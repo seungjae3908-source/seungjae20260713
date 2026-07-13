@@ -345,14 +345,14 @@ function classifyAssetType(name, _market, rawType) {
   const lev = hasLeverage(n);
   const inv = hasInverse(n);
   const isReit = /리츠$/.test(n) || /reit/i.test(n) || t.includes("reit");
-  const isEtn = /상장지수증권|\betn\b/i.test(n) || t.includes("etn");
+  const isEtn2 = /상장지수증권|\betn\b/i.test(n) || t.includes("etn");
   const brandFund = KR_FUND_BRANDS.some((b) => upper.includes(b));
   const isEtf = t === "etp" || t.includes("etf") || /상장지수펀드|\betf\b/i.test(n) || brandFund || // Leverage/inverse naming (Bull/Bear/3X/UltraPro/...) is a reliable ETP
   // signal even when the provider type is missing (e.g. Finnhub tags SOXL as
   // a common stock).
-  (lev || inv) && !isEtn;
+  (lev || inv) && !isEtn2;
   if (isReit) return "REIT";
-  if (isEtn) {
+  if (isEtn2) {
     if (inv) return "INVERSE_ETN";
     if (lev) return "LEVERAGED_ETN";
     return "ETN";
@@ -364,6 +364,26 @@ function classifyAssetType(name, _market, rawType) {
   }
   if (t === "adr" || /\badr\b/i.test(n)) return "ADR";
   return "STOCK";
+}
+var ETP_TYPES = /* @__PURE__ */ new Set([
+  "ETF",
+  "ETN",
+  "LEVERAGED_ETF",
+  "INVERSE_ETF",
+  "LEVERAGED_ETN",
+  "INVERSE_ETN"
+]);
+function isEtp(a) {
+  return ETP_TYPES.has(a);
+}
+function isLeveraged(a) {
+  return a === "LEVERAGED_ETF" || a === "LEVERAGED_ETN";
+}
+function isInverse(a) {
+  return a === "INVERSE_ETF" || a === "INVERSE_ETN";
+}
+function isEtn(a) {
+  return a === "ETN" || a === "LEVERAGED_ETN" || a === "INVERSE_ETN";
 }
 
 // src/sample/rng.ts
@@ -2389,6 +2409,947 @@ var MarketDataService = class {
   }
 };
 
+// src/data/sectors.ts
+var SECTOR_MAP = {
+  // ---- US ----
+  AAPL: "IT\xB7\uD558\uB4DC\uC6E8\uC5B4",
+  MSFT: "\uC18C\uD504\uD2B8\uC6E8\uC5B4",
+  GOOGL: "\uC778\uD130\uB137\xB7\uD50C\uB7AB\uD3FC",
+  GOOG: "\uC778\uD130\uB137\xB7\uD50C\uB7AB\uD3FC",
+  AMZN: "\uC778\uD130\uB137\xB7\uD50C\uB7AB\uD3FC",
+  META: "\uC778\uD130\uB137\xB7\uD50C\uB7AB\uD3FC",
+  NFLX: "\uBBF8\uB514\uC5B4\xB7\uCF58\uD150\uCE20",
+  DIS: "\uBBF8\uB514\uC5B4\xB7\uCF58\uD150\uCE20",
+  CMCSA: "\uBBF8\uB514\uC5B4\xB7\uCF58\uD150\uCE20",
+  WBD: "\uBBF8\uB514\uC5B4\xB7\uCF58\uD150\uCE20",
+  NVDA: "\uBC18\uB3C4\uCCB4",
+  AMD: "\uBC18\uB3C4\uCCB4",
+  INTC: "\uBC18\uB3C4\uCCB4",
+  AVGO: "\uBC18\uB3C4\uCCB4",
+  QCOM: "\uBC18\uB3C4\uCCB4",
+  TXN: "\uBC18\uB3C4\uCCB4",
+  MU: "\uBC18\uB3C4\uCCB4",
+  ASML: "\uBC18\uB3C4\uCCB4",
+  LRCX: "\uBC18\uB3C4\uCCB4",
+  KLAC: "\uBC18\uB3C4\uCCB4",
+  ON: "\uBC18\uB3C4\uCCB4",
+  TSLA: "\uC804\uAE30\uCC28\xB7\uBAA8\uBE4C\uB9AC\uD2F0",
+  F: "\uC790\uB3D9\uCC28",
+  GM: "\uC790\uB3D9\uCC28",
+  RIVN: "\uC804\uAE30\uCC28\xB7\uBAA8\uBE4C\uB9AC\uD2F0",
+  LCID: "\uC804\uAE30\uCC28\xB7\uBAA8\uBE4C\uB9AC\uD2F0",
+  NIO: "\uC804\uAE30\uCC28\xB7\uBAA8\uBE4C\uB9AC\uD2F0",
+  ORCL: "\uC18C\uD504\uD2B8\uC6E8\uC5B4",
+  ADBE: "\uC18C\uD504\uD2B8\uC6E8\uC5B4",
+  CRM: "\uC18C\uD504\uD2B8\uC6E8\uC5B4",
+  NOW: "\uC18C\uD504\uD2B8\uC6E8\uC5B4",
+  INTU: "\uC18C\uD504\uD2B8\uC6E8\uC5B4",
+  PANW: "\uC0AC\uC774\uBC84\uBCF4\uC548",
+  SNOW: "\uC18C\uD504\uD2B8\uC6E8\uC5B4",
+  PLTR: "\uC18C\uD504\uD2B8\uC6E8\uC5B4",
+  IBM: "IT\xB7\uC11C\uBE44\uC2A4",
+  CSCO: "IT\xB7\uD558\uB4DC\uC6E8\uC5B4",
+  COIN: "\uAC00\uC0C1\uC790\uC0B0\xB7\uD540\uD14C\uD06C",
+  MSTR: "\uAC00\uC0C1\uC790\uC0B0\xB7\uD540\uD14C\uD06C",
+  SQ: "\uAC00\uC0C1\uC790\uC0B0\xB7\uD540\uD14C\uD06C",
+  SOFI: "\uAC00\uC0C1\uC790\uC0B0\xB7\uD540\uD14C\uD06C",
+  UBER: "\uC778\uD130\uB137\xB7\uD50C\uB7AB\uD3FC",
+  JPM: "\uAE08\uC735",
+  BAC: "\uAE08\uC735",
+  WFC: "\uAE08\uC735",
+  GS: "\uC99D\uAD8C",
+  MS: "\uC99D\uAD8C",
+  C: "\uAE08\uC735",
+  SCHW: "\uC99D\uAD8C",
+  BLK: "\uC99D\uAD8C",
+  AXP: "\uAE08\uC735\xB7\uACB0\uC81C",
+  V: "\uAE08\uC735\xB7\uACB0\uC81C",
+  MA: "\uAE08\uC735\xB7\uACB0\uC81C",
+  PYPL: "\uAC00\uC0C1\uC790\uC0B0\xB7\uD540\uD14C\uD06C",
+  XOM: "\uC5D0\uB108\uC9C0\xB7\uC815\uC720",
+  CVX: "\uC5D0\uB108\uC9C0\xB7\uC815\uC720",
+  COP: "\uC5D0\uB108\uC9C0\xB7\uC815\uC720",
+  SLB: "\uC5D0\uB108\uC9C0\xB7\uC815\uC720",
+  OXY: "\uC5D0\uB108\uC9C0\xB7\uC815\uC720",
+  LLY: "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  PFE: "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  MRNA: "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  JNJ: "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  MRK: "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  ABBV: "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  GILD: "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  TMO: "\uC758\uB8CC\uAE30\uAE30",
+  ABT: "\uC758\uB8CC\uAE30\uAE30",
+  UNH: "\uAE08\uC735",
+  // 건강보험
+  RGTI: "\uC591\uC790\xB7\uC2E0\uAE30\uC220",
+  CMMB: "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  BA: "\uBC29\uC0B0\xB7\uD56D\uACF5\uC6B0\uC8FC",
+  LMT: "\uBC29\uC0B0\xB7\uD56D\uACF5\uC6B0\uC8FC",
+  RTX: "\uBC29\uC0B0\xB7\uD56D\uACF5\uC6B0\uC8FC",
+  CAT: "\uAE30\uACC4\xB7\uC911\uACF5\uC5C5",
+  GE: "\uAE30\uACC4\xB7\uC911\uACF5\uC5C5",
+  HON: "\uAE30\uACC4\xB7\uC911\uACF5\uC5C5",
+  UPS: "\uC6B4\uC1A1\xB7\uBB3C\uB958",
+  FDX: "\uC6B4\uC1A1\xB7\uBB3C\uB958",
+  DAL: "\uD56D\uACF5\xB7\uC5EC\uD589",
+  UAL: "\uD56D\uACF5\xB7\uC5EC\uD589",
+  AAL: "\uD56D\uACF5\xB7\uC5EC\uD589",
+  LUV: "\uD56D\uACF5\xB7\uC5EC\uD589",
+  T: "\uD1B5\uC2E0",
+  VZ: "\uD1B5\uC2E0",
+  TMUS: "\uD1B5\uC2E0",
+  WMT: "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  COST: "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  TGT: "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  HD: "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  LOW: "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  NKE: "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  SBUX: "\uC74C\uC2DD\xB7\uC2DD\uD488",
+  MCD: "\uC74C\uC2DD\xB7\uC2DD\uD488",
+  KO: "\uC74C\uC2DD\xB7\uC2DD\uD488",
+  PEP: "\uC74C\uC2DD\xB7\uC2DD\uD488",
+  PG: "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  CL: "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  GME: "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  AMC: "\uBBF8\uB514\uC5B4\xB7\uCF58\uD150\uCE20",
+  // ---- KR ----
+  "005930": "\uBC18\uB3C4\uCCB4",
+  "000660": "\uBC18\uB3C4\uCCB4",
+  "042700": "\uBC18\uB3C4\uCCB4",
+  "000990": "\uBC18\uB3C4\uCCB4",
+  "011070": "\uC804\uC790\uBD80\uD488",
+  "009150": "\uC804\uC790\uBD80\uD488",
+  "066570": "\uC804\uC790\xB7\uAC00\uC804",
+  "034220": "\uC804\uC790\uBD80\uD488",
+  "018260": "IT\xB7\uC11C\uBE44\uC2A4",
+  "005380": "\uC790\uB3D9\uCC28",
+  "000270": "\uC790\uB3D9\uCC28",
+  "012330": "\uC790\uB3D9\uCC28\uBD80\uD488",
+  "064350": "\uBC29\uC0B0\xB7\uCCA0\uB3C4",
+  "035420": "\uC778\uD130\uB137\xB7\uD50C\uB7AB\uD3FC",
+  "035720": "\uC778\uD130\uB137\xB7\uD50C\uB7AB\uD3FC",
+  "323410": "\uAC00\uC0C1\uC790\uC0B0\xB7\uD540\uD14C\uD06C",
+  "373220": "2\uCC28\uC804\uC9C0",
+  "006400": "2\uCC28\uC804\uC9C0",
+  "003670": "2\uCC28\uC804\uC9C0",
+  "011790": "2\uCC28\uC804\uC9C0",
+  "051910": "\uD654\uD559\xB72\uCC28\uC804\uC9C0",
+  "009830": "\uD0DC\uC591\uAD11\xB7\uC2E0\uC7AC\uC0DD",
+  "010060": "\uD0DC\uC591\uAD11\xB7\uC2E0\uC7AC\uC0DD",
+  "011780": "\uD654\uD559\xB72\uCC28\uC804\uC9C0",
+  "207940": "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  "068270": "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  "000100": "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  "128940": "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  "185750": "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  "069620": "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  "326030": "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  "006280": "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  "302440": "\uC81C\uC57D\xB7\uBC14\uC774\uC624",
+  "145750": "\uC758\uB8CC\uAE30\uAE30",
+  "145020": "\uC758\uB8CC\uAE30\uAE30",
+  "214150": "\uC758\uB8CC\uAE30\uAE30",
+  "005490": "\uCCA0\uAC15\xB7\uC18C\uC7AC",
+  "004020": "\uCCA0\uAC15\xB7\uC18C\uC7AC",
+  "010130": "\uCCA0\uAC15\xB7\uC18C\uC7AC",
+  "105560": "\uAE08\uC735",
+  "055550": "\uAE08\uC735",
+  "086790": "\uAE08\uC735",
+  "316140": "\uAE08\uC735",
+  "024110": "\uAE08\uC735",
+  "138040": "\uAE08\uC735",
+  "032830": "\uBCF4\uD5D8",
+  "000810": "\uBCF4\uD5D8",
+  "001450": "\uBCF4\uD5D8",
+  "000060": "\uBCF4\uD5D8",
+  "088350": "\uBCF4\uD5D8",
+  "039490": "\uC99D\uAD8C",
+  "016360": "\uC99D\uAD8C",
+  "071050": "\uC99D\uAD8C",
+  "006800": "\uC99D\uAD8C",
+  "005940": "\uC99D\uAD8C",
+  "015760": "\uC804\uB825\xB7\uC720\uD2F8\uB9AC\uD2F0",
+  "036460": "\uC5D0\uB108\uC9C0\xB7\uC815\uC720",
+  "017670": "\uD1B5\uC2E0",
+  "030200": "\uD1B5\uC2E0",
+  "032640": "\uD1B5\uC2E0",
+  "028260": "\uC9C0\uC8FC\xB7\uAC74\uC124",
+  "000720": "\uC9C0\uC8FC\xB7\uAC74\uC124",
+  "047040": "\uC9C0\uC8FC\xB7\uAC74\uC124",
+  "006360": "\uC9C0\uC8FC\xB7\uAC74\uC124",
+  "011200": "\uC6B4\uC1A1\xB7\uD574\uC6B4",
+  "096770": "\uC5D0\uB108\uC9C0\xB7\uC815\uC720",
+  "010950": "\uC5D0\uB108\uC9C0\xB7\uC815\uC720",
+  "036570": "\uAC8C\uC784",
+  "251270": "\uAC8C\uC784",
+  "263750": "\uAC8C\uC784",
+  "293490": "\uAC8C\uC784",
+  "352820": "\uC5D4\uD130\xB7\uBBF8\uB514\uC5B4",
+  "041510": "\uC5D4\uD130\xB7\uBBF8\uB514\uC5B4",
+  "122870": "\uC5D4\uD130\xB7\uBBF8\uB514\uC5B4",
+  "035900": "\uC5D4\uD130\xB7\uBBF8\uB514\uC5B4",
+  "090430": "\uD654\uC7A5\uD488",
+  "051900": "\uD654\uC7A5\uD488",
+  "097950": "\uC74C\uC2DD\xB7\uC2DD\uD488",
+  "004370": "\uC74C\uC2DD\xB7\uC2DD\uD488",
+  "271560": "\uC74C\uC2DD\xB7\uC2DD\uD488",
+  "000080": "\uC74C\uC2DD\xB7\uC2DD\uD488",
+  "139480": "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  "069960": "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  "282330": "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC",
+  "078930": "\uC9C0\uC8FC\xB7\uAC74\uC124",
+  "010140": "\uC870\uC120",
+  "042660": "\uC870\uC120",
+  "329180": "\uC870\uC120",
+  "267250": "\uC9C0\uC8FC\xB7\uAC74\uC124",
+  "010620": "\uC870\uC120",
+  "003490": "\uD56D\uACF5\xB7\uC5EC\uD589",
+  "020560": "\uD56D\uACF5\xB7\uC5EC\uD589",
+  "180640": "\uD56D\uACF5\xB7\uC5EC\uD589",
+  "000120": "\uC6B4\uC1A1\xB7\uBB3C\uB958",
+  "012450": "\uBC29\uC0B0\xB7\uD56D\uACF5\uC6B0\uC8FC",
+  "047810": "\uBC29\uC0B0\xB7\uD56D\uACF5\uC6B0\uC8FC",
+  "272210": "\uBC29\uC0B0\xB7\uD56D\uACF5\uC6B0\uC8FC",
+  "000880": "\uC9C0\uC8FC\xB7\uAC74\uC124",
+  "034730": "\uC9C0\uC8FC\xB7\uAC74\uC124",
+  "003550": "\uC9C0\uC8FC\xB7\uAC74\uC124",
+  "001040": "\uC9C0\uC8FC\xB7\uAC74\uC124",
+  "267260": "\uC9C0\uC8FC\xB7\uAC74\uC124"
+};
+
+// src/services/themes.service.ts
+var THEME_STOCK_LIMIT = 100;
+var SURGE_PCT = 3;
+var PLUNGE_PCT = -3;
+var LARGE_CAP_MIN_USD = 1e10;
+var LARGE_CAP_MIN_KRW = 1e13;
+function largeCapMin(currency) {
+  return currency === "USD" ? LARGE_CAP_MIN_USD : LARGE_CAP_MIN_KRW;
+}
+var DYNAMIC_LIMIT = 40;
+var THEME_DEFS = [
+  {
+    key: "semiconductor",
+    label: "\uBC18\uB3C4\uCCB4",
+    sectors: ["\uBC18\uB3C4\uCCB4", "\uC804\uC790\uBD80\uD488"],
+    keywords: [
+      "semiconductor",
+      "semi",
+      "chip",
+      "foundry",
+      "micron",
+      "nvidia",
+      "broadcom",
+      "\uBC18\uB3C4\uCCB4",
+      "\uD558\uC774\uB2C9\uC2A4",
+      "\uB514\uBE44\uD558\uC774\uD14D",
+      "db\uD558\uC774\uD14D",
+      "\uD55C\uBBF8\uBC18\uB3C4\uCCB4",
+      "\uC774\uB178\uD14D",
+      "\uC804\uAE30"
+    ]
+  },
+  {
+    key: "ai",
+    label: "AI\xB7\uC778\uACF5\uC9C0\uB2A5",
+    sectors: ["\uC591\uC790\xB7\uC2E0\uAE30\uC220"],
+    keywords: [
+      "ai",
+      "artificial intelligence",
+      "palantir",
+      "nvidia",
+      "quantum",
+      "rigetti",
+      "\uC778\uACF5\uC9C0\uB2A5",
+      "\uC591\uC790"
+    ]
+  },
+  {
+    key: "ev",
+    label: "\uC804\uAE30\uCC28",
+    sectors: ["\uC804\uAE30\uCC28\xB7\uBAA8\uBE4C\uB9AC\uD2F0"],
+    keywords: [
+      "ev",
+      "electric vehicle",
+      "tesla",
+      "rivian",
+      "lucid",
+      "nio",
+      "\uC804\uAE30\uCC28",
+      "\uCC28\uC774\uB098\uC804\uAE30\uCC28"
+    ]
+  },
+  {
+    key: "battery",
+    label: "2\uCC28\uC804\uC9C0\xB7\uBC30\uD130\uB9AC",
+    sectors: ["2\uCC28\uC804\uC9C0", "\uD654\uD559\xB72\uCC28\uC804\uC9C0"],
+    keywords: [
+      "battery",
+      "lithium",
+      "\uBC30\uD130\uB9AC",
+      "2\uCC28\uC804\uC9C0",
+      "\uC774\uCC28\uC804\uC9C0",
+      "\uC804\uC9C0",
+      "\uC5D0\uB108\uC9C0\uC194\uB8E8\uC158",
+      "\uC5D0\uC2A4\uB514\uC544\uC774",
+      "sdi",
+      "\uC5D8\uC564\uC5D0\uD504",
+      "\uD3EC\uC2A4\uCF54\uD4E8\uCC98\uC5E0",
+      "\uD4E8\uCC98\uC5E0"
+    ]
+  },
+  {
+    key: "bio",
+    label: "\uBC14\uC774\uC624\xB7\uC81C\uC57D",
+    sectors: ["\uC81C\uC57D\xB7\uBC14\uC774\uC624"],
+    keywords: [
+      "bio",
+      "pharma",
+      "therapeut",
+      "genom",
+      "drug",
+      "lilly",
+      "pfizer",
+      "moderna",
+      "\uBC14\uC774\uC624",
+      "\uC81C\uC57D",
+      "\uD31C",
+      "\uC0DD\uBA85\uACFC\uD559",
+      "\uC2E0\uC57D",
+      "\uC140\uD2B8\uB9AC\uC628",
+      "\uC720\uD55C\uC591\uD589",
+      "\uD55C\uBBF8\uC57D\uD488",
+      "\uC885\uADFC\uB2F9",
+      "\uB300\uC6C5",
+      "\uB179\uC2ED\uC790",
+      "\uBC14\uC774\uC624\uC0AC\uC774\uC5B8\uC2A4",
+      "\uBC14\uC774\uC624\uB85C\uC9C1\uC2A4"
+    ]
+  },
+  {
+    key: "medical",
+    label: "\uC758\uB8CC\uAE30\uAE30",
+    sectors: ["\uC758\uB8CC\uAE30\uAE30"],
+    keywords: [
+      "medical device",
+      "diagnostic",
+      "thermo fisher",
+      "abbott",
+      "\uC758\uB8CC\uAE30\uAE30",
+      "\uD734\uC824",
+      "\uD074\uB798\uC2DC\uC2A4",
+      "\uB8E8\uB2DB",
+      "\uBA54\uB514\uD1A1\uC2A4"
+    ]
+  },
+  {
+    key: "robot",
+    label: "\uB85C\uBD07",
+    sectors: [],
+    keywords: [
+      "robot",
+      "robotics",
+      "automation",
+      "\uB85C\uBD07",
+      "\uB85C\uBCF4",
+      "\uB808\uC778\uBCF4\uC6B0",
+      "\uB450\uC0B0\uB85C\uBCF4\uD2F1\uC2A4"
+    ]
+  },
+  {
+    key: "defense",
+    label: "\uBC29\uC0B0",
+    sectors: ["\uBC29\uC0B0\xB7\uD56D\uACF5\uC6B0\uC8FC", "\uBC29\uC0B0\xB7\uCCA0\uB3C4"],
+    keywords: [
+      "defense",
+      "aerospace",
+      "lockheed",
+      "rtx",
+      "boeing",
+      "\uBC29\uC0B0",
+      "\uBC29\uC704",
+      "\uD56D\uACF5\uC6B0\uC8FC",
+      "\uC5D0\uC5B4\uB85C\uC2A4\uD398\uC774\uC2A4",
+      "\uD55C\uD654\uC2DC\uC2A4\uD15C",
+      "\uD55C\uAD6D\uD56D\uACF5\uC6B0\uC8FC",
+      "\uD604\uB300\uB85C\uD15C",
+      "k\uBC29\uC0B0"
+    ]
+  },
+  {
+    key: "shipbuilding",
+    label: "\uC870\uC120",
+    sectors: ["\uC870\uC120"],
+    keywords: [
+      "shipbuild",
+      "marine",
+      "\uC870\uC120",
+      "\uC911\uACF5\uC5C5",
+      "\uD55C\uD654\uC624\uC158",
+      "\uD604\uB300\uC911\uACF5\uC5C5",
+      "\uD604\uB300\uBBF8\uD3EC",
+      "\uC0BC\uC131\uC911\uACF5\uC5C5"
+    ]
+  },
+  {
+    key: "auto",
+    label: "\uC790\uB3D9\uCC28",
+    sectors: ["\uC790\uB3D9\uCC28", "\uC790\uB3D9\uCC28\uBD80\uD488", "\uC804\uAE30\uCC28\xB7\uBAA8\uBE4C\uB9AC\uD2F0"],
+    keywords: [
+      "motor",
+      "auto",
+      "vehicle",
+      "ford",
+      "general motors",
+      "\uC790\uB3D9\uCC28",
+      "\uBAA8\uBE44\uC2A4",
+      "\uD604\uB300\uCC28",
+      "\uAE30\uC544"
+    ]
+  },
+  {
+    key: "bank",
+    label: "\uAE08\uC735\xB7\uC740\uD589",
+    sectors: ["\uAE08\uC735"],
+    keywords: [
+      "bank",
+      "financial",
+      "jpmorgan",
+      "wells fargo",
+      "citigroup",
+      "\uAE08\uC735",
+      "\uC740\uD589",
+      "\uC9C0\uC8FC",
+      "\uCE74\uB4DC",
+      "\uCE90\uD53C\uD0C8",
+      "\uCE74\uCE74\uC624\uBC45\uD06C",
+      "\uAE30\uC5C5\uC740\uD589"
+    ]
+  },
+  {
+    key: "insurance",
+    label: "\uBCF4\uD5D8",
+    sectors: ["\uBCF4\uD5D8"],
+    keywords: [
+      "insurance",
+      "\uBCF4\uD5D8",
+      "\uD654\uC7AC",
+      "\uC0DD\uBA85",
+      "\uD574\uC0C1",
+      "\uBA54\uB9AC\uCE20\uD654\uC7AC",
+      "\uC0BC\uC131\uC0DD\uBA85",
+      "\uD55C\uD654\uC0DD\uBA85",
+      "\uD604\uB300\uD574\uC0C1"
+    ]
+  },
+  {
+    key: "securities",
+    label: "\uC99D\uAD8C",
+    sectors: ["\uC99D\uAD8C"],
+    keywords: [
+      "securities",
+      "goldman",
+      "morgan stanley",
+      "schwab",
+      "blackrock",
+      "\uC99D\uAD8C",
+      "\uD22C\uC790\uC99D\uAD8C",
+      "\uAE08\uC735\uC9C0\uC8FC",
+      "\uD0A4\uC6C0"
+    ]
+  },
+  {
+    key: "construction",
+    label: "\uAC74\uC124",
+    sectors: ["\uC9C0\uC8FC\xB7\uAC74\uC124"],
+    keywords: [
+      "construction",
+      "engineering",
+      "\uAC74\uC124",
+      "\uC5D4\uC9C0\uB2C8\uC5B4\uB9C1",
+      "\uD604\uB300\uAC74\uC124",
+      "\uB300\uC6B0\uAC74\uC124",
+      "gs\uAC74\uC124",
+      "\uC0BC\uC131\uBB3C\uC0B0"
+    ]
+  },
+  {
+    key: "steel",
+    label: "\uCCA0\uAC15",
+    sectors: ["\uCCA0\uAC15\xB7\uC18C\uC7AC"],
+    keywords: [
+      "steel",
+      "metal",
+      "\uCCA0\uAC15",
+      "\uC81C\uCCA0",
+      "posco",
+      "\uD3EC\uC2A4\uCF54",
+      "\uACE0\uB824\uC544\uC5F0",
+      "\uD604\uB300\uC81C\uCCA0"
+    ]
+  },
+  {
+    key: "chemical",
+    label: "\uD654\uD559",
+    sectors: ["\uD654\uD559\xB72\uCC28\uC804\uC9C0"],
+    keywords: [
+      "chemical",
+      "chem",
+      "\uD654\uD559",
+      "lg\uD654\uD559",
+      "\uAE08\uD638\uC11D\uC720",
+      "\uD55C\uD654\uC194\uB8E8\uC158",
+      "oci",
+      "skc",
+      "\uB86F\uB370\uCF00\uBBF8\uCE7C"
+    ]
+  },
+  {
+    key: "oil-energy",
+    label: "\uC815\uC720\xB7\uC5D0\uB108\uC9C0",
+    sectors: ["\uC5D0\uB108\uC9C0\xB7\uC815\uC720", "\uC5D0\uB108\uC9C0"],
+    keywords: [
+      "oil",
+      "gas",
+      "petroleum",
+      "exxon",
+      "chevron",
+      "conocophillips",
+      "schlumberger",
+      "occidental",
+      "\uC815\uC720",
+      "\uC11D\uC720",
+      "\uAC00\uC2A4",
+      "s-oil",
+      "sk\uC774\uB178\uBCA0\uC774\uC158",
+      "\uAC00\uC2A4\uACF5\uC0AC"
+    ]
+  },
+  {
+    key: "nuclear",
+    label: "\uC6D0\uC804",
+    sectors: [],
+    keywords: [
+      "nuclear",
+      "uranium",
+      "\uC6D0\uC804",
+      "\uC6D0\uC790\uB825",
+      "\uB450\uC0B0\uC5D0\uB108\uBE4C\uB9AC\uD2F0",
+      "\uD55C\uC804\uAE30\uC220"
+    ]
+  },
+  {
+    key: "solar",
+    label: "\uD0DC\uC591\uAD11\xB7\uC2E0\uC7AC\uC0DD",
+    sectors: ["\uD0DC\uC591\uAD11\xB7\uC2E0\uC7AC\uC0DD"],
+    keywords: [
+      "solar",
+      "renewable",
+      "\uD0DC\uC591\uAD11",
+      "\uC2E0\uC7AC\uC0DD",
+      "\uD55C\uD654\uC194\uB8E8\uC158",
+      "oci",
+      "\uD48D\uB825"
+    ]
+  },
+  {
+    key: "power",
+    label: "\uC804\uB825\xB7\uC804\uC120",
+    sectors: ["\uC804\uB825\xB7\uC720\uD2F8\uB9AC\uD2F0"],
+    keywords: [
+      "power",
+      "utility",
+      "electric power",
+      "\uC804\uB825",
+      "\uC804\uC120",
+      "\uD55C\uAD6D\uC804\uB825",
+      "\uD55C\uC804",
+      "\uB300\uD55C\uC804\uC120",
+      "ls"
+    ]
+  },
+  {
+    key: "food",
+    label: "\uC74C\uC2DD\xB7\uC2DD\uD488",
+    sectors: ["\uC74C\uC2DD\xB7\uC2DD\uD488"],
+    keywords: [
+      "food",
+      "beverage",
+      "coca-cola",
+      "pepsi",
+      "mcdonald",
+      "starbucks",
+      "\uC2DD\uD488",
+      "\uC81C\uB2F9",
+      "\uC74C\uB8CC",
+      "\uC81C\uACFC",
+      "\uB18D\uC2EC",
+      "\uC624\uB9AC\uC628",
+      "\uC9C4\uB85C",
+      "\uC81C\uC77C\uC81C\uB2F9"
+    ]
+  },
+  {
+    key: "cosmetics",
+    label: "\uD654\uC7A5\uD488",
+    sectors: ["\uD654\uC7A5\uD488"],
+    keywords: [
+      "cosmetic",
+      "beauty",
+      "\uD654\uC7A5\uD488",
+      "\uC544\uBAA8\uB808",
+      "\uC0DD\uD65C\uAC74\uAC15",
+      "\uCF54\uC2A4\uBA54\uD2F1"
+    ]
+  },
+  {
+    key: "game",
+    label: "\uAC8C\uC784",
+    sectors: ["\uAC8C\uC784"],
+    keywords: [
+      "game",
+      "gaming",
+      "\uAC8C\uC784",
+      "\uC5D4\uC528",
+      "\uB137\uB9C8\uBE14",
+      "\uD384\uC5B4\uBE44\uC2A4",
+      "\uCE74\uCE74\uC624\uAC8C\uC784\uC988",
+      "\uD06C\uB798\uD504\uD1A4",
+      "\uC704\uBA54\uC774\uB4DC"
+    ]
+  },
+  {
+    key: "entertainment",
+    label: "\uC5D4\uD130",
+    sectors: ["\uC5D4\uD130\xB7\uBBF8\uB514\uC5B4"],
+    keywords: [
+      "entertainment",
+      "\uC5D4\uD130",
+      "\uD558\uC774\uBE0C",
+      "\uC5D0\uC2A4\uC5E0",
+      "\uC640\uC774\uC9C0",
+      "jyp",
+      "\uAE30\uD68D\uC0AC"
+    ]
+  },
+  {
+    key: "media",
+    label: "\uBBF8\uB514\uC5B4",
+    sectors: ["\uBBF8\uB514\uC5B4\xB7\uCF58\uD150\uCE20"],
+    keywords: [
+      "media",
+      "content",
+      "studio",
+      "netflix",
+      "disney",
+      "warner",
+      "comcast",
+      "\uBBF8\uB514\uC5B4",
+      "\uCF58\uD150\uCE20",
+      "\uBC29\uC1A1",
+      "cj enm"
+    ]
+  },
+  {
+    key: "telecom",
+    label: "\uD1B5\uC2E0",
+    sectors: ["\uD1B5\uC2E0"],
+    keywords: [
+      "telecom",
+      "wireless",
+      "communications",
+      "verizon",
+      "t-mobile",
+      "\uD1B5\uC2E0",
+      "skt",
+      "sk\uD154\uB808\uCF64",
+      "kt",
+      "lg\uC720\uD50C\uB7EC\uC2A4"
+    ]
+  },
+  {
+    key: "internet",
+    label: "\uC778\uD130\uB137\xB7\uD50C\uB7AB\uD3FC",
+    sectors: ["\uC778\uD130\uB137\xB7\uD50C\uB7AB\uD3FC"],
+    keywords: [
+      "internet",
+      "platform",
+      "commerce",
+      "\uC778\uD130\uB137",
+      "\uD50C\uB7AB\uD3FC",
+      "naver",
+      "\uB124\uC774\uBC84",
+      "\uCE74\uCE74\uC624",
+      "kakao",
+      "amazon",
+      "alphabet",
+      "meta",
+      "uber"
+    ]
+  },
+  {
+    key: "cloud-software",
+    label: "\uD074\uB77C\uC6B0\uB4DC\xB7\uC18C\uD504\uD2B8\uC6E8\uC5B4",
+    sectors: ["\uC18C\uD504\uD2B8\uC6E8\uC5B4", "IT\xB7\uC11C\uBE44\uC2A4", "IT\xB7\uD558\uB4DC\uC6E8\uC5B4"],
+    keywords: [
+      "cloud",
+      "software",
+      "oracle",
+      "adobe",
+      "salesforce",
+      "servicenow",
+      "intuit",
+      "snowflake",
+      "microsoft",
+      "\uC18C\uD504\uD2B8\uC6E8\uC5B4",
+      "\uD074\uB77C\uC6B0\uB4DC",
+      "\uC5D0\uC2A4\uB514\uC5D0\uC2A4"
+    ]
+  },
+  {
+    key: "cybersecurity",
+    label: "\uC0AC\uC774\uBC84\uBCF4\uC548",
+    sectors: ["\uC0AC\uC774\uBC84\uBCF4\uC548"],
+    keywords: ["cybersecurity", "security", "palo alto", "\uBCF4\uC548", "\uC0AC\uC774\uBC84"]
+  },
+  {
+    key: "travel",
+    label: "\uD56D\uACF5\xB7\uC5EC\uD589",
+    sectors: ["\uD56D\uACF5\xB7\uC5EC\uD589"],
+    keywords: [
+      "airline",
+      "air lines",
+      "travel",
+      "delta",
+      "united airlines",
+      "southwest",
+      "\uD56D\uACF5",
+      "\uC5EC\uD589",
+      "\uB300\uD55C\uD56D\uACF5",
+      "\uC544\uC2DC\uC544\uB098",
+      "\uC5EC\uD589\uB808\uC800"
+    ]
+  },
+  {
+    key: "logistics",
+    label: "\uD574\uC6B4\xB7\uBB3C\uB958",
+    sectors: ["\uC6B4\uC1A1\xB7\uD574\uC6B4", "\uC6B4\uC1A1\xB7\uBB3C\uB958"],
+    keywords: [
+      "shipping",
+      "logistics",
+      "parcel",
+      "fedex",
+      "\uD574\uC6B4",
+      "\uBB3C\uB958",
+      "\uD0DD\uBC30",
+      "hmm",
+      "\uB300\uD55C\uD1B5\uC6B4"
+    ]
+  },
+  {
+    key: "retail",
+    label: "\uC720\uD1B5",
+    sectors: ["\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC"],
+    keywords: [
+      "retail",
+      "wholesale",
+      "walmart",
+      "costco",
+      "target",
+      "home depot",
+      "nike",
+      "\uC720\uD1B5",
+      "\uB9AC\uD14C\uC77C",
+      "\uC774\uB9C8\uD2B8",
+      "\uBC31\uD654\uC810"
+    ]
+  },
+  {
+    key: "reit",
+    label: "\uB9AC\uCE20\xB7\uBD80\uB3D9\uC0B0",
+    sectors: [],
+    keywords: ["reit", "realty", "real estate", "\uB9AC\uCE20", "\uBD80\uB3D9\uC0B0"]
+  }
+];
+var ETP_KEYS = {
+  etf: "etf",
+  etn: "etn",
+  leverage: "leverage",
+  inverse: "inverse"
+};
+var ETP_KEYWORD_THEMES = [
+  {
+    key: "commodity",
+    label: "\uC6D0\uC790\uC7AC",
+    keywords: [
+      "commodity",
+      "natural gas",
+      "crude",
+      "oil",
+      "copper",
+      "agriculture",
+      "\uC6D0\uC790\uC7AC",
+      "\uCC9C\uC5F0\uAC00\uC2A4",
+      "\uC6D0\uC720",
+      "\uAD6C\uB9AC",
+      "\uB18D\uC0B0\uBB3C",
+      "bloomberg"
+    ]
+  },
+  {
+    key: "gold-silver",
+    label: "\uAE08\xB7\uC740",
+    keywords: ["gold", "silver", "\uAE08", "\uC740", "\uACE8\uB4DC", "\uC2E4\uBC84"]
+  },
+  {
+    key: "bond",
+    label: "\uCC44\uAD8C",
+    keywords: [
+      "bond",
+      "treasury",
+      "aggregate",
+      "\uCC44\uAD8C",
+      "\uAD6D\uCC44",
+      "\uD68C\uC0AC\uCC44",
+      "\uB9CC\uAE30"
+    ]
+  }
+];
+var DYNAMIC_THEMES = [
+  { key: "surge", label: "\uAE09\uB4F1\uC8FC" },
+  { key: "plunge", label: "\uAE09\uB77D\uC8FC" },
+  { key: "large-cap", label: "\uB300\uD615\uC8FC" },
+  { key: "mid-small-cap", label: "\uC911\uC18C\uD615\uC8FC" }
+];
+function inferSector(entry) {
+  return SECTOR_MAP[entry.ticker];
+}
+function matchThemes(entry) {
+  const sector = inferSector(entry);
+  const name = entry.name.toLowerCase();
+  const matched = [];
+  for (const def of THEME_DEFS) {
+    const bySector = sector != null && def.sectors.includes(sector);
+    const byKeyword = def.keywords.some(
+      (kw) => name.includes(kw.toLowerCase())
+    );
+    if (bySector || byKeyword) matched.push(def);
+  }
+  return matched;
+}
+function matchEtpKeywordThemes(entry) {
+  const name = entry.name.toLowerCase();
+  return ETP_KEYWORD_THEMES.filter(
+    (t) => t.keywords.some((kw) => name.includes(kw.toLowerCase()))
+  );
+}
+function assetTypeOf(entry) {
+  return classifyAssetType(entry.name, entry.market);
+}
+function toThemeStock(entry, quote5, assetType) {
+  return {
+    ticker: entry.ticker,
+    name: entry.name,
+    market: entry.market,
+    currency: entry.currency,
+    price: quote5?.price ?? 0,
+    changePercent: quote5?.changePercent ?? 0,
+    marketCap: quote5?.marketCap,
+    assetType
+  };
+}
+async function buildThemes(market) {
+  return cached(`themes:v4:${market}`, TTL.quote, async () => {
+    const entries = CATALOG.filter((e) => e.market === market);
+    const live = await Promise.all(
+      entries.map(async (entry) => {
+        let quote5 = null;
+        try {
+          quote5 = await MarketDataService.getQuote(entry.ticker);
+        } catch {
+          quote5 = null;
+        }
+        return { entry, quote: quote5, assetType: assetTypeOf(entry) };
+      })
+    );
+    const buckets = /* @__PURE__ */ new Map();
+    const push = (key, stock) => {
+      const list = buckets.get(key) ?? [];
+      list.push(stock);
+      buckets.set(key, list);
+    };
+    for (const { entry, quote: quote5, assetType } of live) {
+      const stock = toThemeStock(entry, quote5, assetType);
+      if (isEtp(assetType)) {
+        if (isLeveraged(assetType)) {
+          push(ETP_KEYS.leverage, stock);
+        } else if (isInverse(assetType)) {
+          push(ETP_KEYS.inverse, stock);
+        } else if (isEtn(assetType)) {
+          push(ETP_KEYS.etn, stock);
+        } else {
+          push(ETP_KEYS.etf, stock);
+        }
+        for (const t of matchEtpKeywordThemes(entry)) {
+          push(t.key, stock);
+        }
+        continue;
+      }
+      for (const theme of matchThemes(entry)) {
+        push(theme.key, stock);
+      }
+      if (quote5 && Number.isFinite(quote5.changePercent)) {
+        if (quote5.changePercent >= SURGE_PCT) push("surge", stock);
+        if (quote5.changePercent <= PLUNGE_PCT) push("plunge", stock);
+      }
+      if (quote5 && Number.isFinite(quote5.marketCap) && quote5.marketCap > 0) {
+        const capMin = largeCapMin(entry.currency);
+        if (quote5.marketCap >= capMin) {
+          push("large-cap", stock);
+        } else {
+          push("mid-small-cap", stock);
+        }
+      }
+    }
+    const themeOrder = [
+      ...THEME_DEFS.map((t) => ({ key: t.key, label: t.label })),
+      ...ETP_KEYWORD_THEMES.map((t) => ({ key: t.key, label: t.label })),
+      { key: ETP_KEYS.etf, label: "ETF" },
+      { key: ETP_KEYS.etn, label: "ETN" },
+      { key: ETP_KEYS.leverage, label: "\uB808\uBC84\uB9AC\uC9C0" },
+      { key: ETP_KEYS.inverse, label: "\uC778\uBC84\uC2A4" },
+      ...DYNAMIC_THEMES.map((t) => ({
+        key: t.key,
+        label: t.label,
+        dynamic: true
+      }))
+    ];
+    const themes = [];
+    for (const { key, label, dynamic } of themeOrder) {
+      const list = buckets.get(key) ?? [];
+      if (list.length === 0) continue;
+      const sorted = [...list];
+      if (key === "plunge") {
+        sorted.sort((a, b) => a.changePercent - b.changePercent);
+      } else if (key === "surge") {
+        sorted.sort((a, b) => b.changePercent - a.changePercent);
+      } else {
+        sorted.sort(
+          (a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0) || b.changePercent - a.changePercent
+        );
+      }
+      const limit = dynamic ? DYNAMIC_LIMIT : THEME_STOCK_LIMIT;
+      const stocks = sorted.slice(0, limit);
+      themes.push({ key, label, count: stocks.length, stocks });
+    }
+    return { market, themes };
+  });
+}
+var ThemesService = {
+  getThemes: buildThemes
+};
+
 // src/routes/market.ts
 var router2 = Router2();
 var FALLBACK_UNIVERSE = [
@@ -2477,7 +3438,12 @@ var FALLBACK_UNIVERSE = [
   { ticker: "QCOM", name: "Qualcomm", market: "US", currency: "USD" },
   { ticker: "AMAT", name: "Applied Materials", market: "US", currency: "USD" },
   { ticker: "MU", name: "Micron", market: "US", currency: "USD" },
-  { ticker: "SMCI", name: "Super Micro Computer", market: "US", currency: "USD" },
+  {
+    ticker: "SMCI",
+    name: "Super Micro Computer",
+    market: "US",
+    currency: "USD"
+  },
   { ticker: "ARM", name: "Arm Holdings", market: "US", currency: "USD" },
   { ticker: "TSM", name: "TSMC", market: "US", currency: "USD" },
   { ticker: "ASML", name: "ASML", market: "US", currency: "USD" },
@@ -2526,7 +3492,10 @@ function findFallbackStock(ticker) {
   };
 }
 function fallbackQuote(stock) {
-  const seed = [...stock.ticker].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const seed = [...stock.ticker].reduce(
+    (sum, char) => sum + char.charCodeAt(0),
+    0
+  );
   const basePrice2 = stock.market === "KR" ? numberFromSeed(stock.ticker, 3500, 3e5) : numberFromSeed(stock.ticker, 20, 900);
   const changePercent = Number(((seed % 1800 - 900) / 100).toFixed(2));
   const price = stock.market === "KR" ? Math.round(basePrice2 / 50) * 50 : Number(basePrice2.toFixed(2));
@@ -2558,9 +3527,15 @@ function fallbackQuote(stock) {
   };
 }
 function providerQuoteToRow(providerQuote, stock, provider) {
-  const price = Number(providerQuote.price ?? providerQuote.currentPrice ?? providerQuote.regularMarketPrice ?? 0);
-  const previousClose = Number(providerQuote.previousClose ?? providerQuote.prevClose ?? price);
-  const changeAmount = Number(providerQuote.changeAmount ?? providerQuote.change ?? price - previousClose);
+  const price = Number(
+    providerQuote.price ?? providerQuote.currentPrice ?? providerQuote.regularMarketPrice ?? 0
+  );
+  const previousClose = Number(
+    providerQuote.previousClose ?? providerQuote.prevClose ?? price
+  );
+  const changeAmount = Number(
+    providerQuote.changeAmount ?? providerQuote.change ?? price - previousClose
+  );
   const changePercent = Number(
     providerQuote.changePercent ?? providerQuote.regularMarketChangePercent ?? (previousClose ? changeAmount / previousClose * 100 : 0)
   );
@@ -2611,16 +3586,22 @@ function filterUniverseByMarket(market) {
   return FALLBACK_UNIVERSE.filter((stock) => stock.market === market);
 }
 function sortByTradingValue(rows) {
-  return [...rows].sort((a, b) => (b.tradingValue ?? 0) - (a.tradingValue ?? 0));
+  return [...rows].sort(
+    (a, b) => (b.tradingValue ?? 0) - (a.tradingValue ?? 0)
+  );
 }
 function sortByVolume(rows) {
   return [...rows].sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0));
 }
 function sortByGainers(rows) {
-  return [...rows].sort((a, b) => (b.changePercent ?? 0) - (a.changePercent ?? 0));
+  return [...rows].sort(
+    (a, b) => (b.changePercent ?? 0) - (a.changePercent ?? 0)
+  );
 }
 function sortByLosers(rows) {
-  return [...rows].sort((a, b) => (a.changePercent ?? 0) - (b.changePercent ?? 0));
+  return [...rows].sort(
+    (a, b) => (a.changePercent ?? 0) - (b.changePercent ?? 0)
+  );
 }
 function sortByRecommended(rows) {
   return [...rows].sort((a, b) => {
@@ -2649,6 +3630,48 @@ async function getRowsForTickers(tickers) {
   );
   return rows;
 }
+async function searchNaverStocks(query) {
+  const q = query.trim();
+  if (!q) return [];
+  try {
+    const response = await fetch(
+      "https://ac.stock.naver.com/ac?q=" + encodeURIComponent(q) + "&target=stock",
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0 seungjae-stock-app/1.0",
+          Accept: "application/json,text/plain,*/*",
+          Referer: "https://finance.naver.com/"
+        }
+      }
+    );
+    if (!response.ok) return [];
+    const data = await response.json();
+    const candidates = Array.isArray(data?.items) ? data.items : Array.isArray(data?.result?.items) ? data.result.items : Array.isArray(data?.stocks) ? data.stocks : [];
+    return candidates.map((item) => {
+      const ticker = String(
+        item.code ?? item.stockCode ?? item.localCode ?? item.symbol ?? ""
+      ).replace(/\D/g, "").slice(-6);
+      const name = String(
+        item.name ?? item.stockName ?? item.koreanName ?? item.label ?? ""
+      ).trim();
+      const marketText = String(
+        item.typeCode ?? item.typeName ?? item.market ?? item.exchange ?? ""
+      ).toUpperCase();
+      if (!/^\d{6}$/.test(ticker) || !name) return null;
+      return {
+        ticker,
+        name,
+        market: "KR",
+        currency: "KRW",
+        assetType: /ETF/.test(marketText) ? "ETF" : /ETN/.test(marketText) ? "ETN" : "stock",
+        exchange: marketText.includes("KOSDAQ") ? "KOSDAQ" : marketText.includes("KONEX") ? "KONEX" : "KOSPI",
+        aliases: []
+      };
+    }).filter(Boolean).slice(0, 80);
+  } catch {
+    return [];
+  }
+}
 router2.get("/config", (_req, res) => {
   res.json({
     ok: true,
@@ -2669,6 +3692,14 @@ router2.get("/search", async (req, res) => {
     const results2 = await MarketDataService.search(q, 80);
     if (results2.length > 0) {
       res.json({ q, results: results2 });
+      return;
+    }
+  } catch {
+  }
+  try {
+    const naverResults = await searchNaverStocks(q);
+    if (naverResults.length > 0) {
+      res.json({ q, results: naverResults });
       return;
     }
   } catch {
@@ -2773,6 +3804,20 @@ router2.get("/market/briefing", (_req, res) => {
     ],
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   });
+});
+router2.get("/market/themes", async (req, res) => {
+  const market = String(req.query.market ?? "KR").toUpperCase() === "US" ? "US" : "KR";
+  try {
+    const data = await ThemesService.getThemes(market);
+    res.json(data);
+  } catch (error) {
+    console.error("market themes route error:", error);
+    res.status(500).json({
+      error: "MARKET_THEMES_ROUTE_ERROR",
+      market,
+      themes: []
+    });
+  }
 });
 router2.get("/market/scan", async (req, res) => {
   const scope = normalizeMarket(req.query.market);
@@ -3288,6 +4333,131 @@ function normalizeTimeframe(value) {
   if (!raw) return "1D";
   return raw;
 }
+function decodeXml2(value) {
+  return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+}
+function xmlTag(block, tag) {
+  const match = block.match(
+    new RegExp("<" + tag + "[^>]*>([\\s\\S]*?)<\\/" + tag + ">", "i")
+  );
+  return match ? decodeXml2(match[1]) : "";
+}
+function companyNameFromProfile(profile, ticker) {
+  return String(
+    profile?.name ?? profile?.companyName ?? profile?.corp_name ?? profile?.company?.name ?? ticker
+  ).trim();
+}
+var dartCorpMapCache = null;
+async function getDartCorpCode(ticker, apiKey) {
+  if (!dartCorpMapCache) {
+    const response = await fetch(
+      "https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key=" + encodeURIComponent(apiKey)
+    );
+    if (!response.ok) throw new Error("DART_CORP_CODE_HTTP_" + response.status);
+    const xml = await response.text();
+    const map = /* @__PURE__ */ new Map();
+    for (const block of xml.match(/<list>[\s\S]*?<\/list>/g) ?? []) {
+      const stockCode = xmlTag(block, "stock_code");
+      const corpCode = xmlTag(block, "corp_code");
+      if (stockCode && corpCode) map.set(stockCode, corpCode);
+    }
+    dartCorpMapCache = map;
+  }
+  return dartCorpMapCache.get(ticker) ?? "";
+}
+async function fetchDartFilings(ticker) {
+  const apiKey = String(process.env.DART_API_KEY ?? "").trim();
+  const fallback = {
+    title: "DART\uC5D0\uC11C " + ticker + " \uACF5\uC2DC \uC804\uCCB4\uBCF4\uAE30",
+    report_nm: "\uACF5\uC2DD \uC804\uC790\uACF5\uC2DC \uAC80\uC0C9",
+    date: "\uC2E4\uC2DC\uAC04",
+    rcept_dt: "",
+    url: "https://dart.fss.or.kr/dsab001/main.do",
+    source: "DART"
+  };
+  if (!apiKey || !/^\d{6}$/.test(ticker)) return [fallback];
+  const corpCode = await getDartCorpCode(ticker, apiKey);
+  if (!corpCode) return [fallback];
+  const from = /* @__PURE__ */ new Date();
+  from.setFullYear(from.getFullYear() - 1);
+  const bgnDe = from.toISOString().slice(0, 10).replace(/-/g, "");
+  const url = "https://opendart.fss.or.kr/api/list.json?crtfc_key=" + encodeURIComponent(apiKey) + "&corp_code=" + encodeURIComponent(corpCode) + "&bgn_de=" + bgnDe + "&last_reprt_at=Y&page_count=100&sort=date&sort_mth=desc";
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("DART_LIST_HTTP_" + response.status);
+  const data = await response.json();
+  if (!Array.isArray(data?.list)) return [fallback];
+  return data.list.map((item) => ({
+    ...item,
+    title: item.report_nm,
+    date: item.rcept_dt,
+    url: item.rcept_no ? "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + item.rcept_no : fallback.url,
+    source: "DART"
+  }));
+}
+function simpleDartSummary(item) {
+  const title = String(item?.title ?? item?.report_nm ?? "").trim();
+  if (!title || title.includes("\uACF5\uC2DC \uC804\uCCB4\uBCF4\uAE30") || title.includes("\uACF5\uC2DD \uC804\uC790\uACF5\uC2DC \uAC80\uC0C9")) {
+    return "DART\uC5D0\uC11C \uC774 \uC885\uBAA9\uC758 \uC804\uCCB4 \uACF5\uC2DC \uC6D0\uBB38\uC744 \uD655\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.";
+  }
+  if (/주주총회|주총/.test(title))
+    return "\uC8FC\uC8FC\uCD1D\uD68C \uAC1C\uCD5C \uB610\uB294 \uAD00\uB828 \uC77C\uC815\uC774 \uACF5\uC2DC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+  if (/현금.*배당|배당.*결정|배당금/.test(title))
+    return "\uC8FC\uC8FC \uBC30\uB2F9\uACFC \uAD00\uB828\uB41C \uB0B4\uC6A9\uC774 \uACF5\uC2DC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+  if (/유상증자/.test(title))
+    return "\uC720\uC0C1\uC99D\uC790 \uACC4\uD68D \uB610\uB294 \uC9C4\uD589 \uB0B4\uC6A9\uC774 \uACF5\uC2DC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+  if (/무상증자/.test(title))
+    return "\uBB34\uC0C1\uC99D\uC790 \uACC4\uD68D \uB610\uB294 \uC9C4\uD589 \uB0B4\uC6A9\uC774 \uACF5\uC2DC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+  if (/자기주식|자사주/.test(title))
+    return "\uC790\uC0AC\uC8FC \uCDE8\uB4DD\xB7\uCC98\uBD84\uACFC \uAD00\uB828\uB41C \uB0B4\uC6A9\uC774 \uACF5\uC2DC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+  if (/단일판매|공급계약|수주/.test(title))
+    return "\uC2E0\uADDC \uACC4\uC57D \uB610\uB294 \uC218\uC8FC \uAD00\uB828 \uB0B4\uC6A9\uC774 \uACF5\uC2DC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+  if (/잠정.*실적|영업.*실적|매출액.*손익/.test(title))
+    return "\uCD5C\uADFC \uACBD\uC601\uC2E4\uC801\uACFC \uAD00\uB828\uB41C \uB0B4\uC6A9\uC774 \uACF5\uC2DC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+  if (/사업보고서/.test(title))
+    return "\uC0AC\uC5C5\uBCF4\uACE0\uC11C\uAC00 \uC81C\uCD9C\uB418\uC5B4 \uD68C\uC0AC\uC758 \uC8FC\uC694 \uC2E4\uC801\uACFC \uD604\uD669\uC744 \uD655\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.";
+  if (/분기보고서/.test(title))
+    return "\uBD84\uAE30\uBCF4\uACE0\uC11C\uAC00 \uC81C\uCD9C\uB418\uC5B4 \uCD5C\uADFC \uBD84\uAE30 \uC2E4\uC801\uC744 \uD655\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.";
+  if (/반기보고서/.test(title))
+    return "\uBC18\uAE30\uBCF4\uACE0\uC11C\uAC00 \uC81C\uCD9C\uB418\uC5B4 \uC0C1\uBC18\uAE30 \uC2E4\uC801\uC744 \uD655\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.";
+  if (/최대주주/.test(title))
+    return "\uCD5C\uB300\uC8FC\uC8FC \uB610\uB294 \uC8FC\uC694 \uC9C0\uBD84 \uBCC0\uB3D9 \uB0B4\uC6A9\uC774 \uACF5\uC2DC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+  const shortTitle = title.length > 58 ? title.slice(0, 58) + "\u2026" : title;
+  return shortTitle + " \uAD00\uB828 \uACF5\uC2DC\uAC00 \uB4F1\uB85D\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+}
+function simpleNewsSummary(item) {
+  const source = String(item?.source ?? "").trim();
+  let title = String(item?.title ?? "").replace(/\s+/g, " ").trim();
+  const suffix = source ? " - " + source : "";
+  if (suffix && title.endsWith(suffix))
+    title = title.slice(0, -suffix.length).trim();
+  const shortTitle = title.length > 70 ? title.slice(0, 70) + "\u2026" : title;
+  return shortTitle ? shortTitle + " \uAD00\uB828 \uC18C\uC2DD\uC785\uB2C8\uB2E4." : "\uCD5C\uADFC \uAD00\uB828 \uB274\uC2A4\uB97C \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4.";
+}
+async function fetchGoogleNews(ticker) {
+  let profile = null;
+  try {
+    profile = await MarketDataService.getCompanyProfile(ticker);
+  } catch {
+    profile = null;
+  }
+  const companyName = companyNameFromProfile(profile, ticker);
+  const isKorean = /^\d{6}$/.test(ticker);
+  const query = isKorean ? '"' + companyName + '" \uC8FC\uC2DD' : '"' + companyName + '" stock';
+  const feedUrl = "https://news.google.com/rss/search?q=" + encodeURIComponent(query) + "&hl=" + (isKorean ? "ko" : "en-US") + "&gl=" + (isKorean ? "KR" : "US") + "&ceid=" + (isKorean ? "KR:ko" : "US:en");
+  const response = await fetch(feedUrl, {
+    headers: { "User-Agent": "seungjae-stock-app/1.0" }
+  });
+  if (!response.ok) throw new Error("NEWS_RSS_HTTP_" + response.status);
+  const xml = await response.text();
+  return (xml.match(/<item>[\s\S]*?<\/item>/g) ?? []).slice(0, 30).map((block) => ({
+    title: xmlTag(block, "title"),
+    url: xmlTag(block, "link"),
+    link: xmlTag(block, "link"),
+    publishedAt: xmlTag(block, "pubDate"),
+    date: xmlTag(block, "pubDate"),
+    source: xmlTag(block, "source") || "Google News"
+  })).filter((item) => item.title && item.url);
+}
 router6.get("/:ticker/quote", async (req, res) => {
   const ticker = normalizeTicker3(req.params.ticker);
   if (!ticker) {
@@ -3362,7 +4532,10 @@ router6.get("/:ticker/candles", async (req, res) => {
     return;
   }
   try {
-    const candles5 = await MarketDataService.getCandles(ticker, timeframe);
+    const candles5 = await MarketDataService.getCandles(
+      ticker,
+      timeframe
+    );
     res.json({
       ticker,
       timeframe,
@@ -3418,30 +4591,230 @@ router6.get("/:ticker/risk", async (req, res) => {
 });
 router6.get("/:ticker/filings", async (req, res) => {
   const ticker = normalizeTicker3(req.params.ticker);
-  res.json({
-    ticker,
-    filings: [],
-    items: [],
-    summary: "\uACF5\uC2DC \uB370\uC774\uD130\uB294 \uC5F0\uACB0 \uC900\uBE44 \uC911\uC785\uB2C8\uB2E4."
-  });
+  try {
+    const items = await fetchDartFilings(ticker);
+    res.json({
+      ticker,
+      filings: items,
+      items,
+      summary: simpleDartSummary(items[0]) + (items.length > 1 ? " \uCD5C\uADFC 1\uB144 \uACF5\uC2DC " + items.length + "\uAC74\uC744 \uBD88\uB7EC\uC654\uC2B5\uB2C8\uB2E4." : "")
+    });
+  } catch (error) {
+    console.error("stock filings route error:", error);
+    const items = await fetchDartFilings("").catch(() => []);
+    res.json({
+      ticker,
+      filings: items,
+      items,
+      summary: "DART \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
+    });
+  }
 });
 router6.get("/:ticker/disclosures", async (req, res) => {
   const ticker = normalizeTicker3(req.params.ticker);
-  res.json({
-    ticker,
-    disclosures: [],
-    items: [],
-    summary: "\uACF5\uC2DC \uB370\uC774\uD130\uB294 \uC5F0\uACB0 \uC900\uBE44 \uC911\uC785\uB2C8\uB2E4."
-  });
+  try {
+    const items = await fetchDartFilings(ticker);
+    res.json({
+      ticker,
+      disclosures: items,
+      items,
+      summary: simpleDartSummary(items[0])
+    });
+  } catch (error) {
+    console.error("stock disclosures route error:", error);
+    res.json({
+      ticker,
+      disclosures: [],
+      items: [],
+      summary: "DART \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
+    });
+  }
 });
 router6.get("/:ticker/news", async (req, res) => {
   const ticker = normalizeTicker3(req.params.ticker);
-  res.json({
-    ticker,
-    news: [],
-    items: [],
-    summary: "\uB274\uC2A4 \uB370\uC774\uD130\uB294 \uC5F0\uACB0 \uC900\uBE44 \uC911\uC785\uB2C8\uB2E4."
-  });
+  try {
+    const items = await fetchGoogleNews(ticker);
+    res.json({
+      ticker,
+      news: items,
+      items,
+      summary: items.length ? simpleNewsSummary(items[0]) : "\uCD5C\uADFC \uAD00\uB828 \uB274\uC2A4\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."
+    });
+  } catch (error) {
+    console.error("stock news route error:", error);
+    res.status(502).json({
+      ticker,
+      news: [],
+      items: [],
+      summary: "\uB274\uC2A4 \uC81C\uACF5\uCC98 \uC5F0\uACB0\uC774 \uC7A0\uC2DC \uC9C0\uC5F0\uB418\uACE0 \uC788\uC2B5\uB2C8\uB2E4."
+    });
+  }
+});
+function cleanFinanceCell(value) {
+  return value.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+}
+function financeNumber(value) {
+  if (!value) return 0;
+  const normalized = value.replace(/,/g, "").replace(/%/g, "").replace(/[^0-9+\-.]/g, "");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+function financeTableRows(html) {
+  return [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map(
+    (row) => [...row[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(
+      (cell) => cleanFinanceCell(cell[1])
+    )
+  ).filter((cells) => cells.length > 0);
+}
+function groupInvestorRows(rows, period) {
+  const size = period === "weekly" ? 5 : period === "monthly" ? 20 : period === "yearly" ? 240 : 1;
+  if (size === 1) return rows.slice(0, 30);
+  const grouped = [];
+  for (let i = 0; i < rows.length; i += size) {
+    const chunk = rows.slice(i, i + size);
+    if (!chunk.length) continue;
+    grouped.push({
+      date: chunk[0].date,
+      individual: chunk.reduce((sum, row) => sum + row.individual, 0),
+      institution: chunk.reduce((sum, row) => sum + row.institution, 0),
+      foreign: chunk.reduce((sum, row) => sum + row.foreign, 0)
+    });
+  }
+  return grouped.slice(0, 30);
+}
+router6.get("/:ticker/market-flow", async (req, res) => {
+  const ticker = normalizeTicker3(req.params.ticker);
+  const period = String(req.query.period ?? "daily");
+  if (!/^\d{6}$/.test(ticker)) {
+    return res.json({
+      ticker,
+      period,
+      available: false,
+      rows: [],
+      totals: { individual: 0, institution: 0, foreign: 0 },
+      message: "\uD574\uC678 \uC885\uBAA9\uC758 \uD22C\uC790\uC790\uBCC4 \uC218\uAE09\uC740 \uD604\uC7AC \uC81C\uACF5\uCC98\uC5D0\uC11C \uC9C0\uC6D0\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
+    });
+  }
+  try {
+    const response = await fetch(
+      `https://finance.naver.com/item/frgn.naver?code=${ticker}&page=1`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          Referer: "https://finance.naver.com/"
+        }
+      }
+    );
+    const html = await response.text();
+    const dailyRows = financeTableRows(html).filter(
+      (cells) => /^\d{4}\.\d{2}\.\d{2}$/.test(cells[0] ?? "") && cells.length >= 7
+    ).map((cells) => {
+      const institution = financeNumber(cells[5]);
+      const foreign = financeNumber(cells[6]);
+      return {
+        date: cells[0],
+        individual: -(institution + foreign),
+        institution,
+        foreign
+      };
+    });
+    const rows = groupInvestorRows(dailyRows, period);
+    const totals = rows.reduce(
+      (acc, row) => ({
+        individual: acc.individual + row.individual,
+        institution: acc.institution + row.institution,
+        foreign: acc.foreign + row.foreign
+      }),
+      { individual: 0, institution: 0, foreign: 0 }
+    );
+    res.json({
+      ticker,
+      period,
+      available: rows.length > 0,
+      rows,
+      totals,
+      note: "\uAC1C\uC778\uC740 \uAE30\uAD00\xB7\uC678\uAD6D\uC778 \uC21C\uB9E4\uB9E4\uC758 \uBC18\uB300\uAC12\uC73C\uB85C \uCD94\uC815\uD55C \uCC38\uACE0\uCE58\uC785\uB2C8\uB2E4."
+    });
+  } catch (error) {
+    console.error("investor flow route error:", error);
+    res.json({
+      ticker,
+      period,
+      available: false,
+      rows: [],
+      totals: { individual: 0, institution: 0, foreign: 0 },
+      message: "\uD22C\uC790\uC790\uBCC4 \uC218\uAE09 \uB370\uC774\uD130\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
+    });
+  }
+});
+router6.get("/:ticker/short-selling", async (req, res) => {
+  const ticker = normalizeTicker3(req.params.ticker);
+  if (!/^\d{6}$/.test(ticker)) {
+    return res.json({
+      ticker,
+      available: false,
+      rows: [],
+      latest: null,
+      message: "\uD574\uC678 \uACF5\uB9E4\uB3C4 \uB370\uC774\uD130\uB294 \uBCC4\uB3C4 \uC81C\uACF5\uCC98 \uC5F0\uB3D9\uC774 \uD544\uC694\uD569\uB2C8\uB2E4."
+    });
+  }
+  try {
+    const headers = {
+      "User-Agent": "Mozilla/5.0",
+      Referer: "https://finance.naver.com/"
+    };
+    const [tradeResponse, balanceResponse] = await Promise.all([
+      fetch(`https://finance.naver.com/item/short_trade.naver?code=${ticker}`, {
+        headers
+      }),
+      fetch(
+        `https://finance.naver.com/item/short_balance.naver?code=${ticker}`,
+        { headers }
+      )
+    ]);
+    const [tradeHtml, balanceHtml] = await Promise.all([
+      tradeResponse.text(),
+      balanceResponse.text()
+    ]);
+    const tradeRows = financeTableRows(tradeHtml).filter(
+      (cells) => /^\d{4}\.\d{2}\.\d{2}$/.test(cells[0] ?? "") && cells.length >= 6
+    ).map((cells) => ({
+      date: cells[0],
+      shortVolume: financeNumber(cells[cells.length - 2]),
+      ratio: financeNumber(cells[cells.length - 1])
+    }));
+    const balanceMap = new Map(
+      financeTableRows(balanceHtml).filter(
+        (cells) => /^\d{4}\.\d{2}\.\d{2}$/.test(cells[0] ?? "") && cells.length >= 6
+      ).map((cells) => [
+        cells[0],
+        {
+          balance: financeNumber(cells[cells.length - 4]),
+          balanceAmount: financeNumber(cells[cells.length - 3]),
+          balanceRatio: financeNumber(cells[cells.length - 1])
+        }
+      ])
+    );
+    const rows = tradeRows.slice(0, 30).map((row) => ({ ...row, ...balanceMap.get(row.date) ?? {} }));
+    const latestBalance = [...balanceMap.values()][0] ?? {};
+    const latest = rows.length ? { ...rows[0], ...latestBalance, borrowRate: null } : null;
+    res.json({
+      ticker,
+      available: rows.length > 0,
+      rows,
+      latest,
+      note: "\uB300\uCC28 \uC774\uC790\uC728\uC740 \uD604\uC7AC \uC81C\uACF5\uCC98\uAC00 \uACF5\uAC1C\uD558\uC9C0 \uC54A\uC544 \uBBF8\uC81C\uACF5\uC73C\uB85C \uD45C\uC2DC\uB429\uB2C8\uB2E4."
+    });
+  } catch (error) {
+    console.error("short selling route error:", error);
+    res.json({
+      ticker,
+      available: false,
+      rows: [],
+      latest: null,
+      message: "\uACF5\uB9E4\uB3C4 \uB370\uC774\uD130\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
+    });
+  }
 });
 var stocks_default = router6;
 
@@ -3587,12 +4960,16 @@ router7.delete("/watchlist/:ticker", async (req, res) => {
 var watchlist_default = router7;
 
 // src/routes/kiwoom.routes.ts
-import { Router as Router8 } from "express";
+import {
+  Router as Router8
+} from "express";
 
 // src/providers/kiwoom.ts
 var REAL_BASE_URL = "https://api.kiwoom.com";
 var MOCK_BASE_URL = "https://mockapi.kiwoom.com";
 var REQUEST_TIMEOUT_MS = 15e3;
+var UINT32_MAX = 4294967295;
+var INT32_MAX = 2147483647;
 var tokenCache = null;
 function baseUrl() {
   return process.env.KIWOOM_MODE?.trim().toLowerCase() === "mock" ? MOCK_BASE_URL : REAL_BASE_URL;
@@ -3600,15 +4977,23 @@ function baseUrl() {
 function requireEnv(name) {
   const value = process.env[name]?.trim();
   if (!value) {
-    throw new Error(`${name} \uD658\uACBD\uBCC0\uC218\uAC00 \uB4F1\uB85D\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.`);
+    throw new Error(
+      `${name} \uD658\uACBD\uBCC0\uC218\uAC00 \uB4F1\uB85D\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.`
+    );
   }
   return value;
 }
 function toNumber(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "string") return null;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
   const normalized = value.replace(/[,+%₩$]/g, "").trim();
-  if (!normalized) return null;
+  if (!normalized) {
+    return null;
+  }
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -3616,9 +5001,42 @@ function absoluteNumber(value) {
   const parsed = toNumber(value);
   return parsed == null ? null : Math.abs(parsed);
 }
+function normalizeVolume(value) {
+  const parsed = absoluteNumber(value);
+  if (parsed == null) {
+    return {
+      value: null,
+      warning: null
+    };
+  }
+  if (parsed === UINT32_MAX) {
+    return {
+      value: null,
+      warning: "\uD0A4\uC6C0 \uC751\uB2F5 \uAC70\uB798\uB7C9\uC774 UINT32 \uCD5C\uB300\uAC12(4,294,967,295)\uC73C\uB85C \uBC18\uD658\uB418\uC5B4 \uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uAC12\uC73C\uB85C \uCC98\uB9AC\uD588\uC2B5\uB2C8\uB2E4."
+    };
+  }
+  if (parsed === INT32_MAX) {
+    return {
+      value: null,
+      warning: "\uD0A4\uC6C0 \uC751\uB2F5 \uAC70\uB798\uB7C9\uC774 INT32 \uCD5C\uB300\uAC12(2,147,483,647)\uC73C\uB85C \uBC18\uD658\uB418\uC5B4 \uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uAC12\uC73C\uB85C \uCC98\uB9AC\uD588\uC2B5\uB2C8\uB2E4."
+    };
+  }
+  if (!Number.isSafeInteger(parsed)) {
+    return {
+      value: null,
+      warning: "\uAC70\uB798\uB7C9\uC774 JavaScript \uC548\uC804 \uC815\uC218 \uBC94\uC704\uB97C \uBC97\uC5B4\uB098 \uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uAC12\uC73C\uB85C \uCC98\uB9AC\uD588\uC2B5\uB2C8\uB2E4."
+    };
+  }
+  return {
+    value: parsed,
+    warning: null
+  };
+}
 async function readJson(response) {
   const text = await response.text();
-  if (!text) return {};
+  if (!text) {
+    return {};
+  }
   try {
     return JSON.parse(text);
   } catch {
@@ -3629,7 +5047,9 @@ async function readJson(response) {
 }
 function returnCode(data) {
   const raw = data.return_code;
-  if (raw == null || raw === "") return 0;
+  if (raw == null || raw === "") {
+    return 0;
+  }
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : -1;
 }
@@ -3644,8 +5064,12 @@ function getKiwoomStatus() {
     provider: "kiwoom",
     mode: process.env.KIWOOM_MODE?.trim().toLowerCase() === "mock" ? "mock" : "real",
     baseUrl: baseUrl(),
-    appKeyRegistered: Boolean(process.env.KIWOOM_APP_KEY?.trim()),
-    appSecretRegistered: Boolean(process.env.KIWOOM_APP_SECRET?.trim()),
+    appKeyRegistered: Boolean(
+      process.env.KIWOOM_APP_KEY?.trim()
+    ),
+    appSecretRegistered: Boolean(
+      process.env.KIWOOM_APP_SECRET?.trim()
+    ),
     tokenCached: Boolean(
       tokenCache && Date.now() < tokenCache.expiresAt - 6e4
     )
@@ -3656,22 +5080,32 @@ async function getKiwoomToken() {
     return tokenCache.token;
   }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    REQUEST_TIMEOUT_MS
+  );
   try {
-    const response = await fetch(`${baseUrl()}/oauth2/token`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json;charset=UTF-8"
-      },
-      body: JSON.stringify({
-        grant_type: "client_credentials",
-        appkey: requireEnv("KIWOOM_APP_KEY"),
-        secretkey: requireEnv("KIWOOM_APP_SECRET")
-      }),
-      signal: controller.signal
-    });
-    const result = await readJson(response);
+    const response = await fetch(
+      `${baseUrl()}/oauth2/token`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json;charset=UTF-8"
+        },
+        body: JSON.stringify({
+          grant_type: "client_credentials",
+          appkey: requireEnv("KIWOOM_APP_KEY"),
+          secretkey: requireEnv(
+            "KIWOOM_APP_SECRET"
+          )
+        }),
+        signal: controller.signal
+      }
+    );
+    const result = await readJson(
+      response
+    );
     if (!response.ok || returnCode(result) !== 0 || !result.token) {
       throw new Error(
         `\uD0A4\uC6C0 \uD1A0\uD070 \uBC1C\uAE09 \uC2E4\uD328: ${returnMessage(result)} (HTTP ${response.status})`
@@ -3679,38 +5113,55 @@ async function getKiwoomToken() {
     }
     tokenCache = {
       token: result.token,
-      // Official token lifetime is 24 hours. Cache for 23 hours defensively.
       expiresAt: Date.now() + 23 * 60 * 60 * 1e3
     };
     return result.token;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("\uD0A4\uC6C0 \uD1A0\uD070 \uC694\uCCAD \uC2DC\uAC04\uC774 \uCD08\uACFC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+      throw new Error(
+        "\uD0A4\uC6C0 \uD1A0\uD070 \uC694\uCCAD \uC2DC\uAC04\uC774 \uCD08\uACFC\uB418\uC5C8\uC2B5\uB2C8\uB2E4."
+      );
     }
     throw error;
   } finally {
     clearTimeout(timeout);
   }
 }
-async function kiwoomRequest({ apiId, path: path3, body, contYn, nextKey }) {
+async function kiwoomRequest({
+  apiId,
+  path: path3,
+  body,
+  contYn,
+  nextKey
+}) {
   const token = await getKiwoomToken();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    REQUEST_TIMEOUT_MS
+  );
   const headers = {
     Accept: "application/json",
     "Content-Type": "application/json;charset=UTF-8",
     authorization: `Bearer ${token}`,
     "api-id": apiId
   };
-  if (contYn) headers["cont-yn"] = contYn;
-  if (nextKey) headers["next-key"] = nextKey;
+  if (contYn) {
+    headers["cont-yn"] = contYn;
+  }
+  if (nextKey) {
+    headers["next-key"] = nextKey;
+  }
   try {
-    const response = await fetch(`${baseUrl()}${path3}`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
+    const response = await fetch(
+      `${baseUrl()}${path3}`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal
+      }
+    );
     const result = await readJson(response);
     if (!response.ok || returnCode(result) !== 0) {
       if (response.status === 401 || response.status === 403) {
@@ -3727,7 +5178,9 @@ async function kiwoomRequest({ apiId, path: path3, body, contYn, nextKey }) {
     };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`\uD0A4\uC6C0 ${apiId} \uC694\uCCAD \uC2DC\uAC04\uC774 \uCD08\uACFC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.`);
+      throw new Error(
+        `\uD0A4\uC6C0 ${apiId} \uC694\uCCAD \uC2DC\uAC04\uC774 \uCD08\uACFC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.`
+      );
     }
     throw error;
   } finally {
@@ -3736,13 +5189,19 @@ async function kiwoomRequest({ apiId, path: path3, body, contYn, nextKey }) {
 }
 async function getKiwoomDomesticOrderbook(ticker) {
   const normalizedTicker = ticker.trim().toUpperCase();
-  if (!/^[0-9]{6}(?:_(?:NX|AL))?$/.test(normalizedTicker)) {
-    throw new Error(`\uC798\uBABB\uB41C \uAD6D\uB0B4 \uC885\uBAA9\uCF54\uB4DC\uC785\uB2C8\uB2E4: ${normalizedTicker}`);
+  if (!/^[0-9A-Z]{6}(?:_(?:NX|AL))?$/.test(
+    normalizedTicker
+  )) {
+    throw new Error(
+      `\uC798\uBABB\uB41C \uAD6D\uB0B4 \uC885\uBAA9\uCF54\uB4DC\uC785\uB2C8\uB2E4: ${normalizedTicker}`
+    );
   }
   const result = await kiwoomRequest({
     apiId: "ka10004",
     path: "/api/dostk/mrkcond",
-    body: { stk_cd: normalizedTicker }
+    body: {
+      stk_cd: normalizedTicker
+    }
   });
   return result.data;
 }
@@ -3779,7 +5238,7 @@ function domesticRankingRequest(type) {
     path: "/api/dostk/rkinfo",
     body: {
       ...common,
-      sort_tp: type === "losers" ? "2" : "1",
+      sort_tp: type === "losers" ? "3" : "1",
       trde_qty_cnd: "0000",
       stk_cnd: "0",
       crd_cnd: "0",
@@ -3789,48 +5248,289 @@ function domesticRankingRequest(type) {
     }
   };
 }
-function usRankingRequest(type) {
-  const apiId = type === "volume" ? "usa20530" : type === "tradingValue" ? "usa20540" : "usa20910";
-  return {
-    apiId,
-    path: "/api/us/rkinfo",
-    body: {
-      // 000 = all supported US exchanges in Kiwoom ranking screens.
-      excd: "000",
-      // Stock/industry rows, not ETF-only rows.
-      item_tp: "1",
-      sort_tp: type === "losers" ? "2" : "1"
+function usRankingRequests(type) {
+  if (type === "volume") {
+    return [
+      {
+        apiId: "usa20530",
+        path: "/api/us/rkinfo",
+        body: {
+          excd: "000",
+          item_tp: "1",
+          sort_tp: "1"
+        }
+      }
+    ];
+  }
+  if (type === "tradingValue") {
+    return [
+      {
+        apiId: "usa20540",
+        path: "/api/us/rkinfo",
+        body: {
+          excd: "000",
+          item_tp: "1",
+          sort_tp: "1"
+        }
+      }
+    ];
+  }
+  if (type === "gainers") {
+    return [
+      {
+        apiId: "usa20910",
+        path: "/api/us/rkinfo",
+        body: {
+          excd: "000",
+          item_tp: "1",
+          sort_tp: "1"
+        }
+      }
+    ];
+  }
+  return [
+    {
+      apiId: "usa20910",
+      path: "/api/us/rkinfo",
+      body: {
+        excd: "000",
+        item_tp: "1",
+        sort_tp: "4"
+      }
+    },
+    {
+      apiId: "usa20910",
+      path: "/api/us/rkinfo",
+      body: {
+        excd: "000",
+        item_tp: "1",
+        sort_tp: "5"
+      }
+    },
+    {
+      apiId: "usa20910",
+      path: "/api/us/rkinfo",
+      body: {
+        excd: "000",
+        item_tp: "1",
+        sort_tp: "2"
+      }
     }
-  };
+  ];
 }
 function objectRows(value, depth = 0) {
-  if (depth > 4) return [];
+  if (depth > 4) {
+    return [];
+  }
   if (Array.isArray(value)) {
     return value.filter(
       (item) => Boolean(item) && typeof item === "object" && !Array.isArray(item)
     );
   }
-  if (!value || typeof value !== "object") return [];
-  const entries = Object.entries(value);
-  const direct = entries.filter(([, nested]) => Array.isArray(nested)).sort((a, b) => b[1].length - a[1].length);
-  for (const [, nested] of direct) {
-    const rows = objectRows(nested, depth + 1);
-    if (rows.length > 0) return rows;
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const entries = Object.entries(
+    value
+  );
+  const directArrays = entries.filter(
+    ([, nested]) => Array.isArray(nested)
+  ).sort(
+    (a, b) => b[1].length - a[1].length
+  );
+  for (const [, nested] of directArrays) {
+    const rows = objectRows(
+      nested,
+      depth + 1
+    );
+    if (rows.length > 0) {
+      return rows;
+    }
   }
   for (const [, nested] of entries) {
-    const rows = objectRows(nested, depth + 1);
-    if (rows.length > 0) return rows;
+    const rows = objectRows(
+      nested,
+      depth + 1
+    );
+    if (rows.length > 0) {
+      return rows;
+    }
   }
   return [];
 }
+function rankingRows(data) {
+  const resultList = data.result_list;
+  if (Array.isArray(resultList)) {
+    const rows = objectRows(resultList);
+    if (rows.length > 0) {
+      return rows;
+    }
+  }
+  return objectRows(data);
+}
 function pick3(row, keys) {
   for (const key of keys) {
-    if (row[key] != null && row[key] !== "") return row[key];
+    if (row[key] != null && row[key] !== "") {
+      return row[key];
+    }
   }
   return void 0;
 }
-function normalizeRankingRows(data, market, type, limit) {
-  const rows = objectRows(data);
+function pickEntry(row, keys) {
+  for (const key of keys) {
+    if (row[key] != null && row[key] !== "") {
+      return {
+        key,
+        value: row[key]
+      };
+    }
+  }
+  return null;
+}
+function normalizeTradingValue(row, market) {
+  const entry = pickEntry(row, [
+    "trde_amt",
+    "trde_prica",
+    "trading_value",
+    "acml_tr_pbmn",
+    "acml_trading_value",
+    "acc_trde_prica",
+    "amount",
+    "trade_amount",
+    "trd_amt",
+    "turnover"
+  ]);
+  if (!entry) {
+    return null;
+  }
+  const parsed = absoluteNumber(entry.value);
+  if (parsed == null) {
+    return null;
+  }
+  if (market === "KR" && (entry.key === "trde_amt" || entry.key === "trde_prica")) {
+    return parsed * 1e6;
+  }
+  if (market === "US" && (entry.key === "trde_prica" || entry.key === "acc_trde_prica")) {
+    return parsed * 1e3;
+  }
+  return parsed;
+}
+function containsAny(text, keywords) {
+  return keywords.some(
+    (keyword) => text.includes(keyword)
+  );
+}
+function classifyKiwoomInstrument(name, market) {
+  const normalizedName = name.replace(/\s+/g, " ").trim();
+  const upperName = normalizedName.toUpperCase();
+  const compactName = upperName.replace(/\s+/g, "");
+  const isEtn2 = /\bETN\b/i.test(upperName) || containsAny(compactName, [
+    "\uC0C1\uC7A5\uC9C0\uC218\uC99D\uAD8C",
+    "\uB808\uBC84\uB9AC\uC9C0ETN",
+    "\uC778\uBC84\uC2A4ETN"
+  ]);
+  const koreanEtfBrand = /^(KODEX|TIGER|RISE|ACE|SOL|PLUS|HANARO|KOSEF|ARIRANG|TIMEFOLIO|WOORI|FOCUS|KIWOOM|KBSTAR|1Q|BNK|히어로즈|마이티)(\s|$)/i.test(
+    normalizedName
+  );
+  const overseasEtfName = /\bETF\b/i.test(upperName) || /\bEXCHANGE TRADED FUND\b/i.test(
+    upperName
+  );
+  const isEtf = !isEtn2 && (koreanEtfBrand || overseasEtfName || containsAny(compactName, [
+    "\uC0C1\uC7A5\uC9C0\uC218\uD380\uB4DC",
+    "\uB2E8\uC77C\uC885\uBAA9\uB808\uBC84\uB9AC\uC9C0",
+    "\uC120\uBB3C\uC778\uBC84\uC2A4",
+    "\uCF54\uC2A4\uB2E5150\uB808\uBC84\uB9AC\uC9C0",
+    "\uCF54\uC2A4\uB2E5150\uC120\uBB3C\uC778\uBC84\uC2A4"
+  ]));
+  const isWarrant = containsAny(compactName, [
+    "WARRANT",
+    "WARRANTS",
+    "C/WTS",
+    "WTS",
+    "\uC6CC\uB7F0\uD2B8",
+    "\uC2E0\uC8FC\uC778\uC218\uAD8C"
+  ]);
+  const isReit = containsAny(compactName, [
+    "\uB9AC\uCE20",
+    "REIT"
+  ]) && !isEtf && !isEtn2 && !isWarrant;
+  const isSpac = containsAny(compactName, [
+    "\uC2A4\uD329",
+    "SPAC"
+  ]) && !isEtf && !isEtn2 && !isWarrant;
+  const isLeveraged2 = containsAny(compactName, [
+    "\uB808\uBC84\uB9AC\uC9C0",
+    "2X",
+    "3X",
+    "BULL2X",
+    "BULL3X"
+  ]);
+  const isInverse2 = containsAny(compactName, [
+    "\uC778\uBC84\uC2A4",
+    "INVERSE",
+    "BEAR",
+    "SHORT",
+    "SHORT2X",
+    "SHORT3X",
+    "-1X",
+    "-2X",
+    "-3X"
+  ]);
+  const derivativeKeyword = containsAny(compactName, [
+    "\uC120\uBB3C",
+    "FUTURES",
+    "\uC635\uC158",
+    "OPTION"
+  ]);
+  const isDerivative = isLeveraged2 || isInverse2 || derivativeKeyword || isWarrant;
+  let assetType = "UNKNOWN";
+  if (isEtn2) {
+    assetType = "ETN";
+  } else if (isEtf) {
+    assetType = "ETF";
+  } else if (isWarrant) {
+    assetType = "UNKNOWN";
+  } else if (isReit) {
+    assetType = "REIT";
+  } else if (isSpac) {
+    assetType = "SPAC";
+  } else if (market === "KR") {
+    assetType = "STOCK";
+  } else if (!/\bFUND\b/i.test(upperName) && !/\bTRUST\b/i.test(upperName) && !/\bUNIT\b/i.test(upperName)) {
+    assetType = "STOCK";
+  }
+  const isEtp2 = assetType === "ETF" || assetType === "ETN";
+  let riskLevel = "NORMAL";
+  if (assetType === "ETN" || isLeveraged2 || isInverse2 || isDerivative) {
+    riskLevel = "HIGH";
+  } else if (assetType === "ETF" || assetType === "REIT" || assetType === "SPAC" || assetType === "UNKNOWN") {
+    riskLevel = "CAUTION";
+  }
+  const recommendationEligible = assetType === "STOCK" && riskLevel === "NORMAL" && !isLeveraged2 && !isInverse2 && !isDerivative;
+  return {
+    assetType,
+    isEtp: isEtp2,
+    isLeveraged: isLeveraged2,
+    isInverse: isInverse2,
+    isDerivative,
+    riskLevel,
+    recommendationEligible
+  };
+}
+function rankingReason(type) {
+  if (type === "volume") {
+    return "\uD0A4\uC6C0\uC99D\uAD8C \uAC70\uB798\uB7C9 \uC0C1\uC704 \uC885\uBAA9\uC785\uB2C8\uB2E4.";
+  }
+  if (type === "tradingValue") {
+    return "\uD0A4\uC6C0\uC99D\uAD8C \uAC70\uB798\uB300\uAE08 \uC0C1\uC704 \uC885\uBAA9\uC785\uB2C8\uB2E4.";
+  }
+  if (type === "gainers") {
+    return "\uD0A4\uC6C0\uC99D\uAD8C \uB4F1\uB77D\uB960 \uAE30\uC900 \uAE09\uC0C1\uC2B9 \uC885\uBAA9\uC785\uB2C8\uB2E4.";
+  }
+  return "\uD0A4\uC6C0\uC99D\uAD8C \uB4F1\uB77D\uB960 \uAE30\uC900 \uAE09\uD558\uB77D \uC885\uBAA9\uC785\uB2C8\uB2E4.";
+}
+function normalizeRankingRows(data, market, type) {
+  const rows = rankingRows(data);
   const result = [];
   for (const row of rows) {
     const tickerRaw = pick3(row, [
@@ -3841,22 +5541,46 @@ function normalizeRankingRows(data, market, type, limit) {
       "ticker",
       "ovrs_pdno",
       "eng_stk_cd",
-      "code"
+      "code",
+      "item_cd",
+      "item_code"
     ]);
-    const ticker = String(tickerRaw ?? "").trim().toUpperCase();
-    if (!ticker) continue;
+    const ticker = String(
+      tickerRaw ?? ""
+    ).trim().toUpperCase();
+    if (!ticker) {
+      continue;
+    }
     const name = String(
       pick3(row, [
         "stk_nm",
         "stk_name",
         "name",
         "kor_nm",
-        "eng_nm",
-        "ovrs_item_name"
+        "ovrs_item_name",
+        "item_nm",
+        "item_name"
       ]) ?? ticker
     ).trim();
+    const englishName = String(
+      pick3(row, [
+        "stk_enm",
+        "eng_nm",
+        "eng_item_nm"
+      ]) ?? ""
+    ).trim();
     const price = absoluteNumber(
-      pick3(row, ["cur_prc", "now_pric", "last", "price", "ovrs_nmix_prpr"])
+      pick3(row, [
+        "cur_prc",
+        "now_pric",
+        "curr_pric",
+        "last",
+        "price",
+        "ovrs_nmix_prpr",
+        "last_pric",
+        "close",
+        "prpr"
+      ])
     );
     const changePercent = toNumber(
       pick3(row, [
@@ -3865,14 +5589,55 @@ function normalizeRankingRows(data, market, type, limit) {
         "change_rate",
         "changePercent",
         "prdy_ctrt",
-        "rate"
+        "rate",
+        "diff_rate",
+        "fluctuation_rate",
+        "diff_rate_for_gjga"
       ])
     );
-    const volume = absoluteNumber(
-      pick3(row, ["trde_qty", "volume", "acml_vol", "acml_volum", "tvol"])
+    const normalizedVolume = normalizeVolume(
+      pick3(row, [
+        "acc_trde_qty",
+        "acc_trd_qty",
+        "acml_trde_qty",
+        "acml_trd_qty",
+        "trde_qty",
+        "now_trde_qty",
+        "volume",
+        "acml_vol",
+        "acml_volum",
+        "tvol",
+        "tot_qty",
+        "trade_volume"
+      ])
     );
-    const tradingValue = absoluteNumber(
-      pick3(row, ["trde_prica", "trading_value", "acml_tr_pbmn", "amount"])
+    const tradingValue = normalizeTradingValue(
+      row,
+      market
+    );
+    const classification = classifyKiwoomInstrument(
+      `${name} ${englishName}`.trim(),
+      market
+    );
+    const dataQualityWarnings = [];
+    if (normalizedVolume.warning) {
+      dataQualityWarnings.push(
+        normalizedVolume.warning
+      );
+    }
+    const sourceRankValue = toNumber(
+      pick3(row, [
+        "rank",
+        "sourceRank",
+        "kw_high_rank",
+        "rnk"
+      ])
+    );
+    const sourceRank = sourceRankValue == null ? result.length + 1 : Math.max(
+      1,
+      Math.trunc(
+        Math.abs(sourceRankValue)
+      )
     );
     result.push({
       ticker,
@@ -3881,33 +5646,171 @@ function normalizeRankingRows(data, market, type, limit) {
       currency: market === "KR" ? "KRW" : "USD",
       price,
       changePercent,
-      volume,
+      volume: normalizedVolume.value,
       tradingValue,
-      rank: result.length + 1,
-      reason: type === "volume" ? "\uD0A4\uC6C0\uC99D\uAD8C \uAC70\uB798\uB7C9 \uC0C1\uC704 \uC885\uBAA9\uC785\uB2C8\uB2E4." : type === "tradingValue" ? "\uD0A4\uC6C0\uC99D\uAD8C \uAC70\uB798\uB300\uAE08 \uC0C1\uC704 \uC885\uBAA9\uC785\uB2C8\uB2E4." : type === "gainers" ? "\uD0A4\uC6C0\uC99D\uAD8C \uB4F1\uB77D\uB960 \uAE30\uC900 \uAE09\uC0C1\uC2B9 \uC885\uBAA9\uC785\uB2C8\uB2E4." : "\uD0A4\uC6C0\uC99D\uAD8C \uB4F1\uB77D\uB960 \uAE30\uC900 \uAE09\uD558\uB77D \uC885\uBAA9\uC785\uB2C8\uB2E4.",
+      rank: sourceRank,
+      sourceRank,
+      assetType: classification.assetType,
+      isEtp: classification.isEtp,
+      isLeveraged: classification.isLeveraged,
+      isInverse: classification.isInverse,
+      isDerivative: classification.isDerivative,
+      riskLevel: classification.riskLevel,
+      recommendationEligible: classification.recommendationEligible,
+      dataQualityWarnings,
+      reason: rankingReason(type),
       provider: "kiwoom",
       raw: row
     });
-    if (result.length >= limit) break;
   }
   return result;
 }
-async function getKiwoomRankings(market, type, limit = 30) {
-  const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit || 30)));
-  const request = market === "KR" ? domesticRankingRequest(type) : usRankingRequest(type);
-  const response = await kiwoomRequest(request);
-  const rows = normalizeRankingRows(
-    response.data,
-    market,
-    type,
-    safeLimit
+function sortRankingRows(rows, type) {
+  return [...rows].sort(
+    (a, b) => {
+      if (type === "volume") {
+        if (a.volume == null && b.volume == null) {
+          return a.sourceRank - b.sourceRank;
+        }
+        if (a.volume == null) {
+          return 1;
+        }
+        if (b.volume == null) {
+          return -1;
+        }
+        return b.volume - a.volume;
+      }
+      if (type === "tradingValue") {
+        if (a.tradingValue == null && b.tradingValue == null) {
+          return a.sourceRank - b.sourceRank;
+        }
+        if (a.tradingValue == null) {
+          return 1;
+        }
+        if (b.tradingValue == null) {
+          return -1;
+        }
+        return b.tradingValue - a.tradingValue;
+      }
+      if (type === "gainers") {
+        return (b.changePercent ?? Number.NEGATIVE_INFINITY) - (a.changePercent ?? Number.NEGATIVE_INFINITY);
+      }
+      if (type === "losers") {
+        return (a.changePercent ?? Number.POSITIVE_INFINITY) - (b.changePercent ?? Number.POSITIVE_INFINITY);
+      }
+      return a.sourceRank - b.sourceRank;
+    }
   );
-  if (rows.length === 0) {
-    throw new Error(
-      `\uD0A4\uC6C0 ${request.apiId} \uC751\uB2F5\uC5D0\uC11C \uC885\uBAA9 \uBAA9\uB85D\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. API \uC6D0\uBB38\uC740 /api/kiwoom/raw-ranking\uC5D0\uC11C \uD655\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.`
+}
+function applyRankingOptions(rows, options, limit) {
+  const assetFilter = options.assetFilter ?? "all";
+  const filtered = rows.filter(
+    (row) => {
+      if (assetFilter === "stocks" && (row.assetType !== "STOCK" || row.isEtp || row.isLeveraged || row.isInverse || row.isDerivative || row.riskLevel === "HIGH")) {
+        return false;
+      }
+      if (assetFilter === "etp" && row.assetType !== "ETF" && row.assetType !== "ETN") {
+        return false;
+      }
+      if (options.excludeHighRisk && row.riskLevel === "HIGH") {
+        return false;
+      }
+      if (options.recommendationEligibleOnly && !row.recommendationEligible) {
+        return false;
+      }
+      return true;
+    }
+  );
+  return filtered.slice(0, limit).map((row, index) => ({
+    ...row,
+    rank: index + 1
+  }));
+}
+function filterByDirection(rows, type) {
+  return rows.filter(
+    (row) => {
+      if (type === "gainers") {
+        return row.changePercent != null && row.changePercent > 0;
+      }
+      if (type === "losers") {
+        return row.changePercent != null && row.changePercent < 0;
+      }
+      return true;
+    }
+  );
+}
+function finalizeRankingRows(data, market, type, options, limit) {
+  const normalizedRows = normalizeRankingRows(
+    data,
+    market,
+    type
+  );
+  const directionFilteredRows = filterByDirection(
+    normalizedRows,
+    type
+  );
+  const sortedRows = sortRankingRows(
+    directionFilteredRows,
+    type
+  );
+  return applyRankingOptions(
+    sortedRows,
+    options,
+    limit
+  );
+}
+async function getKiwoomRankings(market, type, limit = 30, options = {}) {
+  const safeLimit = Math.max(
+    1,
+    Math.min(
+      100,
+      Math.trunc(limit || 30)
+    )
+  );
+  if (market === "KR") {
+    const request = domesticRankingRequest(type);
+    const response = await kiwoomRequest(request);
+    const rows = finalizeRankingRows(
+      response.data,
+      market,
+      type,
+      options,
+      safeLimit
     );
+    if (rows.length === 0) {
+      throw new Error(
+        `\uC870\uAC74\uC5D0 \uB9DE\uB294 \uD0A4\uC6C0 \uB7AD\uD0B9 \uC885\uBAA9\uC774 \uC5C6\uC2B5\uB2C8\uB2E4. API=${request.apiId}, market=${market}, type=${type}.`
+      );
+    }
+    return rows;
   }
-  return rows;
+  const requests = usRankingRequests(type);
+  const attemptMessages = [];
+  for (const request of requests) {
+    try {
+      const response = await kiwoomRequest(request);
+      const rows = finalizeRankingRows(
+        response.data,
+        market,
+        type,
+        options,
+        safeLimit
+      );
+      if (rows.length > 0) {
+        return rows;
+      }
+      attemptMessages.push(
+        `${request.apiId}/sort_tp=${String(request.body.sort_tp)}: \uC870\uAC74\uC5D0 \uB9DE\uB294 \uC77C\uBC18\uC8FC\uC2DD 0\uAC1C`
+      );
+    } catch (error) {
+      attemptMessages.push(
+        `${request.apiId}/sort_tp=${String(request.body.sort_tp)}: ${error instanceof Error ? error.message : "\uC54C \uC218 \uC5C6\uB294 \uC624\uB958"}`
+      );
+    }
+  }
+  throw new Error(
+    `\uBBF8\uAD6D \uD0A4\uC6C0 \uB7AD\uD0B9 \uC870\uD68C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. market=${market}, type=${type}. \uC2DC\uB3C4 \uACB0\uACFC: ${attemptMessages.join(" | ")}`
+  );
 }
 
 // src/routes/kiwoom.routes.ts
@@ -3916,165 +5819,396 @@ function marketParam(value) {
   return String(value ?? "").toUpperCase() === "US" ? "US" : "KR";
 }
 function rankingTypeParam(value) {
-  const normalized = String(value ?? "volume");
-  if (normalized === "tradingValue") return "tradingValue";
-  if (normalized === "gainers") return "gainers";
-  if (normalized === "losers") return "losers";
+  const normalized = String(
+    value ?? "volume"
+  );
+  if (normalized === "tradingValue") {
+    return "tradingValue";
+  }
+  if (normalized === "gainers") {
+    return "gainers";
+  }
+  if (normalized === "losers") {
+    return "losers";
+  }
   return "volume";
 }
-router8.get("/status", (_req, res) => {
-  res.json({ ok: true, ...getKiwoomStatus() });
-});
-router8.get("/token-test", async (_req, res) => {
-  try {
-    const token = await getKiwoomToken();
-    res.json({
-      ok: true,
-      provider: "kiwoom",
-      message: "\uD0A4\uC6C0 \uC811\uADFC\uD1A0\uD070 \uBC1C\uAE09 \uC131\uACF5",
-      tokenReceived: Boolean(token),
-      tokenLength: token.length
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      provider: "kiwoom",
-      error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uD1A0\uD070 \uBC1C\uAE09 \uC2E4\uD328"
-    });
+function rankingAssetFilterParam(value) {
+  const normalized = String(
+    value ?? "all"
+  ).trim().toLowerCase();
+  if (normalized === "stocks") {
+    return "stocks";
   }
-});
-router8.get("/test", async (_req, res) => {
-  try {
-    const data = await getKiwoomDomesticOrderbook("005930");
-    res.json({
-      ok: true,
-      provider: "kiwoom",
-      market: "KR",
-      ticker: "005930",
-      name: "\uC0BC\uC131\uC804\uC790",
-      data
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      provider: "kiwoom",
-      error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uC870\uD68C \uC2E4\uD328"
-    });
+  if (normalized === "etp") {
+    return "etp";
   }
-});
-router8.get("/quote/:ticker", async (req, res) => {
-  try {
-    const ticker = String(req.params.ticker ?? "").trim().toUpperCase();
-    const data = await getKiwoomDomesticOrderbook(ticker);
-    res.json({ ok: true, provider: "kiwoom", market: "KR", ticker, data });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      provider: "kiwoom",
-      ticker: String(req.params.ticker ?? ""),
-      error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uC885\uBAA9 \uC870\uD68C \uC2E4\uD328"
-    });
+  return "all";
+}
+function booleanParam(value, defaultValue = false) {
+  if (value == null || value === "") {
+    return defaultValue;
   }
-});
-router8.get("/rankings", async (req, res) => {
-  const market = marketParam(req.query.market);
-  const type = rankingTypeParam(req.query.type);
-  const limit = Number(req.query.limit ?? 30);
-  try {
-    const rows = await getKiwoomRankings(market, type, limit);
-    res.json({
-      ok: true,
-      provider: "kiwoom",
-      market,
-      type,
-      rows,
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-    });
-  } catch (error) {
-    res.status(502).json({
-      ok: false,
-      provider: "kiwoom",
-      market,
-      type,
-      rows: [],
-      error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uB7AD\uD0B9 \uC870\uD68C \uC2E4\uD328"
-    });
+  const normalized = String(
+    value
+  ).trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+    return true;
   }
-});
-router8.get("/raw-ranking", async (req, res) => {
-  const market = marketParam(req.query.market);
-  const type = rankingTypeParam(req.query.type);
-  try {
-    const request = market === "KR" ? type === "volume" ? {
-      apiId: "ka10030",
-      path: "/api/dostk/rkinfo",
-      body: {
-        mrkt_tp: "000",
-        sort_tp: "1",
-        mang_stk_incls: "0",
-        crd_tp: "0",
-        trde_qty_tp: "0",
-        pric_tp: "0",
-        trde_prica_tp: "0",
-        mrkt_open_tp: "0",
-        stex_tp: "1"
+  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  return defaultValue;
+}
+function limitParam(value) {
+  const requestedLimit = Number(value ?? 30);
+  if (!Number.isFinite(
+    requestedLimit
+  )) {
+    return 30;
+  }
+  return Math.min(
+    Math.max(
+      Math.trunc(
+        requestedLimit
+      ),
+      1
+    ),
+    100
+  );
+}
+async function requestPublicIp() {
+  const providers = [
+    {
+      url: "https://api.ipify.org?format=json",
+      parse: async (response) => {
+        const result = await response.json();
+        return result.ip?.trim() ?? "";
       }
-    } : type === "tradingValue" ? {
-      apiId: "ka10032",
-      path: "/api/dostk/rkinfo",
-      body: { mrkt_tp: "000", mang_stk_incls: "0", stex_tp: "1" }
-    } : {
-      apiId: "ka10027",
-      path: "/api/dostk/rkinfo",
-      body: {
-        mrkt_tp: "000",
-        sort_tp: type === "losers" ? "2" : "1",
-        trde_qty_cnd: "0000",
-        stk_cnd: "0",
-        crd_cnd: "0",
-        updown_incls: "1",
-        pric_cnd: "0",
-        trde_prica_cnd: "0",
-        stex_tp: "1"
+    },
+    {
+      url: "https://checkip.amazonaws.com/",
+      parse: async (response) => {
+        return (await response.text()).trim();
       }
-    } : {
-      apiId: type === "volume" ? "usa20530" : type === "tradingValue" ? "usa20540" : "usa20910",
-      path: "/api/us/rkinfo",
-      body: {
-        excd: "000",
-        item_tp: "1",
-        sort_tp: type === "losers" ? "2" : "1"
+    }
+  ];
+  let lastError = null;
+  for (const provider of providers) {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      1e4
+    );
+    try {
+      const response = await fetch(
+        provider.url,
+        {
+          method: "GET",
+          headers: {
+            Accept: "application/json,text/plain",
+            "Cache-Control": "no-cache"
+          },
+          signal: controller.signal
+        }
+      );
+      if (!response.ok) {
+        throw new Error(
+          `\uC678\uBD80 IP \uD655\uC778 \uC2E4\uD328: HTTP ${response.status}`
+        );
       }
+      const ip = await provider.parse(
+        response
+      );
+      if (!ip) {
+        throw new Error(
+          "\uC678\uBD80 IP \uD655\uC778 \uACB0\uACFC\uAC00 \uBE44\uC5B4 \uC788\uC2B5\uB2C8\uB2E4."
+        );
+      }
+      return ip;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(
+        "\uC678\uBD80 IP \uD655\uC778 \uC2E4\uD328"
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError ?? new Error(
+    "Replit \uC678\uBD80 IP\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
+  );
+}
+router8.get(
+  "/egress-ip",
+  async (_req, res) => {
+    try {
+      const egressIp = await requestPublicIp();
+      return res.json({
+        ok: true,
+        provider: "server-egress-check",
+        egressIp,
+        message: "\uC774 IP\uB97C \uD0A4\uC6C0 REST API \uACC4\uC88C App Key \uAD00\uB9AC \uD654\uBA74\uC5D0 \uB4F1\uB85D\uD558\uC138\uC694.",
+        warning: "Replit \uC7AC\uC2DC\uC791 \uB610\uB294 \uC11C\uBC84 \uD658\uACBD \uBCC0\uACBD \uD6C4 IP\uAC00 \uBC14\uB014 \uC218 \uC788\uC2B5\uB2C8\uB2E4.",
+        checkedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+    } catch (error) {
+      return res.status(502).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Replit \uC678\uBD80 IP \uD655\uC778 \uC2E4\uD328"
+      });
+    }
+  }
+);
+router8.get(
+  "/status",
+  (_req, res) => {
+    return res.json({
+      ok: true,
+      ...getKiwoomStatus()
+    });
+  }
+);
+router8.get(
+  "/token-test",
+  async (_req, res) => {
+    try {
+      const token = await getKiwoomToken();
+      return res.json({
+        ok: true,
+        provider: "kiwoom",
+        message: "\uD0A4\uC6C0 \uC811\uADFC\uD1A0\uD070 \uBC1C\uAE09 \uC131\uACF5",
+        tokenReceived: Boolean(token),
+        tokenLength: token.length
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        provider: "kiwoom",
+        error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uD1A0\uD070 \uBC1C\uAE09 \uC2E4\uD328"
+      });
+    }
+  }
+);
+router8.get(
+  "/test",
+  async (_req, res) => {
+    try {
+      const data = await getKiwoomDomesticOrderbook(
+        "005930"
+      );
+      return res.json({
+        ok: true,
+        provider: "kiwoom",
+        market: "KR",
+        ticker: "005930",
+        name: "\uC0BC\uC131\uC804\uC790",
+        data
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        provider: "kiwoom",
+        error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uC870\uD68C \uC2E4\uD328"
+      });
+    }
+  }
+);
+router8.get(
+  "/quote/:ticker",
+  async (req, res) => {
+    try {
+      const ticker = String(
+        req.params.ticker ?? ""
+      ).trim().toUpperCase();
+      const data = await getKiwoomDomesticOrderbook(
+        ticker
+      );
+      return res.json({
+        ok: true,
+        provider: "kiwoom",
+        market: "KR",
+        ticker,
+        data
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        provider: "kiwoom",
+        ticker: String(
+          req.params.ticker ?? ""
+        ),
+        error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uC885\uBAA9 \uC870\uD68C \uC2E4\uD328"
+      });
+    }
+  }
+);
+router8.get(
+  "/rankings",
+  async (req, res) => {
+    const market = marketParam(
+      req.query.market
+    );
+    const type = rankingTypeParam(
+      req.query.type
+    );
+    const limit = limitParam(
+      req.query.limit
+    );
+    const assetFilter = rankingAssetFilterParam(
+      req.query.assetFilter
+    );
+    const excludeHighRisk = booleanParam(
+      req.query.excludeHighRisk
+    );
+    const recommendationEligibleOnly = booleanParam(
+      req.query.recommendationEligibleOnly
+    );
+    const options = {
+      assetFilter,
+      excludeHighRisk,
+      recommendationEligibleOnly
     };
-    const result = await kiwoomRequest(request);
-    res.json({ ok: true, market, type, request, data: result.data });
-  } catch (error) {
-    res.status(502).json({
-      ok: false,
-      market,
-      type,
-      error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uC6D0\uBB38 \uC870\uD68C \uC2E4\uD328"
-    });
+    try {
+      const rows = await getKiwoomRankings(
+        market,
+        type,
+        limit,
+        options
+      );
+      return res.json({
+        ok: true,
+        provider: "kiwoom",
+        market,
+        type,
+        limit,
+        filters: {
+          assetFilter,
+          excludeHighRisk,
+          recommendationEligibleOnly
+        },
+        count: rows.length,
+        rows,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+    } catch (error) {
+      return res.status(502).json({
+        ok: false,
+        provider: "kiwoom",
+        market,
+        type,
+        limit,
+        filters: {
+          assetFilter,
+          excludeHighRisk,
+          recommendationEligibleOnly
+        },
+        count: 0,
+        rows: [],
+        error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uB7AD\uD0B9 \uC870\uD68C \uC2E4\uD328"
+      });
+    }
   }
-});
-router8.post("/token/refresh", async (_req, res) => {
-  try {
-    clearKiwoomTokenCache();
-    const token = await getKiwoomToken();
-    res.json({
-      ok: true,
-      provider: "kiwoom",
-      message: "\uD0A4\uC6C0 \uC811\uADFC\uD1A0\uD070 \uAC31\uC2E0 \uC131\uACF5",
-      tokenReceived: Boolean(token)
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      provider: "kiwoom",
-      error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uD1A0\uD070 \uAC31\uC2E0 \uC2E4\uD328"
-    });
+);
+router8.get(
+  "/raw-ranking",
+  async (req, res) => {
+    const market = marketParam(
+      req.query.market
+    );
+    const type = rankingTypeParam(
+      req.query.type
+    );
+    try {
+      const request = market === "KR" ? type === "volume" ? {
+        apiId: "ka10030",
+        path: "/api/dostk/rkinfo",
+        body: {
+          mrkt_tp: "000",
+          sort_tp: "1",
+          mang_stk_incls: "0",
+          crd_tp: "0",
+          trde_qty_tp: "0",
+          pric_tp: "0",
+          trde_prica_tp: "0",
+          mrkt_open_tp: "0",
+          stex_tp: "1"
+        }
+      } : type === "tradingValue" ? {
+        apiId: "ka10032",
+        path: "/api/dostk/rkinfo",
+        body: {
+          mrkt_tp: "000",
+          mang_stk_incls: "0",
+          stex_tp: "1"
+        }
+      } : {
+        apiId: "ka10027",
+        path: "/api/dostk/rkinfo",
+        body: {
+          mrkt_tp: "000",
+          sort_tp: type === "losers" ? "3" : "1",
+          trde_qty_cnd: "0000",
+          stk_cnd: "0",
+          crd_cnd: "0",
+          updown_incls: "1",
+          pric_cnd: "0",
+          trde_prica_cnd: "0",
+          stex_tp: "1"
+        }
+      } : {
+        apiId: type === "volume" ? "usa20512" : type === "tradingValue" ? "usa20531" : "usa20881",
+        path: "/api/us/rkinfo",
+        body: {
+          excd: "000",
+          item_tp: "1",
+          sort_tp: type === "losers" ? "2" : "1"
+        }
+      };
+      const result = await kiwoomRequest(
+        request
+      );
+      return res.json({
+        ok: true,
+        market,
+        type,
+        request,
+        continuation: {
+          contYn: result.contYn,
+          nextKey: result.nextKey
+        },
+        data: result.data
+      });
+    } catch (error) {
+      return res.status(502).json({
+        ok: false,
+        market,
+        type,
+        error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uC6D0\uBB38 \uC870\uD68C \uC2E4\uD328"
+      });
+    }
   }
-});
+);
+router8.post(
+  "/token/refresh",
+  async (_req, res) => {
+    try {
+      clearKiwoomTokenCache();
+      const token = await getKiwoomToken();
+      return res.json({
+        ok: true,
+        provider: "kiwoom",
+        message: "\uD0A4\uC6C0 \uC811\uADFC\uD1A0\uD070 \uAC31\uC2E0 \uC131\uACF5",
+        tokenReceived: Boolean(token)
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        provider: "kiwoom",
+        error: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uD1A0\uD070 \uAC31\uC2E0 \uC2E4\uD328"
+      });
+    }
+  }
+);
 var kiwoom_routes_default = router8;
 
 // src/routes/index.ts
@@ -4113,7 +6247,9 @@ var routes_default = router9;
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path2.dirname(__filename);
 var app = express();
-var port = Number(process.env.PORT ?? process.env.API_PORT ?? 8080);
+var port = Number(
+  process.env.PORT ?? process.env.API_PORT ?? 8080
+);
 app.disable("x-powered-by");
 app.use(
   cors({
@@ -4121,8 +6257,16 @@ app.use(
     credentials: true
   })
 );
-app.use(express.json({ limit: "5mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(
+  express.json({
+    limit: "5mb"
+  })
+);
+app.use(
+  express.urlencoded({
+    extended: true
+  })
+);
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
@@ -4141,22 +6285,61 @@ app.get("/api/health", (_req, res) => {
 });
 app.use("/api", routes_default);
 var frontendDistCandidates = [
-  path2.resolve(__dirname, "../../stock-analyzer/dist/public"),
-  path2.resolve(__dirname, "../../stock-analyzer/dist"),
-  path2.resolve(__dirname, "../../../stock-analyzer/dist/public"),
-  path2.resolve(__dirname, "../../../stock-analyzer/dist"),
-  path2.resolve(process.cwd(), "../stock-analyzer/dist/public"),
-  path2.resolve(process.cwd(), "../stock-analyzer/dist"),
-  path2.resolve(process.cwd(), "artifacts/stock-analyzer/dist/public"),
-  path2.resolve(process.cwd(), "artifacts/stock-analyzer/dist"),
-  path2.resolve(process.cwd(), "stock-analyzer/dist/public"),
-  path2.resolve(process.cwd(), "stock-analyzer/dist")
+  path2.resolve(
+    __dirname,
+    "../../stock-analyzer/dist/public"
+  ),
+  path2.resolve(
+    __dirname,
+    "../../stock-analyzer/dist"
+  ),
+  path2.resolve(
+    __dirname,
+    "../../../stock-analyzer/dist/public"
+  ),
+  path2.resolve(
+    __dirname,
+    "../../../stock-analyzer/dist"
+  ),
+  path2.resolve(
+    process.cwd(),
+    "../stock-analyzer/dist/public"
+  ),
+  path2.resolve(
+    process.cwd(),
+    "../stock-analyzer/dist"
+  ),
+  path2.resolve(
+    process.cwd(),
+    "artifacts/stock-analyzer/dist/public"
+  ),
+  path2.resolve(
+    process.cwd(),
+    "artifacts/stock-analyzer/dist"
+  ),
+  path2.resolve(
+    process.cwd(),
+    "stock-analyzer/dist/public"
+  ),
+  path2.resolve(
+    process.cwd(),
+    "stock-analyzer/dist"
+  )
 ];
 var frontendDist = frontendDistCandidates.find(
-  (candidate) => fs2.existsSync(path2.join(candidate, "index.html"))
+  (candidate) => fs2.existsSync(
+    path2.join(
+      candidate,
+      "index.html"
+    )
+  )
 );
 if (frontendDist) {
-  app.use(express.static(frontendDist));
+  app.use(
+    express.static(
+      frontendDist
+    )
+  );
 }
 var availableRoutes = [
   "/api",
@@ -4175,7 +6358,9 @@ var availableRoutes = [
   "/api/watchlist"
 ];
 app.use((req, res) => {
-  if (req.path.startsWith("/api")) {
+  if (req.path.startsWith(
+    "/api"
+  )) {
     res.status(404).json({
       ok: false,
       error: "API_ROUTE_NOT_FOUND",
@@ -4185,23 +6370,43 @@ app.use((req, res) => {
     return;
   }
   if (frontendDist) {
-    res.sendFile(path2.join(frontendDist, "index.html"));
+    res.sendFile(
+      path2.join(
+        frontendDist,
+        "index.html"
+      )
+    );
     return;
   }
   res.status(200).json({
     ok: true,
     service: "api-server",
     message: "API server is running, but frontend dist was not found.",
-    available: ["/health", ...availableRoutes]
+    available: [
+      "/health",
+      ...availableRoutes
+    ]
   });
 });
-app.listen(port, "0.0.0.0", () => {
-  console.log(`[api-server] listening on 0.0.0.0:${port}`);
-  console.log("[api-server] Kiwoom routes enabled at /api/kiwoom");
-  if (frontendDist) {
-    console.log(`[api-server] serving frontend from ${frontendDist}`);
-  } else {
-    console.log("[api-server] frontend dist not found, api only mode");
+app.listen(
+  port,
+  "0.0.0.0",
+  () => {
+    console.log(
+      `[api-server] listening on 0.0.0.0:${port}`
+    );
+    console.log(
+      "[api-server] Kiwoom routes enabled at /api/kiwoom"
+    );
+    if (frontendDist) {
+      console.log(
+        `[api-server] serving frontend from ${frontendDist}`
+      );
+    } else {
+      console.log(
+        "[api-server] frontend dist not found, api only mode"
+      );
+    }
   }
-});
+);
 //# sourceMappingURL=index.mjs.map

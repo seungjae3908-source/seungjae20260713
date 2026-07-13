@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "NODE_ENV=development node --enable-source-maps ./dist/index.mjs",
-    "build": "node ./build.mjs",
-    "start": "NODE_ENV=development node --enable-source-maps ./dist/index.mjs",
-    "build-and-start": "pnpm run build && NODE_ENV=development node --enable-source-maps ./dist/index.mjs",
+    "dev": "pnpm run start",
+    "build:frontend": "pnpm --dir ../stock-analyzer run build",
+    "build:server": "node ./build.mjs",
+    "build": "pnpm run build:frontend && pnpm run build:server",
+    "start": "pnpm run build && NODE_ENV=development node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

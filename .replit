@@ -10,5 +10,27 @@ localPort = 8080
 externalPort = 80
 
 [[ports]]
+localPort = 8081
+externalPort = 8081
+
+[[ports]]
+localPort = 8082
+externalPort = 3001
+
+[[ports]]
+localPort = 8083
+externalPort = 3002
+
+[[ports]]
 localPort = 18797
 externalPort = 3000
+
+[userenv]
+
+[userenv.shared]
+KIWOOM_BASE_URL = "https://api.kiwoom.com"
+SUPABASE_ANON_KEY = "sb_publishable_l5iOTxTerk7gv3eDYouXcg_Q-YmVsZU"
+SUPABASE_URL = "https://bawcbkoyovbeajkrnduq.supabase.co"
+VITE_SUPABASE_ANON_KEY = "sb_publishable_l5iOTxTerk7gv3eDYouXcg_Q-YmVsZU"
+VITE_SUPABASE_URL = "https://bawcbkoyovbeajkrnduq.supabase.co"
+KIWOOM_MODE = "real"
