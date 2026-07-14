@@ -1,11 +1,11 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'wouter';
 import {
-	Bell,
-	ExternalLink,
-	ChevronRight,
-	TrendingUp,
-	TrendingDown,
+  Bell,
+  ExternalLink,
+  ChevronRight,
+  TrendingUp,
+  TrendingDown,
 } from 'lucide-react';
 import { useAlertFeed } from '@/hooks/use-stock-data';
 import { BottomNav } from '@/components/bottom-nav';
@@ -18,327 +18,327 @@ type MarketTab = 'KR' | 'US';
 type ToneTab = 'all' | 'positive' | 'negative';
 
 const IMPORTANCE: Record<
-	MarketAlert['importance'],
-	{ label: string; cls: string; stars: string }
+  MarketAlert['importance'],
+  { label: string; cls: string; stars: string }
 > = {
-	high: {
-		label: '높음',
-		cls: 'text-risk border-risk/30 bg-risk/10',
-		stars: '★★★★★',
-	},
-	medium: {
-		label: '보통',
-		cls: 'text-warning border-warning/30 bg-warning/10',
-		stars: '★★★★☆',
-	},
-	low: {
-		label: '낮음',
-		cls: 'text-muted-foreground border-border bg-secondary',
-		stars: '★★★☆☆',
-	},
+  high: {
+    label: '높음',
+    cls: 'text-risk border-risk/30 bg-risk/10',
+    stars: '★★★★★',
+  },
+  medium: {
+    label: '보통',
+    cls: 'text-warning border-warning/30 bg-warning/10',
+    stars: '★★★★☆',
+  },
+  low: {
+    label: '낮음',
+    cls: 'text-muted-foreground border-border bg-secondary',
+    stars: '★★★☆☆',
+  },
 };
 
 function relTime(iso: string): string {
-	const t = Date.parse(iso);
-	if (Number.isNaN(t)) return iso || '—';
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso || '—';
 
-	const diff = Date.now() - t;
-	const min = Math.floor(diff / 60000);
+  const diff = Date.now() - t;
+  const min = Math.floor(diff / 60000);
 
-	if (min < 1) return '방금';
-	if (min < 60) return `${min}분 전`;
+  if (min < 1) return '방금';
+  if (min < 60) return `${min}분 전`;
 
-	const hr = Math.floor(min / 60);
-	if (hr < 24) return `${hr}시간 전`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}시간 전`;
 
-	const day = Math.floor(hr / 24);
-	if (day < 7) return `${day}일 전`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day}일 전`;
 
-	return new Date(t).toLocaleDateString('ko-KR', {
-		month: 'short',
-		day: 'numeric',
-	});
+  return new Date(t).toLocaleDateString('ko-KR', {
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 function getAlertMarket(alert: MarketAlert): MarketTab {
-	const market = (alert as MarketAlert & { market?: string }).market;
+  const market = (alert as MarketAlert & { market?: string }).market;
 
-	if (market === 'KR' || market === 'US') return market;
+  if (market === 'KR' || market === 'US') return market;
 
-	// 한국 종목코드는 보통 숫자 6자리
-	if (/^\d{6}$/.test(alert.ticker)) return 'KR';
+  // 한국 종목코드는 보통 숫자 6자리
+  if (/^\d{6}$/.test(alert.ticker)) return 'KR';
 
-	return 'US';
+  return 'US';
 }
 
 function getFilteredAlerts(
-	data: { positive: MarketAlert[]; negative: MarketAlert[] } | undefined,
-	market: MarketTab,
-	tone: ToneTab,
+  data: { positive: MarketAlert[]; negative: MarketAlert[] } | undefined,
+  market: MarketTab,
+  tone: ToneTab,
 ): MarketAlert[] {
-	if (!data) return [];
+  if (!data) return [];
 
-	const all =
-		tone === 'positive'
-			? data.positive
-			: tone === 'negative'
-				? data.negative
-				: [...data.positive, ...data.negative];
+  const all =
+    tone === 'positive'
+      ? data.positive
+      : tone === 'negative'
+        ? data.negative
+        : [...data.positive, ...data.negative];
 
-	return all
-		.filter((a) => getAlertMarket(a) === market)
-		.sort((a, b) => Date.parse(b.time) - Date.parse(a.time));
+  return all
+    .filter((a) => getAlertMarket(a) === market)
+    .sort((a, b) => Date.parse(b.time) - Date.parse(a.time));
 }
 
 export default function AlertsPage() {
-	const [market, setMarket] = useState<MarketTab>('KR');
-	const [tone, setTone] = useState<ToneTab>('all');
+  const [market, setMarket] = useState<MarketTab>('KR');
+  const [tone, setTone] = useState<ToneTab>('all');
 
-	const feed = useAlertFeed('ALL');
+  const feed = useAlertFeed('ALL');
 
-	const list = useMemo(
-		() => getFilteredAlerts(feed.data, market, tone),
-		[feed.data, market, tone],
-	);
+  const list = useMemo(
+    () => getFilteredAlerts(feed.data, market, tone),
+    [feed.data, market, tone],
+  );
 
-	const counts = useMemo(() => {
-		const krAll = getFilteredAlerts(feed.data, 'KR', 'all').length;
-		const usAll = getFilteredAlerts(feed.data, 'US', 'all').length;
-		const all = getFilteredAlerts(feed.data, market, 'all').length;
-		const positive = getFilteredAlerts(feed.data, market, 'positive').length;
-		const negative = getFilteredAlerts(feed.data, market, 'negative').length;
+  const counts = useMemo(() => {
+    const krAll = getFilteredAlerts(feed.data, 'KR', 'all').length;
+    const usAll = getFilteredAlerts(feed.data, 'US', 'all').length;
+    const all = getFilteredAlerts(feed.data, market, 'all').length;
+    const positive = getFilteredAlerts(feed.data, market, 'positive').length;
+    const negative = getFilteredAlerts(feed.data, market, 'negative').length;
 
-		return { krAll, usAll, all, positive, negative };
-	}, [feed.data, market]);
+    return { krAll, usAll, all, positive, negative };
+  }, [feed.data, market]);
 
-	return (
-		<div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-			<header className="sticky top-0 z-20 border-b border-card-border bg-background/90 px-4 pb-0 pt-4 backdrop-blur">
-				<div className="mb-3 flex items-center gap-2">
-					<Bell className="h-5 w-5 text-ai" />
-					<h1 className="text-xl font-bold">알림</h1>
-					<span className="ml-auto text-[11px] text-muted-foreground">
-						전체 종목 신호
-					</span>
-				</div>
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background">
+      <header className="relative z-20 border-b border-card-border bg-background/90 px-4 pb-0 pt-4 backdrop-blur">
+        <div className="mb-3 flex items-center gap-2">
+          <Bell className="h-5 w-5 text-ai" />
+          <h1 className="text-xl font-bold">알림</h1>
+          <span className="ml-auto text-[11px] text-muted-foreground">
+            전체 종목 신호
+          </span>
+        </div>
 
-				<div className="mb-2 grid grid-cols-2 gap-2">
-					<MarketButton
-						active={market === 'KR'}
-						onClick={() => setMarket('KR')}
-					>
-						🇰🇷 국장 <Count n={counts.krAll} />
-					</MarketButton>
+        <div className="mb-2 grid grid-cols-2 gap-2">
+          <MarketButton
+            active={market === 'KR'}
+            onClick={() => setMarket('KR')}
+          >
+            🇰🇷 국장 <Count n={counts.krAll} />
+          </MarketButton>
 
-					<MarketButton
-						active={market === 'US'}
-						onClick={() => setMarket('US')}
-					>
-						🇺🇸 미장 <Count n={counts.usAll} />
-					</MarketButton>
-				</div>
+          <MarketButton
+            active={market === 'US'}
+            onClick={() => setMarket('US')}
+          >
+            🇺🇸 미장 <Count n={counts.usAll} />
+          </MarketButton>
+        </div>
 
-				<div className="flex">
-					<ToneButton active={tone === 'all'} onClick={() => setTone('all')}>
-						전체 <Count n={counts.all} />
-					</ToneButton>
+        <div className="flex">
+          <ToneButton active={tone === 'all'} onClick={() => setTone('all')}>
+            전체 <Count n={counts.all} />
+          </ToneButton>
 
-					<ToneButton
-						active={tone === 'positive'}
-						onClick={() => setTone('positive')}
-						tone="positive"
-					>
-						<TrendingUp className="h-4 w-4" />
-						호재 <Count n={counts.positive} />
-					</ToneButton>
+          <ToneButton
+            active={tone === 'positive'}
+            onClick={() => setTone('positive')}
+            tone="positive"
+          >
+            <TrendingUp className="h-4 w-4" />
+            호재 <Count n={counts.positive} />
+          </ToneButton>
 
-					<ToneButton
-						active={tone === 'negative'}
-						onClick={() => setTone('negative')}
-						tone="negative"
-					>
-						<TrendingDown className="h-4 w-4" />
-						악재 <Count n={counts.negative} />
-					</ToneButton>
-				</div>
-			</header>
+          <ToneButton
+            active={tone === 'negative'}
+            onClick={() => setTone('negative')}
+            tone="negative"
+          >
+            <TrendingDown className="h-4 w-4" />
+            악재 <Count n={counts.negative} />
+          </ToneButton>
+        </div>
+      </header>
 
-			<main className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-20">
-				{feed.isLoading && <LoadingState label="시장 신호 수집 중..." />}
+      <main className="flex-none p-3 pb-20">
+        {feed.isLoading && <LoadingState label="시장 신호 수집 중..." />}
 
-				{feed.isError && <ErrorState onRetry={() => feed.refetch()} />}
+        {feed.isError && <ErrorState onRetry={() => feed.refetch()} />}
 
-				{feed.data && list.length === 0 && (
-					<p className="py-16 text-center text-sm text-muted-foreground">
-						현재 {market === 'KR' ? '국장' : '미장'}{' '}
-						{tone === 'positive'
-							? '호재'
-							: tone === 'negative'
-								? '악재'
-								: '전체'}{' '}
-						신호가 없습니다.
-					</p>
-				)}
+        {feed.data && list.length === 0 && (
+          <p className="py-16 text-center text-sm text-muted-foreground">
+            현재 {market === 'KR' ? '국장' : '미장'}{' '}
+            {tone === 'positive'
+              ? '호재'
+              : tone === 'negative'
+                ? '악재'
+                : '전체'}{' '}
+            신호가 없습니다.
+          </p>
+        )}
 
-				<div className="space-y-2">
-					{list.map((alert) => (
-						<AlertItem key={alert.id} alert={alert} />
-					))}
-				</div>
-			</main>
+        <div className="space-y-2">
+          {list.map((alert) => (
+            <AlertItem key={alert.id} alert={alert} />
+          ))}
+        </div>
+      </main>
 
-			<BottomNav />
-		</div>
-	);
+      <BottomNav />
+    </div>
+  );
 }
 
 function MarketButton({
-	active,
-	onClick,
-	children,
+  active,
+  onClick,
+  children,
 }: {
-	active: boolean;
-	onClick: () => void;
-	children: ReactNode;
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
 }) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			className={cn(
-				'flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-sm font-bold transition-colors',
-				active
-					? 'border-ai bg-ai/15 text-ai'
-					: 'border-card-border bg-card text-muted-foreground',
-			)}
-		>
-			{children}
-		</button>
-	);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-sm font-bold transition-colors',
+        active
+          ? 'border-ai bg-ai/15 text-ai'
+          : 'border-card-border bg-card text-muted-foreground',
+      )}
+    >
+      {children}
+    </button>
+  );
 }
 
 function ToneButton({
-	active,
-	onClick,
-	tone = 'all',
-	children,
+  active,
+  onClick,
+  tone = 'all',
+  children,
 }: {
-	active: boolean;
-	onClick: () => void;
-	tone?: ToneTab;
-	children: ReactNode;
+  active: boolean;
+  onClick: () => void;
+  tone?: ToneTab;
+  children: ReactNode;
 }) {
-	const activeCls =
-		tone === 'positive'
-			? 'border-positive text-positive'
-			: tone === 'negative'
-				? 'border-destructive text-destructive'
-				: 'border-ai text-ai';
+  const activeCls =
+    tone === 'positive'
+      ? 'border-positive text-positive'
+      : tone === 'negative'
+        ? 'border-destructive text-destructive'
+        : 'border-ai text-ai';
 
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			className={cn(
-				'flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-sm font-semibold transition-colors',
-				active ? activeCls : 'border-transparent text-muted-foreground',
-			)}
-		>
-			{children}
-		</button>
-	);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-sm font-semibold transition-colors',
+        active ? activeCls : 'border-transparent text-muted-foreground',
+      )}
+    >
+      {children}
+    </button>
+  );
 }
 
 function Count({ n }: { n: number }) {
-	return (
-		<span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-			{n}
-		</span>
-	);
+  return (
+    <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+      {n}
+    </span>
+  );
 }
 
 function AlertItem({ alert }: { alert: MarketAlert }) {
-	const imp = IMPORTANCE[alert.importance];
+  const imp = IMPORTANCE[alert.importance];
 
-	const kindCls =
-		alert.kind === 'positive'
-			? 'text-positive border-positive/30 bg-positive/10'
-			: 'text-destructive border-destructive/30 bg-destructive/10';
+  const kindCls =
+    alert.kind === 'positive'
+      ? 'text-positive border-positive/30 bg-positive/10'
+      : 'text-destructive border-destructive/30 bg-destructive/10';
 
-	const sourceLabel = NOTIFICATION_LABELS[classifyAlert(alert)];
+  const sourceLabel = NOTIFICATION_LABELS[classifyAlert(alert)];
 
-	return (
-		<article className="rounded-2xl border border-card-border bg-card p-3.5 shadow-sm">
-			<div className="flex items-start gap-2">
-				<Link href={`/stock/${alert.ticker}`} className="min-w-0 flex-1">
-					<div className="flex items-center gap-1.5">
-						<span className="truncate text-sm font-bold">{alert.name}</span>
-						<span className="shrink-0 text-xs text-muted-foreground">
-							{alert.ticker}
-						</span>
-					</div>
+  return (
+    <article className="rounded-2xl border border-card-border bg-card p-3.5 shadow-sm">
+      <div className="flex items-start gap-2">
+        <Link href={`/stock/${alert.ticker}`} className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-sm font-bold">{alert.name}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {alert.ticker}
+            </span>
+          </div>
 
-					<div className="mt-1 flex flex-wrap items-center gap-1.5">
-						<span
-							className={cn(
-								'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-								kindCls,
-							)}
-						>
-							{alert.kind === 'positive' ? '🟢 호재' : '🔴 악재'}
-						</span>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <span
+              className={cn(
+                'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                kindCls,
+              )}
+            >
+              {alert.kind === 'positive' ? '🟢 호재' : '🔴 악재'}
+            </span>
 
-						<span
-							className={cn(
-								'rounded-full border px-2 py-0.5 text-[11px] font-medium',
-								imp.cls,
-							)}
-						>
-							중요도 {imp.label}
-						</span>
+            <span
+              className={cn(
+                'rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                imp.cls,
+              )}
+            >
+              중요도 {imp.label}
+            </span>
 
-						<span className="rounded-full border border-card-border bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-							{sourceLabel}
-						</span>
-					</div>
-				</Link>
+            <span className="rounded-full border border-card-border bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+              {sourceLabel}
+            </span>
+          </div>
+        </Link>
 
-				<span className="shrink-0 text-xs font-semibold text-warning">
-					{imp.stars}
-				</span>
-			</div>
+        <span className="shrink-0 text-xs font-semibold text-warning">
+          {imp.stars}
+        </span>
+      </div>
 
-			<p className="mt-3 text-sm font-medium leading-snug">{alert.title}</p>
+      <p className="mt-3 text-sm font-medium leading-snug">{alert.title}</p>
 
-			<p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-				{alert.kind === 'positive'
-					? 'AI 분석: 투자심리와 단기 수급에 긍정적으로 작용할 수 있는 신호입니다.'
-					: 'AI 분석: 변동성 확대 또는 투자심리 위축 요인으로 볼 수 있어 주의가 필요합니다.'}
-			</p>
+      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+        {alert.kind === 'positive'
+          ? 'AI 분석: 투자심리와 단기 수급에 긍정적으로 작용할 수 있는 신호입니다.'
+          : 'AI 분석: 변동성 확대 또는 투자심리 위축 요인으로 볼 수 있어 주의가 필요합니다.'}
+      </p>
 
-			<div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground">
-				<span>{relTime(alert.time)}</span>
+      <div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground">
+        <span>{relTime(alert.time)}</span>
 
-				<div className="ml-auto flex items-center gap-3">
-					{alert.url ? (
-						<a
-							href={alert.url}
-							target="_blank"
-							rel="noopener noreferrer"
-							className="flex items-center gap-0.5 text-ai hover:underline"
-						>
-							원문 <ExternalLink className="h-3 w-3" />
-						</a>
-					) : null}
+        <div className="ml-auto flex items-center gap-3">
+          {alert.url ? (
+            <a
+              href={alert.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-0.5 text-ai hover:underline"
+            >
+              원문 <ExternalLink className="h-3 w-3" />
+            </a>
+          ) : null}
 
-					<Link
-						href={`/stock/${alert.ticker}`}
-						className="flex items-center gap-0.5 hover:text-foreground"
-					>
-						상세 <ChevronRight className="h-3 w-3" />
-					</Link>
-				</div>
-			</div>
-		</article>
-	);
+          <Link
+            href={`/stock/${alert.ticker}`}
+            className="flex items-center gap-0.5 hover:text-foreground"
+          >
+            상세 <ChevronRight className="h-3 w-3" />
+          </Link>
+        </div>
+      </div>
+    </article>
+  );
 }
