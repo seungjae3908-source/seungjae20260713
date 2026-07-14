@@ -1,7 +1,108 @@
 import { Router, type IRouter } from "express";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { MarketDataService } from "../services/market-data.service";
+import { placeKiwoomDomesticOrder } from "../providers/kiwoom";
 
 const router: IRouter = Router();
+
+
+// GET /api/stocks/server-ip
+// Replit 서버가 외부 API에 접속할 때 사용되는 현재 공인 IP를 확인합니다.
+router.get("/server-ip", async (_req, res) => {
+  const providers = [
+    "https://api.ipify.org?format=json",
+    "https://ifconfig.me/all.json",
+    "https://checkip.amazonaws.com",
+  ];
+
+  const attempts: Array<{
+    provider: string;
+    ok: boolean;
+    status?: number;
+    error?: string;
+  }> = [];
+
+  for (const provider of providers) {
+    try {
+      const response = await fetch(provider, {
+        headers: {
+          Accept: "application/json,text/plain;q=0.9,*/*;q=0.8",
+          "User-Agent": "seungjae-stock-app/1.0",
+        },
+      });
+
+      if (!response.ok) {
+        attempts.push({
+          provider,
+          ok: false,
+          status: response.status,
+        });
+        continue;
+      }
+
+      const raw = (await response.text()).trim();
+
+      let ip = raw;
+
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+        ip = String(
+          parsed.ip ??
+            parsed.ip_addr ??
+            parsed.address ??
+            parsed.ipv4 ??
+            parsed.ipv6 ??
+            "",
+        ).trim();
+      } catch {
+        // 텍스트 응답이면 그대로 사용합니다.
+      }
+
+      const matchedIp =
+        ip.match(
+          /(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}/,
+        )?.[0] ?? "";
+
+      if (!matchedIp) {
+        attempts.push({
+          provider,
+          ok: false,
+          error: "IP_ADDRESS_NOT_FOUND",
+        });
+        continue;
+      }
+
+      res.setHeader("Cache-Control", "no-store");
+
+      res.json({
+        ok: true,
+        ip: matchedIp,
+        provider,
+        checkedAt: new Date().toISOString(),
+        note:
+          "이 값은 현재 실행 중인 Replit 서버의 외부 요청 IP입니다. 서버 재시작·재배포·실행 환경 변경 시 달라질 수 있습니다.",
+      });
+      return;
+    } catch (error) {
+      attempts.push({
+        provider,
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "UNKNOWN_SERVER_IP_ERROR",
+      });
+    }
+  }
+
+  res.status(502).json({
+    ok: false,
+    error: "SERVER_IP_LOOKUP_FAILED",
+    attempts,
+  });
+});
 
 function normalizeTicker(value: unknown) {
   return String(value ?? "")
@@ -83,23 +184,43 @@ async function fetchDartFilings(ticker: string) {
   const corpCode = await getDartCorpCode(ticker, apiKey);
   if (!corpCode) return [fallback];
 
-  const from = new Date();
-  from.setFullYear(from.getFullYear() - 1);
-  const bgnDe = from.toISOString().slice(0, 10).replace(/-/g, "");
-  const url =
-    "https://opendart.fss.or.kr/api/list.json?crtfc_key=" +
-    encodeURIComponent(apiKey) +
-    "&corp_code=" +
-    encodeURIComponent(corpCode) +
-    "&bgn_de=" +
-    bgnDe +
-    "&last_reprt_at=Y&page_count=100&sort=date&sort_mth=desc";
-  const response = await fetch(url);
-  if (!response.ok) throw new Error("DART_LIST_HTTP_" + response.status);
-  const data: any = await response.json();
-  if (!Array.isArray(data?.list)) return [fallback];
+  const items: any[] = [];
+  let pageNo = 1;
+  let totalPage = 1;
 
-  return data.list.map((item: any) => ({
+  do {
+    const query = new URLSearchParams({
+      crtfc_key: apiKey,
+      corp_code: corpCode,
+      bgn_de: "19990101",
+      last_reprt_at: "N",
+      page_no: String(pageNo),
+      page_count: "100",
+      sort: "date",
+      sort_mth: "desc",
+    });
+    const response = await fetch(
+      "https://opendart.fss.or.kr/api/list.json?" + query.toString(),
+    );
+    if (!response.ok) throw new Error("DART_LIST_HTTP_" + response.status);
+    const data: any = await response.json();
+
+    if (data?.status && data.status !== "000" && data.status !== "013") {
+      throw new Error(`DART_LIST_${String(data.status)}:${String(data.message ?? "")}`);
+    }
+    if (Array.isArray(data?.list)) items.push(...data.list);
+
+    totalPage = Math.max(1, Number(data?.total_page ?? 1) || 1);
+    pageNo += 1;
+  } while (pageNo <= totalPage && pageNo <= 100);
+
+  const unique = new Map<string, any>();
+  for (const item of items) {
+    const key = String(item?.rcept_no ?? `${item?.rcept_dt}:${item?.report_nm}`);
+    if (!unique.has(key)) unique.set(key, item);
+  }
+
+  const result = [...unique.values()].map((item: any) => ({
     ...item,
     title: item.report_nm,
     date: item.rcept_dt,
@@ -108,6 +229,235 @@ async function fetchDartFilings(ticker: string) {
       : fallback.url,
     source: "DART",
   }));
+
+  return result.length ? result : [fallback];
+}
+
+interface SecTickerEntry {
+  cik_str?: number | string;
+  ticker?: string;
+  title?: string;
+}
+
+let secTickerMapCache: Map<string, string> | null = null;
+
+function secHeaders() {
+  return {
+    Accept: "application/json",
+    "User-Agent":
+      String(process.env.SEC_USER_AGENT ?? "").trim() ||
+      "seungjae-stock-app/1.0 seungjae3908@gmail.com",
+  };
+}
+
+async function getSecCik(ticker: string) {
+  if (!secTickerMapCache) {
+    const response = await fetch("https://www.sec.gov/files/company_tickers.json", {
+      headers: secHeaders(),
+    });
+    if (!response.ok) throw new Error("SEC_TICKERS_HTTP_" + response.status);
+    const data = (await response.json()) as Record<string, SecTickerEntry>;
+    const map = new Map<string, string>();
+    for (const entry of Object.values(data)) {
+      const symbol = String(entry?.ticker ?? "").trim().toUpperCase();
+      const cik = String(entry?.cik_str ?? "").replace(/\D/g, "").padStart(10, "0");
+      if (symbol && cik) map.set(symbol, cik);
+    }
+    secTickerMapCache = map;
+  }
+  return secTickerMapCache.get(ticker.trim().toUpperCase()) ?? "";
+}
+
+function secColumnRows(source: any, cik: string) {
+  const count = Math.max(
+    ...(Object.values(source ?? {}) as unknown[]).map((value) =>
+      Array.isArray(value) ? value.length : 0,
+    ),
+    0,
+  );
+  const rows: any[] = [];
+  const cikNoZero = String(Number(cik));
+
+  for (let index = 0; index < count; index += 1) {
+    const accessionNumber = String(source?.accessionNumber?.[index] ?? "");
+    const primaryDocument = String(source?.primaryDocument?.[index] ?? "");
+    const filingDate = String(source?.filingDate?.[index] ?? "");
+    const form = String(source?.form?.[index] ?? "");
+    if (!accessionNumber || !filingDate) continue;
+
+    rows.push({
+      accessionNumber,
+      filingDate,
+      date: filingDate,
+      acceptedAt: source?.acceptanceDateTime?.[index] ?? filingDate,
+      form,
+      title: form ? `${form} 제출` : "SEC 공시",
+      primaryDocument,
+      reportDate: source?.reportDate?.[index] ?? "",
+      url: primaryDocument
+        ? `https://www.sec.gov/Archives/edgar/data/${cikNoZero}/${accessionNumber.replace(/-/g, "")}/${primaryDocument}`
+        : `https://www.sec.gov/Archives/edgar/data/${cikNoZero}/${accessionNumber.replace(/-/g, "")}/`,
+      source: "SEC EDGAR",
+    });
+  }
+  return rows;
+}
+
+async function fetchSecFilings(ticker: string) {
+  const cik = await getSecCik(ticker);
+  if (!cik) return [];
+
+  const response = await fetch(
+    `https://data.sec.gov/submissions/CIK${cik}.json`,
+    { headers: secHeaders() },
+  );
+  if (!response.ok) throw new Error("SEC_SUBMISSIONS_HTTP_" + response.status);
+  const data: any = await response.json();
+  const items = secColumnRows(data?.filings?.recent ?? {}, cik);
+
+  for (const file of Array.isArray(data?.filings?.files) ? data.filings.files : []) {
+    const name = String(file?.name ?? "").trim();
+    if (!name) continue;
+    const historyResponse = await fetch(
+      `https://data.sec.gov/submissions/${encodeURIComponent(name)}`,
+      { headers: secHeaders() },
+    );
+    if (!historyResponse.ok) continue;
+    const history: any = await historyResponse.json();
+    items.push(...secColumnRows(history, cik));
+  }
+
+  const unique = new Map<string, any>();
+  for (const item of items) {
+    if (!unique.has(item.accessionNumber)) unique.set(item.accessionNumber, item);
+  }
+  return [...unique.values()].sort((a, b) =>
+    String(b.filingDate).localeCompare(String(a.filingDate)),
+  );
+}
+
+async function fetchAllFilings(ticker: string) {
+  return /^\d{6}$/.test(ticker)
+    ? fetchDartFilings(ticker)
+    : fetchSecFilings(ticker);
+}
+
+function metricRow(rows: string[][], patterns: RegExp[]) {
+  return rows.find((cells) => patterns.some((pattern) => pattern.test(cells[0] ?? "")));
+}
+
+function buildNaverFinancialRows(html: string) {
+  const table = financeTableRows(html);
+  const periodCells = table.find((cells) => cells.filter((cell) => /^20\d{2}\.\d{2}/.test(cell)).length >= 4) ?? [];
+  const periods = periodCells.filter((cell) => /^20\d{2}\.\d{2}/.test(cell));
+  if (!periods.length) return { annual: [], quarterly: [], ratios: {} };
+
+  const definitions = {
+    revenue: [/^매출액/, /^영업수익/],
+    operatingIncome: [/^영업이익/],
+    netIncome: [/^당기순이익/, /^순이익/],
+    assets: [/^자산총계/],
+    liabilities: [/^부채총계/],
+    equity: [/^자본총계/],
+    roe: [/^ROE/],
+    per: [/^PER/],
+    pbr: [/^PBR/],
+  } as const;
+  const metricRows = Object.fromEntries(
+    Object.entries(definitions).map(([key, patterns]) => [key, metricRow(table, [...patterns])]),
+  ) as Record<string, string[] | undefined>;
+
+  const valuesAt = (key: string, index: number) =>
+    financeNumber(metricRows[key]?.[index + 1]);
+  const rows = periods.map((period, index) => ({
+    period: period.replace(/\(E\)/g, ""),
+    revenue: valuesAt("revenue", index),
+    operatingIncome: valuesAt("operatingIncome", index),
+    netIncome: valuesAt("netIncome", index),
+    assets: valuesAt("assets", index),
+    liabilities: valuesAt("liabilities", index),
+    equity: valuesAt("equity", index),
+  }));
+  const annual = rows.filter((row) => /\.12/.test(row.period)).slice(0, 5);
+  const quarterly = rows.filter((row) => !/\.12/.test(row.period)).slice(0, 6);
+  const latestIndex = 0;
+
+  return {
+    annual,
+    yearly: annual,
+    quarterly,
+    quarters: quarterly,
+    ratios: {
+      roe: valuesAt("roe", latestIndex),
+      per: valuesAt("per", latestIndex),
+      pbr: valuesAt("pbr", latestIndex),
+    },
+  };
+}
+
+async function fetchNaverFinancials(ticker: string) {
+  const response = await fetch(
+    `https://finance.naver.com/item/main.naver?code=${encodeURIComponent(ticker)}`,
+    { headers: { "User-Agent": "Mozilla/5.0", Referer: "https://finance.naver.com/" } },
+  );
+  if (!response.ok) throw new Error("NAVER_FINANCIAL_HTTP_" + response.status);
+  return buildNaverFinancialRows(await response.text());
+}
+
+function secFactUnits(data: any, tags: string[]) {
+  for (const tag of tags) {
+    const units = data?.facts?.["us-gaap"]?.[tag]?.units;
+    if (!units || typeof units !== "object") continue;
+    const first = Object.values(units).find((value) => Array.isArray(value));
+    if (Array.isArray(first)) return first as any[];
+  }
+  return [];
+}
+
+function latestSecValue(data: any, tags: string[], fy: number, forms: string[]) {
+  const values = secFactUnits(data, tags)
+    .filter((item) => Number(item?.fy) === fy && forms.includes(String(item?.form ?? "")))
+    .sort((a, b) => String(b?.filed ?? "").localeCompare(String(a?.filed ?? "")));
+  return Number(values[0]?.val ?? 0) || 0;
+}
+
+async function fetchSecFinancials(ticker: string) {
+  const cik = await getSecCik(ticker);
+  if (!cik) return { annual: [], quarterly: [], ratios: {} };
+  const response = await fetch(
+    `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`,
+    { headers: secHeaders() },
+  );
+  if (!response.ok) throw new Error("SEC_COMPANYFACTS_HTTP_" + response.status);
+  const data: any = await response.json();
+  const all = secFactUnits(data, ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"]);
+  const years = [...new Set(all.map((item) => Number(item?.fy)).filter(Number.isFinite))]
+    .sort((a, b) => b - a)
+    .slice(0, 5);
+  const tags = {
+    revenue: ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"],
+    operatingIncome: ["OperatingIncomeLoss"],
+    netIncome: ["NetIncomeLoss", "ProfitLoss"],
+    assets: ["Assets"],
+    liabilities: ["Liabilities"],
+    equity: ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
+  };
+  const annual = years.map((fy) => ({
+    period: String(fy),
+    revenue: latestSecValue(data, tags.revenue, fy, ["10-K"]),
+    operatingIncome: latestSecValue(data, tags.operatingIncome, fy, ["10-K"]),
+    netIncome: latestSecValue(data, tags.netIncome, fy, ["10-K"]),
+    assets: latestSecValue(data, tags.assets, fy, ["10-K"]),
+    liabilities: latestSecValue(data, tags.liabilities, fy, ["10-K"]),
+    equity: latestSecValue(data, tags.equity, fy, ["10-K"]),
+  }));
+  return { annual, yearly: annual, quarterly: [], quarters: [], ratios: {} };
+}
+
+async function fetchFinancials(ticker: string) {
+  return /^\d{6}$/.test(ticker)
+    ? fetchNaverFinancials(ticker)
+    : fetchSecFinancials(ticker);
 }
 
 function simpleDartSummary(item: any) {
@@ -198,6 +548,316 @@ async function fetchGoogleNews(ticker: string) {
     }))
     .filter((item) => item.title && item.url);
 }
+
+const autoTradeExecuted = new Set<string>();
+interface AutoTradePosition {
+  ticker: string;
+  quantity: number;
+  entryPrice: number;
+  stopPrice: number;
+  targetPrice: number;
+  openedAt: string;
+}
+const autoTradePositions = new Map<string, AutoTradePosition>();
+const autoTradePositionFile = path.resolve(
+  process.env.KIWOOM_AUTO_TRADE_POSITION_FILE?.trim() ||
+    "data/auto-trade-positions.json",
+);
+let autoTradePositionsLoaded = false;
+
+async function ensureAutoTradePositionsLoaded() {
+  if (autoTradePositionsLoaded) return;
+  autoTradePositionsLoaded = true;
+
+  try {
+    const parsed = JSON.parse(await readFile(autoTradePositionFile, "utf8"));
+    if (!Array.isArray(parsed)) return;
+    for (const raw of parsed) {
+      const position = raw as Partial<AutoTradePosition>;
+      const ticker = normalizeTicker(position.ticker);
+      const quantity = Math.trunc(Number(position.quantity));
+      const entryPrice = Number(position.entryPrice);
+      const stopPrice = Number(position.stopPrice);
+      const targetPrice = Number(position.targetPrice);
+      if (
+        /^\d{6}$/.test(ticker) &&
+        quantity > 0 &&
+        entryPrice > 0 &&
+        stopPrice > 0 &&
+        targetPrice > 0
+      ) {
+        autoTradePositions.set(ticker, {
+          ticker,
+          quantity,
+          entryPrice,
+          stopPrice,
+          targetPrice,
+          openedAt: String(position.openedAt ?? new Date().toISOString()),
+        });
+      }
+    }
+  } catch {
+    // 첫 실행이거나 저장 파일이 없으면 빈 상태로 시작합니다.
+  }
+}
+
+async function saveAutoTradePositions() {
+  await mkdir(path.dirname(autoTradePositionFile), { recursive: true });
+  await writeFile(
+    autoTradePositionFile,
+    JSON.stringify([...autoTradePositions.values()], null, 2),
+    "utf8",
+  );
+}
+
+function kstParts() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+function koreanMarketOpenNow() {
+  if (process.env.KIWOOM_AUTO_TRADE_ALLOW_OFF_HOURS === "true") return true;
+  const parts = kstParts();
+  if (["Sat", "Sun"].includes(parts.weekday)) return false;
+  const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+  return minutes >= 9 * 60 && minutes <= 15 * 60 + 30;
+}
+
+// POST /api/stocks/auto-trade/execute
+router.post("/auto-trade/execute", async (req, res) => {
+  const enabled = process.env.KIWOOM_AUTO_TRADE_ENABLED === "true";
+  const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
+  const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
+
+  if (!enabled) {
+    return res.status(403).json({ ok: false, message: "서버의 실제 자동매매 기능이 꺼져 있습니다." });
+  }
+  if (!configuredKey || suppliedKey !== configuredKey) {
+    return res.status(401).json({ ok: false, message: "자동매매 실행키가 올바르지 않습니다." });
+  }
+  if (!koreanMarketOpenNow()) {
+    return res.status(409).json({ ok: false, message: "국내 정규장 주문 가능 시간이 아닙니다." });
+  }
+
+  await ensureAutoTradePositionsLoaded();
+
+  const candidates = Array.isArray(req.body?.candidates)
+    ? req.body.candidates.slice(0, 5)
+    : [];
+  const investmentPerTrade = Math.max(1, Number(req.body?.investmentPerTrade ?? 0));
+  const stopLossPercent = Math.max(0.1, Number(req.body?.stopLossPercent ?? 5));
+  const takeProfitPercent = Math.max(0.1, Number(req.body?.takeProfitPercent ?? 10));
+  const day = `${kstParts().year}-${kstParts().month}-${kstParts().day}`;
+  const results: any[] = [];
+
+  for (const candidate of candidates) {
+    const ticker = normalizeTicker(candidate?.ticker);
+    const price = Number(candidate?.price ?? 0);
+    const probability = Number(candidate?.probability ?? 0);
+    const key = `${day}:${ticker}:BUY`;
+
+    if (!/^\d{6}$/.test(ticker)) {
+      results.push({ ticker, ok: false, skipped: true, message: "국내 주식만 실제 자동주문을 지원합니다." });
+      continue;
+    }
+    if (!Number.isFinite(price) || price <= 0 || probability <= 0) {
+      results.push({ ticker, ok: false, skipped: true, message: "가격 또는 확률 데이터가 부족합니다." });
+      continue;
+    }
+    if (autoTradeExecuted.has(key)) {
+      results.push({ ticker, ok: true, skipped: true, message: "오늘 이미 주문한 종목입니다." });
+      continue;
+    }
+
+    const quantity = Math.floor(investmentPerTrade / price);
+    if (quantity < 1) {
+      results.push({ ticker, ok: false, skipped: true, message: "주문금액이 현재가보다 작습니다." });
+      continue;
+    }
+
+    try {
+      const order = await placeKiwoomDomesticOrder({
+        ticker,
+        side: "buy",
+        quantity,
+        orderType: "market",
+      });
+      const stopPrice = price * (1 - stopLossPercent / 100);
+      const targetPrice = price * (1 + takeProfitPercent / 100);
+      autoTradeExecuted.add(key);
+      autoTradePositions.set(ticker, {
+        ticker,
+        quantity,
+        entryPrice: price,
+        stopPrice,
+        targetPrice,
+        openedAt: new Date().toISOString(),
+      });
+      await saveAutoTradePositions();
+      results.push({
+        ticker,
+        ok: true,
+        quantity,
+        orderNo: order.orderNo,
+        stopPrice,
+        targetPrice,
+        message: "시장가 매수 주문을 전송했습니다.",
+      });
+    } catch (error) {
+      results.push({
+        ticker,
+        ok: false,
+        quantity,
+        message: error instanceof Error ? error.message : "키움 주문 전송 실패",
+      });
+    }
+  }
+
+  const completed = results.filter((item) => item.ok && !item.skipped).length;
+  return res.json({
+    ok: completed > 0 || results.every((item) => item.skipped),
+    message: completed > 0 ? `${completed}개 종목 주문을 전송했습니다.` : "신규 주문이 전송되지 않았습니다.",
+    results,
+  });
+});
+
+let autoTradeMonitorRunning = false;
+
+async function runAutoTradeMonitor() {
+  if (autoTradeMonitorRunning) {
+    return { results: [] as any[], activePositions: autoTradePositions.size };
+  }
+  autoTradeMonitorRunning = true;
+
+  try {
+    await ensureAutoTradePositionsLoaded();
+    const results: any[] = [];
+
+    for (const position of [...autoTradePositions.values()]) {
+      try {
+        const quote: any = await MarketDataService.getQuoteRow(position.ticker);
+        const currentPrice = Math.abs(
+          Number(quote?.price ?? quote?.currentPrice ?? quote?.cur_prc ?? 0),
+        );
+        if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+          results.push({
+            ticker: position.ticker,
+            ok: false,
+            skipped: true,
+            message: "현재가 확인 실패",
+          });
+          continue;
+        }
+
+        const reason =
+          currentPrice <= position.stopPrice
+            ? "손절가 도달"
+            : currentPrice >= position.targetPrice
+              ? "목표가 도달"
+              : "보유 유지";
+
+        if (reason === "보유 유지") {
+          results.push({
+            ticker: position.ticker,
+            ok: true,
+            skipped: true,
+            currentPrice,
+            stopPrice: position.stopPrice,
+            targetPrice: position.targetPrice,
+            message: reason,
+          });
+          continue;
+        }
+
+        const order = await placeKiwoomDomesticOrder({
+          ticker: position.ticker,
+          side: "sell",
+          quantity: position.quantity,
+          orderType: "market",
+        });
+        autoTradePositions.delete(position.ticker);
+        await saveAutoTradePositions();
+        results.push({
+          ticker: position.ticker,
+          ok: true,
+          quantity: position.quantity,
+          orderNo: order.orderNo,
+          currentPrice,
+          message: `${reason}로 시장가 매도 주문을 전송했습니다.`,
+        });
+      } catch (error) {
+        results.push({
+          ticker: position.ticker,
+          ok: false,
+          message: error instanceof Error ? error.message : "자동청산 주문 실패",
+        });
+      }
+    }
+
+    return { results, activePositions: autoTradePositions.size };
+  } finally {
+    autoTradeMonitorRunning = false;
+  }
+}
+
+// 서버 프로세스가 실행 중이면 화면을 닫아도 30초마다 손절·목표가를 확인합니다.
+const autoTradeMonitorTimer = setInterval(() => {
+  if (
+    process.env.KIWOOM_AUTO_TRADE_ENABLED === "true" &&
+    koreanMarketOpenNow()
+  ) {
+    void runAutoTradeMonitor().catch((error) =>
+      console.error("auto trade background monitor error:", error),
+    );
+  }
+}, 30_000);
+autoTradeMonitorTimer.unref?.();
+
+// POST /api/stocks/auto-trade/monitor
+router.post("/auto-trade/monitor", async (req, res) => {
+  const enabled = process.env.KIWOOM_AUTO_TRADE_ENABLED === "true";
+  const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
+  const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
+
+  if (!enabled) {
+    return res.status(403).json({
+      ok: false,
+      message: "서버의 실제 자동매매 기능이 꺼져 있습니다.",
+    });
+  }
+  if (!configuredKey || suppliedKey !== configuredKey) {
+    return res.status(401).json({
+      ok: false,
+      message: "자동매매 실행키가 올바르지 않습니다.",
+    });
+  }
+  if (!koreanMarketOpenNow()) {
+    return res.json({
+      ok: true,
+      message: "장 시간이 아니어서 자동청산 확인을 건너뜁니다.",
+      results: [],
+    });
+  }
+
+  const monitored = await runAutoTradeMonitor();
+  return res.json({
+    ok: monitored.results.every((item) => item.ok),
+    activePositions: monitored.activePositions,
+    message: monitored.activePositions
+      ? `자동매매 보유 ${monitored.activePositions}개를 감시 중입니다.`
+      : "감시 중인 자동매매 보유 종목이 없습니다.",
+    results: monitored.results,
+  });
+});
 
 // GET /api/stocks/:ticker/quote
 router.get("/:ticker/quote", async (req, res) => {
@@ -347,12 +1007,19 @@ router.get("/:ticker/rating", async (req, res) => {
 // GET /api/stocks/:ticker/financials
 router.get("/:ticker/financials", async (req, res) => {
   const ticker = normalizeTicker(req.params.ticker);
-
-  res.json({
-    ticker,
-    items: [],
-    summary: "재무제표 데이터는 연결 준비 중입니다.",
-  });
+  try {
+    const financials = await fetchFinancials(ticker);
+    res.json({
+      ticker,
+      financials,
+      ...financials,
+      items: financials.annual ?? [],
+      summary: "실제 공개 재무 데이터를 불러왔습니다.",
+    });
+  } catch (error) {
+    console.error("stock financials route error:", error);
+    res.json({ ticker, annual: [], quarterly: [], items: [], ratios: {}, summary: "재무제표 데이터를 불러오지 못했습니다." });
+  }
 });
 
 // GET /api/stocks/:ticker/risk
@@ -371,7 +1038,7 @@ router.get("/:ticker/risk", async (req, res) => {
 router.get("/:ticker/filings", async (req, res) => {
   const ticker = normalizeTicker(req.params.ticker);
   try {
-    const items = await fetchDartFilings(ticker);
+    const items = await fetchAllFilings(ticker);
     res.json({
       ticker,
       filings: items,
@@ -379,17 +1046,17 @@ router.get("/:ticker/filings", async (req, res) => {
       summary:
         simpleDartSummary(items[0]) +
         (items.length > 1
-          ? " 최근 1년 공시 " + items.length + "건을 불러왔습니다."
+          ? " 전체 공시 " + items.length + "건을 불러왔습니다."
           : ""),
     });
   } catch (error) {
     console.error("stock filings route error:", error);
-    const items = await fetchDartFilings("").catch(() => []);
+    const items: any[] = [];
     res.json({
       ticker,
       filings: items,
       items,
-      summary: "DART 연결을 확인해 주세요.",
+      summary: /^\d{6}$/.test(ticker) ? "DART 연결을 확인해 주세요." : "SEC EDGAR 연결을 확인해 주세요.",
     });
   }
 });
@@ -398,7 +1065,7 @@ router.get("/:ticker/filings", async (req, res) => {
 router.get("/:ticker/disclosures", async (req, res) => {
   const ticker = normalizeTicker(req.params.ticker);
   try {
-    const items = await fetchDartFilings(ticker);
+    const items = await fetchAllFilings(ticker);
     res.json({
       ticker,
       disclosures: items,
@@ -411,7 +1078,7 @@ router.get("/:ticker/disclosures", async (req, res) => {
       ticker,
       disclosures: [],
       items: [],
-      summary: "DART 연결을 확인해 주세요.",
+      summary: /^\d{6}$/.test(ticker) ? "DART 연결을 확인해 주세요." : "SEC EDGAR 연결을 확인해 주세요.",
     });
   }
 });

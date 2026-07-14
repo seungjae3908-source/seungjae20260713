@@ -6,7 +6,7 @@ const require = __createRequire(import.meta.url);
 // src/index.ts
 import express from "express";
 import cors from "cors";
-import path2 from "node:path";
+import path3 from "node:path";
 import fs2 from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -1715,6 +1715,1454 @@ async function getKrUniverse() {
   });
 }
 
+// src/providers/kiwoom.ts
+var REAL_BASE_URL = process.env.KIWOOM_BASE_URL?.trim() || "http://158.247.235.32:3000/kiwoom";
+var MOCK_BASE_URL = "https://mockapi.kiwoom.com";
+var REQUEST_TIMEOUT_MS = 15e3;
+var UINT32_MAX = 4294967295;
+var INT32_MAX = 2147483647;
+var tokenCache = null;
+function isMockMode() {
+  return process.env.KIWOOM_MODE?.trim().toLowerCase() === "mock";
+}
+function baseUrl() {
+  return isMockMode() ? MOCK_BASE_URL : REAL_BASE_URL;
+}
+function requireEnv(name) {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(
+      `${name} \uD658\uACBD\uBCC0\uC218\uAC00 \uB4F1\uB85D\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.`
+    );
+  }
+  return value;
+}
+function proxyHeaders() {
+  if (isMockMode()) {
+    return {};
+  }
+  return {
+    "x-proxy-key": requireEnv(
+      "KIWOOM_PROXY_KEY"
+    )
+  };
+}
+function toNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.replace(/[,+%₩$]/g, "").trim();
+  if (!normalized) {
+    return null;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function absoluteNumber(value) {
+  const parsed = toNumber(value);
+  return parsed == null ? null : Math.abs(parsed);
+}
+function normalizeVolume(value) {
+  const parsed = absoluteNumber(value);
+  if (parsed == null) {
+    return {
+      value: null,
+      warning: null
+    };
+  }
+  if (parsed === UINT32_MAX) {
+    return {
+      value: null,
+      warning: "\uD0A4\uC6C0 \uC751\uB2F5 \uAC70\uB798\uB7C9\uC774 UINT32 \uCD5C\uB300\uAC12(4,294,967,295)\uC73C\uB85C \uBC18\uD658\uB418\uC5B4 \uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uAC12\uC73C\uB85C \uCC98\uB9AC\uD588\uC2B5\uB2C8\uB2E4."
+    };
+  }
+  if (parsed === INT32_MAX) {
+    return {
+      value: null,
+      warning: "\uD0A4\uC6C0 \uC751\uB2F5 \uAC70\uB798\uB7C9\uC774 INT32 \uCD5C\uB300\uAC12(2,147,483,647)\uC73C\uB85C \uBC18\uD658\uB418\uC5B4 \uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uAC12\uC73C\uB85C \uCC98\uB9AC\uD588\uC2B5\uB2C8\uB2E4."
+    };
+  }
+  if (!Number.isSafeInteger(parsed)) {
+    return {
+      value: null,
+      warning: "\uAC70\uB798\uB7C9\uC774 JavaScript \uC548\uC804 \uC815\uC218 \uBC94\uC704\uB97C \uBC97\uC5B4\uB098 \uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uAC12\uC73C\uB85C \uCC98\uB9AC\uD588\uC2B5\uB2C8\uB2E4."
+    };
+  }
+  return {
+    value: parsed,
+    warning: null
+  };
+}
+async function readJson(response) {
+  const text = await response.text();
+  if (!text) {
+    return {};
+  }
+  try {
+    return JSON.parse(
+      text
+    );
+  } catch {
+    throw new Error(
+      `\uD0A4\uC6C0 API\uAC00 JSON\uC774 \uC544\uB2CC \uC751\uB2F5\uC744 \uBC18\uD658\uD588\uC2B5\uB2C8\uB2E4. HTTP ${response.status}: ${text.slice(0, 240)}`
+    );
+  }
+}
+function returnCode(data) {
+  const raw = data.return_code;
+  if (raw == null || raw === "") {
+    return 0;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : -1;
+}
+function returnMessage(data) {
+  return typeof data.return_msg === "string" && data.return_msg.trim() ? data.return_msg : "\uC54C \uC218 \uC5C6\uB294 \uD0A4\uC6C0 API \uC624\uB958";
+}
+function clearKiwoomTokenCache() {
+  tokenCache = null;
+}
+function isKiwoomConfigured() {
+  return Boolean(
+    process.env.KIWOOM_APP_KEY?.trim() && process.env.KIWOOM_APP_SECRET?.trim() && (isMockMode() || process.env.KIWOOM_PROXY_KEY?.trim())
+  );
+}
+function getKiwoomStatus() {
+  return {
+    provider: "kiwoom",
+    mode: isMockMode() ? "mock" : "real",
+    baseUrl: baseUrl(),
+    appKeyRegistered: Boolean(
+      process.env.KIWOOM_APP_KEY?.trim()
+    ),
+    appSecretRegistered: Boolean(
+      process.env.KIWOOM_APP_SECRET?.trim()
+    ),
+    proxyKeyRegistered: isMockMode() || Boolean(
+      process.env.KIWOOM_PROXY_KEY?.trim()
+    ),
+    tokenCached: Boolean(
+      tokenCache && Date.now() < tokenCache.expiresAt - 6e4
+    )
+  };
+}
+async function getKiwoomToken() {
+  if (tokenCache && Date.now() < tokenCache.expiresAt - 5 * 60 * 1e3) {
+    return tokenCache.token;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    REQUEST_TIMEOUT_MS
+  );
+  try {
+    const response = await fetch(
+      `${baseUrl()}/oauth2/token`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json;charset=UTF-8",
+          ...proxyHeaders()
+        },
+        body: JSON.stringify({
+          grant_type: "client_credentials",
+          appkey: requireEnv(
+            "KIWOOM_APP_KEY"
+          ),
+          secretkey: requireEnv(
+            "KIWOOM_APP_SECRET"
+          )
+        }),
+        signal: controller.signal
+      }
+    );
+    const result = await readJson(
+      response
+    );
+    if (!response.ok || returnCode(result) !== 0 || !result.token) {
+      throw new Error(
+        `\uD0A4\uC6C0 \uD1A0\uD070 \uBC1C\uAE09 \uC2E4\uD328: ${returnMessage(result)} (HTTP ${response.status})`
+      );
+    }
+    tokenCache = {
+      token: result.token,
+      expiresAt: Date.now() + 23 * 60 * 60 * 1e3
+    };
+    return result.token;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(
+        "\uD0A4\uC6C0 \uD1A0\uD070 \uC694\uCCAD \uC2DC\uAC04\uC774 \uCD08\uACFC\uB418\uC5C8\uC2B5\uB2C8\uB2E4."
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function kiwoomRequest({
+  apiId,
+  path: path4,
+  body,
+  contYn,
+  nextKey
+}) {
+  const token = await getKiwoomToken();
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    REQUEST_TIMEOUT_MS
+  );
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json;charset=UTF-8",
+    authorization: `Bearer ${token}`,
+    "api-id": apiId,
+    ...proxyHeaders()
+  };
+  if (contYn) {
+    headers["cont-yn"] = contYn;
+  }
+  if (nextKey) {
+    headers["next-key"] = nextKey;
+  }
+  try {
+    const response = await fetch(
+      `${baseUrl()}${path4}`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal
+      }
+    );
+    const result = await readJson(response);
+    if (!response.ok || returnCode(result) !== 0) {
+      if (response.status === 401 || response.status === 403) {
+        clearKiwoomTokenCache();
+      }
+      throw new Error(
+        `\uD0A4\uC6C0 ${apiId} \uC694\uCCAD \uC2E4\uD328: ${returnMessage(result)} (HTTP ${response.status})`
+      );
+    }
+    return {
+      data: result,
+      contYn: response.headers.get(
+        "cont-yn"
+      ),
+      nextKey: response.headers.get(
+        "next-key"
+      )
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(
+        `\uD0A4\uC6C0 ${apiId} \uC694\uCCAD \uC2DC\uAC04\uC774 \uCD08\uACFC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.`
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function getKiwoomDomesticOrderbook(ticker) {
+  const normalizedTicker = ticker.trim().toUpperCase();
+  if (!/^[0-9A-Z]{6}(?:_(?:NX|AL))?$/.test(
+    normalizedTicker
+  )) {
+    throw new Error(
+      `\uC798\uBABB\uB41C \uAD6D\uB0B4 \uC885\uBAA9\uCF54\uB4DC\uC785\uB2C8\uB2E4: ${normalizedTicker}`
+    );
+  }
+  const result = await kiwoomRequest({
+    apiId: "ka10004",
+    path: "/api/dostk/mrkcond",
+    body: {
+      stk_cd: normalizedTicker
+    }
+  });
+  return result.data;
+}
+function domesticRankingRequest(type) {
+  const common = {
+    mrkt_tp: "000",
+    mang_stk_incls: "0",
+    stex_tp: "1"
+  };
+  if (type === "volume") {
+    return {
+      apiId: "ka10030",
+      path: "/api/dostk/rkinfo",
+      body: {
+        ...common,
+        sort_tp: "1",
+        crd_tp: "0",
+        trde_qty_tp: "0",
+        pric_tp: "0",
+        trde_prica_tp: "0",
+        mrkt_open_tp: "0"
+      }
+    };
+  }
+  if (type === "tradingValue") {
+    return {
+      apiId: "ka10032",
+      path: "/api/dostk/rkinfo",
+      body: common
+    };
+  }
+  return {
+    apiId: "ka10027",
+    path: "/api/dostk/rkinfo",
+    body: {
+      ...common,
+      sort_tp: type === "losers" ? "3" : "1",
+      trde_qty_cnd: "0000",
+      stk_cnd: "0",
+      crd_cnd: "0",
+      updown_incls: "1",
+      pric_cnd: "0",
+      trde_prica_cnd: "0"
+    }
+  };
+}
+function usRankingRequests(type) {
+  if (type === "volume") {
+    return [
+      {
+        apiId: "usa20530",
+        path: "/api/us/rkinfo",
+        body: {
+          excd: "000",
+          item_tp: "1",
+          sort_tp: "1"
+        }
+      }
+    ];
+  }
+  if (type === "tradingValue") {
+    return [
+      {
+        apiId: "usa20540",
+        path: "/api/us/rkinfo",
+        body: {
+          excd: "000",
+          item_tp: "1",
+          sort_tp: "1"
+        }
+      }
+    ];
+  }
+  if (type === "gainers") {
+    return [
+      {
+        apiId: "usa20910",
+        path: "/api/us/rkinfo",
+        body: {
+          excd: "000",
+          item_tp: "1",
+          sort_tp: "1"
+        }
+      }
+    ];
+  }
+  return [
+    {
+      apiId: "usa20910",
+      path: "/api/us/rkinfo",
+      body: {
+        excd: "000",
+        item_tp: "1",
+        sort_tp: "4"
+      }
+    },
+    {
+      apiId: "usa20910",
+      path: "/api/us/rkinfo",
+      body: {
+        excd: "000",
+        item_tp: "1",
+        sort_tp: "5"
+      }
+    },
+    {
+      apiId: "usa20910",
+      path: "/api/us/rkinfo",
+      body: {
+        excd: "000",
+        item_tp: "1",
+        sort_tp: "2"
+      }
+    }
+  ];
+}
+function objectRows(value, depth = 0) {
+  if (depth > 4) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.filter(
+      (item) => Boolean(item) && typeof item === "object" && !Array.isArray(item)
+    );
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const entries = Object.entries(
+    value
+  );
+  const directArrays = entries.filter(
+    ([, nested]) => Array.isArray(nested)
+  ).sort(
+    (a, b) => b[1].length - a[1].length
+  );
+  for (const [, nested] of directArrays) {
+    const rows = objectRows(
+      nested,
+      depth + 1
+    );
+    if (rows.length > 0) {
+      return rows;
+    }
+  }
+  for (const [, nested] of entries) {
+    const rows = objectRows(
+      nested,
+      depth + 1
+    );
+    if (rows.length > 0) {
+      return rows;
+    }
+  }
+  return [];
+}
+function rankingRows(data) {
+  const resultList = data.result_list;
+  if (Array.isArray(resultList)) {
+    const rows = objectRows(resultList);
+    if (rows.length > 0) {
+      return rows;
+    }
+  }
+  return objectRows(data);
+}
+function pick2(row, keys) {
+  for (const key of keys) {
+    if (row[key] != null && row[key] !== "") {
+      return row[key];
+    }
+  }
+  return void 0;
+}
+function pickEntry(row, keys) {
+  for (const key of keys) {
+    if (row[key] != null && row[key] !== "") {
+      return {
+        key,
+        value: row[key]
+      };
+    }
+  }
+  return null;
+}
+function normalizeTradingValue(row, market) {
+  const entry = pickEntry(
+    row,
+    [
+      "trde_amt",
+      "trde_prica",
+      "trading_value",
+      "acml_tr_pbmn",
+      "acml_trading_value",
+      "acc_trde_prica",
+      "amount",
+      "trade_amount",
+      "trd_amt",
+      "turnover"
+    ]
+  );
+  if (!entry) {
+    return null;
+  }
+  const parsed = absoluteNumber(entry.value);
+  if (parsed == null) {
+    return null;
+  }
+  if (market === "KR" && (entry.key === "trde_amt" || entry.key === "trde_prica")) {
+    return parsed * 1e6;
+  }
+  if (market === "US" && (entry.key === "trde_prica" || entry.key === "acc_trde_prica")) {
+    return parsed * 1e3;
+  }
+  return parsed;
+}
+function containsAny(text, keywords) {
+  return keywords.some(
+    (keyword) => text.includes(keyword)
+  );
+}
+function classifyKiwoomInstrument(name, market) {
+  const normalizedName = name.replace(/\s+/g, " ").trim();
+  const upperName = normalizedName.toUpperCase();
+  const compactName = upperName.replace(/\s+/g, "");
+  const isEtn2 = /\bETN\b/i.test(
+    upperName
+  ) || containsAny(
+    compactName,
+    [
+      "\uC0C1\uC7A5\uC9C0\uC218\uC99D\uAD8C",
+      "\uB808\uBC84\uB9AC\uC9C0ETN",
+      "\uC778\uBC84\uC2A4ETN"
+    ]
+  );
+  const koreanEtfBrand = /^(KODEX|TIGER|RISE|ACE|SOL|PLUS|HANARO|KOSEF|ARIRANG|TIMEFOLIO|WOORI|FOCUS|KIWOOM|KBSTAR|1Q|BNK|히어로즈|마이티)(\s|$)/i.test(
+    normalizedName
+  );
+  const overseasEtfName = /\bETF\b/i.test(
+    upperName
+  ) || /\bEXCHANGE TRADED FUND\b/i.test(
+    upperName
+  );
+  const isEtf = !isEtn2 && (koreanEtfBrand || overseasEtfName || containsAny(
+    compactName,
+    [
+      "\uC0C1\uC7A5\uC9C0\uC218\uD380\uB4DC",
+      "\uB2E8\uC77C\uC885\uBAA9\uB808\uBC84\uB9AC\uC9C0",
+      "\uC120\uBB3C\uC778\uBC84\uC2A4",
+      "\uCF54\uC2A4\uB2E5150\uB808\uBC84\uB9AC\uC9C0",
+      "\uCF54\uC2A4\uB2E5150\uC120\uBB3C\uC778\uBC84\uC2A4"
+    ]
+  ));
+  const isWarrant = containsAny(
+    compactName,
+    [
+      "WARRANT",
+      "WARRANTS",
+      "C/WTS",
+      "WTS",
+      "\uC6CC\uB7F0\uD2B8",
+      "\uC2E0\uC8FC\uC778\uC218\uAD8C"
+    ]
+  );
+  const isReit = containsAny(
+    compactName,
+    [
+      "\uB9AC\uCE20",
+      "REIT"
+    ]
+  ) && !isEtf && !isEtn2 && !isWarrant;
+  const isSpac = containsAny(
+    compactName,
+    [
+      "\uC2A4\uD329",
+      "SPAC"
+    ]
+  ) && !isEtf && !isEtn2 && !isWarrant;
+  const isLeveraged2 = containsAny(
+    compactName,
+    [
+      "\uB808\uBC84\uB9AC\uC9C0",
+      "2X",
+      "3X",
+      "BULL2X",
+      "BULL3X"
+    ]
+  );
+  const isInverse2 = containsAny(
+    compactName,
+    [
+      "\uC778\uBC84\uC2A4",
+      "INVERSE",
+      "BEAR",
+      "SHORT",
+      "SHORT2X",
+      "SHORT3X",
+      "-1X",
+      "-2X",
+      "-3X"
+    ]
+  );
+  const derivativeKeyword = containsAny(
+    compactName,
+    [
+      "\uC120\uBB3C",
+      "FUTURES",
+      "\uC635\uC158",
+      "OPTION"
+    ]
+  );
+  const isDerivative = isLeveraged2 || isInverse2 || derivativeKeyword || isWarrant;
+  let assetType = "UNKNOWN";
+  if (isEtn2) {
+    assetType = "ETN";
+  } else if (isEtf) {
+    assetType = "ETF";
+  } else if (isWarrant) {
+    assetType = "UNKNOWN";
+  } else if (isReit) {
+    assetType = "REIT";
+  } else if (isSpac) {
+    assetType = "SPAC";
+  } else if (market === "KR") {
+    assetType = "STOCK";
+  } else if (!/\bFUND\b/i.test(
+    upperName
+  ) && !/\bTRUST\b/i.test(
+    upperName
+  ) && !/\bUNIT\b/i.test(
+    upperName
+  )) {
+    assetType = "STOCK";
+  }
+  const isEtp2 = assetType === "ETF" || assetType === "ETN";
+  let riskLevel = "NORMAL";
+  if (assetType === "ETN" || isLeveraged2 || isInverse2 || isDerivative) {
+    riskLevel = "HIGH";
+  } else if (assetType === "ETF" || assetType === "REIT" || assetType === "SPAC" || assetType === "UNKNOWN") {
+    riskLevel = "CAUTION";
+  }
+  const recommendationEligible = assetType === "STOCK" && riskLevel === "NORMAL" && !isLeveraged2 && !isInverse2 && !isDerivative;
+  return {
+    assetType,
+    isEtp: isEtp2,
+    isLeveraged: isLeveraged2,
+    isInverse: isInverse2,
+    isDerivative,
+    riskLevel,
+    recommendationEligible
+  };
+}
+function rankingReason(type) {
+  if (type === "volume") {
+    return "\uD0A4\uC6C0\uC99D\uAD8C \uAC70\uB798\uB7C9 \uC0C1\uC704 \uC885\uBAA9\uC785\uB2C8\uB2E4.";
+  }
+  if (type === "tradingValue") {
+    return "\uD0A4\uC6C0\uC99D\uAD8C \uAC70\uB798\uB300\uAE08 \uC0C1\uC704 \uC885\uBAA9\uC785\uB2C8\uB2E4.";
+  }
+  if (type === "gainers") {
+    return "\uD0A4\uC6C0\uC99D\uAD8C \uB4F1\uB77D\uB960 \uAE30\uC900 \uAE09\uC0C1\uC2B9 \uC885\uBAA9\uC785\uB2C8\uB2E4.";
+  }
+  return "\uD0A4\uC6C0\uC99D\uAD8C \uB4F1\uB77D\uB960 \uAE30\uC900 \uAE09\uD558\uB77D \uC885\uBAA9\uC785\uB2C8\uB2E4.";
+}
+function normalizeRankingRows(data, market, type) {
+  const rows = rankingRows(data);
+  const result = [];
+  for (const row of rows) {
+    const tickerRaw = pick2(
+      row,
+      [
+        "stk_cd",
+        "stk_code",
+        "symbol",
+        "symb",
+        "ticker",
+        "ovrs_pdno",
+        "eng_stk_cd",
+        "code",
+        "item_cd",
+        "item_code"
+      ]
+    );
+    const ticker = String(
+      tickerRaw ?? ""
+    ).trim().toUpperCase();
+    if (!ticker) {
+      continue;
+    }
+    const name = String(
+      pick2(
+        row,
+        [
+          "stk_nm",
+          "stk_name",
+          "name",
+          "kor_nm",
+          "ovrs_item_name",
+          "item_nm",
+          "item_name"
+        ]
+      ) ?? ticker
+    ).trim();
+    const englishName = String(
+      pick2(
+        row,
+        [
+          "stk_enm",
+          "eng_nm",
+          "eng_item_nm"
+        ]
+      ) ?? ""
+    ).trim();
+    const price = absoluteNumber(
+      pick2(
+        row,
+        [
+          "cur_prc",
+          "now_pric",
+          "curr_pric",
+          "last",
+          "price",
+          "ovrs_nmix_prpr",
+          "last_pric",
+          "close",
+          "prpr"
+        ]
+      )
+    );
+    const changePercent = toNumber(
+      pick2(
+        row,
+        [
+          "flu_rt",
+          "chg_rt",
+          "change_rate",
+          "changePercent",
+          "prdy_ctrt",
+          "rate",
+          "diff_rate",
+          "fluctuation_rate",
+          "diff_rate_for_gjga"
+        ]
+      )
+    );
+    const normalizedVolume = normalizeVolume(
+      pick2(
+        row,
+        [
+          "acc_trde_qty",
+          "acc_trd_qty",
+          "acml_trde_qty",
+          "acml_trd_qty",
+          "trde_qty",
+          "now_trde_qty",
+          "volume",
+          "acml_vol",
+          "acml_volum",
+          "tvol",
+          "tot_qty",
+          "trade_volume"
+        ]
+      )
+    );
+    const tradingValue = normalizeTradingValue(
+      row,
+      market
+    );
+    const classification = classifyKiwoomInstrument(
+      `${name} ${englishName}`.trim(),
+      market
+    );
+    const dataQualityWarnings = [];
+    if (normalizedVolume.warning) {
+      dataQualityWarnings.push(
+        normalizedVolume.warning
+      );
+    }
+    const sourceRankValue = toNumber(
+      pick2(
+        row,
+        [
+          "rank",
+          "sourceRank",
+          "kw_high_rank",
+          "rnk"
+        ]
+      )
+    );
+    const sourceRank = sourceRankValue == null ? result.length + 1 : Math.max(
+      1,
+      Math.trunc(
+        Math.abs(
+          sourceRankValue
+        )
+      )
+    );
+    result.push({
+      ticker,
+      name,
+      market,
+      currency: market === "KR" ? "KRW" : "USD",
+      price,
+      changePercent,
+      volume: normalizedVolume.value,
+      tradingValue,
+      rank: sourceRank,
+      sourceRank,
+      assetType: classification.assetType,
+      isEtp: classification.isEtp,
+      isLeveraged: classification.isLeveraged,
+      isInverse: classification.isInverse,
+      isDerivative: classification.isDerivative,
+      riskLevel: classification.riskLevel,
+      recommendationEligible: classification.recommendationEligible,
+      dataQualityWarnings,
+      reason: rankingReason(type),
+      provider: "kiwoom",
+      raw: row
+    });
+  }
+  return result;
+}
+function sortRankingRows(rows, type) {
+  return [...rows].sort(
+    (a, b) => {
+      if (type === "volume") {
+        if (a.volume == null && b.volume == null) {
+          return a.sourceRank - b.sourceRank;
+        }
+        if (a.volume == null) {
+          return 1;
+        }
+        if (b.volume == null) {
+          return -1;
+        }
+        return b.volume - a.volume;
+      }
+      if (type === "tradingValue") {
+        if (a.tradingValue == null && b.tradingValue == null) {
+          return a.sourceRank - b.sourceRank;
+        }
+        if (a.tradingValue == null) {
+          return 1;
+        }
+        if (b.tradingValue == null) {
+          return -1;
+        }
+        return b.tradingValue - a.tradingValue;
+      }
+      if (type === "gainers") {
+        return (b.changePercent ?? Number.NEGATIVE_INFINITY) - (a.changePercent ?? Number.NEGATIVE_INFINITY);
+      }
+      if (type === "losers") {
+        return (a.changePercent ?? Number.POSITIVE_INFINITY) - (b.changePercent ?? Number.POSITIVE_INFINITY);
+      }
+      return a.sourceRank - b.sourceRank;
+    }
+  );
+}
+function applyRankingOptions(rows, options, limit) {
+  const assetFilter = options.assetFilter ?? "all";
+  const filtered = rows.filter(
+    (row) => {
+      if (assetFilter === "stocks" && (row.assetType !== "STOCK" || row.isEtp || row.isLeveraged || row.isInverse || row.isDerivative || row.riskLevel === "HIGH")) {
+        return false;
+      }
+      if (assetFilter === "etp" && row.assetType !== "ETF" && row.assetType !== "ETN") {
+        return false;
+      }
+      if (options.excludeHighRisk && row.riskLevel === "HIGH") {
+        return false;
+      }
+      if (options.recommendationEligibleOnly && !row.recommendationEligible) {
+        return false;
+      }
+      return true;
+    }
+  );
+  return filtered.slice(0, limit).map(
+    (row, index) => ({
+      ...row,
+      rank: index + 1
+    })
+  );
+}
+function filterByDirection(rows, type) {
+  return rows.filter(
+    (row) => {
+      if (type === "gainers") {
+        return row.changePercent != null && row.changePercent > 0;
+      }
+      if (type === "losers") {
+        return row.changePercent != null && row.changePercent < 0;
+      }
+      return true;
+    }
+  );
+}
+function finalizeRankingRows(data, market, type, options, limit) {
+  const normalizedRows = normalizeRankingRows(
+    data,
+    market,
+    type
+  );
+  const directionFilteredRows = filterByDirection(
+    normalizedRows,
+    type
+  );
+  const sortedRows = sortRankingRows(
+    directionFilteredRows,
+    type
+  );
+  return applyRankingOptions(
+    sortedRows,
+    options,
+    limit
+  );
+}
+async function getKiwoomRankings(market, type, limit = 30, options = {}) {
+  const safeLimit = Math.max(
+    1,
+    Math.min(
+      100,
+      Math.trunc(
+        limit || 30
+      )
+    )
+  );
+  if (market === "KR") {
+    const request = domesticRankingRequest(
+      type
+    );
+    const response = await kiwoomRequest(
+      request
+    );
+    const rows = finalizeRankingRows(
+      response.data,
+      market,
+      type,
+      options,
+      safeLimit
+    );
+    if (rows.length === 0) {
+      throw new Error(
+        `\uC870\uAC74\uC5D0 \uB9DE\uB294 \uD0A4\uC6C0 \uB7AD\uD0B9 \uC885\uBAA9\uC774 \uC5C6\uC2B5\uB2C8\uB2E4. API=${request.apiId}, market=${market}, type=${type}.`
+      );
+    }
+    return rows;
+  }
+  const requests = usRankingRequests(type);
+  const attemptMessages = [];
+  for (const request of requests) {
+    try {
+      const response = await kiwoomRequest(
+        request
+      );
+      const rows = finalizeRankingRows(
+        response.data,
+        market,
+        type,
+        options,
+        safeLimit
+      );
+      if (rows.length > 0) {
+        return rows;
+      }
+      attemptMessages.push(
+        `${request.apiId}/sort_tp=${String(request.body.sort_tp)}: \uC870\uAC74\uC5D0 \uB9DE\uB294 \uC77C\uBC18\uC8FC\uC2DD 0\uAC1C`
+      );
+    } catch (error) {
+      attemptMessages.push(
+        `${request.apiId}/sort_tp=${String(request.body.sort_tp)}: ${error instanceof Error ? error.message : "\uC54C \uC218 \uC5C6\uB294 \uC624\uB958"}`
+      );
+    }
+  }
+  throw new Error(
+    `\uBBF8\uAD6D \uD0A4\uC6C0 \uB7AD\uD0B9 \uC870\uD68C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. market=${market}, type=${type}. \uC2DC\uB3C4 \uACB0\uACFC: ${attemptMessages.join(" | ")}`
+  );
+}
+async function placeKiwoomDomesticOrder(input) {
+  const ticker = input.ticker.trim().toUpperCase();
+  const quantity = Math.trunc(Number(input.quantity));
+  const orderType = input.orderType ?? "market";
+  const price = input.price == null ? null : Number(input.price);
+  if (!/^\d{6}(?:_(?:NX|AL))?$/.test(ticker)) {
+    throw new Error(`\uC798\uBABB\uB41C \uAD6D\uB0B4 \uC885\uBAA9\uCF54\uB4DC\uC785\uB2C8\uB2E4: ${ticker}`);
+  }
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+    throw new Error("\uC8FC\uBB38 \uC218\uB7C9\uC740 1\uC8FC \uC774\uC0C1 \uC815\uC218\uC5EC\uC57C \uD569\uB2C8\uB2E4.");
+  }
+  if (orderType === "limit" && (!Number.isFinite(price) || Number(price) <= 0)) {
+    throw new Error("\uC9C0\uC815\uAC00 \uC8FC\uBB38 \uAC00\uACA9\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.");
+  }
+  const apiId = input.side === "buy" ? process.env.KIWOOM_BUY_ORDER_API_ID?.trim() || "kt10000" : process.env.KIWOOM_SELL_ORDER_API_ID?.trim() || "kt10001";
+  const path4 = process.env.KIWOOM_ORDER_PATH?.trim() || "/api/dostk/ordr";
+  const marketTradeType = process.env.KIWOOM_MARKET_ORDER_TRADE_TYPE?.trim() || "3";
+  const limitTradeType = process.env.KIWOOM_LIMIT_ORDER_TRADE_TYPE?.trim() || "0";
+  const response = await kiwoomRequest({
+    apiId,
+    path: path4,
+    body: {
+      dmst_stex_tp: process.env.KIWOOM_DOMESTIC_EXCHANGE?.trim() || "KRX",
+      stk_cd: ticker,
+      ord_qty: String(quantity),
+      ord_uv: orderType === "limit" ? String(Math.round(Number(price))) : "",
+      trde_tp: orderType === "limit" ? limitTradeType : marketTradeType,
+      cond_uv: ""
+    }
+  });
+  const raw = response.data;
+  const orderNo = String(
+    raw.ord_no ?? raw.order_no ?? raw.ordNo ?? raw.orderNo ?? ""
+  ).trim() || null;
+  return {
+    ticker,
+    side: input.side,
+    quantity,
+    orderNo,
+    raw
+  };
+}
+
+// src/kiwoom-chart.ts
+var CHART_PATH = "/api/dostk/chart";
+var CONTINUATION_DELAY_MS = 80;
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+function normalizeTicker(value) {
+  return String(value ?? "").trim().toUpperCase();
+}
+function normalizeTimeframe(value) {
+  const raw = String(value ?? "1D").trim();
+  return raw || "1D";
+}
+function koreaToday() {
+  const now = /* @__PURE__ */ new Date();
+  const koreaTime = new Date(
+    now.getTime() + 9 * 60 * 60 * 1e3
+  );
+  return koreaTime.toISOString().slice(0, 10).replace(/-/g, "");
+}
+function toFiniteNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.replace(/,/g, "").replace(/[+%₩$원]/g, "").trim();
+  if (!normalized) {
+    return null;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function absoluteFiniteNumber(value) {
+  const parsed = toFiniteNumber(value);
+  return parsed == null ? null : Math.abs(parsed);
+}
+function pick3(row, keys) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value != null && value !== "") {
+      return value;
+    }
+  }
+  return void 0;
+}
+function rowLooksLikeChart(row) {
+  const date = pick3(row, [
+    "dt",
+    "date",
+    "cntr_tm",
+    "time",
+    "datetime",
+    "timestamp",
+    "xymd",
+    "base_dt",
+    "trde_dt"
+  ]);
+  const close = pick3(row, [
+    "cur_prc",
+    "close",
+    "close_pric",
+    "closePrice",
+    "last",
+    "price"
+  ]);
+  const open = pick3(row, [
+    "open_pric",
+    "open",
+    "openPrice",
+    "open_prc"
+  ]);
+  const high = pick3(row, [
+    "high_pric",
+    "high",
+    "highPrice",
+    "high_prc"
+  ]);
+  const low = pick3(row, [
+    "low_pric",
+    "low",
+    "lowPrice",
+    "low_prc"
+  ]);
+  return Boolean(
+    date && close != null && open != null && high != null && low != null
+  );
+}
+function collectChartArrays(value, depth = 0, results = []) {
+  if (depth > 6 || value == null) {
+    return results;
+  }
+  if (Array.isArray(value)) {
+    const objectRows2 = value.filter(
+      (item) => Boolean(item) && typeof item === "object" && !Array.isArray(item)
+    );
+    if (objectRows2.length > 0 && objectRows2.some(rowLooksLikeChart)) {
+      results.push(objectRows2);
+    }
+    for (const item of value) {
+      collectChartArrays(
+        item,
+        depth + 1,
+        results
+      );
+    }
+    return results;
+  }
+  if (typeof value === "object") {
+    for (const nested of Object.values(
+      value
+    )) {
+      collectChartArrays(
+        nested,
+        depth + 1,
+        results
+      );
+    }
+  }
+  return results;
+}
+function bestChartRows(data) {
+  const arrays = collectChartArrays(data);
+  if (arrays.length === 0) {
+    return [];
+  }
+  return arrays.sort((a, b) => {
+    const scoreA = a.filter(rowLooksLikeChart).length * 1e3 + a.length;
+    const scoreB = b.filter(rowLooksLikeChart).length * 1e3 + b.length;
+    return scoreB - scoreA;
+  })[0];
+}
+function combineDateAndTime(row) {
+  const date = String(
+    pick3(row, [
+      "dt",
+      "date",
+      "xymd",
+      "trde_dt",
+      "base_dt"
+    ]) ?? ""
+  ).replace(/\D/g, "").trim();
+  const time = String(
+    pick3(row, [
+      "cntr_tm",
+      "time",
+      "hhmmss",
+      "trde_tm"
+    ]) ?? ""
+  ).replace(/\D/g, "").trim();
+  if (time.length >= 12) {
+    return time.slice(0, 14);
+  }
+  if (date.length === 8 && time.length >= 4 && time.length <= 6) {
+    return `${date}${time.padEnd(6, "0")}`;
+  }
+  if (date.length === 8) {
+    return date;
+  }
+  if (time.length >= 8) {
+    return time;
+  }
+  return String(
+    pick3(row, [
+      "datetime",
+      "timestamp",
+      "cntr_tm",
+      "time",
+      "dt",
+      "date"
+    ]) ?? ""
+  ).trim();
+}
+function normalizeRow(row) {
+  const close = absoluteFiniteNumber(
+    pick3(row, [
+      "cur_prc",
+      "close",
+      "close_pric",
+      "closePrice",
+      "last",
+      "price"
+    ])
+  );
+  const open = absoluteFiniteNumber(
+    pick3(row, [
+      "open_pric",
+      "open",
+      "openPrice",
+      "open_prc"
+    ])
+  );
+  const high = absoluteFiniteNumber(
+    pick3(row, [
+      "high_pric",
+      "high",
+      "highPrice",
+      "high_prc"
+    ])
+  );
+  const low = absoluteFiniteNumber(
+    pick3(row, [
+      "low_pric",
+      "low",
+      "lowPrice",
+      "low_prc"
+    ])
+  );
+  const volume = absoluteFiniteNumber(
+    pick3(row, [
+      "trde_qty",
+      "acc_trde_qty",
+      "volume",
+      "tradeVolume",
+      "tradingVolume",
+      "acml_vol"
+    ])
+  );
+  const time = combineDateAndTime(row);
+  if (!time || close == null || open == null || high == null || low == null) {
+    return null;
+  }
+  return {
+    time,
+    open,
+    high: Math.max(
+      high,
+      open,
+      close
+    ),
+    low: Math.min(
+      low,
+      open,
+      close
+    ),
+    close,
+    volume: Math.max(
+      volume ?? 0,
+      0
+    )
+  };
+}
+function timeSortValue(value) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  const parsed = Number(digits);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+function dedupeAndSort(rows) {
+  const map = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    map.set(row.time, row);
+  }
+  return [...map.values()].sort(
+    (a, b) => timeSortValue(a.time) - timeSortValue(b.time)
+  );
+}
+function aggregateCandles(rows, size) {
+  if (size <= 1 || rows.length <= 1) {
+    return rows;
+  }
+  const result = [];
+  for (let index = 0; index < rows.length; index += size) {
+    const chunk = rows.slice(
+      index,
+      index + size
+    );
+    if (chunk.length === 0) {
+      continue;
+    }
+    result.push({
+      time: chunk[0].time,
+      open: chunk[0].open,
+      high: Math.max(
+        ...chunk.map(
+          (item) => item.high
+        )
+      ),
+      low: Math.min(
+        ...chunk.map(
+          (item) => item.low
+        )
+      ),
+      close: chunk[chunk.length - 1].close,
+      volume: chunk.reduce(
+        (sum, item) => sum + item.volume,
+        0
+      )
+    });
+  }
+  return result;
+}
+function requestSpec(ticker, timeframe) {
+  const tf = normalizeTimeframe(timeframe);
+  const baseBody = {
+    stk_cd: ticker,
+    /*
+     * 수정주가 적용 여부입니다.
+     * 1을 사용해 액면분할·병합 등이 반영된
+     * 과거 가격을 받습니다.
+     */
+    upd_stkpc_tp: "1"
+  };
+  const minuteScope = {
+    "1m": "1",
+    "3m": "3",
+    "5m": "5",
+    "15m": "15",
+    "30m": "30",
+    "1H": "60",
+    "4H": "60"
+  };
+  if (minuteScope[tf]) {
+    return {
+      apiId: "ka10080",
+      path: CHART_PATH,
+      body: {
+        ...baseBody,
+        tic_scope: minuteScope[tf]
+      },
+      /*
+       * 분봉은 데이터 양이 매우 많으므로
+       * 과도한 API 호출을 막기 위해 제한합니다.
+       */
+      maxPages: tf === "4H" ? 60 : 40,
+      /*
+       * 키움에서 4시간봉을 직접 제공하지 않으면
+       * 60분봉 4개를 합쳐 4시간봉으로 만듭니다.
+       */
+      aggregateSize: tf === "4H" ? 4 : 1
+    };
+  }
+  if (tf === "1M") {
+    return {
+      apiId: "ka10083",
+      path: CHART_PATH,
+      body: {
+        ...baseBody,
+        base_dt: koreaToday()
+      },
+      maxPages: 100
+    };
+  }
+  if (tf === "1Y") {
+    return {
+      apiId: "ka10094",
+      path: CHART_PATH,
+      body: {
+        ...baseBody,
+        base_dt: koreaToday()
+      },
+      maxPages: 60
+    };
+  }
+  const aggregateSize = tf === "3D" ? 3 : tf === "5D" ? 5 : tf === "10D" ? 10 : 1;
+  return {
+    apiId: "ka10081",
+    path: CHART_PATH,
+    body: {
+      ...baseBody,
+      base_dt: koreaToday()
+    },
+    /*
+     * 상장일부터 현재까지 조회하기 위해
+     * cont-yn과 next-key로 최대 300페이지를
+     * 연속 조회합니다.
+     */
+    maxPages: 300,
+    aggregateSize
+  };
+}
+async function fetchAllPages(spec) {
+  const collected = [];
+  const seenNextKeys = /* @__PURE__ */ new Set();
+  let contYn;
+  let nextKey;
+  for (let page = 0; page < spec.maxPages; page += 1) {
+    const response = await kiwoomRequest({
+      apiId: spec.apiId,
+      path: spec.path,
+      body: spec.body,
+      contYn,
+      nextKey
+    });
+    const rows = bestChartRows(
+      response.data
+    );
+    const normalizedRows = rows.map(normalizeRow).filter(
+      (item) => item != null
+    );
+    collected.push(
+      ...normalizedRows
+    );
+    const hasNext = String(
+      response.contYn ?? ""
+    ).toUpperCase() === "Y";
+    const returnedNextKey = String(
+      response.nextKey ?? ""
+    ).trim();
+    if (!hasNext || !returnedNextKey) {
+      break;
+    }
+    if (seenNextKeys.has(
+      returnedNextKey
+    )) {
+      break;
+    }
+    seenNextKeys.add(
+      returnedNextKey
+    );
+    contYn = response.contYn ?? "Y";
+    nextKey = returnedNextKey;
+    await sleep(
+      CONTINUATION_DELAY_MS
+    );
+  }
+  return dedupeAndSort(
+    collected
+  );
+}
+async function getKiwoomChartCandles(tickerValue, timeframeValue = "1D") {
+  if (!isKiwoomConfigured()) {
+    throw new Error(
+      "\uD0A4\uC6C0 API \uD0A4\uAC00 \uB4F1\uB85D\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4."
+    );
+  }
+  const ticker = normalizeTicker(tickerValue);
+  if (!/^[0-9A-Z]{6}(?:_(?:NX|AL))?$/.test(
+    ticker
+  )) {
+    throw new Error(
+      `\uC798\uBABB\uB41C \uAD6D\uB0B4 \uC885\uBAA9\uCF54\uB4DC\uC785\uB2C8\uB2E4: ${ticker}`
+    );
+  }
+  const timeframe = normalizeTimeframe(
+    timeframeValue
+  );
+  const spec = requestSpec(
+    ticker,
+    timeframe
+  );
+  const rows = await fetchAllPages(spec);
+  const aggregated = aggregateCandles(
+    rows,
+    spec.aggregateSize ?? 1
+  );
+  if (aggregated.length < 2) {
+    throw new Error(
+      `\uD0A4\uC6C0 \uCC28\uD2B8 \uB370\uC774\uD130\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4. ticker=${ticker}, timeframe=${timeframe}, count=${aggregated.length}`
+    );
+  }
+  return aggregated;
+}
+
 // src/services/market-data.service.ts
 var EXTRA_ALIASES = {
   \uC0BC\uC131\uC804\uC790: {
@@ -2118,7 +3566,9 @@ function ratingFromQuote(quote5, entry) {
       quote: quote5,
       entry
     });
-    if (typeof scores === "number") return scoreToRating(scores);
+    if (typeof scores === "number") {
+      return scoreToRating(scores);
+    }
     if (typeof scores?.total === "number") {
       return scoreToRating(scores.total);
     }
@@ -2132,11 +3582,21 @@ function ratingFromQuote(quote5, entry) {
 }
 function toQuoteRow(entry, quote5) {
   const ticker = cleanTicker3(entry.ticker);
-  const marketValue = normalizeMarketValue(entry.market, ticker);
-  const currency = normalizeCurrencyValue(entry.currency, marketValue);
+  const marketValue = normalizeMarketValue(
+    entry.market,
+    ticker
+  );
+  const currency = normalizeCurrencyValue(
+    entry.currency,
+    marketValue
+  );
   const price = quotePrice(quote5);
   const previousClose = quotePreviousClose(quote5, price);
-  const changeAmount = quoteChangeAmount(quote5, price, previousClose);
+  const changeAmount = quoteChangeAmount(
+    quote5,
+    price,
+    previousClose
+  );
   const changePercent = quoteChangePercent(
     quote5,
     price,
@@ -2147,7 +3607,9 @@ function toQuoteRow(entry, quote5) {
   const tradingValue = safeNumber3(quote5.tradingValue, 0) || Math.max(price * volume, 0);
   return {
     ticker,
-    name: String(entry.name ?? quote5.name ?? ticker),
+    name: String(
+      entry.name ?? quote5.name ?? ticker
+    ),
     market: String(marketValue),
     currency: String(currency),
     assetType: classifyAssetType(entry),
@@ -2160,21 +3622,37 @@ function toQuoteRow(entry, quote5) {
     low: safeNumber3(quote5.low, 0),
     open: safeNumber3(quote5.open, 0),
     previousClose,
-    updatedAt: String(quote5.updatedAt ?? (/* @__PURE__ */ new Date()).toISOString()),
+    updatedAt: String(
+      quote5.updatedAt ?? (/* @__PURE__ */ new Date()).toISOString()
+    ),
     rating: ratingFromQuote(quote5, entry)
   };
 }
 function sampleQuoteFor(entry) {
-  const ticker = cleanTicker3(entry.ticker);
+  const ticker = cleanTicker3(
+    entry.ticker
+  );
   const base = isKrTicker3(ticker) ? 5e3 + (Number(ticker.slice(-3)) || 100) * 100 : 20 + ticker.charCodeAt(0) * 3;
-  const seed = [...ticker].reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  const changePercent = Number(((seed % 1800 - 900) / 100).toFixed(2));
-  const price = Math.max(1, Math.round(base * (1 + changePercent / 100)));
+  const seed = [...ticker].reduce(
+    (sum, char) => sum + char.charCodeAt(0),
+    0
+  );
+  const changePercent = Number(
+    ((seed % 1800 - 900) / 100).toFixed(2)
+  );
+  const price = Math.max(
+    1,
+    Math.round(
+      base * (1 + changePercent / 100)
+    )
+  );
   const previousClose = price / (1 + changePercent / 100);
   const volume = 1e5 + seed * 1377;
   return {
     ticker,
-    name: String(entry.name ?? ticker),
+    name: String(
+      entry.name ?? ticker
+    ),
     price,
     previousClose,
     changeAmount: price - previousClose,
@@ -2182,27 +3660,68 @@ function sampleQuoteFor(entry) {
     volume,
     tradingValue: price * volume,
     open: previousClose,
-    high: Math.max(price, previousClose) * 1.02,
-    low: Math.min(price, previousClose) * 0.98,
+    high: Math.max(
+      price,
+      previousClose
+    ) * 1.02,
+    low: Math.min(
+      price,
+      previousClose
+    ) * 0.98,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
 }
 async function tryQuoteProvider(entry) {
   const providers = providerStatus();
-  const marketValue = normalizeMarketValue(entry.market, entry.ticker);
+  const marketValue = normalizeMarketValue(
+    entry.market,
+    entry.ticker
+  );
   const attempts = [];
   if (marketValue === "KR") {
-    attempts.push(() => getQuote3?.(entry));
-    attempts.push(() => quote2?.(entry));
+    attempts.push(
+      () => getQuote3?.(
+        entry
+      )
+    );
+    attempts.push(
+      () => quote2?.(
+        entry
+      )
+    );
   }
-  attempts.push(() => getQuote2?.(entry));
-  attempts.push(() => quote?.(entry));
+  attempts.push(
+    () => getQuote2?.(
+      entry
+    )
+  );
+  attempts.push(
+    () => quote?.(
+      entry
+    )
+  );
   if (providers.finnhub) {
-    attempts.push(() => getQuote4?.(entry));
-    attempts.push(() => (void 0)?.(entry));
+    attempts.push(
+      () => getQuote4?.(
+        entry
+      )
+    );
+    attempts.push(
+      () => (void 0)?.(
+        entry
+      )
+    );
   }
-  attempts.push(() => getQuote?.(entry.ticker));
-  attempts.push(() => (void 0)?.(entry.ticker));
+  attempts.push(
+    () => getQuote?.(
+      entry.ticker
+    )
+  );
+  attempts.push(
+    () => (void 0)?.(
+      entry.ticker
+    )
+  );
   for (const attempt of attempts) {
     try {
       const result = await attempt();
@@ -2219,56 +3738,94 @@ async function tryQuoteProvider(entry) {
   return null;
 }
 async function tryCandlesProvider(entry, timeframe) {
+  const ticker = cleanTicker3(
+    entry.ticker
+  );
+  const marketValue = normalizeMarketValue(
+    entry.market,
+    ticker
+  );
+  const timeframeText = String(
+    timeframe ?? "1D"
+  );
+  if (marketValue === "KR") {
+    try {
+      const kiwoomRows = await getKiwoomChartCandles(
+        ticker,
+        timeframeText
+      );
+      if (kiwoomRows.length >= 2) {
+        return kiwoomRows;
+      }
+    } catch (error) {
+      console.error(
+        `kiwoom chart provider failed: ticker=${ticker}, timeframe=${timeframeText}`,
+        error
+      );
+    }
+  }
   const attempts = [
-    () => getCandles2?.(entry, timeframe),
-    () => candles?.(entry, timeframe),
-    () => getCandles3?.(entry, timeframe),
-    () => candles2?.(entry, timeframe),
-    () => (void 0)?.(entry, timeframe),
-    () => (void 0)?.(entry, timeframe),
-    () => getCandles?.(entry.ticker, timeframe),
-    () => (void 0)?.(entry.ticker, timeframe)
+    () => getCandles2?.(
+      entry,
+      timeframe
+    ),
+    () => candles?.(
+      entry,
+      timeframe
+    ),
+    () => getCandles3?.(
+      entry,
+      timeframe
+    ),
+    () => candles2?.(
+      entry,
+      timeframe
+    ),
+    () => (void 0)?.(
+      entry,
+      timeframe
+    ),
+    () => (void 0)?.(
+      entry,
+      timeframe
+    ),
+    () => getCandles?.(
+      entry.ticker,
+      timeframe
+    ),
+    () => (void 0)?.(
+      entry.ticker,
+      timeframe
+    )
   ];
   for (const attempt of attempts) {
     try {
       const result = await attempt();
-      if (Array.isArray(result) && result.length > 0) {
+      if (Array.isArray(result) && result.length >= 2) {
         return result;
       }
     } catch {
     }
   }
-  return buildFallbackCandles(entry);
-}
-function buildFallbackCandles(entry) {
-  const quote5 = sampleQuoteFor(entry);
-  const now = Date.now();
-  const base = quotePrice(quote5);
-  const candles5 = [];
-  for (let i = 59; i >= 0; i -= 1) {
-    const wave = Math.sin(i / 5) * 0.015;
-    const close = Math.max(1, base * (1 + wave));
-    const open = close * (1 - wave / 3);
-    const high = Math.max(open, close) * 1.01;
-    const low = Math.min(open, close) * 0.99;
-    candles5.push({
-      time: new Date(now - i * 864e5).toISOString(),
-      open,
-      high,
-      low,
-      close,
-      volume: safeNumber3(quote5.volume, 1e5) + i * 1e3
-    });
-  }
-  return candles5;
+  return [];
 }
 async function tryProfileProvider(entry) {
   const attempts = [
-    () => (void 0)?.(entry),
-    () => (void 0)?.(entry),
-    () => getCompanyProfile2?.(entry),
-    () => companyProfile?.(entry),
-    () => getCompanyProfile(entry.ticker)
+    () => (void 0)?.(
+      entry
+    ),
+    () => (void 0)?.(
+      entry
+    ),
+    () => getCompanyProfile2?.(
+      entry
+    ),
+    () => companyProfile?.(
+      entry
+    ),
+    () => getCompanyProfile(
+      entry.ticker
+    )
   ];
   for (const attempt of attempts) {
     try {
@@ -2280,10 +3837,18 @@ async function tryProfileProvider(entry) {
     }
   }
   return {
-    ticker: cleanTicker3(entry.ticker),
-    name: String(entry.name ?? entry.ticker),
-    market: String(entry.market ?? ""),
-    currency: String(entry.currency ?? ""),
+    ticker: cleanTicker3(
+      entry.ticker
+    ),
+    name: String(
+      entry.name ?? entry.ticker
+    ),
+    market: String(
+      entry.market ?? ""
+    ),
+    currency: String(
+      entry.currency ?? ""
+    ),
     description: "\uAE30\uC5C5 \uC815\uBCF4\uB97C \uD655\uC778 \uC911\uC785\uB2C8\uB2E4.",
     sector: "",
     industry: "",
@@ -2293,24 +3858,45 @@ async function tryProfileProvider(entry) {
 async function buildKrUniverseEntries() {
   try {
     const rows = await getKrUniverse();
-    if (!Array.isArray(rows)) return [];
+    if (!Array.isArray(rows)) {
+      return [];
+    }
     return rows.map((row) => {
-      const ticker = cleanTicker3(row.ticker ?? row.code ?? row.symbol);
-      const name = String(row.name ?? row.companyName ?? ticker);
-      if (!ticker) return null;
-      return createEntry(ticker, name, "KR", "KRW", [
-        name
-      ]);
-    }).filter((entry) => Boolean(entry));
+      const ticker = cleanTicker3(
+        row.ticker ?? row.code ?? row.symbol
+      );
+      const name = String(
+        row.name ?? row.companyName ?? ticker
+      );
+      if (!ticker) {
+        return null;
+      }
+      return createEntry(
+        ticker,
+        name,
+        "KR",
+        "KRW",
+        [name]
+      );
+    }).filter(
+      (entry) => Boolean(entry)
+    );
   } catch {
     return [];
   }
 }
 var MarketDataService = class {
   static async search(q, limit = 80) {
-    const query = String(q ?? "").trim();
-    const aliasEntries = Object.entries(EXTRA_ALIASES).map(
-      ([, value]) => createEntry(
+    const query = String(
+      q ?? ""
+    ).trim();
+    const aliasEntries = Object.entries(
+      EXTRA_ALIASES
+    ).map(
+      ([
+        ,
+        value
+      ]) => createEntry(
         value.ticker,
         value.name,
         value.market,
@@ -2325,41 +3911,87 @@ var MarketDataService = class {
     ]);
     for (const entry of entries) {
       try {
-        registerDynamicEntry(entry);
+        registerDynamicEntry(
+          entry
+        );
       } catch {
       }
     }
     const scored = entries.map((entry) => ({
       entry,
-      score: searchScore(entry, query)
-    })).filter((item) => query ? item.score > 0 : true).sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return String(a.entry.ticker).localeCompare(
-        String(b.entry.ticker)
+      score: searchScore(
+        entry,
+        query
+      )
+    })).filter(
+      (item) => query ? item.score > 0 : true
+    ).sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      return String(
+        a.entry.ticker
+      ).localeCompare(
+        String(
+          b.entry.ticker
+        )
       );
-    }).slice(0, limit).map((item) => toSearchResult(item.entry));
+    }).slice(
+      0,
+      limit
+    ).map(
+      (item) => toSearchResult(
+        item.entry
+      )
+    );
     return scored;
   }
   static async getQuote(ticker) {
-    const entry = resolveEntry(ticker);
-    return cached(`quote:${cleanTicker3(ticker)}`, TTL.quote, async () => {
-      const providerQuote = await tryQuoteProvider(entry);
-      const quote5 = providerQuote ?? sampleQuoteFor(entry);
-      return {
-        ...quote5,
-        ticker: cleanTicker3(entry.ticker),
-        name: String(entry.name ?? entry.ticker)
-      };
-    });
+    const entry = resolveEntry(
+      ticker
+    );
+    return cached(
+      `quote:${cleanTicker3(ticker)}`,
+      TTL.quote,
+      async () => {
+        const providerQuote = await tryQuoteProvider(
+          entry
+        );
+        const quote5 = providerQuote ?? sampleQuoteFor(
+          entry
+        );
+        return {
+          ...quote5,
+          ticker: cleanTicker3(
+            entry.ticker
+          ),
+          name: String(
+            entry.name ?? entry.ticker
+          )
+        };
+      }
+    );
   }
   static async getQuoteRow(ticker) {
-    const entry = resolveEntry(ticker);
+    const entry = resolveEntry(
+      ticker
+    );
     try {
-      const quote5 = await this.getQuote(ticker);
-      return toQuoteRow(entry, quote5);
+      const quote5 = await this.getQuote(
+        ticker
+      );
+      return toQuoteRow(
+        entry,
+        quote5
+      );
     } catch {
       try {
-        return toQuoteRow(entry, sampleQuoteFor(entry));
+        return toQuoteRow(
+          entry,
+          sampleQuoteFor(
+            entry
+          )
+        );
       } catch {
         return null;
       }
@@ -2367,45 +3999,82 @@ var MarketDataService = class {
   }
   static async getQuotes(tickers) {
     const rows = await Promise.all(
-      tickers.map((ticker) => this.getQuoteRow(ticker))
+      tickers.map(
+        (ticker) => this.getQuoteRow(
+          ticker
+        )
+      )
     );
-    return rows.filter((row) => Boolean(row));
+    return rows.filter(
+      (row) => Boolean(row)
+    );
   }
   static async getCandles(ticker, timeframe = "1D") {
-    const entry = resolveEntry(ticker);
+    const entry = resolveEntry(
+      ticker
+    );
     return cached(
       `candles:${cleanTicker3(ticker)}:${String(timeframe)}`,
       TTL.candles ?? TTL.quote,
-      async () => tryCandlesProvider(entry, timeframe)
+      async () => tryCandlesProvider(
+        entry,
+        timeframe
+      )
     );
   }
   static async getCompanyProfile(ticker) {
-    const entry = resolveEntry(ticker);
+    const entry = resolveEntry(
+      ticker
+    );
     return cached(
       `company:${cleanTicker3(ticker)}`,
       TTL.profile ?? TTL.quote,
-      async () => tryProfileProvider(entry)
+      async () => tryProfileProvider(
+        entry
+      )
     );
   }
   static async getProfile(ticker) {
-    return this.getCompanyProfile(ticker);
+    return this.getCompanyProfile(
+      ticker
+    );
   }
   static async getRating(ticker) {
-    const quote5 = await this.getQuoteRow(ticker);
+    const quote5 = await this.getQuoteRow(
+      ticker
+    );
     return quote5?.rating ?? defaultRating();
   }
   static async getCatalogEntry(ticker) {
-    return resolveEntry(ticker);
+    return resolveEntry(
+      ticker
+    );
   }
   static async getUniverse(marketValue) {
-    const entries = dedupeEntries([...catalogArray(), ...await buildKrUniverseEntries()]);
-    const filtered = entries.filter((entry) => {
-      if (!marketValue || marketValue === "ALL") return true;
-      const ticker = cleanTicker3(entry.ticker);
-      const entryMarket = normalizeMarketValue(entry.market, ticker);
-      return String(entryMarket) === marketValue;
-    });
-    return filtered.map(toSearchResult);
+    const entries = dedupeEntries([
+      ...catalogArray(),
+      ...await buildKrUniverseEntries()
+    ]);
+    const filtered = entries.filter(
+      (entry) => {
+        if (!marketValue || marketValue === "ALL") {
+          return true;
+        }
+        const ticker = cleanTicker3(
+          entry.ticker
+        );
+        const entryMarket = normalizeMarketValue(
+          entry.market,
+          ticker
+        );
+        return String(
+          entryMarket
+        ) === marketValue;
+      }
+    );
+    return filtered.map(
+      toSearchResult
+    );
   }
 };
 
@@ -3353,114 +5022,20 @@ var ThemesService = {
 // src/routes/market.ts
 var router2 = Router2();
 var FALLBACK_UNIVERSE = [
-  { ticker: "005930", name: "\uC0BC\uC131\uC804\uC790", market: "KR", currency: "KRW" },
-  { ticker: "000660", name: "SK\uD558\uC774\uB2C9\uC2A4", market: "KR", currency: "KRW" },
-  { ticker: "005380", name: "\uD604\uB300\uCC28", market: "KR", currency: "KRW" },
-  { ticker: "000270", name: "\uAE30\uC544", market: "KR", currency: "KRW" },
+  { ticker: "005930", name: "\uFFFD\uC1F1\uAF66\uFFFD\uAFA9\uC604", market: "KR", currency: "KRW" },
+  { ticker: "000660", name: "SK\uFFFD\uC10F\uC520\uFFFD\uB431\uB4AA", market: "KR", currency: "KRW" },
+  { ticker: "005380", name: "\uFFFD\uAFA8\uFFFD\uF9E1\uFFFD", market: "KR", currency: "KRW" },
+  { ticker: "000270", name: "\u6E72\uACD7\uBE18", market: "KR", currency: "KRW" },
   { ticker: "035420", name: "NAVER", market: "KR", currency: "KRW" },
-  { ticker: "035720", name: "\uCE74\uCE74\uC624", market: "KR", currency: "KRW" },
-  { ticker: "373220", name: "LG\uC5D0\uB108\uC9C0\uC194\uB8E8\uC158", market: "KR", currency: "KRW" },
-  { ticker: "207940", name: "\uC0BC\uC131\uBC14\uC774\uC624\uB85C\uC9C1\uC2A4", market: "KR", currency: "KRW" },
-  { ticker: "068270", name: "\uC140\uD2B8\uB9AC\uC628", market: "KR", currency: "KRW" },
-  { ticker: "051910", name: "LG\uD654\uD559", market: "KR", currency: "KRW" },
-  { ticker: "006400", name: "\uC0BC\uC131SDI", market: "KR", currency: "KRW" },
-  { ticker: "005490", name: "POSCO\uD640\uB529\uC2A4", market: "KR", currency: "KRW" },
-  { ticker: "003670", name: "\uD3EC\uC2A4\uCF54\uD4E8\uCC98\uC5E0", market: "KR", currency: "KRW" },
-  { ticker: "012330", name: "\uD604\uB300\uBAA8\uBE44\uC2A4", market: "KR", currency: "KRW" },
-  { ticker: "028260", name: "\uC0BC\uC131\uBB3C\uC0B0", market: "KR", currency: "KRW" },
-  { ticker: "055550", name: "\uC2E0\uD55C\uC9C0\uC8FC", market: "KR", currency: "KRW" },
-  { ticker: "105560", name: "KB\uAE08\uC735", market: "KR", currency: "KRW" },
-  { ticker: "086790", name: "\uD558\uB098\uAE08\uC735\uC9C0\uC8FC", market: "KR", currency: "KRW" },
-  { ticker: "316140", name: "\uC6B0\uB9AC\uAE08\uC735\uC9C0\uC8FC", market: "KR", currency: "KRW" },
-  { ticker: "066570", name: "LG\uC804\uC790", market: "KR", currency: "KRW" },
-  { ticker: "096770", name: "SK\uC774\uB178\uBCA0\uC774\uC158", market: "KR", currency: "KRW" },
-  { ticker: "017670", name: "SK\uD154\uB808\uCF64", market: "KR", currency: "KRW" },
-  { ticker: "030200", name: "KT", market: "KR", currency: "KRW" },
-  { ticker: "032830", name: "\uC0BC\uC131\uC0DD\uBA85", market: "KR", currency: "KRW" },
-  { ticker: "000810", name: "\uC0BC\uC131\uD654\uC7AC", market: "KR", currency: "KRW" },
-  { ticker: "033780", name: "KT&G", market: "KR", currency: "KRW" },
-  { ticker: "015760", name: "\uD55C\uAD6D\uC804\uB825", market: "KR", currency: "KRW" },
-  { ticker: "034020", name: "\uB450\uC0B0\uC5D0\uB108\uBE4C\uB9AC\uD2F0", market: "KR", currency: "KRW" },
-  { ticker: "010130", name: "\uACE0\uB824\uC544\uC5F0", market: "KR", currency: "KRW" },
-  { ticker: "009540", name: "HD\uD55C\uAD6D\uC870\uC120\uD574\uC591", market: "KR", currency: "KRW" },
-  { ticker: "010140", name: "\uC0BC\uC131\uC911\uACF5\uC5C5", market: "KR", currency: "KRW" },
-  { ticker: "329180", name: "HD\uD604\uB300\uC911\uACF5\uC5C5", market: "KR", currency: "KRW" },
-  { ticker: "000720", name: "\uD604\uB300\uAC74\uC124", market: "KR", currency: "KRW" },
-  { ticker: "006360", name: "GS\uAC74\uC124", market: "KR", currency: "KRW" },
-  { ticker: "047040", name: "\uB300\uC6B0\uAC74\uC124", market: "KR", currency: "KRW" },
-  { ticker: "003490", name: "\uB300\uD55C\uD56D\uACF5", market: "KR", currency: "KRW" },
-  { ticker: "089590", name: "\uC81C\uC8FC\uD56D\uACF5", market: "KR", currency: "KRW" },
-  { ticker: "086520", name: "\uC5D0\uCF54\uD504\uB85C", market: "KR", currency: "KRW" },
-  { ticker: "247540", name: "\uC5D0\uCF54\uD504\uB85C\uBE44\uC5E0", market: "KR", currency: "KRW" },
-  { ticker: "196170", name: "\uC54C\uD14C\uC624\uC820", market: "KR", currency: "KRW" },
-  { ticker: "028300", name: "HLB", market: "KR", currency: "KRW" },
-  { ticker: "277810", name: "\uB808\uC778\uBCF4\uC6B0\uB85C\uBCF4\uD2F1\uC2A4", market: "KR", currency: "KRW" },
-  { ticker: "042700", name: "\uD55C\uBBF8\uBC18\uB3C4\uCCB4", market: "KR", currency: "KRW" },
-  { ticker: "352820", name: "\uD558\uC774\uBE0C", market: "KR", currency: "KRW" },
-  { ticker: "259960", name: "\uD06C\uB798\uD504\uD1A4", market: "KR", currency: "KRW" },
-  { ticker: "036570", name: "\uC5D4\uC528\uC18C\uD504\uD2B8", market: "KR", currency: "KRW" },
-  { ticker: "251270", name: "\uB137\uB9C8\uBE14", market: "KR", currency: "KRW" },
-  { ticker: "011200", name: "HMM", market: "KR", currency: "KRW" },
-  { ticker: "018260", name: "\uC0BC\uC131\uC5D0\uC2A4\uB514\uC5D0\uC2A4", market: "KR", currency: "KRW" },
-  { ticker: "090430", name: "\uC544\uBAA8\uB808\uD37C\uC2DC\uD53D", market: "KR", currency: "KRW" },
-  { ticker: "004020", name: "\uD604\uB300\uC81C\uCCA0", market: "KR", currency: "KRW" },
-  { ticker: "011070", name: "LG\uC774\uB178\uD14D", market: "KR", currency: "KRW" },
+  { ticker: "035720", name: "\u79FB\uB301\uBB45\uFFFD\uFFFD", market: "KR", currency: "KRW" },
   { ticker: "AAPL", name: "Apple", market: "US", currency: "USD" },
   { ticker: "MSFT", name: "Microsoft", market: "US", currency: "USD" },
   { ticker: "NVDA", name: "NVIDIA", market: "US", currency: "USD" },
-  { ticker: "GOOGL", name: "Alphabet A", market: "US", currency: "USD" },
-  { ticker: "GOOG", name: "Alphabet C", market: "US", currency: "USD" },
   { ticker: "AMZN", name: "Amazon", market: "US", currency: "USD" },
   { ticker: "META", name: "Meta Platforms", market: "US", currency: "USD" },
-  { ticker: "TSLA", name: "Tesla", market: "US", currency: "USD" },
-  { ticker: "AVGO", name: "Broadcom", market: "US", currency: "USD" },
-  { ticker: "NFLX", name: "Netflix", market: "US", currency: "USD" },
-  { ticker: "AMD", name: "AMD", market: "US", currency: "USD" },
-  { ticker: "INTC", name: "Intel", market: "US", currency: "USD" },
-  { ticker: "PLTR", name: "Palantir", market: "US", currency: "USD" },
-  { ticker: "SOFI", name: "SoFi", market: "US", currency: "USD" },
-  { ticker: "COIN", name: "Coinbase", market: "US", currency: "USD" },
-  { ticker: "UBER", name: "Uber", market: "US", currency: "USD" },
-  { ticker: "AAL", name: "American Airlines", market: "US", currency: "USD" },
-  { ticker: "DAL", name: "Delta Air Lines", market: "US", currency: "USD" },
-  { ticker: "UAL", name: "United Airlines", market: "US", currency: "USD" },
-  { ticker: "JPM", name: "JPMorgan Chase", market: "US", currency: "USD" },
-  { ticker: "BAC", name: "Bank of America", market: "US", currency: "USD" },
-  { ticker: "XOM", name: "Exxon Mobil", market: "US", currency: "USD" },
-  { ticker: "CVX", name: "Chevron", market: "US", currency: "USD" },
-  { ticker: "LLY", name: "Eli Lilly", market: "US", currency: "USD" },
-  { ticker: "UNH", name: "UnitedHealth", market: "US", currency: "USD" },
-  { ticker: "WMT", name: "Walmart", market: "US", currency: "USD" },
-  { ticker: "COST", name: "Costco", market: "US", currency: "USD" },
-  { ticker: "ORCL", name: "Oracle", market: "US", currency: "USD" },
-  { ticker: "ADBE", name: "Adobe", market: "US", currency: "USD" },
-  { ticker: "CRM", name: "Salesforce", market: "US", currency: "USD" },
-  { ticker: "QCOM", name: "Qualcomm", market: "US", currency: "USD" },
-  { ticker: "AMAT", name: "Applied Materials", market: "US", currency: "USD" },
-  { ticker: "MU", name: "Micron", market: "US", currency: "USD" },
-  {
-    ticker: "SMCI",
-    name: "Super Micro Computer",
-    market: "US",
-    currency: "USD"
-  },
-  { ticker: "ARM", name: "Arm Holdings", market: "US", currency: "USD" },
-  { ticker: "TSM", name: "TSMC", market: "US", currency: "USD" },
-  { ticker: "ASML", name: "ASML", market: "US", currency: "USD" },
-  { ticker: "NVO", name: "Novo Nordisk", market: "US", currency: "USD" },
-  { ticker: "MRNA", name: "Moderna", market: "US", currency: "USD" },
-  { ticker: "PFE", name: "Pfizer", market: "US", currency: "USD" },
-  { ticker: "JNJ", name: "Johnson & Johnson", market: "US", currency: "USD" },
-  { ticker: "BA", name: "Boeing", market: "US", currency: "USD" },
-  { ticker: "DIS", name: "Disney", market: "US", currency: "USD" },
-  { ticker: "NKE", name: "Nike", market: "US", currency: "USD" },
-  { ticker: "SHOP", name: "Shopify", market: "US", currency: "USD" },
-  { ticker: "CRWD", name: "CrowdStrike", market: "US", currency: "USD" },
-  { ticker: "SNOW", name: "Snowflake", market: "US", currency: "USD" },
-  { ticker: "RGTI", name: "Rigetti Computing", market: "US", currency: "USD" },
-  { ticker: "IONQ", name: "IonQ", market: "US", currency: "USD" }
+  { ticker: "TSLA", name: "Tesla", market: "US", currency: "USD" }
 ];
-function normalizeTicker(value) {
+function normalizeTicker2(value) {
   return String(value ?? "").trim().toUpperCase();
 }
 function normalizeMarket(value) {
@@ -3471,7 +5046,7 @@ function normalizeMarket(value) {
 }
 function uniqueTickers(values) {
   return Array.from(
-    new Set(values.map((value) => normalizeTicker(value)).filter(Boolean))
+    new Set(values.map((value) => normalizeTicker2(value)).filter(Boolean))
   );
 }
 function isKrTicker4(ticker) {
@@ -3479,12 +5054,11 @@ function isKrTicker4(ticker) {
 }
 function numberFromSeed(ticker, min, max) {
   const seed = [...ticker].reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  const range = max - min;
-  return min + seed % range;
+  return min + seed % (max - min);
 }
 function findFallbackStock(ticker) {
-  const clean = normalizeTicker(ticker);
-  return FALLBACK_UNIVERSE.find((stock) => stock.ticker.toUpperCase() === clean) ?? {
+  const clean = normalizeTicker2(ticker);
+  return FALLBACK_UNIVERSE.find((stock) => stock.ticker === clean) ?? {
     ticker: clean,
     name: clean,
     market: isKrTicker4(clean) ? "KR" : "US",
@@ -3502,7 +5076,6 @@ function fallbackQuote(stock) {
   const previousClose = price / (1 + changePercent / 100);
   const changeAmount = price - previousClose;
   const volume = numberFromSeed(stock.ticker, 1e5, 9e6);
-  const tradingValue = price * volume;
   return {
     ticker: stock.ticker,
     name: stock.name,
@@ -3513,7 +5086,7 @@ function fallbackQuote(stock) {
     changeAmount,
     changePercent,
     volume,
-    tradingValue,
+    tradingValue: price * volume,
     open: previousClose,
     high: Math.max(price, previousClose) * 1.02,
     low: Math.min(price, previousClose) * 0.98,
@@ -3523,7 +5096,7 @@ function fallbackQuote(stock) {
       score: Math.max(1, Math.min(100, 50 + changePercent * 3)),
       rating: changePercent > 3 ? "BUY" : changePercent < -3 ? "SELL" : "HOLD"
     },
-    reason: "\uC784\uC2DC fallback \uC2DC\uC138\uC785\uB2C8\uB2E4."
+    reason: "\uFFFD\uAFA9\uB586 fallback \uFFFD\uC496\uAF6D\uFFFD\uB085\uB572\uFFFD\uFFFD."
   };
 }
 function providerQuoteToRow(providerQuote, stock, provider) {
@@ -3561,7 +5134,35 @@ function providerQuoteToRow(providerQuote, stock, provider) {
       score: Math.max(1, Math.min(100, 50 + changePercent * 3)),
       rating: changePercent > 3 ? "BUY" : changePercent < -3 ? "SELL" : "HOLD"
     },
-    reason: provider === "naver" ? "\uB124\uC774\uBC84 \uC2E4\uC2DC\uAC04 \uC2DC\uC138\uC785\uB2C8\uB2E4." : "Yahoo \uC2E4\uC2DC\uAC04 \uC2DC\uC138\uC785\uB2C8\uB2E4."
+    reason: provider === "naver" ? "\uFFFD\u317C\uC520\u8E30\uFFFD \uFFFD\u317C\uB586\u5A9B\uFFFD \uFFFD\uC496\uAF6D\uFFFD\uB085\uB572\uFFFD\uFFFD." : "Yahoo \uFFFD\u317C\uB586\u5A9B\uFFFD \uFFFD\uC496\uAF6D\uFFFD\uB085\uB572\uFFFD\uFFFD."
+  };
+}
+function kiwoomRankingToQuoteRow(row) {
+  const price = Number(row.price ?? 0);
+  const changePercent = Number(row.changePercent ?? 0);
+  const previousClose = price > 0 && changePercent !== -100 ? price / (1 + changePercent / 100) : price;
+  const changeAmount = price - previousClose;
+  return {
+    ticker: row.ticker,
+    name: row.name,
+    market: row.market,
+    currency: row.currency,
+    assetType: row.assetType.toLowerCase(),
+    price,
+    changeAmount,
+    changePercent,
+    volume: Number(row.volume ?? 0),
+    tradingValue: Number(row.tradingValue ?? 0),
+    open: previousClose,
+    high: price,
+    low: price,
+    previousClose,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    rating: {
+      score: Math.max(1, Math.min(100, 50 + changePercent * 3)),
+      rating: changePercent > 3 ? "BUY" : changePercent < -3 ? "SELL" : "HOLD"
+    },
+    reason: row.reason
   };
 }
 async function getProviderQuote(ticker) {
@@ -3585,24 +5186,6 @@ function filterUniverseByMarket(market) {
   if (market === "ALL") return FALLBACK_UNIVERSE;
   return FALLBACK_UNIVERSE.filter((stock) => stock.market === market);
 }
-function sortByTradingValue(rows) {
-  return [...rows].sort(
-    (a, b) => (b.tradingValue ?? 0) - (a.tradingValue ?? 0)
-  );
-}
-function sortByVolume(rows) {
-  return [...rows].sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0));
-}
-function sortByGainers(rows) {
-  return [...rows].sort(
-    (a, b) => (b.changePercent ?? 0) - (a.changePercent ?? 0)
-  );
-}
-function sortByLosers(rows) {
-  return [...rows].sort(
-    (a, b) => (a.changePercent ?? 0) - (b.changePercent ?? 0)
-  );
-}
 function sortByRecommended(rows) {
   return [...rows].sort((a, b) => {
     const bScore = b.rating?.score ?? Math.abs(b.changePercent ?? 0);
@@ -3613,7 +5196,7 @@ function sortByRecommended(rows) {
 async function getRowsForTickers(tickers) {
   const cleanTickers = uniqueTickers(tickers);
   if (cleanTickers.length === 0) return [];
-  const rows = await Promise.all(
+  return Promise.all(
     cleanTickers.map(async (ticker) => {
       const providerRow = await getProviderQuote(ticker);
       if (providerRow) return providerRow;
@@ -3628,14 +5211,13 @@ async function getRowsForTickers(tickers) {
       return fallbackQuote(findFallbackStock(ticker));
     })
   );
-  return rows;
 }
 async function searchNaverStocks(query) {
   const q = query.trim();
   if (!q) return [];
   try {
     const response = await fetch(
-      "https://ac.stock.naver.com/ac?q=" + encodeURIComponent(q) + "&target=stock",
+      `https://ac.stock.naver.com/ac?q=${encodeURIComponent(q)}&target=stock`,
       {
         headers: {
           "User-Agent": "Mozilla/5.0 seungjae-stock-app/1.0",
@@ -3678,6 +5260,7 @@ router2.get("/config", (_req, res) => {
     service: "seungjae-stock-api",
     time: (/* @__PURE__ */ new Date()).toISOString(),
     providers: {
+      kiwoom: true,
       naver: true,
       yahoo: true,
       quotes: true,
@@ -3696,13 +5279,10 @@ router2.get("/search", async (req, res) => {
     }
   } catch {
   }
-  try {
-    const naverResults = await searchNaverStocks(q);
-    if (naverResults.length > 0) {
-      res.json({ q, results: naverResults });
-      return;
-    }
-  } catch {
+  const naverResults = await searchNaverStocks(q);
+  if (naverResults.length > 0) {
+    res.json({ q, results: naverResults });
+    return;
   }
   const needle = q.replace(/\s+/g, "").toLowerCase();
   const results = FALLBACK_UNIVERSE.filter((stock) => {
@@ -3726,49 +5306,73 @@ router2.get("/quotes", async (req, res) => {
 });
 router2.get("/market/movers", async (req, res) => {
   const scope = normalizeMarket(req.query.market);
-  const universe = filterUniverseByMarket(scope);
-  const tickers = universe.map((stock) => stock.ticker);
-  const rows = await getRowsForTickers(tickers);
-  const popular = sortByTradingValue(rows).slice(0, 30).map((row, index) => ({
-    ...row,
-    rank: index + 1,
-    reason: row.reason ?? "\uAC70\uB798\uB300\uAE08 \uAE30\uC900 \uC0C1\uC704 \uC885\uBAA9\uC785\uB2C8\uB2E4."
-  }));
-  const volume = sortByVolume(rows).slice(0, 30).map((row, index) => ({
-    ...row,
-    rank: index + 1,
-    reason: row.reason ?? "\uAC70\uB798\uB7C9 \uAE30\uC900 \uC0C1\uC704 \uC885\uBAA9\uC785\uB2C8\uB2E4."
-  }));
-  const recommended = sortByRecommended(rows).slice(0, 30).map((row, index) => ({
-    ...row,
-    rank: index + 1,
-    reason: row.reason ?? "AI \uC810\uC218 \uAE30\uC900 \uCD94\uCC9C \uC885\uBAA9\uC785\uB2C8\uB2E4."
-  }));
-  const gainers = sortByGainers(rows).slice(0, 30).map((row, index) => ({
-    ...row,
-    rank: index + 1,
-    reason: row.reason ?? "\uB4F1\uB77D\uB960 \uAE30\uC900 \uAE09\uC0C1\uC2B9 \uC885\uBAA9\uC785\uB2C8\uB2E4."
-  }));
-  const losers = sortByLosers(rows).slice(0, 30).map((row, index) => ({
-    ...row,
-    rank: index + 1,
-    reason: row.reason ?? "\uB4F1\uB77D\uB960 \uAE30\uC900 \uAE09\uD558\uB77D \uC885\uBAA9\uC785\uB2C8\uB2E4."
-  }));
-  res.json({
-    market: scope,
-    popular,
-    volume,
-    recommended,
-    gainers,
-    losers,
-    risky: losers,
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-  });
+  try {
+    const markets = scope === "ALL" ? ["KR", "US"] : [scope];
+    const results = await Promise.all(
+      markets.map(async (market) => {
+        const [popularRows, volumeRows, gainerRows, loserRows] = await Promise.all([
+          getKiwoomRankings(market, "tradingValue", 30, {
+            excludeHighRisk: true
+          }),
+          getKiwoomRankings(market, "volume", 30, {
+            excludeHighRisk: true
+          }),
+          getKiwoomRankings(market, "gainers", 30, {
+            excludeHighRisk: true
+          }),
+          getKiwoomRankings(market, "losers", 30, {
+            excludeHighRisk: true
+          })
+        ]);
+        return {
+          popular: popularRows.map(kiwoomRankingToQuoteRow),
+          volume: volumeRows.map(kiwoomRankingToQuoteRow),
+          gainers: gainerRows.map(kiwoomRankingToQuoteRow),
+          losers: loserRows.map(kiwoomRankingToQuoteRow)
+        };
+      })
+    );
+    const popular = results.flatMap((result) => result.popular).sort(
+      (a, b) => Number(b.tradingValue ?? 0) - Number(a.tradingValue ?? 0)
+    ).slice(0, 30).map((row, index) => ({ ...row, rank: index + 1 }));
+    const volume = results.flatMap((result) => result.volume).sort((a, b) => Number(b.volume ?? 0) - Number(a.volume ?? 0)).slice(0, 30).map((row, index) => ({ ...row, rank: index + 1 }));
+    const gainers = results.flatMap((result) => result.gainers).sort(
+      (a, b) => Number(b.changePercent ?? 0) - Number(a.changePercent ?? 0)
+    ).slice(0, 30).map((row, index) => ({ ...row, rank: index + 1 }));
+    const losers = results.flatMap((result) => result.losers).sort(
+      (a, b) => Number(a.changePercent ?? 0) - Number(b.changePercent ?? 0)
+    ).slice(0, 30).map((row, index) => ({ ...row, rank: index + 1 }));
+    const recommended = [...gainers].sort(
+      (a, b) => Number(b.rating?.score ?? 0) - Number(a.rating?.score ?? 0)
+    ).slice(0, 30).map((row, index) => ({
+      ...row,
+      rank: index + 1,
+      reason: "\uFFFD\u317C\uFFFD \uFFFD\u317C\uB586\u5A9B\uFFFD \uFFFD\uACD7\uC520\uFFFD\uFFFD \u6E72\uACD5\uCEF2 \u7570\uBDBF\uCFC7 \u91AB\uB085\u3049\uFFFD\uB085\uB572\uFFFD\uFFFD."
+    }));
+    res.json({
+      market: scope,
+      provider: "kiwoom",
+      popular,
+      volume,
+      recommended,
+      gainers,
+      losers,
+      risky: losers,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+  } catch (error) {
+    console.error("Kiwoom market movers error:", error);
+    res.status(502).json({
+      ok: false,
+      provider: "kiwoom",
+      error: error instanceof Error ? error.message : "\uFFFD\u317C\uFFFD \uFFFD\uC496\uC623 \uFFFD\uC496\uC41E \u8B70\uACE0\uC276\uFFFD\uFFFD \uFFFD\u317D\uB663\uFFFD\uB349\uB4BF\uFFFD\uB348\uB58E."
+    });
+  }
 });
 router2.get("/market/summary", (_req, res) => {
   res.json({
     ok: true,
-    summary: "\uC2DC\uC7A5 \uC694\uC57D \uB370\uC774\uD130\uB294 \uC900\uBE44 \uC911\uC785\uB2C8\uB2E4.",
+    summary: "\uFFFD\uC496\uC623 \uFFFD\uBDBF\uBE5F \uFFFD\uACD7\uC520\uFFFD\uACD5\uB497 \u4EE5\x80\u936E\uFFFD \u4EE5\uBB12\uC5EF\uFFFD\uB348\uB58E.",
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   });
 });
@@ -3777,29 +5381,29 @@ router2.get("/market/briefing", (_req, res) => {
     ok: true,
     items: [
       {
-        sector: "\uBC18\uB3C4\uCCB4",
-        title: "\uBC18\uB3C4\uCCB4",
-        summary: "AI \uBC18\uB3C4\uCCB4\uC640 \uACE0\uC131\uB2A5 \uBA54\uBAA8\uB9AC \uC218\uC694 \uD750\uB984\uC744 \uD655\uC778\uD569\uB2C8\uB2E4."
+        sector: "\u8ADB\uC10E\uB8C4\uF9E3\uFFFD",
+        title: "\u8ADB\uC10E\uB8C4\uF9E3\uFFFD",
+        summary: "AI \u8ADB\uC10E\uB8C4\uF9E3\uB301\uFFFD \u6028\uC88E\uAF66\uFFFD\uFFFD \uF9CE\uBDBE\u3048\u7531\uFFFD \uFFFD\uC10F\uC282 \uFFFD\uBA2E\uCAEB\uFFFD\uFFFD \uFFFD\uBEA4\uC524\uFFFD\u2478\uB572\uFFFD\uFFFD."
       },
       {
-        sector: "\uBC14\uC774\uC624",
-        title: "\uBC14\uC774\uC624",
-        summary: "\uC784\uC0C1\xB7\uC2B9\uC778\xB7\uACC4\uC57D \uB274\uC2A4\uC5D0 \uB530\uB978 \uC885\uBAA9\uBCC4 \uBCC0\uB3D9\uC131\uC744 \uD655\uC778\uD569\uB2C8\uB2E4."
+        sector: "\u8ADB\uBDBF\uC520\uFFFD\uFFFD",
+        title: "\u8ADB\uBDBF\uC520\uFFFD\uFFFD",
+        summary: "\uFFFD\uAFA9\uAE3D\uCA0C\uFFFD\uBC40\uC524\uCA0C\u6028\uAFA9\uBE5F \uFFFD\uB301\uB4AA\uFFFD\uFFFD \uFFFD\uACD5\u2168 \u91AB\uB085\u3049\u8E42\uFFFD \u8E42\x80\uFFFD\uC208\uAF66\uFFFD\uFFFD \uFFFD\uBEA4\uC524\uFFFD\u2478\uB572\uFFFD\uFFFD."
       },
       {
-        sector: "\uC790\uB3D9\uCC28",
-        title: "\uC790\uB3D9\uCC28",
-        summary: "\uC644\uC131\uCC28 \uD310\uB9E4\uC640 \uC804\uAE30\uCC28 \uC804\uD658 \uD750\uB984\uC744 \uD655\uC778\uD569\uB2C8\uB2E4."
+        sector: "\uFFFD\uBA2E\uB8DE\uF9E1\uFFFD",
+        title: "\uFFFD\uBA2E\uB8DE\uF9E1\uFFFD",
+        summary: "\uFFFD\uAFA9\uAF66\uF9E1\uFFFD \uFFFD\uBA2E\u2113\uFFFD\x80 \uFFFD\uAFA7\uB9B0\uF9E1\uFFFD \uFFFD\uAFAA\uC19A \uFFFD\uBA2E\uCAEB\uFFFD\uFFFD \uFFFD\uBEA4\uC524\uFFFD\u2478\uB572\uFFFD\uFFFD."
       },
       {
-        sector: "\uD56D\uACF5",
-        title: "\uD56D\uACF5",
-        summary: "\uC5EC\uD589 \uC218\uC694\uC640 \uC720\uAC00, \uD658\uC728\uC5D0 \uB530\uB978 \uD56D\uACF5\uC8FC \uD750\uB984\uC744 \uD655\uC778\uD569\uB2C8\uB2E4."
+        sector: "\uFFFD\uFFFD\uB0AC",
+        title: "\uFFFD\uFFFD\uB0AC",
+        summary: "\uFFFD\u044B\uBEFE \uFFFD\uC10F\uC282\uFFFD\x80 \uFFFD\uC889\uFFFD, \uFFFD\uC10F\uC449\uFFFD\uFFFD \uFFFD\uACD5\u2168 \uFFFD\uFFFD\uB0AC\u4E8C\uFFFD \uFFFD\uBA2E\uCAEB\uFFFD\uFFFD \uFFFD\uBEA4\uC524\uFFFD\u2478\uB572\uFFFD\uFFFD."
       },
       {
-        sector: "\uAC74\uC124",
-        title: "\uAC74\uC124",
-        summary: "\uBD80\uB3D9\uC0B0 \uC815\uCC45\uACFC \uC218\uC8FC \uD750\uB984\uC744 \uD655\uC778\uD569\uB2C8\uB2E4."
+        sector: "\u5AC4\uB301\uAF55",
+        title: "\u5AC4\uB301\uAF55",
+        summary: "\u907A\x80\uFFFD\uC208\uAD9B \uFFFD\uBEA4\uCF49\u6028\uFFFD \uFFFD\uC10F\uFF1C \uFFFD\uBA2E\uCAEB\uFFFD\uFFFD \uFFFD\uBEA4\uC524\uFFFD\u2478\uB572\uFFFD\uFFFD."
       }
     ],
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -3835,9 +5439,10 @@ router2.get("/market/alerts", async (req, res) => {
   const rows = await getRowsForTickers(
     filterUniverseByMarket(scope).map((stock) => stock.ticker)
   );
+  const alerts = [...rows].sort((a, b) => Number(b.changePercent ?? 0) - Number(a.changePercent ?? 0)).slice(0, 20);
   res.json({
     market: scope,
-    alerts: sortByGainers(rows).slice(0, 20),
+    alerts,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   });
 });
@@ -4048,7 +5653,7 @@ async function usItems(entry) {
 function decodeXml(s) {
   return s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&amp;/g, "&").trim();
 }
-function pick2(block, re) {
+function pick4(block, re) {
   const m = block.match(re);
   return m ? m[1] : "";
 }
@@ -4063,11 +5668,11 @@ async function krItems(entry) {
   let m;
   while ((m = re.exec(xml)) !== null && items.length < 16) {
     const block = m[1];
-    const title = decodeXml(pick2(block, /<title>([\s\S]*?)<\/title>/));
-    const url = decodeXml(pick2(block, /<link>([\s\S]*?)<\/link>/));
-    const pub = pick2(block, /<pubDate>([\s\S]*?)<\/pubDate>/);
-    const srcUrl = pick2(block, /<source[^>]*url="([^"]*)"/);
-    const srcName = decodeXml(pick2(block, /<source[^>]*>([\s\S]*?)<\/source>/));
+    const title = decodeXml(pick4(block, /<title>([\s\S]*?)<\/title>/));
+    const url = decodeXml(pick4(block, /<link>([\s\S]*?)<\/link>/));
+    const pub = pick4(block, /<pubDate>([\s\S]*?)<\/pubDate>/);
+    const srcUrl = pick4(block, /<source[^>]*url="([^"]*)"/);
+    const srcName = decodeXml(pick4(block, /<source[^>]*>([\s\S]*?)<\/source>/));
     if (!title || !url || !url.startsWith("http")) continue;
     const date = pub ? new Date(pub).toISOString().slice(0, 10) : (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
     items.push({
@@ -4124,7 +5729,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Router as Router4 } from "express";
 var router4 = Router4();
-function normalizeTicker2(value) {
+function normalizeTicker3(value) {
   return String(value ?? "").trim().toUpperCase();
 }
 function isKrTicker5(ticker) {
@@ -4163,7 +5768,7 @@ function safeRead(filePath) {
   }
 }
 async function testOneTicker(ticker) {
-  const clean = normalizeTicker2(ticker);
+  const clean = normalizeTicker3(ticker);
   const result = {
     ticker: clean,
     marketGuess: isKrTicker5(clean) ? "KR" : "US",
@@ -4205,7 +5810,7 @@ async function testOneTicker(ticker) {
 }
 router4.get("/provider", async (req, res) => {
   const raw = String(req.query.tickers ?? req.query.ticker ?? "005930,NVDA");
-  const tickers = raw.split(",").map((ticker) => normalizeTicker2(ticker)).filter(Boolean);
+  const tickers = raw.split(",").map((ticker) => normalizeTicker3(ticker)).filter(Boolean);
   const results = await Promise.all(tickers.map((ticker) => testOneTicker(ticker)));
   res.json({
     ok: true,
@@ -4324,11 +5929,79 @@ var push_default = router5;
 
 // src/routes/stocks.ts
 import { Router as Router6 } from "express";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path2 from "node:path";
 var router6 = Router6();
-function normalizeTicker3(value) {
+router6.get("/server-ip", async (_req, res) => {
+  const providers = [
+    "https://api.ipify.org?format=json",
+    "https://ifconfig.me/all.json",
+    "https://checkip.amazonaws.com"
+  ];
+  const attempts = [];
+  for (const provider of providers) {
+    try {
+      const response = await fetch(provider, {
+        headers: {
+          Accept: "application/json,text/plain;q=0.9,*/*;q=0.8",
+          "User-Agent": "seungjae-stock-app/1.0"
+        }
+      });
+      if (!response.ok) {
+        attempts.push({
+          provider,
+          ok: false,
+          status: response.status
+        });
+        continue;
+      }
+      const raw = (await response.text()).trim();
+      let ip = raw;
+      try {
+        const parsed = JSON.parse(raw);
+        ip = String(
+          parsed.ip ?? parsed.ip_addr ?? parsed.address ?? parsed.ipv4 ?? parsed.ipv6 ?? ""
+        ).trim();
+      } catch {
+      }
+      const matchedIp = ip.match(
+        /(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}/
+      )?.[0] ?? "";
+      if (!matchedIp) {
+        attempts.push({
+          provider,
+          ok: false,
+          error: "IP_ADDRESS_NOT_FOUND"
+        });
+        continue;
+      }
+      res.setHeader("Cache-Control", "no-store");
+      res.json({
+        ok: true,
+        ip: matchedIp,
+        provider,
+        checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        note: "\uC774 \uAC12\uC740 \uD604\uC7AC \uC2E4\uD589 \uC911\uC778 Replit \uC11C\uBC84\uC758 \uC678\uBD80 \uC694\uCCAD IP\uC785\uB2C8\uB2E4. \uC11C\uBC84 \uC7AC\uC2DC\uC791\xB7\uC7AC\uBC30\uD3EC\xB7\uC2E4\uD589 \uD658\uACBD \uBCC0\uACBD \uC2DC \uB2EC\uB77C\uC9C8 \uC218 \uC788\uC2B5\uB2C8\uB2E4."
+      });
+      return;
+    } catch (error) {
+      attempts.push({
+        provider,
+        ok: false,
+        error: error instanceof Error ? error.message : "UNKNOWN_SERVER_IP_ERROR"
+      });
+    }
+  }
+  res.status(502).json({
+    ok: false,
+    error: "SERVER_IP_LOOKUP_FAILED",
+    attempts
+  });
+});
+function normalizeTicker4(value) {
   return String(value ?? "").trim().toUpperCase();
 }
-function normalizeTimeframe(value) {
+function normalizeTimeframe2(value) {
   const raw = String(value ?? "1D").trim();
   if (!raw) return "1D";
   return raw;
@@ -4378,21 +6051,232 @@ async function fetchDartFilings(ticker) {
   if (!apiKey || !/^\d{6}$/.test(ticker)) return [fallback];
   const corpCode = await getDartCorpCode(ticker, apiKey);
   if (!corpCode) return [fallback];
-  const from = /* @__PURE__ */ new Date();
-  from.setFullYear(from.getFullYear() - 1);
-  const bgnDe = from.toISOString().slice(0, 10).replace(/-/g, "");
-  const url = "https://opendart.fss.or.kr/api/list.json?crtfc_key=" + encodeURIComponent(apiKey) + "&corp_code=" + encodeURIComponent(corpCode) + "&bgn_de=" + bgnDe + "&last_reprt_at=Y&page_count=100&sort=date&sort_mth=desc";
-  const response = await fetch(url);
-  if (!response.ok) throw new Error("DART_LIST_HTTP_" + response.status);
-  const data = await response.json();
-  if (!Array.isArray(data?.list)) return [fallback];
-  return data.list.map((item) => ({
+  const items = [];
+  let pageNo = 1;
+  let totalPage = 1;
+  do {
+    const query = new URLSearchParams({
+      crtfc_key: apiKey,
+      corp_code: corpCode,
+      bgn_de: "19990101",
+      last_reprt_at: "N",
+      page_no: String(pageNo),
+      page_count: "100",
+      sort: "date",
+      sort_mth: "desc"
+    });
+    const response = await fetch(
+      "https://opendart.fss.or.kr/api/list.json?" + query.toString()
+    );
+    if (!response.ok) throw new Error("DART_LIST_HTTP_" + response.status);
+    const data = await response.json();
+    if (data?.status && data.status !== "000" && data.status !== "013") {
+      throw new Error(`DART_LIST_${String(data.status)}:${String(data.message ?? "")}`);
+    }
+    if (Array.isArray(data?.list)) items.push(...data.list);
+    totalPage = Math.max(1, Number(data?.total_page ?? 1) || 1);
+    pageNo += 1;
+  } while (pageNo <= totalPage && pageNo <= 100);
+  const unique = /* @__PURE__ */ new Map();
+  for (const item of items) {
+    const key = String(item?.rcept_no ?? `${item?.rcept_dt}:${item?.report_nm}`);
+    if (!unique.has(key)) unique.set(key, item);
+  }
+  const result = [...unique.values()].map((item) => ({
     ...item,
     title: item.report_nm,
     date: item.rcept_dt,
     url: item.rcept_no ? "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + item.rcept_no : fallback.url,
     source: "DART"
   }));
+  return result.length ? result : [fallback];
+}
+var secTickerMapCache = null;
+function secHeaders() {
+  return {
+    Accept: "application/json",
+    "User-Agent": String(process.env.SEC_USER_AGENT ?? "").trim() || "seungjae-stock-app/1.0 seungjae3908@gmail.com"
+  };
+}
+async function getSecCik(ticker) {
+  if (!secTickerMapCache) {
+    const response = await fetch("https://www.sec.gov/files/company_tickers.json", {
+      headers: secHeaders()
+    });
+    if (!response.ok) throw new Error("SEC_TICKERS_HTTP_" + response.status);
+    const data = await response.json();
+    const map = /* @__PURE__ */ new Map();
+    for (const entry of Object.values(data)) {
+      const symbol = String(entry?.ticker ?? "").trim().toUpperCase();
+      const cik = String(entry?.cik_str ?? "").replace(/\D/g, "").padStart(10, "0");
+      if (symbol && cik) map.set(symbol, cik);
+    }
+    secTickerMapCache = map;
+  }
+  return secTickerMapCache.get(ticker.trim().toUpperCase()) ?? "";
+}
+function secColumnRows(source, cik) {
+  const count = Math.max(
+    ...Object.values(source ?? {}).map(
+      (value) => Array.isArray(value) ? value.length : 0
+    ),
+    0
+  );
+  const rows = [];
+  const cikNoZero = String(Number(cik));
+  for (let index = 0; index < count; index += 1) {
+    const accessionNumber = String(source?.accessionNumber?.[index] ?? "");
+    const primaryDocument = String(source?.primaryDocument?.[index] ?? "");
+    const filingDate = String(source?.filingDate?.[index] ?? "");
+    const form = String(source?.form?.[index] ?? "");
+    if (!accessionNumber || !filingDate) continue;
+    rows.push({
+      accessionNumber,
+      filingDate,
+      date: filingDate,
+      acceptedAt: source?.acceptanceDateTime?.[index] ?? filingDate,
+      form,
+      title: form ? `${form} \uC81C\uCD9C` : "SEC \uACF5\uC2DC",
+      primaryDocument,
+      reportDate: source?.reportDate?.[index] ?? "",
+      url: primaryDocument ? `https://www.sec.gov/Archives/edgar/data/${cikNoZero}/${accessionNumber.replace(/-/g, "")}/${primaryDocument}` : `https://www.sec.gov/Archives/edgar/data/${cikNoZero}/${accessionNumber.replace(/-/g, "")}/`,
+      source: "SEC EDGAR"
+    });
+  }
+  return rows;
+}
+async function fetchSecFilings(ticker) {
+  const cik = await getSecCik(ticker);
+  if (!cik) return [];
+  const response = await fetch(
+    `https://data.sec.gov/submissions/CIK${cik}.json`,
+    { headers: secHeaders() }
+  );
+  if (!response.ok) throw new Error("SEC_SUBMISSIONS_HTTP_" + response.status);
+  const data = await response.json();
+  const items = secColumnRows(data?.filings?.recent ?? {}, cik);
+  for (const file of Array.isArray(data?.filings?.files) ? data.filings.files : []) {
+    const name = String(file?.name ?? "").trim();
+    if (!name) continue;
+    const historyResponse = await fetch(
+      `https://data.sec.gov/submissions/${encodeURIComponent(name)}`,
+      { headers: secHeaders() }
+    );
+    if (!historyResponse.ok) continue;
+    const history = await historyResponse.json();
+    items.push(...secColumnRows(history, cik));
+  }
+  const unique = /* @__PURE__ */ new Map();
+  for (const item of items) {
+    if (!unique.has(item.accessionNumber)) unique.set(item.accessionNumber, item);
+  }
+  return [...unique.values()].sort(
+    (a, b) => String(b.filingDate).localeCompare(String(a.filingDate))
+  );
+}
+async function fetchAllFilings(ticker) {
+  return /^\d{6}$/.test(ticker) ? fetchDartFilings(ticker) : fetchSecFilings(ticker);
+}
+function metricRow(rows, patterns) {
+  return rows.find((cells) => patterns.some((pattern) => pattern.test(cells[0] ?? "")));
+}
+function buildNaverFinancialRows(html) {
+  const table = financeTableRows(html);
+  const periodCells = table.find((cells) => cells.filter((cell) => /^20\d{2}\.\d{2}/.test(cell)).length >= 4) ?? [];
+  const periods = periodCells.filter((cell) => /^20\d{2}\.\d{2}/.test(cell));
+  if (!periods.length) return { annual: [], quarterly: [], ratios: {} };
+  const definitions = {
+    revenue: [/^매출액/, /^영업수익/],
+    operatingIncome: [/^영업이익/],
+    netIncome: [/^당기순이익/, /^순이익/],
+    assets: [/^자산총계/],
+    liabilities: [/^부채총계/],
+    equity: [/^자본총계/],
+    roe: [/^ROE/],
+    per: [/^PER/],
+    pbr: [/^PBR/]
+  };
+  const metricRows = Object.fromEntries(
+    Object.entries(definitions).map(([key, patterns]) => [key, metricRow(table, [...patterns])])
+  );
+  const valuesAt = (key, index) => financeNumber(metricRows[key]?.[index + 1]);
+  const rows = periods.map((period, index) => ({
+    period: period.replace(/\(E\)/g, ""),
+    revenue: valuesAt("revenue", index),
+    operatingIncome: valuesAt("operatingIncome", index),
+    netIncome: valuesAt("netIncome", index),
+    assets: valuesAt("assets", index),
+    liabilities: valuesAt("liabilities", index),
+    equity: valuesAt("equity", index)
+  }));
+  const annual = rows.filter((row) => /\.12/.test(row.period)).slice(0, 5);
+  const quarterly = rows.filter((row) => !/\.12/.test(row.period)).slice(0, 6);
+  const latestIndex = 0;
+  return {
+    annual,
+    yearly: annual,
+    quarterly,
+    quarters: quarterly,
+    ratios: {
+      roe: valuesAt("roe", latestIndex),
+      per: valuesAt("per", latestIndex),
+      pbr: valuesAt("pbr", latestIndex)
+    }
+  };
+}
+async function fetchNaverFinancials(ticker) {
+  const response = await fetch(
+    `https://finance.naver.com/item/main.naver?code=${encodeURIComponent(ticker)}`,
+    { headers: { "User-Agent": "Mozilla/5.0", Referer: "https://finance.naver.com/" } }
+  );
+  if (!response.ok) throw new Error("NAVER_FINANCIAL_HTTP_" + response.status);
+  return buildNaverFinancialRows(await response.text());
+}
+function secFactUnits(data, tags) {
+  for (const tag of tags) {
+    const units = data?.facts?.["us-gaap"]?.[tag]?.units;
+    if (!units || typeof units !== "object") continue;
+    const first = Object.values(units).find((value) => Array.isArray(value));
+    if (Array.isArray(first)) return first;
+  }
+  return [];
+}
+function latestSecValue(data, tags, fy, forms) {
+  const values = secFactUnits(data, tags).filter((item) => Number(item?.fy) === fy && forms.includes(String(item?.form ?? ""))).sort((a, b) => String(b?.filed ?? "").localeCompare(String(a?.filed ?? "")));
+  return Number(values[0]?.val ?? 0) || 0;
+}
+async function fetchSecFinancials(ticker) {
+  const cik = await getSecCik(ticker);
+  if (!cik) return { annual: [], quarterly: [], ratios: {} };
+  const response = await fetch(
+    `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`,
+    { headers: secHeaders() }
+  );
+  if (!response.ok) throw new Error("SEC_COMPANYFACTS_HTTP_" + response.status);
+  const data = await response.json();
+  const all = secFactUnits(data, ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"]);
+  const years = [...new Set(all.map((item) => Number(item?.fy)).filter(Number.isFinite))].sort((a, b) => b - a).slice(0, 5);
+  const tags = {
+    revenue: ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"],
+    operatingIncome: ["OperatingIncomeLoss"],
+    netIncome: ["NetIncomeLoss", "ProfitLoss"],
+    assets: ["Assets"],
+    liabilities: ["Liabilities"],
+    equity: ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]
+  };
+  const annual = years.map((fy) => ({
+    period: String(fy),
+    revenue: latestSecValue(data, tags.revenue, fy, ["10-K"]),
+    operatingIncome: latestSecValue(data, tags.operatingIncome, fy, ["10-K"]),
+    netIncome: latestSecValue(data, tags.netIncome, fy, ["10-K"]),
+    assets: latestSecValue(data, tags.assets, fy, ["10-K"]),
+    liabilities: latestSecValue(data, tags.liabilities, fy, ["10-K"]),
+    equity: latestSecValue(data, tags.equity, fy, ["10-K"])
+  }));
+  return { annual, yearly: annual, quarterly: [], quarters: [], ratios: {} };
+}
+async function fetchFinancials(ticker) {
+  return /^\d{6}$/.test(ticker) ? fetchNaverFinancials(ticker) : fetchSecFinancials(ticker);
 }
 function simpleDartSummary(item) {
   const title = String(item?.title ?? item?.report_nm ?? "").trim();
@@ -4458,8 +6342,260 @@ async function fetchGoogleNews(ticker) {
     source: xmlTag(block, "source") || "Google News"
   })).filter((item) => item.title && item.url);
 }
+var autoTradeExecuted = /* @__PURE__ */ new Set();
+var autoTradePositions = /* @__PURE__ */ new Map();
+var autoTradePositionFile = path2.resolve(
+  process.env.KIWOOM_AUTO_TRADE_POSITION_FILE?.trim() || "data/auto-trade-positions.json"
+);
+var autoTradePositionsLoaded = false;
+async function ensureAutoTradePositionsLoaded() {
+  if (autoTradePositionsLoaded) return;
+  autoTradePositionsLoaded = true;
+  try {
+    const parsed = JSON.parse(await readFile(autoTradePositionFile, "utf8"));
+    if (!Array.isArray(parsed)) return;
+    for (const raw of parsed) {
+      const position = raw;
+      const ticker = normalizeTicker4(position.ticker);
+      const quantity = Math.trunc(Number(position.quantity));
+      const entryPrice = Number(position.entryPrice);
+      const stopPrice = Number(position.stopPrice);
+      const targetPrice = Number(position.targetPrice);
+      if (/^\d{6}$/.test(ticker) && quantity > 0 && entryPrice > 0 && stopPrice > 0 && targetPrice > 0) {
+        autoTradePositions.set(ticker, {
+          ticker,
+          quantity,
+          entryPrice,
+          stopPrice,
+          targetPrice,
+          openedAt: String(position.openedAt ?? (/* @__PURE__ */ new Date()).toISOString())
+        });
+      }
+    }
+  } catch {
+  }
+}
+async function saveAutoTradePositions() {
+  await mkdir(path2.dirname(autoTradePositionFile), { recursive: true });
+  await writeFile(
+    autoTradePositionFile,
+    JSON.stringify([...autoTradePositions.values()], null, 2),
+    "utf8"
+  );
+}
+function kstParts() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(/* @__PURE__ */ new Date());
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+function koreanMarketOpenNow() {
+  if (process.env.KIWOOM_AUTO_TRADE_ALLOW_OFF_HOURS === "true") return true;
+  const parts = kstParts();
+  if (["Sat", "Sun"].includes(parts.weekday)) return false;
+  const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+  return minutes >= 9 * 60 && minutes <= 15 * 60 + 30;
+}
+router6.post("/auto-trade/execute", async (req, res) => {
+  const enabled = process.env.KIWOOM_AUTO_TRADE_ENABLED === "true";
+  const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
+  const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
+  if (!enabled) {
+    return res.status(403).json({ ok: false, message: "\uC11C\uBC84\uC758 \uC2E4\uC81C \uC790\uB3D9\uB9E4\uB9E4 \uAE30\uB2A5\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4." });
+  }
+  if (!configuredKey || suppliedKey !== configuredKey) {
+    return res.status(401).json({ ok: false, message: "\uC790\uB3D9\uB9E4\uB9E4 \uC2E4\uD589\uD0A4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." });
+  }
+  if (!koreanMarketOpenNow()) {
+    return res.status(409).json({ ok: false, message: "\uAD6D\uB0B4 \uC815\uADDC\uC7A5 \uC8FC\uBB38 \uAC00\uB2A5 \uC2DC\uAC04\uC774 \uC544\uB2D9\uB2C8\uB2E4." });
+  }
+  await ensureAutoTradePositionsLoaded();
+  const candidates = Array.isArray(req.body?.candidates) ? req.body.candidates.slice(0, 5) : [];
+  const investmentPerTrade = Math.max(1, Number(req.body?.investmentPerTrade ?? 0));
+  const stopLossPercent = Math.max(0.1, Number(req.body?.stopLossPercent ?? 5));
+  const takeProfitPercent = Math.max(0.1, Number(req.body?.takeProfitPercent ?? 10));
+  const day = `${kstParts().year}-${kstParts().month}-${kstParts().day}`;
+  const results = [];
+  for (const candidate of candidates) {
+    const ticker = normalizeTicker4(candidate?.ticker);
+    const price = Number(candidate?.price ?? 0);
+    const probability = Number(candidate?.probability ?? 0);
+    const key = `${day}:${ticker}:BUY`;
+    if (!/^\d{6}$/.test(ticker)) {
+      results.push({ ticker, ok: false, skipped: true, message: "\uAD6D\uB0B4 \uC8FC\uC2DD\uB9CC \uC2E4\uC81C \uC790\uB3D9\uC8FC\uBB38\uC744 \uC9C0\uC6D0\uD569\uB2C8\uB2E4." });
+      continue;
+    }
+    if (!Number.isFinite(price) || price <= 0 || probability <= 0) {
+      results.push({ ticker, ok: false, skipped: true, message: "\uAC00\uACA9 \uB610\uB294 \uD655\uB960 \uB370\uC774\uD130\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4." });
+      continue;
+    }
+    if (autoTradeExecuted.has(key)) {
+      results.push({ ticker, ok: true, skipped: true, message: "\uC624\uB298 \uC774\uBBF8 \uC8FC\uBB38\uD55C \uC885\uBAA9\uC785\uB2C8\uB2E4." });
+      continue;
+    }
+    const quantity = Math.floor(investmentPerTrade / price);
+    if (quantity < 1) {
+      results.push({ ticker, ok: false, skipped: true, message: "\uC8FC\uBB38\uAE08\uC561\uC774 \uD604\uC7AC\uAC00\uBCF4\uB2E4 \uC791\uC2B5\uB2C8\uB2E4." });
+      continue;
+    }
+    try {
+      const order = await placeKiwoomDomesticOrder({
+        ticker,
+        side: "buy",
+        quantity,
+        orderType: "market"
+      });
+      const stopPrice = price * (1 - stopLossPercent / 100);
+      const targetPrice = price * (1 + takeProfitPercent / 100);
+      autoTradeExecuted.add(key);
+      autoTradePositions.set(ticker, {
+        ticker,
+        quantity,
+        entryPrice: price,
+        stopPrice,
+        targetPrice,
+        openedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      await saveAutoTradePositions();
+      results.push({
+        ticker,
+        ok: true,
+        quantity,
+        orderNo: order.orderNo,
+        stopPrice,
+        targetPrice,
+        message: "\uC2DC\uC7A5\uAC00 \uB9E4\uC218 \uC8FC\uBB38\uC744 \uC804\uC1A1\uD588\uC2B5\uB2C8\uB2E4."
+      });
+    } catch (error) {
+      results.push({
+        ticker,
+        ok: false,
+        quantity,
+        message: error instanceof Error ? error.message : "\uD0A4\uC6C0 \uC8FC\uBB38 \uC804\uC1A1 \uC2E4\uD328"
+      });
+    }
+  }
+  const completed = results.filter((item) => item.ok && !item.skipped).length;
+  return res.json({
+    ok: completed > 0 || results.every((item) => item.skipped),
+    message: completed > 0 ? `${completed}\uAC1C \uC885\uBAA9 \uC8FC\uBB38\uC744 \uC804\uC1A1\uD588\uC2B5\uB2C8\uB2E4.` : "\uC2E0\uADDC \uC8FC\uBB38\uC774 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.",
+    results
+  });
+});
+var autoTradeMonitorRunning = false;
+async function runAutoTradeMonitor() {
+  if (autoTradeMonitorRunning) {
+    return { results: [], activePositions: autoTradePositions.size };
+  }
+  autoTradeMonitorRunning = true;
+  try {
+    await ensureAutoTradePositionsLoaded();
+    const results = [];
+    for (const position of [...autoTradePositions.values()]) {
+      try {
+        const quote5 = await MarketDataService.getQuoteRow(position.ticker);
+        const currentPrice = Math.abs(
+          Number(quote5?.price ?? quote5?.currentPrice ?? quote5?.cur_prc ?? 0)
+        );
+        if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+          results.push({
+            ticker: position.ticker,
+            ok: false,
+            skipped: true,
+            message: "\uD604\uC7AC\uAC00 \uD655\uC778 \uC2E4\uD328"
+          });
+          continue;
+        }
+        const reason = currentPrice <= position.stopPrice ? "\uC190\uC808\uAC00 \uB3C4\uB2EC" : currentPrice >= position.targetPrice ? "\uBAA9\uD45C\uAC00 \uB3C4\uB2EC" : "\uBCF4\uC720 \uC720\uC9C0";
+        if (reason === "\uBCF4\uC720 \uC720\uC9C0") {
+          results.push({
+            ticker: position.ticker,
+            ok: true,
+            skipped: true,
+            currentPrice,
+            stopPrice: position.stopPrice,
+            targetPrice: position.targetPrice,
+            message: reason
+          });
+          continue;
+        }
+        const order = await placeKiwoomDomesticOrder({
+          ticker: position.ticker,
+          side: "sell",
+          quantity: position.quantity,
+          orderType: "market"
+        });
+        autoTradePositions.delete(position.ticker);
+        await saveAutoTradePositions();
+        results.push({
+          ticker: position.ticker,
+          ok: true,
+          quantity: position.quantity,
+          orderNo: order.orderNo,
+          currentPrice,
+          message: `${reason}\uB85C \uC2DC\uC7A5\uAC00 \uB9E4\uB3C4 \uC8FC\uBB38\uC744 \uC804\uC1A1\uD588\uC2B5\uB2C8\uB2E4.`
+        });
+      } catch (error) {
+        results.push({
+          ticker: position.ticker,
+          ok: false,
+          message: error instanceof Error ? error.message : "\uC790\uB3D9\uCCAD\uC0B0 \uC8FC\uBB38 \uC2E4\uD328"
+        });
+      }
+    }
+    return { results, activePositions: autoTradePositions.size };
+  } finally {
+    autoTradeMonitorRunning = false;
+  }
+}
+var autoTradeMonitorTimer = setInterval(() => {
+  if (process.env.KIWOOM_AUTO_TRADE_ENABLED === "true" && koreanMarketOpenNow()) {
+    void runAutoTradeMonitor().catch(
+      (error) => console.error("auto trade background monitor error:", error)
+    );
+  }
+}, 3e4);
+autoTradeMonitorTimer.unref?.();
+router6.post("/auto-trade/monitor", async (req, res) => {
+  const enabled = process.env.KIWOOM_AUTO_TRADE_ENABLED === "true";
+  const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
+  const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
+  if (!enabled) {
+    return res.status(403).json({
+      ok: false,
+      message: "\uC11C\uBC84\uC758 \uC2E4\uC81C \uC790\uB3D9\uB9E4\uB9E4 \uAE30\uB2A5\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4."
+    });
+  }
+  if (!configuredKey || suppliedKey !== configuredKey) {
+    return res.status(401).json({
+      ok: false,
+      message: "\uC790\uB3D9\uB9E4\uB9E4 \uC2E4\uD589\uD0A4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
+    });
+  }
+  if (!koreanMarketOpenNow()) {
+    return res.json({
+      ok: true,
+      message: "\uC7A5 \uC2DC\uAC04\uC774 \uC544\uB2C8\uC5B4\uC11C \uC790\uB3D9\uCCAD\uC0B0 \uD655\uC778\uC744 \uAC74\uB108\uB701\uB2C8\uB2E4.",
+      results: []
+    });
+  }
+  const monitored = await runAutoTradeMonitor();
+  return res.json({
+    ok: monitored.results.every((item) => item.ok),
+    activePositions: monitored.activePositions,
+    message: monitored.activePositions ? `\uC790\uB3D9\uB9E4\uB9E4 \uBCF4\uC720 ${monitored.activePositions}\uAC1C\uB97C \uAC10\uC2DC \uC911\uC785\uB2C8\uB2E4.` : "\uAC10\uC2DC \uC911\uC778 \uC790\uB3D9\uB9E4\uB9E4 \uBCF4\uC720 \uC885\uBAA9\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.",
+    results: monitored.results
+  });
+});
 router6.get("/:ticker/quote", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
+  const ticker = normalizeTicker4(req.params.ticker);
   if (!ticker) {
     res.status(400).json({
       error: "MISSING_TICKER"
@@ -4485,7 +6621,7 @@ router6.get("/:ticker/quote", async (req, res) => {
   }
 });
 router6.get("/:ticker/profile", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
+  const ticker = normalizeTicker4(req.params.ticker);
   if (!ticker) {
     res.status(400).json({
       error: "MISSING_TICKER"
@@ -4504,7 +6640,7 @@ router6.get("/:ticker/profile", async (req, res) => {
   }
 });
 router6.get("/:ticker/company", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
+  const ticker = normalizeTicker4(req.params.ticker);
   if (!ticker) {
     res.status(400).json({
       error: "MISSING_TICKER"
@@ -4523,8 +6659,8 @@ router6.get("/:ticker/company", async (req, res) => {
   }
 });
 router6.get("/:ticker/candles", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
-  const timeframe = normalizeTimeframe(req.query.tf ?? req.query.timeframe);
+  const ticker = normalizeTicker4(req.params.ticker);
+  const timeframe = normalizeTimeframe2(req.query.tf ?? req.query.timeframe);
   if (!ticker) {
     res.status(400).json({
       error: "MISSING_TICKER"
@@ -4551,7 +6687,7 @@ router6.get("/:ticker/candles", async (req, res) => {
   }
 });
 router6.get("/:ticker/rating", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
+  const ticker = normalizeTicker4(req.params.ticker);
   if (!ticker) {
     res.status(400).json({
       error: "MISSING_TICKER"
@@ -4573,15 +6709,23 @@ router6.get("/:ticker/rating", async (req, res) => {
   }
 });
 router6.get("/:ticker/financials", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
-  res.json({
-    ticker,
-    items: [],
-    summary: "\uC7AC\uBB34\uC81C\uD45C \uB370\uC774\uD130\uB294 \uC5F0\uACB0 \uC900\uBE44 \uC911\uC785\uB2C8\uB2E4."
-  });
+  const ticker = normalizeTicker4(req.params.ticker);
+  try {
+    const financials = await fetchFinancials(ticker);
+    res.json({
+      ticker,
+      financials,
+      ...financials,
+      items: financials.annual ?? [],
+      summary: "\uC2E4\uC81C \uACF5\uAC1C \uC7AC\uBB34 \uB370\uC774\uD130\uB97C \uBD88\uB7EC\uC654\uC2B5\uB2C8\uB2E4."
+    });
+  } catch (error) {
+    console.error("stock financials route error:", error);
+    res.json({ ticker, annual: [], quarterly: [], items: [], ratios: {}, summary: "\uC7AC\uBB34\uC81C\uD45C \uB370\uC774\uD130\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." });
+  }
 });
 router6.get("/:ticker/risk", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
+  const ticker = normalizeTicker4(req.params.ticker);
   res.json({
     ticker,
     delistingRisk: false,
@@ -4590,30 +6734,30 @@ router6.get("/:ticker/risk", async (req, res) => {
   });
 });
 router6.get("/:ticker/filings", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
+  const ticker = normalizeTicker4(req.params.ticker);
   try {
-    const items = await fetchDartFilings(ticker);
+    const items = await fetchAllFilings(ticker);
     res.json({
       ticker,
       filings: items,
       items,
-      summary: simpleDartSummary(items[0]) + (items.length > 1 ? " \uCD5C\uADFC 1\uB144 \uACF5\uC2DC " + items.length + "\uAC74\uC744 \uBD88\uB7EC\uC654\uC2B5\uB2C8\uB2E4." : "")
+      summary: simpleDartSummary(items[0]) + (items.length > 1 ? " \uC804\uCCB4 \uACF5\uC2DC " + items.length + "\uAC74\uC744 \uBD88\uB7EC\uC654\uC2B5\uB2C8\uB2E4." : "")
     });
   } catch (error) {
     console.error("stock filings route error:", error);
-    const items = await fetchDartFilings("").catch(() => []);
+    const items = [];
     res.json({
       ticker,
       filings: items,
       items,
-      summary: "DART \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
+      summary: /^\d{6}$/.test(ticker) ? "DART \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694." : "SEC EDGAR \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
     });
   }
 });
 router6.get("/:ticker/disclosures", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
+  const ticker = normalizeTicker4(req.params.ticker);
   try {
-    const items = await fetchDartFilings(ticker);
+    const items = await fetchAllFilings(ticker);
     res.json({
       ticker,
       disclosures: items,
@@ -4626,12 +6770,12 @@ router6.get("/:ticker/disclosures", async (req, res) => {
       ticker,
       disclosures: [],
       items: [],
-      summary: "DART \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
+      summary: /^\d{6}$/.test(ticker) ? "DART \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694." : "SEC EDGAR \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
     });
   }
 });
 router6.get("/:ticker/news", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
+  const ticker = normalizeTicker4(req.params.ticker);
   try {
     const items = await fetchGoogleNews(ticker);
     res.json({
@@ -4683,7 +6827,7 @@ function groupInvestorRows(rows, period) {
   return grouped.slice(0, 30);
 }
 router6.get("/:ticker/market-flow", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
+  const ticker = normalizeTicker4(req.params.ticker);
   const period = String(req.query.period ?? "daily");
   if (!/^\d{6}$/.test(ticker)) {
     return res.json({
@@ -4748,7 +6892,7 @@ router6.get("/:ticker/market-flow", async (req, res) => {
   }
 });
 router6.get("/:ticker/short-selling", async (req, res) => {
-  const ticker = normalizeTicker3(req.params.ticker);
+  const ticker = normalizeTicker4(req.params.ticker);
   if (!/^\d{6}$/.test(ticker)) {
     return res.json({
       ticker,
@@ -4963,857 +7107,6 @@ var watchlist_default = router7;
 import {
   Router as Router8
 } from "express";
-
-// src/providers/kiwoom.ts
-var REAL_BASE_URL = "https://api.kiwoom.com";
-var MOCK_BASE_URL = "https://mockapi.kiwoom.com";
-var REQUEST_TIMEOUT_MS = 15e3;
-var UINT32_MAX = 4294967295;
-var INT32_MAX = 2147483647;
-var tokenCache = null;
-function baseUrl() {
-  return process.env.KIWOOM_MODE?.trim().toLowerCase() === "mock" ? MOCK_BASE_URL : REAL_BASE_URL;
-}
-function requireEnv(name) {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    throw new Error(
-      `${name} \uD658\uACBD\uBCC0\uC218\uAC00 \uB4F1\uB85D\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.`
-    );
-  }
-  return value;
-}
-function toNumber(value) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.replace(/[,+%₩$]/g, "").trim();
-  if (!normalized) {
-    return null;
-  }
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-function absoluteNumber(value) {
-  const parsed = toNumber(value);
-  return parsed == null ? null : Math.abs(parsed);
-}
-function normalizeVolume(value) {
-  const parsed = absoluteNumber(value);
-  if (parsed == null) {
-    return {
-      value: null,
-      warning: null
-    };
-  }
-  if (parsed === UINT32_MAX) {
-    return {
-      value: null,
-      warning: "\uD0A4\uC6C0 \uC751\uB2F5 \uAC70\uB798\uB7C9\uC774 UINT32 \uCD5C\uB300\uAC12(4,294,967,295)\uC73C\uB85C \uBC18\uD658\uB418\uC5B4 \uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uAC12\uC73C\uB85C \uCC98\uB9AC\uD588\uC2B5\uB2C8\uB2E4."
-    };
-  }
-  if (parsed === INT32_MAX) {
-    return {
-      value: null,
-      warning: "\uD0A4\uC6C0 \uC751\uB2F5 \uAC70\uB798\uB7C9\uC774 INT32 \uCD5C\uB300\uAC12(2,147,483,647)\uC73C\uB85C \uBC18\uD658\uB418\uC5B4 \uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uAC12\uC73C\uB85C \uCC98\uB9AC\uD588\uC2B5\uB2C8\uB2E4."
-    };
-  }
-  if (!Number.isSafeInteger(parsed)) {
-    return {
-      value: null,
-      warning: "\uAC70\uB798\uB7C9\uC774 JavaScript \uC548\uC804 \uC815\uC218 \uBC94\uC704\uB97C \uBC97\uC5B4\uB098 \uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uAC12\uC73C\uB85C \uCC98\uB9AC\uD588\uC2B5\uB2C8\uB2E4."
-    };
-  }
-  return {
-    value: parsed,
-    warning: null
-  };
-}
-async function readJson(response) {
-  const text = await response.text();
-  if (!text) {
-    return {};
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(
-      `\uD0A4\uC6C0 API\uAC00 JSON\uC774 \uC544\uB2CC \uC751\uB2F5\uC744 \uBC18\uD658\uD588\uC2B5\uB2C8\uB2E4. HTTP ${response.status}: ${text.slice(0, 240)}`
-    );
-  }
-}
-function returnCode(data) {
-  const raw = data.return_code;
-  if (raw == null || raw === "") {
-    return 0;
-  }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : -1;
-}
-function returnMessage(data) {
-  return typeof data.return_msg === "string" && data.return_msg.trim() ? data.return_msg : "\uC54C \uC218 \uC5C6\uB294 \uD0A4\uC6C0 API \uC624\uB958";
-}
-function clearKiwoomTokenCache() {
-  tokenCache = null;
-}
-function getKiwoomStatus() {
-  return {
-    provider: "kiwoom",
-    mode: process.env.KIWOOM_MODE?.trim().toLowerCase() === "mock" ? "mock" : "real",
-    baseUrl: baseUrl(),
-    appKeyRegistered: Boolean(
-      process.env.KIWOOM_APP_KEY?.trim()
-    ),
-    appSecretRegistered: Boolean(
-      process.env.KIWOOM_APP_SECRET?.trim()
-    ),
-    tokenCached: Boolean(
-      tokenCache && Date.now() < tokenCache.expiresAt - 6e4
-    )
-  };
-}
-async function getKiwoomToken() {
-  if (tokenCache && Date.now() < tokenCache.expiresAt - 5 * 60 * 1e3) {
-    return tokenCache.token;
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    REQUEST_TIMEOUT_MS
-  );
-  try {
-    const response = await fetch(
-      `${baseUrl()}/oauth2/token`,
-      {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json;charset=UTF-8"
-        },
-        body: JSON.stringify({
-          grant_type: "client_credentials",
-          appkey: requireEnv("KIWOOM_APP_KEY"),
-          secretkey: requireEnv(
-            "KIWOOM_APP_SECRET"
-          )
-        }),
-        signal: controller.signal
-      }
-    );
-    const result = await readJson(
-      response
-    );
-    if (!response.ok || returnCode(result) !== 0 || !result.token) {
-      throw new Error(
-        `\uD0A4\uC6C0 \uD1A0\uD070 \uBC1C\uAE09 \uC2E4\uD328: ${returnMessage(result)} (HTTP ${response.status})`
-      );
-    }
-    tokenCache = {
-      token: result.token,
-      expiresAt: Date.now() + 23 * 60 * 60 * 1e3
-    };
-    return result.token;
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(
-        "\uD0A4\uC6C0 \uD1A0\uD070 \uC694\uCCAD \uC2DC\uAC04\uC774 \uCD08\uACFC\uB418\uC5C8\uC2B5\uB2C8\uB2E4."
-      );
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-async function kiwoomRequest({
-  apiId,
-  path: path3,
-  body,
-  contYn,
-  nextKey
-}) {
-  const token = await getKiwoomToken();
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    REQUEST_TIMEOUT_MS
-  );
-  const headers = {
-    Accept: "application/json",
-    "Content-Type": "application/json;charset=UTF-8",
-    authorization: `Bearer ${token}`,
-    "api-id": apiId
-  };
-  if (contYn) {
-    headers["cont-yn"] = contYn;
-  }
-  if (nextKey) {
-    headers["next-key"] = nextKey;
-  }
-  try {
-    const response = await fetch(
-      `${baseUrl()}${path3}`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal
-      }
-    );
-    const result = await readJson(response);
-    if (!response.ok || returnCode(result) !== 0) {
-      if (response.status === 401 || response.status === 403) {
-        clearKiwoomTokenCache();
-      }
-      throw new Error(
-        `\uD0A4\uC6C0 ${apiId} \uC694\uCCAD \uC2E4\uD328: ${returnMessage(result)} (HTTP ${response.status})`
-      );
-    }
-    return {
-      data: result,
-      contYn: response.headers.get("cont-yn"),
-      nextKey: response.headers.get("next-key")
-    };
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(
-        `\uD0A4\uC6C0 ${apiId} \uC694\uCCAD \uC2DC\uAC04\uC774 \uCD08\uACFC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.`
-      );
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-async function getKiwoomDomesticOrderbook(ticker) {
-  const normalizedTicker = ticker.trim().toUpperCase();
-  if (!/^[0-9A-Z]{6}(?:_(?:NX|AL))?$/.test(
-    normalizedTicker
-  )) {
-    throw new Error(
-      `\uC798\uBABB\uB41C \uAD6D\uB0B4 \uC885\uBAA9\uCF54\uB4DC\uC785\uB2C8\uB2E4: ${normalizedTicker}`
-    );
-  }
-  const result = await kiwoomRequest({
-    apiId: "ka10004",
-    path: "/api/dostk/mrkcond",
-    body: {
-      stk_cd: normalizedTicker
-    }
-  });
-  return result.data;
-}
-function domesticRankingRequest(type) {
-  const common = {
-    mrkt_tp: "000",
-    mang_stk_incls: "0",
-    stex_tp: "1"
-  };
-  if (type === "volume") {
-    return {
-      apiId: "ka10030",
-      path: "/api/dostk/rkinfo",
-      body: {
-        ...common,
-        sort_tp: "1",
-        crd_tp: "0",
-        trde_qty_tp: "0",
-        pric_tp: "0",
-        trde_prica_tp: "0",
-        mrkt_open_tp: "0"
-      }
-    };
-  }
-  if (type === "tradingValue") {
-    return {
-      apiId: "ka10032",
-      path: "/api/dostk/rkinfo",
-      body: common
-    };
-  }
-  return {
-    apiId: "ka10027",
-    path: "/api/dostk/rkinfo",
-    body: {
-      ...common,
-      sort_tp: type === "losers" ? "3" : "1",
-      trde_qty_cnd: "0000",
-      stk_cnd: "0",
-      crd_cnd: "0",
-      updown_incls: "1",
-      pric_cnd: "0",
-      trde_prica_cnd: "0"
-    }
-  };
-}
-function usRankingRequests(type) {
-  if (type === "volume") {
-    return [
-      {
-        apiId: "usa20530",
-        path: "/api/us/rkinfo",
-        body: {
-          excd: "000",
-          item_tp: "1",
-          sort_tp: "1"
-        }
-      }
-    ];
-  }
-  if (type === "tradingValue") {
-    return [
-      {
-        apiId: "usa20540",
-        path: "/api/us/rkinfo",
-        body: {
-          excd: "000",
-          item_tp: "1",
-          sort_tp: "1"
-        }
-      }
-    ];
-  }
-  if (type === "gainers") {
-    return [
-      {
-        apiId: "usa20910",
-        path: "/api/us/rkinfo",
-        body: {
-          excd: "000",
-          item_tp: "1",
-          sort_tp: "1"
-        }
-      }
-    ];
-  }
-  return [
-    {
-      apiId: "usa20910",
-      path: "/api/us/rkinfo",
-      body: {
-        excd: "000",
-        item_tp: "1",
-        sort_tp: "4"
-      }
-    },
-    {
-      apiId: "usa20910",
-      path: "/api/us/rkinfo",
-      body: {
-        excd: "000",
-        item_tp: "1",
-        sort_tp: "5"
-      }
-    },
-    {
-      apiId: "usa20910",
-      path: "/api/us/rkinfo",
-      body: {
-        excd: "000",
-        item_tp: "1",
-        sort_tp: "2"
-      }
-    }
-  ];
-}
-function objectRows(value, depth = 0) {
-  if (depth > 4) {
-    return [];
-  }
-  if (Array.isArray(value)) {
-    return value.filter(
-      (item) => Boolean(item) && typeof item === "object" && !Array.isArray(item)
-    );
-  }
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  const entries = Object.entries(
-    value
-  );
-  const directArrays = entries.filter(
-    ([, nested]) => Array.isArray(nested)
-  ).sort(
-    (a, b) => b[1].length - a[1].length
-  );
-  for (const [, nested] of directArrays) {
-    const rows = objectRows(
-      nested,
-      depth + 1
-    );
-    if (rows.length > 0) {
-      return rows;
-    }
-  }
-  for (const [, nested] of entries) {
-    const rows = objectRows(
-      nested,
-      depth + 1
-    );
-    if (rows.length > 0) {
-      return rows;
-    }
-  }
-  return [];
-}
-function rankingRows(data) {
-  const resultList = data.result_list;
-  if (Array.isArray(resultList)) {
-    const rows = objectRows(resultList);
-    if (rows.length > 0) {
-      return rows;
-    }
-  }
-  return objectRows(data);
-}
-function pick3(row, keys) {
-  for (const key of keys) {
-    if (row[key] != null && row[key] !== "") {
-      return row[key];
-    }
-  }
-  return void 0;
-}
-function pickEntry(row, keys) {
-  for (const key of keys) {
-    if (row[key] != null && row[key] !== "") {
-      return {
-        key,
-        value: row[key]
-      };
-    }
-  }
-  return null;
-}
-function normalizeTradingValue(row, market) {
-  const entry = pickEntry(row, [
-    "trde_amt",
-    "trde_prica",
-    "trading_value",
-    "acml_tr_pbmn",
-    "acml_trading_value",
-    "acc_trde_prica",
-    "amount",
-    "trade_amount",
-    "trd_amt",
-    "turnover"
-  ]);
-  if (!entry) {
-    return null;
-  }
-  const parsed = absoluteNumber(entry.value);
-  if (parsed == null) {
-    return null;
-  }
-  if (market === "KR" && (entry.key === "trde_amt" || entry.key === "trde_prica")) {
-    return parsed * 1e6;
-  }
-  if (market === "US" && (entry.key === "trde_prica" || entry.key === "acc_trde_prica")) {
-    return parsed * 1e3;
-  }
-  return parsed;
-}
-function containsAny(text, keywords) {
-  return keywords.some(
-    (keyword) => text.includes(keyword)
-  );
-}
-function classifyKiwoomInstrument(name, market) {
-  const normalizedName = name.replace(/\s+/g, " ").trim();
-  const upperName = normalizedName.toUpperCase();
-  const compactName = upperName.replace(/\s+/g, "");
-  const isEtn2 = /\bETN\b/i.test(upperName) || containsAny(compactName, [
-    "\uC0C1\uC7A5\uC9C0\uC218\uC99D\uAD8C",
-    "\uB808\uBC84\uB9AC\uC9C0ETN",
-    "\uC778\uBC84\uC2A4ETN"
-  ]);
-  const koreanEtfBrand = /^(KODEX|TIGER|RISE|ACE|SOL|PLUS|HANARO|KOSEF|ARIRANG|TIMEFOLIO|WOORI|FOCUS|KIWOOM|KBSTAR|1Q|BNK|히어로즈|마이티)(\s|$)/i.test(
-    normalizedName
-  );
-  const overseasEtfName = /\bETF\b/i.test(upperName) || /\bEXCHANGE TRADED FUND\b/i.test(
-    upperName
-  );
-  const isEtf = !isEtn2 && (koreanEtfBrand || overseasEtfName || containsAny(compactName, [
-    "\uC0C1\uC7A5\uC9C0\uC218\uD380\uB4DC",
-    "\uB2E8\uC77C\uC885\uBAA9\uB808\uBC84\uB9AC\uC9C0",
-    "\uC120\uBB3C\uC778\uBC84\uC2A4",
-    "\uCF54\uC2A4\uB2E5150\uB808\uBC84\uB9AC\uC9C0",
-    "\uCF54\uC2A4\uB2E5150\uC120\uBB3C\uC778\uBC84\uC2A4"
-  ]));
-  const isWarrant = containsAny(compactName, [
-    "WARRANT",
-    "WARRANTS",
-    "C/WTS",
-    "WTS",
-    "\uC6CC\uB7F0\uD2B8",
-    "\uC2E0\uC8FC\uC778\uC218\uAD8C"
-  ]);
-  const isReit = containsAny(compactName, [
-    "\uB9AC\uCE20",
-    "REIT"
-  ]) && !isEtf && !isEtn2 && !isWarrant;
-  const isSpac = containsAny(compactName, [
-    "\uC2A4\uD329",
-    "SPAC"
-  ]) && !isEtf && !isEtn2 && !isWarrant;
-  const isLeveraged2 = containsAny(compactName, [
-    "\uB808\uBC84\uB9AC\uC9C0",
-    "2X",
-    "3X",
-    "BULL2X",
-    "BULL3X"
-  ]);
-  const isInverse2 = containsAny(compactName, [
-    "\uC778\uBC84\uC2A4",
-    "INVERSE",
-    "BEAR",
-    "SHORT",
-    "SHORT2X",
-    "SHORT3X",
-    "-1X",
-    "-2X",
-    "-3X"
-  ]);
-  const derivativeKeyword = containsAny(compactName, [
-    "\uC120\uBB3C",
-    "FUTURES",
-    "\uC635\uC158",
-    "OPTION"
-  ]);
-  const isDerivative = isLeveraged2 || isInverse2 || derivativeKeyword || isWarrant;
-  let assetType = "UNKNOWN";
-  if (isEtn2) {
-    assetType = "ETN";
-  } else if (isEtf) {
-    assetType = "ETF";
-  } else if (isWarrant) {
-    assetType = "UNKNOWN";
-  } else if (isReit) {
-    assetType = "REIT";
-  } else if (isSpac) {
-    assetType = "SPAC";
-  } else if (market === "KR") {
-    assetType = "STOCK";
-  } else if (!/\bFUND\b/i.test(upperName) && !/\bTRUST\b/i.test(upperName) && !/\bUNIT\b/i.test(upperName)) {
-    assetType = "STOCK";
-  }
-  const isEtp2 = assetType === "ETF" || assetType === "ETN";
-  let riskLevel = "NORMAL";
-  if (assetType === "ETN" || isLeveraged2 || isInverse2 || isDerivative) {
-    riskLevel = "HIGH";
-  } else if (assetType === "ETF" || assetType === "REIT" || assetType === "SPAC" || assetType === "UNKNOWN") {
-    riskLevel = "CAUTION";
-  }
-  const recommendationEligible = assetType === "STOCK" && riskLevel === "NORMAL" && !isLeveraged2 && !isInverse2 && !isDerivative;
-  return {
-    assetType,
-    isEtp: isEtp2,
-    isLeveraged: isLeveraged2,
-    isInverse: isInverse2,
-    isDerivative,
-    riskLevel,
-    recommendationEligible
-  };
-}
-function rankingReason(type) {
-  if (type === "volume") {
-    return "\uD0A4\uC6C0\uC99D\uAD8C \uAC70\uB798\uB7C9 \uC0C1\uC704 \uC885\uBAA9\uC785\uB2C8\uB2E4.";
-  }
-  if (type === "tradingValue") {
-    return "\uD0A4\uC6C0\uC99D\uAD8C \uAC70\uB798\uB300\uAE08 \uC0C1\uC704 \uC885\uBAA9\uC785\uB2C8\uB2E4.";
-  }
-  if (type === "gainers") {
-    return "\uD0A4\uC6C0\uC99D\uAD8C \uB4F1\uB77D\uB960 \uAE30\uC900 \uAE09\uC0C1\uC2B9 \uC885\uBAA9\uC785\uB2C8\uB2E4.";
-  }
-  return "\uD0A4\uC6C0\uC99D\uAD8C \uB4F1\uB77D\uB960 \uAE30\uC900 \uAE09\uD558\uB77D \uC885\uBAA9\uC785\uB2C8\uB2E4.";
-}
-function normalizeRankingRows(data, market, type) {
-  const rows = rankingRows(data);
-  const result = [];
-  for (const row of rows) {
-    const tickerRaw = pick3(row, [
-      "stk_cd",
-      "stk_code",
-      "symbol",
-      "symb",
-      "ticker",
-      "ovrs_pdno",
-      "eng_stk_cd",
-      "code",
-      "item_cd",
-      "item_code"
-    ]);
-    const ticker = String(
-      tickerRaw ?? ""
-    ).trim().toUpperCase();
-    if (!ticker) {
-      continue;
-    }
-    const name = String(
-      pick3(row, [
-        "stk_nm",
-        "stk_name",
-        "name",
-        "kor_nm",
-        "ovrs_item_name",
-        "item_nm",
-        "item_name"
-      ]) ?? ticker
-    ).trim();
-    const englishName = String(
-      pick3(row, [
-        "stk_enm",
-        "eng_nm",
-        "eng_item_nm"
-      ]) ?? ""
-    ).trim();
-    const price = absoluteNumber(
-      pick3(row, [
-        "cur_prc",
-        "now_pric",
-        "curr_pric",
-        "last",
-        "price",
-        "ovrs_nmix_prpr",
-        "last_pric",
-        "close",
-        "prpr"
-      ])
-    );
-    const changePercent = toNumber(
-      pick3(row, [
-        "flu_rt",
-        "chg_rt",
-        "change_rate",
-        "changePercent",
-        "prdy_ctrt",
-        "rate",
-        "diff_rate",
-        "fluctuation_rate",
-        "diff_rate_for_gjga"
-      ])
-    );
-    const normalizedVolume = normalizeVolume(
-      pick3(row, [
-        "acc_trde_qty",
-        "acc_trd_qty",
-        "acml_trde_qty",
-        "acml_trd_qty",
-        "trde_qty",
-        "now_trde_qty",
-        "volume",
-        "acml_vol",
-        "acml_volum",
-        "tvol",
-        "tot_qty",
-        "trade_volume"
-      ])
-    );
-    const tradingValue = normalizeTradingValue(
-      row,
-      market
-    );
-    const classification = classifyKiwoomInstrument(
-      `${name} ${englishName}`.trim(),
-      market
-    );
-    const dataQualityWarnings = [];
-    if (normalizedVolume.warning) {
-      dataQualityWarnings.push(
-        normalizedVolume.warning
-      );
-    }
-    const sourceRankValue = toNumber(
-      pick3(row, [
-        "rank",
-        "sourceRank",
-        "kw_high_rank",
-        "rnk"
-      ])
-    );
-    const sourceRank = sourceRankValue == null ? result.length + 1 : Math.max(
-      1,
-      Math.trunc(
-        Math.abs(sourceRankValue)
-      )
-    );
-    result.push({
-      ticker,
-      name,
-      market,
-      currency: market === "KR" ? "KRW" : "USD",
-      price,
-      changePercent,
-      volume: normalizedVolume.value,
-      tradingValue,
-      rank: sourceRank,
-      sourceRank,
-      assetType: classification.assetType,
-      isEtp: classification.isEtp,
-      isLeveraged: classification.isLeveraged,
-      isInverse: classification.isInverse,
-      isDerivative: classification.isDerivative,
-      riskLevel: classification.riskLevel,
-      recommendationEligible: classification.recommendationEligible,
-      dataQualityWarnings,
-      reason: rankingReason(type),
-      provider: "kiwoom",
-      raw: row
-    });
-  }
-  return result;
-}
-function sortRankingRows(rows, type) {
-  return [...rows].sort(
-    (a, b) => {
-      if (type === "volume") {
-        if (a.volume == null && b.volume == null) {
-          return a.sourceRank - b.sourceRank;
-        }
-        if (a.volume == null) {
-          return 1;
-        }
-        if (b.volume == null) {
-          return -1;
-        }
-        return b.volume - a.volume;
-      }
-      if (type === "tradingValue") {
-        if (a.tradingValue == null && b.tradingValue == null) {
-          return a.sourceRank - b.sourceRank;
-        }
-        if (a.tradingValue == null) {
-          return 1;
-        }
-        if (b.tradingValue == null) {
-          return -1;
-        }
-        return b.tradingValue - a.tradingValue;
-      }
-      if (type === "gainers") {
-        return (b.changePercent ?? Number.NEGATIVE_INFINITY) - (a.changePercent ?? Number.NEGATIVE_INFINITY);
-      }
-      if (type === "losers") {
-        return (a.changePercent ?? Number.POSITIVE_INFINITY) - (b.changePercent ?? Number.POSITIVE_INFINITY);
-      }
-      return a.sourceRank - b.sourceRank;
-    }
-  );
-}
-function applyRankingOptions(rows, options, limit) {
-  const assetFilter = options.assetFilter ?? "all";
-  const filtered = rows.filter(
-    (row) => {
-      if (assetFilter === "stocks" && (row.assetType !== "STOCK" || row.isEtp || row.isLeveraged || row.isInverse || row.isDerivative || row.riskLevel === "HIGH")) {
-        return false;
-      }
-      if (assetFilter === "etp" && row.assetType !== "ETF" && row.assetType !== "ETN") {
-        return false;
-      }
-      if (options.excludeHighRisk && row.riskLevel === "HIGH") {
-        return false;
-      }
-      if (options.recommendationEligibleOnly && !row.recommendationEligible) {
-        return false;
-      }
-      return true;
-    }
-  );
-  return filtered.slice(0, limit).map((row, index) => ({
-    ...row,
-    rank: index + 1
-  }));
-}
-function filterByDirection(rows, type) {
-  return rows.filter(
-    (row) => {
-      if (type === "gainers") {
-        return row.changePercent != null && row.changePercent > 0;
-      }
-      if (type === "losers") {
-        return row.changePercent != null && row.changePercent < 0;
-      }
-      return true;
-    }
-  );
-}
-function finalizeRankingRows(data, market, type, options, limit) {
-  const normalizedRows = normalizeRankingRows(
-    data,
-    market,
-    type
-  );
-  const directionFilteredRows = filterByDirection(
-    normalizedRows,
-    type
-  );
-  const sortedRows = sortRankingRows(
-    directionFilteredRows,
-    type
-  );
-  return applyRankingOptions(
-    sortedRows,
-    options,
-    limit
-  );
-}
-async function getKiwoomRankings(market, type, limit = 30, options = {}) {
-  const safeLimit = Math.max(
-    1,
-    Math.min(
-      100,
-      Math.trunc(limit || 30)
-    )
-  );
-  if (market === "KR") {
-    const request = domesticRankingRequest(type);
-    const response = await kiwoomRequest(request);
-    const rows = finalizeRankingRows(
-      response.data,
-      market,
-      type,
-      options,
-      safeLimit
-    );
-    if (rows.length === 0) {
-      throw new Error(
-        `\uC870\uAC74\uC5D0 \uB9DE\uB294 \uD0A4\uC6C0 \uB7AD\uD0B9 \uC885\uBAA9\uC774 \uC5C6\uC2B5\uB2C8\uB2E4. API=${request.apiId}, market=${market}, type=${type}.`
-      );
-    }
-    return rows;
-  }
-  const requests = usRankingRequests(type);
-  const attemptMessages = [];
-  for (const request of requests) {
-    try {
-      const response = await kiwoomRequest(request);
-      const rows = finalizeRankingRows(
-        response.data,
-        market,
-        type,
-        options,
-        safeLimit
-      );
-      if (rows.length > 0) {
-        return rows;
-      }
-      attemptMessages.push(
-        `${request.apiId}/sort_tp=${String(request.body.sort_tp)}: \uC870\uAC74\uC5D0 \uB9DE\uB294 \uC77C\uBC18\uC8FC\uC2DD 0\uAC1C`
-      );
-    } catch (error) {
-      attemptMessages.push(
-        `${request.apiId}/sort_tp=${String(request.body.sort_tp)}: ${error instanceof Error ? error.message : "\uC54C \uC218 \uC5C6\uB294 \uC624\uB958"}`
-      );
-    }
-  }
-  throw new Error(
-    `\uBBF8\uAD6D \uD0A4\uC6C0 \uB7AD\uD0B9 \uC870\uD68C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. market=${market}, type=${type}. \uC2DC\uB3C4 \uACB0\uACFC: ${attemptMessages.join(" | ")}`
-  );
-}
-
-// src/routes/kiwoom.routes.ts
 var router8 = Router8();
 function marketParam(value) {
   return String(value ?? "").toUpperCase() === "US" ? "US" : "KR";
@@ -6245,7 +7538,7 @@ var routes_default = router9;
 
 // src/index.ts
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path2.dirname(__filename);
+var __dirname = path3.dirname(__filename);
 var app = express();
 var port = Number(
   process.env.PORT ?? process.env.API_PORT ?? 8080
@@ -6285,50 +7578,50 @@ app.get("/api/health", (_req, res) => {
 });
 app.use("/api", routes_default);
 var frontendDistCandidates = [
-  path2.resolve(
+  path3.resolve(
     __dirname,
     "../../stock-analyzer/dist/public"
   ),
-  path2.resolve(
+  path3.resolve(
     __dirname,
     "../../stock-analyzer/dist"
   ),
-  path2.resolve(
+  path3.resolve(
     __dirname,
     "../../../stock-analyzer/dist/public"
   ),
-  path2.resolve(
+  path3.resolve(
     __dirname,
     "../../../stock-analyzer/dist"
   ),
-  path2.resolve(
+  path3.resolve(
     process.cwd(),
     "../stock-analyzer/dist/public"
   ),
-  path2.resolve(
+  path3.resolve(
     process.cwd(),
     "../stock-analyzer/dist"
   ),
-  path2.resolve(
+  path3.resolve(
     process.cwd(),
     "artifacts/stock-analyzer/dist/public"
   ),
-  path2.resolve(
+  path3.resolve(
     process.cwd(),
     "artifacts/stock-analyzer/dist"
   ),
-  path2.resolve(
+  path3.resolve(
     process.cwd(),
     "stock-analyzer/dist/public"
   ),
-  path2.resolve(
+  path3.resolve(
     process.cwd(),
     "stock-analyzer/dist"
   )
 ];
 var frontendDist = frontendDistCandidates.find(
   (candidate) => fs2.existsSync(
-    path2.join(
+    path3.join(
       candidate,
       "index.html"
     )
@@ -6371,7 +7664,7 @@ app.use((req, res) => {
   }
   if (frontendDist) {
     res.sendFile(
-      path2.join(
+      path3.join(
         frontendDist,
         "index.html"
       )

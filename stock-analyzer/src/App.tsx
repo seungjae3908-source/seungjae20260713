@@ -25,86 +25,86 @@ const AccountPage = lazy(() => import('@/pages/account'));
 const NotFound = lazy(() => import('@/pages/not-found'));
 
 const queryClient = new QueryClient({
-	defaultOptions: {
-		queries: {
-			refetchOnWindowFocus: false,
-			staleTime: 60 * 1000,
-			gcTime: 30 * 60 * 1000,
-			retry: 2,
-		},
-	},
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      staleTime: 60 * 1000,
+      gcTime: 30 * 60 * 1000,
+      retry: 2,
+    },
+  },
 });
 
 function AppShell({ children }: { children: React.ReactNode }) {
-	return (
-		<div className="relative min-h-[100dvh] w-full text-foreground">
-			<AppBackground />
+  return (
+    <div className="relative h-[100dvh] w-full overflow-hidden text-foreground">
+      <AppBackground />
 
-			<div className="relative z-10 mx-auto flex min-h-[100dvh] max-w-md flex-col bg-background">
-				<OfflineBanner />
-				{children}
-			</div>
-		</div>
-	);
+      <div className="relative z-10 mx-auto flex h-[100dvh] min-h-0 max-w-md flex-col overflow-hidden bg-background">
+        <OfflineBanner />
+        <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+      </div>
+    </div>
+  );
 }
 
 function Router() {
-	return (
-		<Suspense fallback={<PageFallback />}>
-			<Switch>
-				<Route path="/" component={HomePage} />
+  return (
+    <Suspense fallback={<PageFallback />}>
+      <Switch>
+        <Route path="/" component={HomePage} />
 
-				{/* 기존 일반 종목 리스트/검색 화면 */}
-				<Route path="/search" component={SearchPage} />
+        {/* 기존 일반 종목 리스트/검색 화면 */}
+        <Route path="/search" component={SearchPage} />
 
-				{/* 종목검색기 = 스캐너 기능 */}
-				<Route path="/scanner" component={ScannerPage} />
+        {/* 종목검색기 = 스캐너 기능 */}
+        <Route path="/scanner" component={ScannerPage} />
 
-				{/* 주식정보 = 국내/해외 호재·악재 */}
-				<Route path="/stock-info" component={StockInfoPage} />
+        {/* 주식정보 = 국내/해외 호재·악재 */}
+        <Route path="/stock-info" component={StockInfoPage} />
 
-				{/* 테마종목 = 업종/테마별 분류 */}
-				<Route path="/themes" component={ThemesPage} />
+        {/* 테마종목 = 업종/테마별 분류 */}
+        <Route path="/themes" component={ThemesPage} />
 
-				{/* 주식공부 = 지표 학습 */}
-				<Route path="/learn" component={LearnPage} />
+        {/* 주식공부 = 지표 학습 */}
+        <Route path="/learn" component={LearnPage} />
 
-				<Route path="/watchlist" component={WatchlistPage} />
-				<Route path="/alerts" component={AlertsPage} />
-				<Route path="/portfolio" component={PortfolioPage} />
-				<Route path="/account" component={AccountPage} />
-				<Route path="/login" component={AccountPage} />
-				<Route path="/more" component={MorePage} />
-				<Route path="/settings" component={MorePage} />
-				<Route path="/stock/:ticker" component={DetailPage} />
-				<Route component={NotFound} />
-			</Switch>
-		</Suspense>
-	);
+        <Route path="/watchlist" component={WatchlistPage} />
+        <Route path="/alerts" component={AlertsPage} />
+        <Route path="/portfolio" component={PortfolioPage} />
+        <Route path="/account" component={AccountPage} />
+        <Route path="/login" component={AccountPage} />
+        <Route path="/more" component={MorePage} />
+        <Route path="/settings" component={MorePage} />
+        <Route path="/stock/:ticker" component={DetailPage} />
+        <Route component={NotFound} />
+      </Switch>
+    </Suspense>
+  );
 }
 
 function App() {
-	useEffect(() => {
-		ensureWatchlistSync();
-	}, []);
+  useEffect(() => {
+    ensureWatchlistSync();
+  }, []);
 
-	return (
-		<QueryClientProvider client={queryClient}>
-			<AuthProvider>
-			<SettingsProvider>
-				<TooltipProvider>
-					<WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-						<AppShell>
-							<Router />
-						</AppShell>
-					</WouterRouter>
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+      <SettingsProvider>
+        <TooltipProvider>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+            <AppShell>
+              <Router />
+            </AppShell>
+          </WouterRouter>
 
-					<Toaster />
-				</TooltipProvider>
-			</SettingsProvider>
-			</AuthProvider>
-		</QueryClientProvider>
-	);
+          <Toaster />
+        </TooltipProvider>
+      </SettingsProvider>
+      </AuthProvider>
+    </QueryClientProvider>
+  );
 }
 
 export default App;
