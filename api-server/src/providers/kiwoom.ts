@@ -4,41 +4,45 @@
  * Required Replit Secrets:
  * - KIWOOM_APP_KEY
  * - KIWOOM_APP_SECRET
+ * - KIWOOM_PROXY_KEY
  * - KIWOOM_MODE=real | mock
  */
 
-const REAL_BASE_URL = 'https://api.kiwoom.com';
-const MOCK_BASE_URL = 'https://mockapi.kiwoom.com';
+const REAL_BASE_URL =
+	process.env.KIWOOM_BASE_URL?.trim() ||
+	"http://158.247.235.32:3000/kiwoom";
+
+const MOCK_BASE_URL = "https://mockapi.kiwoom.com";
 const REQUEST_TIMEOUT_MS = 15_000;
 
 const UINT32_MAX = 4_294_967_295;
 const INT32_MAX = 2_147_483_647;
 
-export type KiwoomMarket = 'KR' | 'US';
+export type KiwoomMarket = "KR" | "US";
 
 export type KiwoomRankingType =
-	| 'volume'
-	| 'tradingValue'
-	| 'gainers'
-	| 'losers';
+	| "volume"
+	| "tradingValue"
+	| "gainers"
+	| "losers";
 
 export type KiwoomAssetType =
-	| 'STOCK'
-	| 'ETF'
-	| 'ETN'
-	| 'REIT'
-	| 'SPAC'
-	| 'UNKNOWN';
+	| "STOCK"
+	| "ETF"
+	| "ETN"
+	| "REIT"
+	| "SPAC"
+	| "UNKNOWN";
 
 export type KiwoomRiskLevel =
-	| 'NORMAL'
-	| 'CAUTION'
-	| 'HIGH';
+	| "NORMAL"
+	| "CAUTION"
+	| "HIGH";
 
 export type KiwoomRankingAssetFilter =
-	| 'all'
-	| 'stocks'
-	| 'etp';
+	| "all"
+	| "stocks"
+	| "etp";
 
 export interface KiwoomRankingOptions {
 	assetFilter?: KiwoomRankingAssetFilter;
@@ -56,7 +60,7 @@ export interface KiwoomRankingRow {
 	ticker: string;
 	name: string;
 	market: KiwoomMarket;
-	currency: 'KRW' | 'USD';
+	currency: "KRW" | "USD";
 
 	price: number | null;
 	changePercent: number | null;
@@ -77,7 +81,7 @@ export interface KiwoomRankingRow {
 	dataQualityWarnings: string[];
 
 	reason: string;
-	provider: 'kiwoom';
+	provider: "kiwoom";
 	raw: Record<string, unknown>;
 }
 
@@ -120,10 +124,16 @@ let tokenCache: {
 	expiresAt: number;
 } | null = null;
 
+function isMockMode(): boolean {
+	return (
+		process.env.KIWOOM_MODE
+			?.trim()
+			.toLowerCase() === "mock"
+	);
+}
+
 function baseUrl(): string {
-	return process.env.KIWOOM_MODE
-		?.trim()
-		.toLowerCase() === 'mock'
+	return isMockMode()
 		? MOCK_BASE_URL
 		: REAL_BASE_URL;
 }
@@ -140,20 +150,38 @@ function requireEnv(name: string): string {
 	return value;
 }
 
-function toNumber(value: unknown): number | null {
+/**
+ * 실전 모드에서는 Vultr 프록시 인증키를 모든 요청에 포함합니다.
+ * mock 모드에서는 키움 mock 서버로 직접 접속하므로 프록시 헤더를 보내지 않습니다.
+ */
+function proxyHeaders(): Record<string, string> {
+	if (isMockMode()) {
+		return {};
+	}
+
+	return {
+		"x-proxy-key": requireEnv(
+			"KIWOOM_PROXY_KEY",
+		),
+	};
+}
+
+function toNumber(
+	value: unknown,
+): number | null {
 	if (
-		typeof value === 'number' &&
+		typeof value === "number" &&
 		Number.isFinite(value)
 	) {
 		return value;
 	}
 
-	if (typeof value !== 'string') {
+	if (typeof value !== "string") {
 		return null;
 	}
 
 	const normalized = value
-		.replace(/[,+%₩$]/g, '')
+		.replace(/[,+%₩$]/g, "")
 		.trim();
 
 	if (!normalized) {
@@ -167,7 +195,9 @@ function toNumber(value: unknown): number | null {
 		: null;
 }
 
-function absoluteNumber(value: unknown): number | null {
+function absoluteNumber(
+	value: unknown,
+): number | null {
 	const parsed = toNumber(value);
 
 	return parsed == null
@@ -191,7 +221,7 @@ function normalizeVolume(
 		return {
 			value: null,
 			warning:
-				'키움 응답 거래량이 UINT32 최대값(4,294,967,295)으로 반환되어 유효하지 않은 값으로 처리했습니다.',
+				"키움 응답 거래량이 UINT32 최대값(4,294,967,295)으로 반환되어 유효하지 않은 값으로 처리했습니다.",
 		};
 	}
 
@@ -199,7 +229,7 @@ function normalizeVolume(
 		return {
 			value: null,
 			warning:
-				'키움 응답 거래량이 INT32 최대값(2,147,483,647)으로 반환되어 유효하지 않은 값으로 처리했습니다.',
+				"키움 응답 거래량이 INT32 최대값(2,147,483,647)으로 반환되어 유효하지 않은 값으로 처리했습니다.",
 		};
 	}
 
@@ -207,7 +237,7 @@ function normalizeVolume(
 		return {
 			value: null,
 			warning:
-				'거래량이 JavaScript 안전 정수 범위를 벗어나 유효하지 않은 값으로 처리했습니다.',
+				"거래량이 JavaScript 안전 정수 범위를 벗어나 유효하지 않은 값으로 처리했습니다.",
 		};
 	}
 
@@ -227,7 +257,9 @@ async function readJson(
 	}
 
 	try {
-		return JSON.parse(text) as Record<string, unknown>;
+		return JSON.parse(
+			text,
+		) as Record<string, unknown>;
 	} catch {
 		throw new Error(
 			`키움 API가 JSON이 아닌 응답을 반환했습니다. HTTP ${response.status}: ${text.slice(0, 240)}`,
@@ -240,7 +272,7 @@ function returnCode(
 ): number {
 	const raw = data.return_code;
 
-	if (raw == null || raw === '') {
+	if (raw == null || raw === "") {
 		return 0;
 	}
 
@@ -254,10 +286,12 @@ function returnCode(
 function returnMessage(
 	data: Record<string, unknown>,
 ): string {
-	return typeof data.return_msg === 'string' &&
+	return (
+		typeof data.return_msg === "string" &&
 		data.return_msg.trim()
+	)
 		? data.return_msg
-		: '알 수 없는 키움 API 오류';
+		: "알 수 없는 키움 API 오류";
 }
 
 export function clearKiwoomTokenCache(): void {
@@ -267,20 +301,21 @@ export function clearKiwoomTokenCache(): void {
 export function isKiwoomConfigured(): boolean {
 	return Boolean(
 		process.env.KIWOOM_APP_KEY?.trim() &&
-			process.env.KIWOOM_APP_SECRET?.trim(),
+			process.env.KIWOOM_APP_SECRET?.trim() &&
+			(
+				isMockMode() ||
+				process.env.KIWOOM_PROXY_KEY?.trim()
+			),
 	);
 }
 
 export function getKiwoomStatus() {
 	return {
-		provider: 'kiwoom',
+		provider: "kiwoom",
 
-		mode:
-			process.env.KIWOOM_MODE
-				?.trim()
-				.toLowerCase() === 'mock'
-				? 'mock'
-				: 'real',
+		mode: isMockMode()
+			? "mock"
+			: "real",
 
 		baseUrl: baseUrl(),
 
@@ -291,6 +326,12 @@ export function getKiwoomStatus() {
 		appSecretRegistered: Boolean(
 			process.env.KIWOOM_APP_SECRET?.trim(),
 		),
+
+		proxyKeyRegistered:
+			isMockMode() ||
+			Boolean(
+				process.env.KIWOOM_PROXY_KEY?.trim(),
+			),
 
 		tokenCached: Boolean(
 			tokenCache &&
@@ -310,7 +351,8 @@ export async function getKiwoomToken(): Promise<string> {
 		return tokenCache.token;
 	}
 
-	const controller = new AbortController();
+	const controller =
+		new AbortController();
 
 	const timeout = setTimeout(
 		() => controller.abort(),
@@ -321,19 +363,23 @@ export async function getKiwoomToken(): Promise<string> {
 		const response = await fetch(
 			`${baseUrl()}/oauth2/token`,
 			{
-				method: 'POST',
+				method: "POST",
 
 				headers: {
-					Accept: 'application/json',
-					'Content-Type':
-						'application/json;charset=UTF-8',
+					Accept: "application/json",
+					"Content-Type":
+						"application/json;charset=UTF-8",
+					...proxyHeaders(),
 				},
 
 				body: JSON.stringify({
-					grant_type: 'client_credentials',
-					appkey: requireEnv('KIWOOM_APP_KEY'),
+					grant_type:
+						"client_credentials",
+					appkey: requireEnv(
+						"KIWOOM_APP_KEY",
+					),
 					secretkey: requireEnv(
-						'KIWOOM_APP_SECRET',
+						"KIWOOM_APP_SECRET",
 					),
 				}),
 
@@ -358,7 +404,6 @@ export async function getKiwoomToken(): Promise<string> {
 
 		tokenCache = {
 			token: result.token,
-
 			expiresAt:
 				Date.now() +
 				23 * 60 * 60 * 1000,
@@ -368,10 +413,10 @@ export async function getKiwoomToken(): Promise<string> {
 	} catch (error) {
 		if (
 			error instanceof Error &&
-			error.name === 'AbortError'
+			error.name === "AbortError"
 		) {
 			throw new Error(
-				'키움 토큰 요청 시간이 초과되었습니다.',
+				"키움 토큰 요청 시간이 초과되었습니다.",
 			);
 		}
 
@@ -395,39 +440,45 @@ export async function kiwoomRequest<
 	contYn: string | null;
 	nextKey: string | null;
 }> {
-	const token = await getKiwoomToken();
+	const token =
+		await getKiwoomToken();
 
-	const controller = new AbortController();
+	const controller =
+		new AbortController();
 
 	const timeout = setTimeout(
 		() => controller.abort(),
 		REQUEST_TIMEOUT_MS,
 	);
 
-	const headers: Record<string, string> = {
-		Accept: 'application/json',
+	const headers:
+		Record<string, string> = {
+			Accept: "application/json",
 
-		'Content-Type':
-			'application/json;charset=UTF-8',
+			"Content-Type":
+				"application/json;charset=UTF-8",
 
-		authorization: `Bearer ${token}`,
+			authorization:
+				`Bearer ${token}`,
 
-		'api-id': apiId,
-	};
+			"api-id": apiId,
+
+			...proxyHeaders(),
+		};
 
 	if (contYn) {
-		headers['cont-yn'] = contYn;
+		headers["cont-yn"] = contYn;
 	}
 
 	if (nextKey) {
-		headers['next-key'] = nextKey;
+		headers["next-key"] = nextKey;
 	}
 
 	try {
 		const response = await fetch(
 			`${baseUrl()}${path}`,
 			{
-				method: 'POST',
+				method: "POST",
 				headers,
 				body: JSON.stringify(body),
 				signal: controller.signal,
@@ -456,14 +507,18 @@ export async function kiwoomRequest<
 		return {
 			data: result,
 			contYn:
-				response.headers.get('cont-yn'),
+				response.headers.get(
+					"cont-yn",
+				),
 			nextKey:
-				response.headers.get('next-key'),
+				response.headers.get(
+					"next-key",
+				),
 		};
 	} catch (error) {
 		if (
 			error instanceof Error &&
-			error.name === 'AbortError'
+			error.name === "AbortError"
 		) {
 			throw new Error(
 				`키움 ${apiId} 요청 시간이 초과되었습니다.`,
@@ -493,14 +548,16 @@ export async function getKiwoomDomesticOrderbook(
 		);
 	}
 
-	const result = await kiwoomRequest({
-		apiId: 'ka10004',
-		path: '/api/dostk/mrkcond',
+	const result =
+		await kiwoomRequest({
+			apiId: "ka10004",
+			path: "/api/dostk/mrkcond",
 
-		body: {
-			stk_cd: normalizedTicker,
-		},
-	});
+			body: {
+				stk_cd:
+					normalizedTicker,
+			},
+		});
 
 	return result.data;
 }
@@ -509,54 +566,56 @@ function domesticRankingRequest(
 	type: KiwoomRankingType,
 ): RequestOptions {
 	const common = {
-		mrkt_tp: '000',
-		mang_stk_incls: '0',
-		stex_tp: '1',
+		mrkt_tp: "000",
+		mang_stk_incls: "0",
+		stex_tp: "1",
 	};
 
-	if (type === 'volume') {
+	if (type === "volume") {
 		return {
-			apiId: 'ka10030',
-			path: '/api/dostk/rkinfo',
+			apiId: "ka10030",
+			path: "/api/dostk/rkinfo",
 
 			body: {
 				...common,
-				sort_tp: '1',
-				crd_tp: '0',
-				trde_qty_tp: '0',
-				pric_tp: '0',
-				trde_prica_tp: '0',
-				mrkt_open_tp: '0',
+				sort_tp: "1",
+				crd_tp: "0",
+				trde_qty_tp: "0",
+				pric_tp: "0",
+				trde_prica_tp: "0",
+				mrkt_open_tp: "0",
 			},
 		};
 	}
 
-	if (type === 'tradingValue') {
+	if (
+		type === "tradingValue"
+	) {
 		return {
-			apiId: 'ka10032',
-			path: '/api/dostk/rkinfo',
+			apiId: "ka10032",
+			path: "/api/dostk/rkinfo",
 			body: common,
 		};
 	}
 
 	return {
-		apiId: 'ka10027',
-		path: '/api/dostk/rkinfo',
+		apiId: "ka10027",
+		path: "/api/dostk/rkinfo",
 
 		body: {
 			...common,
 
 			sort_tp:
-				type === 'losers'
-					? '3'
-					: '1',
+				type === "losers"
+					? "3"
+					: "1",
 
-			trde_qty_cnd: '0000',
-			stk_cnd: '0',
-			crd_cnd: '0',
-			updown_incls: '1',
-			pric_cnd: '0',
-			trde_prica_cnd: '0',
+			trde_qty_cnd: "0000",
+			stk_cnd: "0",
+			crd_cnd: "0",
+			updown_incls: "1",
+			pric_cnd: "0",
+			trde_prica_cnd: "0",
 		},
 	};
 }
@@ -564,46 +623,48 @@ function domesticRankingRequest(
 function usRankingRequests(
 	type: KiwoomRankingType,
 ): RequestOptions[] {
-	if (type === 'volume') {
+	if (type === "volume") {
 		return [
 			{
-				apiId: 'usa20530',
-				path: '/api/us/rkinfo',
+				apiId: "usa20530",
+				path: "/api/us/rkinfo",
 
 				body: {
-					excd: '000',
-					item_tp: '1',
-					sort_tp: '1',
+					excd: "000",
+					item_tp: "1",
+					sort_tp: "1",
 				},
 			},
 		];
 	}
 
-	if (type === 'tradingValue') {
+	if (
+		type === "tradingValue"
+	) {
 		return [
 			{
-				apiId: 'usa20540',
-				path: '/api/us/rkinfo',
+				apiId: "usa20540",
+				path: "/api/us/rkinfo",
 
 				body: {
-					excd: '000',
-					item_tp: '1',
-					sort_tp: '1',
+					excd: "000",
+					item_tp: "1",
+					sort_tp: "1",
 				},
 			},
 		];
 	}
 
-	if (type === 'gainers') {
+	if (type === "gainers") {
 		return [
 			{
-				apiId: 'usa20910',
-				path: '/api/us/rkinfo',
+				apiId: "usa20910",
+				path: "/api/us/rkinfo",
 
 				body: {
-					excd: '000',
-					item_tp: '1',
-					sort_tp: '1',
+					excd: "000",
+					item_tp: "1",
+					sort_tp: "1",
 				},
 			},
 		];
@@ -611,35 +672,35 @@ function usRankingRequests(
 
 	return [
 		{
-			apiId: 'usa20910',
-			path: '/api/us/rkinfo',
+			apiId: "usa20910",
+			path: "/api/us/rkinfo",
 
 			body: {
-				excd: '000',
-				item_tp: '1',
-				sort_tp: '4',
+				excd: "000",
+				item_tp: "1",
+				sort_tp: "4",
 			},
 		},
 
 		{
-			apiId: 'usa20910',
-			path: '/api/us/rkinfo',
+			apiId: "usa20910",
+			path: "/api/us/rkinfo",
 
 			body: {
-				excd: '000',
-				item_tp: '1',
-				sort_tp: '5',
+				excd: "000",
+				item_tp: "1",
+				sort_tp: "5",
 			},
 		},
 
 		{
-			apiId: 'usa20910',
-			path: '/api/us/rkinfo',
+			apiId: "usa20910",
+			path: "/api/us/rkinfo",
 
 			body: {
-				excd: '000',
-				item_tp: '1',
-				sort_tp: '2',
+				excd: "000",
+				item_tp: "1",
+				sort_tp: "2",
 			},
 		},
 	];
@@ -657,22 +718,29 @@ function objectRows(
 		return value.filter(
 			(
 				item,
-			): item is Record<string, unknown> =>
+			): item is Record<
+				string,
+				unknown
+			> =>
 				Boolean(item) &&
-				typeof item === 'object' &&
+				typeof item ===
+					"object" &&
 				!Array.isArray(item),
 		);
 	}
 
 	if (
 		!value ||
-		typeof value !== 'object'
+		typeof value !== "object"
 	) {
 		return [];
 	}
 
 	const entries = Object.entries(
-		value as Record<string, unknown>,
+		value as Record<
+			string,
+			unknown
+		>,
 	);
 
 	const directArrays = entries
@@ -681,11 +749,16 @@ function objectRows(
 		)
 		.sort(
 			(a, b) =>
-				(b[1] as unknown[]).length -
-				(a[1] as unknown[]).length,
+				(b[1] as unknown[])
+					.length -
+				(a[1] as unknown[])
+					.length,
 		);
 
-	for (const [, nested] of directArrays) {
+	for (
+		const [, nested]
+		of directArrays
+	) {
 		const rows = objectRows(
 			nested,
 			depth + 1,
@@ -696,7 +769,10 @@ function objectRows(
 		}
 	}
 
-	for (const [, nested] of entries) {
+	for (
+		const [, nested]
+		of entries
+	) {
 		const rows = objectRows(
 			nested,
 			depth + 1,
@@ -713,10 +789,14 @@ function objectRows(
 function rankingRows(
 	data: Record<string, unknown>,
 ): Record<string, unknown>[] {
-	const resultList = data.result_list;
+	const resultList =
+		data.result_list;
 
-	if (Array.isArray(resultList)) {
-		const rows = objectRows(resultList);
+	if (
+		Array.isArray(resultList)
+	) {
+		const rows =
+			objectRows(resultList);
 
 		if (rows.length > 0) {
 			return rows;
@@ -733,7 +813,7 @@ function pick(
 	for (const key of keys) {
 		if (
 			row[key] != null &&
-			row[key] !== ''
+			row[key] !== ""
 		) {
 			return row[key];
 		}
@@ -749,7 +829,7 @@ function pickEntry(
 	for (const key of keys) {
 		if (
 			row[key] != null &&
-			row[key] !== ''
+			row[key] !== ""
 		) {
 			return {
 				key,
@@ -765,52 +845,62 @@ function normalizeTradingValue(
 	row: Record<string, unknown>,
 	market: KiwoomMarket,
 ): number | null {
-	const entry = pickEntry(row, [
-		'trde_amt',
-		'trde_prica',
-		'trading_value',
-		'acml_tr_pbmn',
-		'acml_trading_value',
-		'acc_trde_prica',
-		'amount',
-		'trade_amount',
-		'trd_amt',
-		'turnover',
-	]);
+	const entry = pickEntry(
+		row,
+		[
+			"trde_amt",
+			"trde_prica",
+			"trading_value",
+			"acml_tr_pbmn",
+			"acml_trading_value",
+			"acc_trde_prica",
+			"amount",
+			"trade_amount",
+			"trd_amt",
+			"turnover",
+		],
+	);
 
 	if (!entry) {
 		return null;
 	}
 
-	const parsed = absoluteNumber(entry.value);
+	const parsed =
+		absoluteNumber(entry.value);
 
 	if (parsed == null) {
 		return null;
 	}
 
 	/*
-	 * 국내 키움 거래대금 순위의 trde_amt/trde_prica는
-	 * 백만원 단위이므로 원화로 변환한다.
+	 * 국내 키움 거래대금 순위의
+	 * trde_amt/trde_prica는
+	 * 백만원 단위이므로 원화로 변환합니다.
 	 */
 	if (
-		market === 'KR' &&
+		market === "KR" &&
 		(
-			entry.key === 'trde_amt' ||
-			entry.key === 'trde_prica'
+			entry.key ===
+				"trde_amt" ||
+			entry.key ===
+				"trde_prica"
 		)
 	) {
 		return parsed * 1_000_000;
 	}
 
 	/*
-	 * 미국 키움 거래량·거래대금 순위의 trde_prica는
-	 * 천 달러 단위이므로 실제 달러 금액으로 변환한다.
+	 * 미국 키움 거래량·거래대금 순위의
+	 * trde_prica는 천 달러 단위이므로
+	 * 실제 달러 금액으로 변환합니다.
 	 */
 	if (
-		market === 'US' &&
+		market === "US" &&
 		(
-			entry.key === 'trde_prica' ||
-			entry.key === 'acc_trde_prica'
+			entry.key ===
+				"trde_prica" ||
+			entry.key ===
+				"acc_trde_prica"
 		)
 	) {
 		return parsed * 1_000;
@@ -834,22 +924,27 @@ export function classifyKiwoomInstrument(
 	market: KiwoomMarket,
 ): InstrumentClassification {
 	const normalizedName = name
-		.replace(/\s+/g, ' ')
+		.replace(/\s+/g, " ")
 		.trim();
 
 	const upperName =
 		normalizedName.toUpperCase();
 
 	const compactName =
-		upperName.replace(/\s+/g, '');
+		upperName.replace(/\s+/g, "");
 
 	const isEtn =
-		/\bETN\b/i.test(upperName) ||
-		containsAny(compactName, [
-			'상장지수증권',
-			'레버리지ETN',
-			'인버스ETN',
-		]);
+		/\bETN\b/i.test(
+			upperName,
+		) ||
+		containsAny(
+			compactName,
+			[
+				"상장지수증권",
+				"레버리지ETN",
+				"인버스ETN",
+			],
+		);
 
 	const koreanEtfBrand =
 		/^(KODEX|TIGER|RISE|ACE|SOL|PLUS|HANARO|KOSEF|ARIRANG|TIMEFOLIO|WOORI|FOCUS|KIWOOM|KBSTAR|1Q|BNK|히어로즈|마이티)(\s|$)/i.test(
@@ -857,7 +952,9 @@ export function classifyKiwoomInstrument(
 		);
 
 	const overseasEtfName =
-		/\bETF\b/i.test(upperName) ||
+		/\bETF\b/i.test(
+			upperName,
+		) ||
 		/\bEXCHANGE TRADED FUND\b/i.test(
 			upperName,
 		);
@@ -867,72 +964,93 @@ export function classifyKiwoomInstrument(
 		(
 			koreanEtfBrand ||
 			overseasEtfName ||
-			containsAny(compactName, [
-				'상장지수펀드',
-				'단일종목레버리지',
-				'선물인버스',
-				'코스닥150레버리지',
-				'코스닥150선물인버스',
-			])
+			containsAny(
+				compactName,
+				[
+					"상장지수펀드",
+					"단일종목레버리지",
+					"선물인버스",
+					"코스닥150레버리지",
+					"코스닥150선물인버스",
+				],
+			)
 		);
 
 	const isWarrant =
-		containsAny(compactName, [
-			'WARRANT',
-			'WARRANTS',
-			'C/WTS',
-			'WTS',
-			'워런트',
-			'신주인수권',
-		]);
+		containsAny(
+			compactName,
+			[
+				"WARRANT",
+				"WARRANTS",
+				"C/WTS",
+				"WTS",
+				"워런트",
+				"신주인수권",
+			],
+		);
 
 	const isReit =
-		containsAny(compactName, [
-			'리츠',
-			'REIT',
-		]) &&
+		containsAny(
+			compactName,
+			[
+				"리츠",
+				"REIT",
+			],
+		) &&
 		!isEtf &&
 		!isEtn &&
 		!isWarrant;
 
 	const isSpac =
-		containsAny(compactName, [
-			'스팩',
-			'SPAC',
-		]) &&
+		containsAny(
+			compactName,
+			[
+				"스팩",
+				"SPAC",
+			],
+		) &&
 		!isEtf &&
 		!isEtn &&
 		!isWarrant;
 
 	const isLeveraged =
-		containsAny(compactName, [
-			'레버리지',
-			'2X',
-			'3X',
-			'BULL2X',
-			'BULL3X',
-		]);
+		containsAny(
+			compactName,
+			[
+				"레버리지",
+				"2X",
+				"3X",
+				"BULL2X",
+				"BULL3X",
+			],
+		);
 
 	const isInverse =
-		containsAny(compactName, [
-			'인버스',
-			'INVERSE',
-			'BEAR',
-			'SHORT',
-			'SHORT2X',
-			'SHORT3X',
-			'-1X',
-			'-2X',
-			'-3X',
-		]);
+		containsAny(
+			compactName,
+			[
+				"인버스",
+				"INVERSE",
+				"BEAR",
+				"SHORT",
+				"SHORT2X",
+				"SHORT3X",
+				"-1X",
+				"-2X",
+				"-3X",
+			],
+		);
 
 	const derivativeKeyword =
-		containsAny(compactName, [
-			'선물',
-			'FUTURES',
-			'옵션',
-			'OPTION',
-		]);
+		containsAny(
+			compactName,
+			[
+				"선물",
+				"FUTURES",
+				"옵션",
+				"OPTION",
+			],
+		);
 
 	const isDerivative =
 		isLeveraged ||
@@ -940,55 +1058,65 @@ export function classifyKiwoomInstrument(
 		derivativeKeyword ||
 		isWarrant;
 
-	let assetType: KiwoomAssetType =
-		'UNKNOWN';
+	let assetType:
+		KiwoomAssetType =
+			"UNKNOWN";
 
 	if (isEtn) {
-		assetType = 'ETN';
+		assetType = "ETN";
 	} else if (isEtf) {
-		assetType = 'ETF';
+		assetType = "ETF";
 	} else if (isWarrant) {
-		assetType = 'UNKNOWN';
+		assetType = "UNKNOWN";
 	} else if (isReit) {
-		assetType = 'REIT';
+		assetType = "REIT";
 	} else if (isSpac) {
-		assetType = 'SPAC';
-	} else if (market === 'KR') {
-		assetType = 'STOCK';
+		assetType = "SPAC";
 	} else if (
-		!/\bFUND\b/i.test(upperName) &&
-		!/\bTRUST\b/i.test(upperName) &&
-		!/\bUNIT\b/i.test(upperName)
+		market === "KR"
 	) {
-		assetType = 'STOCK';
+		assetType = "STOCK";
+	} else if (
+		!/\bFUND\b/i.test(
+			upperName,
+		) &&
+		!/\bTRUST\b/i.test(
+			upperName,
+		) &&
+		!/\bUNIT\b/i.test(
+			upperName,
+		)
+	) {
+		assetType = "STOCK";
 	}
 
 	const isEtp =
-		assetType === 'ETF' ||
-		assetType === 'ETN';
+		assetType === "ETF" ||
+		assetType === "ETN";
 
-	let riskLevel: KiwoomRiskLevel =
-		'NORMAL';
+	let riskLevel:
+		KiwoomRiskLevel =
+			"NORMAL";
 
 	if (
-		assetType === 'ETN' ||
+		assetType === "ETN" ||
 		isLeveraged ||
 		isInverse ||
 		isDerivative
 	) {
-		riskLevel = 'HIGH';
+		riskLevel = "HIGH";
 	} else if (
-		assetType === 'ETF' ||
-		assetType === 'REIT' ||
-		assetType === 'SPAC' ||
-		assetType === 'UNKNOWN'
+		assetType === "ETF" ||
+		assetType === "REIT" ||
+		assetType === "SPAC" ||
+		assetType === "UNKNOWN"
 	) {
-		riskLevel = 'CAUTION';
+		riskLevel = "CAUTION";
 	}
 
 	const recommendationEligible =
-		assetType === 'STOCK' &&
-		riskLevel === 'NORMAL' &&
+		assetType === "STOCK" &&
+		riskLevel === "NORMAL" &&
 		!isLeveraged &&
 		!isInverse &&
 		!isDerivative;
@@ -1007,19 +1135,21 @@ export function classifyKiwoomInstrument(
 function rankingReason(
 	type: KiwoomRankingType,
 ): string {
-	if (type === 'volume') {
-		return '키움증권 거래량 상위 종목입니다.';
+	if (type === "volume") {
+		return "키움증권 거래량 상위 종목입니다.";
 	}
 
-	if (type === 'tradingValue') {
-		return '키움증권 거래대금 상위 종목입니다.';
+	if (
+		type === "tradingValue"
+	) {
+		return "키움증권 거래대금 상위 종목입니다.";
 	}
 
-	if (type === 'gainers') {
-		return '키움증권 등락률 기준 급상승 종목입니다.';
+	if (type === "gainers") {
+		return "키움증권 등락률 기준 급상승 종목입니다.";
 	}
 
-	return '키움증권 등락률 기준 급하락 종목입니다.';
+	return "키움증권 등락률 기준 급하락 종목입니다.";
 }
 
 function normalizeRankingRows(
@@ -1027,26 +1157,31 @@ function normalizeRankingRows(
 	market: KiwoomMarket,
 	type: KiwoomRankingType,
 ): KiwoomRankingRow[] {
-	const rows = rankingRows(data);
+	const rows =
+		rankingRows(data);
 
-	const result: KiwoomRankingRow[] = [];
+	const result:
+		KiwoomRankingRow[] = [];
 
 	for (const row of rows) {
-		const tickerRaw = pick(row, [
-			'stk_cd',
-			'stk_code',
-			'symbol',
-			'symb',
-			'ticker',
-			'ovrs_pdno',
-			'eng_stk_cd',
-			'code',
-			'item_cd',
-			'item_code',
-		]);
+		const tickerRaw = pick(
+			row,
+			[
+				"stk_cd",
+				"stk_code",
+				"symbol",
+				"symb",
+				"ticker",
+				"ovrs_pdno",
+				"eng_stk_cd",
+				"code",
+				"item_cd",
+				"item_code",
+			],
+		);
 
 		const ticker = String(
-			tickerRaw ?? '',
+			tickerRaw ?? "",
 		)
 			.trim()
 			.toUpperCase();
@@ -1056,69 +1191,87 @@ function normalizeRankingRows(
 		}
 
 		const name = String(
-			pick(row, [
-				'stk_nm',
-				'stk_name',
-				'name',
-				'kor_nm',
-				'ovrs_item_name',
-				'item_nm',
-				'item_name',
-			]) ?? ticker,
+			pick(
+				row,
+				[
+					"stk_nm",
+					"stk_name",
+					"name",
+					"kor_nm",
+					"ovrs_item_name",
+					"item_nm",
+					"item_name",
+				],
+			) ?? ticker,
 		).trim();
 
-		const englishName = String(
-			pick(row, [
-				'stk_enm',
-				'eng_nm',
-				'eng_item_nm',
-			]) ?? '',
-		).trim();
+		const englishName =
+			String(
+				pick(
+					row,
+					[
+						"stk_enm",
+						"eng_nm",
+						"eng_item_nm",
+					],
+				) ?? "",
+			).trim();
 
-		const price = absoluteNumber(
-			pick(row, [
-				'cur_prc',
-				'now_pric',
-				'curr_pric',
-				'last',
-				'price',
-				'ovrs_nmix_prpr',
-				'last_pric',
-				'close',
-				'prpr',
-			]),
-		);
+		const price =
+			absoluteNumber(
+				pick(
+					row,
+					[
+						"cur_prc",
+						"now_pric",
+						"curr_pric",
+						"last",
+						"price",
+						"ovrs_nmix_prpr",
+						"last_pric",
+						"close",
+						"prpr",
+					],
+				),
+			);
 
-		const changePercent = toNumber(
-			pick(row, [
-				'flu_rt',
-				'chg_rt',
-				'change_rate',
-				'changePercent',
-				'prdy_ctrt',
-				'rate',
-				'diff_rate',
-				'fluctuation_rate',
-				'diff_rate_for_gjga',
-			]),
-		);
+		const changePercent =
+			toNumber(
+				pick(
+					row,
+					[
+						"flu_rt",
+						"chg_rt",
+						"change_rate",
+						"changePercent",
+						"prdy_ctrt",
+						"rate",
+						"diff_rate",
+						"fluctuation_rate",
+						"diff_rate_for_gjga",
+					],
+				),
+			);
 
 		const normalizedVolume =
 			normalizeVolume(
-				pick(row, [
-					'acc_trde_qty',
-					'acc_trd_qty',
-					'acml_trde_qty',
-					'acml_trd_qty',
-					'trde_qty',
-					'now_trde_qty',
-					'volume',
-					'acml_vol',
-					'acml_volum',
-					'tvol',
-					'tot_qty',
-					'trade_volume',
-				]),
+				pick(
+					row,
+					[
+						"acc_trde_qty",
+						"acc_trd_qty",
+						"acml_trde_qty",
+						"acml_trd_qty",
+						"trde_qty",
+						"now_trde_qty",
+						"volume",
+						"acml_vol",
+						"acml_volum",
+						"tvol",
+						"tot_qty",
+						"trade_volume",
+					],
+				),
 			);
 
 		const tradingValue =
@@ -1136,20 +1289,26 @@ function normalizeRankingRows(
 		const dataQualityWarnings:
 			string[] = [];
 
-		if (normalizedVolume.warning) {
+		if (
+			normalizedVolume.warning
+		) {
 			dataQualityWarnings.push(
 				normalizedVolume.warning,
 			);
 		}
 
-		const sourceRankValue = toNumber(
-			pick(row, [
-				'rank',
-				'sourceRank',
-				'kw_high_rank',
-				'rnk',
-			]),
-		);
+		const sourceRankValue =
+			toNumber(
+				pick(
+					row,
+					[
+						"rank",
+						"sourceRank",
+						"kw_high_rank",
+						"rnk",
+					],
+				),
+			);
 
 		const sourceRank =
 			sourceRankValue == null
@@ -1157,7 +1316,9 @@ function normalizeRankingRows(
 				: Math.max(
 						1,
 						Math.trunc(
-							Math.abs(sourceRankValue),
+							Math.abs(
+								sourceRankValue,
+							),
 						),
 					);
 
@@ -1167,13 +1328,14 @@ function normalizeRankingRows(
 			market,
 
 			currency:
-				market === 'KR'
-					? 'KRW'
-					: 'USD',
+				market === "KR"
+					? "KRW"
+					: "USD",
 
 			price,
 			changePercent,
-			volume: normalizedVolume.value,
+			volume:
+				normalizedVolume.value,
 			tradingValue,
 
 			rank: sourceRank,
@@ -1198,14 +1360,15 @@ function normalizeRankingRows(
 				classification.riskLevel,
 
 			recommendationEligible:
-				classification.recommendationEligible,
+				classification
+					.recommendationEligible,
 
 			dataQualityWarnings,
 
 			reason:
 				rankingReason(type),
 
-			provider: 'kiwoom',
+			provider: "kiwoom",
 			raw: row,
 		});
 	}
@@ -1219,12 +1382,15 @@ function sortRankingRows(
 ): KiwoomRankingRow[] {
 	return [...rows].sort(
 		(a, b) => {
-			if (type === 'volume') {
+			if (type === "volume") {
 				if (
 					a.volume == null &&
 					b.volume == null
 				) {
-					return a.sourceRank - b.sourceRank;
+					return (
+						a.sourceRank -
+						b.sourceRank
+					);
 				}
 
 				if (a.volume == null) {
@@ -1235,22 +1401,39 @@ function sortRankingRows(
 					return -1;
 				}
 
-				return b.volume - a.volume;
+				return (
+					b.volume -
+					a.volume
+				);
 			}
 
-			if (type === 'tradingValue') {
+			if (
+				type ===
+				"tradingValue"
+			) {
 				if (
-					a.tradingValue == null &&
-					b.tradingValue == null
+					a.tradingValue ==
+						null &&
+					b.tradingValue ==
+						null
 				) {
-					return a.sourceRank - b.sourceRank;
+					return (
+						a.sourceRank -
+						b.sourceRank
+					);
 				}
 
-				if (a.tradingValue == null) {
+				if (
+					a.tradingValue ==
+					null
+				) {
 					return 1;
 				}
 
-				if (b.tradingValue == null) {
+				if (
+					b.tradingValue ==
+					null
+				) {
 					return -1;
 				}
 
@@ -1260,71 +1443,101 @@ function sortRankingRows(
 				);
 			}
 
-			if (type === 'gainers') {
+			if (
+				type === "gainers"
+			) {
 				return (
-					(b.changePercent ??
-						Number.NEGATIVE_INFINITY) -
-					(a.changePercent ??
-						Number.NEGATIVE_INFINITY)
+					(
+						b.changePercent ??
+						Number
+							.NEGATIVE_INFINITY
+					) -
+					(
+						a.changePercent ??
+						Number
+							.NEGATIVE_INFINITY
+					)
 				);
 			}
 
-			if (type === 'losers') {
+			if (
+				type === "losers"
+			) {
 				return (
-					(a.changePercent ??
-						Number.POSITIVE_INFINITY) -
-					(b.changePercent ??
-						Number.POSITIVE_INFINITY)
+					(
+						a.changePercent ??
+						Number
+							.POSITIVE_INFINITY
+					) -
+					(
+						b.changePercent ??
+						Number
+							.POSITIVE_INFINITY
+					)
 				);
 			}
 
-			return a.sourceRank - b.sourceRank;
+			return (
+				a.sourceRank -
+				b.sourceRank
+			);
 		},
 	);
 }
 
 function applyRankingOptions(
 	rows: KiwoomRankingRow[],
-	options: KiwoomRankingOptions,
+	options:
+		KiwoomRankingOptions,
 	limit: number,
 ): KiwoomRankingRow[] {
 	const assetFilter =
-		options.assetFilter ?? 'all';
+		options.assetFilter ??
+		"all";
 
 	const filtered = rows.filter(
 		(row) => {
 			if (
-				assetFilter === 'stocks' &&
+				assetFilter ===
+					"stocks" &&
 				(
-					row.assetType !== 'STOCK' ||
+					row.assetType !==
+						"STOCK" ||
 					row.isEtp ||
 					row.isLeveraged ||
 					row.isInverse ||
 					row.isDerivative ||
-					row.riskLevel === 'HIGH'
+					row.riskLevel ===
+						"HIGH"
 				)
 			) {
 				return false;
 			}
 
 			if (
-				assetFilter === 'etp' &&
-				row.assetType !== 'ETF' &&
-				row.assetType !== 'ETN'
+				assetFilter === "etp" &&
+				row.assetType !==
+					"ETF" &&
+				row.assetType !==
+					"ETN"
 			) {
 				return false;
 			}
 
 			if (
-				options.excludeHighRisk &&
-				row.riskLevel === 'HIGH'
+				options
+					.excludeHighRisk &&
+				row.riskLevel ===
+					"HIGH"
 			) {
 				return false;
 			}
 
 			if (
-				options.recommendationEligibleOnly &&
-				!row.recommendationEligible
+				options
+					.recommendationEligibleOnly &&
+				!row
+					.recommendationEligible
 			) {
 				return false;
 			}
@@ -1335,10 +1548,12 @@ function applyRankingOptions(
 
 	return filtered
 		.slice(0, limit)
-		.map((row, index) => ({
-			...row,
-			rank: index + 1,
-		}));
+		.map(
+			(row, index) => ({
+				...row,
+				rank: index + 1,
+			}),
+		);
 }
 
 function filterByDirection(
@@ -1347,16 +1562,22 @@ function filterByDirection(
 ): KiwoomRankingRow[] {
 	return rows.filter(
 		(row) => {
-			if (type === 'gainers') {
+			if (
+				type === "gainers"
+			) {
 				return (
-					row.changePercent != null &&
+					row.changePercent !=
+						null &&
 					row.changePercent > 0
 				);
 			}
 
-			if (type === 'losers') {
+			if (
+				type === "losers"
+			) {
 				return (
-					row.changePercent != null &&
+					row.changePercent !=
+						null &&
 					row.changePercent < 0
 				);
 			}
@@ -1370,7 +1591,8 @@ function finalizeRankingRows(
 	data: Record<string, unknown>,
 	market: KiwoomMarket,
 	type: KiwoomRankingType,
-	options: KiwoomRankingOptions,
+	options:
+		KiwoomRankingOptions,
 	limit: number,
 ): KiwoomRankingRow[] {
 	const normalizedRows =
@@ -1403,22 +1625,32 @@ export async function getKiwoomRankings(
 	market: KiwoomMarket,
 	type: KiwoomRankingType,
 	limit = 30,
-	options: KiwoomRankingOptions = {},
-): Promise<KiwoomRankingRow[]> {
-	const safeLimit = Math.max(
-		1,
-		Math.min(
-			100,
-			Math.trunc(limit || 30),
-		),
-	);
+	options:
+		KiwoomRankingOptions = {},
+): Promise<
+	KiwoomRankingRow[]
+> {
+	const safeLimit =
+		Math.max(
+			1,
+			Math.min(
+				100,
+				Math.trunc(
+					limit || 30,
+				),
+			),
+		);
 
-	if (market === 'KR') {
+	if (market === "KR") {
 		const request =
-			domesticRankingRequest(type);
+			domesticRankingRequest(
+				type,
+			);
 
 		const response =
-			await kiwoomRequest(request);
+			await kiwoomRequest(
+				request,
+			);
 
 		const rows =
 			finalizeRankingRows(
@@ -1432,7 +1664,9 @@ export async function getKiwoomRankings(
 				safeLimit,
 			);
 
-		if (rows.length === 0) {
+		if (
+			rows.length === 0
+		) {
 			throw new Error(
 				`조건에 맞는 키움 랭킹 종목이 없습니다. API=${request.apiId}, market=${market}, type=${type}.`,
 			);
@@ -1447,10 +1681,15 @@ export async function getKiwoomRankings(
 	const attemptMessages:
 		string[] = [];
 
-	for (const request of requests) {
+	for (
+		const request
+		of requests
+	) {
 		try {
 			const response =
-				await kiwoomRequest(request);
+				await kiwoomRequest(
+					request,
+				);
 
 			const rows =
 				finalizeRankingRows(
@@ -1464,7 +1703,9 @@ export async function getKiwoomRankings(
 					safeLimit,
 				);
 
-			if (rows.length > 0) {
+			if (
+				rows.length > 0
+			) {
 				return rows;
 			}
 
@@ -1476,13 +1717,91 @@ export async function getKiwoomRankings(
 				`${request.apiId}/sort_tp=${String(request.body.sort_tp)}: ${
 					error instanceof Error
 						? error.message
-						: '알 수 없는 오류'
+						: "알 수 없는 오류"
 				}`,
 			);
 		}
 	}
 
 	throw new Error(
-		`미국 키움 랭킹 조회에 실패했습니다. market=${market}, type=${type}. 시도 결과: ${attemptMessages.join(' | ')}`,
+		`미국 키움 랭킹 조회에 실패했습니다. market=${market}, type=${type}. 시도 결과: ${attemptMessages.join(" | ")}`,
 	);
 }
+
+export interface KiwoomDomesticOrderInput {
+	ticker: string;
+	side: "buy" | "sell";
+	quantity: number;
+	orderType?: "market" | "limit";
+	price?: number | null;
+}
+
+export interface KiwoomDomesticOrderResult {
+	ticker: string;
+	side: "buy" | "sell";
+	quantity: number;
+	orderNo: string | null;
+	raw: KiwoomApiResponse;
+}
+
+/**
+ * 국내주식 실제 주문 전송.
+ * 기본 API ID/경로/거래구분은 환경변수로 교체할 수 있어
+ * 키움 계정별 최신 REST 규격에 맞게 조정할 수 있습니다.
+ */
+export async function placeKiwoomDomesticOrder(
+	input: KiwoomDomesticOrderInput,
+): Promise<KiwoomDomesticOrderResult> {
+	const ticker = input.ticker.trim().toUpperCase();
+	const quantity = Math.trunc(Number(input.quantity));
+	const orderType = input.orderType ?? "market";
+	const price = input.price == null ? null : Number(input.price);
+
+	if (!/^\d{6}(?:_(?:NX|AL))?$/.test(ticker)) {
+		throw new Error(`잘못된 국내 종목코드입니다: ${ticker}`);
+	}
+	if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+		throw new Error("주문 수량은 1주 이상 정수여야 합니다.");
+	}
+	if (orderType === "limit" && (!Number.isFinite(price) || Number(price) <= 0)) {
+		throw new Error("지정가 주문 가격을 확인해 주세요.");
+	}
+
+	const apiId =
+		input.side === "buy"
+			? process.env.KIWOOM_BUY_ORDER_API_ID?.trim() || "kt10000"
+			: process.env.KIWOOM_SELL_ORDER_API_ID?.trim() || "kt10001";
+	const path = process.env.KIWOOM_ORDER_PATH?.trim() || "/api/dostk/ordr";
+	const marketTradeType =
+		process.env.KIWOOM_MARKET_ORDER_TRADE_TYPE?.trim() || "3";
+	const limitTradeType =
+		process.env.KIWOOM_LIMIT_ORDER_TRADE_TYPE?.trim() || "0";
+
+	const response = await kiwoomRequest({
+		apiId,
+		path,
+		body: {
+			dmst_stex_tp:
+				process.env.KIWOOM_DOMESTIC_EXCHANGE?.trim() || "KRX",
+			stk_cd: ticker,
+			ord_qty: String(quantity),
+			ord_uv: orderType === "limit" ? String(Math.round(Number(price))) : "",
+			trde_tp: orderType === "limit" ? limitTradeType : marketTradeType,
+			cond_uv: "",
+		},
+	});
+
+	const raw = response.data as KiwoomApiResponse & Record<string, unknown>;
+	const orderNo = String(
+		raw.ord_no ?? raw.order_no ?? raw.ordNo ?? raw.orderNo ?? "",
+	).trim() || null;
+
+	return {
+		ticker,
+		side: input.side,
+		quantity,
+		orderNo,
+		raw,
+	};
+}
+

@@ -18,6 +18,7 @@ import * as naver from '../providers/naver';
 import * as finnhub from '../providers/finnhub';
 import { getKrUniverse } from '../providers/krx';
 import { providerStatus } from '../lib/config';
+import { getKiwoomChartCandles } from '../kiwoom-chart';
 import { cached, TTL } from '../lib/cache';
 import type {
   Candle,
@@ -524,7 +525,11 @@ function quotePreviousClose(q: LooseQuote, price: number): number {
   return safeNumber(q.previousClose ?? q.prevClose, price);
 }
 
-function quoteChangeAmount(q: LooseQuote, price: number, previousClose: number) {
+function quoteChangeAmount(
+  q: LooseQuote,
+  price: number,
+  previousClose: number,
+) {
   const direct = safeNumber(q.changeAmount ?? q.change, Number.NaN);
 
   if (Number.isFinite(direct)) return direct;
@@ -539,7 +544,9 @@ function quoteChangePercent(
   changeAmount: number,
 ) {
   const direct = safeNumber(
-    q.changePercent ?? q.regularMarketChangePercent ?? q.percent,
+    q.changePercent ??
+      q.regularMarketChangePercent ??
+      q.percent,
     Number.NaN,
   );
 
@@ -554,14 +561,19 @@ function defaultRating(): RatingResult {
   return scoreToRating(50);
 }
 
-function ratingFromQuote(quote: LooseQuote, entry: CatalogEntry): RatingResult {
+function ratingFromQuote(
+  quote: LooseQuote,
+  entry: CatalogEntry,
+): RatingResult {
   try {
     const scores = computeScores({
       quote,
       entry,
     } as any);
 
-    if (typeof scores === 'number') return scoreToRating(scores);
+    if (typeof scores === 'number') {
+      return scoreToRating(scores);
+    }
 
     if (typeof (scores as any)?.total === 'number') {
       return scoreToRating((scores as any).total);
@@ -577,13 +589,26 @@ function ratingFromQuote(quote: LooseQuote, entry: CatalogEntry): RatingResult {
   }
 }
 
-function toQuoteRow(entry: CatalogEntry, quote: LooseQuote): QuoteRow {
+function toQuoteRow(
+  entry: CatalogEntry,
+  quote: LooseQuote,
+): QuoteRow {
   const ticker = cleanTicker((entry as any).ticker);
-  const marketValue = normalizeMarketValue((entry as any).market, ticker);
-  const currency = normalizeCurrencyValue((entry as any).currency, marketValue);
+  const marketValue = normalizeMarketValue(
+    (entry as any).market,
+    ticker,
+  );
+  const currency = normalizeCurrencyValue(
+    (entry as any).currency,
+    marketValue,
+  );
   const price = quotePrice(quote);
   const previousClose = quotePreviousClose(quote, price);
-  const changeAmount = quoteChangeAmount(quote, price, previousClose);
+  const changeAmount = quoteChangeAmount(
+    quote,
+    price,
+    previousClose,
+  );
   const changePercent = quoteChangePercent(
     quote,
     price,
@@ -592,11 +617,16 @@ function toQuoteRow(entry: CatalogEntry, quote: LooseQuote): QuoteRow {
   );
   const volume = safeNumber(quote.volume, 0);
   const tradingValue =
-    safeNumber(quote.tradingValue, 0) || Math.max(price * volume, 0);
+    safeNumber(quote.tradingValue, 0) ||
+    Math.max(price * volume, 0);
 
   return {
     ticker,
-    name: String((entry as any).name ?? quote.name ?? ticker),
+    name: String(
+      (entry as any).name ??
+        quote.name ??
+        ticker,
+    ),
     market: String(marketValue),
     currency: String(currency),
     assetType: classifyAssetType(entry),
@@ -609,72 +639,191 @@ function toQuoteRow(entry: CatalogEntry, quote: LooseQuote): QuoteRow {
     low: safeNumber(quote.low, 0),
     open: safeNumber(quote.open, 0),
     previousClose,
-    updatedAt: String(quote.updatedAt ?? new Date().toISOString()),
+    updatedAt: String(
+      quote.updatedAt ??
+        new Date().toISOString(),
+    ),
     rating: ratingFromQuote(quote, entry),
   };
 }
 
-function sampleQuoteFor(entry: CatalogEntry): LooseQuote {
-  const ticker = cleanTicker((entry as any).ticker);
+function sampleQuoteFor(
+  entry: CatalogEntry,
+): LooseQuote {
+  const ticker = cleanTicker(
+    (entry as any).ticker,
+  );
 
   const base =
     isKrTicker(ticker)
-      ? 5000 + ((Number(ticker.slice(-3)) || 100) * 100)
-      : 20 + ticker.charCodeAt(0) * 3;
+      ? 5000 +
+        ((Number(ticker.slice(-3)) || 100) *
+          100)
+      : 20 +
+        ticker.charCodeAt(0) *
+          3;
 
-  const seed = [...ticker].reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  const changePercent = Number((((seed % 1800) - 900) / 100).toFixed(2));
-  const price = Math.max(1, Math.round(base * (1 + changePercent / 100)));
-  const previousClose = price / (1 + changePercent / 100);
-  const volume = 100_000 + seed * 1377;
+  const seed = [...ticker].reduce(
+    (sum, char) =>
+      sum +
+      char.charCodeAt(0),
+    0,
+  );
+
+  const changePercent = Number(
+    (((seed % 1800) - 900) / 100).toFixed(2),
+  );
+
+  const price = Math.max(
+    1,
+    Math.round(
+      base *
+        (1 +
+          changePercent /
+            100),
+    ),
+  );
+
+  const previousClose =
+    price /
+    (1 +
+      changePercent /
+        100);
+
+  const volume =
+    100_000 +
+    seed *
+      1377;
 
   return {
     ticker,
-    name: String((entry as any).name ?? ticker),
+    name: String(
+      (entry as any).name ??
+        ticker,
+    ),
     price,
     previousClose,
-    changeAmount: price - previousClose,
+    changeAmount:
+      price -
+      previousClose,
     changePercent,
     volume,
-    tradingValue: price * volume,
+    tradingValue:
+      price *
+      volume,
     open: previousClose,
-    high: Math.max(price, previousClose) * 1.02,
-    low: Math.min(price, previousClose) * 0.98,
-    updatedAt: new Date().toISOString(),
+    high:
+      Math.max(
+        price,
+        previousClose,
+      ) *
+      1.02,
+    low:
+      Math.min(
+        price,
+        previousClose,
+      ) *
+      0.98,
+    updatedAt:
+      new Date().toISOString(),
   };
 }
 
-async function tryQuoteProvider(entry: CatalogEntry): Promise<LooseQuote | null> {
+async function tryQuoteProvider(
+  entry: CatalogEntry,
+): Promise<LooseQuote | null> {
   const providers = providerStatus();
-  const marketValue = normalizeMarketValue((entry as any).market, (entry as any).ticker);
 
-  const attempts: Array<() => Promise<unknown>> = [];
+  const marketValue =
+    normalizeMarketValue(
+      (entry as any).market,
+      (entry as any).ticker,
+    );
+
+  const attempts: Array<
+    () => Promise<unknown>
+  > = [];
 
   if (marketValue === 'KR') {
-    attempts.push(() => (naver as any).getQuote?.(entry));
-    attempts.push(() => (naver as any).quote?.(entry));
+    attempts.push(
+      () =>
+        (naver as any).getQuote?.(
+          entry,
+        ),
+    );
+
+    attempts.push(
+      () =>
+        (naver as any).quote?.(
+          entry,
+        ),
+    );
   }
 
-  attempts.push(() => (yahoo as any).getQuote?.(entry));
-  attempts.push(() => (yahoo as any).quote?.(entry));
+  attempts.push(
+    () =>
+      (yahoo as any).getQuote?.(
+        entry,
+      ),
+  );
+
+  attempts.push(
+    () =>
+      (yahoo as any).quote?.(
+        entry,
+      ),
+  );
 
   if (providers.finnhub) {
-    attempts.push(() => (finnhub as any).getQuote?.(entry));
-    attempts.push(() => (finnhub as any).quote?.(entry));
+    attempts.push(
+      () =>
+        (finnhub as any).getQuote?.(
+          entry,
+        ),
+    );
+
+    attempts.push(
+      () =>
+        (finnhub as any).quote?.(
+          entry,
+        ),
+    );
   }
 
-  attempts.push(() => (market as any).getQuote?.((entry as any).ticker));
-  attempts.push(() => (market as any).quote?.((entry as any).ticker));
+  attempts.push(
+    () =>
+      (market as any).getQuote?.(
+        (entry as any).ticker,
+      ),
+  );
+
+  attempts.push(
+    () =>
+      (market as any).quote?.(
+        (entry as any).ticker,
+      ),
+  );
 
   for (const attempt of attempts) {
     try {
-      const result = await attempt();
+      const result =
+        await attempt();
 
-      if (result && typeof result === 'object') {
-        const quote = result as LooseQuote;
-        const price = quotePrice(quote);
+      if (
+        result &&
+        typeof result === 'object'
+      ) {
+        const quote =
+          result as LooseQuote;
 
-        if (price > 0 || quote.changePercent != null || quote.volume != null) {
+        const price =
+          quotePrice(quote);
+
+        if (
+          price > 0 ||
+          quote.changePercent != null ||
+          quote.volume != null
+        ) {
           return quote;
         }
       }
@@ -690,22 +839,109 @@ async function tryCandlesProvider(
   entry: CatalogEntry,
   timeframe: Timeframe,
 ): Promise<Candle[]> {
-  const attempts: Array<() => Promise<unknown>> = [
-    () => (yahoo as any).getCandles?.(entry, timeframe),
-    () => (yahoo as any).candles?.(entry, timeframe),
-    () => (naver as any).getCandles?.(entry, timeframe),
-    () => (naver as any).candles?.(entry, timeframe),
-    () => (finnhub as any).getCandles?.(entry, timeframe),
-    () => (finnhub as any).candles?.(entry, timeframe),
-    () => (market as any).getCandles?.((entry as any).ticker, timeframe),
-    () => (market as any).candles?.((entry as any).ticker, timeframe),
+  const ticker = cleanTicker(
+    (entry as any).ticker,
+  );
+
+  const marketValue =
+    normalizeMarketValue(
+      (entry as any).market,
+      ticker,
+    );
+
+  const timeframeText =
+    String(
+      timeframe ??
+        '1D',
+    );
+
+  /*
+   * 국내 종목은 키움증권 차트 API를 가장 먼저 사용합니다.
+   * kiwoom-chart.ts가 cont-yn / next-key를 끝까지 따라가므로
+   * 일봉과 전체 차트는 상장일부터 현재까지의 데이터를 받을 수 있습니다.
+   */
+  if (marketValue === 'KR') {
+    try {
+      const kiwoomRows =
+        await getKiwoomChartCandles(
+          ticker,
+          timeframeText,
+        );
+
+      if (
+        kiwoomRows.length >= 2
+      ) {
+        return kiwoomRows as Candle[];
+      }
+    } catch (error) {
+      console.error(
+        `kiwoom chart provider failed: ticker=${ticker}, timeframe=${timeframeText}`,
+        error,
+      );
+    }
+  }
+
+  const attempts: Array<
+    () => Promise<unknown>
+  > = [
+    () =>
+      (yahoo as any).getCandles?.(
+        entry,
+        timeframe,
+      ),
+
+    () =>
+      (yahoo as any).candles?.(
+        entry,
+        timeframe,
+      ),
+
+    () =>
+      (naver as any).getCandles?.(
+        entry,
+        timeframe,
+      ),
+
+    () =>
+      (naver as any).candles?.(
+        entry,
+        timeframe,
+      ),
+
+    () =>
+      (finnhub as any).getCandles?.(
+        entry,
+        timeframe,
+      ),
+
+    () =>
+      (finnhub as any).candles?.(
+        entry,
+        timeframe,
+      ),
+
+    () =>
+      (market as any).getCandles?.(
+        (entry as any).ticker,
+        timeframe,
+      ),
+
+    () =>
+      (market as any).candles?.(
+        (entry as any).ticker,
+        timeframe,
+      ),
   ];
 
   for (const attempt of attempts) {
     try {
-      const result = await attempt();
+      const result =
+        await attempt();
 
-      if (Array.isArray(result) && result.length > 0) {
+      if (
+        Array.isArray(result) &&
+        result.length >= 2
+      ) {
         return result as Candle[];
       }
     } catch {
@@ -713,49 +949,54 @@ async function tryCandlesProvider(
     }
   }
 
-  return buildFallbackCandles(entry);
+  /*
+   * 실제 금융 차트에 가짜 봉을 표시하지 않습니다.
+   * 제공처가 모두 실패하면 빈 배열을 반환합니다.
+   */
+  return [];
 }
 
-function buildFallbackCandles(entry: CatalogEntry): Candle[] {
-  const quote = sampleQuoteFor(entry);
-  const now = Date.now();
-  const base = quotePrice(quote);
-  const candles: Candle[] = [];
+async function tryProfileProvider(
+  entry: CatalogEntry,
+): Promise<CompanyProfile> {
+  const attempts: Array<
+    () => Promise<unknown>
+  > = [
+    () =>
+      (finnhub as any).getCompanyProfile?.(
+        entry,
+      ),
 
-  for (let i = 59; i >= 0; i -= 1) {
-    const wave = Math.sin(i / 5) * 0.015;
-    const close = Math.max(1, base * (1 + wave));
-    const open = close * (1 - wave / 3);
-    const high = Math.max(open, close) * 1.01;
-    const low = Math.min(open, close) * 0.99;
+    () =>
+      (finnhub as any).companyProfile?.(
+        entry,
+      ),
 
-    candles.push({
-      time: new Date(now - i * 86_400_000).toISOString(),
-      open,
-      high,
-      low,
-      close,
-      volume: safeNumber(quote.volume, 100_000) + i * 1000,
-    } as Candle);
-  }
+    () =>
+      (yahoo as any).getCompanyProfile?.(
+        entry,
+      ),
 
-  return candles;
-}
+    () =>
+      (yahoo as any).companyProfile?.(
+        entry,
+      ),
 
-async function tryProfileProvider(entry: CatalogEntry): Promise<CompanyProfile> {
-  const attempts: Array<() => Promise<unknown>> = [
-    () => (finnhub as any).getCompanyProfile?.(entry),
-    () => (finnhub as any).companyProfile?.(entry),
-    () => (yahoo as any).getCompanyProfile?.(entry),
-    () => (yahoo as any).companyProfile?.(entry),
-    () => getSampleCompanyProfile((entry as any).ticker),
+    () =>
+      getSampleCompanyProfile(
+        (entry as any).ticker,
+      ),
   ];
 
   for (const attempt of attempts) {
     try {
-      const result = await attempt();
+      const result =
+        await attempt();
 
-      if (result && typeof result === 'object') {
+      if (
+        result &&
+        typeof result === 'object'
+      ) {
         return result as CompanyProfile;
       }
     } catch {
@@ -764,63 +1005,130 @@ async function tryProfileProvider(entry: CatalogEntry): Promise<CompanyProfile> 
   }
 
   return {
-    ticker: cleanTicker((entry as any).ticker),
-    name: String((entry as any).name ?? (entry as any).ticker),
-    market: String((entry as any).market ?? ''),
-    currency: String((entry as any).currency ?? ''),
-    description: '기업 정보를 확인 중입니다.',
+    ticker: cleanTicker(
+      (entry as any).ticker,
+    ),
+
+    name: String(
+      (entry as any).name ??
+        (entry as any).ticker,
+    ),
+
+    market: String(
+      (entry as any).market ??
+        '',
+    ),
+
+    currency: String(
+      (entry as any).currency ??
+        '',
+    ),
+
+    description:
+      '기업 정보를 확인 중입니다.',
+
     sector: '',
     industry: '',
     website: '',
   } as CompanyProfile;
 }
 
-async function buildKrUniverseEntries(): Promise<CatalogEntry[]> {
+async function buildKrUniverseEntries(): Promise<
+  CatalogEntry[]
+> {
   try {
-    const rows = await getKrUniverse();
+    const rows =
+      await getKrUniverse();
 
-    if (!Array.isArray(rows)) return [];
+    if (!Array.isArray(rows)) {
+      return [];
+    }
 
     return rows
       .map((row: any) => {
-        const ticker = cleanTicker(row.ticker ?? row.code ?? row.symbol);
-        const name = String(row.name ?? row.companyName ?? ticker);
+        const ticker =
+          cleanTicker(
+            row.ticker ??
+              row.code ??
+              row.symbol,
+          );
 
-        if (!ticker) return null;
+        const name =
+          String(
+            row.name ??
+              row.companyName ??
+              ticker,
+          );
 
-        return createEntry(ticker, name, 'KR' as Market, 'KRW' as Currency, [
+        if (!ticker) {
+          return null;
+        }
+
+        return createEntry(
+          ticker,
           name,
-        ]);
+          'KR' as Market,
+          'KRW' as Currency,
+          [name],
+        );
       })
-      .filter((entry): entry is CatalogEntry => Boolean(entry));
+      .filter(
+        (
+          entry,
+        ): entry is CatalogEntry =>
+          Boolean(entry),
+      );
   } catch {
     return [];
   }
 }
 
 export class MarketDataService {
-  static async search(q: string, limit = 80): Promise<SearchResult[]> {
-    const query = String(q ?? '').trim();
+  static async search(
+    q: string,
+    limit = 80,
+  ): Promise<SearchResult[]> {
+    const query =
+      String(
+        q ??
+          '',
+      ).trim();
 
-    const aliasEntries = Object.entries(EXTRA_ALIASES).map(([, value]) =>
-      createEntry(
-        value.ticker,
-        value.name,
-        value.market,
-        value.currency,
-        value.aliases,
-      ),
-    );
+    const aliasEntries =
+      Object.entries(
+        EXTRA_ALIASES,
+      ).map(
+        (
+          [
+            ,
+            value,
+          ],
+        ) =>
+          createEntry(
+            value.ticker,
+            value.name,
+            value.market,
+            value.currency,
+            value.aliases,
+          ),
+      );
 
-    const entries = dedupeEntries([
-      ...catalogArray(),
-      ...aliasEntries,
-      ...(query.length >= 2 ? await buildKrUniverseEntries() : []),
-    ]);
+    const entries =
+      dedupeEntries([
+        ...catalogArray(),
+
+        ...aliasEntries,
+
+        ...(query.length >= 2
+          ? await buildKrUniverseEntries()
+          : []),
+      ]);
 
     for (const entry of entries) {
       try {
-        registerDynamicEntry(entry);
+        registerDynamicEntry(
+          entry,
+        );
       } catch {
         // Dynamic registration is optional.
       }
@@ -829,109 +1137,269 @@ export class MarketDataService {
     const scored = entries
       .map((entry) => ({
         entry,
-        score: searchScore(entry, query),
-      }))
-      .filter((item) => (query ? item.score > 0 : true))
-      .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
 
-        return String((a.entry as any).ticker).localeCompare(
-          String((b.entry as any).ticker),
+        score:
+          searchScore(
+            entry,
+            query,
+          ),
+      }))
+      .filter(
+        (item) =>
+          query
+            ? item.score > 0
+            : true,
+      )
+      .sort((a, b) => {
+        if (
+          b.score !==
+          a.score
+        ) {
+          return (
+            b.score -
+            a.score
+          );
+        }
+
+        return String(
+          (a.entry as any).ticker,
+        ).localeCompare(
+          String(
+            (b.entry as any).ticker,
+          ),
         );
       })
-      .slice(0, limit)
-      .map((item) => toSearchResult(item.entry));
+      .slice(
+        0,
+        limit,
+      )
+      .map(
+        (item) =>
+          toSearchResult(
+            item.entry,
+          ),
+      );
 
     return scored;
   }
 
-  static async getQuote(ticker: string): Promise<Quote> {
-    const entry = resolveEntry(ticker);
+  static async getQuote(
+    ticker: string,
+  ): Promise<Quote> {
+    const entry =
+      resolveEntry(
+        ticker,
+      );
 
-    return cached(`quote:${cleanTicker(ticker)}`, TTL.quote, async () => {
-      const providerQuote = await tryQuoteProvider(entry);
-      const quote = providerQuote ?? sampleQuoteFor(entry);
+    return cached(
+      `quote:${cleanTicker(ticker)}`,
 
-      return {
-        ...quote,
-        ticker: cleanTicker((entry as any).ticker),
-        name: String((entry as any).name ?? (entry as any).ticker),
-      } as Quote;
-    });
+      TTL.quote,
+
+      async () => {
+        const providerQuote =
+          await tryQuoteProvider(
+            entry,
+          );
+
+        const quote =
+          providerQuote ??
+          sampleQuoteFor(
+            entry,
+          );
+
+        return {
+          ...quote,
+
+          ticker:
+            cleanTicker(
+              (entry as any).ticker,
+            ),
+
+          name: String(
+            (entry as any).name ??
+              (entry as any).ticker,
+          ),
+        } as Quote;
+      },
+    );
   }
 
-  static async getQuoteRow(ticker: string): Promise<QuoteRow | null> {
-    const entry = resolveEntry(ticker);
+  static async getQuoteRow(
+    ticker: string,
+  ): Promise<QuoteRow | null> {
+    const entry =
+      resolveEntry(
+        ticker,
+      );
 
     try {
-      const quote = await this.getQuote(ticker);
+      const quote =
+        await this.getQuote(
+          ticker,
+        );
 
-      return toQuoteRow(entry, quote as LooseQuote);
+      return toQuoteRow(
+        entry,
+        quote as LooseQuote,
+      );
     } catch {
       try {
-        return toQuoteRow(entry, sampleQuoteFor(entry));
+        return toQuoteRow(
+          entry,
+          sampleQuoteFor(
+            entry,
+          ),
+        );
       } catch {
         return null;
       }
     }
   }
 
-  static async getQuotes(tickers: string[]): Promise<QuoteRow[]> {
-    const rows = await Promise.all(
-      tickers.map((ticker) => this.getQuoteRow(ticker)),
-    );
+  static async getQuotes(
+    tickers: string[],
+  ): Promise<QuoteRow[]> {
+    const rows =
+      await Promise.all(
+        tickers.map(
+          (ticker) =>
+            this.getQuoteRow(
+              ticker,
+            ),
+        ),
+      );
 
-    return rows.filter((row): row is QuoteRow => Boolean(row));
+    return rows.filter(
+      (
+        row,
+      ): row is QuoteRow =>
+        Boolean(row),
+    );
   }
 
   static async getCandles(
     ticker: string,
-    timeframe: Timeframe = '1D' as Timeframe,
+    timeframe: Timeframe =
+      '1D' as Timeframe,
   ): Promise<Candle[]> {
-    const entry = resolveEntry(ticker);
+    const entry =
+      resolveEntry(
+        ticker,
+      );
 
     return cached(
       `candles:${cleanTicker(ticker)}:${String(timeframe)}`,
-      TTL.candles ?? TTL.quote,
-      async () => tryCandlesProvider(entry, timeframe),
+
+      TTL.candles ??
+        TTL.quote,
+
+      async () =>
+        tryCandlesProvider(
+          entry,
+          timeframe,
+        ),
     );
   }
 
-  static async getCompanyProfile(ticker: string): Promise<CompanyProfile> {
-    const entry = resolveEntry(ticker);
+  static async getCompanyProfile(
+    ticker: string,
+  ): Promise<CompanyProfile> {
+    const entry =
+      resolveEntry(
+        ticker,
+      );
 
-    return cached(`company:${cleanTicker(ticker)}`, TTL.profile ?? TTL.quote, async () =>
-      tryProfileProvider(entry),
+    return cached(
+      `company:${cleanTicker(ticker)}`,
+
+      TTL.profile ??
+        TTL.quote,
+
+      async () =>
+        tryProfileProvider(
+          entry,
+        ),
     );
   }
 
-  static async getProfile(ticker: string): Promise<CompanyProfile> {
-    return this.getCompanyProfile(ticker);
+  static async getProfile(
+    ticker: string,
+  ): Promise<CompanyProfile> {
+    return this.getCompanyProfile(
+      ticker,
+    );
   }
 
-  static async getRating(ticker: string): Promise<RatingResult> {
-    const quote = await this.getQuoteRow(ticker);
+  static async getRating(
+    ticker: string,
+  ): Promise<RatingResult> {
+    const quote =
+      await this.getQuoteRow(
+        ticker,
+      );
 
-    return quote?.rating ?? defaultRating();
+    return (
+      quote?.rating ??
+      defaultRating()
+    );
   }
 
-  static async getCatalogEntry(ticker: string): Promise<CatalogEntry> {
-    return resolveEntry(ticker);
+  static async getCatalogEntry(
+    ticker: string,
+  ): Promise<CatalogEntry> {
+    return resolveEntry(
+      ticker,
+    );
   }
 
-  static async getUniverse(marketValue?: 'ALL' | 'KR' | 'US'): Promise<SearchResult[]> {
-    const entries = dedupeEntries([...catalogArray(), ...(await buildKrUniverseEntries())]);
+  static async getUniverse(
+    marketValue?:
+      | 'ALL'
+      | 'KR'
+      | 'US',
+  ): Promise<SearchResult[]> {
+    const entries =
+      dedupeEntries([
+        ...catalogArray(),
 
-    const filtered = entries.filter((entry) => {
-      if (!marketValue || marketValue === 'ALL') return true;
+        ...(await buildKrUniverseEntries()),
+      ]);
 
-      const ticker = cleanTicker((entry as any).ticker);
-      const entryMarket = normalizeMarketValue((entry as any).market, ticker);
+    const filtered =
+      entries.filter(
+        (entry) => {
+          if (
+            !marketValue ||
+            marketValue ===
+              'ALL'
+          ) {
+            return true;
+          }
 
-      return String(entryMarket) === marketValue;
-    });
+          const ticker =
+            cleanTicker(
+              (entry as any).ticker,
+            );
 
-    return filtered.map(toSearchResult);
+          const entryMarket =
+            normalizeMarketValue(
+              (entry as any).market,
+              ticker,
+            );
+
+          return (
+            String(
+              entryMarket,
+            ) ===
+            marketValue
+          );
+        },
+      );
+
+    return filtered.map(
+      toSearchResult,
+    );
   }
 }
 
