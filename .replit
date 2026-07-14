@@ -29,7 +29,7 @@ externalPort = 3000
 [userenv]
 
 [userenv.shared]
-KIWOOM_BASE_URL = "http://158.247.235.32:3000/kiwoom"
+KIWOOM_BASE_URL = "https://lsj119.duckdns.org/kiwoom"
 SUPABASE_ANON_KEY = "sb_publishable_l5iOTxTerk7gv3eDYouXcg_Q-YmVsZU"
 SUPABASE_URL = "https://bawcbkoyovbeajkrnduq.supabase.co"
 VITE_SUPABASE_ANON_KEY = "sb_publishable_l5iOTxTerk7gv3eDYouXcg_Q-YmVsZU"

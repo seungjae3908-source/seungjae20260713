@@ -5932,6 +5932,19 @@ import { Router as Router6 } from "express";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path2 from "node:path";
 var router6 = Router6();
+var liveDataCache = /* @__PURE__ */ new Map();
+async function withLiveCache(key, ttlMs, loader) {
+  const cached2 = liveDataCache.get(key);
+  if (cached2 && cached2.expiresAt > Date.now()) return cached2.value;
+  const value = await loader();
+  liveDataCache.set(key, { expiresAt: Date.now() + ttlMs, value });
+  if (liveDataCache.size > 300) {
+    for (const [cacheKey, entry] of liveDataCache) {
+      if (entry.expiresAt <= Date.now()) liveDataCache.delete(cacheKey);
+    }
+  }
+  return value;
+}
 router6.get("/server-ip", async (_req, res) => {
   const providers = [
     "https://api.ipify.org?format=json",
@@ -6180,6 +6193,25 @@ async function fetchAllFilings(ticker) {
 function metricRow(rows, patterns) {
   return rows.find((cells) => patterns.some((pattern) => pattern.test(cells[0] ?? "")));
 }
+function financialNumber(value) {
+  if (value == null) return null;
+  const raw = String(value).replace(/&#40;|\$#40;|#40;/gi, "(").replace(/&#41;|\$#41;|#41;/gi, ")").replace(/&nbsp;|&#160;/gi, " ").replace(/,/g, "").replace(/%/g, "").trim();
+  if (!raw || raw === "-" || raw === "N/A") return null;
+  const negative = /^\(.*\)$/.test(raw);
+  const normalized = raw.replace(/[()]/g, "").replace(/[^0-9+\-.]/g, "");
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed === 0) return null;
+  return negative ? -Math.abs(parsed) : parsed;
+}
+function periodIsAvailable(period) {
+  const clean = period.replace(/\(E\)/gi, "").replace(/[^0-9.]/g, "");
+  const match = clean.match(/^(20\d{2})(?:\.(\d{2}))?/);
+  if (!match) return true;
+  const year = Number(match[1]);
+  const month = Number(match[2] ?? 12);
+  const now = /* @__PURE__ */ new Date();
+  return year < now.getFullYear() || year === now.getFullYear() && month <= now.getMonth() + 1;
+}
 function buildNaverFinancialRows(html) {
   const table = financeTableRows(html);
   const periodCells = table.find((cells) => cells.filter((cell) => /^20\d{2}\.\d{2}/.test(cell)).length >= 4) ?? [];
@@ -6192,6 +6224,11 @@ function buildNaverFinancialRows(html) {
     assets: [/^자산총계/],
     liabilities: [/^부채총계/],
     equity: [/^자본총계/],
+    capitalStock: [/^자본금/],
+    cash: [/^현금및현금성자산/, /^현금 및 현금성자산/],
+    operatingCashFlow: [/^영업활동.*현금흐름/],
+    investingCashFlow: [/^투자활동.*현금흐름/],
+    financingCashFlow: [/^재무활동.*현금흐름/],
     roe: [/^ROE/],
     per: [/^PER/],
     pbr: [/^PBR/]
@@ -6199,15 +6236,20 @@ function buildNaverFinancialRows(html) {
   const metricRows = Object.fromEntries(
     Object.entries(definitions).map(([key, patterns]) => [key, metricRow(table, [...patterns])])
   );
-  const valuesAt = (key, index) => financeNumber(metricRows[key]?.[index + 1]);
-  const rows = periods.map((period, index) => ({
-    period: period.replace(/\(E\)/g, ""),
+  const valuesAt = (key, index) => financialNumber(metricRows[key]?.[index + 1]);
+  const rows = periods.filter(periodIsAvailable).map((period, index) => ({
+    period: period.replace(/&#40;|\$#40;|#40;/gi, "(").replace(/&#41;|\$#41;|#41;/gi, ")").replace(/\(E\)/g, "").replace(/<[^>]+>/g, "").trim(),
     revenue: valuesAt("revenue", index),
     operatingIncome: valuesAt("operatingIncome", index),
     netIncome: valuesAt("netIncome", index),
     assets: valuesAt("assets", index),
     liabilities: valuesAt("liabilities", index),
-    equity: valuesAt("equity", index)
+    equity: valuesAt("equity", index),
+    capitalStock: valuesAt("capitalStock", index),
+    cash: valuesAt("cash", index),
+    operatingCashFlow: valuesAt("operatingCashFlow", index),
+    investingCashFlow: valuesAt("investingCashFlow", index),
+    financingCashFlow: valuesAt("financingCashFlow", index)
   }));
   const annual = rows.filter((row) => /\.12/.test(row.period)).slice(0, 5);
   const quarterly = rows.filter((row) => !/\.12/.test(row.period)).slice(0, 6);
@@ -6220,8 +6262,11 @@ function buildNaverFinancialRows(html) {
     ratios: {
       roe: valuesAt("roe", latestIndex),
       per: valuesAt("per", latestIndex),
-      pbr: valuesAt("pbr", latestIndex)
-    }
+      pbr: valuesAt("pbr", latestIndex),
+      debtRatio: annual[0]?.liabilities != null && annual[0]?.equity ? annual[0].liabilities / annual[0].equity * 100 : null
+    },
+    source: "NAVER_FINANCE",
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
 }
 async function fetchNaverFinancials(ticker) {
@@ -6232,6 +6277,68 @@ async function fetchNaverFinancials(ticker) {
   if (!response.ok) throw new Error("NAVER_FINANCIAL_HTTP_" + response.status);
   return buildNaverFinancialRows(await response.text());
 }
+var DART_REPORTS = [
+  { code: "11013", month: "03", label: "1\uBD84\uAE30" },
+  { code: "11012", month: "06", label: "\uBC18\uAE30" },
+  { code: "11014", month: "09", label: "3\uBD84\uAE30" },
+  { code: "11011", month: "12", label: "\uC5F0\uAC04" }
+];
+function dartAccountValue(list, patterns) {
+  const candidates = list.filter((item) => patterns.some((pattern) => pattern.test(`${item?.account_id ?? ""} ${item?.account_nm ?? ""}`)));
+  const consolidated = candidates.find((item) => String(item?.fs_div ?? "").toUpperCase() === "CFS") ?? candidates[0];
+  return financialNumber(consolidated?.thstrm_amount ?? consolidated?.thstrm_add_amount);
+}
+async function fetchDartFinancials(ticker) {
+  const apiKey = String(process.env.DART_API_KEY ?? "").trim();
+  if (!apiKey) throw new Error("DART_API_KEY_MISSING");
+  const corpCode = await getDartCorpCode(ticker, apiKey);
+  if (!corpCode) throw new Error("DART_CORP_CODE_NOT_FOUND");
+  const now = /* @__PURE__ */ new Date();
+  const annual = [];
+  const quarterly = [];
+  for (let year = now.getFullYear(); year >= now.getFullYear() - 5; year -= 1) {
+    for (const report of DART_REPORTS) {
+      const periodEnd = new Date(year, Number(report.month), 0, 23, 59, 59);
+      if (periodEnd.getTime() > now.getTime()) continue;
+      const query = new URLSearchParams({ crtfc_key: apiKey, corp_code: corpCode, bsns_year: String(year), reprt_code: report.code, fs_div: "CFS" });
+      const response = await fetch(`https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json?${query.toString()}`);
+      if (!response.ok) continue;
+      const data = await response.json();
+      if (data?.status !== "000" || !Array.isArray(data?.list)) continue;
+      const list = data.list;
+      const row = {
+        period: `${year}.${report.month}`,
+        periodLabel: `${year}\uB144 ${report.label}`,
+        revenue: dartAccountValue(list, [/Revenue/i, /매출액/, /영업수익/]),
+        operatingIncome: dartAccountValue(list, [/OperatingIncomeLoss/i, /영업이익/]),
+        netIncome: dartAccountValue(list, [/ProfitLoss/i, /당기순이익/, /분기순이익/, /반기순이익/]),
+        assets: dartAccountValue(list, [/^ifrs-full_Assets$/i, /자산총계/]),
+        liabilities: dartAccountValue(list, [/^ifrs-full_Liabilities$/i, /부채총계/]),
+        equity: dartAccountValue(list, [/Equity/i, /자본총계/]),
+        capitalStock: dartAccountValue(list, [/IssuedCapital/i, /자본금/]),
+        cash: dartAccountValue(list, [/CashAndCashEquivalents/i, /현금및현금성자산/, /현금 및 현금성자산/]),
+        operatingCashFlow: dartAccountValue(list, [/CashFlowsFromUsedInOperatingActivities/i, /영업활동.*현금흐름/]),
+        investingCashFlow: dartAccountValue(list, [/CashFlowsFromUsedInInvestingActivities/i, /투자활동.*현금흐름/]),
+        financingCashFlow: dartAccountValue(list, [/CashFlowsFromUsedInFinancingActivities/i, /재무활동.*현금흐름/])
+      };
+      if (!Object.values(row).some((value) => typeof value === "number" && Number.isFinite(value))) continue;
+      if (report.code === "11011") annual.push(row);
+      else quarterly.push(row);
+    }
+  }
+  annual.sort((a, b) => String(b.period).localeCompare(String(a.period)));
+  quarterly.sort((a, b) => String(b.period).localeCompare(String(a.period)));
+  const latest = annual[0] ?? quarterly[0];
+  return {
+    annual: annual.slice(0, 5),
+    yearly: annual.slice(0, 5),
+    quarterly: quarterly.slice(0, 8),
+    quarters: quarterly.slice(0, 8),
+    ratios: { debtRatio: latest?.liabilities != null && latest?.equity ? latest.liabilities / latest.equity * 100 : null },
+    source: "OPEN_DART",
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
 function secFactUnits(data, tags) {
   for (const tag of tags) {
     const units = data?.facts?.["us-gaap"]?.[tag]?.units;
@@ -6241,42 +6348,66 @@ function secFactUnits(data, tags) {
   }
   return [];
 }
-function latestSecValue(data, tags, fy, forms) {
-  const values = secFactUnits(data, tags).filter((item) => Number(item?.fy) === fy && forms.includes(String(item?.form ?? ""))).sort((a, b) => String(b?.filed ?? "").localeCompare(String(a?.filed ?? "")));
-  return Number(values[0]?.val ?? 0) || 0;
+function secFactValueFor(data, tags, end, form) {
+  for (const tag of tags) {
+    const matches = secFactUnits(data, [tag]).filter((item) => String(item?.end ?? "") === end && String(item?.form ?? "") === form).sort((a, b) => String(b?.filed ?? "").localeCompare(String(a?.filed ?? "")));
+    const value = financialNumber(matches[0]?.val);
+    if (value != null) return value;
+  }
+  return null;
 }
 async function fetchSecFinancials(ticker) {
   const cik = await getSecCik(ticker);
-  if (!cik) return { annual: [], quarterly: [], ratios: {} };
-  const response = await fetch(
-    `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`,
-    { headers: secHeaders() }
-  );
+  if (!cik) return { annual: [], quarterly: [], ratios: {}, source: "SEC_COMPANYFACTS", updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  const response = await fetch(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, { headers: secHeaders() });
   if (!response.ok) throw new Error("SEC_COMPANYFACTS_HTTP_" + response.status);
   const data = await response.json();
-  const all = secFactUnits(data, ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"]);
-  const years = [...new Set(all.map((item) => Number(item?.fy)).filter(Number.isFinite))].sort((a, b) => b - a).slice(0, 5);
+  const revenueTags = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"];
+  const seed = secFactUnits(data, revenueTags).filter((item) => ["10-K", "10-Q"].includes(String(item?.form ?? "")) && item?.end);
+  const periods = [...new Map(seed.map((item) => [`${item.form}:${item.end}`, { end: String(item.end), form: String(item.form), fy: Number(item.fy), fp: String(item.fp ?? "") }])).values()].filter((item) => Date.parse(item.end) <= Date.now()).sort((a, b) => b.end.localeCompare(a.end));
   const tags = {
-    revenue: ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"],
+    revenue: revenueTags,
     operatingIncome: ["OperatingIncomeLoss"],
     netIncome: ["NetIncomeLoss", "ProfitLoss"],
     assets: ["Assets"],
     liabilities: ["Liabilities"],
-    equity: ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]
+    equity: ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
+    capitalStock: ["CommonStocksIncludingAdditionalPaidInCapital", "CommonStockValue", "AdditionalPaidInCapital"],
+    cash: ["CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+    operatingCashFlow: ["NetCashProvidedByUsedInOperatingActivities"],
+    investingCashFlow: ["NetCashProvidedByUsedInInvestingActivities"],
+    financingCashFlow: ["NetCashProvidedByUsedInFinancingActivities"]
   };
-  const annual = years.map((fy) => ({
-    period: String(fy),
-    revenue: latestSecValue(data, tags.revenue, fy, ["10-K"]),
-    operatingIncome: latestSecValue(data, tags.operatingIncome, fy, ["10-K"]),
-    netIncome: latestSecValue(data, tags.netIncome, fy, ["10-K"]),
-    assets: latestSecValue(data, tags.assets, fy, ["10-K"]),
-    liabilities: latestSecValue(data, tags.liabilities, fy, ["10-K"]),
-    equity: latestSecValue(data, tags.equity, fy, ["10-K"])
-  }));
-  return { annual, yearly: annual, quarterly: [], quarters: [], ratios: {} };
+  const build = (period) => ({
+    period: period.end.slice(0, 7).replace("-", "."),
+    periodLabel: `${period.fy || period.end.slice(0, 4)} ${period.fp || (period.form === "10-K" ? "\uC5F0\uAC04" : "\uBD84\uAE30")}`,
+    revenue: secFactValueFor(data, tags.revenue, period.end, period.form),
+    operatingIncome: secFactValueFor(data, tags.operatingIncome, period.end, period.form),
+    netIncome: secFactValueFor(data, tags.netIncome, period.end, period.form),
+    assets: secFactValueFor(data, tags.assets, period.end, period.form),
+    liabilities: secFactValueFor(data, tags.liabilities, period.end, period.form),
+    equity: secFactValueFor(data, tags.equity, period.end, period.form),
+    capitalStock: secFactValueFor(data, tags.capitalStock, period.end, period.form),
+    cash: secFactValueFor(data, tags.cash, period.end, period.form),
+    operatingCashFlow: secFactValueFor(data, tags.operatingCashFlow, period.end, period.form),
+    investingCashFlow: secFactValueFor(data, tags.investingCashFlow, period.end, period.form),
+    financingCashFlow: secFactValueFor(data, tags.financingCashFlow, period.end, period.form)
+  });
+  const annual = periods.filter((item) => item.form === "10-K").slice(0, 5).map(build);
+  const quarterly = periods.filter((item) => item.form === "10-Q").slice(0, 8).map(build);
+  const latest = annual[0] ?? quarterly[0];
+  return { annual, yearly: annual, quarterly, quarters: quarterly, ratios: { debtRatio: latest?.liabilities != null && latest?.equity ? latest.liabilities / latest.equity * 100 : null }, source: "SEC_COMPANYFACTS", updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
 }
 async function fetchFinancials(ticker) {
-  return /^\d{6}$/.test(ticker) ? fetchNaverFinancials(ticker) : fetchSecFinancials(ticker);
+  if (/^\d{6}$/.test(ticker)) {
+    try {
+      return await fetchDartFinancials(ticker);
+    } catch (error) {
+      console.warn("DART financial fallback:", error);
+      return fetchNaverFinancials(ticker);
+    }
+  }
+  return fetchSecFinancials(ticker);
 }
 function simpleDartSummary(item) {
   const title = String(item?.title ?? item?.report_nm ?? "").trim();
@@ -6333,13 +6464,15 @@ async function fetchGoogleNews(ticker) {
   });
   if (!response.ok) throw new Error("NEWS_RSS_HTTP_" + response.status);
   const xml = await response.text();
-  return (xml.match(/<item>[\s\S]*?<\/item>/g) ?? []).slice(0, 30).map((block) => ({
+  return (xml.match(/<item>[\s\S]*?<\/item>/g) ?? []).slice(0, 100).map((block) => ({
     title: xmlTag(block, "title"),
     url: xmlTag(block, "link"),
     link: xmlTag(block, "link"),
     publishedAt: xmlTag(block, "pubDate"),
     date: xmlTag(block, "pubDate"),
-    source: xmlTag(block, "source") || "Google News"
+    source: xmlTag(block, "source") || "Google News",
+    description: cleanFinanceCell(xmlTag(block, "description")),
+    summary: cleanFinanceCell(xmlTag(block, "description"))
   })).filter((item) => item.title && item.url);
 }
 var autoTradeExecuted = /* @__PURE__ */ new Set();
@@ -6710,8 +6843,9 @@ router6.get("/:ticker/rating", async (req, res) => {
 });
 router6.get("/:ticker/financials", async (req, res) => {
   const ticker = normalizeTicker4(req.params.ticker);
+  res.setHeader("Cache-Control", "no-store, max-age=0");
   try {
-    const financials = await fetchFinancials(ticker);
+    const financials = await withLiveCache(`financials:${ticker}`, 5 * 6e4, () => fetchFinancials(ticker));
     res.json({
       ticker,
       financials,
@@ -6735,8 +6869,9 @@ router6.get("/:ticker/risk", async (req, res) => {
 });
 router6.get("/:ticker/filings", async (req, res) => {
   const ticker = normalizeTicker4(req.params.ticker);
+  res.setHeader("Cache-Control", "no-store, max-age=0");
   try {
-    const items = await fetchAllFilings(ticker);
+    const items = await withLiveCache(`filings:${ticker}`, 6e4, () => fetchAllFilings(ticker));
     res.json({
       ticker,
       filings: items,
@@ -6756,8 +6891,9 @@ router6.get("/:ticker/filings", async (req, res) => {
 });
 router6.get("/:ticker/disclosures", async (req, res) => {
   const ticker = normalizeTicker4(req.params.ticker);
+  res.setHeader("Cache-Control", "no-store, max-age=0");
   try {
-    const items = await fetchAllFilings(ticker);
+    const items = await withLiveCache(`filings:${ticker}`, 6e4, () => fetchAllFilings(ticker));
     res.json({
       ticker,
       disclosures: items,
@@ -6776,8 +6912,9 @@ router6.get("/:ticker/disclosures", async (req, res) => {
 });
 router6.get("/:ticker/news", async (req, res) => {
   const ticker = normalizeTicker4(req.params.ticker);
+  res.setHeader("Cache-Control", "no-store, max-age=0");
   try {
-    const items = await fetchGoogleNews(ticker);
+    const items = await withLiveCache(`news:${ticker}`, 6e4, () => fetchGoogleNews(ticker));
     res.json({
       ticker,
       news: items,
