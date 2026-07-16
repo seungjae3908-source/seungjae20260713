@@ -1,13 +1,19 @@
 import { Router } from 'express';
 import { requireAdmin, requireMember, type AuthenticatedRequest } from '../middleware/auth';
-import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';
+import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 
 const router = Router();
 router.use(requireMember, requireAdmin);
 
-router.get('/members', async (req, res) => {
+// 서비스 역할 키가 없으면 관리자 본인 토큰으로 동작한다.
+// RLS의 "admins read/update profiles" 정책이 권한을 보장한다.
+function adminDb(req: AuthenticatedRequest) {
+  return hasSupabaseServerKey() ? getSupabase() : getUserSupabase(req.accessToken!);
+}
+
+router.get('/members', async (req: AuthenticatedRequest, res) => {
   const status = typeof req.query.status === 'string' ? req.query.status : undefined;
-  let query = getSupabase().from('profiles').select('*').order('created_at', { ascending: false }).limit(500);
+  let query = adminDb(req).from('profiles').select('*').order('created_at', { ascending: false }).limit(500);
   if (status) query = query.eq('status', status);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: 'MEMBER_LIST_FAILED' });
@@ -15,7 +21,6 @@ router.get('/members', async (req, res) => {
 });
 
 router.patch('/members/:id', async (req: AuthenticatedRequest, res) => {
-  if (!hasSupabaseServerKey()) return res.status(503).json({ error: 'ADMIN_KEY_REQUIRED' });
   const allowedStatus = ['pending', 'approved', 'rejected', 'suspended', 'withdrawn'];
   const allowedRole = ['user', 'admin'];
   const status = allowedStatus.includes(req.body?.status) ? req.body.status : undefined;
@@ -27,14 +32,15 @@ router.patch('/members/:id', async (req: AuthenticatedRequest, res) => {
   const changes: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (status) Object.assign(changes, { status, approved_at: status === 'approved' ? new Date().toISOString() : null, approved_by: status === 'approved' ? req.member?.id : null });
   if (role) changes.role = role;
-  const { data, error } = await getSupabase().from('profiles').update(changes).eq('id', req.params.id).select('*').single();
+  const { data, error } = await adminDb(req).from('profiles').update(changes).eq('id', req.params.id).select('*').single();
   if (error) return res.status(500).json({ error: 'MEMBER_UPDATE_FAILED' });
+  // 감사 로그는 best-effort: 서비스 역할 키가 없으면 RLS로 인해 기록되지 않을 수 있음
   await getSupabase().from('audit_logs').insert({ actor_id: req.member?.id, action: 'member.update', target_type: 'profile', target_id: req.params.id, details: changes, ip_address: req.ip });
   return res.json({ member: data });
 });
 
-router.get('/audit-logs', async (_req, res) => {
-  const { data, error } = await getSupabase().from('audit_logs').select('*').order('created_at', { ascending: false }).limit(500);
+router.get('/audit-logs', async (req: AuthenticatedRequest, res) => {
+  const { data, error } = await adminDb(req).from('audit_logs').select('*').order('created_at', { ascending: false }).limit(500);
   if (error) return res.status(500).json({ error: 'AUDIT_LIST_FAILED' });
   return res.json({ logs: data ?? [] });
 });

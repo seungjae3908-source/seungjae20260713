@@ -7609,8 +7609,8 @@ function initializeVapid() {
   );
   vapidInitialized = true;
 }
-async function ensureNotificationPreferences(memberId) {
-  const supabase = getSupabase();
+async function ensureNotificationPreferences(memberId, client2) {
+  const supabase = client2 ?? getSupabase();
   const { data, error } = await supabase.from("notification_preferences").select("*").eq("member_id", memberId).maybeSingle();
   if (error) throw error;
   if (data) return data;
@@ -7833,6 +7833,9 @@ function startPriceAlertMonitor() {
 
 // src/routes/push.ts
 var router5 = Router5();
+function db(req) {
+  return hasSupabaseServerKey() ? getSupabase() : getUserSupabase(req.accessToken);
+}
 function getEndpoint(body) {
   if (!body || typeof body !== "object") return null;
   const endpoint = body.endpoint;
@@ -7840,7 +7843,7 @@ function getEndpoint(body) {
 }
 router5.get("/notifications/preferences", async (req, res) => {
   try {
-    return res.json({ preferences: await ensureNotificationPreferences(req.member.id), vapidReady: isVapidReady() });
+    return res.json({ preferences: await ensureNotificationPreferences(req.member.id, db(req)), vapidReady: isVapidReady() });
   } catch (error) {
     console.error("notification preferences read error:", error);
     return res.status(500).json({ error: "NOTIFICATION_PREFERENCES_READ_FAILED" });
@@ -7849,27 +7852,28 @@ router5.get("/notifications/preferences", async (req, res) => {
 router5.put("/notifications/preferences", async (req, res) => {
   const enabledTypes = Array.isArray(req.body?.enabledTypes) ? [...new Set(req.body.enabledTypes.map(String))].filter((item) => DEFAULT_NOTIFICATION_TYPES.includes(item)) : [...DEFAULT_NOTIFICATION_TYPES];
   const changes = { member_id: req.member.id, enabled_types: enabledTypes, app_enabled: req.body?.appEnabled !== false, push_enabled: req.body?.pushEnabled === true, updated_at: (/* @__PURE__ */ new Date()).toISOString() };
-  const { data, error } = await getSupabase().from("notification_preferences").upsert(changes, { onConflict: "member_id" }).select("*").single();
+  const { data, error } = await db(req).from("notification_preferences").upsert(changes, { onConflict: "member_id" }).select("*").single();
   if (error) return res.status(500).json({ error: "NOTIFICATION_PREFERENCES_SAVE_FAILED" });
   return res.json({ preferences: data });
 });
 router5.post("/push/subscribe", async (req, res) => {
   const endpoint = getEndpoint(req.body);
   if (!endpoint) return res.status(400).json({ error: "INVALID_SUBSCRIPTION" });
-  const { error } = await getSupabase().from("push_subscriptions").upsert({ member_id: req.member.id, endpoint, subscription: req.body, updated_at: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "endpoint" });
+  const { error } = await db(req).from("push_subscriptions").upsert({ member_id: req.member.id, endpoint, subscription: req.body, updated_at: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "endpoint" });
   if (error) return res.status(500).json({ error: "PUSH_SUBSCRIPTION_SAVE_FAILED" });
-  await getSupabase().from("notification_preferences").upsert({ member_id: req.member.id, push_enabled: true, updated_at: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "member_id" });
-  const { count } = await getSupabase().from("push_subscriptions").select("*", { count: "exact", head: true }).eq("member_id", req.member.id);
+  await db(req).from("notification_preferences").upsert({ member_id: req.member.id, push_enabled: true, updated_at: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "member_id" });
+  const { count } = await db(req).from("push_subscriptions").select("*", { count: "exact", head: true }).eq("member_id", req.member.id);
   return res.json({ ok: true, count: count ?? 0, vapidReady: isVapidReady() });
 });
 router5.post("/push/unsubscribe", async (req, res) => {
   const endpoint = getEndpoint(req.body);
   if (!endpoint) return res.status(400).json({ error: "INVALID_ENDPOINT" });
-  const { error } = await getSupabase().from("push_subscriptions").delete().eq("member_id", req.member.id).eq("endpoint", endpoint);
+  const { error } = await db(req).from("push_subscriptions").delete().eq("member_id", req.member.id).eq("endpoint", endpoint);
   if (error) return res.status(500).json({ error: "PUSH_UNSUBSCRIBE_FAILED" });
   return res.json({ ok: true });
 });
 router5.post("/push/test", async (req, res) => {
+  if (!hasSupabaseServerKey()) return res.status(503).json({ error: "SERVICE_KEY_REQUIRED", message: "SUPABASE_SERVICE_ROLE_KEY\uAC00 \uB4F1\uB85D\uB418\uC5B4\uC57C \uC54C\uB9BC \uBC1C\uC1A1\uC744 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." });
   const body = typeof req.body === "object" && req.body ? req.body : {};
   const result = await deliverMemberNotification({
     memberId: req.member.id,
@@ -7883,6 +7887,7 @@ router5.post("/push/test", async (req, res) => {
   return res.json({ ok: true, ...result, vapidReady: isVapidReady() });
 });
 router5.post("/notifications/price-alerts/check-now", async (_req, res) => {
+  if (!hasSupabaseServerKey()) return res.status(503).json({ error: "SERVICE_KEY_REQUIRED", message: "SUPABASE_SERVICE_ROLE_KEY\uAC00 \uB4F1\uB85D\uB418\uC5B4\uC57C \uAC00\uACA9 \uC54C\uB9BC \uBAA8\uB2C8\uD130\uB97C \uC2E4\uD589\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." });
   try {
     return res.json({ ok: true, ...await runPriceAlertMonitorOnce() });
   } catch (error) {
@@ -7892,17 +7897,17 @@ router5.post("/notifications/price-alerts/check-now", async (_req, res) => {
 });
 router5.get("/notifications/history", async (req, res) => {
   const limit = Math.max(1, Math.min(200, Number(req.query.limit ?? 100) || 100));
-  const { data, error } = await getSupabase().from("notification_history").select("*").eq("member_id", req.member.id).order("created_at", { ascending: false }).limit(limit);
+  const { data, error } = await db(req).from("notification_history").select("*").eq("member_id", req.member.id).order("created_at", { ascending: false }).limit(limit);
   if (error) return res.status(500).json({ error: "NOTIFICATION_HISTORY_READ_FAILED" });
   return res.json({ notifications: data ?? [], count: data?.length ?? 0 });
 });
 router5.patch("/notifications/history/:id/read", async (req, res) => {
-  const { data, error } = await getSupabase().from("notification_history").update({ read_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", req.params.id).eq("member_id", req.member.id).select("*").maybeSingle();
+  const { data, error } = await db(req).from("notification_history").update({ read_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", req.params.id).eq("member_id", req.member.id).select("*").maybeSingle();
   if (error) return res.status(500).json({ error: "NOTIFICATION_HISTORY_UPDATE_FAILED" });
   return res.json({ notification: data });
 });
 router5.get("/notifications/price-alerts", async (req, res) => {
-  const { data, error } = await getSupabase().from("price_alerts").select("*").eq("member_id", req.member.id).order("created_at", { ascending: false });
+  const { data, error } = await db(req).from("price_alerts").select("*").eq("member_id", req.member.id).order("created_at", { ascending: false });
   if (error) return res.status(500).json({ error: "PRICE_ALERT_LIST_FAILED" });
   return res.json({ alerts: data ?? [] });
 });
@@ -7913,12 +7918,12 @@ router5.post("/notifications/price-alerts", async (req, res) => {
   const targetPrice = Number(req.body?.targetPrice);
   if (!assetType || !direction || !symbol || !Number.isFinite(targetPrice) || targetPrice <= 0) return res.status(400).json({ error: "INVALID_PRICE_ALERT" });
   const row = { member_id: req.member.id, asset_type: assetType, market: String(req.body?.market ?? ""), symbol, direction, target_price: targetPrice, repeat_enabled: req.body?.repeatEnabled === true, app_enabled: req.body?.appEnabled !== false, push_enabled: req.body?.pushEnabled !== false, expires_at: req.body?.expiresAt || null, enabled: true, updated_at: (/* @__PURE__ */ new Date()).toISOString() };
-  const { data, error } = await getSupabase().from("price_alerts").upsert(row, { onConflict: "member_id,asset_type,market,symbol,direction,target_price" }).select("*").single();
+  const { data, error } = await db(req).from("price_alerts").upsert(row, { onConflict: "member_id,asset_type,market,symbol,direction,target_price" }).select("*").single();
   if (error) return res.status(500).json({ error: "PRICE_ALERT_SAVE_FAILED" });
   return res.json({ alert: data });
 });
 router5.delete("/notifications/price-alerts/:id", async (req, res) => {
-  const { error } = await getSupabase().from("price_alerts").delete().eq("id", req.params.id).eq("member_id", req.member.id);
+  const { error } = await db(req).from("price_alerts").delete().eq("id", req.params.id).eq("member_id", req.member.id);
   if (error) return res.status(500).json({ error: "PRICE_ALERT_DELETE_FAILED" });
   return res.json({ ok: true });
 });
@@ -10156,16 +10161,18 @@ var kiwoom_routes_default = router8;
 import { Router as Router9 } from "express";
 var router9 = Router9();
 router9.use(requireMember, requireAdmin);
+function adminDb(req) {
+  return hasSupabaseServerKey() ? getSupabase() : getUserSupabase(req.accessToken);
+}
 router9.get("/members", async (req, res) => {
   const status = typeof req.query.status === "string" ? req.query.status : void 0;
-  let query = getSupabase().from("profiles").select("*").order("created_at", { ascending: false }).limit(500);
+  let query = adminDb(req).from("profiles").select("*").order("created_at", { ascending: false }).limit(500);
   if (status) query = query.eq("status", status);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: "MEMBER_LIST_FAILED" });
   return res.json({ members: data ?? [] });
 });
 router9.patch("/members/:id", async (req, res) => {
-  if (!hasSupabaseServerKey()) return res.status(503).json({ error: "ADMIN_KEY_REQUIRED" });
   const allowedStatus = ["pending", "approved", "rejected", "suspended", "withdrawn"];
   const allowedRole = ["user", "admin"];
   const status = allowedStatus.includes(req.body?.status) ? req.body.status : void 0;
@@ -10177,13 +10184,13 @@ router9.patch("/members/:id", async (req, res) => {
   const changes = { updated_at: (/* @__PURE__ */ new Date()).toISOString() };
   if (status) Object.assign(changes, { status, approved_at: status === "approved" ? (/* @__PURE__ */ new Date()).toISOString() : null, approved_by: status === "approved" ? req.member?.id : null });
   if (role) changes.role = role;
-  const { data, error } = await getSupabase().from("profiles").update(changes).eq("id", req.params.id).select("*").single();
+  const { data, error } = await adminDb(req).from("profiles").update(changes).eq("id", req.params.id).select("*").single();
   if (error) return res.status(500).json({ error: "MEMBER_UPDATE_FAILED" });
   await getSupabase().from("audit_logs").insert({ actor_id: req.member?.id, action: "member.update", target_type: "profile", target_id: req.params.id, details: changes, ip_address: req.ip });
   return res.json({ member: data });
 });
-router9.get("/audit-logs", async (_req, res) => {
-  const { data, error } = await getSupabase().from("audit_logs").select("*").order("created_at", { ascending: false }).limit(500);
+router9.get("/audit-logs", async (req, res) => {
+  const { data, error } = await adminDb(req).from("audit_logs").select("*").order("created_at", { ascending: false }).limit(500);
   if (error) return res.status(500).json({ error: "AUDIT_LIST_FAILED" });
   return res.json({ logs: data ?? [] });
 });
