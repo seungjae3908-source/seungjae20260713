@@ -2,3 +2,4 @@
 - [Supabase RLS lessons](supabase-rls-lessons.md) — profiles policies need is_admin() fn (recursion), server must use user-scoped client (no service key), migrations run manually by user.
 - [Run/port setup](run-port-setup.md) — Run button & api-server workflow both build frontend then serve API on 8080 (external 80); only one may hold 8080 at a time. KIWOOM_MODE=mock is mandatory (no real trading).
 - [Market data provider quirks](market-data-provider-quirks.md) — Yahoo range=max buckets ~168 rows (use period1/period2); Kiwoom 1W=ka10082; SEC 429s intermittently; no fake data fallbacks allowed.
+- [Reco & scan engine rules](reco-scan-rules.md) — Financials.source flag gates sample data out of recos; scan throws on ≥80% provider errors (0건≠오류); crypto account/position routes must stay member-gated.

@@ -1,5 +1,6 @@
 import { Router, type IRouter } from 'express';
 import { createHmac, randomUUID } from 'node:crypto';
+import { requireMember } from '../middleware/auth';
 
 const router: IRouter = Router();
 const UPBIT_BASE = 'https://api.upbit.com';
@@ -168,13 +169,19 @@ router.get('/crypto/spot/candles', async (req, res) => {
   const symbol = safeSymbol(req.query.symbol || 'BTC');
   const unit = Math.max(1, Math.min(240, Number(req.query.unit ?? 15) || 15));
   const count = Math.max(1, Math.min(200, Number(req.query.count ?? 120) || 120));
+  // tf=1D|1W|1M 이면 업비트 일/주/월봉, 없으면 기존 분봉 동작 유지.
+  const tf = String(req.query.tf ?? '').toUpperCase();
+  const tfPath = tf === '1D' ? 'days' : tf === '1W' ? 'weeks' : tf === '1M' ? 'months' : null;
+  const url = tfPath
+    ? `${UPBIT_BASE}/v1/candles/${tfPath}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`
+    : `${UPBIT_BASE}/v1/candles/minutes/${unit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`;
   try {
-    const rows = await fetchJson<any[]>(`${UPBIT_BASE}/v1/candles/minutes/${unit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`);
+    const rows = await fetchJson<any[]>(url);
     const candles = rows.reverse().map((row) => ({ time: row.candle_date_time_kst, open: finite(row.opening_price), high: finite(row.high_price), low: finite(row.low_price), close: finite(row.trade_price), volume: finite(row.candle_acc_trade_volume), tradingValue: finite(row.candle_acc_trade_price) }));
-    return res.json({ exchange: 'UPBIT', market: `KRW-${symbol}`, unit: `${unit}m`, candles, count: candles.length, updatedAt: new Date().toISOString() });
+    return res.json({ ok: true, provider: 'upbit', fetchedAt: new Date().toISOString(), exchange: 'UPBIT', market: `KRW-${symbol}`, unit: tfPath ? tf : `${unit}m`, candles, count: candles.length, updatedAt: new Date().toISOString() });
   } catch (error) {
     console.error('upbit candles error:', error);
-    return res.status(502).json({ exchange: 'UPBIT', candles: [], count: 0, error: 'UPBIT_CANDLES_UNAVAILABLE' });
+    return res.status(502).json({ ok: false, provider: 'upbit', exchange: 'UPBIT', candles: [], count: 0, error: 'UPBIT_CANDLES_UNAVAILABLE', message: '업비트 캔들 조회 실패 — 결과 0건이 아니라 조회 오류입니다.' });
   }
 });
 
@@ -223,7 +230,8 @@ router.get('/crypto/futures/candles', async (req, res) => {
   }
 });
 
-router.get('/crypto/spot/accounts', async (_req, res) => {
+// 개인 계좌/포지션 조회는 회원 인증 필수 (서버 측 키로 조회되는 민감 정보).
+router.get('/crypto/spot/accounts', requireMember, async (_req, res) => {
   const accessKey = String(process.env.UPBIT_ACCESS_KEY ?? '').trim();
   const secretKey = String(process.env.UPBIT_SECRET_KEY ?? '').trim();
   if (!accessKey || !secretKey) return res.status(503).json({ exchange: 'UPBIT', configured: false, accounts: [], error: 'UPBIT_PRIVATE_KEYS_NOT_CONFIGURED' });
@@ -245,7 +253,7 @@ router.get('/crypto/spot/accounts', async (_req, res) => {
   }
 });
 
-router.get('/crypto/futures/account', async (_req, res) => {
+router.get('/crypto/futures/account', requireMember, async (_req, res) => {
   const path = '/api/v2/mix/account/accounts';
   const query = 'productType=USDT-FUTURES';
   try {
@@ -268,7 +276,7 @@ router.get('/crypto/futures/account', async (_req, res) => {
   }
 });
 
-router.get('/crypto/futures/positions', async (_req, res) => {
+router.get('/crypto/futures/positions', requireMember, async (_req, res) => {
   const path = '/api/v2/mix/position/all-position';
   const query = 'productType=USDT-FUTURES&marginCoin=USDT';
   try {

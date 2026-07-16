@@ -386,9 +386,15 @@ function CoinInfo() {
     enabled: coinMarket === 'spot' && Boolean(symbol),
     refetchInterval: 5_000,
   });
+  const [coinTf, setCoinTf] = useState<'15m' | '1D' | '1W' | '1M'>('15m');
   const spotCandles = useQuery({
-    queryKey: ['crypto-spot-candles', symbol],
-    queryFn: () => apiGet<AnyObj>(`/crypto/spot/candles?symbol=${encodeURIComponent(symbol)}&unit=15&count=120`),
+    queryKey: ['crypto-spot-candles', symbol, coinTf],
+    queryFn: () =>
+      apiGet<AnyObj>(
+        coinTf === '15m'
+          ? `/crypto/spot/candles?symbol=${encodeURIComponent(symbol)}&unit=15&count=120`
+          : `/crypto/spot/candles?symbol=${encodeURIComponent(symbol)}&tf=${coinTf}&count=200`,
+      ),
     enabled: coinMarket === 'spot' && Boolean(symbol),
     refetchInterval: 30_000,
   });
@@ -463,6 +469,23 @@ function CoinInfo() {
               </div>
               <button type="button" onClick={() => { void (coinMarket === 'spot' ? spotTickers.refetch() : futuresTickers.refetch()); }} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border"><RefreshCw className="h-4 w-4" /></button>
             </div>
+            {coinMarket === 'spot' && (
+              <div className="mt-3 grid grid-cols-4 gap-1">
+                {(['15m', '1D', '1W', '1M'] as const).map((tf) => (
+                  <button
+                    key={tf}
+                    type="button"
+                    onClick={() => setCoinTf(tf)}
+                    className={cn(
+                      'rounded-xl border px-2 py-1.5 text-[11px] font-black',
+                      coinTf === tf ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground',
+                    )}
+                  >
+                    {tf === '15m' ? '15분' : tf === '1D' ? '일봉' : tf === '1W' ? '주봉' : '월봉'}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="mt-4 grid grid-cols-2 gap-2">
               <Metric label="현재가" value={money(selected.price, currency)} strong />
               <Metric label="24시간 등락률" value={finite(selected.changePercent ?? selected.changePercent24h) == null ? '데이터 없음' : formatAppPercent(selected.changePercent ?? selected.changePercent24h)} tone={Number(selected.changePercent ?? selected.changePercent24h) >= 0 ? 'up' : 'down'} />
@@ -475,7 +498,7 @@ function CoinInfo() {
               {coinMarket === 'futures' && <Metric label="펀딩비" value={metric(finite(selected.fundingRate) == null ? null : Number(selected.fundingRate) * 100, '%')} />}
               {coinMarket === 'futures' && <Metric label="미결제약정" value={metric(selected.openInterest)} />}
               {coinMarket === 'futures' && <Metric label="매수 / 매도호가" value={`${money(selected.bidPrice, currency)} / ${money(selected.askPrice, currency)}`} />}
-              <Metric label="15분봉 최신 종가" value={money(latestCandle?.close, currency)} />
+              <Metric label={coinMarket === 'spot' ? `${coinTf === '15m' ? '15분봉' : coinTf === '1D' ? '일봉' : coinTf === '1W' ? '주봉' : '월봉'} 최신 종가` : '15분봉 최신 종가'} value={money(latestCandle?.close, currency)} />
               <Metric label="캔들 수" value={candles?.length ? `${candles.length}개` : '데이터 없음'} />
               {coinMarket === 'spot' && <Metric label="유의 상태" value={selected.warning ? '유의 종목' : '정상'} tone={selected.warning ? 'down' : undefined} />}
             </div>

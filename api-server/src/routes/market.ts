@@ -5,6 +5,8 @@ import {
   type MarketKey,
 } from '../services/market-listing.service';
 import { ThemesService } from '../services/themes.service';
+import { SignalService } from '../services/signal.service';
+import { RecommendationService } from '../services/recommendation.service';
 
 const router: IRouter = Router();
 
@@ -278,18 +280,79 @@ router.get('/market/themes', async (req, res) => {
 
 router.get('/market/scan', async (req, res) => {
   const scope = normalizeMarket(req.query.market);
+  // 프런트가 보낸 선택 지표를 실제 검색 조건으로 사용한다 (미선택 시 기본 3종).
+  const indicators = String(req.query.indicators ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const num = (v: unknown) => {
+    const parsed = Number(v);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  };
+  const filters = {
+    volumeThreshold: num(req.query.volumeThreshold),
+    tradingValueThreshold: num(req.query.tradingValueThreshold),
+  };
   try {
-    const rows = rankByScore(await liveListings(scope)).slice(0, 100);
-    return res.status(rows.length ? 200 : 503).json({
+    const result = await SignalService.scan(scope, indicators, filters);
+    // 결과 0건은 "조건에 맞는 종목 없음"(200)이며 오류(5xx)와 구분한다.
+    return res.json({
+      ok: true,
+      provider: 'rule-scan',
+      fetchedAt: new Date().toISOString(),
       market: scope,
-      results: rows,
-      cards: rows,
+      rows: result.cards,
+      cards: result.cards,
+      results: result.cards,
+      count: result.cards.length,
+      selected: result.selected,
+      supportedIndicators: result.supportedIndicators,
+      appliedConditions: {
+        market: scope,
+        indicators: result.selected,
+        defaultApplied: indicators.length === 0,
+        volumeThreshold: result.appliedFilters.volumeThreshold,
+        tradingValueThreshold: result.appliedFilters.tradingValueThreshold,
+      },
+      scanned: result.scanned,
+      excludedCount: result.excludedCount,
       updatedAt: new Date().toISOString(),
-      ...(!rows.length ? { error: 'SCAN_DATA_UNAVAILABLE' } : {}),
     });
   } catch (error) {
     console.error('market scan error:', error);
-    return res.status(502).json({ market: scope, results: [], cards: [], error: 'SCAN_PROVIDER_ERROR' });
+    return res.status(502).json({
+      ok: false,
+      provider: 'rule-scan',
+      market: scope,
+      rows: [],
+      results: [],
+      cards: [],
+      error: 'SCAN_PROVIDER_ERROR',
+      message: '조건검색 데이터 공급자 오류 — 결과 0건이 아니라 조회 실패입니다.',
+    });
+  }
+});
+
+router.get('/market/recommendations', async (req, res) => {
+  const market = String(req.query.market ?? 'KR').toUpperCase() === 'US' ? 'US' : 'KR';
+  const category = String(req.query.category ?? 'all');
+  try {
+    const result = await RecommendationService.getRecommendations(market);
+    const rows =
+      category === 'undervalued' || category === 'breakout'
+        ? result.rows.filter((row) => row.category === category)
+        : result.rows;
+    return res.json({ ...result, rows, category });
+  } catch (error) {
+    console.error('market recommendations error:', error);
+    return res.status(502).json({
+      ok: false,
+      provider: 'rule-based-engine',
+      market,
+      rows: [],
+      error: 'RECOMMENDATION_ENGINE_ERROR',
+      message: '추천 산출 실패 — 실데이터 조회 오류입니다.',
+    });
   }
 });
 

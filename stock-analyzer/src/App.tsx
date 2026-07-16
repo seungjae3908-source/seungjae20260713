@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { Route, Switch, Router as WouterRouter } from 'wouter';
+import { Route, Switch, Router as WouterRouter, useLocation, useRoute } from 'wouter';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -7,7 +7,7 @@ import { SettingsProvider } from '@/lib/settings';
 import { ensureWatchlistSync } from '@/lib/watchlist-sync';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { AppBackground } from '@/components/app-background';
-import { AssetModeProvider } from '@/lib/asset-mode';
+import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
 import { OfflineBanner } from '@/components/offline-banner';
 import { PageFallback } from '@/components/data-state';
 import { AutoBackupSync } from '@/lib/backup-sync';
@@ -27,6 +27,7 @@ const PortfolioPage = lazy(() => import('@/pages/portfolio'));
 const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
+const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const NotFound = lazy(() => import('@/pages/not-found'));
 
 const queryClient = new QueryClient({
@@ -40,6 +41,36 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// /crypto* 경로: 자산 모드를 코인으로 전환한 뒤 기존 코인 화면으로 이동한다.
+function useCryptoRedirect(target: (symbol?: string) => string, symbol?: string) {
+  const mode = useAssetMode();
+  const [, navigate] = useLocation();
+  useEffect(() => {
+    mode.setAsset('coin');
+    navigate(target(symbol), { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}
+
+function CryptoHomeRedirect() {
+  useCryptoRedirect(() => '/home');
+  return <PageFallback />;
+}
+
+function CryptoSearchRedirect() {
+  useCryptoRedirect(() => '/stocks');
+  return <PageFallback />;
+}
+
+function CryptoDetailRedirect() {
+  const [, params] = useRoute('/crypto/:symbol') as [boolean, { symbol?: string } | null];
+  useCryptoRedirect(
+    (symbol) => `/stock-info?asset=coin&coinMarket=spot&symbol=${encodeURIComponent(String(symbol ?? 'BTC').toUpperCase())}`,
+    params?.symbol,
+  );
+  return <PageFallback />;
+}
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -77,6 +108,11 @@ function ApprovedRouter() {
         <Route path="/admin" component={AdminPage} />
         <Route path="/more" component={MorePage} />
         <Route path="/stock/:ticker" component={DetailPage} />
+        <Route path="/recommendations" component={RecommendationsPage} />
+        {/* 코인 전용 경로 — 기존 코인 화면(자산 모드 코인)으로 연결한다. */}
+        <Route path="/crypto" component={CryptoHomeRedirect} />
+        <Route path="/crypto/search" component={CryptoSearchRedirect} />
+        <Route path="/crypto/:symbol" component={CryptoDetailRedirect} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>
