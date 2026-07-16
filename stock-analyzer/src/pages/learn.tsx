@@ -795,13 +795,13 @@ export default function LearnPage() {
           <button
             type="button"
             onClick={() => navigate('/stock-info')}
-            className="rounded-xl border border-card-border bg-card px-3 py-2 text-center text-sm font-black text-muted-foreground"
+            className="inline-flex items-center justify-center break-keep leading-tight rounded-xl border border-card-border bg-card px-3 py-2 text-center text-sm font-black text-muted-foreground"
           >
             정보
           </button>
           <button
             type="button"
-            className="rounded-xl border border-primary bg-primary px-3 py-2 text-center text-sm font-black text-primary-foreground"
+            className="inline-flex items-center justify-center break-keep leading-tight rounded-xl border border-primary bg-primary px-3 py-2 text-center text-sm font-black text-primary-foreground"
           >
             공부
           </button>
