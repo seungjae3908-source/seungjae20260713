@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, RefreshCw, Search, ShieldAlert, TrendingUp } from 'lucide-react';
+import { Bell, RefreshCw, Search } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { AssetSwitch } from '@/components/asset-switch';
 import { useAssetMode } from '@/lib/asset-mode';
-import { api, apiGet, type QuoteRow } from '@/lib/api';
+import { api, apiGet, type QuoteRow, type SectorPopularData, type SectorPopularRow } from '@/lib/api';
 import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
 import { cn } from '@/lib/utils';
 
@@ -39,11 +39,11 @@ export default function HomePage() {
     enabled: mode.asset === 'stock',
     refetchInterval: 10_000,
   });
-  const movers = useQuery({
-    queryKey: ['home-market-movers', mode.stockMarket],
-    queryFn: () => api.movers(mode.stockMarket === 'KR' ? 'KRX' : 'NASDAQ'),
+  const sectorPopular = useQuery({
+    queryKey: ['home-sector-popular', mode.stockMarket],
+    queryFn: () => api.sectorPopular(mode.stockMarket),
     enabled: mode.asset === 'stock',
-    refetchInterval: 20_000,
+    refetchInterval: 30_000,
   });
   const cryptoStatus = useQuery({
     queryKey: ['home-crypto-status'],
@@ -64,10 +64,6 @@ export default function HomePage() {
     refetchInterval: 8_000,
   });
 
-  const stockRows = useMemo(() => {
-    const source = movers.data?.popular ?? [];
-    return source.filter((row) => row.market === mode.stockMarket).slice(0, 10);
-  }, [mode.stockMarket, movers.data]);
   const cryptoRows = useMemo(() => {
     const source = mode.coinMarket === 'spot'
       ? ((spotTickers.data?.tickers ?? []) as AnyObj[])
@@ -79,7 +75,7 @@ export default function HomePage() {
 
   const refresh = () => {
     if (mode.asset === 'stock') {
-      void Promise.all([summary.refetch(), movers.refetch()]);
+      void Promise.all([summary.refetch(), sectorPopular.refetch()]);
     } else {
       void Promise.all([cryptoStatus.refetch(), mode.coinMarket === 'spot' ? spotTickers.refetch() : futuresTickers.refetch()]);
     }
@@ -95,7 +91,7 @@ export default function HomePage() {
           </div>
           <div className="flex gap-2">
             <button type="button" onClick={() => navigate('/alerts')} aria-label="알림" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><Bell className="h-4 w-4" /></button>
-            <button type="button" onClick={refresh} aria-label="새로고침" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><RefreshCw className={cn('h-4 w-4', (summary.isFetching || movers.isFetching || spotTickers.isFetching || futuresTickers.isFetching) && 'animate-spin')} /></button>
+            <button type="button" onClick={refresh} aria-label="새로고침" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><RefreshCw className={cn('h-4 w-4', (summary.isFetching || sectorPopular.isFetching || spotTickers.isFetching || futuresTickers.isFetching) && 'animate-spin')} /></button>
           </div>
         </div>
         <AssetSwitch className="mt-3" />
@@ -107,7 +103,7 @@ export default function HomePage() {
 
       <main className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-28 pt-4">
         {mode.asset === 'stock' ? (
-          <StockHome mode={mode.stockMarket} summary={summary.data?.items ?? []} rows={stockRows} loading={summary.isLoading || movers.isLoading} error={summary.isError || movers.isError} onNavigate={navigate} />
+          <StockHome mode={mode.stockMarket} summary={summary.data?.items ?? []} sectorData={sectorPopular.data} summaryLoading={summary.isLoading} summaryError={summary.isError} sectorLoading={sectorPopular.isLoading} sectorError={sectorPopular.isError} onNavigate={navigate} />
         ) : (
           <CryptoHome mode={mode.coinMarket} status={cryptoStatus.data} rows={cryptoRows} loading={mode.coinMarket === 'spot' ? spotTickers.isLoading : futuresTickers.isLoading} error={mode.coinMarket === 'spot' ? spotTickers.isError : futuresTickers.isError} onNavigate={navigate} />
         )}
@@ -117,34 +113,63 @@ export default function HomePage() {
   );
 }
 
-function StockHome({ mode, summary, rows, loading, error, onNavigate }: { mode: 'KR' | 'US'; summary: AnyObj[]; rows: QuoteRow[]; loading: boolean; error: boolean; onNavigate: (to: string) => void }) {
+function StockHome({ mode, summary, sectorData, summaryLoading, summaryError, sectorLoading, sectorError, onNavigate }: { mode: 'KR' | 'US'; summary: AnyObj[]; sectorData?: SectorPopularData; summaryLoading: boolean; summaryError: boolean; sectorLoading: boolean; sectorError: boolean; onNavigate: (to: string) => void }) {
   const wanted = mode === 'KR' ? ['kospi', 'kosdaq'] : ['nasdaq'];
   const indices = summary.filter((item) => wanted.includes(String(item.key).toLowerCase()));
+  const sectors = sectorData?.sectors ?? [];
+  const [activeSector, setActiveSector] = useState<string | null>(null);
+  const selected = sectors.find((sector) => sector.key === activeSector) ?? sectors[0] ?? null;
+  const sectorRows = selected?.rows ?? [];
   return (
     <>
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
         <div className="flex items-center justify-between"><h2 className="text-sm font-black">시장현황</h2><span className="text-[10px] font-bold text-muted-foreground">실제 제공기관 기준</span></div>
-        {loading && <State>시장 데이터를 불러오는 중입니다.</State>}
-        {error && <State error>시장 데이터 제공기관이 지연되고 있습니다.</State>}
+        {summaryLoading && <State>시장 데이터를 불러오는 중입니다.</State>}
+        {summaryError && <State error>시장 데이터 제공기관이 지연되고 있습니다.</State>}
         <div className="mt-3 grid grid-cols-2 gap-2">
           {indices.map((item) => {
             const change = finite(item.changePercent);
             return <InfoCard key={String(item.key)} label={String(item.label ?? item.key)} value={finite(item.price) == null ? '데이터 없음' : Number(item.price).toLocaleString(undefined, { maximumFractionDigits: 2 })} sub={change == null ? '등락 데이터 없음' : formatAppPercent(change)} tone={change == null ? undefined : change >= 0 ? 'up' : 'down'} />;
           })}
-          {!loading && indices.length === 0 && <div className="col-span-2"><State>현재 제공된 지수 데이터가 없습니다.</State></div>}
+          {!summaryLoading && indices.length === 0 && <div className="col-span-2"><State>현재 제공된 지수 데이터가 없습니다.</State></div>}
         </div>
       </section>
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-black">거래대금 상위</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">고정 종목이 아닌 실제 조회 결과</p></div><button type="button" onClick={() => onNavigate('/stocks')} className="text-xs font-black text-primary">전체보기</button></div>
-        <div className="mt-3 space-y-2">{rows.map((row, index) => <StockRow key={`${row.market}:${row.ticker}`} row={row} rank={index + 1} onClick={() => onNavigate(`/stock/${encodeURIComponent(row.ticker)}`)} />)}</div>
-        {!loading && rows.length === 0 && <State>실제 순위 데이터가 없습니다.</State>}
+        <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-black">섹터별 인기종목</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">{sectorData?.sortBasis ?? '거래대금 기준'}</p></div><button type="button" onClick={() => onNavigate('/stocks')} className="text-xs font-black text-primary">전체보기</button></div>
+        {sectorLoading && <State>섹터 데이터를 불러오는 중입니다.</State>}
+        {sectorError && <State error>섹터 데이터 제공기관이 지연되고 있습니다.</State>}
+        {sectors.length > 0 && (
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+            {sectors.map((sector) => (
+              <button key={sector.key} type="button" onClick={() => setActiveSector(sector.key)} className={cn('shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold', selected?.key === sector.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{sector.label}</button>
+            ))}
+          </div>
+        )}
+        <div className="mt-3 space-y-2">{sectorRows.map((row, index) => <StockRow key={`${row.market}:${row.ticker}`} row={row} rank={row.rank ?? index + 1} onClick={() => onNavigate(`/stock/${encodeURIComponent(row.ticker)}`)} />)}</div>
+        {!sectorLoading && !sectorError && sectorRows.length === 0 && <State>현재 표시할 실제 종목 데이터가 없습니다.</State>}
       </section>
-      <div className="grid grid-cols-2 gap-3">
-        <QuickCard icon={TrendingUp} title="AI 추천 (규칙 기반)" onClick={() => onNavigate('/recommendations')} />
-        <QuickCard icon={ShieldAlert} title="자동매매 상태" onClick={() => onNavigate('/auto-trading')} />
-      </div>
     </>
   );
+}
+
+// 검증 가능한 코인 분야 분류(정적). 근거가 명확한 널리 알려진 코인만 포함하며,
+// 근거 불명 코인은 어떤 분야에도 넣지 않는다. 가격·등락률은 실데이터에서 채운다.
+const COIN_SECTORS: { key: string; label: string; symbols: string[] }[] = [
+  { key: 'major', label: '주요 코인', symbols: ['BTC', 'ETH', 'XRP'] },
+  { key: 'smart-contract', label: '스마트계약', symbols: ['ETH', 'SOL', 'ADA'] },
+  { key: 'payment', label: '결제', symbols: ['XRP', 'BTC'] },
+  { key: 'defi', label: '디파이', symbols: ['UNI', 'AAVE', 'LINK'] },
+  { key: 'meme', label: '밈', symbols: ['DOGE', 'SHIB', 'PEPE'] },
+  { key: 'ai-data', label: 'AI·데이터', symbols: ['FET', 'GRT'] },
+  { key: 'gaming', label: '게임·메타버스', symbols: ['SAND', 'MANA', 'AXS'] },
+  { key: 'layer2', label: '레이어2', symbols: ['ARB', 'OP', 'POL'] },
+];
+
+// 심볼(KRW-BTC, BTCUSDT 등)에서 기초 심볼(BTC)만 추출.
+function baseCoinSymbol(symbol: string): string {
+  const raw = String(symbol ?? '').toUpperCase().trim();
+  const dashed = raw.includes('-') ? raw.split('-').pop() ?? raw : raw;
+  return dashed.replace(/(USDT|USDC|KRW|BTC)$/u, (m) => (dashed === m ? m : '')) || dashed;
 }
 
 function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 'spot' | 'futures'; status?: AnyObj; rows: AnyObj[]; loading: boolean; error: boolean; onNavigate: (to: string) => void }) {
@@ -153,6 +178,26 @@ function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 
   const btc = rows.find((row) => String(row.symbol).startsWith('BTC'));
   const eth = rows.find((row) => String(row.symbol).startsWith('ETH'));
   const xrp = rows.find((row) => String(row.symbol).startsWith('XRP'));
+
+  const bySymbol = useMemo(() => {
+    const map = new Map<string, AnyObj>();
+    for (const row of rows) {
+      const base = baseCoinSymbol(String(row.symbol));
+      if (!map.has(base)) map.set(base, row);
+    }
+    return map;
+  }, [rows]);
+
+  const [activeSector, setActiveSector] = useState<string | null>(null);
+  const selected = COIN_SECTORS.find((sector) => sector.key === activeSector) ?? COIN_SECTORS[0];
+  const sectorRows = useMemo(
+    () =>
+      selected.symbols
+        .map((symbol) => bySymbol.get(symbol))
+        .filter((row): row is AnyObj => Boolean(row)),
+    [bySymbol, selected],
+  );
+
   return (
     <>
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
@@ -168,17 +213,22 @@ function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 
         {mode === 'futures' && btc && <div className="mt-2 grid grid-cols-2 gap-2"><InfoCard label="BTC 펀딩비" value={finite(btc.fundingRate) == null ? '데이터 없음' : `${(Number(btc.fundingRate) * 100).toFixed(4)}%`} /><InfoCard label="BTC 미결제약정" value={finite(btc.openInterest) == null ? '데이터 없음' : Number(btc.openInterest).toLocaleString()} /></div>}
       </section>
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <div className="flex items-center justify-between"><div><h2 className="text-sm font-black">거래대금 상위</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">실제 거래소 공개 시세</p></div><button type="button" onClick={() => onNavigate('/stocks')} className="text-xs font-black text-primary">전체보기</button></div>
+        <div className="flex items-center justify-between"><div><h2 className="text-sm font-black">분야별 인기코인</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">거래대금 기준</p></div><button type="button" onClick={() => onNavigate('/stocks')} className="text-xs font-black text-primary">전체보기</button></div>
         {loading && <State>코인 시세를 불러오는 중입니다.</State>}
         {error && <State error>거래소 시세를 불러오지 못했습니다.</State>}
-        <div className="mt-3 space-y-2">{rows.map((row, index) => <CryptoRow key={String(row.symbol)} row={row} rank={index + 1} currency={mode === 'spot' ? 'KRW' : 'USDT'} onClick={() => onNavigate(`/stock-info?asset=coin&coinMarket=${mode}&symbol=${encodeURIComponent(String(row.symbol))}`)} />)}</div>
+        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+          {COIN_SECTORS.map((sector) => (
+            <button key={sector.key} type="button" onClick={() => setActiveSector(sector.key)} className={cn('shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold', selected.key === sector.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{sector.label}</button>
+          ))}
+        </div>
+        <div className="mt-3 space-y-2">{sectorRows.map((row, index) => <CryptoRow key={String(row.symbol)} row={row} rank={index + 1} currency={mode === 'spot' ? 'KRW' : 'USDT'} onClick={() => onNavigate(`/stock-info?asset=coin&coinMarket=${mode}&symbol=${encodeURIComponent(String(row.symbol))}`)} />)}</div>
+        {!loading && !error && sectorRows.length === 0 && <State>현재 표시할 실제 종목 데이터가 없습니다.</State>}
       </section>
-      <div className="grid grid-cols-2 gap-3"><QuickCard icon={TrendingUp} title="코인 종목보기" onClick={() => onNavigate('/stocks')} /><QuickCard icon={ShieldAlert} title="코인 자동매매" onClick={() => onNavigate('/auto-trading')} /></div>
     </>
   );
 }
 
-function StockRow({ row, rank, onClick }: { row: QuoteRow; rank: number; onClick: () => void }) {
+function StockRow({ row, rank, onClick }: { row: QuoteRow | SectorPopularRow; rank: number; onClick: () => void }) {
   return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl bg-secondary/60 p-3 text-left"><span className="w-6 text-center text-sm font-black text-primary">{rank}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayStockName(row.ticker, row.name, row.market)}</p><p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{row.ticker}</p></div><div className="text-right"><p className="text-xs font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('text-[10px] font-black', row.changePercent >= 0 ? 'text-positive' : 'text-destructive')}>{formatAppPercent(row.changePercent)}</p></div></button>;
 }
 
@@ -194,10 +244,6 @@ function CryptoSummary({ row, label, currency }: { row?: AnyObj; label: string; 
 
 function InfoCard({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'up' | 'down' }) {
   return <div className="rounded-2xl bg-secondary/60 p-3"><p className="text-[10px] font-bold text-muted-foreground">{label}</p><p className="mt-1 text-sm font-black">{value}</p>{sub && <p className={cn('mt-1 text-[10px] font-black', tone === 'up' ? 'text-positive' : tone === 'down' ? 'text-destructive' : 'text-muted-foreground')}>{sub}</p>}</div>;
-}
-
-function QuickCard({ icon: Icon, title, onClick }: { icon: typeof TrendingUp; title: string; onClick: () => void }) {
-  return <button type="button" onClick={onClick} className="rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm"><Icon className="h-5 w-5 text-primary" /><p className="mt-3 break-keep text-sm font-black">{title}</p></button>;
 }
 
 function State({ children, error }: { children: React.ReactNode; error?: boolean }) {

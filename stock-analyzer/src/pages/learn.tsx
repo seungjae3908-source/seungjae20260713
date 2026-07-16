@@ -1,54 +1,29 @@
 import {
-  useMemo,
   useState,
   type ReactNode,
 } from 'react';
 import { useLocation } from 'wouter';
-import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   ChevronDown,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { cn } from '@/lib/utils';
-import { api, type Candle } from '@/lib/api';
+import {
+  StudyChart,
+  type StudyChartConfig,
+} from '@/components/study-chart';
+import type { PatternKind, SignalKind } from '@/lib/study-detect';
 
 // ── 공부 페이지 ──────────────────────────────────────────────
 // 교육 목적 전용. 실제 매수·매도 권유가 아니며, 데이터가 없으면
 // '정보 없음' / '데이터 부족' / '제공 불가'로 표기한다. 실제 차트 예시는
 // api.chart 로 불러온 실데이터에서만 사례를 탐지한다.
 
-type StudyGroup = '캔들' | '차트 기초' | '보조지표';
+type StudyGroup = '캔들' | '차트 기초' | '보조지표' | '차트 패턴';
 
-// 실제 차트에서 사례를 탐지할 때 사용하는 이벤트 종류
-type DetectKind =
-  | 'bullish' // 양봉
-  | 'bearish' // 음봉
-  | 'doji' // 도지
-  | 'hammer' // 망치형
-  | 'invertedHammer' // 역망치형
-  | 'longBullish' // 장대양봉
-  | 'longBearish' // 장대음봉
-  | 'bullishEngulfing' // 상승장악형
-  | 'bearishEngulfing' // 하락장악형
-  | 'morningStar' // 샛별형
-  | 'eveningStar' // 석별형
-  | 'support' // 지지선 반등
-  | 'resistance' // 저항선 돌파
-  | 'trendUp' // 추세선(상승)
-  | 'box' // 박스권
-  | 'breakout' // 돌파
-  | 'gap' // 갭
-  | 'volume' // 거래량 급증
-  | 'goldenCross' // 골든크로스
-  | 'deadCross' // 데드크로스
-  | 'rsiOversold' // RSI 과매도
-  | 'rsiOverbought' // RSI 과열
-  | 'macdCross' // MACD 골든크로스
-  | 'bollingerBreak' // 볼린저밴드 상단 돌파
-  | 'atrSpike' // ATR 급등(변동성 확대)
-  | 'stochOversold' // 스토캐스틱 과매도
-  | 'obvUp'; // OBV 상승 다이버전스
+// 실제 차트에서 사례를 탐지할 때 사용하는 신호 종류 (study-detect의 SignalKind 사용)
+type DetectKind = SignalKind;
 
 interface StudyTopic {
   id: string;
@@ -62,11 +37,15 @@ interface StudyTopic {
   sellSignal: string; // 매도 또는 위험 신호
   mistake: string; // 잘못 해석하기 쉬운 점
   related: string; // 함께 확인하면 좋은 다른 지표
-  detect: DetectKind; // 실제 차트 예시 탐지 종류
+  // 신호 기반 항목(캔들/차트 기초/보조지표)
+  detect?: DetectKind;
+  // 패턴 기반 항목(차트 패턴)
+  pattern?: PatternKind;
+  // 주제별 하단 보조지표 표시
+  showRsi?: boolean;
+  showMacd?: boolean;
 }
 
-const DEFAULT_TICKER = '005930';
-const DEFAULT_TICKER_NAME = '삼성전자';
 const NOTICE = '교육 목적이며 매수·매도 권유가 아닙니다.';
 
 const TOPICS: StudyTopic[] = [
@@ -404,6 +383,7 @@ const TOPICS: StudyTopic[] = [
     mistake: '강한 추세장에서는 RSI가 과매도·과열에 오래 머뭅니다. RSI만으로 역추세 매매하면 위험합니다.',
     related: '지지선, 거래량, MACD',
     detect: 'rsiOversold',
+    showRsi: true,
   },
   {
     id: 'macd',
@@ -418,7 +398,8 @@ const TOPICS: StudyTopic[] = [
     sellSignal: 'MACD선이 시그널선을 위에서 아래로 교차하거나 히스토그램이 줄면 매도·주의 관점입니다.',
     mistake: '이평 기반이라 신호가 늦고, 횡보장에서는 교차가 자주 어긋나 잦은 매매 손실이 납니다.',
     related: '이동평균선, 거래량, RSI',
-    detect: 'macdCross',
+    detect: 'macdBuy',
+    showMacd: true,
   },
   {
     id: 'bollinger',
@@ -495,391 +476,296 @@ const TOPICS: StudyTopic[] = [
     related: '거래량, 캔들 패턴, 이동평균선',
     detect: 'obvUp',
   },
+
+  // ── 차트 패턴 ──────────────────────────────────────────
+  {
+    id: 'pattern-double-bottom',
+    group: '차트 패턴',
+    title: '쌍바닥',
+    short: '비슷한 높이의 두 저점(W자)으로 만드는 바닥 반전',
+    concept:
+      '쌍바닥은 비슷한 가격대의 저점을 두 번 만든 뒤 그 사이 고점(넥라인)을 돌파하며 상승 반전하는 W자 패턴입니다.',
+    condition: '두 저점이 대략 ±3% 이내로 비슷하고, 두 저점 사이 고점(넥라인)을 종가로 돌파할 때 완성됩니다.',
+    interpretation: '두 번의 매도 시도가 실패하고 매수세가 우위로 돌아섰음을 뜻합니다.',
+    buySignal: '넥라인을 거래량 증가와 함께 종가로 돌파하면 상승 반전 후보로 봅니다.',
+    sellSignal: '넥라인 돌파에 실패하고 두 번째 저점마저 이탈하면 하락 지속 위험 신호입니다.',
+    mistake: '넥라인 돌파 전에 미리 진입하면 두 번째 저점 이탈에 걸릴 수 있습니다.',
+    related: '거래량, 지지선, 넥라인. 손절은 두 번째 저점 아래로 잡습니다. 넥라인 돌파 시 거래량 증가를 함께 확인하세요.',
+    pattern: 'doubleBottom',
+  },
+  {
+    id: 'pattern-double-top',
+    group: '차트 패턴',
+    title: '쌍봉',
+    short: '비슷한 높이의 두 고점(M자)으로 만드는 천장 반전',
+    concept:
+      '쌍봉은 비슷한 가격대의 고점을 두 번 만든 뒤 그 사이 저점(넥라인)을 이탈하며 하락 반전하는 M자 패턴입니다.',
+    condition: '두 고점이 대략 ±3% 이내로 비슷하고, 두 고점 사이 저점(넥라인)을 종가로 이탈할 때 완성됩니다.',
+    interpretation: '두 번의 상승 시도가 실패하고 매도세가 우위로 돌아섰음을 뜻합니다.',
+    buySignal: '이 패턴은 하락 반전형이므로 매수 신호로 쓰지 않습니다.',
+    sellSignal: '넥라인을 거래량과 함께 종가로 이탈하면 하락 반전 위험 신호로 봅니다.',
+    mistake: '두 고점 높이가 크게 다르면 신뢰도가 낮습니다. 넥라인 이탈 확인이 핵심입니다.',
+    related: '거래량, 저항선, 넥라인. 손절은 두 번째 고점 위로 잡습니다. 넥라인 이탈 시 거래량을 함께 확인하세요.',
+    pattern: 'doubleTop',
+  },
+  {
+    id: 'pattern-head-shoulders',
+    group: '차트 패턴',
+    title: '머리어깨형',
+    short: '왼쪽 어깨·머리·오른쪽 어깨 3고점 천장 반전',
+    concept:
+      '머리어깨형은 가운데 고점(머리)이 가장 높고 양옆 고점(어깨)이 비슷한 3고점 패턴으로, 대표적인 천장 반전형입니다.',
+    condition: '머리가 양 어깨보다 높고, 두 어깨가 비슷하며, 어깨 저점을 이은 넥라인을 종가로 이탈할 때 완성됩니다.',
+    interpretation: '상승 추세의 힘이 점차 약해지며 하락으로 전환됨을 뜻합니다.',
+    buySignal: '이 패턴은 하락 반전형이므로 매수 신호로 쓰지 않습니다.',
+    sellSignal: '넥라인을 거래량과 함께 이탈하면 하락 전환 위험 신호로 봅니다.',
+    mistake: '완성 전(오른쪽 어깨 형성 중)에 단정하면 안 됩니다. 넥라인 이탈로 확인해야 합니다.',
+    related: '거래량, 넥라인, 저항선. 손절은 오른쪽 어깨 고점 위로 잡습니다. 이탈 시 거래량 증가를 확인하세요.',
+    pattern: 'headShoulders',
+  },
+  {
+    id: 'pattern-inv-head-shoulders',
+    group: '차트 패턴',
+    title: '역머리어깨형',
+    short: '뒤집힌 머리어깨형(3저점) 바닥 반전',
+    concept:
+      '역머리어깨형은 가운데 저점(머리)이 가장 낮고 양옆 저점(어깨)이 비슷한 3저점 패턴으로, 대표적인 바닥 반전형입니다.',
+    condition: '머리가 양 어깨보다 낮고, 두 어깨가 비슷하며, 어깨 고점을 이은 넥라인을 종가로 돌파할 때 완성됩니다.',
+    interpretation: '하락 추세의 힘이 약해지며 상승으로 전환됨을 뜻합니다.',
+    buySignal: '넥라인을 거래량 증가와 함께 돌파하면 상승 반전 후보로 봅니다.',
+    sellSignal: '넥라인 돌파에 실패하고 머리 저점을 재이탈하면 하락 지속 위험입니다.',
+    mistake: '완성 전에 미리 진입하면 실패 시 손실이 커집니다. 넥라인 돌파 확인이 핵심입니다.',
+    related: '거래량, 넥라인, 지지선. 손절은 오른쪽 어깨 저점 아래로 잡습니다. 돌파 시 거래량을 확인하세요.',
+    pattern: 'invHeadShoulders',
+  },
+  {
+    id: 'pattern-asc-triangle',
+    group: '차트 패턴',
+    title: '상승 삼각형',
+    short: '수평 저항 + 저점 상승으로 수렴하는 강세형',
+    concept:
+      '상승 삼각형은 고점이 수평 저항선을 이루고 저점이 점점 높아지며 수렴하는 패턴으로, 상승 돌파 가능성이 높은 강세형입니다.',
+    condition: '고점이 비슷한 수평 저항, 저점이 계속 높아지며 두 선이 수렴하고, 저항을 종가로 돌파할 때 완성됩니다.',
+    interpretation: '매도세는 일정한데 매수세가 점점 강해지며 위로 눌리는 힘이 커짐을 뜻합니다.',
+    buySignal: '수평 저항을 거래량 증가와 함께 돌파하면 상승 후보로 봅니다.',
+    sellSignal: '저점 상승 추세선을 하향 이탈하면 패턴 실패 위험 신호입니다.',
+    mistake: '수렴 후반부의 가짜 돌파가 잦습니다. 종가·거래량 확인이 필요합니다.',
+    related: '거래량, 저항선, 추세선. 손절은 마지막 저점 아래로 잡습니다. 돌파 시 거래량 증가를 확인하세요.',
+    pattern: 'ascTriangle',
+  },
+  {
+    id: 'pattern-desc-triangle',
+    group: '차트 패턴',
+    title: '하락 삼각형',
+    short: '수평 지지 + 고점 하락으로 수렴하는 약세형',
+    concept:
+      '하락 삼각형은 저점이 수평 지지선을 이루고 고점이 점점 낮아지며 수렴하는 패턴으로, 하락 이탈 가능성이 높은 약세형입니다.',
+    condition: '저점이 비슷한 수평 지지, 고점이 계속 낮아지며 수렴하고, 지지를 종가로 이탈할 때 완성됩니다.',
+    interpretation: '매수세는 일정한데 매도세가 점점 강해지며 아래로 눌리는 힘이 커짐을 뜻합니다.',
+    buySignal: '이 패턴은 약세형이므로 매수 신호로 쓰지 않습니다.',
+    sellSignal: '수평 지지를 거래량과 함께 이탈하면 하락 위험 신호로 봅니다.',
+    mistake: '지지선에서 반등이 나올 수도 있어 이탈 확인 전 단정하면 안 됩니다.',
+    related: '거래량, 지지선, 추세선. 손절은 마지막 고점 위로 잡습니다. 이탈 시 거래량을 확인하세요.',
+    pattern: 'descTriangle',
+  },
+  {
+    id: 'pattern-sym-triangle',
+    group: '차트 패턴',
+    title: '대칭 삼각형',
+    short: '고점 하락·저점 상승으로 수렴하는 중립형',
+    concept:
+      '대칭 삼각형은 고점이 낮아지고 저점이 높아지며 대칭으로 수렴하는 패턴으로, 방향이 정해지기 전 에너지를 모으는 중립형입니다.',
+    condition: '고점 하락 추세선과 저점 상승 추세선이 대칭으로 수렴하고, 한쪽을 종가로 돌파할 때 방향이 확정됩니다.',
+    interpretation: '매수·매도 힘이 팽팽하다 한쪽으로 폭발하는 준비 구간입니다.',
+    buySignal: '상단 추세선을 거래량과 함께 돌파하면 상승 후보로 봅니다.',
+    sellSignal: '하단 추세선을 거래량과 함께 이탈하면 하락 위험 신호로 봅니다.',
+    mistake: '수렴 꼭짓점에 가까울수록 가짜 돌파가 잦습니다. 돌파 방향을 확인 후 진입합니다.',
+    related: '거래량, 추세선, 돌파. 손절은 반대 추세선 안쪽으로 잡습니다. 돌파 시 거래량 증가를 확인하세요.',
+    pattern: 'symTriangle',
+  },
+  {
+    id: 'pattern-bull-flag',
+    group: '차트 패턴',
+    title: '상승 깃발형',
+    short: '급등(깃대) 후 완만한 조정 뒤 재상승',
+    concept:
+      '상승 깃발형은 강한 급등(깃대) 뒤 완만하게 눌리는 조정 채널(깃발)을 만들고 다시 상승하는 추세 지속 패턴입니다.',
+    condition: '급등 후 3~10봉 완만한 조정 채널을 만들고, 채널 상단을 종가로 재돌파할 때 완성됩니다.',
+    interpretation: '급등 후 잠시 쉬어가며 매물을 소화한 뒤 상승을 이어감을 뜻합니다.',
+    buySignal: '조정 채널 상단을 거래량과 함께 재돌파하면 상승 지속 후보로 봅니다.',
+    sellSignal: '조정이 깊어져 깃대 시작점 아래로 밀리면 패턴 실패 위험입니다.',
+    mistake: '조정폭이 너무 크면 깃발형이 아닙니다. 조정은 얕고 완만해야 합니다.',
+    related: '거래량, 추세선, 돌파. 손절은 조정 채널 하단 아래로 잡습니다. 재돌파 시 거래량 증가를 확인하세요.',
+    pattern: 'bullFlag',
+  },
+  {
+    id: 'pattern-bear-flag',
+    group: '차트 패턴',
+    title: '하락 깃발형',
+    short: '급락(깃대) 후 완만한 되돌림 뒤 재하락',
+    concept:
+      '하락 깃발형은 강한 급락(깃대) 뒤 완만하게 되돌리는 채널(깃발)을 만들고 다시 하락하는 추세 지속 패턴입니다.',
+    condition: '급락 후 완만한 되돌림 채널을 만들고, 채널 하단을 종가로 재이탈할 때 완성됩니다.',
+    interpretation: '급락 후 잠시 되돌렸다 다시 하락을 이어감을 뜻합니다.',
+    buySignal: '이 패턴은 하락 지속형이므로 매수 신호로 쓰지 않습니다.',
+    sellSignal: '되돌림 채널 하단을 거래량과 함께 재이탈하면 하락 지속 위험 신호입니다.',
+    mistake: '되돌림이 깃대 전체를 되돌리면 깃발형이 아닙니다. 되돌림은 얕아야 합니다.',
+    related: '거래량, 추세선, 이탈. 손절은 되돌림 채널 상단 위로 잡습니다. 재이탈 시 거래량을 확인하세요.',
+    pattern: 'bearFlag',
+  },
+  {
+    id: 'pattern-rising-wedge',
+    group: '차트 패턴',
+    title: '상승 쐐기형',
+    short: '고점·저점이 함께 오르며 수렴하는 하락 전환형',
+    concept:
+      '상승 쐐기형은 고점과 저점이 모두 상승하지만 저점이 더 가파르게 올라 수렴하는 패턴으로, 흔히 하락으로 전환됩니다.',
+    condition: '고점·저점이 함께 상승하며 수렴하고, 하단 추세선을 종가로 이탈할 때 완성됩니다.',
+    interpretation: '상승하지만 상승 폭이 점점 줄어 힘이 약해짐을 뜻합니다.',
+    buySignal: '이 패턴은 하락 전환형이므로 매수 신호로 쓰지 않습니다.',
+    sellSignal: '하단 추세선을 거래량과 함께 이탈하면 하락 전환 위험 신호로 봅니다.',
+    mistake: '상승 중이라 강세로 오해하기 쉽습니다. 수렴과 하단 이탈을 확인해야 합니다.',
+    related: '거래량, 추세선, RSI. 손절은 마지막 고점 위로 잡습니다. 이탈 시 거래량을 확인하세요.',
+    pattern: 'risingWedge',
+  },
+  {
+    id: 'pattern-falling-wedge',
+    group: '차트 패턴',
+    title: '하락 쐐기형',
+    short: '고점·저점이 함께 내리며 수렴하는 상승 전환형',
+    concept:
+      '하락 쐐기형은 고점과 저점이 모두 하락하지만 고점이 더 가파르게 내려 수렴하는 패턴으로, 흔히 상승으로 전환됩니다.',
+    condition: '고점·저점이 함께 하락하며 수렴하고, 상단 추세선을 종가로 돌파할 때 완성됩니다.',
+    interpretation: '하락하지만 하락 폭이 점점 줄어 매도세가 약해짐을 뜻합니다.',
+    buySignal: '상단 추세선을 거래량과 함께 돌파하면 상승 전환 후보로 봅니다.',
+    sellSignal: '상단 돌파 실패 후 저점을 재이탈하면 하락 지속 위험입니다.',
+    mistake: '하락 중이라 약세로 오해하기 쉽습니다. 수렴과 상단 돌파를 확인해야 합니다.',
+    related: '거래량, 추세선, RSI. 손절은 마지막 저점 아래로 잡습니다. 돌파 시 거래량 증가를 확인하세요.',
+    pattern: 'fallingWedge',
+  },
+  {
+    id: 'pattern-cup-handle',
+    group: '차트 패턴',
+    title: '컵앤핸들',
+    short: '완만한 U자 컵 + 얕은 손잡이 뒤 돌파',
+    concept:
+      '컵앤핸들은 완만한 U자형 바닥(컵)을 만든 뒤 우측에서 얕은 조정(손잡이)을 거치고 컵 테두리를 돌파하는 상승 지속형입니다.',
+    condition: '완만한 U자 컵이 형성되고, 우측에서 얕은 손잡이 조정 뒤 컵 테두리(저항)를 종가로 돌파할 때 완성됩니다.',
+    interpretation: '충분히 바닥을 다진 뒤 마지막 눌림을 소화하고 상승을 이어감을 뜻합니다.',
+    buySignal: '컵 테두리를 거래량 증가와 함께 돌파하면 상승 후보로 봅니다.',
+    sellSignal: '손잡이 조정이 깊어져 컵 절반 아래로 밀리면 패턴 실패 위험입니다.',
+    mistake: '컵이 V자로 급하거나 손잡이가 너무 깊으면 신뢰도가 낮습니다.',
+    related: '거래량, 저항선, 추세. 손절은 손잡이 저점 아래로 잡습니다. 돌파 시 거래량 증가를 확인하세요.',
+    pattern: 'cupHandle',
+  },
+  {
+    id: 'pattern-box',
+    group: '차트 패턴',
+    title: '박스권',
+    short: '상단 저항·하단 지지 사이 횡보 구간',
+    concept:
+      '박스권은 뚜렷한 상단 저항선과 하단 지지선 사이에서 반복적으로 오르내리는 횡보 패턴입니다.',
+    condition: '고점과 저점이 비슷한 가격대에서 반복되어 상·하단이 뚜렷할 때 성립합니다.',
+    interpretation: '매수·매도 힘이 균형을 이룬 관망 상태로, 방향이 정해지기 전 구간입니다.',
+    buySignal: '박스 하단 지지 확인 후 반등하거나 상단을 거래량과 함께 돌파할 때 접근을 고려합니다.',
+    sellSignal: '박스 상단에서 막히거나 하단을 이탈하면 매도·관망 신호로 봅니다.',
+    mistake: '상·하단마다 매매하면 가짜 돌파에 자주 당할 수 있습니다.',
+    related: '지지선, 저항선, 거래량. 손절은 반대편 경계 밖으로 잡습니다. 돌파 시 거래량을 확인하세요.',
+    pattern: 'box',
+  },
+  {
+    id: 'pattern-box-break-up',
+    group: '차트 패턴',
+    title: '박스권 상단 돌파',
+    short: '횡보 박스 상단을 종가로 뚫는 상승 전환',
+    concept:
+      '박스권 상단 돌파는 오래 횡보하던 박스의 상단 저항을 종가로 강하게 뚫고 올라가는 상승 전환 패턴입니다.',
+    condition: '박스 상단 저항 위에서 종가가 마감되고 거래량이 평소보다 크게 늘 때 신뢰도가 높습니다.',
+    interpretation: '매물대를 소화하고 새로운 상승 추세가 시작될 수 있음을 뜻합니다.',
+    buySignal: '거래량 동반 종가 돌파 후 되돌림에서 지지받으면 상승 초입 후보로 봅니다.',
+    sellSignal: '돌파 직후 종가가 다시 박스 안으로 밀리면 가짜 돌파 위험 신호입니다.',
+    mistake: '장중 고가 돌파만 보고 진입하면 위험합니다. 종가·거래량을 확인해야 합니다.',
+    related: '거래량, 저항선, 장대양봉. 손절은 박스 상단 아래로 잡습니다. 돌파 시 거래량 증가를 확인하세요.',
+    pattern: 'boxBreakUp',
+  },
+  {
+    id: 'pattern-box-break-down',
+    group: '차트 패턴',
+    title: '박스권 하단 이탈',
+    short: '횡보 박스 하단을 종가로 깨는 하락 전환',
+    concept:
+      '박스권 하단 이탈은 오래 횡보하던 박스의 하단 지지를 종가로 깨고 내려가는 하락 전환 패턴입니다.',
+    condition: '박스 하단 지지 아래에서 종가가 마감되고 거래량이 늘 때 신뢰도가 높습니다.',
+    interpretation: '지지가 무너지며 추가 하락이 이어질 수 있음을 뜻합니다.',
+    buySignal: '이 패턴은 하락 전환형이므로 매수 신호로 쓰지 않습니다.',
+    sellSignal: '거래량 동반 종가 이탈이 확인되면 하락 위험 신호로 봅니다.',
+    mistake: '장중 저가 이탈만 보고 공포 매도하면 저점에 팔 수 있습니다. 종가로 확인합니다.',
+    related: '거래량, 지지선, 장대음봉. 손절은 박스 하단 위로 잡습니다. 이탈 시 거래량을 확인하세요.',
+    pattern: 'boxBreakDown',
+  },
+  {
+    id: 'pattern-rounding-bottom',
+    group: '차트 패턴',
+    title: '둥근 바닥',
+    short: '완만한 U자로 서서히 바닥을 다지는 반전',
+    concept:
+      '둥근 바닥은 급락이나 급반등 없이 완만한 U자 곡선으로 서서히 바닥을 다지고 회복하는 장기 반전 패턴입니다.',
+    condition: '저점이 완만한 곡선을 그리고 좌우가 비슷한 높이로 회복될 때 형성됩니다.',
+    interpretation: '매도세가 서서히 소진되고 매수세가 점진적으로 유입됨을 뜻합니다.',
+    buySignal: '이전 고점(테두리)을 거래량과 함께 돌파하면 상승 후보로 봅니다.',
+    sellSignal: '회복 중 다시 바닥 아래로 밀리면 패턴 실패 위험 신호입니다.',
+    mistake: '형성에 시간이 오래 걸립니다. 조급하게 진입하면 지루한 횡보에 지칠 수 있습니다.',
+    related: '거래량, 지지선, 추세. 손절은 곡선 바닥 아래로 잡습니다. 회복·돌파 시 거래량을 확인하세요.',
+    pattern: 'roundingBottom',
+  },
+  {
+    id: 'pattern-v-recovery',
+    group: '차트 패턴',
+    title: 'V자 반등',
+    short: '급락 직후 곧바로 급반등하는 날카로운 반전',
+    concept:
+      'V자 반등은 급락한 직후 되돌림 없이 곧바로 급반등하며 날카로운 V자를 그리는 반전 패턴입니다.',
+    condition: '단기간 급락 후 곧바로 강한 반등이 나와 저점을 중심으로 V자를 형성할 때 성립합니다.',
+    interpretation: '과도한 투매가 빠르게 해소되며 매수세가 급격히 유입됨을 뜻합니다.',
+    buySignal: '급락 후 강한 반등 양봉과 거래량이 확인되면 단기 반등 후보로 봅니다.',
+    sellSignal: '반등이 이전 저점 부근에서 다시 꺾이면 추가 하락 위험 신호입니다.',
+    mistake: '떨어지는 칼날을 잡으려다 저점 확인 전 진입하면 크게 손실날 수 있습니다.',
+    related: '거래량, 지지선, RSI. 손절은 V자 저점 아래로 잡습니다. 반등 시 거래량 증가를 확인하세요.',
+    pattern: 'vRecovery',
+  },
+  {
+    id: 'pattern-gap-up',
+    group: '차트 패턴',
+    title: '갭 상승',
+    short: '전일 고가 위에서 크게 출발한 상승 빈 구간',
+    concept:
+      '갭 상승은 당일 시가·저가가 전일 고가보다 크게 높게 출발해 캔들 사이에 빈 구간이 생기는 강세 패턴입니다.',
+    condition: '당일 저가가 전일 고가보다 높게 출발해 갭이 생길 때 성립합니다.',
+    interpretation: '강한 호재나 수급으로 급격한 심리 변화가 있었음을 뜻합니다.',
+    buySignal: '거래량 동반 갭이 눌림에도 메워지지 않고 지지되면 강세 지속 후보로 봅니다.',
+    sellSignal: '갭이 당일 바로 메워지며 음봉으로 밀리면 소진성 갭 위험 신호입니다.',
+    mistake: '모든 갭이 메워지는 것은 아닙니다. 갭 종류(돌파·소진)를 구분해야 합니다.',
+    related: '거래량, 저항선, 공시·뉴스. 손절은 갭 하단 아래로 잡습니다. 갭 유지 시 거래량을 확인하세요.',
+    pattern: 'gapUp',
+  },
+  {
+    id: 'pattern-gap-down',
+    group: '차트 패턴',
+    title: '갭 하락',
+    short: '전일 저가 아래에서 크게 출발한 하락 빈 구간',
+    concept:
+      '갭 하락은 당일 시가·고가가 전일 저가보다 크게 낮게 출발해 캔들 사이에 빈 구간이 생기는 약세 패턴입니다.',
+    condition: '당일 고가가 전일 저가보다 낮게 출발해 갭이 생길 때 성립합니다.',
+    interpretation: '강한 악재나 수급으로 급격한 심리 변화가 있었음을 뜻합니다.',
+    buySignal: '과매도 구간에서 갭 하락 직후 강한 반등이 확인되면 바닥 여부를 함께 봅니다.',
+    sellSignal: '갭 하락이 메워지지 못하고 추가 음봉이 나오면 하락 지속 위험 신호입니다.',
+    mistake: '갭 하락에 공포 매도하면 저점에 팔 수 있습니다. 지지선·거래량을 함께 봅니다.',
+    related: '거래량, 지지선, 공시·뉴스. 손절은 갭 상단 위로 잡습니다. 되돌림 시 거래량을 확인하세요.',
+    pattern: 'gapDown',
+  },
 ];
 
-const GROUPS: StudyGroup[] = ['캔들', '차트 기초', '보조지표'];
-
-// ── 실데이터 사례 탐지 유틸 ─────────────────────────────
-interface Occurrence {
-  index: number;
-  date: string;
-  price: number;
-  condition: string;
-}
-
-function num(v: unknown): number {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : NaN;
-}
-
-function toRows(candles: Candle[]) {
-  return candles
-    .map((c) => ({
-      time: String(c.time),
-      open: num(c.open),
-      high: num(c.high),
-      low: num(c.low),
-      close: num(c.close),
-      volume: num(c.volume),
-    }))
-    .filter((c) => [c.open, c.high, c.low, c.close].every(Number.isFinite));
-}
-
-function fmtDate(time: string): string {
-  if (!time) return '정보 없음';
-  const digits = time.replace(/[^0-9]/g, '');
-  if (digits.length >= 8) {
-    return `${digits.slice(0, 4)}.${digits.slice(4, 6)}.${digits.slice(6, 8)}`;
-  }
-  return time;
-}
-
-function sma(values: number[], period: number, at: number): number | null {
-  if (at < period - 1) return null;
-  let sum = 0;
-  for (let i = at - period + 1; i <= at; i += 1) sum += values[i];
-  return sum / period;
-}
-
-function computeRsi(closes: number[], period = 14): (number | null)[] {
-  const out: (number | null)[] = closes.map(() => null);
-  if (closes.length <= period) return out;
-  let gain = 0;
-  let loss = 0;
-  for (let i = 1; i <= period; i += 1) {
-    const diff = closes[i] - closes[i - 1];
-    if (diff >= 0) gain += diff;
-    else loss -= diff;
-  }
-  let avgGain = gain / period;
-  let avgLoss = loss / period;
-  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
-  for (let i = period + 1; i < closes.length; i += 1) {
-    const diff = closes[i] - closes[i - 1];
-    const g = diff > 0 ? diff : 0;
-    const l = diff < 0 ? -diff : 0;
-    avgGain = (avgGain * (period - 1) + g) / period;
-    avgLoss = (avgLoss * (period - 1) + l) / period;
-    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
-  }
-  return out;
-}
-
-function ema(values: number[], period: number): (number | null)[] {
-  const out: (number | null)[] = values.map(() => null);
-  const k = 2 / (period + 1);
-  let prev: number | null = null;
-  for (let i = 0; i < values.length; i += 1) {
-    if (prev == null) {
-      if (i >= period - 1) {
-        let sum = 0;
-        for (let j = i - period + 1; j <= i; j += 1) sum += values[j];
-        prev = sum / period;
-        out[i] = prev;
-      }
-    } else {
-      prev = values[i] * k + prev * (1 - k);
-      out[i] = prev;
-    }
-  }
-  return out;
-}
-
-type Row = ReturnType<typeof toRows>[number];
-
-function body(r: Row) {
-  return Math.abs(r.close - r.open);
-}
-function range(r: Row) {
-  return Math.max(r.high - r.low, 1e-9);
-}
-function isBull(r: Row) {
-  return r.close > r.open;
-}
-function isBear(r: Row) {
-  return r.close < r.open;
-}
-function avgBody(rows: Row[], at: number, period = 20) {
-  const from = Math.max(0, at - period);
-  const slice = rows.slice(from, at);
-  if (!slice.length) return 0;
-  return slice.reduce((s, r) => s + body(r), 0) / slice.length;
-}
-
-function detectOccurrences(kind: DetectKind, rows: Row[]): Occurrence[] {
-  const out: Occurrence[] = [];
-  const closes = rows.map((r) => r.close);
-  const n = rows.length;
-  const push = (i: number, condition: string) =>
-    out.push({ index: i, date: fmtDate(rows[i].time), price: rows[i].close, condition });
-
-  const rsi = computeRsi(closes);
-
-  for (let i = 0; i < n; i += 1) {
-    const r = rows[i];
-    const prev = i > 0 ? rows[i - 1] : null;
-    switch (kind) {
-      case 'bullish':
-        if (isBull(r) && body(r) >= avgBody(rows, i) * 0.8)
-          push(i, `종가 ${r.close.toLocaleString()} > 시가 ${r.open.toLocaleString()} (상승 마감)`);
-        break;
-      case 'bearish':
-        if (isBear(r) && body(r) >= avgBody(rows, i) * 0.8)
-          push(i, `종가 ${r.close.toLocaleString()} < 시가 ${r.open.toLocaleString()} (하락 마감)`);
-        break;
-      case 'doji':
-        if (body(r) <= range(r) * 0.1)
-          push(i, `몸통이 고저폭의 10% 이하 (시가·종가 거의 동일)`);
-        break;
-      case 'hammer': {
-        const lower = Math.min(r.open, r.close) - r.low;
-        const upper = r.high - Math.max(r.open, r.close);
-        if (lower >= body(r) * 2 && upper <= body(r) && body(r) > 0)
-          push(i, `아래꼬리가 몸통의 2배 이상 (저가 반등)`);
-        break;
-      }
-      case 'invertedHammer': {
-        const lower = Math.min(r.open, r.close) - r.low;
-        const upper = r.high - Math.max(r.open, r.close);
-        if (upper >= body(r) * 2 && lower <= body(r) && body(r) > 0)
-          push(i, `위꼬리가 몸통의 2배 이상`);
-        break;
-      }
-      case 'longBullish':
-        if (isBull(r) && body(r) >= avgBody(rows, i) * 2 && avgBody(rows, i) > 0)
-          push(i, `몸통이 최근 평균의 2배 이상인 양봉`);
-        break;
-      case 'longBearish':
-        if (isBear(r) && body(r) >= avgBody(rows, i) * 2 && avgBody(rows, i) > 0)
-          push(i, `몸통이 최근 평균의 2배 이상인 음봉`);
-        break;
-      case 'bullishEngulfing':
-        if (
-          prev &&
-          isBear(prev) &&
-          isBull(r) &&
-          r.close >= prev.open &&
-          r.open <= prev.close
-        )
-          push(i, `양봉이 전일 음봉 몸통을 완전히 감쌈`);
-        break;
-      case 'bearishEngulfing':
-        if (
-          prev &&
-          isBull(prev) &&
-          isBear(r) &&
-          r.open >= prev.close &&
-          r.close <= prev.open
-        )
-          push(i, `음봉이 전일 양봉 몸통을 완전히 감쌈`);
-        break;
-      case 'morningStar':
-        if (i >= 2) {
-          const a = rows[i - 2];
-          const b = rows[i - 1];
-          if (
-            isBear(a) &&
-            body(a) >= avgBody(rows, i - 2) &&
-            body(b) <= range(b) * 0.4 &&
-            isBull(r) &&
-            r.close >= a.open - body(a) / 2 &&
-            r.close > (a.open + a.close) / 2
-          )
-            push(i, `음봉→작은 몸통→양봉 3봉 상승 반전`);
-        }
-        break;
-      case 'eveningStar':
-        if (i >= 2) {
-          const a = rows[i - 2];
-          const b = rows[i - 1];
-          if (
-            isBull(a) &&
-            body(a) >= avgBody(rows, i - 2) &&
-            body(b) <= range(b) * 0.4 &&
-            isBear(r) &&
-            r.close < (a.open + a.close) / 2
-          )
-            push(i, `양봉→작은 몸통→음봉 3봉 하락 반전`);
-        }
-        break;
-      case 'gap':
-        if (prev && (r.low > prev.high || r.high < prev.low)) {
-          const up = r.low > prev.high;
-          push(i, up ? `상승 갭 (당일 저가 > 전일 고가)` : `하락 갭 (당일 고가 < 전일 저가)`);
-        }
-        break;
-      case 'volume': {
-        const va = sma(rows.map((x) => x.volume), 20, i - 1);
-        if (va != null && va > 0 && r.volume >= va * 2.5)
-          push(i, `거래량이 20일 평균의 2.5배 이상 (${Math.round(r.volume / va * 10) / 10}배)`);
-        break;
-      }
-      case 'atrSpike': {
-        if (i >= 15) {
-          const trs: number[] = [];
-          for (let j = i - 13; j <= i; j += 1) {
-            const p = rows[j - 1];
-            trs.push(
-              Math.max(
-                rows[j].high - rows[j].low,
-                p ? Math.abs(rows[j].high - p.close) : 0,
-                p ? Math.abs(rows[j].low - p.close) : 0,
-              ),
-            );
-          }
-          const atr = trs.reduce((s, v) => s + v, 0) / trs.length;
-          const tr = Math.max(
-            r.high - r.low,
-            prev ? Math.abs(r.high - prev.close) : 0,
-            prev ? Math.abs(r.low - prev.close) : 0,
-          );
-          if (atr > 0 && tr >= atr * 2)
-            push(i, `당일 진폭이 14일 ATR의 2배 이상 (변동성 확대)`);
-        }
-        break;
-      }
-      case 'rsiOversold': {
-        const cur = rsi[i];
-        const before = rsi[i - 1];
-        if (cur != null && before != null && before < 30 && cur >= 30)
-          push(i, `RSI 과매도(30 미만) 이탈 회복 (${Math.round(cur)})`);
-        break;
-      }
-      case 'rsiOverbought': {
-        const cur = rsi[i];
-        const before = rsi[i - 1];
-        if (cur != null && before != null && before > 70 && cur <= 70)
-          push(i, `RSI 과열(70 초과) 이탈 (${Math.round(cur)})`);
-        break;
-      }
-      default:
-        break;
-    }
-  }
-
-  // 이동평균 교차·돌파·지지·저항·MACD·볼린저·스토캐스틱·OBV 등 별도 처리
-  if (kind === 'goldenCross' || kind === 'deadCross') {
-    for (let i = 1; i < n; i += 1) {
-      const shortPrev = sma(closes, 5, i - 1);
-      const shortCur = sma(closes, 5, i);
-      const longPrev = sma(closes, 20, i - 1);
-      const longCur = sma(closes, 20, i);
-      if (shortPrev == null || shortCur == null || longPrev == null || longCur == null) continue;
-      if (kind === 'goldenCross' && shortPrev <= longPrev && shortCur > longCur)
-        push(i, `5일선이 20일선을 상향 돌파 (골든크로스)`);
-      if (kind === 'deadCross' && shortPrev >= longPrev && shortCur < longCur)
-        push(i, `5일선이 20일선을 하향 이탈 (데드크로스)`);
-    }
-  }
-
-  if (kind === 'macdCross') {
-    const macdLine = ema(closes, 12).map((v, i) => {
-      const slow = ema(closes, 26)[i];
-      return v != null && slow != null ? v - slow : null;
-    });
-    const validMacd = macdLine.map((v) => (v == null ? 0 : v));
-    const signal = ema(validMacd, 9);
-    for (let i = 1; i < n; i += 1) {
-      const mp = macdLine[i - 1];
-      const mc = macdLine[i];
-      const sp = signal[i - 1];
-      const sc = signal[i];
-      if (mp == null || mc == null || sp == null || sc == null) continue;
-      if (mp <= sp && mc > sc) push(i, `MACD선이 시그널선 상향 돌파 (골든크로스)`);
-    }
-  }
-
-  if (kind === 'bollingerBreak') {
-    for (let i = 20; i < n; i += 1) {
-      const mid = sma(closes, 20, i);
-      if (mid == null) continue;
-      let variance = 0;
-      for (let j = i - 19; j <= i; j += 1) variance += (closes[j] - mid) ** 2;
-      const sd = Math.sqrt(variance / 20);
-      const upper = mid + sd * 2;
-      const prevClose = closes[i - 1];
-      if (prevClose <= upper && closes[i] > upper)
-        push(i, `종가가 볼린저 상단 밴드를 상향 돌파`);
-    }
-  }
-
-  if (kind === 'stochOversold') {
-    for (let i = 14; i < n; i += 1) {
-      const window = rows.slice(i - 13, i + 1);
-      const hi = Math.max(...window.map((x) => x.high));
-      const lo = Math.min(...window.map((x) => x.low));
-      const kCur = hi === lo ? 50 : ((rows[i].close - lo) / (hi - lo)) * 100;
-      const prevWindow = rows.slice(i - 14, i);
-      const hiP = Math.max(...prevWindow.map((x) => x.high));
-      const loP = Math.min(...prevWindow.map((x) => x.low));
-      const kPrev = hiP === loP ? 50 : ((rows[i - 1].close - loP) / (hiP - loP)) * 100;
-      if (kPrev < 20 && kCur >= 20)
-        push(i, `스토캐스틱 %K 과매도(20 미만) 회복 (${Math.round(kCur)})`);
-    }
-  }
-
-  if (kind === 'obvUp') {
-    const obv: number[] = [0];
-    for (let i = 1; i < n; i += 1) {
-      const delta = closes[i] > closes[i - 1] ? rows[i].volume : closes[i] < closes[i - 1] ? -rows[i].volume : 0;
-      obv.push(obv[i - 1] + delta);
-    }
-    for (let i = 10; i < n; i += 1) {
-      const priceDown = closes[i] <= closes[i - 10];
-      const obvUp = obv[i] > obv[i - 10];
-      if (priceDown && obvUp)
-        push(i, `주가 횡보·하락 중 OBV 상승 (매집 다이버전스)`);
-    }
-  }
-
-  if (kind === 'support' || kind === 'resistance' || kind === 'breakout' || kind === 'box' || kind === 'trendUp') {
-    // 최근 스윙 고점·저점 기준 판정
-    const lookback = 10;
-    for (let i = lookback + 1; i < n; i += 1) {
-      const past = rows.slice(Math.max(0, i - 60), i);
-      if (past.length < lookback) continue;
-      const swingLow = Math.min(...past.map((x) => x.low));
-      const swingHigh = Math.max(...past.map((x) => x.high));
-      const r = rows[i];
-      const prevR = rows[i - 1];
-      const tolLow = swingLow * 0.02;
-      if (kind === 'support' && Math.abs(r.low - swingLow) <= tolLow && isBull(r))
-        push(i, `최근 저점(${Math.round(swingLow).toLocaleString()}) 부근 반등`);
-      if (kind === 'resistance' && prevR.close <= swingHigh && r.close > swingHigh)
-        push(i, `최근 고점(${Math.round(swingHigh).toLocaleString()}) 저항 돌파`);
-      if (kind === 'breakout' && prevR.close <= swingHigh && r.close > swingHigh && body(r) >= avgBody(rows, i))
-        push(i, `저항선 종가 돌파 (강한 양봉)`);
-      if (kind === 'trendUp' && i >= 20) {
-        const maNow = sma(closes, 20, i);
-        const maPast = sma(closes, 20, i - 5);
-        if (maNow != null && maPast != null && maNow > maPast && r.close > maNow && prevR.close <= (sma(closes, 20, i - 1) ?? Infinity))
-          push(i, `상승 추세선(20일선) 지지 후 반등`);
-      }
-    }
-    if (kind === 'box') {
-      // 60봉 창에서 고저폭이 좁게 유지되는 마지막 구간 1건만 표기
-      for (let i = n - 1; i >= 40; i -= 1) {
-        const w = rows.slice(i - 39, i + 1);
-        const hi = Math.max(...w.map((x) => x.high));
-        const lo = Math.min(...w.map((x) => x.low));
-        if (lo > 0 && (hi - lo) / lo <= 0.12) {
-          push(i, `최근 40봉이 약 ${Math.round(((hi - lo) / lo) * 100)}% 범위에서 횡보 (박스권)`);
-          break;
-        }
-      }
-    }
-  }
-
-  // 최신 순 정렬, 중복 인덱스 제거
-  const seen = new Set<number>();
-  return out
-    .filter((o) => {
-      if (seen.has(o.index)) return false;
-      seen.add(o.index);
-      return true;
-    })
-    .sort((a, b) => b.index - a.index);
-}
+const GROUPS: StudyGroup[] = ['캔들', '차트 기초', '보조지표', '차트 패턴'];
 
 // ── 페이지 컴포넌트 ────────────────────────────────────
 export default function LearnPage() {
@@ -968,6 +854,24 @@ function TopicCard({
   open: boolean;
   onToggle: () => void;
 }) {
+  const [chartOpen, setChartOpen] = useState(false);
+
+  const chartConfig: StudyChartConfig = topic.pattern
+    ? {
+        title: topic.title,
+        mode: 'pattern',
+        patternKind: topic.pattern,
+        showRsi: topic.showRsi,
+        showMacd: topic.showMacd,
+      }
+    : {
+        title: topic.title,
+        mode: 'signal',
+        signalKind: topic.detect,
+        showRsi: topic.showRsi,
+        showMacd: topic.showMacd,
+      };
+
   return (
     <section className="rounded-3xl border border-card-border bg-card shadow-sm">
       <button
@@ -1009,9 +913,22 @@ function TopicCard({
             </Section>
             <Section title="함께 확인하면 좋은 다른 지표">{topic.related}</Section>
 
-            <RealExample topic={topic} />
+            <div className="rounded-2xl border border-card-border bg-background/70 p-3 text-center">
+              <p className="mb-2 text-center text-sm font-extrabold text-primary">실제 차트 예시</p>
+              <button
+                type="button"
+                onClick={() => setChartOpen(true)}
+                className="mx-auto rounded-full bg-primary px-4 py-2 text-center text-sm font-black text-primary-foreground transition active:scale-[0.98]"
+              >
+                실제 차트 예시 보기
+              </button>
+            </div>
           </div>
         </div>
+      )}
+
+      {chartOpen && (
+        <StudyChart config={chartConfig} onClose={() => setChartOpen(false)} />
       )}
     </section>
   );
@@ -1047,215 +964,4 @@ function Section({
       </p>
     </div>
   );
-}
-
-// ── 실제 차트 예시 ──────────────────────────────────────
-function RealExample({ topic }: { topic: StudyTopic }) {
-  const [loaded, setLoaded] = useState(false);
-
-  return (
-    <div className="rounded-2xl border border-card-border bg-background/70 p-3 text-center">
-      <p className="mb-2 text-center text-sm font-extrabold text-primary">실제 차트 예시</p>
-      {!loaded ? (
-        <button
-          type="button"
-          onClick={() => setLoaded(true)}
-          className="mx-auto rounded-full bg-primary px-4 py-2 text-center text-sm font-black text-primary-foreground transition active:scale-[0.98]"
-        >
-          실제 차트 예시 보기
-        </button>
-      ) : (
-        <RealExampleChart topic={topic} />
-      )}
-    </div>
-  );
-}
-
-function RealExampleChart({ topic }: { topic: StudyTopic }) {
-  const chart = useQuery({
-    queryKey: ['learn-example-chart', topic.detect, DEFAULT_TICKER],
-    queryFn: () => api.chart(DEFAULT_TICKER, '1D'),
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
-  });
-
-  const rows = useMemo(() => (chart.data ? toRows(chart.data.candles) : []), [chart.data]);
-  const occurrences = useMemo(
-    () => (rows.length ? detectOccurrences(topic.detect, rows) : []),
-    [rows, topic.detect],
-  );
-  const drawing = useMemo(() => buildChart(rows, occurrences), [rows, occurrences]);
-
-  if (chart.isLoading) {
-    return (
-      <div className="flex h-40 items-center justify-center rounded-2xl bg-secondary/60 text-center text-sm font-bold text-muted-foreground">
-        실제 일봉 차트를 불러오는 중...
-      </div>
-    );
-  }
-
-  if (chart.isError || rows.length < 5) {
-    return (
-      <div className="flex h-40 items-center justify-center rounded-2xl bg-secondary/60 px-4 text-center text-sm font-bold leading-relaxed text-muted-foreground">
-        차트 데이터를 제공받지 못했습니다. 데이터 부족으로 예시를 표시할 수 없습니다.
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <p className="mb-2 text-center text-xs font-bold text-muted-foreground">
-        {DEFAULT_TICKER_NAME} ({DEFAULT_TICKER}) 일봉 · 최근 {rows.length}봉 기준
-      </p>
-
-      {drawing && (
-        <div className="overflow-hidden rounded-2xl border border-card-border bg-background/70 p-2">
-          <svg viewBox="0 0 640 260" role="img" aria-label={`${topic.title} 실제 차트 예시`} className="h-auto w-full">
-            {[40, 80, 120, 160].map((y) => (
-              <line key={y} x1="14" x2="626" y1={y} y2={y} stroke="hsl(var(--card-border))" strokeWidth="1" />
-            ))}
-            <polyline
-              points={drawing.maPoints}
-              fill="none"
-              stroke="hsl(var(--primary))"
-              strokeWidth="1.5"
-              strokeLinejoin="round"
-            />
-            {drawing.candles.map((item) => (
-              <g key={item.key}>
-                <line
-                  x1={item.x}
-                  x2={item.x}
-                  y1={item.highY}
-                  y2={item.lowY}
-                  stroke={item.up ? 'hsl(var(--positive))' : 'hsl(var(--destructive))'}
-                  strokeWidth="1.2"
-                />
-                <rect
-                  x={item.x - item.width / 2}
-                  y={item.bodyY}
-                  width={item.width}
-                  height={Math.max(item.bodyHeight, 1.2)}
-                  rx="1"
-                  fill={item.up ? 'hsl(var(--positive))' : 'hsl(var(--destructive))'}
-                />
-              </g>
-            ))}
-            {drawing.markers.map((m) => (
-              <g key={`mark:${m.index}`}>
-                <line x1={m.x} x2={m.x} y1="16" y2="196" stroke="hsl(var(--primary) / 0.35)" strokeWidth="1" strokeDasharray="3 3" />
-                <circle cx={m.x} cy={m.y} r="4.5" fill="hsl(var(--primary))" stroke="hsl(var(--background))" strokeWidth="1.5" />
-              </g>
-            ))}
-            {drawing.volumeBars.map((item) => (
-              <rect
-                key={`v:${item.key}`}
-                x={item.x - item.width / 2}
-                y={item.y}
-                width={item.width}
-                height={item.height}
-                rx="1"
-                fill={item.up ? 'hsl(var(--positive) / 0.45)' : 'hsl(var(--destructive) / 0.45)'}
-              />
-            ))}
-          </svg>
-        </div>
-      )}
-
-      {occurrences.length === 0 ? (
-        <div className="mt-3 rounded-2xl bg-secondary/60 px-4 py-4 text-center">
-          <p className="break-keep text-center text-sm font-bold leading-relaxed text-muted-foreground">
-            최근 조회 범위에서 사례 없음
-          </p>
-        </div>
-      ) : (
-        <div className="mt-3">
-          <p className="mb-2 text-center text-sm font-extrabold text-primary">
-            최근 발생 사례 {occurrences.length}건
-          </p>
-          <div className="space-y-2">
-            {occurrences.slice(0, 6).map((o) => (
-              <div
-                key={o.index}
-                className="rounded-2xl border border-card-border bg-background/80 p-3 text-center"
-              >
-                <div className="flex items-center justify-center gap-3">
-                  <span className="text-sm font-extrabold">{o.date}</span>
-                  <span className="text-sm font-extrabold text-primary">
-                    {o.price.toLocaleString()}원
-                  </span>
-                </div>
-                <p className="mt-1 break-keep text-center text-xs font-semibold leading-relaxed text-muted-foreground">
-                  {o.condition}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function buildChart(rows: Row[], occurrences: Occurrence[]) {
-  if (rows.length < 5) return null;
-  const width = 612;
-  const left = 14;
-  const top = 20;
-  const height = 160;
-  const lows = rows.map((r) => r.low);
-  const highs = rows.map((r) => r.high);
-  const min = Math.min(...lows);
-  const max = Math.max(...highs);
-  const priceRange = Math.max(max - min, Math.abs(max) * 0.01, 1);
-  const step = width / rows.length;
-  const yOf = (price: number) => top + ((max - price) / priceRange) * height;
-
-  const candles = rows.map((r, i) => {
-    const x = left + step * i + step / 2;
-    const openY = yOf(r.open);
-    const closeY = yOf(r.close);
-    return {
-      key: `${r.time}:${i}`,
-      x,
-      highY: yOf(r.high),
-      lowY: yOf(r.low),
-      bodyY: Math.min(openY, closeY),
-      bodyHeight: Math.abs(openY - closeY),
-      width: Math.max(1.6, Math.min(7, step * 0.6)),
-      up: r.close >= r.open,
-    };
-  });
-
-  const maPoints = rows
-    .map((_, i) => {
-      const from = Math.max(0, i - 19);
-      const slice = rows.slice(from, i + 1);
-      const avg = slice.reduce((s, r) => s + r.close, 0) / slice.length;
-      return `${left + step * i + step / 2},${yOf(avg)}`;
-    })
-    .join(' ');
-
-  const maxVolume = Math.max(...rows.map((r) => r.volume), 1);
-  const volumeTop = 200;
-  const volumeHeight = 48;
-  const volumeBars = rows.map((r, i) => {
-    const barHeight = Math.max(1, (r.volume / maxVolume) * volumeHeight);
-    return {
-      key: `${r.time}:${i}`,
-      x: left + step * i + step / 2,
-      y: volumeTop + volumeHeight - barHeight,
-      height: barHeight,
-      width: Math.max(1, Math.min(7, step * 0.6)),
-      up: r.close >= r.open,
-    };
-  });
-
-  const markers = occurrences.slice(0, 12).map((o) => ({
-    index: o.index,
-    x: left + step * o.index + step / 2,
-    y: yOf(rows[o.index].close),
-  }));
-
-  return { candles, maPoints, volumeBars, markers };
 }

@@ -320,3 +320,30 @@ export async function getCompanyProfile(
 }
 
 export const companyProfile = getCompanyProfile;
+
+// Fetch the Yahoo `assetProfile.sector` for a US ticker (best-effort, single
+// call). Returns the raw English sector string (e.g. "Technology") or null when
+// unavailable. Never throws.
+export async function getYahooSector(ticker: string): Promise<string | null> {
+  const clean = cleanTicker(ticker);
+  if (!clean || isKrTicker(clean)) return null;
+
+  const encoded = encodeURIComponent(clean);
+  const urls = [
+    `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encoded}?modules=assetProfile`,
+    `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encoded}?modules=assetProfile`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const data = await fetchJson<any>(url);
+      const sector = data?.quoteSummary?.result?.[0]?.assetProfile?.sector;
+      const value = String(sector ?? '').trim();
+      if (value) return value;
+    } catch {
+      // best-effort — try next host / give up silently
+    }
+  }
+
+  return null;
+}
