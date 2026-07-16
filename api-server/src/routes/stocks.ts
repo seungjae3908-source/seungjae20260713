@@ -10,6 +10,10 @@ import {
 	type KiwoomUsExchange,
 } from "../providers/kiwoom";
 import { FilingService } from "../services/filing.service";
+import { SignalService } from "../services/signal.service";
+import { computeIndicators } from "../sample/indicators";
+import { computeScores } from "../sample/scores";
+import { scoreToRating } from "../sample/rating";
 import { deliverMemberNotification } from "../services/notification.service";
 import { requireAdmin, type AuthenticatedRequest } from "../middleware/auth";
 import {
@@ -1644,6 +1648,47 @@ router.get("/:ticker/company", async (req, res) => {
 	}
 });
 
+// GET /api/stocks/:ticker/chart?tf=1D — 프런트 ChartData 계약(캔들+지표+신호+등급)
+router.get("/:ticker/chart", async (req, res) => {
+	const ticker = normalizeTicker(req.params.ticker);
+	const timeframe = normalizeTimeframe(req.query.tf ?? req.query.timeframe);
+
+	if (!ticker) {
+		res.status(400).json({ error: "MISSING_TICKER" });
+		return;
+	}
+
+	try {
+		const meta = await MarketDataService.getCandlesMeta(ticker, timeframe as any);
+		const indicators = computeIndicators(meta.candles);
+		let signals: unknown[] = [];
+		try {
+			const report = await SignalService.getReport(ticker);
+			signals = report?.signals ?? [];
+		} catch (signalError) {
+			console.error("chart signals failed:", signalError);
+		}
+		const { overall } = computeScores(ticker);
+
+		res.json({
+			ok: true,
+			ticker,
+			timeframe,
+			provider: meta.provider,
+			fetchedAt: meta.fetchedAt,
+			candles: meta.candles,
+			indicators,
+			signals,
+			rating: scoreToRating(overall),
+			count: meta.candles.length,
+			updatedAt: meta.fetchedAt,
+		});
+	} catch (error) {
+		console.error("stock chart route error:", error);
+		res.status(500).json({ ok: false, error: "STOCK_CHART_ROUTE_ERROR", ticker, timeframe });
+	}
+});
+
 // GET /api/stocks/:ticker/candles?tf=1D
 router.get("/:ticker/candles", async (req, res) => {
 	const ticker = normalizeTicker(req.params.ticker);
@@ -1657,22 +1702,26 @@ router.get("/:ticker/candles", async (req, res) => {
 	}
 
 	try {
-		const candles = await MarketDataService.getCandles(
+		const meta = await MarketDataService.getCandlesMeta(
 			ticker,
 			timeframe as any,
 		);
 
 		res.json({
+			ok: true,
 			ticker,
 			timeframe,
-			candles,
-			count: candles.length,
-			updatedAt: new Date().toISOString(),
+			provider: meta.provider,
+			fetchedAt: meta.fetchedAt,
+			candles: meta.candles,
+			count: meta.candles.length,
+			updatedAt: meta.fetchedAt,
 		});
 	} catch (error) {
 		console.error("stock candles route error:", error);
 
 		res.status(500).json({
+			ok: false,
 			error: "STOCK_CANDLES_ROUTE_ERROR",
 			ticker,
 			timeframe,

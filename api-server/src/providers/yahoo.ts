@@ -89,15 +89,24 @@ async function fetchJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function fetchYahooChart(symbol: string): Promise<YahooChartResult> {
+async function fetchYahooChart(
+  symbol: string,
+  params?: { range: string; interval: string },
+): Promise<YahooChartResult> {
   const encoded = encodeURIComponent(symbol);
 
-  const urls = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?range=5d&interval=1d`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?range=5d&interval=1d`,
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?range=1mo&interval=1d`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?range=1mo&interval=1d`,
-  ];
+  const query = params
+    ? [
+        params.range
+          ? `range=${params.range}&interval=${params.interval}`
+          : `period1=0&period2=9999999999&interval=${params.interval}`,
+      ]
+    : ['range=5d&interval=1d', 'range=1mo&interval=1d'];
+
+  const urls = query.flatMap((q) => [
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
+  ]);
 
   const errors: string[] = [];
 
@@ -204,12 +213,27 @@ export async function getQuote(
 
 export const quote = getQuote;
 
+// 시간프레임별 야후 차트 range/interval 매핑 (차트용 장기 데이터).
+function chartParams(tf?: string): { range: string; interval: string } {
+  // 주의: range=max는 야후가 굵은 버킷(약 168개)으로 뭉개서 반환한다.
+  // period1/period2 명시가 전체 이력을 올바른 간격으로 준다.
+  switch (String(tf ?? '1D')) {
+    case '1W':
+      return { range: '', interval: '1wk' };
+    case '1M':
+      return { range: '', interval: '1mo' };
+    default:
+      return { range: '10y', interval: '1d' };
+  }
+}
+
 export async function getCandles(
   entryOrTicker: CatalogEntry | string,
+  timeframe?: string,
 ): Promise<Candle[]> {
   const ticker = getTickerFromEntry(entryOrTicker);
   const symbol = yahooSymbol(ticker);
-  const result = await fetchYahooChart(symbol);
+  const result = await fetchYahooChart(symbol, chartParams(timeframe));
   const quote = result.indicators?.quote?.[0];
 
   if (!result.timestamp?.length || !quote) return [];

@@ -37,8 +37,9 @@ function rankingTypeParam(
   );
 
   if (
-    normalized ===
-    'tradingValue'
+    normalized === 'tradingValue' ||
+    normalized.toLowerCase() === 'tradingvalue' ||
+    normalized === 'value'
   ) {
     return 'tradingValue';
   }

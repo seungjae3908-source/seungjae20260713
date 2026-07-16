@@ -113,6 +113,80 @@ export async function getFilings(
   });
 }
 
+// XBRL company facts 요약: 전체 JSON(수 MB)에서 주요 지표의 최신값만 추린다.
+export interface CompanyFactsSummary {
+  entityName: string;
+  cik: string;
+  facts: Array<{
+    key: string;
+    label: string;
+    unit: string;
+    value: number;
+    end: string; // 기준일 (기간 종료일)
+    fy?: string | number;
+    fp?: string;
+    form?: string;
+  }>;
+}
+
+const FACT_KEYS: Array<{ key: string; label: string }> = [
+  { key: 'RevenueFromContractWithCustomerExcludingAssessedTax', label: '매출액' },
+  { key: 'Revenues', label: '매출액' },
+  { key: 'NetIncomeLoss', label: '순이익' },
+  { key: 'Assets', label: '총자산' },
+  { key: 'Liabilities', label: '총부채' },
+  { key: 'StockholdersEquity', label: '자본총계' },
+  { key: 'EarningsPerShareDiluted', label: '희석 EPS' },
+  { key: 'CommonStockSharesOutstanding', label: '발행주식수' },
+  { key: 'CashAndCashEquivalentsAtCarryingValue', label: '현금및현금성자산' },
+];
+
+export async function getCompanyFactsSummary(
+  ticker: string,
+): Promise<CompanyFactsSummary> {
+  const cik = await getCikByTicker(ticker);
+  return cached(`sec:companyfacts:${cik}`, TTL.risk, async () => {
+    const data = await fetchJson<{
+      entityName?: string;
+      facts?: Record<string, Record<string, { units?: Record<string, Array<{ val?: number; end?: string; fy?: number; fp?: string; form?: string }>> }>>;
+    }>(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, {
+      provider: 'sec-edgar',
+      headers: HEADERS,
+    });
+    const gaap = data.facts?.['us-gaap'] ?? {};
+    const out: CompanyFactsSummary = {
+      entityName: data.entityName ?? ticker,
+      cik,
+      facts: [],
+    };
+    const seenLabels = new Set<string>();
+    for (const { key, label } of FACT_KEYS) {
+      if (seenLabels.has(label)) continue;
+      const units = gaap[key]?.units;
+      if (!units) continue;
+      const unitName = Object.keys(units)[0];
+      const rows = units[unitName] ?? [];
+      // 기준일(end) 최신 항목을 고른다 — 오래된 값을 최신처럼 표시하지 않는다.
+      const latest = [...rows]
+        .filter((r) => typeof r.val === 'number' && r.end)
+        .sort((a, b) => String(b.end).localeCompare(String(a.end)))[0];
+      if (!latest) continue;
+      seenLabels.add(label);
+      out.facts.push({
+        key,
+        label,
+        unit: unitName,
+        value: latest.val as number,
+        end: latest.end as string,
+        fy: latest.fy,
+        fp: latest.fp,
+        form: latest.form,
+      });
+    }
+    return out;
+  });
+}
+
 export interface FilingCounts {
   offering: number; // S-1/S-3/424B — dilutive offerings
   reverseSplit: number; // 8-K item 3.03 style structural changes (proxy)

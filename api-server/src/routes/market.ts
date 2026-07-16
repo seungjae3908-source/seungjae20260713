@@ -18,7 +18,8 @@ function normalizeMarket(value: unknown): MarketScope {
 }
 
 function normalizeTicker(value: unknown): string {
-  return String(value ?? '').trim().toUpperCase();
+  // "KR:005930", "US:AAPL" 같은 시장 접두어도 허용한다.
+  return String(value ?? '').trim().toUpperCase().replace(/^(KR|US)[:.]/, '');
 }
 
 function uniqueTickers(values: string[]): string[] {

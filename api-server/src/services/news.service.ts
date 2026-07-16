@@ -6,7 +6,6 @@
 //
 // Items without a real http(s) URL are dropped (cards must open a real
 // article). On live failure we fall back to the deterministic sample feed.
-import { getNews as getSampleNews } from '../sample/news';
 import { getCatalogEntry, type CatalogEntry } from '../data/catalog';
 import { getCompanyNews } from '../providers/finnhub';
 import { fetchText } from '../lib/http';
@@ -134,21 +133,76 @@ async function krItems(entry: CatalogEntry): Promise<NewsItem[]> {
   return items;
 }
 
+// 미국 종목: Finnhub 실패 시 구글 뉴스 RSS(영문, 실제 기사)로 폴백한다.
+async function usItemsFromGoogle(entry: CatalogEntry): Promise<NewsItem[]> {
+  const query = encodeURIComponent(`${entry.name} stock`);
+  const xml = await fetchText(
+    `https://news.google.com/rss/search?q=${query}&hl=en-US&gl=US&ceid=US:en`,
+    { provider: 'google-news', headers: { 'User-Agent': 'Mozilla/5.0' } },
+  );
+
+  const items: NewsItem[] = [];
+  const re = /<item>([\s\S]*?)<\/item>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml)) !== null && items.length < 16) {
+    const block = m[1];
+    const title = decodeXml(pick(block, /<title>([\s\S]*?)<\/title>/));
+    const url = decodeXml(pick(block, /<link>([\s\S]*?)<\/link>/));
+    const pub = pick(block, /<pubDate>([\s\S]*?)<\/pubDate>/);
+    const srcUrl = pick(block, /<source[^>]*url="([^"]*)"/);
+    const srcName = decodeXml(pick(block, /<source[^>]*>([\s\S]*?)<\/source>/));
+    if (!title || !url || !url.startsWith('http')) continue;
+
+    const date = pub ? new Date(pub).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+    items.push({
+      title,
+      source: srcName || domainFromUrl(srcUrl || url),
+      sourceDomain: domainFromUrl(srcUrl || url),
+      date,
+      url,
+      tone: toneFromText(title, false),
+    } as NewsItem);
+  }
+  return items;
+}
+
+export class NewsProviderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NewsProviderError';
+  }
+}
+
+/**
+ * 실제 뉴스만 반환합니다. 공급자 실패 시 가짜(샘플) 뉴스를 만들지 않고
+ * NewsProviderError를 던져 라우트에서 오류로 구분해 표시합니다.
+ */
 async function getNews(ticker: string): Promise<NewsData | null> {
   const entry = getCatalogEntry(ticker);
   if (!entry) return null;
 
   try {
-    const items = entry.market === 'KR' ? await krItems(entry) : await usItems(entry);
-    const filtered = items.filter((n) => n.url && n.url.startsWith('http'));
-    if (filtered.length > 0) {
-      return splitNews(filtered);
+    let items: NewsItem[] = [];
+    if (entry.market === 'KR') {
+      items = await krItems(entry);
+    } else {
+      // 미국: Finnhub 우선, 실패(키 없음 등) 시 구글 뉴스 RSS(실제 기사)로 폴백.
+      try {
+        items = await usItems(entry);
+      } catch (err) {
+        console.error(`finnhub news failed for ${ticker}, falling back to google news:`, err);
+        items = [];
+      }
+      if (items.length === 0) {
+        items = await usItemsFromGoogle(entry);
+      }
     }
+    const filtered = items.filter((n) => n.url && n.url.startsWith('http'));
+    return splitNews(filtered);
   } catch (err) {
     console.error(`live news failed for ${ticker}:`, err);
+    throw new NewsProviderError('뉴스 공급자 호출에 실패했습니다.');
   }
-
-  return getSampleNews(ticker);
 }
 
 export const NewsService = {

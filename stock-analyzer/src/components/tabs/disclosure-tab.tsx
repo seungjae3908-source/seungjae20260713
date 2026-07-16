@@ -17,7 +17,7 @@ export function DisclosureTab({ ticker, active }: { ticker: string; active: bool
   const list = data.market === 'US' ? data.filings : data.disclosures;
 
   return <div className="space-y-3"><Panel title={data.market === 'US' ? '최근 SEC 공시' : '최근 DART 공시'}>
-    {list.length === 0 ? <p className="text-sm text-muted-foreground">최근 7일 이내 확인된 공시가 없습니다.</p> : <ul className="space-y-2">{list.map((item, index) => {
+    {list.length === 0 ? <p className="text-sm text-muted-foreground">확인된 공시가 없습니다.</p> : <ul className="space-y-2">{list.map((item, index) => {
       const title = 'form' in item ? `${item.form} · ${item.description}` : item.report;
       const meta = SENTIMENT[item.sentiment];
       const Icon = meta.icon;
