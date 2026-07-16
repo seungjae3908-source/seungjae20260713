@@ -1,6 +1,6 @@
 import { Router, type IRouter } from 'express';
 import { type AuthenticatedRequest } from '../middleware/auth';
-import { getSupabase } from '../lib/supabase';
+import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
   DEFAULT_NOTIFICATION_TYPES,
   deliverMemberNotification,
@@ -10,6 +10,11 @@ import {
 } from '../services/notification.service';
 
 const router: IRouter = Router();
+
+// 서비스 역할 키가 없으면 로그인한 회원 본인 토큰으로 DB에 접근한다 (RLS 준수).
+function db(req: AuthenticatedRequest) {
+  return hasSupabaseServerKey() ? getSupabase() : getUserSupabase(req.accessToken!);
+}
 function getEndpoint(body: unknown): string | null {
   if (!body || typeof body !== 'object') return null;
   const endpoint = (body as { endpoint?: unknown }).endpoint;
@@ -17,14 +22,14 @@ function getEndpoint(body: unknown): string | null {
 }
 
 router.get('/notifications/preferences', async (req: AuthenticatedRequest, res) => {
-  try { return res.json({ preferences: await ensureNotificationPreferences(req.member!.id), vapidReady: isVapidReady() }); }
+  try { return res.json({ preferences: await ensureNotificationPreferences(req.member!.id, db(req)), vapidReady: isVapidReady() }); }
   catch (error) { console.error('notification preferences read error:', error); return res.status(500).json({ error: 'NOTIFICATION_PREFERENCES_READ_FAILED' }); }
 });
 
 router.put('/notifications/preferences', async (req: AuthenticatedRequest, res) => {
   const enabledTypes = Array.isArray(req.body?.enabledTypes) ? [...new Set<string>((req.body.enabledTypes as unknown[]).map(String))].filter((item: string) => DEFAULT_NOTIFICATION_TYPES.includes(item as any)) : [...DEFAULT_NOTIFICATION_TYPES];
   const changes = { member_id: req.member!.id, enabled_types: enabledTypes, app_enabled: req.body?.appEnabled !== false, push_enabled: req.body?.pushEnabled === true, updated_at: new Date().toISOString() };
-  const { data, error } = await getSupabase().from('notification_preferences').upsert(changes, { onConflict: 'member_id' }).select('*').single();
+  const { data, error } = await db(req).from('notification_preferences').upsert(changes, { onConflict: 'member_id' }).select('*').single();
   if (error) return res.status(500).json({ error: 'NOTIFICATION_PREFERENCES_SAVE_FAILED' });
   return res.json({ preferences: data });
 });
@@ -32,22 +37,24 @@ router.put('/notifications/preferences', async (req: AuthenticatedRequest, res) 
 router.post('/push/subscribe', async (req: AuthenticatedRequest, res) => {
   const endpoint = getEndpoint(req.body);
   if (!endpoint) return res.status(400).json({ error: 'INVALID_SUBSCRIPTION' });
-  const { error } = await getSupabase().from('push_subscriptions').upsert({ member_id: req.member!.id, endpoint, subscription: req.body, updated_at: new Date().toISOString() }, { onConflict: 'endpoint' });
+  const { error } = await db(req).from('push_subscriptions').upsert({ member_id: req.member!.id, endpoint, subscription: req.body, updated_at: new Date().toISOString() }, { onConflict: 'endpoint' });
   if (error) return res.status(500).json({ error: 'PUSH_SUBSCRIPTION_SAVE_FAILED' });
-  await getSupabase().from('notification_preferences').upsert({ member_id: req.member!.id, push_enabled: true, updated_at: new Date().toISOString() }, { onConflict: 'member_id' });
-  const { count } = await getSupabase().from('push_subscriptions').select('*', { count: 'exact', head: true }).eq('member_id', req.member!.id);
+  await db(req).from('notification_preferences').upsert({ member_id: req.member!.id, push_enabled: true, updated_at: new Date().toISOString() }, { onConflict: 'member_id' });
+  const { count } = await db(req).from('push_subscriptions').select('*', { count: 'exact', head: true }).eq('member_id', req.member!.id);
   return res.json({ ok: true, count: count ?? 0, vapidReady: isVapidReady() });
 });
 
 router.post('/push/unsubscribe', async (req: AuthenticatedRequest, res) => {
   const endpoint = getEndpoint(req.body);
   if (!endpoint) return res.status(400).json({ error: 'INVALID_ENDPOINT' });
-  const { error } = await getSupabase().from('push_subscriptions').delete().eq('member_id', req.member!.id).eq('endpoint', endpoint);
+  const { error } = await db(req).from('push_subscriptions').delete().eq('member_id', req.member!.id).eq('endpoint', endpoint);
   if (error) return res.status(500).json({ error: 'PUSH_UNSUBSCRIBE_FAILED' });
   return res.json({ ok: true });
 });
 
 router.post('/push/test', async (req: AuthenticatedRequest, res) => {
+  // 발송 파이프라인은 서버(서비스 역할) 키가 필요하다. 없으면 조용히 실패하는 대신 명시적으로 알린다.
+  if (!hasSupabaseServerKey()) return res.status(503).json({ error: 'SERVICE_KEY_REQUIRED', message: 'SUPABASE_SERVICE_ROLE_KEY가 등록되어야 알림 발송을 사용할 수 있습니다.' });
   const body = typeof req.body === 'object' && req.body ? req.body as Record<string, unknown> : {};
   const result = await deliverMemberNotification({
     memberId: req.member!.id,
@@ -62,6 +69,7 @@ router.post('/push/test', async (req: AuthenticatedRequest, res) => {
 });
 
 router.post('/notifications/price-alerts/check-now', async (_req: AuthenticatedRequest, res) => {
+  if (!hasSupabaseServerKey()) return res.status(503).json({ error: 'SERVICE_KEY_REQUIRED', message: 'SUPABASE_SERVICE_ROLE_KEY가 등록되어야 가격 알림 모니터를 실행할 수 있습니다.' });
   try {
     return res.json({ ok: true, ...(await runPriceAlertMonitorOnce()) });
   } catch (error) {
@@ -72,19 +80,19 @@ router.post('/notifications/price-alerts/check-now', async (_req: AuthenticatedR
 
 router.get('/notifications/history', async (req: AuthenticatedRequest, res) => {
   const limit = Math.max(1, Math.min(200, Number(req.query.limit ?? 100) || 100));
-  const { data, error } = await getSupabase().from('notification_history').select('*').eq('member_id', req.member!.id).order('created_at', { ascending: false }).limit(limit);
+  const { data, error } = await db(req).from('notification_history').select('*').eq('member_id', req.member!.id).order('created_at', { ascending: false }).limit(limit);
   if (error) return res.status(500).json({ error: 'NOTIFICATION_HISTORY_READ_FAILED' });
   return res.json({ notifications: data ?? [], count: data?.length ?? 0 });
 });
 
 router.patch('/notifications/history/:id/read', async (req: AuthenticatedRequest, res) => {
-  const { data, error } = await getSupabase().from('notification_history').update({ read_at: new Date().toISOString() }).eq('id', req.params.id).eq('member_id', req.member!.id).select('*').maybeSingle();
+  const { data, error } = await db(req).from('notification_history').update({ read_at: new Date().toISOString() }).eq('id', req.params.id).eq('member_id', req.member!.id).select('*').maybeSingle();
   if (error) return res.status(500).json({ error: 'NOTIFICATION_HISTORY_UPDATE_FAILED' });
   return res.json({ notification: data });
 });
 
 router.get('/notifications/price-alerts', async (req: AuthenticatedRequest, res) => {
-  const { data, error } = await getSupabase().from('price_alerts').select('*').eq('member_id', req.member!.id).order('created_at', { ascending: false });
+  const { data, error } = await db(req).from('price_alerts').select('*').eq('member_id', req.member!.id).order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: 'PRICE_ALERT_LIST_FAILED' });
   return res.json({ alerts: data ?? [] });
 });
@@ -96,13 +104,13 @@ router.post('/notifications/price-alerts', async (req: AuthenticatedRequest, res
   const targetPrice = Number(req.body?.targetPrice);
   if (!assetType || !direction || !symbol || !Number.isFinite(targetPrice) || targetPrice <= 0) return res.status(400).json({ error: 'INVALID_PRICE_ALERT' });
   const row = { member_id: req.member!.id, asset_type: assetType, market: String(req.body?.market ?? ''), symbol, direction, target_price: targetPrice, repeat_enabled: req.body?.repeatEnabled === true, app_enabled: req.body?.appEnabled !== false, push_enabled: req.body?.pushEnabled !== false, expires_at: req.body?.expiresAt || null, enabled: true, updated_at: new Date().toISOString() };
-  const { data, error } = await getSupabase().from('price_alerts').upsert(row, { onConflict: 'member_id,asset_type,market,symbol,direction,target_price' }).select('*').single();
+  const { data, error } = await db(req).from('price_alerts').upsert(row, { onConflict: 'member_id,asset_type,market,symbol,direction,target_price' }).select('*').single();
   if (error) return res.status(500).json({ error: 'PRICE_ALERT_SAVE_FAILED' });
   return res.json({ alert: data });
 });
 
 router.delete('/notifications/price-alerts/:id', async (req: AuthenticatedRequest, res) => {
-  const { error } = await getSupabase().from('price_alerts').delete().eq('id', req.params.id).eq('member_id', req.member!.id);
+  const { error } = await db(req).from('price_alerts').delete().eq('id', req.params.id).eq('member_id', req.member!.id);
   if (error) return res.status(500).json({ error: 'PRICE_ALERT_DELETE_FAILED' });
   return res.json({ ok: true });
 });

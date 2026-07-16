@@ -78,8 +78,9 @@ function initializeVapid(): void {
 
 export async function ensureNotificationPreferences(
   memberId: string,
+  client?: ReturnType<typeof getSupabase>,
 ): Promise<NotificationPreferences> {
-  const supabase = getSupabase();
+  const supabase = client ?? getSupabase();
   const { data, error } = await supabase
     .from('notification_preferences')
     .select('*')
