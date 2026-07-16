@@ -28,6 +28,16 @@ export default function HomePage() {
   const mode = useAssetMode();
   const [now, setNow] = useState(() => new Date());
 
+  // 딥링크(?asset=coin|stock&marketMode=KR|US) 지원 — 검증·공유용, 기본 동작 불변.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const asset = p.get('asset');
+    const mk = p.get('marketMode');
+    if (asset === 'coin' || asset === 'stock') mode.setAsset(asset);
+    if (mk === 'US' || mk === 'KR') mode.setStockMarket(mk);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
@@ -117,7 +127,8 @@ function StockHome({ mode, summary, sectorData, summaryLoading, summaryError, se
   const wanted = mode === 'KR' ? ['kospi', 'kosdaq'] : ['nasdaq'];
   const indices = summary.filter((item) => wanted.includes(String(item.key).toLowerCase()));
   const sectors = sectorData?.sectors ?? [];
-  const [activeSector, setActiveSector] = useState<string | null>(null);
+  // 딥링크(?sector=키) 지원 — 기본 동작은 기존과 동일(첫 섹터 선택).
+  const [activeSector, setActiveSector] = useState<string | null>(() => new URLSearchParams(window.location.search).get('sector'));
   const selected = sectors.find((sector) => sector.key === activeSector) ?? sectors[0] ?? null;
   const sectorRows = selected?.rows ?? [];
   return (
@@ -188,7 +199,8 @@ function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 
     return map;
   }, [rows]);
 
-  const [activeSector, setActiveSector] = useState<string | null>(null);
+  // 딥링크(?coinCat=키) 지원 — 기본 동작은 기존과 동일(첫 분야 선택).
+  const [activeSector, setActiveSector] = useState<string | null>(() => new URLSearchParams(window.location.search).get('coinCat'));
   const selected = COIN_SECTORS.find((sector) => sector.key === activeSector) ?? COIN_SECTORS[0];
   const sectorRows = useMemo(
     () =>
