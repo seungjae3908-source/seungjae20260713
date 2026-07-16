@@ -7942,7 +7942,7 @@ async function requireMember(req, res, next) {
   const supabase = getSupabase();
   const { data: auth, error: authError } = await supabase.auth.getUser(token);
   if (authError || !auth.user) return res.status(401).json({ error: "INVALID_SESSION" });
-  const { data: profile, error } = await supabase.from("profiles").select("*").eq("id", auth.user.id).single();
+  const { data: profile, error } = await getUserSupabase(token).from("profiles").select("*").eq("id", auth.user.id).single();
   if (error || !profile) return res.status(403).json({ error: "PROFILE_NOT_FOUND" });
   if (profile.status !== "approved") return res.status(403).json({ error: "MEMBER_NOT_APPROVED", status: profile.status });
   req.member = profile;

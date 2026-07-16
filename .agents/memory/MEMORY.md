@@ -1,2 +1,3 @@
 - [API route auth policy](api-route-auth.md) — market/news/crypto/kiwoom-status are public; watchlist, kiwoom ops (egress-ip, token-test, test, raw-ranking, token/refresh) must stay auth-gated (IDOR/abuse risk).
+- [Supabase RLS lessons](supabase-rls-lessons.md) — profiles policies need is_admin() fn (recursion), server must use user-scoped client (no service key), migrations run manually by user.
 - [Run/port setup](run-port-setup.md) — Run button & api-server workflow both build frontend then serve API on 8080 (external 80); only one may hold 8080 at a time. KIWOOM_MODE=mock is mandatory (no real trading).
