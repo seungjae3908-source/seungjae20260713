@@ -1,71 +1,60 @@
-import { useLocation } from "wouter";
-import {
-  Home,
-  Layers3,
-  Newspaper,
-  Search,
-  Settings,
-  TrendingUp,
-  BookOpenCheck,
-} from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useLocation } from 'wouter';
+import { Bot, Home, ListTree, Newspaper, Settings, WalletCards } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 const ITEMS = [
   {
-    href: "/",
-    label: "홈",
+    href: '/home',
+    label: '홈',
     icon: Home,
-    match: (path: string) => path === "/",
+    match: (path: string) => path === '/' || path === '/home',
   },
   {
-    href: "/search",
-    label: "주식",
-    icon: TrendingUp,
+    href: '/stocks',
+    label: '종목',
+    icon: ListTree,
     match: (path: string) =>
-      path === "/search" ||
-      path.startsWith("/stock/") ||
-      path.startsWith("/watchlist"),
+      path === '/stocks' ||
+      path.startsWith('/search') ||
+      path.startsWith('/scanner') ||
+      path.startsWith('/themes') ||
+      path.startsWith('/stock/') ||
+      path.startsWith('/watchlist'),
   },
   {
-    href: "/themes",
-    label: "테마별",
-    icon: Layers3,
-    match: (path: string) => path.startsWith("/themes"),
+    href: '/auto-trading',
+    label: '자동매매',
+    icon: Bot,
+    match: (path: string) => path.startsWith('/auto-trading'),
   },
   {
-    href: "/scanner",
-    label: "검색기",
-    icon: Search,
-    match: (path: string) => path.startsWith("/scanner"),
-  },
-  {
-    href: "/stock-info",
-    label: "정보",
+    href: '/stock-info',
+    label: '주식정보',
     icon: Newspaper,
-    match: (path: string) => path.startsWith("/stock-info"),
+    match: (path: string) => path.startsWith('/stock-info'),
   },
   {
-    href: "/learn",
-    label: "주식공부",
-    icon: BookOpenCheck,
-    match: (path: string) => path.startsWith("/learn"),
+    href: '/assets',
+    label: '자산',
+    icon: WalletCards,
+    match: (path: string) => path.startsWith('/assets') || path.startsWith('/portfolio'),
   },
   {
-    href: "/more",
-    label: "설정",
+    href: '/settings',
+    label: '설정',
     icon: Settings,
     match: (path: string) =>
-      path.startsWith("/more") ||
-      path.startsWith("/settings") ||
-      path.startsWith("/account") ||
-      path.startsWith("/login") ||
-      path.startsWith("/portfolio") ||
-      path.startsWith("/alerts"),
+      path.startsWith('/settings') ||
+      path.startsWith('/more') ||
+      path.startsWith('/account') ||
+      path.startsWith('/admin') ||
+      path.startsWith('/alerts') ||
+      path.startsWith('/learn'),
   },
 ];
 
 function cleanPath(path: string) {
-  return path.split("?")[0] || "/";
+  return path.split('?')[0] || '/';
 }
 
 export function BottomNav() {
@@ -73,31 +62,26 @@ export function BottomNav() {
   const path = cleanPath(location);
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/90 px-1 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-xl">
-      <div className="mx-auto grid max-w-md grid-cols-7 gap-0.5">
+    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/95 px-1 pb-[max(env(safe-area-inset-bottom),0.35rem)] pt-1.5 backdrop-blur-xl">
+      <div className="mx-auto grid max-w-md grid-cols-6 gap-0.5">
         {ITEMS.map((item) => {
           const active = item.match(path);
           const Icon = item.icon;
-
           return (
             <button
               key={item.href}
               type="button"
               onClick={() => navigate(item.href)}
+              aria-current={active ? 'page' : undefined}
               className={cn(
-                "flex min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-2 text-[10px] font-extrabold transition",
+                'flex min-w-0 flex-col items-center justify-center rounded-xl px-0.5 py-1.5 text-[9px] font-extrabold transition',
                 active
-                  ? "text-primary"
-                  : "text-muted-foreground active:text-foreground",
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-muted-foreground active:bg-secondary active:text-foreground',
               )}
             >
-              <Icon
-                className={cn(
-                  "mb-1 h-5 w-5",
-                  active ? "text-primary" : "text-muted-foreground",
-                )}
-              />
-              <span className="truncate">{item.label}</span>
+              <Icon className="mb-0.5 h-[18px] w-[18px]" />
+              <span className="max-w-full truncate">{item.label}</span>
             </button>
           );
         })}

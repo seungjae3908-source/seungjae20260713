@@ -2,7 +2,7 @@ import { cached, TTL } from '../lib/cache';
 import { computeScores } from '../sample/scores';
 import { scoreToRating } from '../sample/rating';
 import { classifyAssetType, type AssetType } from '../data/asset-type';
-import { KiwoomProvider } from '../providers/kiwoom';
+import { getKiwoomRankings, isKiwoomConfigured, type KiwoomRankingRow } from '../providers/kiwoom';
 import type {
   MarketKey,
   MarketListings,
@@ -215,7 +215,9 @@ function naverRowToQuote(row: NaverStockRow, exchange: string): QuoteRow | null 
     currency: 'KRW',
     assetType,
     price,
+    changeAmount: 0,
     changePercent,
+    updatedAt: new Date().toISOString(),
     rating: ratingFor(ticker),
     exchange,
     volume,
@@ -352,7 +354,9 @@ function yahooRowToQuote(row: YahooQuoteRow): QuoteRow | null {
     currency: 'USD',
     assetType,
     price,
+    changeAmount: 0,
     changePercent,
+    updatedAt: new Date().toISOString(),
     rating: ratingFor(ticker),
     exchange: normalizeYahooExchange(row.exchange),
     volume,
@@ -461,7 +465,7 @@ async function getYahooUsRankingRows(market: MarketKey): Promise<QuoteRow[]> {
 
   const rows: QuoteRow[] = [];
 
-  settled.forEach((result, i) => {
+  settled.forEach((result: PromiseSettledResult<QuoteRow[]>, i: number) => {
     if (result.status === 'fulfilled') {
       rows.push(...result.value);
     } else {
@@ -480,44 +484,44 @@ function kiwoomAssetTypeForName(name: string, market: 'KR' | 'US'): AssetType {
   return classifyAssetType(name, market);
 }
 
-function kiwoomRowsToQuotes(
-  rows: Awaited<ReturnType<typeof KiwoomProvider.getDomesticMovers>>,
-): QuoteRow[] {
-  return rows.map((row) => ({
-    ticker: row.ticker,
-    name: row.name,
-    market: row.market,
-    currency: row.currency,
-    assetType: kiwoomAssetTypeForName(row.name, row.market),
-    price: row.price,
-    changePercent: row.changePercent,
-    rating: ratingFor(row.ticker),
-    exchange: row.exchange,
-    reason: undefined,
-  }));
+function kiwoomRowsToQuotes(rows: KiwoomRankingRow[]): QuoteRow[] {
+  return rows
+    .filter((row) => row.price != null && row.changePercent != null)
+    .map((row) => ({
+      ticker: row.ticker,
+      name: row.name,
+      market: row.market,
+      currency: row.currency,
+      assetType: kiwoomAssetTypeForName(row.name, row.market),
+      price: Number(row.price),
+      changeAmount: 0,
+      changePercent: Number(row.changePercent),
+      volume: Number(row.volume ?? 0),
+      tradingValue: Number(row.tradingValue ?? 0),
+      updatedAt: new Date().toISOString(),
+      rating: ratingFor(row.ticker),
+      reason: row.reason,
+      rank: row.rank,
+    }));
 }
 
 async function getKiwoomDomesticRows(market: MarketKey): Promise<QuoteRow[]> {
-  if (!KiwoomProvider.configured()) return [];
+  if (!isKiwoomConfigured()) return [];
 
-  if (market !== 'KRX' && market !== 'KOSPI' && market !== 'KOSDAQ') {
-    return [];
-  }
+  // The Kiwoom ranking endpoint returns the full domestic universe.
+  // KOSPI/KOSDAQ-specific lists continue through the market-specific Naver source.
+  if (market !== 'KRX') return [];
 
   try {
     const [upRows, downRows] = await Promise.all([
-      KiwoomProvider.getDomesticMovers(market, 'up'),
-      KiwoomProvider.getDomesticMovers(market, 'down'),
+      getKiwoomRankings('KR', 'gainers', MAX),
+      getKiwoomRankings('KR', 'losers', MAX),
     ]);
-
     const quotes = kiwoomRowsToQuotes([...upRows, ...downRows]);
-
     console.log('[ranking-movers] kiwoom domestic:', market, quotes.length);
-
     return quotes;
   } catch (error) {
     console.error('[ranking-movers] kiwoom domestic failed:', market, error);
-
     return [];
   }
 }
@@ -627,16 +631,14 @@ async function getMarketListings(market: MarketKey): Promise<RankedListings> {
 }
 
 async function healthCheck() {
-  try {
-    return await KiwoomProvider.healthCheck();
-  } catch (error) {
-    return {
-      configured: KiwoomProvider.configured(),
-      token: false,
-      baseUrl: process.env.KIWOOM_BASE_URL ?? 'https://api.kiwoom.com',
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
+  return {
+    configured: isKiwoomConfigured(),
+    token: null,
+    baseUrl: process.env.KIWOOM_BASE_URL ?? 'https://api.kiwoom.com',
+    message: isKiwoomConfigured()
+      ? '키움 환경변수가 설정되어 있습니다. 실제 토큰 상태는 /api/kiwoom/status에서 확인합니다.'
+      : '키움 App Key 또는 App Secret이 설정되지 않았습니다.',
+  };
 }
 
 export const RankingMoversService = {

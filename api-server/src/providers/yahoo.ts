@@ -23,6 +23,14 @@ type YahooChartResult = {
   };
 };
 
+export interface YahooIndexQuote {
+  price: number;
+  changeAmount: number;
+  changePercent: number;
+  spark: number[];
+  updatedAt: string;
+}
+
 function cleanTicker(value: unknown) {
   return String(value ?? '').trim().toUpperCase();
 }
@@ -223,6 +231,52 @@ export async function getCandles(
 }
 
 export const candles = getCandles;
+
+export async function getIndexQuote(symbol: string): Promise<YahooIndexQuote> {
+  const clean = cleanTicker(symbol);
+  const result = await fetchYahooChart(clean);
+  const quote = result.indicators?.quote?.[0];
+
+  if (!quote?.close?.length) {
+    throw new Error(`YAHOO_INDEX_NO_CLOSE:${clean}`);
+  }
+
+  const index = lastValidIndex(quote.close);
+  if (index < 0) {
+    throw new Error(`YAHOO_INDEX_NO_VALID_PRICE:${clean}`);
+  }
+
+  const price =
+    safeNumber(result.meta?.regularMarketPrice) || safeNumber(quote.close[index]);
+  let previousClose =
+    safeNumber(result.meta?.previousClose) ||
+    safeNumber(result.meta?.chartPreviousClose);
+
+  if (!previousClose) {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      const candidate = safeNumber(quote.close[i]);
+      if (candidate > 0) {
+        previousClose = candidate;
+        break;
+      }
+    }
+  }
+
+  if (!price || !previousClose) {
+    throw new Error(`YAHOO_INDEX_INCOMPLETE:${clean}`);
+  }
+
+  const changeAmount = price - previousClose;
+  return {
+    price,
+    changeAmount,
+    changePercent: (changeAmount / previousClose) * 100,
+    spark: quote.close
+      .map((value) => safeNumber(value))
+      .filter((value) => value > 0),
+    updatedAt: new Date().toISOString(),
+  };
+}
 
 export async function getCompanyProfile(
   entryOrTicker: CatalogEntry | string,

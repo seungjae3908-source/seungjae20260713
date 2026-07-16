@@ -15,6 +15,7 @@ import {
   type KiwoomRankingOptions,
   type KiwoomRankingType,
 } from '../providers/kiwoom';
+import { requireAdmin, requireMember } from '../middleware/auth';
 
 const router: IRouter =
   Router();
@@ -242,6 +243,8 @@ async function requestPublicIp(): Promise<string> {
 
 router.get(
   '/egress-ip',
+  requireMember,
+  requireAdmin,
   async (_req, res) => {
     try {
       const egressIp =
@@ -286,6 +289,8 @@ router.get(
 
 router.get(
   '/token-test',
+  requireMember,
+  requireAdmin,
   async (_req, res) => {
     try {
       const token =
@@ -319,6 +324,8 @@ router.get(
 
 router.get(
   '/test',
+  requireMember,
+  requireAdmin,
   async (_req, res) => {
     try {
       const data =
@@ -488,6 +495,8 @@ router.get(
 
 router.get(
   '/raw-ranking',
+  requireMember,
+  requireAdmin,
   async (req, res) => {
     const market =
       marketParam(
@@ -631,6 +640,8 @@ router.get(
 
 router.post(
   '/token/refresh',
+  requireMember,
+  requireAdmin,
   async (_req, res) => {
     try {
       clearKiwoomTokenCache();

@@ -116,7 +116,7 @@ async function getCorpMap(): Promise<Map<string, string>> {
 }
 
 // Map 6-digit KRX stock code -> 8-digit DART corp_code (disk-cached, resilient).
-async function getCorpCode(stockCode: string): Promise<string> {
+export async function getCorpCode(stockCode: string): Promise<string> {
   const map = await getCorpMap();
   const corp = map.get(stockCode);
   if (!corp) {

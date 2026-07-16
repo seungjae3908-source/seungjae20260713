@@ -393,29 +393,19 @@ async function buildCandidates(market: MarketKey): Promise<CatalogEntry[]> {
 
 async function toRow(entry: CatalogEntry): Promise<QuoteRow | null> {
   try {
-    let price: number;
-    let changePercent: number;
-    let exchange = '';
+    const quote = entry.market === 'US'
+      ? await yahoo.getQuote(entry)
+      : await MarketDataService.getQuote(entry.ticker);
 
-    if (entry.market === 'US') {
-      try {
-        const q = await yahoo.getQuote(entry);
-        price = q.price;
-        changePercent = q.changePercent;
-        exchange = q.exchange ?? '';
-      } catch {
-        const q = await MarketDataService.getQuote(entry.ticker);
-        if (!q) return null;
-        price = q.price;
-        changePercent = q.changePercent;
-      }
-    } else {
-      const q = await MarketDataService.getQuote(entry.ticker);
-      if (!q) return null;
-      price = q.price;
-      changePercent = q.changePercent;
-    }
+    if (!quote) return null;
 
+    const price = Number(quote.price ?? 0);
+    if (!Number.isFinite(price) || price <= 0) return null;
+
+    const changeAmount = Number(quote.changeAmount ?? 0);
+    const changePercent = Number(quote.changePercent ?? 0);
+    const volume = Number(quote.volume ?? 0);
+    const tradingValue = Number((quote as any).tradingValue ?? price * volume);
     const assetType = assetTypeOf(entry);
     const { overall } = computeScores(entry.ticker);
 
@@ -426,9 +416,17 @@ async function toRow(entry: CatalogEntry): Promise<QuoteRow | null> {
       currency: entry.currency,
       assetType,
       price,
-      changePercent,
+      changeAmount: Number.isFinite(changeAmount) ? changeAmount : 0,
+      changePercent: Number.isFinite(changePercent) ? changePercent : 0,
+      volume: Number.isFinite(volume) ? volume : 0,
+      tradingValue: Number.isFinite(tradingValue) ? tradingValue : 0,
+      high: Number((quote as any).high ?? 0) || undefined,
+      low: Number((quote as any).low ?? 0) || undefined,
+      open: Number((quote as any).open ?? 0) || undefined,
+      previousClose: Number((quote as any).previousClose ?? 0) || undefined,
+      updatedAt: String((quote as any).updatedAt ?? new Date().toISOString()),
       rating: scoreToRating(overall),
-      exchange,
+      exchange: String((entry as any).exchange ?? ''),
     };
   } catch {
     return null;

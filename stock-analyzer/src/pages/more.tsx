@@ -15,6 +15,7 @@ import {
   WalletCards,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { UnifiedNotificationSettings } from '@/components/unified-notification-settings';
 import { api } from '@/lib/api';
 import { useSettings } from '@/lib/settings';
 import { WATCHLIST_ALERT_TYPES } from '@/lib/settings';
@@ -85,6 +86,11 @@ const BACKUP_PREFIXES = [
   'sa-settings',
 ];
 
+function isBackupKey(key: string) {
+  const normalized = key.toLowerCase();
+  return key.length <= 120 && BACKUP_PREFIXES.some((prefix) => normalized.includes(prefix));
+}
+
 function readBackupData() {
   const data: Record<string, string> = {};
 
@@ -93,9 +99,7 @@ function readBackupData() {
 
     if (!key) continue;
 
-    const keep = BACKUP_PREFIXES.some((prefix) =>
-      key.toLowerCase().includes(prefix.toLowerCase()),
-    );
+    const keep = isBackupKey(key);
 
     if (keep) {
       data[key] = window.localStorage.getItem(key) ?? '';
@@ -166,7 +170,7 @@ export default function MorePage() {
 
     if (result.ok) {
       showLocalNotification(
-        '승재주식 알림 설정 완료',
+        '지식정보 알림 설정 완료',
         '관심종목 알림을 받을 준비가 되었습니다.',
       );
     }
@@ -203,7 +207,7 @@ export default function MorePage() {
   const exportBackup = () => {
     const backup = {
       app: 'seungjae-stock',
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       localStorage: readBackupData(),
     };
@@ -231,23 +235,29 @@ export default function MorePage() {
     if (!file) return;
 
     try {
+      if (file.size > 5 * 1024 * 1024) {
+        throw new Error('백업 파일은 5MB 이하여야 합니다.');
+      }
       const text = await file.text();
       const parsed = JSON.parse(text) as {
+        app?: string;
+        version?: number;
         localStorage?: Record<string, string>;
       };
 
-      if (!parsed.localStorage || typeof parsed.localStorage !== 'object') {
-        setBackupStatus('백업 파일 형식이 맞지 않습니다.');
-        return;
+      if (parsed.app !== 'seungjae-stock' || !parsed.version || parsed.version > 2 || !parsed.localStorage || typeof parsed.localStorage !== 'object' || Array.isArray(parsed.localStorage)) {
+        throw new Error('이 앱에서 만든 올바른 백업 파일이 아닙니다.');
       }
 
-      Object.entries(parsed.localStorage).forEach(([key, value]) => {
-        window.localStorage.setItem(key, value);
-      });
+      const entries = Object.entries(parsed.localStorage).filter(([key, value]) => isBackupKey(key) && typeof value === 'string');
+      if (!entries.length || entries.length > 500) throw new Error('복원할 앱 데이터가 없거나 항목 수가 비정상적입니다.');
+      const previous = new Map(entries.map(([key]) => [key, window.localStorage.getItem(key)]));
+      try { entries.forEach(([key, value]) => window.localStorage.setItem(key, value)); }
+      catch (cause) { previous.forEach((value, key) => value == null ? window.localStorage.removeItem(key) : window.localStorage.setItem(key, value)); throw cause; }
 
-      setBackupStatus('백업을 복원했습니다. 새로고침하면 반영됩니다.');
-    } catch {
-      setBackupStatus('백업 복원에 실패했습니다.');
+      setBackupStatus(`${entries.length}개 항목을 안전하게 복원했습니다. 새로고침하면 반영됩니다.`);
+    } catch (cause) {
+      setBackupStatus(cause instanceof Error ? cause.message : '백업 복원에 실패했습니다.');
     } finally {
       event.target.value = '';
     }
@@ -369,118 +379,7 @@ export default function MorePage() {
           </div>
         </section>
 
-        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-          <div className="mb-3">
-            <h2 className="text-sm font-extrabold">휴대폰 알림</h2>
-
-            <p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-              관심종목 뉴스, 공시, 등락률, 목표가/손절가 접근 알림을 받을 수
-              있게 연결합니다.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2">
-            <button
-              type="button"
-              onClick={() => void requestPermission()}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-primary/40 bg-primary/10 p-3 text-sm font-extrabold text-primary"
-            >
-              <Smartphone className="h-4 w-4" />
-              브라우저 알림 권한 켜기
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void enablePush()}
-              disabled={!pushSupported}
-              className={cn(
-                'flex w-full items-center justify-center gap-2 rounded-2xl border p-3 text-sm font-extrabold',
-                pushSupported
-                  ? 'border-positive/40 bg-positive/10 text-positive'
-                  : 'border-card-border bg-background text-muted-foreground opacity-60',
-              )}
-            >
-              <Bell className="h-4 w-4" />
-              푸시 알림 구독하기
-            </button>
-          </div>
-
-          {!hasVapidKey && (
-            <p className="mt-2 break-keep text-xs font-bold leading-relaxed text-warning">
-              서버 푸시 키 설정 필요 — 브라우저 알림 권한은 지금도 사용할 수
-              있습니다.
-            </p>
-          )}
-
-          <p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
-            현재 상태: {noticeStatus}
-          </p>
-        </section>
-
-        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-          <div className="mb-3">
-            <h2 className="text-sm font-extrabold">관심종목 알림 종류</h2>
-
-            <p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-              필요한 알림만 켜서 관리합니다.
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            {WATCHLIST_ALERT_TYPES.map((item) => {
-              const active = enabledAlerts.includes(item.key);
-
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => toggleAlert(item.key)}
-                  className={cn(
-                    'flex w-full items-center gap-3 rounded-2xl border p-3 text-left transition-colors',
-                    active
-                      ? 'border-primary/40 bg-primary/10'
-                      : 'border-card-border bg-background',
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl',
-                      active
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-secondary text-muted-foreground',
-                    )}
-                  >
-                    {ALERT_ICONS[item.key]}
-                  </span>
-
-                  <span className="min-w-0 flex-1">
-                    <span className="block break-keep text-sm font-extrabold leading-relaxed">
-                      {item.title}
-                    </span>
-
-                    <span className="mt-0.5 block break-keep text-xs leading-relaxed text-muted-foreground">
-                      {item.desc}
-                    </span>
-                  </span>
-
-                  <span
-                    className={cn(
-                      'h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors',
-                      active ? 'bg-primary' : 'bg-muted',
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        'block h-4 w-4 rounded-full bg-background transition-transform',
-                        active && 'translate-x-4',
-                      )}
-                    />
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
+        <UnifiedNotificationSettings />
 
         <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <div className="mb-3">

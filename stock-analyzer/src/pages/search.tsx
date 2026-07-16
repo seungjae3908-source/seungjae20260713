@@ -1,3 +1,4 @@
+import { authorizedFetch } from '@/lib/auth-fetch';
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
@@ -445,7 +446,7 @@ function normalizeRows(rows: AnyObj[], market: Market): StockRow[] {
 }
 
 async function fetchJson(url: string): Promise<AnyObj> {
-  const response = await fetch(url, {
+  const response = await authorizedFetch(url, {
     cache: "no-store",
   });
 
@@ -939,7 +940,7 @@ async function fetchWatchlistRows(items: ReturnType<typeof readWatchlistItems>):
   const tickers = items.map((item) => item.ticker).filter(Boolean);
   if (!tickers.length) return [];
   try {
-    const response = await fetch(`/api/quotes?tickers=${encodeURIComponent(tickers.join(","))}&_ts=${Date.now()}`, { cache: "no-store" });
+    const response = await authorizedFetch(`/api/quotes?tickers=${encodeURIComponent(tickers.join(","))}&_ts=${Date.now()}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP_${response.status}`);
     const raw = await response.json();
     const rows = Array.isArray(raw?.quotes) ? raw.quotes : Array.isArray(raw?.items) ? raw.items : [];

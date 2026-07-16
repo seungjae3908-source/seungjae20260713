@@ -1,4 +1,4 @@
--- 승재주식 Supabase schema
+-- 지식정보 Supabase schema
 -- Apply with: psql "$SUPABASE_DB_URL" -f artifacts/api-server/supabase/schema.sql
 -- (or paste into the Supabase dashboard SQL Editor)
 

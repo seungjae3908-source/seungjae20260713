@@ -17,6 +17,14 @@ import { HEALTH_KO, healthTone, toneBadge, toneText } from '@/lib/labels';
 import { cn } from '@/lib/utils';
 import { ApiError, type Currency, type FinancialRow, type Financials } from '@/lib/api';
 
+// Recharts 2.x publishes class component declarations that TypeScript 5.9 can
+// reject under the React 18 JSX constructor check even though runtime support
+// is valid. Keep the runtime components and narrow only the JSX declaration.
+const ChartXAxis = XAxis as any;
+const ChartYAxis = YAxis as any;
+const ChartReferenceLine = ReferenceLine as any;
+const ChartBar = Bar as any;
+
 const METRICS: { key: keyof FinancialRow; label: string; signed?: boolean }[] = [
   { key: 'revenue', label: '매출' },
   { key: 'operatingIncome', label: '영업이익', signed: true },
@@ -286,14 +294,14 @@ function GrowthChart({ labels, values }: { labels: string[]; values: number[] })
   return (
     <ResponsiveContainer width="100%" height={140}>
       <BarChart data={data} margin={{ top: 8, right: 4, bottom: 0, left: -20 }}>
-        <XAxis dataKey="name" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} axisLine={false} tickLine={false} />
-        <YAxis tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} axisLine={false} tickLine={false} unit="%" width={44} />
-        <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
-        <Bar dataKey="value" radius={[3, 3, 0, 0]}>
+        <ChartXAxis dataKey="name" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} axisLine={false} tickLine={false} />
+        <ChartYAxis tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} axisLine={false} tickLine={false} unit="%" width={44} />
+        <ChartReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
+        <ChartBar dataKey="value" radius={[3, 3, 0, 0]}>
           {data.map((d, i) => (
             <Cell key={i} fill={d.value >= 0 ? '#22c55e' : '#ef4444'} />
           ))}
-        </Bar>
+        </ChartBar>
       </BarChart>
     </ResponsiveContainer>
   );

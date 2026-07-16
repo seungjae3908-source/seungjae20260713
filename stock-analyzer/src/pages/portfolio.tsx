@@ -1,3 +1,4 @@
+import { authorizedFetch } from '@/lib/auth-fetch';
 import {
   useCallback,
   useEffect,
@@ -6,6 +7,7 @@ import {
   type FormEvent,
 } from 'react';
 import { useLocation } from 'wouter';
+import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   Bell,
@@ -16,6 +18,9 @@ import {
   WalletCards,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { AssetSwitch } from '@/components/asset-switch';
+import { useAssetMode } from '@/lib/asset-mode';
+import { apiGet } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
@@ -27,6 +32,7 @@ import {
 
 type Market = 'KR' | 'US';
 type Currency = 'KRW' | 'USD';
+type AnyObj = Record<string, any>;
 
 interface Holding {
   id: string;
@@ -631,7 +637,7 @@ async function resolveStockByName(
   for (const url of urls) {
     try {
       const response =
-        await fetch(
+        await authorizedFetch(
           url,
           {
             cache:
@@ -727,6 +733,28 @@ export default function PortfolioPage() {
 
   const auth =
     useAuth();
+  const assetMode = useAssetMode();
+  const coinSpotAccounts = useQuery({
+    queryKey: ['assets-upbit-accounts'],
+    queryFn: () => apiGet<AnyObj>('/crypto/spot/accounts'),
+    enabled: assetMode.asset === 'coin' && assetMode.coinMarket === 'spot',
+    refetchInterval: 30_000,
+    retry: false,
+  });
+  const coinFuturesAccount = useQuery({
+    queryKey: ['assets-bitget-account'],
+    queryFn: () => apiGet<AnyObj>('/crypto/futures/account'),
+    enabled: assetMode.asset === 'coin' && assetMode.coinMarket === 'futures',
+    refetchInterval: 15_000,
+    retry: false,
+  });
+  const coinFuturesPositions = useQuery({
+    queryKey: ['assets-bitget-positions'],
+    queryFn: () => apiGet<AnyObj>('/crypto/futures/positions'),
+    enabled: assetMode.asset === 'coin' && assetMode.coinMarket === 'futures',
+    refetchInterval: 10_000,
+    retry: false,
+  });
 
   const [
     rows,
@@ -908,7 +936,7 @@ export default function PortfolioPage() {
           ) {
             try {
               const response =
-                await fetch(
+                await authorizedFetch(
                   `/api/quotes?tickers=${encodeURIComponent(
                     quoteTickers.join(
                       ',',
@@ -1306,8 +1334,17 @@ export default function PortfolioPage() {
 
           </div>
         </div>
+        <AssetSwitch className="mt-3" />
       </header>
 
+      {assetMode.asset === 'coin' ? (
+        <CoinAssetsView
+          mode={assetMode.coinMarket}
+          spot={coinSpotAccounts}
+          futuresAccount={coinFuturesAccount}
+          futuresPositions={coinFuturesPositions}
+        />
+      ) : (
       <main className="flex-none px-4 pb-28 pt-4">
         {!auth.configured && (
           <section className="rounded-3xl border border-amber-500/30 bg-amber-500/10 p-5">
@@ -1802,10 +1839,69 @@ export default function PortfolioPage() {
             </div>
           )}
       </main>
+      )}
 
       <BottomNav />
     </div>
   );
+}
+
+function CoinAssetsView({
+  mode,
+  spot,
+  futuresAccount,
+  futuresPositions,
+}: {
+  mode: 'spot' | 'futures';
+  spot: { data?: AnyObj; isLoading: boolean; isError: boolean; refetch: () => unknown };
+  futuresAccount: { data?: AnyObj; isLoading: boolean; isError: boolean; refetch: () => unknown };
+  futuresPositions: { data?: AnyObj; isLoading: boolean; isError: boolean; refetch: () => unknown };
+}) {
+  const rows = mode === 'spot'
+    ? ((spot.data?.accounts ?? []) as AnyObj[])
+    : ((futuresPositions.data?.positions ?? []) as AnyObj[]);
+  const accountRows = (futuresAccount.data?.accounts ?? []) as AnyObj[];
+  const loading = mode === 'spot' ? spot.isLoading : futuresAccount.isLoading || futuresPositions.isLoading;
+  const error = mode === 'spot' ? spot.isError : futuresAccount.isError || futuresPositions.isError;
+  return (
+    <main className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-28 pt-4">
+      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div><h2 className="text-sm font-black">{mode === 'spot' ? '업비트 현물 자산' : '비트겟 선물 자산'}</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">개인 API 키는 서버 환경변수에서만 사용합니다.</p></div>
+          <button type="button" onClick={() => { void (mode === 'spot' ? spot.refetch() : Promise.all([futuresAccount.refetch(), futuresPositions.refetch()])); }} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border"><RefreshCw className="h-4 w-4" /></button>
+        </div>
+        {loading && <p className="mt-3 rounded-2xl bg-muted p-4 text-center text-xs font-bold text-muted-foreground">실제 잔고를 불러오는 중입니다.</p>}
+        {error && <p className="mt-3 rounded-2xl bg-destructive/10 p-4 text-center text-xs font-bold text-destructive">API 키 미설정, 읽기 권한 부족 또는 거래소 연결 오류입니다. 임시 잔고는 표시하지 않습니다.</p>}
+        {mode === 'futures' && !loading && !error && (
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <HoldingValue label="계좌 평가금액" value={formatCoinNumber(accountRows[0]?.accountEquity, ' USDT')} />
+            <HoldingValue label="사용가능" value={formatCoinNumber(accountRows[0]?.available, ' USDT')} />
+            <HoldingValue label="미실현손익" value={formatCoinNumber(accountRows[0]?.unrealizedPL, ' USDT')} />
+            <HoldingValue label="보유 포지션" value={`${rows.length}개`} />
+          </div>
+        )}
+      </section>
+      {!loading && !error && rows.length === 0 && <section className="rounded-3xl border border-card-border bg-card p-6 text-center text-sm font-bold text-muted-foreground">보유 자산 또는 포지션이 없습니다.</section>}
+      <div className="space-y-3">
+        {mode === 'spot' ? rows.map((row) => (
+          <section key={String(row.currency)} className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+            <div className="flex items-center justify-between"><h3 className="text-base font-black">{row.currency}</h3><span className="text-[10px] font-bold text-muted-foreground">UPBIT</span></div>
+            <div className="mt-3 grid grid-cols-2 gap-2"><HoldingValue label="보유수량" value={formatCoinNumber(row.balance)} /><HoldingValue label="주문 잠금" value={formatCoinNumber(row.locked)} /><HoldingValue label="평균매수가" value={formatCoinNumber(row.averageBuyPrice, ` ${row.unitCurrency ?? 'KRW'}`)} /><HoldingValue label="기준통화" value={String(row.unitCurrency ?? 'KRW')} /></div>
+          </section>
+        )) : rows.map((row) => (
+          <section key={`${row.symbol}:${row.holdSide}`} className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+            <div className="flex items-center justify-between"><h3 className="text-base font-black">{row.symbol}</h3><span className={cn('rounded-full px-2 py-1 text-[10px] font-black', String(row.holdSide).toLowerCase() === 'long' ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive')}>{String(row.holdSide).toUpperCase()}</span></div>
+            <div className="mt-3 grid grid-cols-2 gap-2"><HoldingValue label="진입가" value={formatCoinNumber(row.openPriceAvg, ' USDT')} /><HoldingValue label="마크가격" value={formatCoinNumber(row.markPrice, ' USDT')} /><HoldingValue label="미실현손익" value={formatCoinNumber(row.unrealizedPL, ' USDT')} /><HoldingValue label="포지션 수량" value={formatCoinNumber(row.total)} /><HoldingValue label="레버리지" value={formatCoinNumber(row.leverage, '배')} /><HoldingValue label="청산가격" value={formatCoinNumber(row.liquidationPrice, ' USDT')} /></div>
+          </section>
+        ))}
+      </div>
+    </main>
+  );
+}
+
+function formatCoinNumber(value: unknown, suffix = '') {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${number.toLocaleString(undefined, { maximumFractionDigits: 8 })}${suffix}` : '데이터 없음';
 }
 
 function LoadingCard({

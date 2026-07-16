@@ -1,3 +1,4 @@
+import { authorizedFetch } from '@/lib/auth-fetch';
 import {
   useCallback,
   useEffect,
@@ -519,7 +520,7 @@ async function fetchRelatedStocks(indicators: string[]): Promise<RelatedStock[]>
   const encoded = encodeURIComponent(indicators.join(','));
   const scanResults = await Promise.allSettled(
     ['KR', 'US'].map(async (market) => {
-      const res = await fetch(
+      const res = await authorizedFetch(
         `/api/market/scan?market=${market}&indicators=${encoded}&_ts=${timestamp}`,
         noStoreOptions(),
       );
@@ -540,7 +541,7 @@ async function fetchRelatedStocks(indicators: string[]): Promise<RelatedStock[]>
   // 조건검색 제공처가 잠시 비어 있어도 공부 기능이 멈추지 않도록
   // 대표 국내·해외 종목의 최신 시세를 대체 예시로 불러옵니다.
   const fallbackTickers = ['005930', '000660', '035420', '051910', 'AAPL', 'MSFT', 'NVDA', 'GOOGL'];
-  const res = await fetch(
+  const res = await authorizedFetch(
     `/api/quotes?tickers=${encodeURIComponent(fallbackTickers.join(','))}&_ts=${timestamp}`,
     noStoreOptions(),
   ).catch(() => null);
@@ -572,12 +573,11 @@ async function fetchLearningCandles(ticker: string): Promise<LearningCandle[]> {
   const timestamp = Date.now();
   const candidates = [
     `/api/stocks/${encodeURIComponent(ticker)}/candles?tf=1D&_ts=${timestamp}`,
-    `/api/stocks/${encodeURIComponent(ticker)}/chart?tf=1D&_ts=${timestamp}`,
   ];
 
   for (const url of candidates) {
     try {
-      const res = await fetch(url, noStoreOptions());
+      const res = await authorizedFetch(url, noStoreOptions());
       if (!res.ok) continue;
       const data = (await res.json()) as AnyObj;
       const rows = Array.isArray(data?.candles)
@@ -604,8 +604,7 @@ async function fetchLearningCandles(ticker: string): Promise<LearningCandle[]> {
             volume: Number.isFinite(volume) ? Math.max(0, volume) : 0,
           } satisfies LearningCandle;
         })
-        .filter((row: LearningCandle | null): row is LearningCandle => row != null)
-        .slice(-45);
+        .filter((row: LearningCandle | null): row is LearningCandle => row != null);
       if (normalized.length >= 5) return normalized;
     } catch {
       // 다음 차트 주소를 확인합니다.
@@ -1056,7 +1055,7 @@ function LearningLiveChart({ topic }: { topic: StudyTopic }) {
       {drawing && (
         <div className="overflow-hidden rounded-2xl border border-card-border bg-background/70 p-2">
           <svg
-            viewBox="0 0 640 260"
+            viewBox="0 0 640 320"
             role="img"
             aria-label={`${ticker} 실제 일봉 차트`}
             className="h-auto w-full"
@@ -1100,10 +1099,51 @@ function LearningLiveChart({ topic }: { topic: StudyTopic }) {
               </g>
             ))}
             <line
+              x1="14"
+              x2="626"
+              y1={drawing.supportY}
+              y2={drawing.supportY}
+              stroke="hsl(var(--positive))"
+              strokeWidth="2"
+              strokeDasharray="7 4"
+            />
+            <line
+              x1="14"
+              x2="626"
+              y1={drawing.resistanceY}
+              y2={drawing.resistanceY}
+              stroke="hsl(var(--destructive))"
+              strokeWidth="2"
+              strokeDasharray="7 4"
+            />
+            {drawing.volumeBars.map((item) => (
+              <rect
+                key={`volume:${item.key}`}
+                x={item.x - item.width / 2}
+                y={item.y}
+                width={item.width}
+                height={item.height}
+                rx="1"
+                fill={item.up ? 'hsl(var(--positive) / 0.5)' : 'hsl(var(--destructive) / 0.5)'}
+              />
+            ))}
+            {drawing.signals.map((item) => (
+              <g key={item.key}>
+                <circle
+                  cx={item.x}
+                  cy={item.y}
+                  r="4"
+                  fill={item.up ? 'hsl(var(--positive))' : 'hsl(var(--destructive))'}
+                  stroke="hsl(var(--background))"
+                  strokeWidth="1.5"
+                />
+              </g>
+            ))}
+            <line
               x1={drawing.focusX}
               x2={drawing.focusX}
               y1="16"
-              y2="238"
+              y2="304"
               stroke="hsl(var(--primary))"
               strokeWidth="2"
               strokeDasharray="5 4"
@@ -1125,7 +1165,8 @@ function LearningLiveChart({ topic }: { topic: StudyTopic }) {
         <p className="text-sm font-extrabold text-primary">차트에서 볼 부분</p>
         <p className="mt-2 break-keep text-sm font-semibold leading-relaxed text-foreground">
           파란선은 5일 평균선이며 점선은 최신 구간입니다. “{topic.title}”은 이 구간의
-          캔들, 평균선 방향, 거래량을 함께 비교해 판단합니다. 차트는 1분마다 자동 갱신됩니다.
+          캔들, 평균선 방향, 거래량을 함께 비교해 판단합니다. 초록 점선은 지지선,
+          빨간 점선은 저항선이며 신호가 겹친 위치도 원으로 모두 표시합니다.
         </p>
       </div>
     </div>
@@ -1137,7 +1178,7 @@ function buildLearningChart(candles: LearningCandle[]) {
   const width = 612;
   const left = 14;
   const top = 34;
-  const height = 204;
+  const height = 184;
   const lows = candles.map((row) => row.low);
   const highs = candles.map((row) => row.high);
   const min = Math.min(...lows);
@@ -1168,10 +1209,52 @@ function buildLearningChart(candles: LearningCandle[]) {
   const averagePoints = averages
     .map((value, index) => `${left + step * index + step / 2},${yOf(value)}`)
     .join(' ');
+  const maxVolume = Math.max(...candles.map((row) => row.volume), 1);
+  const volumeTop = 242;
+  const volumeHeight = 56;
+  const volumeBars = candles.map((row, index) => {
+    const barHeight = Math.max(1, (row.volume / maxVolume) * volumeHeight);
+    return {
+      key: `${row.time}:${index}`,
+      x: left + step * index + step / 2,
+      y: volumeTop + volumeHeight - barHeight,
+      height: barHeight,
+      width: Math.max(1, Math.min(8, step * 0.62)),
+      up: row.close >= row.open,
+    };
+  });
+  const average20 = candles.map((_, index) => {
+    if (index < 19) return null;
+    const rows = candles.slice(index - 19, index + 1);
+    return rows.reduce((sum, row) => sum + row.close, 0) / rows.length;
+  });
+  const signals = candles.flatMap((row, index) => {
+    if (index < 20 || average20[index - 1] == null || average20[index] == null) return [];
+    const previousShort = averages[index - 1];
+    const currentShort = averages[index];
+    const previousLong = average20[index - 1]!;
+    const currentLong = average20[index]!;
+    const up = previousShort <= previousLong && currentShort > currentLong;
+    const down = previousShort >= previousLong && currentShort < currentLong;
+    if (!up && !down) return [];
+    return [{
+      key: `signal:${row.time}:${index}`,
+      x: left + step * index + step / 2,
+      y: yOf(up ? row.low : row.high),
+      up,
+    }];
+  });
+  const levelWindow = candles.slice(-Math.min(120, candles.length));
+  const support = Math.min(...levelWindow.map((row) => row.low));
+  const resistance = Math.max(...levelWindow.map((row) => row.high));
   return {
     candles: chartCandles,
     averagePoints,
     focusX: left + step * (candles.length - 1) + step / 2,
+    supportY: yOf(support),
+    resistanceY: yOf(resistance),
+    volumeBars,
+    signals,
   };
 }
 

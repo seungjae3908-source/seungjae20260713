@@ -5,6 +5,7 @@
 // - 로컬 변경 시(WATCHLIST_CHANGE_EVENT): 디바운스 후 전체 목록을 서버에 반영.
 // - 서버가 아직 설정 전(503 SUPABASE_NOT_CONFIGURED)이면 로컬 전용으로 동작하고
 //   콘솔에 한 번만 알린다 — 몰래 실패하지 않는다.
+import { authorizedFetch } from './auth-fetch';
 import {
   readWatchlistItems,
   writeWatchlistItems,
@@ -55,7 +56,7 @@ function warn(message: string): void {
 async function request<T>(path: string, init?: RequestInit): Promise<T | null> {
   if (serverDisabled) return null;
   try {
-    const res = await fetch(`${BASE}${path}`, init);
+    const res = await authorizedFetch(`${BASE}${path}`, init);
     if (res.status === 503) {
       serverDisabled = true;
       warn('Supabase 서버 키가 아직 없어 로컬 전용으로 동작합니다.');

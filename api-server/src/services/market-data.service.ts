@@ -1,5 +1,8 @@
 // MarketDataService — quotes, candlesticks, company profiles and global search.
 
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import {
   CATALOG,
   getCatalogEntry,
@@ -9,8 +12,6 @@ import {
   type Currency,
 } from '../data/catalog';
 import { classifyAssetType, type AssetType } from '../data/asset-type';
-import * as market from '../sample/market';
-import { getCompanyProfile as getSampleCompanyProfile } from '../sample/company';
 import { computeScores } from '../sample/scores';
 import { scoreToRating } from '../sample/rating';
 import * as yahoo from '../providers/yahoo';
@@ -56,6 +57,13 @@ export interface QuoteRow {
   rating: RatingResult;
   reason?: string;
   rank?: number;
+  exchange?: string;
+  signals?: string[];
+  entry?: number;
+  take1?: number;
+  take2?: number;
+  stop?: number;
+  riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
 type LooseQuote = Partial<Quote> & {
@@ -81,6 +89,101 @@ type LooseQuote = Partial<Quote> & {
   prevClose?: number;
   updatedAt?: string;
 };
+
+interface CandleDiskCache {
+  savedAt: number;
+  ticker: string;
+  timeframe: string;
+  candles: Candle[];
+}
+
+function candleCacheDirectory(): string {
+  const configured = process.env.KIWOOM_CHART_CACHE_DIR?.trim();
+  if (configured) return path.resolve(configured);
+
+  const cwd = process.cwd();
+  const apiRoot = path.basename(cwd) === 'api-server'
+    ? cwd
+    : path.join(cwd, 'api-server');
+  return path.join(apiRoot, 'data', 'chart-cache');
+}
+
+function candleCachePath(ticker: string, timeframe: string): string {
+  const safeTicker = cleanTicker(ticker).replace(/[^0-9A-Z_-]/g, '');
+  const safeTimeframe = String(timeframe).replace(/[^0-9A-Z]/gi, '');
+  return path.join(candleCacheDirectory(), `${safeTicker}-${safeTimeframe}.json`);
+}
+
+function candleCacheTtl(timeframe: string): number {
+  return /m|H/.test(timeframe)
+    ? 2 * 60 * 1000
+    : 12 * 60 * 60 * 1000;
+}
+
+async function readCandleDiskCache(
+  ticker: string,
+  timeframe: string,
+): Promise<{ candles: Candle[]; fresh: boolean } | null> {
+  try {
+    const raw = await readFile(candleCachePath(ticker, timeframe), 'utf8');
+    const parsed = JSON.parse(raw) as CandleDiskCache;
+    if (!Array.isArray(parsed.candles) || parsed.candles.length < 2) return null;
+    return {
+      candles: parsed.candles,
+      fresh: Date.now() - Number(parsed.savedAt ?? 0) <= candleCacheTtl(timeframe),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeCandleDiskCache(
+  ticker: string,
+  timeframe: string,
+  candles: Candle[],
+): Promise<void> {
+  if (candles.length < 2) return;
+  try {
+    await mkdir(candleCacheDirectory(), { recursive: true });
+    const payload: CandleDiskCache = {
+      savedAt: Date.now(),
+      ticker: cleanTicker(ticker),
+      timeframe,
+      candles,
+    };
+    await writeFile(
+      candleCachePath(ticker, timeframe),
+      JSON.stringify(payload),
+      'utf8',
+    );
+  } catch (error) {
+    console.warn('chart disk cache write failed:', error);
+  }
+}
+
+function aggregateCachedCandles(
+  rows: Candle[],
+  size: number,
+): Candle[] {
+  if (size <= 1 || rows.length <= 1) return rows;
+
+  const result: Candle[] = [];
+  for (let index = 0; index < rows.length; index += size) {
+    const chunk = rows.slice(index, index + size);
+    if (chunk.length === 0) continue;
+
+    result.push({
+      time: chunk[0].time,
+      open: chunk[0].open,
+      high: Math.max(...chunk.map((item) => item.high)),
+      low: Math.min(...chunk.map((item) => item.low)),
+      close: chunk[chunk.length - 1].close,
+      volume: chunk.reduce((sum, item) => sum + item.volume, 0),
+    });
+  }
+
+  return result;
+}
 
 const EXTRA_ALIASES: Record<
   string,
@@ -460,7 +563,7 @@ function toSearchResult(entry: CatalogEntry): SearchResult {
     name: String((entry as any).name ?? ticker),
     market: String(marketValue),
     currency: String(currency),
-    assetType: classifyAssetType(entry),
+    assetType: classifyAssetType(String((entry as any).name ?? ticker), marketValue as Market, String((entry as any).assetType ?? "")),
     aliases: ((entry as any).aliases ?? []) as string[],
   };
 }
@@ -629,7 +732,7 @@ function toQuoteRow(
     ),
     market: String(marketValue),
     currency: String(currency),
-    assetType: classifyAssetType(entry),
+    assetType: classifyAssetType(String((entry as any).name ?? ticker), marketValue as Market, String((entry as any).assetType ?? "")),
     price,
     changeAmount,
     changePercent,
@@ -647,188 +750,36 @@ function toQuoteRow(
   };
 }
 
-function sampleQuoteFor(
-  entry: CatalogEntry,
-): LooseQuote {
-  const ticker = cleanTicker(
-    (entry as any).ticker,
-  );
-
-  const base =
-    isKrTicker(ticker)
-      ? 5000 +
-        ((Number(ticker.slice(-3)) || 100) *
-          100)
-      : 20 +
-        ticker.charCodeAt(0) *
-          3;
-
-  const seed = [...ticker].reduce(
-    (sum, char) =>
-      sum +
-      char.charCodeAt(0),
-    0,
-  );
-
-  const changePercent = Number(
-    (((seed % 1800) - 900) / 100).toFixed(2),
-  );
-
-  const price = Math.max(
-    1,
-    Math.round(
-      base *
-        (1 +
-          changePercent /
-            100),
-    ),
-  );
-
-  const previousClose =
-    price /
-    (1 +
-      changePercent /
-        100);
-
-  const volume =
-    100_000 +
-    seed *
-      1377;
-
-  return {
-    ticker,
-    name: String(
-      (entry as any).name ??
-        ticker,
-    ),
-    price,
-    previousClose,
-    changeAmount:
-      price -
-      previousClose,
-    changePercent,
-    volume,
-    tradingValue:
-      price *
-      volume,
-    open: previousClose,
-    high:
-      Math.max(
-        price,
-        previousClose,
-      ) *
-      1.02,
-    low:
-      Math.min(
-        price,
-        previousClose,
-      ) *
-      0.98,
-    updatedAt:
-      new Date().toISOString(),
-  };
-}
-
 async function tryQuoteProvider(
   entry: CatalogEntry,
 ): Promise<LooseQuote | null> {
   const providers = providerStatus();
+  const marketValue = normalizeMarketValue(
+    (entry as any).market,
+    (entry as any).ticker,
+  );
 
-  const marketValue =
-    normalizeMarketValue(
-      (entry as any).market,
-      (entry as any).ticker,
-    );
-
-  const attempts: Array<
-    () => Promise<unknown>
-  > = [];
+  const attempts: Array<() => Promise<unknown>> = [];
 
   if (marketValue === 'KR') {
-    attempts.push(
-      () =>
-        (naver as any).getQuote?.(
-          entry,
-        ),
-    );
-
-    attempts.push(
-      () =>
-        (naver as any).quote?.(
-          entry,
-        ),
-    );
+    attempts.push(() => naver.getQuote(entry));
+    attempts.push(() => yahoo.getQuote(entry));
+  } else {
+    attempts.push(() => yahoo.getQuote(entry));
+    if (providers.finnhub) attempts.push(() => finnhub.getQuote(entry));
   }
-
-  attempts.push(
-    () =>
-      (yahoo as any).getQuote?.(
-        entry,
-      ),
-  );
-
-  attempts.push(
-    () =>
-      (yahoo as any).quote?.(
-        entry,
-      ),
-  );
-
-  if (providers.finnhub) {
-    attempts.push(
-      () =>
-        (finnhub as any).getQuote?.(
-          entry,
-        ),
-    );
-
-    attempts.push(
-      () =>
-        (finnhub as any).quote?.(
-          entry,
-        ),
-    );
-  }
-
-  attempts.push(
-    () =>
-      (market as any).getQuote?.(
-        (entry as any).ticker,
-      ),
-  );
-
-  attempts.push(
-    () =>
-      (market as any).quote?.(
-        (entry as any).ticker,
-      ),
-  );
 
   for (const attempt of attempts) {
     try {
-      const result =
-        await attempt();
-
-      if (
-        result &&
-        typeof result === 'object'
-      ) {
-        const quote =
-          result as LooseQuote;
-
-        const price =
-          quotePrice(quote);
-
-        if (
-          price > 0 ||
-          quote.changePercent != null ||
-          quote.volume != null
-        ) {
-          return quote;
-        }
+      const result = await attempt();
+      if (!result || typeof result !== 'object') continue;
+      const quote = result as LooseQuote;
+      const price = quotePrice(quote);
+      if (price > 0 || quote.changePercent != null || quote.volume != null) {
+        return quote;
       }
     } catch {
-      // Try next provider.
+      // Try the next live provider.
     }
   }
 
@@ -854,6 +805,7 @@ async function tryCandlesProvider(
       timeframe ??
         '1D',
     );
+  const minimumUsefulCandles = ['1D', '3D', '5D', '10D', 'ALL'].includes(timeframeText) ? 30 : 2;
 
   /*
    * 국내 종목은 키움증권 차트 API를 가장 먼저 사용합니다.
@@ -869,7 +821,7 @@ async function tryCandlesProvider(
         );
 
       if (
-        kiwoomRows.length >= 2
+        kiwoomRows.length >= minimumUsefulCandles
       ) {
         return kiwoomRows as Candle[];
       }
@@ -881,57 +833,13 @@ async function tryCandlesProvider(
     }
   }
 
-  const attempts: Array<
-    () => Promise<unknown>
-  > = [
-    () =>
-      (yahoo as any).getCandles?.(
-        entry,
-        timeframe,
-      ),
-
-    () =>
-      (yahoo as any).candles?.(
-        entry,
-        timeframe,
-      ),
-
-    () =>
-      (naver as any).getCandles?.(
-        entry,
-        timeframe,
-      ),
-
-    () =>
-      (naver as any).candles?.(
-        entry,
-        timeframe,
-      ),
-
-    () =>
-      (finnhub as any).getCandles?.(
-        entry,
-        timeframe,
-      ),
-
-    () =>
-      (finnhub as any).candles?.(
-        entry,
-        timeframe,
-      ),
-
-    () =>
-      (market as any).getCandles?.(
-        (entry as any).ticker,
-        timeframe,
-      ),
-
-    () =>
-      (market as any).candles?.(
-        (entry as any).ticker,
-        timeframe,
-      ),
-  ];
+  const attempts: Array<() => Promise<unknown>> =
+    marketValue === 'KR'
+      ? [
+          () => naver.getCandles(entry),
+          () => yahoo.getCandles(entry),
+        ]
+      : [() => yahoo.getCandles(entry)];
 
   for (const attempt of attempts) {
     try {
@@ -940,7 +848,7 @@ async function tryCandlesProvider(
 
       if (
         Array.isArray(result) &&
-        result.length >= 2
+        result.length >= minimumUsefulCandles
       ) {
         return result as Candle[];
       }
@@ -959,33 +867,10 @@ async function tryCandlesProvider(
 async function tryProfileProvider(
   entry: CatalogEntry,
 ): Promise<CompanyProfile> {
-  const attempts: Array<
-    () => Promise<unknown>
-  > = [
-    () =>
-      (finnhub as any).getCompanyProfile?.(
-        entry,
-      ),
-
-    () =>
-      (finnhub as any).companyProfile?.(
-        entry,
-      ),
-
-    () =>
-      (yahoo as any).getCompanyProfile?.(
-        entry,
-      ),
-
-    () =>
-      (yahoo as any).companyProfile?.(
-        entry,
-      ),
-
-    () =>
-      getSampleCompanyProfile(
-        (entry as any).ticker,
-      ),
+  const attempts: Array<() => Promise<unknown>> = [
+    () => finnhub.getProfile(entry),
+    () => yahoo.getCompanyProfile(entry),
+    () => naver.getCompanyProfile(entry),
   ];
 
   for (const attempt of attempts) {
@@ -1029,7 +914,9 @@ async function tryProfileProvider(
 
     sector: '',
     industry: '',
-    website: '',
+    country: String((entry as any).market === 'KR' ? '대한민국' : '미국'),
+    mainBusiness: '',
+    competitors: [],
   } as CompanyProfile;
 }
 
@@ -1202,11 +1089,11 @@ export class MarketDataService {
             entry,
           );
 
-        const quote =
-          providerQuote ??
-          sampleQuoteFor(
-            entry,
-          );
+        if (!providerQuote) {
+          throw new Error(`QUOTE_UNAVAILABLE:${cleanTicker(ticker)}`);
+        }
+
+        const quote = providerQuote;
 
         return {
           ...quote,
@@ -1244,16 +1131,7 @@ export class MarketDataService {
         quote as LooseQuote,
       );
     } catch {
-      try {
-        return toQuoteRow(
-          entry,
-          sampleQuoteFor(
-            entry,
-          ),
-        );
-      } catch {
-        return null;
-      }
+      return null;
     }
   }
 
@@ -1287,19 +1165,41 @@ export class MarketDataService {
       resolveEntry(
         ticker,
       );
+    const timeframeText = String(timeframe);
+    const cacheKey = `candles:${cleanTicker(ticker)}:${timeframeText}`;
+    const disk = await readCandleDiskCache(ticker, timeframeText);
 
-    return cached(
-      `candles:${cleanTicker(ticker)}:${String(timeframe)}`,
+    if (disk?.fresh) return disk.candles;
 
-      TTL.candles ??
-        TTL.quote,
+    const aggregateDays = ({
+      '3D': 3,
+      '5D': 5,
+      '10D': 10,
+    } as Record<string, number>)[timeframeText];
 
-      async () =>
-        tryCandlesProvider(
-          entry,
-          timeframe,
-        ),
-    );
+    if (!disk && aggregateDays) {
+      const dailyDisk = await readCandleDiskCache(ticker, '1D');
+      if (dailyDisk?.candles.length) {
+        const aggregated = aggregateCachedCandles(dailyDisk.candles, aggregateDays);
+        await writeCandleDiskCache(ticker, timeframeText, aggregated);
+        return aggregated;
+      }
+    }
+
+    const load = async () => {
+      const rows = await tryCandlesProvider(entry, timeframe);
+      await writeCandleDiskCache(ticker, timeframeText, rows);
+      return rows;
+    };
+
+    if (disk?.candles.length) {
+      void cached(cacheKey, candleCacheTtl(timeframeText), load).catch((error) => {
+        console.error('chart background refresh failed:', error);
+      });
+      return disk.candles;
+    }
+
+    return cached(cacheKey, candleCacheTtl(timeframeText), load);
   }
 
   static async getCompanyProfile(
