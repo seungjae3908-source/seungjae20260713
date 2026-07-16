@@ -169,10 +169,22 @@ interface ActiveDetail {
 }
 
 export function StudyChart({ config, onClose }: { config: StudyChartConfig; onClose: () => void }) {
-  const [assetKind, setAssetKind] = useState<AssetKind>('stock');
+  // 딥링크(?studyAsset=crypto&studySymbol=BTC&studyTf=1W) 지원 — 기본 동작은 기존과 동일.
+  const deepLink = useMemo(() => {
+    const p = new URLSearchParams(window.location.search);
+    const asset: AssetKind = p.get('studyAsset') === 'crypto' ? 'crypto' : 'stock';
+    const symbol = (p.get('studySymbol') ?? '').toUpperCase();
+    const tfParam: Tf = p.get('studyTf') === '1W' ? '1W' : '1D';
+    return { asset, symbol, tf: tfParam };
+  }, []);
+  const [assetKind, setAssetKind] = useState<AssetKind>(deepLink.asset);
   const [region, setRegion] = useState<Region>('KR');
-  const [tf, setTf] = useState<Tf>('1D');
-  const [target, setTarget] = useState<SearchTarget>(DEFAULT_TARGET);
+  const [tf, setTf] = useState<Tf>(deepLink.tf);
+  const [target, setTarget] = useState<SearchTarget>(() =>
+    deepLink.asset === 'crypto'
+      ? { id: deepLink.symbol || 'BTC', name: deepLink.symbol || 'BTC', assetKind: 'crypto', region: 'KR' }
+      : DEFAULT_TARGET,
+  );
   const [fullscreen, setFullscreen] = useState(false);
   const [showMarkers, setShowMarkers] = useState(true);
   const [showIndicators, setShowIndicators] = useState(true);
@@ -253,7 +265,8 @@ export function StudyChart({ config, onClose }: { config: StudyChartConfig; onCl
   return (
     <div
       className={cn(
-        'fixed inset-0 z-50 flex flex-col bg-background',
+        // 전역 --bg-alpha(반투명) 영향 없이 항상 불투명 배경 — 뒤 화면이 차트에 비치지 않게 한다.
+        'fixed inset-0 z-50 flex flex-col bg-[hsl(var(--background))]',
         !fullscreen && 'sm:inset-x-0',
       )}
     >

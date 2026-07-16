@@ -854,7 +854,10 @@ function TopicCard({
   open: boolean;
   onToggle: () => void;
 }) {
-  const [chartOpen, setChartOpen] = useState(false);
+  // 딥링크(?study=항목 제목) 지원 — 해당 항목의 실제 차트를 바로 연다. 기본 동작은 동일.
+  const [chartOpen, setChartOpen] = useState(
+    () => new URLSearchParams(window.location.search).get('study') === topic.title,
+  );
 
   const chartConfig: StudyChartConfig = topic.pattern
     ? {

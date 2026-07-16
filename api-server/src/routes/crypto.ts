@@ -119,7 +119,8 @@ router.get('/crypto/spot/tickers', async (req, res) => {
     let markets = requested.map((symbol) => (symbol.startsWith('KRW-') ? symbol : `KRW-${symbol}`));
     if (!markets.length) {
       const master = await fetchJson<any[]>(`${UPBIT_BASE}/v1/market/all?isDetails=false`);
-      markets = master.filter((item) => String(item.market ?? '').startsWith('KRW-')).map((item) => String(item.market)).slice(0, 100);
+      // KRW 마켓 전체 조회(청크로 나눠 요청). 앞 100개만 자르면 BTC·ETH·XRP가 빠지는 실데이터 누락이 생긴다.
+      markets = master.filter((item) => String(item.market ?? '').startsWith('KRW-')).map((item) => String(item.market));
     }
     const chunks: string[][] = [];
     for (let index = 0; index < markets.length; index += 100) chunks.push(markets.slice(index, index + 100));
