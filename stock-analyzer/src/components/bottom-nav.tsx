@@ -29,9 +29,9 @@ const ITEMS = [
   },
   {
     href: '/stock-info',
-    label: '주식정보',
+    label: '정보',
     icon: Newspaper,
-    match: (path: string) => path.startsWith('/stock-info'),
+    match: (path: string) => path.startsWith('/stock-info') || path.startsWith('/learn'),
   },
   {
     href: '/assets',
@@ -48,8 +48,7 @@ const ITEMS = [
       path.startsWith('/more') ||
       path.startsWith('/account') ||
       path.startsWith('/admin') ||
-      path.startsWith('/alerts') ||
-      path.startsWith('/learn'),
+      path.startsWith('/alerts'),
   },
 ];
 

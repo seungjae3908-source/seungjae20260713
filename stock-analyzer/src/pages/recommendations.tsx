@@ -6,7 +6,7 @@ import { ArrowLeft, RefreshCw, ShieldAlert, TrendingUp } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { BottomNav } from '@/components/bottom-nav';
-import { formatAppPercent, formatAppPrice } from '@/lib/stock-display';
+import { displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
 
 type Category = 'undervalued' | 'breakout';
 
@@ -151,7 +151,7 @@ function RecoCard({ row, onOpen }: { row: RecoRow; onOpen: () => void }) {
     <article className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
       <button type="button" onClick={onOpen} className="flex w-full items-start justify-between gap-3 text-left">
         <div className="min-w-0">
-          <p className="truncate text-sm font-black">{row.name}</p>
+          <p className="truncate text-sm font-black">{displayStockName(row.ticker, row.name, row.market)}</p>
           <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{row.ticker} · {row.market === 'KR' ? '국내' : '미국'} · {row.categoryLabel}</p>
         </div>
         <div className="shrink-0 text-right">

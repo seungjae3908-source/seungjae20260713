@@ -7,7 +7,7 @@ import { AssetSwitch } from '@/components/asset-switch';
 import { ErrorState, LoadingState } from '@/components/data-state';
 import { api, apiGet, type UndervaluedCard } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
-import { formatAppPercent, formatAppPrice } from '@/lib/stock-display';
+import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
 import { cn } from '@/lib/utils';
 
 type AnyObj = Record<string, any>;
@@ -117,7 +117,7 @@ export default function StocksPage() {
               {(undervalued.data?.cards ?? []).slice(0, 5).map((card: UndervaluedCard) => (
                 <button key={card.ticker} type="button" onClick={() => navigate(`/stock/${encodeURIComponent(card.ticker)}`)} className="w-full rounded-2xl border border-card-border bg-card p-3 text-left">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0"><p className="truncate text-sm font-black">{card.name}</p><p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">{card.reasons.join(' · ') || '실제 데이터 근거 확인 필요'}</p></div>
+                    <div className="min-w-0"><p className="truncate text-sm font-black">{displayStockName(card.ticker, card.name, card.market)}</p><p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">{card.reasons.join(' · ') || '실제 데이터 근거 확인 필요'}</p></div>
                     <div className="shrink-0 text-right"><p className="text-sm font-black text-primary">{card.score}점</p><p className="text-[9px] font-bold text-muted-foreground">모델점수</p></div>
                   </div>
                 </button>
@@ -144,7 +144,7 @@ export default function StocksPage() {
             {mode.asset === 'stock' ? visibleStocks.map((stock) => (
               <button key={`${stock.market}:${stock.ticker}`} type="button" onClick={() => navigate(`/stock/${encodeURIComponent(stock.ticker)}`)} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10"><Star className="h-4 w-4 text-primary" /></div>
-                <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{stock.name}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{stock.ticker}</p></div>
+                <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(stock.ticker, stock.name, stock.market)}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{stock.ticker}</p></div>
                 <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, stock.currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', stock.changePercent > 0 ? 'text-positive' : stock.changePercent < 0 ? 'text-destructive' : 'text-muted-foreground')}>{formatAppPercent(stock.changePercent)}</p></div>
               </button>
             )) : cryptoRows.map((row) => {
@@ -153,7 +153,7 @@ export default function StocksPage() {
               return (
                 <button key={String(row.symbol)} type="button" onClick={() => navigate(`/stock-info?asset=coin&coinMarket=${mode.coinMarket}&symbol=${encodeURIComponent(String(row.symbol))}`)} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10"><Star className="h-4 w-4 text-primary" /></div>
-                  <div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{row.koreanName ?? row.englishName ?? row.symbol}</p><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.symbol} · {mode.coinMarket === 'spot' ? 'UPBIT' : 'BITGET'}</p></div>
+                  <div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayCoinName(String(row.symbol), row.koreanName, row.englishName)}</p><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.symbol} · {mode.coinMarket === 'spot' ? 'UPBIT' : 'BITGET'}</p></div>
                   <div className="text-right"><p className="text-sm font-black">{formatAppPrice(Number(row.price), currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change > 0 ? 'text-positive' : change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
                 </button>
               );

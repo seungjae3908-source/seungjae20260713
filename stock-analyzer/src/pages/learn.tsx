@@ -899,11 +899,16 @@ export default function LearnPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background">
       <header className="relative z-20 border-b border-card-border bg-background/95 px-4 pb-4 pt-5 text-center glass">
-        <h1 className="text-2xl font-extrabold">주식공부</h1>
+        <h1 className="text-2xl font-extrabold">공부</h1>
 
         <p className="mt-2 break-keep text-sm font-semibold leading-relaxed text-muted-foreground">
           차트 지표와 가치 지표를 쉬운 설명과 실제 종목으로 배웁니다.
         </p>
+
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button type="button" onClick={() => navigate('/stock-info')} className="rounded-xl border border-card-border bg-card px-3 py-2 text-sm font-black text-muted-foreground">정보</button>
+          <button type="button" className="rounded-xl border border-primary bg-primary px-3 py-2 text-sm font-black text-primary-foreground">공부</button>
+        </div>
       </header>
 
       <main
