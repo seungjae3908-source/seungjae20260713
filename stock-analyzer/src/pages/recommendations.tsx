@@ -82,8 +82,8 @@ export default function RecommendationsPage() {
   const rows = (data?.rows ?? []).filter((row) => row.category === category);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-28 pt-4">
+    <div className="h-full overflow-y-auto overscroll-contain bg-background">
+      <div className="px-4 pb-28 pt-4">
         <header className="mb-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => navigate('/home')} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card">

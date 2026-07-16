@@ -152,8 +152,9 @@ export default function StocksPage() {
   const openCoin = (symbol: string) => navigate(`/stock-info?asset=coin&coinMarket=${mode.coinMarket}&symbol=${encodeURIComponent(symbol)}`);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <header className="border-b border-card-border bg-background/95 px-4 pb-3 pt-4 backdrop-blur">
+    <div className="h-full overflow-y-auto overscroll-contain bg-background">
+      {/* 상단 고정 없음 — 제목·검색창·탭·목록이 한 페이지로 함께 스크롤. */}
+      <header className="border-b border-card-border px-4 pb-3 pt-4">
         <h1 className="text-xl font-black text-center">종목</h1>
 
         {/* 1) 종목 검색창 — 제목 바로 아래에 붙여 하나의 상단 영역처럼 보이게(작은 간격). 입력 텍스트 왼쪽 정렬 유지 */}
@@ -188,7 +189,7 @@ export default function StocksPage() {
         </div>
       </header>
 
-      <main className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-28 pt-4">
+      <main className="space-y-4 px-4 pb-28 pt-4">
         {/* 검색 중이면 검색 결과가 분류 목록 위 */}
         {searching && (
           <section>
