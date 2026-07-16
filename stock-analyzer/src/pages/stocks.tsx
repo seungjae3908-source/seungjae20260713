@@ -156,8 +156,8 @@ export default function StocksPage() {
       <header className="border-b border-card-border bg-background/95 px-4 pb-3 pt-4 backdrop-blur">
         <h1 className="text-xl font-black text-center">종목</h1>
 
-        {/* 1) 종목 검색창 — 입력 텍스트 왼쪽 정렬 유지 */}
-        <label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
+        {/* 1) 종목 검색창 — 제목 바로 아래에 붙여 하나의 상단 영역처럼 보이게(작은 간격). 입력 텍스트 왼쪽 정렬 유지 */}
+        <label className="mt-1.5 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
           <Search className="h-4 w-4 text-muted-foreground" />
           <input
             value={query}
