@@ -1,10 +1,9 @@
 // 지정가 알림 카드 — 종목/코인 상세 화면에서 기존 price_alerts API를 그대로 사용한다.
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, Trash2 } from 'lucide-react';
+import { Bell, ChevronDown, Trash2 } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
-import { CollapsibleCard } from '@/components/collapsible-card';
 import { cn } from '@/lib/utils';
 
 type AnyObj = Record<string, any>;
@@ -23,6 +22,7 @@ export function PriceAlertCard({
   currency: string;
 }) {
   const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false); // 기본 접힘 — 제목 탭으로 펼침
   const [targetPrice, setTargetPrice] = useState('');
   const [direction, setDirection] = useState<'above' | 'below'>('above');
   const [enabled, setEnabled] = useState(true);
@@ -80,12 +80,19 @@ export function PriceAlertCard({
     }
   };
 
+  const summary = alerts.isLoading ? '알림 조회 중' : rows.length > 0 ? `저장된 알림 ${rows.length}건` : '저장된 알림 없음';
+
   return (
-    <CollapsibleCard
-      title={<span className="inline-flex items-center justify-center gap-1"><Bell className="h-4 w-4 text-primary" /> 지정가 알림</span>}
-      summary={alerts.isLoading ? '알림 조회 중' : rows.length > 0 ? `저장된 알림 ${rows.length}건` : '저장된 알림 없음'}
-    >
-      <div className="space-y-3 text-center">
+    <section className="rounded-3xl border border-card-border bg-card shadow-sm">
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full items-center justify-between gap-2 p-4">
+        <span className="flex-1 text-center">
+          <span className="inline-flex items-center justify-center gap-1 text-sm font-black"><Bell className="h-4 w-4 text-primary" /> 지정가 알림</span>
+          {!open && <span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">{summary}</span>}
+        </span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+      <div className="space-y-3 px-4 pb-4 text-center">
         <div className="grid grid-cols-2 gap-2">
           <div className="rounded-xl bg-secondary/60 p-2"><p className="text-[10px] font-bold text-muted-foreground">현재가</p><p className="mt-0.5 text-xs font-black">{currentPrice != null ? `${currentPrice.toLocaleString()} ${currency}` : '데이터 없음'}</p></div>
           <input type="number" inputMode="decimal" value={targetPrice} onChange={(e) => setTargetPrice(e.target.value)} placeholder="목표 가격" className="rounded-xl border border-card-border bg-background p-2 text-center text-xs font-bold outline-none" />
@@ -113,6 +120,7 @@ export function PriceAlertCard({
         ))}
         {!alerts.isLoading && !alerts.isError && rows.length === 0 && <p className="text-[11px] font-bold text-muted-foreground">이 종목에 저장된 알림이 없습니다.</p>}
       </div>
-    </CollapsibleCard>
+      )}
+    </section>
   );
 }
