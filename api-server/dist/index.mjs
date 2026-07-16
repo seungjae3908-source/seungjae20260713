@@ -10838,6 +10838,55 @@ router6.get("/:ticker/quote", async (req, res) => {
     });
   }
 });
+function isPlaceholderDescription(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return true;
+  return /기업 정보입니다\.?$/.test(text) || /기업 정보를 확인 중입니다\.?$/.test(text);
+}
+async function fetchDartCompanyOverview(ticker) {
+  const apiKey = String(process.env.DART_API_KEY ?? "").trim();
+  if (!apiKey || !/^\d{6}$/.test(ticker)) return null;
+  const corpCode = await getDartCorpCode(ticker, apiKey);
+  if (!corpCode) return null;
+  const query = new URLSearchParams({ crtfc_key: apiKey, corp_code: corpCode });
+  const response = await fetch(
+    `https://opendart.fss.or.kr/api/company.json?${query.toString()}`
+  );
+  if (!response.ok) return null;
+  const data = await response.json();
+  if (data?.status !== "000") return null;
+  const website = String(data?.hm_url ?? "").trim();
+  return {
+    industry: String(data?.induty_code ?? "").trim() || null,
+    industryName: String(data?.induty ?? "").trim() || null,
+    sector: String(data?.induty ?? "").trim() || null,
+    website: website && !/^https?:\/\//i.test(website) ? `https://${website}` : website || null,
+    ceo: String(data?.ceo_nm ?? "").trim() || null,
+    establishedAt: String(data?.est_dt ?? "").trim() || null,
+    address: String(data?.adres ?? "").trim() || null,
+    provider: "DART \uAE30\uC5C5\uAC1C\uD669"
+  };
+}
+async function fetchYahooAssetProfile(ticker) {
+  if (/^\d{6}$/.test(ticker)) return null;
+  const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=assetProfile`;
+  const response = await fetch(url, {
+    headers: { "User-Agent": "seungjae-stock-app/1.0", Accept: "application/json" }
+  });
+  if (!response.ok) return null;
+  const data = await response.json();
+  const p = data?.quoteSummary?.result?.[0]?.assetProfile;
+  if (!p || typeof p !== "object") return null;
+  const summary = String(p?.longBusinessSummary ?? "").trim();
+  const website = String(p?.website ?? "").trim();
+  return {
+    description: summary || null,
+    sector: String(p?.sector ?? "").trim() || null,
+    industry: String(p?.industry ?? "").trim() || null,
+    website: website || null,
+    provider: "Yahoo Finance"
+  };
+}
 router6.get("/:ticker/profile", async (req, res) => {
   const ticker = normalizeTicker4(req.params.ticker);
   if (!ticker) {
@@ -10847,8 +10896,8 @@ router6.get("/:ticker/profile", async (req, res) => {
     return;
   }
   try {
-    const profile = await MarketDataService.getCompanyProfile(ticker);
-    res.json(profile);
+    const base = await MarketDataService.getCompanyProfile(ticker);
+    res.json(await enrichCompanyProfile(ticker, base));
   } catch (error) {
     console.error("stock profile route error:", error);
     res.status(500).json({
@@ -10857,6 +10906,37 @@ router6.get("/:ticker/profile", async (req, res) => {
     });
   }
 });
+async function enrichCompanyProfile(ticker, base) {
+  const profile = { ...base ?? {} };
+  if (isPlaceholderDescription(profile.description)) profile.description = "";
+  try {
+    if (/^\d{6}$/.test(ticker)) {
+      const dart = await fetchDartCompanyOverview(ticker).catch(() => null);
+      if (dart) {
+        if (!profile.industry && dart.industryName) profile.industry = dart.industryName;
+        if (!profile.sector && dart.sector) profile.sector = dart.sector;
+        if (!profile.website && dart.website) profile.website = dart.website;
+        if (dart.ceo) profile.ceo = dart.ceo;
+        if (dart.establishedAt) profile.establishedAt = dart.establishedAt;
+        profile.provider = dart.provider;
+      }
+    } else {
+      const yahoo = await fetchYahooAssetProfile(ticker).catch(() => null);
+      if (yahoo) {
+        if (!profile.description && yahoo.description) profile.description = yahoo.description;
+        if (!profile.sector && yahoo.sector) profile.sector = yahoo.sector;
+        if (!profile.industry && yahoo.industry) profile.industry = yahoo.industry;
+        if (!profile.website && yahoo.website) profile.website = yahoo.website;
+        profile.provider = yahoo.provider;
+      }
+    }
+  } catch {
+  }
+  if (!profile.provider) {
+    profile.provider = /^\d{6}$/.test(ticker) ? "DART/\uB124\uC774\uBC84" : "SEC/Yahoo";
+  }
+  return profile;
+}
 router6.get("/:ticker/company", async (req, res) => {
   const ticker = normalizeTicker4(req.params.ticker);
   if (!ticker) {
@@ -10866,8 +10946,8 @@ router6.get("/:ticker/company", async (req, res) => {
     return;
   }
   try {
-    const profile = await MarketDataService.getCompanyProfile(ticker);
-    res.json(profile);
+    const base = await MarketDataService.getCompanyProfile(ticker);
+    res.json(await enrichCompanyProfile(ticker, base));
   } catch (error) {
     console.error("stock company route error:", error);
     res.status(500).json({

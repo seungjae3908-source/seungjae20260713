@@ -1,5 +1,6 @@
 import { useLocation } from 'wouter';
 import { Bot, Home, ListTree, Newspaper, Settings, WalletCards } from 'lucide-react';
+import { useAssetMode } from '@/lib/asset-mode';
 import { cn } from '@/lib/utils';
 
 const ITEMS = [
@@ -58,7 +59,19 @@ function cleanPath(path: string) {
 
 export function BottomNav() {
   const [location, navigate] = useLocation();
+  const mode = useAssetMode();
   const path = cleanPath(location);
+
+  // 하단 메뉴로 새로 진입할 때는 모든 선택을 가장 왼쪽(주식·국내·현물)으로 초기화한다.
+  // 같은 탭을 다시 누르거나 뒤로가기로 돌아온 경우에는 기존 선택을 유지한다.
+  const goTo = (item: (typeof ITEMS)[number]) => {
+    if (!item.match(path)) {
+      mode.setAsset('stock');
+      mode.setStockMarket('KR');
+      mode.setCoinMarket('spot');
+    }
+    navigate(item.href);
+  };
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/95 px-1 pb-[max(env(safe-area-inset-bottom),0.35rem)] pt-1.5 backdrop-blur-xl">
@@ -70,7 +83,7 @@ export function BottomNav() {
             <button
               key={item.href}
               type="button"
-              onClick={() => navigate(item.href)}
+              onClick={() => goTo(item)}
               aria-current={active ? 'page' : undefined}
               className={cn(
                 'flex min-w-0 flex-col items-center justify-center rounded-xl px-0.5 py-1.5 text-[9px] font-extrabold transition',

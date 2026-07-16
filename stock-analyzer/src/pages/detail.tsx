@@ -2,7 +2,7 @@ import { authorizedFetch } from '@/lib/auth-fetch';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Maximize2, Minimize2, Settings2 } from "lucide-react";
+import { ChevronDown, Maximize2, Minimize2, Settings2 } from "lucide-react";
 import {
   ColorType,
   CrosshairMode,
@@ -532,66 +532,30 @@ function buildCoreMetrics({
 }): CoreMetrics {
   const riskLabel = deriveRiskLabel(score, classification, risk);
 
-  const opinionText = String(opinion ?? "").toLowerCase();
-
-  const fairRate =
-    opinionText.includes("매수") || opinionText.includes("buy")
-      ? Math.min(0.08, 0.02 + Math.max(score - 60, 0) * 0.0015)
-      : opinionText.includes("매도") || opinionText.includes("sell")
-        ? -0.04
-        : 0.02;
-
-  const targetRate =
-    opinionText.includes("매수") || opinionText.includes("buy")
-      ? Math.min(0.16, 0.06 + Math.max(score - 60, 0) * 0.003)
-      : opinionText.includes("매도") || opinionText.includes("sell")
-        ? -0.02
-        : 0.04;
-
-  const stopRate =
-    riskLabel === "매우 높음"
-      ? 0.12
-      : riskLabel === "높음"
-        ? 0.1
-        : riskLabel === "보통"
-          ? 0.07
-          : 0.05;
-
   return {
-    fairPrice:
-      firstNumber(
-        quote?.fairPrice,
-        quote?.fairValue,
-        company?.fairPrice,
-        financials?.fairPrice,
-        risk?.fairPrice,
-      ) ??
-      (currentPrice != null
-        ? roundPrice(currentPrice * (1 + fairRate), market)
-        : null),
+    // 실제 데이터 근거가 없으면 현재가 기반 임의 배수로 만들어내지 않고 null(→ 산출 불가) 처리한다.
+    fairPrice: firstNumber(
+      quote?.fairPrice,
+      quote?.fairValue,
+      company?.fairPrice,
+      financials?.fairPrice,
+      risk?.fairPrice,
+    ),
 
-    targetPrice:
-      firstNumber(
-        quote?.targetPrice,
-        quote?.analystTargetPrice,
-        company?.targetPrice,
-        financials?.targetPrice,
-        risk?.targetPrice,
-      ) ??
-      (currentPrice != null
-        ? roundPrice(currentPrice * (1 + targetRate), market)
-        : null),
+    targetPrice: firstNumber(
+      quote?.targetPrice,
+      quote?.analystTargetPrice,
+      company?.targetPrice,
+      financials?.targetPrice,
+      risk?.targetPrice,
+    ),
 
-    stopPrice:
-      firstNumber(
-        quote?.stopPrice,
-        quote?.stopLossPrice,
-        company?.stopPrice,
-        risk?.stopPrice,
-      ) ??
-      (currentPrice != null
-        ? roundPrice(currentPrice * (1 - stopRate), market)
-        : null),
+    stopPrice: firstNumber(
+      quote?.stopPrice,
+      quote?.stopLossPrice,
+      company?.stopPrice,
+      risk?.stopPrice,
+    ),
 
     riskLabel,
 
@@ -644,6 +608,14 @@ function formatCompactMoney(value: unknown, currency: Currency): string {
   }
 
   return `${sign}${Math.round(absolute).toLocaleString()}`;
+}
+
+// 재무제표 표기용 — 원본 금액을 100만 단위로 나눠 표시합니다(원↔달러 환산 없음).
+function formatMillions(value: unknown): string {
+  const numberValue = toNumber(value);
+  if (numberValue == null) return "정보 없음";
+  const scaled = numberValue / 1_000_000;
+  return scaled.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
 function formatMoney(value: unknown, currency: Currency): string {
@@ -1609,29 +1581,52 @@ function SectionCard({
   subtitle,
   actions,
   children,
+  defaultOpen = false,
 }: {
   title: string;
   subtitle?: string;
   actions?: ReactNode;
   children: ReactNode;
+  /** 기본은 접힘. 최상단 헤더 등 항상 펼쳐야 하는 경우만 true */
+  defaultOpen?: boolean;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
+
   return (
     <section className="rounded-2xl border border-card-border bg-card shadow-sm">
-      <div className="flex items-start justify-between gap-3 border-b border-card-border px-4 py-3">
-        <div className="min-w-0">
-          <h2 className="break-keep text-base font-extrabold leading-6">{title}</h2>
+      <div className="flex items-stretch gap-2 border-b border-card-border">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 items-center justify-center gap-2 px-4 py-3 text-center"
+        >
+          <span className="min-w-0 flex-1 text-center">
+            <span className="block break-keep text-base font-extrabold leading-6">
+              {title}
+            </span>
 
-          {subtitle && (
-            <p className="mt-0.5 break-keep text-[11px] font-bold leading-5 text-muted-foreground">
-              {subtitle}
-            </p>
-          )}
-        </div>
+            {subtitle && (
+              <span className="mt-0.5 block break-keep text-[11px] font-bold leading-5 text-muted-foreground">
+                {subtitle}
+              </span>
+            )}
+          </span>
 
-        {actions && <div className="shrink-0">{actions}</div>}
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-180",
+            )}
+          />
+        </button>
+
+        {actions && open && (
+          <div className="flex shrink-0 items-center pr-3">{actions}</div>
+        )}
       </div>
 
-      <div className="p-3">{children}</div>
+      {open && <div className="p-3">{children}</div>}
     </section>
   );
 }
@@ -1646,6 +1641,231 @@ function inferCompanyBusiness(name: string, ticker: string, company: AnyObj | nu
   if (/소프트웨어|software|microsoft|alphabet|naver|카카오|oracle|meta/.test(text)) return "소프트웨어·인터넷 기업으로 플랫폼 이용자, 광고, 클라우드, 구독과 AI 서비스 성장이 핵심 사업입니다.";
   if (/에너지|화학|oil|gas|battery|배터리/.test(text)) return "에너지·소재 기업으로 원자재 가격, 제품 스프레드, 설비 가동률과 전방산업 수요에 영향을 받습니다.";
   return direct ? `${direct} 분야를 중심으로 사업을 영위하는 상장기업입니다. 매출 구성, 주요 고객, 경쟁력과 최근 실적을 함께 확인하세요.` : `${name}은(는) ${/^\d/.test(ticker) ? "대한민국" : "미국"} 상장기업입니다. 회사 개요 데이터가 부족해 재무제표·공시·뉴스의 사업 내용을 함께 확인해야 합니다.`;
+}
+
+type RiskGrade = "낮음" | "보통" | "높음" | "매우 높음" | "데이터 부족";
+
+interface RiskRow {
+  name: string;
+  grade: RiskGrade;
+  reason: string;
+}
+
+// 페이지가 이미 불러온 데이터만 사용해 세부 위험을 계산합니다. 근거 없는 값은 '데이터 부족'입니다.
+function computeRiskBreakdown(
+  data: DetailData,
+  chartStats: ChartStats | null,
+): RiskRow[] {
+  const rows: RiskRow[] = [];
+  const fin = data.financials;
+  const quote = data.quote;
+  const candles = normalizeCandles(data.candles ?? []);
+
+  // 재무 위험 — 부채비율 / 적자 여부
+  {
+    const ratios = fin?.ratios ?? {};
+    const debtRatio = firstNumber(ratios.debtRatio, fin?.debtRatio);
+    const annual = Array.isArray(fin?.annual) ? fin.annual : Array.isArray(fin?.yearly) ? fin.yearly : [];
+    const quarterly = Array.isArray(fin?.quarterly) ? fin.quarterly : Array.isArray(fin?.quarters) ? fin.quarters : [];
+    const latest = quarterly[0] ?? annual[0] ?? null;
+    const netIncome = latest ? firstNumber(latest.netIncome, latest.profit) : null;
+    if (debtRatio == null && netIncome == null) {
+      rows.push({ name: "재무 위험", grade: "데이터 부족", reason: "부채비율·순이익 데이터가 없습니다." });
+    } else {
+      const deficit = netIncome != null && netIncome < 0;
+      let grade: RiskGrade = "보통";
+      if (deficit && debtRatio != null && debtRatio >= 200) grade = "매우 높음";
+      else if (deficit || (debtRatio != null && debtRatio >= 200)) grade = "높음";
+      else if (debtRatio != null && debtRatio < 100) grade = "낮음";
+      rows.push({
+        name: "재무 위험",
+        grade,
+        reason: `${deficit ? "최근 순이익 적자" : "최근 순이익 흑자"}${debtRatio != null ? ` · 부채비율 ${debtRatio.toFixed(0)}%` : ""}`,
+      });
+    }
+  }
+
+  // 밸류에이션 위험 — PER / PBR
+  {
+    const ratios = fin?.ratios ?? {};
+    const per = firstNumber(ratios.per, quote?.per, quote?.pe);
+    const pbr = firstNumber(ratios.pbr, quote?.pbr, quote?.pb);
+    if (per == null && pbr == null) {
+      rows.push({ name: "밸류에이션 위험", grade: "데이터 부족", reason: "PER·PBR 데이터가 없습니다." });
+    } else {
+      let grade: RiskGrade = "보통";
+      const high = (per != null && per > 40) || (pbr != null && pbr > 5);
+      const low = (per != null && per > 0 && per < 10) && (pbr == null || pbr < 1.5);
+      const deficit = per != null && per <= 0;
+      if (high) grade = "높음";
+      else if (deficit) grade = "높음";
+      else if (low) grade = "낮음";
+      rows.push({
+        name: "밸류에이션 위험",
+        grade,
+        reason: `${per != null ? `PER ${per.toFixed(1)}배` : "PER 없음"}${pbr != null ? ` · PBR ${pbr.toFixed(2)}배` : ""}`,
+      });
+    }
+  }
+
+  // 가격 변동성 위험 — 최근 캔들 일간 변동성
+  {
+    if (candles.length < 6) {
+      rows.push({ name: "가격 변동성 위험", grade: "데이터 부족", reason: "변동성 계산에 필요한 캔들이 부족합니다." });
+    } else {
+      const recent = candles.slice(-20);
+      const ranges = recent.map((c) => (c.high - c.low) / (c.close || 1));
+      const avg = ranges.reduce((s, v) => s + v, 0) / ranges.length;
+      let grade: RiskGrade = "보통";
+      if (avg >= 0.07) grade = "매우 높음";
+      else if (avg >= 0.045) grade = "높음";
+      else if (avg < 0.02) grade = "낮음";
+      rows.push({ name: "가격 변동성 위험", grade, reason: `최근 평균 일간 변동폭 약 ${(avg * 100).toFixed(1)}%` });
+    }
+  }
+
+  // 유동성 위험 — 거래대금(거래량 x 종가)
+  {
+    const last = candles[candles.length - 1] ?? null;
+    const tradeValue = last ? last.volume * last.close : null;
+    if (tradeValue == null || tradeValue <= 0) {
+      rows.push({ name: "유동성 위험", grade: "데이터 부족", reason: "거래대금 데이터가 없습니다." });
+    } else {
+      const market = marketOf(data.ticker, quote, data.company);
+      const threshold = market === "KR" ? 1_000_000_000 : 5_000_000; // 10억원 / $5M
+      const lowThreshold = market === "KR" ? 100_000_000 : 500_000;
+      let grade: RiskGrade = "보통";
+      if (tradeValue < lowThreshold) grade = "높음";
+      else if (tradeValue >= threshold) grade = "낮음";
+      rows.push({ name: "유동성 위험", grade, reason: `최근 거래대금 ${formatCompactMoney(tradeValue, currencyOf(market, quote))}` });
+    }
+  }
+
+  // 기술적 위험 — RSI / 이평 위치
+  {
+    if (!chartStats || chartStats.rsi == null) {
+      rows.push({ name: "기술적 위험", grade: "데이터 부족", reason: "기술 지표 계산 데이터가 부족합니다." });
+    } else {
+      const rsi = chartStats.rsi;
+      let grade: RiskGrade = "보통";
+      if (rsi >= 80 || rsi <= 20) grade = "높음";
+      else if (rsi >= 70 || rsi <= 30) grade = "보통";
+      else grade = "낮음";
+      const trend = chartStats.trend;
+      rows.push({ name: "기술적 위험", grade, reason: `RSI ${rsi.toFixed(0)} · ${trend}` });
+    }
+  }
+
+  // 뉴스 위험 — 실제 부정 신호가 있을 때만
+  {
+    const news = Array.isArray(data.news) ? data.news : [];
+    if (news.length === 0) {
+      rows.push({ name: "뉴스 위험", grade: "데이터 부족", reason: "수집된 뉴스가 없습니다." });
+    } else {
+      const negRe = /적자|하락|급락|감소|악재|소송|리콜|횡령|배임|하향|경고|부진|손실/;
+      const negCount = news.filter((n) => negRe.test(String(n.title ?? n.headline ?? ""))).length;
+      let grade: RiskGrade = "낮음";
+      if (negCount >= 3) grade = "높음";
+      else if (negCount >= 1) grade = "보통";
+      rows.push({ name: "뉴스 위험", grade, reason: negCount > 0 ? `부정적 표현 뉴스 ${negCount}건 감지` : `최근 뉴스 ${news.length}건에서 부정 신호 없음` });
+    }
+  }
+
+  const filings = Array.isArray(data.filings) ? data.filings : [];
+  const filingTitle = (f: AnyObj) => String(f.title ?? f.report_nm ?? f.report ?? f.form ?? "");
+
+  // 공시 위험 — 공시 존재 여부
+  {
+    if (filings.length === 0) {
+      rows.push({ name: "공시 위험", grade: "데이터 부족", reason: "수집된 공시가 없습니다." });
+    } else {
+      rows.push({ name: "공시 위험", grade: "낮음", reason: `최근 공시 ${filings.length}건 확인됨` });
+    }
+  }
+
+  // 오퍼링·유상증자 위험 — 공시 제목 키워드 검색
+  {
+    if (filings.length === 0) {
+      rows.push({ name: "오퍼링·유상증자 위험", grade: "데이터 부족", reason: "공시 데이터가 없습니다." });
+    } else {
+      const re = /유상증자|전환사채|신주인수권|CB|BW|offering|dilut/i;
+      const hits = filings.filter((f) => re.test(filingTitle(f)));
+      rows.push({
+        name: "오퍼링·유상증자 위험",
+        grade: hits.length >= 2 ? "높음" : hits.length === 1 ? "보통" : "낮음",
+        reason: hits.length > 0 ? `유상증자·전환사채 관련 공시 ${hits.length}건` : "관련 공시 없음",
+      });
+    }
+  }
+
+  // 상장폐지·거래정지 위험 — 공시 키워드
+  {
+    if (filings.length === 0) {
+      rows.push({ name: "상장폐지·거래정지 위험", grade: "데이터 부족", reason: "공시 데이터가 없습니다." });
+    } else {
+      const re = /상장폐지|거래정지|관리종목|감사의견\s*거절|투자주의|투자경고|delist|going concern/i;
+      const hits = filings.filter((f) => re.test(filingTitle(f)));
+      rows.push({
+        name: "상장폐지·거래정지 위험",
+        grade: hits.length > 0 ? "매우 높음" : "낮음",
+        reason: hits.length > 0 ? `관련 공시 ${hits.length}건 감지` : "관련 공시 없음",
+      });
+    }
+  }
+
+  // 공매도 위험 — 공매도 비중
+  {
+    const shortRatio = firstNumber(
+      quote?.shortRatio,
+      quote?.shortInterestRatio,
+      data.risk?.shortRatio,
+    );
+    if (shortRatio == null) {
+      rows.push({ name: "공매도 위험", grade: "데이터 부족", reason: "공매도 비중 데이터가 없습니다." });
+    } else {
+      let grade: RiskGrade = "보통";
+      if (shortRatio >= 15) grade = "높음";
+      else if (shortRatio < 5) grade = "낮음";
+      rows.push({ name: "공매도 위험", grade, reason: `공매도 비중 약 ${shortRatio.toFixed(1)}%` });
+    }
+  }
+
+  // 수급 위험 — 외국인/기관 순매도 지속(quote/risk에 값이 있을 때만)
+  {
+    const foreignNet = firstNumber(quote?.foreignNet, quote?.foreignNetBuy, data.risk?.foreignNet);
+    const instNet = firstNumber(quote?.institutionNet, quote?.instNetBuy, data.risk?.institutionNet);
+    if (foreignNet == null && instNet == null) {
+      rows.push({ name: "수급 위험", grade: "데이터 부족", reason: "외국인·기관 순매수 데이터가 없습니다." });
+    } else {
+      const bothSell = (foreignNet != null && foreignNet < 0) && (instNet != null && instNet < 0);
+      const anySell = (foreignNet != null && foreignNet < 0) || (instNet != null && instNet < 0);
+      let grade: RiskGrade = "보통";
+      if (bothSell) grade = "높음";
+      else if (!anySell) grade = "낮음";
+      rows.push({
+        name: "수급 위험",
+        grade,
+        reason: `외국인 ${foreignNet == null ? "정보 없음" : foreignNet < 0 ? "순매도" : "순매수"} · 기관 ${instNet == null ? "정보 없음" : instNet < 0 ? "순매도" : "순매수"}`,
+      });
+    }
+  }
+
+  return rows;
+}
+
+function riskGradeTone(grade: RiskGrade): string {
+  switch (grade) {
+    case "낮음":
+      return "text-positive";
+    case "보통":
+      return "text-muted-foreground";
+    case "높음":
+      return "text-destructive";
+    case "매우 높음":
+      return "text-destructive";
+    default:
+      return "text-muted-foreground";
+  }
 }
 
 function OverviewTab({
@@ -1663,13 +1883,25 @@ function OverviewTab({
   insights: ReturnType<typeof buildAiInsights>;
   metrics: CoreMetrics;
 }) {
-  const description = firstText(
+  const isPlaceholderDescription = (value: unknown): boolean => {
+    const text = String(value ?? "").trim();
+    if (!text) return true;
+    return /기업 정보입니다\.?$/.test(text) || /기업 정보를 확인 중입니다\.?$/.test(text);
+  };
+
+  const rawDescription = firstText(
     data.company?.description,
     data.company?.businessSummary,
     data.company?.overview,
     data.company?.summary,
     data.company?.companyDescription,
   );
+  const description = rawDescription && !isPlaceholderDescription(rawDescription) ? rawDescription : null;
+
+  const chartStats = normalizeCandles(data.candles ?? []).length >= 2
+    ? calculateChartStats(normalizeCandles(data.candles ?? []))
+    : null;
+  const riskRows = computeRiskBreakdown(data, chartStats);
 
   const marketCap = firstNumber(
     data.quote?.marketCap,
@@ -1679,31 +1911,54 @@ function OverviewTab({
     data.financials?.marketCap,
   );
 
+  const industry = firstText(data.company?.industry, data.company?.sector);
+  const exchange = firstText(data.company?.exchange, data.quote?.exchange);
+  const website = safeUrl(firstText(data.company?.website, data.company?.homepage, data.company?.hm_url));
+  const provider = firstText(data.company?.provider) ?? (market === "KR" ? "DART/네이버" : "SEC/Yahoo");
+
   return (
     <div className="flex flex-col gap-3">
-      <SectionCard title="개요">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
+      <SectionCard
+        title="개요"
+        subtitle={industry ? `업종 ${industry}` : "회사 개요 정보"}
+      >
+        <div className="flex items-center justify-center gap-2 text-center">
+          <div className="flex min-w-0 flex-col items-center gap-1">
             <p className="truncate text-base font-extrabold">{name}</p>
             <span className="shrink-0 rounded-full bg-secondary/70 px-2.5 py-1 text-[10px] font-extrabold text-muted-foreground">
-              시총 {formatCompactMoney(marketCap, currency)}
+              시총 {marketCap != null ? formatCompactMoney(marketCap, currency) : "정보 없음"}
             </span>
           </div>
         </div>
 
-        <div className="mt-3 rounded-xl bg-secondary/60 px-3 py-3">
+        <div className="mt-3 rounded-xl bg-secondary/60 px-3 py-3 text-center">
           <p className="text-[10px] font-extrabold text-primary">
-            어떤 회사인가요?
+            주요 사업 / 회사 설명
           </p>
 
           <p className="mt-1 break-keep text-xs font-semibold leading-5 text-muted-foreground">
-            {description ? translateMarketText(description) : inferCompanyBusiness(name, data.ticker, data.company)}
+            {description ? translateMarketText(description) : "회사 설명 데이터가 없습니다"}
           </p>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2">
-          <MiniMetric label="업종" value={String(data.company?.industry ?? data.company?.sector ?? inferCompanyBusiness(name, data.ticker, data.company).split(" ")[0])} />
-          <MiniMetric label="시장" value={String(data.company?.exchange ?? data.quote?.exchange ?? (market === "KR" ? "국내" : "미국"))} />
+          <MiniMetric label="업종·산업" value={industry ?? "정보 없음"} />
+          <MiniMetric label="시장(거래소)" value={exchange ?? (market === "KR" ? "국내" : "미국")} />
         </div>
+        {website && (
+          <div className="mt-2 text-center">
+            <a
+              href={website}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block break-all text-[11px] font-extrabold text-primary underline"
+            >
+              공식 홈페이지
+            </a>
+          </div>
+        )}
+        <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">
+          데이터 제공: {provider}
+        </p>
       </SectionCard>
 
       <SectionCard title="AI 간단요약" subtitle="현재 데이터 기준 참고용 분석">
@@ -1730,19 +1985,19 @@ function OverviewTab({
         <div className="mt-2 grid grid-cols-3 gap-2">
           <MiniMetric
             label="적정가"
-            value={formatAppPrice(metrics.fairPrice, currency)}
+            value={metrics.fairPrice != null ? formatAppPrice(metrics.fairPrice, currency) : "산출 불가"}
             valueClassName="text-primary"
           />
 
           <MiniMetric
             label="목표가"
-            value={formatAppPrice(metrics.targetPrice, currency)}
+            value={metrics.targetPrice != null ? formatAppPrice(metrics.targetPrice, currency) : "산출 불가"}
             valueClassName="text-positive"
           />
 
           <MiniMetric
             label="손절가"
-            value={formatAppPrice(metrics.stopPrice, currency)}
+            value={metrics.stopPrice != null ? formatAppPrice(metrics.stopPrice, currency) : "산출 불가"}
             valueClassName="text-destructive"
           />
         </div>
@@ -1757,6 +2012,26 @@ function OverviewTab({
             label="리스크"
             text={insights.riskSummary?.[0] ?? metrics.riskCaption}
           />
+        </div>
+
+        <p className="mb-1 mt-4 text-center text-[10px] font-extrabold">세부 위험 분석</p>
+        <div className="space-y-1.5">
+          {riskRows.map((row) => (
+            <div
+              key={row.name}
+              className="rounded-xl bg-secondary/50 px-3 py-2 text-center"
+            >
+              <div className="flex items-center justify-center gap-2">
+                <span className="text-[11px] font-extrabold">{row.name}</span>
+                <span className={cn("text-[11px] font-black", riskGradeTone(row.grade))}>
+                  {row.grade}
+                </span>
+              </div>
+              <p className="mt-0.5 break-keep text-[10px] font-semibold leading-4 text-muted-foreground">
+                {row.reason}
+              </p>
+            </div>
+          ))}
         </div>
       </SectionCard>
     </div>
@@ -1842,7 +2117,7 @@ function AiTab({
     },
     {
       label: "손절 기준",
-      value: formatAppPrice(metrics.stopPrice, currency),
+      value: metrics.stopPrice != null ? formatAppPrice(metrics.stopPrice, currency) : "산출 불가",
       reason:
         "이 가격 아래에서 일봉이 마감하면 지지선이 무너져 기존 상승 시나리오가 틀렸을 가능성이 커집니다. 물타기보다 위험 축소를 우선합니다.",
       checklist: [
@@ -1854,7 +2129,7 @@ function AiTab({
     },
     {
       label: "목표가 · 분할매도",
-      value: formatAppPrice(metrics.targetPrice, currency),
+      value: metrics.targetPrice != null ? formatAppPrice(metrics.targetPrice, currency) : "산출 불가",
       reason:
         "목표가에 한 번에 모두 매도하지 않고 상승 강도와 거래량을 보며 나누어 이익을 확정합니다.",
       checklist: [
@@ -2800,6 +3075,8 @@ function ChartTab({
 
       <MarketFlowPanel ticker={ticker} />
 
+      <ShortSellingPanel ticker={ticker} />
+
       {explanation && (
         <Modal title={explanation.title} subtitle="실제 차트에서 조건 위치 확인" onClose={() => setExplanation(null)}>
           <p className="mb-3">{explanation.text}</p>
@@ -2813,12 +3090,32 @@ function ChartTab({
   );
 }
 
+type FlowPeriod = "daily" | "weekly" | "monthly" | "yearly";
+
+const FLOW_PERIOD_TABS: Array<[FlowPeriod, string]> = [
+  ["daily", "일별"],
+  ["weekly", "주별"],
+  ["monthly", "월별"],
+  ["yearly", "년별"],
+];
+
+const FLOW_PERIOD_LABEL: Record<FlowPeriod, string> = {
+  daily: "일별",
+  weekly: "주별",
+  monthly: "월별",
+  yearly: "년별",
+};
+
+function flowCompact(value: number): string {
+  if (!Number.isFinite(value)) return "제공 불가";
+  return Math.abs(value) >= 100_000_000
+    ? `${(value / 100_000_000).toFixed(1)}억`
+    : Math.round(value).toLocaleString("ko-KR");
+}
+
+// 수급현황 — 개인/외국인/기관/프로그램 순매수, 거래량/거래대금, 기준일, 공급자
 function MarketFlowPanel({ ticker }: { ticker: string }) {
-  const [mode, setMode] = useState<"investor" | "short">("investor");
-  const [period, setPeriod] = useState<
-    "daily" | "weekly" | "monthly" | "yearly"
-  >("daily");
-  const [open, setOpen] = useState(true);
+  const [period, setPeriod] = useState<FlowPeriod>("daily");
   const [selectedActor, setSelectedActor] = useState<string | null>(null);
   const flow = useQuery<AnyObj>({
     queryKey: ["market-flow", ticker, period],
@@ -2832,6 +3129,147 @@ function MarketFlowPanel({ ticker }: { ticker: string }) {
     staleTime: 60_000,
     retry: false,
   });
+
+  const totals = flow.data?.totals ?? {};
+  const hasProgram = totals.program != null;
+  const actors = [
+    { key: "individual", label: "개인", value: Number(totals.individual ?? 0), has: totals.individual != null },
+    { key: "foreign", label: "외국인", value: Number(totals.foreign ?? 0), has: totals.foreign != null },
+    { key: "institution", label: "기관", value: Number(totals.institution ?? 0), has: totals.institution != null },
+    { key: "program", label: "프로그램", value: Number(totals.program ?? 0), has: hasProgram },
+  ];
+  const dominant = [...actors]
+    .filter((a) => a.has)
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))[0];
+  const flowSummary = flow.data?.available && dominant
+    ? dominant.value >= 0
+      ? `${dominant.label} 매수가 가장 많아요. ${dominant.label} 수급이 이어지는지 조금 더 확인해 보세요.`
+      : `${dominant.label} 매도가 가장 많아요. 매도세가 이어지면 추가 하락 위험이 있어 주의가 필요합니다.`
+    : "투자자별 실제 매매 데이터를 확인 중입니다.";
+  const periodLabel = FLOW_PERIOD_LABEL[period];
+  const provider = firstText(flow.data?.provider, flow.data?.source);
+  const updatedAt = firstText(flow.data?.updatedAt, flow.data?.lastUpdated);
+  const baseDate = firstText(flow.data?.rows?.[0]?.date) ?? "집계 중";
+  const summaryLine = flow.isLoading
+    ? "수급 데이터 확인 중"
+    : flow.data?.available
+      ? `${periodLabel} 기준 · ${baseDate}`
+      : "제공 불가";
+
+  return (
+    <SectionCard title="수급현황" subtitle={summaryLine}>
+      <div className="grid grid-cols-4 gap-1.5">
+        {FLOW_PERIOD_TABS.map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setPeriod(key)}
+            className={cn(
+              "rounded-lg px-2 py-2 text-center text-[10px] font-extrabold",
+              period === key
+                ? "bg-primary/15 text-primary"
+                : "bg-secondary text-muted-foreground",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-3">
+        <p className="mb-2 text-center text-[10px] font-extrabold text-muted-foreground">
+          최신 {periodLabel} 합산 · {baseDate}
+        </p>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          {actors.map((actor) => (
+            <button
+              key={actor.key}
+              type="button"
+              onClick={() => setSelectedActor(actor.label)}
+              className={cn(
+                "rounded-xl border p-3 text-center",
+                !actor.has
+                  ? "border-card-border bg-secondary/50"
+                  : actor.value > 0
+                    ? "border-positive/40 bg-positive/10"
+                    : actor.value < 0
+                      ? "border-destructive/40 bg-destructive/10"
+                      : "border-card-border bg-secondary/50",
+              )}
+            >
+              <p className="text-[10px] font-bold text-muted-foreground">{actor.label}</p>
+              <p
+                className={cn(
+                  "mt-1 text-sm font-extrabold",
+                  actor.has && actor.value > 0
+                    ? "text-positive"
+                    : actor.has && actor.value < 0
+                      ? "text-destructive"
+                      : "",
+                )}
+              >
+                {!actor.has ? "제공 불가" : `${actor.value > 0 ? "+" : ""}${flowCompact(actor.value)}`}
+              </p>
+              <p className="mt-1 text-[9px] font-bold text-muted-foreground">
+                {!actor.has ? "" : actor.value >= 0 ? "순매수" : "순매도"}
+              </p>
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <FlowMetric label="거래량" value={totals.volume != null ? flowCompact(Number(totals.volume)) : "제공 불가"} />
+          <FlowMetric label="거래대금" value={totals.value != null || totals.tradeValue != null ? flowCompact(Number(totals.value ?? totals.tradeValue)) : "제공 불가"} />
+        </div>
+
+        <p className="mt-3 break-keep rounded-xl bg-secondary/70 p-3 text-center text-xs font-bold leading-relaxed text-muted-foreground">
+          {flowSummary}
+        </p>
+
+        {Array.isArray(flow.data?.rows) && flow.data.rows.length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            {flow.data.rows.slice(0, 5).map((row: AnyObj, index: number) => (
+              <div
+                key={row.date ?? index}
+                className="grid grid-cols-4 gap-1 rounded-xl border border-card-border px-2 py-2 text-center text-[10px]"
+              >
+                <span>{row.date}</span>
+                <span className={Number(row.individual) >= 0 ? "text-positive" : "text-destructive"}>
+                  개인 {flowCompact(Number(row.individual))}
+                </span>
+                <span className={Number(row.institution) >= 0 ? "text-positive" : "text-destructive"}>
+                  기관 {flowCompact(Number(row.institution))}
+                </span>
+                <span className={Number(row.foreign) >= 0 ? "text-positive" : "text-destructive"}>
+                  외인 {flowCompact(Number(row.foreign))}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="mt-3 text-center text-[10px] font-bold text-muted-foreground">
+          데이터 공급자: {provider ?? "제공 불가"}
+          {updatedAt ? ` · 갱신 ${new Date(updatedAt).toLocaleString("ko-KR")}` : ""}
+        </p>
+      </div>
+
+      {selectedActor && (
+        <Modal title={`${selectedActor} 수급 설명`} onClose={() => setSelectedActor(null)}>
+          <p>
+            {flow.data?.available
+              ? flowSummary
+              : "현재 API에서 투자자별 순매매 데이터가 제공되지 않았습니다."}
+          </p>
+        </Modal>
+      )}
+    </SectionCard>
+  );
+}
+
+// 공매도현황 — 공매도 거래량/거래대금/비중/잔고, 대차잔고/변화량/이자율, 기준일, 공급자
+function ShortSellingPanel({ ticker }: { ticker: string }) {
+  const [period, setPeriod] = useState<FlowPeriod>("daily");
   const shortSelling = useQuery<AnyObj>({
     queryKey: ["short-selling", ticker, period],
     queryFn: async () => {
@@ -2844,296 +3282,125 @@ function MarketFlowPanel({ ticker }: { ticker: string }) {
     staleTime: 60_000,
     retry: false,
   });
-  const totals = flow.data?.totals ?? {};
-  const actors = [
-    { key: "individual", label: "개인", value: Number(totals.individual ?? 0) },
-    {
-      key: "institution",
-      label: "기관",
-      value: Number(totals.institution ?? 0),
-    },
-    { key: "foreign", label: "외국인", value: Number(totals.foreign ?? 0) },
-  ];
-  const dominant = [...actors].sort(
-    (a, b) => Math.abs(b.value) - Math.abs(a.value),
-  )[0];
-  const flowSummary = flow.data?.available
-    ? dominant.value >= 0
-      ? `${dominant.label} 매수가 가장 많아요. ${dominant.label} 수급이 이어지는지 조금 더 확인해 보세요.`
-      : `${dominant.label} 매도가 가장 많아요. 매도세가 이어지면 추가 하락 위험이 있어 주의가 필요합니다.`
-    : "투자자별 실제 매매 데이터를 확인 중입니다.";
-  const shortRatio = Number(shortSelling.data?.latest?.ratio ?? 0);
-  const balanceRatio = Number(shortSelling.data?.latest?.balanceRatio ?? 0);
-  const borrowRate = Number(shortSelling.data?.latest?.borrowRate ?? 0);
+
+  const latest = shortSelling.data?.latest ?? {};
+  const available = Boolean(shortSelling.data?.available);
+  const shortRatio = Number(latest.ratio ?? 0);
+  const balanceRatio = Number(latest.balanceRatio ?? 0);
+  const borrowRate = Number(latest.borrowRate ?? 0);
   const squeezeScore = Math.min(
     100,
     Math.round(shortRatio * 4 + balanceRatio * 6 + borrowRate * 3),
   );
-  const squeezeText = !shortSelling.data?.available
-  ? shortSelling.isLoading
-    ? "공매도 최신 데이터를 확인 중입니다."
-    : String(shortSelling.data?.message ?? "현재 제공처에서 공매도 데이터가 내려오지 않았습니다. 새로고침해 다시 확인해 주세요.")
+  const squeezeText = !available
+    ? shortSelling.isLoading
+      ? "공매도 최신 데이터를 확인 중입니다."
+      : String(shortSelling.data?.message ?? "현재 제공처에서 공매도 데이터가 내려오지 않았습니다. 새로고침해 다시 확인해 주세요.")
     : squeezeScore >= 70
       ? "공매도 부담이 높아 주가가 급등하면 숏스퀴즈 가능성도 큽니다."
       : squeezeScore >= 40
         ? "공매도 잔고가 다소 있어 거래량 증가 여부를 함께 보세요."
         : "현재 수치만 보면 숏스퀴즈 가능성은 높지 않습니다.";
-  const compact = (value: number) =>
-    !Number.isFinite(value)
-      ? "-"
-      : Math.abs(value) >= 100000000
-        ? `${(value / 100000000).toFixed(1)}억`
-        : Math.round(value).toLocaleString("ko-KR");
-  const periodLabel = {
-    daily: "일별",
-    weekly: "주별",
-    monthly: "월별",
-    yearly: "년별",
-  }[period];
+  const periodLabel = FLOW_PERIOD_LABEL[period];
+  const provider = firstText(shortSelling.data?.provider, shortSelling.data?.source);
+  const updatedAt = firstText(shortSelling.data?.updatedAt, shortSelling.data?.lastUpdated);
+  const baseDate = firstText(shortSelling.data?.rows?.[0]?.date) ?? "집계 중";
+  const summaryLine = shortSelling.isLoading
+    ? "공매도 데이터 확인 중"
+    : available
+      ? `${periodLabel} 기준 · 비중 ${shortRatio.toFixed(2)}%`
+      : "제공 불가";
+
+  const metric = (value: unknown, suffix = "", digits = 0): string => {
+    if (value == null) return "제공 불가";
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "제공 불가";
+    return suffix === "%" ? `${n.toFixed(2)}%` : `${flowCompact(n)}${suffix}`;
+  };
 
   return (
-    <SectionCard
-      title="매수·매도·공매도"
-      subtitle="실제 제공 데이터가 있을 때만 계산합니다"
-    >
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="mb-2 flex w-full items-center justify-between rounded-xl bg-secondary px-3 py-2 text-xs font-extrabold"
-      >
-        <span>투자자 수급 현황</span>
-        <span>{open ? "접기 ▲" : "열기 ▼"}</span>
-      </button>
-      {open && (
-        <>
-          <div className="grid grid-cols-2 gap-2">
+    <SectionCard title="공매도현황" subtitle={summaryLine}>
+      <div className="grid grid-cols-4 gap-1.5">
+        {FLOW_PERIOD_TABS.map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setPeriod(key)}
+            className={cn(
+              "rounded-lg px-2 py-2 text-center text-[10px] font-extrabold",
+              period === key
+                ? "bg-primary/15 text-primary"
+                : "bg-secondary text-muted-foreground",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-3">
+        <p className="mb-2 text-center text-[10px] font-extrabold text-muted-foreground">
+          최신 {periodLabel} 합산 · {baseDate}
+        </p>
+
+        <div className="grid grid-cols-2 gap-2">
+          <FlowMetric label="공매도 거래량" value={available ? metric(latest.shortVolume) : "제공 불가"} />
+          <FlowMetric label="공매도 거래대금" value={available ? metric(latest.shortValue) : "제공 불가"} />
+          <FlowMetric label="공매도 비중" value={available ? metric(latest.ratio, "%") : "제공 불가"} />
+          <FlowMetric label="공매도 잔고" value={available ? metric(latest.balance ?? latest.shortBalance) : "제공 불가"} />
+        </div>
+
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          <FlowMetric label="대차잔고" value={available ? metric(latest.loanBalance) : "제공 불가"} />
+          <FlowMetric label="대차 변화량" value={available ? metric(latest.loanChange) : "제공 불가"} />
+          <FlowMetric label="대차 이자율" value={available ? metric(latest.borrowRate, "%") : "제공 불가"} />
+        </div>
+
+        <div className="mt-3 rounded-xl bg-secondary/70 p-3 text-center">
+          <div className="flex items-center justify-center gap-2">
+            <p className="text-xs font-extrabold">숏스퀴즈 가능성</p>
+            <p className="text-sm font-black text-primary">{available ? `${squeezeScore}점` : "제공 불가"}</p>
+          </div>
+          <p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
+            {squeezeText}
+          </p>
+        </div>
+
+        {!shortSelling.isLoading && !available && (
+          <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center">
+            <p className="break-keep text-xs font-bold leading-relaxed text-amber-700 dark:text-amber-300">
+              {String(shortSelling.data?.message ?? "공매도 원천 데이터가 비어 있습니다.")}
+            </p>
             <button
               type="button"
-              onClick={() => setMode("investor")}
-              className={cn(
-                "rounded-xl px-3 py-2 text-xs font-extrabold",
-                mode === "investor"
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-secondary",
-              )}
+              onClick={() => void shortSelling.refetch()}
+              className="mt-2 rounded-full bg-amber-500 px-3 py-1.5 text-[10px] font-extrabold text-white"
             >
-              매수·매도 현황
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("short")}
-              className={cn(
-                "rounded-xl px-3 py-2 text-xs font-extrabold",
-                mode === "short"
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-secondary",
-              )}
-            >
-              공매도 최신
+              공매도 다시 불러오기
             </button>
           </div>
-          <div className="mt-3 grid grid-cols-4 gap-1.5">
-            {(
-              [
-                ["daily", "일별"],
-                ["weekly", "주별"],
-                ["monthly", "월별"],
-                ["yearly", "년별"],
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setPeriod(key)}
-                className={cn(
-                  "rounded-lg px-2 py-2 text-[10px] font-extrabold",
-                  period === key
-                    ? "bg-primary/15 text-primary"
-                    : "bg-secondary text-muted-foreground",
-                )}
+        )}
+
+        {Array.isArray(shortSelling.data?.rows) && shortSelling.data.rows.length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            {shortSelling.data.rows.slice(0, 7).map((row: AnyObj, index: number) => (
+              <div
+                key={row.date ?? index}
+                className="grid grid-cols-3 gap-2 rounded-xl border border-card-border px-3 py-2 text-center text-[10px] font-bold"
               >
-                {label}
-              </button>
+                <span>{row.date}</span>
+                <span>공매도 {flowCompact(Number(row.shortVolume ?? 0))}</span>
+                <span>비중 {Number(row.ratio ?? 0).toFixed(2)}%</span>
+              </div>
             ))}
           </div>
-          {mode === "investor" ? (
-            <div className="mt-3">
-              <p className="mb-2 text-[10px] font-extrabold text-muted-foreground">
-                최신 {periodLabel} 합산 · {flow.data?.rows?.[0]?.date ?? "집계 중"}
-              </p>
-              <div className="mt-3 grid grid-cols-3 gap-2">
-                {actors.map((actor) => (
-                  <button
-                    key={actor.key}
-                    type="button"
-                    onClick={() => setSelectedActor(actor.label)}
-                    className={cn(
-                      "rounded-xl border p-3 text-center",
-                      actor.value > 0
-                        ? "border-positive/40 bg-positive/10"
-                        : actor.value < 0
-                          ? "border-destructive/40 bg-destructive/10"
-                          : "border-card-border bg-secondary/50",
-                    )}
-                  >
-                    <p className="text-[10px] font-bold text-muted-foreground">
-                      {actor.label}
-                    </p>
-                    <p
-                      className={cn(
-                        "mt-1 text-sm font-extrabold",
-                        actor.value > 0
-                          ? "text-positive"
-                          : actor.value < 0
-                            ? "text-destructive"
-                            : "",
-                      )}
-                    >
-                      {actor.value > 0 ? "+" : ""}
-                      {compact(actor.value)}
-                    </p>
-                    <p className="mt-1 text-[9px] font-bold text-muted-foreground">
-                      {actor.value >= 0 ? "순매수" : "순매도"}
-                    </p>
-                  </button>
-                ))}
-              </div>
-              <p className="mt-3 break-keep rounded-xl bg-secondary/70 p-3 text-xs font-bold leading-relaxed text-muted-foreground">
-                {flowSummary}
-              </p>
-              {Array.isArray(flow.data?.rows) && flow.data.rows.length > 0 && (
-                <div className="mt-3 space-y-1.5">
-                  {flow.data.rows
-                    .slice(0, 5)
-                    .map((row: AnyObj, index: number) => (
-                      <div
-                        key={row.date ?? index}
-                        className="grid grid-cols-4 gap-1 rounded-xl border border-card-border px-2 py-2 text-center text-[10px]"
-                      >
-                        <span>{row.date}</span>
-                        <span
-                          className={
-                            Number(row.individual) >= 0
-                              ? "text-positive"
-                              : "text-destructive"
-                          }
-                        >
-                          개인 {compact(Number(row.individual))}
-                        </span>
-                        <span
-                          className={
-                            Number(row.institution) >= 0
-                              ? "text-positive"
-                              : "text-destructive"
-                          }
-                        >
-                          기관 {compact(Number(row.institution))}
-                        </span>
-                        <span
-                          className={
-                            Number(row.foreign) >= 0
-                              ? "text-positive"
-                              : "text-destructive"
-                          }
-                        >
-                          외인 {compact(Number(row.foreign))}
-                        </span>
-                      </div>
-                    ))}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="mt-3">
-              <p className="mb-2 text-[10px] font-extrabold text-muted-foreground">
-                최신 {periodLabel} 합산 · {shortSelling.data?.rows?.[0]?.date ?? "집계 중"}
-              </p>
-              <div className="grid grid-cols-3 gap-2">
-                <FlowMetric
-                  label="공매도 합계"
-                  value={
-                    shortSelling.data?.available
-                      ? compact(Number(shortSelling.data?.latest?.shortVolume ?? 0))
-                      : "-"
-                  }
-                />
-                <FlowMetric
-                  label="평균 비율"
-                  value={
-                    shortSelling.data?.available
-                      ? `${shortRatio.toFixed(2)}%`
-                      : "-"
-                  }
-                />
-                <FlowMetric
-                  label="최신 잔고 비율"
-                  value={
-                    shortSelling.data?.available
-                      ? `${balanceRatio.toFixed(2)}%`
-                      : "-"
-                  }
-                />
-              </div>
-              <div className="mt-3 rounded-xl bg-secondary/70 p-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-extrabold">숏스퀴즈 가능성</p>
-                  <p className="text-sm font-black text-primary">
-                    {shortSelling.data?.available ? `${squeezeScore}점` : "-"}
-                  </p>
-                </div>
-                <p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
-                  {squeezeText}
-                </p>
-              </div>
-        {!shortSelling.isLoading && !shortSelling.data?.available && (
-        <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
-          <p className="break-keep text-xs font-bold leading-relaxed text-amber-700 dark:text-amber-300">
-          {String(shortSelling.data?.message ?? "공매도 원천 데이터가 비어 있습니다.")}
-          </p>
-          <button
-          type="button"
-          onClick={() => void shortSelling.refetch()}
-          className="mt-2 rounded-full bg-amber-500 px-3 py-1.5 text-[10px] font-extrabold text-white"
-          >
-          공매도 다시 불러오기
-          </button>
-        </div>
         )}
-              {Array.isArray(shortSelling.data?.rows) &&
-                shortSelling.data.rows.length > 0 && (
-                  <div className="mt-3 space-y-1.5">
-                    {shortSelling.data.rows
-                      .slice(0, 7)
-                      .map((row: AnyObj, index: number) => (
-                        <div
-                          key={row.date ?? index}
-                          className="grid grid-cols-3 gap-2 rounded-xl border border-card-border px-3 py-2 text-[10px] font-bold"
-                        >
-                          <span>{row.date}</span>
-                          <span>
-                            공매도 {compact(Number(row.shortVolume ?? 0))}
-                          </span>
-                          <span>평균 {Number(row.ratio ?? 0).toFixed(2)}%</span>
-                        </div>
-                      ))}
-                  </div>
-                )}
-            </div>
-          )}
-        </>
-      )}
-      {selectedActor && (
-        <Modal
-          title={`${selectedActor} 수급 설명`}
-          onClose={() => setSelectedActor(null)}
-        >
-          <p>
-            {flow.data?.available
-              ? flowSummary
-              : "현재 API에서 투자자별 순매매 데이터가 제공되지 않았습니다."}
-          </p>
-        </Modal>
-      )}
+
+        <p className="mt-3 text-center text-[10px] font-bold text-muted-foreground">
+          데이터 공급자: {provider ?? "제공 불가"}
+          {updatedAt ? ` · 갱신 ${new Date(updatedAt).toLocaleString("ko-KR")}` : ""}
+        </p>
+      </div>
     </SectionCard>
   );
 }
@@ -3851,6 +4118,100 @@ function buildTechnicalSignalMarkers(
   return mergeChartMarkers(markers);
 }
 
+interface NumberedSignal {
+  number: number;
+  time: Time;
+  name: string;
+  direction: "up" | "down";
+  color: string;
+  dateLabel: string;
+  price: number;
+  reason: string;
+}
+
+// 실제 로드된 캔들만으로 계산하는 결정적(deterministic) 신호 목록.
+// 지표 토글과 무관하게 항상 동일한 조건으로 계산합니다.
+function buildNumberedSignals(rows: ChartCandleRow[]): NumberedSignal[] {
+  if (rows.length < 21) return [];
+  const closes = rows.map((r) => r.close);
+  const raw: Array<Omit<NumberedSignal, "number">> = [];
+
+  const push = (
+    index: number,
+    direction: "up" | "down",
+    name: string,
+    reason: string,
+  ) => {
+    const row = rows[index];
+    if (!row) return;
+    raw.push({
+      time: row.time,
+      name,
+      direction,
+      color: direction === "up" ? "#ef4444" : "#3b82f6",
+      dateLabel: new Date(Number(row.time) * 1000).toLocaleDateString("ko-KR"),
+      price: row.close,
+      reason,
+    });
+  };
+
+  // 거래량 급증 — 20봉 평균의 2.5배 초과
+  for (let index = 20; index < rows.length; index += 1) {
+    const base = average(rows.slice(index - 20, index).map((r) => r.volume));
+    if (base > 0 && rows[index].volume > base * 2.5) {
+      const up = rows[index].close >= rows[index].open;
+      push(index, up ? "up" : "down", "거래량 급증", `거래량이 20봉 평균의 ${(rows[index].volume / base).toFixed(1)}배`);
+    }
+  }
+
+  // 골든크로스 / 데드크로스 — MA5 vs MA20
+  {
+    const short = smaArray(closes, 5);
+    const long = smaArray(closes, 20);
+    for (let index = 20; index < rows.length; index += 1) {
+      if (short[index - 1] == null || long[index - 1] == null || short[index] == null || long[index] == null) continue;
+      if (short[index - 1]! <= long[index - 1]! && short[index]! > long[index]!) push(index, "up", "골든크로스", "5일선이 20일선을 상향 돌파");
+      if (short[index - 1]! >= long[index - 1]! && short[index]! < long[index]!) push(index, "down", "데드크로스", "5일선이 20일선을 하향 이탈");
+    }
+  }
+
+  // RSI 과매수(>70) / 과매도(<30) 진입
+  {
+    const values = rsiValues(rows);
+    for (let index = 15; index < rows.length; index += 1) {
+      if (values[index - 1] == null || values[index] == null) continue;
+      if (values[index - 1]! <= 70 && values[index]! > 70) push(index, "down", "RSI 과매수", `RSI ${values[index]!.toFixed(0)} · 70 상회`);
+      if (values[index - 1]! >= 30 && values[index]! < 30) push(index, "up", "RSI 과매도", `RSI ${values[index]!.toFixed(0)} · 30 하회`);
+    }
+  }
+
+  // MACD(12/26/9) 매수/매도 전환
+  {
+    const fast = emaArray(closes, 12);
+    const slow = emaArray(closes, 26);
+    const macd = closes.map((_, index) =>
+      fast[index] != null && slow[index] != null ? fast[index]! - slow[index]! : null,
+    );
+    const signal = emaArray(macd, 9);
+    for (let index = 1; index < rows.length; index += 1) {
+      if (macd[index - 1] == null || signal[index - 1] == null || macd[index] == null || signal[index] == null) continue;
+      if (macd[index - 1]! <= signal[index - 1]! && macd[index]! > signal[index]!) push(index, "up", "MACD 매수 전환", "MACD가 시그널선 상향 교차");
+      if (macd[index - 1]! >= signal[index - 1]! && macd[index]! < signal[index]!) push(index, "down", "MACD 매도 전환", "MACD가 시그널선 하향 교차");
+    }
+  }
+
+  // 박스권 돌파 — 직전 20봉 최고가 상향 돌파
+  for (let index = 20; index < rows.length; index += 1) {
+    const priorHigh = Math.max(...rows.slice(index - 20, index).map((r) => r.high));
+    if (rows[index].close > priorHigh) push(index, "up", "박스권 돌파", `직전 20봉 고점 ${Math.round(priorHigh).toLocaleString("ko-KR")} 돌파`);
+  }
+
+  // 발생 봉 시간 기준 정렬 후 최신 12건만
+  raw.sort((a, b) => Number(a.time) - Number(b.time));
+  const recent = raw.slice(-12);
+  return recent.map((item, i) => ({ ...item, number: i + 1 }));
+}
+
 function indicatorPanelModel(
   rows: ChartCandleRow[],
   kind: IndicatorPanelKind,
@@ -4289,11 +4650,16 @@ function PriceChartCanvas({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [signalLegendOpen, setSignalLegendOpen] = useState(false);
+  const [analysisMarkersVisible, setAnalysisMarkersVisible] = useState(true);
   const [selectedMarkerDetails, setSelectedMarkerDetails] = useState<AnyObj[]>([]);
   const height = fullscreen ? Math.max(430, Math.floor(window.innerHeight * 0.62)) : 360;
   const technicalMarkers = useMemo(
     () => buildTechnicalSignalMarkers(rows, indicators),
     [rows, indicators],
+  );
+  const numberedSignals = useMemo(
+    () => buildNumberedSignals(rows),
+    [rows],
   );
   const actualTradeMarkers = useMemo(
     () => buildActualTradeMarkers(rows, tradeEntries),
@@ -4420,11 +4786,26 @@ function PriceChartCanvas({
       ...marker,
       text: "",
     }) as AnyObj);
-    const displayMarkers: AnyObj[] = [...mergedAnalysis, ...actualTradeMarkers]
+    // 번호가 매겨진 실제 캔들 기반 신호 마커(①②… 대신 숫자). 분석 마커 토글과 함께 숨겨집니다.
+    const numberedMarkers: AnyObj[] = numberedSignals.map((signal) => ({
+      time: signal.time,
+      position: signal.direction === "up" ? "belowBar" : "aboveBar",
+      color: signal.color,
+      shape: signal.direction === "up" ? "arrowUp" : "arrowDown",
+      text: String(signal.number),
+      kind: "analysis",
+      title: `${signal.number}. ${signal.name}`,
+      detail: `${signal.dateLabel} · ${signal.direction === "up" ? "상승" : "하락"} 신호 · 당시가 ${Math.round(signal.price).toLocaleString("ko-KR")} · ${signal.reason}`,
+    }));
+    const analysisForDisplay = analysisMarkersVisible ? [...mergedAnalysis, ...numberedMarkers] : [];
+    const displayMarkers: AnyObj[] = [...analysisForDisplay, ...actualTradeMarkers]
       .sort((a, b) => Number(a.time) - Number(b.time));
-    if (displayMarkers.length) candleSeries.setMarkers(displayMarkers as any);
+    candleSeries.setMarkers(displayMarkers as any);
 
-    const clickableMarkers = [...analysisMarkers, ...actualTradeMarkers];
+    const clickableMarkers = [
+      ...(analysisMarkersVisible ? [...analysisMarkers, ...numberedMarkers] : []),
+      ...actualTradeMarkers,
+    ];
     const clickHandler = (param: AnyObj) => {
       if (param.time == null) return;
       const matches = clickableMarkers.filter((marker) => Number(marker.time) === Number(param.time));
@@ -4477,7 +4858,7 @@ function PriceChartCanvas({
       stopResize();
       chart.remove();
     };
-  }, [rows, timeframe, indicators, height, portfolioOverlay, autoSignal, studyFocus, technicalMarkers, actualTradeMarkers, onChartReady]);
+  }, [rows, timeframe, indicators, height, portfolioOverlay, autoSignal, studyFocus, technicalMarkers, numberedSignals, actualTradeMarkers, analysisMarkersVisible, onChartReady]);
 
   return (
     <div className="overflow-hidden rounded-xl border border-card-border bg-secondary/20">
@@ -4492,6 +4873,16 @@ function PriceChartCanvas({
         {indicators.bollinger && <span className="text-teal-500">┄ 볼린저</span>}
         {indicators.vwap && <span className="text-cyan-500">━ VWAP</span>}
         {actualTradeMarkers.length > 0 && <span className="text-emerald-600">● BUY / ■ SELL 실제 체결</span>}
+        {(technicalMarkers.length > 0 || numberedSignals.length > 0) && (
+          <button
+            type="button"
+            onClick={() => setAnalysisMarkersVisible((v) => !v)}
+            aria-pressed={analysisMarkersVisible}
+            className="rounded-full bg-primary/10 px-2 py-1 text-primary"
+          >
+            분석 화살표 {analysisMarkersVisible ? "숨기기" : "표시"}
+          </button>
+        )}
         {technicalMarkers.length > 0 && (
           <button
             type="button"
@@ -4499,7 +4890,7 @@ function PriceChartCanvas({
             aria-expanded={signalLegendOpen}
             className="rounded-full bg-primary/10 px-2 py-1 text-primary"
           >
-            분석 화살표 {signalLegendOpen ? "접기 ▲" : "보기 ▼"} · {technicalMarkers.length}곳
+            신호 설명 {signalLegendOpen ? "접기 ▲" : "보기 ▼"} · {technicalMarkers.length}곳
           </button>
         )}
       </div>
@@ -4513,6 +4904,35 @@ function PriceChartCanvas({
               <div key={`${item.text}:${item.direction}`} className="flex items-center gap-2 rounded-lg bg-secondary/60 px-2.5 py-2 text-[10px] font-bold">
                 <span className="text-base font-black" style={{ color: item.color }}>{item.direction === "up" ? "↑" : "↓"}</span>
                 <span>{item.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {analysisMarkersVisible && numberedSignals.length > 0 && (
+        <div className="border-t border-card-border bg-background/80 px-3 py-3">
+          <p className="mb-2 text-center text-[11px] font-extrabold">신호 목록 · 최근 {numberedSignals.length}개</p>
+          <div className="space-y-1.5">
+            {numberedSignals.map((signal) => (
+              <div
+                key={`${signal.number}:${String(signal.time)}`}
+                className="flex items-center gap-2 rounded-lg bg-secondary/60 px-2.5 py-2 text-[10px] font-bold"
+              >
+                <span
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-black text-white"
+                  style={{ backgroundColor: signal.color }}
+                >
+                  {signal.number}
+                </span>
+                <div className="min-w-0 flex-1 text-center">
+                  <p className="break-keep">
+                    <span style={{ color: signal.color }}>{signal.name}</span>
+                    <span className="text-muted-foreground"> · {signal.direction === "up" ? "상승" : "하락"}</span>
+                  </p>
+                  <p className="mt-0.5 break-keep text-[9px] font-semibold leading-4 text-muted-foreground">
+                    {signal.dateLabel} · 당시가 {Math.round(signal.price).toLocaleString("ko-KR")} · {signal.reason}
+                  </p>
+                </div>
               </div>
             ))}
           </div>
@@ -4710,10 +5130,13 @@ function FinancialTab({
   financials: AnyObj | null;
   currency: Currency;
 }) {
-  const [period, setPeriod] = useState<FinancialPeriod>("annual");
+  const [period, setPeriod] = useState<FinancialPeriod>("quarterly");
 
   const [selectedMetricKey, setSelectedMetricKey] =
     useState<FinancialMetricKey>("roe");
+
+  // KR 주식은 백만원, US 주식은 USD 백만 단위로 표기합니다(원↔달러 환산 없음).
+  const financialUnitLabel = currency === "USD" ? "단위: USD million" : "단위: 백만원";
 
   const ratios = financials?.ratios ?? financials?.metrics ?? {};
 
@@ -4905,7 +5328,7 @@ function FinancialTab({
       <div className="order-3">
         <SectionCard
           title="재무 실적"
-          subtitle="막대가 높을수록 금액이 큽니다. 항목별 흐름을 쉽게 비교해 보세요"
+          subtitle={`막대가 높을수록 금액이 큽니다 · ${currency === "USD" ? "단위: USD million" : "단위: 백만원"}`}
         >
           {annualRows.length ? (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -4933,20 +5356,6 @@ function FinancialTab({
           <div className="mb-3 grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={() => setPeriod("annual")}
-              className={cn(
-                "rounded-xl px-3 py-2 text-xs font-extrabold",
-
-                period === "annual"
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-secondary text-muted-foreground",
-              )}
-            >
-              연도별
-            </button>
-
-            <button
-              type="button"
               onClick={() => setPeriod("quarterly")}
               className={cn(
                 "rounded-xl px-3 py-2 text-xs font-extrabold",
@@ -4958,7 +5367,25 @@ function FinancialTab({
             >
               분기별
             </button>
+
+            <button
+              type="button"
+              onClick={() => setPeriod("annual")}
+              className={cn(
+                "rounded-xl px-3 py-2 text-xs font-extrabold",
+
+                period === "annual"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-secondary text-muted-foreground",
+              )}
+            >
+              연별
+            </button>
           </div>
+
+          <p className="mb-2 text-center text-[10px] font-bold text-muted-foreground">
+            {financialUnitLabel} · 최신 기간 우선
+          </p>
 
           {rows.length ? (
             <FinancialPerformanceChart rows={rows} currency={currency} />
@@ -5548,7 +5975,7 @@ function FinancialPerformanceChart({
                 최근 {item.label}
               </p>
               <p className="mt-1 text-xs font-extrabold">
-                {formatCompactMoney(item.value(latestRow), currency)}
+                {formatMillions(item.value(latestRow))}
               </p>
             </div>
           ))}
@@ -5585,7 +6012,10 @@ function FinancialTrendCard({
         <div>
           <p className="text-sm font-extrabold">{label}</p>
           <p className="mt-1 text-base font-extrabold">
-            {formatCompactMoney(latest, currency)}
+            {formatMillions(latest)}
+          </p>
+          <p className="text-[8px] font-bold text-muted-foreground">
+            {currency === "USD" ? "USD million" : "백만원"}
           </p>
         </div>
         <span
@@ -5611,7 +6041,7 @@ function FinancialTrendCard({
               className="flex min-w-0 flex-1 flex-col items-center justify-end"
             >
               <p className="mb-1 max-w-full truncate text-[8px] font-bold text-muted-foreground">
-                {formatCompactMoney(value, currency)}
+                {formatMillions(value)}
               </p>
               <div
                 className={cn("w-full rounded-t-lg opacity-85", color)}
