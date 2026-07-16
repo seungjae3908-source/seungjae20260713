@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
 import {
+  ChevronDown,
   ChevronRight,
   ExternalLink,
   RefreshCw,
@@ -9,6 +10,7 @@ import {
   Star,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { PriceAlertCard } from '@/components/price-alert-card';
 import { api, apiGet, type SearchResult } from '@/lib/api';
 import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice, toggleWatchlistItem, isInWatchlist } from '@/lib/stock-display';
 import { cn } from '@/lib/utils';
@@ -20,13 +22,12 @@ type MarketTab = 'KR' | 'US';
 type FinancialPeriod = 'annual' | 'quarterly';
 type FlowPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
-const DEFAULT_TICKER: Record<MarketTab, string> = { KR: '005930', US: 'AAPL' };
-
+// 기본 종목 자동 선택 없음 — 사용자가 검색해서 선택하기 전에는 검색창만 표시한다.
 function queryState(location: string) {
   const params = new URLSearchParams(location.split('?')[1] ?? '');
   const asset: AssetTab = params.get('asset') === 'coin' ? 'coin' : 'stock';
   const market: MarketTab = params.get('market') === 'US' ? 'US' : 'KR';
-  const ticker = String(params.get('ticker') ?? DEFAULT_TICKER[market]).toUpperCase();
+  const ticker = String(params.get('ticker') ?? '').toUpperCase();
   return { asset, market, ticker };
 }
 
@@ -48,6 +49,12 @@ function metric(value: unknown, suffix = '') {
 function money(value: unknown, currency: string) {
   const number = finite(value);
   return number == null ? '데이터 없음' : formatAppPrice(number, currency);
+}
+
+// 재무 금액을 백만 단위로 표시 (국내: 백만원, 미국: USD million). 임의 환산 없음.
+function millions(value: unknown) {
+  const number = finite(value);
+  return number == null ? '데이터 없음' : Math.round(number / 1_000_000).toLocaleString('ko-KR');
 }
 
 function normalizeTitle(value: unknown) {
@@ -77,7 +84,7 @@ export default function StockInfoPage() {
   const [market, setMarket] = useState<MarketTab>(initial.market);
   const [ticker, setTicker] = useState(initial.ticker);
   const [searchText, setSearchText] = useState('');
-  const [financialPeriod, setFinancialPeriod] = useState<FinancialPeriod>('annual');
+  const [financialPeriod, setFinancialPeriod] = useState<FinancialPeriod>('quarterly');
   const [flowPeriod, setFlowPeriod] = useState<FlowPeriod>('daily');
   const [watchlisted, setWatchlisted] = useState(() => isInWatchlist(initial.ticker));
 
@@ -94,15 +101,18 @@ export default function StockInfoPage() {
     const nextMarket = next.market ?? market;
     appMode.setAsset(nextAsset);
     if (nextAsset === 'stock') appMode.setStockMarket(nextMarket);
-    const nextTicker = String(next.ticker ?? (next.market && next.market !== market ? DEFAULT_TICKER[nextMarket] : ticker)).toUpperCase();
-    const params = new URLSearchParams({ asset: nextAsset, market: nextMarket, ticker: nextTicker });
+    // 시장(국내/미국)이나 자산(주식/코인)을 바꾸면 이전 종목 선택을 비워
+    // 버튼 상태·검색 대상·API 요청 시장이 항상 함께 바뀌게 한다.
+    const nextTicker = String(next.ticker ?? (next.market && next.market !== market ? '' : ticker)).toUpperCase();
+    const params = new URLSearchParams({ asset: nextAsset, market: nextMarket });
+    if (nextTicker) params.set('ticker', nextTicker);
     navigate(`/stock-info?${params.toString()}`, { replace: true });
   }
 
   const search = useQuery({
     queryKey: ['stock-info-search', market, searchText.trim()],
     queryFn: () => api.search(searchText.trim()),
-    enabled: asset === 'stock',
+    enabled: asset === 'stock' && searchText.trim().length > 0,
     staleTime: 30_000,
   });
 
@@ -211,84 +221,110 @@ export default function StockInfoPage() {
           <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
             <label className="flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
               <Search className="h-4 w-4 text-muted-foreground" />
-              <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="종목명·코드 검색" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
+              <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={market === 'KR' ? '국내 종목명·코드 검색' : '미국 종목명·티커·한글명 검색'} className="min-w-0 flex-1 bg-transparent text-center text-sm font-bold outline-none" />
             </label>
-            <div className="mt-3 max-h-44 space-y-1 overflow-y-auto">
-              {search.isLoading && <InlineState>종목 목록을 불러오는 중입니다.</InlineState>}
-              {search.isError && <InlineState tone="error">종목 목록을 불러오지 못했습니다.</InlineState>}
-              {candidates.map((item: SearchResult) => (
-                <button key={`${item.market}:${item.ticker}`} type="button" onClick={() => { setSearchText(''); updateSelection({ ticker: item.ticker }); }} className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2 text-left', item.ticker === ticker ? 'bg-primary/10 text-primary' : 'bg-secondary/60')}>
-                  <span className="min-w-0 truncate text-sm font-black">{displayStockName(item.ticker, item.name, item.market)}</span>
-                  <span className="ml-2 shrink-0 text-[10px] font-bold text-muted-foreground">{item.ticker}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <Section title="기본정보" state={queryStateText(quote)}>
-            {quote.data && (
-              <>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-xl font-black">{selectedName}</p>
-                    <p className="mt-1 text-xs font-bold text-muted-foreground">{ticker} · {market === 'KR' ? '국내' : '미국'} · 기준 {formatDate(quote.data.updatedAt)}</p>
-                  </div>
-                  <button type="button" onClick={() => setWatchlisted(toggleWatchlistItem({ ticker, name: selectedName, market, currency }))} aria-label="관심종목" className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', watchlisted ? 'border-warning bg-warning/10 text-warning' : 'border-card-border')}>
-                    <Star className={cn('h-5 w-5', watchlisted && 'fill-current')} />
+            {searchText.trim().length > 0 && (
+              <div className="mt-3 max-h-44 space-y-1 overflow-y-auto">
+                {search.isLoading && <InlineState>종목 목록을 불러오는 중입니다.</InlineState>}
+                {search.isError && <InlineState tone="error">종목 목록을 불러오지 못했습니다.</InlineState>}
+                {!search.isLoading && !search.isError && candidates.length === 0 && <InlineState>검색 결과가 없습니다.</InlineState>}
+                {candidates.map((item: SearchResult) => (
+                  <button key={`${item.market}:${item.ticker}`} type="button" onClick={() => { setSearchText(''); updateSelection({ ticker: item.ticker }); }} className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2', item.ticker === ticker ? 'bg-primary/10 text-primary' : 'bg-secondary/60')}>
+                    <span className="min-w-0 flex-1 truncate text-center text-sm font-black">{displayStockName(item.ticker, item.name, item.market)}</span>
+                    <span className="ml-2 shrink-0 text-[10px] font-bold text-muted-foreground">{item.ticker}</span>
                   </button>
-                </div>
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  <Metric label="현재가" value={money(quote.data.price, currency)} strong />
-                  <Metric label="등락률" value={finite(quote.data.changePercent) == null ? '데이터 없음' : formatAppPercent(quote.data.changePercent)} tone={Number(quote.data.changePercent) >= 0 ? 'up' : 'down'} />
-                  <Metric label="전일대비" value={money(quote.data.changeAmount, currency)} />
-                  <Metric label="거래량" value={metric(quote.data.volume)} />
-                  <Metric label="시가" value={money(quote.data.open, currency)} />
-                  <Metric label="고가 / 저가" value={`${money(quote.data.high, currency)} / ${money(quote.data.low, currency)}`} />
-                  <Metric label="거래대금" value={money(quote.data.tradingValue, currency)} />
-                  <Metric label="시가총액" value={money(quote.data.marketCap ?? financials.data?.marketCap, currency)} />
-                </div>
-                <button type="button" onClick={() => navigate(`/stock/${encodeURIComponent(ticker)}`)} className="mt-3 flex w-full items-center justify-center gap-1 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground">상세 분석 <ChevronRight className="h-4 w-4" /></button>
-              </>
-            )}
-          </Section>
-
-          <Section title="기업·업종" state={queryStateText(profile)}>
-            {profile.data && <div className="grid grid-cols-2 gap-2"><Metric label="업종" value={text(profile.data.industry) ?? '데이터 없음'} /><Metric label="산업" value={text(profile.data.sector) ?? '데이터 없음'} /><Metric label="국가" value={text(profile.data.country) ?? '데이터 없음'} /><Metric label="시장상태" value={text(quote.data?.marketStatus) ?? '제공기관 미지원'} /></div>}
-          </Section>
-
-          <Section title="재무요약" state={queryStateText(financials)} action={<Toggle values={[['annual', '연간'], ['quarterly', '분기']]} value={financialPeriod} onChange={(value) => setFinancialPeriod(value as FinancialPeriod)} />}>
-            {financials.data && (
-              <div className="grid grid-cols-2 gap-2">
-                <Metric label="매출" value={money(financeLatest?.revenue, currency)} />
-                <Metric label="영업이익" value={money(financeLatest?.operatingIncome, currency)} />
-                <Metric label="순이익" value={money(financeLatest?.netIncome, currency)} />
-                <Metric label="자산" value={money(financeLatest?.assets, currency)} />
-                <Metric label="부채" value={money(financeLatest?.liabilities ?? financeLatest?.debt, currency)} />
-                <Metric label="자본" value={money(financeLatest?.equity ?? financeLatest?.capital, currency)} />
-                <Metric label="영업현금흐름" value={money(financeLatest?.operatingCashFlow, currency)} />
-                <Metric label="PER" value={metric(ratios.per, '배')} />
-                <Metric label="PBR" value={metric(ratios.pbr, '배')} />
-                <Metric label="ROE" value={metric(ratios.roe, '%')} />
-                <Metric label="부채비율" value={metric(ratios.debtRatio, '%')} />
-                <Metric label="기준기간" value={text(financeLatest?.periodLabel ?? financeLatest?.period) ?? '데이터 없음'} />
+                ))}
               </div>
             )}
-          </Section>
+          </section>
 
-          <Section title="수급·공매도" state={queryStateText(flow)} action={<Toggle values={[['daily', '일'], ['weekly', '주'], ['monthly', '월'], ['yearly', '년']]} value={flowPeriod} onChange={(value) => setFlowPeriod(value as FlowPeriod)} />}>
-            <div className="grid grid-cols-2 gap-2">
-              <Metric label="개인 순매매" value={flow.data?.available ? metric(flow.data?.totals?.individual) : flow.data?.message ?? '데이터 없음'} />
-              <Metric label="기관 순매매" value={flow.data?.available ? metric(flow.data?.totals?.institution) : flow.data?.message ?? '데이터 없음'} />
-              <Metric label="외국인 순매매" value={flow.data?.available ? metric(flow.data?.totals?.foreign) : flow.data?.message ?? '데이터 없음'} />
-              <Metric label="공매도 거래량" value={shortSelling.data?.available ? metric(shortSelling.data?.latest?.shortVolume) : shortSelling.data?.message ?? '데이터 없음'} />
-              <Metric label="공매도 비중" value={shortSelling.data?.available ? metric(shortSelling.data?.latest?.ratio, '%') : '데이터 없음'} />
-              <Metric label="대차잔고" value={shortSelling.data?.available ? metric(shortSelling.data?.latest?.balance) : '데이터 없음'} />
-            </div>
-            {flow.data?.note && <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">{flow.data.note}</p>}
-          </Section>
+          {!ticker && (
+            <InlineState>종목을 검색해 선택하면 실제 시세·재무·수급·공매도·뉴스·공시가 아래에 표시됩니다.</InlineState>
+          )}
 
-          <HistorySection title="최신 뉴스" rows={newsRows} latestCount={5} loading={news.isLoading} error={news.isError} titleOf={(row) => row.title} subtitleOf={(row) => `${row.source ?? '뉴스'} · ${row.date ?? '날짜 없음'}`} />
-          <HistorySection title="최신 공시" rows={disclosureRows} latestCount={5} loading={disclosures.isLoading} error={disclosures.isError} titleOf={(row) => row.report ?? `${row.form ?? '공시'} ${row.description ?? ''}`} subtitleOf={(row) => `${row.date ?? '날짜 없음'} · ${market === 'KR' ? 'DART' : 'SEC EDGAR'}`} />
+          {ticker && (
+            <>
+              {/* 항상 표시되는 최상단 종목 헤더 (종목명·현재가·등락률) */}
+              <section className="rounded-3xl border border-primary/20 bg-primary/5 p-4 text-center shadow-sm">
+                {quote.isLoading && <InlineState>시세를 불러오는 중입니다.</InlineState>}
+                {quote.isError && <InlineState tone="error">시세를 불러오지 못했습니다.</InlineState>}
+                {quote.data && (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xl font-black">{selectedName}</p>
+                        <p className="mt-1 text-xs font-bold text-muted-foreground">{ticker} · {market === 'KR' ? '국내' : '미국'} · 기준 {formatDate(quote.data.updatedAt)}</p>
+                      </div>
+                      <button type="button" onClick={() => setWatchlisted(toggleWatchlistItem({ ticker, name: selectedName, market, currency }))} aria-label="관심종목" className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', watchlisted ? 'border-warning bg-warning/10 text-warning' : 'border-card-border')}>
+                        <Star className={cn('h-5 w-5', watchlisted && 'fill-current')} />
+                      </button>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <Metric label="현재가" value={money(quote.data.price, currency)} strong />
+                      <Metric label="등락률" value={finite(quote.data.changePercent) == null ? '데이터 없음' : formatAppPercent(quote.data.changePercent)} tone={Number(quote.data.changePercent) >= 0 ? 'up' : 'down'} />
+                    </div>
+                    <button type="button" onClick={() => navigate(`/stock/${encodeURIComponent(ticker)}`)} className="mt-3 flex w-full items-center justify-center gap-1 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground">상세 분석 <ChevronRight className="h-4 w-4" /></button>
+                  </>
+                )}
+              </section>
+
+              <Section title="기본정보" state={queryStateText(quote)}>
+                {quote.data && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Metric label="전일대비" value={money(quote.data.changeAmount, currency)} />
+                    <Metric label="거래량" value={metric(quote.data.volume)} />
+                    <Metric label="시가" value={money(quote.data.open, currency)} />
+                    <Metric label="고가 / 저가" value={`${money(quote.data.high, currency)} / ${money(quote.data.low, currency)}`} />
+                    <Metric label="거래대금" value={money(quote.data.tradingValue, currency)} />
+                    <Metric label="시가총액" value={money(quote.data.marketCap ?? financials.data?.marketCap, currency)} />
+                  </div>
+                )}
+              </Section>
+
+              <PriceAlertCard assetType="stock" market={market} symbol={ticker} currentPrice={finite(quote.data?.price)} currency={currency} />
+
+              <Section title="기업·업종" state={queryStateText(profile)}>
+                {profile.data && <div className="grid grid-cols-2 gap-2"><Metric label="업종" value={text(profile.data.industry) ?? '데이터 없음'} /><Metric label="산업" value={text(profile.data.sector) ?? '데이터 없음'} /><Metric label="국가" value={text(profile.data.country) ?? '데이터 없음'} /><Metric label="시장상태" value={text(quote.data?.marketStatus) ?? '제공기관 미지원'} /></div>}
+              </Section>
+
+              <Section title="재무요약" state={queryStateText(financials)} action={<Toggle values={[['quarterly', '분기별'], ['annual', '연별']]} value={financialPeriod} onChange={(value) => setFinancialPeriod(value as FinancialPeriod)} />}>
+                {financials.data && (
+                  <>
+                    <p className="mb-2 text-[10px] font-black text-muted-foreground">단위: {market === 'KR' ? '백만원' : 'USD million'}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Metric label="매출" value={millions(financeLatest?.revenue)} />
+                      <Metric label="영업이익" value={millions(financeLatest?.operatingIncome)} />
+                      <Metric label="순이익" value={millions(financeLatest?.netIncome)} />
+                      <Metric label="자산" value={millions(financeLatest?.assets)} />
+                      <Metric label="부채" value={millions(financeLatest?.liabilities ?? financeLatest?.debt)} />
+                      <Metric label="자본" value={millions(financeLatest?.equity ?? financeLatest?.capital)} />
+                      <Metric label="영업현금흐름" value={millions(financeLatest?.operatingCashFlow)} />
+                      <Metric label="PER" value={metric(ratios.per, '배')} />
+                      <Metric label="PBR" value={metric(ratios.pbr, '배')} />
+                      <Metric label="ROE" value={metric(ratios.roe, '%')} />
+                      <Metric label="부채비율" value={metric(ratios.debtRatio, '%')} />
+                      <Metric label="기준기간" value={text(financeLatest?.periodLabel ?? financeLatest?.period) ?? '데이터 없음'} />
+                    </div>
+                  </>
+                )}
+              </Section>
+
+              <Section title="수급·공매도" state={queryStateText(flow)} action={<Toggle values={[['daily', '일별'], ['weekly', '주별'], ['monthly', '월별']]} value={flowPeriod} onChange={(value) => setFlowPeriod(value as FlowPeriod)} />}>
+                <div className="grid grid-cols-2 gap-2">
+                  <Metric label="개인 순매매" value={flow.data?.available ? metric(flow.data?.totals?.individual) : flow.data?.message ?? '데이터 없음'} />
+                  <Metric label="기관 순매매" value={flow.data?.available ? metric(flow.data?.totals?.institution) : flow.data?.message ?? '데이터 없음'} />
+                  <Metric label="외국인 순매매" value={flow.data?.available ? metric(flow.data?.totals?.foreign) : flow.data?.message ?? '데이터 없음'} />
+                  <Metric label="공매도 거래량" value={shortSelling.data?.available ? metric(shortSelling.data?.latest?.shortVolume) : shortSelling.data?.message ?? '데이터 없음'} />
+                  <Metric label="공매도 비중" value={shortSelling.data?.available ? metric(shortSelling.data?.latest?.ratio, '%') : '데이터 없음'} />
+                  <Metric label="대차잔고" value={shortSelling.data?.available ? metric(shortSelling.data?.latest?.balance) : '제공 불가'} />
+                </div>
+                {flow.data?.note && <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">{flow.data.note}</p>}
+              </Section>
+
+              <HistorySection title="최신 뉴스" rows={newsRows} latestCount={5} loading={news.isLoading} error={news.isError} titleOf={(row) => row.title} subtitleOf={(row) => `${row.source ?? '뉴스'} · ${row.date ?? '날짜 없음'}`} />
+              <HistorySection title="최신 공시" rows={disclosureRows} latestCount={5} loading={disclosures.isLoading} error={disclosures.isError} titleOf={(row) => row.report ?? `${row.form ?? '공시'} ${row.description ?? ''}`} subtitleOf={(row) => `${row.date ?? '날짜 없음'} · ${market === 'KR' ? 'DART' : 'SEC EDGAR'}`} />
+            </>
+          )}
         </main>
       )}
       <BottomNav />
@@ -300,8 +336,26 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
   return <button type="button" onClick={onClick} className={cn('rounded-xl border px-3 py-2 text-sm font-black', active ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{children}</button>;
 }
 
+// 상세 카드 — 기본 접힘, 제목 영역 전체 탭으로 펼침/접힘.
 function Section({ title, state, action, children }: { title: string; state?: string | null; action?: ReactNode; children: ReactNode }) {
-  return <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-sm font-black">{title}</h2>{action}</div>{state ? <InlineState tone={state.includes('못') ? 'error' : undefined}>{state}</InlineState> : children}</section>;
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="rounded-3xl border border-card-border bg-card shadow-sm">
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full items-center justify-between gap-2 p-4">
+        <span className="flex-1 text-center">
+          <span className="block text-sm font-black">{title}</span>
+          {!open && <span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">{state ?? '눌러서 펼치기'}</span>}
+        </span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div className="px-4 pb-4">
+          {action && <div className="mb-3 flex justify-center">{action}</div>}
+          {state ? <InlineState tone={state.includes('못') ? 'error' : undefined}>{state}</InlineState> : children}
+        </div>
+      )}
+    </section>
+  );
 }
 
 function Metric({ label, value, strong, tone }: { label: string; value: string; strong?: boolean; tone?: 'up' | 'down' }) {
@@ -325,7 +379,18 @@ function Toggle({ values, value, onChange }: { values: [string, string][]; value
 
 function HistorySection({ title, rows, latestCount, loading, error, titleOf, subtitleOf }: { title: string; rows: AnyObj[]; latestCount: number; loading: boolean; error: boolean; titleOf: (row: AnyObj) => unknown; subtitleOf: (row: AnyObj) => string }) {
   const latest = rows.slice(0, latestCount);
-  return <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-black">{title}</h2><span className="text-[10px] font-bold text-muted-foreground">최신 고유 {latest.length}건 / 전체 {rows.length}건</span></div>{loading && <InlineState>데이터를 불러오는 중입니다.</InlineState>}{error && <InlineState tone="error">데이터를 불러오지 못했습니다.</InlineState>}{!loading && !error && latest.length === 0 && <InlineState>제공된 데이터가 없습니다.</InlineState>}<div className="space-y-2">{latest.map((row, index) => <HistoryRow key={`${row.url ?? titleOf(row)}:${index}`} row={row} title={String(titleOf(row) || '제목 없음')} subtitle={subtitleOf(row)} />)}</div>{rows.length > latestCount && <details className="mt-3 rounded-2xl border border-card-border bg-background p-3"><summary className="cursor-pointer text-xs font-black">전체 과거 이력 보기 ({rows.length}건)</summary><div className="mt-3 max-h-96 space-y-2 overflow-y-auto">{rows.slice(latestCount).map((row, index) => <HistoryRow key={`history:${row.url ?? titleOf(row)}:${index}`} row={row} title={String(titleOf(row) || '제목 없음')} subtitle={subtitleOf(row)} />)}</div></details>}</section>;
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <section className="rounded-3xl border border-card-border bg-card shadow-sm">
+        <button type="button" onClick={() => setOpen(true)} aria-expanded={false} className="flex w-full items-center justify-between gap-2 p-4">
+          <span className="flex-1 text-center"><span className="block text-sm font-black">{title}</span><span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">{loading ? '불러오는 중' : error ? '불러오기 실패' : `최신 고유 ${latest.length}건 / 전체 ${rows.length}건`}</span></span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </button>
+      </section>
+    );
+  }
+  return <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><button type="button" onClick={() => setOpen(false)} aria-expanded className="mb-3 flex w-full items-center justify-between gap-2"><span className="flex-1 text-center text-sm font-black">{title}</span><span className="text-[10px] font-bold text-muted-foreground">최신 고유 {latest.length}건 / 전체 {rows.length}건</span><ChevronDown className="h-4 w-4 rotate-180 text-muted-foreground" /></button>{loading && <InlineState>데이터를 불러오는 중입니다.</InlineState>}{error && <InlineState tone="error">데이터를 불러오지 못했습니다.</InlineState>}{!loading && !error && latest.length === 0 && <InlineState>제공된 데이터가 없습니다.</InlineState>}<div className="space-y-2">{latest.map((row, index) => <HistoryRow key={`${row.url ?? titleOf(row)}:${index}`} row={row} title={String(titleOf(row) || '제목 없음')} subtitle={subtitleOf(row)} />)}</div>{rows.length > latestCount && <details className="mt-3 rounded-2xl border border-card-border bg-background p-3"><summary className="cursor-pointer text-xs font-black">전체 과거 이력 보기 ({rows.length}건)</summary><div className="mt-3 max-h-96 space-y-2 overflow-y-auto">{rows.slice(latestCount).map((row, index) => <HistoryRow key={`history:${row.url ?? titleOf(row)}:${index}`} row={row} title={String(titleOf(row) || '제목 없음')} subtitle={subtitleOf(row)} />)}</div></details>}</section>;
 }
 
 function HistoryRow({ row, title, subtitle }: { row: AnyObj; title: string; subtitle: string }) {
@@ -346,14 +411,15 @@ function CoinInfo() {
   const params = new URLSearchParams(location.split('?')[1] ?? '');
   const initialMarket: CoinMarketTab = params.get('coinMarket') === 'futures' ? 'futures' : 'spot';
   const [coinMarket, setCoinMarket] = useState<CoinMarketTab>(initialMarket);
-  const [symbol, setSymbol] = useState(() => String(params.get('symbol') ?? (initialMarket === 'spot' ? 'BTC' : 'BTCUSDT')).toUpperCase());
+  const [symbol, setSymbol] = useState(() => String(params.get('symbol') ?? '').toUpperCase());
   const [searchText, setSearchText] = useState('');
 
   useEffect(() => {
     const nextParams = new URLSearchParams(location.split('?')[1] ?? '');
     const nextMarket: CoinMarketTab = nextParams.get('coinMarket') === 'futures' ? 'futures' : 'spot';
     setCoinMarket(nextMarket);
-    setSymbol(String(nextParams.get('symbol') ?? (nextMarket === 'spot' ? 'BTC' : 'BTCUSDT')).toUpperCase());
+    // 기본 코인 자동 선택 없음 — 사용자가 검색·선택해야 상세 정보를 표시한다.
+    setSymbol(String(nextParams.get('symbol') ?? '').toUpperCase());
   }, [location]);
 
   const changeCoin = (nextMarket: CoinMarketTab, nextSymbol?: string) => {
@@ -362,7 +428,9 @@ function CoinInfo() {
     const next = new URLSearchParams(location.split('?')[1] ?? '');
     next.set('asset', 'coin');
     next.set('coinMarket', nextMarket);
-    next.set('symbol', String(nextSymbol ?? (nextMarket === 'spot' ? 'BTC' : 'BTCUSDT')).toUpperCase());
+    const resolved = String(nextSymbol ?? '').toUpperCase();
+    if (resolved) next.set('symbol', resolved);
+    else next.delete('symbol');
     navigate(`/stock-info?${next.toString()}`, { replace: true });
   };
 
@@ -448,8 +516,10 @@ function CoinInfo() {
           <Search className="h-4 w-4 text-muted-foreground" />
           <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={coinMarket === 'spot' ? '코인명·심볼 검색' : '선물 심볼 검색'} className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
         </label>
+        {searchText.trim().length > 0 && (
         <div className="mt-3 max-h-52 space-y-1 overflow-y-auto">
           {(coinMarket === 'spot' ? spotTickers.isLoading : futuresTickers.isLoading) && <InlineState>코인 목록을 불러오는 중입니다.</InlineState>}
+          {!(coinMarket === 'spot' ? spotTickers.isLoading : futuresTickers.isLoading) && filteredRows.length === 0 && <InlineState>검색 결과가 없습니다.</InlineState>}
           {filteredRows.map((item) => {
             const itemSymbol = String(item.symbol);
             return (
@@ -460,8 +530,13 @@ function CoinInfo() {
             );
           })}
         </div>
+        )}
       </section>
 
+      {!symbol && <InlineState>코인을 검색해 선택하면 실제 시세·호가·캔들 정보가 아래에 표시됩니다.</InlineState>}
+
+      {symbol && (
+      <>
       <Section title={coinMarket === 'spot' ? '현물 기본정보' : '선물 기본정보'} state={selected ? null : '선택한 코인의 시세 데이터가 없습니다.'}>
         {selected && (
           <>
@@ -523,6 +598,10 @@ function CoinInfo() {
             ))}
           </div>
         </Section>
+      )}
+
+      <PriceAlertCard assetType={coinMarket === 'spot' ? 'coin_spot' : 'coin_futures'} market={coinMarket === 'spot' ? 'UPBIT' : 'BITGET'} symbol={symbol} currentPrice={finite(selected?.price)} currency={currency} />
+      </>
       )}
 
       <section className="rounded-3xl border border-card-border bg-card p-4 text-xs font-bold leading-relaxed text-muted-foreground shadow-sm">

@@ -1598,6 +1598,66 @@ router.get("/:ticker/quote", async (req, res) => {
 	}
 });
 
+// 알려진 자리표시자(placeholder) 설명은 실제 데이터가 아니므로 비웁니다.
+function isPlaceholderDescription(value: unknown): boolean {
+	const text = String(value ?? "").trim();
+	if (!text) return true;
+	return (
+		/기업 정보입니다\.?$/.test(text) ||
+		/기업 정보를 확인 중입니다\.?$/.test(text)
+	);
+}
+
+// DART 기업개황 API(company.json)에서 실제 업종/설립일/홈페이지 등을 가져옵니다.
+async function fetchDartCompanyOverview(ticker: string) {
+	const apiKey = String(process.env.DART_API_KEY ?? "").trim();
+	if (!apiKey || !/^\d{6}$/.test(ticker)) return null;
+	const corpCode = await getDartCorpCode(ticker, apiKey);
+	if (!corpCode) return null;
+	const query = new URLSearchParams({ crtfc_key: apiKey, corp_code: corpCode });
+	const response = await fetch(
+		`https://opendart.fss.or.kr/api/company.json?${query.toString()}`,
+	);
+	if (!response.ok) return null;
+	const data: any = await response.json();
+	if (data?.status !== "000") return null;
+	const website = String(data?.hm_url ?? "").trim();
+	return {
+		industry: String(data?.induty_code ?? "").trim() || null,
+		industryName: String(data?.induty ?? "").trim() || null,
+		sector: String(data?.induty ?? "").trim() || null,
+		website:
+			website && !/^https?:\/\//i.test(website) ? `https://${website}` : website || null,
+		ceo: String(data?.ceo_nm ?? "").trim() || null,
+		establishedAt: String(data?.est_dt ?? "").trim() || null,
+		address: String(data?.adres ?? "").trim() || null,
+		provider: "DART 기업개황",
+	};
+}
+
+// Yahoo quoteSummary(assetProfile)에서 실제 사업 요약/섹터/산업/홈페이지를 가져옵니다.
+async function fetchYahooAssetProfile(ticker: string) {
+	if (/^\d{6}$/.test(ticker)) return null;
+	const url =
+		`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=assetProfile`;
+	const response = await fetch(url, {
+		headers: { "User-Agent": "seungjae-stock-app/1.0", Accept: "application/json" },
+	});
+	if (!response.ok) return null;
+	const data: any = await response.json();
+	const p = data?.quoteSummary?.result?.[0]?.assetProfile;
+	if (!p || typeof p !== "object") return null;
+	const summary = String(p?.longBusinessSummary ?? "").trim();
+	const website = String(p?.website ?? "").trim();
+	return {
+		description: summary || null,
+		sector: String(p?.sector ?? "").trim() || null,
+		industry: String(p?.industry ?? "").trim() || null,
+		website: website || null,
+		provider: "Yahoo Finance",
+	};
+}
+
 // GET /api/stocks/:ticker/profile
 router.get("/:ticker/profile", async (req, res) => {
 	const ticker = normalizeTicker(req.params.ticker);
@@ -1610,9 +1670,8 @@ router.get("/:ticker/profile", async (req, res) => {
 	}
 
 	try {
-		const profile = await MarketDataService.getCompanyProfile(ticker);
-
-		res.json(profile);
+		const base = await MarketDataService.getCompanyProfile(ticker);
+		res.json(await enrichCompanyProfile(ticker, base));
 	} catch (error) {
 		console.error("stock profile route error:", error);
 
@@ -1622,6 +1681,42 @@ router.get("/:ticker/profile", async (req, res) => {
 		});
 	}
 });
+
+// 실제 공급자(DART/Yahoo) 데이터로 회사 개요를 보강합니다. 없는 값은 채우지 않습니다.
+async function enrichCompanyProfile(ticker: string, base: any) {
+	const profile: any = { ...(base ?? {}) };
+	if (isPlaceholderDescription(profile.description)) profile.description = "";
+
+	try {
+		if (/^\d{6}$/.test(ticker)) {
+			const dart = await fetchDartCompanyOverview(ticker).catch(() => null);
+			if (dart) {
+				if (!profile.industry && dart.industryName) profile.industry = dart.industryName;
+				if (!profile.sector && dart.sector) profile.sector = dart.sector;
+				if (!profile.website && dart.website) profile.website = dart.website;
+				if (dart.ceo) profile.ceo = dart.ceo;
+				if (dart.establishedAt) profile.establishedAt = dart.establishedAt;
+				profile.provider = dart.provider;
+			}
+		} else {
+			const yahoo = await fetchYahooAssetProfile(ticker).catch(() => null);
+			if (yahoo) {
+				if (!profile.description && yahoo.description) profile.description = yahoo.description;
+				if (!profile.sector && yahoo.sector) profile.sector = yahoo.sector;
+				if (!profile.industry && yahoo.industry) profile.industry = yahoo.industry;
+				if (!profile.website && yahoo.website) profile.website = yahoo.website;
+				profile.provider = yahoo.provider;
+			}
+		}
+	} catch {
+		// 보강 실패 시 기본 프로필을 그대로 반환합니다.
+	}
+
+	if (!profile.provider) {
+		profile.provider = /^\d{6}$/.test(ticker) ? "DART/네이버" : "SEC/Yahoo";
+	}
+	return profile;
+}
 
 // GET /api/stocks/:ticker/company
 router.get("/:ticker/company", async (req, res) => {
@@ -1635,9 +1730,8 @@ router.get("/:ticker/company", async (req, res) => {
 	}
 
 	try {
-		const profile = await MarketDataService.getCompanyProfile(ticker);
-
-		res.json(profile);
+		const base = await MarketDataService.getCompanyProfile(ticker);
+		res.json(await enrichCompanyProfile(ticker, base));
 	} catch (error) {
 		console.error("stock company route error:", error);
 

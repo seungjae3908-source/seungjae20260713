@@ -1,9 +1,5 @@
-import { authorizedFetch } from '@/lib/auth-fetch';
 import {
-  useCallback,
-  useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -11,929 +7,944 @@ import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
-  ArrowLeft,
-  BarChart3,
-  BookOpen,
   ChevronDown,
-  ChevronRight,
-  GraduationCap,
-  LineChart,
-  Search,
-  ShieldAlert,
-  TrendingUp,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { cn } from '@/lib/utils';
-import { STOCK_DIRECTORY } from '@/data/stock-directory';
+import { api, type Candle } from '@/lib/api';
 
-type AnyObj = Record<string, any>;
+// ── 공부 페이지 ──────────────────────────────────────────────
+// 교육 목적 전용. 실제 매수·매도 권유가 아니며, 데이터가 없으면
+// '정보 없음' / '데이터 부족' / '제공 불가'로 표기한다. 실제 차트 예시는
+// api.chart 로 불러온 실데이터에서만 사례를 탐지한다.
 
-type StudyGroup =
-  | '캔들·추세'
-  | '차트 지표'
-  | '매매 신호'
-  | '재무제표'
-  | '가치 지표'
-  | '리스크 관리';
+type StudyGroup = '캔들' | '차트 기초' | '보조지표';
+
+// 실제 차트에서 사례를 탐지할 때 사용하는 이벤트 종류
+type DetectKind =
+  | 'bullish' // 양봉
+  | 'bearish' // 음봉
+  | 'doji' // 도지
+  | 'hammer' // 망치형
+  | 'invertedHammer' // 역망치형
+  | 'longBullish' // 장대양봉
+  | 'longBearish' // 장대음봉
+  | 'bullishEngulfing' // 상승장악형
+  | 'bearishEngulfing' // 하락장악형
+  | 'morningStar' // 샛별형
+  | 'eveningStar' // 석별형
+  | 'support' // 지지선 반등
+  | 'resistance' // 저항선 돌파
+  | 'trendUp' // 추세선(상승)
+  | 'box' // 박스권
+  | 'breakout' // 돌파
+  | 'gap' // 갭
+  | 'volume' // 거래량 급증
+  | 'goldenCross' // 골든크로스
+  | 'deadCross' // 데드크로스
+  | 'rsiOversold' // RSI 과매도
+  | 'rsiOverbought' // RSI 과열
+  | 'macdCross' // MACD 골든크로스
+  | 'bollingerBreak' // 볼린저밴드 상단 돌파
+  | 'atrSpike' // ATR 급등(변동성 확대)
+  | 'stochOversold' // 스토캐스틱 과매도
+  | 'obvUp'; // OBV 상승 다이버전스
 
 interface StudyTopic {
   id: string;
   group: StudyGroup;
   title: string;
   short: string;
-  easy: string;
-  when: string;
-  danger: string;
-  conditionTitle: string;
-  indicators: string[];
-  example: string;
+  concept: string; // 개념 설명
+  condition: string; // 발생 조건
+  interpretation: string; // 일반적인 해석
+  buySignal: string; // 매수 신호로 볼 수 있는 경우
+  sellSignal: string; // 매도 또는 위험 신호
+  mistake: string; // 잘못 해석하기 쉬운 점
+  related: string; // 함께 확인하면 좋은 다른 지표
+  detect: DetectKind; // 실제 차트 예시 탐지 종류
 }
 
-interface LearningCandle {
-  time: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
-
-interface RelatedStock {
-  ticker: string;
-  name: string;
-  market: 'KR' | 'US';
-  currency: 'KRW' | 'USD';
-  price?: number | null;
-  changePercent?: number | null;
-  score?: number | null;
-  matched?: string[];
-}
-
-const LIST_SCROLL_KEY = 'learn-page-scroll-top';
+const DEFAULT_TICKER = '005930';
+const DEFAULT_TICKER_NAME = '삼성전자';
+const NOTICE = '교육 목적이며 매수·매도 권유가 아닙니다.';
 
 const TOPICS: StudyTopic[] = [
+  // ── 캔들 ──────────────────────────────────────────────
   {
-    id: 'candlestick',
-    group: '캔들·추세',
-    title: '캔들 읽기',
-    short: '시가·고가·저가·종가와 몸통·꼬리로 하루 힘을 읽는 방법',
-    easy:
-      '양봉은 종가가 시가보다 높고, 음봉은 종가가 시가보다 낮습니다. 몸통은 시가와 종가 사이, 위·아래 꼬리는 장중 고가와 저가를 보여줍니다.',
-    when:
-      '지지선에서 아래꼬리가 길게 생기거나 저항선에서 위꼬리가 길게 생길 때 매수·매도 힘의 충돌을 확인합니다.',
-    danger:
-      '캔들 하나만 보고 방향을 단정하면 위험합니다. 앞선 추세, 거래량, 지지·저항 위치를 함께 봐야 합니다.',
-    conditionTitle: '거래량 동반 캔들 변화',
-    indicators: ['거래량 증가', '단기 추세 전환', '돌파 직전'],
-    example:
-      '박스권 상단에서 거래량이 늘어난 장대양봉이 종가까지 유지되면 돌파 가능성을 확인합니다.',
+    id: 'bullish',
+    group: '캔들',
+    title: '양봉',
+    short: '종가가 시가보다 높게 끝난 상승 캔들',
+    concept:
+      '양봉은 하루(또는 한 봉) 동안 종가가 시가보다 높게 끝난 캔들입니다. 몸통은 시가와 종가 사이이며, 매수세가 매도세보다 우위였다는 뜻입니다.',
+    condition: '종가 > 시가. 몸통이 위쪽 방향으로 형성되어 상승 마감된 경우입니다.',
+    interpretation: '해당 구간에서 매수세가 우위였음을 보여줍니다. 연속된 양봉은 단기 상승 흐름을 시사합니다.',
+    buySignal: '지지선 부근이나 거래량 증가와 함께 양봉이 나오면 반등·상승 시작 후보로 볼 수 있습니다.',
+    sellSignal: '고가권에서 위꼬리가 긴 양봉이 나오면 상승 힘이 약해지는 신호일 수 있습니다.',
+    mistake: '양봉 하나만으로 방향을 단정하면 위험합니다. 몸통 크기와 거래량, 앞선 추세를 함께 봐야 합니다.',
+    related: '거래량, 이동평균선, 지지선',
+    detect: 'bullish',
   },
   {
-    id: 'trend',
-    group: '캔들·추세',
-    title: '상승·하락·횡보 추세',
-    short: '고점과 저점의 방향으로 현재 주가 흐름을 구분하는 기본 방법',
-    easy:
-      '고점과 저점이 계속 높아지면 상승 추세, 계속 낮아지면 하락 추세, 일정 범위 안에서 움직이면 횡보 추세입니다.',
-    when:
-      '매수 전 현재 추세를 먼저 구분하고 상승 추세의 눌림인지, 하락 추세의 일시 반등인지 판단할 때 사용합니다.',
-    danger:
-      '짧은 구간만 보면 큰 추세와 반대로 판단할 수 있습니다. 일봉과 주봉을 함께 확인해야 합니다.',
-    conditionTitle: '추세 전환 후보',
-    indicators: ['단기 추세 전환', '20일선 회복', '60일선 돌파'],
-    example:
-      '저점이 더 이상 낮아지지 않고 이전 고점을 돌파하면 하락 추세 종료 가능성을 확인합니다.',
+    id: 'bearish',
+    group: '캔들',
+    title: '음봉',
+    short: '종가가 시가보다 낮게 끝난 하락 캔들',
+    concept:
+      '음봉은 종가가 시가보다 낮게 끝난 캔들입니다. 몸통이 아래쪽 방향으로 형성되며 매도세가 우위였음을 뜻합니다.',
+    condition: '종가 < 시가. 몸통이 아래 방향으로 형성되어 하락 마감된 경우입니다.',
+    interpretation: '해당 구간에서 매도세가 우위였음을 보여줍니다. 연속 음봉은 단기 하락 흐름을 시사합니다.',
+    buySignal: '과매도 구간이나 지지선 부근에서 음봉의 아래꼬리가 길어지면 반등 가능성을 함께 확인합니다.',
+    sellSignal: '저항선 부근이나 거래량 증가와 함께 큰 음봉이 나오면 하락 전환 위험 신호일 수 있습니다.',
+    mistake: '음봉이라고 무조건 나쁜 것은 아닙니다. 상승 중 쉬어가는 조정 음봉도 흔합니다.',
+    related: '거래량, 저항선, RSI',
+    detect: 'bearish',
   },
   {
-    id: 'income-statement',
-    group: '재무제표',
-    title: '손익계산서',
-    short: '매출·영업이익·순이익으로 회사가 실제 돈을 버는지 확인',
-    easy:
-      '매출은 판매 규모, 영업이익은 본업에서 남긴 이익, 순이익은 세금과 금융비용까지 반영한 최종 이익입니다.',
-    when:
-      '최근 여러 분기의 매출과 영업이익이 함께 증가하는지, 일회성 이익 없이 본업이 좋아지는지 확인합니다.',
-    danger:
-      '한 분기 급증만 보고 성장으로 단정하면 위험합니다. 전년 동기와 최근 3~4개 분기를 함께 봐야 합니다.',
-    conditionTitle: '실적 개선 종목',
-    indicators: ['ROE 개선', 'AI 점수 상위', '저평가'],
-    example:
-      '매출 증가율보다 영업이익 증가율이 더 크면 수익성이 개선되는 구간일 수 있습니다.',
+    id: 'doji',
+    group: '캔들',
+    title: '도지',
+    short: '시가와 종가가 거의 같은 결정 보류 캔들',
+    concept:
+      '도지는 시가와 종가가 거의 같아 몸통이 매우 작은 캔들입니다. 매수세와 매도세가 팽팽하게 맞선 상태를 뜻합니다.',
+    condition: '몸통 길이가 전체 고가-저가 폭에 비해 매우 작은 경우(대략 10% 이하)입니다.',
+    interpretation: '방향성 결정이 보류된 상태로, 추세의 힘이 약해지거나 전환될 수 있음을 암시합니다.',
+    buySignal: '하락 추세 끝, 지지선 부근에서 도지가 나오고 다음 봉이 양봉이면 반등 후보로 봅니다.',
+    sellSignal: '상승 추세 끝, 저항선 부근에서 도지가 나오면 상승 힘 소진 위험 신호일 수 있습니다.',
+    mistake: '도지 자체는 방향을 알려주지 않습니다. 반드시 다음 봉과 위치(추세 상단/하단)를 확인해야 합니다.',
+    related: '지지선, 저항선, 거래량',
+    detect: 'doji',
   },
   {
-    id: 'balance-sheet',
-    group: '재무제표',
-    title: '재무상태표',
-    short: '자산·부채·자본으로 회사의 체력과 빚 부담을 확인',
-    easy:
-      '자산은 회사가 가진 것, 부채는 갚아야 할 것, 자본은 자산에서 부채를 뺀 주주의 몫입니다.',
-    when:
-      '현금이 충분한지, 단기 부채가 급증하지 않았는지, 자본이 계속 줄지 않는지 확인합니다.',
-    danger:
-      '자산이 많아도 현금화하기 어려운 자산이거나 부채가 더 빠르게 늘면 위험할 수 있습니다.',
-    conditionTitle: '재무 안정 종목',
-    indicators: ['저평가', 'PBR 낮음', 'AI 점수 상위'],
-    example:
-      '현금성 자산이 늘고 부채비율이 낮아지면서 이익도 증가하면 재무 체력이 좋아지는 흐름입니다.',
+    id: 'hammer',
+    group: '캔들',
+    title: '망치형',
+    short: '아래꼬리가 긴 하락 반전 캔들',
+    concept:
+      '망치형은 몸통이 위쪽에 작게 있고 아래꼬리가 몸통의 2배 이상 긴 캔들입니다. 장중 크게 밀렸다가 다시 회복했음을 뜻합니다.',
+    condition: '아래꼬리 길이 ≥ 몸통의 2배, 위꼬리는 매우 짧음. 주로 하락 추세 끝에서 의미가 큽니다.',
+    interpretation: '저가에서 매수세가 강하게 들어와 반등이 시작될 수 있음을 암시합니다.',
+    buySignal: '하락 추세 하단·지지선에서 망치형이 나오고 다음 봉이 양봉으로 확인되면 반등 후보입니다.',
+    sellSignal: '상승 추세 고가권에서 나타난 비슷한 모양(교수형)은 오히려 하락 신호일 수 있습니다.',
+    mistake: '위치를 무시하면 안 됩니다. 같은 모양도 하단이면 반등, 상단이면 하락 신호로 해석이 갈립니다.',
+    related: '지지선, 거래량, RSI',
+    detect: 'hammer',
   },
   {
-    id: 'cash-flow',
-    group: '재무제표',
-    title: '현금흐름표',
-    short: '회계상 이익이 아니라 실제 현금이 들어오고 나가는 방향을 확인',
-    easy:
-      '영업현금흐름은 본업에서 들어온 현금, 투자현금흐름은 설비·투자 지출, 재무현금흐름은 차입·증자·배당 흐름입니다.',
-    when:
-      '순이익은 흑자인데 영업현금흐름이 계속 적자인지, 빚이나 증자로 운영비를 충당하는지 확인합니다.',
-    danger:
-      '순이익만 보고 현금 사정을 놓치면 위험합니다. 적자 현금흐름이 반복되면 추가 자금조달 가능성이 커집니다.',
-    conditionTitle: '현금창출 개선 종목',
-    indicators: ['ROE 개선', '저평가', 'AI 점수 상위'],
-    example:
-      '영업현금흐름이 꾸준히 플러스이고 투자 지출 후에도 현금이 남으면 재무 여력이 좋다고 볼 수 있습니다.',
+    id: 'inverted-hammer',
+    group: '캔들',
+    title: '역망치형',
+    short: '위꼬리가 긴 하락권 반전 시도 캔들',
+    concept:
+      '역망치형은 몸통이 아래쪽에 작게 있고 위꼬리가 몸통의 2배 이상 긴 캔들입니다. 장중 위로 크게 올랐다가 밀린 모습입니다.',
+    condition: '위꼬리 길이 ≥ 몸통의 2배, 아래꼬리는 매우 짧음. 하락 추세 끝에서 의미가 큽니다.',
+    interpretation: '하락권에서 매수 시도가 나왔음을 보여주며, 다음 봉이 확인되면 반등 가능성을 봅니다.',
+    buySignal: '하락 추세 하단에서 역망치형 다음에 양봉이 나오면 반등 후보로 볼 수 있습니다.',
+    sellSignal: '상승 고가권에서 나타난 유성형(비슷한 모양)은 하락 반전 신호일 수 있습니다.',
+    mistake: '역망치형은 단독 확정 신호가 아니라 다음 봉 확인이 필요한 예비 신호입니다.',
+    related: '거래량, 지지선, RSI',
+    detect: 'invertedHammer',
   },
   {
-    id: 'bollinger',
-    group: '차트 지표',
-    title: '볼린저밴드',
-    short: '가격의 변동 범위를 위·아래 밴드로 보여주는 지표',
-    easy:
-      '볼린저밴드는 가격이 평균에서 얼마나 멀리 벗어났는지 보는 도구입니다. 위쪽 밴드에 가까우면 단기 과열, 아래쪽 밴드에 가까우면 단기 과매도 가능성을 봅니다.',
-    when:
-      '밴드가 좁아졌다가 다시 벌어지는 구간은 변동성이 커지는 시작점일 수 있습니다. 가격이 상단 밴드를 거래량과 함께 돌파하면 추세가 강해질 가능성을 봅니다.',
-    danger:
-      '밴드 상단에 닿았다고 무조건 매도, 하단에 닿았다고 무조건 매수하면 위험합니다. 강한 상승장에서는 상단 밴드를 타고 계속 오를 수 있고, 강한 하락장에서는 하단 밴드를 타고 계속 내려갈 수 있습니다.',
-    conditionTitle: '볼린저밴드 수축/돌파',
-    indicators: ['돌파 직전', '변동성 확대', '박스권 상단 돌파'],
-    example:
-      '가격이 좁은 박스권에서 움직이다가 거래량이 늘면서 상단 밴드를 돌파하면 단기 추세 전환 후보로 볼 수 있습니다.',
+    id: 'long-bullish',
+    group: '캔들',
+    title: '장대양봉',
+    short: '몸통이 아주 큰 강한 상승 캔들',
+    concept:
+      '장대양봉은 몸통이 평소보다 훨씬 큰 양봉입니다. 강한 매수세가 하루 종일 우위였음을 뜻합니다.',
+    condition: '몸통 크기가 최근 평균 몸통의 2배 이상이고 종가가 시가보다 크게 높은 경우입니다.',
+    interpretation: '강한 매수 에너지가 유입된 상태로, 추세 시작이나 돌파 신호로 자주 쓰입니다.',
+    buySignal: '박스권 상단·저항선을 거래량과 함께 장대양봉으로 돌파하면 상승 추세 후보로 봅니다.',
+    sellSignal: '고가권에서 이미 많이 오른 뒤 나오는 장대양봉은 막바지 과열일 수 있습니다.',
+    mistake: '거래량 없는 장대양봉은 신뢰도가 낮습니다. 반드시 거래량 동반 여부를 확인합니다.',
+    related: '거래량, 저항선, 돌파',
+    detect: 'longBullish',
   },
   {
-    id: 'rsi',
-    group: '차트 지표',
-    title: 'RSI',
-    short: '최근 상승·하락 힘을 0~100으로 나타내는 과열·침체 지표',
-    easy:
-      'RSI는 최근 가격 상승 힘과 하락 힘을 비교해서 현재 주가가 과열인지 침체인지 보는 지표입니다. 보통 70 이상은 과열, 30 이하는 과매도 구간으로 봅니다.',
-    when:
-      'RSI가 30 아래에서 다시 올라오면서 가격도 지지선을 지키면 기술적 반등 후보가 될 수 있습니다. 반대로 70 이상에서 거래량 없이 밀리면 단기 조정 가능성을 봅니다.',
-    danger:
-      'RSI만 보고 매수하면 위험합니다. 하락 추세가 강하면 RSI가 낮아도 계속 떨어질 수 있습니다. 반드시 지지선, 거래량, 추세를 같이 확인해야 합니다.',
-    conditionTitle: 'RSI 과매도 반등',
-    indicators: ['RSI 과매도 반등', '낙폭과대', '지지선 반등'],
-    example:
-      'RSI가 30 근처까지 내려왔다가 다시 35~40 위로 회복하고, 동시에 주가가 이전 저점을 깨지 않으면 반등 가능성을 체크합니다.',
+    id: 'long-bearish',
+    group: '캔들',
+    title: '장대음봉',
+    short: '몸통이 아주 큰 강한 하락 캔들',
+    concept:
+      '장대음봉은 몸통이 평소보다 훨씬 큰 음봉입니다. 강한 매도세가 하루 종일 우위였음을 뜻합니다.',
+    condition: '몸통 크기가 최근 평균 몸통의 2배 이상이고 종가가 시가보다 크게 낮은 경우입니다.',
+    interpretation: '강한 매도 압력이 유입된 상태로, 하락 추세 시작이나 지지 이탈 신호로 자주 쓰입니다.',
+    buySignal: '과매도 구간에서 투매성 장대음봉 이후 반등이 나오면 바닥 확인 후 접근을 고려합니다.',
+    sellSignal: '지지선을 거래량과 함께 장대음봉으로 이탈하면 추가 하락 위험 신호로 봅니다.',
+    mistake: '장대음봉 하나로 공포 매도하면 저점에 팔 수 있습니다. 지지선과 거래량을 함께 봐야 합니다.',
+    related: '거래량, 지지선, RSI',
+    detect: 'longBearish',
   },
   {
-    id: 'macd',
-    group: '차트 지표',
-    title: 'MACD',
-    short: '단기·장기 이동평균의 차이로 추세 전환을 잡는 지표',
-    easy:
-      'MACD는 단기 이동평균에서 장기 이동평균을 뺀 값과 그 평균선을 함께 봅니다. 두 선이 교차하는 지점에서 추세 변화를 읽습니다.',
-    when:
-      'MACD선이 시그널선을 아래에서 위로 뚫으면 매수 관점, 위에서 아래로 뚫으면 매도 관점으로 활용합니다. 막대가 커지는지도 같이 봅니다.',
-    danger:
-      '이동평균 기반이라 신호가 늦게 나옵니다. 횡보장에서는 교차 신호가 자주 어긋나 잦은 매매로 손실이 쌓일 수 있습니다.',
-    conditionTitle: 'MACD 골든크로스',
-    indicators: ['MACD 골든크로스', '단기 추세 전환', '이평선 돌파'],
-    example:
-      '가격이 바닥권에서 횡보한 뒤 MACD가 골든크로스를 만들고 거래량이 붙으면 추세 전환 후보로 볼 수 있습니다.',
+    id: 'bullish-engulfing',
+    group: '캔들',
+    title: '상승장악형',
+    short: '큰 양봉이 앞의 음봉을 완전히 감싸는 반전 패턴',
+    concept:
+      '상승장악형은 앞 봉이 음봉이고 다음 봉이 그 몸통을 완전히 감싸는 큰 양봉인 2봉 패턴입니다.',
+    condition: '전일 음봉, 당일 양봉이며 당일 몸통이 전일 몸통을 완전히 포함하는 경우입니다.',
+    interpretation: '매도세가 우위였다가 매수세가 강하게 역전했음을 보여주는 상승 반전 신호입니다.',
+    buySignal: '하락 추세 하단·지지선에서 거래량 증가와 함께 나오면 반등 후보로 봅니다.',
+    sellSignal: '상승이 많이 진행된 뒤 나오면 신뢰도가 낮습니다. 하단에서 나올 때 의미가 큽니다.',
+    mistake: '몸통만 감싸면 되고 꼬리까지 감쌀 필요는 없습니다. 위치(하단)가 핵심입니다.',
+    related: '지지선, 거래량, RSI',
+    detect: 'bullishEngulfing',
   },
   {
-    id: 'moving-average',
-    group: '차트 지표',
-    title: '이동평균선',
-    short: '일정 기간 평균 가격을 이은 선으로 추세를 보는 기본 지표',
-    easy:
-      '이동평균선은 일정 기간 동안의 평균 가격입니다. 20일선은 단기, 60일선은 중기, 120일선은 장기 흐름을 보는 데 많이 씁니다.',
-    when:
-      '주가가 20일선을 회복하고 60일선까지 돌파하면 단기 추세 회복 가능성을 봅니다. 장기 하락 후 120일선을 회복하면 큰 추세 전환 후보가 될 수 있습니다.',
-    danger:
-      '이평선은 과거 가격 평균이라 항상 늦습니다. 돌파 직후 추격매수하면 눌림에 걸릴 수 있으니 거래량과 종가 유지 여부를 같이 봐야 합니다.',
-    conditionTitle: '이평선 회복/돌파',
-    indicators: ['이평선 돌파', '20일선 회복', '60일선 돌파', '120일선 돌파'],
-    example:
-      '20일선 위로 올라온 뒤 다시 20일선 근처에서 지지를 받으면 눌림목 진입 후보로 볼 수 있습니다.',
+    id: 'bearish-engulfing',
+    group: '캔들',
+    title: '하락장악형',
+    short: '큰 음봉이 앞의 양봉을 완전히 감싸는 반전 패턴',
+    concept:
+      '하락장악형은 앞 봉이 양봉이고 다음 봉이 그 몸통을 완전히 감싸는 큰 음봉인 2봉 패턴입니다.',
+    condition: '전일 양봉, 당일 음봉이며 당일 몸통이 전일 몸통을 완전히 포함하는 경우입니다.',
+    interpretation: '매수세가 우위였다가 매도세가 강하게 역전했음을 보여주는 하락 반전 신호입니다.',
+    buySignal: '이 패턴 자체는 매수 신호가 아닙니다. 지지선 확인 후 반등 여부를 기다립니다.',
+    sellSignal: '상승 추세 상단·저항선에서 거래량과 함께 나오면 하락 전환 위험 신호로 봅니다.',
+    mistake: '상승 초기에 나오는 경우는 신뢰도가 낮습니다. 고가권 위치가 핵심입니다.',
+    related: '저항선, 거래량, RSI',
+    detect: 'bearishEngulfing',
   },
   {
-    id: 'volume',
-    group: '차트 지표',
-    title: '거래량',
-    short: '얼마나 많은 주식이 사고팔렸는지 보여주는 힘의 크기',
-    easy:
-      '거래량은 시장 참여자의 관심과 돈의 유입을 보여줍니다. 가격 상승과 거래량 증가가 같이 나오면 상승의 신뢰도가 높아집니다.',
-    when:
-      '박스권 돌파, 이평선 돌파, 신고가 돌파 시 거래량이 함께 증가하면 신뢰도가 올라갑니다. 반대로 거래량 없는 상승은 힘이 약할 수 있습니다.',
-    danger:
-      '거래량이 많아도 윗꼬리가 길게 남고 종가가 밀리면 세력이 털고 나간 흔적일 수 있습니다. 캔들 모양과 종가 위치를 반드시 같이 봐야 합니다.',
-    conditionTitle: '거래량 증가',
-    indicators: ['거래량 증가', '거래량 급증', '거래대금 증가'],
-    example:
-      '평소보다 거래량이 2배 이상 늘면서 이전 고점을 돌파하면 관심종목으로 올려볼 수 있습니다.',
+    id: 'morning-star',
+    group: '캔들',
+    title: '샛별형',
+    short: '음봉·도지·양봉 3봉으로 이뤄진 상승 반전',
+    concept:
+      '샛별형은 큰 음봉 → 작은 몸통(도지형) → 큰 양봉의 3봉 패턴입니다. 하락 끝에서 반등이 시작되는 모습입니다.',
+    condition: '1봉 음봉, 2봉 작은 몸통(갭 또는 약세 마무리), 3봉이 1봉 몸통 중간 이상까지 회복하는 양봉입니다.',
+    interpretation: '하락 → 관망 → 매수 전환의 흐름으로, 대표적인 바닥권 상승 반전 신호입니다.',
+    buySignal: '하락 추세 하단에서 거래량 증가와 함께 샛별형이 완성되면 반등 후보로 봅니다.',
+    sellSignal: '이 패턴은 상승 반전 신호이므로 매도 신호로 쓰지 않습니다.',
+    mistake: '3봉이 모두 확인되어야 완성입니다. 2봉만 보고 미리 진입하면 위험합니다.',
+    related: '지지선, 거래량, RSI',
+    detect: 'morningStar',
   },
   {
-    id: 'golden-cross',
-    group: '매매 신호',
-    title: '골든크로스',
-    short: '단기 이동평균선이 장기 이동평균선을 위로 돌파하는 신호',
-    easy:
-      '골든크로스는 짧은 기간 평균 가격이 긴 기간 평균 가격을 위로 뚫는 현상입니다. 하락하던 흐름이 상승으로 바뀔 가능성을 봅니다.',
-    when:
-      '20일선이 60일선을 돌파하거나 MACD가 골든크로스를 만들 때 거래량이 같이 붙으면 더 의미가 있습니다.',
-    danger:
-      '횡보장에서는 골든크로스가 나와도 바로 다시 꺾이는 경우가 많습니다. 돌파 후 지지 여부를 확인해야 합니다.',
-    conditionTitle: '골든크로스 조건',
-    indicators: ['MACD 골든크로스', '이평선 돌파', '단기 추세 전환'],
-    example:
-      '주가가 바닥권에서 횡보하다가 20일선과 60일선을 회복하며 거래량이 증가하면 골든크로스 후보로 볼 수 있습니다.',
+    id: 'evening-star',
+    group: '캔들',
+    title: '석별형',
+    short: '양봉·도지·음봉 3봉으로 이뤄진 하락 반전',
+    concept:
+      '석별형(저녁별)은 큰 양봉 → 작은 몸통 → 큰 음봉의 3봉 패턴입니다. 상승 끝에서 하락이 시작되는 모습입니다.',
+    condition: '1봉 양봉, 2봉 작은 몸통, 3봉이 1봉 몸통 중간 이하까지 하락하는 음봉입니다.',
+    interpretation: '상승 → 관망 → 매도 전환의 흐름으로, 대표적인 고점권 하락 반전 신호입니다.',
+    buySignal: '이 패턴은 하락 반전 신호이므로 매수 신호로 쓰지 않습니다.',
+    sellSignal: '상승 추세 상단·저항선에서 거래량과 함께 석별형이 완성되면 하락 위험 신호로 봅니다.',
+    mistake: '3봉이 모두 확인되어야 완성입니다. 상승 초기 위치에서는 신뢰도가 낮습니다.',
+    related: '저항선, 거래량, RSI',
+    detect: 'eveningStar',
+  },
+
+  // ── 차트 기초 ──────────────────────────────────────────
+  {
+    id: 'support',
+    group: '차트 기초',
+    title: '지지선',
+    short: '주가가 반복해서 멈추고 되돌아선 아래쪽 가격대',
+    concept:
+      '지지선은 주가가 내려오다 매수세가 들어와 반복적으로 멈추고 반등하는 가격대입니다.',
+    condition: '과거 저점이 비슷한 가격대에 여러 번 형성되고, 그 부근에서 반등이 반복될 때 지지선으로 봅니다.',
+    interpretation: '지지선 부근에서는 매수세가 강해 하락이 멈추는 경향이 있습니다.',
+    buySignal: '지지선 부근에서 반등 캔들(망치형·양봉)과 거래량이 나오면 저가 매수 후보로 봅니다.',
+    sellSignal: '지지선이 거래량과 함께 깨지면 추가 하락 위험이 커집니다.',
+    mistake: '지지선은 한 가격이 아니라 구간으로 봐야 하며 절대선이 아닙니다. 손절 기준이 필요합니다.',
+    related: '거래량, 이동평균선, 캔들 패턴',
+    detect: 'support',
+  },
+  {
+    id: 'resistance',
+    group: '차트 기초',
+    title: '저항선',
+    short: '주가가 반복해서 막히고 되돌아선 위쪽 가격대',
+    concept:
+      '저항선은 주가가 올라가다 매도세가 나와 반복적으로 막히는 가격대입니다.',
+    condition: '과거 고점이 비슷한 가격대에 여러 번 형성되고, 그 부근에서 되돌림이 반복될 때 저항선으로 봅니다.',
+    interpretation: '저항선 부근에서는 매도세가 강해 상승이 막히는 경향이 있습니다.',
+    buySignal: '저항선을 거래량과 함께 종가로 돌파하면 상승 추세 전환 후보로 볼 수 있습니다.',
+    sellSignal: '저항선에서 위꼬리가 길게 남고 밀리면 단기 매도·조정 신호일 수 있습니다.',
+    mistake: '돌파한 척하다 되밀리는 가짜 돌파가 많습니다. 종가 기준 돌파를 확인해야 합니다.',
+    related: '거래량, 돌파, 캔들 패턴',
+    detect: 'resistance',
+  },
+  {
+    id: 'trendline',
+    group: '차트 기초',
+    title: '추세선',
+    short: '고점 또는 저점을 이어 방향을 확인하는 선',
+    concept:
+      '추세선은 연속된 저점(상승 추세)이나 고점(하락 추세)을 이어 그린 선으로, 현재 흐름의 방향과 각도를 보여줍니다.',
+    condition: '상승 추세는 저점이 계속 높아지고, 하락 추세는 고점이 계속 낮아질 때 성립합니다.',
+    interpretation: '추세선을 따라 움직이는 동안은 추세가 유지되고, 이탈하면 전환 가능성을 봅니다.',
+    buySignal: '상승 추세선 부근으로 눌린 뒤 지지받고 반등하면 추세 지속 매수 후보로 봅니다.',
+    sellSignal: '상승 추세선을 거래량과 함께 하향 이탈하면 추세 훼손 위험 신호입니다.',
+    mistake: '기울기를 너무 급하게 그으면 잦은 이탈로 오판할 수 있습니다. 완만한 선이 더 유효합니다.',
+    related: '이동평균선, 지지선, 거래량',
+    detect: 'trendUp',
+  },
+  {
+    id: 'box',
+    group: '차트 기초',
+    title: '박스권',
+    short: '일정 범위 안에서 오르내리는 횡보 구간',
+    concept:
+      '박스권은 주가가 지지선과 저항선 사이 일정 범위에서 반복적으로 오르내리는 횡보 구간입니다.',
+    condition: '고점과 저점이 비슷한 가격대에서 여러 번 반복되어 상·하단이 뚜렷할 때 성립합니다.',
+    interpretation: '매수·매도 힘이 균형을 이룬 관망 상태로, 방향이 정해지기 전 에너지를 모으는 구간입니다.',
+    buySignal: '박스 하단 지지 확인 후 반등, 또는 상단을 거래량과 함께 돌파할 때 접근을 고려합니다.',
+    sellSignal: '박스 상단에서 막히거나 하단을 이탈하면 매도·관망 신호로 봅니다.',
+    mistake: '박스권에서 상·하단마다 매매하면 가짜 돌파에 자주 당할 수 있습니다.',
+    related: '지지선, 저항선, 거래량',
+    detect: 'box',
   },
   {
     id: 'breakout',
-    group: '매매 신호',
-    title: '캔들 돌파',
-    short: '저항선을 강한 캔들로 뚫고 올라가는 신호',
-    easy:
-      '캔들 돌파는 이전에 계속 막히던 가격대를 강한 양봉으로 뚫는 모습입니다. 매물대를 뚫었다는 의미로 해석합니다.',
-    when:
-      '이전 고점, 박스권 상단, 장기 이평선 같은 저항선을 거래량과 함께 돌파할 때 의미가 커집니다.',
-    danger:
-      '돌파한 척하다가 다시 저항선 아래로 밀리는 가짜 돌파가 많습니다. 종가가 저항선 위에서 마감되는지 확인해야 합니다.',
-    conditionTitle: '저항선 돌파',
-    indicators: ['저항선 돌파', '박스권 상단 돌파', '돌파 직전'],
-    example:
-      '여러 번 막히던 가격대를 거래량 동반 장대양봉으로 넘고 종가가 위에서 끝나면 돌파 신뢰도가 높아집니다.',
+    group: '차트 기초',
+    title: '돌파',
+    short: '저항선·박스 상단을 강하게 뚫는 움직임',
+    concept:
+      '돌파는 이전에 계속 막히던 저항선이나 박스권 상단을 종가로 강하게 뚫고 올라가는 움직임입니다.',
+    condition: '종가가 직전 저항 구간 위에서 마감되고 거래량이 평소보다 크게 증가할 때 신뢰도가 높습니다.',
+    interpretation: '매물대를 소화하고 새로운 상승 추세가 시작될 수 있음을 뜻합니다.',
+    buySignal: '거래량 동반 종가 돌파 후 되돌림에서 지지받으면 상승 추세 초입 후보로 봅니다.',
+    sellSignal: '돌파 직후 종가가 다시 저항선 아래로 밀리면 가짜 돌파 위험 신호입니다.',
+    mistake: '장중 고가 돌파만 보고 진입하면 위험합니다. 종가 기준·거래량을 확인해야 합니다.',
+    related: '저항선, 거래량, 장대양봉',
+    detect: 'breakout',
   },
   {
-    id: 'pullback',
-    group: '매매 신호',
-    title: '눌림목',
-    short: '상승 중 잠깐 쉬어가는 조정 구간',
-    easy:
-      '눌림목은 상승하던 주가가 잠시 조정받는 자리입니다. 추세가 살아있다면 이 구간이 분할 진입 후보가 됩니다.',
-    when:
-      '20일선, 이전 저항선이 지지선으로 바뀐 자리, 박스권 상단 재확인 자리에서 반등이 나오면 눌림목으로 볼 수 있습니다.',
-    danger:
-      '눌림목이라고 생각했는데 실제로는 추세가 무너지는 시작일 수 있습니다. 손절 기준을 먼저 정해야 합니다.',
-    conditionTitle: '눌림목 조건',
-    indicators: ['눌림목', '지지선 반등', '20일선 회복'],
-    example:
-      '돌파 후 주가가 다시 20일선 근처까지 내려왔지만 거래량이 줄고 지지를 받으면 눌림목 후보입니다.',
+    id: 'gap',
+    group: '차트 기초',
+    title: '갭',
+    short: '전일 종가와 당일 시가가 크게 벌어진 빈 구간',
+    concept:
+      '갭은 전일 종가와 당일 시가 사이에 가격이 크게 벌어져 캔들이 겹치지 않는 빈 구간입니다. 강한 호재·악재나 시간외 수급으로 발생합니다.',
+    condition: '당일 시가가 전일 고가보다 크게 높거나(상승 갭) 전일 저가보다 크게 낮게(하락 갭) 출발할 때입니다.',
+    interpretation: '급격한 심리 변화를 반영하며, 갭이 유지되면 강한 추세, 메워지면 되돌림으로 봅니다.',
+    buySignal: '거래량 동반 상승 갭이 눌림에도 메워지지 않고 지지되면 강세 지속 후보로 봅니다.',
+    sellSignal: '상승 갭이 당일 바로 메워지며 음봉으로 밀리면 소진성 갭 위험 신호일 수 있습니다.',
+    mistake: '모든 갭이 메워지는 것은 아닙니다. 갭 종류(돌파·소진·보통)를 구분해야 합니다.',
+    related: '거래량, 저항선, 공시·뉴스',
+    detect: 'gap',
   },
   {
-    id: 'support-resistance',
-    group: '매매 신호',
-    title: '지지선/저항선',
-    short: '주가가 자주 멈추거나 튕기는 가격대',
-    easy:
-      '지지선은 주가가 내려오다 멈추는 가격대, 저항선은 올라가다 막히는 가격대입니다. 매수·매도 기준을 잡는 데 중요합니다.',
-    when:
-      '지지선 근처에서는 손절폭을 짧게 잡고 반등을 노릴 수 있고, 저항선을 돌파하면 상승 추세 전환 가능성을 봅니다.',
-    danger:
-      '지지선은 절대선이 아닙니다. 깨지면 빠르게 하락할 수 있어 손절 기준을 반드시 정해야 합니다.',
-    conditionTitle: '지지/저항 조건',
-    indicators: ['지지선 반등', '저항선 돌파', '박스권 하단'],
-    example:
-      '여러 번 반등했던 가격대를 다시 지키면 지지선 반등 후보, 여러 번 막혔던 가격을 뚫으면 저항선 돌파 후보입니다.',
+    id: 'volume',
+    group: '차트 기초',
+    title: '거래량',
+    short: '얼마나 많이 사고팔렸는지 나타내는 힘의 크기',
+    concept:
+      '거래량은 해당 구간에 거래된 주식 수로, 시장 참여자의 관심과 자금 유입 강도를 보여줍니다.',
+    condition: '가격 변화와 함께 거래량이 평소 대비 크게 늘거나 줄 때 의미가 커집니다.',
+    interpretation: '가격 상승 + 거래량 증가는 신뢰도 높은 상승, 거래량 없는 상승은 약한 상승으로 봅니다.',
+    buySignal: '돌파·이평선 회복·신고가 시 거래량이 함께 증가하면 신뢰도가 올라갑니다.',
+    sellSignal: '거래량이 급증했는데 위꼬리가 길고 종가가 밀리면 세력 이탈 신호일 수 있습니다.',
+    mistake: '거래량 많음 = 무조건 상승은 아닙니다. 캔들 모양·종가 위치를 함께 봐야 합니다.',
+    related: '캔들 패턴, 돌파, OBV',
+    detect: 'volume',
+  },
+
+  // ── 보조지표 ──────────────────────────────────────────
+  {
+    id: 'moving-average',
+    group: '보조지표',
+    title: '이동평균선',
+    short: '일정 기간 평균 가격을 이어 추세를 보는 선',
+    concept:
+      '이동평균선은 일정 기간 종가의 평균을 이은 선입니다. 5·20일은 단기, 60일은 중기, 120일은 장기 흐름을 봅니다.',
+    condition: '주가가 이평선 위/아래에 있는지, 이평선들이 정배열(단기>장기)인지로 흐름을 판단합니다.',
+    interpretation: '주가가 이평선 위에서 정배열이면 상승 흐름, 아래에서 역배열이면 하락 흐름으로 봅니다.',
+    buySignal: '20일선을 회복하고 60일선까지 돌파하면 단기 추세 회복 후보로 봅니다.',
+    sellSignal: '주가가 이평선들을 차례로 이탈하며 역배열로 바뀌면 하락 전환 위험 신호입니다.',
+    mistake: '이평선은 과거 평균이라 항상 늦습니다. 돌파 직후 추격매수는 눌림에 걸릴 수 있습니다.',
+    related: '거래량, 골든크로스, 추세선',
+    detect: 'goldenCross',
   },
   {
-    id: 'per',
-    group: '가치 지표',
-    title: 'PER',
-    short: '이익 대비 주가가 비싼지 싼지 보는 지표',
-    easy:
-      'PER은 주가를 주당순이익으로 나눈 값입니다. 낮으면 이익 대비 싸다고 볼 수 있지만, 성장성이 낮거나 실적이 꺾이면 낮은 PER도 위험할 수 있습니다.',
-    when:
-      '안정적으로 이익을 내는 기업이 업종 평균보다 PER이 낮고 실적이 유지된다면 저평가 후보로 볼 수 있습니다.',
-    danger:
-      '일회성 이익 때문에 PER이 낮아진 경우가 있습니다. 영업이익과 순이익이 지속 가능한지 확인해야 합니다.',
-    conditionTitle: 'PER 낮음',
-    indicators: ['PER 낮음', '저평가', 'AI 점수 상위'],
-    example:
-      'PER이 낮은데 매출과 이익이 꾸준히 증가하고 부채가 낮다면 저평가 후보로 봅니다.',
+    id: 'golden-cross',
+    group: '보조지표',
+    title: '골든크로스',
+    short: '단기 이평선이 장기 이평선을 위로 뚫는 신호',
+    concept:
+      '골든크로스는 단기 이동평균선(예: 5일·20일)이 장기 이동평균선(예: 20일·60일)을 아래에서 위로 돌파하는 현상입니다.',
+    condition: '전일까지 단기선 ≤ 장기선이었다가 당일 단기선 > 장기선으로 교차하는 시점입니다.',
+    interpretation: '하락·횡보 흐름이 상승으로 전환될 수 있음을 시사하는 대표적 강세 신호입니다.',
+    buySignal: '바닥권에서 거래량 증가와 함께 골든크로스가 나오면 추세 전환 후보로 봅니다.',
+    sellSignal: '이 신호 자체는 매도 신호가 아니지만, 횡보장에서 잦은 교차는 손실을 키울 수 있습니다.',
+    mistake: '이평선 기반이라 신호가 늦습니다. 횡보장에서는 골든크로스 직후 다시 꺾이기 쉽습니다.',
+    related: '거래량, 이동평균선, MACD',
+    detect: 'goldenCross',
   },
   {
-    id: 'pbr',
-    group: '가치 지표',
-    title: 'PBR',
-    short: '자산 대비 주가가 비싼지 싼지 보는 지표',
-    easy:
-      'PBR은 주가를 주당순자산으로 나눈 값입니다. 1배 이하면 장부상 자산보다 낮게 거래된다는 뜻입니다.',
-    when:
-      '자산가치가 중요하고 부채가 낮은 기업이 PBR 1배 근처라면 저평가 후보로 볼 수 있습니다.',
-    danger:
-      'PBR이 낮아도 자산의 질이 나쁘거나 계속 적자를 내면 싸다고 보기 어렵습니다.',
-    conditionTitle: 'PBR 낮음',
-    indicators: ['PBR 낮음', '저평가', '재무 확인'],
-    example:
-      'PBR이 낮고 부채비율이 안정적이며 흑자를 유지하는 기업은 가치주 후보로 볼 수 있습니다.',
+    id: 'dead-cross',
+    group: '보조지표',
+    title: '데드크로스',
+    short: '단기 이평선이 장기 이평선을 아래로 뚫는 신호',
+    concept:
+      '데드크로스는 단기 이동평균선이 장기 이동평균선을 위에서 아래로 뚫고 내려가는 현상입니다.',
+    condition: '전일까지 단기선 ≥ 장기선이었다가 당일 단기선 < 장기선으로 교차하는 시점입니다.',
+    interpretation: '상승·횡보 흐름이 하락으로 전환될 수 있음을 시사하는 대표적 약세 신호입니다.',
+    buySignal: '이 신호 자체는 매수 신호가 아닙니다. 과매도 반등을 확인한 뒤 접근합니다.',
+    sellSignal: '고가권에서 거래량 증가와 함께 데드크로스가 나오면 하락 전환 위험 신호입니다.',
+    mistake: '이평선 기반이라 늦게 나옵니다. 이미 많이 빠진 뒤 신호가 나오기도 합니다.',
+    related: '거래량, 이동평균선, MACD',
+    detect: 'deadCross',
   },
   {
-    id: 'roe',
-    group: '가치 지표',
-    title: 'ROE',
-    short: '자본으로 얼마나 이익을 잘 내는지 보는 지표',
-    easy:
-      'ROE는 자기자본 대비 순이익 비율입니다. 기업이 가진 자본을 얼마나 효율적으로 굴리는지 보여줍니다.',
-    when:
-      'ROE가 꾸준히 높고 부채비율이 과하지 않다면 좋은 기업일 가능성이 높습니다.',
-    danger:
-      '부채를 많이 써서 ROE가 높아진 경우도 있습니다. 부채비율과 함께 봐야 합니다.',
-    conditionTitle: 'ROE 개선',
-    indicators: ['ROE 개선', 'AI 점수 상위', '저평가'],
-    example:
-      'ROE가 15% 이상이고 매출과 이익이 함께 증가하면 우량 성장주 후보로 볼 수 있습니다.',
+    id: 'rsi',
+    group: '보조지표',
+    title: 'RSI',
+    short: '최근 상승·하락 힘을 0~100으로 나타내는 지표',
+    concept:
+      'RSI는 최근 일정 기간의 상승 폭과 하락 폭을 비교해 0~100 사이로 표시합니다. 보통 70 이상 과열, 30 이하 과매도로 봅니다.',
+    condition: 'RSI가 30 이하로 내려가면 과매도, 70 이상으로 올라가면 과열 구간으로 판단합니다.',
+    interpretation: '가격 모멘텀의 강도와 과열·침체 정도를 보여줍니다.',
+    buySignal: 'RSI가 30 아래에서 다시 올라오며 주가가 지지선을 지키면 기술적 반등 후보로 봅니다.',
+    sellSignal: 'RSI 70 이상 과열에서 거래량 없이 밀리거나 하락 다이버전스가 나오면 조정 위험 신호입니다.',
+    mistake: '강한 추세장에서는 RSI가 과매도·과열에 오래 머뭅니다. RSI만으로 역추세 매매하면 위험합니다.',
+    related: '지지선, 거래량, MACD',
+    detect: 'rsiOversold',
   },
   {
-    id: 'debt',
-    group: '리스크 관리',
-    title: '부채비율',
-    short: '자본 대비 부채가 얼마나 많은지 보는 안정성 지표',
-    easy:
-      '부채비율은 기업이 가진 자본에 비해 빚이 얼마나 많은지 보는 지표입니다. 낮을수록 재무 안정성이 높습니다.',
-    when:
-      '부채비율이 100% 이하이면 비교적 안정적으로 보고, 200% 이상이면 업종 특성을 감안해도 주의가 필요합니다.',
-    danger:
-      '부채비율만 낮아도 적자가 계속되면 위험합니다. 현금흐름과 이익을 같이 봐야 합니다.',
-    conditionTitle: '재무 안정 조건',
-    indicators: ['AI 점수 상위', '저평가', 'ROE 개선'],
-    example:
-      '부채비율이 낮고 영업이익이 흑자인 기업은 하락장에서도 버틸 가능성이 높습니다.',
+    id: 'macd',
+    group: '보조지표',
+    title: 'MACD',
+    short: '단기·장기 이평 차이로 추세 전환을 잡는 지표',
+    concept:
+      'MACD는 단기 이동평균에서 장기 이동평균을 뺀 값(MACD선)과 그 평균(시그널선), 두 선의 차이(히스토그램)로 구성됩니다.',
+    condition: 'MACD선이 시그널선을 위로 뚫으면 골든크로스, 아래로 뚫으면 데드크로스로 판단합니다.',
+    interpretation: '추세의 방향과 전환 시점, 모멘텀의 강도를 함께 보여줍니다.',
+    buySignal: 'MACD선이 시그널선을 아래에서 위로 교차하고 히스토그램이 커지면 매수 관점으로 봅니다.',
+    sellSignal: 'MACD선이 시그널선을 위에서 아래로 교차하거나 히스토그램이 줄면 매도·주의 관점입니다.',
+    mistake: '이평 기반이라 신호가 늦고, 횡보장에서는 교차가 자주 어긋나 잦은 매매 손실이 납니다.',
+    related: '이동평균선, 거래량, RSI',
+    detect: 'macdCross',
   },
   {
-    id: 'dilution',
-    group: '리스크 관리',
-    title: '유상증자/희석',
-    short: '새 주식 발행으로 기존 주주 가치가 줄어드는 리스크',
-    easy:
-      '희석은 회사가 새 주식을 발행해서 기존 주주의 지분 가치가 줄어드는 현상입니다. 유상증자, 오퍼링, ATM, 전환사채 등이 원인이 됩니다.',
-    when:
-      '자금 조달이 성장 투자로 이어질 수도 있지만, 적자 보전이나 운영비 확보 목적이면 주가에 부담이 될 수 있습니다.',
-    danger:
-      '반복적인 희석은 주가가 오르기 어려운 큰 이유가 됩니다. 특히 소형주, 적자기업, 바이오·스팩류에서 조심해야 합니다.',
-    conditionTitle: '희석 리스크 확인',
-    indicators: ['변동성 확대', '공시 호재', '거래량 급증'],
-    example:
-      '급등 후 유상증자나 ATM 공시가 나오면 기존 주주에게 희석 부담이 생길 수 있습니다.',
+    id: 'bollinger',
+    group: '보조지표',
+    title: '볼린저밴드',
+    short: '평균선 위·아래로 변동 범위를 보여주는 밴드',
+    concept:
+      '볼린저밴드는 중심선(보통 20일 이동평균)과 표준편차로 만든 상단·하단 밴드로 가격의 변동 범위를 보여줍니다.',
+    condition: '밴드 폭이 좁아졌다(수축) 넓어지거나(확장), 가격이 상·하단 밴드에 닿을 때 주목합니다.',
+    interpretation: '밴드 수축은 변동성 축소, 확장은 변동성 확대를 뜻하며 상·하단은 상대적 과열·침체를 봅니다.',
+    buySignal: '밴드 수축 후 거래량과 함께 상단을 돌파하면 변동성 확대 상승 후보로 봅니다.',
+    sellSignal: '상단 밴드 접촉 후 거래량 없이 밀리면 단기 조정, 하단 이탈 지속은 약세 신호입니다.',
+    mistake: '상단에 닿았다고 무조건 매도, 하단에 닿았다고 무조건 매수하면 강한 추세에서 크게 틀립니다.',
+    related: '거래량, RSI, ATR',
+    detect: 'bollingerBreak',
   },
   {
-    id: 'support-resistance',
-    group: '캔들·추세',
-    title: '지지선·저항선',
-    short: '반복해서 멈추거나 되돌아선 가격대를 실제 차트에서 찾는 방법',
-    easy: '지지선은 매수세가 들어와 하락이 멈춘 구간이고, 저항선은 매도세가 나와 상승이 막힌 구간입니다.',
-    when: '과거 고점·저점, 거래량이 많이 쌓인 가격대, 이동평균선 부근을 함께 확인합니다.',
-    danger: '선을 한 가격으로 너무 정확하게 잡으면 가짜 이탈에 흔들릴 수 있습니다. 한 줄보다 가격 구간으로 봐야 합니다.',
-    conditionTitle: '지지·저항 반응 종목',
-    indicators: ['지지선 반등', '저항선 돌파', '거래량 증가'],
-    example: '같은 가격대에서 세 번 이상 반등한 뒤 거래량을 동반해 위 저항을 돌파하면 추세 변화 후보가 됩니다.',
+    id: 'volume-spike',
+    group: '보조지표',
+    title: '거래량 급증',
+    short: '평소보다 거래량이 크게 폭증한 구간',
+    concept:
+      '거래량 급증은 특정 구간에 거래량이 평소 평균 대비 크게 폭증하는 현상으로, 강한 관심·수급 변화를 뜻합니다.',
+    condition: '당일 거래량이 최근 20일 평균 거래량의 약 2.5배 이상으로 늘어난 경우입니다.',
+    interpretation: '중요한 매수 또는 매도 이벤트가 발생했음을 보여주는 강한 신호입니다.',
+    buySignal: '저항선·박스 상단 돌파 시 거래량이 급증하면 돌파 신뢰도가 높아집니다.',
+    sellSignal: '고가권에서 거래량 급증과 함께 긴 위꼬리·음봉이 나오면 분산·이탈 위험 신호입니다.',
+    mistake: '거래량만 보면 안 됩니다. 급증이 상승 때인지 하락 때인지(캔들 방향)를 함께 봐야 합니다.',
+    related: '캔들 패턴, 돌파, OBV',
+    detect: 'volume',
   },
   {
     id: 'atr',
-    group: '차트 지표',
-    title: 'ATR 변동성',
-    short: '최근 주가가 하루에 평균 얼마나 움직이는지 보는 변동성 지표',
-    easy: 'ATR이 커지면 하루 움직임이 커졌다는 뜻이고, 작아지면 변동성이 줄었다는 뜻입니다.',
-    when: '손절폭과 주문 수량을 종목 변동성에 맞출 때 사용합니다. 변동성이 큰 종목은 같은 비율로 매수하면 위험이 커집니다.',
-    danger: 'ATR은 방향을 알려주지 않습니다. 값이 커졌다고 상승 신호로 해석하면 안 됩니다.',
-    conditionTitle: '변동성 확대 종목',
-    indicators: ['변동성 확대', '거래량 급증', '돌파 직전'],
-    example: '횡보 중 ATR이 낮아졌다가 거래량과 함께 빠르게 커지면 큰 움직임이 시작되는지 확인합니다.',
+    group: '보조지표',
+    title: 'ATR',
+    short: '하루 평균 변동폭을 나타내는 변동성 지표',
+    concept:
+      'ATR(평균 진폭)은 최근 일정 기간 하루 가격 변동폭의 평균으로, 종목이 하루에 평균 얼마나 움직이는지 보여줍니다.',
+    condition: 'ATR이 커지면 변동성 확대, 작아지면 변동성 축소로 판단합니다.',
+    interpretation: '방향이 아니라 변동성의 크기를 보여줍니다. 손절폭·주문 수량 조절에 활용합니다.',
+    buySignal: '횡보 중 ATR이 낮았다가 거래량과 함께 커지면 큰 움직임 시작 여부를 확인합니다.',
+    sellSignal: 'ATR 급등은 위험 급증도 뜻하므로 변동성이 큰 구간은 비중·손절 관리를 강화합니다.',
+    mistake: 'ATR은 방향을 알려주지 않습니다. 값이 커졌다고 상승 신호로 해석하면 안 됩니다.',
+    related: '볼린저밴드, 거래량, 캔들 패턴',
+    detect: 'atrSpike',
+  },
+  {
+    id: 'stochastic',
+    group: '보조지표',
+    title: '스토캐스틱',
+    short: '최근 범위 내 종가 위치로 과열·침체를 보는 지표',
+    concept:
+      '스토캐스틱은 최근 일정 기간의 고가~저가 범위에서 현재 종가가 어디에 있는지를 %K, %D 선으로 나타냅니다. 보통 80 이상 과열, 20 이하 과매도로 봅니다.',
+    condition: '%K가 20 이하로 내려가면 과매도, 80 이상으로 올라가면 과열 구간으로 판단합니다.',
+    interpretation: '단기 모멘텀의 과열·침체와 반전 시점을 민감하게 보여줍니다.',
+    buySignal: '과매도(20 이하)에서 %K가 %D를 위로 교차하며 올라오면 단기 반등 후보로 봅니다.',
+    sellSignal: '과열(80 이상)에서 %K가 %D를 아래로 교차하면 단기 조정 신호일 수 있습니다.',
+    mistake: '민감해서 신호가 잦습니다. 강한 추세장에서는 과열·과매도에 오래 머물러 오판하기 쉽습니다.',
+    related: 'RSI, 거래량, 지지선',
+    detect: 'stochOversold',
   },
   {
     id: 'obv',
-    group: '차트 지표',
-    title: 'OBV 수급',
-    short: '상승일·하락일 거래량을 누적해 매집과 이탈을 살펴보는 지표',
-    easy: '주가가 오르면 거래량을 더하고 내리면 빼서 거래량의 방향을 누적합니다.',
-    when: '주가는 횡보하는데 OBV가 먼저 오르면 매집 가능성, 주가는 오르는데 OBV가 떨어지면 힘 약화를 확인합니다.',
-    danger: '대량 거래 한 번에 값이 크게 왜곡될 수 있으므로 공시·블록딜 여부와 함께 봐야 합니다.',
-    conditionTitle: 'OBV 상승 종목',
-    indicators: ['OBV 상승', '바닥권매집', '거래량 증가'],
-    example: '가격이 박스권인데 OBV 저점이 계속 높아지면 수급이 먼저 들어오는지 관찰합니다.',
-  },
-  {
-    id: 'profitability',
-    group: '가치 지표',
-    title: '영업이익률·순이익률',
-    short: '매출에서 실제로 얼마나 이익을 남기는지 비교하는 수익성 지표',
-    easy: '영업이익률은 본업 수익성, 순이익률은 모든 비용을 반영한 최종 수익성을 뜻합니다.',
-    when: '같은 업종 기업끼리 최근 분기와 연간 추세를 비교합니다. 매출과 이익률이 함께 개선되는 기업이 좋습니다.',
-    danger: '업종마다 정상 이익률이 다르므로 서로 다른 업종을 단순 비교하면 잘못 판단할 수 있습니다.',
-    conditionTitle: '수익성 개선 종목',
-    indicators: ['ROE 개선', 'AI 점수 상위', '저평가'],
-    example: '매출이 늘면서 영업이익률도 3개 분기 연속 개선되면 질 좋은 성장인지 확인할 수 있습니다.',
-  },
-  {
-    id: 'filing-news-check',
-    group: '리스크 관리',
-    title: '공시·뉴스 검증',
-    short: '제목만 보지 않고 원문과 숫자, 발생일을 확인하는 방법',
-    easy: '공시는 회사가 공식 제출한 자료이고 뉴스는 이를 해석한 기사입니다. 중요한 판단은 공시 원문을 우선합니다.',
-    when: '계약, 증자, 전환사채, 실적, 소송, 최대주주 변경이 나오면 금액·기간·상대방·조건을 원문에서 확인합니다.',
-    danger: '오래된 뉴스나 이미 주가에 반영된 내용을 새 호재처럼 받아들이면 추격매수 위험이 큽니다.',
-    conditionTitle: '최근 공시·뉴스 확인 종목',
-    indicators: ['공시 호재', '뉴스 호재', '거래량 증가'],
-    example: '대규모 계약 기사라도 매출 대비 계약 비중과 해지 조건이 작거나 불확실하면 실제 영향이 제한될 수 있습니다.',
-  },
-  {
-    id: 'delisting',
-    group: '리스크 관리',
-    title: '상장폐지 주의',
-    short: '거래정지·관리종목·상장유지 요건 미달 리스크',
-    easy:
-      '상장폐지 주의는 회사가 거래소 기준을 충족하지 못하거나 재무·감사의견 문제가 생겼을 때 봐야 하는 리스크입니다.',
-    when:
-      '관리종목, 거래정지, 감사의견 거절, 나스닥 최저가 요건 미달 같은 공시가 나오면 반드시 원문을 확인해야 합니다.',
-    danger:
-      '상장폐지 리스크가 있는 종목은 반등이 커 보여도 손실 위험이 매우 큽니다. 단기 매매라도 손절 기준이 없으면 위험합니다.',
-    conditionTitle: '상장 리스크 확인',
-    indicators: ['변동성 확대', '급락', '공시 확인'],
-    example:
-      '주가가 싸다고 느껴져도 상장유지 요건 문제가 있으면 단순 저가 매수가 아니라 고위험 투기일 수 있습니다.',
+    group: '보조지표',
+    title: 'OBV',
+    short: '상승일·하락일 거래량을 누적해 수급을 보는 지표',
+    concept:
+      'OBV(누적 거래량)는 주가가 오른 날 거래량을 더하고 내린 날 빼서 누적해, 자금이 매집되는지 이탈하는지를 보여줍니다.',
+    condition: '주가와 OBV의 방향이 같은지(동행) 다른지(다이버전스)를 비교합니다.',
+    interpretation: '가격보다 수급의 방향이 먼저 드러나는 경우가 많아 선행 신호로 활용됩니다.',
+    buySignal: '주가는 횡보·하락인데 OBV 저점이 계속 높아지면 매집(강세 다이버전스) 후보로 봅니다.',
+    sellSignal: '주가는 오르는데 OBV가 하락하면 상승 힘 약화(약세 다이버전스) 위험 신호입니다.',
+    mistake: '대량 거래 한 번에 값이 크게 왜곡될 수 있어 공시·블록딜 여부를 함께 봐야 합니다.',
+    related: '거래량, 캔들 패턴, 이동평균선',
+    detect: 'obvUp',
   },
 ];
 
-const GROUPS: StudyGroup[] = [
-  '캔들·추세',
-  '차트 지표',
-  '매매 신호',
-  '재무제표',
-  '가치 지표',
-  '리스크 관리',
-];
+const GROUPS: StudyGroup[] = ['캔들', '차트 기초', '보조지표'];
 
-function currentBasePath() {
-  const path = window.location.pathname;
-
-  if (path.startsWith('/study')) return '/study';
-
-  return '/learn';
+// ── 실데이터 사례 탐지 유틸 ─────────────────────────────
+interface Occurrence {
+  index: number;
+  date: string;
+  price: number;
+  condition: string;
 }
 
-function topicFromUrl() {
-  return new URLSearchParams(window.location.search).get('topic');
+function num(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
 }
 
-function saveScroll(value: number) {
-  window.sessionStorage.setItem(LIST_SCROLL_KEY, String(value));
+function toRows(candles: Candle[]) {
+  return candles
+    .map((c) => ({
+      time: String(c.time),
+      open: num(c.open),
+      high: num(c.high),
+      low: num(c.low),
+      close: num(c.close),
+      volume: num(c.volume),
+    }))
+    .filter((c) => [c.open, c.high, c.low, c.close].every(Number.isFinite));
 }
 
-function readScroll() {
-  const value = Number(window.sessionStorage.getItem(LIST_SCROLL_KEY) ?? 0);
-
-  return Number.isFinite(value) ? value : 0;
+function fmtDate(time: string): string {
+  if (!time) return '정보 없음';
+  const digits = time.replace(/[^0-9]/g, '');
+  if (digits.length >= 8) {
+    return `${digits.slice(0, 4)}.${digits.slice(4, 6)}.${digits.slice(6, 8)}`;
+  }
+  return time;
 }
 
-function noStoreOptions(): RequestInit {
-  return {
-    cache: 'no-store',
-    headers: {
-      'Cache-Control': 'no-cache, no-store, max-age=0',
-      Pragma: 'no-cache',
-    },
-  };
+function sma(values: number[], period: number, at: number): number | null {
+  if (at < period - 1) return null;
+  let sum = 0;
+  for (let i = at - period + 1; i <= at; i += 1) sum += values[i];
+  return sum / period;
 }
 
-function normalizeRelatedCard(card: AnyObj): RelatedStock | null {
-  const ticker = String(card.ticker ?? '').trim().toUpperCase();
-  if (!ticker) return null;
-
-  return {
-    ticker,
-    name: String(card.name ?? ticker),
-    market: card.market === 'US' || !/^\d{6}$/.test(ticker) ? 'US' : 'KR',
-    currency: card.currency === 'USD' || !/^\d{6}$/.test(ticker) ? 'USD' : 'KRW',
-    price: Number.isFinite(Number(card.price)) ? Number(card.price) : null,
-    changePercent: Number.isFinite(Number(card.changePercent))
-      ? Number(card.changePercent)
-      : null,
-    score: Number.isFinite(Number(card.score)) ? Number(card.score) : null,
-    matched: Array.isArray(card.matched) ? card.matched.map(String) : [],
-  };
+function computeRsi(closes: number[], period = 14): (number | null)[] {
+  const out: (number | null)[] = closes.map(() => null);
+  if (closes.length <= period) return out;
+  let gain = 0;
+  let loss = 0;
+  for (let i = 1; i <= period; i += 1) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) gain += diff;
+    else loss -= diff;
+  }
+  let avgGain = gain / period;
+  let avgLoss = loss / period;
+  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  for (let i = period + 1; i < closes.length; i += 1) {
+    const diff = closes[i] - closes[i - 1];
+    const g = diff > 0 ? diff : 0;
+    const l = diff < 0 ? -diff : 0;
+    avgGain = (avgGain * (period - 1) + g) / period;
+    avgLoss = (avgLoss * (period - 1) + l) / period;
+    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return out;
 }
 
-async function fetchRelatedStocks(indicators: string[]): Promise<RelatedStock[]> {
-  if (!indicators.length) return [];
-
-  const timestamp = Date.now();
-  const encoded = encodeURIComponent(indicators.join(','));
-  const scanResults = await Promise.allSettled(
-    ['KR', 'US'].map(async (market) => {
-      const res = await authorizedFetch(
-        `/api/market/scan?market=${market}&indicators=${encoded}&_ts=${timestamp}`,
-        noStoreOptions(),
-      );
-      if (!res.ok) return [];
-      const data = (await res.json()) as { cards?: AnyObj[] };
-      return (data.cards ?? []).map(normalizeRelatedCard).filter(Boolean) as RelatedStock[];
-    }),
-  );
-
-  const scanned = scanResults.flatMap((result) =>
-    result.status === 'fulfilled' ? result.value : [],
-  );
-  const uniqueScanned = Array.from(
-    new Map(scanned.map((row) => [`${row.market}:${row.ticker}`, row])).values(),
-  ).slice(0, 8);
-  if (uniqueScanned.length) return uniqueScanned;
-
-  // 조건검색 제공처가 잠시 비어 있어도 공부 기능이 멈추지 않도록
-  // 대표 국내·해외 종목의 최신 시세를 대체 예시로 불러옵니다.
-  const fallbackTickers = ['005930', '000660', '035420', '051910', 'AAPL', 'MSFT', 'NVDA', 'GOOGL'];
-  const res = await authorizedFetch(
-    `/api/quotes?tickers=${encodeURIComponent(fallbackTickers.join(','))}&_ts=${timestamp}`,
-    noStoreOptions(),
-  ).catch(() => null);
-  const payload = res?.ok ? ((await res.json()) as AnyObj) : {};
-  const rows = Array.isArray(payload?.quotes) ? payload.quotes : [];
-  const byTicker = new Map(rows.map((row: AnyObj) => [String(row.ticker).toUpperCase(), row]));
-
-  return fallbackTickers.map((ticker) => {
-    const live = byTicker.get(ticker) ?? {};
-    const entry = STOCK_DIRECTORY.find((item) => item.ticker === ticker);
-    return {
-      ticker,
-      name: String(live.name ?? entry?.name ?? ticker),
-      market: /^\d{6}$/.test(ticker) ? 'KR' : 'US',
-      currency: /^\d{6}$/.test(ticker) ? 'KRW' : 'USD',
-      price: Number.isFinite(Number(live.price)) ? Number(live.price) : null,
-      changePercent: Number.isFinite(Number(live.changePercent))
-        ? Number(live.changePercent)
-        : null,
-      score: Number.isFinite(Number(live.rating?.score ?? live.score))
-        ? Number(live.rating?.score ?? live.score)
-        : null,
-      matched: ['실시간 학습 예시'],
-    } satisfies RelatedStock;
-  });
+function ema(values: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = values.map(() => null);
+  const k = 2 / (period + 1);
+  let prev: number | null = null;
+  for (let i = 0; i < values.length; i += 1) {
+    if (prev == null) {
+      if (i >= period - 1) {
+        let sum = 0;
+        for (let j = i - period + 1; j <= i; j += 1) sum += values[j];
+        prev = sum / period;
+        out[i] = prev;
+      }
+    } else {
+      prev = values[i] * k + prev * (1 - k);
+      out[i] = prev;
+    }
+  }
+  return out;
 }
 
-async function fetchLearningCandles(ticker: string): Promise<LearningCandle[]> {
-  const timestamp = Date.now();
-  const candidates = [
-    `/api/stocks/${encodeURIComponent(ticker)}/candles?tf=1D&_ts=${timestamp}`,
-  ];
+type Row = ReturnType<typeof toRows>[number];
 
-  for (const url of candidates) {
-    try {
-      const res = await authorizedFetch(url, noStoreOptions());
-      if (!res.ok) continue;
-      const data = (await res.json()) as AnyObj;
-      const rows = Array.isArray(data?.candles)
-        ? data.candles
-        : Array.isArray(data?.data?.candles)
-          ? data.data.candles
-          : Array.isArray(data?.items)
-            ? data.items
-            : [];
-      const normalized = rows
-        .map((row: AnyObj, index: number) => {
-          const close = Number(row.close ?? row.closePrice ?? row.cur_prc ?? row.price);
-          const open = Number(row.open ?? row.openPrice ?? row.open_prc ?? close);
-          const high = Number(row.high ?? row.highPrice ?? row.high_prc ?? Math.max(open, close));
-          const low = Number(row.low ?? row.lowPrice ?? row.low_prc ?? Math.min(open, close));
-          const volume = Number(row.volume ?? row.acc_trde_qty ?? 0);
-          if (![open, high, low, close].every(Number.isFinite)) return null;
-          return {
-            time: String(row.time ?? row.date ?? row.datetime ?? index),
-            open,
-            high: Math.max(high, open, close),
-            low: Math.min(low, open, close),
-            close,
-            volume: Number.isFinite(volume) ? Math.max(0, volume) : 0,
-          } satisfies LearningCandle;
-        })
-        .filter((row: LearningCandle | null): row is LearningCandle => row != null);
-      if (normalized.length >= 5) return normalized;
-    } catch {
-      // 다음 차트 주소를 확인합니다.
+function body(r: Row) {
+  return Math.abs(r.close - r.open);
+}
+function range(r: Row) {
+  return Math.max(r.high - r.low, 1e-9);
+}
+function isBull(r: Row) {
+  return r.close > r.open;
+}
+function isBear(r: Row) {
+  return r.close < r.open;
+}
+function avgBody(rows: Row[], at: number, period = 20) {
+  const from = Math.max(0, at - period);
+  const slice = rows.slice(from, at);
+  if (!slice.length) return 0;
+  return slice.reduce((s, r) => s + body(r), 0) / slice.length;
+}
+
+function detectOccurrences(kind: DetectKind, rows: Row[]): Occurrence[] {
+  const out: Occurrence[] = [];
+  const closes = rows.map((r) => r.close);
+  const n = rows.length;
+  const push = (i: number, condition: string) =>
+    out.push({ index: i, date: fmtDate(rows[i].time), price: rows[i].close, condition });
+
+  const rsi = computeRsi(closes);
+
+  for (let i = 0; i < n; i += 1) {
+    const r = rows[i];
+    const prev = i > 0 ? rows[i - 1] : null;
+    switch (kind) {
+      case 'bullish':
+        if (isBull(r) && body(r) >= avgBody(rows, i) * 0.8)
+          push(i, `종가 ${r.close.toLocaleString()} > 시가 ${r.open.toLocaleString()} (상승 마감)`);
+        break;
+      case 'bearish':
+        if (isBear(r) && body(r) >= avgBody(rows, i) * 0.8)
+          push(i, `종가 ${r.close.toLocaleString()} < 시가 ${r.open.toLocaleString()} (하락 마감)`);
+        break;
+      case 'doji':
+        if (body(r) <= range(r) * 0.1)
+          push(i, `몸통이 고저폭의 10% 이하 (시가·종가 거의 동일)`);
+        break;
+      case 'hammer': {
+        const lower = Math.min(r.open, r.close) - r.low;
+        const upper = r.high - Math.max(r.open, r.close);
+        if (lower >= body(r) * 2 && upper <= body(r) && body(r) > 0)
+          push(i, `아래꼬리가 몸통의 2배 이상 (저가 반등)`);
+        break;
+      }
+      case 'invertedHammer': {
+        const lower = Math.min(r.open, r.close) - r.low;
+        const upper = r.high - Math.max(r.open, r.close);
+        if (upper >= body(r) * 2 && lower <= body(r) && body(r) > 0)
+          push(i, `위꼬리가 몸통의 2배 이상`);
+        break;
+      }
+      case 'longBullish':
+        if (isBull(r) && body(r) >= avgBody(rows, i) * 2 && avgBody(rows, i) > 0)
+          push(i, `몸통이 최근 평균의 2배 이상인 양봉`);
+        break;
+      case 'longBearish':
+        if (isBear(r) && body(r) >= avgBody(rows, i) * 2 && avgBody(rows, i) > 0)
+          push(i, `몸통이 최근 평균의 2배 이상인 음봉`);
+        break;
+      case 'bullishEngulfing':
+        if (
+          prev &&
+          isBear(prev) &&
+          isBull(r) &&
+          r.close >= prev.open &&
+          r.open <= prev.close
+        )
+          push(i, `양봉이 전일 음봉 몸통을 완전히 감쌈`);
+        break;
+      case 'bearishEngulfing':
+        if (
+          prev &&
+          isBull(prev) &&
+          isBear(r) &&
+          r.open >= prev.close &&
+          r.close <= prev.open
+        )
+          push(i, `음봉이 전일 양봉 몸통을 완전히 감쌈`);
+        break;
+      case 'morningStar':
+        if (i >= 2) {
+          const a = rows[i - 2];
+          const b = rows[i - 1];
+          if (
+            isBear(a) &&
+            body(a) >= avgBody(rows, i - 2) &&
+            body(b) <= range(b) * 0.4 &&
+            isBull(r) &&
+            r.close >= a.open - body(a) / 2 &&
+            r.close > (a.open + a.close) / 2
+          )
+            push(i, `음봉→작은 몸통→양봉 3봉 상승 반전`);
+        }
+        break;
+      case 'eveningStar':
+        if (i >= 2) {
+          const a = rows[i - 2];
+          const b = rows[i - 1];
+          if (
+            isBull(a) &&
+            body(a) >= avgBody(rows, i - 2) &&
+            body(b) <= range(b) * 0.4 &&
+            isBear(r) &&
+            r.close < (a.open + a.close) / 2
+          )
+            push(i, `양봉→작은 몸통→음봉 3봉 하락 반전`);
+        }
+        break;
+      case 'gap':
+        if (prev && (r.low > prev.high || r.high < prev.low)) {
+          const up = r.low > prev.high;
+          push(i, up ? `상승 갭 (당일 저가 > 전일 고가)` : `하락 갭 (당일 고가 < 전일 저가)`);
+        }
+        break;
+      case 'volume': {
+        const va = sma(rows.map((x) => x.volume), 20, i - 1);
+        if (va != null && va > 0 && r.volume >= va * 2.5)
+          push(i, `거래량이 20일 평균의 2.5배 이상 (${Math.round(r.volume / va * 10) / 10}배)`);
+        break;
+      }
+      case 'atrSpike': {
+        if (i >= 15) {
+          const trs: number[] = [];
+          for (let j = i - 13; j <= i; j += 1) {
+            const p = rows[j - 1];
+            trs.push(
+              Math.max(
+                rows[j].high - rows[j].low,
+                p ? Math.abs(rows[j].high - p.close) : 0,
+                p ? Math.abs(rows[j].low - p.close) : 0,
+              ),
+            );
+          }
+          const atr = trs.reduce((s, v) => s + v, 0) / trs.length;
+          const tr = Math.max(
+            r.high - r.low,
+            prev ? Math.abs(r.high - prev.close) : 0,
+            prev ? Math.abs(r.low - prev.close) : 0,
+          );
+          if (atr > 0 && tr >= atr * 2)
+            push(i, `당일 진폭이 14일 ATR의 2배 이상 (변동성 확대)`);
+        }
+        break;
+      }
+      case 'rsiOversold': {
+        const cur = rsi[i];
+        const before = rsi[i - 1];
+        if (cur != null && before != null && before < 30 && cur >= 30)
+          push(i, `RSI 과매도(30 미만) 이탈 회복 (${Math.round(cur)})`);
+        break;
+      }
+      case 'rsiOverbought': {
+        const cur = rsi[i];
+        const before = rsi[i - 1];
+        if (cur != null && before != null && before > 70 && cur <= 70)
+          push(i, `RSI 과열(70 초과) 이탈 (${Math.round(cur)})`);
+        break;
+      }
+      default:
+        break;
     }
   }
 
-  return [];
-}
-
-function formatPrice(value: number | null | undefined, currency: 'KRW' | 'USD') {
-  if (value == null || !Number.isFinite(value)) return '확인중';
-
-  if (currency === 'USD') {
-    return `$${value.toLocaleString(undefined, {
-      maximumFractionDigits: value >= 100 ? 2 : 4,
-    })}`;
+  // 이동평균 교차·돌파·지지·저항·MACD·볼린저·스토캐스틱·OBV 등 별도 처리
+  if (kind === 'goldenCross' || kind === 'deadCross') {
+    for (let i = 1; i < n; i += 1) {
+      const shortPrev = sma(closes, 5, i - 1);
+      const shortCur = sma(closes, 5, i);
+      const longPrev = sma(closes, 20, i - 1);
+      const longCur = sma(closes, 20, i);
+      if (shortPrev == null || shortCur == null || longPrev == null || longCur == null) continue;
+      if (kind === 'goldenCross' && shortPrev <= longPrev && shortCur > longCur)
+        push(i, `5일선이 20일선을 상향 돌파 (골든크로스)`);
+      if (kind === 'deadCross' && shortPrev >= longPrev && shortCur < longCur)
+        push(i, `5일선이 20일선을 하향 이탈 (데드크로스)`);
+    }
   }
 
-  return `${Math.round(value).toLocaleString()}원`;
+  if (kind === 'macdCross') {
+    const macdLine = ema(closes, 12).map((v, i) => {
+      const slow = ema(closes, 26)[i];
+      return v != null && slow != null ? v - slow : null;
+    });
+    const validMacd = macdLine.map((v) => (v == null ? 0 : v));
+    const signal = ema(validMacd, 9);
+    for (let i = 1; i < n; i += 1) {
+      const mp = macdLine[i - 1];
+      const mc = macdLine[i];
+      const sp = signal[i - 1];
+      const sc = signal[i];
+      if (mp == null || mc == null || sp == null || sc == null) continue;
+      if (mp <= sp && mc > sc) push(i, `MACD선이 시그널선 상향 돌파 (골든크로스)`);
+    }
+  }
+
+  if (kind === 'bollingerBreak') {
+    for (let i = 20; i < n; i += 1) {
+      const mid = sma(closes, 20, i);
+      if (mid == null) continue;
+      let variance = 0;
+      for (let j = i - 19; j <= i; j += 1) variance += (closes[j] - mid) ** 2;
+      const sd = Math.sqrt(variance / 20);
+      const upper = mid + sd * 2;
+      const prevClose = closes[i - 1];
+      if (prevClose <= upper && closes[i] > upper)
+        push(i, `종가가 볼린저 상단 밴드를 상향 돌파`);
+    }
+  }
+
+  if (kind === 'stochOversold') {
+    for (let i = 14; i < n; i += 1) {
+      const window = rows.slice(i - 13, i + 1);
+      const hi = Math.max(...window.map((x) => x.high));
+      const lo = Math.min(...window.map((x) => x.low));
+      const kCur = hi === lo ? 50 : ((rows[i].close - lo) / (hi - lo)) * 100;
+      const prevWindow = rows.slice(i - 14, i);
+      const hiP = Math.max(...prevWindow.map((x) => x.high));
+      const loP = Math.min(...prevWindow.map((x) => x.low));
+      const kPrev = hiP === loP ? 50 : ((rows[i - 1].close - loP) / (hiP - loP)) * 100;
+      if (kPrev < 20 && kCur >= 20)
+        push(i, `스토캐스틱 %K 과매도(20 미만) 회복 (${Math.round(kCur)})`);
+    }
+  }
+
+  if (kind === 'obvUp') {
+    const obv: number[] = [0];
+    for (let i = 1; i < n; i += 1) {
+      const delta = closes[i] > closes[i - 1] ? rows[i].volume : closes[i] < closes[i - 1] ? -rows[i].volume : 0;
+      obv.push(obv[i - 1] + delta);
+    }
+    for (let i = 10; i < n; i += 1) {
+      const priceDown = closes[i] <= closes[i - 10];
+      const obvUp = obv[i] > obv[i - 10];
+      if (priceDown && obvUp)
+        push(i, `주가 횡보·하락 중 OBV 상승 (매집 다이버전스)`);
+    }
+  }
+
+  if (kind === 'support' || kind === 'resistance' || kind === 'breakout' || kind === 'box' || kind === 'trendUp') {
+    // 최근 스윙 고점·저점 기준 판정
+    const lookback = 10;
+    for (let i = lookback + 1; i < n; i += 1) {
+      const past = rows.slice(Math.max(0, i - 60), i);
+      if (past.length < lookback) continue;
+      const swingLow = Math.min(...past.map((x) => x.low));
+      const swingHigh = Math.max(...past.map((x) => x.high));
+      const r = rows[i];
+      const prevR = rows[i - 1];
+      const tolLow = swingLow * 0.02;
+      if (kind === 'support' && Math.abs(r.low - swingLow) <= tolLow && isBull(r))
+        push(i, `최근 저점(${Math.round(swingLow).toLocaleString()}) 부근 반등`);
+      if (kind === 'resistance' && prevR.close <= swingHigh && r.close > swingHigh)
+        push(i, `최근 고점(${Math.round(swingHigh).toLocaleString()}) 저항 돌파`);
+      if (kind === 'breakout' && prevR.close <= swingHigh && r.close > swingHigh && body(r) >= avgBody(rows, i))
+        push(i, `저항선 종가 돌파 (강한 양봉)`);
+      if (kind === 'trendUp' && i >= 20) {
+        const maNow = sma(closes, 20, i);
+        const maPast = sma(closes, 20, i - 5);
+        if (maNow != null && maPast != null && maNow > maPast && r.close > maNow && prevR.close <= (sma(closes, 20, i - 1) ?? Infinity))
+          push(i, `상승 추세선(20일선) 지지 후 반등`);
+      }
+    }
+    if (kind === 'box') {
+      // 60봉 창에서 고저폭이 좁게 유지되는 마지막 구간 1건만 표기
+      for (let i = n - 1; i >= 40; i -= 1) {
+        const w = rows.slice(i - 39, i + 1);
+        const hi = Math.max(...w.map((x) => x.high));
+        const lo = Math.min(...w.map((x) => x.low));
+        if (lo > 0 && (hi - lo) / lo <= 0.12) {
+          push(i, `최근 40봉이 약 ${Math.round(((hi - lo) / lo) * 100)}% 범위에서 횡보 (박스권)`);
+          break;
+        }
+      }
+    }
+  }
+
+  // 최신 순 정렬, 중복 인덱스 제거
+  const seen = new Set<number>();
+  return out
+    .filter((o) => {
+      if (seen.has(o.index)) return false;
+      seen.add(o.index);
+      return true;
+    })
+    .sort((a, b) => b.index - a.index);
 }
 
-function formatPercent(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return '0.00%';
-
-  return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
-}
-
+// ── 페이지 컴포넌트 ────────────────────────────────────
 export default function LearnPage() {
   const [, navigate] = useLocation();
-  const listRef = useRef<HTMLElement | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(() => {
-    const id = topicFromUrl();
+  // 페이지 진입 시 모든 카드 접힘 상태로 시작 (openIds 비움)
+  const [openIds, setOpenIds] = useState<Set<string>>(() => new Set());
 
-    return TOPICS.some((topic) => topic.id === id) ? id : null;
-  });
-
-  const selected = useMemo(
-    () => TOPICS.find((topic) => topic.id === selectedId) ?? null,
-    [selectedId],
-  );
-
-  const related = useQuery({
-    queryKey: ['learn-related-stocks', selected?.id],
-    queryFn: () => fetchRelatedStocks(selected?.indicators ?? []),
-    enabled: Boolean(selected),
-    staleTime: 0,
-    gcTime: 5 * 60_000,
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: true,
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
-  });
-
-  const restoreListScroll = useCallback(() => {
-    const top = readScroll();
-
-    window.setTimeout(() => {
-      if (listRef.current) {
-        listRef.current.scrollTop = top;
-      }
-    }, 50);
-  }, []);
-
-  useEffect(() => {
-    const onPopState = () => {
-      const id = topicFromUrl();
-      const valid = TOPICS.some((topic) => topic.id === id);
-
-      setSelectedId(valid ? id : null);
-
-      if (!valid) {
-        restoreListScroll();
-      }
-    };
-
-    window.addEventListener('popstate', onPopState);
-
-    return () => window.removeEventListener('popstate', onPopState);
-  }, [restoreListScroll]);
-
-  useEffect(() => {
-    if (!selectedId) {
-      restoreListScroll();
-    }
-  }, [selectedId, restoreListScroll]);
-
-  const openTopic = (topic: StudyTopic) => {
-    saveScroll(listRef.current?.scrollTop ?? 0);
-
-    const base = currentBasePath();
-    const nextUrl = `${base}?topic=${encodeURIComponent(topic.id)}`;
-
-    window.history.pushState(
-      {
-        fromLearnList: true,
-        learnTopic: topic.id,
-      },
-      '',
-      nextUrl,
-    );
-
-    setSelectedId(topic.id);
+  const toggle = (id: string) => {
+    setOpenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
-
-  const closeTopic = () => {
-    const state = window.history.state as
-      | {
-          fromLearnList?: boolean;
-        }
-      | null
-      | undefined;
-
-    if (state?.fromLearnList) {
-      window.history.back();
-      return;
-    }
-
-    const base = currentBasePath();
-
-    window.history.replaceState({}, '', base);
-    setSelectedId(null);
-    restoreListScroll();
-  };
-
-  if (selected) {
-    return (
-      <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background">
-        <header className="relative z-20 border-b border-card-border bg-background/95 px-4 pb-4 pt-5 glass">
-          <div className="grid grid-cols-[56px_minmax(0,1fr)] items-center gap-3">
-            <button
-              type="button"
-              onClick={closeTopic}
-              className="flex h-12 w-12 items-center justify-center rounded-full border border-card-border bg-card text-muted-foreground"
-            >
-              <ArrowLeft className="h-6 w-6" />
-            </button>
-
-            <div className="min-w-0">
-              <h1 className="truncate text-2xl font-extrabold">
-                {selected.title}
-              </h1>
-
-              <p className="mt-1 text-sm font-bold text-muted-foreground">
-                {selected.group}
-              </p>
-            </div>
-          </div>
-        </header>
-
-        <main className="flex-none px-4 pb-24 pt-4">
-          <div className="space-y-4">
-            <StudyCard title="실제 차트로 확인" defaultOpen>
-              <LearningLiveChart topic={selected} />
-            </StudyCard>
-
-            <StudyCard title="쉬운 설명" defaultOpen>
-              <p className="break-keep text-base font-semibold leading-loose text-foreground">
-                {selected.easy}
-              </p>
-            </StudyCard>
-
-            <StudyCard title="언제 쓰나요">
-              <p className="break-keep text-base font-semibold leading-loose text-foreground">
-                {selected.when}
-              </p>
-            </StudyCard>
-
-            <StudyCard title="실전 예시">
-              <p className="break-keep text-base font-semibold leading-loose text-foreground">
-                {selected.example}
-              </p>
-            </StudyCard>
-
-            <StudyCard title="잘못 쓰면 위험한 점">
-              <div className="flex gap-3">
-                <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-destructive" />
-
-                <p className="break-keep text-base font-semibold leading-loose text-destructive">
-                  {selected.danger}
-                </p>
-              </div>
-            </StudyCard>
-
-            <StudyCard title="조건에 맞는 관련 종목" defaultOpen>
-              <p className="break-keep text-sm font-semibold leading-relaxed text-muted-foreground">
-                아래 종목은 “{selected.conditionTitle}” 조건에 맞는 후보입니다.
-                단독 매수 신호가 아니라 공부용 예시로 확인하세요.
-              </p>
-
-              <div className="mt-3 flex flex-wrap gap-2">
-                {selected.indicators.map((indicator) => (
-                  <span
-                    key={indicator}
-                    className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-extrabold text-primary"
-                  >
-                    {indicator}
-                  </span>
-                ))}
-              </div>
-
-              {related.isLoading && (
-                <div className="mt-4 rounded-2xl bg-secondary/70 p-4 text-center">
-                  <p className="text-sm font-bold text-muted-foreground">
-                    관련 종목을 불러오는 중...
-                  </p>
-                </div>
-              )}
-
-              {!related.isLoading && (related.data ?? []).length === 0 && (
-                <div className="mt-4 rounded-2xl bg-secondary/70 p-4 text-center">
-                  <p className="break-keep text-sm font-bold leading-relaxed text-muted-foreground">
-                    현재 조건에 맞는 관련 종목이 없습니다.
-                  </p>
-                </div>
-              )}
-
-              <div className="mt-4 grid grid-cols-1 gap-2">
-                {(related.data ?? []).map((stock) => (
-                  <button
-                    key={`${stock.market}:${stock.ticker}`}
-                    type="button"
-                    onClick={() => {
-                      const back = `${currentBasePath()}?topic=${selected.id}`;
-
-                      const tab =
-                        selected.group === '재무제표' ||
-                        selected.group === '가치 지표'
-                          ? 'financials'
-                          : 'chart';
-
-                      navigate(
-                        `/stock/${stock.ticker}?tab=${tab}&study=${encodeURIComponent(
-                          selected.id,
-                        )}&back=${encodeURIComponent(back)}`,
-                      );
-                    }}
-                    className="rounded-2xl border border-card-border bg-background/80 p-3 text-left transition active:scale-[0.99]"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-extrabold">
-                          {stock.name}
-                        </p>
-
-                        <p className="mt-1 text-xs font-bold text-muted-foreground">
-                          {stock.market === 'US'
-                            ? `티커 ${stock.ticker}`
-                            : stock.ticker}
-                        </p>
-                      </div>
-
-                      <div className="shrink-0 text-right">
-                        <p className="text-sm font-extrabold">
-                          {formatPrice(stock.price, stock.currency)}
-                        </p>
-
-                        <p
-                          className={cn(
-                            'mt-1 text-xs font-extrabold',
-                            (stock.changePercent ?? 0) >= 0
-                              ? 'text-positive'
-                              : 'text-destructive',
-                          )}
-                        >
-                          {formatPercent(stock.changePercent)}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {(stock.matched ?? []).slice(0, 4).map((item) => (
-                        <span
-                          key={item}
-                          className="rounded-full bg-secondary px-2 py-1 text-[11px] font-bold text-muted-foreground"
-                        >
-                          {item}
-                        </span>
-                      ))}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </StudyCard>
-          </div>
-        </main>
-
-        <BottomNav />
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background">
       <header className="relative z-20 border-b border-card-border bg-background/95 px-4 pb-4 pt-5 text-center glass">
         <h1 className="text-2xl font-extrabold">공부</h1>
 
-        <p className="mt-2 break-keep text-sm font-semibold leading-relaxed text-muted-foreground">
-          차트 지표와 가치 지표를 쉬운 설명과 실제 종목으로 배웁니다.
+        <p className="mx-auto mt-2 max-w-md break-keep text-center text-sm font-semibold leading-relaxed text-muted-foreground">
+          캔들·차트 기초·보조지표를 쉬운 설명과 실제 차트로 배웁니다.
         </p>
 
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <button type="button" onClick={() => navigate('/stock-info')} className="rounded-xl border border-card-border bg-card px-3 py-2 text-sm font-black text-muted-foreground">정보</button>
-          <button type="button" className="rounded-xl border border-primary bg-primary px-3 py-2 text-sm font-black text-primary-foreground">공부</button>
+          <button
+            type="button"
+            onClick={() => navigate('/stock-info')}
+            className="rounded-xl border border-card-border bg-card px-3 py-2 text-center text-sm font-black text-muted-foreground"
+          >
+            정보
+          </button>
+          <button
+            type="button"
+            className="rounded-xl border border-primary bg-primary px-3 py-2 text-center text-sm font-black text-primary-foreground"
+          >
+            공부
+          </button>
         </div>
       </header>
 
-      <main
-        ref={listRef}
-        onScroll={(event) => {
-          saveScroll(event.currentTarget.scrollTop);
-        }}
-        className="flex-none px-4 pb-24 pt-4"
-      >
+      <main className="flex-none px-4 pb-28 pt-4">
+        <div className="mb-4 flex items-start gap-2 rounded-2xl border border-card-border bg-secondary/60 px-4 py-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <p className="break-keep text-center text-xs font-bold leading-relaxed text-muted-foreground">
+            {NOTICE}
+          </p>
+        </div>
+
         <div className="space-y-6">
           {GROUPS.map((group) => {
-            const topics = TOPICS.filter((topic) => topic.group === group);
-
+            const topics = TOPICS.filter((t) => t.group === group);
             return (
               <section key={group}>
-                <h2 className="mb-3 text-lg font-extrabold text-muted-foreground">
+                <h2 className="mb-3 text-center text-lg font-extrabold text-muted-foreground">
                   {group}
                 </h2>
-
                 <div className="space-y-3">
                   {topics.map((topic) => (
-                    <StudyTopicButton
+                    <TopicCard
                       key={topic.id}
                       topic={topic}
-                      onClick={() => openTopic(topic)}
+                      open={openIds.has(topic.id)}
+                      onToggle={() => toggle(topic.id)}
                     />
                   ))}
                 </div>
@@ -948,139 +959,166 @@ export default function LearnPage() {
   );
 }
 
-function StudyTopicButton({
+function TopicCard({
   topic,
-  onClick,
+  open,
+  onToggle,
 }: {
   topic: StudyTopic;
-  onClick: () => void;
+  open: boolean;
+  onToggle: () => void;
 }) {
-  const Icon = iconForGroup(topic.group);
-
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="grid w-full grid-cols-[72px_minmax(0,1fr)_24px] items-center gap-3 rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm transition active:scale-[0.99]"
-    >
-      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-        <Icon className="h-7 w-7" />
-      </div>
+    <section className="rounded-3xl border border-card-border bg-card shadow-sm">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 p-4 text-center"
+      >
+        <span className="flex-1 text-center">
+          <span className="block text-base font-black">{topic.title}</span>
+          {!open && (
+            <span className="mt-1 block break-keep text-xs font-semibold text-muted-foreground">
+              {topic.short}
+            </span>
+          )}
+        </span>
+        <ChevronDown
+          className={cn(
+            'h-5 w-5 shrink-0 text-muted-foreground transition-transform',
+            open && 'rotate-180',
+          )}
+        />
+      </button>
 
-      <div className="min-w-0">
-        <p className="text-lg font-extrabold">{topic.title}</p>
+      {open && (
+        <div className="border-t border-card-border px-4 pb-4 pt-4">
+          <div className="space-y-4">
+            <Section title="개념 설명">{topic.concept}</Section>
+            <Section title="발생 조건">{topic.condition}</Section>
+            <Section title="일반적인 해석">{topic.interpretation}</Section>
+            <Section title="매수 신호로 볼 수 있는 경우" tone="positive">
+              {topic.buySignal}
+            </Section>
+            <Section title="매도 또는 위험 신호" tone="danger">
+              {topic.sellSignal}
+            </Section>
+            <Section title="잘못 해석하기 쉬운 점" tone="warn">
+              {topic.mistake}
+            </Section>
+            <Section title="함께 확인하면 좋은 다른 지표">{topic.related}</Section>
 
-        <p className="mt-1 break-keep text-sm font-semibold leading-relaxed text-muted-foreground">
-          {topic.short}
-        </p>
-      </div>
-
-      <ChevronRight className="h-5 w-5 text-muted-foreground" />
-    </button>
+            <RealExample topic={topic} />
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
-function StudyCard({
+function Section({
   title,
   children,
-  defaultOpen = false,
+  tone = 'normal',
 }: {
   title: string;
   children: ReactNode;
-  defaultOpen?: boolean;
+  tone?: 'normal' | 'positive' | 'danger' | 'warn';
 }) {
+  const textClass =
+    tone === 'positive'
+      ? 'text-positive'
+      : tone === 'danger'
+        ? 'text-destructive'
+        : tone === 'warn'
+          ? 'text-foreground'
+          : 'text-foreground';
   return (
-    <details
-      className="group rounded-3xl border border-card-border bg-card shadow-sm"
-      open={defaultOpen}
-    >
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-lg font-extrabold [&::-webkit-details-marker]:hidden">
-        <span>{title}</span>
-        <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
-      </summary>
-      <div className="border-t border-card-border px-5 pb-5 pt-4">{children}</div>
-    </details>
+    <div className="rounded-2xl bg-secondary/40 p-3 text-center">
+      <p className="mb-1.5 text-center text-sm font-extrabold text-primary">{title}</p>
+      <p
+        className={cn(
+          'break-keep text-center text-sm font-semibold leading-relaxed',
+          textClass,
+        )}
+      >
+        {children}
+      </p>
+    </div>
   );
 }
 
-function LearningLiveChart({ topic }: { topic: StudyTopic }) {
-  const preferredTicker =
-    topic.group === '재무제표' || topic.group === '가치 지표' ? '005930' : '000660';
-  const [ticker, setTicker] = useState(preferredTicker);
-  const sampleStocks = [
-    { ticker: '005930', name: '삼성전자' },
-    { ticker: '000660', name: 'SK하이닉스' },
-    { ticker: 'AAPL', name: 'Apple' },
-    { ticker: 'NVDA', name: 'NVIDIA' },
-  ];
+// ── 실제 차트 예시 ──────────────────────────────────────
+function RealExample({ topic }: { topic: StudyTopic }) {
+  const [loaded, setLoaded] = useState(false);
+
+  return (
+    <div className="rounded-2xl border border-card-border bg-background/70 p-3 text-center">
+      <p className="mb-2 text-center text-sm font-extrabold text-primary">실제 차트 예시</p>
+      {!loaded ? (
+        <button
+          type="button"
+          onClick={() => setLoaded(true)}
+          className="mx-auto rounded-full bg-primary px-4 py-2 text-center text-sm font-black text-primary-foreground transition active:scale-[0.98]"
+        >
+          실제 차트 예시 보기
+        </button>
+      ) : (
+        <RealExampleChart topic={topic} />
+      )}
+    </div>
+  );
+}
+
+function RealExampleChart({ topic }: { topic: StudyTopic }) {
   const chart = useQuery({
-    queryKey: ['learn-live-chart', topic.id, ticker],
-    queryFn: () => fetchLearningCandles(ticker),
-    staleTime: 0,
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: true,
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
+    queryKey: ['learn-example-chart', topic.detect, DEFAULT_TICKER],
+    queryFn: () => api.chart(DEFAULT_TICKER, '1D'),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
-  const candles = chart.data ?? [];
-  const drawing = useMemo(() => buildLearningChart(candles), [candles]);
+
+  const rows = useMemo(() => (chart.data ? toRows(chart.data.candles) : []), [chart.data]);
+  const occurrences = useMemo(
+    () => (rows.length ? detectOccurrences(topic.detect, rows) : []),
+    [rows, topic.detect],
+  );
+  const drawing = useMemo(() => buildChart(rows, occurrences), [rows, occurrences]);
+
+  if (chart.isLoading) {
+    return (
+      <div className="flex h-40 items-center justify-center rounded-2xl bg-secondary/60 text-center text-sm font-bold text-muted-foreground">
+        실제 일봉 차트를 불러오는 중...
+      </div>
+    );
+  }
+
+  if (chart.isError || rows.length < 5) {
+    return (
+      <div className="flex h-40 items-center justify-center rounded-2xl bg-secondary/60 px-4 text-center text-sm font-bold leading-relaxed text-muted-foreground">
+        차트 데이터를 제공받지 못했습니다. 데이터 부족으로 예시를 표시할 수 없습니다.
+      </div>
+    );
+  }
 
   return (
     <div>
-      <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
-        {sampleStocks.map((stock) => (
-          <button
-            key={stock.ticker}
-            type="button"
-            onClick={() => setTicker(stock.ticker)}
-            className={cn(
-              'shrink-0 rounded-full px-3 py-2 text-xs font-extrabold',
-              ticker === stock.ticker
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-secondary text-muted-foreground',
-            )}
-          >
-            {stock.name}
-          </button>
-        ))}
-      </div>
-
-      {chart.isLoading && (
-        <div className="flex h-56 items-center justify-center rounded-2xl bg-secondary/60 text-sm font-bold text-muted-foreground">
-          최신 일봉 차트를 불러오는 중...
-        </div>
-      )}
-
-      {!chart.isLoading && !drawing && (
-        <div className="flex h-56 items-center justify-center rounded-2xl bg-secondary/60 px-5 text-center text-sm font-bold leading-relaxed text-muted-foreground">
-          현재 차트 제공처 응답을 확인 중입니다. 잠시 뒤 자동으로 다시 불러옵니다.
-        </div>
-      )}
+      <p className="mb-2 text-center text-xs font-bold text-muted-foreground">
+        {DEFAULT_TICKER_NAME} ({DEFAULT_TICKER}) 일봉 · 최근 {rows.length}봉 기준
+      </p>
 
       {drawing && (
         <div className="overflow-hidden rounded-2xl border border-card-border bg-background/70 p-2">
-          <svg
-            viewBox="0 0 640 320"
-            role="img"
-            aria-label={`${ticker} 실제 일봉 차트`}
-            className="h-auto w-full"
-          >
-            {[50, 100, 150, 200].map((y) => (
-              <line
-                key={y}
-                x1="14"
-                x2="626"
-                y1={y}
-                y2={y}
-                stroke="hsl(var(--card-border))"
-                strokeWidth="1"
-              />
+          <svg viewBox="0 0 640 260" role="img" aria-label={`${topic.title} 실제 차트 예시`} className="h-auto w-full">
+            {[40, 80, 120, 160].map((y) => (
+              <line key={y} x1="14" x2="626" y1={y} y2={y} stroke="hsl(var(--card-border))" strokeWidth="1" />
             ))}
             <polyline
-              points={drawing.averagePoints}
+              points={drawing.maPoints}
               fill="none"
               stroke="hsl(var(--primary))"
-              strokeWidth="2"
+              strokeWidth="1.5"
               strokeLinejoin="round"
             />
             {drawing.candles.map((item) => (
@@ -1091,185 +1129,133 @@ function LearningLiveChart({ topic }: { topic: StudyTopic }) {
                   y1={item.highY}
                   y2={item.lowY}
                   stroke={item.up ? 'hsl(var(--positive))' : 'hsl(var(--destructive))'}
-                  strokeWidth="1.5"
+                  strokeWidth="1.2"
                 />
                 <rect
                   x={item.x - item.width / 2}
                   y={item.bodyY}
                   width={item.width}
-                  height={Math.max(item.bodyHeight, 1.5)}
+                  height={Math.max(item.bodyHeight, 1.2)}
                   rx="1"
                   fill={item.up ? 'hsl(var(--positive))' : 'hsl(var(--destructive))'}
                 />
               </g>
             ))}
-            <line
-              x1="14"
-              x2="626"
-              y1={drawing.supportY}
-              y2={drawing.supportY}
-              stroke="hsl(var(--positive))"
-              strokeWidth="2"
-              strokeDasharray="7 4"
-            />
-            <line
-              x1="14"
-              x2="626"
-              y1={drawing.resistanceY}
-              y2={drawing.resistanceY}
-              stroke="hsl(var(--destructive))"
-              strokeWidth="2"
-              strokeDasharray="7 4"
-            />
+            {drawing.markers.map((m) => (
+              <g key={`mark:${m.index}`}>
+                <line x1={m.x} x2={m.x} y1="16" y2="196" stroke="hsl(var(--primary) / 0.35)" strokeWidth="1" strokeDasharray="3 3" />
+                <circle cx={m.x} cy={m.y} r="4.5" fill="hsl(var(--primary))" stroke="hsl(var(--background))" strokeWidth="1.5" />
+              </g>
+            ))}
             {drawing.volumeBars.map((item) => (
               <rect
-                key={`volume:${item.key}`}
+                key={`v:${item.key}`}
                 x={item.x - item.width / 2}
                 y={item.y}
                 width={item.width}
                 height={item.height}
                 rx="1"
-                fill={item.up ? 'hsl(var(--positive) / 0.5)' : 'hsl(var(--destructive) / 0.5)'}
+                fill={item.up ? 'hsl(var(--positive) / 0.45)' : 'hsl(var(--destructive) / 0.45)'}
               />
             ))}
-            {drawing.signals.map((item) => (
-              <g key={item.key}>
-                <circle
-                  cx={item.x}
-                  cy={item.y}
-                  r="4"
-                  fill={item.up ? 'hsl(var(--positive))' : 'hsl(var(--destructive))'}
-                  stroke="hsl(var(--background))"
-                  strokeWidth="1.5"
-                />
-              </g>
-            ))}
-            <line
-              x1={drawing.focusX}
-              x2={drawing.focusX}
-              y1="16"
-              y2="304"
-              stroke="hsl(var(--primary))"
-              strokeWidth="2"
-              strokeDasharray="5 4"
-            />
-            <text
-              x={Math.max(18, drawing.focusX - 82)}
-              y="24"
-              fill="hsl(var(--primary))"
-              fontSize="12"
-              fontWeight="800"
-            >
-              현재 확인 구간
-            </text>
           </svg>
         </div>
       )}
 
-      <div className="mt-3 rounded-2xl bg-primary/10 p-4">
-        <p className="text-sm font-extrabold text-primary">차트에서 볼 부분</p>
-        <p className="mt-2 break-keep text-sm font-semibold leading-relaxed text-foreground">
-          파란선은 5일 평균선이며 점선은 최신 구간입니다. “{topic.title}”은 이 구간의
-          캔들, 평균선 방향, 거래량을 함께 비교해 판단합니다. 초록 점선은 지지선,
-          빨간 점선은 저항선이며 신호가 겹친 위치도 원으로 모두 표시합니다.
-        </p>
-      </div>
+      {occurrences.length === 0 ? (
+        <div className="mt-3 rounded-2xl bg-secondary/60 px-4 py-4 text-center">
+          <p className="break-keep text-center text-sm font-bold leading-relaxed text-muted-foreground">
+            최근 조회 범위에서 사례 없음
+          </p>
+        </div>
+      ) : (
+        <div className="mt-3">
+          <p className="mb-2 text-center text-sm font-extrabold text-primary">
+            최근 발생 사례 {occurrences.length}건
+          </p>
+          <div className="space-y-2">
+            {occurrences.slice(0, 6).map((o) => (
+              <div
+                key={o.index}
+                className="rounded-2xl border border-card-border bg-background/80 p-3 text-center"
+              >
+                <div className="flex items-center justify-center gap-3">
+                  <span className="text-sm font-extrabold">{o.date}</span>
+                  <span className="text-sm font-extrabold text-primary">
+                    {o.price.toLocaleString()}원
+                  </span>
+                </div>
+                <p className="mt-1 break-keep text-center text-xs font-semibold leading-relaxed text-muted-foreground">
+                  {o.condition}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function buildLearningChart(candles: LearningCandle[]) {
-  if (candles.length < 5) return null;
+function buildChart(rows: Row[], occurrences: Occurrence[]) {
+  if (rows.length < 5) return null;
   const width = 612;
   const left = 14;
-  const top = 34;
-  const height = 184;
-  const lows = candles.map((row) => row.low);
-  const highs = candles.map((row) => row.high);
+  const top = 20;
+  const height = 160;
+  const lows = rows.map((r) => r.low);
+  const highs = rows.map((r) => r.high);
   const min = Math.min(...lows);
   const max = Math.max(...highs);
-  const range = Math.max(max - min, Math.abs(max) * 0.01, 1);
-  const step = width / candles.length;
-  const yOf = (price: number) => top + ((max - price) / range) * height;
-  const chartCandles = candles.map((row, index) => {
-    const x = left + step * index + step / 2;
-    const openY = yOf(row.open);
-    const closeY = yOf(row.close);
+  const priceRange = Math.max(max - min, Math.abs(max) * 0.01, 1);
+  const step = width / rows.length;
+  const yOf = (price: number) => top + ((max - price) / priceRange) * height;
+
+  const candles = rows.map((r, i) => {
+    const x = left + step * i + step / 2;
+    const openY = yOf(r.open);
+    const closeY = yOf(r.close);
     return {
-      key: `${row.time}:${index}`,
+      key: `${r.time}:${i}`,
       x,
-      highY: yOf(row.high),
-      lowY: yOf(row.low),
+      highY: yOf(r.high),
+      lowY: yOf(r.low),
       bodyY: Math.min(openY, closeY),
       bodyHeight: Math.abs(openY - closeY),
-      width: Math.max(2.5, Math.min(8, step * 0.62)),
-      up: row.close >= row.open,
+      width: Math.max(1.6, Math.min(7, step * 0.6)),
+      up: r.close >= r.open,
     };
   });
-  const averages = candles.map((_, index) => {
-    const from = Math.max(0, index - 4);
-    const rows = candles.slice(from, index + 1);
-    return rows.reduce((sum, row) => sum + row.close, 0) / rows.length;
-  });
-  const averagePoints = averages
-    .map((value, index) => `${left + step * index + step / 2},${yOf(value)}`)
+
+  const maPoints = rows
+    .map((_, i) => {
+      const from = Math.max(0, i - 19);
+      const slice = rows.slice(from, i + 1);
+      const avg = slice.reduce((s, r) => s + r.close, 0) / slice.length;
+      return `${left + step * i + step / 2},${yOf(avg)}`;
+    })
     .join(' ');
-  const maxVolume = Math.max(...candles.map((row) => row.volume), 1);
-  const volumeTop = 242;
-  const volumeHeight = 56;
-  const volumeBars = candles.map((row, index) => {
-    const barHeight = Math.max(1, (row.volume / maxVolume) * volumeHeight);
+
+  const maxVolume = Math.max(...rows.map((r) => r.volume), 1);
+  const volumeTop = 200;
+  const volumeHeight = 48;
+  const volumeBars = rows.map((r, i) => {
+    const barHeight = Math.max(1, (r.volume / maxVolume) * volumeHeight);
     return {
-      key: `${row.time}:${index}`,
-      x: left + step * index + step / 2,
+      key: `${r.time}:${i}`,
+      x: left + step * i + step / 2,
       y: volumeTop + volumeHeight - barHeight,
       height: barHeight,
-      width: Math.max(1, Math.min(8, step * 0.62)),
-      up: row.close >= row.open,
+      width: Math.max(1, Math.min(7, step * 0.6)),
+      up: r.close >= r.open,
     };
   });
-  const average20 = candles.map((_, index) => {
-    if (index < 19) return null;
-    const rows = candles.slice(index - 19, index + 1);
-    return rows.reduce((sum, row) => sum + row.close, 0) / rows.length;
-  });
-  const signals = candles.flatMap((row, index) => {
-    if (index < 20 || average20[index - 1] == null || average20[index] == null) return [];
-    const previousShort = averages[index - 1];
-    const currentShort = averages[index];
-    const previousLong = average20[index - 1]!;
-    const currentLong = average20[index]!;
-    const up = previousShort <= previousLong && currentShort > currentLong;
-    const down = previousShort >= previousLong && currentShort < currentLong;
-    if (!up && !down) return [];
-    return [{
-      key: `signal:${row.time}:${index}`,
-      x: left + step * index + step / 2,
-      y: yOf(up ? row.low : row.high),
-      up,
-    }];
-  });
-  const levelWindow = candles.slice(-Math.min(120, candles.length));
-  const support = Math.min(...levelWindow.map((row) => row.low));
-  const resistance = Math.max(...levelWindow.map((row) => row.high));
-  return {
-    candles: chartCandles,
-    averagePoints,
-    focusX: left + step * (candles.length - 1) + step / 2,
-    supportY: yOf(support),
-    resistanceY: yOf(resistance),
-    volumeBars,
-    signals,
-  };
-}
 
-function iconForGroup(group: StudyGroup) {
-  if (group === '캔들·추세') return LineChart;
-  if (group === '차트 지표') return GraduationCap;
-  if (group === '매매 신호') return TrendingUp;
-  if (group === '재무제표') return BookOpen;
-  if (group === '가치 지표') return BarChart3;
-  if (group === '리스크 관리') return ShieldAlert;
+  const markers = occurrences.slice(0, 12).map((o) => ({
+    index: o.index,
+    x: left + step * o.index + step / 2,
+    y: yOf(rows[o.index].close),
+  }));
 
-  return BookOpen;
+  return { candles, maPoints, volumeBars, markers };
 }

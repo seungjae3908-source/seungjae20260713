@@ -108,7 +108,7 @@ export default function RecommendationsPage() {
         </div>
         <div className="mb-3 grid grid-cols-2 gap-2">
           <button type="button" onClick={() => setCategory('undervalued')} className={cn('flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-sm font-extrabold', category === 'undervalued' ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>
-            <ShieldAlert className="h-4 w-4" /> 저평가 후보
+            <ShieldAlert className="h-4 w-4" /> 저평가 회복
           </button>
           <button type="button" onClick={() => setCategory('breakout')} className={cn('flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-sm font-extrabold', category === 'breakout' ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>
             <TrendingUp className="h-4 w-4" /> 초기 추세돌파

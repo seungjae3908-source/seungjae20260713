@@ -1,13 +1,13 @@
 import { useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
-import { Filter, Layers3, Search, Star, TrendingUp } from 'lucide-react';
+import { Filter, Layers3, Search, SlidersHorizontal, Star } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { AssetSwitch } from '@/components/asset-switch';
 import { ErrorState, LoadingState } from '@/components/data-state';
-import { api, apiGet, type UndervaluedCard } from '@/lib/api';
+import { api, apiGet, type ScanCard } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
-import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
+import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice, isInWatchlist, toggleWatchlistItem } from '@/lib/stock-display';
 import { cn } from '@/lib/utils';
 
 type AnyObj = Record<string, any>;
@@ -23,12 +23,6 @@ export default function StocksPage() {
     queryFn: () => api.searchRows(trimmed),
     enabled: mode.asset === 'stock',
     staleTime: 30_000,
-  });
-  const undervalued = useQuery({
-    queryKey: ['stocks-undervalued-recovery', mode.stockMarket],
-    queryFn: () => api.undervalued(mode.stockMarket === 'KR' ? 'KRX' : 'NASDAQ'),
-    enabled: mode.asset === 'stock',
-    staleTime: 60_000,
   });
   const spotMarkets = useQuery({
     queryKey: ['stocks-crypto-spot-markets'],
@@ -93,38 +87,15 @@ export default function StocksPage() {
           />
         </label>
         {mode.asset === 'stock' && (
-          <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="mt-3 grid grid-cols-2 gap-2">
             <QuickButton icon={Filter} label="조건검색" onClick={() => navigate('/scanner')} />
             <QuickButton icon={Layers3} label="테마종목" onClick={() => navigate(`/themes?market=${mode.stockMarket}`)} />
-            <QuickButton icon={TrendingUp} label="상세검색" onClick={() => navigate(`/search?market=${mode.stockMarket}`)} />
           </div>
         )}
       </header>
 
       <main className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-28 pt-4">
-        {mode.asset === 'stock' && (
-          <section className="rounded-3xl border border-primary/20 bg-primary/5 p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-black">저평가 회복</h2>
-                <p className="mt-1 text-[10px] font-bold text-muted-foreground">실제 재무·가격 데이터가 충분한 종목만 독립 추천합니다.</p>
-              </div>
-              <span className="text-[10px] font-black text-primary">{undervalued.data?.cards?.length ?? 0}개</span>
-            </div>
-            {undervalued.isLoading && <div className="mt-3"><LoadingState label="저평가 회복 후보를 계산하는 중입니다." /></div>}
-            {undervalued.isError && <p className="mt-3 rounded-2xl bg-card p-3 text-xs font-bold text-muted-foreground">실제 데이터가 부족하거나 제공기관이 지연되고 있습니다.</p>}
-            <div className="mt-3 space-y-2">
-              {(undervalued.data?.cards ?? []).slice(0, 5).map((card: UndervaluedCard) => (
-                <button key={card.ticker} type="button" onClick={() => navigate(`/stock/${encodeURIComponent(card.ticker)}`)} className="w-full rounded-2xl border border-card-border bg-card p-3 text-left">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0"><p className="truncate text-sm font-black">{displayStockName(card.ticker, card.name, card.market)}</p><p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">{card.reasons.join(' · ') || '실제 데이터 근거 확인 필요'}</p></div>
-                    <div className="shrink-0 text-right"><p className="text-sm font-black text-primary">{card.score}점</p><p className="text-[9px] font-bold text-muted-foreground">모델점수</p></div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
+        {mode.asset === 'stock' && <InlineConditionSearch market={mode.stockMarket} onOpenStock={(ticker) => navigate(`/stock/${encodeURIComponent(ticker)}`)} />}
 
         <section>
           <div className="mb-3 flex items-center justify-between">
@@ -168,4 +139,127 @@ export default function StocksPage() {
 
 function QuickButton({ icon: Icon, label, onClick }: { icon: typeof Search; label: string; onClick: () => void }) {
   return <button type="button" onClick={onClick} className="flex items-center justify-center gap-1.5 rounded-xl border border-card-border bg-card px-2 py-2 text-[11px] font-black"><Icon className="h-3.5 w-3.5 text-primary" />{label}</button>;
+}
+
+// ─── 상세검색(조건 검색) — 실제 /market/scan 결과만 표시 ───────────────────────
+const SEARCH_INDICATORS = [
+  '거래량 증가', '거래대금 증가', '5일선 돌파', '20일선 회복', '60일선 돌파',
+  'MACD 골든크로스', 'RSI 과매도 반등', '돌파 직전', '박스권 하단', '단기 추세 전환',
+  '볼린저밴드 상단 돌파', '스토캐스틱 골든크로스', 'OBV 상승', '신고가 근접', '낙폭과대',
+  '저평가', 'PER 낮음', 'PBR 낮음', 'ROE 개선', 'AI 점수 상위',
+];
+const EXCLUDE_OPTIONS = [
+  { key: 'down', label: '하락 종목 제외' },
+  { key: 'lowConfidence', label: '신뢰도 50 미만 제외' },
+] as const;
+const SORT_OPTIONS = [
+  { key: 'score', label: '모델점수순' },
+  { key: 'match', label: '조건일치순' },
+  { key: 'change', label: '등락률순' },
+] as const;
+
+function InlineConditionSearch({ market, onOpenStock }: { market: 'KR' | 'US'; onOpenStock: (ticker: string) => void }) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const [excluded, setExcluded] = useState<string[]>([]);
+  const [sortKey, setSortKey] = useState<(typeof SORT_OPTIONS)[number]['key']>('score');
+  const [watchTick, setWatchTick] = useState(0);
+
+  const scan = useQuery({
+    queryKey: ['stocks-inline-scan', market, selected.join('|')],
+    queryFn: () => api.scan(selected, market),
+    enabled: false,
+    retry: false,
+  });
+
+  const results = useMemo(() => {
+    let cards = (scan.data?.cards ?? []) as ScanCard[];
+    if (excluded.includes('down')) cards = cards.filter((card) => card.changePercent >= 0);
+    if (excluded.includes('lowConfidence')) cards = cards.filter((card) => card.confidence >= 50);
+    const sorted = [...cards];
+    if (sortKey === 'score') sorted.sort((a, b) => b.score - a.score);
+    if (sortKey === 'match') sorted.sort((a, b) => b.matchCount - a.matchCount || b.score - a.score);
+    if (sortKey === 'change') sorted.sort((a, b) => b.changePercent - a.changePercent);
+    return sorted.slice(0, 30);
+  }, [excluded, scan.data, sortKey]);
+
+  const toggle = (list: string[], value: string, set: (next: string[]) => void) => {
+    set(list.includes(value) ? list.filter((item) => item !== value) : [...list, value]);
+  };
+
+  const updatedAt = scan.dataUpdatedAt ? new Date(scan.dataUpdatedAt).toLocaleTimeString('ko-KR') : null;
+
+  return (
+    <section className="rounded-3xl border border-primary/20 bg-primary/5 p-4 text-center shadow-sm">
+      <h2 className="inline-flex items-center justify-center gap-1.5 text-sm font-black"><SlidersHorizontal className="h-4 w-4 text-primary" /> 검색 조건</h2>
+
+      <p className="mt-3 text-[11px] font-black text-muted-foreground">지표 선택</p>
+      <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+        {SEARCH_INDICATORS.map((label) => (
+          <button key={label} type="button" onClick={() => toggle(selected, label, setSelected)} className={cn('rounded-full border px-2.5 py-1 text-[10px] font-black', selected.includes(label) ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{label}</button>
+        ))}
+      </div>
+
+      <p className="mt-3 text-[11px] font-black text-muted-foreground">제외 조건</p>
+      <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+        {EXCLUDE_OPTIONS.map((option) => (
+          <button key={option.key} type="button" onClick={() => toggle(excluded, option.key, setExcluded)} className={cn('rounded-full border px-2.5 py-1 text-[10px] font-black', excluded.includes(option.key) ? 'border-destructive bg-destructive/10 text-destructive' : 'border-card-border bg-card text-muted-foreground')}>{option.label}</button>
+        ))}
+      </div>
+
+      <p className="mt-3 text-[11px] font-black text-muted-foreground">정렬 기준</p>
+      <div className="mt-2 grid grid-cols-3 gap-1.5">
+        {SORT_OPTIONS.map((option) => (
+          <button key={option.key} type="button" onClick={() => setSortKey(option.key)} className={cn('rounded-xl border px-2 py-1.5 text-[10px] font-black', sortKey === option.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{option.label}</button>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => { if (selected.length > 0) void scan.refetch(); }}
+        disabled={selected.length === 0 || scan.isFetching}
+        className="mt-3 w-full rounded-2xl bg-primary py-3 text-sm font-black text-primary-foreground disabled:opacity-50"
+      >
+        {scan.isFetching ? '실제 데이터 검색 중…' : selected.length === 0 ? '지표를 1개 이상 선택하세요' : '검색 실행'}
+      </button>
+
+      {scan.isError && (
+        <p className="mt-3 rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-xs font-bold text-destructive">검색 오류 — 데이터 공급자 응답에 실패했습니다. 잠시 후 다시 시도해 주세요. (결과 0건과는 다른 상태입니다)</p>
+      )}
+      {scan.isSuccess && results.length === 0 && (
+        <p className="mt-3 rounded-2xl bg-card p-3 text-xs font-bold text-muted-foreground">조건을 충족한 종목이 0건입니다. (API 오류 아님)</p>
+      )}
+
+      {results.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <p className="text-[10px] font-bold text-muted-foreground">데이터 공급자: 서버 실시간 시세·지표 스캔{updatedAt ? ` · 갱신 ${updatedAt}` : ''} · {results.length}건 표시</p>
+          {results.map((card) => {
+            const starred = isInWatchlist(card.ticker);
+            return (
+              <div key={card.ticker} className="rounded-2xl border border-card-border bg-card p-3">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    aria-label={starred ? '관심종목 해제' : '관심종목 추가'}
+                    onClick={() => { toggleWatchlistItem({ ticker: card.ticker, name: card.name, market: card.market, currency: card.currency, price: card.price, changePercent: card.changePercent }); setWatchTick(watchTick + 1); }}
+                    className="shrink-0 rounded-xl border border-card-border p-2"
+                  >
+                    <Star className={cn('h-4 w-4', starred ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground')} />
+                  </button>
+                  <button type="button" onClick={() => onOpenStock(card.ticker)} className="min-w-0 flex-1 text-center">
+                    <p className="truncate text-sm font-black">{displayStockName(card.ticker, card.name, card.market)}</p>
+                    <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{card.ticker} · 신뢰도 {card.confidence}</p>
+                  </button>
+                  <div className="shrink-0 text-center">
+                    <p className="text-sm font-black text-primary">{card.score}점</p>
+                    <p className={cn('text-[10px] font-black', card.changePercent > 0 ? 'text-positive' : card.changePercent < 0 ? 'text-destructive' : 'text-muted-foreground')}>{formatAppPercent(card.changePercent)}</p>
+                  </div>
+                </div>
+                {card.matched.length > 0 && <p className="mt-2 break-keep text-[10px] font-bold text-muted-foreground">충족: {card.matched.join(' · ')}</p>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
 }

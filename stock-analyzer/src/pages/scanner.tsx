@@ -463,18 +463,6 @@ function loadThreshold(): ThresholdOption {
   return DEFAULT_THRESHOLD;
 }
 
-function loadMarket(): MarketFilter {
-  if (typeof window === "undefined") return DEFAULT_MARKET;
-
-  const raw = window.localStorage.getItem(MARKET_STORAGE_KEY);
-
-  if (raw && MARKET_OPTIONS.includes(raw as MarketFilter)) {
-    return raw as MarketFilter;
-  }
-
-  return DEFAULT_MARKET;
-}
-
 function LoadingBox() {
   return (
     <div className="rounded-3xl border border-card-border bg-card p-8 text-center">
@@ -488,9 +476,9 @@ function LoadingBox() {
 export default function ScannerPage() {
   const [location, navigate] = useLocation();
   const assetMode = useAssetMode();
-  const [viewMode, setViewMode] = useState<ScannerViewMode>(() =>
-    location.split("?")[0] === "/auto-trading" ? "auto" : "condition",
-  );
+  // 최초 진입 시에는 항상 가장 왼쪽 탭(조건검색)이 선택된다.
+  // 자동매매 설정·후보 화면은 사용자가 '자동매매' 버튼을 직접 눌렀을 때만 표시한다.
+  const [viewMode, setViewMode] = useState<ScannerViewMode>("condition");
   const [market, setMarket] = useState<MarketFilter>(DEFAULT_MARKET);
   const [selected, setSelected] = useState<string[]>(DEFAULT_SELECTED);
   const [helpOpen, setHelpOpen] = useState<string | null>(null);
@@ -535,16 +523,16 @@ export default function ScannerPage() {
     staleTime: 30_000,
   });
 
+  // 라우트가 바뀌어 새로 진입하면 다시 왼쪽 탭(조건검색)부터 시작한다.
   useEffect(() => {
-    setViewMode(location.split("?")[0] === "/auto-trading" ? "auto" : "condition");
+    setViewMode("condition");
   }, [location]);
 
-  // localStorage에서 저장된 임계값·시장 복원.
+  // localStorage에서 저장된 임계값 복원. (시장 선택은 새 진입 시 항상 국내부터)
   useEffect(() => {
     const savedThreshold = loadThreshold();
     setVolumeThreshold(savedThreshold);
     setTradingValueThreshold(savedThreshold);
-    setMarket(loadMarket());
   }, []);
 
   const chooseMarket = (value: MarketFilter) => {
