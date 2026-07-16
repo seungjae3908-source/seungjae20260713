@@ -28,7 +28,7 @@ export function AssetSwitch({ className }: { className?: string }) {
 
 function SwitchButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button type="button" onClick={onClick} className={cn('rounded-xl border px-3 py-2 text-xs font-black', active ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>
+    <button type="button" onClick={onClick} className={cn('inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-3 py-2 text-xs font-black', active ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>
       {children}
     </button>
   );

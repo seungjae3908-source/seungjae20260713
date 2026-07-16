@@ -936,7 +936,7 @@ export default function ScannerPage() {
             type="button"
             onClick={() => setViewMode("condition")}
             className={cn(
-              "rounded-xl border px-3 py-2 text-sm font-extrabold",
+              "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-3 py-2 text-sm font-extrabold",
               viewMode === "condition"
                 ? "border-primary bg-primary text-primary-foreground"
                 : "border-card-border bg-card text-muted-foreground",
@@ -948,7 +948,7 @@ export default function ScannerPage() {
             type="button"
             onClick={() => setViewMode("auto")}
             className={cn(
-              "rounded-xl border px-3 py-2 text-sm font-extrabold",
+              "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-3 py-2 text-sm font-extrabold",
               viewMode === "auto"
                 ? "border-primary bg-primary text-primary-foreground"
                 : "border-card-border bg-card text-muted-foreground",
@@ -965,7 +965,7 @@ export default function ScannerPage() {
               type="button"
               onClick={() => chooseMarket(item)}
               className={cn(
-                "rounded-xl border px-3 py-2 text-sm font-bold",
+                "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-3 py-2 text-sm font-bold",
                 market === item
                   ? "border-primary bg-primary text-primary-foreground"
                   : "border-card-border bg-card text-muted-foreground",
@@ -991,7 +991,7 @@ export default function ScannerPage() {
                 type="button"
                 onClick={() => applyPreset(preset)}
                 className={cn(
-                  "rounded-2xl border px-2 py-2.5 text-center",
+                  "inline-flex items-center justify-center break-keep leading-tight rounded-2xl border px-2 py-2.5 text-center",
                   activePreset === preset.key
                     ? "border-primary bg-primary/10 text-primary"
                     : "border-card-border bg-background text-foreground",
@@ -1104,7 +1104,7 @@ export default function ScannerPage() {
                                     chooseIndicatorThreshold(label, value)
                                   }
                                   className={cn(
-                                    "rounded-xl border px-2 py-2 text-xs font-extrabold",
+                                    "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-2 py-2 text-xs font-extrabold",
                                     currentValue === value
                                       ? "border-primary bg-primary text-primary-foreground"
                                       : "border-card-border bg-background text-muted-foreground",

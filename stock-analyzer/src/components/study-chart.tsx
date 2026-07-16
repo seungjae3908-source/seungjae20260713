@@ -466,7 +466,7 @@ function Segmented({
           type="button"
           onClick={() => onChange(o.key)}
           className={cn(
-            'px-2.5 py-1.5 text-xs font-black transition',
+            'inline-flex items-center justify-center text-center break-keep leading-tight px-2.5 py-1.5 text-xs font-black transition',
             value === o.key ? 'bg-primary text-primary-foreground' : 'bg-card text-muted-foreground',
           )}
         >
@@ -483,7 +483,7 @@ function Toggle({ label, active, onClick }: { label: string; active: boolean; on
       type="button"
       onClick={onClick}
       className={cn(
-        'rounded-lg border px-2.5 py-1 text-xs font-black transition',
+        'inline-flex items-center justify-center text-center break-keep leading-tight rounded-lg border px-2.5 py-1 text-xs font-black transition',
         active ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card text-muted-foreground',
       )}
     >

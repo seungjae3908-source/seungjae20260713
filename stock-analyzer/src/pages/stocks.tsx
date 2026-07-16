@@ -178,7 +178,7 @@ export default function StocksPage() {
               type="button"
               onClick={() => setCategory(item.key)}
               className={cn(
-                'rounded-xl border px-2 py-2 text-[11px] font-black',
+                'inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-2 py-2 text-[11px] font-black',
                 category === item.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground',
               )}
             >

@@ -365,7 +365,7 @@ export default function MorePage() {
                   type="button"
                   onClick={() => changeAccentColor(color.key)}
                   className={cn(
-                    'flex items-center justify-center gap-1.5 rounded-2xl border px-2 py-2 text-xs font-extrabold',
+                    'flex items-center justify-center text-center break-keep leading-tight gap-1.5 rounded-2xl border px-2 py-2 text-xs font-extrabold',
                     accentColor === color.key
                       ? 'border-primary bg-primary/10 text-primary'
                       : 'border-card-border bg-background text-muted-foreground',

@@ -2906,7 +2906,7 @@ function ChartTab({
                 type="button"
                 onClick={() => setTimeframe(item.key)}
                 className={cn(
-                  "rounded-xl px-2 py-2.5 text-[10px] font-extrabold",
+                  "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl px-2 py-2.5 text-[10px] font-extrabold",
                   timeframe === item.key
                     ? "bg-primary text-primary-foreground"
                     : "bg-secondary text-muted-foreground",
@@ -3165,7 +3165,7 @@ function MarketFlowPanel({ ticker }: { ticker: string }) {
             type="button"
             onClick={() => setPeriod(key)}
             className={cn(
-              "rounded-lg px-2 py-2 text-center text-[10px] font-extrabold",
+              "inline-flex items-center justify-center break-keep leading-tight rounded-lg px-2 py-2 text-center text-[10px] font-extrabold",
               period === key
                 ? "bg-primary/15 text-primary"
                 : "bg-secondary text-muted-foreground",
@@ -3327,7 +3327,7 @@ function ShortSellingPanel({ ticker }: { ticker: string }) {
             type="button"
             onClick={() => setPeriod(key)}
             className={cn(
-              "rounded-lg px-2 py-2 text-center text-[10px] font-extrabold",
+              "inline-flex items-center justify-center break-keep leading-tight rounded-lg px-2 py-2 text-center text-[10px] font-extrabold",
               period === key
                 ? "bg-primary/15 text-primary"
                 : "bg-secondary text-muted-foreground",
@@ -5358,7 +5358,7 @@ function FinancialTab({
               type="button"
               onClick={() => setPeriod("quarterly")}
               className={cn(
-                "rounded-xl px-3 py-2 text-xs font-extrabold",
+                "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl px-3 py-2 text-xs font-extrabold",
 
                 period === "quarterly"
                   ? "bg-primary text-primary-foreground"
@@ -5372,7 +5372,7 @@ function FinancialTab({
               type="button"
               onClick={() => setPeriod("annual")}
               className={cn(
-                "rounded-xl px-3 py-2 text-xs font-extrabold",
+                "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl px-3 py-2 text-xs font-extrabold",
 
                 period === "annual"
                   ? "bg-primary text-primary-foreground"

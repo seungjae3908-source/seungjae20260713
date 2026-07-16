@@ -333,7 +333,7 @@ export default function StockInfoPage() {
 }
 
 function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
-  return <button type="button" onClick={onClick} className={cn('rounded-xl border px-3 py-2 text-sm font-black', active ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{children}</button>;
+  return <button type="button" onClick={onClick} className={cn('inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-3 py-2 text-sm font-black', active ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{children}</button>;
 }
 
 // 상세 카드 — 기본 접힘, 제목 영역 전체 탭으로 펼침/접힘.

@@ -152,7 +152,7 @@ function StockHome({ mode, summary, sectorData, summaryLoading, summaryError, se
         {sectors.length > 0 && (
           <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
             {sectors.map((sector) => (
-              <button key={sector.key} type="button" onClick={() => setActiveSector(sector.key)} className={cn('shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold', selected?.key === sector.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{sector.label}</button>
+              <button key={sector.key} type="button" onClick={() => setActiveSector(sector.key)} className={cn('inline-flex items-center justify-center text-center break-keep leading-tight shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold', selected?.key === sector.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{sector.label}</button>
             ))}
           </div>
         )}
@@ -230,7 +230,7 @@ function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 
         {error && <State error>거래소 시세를 불러오지 못했습니다.</State>}
         <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
           {COIN_SECTORS.map((sector) => (
-            <button key={sector.key} type="button" onClick={() => setActiveSector(sector.key)} className={cn('shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold', selected.key === sector.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{sector.label}</button>
+            <button key={sector.key} type="button" onClick={() => setActiveSector(sector.key)} className={cn('inline-flex items-center justify-center text-center break-keep leading-tight shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold', selected.key === sector.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{sector.label}</button>
           ))}
         </div>
         <div className="mt-3 space-y-2">{sectorRows.map((row, index) => <CryptoRow key={String(row.symbol)} row={row} rank={index + 1} currency={mode === 'spot' ? 'KRW' : 'USDT'} onClick={() => onNavigate(`/stock-info?asset=coin&coinMarket=${mode}&symbol=${encodeURIComponent(String(row.symbol))}`)} />)}</div>
