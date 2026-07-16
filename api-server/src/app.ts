@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
-import { NewsService } from "./services/news.service";
+import { apiRateLimit, securityHeaders } from './middleware/security';
 
 const app: Express = express();
 
@@ -36,9 +36,16 @@ app.use(
   }),
 );
 
-app.use(cors());
+const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? '').split(',').map((value) => value.trim()).filter(Boolean);
+app.set('trust proxy', 1);
+app.use(securityHeaders);
+app.use(cors({ origin(origin, callback) {
+  if (!origin || process.env.NODE_ENV !== 'production' || allowedOrigins.includes(origin)) return callback(null, true);
+  return callback(new Error('CORS origin rejected'));
+}, methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auto-Trade-Key'] }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use('/api', apiRateLimit);
 
 app.get("/api", (_req, res) => {
   res.json({
@@ -49,29 +56,6 @@ app.get("/api", (_req, res) => {
 
 app.get("/api/healthz", (_req, res) => {
   res.json({ status: "ok" });
-});
-
-app.get("/api/stocks/:ticker/news", async (req, res) => {
-  try {
-    const ticker = String(req.params.ticker || "").toUpperCase();
-
-    const news = await NewsService.getNews(ticker);
-
-    if (!news) {
-      return res.status(404).json({
-        error: "NEWS_NOT_FOUND",
-        ticker,
-      });
-    }
-
-    return res.json(news);
-  } catch (error) {
-    console.error("direct news route error:", error);
-
-    return res.status(500).json({
-      error: "NEWS_ROUTE_ERROR",
-    });
-  }
 });
 
 app.use("/api", router);

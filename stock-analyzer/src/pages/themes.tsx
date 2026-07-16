@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
-import { Link } from "wouter";
+import { authorizedFetch } from '@/lib/auth-fetch';
+import { useEffect, useMemo, useState } from "react";
+import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Layers, Search } from "lucide-react";
 import { api, type ThemeGroup, type ThemeStock } from "@/lib/api";
 import { classifyStock, stockClassBadgeClass } from "@/lib/stock-classifier";
 import { BottomNav } from "@/components/bottom-nav";
-import { buildLocalThemes, mergeThemeGroups } from "@/data/theme-catalog";
 import { cn } from "@/lib/utils";
 
 type MarketTab = "KR" | "US";
@@ -21,18 +21,26 @@ function formatPrice(price: number, currency: string) {
 
 async function fetchThemeQuotes(tickers: string[]) {
 	if (!tickers.length) return [] as ThemeStock[];
-	const response = await fetch(`/api/quotes?tickers=${encodeURIComponent(tickers.join(","))}&_ts=${Date.now()}`, { cache: "no-store" });
+	const response = await authorizedFetch(`/api/quotes?tickers=${encodeURIComponent(tickers.join(","))}&_ts=${Date.now()}`, { cache: "no-store" });
 	if (!response.ok) return [];
 	const raw = await response.json();
 	return (Array.isArray(raw?.quotes) ? raw.quotes : Array.isArray(raw?.items) ? raw.items : []) as ThemeStock[];
 }
 
 export default function ThemesPage() {
-	const [market, setMarket] = useState<MarketTab>("KR");
+	const [location, navigate] = useLocation();
+	const initialMarket = new URLSearchParams(location.split("?")[1] ?? "").get("market") === "US" ? "US" : "KR";
+	const [market, setMarket] = useState<MarketTab>(initialMarket);
 	const [selectedKey, setSelectedKey] = useState<string | null>(null);
 	const [query, setQuery] = useState("");
 	const themesQuery = useQuery({ queryKey: ["themes-complete", market], queryFn: () => api.themes(market), staleTime: 0, refetchInterval: 5 * 60_000, refetchOnWindowFocus: true });
-	const themes = useMemo(() => mergeThemeGroups(buildLocalThemes(market), themesQuery.data?.themes ?? []), [market, themesQuery.data]);
+	useEffect(() => {
+		const params = new URLSearchParams(location.split("?")[1] ?? "");
+		params.set("market", market);
+		const next = `/themes?${params.toString()}`;
+		if (location !== next) navigate(next, { replace: true });
+	}, [location, market, navigate]);
+	const themes = useMemo(() => themesQuery.data?.themes ?? [], [themesQuery.data]);
 	const filteredThemes = useMemo(() => {
 		const keyword = query.trim().toLowerCase();
 		if (!keyword) return themes;

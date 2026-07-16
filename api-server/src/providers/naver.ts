@@ -376,3 +376,32 @@ export async function getCompanyProfile(
 }
 
 export const companyProfile = getCompanyProfile;
+export interface NaverRatios {
+  eps: number;
+  per: number;
+  pbr: number;
+  bps: number;
+}
+
+export async function getRatios(
+  entryOrTicker: CatalogEntry | string,
+): Promise<NaverRatios> {
+  const ticker = getTickerFromEntry(entryOrTicker);
+  const code = onlyDigits(ticker);
+
+  if (!isKrTicker(code)) {
+    throw new Error(`NAVER_ONLY_SUPPORTS_KR_TICKER:${ticker}`);
+  }
+
+  const html = await fetchText(`https://finance.naver.com/item/main.naver?code=${code}`);
+  const eps = parseNumberNear('EPS', html);
+  const per = parseNumberNear('PER', html);
+  const pbr = parseNumberNear('PBR', html);
+  const bps = parseNumberNear('BPS', html);
+
+  if (![eps, per, pbr, bps].some((value) => Number.isFinite(value) && value !== 0)) {
+    throw new Error(`NAVER_RATIO_PARSE_FAILED:${code}`);
+  }
+
+  return { eps, per, pbr, bps };
+}

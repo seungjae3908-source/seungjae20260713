@@ -64,7 +64,11 @@ export const GradeService = {
           netIncome: latest?.netIncome ?? null,
           equity: latest?.equity ?? null,
           debt: latest?.debt ?? null,
-          riskEvents: risk?.events ?? null,
+          riskFactors: (risk?.events ?? []).map((event) => ({
+            label: event.label || event.title,
+            detail: event.summary,
+            level: event.level,
+          })),
         }),
       );
     });

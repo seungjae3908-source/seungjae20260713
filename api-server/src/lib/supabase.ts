@@ -49,3 +49,22 @@ export function getSupabase(): SupabaseClient {
 
 	return client;
 }
+
+export function getUserSupabase(accessToken: string): SupabaseClient {
+	const url = process.env.SUPABASE_URL;
+	const key = process.env.SUPABASE_ANON_KEY ?? serverKey();
+
+	if (!url || !key || !accessToken) {
+		throw new Error('User-scoped Supabase is not configured.');
+	}
+
+	return createClient(url, key, {
+		global: {
+			headers: { Authorization: `Bearer ${accessToken}` },
+		},
+		auth: {
+			persistSession: false,
+			autoRefreshToken: false,
+		},
+	});
+}

@@ -1,26 +1,14 @@
 modules = ["nodejs-24"]
 
-[nix]
-channel = "stable-25_05"
+run = "bash -lc 'if [ ! -d node_modules ]; then pnpm install --no-frozen-lockfile; fi; pnpm --filter @workspace/stock-analyzer run build && PORT=8080 pnpm --filter @workspace/api-server run dev'"
 
-[agent]
-expertMode = true
+[[ports]]
+localPort = 3001
+externalPort = 3001
 
 [[ports]]
 localPort = 8080
 externalPort = 80
-
-[[ports]]
-localPort = 8081
-externalPort = 8081
-
-[[ports]]
-localPort = 8082
-externalPort = 3001
-
-[[ports]]
-localPort = 8083
-externalPort = 3002
 
 [[ports]]
 localPort = 18797
@@ -34,5 +22,100 @@ SUPABASE_ANON_KEY = "sb_publishable_l5iOTxTerk7gv3eDYouXcg_Q-YmVsZU"
 SUPABASE_URL = "https://bawcbkoyovbeajkrnduq.supabase.co"
 VITE_SUPABASE_ANON_KEY = "sb_publishable_l5iOTxTerk7gv3eDYouXcg_Q-YmVsZU"
 VITE_SUPABASE_URL = "https://bawcbkoyovbeajkrnduq.supabase.co"
-KIWOOM_MODE = "real"
+KIWOOM_MODE = "mock"
 KIWOOM_PROXY_KEY = "61d9f2e1de29357bc03750dee327b6f0701a2b787e0f09e4944f2473375e5e46"
+
+[workflows]
+
+[[workflows.workflow]]
+name = "mockup-sandbox: Component Preview Server"
+author = "agent"
+mode = "sequential"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+artifactId = "XegfDyZt7HqfW2Bb8Ghoy"
+isCanvasWorkflow = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/mockup-sandbox run dev"
+cwd = "./mockup-sandbox"
+waitForPort = 8081
+ensurePreviewReachable = "/"
+router = "path"
+
+[workflows.workflow.tasks.env]
+PORT = "8081"
+BASE_PATH = "/__mockup"
+
+[[workflows.workflow]]
+name = "stock-analyzer: web"
+author = "agent"
+mode = "sequential"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+artifactId = "artifacts/stock-analyzer"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/stock-analyzer run dev"
+cwd = "./stock-analyzer"
+waitForPort = 18797
+ensurePreviewReachable = "/"
+router = "path"
+
+[workflows.workflow.tasks.env]
+PORT = "18797"
+BASE_PATH = "/"
+
+[[workflows.workflow]]
+name = "api-server: API Server"
+author = "agent"
+mode = "sequential"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+artifactId = "3B4_FFSkEVBkAeYMFRJ2e"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash -lc 'pnpm --filter @workspace/stock-analyzer run build && PORT=8080 pnpm --filter @workspace/api-server run dev'"
+cwd = "."
+waitForPort = 8080
+ensurePreviewReachable = "/api/health"
+router = "path"
+
+[workflows.workflow.tasks.env]
+PORT = "8080"
+
+[[workflows.workflow]]
+name = "패키지 설치"
+mode = "sequential"
+author = 61907377
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm install --no-frozen-lockfile"
+
+[[workflows.workflow]]
+name = "프런트 실행"
+mode = "sequential"
+author = 61907377
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/stock-analyzer run dev"
+
+[[workflows.workflow]]
+name = "앱 전체 실행"
+mode = "sequential"
+author = 61907377
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/stock-analyzer run build && PORT=3001 pnpm --filter @workspace/api-server run dev"
+
+[agent]
+expertMode = true

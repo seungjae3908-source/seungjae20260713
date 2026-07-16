@@ -1,3 +1,4 @@
+import { authorizedFetch } from '@/lib/auth-fetch';
 import type { StockGrade } from '@workspace/stock-grade';
 
 export type { StockGrade };
@@ -343,6 +344,7 @@ export interface Filing {
   sentiment: Sentiment;
   events: EventType[];
   eventLabels: string[];
+  relatedCount?: number;
 }
 
 export interface Disclosure {
@@ -353,6 +355,7 @@ export interface Disclosure {
   sentiment: Sentiment;
   events: EventType[];
   eventLabels: string[];
+  relatedCount?: number;
 }
 
 export interface DisclosureData {
@@ -543,6 +546,17 @@ export interface ThemesData {
   themes: ThemeGroup[];
 }
 
+export interface LatestBackupResponse {
+  ok: boolean;
+  exists: boolean;
+  schemaVersion?: number;
+  localStorage?: Record<string, string>;
+  itemCount?: number;
+  checksum?: string;
+  clientUpdatedAt?: string | null;
+  updatedAt?: string | null;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -560,7 +574,7 @@ const enc = encodeURIComponent;
 export async function apiGet<T>(path: string): Promise<T> {
   const separator = path.includes('?') ? '&' : '?';
   const url = `${BASE}${path}${separator}_ts=${Date.now()}`;
-  const res = await fetch(url, {
+  const res = await authorizedFetch(url, {
     cache: 'no-store',
     headers: {
       'Cache-Control': 'no-cache, no-store, max-age=0',
@@ -744,7 +758,7 @@ export const api = {
     apiGet<ThemesData>(`/market/themes?market=${market}`),
 
   pushSubscribe: (subscription: unknown) =>
-    fetch(`${BASE}/push/subscribe`, {
+    authorizedFetch(`${BASE}/push/subscribe`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -753,7 +767,7 @@ export const api = {
     }).then((res) => res.json()),
 
   pushUnsubscribe: (endpoint: string) =>
-    fetch(`${BASE}/push/unsubscribe`, {
+    authorizedFetch(`${BASE}/push/unsubscribe`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -762,11 +776,28 @@ export const api = {
     }).then((res) => res.json()),
 
   pushTest: (endpoint?: string) =>
-    fetch(`${BASE}/push/test`, {
+    authorizedFetch(`${BASE}/push/test`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ endpoint }),
     }).then((res) => res.json()),
+
+  backupLatest: () => apiGet<LatestBackupResponse>('/backup/latest'),
+
+  saveLatestBackup: async (payload: {
+    schemaVersion: number;
+    localStorage: Record<string, string>;
+    clientUpdatedAt: string;
+  }) => {
+    const res = await authorizedFetch(`${BASE}/backup/latest`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json().catch(() => ({}))) as LatestBackupResponse & { error?: string };
+    if (!res.ok) throw new ApiError(res.status, body.error ?? `HTTP_${res.status}`);
+    return body;
+  },
 };

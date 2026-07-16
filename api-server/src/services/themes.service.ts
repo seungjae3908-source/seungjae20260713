@@ -742,8 +742,8 @@ async function buildThemes(market: "KR" | "US"): Promise<ThemesData> {
   return cached(`themes:v4:${market}`, TTL.quote, async () => {
     const entries = CATALOG.filter((e) => e.market === market);
 
-    // Every catalog entry stays in its sector. Live quotes enrich available
-    // symbols, while temporarily unavailable quotes no longer hide the stock.
+    // 실제 시세가 확인된 종목만 결과에 포함합니다.
+    // 제공처 실패 시 가격 0이나 등락률 0으로 대체하지 않습니다.
     const live = await Promise.all(
       entries.map(async (entry) => {
         let quote: Quote | null = null;
@@ -765,6 +765,7 @@ async function buildThemes(market: "KR" | "US"): Promise<ThemesData> {
     };
 
     for (const { entry, quote, assetType } of live) {
+      if (!quote || !Number.isFinite(quote.price) || quote.price <= 0) continue;
       const stock = toThemeStock(entry, quote, assetType);
 
       // ETP family → separate ETF/ETN/레버리지/인버스 buckets + keyword themes.

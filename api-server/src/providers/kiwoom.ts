@@ -97,6 +97,8 @@ interface RequestOptions {
   body: Record<string, unknown>;
   contYn?: string;
   nextKey?: string;
+  retryAuth?: boolean;
+  retryRateLimit?: number;
 }
 
 interface PickedEntry {
@@ -123,6 +125,28 @@ let tokenCache: {
   token: string;
   expiresAt: number;
 } | null = null;
+
+let requestQueue: Promise<void> = Promise.resolve();
+let nextRequestAt = 0;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForRequestSlot(): Promise<void> {
+  const previous = requestQueue;
+  let release: () => void = () => undefined;
+  requestQueue = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await previous;
+  const minimumInterval = isMockMode() ? 260 : 240;
+  const wait = Math.max(0, nextRequestAt - Date.now());
+  if (wait > 0) await sleep(wait);
+  nextRequestAt = Date.now() + minimumInterval;
+  release();
+}
 
 function isMockMode(): boolean {
   return (
@@ -317,7 +341,7 @@ export function getKiwoomStatus() {
       ? "mock"
       : "real",
 
-    baseUrl: baseUrl(),
+    providerEndpointConfigured: Boolean(process.env.KIWOOM_BASE_URL),
 
     appKeyRegistered: Boolean(
       process.env.KIWOOM_APP_KEY?.trim(),
@@ -435,6 +459,8 @@ export async function kiwoomRequest<
   body,
   contYn,
   nextKey,
+  retryAuth = true,
+  retryRateLimit = 0,
 }: RequestOptions): Promise<{
   data: T;
   contYn: string | null;
@@ -442,6 +468,8 @@ export async function kiwoomRequest<
 }> {
   const token =
     await getKiwoomToken();
+
+  await waitForRequestSlot();
 
   const controller =
     new AbortController();
@@ -492,15 +520,41 @@ export async function kiwoomRequest<
       !response.ok ||
       returnCode(result) !== 0
     ) {
-      if (
+      const message = returnMessage(result);
+      const rateLimited =
+        response.status === 429 ||
+        returnCode(result) === 1700 ||
+        /요청 개수|too many|rate limit/i.test(message);
+
+      if (rateLimited && retryRateLimit < 4) {
+        clearTimeout(timeout);
+        await sleep(700 * Math.pow(2, retryRateLimit));
+        return kiwoomRequest<T>({
+          apiId,
+          path,
+          body,
+          contYn,
+          nextKey,
+          retryAuth,
+          retryRateLimit: retryRateLimit + 1,
+        });
+      }
+
+      const authExpired =
         response.status === 401 ||
-        response.status === 403
-      ) {
+        response.status === 403 ||
+        returnCode(result) === 8005 ||
+        message.toLowerCase().includes("token");
+
+      if (authExpired) {
         clearKiwoomTokenCache();
+        if (retryAuth) {
+          return kiwoomRequest<T>({ apiId, path, body, contYn, nextKey, retryAuth: false, retryRateLimit });
+        }
       }
 
       throw new Error(
-        `키움 ${apiId} 요청 실패: ${returnMessage(result)} (HTTP ${response.status})`,
+        `키움 ${apiId} 요청 실패: ${message} (HTTP ${response.status})`,
       );
     }
 
@@ -1744,6 +1798,26 @@ export interface KiwoomDomesticOrderResult {
   raw: KiwoomApiResponse;
 }
 
+export type KiwoomUsExchange = "NASDAQ" | "NYSE" | "AMEX";
+
+export interface KiwoomUsOrderInput {
+  ticker: string;
+  exchange: KiwoomUsExchange;
+  side: "buy" | "sell";
+  quantity: number;
+  orderType?: "market" | "limit";
+  price?: number | null;
+}
+
+export interface KiwoomUsOrderResult {
+  ticker: string;
+  exchange: KiwoomUsExchange;
+  side: "buy" | "sell";
+  quantity: number;
+  orderNo: string | null;
+  raw: KiwoomApiResponse;
+}
+
 /**
  * 국내주식 실제 주문 전송.
  * 기본 API ID/경로/거래구분은 환경변수로 교체할 수 있어
@@ -1803,4 +1877,98 @@ export async function placeKiwoomDomesticOrder(
     orderNo,
     raw,
   };
+}
+
+/**
+ * 미국주식 실제 주문 전송.
+ * 키움 REST API의 미국주식 주문(ust20000/ust20001) 규격을 사용합니다.
+ */
+export async function placeKiwoomUsOrder(
+  input: KiwoomUsOrderInput,
+): Promise<KiwoomUsOrderResult> {
+  const ticker = input.ticker.trim().toUpperCase();
+  const quantity = Math.trunc(Number(input.quantity));
+  const orderType = input.orderType ?? "market";
+  const price = input.price == null ? null : Number(input.price);
+
+  if (!/^[A-Z][A-Z0-9.-]{0,11}$/.test(ticker)) {
+    throw new Error(`잘못된 미국 종목코드입니다: ${ticker}`);
+  }
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+    throw new Error("주문 수량은 1주 이상 정수여야 합니다.");
+  }
+  if (orderType === "limit" && (!Number.isFinite(price) || Number(price) <= 0)) {
+    throw new Error("지정가 주문 가격을 확인해 주세요.");
+  }
+
+  const exchangeCode: Record<KiwoomUsExchange, string> = {
+    NASDAQ: "ND",
+    NYSE: "NY",
+    AMEX: "NA",
+  };
+  const apiId =
+    input.side === "buy"
+      ? process.env.KIWOOM_US_BUY_ORDER_API_ID?.trim() || "ust20000"
+      : process.env.KIWOOM_US_SELL_ORDER_API_ID?.trim() || "ust20001";
+  const path = process.env.KIWOOM_US_ORDER_PATH?.trim() || "/api/us/ordr";
+  const marketTradeType =
+    process.env.KIWOOM_US_MARKET_ORDER_TRADE_TYPE?.trim() || "03";
+  const limitTradeType =
+    process.env.KIWOOM_US_LIMIT_ORDER_TRADE_TYPE?.trim() || "00";
+  const limitPrice = Number(price ?? 0)
+    .toFixed(4)
+    .replace(/\.?0+$/, "");
+
+  const response = await kiwoomRequest({
+    apiId,
+    path,
+    body: {
+      stex_tp: exchangeCode[input.exchange],
+      stk_cd: ticker,
+      ord_qty: String(quantity),
+      ord_uv: orderType === "limit" ? limitPrice : "",
+      trde_tp: orderType === "limit" ? limitTradeType : marketTradeType,
+    },
+  });
+
+  const raw = response.data as KiwoomApiResponse & Record<string, unknown>;
+  const orderNo = String(
+    raw.ord_no ?? raw.order_no ?? raw.ordNo ?? raw.orderNo ?? "",
+  ).trim() || null;
+
+  return {
+    ticker,
+    exchange: input.exchange,
+    side: input.side,
+    quantity,
+    orderNo,
+    raw,
+  };
+}
+
+/** 키움 국내주식 공매도추이(ka10014) 원문 조회. */
+export async function getKiwoomShortSellingRaw(tickerInput: string) {
+  const ticker = tickerInput.trim().toUpperCase();
+  if (!/^\d{6}(?:_(?:NX|AL))?$/.test(ticker)) {
+    throw new Error(`잘못된 국내 종목코드입니다: ${ticker}`);
+  }
+
+  const formatDate = (date: Date) =>
+    `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}`;
+  const endDate = new Date();
+  const startDate = new Date(endDate);
+  startDate.setDate(startDate.getDate() - 31);
+
+  const response = await kiwoomRequest({
+    apiId: process.env.KIWOOM_SHORT_SELLING_API_ID?.trim() || "ka10014",
+    path: process.env.KIWOOM_SHORT_SELLING_PATH?.trim() || "/api/dostk/shsa",
+    body: {
+      stk_cd: ticker,
+      tm_tp: "1",
+      strt_dt: formatDate(startDate),
+      end_dt: formatDate(endDate),
+    },
+  });
+
+  return response.data as KiwoomApiResponse & Record<string, unknown>;
 }

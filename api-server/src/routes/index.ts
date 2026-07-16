@@ -7,38 +7,39 @@ import pushRouter from './push';
 import stocksRouter from './stocks';
 import watchlistRouter from './watchlist';
 import kiwoomRouter from './kiwoom.routes';
+import adminRouter from './admin';
+import cryptoRouter from './crypto';
+import backupRouter from './backup';
+import { requireAdmin, requireMember } from '../middleware/auth';
 
 const router: IRouter = Router();
 
+// -------------------------------------------------------------------
+// Public routes (no auth required)
+// -------------------------------------------------------------------
 router.get('/', (_req, res) => {
-  res.json({
-    ok: true,
-    service: 'seungjae-stock-api',
-    status: 'running',
-    recommendationCount: { KR: 30, US: 30 },
-    routes: {
-      health: '/api/healthz',
-      config: '/api/config',
-      search: '/api/search?q=삼성전자',
-      quotes: '/api/quotes?tickers=005930,NVDA,AAPL',
-      movers: '/api/market/movers?market=KR',
-      kiwoomStatus: '/api/kiwoom/status',
-      kiwoomRankings:
-        '/api/kiwoom/rankings?market=KR&type=volume&limit=30',
-      stockQuote: '/api/stocks/005930/quote',
-      watchlist: '/api/watchlist',
-      alerts: '/api/market/alerts?market=ALL',
-    },
-  });
+  res.json({ ok: true, service: 'seungjae-stock-api' });
 });
 
 router.use('/', healthRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
-router.use('/debug', providerDebugRouter);
-router.use('/', pushRouter);
-router.use('/stocks', stocksRouter);
-router.use('/', watchlistRouter);
 router.use('/kiwoom', kiwoomRouter);
+router.use('/', cryptoRouter);
+
+// -------------------------------------------------------------------
+// Admin routes (auth + admin role required — checked inside adminRouter)
+// -------------------------------------------------------------------
+router.use('/admin', adminRouter);
+
+// -------------------------------------------------------------------
+// Authenticated routes (login required)
+// -------------------------------------------------------------------
+router.use(requireMember);
+router.use('/debug', requireAdmin, providerDebugRouter);
+router.use('/', pushRouter);
+router.use('/', watchlistRouter);
+router.use('/stocks', stocksRouter);
+router.use('/backup', backupRouter);
 
 export default router;

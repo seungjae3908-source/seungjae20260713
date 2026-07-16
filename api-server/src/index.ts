@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import apiRouter from './routes';
+import { startPriceAlertMonitor } from './services/notification.service';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -199,6 +200,8 @@ app.listen(
     console.log(
       '[api-server] Kiwoom routes enabled at /api/kiwoom',
     );
+
+    startPriceAlertMonitor();
 
     if (frontendDist) {
       console.log(

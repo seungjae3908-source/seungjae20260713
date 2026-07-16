@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm run start",
+    "dev": "pnpm run build:server && NODE_ENV=development node --enable-source-maps ./dist/index.mjs",
     "build:frontend": "pnpm --dir ../stock-analyzer run build",
     "build:server": "node ./build.mjs",
     "build": "pnpm run build:frontend && pnpm run build:server",
