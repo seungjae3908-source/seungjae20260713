@@ -208,6 +208,56 @@ export function displayStockName(ticker: string, name: string, _market?: string)
     .trim();
 }
 
+// 주요 코인 한글명 (업비트가 한글명을 주지 않는 경우·비트겟 선물용 폴백)
+const COIN_KO_MAP: Record<string, string> = {
+  BTC: '비트코인',
+  ETH: '이더리움',
+  XRP: '리플',
+  SOL: '솔라나',
+  DOGE: '도지코인',
+  ADA: '에이다',
+  TRX: '트론',
+  LINK: '체인링크',
+  AVAX: '아발란체',
+  DOT: '폴카닷',
+  SUI: '수이',
+  XLM: '스텔라루멘',
+  BCH: '비트코인캐시',
+  LTC: '라이트코인',
+  ETC: '이더리움클래식',
+  PEPE: '페페',
+  SHIB: '시바이누',
+  USDT: '테더',
+  HBAR: '헤데라',
+  NEAR: '니어프로토콜',
+  APT: '앱토스',
+  ARB: '아비트럼',
+  OP: '옵티미즘',
+  ATOM: '코스모스',
+  UNI: '유니스왑',
+  ONDO: '온도파이낸스',
+  SEI: '세이',
+  STX: '스택스',
+  AAVE: '에이브',
+  ENS: '이더리움네임서비스',
+};
+
+// 심볼에서 기초 코인만 추출: 'KRW-BTC' → 'BTC', 'BTCUSDT' → 'BTC'
+function coinBaseSymbol(symbol: string): string {
+  const raw = String(symbol ?? '').toUpperCase().trim();
+  const dashed = raw.includes('-') ? raw.split('-').pop() ?? raw : raw;
+  return dashed.replace(/(USDT|USDC|KRW|BTC)$/u, (m) => (dashed === m ? m : '')) || dashed;
+}
+
+export function displayCoinName(symbol: string, koreanName?: unknown, englishName?: unknown) {
+  const ko = String(koreanName ?? '').trim();
+  if (ko) return ko;
+  const base = coinBaseSymbol(symbol);
+  if (COIN_KO_MAP[base]) return COIN_KO_MAP[base];
+  const en = String(englishName ?? '').trim();
+  return en || String(symbol ?? '');
+}
+
 export function translateMarketText(value: unknown) {
   const raw = String(value ?? '').trim();
 

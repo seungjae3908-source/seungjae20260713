@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { api, apiGet, type SearchResult } from '@/lib/api';
-import { formatAppPercent, formatAppPrice, toggleWatchlistItem, isInWatchlist } from '@/lib/stock-display';
+import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice, toggleWatchlistItem, isInWatchlist } from '@/lib/stock-display';
 import { cn } from '@/lib/utils';
 import { useAssetMode } from '@/lib/asset-mode';
 
@@ -150,7 +150,7 @@ export default function StockInfoPage() {
     enabled: asset === 'stock' && Boolean(ticker),
   });
 
-  const selectedName = text(quote.data?.name) ?? text(profile.data?.name) ?? ticker;
+  const selectedName = displayStockName(ticker, text(quote.data?.name) ?? text(profile.data?.name) ?? ticker, market);
   const currency = text(quote.data?.currency) ?? (market === 'KR' ? 'KRW' : 'USD');
   const financeData = financials.data?.financials ?? financials.data ?? {};
   const financeRows = (financialPeriod === 'annual'
@@ -179,17 +179,20 @@ export default function StockInfoPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <header className="border-b border-card-border bg-background/95 px-4 pb-3 pt-4 backdrop-blur">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-black">주식정보</h1>
-            <p className="mt-1 text-xs text-muted-foreground">선택 종목의 실제 시세·재무·수급·공매도·뉴스·공시</p>
-          </div>
-          <button type="button" onClick={refreshAll} aria-label="전체 새로고침" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card">
+        <div className="relative text-center">
+          <h1 className="text-xl font-black">정보</h1>
+          <p className="mt-1 text-xs text-muted-foreground">선택 종목의 실제 시세·재무·수급·공매도·뉴스·공시</p>
+          <button type="button" onClick={refreshAll} aria-label="전체 새로고침" className="absolute right-0 top-0 flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card">
             <RefreshCw className={cn('h-4 w-4', quote.isFetching && 'animate-spin')} />
           </button>
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-2">
+          <Tab active onClick={() => undefined}>정보</Tab>
+          <Tab active={false} onClick={() => navigate('/learn')}>공부</Tab>
+        </div>
+
+        <div className="mt-2 grid grid-cols-2 gap-2">
           <Tab active={asset === 'stock'} onClick={() => updateSelection({ asset: 'stock' })}>주식</Tab>
           <Tab active={asset === 'coin'} onClick={() => updateSelection({ asset: 'coin' })}>코인</Tab>
         </div>
@@ -215,7 +218,7 @@ export default function StockInfoPage() {
               {search.isError && <InlineState tone="error">종목 목록을 불러오지 못했습니다.</InlineState>}
               {candidates.map((item: SearchResult) => (
                 <button key={`${item.market}:${item.ticker}`} type="button" onClick={() => { setSearchText(''); updateSelection({ ticker: item.ticker }); }} className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2 text-left', item.ticker === ticker ? 'bg-primary/10 text-primary' : 'bg-secondary/60')}>
-                  <span className="min-w-0 truncate text-sm font-black">{item.name}</span>
+                  <span className="min-w-0 truncate text-sm font-black">{displayStockName(item.ticker, item.name, item.market)}</span>
                   <span className="ml-2 shrink-0 text-[10px] font-bold text-muted-foreground">{item.ticker}</span>
                 </button>
               ))}
@@ -451,7 +454,7 @@ function CoinInfo() {
             const itemSymbol = String(item.symbol);
             return (
               <button key={itemSymbol} type="button" onClick={() => { setSearchText(''); changeCoin(coinMarket, itemSymbol); }} className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2 text-left', itemSymbol === symbol ? 'bg-primary/10 text-primary' : 'bg-secondary/60')}>
-                <span className="min-w-0 truncate text-sm font-black">{item.koreanName ?? item.englishName ?? itemSymbol}</span>
+                <span className="min-w-0 truncate text-sm font-black">{displayCoinName(String(itemSymbol), item.koreanName, item.englishName)}</span>
                 <span className="ml-2 shrink-0 text-[10px] font-bold text-muted-foreground">{itemSymbol}</span>
               </button>
             );
@@ -464,7 +467,7 @@ function CoinInfo() {
           <>
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-xl font-black">{selected.koreanName ?? selected.englishName ?? selected.symbol}</p>
+                <p className="text-xl font-black">{displayCoinName(String(selected.symbol), selected.koreanName, selected.englishName)}</p>
                 <p className="mt-1 text-xs font-bold text-muted-foreground">{selected.symbol} · {coinMarket === 'spot' ? '업비트 KRW' : '비트겟 USDT 선물'} · 기준 {formatDate(coinMarket === 'spot' ? spotTickers.data?.updatedAt : futuresTickers.data?.updatedAt)}</p>
               </div>
               <button type="button" onClick={() => { void (coinMarket === 'spot' ? spotTickers.refetch() : futuresTickers.refetch()); }} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border"><RefreshCw className="h-4 w-4" /></button>

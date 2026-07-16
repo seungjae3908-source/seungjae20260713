@@ -6,7 +6,7 @@ import { BottomNav } from '@/components/bottom-nav';
 import { AssetSwitch } from '@/components/asset-switch';
 import { useAssetMode } from '@/lib/asset-mode';
 import { api, apiGet, type QuoteRow } from '@/lib/api';
-import { formatAppPercent, formatAppPrice } from '@/lib/stock-display';
+import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
 import { cn } from '@/lib/utils';
 
 type AnyObj = Record<string, any>;
@@ -158,9 +158,9 @@ function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
         <div className="flex items-center justify-between"><h2 className="text-sm font-black">{mode === 'spot' ? '코인 현물 시장' : '코인 선물 시장'}</h2><span className={cn('rounded-full px-2 py-1 text-[10px] font-black', ok ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive')}>{exchange} · {ok ? '정상' : '오류'}</span></div>
         <div className="mt-3 grid grid-cols-3 gap-2">
-          <CryptoSummary row={btc} label={mode === 'spot' ? 'BTC/KRW' : 'BTCUSDT'} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
-          <CryptoSummary row={eth} label={mode === 'spot' ? 'ETH/KRW' : 'ETHUSDT'} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
-          <CryptoSummary row={xrp} label={mode === 'spot' ? 'XRP/KRW' : 'XRPUSDT'} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
+          <CryptoSummary row={btc} label={`비트코인 (${mode === 'spot' ? 'BTC/KRW' : 'BTCUSDT'})`} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
+          <CryptoSummary row={eth} label={`이더리움 (${mode === 'spot' ? 'ETH/KRW' : 'ETHUSDT'})`} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
+          <CryptoSummary row={xrp} label={`리플 (${mode === 'spot' ? 'XRP/KRW' : 'XRPUSDT'})`} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
         </div>
         <p className="mt-2 text-[10px] font-bold text-muted-foreground">
           {mode === 'spot' ? '업비트 공개 API' : '비트겟 공개 API'} 실시간 시세 기준
@@ -179,12 +179,12 @@ function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 
 }
 
 function StockRow({ row, rank, onClick }: { row: QuoteRow; rank: number; onClick: () => void }) {
-  return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl bg-secondary/60 p-3 text-left"><span className="w-6 text-center text-sm font-black text-primary">{rank}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{row.name}</p><p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{row.ticker}</p></div><div className="text-right"><p className="text-xs font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('text-[10px] font-black', row.changePercent >= 0 ? 'text-positive' : 'text-destructive')}>{formatAppPercent(row.changePercent)}</p></div></button>;
+  return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl bg-secondary/60 p-3 text-left"><span className="w-6 text-center text-sm font-black text-primary">{rank}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayStockName(row.ticker, row.name, row.market)}</p><p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{row.ticker}</p></div><div className="text-right"><p className="text-xs font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('text-[10px] font-black', row.changePercent >= 0 ? 'text-positive' : 'text-destructive')}>{formatAppPercent(row.changePercent)}</p></div></button>;
 }
 
 function CryptoRow({ row, rank, currency, onClick }: { row: AnyObj; rank: number; currency: string; onClick: () => void }) {
   const change = finite(row.changePercent ?? row.changePercent24h);
-  return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl bg-secondary/60 p-3 text-left"><span className="w-6 text-center text-sm font-black text-primary">{rank}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{row.koreanName ?? row.englishName ?? row.symbol}</p><p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{row.symbol}</p></div><div className="text-right"><p className="text-xs font-black">{formatAppPrice(Number(row?.price), currency)}</p><p className={cn('text-[10px] font-black', change == null ? 'text-muted-foreground' : change >= 0 ? 'text-positive' : 'text-destructive')}>{change == null ? '데이터 없음' : formatAppPercent(change)}</p></div></button>;
+  return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl bg-secondary/60 p-3 text-left"><span className="w-6 text-center text-sm font-black text-primary">{rank}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayCoinName(String(row.symbol), row.koreanName, row.englishName)}</p><p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{row.symbol}</p></div><div className="text-right"><p className="text-xs font-black">{formatAppPrice(Number(row?.price), currency)}</p><p className={cn('text-[10px] font-black', change == null ? 'text-muted-foreground' : change >= 0 ? 'text-positive' : 'text-destructive')}>{change == null ? '데이터 없음' : formatAppPercent(change)}</p></div></button>;
 }
 
 function CryptoSummary({ row, label, currency }: { row?: AnyObj; label: string; currency: string }) {
