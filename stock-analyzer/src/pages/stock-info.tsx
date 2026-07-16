@@ -221,7 +221,7 @@ export default function StockInfoPage() {
           <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
             <label className="flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
               <Search className="h-4 w-4 text-muted-foreground" />
-              <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={market === 'KR' ? '국내 종목명·코드 검색' : '미국 종목명·티커·한글명 검색'} className="min-w-0 flex-1 bg-transparent text-center text-sm font-bold outline-none" />
+              <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={market === 'KR' ? '국내 종목명·코드 검색' : '미국 종목명·티커·한글명 검색'} className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
             </label>
             {searchText.trim().length > 0 && (
               <div className="mt-3 max-h-44 space-y-1 overflow-y-auto">
