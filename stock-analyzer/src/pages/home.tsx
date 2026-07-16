@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, RefreshCw, Search } from 'lucide-react';
+import { Bell, ChevronRight, RefreshCw, Search } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { AssetSwitch } from '@/components/asset-switch';
 import { useAssetMode } from '@/lib/asset-mode';
@@ -127,10 +127,19 @@ function StockHome({ mode, summary, sectorData, summaryLoading, summaryError, se
   const wanted = mode === 'KR' ? ['kospi', 'kosdaq'] : ['nasdaq'];
   const indices = summary.filter((item) => wanted.includes(String(item.key).toLowerCase()));
   const sectors = sectorData?.sectors ?? [];
-  // 딥링크(?sector=키) 지원 — 기본 동작은 기존과 동일(첫 섹터 선택).
-  const [activeSector, setActiveSector] = useState<string | null>(() => new URLSearchParams(window.location.search).get('sector'));
-  const selected = sectors.find((sector) => sector.key === activeSector) ?? sectors[0] ?? null;
-  const sectorRows = selected?.rows ?? [];
+  // 실제 인기(섹터 내 종목의 거래대금 합, 없으면 거래량 합) 기준 상위 5개만 세로 목록으로.
+  const topSectors = useMemo(() => {
+    const scored = sectors.map((sector) => ({
+      sector,
+      score: sector.rows.reduce((sum, row) => sum + (finite(row.tradingValue) ?? finite(row.volume) ?? 0), 0),
+      count: sector.rows.length,
+    }));
+    scored.sort((a, b) => (b.count > 0 ? 1 : 0) - (a.count > 0 ? 1 : 0) || b.score - a.score || b.count - a.count);
+    return scored.slice(0, 5).map((item) => item.sector);
+  }, [sectors]);
+  // 딥링크(?sector=키) 지원 — 해당 섹터 팝업을 바로 연다. 기본은 팝업 닫힘.
+  const [openSector, setOpenSector] = useState<string | null>(() => new URLSearchParams(window.location.search).get('sector'));
+  const selected = sectors.find((sector) => sector.key === openSector) ?? null;
   return (
     <>
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
@@ -149,16 +158,18 @@ function StockHome({ mode, summary, sectorData, summaryLoading, summaryError, se
         <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-black">섹터별 인기종목</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">{sectorData?.sortBasis ?? '거래대금 기준'}</p></div><button type="button" onClick={() => onNavigate('/stocks')} className="text-xs font-black text-primary">전체보기</button></div>
         {sectorLoading && <State>섹터 데이터를 불러오는 중입니다.</State>}
         {sectorError && <State error>섹터 데이터 제공기관이 지연되고 있습니다.</State>}
-        {sectors.length > 0 && (
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {sectors.map((sector) => (
-              <button key={sector.key} type="button" onClick={() => setActiveSector(sector.key)} className={cn('inline-flex items-center justify-center text-center break-keep leading-tight shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold', selected?.key === sector.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{sector.label}</button>
-            ))}
-          </div>
-        )}
-        <div className="mt-3 space-y-2">{sectorRows.map((row, index) => <StockRow key={`${row.market}:${row.ticker}`} row={row} rank={row.rank ?? index + 1} onClick={() => onNavigate(`/stock/${encodeURIComponent(row.ticker)}`)} />)}</div>
-        {!sectorLoading && !sectorError && sectorRows.length === 0 && <State>현재 표시할 실제 종목 데이터가 없습니다.</State>}
+        {/* 인기 섹터 상위 5개 — 세로 목록(가로 스크롤 없음). 종목은 팝업에서만 표시. */}
+        <div className="mt-3 space-y-2">
+          {topSectors.map((sector) => <SectorListButton key={sector.key} label={sector.label} onClick={() => setOpenSector(sector.key)} />)}
+        </div>
+        {!sectorLoading && !sectorError && topSectors.length === 0 && <State>현재 표시할 실제 섹터 데이터가 없습니다.</State>}
       </section>
+      {selected && (
+        <SectorPopup title={`${selected.label} 인기종목`} sortBasis={sectorData?.sortBasis ?? '거래대금 기준'} onViewAll={() => onNavigate('/stocks')} onClose={() => setOpenSector(null)}>
+          {selected.rows.slice(0, 5).map((row, index) => <StockRow key={`${row.market}:${row.ticker}`} row={row} rank={row.rank ?? index + 1} onClick={() => onNavigate(`/stock/${encodeURIComponent(row.ticker)}`)} />)}
+          {selected.rows.length === 0 && <State>현재 표시할 실제 종목 데이터가 없습니다.</State>}
+        </SectorPopup>
+      )}
     </>
   );
 }
@@ -199,14 +210,22 @@ function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 
     return map;
   }, [rows]);
 
-  // 딥링크(?coinCat=키) 지원 — 기본 동작은 기존과 동일(첫 분야 선택).
-  const [activeSector, setActiveSector] = useState<string | null>(() => new URLSearchParams(window.location.search).get('coinCat'));
-  const selected = COIN_SECTORS.find((sector) => sector.key === activeSector) ?? COIN_SECTORS[0];
-  const sectorRows = useMemo(
-    () =>
-      selected.symbols
-        .map((symbol) => bySymbol.get(symbol))
-        .filter((row): row is AnyObj => Boolean(row)),
+  // 실제 거래대금 합 기준 상위 5개 분야만 세로 목록으로.
+  const rankedSectors = useMemo(() => {
+    const scored = COIN_SECTORS.map((sector) => {
+      const sectorRows = sector.symbols.map((symbol) => bySymbol.get(symbol)).filter((row): row is AnyObj => Boolean(row));
+      return { sector, sectorRows, score: sectorRows.reduce((sum, row) => sum + (finite(row.tradingValue24h) ?? 0), 0) };
+    });
+    // 실데이터가 있는 분야만 후보로 삼는다 — 시세가 전혀 없으면 목록 대신 정직한 안내 문구를 보여준다.
+    const withData = scored.filter((item) => item.sectorRows.length > 0);
+    withData.sort((a, b) => b.score - a.score);
+    return withData.slice(0, 5);
+  }, [bySymbol]);
+  // 딥링크(?coinCat=키) 지원 — 해당 분야 팝업을 바로 연다. 기본은 팝업 닫힘.
+  const [openSector, setOpenSector] = useState<string | null>(() => new URLSearchParams(window.location.search).get('coinCat'));
+  const selected = COIN_SECTORS.find((sector) => sector.key === openSector) ?? null;
+  const selectedRows = useMemo(
+    () => (selected ? selected.symbols.map((symbol) => bySymbol.get(symbol)).filter((row): row is AnyObj => Boolean(row)) : []),
     [bySymbol, selected],
   );
 
@@ -228,15 +247,54 @@ function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 
         <div className="flex items-center justify-between"><div><h2 className="text-sm font-black">분야별 인기코인</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">거래대금 기준</p></div><button type="button" onClick={() => onNavigate('/stocks')} className="text-xs font-black text-primary">전체보기</button></div>
         {loading && <State>코인 시세를 불러오는 중입니다.</State>}
         {error && <State error>거래소 시세를 불러오지 못했습니다.</State>}
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-          {COIN_SECTORS.map((sector) => (
-            <button key={sector.key} type="button" onClick={() => setActiveSector(sector.key)} className={cn('inline-flex items-center justify-center text-center break-keep leading-tight shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold', selected.key === sector.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{sector.label}</button>
-          ))}
+        {/* 인기 분야 상위 5개 — 세로 목록(가로 스크롤 없음). 코인은 팝업에서만 표시. */}
+        <div className="mt-3 space-y-2">
+          {rankedSectors.map(({ sector }) => <SectorListButton key={sector.key} label={sector.label} onClick={() => setOpenSector(sector.key)} />)}
         </div>
-        <div className="mt-3 space-y-2">{sectorRows.map((row, index) => <CryptoRow key={String(row.symbol)} row={row} rank={index + 1} currency={mode === 'spot' ? 'KRW' : 'USDT'} onClick={() => onNavigate(`/stock-info?asset=coin&coinMarket=${mode}&symbol=${encodeURIComponent(String(row.symbol))}`)} />)}</div>
-        {!loading && !error && sectorRows.length === 0 && <State>현재 표시할 실제 종목 데이터가 없습니다.</State>}
+        {!loading && !error && rankedSectors.length === 0 && <State>현재 표시할 실제 분야 데이터가 없습니다.</State>}
       </section>
+      {selected && (
+        <SectorPopup title={`${selected.label} 인기코인`} sortBasis="거래대금 기준" onViewAll={() => onNavigate('/stocks')} onClose={() => setOpenSector(null)}>
+          {selectedRows.slice(0, 5).map((row, index) => <CryptoRow key={String(row.symbol)} row={row} rank={index + 1} currency={mode === 'spot' ? 'KRW' : 'USDT'} onClick={() => onNavigate(`/stock-info?asset=coin&coinMarket=${mode}&symbol=${encodeURIComponent(String(row.symbol))}`)} />)}
+          {selectedRows.length === 0 && <State>현재 표시할 실제 종목 데이터가 없습니다.</State>}
+        </SectorPopup>
+      )}
     </>
+  );
+}
+
+// 섹터 세로 목록의 한 줄 버튼 — 이름과 화살표 그룹을 카드 정중앙에 배치.
+function SectorListButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="flex w-full items-center justify-center gap-1.5 rounded-2xl border border-card-border bg-secondary/60 px-4 py-3 text-center">
+      <span className="min-w-0 break-keep text-sm font-black leading-tight">{label}</span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+    </button>
+  );
+}
+
+// 섹터를 눌렀을 때 뜨는 작은 하단 팝업 — 페이지 이동 없음, 하단 메뉴보다 위(z-[70]).
+function SectorPopup({ title, sortBasis, children, onViewAll, onClose }: { title: string; sortBasis: string; children: React.ReactNode; onViewAll: () => void; onClose: () => void }) {
+  // 키보드(Esc) 닫기 지원.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/60 p-4 pb-24" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-md overflow-hidden rounded-3xl border border-card-border bg-card shadow-lg" onClick={(event) => event.stopPropagation()}>
+        <div className="border-b border-card-border px-4 py-3 text-center">
+          <h3 className="break-keep text-sm font-black leading-tight">{title}</h3>
+          <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{sortBasis}</p>
+        </div>
+        <div className="max-h-[45vh] space-y-2 overflow-y-auto p-3">{children}</div>
+        <div className="grid grid-cols-2 gap-2 border-t border-card-border p-3">
+          <button type="button" onClick={onViewAll} className="inline-flex items-center justify-center rounded-xl border border-primary bg-primary px-3 py-2 text-center text-xs font-black text-primary-foreground">전체보기</button>
+          <button type="button" onClick={onClose} className="inline-flex items-center justify-center rounded-xl border border-card-border bg-secondary/60 px-3 py-2 text-center text-xs font-black">닫기</button>
+        </div>
+      </div>
+    </div>
   );
 }
 

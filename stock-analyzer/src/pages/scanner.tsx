@@ -929,8 +929,7 @@ export default function ScannerPage() {
           </button>
         </div>
 
-        <AssetSwitch className="mb-3" />
-
+        {/* 1행: 조건검색/자동매매 */}
         <div className="mb-2 grid grid-cols-2 gap-2">
           <button
             type="button"
@@ -958,6 +957,31 @@ export default function ScannerPage() {
           </button>
         </div>
 
+        {/* 2행: 주식/코인 */}
+        <div className="mb-2 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => assetMode.setAsset("stock")}
+            className={cn(
+              "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-3 py-2 text-sm font-bold",
+              assetMode.asset === "stock"
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-card-border bg-card text-muted-foreground",
+            )}
+          >
+            주식
+          </button>
+          {/* 이 헤더는 주식 모드에서만 렌더링되므로(코인은 별도 워크스페이스) 코인 버튼은 항상 비선택 상태 */}
+          <button
+            type="button"
+            onClick={() => assetMode.setAsset("coin")}
+            className="inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border border-card-border bg-card px-3 py-2 text-sm font-bold text-muted-foreground"
+          >
+            코인
+          </button>
+        </div>
+
+        {/* 3행: 국내/해외 — 실제 조건검색 요청 시장값(chooseMarket)과 직접 연결 */}
         <div className="grid grid-cols-2 gap-2">
           {MARKET_OPTIONS.map((item) => (
             <button
