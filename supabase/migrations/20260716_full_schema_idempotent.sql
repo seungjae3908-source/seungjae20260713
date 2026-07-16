@@ -226,31 +226,34 @@ alter table public.price_alerts enable row level security;
 -- 13. RLS 정책
 -- ============================================================
 
+-- 정책보다 먼저 헬퍼 함수 정의 (아래 정책들이 참조)
+create or replace function public.is_approved_member()
+returns boolean language sql stable security definer set search_path = public
+as $ select exists(select 1 from public.profiles where id = auth.uid() and status = 'approved') $;
+
+create or replace function public.is_admin()
+returns boolean language sql stable security definer set search_path = public
+as $ select exists(select 1 from public.profiles where id = auth.uid() and status = 'approved' and role = 'admin') $;
+
 -- profiles
 drop policy if exists "members read own profile" on public.profiles;
 create policy "members read own profile" on public.profiles
   for select using (id = auth.uid());
 
+-- 주의: profiles 정책 안에서 profiles를 직접 서브쿼리하면 무한 재귀(42P17)가
+-- 발생하므로 반드시 security definer 함수(is_admin)를 사용합니다.
 drop policy if exists "admins read profiles" on public.profiles;
 create policy "admins read profiles" on public.profiles
-  for select using (
-    exists(select 1 from public.profiles p where p.id = auth.uid() and p.status = 'approved' and p.role = 'admin')
-  );
+  for select using (public.is_admin());
 
 drop policy if exists "admins update profiles" on public.profiles;
 create policy "admins update profiles" on public.profiles
-  for update using (
-    exists(select 1 from public.profiles p where p.id = auth.uid() and p.status = 'approved' and p.role = 'admin')
-  ) with check (
-    exists(select 1 from public.profiles p where p.id = auth.uid() and p.status = 'approved' and p.role = 'admin')
-  );
+  for update using (public.is_admin()) with check (public.is_admin());
 
 -- audit_logs
 drop policy if exists "admins read audit logs" on public.audit_logs;
 create policy "admins read audit logs" on public.audit_logs
-  for select using (
-    exists(select 1 from public.profiles p where p.id = auth.uid() and p.status = 'approved' and p.role = 'admin')
-  );
+  for select using (public.is_admin());
 
 revoke insert, update, delete on public.audit_logs from anon, authenticated;
 revoke delete on public.profiles from anon, authenticated;
