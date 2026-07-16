@@ -26,7 +26,7 @@ const NEGATIVE_EVENTS = new Set([
 
 const POSITIVE_EVENTS = new Set(['DIVIDEND', 'SUPPLY_CONTRACT']);
 
-async function buildContext(entry: CatalogEntry): Promise<SignalContext> {
+export async function buildContext(entry: CatalogEntry): Promise<SignalContext> {
   const ctx: SignalContext = { currency: entry.currency };
 
   const [fin, risk, news] = await Promise.allSettled([
@@ -421,7 +421,14 @@ async function scan(
   selected: string[],
   filters: ScanFilters = {},
   limit = SCAN_POOL_LIMIT,
-): Promise<{ cards: ScanCard[]; selected: string[]; supportedIndicators: string[] }> {
+): Promise<{
+  cards: ScanCard[];
+  selected: string[];
+  supportedIndicators: string[];
+  scanned: number;
+  excludedCount: number;
+  appliedFilters: { volumeThreshold: number | null; tradingValueThreshold: number | null };
+}> {
   const keys = normalizeSelected(selected);
   const active: ScanKey[] =
     keys.length > 0 ? keys : ['volume_accum', 'ma_breakout', 'ai_high'];
@@ -437,6 +444,9 @@ async function scan(
       : null;
 
   const pool = CATALOG.filter(marketFilter(market)).slice(0, limit);
+
+  // 공급자 오류(데이터 조회 실패)와 조건 미충족을 구분해 집계한다.
+  let providerErrors = 0;
 
   const settled = await Promise.all(
     pool.map(async (entry): Promise<ScanCard | null> => {
@@ -537,20 +547,37 @@ async function scan(
           selectedCount: active.length,
         };
       } catch {
+        // 데이터 조회 실패(공급자 오류) — 조건 미충족(null 반환 경로)과 구분.
+        providerErrors += 1;
         return null;
       }
     }),
   );
+
+  // 풀의 대부분에서 데이터 조회 자체가 실패하면 "결과 0건"이 아니라
+  // 공급자 오류로 명시적으로 실패시킨다.
+  if (pool.length > 0 && providerErrors >= Math.max(10, Math.ceil(pool.length * 0.8))) {
+    const err = new Error(
+      `SCAN_PROVIDER_ERROR: ${providerErrors}/${pool.length} 종목 데이터 조회 실패 (시세 공급자 장애)`,
+    );
+    (err as any).provider = 'market-data';
+    throw err;
+  }
 
   const cards = settled
     .filter((card): card is ScanCard => card !== null)
     .sort((a, b) => b.matchCount - a.matchCount || b.score - a.score)
     .slice(0, SCAN_CARD_LIMIT);
 
+  const survived = settled.filter((card) => card !== null).length;
+
   return {
     cards,
     selected: active.map((key) => SCAN_LABELS[key]),
     supportedIndicators: SUPPORTED_INDICATORS,
+    scanned: pool.length,
+    excludedCount: pool.length - survived,
+    appliedFilters: { volumeThreshold, tradingValueThreshold },
   };
 }
 

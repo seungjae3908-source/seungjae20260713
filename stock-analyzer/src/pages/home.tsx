@@ -140,7 +140,7 @@ function StockHome({ mode, summary, rows, loading, error, onNavigate }: { mode: 
         {!loading && rows.length === 0 && <State>실제 순위 데이터가 없습니다.</State>}
       </section>
       <div className="grid grid-cols-2 gap-3">
-        <QuickCard icon={TrendingUp} title="AI 추천·저평가 회복" onClick={() => onNavigate('/stocks')} />
+        <QuickCard icon={TrendingUp} title="AI 추천 (규칙 기반)" onClick={() => onNavigate('/recommendations')} />
         <QuickCard icon={ShieldAlert} title="자동매매 상태" onClick={() => onNavigate('/auto-trading')} />
       </div>
     </>
@@ -152,14 +152,19 @@ function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 
   const ok = mode === 'spot' ? status?.upbit?.ok : status?.bitget?.ok;
   const btc = rows.find((row) => String(row.symbol).startsWith('BTC'));
   const eth = rows.find((row) => String(row.symbol).startsWith('ETH'));
+  const xrp = rows.find((row) => String(row.symbol).startsWith('XRP'));
   return (
     <>
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
         <div className="flex items-center justify-between"><h2 className="text-sm font-black">{mode === 'spot' ? '코인 현물 시장' : '코인 선물 시장'}</h2><span className={cn('rounded-full px-2 py-1 text-[10px] font-black', ok ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive')}>{exchange} · {ok ? '정상' : '오류'}</span></div>
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="mt-3 grid grid-cols-3 gap-2">
           <CryptoSummary row={btc} label={mode === 'spot' ? 'BTC/KRW' : 'BTCUSDT'} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
           <CryptoSummary row={eth} label={mode === 'spot' ? 'ETH/KRW' : 'ETHUSDT'} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
+          <CryptoSummary row={xrp} label={mode === 'spot' ? 'XRP/KRW' : 'XRPUSDT'} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
         </div>
+        <p className="mt-2 text-[10px] font-bold text-muted-foreground">
+          {mode === 'spot' ? '업비트 공개 API' : '비트겟 공개 API'} 실시간 시세 기준
+        </p>
         {mode === 'futures' && btc && <div className="mt-2 grid grid-cols-2 gap-2"><InfoCard label="BTC 펀딩비" value={finite(btc.fundingRate) == null ? '데이터 없음' : `${(Number(btc.fundingRate) * 100).toFixed(4)}%`} /><InfoCard label="BTC 미결제약정" value={finite(btc.openInterest) == null ? '데이터 없음' : Number(btc.openInterest).toLocaleString()} /></div>}
       </section>
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">

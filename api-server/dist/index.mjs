@@ -6,8 +6,8 @@ const require = __createRequire(import.meta.url);
 // src/index.ts
 import express from "express";
 import cors from "cors";
-import path5 from "node:path";
-import fs3 from "node:fs";
+import path6 from "node:path";
+import fs4 from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // src/routes/index.ts
@@ -1963,7 +1963,7 @@ async function getKiwoomToken() {
 }
 async function kiwoomRequest({
   apiId,
-  path: path6,
+  path: path7,
   body,
   contYn,
   nextKey,
@@ -1992,7 +1992,7 @@ async function kiwoomRequest({
   }
   try {
     const response = await fetch(
-      `${baseUrl()}${path6}`,
+      `${baseUrl()}${path7}`,
       {
         method: "POST",
         headers,
@@ -2009,7 +2009,7 @@ async function kiwoomRequest({
         await sleep(700 * Math.pow(2, retryRateLimit));
         return kiwoomRequest({
           apiId,
-          path: path6,
+          path: path7,
           body,
           contYn,
           nextKey,
@@ -2021,7 +2021,7 @@ async function kiwoomRequest({
       if (authExpired) {
         clearKiwoomTokenCache();
         if (retryAuth) {
-          return kiwoomRequest({ apiId, path: path6, body, contYn, nextKey, retryAuth: false, retryRateLimit });
+          return kiwoomRequest({ apiId, path: path7, body, contYn, nextKey, retryAuth: false, retryRateLimit });
         }
       }
       throw new Error(
@@ -2758,12 +2758,12 @@ async function placeKiwoomDomesticOrder(input) {
     throw new Error("\uC9C0\uC815\uAC00 \uC8FC\uBB38 \uAC00\uACA9\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.");
   }
   const apiId = input.side === "buy" ? process.env.KIWOOM_BUY_ORDER_API_ID?.trim() || "kt10000" : process.env.KIWOOM_SELL_ORDER_API_ID?.trim() || "kt10001";
-  const path6 = process.env.KIWOOM_ORDER_PATH?.trim() || "/api/dostk/ordr";
+  const path7 = process.env.KIWOOM_ORDER_PATH?.trim() || "/api/dostk/ordr";
   const marketTradeType = process.env.KIWOOM_MARKET_ORDER_TRADE_TYPE?.trim() || "3";
   const limitTradeType = process.env.KIWOOM_LIMIT_ORDER_TRADE_TYPE?.trim() || "0";
   const response = await kiwoomRequest({
     apiId,
-    path: path6,
+    path: path7,
     body: {
       dmst_stex_tp: process.env.KIWOOM_DOMESTIC_EXCHANGE?.trim() || "KRX",
       stk_cd: ticker,
@@ -2805,13 +2805,13 @@ async function placeKiwoomUsOrder(input) {
     AMEX: "NA"
   };
   const apiId = input.side === "buy" ? process.env.KIWOOM_US_BUY_ORDER_API_ID?.trim() || "ust20000" : process.env.KIWOOM_US_SELL_ORDER_API_ID?.trim() || "ust20001";
-  const path6 = process.env.KIWOOM_US_ORDER_PATH?.trim() || "/api/us/ordr";
+  const path7 = process.env.KIWOOM_US_ORDER_PATH?.trim() || "/api/us/ordr";
   const marketTradeType = process.env.KIWOOM_US_MARKET_ORDER_TRADE_TYPE?.trim() || "03";
   const limitTradeType = process.env.KIWOOM_US_LIMIT_ORDER_TRADE_TYPE?.trim() || "00";
   const limitPrice = Number(price ?? 0).toFixed(4).replace(/\.?0+$/, "");
   const response = await kiwoomRequest({
     apiId,
-    path: path6,
+    path: path7,
     body: {
       stex_tp: exchangeCode[input.exchange],
       stk_cd: ticker,
@@ -4884,6 +4884,7 @@ function buildHealth(r) {
 }
 function assemble(raw, ratios) {
   return {
+    source: "live",
     quarterly: raw.quarterly,
     annual: raw.annual,
     ratios,
@@ -4933,7 +4934,8 @@ async function getFinancials4(ticker) {
     return await getLive(entry);
   } catch (err) {
     console.error(`live financials failed for ${ticker}:`, err);
-    return getFinancials(ticker);
+    const sample = getFinancials(ticker);
+    return sample ? { ...sample, source: "sample" } : sample;
   }
 }
 var FinancialService = {
@@ -5382,14 +5384,14 @@ function buildKrItems(ds) {
     )
   ];
 }
-function buildUsItems(fs4) {
-  const offering = fs4.filter(
+function buildUsItems(fs5) {
+  const offering = fs5.filter(
     (f) => /S-1|S-3|424B|F-1|F-3/i.test(f.form) || f.events.some((e) => DILUTION_EVENTS.has(e))
   ).length;
-  const delisting = fs4.filter(
+  const delisting = fs5.filter(
     (f) => /^25(-NSE)?$/i.test(f.form) || hasKeyword(f.description, DELISTING_KEYWORDS)
   ).length;
-  const eightK = fs4.filter((f) => /^8-K/i.test(f.form)).length;
+  const eightK = fs5.filter((f) => /^8-K/i.test(f.form)).length;
   return [
     mk(
       "\uD76C\uC11D\uC131 \uC790\uBCF8\uC870\uB2EC (S-1/S-3/424B)",
@@ -5508,8 +5510,8 @@ function krRiskSources(ds) {
     source: "DART"
   }));
 }
-function usRiskSources(fs4) {
-  return fs4.map((f) => ({
+function usRiskSources(fs5) {
+  return fs5.map((f) => ({
     text: `${f.form} ${f.description}`,
     title: `${f.form} \xB7 ${f.description}`,
     summary: `${f.form} \uACF5\uC2DC: ${f.description}`,
@@ -7216,804 +7218,6 @@ var ThemesService = {
   getThemes: buildThemes
 };
 
-// src/routes/market.ts
-var router2 = Router2();
-function normalizeMarket(value) {
-  const raw = String(value ?? "ALL").toUpperCase();
-  if (raw === "KR") return "KR";
-  if (raw === "US") return "US";
-  return "ALL";
-}
-function normalizeTicker2(value) {
-  return String(value ?? "").trim().toUpperCase().replace(/^(KR|US)[:.]/, "");
-}
-function uniqueTickers(values) {
-  return Array.from(new Set(values.map(normalizeTicker2).filter(Boolean)));
-}
-function uniqueRows(rows) {
-  const seen = /* @__PURE__ */ new Set();
-  return rows.filter((row) => {
-    const key = `${row.market}:${row.ticker}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return Number.isFinite(row.price) && row.price > 0;
-  });
-}
-function rankByTradingValue(rows) {
-  return [...rows].sort(
-    (a, b) => Number(b.tradingValue ?? 0) - Number(a.tradingValue ?? 0)
-  );
-}
-function rankByVolume(rows) {
-  return [...rows].sort((a, b) => Number(b.volume ?? 0) - Number(a.volume ?? 0));
-}
-function rankByChange(rows, direction) {
-  return [...rows].sort(
-    (a, b) => direction === "desc" ? Number(b.changePercent ?? 0) - Number(a.changePercent ?? 0) : Number(a.changePercent ?? 0) - Number(b.changePercent ?? 0)
-  );
-}
-function rankByScore(rows) {
-  return [...rows].sort(
-    (a, b) => Number(b.rating?.score ?? 0) - Number(a.rating?.score ?? 0)
-  );
-}
-function marketKeys(scope) {
-  if (scope === "KR") return ["KRX"];
-  if (scope === "US") return ["NASDAQ", "NYSE"];
-  return ["KRX", "NASDAQ", "NYSE"];
-}
-async function liveListings(scope) {
-  const settled = await Promise.allSettled(
-    marketKeys(scope).map((market) => MarketListingService.getMarketListings(market))
-  );
-  const rows = [];
-  for (const result of settled) {
-    if (result.status !== "fulfilled") continue;
-    rows.push(
-      ...result.value.popular,
-      ...result.value.gainers,
-      ...result.value.losers,
-      ...result.value.recommended
-    );
-  }
-  return uniqueRows(rows);
-}
-router2.get("/config", (_req, res) => {
-  res.json({
-    ok: true,
-    service: "seungjae-stock-api",
-    time: (/* @__PURE__ */ new Date()).toISOString(),
-    providers: {
-      kiwoom: Boolean(process.env.KIWOOM_APP_KEY && process.env.KIWOOM_APP_SECRET),
-      naver: true,
-      yahoo: true,
-      upbit: Boolean(process.env.UPBIT_ACCESS_KEY && process.env.UPBIT_SECRET_KEY),
-      bitget: Boolean(
-        process.env.BITGET_API_KEY && process.env.BITGET_SECRET_KEY && process.env.BITGET_PASSPHRASE
-      )
-    }
-  });
-});
-router2.get("/search", async (req, res) => {
-  const q = String(req.query.q ?? "").trim();
-  try {
-    const results = await MarketDataService.search(q, q ? 100 : 500);
-    return res.json({ q, results, count: results.length, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
-  } catch (error) {
-    console.error("market search error:", error);
-    return res.status(502).json({ q, results: [], count: 0, error: "SEARCH_PROVIDER_ERROR" });
-  }
-});
-router2.get("/search/quotes", async (req, res) => {
-  const q = String(req.query.q ?? "").trim();
-  try {
-    const matches = await MarketDataService.search(q, 100);
-    const quotes = await MarketDataService.getQuotes(matches.map((item) => item.ticker));
-    const rows = uniqueRows(quotes);
-    return res.json({ q, results: rows, count: rows.length, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
-  } catch (error) {
-    console.error("market quote search error:", error);
-    return res.status(502).json({ q, results: [], count: 0, error: "QUOTE_SEARCH_PROVIDER_ERROR" });
-  }
-});
-router2.get("/quotes", async (req, res) => {
-  const raw = req.query.tickers ?? req.query.symbols ?? req.query.symbol ?? req.query.ticker ?? "";
-  const tickers = uniqueTickers(String(raw).split(","));
-  const quotes = await MarketDataService.getQuotes(tickers);
-  return res.json({
-    quotes: uniqueRows(quotes),
-    requested: tickers.length,
-    available: quotes.length,
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-  });
-});
-router2.get("/market/movers", async (req, res) => {
-  const scope = normalizeMarket(req.query.market);
-  try {
-    const rows = await liveListings(scope);
-    if (!rows.length) {
-      return res.status(503).json({
-        market: scope,
-        popular: [],
-        volume: [],
-        recommended: [],
-        gainers: [],
-        losers: [],
-        risky: [],
-        error: "MARKET_DATA_UNAVAILABLE",
-        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-      });
-    }
-    const popular = rankByTradingValue(rows).slice(0, 30);
-    const volume = rankByVolume(rows).slice(0, 30);
-    const gainers = rankByChange(rows, "desc").slice(0, 30);
-    const losers = rankByChange(rows, "asc").slice(0, 30);
-    const recommended = rankByScore(rows).slice(0, 30);
-    return res.json({
-      market: scope,
-      provider: "live-market-providers",
-      popular,
-      volume,
-      recommended,
-      gainers,
-      losers,
-      risky: losers,
-      rankingSource: {
-        popular: "\uC2E4\uC81C \uAC70\uB798\uB300\uAE08 \uAE30\uC900",
-        gainers: "\uC2E4\uC81C \uB4F1\uB77D\uB960 \uAE30\uC900",
-        losers: "\uC2E4\uC81C \uB4F1\uB77D\uB960 \uAE30\uC900",
-        recommended: "\uC2E4\uC81C \uB370\uC774\uD130 \uAE30\uBC18 \uC885\uD569\uC810\uC218 \uAE30\uC900"
-      },
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-    });
-  } catch (error) {
-    console.error("market movers error:", error);
-    return res.status(502).json({
-      market: scope,
-      popular: [],
-      volume: [],
-      recommended: [],
-      gainers: [],
-      losers: [],
-      risky: [],
-      error: "MARKET_MOVERS_PROVIDER_ERROR"
-    });
-  }
-});
-router2.get("/market/home", async (_req, res) => {
-  res.setHeader("Cache-Control", "no-store, max-age=0");
-  try {
-    const rows = await MarketListingService.getMarketSummary();
-    const indices = rows.filter((row) => ["kospi", "kosdaq", "nasdaq"].includes(row.key) && row.ok).map((row) => ({
-      key: row.key.toUpperCase(),
-      label: row.label,
-      value: row.price,
-      price: row.price,
-      changeAmount: null,
-      changePercent: row.changePercent,
-      direction: row.changePercent > 0 ? "up" : row.changePercent < 0 ? "down" : "flat",
-      spark: row.spark,
-      provider: "Yahoo Finance",
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-    }));
-    return res.status(indices.length ? 200 : 503).json({
-      ok: indices.length > 0,
-      indices,
-      sectorBriefings: [],
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      ...!indices.length ? { message: "\uC2E4\uC2DC\uAC04 \uC9C0\uC218 \uC81C\uACF5\uAE30\uAD00\uC758 \uC751\uB2F5\uC774 \uC9C0\uC5F0\uB418\uACE0 \uC788\uC2B5\uB2C8\uB2E4." } : {}
-    });
-  } catch (error) {
-    console.error("market home error:", error);
-    return res.status(502).json({ ok: false, indices: [], sectorBriefings: [], error: "INDEX_PROVIDER_ERROR" });
-  }
-});
-router2.get("/market/summary", async (_req, res) => {
-  res.setHeader("Cache-Control", "no-store, max-age=0");
-  try {
-    const items = await MarketListingService.getMarketSummary();
-    const available = items.filter((item) => item.ok);
-    return res.status(available.length ? 200 : 503).json({
-      items,
-      ok: available.length > 0,
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-    });
-  } catch (error) {
-    console.error("market summary error:", error);
-    return res.status(502).json({ ok: false, items: [], error: "SUMMARY_PROVIDER_ERROR" });
-  }
-});
-router2.get("/market/briefing", async (_req, res) => {
-  try {
-    const briefing = await MarketListingService.getBriefing();
-    return res.json(briefing);
-  } catch (error) {
-    console.error("market briefing error:", error);
-    return res.status(502).json({
-      asOf: (/* @__PURE__ */ new Date()).toISOString(),
-      mood: "neutral",
-      headline: "\uC2E4\uC81C \uC2DC\uC7A5 \uBE0C\uB9AC\uD551 \uB370\uC774\uD130\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.",
-      lines: [],
-      strongSectors: [],
-      weakSectors: [],
-      positiveNews: [],
-      negativeNews: [],
-      disclosureRisks: [],
-      gainers: [],
-      losers: [],
-      picks: [],
-      error: "BRIEFING_PROVIDER_ERROR"
-    });
-  }
-});
-router2.get("/market/themes", async (req, res) => {
-  const market = String(req.query.market ?? "KR").toUpperCase() === "US" ? "US" : "KR";
-  try {
-    return res.json(await ThemesService.getThemes(market));
-  } catch (error) {
-    console.error("market themes route error:", error);
-    return res.status(502).json({ market, themes: [], error: "MARKET_THEMES_PROVIDER_ERROR" });
-  }
-});
-router2.get("/market/scan", async (req, res) => {
-  const scope = normalizeMarket(req.query.market);
-  try {
-    const rows = rankByScore(await liveListings(scope)).slice(0, 100);
-    return res.status(rows.length ? 200 : 503).json({
-      market: scope,
-      results: rows,
-      cards: rows,
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      ...!rows.length ? { error: "SCAN_DATA_UNAVAILABLE" } : {}
-    });
-  } catch (error) {
-    console.error("market scan error:", error);
-    return res.status(502).json({ market: scope, results: [], cards: [], error: "SCAN_PROVIDER_ERROR" });
-  }
-});
-router2.get("/market/alerts", async (req, res) => {
-  const scope = normalizeMarket(req.query.market);
-  try {
-    const rows = rankByChange(await liveListings(scope), "desc").slice(0, 20);
-    const alerts = rows.map((row, index) => ({
-      id: `${row.market}:${row.ticker}:movement`,
-      ticker: row.ticker,
-      name: row.name,
-      market: row.market,
-      kind: Number(row.changePercent ?? 0) >= 0 ? "positive" : "negative",
-      category: "\uC2DC\uC138 \uBCC0\uB3D9",
-      title: `${row.name} ${Number(row.changePercent ?? 0) >= 0 ? "\uC0C1\uC2B9" : "\uD558\uB77D"} ${Math.abs(Number(row.changePercent ?? 0)).toFixed(2)}%`,
-      importance: index < 5 ? "high" : index < 12 ? "medium" : "low",
-      time: row.updatedAt,
-      url: null
-    }));
-    return res.json({ market: scope, positive: alerts.filter((item) => item.kind === "positive"), negative: alerts.filter((item) => item.kind === "negative"), alerts, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
-  } catch (error) {
-    console.error("market alerts error:", error);
-    return res.status(502).json({ market: scope, positive: [], negative: [], alerts: [], error: "ALERT_PROVIDER_ERROR" });
-  }
-});
-router2.get("/market/undervalued", async (req, res) => {
-  const raw = String(req.query.market ?? "KRX").toUpperCase();
-  const market = raw === "US" ? "NASDAQ" : raw === "KR" ? "KRX" : raw;
-  try {
-    return res.json(await MarketListingService.getUndervalued(market));
-  } catch (error) {
-    console.error("market undervalued error:", error);
-    return res.status(502).json({ market, cards: [], error: "UNDERVALUED_PROVIDER_ERROR" });
-  }
-});
-var market_default = router2;
-
-// src/routes/news.route.ts
-import { Router as Router3 } from "express";
-var router3 = Router3();
-router3.get("/news/:ticker", async (req, res) => {
-  const fetchedAt = (/* @__PURE__ */ new Date()).toISOString();
-  try {
-    const ticker = String(req.params.ticker || "").toUpperCase();
-    if (!ticker) {
-      return res.status(400).json({ ok: false, error: "TICKER_REQUIRED" });
-    }
-    const data = await NewsService.getNews(ticker);
-    if (!data) {
-      return res.status(404).json({ ok: false, error: "TICKER_NOT_FOUND" });
-    }
-    const provider = /^\d{6}$/.test(ticker) ? "google-news" : "finnhub/google-news";
-    return res.json({ ok: true, provider, fetchedAt, ...data });
-  } catch (error) {
-    if (error instanceof NewsProviderError) {
-      return res.status(502).json({ ok: false, error: "NEWS_PROVIDER_ERROR", message: error.message });
-    }
-    console.error("news route error:", error);
-    return res.status(500).json({ ok: false, error: "NEWS_ROUTE_ERROR" });
-  }
-});
-var news_route_default = router3;
-
-// src/routes/provider-debug.ts
-import fs2 from "node:fs";
-import path3 from "node:path";
-import { Router as Router4 } from "express";
-var router4 = Router4();
-function normalizeTicker3(value) {
-  return String(value ?? "").trim().toUpperCase();
-}
-function isKrTicker4(ticker) {
-  return /^\d{6}$/.test(ticker);
-}
-function errorToJson(error) {
-  if (error instanceof Error) {
-    return {
-      name: error.name,
-      message: error.message,
-      stack: error.stack?.split("\n").slice(0, 8).join("\n")
-    };
-  }
-  return {
-    message: String(error)
-  };
-}
-function safeRead(filePath) {
-  try {
-    const text = fs2.readFileSync(filePath, "utf8");
-    return {
-      exists: true,
-      path: filePath,
-      length: text.length,
-      hasOldStooqMarker: text.includes("STOOQ_HTTP_"),
-      hasNewYahooMarker: text.includes("YAHOO_PROVIDER_MARKER_20260711"),
-      hasYahooChartHttpMarker: text.includes("YAHOO_CHART_HTTP_"),
-      first300: text.slice(0, 300)
-    };
-  } catch (error) {
-    return {
-      exists: false,
-      path: filePath,
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
-async function testOneTicker(ticker) {
-  const clean = normalizeTicker3(ticker);
-  const result = {
-    ticker: clean,
-    marketGuess: isKrTicker4(clean) ? "KR" : "US",
-    naver: null,
-    yahoo: null
-  };
-  if (isKrTicker4(clean)) {
-    try {
-      const naverQuote = await getQuote3(clean);
-      result.naver = {
-        ok: true,
-        quote: naverQuote
-      };
-    } catch (error) {
-      result.naver = {
-        ok: false,
-        error: errorToJson(error)
-      };
-    }
-  } else {
-    result.naver = {
-      ok: false,
-      skipped: "NAVER_ONLY_FOR_KR_TICKER"
-    };
-  }
-  try {
-    const yahooQuote = await getQuote2(clean);
-    result.yahoo = {
-      ok: true,
-      quote: yahooQuote
-    };
-  } catch (error) {
-    result.yahoo = {
-      ok: false,
-      error: errorToJson(error)
-    };
-  }
-  return result;
-}
-router4.get("/provider", async (req, res) => {
-  const raw = String(req.query.tickers ?? req.query.ticker ?? "005930,NVDA");
-  const tickers = raw.split(",").map((ticker) => normalizeTicker3(ticker)).filter(Boolean);
-  const results = await Promise.all(tickers.map((ticker) => testOneTicker(ticker)));
-  res.json({
-    ok: true,
-    testedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    cwd: process.cwd(),
-    results
-  });
-});
-router4.get("/source-check", (_req, res) => {
-  const cwd = process.cwd();
-  const sourceYahooPath = path3.resolve(cwd, "src/providers/yahoo.ts");
-  const sourceNaverPath = path3.resolve(cwd, "src/providers/naver.ts");
-  const sourceMarketPath = path3.resolve(cwd, "src/routes/market.ts");
-  const sourceProviderDebugPath = path3.resolve(cwd, "src/routes/provider-debug.ts");
-  const sourceIndexPath = path3.resolve(cwd, "src/routes/index.ts");
-  const distPath = path3.resolve(cwd, "dist/index.mjs");
-  const packagePath = path3.resolve(cwd, "package.json");
-  res.json({
-    ok: true,
-    checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    cwd,
-    files: {
-      packageJson: safeRead(packagePath),
-      sourceYahoo: safeRead(sourceYahooPath),
-      sourceNaver: safeRead(sourceNaverPath),
-      sourceMarket: safeRead(sourceMarketPath),
-      sourceProviderDebug: safeRead(sourceProviderDebugPath),
-      sourceIndex: safeRead(sourceIndexPath),
-      distIndex: safeRead(distPath)
-    }
-  });
-});
-var provider_debug_default = router4;
-
-// src/routes/push.ts
-import { Router as Router5 } from "express";
-
-// src/services/notification.service.ts
-import webPush from "web-push";
-var DEFAULT_NOTIFICATION_TYPES = [
-  "news_positive",
-  "news_negative",
-  "disclosure_positive",
-  "disclosure_negative",
-  "ai_strong_buy",
-  "ai_sell_signal",
-  "golden_cross",
-  "volume_surge",
-  "capital_event",
-  "price_target",
-  "auto_trade",
-  "system"
-];
-var vapidInitialized = false;
-var priceMonitorRunning = false;
-var priceMonitorTimer = null;
-function isVapidReady() {
-  return Boolean(
-    process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY && process.env.VAPID_SUBJECT
-  );
-}
-function initializeVapid() {
-  if (vapidInitialized || !isVapidReady()) return;
-  webPush.setVapidDetails(
-    process.env.VAPID_SUBJECT,
-    process.env.VAPID_PUBLIC_KEY,
-    process.env.VAPID_PRIVATE_KEY
-  );
-  vapidInitialized = true;
-}
-async function ensureNotificationPreferences(memberId, client2) {
-  const supabase = client2 ?? getSupabase();
-  const { data, error } = await supabase.from("notification_preferences").select("*").eq("member_id", memberId).maybeSingle();
-  if (error) throw error;
-  if (data) return data;
-  const { data: created, error: createError } = await supabase.from("notification_preferences").insert({ member_id: memberId, enabled_types: DEFAULT_NOTIFICATION_TYPES }).select("*").single();
-  if (createError) throw createError;
-  return created;
-}
-async function deliverMemberNotification(input) {
-  const preferences = await ensureNotificationPreferences(input.memberId);
-  const enabledTypes = Array.isArray(preferences.enabled_types) ? preferences.enabled_types : [...DEFAULT_NOTIFICATION_TYPES];
-  if (!enabledTypes.includes(input.type)) {
-    return { appStored: false, pushSent: 0, skipped: "TYPE_DISABLED" };
-  }
-  const appAllowed = input.app !== false && preferences.app_enabled !== false;
-  const pushAllowed = input.push !== false && preferences.push_enabled === true && isVapidReady();
-  let pushSent = 0;
-  if (pushAllowed) {
-    initializeVapid();
-    const supabase = getSupabase();
-    const { data, error } = await supabase.from("push_subscriptions").select("id,endpoint,subscription").eq("member_id", input.memberId);
-    if (error) throw error;
-    const invalidEndpoints = [];
-    const payload = JSON.stringify({
-      title: input.title,
-      body: input.body,
-      url: input.url ?? "/alerts",
-      type: input.type,
-      metadata: input.metadata ?? {}
-    });
-    await Promise.all(
-      (data ?? []).map(async (row) => {
-        try {
-          await webPush.sendNotification(
-            row.subscription,
-            payload
-          );
-          pushSent += 1;
-        } catch {
-          invalidEndpoints.push(String(row.endpoint));
-        }
-      })
-    );
-    if (invalidEndpoints.length > 0) {
-      await supabase.from("push_subscriptions").delete().eq("member_id", input.memberId).in("endpoint", invalidEndpoints);
-    }
-  }
-  let appStored = false;
-  if (appAllowed) {
-    const { error } = await getSupabase().from("notification_history").insert({
-      member_id: input.memberId,
-      notification_type: input.type,
-      title: input.title,
-      body: input.body,
-      url: input.url ?? null,
-      channel: pushSent > 0 ? "both" : "app"
-    });
-    if (error) throw error;
-    appStored = true;
-  }
-  return { appStored, pushSent };
-}
-async function fetchJson4(url) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 1e4);
-  try {
-    const response = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "knowledge-info-price-alert/1.0"
-      },
-      signal: controller.signal
-    });
-    if (!response.ok) throw new Error(`HTTP_${response.status}`);
-    return await response.json();
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-function cleanSymbol(value) {
-  return String(value ?? "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 30);
-}
-async function readAlertPrice(alert) {
-  const symbol = cleanSymbol(alert.symbol);
-  if (!symbol) throw new Error("INVALID_SYMBOL");
-  if (alert.asset_type === "stock") {
-    const quote = await MarketDataService.getQuoteRow(symbol);
-    if (!quote || !Number.isFinite(quote.price) || quote.price <= 0) {
-      throw new Error("STOCK_QUOTE_UNAVAILABLE");
-    }
-    return quote.price;
-  }
-  if (alert.asset_type === "coin_spot") {
-    const market = symbol.startsWith("KRW-") ? symbol : `KRW-${symbol}`;
-    const rows = await fetchJson4(
-      `https://api.upbit.com/v1/ticker?markets=${encodeURIComponent(market)}`
-    );
-    const price2 = Number(rows[0]?.trade_price);
-    if (!Number.isFinite(price2) || price2 <= 0) {
-      throw new Error("UPBIT_QUOTE_UNAVAILABLE");
-    }
-    return price2;
-  }
-  const futuresSymbol = symbol.endsWith("USDT") ? symbol : `${symbol}USDT`;
-  const payload = await fetchJson4(
-    `https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES&symbol=${encodeURIComponent(futuresSymbol)}`
-  );
-  if (String(payload.code ?? "") !== "00000") {
-    throw new Error(`BITGET_${String(payload.code ?? "INVALID")}`);
-  }
-  const price = Number(payload.data?.[0]?.markPrice ?? payload.data?.[0]?.lastPr);
-  if (!Number.isFinite(price) || price <= 0) {
-    throw new Error("BITGET_QUOTE_UNAVAILABLE");
-  }
-  return price;
-}
-function isConditionMet(alert, price) {
-  const target = Number(alert.target_price);
-  return alert.direction === "above" ? price >= target : price <= target;
-}
-function alertUrl(alert) {
-  const symbol = encodeURIComponent(cleanSymbol(alert.symbol));
-  if (alert.asset_type === "stock") {
-    const market = encodeURIComponent(String(alert.market || "KR").toUpperCase());
-    return `/stock-info?asset=stock&market=${market}&ticker=${symbol}`;
-  }
-  const coinMarket = alert.asset_type === "coin_futures" ? "futures" : "spot";
-  return `/stock-info?asset=coin&coinMarket=${coinMarket}&symbol=${symbol}`;
-}
-function formatPrice(value, assetType) {
-  if (assetType === "coin_futures") {
-    return value.toLocaleString("ko-KR", { maximumFractionDigits: 8 });
-  }
-  return value.toLocaleString("ko-KR", { maximumFractionDigits: 4 });
-}
-async function evaluatePriceAlert(alert) {
-  const supabase = getSupabase();
-  const now = /* @__PURE__ */ new Date();
-  if (alert.expires_at && Date.parse(alert.expires_at) <= now.getTime()) {
-    await supabase.from("price_alerts").update({ enabled: false, updated_at: now.toISOString() }).eq("id", alert.id);
-    return;
-  }
-  try {
-    const currentPrice = await readAlertPrice(alert);
-    const met = isConditionMet(alert, currentPrice);
-    const wasMet = alert.condition_met === true;
-    const update = {
-      condition_met: met,
-      last_checked_price: currentPrice,
-      last_checked_at: now.toISOString(),
-      last_error: null,
-      updated_at: now.toISOString()
-    };
-    if (met && !wasMet) {
-      const target = Number(alert.target_price);
-      const directionText = alert.direction === "above" ? "\uC774\uC0C1" : "\uC774\uD558";
-      await deliverMemberNotification({
-        memberId: alert.member_id,
-        type: "price_target",
-        title: `\uC9C0\uC815\uAC00 \uB3C4\uB2EC \xB7 ${cleanSymbol(alert.symbol)}`,
-        body: `\uD604\uC7AC\uAC00 ${formatPrice(currentPrice, alert.asset_type)} \xB7 \uC124\uC815\uAC00 ${formatPrice(target, alert.asset_type)} ${directionText}`,
-        url: alertUrl(alert),
-        app: alert.app_enabled,
-        push: alert.push_enabled,
-        metadata: {
-          alertId: alert.id,
-          assetType: alert.asset_type,
-          market: alert.market,
-          symbol: cleanSymbol(alert.symbol),
-          currentPrice,
-          targetPrice: target,
-          direction: alert.direction
-        }
-      });
-      update.last_triggered_at = now.toISOString();
-      if (!alert.repeat_enabled) update.enabled = false;
-    }
-    const { error } = await supabase.from("price_alerts").update(update).eq("id", alert.id);
-    if (error) throw error;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await supabase.from("price_alerts").update({
-      last_checked_at: now.toISOString(),
-      last_error: message.slice(0, 300),
-      updated_at: now.toISOString()
-    }).eq("id", alert.id);
-  }
-}
-async function runPriceAlertMonitorOnce() {
-  if (priceMonitorRunning) return { checked: 0, skipped: "ALREADY_RUNNING" };
-  if (!isSupabaseConfigured()) return { checked: 0, skipped: "SUPABASE_NOT_CONFIGURED" };
-  priceMonitorRunning = true;
-  try {
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    const { data, error } = await getSupabase().from("price_alerts").select("*").eq("enabled", true).or(`expires_at.is.null,expires_at.gt.${now}`).order("updated_at", { ascending: true }).limit(500);
-    if (error) throw error;
-    const alerts = data ?? [];
-    for (let index = 0; index < alerts.length; index += 5) {
-      await Promise.all(alerts.slice(index, index + 5).map(evaluatePriceAlert));
-    }
-    return { checked: alerts.length };
-  } finally {
-    priceMonitorRunning = false;
-  }
-}
-function startPriceAlertMonitor() {
-  if (priceMonitorTimer) return;
-  const configured = Number(process.env.PRICE_ALERT_MONITOR_INTERVAL_MS ?? 6e4);
-  const intervalMs = Math.max(3e4, Math.min(15 * 6e4, Number.isFinite(configured) ? configured : 6e4));
-  const run = () => {
-    void runPriceAlertMonitorOnce().catch((error) => {
-      console.error("price alert monitor error:", error);
-    });
-  };
-  const initialTimer = setTimeout(run, 1e4);
-  initialTimer.unref?.();
-  priceMonitorTimer = setInterval(run, intervalMs);
-  priceMonitorTimer.unref?.();
-  console.log(`[api-server] price alert monitor enabled (${intervalMs}ms)`);
-}
-
-// src/routes/push.ts
-var router5 = Router5();
-function db(req) {
-  return hasSupabaseServerKey() ? getSupabase() : getUserSupabase(req.accessToken);
-}
-function getEndpoint(body) {
-  if (!body || typeof body !== "object") return null;
-  const endpoint = body.endpoint;
-  return typeof endpoint === "string" && endpoint.length > 0 ? endpoint : null;
-}
-router5.get("/notifications/preferences", async (req, res) => {
-  try {
-    return res.json({ preferences: await ensureNotificationPreferences(req.member.id, db(req)), vapidReady: isVapidReady() });
-  } catch (error) {
-    console.error("notification preferences read error:", error);
-    return res.status(500).json({ error: "NOTIFICATION_PREFERENCES_READ_FAILED" });
-  }
-});
-router5.put("/notifications/preferences", async (req, res) => {
-  const enabledTypes = Array.isArray(req.body?.enabledTypes) ? [...new Set(req.body.enabledTypes.map(String))].filter((item) => DEFAULT_NOTIFICATION_TYPES.includes(item)) : [...DEFAULT_NOTIFICATION_TYPES];
-  const changes = { member_id: req.member.id, enabled_types: enabledTypes, app_enabled: req.body?.appEnabled !== false, push_enabled: req.body?.pushEnabled === true, updated_at: (/* @__PURE__ */ new Date()).toISOString() };
-  const { data, error } = await db(req).from("notification_preferences").upsert(changes, { onConflict: "member_id" }).select("*").single();
-  if (error) return res.status(500).json({ error: "NOTIFICATION_PREFERENCES_SAVE_FAILED" });
-  return res.json({ preferences: data });
-});
-router5.post("/push/subscribe", async (req, res) => {
-  const endpoint = getEndpoint(req.body);
-  if (!endpoint) return res.status(400).json({ error: "INVALID_SUBSCRIPTION" });
-  const { error } = await db(req).from("push_subscriptions").upsert({ member_id: req.member.id, endpoint, subscription: req.body, updated_at: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "endpoint" });
-  if (error) return res.status(500).json({ error: "PUSH_SUBSCRIPTION_SAVE_FAILED" });
-  await db(req).from("notification_preferences").upsert({ member_id: req.member.id, push_enabled: true, updated_at: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "member_id" });
-  const { count } = await db(req).from("push_subscriptions").select("*", { count: "exact", head: true }).eq("member_id", req.member.id);
-  return res.json({ ok: true, count: count ?? 0, vapidReady: isVapidReady() });
-});
-router5.post("/push/unsubscribe", async (req, res) => {
-  const endpoint = getEndpoint(req.body);
-  if (!endpoint) return res.status(400).json({ error: "INVALID_ENDPOINT" });
-  const { error } = await db(req).from("push_subscriptions").delete().eq("member_id", req.member.id).eq("endpoint", endpoint);
-  if (error) return res.status(500).json({ error: "PUSH_UNSUBSCRIBE_FAILED" });
-  return res.json({ ok: true });
-});
-router5.post("/push/test", async (req, res) => {
-  if (!hasSupabaseServerKey()) return res.status(503).json({ error: "SERVICE_KEY_REQUIRED", message: "SUPABASE_SERVICE_ROLE_KEY\uAC00 \uB4F1\uB85D\uB418\uC5B4\uC57C \uC54C\uB9BC \uBC1C\uC1A1\uC744 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." });
-  const body = typeof req.body === "object" && req.body ? req.body : {};
-  const result = await deliverMemberNotification({
-    memberId: req.member.id,
-    type: "system",
-    title: String(body.title ?? "\uC9C0\uC2DD\uC815\uBCF4 \uD14C\uC2A4\uD2B8 \uC54C\uB9BC"),
-    body: String(body.body ?? "\uD68C\uC6D0\uBCC4 \uD1B5\uD569 \uC54C\uB9BC \uC5F0\uACB0 \uD14C\uC2A4\uD2B8\uC785\uB2C8\uB2E4."),
-    url: String(body.url ?? "/alerts"),
-    app: true,
-    push: true
-  });
-  return res.json({ ok: true, ...result, vapidReady: isVapidReady() });
-});
-router5.post("/notifications/price-alerts/check-now", async (_req, res) => {
-  if (!hasSupabaseServerKey()) return res.status(503).json({ error: "SERVICE_KEY_REQUIRED", message: "SUPABASE_SERVICE_ROLE_KEY\uAC00 \uB4F1\uB85D\uB418\uC5B4\uC57C \uAC00\uACA9 \uC54C\uB9BC \uBAA8\uB2C8\uD130\uB97C \uC2E4\uD589\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." });
-  try {
-    return res.json({ ok: true, ...await runPriceAlertMonitorOnce() });
-  } catch (error) {
-    console.error("price alert manual check error:", error);
-    return res.status(500).json({ error: "PRICE_ALERT_CHECK_FAILED" });
-  }
-});
-router5.get("/notifications/history", async (req, res) => {
-  const limit = Math.max(1, Math.min(200, Number(req.query.limit ?? 100) || 100));
-  const { data, error } = await db(req).from("notification_history").select("*").eq("member_id", req.member.id).order("created_at", { ascending: false }).limit(limit);
-  if (error) return res.status(500).json({ error: "NOTIFICATION_HISTORY_READ_FAILED" });
-  return res.json({ notifications: data ?? [], count: data?.length ?? 0 });
-});
-router5.patch("/notifications/history/:id/read", async (req, res) => {
-  const { data, error } = await db(req).from("notification_history").update({ read_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", req.params.id).eq("member_id", req.member.id).select("*").maybeSingle();
-  if (error) return res.status(500).json({ error: "NOTIFICATION_HISTORY_UPDATE_FAILED" });
-  return res.json({ notification: data });
-});
-router5.get("/notifications/price-alerts", async (req, res) => {
-  const { data, error } = await db(req).from("price_alerts").select("*").eq("member_id", req.member.id).order("created_at", { ascending: false });
-  if (error) return res.status(500).json({ error: "PRICE_ALERT_LIST_FAILED" });
-  return res.json({ alerts: data ?? [] });
-});
-router5.post("/notifications/price-alerts", async (req, res) => {
-  const assetType = ["stock", "coin_spot", "coin_futures"].includes(String(req.body?.assetType)) ? String(req.body.assetType) : null;
-  const direction = ["above", "below"].includes(String(req.body?.direction)) ? String(req.body.direction) : null;
-  const symbol = String(req.body?.symbol ?? "").trim().toUpperCase();
-  const targetPrice = Number(req.body?.targetPrice);
-  if (!assetType || !direction || !symbol || !Number.isFinite(targetPrice) || targetPrice <= 0) return res.status(400).json({ error: "INVALID_PRICE_ALERT" });
-  const row = { member_id: req.member.id, asset_type: assetType, market: String(req.body?.market ?? ""), symbol, direction, target_price: targetPrice, repeat_enabled: req.body?.repeatEnabled === true, app_enabled: req.body?.appEnabled !== false, push_enabled: req.body?.pushEnabled !== false, expires_at: req.body?.expiresAt || null, enabled: true, updated_at: (/* @__PURE__ */ new Date()).toISOString() };
-  const { data, error } = await db(req).from("price_alerts").upsert(row, { onConflict: "member_id,asset_type,market,symbol,direction,target_price" }).select("*").single();
-  if (error) return res.status(500).json({ error: "PRICE_ALERT_SAVE_FAILED" });
-  return res.json({ alert: data });
-});
-router5.delete("/notifications/price-alerts/:id", async (req, res) => {
-  const { error } = await db(req).from("price_alerts").delete().eq("id", req.params.id).eq("member_id", req.member.id);
-  if (error) return res.status(500).json({ error: "PRICE_ALERT_DELETE_FAILED" });
-  return res.json({ ok: true });
-});
-var push_default = router5;
-
-// src/routes/stocks.ts
-import { Router as Router6 } from "express";
-import { mkdir as mkdir2, readFile as readFile2, writeFile as writeFile2 } from "node:fs/promises";
-import path4 from "node:path";
-import { randomUUID } from "node:crypto";
-
 // src/sample/accumulation.ts
 function obvSeries(c) {
   const out = [0];
@@ -9050,6 +8254,7 @@ async function scan(market, selected, filters = {}, limit = SCAN_POOL_LIMIT) {
   const volumeThreshold = typeof filters.volumeThreshold === "number" && filters.volumeThreshold > 0 ? filters.volumeThreshold : null;
   const tradingValueThreshold = typeof filters.tradingValueThreshold === "number" && filters.tradingValueThreshold > 0 ? filters.tradingValueThreshold : null;
   const pool = CATALOG.filter(marketFilter(market)).slice(0, limit);
+  let providerErrors = 0;
   const settled = await Promise.all(
     pool.map(async (entry) => {
       try {
@@ -9108,21 +8313,1308 @@ async function scan(market, selected, filters = {}, limit = SCAN_POOL_LIMIT) {
           selectedCount: active.length
         };
       } catch {
+        providerErrors += 1;
         return null;
       }
     })
   );
+  if (pool.length > 0 && providerErrors >= Math.max(10, Math.ceil(pool.length * 0.8))) {
+    const err = new Error(
+      `SCAN_PROVIDER_ERROR: ${providerErrors}/${pool.length} \uC885\uBAA9 \uB370\uC774\uD130 \uC870\uD68C \uC2E4\uD328 (\uC2DC\uC138 \uACF5\uAE09\uC790 \uC7A5\uC560)`
+    );
+    err.provider = "market-data";
+    throw err;
+  }
   const cards = settled.filter((card) => card !== null).sort((a, b) => b.matchCount - a.matchCount || b.score - a.score).slice(0, SCAN_CARD_LIMIT);
+  const survived = settled.filter((card) => card !== null).length;
   return {
     cards,
     selected: active.map((key) => SCAN_LABELS[key]),
-    supportedIndicators: SUPPORTED_INDICATORS
+    supportedIndicators: SUPPORTED_INDICATORS,
+    scanned: pool.length,
+    excludedCount: pool.length - survived,
+    appliedFilters: { volumeThreshold, tradingValueThreshold }
   };
 }
 var SignalService = {
   getReport,
   scan
 };
+
+// src/services/recommendation.service.ts
+import { promises as fs2 } from "node:fs";
+import path3 from "node:path";
+var POOL_LIMIT = 150;
+var MAX_ROWS_PER_CATEGORY = 30;
+var REFRESH_MS = 5 * 60 * 1e3;
+var STALE_DAYS = 7;
+var MIN_TRADING_VALUE = { KR: 1e9, US: 5e6 };
+var HISTORY_FILE = path3.join("/tmp", "reco-history.json");
+var history = null;
+async function loadHistory() {
+  if (history) return history;
+  try {
+    history = JSON.parse(await fs2.readFile(HISTORY_FILE, "utf-8"));
+  } catch {
+    history = {};
+  }
+  return history;
+}
+var historyWriteChain = Promise.resolve();
+function saveHistory() {
+  historyWriteChain = historyWriteChain.then(async () => {
+    if (!history) return;
+    try {
+      const tmp = `${HISTORY_FILE}.tmp`;
+      await fs2.writeFile(tmp, JSON.stringify(history));
+      await fs2.rename(tmp, HISTORY_FILE);
+    } catch {
+    }
+  });
+  return historyWriteChain;
+}
+function atr14(candles) {
+  const n = candles.length;
+  if (n < 15) return null;
+  let sum = 0;
+  for (let i = n - 14; i < n; i++) {
+    const prev = candles[i - 1].close;
+    const tr = Math.max(
+      candles[i].high - candles[i].low,
+      Math.abs(candles[i].high - prev),
+      Math.abs(candles[i].low - prev)
+    );
+    sum += tr;
+  }
+  return sum / 14;
+}
+function pctGain(candles, bars) {
+  const n = candles.length;
+  if (n <= bars) return null;
+  const then = candles[n - 1 - bars].close;
+  if (!then) return null;
+  return (candles[n - 1].close - then) / then * 100;
+}
+function lastNumber(values) {
+  for (let i = values.length - 1; i >= 0; i--) {
+    if (values[i] != null && Number.isFinite(values[i])) return values[i];
+  }
+  return null;
+}
+function candleDate(candle) {
+  const raw = String(candle.time ?? "");
+  if (/^\d{8}$/.test(raw)) {
+    return /* @__PURE__ */ new Date(`${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}T00:00:00+09:00`);
+  }
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function round22(v) {
+  return Math.round(v * 100) / 100;
+}
+function roundPrice2(v, currency) {
+  return currency === "KRW" ? Math.round(v) : round22(v);
+}
+var DELIST_PATTERN = /관리종목|상장폐지|거래정지|투자주의|투자경고|투자위험/;
+var OFFERING_PATTERN = /유상증자|CB|BW|전환사채|신주인수권|ATM|오퍼링|증자/i;
+async function analyze(entry) {
+  const assetType = classifyAssetType(entry.name, entry.market);
+  if (assetType !== "STOCK") return { a: null, exclude: "not_qualified" };
+  const [meta, quote, ctx, finRaw] = await Promise.all([
+    MarketDataService.getCandlesMeta(entry.ticker, "1D").catch(() => null),
+    MarketDataService.getQuote(entry.ticker).catch(() => null),
+    buildContext(entry).catch(() => ({ currency: entry.currency })),
+    FinancialService.getFinancials(entry.ticker).catch(() => null)
+  ]);
+  const candles = meta?.candles ?? [];
+  if (!quote || candles.length < 60) return { a: null, exclude: "insufficient_data" };
+  const lastDate = candleDate(candles[candles.length - 1]);
+  const stale = !lastDate || Date.now() - lastDate.getTime() > STALE_DAYS * 864e5;
+  if (stale) return { a: null, exclude: "stale_data" };
+  const recent = candles.slice(-21, -1);
+  const avgVol20 = recent.length ? recent.reduce((s, c) => s + c.volume, 0) / recent.length : null;
+  const avgTv20 = recent.length ? recent.reduce((s, c) => s + c.volume * c.close, 0) / recent.length : null;
+  const minTv = MIN_TRADING_VALUE[entry.market] ?? MIN_TRADING_VALUE.US;
+  if (avgTv20 == null || avgTv20 < minTv) return { a: null, exclude: "low_liquidity" };
+  const indicators = computeIndicators(candles);
+  const cond = computeScanConditions(candles, indicators);
+  const rsi = lastNumber(indicators.rsi);
+  const gain5 = pctGain(candles, 5);
+  const gain20 = pctGain(candles, 20);
+  const overheatDetail = gain20 != null && gain20 > 60 ? `\uCD5C\uADFC 20\uAC70\uB798\uC77C +${round22(gain20)}% \uAE09\uB4F1` : gain5 != null && gain5 > 25 ? `\uCD5C\uADFC 5\uAC70\uB798\uC77C +${round22(gain5)}% \uAE09\uB4F1` : rsi != null && rsi > 78 ? `RSI ${round22(rsi)} \uACFC\uC5F4` : null;
+  const negatives = ctx.negativeEvents ?? [];
+  const delistRisk = negatives.find((l) => DELIST_PATTERN.test(l)) ?? null;
+  const offeringRisk = negatives.find((l) => OFFERING_PATTERN.test(l)) ?? null;
+  const newsRisk = ctx.newsScore == null ? "\uD310\uB2E8 \uBD88\uAC00" : ctx.newsScore <= -40 || (ctx.newsNegative ?? 0) >= 5 ? "\uB192\uC74C" : ctx.newsScore < 0 ? "\uBCF4\uD1B5" : "\uB0AE\uC74C";
+  const n = candles.length;
+  const boxSlice = candles.slice(Math.max(0, n - 65), n - 5);
+  const boxHigh = boxSlice.length >= 30 ? Math.max(...boxSlice.map((c) => c.high)) : null;
+  const boxLow = boxSlice.length >= 30 ? Math.min(...boxSlice.map((c) => c.low)) : null;
+  const support20 = recent.length ? Math.min(...recent.map((c) => c.low)) : null;
+  const fin = ctx.financials ?? null;
+  const finSource = finRaw == null ? "none" : finRaw.source === "sample" ? "sample" : "live";
+  return {
+    a: {
+      entry,
+      candles,
+      price: quote.price,
+      changePercent: Number(quote.changePercent ?? 0),
+      dataUpdatedAt: String(quote.updatedAt ?? lastDate?.toISOString() ?? (/* @__PURE__ */ new Date()).toISOString()),
+      providers: Array.from(
+        /* @__PURE__ */ new Set([meta?.provider ?? "unknown", entry.market === "KR" ? "naver/dart" : "yahoo/sec-edgar", "google-news"])
+      ),
+      ctx,
+      finSource,
+      fin: finSource === "live" ? fin : null,
+      rsi,
+      macdHist: lastNumber(indicators.macd.hist),
+      ma20: lastNumber(indicators.ma20),
+      ma60: lastNumber(indicators.ma60),
+      ma240: lastNumber(indicators.ma240),
+      atr: atr14(candles),
+      gain5,
+      gain20,
+      avgVol20,
+      avgTv20,
+      lastVol: candles[n - 1].volume,
+      boxHigh,
+      boxLow,
+      support20,
+      boxConsolidation: Boolean(cond?.box_consolidation),
+      overheated: overheatDetail != null,
+      overheatDetail,
+      delistRisk,
+      offeringRisk,
+      newsRisk,
+      stale
+    }
+  };
+}
+function baseRisks(a) {
+  const risks = [];
+  if (a.overheatDetail) risks.push(`\uACFC\uC5F4: ${a.overheatDetail}`);
+  if (a.delistRisk) risks.push(`\uC2DC\uC7A5\uC870\uCE58 \uC704\uD5D8: ${a.delistRisk}`);
+  if (a.offeringRisk) risks.push(`\uD76C\uC11D \uC704\uD5D8: ${a.offeringRisk}`);
+  if (a.newsRisk === "\uB192\uC74C") risks.push("\uCD5C\uADFC \uB274\uC2A4 \uBD80\uC815\uC801 \uBE44\uC911 \uB192\uC74C");
+  if (a.fin && a.fin.debtRatio != null && a.fin.debtRatio > 200) {
+    risks.push(`\uBD80\uCC44\uBE44\uC728 ${round22(a.fin.debtRatio)}% (\uC7AC\uBB34 \uBD80\uB2F4)`);
+  }
+  if (a.gain20 != null && a.gain20 < -25 && a.gain5 != null && a.gain5 > 8) {
+    risks.push(`\uAE09\uB77D \uD6C4 \uAE30\uC220\uC801 \uBC18\uB4F1 \uAD6C\uAC04 (20\uC77C ${round22(a.gain20)}%, 5\uC77C +${round22(a.gain5)}%) \u2014 \uCD94\uC138 \uD655\uC778 \uD544\uC694`);
+  }
+  return risks;
+}
+function financialStability(a) {
+  if (!a.fin) return "\uD310\uB2E8 \uBD88\uAC00";
+  const debt = a.fin.debtRatio;
+  const roe = a.fin.roe;
+  if (debt != null && debt > 250) return "\uBD88\uC548\uC815";
+  if ((debt == null || debt <= 120) && roe != null && roe >= 8) return "\uC548\uC815";
+  return "\uBCF4\uD1B5";
+}
+function buildUndervalued(a) {
+  const used = ["\uC77C\uBD09(\uCE94\uB4E4)", "\uD604\uC7AC\uAC00/\uB4F1\uB77D\uB960", "\uAC70\uB798\uB7C9\xB7\uAC70\uB798\uB300\uAE08"];
+  const missing = [];
+  const reasons = [];
+  if (a.finSource !== "live") {
+    return null;
+  }
+  used.push(a.entry.market === "KR" ? "\uC7AC\uBB34\uBE44\uC728(\uB124\uC774\uBC84/DART)" : "\uC7AC\uBB34\uBE44\uC728(SEC/Finnhub)");
+  const fin = a.fin;
+  let valuationHits = 0;
+  let valuationAvailable = 0;
+  const perCap = a.entry.market === "KR" ? 12 : 18;
+  if (fin.per != null && fin.per > 0) {
+    valuationAvailable++;
+    if (fin.per < perCap) {
+      valuationHits++;
+      reasons.push(`PER ${round22(fin.per)}\uBC30 (\uAE30\uC900 ${perCap}\uBC30 \uBBF8\uB9CC)`);
+    }
+  } else missing.push("PER");
+  if (fin.pbr != null && fin.pbr > 0) {
+    valuationAvailable++;
+    if (fin.pbr < 1.5) {
+      valuationHits++;
+      reasons.push(`PBR ${round22(fin.pbr)}\uBC30 (1.5\uBC30 \uBBF8\uB9CC)`);
+    }
+  } else missing.push("PBR");
+  if (fin.roe != null) {
+    valuationAvailable++;
+    if (fin.roe >= 8) {
+      valuationHits++;
+      reasons.push(`ROE ${round22(fin.roe)}% (8% \uC774\uC0C1)`);
+    }
+  } else missing.push("ROE");
+  if (fin.debtRatio != null) {
+    if (fin.debtRatio <= 150) reasons.push(`\uBD80\uCC44\uBE44\uC728 ${round22(fin.debtRatio)}% (150% \uC774\uD558)`);
+  } else missing.push("\uBD80\uCC44\uBE44\uC728");
+  const profitTrend = fin.profitGrowth?.filter((v) => Number.isFinite(v)) ?? [];
+  if (profitTrend.length) {
+    const avgG = profitTrend.reduce((s, v) => s + v, 0) / profitTrend.length;
+    if (avgG > 0) reasons.push(`\uC21C\uC774\uC775 \uC131\uC7A5 \uD3C9\uADE0 +${round22(avgG)}%`);
+    used.push("\uC5F0\uAC04 \uC774\uC775 \uCD94\uC138");
+  } else missing.push("\uC774\uC775 \uCD94\uC138");
+  if (a.ma240 != null && a.ma240 > 0) {
+    if (a.price <= a.ma240 * 1.05) reasons.push("\uAC00\uACA9\uC774 240\uC77C \uC774\uB3D9\uD3C9\uADE0 \uBD80\uADFC/\uC774\uD558 (\uC7A5\uAE30 \uC800\uD3C9\uAC00 \uAD6C\uAC04)");
+    used.push("240\uC77C \uC774\uB3D9\uD3C9\uADE0");
+  } else missing.push("\uC7A5\uAE30 \uC774\uB3D9\uD3C9\uADE0");
+  if (a.ctx.newsScore != null) used.push("\uB274\uC2A4 \uAC10\uC131 \uC810\uC218");
+  else missing.push("\uB274\uC2A4 \uB370\uC774\uD130");
+  if (valuationAvailable < 2 || valuationHits < 2) return null;
+  if (a.delistRisk) return null;
+  if (a.overheated) return null;
+  const risks = baseRisks(a);
+  const stability = financialStability(a);
+  if (stability === "\uBD88\uC548\uC815") risks.push("\uC7AC\uBB34 \uBD88\uC548\uC815 \u2014 \uC800\uD3C9\uAC00 \uD6C4\uBCF4\uC5D0\uC11C \uC2E0\uC911 \uAC80\uD1A0 \uD544\uC694");
+  let targetPrice = null;
+  let targetBasis = "\uC0B0\uCD9C \uBD88\uAC00 (\uC720\uD6A8\uD55C \uC800\uD56D\uC120 \uC5C6\uC74C)";
+  if (a.boxHigh != null && a.boxHigh > a.price) {
+    targetPrice = roundPrice2(a.boxHigh, a.entry.currency);
+    targetBasis = "\uC9C1\uC804 60\uAC70\uB798\uC77C \uC800\uD56D\uC120(\uBC15\uC2A4 \uC0C1\uB2E8)";
+  }
+  let stopLoss = null;
+  let stopBasis = "\uC0B0\uCD9C \uBD88\uAC00 (\uC720\uD6A8\uD55C \uC9C0\uC9C0\uC120 \uC5C6\uC74C)";
+  if (a.support20 != null && a.support20 < a.price) {
+    stopLoss = roundPrice2(a.support20, a.entry.currency);
+    stopBasis = "\uCD5C\uADFC 20\uAC70\uB798\uC77C \uC9C0\uC9C0\uC120(\uC800\uAC00)";
+  } else if (a.atr != null) {
+    stopLoss = roundPrice2(a.price - 1.5 * a.atr, a.entry.currency);
+    stopBasis = "ATR(14) 1.5\uBC30 \uD558\uB2E8";
+  }
+  const score = Math.min(
+    100,
+    Math.round(
+      valuationHits * 18 + (stability === "\uC548\uC815" ? 15 : stability === "\uBCF4\uD1B5" ? 7 : 0) + (a.newsRisk === "\uB0AE\uC74C" ? 10 : a.newsRisk === "\uBCF4\uD1B5" ? 4 : 0) + (profitTrend.length && profitTrend.reduce((s, v) => s + v, 0) > 0 ? 12 : 0) + (a.ma240 != null && a.price <= a.ma240 * 1.05 ? 10 : 0)
+    )
+  );
+  const dataQuality = missing.length === 0 ? "sufficient" : missing.length <= 2 ? "partial" : "insufficient";
+  if (dataQuality === "insufficient") return null;
+  return finalizeRow(a, "undervalued", "\uC800\uD3C9\uAC00 \uD6C4\uBCF4", reasons, used, missing, risks, score, {
+    targetPrice,
+    targetBasis,
+    stopLoss,
+    stopBasis,
+    shortTermOutlook: "\uB2E8\uAE30 \uBAA8\uBA58\uD140\uBCF4\uB2E4 \uBC38\uB958\uC5D0\uC774\uC158 \uD68C\uBCF5\uC5D0 \uBB34\uAC8C \u2014 \uAE09\uB4F1 \uC2E0\uD638\uB294 \uC544\uB2D8",
+    midTermOutlook: "\uC7AC\uBB34\uBE44\uC728\uACFC \uC774\uC775 \uCD94\uC138\uAC00 \uC720\uC9C0\uB418\uBA74 \uC911\uAE30 \uC7AC\uD3C9\uAC00 \uC5EC\uC9C0 (\uADDC\uCE59 \uAE30\uBC18 \uD310\uB2E8)",
+    opinion: score >= 70 && risks.length === 0 ? "\uB9E4\uC218" : "\uAD00\uB9DD",
+    dataQuality
+  });
+}
+function buildBreakout(a) {
+  const used = ["\uC77C\uBD09(\uCE94\uB4E4)", "\uD604\uC7AC\uAC00/\uB4F1\uB77D\uB960", "\uAC70\uB798\uB7C9\xB7\uAC70\uB798\uB300\uAE08", "RSI", "MACD", "\uC774\uB3D9\uD3C9\uADE0\uC120"];
+  const missing = [];
+  const reasons = [];
+  if (a.overheated) return null;
+  if (a.delistRisk) return null;
+  if (a.boxHigh == null || a.boxLow == null) return null;
+  const n = a.candles.length;
+  const last5 = a.candles.slice(n - 5);
+  const brokeNow = a.price > a.boxHigh;
+  const firstBreakIdx = last5.findIndex((c) => c.close > a.boxHigh);
+  if (!brokeNow || firstBreakIdx < 0) return null;
+  const breakoutAge = 5 - firstBreakIdx;
+  reasons.push(`\uC9C1\uC804 60\uAC70\uB798\uC77C \uC800\uD56D\uC120 \uB3CC\uD30C (\uB3CC\uD30C ${breakoutAge}\uAC70\uB798\uC77C\uC9F8 \u2014 \uCD08\uAE30 \uB2E8\uACC4)`);
+  const extension = (a.price - a.boxHigh) / a.boxHigh * 100;
+  if (extension > 15) return null;
+  if (a.avgVol20 == null || a.avgVol20 <= 0) {
+    missing.push("\uD3C9\uADE0 \uAC70\uB798\uB7C9");
+    return null;
+  }
+  const volRatio = a.lastVol / a.avgVol20;
+  if (volRatio < 1.5) return null;
+  reasons.push(`\uAC70\uB798\uB7C9 \uD3C9\uC18C \uB300\uBE44 ${round22(volRatio)}\uBC30 \uC99D\uAC00`);
+  if (a.boxConsolidation) reasons.push("\uB3CC\uD30C \uC804 \uC7A5\uAE30 \uBC15\uC2A4\uAD8C \uC218\uB834 \uD655\uC778");
+  if (a.rsi != null) {
+    if (a.rsi >= 72) return null;
+    reasons.push(`RSI ${round22(a.rsi)} (\uACFC\uC5F4 \uC544\uB2D8)`);
+  } else missing.push("RSI");
+  if (a.macdHist != null) {
+    if (a.macdHist > 0) reasons.push("MACD \uD788\uC2A4\uD1A0\uADF8\uB7A8 \uC591\uC804\uD658");
+  } else missing.push("MACD");
+  if (a.ma20 != null && a.ma60 != null) {
+    if (a.ma20 > a.ma60 && a.price > a.ma20) reasons.push("20\uC77C>60\uC77C \uC774\uB3D9\uD3C9\uADE0 \uC815\uBC30\uC5F4 \uCD08\uAE30");
+  } else missing.push("\uC774\uB3D9\uD3C9\uADE0\uC120");
+  if (a.ctx.newsScore != null) {
+    used.push("\uB274\uC2A4 \uAC10\uC131 \uC810\uC218");
+    if (a.ctx.newsScore > 20) reasons.push(`\uB274\uC2A4 \uAC10\uC131 \uAE0D\uC815 (${a.ctx.newsScore})`);
+  } else missing.push("\uB274\uC2A4 \uB370\uC774\uD130");
+  if ((a.ctx.positiveEvents ?? []).length) {
+    used.push("\uACF5\uC2DC \uC774\uBCA4\uD2B8");
+    reasons.push(`\uAE0D\uC815 \uACF5\uC2DC: ${(a.ctx.positiveEvents ?? []).slice(0, 2).join(", ")}`);
+  }
+  let stopLoss = null;
+  let stopBasis = "";
+  if (a.boxHigh < a.price) {
+    const retest = a.boxHigh * 0.99;
+    const atrStop = a.atr != null ? a.price - 2 * a.atr : null;
+    const stop = atrStop != null ? Math.max(retest, atrStop) : retest;
+    stopLoss = roundPrice2(stop, a.entry.currency);
+    stopBasis = a.atr != null ? "\uB3CC\uD30C\uC120 \uB9AC\uD14C\uC2A4\uD2B8 \uD558\uB2E8\uACFC ATR(14) 2\uBC30 \uC911 \uB192\uC740 \uAC12" : "\uB3CC\uD30C\uD55C \uC800\uD56D\uC120(\uB9AC\uD14C\uC2A4\uD2B8) \uD558\uB2E8";
+  }
+  if (stopLoss == null) return null;
+  const boxHeight = a.boxHigh - a.boxLow;
+  let targetPrice = null;
+  let targetBasis = "\uC0B0\uCD9C \uBD88\uAC00 (\uBC15\uC2A4 \uB192\uC774 \uC0B0\uCD9C \uC2E4\uD328)";
+  if (boxHeight > 0) {
+    targetPrice = roundPrice2(a.boxHigh + boxHeight, a.entry.currency);
+    targetBasis = "\uBC15\uC2A4\uAD8C \uB192\uC774 \uCE21\uC815 \uC774\uB3D9 (\uB3CC\uD30C\uC120 + \uBC15\uC2A4 \uB192\uC774)";
+  }
+  const risks = baseRisks(a);
+  if (a.fin == null) risks.push(a.finSource === "none" ? "\uC7AC\uBB34 \uB370\uC774\uD130 \uC5C6\uC74C \u2014 \uAE30\uC220\uC801 \uC2E0\uD638 \uC704\uC8FC \uD6C4\uBCF4" : "\uC2E4\uC81C \uC7AC\uBB34 \uBBF8\uD655\uBCF4(\uC0D8\uD50C \uBBF8\uC0AC\uC6A9) \u2014 \uAE30\uC220\uC801 \uC2E0\uD638 \uC704\uC8FC \uD6C4\uBCF4");
+  const score = Math.min(
+    100,
+    Math.round(
+      35 + Math.min(20, (volRatio - 1.5) * 10) + (a.boxConsolidation ? 10 : 0) + (a.macdHist != null && a.macdHist > 0 ? 10 : 0) + (a.ma20 != null && a.ma60 != null && a.ma20 > a.ma60 ? 10 : 0) + (a.ctx.newsScore != null && a.ctx.newsScore > 20 ? 8 : 0) + (breakoutAge <= 2 ? 7 : 0)
+    )
+  );
+  const dataQuality = missing.length === 0 ? "sufficient" : missing.length <= 2 ? "partial" : "insufficient";
+  if (dataQuality === "insufficient") return null;
+  return finalizeRow(a, "breakout", "\uCD08\uAE30 \uCD94\uC138\uB3CC\uD30C \uD6C4\uBCF4", reasons, used, missing, risks, score, {
+    targetPrice,
+    targetBasis,
+    stopLoss,
+    stopBasis,
+    shortTermOutlook: `\uB3CC\uD30C ${breakoutAge}\uAC70\uB798\uC77C\uC9F8 \u2014 \uAC70\uB798\uB7C9 \uC720\uC9C0 \uC5EC\uBD80\uAC00 \uAD00\uAC74 (\uADDC\uCE59 \uAE30\uBC18 \uD310\uB2E8)`,
+    midTermOutlook: "\uB3CC\uD30C\uC120 \uC704 \uC548\uCC29 \uC2DC \uCD94\uC138 \uC9C0\uC18D \uC5EC\uC9C0, \uC774\uD0C8 \uC2DC \uC190\uC808 \uAE30\uC900 \uC900\uC218 \uD544\uC694",
+    opinion: score >= 70 && risks.length === 0 ? "\uB9E4\uC218" : "\uAD00\uB9DD",
+    dataQuality
+  });
+}
+function finalizeRow(a, category, categoryLabel, reasons, usedData, missingData, risks, score, extra) {
+  const riskLevel = risks.length === 0 ? "LOW" : risks.length <= 2 ? "MEDIUM" : "HIGH";
+  return {
+    ticker: a.entry.ticker,
+    name: a.entry.name,
+    market: a.entry.market,
+    currency: a.entry.currency,
+    category,
+    categoryLabel,
+    price: a.price,
+    changePercent: a.changePercent,
+    reasons,
+    usedData,
+    missingData,
+    risks,
+    overheated: a.overheated,
+    financialStability: financialStability(a),
+    newsRisk: a.newsRisk,
+    riskLevel,
+    score,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    dataUpdatedAt: a.dataUpdatedAt,
+    providers: a.providers,
+    ...extra
+  };
+}
+async function getRecommendations(marketInput) {
+  const market = String(marketInput).toUpperCase() === "US" ? "US" : "KR";
+  return cached(`reco:v1:${market}`, REFRESH_MS, async () => {
+    const pool = CATALOG.filter(
+      (e) => e.market === market && classifyAssetType(e.name, e.market) === "STOCK"
+    ).slice(0, POOL_LIMIT);
+    const excludedBreakdown = {};
+    const analyzed = [];
+    const settled = await Promise.all(pool.map((entry) => analyze(entry).catch(() => ({ a: null, exclude: "insufficient_data" }))));
+    for (const { a, exclude } of settled) {
+      if (a) analyzed.push(a);
+      else if (exclude && exclude !== "not_qualified") {
+        excludedBreakdown[exclude] = (excludedBreakdown[exclude] ?? 0) + 1;
+      }
+    }
+    const hist = await loadHistory();
+    const rows = [];
+    for (const builder of [buildUndervalued, buildBreakout]) {
+      const built = analyzed.map((a) => {
+        try {
+          return builder(a);
+        } catch {
+          return null;
+        }
+      }).filter((r) => r !== null).sort((x, y) => y.score - x.score).slice(0, MAX_ROWS_PER_CATEGORY);
+      rows.push(...built);
+    }
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    for (const row of rows) {
+      const key = `${row.market}:${row.ticker}:${row.category}`;
+      const prev = hist[key];
+      if (prev) {
+        row.previousGeneratedAt = prev.generatedAt;
+        row.previousPrice = prev.price;
+        if (prev.price > 0) row.changeSincePrevious = round22((row.price - prev.price) / prev.price * 100);
+      }
+      hist[key] = { generatedAt: now, price: row.price };
+    }
+    void saveHistory();
+    const overheatedExcluded = analyzed.filter((a) => a.overheated).length;
+    if (overheatedExcluded) excludedBreakdown.overheated = overheatedExcluded;
+    return {
+      ok: true,
+      provider: "rule-based-engine",
+      analysisMode: "rule-based",
+      aiConfigured: false,
+      analysisDescription: "LLM/AI API \uBBF8\uC5F0\uACB0 \uC0C1\uD0DC\uC785\uB2C8\uB2E4. \uC774 \uCD94\uCC9C\uC740 \uC2E4\uC81C \uC2DC\uC138\xB7\uAC70\uB798\uB7C9\xB7\uC7AC\uBB34\uBE44\uC728\xB7\uB274\uC2A4 \uAC10\uC131\xB7\uACF5\uC2DC \uC774\uBCA4\uD2B8\uB97C \uADDC\uCE59 \uAE30\uBC18\uC73C\uB85C \uC885\uD569\uD55C \uACB0\uACFC\uC774\uBA70, AI\uAC00 \uC791\uC131\uD55C \uC790\uC5F0\uC5B4 \uBD84\uC11D\uC774 \uC544\uB2D9\uB2C8\uB2E4.",
+      market,
+      fetchedAt: now,
+      generatedAt: now,
+      refreshIntervalMs: REFRESH_MS,
+      rows,
+      excludedCount: Object.values(excludedBreakdown).reduce((s, v) => s + v, 0),
+      excludedBreakdown,
+      dataQualityNote: "\uC870\uAC74 \uBBF8\uB2EC \uC885\uBAA9\uC73C\uB85C \uAC1C\uC218\uB97C \uCC44\uC6B0\uC9C0 \uC54A\uC73C\uBA70, \uC0D8\uD50C(\uBE44\uC2E4\uCE21) \uC7AC\uBB34\uB294 \uC800\uD3C9\uAC00 \uD310\uB2E8\uC5D0 \uC0AC\uC6A9\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
+    };
+  });
+}
+var RecommendationService = { getRecommendations };
+
+// src/routes/market.ts
+var router2 = Router2();
+function normalizeMarket(value) {
+  const raw = String(value ?? "ALL").toUpperCase();
+  if (raw === "KR") return "KR";
+  if (raw === "US") return "US";
+  return "ALL";
+}
+function normalizeTicker2(value) {
+  return String(value ?? "").trim().toUpperCase().replace(/^(KR|US)[:.]/, "");
+}
+function uniqueTickers(values) {
+  return Array.from(new Set(values.map(normalizeTicker2).filter(Boolean)));
+}
+function uniqueRows(rows) {
+  const seen = /* @__PURE__ */ new Set();
+  return rows.filter((row) => {
+    const key = `${row.market}:${row.ticker}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return Number.isFinite(row.price) && row.price > 0;
+  });
+}
+function rankByTradingValue(rows) {
+  return [...rows].sort(
+    (a, b) => Number(b.tradingValue ?? 0) - Number(a.tradingValue ?? 0)
+  );
+}
+function rankByVolume(rows) {
+  return [...rows].sort((a, b) => Number(b.volume ?? 0) - Number(a.volume ?? 0));
+}
+function rankByChange(rows, direction) {
+  return [...rows].sort(
+    (a, b) => direction === "desc" ? Number(b.changePercent ?? 0) - Number(a.changePercent ?? 0) : Number(a.changePercent ?? 0) - Number(b.changePercent ?? 0)
+  );
+}
+function rankByScore(rows) {
+  return [...rows].sort(
+    (a, b) => Number(b.rating?.score ?? 0) - Number(a.rating?.score ?? 0)
+  );
+}
+function marketKeys(scope) {
+  if (scope === "KR") return ["KRX"];
+  if (scope === "US") return ["NASDAQ", "NYSE"];
+  return ["KRX", "NASDAQ", "NYSE"];
+}
+async function liveListings(scope) {
+  const settled = await Promise.allSettled(
+    marketKeys(scope).map((market) => MarketListingService.getMarketListings(market))
+  );
+  const rows = [];
+  for (const result of settled) {
+    if (result.status !== "fulfilled") continue;
+    rows.push(
+      ...result.value.popular,
+      ...result.value.gainers,
+      ...result.value.losers,
+      ...result.value.recommended
+    );
+  }
+  return uniqueRows(rows);
+}
+router2.get("/config", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "seungjae-stock-api",
+    time: (/* @__PURE__ */ new Date()).toISOString(),
+    providers: {
+      kiwoom: Boolean(process.env.KIWOOM_APP_KEY && process.env.KIWOOM_APP_SECRET),
+      naver: true,
+      yahoo: true,
+      upbit: Boolean(process.env.UPBIT_ACCESS_KEY && process.env.UPBIT_SECRET_KEY),
+      bitget: Boolean(
+        process.env.BITGET_API_KEY && process.env.BITGET_SECRET_KEY && process.env.BITGET_PASSPHRASE
+      )
+    }
+  });
+});
+router2.get("/search", async (req, res) => {
+  const q = String(req.query.q ?? "").trim();
+  try {
+    const results = await MarketDataService.search(q, q ? 100 : 500);
+    return res.json({ q, results, count: results.length, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+  } catch (error) {
+    console.error("market search error:", error);
+    return res.status(502).json({ q, results: [], count: 0, error: "SEARCH_PROVIDER_ERROR" });
+  }
+});
+router2.get("/search/quotes", async (req, res) => {
+  const q = String(req.query.q ?? "").trim();
+  try {
+    const matches = await MarketDataService.search(q, 100);
+    const quotes = await MarketDataService.getQuotes(matches.map((item) => item.ticker));
+    const rows = uniqueRows(quotes);
+    return res.json({ q, results: rows, count: rows.length, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+  } catch (error) {
+    console.error("market quote search error:", error);
+    return res.status(502).json({ q, results: [], count: 0, error: "QUOTE_SEARCH_PROVIDER_ERROR" });
+  }
+});
+router2.get("/quotes", async (req, res) => {
+  const raw = req.query.tickers ?? req.query.symbols ?? req.query.symbol ?? req.query.ticker ?? "";
+  const tickers = uniqueTickers(String(raw).split(","));
+  const quotes = await MarketDataService.getQuotes(tickers);
+  return res.json({
+    quotes: uniqueRows(quotes),
+    requested: tickers.length,
+    available: quotes.length,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
+});
+router2.get("/market/movers", async (req, res) => {
+  const scope = normalizeMarket(req.query.market);
+  try {
+    const rows = await liveListings(scope);
+    if (!rows.length) {
+      return res.status(503).json({
+        market: scope,
+        popular: [],
+        volume: [],
+        recommended: [],
+        gainers: [],
+        losers: [],
+        risky: [],
+        error: "MARKET_DATA_UNAVAILABLE",
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+    }
+    const popular = rankByTradingValue(rows).slice(0, 30);
+    const volume = rankByVolume(rows).slice(0, 30);
+    const gainers = rankByChange(rows, "desc").slice(0, 30);
+    const losers = rankByChange(rows, "asc").slice(0, 30);
+    const recommended = rankByScore(rows).slice(0, 30);
+    return res.json({
+      market: scope,
+      provider: "live-market-providers",
+      popular,
+      volume,
+      recommended,
+      gainers,
+      losers,
+      risky: losers,
+      rankingSource: {
+        popular: "\uC2E4\uC81C \uAC70\uB798\uB300\uAE08 \uAE30\uC900",
+        gainers: "\uC2E4\uC81C \uB4F1\uB77D\uB960 \uAE30\uC900",
+        losers: "\uC2E4\uC81C \uB4F1\uB77D\uB960 \uAE30\uC900",
+        recommended: "\uC2E4\uC81C \uB370\uC774\uD130 \uAE30\uBC18 \uC885\uD569\uC810\uC218 \uAE30\uC900"
+      },
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+  } catch (error) {
+    console.error("market movers error:", error);
+    return res.status(502).json({
+      market: scope,
+      popular: [],
+      volume: [],
+      recommended: [],
+      gainers: [],
+      losers: [],
+      risky: [],
+      error: "MARKET_MOVERS_PROVIDER_ERROR"
+    });
+  }
+});
+router2.get("/market/home", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  try {
+    const rows = await MarketListingService.getMarketSummary();
+    const indices = rows.filter((row) => ["kospi", "kosdaq", "nasdaq"].includes(row.key) && row.ok).map((row) => ({
+      key: row.key.toUpperCase(),
+      label: row.label,
+      value: row.price,
+      price: row.price,
+      changeAmount: null,
+      changePercent: row.changePercent,
+      direction: row.changePercent > 0 ? "up" : row.changePercent < 0 ? "down" : "flat",
+      spark: row.spark,
+      provider: "Yahoo Finance",
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    }));
+    return res.status(indices.length ? 200 : 503).json({
+      ok: indices.length > 0,
+      indices,
+      sectorBriefings: [],
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      ...!indices.length ? { message: "\uC2E4\uC2DC\uAC04 \uC9C0\uC218 \uC81C\uACF5\uAE30\uAD00\uC758 \uC751\uB2F5\uC774 \uC9C0\uC5F0\uB418\uACE0 \uC788\uC2B5\uB2C8\uB2E4." } : {}
+    });
+  } catch (error) {
+    console.error("market home error:", error);
+    return res.status(502).json({ ok: false, indices: [], sectorBriefings: [], error: "INDEX_PROVIDER_ERROR" });
+  }
+});
+router2.get("/market/summary", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  try {
+    const items = await MarketListingService.getMarketSummary();
+    const available = items.filter((item) => item.ok);
+    return res.status(available.length ? 200 : 503).json({
+      items,
+      ok: available.length > 0,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+  } catch (error) {
+    console.error("market summary error:", error);
+    return res.status(502).json({ ok: false, items: [], error: "SUMMARY_PROVIDER_ERROR" });
+  }
+});
+router2.get("/market/briefing", async (_req, res) => {
+  try {
+    const briefing = await MarketListingService.getBriefing();
+    return res.json(briefing);
+  } catch (error) {
+    console.error("market briefing error:", error);
+    return res.status(502).json({
+      asOf: (/* @__PURE__ */ new Date()).toISOString(),
+      mood: "neutral",
+      headline: "\uC2E4\uC81C \uC2DC\uC7A5 \uBE0C\uB9AC\uD551 \uB370\uC774\uD130\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.",
+      lines: [],
+      strongSectors: [],
+      weakSectors: [],
+      positiveNews: [],
+      negativeNews: [],
+      disclosureRisks: [],
+      gainers: [],
+      losers: [],
+      picks: [],
+      error: "BRIEFING_PROVIDER_ERROR"
+    });
+  }
+});
+router2.get("/market/themes", async (req, res) => {
+  const market = String(req.query.market ?? "KR").toUpperCase() === "US" ? "US" : "KR";
+  try {
+    return res.json(await ThemesService.getThemes(market));
+  } catch (error) {
+    console.error("market themes route error:", error);
+    return res.status(502).json({ market, themes: [], error: "MARKET_THEMES_PROVIDER_ERROR" });
+  }
+});
+router2.get("/market/scan", async (req, res) => {
+  const scope = normalizeMarket(req.query.market);
+  const indicators = String(req.query.indicators ?? "").split(",").map((v) => v.trim()).filter(Boolean);
+  const num2 = (v) => {
+    const parsed = Number(v);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : void 0;
+  };
+  const filters = {
+    volumeThreshold: num2(req.query.volumeThreshold),
+    tradingValueThreshold: num2(req.query.tradingValueThreshold)
+  };
+  try {
+    const result = await SignalService.scan(scope, indicators, filters);
+    return res.json({
+      ok: true,
+      provider: "rule-scan",
+      fetchedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      market: scope,
+      rows: result.cards,
+      cards: result.cards,
+      results: result.cards,
+      count: result.cards.length,
+      selected: result.selected,
+      supportedIndicators: result.supportedIndicators,
+      appliedConditions: {
+        market: scope,
+        indicators: result.selected,
+        defaultApplied: indicators.length === 0,
+        volumeThreshold: result.appliedFilters.volumeThreshold,
+        tradingValueThreshold: result.appliedFilters.tradingValueThreshold
+      },
+      scanned: result.scanned,
+      excludedCount: result.excludedCount,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+  } catch (error) {
+    console.error("market scan error:", error);
+    return res.status(502).json({
+      ok: false,
+      provider: "rule-scan",
+      market: scope,
+      rows: [],
+      results: [],
+      cards: [],
+      error: "SCAN_PROVIDER_ERROR",
+      message: "\uC870\uAC74\uAC80\uC0C9 \uB370\uC774\uD130 \uACF5\uAE09\uC790 \uC624\uB958 \u2014 \uACB0\uACFC 0\uAC74\uC774 \uC544\uB2C8\uB77C \uC870\uD68C \uC2E4\uD328\uC785\uB2C8\uB2E4."
+    });
+  }
+});
+router2.get("/market/recommendations", async (req, res) => {
+  const market = String(req.query.market ?? "KR").toUpperCase() === "US" ? "US" : "KR";
+  const category = String(req.query.category ?? "all");
+  try {
+    const result = await RecommendationService.getRecommendations(market);
+    const rows = category === "undervalued" || category === "breakout" ? result.rows.filter((row) => row.category === category) : result.rows;
+    return res.json({ ...result, rows, category });
+  } catch (error) {
+    console.error("market recommendations error:", error);
+    return res.status(502).json({
+      ok: false,
+      provider: "rule-based-engine",
+      market,
+      rows: [],
+      error: "RECOMMENDATION_ENGINE_ERROR",
+      message: "\uCD94\uCC9C \uC0B0\uCD9C \uC2E4\uD328 \u2014 \uC2E4\uB370\uC774\uD130 \uC870\uD68C \uC624\uB958\uC785\uB2C8\uB2E4."
+    });
+  }
+});
+router2.get("/market/alerts", async (req, res) => {
+  const scope = normalizeMarket(req.query.market);
+  try {
+    const rows = rankByChange(await liveListings(scope), "desc").slice(0, 20);
+    const alerts = rows.map((row, index) => ({
+      id: `${row.market}:${row.ticker}:movement`,
+      ticker: row.ticker,
+      name: row.name,
+      market: row.market,
+      kind: Number(row.changePercent ?? 0) >= 0 ? "positive" : "negative",
+      category: "\uC2DC\uC138 \uBCC0\uB3D9",
+      title: `${row.name} ${Number(row.changePercent ?? 0) >= 0 ? "\uC0C1\uC2B9" : "\uD558\uB77D"} ${Math.abs(Number(row.changePercent ?? 0)).toFixed(2)}%`,
+      importance: index < 5 ? "high" : index < 12 ? "medium" : "low",
+      time: row.updatedAt,
+      url: null
+    }));
+    return res.json({ market: scope, positive: alerts.filter((item) => item.kind === "positive"), negative: alerts.filter((item) => item.kind === "negative"), alerts, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+  } catch (error) {
+    console.error("market alerts error:", error);
+    return res.status(502).json({ market: scope, positive: [], negative: [], alerts: [], error: "ALERT_PROVIDER_ERROR" });
+  }
+});
+router2.get("/market/undervalued", async (req, res) => {
+  const raw = String(req.query.market ?? "KRX").toUpperCase();
+  const market = raw === "US" ? "NASDAQ" : raw === "KR" ? "KRX" : raw;
+  try {
+    return res.json(await MarketListingService.getUndervalued(market));
+  } catch (error) {
+    console.error("market undervalued error:", error);
+    return res.status(502).json({ market, cards: [], error: "UNDERVALUED_PROVIDER_ERROR" });
+  }
+});
+var market_default = router2;
+
+// src/routes/news.route.ts
+import { Router as Router3 } from "express";
+var router3 = Router3();
+router3.get("/news/:ticker", async (req, res) => {
+  const fetchedAt = (/* @__PURE__ */ new Date()).toISOString();
+  try {
+    const ticker = String(req.params.ticker || "").toUpperCase();
+    if (!ticker) {
+      return res.status(400).json({ ok: false, error: "TICKER_REQUIRED" });
+    }
+    const data = await NewsService.getNews(ticker);
+    if (!data) {
+      return res.status(404).json({ ok: false, error: "TICKER_NOT_FOUND" });
+    }
+    const provider = /^\d{6}$/.test(ticker) ? "google-news" : "finnhub/google-news";
+    return res.json({ ok: true, provider, fetchedAt, ...data });
+  } catch (error) {
+    if (error instanceof NewsProviderError) {
+      return res.status(502).json({ ok: false, error: "NEWS_PROVIDER_ERROR", message: error.message });
+    }
+    console.error("news route error:", error);
+    return res.status(500).json({ ok: false, error: "NEWS_ROUTE_ERROR" });
+  }
+});
+var news_route_default = router3;
+
+// src/routes/provider-debug.ts
+import fs3 from "node:fs";
+import path4 from "node:path";
+import { Router as Router4 } from "express";
+var router4 = Router4();
+function normalizeTicker3(value) {
+  return String(value ?? "").trim().toUpperCase();
+}
+function isKrTicker4(ticker) {
+  return /^\d{6}$/.test(ticker);
+}
+function errorToJson(error) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack?.split("\n").slice(0, 8).join("\n")
+    };
+  }
+  return {
+    message: String(error)
+  };
+}
+function safeRead(filePath) {
+  try {
+    const text = fs3.readFileSync(filePath, "utf8");
+    return {
+      exists: true,
+      path: filePath,
+      length: text.length,
+      hasOldStooqMarker: text.includes("STOOQ_HTTP_"),
+      hasNewYahooMarker: text.includes("YAHOO_PROVIDER_MARKER_20260711"),
+      hasYahooChartHttpMarker: text.includes("YAHOO_CHART_HTTP_"),
+      first300: text.slice(0, 300)
+    };
+  } catch (error) {
+    return {
+      exists: false,
+      path: filePath,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+async function testOneTicker(ticker) {
+  const clean = normalizeTicker3(ticker);
+  const result = {
+    ticker: clean,
+    marketGuess: isKrTicker4(clean) ? "KR" : "US",
+    naver: null,
+    yahoo: null
+  };
+  if (isKrTicker4(clean)) {
+    try {
+      const naverQuote = await getQuote3(clean);
+      result.naver = {
+        ok: true,
+        quote: naverQuote
+      };
+    } catch (error) {
+      result.naver = {
+        ok: false,
+        error: errorToJson(error)
+      };
+    }
+  } else {
+    result.naver = {
+      ok: false,
+      skipped: "NAVER_ONLY_FOR_KR_TICKER"
+    };
+  }
+  try {
+    const yahooQuote = await getQuote2(clean);
+    result.yahoo = {
+      ok: true,
+      quote: yahooQuote
+    };
+  } catch (error) {
+    result.yahoo = {
+      ok: false,
+      error: errorToJson(error)
+    };
+  }
+  return result;
+}
+router4.get("/provider", async (req, res) => {
+  const raw = String(req.query.tickers ?? req.query.ticker ?? "005930,NVDA");
+  const tickers = raw.split(",").map((ticker) => normalizeTicker3(ticker)).filter(Boolean);
+  const results = await Promise.all(tickers.map((ticker) => testOneTicker(ticker)));
+  res.json({
+    ok: true,
+    testedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    cwd: process.cwd(),
+    results
+  });
+});
+router4.get("/source-check", (_req, res) => {
+  const cwd = process.cwd();
+  const sourceYahooPath = path4.resolve(cwd, "src/providers/yahoo.ts");
+  const sourceNaverPath = path4.resolve(cwd, "src/providers/naver.ts");
+  const sourceMarketPath = path4.resolve(cwd, "src/routes/market.ts");
+  const sourceProviderDebugPath = path4.resolve(cwd, "src/routes/provider-debug.ts");
+  const sourceIndexPath = path4.resolve(cwd, "src/routes/index.ts");
+  const distPath = path4.resolve(cwd, "dist/index.mjs");
+  const packagePath = path4.resolve(cwd, "package.json");
+  res.json({
+    ok: true,
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    cwd,
+    files: {
+      packageJson: safeRead(packagePath),
+      sourceYahoo: safeRead(sourceYahooPath),
+      sourceNaver: safeRead(sourceNaverPath),
+      sourceMarket: safeRead(sourceMarketPath),
+      sourceProviderDebug: safeRead(sourceProviderDebugPath),
+      sourceIndex: safeRead(sourceIndexPath),
+      distIndex: safeRead(distPath)
+    }
+  });
+});
+var provider_debug_default = router4;
+
+// src/routes/push.ts
+import { Router as Router5 } from "express";
+
+// src/services/notification.service.ts
+import webPush from "web-push";
+var DEFAULT_NOTIFICATION_TYPES = [
+  "news_positive",
+  "news_negative",
+  "disclosure_positive",
+  "disclosure_negative",
+  "ai_strong_buy",
+  "ai_sell_signal",
+  "golden_cross",
+  "volume_surge",
+  "capital_event",
+  "price_target",
+  "auto_trade",
+  "system"
+];
+var vapidInitialized = false;
+var priceMonitorRunning = false;
+var priceMonitorTimer = null;
+function isVapidReady() {
+  return Boolean(
+    process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY && process.env.VAPID_SUBJECT
+  );
+}
+function initializeVapid() {
+  if (vapidInitialized || !isVapidReady()) return;
+  webPush.setVapidDetails(
+    process.env.VAPID_SUBJECT,
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+  vapidInitialized = true;
+}
+async function ensureNotificationPreferences(memberId, client2) {
+  const supabase = client2 ?? getSupabase();
+  const { data, error } = await supabase.from("notification_preferences").select("*").eq("member_id", memberId).maybeSingle();
+  if (error) throw error;
+  if (data) return data;
+  const { data: created, error: createError } = await supabase.from("notification_preferences").insert({ member_id: memberId, enabled_types: DEFAULT_NOTIFICATION_TYPES }).select("*").single();
+  if (createError) throw createError;
+  return created;
+}
+async function deliverMemberNotification(input) {
+  const preferences = await ensureNotificationPreferences(input.memberId);
+  const enabledTypes = Array.isArray(preferences.enabled_types) ? preferences.enabled_types : [...DEFAULT_NOTIFICATION_TYPES];
+  if (!enabledTypes.includes(input.type)) {
+    return { appStored: false, pushSent: 0, skipped: "TYPE_DISABLED" };
+  }
+  const appAllowed = input.app !== false && preferences.app_enabled !== false;
+  const pushAllowed = input.push !== false && preferences.push_enabled === true && isVapidReady();
+  let pushSent = 0;
+  if (pushAllowed) {
+    initializeVapid();
+    const supabase = getSupabase();
+    const { data, error } = await supabase.from("push_subscriptions").select("id,endpoint,subscription").eq("member_id", input.memberId);
+    if (error) throw error;
+    const invalidEndpoints = [];
+    const payload = JSON.stringify({
+      title: input.title,
+      body: input.body,
+      url: input.url ?? "/alerts",
+      type: input.type,
+      metadata: input.metadata ?? {}
+    });
+    await Promise.all(
+      (data ?? []).map(async (row) => {
+        try {
+          await webPush.sendNotification(
+            row.subscription,
+            payload
+          );
+          pushSent += 1;
+        } catch {
+          invalidEndpoints.push(String(row.endpoint));
+        }
+      })
+    );
+    if (invalidEndpoints.length > 0) {
+      await supabase.from("push_subscriptions").delete().eq("member_id", input.memberId).in("endpoint", invalidEndpoints);
+    }
+  }
+  let appStored = false;
+  if (appAllowed) {
+    const { error } = await getSupabase().from("notification_history").insert({
+      member_id: input.memberId,
+      notification_type: input.type,
+      title: input.title,
+      body: input.body,
+      url: input.url ?? null,
+      channel: pushSent > 0 ? "both" : "app"
+    });
+    if (error) throw error;
+    appStored = true;
+  }
+  return { appStored, pushSent };
+}
+async function fetchJson4(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1e4);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "knowledge-info-price-alert/1.0"
+      },
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`HTTP_${response.status}`);
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+function cleanSymbol(value) {
+  return String(value ?? "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 30);
+}
+async function readAlertPrice(alert) {
+  const symbol = cleanSymbol(alert.symbol);
+  if (!symbol) throw new Error("INVALID_SYMBOL");
+  if (alert.asset_type === "stock") {
+    const quote = await MarketDataService.getQuoteRow(symbol);
+    if (!quote || !Number.isFinite(quote.price) || quote.price <= 0) {
+      throw new Error("STOCK_QUOTE_UNAVAILABLE");
+    }
+    return quote.price;
+  }
+  if (alert.asset_type === "coin_spot") {
+    const market = symbol.startsWith("KRW-") ? symbol : `KRW-${symbol}`;
+    const rows = await fetchJson4(
+      `https://api.upbit.com/v1/ticker?markets=${encodeURIComponent(market)}`
+    );
+    const price2 = Number(rows[0]?.trade_price);
+    if (!Number.isFinite(price2) || price2 <= 0) {
+      throw new Error("UPBIT_QUOTE_UNAVAILABLE");
+    }
+    return price2;
+  }
+  const futuresSymbol = symbol.endsWith("USDT") ? symbol : `${symbol}USDT`;
+  const payload = await fetchJson4(
+    `https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES&symbol=${encodeURIComponent(futuresSymbol)}`
+  );
+  if (String(payload.code ?? "") !== "00000") {
+    throw new Error(`BITGET_${String(payload.code ?? "INVALID")}`);
+  }
+  const price = Number(payload.data?.[0]?.markPrice ?? payload.data?.[0]?.lastPr);
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error("BITGET_QUOTE_UNAVAILABLE");
+  }
+  return price;
+}
+function isConditionMet(alert, price) {
+  const target = Number(alert.target_price);
+  return alert.direction === "above" ? price >= target : price <= target;
+}
+function alertUrl(alert) {
+  const symbol = encodeURIComponent(cleanSymbol(alert.symbol));
+  if (alert.asset_type === "stock") {
+    const market = encodeURIComponent(String(alert.market || "KR").toUpperCase());
+    return `/stock-info?asset=stock&market=${market}&ticker=${symbol}`;
+  }
+  const coinMarket = alert.asset_type === "coin_futures" ? "futures" : "spot";
+  return `/stock-info?asset=coin&coinMarket=${coinMarket}&symbol=${symbol}`;
+}
+function formatPrice(value, assetType) {
+  if (assetType === "coin_futures") {
+    return value.toLocaleString("ko-KR", { maximumFractionDigits: 8 });
+  }
+  return value.toLocaleString("ko-KR", { maximumFractionDigits: 4 });
+}
+async function evaluatePriceAlert(alert) {
+  const supabase = getSupabase();
+  const now = /* @__PURE__ */ new Date();
+  if (alert.expires_at && Date.parse(alert.expires_at) <= now.getTime()) {
+    await supabase.from("price_alerts").update({ enabled: false, updated_at: now.toISOString() }).eq("id", alert.id);
+    return;
+  }
+  try {
+    const currentPrice = await readAlertPrice(alert);
+    const met = isConditionMet(alert, currentPrice);
+    const wasMet = alert.condition_met === true;
+    const update = {
+      condition_met: met,
+      last_checked_price: currentPrice,
+      last_checked_at: now.toISOString(),
+      last_error: null,
+      updated_at: now.toISOString()
+    };
+    if (met && !wasMet) {
+      const target = Number(alert.target_price);
+      const directionText = alert.direction === "above" ? "\uC774\uC0C1" : "\uC774\uD558";
+      await deliverMemberNotification({
+        memberId: alert.member_id,
+        type: "price_target",
+        title: `\uC9C0\uC815\uAC00 \uB3C4\uB2EC \xB7 ${cleanSymbol(alert.symbol)}`,
+        body: `\uD604\uC7AC\uAC00 ${formatPrice(currentPrice, alert.asset_type)} \xB7 \uC124\uC815\uAC00 ${formatPrice(target, alert.asset_type)} ${directionText}`,
+        url: alertUrl(alert),
+        app: alert.app_enabled,
+        push: alert.push_enabled,
+        metadata: {
+          alertId: alert.id,
+          assetType: alert.asset_type,
+          market: alert.market,
+          symbol: cleanSymbol(alert.symbol),
+          currentPrice,
+          targetPrice: target,
+          direction: alert.direction
+        }
+      });
+      update.last_triggered_at = now.toISOString();
+      if (!alert.repeat_enabled) update.enabled = false;
+    }
+    const { error } = await supabase.from("price_alerts").update(update).eq("id", alert.id);
+    if (error) throw error;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await supabase.from("price_alerts").update({
+      last_checked_at: now.toISOString(),
+      last_error: message.slice(0, 300),
+      updated_at: now.toISOString()
+    }).eq("id", alert.id);
+  }
+}
+async function runPriceAlertMonitorOnce() {
+  if (priceMonitorRunning) return { checked: 0, skipped: "ALREADY_RUNNING" };
+  if (!isSupabaseConfigured()) return { checked: 0, skipped: "SUPABASE_NOT_CONFIGURED" };
+  priceMonitorRunning = true;
+  try {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const { data, error } = await getSupabase().from("price_alerts").select("*").eq("enabled", true).or(`expires_at.is.null,expires_at.gt.${now}`).order("updated_at", { ascending: true }).limit(500);
+    if (error) throw error;
+    const alerts = data ?? [];
+    for (let index = 0; index < alerts.length; index += 5) {
+      await Promise.all(alerts.slice(index, index + 5).map(evaluatePriceAlert));
+    }
+    return { checked: alerts.length };
+  } finally {
+    priceMonitorRunning = false;
+  }
+}
+function startPriceAlertMonitor() {
+  if (priceMonitorTimer) return;
+  const configured = Number(process.env.PRICE_ALERT_MONITOR_INTERVAL_MS ?? 6e4);
+  const intervalMs = Math.max(3e4, Math.min(15 * 6e4, Number.isFinite(configured) ? configured : 6e4));
+  const run = () => {
+    void runPriceAlertMonitorOnce().catch((error) => {
+      console.error("price alert monitor error:", error);
+    });
+  };
+  const initialTimer = setTimeout(run, 1e4);
+  initialTimer.unref?.();
+  priceMonitorTimer = setInterval(run, intervalMs);
+  priceMonitorTimer.unref?.();
+  console.log(`[api-server] price alert monitor enabled (${intervalMs}ms)`);
+}
+
+// src/routes/push.ts
+var router5 = Router5();
+function db(req) {
+  return hasSupabaseServerKey() ? getSupabase() : getUserSupabase(req.accessToken);
+}
+function getEndpoint(body) {
+  if (!body || typeof body !== "object") return null;
+  const endpoint = body.endpoint;
+  return typeof endpoint === "string" && endpoint.length > 0 ? endpoint : null;
+}
+router5.get("/notifications/preferences", async (req, res) => {
+  try {
+    return res.json({ preferences: await ensureNotificationPreferences(req.member.id, db(req)), vapidReady: isVapidReady() });
+  } catch (error) {
+    console.error("notification preferences read error:", error);
+    return res.status(500).json({ error: "NOTIFICATION_PREFERENCES_READ_FAILED" });
+  }
+});
+router5.put("/notifications/preferences", async (req, res) => {
+  const enabledTypes = Array.isArray(req.body?.enabledTypes) ? [...new Set(req.body.enabledTypes.map(String))].filter((item) => DEFAULT_NOTIFICATION_TYPES.includes(item)) : [...DEFAULT_NOTIFICATION_TYPES];
+  const changes = { member_id: req.member.id, enabled_types: enabledTypes, app_enabled: req.body?.appEnabled !== false, push_enabled: req.body?.pushEnabled === true, updated_at: (/* @__PURE__ */ new Date()).toISOString() };
+  const { data, error } = await db(req).from("notification_preferences").upsert(changes, { onConflict: "member_id" }).select("*").single();
+  if (error) return res.status(500).json({ error: "NOTIFICATION_PREFERENCES_SAVE_FAILED" });
+  return res.json({ preferences: data });
+});
+router5.post("/push/subscribe", async (req, res) => {
+  const endpoint = getEndpoint(req.body);
+  if (!endpoint) return res.status(400).json({ error: "INVALID_SUBSCRIPTION" });
+  const { error } = await db(req).from("push_subscriptions").upsert({ member_id: req.member.id, endpoint, subscription: req.body, updated_at: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "endpoint" });
+  if (error) return res.status(500).json({ error: "PUSH_SUBSCRIPTION_SAVE_FAILED" });
+  await db(req).from("notification_preferences").upsert({ member_id: req.member.id, push_enabled: true, updated_at: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "member_id" });
+  const { count } = await db(req).from("push_subscriptions").select("*", { count: "exact", head: true }).eq("member_id", req.member.id);
+  return res.json({ ok: true, count: count ?? 0, vapidReady: isVapidReady() });
+});
+router5.post("/push/unsubscribe", async (req, res) => {
+  const endpoint = getEndpoint(req.body);
+  if (!endpoint) return res.status(400).json({ error: "INVALID_ENDPOINT" });
+  const { error } = await db(req).from("push_subscriptions").delete().eq("member_id", req.member.id).eq("endpoint", endpoint);
+  if (error) return res.status(500).json({ error: "PUSH_UNSUBSCRIBE_FAILED" });
+  return res.json({ ok: true });
+});
+router5.post("/push/test", async (req, res) => {
+  if (!hasSupabaseServerKey()) return res.status(503).json({ error: "SERVICE_KEY_REQUIRED", message: "SUPABASE_SERVICE_ROLE_KEY\uAC00 \uB4F1\uB85D\uB418\uC5B4\uC57C \uC54C\uB9BC \uBC1C\uC1A1\uC744 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." });
+  const body = typeof req.body === "object" && req.body ? req.body : {};
+  const result = await deliverMemberNotification({
+    memberId: req.member.id,
+    type: "system",
+    title: String(body.title ?? "\uC9C0\uC2DD\uC815\uBCF4 \uD14C\uC2A4\uD2B8 \uC54C\uB9BC"),
+    body: String(body.body ?? "\uD68C\uC6D0\uBCC4 \uD1B5\uD569 \uC54C\uB9BC \uC5F0\uACB0 \uD14C\uC2A4\uD2B8\uC785\uB2C8\uB2E4."),
+    url: String(body.url ?? "/alerts"),
+    app: true,
+    push: true
+  });
+  return res.json({ ok: true, ...result, vapidReady: isVapidReady() });
+});
+router5.post("/notifications/price-alerts/check-now", async (_req, res) => {
+  if (!hasSupabaseServerKey()) return res.status(503).json({ error: "SERVICE_KEY_REQUIRED", message: "SUPABASE_SERVICE_ROLE_KEY\uAC00 \uB4F1\uB85D\uB418\uC5B4\uC57C \uAC00\uACA9 \uC54C\uB9BC \uBAA8\uB2C8\uD130\uB97C \uC2E4\uD589\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." });
+  try {
+    return res.json({ ok: true, ...await runPriceAlertMonitorOnce() });
+  } catch (error) {
+    console.error("price alert manual check error:", error);
+    return res.status(500).json({ error: "PRICE_ALERT_CHECK_FAILED" });
+  }
+});
+router5.get("/notifications/history", async (req, res) => {
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit ?? 100) || 100));
+  const { data, error } = await db(req).from("notification_history").select("*").eq("member_id", req.member.id).order("created_at", { ascending: false }).limit(limit);
+  if (error) return res.status(500).json({ error: "NOTIFICATION_HISTORY_READ_FAILED" });
+  return res.json({ notifications: data ?? [], count: data?.length ?? 0 });
+});
+router5.patch("/notifications/history/:id/read", async (req, res) => {
+  const { data, error } = await db(req).from("notification_history").update({ read_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", req.params.id).eq("member_id", req.member.id).select("*").maybeSingle();
+  if (error) return res.status(500).json({ error: "NOTIFICATION_HISTORY_UPDATE_FAILED" });
+  return res.json({ notification: data });
+});
+router5.get("/notifications/price-alerts", async (req, res) => {
+  const { data, error } = await db(req).from("price_alerts").select("*").eq("member_id", req.member.id).order("created_at", { ascending: false });
+  if (error) return res.status(500).json({ error: "PRICE_ALERT_LIST_FAILED" });
+  return res.json({ alerts: data ?? [] });
+});
+router5.post("/notifications/price-alerts", async (req, res) => {
+  const assetType = ["stock", "coin_spot", "coin_futures"].includes(String(req.body?.assetType)) ? String(req.body.assetType) : null;
+  const direction = ["above", "below"].includes(String(req.body?.direction)) ? String(req.body.direction) : null;
+  const symbol = String(req.body?.symbol ?? "").trim().toUpperCase();
+  const targetPrice = Number(req.body?.targetPrice);
+  if (!assetType || !direction || !symbol || !Number.isFinite(targetPrice) || targetPrice <= 0) return res.status(400).json({ error: "INVALID_PRICE_ALERT" });
+  const row = { member_id: req.member.id, asset_type: assetType, market: String(req.body?.market ?? ""), symbol, direction, target_price: targetPrice, repeat_enabled: req.body?.repeatEnabled === true, app_enabled: req.body?.appEnabled !== false, push_enabled: req.body?.pushEnabled !== false, expires_at: req.body?.expiresAt || null, enabled: true, updated_at: (/* @__PURE__ */ new Date()).toISOString() };
+  const { data, error } = await db(req).from("price_alerts").upsert(row, { onConflict: "member_id,asset_type,market,symbol,direction,target_price" }).select("*").single();
+  if (error) return res.status(500).json({ error: "PRICE_ALERT_SAVE_FAILED" });
+  return res.json({ alert: data });
+});
+router5.delete("/notifications/price-alerts/:id", async (req, res) => {
+  const { error } = await db(req).from("price_alerts").delete().eq("id", req.params.id).eq("member_id", req.member.id);
+  if (error) return res.status(500).json({ error: "PRICE_ALERT_DELETE_FAILED" });
+  return res.json({ ok: true });
+});
+var push_default = router5;
+
+// src/routes/stocks.ts
+import { Router as Router6 } from "express";
+import { mkdir as mkdir2, readFile as readFile2, writeFile as writeFile2 } from "node:fs/promises";
+import path5 from "node:path";
+import { randomUUID } from "node:crypto";
 
 // src/middleware/auth.ts
 function bearerToken(req) {
@@ -9410,8 +9902,8 @@ async function fetchSecFilings(ticker) {
       { headers: secHeaders() }
     );
     if (!historyResponse.ok) continue;
-    const history = await historyResponse.json();
-    items.push(...secColumnRows(history, cik));
+    const history2 = await historyResponse.json();
+    items.push(...secColumnRows(history2, cik));
   }
   const unique = /* @__PURE__ */ new Map();
   for (const item of items) {
@@ -9694,10 +10186,10 @@ async function fetchGoogleNews(ticker, allHistory = false) {
 var autoTradeExecuted = /* @__PURE__ */ new Set();
 var autoTradePositions = /* @__PURE__ */ new Map();
 var autoTradeJournal = [];
-var autoTradePositionFile = path4.resolve(
+var autoTradePositionFile = path5.resolve(
   process.env.KIWOOM_AUTO_TRADE_POSITION_FILE?.trim() || "data/auto-trade-positions.json"
 );
-var autoTradeJournalFile = path4.resolve(
+var autoTradeJournalFile = path5.resolve(
   process.env.KIWOOM_AUTO_TRADE_JOURNAL_FILE?.trim() || "data/auto-trade-journal.json"
 );
 var autoTradePositionsLoaded = false;
@@ -9765,7 +10257,7 @@ async function ensureAutoTradePositionsLoaded() {
   }
 }
 async function saveAutoTradePositions() {
-  await mkdir2(path4.dirname(autoTradePositionFile), { recursive: true });
+  await mkdir2(path5.dirname(autoTradePositionFile), { recursive: true });
   await writeFile2(
     autoTradePositionFile,
     JSON.stringify([...autoTradePositions.values()], null, 2),
@@ -9773,7 +10265,7 @@ async function saveAutoTradePositions() {
   );
 }
 async function saveAutoTradeJournal() {
-  await mkdir2(path4.dirname(autoTradeJournalFile), { recursive: true });
+  await mkdir2(path5.dirname(autoTradeJournalFile), { recursive: true });
   await writeFile2(
     autoTradeJournalFile,
     JSON.stringify(autoTradeJournal.slice(-500), null, 2),
@@ -11643,13 +12135,16 @@ router11.get("/crypto/spot/candles", async (req, res) => {
   const symbol = safeSymbol(req.query.symbol || "BTC");
   const unit = Math.max(1, Math.min(240, Number(req.query.unit ?? 15) || 15));
   const count = Math.max(1, Math.min(200, Number(req.query.count ?? 120) || 120));
+  const tf = String(req.query.tf ?? "").toUpperCase();
+  const tfPath = tf === "1D" ? "days" : tf === "1W" ? "weeks" : tf === "1M" ? "months" : null;
+  const url = tfPath ? `${UPBIT_BASE}/v1/candles/${tfPath}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}` : `${UPBIT_BASE}/v1/candles/minutes/${unit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`;
   try {
-    const rows = await fetchJson5(`${UPBIT_BASE}/v1/candles/minutes/${unit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`);
+    const rows = await fetchJson5(url);
     const candles = rows.reverse().map((row) => ({ time: row.candle_date_time_kst, open: finite(row.opening_price), high: finite(row.high_price), low: finite(row.low_price), close: finite(row.trade_price), volume: finite(row.candle_acc_trade_volume), tradingValue: finite(row.candle_acc_trade_price) }));
-    return res.json({ exchange: "UPBIT", market: `KRW-${symbol}`, unit: `${unit}m`, candles, count: candles.length, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+    return res.json({ ok: true, provider: "upbit", fetchedAt: (/* @__PURE__ */ new Date()).toISOString(), exchange: "UPBIT", market: `KRW-${symbol}`, unit: tfPath ? tf : `${unit}m`, candles, count: candles.length, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
   } catch (error) {
     console.error("upbit candles error:", error);
-    return res.status(502).json({ exchange: "UPBIT", candles: [], count: 0, error: "UPBIT_CANDLES_UNAVAILABLE" });
+    return res.status(502).json({ ok: false, provider: "upbit", exchange: "UPBIT", candles: [], count: 0, error: "UPBIT_CANDLES_UNAVAILABLE", message: "\uC5C5\uBE44\uD2B8 \uCE94\uB4E4 \uC870\uD68C \uC2E4\uD328 \u2014 \uACB0\uACFC 0\uAC74\uC774 \uC544\uB2C8\uB77C \uC870\uD68C \uC624\uB958\uC785\uB2C8\uB2E4." });
   }
 });
 router11.get("/crypto/futures/tickers", async (req, res) => {
@@ -11695,7 +12190,7 @@ router11.get("/crypto/futures/candles", async (req, res) => {
     return res.status(502).json({ exchange: "BITGET", candles: [], count: 0, error: "BITGET_CANDLES_UNAVAILABLE" });
   }
 });
-router11.get("/crypto/spot/accounts", async (_req, res) => {
+router11.get("/crypto/spot/accounts", requireMember, async (_req, res) => {
   const accessKey = String(process.env.UPBIT_ACCESS_KEY ?? "").trim();
   const secretKey = String(process.env.UPBIT_SECRET_KEY ?? "").trim();
   if (!accessKey || !secretKey) return res.status(503).json({ exchange: "UPBIT", configured: false, accounts: [], error: "UPBIT_PRIVATE_KEYS_NOT_CONFIGURED" });
@@ -11716,11 +12211,11 @@ router11.get("/crypto/spot/accounts", async (_req, res) => {
     return res.status(502).json({ exchange: "UPBIT", configured: true, accounts: [], error: "UPBIT_ACCOUNTS_UNAVAILABLE" });
   }
 });
-router11.get("/crypto/futures/account", async (_req, res) => {
-  const path6 = "/api/v2/mix/account/accounts";
+router11.get("/crypto/futures/account", requireMember, async (_req, res) => {
+  const path7 = "/api/v2/mix/account/accounts";
   const query = "productType=USDT-FUTURES";
   try {
-    const payload = await fetchJsonWithHeaders(`${BITGET_BASE}${path6}?${query}`, bitgetHeaders("GET", path6, query));
+    const payload = await fetchJsonWithHeaders(`${BITGET_BASE}${path7}?${query}`, bitgetHeaders("GET", path7, query));
     if (String(payload?.code ?? "") !== "00000" || !Array.isArray(payload?.data)) throw new Error(`BITGET_${String(payload?.code ?? "INVALID")}`);
     const accounts = payload.data.map((row) => ({
       marginCoin: String(row.marginCoin ?? ""),
@@ -11738,11 +12233,11 @@ router11.get("/crypto/futures/account", async (_req, res) => {
     return res.status(notConfigured ? 503 : 502).json({ exchange: "BITGET", configured: !notConfigured, accounts: [], error: notConfigured ? "BITGET_PRIVATE_KEYS_NOT_CONFIGURED" : "BITGET_ACCOUNT_UNAVAILABLE" });
   }
 });
-router11.get("/crypto/futures/positions", async (_req, res) => {
-  const path6 = "/api/v2/mix/position/all-position";
+router11.get("/crypto/futures/positions", requireMember, async (_req, res) => {
+  const path7 = "/api/v2/mix/position/all-position";
   const query = "productType=USDT-FUTURES&marginCoin=USDT";
   try {
-    const payload = await fetchJsonWithHeaders(`${BITGET_BASE}${path6}?${query}`, bitgetHeaders("GET", path6, query));
+    const payload = await fetchJsonWithHeaders(`${BITGET_BASE}${path7}?${query}`, bitgetHeaders("GET", path7, query));
     if (String(payload?.code ?? "") !== "00000" || !Array.isArray(payload?.data)) throw new Error(`BITGET_${String(payload?.code ?? "INVALID")}`);
     const positions = payload.data.map((row) => ({
       symbol: String(row.symbol ?? ""),
@@ -11899,7 +12394,7 @@ var routes_default = router13;
 
 // src/index.ts
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path5.dirname(__filename);
+var __dirname = path6.dirname(__filename);
 var app = express();
 var port = Number(
   process.env.PORT ?? process.env.API_PORT ?? 8080
@@ -11939,50 +12434,50 @@ app.get("/api/health", (_req, res) => {
 });
 app.use("/api", routes_default);
 var frontendDistCandidates = [
-  path5.resolve(
+  path6.resolve(
     __dirname,
     "../../stock-analyzer/dist/public"
   ),
-  path5.resolve(
+  path6.resolve(
     __dirname,
     "../../stock-analyzer/dist"
   ),
-  path5.resolve(
+  path6.resolve(
     __dirname,
     "../../../stock-analyzer/dist/public"
   ),
-  path5.resolve(
+  path6.resolve(
     __dirname,
     "../../../stock-analyzer/dist"
   ),
-  path5.resolve(
+  path6.resolve(
     process.cwd(),
     "../stock-analyzer/dist/public"
   ),
-  path5.resolve(
+  path6.resolve(
     process.cwd(),
     "../stock-analyzer/dist"
   ),
-  path5.resolve(
+  path6.resolve(
     process.cwd(),
     "artifacts/stock-analyzer/dist/public"
   ),
-  path5.resolve(
+  path6.resolve(
     process.cwd(),
     "artifacts/stock-analyzer/dist"
   ),
-  path5.resolve(
+  path6.resolve(
     process.cwd(),
     "stock-analyzer/dist/public"
   ),
-  path5.resolve(
+  path6.resolve(
     process.cwd(),
     "stock-analyzer/dist"
   )
 ];
 var frontendDist = frontendDistCandidates.find(
-  (candidate) => fs3.existsSync(
-    path5.join(
+  (candidate) => fs4.existsSync(
+    path6.join(
       candidate,
       "index.html"
     )
@@ -12025,7 +12520,7 @@ app.use((req, res) => {
   }
   if (frontendDist) {
     res.sendFile(
-      path5.join(
+      path6.join(
         frontendDist,
         "index.html"
       )

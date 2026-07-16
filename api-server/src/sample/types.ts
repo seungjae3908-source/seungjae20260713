@@ -111,6 +111,8 @@ export interface CashBurn {
 export type HealthLevel = 'STRONG' | 'AVERAGE' | 'WEAK';
 
 export interface Financials {
+	/** 'live' = 실제 공급자(DART/SEC/네이버/Finnhub), 'sample' = 결정적 샘플 모델. */
+	source?: 'live' | 'sample';
 	quarterly: FinancialRow[];
 	annual: FinancialRow[];
 	rows?: FinancialRow[];

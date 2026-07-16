@@ -64,6 +64,7 @@ function buildHealth(r: FinancialRatios): {
 
 function assemble(raw: FinancialsRaw, ratios: FinancialRatios): Financials {
   return {
+    source: 'live',
     quarterly: raw.quarterly,
     annual: raw.annual,
     ratios,
@@ -135,7 +136,9 @@ async function getFinancials(ticker: string): Promise<Financials | null> {
     return await getLive(entry);
   } catch (err) {
     console.error(`live financials failed for ${ticker}:`, err);
-    return getSampleFinancials(ticker);
+    const sample = getSampleFinancials(ticker);
+    // 추천 엔진 등이 실데이터와 구분할 수 있도록 출처를 명시한다.
+    return sample ? { ...sample, source: 'sample' as const } : sample;
   }
 }
 

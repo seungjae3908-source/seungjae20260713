@@ -1617,10 +1617,13 @@ export default function ScannerPage() {
         {scan.data && cards.length === 0 && (
           <div className="rounded-3xl border border-card-border bg-card p-6 text-center">
             <p className="break-keep text-sm font-bold leading-relaxed">
-              조건에 맞는 종목이 없습니다.
+              조건에 맞는 종목이 없습니다. (조회는 정상 — 오류 아님)
             </p>
 
             <p className="mt-2 break-keep text-xs leading-relaxed text-muted-foreground">
+              {(scan.data as any)?.scanned != null
+                ? `${(scan.data as any).scanned}종목 검사 · ${(scan.data as any).excludedCount ?? 0}종목 조건 미충족 제외 · `
+                : ''}
               지표를 줄이거나 시장을 바꿔 보세요.
             </p>
           </div>

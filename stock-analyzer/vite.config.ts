@@ -62,7 +62,7 @@ export default defineConfig({
             // Live market/index/quote/chart data must never be served from an
             // old service-worker cache entry.
             urlPattern: ({ url }) =>
-              /\/api\/(market\/(home|summary|movers|alerts)|quotes|candles|kiwoom\/(rankings|quote)|stocks\/[^/]+\/(chart|candles|quote))/.test(
+              /\/api\/(market\/(home|summary|movers|alerts|scan|recommendations)|quotes|candles|crypto\/|kiwoom\/(rankings|quote)|stocks\/[^/]+\/(chart|candles|quote))/.test(
                 url.pathname,
               ),
             handler: 'NetworkOnly',
