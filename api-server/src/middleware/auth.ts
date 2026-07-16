@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
+import { getSupabase, getUserSupabase, isSupabaseConfigured } from '../lib/supabase';
 
 export type MemberProfile = {
   id: string;
@@ -25,7 +25,9 @@ export async function requireMember(req: AuthenticatedRequest, res: Response, ne
   const { data: auth, error: authError } = await supabase.auth.getUser(token);
   if (authError || !auth.user) return res.status(401).json({ error: 'INVALID_SESSION' });
 
-  const { data: profile, error } = await supabase.from('profiles').select('*').eq('id', auth.user.id).single();
+  // 프로필 조회는 사용자 토큰 권한으로 수행한다 (anon 클라이언트는 RLS에 막힘).
+  const { data: profile, error } = await getUserSupabase(token)
+    .from('profiles').select('*').eq('id', auth.user.id).single();
   if (error || !profile) return res.status(403).json({ error: 'PROFILE_NOT_FOUND' });
   if (profile.status !== 'approved') return res.status(403).json({ error: 'MEMBER_NOT_APPROVED', status: profile.status });
 
