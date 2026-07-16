@@ -5,6 +5,7 @@ import {
   type MarketKey,
 } from '../services/market-listing.service';
 import { ThemesService } from '../services/themes.service';
+import { SectorPopularService } from '../services/sector-popular.service';
 import { SignalService } from '../services/signal.service';
 import { RecommendationService } from '../services/recommendation.service';
 
@@ -193,6 +194,23 @@ router.get('/market/movers', async (req, res) => {
       losers: [],
       risky: [],
       error: 'MARKET_MOVERS_PROVIDER_ERROR',
+    });
+  }
+});
+
+router.get('/market/sector-popular', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  const market = String(req.query.market ?? 'KR').toUpperCase() === 'US' ? 'US' : 'KR';
+  try {
+    const result = await SectorPopularService.getSectorPopular(market);
+    return res.json(result);
+  } catch (error) {
+    console.error('market sector-popular error:', error);
+    return res.status(502).json({
+      market,
+      sortBasis: '거래대금 기준',
+      sectors: [],
+      error: 'SECTOR_POPULAR_PROVIDER_ERROR',
     });
   }
 });

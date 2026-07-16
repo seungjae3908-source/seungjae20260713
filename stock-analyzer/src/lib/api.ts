@@ -546,6 +546,31 @@ export interface ThemesData {
   themes: ThemeGroup[];
 }
 
+export interface SectorPopularRow {
+  rank: number;
+  ticker: string;
+  name: string;
+  market: Market;
+  currency: Currency;
+  price: number;
+  changePercent: number;
+  tradingValue?: number;
+  volume?: number;
+}
+
+export interface SectorPopularGroup {
+  key: string;
+  label: string;
+  rows: SectorPopularRow[];
+}
+
+export interface SectorPopularData {
+  market: 'KR' | 'US';
+  sortBasis: string;
+  sectors: SectorPopularGroup[];
+  error?: string;
+}
+
 export interface LatestBackupResponse {
   ok: boolean;
   exists: boolean;
@@ -756,6 +781,9 @@ export const api = {
 
   themes: (market: 'KR' | 'US') =>
     apiGet<ThemesData>(`/market/themes?market=${market}`),
+
+  sectorPopular: (market: 'KR' | 'US') =>
+    apiGet<SectorPopularData>(`/market/sector-popular?market=${market}`),
 
   pushSubscribe: (subscription: unknown) =>
     authorizedFetch(`${BASE}/push/subscribe`, {

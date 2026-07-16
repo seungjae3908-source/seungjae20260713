@@ -1065,6 +1065,25 @@ async function getCompanyProfile(entryOrTicker) {
     website: ""
   };
 }
+async function getYahooSector(ticker) {
+  const clean = cleanTicker(ticker);
+  if (!clean || isKrTicker(clean)) return null;
+  const encoded = encodeURIComponent(clean);
+  const urls = [
+    `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encoded}?modules=assetProfile`,
+    `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encoded}?modules=assetProfile`
+  ];
+  for (const url of urls) {
+    try {
+      const data = await fetchJson(url);
+      const sector = data?.quoteSummary?.result?.[0]?.assetProfile?.sector;
+      const value = String(sector ?? "").trim();
+      if (value) return value;
+    } catch {
+    }
+  }
+  return null;
+}
 
 // src/providers/naver.ts
 function cleanTicker2(value) {
@@ -7218,6 +7237,211 @@ var ThemesService = {
   getThemes: buildThemes
 };
 
+// src/services/sector-popular.service.ts
+var SORT_BASIS = "\uAC70\uB798\uB300\uAE08 \uAE30\uC900";
+var MAX_PER_SECTOR = 10;
+var US_ENRICH_CAP = 40;
+var KR_SECTORS = [
+  { key: "semiconductor", label: "\uBC18\uB3C4\uCCB4" },
+  { key: "auto", label: "\uC790\uB3D9\uCC28" },
+  { key: "finance", label: "\uAE08\uC735" },
+  { key: "bio", label: "\uC81C\uC57D\xB7\uBC14\uC774\uC624" },
+  { key: "defense", label: "\uBC29\uC0B0\xB7\uD56D\uACF5\uC6B0\uC8FC" },
+  { key: "ship", label: "\uC870\uC120" },
+  { key: "battery", label: "2\uCC28\uC804\uC9C0" },
+  { key: "electronics", label: "\uC804\uC790\uBD80\uD488" },
+  { key: "telecom", label: "\uD1B5\uC2E0" },
+  { key: "retail", label: "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC" },
+  { key: "construction", label: "\uC9C0\uC8FC\xB7\uAC74\uC124" },
+  { key: "energy", label: "\uC5D0\uB108\uC9C0\xB7\uC815\uC720" },
+  { key: "entertainment", label: "\uC5D4\uD130\xB7\uBBF8\uB514\uC5B4" },
+  { key: "internet", label: "\uC778\uD130\uB137\xB7\uD50C\uB7AB\uD3FC" }
+];
+function krSectorKeyForLabel(label) {
+  const found = KR_SECTORS.find((s) => s.label === label);
+  return found ? found.key : null;
+}
+var US_SECTORS = [
+  { key: "technology", label: "\uAE30\uC220", yahoo: ["Technology", "Information Technology"] },
+  { key: "financial", label: "\uAE08\uC735", yahoo: ["Financial Services", "Financial"] },
+  { key: "healthcare", label: "\uD5EC\uC2A4\uCF00\uC5B4", yahoo: ["Healthcare", "Health Care"] },
+  { key: "consumer", label: "\uC18C\uBE44\uC7AC", yahoo: ["Consumer Cyclical", "Consumer Defensive", "Consumer Staples", "Consumer Discretionary"] },
+  { key: "industrials", label: "\uC0B0\uC5C5\uC7AC", yahoo: ["Industrials"] },
+  { key: "energy", label: "\uC5D0\uB108\uC9C0", yahoo: ["Energy"] },
+  { key: "communication", label: "\uCEE4\uBBA4\uB2C8\uCF00\uC774\uC158", yahoo: ["Communication Services"] },
+  { key: "utilities", label: "\uC720\uD2F8\uB9AC\uD2F0", yahoo: ["Utilities"] }
+];
+var US_CURATED_LABEL_TO_KEY = {
+  \uBC18\uB3C4\uCCB4: "technology",
+  "\uC18C\uD504\uD2B8\uC6E8\uC5B4": "technology",
+  "IT\xB7\uD558\uB4DC\uC6E8\uC5B4": "technology",
+  "IT\xB7\uC11C\uBE44\uC2A4": "technology",
+  "\uC0AC\uC774\uBC84\uBCF4\uC548": "technology",
+  "\uC591\uC790\xB7\uC2E0\uAE30\uC220": "technology",
+  \uAE08\uC735: "financial",
+  \uC99D\uAD8C: "financial",
+  "\uAE08\uC735\xB7\uACB0\uC81C": "financial",
+  "\uAC00\uC0C1\uC790\uC0B0\xB7\uD540\uD14C\uD06C": "financial",
+  "\uC81C\uC57D\xB7\uBC14\uC774\uC624": "healthcare",
+  \uC758\uB8CC\uAE30\uAE30: "healthcare",
+  "\uC720\uD1B5\xB7\uC18C\uBE44\uC7AC": "consumer",
+  "\uC74C\uC2DD\xB7\uC2DD\uD488": "consumer",
+  "\uC804\uAE30\uCC28\xB7\uBAA8\uBE4C\uB9AC\uD2F0": "consumer",
+  \uC790\uB3D9\uCC28: "consumer",
+  "\uAE30\uACC4\xB7\uC911\uACF5\uC5C5": "industrials",
+  "\uC6B4\uC1A1\xB7\uBB3C\uB958": "industrials",
+  "\uD56D\uACF5\xB7\uC5EC\uD589": "industrials",
+  "\uBC29\uC0B0\xB7\uD56D\uACF5\uC6B0\uC8FC": "industrials",
+  "\uC5D0\uB108\uC9C0\xB7\uC815\uC720": "energy",
+  "\uBBF8\uB514\uC5B4\xB7\uCF58\uD150\uCE20": "communication",
+  "\uC778\uD130\uB137\xB7\uD50C\uB7AB\uD3FC": "communication",
+  \uD1B5\uC2E0: "communication",
+  "\uC804\uB825\xB7\uC720\uD2F8\uB9AC\uD2F0": "utilities"
+};
+function yahooSectorToKey(sector) {
+  const normalized = sector.trim();
+  for (const s of US_SECTORS) {
+    if (s.yahoo.some((y) => y.toLowerCase() === normalized.toLowerCase())) {
+      return s.key;
+    }
+  }
+  return null;
+}
+function toRow2(row, rank) {
+  return {
+    rank,
+    ticker: row.ticker,
+    name: row.name,
+    market: row.market === "US" ? "US" : "KR",
+    currency: row.currency === "USD" ? "USD" : "KRW",
+    price: Number(row.price ?? 0),
+    changePercent: Number(row.changePercent ?? 0),
+    tradingValue: Number(row.tradingValue ?? 0),
+    volume: Number(row.volume ?? 0)
+  };
+}
+function rankPopular(rows) {
+  return [...rows].sort((a, b) => {
+    const tv = Number(b.tradingValue ?? 0) - Number(a.tradingValue ?? 0);
+    if (tv !== 0) return tv;
+    const vol = Number(b.volume ?? 0) - Number(a.volume ?? 0);
+    if (vol !== 0) return vol;
+    return Number(b.changePercent ?? 0) - Number(a.changePercent ?? 0);
+  });
+}
+function uniqueRows(rows) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const row of rows) {
+    const key = `${row.market}:${row.ticker}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!(Number.isFinite(row.price) && row.price > 0)) continue;
+    out.push(row);
+  }
+  return out;
+}
+async function loadUniverse(market) {
+  const keys = market === "KR" ? ["KRX"] : ["NASDAQ", "NYSE"];
+  const settled = await Promise.allSettled(
+    keys.map((k) => MarketListingService.getMarketListings(k))
+  );
+  const rows = [];
+  for (const result of settled) {
+    if (result.status !== "fulfilled") continue;
+    rows.push(
+      ...result.value.popular,
+      ...result.value.gainers,
+      ...result.value.losers,
+      ...result.value.recommended
+    );
+  }
+  return uniqueRows(rows);
+}
+async function buildKr() {
+  const ranked = rankPopular(await loadUniverse("KR"));
+  const buckets = /* @__PURE__ */ new Map();
+  for (const row of ranked) {
+    const label = SECTOR_MAP[row.ticker];
+    if (!label) continue;
+    const key = krSectorKeyForLabel(label);
+    if (!key) continue;
+    const list = buckets.get(key) ?? [];
+    if (list.length >= MAX_PER_SECTOR) continue;
+    list.push(row);
+    buckets.set(key, list);
+  }
+  const sectors = KR_SECTORS.map((s) => ({
+    key: s.key,
+    label: s.label,
+    rows: (buckets.get(s.key) ?? []).map((row, i) => toRow2(row, i + 1))
+  }));
+  return {
+    market: "KR",
+    sortBasis: SORT_BASIS,
+    sectors,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+async function buildUs() {
+  const ranked = rankPopular(await loadUniverse("US"));
+  const keyByTicker = /* @__PURE__ */ new Map();
+  const needEnrich = [];
+  for (const row of ranked) {
+    const label = SECTOR_MAP[row.ticker];
+    const curatedKey = label ? US_CURATED_LABEL_TO_KEY[label] : void 0;
+    if (curatedKey) {
+      keyByTicker.set(row.ticker, curatedKey);
+    } else {
+      needEnrich.push(row);
+    }
+  }
+  const enrichTargets = needEnrich.slice(0, US_ENRICH_CAP);
+  const enriched = await Promise.allSettled(
+    enrichTargets.map(async (row) => {
+      const sector = await getYahooSector(row.ticker);
+      return { ticker: row.ticker, sector };
+    })
+  );
+  for (const result of enriched) {
+    if (result.status !== "fulfilled") continue;
+    const { ticker, sector } = result.value;
+    if (!sector) continue;
+    const key = yahooSectorToKey(sector);
+    if (key) keyByTicker.set(ticker, key);
+  }
+  const buckets = /* @__PURE__ */ new Map();
+  for (const row of ranked) {
+    const key = keyByTicker.get(row.ticker);
+    if (!key) continue;
+    const list = buckets.get(key) ?? [];
+    if (list.length >= MAX_PER_SECTOR) continue;
+    list.push(row);
+    buckets.set(key, list);
+  }
+  const sectors = US_SECTORS.map((s) => ({
+    key: s.key,
+    label: s.label,
+    rows: (buckets.get(s.key) ?? []).map((row, i) => toRow2(row, i + 1))
+  }));
+  return {
+    market: "US",
+    sortBasis: SORT_BASIS,
+    sectors,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+async function getSectorPopular(market) {
+  return cached(
+    `sector-popular:v1:${market}`,
+    TTL.quote,
+    async () => market === "KR" ? buildKr() : buildUs()
+  );
+}
+var SectorPopularService = {
+  getSectorPopular
+};
+
 // src/sample/accumulation.ts
 function obvSeries(c) {
   const out = [0];
@@ -8780,7 +9004,7 @@ function normalizeTicker2(value) {
 function uniqueTickers(values) {
   return Array.from(new Set(values.map(normalizeTicker2).filter(Boolean)));
 }
-function uniqueRows(rows) {
+function uniqueRows2(rows) {
   const seen = /* @__PURE__ */ new Set();
   return rows.filter((row) => {
     const key = `${row.market}:${row.ticker}`;
@@ -8826,7 +9050,7 @@ async function liveListings(scope) {
       ...result.value.recommended
     );
   }
-  return uniqueRows(rows);
+  return uniqueRows2(rows);
 }
 router2.get("/config", (_req, res) => {
   res.json({
@@ -8859,7 +9083,7 @@ router2.get("/search/quotes", async (req, res) => {
   try {
     const matches = await MarketDataService.search(q, 100);
     const quotes = await MarketDataService.getQuotes(matches.map((item) => item.ticker));
-    const rows = uniqueRows(quotes);
+    const rows = uniqueRows2(quotes);
     return res.json({ q, results: rows, count: rows.length, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
   } catch (error) {
     console.error("market quote search error:", error);
@@ -8871,7 +9095,7 @@ router2.get("/quotes", async (req, res) => {
   const tickers = uniqueTickers(String(raw).split(","));
   const quotes = await MarketDataService.getQuotes(tickers);
   return res.json({
-    quotes: uniqueRows(quotes),
+    quotes: uniqueRows2(quotes),
     requested: tickers.length,
     available: quotes.length,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -8927,6 +9151,22 @@ router2.get("/market/movers", async (req, res) => {
       losers: [],
       risky: [],
       error: "MARKET_MOVERS_PROVIDER_ERROR"
+    });
+  }
+});
+router2.get("/market/sector-popular", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  const market = String(req.query.market ?? "KR").toUpperCase() === "US" ? "US" : "KR";
+  try {
+    const result = await SectorPopularService.getSectorPopular(market);
+    return res.json(result);
+  } catch (error) {
+    console.error("market sector-popular error:", error);
+    return res.status(502).json({
+      market,
+      sortBasis: "\uAC70\uB798\uB300\uAE08 \uAE30\uC900",
+      sectors: [],
+      error: "SECTOR_POPULAR_PROVIDER_ERROR"
     });
   }
 });
