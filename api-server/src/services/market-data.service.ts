@@ -95,6 +95,7 @@ interface CandleDiskCache {
   ticker: string;
   timeframe: string;
   candles: Candle[];
+  provider?: string;
 }
 
 function candleCacheDirectory(): string {
@@ -123,13 +124,15 @@ function candleCacheTtl(timeframe: string): number {
 async function readCandleDiskCache(
   ticker: string,
   timeframe: string,
-): Promise<{ candles: Candle[]; fresh: boolean } | null> {
+): Promise<{ candles: Candle[]; fresh: boolean; provider: string; savedAt: number } | null> {
   try {
     const raw = await readFile(candleCachePath(ticker, timeframe), 'utf8');
     const parsed = JSON.parse(raw) as CandleDiskCache;
     if (!Array.isArray(parsed.candles) || parsed.candles.length < 2) return null;
     return {
       candles: parsed.candles,
+      provider: parsed.provider ?? 'unknown',
+      savedAt: Number(parsed.savedAt ?? 0),
       fresh: Date.now() - Number(parsed.savedAt ?? 0) <= candleCacheTtl(timeframe),
     };
   } catch {
@@ -141,6 +144,7 @@ async function writeCandleDiskCache(
   ticker: string,
   timeframe: string,
   candles: Candle[],
+  provider?: string,
 ): Promise<void> {
   if (candles.length < 2) return;
   try {
@@ -150,6 +154,7 @@ async function writeCandleDiskCache(
       ticker: cleanTicker(ticker),
       timeframe,
       candles,
+      provider,
     };
     await writeFile(
       candleCachePath(ticker, timeframe),
@@ -789,7 +794,7 @@ async function tryQuoteProvider(
 async function tryCandlesProvider(
   entry: CatalogEntry,
   timeframe: Timeframe,
-): Promise<Candle[]> {
+): Promise<{ candles: Candle[]; provider: string }> {
   const ticker = cleanTicker(
     (entry as any).ticker,
   );
@@ -823,7 +828,7 @@ async function tryCandlesProvider(
       if (
         kiwoomRows.length >= minimumUsefulCandles
       ) {
-        return kiwoomRows as Candle[];
+        return { candles: kiwoomRows as Candle[], provider: 'kiwoom' };
       }
     } catch (error) {
       console.error(
@@ -833,24 +838,24 @@ async function tryCandlesProvider(
     }
   }
 
-  const attempts: Array<() => Promise<unknown>> =
+  const attempts: Array<{ name: string; run: () => Promise<unknown> }> =
     marketValue === 'KR'
       ? [
-          () => naver.getCandles(entry),
-          () => yahoo.getCandles(entry),
+          { name: 'naver', run: () => naver.getCandles(entry) },
+          { name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) },
         ]
-      : [() => yahoo.getCandles(entry)];
+      : [{ name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) }];
 
   for (const attempt of attempts) {
     try {
       const result =
-        await attempt();
+        await attempt.run();
 
       if (
         Array.isArray(result) &&
         result.length >= minimumUsefulCandles
       ) {
-        return result as Candle[];
+        return { candles: result as Candle[], provider: attempt.name };
       }
     } catch {
       // Try next provider.
@@ -861,7 +866,7 @@ async function tryCandlesProvider(
    * 실제 금융 차트에 가짜 봉을 표시하지 않습니다.
    * 제공처가 모두 실패하면 빈 배열을 반환합니다.
    */
-  return [];
+  return { candles: [], provider: 'none' };
 }
 
 async function tryProfileProvider(
@@ -1161,15 +1166,36 @@ export class MarketDataService {
     timeframe: Timeframe =
       '1D' as Timeframe,
   ): Promise<Candle[]> {
+    const meta = await MarketDataService.getCandlesMeta(ticker, timeframe);
+    return meta.candles;
+  }
+
+  /**
+   * 캔들과 함께 실제 데이터 공급자 이름과 조회 시각을 반환합니다.
+   * 디스크 캐시에서 읽은 경우 캐시에 기록된 공급자와 저장 시각을 사용합니다.
+   */
+  static async getCandlesMeta(
+    ticker: string,
+    timeframe: Timeframe =
+      '1D' as Timeframe,
+  ): Promise<{ candles: Candle[]; provider: string; fetchedAt: string }> {
     const entry =
       resolveEntry(
         ticker,
       );
     const timeframeText = String(timeframe);
-    const cacheKey = `candles:${cleanTicker(ticker)}:${timeframeText}`;
+    // v2: 캐시 값 형태가 Candle[] → {candles, provider}로 바뀌어 키를 올린다.
+    // (Supabase 영속 캐시에 남아 있을 수 있는 구버전 배열과 충돌 방지)
+    const cacheKey = `candles:v2:${cleanTicker(ticker)}:${timeframeText}`;
     const disk = await readCandleDiskCache(ticker, timeframeText);
 
-    if (disk?.fresh) return disk.candles;
+    if (disk?.fresh) {
+      return {
+        candles: disk.candles,
+        provider: disk.provider,
+        fetchedAt: new Date(disk.savedAt).toISOString(),
+      };
+    }
 
     const aggregateDays = ({
       '3D': 3,
@@ -1181,25 +1207,46 @@ export class MarketDataService {
       const dailyDisk = await readCandleDiskCache(ticker, '1D');
       if (dailyDisk?.candles.length) {
         const aggregated = aggregateCachedCandles(dailyDisk.candles, aggregateDays);
-        await writeCandleDiskCache(ticker, timeframeText, aggregated);
-        return aggregated;
+        await writeCandleDiskCache(ticker, timeframeText, aggregated, dailyDisk.provider);
+        return {
+          candles: aggregated,
+          provider: dailyDisk.provider,
+          fetchedAt: new Date(dailyDisk.savedAt).toISOString(),
+        };
       }
     }
 
     const load = async () => {
-      const rows = await tryCandlesProvider(entry, timeframe);
-      await writeCandleDiskCache(ticker, timeframeText, rows);
-      return rows;
+      const result = await tryCandlesProvider(entry, timeframe);
+      await writeCandleDiskCache(ticker, timeframeText, result.candles, result.provider);
+      return result;
     };
 
     if (disk?.candles.length) {
       void cached(cacheKey, candleCacheTtl(timeframeText), load).catch((error) => {
         console.error('chart background refresh failed:', error);
       });
-      return disk.candles;
+      return {
+        candles: disk.candles,
+        provider: disk.provider,
+        fetchedAt: new Date(disk.savedAt).toISOString(),
+      };
     }
 
-    return cached(cacheKey, candleCacheTtl(timeframeText), load);
+    const result = await cached(cacheKey, candleCacheTtl(timeframeText), load);
+    // 방어: 혹시 구버전 캐시(Candle[])가 남아 있으면 감싸서 반환한다.
+    if (Array.isArray(result)) {
+      return {
+        candles: result as Candle[],
+        provider: 'unknown',
+        fetchedAt: new Date().toISOString(),
+      };
+    }
+    return {
+      candles: result.candles,
+      provider: result.provider,
+      fetchedAt: new Date().toISOString(),
+    };
   }
 
   static async getCompanyProfile(

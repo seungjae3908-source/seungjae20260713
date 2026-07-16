@@ -659,7 +659,9 @@ async function getMarketListings(market: MarketKey): Promise<MarketListings> {
     );
 
     if (market === 'NASDAQ' || market === 'NYSE' || market === 'AMEX') {
-      rows = rows.filter((r) => r.exchange === market);
+      // FINNHUB_API_KEY가 없으면 카탈로그 폴백 종목에는 거래소 정보가 없다.
+      // 실제 시세(야후)가 있는 종목이므로 exchange 미상은 통과시킨다.
+      rows = rows.filter((r) => r.exchange === market || !r.exchange);
     }
 
     const popular = rows.slice(0, MAX).map((r) => ({

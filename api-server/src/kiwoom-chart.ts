@@ -557,6 +557,26 @@ function requestSpec(
     };
   }
 
+  if (tf === "1W") {
+    /*
+     * 주봉은 키움 주봉 차트 API(ka10082)를 사용합니다.
+     * 일봉(ka10081)과 별도의 데이터입니다.
+     */
+    return {
+      apiId: "ka10082",
+
+      path: CHART_PATH,
+
+      body: {
+        ...baseBody,
+
+        base_dt: koreaToday(),
+      },
+
+      maxPages: 150,
+    };
+  }
+
   if (tf === "1M") {
     return {
       apiId: "ka10083",

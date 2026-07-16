@@ -25,7 +25,10 @@ const BASE = 'https://opendart.fss.or.kr/api';
 // all resolve corp_code on a KR detail load).
 const CORPMAP_DISK = path.join(os.tmpdir(), 'dart-corpmap.json');
 const CORPMAP_DISK_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
-const CORPMAP_DOWNLOAD_TIMEOUT = 60_000; // large file; DART can be slow
+// 실측 결과 DART 벌크 다운로드는 이 환경에서 3~4분까지 걸릴 수 있다.
+const CORPMAP_DOWNLOAD_TIMEOUT = 270_000;
+// 저장소에 함께 배포되는 사전 생성 매핑 (배포 직후 콜드스타트 대비).
+const CORPMAP_BUNDLED = path.resolve(process.cwd(), 'data', 'dart-corpmap.json');
 
 let corpMapMem: { map: Map<string, string>; expires: number } | null = null;
 let corpMapInflight: Promise<Map<string, string>> | null = null;
@@ -34,16 +37,19 @@ async function loadCorpMapFromDisk(): Promise<{
   map: Map<string, string>;
   mtime: number;
 } | null> {
-  try {
-    const stat = await fs.stat(CORPMAP_DISK);
-    const raw = await fs.readFile(CORPMAP_DISK, 'utf-8');
-    const obj = JSON.parse(raw) as Record<string, string>;
-    const map = new Map(Object.entries(obj));
-    if (map.size === 0) return null;
-    return { map, mtime: stat.mtimeMs };
-  } catch {
-    return null;
+  for (const file of [CORPMAP_DISK, CORPMAP_BUNDLED]) {
+    try {
+      const stat = await fs.stat(file);
+      const raw = await fs.readFile(file, 'utf-8');
+      const obj = JSON.parse(raw) as Record<string, string>;
+      const map = new Map(Object.entries(obj));
+      if (map.size === 0) continue;
+      return { map, mtime: stat.mtimeMs };
+    } catch {
+      // try next candidate
+    }
   }
+  return null;
 }
 
 async function downloadCorpMap(): Promise<Map<string, string>> {

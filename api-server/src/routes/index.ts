@@ -8,6 +8,7 @@ import stocksRouter from './stocks';
 import watchlistRouter from './watchlist';
 import kiwoomRouter from './kiwoom.routes';
 import adminRouter from './admin';
+import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import backupRouter from './backup';
 import { requireAdmin, requireMember } from '../middleware/auth';
@@ -40,6 +41,7 @@ router.use('/debug', requireAdmin, providerDebugRouter);
 router.use('/', pushRouter);
 router.use('/', watchlistRouter);
 router.use('/stocks', stocksRouter);
+router.use('/', secRouter);
 router.use('/backup', backupRouter);
 
 export default router;

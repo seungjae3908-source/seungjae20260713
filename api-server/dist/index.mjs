@@ -11,7 +11,7 @@ import fs3 from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // src/routes/index.ts
-import { Router as Router12 } from "express";
+import { Router as Router13 } from "express";
 
 // src/routes/health.ts
 import { Router } from "express";
@@ -416,9 +416,6 @@ function mulberry32(seed) {
 function seeded(...parts) {
   return mulberry32(hashString(parts.join(":")));
 }
-function rangeInt(rng, min, max) {
-  return Math.floor(rng() * (max - min + 1)) + min;
-}
 function rangeFloat(rng, min, max) {
   return rng() * (max - min) + min;
 }
@@ -513,13 +510,13 @@ function intradaySeries(entry, tf) {
   const count = 200;
   const rng = seeded(entry.ticker, "intraday", tf);
   const daily = dailySeries(entry);
-  const last = daily[daily.length - 1].close;
+  const last3 = daily[daily.length - 1].close;
   const now = Math.floor(ANCHOR_MS / 1e3);
   const stepSec = step * 60;
   const times = [];
   for (let i = count - 1; i >= 0; i--) times.push(now - i * stepSec);
   const vol = 4e-3 + step / 60 * 4e-3;
-  const start = last * (1 - rangeFloat(rng, -0.01, 0.01));
+  const start = last3 * (1 - rangeFloat(rng, -0.01, 0.01));
   return walk(rng, start, times, vol, 0);
 }
 function getCandles(ticker, tf) {
@@ -534,17 +531,17 @@ function getQuote(ticker) {
   const entry = getCatalogEntry(ticker);
   if (!entry) return null;
   const daily = dailySeries(entry);
-  const last = daily[daily.length - 1];
+  const last3 = daily[daily.length - 1];
   const prev = daily[daily.length - 2];
-  const price = last.close;
-  const changeAmount = r2(last.close - prev.close);
+  const price = last3.close;
+  const changeAmount = r2(last3.close - prev.close);
   const changePercent = r2(changeAmount / prev.close * 100);
   const window = daily.slice(-252);
   return {
     price,
     changeAmount,
     changePercent,
-    volume: last.volume,
+    volume: last3.volume,
     marketCap: Math.round(price * shares(entry)),
     week52High: r2(Math.max(...window.map((c) => c.high))),
     week52Low: r2(Math.min(...window.map((c) => c.low)))
@@ -663,8 +660,8 @@ function detectSignals(candles, ind) {
   let volSurge = false;
   let ratio = 0;
   if (n >= 21) {
-    const avg = candles.slice(n - 21, n - 1).reduce((s, c) => s + c.volume, 0) / 20;
-    ratio = avg > 0 ? candles[n - 1].volume / avg : 0;
+    const avg2 = candles.slice(n - 21, n - 1).reduce((s, c) => s + c.volume, 0) / 20;
+    ratio = avg2 > 0 ? candles[n - 1].volume / avg2 : 0;
     volSurge = ratio >= 1.8;
   }
   signals.push({
@@ -907,14 +904,15 @@ async function fetchJson(url) {
   }
   return await res.json();
 }
-async function fetchYahooChart(symbol) {
+async function fetchYahooChart(symbol, params) {
   const encoded = encodeURIComponent(symbol);
-  const urls = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?range=5d&interval=1d`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?range=5d&interval=1d`,
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?range=1mo&interval=1d`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?range=1mo&interval=1d`
-  ];
+  const query = params ? [
+    params.range ? `range=${params.range}&interval=${params.interval}` : `period1=0&period2=9999999999&interval=${params.interval}`
+  ] : ["range=5d&interval=1d", "range=1mo&interval=1d"];
+  const urls = query.flatMap((q) => [
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`
+  ]);
   const errors = [];
   for (const url of urls) {
     try {
@@ -992,10 +990,20 @@ async function getQuote2(entryOrTicker) {
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
 }
-async function getCandles2(entryOrTicker) {
+function chartParams(tf) {
+  switch (String(tf ?? "1D")) {
+    case "1W":
+      return { range: "", interval: "1wk" };
+    case "1M":
+      return { range: "", interval: "1mo" };
+    default:
+      return { range: "10y", interval: "1d" };
+  }
+}
+async function getCandles2(entryOrTicker, timeframe) {
   const ticker = getTickerFromEntry(entryOrTicker);
   const symbol = yahooSymbol(ticker);
-  const result = await fetchYahooChart(symbol);
+  const result = await fetchYahooChart(symbol, chartParams(timeframe));
   const quote = result.indicators?.quote?.[0];
   if (!result.timestamp?.length || !quote) return [];
   return result.timestamp.map((timestamp, index) => {
@@ -3181,6 +3189,17 @@ function requestSpec(ticker, timeframe) {
       aggregateSize: tf === "4H" ? 4 : 1
     };
   }
+  if (tf === "1W") {
+    return {
+      apiId: "ka10082",
+      path: CHART_PATH,
+      body: {
+        ...baseBody,
+        base_dt: koreaToday()
+      },
+      maxPages: 150
+    };
+  }
   if (tf === "1M") {
     return {
       apiId: "ka10083",
@@ -3326,13 +3345,15 @@ async function readCandleDiskCache(ticker, timeframe) {
     if (!Array.isArray(parsed.candles) || parsed.candles.length < 2) return null;
     return {
       candles: parsed.candles,
+      provider: parsed.provider ?? "unknown",
+      savedAt: Number(parsed.savedAt ?? 0),
       fresh: Date.now() - Number(parsed.savedAt ?? 0) <= candleCacheTtl(timeframe)
     };
   } catch {
     return null;
   }
 }
-async function writeCandleDiskCache(ticker, timeframe, candles) {
+async function writeCandleDiskCache(ticker, timeframe, candles, provider) {
   if (candles.length < 2) return;
   try {
     await mkdir(candleCacheDirectory(), { recursive: true });
@@ -3340,7 +3361,8 @@ async function writeCandleDiskCache(ticker, timeframe, candles) {
       savedAt: Date.now(),
       ticker: cleanTicker3(ticker),
       timeframe,
-      candles
+      candles,
+      provider
     };
     await writeFile(
       candleCachePath(ticker, timeframe),
@@ -3879,7 +3901,7 @@ async function tryCandlesProvider(entry, timeframe) {
         timeframeText
       );
       if (kiwoomRows.length >= minimumUsefulCandles) {
-        return kiwoomRows;
+        return { candles: kiwoomRows, provider: "kiwoom" };
       }
     } catch (error) {
       console.error(
@@ -3889,19 +3911,19 @@ async function tryCandlesProvider(entry, timeframe) {
     }
   }
   const attempts = marketValue === "KR" ? [
-    () => getCandles3(entry),
-    () => getCandles2(entry)
-  ] : [() => getCandles2(entry)];
+    { name: "naver", run: () => getCandles3(entry) },
+    { name: "yahoo", run: () => getCandles2(entry, String(timeframe)) }
+  ] : [{ name: "yahoo", run: () => getCandles2(entry, String(timeframe)) }];
   for (const attempt of attempts) {
     try {
-      const result = await attempt();
+      const result = await attempt.run();
       if (Array.isArray(result) && result.length >= minimumUsefulCandles) {
-        return result;
+        return { candles: result, provider: attempt.name };
       }
     } catch {
     }
   }
-  return [];
+  return { candles: [], provider: "none" };
 }
 async function tryProfileProvider(entry) {
   const attempts = [
@@ -3969,7 +3991,7 @@ async function buildKrUniverseEntries() {
     return [];
   }
 }
-var MarketDataService = class {
+var MarketDataService = class _MarketDataService {
   static async search(q, limit = 80) {
     const query = String(
       q ?? ""
@@ -4086,13 +4108,27 @@ var MarketDataService = class {
     );
   }
   static async getCandles(ticker, timeframe = "1D") {
+    const meta = await _MarketDataService.getCandlesMeta(ticker, timeframe);
+    return meta.candles;
+  }
+  /**
+   * 캔들과 함께 실제 데이터 공급자 이름과 조회 시각을 반환합니다.
+   * 디스크 캐시에서 읽은 경우 캐시에 기록된 공급자와 저장 시각을 사용합니다.
+   */
+  static async getCandlesMeta(ticker, timeframe = "1D") {
     const entry = resolveEntry(
       ticker
     );
     const timeframeText = String(timeframe);
-    const cacheKey = `candles:${cleanTicker3(ticker)}:${timeframeText}`;
+    const cacheKey = `candles:v2:${cleanTicker3(ticker)}:${timeframeText}`;
     const disk = await readCandleDiskCache(ticker, timeframeText);
-    if (disk?.fresh) return disk.candles;
+    if (disk?.fresh) {
+      return {
+        candles: disk.candles,
+        provider: disk.provider,
+        fetchedAt: new Date(disk.savedAt).toISOString()
+      };
+    }
     const aggregateDays = {
       "3D": 3,
       "5D": 5,
@@ -4102,22 +4138,42 @@ var MarketDataService = class {
       const dailyDisk = await readCandleDiskCache(ticker, "1D");
       if (dailyDisk?.candles.length) {
         const aggregated = aggregateCachedCandles(dailyDisk.candles, aggregateDays);
-        await writeCandleDiskCache(ticker, timeframeText, aggregated);
-        return aggregated;
+        await writeCandleDiskCache(ticker, timeframeText, aggregated, dailyDisk.provider);
+        return {
+          candles: aggregated,
+          provider: dailyDisk.provider,
+          fetchedAt: new Date(dailyDisk.savedAt).toISOString()
+        };
       }
     }
     const load = async () => {
-      const rows = await tryCandlesProvider(entry, timeframe);
-      await writeCandleDiskCache(ticker, timeframeText, rows);
-      return rows;
+      const result2 = await tryCandlesProvider(entry, timeframe);
+      await writeCandleDiskCache(ticker, timeframeText, result2.candles, result2.provider);
+      return result2;
     };
     if (disk?.candles.length) {
       void cached(cacheKey, candleCacheTtl(timeframeText), load).catch((error) => {
         console.error("chart background refresh failed:", error);
       });
-      return disk.candles;
+      return {
+        candles: disk.candles,
+        provider: disk.provider,
+        fetchedAt: new Date(disk.savedAt).toISOString()
+      };
     }
-    return cached(cacheKey, candleCacheTtl(timeframeText), load);
+    const result = await cached(cacheKey, candleCacheTtl(timeframeText), load);
+    if (Array.isArray(result)) {
+      return {
+        candles: result,
+        provider: "unknown",
+        fetchedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+    }
+    return {
+      candles: result.candles,
+      provider: result.provider,
+      fetchedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
   }
   static async getCompanyProfile(ticker) {
     const entry = resolveEntry(
@@ -4355,6 +4411,54 @@ async function getFilings(ticker, limit = 20) {
     return out;
   });
 }
+var FACT_KEYS = [
+  { key: "RevenueFromContractWithCustomerExcludingAssessedTax", label: "\uB9E4\uCD9C\uC561" },
+  { key: "Revenues", label: "\uB9E4\uCD9C\uC561" },
+  { key: "NetIncomeLoss", label: "\uC21C\uC774\uC775" },
+  { key: "Assets", label: "\uCD1D\uC790\uC0B0" },
+  { key: "Liabilities", label: "\uCD1D\uBD80\uCC44" },
+  { key: "StockholdersEquity", label: "\uC790\uBCF8\uCD1D\uACC4" },
+  { key: "EarningsPerShareDiluted", label: "\uD76C\uC11D EPS" },
+  { key: "CommonStockSharesOutstanding", label: "\uBC1C\uD589\uC8FC\uC2DD\uC218" },
+  { key: "CashAndCashEquivalentsAtCarryingValue", label: "\uD604\uAE08\uBC0F\uD604\uAE08\uC131\uC790\uC0B0" }
+];
+async function getCompanyFactsSummary(ticker) {
+  const cik = await getCikByTicker(ticker);
+  return cached(`sec:companyfacts:${cik}`, TTL.risk, async () => {
+    const data = await fetchJson3(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, {
+      provider: "sec-edgar",
+      headers: HEADERS
+    });
+    const gaap = data.facts?.["us-gaap"] ?? {};
+    const out = {
+      entityName: data.entityName ?? ticker,
+      cik,
+      facts: []
+    };
+    const seenLabels = /* @__PURE__ */ new Set();
+    for (const { key, label } of FACT_KEYS) {
+      if (seenLabels.has(label)) continue;
+      const units = gaap[key]?.units;
+      if (!units) continue;
+      const unitName = Object.keys(units)[0];
+      const rows = units[unitName] ?? [];
+      const latest = [...rows].filter((r) => typeof r.val === "number" && r.end).sort((a, b) => String(b.end).localeCompare(String(a.end)))[0];
+      if (!latest) continue;
+      seenLabels.add(label);
+      out.facts.push({
+        key,
+        label,
+        unit: unitName,
+        value: latest.val,
+        end: latest.end,
+        fy: latest.fy,
+        fp: latest.fp,
+        form: latest.form
+      });
+    }
+    return out;
+  });
+}
 var CAPITAL_TAGS = [
   "CommonStockValue",
   "CommonStocksIncludingAdditionalPaidInCapital"
@@ -4500,20 +4604,23 @@ import AdmZip from "adm-zip";
 var BASE3 = "https://opendart.fss.or.kr/api";
 var CORPMAP_DISK = path2.join(os.tmpdir(), "dart-corpmap.json");
 var CORPMAP_DISK_TTL = 7 * 24 * 60 * 60 * 1e3;
-var CORPMAP_DOWNLOAD_TIMEOUT = 6e4;
+var CORPMAP_DOWNLOAD_TIMEOUT = 27e4;
+var CORPMAP_BUNDLED = path2.resolve(process.cwd(), "data", "dart-corpmap.json");
 var corpMapMem = null;
 var corpMapInflight = null;
 async function loadCorpMapFromDisk() {
-  try {
-    const stat = await fs.stat(CORPMAP_DISK);
-    const raw = await fs.readFile(CORPMAP_DISK, "utf-8");
-    const obj = JSON.parse(raw);
-    const map = new Map(Object.entries(obj));
-    if (map.size === 0) return null;
-    return { map, mtime: stat.mtimeMs };
-  } catch {
-    return null;
+  for (const file of [CORPMAP_DISK, CORPMAP_BUNDLED]) {
+    try {
+      const stat = await fs.stat(file);
+      const raw = await fs.readFile(file, "utf-8");
+      const obj = JSON.parse(raw);
+      const map = new Map(Object.entries(obj));
+      if (map.size === 0) continue;
+      return { map, mtime: stat.mtimeMs };
+    } catch {
+    }
   }
+  return null;
 }
 async function downloadCorpMap() {
   const key = getDartKey();
@@ -4833,85 +4940,6 @@ var FinancialService = {
   getFinancials: getFinancials4
 };
 
-// src/sample/news.ts
-var KR_SOURCES = [
-  { name: "\uD55C\uAD6D\uACBD\uC81C", domain: "hankyung.com" },
-  { name: "\uB9E4\uC77C\uACBD\uC81C", domain: "mk.co.kr" },
-  { name: "\uC5F0\uD569\uC778\uD3EC\uB9E5\uC2A4", domain: "einfomax.co.kr" },
-  { name: "\uC11C\uC6B8\uACBD\uC81C", domain: "sedaily.com" },
-  { name: "\uC804\uC790\uC2E0\uBB38", domain: "etnews.com" },
-  { name: "\uC774\uB370\uC77C\uB9AC", domain: "edaily.co.kr" }
-];
-var US_SOURCES = [
-  { name: "Bloomberg", domain: "bloomberg.com" },
-  { name: "Reuters", domain: "reuters.com" },
-  { name: "CNBC", domain: "cnbc.com" },
-  { name: "MarketWatch", domain: "marketwatch.com" },
-  { name: "The Wall Street Journal", domain: "wsj.com" }
-];
-var POSITIVE = [
-  "{n}, \uC2DC\uC7A5 \uC608\uC0C1 \uC0C1\uD68C\uD558\uB294 \uBD84\uAE30 \uC2E4\uC801 \uBC1C\uD45C",
-  "{n}, \uC2E0\uC81C\uD488 \uCD9C\uC2DC\uB85C \uB9E4\uCD9C \uC131\uC7A5 \uAE30\uB300\uAC10 \uD655\uB300",
-  "\uC99D\uAD8C\uAC00, {n} \uBAA9\uD45C\uC8FC\uAC00 \uC0C1\uD5A5 \uC870\uC815",
-  "{n}, \uB300\uADDC\uBAA8 \uC2E0\uADDC \uC218\uC8FC \uACC4\uC57D \uCCB4\uACB0",
-  "{n}, \uC790\uC0AC\uC8FC \uB9E4\uC785 \uACB0\uC815\uC73C\uB85C \uC8FC\uC8FC\uAC00\uCE58 \uC81C\uACE0",
-  "\uC678\uAD6D\uC778\xB7\uAE30\uAD00, {n} \uB3D9\uBC18 \uC21C\uB9E4\uC218 \uC9C0\uC18D",
-  "{n}, \uC2E0\uADDC \uC2DC\uC7A5 \uC9C4\uCD9C\uB85C \uC131\uC7A5 \uB3D9\uB825 \uD655\uBCF4",
-  "{n}, \uC601\uC5C5\uC774\uC775\uB960 \uAC1C\uC120\uC138 \uB69C\uB837"
-];
-var NEGATIVE = [
-  "{n}, \uC2DC\uC7A5 \uAE30\uB300 \uBC11\uB3C4\uB294 \uC2E4\uC801\uC5D0 \uD22C\uC790\uC2EC\uB9AC \uC704\uCD95",
-  "\uC99D\uAD8C\uAC00, {n} \uD22C\uC790\uC758\uACAC \uD558\uD5A5",
-  "{n}, \uACBD\uC7C1 \uC2EC\uD654\uC5D0 \uB530\uB978 \uB9C8\uC9C4 \uC555\uBC15 \uC6B0\uB824",
-  "{n}, \uB300\uADDC\uBAA8 \uC720\uC0C1\uC99D\uC790 \uAC80\uD1A0\uC124\uC5D0 \uC8FC\uAC00 \uC57D\uC138",
-  "{n}, \uC6D0\uAC00 \uC0C1\uC2B9\uC73C\uB85C \uC218\uC775\uC131 \uBD80\uB2F4 \uD655\uB300",
-  "\uC678\uAD6D\uC778, {n} \uB9E4\uB3C4\uC138 \uC9C0\uC18D",
-  "{n}, \uADDC\uC81C \uB9AC\uC2A4\uD06C \uBD80\uAC01\uC5D0 \uBCC0\uB3D9\uC131 \uD655\uB300",
-  "{n}, \uBD80\uCC44\uBE44\uC728 \uC0C1\uC2B9 \uC6B0\uB824 \uC81C\uAE30"
-];
-function recentDate(rng, i) {
-  const d = new Date(ANCHOR_MS);
-  d.setUTCDate(d.getUTCDate() - (i + rangeInt(rng, 0, 2)));
-  return d.toISOString().slice(0, 10);
-}
-function articleUrl(title, market) {
-  const q = encodeURIComponent(title);
-  return `https://search.naver.com/search.naver?where=news&sm=tab_jum&sort=1&query=${q}`;
-}
-function getNews(ticker) {
-  const entry = getCatalogEntry(ticker);
-  if (!entry) return null;
-  const rng = seeded(entry.ticker, "news");
-  const sources = entry.market === "KR" ? KR_SOURCES : US_SOURCES;
-  const q = qualityScore(entry.ticker);
-  const posCount = Math.max(2, Math.round(q / 100 * 4) + rangeInt(rng, 1, 2));
-  const negCount = Math.max(1, 5 - Math.round(q / 100 * 3));
-  const pickUnique = (pool, count, tone) => {
-    const items = [];
-    const avail = [...pool];
-    for (let i = 0; i < count && avail.length > 0; i++) {
-      const idx = Math.floor(rng() * avail.length);
-      const tpl = avail.splice(idx, 1)[0];
-      const title = tpl.replace("{n}", entry.name);
-      const src = sources[Math.floor(rng() * sources.length)];
-      items.push({
-        title,
-        source: src.name,
-        sourceDomain: src.domain,
-        date: recentDate(rng, i),
-        url: articleUrl(title, entry.market),
-        tone
-      });
-    }
-    return items;
-  };
-  const positive = pickUnique(POSITIVE, posCount, "positive");
-  const negative = pickUnique(NEGATIVE, negCount, "negative");
-  const total = positive.length + negative.length;
-  const sentimentScore = Math.round((positive.length - negative.length) / total * 100);
-  return { positive, negative, sentimentScore };
-}
-
 // src/services/news.service.ts
 function dateFromUnix(value) {
   if (!value) return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
@@ -5057,22 +5085,68 @@ async function krItems(entry) {
   }
   return items;
 }
-async function getNews2(ticker) {
+async function usItemsFromGoogle(entry) {
+  const query = encodeURIComponent(`${entry.name} stock`);
+  const xml = await fetchText2(
+    `https://news.google.com/rss/search?q=${query}&hl=en-US&gl=US&ceid=US:en`,
+    { provider: "google-news", headers: { "User-Agent": "Mozilla/5.0" } }
+  );
+  const items = [];
+  const re = /<item>([\s\S]*?)<\/item>/g;
+  let m;
+  while ((m = re.exec(xml)) !== null && items.length < 16) {
+    const block = m[1];
+    const title = decodeXml(pick3(block, /<title>([\s\S]*?)<\/title>/));
+    const url = decodeXml(pick3(block, /<link>([\s\S]*?)<\/link>/));
+    const pub = pick3(block, /<pubDate>([\s\S]*?)<\/pubDate>/);
+    const srcUrl = pick3(block, /<source[^>]*url="([^"]*)"/);
+    const srcName = decodeXml(pick3(block, /<source[^>]*>([\s\S]*?)<\/source>/));
+    if (!title || !url || !url.startsWith("http")) continue;
+    const date = pub ? new Date(pub).toISOString().slice(0, 10) : (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    items.push({
+      title,
+      source: srcName || domainFromUrl(srcUrl || url),
+      sourceDomain: domainFromUrl(srcUrl || url),
+      date,
+      url,
+      tone: toneFromText(title, false)
+    });
+  }
+  return items;
+}
+var NewsProviderError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "NewsProviderError";
+  }
+};
+async function getNews(ticker) {
   const entry = getCatalogEntry(ticker);
   if (!entry) return null;
   try {
-    const items = entry.market === "KR" ? await krItems(entry) : await usItems(entry);
-    const filtered = items.filter((n) => n.url && n.url.startsWith("http"));
-    if (filtered.length > 0) {
-      return splitNews(filtered);
+    let items = [];
+    if (entry.market === "KR") {
+      items = await krItems(entry);
+    } else {
+      try {
+        items = await usItems(entry);
+      } catch (err) {
+        console.error(`finnhub news failed for ${ticker}, falling back to google news:`, err);
+        items = [];
+      }
+      if (items.length === 0) {
+        items = await usItemsFromGoogle(entry);
+      }
     }
+    const filtered = items.filter((n) => n.url && n.url.startsWith("http"));
+    return splitNews(filtered);
   } catch (err) {
     console.error(`live news failed for ${ticker}:`, err);
+    throw new NewsProviderError("\uB274\uC2A4 \uACF5\uAE09\uC790 \uD638\uCD9C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.");
   }
-  return getNews(ticker);
 }
 var NewsService = {
-  getNews: getNews2
+  getNews
 };
 
 // src/lib/filing-classify.ts
@@ -6115,7 +6189,7 @@ async function getMarketListings(market) {
       (r) => r !== null
     );
     if (market === "NASDAQ" || market === "NYSE" || market === "AMEX") {
-      rows = rows.filter((r) => r.exchange === market);
+      rows = rows.filter((r) => r.exchange === market || !r.exchange);
     }
     const popular = rows.slice(0, MAX).map((r) => ({
       ...r,
@@ -6284,9 +6358,9 @@ function aggregateSectors(rows) {
     count: v.count
   })).sort((a, b) => b.changePercent - a.changePercent);
 }
-function moodOf(avg) {
-  if (avg >= 0.4) return "positive";
-  if (avg <= -0.4) return "negative";
+function moodOf(avg2) {
+  if (avg2 >= 0.4) return "positive";
+  if (avg2 <= -0.4) return "negative";
   return "neutral";
 }
 async function getBriefing() {
@@ -6302,8 +6376,8 @@ async function getBriefing() {
     const nasdaq = byKey("nasdaq");
     const sp = byKey("sp500");
     const changes = [kospi, nasdaq, sp].filter((s) => !!s && s.ok).map((s) => s.changePercent);
-    const avg = changes.length ? changes.reduce((a, b) => a + b, 0) / changes.length : 0;
-    const mood = moodOf(avg);
+    const avg2 = changes.length ? changes.reduce((a, b) => a + b, 0) / changes.length : 0;
+    const mood = moodOf(avg2);
     const pct = (s) => s && s.ok ? `${s.changePercent >= 0 ? "+" : ""}${s.changePercent.toFixed(2)}%` : "\u2014";
     const lines = [];
     if (kospi) lines.push(`\uCF54\uC2A4\uD53C ${pct(kospi)} \xB7 \uCF54\uC2A4\uB2E5 ${pct(kosdaq)}`);
@@ -7151,7 +7225,7 @@ function normalizeMarket(value) {
   return "ALL";
 }
 function normalizeTicker2(value) {
-  return String(value ?? "").trim().toUpperCase();
+  return String(value ?? "").trim().toUpperCase().replace(/^(KR|US)[:.]/, "");
 }
 function uniqueTickers(values) {
   return Array.from(new Set(values.map(normalizeTicker2).filter(Boolean)));
@@ -7435,19 +7509,24 @@ var market_default = router2;
 import { Router as Router3 } from "express";
 var router3 = Router3();
 router3.get("/news/:ticker", async (req, res) => {
+  const fetchedAt = (/* @__PURE__ */ new Date()).toISOString();
   try {
     const ticker = String(req.params.ticker || "").toUpperCase();
     if (!ticker) {
-      return res.status(400).json({ error: "ticker required" });
+      return res.status(400).json({ ok: false, error: "TICKER_REQUIRED" });
     }
     const data = await NewsService.getNews(ticker);
     if (!data) {
-      return res.status(404).json({ error: "news not found" });
+      return res.status(404).json({ ok: false, error: "TICKER_NOT_FOUND" });
     }
-    return res.json(data);
+    const provider = /^\d{6}$/.test(ticker) ? "google-news" : "finnhub/google-news";
+    return res.json({ ok: true, provider, fetchedAt, ...data });
   } catch (error) {
+    if (error instanceof NewsProviderError) {
+      return res.status(502).json({ ok: false, error: "NEWS_PROVIDER_ERROR", message: error.message });
+    }
     console.error("news route error:", error);
-    return res.status(500).json({ error: "news server error" });
+    return res.status(500).json({ ok: false, error: "NEWS_ROUTE_ERROR" });
   }
 });
 var news_route_default = router3;
@@ -7934,6 +8013,1116 @@ import { Router as Router6 } from "express";
 import { mkdir as mkdir2, readFile as readFile2, writeFile as writeFile2 } from "node:fs/promises";
 import path4 from "node:path";
 import { randomUUID } from "node:crypto";
+
+// src/sample/accumulation.ts
+function obvSeries(c) {
+  const out = [0];
+  for (let i = 1; i < c.length; i++) {
+    const d = c[i].close - c[i - 1].close;
+    out.push(out[i - 1] + (d > 0 ? c[i].volume : d < 0 ? -c[i].volume : 0));
+  }
+  return out;
+}
+function atrSeries(c, period = 14) {
+  const tr = [];
+  for (let i = 0; i < c.length; i++) {
+    if (i === 0) {
+      tr.push(c[i].high - c[i].low);
+      continue;
+    }
+    tr.push(
+      Math.max(
+        c[i].high - c[i].low,
+        Math.abs(c[i].high - c[i - 1].close),
+        Math.abs(c[i].low - c[i - 1].close)
+      )
+    );
+  }
+  return sma(tr, period);
+}
+function mfiSeries(c, period = 14) {
+  const tp = c.map((x) => (x.high + x.low + x.close) / 3);
+  const out = new Array(c.length).fill(null);
+  for (let i = period; i < c.length; i++) {
+    let pos = 0;
+    let neg = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      const raw = tp[j] * c[j].volume;
+      if (tp[j] > tp[j - 1]) pos += raw;
+      else if (tp[j] < tp[j - 1]) neg += raw;
+    }
+    out[i] = neg === 0 ? 100 : 100 - 100 / (1 + pos / neg);
+  }
+  return out;
+}
+function bollinger(closes, period = 20, mult = 2) {
+  const mid = sma(closes, period);
+  const upper = [];
+  const lower = [];
+  const width = [];
+  for (let i = 0; i < closes.length; i++) {
+    const m = mid[i];
+    if (i < period - 1 || m === null) {
+      upper.push(null);
+      lower.push(null);
+      width.push(null);
+      continue;
+    }
+    let s = 0;
+    for (let j = i - period + 1; j <= i; j++) s += (closes[j] - m) ** 2;
+    const sd = Math.sqrt(s / period);
+    upper.push(m + mult * sd);
+    lower.push(m - mult * sd);
+    width.push(m !== 0 ? 2 * mult * sd / m * 100 : null);
+  }
+  return { mid, upper, lower, width };
+}
+function slope(arr, lookback) {
+  const n = arr.length;
+  const b = arr[n - 1];
+  const a = arr[n - 1 - lookback];
+  if (a == null || b == null || a === 0) return null;
+  return (b - a) / Math.abs(a) * 100;
+}
+function last(arr) {
+  return arr[arr.length - 1];
+}
+function roundTo(v, currency) {
+  if (currency === "KRW") return Math.round(v);
+  return Math.round(v * 100) / 100;
+}
+function computeAccumulation(candles, ind, ctx) {
+  const n = candles.length;
+  const closes = candles.map((c) => c.close);
+  const price = closes[n - 1];
+  const boxWin = Math.min(80, n - 1);
+  const recentWin = Math.min(20, n - 1);
+  const hi = Math.max(...closes);
+  const loAll = Math.min(...closes);
+  const boxSlice = closes.slice(n - boxWin);
+  const boxHi = Math.max(...boxSlice);
+  const boxLo = Math.min(...boxSlice);
+  const recentLo = Math.min(...closes.slice(n - recentWin));
+  const obv = obvSeries(candles);
+  const atr2 = atrSeries(candles, 14);
+  const mfi = mfiSeries(candles, 14);
+  const bb = bollinger(closes, 20, 2);
+  const rsi = ind.rsi;
+  const factors = {};
+  {
+    const drawdown = hi > 0 ? (hi - price) / hi : 0;
+    const nearLow = loAll > 0 ? (price - loAll) / loAll : 1;
+    const notBreaking = price > recentLo * 0.98;
+    let s = 0;
+    if (drawdown >= 0.2) s += 0.4;
+    else if (drawdown >= 0.1) s += 0.2;
+    if (nearLow <= 0.15) s += 0.35;
+    else if (nearLow <= 0.3) s += 0.2;
+    if (notBreaking) s += 0.25;
+    factors.pricePosition = {
+      strength: Math.min(1, s),
+      weight: 10,
+      pass: `\uACE0\uC810 \uB300\uBE44 ${(drawdown * 100).toFixed(0)}% \uD558\uB77D\uD55C \uC800\uC810\uAD8C\uC774\uBA70 \uCD5C\uADFC \uC800\uC810\uC774 \uC720\uC9C0\uB418\uACE0 \uC788\uC2B5\uB2C8\uB2E4.`,
+      fail: "\uC544\uC9C1 \uC800\uC810\uAD8C\uC774 \uC544\uB2C8\uAC70\uB098 \uC800\uC810\uC774 \uACC4\uC18D \uB0AE\uC544\uC9C0\uACE0 \uC788\uC2B5\uB2C8\uB2E4."
+    };
+  }
+  {
+    const boxRange = boxLo > 0 ? (boxHi - boxLo) / boxLo : 1;
+    const atrNow = last(atr2) ?? null;
+    const atrPast = atr2[n - 1 - boxWin] ?? null;
+    const atrFalling = atrNow != null && atrPast != null && atrNow < atrPast;
+    const half = Math.floor(boxWin / 2);
+    const oldLow = Math.min(...closes.slice(n - boxWin, n - half));
+    const newLow = Math.min(...closes.slice(n - half));
+    const higherLows = newLow >= oldLow * 0.99;
+    let s = 0;
+    if (boxRange <= 0.15) s += 0.4;
+    else if (boxRange <= 0.28) s += 0.22;
+    if (atrFalling) s += 0.3;
+    if (higherLows) s += 0.3;
+    factors.box = {
+      strength: Math.min(1, s),
+      weight: 12,
+      pass: `\uC57D ${boxWin}\uBD09 \uB3D9\uC548 ${(boxRange * 100).toFixed(0)}% \uD3ED\uC758 \uBC15\uC2A4\uAD8C\uC5D0\uC11C \uBCC0\uB3D9\uC131\uC774 \uC904\uACE0 \uC800\uC810\uC774 \uB192\uC544\uC9C0\uACE0 \uC788\uC2B5\uB2C8\uB2E4.`,
+      fail: "\uBC15\uC2A4\uAD8C \uD6A1\uBCF4\uAC00 \uB69C\uB837\uD558\uC9C0 \uC54A\uAC70\uB098 \uBCC0\uB3D9\uC131\uC774 \uC5EC\uC804\uD788 \uD07D\uB2C8\uB2E4."
+    };
+  }
+  {
+    const obvArr = obv.map((v) => v);
+    const obvSlope = slope(obvArr, recentWin);
+    let upVol = 0;
+    let downVol = 0;
+    for (let i = n - recentWin; i < n; i++) {
+      if (candles[i].close >= candles[i - 1].close) upVol += candles[i].volume;
+      else downVol += candles[i].volume;
+    }
+    const upBias = upVol > downVol * 1.1;
+    const mfiNow = last(mfi) ?? null;
+    const mfiPast = mfi[n - 1 - recentWin] ?? null;
+    const mfiUp = mfiNow != null && mfiPast != null && mfiNow > mfiPast;
+    let s = 0;
+    if (obvSlope != null && obvSlope > 0) s += 0.4;
+    if (upBias) s += 0.35;
+    if (mfiUp) s += 0.25;
+    factors.volume = {
+      strength: Math.min(1, s),
+      weight: 16,
+      pass: `OBV\uAC00 \uC0C1\uC2B9\uD558\uACE0 \uC0C1\uC2B9\uC77C \uAC70\uB798\uB7C9\uC774 \uD558\uB77D\uC77C\uBCF4\uB2E4 \uCEE4 \uB9E4\uC9D1 \uD754\uC801\uC774 \uBCF4\uC785\uB2C8\uB2E4${mfiUp ? " (MFI \uAC1C\uC120)" : ""}.`,
+      fail: "\uAC70\uB798\uB7C9 \uB9E4\uC9D1 \uC2E0\uD638(OBV\xB7\uC0C1\uC2B9\uC77C \uAC70\uB798\uB7C9 \uC6B0\uC704)\uAC00 \uC57D\uD569\uB2C8\uB2E4."
+    };
+  }
+  {
+    const ma20Slope = slope(ind.ma20, 5);
+    const ma60Slope = slope(ind.ma60, 10);
+    const ma20 = last(ind.ma20) ?? null;
+    const ma60 = last(ind.ma60) ?? null;
+    let s = 0;
+    if (ma20Slope != null && ma20Slope > 0) s += 0.4;
+    if (ma60Slope != null && Math.abs(ma60Slope) < 3) s += 0.3;
+    if (ma20 != null && ma60 != null) {
+      const gap = ma60 > 0 ? (ma60 - ma20) / ma60 : 1;
+      if (gap > 0 && gap < 0.05) s += 0.3;
+      else if (ma20 > ma60) s += 0.2;
+    }
+    const maApplicable = ma20 != null || ma60 != null;
+    factors.movingAverage = {
+      strength: maApplicable ? Math.min(1, s) : null,
+      weight: 12,
+      pass: "MA20\uAC00 \uC0C1\uC2B9 \uC804\uD658\uD558\uACE0 MA60\uC774 \uD3C9\uD0C4\uD574\uC9C0\uBA70 \uC815\uBC30\uC5F4\uC5D0 \uADFC\uC811\uD558\uACE0 \uC788\uC2B5\uB2C8\uB2E4.",
+      fail: "MA20 \uC0C1\uC2B9 \uC804\uD658\xB7MA60 \uD3C9\uD0C4\uD654\uAC00 \uC544\uC9C1 \uD655\uC778\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
+    };
+  }
+  {
+    const r = last(rsi) ?? null;
+    const rPast = rsi[n - 1 - recentWin] ?? null;
+    const inZone = r != null && r >= 30 && r <= 55;
+    const escaping = r != null && rPast != null && rPast < 35 && r > rPast;
+    const hist = ind.macd.hist;
+    const hNow = last(hist) ?? null;
+    const hPast = hist[n - 3] ?? null;
+    const histUp = hNow != null && hPast != null && hNow > hPast;
+    let s = 0;
+    if (inZone) s += 0.4;
+    if (escaping) s += 0.3;
+    if (histUp) s += 0.3;
+    factors.momentum = {
+      strength: r == null ? null : Math.min(1, s),
+      weight: 12,
+      pass: `RSI\uAC00 ${r != null ? r.toFixed(0) : "\u2014"}\uB85C \uB9E4\uC9D1 \uAD6C\uAC04\uC774\uBA70 MACD \uD788\uC2A4\uD1A0\uADF8\uB7A8\uC774 \uAC1C\uC120\uB418\uACE0 \uC788\uC2B5\uB2C8\uB2E4.`,
+      fail: "\uBAA8\uBA58\uD140(RSI \uD68C\uBCF5\xB7MACD \uAC1C\uC120)\uC774 \uC544\uC9C1 \uBD80\uC871\uD569\uB2C8\uB2E4."
+    };
+  }
+  {
+    const wNow = last(bb.width) ?? null;
+    const wSlice = bb.width.slice(n - boxWin).filter((v) => v != null);
+    const wAvg = wSlice.length ? wSlice.reduce((a, b) => a + b, 0) / wSlice.length : null;
+    const squeeze = wNow != null && wAvg != null && wNow < wAvg * 0.85;
+    const mid = last(bb.mid) ?? null;
+    const midRecover = mid != null && price >= mid;
+    let s = 0;
+    if (squeeze) s += 0.6;
+    if (midRecover) s += 0.4;
+    factors.bollinger = {
+      strength: Math.min(1, s),
+      weight: 8,
+      pass: "\uBCFC\uB9B0\uC800\uBC34\uB4DC\uAC00 \uC218\uCD95(\uC2A4\uD034\uC988)\uD558\uBA70 \uC911\uC2EC\uC120\uC744 \uD68C\uBCF5\uD574 \uBCC0\uB3D9\uC131 \uD655\uB300 \uC9C1\uC804\uC785\uB2C8\uB2E4.",
+      fail: "\uBCFC\uB9B0\uC800\uBC34\uB4DC \uC2A4\uD034\uC988 \uB610\uB294 \uC911\uC2EC\uC120 \uD68C\uBCF5\uC774 \uD655\uC778\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
+    };
+  }
+  factors.supply = {
+    strength: null,
+    weight: 10,
+    pass: "",
+    fail: "\uAE30\uAD00\xB7\uC678\uAD6D\uC778 \uC218\uAE09 \uB370\uC774\uD130\uAC00 \uC81C\uACF5\uB418\uC9C0 \uC54A\uC544 \uD655\uC778 \uBD88\uAC00\uD569\uB2C8\uB2E4."
+  };
+  if (ctx.negativeEvents) {
+    const hasRisk = ctx.negativeEvents.length > 0;
+    factors.disclosureRisk = {
+      strength: hasRisk ? 0 : 1,
+      weight: 8,
+      pass: "\uC720\uC0C1\uC99D\uC790\xB7CB/BW\xB7\uAD00\uB9AC\uC885\uBAA9 \uB4F1 \uB9E4\uC9D1\uC744 \uC800\uD574\uD558\uB294 \uACF5\uC2DC \uB9AC\uC2A4\uD06C\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.",
+      fail: `\uACF5\uC2DC \uB9AC\uC2A4\uD06C\uAC00 \uC788\uC2B5\uB2C8\uB2E4 (${ctx.negativeEvents.join(", ")}).`
+    };
+  } else {
+    factors.disclosureRisk = {
+      strength: null,
+      weight: 8,
+      pass: "",
+      fail: "\uACF5\uC2DC \uB370\uC774\uD130\uAC00 \uC5C6\uC5B4 \uB9AC\uC2A4\uD06C\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
+    };
+  }
+  if (ctx.newsScore != null || ctx.positiveEvents) {
+    let s = 0.5;
+    if (ctx.newsScore != null) s = Math.max(0, Math.min(1, (ctx.newsScore + 100) / 200));
+    if (ctx.positiveEvents && ctx.positiveEvents.length > 0) s = Math.min(1, s + 0.2);
+    factors.news = {
+      strength: s,
+      weight: 8,
+      pass: "\uC545\uC7AC\uC131 \uB274\uC2A4\uAC00 \uC904\uACE0 \uD638\uC7AC\uC131 \uB274\uC2A4\xB7\uAE0D\uC815 \uACF5\uC2DC\uAC00 \uB298\uACE0 \uC788\uC2B5\uB2C8\uB2E4.",
+      fail: "\uB274\uC2A4/\uACF5\uC2DC \uD750\uB984\uC774 \uC544\uC9C1 \uAE0D\uC815\uC801\uC73C\uB85C \uB3CC\uC544\uC11C\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4."
+    };
+  } else {
+    factors.news = { strength: null, weight: 8, pass: "", fail: "\uB274\uC2A4 \uB370\uC774\uD130\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4." };
+  }
+  if (ctx.financials) {
+    const f = ctx.financials;
+    let s = 0;
+    let cnt = 0;
+    const growthUp = (arr) => arr && arr.length >= 2 && arr[arr.length - 1] > arr[arr.length - 2];
+    if (f.revenueGrowth) {
+      cnt++;
+      if (growthUp(f.revenueGrowth) || (last(f.revenueGrowth) ?? -1) > 0) s += 1;
+    }
+    if (f.profitGrowth) {
+      cnt++;
+      if (growthUp(f.profitGrowth) || (last(f.profitGrowth) ?? -1) > 0) s += 1;
+    }
+    if (f.roe != null) {
+      cnt++;
+      if (f.roe > 0) s += 1;
+    }
+    if (f.debtRatio != null) {
+      cnt++;
+      if (f.debtRatio < 150) s += 1;
+    }
+    factors.financials = {
+      strength: cnt > 0 ? s / cnt : null,
+      weight: 8,
+      pass: "\uC2E4\uC801\xB7\uC218\uC775\uC131\xB7\uC7AC\uBB34 \uC548\uC815\uC131\uC774 \uAC1C\uC120 \uD750\uB984\uC744 \uBCF4\uC774\uACE0 \uC788\uC2B5\uB2C8\uB2E4.",
+      fail: "\uC7AC\uBB34 \uAC1C\uC120(\uC2E4\uC801\xB7\uD604\uAE08\xB7\uBD80\uCC44\xB7ROE) \uC2E0\uD638\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4."
+    };
+  } else {
+    factors.financials = { strength: null, weight: 8, pass: "", fail: "\uC7AC\uBB34 \uB370\uC774\uD130\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4." };
+  }
+  const applicable = Object.values(factors).filter((f) => f.strength != null);
+  const totalWeight = Object.values(factors).reduce((a, f) => a + f.weight, 0);
+  const applicableWeight = applicable.reduce((a, f) => a + f.weight, 0);
+  const weightedStrength = applicable.reduce((a, f) => a + f.weight * f.strength, 0);
+  const score = applicableWeight > 0 ? Math.round(weightedStrength / applicableWeight * 100) : 0;
+  const passed = [];
+  const failed = [];
+  for (const f of Object.values(factors)) {
+    if (f.strength == null) {
+      if (f.fail) failed.push(f.fail);
+      continue;
+    }
+    if (f.strength >= 0.6) passed.push(f.pass);
+    else if (f.strength < 0.5) failed.push(f.fail);
+  }
+  const coverage = applicableWeight / totalWeight;
+  const lengthFactor = Math.min(1, n / 180);
+  const confidence = Math.round(coverage * lengthFactor * 100);
+  const dataQuality = n < 40 ? "insufficient" : coverage < 0.75 ? "partial" : "ok";
+  const nearResistance = boxHi > 0 ? price / boxHi : 0;
+  let breakout = score * 0.7;
+  if (factors.bollinger.strength && factors.bollinger.strength >= 0.6) breakout += 8;
+  if (factors.volume.strength && factors.volume.strength >= 0.6) breakout += 8;
+  if (nearResistance >= 0.95) breakout += 6;
+  const breakoutProbability = Math.max(0, Math.min(95, Math.round(breakout)));
+  const expectedPeriod = score >= 75 ? "1~3\uC8FC" : score >= 55 ? "2~4\uC8FC" : "4~8\uC8FC";
+  const stars = Math.max(1, Math.min(5, Math.ceil(score / 20)));
+  const label = score >= 80 ? "\uB9E4\uC9D1 \uC9C4\uD589 \uAC00\uB2A5\uC131 \uB9E4\uC6B0 \uB192\uC74C" : score >= 65 ? "\uB9E4\uC9D1 \uC9C4\uD589 \uAC00\uB2A5\uC131 \uB192\uC74C" : score >= 50 ? "\uB9E4\uC9D1 \uAD00\uCC30 \uD544\uC694" : score >= 35 ? "\uB9E4\uC9D1 \uCD08\uAE30 \uB2E8\uACC4" : "\uB9E4\uC9D1 \uC2E0\uD638 \uC57D\uD568";
+  const cur = ctx.currency;
+  const ma20v = last(ind.ma20) ?? price;
+  const strategy = {
+    entry: [
+      `\uBC15\uC2A4\uAD8C \uD558\uB2E8(\uC57D ${roundTo(boxLo, cur)}) \uBD80\uADFC\uC5D0\uC11C \uBD84\uD560 \uC9C4\uC785`,
+      `MA20(\uC57D ${roundTo(ma20v, cur)}) \uD68C\uBCF5 \uD655\uC778 \uD6C4 1\uCC28 \uC9C4\uC785`,
+      `\uBC15\uC2A4\uAD8C \uC0C1\uB2E8(\uC57D ${roundTo(boxHi, cur)}) \uAC70\uB798\uB7C9 \uB3D9\uBC18 \uB3CC\uD30C \uC2DC \uCD94\uAC00 \uC9C4\uC785`
+    ],
+    take: [
+      `\uBC15\uC2A4\uAD8C \uC0C1\uB2E8(\uC57D ${roundTo(boxHi, cur)}) 1\uCC28 \uC775\uC808`,
+      "\uC804\uACE0\uC810 \uB3CC\uD30C \uC2DC \uC77C\uBD80 \uBB3C\uB7C9 \uD640\uB529",
+      "\uAC70\uB798\uB7C9 \uAE09\uAC10 \uC2DC \uBD84\uD560 \uC775\uC808"
+    ],
+    stop: [
+      `\uBC15\uC2A4\uAD8C \uD558\uB2E8(\uC57D ${roundTo(boxLo, cur)}) \uC774\uD0C8 \uC2DC \uC190\uC808`,
+      `\uC9C1\uC804 \uC800\uC810(\uC57D ${roundTo(recentLo, cur)}) \uC774\uD0C8 \uC2DC \uC190\uC808`,
+      "\uC545\uC7AC \uACF5\uC2DC \uB610\uB294 \uAC70\uB798\uB7C9 \uB3D9\uBC18 \uC7A5\uB300\uC74C\uBD09 \uBC1C\uC0DD \uC2DC \uC190\uC808"
+    ],
+    caution: [
+      "\uB9E4\uC9D1 \uC2E0\uD638\uB294 \uD655\uC815\uC774 \uC544\uB2C8\uB77C \uAC00\uB2A5\uC131 \uC2E0\uD638\uC785\uB2C8\uB2E4.",
+      "\uB3CC\uD30C \uD655\uC778 \uC804\uC5D0\uB294 \uBE44\uC911\uC744 \uC791\uAC8C \uC7A1\uC73C\uC138\uC694.",
+      "\uAC70\uB798\uB7C9 \uC5C6\uB294 \uC0C1\uC2B9\uC740 \uC2E0\uB8B0\uB3C4\uAC00 \uB0AE\uC2B5\uB2C8\uB2E4."
+    ]
+  };
+  return {
+    score,
+    stars,
+    label,
+    confidence,
+    breakoutProbability,
+    expectedPeriod,
+    passed,
+    failed,
+    strategy,
+    dataQuality
+  };
+}
+function mk2(key, label, category, active, score, confidence, tone, reasons, missing, action, dataQuality = "ok") {
+  return {
+    key,
+    label,
+    category,
+    active,
+    score: Math.max(0, Math.min(100, Math.round(score))),
+    confidence: Math.max(0, Math.min(100, Math.round(confidence))),
+    tone,
+    reasons,
+    missing,
+    action,
+    dataQuality
+  };
+}
+var INSUFFICIENT_ACTION = "\uB370\uC774\uD130 \uBD80\uC871\uC73C\uB85C \uC2E0\uB8B0\uB3C4 \uB0AE\uC74C";
+var SIGNAL_META = [
+  { key: "accumulation", label: "\uBC14\uB2E5\uAD8C \uB9E4\uC9D1", category: "accumulation", tone: "positive" },
+  { key: "breakout_imminent", label: "\uB3CC\uD30C \uC784\uBC15", category: "trend", tone: "positive" },
+  { key: "trend_start", label: "\uCD94\uC138 \uC2DC\uC791", category: "trend", tone: "positive" },
+  { key: "golden_cross", label: "\uACE8\uB4E0\uD06C\uB85C\uC2A4", category: "trend", tone: "positive" },
+  { key: "dead_cross", label: "\uB370\uB4DC\uD06C\uB85C\uC2A4", category: "trend", tone: "negative" },
+  { key: "overheated", label: "\uACFC\uC5F4", category: "momentum", tone: "negative" },
+  { key: "trend_break", label: "\uCD94\uC138 \uC774\uD0C8", category: "trend", tone: "negative" },
+  { key: "volume_explosion", label: "\uAC70\uB798\uB7C9 \uD3ED\uBC1C", category: "volume", tone: "positive" },
+  { key: "new_high", label: "\uC2E0\uACE0\uAC00", category: "trend", tone: "positive" },
+  { key: "new_low", label: "\uC2E0\uC800\uAC00", category: "trend", tone: "negative" },
+  { key: "pullback", label: "\uB20C\uB9BC\uBAA9", category: "trend", tone: "positive" },
+  { key: "trend_reversal", label: "\uCD94\uC138 \uC804\uD658", category: "momentum", tone: "positive" },
+  { key: "undervalued", label: "\uC800\uD3C9\uAC00", category: "valuation", tone: "positive" },
+  { key: "overvalued", label: "\uACE0\uD3C9\uAC00", category: "valuation", tone: "negative" },
+  { key: "positive_disclosure", label: "\uD638\uC7AC \uACF5\uC2DC", category: "disclosure", tone: "positive" },
+  { key: "negative_disclosure", label: "\uC545\uC7AC \uACF5\uC2DC", category: "disclosure", tone: "negative" }
+];
+function insufficientSignals(reason) {
+  return SIGNAL_META.map(
+    (m) => mk2(m.key, m.label, m.category, false, 0, 10, m.tone, [], [reason], INSUFFICIENT_ACTION, "insufficient")
+  );
+}
+function naSignal(key, label, category, tone, missing) {
+  return mk2(key, label, category, false, 0, 12, tone, [], [missing], INSUFFICIENT_ACTION, "insufficient");
+}
+function computeSignals2(candles, ind, ctx, acc) {
+  const n = candles.length;
+  const closes = candles.map((c) => c.close);
+  const price = closes[n - 1];
+  const out = [];
+  const ma20 = last(ind.ma20) ?? null;
+  const ma60 = last(ind.ma60) ?? null;
+  const ma20Prev = ind.ma20[n - 2] ?? null;
+  const ma60Prev = ind.ma60[n - 2] ?? null;
+  const rsi = last(ind.rsi) ?? null;
+  const rsiPrev = ind.rsi[n - 1 - Math.min(15, n - 1)] ?? null;
+  const win = Math.min(20, n - 1);
+  const avgVol = candles.slice(n - win - 1, n - 1).reduce((s, c) => s + c.volume, 0) / win;
+  const volRatio = avgVol > 0 ? candles[n - 1].volume / avgVol : 0;
+  const boxWin = Math.min(80, n - 1);
+  const boxHi = Math.max(...closes.slice(n - boxWin));
+  const boxLo = Math.min(...closes.slice(n - boxWin));
+  const hiAll = Math.max(...closes);
+  const loAll = Math.min(...closes);
+  const macd = ind.macd;
+  const mNow = last(macd.macd) ?? null;
+  const mPrev = macd.macd[n - 2] ?? null;
+  const sNow = last(macd.signal) ?? null;
+  const sPrev = macd.signal[n - 2] ?? null;
+  const golden = ma20 != null && ma60 != null && ma20Prev != null && ma60Prev != null && ma20Prev <= ma60Prev && ma20 > ma60;
+  const dead = ma20 != null && ma60 != null && ma20Prev != null && ma60Prev != null && ma20Prev >= ma60Prev && ma20 < ma60;
+  const techConf = Math.round(60 + Math.min(1, n / 150) * 30);
+  const ma60Ready = ma60 != null && ma60Prev != null;
+  const rsiReady = rsi != null;
+  const macdReady = mNow != null && sNow != null && mPrev != null && sPrev != null;
+  const MA60_MISSING = "\uC911\uAE30 \uC774\uB3D9\uD3C9\uADE0(MA60) \uACC4\uC0B0\uC5D0 \uD544\uC694\uD55C \uB370\uC774\uD130\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4.";
+  const RSI_MISSING = "RSI \uACC4\uC0B0\uC5D0 \uD544\uC694\uD55C \uB370\uC774\uD130\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4.";
+  const MACD_MISSING = "MACD \uACC4\uC0B0\uC5D0 \uD544\uC694\uD55C \uB370\uC774\uD130\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4.";
+  out.push(
+    mk2(
+      "accumulation",
+      "\uBC14\uB2E5\uAD8C \uB9E4\uC9D1",
+      "accumulation",
+      acc.score >= 60,
+      acc.score,
+      acc.confidence,
+      "positive",
+      acc.passed.slice(0, 4),
+      acc.failed.slice(0, 4),
+      "\uBC15\uC2A4\uAD8C \uD558\uB2E8 \uBD84\uD560 \uB9E4\uC218 \uD6C4 \uAC70\uB798\uB7C9 \uB3D9\uBC18 \uB3CC\uD30C\uB97C \uD655\uC778\uD558\uC138\uC694.",
+      acc.dataQuality
+    )
+  );
+  if (!rsiReady) {
+    out.push(naSignal("breakout_imminent", "\uB3CC\uD30C \uC784\uBC15", "trend", "positive", RSI_MISSING));
+  } else {
+    const nearTop = boxHi > 0 ? price / boxHi : 0;
+    const active = nearTop >= 0.96 && volRatio >= 1.3 && rsi >= 50 && rsi < 70;
+    out.push(
+      mk2(
+        "breakout_imminent",
+        "\uB3CC\uD30C \uC784\uBC15",
+        "trend",
+        active,
+        active ? 60 + Math.min(35, (volRatio - 1.3) * 30) : nearTop * 60,
+        techConf,
+        "positive",
+        active ? [`\uBC15\uC2A4\uAD8C \uC0C1\uB2E8(${boxHi.toFixed(2)}) \uADFC\uC811, \uAC70\uB798\uB7C9 ${volRatio.toFixed(1)}\uBC30`] : [],
+        active ? [] : ["\uC800\uD56D\uC120 \uADFC\uC811 \uB610\uB294 \uAC70\uB798\uB7C9 \uB3D9\uBC18\uC774 \uBD80\uC871\uD569\uB2C8\uB2E4."],
+        "\uB3CC\uD30C \uC2DC \uC9C4\uC785, \uB3CC\uD30C \uC2E4\uD328(\uC717\uAF2C\uB9AC+\uAC70\uB798\uB7C9 \uAC10\uC18C) \uC2DC \uAD00\uB9DD\uD558\uC138\uC694."
+      )
+    );
+  }
+  if (!ma60Ready) {
+    out.push(naSignal("trend_start", "\uCD94\uC138 \uC2DC\uC791", "trend", "positive", MA60_MISSING));
+  } else {
+    const active = ma20 != null && ma20 > ma60 && price > ma20 && (slope(ind.ma20, 5) ?? 0) > 0;
+    out.push(
+      mk2(
+        "trend_start",
+        "\uCD94\uC138 \uC2DC\uC791",
+        "trend",
+        active,
+        active ? 68 : 30,
+        techConf,
+        "positive",
+        active ? ["\uAC00\uACA9\uC774 MA20 \uC704, MA20>MA60 \uC815\uBC30\uC5F4 \uC9C4\uC785"] : [],
+        active ? [] : ["\uC815\uBC30\uC5F4 \uC804\uD658\uC774 \uC544\uC9C1 \uD655\uC778\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4."],
+        "\uCD08\uAE30 \uB20C\uB9BC\uC5D0\uC11C \uBD84\uD560 \uB9E4\uC218, MA20 \uC774\uD0C8 \uC2DC \uC190\uC808\uD558\uC138\uC694."
+      )
+    );
+  }
+  if (!ma60Ready) {
+    out.push(naSignal("golden_cross", "\uACE8\uB4E0\uD06C\uB85C\uC2A4", "trend", "positive", MA60_MISSING));
+    out.push(naSignal("dead_cross", "\uB370\uB4DC\uD06C\uB85C\uC2A4", "trend", "negative", MA60_MISSING));
+  } else {
+    out.push(
+      mk2(
+        "golden_cross",
+        "\uACE8\uB4E0\uD06C\uB85C\uC2A4",
+        "trend",
+        golden,
+        golden ? 70 : 25,
+        techConf,
+        "positive",
+        golden ? ["MA20\uAC00 MA60\uC744 \uC0C1\uD5A5 \uB3CC\uD30C"] : [],
+        golden ? [] : ["\uCD5C\uADFC \uACE8\uB4E0\uD06C\uB85C\uC2A4\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."],
+        "\uAC70\uB798\uB7C9 \uB3D9\uBC18 \uC5EC\uBD80\uB97C \uD655\uC778\uD558\uACE0 \uB20C\uB9BC\uBAA9\uC5D0\uC11C \uC9C4\uC785\uD558\uC138\uC694."
+      )
+    );
+    out.push(
+      mk2(
+        "dead_cross",
+        "\uB370\uB4DC\uD06C\uB85C\uC2A4",
+        "trend",
+        dead,
+        dead ? 70 : 25,
+        techConf,
+        "negative",
+        dead ? ["MA20\uAC00 MA60\uC744 \uD558\uD5A5 \uB3CC\uD30C"] : [],
+        dead ? [] : ["\uCD5C\uADFC \uB370\uB4DC\uD06C\uB85C\uC2A4\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."],
+        "\uBCF4\uC720 \uC2DC \uBE44\uC911 \uCD95\uC18C, \uBC18\uB4F1\uC740 \uB9E4\uB3C4 \uAE30\uD68C\uB85C \uD65C\uC6A9\uD558\uC138\uC694."
+      )
+    );
+  }
+  if (!rsiReady) {
+    out.push(naSignal("overheated", "\uACFC\uC5F4", "momentum", "negative", RSI_MISSING));
+  } else {
+    const aboveMa20 = ma20 != null && ma20 > 0 ? (price - ma20) / ma20 : 0;
+    const active = rsi >= 70 && aboveMa20 > 0.1;
+    out.push(
+      mk2(
+        "overheated",
+        "\uACFC\uC5F4",
+        "momentum",
+        active,
+        active ? 65 : rsi,
+        techConf,
+        "negative",
+        active ? [`RSI ${rsi.toFixed(0)}, MA20 \uB300\uBE44 +${(aboveMa20 * 100).toFixed(0)}% \uC774\uACA9`] : [],
+        active ? [] : ["\uACFC\uC5F4 \uAD6C\uAC04\uC774 \uC544\uB2D9\uB2C8\uB2E4."],
+        "\uC2E0\uADDC \uC9C4\uC785 \uC790\uC81C, \uBD84\uD560 \uC775\uC808\uB85C \uB9AC\uC2A4\uD06C\uB97C \uAD00\uB9AC\uD558\uC138\uC694."
+      )
+    );
+  }
+  if (ma60 == null) {
+    out.push(naSignal("trend_break", "\uCD94\uC138 \uC774\uD0C8", "trend", "negative", MA60_MISSING));
+  } else {
+    const active = price < ma60 && price < boxLo * 1.01;
+    out.push(
+      mk2(
+        "trend_break",
+        "\uCD94\uC138 \uC774\uD0C8",
+        "trend",
+        active,
+        active ? 65 : 30,
+        techConf,
+        "negative",
+        active ? ["MA60 \uBC0F \uBC15\uC2A4\uAD8C \uD558\uB2E8 \uC774\uD0C8"] : [],
+        active ? [] : ["\uCD94\uC138 \uC774\uD0C8\uC774 \uD655\uC778\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4."],
+        "\uC190\uC808 \uAE30\uC900 \uC900\uC218, \uC7AC\uC9C4\uC785\uC740 \uC9C0\uC9C0 \uD68C\uBCF5 \uD655\uC778 \uD6C4\uB85C \uBBF8\uB8E8\uC138\uC694."
+      )
+    );
+  }
+  {
+    const active = volRatio >= 3;
+    out.push(
+      mk2(
+        "volume_explosion",
+        "\uAC70\uB798\uB7C9 \uD3ED\uBC1C",
+        "volume",
+        active,
+        active ? Math.min(95, 60 + (volRatio - 3) * 10) : volRatio * 20,
+        75,
+        "positive",
+        active ? [`\uAC70\uB798\uB7C9\uC774 20\uBD09 \uD3C9\uADE0\uC758 ${volRatio.toFixed(1)}\uBC30`] : [],
+        active ? [] : ["\uAC70\uB798\uB7C9\uC740 \uD3C9\uADE0 \uC218\uC900\uC785\uB2C8\uB2E4."],
+        "\uBC29\uD5A5(\uC591/\uC74C\uBD09)\uACFC \uC704\uCE58(\uBC14\uB2E5/\uACE0\uC810)\uB97C \uD568\uAED8 \uD655\uC778\uD558\uC138\uC694."
+      )
+    );
+  }
+  out.push(
+    mk2(
+      "new_high",
+      "\uC2E0\uACE0\uAC00",
+      "trend",
+      price >= hiAll * 0.999,
+      price >= hiAll * 0.999 ? 70 : price / hiAll * 60,
+      techConf,
+      "positive",
+      price >= hiAll * 0.999 ? ["\uAE30\uAC04 \uB0B4 \uCD5C\uACE0\uAC00 \uACBD\uC2E0"] : [],
+      price >= hiAll * 0.999 ? [] : ["\uC2E0\uACE0\uAC00\uAC00 \uC544\uB2D9\uB2C8\uB2E4."],
+      "\uB20C\uB9BC\uBAA9 \uBD84\uD560 \uC9C4\uC785, \uAC70\uB798\uB7C9 \uAC10\uC18C \uC2DC \uC775\uC808\uD558\uC138\uC694."
+    )
+  );
+  out.push(
+    mk2(
+      "new_low",
+      "\uC2E0\uC800\uAC00",
+      "trend",
+      price <= loAll * 1.001,
+      price <= loAll * 1.001 ? 70 : 30,
+      techConf,
+      "negative",
+      price <= loAll * 1.001 ? ["\uAE30\uAC04 \uB0B4 \uCD5C\uC800\uAC00 \uACBD\uC2E0"] : [],
+      price <= loAll * 1.001 ? [] : ["\uC2E0\uC800\uAC00\uAC00 \uC544\uB2D9\uB2C8\uB2E4."],
+      "\uC123\uBD80\uB978 \uC800\uC810 \uB9E4\uC218 \uC790\uC81C, \uBC18\uB4F1\xB7\uAC70\uB798\uB7C9 \uD655\uC778 \uD6C4 \uC811\uADFC\uD558\uC138\uC694."
+    )
+  );
+  if (!ma60Ready || !rsiReady) {
+    out.push(naSignal("pullback", "\uB20C\uB9BC\uBAA9", "trend", "positive", !ma60Ready ? MA60_MISSING : RSI_MISSING));
+  } else {
+    const uptrend = ma20 != null && ma20 > ma60;
+    const nearMa20 = ma20 != null && ma20 > 0 ? Math.abs(price - ma20) / ma20 < 0.03 : false;
+    const active = uptrend && nearMa20 && rsi >= 40 && rsi <= 60 && price >= (ma20 ?? 0);
+    out.push(
+      mk2(
+        "pullback",
+        "\uB20C\uB9BC\uBAA9",
+        "trend",
+        active,
+        active ? 66 : 30,
+        techConf,
+        "positive",
+        active ? ["\uC0C1\uC2B9\uCD94\uC138 \uC911 MA20 \uC9C0\uC9C0 \uBD80\uADFC \uC870\uC815"] : [],
+        active ? [] : ["\uC0C1\uC2B9\uCD94\uC138 \uB20C\uB9BC\uBAA9 \uC870\uAC74\uC774 \uC544\uB2D9\uB2C8\uB2E4."],
+        "MA20 \uC9C0\uC9C0 \uD655\uC778 \uD6C4 \uBD84\uD560 \uC9C4\uC785, \uC9C0\uC9C0 \uC774\uD0C8 \uC2DC \uC190\uC808\uD558\uC138\uC694."
+      )
+    );
+  }
+  if (!macdReady || !ma60Ready) {
+    out.push(naSignal("trend_reversal", "\uCD94\uC138 \uC804\uD658", "momentum", "positive", !macdReady ? MACD_MISSING : MA60_MISSING));
+  } else {
+    const macdUp = mPrev <= sPrev && mNow > sNow;
+    const downFlatten = (slope(ind.ma60, 10) ?? -10) > -2 && (slope(ind.ma60, 20) ?? 0) < 0;
+    const active = macdUp && downFlatten;
+    out.push(
+      mk2(
+        "trend_reversal",
+        "\uCD94\uC138 \uC804\uD658",
+        "momentum",
+        active,
+        active ? 64 : 30,
+        techConf,
+        "positive",
+        active ? ["MACD \uC0C1\uD5A5 \uAD50\uCC28 + \uD558\uB77D\uCD94\uC138 \uB454\uD654"] : [],
+        active ? [] : ["\uCD94\uC138 \uC804\uD658 \uC2E0\uD638\uAC00 \uC544\uC9C1 \uC57D\uD569\uB2C8\uB2E4."],
+        "\uC804\uD658 \uCD08\uAE30 \uBD84\uD560 \uC9C4\uC785, \uC9C1\uC804 \uC800\uC810 \uC774\uD0C8 \uC2DC \uC190\uC808\uD558\uC138\uC694."
+      )
+    );
+  }
+  if (ctx.financials && (ctx.financials.per != null || ctx.financials.pbr != null)) {
+    const f = ctx.financials;
+    const cheap = f.per != null && f.per > 0 && f.per < 10 || f.pbr != null && f.pbr > 0 && f.pbr < 1;
+    const rich = f.per != null && f.per > 40 || f.pbr != null && f.pbr > 5;
+    out.push(
+      mk2(
+        "undervalued",
+        "\uC800\uD3C9\uAC00",
+        "valuation",
+        cheap,
+        cheap ? 65 : 35,
+        65,
+        "positive",
+        cheap ? [`PER ${f.per?.toFixed(1) ?? "\u2014"}, PBR ${f.pbr?.toFixed(2) ?? "\u2014"}\uB85C \uB0AE\uC740 \uD3B8`] : [],
+        cheap ? [] : ["\uBC38\uB958\uC5D0\uC774\uC158\uC774 \uD2B9\uBCC4\uD788 \uB0AE\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."],
+        "\uC2E4\uC801 \uAC1C\uC120\uC774 \uB3D9\uBC18\uB418\uB294\uC9C0 \uD655\uC778 \uD6C4 \uC911\uC7A5\uAE30 \uAD00\uC810\uC73C\uB85C \uC811\uADFC\uD558\uC138\uC694."
+      )
+    );
+    out.push(
+      mk2(
+        "overvalued",
+        "\uACE0\uD3C9\uAC00",
+        "valuation",
+        rich,
+        rich ? 65 : 35,
+        65,
+        "negative",
+        rich ? [`PER ${f.per?.toFixed(1) ?? "\u2014"}, PBR ${f.pbr?.toFixed(2) ?? "\u2014"}\uB85C \uB192\uC740 \uD3B8`] : [],
+        rich ? [] : ["\uBC38\uB958\uC5D0\uC774\uC158\uC774 \uD2B9\uBCC4\uD788 \uB192\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."],
+        "\uC131\uC7A5\uC131 \uB300\uBE44 \uACFC\uB3C4\uD55C\uC9C0 \uC810\uAC80\uD558\uACE0 \uCD94\uACA9 \uB9E4\uC218\uB97C \uC790\uC81C\uD558\uC138\uC694."
+      )
+    );
+  } else {
+    out.push(
+      mk2("undervalued", "\uC800\uD3C9\uAC00", "valuation", false, 0, 20, "neutral", [], ["\uC7AC\uBB34(PER/PBR) \uB370\uC774\uD130\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4."], "\uB370\uC774\uD130 \uBD80\uC871\uC73C\uB85C \uC2E0\uB8B0\uB3C4 \uB0AE\uC74C", "insufficient")
+    );
+    out.push(
+      mk2("overvalued", "\uACE0\uD3C9\uAC00", "valuation", false, 0, 20, "neutral", [], ["\uC7AC\uBB34(PER/PBR) \uB370\uC774\uD130\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4."], "\uB370\uC774\uD130 \uBD80\uC871\uC73C\uB85C \uC2E0\uB8B0\uB3C4 \uB0AE\uC74C", "insufficient")
+    );
+  }
+  if (ctx.positiveEvents || ctx.negativeEvents) {
+    const pos = ctx.positiveEvents ?? [];
+    const neg = ctx.negativeEvents ?? [];
+    out.push(
+      mk2(
+        "positive_disclosure",
+        "\uD638\uC7AC \uACF5\uC2DC",
+        "disclosure",
+        pos.length > 0,
+        pos.length > 0 ? 65 : 30,
+        70,
+        "positive",
+        pos.length > 0 ? [`\uAE0D\uC815 \uACF5\uC2DC: ${pos.join(", ")}`] : [],
+        pos.length > 0 ? [] : ["\uCD5C\uADFC \uD638\uC7AC\uC131 \uACF5\uC2DC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."],
+        "\uACF5\uC2DC\uC758 \uC2E4\uC9C8\uC801 \uC601\uD5A5(\uACC4\uC57D \uADDC\uBAA8\xB7\uC9C0\uC18D\uC131)\uC744 \uD655\uC778\uD558\uC138\uC694."
+      )
+    );
+    out.push(
+      mk2(
+        "negative_disclosure",
+        "\uC545\uC7AC \uACF5\uC2DC",
+        "disclosure",
+        neg.length > 0,
+        neg.length > 0 ? 65 : 30,
+        70,
+        "negative",
+        neg.length > 0 ? [`\uC704\uD5D8 \uACF5\uC2DC: ${neg.join(", ")}`] : [],
+        neg.length > 0 ? [] : ["\uCD5C\uADFC \uC545\uC7AC\uC131 \uACF5\uC2DC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."],
+        "\uC720\uC0C1\uC99D\uC790\xB7CB/BW \uB4F1 \uD76C\uC11D \uC774\uC288\uB294 \uBE44\uC911 \uCD95\uC18C\uB85C \uB300\uC751\uD558\uC138\uC694."
+      )
+    );
+  } else {
+    out.push(
+      mk2("positive_disclosure", "\uD638\uC7AC \uACF5\uC2DC", "disclosure", false, 0, 20, "neutral", [], ["\uACF5\uC2DC \uB370\uC774\uD130\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4."], "\uB370\uC774\uD130 \uBD80\uC871\uC73C\uB85C \uC2E0\uB8B0\uB3C4 \uB0AE\uC74C", "insufficient")
+    );
+    out.push(
+      mk2("negative_disclosure", "\uC545\uC7AC \uACF5\uC2DC", "disclosure", false, 0, 20, "neutral", [], ["\uACF5\uC2DC \uB370\uC774\uD130\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4."], "\uB370\uC774\uD130 \uBD80\uC871\uC73C\uB85C \uC2E0\uB8B0\uB3C4 \uB0AE\uC74C", "insufficient")
+    );
+  }
+  return out;
+}
+function computeSignalReport(candles, ind, ctx = {}, asOf = (/* @__PURE__ */ new Date()).toISOString()) {
+  if (!candles || candles.length < 30) {
+    const empty = {
+      score: 0,
+      stars: 1,
+      label: "\uB370\uC774\uD130 \uBD80\uC871\uC73C\uB85C \uC2E0\uB8B0\uB3C4 \uB0AE\uC74C",
+      confidence: 0,
+      breakoutProbability: 0,
+      expectedPeriod: "\u2014",
+      passed: [],
+      failed: ["\uAC00\uACA9 \uB370\uC774\uD130\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4 (30\uBD09 \uBBF8\uB9CC)."],
+      strategy: { entry: [], take: [], stop: [], caution: ["\uB370\uC774\uD130 \uBD80\uC871\uC73C\uB85C \uC2E0\uB8B0\uB3C4 \uB0AE\uC74C"] },
+      dataQuality: "insufficient"
+    };
+    const reason = "\uAC00\uACA9 \uB370\uC774\uD130\uAC00 \uBD80\uC871\uD569\uB2C8\uB2E4 (30\uBD09 \uBBF8\uB9CC).";
+    return { asOf, accumulation: empty, signals: insufficientSignals(reason), dataQuality: "insufficient" };
+  }
+  const accumulation = computeAccumulation(candles, ind, ctx);
+  const signals = computeSignals2(candles, ind, ctx, accumulation);
+  return { asOf, accumulation, signals, dataQuality: accumulation.dataQuality };
+}
+function computeScanConditions(candles, ind) {
+  if (!candles || candles.length < 30) return null;
+  const n = candles.length;
+  const closes = candles.map((c) => c.close);
+  const acc = computeAccumulation(candles, ind, {});
+  const recentWin = Math.min(20, n - 1);
+  const boxWin = Math.min(80, n - 1);
+  const boxSlice = closes.slice(n - boxWin);
+  const boxRange = Math.min(...boxSlice) > 0 ? (Math.max(...boxSlice) - Math.min(...boxSlice)) / Math.min(...boxSlice) : 1;
+  const half = Math.floor(boxWin / 2);
+  const oldLow = Math.min(...closes.slice(n - boxWin, n - half));
+  const newLow = Math.min(...closes.slice(n - half));
+  const box_consolidation = boxRange <= 0.28 && newLow >= oldLow * 0.99;
+  const obv = obvSeries(candles);
+  const obv_rising = (slope(obv, recentWin) ?? 0) > 0;
+  let upVol = 0;
+  let downVol = 0;
+  for (let i = n - recentWin; i < n; i++) {
+    if (candles[i].close >= candles[i - 1].close) upVol += candles[i].volume;
+    else downVol += candles[i].volume;
+  }
+  const volume_accum = upVol > downVol * 1.1;
+  const bb = bollinger(closes, 20, 2);
+  const wNow = last(bb.width) ?? null;
+  const wSlice = bb.width.slice(n - boxWin).filter((v) => v != null);
+  const wAvg = wSlice.length ? wSlice.reduce((a, b) => a + b, 0) / wSlice.length : null;
+  const bollinger_squeeze = wNow != null && wAvg != null && wNow < wAvg * 0.85;
+  const r = last(ind.rsi) ?? null;
+  const rPast = ind.rsi[n - 1 - recentWin] ?? null;
+  const rsi_recovery = r != null && rPast != null && rPast < 35 && r > rPast;
+  const hist = ind.macd.hist;
+  const hNow = last(hist) ?? null;
+  const hPast = hist[n - 3] ?? null;
+  const mNow = last(ind.macd.macd) ?? null;
+  const mPrev = ind.macd.macd[n - 2] ?? null;
+  const sNow = last(ind.macd.signal) ?? null;
+  const sPrev = ind.macd.signal[n - 2] ?? null;
+  const cross = mNow != null && sNow != null && mPrev != null && sPrev != null && mPrev <= sPrev && mNow > sNow;
+  const macd_turn = cross || hNow != null && hPast != null && hNow > hPast && hNow > -Math.abs(hPast);
+  return {
+    score: acc.score,
+    confidence: acc.confidence,
+    accumulation: acc.score >= 60,
+    box_consolidation,
+    obv_rising,
+    volume_accum,
+    bollinger_squeeze,
+    rsi_recovery,
+    macd_turn,
+    inst_accumulation: null,
+    foreign_accumulation: null
+  };
+}
+
+// src/services/signal.service.ts
+var NEGATIVE_EVENTS2 = /* @__PURE__ */ new Set([
+  "OFFERING",
+  "ATM",
+  "REVERSE_SPLIT",
+  "CB",
+  "BW",
+  "RIGHTS_OFFERING"
+]);
+var POSITIVE_EVENTS2 = /* @__PURE__ */ new Set(["DIVIDEND", "SUPPLY_CONTRACT"]);
+async function buildContext(entry) {
+  const ctx = { currency: entry.currency };
+  const [fin, risk, news] = await Promise.allSettled([
+    FinancialService.getFinancials(entry.ticker),
+    RiskAnalysisService.getRisk(entry.ticker),
+    NewsService.getNews(entry.ticker)
+  ]);
+  if (fin.status === "fulfilled" && fin.value) {
+    const f = fin.value;
+    ctx.financials = {
+      revenueGrowth: f.growth?.revenue,
+      profitGrowth: f.growth?.profit,
+      per: f.ratios?.per,
+      pbr: f.ratios?.pbr,
+      roe: f.ratios?.roe,
+      debtRatio: f.ratios?.debtRatio,
+      cashBalance: f.cashBurn?.cashBalance
+    };
+  }
+  if (risk.status === "fulfilled" && risk.value) {
+    const positive = [];
+    const negative = [];
+    const items = [
+      ...risk.value.filings ?? [],
+      ...risk.value.disclosures ?? []
+    ];
+    for (const item of items) {
+      const events = item.events ?? [];
+      const labels = item.eventLabels ?? [];
+      events.forEach((code, index) => {
+        const label = labels[index] ?? code;
+        if (NEGATIVE_EVENTS2.has(code)) negative.push(label);
+        else if (POSITIVE_EVENTS2.has(code)) positive.push(label);
+      });
+    }
+    ctx.negativeEvents = Array.from(new Set(negative));
+    ctx.positiveEvents = Array.from(new Set(positive));
+  }
+  if (news.status === "fulfilled" && news.value) {
+    ctx.newsScore = news.value.sentimentScore;
+    ctx.newsPositive = news.value.positive?.length ?? 0;
+    ctx.newsNegative = news.value.negative?.length ?? 0;
+  }
+  return ctx;
+}
+async function getReport(ticker) {
+  const entry = getCatalogEntry(ticker);
+  if (!entry) return null;
+  return cached(`signals:${ticker}`, TTL.signals, async () => {
+    const candles = await MarketDataService.getCandles(ticker, "1D");
+    const indicators = computeIndicators(candles);
+    const ctx = await buildContext(entry);
+    return computeSignalReport(candles, indicators, ctx);
+  });
+}
+var SCAN_LABELS = {
+  accumulation: "\uBC14\uB2E5\uAD8C\uB9E4\uC9D1",
+  box_consolidation: "\uBC15\uC2A4\uAD8C \uD558\uB2E8",
+  obv_rising: "\uB2E8\uAE30 \uCD94\uC138 \uC804\uD658",
+  volume_accum: "\uAC70\uB798\uB7C9 \uC99D\uAC00",
+  bollinger_squeeze: "\uB3CC\uD30C \uC9C1\uC804",
+  rsi_recovery: "RSI \uACFC\uB9E4\uB3C4 \uBC18\uB4F1",
+  macd_turn: "MACD \uACE8\uB4E0\uD06C\uB85C\uC2A4",
+  inst_accumulation: "\uAE30\uAD00 \uC218\uAE09",
+  foreign_accumulation: "\uC678\uAD6D\uC778 \uC218\uAE09",
+  volume_spike: "\uAC70\uB798\uB7C9 \uAE09\uC99D",
+  trading_value_up: "\uAC70\uB798\uB300\uAE08 \uC99D\uAC00",
+  ma_breakout: "\uC774\uD3C9\uC120 \uB3CC\uD30C",
+  ma5_breakout: "5\uC77C\uC120 \uB3CC\uD30C",
+  ma20_recovery: "20\uC77C\uC120 \uD68C\uBCF5",
+  ma60_breakout: "60\uC77C\uC120 \uB3CC\uD30C",
+  ma120_breakout: "120\uC77C\uC120 \uB3CC\uD30C",
+  rsi_overheat: "RSI \uACFC\uC5F4",
+  new_high_near: "\uC2E0\uACE0\uAC00 \uADFC\uC811",
+  new_low_rebound: "\uC2E0\uC800\uAC00 \uBC18\uB4F1",
+  oversold: "\uB099\uD3ED\uACFC\uB300",
+  undervalued: "\uC800\uD3C9\uAC00",
+  low_per: "PER \uB0AE\uC74C",
+  low_pbr: "PBR \uB0AE\uC74C",
+  roe_improving: "ROE \uAC1C\uC120",
+  ai_high: "AI \uC810\uC218 \uC0C1\uC704",
+  positive_disclosure: "\uACF5\uC2DC \uD638\uC7AC",
+  positive_news: "\uB274\uC2A4 \uD638\uC7AC",
+  short_trend_turn: "\uB2E8\uAE30 \uCD94\uC138 \uC804\uD658",
+  pullback: "\uB20C\uB9BC\uBAA9",
+  pre_breakout: "\uB3CC\uD30C \uC9C1\uC804",
+  volatility_expand: "\uBCC0\uB3D9\uC131 \uD655\uB300",
+  box_lower: "\uBC15\uC2A4\uAD8C \uD558\uB2E8",
+  box_upper_breakout: "\uBC15\uC2A4\uAD8C \uC0C1\uB2E8 \uB3CC\uD30C",
+  support_rebound: "\uC9C0\uC9C0\uC120 \uBC18\uB4F1",
+  resistance_breakout: "\uC800\uD56D\uC120 \uB3CC\uD30C"
+};
+var LABEL_TO_KEYS = Object.entries(SCAN_LABELS).reduce(
+  (acc, [key, label]) => {
+    acc[label] = [...acc[label] ?? [], key];
+    return acc;
+  },
+  {}
+);
+function normalizeSelected(selected) {
+  const keys = [];
+  selected.forEach((item) => {
+    const trimmed = item.trim();
+    const direct = Object.keys(SCAN_LABELS).find(
+      (key) => key === trimmed
+    );
+    if (direct) {
+      keys.push(direct);
+      return;
+    }
+    const mapped = LABEL_TO_KEYS[trimmed];
+    if (mapped) {
+      keys.push(...mapped);
+    }
+  });
+  return Array.from(new Set(keys));
+}
+function marketFilter(market) {
+  if (market === "KR") return (entry) => entry.market === "KR";
+  if (market === "US") return (entry) => entry.market === "US";
+  return () => true;
+}
+function last2(items) {
+  return items.length ? items[items.length - 1] : null;
+}
+function avg(values) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+function pctChange(a, b) {
+  if (!a) return 0;
+  return (b - a) / Math.abs(a) * 100;
+}
+function buildExtraCondition(key, cond, candles, ctx) {
+  const closes = candles.map((candle) => candle.close);
+  const highs = candles.map((candle) => candle.high);
+  const lows = candles.map((candle) => candle.low);
+  const volumes = candles.map((candle) => candle.volume);
+  const latestClose = last2(closes);
+  const latestHigh = last2(highs);
+  const latestLow = last2(lows);
+  const latestVolume = last2(volumes);
+  const recentCloses = closes.slice(-20);
+  const prevCloses = closes.slice(-40, -20);
+  const recentVolumes = volumes.slice(-20);
+  const prevVolumes = volumes.slice(-40, -20);
+  const high60 = Math.max(...highs.slice(-60));
+  const low60 = Math.min(...lows.slice(-60));
+  const high120 = Math.max(...highs.slice(-120));
+  const low120 = Math.min(...lows.slice(-120));
+  const ma20 = avg(closes.slice(-20));
+  const ma60 = avg(closes.slice(-60));
+  const ma120 = avg(closes.slice(-120));
+  const recentMove = pctChange(closes[closes.length - 20] ?? 0, latestClose ?? 0);
+  const todayMove = pctChange(closes[closes.length - 2] ?? 0, latestClose ?? 0);
+  switch (key) {
+    case "volume_spike":
+      return latestVolume != null && avg(recentVolumes) > 0 ? latestVolume >= avg(recentVolumes) * 1.8 : null;
+    case "trading_value_up":
+      return avg(recentVolumes) > avg(prevVolumes) * 1.25;
+    case "ma_breakout":
+      return latestClose != null && ma20 > 0 && latestClose > ma20;
+    case "ma5_breakout": {
+      if (closes.length < 6) return false;
+      const latest5Ma = avg(closes.slice(-5));
+      const prev5Ma = avg(closes.slice(-6, -1));
+      const prevClose = closes[closes.length - 2];
+      if (latestClose == null || prevClose == null || latest5Ma <= 0 || prev5Ma <= 0) {
+        return false;
+      }
+      return prevClose <= prev5Ma && latestClose > latest5Ma;
+    }
+    case "ma20_recovery":
+      return latestClose != null && ma20 > 0 && latestClose > ma20;
+    case "ma60_breakout":
+      return latestClose != null && ma60 > 0 && latestClose > ma60;
+    case "ma120_breakout":
+      return latestClose != null && ma120 > 0 && latestClose > ma120;
+    case "rsi_overheat":
+      return cond.score >= 75 && todayMove > 4;
+    case "new_high_near":
+      return latestHigh != null && high120 > 0 && latestHigh >= high120 * 0.97;
+    case "new_low_rebound":
+      return latestLow != null && low120 > 0 && latestLow <= low120 * 1.08 && todayMove > 0;
+    case "oversold":
+      return recentMove <= -12;
+    case "undervalued":
+      return Boolean(
+        ctx.financials?.pbr != null && ctx.financials.pbr > 0 && ctx.financials.pbr <= 1.2 || ctx.financials?.per != null && ctx.financials.per > 0 && ctx.financials.per <= 12
+      );
+    case "low_per":
+      return ctx.financials?.per != null && ctx.financials.per > 0 && ctx.financials.per <= 12;
+    case "low_pbr":
+      return ctx.financials?.pbr != null && ctx.financials.pbr > 0 && ctx.financials.pbr <= 1.2;
+    case "roe_improving":
+      return ctx.financials?.roe != null && ctx.financials.roe >= 8;
+    case "ai_high":
+      return cond.score >= 70;
+    case "positive_disclosure":
+      return (ctx.positiveEvents?.length ?? 0) > 0;
+    case "positive_news":
+      return (ctx.newsPositive ?? 0) > 0 || (ctx.newsScore ?? 0) > 55;
+    case "short_trend_turn":
+      return latestClose != null && ma20 > 0 && latestClose > ma20 && cond.macd_turn;
+    case "pullback":
+      return latestClose != null && ma20 > 0 && latestClose >= ma20 * 0.97 && latestClose <= ma20 * 1.04;
+    case "pre_breakout":
+      return cond.bollinger_squeeze || latestClose != null && high60 > 0 && latestClose >= high60 * 0.95;
+    case "volatility_expand":
+      return Math.abs(todayMove) >= 4 || Math.abs(recentMove) >= 12;
+    case "box_lower":
+      return latestClose != null && low60 > 0 && latestClose <= low60 * 1.08;
+    case "box_upper_breakout":
+      return latestClose != null && high60 > 0 && latestClose >= high60;
+    case "support_rebound":
+      return latestClose != null && low60 > 0 && latestClose <= low60 * 1.1 && todayMove > 0;
+    case "resistance_breakout":
+      return latestClose != null && high60 > 0 && latestClose >= high60 * 0.99;
+    default:
+      return null;
+  }
+}
+function conditionValue(key, cond, candles, ctx) {
+  if (key in cond) {
+    return cond[key] ?? null;
+  }
+  return buildExtraCondition(key, cond, candles, ctx);
+}
+var SCAN_CARD_LIMIT = 100;
+var SCAN_POOL_LIMIT = 200;
+var SUPPORTED_INDICATORS = Object.values(SCAN_LABELS);
+async function scan(market, selected, filters = {}, limit = SCAN_POOL_LIMIT) {
+  const keys = normalizeSelected(selected);
+  const active = keys.length > 0 ? keys : ["volume_accum", "ma_breakout", "ai_high"];
+  const volumeThreshold = typeof filters.volumeThreshold === "number" && filters.volumeThreshold > 0 ? filters.volumeThreshold : null;
+  const tradingValueThreshold = typeof filters.tradingValueThreshold === "number" && filters.tradingValueThreshold > 0 ? filters.tradingValueThreshold : null;
+  const pool = CATALOG.filter(marketFilter(market)).slice(0, limit);
+  const settled = await Promise.all(
+    pool.map(async (entry) => {
+      try {
+        const [candles, quote, ctx] = await Promise.all([
+          MarketDataService.getCandles(entry.ticker, "1D"),
+          MarketDataService.getQuote(entry.ticker),
+          buildContext(entry)
+        ]);
+        const indicators = computeIndicators(candles);
+        const cond = computeScanConditions(candles, indicators);
+        if (!cond || !quote) return null;
+        const recentBars = candles.slice(-21, -1);
+        const latestVolume = candles.length > 0 ? candles[candles.length - 1].volume : null;
+        if (volumeThreshold != null) {
+          const avgVolume = recentBars.length ? avg(recentBars.map((c) => c.volume)) : null;
+          if (latestVolume == null || avgVolume == null || avgVolume <= 0 || latestVolume < avgVolume * (volumeThreshold / 100)) {
+            return null;
+          }
+        }
+        if (tradingValueThreshold != null) {
+          const latestTradingValue = latestVolume != null ? latestVolume * quote.price : null;
+          const avgTradingValue = recentBars.length ? avg(recentBars.map((c) => c.volume * c.close)) : null;
+          if (latestTradingValue == null || avgTradingValue == null || avgTradingValue <= 0 || latestTradingValue < avgTradingValue * (tradingValueThreshold / 100)) {
+            return null;
+          }
+        }
+        const matched = [];
+        const missing = [];
+        for (const key of active) {
+          const passed = conditionValue(key, cond, candles, ctx);
+          const label = SCAN_LABELS[key];
+          if (passed === true) matched.push(label);
+          else missing.push(label);
+        }
+        if (matched.length === 0) return null;
+        const report = await getReport(entry.ticker);
+        const accumulation = report?.accumulation;
+        const { overall } = computeScores(entry.ticker);
+        return {
+          ticker: entry.ticker,
+          name: entry.name,
+          market: entry.market,
+          currency: entry.currency,
+          assetType: classifyAssetType(entry.name, entry.market),
+          price: quote.price,
+          changePercent: quote.changePercent,
+          score: overall,
+          confidence: cond.confidence,
+          matched: Array.from(new Set(matched)),
+          missing: Array.from(new Set(missing)),
+          breakoutProbability: accumulation?.breakoutProbability ?? cond.score,
+          expectedPeriod: accumulation?.expectedPeriod ?? "\uB2E8\uAE30 \uCD94\uC138 \uD655\uC778 \uD544\uC694",
+          entry: accumulation?.strategy.entry?.length ? accumulation.strategy.entry : [`\uBC15\uC2A4\uAD8C \uD558\uB2E8 \uC57D ${quote.price} \uBD80\uADFC\uC5D0\uC11C \uC9C4\uC785`],
+          stop: accumulation?.strategy.stop?.length ? accumulation.strategy.stop : [`\uCD5C\uADFC \uC9C0\uC9C0\uC120 \uC774\uD0C8 \uC2DC ${Math.round(quote.price * 0.94 * 100) / 100} \uBD80\uADFC \uC190\uC808`],
+          matchCount: matched.length,
+          selectedCount: active.length
+        };
+      } catch {
+        return null;
+      }
+    })
+  );
+  const cards = settled.filter((card) => card !== null).sort((a, b) => b.matchCount - a.matchCount || b.score - a.score).slice(0, SCAN_CARD_LIMIT);
+  return {
+    cards,
+    selected: active.map((key) => SCAN_LABELS[key]),
+    supportedIndicators: SUPPORTED_INDICATORS
+  };
+}
+var SignalService = {
+  getReport,
+  scan
+};
 
 // src/middleware/auth.ts
 function bearerToken(req) {
@@ -9195,6 +10384,42 @@ router6.get("/:ticker/company", async (req, res) => {
     });
   }
 });
+router6.get("/:ticker/chart", async (req, res) => {
+  const ticker = normalizeTicker4(req.params.ticker);
+  const timeframe = normalizeTimeframe2(req.query.tf ?? req.query.timeframe);
+  if (!ticker) {
+    res.status(400).json({ error: "MISSING_TICKER" });
+    return;
+  }
+  try {
+    const meta = await MarketDataService.getCandlesMeta(ticker, timeframe);
+    const indicators = computeIndicators(meta.candles);
+    let signals = [];
+    try {
+      const report = await SignalService.getReport(ticker);
+      signals = report?.signals ?? [];
+    } catch (signalError) {
+      console.error("chart signals failed:", signalError);
+    }
+    const { overall } = computeScores(ticker);
+    res.json({
+      ok: true,
+      ticker,
+      timeframe,
+      provider: meta.provider,
+      fetchedAt: meta.fetchedAt,
+      candles: meta.candles,
+      indicators,
+      signals,
+      rating: scoreToRating(overall),
+      count: meta.candles.length,
+      updatedAt: meta.fetchedAt
+    });
+  } catch (error) {
+    console.error("stock chart route error:", error);
+    res.status(500).json({ ok: false, error: "STOCK_CHART_ROUTE_ERROR", ticker, timeframe });
+  }
+});
 router6.get("/:ticker/candles", async (req, res) => {
   const ticker = normalizeTicker4(req.params.ticker);
   const timeframe = normalizeTimeframe2(req.query.tf ?? req.query.timeframe);
@@ -9205,20 +10430,24 @@ router6.get("/:ticker/candles", async (req, res) => {
     return;
   }
   try {
-    const candles = await MarketDataService.getCandles(
+    const meta = await MarketDataService.getCandlesMeta(
       ticker,
       timeframe
     );
     res.json({
+      ok: true,
       ticker,
       timeframe,
-      candles,
-      count: candles.length,
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      provider: meta.provider,
+      fetchedAt: meta.fetchedAt,
+      candles: meta.candles,
+      count: meta.candles.length,
+      updatedAt: meta.fetchedAt
     });
   } catch (error) {
     console.error("stock candles route error:", error);
     res.status(500).json({
+      ok: false,
       error: "STOCK_CANDLES_ROUTE_ERROR",
       ticker,
       timeframe
@@ -9758,7 +10987,7 @@ function rankingTypeParam(value) {
   const normalized = String(
     value ?? "volume"
   );
-  if (normalized === "tradingValue") {
+  if (normalized === "tradingValue" || normalized.toLowerCase() === "tradingvalue" || normalized === "value") {
     return "tradingValue";
   }
   if (normalized === "gainers") {
@@ -10208,10 +11437,60 @@ router9.get("/system", (req, res) => {
 });
 var admin_default = router9;
 
-// src/routes/crypto.ts
+// src/routes/sec.routes.ts
 import { Router as Router10 } from "express";
-import { createHmac, randomUUID as randomUUID2 } from "node:crypto";
 var router10 = Router10();
+function isUsTicker(value) {
+  return /^[A-Z.\-]{1,10}$/.test(value) && !/^\d{6}$/.test(value);
+}
+router10.get("/sec/:ticker/filings", async (req, res) => {
+  const ticker = String(req.params.ticker || "").trim().toUpperCase();
+  const fetchedAt = (/* @__PURE__ */ new Date()).toISOString();
+  if (!isUsTicker(ticker)) {
+    return res.status(400).json({ ok: false, error: "INVALID_US_TICKER" });
+  }
+  try {
+    const rows = await getFilings(ticker, 20);
+    return res.json({ ok: true, provider: "sec-edgar", fetchedAt, ticker, rows, count: rows.length });
+  } catch (error) {
+    console.error("sec filings route error:", error);
+    return res.status(502).json({ ok: false, provider: "sec-edgar", error: "SEC_PROVIDER_ERROR", message: "SEC EDGAR \uC870\uD68C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4." });
+  }
+});
+router10.get("/sec/:ticker/companyfacts", async (req, res) => {
+  const ticker = String(req.params.ticker || "").trim().toUpperCase();
+  const fetchedAt = (/* @__PURE__ */ new Date()).toISOString();
+  if (!isUsTicker(ticker)) {
+    return res.status(400).json({ ok: false, error: "INVALID_US_TICKER" });
+  }
+  try {
+    const facts = await getCompanyFactsSummary(ticker);
+    return res.json({ ok: true, provider: "sec-edgar", fetchedAt, ticker, ...facts });
+  } catch (error) {
+    console.error("sec companyfacts route error:", error);
+    return res.status(502).json({ ok: false, provider: "sec-edgar", error: "SEC_PROVIDER_ERROR", message: "SEC EDGAR company facts \uC870\uD68C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4." });
+  }
+});
+router10.get("/disclosures/:ticker", async (req, res) => {
+  const ticker = String(req.params.ticker || "").trim().toUpperCase();
+  const fetchedAt = (/* @__PURE__ */ new Date()).toISOString();
+  try {
+    const result = await FilingService.getFilings(ticker);
+    if (!result) return res.status(404).json({ ok: false, error: "TICKER_NOT_FOUND" });
+    const provider = result.market === "KR" ? "dart" : "sec-edgar";
+    return res.json({ ok: true, provider, fetchedAt, ticker, ...result });
+  } catch (error) {
+    console.error("disclosures alias route error:", error);
+    const provider = /^\d{6}$/.test(ticker) ? "dart" : "sec-edgar";
+    return res.status(502).json({ ok: false, provider, error: "DISCLOSURE_PROVIDER_ERROR", message: "\uACF5\uC2DC \uACF5\uAE09\uC790 \uC870\uD68C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4." });
+  }
+});
+var sec_routes_default = router10;
+
+// src/routes/crypto.ts
+import { Router as Router11 } from "express";
+import { createHmac, randomUUID as randomUUID2 } from "node:crypto";
+var router11 = Router11();
 var UPBIT_BASE = "https://api.upbit.com";
 var BITGET_BASE = "https://api.bitget.com";
 function base64Url(value) {
@@ -10275,7 +11554,7 @@ function finite(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
-router10.get("/crypto/status", async (_req, res) => {
+router11.get("/crypto/status", async (_req, res) => {
   const [upbit, bitget] = await Promise.allSettled([
     fetchJson5(`${UPBIT_BASE}/v1/market/all?isDetails=true`),
     fetchJson5(`${BITGET_BASE}/api/v2/mix/market/tickers?productType=USDT-FUTURES`)
@@ -10294,7 +11573,7 @@ router10.get("/crypto/status", async (_req, res) => {
     checkedAt: (/* @__PURE__ */ new Date()).toISOString()
   });
 });
-router10.get("/crypto/spot/markets", async (_req, res) => {
+router11.get("/crypto/spot/markets", async (_req, res) => {
   try {
     const markets = await fetchJson5(`${UPBIT_BASE}/v1/market/all?isDetails=true`);
     const rows = markets.filter((item) => String(item.market ?? "").startsWith("KRW-")).map((item) => ({
@@ -10310,7 +11589,7 @@ router10.get("/crypto/spot/markets", async (_req, res) => {
     return res.status(502).json({ exchange: "UPBIT", markets: [], count: 0, error: "UPBIT_MARKETS_UNAVAILABLE" });
   }
 });
-router10.get("/crypto/spot/tickers", async (req, res) => {
+router11.get("/crypto/spot/tickers", async (req, res) => {
   try {
     const requested = String(req.query.markets ?? "").split(",").map(safeSymbol).filter(Boolean);
     let markets = requested.map((symbol) => symbol.startsWith("KRW-") ? symbol : `KRW-${symbol}`);
@@ -10341,7 +11620,7 @@ router10.get("/crypto/spot/tickers", async (req, res) => {
     return res.status(502).json({ exchange: "UPBIT", tickers: [], count: 0, error: "UPBIT_TICKERS_UNAVAILABLE" });
   }
 });
-router10.get("/crypto/spot/orderbook", async (req, res) => {
+router11.get("/crypto/spot/orderbook", async (req, res) => {
   const symbol = safeSymbol(req.query.symbol || "BTC");
   try {
     const rows = await fetchJson5(`${UPBIT_BASE}/v1/orderbook?markets=${encodeURIComponent(`KRW-${symbol}`)}&level=0`);
@@ -10360,7 +11639,7 @@ router10.get("/crypto/spot/orderbook", async (req, res) => {
     return res.status(502).json({ exchange: "UPBIT", units: [], error: "UPBIT_ORDERBOOK_UNAVAILABLE" });
   }
 });
-router10.get("/crypto/spot/candles", async (req, res) => {
+router11.get("/crypto/spot/candles", async (req, res) => {
   const symbol = safeSymbol(req.query.symbol || "BTC");
   const unit = Math.max(1, Math.min(240, Number(req.query.unit ?? 15) || 15));
   const count = Math.max(1, Math.min(200, Number(req.query.count ?? 120) || 120));
@@ -10373,7 +11652,7 @@ router10.get("/crypto/spot/candles", async (req, res) => {
     return res.status(502).json({ exchange: "UPBIT", candles: [], count: 0, error: "UPBIT_CANDLES_UNAVAILABLE" });
   }
 });
-router10.get("/crypto/futures/tickers", async (req, res) => {
+router11.get("/crypto/futures/tickers", async (req, res) => {
   const requested = safeSymbol(req.query.symbol);
   try {
     const payload = await fetchJson5(`${BITGET_BASE}/api/v2/mix/market/tickers?productType=USDT-FUTURES${requested ? `&symbol=${encodeURIComponent(requested)}` : ""}`);
@@ -10400,7 +11679,7 @@ router10.get("/crypto/futures/tickers", async (req, res) => {
     return res.status(502).json({ exchange: "BITGET", tickers: [], count: 0, error: "BITGET_TICKERS_UNAVAILABLE" });
   }
 });
-router10.get("/crypto/futures/candles", async (req, res) => {
+router11.get("/crypto/futures/candles", async (req, res) => {
   const symbol = safeSymbol(req.query.symbol || "BTCUSDT");
   const allowed = /* @__PURE__ */ new Set(["1m", "3m", "5m", "15m", "30m", "1H", "4H", "6H", "12H", "1D", "1W"]);
   const rawGranularity = String(req.query.granularity ?? "15m");
@@ -10416,7 +11695,7 @@ router10.get("/crypto/futures/candles", async (req, res) => {
     return res.status(502).json({ exchange: "BITGET", candles: [], count: 0, error: "BITGET_CANDLES_UNAVAILABLE" });
   }
 });
-router10.get("/crypto/spot/accounts", async (_req, res) => {
+router11.get("/crypto/spot/accounts", async (_req, res) => {
   const accessKey = String(process.env.UPBIT_ACCESS_KEY ?? "").trim();
   const secretKey = String(process.env.UPBIT_SECRET_KEY ?? "").trim();
   if (!accessKey || !secretKey) return res.status(503).json({ exchange: "UPBIT", configured: false, accounts: [], error: "UPBIT_PRIVATE_KEYS_NOT_CONFIGURED" });
@@ -10437,7 +11716,7 @@ router10.get("/crypto/spot/accounts", async (_req, res) => {
     return res.status(502).json({ exchange: "UPBIT", configured: true, accounts: [], error: "UPBIT_ACCOUNTS_UNAVAILABLE" });
   }
 });
-router10.get("/crypto/futures/account", async (_req, res) => {
+router11.get("/crypto/futures/account", async (_req, res) => {
   const path6 = "/api/v2/mix/account/accounts";
   const query = "productType=USDT-FUTURES";
   try {
@@ -10459,7 +11738,7 @@ router10.get("/crypto/futures/account", async (_req, res) => {
     return res.status(notConfigured ? 503 : 502).json({ exchange: "BITGET", configured: !notConfigured, accounts: [], error: notConfigured ? "BITGET_PRIVATE_KEYS_NOT_CONFIGURED" : "BITGET_ACCOUNT_UNAVAILABLE" });
   }
 });
-router10.get("/crypto/futures/positions", async (_req, res) => {
+router11.get("/crypto/futures/positions", async (_req, res) => {
   const path6 = "/api/v2/mix/position/all-position";
   const query = "productType=USDT-FUTURES&marginCoin=USDT";
   try {
@@ -10486,12 +11765,12 @@ router10.get("/crypto/futures/positions", async (_req, res) => {
     return res.status(notConfigured ? 503 : 502).json({ exchange: "BITGET", configured: !notConfigured, positions: [], error: notConfigured ? "BITGET_PRIVATE_KEYS_NOT_CONFIGURED" : "BITGET_POSITIONS_UNAVAILABLE" });
   }
 });
-var crypto_default = router10;
+var crypto_default = router11;
 
 // src/routes/backup.ts
 import { createHash } from "node:crypto";
-import { Router as Router11 } from "express";
-var router11 = Router11();
+import { Router as Router12 } from "express";
+var router12 = Router12();
 var ALLOWED_KEYS = /* @__PURE__ */ new Set([
   "knowledge-info-asset-mode-v1",
   "sa-settings-v1",
@@ -10535,7 +11814,7 @@ function checksum(payload) {
   const sorted = Object.fromEntries(Object.entries(payload).sort(([a], [b]) => a.localeCompare(b)));
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex");
 }
-router11.get("/latest", async (req, res) => {
+router12.get("/latest", async (req, res) => {
   if (!req.member || !req.accessToken) return res.status(401).json({ error: "LOGIN_REQUIRED" });
   try {
     const supabase = getUserSupabase(req.accessToken);
@@ -10557,7 +11836,7 @@ router11.get("/latest", async (req, res) => {
     return res.status(503).json({ error: "BACKUP_READ_FAILED", detail: message });
   }
 });
-router11.put("/latest", async (req, res) => {
+router12.put("/latest", async (req, res) => {
   if (!req.member || !req.accessToken) return res.status(401).json({ error: "LOGIN_REQUIRED" });
   try {
     const schemaVersion = Number(req.body?.schemaVersion ?? 1);
@@ -10596,26 +11875,27 @@ router11.put("/latest", async (req, res) => {
     return res.status(status).json({ error: message, detail: message });
   }
 });
-var backup_default = router11;
+var backup_default = router12;
 
 // src/routes/index.ts
-var router12 = Router12();
-router12.get("/", (_req, res) => {
+var router13 = Router13();
+router13.get("/", (_req, res) => {
   res.json({ ok: true, service: "seungjae-stock-api" });
 });
-router12.use("/", health_default);
-router12.use("/", market_default);
-router12.use("/", news_route_default);
-router12.use("/kiwoom", kiwoom_routes_default);
-router12.use("/", crypto_default);
-router12.use("/admin", admin_default);
-router12.use(requireMember);
-router12.use("/debug", requireAdmin, provider_debug_default);
-router12.use("/", push_default);
-router12.use("/", watchlist_default);
-router12.use("/stocks", stocks_default);
-router12.use("/backup", backup_default);
-var routes_default = router12;
+router13.use("/", health_default);
+router13.use("/", market_default);
+router13.use("/", news_route_default);
+router13.use("/kiwoom", kiwoom_routes_default);
+router13.use("/", crypto_default);
+router13.use("/admin", admin_default);
+router13.use(requireMember);
+router13.use("/debug", requireAdmin, provider_debug_default);
+router13.use("/", push_default);
+router13.use("/", watchlist_default);
+router13.use("/stocks", stocks_default);
+router13.use("/", sec_routes_default);
+router13.use("/backup", backup_default);
+var routes_default = router13;
 
 // src/index.ts
 var __filename = fileURLToPath(import.meta.url);
