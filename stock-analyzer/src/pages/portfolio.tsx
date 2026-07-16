@@ -1864,7 +1864,7 @@ function CoinAssetsView({
   const loading = mode === 'spot' ? spot.isLoading : futuresAccount.isLoading || futuresPositions.isLoading;
   const error = mode === 'spot' ? spot.isError : futuresAccount.isError || futuresPositions.isError;
   return (
-    <main className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-28 pt-4">
+    <main className="space-y-4 px-4 pb-28 pt-4">
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <div><h2 className="text-sm font-black">{mode === 'spot' ? '업비트 현물 자산' : '비트겟 선물 자산'}</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">개인 API 키는 서버 환경변수에서만 사용합니다.</p></div>

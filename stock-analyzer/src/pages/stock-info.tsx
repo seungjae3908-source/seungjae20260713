@@ -187,8 +187,9 @@ export default function StockInfoPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <header className="border-b border-card-border bg-background/95 px-4 pb-3 pt-4 backdrop-blur">
+    <div className="h-full overflow-y-auto overscroll-contain bg-background">
+      {/* 상단 고정 없음 — 제목·탭·상세가 한 페이지로 함께 스크롤. */}
+      <header className="border-b border-card-border px-4 pb-3 pt-4">
         <div className="relative text-center">
           <h1 className="text-xl font-black">정보</h1>
           <p className="mt-1 text-xs text-muted-foreground">선택 종목의 실제 시세·재무·수급·공매도·뉴스·공시</p>
@@ -217,7 +218,7 @@ export default function StockInfoPage() {
       {asset === 'coin' ? (
         <CoinInfo />
       ) : (
-        <main className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-28 pt-4">
+        <main className="space-y-4 px-4 pb-28 pt-4">
           <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
             <label className="flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
               <Search className="h-4 w-4 text-muted-foreground" />
@@ -503,7 +504,7 @@ function CoinInfo() {
   const connectionOk = coinMarket === 'spot' ? status.data?.upbit?.ok : status.data?.bitget?.ok;
 
   return (
-    <main className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-28 pt-4">
+    <main className="space-y-4 px-4 pb-28 pt-4">
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
         <div className="grid grid-cols-2 gap-2">
           <Tab active={coinMarket === 'spot'} onClick={() => changeCoin('spot')}>현물 · 업비트</Tab>

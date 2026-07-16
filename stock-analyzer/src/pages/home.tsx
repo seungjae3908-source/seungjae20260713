@@ -92,26 +92,28 @@ export default function HomePage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <header className="border-b border-card-border bg-background/95 px-4 pb-3 pt-4 backdrop-blur">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-black">지식정보</h1>
-            <p className="mt-1 text-[11px] font-bold text-muted-foreground">{formatDateTime(now)}</p>
-          </div>
-          <div className="flex gap-2">
-            <button type="button" onClick={() => navigate('/alerts')} aria-label="알림" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><Bell className="h-4 w-4" /></button>
-            <button type="button" onClick={refresh} aria-label="새로고침" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><RefreshCw className={cn('h-4 w-4', (summary.isFetching || sectorPopular.isFetching || spotTickers.isFetching || futuresTickers.isFetching) && 'animate-spin')} /></button>
-          </div>
-        </div>
-        <AssetSwitch className="mt-3" />
+    <div className="h-full overflow-y-auto overscroll-contain bg-background">
+      {/* 상단 고정 없음 — 제목부터 마지막 카드까지 페이지 전체가 하나의 세로 스크롤로 움직인다. */}
+      <header className="border-b border-card-border px-4 pb-3 pt-4">
+        <h1 className="text-2xl font-black">지식정보</h1>
+        {/* 갱신 시각 — 제목 아래 줄, 오른쪽 끝 정렬(크기·색·굵기 기존 유지) */}
+        <p className="mt-1 text-right text-[11px] font-bold text-muted-foreground">{formatDateTime(now)}</p>
+        {/* 종목 검색창 — 주식/코인 선택 버튼보다 위 */}
         <button type="button" onClick={() => navigate('/stocks')} className="mt-3 flex w-full items-center gap-2 rounded-2xl border border-card-border bg-card px-4 py-3 text-left">
           <Search className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-black text-muted-foreground">{mode.asset === 'stock' ? '종목 검색' : '코인 검색'}</span>
         </button>
+        <AssetSwitch className="mt-3" />
+        {/* 지정가 알림·새로고침 — 주식 탭 영역 우측 정렬(종은 주식 탭에서만, 새로고침은 기존 동작 유지) */}
+        <div className="mt-2 flex justify-end gap-2">
+          {mode.asset === 'stock' && (
+            <button type="button" onClick={() => navigate('/alerts')} aria-label="알림" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><Bell className="h-4 w-4" /></button>
+          )}
+          <button type="button" onClick={refresh} aria-label="새로고침" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><RefreshCw className={cn('h-4 w-4', (summary.isFetching || sectorPopular.isFetching || spotTickers.isFetching || futuresTickers.isFetching) && 'animate-spin')} /></button>
+        </div>
       </header>
 
-      <main className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-28 pt-4">
+      <main className="space-y-4 px-4 pb-28 pt-4">
         {mode.asset === 'stock' ? (
           <StockHome mode={mode.stockMarket} summary={summary.data?.items ?? []} sectorData={sectorPopular.data} summaryLoading={summary.isLoading} summaryError={summary.isError} sectorLoading={sectorPopular.isLoading} sectorError={sectorPopular.isError} onNavigate={navigate} />
         ) : (

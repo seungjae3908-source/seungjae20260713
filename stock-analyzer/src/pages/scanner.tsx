@@ -8,6 +8,7 @@ import {
 } from "react";
 import { useLocation } from "wouter";
 import {
+  ChevronDown,
   ChevronRight,
   HelpCircle,
   Plus,
@@ -483,6 +484,8 @@ export default function ScannerPage() {
   const [selected, setSelected] = useState<string[]>(DEFAULT_SELECTED);
   const [helpOpen, setHelpOpen] = useState<string | null>(null);
   const [finderOpen, setFinderOpen] = useState(false);
+  // 지표 카드 접기·펼치기 — 최초 진입 시 접힘. 접어도 선택 지표는 그대로 유지된다.
+  const [indicatorsOpen, setIndicatorsOpen] = useState(false);
   const [volumeThreshold, setVolumeThreshold] =
     useState<ThresholdOption>(DEFAULT_THRESHOLD);
   const [tradingValueThreshold, setTradingValueThreshold] =
@@ -907,8 +910,9 @@ export default function ScannerPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background">
-      <header className="relative z-20 border-b border-card-border bg-background/90 px-4 pb-3 pt-4 glass">
+    <div className="h-full overflow-y-auto overscroll-contain bg-background">
+      {/* 상단 고정 없음 — 제목·선택 3줄·기간·지표·종목보기가 한 페이지로 함께 스크롤. */}
+      <header className="border-b border-card-border px-4 pb-3 pt-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-extrabold">{viewMode === "condition" ? "조건검색" : "자동매매"}</h1>
@@ -1001,7 +1005,7 @@ export default function ScannerPage() {
         </div>
       </header>
 
-      <main className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 pb-24">
+      <main className="space-y-4 p-4 pb-24">
         {viewMode === "condition" && (
           <>
         <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
@@ -1030,12 +1034,24 @@ export default function ScannerPage() {
         </section>
 
         <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 className="text-sm font-extrabold">지표</h2>
+          {/* 지표 카드 접기·펼치기 — 최초 접힘, 제목 줄을 누르면 토글. 접어도 선택 지표는 유지되어 검색 요청에 그대로 반영된다. */}
+          <button
+            type="button"
+            onClick={() => setIndicatorsOpen((open) => !open)}
+            aria-expanded={indicatorsOpen}
+            className="flex w-full items-center justify-between gap-2"
+          >
+            <h2 className="text-sm font-extrabold">지표 · 선택 {selected.length}개</h2>
+            <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", indicatorsOpen && "rotate-180")} />
+          </button>
 
+          {indicatorsOpen && (
+          <>
+          <div className="mb-3 mt-3 flex items-center justify-end gap-2">
             <button
               type="button"
-              onClick={() => setFinderOpen(true)}
+              onClick={() => setFinderOpen((open) => !open)}
+              aria-expanded={finderOpen}
               className="flex items-center gap-1 rounded-full border border-primary bg-primary/10 px-3 py-1.5 text-xs font-extrabold text-primary"
             >
               <Search className="h-3.5 w-3.5" />
@@ -1163,6 +1179,18 @@ export default function ScannerPage() {
                 );
               })}
             </div>
+          )}
+
+          {/* 지표 찾기 — 지표 카드 안에서 별도로 접고 펼침(최초 접힘). 접어도 선택은 유지된다. */}
+          {finderOpen && (
+            <IndicatorFinder
+              indicators={availableIndicators}
+              selected={selected}
+              onToggle={toggleIndicator}
+              onClose={() => setFinderOpen(false)}
+            />
+          )}
+          </>
           )}
         </section>
 
@@ -1863,15 +1891,6 @@ export default function ScannerPage() {
         </div>
       )}
 
-      {finderOpen && (
-        <IndicatorFinder
-          indicators={availableIndicators}
-          selected={selected}
-          onToggle={toggleIndicator}
-          onClose={() => setFinderOpen(false)}
-        />
-      )}
-
       <BottomNav />
     </div>
   );
@@ -1899,17 +1918,10 @@ function IndicatorFinder({
   }, [indicators, query]);
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col justify-end bg-black/70">
-      <button
-        type="button"
-        aria-label="닫기"
-        onClick={onClose}
-        className="flex-1"
-      />
-
-      <div className="max-h-[85dvh] rounded-t-3xl border border-card-border bg-card p-4 shadow-2xl">
+    // 지표 카드 안에 인라인으로 펼쳐지는 영역 — 별도 세로 스크롤 없이 페이지 전체 스크롤과 함께 움직인다.
+    <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-extrabold">지표 찾기</h2>
+          <h2 className="text-sm font-extrabold">지표 찾기</h2>
 
           <button
             type="button"
@@ -1948,7 +1960,7 @@ function IndicatorFinder({
           종목만 남습니다.
         </p>
 
-        <div className="max-h-[52dvh] space-y-2 overflow-y-auto pb-2">
+        <div className="space-y-2 pb-2">
           {filtered.length === 0 ? (
             <p className="break-keep py-6 text-center text-sm font-bold leading-relaxed text-muted-foreground">
               검색 결과가 없습니다.
@@ -2008,7 +2020,6 @@ function IndicatorFinder({
         >
           완료
         </button>
-      </div>
     </div>
   );
 }
@@ -2225,8 +2236,9 @@ function CoinTradingWorkspace({ viewMode, navigate }: { viewMode: ScannerViewMod
   const activeQuery = mode.coinMarket === "spot" ? spot : futures;
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <header className="border-b border-card-border bg-background/95 px-4 pb-3 pt-4 backdrop-blur">
+    <div className="h-full overflow-y-auto overscroll-contain bg-background">
+      {/* 상단 고정 없음 — 제목·탭·검색·목록이 한 페이지로 함께 스크롤. */}
+      <header className="border-b border-card-border px-4 pb-3 pt-4">
         <div className="flex items-start justify-between gap-3">
           <div><h1 className="text-xl font-black">{viewMode === "auto" ? "코인 자동매매" : "코인 검색기"}</h1><p className="mt-1 text-xs font-bold text-muted-foreground">현물과 선물은 주식 주문엔진과 분리합니다.</p></div>
           <button type="button" onClick={() => void activeQuery.refetch()} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><RefreshCw className={cn("h-4 w-4", activeQuery.isFetching && "animate-spin")} /></button>
@@ -2234,7 +2246,7 @@ function CoinTradingWorkspace({ viewMode, navigate }: { viewMode: ScannerViewMod
         <AssetSwitch className="mt-3" />
         <label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3"><Search className="h-4 w-4 text-muted-foreground" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="코인 심볼 검색" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" /></label>
       </header>
-      <main className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-28 pt-4">
+      <main className="space-y-4 px-4 pb-28 pt-4">
         <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <div className="grid grid-cols-2 gap-2 text-center text-[11px] font-black">
             <div className={cn("rounded-2xl p-3", connected ? "bg-positive/10 text-positive" : "bg-destructive/10 text-destructive")}>{mode.coinMarket === "spot" ? "UPBIT" : "BITGET"} 시세 · {connected ? "정상" : "오류"}</div>
