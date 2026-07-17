@@ -10,6 +10,7 @@ import {
 	type KiwoomUsExchange,
 } from "../providers/kiwoom";
 import { FilingService } from "../services/filing.service";
+import { SpecialFeedService } from "../services/special-feed.service";
 import { SignalService } from "../services/signal.service";
 import { computeIndicators } from "../sample/indicators";
 import { computeScores } from "../sample/scores";
@@ -44,7 +45,6 @@ async function withLiveCache<T>(
 	}
 	return value;
 }
-
 
 // GET /api/stocks/server-ip
 // Replit 서버가 외부 API에 접속할 때 사용되는 현재 공인 IP를 확인합니다.
@@ -120,8 +120,7 @@ router.get("/server-ip", requireAdmin, async (_req, res) => {
 				ip: matchedIp,
 				provider,
 				checkedAt: new Date().toISOString(),
-				note:
-					"이 값은 현재 실행 중인 Replit 서버의 외부 요청 IP입니다. 서버 재시작·재배포·실행 환경 변경 시 달라질 수 있습니다.",
+				note: "이 값은 현재 실행 중인 Replit 서버의 외부 요청 IP입니다. 서버 재시작·재배포·실행 환경 변경 시 달라질 수 있습니다.",
 			});
 			return;
 		} catch (error) {
@@ -129,9 +128,7 @@ router.get("/server-ip", requireAdmin, async (_req, res) => {
 				provider,
 				ok: false,
 				error:
-					error instanceof Error
-						? error.message
-						: "UNKNOWN_SERVER_IP_ERROR",
+					error instanceof Error ? error.message : "UNKNOWN_SERVER_IP_ERROR",
 			});
 		}
 	}
@@ -148,6 +145,34 @@ function normalizeTicker(value: unknown) {
 		.trim()
 		.toUpperCase();
 }
+
+// GET /api/stocks/special-feed
+// 현재 앱 종목 목록을 순환 확인해 새 중요 뉴스·공시·차트신호를 1시간 동안 제공합니다.
+router.get("/special-feed", async (req, res) => {
+	const market =
+		String(req.query.market ?? "KR").toUpperCase() === "US" ? "US" : "KR";
+	const limit = Math.max(
+		1,
+		Math.min(120, Math.trunc(Number(req.query.limit ?? 80)) || 80),
+	);
+
+	res.setHeader("Cache-Control", "no-store, max-age=0");
+
+	try {
+		const result = await SpecialFeedService.getFeed(market, limit);
+		res.json(result);
+	} catch (error) {
+		console.error("special feed route error:", error);
+		res.status(502).json({
+			ok: false,
+			market,
+			items: [],
+			count: 0,
+			updatedAt: new Date().toISOString(),
+			message: "실시간 특이정보를 불러오지 못했습니다.",
+		});
+	}
+});
 
 function normalizeTimeframe(value: unknown) {
 	const raw = String(value ?? "1D").trim();
@@ -257,7 +282,9 @@ async function fetchDartFilings(ticker: string, allHistory = false) {
 		const data: any = await response.json();
 
 		if (data?.status && data.status !== "000" && data.status !== "013") {
-			throw new Error(`DART_LIST_${String(data.status)}:${String(data.message ?? "")}`);
+			throw new Error(
+				`DART_LIST_${String(data.status)}:${String(data.message ?? "")}`,
+			);
 		}
 		if (Array.isArray(data?.list)) items.push(...data.list);
 
@@ -267,7 +294,9 @@ async function fetchDartFilings(ticker: string, allHistory = false) {
 
 	const unique = new Map<string, any>();
 	for (const item of items) {
-		const key = String(item?.rcept_no ?? `${item?.rcept_dt}:${item?.report_nm}`);
+		const key = String(
+			item?.rcept_no ?? `${item?.rcept_dt}:${item?.report_nm}`,
+		);
 		if (!unique.has(key)) unique.set(key, item);
 	}
 
@@ -289,7 +318,8 @@ async function fetchDartFilings(ticker: string, allHistory = false) {
 			.replace(/정정|첨부정정|기재정정/g, "")
 			.replace(/[^0-9a-z가-힣]/g, "");
 		const existing = grouped.get(normalizedTitle);
-		if (existing) existing.relatedCount = Number(existing.relatedCount ?? 1) + 1;
+		if (existing)
+			existing.relatedCount = Number(existing.relatedCount ?? 1) + 1;
 		else grouped.set(normalizedTitle, { ...item, relatedCount: 1 });
 	}
 
@@ -316,15 +346,22 @@ function secHeaders() {
 
 async function getSecCik(ticker: string) {
 	if (!secTickerMapCache) {
-		const response = await fetch("https://www.sec.gov/files/company_tickers.json", {
-			headers: secHeaders(),
-		});
+		const response = await fetch(
+			"https://www.sec.gov/files/company_tickers.json",
+			{
+				headers: secHeaders(),
+			},
+		);
 		if (!response.ok) throw new Error("SEC_TICKERS_HTTP_" + response.status);
 		const data = (await response.json()) as Record<string, SecTickerEntry>;
 		const map = new Map<string, string>();
 		for (const entry of Object.values(data)) {
-			const symbol = String(entry?.ticker ?? "").trim().toUpperCase();
-			const cik = String(entry?.cik_str ?? "").replace(/\D/g, "").padStart(10, "0");
+			const symbol = String(entry?.ticker ?? "")
+				.trim()
+				.toUpperCase();
+			const cik = String(entry?.cik_str ?? "")
+				.replace(/\D/g, "")
+				.padStart(10, "0");
 			if (symbol && cik) map.set(symbol, cik);
 		}
 		secTickerMapCache = map;
@@ -379,7 +416,9 @@ async function fetchSecFilings(ticker: string) {
 	const data: any = await response.json();
 	const items = secColumnRows(data?.filings?.recent ?? {}, cik);
 
-	for (const file of Array.isArray(data?.filings?.files) ? data.filings.files : []) {
+	for (const file of Array.isArray(data?.filings?.files)
+		? data.filings.files
+		: []) {
 		const name = String(file?.name ?? "").trim();
 		if (!name) continue;
 		const historyResponse = await fetch(
@@ -393,7 +432,8 @@ async function fetchSecFilings(ticker: string) {
 
 	const unique = new Map<string, any>();
 	for (const item of items) {
-		if (!unique.has(item.accessionNumber)) unique.set(item.accessionNumber, item);
+		if (!unique.has(item.accessionNumber))
+			unique.set(item.accessionNumber, item);
 	}
 	return [...unique.values()].sort((a, b) =>
 		String(b.filingDate).localeCompare(String(a.filingDate)),
@@ -403,11 +443,15 @@ async function fetchSecFilings(ticker: string) {
 async function fetchAllFilings(ticker: string, allHistory = false) {
 	return /^\d{6}$/.test(ticker)
 		? fetchDartFilings(ticker, allHistory)
-		: fetchSecFilings(ticker).then((items) => allHistory ? items : items.slice(0, 5));
+		: fetchSecFilings(ticker).then((items) =>
+				allHistory ? items : items.slice(0, 5),
+			);
 }
 
 function metricRow(rows: string[][], patterns: RegExp[]) {
-	return rows.find((cells) => patterns.some((pattern) => pattern.test(cells[0] ?? "")));
+	return rows.find((cells) =>
+		patterns.some((pattern) => pattern.test(cells[0] ?? "")),
+	);
 }
 
 function financialNumber(value: unknown): number | null {
@@ -434,22 +478,33 @@ function periodIsAvailable(period: string) {
 	const year = Number(match[1]);
 	const month = Number(match[2] ?? 12);
 	const now = new Date();
-	return year < now.getFullYear() || (year === now.getFullYear() && month <= now.getMonth() + 1);
+	return (
+		year < now.getFullYear() ||
+		(year === now.getFullYear() && month <= now.getMonth() + 1)
+	);
 }
 
 function buildNaverFinancialRows(html: string) {
 	const table = financeTableRows(html);
-	const periodCells = table.find((cells) => cells.filter((cell) => /^20\d{2}\.\d{2}/.test(cell)).length >= 4) ?? [];
+	const periodCells =
+		table.find(
+			(cells) =>
+				cells.filter((cell) => /^20\d{2}\.\d{2}/.test(cell)).length >= 4,
+		) ?? [];
 	const periods = periodCells.filter((cell) => /^20\d{2}\.\d{2}/.test(cell));
-	if (!periods.length) return { annual: [], quarterly: [], ratios: {}, marketCap: null };
+	if (!periods.length)
+		return { annual: [], quarterly: [], ratios: {}, marketCap: null };
 
-	const marketCapMatch = html.match(/id=["']_market_sum["'][^>]*>([\s\S]*?)<\/em>/i);
+	const marketCapMatch = html.match(
+		/id=["']_market_sum["'][^>]*>([\s\S]*?)<\/em>/i,
+	);
 	const marketCapHundredMillion = financialNumber(
 		marketCapMatch ? cleanFinanceCell(marketCapMatch[1]) : null,
 	);
-	const marketCap = marketCapHundredMillion == null
-		? null
-		: marketCapHundredMillion * 100_000_000;
+	const marketCap =
+		marketCapHundredMillion == null
+			? null
+			: marketCapHundredMillion * 100_000_000;
 
 	const definitions = {
 		revenue: [/^매출액/, /^영업수익/],
@@ -468,13 +523,21 @@ function buildNaverFinancialRows(html: string) {
 		pbr: [/^PBR/],
 	} as const;
 	const metricRows = Object.fromEntries(
-		Object.entries(definitions).map(([key, patterns]) => [key, metricRow(table, [...patterns])]),
+		Object.entries(definitions).map(([key, patterns]) => [
+			key,
+			metricRow(table, [...patterns]),
+		]),
 	) as Record<string, string[] | undefined>;
 
 	const valuesAt = (key: string, index: number) =>
 		financialNumber(metricRows[key]?.[index + 1]);
 	const rows = periods.filter(periodIsAvailable).map((period, index) => ({
-		period: period.replace(/&#40;|\$#40;|#40;/gi, "(").replace(/&#41;|\$#41;|#41;/gi, ")").replace(/\(E\)/g, "").replace(/<[^>]+>/g, "").trim(),
+		period: period
+			.replace(/&#40;|\$#40;|#40;/gi, "(")
+			.replace(/&#41;|\$#41;|#41;/gi, ")")
+			.replace(/\(E\)/g, "")
+			.replace(/<[^>]+>/g, "")
+			.trim(),
 		revenue: valuesAt("revenue", index),
 		operatingIncome: valuesAt("operatingIncome", index),
 		netIncome: valuesAt("netIncome", index),
@@ -500,7 +563,10 @@ function buildNaverFinancialRows(html: string) {
 			roe: valuesAt("roe", latestIndex),
 			per: valuesAt("per", latestIndex),
 			pbr: valuesAt("pbr", latestIndex),
-			debtRatio: annual[0]?.liabilities != null && annual[0]?.equity ? (annual[0].liabilities / annual[0].equity) * 100 : null,
+			debtRatio:
+				annual[0]?.liabilities != null && annual[0]?.equity
+					? (annual[0].liabilities / annual[0].equity) * 100
+					: null,
 		},
 		marketCap,
 		source: "NAVER_FINANCE",
@@ -511,7 +577,12 @@ function buildNaverFinancialRows(html: string) {
 async function fetchNaverFinancials(ticker: string) {
 	const response = await fetch(
 		`https://finance.naver.com/item/main.naver?code=${encodeURIComponent(ticker)}`,
-		{ headers: { "User-Agent": "Mozilla/5.0", Referer: "https://finance.naver.com/" } },
+		{
+			headers: {
+				"User-Agent": "Mozilla/5.0",
+				Referer: "https://finance.naver.com/",
+			},
+		},
 	);
 	if (!response.ok) throw new Error("NAVER_FINANCIAL_HTTP_" + response.status);
 	return buildNaverFinancialRows(await response.text());
@@ -525,9 +596,18 @@ const DART_REPORTS = [
 ] as const;
 
 function dartAccountValue(list: any[], patterns: RegExp[]) {
-	const candidates = list.filter((item) => patterns.some((pattern) => pattern.test(`${item?.account_id ?? ""} ${item?.account_nm ?? ""}`)));
-	const consolidated = candidates.find((item) => String(item?.fs_div ?? "").toUpperCase() === "CFS") ?? candidates[0];
-	return financialNumber(consolidated?.thstrm_amount ?? consolidated?.thstrm_add_amount);
+	const candidates = list.filter((item) =>
+		patterns.some((pattern) =>
+			pattern.test(`${item?.account_id ?? ""} ${item?.account_nm ?? ""}`),
+		),
+	);
+	const consolidated =
+		candidates.find(
+			(item) => String(item?.fs_div ?? "").toUpperCase() === "CFS",
+		) ?? candidates[0];
+	return financialNumber(
+		consolidated?.thstrm_amount ?? consolidated?.thstrm_add_amount,
+	);
 }
 
 async function fetchDartFinancials(ticker: string) {
@@ -543,8 +623,16 @@ async function fetchDartFinancials(ticker: string) {
 		for (const report of DART_REPORTS) {
 			const periodEnd = new Date(year, Number(report.month), 0, 23, 59, 59);
 			if (periodEnd.getTime() > now.getTime()) continue;
-			const query = new URLSearchParams({ crtfc_key: apiKey, corp_code: corpCode, bsns_year: String(year), reprt_code: report.code, fs_div: "CFS" });
-			const response = await fetch(`https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json?${query.toString()}`);
+			const query = new URLSearchParams({
+				crtfc_key: apiKey,
+				corp_code: corpCode,
+				bsns_year: String(year),
+				reprt_code: report.code,
+				fs_div: "CFS",
+			});
+			const response = await fetch(
+				`https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json?${query.toString()}`,
+			);
 			if (!response.ok) continue;
 			const data: any = await response.json();
 			if (data?.status !== "000" || !Array.isArray(data?.list)) continue;
@@ -553,29 +641,67 @@ async function fetchDartFinancials(ticker: string) {
 				period: `${year}.${report.month}`,
 				periodLabel: `${year}년 ${report.label}`,
 				revenue: dartAccountValue(list, [/Revenue/i, /매출액/, /영업수익/]),
-				operatingIncome: dartAccountValue(list, [/OperatingIncomeLoss/i, /영업이익/]),
-				netIncome: dartAccountValue(list, [/ProfitLoss/i, /당기순이익/, /분기순이익/, /반기순이익/]),
+				operatingIncome: dartAccountValue(list, [
+					/OperatingIncomeLoss/i,
+					/영업이익/,
+				]),
+				netIncome: dartAccountValue(list, [
+					/ProfitLoss/i,
+					/당기순이익/,
+					/분기순이익/,
+					/반기순이익/,
+				]),
 				assets: dartAccountValue(list, [/^ifrs-full_Assets$/i, /자산총계/]),
-				liabilities: dartAccountValue(list, [/^ifrs-full_Liabilities$/i, /부채총계/]),
+				liabilities: dartAccountValue(list, [
+					/^ifrs-full_Liabilities$/i,
+					/부채총계/,
+				]),
 				equity: dartAccountValue(list, [/Equity/i, /자본총계/]),
 				capitalStock: dartAccountValue(list, [/IssuedCapital/i, /자본금/]),
-				cash: dartAccountValue(list, [/CashAndCashEquivalents/i, /현금및현금성자산/, /현금 및 현금성자산/]),
-				operatingCashFlow: dartAccountValue(list, [/CashFlowsFromUsedInOperatingActivities/i, /영업활동.*현금흐름/]),
-				investingCashFlow: dartAccountValue(list, [/CashFlowsFromUsedInInvestingActivities/i, /투자활동.*현금흐름/]),
-				financingCashFlow: dartAccountValue(list, [/CashFlowsFromUsedInFinancingActivities/i, /재무활동.*현금흐름/]),
+				cash: dartAccountValue(list, [
+					/CashAndCashEquivalents/i,
+					/현금및현금성자산/,
+					/현금 및 현금성자산/,
+				]),
+				operatingCashFlow: dartAccountValue(list, [
+					/CashFlowsFromUsedInOperatingActivities/i,
+					/영업활동.*현금흐름/,
+				]),
+				investingCashFlow: dartAccountValue(list, [
+					/CashFlowsFromUsedInInvestingActivities/i,
+					/투자활동.*현금흐름/,
+				]),
+				financingCashFlow: dartAccountValue(list, [
+					/CashFlowsFromUsedInFinancingActivities/i,
+					/재무활동.*현금흐름/,
+				]),
 			};
-			if (!Object.values(row).some((value) => typeof value === "number" && Number.isFinite(value))) continue;
-			if (report.code === "11011") annual.push(row); else quarterly.push(row);
+			if (
+				!Object.values(row).some(
+					(value) => typeof value === "number" && Number.isFinite(value),
+				)
+			)
+				continue;
+			if (report.code === "11011") annual.push(row);
+			else quarterly.push(row);
 		}
 	}
 	annual.sort((a, b) => String(b.period).localeCompare(String(a.period)));
 	quarterly.sort((a, b) => String(b.period).localeCompare(String(a.period)));
 	const latest = annual[0] ?? quarterly[0];
 	return {
-		annual: annual.slice(0, 5), yearly: annual.slice(0, 5),
-		quarterly: quarterly.slice(0, 8), quarters: quarterly.slice(0, 8),
-		ratios: { debtRatio: latest?.liabilities != null && latest?.equity ? (latest.liabilities / latest.equity) * 100 : null },
-		source: "OPEN_DART", updatedAt: new Date().toISOString(),
+		annual: annual.slice(0, 5),
+		yearly: annual.slice(0, 5),
+		quarterly: quarterly.slice(0, 8),
+		quarters: quarterly.slice(0, 8),
+		ratios: {
+			debtRatio:
+				latest?.liabilities != null && latest?.equity
+					? (latest.liabilities / latest.equity) * 100
+					: null,
+		},
+		source: "OPEN_DART",
+		updatedAt: new Date().toISOString(),
 	};
 }
 
@@ -591,7 +717,14 @@ function secFactUnits(data: any, tags: string[]) {
 
 function secFactValueFor(data: any, tags: string[], end: string, form: string) {
 	for (const tag of tags) {
-		const matches = secFactUnits(data, [tag]).filter((item) => String(item?.end ?? "") === end && String(item?.form ?? "") === form).sort((a, b) => String(b?.filed ?? "").localeCompare(String(a?.filed ?? "")));
+		const matches = secFactUnits(data, [tag])
+			.filter(
+				(item) =>
+					String(item?.end ?? "") === end && String(item?.form ?? "") === form,
+			)
+			.sort((a, b) =>
+				String(b?.filed ?? "").localeCompare(String(a?.filed ?? "")),
+			);
 		const value = financialNumber(matches[0]?.val);
 		if (value != null) return value;
 	}
@@ -600,45 +733,134 @@ function secFactValueFor(data: any, tags: string[], end: string, form: string) {
 
 async function fetchSecFinancials(ticker: string) {
 	const cik = await getSecCik(ticker);
-	if (!cik) return { annual: [], quarterly: [], ratios: {}, source: "SEC_COMPANYFACTS", updatedAt: new Date().toISOString() };
-	const response = await fetch(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, { headers: secHeaders() });
+	if (!cik)
+		return {
+			annual: [],
+			quarterly: [],
+			ratios: {},
+			source: "SEC_COMPANYFACTS",
+			updatedAt: new Date().toISOString(),
+		};
+	const response = await fetch(
+		`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`,
+		{ headers: secHeaders() },
+	);
 	if (!response.ok) throw new Error("SEC_COMPANYFACTS_HTTP_" + response.status);
 	const data: any = await response.json();
-	const revenueTags = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"];
-	const seed = secFactUnits(data, revenueTags).filter((item) => ["10-K", "10-Q"].includes(String(item?.form ?? "")) && item?.end);
-	const periods = [...new Map(seed.map((item) => [`${item.form}:${item.end}`, { end: String(item.end), form: String(item.form), fy: Number(item.fy), fp: String(item.fp ?? "") }])).values()]
+	const revenueTags = [
+		"Revenues",
+		"RevenueFromContractWithCustomerExcludingAssessedTax",
+		"SalesRevenueNet",
+	];
+	const seed = secFactUnits(data, revenueTags).filter(
+		(item) => ["10-K", "10-Q"].includes(String(item?.form ?? "")) && item?.end,
+	);
+	const periods = [
+		...new Map(
+			seed.map((item) => [
+				`${item.form}:${item.end}`,
+				{
+					end: String(item.end),
+					form: String(item.form),
+					fy: Number(item.fy),
+					fp: String(item.fp ?? ""),
+				},
+			]),
+		).values(),
+	]
 		.filter((item: any) => Date.parse(item.end) <= Date.now())
 		.sort((a: any, b: any) => b.end.localeCompare(a.end));
 	const tags = {
 		revenue: revenueTags,
 		operatingIncome: ["OperatingIncomeLoss"],
 		netIncome: ["NetIncomeLoss", "ProfitLoss"],
-		assets: ["Assets"], liabilities: ["Liabilities"],
-		equity: ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
-		capitalStock: ["CommonStocksIncludingAdditionalPaidInCapital", "CommonStockValue", "AdditionalPaidInCapital"],
-		cash: ["CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+		assets: ["Assets"],
+		liabilities: ["Liabilities"],
+		equity: [
+			"StockholdersEquity",
+			"StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+		],
+		capitalStock: [
+			"CommonStocksIncludingAdditionalPaidInCapital",
+			"CommonStockValue",
+			"AdditionalPaidInCapital",
+		],
+		cash: [
+			"CashAndCashEquivalentsAtCarryingValue",
+			"CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+		],
 		operatingCashFlow: ["NetCashProvidedByUsedInOperatingActivities"],
 		investingCashFlow: ["NetCashProvidedByUsedInInvestingActivities"],
 		financingCashFlow: ["NetCashProvidedByUsedInFinancingActivities"],
 	};
 	const build = (period: any) => ({
-		period: period.end.slice(0, 7).replace("-", "."), periodLabel: `${period.fy || period.end.slice(0,4)} ${period.fp || (period.form === "10-K" ? "연간" : "분기")}`,
+		period: period.end.slice(0, 7).replace("-", "."),
+		periodLabel: `${period.fy || period.end.slice(0, 4)} ${period.fp || (period.form === "10-K" ? "연간" : "분기")}`,
 		revenue: secFactValueFor(data, tags.revenue, period.end, period.form),
-		operatingIncome: secFactValueFor(data, tags.operatingIncome, period.end, period.form),
+		operatingIncome: secFactValueFor(
+			data,
+			tags.operatingIncome,
+			period.end,
+			period.form,
+		),
 		netIncome: secFactValueFor(data, tags.netIncome, period.end, period.form),
 		assets: secFactValueFor(data, tags.assets, period.end, period.form),
-		liabilities: secFactValueFor(data, tags.liabilities, period.end, period.form),
+		liabilities: secFactValueFor(
+			data,
+			tags.liabilities,
+			period.end,
+			period.form,
+		),
 		equity: secFactValueFor(data, tags.equity, period.end, period.form),
-		capitalStock: secFactValueFor(data, tags.capitalStock, period.end, period.form),
+		capitalStock: secFactValueFor(
+			data,
+			tags.capitalStock,
+			period.end,
+			period.form,
+		),
 		cash: secFactValueFor(data, tags.cash, period.end, period.form),
-		operatingCashFlow: secFactValueFor(data, tags.operatingCashFlow, period.end, period.form),
-		investingCashFlow: secFactValueFor(data, tags.investingCashFlow, period.end, period.form),
-		financingCashFlow: secFactValueFor(data, tags.financingCashFlow, period.end, period.form),
+		operatingCashFlow: secFactValueFor(
+			data,
+			tags.operatingCashFlow,
+			period.end,
+			period.form,
+		),
+		investingCashFlow: secFactValueFor(
+			data,
+			tags.investingCashFlow,
+			period.end,
+			period.form,
+		),
+		financingCashFlow: secFactValueFor(
+			data,
+			tags.financingCashFlow,
+			period.end,
+			period.form,
+		),
 	});
-	const annual = periods.filter((item: any) => item.form === "10-K").slice(0, 5).map(build);
-	const quarterly = periods.filter((item: any) => item.form === "10-Q").slice(0, 8).map(build);
+	const annual = periods
+		.filter((item: any) => item.form === "10-K")
+		.slice(0, 5)
+		.map(build);
+	const quarterly = periods
+		.filter((item: any) => item.form === "10-Q")
+		.slice(0, 8)
+		.map(build);
 	const latest = annual[0] ?? quarterly[0];
-	return { annual, yearly: annual, quarterly, quarters: quarterly, ratios: { debtRatio: latest?.liabilities != null && latest?.equity ? (latest.liabilities / latest.equity) * 100 : null }, source: "SEC_COMPANYFACTS", updatedAt: new Date().toISOString() };
+	return {
+		annual,
+		yearly: annual,
+		quarterly,
+		quarters: quarterly,
+		ratios: {
+			debtRatio:
+				latest?.liabilities != null && latest?.equity
+					? (latest.liabilities / latest.equity) * 100
+					: null,
+		},
+		source: "SEC_COMPANYFACTS",
+		updatedAt: new Date().toISOString(),
+	};
 }
 
 async function fetchFinancials(ticker: string) {
@@ -659,11 +881,14 @@ async function fetchFinancials(ticker: string) {
 			yearly: raw.annual,
 			quarters: raw.quarterly,
 			ratios: {
-				roe: financialNumber(naverRatios.roe) ?? (equity ? (netIncome / equity) * 100 : null),
+				roe:
+					financialNumber(naverRatios.roe) ??
+					(equity ? (netIncome / equity) * 100 : null),
 				debtRatio: equity ? (liabilities / equity) * 100 : null,
 				per: financialNumber(naverRatios.per),
 				pbr: financialNumber(naverRatios.pbr),
-				psr: marketCap > 0 && latestRevenue > 0 ? marketCap / latestRevenue : null,
+				psr:
+					marketCap > 0 && latestRevenue > 0 ? marketCap / latestRevenue : null,
 			},
 			marketCap: marketCap || null,
 			source: "OPEN_DART",
@@ -752,7 +977,8 @@ async function fetchGoogleNews(ticker: string, allHistory = false) {
 	const normalized = (title: string, source: string) => {
 		const suffix = source ? " - " + source.toLowerCase() : "";
 		let value = title.toLowerCase().replace(/\s+/g, " ").trim();
-		if (suffix && value.endsWith(suffix)) value = value.slice(0, -suffix.length);
+		if (suffix && value.endsWith(suffix))
+			value = value.slice(0, -suffix.length);
 		return value
 			.replace(/\[[^\]]+\]|\([^)]*\)/g, " ")
 			.replace(/[^0-9a-z가-힣]+/g, "")
@@ -780,7 +1006,8 @@ async function fetchGoogleNews(ticker: string, allHistory = false) {
 	for (const item of items) {
 		const key = normalized(item.title, item.source) || item.url;
 		const existing = grouped.get(key);
-		if (existing) existing.relatedCount = Number(existing.relatedCount ?? 1) + 1;
+		if (existing)
+			existing.relatedCount = Number(existing.relatedCount ?? 1) + 1;
 		else grouped.set(key, { ...item, relatedCount: 1 });
 	}
 
@@ -844,7 +1071,11 @@ const autoTradeJournalFile = path.resolve(
 );
 let autoTradePositionsLoaded = false;
 
-function autoTradePositionKey(memberId: string, market: "KR" | "US", ticker: string) {
+function autoTradePositionKey(
+	memberId: string,
+	market: "KR" | "US",
+	ticker: string,
+) {
 	return `${memberId}:${market}:${ticker}`;
 }
 
@@ -863,15 +1094,19 @@ async function ensureAutoTradePositionsLoaded() {
 			const ticker = normalizeTicker(position.ticker);
 			const market: "KR" | "US" = position.market === "US" ? "US" : "KR";
 			const currency: "KRW" | "USD" = market === "US" ? "USD" : "KRW";
-			const exchange = market === "US" && ["NASDAQ", "NYSE", "AMEX"].includes(String(position.exchange))
-				? position.exchange as KiwoomUsExchange
-				: null;
+			const exchange =
+				market === "US" &&
+				["NASDAQ", "NYSE", "AMEX"].includes(String(position.exchange))
+					? (position.exchange as KiwoomUsExchange)
+					: null;
 			const quantity = Math.trunc(Number(position.quantity));
 			const entryPrice = Number(position.entryPrice);
 			const stopPrice = Number(position.stopPrice);
 			const targetPrice = Number(position.targetPrice);
 			if (
-				(market === "KR" ? /^\d{6}$/.test(ticker) : /^[A-Z][A-Z0-9.-]{0,11}$/.test(ticker)) &&
+				(market === "KR"
+					? /^\d{6}$/.test(ticker)
+					: /^[A-Z][A-Z0-9.-]{0,11}$/.test(ticker)) &&
 				(market === "KR" || exchange !== null) &&
 				quantity > 0 &&
 				entryPrice > 0 &&
@@ -890,11 +1125,19 @@ async function ensureAutoTradePositionsLoaded() {
 					stopPrice,
 					targetPrice,
 					probability: Number(position.probability ?? 0),
-					reasons: Array.isArray(position.reasons) ? position.reasons.map(String) : [],
-					journalId: String(position.journalId ?? `${position.openedAt ?? "legacy"}:${ticker}`),
+					reasons: Array.isArray(position.reasons)
+						? position.reasons.map(String)
+						: [],
+					journalId: String(
+						position.journalId ?? `${position.openedAt ?? "legacy"}:${ticker}`,
+					),
 					openedAt: String(position.openedAt ?? new Date().toISOString()),
-					exitSignalReason: position.exitSignalReason ? String(position.exitSignalReason) : null,
-					exitSignalAt: position.exitSignalAt ? String(position.exitSignalAt) : null,
+					exitSignalReason: position.exitSignalReason
+						? String(position.exitSignalReason)
+						: null,
+					exitSignalAt: position.exitSignalAt
+						? String(position.exitSignalAt)
+						: null,
 				});
 			}
 		}
@@ -905,20 +1148,24 @@ async function ensureAutoTradePositionsLoaded() {
 		const parsed = JSON.parse(await readFile(autoTradeJournalFile, "utf8"));
 		autoTradeJournal = Array.isArray(parsed)
 			? parsed.slice(-500).flatMap((raw) => {
-				const entry = raw as Partial<AutoTradeJournalEntry>;
-				const memberId = String(entry.memberId ?? "").trim();
-				if (!memberId) return [];
-				const market: "KR" | "US" = entry.market === "US" ? "US" : "KR";
-				return [{
-					...entry,
-					memberId,
-					market,
-					currency: market === "US" ? "USD" : "KRW",
-					exchange: market === "US" && ["NASDAQ", "NYSE", "AMEX"].includes(String(entry.exchange))
-						? entry.exchange as KiwoomUsExchange
-						: null,
-				}] as AutoTradeJournalEntry[];
-			})
+					const entry = raw as Partial<AutoTradeJournalEntry>;
+					const memberId = String(entry.memberId ?? "").trim();
+					if (!memberId) return [];
+					const market: "KR" | "US" = entry.market === "US" ? "US" : "KR";
+					return [
+						{
+							...entry,
+							memberId,
+							market,
+							currency: market === "US" ? "USD" : "KRW",
+							exchange:
+								market === "US" &&
+								["NASDAQ", "NYSE", "AMEX"].includes(String(entry.exchange))
+									? (entry.exchange as KiwoomUsExchange)
+									: null,
+						},
+					] as AutoTradeJournalEntry[];
+				})
 			: [];
 	} catch {
 		autoTradeJournal = [];
@@ -959,7 +1206,9 @@ function marketTimeParts(timeZone: string) {
 
 function marketOpenNow(market: "KR" | "US") {
 	if (process.env.KIWOOM_AUTO_TRADE_ALLOW_OFF_HOURS === "true") return true;
-	const parts = marketTimeParts(market === "US" ? "America/New_York" : "Asia/Seoul");
+	const parts = marketTimeParts(
+		market === "US" ? "America/New_York" : "Asia/Seoul",
+	);
 	if (["Sat", "Sun"].includes(parts.weekday)) return false;
 	const minutes = Number(parts.hour) * 60 + Number(parts.minute);
 	return market === "US"
@@ -967,7 +1216,10 @@ function marketOpenNow(market: "KR" | "US") {
 		: minutes >= 9 * 60 && minutes <= 15 * 60 + 30;
 }
 
-function marketDateString(market: "KR" | "US", value: Date | string = new Date()) {
+function marketDateString(
+	market: "KR" | "US",
+	value: Date | string = new Date(),
+) {
 	const date = value instanceof Date ? value : new Date(value);
 	return new Intl.DateTimeFormat("en-CA", {
 		timeZone: market === "US" ? "America/New_York" : "Asia/Seoul",
@@ -977,12 +1229,24 @@ function marketDateString(market: "KR" | "US", value: Date | string = new Date()
 	}).format(date);
 }
 
-function normalizeUsExchange(value: unknown, ticker: string): KiwoomUsExchange | null {
-	const normalized = String(value ?? "").trim().toUpperCase();
-	if (normalized === "NASDAQ" || normalized === "NASD" || normalized === "ND") return "NASDAQ";
+function normalizeUsExchange(
+	value: unknown,
+	ticker: string,
+): KiwoomUsExchange | null {
+	const normalized = String(value ?? "")
+		.trim()
+		.toUpperCase();
+	if (normalized === "NASDAQ" || normalized === "NASD" || normalized === "ND")
+		return "NASDAQ";
 	if (normalized === "NYSE" || normalized === "NY") return "NYSE";
-	if (normalized === "AMEX" || normalized === "NYSE AMERICAN" || normalized === "NA") return "AMEX";
-	if (["AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA"].includes(ticker)) return "NASDAQ";
+	if (
+		normalized === "AMEX" ||
+		normalized === "NYSE AMERICAN" ||
+		normalized === "NA"
+	)
+		return "AMEX";
+	if (["AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA"].includes(ticker))
+		return "NASDAQ";
 	return null;
 }
 
@@ -1005,8 +1269,15 @@ interface AutoTradeApprovalPlan {
 		takeProfitPercent: number;
 	};
 	order: {
-		ticker: string; name: string; market: "KR" | "US"; currency: "KRW" | "USD";
-		quantity: number; currentPrice: number; estimatedAmount: number; stopPrice: number; targetPrice: number;
+		ticker: string;
+		name: string;
+		market: "KR" | "US";
+		currency: "KRW" | "USD";
+		quantity: number;
+		currentPrice: number;
+		estimatedAmount: number;
+		stopPrice: number;
+		targetPrice: number;
 	};
 }
 const autoTradeApprovalPlans = new Map<string, AutoTradeApprovalPlan>();
@@ -1017,11 +1288,22 @@ interface AutoTradeCloseApprovalPlan {
 	expiresAt: number;
 	positionKey: string;
 	order: {
-		ticker: string; name: string; market: "KR" | "US"; currency: "KRW" | "USD";
-		quantity: number; currentPrice: number; estimatedAmount: number; stopPrice: number; targetPrice: number; reason: string;
+		ticker: string;
+		name: string;
+		market: "KR" | "US";
+		currency: "KRW" | "USD";
+		quantity: number;
+		currentPrice: number;
+		estimatedAmount: number;
+		stopPrice: number;
+		targetPrice: number;
+		reason: string;
 	};
 }
-const autoTradeCloseApprovalPlans = new Map<string, AutoTradeCloseApprovalPlan>();
+const autoTradeCloseApprovalPlans = new Map<
+	string,
+	AutoTradeCloseApprovalPlan
+>();
 
 function cleanupAutoTradeApprovalPlans() {
 	const now = Date.now();
@@ -1033,204 +1315,431 @@ function cleanupAutoTradeApprovalPlans() {
 	}
 }
 
-function validateRealOrderAccess(req: AuthenticatedRequest): { ok: true } | { ok: false; status: number; message: string } {
+function validateRealOrderAccess(
+	req: AuthenticatedRequest,
+): { ok: true } | { ok: false; status: number; message: string } {
 	const enabled = process.env.KIWOOM_AUTO_TRADE_ENABLED === "true";
-	const realMode = String(process.env.KIWOOM_MODE ?? "").trim().toLowerCase() === "real";
+	const realMode =
+		String(process.env.KIWOOM_MODE ?? "")
+			.trim()
+			.toLowerCase() === "real";
 	const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
 	const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
-	if (!enabled) return { ok: false, status: 403, message: "서버의 실제 자동매매 기능이 꺼져 있습니다." };
-	if (!realMode) return { ok: false, status: 409, message: "실제 주문은 KIWOOM_MODE=real 설정이 필요합니다." };
-	if (!configuredKey || suppliedKey !== configuredKey) return { ok: false, status: 401, message: "자동매매 실행키가 올바르지 않습니다." };
-	if (!req.member?.id) return { ok: false, status: 401, message: "로그인이 필요합니다." };
+	if (!enabled)
+		return {
+			ok: false,
+			status: 403,
+			message: "서버의 실제 자동매매 기능이 꺼져 있습니다.",
+		};
+	if (!realMode)
+		return {
+			ok: false,
+			status: 409,
+			message: "실제 주문은 KIWOOM_MODE=real 설정이 필요합니다.",
+		};
+	if (!configuredKey || suppliedKey !== configuredKey)
+		return {
+			ok: false,
+			status: 401,
+			message: "자동매매 실행키가 올바르지 않습니다.",
+		};
+	if (!req.member?.id)
+		return { ok: false, status: 401, message: "로그인이 필요합니다." };
 	return { ok: true };
 }
 
 // POST /api/stocks/auto-trade/plan — 실제 주문은 하지 않고 10분짜리 일회성 승인계획만 만듭니다.
 router.post("/auto-trade/plan", async (req: AuthenticatedRequest, res) => {
 	const enabled = process.env.KIWOOM_AUTO_TRADE_ENABLED === "true";
-	const realMode = String(process.env.KIWOOM_MODE ?? "").trim().toLowerCase() === "real";
+	const realMode =
+		String(process.env.KIWOOM_MODE ?? "")
+			.trim()
+			.toLowerCase() === "real";
 	const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
 	const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
-	if (!enabled) return res.status(403).json({ ok: false, message: "서버의 실제 자동매매 기능이 꺼져 있습니다." });
-	if (!realMode) return res.status(409).json({ ok: false, message: "실제 주문계획은 KIWOOM_MODE=real 설정이 필요합니다." });
-	if (!configuredKey || suppliedKey !== configuredKey) return res.status(401).json({ ok: false, message: "자동매매 실행키가 올바르지 않습니다." });
-	if (!req.member?.id) return res.status(401).json({ ok: false, message: "로그인이 필요합니다." });
+	if (!enabled)
+		return res
+			.status(403)
+			.json({
+				ok: false,
+				message: "서버의 실제 자동매매 기능이 꺼져 있습니다.",
+			});
+	if (!realMode)
+		return res
+			.status(409)
+			.json({
+				ok: false,
+				message: "실제 주문계획은 KIWOOM_MODE=real 설정이 필요합니다.",
+			});
+	if (!configuredKey || suppliedKey !== configuredKey)
+		return res
+			.status(401)
+			.json({ ok: false, message: "자동매매 실행키가 올바르지 않습니다." });
+	if (!req.member?.id)
+		return res.status(401).json({ ok: false, message: "로그인이 필요합니다." });
 
 	const candidates = Array.isArray(req.body?.candidates)
-		? [...req.body.candidates].sort((a, b) => Number(b?.probability ?? b?.score ?? 0) - Number(a?.probability ?? a?.score ?? 0)).slice(0, 1)
+		? [...req.body.candidates]
+				.sort(
+					(a, b) =>
+						Number(b?.probability ?? b?.score ?? 0) -
+						Number(a?.probability ?? a?.score ?? 0),
+				)
+				.slice(0, 1)
 		: [];
 	const candidate = candidates[0];
-	if (!candidate) return res.status(400).json({ ok: false, message: "승인할 주문 후보가 없습니다." });
+	if (!candidate)
+		return res
+			.status(400)
+			.json({ ok: false, message: "승인할 주문 후보가 없습니다." });
 	const ticker = normalizeTicker(candidate.ticker);
 	const market: "KR" | "US" = candidate.market === "US" ? "US" : "KR";
 	const currency: "KRW" | "USD" = market === "US" ? "USD" : "KRW";
-	const investmentPerTrade = Math.max(1, Math.min(1_000_000, Math.round(Number(req.body?.investmentPerTrade ?? 0))));
-	const stopLossPercent = Math.min(20, Math.max(0.1, Number(req.body?.stopLossPercent ?? 3)));
-	const takeProfitPercent = Math.min(100, Math.max(0.1, Number(req.body?.takeProfitPercent ?? 5)));
+	const investmentPerTrade = Math.max(
+		1,
+		Math.min(1_000_000, Math.round(Number(req.body?.investmentPerTrade ?? 0))),
+	);
+	const stopLossPercent = Math.min(
+		20,
+		Math.max(0.1, Number(req.body?.stopLossPercent ?? 3)),
+	);
+	const takeProfitPercent = Math.min(
+		100,
+		Math.max(0.1, Number(req.body?.takeProfitPercent ?? 5)),
+	);
 	const quote = await MarketDataService.getQuoteRow(ticker);
 	const currentPrice = Math.abs(Number(quote?.price ?? 0));
-	if (!Number.isFinite(currentPrice) || currentPrice <= 0) return res.status(409).json({ ok: false, message: "주문계획 생성 전 현재가를 확인하지 못했습니다." });
+	if (!Number.isFinite(currentPrice) || currentPrice <= 0)
+		return res
+			.status(409)
+			.json({
+				ok: false,
+				message: "주문계획 생성 전 현재가를 확인하지 못했습니다.",
+			});
 	const quantity = Math.floor(investmentPerTrade / currentPrice);
-	if (quantity < 1) return res.status(409).json({ ok: false, message: "설정 주문금액으로 1주 이상 주문할 수 없습니다." });
+	if (quantity < 1)
+		return res
+			.status(409)
+			.json({
+				ok: false,
+				message: "설정 주문금액으로 1주 이상 주문할 수 없습니다.",
+			});
 	const stopPrice = currentPrice * (1 - stopLossPercent / 100);
 	const targetPrice = currentPrice * (1 + takeProfitPercent / 100);
 	cleanupAutoTradeApprovalPlans();
 	const token = randomUUID();
 	const expiresAt = Date.now() + 10 * 60_000;
 	const plan: AutoTradeApprovalPlan = {
-		token, memberId: req.member.id, expiresAt,
-		body: { candidates, investmentPerTrade, stopLossPercent, takeProfitPercent },
-		order: { ticker, name: String(candidate.name ?? ticker), market, currency, quantity, currentPrice, estimatedAmount: quantity * currentPrice, stopPrice, targetPrice },
-	};
-	autoTradeApprovalPlans.set(token, plan);
-	return res.json({ ok: true, approvalToken: token, expiresAt: new Date(expiresAt).toISOString(), order: plan.order, message: "주문 내용을 확인한 뒤 10분 안에 한 번만 승인할 수 있습니다." });
-});
-
-// POST /api/stocks/auto-trade/close-plan — 보유 전량 매도 계획만 생성하고 주문하지 않습니다.
-router.post("/auto-trade/close-plan", async (req: AuthenticatedRequest, res) => {
-	const access = validateRealOrderAccess(req);
-	if (!access.ok) return res.status(access.status).json({ ok: false, message: access.message });
-	await ensureAutoTradePositionsLoaded();
-	const memberId = req.member!.id;
-	const ticker = normalizeTicker(req.body?.ticker);
-	const market: "KR" | "US" = req.body?.market === "US" ? "US" : "KR";
-	const positionKey = autoTradePositionKey(memberId, market, ticker);
-	const position = autoTradePositions.get(positionKey);
-	if (!position) return res.status(404).json({ ok: false, message: "현재 회원의 보유 자동매매 포지션을 찾지 못했습니다." });
-	if (!marketOpenNow(market)) return res.status(409).json({ ok: false, message: market === "US" ? "미국 정규장 주문 가능 시간이 아닙니다." : "국내 정규장 주문 가능 시간이 아닙니다." });
-	const quote = await MarketDataService.getQuoteRow(ticker);
-	const currentPrice = Math.abs(Number(quote?.price ?? 0));
-	if (!Number.isFinite(currentPrice) || currentPrice <= 0) return res.status(409).json({ ok: false, message: "매도계획 생성 전 현재가를 확인하지 못했습니다." });
-	const reason = currentPrice <= position.stopPrice
-		? "손절가 도달"
-		: currentPrice >= position.targetPrice
-			? "목표가 도달"
-			: "사용자 수동 청산";
-	cleanupAutoTradeApprovalPlans();
-	const token = randomUUID();
-	const expiresAt = Date.now() + 10 * 60_000;
-	const plan: AutoTradeCloseApprovalPlan = {
 		token,
-		memberId,
+		memberId: req.member.id,
 		expiresAt,
-		positionKey,
+		body: {
+			candidates,
+			investmentPerTrade,
+			stopLossPercent,
+			takeProfitPercent,
+		},
 		order: {
-			ticker: position.ticker,
-			name: position.name,
-			market: position.market,
-			currency: position.currency,
-			quantity: position.quantity,
+			ticker,
+			name: String(candidate.name ?? ticker),
+			market,
+			currency,
+			quantity,
 			currentPrice,
-			estimatedAmount: currentPrice * position.quantity,
-			stopPrice: position.stopPrice,
-			targetPrice: position.targetPrice,
-			reason,
+			estimatedAmount: quantity * currentPrice,
+			stopPrice,
+			targetPrice,
 		},
 	};
-	autoTradeCloseApprovalPlans.set(token, plan);
+	autoTradeApprovalPlans.set(token, plan);
 	return res.json({
 		ok: true,
 		approvalToken: token,
 		expiresAt: new Date(expiresAt).toISOString(),
 		order: plan.order,
-		message: "매도 내용을 확인한 뒤 10분 안에 한 번만 승인할 수 있습니다.",
+		message: "주문 내용을 확인한 뒤 10분 안에 한 번만 승인할 수 있습니다.",
 	});
 });
 
-// POST /api/stocks/auto-trade/close-execute — 일회성 승인 토큰이 있을 때만 전량 매도합니다.
-router.post("/auto-trade/close-execute", async (req: AuthenticatedRequest, res) => {
-	cleanupAutoTradeApprovalPlans();
-	const approvalToken = String(req.body?.approvalToken ?? "").trim();
-	const approval = autoTradeCloseApprovalPlans.get(approvalToken);
-	if (!approval || approval.expiresAt <= Date.now() || approval.memberId !== req.member?.id) {
-		return res.status(409).json({ ok: false, message: "매도 승인이 없거나 만료되었습니다. 매도계획을 다시 확인해 주세요." });
-	}
-	// 같은 토큰의 중복 주문을 막기 위해 주문 검사 시작 전에 폐기합니다.
-	autoTradeCloseApprovalPlans.delete(approvalToken);
-	const access = validateRealOrderAccess(req);
-	if (!access.ok) return res.status(access.status).json({ ok: false, message: access.message });
-	await ensureAutoTradePositionsLoaded();
-	const position = autoTradePositions.get(approval.positionKey);
-	if (!position || position.memberId !== req.member!.id) {
-		return res.status(404).json({ ok: false, message: "청산할 현재 회원의 포지션이 없습니다." });
-	}
-	if (!marketOpenNow(position.market)) {
-		return res.status(409).json({ ok: false, message: position.market === "US" ? "미국 정규장 주문 가능 시간이 아닙니다." : "국내 정규장 주문 가능 시간이 아닙니다." });
-	}
-	const quote = await MarketDataService.getQuoteRow(position.ticker);
-	const currentPrice = Math.abs(Number(quote?.price ?? 0));
-	if (!Number.isFinite(currentPrice) || currentPrice <= 0) return res.status(409).json({ ok: false, message: "매도 직전 현재가를 확인하지 못했습니다." });
+// POST /api/stocks/auto-trade/close-plan — 보유 전량 매도 계획만 생성하고 주문하지 않습니다.
+router.post(
+	"/auto-trade/close-plan",
+	async (req: AuthenticatedRequest, res) => {
+		const access = validateRealOrderAccess(req);
+		if (!access.ok)
+			return res
+				.status(access.status)
+				.json({ ok: false, message: access.message });
+		await ensureAutoTradePositionsLoaded();
+		const memberId = req.member!.id;
+		const ticker = normalizeTicker(req.body?.ticker);
+		const market: "KR" | "US" = req.body?.market === "US" ? "US" : "KR";
+		const positionKey = autoTradePositionKey(memberId, market, ticker);
+		const position = autoTradePositions.get(positionKey);
+		if (!position)
+			return res
+				.status(404)
+				.json({
+					ok: false,
+					message: "현재 회원의 보유 자동매매 포지션을 찾지 못했습니다.",
+				});
+		if (!marketOpenNow(market))
+			return res
+				.status(409)
+				.json({
+					ok: false,
+					message:
+						market === "US"
+							? "미국 정규장 주문 가능 시간이 아닙니다."
+							: "국내 정규장 주문 가능 시간이 아닙니다.",
+				});
+		const quote = await MarketDataService.getQuoteRow(ticker);
+		const currentPrice = Math.abs(Number(quote?.price ?? 0));
+		if (!Number.isFinite(currentPrice) || currentPrice <= 0)
+			return res
+				.status(409)
+				.json({
+					ok: false,
+					message: "매도계획 생성 전 현재가를 확인하지 못했습니다.",
+				});
+		const reason =
+			currentPrice <= position.stopPrice
+				? "손절가 도달"
+				: currentPrice >= position.targetPrice
+					? "목표가 도달"
+					: "사용자 수동 청산";
+		cleanupAutoTradeApprovalPlans();
+		const token = randomUUID();
+		const expiresAt = Date.now() + 10 * 60_000;
+		const plan: AutoTradeCloseApprovalPlan = {
+			token,
+			memberId,
+			expiresAt,
+			positionKey,
+			order: {
+				ticker: position.ticker,
+				name: position.name,
+				market: position.market,
+				currency: position.currency,
+				quantity: position.quantity,
+				currentPrice,
+				estimatedAmount: currentPrice * position.quantity,
+				stopPrice: position.stopPrice,
+				targetPrice: position.targetPrice,
+				reason,
+			},
+		};
+		autoTradeCloseApprovalPlans.set(token, plan);
+		return res.json({
+			ok: true,
+			approvalToken: token,
+			expiresAt: new Date(expiresAt).toISOString(),
+			order: plan.order,
+			message: "매도 내용을 확인한 뒤 10분 안에 한 번만 승인할 수 있습니다.",
+		});
+	},
+);
 
-	try {
-		const order = position.market === "US"
-			? await placeKiwoomUsOrder({ ticker: position.ticker, exchange: position.exchange!, side: "sell", quantity: position.quantity, orderType: "market" })
-			: await placeKiwoomDomesticOrder({ ticker: position.ticker, side: "sell", quantity: position.quantity, orderType: "market" });
-		const closedAt = new Date().toISOString();
-		const status: AutoTradeJournalEntry["status"] = currentPrice <= position.stopPrice
-			? "STOP_LOSS"
-			: currentPrice >= position.targetPrice
-				? "TAKE_PROFIT"
-				: "MANUAL_CLOSE";
-		const reason = status === "STOP_LOSS" ? "손절가 도달" : status === "TAKE_PROFIT" ? "목표가 도달" : "사용자 수동 청산";
-		const profitPercent = position.entryPrice > 0 ? ((currentPrice - position.entryPrice) / position.entryPrice) * 100 : 0;
-		const journal = autoTradeJournal.find((entry) => entry.memberId === position.memberId && entry.id === position.journalId);
-		if (journal) {
-			journal.status = status;
-			journal.exitPrice = currentPrice;
-			journal.exitReason = reason;
-			journal.exitAnalysis = `${reason}에 따라 사용자 확인 후 ${position.quantity}주 시장가 매도 주문을 전송했습니다.`;
-			journal.profitPercent = profitPercent;
-			journal.exitOrderNo = order.orderNo ?? null;
-			journal.closedAt = closedAt;
+// POST /api/stocks/auto-trade/close-execute — 일회성 승인 토큰이 있을 때만 전량 매도합니다.
+router.post(
+	"/auto-trade/close-execute",
+	async (req: AuthenticatedRequest, res) => {
+		cleanupAutoTradeApprovalPlans();
+		const approvalToken = String(req.body?.approvalToken ?? "").trim();
+		const approval = autoTradeCloseApprovalPlans.get(approvalToken);
+		if (
+			!approval ||
+			approval.expiresAt <= Date.now() ||
+			approval.memberId !== req.member?.id
+		) {
+			return res
+				.status(409)
+				.json({
+					ok: false,
+					message:
+						"매도 승인이 없거나 만료되었습니다. 매도계획을 다시 확인해 주세요.",
+				});
 		}
-		autoTradePositions.delete(approval.positionKey);
-		await saveAutoTradePositions();
-		await saveAutoTradeJournal();
-		void deliverMemberNotification({
-			memberId: position.memberId,
-			type: "auto_trade",
-			title: `매도 주문 전송 · ${position.name}`,
-			body: `${reason} · ${position.quantity}주 · 기준가 ${formatTradePrice(currentPrice, position.currency)} · 예상 수익률 ${profitPercent >= 0 ? "+" : ""}${profitPercent.toFixed(2)}%`,
-			url: "/auto-trading",
-			app: true,
-			push: true,
-			metadata: { ticker: position.ticker, market: position.market, quantity: position.quantity, currentPrice, reason, orderNo: order.orderNo ?? null },
-		}).catch((error) => console.error("auto trade close notification error:", error));
-		return res.json({ ok: true, ticker: position.ticker, market: position.market, quantity: position.quantity, orderNo: order.orderNo ?? null, currentPrice, reason, profitPercent, message: "사용자 승인에 따라 시장가 매도 주문을 전송했습니다." });
-	} catch (error) {
-		const message = error instanceof Error ? error.message : "키움 매도 주문 전송 실패";
-		void deliverMemberNotification({ memberId: position.memberId, type: "auto_trade", title: `매도 주문 실패 · ${position.name}`, body: message, url: "/auto-trading", app: true, push: true }).catch(() => undefined);
-		return res.status(502).json({ ok: false, message });
-	}
-});
+		// 같은 토큰의 중복 주문을 막기 위해 주문 검사 시작 전에 폐기합니다.
+		autoTradeCloseApprovalPlans.delete(approvalToken);
+		const access = validateRealOrderAccess(req);
+		if (!access.ok)
+			return res
+				.status(access.status)
+				.json({ ok: false, message: access.message });
+		await ensureAutoTradePositionsLoaded();
+		const position = autoTradePositions.get(approval.positionKey);
+		if (!position || position.memberId !== req.member!.id) {
+			return res
+				.status(404)
+				.json({ ok: false, message: "청산할 현재 회원의 포지션이 없습니다." });
+		}
+		if (!marketOpenNow(position.market)) {
+			return res
+				.status(409)
+				.json({
+					ok: false,
+					message:
+						position.market === "US"
+							? "미국 정규장 주문 가능 시간이 아닙니다."
+							: "국내 정규장 주문 가능 시간이 아닙니다.",
+				});
+		}
+		const quote = await MarketDataService.getQuoteRow(position.ticker);
+		const currentPrice = Math.abs(Number(quote?.price ?? 0));
+		if (!Number.isFinite(currentPrice) || currentPrice <= 0)
+			return res
+				.status(409)
+				.json({
+					ok: false,
+					message: "매도 직전 현재가를 확인하지 못했습니다.",
+				});
+
+		try {
+			const order =
+				position.market === "US"
+					? await placeKiwoomUsOrder({
+							ticker: position.ticker,
+							exchange: position.exchange!,
+							side: "sell",
+							quantity: position.quantity,
+							orderType: "market",
+						})
+					: await placeKiwoomDomesticOrder({
+							ticker: position.ticker,
+							side: "sell",
+							quantity: position.quantity,
+							orderType: "market",
+						});
+			const closedAt = new Date().toISOString();
+			const status: AutoTradeJournalEntry["status"] =
+				currentPrice <= position.stopPrice
+					? "STOP_LOSS"
+					: currentPrice >= position.targetPrice
+						? "TAKE_PROFIT"
+						: "MANUAL_CLOSE";
+			const reason =
+				status === "STOP_LOSS"
+					? "손절가 도달"
+					: status === "TAKE_PROFIT"
+						? "목표가 도달"
+						: "사용자 수동 청산";
+			const profitPercent =
+				position.entryPrice > 0
+					? ((currentPrice - position.entryPrice) / position.entryPrice) * 100
+					: 0;
+			const journal = autoTradeJournal.find(
+				(entry) =>
+					entry.memberId === position.memberId &&
+					entry.id === position.journalId,
+			);
+			if (journal) {
+				journal.status = status;
+				journal.exitPrice = currentPrice;
+				journal.exitReason = reason;
+				journal.exitAnalysis = `${reason}에 따라 사용자 확인 후 ${position.quantity}주 시장가 매도 주문을 전송했습니다.`;
+				journal.profitPercent = profitPercent;
+				journal.exitOrderNo = order.orderNo ?? null;
+				journal.closedAt = closedAt;
+			}
+			autoTradePositions.delete(approval.positionKey);
+			await saveAutoTradePositions();
+			await saveAutoTradeJournal();
+			void deliverMemberNotification({
+				memberId: position.memberId,
+				type: "auto_trade",
+				title: `매도 주문 전송 · ${position.name}`,
+				body: `${reason} · ${position.quantity}주 · 기준가 ${formatTradePrice(currentPrice, position.currency)} · 예상 수익률 ${profitPercent >= 0 ? "+" : ""}${profitPercent.toFixed(2)}%`,
+				url: "/auto-trading",
+				app: true,
+				push: true,
+				metadata: {
+					ticker: position.ticker,
+					market: position.market,
+					quantity: position.quantity,
+					currentPrice,
+					reason,
+					orderNo: order.orderNo ?? null,
+				},
+			}).catch((error) =>
+				console.error("auto trade close notification error:", error),
+			);
+			return res.json({
+				ok: true,
+				ticker: position.ticker,
+				market: position.market,
+				quantity: position.quantity,
+				orderNo: order.orderNo ?? null,
+				currentPrice,
+				reason,
+				profitPercent,
+				message: "사용자 승인에 따라 시장가 매도 주문을 전송했습니다.",
+			});
+		} catch (error) {
+			const message =
+				error instanceof Error ? error.message : "키움 매도 주문 전송 실패";
+			void deliverMemberNotification({
+				memberId: position.memberId,
+				type: "auto_trade",
+				title: `매도 주문 실패 · ${position.name}`,
+				body: message,
+				url: "/auto-trading",
+				app: true,
+				push: true,
+			}).catch(() => undefined);
+			return res.status(502).json({ ok: false, message });
+		}
+	},
+);
 
 // POST /api/stocks/auto-trade/execute
 router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 	cleanupAutoTradeApprovalPlans();
 	const approvalToken = String(req.body?.approvalToken ?? "").trim();
 	const approval = autoTradeApprovalPlans.get(approvalToken);
-	if (!approval || approval.expiresAt <= Date.now() || approval.memberId !== req.member?.id) {
-		return res.status(409).json({ ok: false, message: "주문 승인이 없거나 만료되었습니다. 주문계획을 다시 확인해 주세요." });
+	if (
+		!approval ||
+		approval.expiresAt <= Date.now() ||
+		approval.memberId !== req.member?.id
+	) {
+		return res
+			.status(409)
+			.json({
+				ok: false,
+				message:
+					"주문 승인이 없거나 만료되었습니다. 주문계획을 다시 확인해 주세요.",
+			});
 	}
 	// 재사용을 막기 위해 주문 검사를 시작하기 전에 일회성 토큰을 폐기합니다.
 	autoTradeApprovalPlans.delete(approvalToken);
 	const approvedBody = approval.body;
 	const enabled = process.env.KIWOOM_AUTO_TRADE_ENABLED === "true";
-	const realMode = String(process.env.KIWOOM_MODE ?? "").trim().toLowerCase() === "real";
+	const realMode =
+		String(process.env.KIWOOM_MODE ?? "")
+			.trim()
+			.toLowerCase() === "real";
 	const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
 	const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
 
 	if (!enabled) {
-		return res.status(403).json({ ok: false, message: "서버의 실제 자동매매 기능이 꺼져 있습니다." });
+		return res
+			.status(403)
+			.json({
+				ok: false,
+				message: "서버의 실제 자동매매 기능이 꺼져 있습니다.",
+			});
 	}
 	if (!realMode) {
 		return res.status(409).json({
 			ok: false,
-			message: "실제 자동매매는 서버의 KIWOOM_MODE=real 설정과 실전용 App Key가 필요합니다.",
+			message:
+				"실제 자동매매는 서버의 KIWOOM_MODE=real 설정과 실전용 App Key가 필요합니다.",
 		});
 	}
 	if (!configuredKey || suppliedKey !== configuredKey) {
-		return res.status(401).json({ ok: false, message: "자동매매 실행키가 올바르지 않습니다." });
+		return res
+			.status(401)
+			.json({ ok: false, message: "자동매매 실행키가 올바르지 않습니다." });
 	}
 
 	await ensureAutoTradePositionsLoaded();
@@ -1240,12 +1749,23 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 	// 가장 높은 한 종목만 주문 대상으로 사용합니다.
 	const candidates = Array.isArray(approvedBody.candidates)
 		? [...approvedBody.candidates]
-			.sort((a, b) => Number(b?.probability ?? 0) - Number(a?.probability ?? 0))
-			.slice(0, 1)
+				.sort(
+					(a, b) => Number(b?.probability ?? 0) - Number(a?.probability ?? 0),
+				)
+				.slice(0, 1)
 		: [];
-	const investmentPerTrade = Math.max(1, Number(approvedBody.investmentPerTrade ?? 0));
-	const stopLossPercent = Math.min(20, Math.max(0.1, Number(approvedBody.stopLossPercent ?? 3)));
-	const takeProfitPercent = Math.min(100, Math.max(0.1, Number(approvedBody.takeProfitPercent ?? 5)));
+	const investmentPerTrade = Math.max(
+		1,
+		Number(approvedBody.investmentPerTrade ?? 0),
+	);
+	const stopLossPercent = Math.min(
+		20,
+		Math.max(0.1, Number(approvedBody.stopLossPercent ?? 3)),
+	);
+	const takeProfitPercent = Math.min(
+		100,
+		Math.max(0.1, Number(approvedBody.takeProfitPercent ?? 5)),
+	);
 	const minimumProbability = Math.min(
 		99,
 		Math.max(1, Number(process.env.KIWOOM_AUTO_TRADE_MIN_PROBABILITY ?? 70)),
@@ -1256,7 +1776,10 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 	);
 	const minimumDataCompleteness = Math.min(
 		100,
-		Math.max(0, Number(process.env.KIWOOM_AUTO_TRADE_MIN_DATA_COMPLETENESS ?? 45)),
+		Math.max(
+			0,
+			Number(process.env.KIWOOM_AUTO_TRADE_MIN_DATA_COMPLETENESS ?? 45),
+		),
 	);
 	const dailyOrderLimit = Math.max(
 		1,
@@ -1268,9 +1791,8 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 		const ticker = normalizeTicker(candidate?.ticker);
 		const market: "KR" | "US" = candidate?.market === "US" ? "US" : "KR";
 		const currency: "KRW" | "USD" = market === "US" ? "USD" : "KRW";
-		const exchange = market === "US"
-			? normalizeUsExchange(candidate?.exchange, ticker)
-			: null;
+		const exchange =
+			market === "US" ? normalizeUsExchange(candidate?.exchange, ticker) : null;
 		const probability = Number(candidate?.probability ?? 0);
 		const riskScore = Number(candidate?.riskScore ?? 50);
 		const dataCompleteness = Number(candidate?.dataCompleteness ?? 50);
@@ -1278,7 +1800,10 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 		const key = `${memberId}:${day}:${market}:${ticker}:BUY`;
 		const positionKey = autoTradePositionKey(memberId, market, ticker);
 		const ordersPlacedToday = autoTradeJournal.filter(
-			(entry) => entry.memberId === memberId && entry.market === market && marketDateString(market, entry.openedAt) === day,
+			(entry) =>
+				entry.memberId === memberId &&
+				entry.market === market &&
+				marketDateString(market, entry.openedAt) === day,
 		).length;
 
 		if (ordersPlacedToday >= dailyOrderLimit) {
@@ -1292,11 +1817,27 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 		}
 
 		if (market === "KR" && !/^\d{6}$/.test(ticker)) {
-			results.push({ ticker, market, ok: false, skipped: true, message: "국내 종목코드 형식이 올바르지 않습니다." });
+			results.push({
+				ticker,
+				market,
+				ok: false,
+				skipped: true,
+				message: "국내 종목코드 형식이 올바르지 않습니다.",
+			});
 			continue;
 		}
-		if (market === "US" && (!/^[A-Z][A-Z0-9.-]{0,11}$/.test(ticker) || !exchange)) {
-			results.push({ ticker, market, ok: false, skipped: true, message: "미국 종목코드 또는 거래소(NASDAQ/NYSE/AMEX)를 확인할 수 없습니다." });
+		if (
+			market === "US" &&
+			(!/^[A-Z][A-Z0-9.-]{0,11}$/.test(ticker) || !exchange)
+		) {
+			results.push({
+				ticker,
+				market,
+				ok: false,
+				skipped: true,
+				message:
+					"미국 종목코드 또는 거래소(NASDAQ/NYSE/AMEX)를 확인할 수 없습니다.",
+			});
 			continue;
 		}
 		if (!marketOpenNow(market)) {
@@ -1305,7 +1846,10 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 				market,
 				ok: false,
 				skipped: true,
-				message: market === "US" ? "미국 정규장 주문 가능 시간이 아닙니다." : "국내 정규장 주문 가능 시간이 아닙니다.",
+				message:
+					market === "US"
+						? "미국 정규장 주문 가능 시간이 아닙니다."
+						: "국내 정규장 주문 가능 시간이 아닙니다.",
 			});
 			continue;
 		}
@@ -1328,7 +1872,10 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 			});
 			continue;
 		}
-		if (!Number.isFinite(dataCompleteness) || dataCompleteness < minimumDataCompleteness) {
+		if (
+			!Number.isFinite(dataCompleteness) ||
+			dataCompleteness < minimumDataCompleteness
+		) {
 			results.push({
 				ticker,
 				market,
@@ -1339,47 +1886,70 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 			continue;
 		}
 		if (autoTradePositions.has(positionKey)) {
-			results.push({ ticker, ok: true, skipped: true, message: "이미 자동매매로 보유 중인 종목입니다." });
+			results.push({
+				ticker,
+				ok: true,
+				skipped: true,
+				message: "이미 자동매매로 보유 중인 종목입니다.",
+			});
 			continue;
 		}
 		if (autoTradeExecuted.has(key)) {
-			results.push({ ticker, ok: true, skipped: true, message: "오늘 이미 주문한 종목입니다." });
+			results.push({
+				ticker,
+				ok: true,
+				skipped: true,
+				message: "오늘 이미 주문한 종목입니다.",
+			});
 			continue;
 		}
 
 		let price = 0;
 		try {
 			const quote: any = await MarketDataService.getQuoteRow(ticker);
-			price = Math.abs(Number(quote?.price ?? quote?.currentPrice ?? quote?.cur_prc ?? 0));
+			price = Math.abs(
+				Number(quote?.price ?? quote?.currentPrice ?? quote?.cur_prc ?? 0),
+			);
 		} catch {
 			price = 0;
 		}
 		if (!Number.isFinite(price) || price <= 0) {
-			results.push({ ticker, ok: false, skipped: true, message: "주문 직전 현재가를 확인하지 못했습니다." });
+			results.push({
+				ticker,
+				ok: false,
+				skipped: true,
+				message: "주문 직전 현재가를 확인하지 못했습니다.",
+			});
 			continue;
 		}
 
 		const quantity = Math.floor(investmentPerTrade / price);
 		if (quantity < 1) {
-			results.push({ ticker, ok: false, skipped: true, message: "주문금액이 현재가보다 작습니다." });
+			results.push({
+				ticker,
+				ok: false,
+				skipped: true,
+				message: "주문금액이 현재가보다 작습니다.",
+			});
 			continue;
 		}
 
 		try {
-			const order = market === "US"
-				? await placeKiwoomUsOrder({
-					ticker,
-					exchange: exchange!,
-					side: "buy",
-					quantity,
-					orderType: "market",
-				})
-				: await placeKiwoomDomesticOrder({
-					ticker,
-					side: "buy",
-					quantity,
-					orderType: "market",
-				});
+			const order =
+				market === "US"
+					? await placeKiwoomUsOrder({
+							ticker,
+							exchange: exchange!,
+							side: "buy",
+							quantity,
+							orderType: "market",
+						})
+					: await placeKiwoomDomesticOrder({
+							ticker,
+							side: "buy",
+							quantity,
+							orderType: "market",
+						});
 			const stopPrice = price * (1 - stopLossPercent / 100);
 			const targetPrice = price * (1 + takeProfitPercent / 100);
 			const openedAt = new Date().toISOString();
@@ -1442,8 +2012,18 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 				url: "/auto-trading",
 				app: true,
 				push: true,
-				metadata: { ticker, market, quantity, price, stopPrice, targetPrice, orderNo: order.orderNo ?? null },
-			}).catch((error) => console.error("auto trade entry notification error:", error));
+				metadata: {
+					ticker,
+					market,
+					quantity,
+					price,
+					stopPrice,
+					targetPrice,
+					orderNo: order.orderNo ?? null,
+				},
+			}).catch((error) =>
+				console.error("auto trade entry notification error:", error),
+			);
 			results.push({
 				ticker,
 				market,
@@ -1456,8 +2036,17 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 				message: "시장가 매수 주문을 전송했습니다.",
 			});
 		} catch (error) {
-			const message = error instanceof Error ? error.message : "키움 주문 전송 실패";
-			void deliverMemberNotification({ memberId, type: "auto_trade", title: `매수 주문 실패 · ${String(candidate?.name ?? ticker)}`, body: message, url: "/auto-trading", app: true, push: true }).catch(() => undefined);
+			const message =
+				error instanceof Error ? error.message : "키움 주문 전송 실패";
+			void deliverMemberNotification({
+				memberId,
+				type: "auto_trade",
+				title: `매수 주문 실패 · ${String(candidate?.name ?? ticker)}`,
+				body: message,
+				url: "/auto-trading",
+				app: true,
+				push: true,
+			}).catch(() => undefined);
 			results.push({
 				ticker,
 				market,
@@ -1471,7 +2060,10 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 	const completed = results.filter((item) => item.ok && !item.skipped).length;
 	return res.json({
 		ok: completed > 0 || results.every((item) => item.skipped),
-		message: completed > 0 ? `${completed}개 종목 실주문을 전송했습니다.` : "신규 실주문이 전송되지 않았습니다.",
+		message:
+			completed > 0
+				? `${completed}개 종목 실주문을 전송했습니다.`
+				: "신규 실주문이 전송되지 않았습니다.",
 		results,
 	});
 });
@@ -1479,17 +2071,30 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 async function inspectAutoTradePositions(memberId: string) {
 	await ensureAutoTradePositionsLoaded();
 	const results: any[] = [];
-	const memberPositions = [...autoTradePositions.values()].filter((position) => position.memberId === memberId);
+	const memberPositions = [...autoTradePositions.values()].filter(
+		(position) => position.memberId === memberId,
+	);
 	let changed = false;
 	for (const position of memberPositions) {
 		try {
 			const quote = await MarketDataService.getQuoteRow(position.ticker);
 			const currentPrice = Math.abs(Number(quote?.price ?? 0));
 			if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
-				results.push({ ticker: position.ticker, market: position.market, ok: false, skipped: true, message: "현재가 확인 실패" });
+				results.push({
+					ticker: position.ticker,
+					market: position.market,
+					ok: false,
+					skipped: true,
+					message: "현재가 확인 실패",
+				});
 				continue;
 			}
-			const reason = currentPrice <= position.stopPrice ? "손절가 도달" : currentPrice >= position.targetPrice ? "목표가 도달" : "보유 유지";
+			const reason =
+				currentPrice <= position.stopPrice
+					? "손절가 도달"
+					: currentPrice >= position.targetPrice
+						? "목표가 도달"
+						: "보유 유지";
 			if (reason === "보유 유지") {
 				if (position.exitSignalReason) {
 					position.exitSignalReason = null;
@@ -1508,17 +2113,40 @@ async function inspectAutoTradePositions(memberId: string) {
 					url: "/auto-trading",
 					app: true,
 					push: true,
-					metadata: { ticker: position.ticker, market: position.market, currentPrice, stopPrice: position.stopPrice, targetPrice: position.targetPrice, reason },
-				}).catch((error) => console.error("auto trade exit signal notification error:", error));
+					metadata: {
+						ticker: position.ticker,
+						market: position.market,
+						currentPrice,
+						stopPrice: position.stopPrice,
+						targetPrice: position.targetPrice,
+						reason,
+					},
+				}).catch((error) =>
+					console.error("auto trade exit signal notification error:", error),
+				);
 			}
 			results.push({
-				ticker: position.ticker, market: position.market, ok: true, skipped: true, currentPrice,
-				stopPrice: position.stopPrice, targetPrice: position.targetPrice,
+				ticker: position.ticker,
+				market: position.market,
+				ok: true,
+				skipped: true,
+				currentPrice,
+				stopPrice: position.stopPrice,
+				targetPrice: position.targetPrice,
 				approvalRequired: reason !== "보유 유지",
-				message: reason === "보유 유지" ? "손절·목표가 미도달" : `${reason}: 매도 주문은 사용자 승인 전까지 전송하지 않습니다.`,
+				message:
+					reason === "보유 유지"
+						? "손절·목표가 미도달"
+						: `${reason}: 매도 주문은 사용자 승인 전까지 전송하지 않습니다.`,
 			});
 		} catch (error) {
-			results.push({ ticker: position.ticker, market: position.market, ok: false, skipped: true, message: error instanceof Error ? error.message : "감시 실패" });
+			results.push({
+				ticker: position.ticker,
+				market: position.market,
+				ok: false,
+				skipped: true,
+				message: error instanceof Error ? error.message : "감시 실패",
+			});
 		}
 	}
 	if (changed) await saveAutoTradePositions();
@@ -1529,14 +2157,25 @@ async function inspectAutoTradePositions(memberId: string) {
 router.post("/auto-trade/monitor", async (req: AuthenticatedRequest, res) => {
 	const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
 	const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
-	if (!configuredKey || suppliedKey !== configuredKey) return res.status(401).json({ ok: false, message: "자동매매 실행키가 올바르지 않습니다." });
+	if (!configuredKey || suppliedKey !== configuredKey)
+		return res
+			.status(401)
+			.json({ ok: false, message: "자동매매 실행키가 올바르지 않습니다." });
 	const monitored = await inspectAutoTradePositions(req.member!.id);
-	return res.json({ ok: true, activePositions: monitored.activePositions, message: "보유 종목을 감시했습니다. 청산 주문은 주문별 사용자 승인 전까지 전송하지 않습니다.", results: monitored.results });
+	return res.json({
+		ok: true,
+		activePositions: monitored.activePositions,
+		message:
+			"보유 종목을 감시했습니다. 청산 주문은 주문별 사용자 승인 전까지 전송하지 않습니다.",
+		results: monitored.results,
+	});
 });
 
 // GET /api/stocks/auto-trade/status — 키나 비밀번호는 절대 반환하지 않습니다.
 router.get("/auto-trade/status", (_req, res) => {
-	const mode = String(process.env.KIWOOM_MODE ?? "").trim().toLowerCase();
+	const mode = String(process.env.KIWOOM_MODE ?? "")
+		.trim()
+		.toLowerCase();
 	return res.json({
 		ok: true,
 		mode: mode === "real" ? "real" : "mock",
@@ -1544,7 +2183,8 @@ router.get("/auto-trade/status", (_req, res) => {
 		domesticSupported: true,
 		usSupported: true,
 		realKeyConfigured: Boolean(
-			process.env.KIWOOM_APP_KEY?.trim() && process.env.KIWOOM_APP_SECRET?.trim(),
+			process.env.KIWOOM_APP_KEY?.trim() &&
+				process.env.KIWOOM_APP_SECRET?.trim(),
 		),
 		executionKeyConfigured: Boolean(process.env.KIWOOM_AUTO_TRADE_KEY?.trim()),
 		checks: [
@@ -1562,7 +2202,12 @@ router.get("/auto-trade/status", (_req, res) => {
 // GET /api/stocks/auto-trade/journal
 router.get("/auto-trade/journal", async (req: AuthenticatedRequest, res) => {
 	await ensureAutoTradePositionsLoaded();
-	return res.json({ ok: true, entries: autoTradeJournal.filter((entry) => entry.memberId === req.member!.id).reverse() });
+	return res.json({
+		ok: true,
+		entries: autoTradeJournal
+			.filter((entry) => entry.memberId === req.member!.id)
+			.reverse(),
+	});
 });
 
 // GET /api/stocks/:ticker/quote
@@ -1627,7 +2272,9 @@ async function fetchDartCompanyOverview(ticker: string) {
 		industryName: String(data?.induty ?? "").trim() || null,
 		sector: String(data?.induty ?? "").trim() || null,
 		website:
-			website && !/^https?:\/\//i.test(website) ? `https://${website}` : website || null,
+			website && !/^https?:\/\//i.test(website)
+				? `https://${website}`
+				: website || null,
 		ceo: String(data?.ceo_nm ?? "").trim() || null,
 		establishedAt: String(data?.est_dt ?? "").trim() || null,
 		address: String(data?.adres ?? "").trim() || null,
@@ -1638,10 +2285,12 @@ async function fetchDartCompanyOverview(ticker: string) {
 // Yahoo quoteSummary(assetProfile)에서 실제 사업 요약/섹터/산업/홈페이지를 가져옵니다.
 async function fetchYahooAssetProfile(ticker: string) {
 	if (/^\d{6}$/.test(ticker)) return null;
-	const url =
-		`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=assetProfile`;
+	const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=assetProfile`;
 	const response = await fetch(url, {
-		headers: { "User-Agent": "seungjae-stock-app/1.0", Accept: "application/json" },
+		headers: {
+			"User-Agent": "seungjae-stock-app/1.0",
+			Accept: "application/json",
+		},
 	});
 	if (!response.ok) return null;
 	const data: any = await response.json();
@@ -1691,7 +2340,8 @@ async function enrichCompanyProfile(ticker: string, base: any) {
 		if (/^\d{6}$/.test(ticker)) {
 			const dart = await fetchDartCompanyOverview(ticker).catch(() => null);
 			if (dart) {
-				if (!profile.industry && dart.industryName) profile.industry = dart.industryName;
+				if (!profile.industry && dart.industryName)
+					profile.industry = dart.industryName;
 				if (!profile.sector && dart.sector) profile.sector = dart.sector;
 				if (!profile.website && dart.website) profile.website = dart.website;
 				if (dart.ceo) profile.ceo = dart.ceo;
@@ -1701,9 +2351,11 @@ async function enrichCompanyProfile(ticker: string, base: any) {
 		} else {
 			const yahoo = await fetchYahooAssetProfile(ticker).catch(() => null);
 			if (yahoo) {
-				if (!profile.description && yahoo.description) profile.description = yahoo.description;
+				if (!profile.description && yahoo.description)
+					profile.description = yahoo.description;
 				if (!profile.sector && yahoo.sector) profile.sector = yahoo.sector;
-				if (!profile.industry && yahoo.industry) profile.industry = yahoo.industry;
+				if (!profile.industry && yahoo.industry)
+					profile.industry = yahoo.industry;
 				if (!profile.website && yahoo.website) profile.website = yahoo.website;
 				profile.provider = yahoo.provider;
 			}
@@ -1753,7 +2405,10 @@ router.get("/:ticker/chart", async (req, res) => {
 	}
 
 	try {
-		const meta = await MarketDataService.getCandlesMeta(ticker, timeframe as any);
+		const meta = await MarketDataService.getCandlesMeta(
+			ticker,
+			timeframe as any,
+		);
 		const indicators = computeIndicators(meta.candles);
 		let signals: unknown[] = [];
 		try {
@@ -1779,7 +2434,9 @@ router.get("/:ticker/chart", async (req, res) => {
 		});
 	} catch (error) {
 		console.error("stock chart route error:", error);
-		res.status(500).json({ ok: false, error: "STOCK_CHART_ROUTE_ERROR", ticker, timeframe });
+		res
+			.status(500)
+			.json({ ok: false, error: "STOCK_CHART_ROUTE_ERROR", ticker, timeframe });
 	}
 });
 
@@ -1856,7 +2513,11 @@ router.get("/:ticker/financials", async (req, res) => {
 	const ticker = normalizeTicker(req.params.ticker);
 	res.setHeader("Cache-Control", "no-store, max-age=0");
 	try {
-		const financials = await withLiveCache(`financials:${ticker}`, 5 * 60_000, () => fetchFinancials(ticker));
+		const financials = await withLiveCache(
+			`financials:${ticker}`,
+			5 * 60_000,
+			() => fetchFinancials(ticker),
+		);
 		res.json({
 			ticker,
 			financials,
@@ -1918,7 +2579,9 @@ router.get("/:ticker/filings", async (req, res) => {
 			ticker,
 			filings: items,
 			items,
-			summary: /^\d{6}$/.test(ticker) ? "DART 연결을 확인해 주세요." : "SEC EDGAR 연결을 확인해 주세요.",
+			summary: /^\d{6}$/.test(ticker)
+				? "DART 연결을 확인해 주세요."
+				: "SEC EDGAR 연결을 확인해 주세요.",
 		});
 	}
 });
@@ -1929,8 +2592,18 @@ router.get("/:ticker/disclosures", async (req, res) => {
 	const allHistory = String(req.query.all ?? "") === "1";
 	res.setHeader("Cache-Control", "no-store, max-age=0");
 	try {
-		const result = await withLiveCache(`disclosures:v3:${ticker}:${allHistory ? "all" : "recent"}`, 60_000, () => FilingService.getFilings(ticker, { allHistory }));
-		if (!result) return res.status(404).json({ code: "TICKER_NOT_FOUND", message: "종목을 찾을 수 없습니다." });
+		const result = await withLiveCache(
+			`disclosures:v3:${ticker}:${allHistory ? "all" : "recent"}`,
+			60_000,
+			() => FilingService.getFilings(ticker, { allHistory }),
+		);
+		if (!result)
+			return res
+				.status(404)
+				.json({
+					code: "TICKER_NOT_FOUND",
+					message: "종목을 찾을 수 없습니다.",
+				});
 		res.json(result);
 	} catch (error) {
 		console.error("stock disclosures route error:", error);
@@ -1938,7 +2611,9 @@ router.get("/:ticker/disclosures", async (req, res) => {
 			ticker,
 			disclosures: [],
 			items: [],
-			summary: /^\d{6}$/.test(ticker) ? "DART 연결을 확인해 주세요." : "SEC EDGAR 연결을 확인해 주세요.",
+			summary: /^\d{6}$/.test(ticker)
+				? "DART 연결을 확인해 주세요."
+				: "SEC EDGAR 연결을 확인해 주세요.",
 		});
 	}
 });
@@ -2011,7 +2686,9 @@ function marketPeriodKey(dateText: string, period: string) {
 	if (period === "yearly") return year;
 	if (period === "monthly") return `${year}.${month}`;
 	if (period === "weekly") {
-		const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+		const date = new Date(
+			Date.UTC(Number(year), Number(month) - 1, Number(day)),
+		);
 		const mondayOffset = (date.getUTCDay() + 6) % 7;
 		date.setUTCDate(date.getUTCDate() - mondayOffset);
 		return `${date.getUTCFullYear()}.${String(date.getUTCMonth() + 1).padStart(2, "0")}.${String(date.getUTCDate()).padStart(2, "0")}`;
@@ -2084,27 +2761,44 @@ function extractKiwoomShortRows(raw: Record<string, unknown>) {
 			return;
 		}
 		if (typeof value === "object") {
-			for (const child of Object.values(value as Record<string, unknown>)) visit(child, depth + 1);
+			for (const child of Object.values(value as Record<string, unknown>))
+				visit(child, depth + 1);
 		}
 	};
 	visit(raw);
 	const numberValue = (value: unknown) => financeNumber(String(value ?? ""));
 	const normalized = arrays
 		.map((list) => list.map((item) => item as Record<string, unknown>))
-		.map((list) => list.map((item) => {
-			const rawDate = String(item.dt ?? item.date ?? item.base_dt ?? item.trde_dt ?? "").replace(/\D/g, "");
-			const date = rawDate.length >= 8
-				? `${rawDate.slice(0, 4)}.${rawDate.slice(4, 6)}.${rawDate.slice(6, 8)}`
-				: "";
-			const shortVolume = numberValue(
-				item.shrts_qty ?? item.short_qty ?? item.shrt_qty ?? item.shortVolume ?? item.shrt_trde_qty,
-			);
-			const ratio = numberValue(
-				item.trde_wght ?? item.shrts_qty_rt ?? item.short_ratio ?? item.shrt_rt ?? item.ratio ?? item.shrt_trde_rt,
-			);
-			return { date, shortVolume, ratio };
-		}))
-		.find((list) => list.some((row) => row.date && (row.shortVolume > 0 || row.ratio > 0)));
+		.map((list) =>
+			list.map((item) => {
+				const rawDate = String(
+					item.dt ?? item.date ?? item.base_dt ?? item.trde_dt ?? "",
+				).replace(/\D/g, "");
+				const date =
+					rawDate.length >= 8
+						? `${rawDate.slice(0, 4)}.${rawDate.slice(4, 6)}.${rawDate.slice(6, 8)}`
+						: "";
+				const shortVolume = numberValue(
+					item.shrts_qty ??
+						item.short_qty ??
+						item.shrt_qty ??
+						item.shortVolume ??
+						item.shrt_trde_qty,
+				);
+				const ratio = numberValue(
+					item.trde_wght ??
+						item.shrts_qty_rt ??
+						item.short_ratio ??
+						item.shrt_rt ??
+						item.ratio ??
+						item.shrt_trde_rt,
+				);
+				return { date, shortVolume, ratio };
+			}),
+		)
+		.find((list) =>
+			list.some((row) => row.date && (row.shortVolume > 0 || row.ratio > 0)),
+		);
 	return (normalized ?? []).filter((row) => row.date).slice(0, 120);
 }
 
@@ -2218,9 +2912,7 @@ router.get("/:ticker/short-selling", async (req, res) => {
 				shortVolume: financeNumber(cells[cells.length - 2]),
 				ratio: financeNumber(cells[cells.length - 1]),
 			}));
-		const kiwoomTradeRows = kiwoomRaw
-			? extractKiwoomShortRows(kiwoomRaw)
-			: [];
+		const kiwoomTradeRows = kiwoomRaw ? extractKiwoomShortRows(kiwoomRaw) : [];
 		const tradeRows = kiwoomTradeRows.length ? kiwoomTradeRows : naverTradeRows;
 		const balanceMap = new Map(
 			financeTableRows(balanceHtml)

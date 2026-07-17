@@ -20,13 +20,10 @@ import {
   X,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, apiGet } from "@/lib/api";
 import { BottomNav } from "@/components/bottom-nav";
-import {
-  ChartBroadcastPanel,
-  type ChartBroadcastSignal,
-} from "@/components/chart-broadcast";
-import { CryptoTradingWorkspace } from "@/components/crypto-trading-workspace";
+import { ChartBroadcastPanel } from "@/components/chart-broadcast";
+import { AssetSwitch } from "@/components/asset-switch";
 import { useAssetMode } from "@/lib/asset-mode";
 import {
   classifyStock,
@@ -41,7 +38,7 @@ import {
 } from "@/lib/stock-display";
 import { cn } from "@/lib/utils";
 import {
-	assessAutoTradeCandidate,
+  assessAutoTradeCandidate,
   closeAutoTradePosition,
   executeAutoTradeCandidates,
   loadAutoTradeSettings,
@@ -510,7 +507,6 @@ export default function ScannerPage() {
   const [closingTicker, setClosingTicker] = useState<string | null>(null);
   const [candidateListOpen, setCandidateListOpen] = useState(false);
   const [conditionResultsOpen, setConditionResultsOpen] = useState(false);
-  const [chartTradeSignal, setChartTradeSignal] = useState<ChartBroadcastSignal | null>(null);
 
   const autoTradeStatus = useQuery({
     queryKey: ["auto-trade-status"],
@@ -664,18 +660,18 @@ export default function ScannerPage() {
           toNumber(card.breakoutProbability) ??
           toNumber(card.probability) ??
           toNumber(card.winProbability),
-		price,
-		volume: toNumber(card.volume),
-		tradingValue: toNumber(card.tradingValue),
-		marketCap: marketCapOf(card),
-		confidence: toNumber(card.confidence),
-		newsScore: toNumber(card.newsScore ?? card.newsSentiment),
-		disclosureScore: toNumber(card.disclosureScore ?? card.filingScore),
-		financialScore: toNumber(card.financialScore ?? card.fundamentalScore),
-		riskLevel: String(card.riskLevel ?? ""),
-		isLeveraged: Boolean(card.isLeveraged),
-		isInverse: Boolean(card.isInverse),
-		isDerivative: Boolean(card.isDerivative),
+    price,
+    volume: toNumber(card.volume),
+    tradingValue: toNumber(card.tradingValue),
+    marketCap: marketCapOf(card),
+    confidence: toNumber(card.confidence),
+    newsScore: toNumber(card.newsScore ?? card.newsSentiment),
+    disclosureScore: toNumber(card.disclosureScore ?? card.filingScore),
+    financialScore: toNumber(card.financialScore ?? card.fundamentalScore),
+    riskLevel: String(card.riskLevel ?? ""),
+    isLeveraged: Boolean(card.isLeveraged),
+    isInverse: Boolean(card.isInverse),
+    isDerivative: Boolean(card.isDerivative),
       });
       const ticker = String(card.ticker ?? "").trim().toUpperCase();
       const name = displayStockName(
@@ -684,27 +680,18 @@ export default function ScannerPage() {
         cardMarket(card),
       );
 
-      const chartSignalMatches = chartTradeSignal?.ticker === ticker && chartTradeSignal.market === cardMarket(card);
-      const chartBullish = chartSignalMatches && (chartTradeSignal.signal === "ENTER" || chartTradeSignal.signal === "HOLD");
-      const chartBearish = chartSignalMatches && (chartTradeSignal.signal === "STOP" || chartTradeSignal.signal === "EXIT" || chartTradeSignal.signal === "TAKE_PROFIT");
-      const chartAdjustment = chartBullish
-        ? Math.min(8, Math.round(chartTradeSignal.confidence / 12))
-        : chartBearish
-          ? -Math.min(18, Math.round(chartTradeSignal.confidence / 5))
-          : 0;
-
       return {
         ticker,
         name,
         market: cardMarket(card),
         currency: cardCurrency(card),
-		exchange: cardMarket(card) === "US" ? cardExchange(card) : null,
+    exchange: cardMarket(card) === "US" ? cardExchange(card) : null,
         rank: 0,
         score,
-		probability: Math.max(0, Math.min(100, assessment.probability + chartAdjustment)),
-		riskScore: assessment.riskScore,
-		dataCompleteness: assessment.dataCompleteness,
-		price,
+    probability: assessment.probability,
+    riskScore: assessment.riskScore,
+    dataCompleteness: assessment.dataCompleteness,
+    price,
         changePercent,
         reasons: (
           matched.length
@@ -715,12 +702,8 @@ export default function ScannerPage() {
                   ? "상승 모멘텀"
                   : "변동성 확인",
               ]
-        ).concat(
-          chartSignalMatches
-            ? [`차트생중계 ${chartTradeSignal.title}`, ...chartTradeSignal.patterns]
-            : [],
-        ).filter(Boolean).slice(0, 6),
-		factors: assessment.factors,
+        ).filter(Boolean).slice(0, 4),
+    factors: assessment.factors,
         generatedAt,
       };
     })
@@ -733,7 +716,7 @@ export default function ScannerPage() {
       )
       .slice(0, 100)
       .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
-  }, [chartTradeSignal, scan.data, selectedKey]);
+  }, [scan.data, selectedKey]);
 
   const autoCandidatesKey = autoCandidates
     .map((candidate) => `${candidate.ticker}:${candidate.probability}`)
@@ -924,13 +907,7 @@ export default function ScannerPage() {
   };
 
   if (assetMode.asset === "coin") {
-    return (
-      <CryptoTradingWorkspace
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
-        onBackToStock={() => assetMode.setAsset("stock")}
-      />
-    );
+    return <CoinTradingWorkspace viewMode={viewMode} navigate={navigate} />;
   }
 
   return (
@@ -938,7 +915,23 @@ export default function ScannerPage() {
       {/* 상단 고정 없음 — 제목·선택 3줄·기간·지표·종목보기가 한 페이지로 함께 스크롤. */}
       <header className="border-b border-card-border px-4 pb-3 pt-4">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h1 className="text-xl font-extrabold">도구</h1>
+          <div>
+            <h1 className="text-xl font-extrabold">
+              {viewMode === "condition"
+                ? "조건검색"
+                : viewMode === "chart"
+                  ? "차트중계"
+                  : "자동매매"}
+            </h1>
+
+            <p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
+              {viewMode === "condition"
+                ? "지표를 조합하여 종목을 검색합니다."
+                : viewMode === "chart"
+                  ? "종목 차트와 지표를 선택하고 실시간 분석 신호를 확인합니다."
+                  : "전체 후보를 비교해 모델점수 1위 한 종목을 주문 승인계획과 연결합니다."}
+            </p>
+          </div>
 
           {viewMode !== "chart" && (
             <button
@@ -1044,7 +1037,7 @@ export default function ScannerPage() {
       </header>
 
       <main className="space-y-4 p-4 pb-24">
-        {viewMode === "chart" && <ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />}
+        {viewMode === "chart" && <ChartBroadcastPanel market={market} />}
 
         {viewMode === "condition" && (
           <>
@@ -1238,8 +1231,6 @@ export default function ScannerPage() {
         )}
 
         {viewMode === "auto" && (
-        <>
-        <ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />
         <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -1267,20 +1258,17 @@ export default function ScannerPage() {
           <div className="mt-3 grid grid-cols-2 gap-2">
             <label className="rounded-2xl border border-card-border bg-background p-3">
               <span className="block text-[10px] font-extrabold text-muted-foreground">
-                주문금액 ({market === "US" ? "USD" : "원"})
+        주문금액 ({market === "US" ? "USD" : "원"})
               </span>
               <input
                 type="number"
                 min={0}
-                step={market === "US" ? 10 : 10000}
+        step={market === "US" ? 10 : 10000}
                 inputMode="numeric"
                 value={autoSettings.investmentPerTrade || ""}
                 onChange={(event) =>
                   updateAutoSettings({
-                    investmentPerTrade:
-                      event.target.value === ""
-                        ? 0
-                        : Math.max(0, Number(event.target.value)),
+                    investmentPerTrade: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value)),
                   })
                 }
                 className="mt-1 w-full bg-transparent text-sm font-extrabold outline-none"
@@ -1298,10 +1286,7 @@ export default function ScannerPage() {
                   value={autoSettings.minProbability || ""}
                   onChange={(event) =>
                     updateAutoSettings({
-                      minProbability:
-                        event.target.value === ""
-                          ? 0
-                          : Number(event.target.value),
+                      minProbability: event.target.value === "" ? 0 : Number(event.target.value),
                     })
                   }
                   className="min-w-0 flex-1 bg-transparent text-sm font-extrabold outline-none"
@@ -1321,10 +1306,7 @@ export default function ScannerPage() {
                   value={autoSettings.stopLossPercent || ""}
                   onChange={(event) =>
                     updateAutoSettings({
-                      stopLossPercent:
-                        event.target.value === ""
-                          ? 0
-                          : Number(event.target.value),
+                      stopLossPercent: event.target.value === "" ? 0 : Number(event.target.value),
                     })
                   }
                   className="min-w-0 flex-1 bg-transparent text-sm font-extrabold outline-none"
@@ -1344,10 +1326,7 @@ export default function ScannerPage() {
                   value={autoSettings.takeProfitPercent || ""}
                   onChange={(event) =>
                     updateAutoSettings({
-                      takeProfitPercent:
-                        event.target.value === ""
-                          ? 0
-                          : Number(event.target.value),
+                      takeProfitPercent: event.target.value === "" ? 0 : Number(event.target.value),
                     })
                   }
                   className="min-w-0 flex-1 bg-transparent text-sm font-extrabold outline-none"
@@ -1373,31 +1352,31 @@ export default function ScannerPage() {
             />
           </label>
           <p className="mt-2 break-keep text-[10px] font-semibold leading-4 text-muted-foreground">
-			실행키는 키움 비밀번호가 아닌 주문 보호키이며 이 브라우저 탭이 닫히면 폐기됩니다. 모델점수는 후보 비교용이지 수익확률이 아닙니다. 모든 매수·매도 주문은 주문별 확인 전까지 전송되지 않습니다.
+      실행키는 키움 비밀번호가 아닌 주문 보호키이며 이 브라우저 탭이 닫히면 폐기됩니다. 모델점수는 후보 비교용이지 수익확률이 아닙니다. 모든 매수·매도 주문은 주문별 확인 전까지 전송되지 않습니다.
           </p>
 
-		  <div className="mt-2 grid grid-cols-2 gap-2 text-center text-[10px] font-extrabold">
-			<div className={cn("rounded-xl px-2 py-2", autoTradeStatus.data?.mode === "real" ? "bg-emerald-500/10 text-emerald-600" : "bg-amber-500/10 text-amber-600") }>
-			  서버 · {autoTradeStatus.data?.mode === "real" ? "실전" : "모의/미설정"}
-			</div>
-			<div className={cn("rounded-xl px-2 py-2", autoTradeStatus.data?.enabled ? "bg-emerald-500/10 text-emerald-600" : "bg-secondary text-muted-foreground") }>
-			  주문 서버 · {autoTradeStatus.data?.enabled ? "켜짐" : "꺼짐"}
-			</div>
-		  </div>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-center text-[10px] font-extrabold">
+      <div className={cn("rounded-xl px-2 py-2", autoTradeStatus.data?.mode === "real" ? "bg-emerald-500/10 text-emerald-600" : "bg-amber-500/10 text-amber-600") }>
+        서버 · {autoTradeStatus.data?.mode === "real" ? "실전" : "모의/미설정"}
+      </div>
+      <div className={cn("rounded-xl px-2 py-2", autoTradeStatus.data?.enabled ? "bg-emerald-500/10 text-emerald-600" : "bg-secondary text-muted-foreground") }>
+        주문 서버 · {autoTradeStatus.data?.enabled ? "켜짐" : "꺼짐"}
+      </div>
+      </div>
 
           <div className="mt-2 grid grid-cols-2 gap-2">
             <button
               type="button"
-			  onClick={() => {
-				if (autoSettings.liveTrading) {
-				  updateAutoSettings({ liveTrading: false });
-				  return;
-				}
-				const confirmed = window.confirm(
-				  "실제 주문 기능을 켭니다. 켠 뒤에도 각 주문은 종목·수량·금액·손절가·목표가를 확인하고 승인해야 전송됩니다. 계속하시겠습니까?",
-				);
-				if (confirmed) updateAutoSettings({ liveTrading: true });
-			  }}
+        onClick={() => {
+        if (autoSettings.liveTrading) {
+          updateAutoSettings({ liveTrading: false });
+          return;
+        }
+        const confirmed = window.confirm(
+          "실제 주문 기능을 켭니다. 켠 뒤에도 각 주문은 종목·수량·금액·손절가·목표가를 확인하고 승인해야 전송됩니다. 계속하시겠습니까?",
+        );
+        if (confirmed) updateAutoSettings({ liveTrading: true });
+        }}
               className={cn(
                 "rounded-2xl border px-3 py-3 text-xs font-extrabold",
                 autoSettings.liveTrading
@@ -1478,16 +1457,16 @@ export default function ScannerPage() {
                       <p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">
                         {candidate.reasons.join(" · ") || "AI 점수 기준"}
                       </p>
-					  <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
-						위험 {candidate.riskScore}점 · 데이터 {candidate.dataCompleteness}%
-					  </p>
+            <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
+            위험 {candidate.riskScore}점 · 데이터 {candidate.dataCompleteness}%
+            </p>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-sm font-black text-primary">
                         {candidate.probability}점
                       </p>
                       <p className="mt-1 text-[10px] font-bold text-muted-foreground">
-						모델점수
+            모델점수
                       </p>
                     </div>
                   </div>
@@ -1521,7 +1500,7 @@ export default function ScannerPage() {
               </p>
             ) : !tradeJournal.data?.length ? (
               <p className="mt-3 rounded-2xl bg-secondary/70 px-3 py-4 text-center text-xs font-bold text-muted-foreground">
-					아직 기록된 실제 거래가 없습니다.
+          아직 기록된 실제 거래가 없습니다.
               </p>
             ) : (
               <div className="mt-3">
@@ -1555,7 +1534,7 @@ export default function ScannerPage() {
                           <div className="min-w-0">
                             <p className="truncate text-sm font-extrabold">{entry.name} · {entry.ticker}</p>
                             <p className="mt-1 text-[10px] font-bold text-muted-foreground">
-							  {entry.market === "US" ? `미국/${entry.exchange ?? "거래소 확인"}` : "국내"} · {new Date(entry.openedAt).toLocaleString("ko-KR")} · {entry.quantity}주
+                {entry.market === "US" ? `미국/${entry.exchange ?? "거래소 확인"}` : "국내"} · {new Date(entry.openedAt).toLocaleString("ko-KR")} · {entry.quantity}주
                             </p>
                           </div>
                           <div className="shrink-0 text-right">
@@ -1575,15 +1554,15 @@ export default function ScannerPage() {
                           <p className="mt-1 font-bold">근거: {entry.entryReasons.join(" · ") || "AI 조건"}</p>
                         </div>
                         <div className="grid grid-cols-3 gap-2 text-center">
-						  <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">진입가</p><p className="font-extrabold">{formatAppPrice(entry.entryPrice, entry.currency)}</p></div>
-						  <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">손절가</p><p className="font-extrabold">{formatAppPrice(entry.stopPrice, entry.currency)}</p></div>
-						  <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">목표가</p><p className="font-extrabold">{formatAppPrice(entry.targetPrice, entry.currency)}</p></div>
+              <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">진입가</p><p className="font-extrabold">{formatAppPrice(entry.entryPrice, entry.currency)}</p></div>
+              <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">손절가</p><p className="font-extrabold">{formatAppPrice(entry.stopPrice, entry.currency)}</p></div>
+              <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">목표가</p><p className="font-extrabold">{formatAppPrice(entry.targetPrice, entry.currency)}</p></div>
                         </div>
                         {entry.exitAnalysis && (
                           <div>
                             <p className={cn("font-extrabold", positive ? "text-emerald-500" : "text-destructive")}>{positive ? "왜 익절했나요?" : "왜 손절했나요?"}</p>
                             <p className="mt-1 break-keep font-semibold text-muted-foreground">{entry.exitAnalysis}</p>
-							<p className="mt-1 font-bold">청산가: {entry.exitPrice == null ? "-" : formatAppPrice(entry.exitPrice, entry.currency)} · {entry.exitReason}</p>
+              <p className="mt-1 font-bold">청산가: {entry.exitPrice == null ? "-" : formatAppPrice(entry.exitPrice, entry.currency)} · {entry.exitReason}</p>
                           </div>
                         )}
                       </div>
@@ -1595,7 +1574,7 @@ export default function ScannerPage() {
             )}
           </div>
         </section>
-        </>
+
         )}
 
         {candidateListOpen && (
@@ -1643,9 +1622,9 @@ export default function ScannerPage() {
                         <p className="truncate text-sm font-extrabold">
                           {candidate.rank}위 · {candidate.name}
                         </p>
-						<p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
-						  {candidate.ticker} · {candidate.market}{candidate.exchange ? `/${candidate.exchange}` : ""} · 위험 {candidate.riskScore}점
-						</p>
+            <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
+              {candidate.ticker} · {candidate.market}{candidate.exchange ? `/${candidate.exchange}` : ""} · 위험 {candidate.riskScore}점
+            </p>
                       </div>
                       <p className="shrink-0 text-sm font-black text-primary">
                         {candidate.probability}점
@@ -2243,6 +2222,86 @@ function ScannerCard({
         </>
       )}
     </article>
+  );
+}
+
+function CoinTradingWorkspace({ viewMode, navigate }: { viewMode: ScannerViewMode; navigate: (to: string) => void }) {
+  const mode = useAssetMode();
+  const [query, setQuery] = useState("");
+  const status = useQuery({
+    queryKey: ["coin-trading-status"],
+    queryFn: () => apiGet<AnyObj>("/crypto/status"),
+    refetchInterval: 30_000,
+  });
+  const spot = useQuery({
+    queryKey: ["coin-trading-spot-candidates"],
+    queryFn: () => apiGet<AnyObj>("/crypto/spot/tickers"),
+    enabled: mode.coinMarket === "spot",
+    refetchInterval: 10_000,
+  });
+  const futures = useQuery({
+    queryKey: ["coin-trading-futures-candidates"],
+    queryFn: () => apiGet<AnyObj>("/crypto/futures/tickers"),
+    enabled: mode.coinMarket === "futures",
+    refetchInterval: 8_000,
+  });
+  const rows = useMemo<Array<AnyObj & { rank: number; modelScore: number; change: number }>>(() => {
+    const source = mode.coinMarket === "spot"
+      ? ((spot.data?.tickers ?? []) as AnyObj[])
+      : ((futures.data?.tickers ?? []) as AnyObj[]);
+    const needle = query.trim().toLowerCase();
+    const ranked = [...source]
+      .filter((row) => !needle || String(row.symbol ?? "").toLowerCase().includes(needle))
+      .sort((a, b) => Number(b.tradingValue24h ?? 0) - Number(a.tradingValue24h ?? 0));
+    const maximumTradingValue = Math.max(1, ...ranked.map((row) => Number(row.tradingValue24h ?? 0)));
+    return ranked.slice(0, 100).map((row, index) => {
+      const change = Number(row.changePercent ?? row.changePercent24h ?? 0);
+      const liquidityScore = Math.min(45, Math.round((Number(row.tradingValue24h ?? 0) / maximumTradingValue) * 45));
+      const momentumScore = Math.max(0, Math.min(35, Math.round(17.5 + change * 2.5)));
+      const riskPenalty = Math.min(30, Math.round(Math.abs(change) * 1.5));
+      const modelScore = Math.max(0, Math.min(100, 20 + liquidityScore + momentumScore - riskPenalty));
+      return { ...row, rank: index + 1, modelScore, change };
+    });
+  }, [futures.data, mode.coinMarket, query, spot.data]);
+  const statusData = (status.data ?? {}) as Record<string, AnyObj>;
+  const connected = mode.coinMarket === "spot" ? Boolean(statusData.upbit?.ok) : Boolean(statusData.bitget?.ok);
+  const privateConfigured = mode.coinMarket === "spot" ? Boolean(statusData.upbit?.privateKeyConfigured) : Boolean(statusData.bitget?.privateKeyConfigured);
+  const activeQuery = mode.coinMarket === "spot" ? spot : futures;
+
+  return (
+    <div className="h-full overflow-y-auto overscroll-contain bg-background">
+      {/* 상단 고정 없음 — 제목·탭·검색·목록이 한 페이지로 함께 스크롤. */}
+      <header className="border-b border-card-border px-4 pb-3 pt-4">
+        <div className="flex items-start justify-between gap-3">
+          <div><h1 className="text-xl font-black">{viewMode === "auto" ? "코인 자동매매" : "코인 검색기"}</h1><p className="mt-1 text-xs font-bold text-muted-foreground">현물과 선물은 주식 주문엔진과 분리합니다.</p></div>
+          <button type="button" onClick={() => void activeQuery.refetch()} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><RefreshCw className={cn("h-4 w-4", activeQuery.isFetching && "animate-spin")} /></button>
+        </div>
+        <AssetSwitch className="mt-3" />
+        <label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3"><Search className="h-4 w-4 text-muted-foreground" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="코인 심볼 검색" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" /></label>
+      </header>
+      <main className="space-y-4 px-4 pb-28 pt-4">
+        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+          <div className="grid grid-cols-2 gap-2 text-center text-[11px] font-black">
+            <div className={cn("rounded-2xl p-3", connected ? "bg-positive/10 text-positive" : "bg-destructive/10 text-destructive")}>{mode.coinMarket === "spot" ? "UPBIT" : "BITGET"} 시세 · {connected ? "정상" : "오류"}</div>
+            <div className={cn("rounded-2xl p-3", privateConfigured ? "bg-positive/10 text-positive" : "bg-secondary text-muted-foreground")}>개인 API · {privateConfigured ? "환경변수 설정" : "미설정"}</div>
+          </div>
+          <p className="mt-3 rounded-2xl bg-warning/10 p-3 text-[11px] font-bold leading-relaxed text-warning">
+            {viewMode === "auto" ? "현재 이 화면은 실제 후보와 연결상태를 검증합니다. 코인 주문은 거래소별 주문 전 검사와 주문별 승인 토큰이 완성되기 전까지 잠겨 있으며 자동 전송되지 않습니다." : "검색 결과는 실제 거래소 공개 시세이며 모델점수는 상대 비교값이지 수익확률이 아닙니다."}
+          </p>
+        </section>
+        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+          <div className="flex items-center justify-between"><div><h2 className="text-sm font-black">후보 종목</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">거래대금·변동성·단기 방향 기반 모델점수</p></div><span className="text-xs font-black text-primary">{rows.length}개</span></div>
+          {activeQuery.isLoading && <p className="mt-3 rounded-2xl bg-secondary p-4 text-center text-xs font-bold text-muted-foreground">실제 코인 시세를 불러오는 중입니다.</p>}
+          {activeQuery.isError && <p className="mt-3 rounded-2xl bg-destructive/10 p-4 text-center text-xs font-bold text-destructive">거래소 시세를 불러오지 못했습니다.</p>}
+          <div className="mt-3 space-y-2">{rows.map((row) => (
+            <button key={String(row.symbol)} type="button" onClick={() => navigate(`/stock-info?asset=coin&coinMarket=${mode.coinMarket}&symbol=${encodeURIComponent(String(row.symbol))}`)} className="flex w-full items-center gap-3 rounded-2xl bg-secondary/60 p-3 text-left">
+              <span className="w-7 text-center text-sm font-black text-primary">{row.rank}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{String(row.symbol)}</p><p className="mt-1 text-[10px] font-bold text-muted-foreground">24시간 {Number.isFinite(row.change) ? formatAppPercent(row.change) : "데이터 없음"}</p></div><div className="text-right"><p className="text-sm font-black text-primary">{row.modelScore}점</p><p className="text-[9px] font-bold text-muted-foreground">모델점수</p></div>
+            </button>
+          ))}</div>
+        </section>
+      </main>
+      <BottomNav />
+    </div>
   );
 }
 

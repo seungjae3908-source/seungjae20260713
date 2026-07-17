@@ -1,10 +1,12 @@
 import { Router, type IRouter } from 'express';
 import { createHmac, randomUUID } from 'node:crypto';
 import { requireMember } from '../middleware/auth';
+import cryptoAutoRouter from './crypto-auto';
 
 const router: IRouter = Router();
 const UPBIT_BASE = 'https://api.upbit.com';
 const BITGET_BASE = 'https://api.bitget.com';
+const BITGET_PRODUCT_TYPE = 'USDT-FUTURES';
 
 function base64Url(value: string | Buffer) {
   return Buffer.from(value).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
@@ -74,10 +76,15 @@ function finite(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+router.use('/crypto', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
 router.get('/crypto/status', async (_req, res) => {
   const [upbit, bitget] = await Promise.allSettled([
     fetchJson<unknown[]>(`${UPBIT_BASE}/v1/market/all?isDetails=true`),
-    fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/tickers?productType=USDT-FUTURES`),
+    fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/tickers?productType=${BITGET_PRODUCT_TYPE}`),
   ]);
   return res.json({
     upbit: {
@@ -89,6 +96,7 @@ router.get('/crypto/status', async (_req, res) => {
       privateKeyConfigured: Boolean(
         process.env.BITGET_API_KEY && process.env.BITGET_SECRET_KEY && process.env.BITGET_PASSPHRASE,
       ),
+      productType: BITGET_PRODUCT_TYPE,
     },
     checkedAt: new Date().toISOString(),
   });
@@ -189,28 +197,49 @@ router.get('/crypto/spot/candles', async (req, res) => {
 router.get('/crypto/futures/tickers', async (req, res) => {
   const requested = safeSymbol(req.query.symbol);
   try {
-    const payload = await fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/tickers?productType=USDT-FUTURES${requested ? `&symbol=${encodeURIComponent(requested)}` : ''}`);
+    const payload = await fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/tickers?productType=${BITGET_PRODUCT_TYPE}${requested ? `&symbol=${encodeURIComponent(requested)}` : ''}`);
     if (String(payload?.code ?? '') !== '00000' || !Array.isArray(payload?.data)) throw new Error(`BITGET_${String(payload?.code ?? 'INVALID')}`);
-    const tickers = payload.data.map((item: any) => ({
-      symbol: String(item.symbol ?? ''),
-      price: finite(item.lastPr),
-      markPrice: finite(item.markPrice),
-      indexPrice: finite(item.indexPrice),
-      changePercent24h: finite(item.change24h) == null ? null : Number(item.change24h) * 100,
-      high24h: finite(item.high24h),
-      low24h: finite(item.low24h),
-      volume24h: finite(item.baseVolume),
-      tradingValue24h: finite(item.usdtVolume),
-      fundingRate: finite(item.fundingRate),
-      openInterest: finite(item.holdingAmount),
-      bidPrice: finite(item.bidPr),
-      askPrice: finite(item.askPr),
-      timestamp: finite(item.ts),
-    }));
-    return res.json({ exchange: 'BITGET', productType: 'USDT-FUTURES', tickers, count: tickers.length, updatedAt: new Date().toISOString() });
+    const tickers = payload.data.map((item: any) => {
+      const changeRate24h = finite(item.change24h);
+      const changePercent24h =
+        changeRate24h == null ? null : changeRate24h * 100;
+      const fundingRate = finite(item.fundingRate);
+
+      return {
+        symbol: String(item.symbol ?? ''),
+        price: finite(item.lastPr),
+        markPrice: finite(item.markPrice),
+        indexPrice: finite(item.indexPrice),
+        changeRate24h,
+        changePercent24h,
+        // 기존 코인 화면과 신규 롱·숏 워크스페이스가 모두 사용할 수 있는 별칭.
+        changePercent: changePercent24h,
+        high24h: finite(item.high24h),
+        low24h: finite(item.low24h),
+        volume24h: finite(item.baseVolume),
+        tradingValue24h: finite(item.usdtVolume),
+        fundingRate,
+        fundingRatePercent: fundingRate == null ? null : fundingRate * 100,
+        openInterest: finite(item.holdingAmount),
+        bidPrice: finite(item.bidPr),
+        askPrice: finite(item.askPr),
+        timestamp: finite(item.ts),
+      };
+    });
+    const now = new Date().toISOString();
+    return res.json({
+      ok: true,
+      provider: 'bitget',
+      fetchedAt: now,
+      exchange: 'BITGET',
+      productType: BITGET_PRODUCT_TYPE,
+      tickers,
+      count: tickers.length,
+      updatedAt: now,
+    });
   } catch (error) {
     console.error('bitget tickers error:', error);
-    return res.status(502).json({ exchange: 'BITGET', tickers: [], count: 0, error: 'BITGET_TICKERS_UNAVAILABLE' });
+    return res.status(502).json({ ok: false, provider: 'bitget', exchange: 'BITGET', productType: BITGET_PRODUCT_TYPE, tickers: [], count: 0, error: 'BITGET_TICKERS_UNAVAILABLE', message: '비트겟 선물 시세 조회에 실패했습니다.' });
   }
 });
 
@@ -221,13 +250,34 @@ router.get('/crypto/futures/candles', async (req, res) => {
   const granularity = allowed.has(rawGranularity) ? rawGranularity : '15m';
   const limit = Math.max(1, Math.min(1000, Number(req.query.limit ?? 200) || 200));
   try {
-    const payload = await fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=USDT-FUTURES&granularity=${encodeURIComponent(granularity)}&limit=${limit}`);
+    const payload = await fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${encodeURIComponent(granularity)}&limit=${limit}`);
     if (String(payload?.code ?? '') !== '00000' || !Array.isArray(payload?.data)) throw new Error(`BITGET_${String(payload?.code ?? 'INVALID')}`);
-    const candles = payload.data.reverse().map((row: any[]) => ({ time: finite(row[0]), open: finite(row[1]), high: finite(row[2]), low: finite(row[3]), close: finite(row[4]), volume: finite(row[5]), quoteVolume: finite(row[6]) }));
-    return res.json({ exchange: 'BITGET', symbol, productType: 'USDT-FUTURES', granularity, candles, count: candles.length, updatedAt: new Date().toISOString() });
+    const candles = payload.data.reverse().map((row: any[]) => ({
+      time: finite(row[0]),
+      open: finite(row[1]),
+      high: finite(row[2]),
+      low: finite(row[3]),
+      close: finite(row[4]),
+      volume: finite(row[5]),
+      quoteVolume: finite(row[6]),
+    }));
+    const now = new Date().toISOString();
+    return res.json({
+      ok: true,
+      provider: 'bitget',
+      fetchedAt: now,
+      exchange: 'BITGET',
+      symbol,
+      productType: BITGET_PRODUCT_TYPE,
+      granularity,
+      timeframe: granularity,
+      candles,
+      count: candles.length,
+      updatedAt: now,
+    });
   } catch (error) {
     console.error('bitget candles error:', error);
-    return res.status(502).json({ exchange: 'BITGET', candles: [], count: 0, error: 'BITGET_CANDLES_UNAVAILABLE' });
+    return res.status(502).json({ ok: false, provider: 'bitget', exchange: 'BITGET', productType: BITGET_PRODUCT_TYPE, candles: [], count: 0, error: 'BITGET_CANDLES_UNAVAILABLE', message: '비트겟 선물 캔들 조회에 실패했습니다.' });
   }
 });
 
@@ -256,7 +306,7 @@ router.get('/crypto/spot/accounts', requireMember, async (_req, res) => {
 
 router.get('/crypto/futures/account', requireMember, async (_req, res) => {
   const path = '/api/v2/mix/account/accounts';
-  const query = 'productType=USDT-FUTURES';
+  const query = `productType=${BITGET_PRODUCT_TYPE}`;
   try {
     const payload = await fetchJsonWithHeaders<any>(`${BITGET_BASE}${path}?${query}`, bitgetHeaders('GET', path, query));
     if (String(payload?.code ?? '') !== '00000' || !Array.isArray(payload?.data)) throw new Error(`BITGET_${String(payload?.code ?? 'INVALID')}`);
@@ -269,17 +319,17 @@ router.get('/crypto/futures/account', requireMember, async (_req, res) => {
       crossedMaxAvailable: finite(row.crossedMaxAvailable),
       isolatedMaxAvailable: finite(row.isolatedMaxAvailable),
     }));
-    return res.json({ exchange: 'BITGET', configured: true, accounts, count: accounts.length, updatedAt: new Date().toISOString() });
+    return res.json({ ok: true, provider: 'bitget', exchange: 'BITGET', productType: BITGET_PRODUCT_TYPE, configured: true, accounts, count: accounts.length, updatedAt: new Date().toISOString() });
   } catch (error) {
     const notConfigured = error instanceof Error && error.message === 'BITGET_PRIVATE_KEYS_NOT_CONFIGURED';
     console.error('bitget account error:', error instanceof Error ? error.message : error);
-    return res.status(notConfigured ? 503 : 502).json({ exchange: 'BITGET', configured: !notConfigured, accounts: [], error: notConfigured ? 'BITGET_PRIVATE_KEYS_NOT_CONFIGURED' : 'BITGET_ACCOUNT_UNAVAILABLE' });
+    return res.status(notConfigured ? 503 : 502).json({ exchange: 'BITGET', configured: !notConfigured, accounts: [], error: notConfigured ? 'BITGET_PRIVATE_KEYS_NOT_CONFIGURED' : 'BITGET_ACCOUNT_UNAVAILABLE', message: notConfigured ? '비트겟 API Key·Secret·Passphrase 설정이 필요합니다.' : '비트겟 선물 계좌 조회에 실패했습니다.' });
   }
 });
 
 router.get('/crypto/futures/positions', requireMember, async (_req, res) => {
   const path = '/api/v2/mix/position/all-position';
-  const query = 'productType=USDT-FUTURES&marginCoin=USDT';
+  const query = `productType=${BITGET_PRODUCT_TYPE}&marginCoin=USDT`;
   try {
     const payload = await fetchJsonWithHeaders<any>(`${BITGET_BASE}${path}?${query}`, bitgetHeaders('GET', path, query));
     if (String(payload?.code ?? '') !== '00000' || !Array.isArray(payload?.data)) throw new Error(`BITGET_${String(payload?.code ?? 'INVALID')}`);
@@ -299,12 +349,14 @@ router.get('/crypto/futures/positions', requireMember, async (_req, res) => {
         breakEvenPrice: finite(row.breakEvenPrice),
       }))
       .filter((row: any) => Number(row.total ?? 0) !== 0);
-    return res.json({ exchange: 'BITGET', configured: true, positions, count: positions.length, updatedAt: new Date().toISOString() });
+    return res.json({ ok: true, provider: 'bitget', exchange: 'BITGET', productType: BITGET_PRODUCT_TYPE, configured: true, positions, count: positions.length, updatedAt: new Date().toISOString() });
   } catch (error) {
     const notConfigured = error instanceof Error && error.message === 'BITGET_PRIVATE_KEYS_NOT_CONFIGURED';
     console.error('bitget positions error:', error instanceof Error ? error.message : error);
-    return res.status(notConfigured ? 503 : 502).json({ exchange: 'BITGET', configured: !notConfigured, positions: [], error: notConfigured ? 'BITGET_PRIVATE_KEYS_NOT_CONFIGURED' : 'BITGET_POSITIONS_UNAVAILABLE' });
+    return res.status(notConfigured ? 503 : 502).json({ exchange: 'BITGET', configured: !notConfigured, positions: [], error: notConfigured ? 'BITGET_PRIVATE_KEYS_NOT_CONFIGURED' : 'BITGET_POSITIONS_UNAVAILABLE', message: notConfigured ? '비트겟 API Key·Secret·Passphrase 설정이 필요합니다.' : '비트겟 선물 포지션 조회에 실패했습니다.' });
   }
 });
+
+router.use(cryptoAutoRouter);
 
 export default router;

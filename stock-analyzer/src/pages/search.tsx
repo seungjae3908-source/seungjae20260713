@@ -2,8 +2,9 @@ import { authorizedFetch } from '@/lib/auth-fetch';
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw, Search, TrendingDown, TrendingUp, X, Star } from "lucide-react";
+import { Search, TrendingDown, TrendingUp, X, Star } from "lucide-react";
 import { BottomNav } from "@/components/bottom-nav";
+import { CoinInfo } from "@/pages/stock-info";
 import {
   displayStockName,
   formatAppPercent,
@@ -14,6 +15,7 @@ import { readWatchlistItems, WATCHLIST_CHANGE_EVENT } from "@/lib/stock-display"
 import { cn } from "@/lib/utils";
 
 type AnyObj = Record<string, any>;
+type AssetTab = "stock" | "coin";
 type Market = "KR" | "US";
 type Currency = "KRW" | "USD";
 
@@ -819,6 +821,12 @@ async function fetchSearchRows(
     .slice(0, 30);
 }
 
+function initialAsset(): AssetTab {
+  return new URLSearchParams(window.location.search).get("asset") === "coin"
+    ? "coin"
+    : "stock";
+}
+
 function initialMarket(): Market {
   return new URLSearchParams(window.location.search).get("market") === "US"
     ? "US"
@@ -953,8 +961,10 @@ async function fetchWatchlistRows(items: ReturnType<typeof readWatchlistItems>):
 }
 
 export default function SearchPage() {
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
 
+  const [asset, setAsset] = useState<AssetTab>(initialAsset);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [market, setMarket] = useState<Market>(initialMarket);
 
   const [rank, setRank] = useState<RankType>(initialRank);
@@ -963,6 +973,21 @@ export default function SearchPage() {
   const [watchlistOpen, setWatchlistOpen] = useState(false);
   const [watchMarket, setWatchMarket] = useState<Market>("KR");
   const [watchItems, setWatchItems] = useState(() => readWatchlistItems());
+
+  useEffect(() => {
+    const params = new URLSearchParams(
+      location.includes("?") ? location.split("?")[1] ?? "" : window.location.search,
+    );
+    setAsset(params.get("asset") === "coin" ? "coin" : "stock");
+    if (params.get("asset") !== "coin") {
+      setMarket(params.get("market") === "US" ? "US" : "KR");
+    }
+  }, [location]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const refresh = () => setWatchItems(readWatchlistItems());
@@ -990,6 +1015,8 @@ export default function SearchPage() {
 
     queryFn: () => fetchMoverRows(market, rank),
 
+    enabled: asset === "stock",
+
     staleTime: 0,
 
     gcTime: 5 * 60_000,
@@ -1004,7 +1031,7 @@ export default function SearchPage() {
 
     queryFn: () => fetchSearchRows(trimmedQuery, market),
 
-    enabled: trimmedQuery.length > 0,
+    enabled: asset === "stock" && trimmedQuery.length > 0,
 
     staleTime: 30_000,
 
@@ -1024,20 +1051,36 @@ export default function SearchPage() {
 
   const isError = trimmedQuery ? searchQuery.isError : rankingQuery.isError;
 
+  const handleAssetChange = (nextAsset: AssetTab) => {
+    setAsset(nextAsset);
+    setQuery("");
+    setWatchlistOpen(false);
+
+    if (nextAsset === "stock") {
+      setMarket("KR");
+      navigate(`/search?asset=stock&market=KR&rank=${rank}`);
+      return;
+    }
+
+    navigate("/search?asset=coin&coinMarket=spot");
+  };
+
   const handleMarketChange = (nextMarket: Market) => {
     setMarket(nextMarket);
 
-    navigate(`/search?market=${nextMarket}&rank=${rank}`);
+    navigate(`/search?asset=stock&market=${nextMarket}&rank=${rank}`);
   };
 
   const handleRankChange = (nextRank: RankType) => {
     setRank(nextRank);
 
-    navigate(`/search?market=${market}&rank=${nextRank}`);
+    navigate(`/search?asset=stock&market=${market}&rank=${nextRank}`);
   };
 
   const openDetail = (row: StockRow) => {
-    const back = encodeURIComponent(`/search?market=${market}&rank=${rank}`);
+    const back = encodeURIComponent(
+      `/search?asset=stock&market=${market}&rank=${rank}`,
+    );
 
     navigate(`/stock/${encodeURIComponent(row.ticker)}?back=${back}`);
   };
@@ -1045,101 +1088,105 @@ export default function SearchPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background">
       <header className="relative z-30 shrink-0 border-b border-card-border bg-background/95 px-4 pb-3 pt-5 backdrop-blur">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-extrabold">주식</h1>
+        <h1 className="text-center text-2xl font-extrabold">종목</h1>
 
-            <p className="mt-1 text-xs font-bold text-muted-foreground">
-              키움증권 랭킹과 AI 점수를 함께 확인합니다.
-            </p>
-          </div>
-
+        <div className="mt-4 grid grid-cols-2 gap-2">
           <button
             type="button"
-            aria-label="새로고침"
-            onClick={() => {
-              void rankingQuery.refetch();
-
-              if (trimmedQuery) {
-                void searchQuery.refetch();
-              }
-            }}
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border bg-card text-muted-foreground"
+            onClick={() => handleAssetChange("stock")}
+            className={cn(
+              "inline-flex items-center justify-center rounded-2xl border px-3 py-2.5 text-center text-sm font-extrabold",
+              asset === "stock"
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-card-border bg-card text-muted-foreground",
+            )}
           >
-            <RefreshCw
-              className={cn(
-                "h-4 w-4",
-
-                (rankingQuery.isFetching || searchQuery.isFetching) &&
-                  "animate-spin",
-              )}
-            />
+            주식
+          </button>
+          <button
+            type="button"
+            onClick={() => handleAssetChange("coin")}
+            className={cn(
+              "inline-flex items-center justify-center rounded-2xl border px-3 py-2.5 text-center text-sm font-extrabold",
+              asset === "coin"
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-card-border bg-card text-muted-foreground",
+            )}
+          >
+            코인
           </button>
         </div>
 
-        <div className="relative mt-4">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={
-              market === "KR"
-                ? "국내 종목명 또는 종목코드 검색"
-                : "미국 종목명 또는 티커 검색"
-            }
-            className="h-12 w-full rounded-2xl border border-card-border bg-card pl-10 pr-4 text-sm font-bold outline-none placeholder:text-muted-foreground focus:border-primary"
-          />
-        </div>
-
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          {MARKET_TABS.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => handleMarketChange(item.key)}
-              className={cn(
-                "rounded-2xl border px-3 py-2.5 text-sm font-extrabold",
-
-                market === item.key
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-card-border bg-card text-muted-foreground",
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => { setWatchMarket(market); setWatchlistOpen(true); }}
-            className="rounded-2xl border border-card-border bg-card px-2 py-2.5 text-sm font-extrabold text-muted-foreground"
-          >
-            관심종목
-          </button>
-        </div>
-
-        {!trimmedQuery && (
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            {RANK_TABS.map((item) => (
+        {asset === "stock" && (
+          <>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {MARKET_TABS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => handleMarketChange(item.key)}
+                  className={cn(
+                    "inline-flex items-center justify-center rounded-2xl border px-3 py-2.5 text-center text-sm font-extrabold",
+                    market === item.key
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-card-border bg-card text-muted-foreground",
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
               <button
-                key={item.key}
                 type="button"
-                onClick={() => handleRankChange(item.key)}
-                className={cn(
-                  "min-w-0 rounded-2xl border px-2 py-2.5 text-[11px] font-extrabold",
-
-                  rank === item.key
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-card-border bg-card text-muted-foreground",
-                )}
+                onClick={() => {
+                  setWatchMarket(market);
+                  setWatchlistOpen(true);
+                }}
+                className="inline-flex items-center justify-center rounded-2xl border border-card-border bg-card px-2 py-2.5 text-center text-sm font-extrabold text-muted-foreground"
               >
-                {item.label}
+                관심종목
               </button>
-            ))}
-          </div>
+            </div>
+
+            <div className="relative mt-3">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={
+                  market === "KR"
+                    ? "국내 종목명 또는 종목코드 검색"
+                    : "해외 종목명 또는 티커 검색"
+                }
+                className="h-12 w-full rounded-2xl border border-card-border bg-card pl-10 pr-4 text-sm font-bold outline-none placeholder:text-muted-foreground focus:border-primary"
+              />
+            </div>
+
+            {!trimmedQuery && (
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                {RANK_TABS.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => handleRankChange(item.key)}
+                    className={cn(
+                      "inline-flex min-w-0 items-center justify-center rounded-2xl border px-2 py-2.5 text-center text-[11px] font-extrabold",
+                      rank === item.key
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-card-border bg-card text-muted-foreground",
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </header>
 
+      {asset === "coin" ? (
+        <CoinInfo nowMs={nowMs} basePath="/search" />
+      ) : (
       <main className="flex-none px-4 pb-24 pt-4">
         <div className="mb-3 flex items-end justify-between gap-3">
           <div>
@@ -1288,9 +1335,10 @@ export default function SearchPage() {
         </div>
       </main>
 
+      )}
       <BottomNav />
 
-      {watchlistOpen && (
+      {asset === "stock" && watchlistOpen && (
         <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 p-3 sm:items-center">
           <button type="button" aria-label="닫기" className="absolute inset-0" onClick={() => setWatchlistOpen(false)} />
           <section className="relative z-10 flex max-h-[82dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-card p-4 shadow-2xl">

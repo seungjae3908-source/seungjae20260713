@@ -103,6 +103,13 @@ type LevelSnapshot = {
 	breakdownLevel: number | null;
 };
 
+type MarketContext = {
+	label: string;
+	changePercent: number;
+	bias: number;
+	sources: string[];
+};
+
 type TechnicalSnapshot = {
 	currentPrice: number;
 	previousClose: number;
@@ -118,6 +125,12 @@ type TechnicalSnapshot = {
 	volumeRatio: number;
 	trend: "상승" | "중립" | "하락";
 	levels: LevelSnapshot;
+	patterns: string[];
+	bullishPatternScore: number;
+	bearishPatternScore: number;
+	marketLabel: string;
+	marketChangePercent: number;
+	marketBias: number;
 };
 
 type LiveOpinion = {
@@ -149,8 +162,22 @@ type ChartPayload = {
 	indicators?: AnyObj;
 };
 
+export type ChartBroadcastSignal = {
+	ticker: string;
+	market: ChartBroadcastMarket;
+	signal: SignalKind;
+	confidence: number;
+	title: string;
+	summary: string;
+	currentPrice: number;
+	marketBias: number;
+	patterns: string[];
+	generatedAt: string;
+};
+
 type Props = {
 	market: ChartBroadcastMarket;
+	onSignalChange?: (signal: ChartBroadcastSignal) => void;
 };
 
 const TIMEFRAMES: Array<{ key: ChartTimeframe; label: string }> = [
@@ -406,6 +433,30 @@ async function fetchChart(ticker: string, timeframe: ChartTimeframe): Promise<Ch
 	throw new Error(lastError);
 }
 
+async function fetchMarketContext(market: ChartBroadcastMarket): Promise<MarketContext> {
+	const tickers = market === "KR" ? ["^KS11", "^KQ11"] : ["^GSPC", "^IXIC"];
+	const response = await authorizedFetch(`/api/quotes?tickers=${encodeURIComponent(tickers.join(","))}`, { cache: "no-store" });
+	const payload = (await response.json().catch(() => ({}))) as AnyObj;
+	if (!response.ok) throw new Error(String(payload?.message ?? payload?.error ?? `HTTP_${response.status}`));
+	const source = Array.isArray(payload?.quotes)
+		? payload.quotes
+		: Array.isArray(payload?.rows)
+			? payload.rows
+			: Array.isArray(payload?.data)
+				? payload.data
+				: [];
+	const changes = source
+		.map((row: AnyObj) => Number(row?.changePercent ?? row?.change_pct ?? row?.flu_rt ?? row?.changeRate))
+		.filter((value: number) => Number.isFinite(value));
+	const averageChange = changes.length ? changes.reduce((sum: number, value: number) => sum + value, 0) / changes.length : 0;
+	return {
+		label: market === "KR" ? "코스피·코스닥" : "S&P500·나스닥",
+		changePercent: averageChange,
+		bias: clamp(averageChange * 4, -10, 10),
+		sources: tickers,
+	};
+}
+
 function average(values: number[]): number | null {
 	if (!values.length) return null;
 	return values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -562,7 +613,61 @@ function detectLevels(candles: CandlePoint[]): LevelSnapshot {
 	};
 }
 
-function technicalSnapshot(candles: CandlePoint[]): TechnicalSnapshot {
+function detectChartPatterns(candles: CandlePoint[]) {
+	const patterns: string[] = [];
+	let bullishScore = 0;
+	let bearishScore = 0;
+	if (candles.length < 8) return { patterns, bullishScore, bearishScore };
+	const latest = candles.at(-1)!;
+	const previous = candles.at(-2)!;
+	const body = Math.abs(latest.close - latest.open);
+	const range = Math.max(latest.high - latest.low, Number.EPSILON);
+	const lowerWick = Math.min(latest.open, latest.close) - latest.low;
+	const upperWick = latest.high - Math.max(latest.open, latest.close);
+
+	if (previous.close < previous.open && latest.close > latest.open && latest.open <= previous.close && latest.close >= previous.open) {
+		patterns.push("상승 장악형");
+		bullishScore += 8;
+	}
+	if (previous.close > previous.open && latest.close < latest.open && latest.open >= previous.close && latest.close <= previous.open) {
+		patterns.push("하락 장악형");
+		bearishScore += 8;
+	}
+	if (lowerWick > body * 2 && lowerWick > upperWick * 1.5 && latest.close > latest.open) {
+		patterns.push("망치형 반등");
+		bullishScore += 7;
+	}
+	if (upperWick > body * 2 && upperWick > lowerWick * 1.5 && latest.close < latest.open) {
+		patterns.push("유성형 반락");
+		bearishScore += 7;
+	}
+	if (body / range < 0.12) patterns.push("도지·방향 대기");
+
+	const closes = candles.slice(-40).map((row) => row.close);
+	const lows = closes
+		.map((value, index) => ({ value, index }))
+		.filter((row) => row.index > 0 && row.index < closes.length - 1 && row.value <= closes[row.index - 1] && row.value <= closes[row.index + 1]);
+	const highs = closes
+		.map((value, index) => ({ value, index }))
+		.filter((row) => row.index > 0 && row.index < closes.length - 1 && row.value >= closes[row.index - 1] && row.value >= closes[row.index + 1]);
+	if (lows.length >= 2) {
+		const [left, right] = lows.slice(-2);
+		if (right.index - left.index >= 4 && Math.abs(right.value - left.value) / Math.max(left.value, 1) < 0.012) {
+			patterns.push("쌍바닥 후보");
+			bullishScore += 9;
+		}
+	}
+	if (highs.length >= 2) {
+		const [left, right] = highs.slice(-2);
+		if (right.index - left.index >= 4 && Math.abs(right.value - left.value) / Math.max(left.value, 1) < 0.012) {
+			patterns.push("쌍봉 후보");
+			bearishScore += 9;
+		}
+	}
+	return { patterns: [...new Set(patterns)].slice(0, 5), bullishScore, bearishScore };
+}
+
+function technicalSnapshot(candles: CandlePoint[], marketContext: MarketContext): TechnicalSnapshot {
 	const latest = candles.at(-1)!;
 	const previous = candles.at(-2) ?? latest;
 	const closes = candles.map((row) => row.close);
@@ -596,6 +701,7 @@ function technicalSnapshot(candles: CandlePoint[]): TechnicalSnapshot {
 		latest.close < sma5 &&
 		sma5 < sma20 &&
 		(sma60 == null || sma20 <= sma60 * 1.005);
+	const patternSnapshot = detectChartPatterns(candles);
 
 	return {
 		currentPrice: latest.close,
@@ -613,6 +719,12 @@ function technicalSnapshot(candles: CandlePoint[]): TechnicalSnapshot {
 		volumeRatio,
 		trend: upTrend ? "상승" : downTrend ? "하락" : "중립",
 		levels: detectLevels(candles),
+		patterns: patternSnapshot.patterns,
+		bullishPatternScore: patternSnapshot.bullishScore,
+		bearishPatternScore: patternSnapshot.bearishScore,
+		marketLabel: marketContext.label,
+		marketChangePercent: marketContext.changePercent,
+		marketBias: marketContext.bias,
 	};
 }
 
@@ -686,7 +798,16 @@ function buildOpinion(snapshot: TechnicalSnapshot): LiveOpinion {
 		rsiValue == null ? 0 : rsiValue >= 42 && rsiValue <= 68 ? 10 : rsiValue >= 78 ? -12 : 0;
 	const signalScore =
 		signal === "ENTER" ? 20 : signal === "HOLD" ? 12 : signal === "STOP" ? -15 : 0;
-	const confidence = Math.round(clamp(52 + trendScore + volumeScore + rsiScore + signalScore, 5, 95));
+	const patternScore = snapshot.bullishPatternScore - snapshot.bearishPatternScore;
+	const directionAdjustedMarket = signal === "ENTER" || signal === "HOLD"
+		? snapshot.marketBias
+		: signal === "STOP" || signal === "EXIT" || signal === "TAKE_PROFIT"
+			? -snapshot.marketBias
+			: 0;
+	const confidence = Math.round(clamp(52 + trendScore + volumeScore + rsiScore + signalScore + patternScore + directionAdjustedMarket, 5, 95));
+	const marketText = `${snapshot.marketLabel} ${snapshot.marketChangePercent >= 0 ? "+" : ""}${snapshot.marketChangePercent.toFixed(2)}%`;
+	const patternText = snapshot.patterns.length ? ` · 패턴 ${snapshot.patterns.join("/")}` : "";
+	summary = `${summary} · 시장 ${marketText}${patternText}`;
 
 	return {
 		signal,
@@ -934,7 +1055,7 @@ function ChartCanvas({
 	return <div ref={containerRef} className="h-[390px] w-full" />;
 }
 
-export function ChartBroadcastPanel({ market }: Props) {
+export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 	const [query, setQuery] = useState("");
 	const [selectedStock, setSelectedStock] = useState<SearchRow>(() => DEFAULT_STOCKS[market]);
 	const [timeframe, setTimeframe] = useState<ChartTimeframe>("5m");
@@ -968,13 +1089,27 @@ export function ChartBroadcastPanel({ market }: Props) {
 		refetchOnReconnect: true,
 	});
 
+	const marketContextQuery = useQuery({
+		queryKey: ["chart-broadcast-market-context", market],
+		queryFn: () => fetchMarketContext(market),
+		refetchInterval: live ? 15_000 : false,
+		refetchIntervalInBackground: true,
+		retry: 1,
+	});
+	const marketContext: MarketContext = marketContextQuery.data ?? {
+		label: market === "KR" ? "코스피·코스닥" : "S&P500·나스닥",
+		changePercent: 0,
+		bias: 0,
+		sources: [],
+	};
+
 	const candles = useMemo(
 		() => normalizeCandles(chart.data?.candles ?? [], timeframe),
 		[chart.data?.candles, timeframe],
 	);
 	const snapshot = useMemo(
-		() => (candles.length >= 2 ? technicalSnapshot(candles) : null),
-		[candles],
+		() => (candles.length >= 2 ? technicalSnapshot(candles, marketContext) : null),
+		[candles, marketContext.bias, marketContext.changePercent, marketContext.label],
 	);
 	const opinion = useMemo(
 		() => (snapshot ? buildOpinion(snapshot) : null),
@@ -997,6 +1132,22 @@ export function ChartBroadcastPanel({ market }: Props) {
 			...current,
 		].slice(0, 20));
 	}, [candles, opinion, selectedStock.ticker, timeframe]);
+
+	useEffect(() => {
+		if (!opinion || !snapshot || !onSignalChange) return;
+		onSignalChange({
+			ticker: selectedStock.ticker,
+			market,
+			signal: opinion.signal,
+			confidence: opinion.confidence,
+			title: opinion.title,
+			summary: opinion.summary,
+			currentPrice: snapshot.currentPrice,
+			marketBias: snapshot.marketBias,
+			patterns: snapshot.patterns,
+			generatedAt: new Date().toISOString(),
+		});
+	}, [market, onSignalChange, opinion, selectedStock.ticker, snapshot]);
 
 	const toggleOverlay = (key: OverlayKey) => {
 		setOverlays((current) => ({ ...current, [key]: !current[key] }));
@@ -1194,44 +1345,6 @@ export function ChartBroadcastPanel({ market }: Props) {
 
 			{snapshot && opinion && (
 				<>
-					<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-						<div className="flex items-start justify-between gap-3">
-							<div className="min-w-0">
-								<p className="text-[11px] font-extrabold text-primary">실시간 AI 기술분석</p>
-								<h2 className="mt-1 text-lg font-black">{opinion.title}</h2>
-							</div>
-							<div className={cn("shrink-0 rounded-full border px-3 py-1.5 text-xs font-black", signalClass(opinion.signal))}>{signalLabel(opinion.signal)}</div>
-						</div>
-
-						<p className="mt-3 break-keep rounded-2xl bg-secondary/70 px-3 py-3 text-xs font-bold leading-6 text-foreground">{opinion.summary}</p>
-
-						<div className="mt-3 grid grid-cols-2 gap-2">
-							<MetricCard icon={<Activity className="h-4 w-4" />} label="현재 추세" value={snapshot.trend} />
-							<MetricCard icon={<Gauge className="h-4 w-4" />} label="신뢰도" value={`${opinion.confidence}/100`} />
-							<MetricCard icon={<TrendingUp className="h-4 w-4" />} label="현재가" value={formatPrice(snapshot.currentPrice, market)} />
-							<MetricCard icon={<BarChart3 className="h-4 w-4" />} label="거래량" value={`${snapshot.volumeRatio.toFixed(2)}배`} />
-						</div>
-
-						<div className="mt-3 grid grid-cols-3 gap-2">
-							<PlanCard tone="entry" label="진입 기준" value={formatPrice(opinion.entryPrice, market)} />
-							<PlanCard tone="target" label="목표가" value={formatPrice(opinion.targetPrice, market)} />
-							<PlanCard tone="stop" label="손절 기준" value={formatPrice(opinion.stopPrice, market)} />
-						</div>
-
-						<div className="mt-3 grid grid-cols-2 gap-2">
-							<LevelCard label="1차 저항" value={formatPrice(snapshot.levels.resistance1, market)} tone="resistance" />
-							<LevelCard label="2차 저항" value={formatPrice(snapshot.levels.resistance2, market)} tone="resistance" />
-							<LevelCard label="1차 지지" value={formatPrice(snapshot.levels.support1, market)} tone="support" />
-							<LevelCard label="2차 지지" value={formatPrice(snapshot.levels.support2, market)} tone="support" />
-						</div>
-
-						<div className="mt-3 grid grid-cols-3 gap-2">
-							{overlays.rsi && <SmallIndicator label="RSI" value={snapshot.rsi == null ? "-" : snapshot.rsi.toFixed(1)} />}
-							{overlays.macd && <SmallIndicator label="MACD" value={snapshot.macd == null ? "-" : snapshot.macd.toFixed(3)} />}
-							{overlays.atr && <SmallIndicator label="ATR" value={formatPrice(snapshot.atr, market)} />}
-						</div>
-					</section>
-
 					<section className="overflow-hidden rounded-3xl border border-card-border bg-card shadow-sm">
 						<div className="flex items-center justify-between border-b border-card-border px-4 py-3">
 							<div className="flex items-center gap-2">
@@ -1256,6 +1369,46 @@ export function ChartBroadcastPanel({ market }: Props) {
 							) : (
 								<p className="rounded-2xl bg-background px-3 py-5 text-center text-xs font-bold text-muted-foreground">새 봉과 분석 신호를 기다리는 중입니다.</p>
 							)}
+						</div>
+					</section>
+
+					<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+						<div className="flex items-start justify-between gap-3">
+							<div className="min-w-0">
+								<p className="text-[11px] font-extrabold text-primary">실시간 AI 기술분석</p>
+								<h2 className="mt-1 text-lg font-black">{opinion.title}</h2>
+							</div>
+							<div className={cn("shrink-0 rounded-full border px-3 py-1.5 text-xs font-black", signalClass(opinion.signal))}>{signalLabel(opinion.signal)}</div>
+						</div>
+
+						<p className="mt-3 break-keep rounded-2xl bg-secondary/70 px-3 py-3 text-xs font-bold leading-6 text-foreground">{opinion.summary}</p>
+
+						<div className="mt-3 grid grid-cols-2 gap-2">
+							<MetricCard icon={<Activity className="h-4 w-4" />} label="현재 추세" value={snapshot.trend} />
+							<MetricCard icon={<Gauge className="h-4 w-4" />} label="신뢰도" value={`${opinion.confidence}/100`} />
+							<MetricCard icon={<TrendingUp className="h-4 w-4" />} label="현재가" value={formatPrice(snapshot.currentPrice, market)} />
+							<MetricCard icon={<Gauge className="h-4 w-4" />} label={snapshot.marketLabel} value={`${snapshot.marketChangePercent >= 0 ? "+" : ""}${snapshot.marketChangePercent.toFixed(2)}%`} />
+							<MetricCard icon={<BarChart3 className="h-4 w-4" />} label="거래량" value={`${snapshot.volumeRatio.toFixed(2)}배`} />
+						</div>
+
+						<div className="mt-3 grid grid-cols-3 gap-2">
+							<PlanCard tone="entry" label="진입 기준" value={formatPrice(opinion.entryPrice, market)} />
+							<PlanCard tone="target" label="목표가" value={formatPrice(opinion.targetPrice, market)} />
+							<PlanCard tone="stop" label="손절 기준" value={formatPrice(opinion.stopPrice, market)} />
+						</div>
+
+						<div className="mt-3 grid grid-cols-2 gap-2">
+							<LevelCard label="1차 저항" value={formatPrice(snapshot.levels.resistance1, market)} tone="resistance" />
+							<LevelCard label="2차 저항" value={formatPrice(snapshot.levels.resistance2, market)} tone="resistance" />
+							<LevelCard label="1차 지지" value={formatPrice(snapshot.levels.support1, market)} tone="support" />
+							<LevelCard label="2차 지지" value={formatPrice(snapshot.levels.support2, market)} tone="support" />
+						</div>
+
+						<div className="mt-3 grid grid-cols-3 gap-2">
+							{overlays.rsi && <SmallIndicator label="RSI" value={snapshot.rsi == null ? "-" : snapshot.rsi.toFixed(1)} />}
+							{overlays.macd && <SmallIndicator label="MACD" value={snapshot.macd == null ? "-" : snapshot.macd.toFixed(3)} />}
+							{overlays.atr && <SmallIndicator label="ATR" value={formatPrice(snapshot.atr, market)} />}
+							{snapshot.patterns.map((pattern) => <SmallIndicator key={pattern} label="차트패턴" value={pattern} />)}
 						</div>
 					</section>
 				</>
