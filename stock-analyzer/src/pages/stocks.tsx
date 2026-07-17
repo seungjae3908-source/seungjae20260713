@@ -155,10 +155,8 @@ export default function StocksPage() {
     <div className="h-full overflow-y-auto overscroll-contain bg-background">
       {/* 상단 고정 없음 — 제목·검색창·탭·목록이 한 페이지로 함께 스크롤. */}
       <header className="border-b border-card-border px-4 pb-3 pt-4">
-        <h1 className="text-xl font-black text-center">종목</h1>
-
-        {/* 1) 종목 검색창 — 제목 바로 아래에 붙여 하나의 상단 영역처럼 보이게(작은 간격). 입력 텍스트 왼쪽 정렬 유지 */}
-        <label className="mt-1.5 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
+        {/* 1) 종목 검색창 — 상단 제목 없이 바로 표시. 입력 텍스트 왼쪽 정렬 유지 */}
+        <label className="flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
           <Search className="h-4 w-4 text-muted-foreground" />
           <input
             value={query}
@@ -233,9 +231,11 @@ export default function StocksPage() {
 
         {/* 5) 선택한 분류의 실제 결과 목록 */}
         <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-black">{CATEGORIES.find((c) => c.key === category)?.label}</h2>
-          </div>
+          {category !== 'ai' && (
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-black">{CATEGORIES.find((c) => c.key === category)?.label}</h2>
+            </div>
+          )}
 
           {isStock ? (
             <StockCategoryResults
@@ -314,10 +314,8 @@ function StockCategoryResults({
     const undervalued = rows.filter((row) => row.category === 'undervalued');
     const breakout = rows.filter((row) => row.category === 'breakout');
     if (rows.length === 0) return <EmptyBox>현재 조건을 충족하는 실제 추천 종목이 없습니다. (조건 미달 종목으로 채우지 않습니다)</EmptyBox>;
-    return (
-      <div className="space-y-4">
-        <p className="text-center text-[11px] font-bold text-muted-foreground">규칙 기반 분석 · AI(LLM) 미연결</p>
-        <RecoGroup title="저평가 회복" rows={undervalued} onOpenStock={onOpenStock} />
+    retun)
+        <RecoGroup title="저평가" rows={undervalued} onOpenStock={onOpenStock} />
         <RecoGroup title="초기 추세돌파" rows={breakout} onOpenStock={onOpenStock} />
       </div>
     );

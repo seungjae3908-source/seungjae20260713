@@ -1086,7 +1086,7 @@ export default function SearchPage() {
             placeholder={
               market === "KR"
                 ? "국내 종목명 또는 종목코드 검색"
-                : "미국 종목명 또는 티커 검색"
+                : "해외 종목명 또는 티커 검색"
             }
             className="h-12 w-full rounded-2xl border border-card-border bg-card pl-10 pr-4 text-sm font-bold outline-none placeholder:text-muted-foreground focus:border-primary"
           />
@@ -1320,3 +1320,4 @@ export default function SearchPage() {
     </div>
   );
 }
+
