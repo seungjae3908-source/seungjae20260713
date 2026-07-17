@@ -26,10 +26,47 @@ export interface AutoTradeSettings {
 	liveTrading: boolean;
 	maxRanks: number;
 	investmentPerTrade: number;
+	accountValue: number;
+	riskPerTradePercent: number;
+	dailyLossLimitPercent: number;
+	maxOpenPositions: number;
+	maxConsecutiveLosses: number;
+	maxDailyOrders: number;
 	minProbability: number;
 	stopLossPercent: number;
 	takeProfitPercent: number;
 	executionKey: string;
+}
+
+export interface AutoTradeRiskPreview {
+	riskBudget: number;
+	riskLimitedInvestment: number;
+	perShareRisk: number;
+	riskQuantity: number;
+	budgetQuantity: number;
+	finalQuantity: number;
+	estimatedAmount: number;
+}
+
+export interface AutoTradeSafetyJournalEntry {
+	market: AutoTradeMarket;
+	status: "OPEN" | "TAKE_PROFIT" | "STOP_LOSS" | "MANUAL_CLOSE";
+	quantity: number;
+	entryPrice: number;
+	exitPrice?: number | null;
+	profitPercent?: number | null;
+	openedAt: string;
+	closedAt?: string | null;
+}
+
+export interface AutoTradeSafetySnapshot {
+	allowed: boolean;
+	blockedReason: string | null;
+	openPositions: number;
+	dailyOrders: number;
+	consecutiveLosses: number;
+	dailyLossAmount: number;
+	dailyLossPercent: number;
 }
 
 export interface AutoTradeRunResult {
@@ -61,6 +98,12 @@ const DEFAULT_SETTINGS: AutoTradeSettings = {
 	liveTrading: false,
 	maxRanks: 1,
 	investmentPerTrade: 100000,
+	accountValue: 10000000,
+	riskPerTradePercent: 0.25,
+	dailyLossLimitPercent: 0.75,
+	maxOpenPositions: 3,
+	maxConsecutiveLosses: 2,
+	maxDailyOrders: 3,
 	minProbability: 70,
 	stopLossPercent: 3,
 	takeProfitPercent: 5,
@@ -88,6 +131,41 @@ function safeNumber(value: unknown, fallback = 0) {
 	return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+export function calculateAutoTradeRiskPreview(
+	settings: Pick<
+		AutoTradeSettings,
+		"accountValue" | "riskPerTradePercent" | "investmentPerTrade" | "stopLossPercent"
+	>,
+	price: number | null | undefined,
+): AutoTradeRiskPreview {
+	const currentPrice = Math.max(0, safeNumber(price, 0));
+	const accountValue = Math.max(0, safeNumber(settings.accountValue, 0));
+	const riskPercent = clamp(safeNumber(settings.riskPerTradePercent, 0), 0, 10);
+	const maxInvestment = Math.max(0, safeNumber(settings.investmentPerTrade, 0));
+	const stopPercent = clamp(safeNumber(settings.stopLossPercent, 0), 0, 100);
+	const riskBudget = accountValue * (riskPercent / 100);
+	const riskLimitedInvestment =
+		stopPercent > 0 ? riskBudget / (stopPercent / 100) : 0;
+	const perShareRisk = currentPrice * (stopPercent / 100);
+	const riskQuantity =
+		currentPrice > 0 && perShareRisk > 0
+			? Math.max(0, Math.floor(riskBudget / perShareRisk))
+			: 0;
+	const budgetQuantity =
+		currentPrice > 0 ? Math.max(0, Math.floor(maxInvestment / currentPrice)) : 0;
+	const finalQuantity = Math.max(0, Math.min(riskQuantity, budgetQuantity));
+
+	return {
+		riskBudget,
+		riskLimitedInvestment,
+		perShareRisk,
+		riskQuantity,
+		budgetQuantity,
+		finalQuantity,
+		estimatedAmount: finalQuantity * currentPrice,
+	};
+}
+
 export function loadAutoTradeSettings(): AutoTradeSettings {
 	if (!storageAvailable()) return { ...DEFAULT_SETTINGS };
 
@@ -103,7 +181,64 @@ export function loadAutoTradeSettings(): AutoTradeSettings {
 			maxRanks: 1,
 			investmentPerTrade: Math.max(
 				1,
-				Math.round(safeNumber(parsed.investmentPerTrade, 0)),
+				Math.round(
+					safeNumber(
+						parsed.investmentPerTrade,
+						DEFAULT_SETTINGS.investmentPerTrade,
+					),
+				),
+			),
+			accountValue: Math.max(
+				1,
+				Math.round(
+					safeNumber(parsed.accountValue, DEFAULT_SETTINGS.accountValue),
+				),
+			),
+			riskPerTradePercent: clamp(
+				safeNumber(
+					parsed.riskPerTradePercent,
+					DEFAULT_SETTINGS.riskPerTradePercent,
+				),
+				0.05,
+				2,
+			),
+			dailyLossLimitPercent: clamp(
+				safeNumber(
+					parsed.dailyLossLimitPercent,
+					DEFAULT_SETTINGS.dailyLossLimitPercent,
+				),
+				0.1,
+				10,
+			),
+			maxOpenPositions: clamp(
+				Math.round(
+					safeNumber(
+						parsed.maxOpenPositions,
+						DEFAULT_SETTINGS.maxOpenPositions,
+					),
+				),
+				1,
+				10,
+			),
+			maxConsecutiveLosses: clamp(
+				Math.round(
+					safeNumber(
+						parsed.maxConsecutiveLosses,
+						DEFAULT_SETTINGS.maxConsecutiveLosses,
+					),
+				),
+				1,
+				10,
+			),
+			maxDailyOrders: clamp(
+				Math.round(
+					safeNumber(
+						parsed.maxDailyOrders,
+						DEFAULT_SETTINGS.maxDailyOrders,
+					),
+				),
+				1,
+				20,
 			),
 			minProbability: clamp(
 				Math.round(safeNumber(parsed.minProbability, 0)),
@@ -136,6 +271,16 @@ export function saveAutoTradeSettings(
 		...settings,
 		maxRanks: 1,
 		investmentPerTrade: Math.max(0, Math.round(settings.investmentPerTrade)),
+		accountValue: Math.max(1, Math.round(settings.accountValue)),
+		riskPerTradePercent: clamp(settings.riskPerTradePercent, 0.05, 2),
+		dailyLossLimitPercent: clamp(settings.dailyLossLimitPercent, 0.1, 10),
+		maxOpenPositions: clamp(Math.round(settings.maxOpenPositions), 1, 10),
+		maxConsecutiveLosses: clamp(
+			Math.round(settings.maxConsecutiveLosses),
+			1,
+			10,
+		),
+		maxDailyOrders: clamp(Math.round(settings.maxDailyOrders), 1, 20),
 		minProbability: clamp(Math.round(settings.minProbability), 0, 99),
 		stopLossPercent: clamp(settings.stopLossPercent, 0, 50),
 		takeProfitPercent: clamp(settings.takeProfitPercent, 0, 200),
@@ -357,13 +502,89 @@ export function getAutoTradeSignal(ticker: string) {
 	};
 }
 
-function kstDateKey() {
+function kstDateKey(value: string | Date = new Date()) {
+	const date = value instanceof Date ? value : new Date(value);
+	if (Number.isNaN(date.getTime())) return "";
+
 	return new Intl.DateTimeFormat("en-CA", {
 		timeZone: "Asia/Seoul",
 		year: "numeric",
 		month: "2-digit",
 		day: "2-digit",
-	}).format(new Date());
+	}).format(date);
+}
+
+export function calculateAutoTradeSafetySnapshot(
+	entries: AutoTradeSafetyJournalEntry[],
+	settings: Pick<
+		AutoTradeSettings,
+		| "accountValue"
+		| "dailyLossLimitPercent"
+		| "maxOpenPositions"
+		| "maxConsecutiveLosses"
+		| "maxDailyOrders"
+	>,
+	market: AutoTradeMarket,
+): AutoTradeSafetySnapshot {
+	const today = kstDateKey();
+	const relevant = entries.filter((entry) => entry.market === market);
+	const openPositions = relevant.filter((entry) => entry.status === "OPEN").length;
+	const dailyOrders = relevant.filter(
+		(entry) => kstDateKey(entry.openedAt) === today,
+	).length;
+	const closed = relevant
+		.filter((entry) => entry.status !== "OPEN" && entry.closedAt)
+		.sort(
+			(a, b) =>
+				new Date(b.closedAt ?? 0).getTime() -
+				new Date(a.closedAt ?? 0).getTime(),
+		);
+
+	let consecutiveLosses = 0;
+	for (const entry of closed) {
+		const profitPercent = safeNumber(entry.profitPercent, 0);
+		if (profitPercent < 0) consecutiveLosses += 1;
+		else break;
+	}
+
+	const dailyLossAmount = closed
+		.filter((entry) => kstDateKey(entry.closedAt ?? "") === today)
+		.reduce((sum, entry) => {
+			const quantity = Math.max(0, safeNumber(entry.quantity, 0));
+			const entryPrice = Math.max(0, safeNumber(entry.entryPrice, 0));
+			const exitPrice = safeNumber(entry.exitPrice, Number.NaN);
+			if (Number.isFinite(exitPrice) && exitPrice < entryPrice) {
+				return sum + (entryPrice - exitPrice) * quantity;
+			}
+			const profitPercent = safeNumber(entry.profitPercent, 0);
+			if (profitPercent < 0) {
+				return sum + entryPrice * quantity * (Math.abs(profitPercent) / 100);
+			}
+			return sum;
+		}, 0);
+	const accountValue = Math.max(1, safeNumber(settings.accountValue, 1));
+	const dailyLossPercent = (dailyLossAmount / accountValue) * 100;
+
+	let blockedReason: string | null = null;
+	if (openPositions >= settings.maxOpenPositions) {
+		blockedReason = `동시 보유 한도 ${settings.maxOpenPositions}종목에 도달했습니다.`;
+	} else if (dailyOrders >= settings.maxDailyOrders) {
+		blockedReason = `오늘 신규주문 한도 ${settings.maxDailyOrders}회에 도달했습니다.`;
+	} else if (consecutiveLosses >= settings.maxConsecutiveLosses) {
+		blockedReason = `연속손실 ${consecutiveLosses}회로 신규주문이 정지됐습니다.`;
+	} else if (dailyLossPercent >= settings.dailyLossLimitPercent) {
+		blockedReason = `오늘 확정 손실이 ${settings.dailyLossLimitPercent}% 한도에 도달했습니다.`;
+	}
+
+	return {
+		allowed: blockedReason == null,
+		blockedReason,
+		openPositions,
+		dailyOrders,
+		consecutiveLosses,
+		dailyLossAmount,
+		dailyLossPercent,
+	};
 }
 
 function loadExecutedKeys(): string[] {
@@ -420,7 +641,16 @@ export async function executeAutoTradeCandidates(
 	settings: AutoTradeSettings,
 ): Promise<AutoTradeRunResult> {
 	if (settings.investmentPerTrade <= 0) {
-		throw new Error("주문금액을 직접 입력해 주세요.");
+		throw new Error("1회 최대 주문금액을 직접 입력해 주세요.");
+	}
+	if (settings.accountValue <= 0) {
+		throw new Error("계좌 평가금액을 직접 입력해 주세요.");
+	}
+	if (settings.riskPerTradePercent <= 0) {
+		throw new Error("1회 허용손실률을 직접 입력해 주세요.");
+	}
+	if (settings.dailyLossLimitPercent <= 0) {
+		throw new Error("일일 최대손실률을 직접 입력해 주세요.");
 	}
 	if (settings.minProbability <= 0) {
 		throw new Error("최소 모델점수를 직접 입력해 주세요.");
@@ -435,13 +665,64 @@ export async function executeAutoTradeCandidates(
 	const targets = pendingAutoTradeCandidates(candidates, settings);
 
 	if (!settings.enabled || !settings.liveTrading) {
-		return { ok: false, message: "실제 주문 기능이 활성화되어 있지 않습니다.", results: [] };
+		return {
+			ok: false,
+			message: "실제 주문 기능이 활성화되어 있지 않습니다.",
+			results: [],
+		};
 	}
 	if (!settings.executionKey.trim()) {
-		return { ok: false, message: "자동매매 실행키를 입력해 주세요.", results: [] };
+		return {
+			ok: false,
+			message: "자동매매 실행키를 입력해 주세요.",
+			results: [],
+		};
 	}
 	if (targets.length === 0) {
-		return { ok: true, message: "오늘 이미 주문했거나 기준을 충족한 신규 후보가 없습니다.", results: [] };
+		return {
+			ok: true,
+			message: "오늘 이미 주문했거나 기준을 충족한 신규 후보가 없습니다.",
+			results: [],
+		};
+	}
+
+	const journalResponse = await authorizedFetch("/api/stocks/auto-trade/journal");
+	const journalPayload = (await journalResponse.json().catch(() => ({}))) as {
+		message?: string;
+		entries?: AutoTradeSafetyJournalEntry[];
+	};
+	if (!journalResponse.ok) {
+		throw new Error(
+			journalPayload.message ||
+				`주문 전 안전상태 확인 실패 (HTTP ${journalResponse.status})`,
+		);
+	}
+
+	const safety = calculateAutoTradeSafetySnapshot(
+		Array.isArray(journalPayload.entries) ? journalPayload.entries : [],
+		settings,
+		targets[0].market,
+	);
+	if (!safety.allowed) {
+		return {
+			ok: false,
+			message: `신규 주문 정지 · ${safety.blockedReason ?? "안전한도 확인 필요"}`,
+			results: [],
+		};
+	}
+
+	const riskBudget =
+		settings.accountValue * (settings.riskPerTradePercent / 100);
+	const riskLimitedInvestment =
+		riskBudget / (settings.stopLossPercent / 100);
+	const effectiveInvestmentPerTrade = Math.max(
+		0,
+		Math.floor(
+			Math.min(settings.investmentPerTrade, riskLimitedInvestment),
+		),
+	);
+	if (effectiveInvestmentPerTrade <= 0) {
+		throw new Error("현재 위험 설정으로 주문 가능한 금액이 없습니다.");
 	}
 
 	type ApprovalPlan = {
@@ -470,20 +751,30 @@ export async function executeAutoTradeCandidates(
 		},
 		body: JSON.stringify({
 			candidates: targets,
-			investmentPerTrade: settings.investmentPerTrade,
+			investmentPerTrade: effectiveInvestmentPerTrade,
 			stopLossPercent: settings.stopLossPercent,
 			takeProfitPercent: settings.takeProfitPercent,
 		}),
 	});
 	const plan = (await planResponse.json().catch(() => ({}))) as ApprovalPlan;
 	if (!planResponse.ok || !plan.approvalToken || !plan.order) {
-		throw new Error(plan.message || `주문계획 생성 실패 (HTTP ${planResponse.status})`);
+		throw new Error(
+			plan.message || `주문계획 생성 실패 (HTTP ${planResponse.status})`,
+		);
 	}
 
 	const order = plan.order;
-	const number = new Intl.NumberFormat(order.currency === "USD" ? "en-US" : "ko-KR", {
-		maximumFractionDigits: order.currency === "USD" ? 2 : 0,
-	});
+	const preview = calculateAutoTradeRiskPreview(settings, order.currentPrice);
+	const expectedLoss =
+		order.quantity *
+		order.currentPrice *
+		(settings.stopLossPercent / 100);
+	const number = new Intl.NumberFormat(
+		order.currency === "USD" ? "en-US" : "ko-KR",
+		{
+			maximumFractionDigits: order.currency === "USD" ? 2 : 0,
+		},
+	);
 	const approved = window.confirm(
 		[
 			"실제 주문을 1회 승인하시겠습니까?",
@@ -492,15 +783,27 @@ export async function executeAutoTradeCandidates(
 			`현재가: ${number.format(order.currentPrice)} ${order.currency}`,
 			`수량: ${order.quantity}주`,
 			`예상금액: ${number.format(order.estimatedAmount)} ${order.currency}`,
+			`1회 허용손실금액: ${number.format(preview.riskBudget)} ${order.currency}`,
+			`이번 주문 예상손실한도: ${number.format(expectedLoss)} ${order.currency}`,
 			`손절가: ${number.format(order.stopPrice)} ${order.currency}`,
 			`목표가: ${number.format(order.targetPrice)} ${order.currency}`,
-			`승인 만료: ${plan.expiresAt ? new Date(plan.expiresAt).toLocaleString("ko-KR") : "10분 이내"}`,
+			`안전상태: 보유 ${safety.openPositions}/${settings.maxOpenPositions} · 오늘 주문 ${safety.dailyOrders}/${settings.maxDailyOrders} · 연속손실 ${safety.consecutiveLosses}/${settings.maxConsecutiveLosses}`,
+			`오늘 확정 손실: ${number.format(safety.dailyLossAmount)} ${order.currency} (${safety.dailyLossPercent.toFixed(2)}%)`,
+			`승인 만료: ${
+				plan.expiresAt
+					? new Date(plan.expiresAt).toLocaleString("ko-KR")
+					: "10분 이내"
+			}`,
 			"",
 			"확인을 누른 경우에만 주문이 전송됩니다.",
 		].join("\n"),
 	);
 	if (!approved) {
-		return { ok: false, message: "주문 승인을 취소했습니다.", results: [] };
+		return {
+			ok: false,
+			message: "주문 승인을 취소했습니다.",
+			results: [],
+		};
 	}
 
 	const response = await authorizedFetch("/api/stocks/auto-trade/execute", {
@@ -513,7 +816,9 @@ export async function executeAutoTradeCandidates(
 	});
 	const payload = (await response.json().catch(() => ({}))) as AutoTradeRunResult;
 	if (!response.ok) {
-		throw new Error(payload.message || `자동매매 주문 실패 (HTTP ${response.status})`);
+		throw new Error(
+			payload.message || `자동매매 주문 실패 (HTTP ${response.status})`,
+		);
 	}
 
 	const completed = (payload.results ?? [])
@@ -522,6 +827,7 @@ export async function executeAutoTradeCandidates(
 	markAutoTradeExecuted(completed);
 	return payload;
 }
+
 
 export async function monitorAutoTradePositions(
 	settings: AutoTradeSettings,

@@ -20,9 +20,13 @@ import {
   X,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { api, apiGet } from "@/lib/api";
+import { api } from "@/lib/api";
 import { BottomNav } from "@/components/bottom-nav";
-import { AssetSwitch } from "@/components/asset-switch";
+import {
+  ChartBroadcastPanel,
+  type ChartBroadcastSignal,
+} from "@/components/chart-broadcast";
+import { CryptoTradingWorkspace } from "@/components/crypto-trading-workspace";
 import { useAssetMode } from "@/lib/asset-mode";
 import {
   classifyStock,
@@ -51,7 +55,7 @@ import {
 
 type AnyObj = Record<string, unknown>;
 type MarketFilter = "KR" | "US";
-type ScannerViewMode = "condition" | "auto";
+type ScannerViewMode = "condition" | "chart" | "auto";
 type ThresholdOption = number;
 type AutoTradeJournalEntry = {
   id: string;
@@ -506,6 +510,7 @@ export default function ScannerPage() {
   const [closingTicker, setClosingTicker] = useState<string | null>(null);
   const [candidateListOpen, setCandidateListOpen] = useState(false);
   const [conditionResultsOpen, setConditionResultsOpen] = useState(false);
+  const [chartTradeSignal, setChartTradeSignal] = useState<ChartBroadcastSignal | null>(null);
 
   const autoTradeStatus = useQuery({
     queryKey: ["auto-trade-status"],
@@ -679,6 +684,15 @@ export default function ScannerPage() {
         cardMarket(card),
       );
 
+      const chartSignalMatches = chartTradeSignal?.ticker === ticker && chartTradeSignal.market === cardMarket(card);
+      const chartBullish = chartSignalMatches && (chartTradeSignal.signal === "ENTER" || chartTradeSignal.signal === "HOLD");
+      const chartBearish = chartSignalMatches && (chartTradeSignal.signal === "STOP" || chartTradeSignal.signal === "EXIT" || chartTradeSignal.signal === "TAKE_PROFIT");
+      const chartAdjustment = chartBullish
+        ? Math.min(8, Math.round(chartTradeSignal.confidence / 12))
+        : chartBearish
+          ? -Math.min(18, Math.round(chartTradeSignal.confidence / 5))
+          : 0;
+
       return {
         ticker,
         name,
@@ -687,7 +701,7 @@ export default function ScannerPage() {
 		exchange: cardMarket(card) === "US" ? cardExchange(card) : null,
         rank: 0,
         score,
-		probability: assessment.probability,
+		probability: Math.max(0, Math.min(100, assessment.probability + chartAdjustment)),
 		riskScore: assessment.riskScore,
 		dataCompleteness: assessment.dataCompleteness,
 		price,
@@ -701,7 +715,11 @@ export default function ScannerPage() {
                   ? "상승 모멘텀"
                   : "변동성 확인",
               ]
-        ).filter(Boolean).slice(0, 4),
+        ).concat(
+          chartSignalMatches
+            ? [`차트생중계 ${chartTradeSignal.title}`, ...chartTradeSignal.patterns]
+            : [],
+        ).filter(Boolean).slice(0, 6),
 		factors: assessment.factors,
         generatedAt,
       };
@@ -715,7 +733,7 @@ export default function ScannerPage() {
       )
       .slice(0, 100)
       .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
-  }, [scan.data, selectedKey]);
+  }, [chartTradeSignal, scan.data, selectedKey]);
 
   const autoCandidatesKey = autoCandidates
     .map((candidate) => `${candidate.ticker}:${candidate.probability}`)
@@ -906,7 +924,13 @@ export default function ScannerPage() {
   };
 
   if (assetMode.asset === "coin") {
-    return <CoinTradingWorkspace viewMode={viewMode} navigate={navigate} />;
+    return (
+      <CryptoTradingWorkspace
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        onBackToStock={() => assetMode.setAsset("stock")}
+      />
+    );
   }
 
   return (
@@ -914,32 +938,28 @@ export default function ScannerPage() {
       {/* 상단 고정 없음 — 제목·선택 3줄·기간·지표·종목보기가 한 페이지로 함께 스크롤. */}
       <header className="border-b border-card-border px-4 pb-3 pt-4">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-extrabold">{viewMode === "condition" ? "조건검색" : "자동매매"}</h1>
+          <h1 className="text-xl font-extrabold">도구</h1>
 
-            <p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-              {viewMode === "condition" ? "지표를 조합하여 종목을 검색합니다." : "전체 후보를 비교해 모델점수 1위 한 종목을 주문 승인계획과 연결합니다."}
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => void scan.refetch()}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-card-border bg-card"
-          >
-            <RefreshCw
-              className={cn("h-4 w-4", scan.isFetching && "animate-spin")}
-            />
-          </button>
+          {viewMode !== "chart" && (
+            <button
+              type="button"
+              onClick={() => void scan.refetch()}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-card-border bg-card"
+            >
+              <RefreshCw
+                className={cn("h-4 w-4", scan.isFetching && "animate-spin")}
+              />
+            </button>
+          )}
         </div>
 
-        {/* 1행: 조건검색/자동매매 */}
-        <div className="mb-2 grid grid-cols-2 gap-2">
+        {/* 1행: 조건검색/차트중계/자동매매 */}
+        <div className="mb-2 grid grid-cols-3 gap-2">
           <button
             type="button"
             onClick={() => setViewMode("condition")}
             className={cn(
-              "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-3 py-2 text-sm font-extrabold",
+              "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-2 py-2 text-sm font-extrabold",
               viewMode === "condition"
                 ? "border-primary bg-primary text-primary-foreground"
                 : "border-card-border bg-card text-muted-foreground",
@@ -949,9 +969,24 @@ export default function ScannerPage() {
           </button>
           <button
             type="button"
+            onClick={() => {
+              assetMode.setAsset("stock");
+              setViewMode("chart");
+            }}
+            className={cn(
+              "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-2 py-2 text-sm font-extrabold",
+              viewMode === "chart"
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-card-border bg-card text-muted-foreground",
+            )}
+          >
+            차트중계
+          </button>
+          <button
+            type="button"
             onClick={() => setViewMode("auto")}
             className={cn(
-              "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-3 py-2 text-sm font-extrabold",
+              "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-2 py-2 text-sm font-extrabold",
               viewMode === "auto"
                 ? "border-primary bg-primary text-primary-foreground"
                 : "border-card-border bg-card text-muted-foreground",
@@ -978,7 +1013,10 @@ export default function ScannerPage() {
           {/* 이 헤더는 주식 모드에서만 렌더링되므로(코인은 별도 워크스페이스) 코인 버튼은 항상 비선택 상태 */}
           <button
             type="button"
-            onClick={() => assetMode.setAsset("coin")}
+            onClick={() => {
+              setViewMode("condition");
+              assetMode.setAsset("coin");
+            }}
             className="inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border border-card-border bg-card px-3 py-2 text-sm font-bold text-muted-foreground"
           >
             코인
@@ -1006,6 +1044,8 @@ export default function ScannerPage() {
       </header>
 
       <main className="space-y-4 p-4 pb-24">
+        {viewMode === "chart" && <ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />}
+
         {viewMode === "condition" && (
           <>
         <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
@@ -1198,6 +1238,8 @@ export default function ScannerPage() {
         )}
 
         {viewMode === "auto" && (
+        <>
+        <ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />
         <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -1225,17 +1267,20 @@ export default function ScannerPage() {
           <div className="mt-3 grid grid-cols-2 gap-2">
             <label className="rounded-2xl border border-card-border bg-background p-3">
               <span className="block text-[10px] font-extrabold text-muted-foreground">
-				주문금액 ({market === "US" ? "USD" : "원"})
+                주문금액 ({market === "US" ? "USD" : "원"})
               </span>
               <input
                 type="number"
                 min={0}
-				step={market === "US" ? 10 : 10000}
+                step={market === "US" ? 10 : 10000}
                 inputMode="numeric"
                 value={autoSettings.investmentPerTrade || ""}
                 onChange={(event) =>
                   updateAutoSettings({
-                    investmentPerTrade: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value)),
+                    investmentPerTrade:
+                      event.target.value === ""
+                        ? 0
+                        : Math.max(0, Number(event.target.value)),
                   })
                 }
                 className="mt-1 w-full bg-transparent text-sm font-extrabold outline-none"
@@ -1253,7 +1298,10 @@ export default function ScannerPage() {
                   value={autoSettings.minProbability || ""}
                   onChange={(event) =>
                     updateAutoSettings({
-                      minProbability: event.target.value === "" ? 0 : Number(event.target.value),
+                      minProbability:
+                        event.target.value === ""
+                          ? 0
+                          : Number(event.target.value),
                     })
                   }
                   className="min-w-0 flex-1 bg-transparent text-sm font-extrabold outline-none"
@@ -1273,7 +1321,10 @@ export default function ScannerPage() {
                   value={autoSettings.stopLossPercent || ""}
                   onChange={(event) =>
                     updateAutoSettings({
-                      stopLossPercent: event.target.value === "" ? 0 : Number(event.target.value),
+                      stopLossPercent:
+                        event.target.value === ""
+                          ? 0
+                          : Number(event.target.value),
                     })
                   }
                   className="min-w-0 flex-1 bg-transparent text-sm font-extrabold outline-none"
@@ -1293,7 +1344,10 @@ export default function ScannerPage() {
                   value={autoSettings.takeProfitPercent || ""}
                   onChange={(event) =>
                     updateAutoSettings({
-                      takeProfitPercent: event.target.value === "" ? 0 : Number(event.target.value),
+                      takeProfitPercent:
+                        event.target.value === ""
+                          ? 0
+                          : Number(event.target.value),
                     })
                   }
                   className="min-w-0 flex-1 bg-transparent text-sm font-extrabold outline-none"
@@ -1541,7 +1595,7 @@ export default function ScannerPage() {
             )}
           </div>
         </section>
-
+        </>
         )}
 
         {candidateListOpen && (
@@ -2189,86 +2243,6 @@ function ScannerCard({
         </>
       )}
     </article>
-  );
-}
-
-function CoinTradingWorkspace({ viewMode, navigate }: { viewMode: ScannerViewMode; navigate: (to: string) => void }) {
-  const mode = useAssetMode();
-  const [query, setQuery] = useState("");
-  const status = useQuery({
-    queryKey: ["coin-trading-status"],
-    queryFn: () => apiGet<AnyObj>("/crypto/status"),
-    refetchInterval: 30_000,
-  });
-  const spot = useQuery({
-    queryKey: ["coin-trading-spot-candidates"],
-    queryFn: () => apiGet<AnyObj>("/crypto/spot/tickers"),
-    enabled: mode.coinMarket === "spot",
-    refetchInterval: 10_000,
-  });
-  const futures = useQuery({
-    queryKey: ["coin-trading-futures-candidates"],
-    queryFn: () => apiGet<AnyObj>("/crypto/futures/tickers"),
-    enabled: mode.coinMarket === "futures",
-    refetchInterval: 8_000,
-  });
-  const rows = useMemo<Array<AnyObj & { rank: number; modelScore: number; change: number }>>(() => {
-    const source = mode.coinMarket === "spot"
-      ? ((spot.data?.tickers ?? []) as AnyObj[])
-      : ((futures.data?.tickers ?? []) as AnyObj[]);
-    const needle = query.trim().toLowerCase();
-    const ranked = [...source]
-      .filter((row) => !needle || String(row.symbol ?? "").toLowerCase().includes(needle))
-      .sort((a, b) => Number(b.tradingValue24h ?? 0) - Number(a.tradingValue24h ?? 0));
-    const maximumTradingValue = Math.max(1, ...ranked.map((row) => Number(row.tradingValue24h ?? 0)));
-    return ranked.slice(0, 100).map((row, index) => {
-      const change = Number(row.changePercent ?? row.changePercent24h ?? 0);
-      const liquidityScore = Math.min(45, Math.round((Number(row.tradingValue24h ?? 0) / maximumTradingValue) * 45));
-      const momentumScore = Math.max(0, Math.min(35, Math.round(17.5 + change * 2.5)));
-      const riskPenalty = Math.min(30, Math.round(Math.abs(change) * 1.5));
-      const modelScore = Math.max(0, Math.min(100, 20 + liquidityScore + momentumScore - riskPenalty));
-      return { ...row, rank: index + 1, modelScore, change };
-    });
-  }, [futures.data, mode.coinMarket, query, spot.data]);
-  const statusData = (status.data ?? {}) as Record<string, AnyObj>;
-  const connected = mode.coinMarket === "spot" ? Boolean(statusData.upbit?.ok) : Boolean(statusData.bitget?.ok);
-  const privateConfigured = mode.coinMarket === "spot" ? Boolean(statusData.upbit?.privateKeyConfigured) : Boolean(statusData.bitget?.privateKeyConfigured);
-  const activeQuery = mode.coinMarket === "spot" ? spot : futures;
-
-  return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-background">
-      {/* 상단 고정 없음 — 제목·탭·검색·목록이 한 페이지로 함께 스크롤. */}
-      <header className="border-b border-card-border px-4 pb-3 pt-4">
-        <div className="flex items-start justify-between gap-3">
-          <div><h1 className="text-xl font-black">{viewMode === "auto" ? "코인 자동매매" : "코인 검색기"}</h1><p className="mt-1 text-xs font-bold text-muted-foreground">현물과 선물은 주식 주문엔진과 분리합니다.</p></div>
-          <button type="button" onClick={() => void activeQuery.refetch()} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><RefreshCw className={cn("h-4 w-4", activeQuery.isFetching && "animate-spin")} /></button>
-        </div>
-        <AssetSwitch className="mt-3" />
-        <label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3"><Search className="h-4 w-4 text-muted-foreground" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="코인 심볼 검색" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" /></label>
-      </header>
-      <main className="space-y-4 px-4 pb-28 pt-4">
-        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-          <div className="grid grid-cols-2 gap-2 text-center text-[11px] font-black">
-            <div className={cn("rounded-2xl p-3", connected ? "bg-positive/10 text-positive" : "bg-destructive/10 text-destructive")}>{mode.coinMarket === "spot" ? "UPBIT" : "BITGET"} 시세 · {connected ? "정상" : "오류"}</div>
-            <div className={cn("rounded-2xl p-3", privateConfigured ? "bg-positive/10 text-positive" : "bg-secondary text-muted-foreground")}>개인 API · {privateConfigured ? "환경변수 설정" : "미설정"}</div>
-          </div>
-          <p className="mt-3 rounded-2xl bg-warning/10 p-3 text-[11px] font-bold leading-relaxed text-warning">
-            {viewMode === "auto" ? "현재 이 화면은 실제 후보와 연결상태를 검증합니다. 코인 주문은 거래소별 주문 전 검사와 주문별 승인 토큰이 완성되기 전까지 잠겨 있으며 자동 전송되지 않습니다." : "검색 결과는 실제 거래소 공개 시세이며 모델점수는 상대 비교값이지 수익확률이 아닙니다."}
-          </p>
-        </section>
-        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-          <div className="flex items-center justify-between"><div><h2 className="text-sm font-black">후보 종목</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">거래대금·변동성·단기 방향 기반 모델점수</p></div><span className="text-xs font-black text-primary">{rows.length}개</span></div>
-          {activeQuery.isLoading && <p className="mt-3 rounded-2xl bg-secondary p-4 text-center text-xs font-bold text-muted-foreground">실제 코인 시세를 불러오는 중입니다.</p>}
-          {activeQuery.isError && <p className="mt-3 rounded-2xl bg-destructive/10 p-4 text-center text-xs font-bold text-destructive">거래소 시세를 불러오지 못했습니다.</p>}
-          <div className="mt-3 space-y-2">{rows.map((row) => (
-            <button key={String(row.symbol)} type="button" onClick={() => navigate(`/stock-info?asset=coin&coinMarket=${mode.coinMarket}&symbol=${encodeURIComponent(String(row.symbol))}`)} className="flex w-full items-center gap-3 rounded-2xl bg-secondary/60 p-3 text-left">
-              <span className="w-7 text-center text-sm font-black text-primary">{row.rank}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{String(row.symbol)}</p><p className="mt-1 text-[10px] font-bold text-muted-foreground">24시간 {Number.isFinite(row.change) ? formatAppPercent(row.change) : "데이터 없음"}</p></div><div className="text-right"><p className="text-sm font-black text-primary">{row.modelScore}점</p><p className="text-[9px] font-bold text-muted-foreground">모델점수</p></div>
-            </button>
-          ))}</div>
-        </section>
-      </main>
-      <BottomNav />
-    </div>
   );
 }
 
