@@ -13,7 +13,7 @@ export function AssetSwitch({ className }: { className?: string }) {
         {mode.asset === 'stock' ? (
           <>
             <SwitchButton active={mode.stockMarket === 'KR'} onClick={() => mode.setStockMarket('KR')}>국내</SwitchButton>
-            <SwitchButton active={mode.stockMarket === 'US'} onClick={() => mode.setStockMarket('US')}>미국</SwitchButton>
+            <SwitchButton active={mode.stockMarket === 'US'} onClick={() => mode.setStockMarket('US')}>해외</SwitchButton>
           </>
         ) : (
           <>

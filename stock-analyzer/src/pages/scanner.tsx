@@ -37,7 +37,7 @@ import {
 } from "@/lib/stock-display";
 import { cn } from "@/lib/utils";
 import {
-	assessAutoTradeCandidate,
+  assessAutoTradeCandidate,
   closeAutoTradePosition,
   executeAutoTradeCandidates,
   loadAutoTradeSettings,
@@ -659,18 +659,18 @@ export default function ScannerPage() {
           toNumber(card.breakoutProbability) ??
           toNumber(card.probability) ??
           toNumber(card.winProbability),
-		price,
-		volume: toNumber(card.volume),
-		tradingValue: toNumber(card.tradingValue),
-		marketCap: marketCapOf(card),
-		confidence: toNumber(card.confidence),
-		newsScore: toNumber(card.newsScore ?? card.newsSentiment),
-		disclosureScore: toNumber(card.disclosureScore ?? card.filingScore),
-		financialScore: toNumber(card.financialScore ?? card.fundamentalScore),
-		riskLevel: String(card.riskLevel ?? ""),
-		isLeveraged: Boolean(card.isLeveraged),
-		isInverse: Boolean(card.isInverse),
-		isDerivative: Boolean(card.isDerivative),
+    price,
+    volume: toNumber(card.volume),
+    tradingValue: toNumber(card.tradingValue),
+    marketCap: marketCapOf(card),
+    confidence: toNumber(card.confidence),
+    newsScore: toNumber(card.newsScore ?? card.newsSentiment),
+    disclosureScore: toNumber(card.disclosureScore ?? card.filingScore),
+    financialScore: toNumber(card.financialScore ?? card.fundamentalScore),
+    riskLevel: String(card.riskLevel ?? ""),
+    isLeveraged: Boolean(card.isLeveraged),
+    isInverse: Boolean(card.isInverse),
+    isDerivative: Boolean(card.isDerivative),
       });
       const ticker = String(card.ticker ?? "").trim().toUpperCase();
       const name = displayStockName(
@@ -684,13 +684,13 @@ export default function ScannerPage() {
         name,
         market: cardMarket(card),
         currency: cardCurrency(card),
-		exchange: cardMarket(card) === "US" ? cardExchange(card) : null,
+    exchange: cardMarket(card) === "US" ? cardExchange(card) : null,
         rank: 0,
         score,
-		probability: assessment.probability,
-		riskScore: assessment.riskScore,
-		dataCompleteness: assessment.dataCompleteness,
-		price,
+    probability: assessment.probability,
+    riskScore: assessment.riskScore,
+    dataCompleteness: assessment.dataCompleteness,
+    price,
         changePercent,
         reasons: (
           matched.length
@@ -702,7 +702,7 @@ export default function ScannerPage() {
                   : "변동성 확인",
               ]
         ).filter(Boolean).slice(0, 4),
-		factors: assessment.factors,
+    factors: assessment.factors,
         generatedAt,
       };
     })
@@ -913,15 +913,8 @@ export default function ScannerPage() {
     <div className="h-full overflow-y-auto overscroll-contain bg-background">
       {/* 상단 고정 없음 — 제목·선택 3줄·기간·지표·종목보기가 한 페이지로 함께 스크롤. */}
       <header className="border-b border-card-border px-4 pb-3 pt-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
+      </header>
             <h1 className="text-xl font-extrabold">{viewMode === "condition" ? "조건검색" : "자동매매"}</h1>
-
-            <p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-              {viewMode === "condition" ? "지표를 조합하여 종목을 검색합니다." : "전체 후보를 비교해 모델점수 1위 한 종목을 주문 승인계획과 연결합니다."}
-            </p>
-          </div>
-
           <button
             type="button"
             onClick={() => void scan.refetch()}
@@ -1225,12 +1218,12 @@ export default function ScannerPage() {
           <div className="mt-3 grid grid-cols-2 gap-2">
             <label className="rounded-2xl border border-card-border bg-background p-3">
               <span className="block text-[10px] font-extrabold text-muted-foreground">
-				주문금액 ({market === "US" ? "USD" : "원"})
+        주문금액 ({market === "US" ? "USD" : "원"})
               </span>
               <input
                 type="number"
                 min={0}
-				step={market === "US" ? 10 : 10000}
+        step={market === "US" ? 10 : 10000}
                 inputMode="numeric"
                 value={autoSettings.investmentPerTrade || ""}
                 onChange={(event) =>
@@ -1319,31 +1312,31 @@ export default function ScannerPage() {
             />
           </label>
           <p className="mt-2 break-keep text-[10px] font-semibold leading-4 text-muted-foreground">
-			실행키는 키움 비밀번호가 아닌 주문 보호키이며 이 브라우저 탭이 닫히면 폐기됩니다. 모델점수는 후보 비교용이지 수익확률이 아닙니다. 모든 매수·매도 주문은 주문별 확인 전까지 전송되지 않습니다.
+      실행키는 키움 비밀번호가 아닌 주문 보호키이며 이 브라우저 탭이 닫히면 폐기됩니다. 모델점수는 후보 비교용이지 수익확률이 아닙니다. 모든 매수·매도 주문은 주문별 확인 전까지 전송되지 않습니다.
           </p>
 
-		  <div className="mt-2 grid grid-cols-2 gap-2 text-center text-[10px] font-extrabold">
-			<div className={cn("rounded-xl px-2 py-2", autoTradeStatus.data?.mode === "real" ? "bg-emerald-500/10 text-emerald-600" : "bg-amber-500/10 text-amber-600") }>
-			  서버 · {autoTradeStatus.data?.mode === "real" ? "실전" : "모의/미설정"}
-			</div>
-			<div className={cn("rounded-xl px-2 py-2", autoTradeStatus.data?.enabled ? "bg-emerald-500/10 text-emerald-600" : "bg-secondary text-muted-foreground") }>
-			  주문 서버 · {autoTradeStatus.data?.enabled ? "켜짐" : "꺼짐"}
-			</div>
-		  </div>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-center text-[10px] font-extrabold">
+      <div className={cn("rounded-xl px-2 py-2", autoTradeStatus.data?.mode === "real" ? "bg-emerald-500/10 text-emerald-600" : "bg-amber-500/10 text-amber-600") }>
+        서버 · {autoTradeStatus.data?.mode === "real" ? "실전" : "모의/미설정"}
+      </div>
+      <div className={cn("rounded-xl px-2 py-2", autoTradeStatus.data?.enabled ? "bg-emerald-500/10 text-emerald-600" : "bg-secondary text-muted-foreground") }>
+        주문 서버 · {autoTradeStatus.data?.enabled ? "켜짐" : "꺼짐"}
+      </div>
+      </div>
 
           <div className="mt-2 grid grid-cols-2 gap-2">
             <button
               type="button"
-			  onClick={() => {
-				if (autoSettings.liveTrading) {
-				  updateAutoSettings({ liveTrading: false });
-				  return;
-				}
-				const confirmed = window.confirm(
-				  "실제 주문 기능을 켭니다. 켠 뒤에도 각 주문은 종목·수량·금액·손절가·목표가를 확인하고 승인해야 전송됩니다. 계속하시겠습니까?",
-				);
-				if (confirmed) updateAutoSettings({ liveTrading: true });
-			  }}
+        onClick={() => {
+        if (autoSettings.liveTrading) {
+          updateAutoSettings({ liveTrading: false });
+          return;
+        }
+        const confirmed = window.confirm(
+          "실제 주문 기능을 켭니다. 켠 뒤에도 각 주문은 종목·수량·금액·손절가·목표가를 확인하고 승인해야 전송됩니다. 계속하시겠습니까?",
+        );
+        if (confirmed) updateAutoSettings({ liveTrading: true });
+        }}
               className={cn(
                 "rounded-2xl border px-3 py-3 text-xs font-extrabold",
                 autoSettings.liveTrading
@@ -1424,16 +1417,16 @@ export default function ScannerPage() {
                       <p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">
                         {candidate.reasons.join(" · ") || "AI 점수 기준"}
                       </p>
-					  <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
-						위험 {candidate.riskScore}점 · 데이터 {candidate.dataCompleteness}%
-					  </p>
+            <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
+            위험 {candidate.riskScore}점 · 데이터 {candidate.dataCompleteness}%
+            </p>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-sm font-black text-primary">
                         {candidate.probability}점
                       </p>
                       <p className="mt-1 text-[10px] font-bold text-muted-foreground">
-						모델점수
+            모델점수
                       </p>
                     </div>
                   </div>
@@ -1467,7 +1460,7 @@ export default function ScannerPage() {
               </p>
             ) : !tradeJournal.data?.length ? (
               <p className="mt-3 rounded-2xl bg-secondary/70 px-3 py-4 text-center text-xs font-bold text-muted-foreground">
-					아직 기록된 실제 거래가 없습니다.
+          아직 기록된 실제 거래가 없습니다.
               </p>
             ) : (
               <div className="mt-3">
@@ -1501,7 +1494,7 @@ export default function ScannerPage() {
                           <div className="min-w-0">
                             <p className="truncate text-sm font-extrabold">{entry.name} · {entry.ticker}</p>
                             <p className="mt-1 text-[10px] font-bold text-muted-foreground">
-							  {entry.market === "US" ? `미국/${entry.exchange ?? "거래소 확인"}` : "국내"} · {new Date(entry.openedAt).toLocaleString("ko-KR")} · {entry.quantity}주
+                {entry.market === "US" ? `해외/${entry.exchange ?? "거래소 확인"}` : "국내"} · {new Date(entry.openedAt).toLocaleString("ko-KR")} · {entry.quantity}주
                             </p>
                           </div>
                           <div className="shrink-0 text-right">
@@ -1521,15 +1514,15 @@ export default function ScannerPage() {
                           <p className="mt-1 font-bold">근거: {entry.entryReasons.join(" · ") || "AI 조건"}</p>
                         </div>
                         <div className="grid grid-cols-3 gap-2 text-center">
-						  <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">진입가</p><p className="font-extrabold">{formatAppPrice(entry.entryPrice, entry.currency)}</p></div>
-						  <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">손절가</p><p className="font-extrabold">{formatAppPrice(entry.stopPrice, entry.currency)}</p></div>
-						  <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">목표가</p><p className="font-extrabold">{formatAppPrice(entry.targetPrice, entry.currency)}</p></div>
+              <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">진입가</p><p className="font-extrabold">{formatAppPrice(entry.entryPrice, entry.currency)}</p></div>
+              <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">손절가</p><p className="font-extrabold">{formatAppPrice(entry.stopPrice, entry.currency)}</p></div>
+              <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">목표가</p><p className="font-extrabold">{formatAppPrice(entry.targetPrice, entry.currency)}</p></div>
                         </div>
                         {entry.exitAnalysis && (
                           <div>
                             <p className={cn("font-extrabold", positive ? "text-emerald-500" : "text-destructive")}>{positive ? "왜 익절했나요?" : "왜 손절했나요?"}</p>
                             <p className="mt-1 break-keep font-semibold text-muted-foreground">{entry.exitAnalysis}</p>
-							<p className="mt-1 font-bold">청산가: {entry.exitPrice == null ? "-" : formatAppPrice(entry.exitPrice, entry.currency)} · {entry.exitReason}</p>
+              <p className="mt-1 font-bold">청산가: {entry.exitPrice == null ? "-" : formatAppPrice(entry.exitPrice, entry.currency)} · {entry.exitReason}</p>
                           </div>
                         )}
                       </div>
@@ -1589,9 +1582,9 @@ export default function ScannerPage() {
                         <p className="truncate text-sm font-extrabold">
                           {candidate.rank}위 · {candidate.name}
                         </p>
-						<p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
-						  {candidate.ticker} · {candidate.market}{candidate.exchange ? `/${candidate.exchange}` : ""} · 위험 {candidate.riskScore}점
-						</p>
+            <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
+              {candidate.ticker} · {candidate.market}{candidate.exchange ? `/${candidate.exchange}` : ""} · 위험 {candidate.riskScore}점
+            </p>
                       </div>
                       <p className="shrink-0 text-sm font-black text-primary">
                         {candidate.probability}점
@@ -2341,3 +2334,4 @@ function PlanBlock({
     </div>
   );
 }
+

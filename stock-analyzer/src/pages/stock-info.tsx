@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronRight,
   ExternalLink,
-  RefreshCw,
   Search,
   Star,
 } from 'lucide-react';
@@ -51,7 +50,7 @@ function money(value: unknown, currency: string) {
   return number == null ? '데이터 없음' : formatAppPrice(number, currency);
 }
 
-// 재무 금액을 백만 단위로 표시 (국내: 백만원, 미국: USD million). 임의 환산 없음.
+// 재무 금액을 백만 단위로 표시 (국내: 백만원, 해외: USD million). 임의 환산 없음.
 function millions(value: unknown) {
   const number = finite(value);
   return number == null ? '데이터 없음' : Math.round(number / 1_000_000).toLocaleString('ko-KR');
@@ -99,11 +98,18 @@ export default function StockInfoPage() {
   function updateSelection(next: Partial<{ asset: AssetTab; market: MarketTab; ticker: string }>) {
     const nextAsset = next.asset ?? asset;
     const nextMarket = next.market ?? market;
+    const marketChanged = next.market != null && next.market !== market;
+    const assetChanged = next.asset != null && next.asset !== asset;
+    const nextTicker = String(next.ticker ?? ((marketChanged || assetChanged) ? '' : ticker)).toUpperCase();
+
+    setAsset(nextAsset);
+    setMarket(nextMarket);
+    setTicker(nextTicker);
+    setSearchText('');
+    setWatchlisted(isInWatchlist(nextTicker));
     appMode.setAsset(nextAsset);
     if (nextAsset === 'stock') appMode.setStockMarket(nextMarket);
-    // 시장(국내/미국)이나 자산(주식/코인)을 바꾸면 이전 종목 선택을 비워
-    // 버튼 상태·검색 대상·API 요청 시장이 항상 함께 바뀌게 한다.
-    const nextTicker = String(next.ticker ?? (next.market && next.market !== market ? '' : ticker)).toUpperCase();
+
     const params = new URLSearchParams({ asset: nextAsset, market: nextMarket });
     if (nextTicker) params.set('ticker', nextTicker);
     navigate(`/stock-info?${params.toString()}`, { replace: true });
@@ -174,31 +180,13 @@ export default function StockInfoPage() {
     (row) => row.report ?? `${row.form ?? ''}${row.description ?? ''}`,
   );
 
-  const refreshAll = () => {
-    void Promise.all([
-      quote.refetch(),
-      profile.refetch(),
-      financials.refetch(),
-      flow.refetch(),
-      shortSelling.refetch(),
-      news.refetch(),
-      disclosures.refetch(),
-    ]);
-  };
+
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain bg-background">
       {/* 상단 고정 없음 — 제목·탭·상세가 한 페이지로 함께 스크롤. */}
       <header className="border-b border-card-border px-4 pb-3 pt-4">
-        <div className="relative text-center">
-          <h1 className="text-xl font-black">정보</h1>
-          <p className="mt-1 text-xs text-muted-foreground">선택 종목의 실제 시세·재무·수급·공매도·뉴스·공시</p>
-          <button type="button" onClick={refreshAll} aria-label="전체 새로고침" className="absolute right-0 top-0 flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card">
-            <RefreshCw className={cn('h-4 w-4', quote.isFetching && 'animate-spin')} />
-          </button>
-        </div>
-
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <Tab active onClick={() => undefined}>정보</Tab>
           <Tab active={false} onClick={() => navigate('/learn')}>공부</Tab>
         </div>
@@ -210,7 +198,7 @@ export default function StockInfoPage() {
         {asset === 'stock' && (
           <div className="mt-2 grid grid-cols-2 gap-2">
             <Tab active={market === 'KR'} onClick={() => updateSelection({ market: 'KR' })}>국내</Tab>
-            <Tab active={market === 'US'} onClick={() => updateSelection({ market: 'US' })}>미국</Tab>
+            <Tab active={market === 'US'} onClick={() => updateSelection({ market: 'US' })}>해외</Tab>
           </div>
         )}
       </header>
@@ -222,7 +210,7 @@ export default function StockInfoPage() {
           <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
             <label className="flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
               <Search className="h-4 w-4 text-muted-foreground" />
-              <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={market === 'KR' ? '국내 종목명·코드 검색' : '미국 종목명·티커·한글명 검색'} className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
+              <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={market === 'KR' ? '국내 종목명·코드 검색' : '해외 종목명·티커·한글명 검색'} className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
             </label>
             {searchText.trim().length > 0 && (
               <div className="mt-3 max-h-44 space-y-1 overflow-y-auto">
@@ -254,7 +242,7 @@ export default function StockInfoPage() {
                     <div className="flex items-center gap-2">
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-xl font-black">{selectedName}</p>
-                        <p className="mt-1 text-xs font-bold text-muted-foreground">{ticker} · {market === 'KR' ? '국내' : '미국'} · 기준 {formatDate(quote.data.updatedAt)}</p>
+                        <p className="mt-1 text-xs font-bold text-muted-foreground">{ticker} · {market === 'KR' ? '국내' : '해외'} · 기준 {formatDate(quote.data.updatedAt)}</p>
                       </div>
                       <button type="button" onClick={() => setWatchlisted(toggleWatchlistItem({ ticker, name: selectedName, market, currency }))} aria-label="관심종목" className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', watchlisted ? 'border-warning bg-warning/10 text-warning' : 'border-card-border')}>
                         <Star className={cn('h-5 w-5', watchlisted && 'fill-current')} />
@@ -424,12 +412,16 @@ function CoinInfo() {
   }, [location]);
 
   const changeCoin = (nextMarket: CoinMarketTab, nextSymbol?: string) => {
+    const resolved = String(nextSymbol ?? '').toUpperCase();
+    setCoinMarket(nextMarket);
+    setSymbol(resolved);
+    setSearchText('');
     appMode.setAsset('coin');
     appMode.setCoinMarket(nextMarket);
     const next = new URLSearchParams(location.split('?')[1] ?? '');
     next.set('asset', 'coin');
     next.set('coinMarket', nextMarket);
-    const resolved = String(nextSymbol ?? '').toUpperCase();
+    next.delete('ticker');
     if (resolved) next.set('symbol', resolved);
     else next.delete('symbol');
     navigate(`/stock-info?${next.toString()}`, { replace: true });
@@ -546,7 +538,6 @@ function CoinInfo() {
                 <p className="text-xl font-black">{displayCoinName(String(selected.symbol), selected.koreanName, selected.englishName)}</p>
                 <p className="mt-1 text-xs font-bold text-muted-foreground">{selected.symbol} · {coinMarket === 'spot' ? '업비트 KRW' : '비트겟 USDT 선물'} · 기준 {formatDate(coinMarket === 'spot' ? spotTickers.data?.updatedAt : futuresTickers.data?.updatedAt)}</p>
               </div>
-              <button type="button" onClick={() => { void (coinMarket === 'spot' ? spotTickers.refetch() : futuresTickers.refetch()); }} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border"><RefreshCw className="h-4 w-4" /></button>
             </div>
             {coinMarket === 'spot' && (
               <div className="mt-3 grid grid-cols-4 gap-1">
