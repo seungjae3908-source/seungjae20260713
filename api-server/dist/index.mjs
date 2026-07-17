@@ -13345,7 +13345,7 @@ import { createHmac as createHmac2, randomUUID as randomUUID3 } from "node:crypt
 
 // src/routes/crypto-auto.ts
 import { Router as Router11 } from "express";
-import { createHmac, randomBytes, randomUUID as randomUUID2, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID as randomUUID2, timingSafeEqual } from "node:crypto";
 import { mkdir as mkdir3, readFile as readFile3, writeFile as writeFile3 } from "node:fs/promises";
 import path6 from "node:path";
 var router11 = Router11();
@@ -13405,15 +13405,31 @@ function clamp2(value, min, max) {
 function memberId(req) {
   return String(req.member?.id ?? "unknown");
 }
+function normalizeExecutionKey(value) {
+  let normalized = String(value ?? "").normalize("NFKC").replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").trim();
+  const first = normalized.at(0);
+  const last3 = normalized.at(-1);
+  const quoted = first === '"' && last3 === '"' || first === "'" && last3 === "'" || first === "`" && last3 === "`";
+  if (quoted && normalized.length >= 2) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  return normalized;
+}
+function configuredExecutionKey() {
+  return normalizeExecutionKey(
+    process.env.CRYPTO_AUTO_TRADE_KEY ?? process.env.KIWOOM_AUTO_TRADE_KEY ?? ""
+  );
+}
 function constantTimeEqual(left, right) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  if (leftBuffer.length !== rightBuffer.length) return false;
-  return timingSafeEqual(leftBuffer, rightBuffer);
+  const leftHash = createHash("sha256").update(left).digest();
+  const rightHash = createHash("sha256").update(right).digest();
+  return timingSafeEqual(leftHash, rightHash);
 }
 function executionKeyValid(req) {
-  const configured = String(process.env.CRYPTO_AUTO_TRADE_KEY ?? "").trim();
-  const supplied = String(req.header("X-Crypto-Auto-Trade-Key") ?? "").trim();
+  const configured = configuredExecutionKey();
+  const supplied = normalizeExecutionKey(
+    req.header("X-Crypto-Auto-Trade-Key") ?? req.header("X-Auto-Trade-Key") ?? ""
+  );
   return Boolean(configured && supplied && constantTimeEqual(configured, supplied));
 }
 function tradingEnabled() {
@@ -13625,7 +13641,7 @@ router11.get("/crypto/futures/auto/status", requireMember, async (req, res) => {
     productType: PRODUCT_TYPE,
     credentialsConfigured: credentialsConfigured(),
     serverTradingEnabled: tradingEnabled(),
-    executionKeyConfigured: Boolean(String(process.env.CRYPTO_AUTO_TRADE_KEY ?? "").trim()),
+    executionKeyConfigured: Boolean(configuredExecutionKey()),
     approvalTtlSeconds: APPROVAL_TTL_MS / 1e3,
     todayOrders: todayOrderCount(member),
     positions,
@@ -13646,6 +13662,29 @@ router11.get("/crypto/futures/auto/status", requireMember, async (req, res) => {
       "\uC8FC\uBB38 \uC9C1\uC804 \uB9C8\uD06C\uAC00\uACA9"
     ],
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
+});
+router11.post("/crypto/futures/auto/verify-key", requireMember, async (req, res) => {
+  const configured = configuredExecutionKey();
+  if (!configured) {
+    return res.status(503).json({
+      ok: false,
+      verified: false,
+      message: "Replit Secrets\uC5D0 CRYPTO_AUTO_TRADE_KEY\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4."
+    });
+  }
+  if (!executionKeyValid(req)) {
+    return res.status(401).json({
+      ok: false,
+      verified: false,
+      message: "\uCF54\uC778 \uC790\uB3D9\uB9E4\uB9E4 \uC2E4\uD589\uD0A4\uAC00 \uC11C\uBC84 \uBCF4\uD638\uD0A4\uC640 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
+    });
+  }
+  return res.json({
+    ok: true,
+    verified: true,
+    message: "\uCF54\uC778 \uC790\uB3D9\uB9E4\uB9E4 \uC2E4\uD589\uD0A4\uAC00 \uD655\uC778\uB410\uC2B5\uB2C8\uB2E4.",
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString()
   });
 });
 router11.get("/crypto/futures/auto/journal", requireMember, async (req, res) => {
@@ -14382,7 +14421,7 @@ router12.use(crypto_auto_default);
 var crypto_default = router12;
 
 // src/routes/backup.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 import { Router as Router13 } from "express";
 var router13 = Router13();
 var ALLOWED_KEYS = /* @__PURE__ */ new Set([
@@ -14426,7 +14465,7 @@ function normalizePayload(value) {
 }
 function checksum(payload) {
   const sorted = Object.fromEntries(Object.entries(payload).sort(([a], [b]) => a.localeCompare(b)));
-  return createHash("sha256").update(JSON.stringify(sorted)).digest("hex");
+  return createHash2("sha256").update(JSON.stringify(sorted)).digest("hex");
 }
 router13.get("/latest", async (req, res) => {
   if (!req.member || !req.accessToken) return res.status(401).json({ error: "LOGIN_REQUIRED" });

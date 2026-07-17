@@ -744,11 +744,12 @@ async function getProtected<T>(url: string): Promise<T> {
 }
 
 async function postProtected<T>(url: string, body: AnyObj, executionKey: string): Promise<T> {
+  const normalizedKey = normalizeExecutionKey(executionKey);
   const response = await authorizedFetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Crypto-Auto-Trade-Key": executionKey,
+      "X-Crypto-Auto-Trade-Key": normalizedKey,
     },
     body: JSON.stringify(body),
   });
@@ -806,16 +807,41 @@ function directionLabel(direction: Direction) {
   return direction === "LONG" ? "롱" : direction === "SHORT" ? "숏" : "관망";
 }
 
+function normalizeExecutionKey(value: unknown) {
+  let normalized = String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .trim();
+
+  const first = normalized.at(0);
+  const last = normalized.at(-1);
+  const quoted =
+    (first === '"' && last === '"') ||
+    (first === "'" && last === "'") ||
+    (first === "`" && last === "`");
+
+  if (quoted && normalized.length >= 2) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+
+  return normalized;
+}
+
 function loadExecutionKey() {
   if (typeof window === "undefined") return "";
-  return String(window.sessionStorage.getItem(EXECUTION_KEY_SESSION_KEY) ?? "");
+  return normalizeExecutionKey(
+    window.sessionStorage.getItem(EXECUTION_KEY_SESSION_KEY) ?? "",
+  );
 }
 
 function saveExecutionKeyToSession(value: string) {
   if (typeof window === "undefined") return;
-  const normalized = value.trim();
-  if (normalized) window.sessionStorage.setItem(EXECUTION_KEY_SESSION_KEY, normalized);
-  else window.sessionStorage.removeItem(EXECUTION_KEY_SESSION_KEY);
+  const normalized = normalizeExecutionKey(value);
+  if (normalized) {
+    window.sessionStorage.setItem(EXECUTION_KEY_SESSION_KEY, normalized);
+  } else {
+    window.sessionStorage.removeItem(EXECUTION_KEY_SESSION_KEY);
+  }
 }
 
 function buildAiTradeView(analysis: Analysis, timeframe: Timeframe) {
@@ -1012,7 +1038,10 @@ export function CryptoTradingWorkspace({
   const [settings, setSettings] = useState<AutoSettings>(() => loadSettings());
   const [executionKey, setExecutionKey] = useState(() => loadExecutionKey());
   const [showExecutionKey, setShowExecutionKey] = useState(false);
-  const [executionKeySaved, setExecutionKeySaved] = useState(() => Boolean(loadExecutionKey().trim()));
+  const [executionKeySaved, setExecutionKeySaved] = useState(
+    () => Boolean(loadExecutionKey().trim()),
+  );
+  const [keyVerifying, setKeyVerifying] = useState(false);
   const [pendingPlan, setPendingPlan] = useState<PlanResponse | null>(null);
   const [watchPlan, setWatchPlan] = useState<WatchPlan | null>(null);
   const [planMenuOpen, setPlanMenuOpen] = useState(false);
@@ -1290,19 +1319,51 @@ export function CryptoTradingWorkspace({
   };
 
   const registerExecutionKey = async () => {
-    const normalized = executionKey.trim();
+    if (keyVerifying) return;
+
+    const normalized = normalizeExecutionKey(executionKey);
     if (!normalized) {
       setExecutionKeySaved(false);
       saveExecutionKeyToSession("");
-      setMessage("화면 맨 아래에서 자동매매 실행키를 입력하고 Enter를 눌러 등록하세요.");
+      setMessage(
+        "화면 맨 아래에서 자동매매 실행키를 입력하고 Enter를 눌러 확인하세요.",
+      );
       return;
     }
+
+    setKeyVerifying(true);
     setExecutionKey(normalized);
-    saveExecutionKeyToSession(normalized);
-    setExecutionKeySaved(true);
+    setExecutionKeySaved(false);
     setPendingPlan(null);
-    setMessage("실행키를 이 브라우저 탭에 등록했습니다. 이후 주문계획에 자동 사용됩니다.");
-    await Promise.allSettled([autoStatus.refetch(), account.refetch(), positionsQuery.refetch()]);
+    setMessage("서버에 설정된 자동매매 실행키와 일치하는지 확인 중입니다.");
+
+    try {
+      await postProtected<AnyObj>(
+        "/api/crypto/futures/auto/verify-key",
+        {},
+        normalized,
+      );
+      saveExecutionKeyToSession(normalized);
+      setExecutionKeySaved(true);
+      setMessage(
+        "실행키 확인이 완료됐습니다. 이제 거래소 설정계획과 주문계획에 자동 사용됩니다.",
+      );
+      await Promise.allSettled([
+        autoStatus.refetch(),
+        account.refetch(),
+        positionsQuery.refetch(),
+      ]);
+    } catch (error) {
+      saveExecutionKeyToSession("");
+      setExecutionKeySaved(false);
+      setMessage(
+        error instanceof Error
+          ? `${error.message} Replit Secrets의 CRYPTO_AUTO_TRADE_KEY 값을 확인한 뒤 Stop → Run 해주세요.`
+          : "자동매매 실행키 확인에 실패했습니다.",
+      );
+    } finally {
+      setKeyVerifying(false);
+    }
   };
 
   const createWatchPlan = () => {
@@ -1357,8 +1418,8 @@ export function CryptoTradingWorkspace({
       createWatchPlan();
       return null;
     }
-    if (!executionKey.trim()) {
-      setMessage("화면 맨 아래에서 자동매매 실행키를 입력하고 Enter를 눌러 등록하세요.");
+    if (!executionKeySaved || !normalizeExecutionKey(executionKey)) {
+      setMessage("화면 맨 아래에서 실행키를 입력하고 Enter를 눌러 서버 확인을 완료하세요.");
       return null;
     }
     setPendingAction("open");
@@ -1425,8 +1486,8 @@ export function CryptoTradingWorkspace({
   };
 
   const buildConfigurePlan = async () => {
-    if (!executionKey.trim()) {
-      setMessage("화면 맨 아래에서 자동매매 실행키를 입력하고 Enter를 눌러 등록하세요.");
+    if (!executionKeySaved || !normalizeExecutionKey(executionKey)) {
+      setMessage("화면 맨 아래에서 실행키를 입력하고 Enter를 눌러 서버 확인을 완료하세요.");
       return;
     }
     setPendingAction("configure");
@@ -1476,8 +1537,8 @@ export function CryptoTradingWorkspace({
   };
 
   const buildClosePlan = async (position: Position) => {
-    if (!executionKey.trim()) {
-      setMessage("자동매매 실행키를 입력하세요.");
+    if (!executionKeySaved || !normalizeExecutionKey(executionKey)) {
+      setMessage("화면 맨 아래에서 실행키를 입력하고 Enter를 눌러 서버 확인을 완료하세요.");
       return;
     }
     setPendingAction("close");
@@ -2096,7 +2157,7 @@ export function CryptoTradingWorkspace({
               <KeyRound className="h-4 w-4 text-primary" />
               <div>
                 <p className="text-[10px] font-black">자동매매 실행키 등록</p>
-                <p className="mt-0.5 text-[9px] font-bold text-muted-foreground">입력 후 Enter를 누르면 이 탭에서 자동 사용됩니다.</p>
+                <p className="mt-0.5 text-[9px] font-bold text-muted-foreground">입력 후 Enter를 누르면 서버 키와 일치 여부를 확인하고 이 탭에 저장합니다.</p>
               </div>
             </div>
             <div className="relative mt-2">
@@ -2116,6 +2177,10 @@ export function CryptoTradingWorkspace({
                 }}
                 placeholder="CRYPTO_AUTO_TRADE_KEY 입력 후 Enter"
                 autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="done"
                 className="h-11 w-full rounded-xl border border-card-border bg-card px-3 pr-12 text-sm font-bold outline-none focus:border-primary"
               />
               <button
@@ -2129,14 +2194,19 @@ export function CryptoTradingWorkspace({
             </div>
             <div className="mt-2 flex items-center justify-between gap-2">
               <span className={cn("text-[10px] font-black", executionKeySaved ? "text-positive" : "text-muted-foreground")}>
-                {executionKeySaved ? "✓ 이 탭에 등록됨" : "Enter를 눌러 등록"}
+                {keyVerifying
+                  ? "서버 확인 중..."
+                  : executionKeySaved
+                    ? "✓ 서버 확인 완료"
+                    : "Enter를 눌러 확인"}
               </span>
               <button
                 type="button"
                 onClick={() => void registerExecutionKey()}
-                className="rounded-full bg-primary px-3 py-1.5 text-[10px] font-black text-primary-foreground"
+                disabled={keyVerifying}
+                className="rounded-full bg-primary px-3 py-1.5 text-[10px] font-black text-primary-foreground disabled:opacity-50"
               >
-                등록
+                {keyVerifying ? "확인 중" : "확인"}
               </button>
             </div>
           </div>
@@ -2350,20 +2420,74 @@ function NumberField({
   suffix: string;
   onChange: (value: number) => void;
 }) {
+  const [draft, setDraft] = useState(() => String(value));
+  const focusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!focusedRef.current) {
+      setDraft(String(value));
+    }
+  }, [value]);
+
+  const commit = () => {
+    const cleaned = draft.replace(/,/g, "").trim();
+    if (!cleaned) {
+      setDraft(String(value));
+      return;
+    }
+
+    const parsed = Number(cleaned);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+
+    const normalized = clamp(parsed, min, max);
+    onChange(normalized);
+    setDraft(String(normalized));
+  };
+
   return (
     <label className="rounded-2xl border border-card-border bg-background p-3">
-      <span className="block text-[10px] font-black text-muted-foreground">{label}</span>
+      <span className="block text-[10px] font-black text-muted-foreground">
+        {label}
+      </span>
       <div className="mt-1 flex items-center gap-1">
         <input
-          type="number"
-          value={value}
-          min={min}
-          max={max}
-          step={step}
-          onChange={(event) => onChange(numberOf(event.target.value, min))}
+          type="text"
+          inputMode={Number.isInteger(step) ? "numeric" : "decimal"}
+          value={draft}
+          onFocus={(event) => {
+            focusedRef.current = true;
+            window.requestAnimationFrame(() => event.currentTarget.select());
+          }}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (/^-?\d*(?:[.]\d*)?$/.test(next.replace(/,/g, ""))) {
+              setDraft(next);
+            }
+          }}
+          onBlur={() => {
+            focusedRef.current = false;
+            commit();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commit();
+              event.currentTarget.blur();
+            }
+            if (event.key === "Escape") {
+              setDraft(String(value));
+              event.currentTarget.blur();
+            }
+          }}
+          placeholder={`${min} ~ ${max}`}
           className="min-w-0 flex-1 bg-transparent text-sm font-black outline-none"
         />
-        <span className="text-[10px] font-black text-muted-foreground">{suffix}</span>
+        <span className="text-[10px] font-black text-muted-foreground">
+          {suffix}
+        </span>
       </div>
     </label>
   );

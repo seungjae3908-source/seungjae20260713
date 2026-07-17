@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request } from 'express';
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { requireMember } from '../middleware/auth';
@@ -151,16 +151,47 @@ function memberId(req: Request) {
   return String((req as Request & { member?: { id?: string } }).member?.id ?? 'unknown');
 }
 
+function normalizeExecutionKey(value: unknown) {
+  let normalized = String(value ?? '')
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .trim();
+
+  const first = normalized.at(0);
+  const last = normalized.at(-1);
+  const quoted =
+    (first === '"' && last === '"') ||
+    (first === "'" && last === "'") ||
+    (first === '`' && last === '`');
+
+  if (quoted && normalized.length >= 2) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+
+  return normalized;
+}
+
+function configuredExecutionKey() {
+  return normalizeExecutionKey(
+    process.env.CRYPTO_AUTO_TRADE_KEY ??
+      process.env.KIWOOM_AUTO_TRADE_KEY ??
+      '',
+  );
+}
+
 function constantTimeEqual(left: string, right: string) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  if (leftBuffer.length !== rightBuffer.length) return false;
-  return timingSafeEqual(leftBuffer, rightBuffer);
+  const leftHash = createHash('sha256').update(left).digest();
+  const rightHash = createHash('sha256').update(right).digest();
+  return timingSafeEqual(leftHash, rightHash);
 }
 
 function executionKeyValid(req: Request) {
-  const configured = String(process.env.CRYPTO_AUTO_TRADE_KEY ?? '').trim();
-  const supplied = String(req.header('X-Crypto-Auto-Trade-Key') ?? '').trim();
+  const configured = configuredExecutionKey();
+  const supplied = normalizeExecutionKey(
+    req.header('X-Crypto-Auto-Trade-Key') ??
+      req.header('X-Auto-Trade-Key') ??
+      '',
+  );
   return Boolean(configured && supplied && constantTimeEqual(configured, supplied));
 }
 
@@ -404,7 +435,7 @@ router.get('/crypto/futures/auto/status', requireMember, async (req, res) => {
     productType: PRODUCT_TYPE,
     credentialsConfigured: credentialsConfigured(),
     serverTradingEnabled: tradingEnabled(),
-    executionKeyConfigured: Boolean(String(process.env.CRYPTO_AUTO_TRADE_KEY ?? '').trim()),
+    executionKeyConfigured: Boolean(configuredExecutionKey()),
     approvalTtlSeconds: APPROVAL_TTL_MS / 1000,
     todayOrders: todayOrderCount(member),
     positions,
@@ -425,6 +456,33 @@ router.get('/crypto/futures/auto/status', requireMember, async (req, res) => {
       '주문 직전 마크가격',
     ],
     updatedAt: new Date().toISOString(),
+  });
+});
+
+router.post('/crypto/futures/auto/verify-key', requireMember, async (req, res) => {
+  const configured = configuredExecutionKey();
+
+  if (!configured) {
+    return res.status(503).json({
+      ok: false,
+      verified: false,
+      message: 'Replit Secrets에 CRYPTO_AUTO_TRADE_KEY가 설정되지 않았습니다.',
+    });
+  }
+
+  if (!executionKeyValid(req)) {
+    return res.status(401).json({
+      ok: false,
+      verified: false,
+      message: '코인 자동매매 실행키가 서버 보호키와 일치하지 않습니다.',
+    });
+  }
+
+  return res.json({
+    ok: true,
+    verified: true,
+    message: '코인 자동매매 실행키가 확인됐습니다.',
+    checkedAt: new Date().toISOString(),
   });
 });
 
