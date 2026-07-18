@@ -131,3 +131,6 @@ args = "pnpm --filter @workspace/api-server run dev"
 
 [agent]
 expertMode = true
+
+[deployment]
+deploymentTarget = "cloudrun"
