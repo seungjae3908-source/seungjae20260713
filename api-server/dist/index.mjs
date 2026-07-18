@@ -10593,24 +10593,24 @@ function normalizeTicker4(value) {
   return String(value ?? "").trim().toUpperCase();
 }
 router6.get("/special-feed", async (req, res) => {
-  const market = String(req.query.market ?? "KR").toUpperCase() === "US" ? "US" : "KR";
-  const limit = Math.max(
-    1,
-    Math.min(120, Math.trunc(Number(req.query.limit ?? 80)) || 80)
-  );
+  const asset = String(req.query.asset ?? "stock").toLowerCase() === "coin" ? "coin" : "stock";
+  const rawMarket = String(req.query.market ?? (asset === "coin" ? "spot" : "KR"));
+  const market = asset === "coin" ? rawMarket.toLowerCase() === "futures" ? "futures" : "spot" : rawMarket.toUpperCase() === "US" ? "US" : "KR";
+  const limit = Math.max(1, Math.min(2e3, Math.trunc(Number(req.query.limit ?? 500)) || 500));
   res.setHeader("Cache-Control", "no-store, max-age=0");
   try {
-    const result = await SpecialFeedService.getFeed(market, limit);
+    const result = await SpecialFeedService.getFeed(asset, market, limit);
     res.json(result);
   } catch (error) {
     console.error("special feed route error:", error);
     res.status(502).json({
       ok: false,
+      asset,
       market,
       items: [],
       count: 0,
       updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      message: "\uC2E4\uC2DC\uAC04 \uD2B9\uC774\uC815\uBCF4\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
+      message: "\uD2B9\uC774\uC815\uBCF4\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
     });
   }
 });
@@ -10692,9 +10692,7 @@ async function fetchDartFilings(ticker, allHistory = false) {
     if (!response.ok) throw new Error("DART_LIST_HTTP_" + response.status);
     const data = await response.json();
     if (data?.status && data.status !== "000" && data.status !== "013") {
-      throw new Error(
-        `DART_LIST_${String(data.status)}:${String(data.message ?? "")}`
-      );
+      throw new Error(`DART_LIST_${String(data.status)}:${String(data.message ?? "")}`);
     }
     if (Array.isArray(data?.list)) items.push(...data.list);
     totalPage = Math.max(1, Number(data?.total_page ?? 1) || 1);
@@ -10702,9 +10700,7 @@ async function fetchDartFilings(ticker, allHistory = false) {
   } while (pageNo <= totalPage && (allHistory || pageNo <= 1));
   const unique = /* @__PURE__ */ new Map();
   for (const item of items) {
-    const key = String(
-      item?.rcept_no ?? `${item?.rcept_dt}:${item?.report_nm}`
-    );
+    const key = String(item?.rcept_no ?? `${item?.rcept_dt}:${item?.report_nm}`);
     if (!unique.has(key)) unique.set(key, item);
   }
   const result = [...unique.values()].map((item) => ({
@@ -10718,8 +10714,7 @@ async function fetchDartFilings(ticker, allHistory = false) {
   for (const item of result) {
     const normalizedTitle = String(item.report_nm ?? item.title ?? "").toLowerCase().replace(/\[[^\]]*\]|\([^)]*\)/g, "").replace(/정정|첨부정정|기재정정/g, "").replace(/[^0-9a-z가-힣]/g, "");
     const existing = grouped.get(normalizedTitle);
-    if (existing)
-      existing.relatedCount = Number(existing.relatedCount ?? 1) + 1;
+    if (existing) existing.relatedCount = Number(existing.relatedCount ?? 1) + 1;
     else grouped.set(normalizedTitle, { ...item, relatedCount: 1 });
   }
   const groupedItems = [...grouped.values()];
@@ -10734,12 +10729,9 @@ function secHeaders() {
 }
 async function getSecCik(ticker) {
   if (!secTickerMapCache) {
-    const response = await fetch(
-      "https://www.sec.gov/files/company_tickers.json",
-      {
-        headers: secHeaders()
-      }
-    );
+    const response = await fetch("https://www.sec.gov/files/company_tickers.json", {
+      headers: secHeaders()
+    });
     if (!response.ok) throw new Error("SEC_TICKERS_HTTP_" + response.status);
     const data = await response.json();
     const map = /* @__PURE__ */ new Map();
@@ -10805,22 +10797,17 @@ async function fetchSecFilings(ticker) {
   }
   const unique = /* @__PURE__ */ new Map();
   for (const item of items) {
-    if (!unique.has(item.accessionNumber))
-      unique.set(item.accessionNumber, item);
+    if (!unique.has(item.accessionNumber)) unique.set(item.accessionNumber, item);
   }
   return [...unique.values()].sort(
     (a, b) => String(b.filingDate).localeCompare(String(a.filingDate))
   );
 }
 async function fetchAllFilings(ticker, allHistory = false) {
-  return /^\d{6}$/.test(ticker) ? fetchDartFilings(ticker, allHistory) : fetchSecFilings(ticker).then(
-    (items) => allHistory ? items : items.slice(0, 5)
-  );
+  return /^\d{6}$/.test(ticker) ? fetchDartFilings(ticker, allHistory) : fetchSecFilings(ticker).then((items) => allHistory ? items : items.slice(0, 5));
 }
 function metricRow(rows, patterns) {
-  return rows.find(
-    (cells) => patterns.some((pattern) => pattern.test(cells[0] ?? ""))
-  );
+  return rows.find((cells) => patterns.some((pattern) => pattern.test(cells[0] ?? "")));
 }
 function financialNumber(value) {
   if (value == null) return null;
@@ -10843,15 +10830,10 @@ function periodIsAvailable(period) {
 }
 function buildNaverFinancialRows(html) {
   const table = financeTableRows(html);
-  const periodCells = table.find(
-    (cells) => cells.filter((cell) => /^20\d{2}\.\d{2}/.test(cell)).length >= 4
-  ) ?? [];
+  const periodCells = table.find((cells) => cells.filter((cell) => /^20\d{2}\.\d{2}/.test(cell)).length >= 4) ?? [];
   const periods = periodCells.filter((cell) => /^20\d{2}\.\d{2}/.test(cell));
-  if (!periods.length)
-    return { annual: [], quarterly: [], ratios: {}, marketCap: null };
-  const marketCapMatch = html.match(
-    /id=["']_market_sum["'][^>]*>([\s\S]*?)<\/em>/i
-  );
+  if (!periods.length) return { annual: [], quarterly: [], ratios: {}, marketCap: null };
+  const marketCapMatch = html.match(/id=["']_market_sum["'][^>]*>([\s\S]*?)<\/em>/i);
   const marketCapHundredMillion = financialNumber(
     marketCapMatch ? cleanFinanceCell(marketCapMatch[1]) : null
   );
@@ -10873,10 +10855,7 @@ function buildNaverFinancialRows(html) {
     pbr: [/^PBR/]
   };
   const metricRows = Object.fromEntries(
-    Object.entries(definitions).map(([key, patterns]) => [
-      key,
-      metricRow(table, [...patterns])
-    ])
+    Object.entries(definitions).map(([key, patterns]) => [key, metricRow(table, [...patterns])])
   );
   const valuesAt = (key, index) => financialNumber(metricRows[key]?.[index + 1]);
   const rows = periods.filter(periodIsAvailable).map((period, index) => ({
@@ -10915,12 +10894,7 @@ function buildNaverFinancialRows(html) {
 async function fetchNaverFinancials(ticker) {
   const response = await fetch(
     `https://finance.naver.com/item/main.naver?code=${encodeURIComponent(ticker)}`,
-    {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        Referer: "https://finance.naver.com/"
-      }
-    }
+    { headers: { "User-Agent": "Mozilla/5.0", Referer: "https://finance.naver.com/" } }
   );
   if (!response.ok) throw new Error("NAVER_FINANCIAL_HTTP_" + response.status);
   return buildNaverFinancialRows(await response.text());
@@ -10936,11 +10910,7 @@ function secFactUnits(data, tags) {
 }
 function secFactValueFor(data, tags, end, form) {
   for (const tag of tags) {
-    const matches = secFactUnits(data, [tag]).filter(
-      (item) => String(item?.end ?? "") === end && String(item?.form ?? "") === form
-    ).sort(
-      (a, b) => String(b?.filed ?? "").localeCompare(String(a?.filed ?? ""))
-    );
+    const matches = secFactUnits(data, [tag]).filter((item) => String(item?.end ?? "") === end && String(item?.form ?? "") === form).sort((a, b) => String(b?.filed ?? "").localeCompare(String(a?.filed ?? "")));
     const value = financialNumber(matches[0]?.val);
     if (value != null) return value;
   }
@@ -10948,60 +10918,22 @@ function secFactValueFor(data, tags, end, form) {
 }
 async function fetchSecFinancials(ticker) {
   const cik = await getSecCik(ticker);
-  if (!cik)
-    return {
-      annual: [],
-      quarterly: [],
-      ratios: {},
-      source: "SEC_COMPANYFACTS",
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-  const response = await fetch(
-    `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`,
-    { headers: secHeaders() }
-  );
+  if (!cik) return { annual: [], quarterly: [], ratios: {}, source: "SEC_COMPANYFACTS", updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  const response = await fetch(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, { headers: secHeaders() });
   if (!response.ok) throw new Error("SEC_COMPANYFACTS_HTTP_" + response.status);
   const data = await response.json();
-  const revenueTags = [
-    "Revenues",
-    "RevenueFromContractWithCustomerExcludingAssessedTax",
-    "SalesRevenueNet"
-  ];
-  const seed = secFactUnits(data, revenueTags).filter(
-    (item) => ["10-K", "10-Q"].includes(String(item?.form ?? "")) && item?.end
-  );
-  const periods = [
-    ...new Map(
-      seed.map((item) => [
-        `${item.form}:${item.end}`,
-        {
-          end: String(item.end),
-          form: String(item.form),
-          fy: Number(item.fy),
-          fp: String(item.fp ?? "")
-        }
-      ])
-    ).values()
-  ].filter((item) => Date.parse(item.end) <= Date.now()).sort((a, b) => b.end.localeCompare(a.end));
+  const revenueTags = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"];
+  const seed = secFactUnits(data, revenueTags).filter((item) => ["10-K", "10-Q"].includes(String(item?.form ?? "")) && item?.end);
+  const periods = [...new Map(seed.map((item) => [`${item.form}:${item.end}`, { end: String(item.end), form: String(item.form), fy: Number(item.fy), fp: String(item.fp ?? "") }])).values()].filter((item) => Date.parse(item.end) <= Date.now()).sort((a, b) => b.end.localeCompare(a.end));
   const tags = {
     revenue: revenueTags,
     operatingIncome: ["OperatingIncomeLoss"],
     netIncome: ["NetIncomeLoss", "ProfitLoss"],
     assets: ["Assets"],
     liabilities: ["Liabilities"],
-    equity: [
-      "StockholdersEquity",
-      "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
-    ],
-    capitalStock: [
-      "CommonStocksIncludingAdditionalPaidInCapital",
-      "CommonStockValue",
-      "AdditionalPaidInCapital"
-    ],
-    cash: [
-      "CashAndCashEquivalentsAtCarryingValue",
-      "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
-    ],
+    equity: ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
+    capitalStock: ["CommonStocksIncludingAdditionalPaidInCapital", "CommonStockValue", "AdditionalPaidInCapital"],
+    cash: ["CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
     operatingCashFlow: ["NetCashProvidedByUsedInOperatingActivities"],
     investingCashFlow: ["NetCashProvidedByUsedInInvestingActivities"],
     financingCashFlow: ["NetCashProvidedByUsedInFinancingActivities"]
@@ -11010,61 +10942,21 @@ async function fetchSecFinancials(ticker) {
     period: period.end.slice(0, 7).replace("-", "."),
     periodLabel: `${period.fy || period.end.slice(0, 4)} ${period.fp || (period.form === "10-K" ? "\uC5F0\uAC04" : "\uBD84\uAE30")}`,
     revenue: secFactValueFor(data, tags.revenue, period.end, period.form),
-    operatingIncome: secFactValueFor(
-      data,
-      tags.operatingIncome,
-      period.end,
-      period.form
-    ),
+    operatingIncome: secFactValueFor(data, tags.operatingIncome, period.end, period.form),
     netIncome: secFactValueFor(data, tags.netIncome, period.end, period.form),
     assets: secFactValueFor(data, tags.assets, period.end, period.form),
-    liabilities: secFactValueFor(
-      data,
-      tags.liabilities,
-      period.end,
-      period.form
-    ),
+    liabilities: secFactValueFor(data, tags.liabilities, period.end, period.form),
     equity: secFactValueFor(data, tags.equity, period.end, period.form),
-    capitalStock: secFactValueFor(
-      data,
-      tags.capitalStock,
-      period.end,
-      period.form
-    ),
+    capitalStock: secFactValueFor(data, tags.capitalStock, period.end, period.form),
     cash: secFactValueFor(data, tags.cash, period.end, period.form),
-    operatingCashFlow: secFactValueFor(
-      data,
-      tags.operatingCashFlow,
-      period.end,
-      period.form
-    ),
-    investingCashFlow: secFactValueFor(
-      data,
-      tags.investingCashFlow,
-      period.end,
-      period.form
-    ),
-    financingCashFlow: secFactValueFor(
-      data,
-      tags.financingCashFlow,
-      period.end,
-      period.form
-    )
+    operatingCashFlow: secFactValueFor(data, tags.operatingCashFlow, period.end, period.form),
+    investingCashFlow: secFactValueFor(data, tags.investingCashFlow, period.end, period.form),
+    financingCashFlow: secFactValueFor(data, tags.financingCashFlow, period.end, period.form)
   });
   const annual = periods.filter((item) => item.form === "10-K").slice(0, 5).map(build);
   const quarterly = periods.filter((item) => item.form === "10-Q").slice(0, 8).map(build);
   const latest = annual[0] ?? quarterly[0];
-  return {
-    annual,
-    yearly: annual,
-    quarterly,
-    quarters: quarterly,
-    ratios: {
-      debtRatio: latest?.liabilities != null && latest?.equity ? latest.liabilities / latest.equity * 100 : null
-    },
-    source: "SEC_COMPANYFACTS",
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
+  return { annual, yearly: annual, quarterly, quarters: quarterly, ratios: { debtRatio: latest?.liabilities != null && latest?.equity ? latest.liabilities / latest.equity * 100 : null }, source: "SEC_COMPANYFACTS", updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
 }
 async function fetchFinancials(ticker) {
   if (/^\d{6}$/.test(ticker)) {
@@ -11155,8 +11047,7 @@ async function fetchGoogleNews(ticker, allHistory = false) {
   const normalized = (title, source) => {
     const suffix = source ? " - " + source.toLowerCase() : "";
     let value = title.toLowerCase().replace(/\s+/g, " ").trim();
-    if (suffix && value.endsWith(suffix))
-      value = value.slice(0, -suffix.length);
+    if (suffix && value.endsWith(suffix)) value = value.slice(0, -suffix.length);
     return value.replace(/\[[^\]]+\]|\([^)]*\)/g, " ").replace(/[^0-9a-z가-힣]+/g, "").slice(0, 80);
   };
   const grouped = /* @__PURE__ */ new Map();
@@ -11176,8 +11067,7 @@ async function fetchGoogleNews(ticker, allHistory = false) {
   for (const item of items) {
     const key = normalized(item.title, item.source) || item.url;
     const existing = grouped.get(key);
-    if (existing)
-      existing.relatedCount = Number(existing.relatedCount ?? 1) + 1;
+    if (existing) existing.relatedCount = Number(existing.relatedCount ?? 1) + 1;
     else grouped.set(key, { ...item, relatedCount: 1 });
   }
   const groupedItems = [...grouped.values()];
@@ -11228,9 +11118,7 @@ async function ensureAutoTradePositionsLoaded() {
           targetPrice,
           probability: Number(position.probability ?? 0),
           reasons: Array.isArray(position.reasons) ? position.reasons.map(String) : [],
-          journalId: String(
-            position.journalId ?? `${position.openedAt ?? "legacy"}:${ticker}`
-          ),
+          journalId: String(position.journalId ?? `${position.openedAt ?? "legacy"}:${ticker}`),
           openedAt: String(position.openedAt ?? (/* @__PURE__ */ new Date()).toISOString()),
           exitSignalReason: position.exitSignalReason ? String(position.exitSignalReason) : null,
           exitSignalAt: position.exitSignalAt ? String(position.exitSignalAt) : null
@@ -11246,15 +11134,13 @@ async function ensureAutoTradePositionsLoaded() {
       const memberId2 = String(entry.memberId ?? "").trim();
       if (!memberId2) return [];
       const market = entry.market === "US" ? "US" : "KR";
-      return [
-        {
-          ...entry,
-          memberId: memberId2,
-          market,
-          currency: market === "US" ? "USD" : "KRW",
-          exchange: market === "US" && ["NASDAQ", "NYSE", "AMEX"].includes(String(entry.exchange)) ? entry.exchange : null
-        }
-      ];
+      return [{
+        ...entry,
+        memberId: memberId2,
+        market,
+        currency: market === "US" ? "USD" : "KRW",
+        exchange: market === "US" && ["NASDAQ", "NYSE", "AMEX"].includes(String(entry.exchange)) ? entry.exchange : null
+      }];
     }) : [];
   } catch {
     autoTradeJournal = [];
@@ -11291,9 +11177,7 @@ function marketTimeParts(timeZone) {
 }
 function marketOpenNow(market) {
   if (process.env.KIWOOM_AUTO_TRADE_ALLOW_OFF_HOURS === "true") return true;
-  const parts = marketTimeParts(
-    market === "US" ? "America/New_York" : "Asia/Seoul"
-  );
+  const parts = marketTimeParts(market === "US" ? "America/New_York" : "Asia/Seoul");
   if (["Sat", "Sun"].includes(parts.weekday)) return false;
   const minutes = Number(parts.hour) * 60 + Number(parts.minute);
   return market === "US" ? minutes >= 9 * 60 + 30 && minutes < 16 * 60 : minutes >= 9 * 60 && minutes <= 15 * 60 + 30;
@@ -11309,13 +11193,10 @@ function marketDateString(market, value = /* @__PURE__ */ new Date()) {
 }
 function normalizeUsExchange(value, ticker) {
   const normalized = String(value ?? "").trim().toUpperCase();
-  if (normalized === "NASDAQ" || normalized === "NASD" || normalized === "ND")
-    return "NASDAQ";
+  if (normalized === "NASDAQ" || normalized === "NASD" || normalized === "ND") return "NASDAQ";
   if (normalized === "NYSE" || normalized === "NY") return "NYSE";
-  if (normalized === "AMEX" || normalized === "NYSE AMERICAN" || normalized === "NA")
-    return "AMEX";
-  if (["AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA"].includes(ticker))
-    return "NASDAQ";
+  if (normalized === "AMEX" || normalized === "NYSE AMERICAN" || normalized === "NA") return "AMEX";
+  if (["AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA"].includes(ticker)) return "NASDAQ";
   return null;
 }
 function formatTradePrice(value, currency) {
@@ -11341,26 +11222,10 @@ function validateRealOrderAccess(req) {
   const realMode = String(process.env.KIWOOM_MODE ?? "").trim().toLowerCase() === "real";
   const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
   const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
-  if (!enabled)
-    return {
-      ok: false,
-      status: 403,
-      message: "\uC11C\uBC84\uC758 \uC2E4\uC81C \uC790\uB3D9\uB9E4\uB9E4 \uAE30\uB2A5\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4."
-    };
-  if (!realMode)
-    return {
-      ok: false,
-      status: 409,
-      message: "\uC2E4\uC81C \uC8FC\uBB38\uC740 KIWOOM_MODE=real \uC124\uC815\uC774 \uD544\uC694\uD569\uB2C8\uB2E4."
-    };
-  if (!configuredKey || suppliedKey !== configuredKey)
-    return {
-      ok: false,
-      status: 401,
-      message: "\uC790\uB3D9\uB9E4\uB9E4 \uC2E4\uD589\uD0A4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
-    };
-  if (!req.member?.id)
-    return { ok: false, status: 401, message: "\uB85C\uADF8\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4." };
+  if (!enabled) return { ok: false, status: 403, message: "\uC11C\uBC84\uC758 \uC2E4\uC81C \uC790\uB3D9\uB9E4\uB9E4 \uAE30\uB2A5\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4." };
+  if (!realMode) return { ok: false, status: 409, message: "\uC2E4\uC81C \uC8FC\uBB38\uC740 KIWOOM_MODE=real \uC124\uC815\uC774 \uD544\uC694\uD569\uB2C8\uB2E4." };
+  if (!configuredKey || suppliedKey !== configuredKey) return { ok: false, status: 401, message: "\uC790\uB3D9\uB9E4\uB9E4 \uC2E4\uD589\uD0A4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." };
+  if (!req.member?.id) return { ok: false, status: 401, message: "\uB85C\uADF8\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4." };
   return { ok: true };
 }
 router6.post("/auto-trade/plan", async (req, res) => {
@@ -11368,54 +11233,24 @@ router6.post("/auto-trade/plan", async (req, res) => {
   const realMode = String(process.env.KIWOOM_MODE ?? "").trim().toLowerCase() === "real";
   const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
   const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
-  if (!enabled)
-    return res.status(403).json({
-      ok: false,
-      message: "\uC11C\uBC84\uC758 \uC2E4\uC81C \uC790\uB3D9\uB9E4\uB9E4 \uAE30\uB2A5\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4."
-    });
-  if (!realMode)
-    return res.status(409).json({
-      ok: false,
-      message: "\uC2E4\uC81C \uC8FC\uBB38\uACC4\uD68D\uC740 KIWOOM_MODE=real \uC124\uC815\uC774 \uD544\uC694\uD569\uB2C8\uB2E4."
-    });
-  if (!configuredKey || suppliedKey !== configuredKey)
-    return res.status(401).json({ ok: false, message: "\uC790\uB3D9\uB9E4\uB9E4 \uC2E4\uD589\uD0A4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." });
-  if (!req.member?.id)
-    return res.status(401).json({ ok: false, message: "\uB85C\uADF8\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4." });
-  const candidates = Array.isArray(req.body?.candidates) ? [...req.body.candidates].sort(
-    (a, b) => Number(b?.probability ?? b?.score ?? 0) - Number(a?.probability ?? a?.score ?? 0)
-  ).slice(0, 1) : [];
+  if (!enabled) return res.status(403).json({ ok: false, message: "\uC11C\uBC84\uC758 \uC2E4\uC81C \uC790\uB3D9\uB9E4\uB9E4 \uAE30\uB2A5\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4." });
+  if (!realMode) return res.status(409).json({ ok: false, message: "\uC2E4\uC81C \uC8FC\uBB38\uACC4\uD68D\uC740 KIWOOM_MODE=real \uC124\uC815\uC774 \uD544\uC694\uD569\uB2C8\uB2E4." });
+  if (!configuredKey || suppliedKey !== configuredKey) return res.status(401).json({ ok: false, message: "\uC790\uB3D9\uB9E4\uB9E4 \uC2E4\uD589\uD0A4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." });
+  if (!req.member?.id) return res.status(401).json({ ok: false, message: "\uB85C\uADF8\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4." });
+  const candidates = Array.isArray(req.body?.candidates) ? [...req.body.candidates].sort((a, b) => Number(b?.probability ?? b?.score ?? 0) - Number(a?.probability ?? a?.score ?? 0)).slice(0, 1) : [];
   const candidate = candidates[0];
-  if (!candidate)
-    return res.status(400).json({ ok: false, message: "\uC2B9\uC778\uD560 \uC8FC\uBB38 \uD6C4\uBCF4\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4." });
+  if (!candidate) return res.status(400).json({ ok: false, message: "\uC2B9\uC778\uD560 \uC8FC\uBB38 \uD6C4\uBCF4\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4." });
   const ticker = normalizeTicker4(candidate.ticker);
   const market = candidate.market === "US" ? "US" : "KR";
   const currency = market === "US" ? "USD" : "KRW";
-  const investmentPerTrade = Math.max(
-    1,
-    Math.min(1e6, Math.round(Number(req.body?.investmentPerTrade ?? 0)))
-  );
-  const stopLossPercent = Math.min(
-    20,
-    Math.max(0.1, Number(req.body?.stopLossPercent ?? 3))
-  );
-  const takeProfitPercent = Math.min(
-    100,
-    Math.max(0.1, Number(req.body?.takeProfitPercent ?? 5))
-  );
+  const investmentPerTrade = Math.max(1, Math.min(1e6, Math.round(Number(req.body?.investmentPerTrade ?? 0))));
+  const stopLossPercent = Math.min(20, Math.max(0.1, Number(req.body?.stopLossPercent ?? 3)));
+  const takeProfitPercent = Math.min(100, Math.max(0.1, Number(req.body?.takeProfitPercent ?? 5)));
   const quote = await MarketDataService.getQuoteRow(ticker);
   const currentPrice = Math.abs(Number(quote?.price ?? 0));
-  if (!Number.isFinite(currentPrice) || currentPrice <= 0)
-    return res.status(409).json({
-      ok: false,
-      message: "\uC8FC\uBB38\uACC4\uD68D \uC0DD\uC131 \uC804 \uD604\uC7AC\uAC00\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
-    });
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) return res.status(409).json({ ok: false, message: "\uC8FC\uBB38\uACC4\uD68D \uC0DD\uC131 \uC804 \uD604\uC7AC\uAC00\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." });
   const quantity = Math.floor(investmentPerTrade / currentPrice);
-  if (quantity < 1)
-    return res.status(409).json({
-      ok: false,
-      message: "\uC124\uC815 \uC8FC\uBB38\uAE08\uC561\uC73C\uB85C 1\uC8FC \uC774\uC0C1 \uC8FC\uBB38\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."
-    });
+  if (quantity < 1) return res.status(409).json({ ok: false, message: "\uC124\uC815 \uC8FC\uBB38\uAE08\uC561\uC73C\uB85C 1\uC8FC \uC774\uC0C1 \uC8FC\uBB38\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4." });
   const stopPrice = currentPrice * (1 - stopLossPercent / 100);
   const targetPrice = currentPrice * (1 + takeProfitPercent / 100);
   cleanupAutoTradeApprovalPlans();
@@ -11425,214 +11260,120 @@ router6.post("/auto-trade/plan", async (req, res) => {
     token,
     memberId: req.member.id,
     expiresAt,
-    body: {
-      candidates,
-      investmentPerTrade,
-      stopLossPercent,
-      takeProfitPercent
-    },
-    order: {
-      ticker,
-      name: String(candidate.name ?? ticker),
-      market,
-      currency,
-      quantity,
-      currentPrice,
-      estimatedAmount: quantity * currentPrice,
-      stopPrice,
-      targetPrice
-    }
+    body: { candidates, investmentPerTrade, stopLossPercent, takeProfitPercent },
+    order: { ticker, name: String(candidate.name ?? ticker), market, currency, quantity, currentPrice, estimatedAmount: quantity * currentPrice, stopPrice, targetPrice }
   };
   autoTradeApprovalPlans.set(token, plan);
+  return res.json({ ok: true, approvalToken: token, expiresAt: new Date(expiresAt).toISOString(), order: plan.order, message: "\uC8FC\uBB38 \uB0B4\uC6A9\uC744 \uD655\uC778\uD55C \uB4A4 10\uBD84 \uC548\uC5D0 \uD55C \uBC88\uB9CC \uC2B9\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." });
+});
+router6.post("/auto-trade/close-plan", async (req, res) => {
+  const access = validateRealOrderAccess(req);
+  if (!access.ok) return res.status(access.status).json({ ok: false, message: access.message });
+  await ensureAutoTradePositionsLoaded();
+  const memberId2 = req.member.id;
+  const ticker = normalizeTicker4(req.body?.ticker);
+  const market = req.body?.market === "US" ? "US" : "KR";
+  const positionKey = autoTradePositionKey(memberId2, market, ticker);
+  const position = autoTradePositions.get(positionKey);
+  if (!position) return res.status(404).json({ ok: false, message: "\uD604\uC7AC \uD68C\uC6D0\uC758 \uBCF4\uC720 \uC790\uB3D9\uB9E4\uB9E4 \uD3EC\uC9C0\uC158\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." });
+  if (!marketOpenNow(market)) return res.status(409).json({ ok: false, message: market === "US" ? "\uBBF8\uAD6D \uC815\uADDC\uC7A5 \uC8FC\uBB38 \uAC00\uB2A5 \uC2DC\uAC04\uC774 \uC544\uB2D9\uB2C8\uB2E4." : "\uAD6D\uB0B4 \uC815\uADDC\uC7A5 \uC8FC\uBB38 \uAC00\uB2A5 \uC2DC\uAC04\uC774 \uC544\uB2D9\uB2C8\uB2E4." });
+  const quote = await MarketDataService.getQuoteRow(ticker);
+  const currentPrice = Math.abs(Number(quote?.price ?? 0));
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) return res.status(409).json({ ok: false, message: "\uB9E4\uB3C4\uACC4\uD68D \uC0DD\uC131 \uC804 \uD604\uC7AC\uAC00\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." });
+  const reason = currentPrice <= position.stopPrice ? "\uC190\uC808\uAC00 \uB3C4\uB2EC" : currentPrice >= position.targetPrice ? "\uBAA9\uD45C\uAC00 \uB3C4\uB2EC" : "\uC0AC\uC6A9\uC790 \uC218\uB3D9 \uCCAD\uC0B0";
+  cleanupAutoTradeApprovalPlans();
+  const token = randomUUID();
+  const expiresAt = Date.now() + 10 * 6e4;
+  const plan = {
+    token,
+    memberId: memberId2,
+    expiresAt,
+    positionKey,
+    order: {
+      ticker: position.ticker,
+      name: position.name,
+      market: position.market,
+      currency: position.currency,
+      quantity: position.quantity,
+      currentPrice,
+      estimatedAmount: currentPrice * position.quantity,
+      stopPrice: position.stopPrice,
+      targetPrice: position.targetPrice,
+      reason
+    }
+  };
+  autoTradeCloseApprovalPlans.set(token, plan);
   return res.json({
     ok: true,
     approvalToken: token,
     expiresAt: new Date(expiresAt).toISOString(),
     order: plan.order,
-    message: "\uC8FC\uBB38 \uB0B4\uC6A9\uC744 \uD655\uC778\uD55C \uB4A4 10\uBD84 \uC548\uC5D0 \uD55C \uBC88\uB9CC \uC2B9\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4."
+    message: "\uB9E4\uB3C4 \uB0B4\uC6A9\uC744 \uD655\uC778\uD55C \uB4A4 10\uBD84 \uC548\uC5D0 \uD55C \uBC88\uB9CC \uC2B9\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4."
   });
 });
-router6.post(
-  "/auto-trade/close-plan",
-  async (req, res) => {
-    const access = validateRealOrderAccess(req);
-    if (!access.ok)
-      return res.status(access.status).json({ ok: false, message: access.message });
-    await ensureAutoTradePositionsLoaded();
-    const memberId2 = req.member.id;
-    const ticker = normalizeTicker4(req.body?.ticker);
-    const market = req.body?.market === "US" ? "US" : "KR";
-    const positionKey = autoTradePositionKey(memberId2, market, ticker);
-    const position = autoTradePositions.get(positionKey);
-    if (!position)
-      return res.status(404).json({
-        ok: false,
-        message: "\uD604\uC7AC \uD68C\uC6D0\uC758 \uBCF4\uC720 \uC790\uB3D9\uB9E4\uB9E4 \uD3EC\uC9C0\uC158\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
-      });
-    if (!marketOpenNow(market))
-      return res.status(409).json({
-        ok: false,
-        message: market === "US" ? "\uBBF8\uAD6D \uC815\uADDC\uC7A5 \uC8FC\uBB38 \uAC00\uB2A5 \uC2DC\uAC04\uC774 \uC544\uB2D9\uB2C8\uB2E4." : "\uAD6D\uB0B4 \uC815\uADDC\uC7A5 \uC8FC\uBB38 \uAC00\uB2A5 \uC2DC\uAC04\uC774 \uC544\uB2D9\uB2C8\uB2E4."
-      });
-    const quote = await MarketDataService.getQuoteRow(ticker);
-    const currentPrice = Math.abs(Number(quote?.price ?? 0));
-    if (!Number.isFinite(currentPrice) || currentPrice <= 0)
-      return res.status(409).json({
-        ok: false,
-        message: "\uB9E4\uB3C4\uACC4\uD68D \uC0DD\uC131 \uC804 \uD604\uC7AC\uAC00\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
-      });
-    const reason = currentPrice <= position.stopPrice ? "\uC190\uC808\uAC00 \uB3C4\uB2EC" : currentPrice >= position.targetPrice ? "\uBAA9\uD45C\uAC00 \uB3C4\uB2EC" : "\uC0AC\uC6A9\uC790 \uC218\uB3D9 \uCCAD\uC0B0";
-    cleanupAutoTradeApprovalPlans();
-    const token = randomUUID();
-    const expiresAt = Date.now() + 10 * 6e4;
-    const plan = {
-      token,
-      memberId: memberId2,
-      expiresAt,
-      positionKey,
-      order: {
-        ticker: position.ticker,
-        name: position.name,
-        market: position.market,
-        currency: position.currency,
-        quantity: position.quantity,
-        currentPrice,
-        estimatedAmount: currentPrice * position.quantity,
-        stopPrice: position.stopPrice,
-        targetPrice: position.targetPrice,
-        reason
-      }
-    };
-    autoTradeCloseApprovalPlans.set(token, plan);
-    return res.json({
-      ok: true,
-      approvalToken: token,
-      expiresAt: new Date(expiresAt).toISOString(),
-      order: plan.order,
-      message: "\uB9E4\uB3C4 \uB0B4\uC6A9\uC744 \uD655\uC778\uD55C \uB4A4 10\uBD84 \uC548\uC5D0 \uD55C \uBC88\uB9CC \uC2B9\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4."
-    });
+router6.post("/auto-trade/close-execute", async (req, res) => {
+  cleanupAutoTradeApprovalPlans();
+  const approvalToken = String(req.body?.approvalToken ?? "").trim();
+  const approval = autoTradeCloseApprovalPlans.get(approvalToken);
+  if (!approval || approval.expiresAt <= Date.now() || approval.memberId !== req.member?.id) {
+    return res.status(409).json({ ok: false, message: "\uB9E4\uB3C4 \uC2B9\uC778\uC774 \uC5C6\uAC70\uB098 \uB9CC\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB9E4\uB3C4\uACC4\uD68D\uC744 \uB2E4\uC2DC \uD655\uC778\uD574 \uC8FC\uC138\uC694." });
   }
-);
-router6.post(
-  "/auto-trade/close-execute",
-  async (req, res) => {
-    cleanupAutoTradeApprovalPlans();
-    const approvalToken = String(req.body?.approvalToken ?? "").trim();
-    const approval = autoTradeCloseApprovalPlans.get(approvalToken);
-    if (!approval || approval.expiresAt <= Date.now() || approval.memberId !== req.member?.id) {
-      return res.status(409).json({
-        ok: false,
-        message: "\uB9E4\uB3C4 \uC2B9\uC778\uC774 \uC5C6\uAC70\uB098 \uB9CC\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB9E4\uB3C4\uACC4\uD68D\uC744 \uB2E4\uC2DC \uD655\uC778\uD574 \uC8FC\uC138\uC694."
-      });
-    }
-    autoTradeCloseApprovalPlans.delete(approvalToken);
-    const access = validateRealOrderAccess(req);
-    if (!access.ok)
-      return res.status(access.status).json({ ok: false, message: access.message });
-    await ensureAutoTradePositionsLoaded();
-    const position = autoTradePositions.get(approval.positionKey);
-    if (!position || position.memberId !== req.member.id) {
-      return res.status(404).json({ ok: false, message: "\uCCAD\uC0B0\uD560 \uD604\uC7AC \uD68C\uC6D0\uC758 \uD3EC\uC9C0\uC158\uC774 \uC5C6\uC2B5\uB2C8\uB2E4." });
-    }
-    if (!marketOpenNow(position.market)) {
-      return res.status(409).json({
-        ok: false,
-        message: position.market === "US" ? "\uBBF8\uAD6D \uC815\uADDC\uC7A5 \uC8FC\uBB38 \uAC00\uB2A5 \uC2DC\uAC04\uC774 \uC544\uB2D9\uB2C8\uB2E4." : "\uAD6D\uB0B4 \uC815\uADDC\uC7A5 \uC8FC\uBB38 \uAC00\uB2A5 \uC2DC\uAC04\uC774 \uC544\uB2D9\uB2C8\uB2E4."
-      });
-    }
-    const quote = await MarketDataService.getQuoteRow(position.ticker);
-    const currentPrice = Math.abs(Number(quote?.price ?? 0));
-    if (!Number.isFinite(currentPrice) || currentPrice <= 0)
-      return res.status(409).json({
-        ok: false,
-        message: "\uB9E4\uB3C4 \uC9C1\uC804 \uD604\uC7AC\uAC00\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
-      });
-    try {
-      const order = position.market === "US" ? await placeKiwoomUsOrder({
-        ticker: position.ticker,
-        exchange: position.exchange,
-        side: "sell",
-        quantity: position.quantity,
-        orderType: "market"
-      }) : await placeKiwoomDomesticOrder({
-        ticker: position.ticker,
-        side: "sell",
-        quantity: position.quantity,
-        orderType: "market"
-      });
-      const closedAt = (/* @__PURE__ */ new Date()).toISOString();
-      const status = currentPrice <= position.stopPrice ? "STOP_LOSS" : currentPrice >= position.targetPrice ? "TAKE_PROFIT" : "MANUAL_CLOSE";
-      const reason = status === "STOP_LOSS" ? "\uC190\uC808\uAC00 \uB3C4\uB2EC" : status === "TAKE_PROFIT" ? "\uBAA9\uD45C\uAC00 \uB3C4\uB2EC" : "\uC0AC\uC6A9\uC790 \uC218\uB3D9 \uCCAD\uC0B0";
-      const profitPercent = position.entryPrice > 0 ? (currentPrice - position.entryPrice) / position.entryPrice * 100 : 0;
-      const journal = autoTradeJournal.find(
-        (entry) => entry.memberId === position.memberId && entry.id === position.journalId
-      );
-      if (journal) {
-        journal.status = status;
-        journal.exitPrice = currentPrice;
-        journal.exitReason = reason;
-        journal.exitAnalysis = `${reason}\uC5D0 \uB530\uB77C \uC0AC\uC6A9\uC790 \uD655\uC778 \uD6C4 ${position.quantity}\uC8FC \uC2DC\uC7A5\uAC00 \uB9E4\uB3C4 \uC8FC\uBB38\uC744 \uC804\uC1A1\uD588\uC2B5\uB2C8\uB2E4.`;
-        journal.profitPercent = profitPercent;
-        journal.exitOrderNo = order.orderNo ?? null;
-        journal.closedAt = closedAt;
-      }
-      autoTradePositions.delete(approval.positionKey);
-      await saveAutoTradePositions();
-      await saveAutoTradeJournal();
-      void deliverMemberNotification({
-        memberId: position.memberId,
-        type: "auto_trade",
-        title: `\uB9E4\uB3C4 \uC8FC\uBB38 \uC804\uC1A1 \xB7 ${position.name}`,
-        body: `${reason} \xB7 ${position.quantity}\uC8FC \xB7 \uAE30\uC900\uAC00 ${formatTradePrice(currentPrice, position.currency)} \xB7 \uC608\uC0C1 \uC218\uC775\uB960 ${profitPercent >= 0 ? "+" : ""}${profitPercent.toFixed(2)}%`,
-        url: "/auto-trading",
-        app: true,
-        push: true,
-        metadata: {
-          ticker: position.ticker,
-          market: position.market,
-          quantity: position.quantity,
-          currentPrice,
-          reason,
-          orderNo: order.orderNo ?? null
-        }
-      }).catch(
-        (error) => console.error("auto trade close notification error:", error)
-      );
-      return res.json({
-        ok: true,
-        ticker: position.ticker,
-        market: position.market,
-        quantity: position.quantity,
-        orderNo: order.orderNo ?? null,
-        currentPrice,
-        reason,
-        profitPercent,
-        message: "\uC0AC\uC6A9\uC790 \uC2B9\uC778\uC5D0 \uB530\uB77C \uC2DC\uC7A5\uAC00 \uB9E4\uB3C4 \uC8FC\uBB38\uC744 \uC804\uC1A1\uD588\uC2B5\uB2C8\uB2E4."
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "\uD0A4\uC6C0 \uB9E4\uB3C4 \uC8FC\uBB38 \uC804\uC1A1 \uC2E4\uD328";
-      void deliverMemberNotification({
-        memberId: position.memberId,
-        type: "auto_trade",
-        title: `\uB9E4\uB3C4 \uC8FC\uBB38 \uC2E4\uD328 \xB7 ${position.name}`,
-        body: message,
-        url: "/auto-trading",
-        app: true,
-        push: true
-      }).catch(() => void 0);
-      return res.status(502).json({ ok: false, message });
-    }
+  autoTradeCloseApprovalPlans.delete(approvalToken);
+  const access = validateRealOrderAccess(req);
+  if (!access.ok) return res.status(access.status).json({ ok: false, message: access.message });
+  await ensureAutoTradePositionsLoaded();
+  const position = autoTradePositions.get(approval.positionKey);
+  if (!position || position.memberId !== req.member.id) {
+    return res.status(404).json({ ok: false, message: "\uCCAD\uC0B0\uD560 \uD604\uC7AC \uD68C\uC6D0\uC758 \uD3EC\uC9C0\uC158\uC774 \uC5C6\uC2B5\uB2C8\uB2E4." });
   }
-);
+  if (!marketOpenNow(position.market)) {
+    return res.status(409).json({ ok: false, message: position.market === "US" ? "\uBBF8\uAD6D \uC815\uADDC\uC7A5 \uC8FC\uBB38 \uAC00\uB2A5 \uC2DC\uAC04\uC774 \uC544\uB2D9\uB2C8\uB2E4." : "\uAD6D\uB0B4 \uC815\uADDC\uC7A5 \uC8FC\uBB38 \uAC00\uB2A5 \uC2DC\uAC04\uC774 \uC544\uB2D9\uB2C8\uB2E4." });
+  }
+  const quote = await MarketDataService.getQuoteRow(position.ticker);
+  const currentPrice = Math.abs(Number(quote?.price ?? 0));
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) return res.status(409).json({ ok: false, message: "\uB9E4\uB3C4 \uC9C1\uC804 \uD604\uC7AC\uAC00\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." });
+  try {
+    const order = position.market === "US" ? await placeKiwoomUsOrder({ ticker: position.ticker, exchange: position.exchange, side: "sell", quantity: position.quantity, orderType: "market" }) : await placeKiwoomDomesticOrder({ ticker: position.ticker, side: "sell", quantity: position.quantity, orderType: "market" });
+    const closedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const status = currentPrice <= position.stopPrice ? "STOP_LOSS" : currentPrice >= position.targetPrice ? "TAKE_PROFIT" : "MANUAL_CLOSE";
+    const reason = status === "STOP_LOSS" ? "\uC190\uC808\uAC00 \uB3C4\uB2EC" : status === "TAKE_PROFIT" ? "\uBAA9\uD45C\uAC00 \uB3C4\uB2EC" : "\uC0AC\uC6A9\uC790 \uC218\uB3D9 \uCCAD\uC0B0";
+    const profitPercent = position.entryPrice > 0 ? (currentPrice - position.entryPrice) / position.entryPrice * 100 : 0;
+    const journal = autoTradeJournal.find((entry) => entry.memberId === position.memberId && entry.id === position.journalId);
+    if (journal) {
+      journal.status = status;
+      journal.exitPrice = currentPrice;
+      journal.exitReason = reason;
+      journal.exitAnalysis = `${reason}\uC5D0 \uB530\uB77C \uC0AC\uC6A9\uC790 \uD655\uC778 \uD6C4 ${position.quantity}\uC8FC \uC2DC\uC7A5\uAC00 \uB9E4\uB3C4 \uC8FC\uBB38\uC744 \uC804\uC1A1\uD588\uC2B5\uB2C8\uB2E4.`;
+      journal.profitPercent = profitPercent;
+      journal.exitOrderNo = order.orderNo ?? null;
+      journal.closedAt = closedAt;
+    }
+    autoTradePositions.delete(approval.positionKey);
+    await saveAutoTradePositions();
+    await saveAutoTradeJournal();
+    void deliverMemberNotification({
+      memberId: position.memberId,
+      type: "auto_trade",
+      title: `\uB9E4\uB3C4 \uC8FC\uBB38 \uC804\uC1A1 \xB7 ${position.name}`,
+      body: `${reason} \xB7 ${position.quantity}\uC8FC \xB7 \uAE30\uC900\uAC00 ${formatTradePrice(currentPrice, position.currency)} \xB7 \uC608\uC0C1 \uC218\uC775\uB960 ${profitPercent >= 0 ? "+" : ""}${profitPercent.toFixed(2)}%`,
+      url: "/auto-trading",
+      app: true,
+      push: true,
+      metadata: { ticker: position.ticker, market: position.market, quantity: position.quantity, currentPrice, reason, orderNo: order.orderNo ?? null }
+    }).catch((error) => console.error("auto trade close notification error:", error));
+    return res.json({ ok: true, ticker: position.ticker, market: position.market, quantity: position.quantity, orderNo: order.orderNo ?? null, currentPrice, reason, profitPercent, message: "\uC0AC\uC6A9\uC790 \uC2B9\uC778\uC5D0 \uB530\uB77C \uC2DC\uC7A5\uAC00 \uB9E4\uB3C4 \uC8FC\uBB38\uC744 \uC804\uC1A1\uD588\uC2B5\uB2C8\uB2E4." });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "\uD0A4\uC6C0 \uB9E4\uB3C4 \uC8FC\uBB38 \uC804\uC1A1 \uC2E4\uD328";
+    void deliverMemberNotification({ memberId: position.memberId, type: "auto_trade", title: `\uB9E4\uB3C4 \uC8FC\uBB38 \uC2E4\uD328 \xB7 ${position.name}`, body: message, url: "/auto-trading", app: true, push: true }).catch(() => void 0);
+    return res.status(502).json({ ok: false, message });
+  }
+});
 router6.post("/auto-trade/execute", async (req, res) => {
   cleanupAutoTradeApprovalPlans();
   const approvalToken = String(req.body?.approvalToken ?? "").trim();
   const approval = autoTradeApprovalPlans.get(approvalToken);
   if (!approval || approval.expiresAt <= Date.now() || approval.memberId !== req.member?.id) {
-    return res.status(409).json({
-      ok: false,
-      message: "\uC8FC\uBB38 \uC2B9\uC778\uC774 \uC5C6\uAC70\uB098 \uB9CC\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC8FC\uBB38\uACC4\uD68D\uC744 \uB2E4\uC2DC \uD655\uC778\uD574 \uC8FC\uC138\uC694."
-    });
+    return res.status(409).json({ ok: false, message: "\uC8FC\uBB38 \uC2B9\uC778\uC774 \uC5C6\uAC70\uB098 \uB9CC\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC8FC\uBB38\uACC4\uD68D\uC744 \uB2E4\uC2DC \uD655\uC778\uD574 \uC8FC\uC138\uC694." });
   }
   autoTradeApprovalPlans.delete(approvalToken);
   const approvedBody = approval.body;
@@ -11641,10 +11382,7 @@ router6.post("/auto-trade/execute", async (req, res) => {
   const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
   const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
   if (!enabled) {
-    return res.status(403).json({
-      ok: false,
-      message: "\uC11C\uBC84\uC758 \uC2E4\uC81C \uC790\uB3D9\uB9E4\uB9E4 \uAE30\uB2A5\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4."
-    });
+    return res.status(403).json({ ok: false, message: "\uC11C\uBC84\uC758 \uC2E4\uC81C \uC790\uB3D9\uB9E4\uB9E4 \uAE30\uB2A5\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4." });
   }
   if (!realMode) {
     return res.status(409).json({
@@ -11657,21 +11395,10 @@ router6.post("/auto-trade/execute", async (req, res) => {
   }
   await ensureAutoTradePositionsLoaded();
   const memberId2 = req.member.id;
-  const candidates = Array.isArray(approvedBody.candidates) ? [...approvedBody.candidates].sort(
-    (a, b) => Number(b?.probability ?? 0) - Number(a?.probability ?? 0)
-  ).slice(0, 1) : [];
-  const investmentPerTrade = Math.max(
-    1,
-    Number(approvedBody.investmentPerTrade ?? 0)
-  );
-  const stopLossPercent = Math.min(
-    20,
-    Math.max(0.1, Number(approvedBody.stopLossPercent ?? 3))
-  );
-  const takeProfitPercent = Math.min(
-    100,
-    Math.max(0.1, Number(approvedBody.takeProfitPercent ?? 5))
-  );
+  const candidates = Array.isArray(approvedBody.candidates) ? [...approvedBody.candidates].sort((a, b) => Number(b?.probability ?? 0) - Number(a?.probability ?? 0)).slice(0, 1) : [];
+  const investmentPerTrade = Math.max(1, Number(approvedBody.investmentPerTrade ?? 0));
+  const stopLossPercent = Math.min(20, Math.max(0.1, Number(approvedBody.stopLossPercent ?? 3)));
+  const takeProfitPercent = Math.min(100, Math.max(0.1, Number(approvedBody.takeProfitPercent ?? 5)));
   const minimumProbability = Math.min(
     99,
     Math.max(1, Number(process.env.KIWOOM_AUTO_TRADE_MIN_PROBABILITY ?? 70))
@@ -11682,10 +11409,7 @@ router6.post("/auto-trade/execute", async (req, res) => {
   );
   const minimumDataCompleteness = Math.min(
     100,
-    Math.max(
-      0,
-      Number(process.env.KIWOOM_AUTO_TRADE_MIN_DATA_COMPLETENESS ?? 45)
-    )
+    Math.max(0, Number(process.env.KIWOOM_AUTO_TRADE_MIN_DATA_COMPLETENESS ?? 45))
   );
   const dailyOrderLimit = Math.max(
     1,
@@ -11716,23 +11440,11 @@ router6.post("/auto-trade/execute", async (req, res) => {
       continue;
     }
     if (market === "KR" && !/^\d{6}$/.test(ticker)) {
-      results.push({
-        ticker,
-        market,
-        ok: false,
-        skipped: true,
-        message: "\uAD6D\uB0B4 \uC885\uBAA9\uCF54\uB4DC \uD615\uC2DD\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
-      });
+      results.push({ ticker, market, ok: false, skipped: true, message: "\uAD6D\uB0B4 \uC885\uBAA9\uCF54\uB4DC \uD615\uC2DD\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." });
       continue;
     }
     if (market === "US" && (!/^[A-Z][A-Z0-9.-]{0,11}$/.test(ticker) || !exchange)) {
-      results.push({
-        ticker,
-        market,
-        ok: false,
-        skipped: true,
-        message: "\uBBF8\uAD6D \uC885\uBAA9\uCF54\uB4DC \uB610\uB294 \uAC70\uB798\uC18C(NASDAQ/NYSE/AMEX)\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."
-      });
+      results.push({ ticker, market, ok: false, skipped: true, message: "\uBBF8\uAD6D \uC885\uBAA9\uCF54\uB4DC \uB610\uB294 \uAC70\uB798\uC18C(NASDAQ/NYSE/AMEX)\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4." });
       continue;
     }
     if (!marketOpenNow(market)) {
@@ -11775,49 +11487,27 @@ router6.post("/auto-trade/execute", async (req, res) => {
       continue;
     }
     if (autoTradePositions.has(positionKey)) {
-      results.push({
-        ticker,
-        ok: true,
-        skipped: true,
-        message: "\uC774\uBBF8 \uC790\uB3D9\uB9E4\uB9E4\uB85C \uBCF4\uC720 \uC911\uC778 \uC885\uBAA9\uC785\uB2C8\uB2E4."
-      });
+      results.push({ ticker, ok: true, skipped: true, message: "\uC774\uBBF8 \uC790\uB3D9\uB9E4\uB9E4\uB85C \uBCF4\uC720 \uC911\uC778 \uC885\uBAA9\uC785\uB2C8\uB2E4." });
       continue;
     }
     if (autoTradeExecuted.has(key)) {
-      results.push({
-        ticker,
-        ok: true,
-        skipped: true,
-        message: "\uC624\uB298 \uC774\uBBF8 \uC8FC\uBB38\uD55C \uC885\uBAA9\uC785\uB2C8\uB2E4."
-      });
+      results.push({ ticker, ok: true, skipped: true, message: "\uC624\uB298 \uC774\uBBF8 \uC8FC\uBB38\uD55C \uC885\uBAA9\uC785\uB2C8\uB2E4." });
       continue;
     }
     let price = 0;
     try {
       const quote = await MarketDataService.getQuoteRow(ticker);
-      price = Math.abs(
-        Number(quote?.price ?? quote?.currentPrice ?? quote?.cur_prc ?? 0)
-      );
+      price = Math.abs(Number(quote?.price ?? quote?.currentPrice ?? quote?.cur_prc ?? 0));
     } catch {
       price = 0;
     }
     if (!Number.isFinite(price) || price <= 0) {
-      results.push({
-        ticker,
-        ok: false,
-        skipped: true,
-        message: "\uC8FC\uBB38 \uC9C1\uC804 \uD604\uC7AC\uAC00\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
-      });
+      results.push({ ticker, ok: false, skipped: true, message: "\uC8FC\uBB38 \uC9C1\uC804 \uD604\uC7AC\uAC00\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." });
       continue;
     }
     const quantity = Math.floor(investmentPerTrade / price);
     if (quantity < 1) {
-      results.push({
-        ticker,
-        ok: false,
-        skipped: true,
-        message: "\uC8FC\uBB38\uAE08\uC561\uC774 \uD604\uC7AC\uAC00\uBCF4\uB2E4 \uC791\uC2B5\uB2C8\uB2E4."
-      });
+      results.push({ ticker, ok: false, skipped: true, message: "\uC8FC\uBB38\uAE08\uC561\uC774 \uD604\uC7AC\uAC00\uBCF4\uB2E4 \uC791\uC2B5\uB2C8\uB2E4." });
       continue;
     }
     try {
@@ -11893,18 +11583,8 @@ router6.post("/auto-trade/execute", async (req, res) => {
         url: "/auto-trading",
         app: true,
         push: true,
-        metadata: {
-          ticker,
-          market,
-          quantity,
-          price,
-          stopPrice,
-          targetPrice,
-          orderNo: order.orderNo ?? null
-        }
-      }).catch(
-        (error) => console.error("auto trade entry notification error:", error)
-      );
+        metadata: { ticker, market, quantity, price, stopPrice, targetPrice, orderNo: order.orderNo ?? null }
+      }).catch((error) => console.error("auto trade entry notification error:", error));
       results.push({
         ticker,
         market,
@@ -11918,15 +11598,7 @@ router6.post("/auto-trade/execute", async (req, res) => {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "\uD0A4\uC6C0 \uC8FC\uBB38 \uC804\uC1A1 \uC2E4\uD328";
-      void deliverMemberNotification({
-        memberId: memberId2,
-        type: "auto_trade",
-        title: `\uB9E4\uC218 \uC8FC\uBB38 \uC2E4\uD328 \xB7 ${String(candidate?.name ?? ticker)}`,
-        body: message,
-        url: "/auto-trading",
-        app: true,
-        push: true
-      }).catch(() => void 0);
+      void deliverMemberNotification({ memberId: memberId2, type: "auto_trade", title: `\uB9E4\uC218 \uC8FC\uBB38 \uC2E4\uD328 \xB7 ${String(candidate?.name ?? ticker)}`, body: message, url: "/auto-trading", app: true, push: true }).catch(() => void 0);
       results.push({
         ticker,
         market,
@@ -11946,22 +11618,14 @@ router6.post("/auto-trade/execute", async (req, res) => {
 async function inspectAutoTradePositions(memberId2) {
   await ensureAutoTradePositionsLoaded();
   const results = [];
-  const memberPositions = [...autoTradePositions.values()].filter(
-    (position) => position.memberId === memberId2
-  );
+  const memberPositions = [...autoTradePositions.values()].filter((position) => position.memberId === memberId2);
   let changed = false;
   for (const position of memberPositions) {
     try {
       const quote = await MarketDataService.getQuoteRow(position.ticker);
       const currentPrice = Math.abs(Number(quote?.price ?? 0));
       if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
-        results.push({
-          ticker: position.ticker,
-          market: position.market,
-          ok: false,
-          skipped: true,
-          message: "\uD604\uC7AC\uAC00 \uD655\uC778 \uC2E4\uD328"
-        });
+        results.push({ ticker: position.ticker, market: position.market, ok: false, skipped: true, message: "\uD604\uC7AC\uAC00 \uD655\uC778 \uC2E4\uD328" });
         continue;
       }
       const reason = currentPrice <= position.stopPrice ? "\uC190\uC808\uAC00 \uB3C4\uB2EC" : currentPrice >= position.targetPrice ? "\uBAA9\uD45C\uAC00 \uB3C4\uB2EC" : "\uBCF4\uC720 \uC720\uC9C0";
@@ -11983,17 +11647,8 @@ async function inspectAutoTradePositions(memberId2) {
           url: "/auto-trading",
           app: true,
           push: true,
-          metadata: {
-            ticker: position.ticker,
-            market: position.market,
-            currentPrice,
-            stopPrice: position.stopPrice,
-            targetPrice: position.targetPrice,
-            reason
-          }
-        }).catch(
-          (error) => console.error("auto trade exit signal notification error:", error)
-        );
+          metadata: { ticker: position.ticker, market: position.market, currentPrice, stopPrice: position.stopPrice, targetPrice: position.targetPrice, reason }
+        }).catch((error) => console.error("auto trade exit signal notification error:", error));
       }
       results.push({
         ticker: position.ticker,
@@ -12007,13 +11662,7 @@ async function inspectAutoTradePositions(memberId2) {
         message: reason === "\uBCF4\uC720 \uC720\uC9C0" ? "\uC190\uC808\xB7\uBAA9\uD45C\uAC00 \uBBF8\uB3C4\uB2EC" : `${reason}: \uB9E4\uB3C4 \uC8FC\uBB38\uC740 \uC0AC\uC6A9\uC790 \uC2B9\uC778 \uC804\uAE4C\uC9C0 \uC804\uC1A1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`
       });
     } catch (error) {
-      results.push({
-        ticker: position.ticker,
-        market: position.market,
-        ok: false,
-        skipped: true,
-        message: error instanceof Error ? error.message : "\uAC10\uC2DC \uC2E4\uD328"
-      });
+      results.push({ ticker: position.ticker, market: position.market, ok: false, skipped: true, message: error instanceof Error ? error.message : "\uAC10\uC2DC \uC2E4\uD328" });
     }
   }
   if (changed) await saveAutoTradePositions();
@@ -12022,15 +11671,9 @@ async function inspectAutoTradePositions(memberId2) {
 router6.post("/auto-trade/monitor", async (req, res) => {
   const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
   const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
-  if (!configuredKey || suppliedKey !== configuredKey)
-    return res.status(401).json({ ok: false, message: "\uC790\uB3D9\uB9E4\uB9E4 \uC2E4\uD589\uD0A4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." });
+  if (!configuredKey || suppliedKey !== configuredKey) return res.status(401).json({ ok: false, message: "\uC790\uB3D9\uB9E4\uB9E4 \uC2E4\uD589\uD0A4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." });
   const monitored = await inspectAutoTradePositions(req.member.id);
-  return res.json({
-    ok: true,
-    activePositions: monitored.activePositions,
-    message: "\uBCF4\uC720 \uC885\uBAA9\uC744 \uAC10\uC2DC\uD588\uC2B5\uB2C8\uB2E4. \uCCAD\uC0B0 \uC8FC\uBB38\uC740 \uC8FC\uBB38\uBCC4 \uC0AC\uC6A9\uC790 \uC2B9\uC778 \uC804\uAE4C\uC9C0 \uC804\uC1A1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.",
-    results: monitored.results
-  });
+  return res.json({ ok: true, activePositions: monitored.activePositions, message: "\uBCF4\uC720 \uC885\uBAA9\uC744 \uAC10\uC2DC\uD588\uC2B5\uB2C8\uB2E4. \uCCAD\uC0B0 \uC8FC\uBB38\uC740 \uC8FC\uBB38\uBCC4 \uC0AC\uC6A9\uC790 \uC2B9\uC778 \uC804\uAE4C\uC9C0 \uC804\uC1A1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.", results: monitored.results });
 });
 router6.get("/auto-trade/status", (_req, res) => {
   const mode = String(process.env.KIWOOM_MODE ?? "").trim().toLowerCase();
@@ -12057,10 +11700,7 @@ router6.get("/auto-trade/status", (_req, res) => {
 });
 router6.get("/auto-trade/journal", async (req, res) => {
   await ensureAutoTradePositionsLoaded();
-  return res.json({
-    ok: true,
-    entries: autoTradeJournal.filter((entry) => entry.memberId === req.member.id).reverse()
-  });
+  return res.json({ ok: true, entries: autoTradeJournal.filter((entry) => entry.memberId === req.member.id).reverse() });
 });
 router6.get("/:ticker/quote", async (req, res) => {
   const ticker = normalizeTicker4(req.params.ticker);
@@ -12121,10 +11761,7 @@ async function fetchYahooAssetProfile(ticker) {
   if (/^\d{6}$/.test(ticker)) return null;
   const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=assetProfile`;
   const response = await fetch(url, {
-    headers: {
-      "User-Agent": "seungjae-stock-app/1.0",
-      Accept: "application/json"
-    }
+    headers: { "User-Agent": "seungjae-stock-app/1.0", Accept: "application/json" }
   });
   if (!response.ok) return null;
   const data = await response.json();
@@ -12166,8 +11803,7 @@ async function enrichCompanyProfile(ticker, base) {
     if (/^\d{6}$/.test(ticker)) {
       const dart = await fetchDartCompanyOverview(ticker).catch(() => null);
       if (dart) {
-        if (!profile.industry && dart.industryName)
-          profile.industry = dart.industryName;
+        if (!profile.industry && dart.industryName) profile.industry = dart.industryName;
         if (!profile.sector && dart.sector) profile.sector = dart.sector;
         if (!profile.website && dart.website) profile.website = dart.website;
         if (dart.ceo) profile.ceo = dart.ceo;
@@ -12177,11 +11813,9 @@ async function enrichCompanyProfile(ticker, base) {
     } else {
       const yahoo = await fetchYahooAssetProfile(ticker).catch(() => null);
       if (yahoo) {
-        if (!profile.description && yahoo.description)
-          profile.description = yahoo.description;
+        if (!profile.description && yahoo.description) profile.description = yahoo.description;
         if (!profile.sector && yahoo.sector) profile.sector = yahoo.sector;
-        if (!profile.industry && yahoo.industry)
-          profile.industry = yahoo.industry;
+        if (!profile.industry && yahoo.industry) profile.industry = yahoo.industry;
         if (!profile.website && yahoo.website) profile.website = yahoo.website;
         profile.provider = yahoo.provider;
       }
@@ -12220,10 +11854,7 @@ router6.get("/:ticker/chart", async (req, res) => {
     return;
   }
   try {
-    const meta = await MarketDataService.getCandlesMeta(
-      ticker,
-      timeframe
-    );
+    const meta = await MarketDataService.getCandlesMeta(ticker, timeframe);
     const indicators = computeIndicators(meta.candles);
     let signals = [];
     try {
@@ -12311,11 +11942,7 @@ router6.get("/:ticker/financials", async (req, res) => {
   const ticker = normalizeTicker4(req.params.ticker);
   res.setHeader("Cache-Control", "no-store, max-age=0");
   try {
-    const financials = await withLiveCache(
-      `financials:${ticker}`,
-      5 * 6e4,
-      () => fetchFinancials(ticker)
-    );
+    const financials = await withLiveCache(`financials:${ticker}`, 5 * 6e4, () => fetchFinancials(ticker));
     res.json({
       ticker,
       financials,
@@ -12377,16 +12004,8 @@ router6.get("/:ticker/disclosures", async (req, res) => {
   const allHistory = String(req.query.all ?? "") === "1";
   res.setHeader("Cache-Control", "no-store, max-age=0");
   try {
-    const result = await withLiveCache(
-      `disclosures:v3:${ticker}:${allHistory ? "all" : "recent"}`,
-      6e4,
-      () => FilingService.getFilings(ticker, { allHistory })
-    );
-    if (!result)
-      return res.status(404).json({
-        code: "TICKER_NOT_FOUND",
-        message: "\uC885\uBAA9\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."
-      });
+    const result = await withLiveCache(`disclosures:v3:${ticker}:${allHistory ? "all" : "recent"}`, 6e4, () => FilingService.getFilings(ticker, { allHistory }));
+    if (!result) return res.status(404).json({ code: "TICKER_NOT_FOUND", message: "\uC885\uBAA9\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4." });
     res.json(result);
   } catch (error) {
     console.error("stock disclosures route error:", error);
@@ -12440,6 +12059,19 @@ function financeTableRows(html) {
     )
   ).filter((cells) => cells.length > 0);
 }
+function normalizeMarketFlowPeriod(value) {
+  const period = String(value ?? "daily").trim().toLowerCase();
+  if (period === "weekly" || period === "monthly" || period === "yearly") {
+    return period;
+  }
+  return "daily";
+}
+function marketFlowPageCount(period) {
+  if (period === "weekly") return 2;
+  if (period === "monthly") return 6;
+  if (period === "yearly") return 15;
+  return 2;
+}
 function marketPeriodKey(dateText, period) {
   const match = dateText.match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
   if (!match) return dateText;
@@ -12452,7 +12084,9 @@ function marketPeriodKey(dateText, period) {
     );
     const mondayOffset = (date.getUTCDay() + 6) % 7;
     date.setUTCDate(date.getUTCDate() - mondayOffset);
-    return `${date.getUTCFullYear()}.${String(date.getUTCMonth() + 1).padStart(2, "0")}.${String(date.getUTCDate()).padStart(2, "0")}`;
+    return `${date.getUTCFullYear()}.${String(
+      date.getUTCMonth() + 1
+    ).padStart(2, "0")}.${String(date.getUTCDate()).padStart(2, "0")}`;
   }
   return dateText;
 }
@@ -12461,12 +12095,26 @@ function marketPeriodLabel(key, period) {
   return key;
 }
 function groupInvestorRows(rows, period) {
-  if (period === "daily") return rows.slice(0, 30);
+  const sortedRows = [...rows].sort(
+    (a, b) => String(b.date).localeCompare(String(a.date))
+  );
+  if (period === "daily") {
+    return sortedRows.slice(0, 30).map((row) => ({
+      ...row,
+      periodStart: row.date,
+      periodEnd: row.date,
+      tradingDays: 1
+    }));
+  }
   const grouped = /* @__PURE__ */ new Map();
-  for (const row of rows) {
+  for (const row of sortedRows) {
     const key = marketPeriodKey(row.date, period);
     const current = grouped.get(key) ?? {
+      periodKey: key,
       date: marketPeriodLabel(key, period),
+      periodStart: row.date,
+      periodEnd: row.date,
+      tradingDays: 0,
       individual: 0,
       institution: 0,
       foreign: 0
@@ -12474,9 +12122,20 @@ function groupInvestorRows(rows, period) {
     current.individual += Number(row.individual ?? 0);
     current.institution += Number(row.institution ?? 0);
     current.foreign += Number(row.foreign ?? 0);
+    current.tradingDays = Number(current.tradingDays ?? 0) + 1;
+    if (!current.periodStart || row.date < current.periodStart) {
+      current.periodStart = row.date;
+    }
+    if (!current.periodEnd || row.date > current.periodEnd) {
+      current.periodEnd = row.date;
+    }
     grouped.set(key, current);
   }
-  return [...grouped.values()].slice(0, 30);
+  return [...grouped.values()].sort(
+    (a, b) => String(b.periodEnd ?? b.periodKey).localeCompare(
+      String(a.periodEnd ?? a.periodKey)
+    )
+  ).slice(0, 30).map(({ periodKey: _periodKey, ...row }) => row);
 }
 function groupShortRows(rows, period) {
   if (period === "daily") return rows.slice(0, 30);
@@ -12518,92 +12177,136 @@ function extractKiwoomShortRows(raw) {
       return;
     }
     if (typeof value === "object") {
-      for (const child of Object.values(value))
-        visit(child, depth + 1);
+      for (const child of Object.values(value)) visit(child, depth + 1);
     }
   };
   visit(raw);
   const numberValue = (value) => financeNumber(String(value ?? ""));
-  const normalized = arrays.map((list) => list.map((item) => item)).map(
-    (list) => list.map((item) => {
-      const rawDate = String(
-        item.dt ?? item.date ?? item.base_dt ?? item.trde_dt ?? ""
-      ).replace(/\D/g, "");
-      const date = rawDate.length >= 8 ? `${rawDate.slice(0, 4)}.${rawDate.slice(4, 6)}.${rawDate.slice(6, 8)}` : "";
-      const shortVolume = numberValue(
-        item.shrts_qty ?? item.short_qty ?? item.shrt_qty ?? item.shortVolume ?? item.shrt_trde_qty
-      );
-      const ratio = numberValue(
-        item.trde_wght ?? item.shrts_qty_rt ?? item.short_ratio ?? item.shrt_rt ?? item.ratio ?? item.shrt_trde_rt
-      );
-      return { date, shortVolume, ratio };
-    })
-  ).find(
-    (list) => list.some((row) => row.date && (row.shortVolume > 0 || row.ratio > 0))
-  );
+  const normalized = arrays.map((list) => list.map((item) => item)).map((list) => list.map((item) => {
+    const rawDate = String(item.dt ?? item.date ?? item.base_dt ?? item.trde_dt ?? "").replace(/\D/g, "");
+    const date = rawDate.length >= 8 ? `${rawDate.slice(0, 4)}.${rawDate.slice(4, 6)}.${rawDate.slice(6, 8)}` : "";
+    const shortVolume = numberValue(
+      item.shrts_qty ?? item.short_qty ?? item.shrt_qty ?? item.shortVolume ?? item.shrt_trde_qty
+    );
+    const ratio = numberValue(
+      item.trde_wght ?? item.shrts_qty_rt ?? item.short_ratio ?? item.shrt_rt ?? item.ratio ?? item.shrt_trde_rt
+    );
+    return { date, shortVolume, ratio };
+  })).find((list) => list.some((row) => row.date && (row.shortVolume > 0 || row.ratio > 0)));
   return (normalized ?? []).filter((row) => row.date).slice(0, 120);
 }
 router6.get("/:ticker/market-flow", async (req, res) => {
   const ticker = normalizeTicker4(req.params.ticker);
-  const period = String(req.query.period ?? "daily");
+  const period = normalizeMarketFlowPeriod(req.query.period);
+  res.setHeader("Cache-Control", "no-store, max-age=0");
   if (!/^\d{6}$/.test(ticker)) {
     return res.json({
       ticker,
       period,
       available: false,
       rows: [],
-      totals: { individual: 0, institution: 0, foreign: 0 },
+      totals: {
+        individual: null,
+        institution: null,
+        foreign: null,
+        program: null,
+        volume: null,
+        value: null,
+        tradeValue: null
+      },
       message: "\uD574\uC678 \uC885\uBAA9\uC758 \uD22C\uC790\uC790\uBCC4 \uC218\uAE09\uC740 \uD604\uC7AC \uC81C\uACF5\uCC98\uC5D0\uC11C \uC9C0\uC6D0\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
     });
   }
   try {
-    const response = await fetch(
-      `https://finance.naver.com/item/frgn.naver?code=${ticker}&page=1`,
-      {
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          Referer: "https://finance.naver.com/"
+    const pageCount = marketFlowPageCount(period);
+    const dailyByDate = /* @__PURE__ */ new Map();
+    for (let page = 1; page <= pageCount; page += 1) {
+      const response = await fetch(
+        `https://finance.naver.com/item/frgn.naver?code=${ticker}&page=${page}`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0",
+            Referer: "https://finance.naver.com/"
+          }
         }
+      );
+      if (!response.ok) {
+        throw new Error(`NAVER_INVESTOR_FLOW_HTTP_${response.status}`);
       }
+      const html = await response.text();
+      const pageRows = financeTableRows(html).filter(
+        (cells) => /^\d{4}\.\d{2}\.\d{2}$/.test(cells[0] ?? "") && cells.length >= 7
+      ).map((cells) => {
+        const institution = financeNumber(cells[5]);
+        const foreign = financeNumber(cells[6]);
+        return {
+          date: cells[0],
+          // 네이버 공개 표에는 개인 순매매가 별도 제공되지 않아
+          // 기관+외국인 순매매의 반대값으로 계산합니다.
+          individual: -(institution + foreign),
+          institution,
+          foreign
+        };
+      });
+      for (const row of pageRows) {
+        if (!dailyByDate.has(row.date)) dailyByDate.set(row.date, row);
+      }
+      if (pageRows.length === 0) break;
+    }
+    const dailyRows = [...dailyByDate.values()].sort(
+      (a, b) => String(b.date).localeCompare(String(a.date))
     );
-    const html = await response.text();
-    const dailyRows = financeTableRows(html).filter(
-      (cells) => /^\d{4}\.\d{2}\.\d{2}$/.test(cells[0] ?? "") && cells.length >= 7
-    ).map((cells) => {
-      const institution = financeNumber(cells[5]);
-      const foreign = financeNumber(cells[6]);
-      return {
-        date: cells[0],
-        individual: -(institution + foreign),
-        institution,
-        foreign
-      };
-    });
     const rows = groupInvestorRows(dailyRows, period);
-    const totals = rows.reduce(
-      (sum, row) => ({
-        individual: sum.individual + Number(row.individual ?? 0),
-        institution: sum.institution + Number(row.institution ?? 0),
-        foreign: sum.foreign + Number(row.foreign ?? 0)
-      }),
-      { individual: 0, institution: 0, foreign: 0 }
-    );
-    res.json({
+    const latest = rows[0] ?? null;
+    const totals = latest ? {
+      individual: Number(latest.individual ?? 0),
+      institution: Number(latest.institution ?? 0),
+      foreign: Number(latest.foreign ?? 0),
+      program: null,
+      volume: null,
+      value: null,
+      tradeValue: null
+    } : {
+      individual: null,
+      institution: null,
+      foreign: null,
+      program: null,
+      volume: null,
+      value: null,
+      tradeValue: null
+    };
+    return res.json({
       ticker,
       period,
-      available: rows.length > 0,
+      available: Boolean(latest),
       rows,
       totals,
-      note: "\uAC1C\uC778\uC740 \uAE30\uAD00\xB7\uC678\uAD6D\uC778 \uC21C\uB9E4\uB9E4\uC758 \uBC18\uB300\uAC12\uC73C\uB85C \uCD94\uC815\uD55C \uCC38\uACE0\uCE58\uC785\uB2C8\uB2E4."
+      asOf: latest?.periodEnd ?? latest?.date ?? null,
+      periodStart: latest?.periodStart ?? null,
+      periodEnd: latest?.periodEnd ?? null,
+      tradingDays: latest?.tradingDays ?? 0,
+      provider: "NAVER_FINANCE",
+      source: "NAVER_FINANCE",
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      rawDailyCount: dailyRows.length,
+      note: "\uAC1C\uC778\uC740 \uAE30\uAD00\xB7\uC678\uAD6D\uC778 \uC21C\uB9E4\uB9E4\uC758 \uBC18\uB300\uAC12\uC73C\uB85C \uCD94\uC815\uD55C \uCC38\uACE0\uCE58\uC785\uB2C8\uB2E4. \uD654\uBA74 \uD569\uACC4\uB294 \uC120\uD0DD\uD55C \uCD5C\uC2E0 \uAE30\uAC04 \uD55C \uAD6C\uAC04\uB9CC \uD45C\uC2DC\uD569\uB2C8\uB2E4."
     });
   } catch (error) {
     console.error("investor flow route error:", error);
-    res.json({
+    return res.json({
       ticker,
       period,
       available: false,
       rows: [],
-      totals: { individual: 0, institution: 0, foreign: 0 },
+      totals: {
+        individual: null,
+        institution: null,
+        foreign: null,
+        program: null,
+        volume: null,
+        value: null,
+        tradeValue: null
+      },
       message: "\uD22C\uC790\uC790\uBCC4 \uC218\uAE09 \uB370\uC774\uD130\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
     });
   }

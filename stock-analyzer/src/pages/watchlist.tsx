@@ -10,6 +10,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
   Check,
+  ChevronDown,
+  ChevronUp,
   Search,
   Star,
   Trash2,
@@ -190,7 +192,7 @@ export default function WatchlistPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background">
       <header className="relative z-20 border-b border-card-border bg-background/90 px-4 pb-3 pt-4 glass">
-        <h1 className="text-xl font-extrabold">관심</h1>
+        <h1 className="text-center text-xl font-extrabold">관심</h1>
 
         <div className="mt-3 grid grid-cols-2 gap-2">
           <HeaderTab
@@ -267,7 +269,7 @@ function HeaderTab({
       type="button"
       onClick={onClick}
       className={cn(
-        "rounded-xl border px-3 py-2 text-sm font-extrabold",
+        "inline-flex items-center justify-center rounded-xl border px-3 py-2 text-center text-sm font-extrabold",
         active
           ? "border-primary bg-primary text-primary-foreground"
           : "border-card-border bg-card text-muted-foreground",
@@ -303,6 +305,8 @@ function PriceAlertWorkspace({
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // 알림 추가/알림종류는 처음 들어왔을 때 접힌 상태로 시작합니다.
+  const [editorOpen, setEditorOpen] = useState(false);
 
   const searchQuery = useQuery({
     queryKey: ["price-alert-stock-autocomplete", deferredSearch],
@@ -408,9 +412,28 @@ function PriceAlertWorkspace({
   return (
     <div className="space-y-4">
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <h2 className="text-sm font-extrabold">지정가 알림 추가</h2>
+        <button
+          type="button"
+          aria-expanded={editorOpen}
+          onClick={() => setEditorOpen((current) => !current)}
+          className="flex w-full items-center justify-between gap-3 rounded-2xl bg-secondary/60 px-3 py-3 text-left"
+        >
+          <span>
+            <span className="block text-sm font-extrabold">지정가 알림 추가</span>
+            <span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">
+              종목·알림종류·설정가 입력
+            </span>
+          </span>
+          {editorOpen ? (
+            <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
+        </button>
 
-        <div className="relative mt-3">
+        {editorOpen && (
+          <div className="mt-3">
+        <div className="relative">
           <label className="flex h-12 items-center gap-2 rounded-2xl border border-card-border bg-card px-3 shadow-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
             <Search className="h-4 w-4 shrink-0 text-foreground/70" />
             <input
@@ -555,6 +578,8 @@ function PriceAlertWorkspace({
           <p className="mt-3 break-keep text-center text-xs font-bold text-muted-foreground">
             {message}
           </p>
+        )}
+          </div>
         )}
       </section>
 
