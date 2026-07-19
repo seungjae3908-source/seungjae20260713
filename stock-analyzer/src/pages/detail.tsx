@@ -1,3 +1,4 @@
+import { apiGet } from "@/lib/api";
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useRoute } from "wouter";
@@ -5535,9 +5536,8 @@ function FilingTab({ ticker, market, filings, summary }: { ticker: string; marke
     setHistoryLoading(true);
     setHistoryError("");
     try {
-      const response = await tryJson<AnyObj>(
-        [`/api/stocks/${ticker}/filings?all=1`],
-        {},
+      const response = await apiGet<AnyObj>(
+        `/stocks/${encodeURIComponent(ticker)}/filings?all=1`,
       );
       const loaded = collectFilings(response);
       if (!loaded.length) throw new Error("EMPTY_FILING_HISTORY");

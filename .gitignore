@@ -23,3 +23,4 @@ api-server/data/
 Thumbs.db
 .vscode/
 .idea/
+*.backup-*

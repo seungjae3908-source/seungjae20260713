@@ -10636,22 +10636,63 @@ function companyNameFromProfile(profile, ticker) {
 var dartCorpMapCache = null;
 async function getDartCorpCode(ticker, apiKey) {
   try {
-    return await getCorpCode(ticker);
+    const sharedCorpCode = await getCorpCode(ticker);
+    if (sharedCorpCode) return sharedCorpCode;
   } catch {
   }
   if (!dartCorpMapCache) {
     const response = await fetch(
       "https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key=" + encodeURIComponent(apiKey)
     );
-    if (!response.ok) throw new Error("DART_CORP_CODE_HTTP_" + response.status);
-    const xml = await response.text();
-    const map = /* @__PURE__ */ new Map();
-    for (const block of xml.match(/<list>[\s\S]*?<\/list>/g) ?? []) {
-      const stockCode = xmlTag(block, "stock_code");
-      const corpCode = xmlTag(block, "corp_code");
-      if (stockCode && corpCode) map.set(stockCode, corpCode);
+    if (!response.ok) {
+      throw new Error("DART_CORP_CODE_HTTP_" + response.status);
     }
-    dartCorpMapCache = map;
+    const zipBytes = Buffer.from(await response.arrayBuffer());
+    const { mkdtemp, writeFile: writeFile4, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { execFileSync } = await import("node:child_process");
+    const tempDirectory = await mkdtemp(
+      join(tmpdir(), "dart-corp-code-")
+    );
+    const zipPath = join(tempDirectory, "corpCode.zip");
+    try {
+      await writeFile4(zipPath, zipBytes);
+      const xml = execFileSync(
+        "python3",
+        [
+          "-c",
+          [
+            "import sys, zipfile",
+            "z = zipfile.ZipFile(sys.argv[1])",
+            "name = next(n for n in z.namelist() if n.lower().endswith('.xml'))",
+            "sys.stdout.buffer.write(z.read(name))"
+          ].join("; "),
+          zipPath
+        ],
+        {
+          encoding: "utf8",
+          maxBuffer: 80 * 1024 * 1024
+        }
+      );
+      const map = /* @__PURE__ */ new Map();
+      for (const block of xml.match(/<list>[\s\S]*?<\/list>/g) ?? []) {
+        const stockCode = xmlTag(block, "stock_code").trim();
+        const corpCode = xmlTag(block, "corp_code").trim();
+        if (stockCode && corpCode) {
+          map.set(stockCode, corpCode);
+        }
+      }
+      if (!map.size) {
+        throw new Error("DART_CORP_CODE_MAP_EMPTY");
+      }
+      dartCorpMapCache = map;
+    } finally {
+      await rm(tempDirectory, {
+        recursive: true,
+        force: true
+      });
+    }
   }
   return dartCorpMapCache.get(ticker) ?? "";
 }
@@ -12004,16 +12045,26 @@ router6.get("/:ticker/disclosures", async (req, res) => {
   const allHistory = String(req.query.all ?? "") === "1";
   res.setHeader("Cache-Control", "no-store, max-age=0");
   try {
-    const result = await withLiveCache(`disclosures:v3:${ticker}:${allHistory ? "all" : "recent"}`, 6e4, () => FilingService.getFilings(ticker, { allHistory }));
-    if (!result) return res.status(404).json({ code: "TICKER_NOT_FOUND", message: "\uC885\uBAA9\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4." });
-    res.json(result);
-  } catch (error) {
-    console.error("stock disclosures route error:", error);
+    const items = await withLiveCache(
+      `disclosures:v4:${ticker}:${allHistory ? "all" : "recent"}`,
+      6e4,
+      () => fetchAllFilings(ticker, allHistory)
+    );
     res.json({
       ticker,
+      disclosures: items,
+      filings: items,
+      items,
+      summary: items.length ? simpleDartSummary(items[0]) + (items.length > 1 ? "   " + items.length + " ." : "") : "  ."
+    });
+  } catch (error) {
+    console.error("stock disclosures route error:", error);
+    res.status(502).json({
+      ticker,
       disclosures: [],
+      filings: [],
       items: [],
-      summary: /^\d{6}$/.test(ticker) ? "DART \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694." : "SEC EDGAR \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
+      summary: /^\d{6}$/.test(ticker) ? "DART   ." : "SEC EDGAR   ."
     });
   }
 });
@@ -12988,7 +13039,7 @@ router9.get("/system", (req, res) => {
       return "configured";
     }
   };
-  return res.json({ appVersion: process.env.APP_VERSION ?? "development", environment: "development", kiwoomMode: process.env.KIWOOM_MODE ?? "disabled", apiBase: maskHost(process.env.PUBLIC_API_URL), serverBase: maskHost(process.env.SERVER_URL), databaseConfigured: Boolean(process.env.SUPABASE_URL), autoTradeEnabled: process.env.KIWOOM_AUTO_TRADE_ENABLED === "true", checkedAt: (/* @__PURE__ */ new Date()).toISOString(), requestedBy: req.member?.id });
+  return res.json({ appVersion: process.env.APP_VERSION ?? "development", environment: "production", kiwoomMode: process.env.KIWOOM_MODE ?? "disabled", apiBase: maskHost(process.env.PUBLIC_API_URL), serverBase: maskHost(process.env.SERVER_URL), databaseConfigured: Boolean(process.env.SUPABASE_URL), autoTradeEnabled: process.env.KIWOOM_AUTO_TRADE_ENABLED === "true", checkedAt: (/* @__PURE__ */ new Date()).toISOString(), requestedBy: req.member?.id });
 });
 var admin_default = router9;
 

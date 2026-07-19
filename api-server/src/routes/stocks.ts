@@ -224,28 +224,81 @@ function companyNameFromProfile(profile: any, ticker: string) {
 let dartCorpMapCache: Map<string, string> | null = null;
 
 async function getDartCorpCode(ticker: string, apiKey: string) {
-	try {
-		return await getDartProviderCorpCode(ticker);
-	} catch {
-		// Fall back to the route-local map below when the shared provider is unavailable.
-	}
+try {
+const sharedCorpCode = await getDartProviderCorpCode(ticker);
+if (sharedCorpCode) return sharedCorpCode;
+} catch {
+//  DART     ZIP   .
+}
 
-	if (!dartCorpMapCache) {
-		const response = await fetch(
-			"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key=" +
-				encodeURIComponent(apiKey),
-		);
-		if (!response.ok) throw new Error("DART_CORP_CODE_HTTP_" + response.status);
-		const xml = await response.text();
-		const map = new Map<string, string>();
-		for (const block of xml.match(/<list>[\s\S]*?<\/list>/g) ?? []) {
-			const stockCode = xmlTag(block, "stock_code");
-			const corpCode = xmlTag(block, "corp_code");
-			if (stockCode && corpCode) map.set(stockCode, corpCode);
-		}
-		dartCorpMapCache = map;
-	}
-	return dartCorpMapCache.get(ticker) ?? "";
+if (!dartCorpMapCache) {
+const response = await fetch(
+"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key=" +
+encodeURIComponent(apiKey),
+);
+
+if (!response.ok) {
+throw new Error("DART_CORP_CODE_HTTP_" + response.status);
+}
+
+const zipBytes = Buffer.from(await response.arrayBuffer());
+
+const { mkdtemp, writeFile, rm } =
+await import("node:fs/promises");
+const { tmpdir } = await import("node:os");
+const { join } = await import("node:path");
+const { execFileSync } = await import("node:child_process");
+const tempDirectory = await mkdtemp(
+join(tmpdir(), "dart-corp-code-"),
+);
+const zipPath = join(tempDirectory, "corpCode.zip");
+
+try {
+await writeFile(zipPath, zipBytes);
+
+const xml = execFileSync(
+"python3",
+[
+"-c",
+[
+"import sys, zipfile",
+"z = zipfile.ZipFile(sys.argv[1])",
+"name = next(n for n in z.namelist() if n.lower().endswith('.xml'))",
+"sys.stdout.buffer.write(z.read(name))",
+].join("; "),
+zipPath,
+],
+{
+encoding: "utf8",
+maxBuffer: 80 * 1024 * 1024,
+},
+);
+
+const map = new Map<string, string>();
+
+for (const block of xml.match(/<list>[\s\S]*?<\/list>/g) ?? []) {
+const stockCode = xmlTag(block, "stock_code").trim();
+const corpCode = xmlTag(block, "corp_code").trim();
+
+if (stockCode && corpCode) {
+map.set(stockCode, corpCode);
+}
+}
+
+if (!map.size) {
+throw new Error("DART_CORP_CODE_MAP_EMPTY");
+}
+
+dartCorpMapCache = map;
+} finally {
+await rm(tempDirectory, {
+recursive: true,
+force: true,
+});
+}
+}
+
+return dartCorpMapCache.get(ticker) ?? "";
 }
 
 async function fetchDartFilings(ticker: string, allHistory = false) {
@@ -1960,22 +2013,41 @@ router.get("/:ticker/filings", async (req, res) => {
 
 // GET /api/stocks/:ticker/disclosures
 router.get("/:ticker/disclosures", async (req, res) => {
-	const ticker = normalizeTicker(req.params.ticker);
-	const allHistory = String(req.query.all ?? "") === "1";
-	res.setHeader("Cache-Control", "no-store, max-age=0");
-	try {
-		const result = await withLiveCache(`disclosures:v3:${ticker}:${allHistory ? "all" : "recent"}`, 60_000, () => FilingService.getFilings(ticker, { allHistory }));
-		if (!result) return res.status(404).json({ code: "TICKER_NOT_FOUND", message: "종목을 찾을 수 없습니다." });
-		res.json(result);
-	} catch (error) {
-		console.error("stock disclosures route error:", error);
-		res.json({
-			ticker,
-			disclosures: [],
-			items: [],
-			summary: /^\d{6}$/.test(ticker) ? "DART 연결을 확인해 주세요." : "SEC EDGAR 연결을 확인해 주세요.",
-		});
-	}
+const ticker = normalizeTicker(req.params.ticker);
+const allHistory = String(req.query.all ?? "") === "1";
+res.setHeader("Cache-Control", "no-store, max-age=0");
+
+try {
+const items = await withLiveCache(
+`disclosures:v4:${ticker}:${allHistory ? "all" : "recent"}`,
+60_000,
+() => fetchAllFilings(ticker, allHistory),
+);
+
+res.json({
+ticker,
+disclosures: items,
+filings: items,
+items,
+summary: items.length
+? simpleDartSummary(items[0]) +
+(items.length > 1
+? "   " + items.length + " ."
+: "")
+: "  .",
+});
+} catch (error) {
+console.error("stock disclosures route error:", error);
+res.status(502).json({
+ticker,
+disclosures: [],
+filings: [],
+items: [],
+summary: /^\d{6}$/.test(ticker)
+? "DART   ."
+: "SEC EDGAR   .",
+});
+}
 });
 
 // GET /api/stocks/:ticker/news
