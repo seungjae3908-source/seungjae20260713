@@ -33,7 +33,7 @@ async function internalEmail(loginName: string) {
   const source = new TextEncoder().encode(`seungjae-stock-account:${normalizeName(loginName)}`);
   const digest = await crypto.subtle.digest('SHA-256', source);
   const token = Array.from(new Uint8Array(digest)).slice(0, 20).map((v) => v.toString(16).padStart(2, '0')).join('');
-  return `u-${token}@accounts.seungjae-stock.com`;
+  return `${token}@accounts.seungjae-stock.com`;
 }
 
 function authMessage(cause: unknown) {
@@ -71,8 +71,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthContextValue>(() => ({
     configured: isSupabaseConfigured, loading, session, user: session?.user ?? null, profile,
     displayName: profile?.display_name ?? (session?.user?.user_metadata?.display_name as string | undefined) ?? null,
-    isAdmin: profile?.status === 'approved' && profile.role === 'admin',
-    isApproved: profile?.status === 'approved',
+    isAdmin:
+        (profile?.status === 'approved' && profile.role === 'admin') ||
+        (session?.user?.app_metadata?.status === 'approved' &&
+          session?.user?.app_metadata?.role === 'admin'),
+      isApproved:
+        profile?.status === 'approved' ||
+        session?.user?.app_metadata?.status === 'approved',
     async signIn(loginName, password) {
       const name = validate(loginName, password);
       const { error } = await getSupabase().auth.signInWithPassword({ email: await internalEmail(name), password });
