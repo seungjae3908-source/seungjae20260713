@@ -91,12 +91,21 @@ type LooseQuote = Partial<Quote> & {
 };
 
 interface CandleDiskCache {
+  version: 'v3';
   savedAt: number;
   ticker: string;
   timeframe: string;
   candles: Candle[];
   provider?: string;
 }
+
+const CANDLE_CACHE_VERSION = 'v3' as const;
+const DAILY_AGGREGATE_SIZES: Record<string, number> = {
+  '3D': 3,
+  '5D': 5,
+  '10D': 10,
+  '20D': 20,
+};
 
 function candleCacheDirectory(): string {
   const configured = process.env.KIWOOM_CHART_CACHE_DIR?.trim();
@@ -112,7 +121,10 @@ function candleCacheDirectory(): string {
 function candleCachePath(ticker: string, timeframe: string): string {
   const safeTicker = cleanTicker(ticker).replace(/[^0-9A-Z_-]/g, '');
   const safeTimeframe = String(timeframe).replace(/[^0-9A-Z]/gi, '');
-  return path.join(candleCacheDirectory(), `${safeTicker}-${safeTimeframe}.json`);
+  return path.join(
+    candleCacheDirectory(),
+    `${CANDLE_CACHE_VERSION}-${safeTicker}-${safeTimeframe}.json`,
+  );
 }
 
 function candleCacheTtl(timeframe: string): number {
@@ -128,6 +140,7 @@ async function readCandleDiskCache(
   try {
     const raw = await readFile(candleCachePath(ticker, timeframe), 'utf8');
     const parsed = JSON.parse(raw) as CandleDiskCache;
+    if (parsed.version !== CANDLE_CACHE_VERSION) return null;
     if (!Array.isArray(parsed.candles) || parsed.candles.length < 2) return null;
     return {
       candles: parsed.candles,
@@ -150,6 +163,7 @@ async function writeCandleDiskCache(
   try {
     await mkdir(candleCacheDirectory(), { recursive: true });
     const payload: CandleDiskCache = {
+      version: CANDLE_CACHE_VERSION,
       savedAt: Date.now(),
       ticker: cleanTicker(ticker),
       timeframe,
@@ -166,28 +180,99 @@ async function writeCandleDiskCache(
   }
 }
 
+function candleTimeValue(value: Candle['time']): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 1_000_000_000_000 ? value * 1000 : value;
+  }
+
+  const text = String(value ?? '').trim();
+  const compactDate = text.match(/^(\d{4})(\d{2})(\d{2})/);
+  if (compactDate) {
+    return Date.UTC(
+      Number(compactDate[1]),
+      Number(compactDate[2]) - 1,
+      Number(compactDate[3]),
+    );
+  }
+
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sortCandles(rows: Candle[]): Candle[] {
+  return [...rows].sort(
+    (a, b) => candleTimeValue(a.time) - candleTimeValue(b.time),
+  );
+}
+
+function aggregateCandleChunk(chunk: Candle[]): Candle {
+  return {
+    time: chunk[0].time,
+    open: chunk[0].open,
+    high: Math.max(...chunk.map((item) => item.high)),
+    low: Math.min(...chunk.map((item) => item.low)),
+    close: chunk[chunk.length - 1].close,
+    volume: chunk.reduce((sum, item) => sum + item.volume, 0),
+  };
+}
+
 function aggregateCachedCandles(
   rows: Candle[],
   size: number,
 ): Candle[] {
-  if (size <= 1 || rows.length <= 1) return rows;
+  const sortedRows = sortCandles(rows);
+  if (size <= 1 || sortedRows.length <= 1) return sortedRows;
 
   const result: Candle[] = [];
-  for (let index = 0; index < rows.length; index += size) {
-    const chunk = rows.slice(index, index + size);
+  for (let index = 0; index < sortedRows.length; index += size) {
+    const chunk = sortedRows.slice(index, index + size);
     if (chunk.length === 0) continue;
 
-    result.push({
-      time: chunk[0].time,
-      open: chunk[0].open,
-      high: Math.max(...chunk.map((item) => item.high)),
-      low: Math.min(...chunk.map((item) => item.low)),
-      close: chunk[chunk.length - 1].close,
-      volume: chunk.reduce((sum, item) => sum + item.volume, 0),
-    });
+    result.push(aggregateCandleChunk(chunk));
   }
 
   return result;
+}
+
+function calendarCandleKey(candle: Candle, timeframe: string): string {
+  const date = new Date(candleTimeValue(candle.time));
+
+  if (timeframe === '1Y') return String(date.getUTCFullYear());
+  if (timeframe === '1M') return date.toISOString().slice(0, 7);
+
+  const monday = new Date(date);
+  const daysFromMonday = (monday.getUTCDay() + 6) % 7;
+  monday.setUTCDate(monday.getUTCDate() - daysFromMonday);
+  return monday.toISOString().slice(0, 10);
+}
+
+function aggregateCalendarCandles(
+  rows: Candle[],
+  timeframe: '1W' | '1M' | '1Y',
+): Candle[] {
+  const groups = sortCandles(rows).reduce((map, candle) => {
+    const key = calendarCandleKey(candle, timeframe);
+    const group = map.get(key) ?? [];
+    group.push(candle);
+    map.set(key, group);
+    return map;
+  }, new Map<string, Candle[]>());
+
+  return [...groups.values()].map(aggregateCandleChunk);
+}
+
+function aggregateDailyProviderCandles(
+  rows: Candle[],
+  timeframe: string,
+): Candle[] {
+  const aggregateSize = DAILY_AGGREGATE_SIZES[timeframe];
+  if (aggregateSize) return aggregateCachedCandles(rows, aggregateSize);
+
+  if (timeframe === '1W' || timeframe === '1M' || timeframe === '1Y') {
+    return aggregateCalendarCandles(rows, timeframe);
+  }
+
+  return sortCandles(rows);
 }
 
 const EXTRA_ALIASES: Record<
@@ -810,7 +895,8 @@ async function tryCandlesProvider(
       timeframe ??
         '1D',
     );
-  const minimumUsefulCandles = ['1D', '3D', '5D', '10D', 'ALL'].includes(timeframeText) ? 30 : 2;
+  const isIntradayTimeframe = ['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H'].includes(timeframeText);
+  const minimumUsefulCandles = ['1D', '3D', '5D', '10D', '20D', 'ALL'].includes(timeframeText) ? 30 : 2;
 
   /*
    * 국내 종목은 키움증권 차트 API를 가장 먼저 사용합니다.
@@ -836,12 +922,23 @@ async function tryCandlesProvider(
         error,
       );
     }
+
+    if (isIntradayTimeframe) {
+      return { candles: [], provider: 'none' };
+    }
   }
 
   const attempts: Array<{ name: string; run: () => Promise<unknown> }> =
     marketValue === 'KR'
       ? [
-          { name: 'naver', run: () => naver.getCandles(entry) },
+          {
+            name: 'naver',
+            run: async () => {
+              if (timeframeText === 'ALL') return [];
+              const rows = await naver.getCandles(entry);
+              return aggregateDailyProviderCandles(rows, timeframeText);
+            },
+          },
           { name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) },
         ]
       : [{ name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) }];
@@ -1184,9 +1281,8 @@ export class MarketDataService {
         ticker,
       );
     const timeframeText = String(timeframe);
-    // v2: 캐시 값 형태가 Candle[] → {candles, provider}로 바뀌어 키를 올린다.
-    // (Supabase 영속 캐시에 남아 있을 수 있는 구버전 배열과 충돌 방지)
-    const cacheKey = `candles:v2:${cleanTicker(ticker)}:${timeframeText}`;
+    // v3: 잘못된 시간 프레임 매핑으로 저장된 메모리·디스크 캐시와 분리합니다.
+    const cacheKey = `candles:${CANDLE_CACHE_VERSION}:${cleanTicker(ticker)}:${timeframeText}`;
     const disk = await readCandleDiskCache(ticker, timeframeText);
 
     if (disk?.fresh) {
@@ -1197,11 +1293,7 @@ export class MarketDataService {
       };
     }
 
-    const aggregateDays = ({
-      '3D': 3,
-      '5D': 5,
-      '10D': 10,
-    } as Record<string, number>)[timeframeText];
+    const aggregateDays = DAILY_AGGREGATE_SIZES[timeframeText];
 
     if (!disk && aggregateDays) {
       const dailyDisk = await readCandleDiskCache(ticker, '1D');
