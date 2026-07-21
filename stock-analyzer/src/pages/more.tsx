@@ -21,6 +21,7 @@ import {
 	WalletCards,
 } from "lucide-react";
 import { BottomNav } from "@/components/bottom-nav";
+import { AiRepairCenter } from "@/components/ai-repair-center";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import {
@@ -330,8 +331,8 @@ export default function MorePage() {
 
 	return (
 		<div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-center">
-			<header className="border-b border-card-border bg-background/90 px-4 pb-4 pt-5 glass">
-				<h1 className="text-xl font-extrabold">설정</h1>
+			<header className="shrink-0 border-b border-card-border bg-background/95 px-4 pb-4 pt-5 glass">
+				<h1 className="text-left text-xl font-extrabold">설정</h1>
 			</header>
 
 			<main className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 pb-24">
@@ -562,6 +563,8 @@ export default function MorePage() {
 						})}
 					</div>
 				</section>
+
+				{auth.isAdmin ? <AiRepairCenter /> : null}
 
 				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
 					<div className="mb-3">
