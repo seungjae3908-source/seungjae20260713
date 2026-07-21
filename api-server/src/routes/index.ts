@@ -8,9 +8,11 @@ import stocksRouter from './stocks';
 import watchlistRouter from './watchlist';
 import kiwoomRouter from './kiwoom.routes';
 import adminRouter from './admin';
+import aiRepairRouter from './ai-repair';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import backupRouter from './backup';
+import accountRecoveryRouter from './account-recovery';
 import { requireAdmin, requireMember } from '../middleware/auth';
 
 const router: IRouter = Router();
@@ -23,6 +25,7 @@ router.get('/', (_req, res) => {
 });
 
 router.use('/', healthRouter);
+router.use('/', accountRecoveryRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
 router.use('/kiwoom', kiwoomRouter);
@@ -31,6 +34,7 @@ router.use('/', cryptoRouter);
 // -------------------------------------------------------------------
 // Admin routes (auth + admin role required — checked inside adminRouter)
 // -------------------------------------------------------------------
+router.use('/admin/ai-repair', aiRepairRouter);
 router.use('/admin', adminRouter);
 
 // -------------------------------------------------------------------

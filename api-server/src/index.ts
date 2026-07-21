@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import apiRouter from './routes';
 import { startPriceAlertMonitor } from './services/notification.service';
+import { startAiRepairWorker } from './services/ai-repair.service';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -147,6 +148,7 @@ const availableRoutes = [
   '/api/kiwoom/rankings?market=US&type=tradingValue&limit=30',
   '/api/stocks/005930/quote',
   '/api/watchlist',
+  '/api/admin/ai-repair/config',
 ];
 
 app.use((req, res) => {
@@ -202,6 +204,7 @@ app.listen(
     );
 
     startPriceAlertMonitor();
+    startAiRepairWorker();
 
     if (frontendDist) {
       console.log(

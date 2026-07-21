@@ -1,6 +1,13 @@
 import webPush, { type PushSubscription } from 'web-push';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { MarketDataService } from './market-data.service';
+import {
+  ALERT_TYPES,
+  type AlertAssetType,
+  type AlertTimeframe,
+  type InstrumentAlertType,
+  roleCanUseAlert,
+} from '../types/instrument-alert';
 
 export const DEFAULT_NOTIFICATION_TYPES = [
   'news_positive',
@@ -15,6 +22,7 @@ export const DEFAULT_NOTIFICATION_TYPES = [
   'price_target',
   'auto_trade',
   'system',
+  ...ALERT_TYPES,
 ] as const;
 
 export type NotificationType = (typeof DEFAULT_NOTIFICATION_TYPES)[number];
@@ -35,6 +43,32 @@ type DeliverNotificationInput = {
   app?: boolean;
   push?: boolean;
   metadata?: Record<string, unknown>;
+  eventKey?: string;
+  assetType?: AlertAssetType;
+  market?: string;
+  symbol?: string;
+  timeframe?: AlertTimeframe;
+  conditions?: string[];
+  confidence?: number;
+};
+
+type DeliverInstrumentNotificationInput = {
+  memberId: string;
+  alertType: InstrumentAlertType;
+  assetType: AlertAssetType;
+  market: string;
+  symbol: string;
+  instrumentName: string;
+  timeframe: AlertTimeframe;
+  eventKey: string;
+  conditions: string[];
+  confidence: number;
+  currentPrice?: number;
+  targetPrice?: number;
+  stopPrice?: number;
+  signalTime: string;
+  dataTime: string;
+  autoTradingStatus?: string;
 };
 
 type PriceAlertRow = {
@@ -106,13 +140,50 @@ export async function deliverMemberNotification(
     ? preferences.enabled_types
     : [...DEFAULT_NOTIFICATION_TYPES];
 
-  if (!enabledTypes.includes(input.type)) {
+  if (input.type !== 'system' && !enabledTypes.includes(input.type)) {
     return { appStored: false, pushSent: 0, skipped: 'TYPE_DISABLED' };
   }
 
   const appAllowed = input.app !== false && preferences.app_enabled !== false;
   const pushAllowed =
     input.push !== false && preferences.push_enabled === true && isVapidReady();
+
+  if (!appAllowed && !pushAllowed) {
+    return {
+      appStored: false,
+      pushSent: 0,
+      skipped: input.push !== false && !isVapidReady() ? 'PUSH_NOT_CONFIGURED' : 'CHANNEL_DISABLED',
+    };
+  }
+
+  const historyRow = {
+    member_id: input.memberId,
+    notification_type: input.type,
+    title: input.title,
+    body: input.body,
+    url: input.url ?? null,
+    channel: appAllowed && pushAllowed ? 'both' : pushAllowed ? 'push' : 'app',
+    asset_type: input.assetType ?? null,
+    market: input.market ?? null,
+    symbol: input.symbol ?? null,
+    timeframe: input.timeframe ?? null,
+    conditions: input.conditions ?? [],
+    confidence: input.confidence ?? null,
+    event_key: input.eventKey ?? null,
+    delivery_status: pushAllowed ? 'sending' : 'stored',
+  };
+
+  const { data: history, error: historyError } = await getSupabase()
+    .from('notification_history')
+    .insert(historyRow)
+    .select('id')
+    .single();
+  if (historyError) {
+    if (historyError.code === '23505' && input.eventKey) {
+      return { appStored: false, pushSent: 0, skipped: 'DUPLICATE_EVENT' };
+    }
+    throw historyError;
+  }
 
   let pushSent = 0;
   if (pushAllowed) {
@@ -134,7 +205,7 @@ export async function deliverMemberNotification(
     });
 
     await Promise.all(
-      (data ?? []).map(async (row: any) => {
+      (data ?? []).map(async (row: { endpoint: string; subscription: unknown }) => {
         try {
           await webPush.sendNotification(
             row.subscription as PushSubscription,
@@ -156,21 +227,128 @@ export async function deliverMemberNotification(
     }
   }
 
-  let appStored = false;
-  if (appAllowed) {
-    const { error } = await getSupabase().from('notification_history').insert({
-      member_id: input.memberId,
-      notification_type: input.type,
-      title: input.title,
-      body: input.body,
-      url: input.url ?? null,
-      channel: pushSent > 0 ? 'both' : 'app',
-    });
-    if (error) throw error;
-    appStored = true;
+  const pushRequested = input.push !== false && preferences.push_enabled === true;
+  const failureReason = pushRequested && !isVapidReady()
+    ? 'PUSH_NOT_CONFIGURED'
+    : pushAllowed && pushSent === 0
+      ? 'NO_VALID_PUSH_SUBSCRIPTION'
+      : null;
+  await getSupabase()
+    .from('notification_history')
+    .update({
+      delivery_status: failureReason ? 'partial' : pushSent > 0 ? 'delivered' : 'stored',
+      failure_reason: failureReason,
+      delivered_at: pushSent > 0 ? new Date().toISOString() : null,
+    })
+    .eq('id', history.id);
+
+  return {
+    appStored: appAllowed,
+    pushSent,
+    ...(failureReason ? { skipped: failureReason } : {}),
+  };
+}
+
+function minuteOfDay(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})/.exec(value);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 ? hour * 60 + minute : null;
+}
+
+function isInsideWindow(now: number, startValue: string | null, endValue: string | null): boolean {
+  if (!startValue || !endValue) return true;
+  const start = minuteOfDay(startValue);
+  const end = minuteOfDay(endValue);
+  if (start === null || end === null) return true;
+  return start <= end ? now >= start && now <= end : now >= start || now <= end;
+}
+
+export async function deliverInstrumentNotification(
+  input: DeliverInstrumentNotificationInput,
+): Promise<{ appStored: boolean; pushSent: number; skipped?: string }> {
+  const supabase = getSupabase();
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('role,status')
+    .eq('id', input.memberId)
+    .single();
+  if (profileError) throw profileError;
+  if (profile.status !== 'approved' || !roleCanUseAlert(profile.role, input.alertType)) {
+    return { appStored: false, pushSent: 0, skipped: 'ROLE_NOT_ALLOWED' };
   }
 
-  return { appStored, pushSent };
+  const { data: setting, error: settingError } = await supabase
+    .from('instrument_alert_settings')
+    .select('*')
+    .eq('member_id', input.memberId)
+    .eq('asset_type', input.assetType)
+    .eq('market', input.market)
+    .eq('symbol', input.symbol.toUpperCase())
+    .eq('alert_type', input.alertType)
+    .maybeSingle();
+  if (settingError) throw settingError;
+  if (!setting?.enabled) return { appStored: false, pushSent: 0, skipped: 'INSTRUMENT_ALERT_DISABLED' };
+  if (setting.timeframe !== input.timeframe) return { appStored: false, pushSent: 0, skipped: 'TIMEFRAME_MISMATCH' };
+  if (input.confidence < Number(setting.min_confidence)) return { appStored: false, pushSent: 0, skipped: 'CONFIDENCE_BELOW_MINIMUM' };
+  if (input.conditions.length < Number(setting.min_condition_count)) return { appStored: false, pushSent: 0, skipped: 'CONDITION_COUNT_BELOW_MINIMUM' };
+
+  const seoulTime = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date());
+  const nowMinute = minuteOfDay(seoulTime) ?? 0;
+  if (!isInsideWindow(nowMinute, setting.allowed_start, setting.allowed_end)) {
+    return { appStored: false, pushSent: 0, skipped: 'OUTSIDE_ALLOWED_TIME' };
+  }
+  if (setting.dnd_start && setting.dnd_end && isInsideWindow(nowMinute, setting.dnd_start, setting.dnd_end)) {
+    return { appStored: false, pushSent: 0, skipped: 'DO_NOT_DISTURB' };
+  }
+
+  const cooldownStart = new Date(Date.now() - Number(setting.cooldown_minutes) * 60_000).toISOString();
+  const { count, error: cooldownError } = await supabase
+    .from('notification_history')
+    .select('id', { count: 'exact', head: true })
+    .eq('member_id', input.memberId)
+    .eq('symbol', input.symbol.toUpperCase())
+    .eq('timeframe', input.timeframe)
+    .eq('notification_type', input.alertType)
+    .gte('created_at', cooldownStart);
+  if (cooldownError) throw cooldownError;
+  if ((count ?? 0) > 0) return { appStored: false, pushSent: 0, skipped: 'COOLDOWN_ACTIVE' };
+
+  const priceFacts = [
+    input.currentPrice === undefined ? null : `현재가 ${input.currentPrice.toLocaleString('ko-KR')}`,
+    input.targetPrice === undefined ? null : `목표가 ${input.targetPrice.toLocaleString('ko-KR')}`,
+    input.stopPrice === undefined ? null : `손절가 ${input.stopPrice.toLocaleString('ko-KR')}`,
+  ].filter((value): value is string => value !== null);
+  const body = [
+    `${input.timeframe} 조건 ${input.conditions.length}개 충족`,
+    ...input.conditions,
+    ...priceFacts,
+    `신뢰도 ${input.confidence}%`,
+    `신호 ${input.signalTime} · 데이터 ${input.dataTime}`,
+    input.autoTradingStatus ? `자동매매 ${input.autoTradingStatus}` : null,
+  ].filter((value): value is string => value !== null).join(' · ');
+
+  const market = encodeURIComponent(input.market);
+  const symbol = encodeURIComponent(input.symbol.toUpperCase());
+  return deliverMemberNotification({
+    memberId: input.memberId,
+    type: input.alertType,
+    title: `${input.instrumentName} · ${input.alertType}`,
+    body,
+    url: `/stock-info?asset=${input.assetType === 'stock' ? 'stock' : 'coin'}&market=${market}&ticker=${symbol}&tab=ai-chart`,
+    push: setting.push_enabled === true,
+    eventKey: input.eventKey,
+    assetType: input.assetType,
+    market: input.market,
+    symbol: input.symbol.toUpperCase(),
+    timeframe: input.timeframe,
+    conditions: input.conditions,
+    confidence: input.confidence,
+    metadata: { signalTime: input.signalTime, dataTime: input.dataTime },
+  });
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
