@@ -1,5 +1,6 @@
 // AI_REPAIR_COST_CONSENT_V1
 // AI_REPAIR_LIVE_DIAGNOSTIC_V1
+// AI_REPAIR_HISTORY_SETTINGS_V1
 export type AiRepairJobKind = 'diagnosis' | 'improvement';
 
 export type AiRepairJobStatus =
@@ -106,6 +107,42 @@ export type AiRepairCostSummary = {
   };
 };
 
+
+export type AiRepairBillingMode = 'free' | 'paid';
+
+export type AiRepairFeatureSettings = {
+  freeDiagnosisEnabled: boolean;
+  paidDiagnosisEnabled: boolean;
+  improvementEnabled: boolean;
+  updatedAt: string;
+};
+
+export type AiRepairPagination = {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
+export type AiRepairCostHistoryItem = {
+  jobId: string;
+  title: string;
+  kind: AiRepairJobKind;
+  model: string;
+  calls: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  recordedAt: string;
+};
+
+export type AiRepairCostHistoryPage = {
+  items: AiRepairCostHistoryItem[];
+  pagination: AiRepairPagination;
+};
+
 export type AiRepairJob = {
   id: string;
   kind: AiRepairJobKind;
@@ -121,6 +158,7 @@ export type AiRepairJob = {
   completedAt?: string;
   maxAttempts: number;
   currentAttempt: number;
+  billingMode?: AiRepairBillingMode;
   costEstimate?: AiRepairCostEstimate;
   aiCostApproved?: boolean;
   aiCostApprovedAt?: string;
@@ -159,6 +197,7 @@ export type AiRepairPublicConfig = {
   repoPath: string | null;
   baseBranch: string;
   maxAttempts: number;
+  features: AiRepairFeatureSettings;
   checks: Array<{ name: AiRepairCheckName; label: string }>;
   healthUrl: string | null;
 };

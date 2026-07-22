@@ -1,5 +1,6 @@
 // AI_REPAIR_COST_CONSENT_V1
 // AI_REPAIR_LIVE_DIAGNOSTIC_V1
+// AI_REPAIR_HISTORY_SETTINGS_V1
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,7 +13,10 @@ import type {
   AiRepairCheckName,
   AiRepairCheckResult,
   AiRepairCostEstimate,
+  AiRepairCostHistoryItem,
+  AiRepairCostHistoryPage,
   AiRepairCostSummary,
+  AiRepairFeatureSettings,
   AiRepairJob,
   AiRepairJobKind,
   AiRepairPublicConfig,
@@ -194,14 +198,116 @@ function costLedgerFile(): string {
   return path.join(dataDir(), 'cost-ledger.jsonl');
 }
 
+
+const DEFAULT_FEATURE_SETTINGS: Omit<AiRepairFeatureSettings, 'updatedAt'> = {
+  freeDiagnosisEnabled: true,
+  paidDiagnosisEnabled: true,
+  improvementEnabled: true,
+};
+
+function featureSettingsFile(): string {
+  return path.join(dataDir(), 'feature-settings.json');
+}
+
+export function getAiRepairFeatureSettings(): AiRepairFeatureSettings {
+  ensureDirectories();
+
+  const file = featureSettingsFile();
+
+  if (!fs.existsSync(file)) {
+    return {
+      ...DEFAULT_FEATURE_SETTINGS,
+      updatedAt: now(),
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(file, 'utf8'),
+    ) as Partial<AiRepairFeatureSettings>;
+
+    return {
+      freeDiagnosisEnabled:
+        typeof parsed.freeDiagnosisEnabled === 'boolean'
+          ? parsed.freeDiagnosisEnabled
+          : true,
+      paidDiagnosisEnabled:
+        typeof parsed.paidDiagnosisEnabled === 'boolean'
+          ? parsed.paidDiagnosisEnabled
+          : true,
+      improvementEnabled:
+        typeof parsed.improvementEnabled === 'boolean'
+          ? parsed.improvementEnabled
+          : true,
+      updatedAt:
+        typeof parsed.updatedAt === 'string'
+          ? parsed.updatedAt
+          : now(),
+    };
+  } catch {
+    return {
+      ...DEFAULT_FEATURE_SETTINGS,
+      updatedAt: now(),
+    };
+  }
+}
+
+export function updateAiRepairFeatureSettings(
+  input: Partial<
+    Pick<
+      AiRepairFeatureSettings,
+      | 'freeDiagnosisEnabled'
+      | 'paidDiagnosisEnabled'
+      | 'improvementEnabled'
+    >
+  >,
+): AiRepairFeatureSettings {
+  const current = getAiRepairFeatureSettings();
+
+  const next: AiRepairFeatureSettings = {
+    freeDiagnosisEnabled:
+      typeof input.freeDiagnosisEnabled === 'boolean'
+        ? input.freeDiagnosisEnabled
+        : current.freeDiagnosisEnabled,
+    paidDiagnosisEnabled:
+      typeof input.paidDiagnosisEnabled === 'boolean'
+        ? input.paidDiagnosisEnabled
+        : current.paidDiagnosisEnabled,
+    improvementEnabled:
+      typeof input.improvementEnabled === 'boolean'
+        ? input.improvementEnabled
+        : current.improvementEnabled,
+    updatedAt: now(),
+  };
+
+  const target = featureSettingsFile();
+  const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
+
+  fs.writeFileSync(
+    temp,
+    `${JSON.stringify(next, null, 2)}\n`,
+    { encoding: 'utf8', mode: 0o600 },
+  );
+
+  fs.renameSync(temp, target);
+
+  return next;
+}
+
+
 export function estimateAiRepairCost(input: {
   kind: AiRepairJobKind;
   request: string;
   jobId?: string;
+  paid?: boolean;
 }): AiRepairCostEstimate {
   const model = repairModel();
 
-  if (input.kind === 'diagnosis' && !input.jobId) {
+  if (
+    input.kind === 'diagnosis' &&
+    !input.jobId &&
+    input.paid !== true
+  ) {
     return {
       currency: 'USD',
       model,
@@ -420,6 +526,142 @@ export function getAiRepairCostSummary(
     cachedInputTokens,
     outputTokens,
     modelRates: costRates(),
+  };
+}
+
+
+function createPagination(
+  total: number,
+  requestedPage: number,
+  requestedPageSize: number,
+): {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+} {
+  const pageSize = clamp(
+    Number.isFinite(requestedPageSize)
+      ? Math.floor(requestedPageSize)
+      : 10,
+    1,
+    100,
+  );
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  const page = clamp(
+    Number.isFinite(requestedPage)
+      ? Math.floor(requestedPage)
+      : 1,
+    1,
+    totalPages,
+  );
+
+  return {
+    page,
+    pageSize,
+    total,
+    totalPages,
+  };
+}
+
+export function getAiRepairCostHistoryPage(
+  requestedPage = 1,
+  requestedPageSize = 10,
+): AiRepairCostHistoryPage {
+  startAiRepairWorker();
+  ensureDirectories();
+
+  const aggregated = new Map<string, AiRepairCostHistoryItem>();
+  const ledger = costLedgerFile();
+
+  if (fs.existsSync(ledger)) {
+    const lines = fs
+      .readFileSync(ledger, 'utf8')
+      .split(/\r?\n/)
+      .filter(Boolean);
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as {
+          jobId?: unknown;
+          model?: unknown;
+          inputTokens?: unknown;
+          cachedInputTokens?: unknown;
+          outputTokens?: unknown;
+          totalTokens?: unknown;
+          estimatedCostUsd?: unknown;
+          recordedAt?: unknown;
+        };
+
+        const jobId = String(entry.jobId ?? '').trim();
+
+        if (!jobId) continue;
+
+        const job = jobs.get(jobId);
+        const current = aggregated.get(jobId);
+
+        const recordedAt =
+          typeof entry.recordedAt === 'string'
+            ? entry.recordedAt
+            : now();
+
+        const next: AiRepairCostHistoryItem = current ?? {
+          jobId,
+          title: job?.title ?? '삭제되거나 이전된 AI 작업',
+          kind: job?.kind ?? 'diagnosis',
+          model:
+            typeof entry.model === 'string'
+              ? entry.model
+              : repairModel(),
+          calls: 0,
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          estimatedCostUsd: 0,
+          recordedAt,
+        };
+
+        next.calls += 1;
+        next.inputTokens += Number(entry.inputTokens) || 0;
+        next.cachedInputTokens +=
+          Number(entry.cachedInputTokens) || 0;
+        next.outputTokens += Number(entry.outputTokens) || 0;
+        next.totalTokens += Number(entry.totalTokens) || 0;
+        next.estimatedCostUsd = roundCost(
+          next.estimatedCostUsd +
+            (Number(entry.estimatedCostUsd) || 0),
+        );
+
+        if (recordedAt > next.recordedAt) {
+          next.recordedAt = recordedAt;
+        }
+
+        aggregated.set(jobId, next);
+      } catch {
+        // 손상된 비용 내역은 건너뜁니다.
+      }
+    }
+  }
+
+  const all = [...aggregated.values()].sort(
+    (a, b) => b.recordedAt.localeCompare(a.recordedAt),
+  );
+
+  const pagination = createPagination(
+    all.length,
+    requestedPage,
+    requestedPageSize,
+  );
+
+  const start =
+    (pagination.page - 1) * pagination.pageSize;
+
+  return {
+    items: all.slice(start, start + pagination.pageSize),
+    pagination,
   };
 }
 
@@ -1318,7 +1560,11 @@ async function processRepairJob(job: AiRepairJob): Promise<void> {
     return;
   }
 
-  if (job.kind === 'diagnosis' && !job.aiCostApproved) {
+  if (
+    job.kind === 'diagnosis' &&
+    job.billingMode !== 'paid' &&
+    !job.aiCostApproved
+  ) {
     job.status = 'awaiting_ai_approval';
     job.progress = 40;
     job.message = '무료 진단 완료 — 유료 AI 수정 승인 대기';
@@ -1554,6 +1800,7 @@ export function getAiRepairConfig(): AiRepairPublicConfig {
     repoPath: fs.existsSync(repoPath()) ? repoPath() : null,
     baseBranch: baseBranch(),
     maxAttempts: maxAttempts(),
+    features: getAiRepairFeatureSettings(),
     checks: [
       ...CHECKS.map(({ name, label }) => ({ name, label })),
       { name: 'api-smoke' as const, label: '격리 API 기동·상태 검사' },
@@ -1570,11 +1817,43 @@ export function createAiRepairJob(input: {
   request: string;
   createdBy: string;
   costConsent?: boolean;
+  paidDiagnosis?: boolean;
 }): AiRepairJob {
   startAiRepairWorker();
   if (!isEnabled()) throw new Error('AI 복구 기능이 아직 서버에서 활성화되지 않았습니다.');
 
-  if (input.kind === 'improvement' && input.costConsent !== true) {
+  const features = getAiRepairFeatureSettings();
+  const paidDiagnosis =
+    input.kind === 'diagnosis' &&
+    input.paidDiagnosis === true;
+
+  if (
+    input.kind === 'diagnosis' &&
+    !paidDiagnosis &&
+    !features.freeDiagnosisEnabled
+  ) {
+    throw new Error('무료 진단 기능이 환경설정에서 꺼져 있습니다.');
+  }
+
+  if (
+    input.kind === 'diagnosis' &&
+    paidDiagnosis &&
+    !features.paidDiagnosisEnabled
+  ) {
+    throw new Error('유료 진단·복구 기능이 환경설정에서 꺼져 있습니다.');
+  }
+
+  if (
+    input.kind === 'improvement' &&
+    !features.improvementEnabled
+  ) {
+    throw new Error('개선 작업 기능이 환경설정에서 꺼져 있습니다.');
+  }
+
+  if (
+    (input.kind === 'improvement' || paidDiagnosis) &&
+    input.costConsent !== true
+  ) {
     throw new Error('예상 비용 확인과 유료 AI 작업 동의가 필요합니다.');
   }
 
@@ -1596,18 +1875,28 @@ export function createAiRepairJob(input: {
     updatedAt: now(),
     maxAttempts: maxAttempts(),
     currentAttempt: 0,
+    billingMode:
+      input.kind === 'diagnosis' && !paidDiagnosis
+        ? 'free'
+        : 'paid',
     costEstimate: estimateAiRepairCost({
       kind: input.kind,
       request,
+      paid:
+        input.kind === 'improvement' ||
+        paidDiagnosis,
     }),
     aiCostApproved:
-      input.kind === 'improvement' && input.costConsent === true,
+      (input.kind === 'improvement' || paidDiagnosis) &&
+      input.costConsent === true,
     aiCostApprovedAt:
-      input.kind === 'improvement' && input.costConsent === true
+      (input.kind === 'improvement' || paidDiagnosis) &&
+      input.costConsent === true
         ? now()
         : undefined,
     aiCostApprovedBy:
-      input.kind === 'improvement' && input.costConsent === true
+      (input.kind === 'improvement' || paidDiagnosis) &&
+      input.costConsent === true
         ? input.createdBy
         : undefined,
     actualCostUsd: 0,
@@ -1631,6 +1920,46 @@ export function listAiRepairJobs(limit = 30): AiRepairJob[] {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, clamp(limit, 1, 100))
     .map(publicJob);
+}
+
+
+export function listAiRepairJobsPage(
+  requestedPage = 1,
+  requestedPageSize = 10,
+): {
+  jobs: AiRepairJob[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
+  activeCount: number;
+} {
+  startAiRepairWorker();
+
+  const all = [...jobs.values()].sort(
+    (a, b) => b.createdAt.localeCompare(a.createdAt),
+  );
+
+  const pagination = createPagination(
+    all.length,
+    requestedPage,
+    requestedPageSize,
+  );
+
+  const start =
+    (pagination.page - 1) * pagination.pageSize;
+
+  return {
+    jobs: all
+      .slice(start, start + pagination.pageSize)
+      .map(publicJob),
+    pagination,
+    activeCount: all.filter(
+      (job) => ACTIVE_STATUSES.has(job.status),
+    ).length,
+  };
 }
 
 export function getAiRepairJob(id: string): AiRepairJob {
@@ -1662,6 +1991,13 @@ export function approveAiRepairCost(
     throw new Error('예상 비용 확인과 유료 AI 작업 동의가 필요합니다.');
   }
 
+  const features = getAiRepairFeatureSettings();
+
+  if (!features.paidDiagnosisEnabled) {
+    throw new Error('유료 진단·복구 기능이 환경설정에서 꺼져 있습니다.');
+  }
+
+  job.billingMode = 'paid';
   job.aiCostApproved = true;
   job.aiCostApprovedAt = now();
   job.aiCostApprovedBy = approvedBy;
