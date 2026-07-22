@@ -539,8 +539,7 @@ export function AiRepairCenter() {
 
       <AiRepairCommandPanel />
 
-      {(config?.features?.freeDiagnosisEnabled !== false ||
-        config?.features?.paidDiagnosisEnabled !== false) && (
+      {false && (
         <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
           <div>
             <p className="text-xs font-extrabold">진단기</p>
