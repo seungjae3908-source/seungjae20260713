@@ -911,7 +911,7 @@ export function AiRepairCenter() {
 
                         {job.costEstimate && (
                           <p className="mt-2 rounded-xl bg-background p-2 text-center text-xs font-extrabold">
-                            예상 {formatUsd(job.costEstimate.minUsd)}~{formatUsd(job.costEstimate.maxUsd)}
+                            예상 {formatUsd(job.costEstimate?.minUsd ?? 0)}~{formatUsd(job.costEstimate?.maxUsd ?? 0)}
                           </p>
                         )}
 
@@ -1088,18 +1088,18 @@ export function AiRepairCenter() {
 
               <div>
                 <p className="text-sm font-black">
-                  {costModal.estimate.free
+                  {costModal!.estimate.free
                     ? "무료 진단 확인"
                     : "예상 비용 확인"}
                 </p>
                 <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
-                  모델: {costModal.estimate.model}
+                  모델: {costModal!.estimate.model}
                 </p>
               </div>
             </div>
 
             <div className="mt-4 rounded-2xl bg-background p-4 text-center">
-              {costModal.estimate.free ? (
+              {costModal!.estimate.free ? (
                 <>
                   <p className="text-2xl font-black text-positive">$0.00</p>
                   <p className="mt-1 text-xs font-bold text-positive">
@@ -1112,30 +1112,30 @@ export function AiRepairCenter() {
                     가장 가능성 높은 예상금액
                   </p>
                   <p className="mt-1 text-2xl font-black text-primary">
-                    {formatUsd(costModal.estimate.likelyUsd)}
+                    {formatUsd(costModal!.estimate.likelyUsd)}
                   </p>
                   <p className="mt-2 text-xs font-extrabold">
-                    예상 범위 {formatUsd(costModal.estimate.minUsd)}
+                    예상 범위 {formatUsd(costModal!.estimate.minUsd)}
                     {" ~ "}
-                    {formatUsd(costModal.estimate.maxUsd)}
+                    {formatUsd(costModal!.estimate.maxUsd)}
                   </p>
                 </>
               )}
             </div>
 
-            {costModal.request && (
+            {costModal!.request && (
               <div className="mt-3 max-h-28 overflow-y-auto rounded-xl border border-card-border bg-background p-3">
                 <p className="text-[10px] font-extrabold text-muted-foreground">
                   요청 내용
                 </p>
                 <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed">
-                  {costModal.request}
+                  {costModal!.request}
                 </p>
               </div>
             )}
 
             <p className="mt-3 break-keep text-[11px] leading-relaxed text-muted-foreground">
-              {costModal.estimate.note}
+              {costModal!.estimate.note}
             </p>
 
             <div className="mt-4 grid grid-cols-2 gap-2">
@@ -1156,7 +1156,7 @@ export function AiRepairCenter() {
               >
                 {busyAction === "confirm-cost"
                   ? "처리 중..."
-                  : costModal.estimate.free
+                  : costModal!.estimate.free
                     ? "무료 진단 시작"
                     : "확인 후 시작"}
               </button>
