@@ -223,6 +223,16 @@ function formatDate(value: string): string {
   }
 }
 
+function cleanJobMessage(value: string): string {
+  return value
+    .replace(/무료 진단 완료\s*[—·-]?\s*유료 AI 수정 승인 대기/g, "")
+    .replace(/진단 완료\s*[—·-]?\s*AI 수정 대기/g, "")
+    .replace(/무료 진단 완료/g, "")
+    .replace(/유료 AI 수정 승인 대기/g, "")
+    .replace(/^\s*[·—-]\s*/, "")
+    .trim();
+}
+
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await authorizedFetch(url, {
     ...init,
@@ -253,6 +263,7 @@ export function AiRepairCenter() {
   const [costOpen, setCostOpen] = useState(false);
   const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
   const [jobsPage, setJobsPage] = useState(1);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [jobsPagination, setJobsPagination] = useState<Pagination>({
     page: 1,
     pageSize: 10,
@@ -521,8 +532,8 @@ export function AiRepairCenter() {
   };
 
   return (
-    <section className="rounded-3xl border border-primary/30 bg-card p-4 text-left shadow-sm">
-      <div className="flex items-start gap-3">
+    <details className="group rounded-3xl border border-primary/30 bg-card p-4 text-left shadow-sm">
+      <summary className="flex cursor-pointer list-none items-start gap-3">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
           <Bot className="h-5 w-5" />
         </span>
@@ -534,9 +545,13 @@ export function AiRepairCenter() {
             </span>
           </div>
         </div>
-      </div>
+        <span className="shrink-0 pt-1 text-[10px] font-extrabold text-primary">
+          <span className="group-open:hidden">펼치기</span>
+          <span className="hidden group-open:inline">접기</span>
+        </span>
+      </summary>
 
-      <div className="mt-3 flex items-center justify-between gap-2 rounded-xl bg-secondary/60 px-3 py-2">
+      <div className="mt-1 flex items-center justify-between gap-2 rounded-lg bg-secondary/60 px-2 py-1.5">
         <p className="break-keep text-[11px] font-bold leading-relaxed text-muted-foreground">
           {notice} {activeCount > 0 ? `현재 실행 중 ${activeCount}건` : ""}
         </p>
@@ -646,14 +661,18 @@ export function AiRepairCenter() {
       <div className="mt-4 flex items-center justify-between gap-2">
         <div>
           <p className="text-xs font-extrabold">점검 내역</p>
-          <p className="mt-0.5 text-[10px] text-muted-foreground">
-            최신 작업부터 한 페이지에 10개씩 표시합니다.
-          </p>
         </div>
 
-        <span className="rounded-lg bg-secondary px-2 py-1 text-[10px] font-extrabold">
-          총 {jobsPagination.total}건
-        </span>
+        <button
+          type="button"
+          onClick={() => {
+            setJobsPage(1);
+            setHistoryOpen(true);
+          }}
+          className="rounded-lg bg-secondary px-3 py-1.5 text-[10px] font-extrabold text-primary"
+        >
+          더보기
+        </button>
       </div>
 
       <div className="mt-3 space-y-2">
@@ -662,7 +681,7 @@ export function AiRepairCenter() {
             아직 AI 진단 작업이 없습니다.
           </div>
         ) : (
-          jobs.map((job) => {
+          jobs.slice(0, 3).map((job) => {
             const expanded = expandedId === job.id;
             const latestAttempt =
               job.attempts[job.attempts.length - 1];
@@ -678,9 +697,8 @@ export function AiRepairCenter() {
                     {STATUS_LABEL[job.status]}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-extrabold">{job.title}</span>
-                    <span className="mt-1 block break-keep text-[10px] leading-relaxed text-muted-foreground">
-                      {job.message} · {formatDate(job.updatedAt)}
+                                        <span className="mt-1 block break-keep text-[10px] leading-relaxed text-muted-foreground">
+                      {cleanJobMessage(job.message) ? `${cleanJobMessage(job.message)} · ` : ""}{formatDate(job.updatedAt)}
                     </span>
                   </span>
                   {expanded ? <ChevronUp className="h-4 w-4 shrink-0" /> : <ChevronDown className="h-4 w-4 shrink-0" />}
@@ -732,39 +750,14 @@ export function AiRepairCenter() {
                       </div>
                     )}
 
-                    {job.checks.length > 0 && (
-                      <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
-                        <div className="rounded-xl bg-card p-2">
-                          <p className="text-muted-foreground">전체 점검</p>
-                          <p className="mt-1 text-sm font-black">
-                            {job.checks.length}
-                          </p>
-                        </div>
-
-                        <div className="rounded-xl bg-positive/10 p-2">
-                          <p className="text-positive">정상</p>
-                          <p className="mt-1 text-sm font-black text-positive">
-                            {job.checks.filter((check) => check.ok).length}
-                          </p>
-                        </div>
-
-                        <div className="rounded-xl bg-destructive/10 p-2">
-                          <p className="text-destructive">오류</p>
-                          <p className="mt-1 text-sm font-black text-destructive">
-                            {job.checks.filter((check) => !check.ok).length}
-                          </p>
-                        </div>
-                      </div>
-                    )}
-
                     {!ACTIVE.has(job.status) && (
                       <div className="rounded-2xl border border-primary/30 bg-primary/5 p-3">
                         <p className="text-xs font-extrabold">
-                          전체 진단 결과
+                          시스템 진단 결과
                         </p>
 
                         <p className="mt-1 break-keep text-xs leading-relaxed">
-                          {job.message}
+                          {cleanJobMessage(job.message) || "진단 결과가 준비되었습니다."}
                         </p>
 
                         <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[10px]">
@@ -829,9 +822,9 @@ export function AiRepairCenter() {
                     {job.checks.length > 0 && (
                       <div>
                         <p className="mb-2 text-xs font-extrabold">최종 검사 결과</p>
-                        <div className="space-y-1.5">
+                        <div className="overflow-hidden rounded-xl border border-card-border bg-card">
                           {job.checks.map((check) => (
-                            <details key={check.name} className="rounded-xl border border-card-border bg-card p-2">
+                            <details key={check.name} className="border-b border-card-border p-2 last:border-b-0">
                               <summary className="flex cursor-pointer list-none items-center gap-2 text-[11px] font-extrabold">
                                 {check.ok ? <CheckCircle2 className="h-4 w-4 text-positive" /> : <XCircle className="h-4 w-4 text-destructive" />}
                                 <span className="flex-1">{check.label}</span>
@@ -859,12 +852,6 @@ export function AiRepairCenter() {
                           ))}
                         </div>
                       </div>
-                    )}
-
-                    {job.branch && (
-                      <p className="break-all rounded-xl bg-card p-2 text-[10px] font-bold text-muted-foreground">
-                        검증 브랜치: {job.branch}{job.commitSha ? ` · ${job.commitSha.slice(0, 12)}` : ""}
-                      </p>
                     )}
 
                     {false && job.status === "awaiting_ai_approval" &&
@@ -942,43 +929,94 @@ export function AiRepairCenter() {
           })
         )}
       </div>
+      {historyOpen && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-3xl border border-card-border bg-card p-4 shadow-2xl">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-black">점검 내역</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setHistoryOpen(false);
+                  setJobsPage(1);
+                }}
+                className="rounded-xl border border-card-border px-3 py-2 text-xs font-extrabold"
+              >
+                닫기
+              </button>
+            </div>
 
-      {jobsPagination.totalPages > 1 && (
-        <div className="mt-3 flex items-center justify-between gap-2">
-          <button
-            type="button"
-            disabled={jobsPagination.page <= 1}
-            onClick={() => {
-              setExpandedId(null);
-              setJobsPage((page) => Math.max(1, page - 1));
-            }}
-            className="rounded-lg border border-card-border px-3 py-2 text-[10px] font-extrabold disabled:opacity-40"
-          >
-            이전
-          </button>
+            <div className="mt-3 max-h-[65vh] space-y-2 overflow-y-auto">
+              {jobs.length === 0 ? (
+                <p className="rounded-2xl border border-dashed border-card-border p-5 text-center text-xs text-muted-foreground">
+                  점검 내역이 없습니다.
+                </p>
+              ) : (
+                jobs.map((job) => (
+                  <details
+                    key={`history-${job.id}`}
+                    className="rounded-2xl border border-card-border bg-background p-3"
+                  >
+                    <summary className="cursor-pointer list-none">
+                      <div className="flex items-start gap-2">
+                        <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-extrabold", statusTone(job.status))}>
+                          {statusIcon(job.status)}
+                          {STATUS_LABEL[job.status]}
+                        </span>
+                        <span className="min-w-0 flex-1 text-right text-[10px] font-bold text-muted-foreground">
+                          {formatDate(job.updatedAt)}
+                        </span>
+                      </div>
+                      {cleanJobMessage(job.message) && (
+                        <p className="mt-2 break-keep text-xs leading-relaxed">
+                          {cleanJobMessage(job.message)}
+                        </p>
+                      )}
+                    </summary>
 
-          <span className="text-[10px] font-extrabold text-muted-foreground">
-            {jobsPagination.page} / {jobsPagination.totalPages} 페이지
-          </span>
+                    <div className="mt-3 space-y-2 border-t border-card-border pt-3">
+                      {(job.diagnosticErrors?.length ?? 0) > 0 && (
+                        <div className="rounded-xl bg-destructive/10 p-2 text-xs text-destructive">
+                          발견된 오류 {job.diagnosticErrors?.length ?? 0}개
+                        </div>
+                      )}
+                      <div className="rounded-xl bg-card p-2 text-xs">
+                        최종 검사 {job.checks.length}개 · 정상 {job.checks.filter((check) => check.ok).length}개 · 오류 {job.checks.filter((check) => !check.ok).length}개
+                      </div>
+                    </div>
+                  </details>
+                ))
+              )}
+            </div>
 
-          <button
-            type="button"
-            disabled={
-              jobsPagination.page >= jobsPagination.totalPages
-            }
-            onClick={() => {
-              setExpandedId(null);
-              setJobsPage((page) =>
-                Math.min(
-                  jobsPagination.totalPages,
-                  page + 1,
-                ),
-              );
-            }}
-            className="rounded-lg border border-card-border px-3 py-2 text-[10px] font-extrabold disabled:opacity-40"
-          >
-            다음
-          </button>
+            {jobsPagination.totalPages > 1 && (
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  disabled={jobsPagination.page <= 1}
+                  onClick={() => setJobsPage((page) => Math.max(1, page - 1))}
+                  className="rounded-lg border border-card-border px-3 py-2 text-[10px] font-extrabold disabled:opacity-40"
+                >
+                  이전
+                </button>
+                <span className="text-[10px] font-extrabold text-muted-foreground">
+                  {jobsPagination.page} / {jobsPagination.totalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={jobsPagination.page >= jobsPagination.totalPages}
+                  onClick={() =>
+                    setJobsPage((page) =>
+                      Math.min(jobsPagination.totalPages, page + 1),
+                    )
+                  }
+                  className="rounded-lg border border-card-border px-3 py-2 text-[10px] font-extrabold disabled:opacity-40"
+                >
+                  다음
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1134,6 +1172,6 @@ export function AiRepairCenter() {
           </div>
         </div>
       )}
-    </section>
+    </details>
   );
 }

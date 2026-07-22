@@ -286,7 +286,7 @@ export function AiRepairCommandPanel() {
 
   return (
     <>
-      <section className="mt-3 rounded-2xl border border-primary/30 bg-primary/5 p-3">
+      <section className="mt-2 rounded-2xl border border-primary/30 bg-primary/5 p-3">
         <div className="flex items-start gap-2">
           <Bot className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
 
