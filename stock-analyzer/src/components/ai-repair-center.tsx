@@ -225,10 +225,10 @@ function formatDate(value: string): string {
 
 function cleanJobMessage(value: string): string {
   return value
-    .replace(/무료 진단 완료\s*[—·-]?\s*유료 AI 수정 승인 대기/g, "")
+    .replace(/ 진단 완료\s*[—·-]?\s* AI 수정 승인 대기/g, "")
     .replace(/진단 완료\s*[—·-]?\s*AI 수정 대기/g, "")
-    .replace(/무료 진단 완료/g, "")
-    .replace(/유료 AI 수정 승인 대기/g, "")
+    .replace(/ 진단 완료/g, "")
+    .replace(/ AI 수정 승인 대기/g, "")
     .replace(/^\s*[·—-]\s*/, "")
     .trim();
 }
@@ -357,7 +357,7 @@ export function AiRepairCenter() {
       setNotice(
         error instanceof Error
           ? error.message
-          : "예상 비용 계산에 실패했습니다.",
+          : "예상  계산에 실패했습니다.",
       );
     } finally {
       setBusyAction(null);
@@ -401,8 +401,8 @@ export function AiRepairCenter() {
           modal.estimate.free
             ? " 진단이 시작되었습니다. 오류가 발견돼도 AI 수정은 별도 승인 전까지 실행되지 않습니다."
             : modal.kind === "diagnosis"
-              ? "예상 비용 확인 후 유료 진단·자동 복구가 시작되었습니다."
-              : "예상 비용 확인 후 AI 개선 작업이 시작되었습니다.",
+              ? "예상  확인 후  진단·자동 복구가 시작되었습니다."
+              : "예상  확인 후 AI 개선 작업이 시작되었습니다.",
         );
       } else if (modal.jobId) {
         const body = await apiJson<{
@@ -423,7 +423,7 @@ export function AiRepairCenter() {
         );
 
         setNotice(
-          "예상 비용을 확인했습니다. 유료 AI 수정 작업이 시작되었습니다.",
+          "예상 을 확인했습니다.  AI 수정 작업이 시작되었습니다.",
         );
       }
 
@@ -432,7 +432,7 @@ export function AiRepairCenter() {
       setNotice(
         error instanceof Error
           ? error.message
-          : "비용 승인 작업에 실패했습니다.",
+          : " 승인 작업에 실패했습니다.",
       );
     } finally {
       setBusyAction(null);
@@ -450,7 +450,7 @@ export function AiRepairCenter() {
         setNotice(
           error instanceof Error
             ? error.message
-            : "비용 내역 조회에 실패했습니다.",
+            : " 내역 조회에 실패했습니다.",
         );
       } finally {
         setBusyAction(null);
@@ -608,7 +608,7 @@ export function AiRepairCenter() {
                 className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-primary px-3 py-2.5 text-xs font-extrabold text-primary-foreground disabled:opacity-50"
               >
                 <DollarSign className="h-4 w-4" />
-                유료 진단·자동 복구
+                 진단·자동 복구
               </button>
             )}
           </div>
@@ -650,7 +650,7 @@ export function AiRepairCenter() {
               className="inline-flex items-center gap-1.5 rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-extrabold text-primary disabled:opacity-50"
             >
               <Wrench className="h-4 w-4" />
-              비용 확인 후 시작
+               확인 후 시작
             </button>
           </div>
         </div>
@@ -859,11 +859,11 @@ export function AiRepairCenter() {
                       <div className="rounded-2xl border border-warning/50 bg-warning/10 p-3">
                         <p className="flex items-center gap-1.5 text-xs font-extrabold text-warning">
                           <DollarSign className="h-4 w-4" />
-                           진단 완료 · 유료 AI 수정은 별도 승인 필요
+                           진단 완료 ·  AI 수정은 별도 승인 필요
                         </p>
 
                         <p className="mt-1 break-keep text-[10px] leading-relaxed text-muted-foreground">
-                          현재 검사 결과만 저장됐습니다. 아래 버튼을 눌러 예상 비용을 확인한 뒤에만 OpenAI 수정 작업이 시작됩니다.
+                          현재 검사 결과만 저장됐습니다. 아래 버튼을 눌러 예상 을 확인한 뒤에만 OpenAI 수정 작업이 시작됩니다.
                         </p>
 
                         {job.costEstimate && (
@@ -879,7 +879,7 @@ export function AiRepairCenter() {
                           className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-warning px-3 py-2.5 text-xs font-extrabold text-warning-foreground disabled:opacity-50"
                         >
                           <DollarSign className="h-4 w-4" />
-                          예상 비용 확인 후 AI 수정 시작
+                          예상  확인 후 AI 수정 시작
                         </button>
                       </div>
                     )}
@@ -1078,7 +1078,7 @@ export function AiRepairCenter() {
               onClick={() => void loadCosts()}
               className="w-full rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-extrabold text-primary"
             >
-              비용 새로고침
+               새로고침
             </button>
           </div>
         )}
@@ -1098,7 +1098,7 @@ export function AiRepairCenter() {
                 <p className="text-sm font-black">
                   {costModal!.estimate.free
                     ? " 진단 확인"
-                    : "예상 비용 확인"}
+                    : "예상  확인"}
                 </p>
                 <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
                   모델: {costModal!.estimate.model}
