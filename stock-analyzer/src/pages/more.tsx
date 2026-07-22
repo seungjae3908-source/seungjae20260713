@@ -336,8 +336,16 @@ export default function MorePage() {
 			</header>
 
 			<main className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 pb-24">
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<h2 className="mb-3 text-sm font-extrabold">계정 · 자산</h2>
+				<details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+					
+					<summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+						<span className="text-sm font-extrabold">계정 · 자산</span>
+						<span className="text-xs font-extrabold text-primary">
+							<span className="group-open:hidden">펼치기</span>
+							<span className="hidden group-open:inline">접기</span>
+						</span>
+					</summary>
+
 
 					<button
 						type="button"
@@ -370,7 +378,7 @@ export default function MorePage() {
 							</p>
 						</div>
 					</button>
-				</section>
+				</details>
 
 				<details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
 					<summary className="flex cursor-pointer list-none items-center justify-between gap-3">
@@ -590,9 +598,17 @@ export default function MorePage() {
 
 				{auth.isAdmin ? <AiRepairCenter /> : null}
 
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+				<details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
 					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">서버 자동백업 / 복원</h2>
+						
+					<summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+						<span className="text-sm font-extrabold">서버 자동백업 / 복원</span>
+						<span className="text-xs font-extrabold text-primary">
+							<span className="group-open:hidden">펼치기</span>
+							<span className="hidden group-open:inline">접기</span>
+						</span>
+					</summary>
+
 
 						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
 							승인된 회원 계정에 화면, 검색기, 자동매매, 차트 설정을 최신 1개로
@@ -625,7 +641,7 @@ export default function MorePage() {
 					<p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
 						자동백업 상태: {remoteBackupStatus.message}
 					</p>
-				</section>
+				</details>
 
 				
 
