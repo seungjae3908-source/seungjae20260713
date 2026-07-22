@@ -1,3 +1,4 @@
+// AI_REPAIR_COMMAND_UI_V2
 // AI_REPAIR_COST_CONSENT_V1
 // AI_REPAIR_LIVE_DIAGNOSTIC_V1
 // AI_REPAIR_HISTORY_SETTINGS_V1
@@ -20,7 +21,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { authorizedFetch } from "@/lib/auth-fetch";
-import { AiRepairAdminPanels } from "@/components/ai-repair-admin-panels";
+import { AiRepairCommandPanel } from "@/components/ai-repair-command-panel";
 import { cn } from "@/lib/utils";
 
 type JobStatus =
@@ -526,13 +527,15 @@ export function AiRepairCenter() {
         <ConfigBadge ok={config?.deploymentReady === true} label="승인 배포" />
       </div>
 
+      <AiRepairCommandPanel />
+
       {(config?.features?.freeDiagnosisEnabled !== false ||
         config?.features?.paidDiagnosisEnabled !== false) && (
         <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
           <div>
             <p className="text-xs font-extrabold">전체 오류 진단</p>
             <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-              무료 점검 또는 비용 확인 후 AI 자동 복구까지 진행하는 유료 진단을 선택합니다.
+              무료 점검을 실행합니다. 오류가 발견되면 복구 명령어가 자동 생성됩니다.
             </p>
           </div>
 
@@ -555,11 +558,11 @@ export function AiRepairCenter() {
                 ) : (
                   <Play className="h-4 w-4" />
                 )}
-                무료 진단
+                무료 진단 실행하기
               </button>
             )}
 
-            {config?.features?.paidDiagnosisEnabled !== false && (
+            {false && (
               <button
                 type="button"
                 onClick={() =>
@@ -584,7 +587,7 @@ export function AiRepairCenter() {
         </div>
       )}
 
-      {config?.features?.improvementEnabled !== false && (
+      {false && (
         <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
           <div className="mb-2 flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
@@ -894,7 +897,7 @@ export function AiRepairCenter() {
                       </p>
                     )}
 
-                    {job.status === "awaiting_ai_approval" &&
+                    {false && job.status === "awaiting_ai_approval" &&
                       config?.features?.paidDiagnosisEnabled !== false && (
                       <div className="rounded-2xl border border-warning/50 bg-warning/10 p-3">
                         <p className="flex items-center gap-1.5 text-xs font-extrabold text-warning">
@@ -1009,7 +1012,7 @@ export function AiRepairCenter() {
         </div>
       )}
 
-      <div className="mt-4 rounded-2xl border border-card-border bg-background p-3">
+      <div className="hidden">
         <button
           type="button"
           onClick={() => void toggleCosts()}
@@ -1073,9 +1076,9 @@ export function AiRepairCenter() {
         )}
       </div>
 
-      <AiRepairAdminPanels />
 
-      {costModal && (
+
+      {costModal && false && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-sm rounded-3xl border border-card-border bg-card p-5 shadow-2xl">
             <div className="flex items-center gap-2">
