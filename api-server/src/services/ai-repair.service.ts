@@ -1553,10 +1553,10 @@ async function processRepairJob(job: AiRepairJob): Promise<void> {
   if (allChecksPassed(checks) && job.kind === 'diagnosis') {
     job.status = 'completed';
     job.progress = 100;
-    job.message = '무료 진단 완료 — 오류가 발견되지 않았습니다.';
+    job.message = '진단 완료 — 오류가 발견되지 않았습니다.';
     job.completedAt = now();
     persist(job);
-    await sendJobNotification(job, '무료 진단 완료', '전체 검사에서 오류가 발견되지 않았습니다.');
+    await sendJobNotification(job, '진단 완료', '전체 검사에서 오류가 발견되지 않았습니다.');
     return;
   }
 
@@ -1567,7 +1567,7 @@ async function processRepairJob(job: AiRepairJob): Promise<void> {
   ) {
     job.status = 'awaiting_ai_approval';
     job.progress = 40;
-    job.message = '무료 진단 완료 — 유료 AI 수정 승인 대기';
+    job.message = '진단 완료 — AI 수정 대기';
     job.costEstimate = estimateAiRepairCost({
       kind: job.kind,
       request: job.request,

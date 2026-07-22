@@ -183,12 +183,12 @@ const STATUS_LABEL: Record<JobStatus, string> = {
   diagnosing: "오류 진단 중",
   repairing: "수정 중",
   verifying: "정상 작동 검사 중",
-  awaiting_ai_approval: "AI 비용 승인 대기",
+  awaiting_ai_approval: "결과",
   awaiting_approval: "운영 승인 대기",
   applying: "운영 적용 중",
   completed: "완료",
   failed: "실패",
-  cancelled: "취소됨",
+  cancelled: "취소",
 };
 
 function statusTone(status: JobStatus): string {
@@ -536,6 +536,19 @@ export function AiRepairCenter() {
         </div>
       </div>
 
+      <div className="mt-3 flex items-center justify-between gap-2 rounded-xl bg-secondary/60 px-3 py-2">
+        <p className="break-keep text-[11px] font-bold leading-relaxed text-muted-foreground">
+          {notice} {activeCount > 0 ? `현재 실행 중 ${activeCount}건` : ""}
+        </p>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="shrink-0 rounded-lg p-1.5 text-primary"
+          aria-label="AI 복구 작업 새로고침"
+        >
+          <RefreshCcw className="h-4 w-4" />
+        </button>
+      </div>
 
       <AiRepairCommandPanel />
 
@@ -628,19 +641,7 @@ export function AiRepairCenter() {
         </div>
       )}
 
-      <div className="mt-3 flex items-center justify-between gap-2 rounded-xl bg-secondary/60 px-3 py-2">
-        <p className="break-keep text-[11px] font-bold leading-relaxed text-muted-foreground">
-          {notice} {activeCount > 0 ? `현재 실행 중 ${activeCount}건` : ""}
-        </p>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="shrink-0 rounded-lg p-1.5 text-primary"
-          aria-label="AI 복구 작업 새로고침"
-        >
-          <RefreshCcw className="h-4 w-4" />
-        </button>
-      </div>
+
 
       <div className="mt-4 flex items-center justify-between gap-2">
         <div>
@@ -691,16 +692,6 @@ export function AiRepairCenter() {
 
                 {expanded && (
                   <div className="space-y-3 border-t border-card-border p-3">
-                    <div className="grid grid-cols-2 gap-2 text-[10px]">
-                      <div className="rounded-xl bg-card p-2">
-                        <p className="text-muted-foreground">작업 번호</p>
-                        <p className="mt-1 break-all font-extrabold">{job.id}</p>
-                      </div>
-                      <div className="rounded-xl bg-card p-2">
-                        <p className="text-muted-foreground">수정 반복</p>
-                        <p className="mt-1 font-extrabold">{job.currentAttempt}/{job.maxAttempts}회</p>
-                      </div>
-                    </div>
 
                     {job.request && (
                       <div className="rounded-xl bg-card p-2.5">
@@ -825,16 +816,6 @@ export function AiRepairCenter() {
                             </div>
                           </div>
                         )}
-
-                        <div className="mt-3 flex items-center justify-between rounded-xl bg-background px-3 py-2 text-xs">
-                          <span className="font-bold text-muted-foreground">
-                            이 작업 발생 예상비용
-                          </span>
-
-                          <span className="font-black text-primary">
-                            {formatUsd(job.actualCostUsd ?? 0)}
-                          </span>
-                        </div>
                       </div>
                     )}
 

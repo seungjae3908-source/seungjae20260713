@@ -322,7 +322,7 @@ export function AiRepairCommandPanel() {
             ) : (
               <Bot className="h-4 w-4" />
             )}
-            요청 명령어 만들기
+            요청 명령어
           </button>
 
           <button
@@ -338,7 +338,7 @@ export function AiRepairCommandPanel() {
             ) : (
               <Wrench className="h-4 w-4" />
             )}
-            복구 명령어 만들기
+            복구 명령어
           </button>
         </div>
 

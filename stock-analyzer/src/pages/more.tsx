@@ -372,8 +372,16 @@ export default function MorePage() {
 					</button>
 				</section>
 
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<h2 className="mb-3 text-sm font-extrabold">화면 설정</h2>
+				<details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+					<summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+						<span className="text-sm font-extrabold">화면 설정</span>
+						<span className="text-xs font-extrabold text-primary">
+							<span className="group-open:hidden">펼치기</span>
+							<span className="hidden group-open:inline">접기</span>
+						</span>
+					</summary>
+
+					
 
 					<button
 						type="button"
@@ -449,11 +457,19 @@ export default function MorePage() {
 							))}
 						</div>
 					</div>
-				</section>
+				</details>
 
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+				<details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+					<summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+						<span className="text-sm font-extrabold">휴대폰 알림</span>
+						<span className="text-xs font-extrabold text-primary">
+							<span className="group-open:hidden">펼치기</span>
+							<span className="hidden group-open:inline">접기</span>
+						</span>
+					</summary>
+
 					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">휴대폰 알림</h2>
+						
 
 						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
 							관심종목 뉴스, 공시, 등락률, 목표가/손절가 접근 알림을 받을 수
@@ -497,11 +513,19 @@ export default function MorePage() {
 					<p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
 						현재 상태: {noticeStatus}
 					</p>
-				</section>
+				</details>
 
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+				<details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+					<summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+						<span className="text-sm font-extrabold">관심종목 알림 종류</span>
+						<span className="text-xs font-extrabold text-primary">
+							<span className="group-open:hidden">펼치기</span>
+							<span className="hidden group-open:inline">접기</span>
+						</span>
+					</summary>
+
 					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">관심종목 알림 종류</h2>
+						
 
 						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
 							필요한 알림만 켜서 관리합니다.
@@ -562,7 +586,7 @@ export default function MorePage() {
 							);
 						})}
 					</div>
-				</section>
+				</details>
 
 				{auth.isAdmin ? <AiRepairCenter /> : null}
 
@@ -603,48 +627,7 @@ export default function MorePage() {
 					</p>
 				</section>
 
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">파일 백업 / 복원</h2>
-
-						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-							설정 데이터를 JSON 파일로 내려받거나 저장된 파일을 다시
-							불러옵니다.
-						</p>
-					</div>
-
-					<div className="grid grid-cols-2 gap-2">
-						<button
-							type="button"
-							onClick={exportBackup}
-							className="flex items-center justify-center gap-1.5 rounded-2xl border border-primary/40 bg-primary/10 px-3 py-3 text-sm font-extrabold text-primary"
-						>
-							<Download className="h-4 w-4" />
-							파일 저장
-						</button>
-
-						<button
-							type="button"
-							onClick={() => inputRef.current?.click()}
-							className="flex items-center justify-center gap-1.5 rounded-2xl border border-card-border bg-background px-3 py-3 text-sm font-extrabold"
-						>
-							<Upload className="h-4 w-4" />
-							파일 불러오기
-						</button>
-					</div>
-
-					<input
-						ref={inputRef}
-						type="file"
-						accept="application/json"
-						onChange={(event) => void importBackup(event)}
-						className="hidden"
-					/>
-
-					<p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
-						{backupStatus}
-					</p>
-				</section>
+				
 
 				<p className="pb-4 pt-2 text-center text-xs font-bold text-muted-foreground">
 					By. Seung Jae Lee
