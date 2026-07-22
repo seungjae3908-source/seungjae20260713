@@ -735,18 +735,7 @@ export function AiRepairCenter() {
 
                         <div className="mt-2 space-y-2">
                           {job.diagnosticErrors?.map((error) => (
-                            <details
-                              key={`${error.name}-${error.detectedAt}`}
-                              className="rounded-xl border border-destructive/30 bg-background p-2"
-                            >
-                              <summary className="cursor-pointer list-none text-[11px] font-extrabold text-destructive">
-                                {error.label}
-                              </summary>
-
-                              <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-card p-2 text-[9px] leading-relaxed">
-                                {error.output || "오류 출력 없음"}
-                              </pre>
-                            </details>
+                            <div key={`${error.name}-${error.detectedAt}`} className="rounded-xl border border-destructive/30 bg-background p-3 text-xs"><p><b>문제 구분:</b> {/tsc:\s*not found/i.test(error.output) ? "진단기 환경 오류" : error.name.includes("api") ? "API 오류" : error.name.includes("build") ? "빌드 오류" : "코드 오류"}</p><p className="mt-2"><b>문제 화면:</b> {/tsc:\s*not found/i.test(error.output) ? "진단 시스템" : /trade|trading|order/i.test(`${error.label} ${error.output}`) ? "거래창" : /chart/i.test(`${error.label} ${error.output}`) ? "차트 화면" : error.name.startsWith("api") ? "서버·API" : "앱 화면"}</p><p className="mt-2 break-all"><b>문제 위치:</b> {/tsc:\s*not found/i.test(error.output) ? "격리 작업공간 TypeScript 실행 환경" : error.output.match(/([\w./-]+\.(?:tsx?|jsx?|mjs|cjs|json|css|sql)(?::\d+(?::\d+)?)?)/)?.[1] || error.label}</p><p className="mt-2"><b>쉬운 설명:</b> {/tsc:\s*not found/i.test(error.output) ? "앱 코드 오류가 아닙니다. 진단 작업공간에 TypeScript 실행 파일이 연결되지 않았습니다." : `${error.label} 관련 기능에 문제가 있습니다.`}</p></div>
                           ))}
                         </div>
                       </div>
