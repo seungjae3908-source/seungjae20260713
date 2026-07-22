@@ -89,6 +89,21 @@ const MARKET_CONFIG: Record<
   },
 };
 
+const EXTRA_QUERIES: Record<NewsBriefingMarket, string[]> = {
+  KR: [
+    '코스피 코스닥 외국인 기관 수급 반도체 자동차 금융 when:1d',
+    '삼성전자 SK하이닉스 AI 반도체 국내 증시 when:1d',
+  ],
+  US: [
+    'Wall Street Nasdaq S&P 500 stocks earnings Fed when:1d',
+    'US semiconductor AI stocks regulation economy when:1d',
+  ],
+  COIN: [
+    'Bitcoin Ethereum crypto market ETF regulation exchange when:1d',
+    '비트코인 이더리움 알트코인 ETF 거래소 규제 when:1d',
+  ],
+};
+
 function decodeHtml(value: string): string {
   return value
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
@@ -196,14 +211,15 @@ function parseRss(xml: string): RawNewsIssue[] {
   return issues;
 }
 
-async function fetchRss(
+async function fetchRssQuery(
   market: NewsBriefingMarket,
+  query: string,
 ): Promise<RawNewsIssue[]> {
   const config = MARKET_CONFIG[market];
 
   const url =
     'https://news.google.com/rss/search'
-    + `?q=${encodeURIComponent(config.query)}`
+    + `?q=${encodeURIComponent(query)}`
     + `&hl=${encodeURIComponent(config.hl)}`
     + `&gl=${encodeURIComponent(config.gl)}`
     + `&ceid=${encodeURIComponent(config.ceid)}`;
@@ -225,6 +241,62 @@ async function fetchRss(
   return parseRss(
     await response.text(),
   );
+}
+
+async function fetchRss(
+  market: NewsBriefingMarket,
+): Promise<RawNewsIssue[]> {
+  const queries = [
+    MARKET_CONFIG[market].query,
+    ...EXTRA_QUERIES[market],
+  ];
+
+  const settled = await Promise.allSettled(
+    queries.map((query) =>
+      fetchRssQuery(market, query),
+    ),
+  );
+
+  const merged: RawNewsIssue[] = [];
+  const seen = new Set<string>();
+
+  for (const result of settled) {
+    if (result.status !== 'fulfilled') {
+      console.error(
+        `시장 뉴스 추가 검색 실패 (${market}):`,
+        result.reason,
+      );
+      continue;
+    }
+
+    for (const issue of result.value) {
+      const key = issue.title
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      merged.push(issue);
+    }
+  }
+
+  merged.sort(
+    (left, right) =>
+      new Date(right.publishedAt).getTime()
+      - new Date(left.publishedAt).getTime(),
+  );
+
+  if (merged.length === 0) {
+    throw new Error(
+      `${MARKET_CONFIG[market].label} 뉴스를 찾지 못했습니다.`,
+    );
+  }
+
+  return merged.slice(0, 15);
 }
 
 function isGoogleUrl(value: string): boolean {
@@ -395,6 +467,59 @@ async function fetchHtml(
   };
 }
 
+async function fetchReaderText(
+  url: string,
+): Promise<{
+  url: string;
+  body: string;
+}> {
+  const response = await fetch(
+    `https://r.jina.ai/${url}`,
+    {
+      headers: {
+        Accept: 'text/plain',
+        'User-Agent': 'Mozilla/5.0',
+      },
+      signal: AbortSignal.timeout(25_000),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `기사 리더 응답 오류: ${response.status}`,
+    );
+  }
+
+  const raw = await response.text();
+
+  const sourceMatch = raw.match(
+    /^URL Source:\s*(https?:\/\/\S+)/mi,
+  );
+
+  const sourceUrl =
+    sourceMatch?.[1]
+    && isSafePublicUrl(sourceMatch[1])
+    && !isGoogleUrl(sourceMatch[1])
+      ? sourceMatch[1]
+      : url;
+
+  const body = raw
+    .replace(
+      /^(?:Title|URL Source|Published Time|Markdown Content):.*$/gmi,
+      ' ',
+    )
+    .replace(/\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/[#>*_`|~-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .slice(0, 9_000)
+    .trim();
+
+  return {
+    url: sourceUrl,
+    body,
+  };
+}
+
 function extractArticleBody(
   html: string,
 ): string {
@@ -470,12 +595,15 @@ async function fetchArticle(
   issue: RawNewsIssue,
   index: number,
 ): Promise<ArticleNewsIssue> {
+  let articleUrl = issue.url;
+  let body = '';
+
   try {
     const first = await fetchHtml(
       issue.url,
     );
 
-    let articleUrl = first.url;
+    articleUrl = first.url;
     let articleHtml = first.html;
 
     if (isGoogleUrl(articleUrl)) {
@@ -494,43 +622,77 @@ async function fetchArticle(
       }
     }
 
-    const body =
-      extractArticleBody(articleHtml);
-
-    return {
-      ...issue,
-      index,
-      articleUrl:
-        !isGoogleUrl(articleUrl)
-        && isSafePublicUrl(articleUrl)
-          ? articleUrl
-          : issue.url,
-
-      body:
-        body.length >= 160
-          ? body
-          : '',
-    };
+    body = extractArticleBody(
+      articleHtml,
+    );
   } catch (error) {
     console.error(
-      `기사 본문 수집 실패 (${issue.source}):`,
+      `기사 HTML 수집 실패 (${issue.source}):`,
       error,
     );
-
-    return {
-      ...issue,
-      index,
-      articleUrl: issue.url,
-      body: '',
-    };
   }
+
+  if (
+    body.length < 120
+    || isGoogleUrl(articleUrl)
+  ) {
+    const readerTargets = Array.from(
+      new Set([
+        articleUrl,
+        issue.url,
+      ]),
+    );
+
+    for (const target of readerTargets) {
+      try {
+        const reader =
+          await fetchReaderText(target);
+
+        if (reader.body.length > body.length) {
+          body = reader.body;
+        }
+
+        if (
+          !isGoogleUrl(reader.url)
+          && isSafePublicUrl(reader.url)
+        ) {
+          articleUrl = reader.url;
+        }
+
+        if (body.length >= 120) {
+          break;
+        }
+      } catch (error) {
+        console.error(
+          `기사 리더 수집 실패 (${issue.source}):`,
+          error,
+        );
+      }
+    }
+  }
+
+  return {
+    ...issue,
+    index,
+
+    articleUrl:
+      !isGoogleUrl(articleUrl)
+      && isSafePublicUrl(articleUrl)
+        ? articleUrl
+        : issue.url,
+
+    body:
+      body.length >= 120
+        ? body
+        : '',
+  };
 }
 
 function fallbackItemSummary(
   body: string,
 ): string {
   if (!body) {
-    return '기사 제공기관에서 원문 본문을 불러오는 중입니다.';
+    return '기사 원문을 불러오지 못해 이번 AI 종합 분석에서 제외했습니다.';
   }
 
   const sentences = body
@@ -622,10 +784,10 @@ async function analyzeWithOpenAi(
 
   const available = articles.filter(
     (article) =>
-      article.body.length >= 160,
+      article.body.length >= 120,
   );
 
-  if (available.length < 2) {
+  if (available.length < 1) {
     throw new Error(
       '분석 가능한 기사 원문이 부족합니다.',
     );
@@ -805,7 +967,7 @@ function fallbackAnalysis(
   const usable = itemSummaries.filter(
     (summary) =>
       !summary.startsWith(
-        '기사 제공기관에서',
+        '기사 원문을 불러오지 못해',
       ),
   );
 
