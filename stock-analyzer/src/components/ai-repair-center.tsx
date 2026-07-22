@@ -238,22 +238,6 @@ async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
-function ConfigBadge({ ok, label }: { ok: boolean; label: string }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-extrabold",
-        ok
-          ? "border-positive/40 bg-positive/10 text-positive"
-          : "border-warning/40 bg-warning/10 text-warning",
-      )}
-    >
-      {ok ? <CheckCircle2 className="h-3 w-3" /> : <CircleAlert className="h-3 w-3" />}
-      {label}
-    </span>
-  );
-}
-
 export function AiRepairCenter() {
   const [config, setConfig] = useState<RepairConfig | null>(null);
   const [jobs, setJobs] = useState<RepairJob[]>([]);
@@ -404,7 +388,7 @@ export function AiRepairCenter() {
 
         setNotice(
           modal.estimate.free
-            ? "무료 진단이 시작되었습니다. 오류가 발견돼도 AI 수정은 별도 승인 전까지 실행되지 않습니다."
+            ? " 진단이 시작되었습니다. 오류가 발견돼도 AI 수정은 별도 승인 전까지 실행되지 않습니다."
             : modal.kind === "diagnosis"
               ? "예상 비용 확인 후 유료 진단·자동 복구가 시작되었습니다."
               : "예상 비용 확인 후 AI 개선 작업이 시작되었습니다.",
@@ -465,6 +449,41 @@ export function AiRepairCenter() {
     }
   };
 
+  const startDiagnosis = async () => {
+    setBusyAction("start-diagnosis");
+
+    try {
+      const body = await apiJson<{
+        ok: true;
+        job: RepairJob;
+      }>("/api/admin/ai-repair/jobs", {
+        method: "POST",
+        body: JSON.stringify({
+          kind: "diagnosis",
+          request: "",
+          costConsent: false,
+          paidDiagnosis: false,
+        }),
+      });
+
+      setJobs((current) => [
+        body.job,
+        ...current.filter((item) => item.id !== body.job.id),
+      ]);
+      setExpandedId(body.job.id);
+      setJobsPage(1);
+      setNotice("진단이 시작되었습니다.");
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "진단을 시작하지 못했습니다.",
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const approve = async (job: RepairJob) => {
     const phrase = approvalInput[job.id]?.trim() ?? "";
     const key = `approve-${job.id}`;
@@ -514,18 +533,9 @@ export function AiRepairCenter() {
               관리자 전용
             </span>
           </div>
-          <p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-            별도 작업공간에서 오류를 반복 수정하고 검사를 모두 통과하면 푸시 알림을 보냅니다. 승인 전에는 운영 코드에 적용하지 않습니다.
-          </p>
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        <ConfigBadge ok={config?.enabled === true} label="복구 엔진" />
-        <ConfigBadge ok={config?.aiConfigured === true} label="AI 연결" />
-        <ConfigBadge ok={config?.repositoryReady === true} label="Git 작업공간" />
-        <ConfigBadge ok={config?.deploymentReady === true} label="승인 배포" />
-      </div>
 
       <AiRepairCommandPanel />
 
@@ -533,32 +543,23 @@ export function AiRepairCenter() {
         config?.features?.paidDiagnosisEnabled !== false) && (
         <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
           <div>
-            <p className="text-xs font-extrabold">전체 오류 진단</p>
-            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-              무료 점검을 실행합니다. 오류가 발견되면 복구 명령어가 자동 생성됩니다.
-            </p>
+            <p className="text-xs font-extrabold">진단기</p>
           </div>
 
-          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="mt-3 grid grid-cols-1 gap-2">
             {config?.features?.freeDiagnosisEnabled !== false && (
               <button
                 type="button"
-                onClick={() =>
-                  void openCostEstimate(
-                    "diagnosis",
-                    undefined,
-                    false,
-                  )
-                }
+                onClick={() => void startDiagnosis()}
                 disabled={!config?.enabled || busyAction !== null}
-                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-positive/40 bg-positive/10 px-3 py-2.5 text-xs font-extrabold text-positive disabled:opacity-50"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-positive/40 bg-positive/10 px-3 py-3 text-xs font-extrabold text-positive disabled:opacity-50"
               >
-                {busyAction === "estimate-diagnosis" ? (
+                {busyAction === "start-diagnosis" ? (
                   <LoaderCircle className="h-4 w-4 animate-spin" />
                 ) : (
                   <Play className="h-4 w-4" />
                 )}
-                무료 진단 실행하기
+                진단기
               </button>
             )}
 
@@ -891,7 +892,7 @@ export function AiRepairCenter() {
                       <div className="rounded-2xl border border-warning/50 bg-warning/10 p-3">
                         <p className="flex items-center gap-1.5 text-xs font-extrabold text-warning">
                           <DollarSign className="h-4 w-4" />
-                          무료 진단 완료 · 유료 AI 수정은 별도 승인 필요
+                           진단 완료 · 유료 AI 수정은 별도 승인 필요
                         </p>
 
                         <p className="mt-1 break-keep text-[10px] leading-relaxed text-muted-foreground">
@@ -1010,7 +1011,7 @@ export function AiRepairCenter() {
         >
           <span className="flex items-center gap-2 text-xs font-extrabold">
             <DollarSign className="h-4 w-4 text-primary" />
-            발생 비용 보기
+            
           </span>
 
           <span className="text-xs font-extrabold text-primary">
@@ -1078,7 +1079,7 @@ export function AiRepairCenter() {
               <div>
                 <p className="text-sm font-black">
                   {costModal!.estimate.free
-                    ? "무료 진단 확인"
+                    ? " 진단 확인"
                     : "예상 비용 확인"}
                 </p>
                 <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
@@ -1092,7 +1093,7 @@ export function AiRepairCenter() {
                 <>
                   <p className="text-2xl font-black text-positive">$0.00</p>
                   <p className="mt-1 text-xs font-bold text-positive">
-                    OpenAI 호출 없는 무료 검사
+                    OpenAI 호출 없는  검사
                   </p>
                 </>
               ) : (
@@ -1146,7 +1147,7 @@ export function AiRepairCenter() {
                 {busyAction === "confirm-cost"
                   ? "처리 중..."
                   : costModal!.estimate.free
-                    ? "무료 진단 시작"
+                    ? " 진단 시작"
                     : "확인 후 시작"}
               </button>
             </div>
