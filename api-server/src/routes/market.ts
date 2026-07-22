@@ -8,6 +8,7 @@ import { ThemesService } from '../services/themes.service';
 import { SectorPopularService } from '../services/sector-popular.service';
 import { SignalService } from '../services/signal.service';
 import { RecommendationService } from '../services/recommendation.service';
+import { MarketNewsBriefingService, type NewsBriefingMarket } from '../services/market-news-briefing.service';
 
 const router: IRouter = Router();
 
@@ -259,6 +260,30 @@ router.get('/market/summary', async (_req, res) => {
   } catch (error) {
     console.error('market summary error:', error);
     return res.status(502).json({ ok: false, items: [], error: 'SUMMARY_PROVIDER_ERROR' });
+  }
+});
+
+
+router.get('/market/news-briefing', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  const raw = String(req.query.market ?? 'KR').toUpperCase();
+  const market: NewsBriefingMarket = raw === 'US' || raw === 'COIN' ? raw : 'KR';
+
+  try {
+    return res.json(await MarketNewsBriefingService.getBriefing(market));
+  } catch (error) {
+    console.error('market news briefing error:', error);
+    return res.status(502).json({
+      market,
+      asOf: new Date().toISOString(),
+      stance: '중립',
+      headline: '오늘의 시장 뉴스를 불러오지 못했습니다.',
+      summary: '뉴스 공급기관의 응답이 지연되고 있습니다.',
+      reasons: [],
+      issues: [],
+      aiUsed: false,
+      error: 'MARKET_NEWS_BRIEFING_ERROR',
+    });
   }
 });
 
