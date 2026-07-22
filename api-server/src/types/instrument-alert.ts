@@ -54,7 +54,7 @@ export function isAlertAssetType(value: unknown): value is AlertAssetType {
 
 export function allowedAlertTypes(role: MemberRole): readonly InstrumentAlertType[] {
   if (role === 'admin') return ALERT_TYPES;
-  if (role === 'member') return MEMBER_ALERT_TYPES;
+  if (role === 'user') return MEMBER_ALERT_TYPES;
   return BASIC_ALERT_TYPES;
 }
 

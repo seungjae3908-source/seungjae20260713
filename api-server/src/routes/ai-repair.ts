@@ -1,10 +1,14 @@
+// AI_REPAIR_COST_CONSENT_V1
 import { Router, type Response } from 'express';
 import { requireAdmin, requireMember, type AuthenticatedRequest } from '../middleware/auth';
 import {
+  approveAiRepairCost,
   approveAiRepairJob,
   cancelAiRepairJob,
   createAiRepairJob,
+  estimateAiRepairCost,
   getAiRepairConfig,
+  getAiRepairCostSummary,
   getAiRepairJob,
   listAiRepairJobs,
 } from '../services/ai-repair.service';
@@ -31,6 +35,48 @@ router.get('/config', (_req, res) => {
     res.json({ ok: true, config: getAiRepairConfig() });
   } catch (error) {
     fail(res, error, 500);
+  }
+});
+
+
+router.get('/costs', (req, res) => {
+  try {
+    const month = String(req.query.month ?? '').trim();
+    res.json({
+      ok: true,
+      summary: getAiRepairCostSummary(month || undefined),
+    });
+  } catch (error) {
+    fail(res, error, 500);
+  }
+});
+
+router.post('/estimate', (req, res) => {
+  try {
+    const kind = String(
+      req.body?.kind ?? 'diagnosis',
+    ) as AiRepairJobKind;
+
+    if (kind !== 'diagnosis' && kind !== 'improvement') {
+      throw new Error('지원하지 않는 작업 종류입니다.');
+    }
+
+    const request = String(req.body?.request ?? '')
+      .trim()
+      .slice(0, 4_000);
+
+    const jobId =
+      String(req.body?.jobId ?? '').trim() || undefined;
+
+    const estimate = estimateAiRepairCost({
+      kind,
+      request,
+      jobId,
+    });
+
+    res.json({ ok: true, estimate });
+  } catch (error) {
+    fail(res, error);
   }
 });
 
@@ -70,7 +116,23 @@ router.post('/jobs', (req: AuthenticatedRequest, res) => {
       kind,
       request,
       createdBy: req.member?.id ?? '',
+      costConsent: req.body?.costConsent === true,
     });
+    res.status(202).json({ ok: true, job });
+  } catch (error) {
+    fail(res, error);
+  }
+});
+
+
+router.post('/jobs/:id/approve-ai', (req: AuthenticatedRequest, res) => {
+  try {
+    const job = approveAiRepairCost(
+      String(req.params.id),
+      req.body?.costConsent === true,
+      req.member?.id ?? '',
+    );
+
     res.status(202).json({ ok: true, job });
   } catch (error) {
     fail(res, error);

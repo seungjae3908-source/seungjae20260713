@@ -1,3 +1,4 @@
+// AI_REPAIR_COST_CONSENT_V1
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bot,
@@ -5,6 +6,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleAlert,
+  DollarSign,
   FileCode2,
   LoaderCircle,
   Play,
@@ -24,6 +26,7 @@ type JobStatus =
   | "diagnosing"
   | "repairing"
   | "verifying"
+  | "awaiting_ai_approval"
   | "awaiting_approval"
   | "applying"
   | "completed"
@@ -72,6 +75,8 @@ type RepairJob = {
   branch?: string;
   commitSha?: string;
   approvalPhrase?: string;
+  costEstimate?: CostEstimate;
+  actualCostUsd?: number;
   error?: string;
 };
 
@@ -86,6 +91,47 @@ type RepairConfig = {
   checks: Array<{ name: string; label: string }>;
   healthUrl: string | null;
 };
+
+
+type CostEstimate = {
+  currency: "USD";
+  model: string;
+  free: boolean;
+  minUsd: number;
+  likelyUsd: number;
+  maxUsd: number;
+  maxAttempts: number;
+  note: string;
+};
+
+type CostSummary = {
+  month: string;
+  currency: "USD";
+  estimatedCostUsd: number;
+  calls: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  modelRates: {
+    model: string;
+    inputUsdPerMillion: number;
+    cachedInputUsdPerMillion: number;
+    outputUsdPerMillion: number;
+  };
+};
+
+type CostModalState = {
+  mode: "create" | "approve-ai";
+  kind: "diagnosis" | "improvement";
+  request: string;
+  jobId?: string;
+  estimate: CostEstimate;
+};
+
+function formatUsd(value: number): string {
+  if (value === 0) return "$0.00";
+  return `$${value < 0.1 ? value.toFixed(3) : value.toFixed(2)}`;
+}
 
 const ACTIVE = new Set<JobStatus>([
   "queued",
@@ -102,7 +148,8 @@ const STATUS_LABEL: Record<JobStatus, string> = {
   diagnosing: "오류 진단 중",
   repairing: "수정 중",
   verifying: "정상 작동 검사 중",
-  awaiting_approval: "승인 대기",
+  awaiting_ai_approval: "AI 비용 승인 대기",
+  awaiting_approval: "운영 승인 대기",
   applying: "운영 적용 중",
   completed: "완료",
   failed: "실패",
@@ -111,7 +158,9 @@ const STATUS_LABEL: Record<JobStatus, string> = {
 
 function statusTone(status: JobStatus): string {
   if (status === "completed") return "border-positive/40 bg-positive/10 text-positive";
-  if (status === "awaiting_approval") return "border-warning/50 bg-warning/10 text-warning";
+  if (status === "awaiting_ai_approval" || status === "awaiting_approval") {
+    return "border-warning/50 bg-warning/10 text-warning";
+  }
   if (status === "failed" || status === "cancelled") return "border-destructive/40 bg-destructive/10 text-destructive";
   return "border-primary/40 bg-primary/10 text-primary";
 }
@@ -119,7 +168,9 @@ function statusTone(status: JobStatus): string {
 function statusIcon(status: JobStatus) {
   if (ACTIVE.has(status)) return <LoaderCircle className="h-4 w-4 animate-spin" />;
   if (status === "completed") return <CheckCircle2 className="h-4 w-4" />;
-  if (status === "awaiting_approval") return <ShieldCheck className="h-4 w-4" />;
+  if (status === "awaiting_ai_approval" || status === "awaiting_approval") {
+    return <ShieldCheck className="h-4 w-4" />;
+  }
   if (status === "failed") return <XCircle className="h-4 w-4" />;
   return <CircleAlert className="h-4 w-4" />;
 }
@@ -179,6 +230,9 @@ export function AiRepairCenter() {
   const [approvalInput, setApprovalInput] = useState<Record<string, string>>({});
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [notice, setNotice] = useState("서버 연결 확인 중");
+  const [costModal, setCostModal] = useState<CostModalState | null>(null);
+  const [costOpen, setCostOpen] = useState(false);
+  const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
 
   const load = useCallback(async (quiet = false) => {
     try {
@@ -205,26 +259,150 @@ export function AiRepairCenter() {
     [jobs],
   );
 
-  const submit = async (kind: "diagnosis" | "improvement") => {
-    if (kind === "improvement" && request.trim().length < 4) {
+  const loadCosts = useCallback(async () => {
+    const body = await apiJson<{ ok: true; summary: CostSummary }>(
+      "/api/admin/ai-repair/costs",
+    );
+    setCostSummary(body.summary);
+  }, []);
+
+  const openCostEstimate = async (
+    kind: "diagnosis" | "improvement",
+    job?: RepairJob,
+  ) => {
+    const selectedRequest =
+      kind === "improvement"
+        ? request.trim()
+        : job?.request ?? "";
+
+    if (kind === "improvement" && selectedRequest.length < 4) {
       setNotice("개선할 내용을 네 글자 이상 입력해 주세요.");
       return;
     }
-    const key = `create-${kind}`;
+
+    const key = `estimate-${job?.id ?? kind}`;
     setBusyAction(key);
+
     try {
-      const body = await apiJson<{ ok: true; job: RepairJob }>("/api/admin/ai-repair/jobs", {
+      const body = await apiJson<{
+        ok: true;
+        estimate: CostEstimate;
+      }>("/api/admin/ai-repair/estimate", {
         method: "POST",
-        body: JSON.stringify({ kind, request: kind === "improvement" ? request.trim() : "" }),
+        body: JSON.stringify({
+          kind,
+          request: selectedRequest,
+          jobId: job?.id,
+        }),
       });
-      setJobs((current) => [body.job, ...current.filter((item) => item.id !== body.job.id)]);
-      setExpandedId(body.job.id);
-      if (kind === "improvement") setRequest("");
-      setNotice("작업이 Vultr 대기열에 접수되었습니다. 휴대폰을 꺼도 계속 실행됩니다.");
+
+      setCostModal({
+        mode: job ? "approve-ai" : "create",
+        kind,
+        request: selectedRequest,
+        jobId: job?.id,
+        estimate: body.estimate,
+      });
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "작업 접수에 실패했습니다.");
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "예상 비용 계산에 실패했습니다.",
+      );
     } finally {
       setBusyAction(null);
+    }
+  };
+
+  const confirmCostAction = async () => {
+    const modal = costModal;
+
+    if (!modal) return;
+
+    setBusyAction("confirm-cost");
+
+    try {
+      if (modal.mode === "create") {
+        const body = await apiJson<{
+          ok: true;
+          job: RepairJob;
+        }>("/api/admin/ai-repair/jobs", {
+          method: "POST",
+          body: JSON.stringify({
+            kind: modal.kind,
+            request: modal.request,
+            costConsent: !modal.estimate.free,
+          }),
+        });
+
+        setJobs((current) => [
+          body.job,
+          ...current.filter((item) => item.id !== body.job.id),
+        ]);
+        setExpandedId(body.job.id);
+
+        if (modal.kind === "improvement") {
+          setRequest("");
+        }
+
+        setNotice(
+          modal.estimate.free
+            ? "무료 진단이 시작되었습니다. 오류가 발견돼도 AI 수정은 별도 승인 전까지 실행되지 않습니다."
+            : "예상 비용 확인 후 AI 개선 작업이 시작되었습니다.",
+        );
+      } else if (modal.jobId) {
+        const body = await apiJson<{
+          ok: true;
+          job: RepairJob;
+        }>(
+          `/api/admin/ai-repair/jobs/${encodeURIComponent(modal.jobId)}/approve-ai`,
+          {
+            method: "POST",
+            body: JSON.stringify({ costConsent: true }),
+          },
+        );
+
+        setJobs((current) =>
+          current.map((item) =>
+            item.id === body.job.id ? body.job : item,
+          ),
+        );
+
+        setNotice(
+          "예상 비용을 확인했습니다. 유료 AI 수정 작업이 시작되었습니다.",
+        );
+      }
+
+      setCostModal(null);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "비용 승인 작업에 실패했습니다.",
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const toggleCosts = async () => {
+    if (!costOpen) {
+      setBusyAction("load-costs");
+
+      try {
+        await loadCosts();
+        setCostOpen(true);
+      } catch (error) {
+        setNotice(
+          error instanceof Error
+            ? error.message
+            : "비용 내역 조회에 실패했습니다.",
+        );
+      } finally {
+        setBusyAction(null);
+      }
+    } else {
+      setCostOpen(false);
     }
   };
 
@@ -295,12 +473,12 @@ export function AiRepairCenter() {
           <div>
             <p className="text-xs font-extrabold">전체 오류 진단</p>
             <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-              TypeScript와 프로덕션 빌드를 검사하고, 실패하면 최대 {config?.maxAttempts ?? 5}회까지 안전 수정합니다.
+              무료로 TypeScript·빌드·격리 서버만 검사합니다. 오류가 발견돼도 유료 AI 수정은 별도 승인 전까지 실행하지 않습니다.
             </p>
           </div>
           <button
             type="button"
-            onClick={() => void submit("diagnosis")}
+            onClick={() => void openCostEstimate("diagnosis")}
             disabled={!config?.enabled || busyAction !== null}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-extrabold text-primary-foreground disabled:opacity-50"
           >
@@ -309,7 +487,7 @@ export function AiRepairCenter() {
             ) : (
               <Play className="h-4 w-4" />
             )}
-            진단 시작
+            무료 진단 시작
           </button>
         </div>
       </div>
@@ -330,7 +508,7 @@ export function AiRepairCenter() {
           <span className="text-[10px] font-bold text-muted-foreground">{request.length}/4,000자</span>
           <button
             type="button"
-            onClick={() => void submit("improvement")}
+            onClick={() => void openCostEstimate("improvement")}
             disabled={!config?.enabled || request.trim().length < 4 || busyAction !== null}
             className="inline-flex items-center gap-1.5 rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-extrabold text-primary disabled:opacity-50"
           >
@@ -339,7 +517,7 @@ export function AiRepairCenter() {
             ) : (
               <Wrench className="h-4 w-4" />
             )}
-            개선 작업 시작
+            비용 확인 후 시작
           </button>
         </div>
       </div>
@@ -458,6 +636,35 @@ export function AiRepairCenter() {
                       </p>
                     )}
 
+                    {job.status === "awaiting_ai_approval" && (
+                      <div className="rounded-2xl border border-warning/50 bg-warning/10 p-3">
+                        <p className="flex items-center gap-1.5 text-xs font-extrabold text-warning">
+                          <DollarSign className="h-4 w-4" />
+                          무료 진단 완료 · 유료 AI 수정은 별도 승인 필요
+                        </p>
+
+                        <p className="mt-1 break-keep text-[10px] leading-relaxed text-muted-foreground">
+                          현재 검사 결과만 저장됐습니다. 아래 버튼을 눌러 예상 비용을 확인한 뒤에만 OpenAI 수정 작업이 시작됩니다.
+                        </p>
+
+                        {job.costEstimate && (
+                          <p className="mt-2 rounded-xl bg-background p-2 text-center text-xs font-extrabold">
+                            예상 {formatUsd(job.costEstimate.minUsd)}~{formatUsd(job.costEstimate.maxUsd)}
+                          </p>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => void openCostEstimate(job.kind, job)}
+                          disabled={busyAction !== null}
+                          className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-warning px-3 py-2.5 text-xs font-extrabold text-warning-foreground disabled:opacity-50"
+                        >
+                          <DollarSign className="h-4 w-4" />
+                          예상 비용 확인 후 AI 수정 시작
+                        </button>
+                      </div>
+                    )}
+
                     {job.status === "awaiting_approval" && (
                       <div className="rounded-2xl border border-warning/50 bg-warning/10 p-3">
                         <p className="flex items-center gap-1.5 text-xs font-extrabold text-warning">
@@ -503,6 +710,157 @@ export function AiRepairCenter() {
           })
         )}
       </div>
+
+      <div className="mt-4 rounded-2xl border border-card-border bg-background p-3">
+        <button
+          type="button"
+          onClick={() => void toggleCosts()}
+          disabled={busyAction === "load-costs"}
+          className="flex w-full items-center justify-between gap-3 text-left"
+        >
+          <span className="flex items-center gap-2 text-xs font-extrabold">
+            <DollarSign className="h-4 w-4 text-primary" />
+            발생 비용 보기
+          </span>
+
+          <span className="text-xs font-extrabold text-primary">
+            {costSummary
+              ? formatUsd(costSummary.estimatedCostUsd)
+              : "월 누적 확인"}
+          </span>
+        </button>
+
+        {costOpen && costSummary && (
+          <div className="mt-3 space-y-2 border-t border-card-border pt-3 text-xs">
+            <div className="flex items-center justify-between rounded-xl bg-card p-3">
+              <span className="font-bold text-muted-foreground">
+                {costSummary.month} 월 누적 예상금액
+              </span>
+              <span className="text-lg font-black text-primary">
+                {formatUsd(costSummary.estimatedCostUsd)}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-[10px]">
+              <div className="rounded-xl bg-card p-2">
+                <p className="text-muted-foreground">OpenAI 호출</p>
+                <p className="mt-1 font-extrabold">
+                  {costSummary.calls.toLocaleString()}회
+                </p>
+              </div>
+
+              <div className="rounded-xl bg-card p-2">
+                <p className="text-muted-foreground">입력 / 출력 토큰</p>
+                <p className="mt-1 font-extrabold">
+                  {costSummary.inputTokens.toLocaleString()} /
+                  {" "}
+                  {costSummary.outputTokens.toLocaleString()}
+                </p>
+              </div>
+            </div>
+
+            <p className="break-keep text-[10px] leading-relaxed text-muted-foreground">
+              실제 API 응답의 사용 토큰을 기준으로 계산한 예상금액입니다.
+              최종 청구액은 OpenAI 사용내역과 소수점 처리에 따라 조금 다를 수 있습니다.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => void loadCosts()}
+              className="w-full rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-extrabold text-primary"
+            >
+              비용 새로고침
+            </button>
+          </div>
+        )}
+      </div>
+
+      {costModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-3xl border border-card-border bg-card p-5 shadow-2xl">
+            <div className="flex items-center gap-2">
+              <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                <DollarSign className="h-5 w-5" />
+              </span>
+
+              <div>
+                <p className="text-sm font-black">
+                  {costModal.estimate.free
+                    ? "무료 진단 확인"
+                    : "예상 비용 확인"}
+                </p>
+                <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
+                  모델: {costModal.estimate.model}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl bg-background p-4 text-center">
+              {costModal.estimate.free ? (
+                <>
+                  <p className="text-2xl font-black text-positive">$0.00</p>
+                  <p className="mt-1 text-xs font-bold text-positive">
+                    OpenAI 호출 없는 무료 검사
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs font-bold text-muted-foreground">
+                    가장 가능성 높은 예상금액
+                  </p>
+                  <p className="mt-1 text-2xl font-black text-primary">
+                    {formatUsd(costModal.estimate.likelyUsd)}
+                  </p>
+                  <p className="mt-2 text-xs font-extrabold">
+                    예상 범위 {formatUsd(costModal.estimate.minUsd)}
+                    {" ~ "}
+                    {formatUsd(costModal.estimate.maxUsd)}
+                  </p>
+                </>
+              )}
+            </div>
+
+            {costModal.request && (
+              <div className="mt-3 max-h-28 overflow-y-auto rounded-xl border border-card-border bg-background p-3">
+                <p className="text-[10px] font-extrabold text-muted-foreground">
+                  요청 내용
+                </p>
+                <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed">
+                  {costModal.request}
+                </p>
+              </div>
+            )}
+
+            <p className="mt-3 break-keep text-[11px] leading-relaxed text-muted-foreground">
+              {costModal.estimate.note}
+            </p>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setCostModal(null)}
+                disabled={busyAction === "confirm-cost"}
+                className="rounded-xl border border-card-border px-3 py-3 text-xs font-extrabold disabled:opacity-50"
+              >
+                취소
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void confirmCostAction()}
+                disabled={busyAction === "confirm-cost"}
+                className="rounded-xl bg-primary px-3 py-3 text-xs font-extrabold text-primary-foreground disabled:opacity-50"
+              >
+                {busyAction === "confirm-cost"
+                  ? "처리 중..."
+                  : costModal.estimate.free
+                    ? "무료 진단 시작"
+                    : "확인 후 시작"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
