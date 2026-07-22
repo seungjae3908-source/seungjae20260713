@@ -1,4 +1,5 @@
 // AI_REPAIR_COST_CONSENT_V1
+// AI_REPAIR_HISTORY_SETTINGS_V1
 import { Router, type Response } from 'express';
 import { requireAdmin, requireMember, type AuthenticatedRequest } from '../middleware/auth';
 import {
@@ -8,9 +9,12 @@ import {
   createAiRepairJob,
   estimateAiRepairCost,
   getAiRepairConfig,
+  getAiRepairCostHistoryPage,
   getAiRepairCostSummary,
+  getAiRepairFeatureSettings,
   getAiRepairJob,
-  listAiRepairJobs,
+  listAiRepairJobsPage,
+  updateAiRepairFeatureSettings,
 } from '../services/ai-repair.service';
 import type { AiRepairJobKind } from '../types/ai-repair';
 
@@ -39,12 +43,57 @@ router.get('/config', (_req, res) => {
 });
 
 
+
+router.get('/settings', (_req, res) => {
+  try {
+    res.json({
+      ok: true,
+      settings: getAiRepairFeatureSettings(),
+    });
+  } catch (error) {
+    fail(res, error, 500);
+  }
+});
+
+router.patch('/settings', (req, res) => {
+  try {
+    const settings = updateAiRepairFeatureSettings({
+      freeDiagnosisEnabled:
+        typeof req.body?.freeDiagnosisEnabled === 'boolean'
+          ? req.body.freeDiagnosisEnabled
+          : undefined,
+      paidDiagnosisEnabled:
+        typeof req.body?.paidDiagnosisEnabled === 'boolean'
+          ? req.body.paidDiagnosisEnabled
+          : undefined,
+      improvementEnabled:
+        typeof req.body?.improvementEnabled === 'boolean'
+          ? req.body.improvementEnabled
+          : undefined,
+    });
+
+    res.json({ ok: true, settings });
+  } catch (error) {
+    fail(res, error);
+  }
+});
+
 router.get('/costs', (req, res) => {
   try {
     const month = String(req.query.month ?? '').trim();
+    const page = Number(req.query.page ?? 1);
+    const pageSize = Number(req.query.pageSize ?? 10);
+
+    const history = getAiRepairCostHistoryPage(
+      page,
+      pageSize,
+    );
+
     res.json({
       ok: true,
       summary: getAiRepairCostSummary(month || undefined),
+      history: history.items,
+      pagination: history.pagination,
     });
   } catch (error) {
     fail(res, error, 500);
@@ -72,6 +121,7 @@ router.post('/estimate', (req, res) => {
       kind,
       request,
       jobId,
+      paid: req.body?.paid === true,
     });
 
     res.json({ ok: true, estimate });
@@ -82,9 +132,24 @@ router.post('/estimate', (req, res) => {
 
 router.get('/jobs', (req, res) => {
   try {
-    const requested = Number(req.query.limit ?? 30);
-    const limit = Number.isFinite(requested) ? Math.max(1, Math.min(100, Math.floor(requested))) : 30;
-    res.json({ ok: true, jobs: listAiRepairJobs(limit) });
+    const page = Number(req.query.page ?? 1);
+    const pageSize = Number(
+      req.query.pageSize ??
+      req.query.limit ??
+      10,
+    );
+
+    const result = listAiRepairJobsPage(
+      page,
+      pageSize,
+    );
+
+    res.json({
+      ok: true,
+      jobs: result.jobs,
+      pagination: result.pagination,
+      activeCount: result.activeCount,
+    });
   } catch (error) {
     fail(res, error, 500);
   }
@@ -117,6 +182,7 @@ router.post('/jobs', (req: AuthenticatedRequest, res) => {
       request,
       createdBy: req.member?.id ?? '',
       costConsent: req.body?.costConsent === true,
+      paidDiagnosis: req.body?.paidDiagnosis === true,
     });
     res.status(202).json({ ok: true, job });
   } catch (error) {

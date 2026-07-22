@@ -1,5 +1,6 @@
 // AI_REPAIR_COST_CONSENT_V1
 // AI_REPAIR_LIVE_DIAGNOSTIC_V1
+// AI_REPAIR_HISTORY_SETTINGS_V1
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bot,
@@ -19,6 +20,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { authorizedFetch } from "@/lib/auth-fetch";
+import { AiRepairAdminPanels } from "@/components/ai-repair-admin-panels";
 import { cn } from "@/lib/utils";
 
 type JobStatus =
@@ -105,6 +107,12 @@ type RepairConfig = {
   repoPath: string | null;
   baseBranch: string;
   maxAttempts: number;
+  features: {
+    freeDiagnosisEnabled: boolean;
+    paidDiagnosisEnabled: boolean;
+    improvementEnabled: boolean;
+    updatedAt: string;
+  };
   checks: Array<{ name: string; label: string }>;
   healthUrl: string | null;
 };
@@ -142,7 +150,16 @@ type CostModalState = {
   kind: "diagnosis" | "improvement";
   request: string;
   jobId?: string;
+  paidDiagnosis?: boolean;
   estimate: CostEstimate;
+};
+
+
+type Pagination = {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
 };
 
 function formatUsd(value: number): string {
@@ -250,20 +267,37 @@ export function AiRepairCenter() {
   const [costModal, setCostModal] = useState<CostModalState | null>(null);
   const [costOpen, setCostOpen] = useState(false);
   const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
+  const [jobsPage, setJobsPage] = useState(1);
+  const [jobsPagination, setJobsPagination] = useState<Pagination>({
+    page: 1,
+    pageSize: 10,
+    total: 0,
+    totalPages: 1,
+  });
+  const [globalActiveCount, setGlobalActiveCount] = useState(0);
 
   const load = useCallback(async (quiet = false) => {
     try {
       const [configBody, jobsBody] = await Promise.all([
         apiJson<{ ok: true; config: RepairConfig }>("/api/admin/ai-repair/config"),
-        apiJson<{ ok: true; jobs: RepairJob[] }>("/api/admin/ai-repair/jobs?limit=20"),
+        apiJson<{
+          ok: true;
+          jobs: RepairJob[];
+          pagination: Pagination;
+          activeCount: number;
+        }>(
+          `/api/admin/ai-repair/jobs?page=${jobsPage}&pageSize=10`,
+        ),
       ]);
       setConfig(configBody.config);
       setJobs(jobsBody.jobs);
+      setJobsPagination(jobsBody.pagination);
+      setGlobalActiveCount(jobsBody.activeCount);
       if (!quiet) setNotice("Vultr 작업 서버와 연결되었습니다.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "AI 복구센터 연결에 실패했습니다.");
     }
-  }, []);
+  }, [jobsPage]);
 
   useEffect(() => {
     void load();
@@ -272,8 +306,8 @@ export function AiRepairCenter() {
   }, [load]);
 
   const activeCount = useMemo(
-    () => jobs.filter((job) => ACTIVE.has(job.status)).length,
-    [jobs],
+    () => globalActiveCount,
+    [globalActiveCount],
   );
 
   const loadCosts = useCallback(async () => {
@@ -286,6 +320,7 @@ export function AiRepairCenter() {
   const openCostEstimate = async (
     kind: "diagnosis" | "improvement",
     job?: RepairJob,
+    paidDiagnosis = false,
   ) => {
     const selectedRequest =
       kind === "improvement"
@@ -310,6 +345,7 @@ export function AiRepairCenter() {
           kind,
           request: selectedRequest,
           jobId: job?.id,
+          paid: paidDiagnosis,
         }),
       });
 
@@ -318,6 +354,7 @@ export function AiRepairCenter() {
         kind,
         request: selectedRequest,
         jobId: job?.id,
+        paidDiagnosis,
         estimate: body.estimate,
       });
     } catch (error) {
@@ -349,6 +386,7 @@ export function AiRepairCenter() {
             kind: modal.kind,
             request: modal.request,
             costConsent: !modal.estimate.free,
+            paidDiagnosis: modal.paidDiagnosis === true,
           }),
         });
 
@@ -357,6 +395,7 @@ export function AiRepairCenter() {
           ...current.filter((item) => item.id !== body.job.id),
         ]);
         setExpandedId(body.job.id);
+        setJobsPage(1);
 
         if (modal.kind === "improvement") {
           setRequest("");
@@ -365,7 +404,9 @@ export function AiRepairCenter() {
         setNotice(
           modal.estimate.free
             ? "무료 진단이 시작되었습니다. 오류가 발견돼도 AI 수정은 별도 승인 전까지 실행되지 않습니다."
-            : "예상 비용 확인 후 AI 개선 작업이 시작되었습니다.",
+            : modal.kind === "diagnosis"
+              ? "예상 비용 확인 후 유료 진단·자동 복구가 시작되었습니다."
+              : "예상 비용 확인 후 AI 개선 작업이 시작되었습니다.",
         );
       } else if (modal.jobId) {
         const body = await apiJson<{
@@ -485,59 +526,104 @@ export function AiRepairCenter() {
         <ConfigBadge ok={config?.deploymentReady === true} label="승인 배포" />
       </div>
 
-      <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
-        <div className="flex items-center justify-between gap-2">
+      {(config?.features?.freeDiagnosisEnabled !== false ||
+        config?.features?.paidDiagnosisEnabled !== false) && (
+        <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
           <div>
             <p className="text-xs font-extrabold">전체 오류 진단</p>
             <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-              무료로 TypeScript·빌드·격리 서버만 검사합니다. 오류가 발견돼도 유료 AI 수정은 별도 승인 전까지 실행하지 않습니다.
+              무료 점검 또는 비용 확인 후 AI 자동 복구까지 진행하는 유료 진단을 선택합니다.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => void openCostEstimate("diagnosis")}
-            disabled={!config?.enabled || busyAction !== null}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-extrabold text-primary-foreground disabled:opacity-50"
-          >
-            {busyAction === "create-diagnosis" ? (
-              <LoaderCircle className="h-4 w-4 animate-spin" />
-            ) : (
-              <Play className="h-4 w-4" />
-            )}
-            무료 진단 시작
-          </button>
-        </div>
-      </div>
 
-      <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
-        <div className="mb-2 flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-primary" />
-          <p className="text-xs font-extrabold">개선 요청</p>
-        </div>
-        <textarea
-          value={request}
-          onChange={(event) => setRequest(event.target.value.slice(0, 4_000))}
-          rows={4}
-          placeholder="예: PC 차트는 더 크게 보이게 하고 모바일에서는 외부 창 버튼을 숨겨줘."
-          className="w-full resize-y rounded-xl border border-card-border bg-card px-3 py-2 text-xs leading-relaxed outline-none focus:border-primary"
-        />
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="text-[10px] font-bold text-muted-foreground">{request.length}/4,000자</span>
-          <button
-            type="button"
-            onClick={() => void openCostEstimate("improvement")}
-            disabled={!config?.enabled || request.trim().length < 4 || busyAction !== null}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-extrabold text-primary disabled:opacity-50"
-          >
-            {busyAction === "create-improvement" ? (
-              <LoaderCircle className="h-4 w-4 animate-spin" />
-            ) : (
-              <Wrench className="h-4 w-4" />
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {config?.features?.freeDiagnosisEnabled !== false && (
+              <button
+                type="button"
+                onClick={() =>
+                  void openCostEstimate(
+                    "diagnosis",
+                    undefined,
+                    false,
+                  )
+                }
+                disabled={!config?.enabled || busyAction !== null}
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-positive/40 bg-positive/10 px-3 py-2.5 text-xs font-extrabold text-positive disabled:opacity-50"
+              >
+                {busyAction === "estimate-diagnosis" ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Play className="h-4 w-4" />
+                )}
+                무료 진단
+              </button>
             )}
-            비용 확인 후 시작
-          </button>
+
+            {config?.features?.paidDiagnosisEnabled !== false && (
+              <button
+                type="button"
+                onClick={() =>
+                  void openCostEstimate(
+                    "diagnosis",
+                    undefined,
+                    true,
+                  )
+                }
+                disabled={
+                  !config?.enabled ||
+                  !config?.aiConfigured ||
+                  busyAction !== null
+                }
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-primary px-3 py-2.5 text-xs font-extrabold text-primary-foreground disabled:opacity-50"
+              >
+                <DollarSign className="h-4 w-4" />
+                유료 진단·자동 복구
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
+
+      {config?.features?.improvementEnabled !== false && (
+        <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <p className="text-xs font-extrabold">개선 요청</p>
+          </div>
+
+          <textarea
+            value={request}
+            onChange={(event) =>
+              setRequest(event.target.value.slice(0, 4_000))
+            }
+            rows={4}
+            placeholder="예: PC 차트는 더 크게 보이게 하고 모바일에서는 외부 창 버튼을 숨겨줘."
+            className="w-full resize-y rounded-xl border border-card-border bg-card px-3 py-2 text-xs leading-relaxed outline-none focus:border-primary"
+          />
+
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold text-muted-foreground">
+              {request.length}/4,000자
+            </span>
+
+            <button
+              type="button"
+              onClick={() =>
+                void openCostEstimate("improvement")
+              }
+              disabled={
+                !config?.enabled ||
+                request.trim().length < 4 ||
+                busyAction !== null
+              }
+              className="inline-flex items-center gap-1.5 rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-extrabold text-primary disabled:opacity-50"
+            >
+              <Wrench className="h-4 w-4" />
+              비용 확인 후 시작
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="mt-3 flex items-center justify-between gap-2 rounded-xl bg-secondary/60 px-3 py-2">
         <p className="break-keep text-[11px] font-bold leading-relaxed text-muted-foreground">
@@ -553,6 +639,19 @@ export function AiRepairCenter() {
         </button>
       </div>
 
+      <div className="mt-4 flex items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-extrabold">점검 내역</p>
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
+            최신 작업부터 한 페이지에 10개씩 표시합니다.
+          </p>
+        </div>
+
+        <span className="rounded-lg bg-secondary px-2 py-1 text-[10px] font-extrabold">
+          총 {jobsPagination.total}건
+        </span>
+      </div>
+
       <div className="mt-3 space-y-2">
         {jobs.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-card-border p-5 text-center text-xs text-muted-foreground">
@@ -561,6 +660,8 @@ export function AiRepairCenter() {
         ) : (
           jobs.map((job) => {
             const expanded = expandedId === job.id;
+            const latestAttempt =
+              job.attempts[job.attempts.length - 1];
             return (
               <article key={job.id} className="overflow-hidden rounded-2xl border border-card-border bg-background">
                 <button
@@ -673,6 +774,78 @@ export function AiRepairCenter() {
                       </div>
                     )}
 
+                    {!ACTIVE.has(job.status) && (
+                      <div className="rounded-2xl border border-primary/30 bg-primary/5 p-3">
+                        <p className="text-xs font-extrabold">
+                          전체 진단 결과
+                        </p>
+
+                        <p className="mt-1 break-keep text-xs leading-relaxed">
+                          {job.message}
+                        </p>
+
+                        <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[10px]">
+                          <div className="rounded-xl bg-background p-2">
+                            <p className="text-muted-foreground">점검</p>
+                            <p className="mt-1 font-black">
+                              {job.checks.length}개
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl bg-positive/10 p-2">
+                            <p className="text-positive">정상</p>
+                            <p className="mt-1 font-black text-positive">
+                              {job.checks.filter((check) => check.ok).length}개
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl bg-destructive/10 p-2">
+                            <p className="text-destructive">오류</p>
+                            <p className="mt-1 font-black text-destructive">
+                              {job.checks.filter((check) => !check.ok).length}개
+                            </p>
+                          </div>
+                        </div>
+
+                        {latestAttempt?.summary && (
+                          <p className="mt-3 whitespace-pre-wrap break-words rounded-xl bg-background p-3 text-xs leading-relaxed">
+                            {latestAttempt.summary}
+                          </p>
+                        )}
+
+                        {(latestAttempt?.findings?.length ?? 0) > 0 && (
+                          <div className="mt-3 rounded-xl bg-background p-3">
+                            <p className="text-[10px] font-extrabold text-muted-foreground">
+                              주요 발견 내용
+                            </p>
+
+                            <div className="mt-2 space-y-1">
+                              {latestAttempt.findings.map(
+                                (finding, index) => (
+                                  <p
+                                    key={`${job.id}-finding-${index}`}
+                                    className="break-keep text-xs leading-relaxed"
+                                  >
+                                    {index + 1}. {finding}
+                                  </p>
+                                ),
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="mt-3 flex items-center justify-between rounded-xl bg-background px-3 py-2 text-xs">
+                          <span className="font-bold text-muted-foreground">
+                            이 작업 발생 예상비용
+                          </span>
+
+                          <span className="font-black text-primary">
+                            {formatUsd(job.actualCostUsd ?? 0)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
                     {job.error && (
                       <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
                         <p className="font-extrabold">오류</p>
@@ -721,7 +894,8 @@ export function AiRepairCenter() {
                       </p>
                     )}
 
-                    {job.status === "awaiting_ai_approval" && (
+                    {job.status === "awaiting_ai_approval" &&
+                      config?.features?.paidDiagnosisEnabled !== false && (
                       <div className="rounded-2xl border border-warning/50 bg-warning/10 p-3">
                         <p className="flex items-center gap-1.5 text-xs font-extrabold text-warning">
                           <DollarSign className="h-4 w-4" />
@@ -796,6 +970,45 @@ export function AiRepairCenter() {
         )}
       </div>
 
+      {jobsPagination.totalPages > 1 && (
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <button
+            type="button"
+            disabled={jobsPagination.page <= 1}
+            onClick={() => {
+              setExpandedId(null);
+              setJobsPage((page) => Math.max(1, page - 1));
+            }}
+            className="rounded-lg border border-card-border px-3 py-2 text-[10px] font-extrabold disabled:opacity-40"
+          >
+            이전
+          </button>
+
+          <span className="text-[10px] font-extrabold text-muted-foreground">
+            {jobsPagination.page} / {jobsPagination.totalPages} 페이지
+          </span>
+
+          <button
+            type="button"
+            disabled={
+              jobsPagination.page >= jobsPagination.totalPages
+            }
+            onClick={() => {
+              setExpandedId(null);
+              setJobsPage((page) =>
+                Math.min(
+                  jobsPagination.totalPages,
+                  page + 1,
+                ),
+              );
+            }}
+            className="rounded-lg border border-card-border px-3 py-2 text-[10px] font-extrabold disabled:opacity-40"
+          >
+            다음
+          </button>
+        </div>
+      )}
+
       <div className="mt-4 rounded-2xl border border-card-border bg-background p-3">
         <button
           type="button"
@@ -859,6 +1072,8 @@ export function AiRepairCenter() {
           </div>
         )}
       </div>
+
+      <AiRepairAdminPanels />
 
       {costModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
