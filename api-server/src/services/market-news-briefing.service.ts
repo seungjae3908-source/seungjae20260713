@@ -769,189 +769,450 @@ function parseJsonResponse(
   );
 }
 
-async function analyzeWithOpenAi(
-  market: NewsBriefingMarket,
-  articles: ArticleNewsIssue[],
-): Promise<AiAnalysis> {
-  const apiKey =
-    process.env.OPENAI_API_KEY?.trim();
-
-  if (!apiKey) {
-    throw new Error(
-      'OPENAI_API_KEY가 없습니다.',
-    );
-  }
-
-  const available = articles.filter(
-    (article) =>
-      article.body.length >= 120,
-  );
-
-  if (available.length < 1) {
-    throw new Error(
-      '분석 가능한 기사 원문이 부족합니다.',
-    );
-  }
-
-  const model =
-    process.env.OPENAI_MARKET_BRIEFING_MODEL?.trim()
-    || process.env.OPENAI_REPAIR_MODEL?.trim()
-    || 'gpt-5.1';
-
-  const articleBodies = available
-    .map(
-      (article) =>
-        `${article.index}번 기사\n`
-        + `출처: ${article.source}\n`
-        + `원문 본문:\n${article.body}`,
-    )
-    .join('\n\n');
-
-  const prompt = `
-당신은 한국어 금융시장 뉴스 분석가입니다.
-분석 시장은 ${MARKET_CONFIG[market].label}입니다.
-
-아래 뉴스의 제목을 나열하거나 바꿔 쓰지 말고
-각 뉴스의 실제 원문 본문을 서로 연결해서
-오늘 시장의 구체적인 원인과 파급효과를 분석하세요.
-
-반드시 지킬 규칙:
-
-1. “긍정과 경계 요인이 함께 나타납니다” 같은 고정 문구를 사용하지 마세요.
-2. “정책, 금리, 실적, 규제를 중심으로 형성되었습니다” 같은 일반 문구로 통일하지 마세요.
-3. 기사 본문에 등장한 실제 기업, 업종, 정책, 수급, 매수와 매도 원인을 구체적으로 언급하세요.
-4. 예를 들어 AI·반도체 투자 확대가 삼성전자와 관련 업종에 주는 영향이나 대형주 매도가 코스피와 코스닥 투자심리에 미치는 영향을 기사 근거로 연결하세요.
-5. 지수 등락률이나 퍼센트만 보고 시장을 판단하지 마세요.
-6. 확인되지 않은 사실은 만들지 마세요.
-7. 각 기사 요약은 기사 제목을 복사하지 말고 본문 핵심과 시장 영향을 한 문장으로 작성하세요.
-8. 모든 내용은 한국어로 작성하세요.
-
-아래 JSON 형식만 출력하세요.
-
-{
-  "stance": "강세 또는 중립 또는 약세",
-  "headline": "뉴스 원문 전체를 종합한 오늘 시장의 구체적인 핵심 결론",
-  "summary": "기사 원문들의 관계를 연결한 오늘 시장 분석 3~5문장",
-  "items": [
-    {
-      "index": 1,
-      "summary": "1번 기사 본문의 핵심 원인과 시장 영향"
-    },
-    {
-      "index": 2,
-      "summary": "2번 기사 본문의 핵심 원인과 시장 영향"
-    },
-    {
-      "index": 3,
-      "summary": "3번 기사 본문의 핵심 원인과 시장 영향"
-    },
-    {
-      "index": 4,
-      "summary": "4번 기사 본문의 핵심 원인과 시장 영향"
-    },
-    {
-      "index": 5,
-      "summary": "5번 기사 본문의 핵심 원인과 시장 영향"
-    }
-  ]
+interface LocalTermGroup {
+  label: string;
+  words: string[];
+  impact: string;
 }
 
-뉴스 원문:
+const LOCAL_ENTITY_GROUPS: LocalTermGroup[] = [
+  {
+    label: '삼성전자',
+    words: ['삼성전자', 'samsung electronics'],
+    impact:
+      '삼성전자 관련 실적·투자·수급 뉴스가 반도체 대형주와 코스피 흐름에 영향을 주고 있습니다.',
+  },
+  {
+    label: 'SK하이닉스',
+    words: ['sk하이닉스', 'sk hynix', '하이닉스'],
+    impact:
+      'SK하이닉스 관련 HBM·메모리 수요 뉴스가 반도체 장비·부품주 투자심리에 연결되고 있습니다.',
+  },
+  {
+    label: '현대차·기아',
+    words: ['현대차', '현대자동차', '기아', 'hyundai motor', 'kia'],
+    impact:
+      '현대차·기아의 판매·실적·정책 이슈가 자동차와 부품주 흐름에 영향을 주고 있습니다.',
+  },
+  {
+    label: '엔비디아',
+    words: ['엔비디아', 'nvidia'],
+    impact:
+      '엔비디아 관련 AI 수요와 공급망 뉴스가 글로벌 반도체 및 기술주 투자심리를 움직이고 있습니다.',
+  },
+  {
+    label: '테슬라',
+    words: ['테슬라', 'tesla'],
+    impact:
+      '테슬라의 판매·실적·정책 뉴스가 전기차와 이차전지 관련 종목의 기대와 부담을 함께 바꾸고 있습니다.',
+  },
+  {
+    label: '비트코인',
+    words: ['비트코인', 'bitcoin', 'btc'],
+    impact:
+      '비트코인 관련 자금 유입·규제·ETF 뉴스가 코인 시장의 위험선호에 직접 영향을 주고 있습니다.',
+  },
+  {
+    label: '이더리움',
+    words: ['이더리움', 'ethereum', 'eth'],
+    impact:
+      '이더리움 관련 네트워크·ETF·규제 뉴스가 알트코인 전반의 투자심리에 연결되고 있습니다.',
+  },
+];
 
-${articleBodies}
-`.trim();
+const LOCAL_THEME_GROUPS: LocalTermGroup[] = [
+  {
+    label: 'AI·반도체',
+    words: [
+      '인공지능',
+      'ai ',
+      'ai·',
+      '반도체',
+      'hbm',
+      '메모리',
+      '파운드리',
+      '데이터센터',
+      'chip',
+      'semiconductor',
+    ],
+    impact:
+      'AI·반도체 투자와 실적 기대가 관련 대형주와 장비·부품주 관심을 높이는 흐름입니다.',
+  },
+  {
+    label: '외국인·기관 매도 수급',
+    words: [
+      '외국인 매도',
+      '기관 매도',
+      '순매도',
+      '매도세',
+      '차익 실현',
+      '차익실현',
+      'sell-off',
+      'net selling',
+    ],
+    impact:
+      '외국인·기관 매도와 차익실현 언급은 대형주 수급 및 코스피·코스닥 투자심리에 부담으로 작용할 수 있습니다.',
+  },
+  {
+    label: '매수·자금 유입',
+    words: [
+      '순매수',
+      '매수세',
+      '자금 유입',
+      '수급 개선',
+      '저가 매수',
+      'inflow',
+      'buying',
+    ],
+    impact:
+      '매수세와 자금 유입은 관련 업종의 거래 집중과 단기 투자심리 개선으로 이어지고 있습니다.',
+  },
+  {
+    label: '금리·통화정책',
+    words: [
+      '기준금리',
+      '금리 인하',
+      '금리 동결',
+      '금리 인상',
+      '연준',
+      '한국은행',
+      'fed',
+      'federal reserve',
+      'interest rate',
+    ],
+    impact:
+      '금리와 통화정책 기대 변화가 성장주 가치평가, 환율, 외국인 수급에 영향을 주고 있습니다.',
+  },
+  {
+    label: '환율·달러',
+    words: [
+      '환율',
+      '원달러',
+      '원·달러',
+      '달러 강세',
+      '달러 약세',
+      'exchange rate',
+      'dollar',
+    ],
+    impact:
+      '원·달러 환율과 달러 방향은 외국인 수급 및 수출주·성장주의 상대적인 강도에 영향을 주고 있습니다.',
+  },
+  {
+    label: '기업 실적',
+    words: [
+      '실적',
+      '영업이익',
+      '매출',
+      '어닝',
+      'earnings',
+      'revenue',
+      'operating profit',
+    ],
+    impact:
+      '기업 실적과 전망 변화가 종목별 차별화를 키우면서 지수보다 개별 업종 반응이 커지고 있습니다.',
+  },
+  {
+    label: '정책·규제',
+    words: [
+      '정책',
+      '규제',
+      '관세',
+      '보조금',
+      '법안',
+      '승인',
+      'regulation',
+      'tariff',
+      'subsidy',
+      'approval',
+    ],
+    impact:
+      '정책·규제 변화가 관련 산업의 비용, 투자계획, 수익성 기대를 다시 평가하게 만들고 있습니다.',
+  },
+  {
+    label: '자동차·전기차',
+    words: [
+      '자동차',
+      '전기차',
+      '이차전지',
+      '배터리',
+      'vehicle',
+      'electric vehicle',
+      'battery',
+    ],
+    impact:
+      '자동차·전기차 수요와 정책 뉴스가 완성차, 부품, 배터리 종목의 흐름을 나누고 있습니다.',
+  },
+  {
+    label: '코스피·코스닥 수급',
+    words: [
+      '코스피',
+      '코스닥',
+      '대형주',
+      '중소형주',
+      'kospi',
+      'kosdaq',
+    ],
+    impact:
+      '코스피 대형주와 코스닥 성장주의 수급 차이가 시장 체감 강도와 종목별 변동성을 키우고 있습니다.',
+  },
+  {
+    label: '가상자산 ETF·규제',
+    words: [
+      '현물 etf',
+      '비트코인 etf',
+      '이더리움 etf',
+      '가상자산 규제',
+      '암호화폐 규제',
+      'crypto etf',
+    ],
+    impact:
+      '가상자산 ETF와 규제 뉴스가 기관 자금 유입 기대와 거래소·알트코인 위험을 동시에 바꾸고 있습니다.',
+  },
+];
 
-  const response = await fetch(
-    'https://api.openai.com/v1/responses',
-    {
-      method: 'POST',
+const LOCAL_POSITIVE_WORDS = [
+  '상승',
+  '강세',
+  '개선',
+  '증가',
+  '확대',
+  '회복',
+  '호실적',
+  '수주',
+  '승인',
+  '지원',
+  '완화',
+  '순매수',
+  '자금 유입',
+  'growth',
+  'beat',
+  'record',
+  'approval',
+  'recovery',
+  'inflow',
+  'rally',
+];
 
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
+const LOCAL_NEGATIVE_WORDS = [
+  '하락',
+  '약세',
+  '감소',
+  '부진',
+  '우려',
+  '위축',
+  '규제 강화',
+  '매도세',
+  '순매도',
+  '차익실현',
+  '리스크',
+  '긴축',
+  'sell-off',
+  'miss',
+  'downgrade',
+  'recession',
+  'tightening',
+  'risk',
+];
 
-      body: JSON.stringify({
-        model,
-        input: prompt,
-        max_output_tokens: 1_600,
-      }),
+function countLocalWord(
+  text: string,
+  word: string,
+): number {
+  const normalizedText = text.toLowerCase();
+  const normalizedWord = word.toLowerCase();
 
-      signal:
-        AbortSignal.timeout(45_000),
-    },
+  if (!normalizedWord) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    normalizedText.split(normalizedWord).length - 1,
+  );
+}
+
+function scoreLocalWords(
+  text: string,
+  words: string[],
+): number {
+  return words.reduce(
+    (total, word) =>
+      total + countLocalWord(text, word),
+    0,
+  );
+}
+
+function rankedLocalGroups(
+  text: string,
+  groups: LocalTermGroup[],
+  limit: number,
+): Array<LocalTermGroup & { score: number }> {
+  return groups
+    .map((group) => ({
+      ...group,
+      score: scoreLocalWords(text, group.words),
+    }))
+    .filter((group) => group.score > 0)
+    .sort((left, right) =>
+      right.score - left.score,
+    )
+    .slice(0, limit);
+}
+
+function localArticleSummary(
+  article: ArticleNewsIssue,
+): string {
+  if (!article.body) {
+    return '기사 제공기관에서 원문 본문을 불러오는 중입니다.';
+  }
+
+  const sentences = article.body
+    .split(/[.!?。]\s+|다\.\s+/)
+    .map((value, order) => ({
+      value: value.trim(),
+      order,
+    }))
+    .filter((item) =>
+      item.value.length >= 30,
+    );
+
+  if (sentences.length === 0) {
+    return article.body.slice(0, 260).trim();
+  }
+
+  const keywords = [
+    ...LOCAL_ENTITY_GROUPS.flatMap((group) => group.words),
+    ...LOCAL_THEME_GROUPS.flatMap((group) => group.words),
+    ...LOCAL_POSITIVE_WORDS,
+    ...LOCAL_NEGATIVE_WORDS,
+  ];
+
+  const selected = sentences
+    .map((item) => ({
+      ...item,
+      score:
+        scoreLocalWords(item.value, keywords)
+        + (item.order < 3 ? 2 : 0),
+    }))
+    .sort((left, right) =>
+      right.score - left.score
+      || left.order - right.order,
+    )
+    .slice(0, 2)
+    .sort((left, right) =>
+      left.order - right.order,
+    )
+    .map((item) => item.value);
+
+  return selected
+    .join(' ')
+    .slice(0, 280)
+    .trim();
+}
+
+function localBodyAnalysis(
+  market: NewsBriefingMarket,
+  articles: ArticleNewsIssue[],
+): AiAnalysis {
+  const available = articles.filter(
+    (article) => article.body.length >= 80,
   );
 
-  if (!response.ok) {
-    const errorText = await response
-      .text()
-      .catch(() => '');
+  const combined = available
+    .map((article) => article.body)
+    .join(' ');
 
-    throw new Error(
-      `AI 뉴스 분석 오류: ${response.status} ${errorText.slice(0, 200)}`,
+  const entities = rankedLocalGroups(
+    combined,
+    LOCAL_ENTITY_GROUPS,
+    3,
+  );
+
+  const themes = rankedLocalGroups(
+    combined,
+    LOCAL_THEME_GROUPS,
+    3,
+  );
+
+  const positiveScore =
+    scoreLocalWords(
+      combined,
+      LOCAL_POSITIVE_WORDS,
+    );
+
+  const negativeScore =
+    scoreLocalWords(
+      combined,
+      LOCAL_NEGATIVE_WORDS,
+    );
+
+  const stance: NewsStance =
+    positiveScore >= negativeScore + 3
+      ? '강세'
+      : negativeScore >= positiveScore + 3
+        ? '약세'
+        : '중립';
+
+  const entityText = entities
+    .map((item) => item.label)
+    .join('·');
+
+  const themeText = themes
+    .map((item) => item.label)
+    .join('·');
+
+  const subject =
+    entityText
+    || themeText
+    || MARKET_CONFIG[market].label;
+
+  const headline =
+    themes.length > 0
+      ? `${subject} 관련 원문 뉴스와 ${themes[0].label} 이슈가 오늘 ${MARKET_CONFIG[market].label} 흐름의 핵심으로 나타났습니다.`
+      : `${MARKET_CONFIG[market].label} 기사 원문에서 확인된 기업·산업 이슈를 기준으로 시장 흐름을 분석했습니다.`;
+
+  const summaryParts: string[] = [];
+
+  if (entities.length > 0) {
+    summaryParts.push(
+      `기사 원문에서 ${entityText} 관련 내용이 반복적으로 확인됐습니다.`,
     );
   }
 
-  const parsed = parseJsonResponse(
-    extractOpenAiText(
-      await response.json(),
-    ),
-  );
+  for (const theme of themes) {
+    summaryParts.push(theme.impact);
+  }
 
-  const stance: NewsStance =
-    parsed.stance === '강세'
-    || parsed.stance === '약세'
-      ? parsed.stance
-      : '중립';
+  if (positiveScore > negativeScore) {
+    summaryParts.push(
+      '원문에 나타난 개선·확대·자금 유입 표현이 부담 요인보다 많아 뉴스 흐름은 상대적으로 우호적입니다.',
+    );
+  } else if (negativeScore > positiveScore) {
+    summaryParts.push(
+      '원문에 나타난 매도·부진·규제·위축 표현이 호재보다 많아 관련 종목과 시장 투자심리에 부담이 확인됩니다.',
+    );
+  } else {
+    summaryParts.push(
+      '원문에서 호재와 부담 요인이 비슷하게 확인돼 업종과 종목별 차별화가 큰 흐름입니다.',
+    );
+  }
 
-  const summaries =
-    new Map<number, string>();
-
-  if (Array.isArray(parsed.items)) {
-    for (const item of parsed.items) {
-      const index = Number(
-        item?.index,
-      );
-
-      const summary = String(
-        item?.summary ?? '',
-      ).trim();
-
-      if (
-        Number.isInteger(index)
-        && index >= 1
-        && index <= 5
-        && summary
-      ) {
-        summaries.set(
-          index,
-          summary,
-        );
-      }
-    }
+  if (available.length < 2) {
+    summaryParts.push(
+      '현재 불러온 기사 원문이 적어 추가 뉴스가 수집되면 분석 내용이 자동으로 보완됩니다.',
+    );
   }
 
   return {
     stance,
-
-    headline:
-      String(
-        parsed.headline ?? '',
-      ).trim()
-      || `${MARKET_CONFIG[market].label} 뉴스 원문 분석`,
-
-    summary:
-      String(
-        parsed.summary ?? '',
-      ).trim()
-      || '수집된 기사 원문을 종합해 오늘 시장 흐름을 분석했습니다.',
-
-    itemSummaries:
-      articles.map(
-        (article) =>
-          summaries.get(article.index)
-          || fallbackItemSummary(article.body),
-      ),
+    headline,
+    summary: summaryParts
+      .slice(0, 5)
+      .join(' '),
+    itemSummaries: articles.map(
+      (article) =>
+        localArticleSummary(article),
+    ),
   };
 }
 
@@ -1014,29 +1275,13 @@ async function getBriefing(
       ),
     );
 
-  let analysis: AiAnalysis;
-  let aiUsed = false;
-
-  try {
-    analysis =
-      await analyzeWithOpenAi(
-        market,
-        articles,
-      );
-
-    aiUsed = true;
-  } catch (error) {
-    console.error(
-      `시장 뉴스 AI 분석 대체 처리 (${market}):`,
-      error,
+  const analysis =
+    localBodyAnalysis(
+      market,
+      articles,
     );
 
-    analysis =
-      fallbackAnalysis(
-        market,
-        articles,
-      );
-  }
+  const aiUsed = false;
 
   const result: MarketNewsBriefing = {
     market,
