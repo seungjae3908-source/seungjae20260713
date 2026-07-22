@@ -1,4 +1,5 @@
 // AI_REPAIR_COST_CONSENT_V1
+// AI_REPAIR_LIVE_DIAGNOSTIC_V1
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bot,
@@ -42,6 +43,20 @@ type CheckResult = {
   output: string;
 };
 
+
+type CurrentCheck = {
+  name: string;
+  label: string;
+  startedAt: string;
+};
+
+type DiagnosticError = {
+  name: string;
+  label: string;
+  output: string;
+  detectedAt: string;
+};
+
 type ChangedFile = {
   path: string;
   explanation: string;
@@ -71,6 +86,8 @@ type RepairJob = {
   maxAttempts: number;
   attempts: RepairAttempt[];
   checks: CheckResult[];
+  currentCheck?: CurrentCheck;
+  diagnosticErrors?: DiagnosticError[];
   changedFiles: ChangedFile[];
   branch?: string;
   commitSha?: string;
@@ -585,6 +602,74 @@ export function AiRepairCenter() {
                       <div className="rounded-xl bg-card p-2.5">
                         <p className="text-[10px] font-extrabold text-muted-foreground">요청 내용</p>
                         <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed">{job.request}</p>
+                      </div>
+                    )}
+
+                    {job.currentCheck && (
+                      <div className="rounded-2xl border border-primary/40 bg-primary/10 p-3">
+                        <p className="flex items-center gap-2 text-xs font-extrabold text-primary">
+                          <LoaderCircle className="h-4 w-4 animate-spin" />
+                          현재 진단 중
+                        </p>
+
+                        <p className="mt-2 text-sm font-black">
+                          {job.currentCheck.label}
+                        </p>
+
+                        <p className="mt-1 text-[10px] font-bold text-muted-foreground">
+                          시작 시각 {formatDate(job.currentCheck.startedAt)}
+                        </p>
+                      </div>
+                    )}
+
+                    {(job.diagnosticErrors?.length ?? 0) > 0 && (
+                      <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-3">
+                        <p className="flex items-center gap-2 text-xs font-extrabold text-destructive">
+                          <CircleAlert className="h-4 w-4" />
+                          현재까지 발견된 오류 {job.diagnosticErrors?.length ?? 0}개
+                        </p>
+
+                        <div className="mt-2 space-y-2">
+                          {job.diagnosticErrors?.map((error) => (
+                            <details
+                              key={`${error.name}-${error.detectedAt}`}
+                              className="rounded-xl border border-destructive/30 bg-background p-2"
+                            >
+                              <summary className="cursor-pointer list-none text-[11px] font-extrabold text-destructive">
+                                {error.label}
+                              </summary>
+
+                              <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-card p-2 text-[9px] leading-relaxed">
+                                {error.output || "오류 출력 없음"}
+                              </pre>
+                            </details>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {job.checks.length > 0 && (
+                      <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
+                        <div className="rounded-xl bg-card p-2">
+                          <p className="text-muted-foreground">전체 점검</p>
+                          <p className="mt-1 text-sm font-black">
+                            {job.checks.length}
+                          </p>
+                        </div>
+
+                        <div className="rounded-xl bg-positive/10 p-2">
+                          <p className="text-positive">정상</p>
+                          <p className="mt-1 text-sm font-black text-positive">
+                            {job.checks.filter((check) => check.ok).length}
+                          </p>
+                        </div>
+
+                        <div className="rounded-xl bg-destructive/10 p-2">
+                          <p className="text-destructive">오류</p>
+                          <p className="mt-1 text-sm font-black text-destructive">
+                            {job.checks.filter((check) => !check.ok).length}
+                          </p>
+                        </div>
                       </div>
                     )}
 

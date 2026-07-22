@@ -1,4 +1,5 @@
 // AI_REPAIR_COST_CONSENT_V1
+// AI_REPAIR_LIVE_DIAGNOSTIC_V1
 export type AiRepairJobKind = 'diagnosis' | 'improvement';
 
 export type AiRepairJobStatus =
@@ -31,6 +32,20 @@ export type AiRepairCheckResult = {
   output: string;
   startedAt: string;
   completedAt: string;
+};
+
+
+export type AiRepairCurrentCheck = {
+  name: AiRepairCheckName;
+  label: string;
+  startedAt: string;
+};
+
+export type AiRepairDiagnosticError = {
+  name: AiRepairCheckName;
+  label: string;
+  output: string;
+  detectedAt: string;
 };
 
 export type AiRepairChangedFile = {
@@ -114,6 +129,8 @@ export type AiRepairJob = {
   usage?: AiRepairUsage[];
   attempts: AiRepairAttempt[];
   checks: AiRepairCheckResult[];
+  currentCheck?: AiRepairCurrentCheck;
+  diagnosticErrors?: AiRepairDiagnosticError[];
   changedFiles: AiRepairChangedFile[];
   logs: string[];
   branch?: string;
