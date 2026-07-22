@@ -1,3 +1,4 @@
+// AI_REPAIR_COST_CONSENT_V1
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,9 +10,12 @@ import type {
   AiRepairChangedFile,
   AiRepairCheckName,
   AiRepairCheckResult,
+  AiRepairCostEstimate,
+  AiRepairCostSummary,
   AiRepairJob,
   AiRepairJobKind,
   AiRepairPublicConfig,
+  AiRepairUsage,
 } from '../types/ai-repair';
 
 const CHECKS: Array<{
@@ -140,6 +144,282 @@ function maxAttempts(): number {
 
 function isEnabled(): boolean {
   return process.env.AI_REPAIR_ENABLED === 'true';
+}
+
+
+function repairModel(): string {
+  return process.env.OPENAI_REPAIR_MODEL?.trim() || 'gpt-5.1';
+}
+
+function configuredRate(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function costRates() {
+  return {
+    model: repairModel(),
+    inputUsdPerMillion: configuredRate('OPENAI_REPAIR_INPUT_USD_PER_1M', 1.25),
+    cachedInputUsdPerMillion: configuredRate('OPENAI_REPAIR_CACHED_INPUT_USD_PER_1M', 0.125),
+    outputUsdPerMillion: configuredRate('OPENAI_REPAIR_OUTPUT_USD_PER_1M', 10),
+  };
+}
+
+function roundCost(value: number, digits = 6): number {
+  const multiplier = 10 ** digits;
+  return Math.round(Math.max(0, value) * multiplier) / multiplier;
+}
+
+function calculateCost(
+  inputTokens: number,
+  cachedInputTokens: number,
+  outputTokens: number,
+): number {
+  const rates = costRates();
+  const uncachedInput = Math.max(0, inputTokens - cachedInputTokens);
+
+  return roundCost(
+    (uncachedInput / 1_000_000) * rates.inputUsdPerMillion +
+      (cachedInputTokens / 1_000_000) * rates.cachedInputUsdPerMillion +
+      (outputTokens / 1_000_000) * rates.outputUsdPerMillion,
+  );
+}
+
+function monthKey(value = now()): string {
+  return value.slice(0, 7);
+}
+
+function costLedgerFile(): string {
+  return path.join(dataDir(), 'cost-ledger.jsonl');
+}
+
+export function estimateAiRepairCost(input: {
+  kind: AiRepairJobKind;
+  request: string;
+  jobId?: string;
+}): AiRepairCostEstimate {
+  const model = repairModel();
+
+  if (input.kind === 'diagnosis' && !input.jobId) {
+    return {
+      currency: 'USD',
+      model,
+      free: true,
+      minUsd: 0,
+      likelyUsd: 0,
+      maxUsd: 0,
+      maxAttempts: 0,
+      note: 'TypeScript·빌드·격리 서버 검사만 실행합니다. 오류가 발견되어도 AI 수정은 별도 승인을 받기 전까지 실행하지 않습니다.',
+    };
+  }
+
+  const existing = input.jobId ? jobs.get(input.jobId) : undefined;
+
+  if (input.jobId && !existing) {
+    throw new Error('비용을 계산할 AI 복구 작업을 찾을 수 없습니다.');
+  }
+
+  const request = `${input.request || existing?.request || ''}`.trim();
+  const failedChecks = existing?.checks.filter((item) => !item.ok) ?? [];
+  const diagnosticChars = failedChecks.reduce(
+    (total, item) => total + item.output.length,
+    0,
+  );
+
+  const complexityTerms = [
+    '서버',
+    '데이터베이스',
+    '로그인',
+    '권한',
+    '배포',
+    '차트',
+    '실시간',
+    'api',
+    '오류',
+    '리팩터링',
+    '모바일',
+    'pc',
+    'ui',
+  ];
+
+  const lowerRequest = request.toLowerCase();
+  const complexity = complexityTerms.filter((term) =>
+    lowerRequest.includes(term),
+  ).length;
+
+  const estimatedInput = clamp(
+    Math.round(
+      28_000 +
+        request.length * 24 +
+        diagnosticChars / 4 +
+        complexity * 9_000,
+    ),
+    25_000,
+    180_000,
+  );
+
+  const estimatedOutput = clamp(
+    Math.round(3_500 + request.length * 4 + complexity * 1_100),
+    3_500,
+    20_000,
+  );
+
+  const likelyAttempts = clamp(
+    1 +
+      Math.floor(complexity / 4) +
+      (failedChecks.length >= 3 ? 1 : 0),
+    1,
+    Math.min(3, maxAttempts()),
+  );
+
+  const minUsd = calculateCost(
+    Math.round(estimatedInput * 0.65),
+    0,
+    Math.round(estimatedOutput * 0.55),
+  );
+
+  const likelyUsd =
+    calculateCost(estimatedInput, 0, estimatedOutput) * likelyAttempts;
+
+  const maxUsd =
+    calculateCost(
+      Math.round(estimatedInput * 1.35),
+      0,
+      Math.round(estimatedOutput * 1.5),
+    ) * maxAttempts();
+
+  return {
+    currency: 'USD',
+    model,
+    free: false,
+    minUsd: roundCost(minUsd, 4),
+    likelyUsd: roundCost(likelyUsd, 4),
+    maxUsd: roundCost(maxUsd, 4),
+    maxAttempts: maxAttempts(),
+    note: '요청 길이·검사 오류·예상 수정 반복 횟수로 계산한 사전 추정치입니다. 실제 청구액은 사용 토큰에 따라 달라질 수 있습니다.',
+  };
+}
+
+function recordOpenAiUsage(
+  job: AiRepairJob,
+  payload: unknown,
+  model: string,
+): void {
+  if (!payload || typeof payload !== 'object') return;
+
+  const usage = (payload as {
+    usage?: {
+      input_tokens?: unknown;
+      output_tokens?: unknown;
+      total_tokens?: unknown;
+      input_tokens_details?: {
+        cached_tokens?: unknown;
+      };
+    };
+  }).usage;
+
+  if (!usage) return;
+
+  const inputTokens = Math.max(0, Number(usage.input_tokens) || 0);
+  const cachedInputTokens = Math.max(
+    0,
+    Number(usage.input_tokens_details?.cached_tokens) || 0,
+  );
+  const outputTokens = Math.max(0, Number(usage.output_tokens) || 0);
+  const totalTokens = Math.max(
+    0,
+    Number(usage.total_tokens) || inputTokens + outputTokens,
+  );
+
+  if (inputTokens === 0 && outputTokens === 0) return;
+
+  const entry: AiRepairUsage = {
+    month: monthKey(),
+    model,
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    totalTokens,
+    estimatedCostUsd: calculateCost(
+      inputTokens,
+      cachedInputTokens,
+      outputTokens,
+    ),
+    recordedAt: now(),
+  };
+
+  ensureDirectories();
+
+  fs.appendFileSync(
+    costLedgerFile(),
+    `${JSON.stringify({
+      jobId: job.id,
+      createdBy: job.createdBy,
+      ...entry,
+    })}\n`,
+    { encoding: 'utf8', mode: 0o600 },
+  );
+
+  job.usage = [...(job.usage ?? []), entry];
+  job.actualCostUsd = roundCost(
+    (job.actualCostUsd ?? 0) + entry.estimatedCostUsd,
+  );
+
+  logJob(
+    job,
+    `OpenAI 사용량 기록: 입력 ${inputTokens}, 출력 ${outputTokens}, 예상 $${entry.estimatedCostUsd.toFixed(6)}`,
+  );
+}
+
+export function getAiRepairCostSummary(
+  requestedMonth?: string,
+): AiRepairCostSummary {
+  const month =
+    requestedMonth && /^\d{4}-\d{2}$/.test(requestedMonth)
+      ? requestedMonth
+      : monthKey();
+
+  let calls = 0;
+  let inputTokens = 0;
+  let cachedInputTokens = 0;
+  let outputTokens = 0;
+  let estimatedCostUsd = 0;
+
+  const ledger = costLedgerFile();
+
+  if (fs.existsSync(ledger)) {
+    const lines = fs
+      .readFileSync(ledger, 'utf8')
+      .split(/\r?\n/)
+      .filter(Boolean);
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as Partial<AiRepairUsage>;
+
+        if (entry.month !== month) continue;
+
+        calls += 1;
+        inputTokens += Number(entry.inputTokens) || 0;
+        cachedInputTokens += Number(entry.cachedInputTokens) || 0;
+        outputTokens += Number(entry.outputTokens) || 0;
+        estimatedCostUsd += Number(entry.estimatedCostUsd) || 0;
+      } catch {
+        // 손상된 한 줄은 건너뜁니다.
+      }
+    }
+  }
+
+  return {
+    month,
+    currency: 'USD',
+    estimatedCostUsd: roundCost(estimatedCostUsd),
+    calls,
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    modelRates: costRates(),
+  };
 }
 
 function jobFile(id: string): string {
@@ -728,6 +1008,7 @@ async function askAiForRepair(
 ): Promise<AiRepairProposal> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error('OPENAI_API_KEY가 설정되지 않아 자동 수정안을 만들 수 없습니다.');
+  const model = repairModel();
   const files = chooseContextFiles(workspace, job.request, diagnostics);
   const context = buildContext(workspace, files);
   if (!context) throw new Error('AI가 읽을 수 있는 소스 파일을 찾지 못했습니다.');
@@ -781,7 +1062,7 @@ async function askAiForRepair(
       'content-type': 'application/json',
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_REPAIR_MODEL?.trim() || 'gpt-5.1',
+      model,
       store: false,
       max_output_tokens: 30_000,
       text: {
@@ -835,6 +1116,8 @@ async function askAiForRepair(
   if (!Array.isArray(parsed.changes) || parsed.changes.length > 8) {
     throw new Error('AI 수정 파일 수가 허용 범위를 벗어났습니다.');
   }
+
+  recordOpenAiUsage(job, payload, model);
   return parsed;
 }
 
@@ -978,10 +1261,30 @@ async function processRepairJob(job: AiRepairJob): Promise<void> {
   if (allChecksPassed(checks) && job.kind === 'diagnosis') {
     job.status = 'completed';
     job.progress = 100;
-    job.message = '오류가 발견되지 않았습니다.';
+    job.message = '무료 진단 완료 — 오류가 발견되지 않았습니다.';
     job.completedAt = now();
     persist(job);
-    await sendJobNotification(job, 'AI 진단 완료', '전체 검사에서 오류가 발견되지 않았습니다.');
+    await sendJobNotification(job, '무료 진단 완료', '전체 검사에서 오류가 발견되지 않았습니다.');
+    return;
+  }
+
+  if (job.kind === 'diagnosis' && !job.aiCostApproved) {
+    job.status = 'awaiting_ai_approval';
+    job.progress = 40;
+    job.message = '무료 진단 완료 — 유료 AI 수정 승인 대기';
+    job.costEstimate = estimateAiRepairCost({
+      kind: job.kind,
+      request: job.request,
+      jobId: job.id,
+    });
+    job.error = undefined;
+    persist(job);
+
+    await sendJobNotification(
+      job,
+      '무료 진단에서 오류 발견',
+      'AI 수정은 비용 확인과 별도 승인을 받은 뒤에만 시작됩니다.',
+    );
     return;
   }
 
@@ -1215,9 +1518,15 @@ export function createAiRepairJob(input: {
   kind: AiRepairJobKind;
   request: string;
   createdBy: string;
+  costConsent?: boolean;
 }): AiRepairJob {
   startAiRepairWorker();
   if (!isEnabled()) throw new Error('AI 복구 기능이 아직 서버에서 활성화되지 않았습니다.');
+
+  if (input.kind === 'improvement' && input.costConsent !== true) {
+    throw new Error('예상 비용 확인과 유료 AI 작업 동의가 필요합니다.');
+  }
+
   const request = input.request.trim().slice(0, 20_000);
   if (input.kind === 'improvement' && request.length < 3) throw new Error('개선 요청을 3자 이상 입력해 주세요.');
   const id = `repair-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
@@ -1236,6 +1545,22 @@ export function createAiRepairJob(input: {
     updatedAt: now(),
     maxAttempts: maxAttempts(),
     currentAttempt: 0,
+    costEstimate: estimateAiRepairCost({
+      kind: input.kind,
+      request,
+    }),
+    aiCostApproved:
+      input.kind === 'improvement' && input.costConsent === true,
+    aiCostApprovedAt:
+      input.kind === 'improvement' && input.costConsent === true
+        ? now()
+        : undefined,
+    aiCostApprovedBy:
+      input.kind === 'improvement' && input.costConsent === true
+        ? input.createdBy
+        : undefined,
+    actualCostUsd: 0,
+    usage: [],
     attempts: [],
     checks: [],
     changedFiles: [],
@@ -1259,6 +1584,47 @@ export function getAiRepairJob(id: string): AiRepairJob {
   startAiRepairWorker();
   const job = jobs.get(id);
   if (!job) throw new Error('AI 복구 작업을 찾을 수 없습니다.');
+  return publicJob(job);
+}
+
+
+export function approveAiRepairCost(
+  id: string,
+  costConsent: boolean,
+  approvedBy: string,
+): AiRepairJob {
+  startAiRepairWorker();
+
+  const job = jobs.get(id);
+
+  if (!job) {
+    throw new Error('AI 복구 작업을 찾을 수 없습니다.');
+  }
+
+  if (job.status !== 'awaiting_ai_approval') {
+    throw new Error('현재 유료 AI 수정 승인을 받을 수 있는 상태가 아닙니다.');
+  }
+
+  if (costConsent !== true) {
+    throw new Error('예상 비용 확인과 유료 AI 작업 동의가 필요합니다.');
+  }
+
+  job.aiCostApproved = true;
+  job.aiCostApprovedAt = now();
+  job.aiCostApprovedBy = approvedBy;
+  job.costEstimate = estimateAiRepairCost({
+    kind: job.kind,
+    request: job.request,
+    jobId: job.id,
+  });
+  job.status = 'queued';
+  job.progress = 40;
+  job.message = '유료 AI 수정 승인 완료 — 작업 대기열 접수';
+  job.error = undefined;
+
+  persist(job);
+  enqueue(job.id);
+
   return publicJob(job);
 }
 

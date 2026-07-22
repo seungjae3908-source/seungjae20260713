@@ -1,3 +1,4 @@
+// AI_REPAIR_COST_CONSENT_V1
 export type AiRepairJobKind = 'diagnosis' | 'improvement';
 
 export type AiRepairJobStatus =
@@ -6,6 +7,7 @@ export type AiRepairJobStatus =
   | 'diagnosing'
   | 'repairing'
   | 'verifying'
+  | 'awaiting_ai_approval'
   | 'awaiting_approval'
   | 'applying'
   | 'completed'
@@ -50,6 +52,45 @@ export type AiRepairAttempt = {
   error?: string;
 };
 
+
+export type AiRepairCostEstimate = {
+  currency: 'USD';
+  model: string;
+  free: boolean;
+  minUsd: number;
+  likelyUsd: number;
+  maxUsd: number;
+  maxAttempts: number;
+  note: string;
+};
+
+export type AiRepairUsage = {
+  month: string;
+  model: string;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  recordedAt: string;
+};
+
+export type AiRepairCostSummary = {
+  month: string;
+  currency: 'USD';
+  estimatedCostUsd: number;
+  calls: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  modelRates: {
+    model: string;
+    inputUsdPerMillion: number;
+    cachedInputUsdPerMillion: number;
+    outputUsdPerMillion: number;
+  };
+};
+
 export type AiRepairJob = {
   id: string;
   kind: AiRepairJobKind;
@@ -65,6 +106,12 @@ export type AiRepairJob = {
   completedAt?: string;
   maxAttempts: number;
   currentAttempt: number;
+  costEstimate?: AiRepairCostEstimate;
+  aiCostApproved?: boolean;
+  aiCostApprovedAt?: string;
+  aiCostApprovedBy?: string;
+  actualCostUsd?: number;
+  usage?: AiRepairUsage[];
   attempts: AiRepairAttempt[];
   checks: AiRepairCheckResult[];
   changedFiles: AiRepairChangedFile[];
