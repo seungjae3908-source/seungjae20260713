@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ExternalLink, RefreshCw } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { useAssetMode } from '@/lib/asset-mode';
 import { api, apiGet, type SummaryItem } from '@/lib/api';
@@ -15,6 +15,7 @@ interface NewsIssue {
   url: string;
   source: string;
   publishedAt: string;
+  summary: string;
 }
 
 interface MarketNewsBriefing {
@@ -76,6 +77,7 @@ export default function HomePage() {
     queryKey: ['home-market-summary'],
     queryFn: () => api.summary(),
     refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
   });
 
   const coinTickers = useQuery({
@@ -83,12 +85,15 @@ export default function HomePage() {
     queryFn: () => apiGet<AnyObj>('/crypto/spot/tickers'),
     enabled: view === 'COIN',
     refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
   });
 
   const briefing = useQuery({
     queryKey: ['home-market-news-briefing', view],
     queryFn: () => apiGet<MarketNewsBriefing>(`/market/news-briefing?market=${view}`),
-    refetchInterval: 15 * 60_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
   });
 
   const stockIndices = useMemo(() => {
@@ -105,16 +110,6 @@ export default function HomePage() {
     });
   }, [coinTickers.data]);
 
-  const refresh = () => {
-    void Promise.all([
-      summary.refetch(),
-      briefing.refetch(),
-      view === 'COIN' ? coinTickers.refetch() : Promise.resolve(),
-    ]);
-  };
-
-  const busy = summary.isFetching || briefing.isFetching || coinTickers.isFetching;
-
   return (
     <div className="h-full overflow-y-auto overscroll-contain bg-background">
       <header className="border-b border-card-border px-4 py-4">
@@ -128,21 +123,11 @@ export default function HomePage() {
 
       <main className="space-y-4 px-4 pb-28 pt-4">
         <section>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-black">오늘의 증시현황</h2>
-              <p className="mt-1 text-xs font-bold text-muted-foreground">
-                주요 뉴스와 시장 데이터를 함께 확인합니다.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={refresh}
-              aria-label="새로고침"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-card-border bg-card"
-            >
-              <RefreshCw className={cn('h-4 w-4', busy && 'animate-spin')} />
-            </button>
+          <div className="text-center">
+            <h2 className="text-xl font-black">오늘의 증시현황</h2>
+            <p className="mt-1 text-xs font-bold text-muted-foreground">
+              주요 뉴스와 시장 데이터를 함께 확인합니다.
+            </p>
           </div>
 
           <div className="mt-4 grid grid-cols-3 gap-2 rounded-2xl bg-secondary/70 p-1.5">
@@ -162,10 +147,10 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-          <div className="flex items-center justify-between">
+        <section className="rounded-3xl border border-card-border bg-card p-4 text-center shadow-sm">
+          <div>
             <h3 className="text-base font-black">{VIEW_META[view].indexTitle}</h3>
-            <span className="text-[10px] font-bold text-muted-foreground">실시간 제공기관 기준</span>
+            <span className="mt-1 block text-[10px] font-bold text-muted-foreground">실시간 제공기관 기준</span>
           </div>
 
           {view === 'COIN' ? (
@@ -201,8 +186,8 @@ export default function HomePage() {
           {(summary.isError || (view === 'COIN' && coinTickers.isError)) && <State error>지수 제공기관의 응답이 지연되고 있습니다.</State>}
         </section>
 
-        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
+        <section className="rounded-3xl border border-card-border bg-card p-4 text-center shadow-sm">
+          <div className="flex flex-col items-center gap-2">
             <div>
               <h3 className="text-base font-black">오늘의 이슈</h3>
               <p className="mt-1 text-[11px] font-bold text-muted-foreground">주식시장 주요 뉴스 AI 분석</p>
@@ -222,37 +207,25 @@ export default function HomePage() {
                 </p>
               </div>
 
-              {briefing.data.reasons.length > 0 && (
-                <div className="space-y-2">
-                  {briefing.data.reasons.slice(0, 4).map((reason, index) => (
-                    <div key={`${reason}-${index}`} className="flex gap-2 rounded-2xl border border-card-border px-3 py-3">
-                      <span className="font-black text-primary">{index + 1}</span>
-                      <p className="text-sm font-semibold leading-5">{reason}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-
               {briefing.data.issues.length > 0 && (
-                <div>
-                  <p className="mb-2 text-xs font-black text-muted-foreground">분석에 반영한 주요 뉴스</p>
-                  <div className="space-y-2">
-                    {briefing.data.issues.slice(0, 5).map((issue, index) => (
-                      <a
-                        key={`${issue.url}-${index}`}
-                        href={issue.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-start gap-3 rounded-2xl border border-card-border px-3 py-3"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="line-clamp-2 text-sm font-black leading-5">{issue.title}</p>
-                          <p className="mt-1 text-[10px] font-bold text-muted-foreground">{issue.source}</p>
-                        </div>
-                        <ExternalLink className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                      </a>
-                    ))}
-                  </div>
+                <div className="space-y-2">
+                  {briefing.data.issues.slice(0, 5).map((issue, index) => (
+                    <a
+                      key={`${issue.url}-${index}`}
+                      href={issue.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block rounded-2xl border border-card-border px-3 py-3 text-center"
+                    >
+                      <p className="line-clamp-2 text-sm font-semibold leading-5">
+                        {issue.summary}
+                      </p>
+                      <div className="mt-1 flex items-center justify-center gap-1 text-[10px] font-bold text-muted-foreground">
+                        <span>{issue.source}</span>
+                        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                      </div>
+                    </a>
+                  ))}
                 </div>
               )}
 
@@ -271,9 +244,9 @@ export default function HomePage() {
 
 function IndexCard({ label, value, change }: { label: string; value: string; change: number | null }) {
   return (
-    <div className="rounded-2xl bg-secondary/60 p-3">
+    <div className="rounded-2xl bg-secondary/60 p-3 text-center">
       <p className="text-[11px] font-bold text-muted-foreground">{label}</p>
-      <p className="mt-1 text-base font-black">{value}</p>
+      <p className="mt-1 truncate text-base font-black">{value}</p>
       <p className={cn(
         'mt-1 text-xs font-black',
         change == null ? 'text-muted-foreground' : change >= 0 ? 'text-positive' : 'text-destructive',
