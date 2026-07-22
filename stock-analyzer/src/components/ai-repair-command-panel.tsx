@@ -3,6 +3,7 @@ import {
   Bot,
   Clipboard,
   LoaderCircle,
+  Play,
   Wrench,
   X,
 } from "lucide-react";
@@ -87,7 +88,7 @@ function errorCount(job: RepairJob): number {
 export function AiRepairCommandPanel() {
   const [request, setRequest] = useState("");
   const [busy, setBusy] = useState<
-    "diagnosis" | "repair" | "copy" | null
+    "diagnosis" | "repair" | "scan" | "copy" | null
   >(null);
   const [notice, setNotice] = useState(
     "",
@@ -232,6 +233,36 @@ export function AiRepairCommandPanel() {
     rememberProcessed,
   ]);
 
+  const runDiagnosis = async () => {
+    setBusy("scan");
+
+    try {
+      const body = await apiJson<{
+        ok: true;
+        job: { id: string };
+      }>("/api/admin/ai-repair/jobs", {
+        method: "POST",
+        body: JSON.stringify({
+          kind: "diagnosis",
+          request: "",
+          costConsent: false,
+          paidDiagnosis: false,
+        }),
+      });
+
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set("aiRepairJob", body.job.id);
+      window.location.assign(nextUrl.toString());
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "진단을 시작하지 못했습니다.",
+      );
+      setBusy(null);
+    }
+  };
+
   const copyCommand = async () => {
     if (!modal) {
       return;
@@ -310,6 +341,20 @@ export function AiRepairCommandPanel() {
             복구 명령어 만들기
           </button>
         </div>
+
+        <button
+          type="button"
+          onClick={() => void runDiagnosis()}
+          disabled={busy !== null}
+          className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-positive px-3 py-3 text-xs font-extrabold text-positive-foreground disabled:opacity-50"
+        >
+          {busy === "scan" ? (
+            <LoaderCircle className="h-4 w-4 animate-spin" />
+          ) : (
+            <Play className="h-4 w-4" />
+          )}
+          진단 실행
+        </button>
 
       </section>
 
