@@ -1,7 +1,6 @@
 // AI_REPAIR_COMMAND_PANEL_V2
 import {
   Bot,
-  CheckCircle2,
   Clipboard,
   LoaderCircle,
   Wrench,
@@ -91,7 +90,7 @@ export function AiRepairCommandPanel() {
     "diagnosis" | "repair" | "copy" | null
   >(null);
   const [notice, setNotice] = useState(
-    "AI API 호출 없이 무료로 명령어를 생성합니다.",
+    "",
   );
   const [modal, setModal] = useState<{
     title: string;
@@ -160,7 +159,7 @@ export function AiRepairCommandPanel() {
         setModal({
           title:
             mode === "diagnosis"
-              ? "진단 명령어"
+              ? "요청 명령어"
               : automatic
                 ? `오류 ${count}개 복구 명령어`
                 : "복구 명령어",
@@ -168,11 +167,7 @@ export function AiRepairCommandPanel() {
           automatic,
         });
 
-        setNotice(
-          automatic
-            ? `오류 ${count}개가 발견되어 복구 명령어를 자동 생성했습니다.`
-            : "명령어가 생성되었습니다. 비용은 발생하지 않았습니다.",
-        );
+        setNotice("");
       } catch (error) {
         setNotice(
           error instanceof Error
@@ -266,14 +261,9 @@ export function AiRepairCommandPanel() {
 
           <div className="min-w-0 flex-1">
             <p className="text-xs font-extrabold">
-              무료 ChatGPT 명령어
+              ChatGPT 명령어
             </p>
 
-            <p className="mt-1 break-keep text-[10px] leading-relaxed text-muted-foreground">
-              앱에서 AI API를 호출하지 않습니다. 생성 비용은
-              0원이며 오류가 발견되면 복구 명령어가 자동으로
-              생성됩니다.
-            </p>
           </div>
         </div>
 
@@ -301,7 +291,7 @@ export function AiRepairCommandPanel() {
             ) : (
               <Bot className="h-4 w-4" />
             )}
-            진단 명령어 만들기
+            요청 명령어 만들기
           </button>
 
           <button
@@ -321,24 +311,17 @@ export function AiRepairCommandPanel() {
           </button>
         </div>
 
-        <p className="mt-2 flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground">
-          <CheckCircle2 className="h-3.5 w-3.5 text-positive" />
-          {notice}
-        </p>
       </section>
 
       {modal && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-2xl rounded-3xl border border-card-border bg-card p-4 shadow-2xl">
+          <div className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-card-border bg-card p-4 shadow-2xl">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-black">
                   {modal.title}
                 </p>
 
-                <p className="mt-1 text-[10px] font-bold text-positive">
-                  AI API 호출 없음 · 발생 비용 없음
-                </p>
               </div>
 
               <button
@@ -351,18 +334,12 @@ export function AiRepairCommandPanel() {
               </button>
             </div>
 
-            {modal.automatic && (
-              <p className="mt-3 rounded-xl border border-warning/40 bg-warning/10 p-3 text-xs font-extrabold text-warning">
-                오류가 발견되어 수정 요청 명령어를 자동
-                생성했습니다.
-              </p>
-            )}
 
             <textarea
               readOnly
               value={modal.command}
-              rows={18}
-              className="mt-3 w-full resize-y rounded-2xl border border-card-border bg-background p-3 text-xs leading-relaxed outline-none"
+              rows={20}
+              className="mt-3 min-h-[55vh] w-full resize-y rounded-2xl border border-card-border bg-background p-3 text-xs leading-relaxed outline-none"
             />
 
             <button
