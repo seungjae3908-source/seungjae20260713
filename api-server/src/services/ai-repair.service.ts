@@ -1,4 +1,5 @@
 // AI_REPAIR_COST_CONSENT_V1
+// AI_REPAIR_LIVE_DIAGNOSTIC_V1
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -479,6 +480,7 @@ function loadPersistedJobs(): void {
       const job = JSON.parse(fs.readFileSync(path.join(jobsDir(), name), 'utf8')) as AiRepairJob;
       jobs.set(job.id, job);
       if (ACTIVE_STATUSES.has(job.status)) {
+        job.currentCheck = undefined;
         job.status = job.status === 'applying' ? 'applying' : 'queued';
         job.message = job.status === 'applying'
           ? '서버 재시작 후 승인 작업 재개 대기'
@@ -839,6 +841,20 @@ async function runChecks(job: AiRepairJob, workspace: string): Promise<AiRepairC
     if (job.cancellationRequested) throw new Error('사용자가 작업 중단을 요청했습니다.');
     const check = CHECKS[index];
     const startedAt = now();
+
+    job.currentCheck = {
+      name: check.name,
+      label: check.label,
+      startedAt,
+    };
+    job.progress = clamp(
+      12 + Math.round((index / CHECKS.length) * 24),
+      0,
+      100,
+    );
+    job.message = `${check.label} 진단 중`;
+    persist(job);
+
     const result = await runCommand(
       job,
       path.resolve(workspace, check.cwd),
@@ -847,10 +863,44 @@ async function runChecks(job: AiRepairJob, workspace: string): Promise<AiRepairC
       check.timeoutMs,
       { allowFailure: true },
     );
-    results.push(checkRow(check.name, check.label, result, startedAt));
+
+    if (job.cancellationRequested) {
+      job.currentCheck = undefined;
+      persist(job);
+      throw new Error('사용자가 작업 중단을 요청했습니다.');
+    }
+
+    const row = checkRow(
+      check.name,
+      check.label,
+      result,
+      startedAt,
+    );
+
+    results.push(row);
     job.checks = results;
-    job.progress = clamp(18 + Math.round(((index + 1) / CHECKS.length) * 20), 0, 100);
-    job.message = `${check.label}: ${result.ok ? '성공' : '실패'}`;
+
+    if (!result.ok) {
+      job.diagnosticErrors = [
+        ...(job.diagnosticErrors ?? []).filter(
+          (item) => item.name !== check.name,
+        ),
+        {
+          name: check.name,
+          label: check.label,
+          output: result.output.slice(-20_000),
+          detectedAt: now(),
+        },
+      ];
+    }
+
+    job.currentCheck = undefined;
+    job.progress = clamp(
+      18 + Math.round(((index + 1) / CHECKS.length) * 20),
+      0,
+      100,
+    );
+    job.message = `${check.label}: ${result.ok ? '성공' : '오류 발견'}`;
     persist(job);
   }
   if (results.every((item) => item.ok)) {
@@ -1436,6 +1486,7 @@ async function executeJob(job: AiRepairJob): Promise<void> {
         : '자동 복구 작업이 완료되지 못했습니다.';
       job.error = message;
     }
+    job.currentCheck = undefined;
     job.progress = 100;
     job.completedAt = now();
     persist(job);
@@ -1563,6 +1614,8 @@ export function createAiRepairJob(input: {
     usage: [],
     attempts: [],
     checks: [],
+    currentCheck: undefined,
+    diagnosticErrors: [],
     changedFiles: [],
     logs: [],
   };
