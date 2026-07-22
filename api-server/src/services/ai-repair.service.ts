@@ -323,7 +323,7 @@ export function estimateAiRepairCost(input: {
   const existing = input.jobId ? jobs.get(input.jobId) : undefined;
 
   if (input.jobId && !existing) {
-    throw new Error('비용을 계산할 AI 복구 작업을 찾을 수 없습니다.');
+    throw new Error('을 계산할 AI 복구 작업을 찾을 수 없습니다.');
   }
 
   const request = `${input.request || existing?.request || ''}`.trim();
@@ -641,7 +641,7 @@ export function getAiRepairCostHistoryPage(
 
         aggregated.set(jobId, next);
       } catch {
-        // 손상된 비용 내역은 건너뜁니다.
+        // 손상된  내역은 건너뜁니다.
       }
     }
   }
@@ -1578,8 +1578,8 @@ async function processRepairJob(job: AiRepairJob): Promise<void> {
 
     await sendJobNotification(
       job,
-      '무료 진단에서 오류 발견',
-      'AI 수정은 비용 확인과 별도 승인을 받은 뒤에만 시작됩니다.',
+      ' 진단에서 오류 발견',
+      'AI 수정은  확인과 별도 승인을 받은 뒤에만 시작됩니다.',
     );
     return;
   }
@@ -1832,7 +1832,7 @@ export function createAiRepairJob(input: {
     !paidDiagnosis &&
     !features.freeDiagnosisEnabled
   ) {
-    throw new Error('무료 진단 기능이 환경설정에서 꺼져 있습니다.');
+    throw new Error(' 진단 기능이 환경설정에서 꺼져 있습니다.');
   }
 
   if (
@@ -1840,7 +1840,7 @@ export function createAiRepairJob(input: {
     paidDiagnosis &&
     !features.paidDiagnosisEnabled
   ) {
-    throw new Error('유료 진단·복구 기능이 환경설정에서 꺼져 있습니다.');
+    throw new Error(' 진단·복구 기능이 환경설정에서 꺼져 있습니다.');
   }
 
   if (
@@ -1854,7 +1854,7 @@ export function createAiRepairJob(input: {
     (input.kind === 'improvement' || paidDiagnosis) &&
     input.costConsent !== true
   ) {
-    throw new Error('예상 비용 확인과 유료 AI 작업 동의가 필요합니다.');
+    throw new Error('예상  확인과  AI 작업 동의가 필요합니다.');
   }
 
   const request = input.request.trim().slice(0, 20_000);
@@ -1984,17 +1984,17 @@ export function approveAiRepairCost(
   }
 
   if (job.status !== 'awaiting_ai_approval') {
-    throw new Error('현재 유료 AI 수정 승인을 받을 수 있는 상태가 아닙니다.');
+    throw new Error('현재  AI 수정 승인을 받을 수 있는 상태가 아닙니다.');
   }
 
   if (costConsent !== true) {
-    throw new Error('예상 비용 확인과 유료 AI 작업 동의가 필요합니다.');
+    throw new Error('예상  확인과  AI 작업 동의가 필요합니다.');
   }
 
   const features = getAiRepairFeatureSettings();
 
   if (!features.paidDiagnosisEnabled) {
-    throw new Error('유료 진단·복구 기능이 환경설정에서 꺼져 있습니다.');
+    throw new Error(' 진단·복구 기능이 환경설정에서 꺼져 있습니다.');
   }
 
   job.billingMode = 'paid';
@@ -2008,7 +2008,7 @@ export function approveAiRepairCost(
   });
   job.status = 'queued';
   job.progress = 40;
-  job.message = '유료 AI 수정 승인 완료 — 작업 대기열 접수';
+  job.message = ' AI 수정 승인 완료 — 작업 대기열 접수';
   job.error = undefined;
 
   persist(job);

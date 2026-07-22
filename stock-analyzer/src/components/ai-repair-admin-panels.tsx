@@ -201,21 +201,21 @@ export function AiRepairAdminPanels() {
             {[
               {
                 key: "freeDiagnosisEnabled" as const,
-                title: "무료 진단 버튼",
+                title: " 진단 버튼",
                 description:
                   "OpenAI 호출 없이 TypeScript·빌드·격리 서버만 검사",
               },
               {
                 key: "paidDiagnosisEnabled" as const,
-                title: "유료 진단·자동 복구 버튼",
+                title: " 진단·자동 복구 버튼",
                 description:
-                  "오류 발견 시 비용 승인 후 AI 수정과 재검사 진행",
+                  "오류 발견 시  승인 후 AI 수정과 재검사 진행",
               },
               {
                 key: "improvementEnabled" as const,
-                title: "유료 개선 작업 버튼",
+                title: " 개선 작업 버튼",
                 description:
-                  "입력한 개선 요청 기준으로 예상 비용 확인 후 실행",
+                  "입력한 개선 요청 기준으로 예상  확인 후 실행",
               },
             ].map((item) => (
               <label
@@ -268,7 +268,7 @@ export function AiRepairAdminPanels() {
         >
           <span className="flex items-center gap-2 text-xs font-extrabold">
             <DollarSign className="h-4 w-4 text-primary" />
-            발생 비용 지난내역
+            발생  지난내역
           </span>
 
           <span className="text-xs font-extrabold text-primary">
@@ -302,7 +302,7 @@ export function AiRepairAdminPanels() {
 
             {history.length === 0 ? (
               <div className="rounded-xl border border-dashed border-card-border p-5 text-center text-xs text-muted-foreground">
-                아직 발생한 유료 AI 비용이 없습니다.
+                아직 발생한  AI 이 없습니다.
               </div>
             ) : (
               <div className="space-y-2">
@@ -319,7 +319,7 @@ export function AiRepairAdminPanels() {
 
                         <p className="mt-1 text-[10px] text-muted-foreground">
                           {item.kind === "diagnosis"
-                            ? "유료 진단·복구"
+                            ? " 진단·복구"
                             : "개선 작업"}
                           {" · "}
                           {formatDate(item.recordedAt)}
@@ -400,7 +400,7 @@ export function AiRepairAdminPanels() {
               className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-extrabold text-primary"
             >
               <RefreshCcw className="h-4 w-4" />
-              비용 내역 새로고침
+               내역 새로고침
             </button>
           </div>
         )}
