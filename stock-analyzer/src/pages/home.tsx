@@ -228,10 +228,6 @@ export default function HomePage() {
                   ))}
                 </div>
               )}
-
-              <p className="text-[10px] font-bold text-muted-foreground">
-                등락률만으로 판단하지 않고 정책·금리·실적·규제·산업 뉴스 흐름을 종합한 브리핑입니다.
-              </p>
             </div>
           )}
         </section>
