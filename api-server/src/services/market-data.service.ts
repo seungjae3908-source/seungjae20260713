@@ -734,11 +734,18 @@ async function tryCandlesProviderMeta(
    */
   if (marketValue === 'KR') {
     try {
-      const kiwoomRows = await getKiwoomChartCandles(
-        ticker,
-        timeframeText,
-        options.maxPages,
-      );
+      const timeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("KIWOOM_TIMEOUT")), 10000);
+      });
+
+      const kiwoomRows = await Promise.race([
+        getKiwoomChartCandles(
+          ticker,
+          timeframeText,
+          options.maxPages,
+        ),
+        timeout,
+      ]);
 
       if (kiwoomRows.length >= 2) {
         return { candles: kiwoomRows as Candle[], provider: 'kiwoom' };

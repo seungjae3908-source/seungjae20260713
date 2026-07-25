@@ -202,7 +202,6 @@ const server = app.listen(
       '[api-server] Kiwoom routes enabled at /api/kiwoom',
     );
 
-    startPriceAlertMonitor();
 
     if (frontendDist) {
       console.log(
@@ -216,4 +215,4 @@ const server = app.listen(
   },
 );
 
-attachRealtimeChartServer(server);
+// attachRealtimeChartServer(server);
