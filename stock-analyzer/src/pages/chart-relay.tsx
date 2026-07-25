@@ -251,6 +251,117 @@ function signalAtCandle(signals: ChartSignal[], candle: CandlePoint) {
     .sort((left, right) => priority[right.stage] - priority[left.stage])[0] ?? null;
 }
 
+function detectLocalPatternSignals(candles: CandlePoint[]): ChartSignal[] {
+  if (candles.length < 3) return [];
+  const found: ChartSignal[] = [];
+  const start = Math.max(1, candles.length - 160);
+
+  const add = (
+    name: string,
+    fromIndex: number,
+    toIndex: number,
+    stage: ChartSignal['stage'],
+    importance: SignalImportance,
+  ) => {
+    const from = candles[fromIndex];
+    const to = candles[toIndex];
+    if (!from || !to) return;
+    const region = candles.slice(fromIndex, toIndex + 1);
+    const bullish = /상승|망치|쌍바닥/.test(name);
+    const bearish = /하락|유성|쌍봉/.test(name);
+    let resolvedStage = stage;
+    const future = candles.slice(toIndex + 1, Math.min(candles.length, toIndex + 5));
+    if (
+      (bullish && future.some((row) => row.close < Math.min(...region.map((item) => item.low)))) ||
+      (bearish && future.some((row) => row.close > Math.max(...region.map((item) => item.high))))
+    ) {
+      resolvedStage = 'INVALIDATED';
+    }
+    found.push({
+      id: `local:${name}:${Number(from.time)}:${Number(to.time)}`,
+      kind: 'candle',
+      name,
+      occurredAt: new Date(Number(to.time) * 1000).toISOString(),
+      price: to.close,
+      barTime: Number(to.time),
+      importance,
+      meaningGeneral: '캔들의 몸통·꼬리·이전 봉 관계를 현재 차트에서 직접 계산한 패턴입니다.',
+      meaningHere: `${fromIndex + 1}번 봉부터 ${toIndex + 1}번 봉까지 ${PATTERN_STAGE_META[resolvedStage].label} 상태입니다.`,
+      confirmations: ['거래량 증가 여부', '다음 봉의 방향 유지', '지지·저항 돌파 또는 이탈'],
+      invalidation: ['패턴 저점 또는 고점 반대 방향 돌파'],
+      risk: '클라이언트 캔들 기반 보완 감지이며 실제 주문 신호가 아닙니다.',
+      overlay: {
+        type: 'zone',
+        fromTime: Number(from.time),
+        toTime: Number(to.time),
+      },
+      stage: resolvedStage,
+    });
+  };
+
+  for (let index = start; index < candles.length; index += 1) {
+    const previous = candles[index - 1]!;
+    const current = candles[index]!;
+    const body = Math.abs(current.close - current.open);
+    const range = Math.max(current.high - current.low, Number.EPSILON);
+    const lowerWick = Math.min(current.open, current.close) - current.low;
+    const upperWick = current.high - Math.max(current.open, current.close);
+    if (
+      previous.close < previous.open &&
+      current.close > current.open &&
+      current.open <= previous.close &&
+      current.close >= previous.open
+    ) {
+      add('상승 장악형', index - 1, index, 'COMPLETED', 'high');
+    } else if (
+      previous.close > previous.open &&
+      current.close < current.open &&
+      current.open >= previous.close &&
+      current.close <= previous.open
+    ) {
+      add('하락 장악형', index - 1, index, 'COMPLETED', 'high');
+    } else if (body / range < 0.1) {
+      add('도지', index, index, 'START', 'low');
+    } else if (lowerWick > body * 2 && lowerWick > upperWick * 1.5) {
+      add('망치형', index, index, 'START', 'medium');
+    } else if (upperWick > body * 2 && upperWick > lowerWick * 1.5) {
+      add('유성형', index, index, 'START', 'medium');
+    }
+  }
+
+  const recentStart = Math.max(1, candles.length - 60);
+  const lows = candles
+    .slice(recentStart)
+    .map((row, offset) => ({ value: row.low, index: recentStart + offset }))
+    .filter((row) => {
+      const before = candles[row.index - 1];
+      const after = candles[row.index + 1];
+      return before && after && row.value <= before.low && row.value <= after.low;
+    });
+  const highs = candles
+    .slice(recentStart)
+    .map((row, offset) => ({ value: row.high, index: recentStart + offset }))
+    .filter((row) => {
+      const before = candles[row.index - 1];
+      const after = candles[row.index + 1];
+      return before && after && row.value >= before.high && row.value >= after.high;
+    });
+  if (lows.length >= 2) {
+    const [left, right] = lows.slice(-2);
+    if (right.index - left.index >= 4 && Math.abs(right.value - left.value) / Math.max(left.value, 1) < 0.015) {
+      add('쌍바닥 후보', left.index, right.index, 'DEVELOPING', 'medium');
+    }
+  }
+  if (highs.length >= 2) {
+    const [left, right] = highs.slice(-2);
+    if (right.index - left.index >= 4 && Math.abs(right.value - left.value) / Math.max(left.value, 1) < 0.015) {
+      add('쌍봉 후보', left.index, right.index, 'DEVELOPING', 'medium');
+    }
+  }
+
+  return found.slice(-40);
+}
+
 function settingsWithValue(value: boolean): ChartSettings {
   return {
     liveSignal: value,
@@ -1760,8 +1871,15 @@ export default function ChartRelayPage() {
       seen.add(id);
       mapped.push(signal);
     }
+    if (settings.liveSignal && (settings.chartPattern || settings.candlePattern)) {
+      for (const signal of detectLocalPatternSignals(candles)) {
+        if (seen.has(signal.id)) continue;
+        seen.add(signal.id);
+        mapped.push(signal);
+      }
+    }
     return mapped;
-  }, [signalsQuery.data, settings]);
+  }, [candles, signalsQuery.data, settings]);
 
   useEffect(() => {
     if (!settings.liveSignal) {
