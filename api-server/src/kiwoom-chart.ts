@@ -748,6 +748,7 @@ async function fetchAllPages(
 export async function getKiwoomChartCandles(
   tickerValue: string,
   timeframeValue = "1D",
+  maxPagesOverride?: number,
 ): Promise<KiwoomChartCandle[]> {
   if (!isKiwoomConfigured()) {
     throw new Error(
@@ -773,10 +774,21 @@ export async function getKiwoomChartCandles(
       timeframeValue,
     );
 
-  const spec = requestSpec(
+  const baseSpec = requestSpec(
     ticker,
     timeframe,
   );
+  const spec =
+    Number.isFinite(maxPagesOverride) &&
+    Number(maxPagesOverride) > 0
+      ? {
+          ...baseSpec,
+          maxPages: Math.min(
+            baseSpec.maxPages,
+            Math.max(1, Math.floor(Number(maxPagesOverride))),
+          ),
+        }
+      : baseSpec;
 
   const rows =
     await fetchAllPages(spec);
