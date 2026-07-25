@@ -6,6 +6,10 @@ run = "bash -lc 'if [ ! -d node_modules ]; then pnpm install --no-frozen-lockfil
 localPort = 3001
 
 [[ports]]
+localPort = 5173
+externalPort = 5173
+
+[[ports]]
 localPort = 8080
 externalPort = 80
 

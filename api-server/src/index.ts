@@ -3,9 +3,10 @@ import cors from 'cors';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+
 import apiRouter from './routes';
 import { startPriceAlertMonitor } from './services/notification.service';
-import { attachRealtimeChartServer } from './services/analysis/realtime-chart.service';
+// import { attachRealtimeChartServer } from './services/analysis/realtime-chart.service';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,19 +54,15 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-/*
- * API 라우트는 반드시 프론트 정적 파일보다 먼저 등록합니다.
- */
 app.use('/api', apiRouter);
 
-/*
- * 중요:
- * 이전 코드는 여러 dist 후보 중 먼저 존재하는 폴더를 골랐기 때문에,
- * Replit 작업공간에 남아 있던 오래된 dist가 선택될 수 있었습니다.
- * 이제 현재 저장소의 stock-analyzer/dist/public만 사용합니다.
- */
 const repositoryRoot = path.resolve(__dirname, '../..');
-const frontendDist = path.join(repositoryRoot, 'stock-analyzer/dist/public');
+const frontendDist = path.join(
+  repositoryRoot,
+  'stock-analyzer',
+  'dist',
+  'public',
+);
 const frontendIndex = path.join(frontendDist, 'index.html');
 const hasFrontendBuild = fs.existsSync(frontendIndex);
 
@@ -74,13 +71,22 @@ if (hasFrontendBuild) {
     express.static(frontendDist, {
       index: false,
       setHeaders(res, filePath) {
-        if (filePath.endsWith('.html') || filePath.endsWith('sw.js')) {
-          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        if (
+          filePath.endsWith('.html') ||
+          filePath.endsWith('sw.js')
+        ) {
+          res.setHeader(
+            'Cache-Control',
+            'no-store, no-cache, must-revalidate',
+          );
           return;
         }
 
         if (/\.(?:js|css|woff2|png|svg)$/.test(filePath)) {
-          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          res.setHeader(
+            'Cache-Control',
+            'public, max-age=31536000, immutable',
+          );
         }
       },
     }),
@@ -117,7 +123,10 @@ app.use((req, res) => {
   }
 
   if (hasFrontendBuild) {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader(
+      'Cache-Control',
+      'no-store, no-cache, must-revalidate',
+    );
     res.setHeader('X-Frontend-Dist', frontendDist);
     res.sendFile(frontendIndex);
     return;
@@ -126,7 +135,8 @@ app.use((req, res) => {
   res.status(200).json({
     ok: true,
     service: 'api-server',
-    message: 'API server is running, but frontend dist was not found.',
+    message:
+      'API server is running, but frontend dist was not found.',
     expectedFrontendDist: frontendDist,
     available: ['/health', ...availableRoutes],
   });
@@ -134,27 +144,22 @@ app.use((req, res) => {
 
 const server = app.listen(port, '0.0.0.0', () => {
   console.log(`[api-server] listening on 0.0.0.0:${port}`);
-  console.log('[api-server] Kiwoom routes enabled at /api/kiwoom');
+  console.log(
+    '[api-server] Kiwoom routes enabled at /api/kiwoom',
+  );
 
   startPriceAlertMonitor();
 
   if (hasFrontendBuild) {
-    console.log(`[api-server] serving frontend from ${frontendDist}`);
+    console.log(
+      `[api-server] serving frontend from ${frontendDist}`,
+    );
   } else {
     console.log(
       `[api-server] frontend dist not found: ${frontendDist}; api only mode`,
     );
+  }
+});
 
-		console.log('[api-server] Kiwoom routes enabled at /api/kiwoom');
-
-		startPriceAlertMonitor();
-
-		if (hasFrontendBuild) {
-			console.log(`[api-server] serving frontend from ${frontendDist}`);
-		} else {
-			console.log(
-				`[api-server] frontend dist not found: ${frontendDist}; api only mode`,
-			);
-		}
-		});
 // attachRealtimeChartServer(server);
+void server;
