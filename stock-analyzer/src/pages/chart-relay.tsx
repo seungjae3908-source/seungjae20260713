@@ -1589,7 +1589,13 @@ export default function ChartRelayPage() {
   // WebSocket이 실제 스냅샷을 전달하기 전까지 REST 캔들 조회를 유지한다.
   // Replit Preview에서 WebSocket 업그레이드가 지연되거나 실패해도
   // 차트가 무한 로딩 상태에 머물지 않게 한다.
-  const useRestFallback = realtime.status !== 'live' || !realtime.snapshot;
+  const hasMatchingRealtimeSnapshot =
+    realtime.status === 'live' &&
+    realtime.snapshot?.asset === asset &&
+    realtime.snapshot.symbol === symbol.trim().toUpperCase() &&
+    realtime.snapshot.interval === interval &&
+    realtime.snapshot.candles.length >= 2;
+  const useRestFallback = !hasMatchingRealtimeSnapshot;
 
   const candleQuery = useQuery({
     queryKey: candleQueryKey,
@@ -1597,6 +1603,7 @@ export default function ChartRelayPage() {
       const normalizedSymbol = symbol.trim().toUpperCase();
       const payload = await apiGet<AnyObj>(
         candleUrl(asset, normalizedSymbol, interval),
+        { timeoutMs: 20_000 },
       );
 
       if (extractCandleRows(payload).length < 2) {
@@ -1610,8 +1617,8 @@ export default function ChartRelayPage() {
     refetchIntervalInBackground: true,
     refetchOnMount: 'always',
     refetchOnReconnect: true,
-    retry: 3,
-    retryDelay: (attempt) => Math.min(1_500 * 2 ** attempt, 8_000),
+    retry: 1,
+    retryDelay: 1_500,
   });
 
   const signalsQuery = useQuery({
