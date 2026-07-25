@@ -1879,6 +1879,7 @@ router.get("/:ticker/chart", async (req, res) => {
 router.get("/:ticker/candles", async (req, res) => {
 	const ticker = normalizeTicker(req.params.ticker);
 	const timeframe = normalizeTimeframe(req.query.tf ?? req.query.timeframe);
+	const quick = String(req.query.quick ?? "") === "1";
 
 	if (!ticker) {
 		res.status(400).json({
@@ -1891,6 +1892,7 @@ router.get("/:ticker/candles", async (req, res) => {
 		const meta = await MarketDataService.getCandlesMeta(
 			ticker,
 			timeframe as any,
+			quick ? { maxPages: 1 } : {},
 		);
 
 		res.json({
