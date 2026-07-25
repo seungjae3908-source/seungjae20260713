@@ -86,6 +86,7 @@ type ChartSignal = {
   invalidation: string[];
   risk: string;
   overlay: OverlayShape | null;
+  stage: 'START' | 'DEVELOPING' | 'COMPLETED' | 'INVALIDATED';
 };
 
 type AiPlan = {
@@ -215,6 +216,40 @@ const SETTING_LABELS: Array<{ key: keyof ChartSettings; label: string }> = [
 ];
 
 const CHART_TYPE_KEY = 'chart-relay-chart-type-v1';
+
+const PATTERN_STAGE_META = {
+  START: { label: '시작', color: '#eab308' },
+  DEVELOPING: { label: '진행', color: '#f97316' },
+  COMPLETED: { label: '완성', color: '#22c55e' },
+  INVALIDATED: { label: '이탈', color: '#ef4444' },
+} as const;
+
+function chartSignalStage(row: AnyObj, name: string, importance: string): ChartSignal['stage'] {
+  const raw = String(row?.stage ?? row?.status ?? '').toUpperCase();
+  if (raw === 'INVALIDATED' || /이탈|실패|무효/.test(name)) return 'INVALIDATED';
+  if (raw === 'COMPLETED' || /완성|확정|돌파/.test(name) || signalImportance(importance) === 'high') return 'COMPLETED';
+  if (raw === 'DEVELOPING' || /후보|진행|형성/.test(name)) return 'DEVELOPING';
+  return 'START';
+}
+
+function signalAtCandle(signals: ChartSignal[], candle: CandlePoint) {
+  const time = Number(candle.time);
+  const priority: Record<ChartSignal['stage'], number> = {
+    START: 1,
+    DEVELOPING: 2,
+    COMPLETED: 3,
+    INVALIDATED: 4,
+  };
+  return signals
+    .filter((signal) => {
+      if (signal.kind !== 'chart' && signal.kind !== 'candle') return false;
+      const from = toUnixSeconds(signal.overlay?.fromTime ?? signal.barTime);
+      const to = toUnixSeconds(signal.overlay?.toTime ?? signal.barTime);
+      if (from == null && to == null) return false;
+      return time >= Math.min(from ?? to!, to ?? from!) && time <= Math.max(from ?? to!, to ?? from!);
+    })
+    .sort((left, right) => priority[right.stage] - priority[left.stage])[0] ?? null;
+}
 
 function settingsWithValue(value: boolean): ChartSettings {
   return {
@@ -619,6 +654,7 @@ function RelayChart({
   canLoadOlder,
   isLoadingOlder,
   onLoadOlder,
+  onSignalSelect,
 }: {
   candles: CandlePoint[];
   timeVisible: boolean;
@@ -632,6 +668,7 @@ function RelayChart({
   canLoadOlder: boolean;
   isLoadingOlder: boolean;
   onLoadOlder: () => void;
+  onSignalSelect: (signal: ChartSignal) => void;
 }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -673,6 +710,9 @@ function RelayChart({
   const loadOlderArmedRef = useRef(true);
   const viewingHistoryRef = useRef(false);
   const onLoadOlderRef = useRef(onLoadOlder);
+  const onSignalSelectRef = useRef(onSignalSelect);
+  const signalsRef = useRef(signals);
+  const candlesRef = useRef(candles);
   const canLoadOlderRef = useRef(canLoadOlder);
   const [chartType, setChartType] = useState<ChartType>(() => loadChartType());
   const [scaleType, setScaleType] = useState<PriceScaleType>('normal');
@@ -703,7 +743,13 @@ function RelayChart({
   useEffect(() => {
     onLoadOlderRef.current = onLoadOlder;
     canLoadOlderRef.current = canLoadOlder;
-  }, [canLoadOlder, onLoadOlder]);
+    onSignalSelectRef.current = onSignalSelect;
+  }, [canLoadOlder, onLoadOlder, onSignalSelect]);
+
+  useEffect(() => {
+    signalsRef.current = signals;
+    candlesRef.current = candles;
+  }, [candles, signals]);
 
   useEffect(() => {
     firstFitRef.current = false;
@@ -798,6 +844,14 @@ function RelayChart({
       setHoverTime(typeof param.time === 'number' ? Number(param.time) : null);
     };
     chart.subscribeCrosshairMove(crosshairHandler);
+    const clickHandler = (param: MouseEventParams<Time>) => {
+      if (typeof param.time !== 'number') return;
+      const candle = candlesRef.current.find((item) => Number(item.time) === Number(param.time));
+      if (!candle) return;
+      const signal = signalAtCandle(signalsRef.current, candle);
+      if (signal) onSignalSelectRef.current(signal);
+    };
+    chart.subscribeClick(clickHandler);
 
     const rangeHandler = (range: LogicalRange | null) => {
       if (!range) return;
@@ -831,6 +885,7 @@ function RelayChart({
       savedRangeRef.current = chart.timeScale().getVisibleLogicalRange();
       observer.disconnect();
       chart.unsubscribeCrosshairMove(crosshairHandler);
+      chart.unsubscribeClick(clickHandler);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(rangeHandler);
       chart.remove();
       chartRef.current = null;
@@ -938,13 +993,18 @@ function RelayChart({
     const chart = chartRef.current;
     const volumeSeries = volumeSeriesRef.current;
     if (!chart || !volumeSeries || candles.length < 2) return;
-    const candleData = candles.map((row) => ({
-      time: row.time,
-      open: row.open,
-      high: row.high,
-      low: row.low,
-      close: row.close,
-    }));
+    const candleData = candles.map((row) => {
+      const pattern = signalAtCandle(signals, row);
+      const color = pattern ? PATTERN_STAGE_META[pattern.stage].color : null;
+      return {
+        time: row.time,
+        open: row.open,
+        high: row.high,
+        low: row.low,
+        close: row.close,
+        ...(color ? { color, borderColor: color, wickColor: color } : {}),
+      };
+    });
     const closeData = candles.map((row) => ({ time: row.time, value: row.close }));
     const volumeData = candles.map((row) => ({
       time: row.time,
@@ -958,12 +1018,17 @@ function RelayChart({
       previous.slice(0, -1).every((row, index) => Number(row.time) === Number(candles[index]?.time));
     if (tailOnly) {
       const latest = candles.at(-1)!;
+      const latestPattern = signalAtCandle(signals, latest);
+      const latestColor = latestPattern ? PATTERN_STAGE_META[latestPattern.stage].color : null;
       candleSeriesRef.current?.update({
         time: latest.time,
         open: latest.open,
         high: latest.high,
         low: latest.low,
         close: latest.close,
+        ...(latestColor
+          ? { color: latestColor, borderColor: latestColor, wickColor: latestColor }
+          : {}),
       });
       closeSeriesRef.current?.update({ time: latest.time, value: latest.close });
       volumeSeries.update({
@@ -1005,6 +1070,7 @@ function RelayChart({
     settings.ma5,
     settings.ma60,
     settings.volumeMa20,
+    signals,
   ]);
 
   useEffect(() => {
@@ -1301,6 +1367,16 @@ function RelayChart({
         <span>MACD {indicatorText(selectedIndicator?.macd ?? null, 4)}</span>
         <span>Signal {indicatorText(selectedIndicator?.macdSignal ?? null, 4)}</span>
         <span>Histogram {indicatorText(selectedIndicator?.macdHistogram ?? null, 4)}</span>
+      </div>
+
+      <div className="flex flex-wrap gap-2 border-b border-card-border px-2 py-1.5">
+        {Object.entries(PATTERN_STAGE_META).map(([stage, meta]) => (
+          <span key={stage} className="flex items-center gap-1 text-[9px] font-black text-muted-foreground">
+            <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: meta.color }} />
+            {meta.label}
+          </span>
+        ))}
+        <span className="text-[9px] font-bold text-muted-foreground">색칠된 봉을 누르면 신호 상세가 열립니다.</span>
       </div>
 
       <div
@@ -1662,6 +1738,11 @@ export default function ChartRelayPage() {
         invalidation: Array.isArray(row?.invalidation) ? row.invalidation.map(String) : [],
         risk: String(row?.risk ?? ''),
         overlay: (row?.overlay as OverlayShape | null) ?? null,
+        stage: chartSignalStage(
+          row,
+          String(row?.name ?? '신호'),
+          String(row?.importance ?? ''),
+        ),
       };
       // 설정 토글에 따라 종류별 필터
       if (!settings.liveSignal) continue;
@@ -2110,7 +2191,7 @@ export default function ChartRelayPage() {
                 : 'border-card-border bg-card text-muted-foreground',
             )}
           >
-            실시간 차트 생중계
+            실시간 차트 분석
           </button>
           <button
             type="button"
@@ -2122,7 +2203,7 @@ export default function ChartRelayPage() {
                 : 'border-card-border bg-card text-muted-foreground',
             )}
           >
-            AI 차트 실시간 생중계
+            실시간 신호 분석
           </button>
         </div>
 
@@ -2243,6 +2324,10 @@ export default function ChartRelayPage() {
                     canLoadOlder={Boolean(historyCursor)}
                     isLoadingOlder={isLoadingOlder}
                     onLoadOlder={() => void loadOlder()}
+                    onSignalSelect={(signal) => {
+                      setActiveSignalId(signal.id);
+                      setModalSignal(signal);
+                    }}
                   />
                 )}
               </div>
@@ -2465,7 +2550,7 @@ function AiPlanPanel({
 }) {
   return (
     <section className="mt-3 space-y-2">
-      <h2 className="text-sm font-extrabold">AI 차트 실시간 생중계</h2>
+      <h2 className="text-sm font-extrabold">실시간 신호 분석</h2>
       <p className="rounded-2xl border border-warning/40 bg-warning/10 px-3 py-2 text-[10px] font-bold text-warning">
         표시 전용입니다. 실제 주문과 연결되지 않습니다.
       </p>
