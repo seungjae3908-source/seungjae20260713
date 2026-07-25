@@ -28,7 +28,7 @@ function patchChartRelay(source: string): string {
   code = replaceOnce(
     code,
     "import { InstrumentAlertButton } from '@/components/instrument-alert-modal';",
-    "import { InstrumentAlertButton } from '@/components/instrument-alert-modal';\nimport { PlanLevelsPanel, SignalAnalysisWorkspace } from '@/components/chart-relay-enhancements';",
+    "import { InstrumentAlertButton } from '@/components/instrument-alert-modal';\nimport { buildDisplayPlan, PlanLevelsPanel, SignalAnalysisWorkspace } from '@/components/chart-relay-enhancements';",
     'enhancement import',
   );
 
@@ -82,6 +82,13 @@ function patchChartRelay(source: string): string {
 
   code = replaceOnce(
     code,
+    `  const latestPrice = latestCandle?.close ?? null;`,
+    `  const latestPrice = latestCandle?.close ?? null;\n  const displayPlan = useMemo(\n    () => buildDisplayPlan(plan, candles, symbol),\n    [candles, plan, symbol],\n  );`,
+    'fallback display plan',
+  );
+
+  code = replaceOnce(
+    code,
     `        ) : (\n          <>\n            {/* 차트 영역 */}`,
     `        ) : tab === 'live' ? (\n          <>\n            {/* 차트 영역 */}`,
     'dedicated tab body start',
@@ -90,7 +97,7 @@ function patchChartRelay(source: string): string {
   code = replaceOnce(
     code,
     `            </section>\n            {historyError && (`,
-    `            </section>\n\n            <PlanLevelsPanel\n              plan={plan}\n              asset={asset}\n              settings={settings}\n            />\n\n            {historyError && (`,
+    `            </section>\n\n            <PlanLevelsPanel\n              plan={displayPlan}\n              asset={asset}\n              settings={settings}\n            />\n\n            {historyError && (`,
     'plan levels panel insertion',
   );
 
@@ -107,9 +114,11 @@ function patchChartRelay(source: string): string {
   }
   if (bodyCloseIndex >= 0) {
     const absoluteIndex = bodyStart + bodyCloseIndex;
-    const replacement = `          </>\n        ) : (\n          <SignalAnalysisWorkspace\n            query={signalsQuery}\n            signals={signals}\n            activeSignalId={activeSignalId}\n            onSelect={selectSignal}\n            plan={plan}\n            asset={asset}\n            symbol={symbol}\n            interval={interval}\n          />\n        )}\n`;
+    const replacement = `          </>\n        ) : (\n          <SignalAnalysisWorkspace\n            query={signalsQuery}\n            signals={signals}\n            activeSignalId={activeSignalId}\n            onSelect={selectSignal}\n            plan={displayPlan}\n            asset={asset}\n            symbol={symbol}\n            interval={interval}\n          />\n        )}\n`;
     code = code.slice(0, absoluteIndex) + replacement + code.slice(absoluteIndex + bodyClose.length);
   }
+
+  code = code.replaceAll('plan={plan}', 'plan={displayPlan}');
 
   code = code.replace(
     /className="fixed inset-0 z-\[(?:90|95)\] flex items-end justify-center/g,
