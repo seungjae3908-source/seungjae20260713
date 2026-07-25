@@ -13,6 +13,15 @@ function replaceOnce(
   return source.replace(search, replacement);
 }
 
+function patchRelayChartLibrary(source: string): string {
+  return replaceOnce(
+    source,
+    `  chart.subscribeClick((param: any) => {\n    for (const [series, explanation] of lineExplanations) {\n      if (param?.seriesData?.has?.(series)) {\n        showExplanationModal(explanation);\n        return;\n      }\n    }\n\n    if (!param?.point || !mainCandleSeries || priceLines.length === 0) return;`,
+    `  chart.subscribeClick((param: any) => {\n    const hoveredSeries = param?.hoveredSeries;\n    if (hoveredSeries && lineExplanations.has(hoveredSeries)) {\n      showExplanationModal(lineExplanations.get(hoveredSeries)!);\n      return;\n    }\n\n    if (!param?.point || !mainCandleSeries || priceLines.length === 0) return;`,
+    'indicator click hit test',
+  );
+}
+
 function patchChartRelay(source: string): string {
   let code = source;
 
@@ -117,13 +126,13 @@ const CENTERED_POPUP_SELECTOR =
 function ensurePopupCloseButton(overlay) {
   if (!(overlay instanceof HTMLElement)) return;
   if (overlay.dataset.popupCloseChecked === 'true') return;
-  overlay.dataset.popupCloseChecked = 'true';
   overlay.style.alignItems = 'center';
 
   const panel = Array.from(overlay.children).find(
     (child) => child instanceof HTMLElement && child !== overlay,
   );
   if (!(panel instanceof HTMLElement)) return;
+  overlay.dataset.popupCloseChecked = 'true';
   if (panel.querySelector('[aria-label*="닫기"], [data-popup-close-button]')) return;
 
   if (getComputedStyle(panel).position === 'static') panel.style.position = 'relative';
@@ -141,8 +150,8 @@ function ensurePopupCloseButton(overlay) {
     height: '36px',
     borderRadius: '9999px',
     border: '1px solid rgba(148,163,184,.35)',
-    background: 'var(--card, rgba(15,23,42,.92))',
-    color: 'inherit',
+    background: 'rgba(15,23,42,.92)',
+    color: '#f8fafc',
     fontSize: '24px',
     lineHeight: '30px',
     fontWeight: '800',
@@ -175,6 +184,9 @@ export function chartRelayFeaturePatch(): Plugin {
     enforce: 'pre',
     transform(source, id) {
       const normalized = id.replace(/\\/g, '/').split('?')[0];
+      if (normalized.endsWith('/src/lib/lightweight-charts-relay-patch.ts')) {
+        return { code: patchRelayChartLibrary(source), map: null };
+      }
       if (!normalized.endsWith('/src/pages/chart-relay.tsx')) return null;
       return {
         code: patchChartRelay(source),
