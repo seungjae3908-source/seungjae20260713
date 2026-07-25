@@ -703,6 +703,10 @@ type CandlesMeta = {
   fetchedAt: string;
 };
 
+type CandleFetchOptions = {
+  maxPages?: number;
+};
+
 async function tryCandlesProvider(
   entry: CatalogEntry,
   timeframe: Timeframe,
@@ -714,6 +718,7 @@ async function tryCandlesProvider(
 async function tryCandlesProviderMeta(
   entry: CatalogEntry,
   timeframe: Timeframe,
+  options: CandleFetchOptions = {},
 ): Promise<{ candles: Candle[]; provider: string }> {
   const ticker = cleanTicker((entry as any).ticker);
   const marketValue = normalizeMarketValue((entry as any).market, ticker);
@@ -729,7 +734,11 @@ async function tryCandlesProviderMeta(
    */
   if (marketValue === 'KR') {
     try {
-      const kiwoomRows = await getKiwoomChartCandles(ticker, timeframeText);
+      const kiwoomRows = await getKiwoomChartCandles(
+        ticker,
+        timeframeText,
+        options.maxPages,
+      );
 
       if (kiwoomRows.length >= 2) {
         return { candles: kiwoomRows as Candle[], provider: 'kiwoom' };
@@ -996,7 +1005,9 @@ export class MarketDataService {
     timeframe: Timeframe = '1D' as Timeframe,
   ): Promise<CandlesMeta> {
     const entry = resolveEntry(ticker);
-    const { candles, provider } = await tryCandlesProviderMeta(entry, timeframe);
+    const { candles, provider } = await tryCandlesProviderMeta(entry, timeframe, {
+      maxPages: 1,
+    });
     return {
       candles,
       provider,
@@ -1012,6 +1023,7 @@ export class MarketDataService {
   static async getCandlesMeta(
     ticker: string,
     timeframe: Timeframe = '1D' as Timeframe,
+    options: CandleFetchOptions = {},
   ): Promise<CandlesMeta> {
     const entry = resolveEntry(ticker);
     const timeframeText = String(timeframe ?? '1D');
@@ -1023,12 +1035,13 @@ export class MarketDataService {
 
     // v3: 실시간 분봉 TTL과 공급자 정책 변경 전 캐시와 충돌하지 않도록 버전을 올린다.
     return cached(
-      `candles:v3:${cleanTicker(ticker)}:${timeframeText}`,
+      `candles:v4:${cleanTicker(ticker)}:${timeframeText}:pages:${options.maxPages ?? 'all'}`,
       intradayTtl,
       async () => {
         const { candles, provider } = await tryCandlesProviderMeta(
           entry,
           timeframe,
+          options,
         );
 
         return {
