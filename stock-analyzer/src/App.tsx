@@ -34,6 +34,7 @@ const TechPage = lazy(() => import('@/pages/tech'));
 const SignalScanPage = lazy(() => import('@/pages/signal-scan'));
 const AutoTradePage = lazy(() => import('@/pages/auto-trade'));
 const ChartRelayPage = lazy(() => import('@/pages/chart-relay'));
+const ChartBroadcastPage = lazy(() => import('@/components/chart-broadcast'));
 const MarketAnalysisPage = lazy(() => import('@/pages/market-analysis'));
 const StockInfoPage = lazy(() => import('@/pages/stock-info'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
@@ -281,6 +282,14 @@ function GatedChartRelayPage() {
 	);
 }
 
+function GatedChartBroadcastPage() {
+	return (
+		<FeatureGate feature="aiRealtimeChart">
+			<ChartBroadcastPage />
+		</FeatureGate>
+	);
+}
+
 function GatedAutoTradePage() {
 	return (
 		<FeatureGate feature="aiRealtimeChart">
@@ -388,6 +397,7 @@ function ApprovedRouter() {
 				<Route path="/tech/signal-scan" component={GatedSignalScanPage} />
 				<Route path="/tech/signal-scan/:market" component={GatedSignalScanPage} />
 				<Route path="/tech/chart-relay" component={GatedChartRelayPage} />
+				<Route path="/tech/chart-broadcast" component={GatedChartBroadcastPage} />
 				<Route path="/tech/auto-trade" component={GatedAutoTradePage} />
 				<Route path="/analysis/:market" component={GatedMarketAnalysisPage} />
 				<Route path="/learn" component={AdvancedLearnPage} />

@@ -1,0 +1,1594 @@
+cd ~/workspace && python3 - <<'PY'
+from pathlib import Path
+from datetime import datetime
+import glob
+import re
+import shutil
+import tarfile
+
+ROOT = Path.home() / "workspace"
+STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
+MARK = "// FINAL_AI_SIGNAL_PATCH_20260720"
+
+PATHS = {
+    "search": ROOT / "stock-analyzer/src/pages/search.tsx",
+    "stocks": ROOT / "stock-analyzer/src/pages/stocks.tsx",
+    "scanner": ROOT / "stock-analyzer/src/pages/scanner.tsx",
+    "detail": ROOT / "stock-analyzer/src/pages/detail.tsx",
+    "stock_info": ROOT / "stock-analyzer/src/pages/stock-info.tsx",
+    "chart": ROOT / "stock-analyzer/src/components/chart-broadcast.tsx",
+    "spot": ROOT / "stock-analyzer/src/components/coin-spot-tools.tsx",
+    "futures": ROOT / "stock-analyzer/src/components/crypto-trading-workspace.tsx",
+}
+
+for name, path in PATHS.items():
+    if not path.exists():
+        raise SystemExit(f"파일 없음: {path}")
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    if old not in text:
+        raise RuntimeError(f"교체 위치를 찾지 못했습니다: {label}")
+    return text.replace(old, new, 1)
+
+def regex_once(text: str, pattern: str, replacement: str, label: str) -> str:
+    updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+    if count != 1:
+        raise RuntimeError(f"교체 위치를 찾지 못했습니다: {label}")
+    return updated
+
+def load_correct_scanner() -> str:
+    current = PATHS["scanner"].read_text(encoding="utf-8")
+    if "export default function ScannerPage()" in current:
+        return current
+
+    backup_files = sorted(
+        PATHS["scanner"].parent.glob("scanner.tsx.bak-*"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+    for path in backup_files:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if "export default function ScannerPage()" in text and "ChartBroadcastPanel" in text:
+            print(f"SCANNER_RESTORE_SOURCE={path}")
+            return text
+
+    archives = []
+    archive_patterns = [
+        str(ROOT / "*.tar.gz"),
+        str(ROOT / "UPLOAD/*.tar.gz"),
+        str(Path.home() / "replit-source-backup-*.tar.gz"),
+        str(Path.home() / "stock-source-*.tar.gz"),
+    ]
+
+    for pattern in archive_patterns:
+        archives.extend(Path(path) for path in glob.glob(pattern))
+
+    archives = sorted(
+        set(archives),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+    for archive in archives:
+        try:
+            with tarfile.open(archive, "r:gz") as handle:
+                for member in handle.getmembers():
+                    if not member.isfile():
+                        continue
+                    if not member.name.endswith("stock-analyzer/src/pages/scanner.tsx"):
+                        continue
+                    extracted = handle.extractfile(member)
+                    if extracted is None:
+                        continue
+                    text = extracted.read().decode("utf-8", errors="ignore")
+                    if (
+                        "export default function ScannerPage()" in text
+                        and "ChartBroadcastPanel" in text
+                    ):
+                        print(f"SCANNER_RESTORE_SOURCE={archive}:{member.name}")
+                        return text
+        except Exception:
+            continue
+
+    raise RuntimeError(
+        "정상 scanner.tsx 백업을 찾지 못했습니다. "
+        "UPLOAD 폴더의 stock-source 압축파일을 삭제하지 않았는지 확인하세요."
+    )
+
+def patch_search(text: str) -> str:
+    if MARK in text:
+        return text
+
+    rank_tabs = '''const RANK_TABS: Array<{
+  key: RankType;
+  label: string;
+}> = [
+  { key: "marketCap", label: "시가총액" },
+  { key: "tradingValue", label: "거래대금" },
+  { key: "volume", label: "거래량" },
+  { key: "gainers", label: "급상승" },
+  { key: "losers", label: "급하락" },
+  { key: "recommended", label: "AI추천" },
+];
+
+function toNumber'''
+
+    text = regex_once(
+        text,
+        r'const RANK_TABS:[\s\S]*?\n\];\n\nfunction toNumber',
+        rank_tabs,
+        "search RANK_TABS",
+    )
+
+    if "type AiGroup =" not in text:
+        text = replace_once(
+            text,
+            'type ClassificationLabel = "우량주" | "보통주" | "저평가주" | "잡주";',
+            '''type ClassificationLabel = "우량주" | "보통주" | "저평가주" | "잡주";
+type AiGroup = "pullback" | "breakout" | "accumulation" | "uptrend";
+
+const AI_GROUPS: Array<{ key: AiGroup; label: string }> = [
+  { key: "pullback", label: "눌림목" },
+  { key: "breakout", label: "추세돌파" },
+  { key: "accumulation", label: "매집" },
+  { key: "uptrend", label: "상승추세" },
+];''',
+            "search AI type",
+        )
+
+    text = replace_once(
+        text,
+        '  const [rank, setRank] = useState<RankType>(initialRank);',
+        '''  const [rank, setRank] = useState<RankType>(initialRank);
+  const [aiGroup, setAiGroup] = useState<AiGroup>("pullback");''',
+        "search AI state",
+    )
+
+    if "function classifyAiRecommendedRow" not in text:
+        helper = '''
+function classifyAiRecommendedRow(row: StockRow): AiGroup {
+  const text = `${row.reason} ${row.rating?.rating ?? ""}`.toLowerCase();
+  const change = row.changePercent ?? 0;
+  const score = row.rating?.score ?? 50;
+
+  if (
+    /눌림|조정|지지|되돌림|과매도|반등/.test(text) ||
+    (change <= 0 && change >= -4 && score >= 55)
+  ) {
+    return "pullback";
+  }
+
+  if (
+    /돌파|신고가|저항|거래량급증|추세전환/.test(text) ||
+    change >= 3
+  ) {
+    return "breakout";
+  }
+
+  if (
+    /매집|수급|외국인|기관|obv|거래대금/.test(text) ||
+    (Math.abs(change) <= 2 && (row.tradingValue ?? 0) > 0)
+  ) {
+    return "accumulation";
+  }
+
+  return "uptrend";
+}
+
+'''
+        text = replace_once(
+            text,
+            "async function fetchWatchlistRows",
+            helper + "async function fetchWatchlistRows",
+            "search AI classifier",
+        )
+
+    text = regex_once(
+        text,
+        r'  const rows = useMemo\(\s*\(\) => \(trimmedQuery \? \(searchQuery\.data \?\? \[\]\) : \(rankingQuery\.data \?\? \[\]\)\),\s*\[trimmedQuery, searchQuery\.data, rankingQuery\.data\],\s*\);',
+        '''  const rows = useMemo(() => {
+    const baseRows = trimmedQuery
+      ? (searchQuery.data ?? [])
+      : (rankingQuery.data ?? []);
+
+    if (trimmedQuery || rank !== "recommended") {
+      return baseRows;
+    }
+
+    return baseRows.filter(
+      (row) => classifyAiRecommendedRow(row) === aiGroup,
+    );
+  }, [
+    aiGroup,
+    rank,
+    trimmedQuery,
+    searchQuery.data,
+    rankingQuery.data,
+  ]);''',
+        "search filtered rows",
+    )
+
+    search_match = re.search(
+        r'\n            <div className="relative mt-3">\n[\s\S]*?\n            </div>\n',
+        text,
+    )
+    if search_match is None:
+        raise RuntimeError("검색창 블록을 찾지 못했습니다.")
+
+    search_block = search_match.group(0)
+    text = text[:search_match.start()] + text[search_match.end():]
+
+    new_rank_area = '''
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {RANK_TABS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => handleRankChange(item.key)}
+                  className={cn(
+                    "inline-flex min-w-0 items-center justify-center rounded-2xl border px-2 py-2.5 text-center text-[11px] font-extrabold",
+                    rank === item.key
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-card-border bg-card text-muted-foreground",
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            {rank === "recommended" && !trimmedQuery && (
+              <div className="mt-2 grid grid-cols-4 gap-1.5">
+                {AI_GROUPS.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => setAiGroup(item.key)}
+                    className={cn(
+                      "rounded-xl border px-1 py-2 text-[10px] font-extrabold",
+                      aiGroup === item.key
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-card-border bg-card text-muted-foreground",
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
+''' + search_block
+
+    text = regex_once(
+        text,
+        r'\n            \{!trimmedQuery && \(\n              <div className="mt-3 grid grid-cols-3 gap-2">[\s\S]*?\n              </div>\n            \)\}',
+        new_rank_area,
+        "search rank and search order",
+    )
+
+    text = text.replace(
+        '                      시총\n',
+        '                      시가총액\n',
+    )
+
+    return text.rstrip() + "\n\n" + MARK + "\n"
+
+def patch_stocks(text: str) -> str:
+    if MARK in text:
+        return text
+
+    text = re.sub(
+        r"type AiGroup = [^;]+;",
+        "type AiGroup = 'pullback' | 'breakout' | 'accumulation' | 'uptrend';",
+        text,
+        count=1,
+    )
+
+    text = regex_once(
+        text,
+        r"const CATEGORIES: \{ key: CategoryKey; label: string \}\[\] = \[[\s\S]*?\n\];",
+        '''const CATEGORIES: { key: CategoryKey; label: string }[] = [
+  { key: 'marketCap', label: '시가총액' },
+  { key: 'tradingValue', label: '거래대금' },
+  { key: 'volume', label: '거래량' },
+  { key: 'gainers', label: '급상승' },
+  { key: 'losers', label: '급하락' },
+  { key: 'ai', label: 'AI추천' },
+];''',
+        "stocks categories",
+    )
+
+    text = regex_once(
+        text,
+        r"const AI_GROUPS: \{ key: AiGroup; label: string \}\[\] = \[[\s\S]*?\n\];",
+        '''const AI_GROUPS: { key: AiGroup; label: string }[] = [
+  { key: 'pullback', label: '눌림목' },
+  { key: 'breakout', label: '추세돌파' },
+  { key: 'accumulation', label: '매집' },
+  { key: 'uptrend', label: '상승추세' },
+];''',
+        "stocks AI groups",
+    )
+
+    text = text.replace(
+        "const [aiGroup, setAiGroup] = useState<AiGroup>('undervalued');",
+        "const [aiGroup, setAiGroup] = useState<AiGroup>('pullback');",
+    )
+
+    text = regex_once(
+        text,
+        r"function classifyStockAi\(row: RecoRow\): AiGroup \{[\s\S]*?\n\}",
+        '''function classifyStockAi(row: RecoRow): AiGroup {
+  const text = `${row.category} ${row.categoryLabel ?? ''} ${(row.reasons ?? []).join(' ')}`.toLowerCase();
+  const change = finite(row.changePercent) ?? 0;
+
+  if (/눌림|조정|지지|되돌림|과매도|반등/.test(text)) return 'pullback';
+  if (/돌파|저항|신고가|거래량급증/.test(text) || change >= 3) return 'breakout';
+  if (/매집|수급|외국인|기관|obv|거래대금/.test(text)) return 'accumulation';
+  return 'uptrend';
+}''',
+        "stocks AI classifier",
+    )
+
+    text = regex_once(
+        text,
+        r"function buildCoinCandidates\([\s\S]*?\n\}\s*$",
+        '''function buildCoinCandidates(rows: AnyObj[], market: 'spot' | 'futures') {
+  const valid = rows.filter(
+    (row) =>
+      finite(row.price) != null &&
+      finite(row.changePercent ?? row.changePercent24h) != null,
+  );
+
+  const tradingValues = valid
+    .map((row) => finite(row.tradingValue ?? row.tradingValue24h) ?? 0)
+    .sort((a, b) => b - a);
+
+  const highValue =
+    tradingValues[
+      Math.min(
+        Math.floor(tradingValues.length * 0.25),
+        Math.max(0, tradingValues.length - 1),
+      )
+    ] ?? 0;
+
+  return valid
+    .map((row) => {
+      const change =
+        finite(row.changePercent ?? row.changePercent24h) ?? 0;
+      const value =
+        finite(row.tradingValue ?? row.tradingValue24h) ?? 0;
+      const price = finite(row.price) ?? 0;
+
+      let aiGroup: AiGroup;
+      let aiLabel: string;
+      let opinion: string;
+      const reasons: string[] = [];
+
+      if (change >= 3) {
+        aiGroup = 'breakout';
+        aiLabel = '추세돌파';
+        opinion = market === 'futures' ? '롱 후보' : '매수 후보';
+        reasons.push(`24시간 등락률이 ${change.toFixed(2)}%로 저항 돌파 흐름입니다.`);
+      } else if (change > 0) {
+        aiGroup = 'uptrend';
+        aiLabel = '상승추세';
+        opinion = market === 'futures' ? '롱 관찰' : '매수 관찰';
+        reasons.push(`24시간 등락률이 ${change.toFixed(2)}%로 상승 흐름을 유지하고 있습니다.`);
+      } else if (value >= highValue && Math.abs(change) <= 2) {
+        aiGroup = 'accumulation';
+        aiLabel = '매집';
+        opinion = market === 'futures' ? '방향 확인' : '매수 관찰';
+        reasons.push('가격 변동폭에 비해 거래대금이 상위권이라 매집 여부를 확인합니다.');
+      } else {
+        aiGroup = 'pullback';
+        aiLabel = '눌림목';
+        opinion = market === 'futures' ? '반등 롱 관찰' : '눌림목 매수 관찰';
+        reasons.push(`24시간 ${Math.abs(change).toFixed(2)}% 조정 중인 눌림목 후보입니다.`);
+      }
+
+      if (value > 0) {
+        reasons.push(`24시간 거래대금 ${value.toLocaleString()} 기준입니다.`);
+      }
+
+      const score = Math.max(
+        1,
+        Math.min(
+          99,
+          Math.round(
+            55 +
+              change * 4 +
+              (value >= highValue ? 12 : 0),
+          ),
+        ),
+      );
+
+      return {
+        ...row,
+        aiGroup,
+        aiLabel,
+        categoryLabel: aiLabel,
+        opinion,
+        score,
+        reasons,
+        risks: [
+          '거래량 감소나 시장 방향 반전 시 현재 신호가 무효화될 수 있습니다.',
+        ],
+        target:
+          price > 0
+            ? price *
+              (1 +
+                Math.min(
+                  0.08,
+                  Math.max(0.02, Math.abs(change) / 100),
+                ))
+            : null,
+        stop: price > 0 ? price * 0.97 : null,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
+''' + MARK + "\n",
+        "stocks coin AI builder",
+    )
+
+    return text
+
+def patch_scanner(text: str) -> str:
+    if MARK in text:
+        return text
+
+    if "type ChartRankedRow" not in text:
+        text = replace_once(
+            text,
+            "type ChartBroadcastSignal,\n} from",
+            "type ChartBroadcastSignal,\n\ttype ChartRankedRow,\n} from",
+            "scanner ChartRankedRow import",
+        )
+
+    ranking_code = '''
+  const chartRankedRows = useMemo<ChartRankedRow[]>(() => {
+    const response = scan.data as
+      | { cards?: AnyObj[]; results?: AnyObj[] }
+      | undefined;
+
+    const source = response?.cards ?? response?.results ?? [];
+
+    return source
+      .map((card) => {
+        const ticker = String(card.ticker ?? '').trim().toUpperCase();
+        const score = scoreOf(card);
+        const changePercent =
+          toNumber(card.changePercent) ??
+          toNumber(card.changeRate) ??
+          0;
+        const matched = matchedLabels(card);
+        const momentum =
+          (score - 50) * 0.7 +
+          changePercent * 4 +
+          matched.length * 3;
+
+        const longScore = Math.max(
+          0,
+          Math.min(100, Math.round(50 + momentum)),
+        );
+        const shortScore = Math.max(
+          0,
+          Math.min(100, Math.round(50 - momentum)),
+        );
+
+        return {
+          ticker,
+          name: displayStockName(
+            ticker,
+            String(card.name ?? ticker),
+            cardMarket(card),
+          ),
+          market: cardMarket(card),
+          currency: cardCurrency(card),
+          price:
+            toNumber(card.price) ??
+            toNumber(card.currentPrice) ??
+            toNumber(card.close),
+          changePercent,
+          longScore,
+          shortScore,
+          reasons:
+            matched.length > 0
+              ? matched.slice(0, 5)
+              : [String(card.reason ?? '실시간 가격·거래량·AI 점수 기준')],
+        };
+      })
+      .filter((row) => row.ticker && row.market === market)
+      .sort(
+        (a, b) =>
+          Math.max(b.longScore, b.shortScore) -
+            Math.max(a.longScore, a.shortScore) ||
+          Math.abs(b.longScore - b.shortScore) -
+            Math.abs(a.longScore - a.shortScore),
+      )
+      .slice(0, 60);
+  }, [market, scan.data, selectedKey]);
+
+'''
+
+    text = replace_once(
+        text,
+        "  const autoCandidates = useMemo<AutoTradeCandidate[]>(() => {",
+        ranking_code + "  const autoCandidates = useMemo<AutoTradeCandidate[]>(() => {",
+        "scanner ranked rows",
+    )
+
+    text = replace_once(
+        text,
+        '<ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />',
+        '<ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} rankedRows={chartRankedRows} />',
+        "scanner chart props",
+    )
+
+    return text.rstrip() + "\n\n" + MARK + "\n"
+
+def patch_chart(text: str) -> str:
+    if MARK in text:
+        return text
+
+    text = text.replace(
+        "return source.slice(0, 10);",
+        "return source.slice(0, 100);",
+        1,
+    )
+
+    text = replace_once(
+        text,
+        "}, [rankedRows, searchRows, trimmed]);\n\tconst signalScores",
+        '''}, [rankedRows, searchRows, trimmed]);
+
+\tconst buyRankedRows = useMemo(
+\t\t() => [...analyzerRows]
+\t\t\t.sort((a, b) => b.longScore - a.longScore)
+\t\t\t.slice(0, 10),
+\t\t[analyzerRows],
+\t);
+
+\tconst sellRankedRows = useMemo(
+\t\t() => [...analyzerRows]
+\t\t\t.sort((a, b) => b.shortScore - a.shortScore)
+\t\t\t.slice(0, 10),
+\t\t[analyzerRows],
+\t);
+
+\tconst signalScores''',
+        "chart buy sell ranking",
+    )
+
+    text = text.replace('title="종목 롱·숏 분석기"', 'title="신호포착"', 1)
+    text = text.replace(
+        'subtitle="종목 검색 · 롱·숏 강도가 높은 순서대로 최대 10종목"',
+        'subtitle={`${market === "KR" ? "국내주식" : "해외주식"} · 매수 상위 10위 / 매도 상위 10위`}',
+        1,
+    )
+
+    text = regex_once(
+        text,
+        r'\n\t\t\t\t<div className="mt-3 space-y-2">\n\t\t\t\t\t\{search\.isLoading[\s\S]*?\n\t\t\t\t</div>\n\t\t\t</UnifiedSectionCard>',
+        '''
+\t\t\t\t{search.isLoading && trimmed ? (
+\t\t\t\t\t<div className="mt-3 flex items-center justify-center gap-2 rounded-2xl bg-background px-3 py-5 text-xs font-bold text-muted-foreground">
+\t\t\t\t\t\t<Loader2 className="h-4 w-4 animate-spin" />
+\t\t\t\t\t\t검색 중...
+\t\t\t\t\t</div>
+\t\t\t\t) : (
+\t\t\t\t\t<div className="mt-3 grid grid-cols-2 gap-2">
+\t\t\t\t\t\t<SignalRankingList
+\t\t\t\t\t\t\ttitle="매수 상위 10위"
+\t\t\t\t\t\t\trows={buyRankedRows}
+\t\t\t\t\t\t\tscoreKey="longScore"
+\t\t\t\t\t\t\ttone="buy"
+\t\t\t\t\t\t\tonSelect={chooseStock}
+\t\t\t\t\t\t/>
+\t\t\t\t\t\t<SignalRankingList
+\t\t\t\t\t\t\ttitle="매도 상위 10위"
+\t\t\t\t\t\t\trows={sellRankedRows}
+\t\t\t\t\t\t\tscoreKey="shortScore"
+\t\t\t\t\t\t\ttone="sell"
+\t\t\t\t\t\t\tonSelect={chooseStock}
+\t\t\t\t\t\t/>
+\t\t\t\t\t</div>
+\t\t\t\t)}
+\t\t\t</UnifiedSectionCard>''',
+        "chart ranking UI",
+    )
+
+    text = text.replace(
+        "text: opinion.event,",
+        '''text: `${opinion.event} · 실제값 RSI ${snapshot.rsi == null ? "-" : snapshot.rsi.toFixed(1)}, MACD ${snapshot.macd == null ? "-" : snapshot.macd.toFixed(3)}, 거래량 ${snapshot.volumeRatio.toFixed(2)}배 · 진입 ${formatRawPrice(opinion.entryPrice)} · 추가 확인 ${formatRawPrice(snapshot.levels.resistance1)} 돌파·안착 · 무효화 ${formatRawPrice(opinion.stopPrice)} 이탈 · 목표 ${formatRawPrice(opinion.targetPrice)} · 위험: 거래량 감소나 시장 방향 반전 시 신호가 바뀔 수 있습니다.`,''',
+        1,
+    )
+
+    text = text.replace(
+        'title="차트 AI 분석"',
+        'title="AI 차트 실시간 생중계"',
+        1,
+    )
+
+    ranking_component = '''
+function SignalRankingList({
+\ttitle,
+\trows,
+\tscoreKey,
+\ttone,
+\tonSelect,
+}: {
+\ttitle: string;
+\trows: ChartRankedRow[];
+\tscoreKey: "longScore" | "shortScore";
+\ttone: "buy" | "sell";
+\tonSelect: (row: SearchRow) => void;
+}) {
+\treturn (
+\t\t<div className="min-w-0 rounded-2xl border border-card-border bg-background p-2">
+\t\t\t<p className={cn(
+\t\t\t\t"mb-2 text-center text-[10px] font-black",
+\t\t\t\ttone === "buy" ? "text-positive" : "text-destructive",
+\t\t\t)}>
+\t\t\t\t{title}
+\t\t\t</p>
+\t\t\t<div className="max-h-[420px] space-y-1 overflow-y-auto">
+\t\t\t\t{rows.map((row, index) => (
+\t\t\t\t\t<button
+\t\t\t\t\t\tkey={`${title}:${row.market}:${row.ticker}`}
+\t\t\t\t\t\ttype="button"
+\t\t\t\t\t\tonClick={() => onSelect(row)}
+\t\t\t\t\t\tclassName="w-full rounded-xl border border-card-border bg-card px-2 py-2 text-left"
+\t\t\t\t\t>
+\t\t\t\t\t\t<div className="flex items-center justify-between gap-1">
+\t\t\t\t\t\t\t<p className="min-w-0 truncate text-[10px] font-black">
+\t\t\t\t\t\t\t\t{index + 1}위 · {row.name}
+\t\t\t\t\t\t\t</p>
+\t\t\t\t\t\t\t<span className={cn(
+\t\t\t\t\t\t\t\t"shrink-0 text-[10px] font-black",
+\t\t\t\t\t\t\t\ttone === "buy" ? "text-positive" : "text-destructive",
+\t\t\t\t\t\t\t)}>
+\t\t\t\t\t\t\t\t{row[scoreKey]}
+\t\t\t\t\t\t\t</span>
+\t\t\t\t\t\t</div>
+\t\t\t\t\t\t<p className="mt-1 truncate text-[9px] font-bold text-muted-foreground">
+\t\t\t\t\t\t\t{row.ticker} · {formatPercent(row.changePercent)}
+\t\t\t\t\t\t</p>
+\t\t\t\t\t</button>
+\t\t\t\t))}
+\t\t\t\t{rows.length === 0 && (
+\t\t\t\t\t<p className="px-2 py-5 text-center text-[10px] font-bold text-muted-foreground">
+\t\t\t\t\t\t분석 후보가 없습니다.
+\t\t\t\t\t</p>
+\t\t\t\t)}
+\t\t\t</div>
+\t\t</div>
+\t);
+}
+
+'''
+
+    text = replace_once(
+        text,
+        "function SignalScore(",
+        ranking_component + "function SignalScore(",
+        "chart ranking component",
+    )
+
+    return text.rstrip() + "\n\n" + MARK + "\n"
+
+def patch_spot(text: str) -> str:
+    if MARK in text:
+        return text
+
+    text = regex_once(
+        text,
+        r"  const analyzerRows = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[candidates, query\]\);",
+        '''  const analyzerPool = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return candidates.filter(
+      (item) =>
+        !needle ||
+        [item.symbol, item.name].some((value) =>
+          value.toLowerCase().includes(needle),
+        ),
+    );
+  }, [candidates, query]);
+
+  const buySignalRows = useMemo(
+    () => [...analyzerPool].sort((a, b) => b.buyScore - a.buyScore).slice(0, 10),
+    [analyzerPool],
+  );
+
+  const sellSignalRows = useMemo(
+    () => [...analyzerPool].sort((a, b) => b.sellScore - a.sellScore).slice(0, 10),
+    [analyzerPool],
+  );''',
+        "spot rankings",
+    )
+
+    text = text.replace('title="종목 롱·숏 분석기"', 'title="신호포착"', 1)
+    text = text.replace(
+        'subtitle="종목 검색 · 매수·매도 강도가 높은 순서대로 최대 10종목"',
+        'subtitle="업비트 현물 · 매수 상위 10위 / 매도 상위 10위"',
+        1,
+    )
+
+    text = regex_once(
+        text,
+        r'\n              <div className="mt-3 space-y-2">\n                \{analyzerRows\.map[\s\S]*?\n              </div>\n            </UnifiedSectionCard>',
+        '''
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <SpotSignalRanking
+                  title="매수 상위 10위"
+                  rows={buySignalRows}
+                  scoreKey="buyScore"
+                  tone="buy"
+                  onSelect={pickSymbol}
+                />
+                <SpotSignalRanking
+                  title="매도 상위 10위"
+                  rows={sellSignalRows}
+                  scoreKey="sellScore"
+                  tone="sell"
+                  onSelect={pickSymbol}
+                />
+              </div>
+            </UnifiedSectionCard>''',
+        "spot ranking UI",
+    )
+
+    text = text.replace(
+        'title="차트 AI 분석"',
+        'title="AI 차트 실시간 생중계"',
+        1,
+    )
+
+    old_reason = '''              <p className="mt-3 text-left text-xs font-bold leading-5 text-muted-foreground">
+                {analysis.reasons[0] ?? analysis.risks[0] ?? '선택 봉의 실데이터가 충분해질 때 분석을 표시합니다.'}
+              </p>'''
+
+    new_reason = '''              <p className="mt-3 text-left text-xs font-bold leading-5 text-muted-foreground">
+                {analysis.reasons[0] ?? analysis.risks[0] ?? '선택 봉의 실데이터가 충분해질 때 분석을 표시합니다.'}
+              </p>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <Metric
+                  label="진입 조건"
+                  value={
+                    analysis.current == null
+                      ? '데이터 없음'
+                      : `${formatAppPrice(analysis.current, 'KRW')} 위에서 거래량 유지`
+                  }
+                />
+                <Metric
+                  label="추가 확인"
+                  value={
+                    analysis.sma20
+                      ? `${formatAppPrice(analysis.sma20, 'KRW')} 지지 확인`
+                      : '중기선 확인 필요'
+                  }
+                />
+                <Metric
+                  label="목표가"
+                  value={
+                    analysis.current == null
+                      ? '데이터 없음'
+                      : formatAppPrice(analysis.current * 1.04, 'KRW')
+                  }
+                />
+                <Metric
+                  label="무효화·손절"
+                  value={
+                    analysis.current == null
+                      ? '데이터 없음'
+                      : formatAppPrice(
+                          Math.min(
+                            analysis.sma20 || analysis.current * 0.97,
+                            analysis.current * 0.97,
+                          ),
+                          'KRW',
+                        )
+                  }
+                />
+              </div>'''
+
+    text = replace_once(
+        text,
+        old_reason,
+        new_reason,
+        "spot plan details",
+    )
+
+    helper = '''
+function SpotSignalRanking({
+  title,
+  rows,
+  scoreKey,
+  tone,
+  onSelect,
+}: {
+  title: string;
+  rows: Candidate[];
+  scoreKey: 'buyScore' | 'sellScore';
+  tone: 'buy' | 'sell';
+  onSelect: (symbol: string) => void;
+}) {
+  return (
+    <div className="min-w-0 rounded-2xl border border-card-border bg-background p-2">
+      <p className={cn(
+        'mb-2 text-center text-[10px] font-black',
+        tone === 'buy' ? 'text-positive' : 'text-destructive',
+      )}>
+        {title}
+      </p>
+      <div className="max-h-[420px] space-y-1 overflow-y-auto">
+        {rows.map((item, index) => (
+          <button
+            key={`${title}:${item.symbol}`}
+            type="button"
+            onClick={() => onSelect(item.symbol)}
+            className="w-full rounded-xl border border-card-border bg-card px-2 py-2 text-left"
+          >
+            <div className="flex items-center justify-between gap-1">
+              <p className="min-w-0 truncate text-[10px] font-black">
+                {index + 1}위 · {item.name}
+              </p>
+              <span className={cn(
+                'shrink-0 text-[10px] font-black',
+                tone === 'buy' ? 'text-positive' : 'text-destructive',
+              )}>
+                {item[scoreKey]}
+              </span>
+            </div>
+            <p className="mt-1 truncate text-[9px] font-bold text-muted-foreground">
+              {item.symbol} · {item.opinion}
+            </p>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+'''
+
+    text = replace_once(
+        text,
+        "function TopButton(",
+        helper + "function TopButton(",
+        "spot ranking component",
+    )
+
+    return text.rstrip() + "\n\n" + MARK + "\n"
+
+def patch_futures(text: str) -> str:
+    if MARK in text:
+        return text
+
+    text = replace_once(
+        text,
+        "  const analysisMap = useMemo(",
+        '''  const topLongRows = useMemo(
+    () => [...scannerRows]
+      .sort((a, b) => b.analysis.longScore - a.analysis.longScore)
+      .slice(0, 10),
+    [scannerRows],
+  );
+
+  const topShortRows = useMemo(
+    () => [...scannerRows]
+      .sort((a, b) => b.analysis.shortScore - a.analysis.shortScore)
+      .slice(0, 10),
+    [scannerRows],
+  );
+
+  const analysisMap = useMemo(''',
+        "futures rankings",
+    )
+
+    text = text.replace(
+        'title={viewMode === "chart" ? "종목 롱·숏 분석기" : "통합 조건검색"}',
+        'title={viewMode === "chart" ? "신호포착" : "통합 조건검색"}',
+        1,
+    )
+    text = text.replace(
+        'subtitle={viewMode === "chart" ? "종목 검색 · AI 롱·숏 강도가 높은 순서대로 최대 10종목" : "종목명·거래대금·거래량·등락률·AI 롱·AI 숏 정렬"}',
+        'subtitle={viewMode === "chart" ? "비트겟 선물 · 롱 상위 10위 / 숏 상위 10위" : "종목명·거래대금·거래량·등락률·AI 롱·AI 숏 정렬"}',
+        1,
+    )
+
+    text = regex_once(
+        text,
+        r'\n            \{viewMode === "chart" && \(\n              <div className="mt-3 space-y-2">[\s\S]*?\n              </div>\n            \)\}',
+        '''
+            {viewMode === "chart" && (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <FuturesSignalRanking
+                  title="롱 상위 10위"
+                  rows={topLongRows}
+                  scoreKey="longScore"
+                  tone="long"
+                  onSelect={selectSymbol}
+                />
+                <FuturesSignalRanking
+                  title="숏 상위 10위"
+                  rows={topShortRows}
+                  scoreKey="shortScore"
+                  tone="short"
+                  onSelect={selectSymbol}
+                />
+              </div>
+            )}''',
+        "futures ranking UI",
+    )
+
+    text = text.replace(
+        'title="차트 AI 분석"',
+        'title="AI 차트 실시간 생중계"',
+        1,
+    )
+
+    helper = '''
+function FuturesSignalRanking({
+  title,
+  rows,
+  scoreKey,
+  tone,
+  onSelect,
+}: {
+  title: string;
+  rows: ScannerRow[];
+  scoreKey: 'longScore' | 'shortScore';
+  tone: 'long' | 'short';
+  onSelect: (symbol: string) => void;
+}) {
+  return (
+    <div className="min-w-0 rounded-2xl border border-card-border bg-background p-2">
+      <p className={cn(
+        'mb-2 text-center text-[10px] font-black',
+        tone === 'long' ? 'text-positive' : 'text-destructive',
+      )}>
+        {title}
+      </p>
+      <div className="max-h-[420px] space-y-1 overflow-y-auto">
+        {rows.map((row, index) => (
+          <button
+            key={`${title}:${row.ticker.symbol}`}
+            type="button"
+            onClick={() => onSelect(row.ticker.symbol)}
+            className="w-full rounded-xl border border-card-border bg-card px-2 py-2 text-left"
+          >
+            <div className="flex items-center justify-between gap-1">
+              <p className="min-w-0 truncate text-[10px] font-black">
+                {index + 1}위 · {row.ticker.symbol}
+              </p>
+              <span className={cn(
+                'shrink-0 text-[10px] font-black',
+                tone === 'long' ? 'text-positive' : 'text-destructive',
+              )}>
+                {row.analysis[scoreKey]}
+              </span>
+            </div>
+            <p className="mt-1 truncate text-[9px] font-bold text-muted-foreground">
+              {directionLabel(row.analysis.direction)} · {formatPercent(row.ticker.changePercent24h)}
+            </p>
+          </button>
+        ))}
+        {rows.length === 0 && (
+          <p className="px-2 py-5 text-center text-[10px] font-bold text-muted-foreground">
+            실시간 분석 중입니다.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+'''
+
+    marker_candidates = [
+        "function TopTab(",
+        "function CollapsibleSectionCard(",
+    ]
+
+    inserted = False
+    for marker in marker_candidates:
+        if marker in text:
+            text = replace_once(
+                text,
+                marker,
+                helper + marker,
+                "futures ranking component",
+            )
+            inserted = True
+            break
+
+    if not inserted:
+        raise RuntimeError("선물 랭킹 컴포넌트 삽입 위치를 찾지 못했습니다.")
+
+    return text.rstrip() + "\n\n" + MARK + "\n"
+
+def patch_detail(text: str) -> str:
+    if MARK in text:
+        return text
+
+    text = text.replace(
+        'title="차트 AI 분석"',
+        'title="AI 차트 실시간 생중계"',
+    )
+
+    return text.rstrip() + "\n\n" + MARK + "\n"
+
+def patch_stock_info(text: str) -> str:
+    if MARK in text:
+        return text
+
+    text = text.replace(
+        "import { useEffect, useMemo, useState, type ReactNode } from 'react';",
+        "import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';",
+        1,
+    )
+
+    if "from 'lightweight-charts'" not in text:
+        text = replace_once(
+            text,
+            "import { useQuery } from '@tanstack/react-query';",
+            "import { useQuery } from '@tanstack/react-query';\nimport { ColorType, createChart, type UTCTimestamp } from 'lightweight-charts';",
+            "stock-info chart import",
+        )
+
+    analysis_helpers = '''
+type CoinDirectoryCategory =
+  | 'marketCap'
+  | 'tradingValue'
+  | 'volume'
+  | 'gainers'
+  | 'losers'
+  | 'ai';
+
+type CoinDirectoryAiGroup =
+  | 'pullback'
+  | 'breakout'
+  | 'accumulation'
+  | 'uptrend';
+
+const COIN_DIRECTORY_CATEGORIES: Array<{
+  key: CoinDirectoryCategory;
+  label: string;
+}> = [
+  { key: 'marketCap', label: '시가총액' },
+  { key: 'tradingValue', label: '거래대금' },
+  { key: 'volume', label: '거래량' },
+  { key: 'gainers', label: '급상승' },
+  { key: 'losers', label: '급하락' },
+  { key: 'ai', label: 'AI추천' },
+];
+
+const COIN_DIRECTORY_AI_GROUPS: Array<{
+  key: CoinDirectoryAiGroup;
+  label: string;
+}> = [
+  { key: 'pullback', label: '눌림목' },
+  { key: 'breakout', label: '추세돌파' },
+  { key: 'accumulation', label: '매집' },
+  { key: 'uptrend', label: '상승추세' },
+];
+
+function coinDirectoryAiGroup(row: AnyObj): CoinDirectoryAiGroup {
+  const change = finite(row.changePercent ?? row.changePercent24h) ?? 0;
+  const value = finite(row.tradingValue24h ?? row.tradingValue) ?? 0;
+
+  if (change >= 3) return 'breakout';
+  if (change > 0) return 'uptrend';
+  if (Math.abs(change) <= 2 && value > 0) return 'accumulation';
+  return 'pullback';
+}
+
+function analyzeCoinDetail(candles: AnyObj[], futures: boolean) {
+  const closes = candles
+    .map((row) => finite(row.close))
+    .filter((value): value is number => value != null);
+  const volumes = candles
+    .map((row) => finite(row.volume))
+    .filter((value): value is number => value != null);
+
+  const current = closes.at(-1) ?? null;
+  const previous = closes.at(-2) ?? current;
+  const sma5 = closes.length
+    ? closes.slice(-5).reduce((sum, value) => sum + value, 0) /
+      Math.min(5, closes.length)
+    : null;
+  const sma20 = closes.length
+    ? closes.slice(-20).reduce((sum, value) => sum + value, 0) /
+      Math.min(20, closes.length)
+    : null;
+
+  let gains = 0;
+  let losses = 0;
+  const rsiRows = closes.slice(-15);
+
+  for (let index = 1; index < rsiRows.length; index += 1) {
+    const change = rsiRows[index] - rsiRows[index - 1];
+    if (change >= 0) gains += change;
+    else losses += Math.abs(change);
+  }
+
+  const rsi =
+    rsiRows.length < 2
+      ? null
+      : losses === 0
+        ? 100
+        : 100 - 100 / (1 + gains / losses);
+
+  const latestVolume = volumes.at(-1) ?? 0;
+  const previousVolumes = volumes.slice(-21, -1);
+  const averageVolume = previousVolumes.length
+    ? previousVolumes.reduce((sum, value) => sum + value, 0) /
+      previousVolumes.length
+    : 0;
+  const volumeRatio =
+    averageVolume > 0 ? latestVolume / averageVolume : null;
+
+  let positiveScore = 40;
+  let negativeScore = 40;
+  const reasons: string[] = [];
+  const risks: string[] = [];
+
+  if (current != null && sma5 != null && current > sma5) {
+    positiveScore += 15;
+    reasons.push('현재가가 단기 이동평균선 위에 있습니다.');
+  } else {
+    negativeScore += 12;
+    risks.push('현재가가 단기 이동평균선 아래에 있습니다.');
+  }
+
+  if (sma5 != null && sma20 != null && sma5 > sma20) {
+    positiveScore += 17;
+    reasons.push('단기 이동평균선이 중기 이동평균선 위에 있어 상승 추세가 우세합니다.');
+  } else {
+    negativeScore += 14;
+    risks.push('단기 이동평균선이 중기 이동평균선 아래에 있어 하락 추세를 확인해야 합니다.');
+  }
+
+  if (rsi != null) {
+    if (rsi >= 50 && rsi <= 70) {
+      positiveScore += 12;
+      reasons.push(`RSI ${rsi.toFixed(1)}로 상승 힘이 유지되는 구간입니다.`);
+    } else if (rsi >= 75) {
+      negativeScore += 13;
+      risks.push(`RSI ${rsi.toFixed(1)}로 단기 과열 가능성이 있습니다.`);
+    } else if (rsi <= 35) {
+      positiveScore += 7;
+      reasons.push(`RSI ${rsi.toFixed(1)}로 과매도 반등 가능성을 확인합니다.`);
+    }
+  }
+
+  if (volumeRatio != null && volumeRatio >= 1.5) {
+    if (current != null && previous != null && current >= previous) {
+      positiveScore += 13;
+      reasons.push(`거래량이 최근 평균의 ${volumeRatio.toFixed(2)}배로 증가했습니다.`);
+    } else {
+      negativeScore += 13;
+      risks.push(`하락 중 거래량이 최근 평균의 ${volumeRatio.toFixed(2)}배로 증가했습니다.`);
+    }
+  }
+
+  positiveScore = Math.max(0, Math.min(100, Math.round(positiveScore)));
+  negativeScore = Math.max(0, Math.min(100, Math.round(negativeScore)));
+
+  const direction =
+    positiveScore - negativeScore >= 12
+      ? futures
+        ? '롱'
+        : '매수'
+      : negativeScore - positiveScore >= 12
+        ? futures
+          ? '숏'
+          : '매도'
+        : '관망';
+
+  const entry = current;
+  const stop =
+    current == null
+      ? null
+      : Math.min(sma20 ?? current * 0.97, current * 0.97);
+  const target =
+    current == null
+      ? null
+      : current + Math.max(current - (stop ?? current * 0.97), current * 0.015) * 1.8;
+
+  return {
+    current,
+    sma5,
+    sma20,
+    rsi,
+    volumeRatio,
+    positiveScore,
+    negativeScore,
+    direction,
+    reasons,
+    risks,
+    entry,
+    stop,
+    target,
+  };
+}
+
+function CoinDetailLiveChart({
+  candles,
+  direction,
+}: {
+  candles: AnyObj[];
+  direction: string;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const container = ref.current;
+    if (!container || candles.length === 0) return;
+
+    const chart = createChart(container, {
+      height: 380,
+      layout: {
+        background: { type: ColorType.Solid, color: 'transparent' },
+        textColor: '#94a3b8',
+      },
+      grid: {
+        vertLines: { color: 'rgba(148,163,184,.08)' },
+        horzLines: { color: 'rgba(148,163,184,.08)' },
+      },
+      timeScale: { timeVisible: true, secondsVisible: false },
+    });
+
+    const candleSeries = chart.addCandlestickSeries();
+    const volumeSeries = chart.addHistogramSeries({
+      priceScaleId: '',
+      priceFormat: { type: 'volume' },
+    });
+
+    const normalized = candles
+      .map((row, index) => {
+        const rawTime = row.time ?? row.sourceTime;
+        const numericTime = Number(rawTime);
+        const parsedTime = Number.isFinite(numericTime)
+          ? numericTime > 10_000_000_000
+            ? numericTime
+            : numericTime * 1000
+          : Date.parse(String(rawTime ?? ''));
+
+        const time = Math.floor(
+          (Number.isFinite(parsedTime)
+            ? parsedTime
+            : Date.now() - (candles.length - index) * 60_000) / 1000,
+        ) as UTCTimestamp;
+
+        return {
+          time,
+          open: Number(row.open),
+          high: Number(row.high),
+          low: Number(row.low),
+          close: Number(row.close),
+          volume: Number(row.volume ?? 0),
+        };
+      })
+      .filter((row) =>
+        [row.open, row.high, row.low, row.close].every(Number.isFinite),
+      );
+
+    candleSeries.setData(
+      normalized.map(({ time, open, high, low, close }) => ({
+        time,
+        open,
+        high,
+        low,
+        close,
+      })),
+    );
+
+    volumeSeries.setData(
+      normalized.map(({ time, volume }) => ({
+        time,
+        value: volume,
+      })),
+    );
+
+    const latest = normalized.at(-1);
+
+    if (latest) {
+      (candleSeries as any).setMarkers([
+        {
+          time: latest.time,
+          position:
+            direction === '매수' || direction === '롱'
+              ? 'belowBar'
+              : 'aboveBar',
+          color:
+            direction === '매수' || direction === '롱'
+              ? '#16a34a'
+              : direction === '매도' || direction === '숏'
+                ? '#dc2626'
+                : '#7c3aed',
+          shape:
+            direction === '매수' || direction === '롱'
+              ? 'arrowUp'
+              : direction === '매도' || direction === '숏'
+                ? 'arrowDown'
+                : 'circle',
+          text: direction,
+        },
+      ]);
+    }
+
+    chart.timeScale().fitContent();
+
+    const observer = new ResizeObserver(([entry]) => {
+      chart.applyOptions({
+        width: Math.max(1, entry.contentRect.width),
+      });
+    });
+
+    observer.observe(container);
+
+    return () => {
+      observer.disconnect();
+      chart.remove();
+    };
+  }, [candles, direction]);
+
+  return <div ref={ref} className="w-full" />;
+}
+
+'''
+
+    text = replace_once(
+        text,
+        "export function CoinInfo(",
+        analysis_helpers + "export function CoinInfo(",
+        "stock-info coin helpers",
+    )
+
+    text = replace_once(
+        text,
+        "const [coinFeedFilter, setCoinFeedFilter] = useState<SpecialFeedFilter>('all');",
+        '''const [coinFeedFilter, setCoinFeedFilter] = useState<SpecialFeedFilter>('all');
+\tconst [coinCategory, setCoinCategory] =
+\t\tuseState<CoinDirectoryCategory>('tradingValue');
+\tconst [coinAiGroup, setCoinAiGroup] =
+\t\tuseState<CoinDirectoryAiGroup>('pullback');''',
+        "stock-info category state",
+    )
+
+    text = regex_once(
+        text,
+        r"\tconst filteredRows = rows\n\t\t\.filter\(\(item\) => \{[\s\S]*?\n\t\t\.slice\(0, 100\);",
+        '''\tconst filteredRows = useMemo(() => {
+\t\tconst query = searchText.trim().toLowerCase();
+\t\tlet result = rows.filter((item) => {
+\t\t\tif (!query) return true;
+\t\t\treturn [item.symbol, item.koreanName, item.englishName].some(
+\t\t\t\t(value) => String(value ?? '').toLowerCase().includes(query),
+\t\t\t);
+\t\t});
+
+\t\tif (!query) {
+\t\t\tif (coinCategory === 'marketCap') {
+\t\t\t\tresult = result.filter((item) => finite(item.marketCap) != null);
+\t\t\t\tresult.sort((a, b) => Number(b.marketCap ?? 0) - Number(a.marketCap ?? 0));
+\t\t\t} else if (coinCategory === 'tradingValue') {
+\t\t\t\tresult.sort((a, b) => Number(b.tradingValue24h ?? 0) - Number(a.tradingValue24h ?? 0));
+\t\t\t} else if (coinCategory === 'volume') {
+\t\t\t\tresult.sort((a, b) => Number(b.volume24h ?? 0) - Number(a.volume24h ?? 0));
+\t\t\t} else if (coinCategory === 'gainers') {
+\t\t\t\tresult.sort((a, b) => Number(b.changePercent ?? b.changePercent24h ?? 0) - Number(a.changePercent ?? a.changePercent24h ?? 0));
+\t\t\t} else if (coinCategory === 'losers') {
+\t\t\t\tresult.sort((a, b) => Number(a.changePercent ?? a.changePercent24h ?? 0) - Number(b.changePercent ?? b.changePercent24h ?? 0));
+\t\t\t} else {
+\t\t\t\tresult = result
+\t\t\t\t\t.filter((item) => coinDirectoryAiGroup(item) === coinAiGroup)
+\t\t\t\t\t.sort((a, b) => Number(b.tradingValue24h ?? 0) - Number(a.tradingValue24h ?? 0));
+\t\t\t}
+\t\t}
+
+\t\treturn result.slice(0, 100);
+\t}, [coinAiGroup, coinCategory, rows, searchText]);''',
+        "stock-info filtered coin rows",
+    )
+
+    text = replace_once(
+        text,
+        "const connectionOk = coinMarket === 'spot' ? status.data?.upbit?.ok : status.data?.bitget?.ok;",
+        '''const connectionOk = coinMarket === 'spot' ? status.data?.upbit?.ok : status.data?.bitget?.ok;
+\tconst coinLiveAnalysis = useMemo(
+\t\t() => analyzeCoinDetail(candles ?? [], coinMarket === 'futures'),
+\t\t[candles, coinMarket],
+\t);''',
+        "stock-info live analysis",
+    )
+
+    connection_block = '''				<div className={cn('mt-3 rounded-2xl px-3 py-2 text-xs font-black', connectionOk ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive')}>
+					{coinMarket === 'spot' ? '업비트' : '비트겟'} 공개 시세 · {status.isLoading ? '연결 확인 중' : connectionOk ? '정상' : '연결 오류'}
+				</div>'''
+
+    categories_block = connection_block + '''
+				<div className="mt-3 grid grid-cols-3 gap-2">
+					{COIN_DIRECTORY_CATEGORIES.map((item) => (
+						<button
+							key={item.key}
+							type="button"
+							onClick={() => setCoinCategory(item.key)}
+							className={cn(
+								'rounded-xl border px-2 py-2.5 text-[11px] font-black',
+								coinCategory === item.key
+									? 'border-primary bg-primary text-primary-foreground'
+									: 'border-card-border bg-background text-muted-foreground',
+							)}
+						>
+							{item.label}
+						</button>
+					))}
+				</div>
+				{coinCategory === 'ai' && (
+					<div className="mt-2 grid grid-cols-4 gap-1.5">
+						{COIN_DIRECTORY_AI_GROUPS.map((item) => (
+							<button
+								key={item.key}
+								type="button"
+								onClick={() => setCoinAiGroup(item.key)}
+								className={cn(
+									'rounded-xl border px-1 py-2 text-[10px] font-black',
+									coinAiGroup === item.key
+										? 'border-primary bg-primary text-primary-foreground'
+										: 'border-card-border bg-background text-muted-foreground',
+								)}
+							>
+								{item.label}
+							</button>
+						))}
+					</div>
+				)}'''
+
+    text = replace_once(
+        text,
+        connection_block,
+        categories_block,
+        "stock-info categories",
+    )
+
+    text = text.replace(
+        "{searchText.trim().length > 0 && (",
+        "{(searchText.trim().length > 0 || Boolean(coinCategory)) && (",
+        1,
+    )
+
+    detail_panels = '''
+			<Section
+				title="실시간 차트 생중계"
+				state={
+					(coinMarket === 'spot' ? spotCandles.isLoading : futuresCandles.isLoading)
+						? '차트 데이터를 불러오는 중입니다.'
+						: candles?.length
+							? null
+							: '실제 차트 데이터가 없습니다.'
+				}
+			>
+				{candles?.length ? (
+					<CoinDetailLiveChart
+						candles={candles}
+						direction={coinLiveAnalysis.direction}
+					/>
+				) : null}
+			</Section>
+
+			<Section title="AI 차트 실시간 생중계">
+				<div className="grid grid-cols-3 gap-2">
+					<Metric
+						label={coinMarket === 'futures' ? '롱 점수' : '매수 점수'}
+						value={`${coinLiveAnalysis.positiveScore}점`}
+						tone="up"
+					/>
+					<Metric
+						label={coinMarket === 'futures' ? '숏 점수' : '매도 점수'}
+						value={`${coinLiveAnalysis.negativeScore}점`}
+						tone="down"
+					/>
+					<Metric
+						label="종합신호"
+						value={coinLiveAnalysis.direction}
+						strong
+					/>
+				</div>
+				<div className="mt-3 grid grid-cols-2 gap-2">
+					<Metric
+						label="RSI"
+						value={coinLiveAnalysis.rsi == null ? '데이터 없음' : coinLiveAnalysis.rsi.toFixed(1)}
+					/>
+					<Metric
+						label="거래량 비율"
+						value={coinLiveAnalysis.volumeRatio == null ? '데이터 없음' : `${coinLiveAnalysis.volumeRatio.toFixed(2)}배`}
+					/>
+					<Metric
+						label="진입 조건"
+						value={money(coinLiveAnalysis.entry, currency)}
+					/>
+					<Metric
+						label="목표가"
+						value={money(coinLiveAnalysis.target, currency)}
+					/>
+					<Metric
+						label="무효화·손절"
+						value={money(coinLiveAnalysis.stop, currency)}
+					/>
+					<Metric
+						label="추가 확인"
+						value={
+							coinLiveAnalysis.sma20 == null
+								? '중기선 확인 필요'
+								: `${money(coinLiveAnalysis.sma20, currency)} 지지 확인`
+						}
+					/>
+				</div>
+				<div className="mt-3 space-y-2">
+					{[
+						...coinLiveAnalysis.reasons.map((row) => `판단 근거 · ${row}`),
+						...coinLiveAnalysis.risks.map((row) => `위험요인 · ${row}`),
+					].slice(0, 8).map((row, index) => (
+						<p
+							key={`${row}:${index}`}
+							className="rounded-2xl bg-secondary/60 p-3 text-xs font-bold leading-5 text-muted-foreground"
+						>
+							{row}
+						</p>
+					))}
+				</div>
+			</Section>
+
+'''
+
+    text = replace_once(
+        text,
+        "\n\t\t\t{coinMarket === 'spot' && (\n\t\t\t\t<Section title=\"호가\"",
+        "\n" + detail_panels + "\t\t\t{coinMarket === 'spot' && (\n\t\t\t\t<Section title=\"호가\"",
+        "stock-info chart panels",
+    )
+
+    return text.rstrip() + "\n\n" + MARK + "\n"
+
+scanner_source = load_correct_scanner()
+
+originals = {
+    "search": PATHS["search"].read_text(encoding="utf-8"),
+    "stocks": PATHS["stocks"].read_text(encoding="utf-8"),
+    "scanner": scanner_source,
+    "detail": PATHS["detail"].read_text(encoding="utf-8"),
+    "stock_info": PATHS["stock_info"].read_text(encoding="utf-8"),
+    "chart": PATHS["chart"].read_text(encoding="utf-8"),
+    "spot": PATHS["spot"].read_text(encoding="utf-8"),
+    "futures": PATHS["futures"].read_text(encoding="utf-8"),
+}
+
+updated = {
+    "search": patch_search(originals["search"]),
+    "stocks": patch_stocks(originals["stocks"]),
+    "scanner": patch_scanner(originals["scanner"]),
+    "detail": patch_detail(originals["detail"]),
+    "stock_info": patch_stock_info(originals["stock_info"]),
+    "chart": patch_chart(originals["chart"]),
+    "spot": patch_spot(originals["spot"]),
+    "futures": patch_futures(originals["futures"]),
+}
+
+for name, path in PATHS.items():
+    backup = path.with_name(f"{path.name}.before-final-ai-{STAMP}")
+    shutil.copy2(path, backup)
+    print(f"BACKUP={backup}")
+
+for name, text in updated.items():
+    PATHS[name].write_text(text, encoding="utf-8")
+    print(f"CHANGED={PATHS[name]}")
+
+print("FINAL_AI_SIGNAL_PATCH_COMPLETE")
+PY
+
+cd ~/workspace/stock-analyzer && pnpm run build && echo "FINAL_AI_SIGNAL_BUILD_COMPLETE"

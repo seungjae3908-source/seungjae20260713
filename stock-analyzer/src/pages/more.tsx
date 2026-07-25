@@ -329,17 +329,17 @@ export default function MorePage() {
   };
 
   return (
-    <div className="h-full min-h-0 flex-col overflow-hidden bg-background text-center relative grid items-center grid-cols-[2.75rem_minmax(0,1fr)_2.75rem]">
-      <header className="shrink-0 border-b border-card-border bg-background/95 px-4 pb-4 pt-5 glass">
-        <h1 className="text-center text-xl font-extrabold">설정</h1>
+    <div className="flex min-h-screen flex-col bg-background">
+      <header className="sticky top-0 z-20 border-b border-card-border bg-background/95 px-5 py-5 backdrop-blur">
+          <h1 className="text-center text-2xl font-black tracking-tight">설정</h1>
       </header>
 
-      <main className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 pb-24">
-        <details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+        <main className="flex-1 space-y-5 overflow-y-auto px-5 py-5 pb-28">
+          <details className="group rounded-3xl border border-card-border bg-card/90 px-5 py-4 shadow-lg transition-all duration-200">
 
           <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4">
-            <span className="w-full text-center text-sm font-extrabold">계정 · 자산</span>
-            <span className="absolute right-0 text-xs font-extrabold text-primary">
+            <span className="w-full text-center text-base font-black">계정 · 자산</span>
+            <span className="absolute right-0 text-sm font-extrabold text-primary font-bold font-bold font-bold font-bold">
               <span className="group-open:hidden">펼치기</span>
               <span className="hidden group-open:inline">접기</span>
             </span>
@@ -351,12 +351,12 @@ export default function MorePage() {
             onClick={() => navigate("/account")}
             className="flex w-full items-center gap-3 border-b border-card-border py-3 text-center"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary font-bold font-bold font-bold font-bold">
               <UserRound className="h-4 w-4" />
             </span>
             <div className="text-center min-w-0 flex-1">
-              <p className="text-sm font-extrabold w-full px-2 text-center">로그인 · 회원가입</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
+              <p className="text-base font-black w-full px-2 text-center">로그인 · 회원가입</p>
+              <p className="mt-0.5 text-sm text-muted-foreground">
                 관심종목, 알림, 포트폴리오를 계정에 저장합니다.
               </p>
             </div>
@@ -367,12 +367,12 @@ export default function MorePage() {
             onClick={() => navigate("/portfolio")}
             className="flex w-full items-center gap-3 py-3 text-center"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary font-bold font-bold font-bold font-bold">
               <WalletCards className="h-4 w-4" />
             </span>
             <div className="text-center min-w-0 flex-1">
-              <p className="text-sm font-extrabold w-full px-2 text-center">내 포트폴리오</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
+              <p className="text-base font-black w-full px-2 text-center">내 포트폴리오</p>
+              <p className="mt-0.5 text-sm text-muted-foreground">
                 매수가, 수량, 평가손익과 수익률을 확인합니다.
               </p>
             </div>
@@ -381,8 +381,8 @@ export default function MorePage() {
 
         <details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4">
-            <span className="w-full text-center text-sm font-extrabold">화면 설정</span>
-            <span className="absolute right-0 text-xs font-extrabold text-primary">
+            <span className="w-full text-center text-base font-black">화면 설정</span>
+            <span className="absolute right-0 text-sm font-extrabold text-primary font-bold font-bold font-bold font-bold">
               <span className="group-open:hidden">펼치기</span>
               <span className="hidden group-open:inline">접기</span>
             </span>
@@ -395,7 +395,7 @@ export default function MorePage() {
             onClick={toggleTheme}
             className="flex w-full items-center gap-3 border-b border-card-border py-3 text-center last:border-b-0"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary font-bold font-bold font-bold font-bold">
               {isDark ? (
                 <Moon className="h-4 w-4" />
               ) : (
@@ -404,11 +404,11 @@ export default function MorePage() {
             </span>
 
             <div className="text-center min-w-0 flex-1">
-              <p className="break-keep text-sm font-extrabold leading-relaxed">
+              <p className="break-keep text-base font-black leading-relaxed">
                 다크모드
               </p>
 
-              <p className="mt-0.5 break-keep text-xs leading-relaxed text-muted-foreground">
+              <p className="mt-0.5 break-keep text-sm leading-relaxed text-muted-foreground">
                 {isDark ? "어두운 화면 사용 중" : "밝은 화면 사용 중"}
               </p>
             </div>
@@ -432,8 +432,8 @@ export default function MorePage() {
 
         <details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4">
-            <span className="w-full text-center text-sm font-extrabold">휴대폰 알림</span>
-            <span className="absolute right-0 text-xs font-extrabold text-primary">
+            <span className="w-full text-center text-base font-black">휴대폰 알림</span>
+            <span className="absolute right-0 text-sm font-extrabold text-primary font-bold font-bold font-bold font-bold">
               <span className="group-open:hidden">펼치기</span>
               <span className="hidden group-open:inline">접기</span>
             </span>
@@ -442,7 +442,7 @@ export default function MorePage() {
           <div className="mb-3">
 
 
-            <p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
+            <p className="mt-1 break-keep text-sm leading-relaxed text-muted-foreground">
               관심종목 뉴스, 공시, 등락률, 목표가/손절가 접근 알림을 받을 수
               있게 연결합니다.
             </p>
@@ -452,7 +452,7 @@ export default function MorePage() {
             <button
               type="button"
               onClick={() => void requestPermission()}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-primary/40 bg-primary/10 p-3 text-sm font-extrabold text-primary"
+              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-primary/40 bg-primary/10 p-3 text-base font-black text-primary font-bold font-bold font-bold font-bold"
             >
               <Smartphone className="h-4 w-4" />
               브라우저 알림 권한 켜기
@@ -463,7 +463,7 @@ export default function MorePage() {
               onClick={() => void enablePush()}
               disabled={!pushSupported}
               className={cn(
-                "flex w-full items-center justify-center gap-2 rounded-2xl border p-3 text-sm font-extrabold",
+                "flex w-full items-center justify-center gap-2 rounded-2xl border p-3 text-base font-black",
                 pushSupported
                   ? "border-positive/40 bg-positive/10 text-positive"
                   : "border-card-border bg-background text-muted-foreground opacity-60",
@@ -475,21 +475,21 @@ export default function MorePage() {
           </div>
 
           {!hasVapidKey && (
-            <p className="mt-2 break-keep text-xs font-bold leading-relaxed text-warning">
+            <p className="mt-2 break-keep text-sm font-bold leading-relaxed text-warning">
               서버 푸시 키 설정 필요 — 브라우저 알림 권한은 지금도 사용할 수
               있습니다.
             </p>
           )}
 
-          <p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
+          <p className="mt-2 break-keep text-sm font-bold leading-relaxed text-muted-foreground">
             현재 상태: {noticeStatus}
           </p>
         </details>
 
         <details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4">
-            <span className="w-full text-center text-sm font-extrabold">관심종목 알림 종류</span>
-            <span className="absolute right-0 text-xs font-extrabold text-primary">
+            <span className="w-full text-center text-base font-black">관심종목 알림 종류</span>
+            <span className="absolute right-0 text-sm font-extrabold text-primary font-bold font-bold font-bold font-bold">
               <span className="group-open:hidden">펼치기</span>
               <span className="hidden group-open:inline">접기</span>
             </span>
@@ -498,7 +498,7 @@ export default function MorePage() {
           <div className="mb-3">
 
 
-            <p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
+            <p className="mt-1 break-keep text-sm leading-relaxed text-muted-foreground">
               필요한 알림만 켜서 관리합니다.
             </p>
           </div>
@@ -523,7 +523,7 @@ export default function MorePage() {
                     className={cn(
                       "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
                       active
-                        ? "bg-primary text-primary-foreground"
+                        ? "bg-primary text-primary font-bold font-bold font-bold font-bold-foreground"
                         : "bg-secondary text-muted-foreground",
                     )}
                   >
@@ -531,11 +531,11 @@ export default function MorePage() {
                   </span>
 
                   <span className="min-w-0 flex-1">
-                    <span className="block break-keep text-sm font-extrabold leading-relaxed">
+                    <span className="block break-keep text-base font-black leading-relaxed">
                       {item.title}
                     </span>
 
-                    <span className="mt-0.5 block break-keep text-xs leading-relaxed text-muted-foreground">
+                    <span className="mt-0.5 block break-keep text-sm leading-relaxed text-muted-foreground">
                       {item.desc}
                     </span>
                   </span>
@@ -563,8 +563,8 @@ export default function MorePage() {
 
         <details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
                                         <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4">
-            <span className="w-full text-center text-sm font-extrabold">서버 자동백업 / 복원</span>
-            <span className="absolute right-0 text-xs font-extrabold text-primary">
+            <span className="w-full text-center text-base font-black">서버 자동백업 / 복원</span>
+            <span className="absolute right-0 text-sm font-extrabold text-primary font-bold font-bold font-bold font-bold">
               <span className="group-open:hidden">펼치기</span>
               <span className="hidden group-open:inline">접기</span>
             </span>
@@ -575,7 +575,7 @@ export default function MorePage() {
               type="button"
               onClick={() => void saveServerBackup()}
               disabled={!memberId || remoteBackupBusy}
-              className="flex items-center justify-center gap-1.5 rounded-2xl border border-primary/40 bg-primary/10 px-3 py-3 text-sm font-extrabold text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex items-center justify-center gap-1.5 rounded-2xl border border-primary/40 bg-primary/10 px-3 py-3 text-base font-black text-primary font-bold font-bold font-bold font-bold disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Download className="h-4 w-4" />
               서버에 저장
@@ -585,7 +585,7 @@ export default function MorePage() {
               type="button"
               onClick={() => void restoreServerBackup()}
               disabled={!memberId || remoteBackupBusy}
-              className="flex items-center justify-center gap-1.5 rounded-2xl border border-positive/40 bg-positive/10 px-3 py-3 text-sm font-extrabold text-positive disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex items-center justify-center gap-1.5 rounded-2xl border border-positive/40 bg-positive/10 px-3 py-3 text-base font-black text-positive disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Upload className="h-4 w-4" />
               서버 백업 복원
@@ -595,7 +595,7 @@ export default function MorePage() {
 
 
 
-        <p className="pb-4 pt-2 text-center text-xs font-bold text-muted-foreground">
+        <p className="pb-4 pt-2 text-center text-sm font-bold text-muted-foreground">
           By. Seung Jae Lee
         </p>
       </main>

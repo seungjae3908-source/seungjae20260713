@@ -8,6 +8,10 @@ import { fetchBitgetCandles, fetchUpbitCandles } from './crypto-source';
 import { toBars, type Bar } from './candle-math';
 import { getChartSignals } from './chart-signals.service';
 import { getAiChartPlan } from './ai-chart-plan.service';
+import {
+  deliverMemberNotification,
+  type NotificationType,
+} from '../notification.service';
 
 type RealtimeAsset = 'stockKR' | 'stockUS' | 'coinSpot' | 'coinFutures';
 
@@ -23,6 +27,7 @@ type SubscribeMessage = SubscriptionSpec & {
 };
 
 type AuthorizedMember = {
+  id: string;
   role: 'associate' | 'full' | 'admin';
 };
 
@@ -40,11 +45,13 @@ type SharedFeed = {
   timer: NodeJS.Timeout | null;
   loading: boolean;
   lastSignature: string | null;
+  lastSignalIds: Set<string> | null;
+  lastPlan: { view: string; target: number | null; stop: number | null } | null;
 };
 
-const STOCK_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H', '1D']);
-const SPOT_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '60m', '1D', '1W', '1M']);
-const FUTURES_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '1H', '4H', '1D']);
+const STOCK_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '1H', '4H', '1D', '1W', '1M']);
+const SPOT_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '1H', '4H', '1D', '1W', '1M']);
+const FUTURES_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '1H', '4H', '1D', '1W', '1M']);
 const feeds = new Map<string, SharedFeed>();
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -117,7 +124,7 @@ async function authorize(accessToken: string): Promise<AuthorizedMember> {
     throw new Error('MEMBER_NOT_APPROVED');
   }
 
-  return { role: normalizeMembershipRole(profile.role) };
+  return { id: auth.user.id, role: normalizeMembershipRole(profile.role) };
 }
 
 function send(socket: RealtimeSocket, payload: Record<string, unknown>): void {
@@ -165,7 +172,12 @@ async function loadSnapshot(spec: SubscriptionSpec): Promise<{
   }
 
   if (spec.asset === 'coinSpot') {
-    const timeframe = spec.interval === '1H' ? '60m' : spec.interval;
+    const timeframe =
+      spec.interval === '1H'
+        ? '60m'
+        : spec.interval === '4H'
+          ? '240m'
+          : spec.interval;
     const candles = await fetchUpbitCandles(spec.symbol.replace(/^KRW-/, ''), 200, timeframe);
     return { candles: normalizeBars(candles), provider: 'upbit', fetchedAt: new Date().toISOString() };
   }
@@ -180,6 +192,48 @@ function snapshotSignature(candles: Bar[]): string {
   return latest
     ? [latest.time, latest.open, latest.high, latest.low, latest.close, latest.volume].join(':')
     : 'empty';
+}
+
+function notificationTypeForSignal(name: string): NotificationType {
+  return /매도|하락|약세|이탈|손절/.test(name)
+    ? 'ai_sell_signal'
+    : 'ai_buy_signal';
+}
+
+function notifyFeedMembers(
+  feed: SharedFeed,
+  input: {
+    type: NotificationType;
+    title: string;
+    body: string;
+    signalId: string;
+    importance: string;
+  },
+): void {
+  const memberIds = new Set(
+    [...feed.clients]
+      .map((client) => client.authorization?.id)
+      .filter((id): id is string => Boolean(id)),
+  );
+  for (const memberId of memberIds) {
+    void deliverMemberNotification({
+      memberId,
+      type: input.type,
+      title: input.title,
+      body: input.body,
+      url: `/tech/chart-relay?asset=${encodeURIComponent(feed.spec.asset)}&symbol=${encodeURIComponent(feed.spec.symbol)}&interval=${encodeURIComponent(feed.spec.interval)}`,
+      app: true,
+      push: false,
+      metadata: {
+        assetType: feed.spec.asset,
+        symbol: feed.spec.symbol,
+        signalId: input.signalId,
+        importance: input.importance,
+      },
+    }).catch((error) => {
+      console.error('[realtime-chart] notification error:', error);
+    });
+  }
 }
 
 async function refreshFeed(feed: SharedFeed): Promise<void> {
@@ -223,6 +277,58 @@ async function refreshFeed(feed: SharedFeed): Promise<void> {
           snapshot.candles,
         ),
       ]);
+      const currentSignalIds = new Set(signalResult.signals.map((signal) => signal.id));
+      const currentPlan = {
+        view: plan.view,
+        target: plan.target,
+        stop: plan.stop,
+      };
+      if (feed.lastSignalIds) {
+        for (const signal of signalResult.signals) {
+          if (feed.lastSignalIds.has(signal.id)) continue;
+          notifyFeedMembers(feed, {
+            type: notificationTypeForSignal(signal.name),
+            title: `${signal.name} · ${feed.spec.symbol}`,
+            body: signal.meaningHere || signal.meaningGeneral,
+            signalId: signal.id,
+            importance: signal.importance || 'medium',
+          });
+        }
+      }
+      if (feed.lastPlan) {
+        if (feed.lastPlan.view !== currentPlan.view) {
+          notifyFeedMembers(feed, {
+            type:
+              currentPlan.view === '매도'
+                ? 'ai_sell_signal'
+                : 'ai_buy_signal',
+            title: `AI 관점 변경 · ${feed.spec.symbol}`,
+            body: `${feed.lastPlan.view} → ${currentPlan.view}`,
+            signalId: `plan-view:${feed.key}:${snapshot.fetchedAt}:${currentPlan.view}`,
+            importance: 'high',
+          });
+        }
+        if (feed.lastPlan.target !== currentPlan.target) {
+          notifyFeedMembers(feed, {
+            type: 'target_change',
+            title: `목표가 변경 · ${feed.spec.symbol}`,
+            body: `${feed.lastPlan.target ?? '산출 불가'} → ${currentPlan.target ?? '산출 불가'}`,
+            signalId: `plan-target:${feed.key}:${snapshot.fetchedAt}:${currentPlan.target ?? 'none'}`,
+            importance: 'medium',
+          });
+        }
+        if (feed.lastPlan.stop !== currentPlan.stop) {
+          notifyFeedMembers(feed, {
+            type: 'stop_change',
+            title: `손절가 변경 · ${feed.spec.symbol}`,
+            body: `${feed.lastPlan.stop ?? '산출 불가'} → ${currentPlan.stop ?? '산출 불가'}`,
+            signalId: `plan-stop:${feed.key}:${snapshot.fetchedAt}:${currentPlan.stop ?? 'none'}`,
+            importance: 'high',
+          });
+        }
+      }
+      feed.lastSignalIds = currentSignalIds;
+      feed.lastPlan = currentPlan;
       payload = {
           type: 'snapshot',
           ...feed.spec,
@@ -282,6 +388,8 @@ function subscribe(socket: RealtimeSocket, spec: SubscriptionSpec): void {
       timer: null,
       loading: false,
       lastSignature: null,
+      lastSignalIds: null,
+      lastPlan: null,
     };
     created.timer = setInterval(() => void refreshFeed(created), feedPollMs(spec.asset));
     created.timer.unref?.();

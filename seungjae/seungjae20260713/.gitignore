@@ -1,0 +1,29 @@
+# Dependencies and local caches
+node_modules/
+.local/
+*.tsbuildinfo
+
+# Build output
+dist/
+**/dist/
+
+# Runtime data and logs
+api-server/data/
+# DART 기업코드 매핑은 콜드스타트 대비 번들로 유지 (벌크 다운로드가 3~4분 걸림)
+!api-server/data/dart-corpmap.json
+*.log
+
+# Local environment/secrets
+.env
+.env.*
+!.env.example
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.backup-*
+
+# AI repair runtime staging, backups, approvals
+.ai-repair/

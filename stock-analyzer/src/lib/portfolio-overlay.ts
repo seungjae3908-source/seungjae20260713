@@ -1,4 +1,4 @@
-export interface PortfolioChartOverlay {
+  export interface PortfolioChartOverlay {
   ticker: string;
   name: string;
   market: "KR" | "US";

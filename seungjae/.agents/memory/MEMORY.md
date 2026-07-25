@@ -1,0 +1,9 @@
+- [API route auth policy](api-route-auth.md) — market/news/crypto/kiwoom-status are public; watchlist, kiwoom ops (egress-ip, token-test, test, raw-ranking, token/refresh) must stay auth-gated (IDOR/abuse risk).
+- [Supabase RLS lessons](supabase-rls-lessons.md) — profiles policies need is_admin() fn (recursion), server must use user-scoped client (no service key), migrations run manually by user.
+- [Run/port setup](run-port-setup.md) — public URL = external 80 → local 8080, served ONLY by api-server workflow; 앱 전체 실행 serves 3001. No process on 8080 ⇒ phones show stale SW-cached app. KIWOOM_MODE=mock mandatory.
+- [Screenshot verify harness](verify-harness.md) — SW hijacks harness pages after first load; serve harness via temp /api/__vp route (SW denylist) with sc/clk params; delete route+file after.
+- [Market data provider quirks](market-data-provider-quirks.md) — Yahoo range=max buckets ~168 rows (use period1/period2); Kiwoom 1W=ka10082; SEC 429s intermittently; no fake data fallbacks allowed.
+- [No-fake-data UI rules](no-fake-data-rules.md) — no heuristic targets from price/score (→산출 불가); risk grades default 데이터 부족; price-alerts API takes camelCase, returns snake_case.
+- [외부 파일 반입 손상 패턴](chatgpt-import-corruption.md) — 외부 tar/txt 반입 후엔 프런트·서버 모두 tsc 필수; 파일 자리바꿈·서비스/라우트 버전 불일치 사고 반복.
+- [Supabase 무한 로딩 사고](supabase-rate-limit-deadlock.md) — onAuthStateChange 안 supabase 호출 금지(교착); 유효 apikey만 무응답이면 rate-limit tarpit; requireMember 60초 캐시+10초 타임아웃 유지.
+- [Reco & scan engine rules](reco-scan-rules.md) — Financials.source flag gates sample data out of recos; scan throws on ≥80% provider errors (0건≠오류); crypto account/position routes must stay member-gated.
