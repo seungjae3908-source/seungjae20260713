@@ -50,10 +50,17 @@ type AnyObj = Record<string, any>;
 
 type Asset = 'stockKR' | 'stockUS' | 'coinSpot' | 'coinFutures';
 type Tab = 'live' | 'ai';
+type AnalysisTab = 'summary' | 'buy' | 'sell' | 'signals';
 type ChartType = 'candles' | 'line';
 type PriceScaleType = 'normal' | 'logarithmic' | 'percentage';
 type SignalImportance = 'high' | 'medium' | 'low';
 type SignalKind = 'chart' | 'candle' | 'volume' | 'indicator';
+type PatternKind = Extract<SignalKind, 'chart' | 'candle'>;
+
+type PatternOption = {
+  name: string;
+  kind: PatternKind;
+};
 
 type CandlePoint = {
   time: UTCTimestamp;
@@ -176,13 +183,6 @@ type AiPlanChange = {
   nextStop: number | null;
 };
 
-type FreshnessTimes = {
-  chartUpdatedAt: string | number | null;
-  realtimeReceivedAt: string | number | null;
-  aiAsOf: string | number | null;
-  signalsAsOf: string | number | null;
-};
-
 type TopSignalBanner = {
   id: string;
   title: string;
@@ -279,7 +279,11 @@ function chartSignalStage(row: AnyObj, name: string, importance: string): ChartS
   return 'START';
 }
 
-function signalAtCandle(signals: ChartSignal[], candle: CandlePoint) {
+function signalAtCandle(
+  signals: ChartSignal[],
+  candle: CandlePoint,
+  latestCandleTime = Number(candle.time),
+) {
   const time = Number(candle.time);
   const priority: Record<ChartSignal['stage'], number> = {
     START: 1,
@@ -290,12 +294,43 @@ function signalAtCandle(signals: ChartSignal[], candle: CandlePoint) {
   return signals
     .filter((signal) => {
       if (signal.kind !== 'chart' && signal.kind !== 'candle') return false;
-      const from = toUnixSeconds(signal.overlay?.fromTime ?? signal.barTime);
-      const to = toUnixSeconds(signal.overlay?.toTime ?? signal.barTime);
-      if (from == null && to == null) return false;
-      return time >= Math.min(from ?? to!, to ?? from!) && time <= Math.max(from ?? to!, to ?? from!);
+      const range = signalDisplayRange(signal, latestCandleTime);
+      return range != null && time >= range.start && time <= range.end;
     })
     .sort((left, right) => priority[right.stage] - priority[left.stage])[0] ?? null;
+}
+
+function signalDisplayRange(
+  signal: ChartSignal,
+  latestCandleTime: number,
+): { start: number; end: number } | null {
+  const from = toUnixSeconds(signal.overlay?.fromTime ?? signal.barTime);
+  const to = toUnixSeconds(signal.overlay?.toTime ?? signal.barTime);
+  if (from == null && to == null) return null;
+  const start = Math.min(from ?? to!, to ?? from!);
+  const detectedEnd = Math.max(from ?? to!, to ?? from!);
+  const ongoing = signal.stage === 'START' || signal.stage === 'DEVELOPING';
+  return {
+    start,
+    end: ongoing ? Math.max(detectedEnd, latestCandleTime) : detectedEnd,
+  };
+}
+
+function signalPrediction(signal: ChartSignal): string {
+  if (signal.stage === 'INVALIDATED') {
+    return '기존 예측 방향이 무효화된 상태입니다. 새 지지·저항과 다음 신호를 다시 확인해야 합니다.';
+  }
+  if (/하락|매도|약세|이탈|쌍봉|이중천장|석별|유성/.test(signal.name)) {
+    return signal.stage === 'COMPLETED'
+      ? '하락 방향이 확인된 상태로 해석하지만 반등과 거래량 변화를 함께 확인해야 합니다.'
+      : '하락 전환 또는 약세 지속 가능성을 관찰하는 단계입니다.';
+  }
+  if (/상승|매수|강세|돌파|쌍바닥|이중바닥|샛별|망치/.test(signal.name)) {
+    return signal.stage === 'COMPLETED'
+      ? '상승 방향이 확인된 상태로 해석하지만 추격 진입보다 지지 확인이 우선입니다.'
+      : '상승 전환 또는 강세 지속 가능성을 관찰하는 단계입니다.';
+  }
+  return '방향이 아직 확정되지 않았습니다. 다음 봉과 거래량, 지지·저항 반응을 함께 확인해야 합니다.';
 }
 
 function normalizeSignalName(value: string): string {
@@ -556,7 +591,7 @@ const SIGNAL_SETTING_KEYS: Array<{ key: keyof ChartSettings; label: string }> =
     ].includes(item.key),
   );
 
-const DEFAULT_PATTERN_NAMES = [
+const DEFAULT_CANDLE_PATTERN_NAMES = [
   '상승 장악형',
   '하락 장악형',
   '도지',
@@ -565,6 +600,9 @@ const DEFAULT_PATTERN_NAMES = [
   '유성형',
   '샛별형',
   '석별형',
+];
+
+const DEFAULT_CHART_PATTERN_NAMES = [
   '박스권 상단 돌파',
   '지지선 이탈',
   '삼각수렴',
@@ -574,6 +612,11 @@ const DEFAULT_PATTERN_NAMES = [
   '이중천장',
   '쌍바닥 후보',
   '쌍봉 후보',
+];
+
+const DEFAULT_PATTERN_OPTIONS: PatternOption[] = [
+  ...DEFAULT_CANDLE_PATTERN_NAMES.map((name) => ({ name, kind: 'candle' as const })),
+  ...DEFAULT_CHART_PATTERN_NAMES.map((name) => ({ name, kind: 'chart' as const })),
 ];
 
 const DEFAULT_SYMBOL: Record<Asset, string> = {
@@ -1086,29 +1129,10 @@ function toEpochMilliseconds(value: string | number | null | undefined): number 
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function formatDataTime(value: string | number | null): string {
-  const milliseconds = toEpochMilliseconds(value);
-  if (milliseconds == null) return '-';
-  return new Intl.DateTimeFormat('ko-KR', {
-    timeZone: 'Asia/Seoul',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(new Date(milliseconds));
-}
-
 function priceScaleMode(value: PriceScaleType): PriceScaleMode {
   if (value === 'logarithmic') return PriceScaleMode.Logarithmic;
   if (value === 'percentage') return PriceScaleMode.Percentage;
   return PriceScaleMode.Normal;
-}
-
-function indicatorText(value: number | null, digits = 2): string {
-  return value == null || !Number.isFinite(value)
-    ? '-'
-    : value.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
 type LowerIndicatorKey = 'rsi' | 'macd' | 'atr' | 'cci' | 'obv' | 'williamsR' | 'roc';
@@ -1128,13 +1152,13 @@ const LowerIndicatorPanel = memo(function LowerIndicatorPanel({
   enabled,
   timeVisible,
   sourceKey,
-  onHoverTime,
+  onOpenSettings,
 }: {
   indicators: IndicatorPoint[];
   enabled: LowerIndicatorKey[];
   timeVisible: boolean;
   sourceKey: string;
-  onHoverTime: (time: number | null) => void;
+  onOpenSettings: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -1172,10 +1196,6 @@ const LowerIndicatorPanel = memo(function LowerIndicatorPanel({
       handleScale: true,
     });
     chartRef.current = chart;
-    const crosshairHandler = (param: MouseEventParams<Time>) => {
-      onHoverTime(typeof param.time === 'number' ? Number(param.time) : null);
-    };
-    chart.subscribeCrosshairMove(crosshairHandler);
     const observer = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
       if (rect?.width && rect.height) {
@@ -1185,7 +1205,6 @@ const LowerIndicatorPanel = memo(function LowerIndicatorPanel({
     observer.observe(container);
     return () => {
       observer.disconnect();
-      chart.unsubscribeCrosshairMove(crosshairHandler);
       chart.remove();
       chartRef.current = null;
       valueSeriesRef.current = null;
@@ -1193,7 +1212,7 @@ const LowerIndicatorPanel = memo(function LowerIndicatorPanel({
       histogramSeriesRef.current = null;
       boundarySeriesRef.current = [];
     };
-  }, [enabled.length, onHoverTime]);
+  }, [enabled.length]);
 
   useEffect(() => {
     chartRef.current?.timeScale().applyOptions({ timeVisible, secondsVisible: false });
@@ -1296,27 +1315,49 @@ const LowerIndicatorPanel = memo(function LowerIndicatorPanel({
     }
   }, [active, indicators, sourceKey]);
 
-  if (enabled.length === 0) return null;
   return (
     <div className="border-t border-card-border">
-      <div className="flex min-h-[38px] items-center gap-1 overflow-x-auto px-2 py-1.5">
-        {enabled.map((key) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setActive(key)}
-            className={cn(
-              'shrink-0 rounded-lg border px-2 py-1 text-[10px] font-black',
-              active === key
-                ? 'border-primary bg-primary text-primary-foreground'
-                : 'border-card-border bg-card',
-            )}
-          >
-            {LOWER_INDICATOR_LABEL[key]}
-          </button>
-        ))}
+      <div className="flex min-h-[42px] items-center justify-between gap-2 border-b border-card-border px-2 py-1.5">
+        <p className="shrink-0 text-[10px] font-black">거래량 아래 보조지표</p>
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-primary/50 bg-primary/10 px-2 py-1.5 text-[10px] font-black text-primary"
+        >
+          <Settings2 className="h-3 w-3" />
+          지표 추가·변경
+        </button>
       </div>
-      <div ref={containerRef} className="h-[160px] min-h-[160px] w-full" />
+      {enabled.length > 0 ? (
+        <>
+          <div className="flex min-h-[38px] items-center gap-1 overflow-x-auto px-2 py-1.5">
+            {enabled.map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActive(key)}
+                className={cn(
+                  'shrink-0 rounded-lg border px-2 py-1 text-[10px] font-black',
+                  active === key
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-card-border bg-card',
+                )}
+              >
+                {LOWER_INDICATOR_LABEL[key]}
+              </button>
+            ))}
+          </div>
+          <div ref={containerRef} className="h-[160px] min-h-[160px] w-full" />
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="flex h-[96px] w-full items-center justify-center px-4 text-center text-[11px] font-bold text-muted-foreground"
+        >
+          RSI·MACD·ATR·CCI·OBV·Williams %R·ROC 중 표시할 지표를 선택하세요.
+        </button>
+      )}
     </div>
   );
 });
@@ -1337,6 +1378,7 @@ const RelayChart = memo(function RelayChart({
   isLoadingOlder,
   onLoadOlder,
   onSignalSelect,
+  onOpenIndicatorSettings,
 }: {
   candles: CandlePoint[];
   timeVisible: boolean;
@@ -1352,14 +1394,11 @@ const RelayChart = memo(function RelayChart({
   isLoadingOlder: boolean;
   onLoadOlder: () => void;
   onSignalSelect: (signal: ChartSignal) => void;
+  onOpenIndicatorSettings: () => void;
 }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const rsiContainerRef = useRef<HTMLDivElement | null>(null);
-  const macdContainerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const rsiChartRef = useRef<IChartApi | null>(null);
-  const macdChartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const closeSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
@@ -1389,16 +1428,6 @@ const RelayChart = memo(function RelayChart({
   }>({ conversion: null, base: null, spanA: null, spanB: null, lagging: null });
   const volumeMaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const patternSeriesRef = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
-  const rsiSeriesRef = useRef<{
-    value: ISeriesApi<'Line'> | null;
-    overbought: ISeriesApi<'Line'> | null;
-    oversold: ISeriesApi<'Line'> | null;
-  }>({ value: null, overbought: null, oversold: null });
-  const macdSeriesRef = useRef<{
-    macd: ISeriesApi<'Line'> | null;
-    signal: ISeriesApi<'Line'> | null;
-    histogram: ISeriesApi<'Histogram'> | null;
-  }>({ macd: null, signal: null, histogram: null });
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const savedRangeRef = useRef<LogicalRange | null>(null);
   const firstFitRef = useRef(false);
@@ -1414,7 +1443,6 @@ const RelayChart = memo(function RelayChart({
   const canLoadOlderRef = useRef(canLoadOlder);
   const [chartType, setChartType] = useState<ChartType>(() => loadChartType());
   const [scaleType, setScaleType] = useState<PriceScaleType>('normal');
-  const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [showLatest, setShowLatest] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const fallbackFullscreenRef = useRef(false);
@@ -1453,18 +1481,6 @@ const RelayChart = memo(function RelayChart({
       settings.williamsR,
     ],
   );
-  const indicatorByTime = useMemo(
-    () => new Map(indicators.map((point) => [Number(point.time), point])),
-    [indicators],
-  );
-  const candleByTime = useMemo(
-    () => new Map(candles.map((point) => [Number(point.time), point])),
-    [candles],
-  );
-  const selectedCandle = hoverTime == null ? candles.at(-1) ?? null : candleByTime.get(hoverTime) ?? null;
-  const selectedIndicator =
-    selectedCandle == null ? null : indicatorByTime.get(Number(selectedCandle.time)) ?? null;
-
   useEffect(() => {
     candlesLengthRef.current = candles.length;
     loadOlderArmedRef.current = true;
@@ -1486,7 +1502,6 @@ const RelayChart = memo(function RelayChart({
     savedRangeRef.current = null;
     previousCandlesRef.current = [];
     viewingHistoryRef.current = false;
-    setHoverTime(null);
     setShowLatest(false);
   }, [sourceKey]);
 
@@ -1586,15 +1601,24 @@ const RelayChart = memo(function RelayChart({
       lastValueVisible: false,
     });
 
-    const crosshairHandler = (param: MouseEventParams<Time>) => {
-      setHoverTime(typeof param.time === 'number' ? Number(param.time) : null);
-    };
-    chart.subscribeCrosshairMove(crosshairHandler);
     const clickHandler = (param: MouseEventParams<Time>) => {
+      const clickedPatternKey = [...patternSeriesRef.current.entries()].find(
+        ([, series]) => param.seriesData.has(series),
+      )?.[0];
+      if (clickedPatternKey) {
+        const clickedSignal = signalsRef.current.find(
+          (signal) => signalOccurrenceKey(signal) === clickedPatternKey,
+        );
+        if (clickedSignal) {
+          onSignalSelectRef.current(clickedSignal);
+          return;
+        }
+      }
       if (typeof param.time !== 'number') return;
       const candle = candlesRef.current.find((item) => Number(item.time) === Number(param.time));
       if (!candle) return;
-      const signal = signalAtCandle(signalsRef.current, candle);
+      const latestCandleTime = Number(candlesRef.current.at(-1)?.time ?? candle.time);
+      const signal = signalAtCandle(signalsRef.current, candle, latestCandleTime);
       if (signal) onSignalSelectRef.current(signal);
     };
     chart.subscribeClick(clickHandler);
@@ -1610,13 +1634,6 @@ const RelayChart = memo(function RelayChart({
         loadOlderArmedRef.current = false;
         onLoadOlderRef.current();
       }
-      const visibleTimeRange = chart.timeScale().getVisibleRange();
-      if (visibleTimeRange && rsiChartRef.current) {
-        rsiChartRef.current.timeScale().setVisibleRange(visibleTimeRange);
-      }
-      if (visibleTimeRange && macdChartRef.current) {
-        macdChartRef.current.timeScale().setVisibleRange(visibleTimeRange);
-      }
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(rangeHandler);
 
@@ -1630,7 +1647,6 @@ const RelayChart = memo(function RelayChart({
     return () => {
       savedRangeRef.current = chart.timeScale().getVisibleLogicalRange();
       observer.disconnect();
-      chart.unsubscribeCrosshairMove(crosshairHandler);
       chart.unsubscribeClick(clickHandler);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(rangeHandler);
       chart.remove();
@@ -1661,96 +1677,6 @@ const RelayChart = memo(function RelayChart({
       secondsVisible: false,
     });
   }, [timeVisible]);
-
-  useEffect(() => {
-    const container = rsiContainerRef.current;
-    if (!settings.rsi || !container) {
-      rsiChartRef.current = null;
-      rsiSeriesRef.current = { value: null, overbought: null, oversold: null };
-      return;
-    }
-    const dark = document.documentElement.classList.contains('dark');
-    const chart = createChart(container, {
-      width: Math.max(container.clientWidth, 1),
-      height: Math.max(container.clientHeight, 145),
-      layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: dark ? '#94a3b8' : '#64748b', fontSize: 10 },
-      grid: {
-        vertLines: { color: 'rgba(100,116,139,0.08)' },
-        horzLines: { color: 'rgba(100,116,139,0.08)' },
-      },
-      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.1, bottom: 0.1 } },
-      timeScale: { borderVisible: false, timeVisible, secondsVisible: false },
-      handleScroll: false,
-      handleScale: false,
-    });
-    rsiChartRef.current = chart;
-    rsiSeriesRef.current = {
-      value: chart.addLineSeries({ color: '#8b5cf6', lineWidth: 2, priceLineVisible: false, lastValueVisible: true }),
-      overbought: chart.addLineSeries({ color: '#ef4444', lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }),
-      oversold: chart.addLineSeries({ color: '#3b82f6', lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }),
-    };
-    const crosshairHandler = (param: MouseEventParams<Time>) => {
-      setHoverTime(typeof param.time === 'number' ? Number(param.time) : null);
-    };
-    chart.subscribeCrosshairMove(crosshairHandler);
-    const observer = new ResizeObserver((entries) => {
-      const rect = entries[0]?.contentRect;
-      if (rect?.width && rect.height) chart.applyOptions({ width: rect.width, height: rect.height });
-    });
-    observer.observe(container);
-    return () => {
-      observer.disconnect();
-      chart.unsubscribeCrosshairMove(crosshairHandler);
-      chart.remove();
-      rsiChartRef.current = null;
-      rsiSeriesRef.current = { value: null, overbought: null, oversold: null };
-    };
-  }, [isFullscreen, settings.rsi, timeVisible]);
-
-  useEffect(() => {
-    const container = macdContainerRef.current;
-    if (!settings.macd || !container) {
-      macdChartRef.current = null;
-      macdSeriesRef.current = { macd: null, signal: null, histogram: null };
-      return;
-    }
-    const dark = document.documentElement.classList.contains('dark');
-    const chart = createChart(container, {
-      width: Math.max(container.clientWidth, 1),
-      height: Math.max(container.clientHeight, 145),
-      layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: dark ? '#94a3b8' : '#64748b', fontSize: 10 },
-      grid: {
-        vertLines: { color: 'rgba(100,116,139,0.08)' },
-        horzLines: { color: 'rgba(100,116,139,0.08)' },
-      },
-      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.1, bottom: 0.1 } },
-      timeScale: { borderVisible: false, timeVisible, secondsVisible: false },
-      handleScroll: false,
-      handleScale: false,
-    });
-    macdChartRef.current = chart;
-    macdSeriesRef.current = {
-      macd: chart.addLineSeries({ color: '#8b5cf6', lineWidth: 2, priceLineVisible: false, lastValueVisible: true }),
-      signal: chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, priceLineVisible: false, lastValueVisible: true }),
-      histogram: chart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false }),
-    };
-    const crosshairHandler = (param: MouseEventParams<Time>) => {
-      setHoverTime(typeof param.time === 'number' ? Number(param.time) : null);
-    };
-    chart.subscribeCrosshairMove(crosshairHandler);
-    const observer = new ResizeObserver((entries) => {
-      const rect = entries[0]?.contentRect;
-      if (rect?.width && rect.height) chart.applyOptions({ width: rect.width, height: rect.height });
-    });
-    observer.observe(container);
-    return () => {
-      observer.disconnect();
-      chart.unsubscribeCrosshairMove(crosshairHandler);
-      chart.remove();
-      macdChartRef.current = null;
-      macdSeriesRef.current = { macd: null, signal: null, histogram: null };
-    };
-  }, [isFullscreen, settings.macd, timeVisible]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -1865,17 +1791,17 @@ const RelayChart = memo(function RelayChart({
             (toEpochMilliseconds(left.occurredAt) ?? 0) -
             (toEpochMilliseconds(right.occurredAt) ?? 0),
         )
-        .slice(-40);
+        .slice(-20);
       const chartHigh = Math.max(...candles.map((candle) => candle.high));
       const chartLow = Math.min(...candles.map((candle) => candle.low));
       const chartRange = Math.max(chartHigh - chartLow, Math.abs(chartLow) * 0.01, 1);
+      const latestCandleTime = Number(candles.at(-1)!.time);
 
       patternSignals.forEach((signal, signalIndex) => {
-        const from = toUnixSeconds(signal.overlay?.fromTime ?? signal.barTime);
-        const to = toUnixSeconds(signal.overlay?.toTime ?? signal.barTime);
-        if (from == null && to == null) return;
-        const startTime = Math.min(from ?? to!, to ?? from!);
-        const endTime = Math.max(from ?? to!, to ?? from!);
+        const range = signalDisplayRange(signal, latestCandleTime);
+        if (!range) return;
+        const startTime = range.start;
+        const endTime = range.end;
         const startIndex = candles.reduce(
           (nearest, candle, index) =>
             Math.abs(Number(candle.time) - startTime) <
@@ -1892,8 +1818,12 @@ const RelayChart = memo(function RelayChart({
               : nearest,
           startIndex,
         );
-        const left = Math.min(startIndex, endIndex);
-        const right = Math.max(startIndex, endIndex);
+        let left = Math.min(startIndex, endIndex);
+        let right = Math.max(startIndex, endIndex);
+        if (left === right) {
+          if (right < candles.length - 1) right += 1;
+          else left = Math.max(0, left - 1);
+        }
         if (left === right) return;
         const key = signalOccurrenceKey(signal);
         desired.add(key);
@@ -1934,36 +1864,6 @@ const RelayChart = memo(function RelayChart({
   }, [candles, chartType, settings.highlight, signals, tab]);
 
   useEffect(() => {
-    if (!settings.rsi || !rsiSeriesRef.current.value) return;
-    const valueData = lineData(indicators, (point) => point.rsi);
-    rsiSeriesRef.current.value.setData(valueData);
-    const boundaryTimes = valueData.map((point) => point.time);
-    rsiSeriesRef.current.overbought?.setData(boundaryTimes.map((time) => ({ time, value: 70 })));
-    rsiSeriesRef.current.oversold?.setData(boundaryTimes.map((time) => ({ time, value: 30 })));
-    const range = chartRef.current?.timeScale().getVisibleRange();
-    if (range) rsiChartRef.current?.timeScale().setVisibleRange(range);
-  }, [indicators, settings.rsi]);
-
-  useEffect(() => {
-    if (!settings.macd || !macdSeriesRef.current.macd) return;
-    macdSeriesRef.current.macd.setData(lineData(indicators, (point) => point.macd));
-    macdSeriesRef.current.signal?.setData(lineData(indicators, (point) => point.macdSignal));
-    macdSeriesRef.current.histogram?.setData(
-      indicators.flatMap((point) =>
-        point.macdHistogram == null
-          ? []
-          : [{
-              time: point.time,
-              value: point.macdHistogram,
-              color: point.macdHistogram >= 0 ? 'rgba(239,68,68,0.55)' : 'rgba(59,130,246,0.55)',
-            }],
-      ),
-    );
-    const range = chartRef.current?.timeScale().getVisibleRange();
-    if (range) macdChartRef.current?.timeScale().setVisibleRange(range);
-  }, [indicators, settings.macd]);
-
-  useEffect(() => {
     const series =
       chartType === 'candles'
         ? candleSeriesRef.current
@@ -1981,7 +1881,7 @@ const RelayChart = memo(function RelayChart({
             (toEpochMilliseconds(left.occurredAt) ?? 0) -
             (toEpochMilliseconds(right.occurredAt) ?? 0),
         )
-        .slice(-40);
+        .slice(-20);
       const nearestTime = (target: number): Time =>
         candles.reduce((nearest, candle) =>
           Math.abs(Number(candle.time) - target) <
@@ -1989,19 +1889,19 @@ const RelayChart = memo(function RelayChart({
             ? candle
             : nearest,
         ).time as Time;
+      const latestCandleTime = Number(candles.at(-1)!.time);
       for (const signal of patternSignals) {
-        const from = toUnixSeconds(signal.overlay?.fromTime ?? signal.barTime);
-        const to = toUnixSeconds(signal.overlay?.toTime ?? signal.barTime);
-        if (from == null && to == null) continue;
-        const start = nearestTime(Math.min(from ?? to!, to ?? from!));
-        const end = nearestTime(Math.max(from ?? to!, to ?? from!));
+        const range = signalDisplayRange(signal, latestCandleTime);
+        if (!range) continue;
+        const start = nearestTime(range.start);
+        const end = nearestTime(range.end);
         const meta = PATTERN_STAGE_META[signal.stage];
         markers.push({
           time: start,
           position: 'belowBar',
           color: meta.color,
           shape: 'circle',
-          text: Number(start) === Number(end) ? `${signal.name} · ${meta.label}` : '시작',
+          text: `시작 · ${signal.name}`,
         });
         if (Number(start) !== Number(end)) {
           markers.push({
@@ -2009,7 +1909,10 @@ const RelayChart = memo(function RelayChart({
             position: 'belowBar',
             color: meta.color,
             shape: signal.stage === 'INVALIDATED' ? 'arrowDown' : 'square',
-            text: meta.label,
+            text:
+              signal.stage === 'START' || signal.stage === 'DEVELOPING'
+                ? `현재 · ${meta.label}`
+                : meta.label,
           });
         }
       }
@@ -2249,47 +2152,6 @@ const RelayChart = memo(function RelayChart({
         </button>
       </div>
 
-      <div className="grid h-[236px] min-h-[236px] max-h-[236px] grid-cols-2 auto-rows-[18px] gap-x-3 gap-y-1 overflow-y-auto border-b border-card-border px-2 py-2 font-mono text-[10px] font-bold tabular-nums sm:h-[140px] sm:min-h-[140px] sm:max-h-[140px] sm:grid-cols-4">
-        <span className="min-w-0 truncate whitespace-nowrap">시간 {selectedCandle ? formatCandleTime(selectedCandle.time) : '-'}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">시가 {selectedCandle ? formatPrice(selectedCandle.open, asset) : '-'}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">고가 {selectedCandle ? formatPrice(selectedCandle.high, asset) : '-'}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">저가 {selectedCandle ? formatPrice(selectedCandle.low, asset) : '-'}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">종가 {selectedCandle ? formatPrice(selectedCandle.close, asset) : '-'}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">거래량 {selectedCandle ? indicatorText(selectedCandle.volume, 4) : '-'}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">
-          시가 대비{' '}
-          {selectedCandle && selectedCandle.open !== 0
-            ? `${(((selectedCandle.close - selectedCandle.open) / selectedCandle.open) * 100).toFixed(2)}%`
-            : '-'}
-        </span>
-        <span className="min-w-0 truncate whitespace-nowrap">SMA5 {indicatorText(selectedIndicator?.ma5 ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">SMA20 {indicatorText(selectedIndicator?.ma20 ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">SMA60 {indicatorText(selectedIndicator?.ma60 ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">SMA120 {indicatorText(selectedIndicator?.ma120 ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">EMA9 {indicatorText(selectedIndicator?.ema9 ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">EMA20 {indicatorText(selectedIndicator?.ema20 ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">EMA60 {indicatorText(selectedIndicator?.ema60 ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">BB 중앙 {indicatorText(selectedIndicator?.bollingerMiddle ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">BB 상단 {indicatorText(selectedIndicator?.bollingerUpper ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">BB 하단 {indicatorText(selectedIndicator?.bollingerLower ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">VWAP {indicatorText(selectedIndicator?.vwap ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">거래량 MA20 {indicatorText(selectedIndicator?.volumeMa20 ?? null, 4)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">RSI {indicatorText(selectedIndicator?.rsi ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">MACD {indicatorText(selectedIndicator?.macd ?? null, 4)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">Signal {indicatorText(selectedIndicator?.macdSignal ?? null, 4)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">Histogram {indicatorText(selectedIndicator?.macdHistogram ?? null, 4)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">ATR {indicatorText(selectedIndicator?.atr ?? null, 4)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">CCI {indicatorText(selectedIndicator?.cci ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">OBV {indicatorText(selectedIndicator?.obv ?? null, 4)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">Williams %R {indicatorText(selectedIndicator?.williamsR ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">ROC {indicatorText(selectedIndicator?.roc ?? null, 4)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">일목 전환 {indicatorText(selectedIndicator?.ichimokuConversion ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">일목 기준 {indicatorText(selectedIndicator?.ichimokuBase ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">선행 A {indicatorText(selectedIndicator?.ichimokuSpanA ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">선행 B {indicatorText(selectedIndicator?.ichimokuSpanB ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">후행 {indicatorText(selectedIndicator?.ichimokuLagging ?? null)}</span>
-      </div>
-
       <div className="flex min-h-[38px] flex-wrap content-center gap-2 overflow-hidden border-b border-card-border px-2 py-1.5">
         {Object.entries(PATTERN_STAGE_META).map(([stage, meta]) => (
           <span key={stage} className="flex items-center gap-1 text-[9px] font-black text-muted-foreground">
@@ -2309,7 +2171,7 @@ const RelayChart = memo(function RelayChart({
         enabled={lowerIndicators}
         timeVisible={timeVisible}
         sourceKey={sourceKey}
-        onHoverTime={setHoverTime}
+        onOpenSettings={onOpenIndicatorSettings}
       />
 
       {(showLatest || isLoadingOlder) && (
@@ -2400,7 +2262,6 @@ export default function ChartRelayPage() {
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [aiHistory, setAiHistory] = useState<AiPlanChange[]>([]);
-  const [lastRealtimeReceivedAt, setLastRealtimeReceivedAt] = useState<number | null>(null);
   const [topBanners, setTopBanners] = useState<TopSignalBanner[]>([]);
   const seenSignalIdsRef = useRef<Set<string>>(new Set());
   const bannerSourceRef = useRef<string>('');
@@ -2433,7 +2294,6 @@ export default function ChartRelayPage() {
     setHistoryCursor(undefined);
     setHistoryError(null);
     setAiHistory([]);
-    setLastRealtimeReceivedAt(null);
     setTopBanners([]);
     seenSignalIdsRef.current = new Set();
     seenAiChangeIdsRef.current = new Set();
@@ -2559,7 +2419,7 @@ export default function ChartRelayPage() {
     enabled:
       Boolean(symbol) &&
       !futuresLocked &&
-      tab === 'live' &&
+      settings.liveSignal &&
       useRestFallback &&
       hasInitialCandleData,
     refetchInterval: useRestFallback ? 30_000 : false,
@@ -2576,7 +2436,7 @@ export default function ChartRelayPage() {
     enabled:
       Boolean(symbol) &&
       !futuresLocked &&
-      tab === 'ai' &&
+      settings.ai &&
       useRestFallback &&
       hasInitialCandleData,
     refetchInterval: useRestFallback ? 30_000 : false,
@@ -2594,8 +2454,6 @@ export default function ChartRelayPage() {
     ) {
       return;
     }
-    setLastRealtimeReceivedAt(Date.now());
-
     queryClient.setQueryData<AnyObj>(candleQueryKey, {
       ok: true,
       provider: snapshot.provider,
@@ -2852,44 +2710,11 @@ export default function ChartRelayPage() {
     return () => window.clearTimeout(timer);
   }, [topBanners]);
 
-  const freshness = useMemo<FreshnessTimes>(() => {
-    const matchingSnapshot =
-      realtime.snapshot &&
-      realtime.snapshot.asset === asset &&
-      realtime.snapshot.symbol === symbol.toUpperCase() &&
-      realtime.snapshot.interval === interval
-        ? realtime.snapshot
-        : null;
-    const latestSignalTime = signals
-      .map((signal) => toEpochMilliseconds(signal.occurredAt))
-      .filter((value): value is number => value != null)
-      .sort((a, b) => b - a)[0] ?? null;
-    return {
-      chartUpdatedAt:
-        candleQuery.data?.fetchedAt ??
-        candleQuery.data?.updatedAt ??
-        (candleQuery.dataUpdatedAt || null),
-      realtimeReceivedAt: matchingSnapshot ? lastRealtimeReceivedAt : null,
-      aiAsOf: plan?.dataAsOf ?? null,
-      signalsAsOf: signalsQuery.data?.updatedAt ?? latestSignalTime,
-    };
-  }, [
-    asset,
-    candleQuery.data,
-    candleQuery.dataUpdatedAt,
-    interval,
-    lastRealtimeReceivedAt,
-    plan?.dataAsOf,
-    realtime.snapshot,
-    signals,
-    signalsQuery.data,
-    symbol,
-  ]);
   const timeVisible = /m|H/.test(interval);
   const intervalList = intervalsFor(asset);
-  const availablePatternNames = useMemo(() => {
-    const names = new Map(
-      DEFAULT_PATTERN_NAMES.map((name) => [normalizeSignalName(name), name]),
+  const availablePatternOptions = useMemo(() => {
+    const options = new Map(
+      DEFAULT_PATTERN_OPTIONS.map((option) => [normalizeSignalName(option.name), option]),
     );
     const raw = Array.isArray(signalsQuery.data?.signals)
       ? (signalsQuery.data!.signals as AnyObj[])
@@ -2897,14 +2722,25 @@ export default function ChartRelayPage() {
     raw.forEach((row) => {
       if (row?.kind !== 'chart' && row?.kind !== 'candle') return;
       const name = String(row?.name ?? '').trim();
-      if (name) names.set(normalizeSignalName(name), name);
+      if (name) {
+        options.set(normalizeSignalName(name), {
+          name,
+          kind: row.kind,
+        });
+      }
     });
     signals.forEach((signal) => {
       if (signal.kind === 'chart' || signal.kind === 'candle') {
-        names.set(normalizeSignalName(signal.name), signal.name);
+        options.set(normalizeSignalName(signal.name), {
+          name: signal.name,
+          kind: signal.kind,
+        });
       }
     });
-    return [...names.values()].sort((left, right) => left.localeCompare(right, 'ko'));
+    return [...options.values()].sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === 'candle' ? -1 : 1;
+      return left.name.localeCompare(right.name, 'ko');
+    });
   }, [signals, signalsQuery.data]);
   const openSettingsPanel = (panel: 'candle' | 'indicator' | 'signal') => {
     setDraftSettings(settings);
@@ -3302,34 +3138,29 @@ export default function ChartRelayPage() {
                     isLoadingOlder={isLoadingOlder}
                     onLoadOlder={requestLoadOlder}
                     onSignalSelect={selectSignal}
+                    onOpenIndicatorSettings={() => openSettingsPanel('indicator')}
                   />
                 )}
               </div>
             </section>
-            <DataFreshness times={freshness} interval={interval} />
             {historyError && (
               <p className="mt-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-center text-[10px] font-bold text-warning">
                 과거 데이터 추가 조회 실패: {historyError}
               </p>
             )}
 
-            {tab === 'live' ? (
-              <LiveSignalsPanel
-                query={signalsQuery}
-                signals={signals}
-                activeSignalId={activeSignalId}
-                onSelect={selectSignal}
-                enabled={settings.liveSignal}
-              />
-            ) : (
-              <AiPlanPanel
-                query={planQuery}
-                plan={plan}
-                asset={asset}
-                settings={settings}
-                history={aiHistory}
-              />
-            )}
+            <ChartAnalysisTabs
+              sourceKey={sourceKey}
+              planQuery={planQuery}
+              plan={plan}
+              asset={asset}
+              settings={settings}
+              aiHistory={aiHistory}
+              signalsQuery={signalsQuery}
+              signals={signals}
+              activeSignalId={activeSignalId}
+              onSignalSelect={selectSignal}
+            />
             <p className="mt-3 rounded-2xl border border-warning/40 bg-warning/10 px-3 py-2 text-center text-[10px] font-black text-warning">
               AI 신호와 추천 가격은 참고용이며 실제 주문을 실행하지 않습니다.
             </p>
@@ -3350,7 +3181,7 @@ export default function ChartRelayPage() {
           panel={settingsPanel}
           settings={draftSettings}
           interval={draftInterval}
-          patternNames={availablePatternNames}
+          patternOptions={availablePatternOptions}
           disabledPatternNames={draftDisabledPatternNames}
           onSettingsChange={setDraftSettings}
           onIntervalChange={setDraftInterval}
@@ -3377,7 +3208,7 @@ function ChartSettingsModal({
   panel,
   settings,
   interval,
-  patternNames,
+  patternOptions,
   disabledPatternNames,
   onSettingsChange,
   onIntervalChange,
@@ -3388,7 +3219,7 @@ function ChartSettingsModal({
   panel: 'candle' | 'indicator' | 'signal';
   settings: ChartSettings;
   interval: string;
-  patternNames: string[];
+  patternOptions: PatternOption[];
   disabledPatternNames: Set<string>;
   onSettingsChange: (settings: ChartSettings) => void;
   onIntervalChange: (interval: string) => void;
@@ -3408,6 +3239,18 @@ function ChartSettingsModal({
     else next.add(normalized);
     onDisabledPatternsChange(next);
   };
+  const patternGroups: Array<{ kind: PatternKind; label: string; items: PatternOption[] }> = [
+    {
+      kind: 'candle',
+      label: '캔들형 패턴',
+      items: patternOptions.filter((option) => option.kind === 'candle'),
+    },
+    {
+      kind: 'chart',
+      label: '차트형 패턴',
+      items: patternOptions.filter((option) => option.kind === 'chart'),
+    },
+  ];
 
   return (
     <div className="fixed inset-0 z-[95] flex items-end justify-center bg-black/60 p-3" onClick={onClose}>
@@ -3530,47 +3373,68 @@ function ChartSettingsModal({
                 ))}
               </div>
             </div>
-            <div>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <p className="text-[11px] font-black text-muted-foreground">캔들형·차트형 패턴</p>
-                <div className="flex gap-1">
-                  <button
-                    type="button"
-                    onClick={() => onDisabledPatternsChange(new Set())}
-                    className="rounded-lg border border-card-border px-2 py-1 text-[9px] font-black"
-                  >
-                    전체 선택
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onDisabledPatternsChange(new Set(patternNames.map(normalizeSignalName)))}
-                    className="rounded-lg border border-card-border px-2 py-1 text-[9px] font-black"
-                  >
-                    전체 해제
-                  </button>
+            {patternGroups.map((group) => (
+              <div key={group.kind} className="rounded-2xl border border-card-border bg-card/40 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[12px] font-black">{group.label}</p>
+                    <p className="text-[9px] font-bold text-muted-foreground">
+                      {group.kind === 'candle'
+                        ? '한 개 또는 여러 캔들의 몸통·꼬리 관계'
+                        : '여러 봉에 걸친 추세·지지·저항 구조'}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const groupNames = new Set(group.items.map((item) => normalizeSignalName(item.name)));
+                        onDisabledPatternsChange(
+                          new Set([...disabledPatternNames].filter((name) => !groupNames.has(name))),
+                        );
+                      }}
+                      className="rounded-lg border border-card-border px-2 py-1 text-[9px] font-black"
+                    >
+                      전체 선택
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onDisabledPatternsChange(
+                          new Set([
+                            ...disabledPatternNames,
+                            ...group.items.map((item) => normalizeSignalName(item.name)),
+                          ]),
+                        )
+                      }
+                      className="rounded-lg border border-card-border px-2 py-1 text-[9px] font-black"
+                    >
+                      전체 해제
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {group.items.map((item) => {
+                    const selected = !disabledPatternNames.has(normalizeSignalName(item.name));
+                    return (
+                      <button
+                        key={`${group.kind}:${item.name}`}
+                        type="button"
+                        onClick={() => togglePattern(item.name)}
+                        className={cn(
+                          'rounded-xl border px-3 py-2.5 text-left text-[11px] font-black',
+                          selected
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : 'border-card-border bg-card text-muted-foreground',
+                        )}
+                      >
+                        {selected ? '✓ ' : '□ '}{item.name}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                {patternNames.map((name) => {
-                  const selected = !disabledPatternNames.has(normalizeSignalName(name));
-                  return (
-                    <button
-                      key={name}
-                      type="button"
-                      onClick={() => togglePattern(name)}
-                      className={cn(
-                        'rounded-xl border px-3 py-2.5 text-left text-[11px] font-black',
-                        selected
-                          ? 'border-primary bg-primary/10 text-primary'
-                          : 'border-card-border bg-card text-muted-foreground',
-                      )}
-                    >
-                      {selected ? '✓ ' : '□ '}{name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            ))}
           </div>
         )}
 
@@ -3601,12 +3465,14 @@ function LiveSignalsPanel({
   activeSignalId,
   onSelect,
   enabled,
+  embedded = false,
 }: {
   query: ReturnType<typeof useQuery<AnyObj>>;
   signals: ChartSignal[];
   activeSignalId: string | null;
   onSelect: (signal: ChartSignal) => void;
   enabled: boolean;
+  embedded?: boolean;
 }) {
   const [importanceFilter, setImportanceFilter] = useState<'all' | SignalImportance>('all');
   const [kindFilter, setKindFilter] = useState<'all' | SignalKind>('all');
@@ -3662,8 +3528,8 @@ function LiveSignalsPanel({
 
   return (
     <>
-      <section className="mt-3">
-        <h2 className="text-sm font-extrabold">실시간 신호</h2>
+      <section className={embedded ? '' : 'mt-3'}>
+        <h2 className="text-sm font-extrabold">{embedded ? '지난 신호 내역' : '실시간 신호'}</h2>
         <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">
           같은 신호는 최신 상태만 표시합니다. 항목을 누르면 지난 내역을 확인할 수 있습니다.
         </p>
@@ -3944,6 +3810,203 @@ function SignalHistoryModal({
   );
 }
 
+function ChartAnalysisTabs({
+  sourceKey,
+  planQuery,
+  plan,
+  asset,
+  settings,
+  aiHistory,
+  signalsQuery,
+  signals,
+  activeSignalId,
+  onSignalSelect,
+}: {
+  sourceKey: string;
+  planQuery: ReturnType<typeof useQuery<AiPlan>>;
+  plan: AiPlan | null;
+  asset: Asset;
+  settings: ChartSettings;
+  aiHistory: AiPlanChange[];
+  signalsQuery: ReturnType<typeof useQuery<AnyObj>>;
+  signals: ChartSignal[];
+  activeSignalId: string | null;
+  onSignalSelect: (signal: ChartSignal) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<AnalysisTab>('summary');
+
+  useEffect(() => {
+    setActiveTab('summary');
+  }, [sourceKey]);
+
+  const tabs: Array<{ key: AnalysisTab; label: string }> = [
+    { key: 'summary', label: '종합 분석' },
+    { key: 'buy', label: '매수 의견' },
+    { key: 'sell', label: '매도 의견' },
+    { key: 'signals', label: '지난 신호' },
+  ];
+  const loadingState = !settings.ai ? (
+    <StateBox>설정에서 AI 분석이 꺼져 있습니다.</StateBox>
+  ) : planQuery.isLoading && !plan ? (
+    <StateBox>차트 표시 후 분석 내용을 계산하고 있습니다.</StateBox>
+  ) : planQuery.isError && !plan ? (
+    <StateBox error>분석 데이터를 불러오지 못했습니다.</StateBox>
+  ) : !plan ? (
+    <StateBox>현재 종목과 봉 주기에서 산출된 분석 내용이 없습니다.</StateBox>
+  ) : null;
+
+  const viewTone =
+    plan?.view === '매수'
+      ? 'border-destructive/40 bg-destructive/10 text-destructive'
+      : plan?.view === '매도'
+        ? 'border-blue-500/40 bg-blue-500/10 text-blue-500'
+        : 'border-card-border bg-secondary text-muted-foreground';
+
+  return (
+    <section className="mt-3 overflow-hidden rounded-2xl border border-card-border bg-card">
+      <div className="border-b border-card-border p-3">
+        <h2 className="text-sm font-black">차트 분석 의견</h2>
+        <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
+          매수·매도 판단 근거와 지난 신호를 탭별로 확인합니다.
+        </p>
+        <div className="mt-3 grid grid-cols-4 gap-1.5">
+          {tabs.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => setActiveTab(item.key)}
+              className={cn(
+                'min-w-0 rounded-xl border px-1 py-2 text-[10px] font-black',
+                activeTab === item.key
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-card-border bg-background text-muted-foreground',
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="p-3">
+        {activeTab === 'signals' ? (
+          <LiveSignalsPanel
+            query={signalsQuery}
+            signals={signals}
+            activeSignalId={activeSignalId}
+            onSelect={onSignalSelect}
+            enabled={settings.liveSignal}
+            embedded
+          />
+        ) : loadingState ? (
+          loadingState
+        ) : plan ? (
+          <div className="space-y-2">
+            {activeTab === 'summary' && (
+              <>
+                <div className="flex items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3">
+                  <div>
+                    <p className="text-[10px] font-bold text-muted-foreground">현재 종합 관점</p>
+                    <p className="mt-1 text-xs font-black">
+                      {plan.view === '매수'
+                        ? '상승 조건 우세 · 매수 관점'
+                        : plan.view === '매도'
+                          ? '하락 조건 우세 · 매도 관점'
+                          : '방향 확인 중 · 중립 관점'}
+                    </p>
+                  </div>
+                  <span className={cn('rounded-full border px-3 py-1 text-xs font-black', viewTone)}>
+                    {plan.view}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <PlanCell label="목표가" value={formatPrice(plan.target, asset)} tone="target" />
+                  <PlanCell label="손절가" value={formatPrice(plan.stop, asset)} tone="stop" />
+                </div>
+                <ListCard title="종합 분석 근거" items={plan.basis} empty="분석 근거가 없습니다." />
+                <ListCard
+                  title="위험·무효 조건"
+                  items={[...plan.risks, ...plan.invalidation]}
+                  empty="등록된 위험·무효 조건이 없습니다."
+                />
+                {aiHistory[0] && (
+                  <p className="rounded-xl bg-secondary px-3 py-2 text-[10px] font-bold text-muted-foreground">
+                    최근 관점 변경: {aiHistory[0].previousView} → {aiHistory[0].nextView} ·{' '}
+                    {formatTime(aiHistory[0].changedAt)}
+                  </p>
+                )}
+              </>
+            )}
+
+            {activeTab === 'buy' && (
+              <>
+                <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs font-black text-destructive">
+                  {plan.view === '매수'
+                    ? '현재 분석은 매수 조건이 상대적으로 우세합니다.'
+                    : plan.view === '매도'
+                      ? '현재는 매수보다 하락 위험 관리가 우선인 구간입니다.'
+                      : '매수 방향이 확정되지 않아 확인 신호를 기다리는 구간입니다.'}
+                </p>
+                <div className="rounded-2xl border border-card-border bg-background p-3">
+                  <p className="mb-2 text-[11px] font-black">분할매수 참고 구간</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[0, 1, 2].map((index) => (
+                      <PlanCell
+                        key={index}
+                        label={`${index + 1}차 매수`}
+                        value={formatPrice(plan.buyLevels[index] ?? null, asset)}
+                        tone="buy"
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <PlanCell label="상승 목표" value={formatPrice(plan.target, asset)} tone="target" />
+                  <PlanCell label="매수 무효·손절" value={formatPrice(plan.stop, asset)} tone="stop" />
+                </div>
+                <ListCard title="매수 판단 근거" items={plan.basis} empty="매수 판단 근거가 없습니다." />
+              </>
+            )}
+
+            {activeTab === 'sell' && (
+              <>
+                <p className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-black text-blue-500">
+                  {plan.view === '매도'
+                    ? '현재 분석은 매도 또는 비중 축소 조건이 상대적으로 우세합니다.'
+                    : plan.view === '매수'
+                      ? '현재 상승 관점이므로 매도는 목표 도달과 추세 이탈을 함께 확인합니다.'
+                      : '매도 방향이 확정되지 않아 지지 이탈 여부를 확인하는 구간입니다.'}
+                </p>
+                <div className="rounded-2xl border border-card-border bg-background p-3">
+                  <p className="mb-2 text-[11px] font-black">분할매도 참고 구간</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[0, 1, 2].map((index) => (
+                      <PlanCell
+                        key={index}
+                        label={`${index + 1}차 매도`}
+                        value={formatPrice(plan.sellLevels[index] ?? null, asset)}
+                        tone="sell"
+                      />
+                    ))}
+                  </div>
+                </div>
+                <ListCard title="매도·무효 조건" items={plan.invalidation} empty="매도·무효 조건이 없습니다." />
+                <ListCard title="위험 요인" items={plan.risks} empty="등록된 위험 요인이 없습니다." />
+              </>
+            )}
+
+            {plan.dataAsOf && (
+              <p className="text-center text-[10px] font-bold text-muted-foreground">
+                분석 기준 {formatTime(plan.dataAsOf)}
+              </p>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function AiPlanPanel({
   query,
   plan,
@@ -4055,51 +4118,6 @@ function AiPlanPanel({
   );
 }
 
-function DataFreshness({ times, interval }: { times: FreshnessTimes; interval: string }) {
-  const rows = [
-    { label: '차트 데이터 갱신', value: times.chartUpdatedAt },
-    { label: '실시간 데이터 수신', value: times.realtimeReceivedAt },
-    { label: 'AI 분석 기준', value: times.aiAsOf },
-    { label: '신호 기준', value: times.signalsAsOf },
-  ];
-  const validTimes = rows
-    .map((row) => toEpochMilliseconds(row.value))
-    .filter((value): value is number => value != null);
-  const intervalMinutes = (() => {
-    const numeric = Number.parseInt(interval, 10);
-    if (interval.endsWith('m') && Number.isFinite(numeric)) return numeric;
-    if (interval.endsWith('H') && Number.isFinite(numeric)) return numeric * 60;
-    if (interval.endsWith('D') && Number.isFinite(numeric)) return numeric * 24 * 60;
-    if (interval.endsWith('W') && Number.isFinite(numeric)) return numeric * 7 * 24 * 60;
-    if (interval.endsWith('M') && Number.isFinite(numeric)) return numeric * 30 * 24 * 60;
-    if (interval.endsWith('Y') && Number.isFinite(numeric)) return numeric * 365 * 24 * 60;
-    if (interval === 'ALL') return 10 * 365 * 24 * 60;
-    return 5;
-  })();
-  const allowedGap = Math.max(10 * 60_000, intervalMinutes * 2 * 60_000);
-  const delayed =
-    validTimes.length >= 2 &&
-    Math.max(...validTimes) - Math.min(...validTimes) > allowedGap;
-
-  return (
-    <div className="mt-2 rounded-2xl border border-card-border bg-card p-3">
-      <div className="grid grid-cols-2 gap-2 text-[10px]">
-        {rows.map((row) => (
-          <div key={row.label} className="min-w-0">
-            <p className="font-bold text-muted-foreground">{row.label}</p>
-            <p className="truncate font-black">{formatDataTime(row.value)}</p>
-          </div>
-        ))}
-      </div>
-      {delayed && (
-        <p className="mt-2 rounded-lg bg-warning/10 px-2 py-1.5 text-center text-[10px] font-black text-warning">
-          데이터 지연 가능성 · 각 데이터 기준 시각의 차이가 큽니다.
-        </p>
-      )}
-    </div>
-  );
-}
-
 function SignalModal({
   signal,
   asset,
@@ -4136,7 +4154,29 @@ function SignalModal({
           </button>
         </div>
 
+        <div className="mt-3 flex flex-wrap gap-2">
+          <span className="rounded-full border border-card-border bg-background px-2.5 py-1 text-[10px] font-black">
+            {signal.kind === 'candle'
+              ? '캔들형 패턴'
+              : signal.kind === 'chart'
+                ? '차트형 패턴'
+                : signal.kind === 'volume'
+                  ? '거래량 신호'
+                  : '기술지표 신호'}
+          </span>
+          <span
+            className="rounded-full border px-2.5 py-1 text-[10px] font-black"
+            style={{
+              borderColor: PATTERN_STAGE_META[signal.stage].color,
+              color: PATTERN_STAGE_META[signal.stage].color,
+            }}
+          >
+            현재 단계 · {PATTERN_STAGE_META[signal.stage].label}
+          </span>
+        </div>
+
         <div className="mt-3 space-y-3">
+          <ModalBlock title="예측 방향" text={signalPrediction(signal)} />
           <ModalBlock title="중요한 이유" text={signal.importance} />
           <ModalBlock title="일반적인 의미" text={signal.meaningGeneral} />
           <ModalBlock title="현재 차트에서의 의미" text={signal.meaningHere} />
