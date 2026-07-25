@@ -1,9 +1,13 @@
 import path from 'path';
+import { createRequire } from 'node:module';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
+
+const require = createRequire(import.meta.url);
+const lightweightChartsEntry = require.resolve('lightweight-charts');
 
 const rawPort = process.env.PORT;
 const port = rawPort ? Number(rawPort) : 5173;
@@ -40,16 +44,32 @@ export default defineConfig({
   ],
 
   resolve: {
-    alias: {
-      '@': path.resolve(import.meta.dirname, 'src'),
-
-      '@assets': path.resolve(
-        import.meta.dirname,
-        '..',
-        '..',
-        'attached_assets',
-      ),
-    },
+    alias: [
+      {
+        find: /^lightweight-charts-original$/,
+        replacement: lightweightChartsEntry,
+      },
+      {
+        find: /^lightweight-charts$/,
+        replacement: path.resolve(
+          import.meta.dirname,
+          'src/lib/lightweight-charts-relay-patch.ts',
+        ),
+      },
+      {
+        find: '@',
+        replacement: path.resolve(import.meta.dirname, 'src'),
+      },
+      {
+        find: '@assets',
+        replacement: path.resolve(
+          import.meta.dirname,
+          '..',
+          '..',
+          'attached_assets',
+        ),
+      },
+    ],
 
     dedupe: ['react', 'react-dom'],
   },
