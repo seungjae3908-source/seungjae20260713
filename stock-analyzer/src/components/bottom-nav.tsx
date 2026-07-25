@@ -1,73 +1,133 @@
-import { useLocation } from "wouter";
+import { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'wouter';
 import {
+  BarChart3,
+  BookOpen,
+  BriefcaseBusiness,
   Home,
   Layers3,
   Newspaper,
   Search,
   Settings,
-  TrendingUp,
   Star,
-} from "lucide-react";
-import { cn } from "@/lib/utils";
+  TrendingUp,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+const INFO_PATHS = ['/stock-info', '/learn', '/market-overview', '/portfolio', '/assets'];
+
+const INFO_MENU_ITEMS = [
+  {
+    href: '/stock-info',
+    label: '정보',
+    icon: Newspaper,
+  },
+  {
+    href: '/learn',
+    label: '공부',
+    icon: BookOpen,
+  },
+  {
+    href: '/market-overview',
+    label: '시황',
+    icon: BarChart3,
+  },
+  {
+    href: '/portfolio',
+    label: '포트폴리오',
+    icon: BriefcaseBusiness,
+  },
+];
 
 const ITEMS = [
   {
-    href: "/",
-    label: "홈",
+    href: '/',
+    label: '홈',
     icon: Home,
-    match: (path: string) => path === "/",
+    match: (path: string) => path === '/',
   },
   {
-    href: "/search",
-    label: "종목",
+    href: '/search',
+    label: '종목',
     icon: TrendingUp,
-    match: (path: string) => path === "/search" || path.startsWith("/stock/"),
+    match: (path: string) => path === '/search' || path.startsWith('/stock/'),
   },
   {
-    href: "/themes",
-    label: "테마",
+    href: '/themes',
+    label: '테마',
     icon: Layers3,
-    match: (path: string) => path.startsWith("/themes"),
+    match: (path: string) => path.startsWith('/themes'),
   },
   {
-    href: "/watchlist",
-    label: "관심",
+    href: '/watchlist',
+    label: '관심',
     icon: Star,
     match: (path: string) =>
-      path.startsWith("/watchlist") || path.startsWith("/alerts"),
+      path.startsWith('/watchlist') || path.startsWith('/alerts'),
   },
   {
-    href: "/scanner",
-    label: "기술",
+    href: '/scanner',
+    label: '기술',
     icon: Search,
-    match: (path: string) => path.startsWith("/scanner"),
+    match: (path: string) => path.startsWith('/scanner'),
   },
   {
-    href: "/stock-info",
-    label: "정보",
+    href: '/stock-info',
+    label: '정보',
     icon: Newspaper,
-    match: (path: string) => path.startsWith("/stock-info"),
+    popup: true,
+    match: (path: string) => INFO_PATHS.some((item) => path.startsWith(item)),
   },
   {
-    href: "/more",
-    label: "설정",
+    href: '/more',
+    label: '설정',
     icon: Settings,
     match: (path: string) =>
-      path.startsWith("/more") ||
-      path.startsWith("/settings") ||
-      path.startsWith("/account") ||
-      path.startsWith("/login") ||
-      path.startsWith("/portfolio"),
+      path.startsWith('/more') ||
+      path.startsWith('/settings') ||
+      path.startsWith('/account') ||
+      path.startsWith('/login'),
   },
 ];
 
 function cleanPath(path: string) {
-  return path.split("?")[0] || "/";
+  return path.split('?')[0] || '/';
 }
 
 export function BottomNav() {
   const [location, navigate] = useLocation();
   const path = cleanPath(location);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const infoMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setInfoOpen(false);
+  }, [location]);
+
+  useEffect(() => {
+    function handlePointerDown(event: PointerEvent) {
+      if (infoMenuRef.current && !infoMenuRef.current.contains(event.target as Node)) {
+        setInfoOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setInfoOpen(false);
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  function moveTo(href: string) {
+    setInfoOpen(false);
+    navigate(href);
+  }
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/90 px-1 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-xl">
@@ -76,22 +136,80 @@ export function BottomNav() {
           const active = item.match(path);
           const Icon = item.icon;
 
+          if (item.popup) {
+            return (
+              <div key={item.href} ref={infoMenuRef} className="relative min-w-0">
+                {infoOpen && (
+                  <div
+                    role="menu"
+                    aria-label="정보 메뉴"
+                    className="absolute bottom-full right-0 z-50 mb-3 w-44 overflow-hidden rounded-2xl border border-card-border bg-card p-2 shadow-2xl"
+                  >
+                    {INFO_MENU_ITEMS.map((menuItem) => {
+                      const MenuIcon = menuItem.icon;
+                      const menuActive = path.startsWith(menuItem.href);
+
+                      return (
+                        <button
+                          key={menuItem.href}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => moveTo(menuItem.href)}
+                          className={cn(
+                            'flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-extrabold transition',
+                            menuActive
+                              ? 'bg-primary/10 text-primary'
+                              : 'text-foreground hover:bg-muted active:bg-muted',
+                          )}
+                        >
+                          <MenuIcon className="h-4 w-4 shrink-0" />
+                          <span>{menuItem.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={infoOpen}
+                  onClick={() => setInfoOpen((previous) => !previous)}
+                  className={cn(
+                    'flex w-full min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-2 text-[10px] font-extrabold transition',
+                    active || infoOpen
+                      ? 'text-primary'
+                      : 'text-muted-foreground active:text-foreground',
+                  )}
+                >
+                  <Icon
+                    className={cn(
+                      'mb-1 h-5 w-5',
+                      active || infoOpen ? 'text-primary' : 'text-muted-foreground',
+                    )}
+                  />
+                  <span className="truncate">{item.label}</span>
+                </button>
+              </div>
+            );
+          }
+
           return (
             <button
               key={item.href}
               type="button"
-              onClick={() => navigate(item.href)}
+              onClick={() => moveTo(item.href)}
               className={cn(
-                "flex min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-2 text-[10px] font-extrabold transition",
+                'flex min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-2 text-[10px] font-extrabold transition',
                 active
-                  ? "text-primary"
-                  : "text-muted-foreground active:text-foreground",
+                  ? 'text-primary'
+                  : 'text-muted-foreground active:text-foreground',
               )}
             >
               <Icon
                 className={cn(
-                  "mb-1 h-5 w-5",
-                  active ? "text-primary" : "text-muted-foreground",
+                  'mb-1 h-5 w-5',
+                  active ? 'text-primary' : 'text-muted-foreground',
                 )}
               />
               <span className="truncate">{item.label}</span>
