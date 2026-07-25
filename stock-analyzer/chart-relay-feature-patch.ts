@@ -96,9 +96,9 @@ function patchChartRelay(source: string): string {
 
   code = replaceOnce(
     code,
-    `            <PlanLevelsPanel\n              plan={displayPlan}\n              asset={asset}\n              settings={settings}\n            />`,
-    `            <PlanLevelsPanel\n              plan={displayPlan}\n              asset={asset}\n              settings={settings}\n            />\n\n            <PriceLevelAlertMonitor\n              plan={displayPlan}\n              candles={candles}\n              asset={asset}\n              symbol={symbol}\n              interval={interval}\n              settings={settings}\n            />`,
-    'price alert monitor insertion',
+    `            </section>\n            {historyError && (`,
+    `            </section>\n\n            <PlanLevelsPanel\n              plan={displayPlan}\n              asset={asset}\n              settings={settings}\n            />\n\n            <PriceLevelAlertMonitor\n              plan={displayPlan}\n              candles={candles}\n              asset={asset}\n              symbol={symbol}\n              interval={interval}\n              settings={settings}\n            />\n\n            {historyError && (`,
+    'plan panel and price alert monitor insertion',
   );
 
   const bodyStart = code.indexOf('{/* 본문 */}');
