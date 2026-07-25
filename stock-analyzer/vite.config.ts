@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
+import { chartRelayFeaturePatch } from './chart-relay-feature-patch';
 
 const require = createRequire(import.meta.url);
 const lightweightChartsEntry = require.resolve('lightweight-charts');
@@ -22,6 +23,7 @@ export default defineConfig({
   base: basePath,
 
   plugins: [
+    chartRelayFeaturePatch(),
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
