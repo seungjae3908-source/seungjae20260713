@@ -1,0 +1,13 @@
+신호검색기 원본 코드입니다.
+
+주의: 원본 scanner.tsx에는 신호검색기 외에 자동매매·주문 관련 코드가 함께 섞여 있습니다.
+최신 프로젝트에 적용할 때는 아래 항목을 제외해야 합니다.
+
+- assessAutoTradeCandidate
+- executeAutoTradeCandidates
+- monitorAutoTradePositions
+- closeAutoTradePosition
+- /api/stocks/auto-trade/*
+- 주문키, 포지션 감시, 실제 주문 전송 코드
+
+실제 원본 코드는 같은 폴더의 신호검색기_원본코드_자동매매혼재.txt 파일에 있습니다.
