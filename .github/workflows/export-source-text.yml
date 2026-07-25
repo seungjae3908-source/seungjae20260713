@@ -1,0 +1,29 @@
+name: Export source text
+
+on:
+  pull_request:
+    branches:
+      - tmp/chat-export-base
+
+permissions:
+  contents: read
+
+jobs:
+  export-source-text:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Prepare text files
+        shell: bash
+        run: |
+          mkdir -p chat-attachments
+          cp stock-analyzer/src/pages/scanner.tsx "chat-attachments/신호검색기_원본코드_자동매매혼재.txt"
+          cp stock-analyzer/src/components/chart-broadcast.tsx "chat-attachments/차트_AI_생중계_원본코드.txt"
+      - name: Upload text files
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-chart-text-files
+          path: chat-attachments/*.txt
+          if-no-files-found: error
+          retention-days: 1
