@@ -28,42 +28,42 @@ function patchChartRelay(source: string): string {
   code = replaceOnce(
     code,
     "import { InstrumentAlertButton } from '@/components/instrument-alert-modal';",
-    "import { InstrumentAlertButton } from '@/components/instrument-alert-modal';\nimport { buildDisplayPlan, PlanLevelsPanel, SignalAnalysisWorkspace } from '@/components/chart-relay-enhancements';",
-    'enhancement import',
+    "import { InstrumentAlertButton } from '@/components/instrument-alert-modal';\nimport { buildDisplayPlan, PlanLevelsPanel } from '@/components/chart-relay-enhancements';\nimport { DetailedSignalAnalysisWorkspace, PriceLevelAlertMonitor } from '@/components/chart-relay-price-alerts';",
+    'enhancement imports',
   );
 
   code = replaceOnce(
     code,
     `  buyLevels: boolean;\n  sellLevels: boolean;`,
-    `  buyLevels: boolean;\n  buyLevel1: boolean;\n  buyLevel2: boolean;\n  buyLevel3: boolean;\n  sellLevels: boolean;\n  sellLevel1: boolean;\n  sellLevel2: boolean;\n  sellLevel3: boolean;`,
-    'individual level setting types',
+    `  buyLevels: boolean;\n  buyLevel1: boolean;\n  buyLevel2: boolean;\n  buyLevel3: boolean;\n  sellLevels: boolean;\n  sellLevel1: boolean;\n  sellLevel2: boolean;\n  sellLevel3: boolean;\n  levelAlerts: boolean;\n  targetAlert: boolean;\n  stopAlert: boolean;\n  buyAlert: boolean;\n  sellAlert: boolean;`,
+    'individual level and alert setting types',
   );
 
   code = replaceOnce(
     code,
     `  buyLevels: true,\n  sellLevels: true,`,
-    `  buyLevels: true,\n  buyLevel1: true,\n  buyLevel2: true,\n  buyLevel3: true,\n  sellLevels: true,\n  sellLevel1: true,\n  sellLevel2: true,\n  sellLevel3: true,`,
-    'individual level defaults',
+    `  buyLevels: true,\n  buyLevel1: true,\n  buyLevel2: true,\n  buyLevel3: true,\n  sellLevels: true,\n  sellLevel1: true,\n  sellLevel2: true,\n  sellLevel3: true,\n  levelAlerts: true,\n  targetAlert: true,\n  stopAlert: true,\n  buyAlert: true,\n  sellAlert: true,`,
+    'individual level and alert defaults',
   );
 
   code = replaceOnce(
     code,
     `  { key: 'buyLevels', label: '분할매수' },\n  { key: 'sellLevels', label: '분할매도' },`,
-    `  { key: 'buyLevels', label: '분할매수 전체' },\n  { key: 'buyLevel1', label: '1차 분할매수' },\n  { key: 'buyLevel2', label: '2차 분할매수' },\n  { key: 'buyLevel3', label: '3차 분할매수' },\n  { key: 'sellLevels', label: '분할매도 전체' },\n  { key: 'sellLevel1', label: '1차 분할매도' },\n  { key: 'sellLevel2', label: '2차 분할매도' },\n  { key: 'sellLevel3', label: '3차 분할매도' },`,
-    'individual level labels',
+    `  { key: 'buyLevels', label: '분할매수 전체' },\n  { key: 'buyLevel1', label: '1차 분할매수' },\n  { key: 'buyLevel2', label: '2차 분할매수' },\n  { key: 'buyLevel3', label: '3차 분할매수' },\n  { key: 'sellLevels', label: '분할매도 전체' },\n  { key: 'sellLevel1', label: '1차 분할매도' },\n  { key: 'sellLevel2', label: '2차 분할매도' },\n  { key: 'sellLevel3', label: '3차 분할매도' },\n  { key: 'levelAlerts', label: '가격 도달 알림 전체' },\n  { key: 'targetAlert', label: '목표가 도달 알림' },\n  { key: 'stopAlert', label: '손절가 도달 알림' },\n  { key: 'buyAlert', label: '분할매수 도달 알림' },\n  { key: 'sellAlert', label: '분할매도 도달 알림' },`,
+    'individual level and alert labels',
   );
 
   code = replaceOnce(
     code,
     `    buyLevels: value,\n    sellLevels: value,`,
-    `    buyLevels: value,\n    buyLevel1: value,\n    buyLevel2: value,\n    buyLevel3: value,\n    sellLevels: value,\n    sellLevel1: value,\n    sellLevel2: value,\n    sellLevel3: value,`,
-    'settingsWithValue individual levels',
+    `    buyLevels: value,\n    buyLevel1: value,\n    buyLevel2: value,\n    buyLevel3: value,\n    sellLevels: value,\n    sellLevel1: value,\n    sellLevel2: value,\n    sellLevel3: value,\n    levelAlerts: value,\n    targetAlert: value,\n    stopAlert: value,\n    buyAlert: value,\n    sellAlert: value,`,
+    'settingsWithValue individual levels and alerts',
   );
 
   code = replaceOnce(
     code,
     `      'liveSignal', 'volumeSignal', 'indicatorSignal', 'highlight', 'target', 'stop', 'buyLevels',\n      'sellLevels', 'ai',`,
-    `      'liveSignal', 'volumeSignal', 'indicatorSignal', 'highlight', 'target', 'stop',\n      'buyLevels', 'buyLevel1', 'buyLevel2', 'buyLevel3',\n      'sellLevels', 'sellLevel1', 'sellLevel2', 'sellLevel3', 'ai',`,
+    `      'liveSignal', 'volumeSignal', 'indicatorSignal', 'highlight', 'target', 'stop',\n      'buyLevels', 'buyLevel1', 'buyLevel2', 'buyLevel3',\n      'sellLevels', 'sellLevel1', 'sellLevel2', 'sellLevel3',\n      'levelAlerts', 'targetAlert', 'stopAlert', 'buyAlert', 'sellAlert', 'ai',`,
     'analysis setting key list',
   );
 
@@ -96,9 +96,9 @@ function patchChartRelay(source: string): string {
 
   code = replaceOnce(
     code,
-    `            </section>\n            {historyError && (`,
-    `            </section>\n\n            <PlanLevelsPanel\n              plan={displayPlan}\n              asset={asset}\n              settings={settings}\n            />\n\n            {historyError && (`,
-    'plan levels panel insertion',
+    `            <PlanLevelsPanel\n              plan={displayPlan}\n              asset={asset}\n              settings={settings}\n            />`,
+    `            <PlanLevelsPanel\n              plan={displayPlan}\n              asset={asset}\n              settings={settings}\n            />\n\n            <PriceLevelAlertMonitor\n              plan={displayPlan}\n              candles={candles}\n              asset={asset}\n              symbol={symbol}\n              interval={interval}\n              settings={settings}\n            />`,
+    'price alert monitor insertion',
   );
 
   const bodyStart = code.indexOf('{/* 본문 */}');
@@ -109,12 +109,12 @@ function patchChartRelay(source: string): string {
   const beforeModal = code.slice(bodyStart, modalStart);
   const bodyClose = `          </>\n        )}\n`;
   const bodyCloseIndex = beforeModal.lastIndexOf(bodyClose);
-  if (bodyCloseIndex < 0 && !beforeModal.includes('<SignalAnalysisWorkspace')) {
+  if (bodyCloseIndex < 0 && !beforeModal.includes('<DetailedSignalAnalysisWorkspace')) {
     throw new Error('[chart-relay-feature-patch] 차트 본문 닫힘 위치를 찾지 못했습니다.');
   }
   if (bodyCloseIndex >= 0) {
     const absoluteIndex = bodyStart + bodyCloseIndex;
-    const replacement = `          </>\n        ) : (\n          <SignalAnalysisWorkspace\n            query={signalsQuery}\n            signals={signals}\n            activeSignalId={activeSignalId}\n            onSelect={selectSignal}\n            plan={displayPlan}\n            asset={asset}\n            symbol={symbol}\n            interval={interval}\n          />\n        )}\n`;
+    const replacement = `          </>\n        ) : (\n          <DetailedSignalAnalysisWorkspace\n            query={signalsQuery}\n            signals={signals}\n            activeSignalId={activeSignalId}\n            onSelect={selectSignal}\n            plan={displayPlan}\n            asset={asset}\n            symbol={symbol}\n            interval={interval}\n          />\n        )}\n`;
     code = code.slice(0, absoluteIndex) + replacement + code.slice(absoluteIndex + bodyClose.length);
   }
 
