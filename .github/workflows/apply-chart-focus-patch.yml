@@ -1,0 +1,181 @@
+name: Apply chart focus patch
+
+on:
+  push:
+    branches:
+      - feature/detail-realtime-chart-integration
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'chore: apply chart focus patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/detail-realtime-chart-integration
+          fetch-depth: 0
+
+      - name: Patch chart relay
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('stock-analyzer/src/pages/chart-relay.tsx')
+          text = path.read_text(encoding='utf-8')
+
+          ref_line = "  const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);"
+          focus_ref_line = "  const focusCandleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);"
+          if focus_ref_line not in text:
+              if ref_line not in text:
+                  raise SystemExit('candleSeriesRef declaration not found')
+              text = text.replace(ref_line, ref_line + '\n' + focus_ref_line, 1)
+
+          candle_block = """    candleSeriesRef.current = chart.addCandlestickSeries({
+      upColor: '#ef4444',
+      downColor: '#3b82f6',
+      wickUpColor: '#ef4444',
+      wickDownColor: '#3b82f6',
+      borderUpColor: '#ef4444',
+      borderDownColor: '#3b82f6',
+      priceLineVisible: true,
+      lastValueVisible: true,
+    });"""
+          focus_block = """
+    focusCandleSeriesRef.current = chart.addCandlestickSeries({
+      upColor: '#b91c1c',
+      downColor: '#1d4ed8',
+      wickUpColor: '#b91c1c',
+      wickDownColor: '#1d4ed8',
+      borderUpColor: '#7f1d1d',
+      borderDownColor: '#1e3a8a',
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });"""
+          if focus_block.strip() not in text:
+              if candle_block not in text:
+                  raise SystemExit('main candle series block not found')
+              text = text.replace(candle_block, candle_block + focus_block, 1)
+
+          cleanup_line = "      candleSeriesRef.current = null;"
+          focus_cleanup_line = "      focusCandleSeriesRef.current = null;"
+          if focus_cleanup_line not in text:
+              if cleanup_line not in text:
+                  raise SystemExit('candle cleanup line not found')
+              text = text.replace(cleanup_line, cleanup_line + '\n' + focus_cleanup_line, 1)
+
+          rail_effect = re.compile(
+              r"  useEffect\(\(\) => \{\n    const chart = chartRef\.current;\n    if \(!chart\) return;\n    const desired = new Set<string>\(\);[\s\S]*?\n  \}, \[candles, chartType, settings\.highlight, signals, tab\]\);",
+          )
+          rail_replacement = """  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    for (const [key, series] of patternSeriesRef.current) {
+      chart.removeSeries(series);
+      patternSeriesRef.current.delete(key);
+    }
+  }, [candles, chartType, settings.highlight, signals, tab]);
+
+  useEffect(() => {
+    const focusSeries = focusCandleSeriesRef.current;
+    if (!focusSeries) return;
+
+    if (
+      tab !== 'live' ||
+      chartType !== 'candles' ||
+      !activeSignalId ||
+      candles.length === 0
+    ) {
+      focusSeries.setData([]);
+      return;
+    }
+
+    const signal = signals.find((item) => item.id === activeSignalId);
+    if (!signal) {
+      focusSeries.setData([]);
+      return;
+    }
+
+    const latestCandleTime = Number(candles.at(-1)!.time);
+    const range = signalDisplayRange(signal, latestCandleTime);
+    if (!range) {
+      focusSeries.setData([]);
+      return;
+    }
+
+    let selectedCandles = candles.filter((candle) => {
+      const time = Number(candle.time);
+      return time >= range.start && time <= range.end;
+    });
+
+    if (selectedCandles.length === 0) {
+      const target = toUnixSeconds(signal.barTime ?? signal.overlay?.fromTime);
+      if (target != null) {
+        const nearest = candles.reduce((best, candle) =>
+          Math.abs(Number(candle.time) - target) <
+          Math.abs(Number(best.time) - target)
+            ? candle
+            : best,
+        );
+        selectedCandles = [nearest];
+      }
+    }
+
+    focusSeries.setData(
+      selectedCandles.map((candle) => ({
+        time: candle.time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      })),
+    );
+  }, [activeSignalId, candles, chartType, signals, tab]);"""
+          text, count = rail_effect.subn(rail_replacement, text, count=1)
+          if count != 1 and 'const focusSeries = focusCandleSeriesRef.current;' not in text:
+              raise SystemExit('pattern rail effect not found')
+
+          level_blocks = """      if (overlay?.level != null && Number.isFinite(overlay.level)) {
+        priceLinesRef.current.push(
+          series.createPriceLine({
+            price: overlay.level,
+            color: '#eab308',
+            lineWidth: 2,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: true,
+            title: signal?.name ?? '신호',
+          }),
+        );
+      }
+      if (overlay?.level2 != null && Number.isFinite(overlay.level2)) {
+        priceLinesRef.current.push(
+          series.createPriceLine({
+            price: overlay.level2,
+            color: '#eab308',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: '',
+          }),
+        );
+      }
+"""
+          text = text.replace(level_blocks, '', 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add stock-analyzer/src/pages/chart-relay.tsx
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: highlight selected pattern candles"
+          git push origin HEAD:feature/detail-realtime-chart-integration
