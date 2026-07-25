@@ -1463,7 +1463,7 @@ function RelayChart({
           'fixed inset-0 z-[80] overflow-y-auto p-2 [padding-bottom:max(12px,env(safe-area-inset-bottom))]',
       )}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-card-border px-2 py-2">
+      <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-2 border-b border-card-border px-2 py-2">
         <div className="flex flex-wrap gap-1">
           <button
             type="button"
@@ -1506,34 +1506,34 @@ function RelayChart({
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-b border-card-border px-2 py-2 text-[10px] font-bold sm:grid-cols-4">
-        <span>시간 {selectedCandle ? formatCandleTime(selectedCandle.time) : '-'}</span>
-        <span>시가 {selectedCandle ? formatPrice(selectedCandle.open, asset) : '-'}</span>
-        <span>고가 {selectedCandle ? formatPrice(selectedCandle.high, asset) : '-'}</span>
-        <span>저가 {selectedCandle ? formatPrice(selectedCandle.low, asset) : '-'}</span>
-        <span>종가 {selectedCandle ? formatPrice(selectedCandle.close, asset) : '-'}</span>
-        <span>거래량 {selectedCandle ? indicatorText(selectedCandle.volume, 4) : '-'}</span>
-        <span>
+      <div className="grid h-[236px] min-h-[236px] max-h-[236px] grid-cols-2 auto-rows-[18px] gap-x-3 gap-y-1 overflow-hidden border-b border-card-border px-2 py-2 font-mono text-[10px] font-bold tabular-nums sm:h-[140px] sm:min-h-[140px] sm:max-h-[140px] sm:grid-cols-4">
+        <span className="min-w-0 truncate whitespace-nowrap">시간 {selectedCandle ? formatCandleTime(selectedCandle.time) : '-'}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">시가 {selectedCandle ? formatPrice(selectedCandle.open, asset) : '-'}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">고가 {selectedCandle ? formatPrice(selectedCandle.high, asset) : '-'}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">저가 {selectedCandle ? formatPrice(selectedCandle.low, asset) : '-'}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">종가 {selectedCandle ? formatPrice(selectedCandle.close, asset) : '-'}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">거래량 {selectedCandle ? indicatorText(selectedCandle.volume, 4) : '-'}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">
           시가 대비{' '}
           {selectedCandle && selectedCandle.open !== 0
             ? `${(((selectedCandle.close - selectedCandle.open) / selectedCandle.open) * 100).toFixed(2)}%`
             : '-'}
         </span>
-        <span>MA5 {indicatorText(selectedIndicator?.ma5 ?? null)}</span>
-        <span>MA20 {indicatorText(selectedIndicator?.ma20 ?? null)}</span>
-        <span>MA60 {indicatorText(selectedIndicator?.ma60 ?? null)}</span>
-        <span>MA120 {indicatorText(selectedIndicator?.ma120 ?? null)}</span>
-        <span>BB 중앙 {indicatorText(selectedIndicator?.bollingerMiddle ?? null)}</span>
-        <span>BB 상단 {indicatorText(selectedIndicator?.bollingerUpper ?? null)}</span>
-        <span>BB 하단 {indicatorText(selectedIndicator?.bollingerLower ?? null)}</span>
-        <span>거래량 MA20 {indicatorText(selectedIndicator?.volumeMa20 ?? null, 4)}</span>
-        <span>RSI {indicatorText(selectedIndicator?.rsi ?? null)}</span>
-        <span>MACD {indicatorText(selectedIndicator?.macd ?? null, 4)}</span>
-        <span>Signal {indicatorText(selectedIndicator?.macdSignal ?? null, 4)}</span>
-        <span>Histogram {indicatorText(selectedIndicator?.macdHistogram ?? null, 4)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">MA5 {indicatorText(selectedIndicator?.ma5 ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">MA20 {indicatorText(selectedIndicator?.ma20 ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">MA60 {indicatorText(selectedIndicator?.ma60 ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">MA120 {indicatorText(selectedIndicator?.ma120 ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">BB 중앙 {indicatorText(selectedIndicator?.bollingerMiddle ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">BB 상단 {indicatorText(selectedIndicator?.bollingerUpper ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">BB 하단 {indicatorText(selectedIndicator?.bollingerLower ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">거래량 MA20 {indicatorText(selectedIndicator?.volumeMa20 ?? null, 4)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">RSI {indicatorText(selectedIndicator?.rsi ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">MACD {indicatorText(selectedIndicator?.macd ?? null, 4)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">Signal {indicatorText(selectedIndicator?.macdSignal ?? null, 4)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">Histogram {indicatorText(selectedIndicator?.macdHistogram ?? null, 4)}</span>
       </div>
 
-      <div className="flex flex-wrap gap-2 border-b border-card-border px-2 py-1.5">
+      <div className="flex min-h-[38px] flex-wrap content-center gap-2 overflow-hidden border-b border-card-border px-2 py-1.5">
         {Object.entries(PATTERN_STAGE_META).map(([stage, meta]) => (
           <span key={stage} className="flex items-center gap-1 text-[9px] font-black text-muted-foreground">
             <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: meta.color }} />
