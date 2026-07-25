@@ -517,10 +517,15 @@ function writeCachedCandles(asset: Asset, symbol: string, interval: string, payl
   }
 }
 
-function candleUrl(asset: Asset, symbol: string, interval: string): string {
+function candleUrl(
+  asset: Asset,
+  symbol: string,
+  interval: string,
+  stockPages = 1,
+): string {
   const s = encodeURIComponent(symbol);
   if (asset === 'stockKR' || asset === 'stockUS') {
-    return `/stocks/${s}/candles?tf=${encodeURIComponent(interval)}&quick=1`;
+    return `/stocks/${s}/candles?tf=${encodeURIComponent(interval)}&pages=${stockPages}`;
   }
   if (asset === 'coinSpot') {
     const normalized = normalizeRealtimeTimeframe(interval);
@@ -1860,14 +1865,39 @@ export default function ChartRelayPage() {
 
   useEffect(() => {
     if (historyCursor !== undefined || !candleQuery.data) return;
-    setHistoryCursor(extractBeforeCursor(candleQuery.data));
-  }, [candleQuery.data, historyCursor]);
+    setHistoryCursor(
+      asset === 'stockKR' && currentCandles.length >= 2
+        ? 'stock-pages:1'
+        : extractBeforeCursor(candleQuery.data),
+    );
+  }, [asset, candleQuery.data, currentCandles.length, historyCursor]);
 
   const loadOlder = useCallback(async () => {
     if (!historyCursor || isLoadingOlder || futuresLocked) return;
     setIsLoadingOlder(true);
     setHistoryError(null);
     try {
+      if (asset === 'stockKR' && historyCursor.startsWith('stock-pages:')) {
+        const currentPages = Number(historyCursor.slice('stock-pages:'.length)) || 1;
+        const pageSteps = [1, 3, 10, 30, 100, 300];
+        const nextPages = pageSteps.find((value) => value > currentPages);
+        if (!nextPages) {
+          setHistoryCursor(null);
+          return;
+        }
+        const payload = await apiGet<AnyObj>(
+          candleUrl(asset, symbol.trim().toUpperCase(), interval, nextPages),
+          { timeoutMs: 180_000 },
+        );
+        const rows = normalizeCandles(extractCandleRows(payload));
+        if (rows.length <= candles.length) {
+          setHistoryCursor(null);
+          return;
+        }
+        setOlderCandles((current) => normalizeCandles([...rows, ...current]));
+        setHistoryCursor(nextPages < 300 ? `stock-pages:${nextPages}` : null);
+        return;
+      }
       const payload = await apiGet<AnyObj>(
         withBeforeCursor(candleUrl(asset, symbol.trim().toUpperCase(), interval), historyCursor),
       );
@@ -1884,7 +1914,7 @@ export default function ChartRelayPage() {
     } finally {
       setIsLoadingOlder(false);
     }
-  }, [asset, futuresLocked, historyCursor, interval, isLoadingOlder, symbol]);
+  }, [asset, candles.length, futuresLocked, historyCursor, interval, isLoadingOlder, symbol]);
 
   const signals = useMemo<ChartSignal[]>(() => {
     const raw = Array.isArray(signalsQuery.data?.signals) ? (signalsQuery.data!.signals as AnyObj[]) : [];
