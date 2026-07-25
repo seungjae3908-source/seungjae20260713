@@ -50,6 +50,7 @@ type AnyObj = Record<string, any>;
 type Asset = 'stockKR' | 'stockUS' | 'coinSpot' | 'coinFutures';
 type Tab = 'live' | 'ai';
 type AnalysisTab = 'summary' | 'buy' | 'sell' | 'signals';
+type ChartSettingsPanel = 'menu' | 'candle' | 'indicator' | 'signal';
 type ChartType = 'candles' | 'line';
 type PriceScaleType = 'normal' | 'logarithmic' | 'percentage';
 type SignalImportance = 'high' | 'medium' | 'low';
@@ -590,7 +591,7 @@ const INDICATOR_SETTING_KEYS: Array<{ key: keyof ChartSettings; label: string }>
     ].includes(item.key),
   );
 
-const SIGNAL_DISPLAY_SETTING_KEYS: Array<{ key: keyof ChartSettings; label: string }> =
+const ANALYSIS_SIGNAL_SETTING_KEYS: Array<{ key: keyof ChartSettings; label: string }> =
   SETTING_LABELS.filter((item) =>
     [
       'liveSignal', 'volumeSignal', 'indicatorSignal', 'highlight', 'target', 'stop', 'buyLevels',
@@ -1159,13 +1160,11 @@ const LowerIndicatorPanel = memo(function LowerIndicatorPanel({
   enabled,
   timeVisible,
   sourceKey,
-  onOpenSettings,
 }: {
   indicators: IndicatorPoint[];
   enabled: LowerIndicatorKey[];
   timeVisible: boolean;
   sourceKey: string;
-  onOpenSettings: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -1324,16 +1323,8 @@ const LowerIndicatorPanel = memo(function LowerIndicatorPanel({
 
   return (
     <div className="border-t border-card-border">
-      <div className="flex min-h-[42px] items-center justify-between gap-2 border-b border-card-border px-2 py-1.5">
+      <div className="flex min-h-[38px] items-center border-b border-card-border px-2 py-1.5">
         <p className="shrink-0 text-[10px] font-black">거래량 아래 보조지표</p>
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-primary/50 bg-primary/10 px-2 py-1.5 text-[10px] font-black text-primary"
-        >
-          <Settings2 className="h-3 w-3" />
-          지표 추가·변경
-        </button>
       </div>
       {enabled.length > 0 ? (
         <>
@@ -1357,13 +1348,9 @@ const LowerIndicatorPanel = memo(function LowerIndicatorPanel({
           <div ref={containerRef} className="h-[160px] min-h-[160px] w-full" />
         </>
       ) : (
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="flex h-[96px] w-full items-center justify-center px-4 text-center text-[11px] font-bold text-muted-foreground"
-        >
-          RSI·MACD·ATR·CCI·OBV·Williams %R·ROC 중 표시할 지표를 선택하세요.
-        </button>
+        <div className="flex h-[96px] w-full items-center justify-center px-4 text-center text-[11px] font-bold text-muted-foreground">
+          차트 상단 톱니바퀴에서 표시할 보조지표를 선택하세요.
+        </div>
       )}
     </div>
   );
@@ -1385,7 +1372,7 @@ const RelayChart = memo(function RelayChart({
   isLoadingOlder,
   onLoadOlder,
   onSignalSelect,
-  onOpenIndicatorSettings,
+  onOpenSettings,
 }: {
   candles: CandlePoint[];
   timeVisible: boolean;
@@ -1401,7 +1388,7 @@ const RelayChart = memo(function RelayChart({
   isLoadingOlder: boolean;
   onLoadOlder: () => void;
   onSignalSelect: (signal: ChartSignal) => void;
-  onOpenIndicatorSettings: () => void;
+  onOpenSettings: () => void;
 }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -2147,16 +2134,30 @@ const RelayChart = memo(function RelayChart({
             <option value="logarithmic">로그 가격축</option>
             <option value="percentage">퍼센트 가격축</option>
           </select>
+          <span className="inline-flex items-center rounded-lg border border-card-border bg-card px-2 py-1 text-[10px] font-black text-primary">
+            {STANDARD_INTERVALS.find((item) => item.key === interval)?.label ?? interval}
+          </span>
         </div>
-        <button
-          type="button"
-          onClick={() => void toggleFullscreen()}
-          aria-label={isFullscreen ? '전체화면 종료' : '차트 전체화면'}
-          className="flex h-9 items-center gap-1 rounded-lg border border-card-border bg-card px-2 text-[10px] font-black"
-        >
-          {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-          {isFullscreen ? '종료' : '전체화면'}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label="차트 설정"
+            title="차트 설정"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-card-border bg-card text-primary"
+          >
+            <Settings2 className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void toggleFullscreen()}
+            aria-label={isFullscreen ? '전체화면 종료' : '차트 전체화면'}
+            className="flex h-9 items-center gap-1 rounded-lg border border-card-border bg-card px-2 text-[10px] font-black"
+          >
+            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            {isFullscreen ? '종료' : '전체화면'}
+          </button>
+        </div>
       </div>
 
       <div className="flex min-h-[38px] flex-wrap content-center gap-2 overflow-hidden border-b border-card-border px-2 py-1.5">
@@ -2178,7 +2179,6 @@ const RelayChart = memo(function RelayChart({
         enabled={lowerIndicators}
         timeVisible={timeVisible}
         sourceKey={sourceKey}
-        onOpenSettings={onOpenIndicatorSettings}
       />
 
       {(showLatest || isLoadingOlder) && (
@@ -2252,7 +2252,7 @@ export default function ChartRelayPage() {
   const [tab, setTab] = useState<Tab>(initialRoute.tab);
   const [assetMenu, setAssetMenu] =
     useState<'stock' | 'coin' | null>(null);
-  const [settingsPanel, setSettingsPanel] = useState<'candle' | 'indicator' | 'signal' | null>(null);
+  const [settingsPanel, setSettingsPanel] = useState<ChartSettingsPanel | null>(null);
   const [settings, setSettings] = useState<ChartSettings>(() => loadSettings());
   const [draftSettings, setDraftSettings] = useState<ChartSettings>(() => loadSettings());
   const [draftInterval, setDraftInterval] = useState<string>(initialRoute.interval);
@@ -2718,7 +2718,6 @@ export default function ChartRelayPage() {
   }, [topBanners]);
 
   const timeVisible = /m|H/.test(interval);
-  const intervalList = intervalsFor(asset);
   const availablePatternOptions = useMemo(() => {
     const options = new Map(
       DEFAULT_PATTERN_OPTIONS.map((option) => [normalizeSignalName(option.name), option]),
@@ -2749,7 +2748,7 @@ export default function ChartRelayPage() {
       return left.name.localeCompare(right.name, 'ko');
     });
   }, [signals, signalsQuery.data]);
-  const openSettingsPanel = (panel: 'candle' | 'indicator' | 'signal') => {
+  const openSettingsPanel = (panel: ChartSettingsPanel = 'menu') => {
     setDraftSettings(settings);
     setDraftInterval(interval);
     setDraftDisabledPatternNames(new Set(disabledPatternNames));
@@ -3019,18 +3018,6 @@ export default function ChartRelayPage() {
           </button>
         </div>
 
-        {/* 현재 봉 주기 */}
-        <button
-          type="button"
-          onClick={() => openSettingsPanel('candle')}
-          className="mt-3 flex w-full items-center justify-between rounded-2xl border border-card-border bg-card px-3 py-2.5 text-left"
-        >
-          <span className="text-[11px] font-bold text-muted-foreground">현재 봉 주기</span>
-          <span className="rounded-full bg-primary px-3 py-1 text-xs font-black text-primary-foreground">
-            {intervalList.find((item) => item.key === interval)?.label ?? interval}
-          </span>
-        </button>
-
         {/* 탭 */}
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button
@@ -3057,29 +3044,6 @@ export default function ChartRelayPage() {
           >
             실시간 신호 분석
           </button>
-        </div>
-
-        {/* 차트 설정 팝업 */}
-        <div className="mt-3 rounded-2xl border border-card-border bg-card p-3">
-          <p className="inline-flex items-center gap-2 text-xs font-extrabold">
-            <Settings2 className="h-4 w-4 text-primary" /> 차트 설정 · 표시 항목
-          </p>
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            {[
-              { key: 'candle' as const, label: '봉차트' },
-              { key: 'indicator' as const, label: '지표차트' },
-              { key: 'signal' as const, label: '신호차트' },
-            ].map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => openSettingsPanel(item.key)}
-                className="rounded-xl border border-card-border bg-background px-2 py-3 text-xs font-black"
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
         </div>
 
         {/* 본문 */}
@@ -3145,7 +3109,7 @@ export default function ChartRelayPage() {
                     isLoadingOlder={isLoadingOlder}
                     onLoadOlder={requestLoadOlder}
                     onSignalSelect={selectSignal}
-                    onOpenIndicatorSettings={() => openSettingsPanel('indicator')}
+                    onOpenSettings={() => openSettingsPanel('menu')}
                   />
                 )}
               </div>
@@ -3193,6 +3157,7 @@ export default function ChartRelayPage() {
           onSettingsChange={setDraftSettings}
           onIntervalChange={setDraftInterval}
           onDisabledPatternsChange={setDraftDisabledPatternNames}
+          onPanelChange={setSettingsPanel}
           onClose={() => setSettingsPanel(null)}
           onApply={() => {
             setSettings(draftSettings);
@@ -3220,10 +3185,11 @@ function ChartSettingsModal({
   onSettingsChange,
   onIntervalChange,
   onDisabledPatternsChange,
+  onPanelChange,
   onClose,
   onApply,
 }: {
-  panel: 'candle' | 'indicator' | 'signal';
+  panel: ChartSettingsPanel;
   settings: ChartSettings;
   interval: string;
   patternOptions: PatternOption[];
@@ -3231,12 +3197,19 @@ function ChartSettingsModal({
   onSettingsChange: (settings: ChartSettings) => void;
   onIntervalChange: (interval: string) => void;
   onDisabledPatternsChange: (patterns: Set<string>) => void;
+  onPanelChange: (panel: ChartSettingsPanel) => void;
   onClose: () => void;
   onApply: () => void;
 }) {
-  const [signalSection, setSignalSection] = useState<'display' | PatternKind>('display');
+  const [signalSection, setSignalSection] = useState<'analysis' | PatternKind>('candle');
   const title =
-    panel === 'candle' ? 'Candle Chart Settings' : panel === 'indicator' ? '지표차트 설정' : '신호차트 설정';
+    panel === 'menu'
+      ? '차트 설정'
+      : panel === 'candle'
+        ? 'Candle Settings'
+        : panel === 'indicator'
+          ? '지표 설정'
+          : '신호 설정';
   const toggleSetting = (key: keyof ChartSettings) => {
     onSettingsChange({ ...settings, [key]: !settings[key] });
   };
@@ -3267,11 +3240,62 @@ function ChartSettingsModal({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-base font-black">{title}</h3>
+          <div className="flex min-w-0 items-center gap-2">
+            {panel !== 'menu' && (
+              <button
+                type="button"
+                onClick={() => onPanelChange('menu')}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-card-border"
+                aria-label="차트 설정 메뉴로 돌아가기"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+            )}
+            <h3 className="truncate text-base font-black">{title}</h3>
+          </div>
           <button type="button" onClick={onClose} className="rounded-full border border-card-border p-2" aria-label="닫기">
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {panel === 'menu' && (
+          <div className="mt-4">
+            <p className="mb-3 text-[11px] font-bold text-muted-foreground">
+              변경할 차트 항목을 선택하세요.
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                {
+                  key: 'candle' as const,
+                  label: '캔들',
+                  description: '봉 주기',
+                },
+                {
+                  key: 'indicator' as const,
+                  label: '지표',
+                  description: '보조지표',
+                },
+                {
+                  key: 'signal' as const,
+                  label: '신호',
+                  description: '패턴·분석',
+                },
+              ].map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => onPanelChange(item.key)}
+                  className="rounded-2xl border border-card-border bg-card px-2 py-4 text-center"
+                >
+                  <span className="block text-sm font-black">{item.label}</span>
+                  <span className="mt-1 block text-[9px] font-bold text-muted-foreground">
+                    {item.description}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {panel === 'candle' && (
           <div className="mt-3 space-y-4">
@@ -3363,9 +3387,9 @@ function ChartSettingsModal({
           <div className="mt-3 space-y-4">
             <div className="grid grid-cols-3 gap-2">
               {[
-                { key: 'display' as const, label: '신호 표시' },
                 { key: 'candle' as const, label: '캔들형 패턴' },
                 { key: 'chart' as const, label: '차트형 패턴' },
+                { key: 'analysis' as const, label: '분석 신호' },
               ].map((item) => (
                 <button
                   key={item.key}
@@ -3383,13 +3407,13 @@ function ChartSettingsModal({
               ))}
             </div>
 
-            {signalSection === 'display' && (
+            {signalSection === 'analysis' && (
               <div className="rounded-2xl border border-card-border bg-card/40 p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div>
-                    <p className="text-[12px] font-black">신호 표시</p>
+                    <p className="text-[12px] font-black">분석 신호</p>
                     <p className="text-[9px] font-bold text-muted-foreground">
-                      차트에 표시할 신호·가격선·AI 항목
+                      거래량·기술지표·AI·목표가·손절가·분할매수·분할매도
                     </p>
                   </div>
                   <div className="flex shrink-0 gap-1">
@@ -3397,7 +3421,7 @@ function ChartSettingsModal({
                       type="button"
                       onClick={() => {
                         const next = { ...settings };
-                        SIGNAL_DISPLAY_SETTING_KEYS.forEach((item) => {
+                        ANALYSIS_SIGNAL_SETTING_KEYS.forEach((item) => {
                           next[item.key] = true;
                         });
                         onSettingsChange(next);
@@ -3410,7 +3434,7 @@ function ChartSettingsModal({
                       type="button"
                       onClick={() => {
                         const next = { ...settings };
-                        SIGNAL_DISPLAY_SETTING_KEYS.forEach((item) => {
+                        ANALYSIS_SIGNAL_SETTING_KEYS.forEach((item) => {
                           next[item.key] = false;
                         });
                         onSettingsChange(next);
@@ -3422,7 +3446,7 @@ function ChartSettingsModal({
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  {SIGNAL_DISPLAY_SETTING_KEYS.map((item) => (
+                  {ANALYSIS_SIGNAL_SETTING_KEYS.map((item) => (
                     <button
                       key={item.key}
                       type="button"
@@ -3441,7 +3465,7 @@ function ChartSettingsModal({
               </div>
             )}
 
-            {signalSection !== 'display' &&
+            {signalSection !== 'analysis' &&
               patternGroups
                 .filter((group) => group.kind === signalSection)
                 .map((group) => {
@@ -3545,22 +3569,32 @@ function ChartSettingsModal({
           </div>
         )}
 
-        <div className="sticky bottom-0 mt-4 grid grid-cols-2 gap-2 border-t border-card-border bg-background pt-3">
+        {panel === 'menu' ? (
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-card-border py-3 text-xs font-black"
+            className="mt-4 w-full rounded-xl border border-card-border py-3 text-xs font-black"
           >
-            {panel === 'candle' ? 'Cancel' : '취소'}
+            닫기
           </button>
-          <button
-            type="button"
-            onClick={onApply}
-            className="rounded-xl bg-primary py-3 text-xs font-black text-primary-foreground"
-          >
-            {panel === 'candle' ? 'Apply' : '적용'}
-          </button>
-        </div>
+        ) : (
+          <div className="sticky bottom-0 mt-4 grid grid-cols-2 gap-2 border-t border-card-border bg-background pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl border border-card-border py-3 text-xs font-black"
+            >
+              {panel === 'candle' ? 'Cancel' : '취소'}
+            </button>
+            <button
+              type="button"
+              onClick={onApply}
+              className="rounded-xl bg-primary py-3 text-xs font-black text-primary-foreground"
+            >
+              {panel === 'candle' ? 'Apply' : '적용'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
