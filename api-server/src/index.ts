@@ -12,11 +12,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-const port = Number(
-  process.env.PORT ??
-    process.env.API_PORT ??
-    8080,
-);
+const port = Number(process.env.PORT ?? process.env.API_PORT ?? 8080);
 
 app.disable('x-powered-by');
 
@@ -62,74 +58,32 @@ app.get('/api/health', (_req, res) => {
  */
 app.use('/api', apiRouter);
 
-const frontendDistCandidates = [
-  path.resolve(
-    __dirname,
-    '../../stock-analyzer/dist/public',
-  ),
+/*
+ * 중요:
+ * 이전 코드는 여러 dist 후보 중 먼저 존재하는 폴더를 골랐기 때문에,
+ * Replit 작업공간에 남아 있던 오래된 dist가 선택될 수 있었습니다.
+ * 이제 현재 저장소의 stock-analyzer/dist/public만 사용합니다.
+ */
+const repositoryRoot = path.resolve(__dirname, '../..');
+const frontendDist = path.join(repositoryRoot, 'stock-analyzer/dist/public');
+const frontendIndex = path.join(frontendDist, 'index.html');
+const hasFrontendBuild = fs.existsSync(frontendIndex);
 
-  path.resolve(
-    __dirname,
-    '../../stock-analyzer/dist',
-  ),
-
-  path.resolve(
-    __dirname,
-    '../../../stock-analyzer/dist/public',
-  ),
-
-  path.resolve(
-    __dirname,
-    '../../../stock-analyzer/dist',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    '../stock-analyzer/dist/public',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    '../stock-analyzer/dist',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    'artifacts/stock-analyzer/dist/public',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    'artifacts/stock-analyzer/dist',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    'stock-analyzer/dist/public',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    'stock-analyzer/dist',
-  ),
-];
-
-const frontendDist =
-  frontendDistCandidates.find(
-    (candidate) =>
-      fs.existsSync(
-        path.join(
-          candidate,
-          'index.html',
-        ),
-      ),
-  );
-
-if (frontendDist) {
+if (hasFrontendBuild) {
   app.use(
-    express.static(
-      frontendDist,
-    ),
+    express.static(frontendDist, {
+      index: false,
+      setHeaders(res, filePath) {
+        if (filePath.endsWith('.html') || filePath.endsWith('sw.js')) {
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+          return;
+        }
+
+        if (/\.(?:js|css|woff2|png|svg)$/.test(filePath)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      },
+    }),
   );
 }
 
@@ -151,11 +105,7 @@ const availableRoutes = [
 ];
 
 app.use((req, res) => {
-  if (
-    req.path.startsWith(
-      '/api',
-    )
-  ) {
+  if (req.path.startsWith('/api')) {
     res.status(404).json({
       ok: false,
       error: 'API_ROUTE_NOT_FOUND',
@@ -166,54 +116,35 @@ app.use((req, res) => {
     return;
   }
 
-  if (frontendDist) {
-    res.sendFile(
-      path.join(
-        frontendDist,
-        'index.html',
-      ),
-    );
-
+  if (hasFrontendBuild) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('X-Frontend-Dist', frontendDist);
+    res.sendFile(frontendIndex);
     return;
   }
 
   res.status(200).json({
     ok: true,
     service: 'api-server',
-    message:
-      'API server is running, but frontend dist was not found.',
-
-    available: [
-      '/health',
-      ...availableRoutes,
-    ],
+    message: 'API server is running, but frontend dist was not found.',
+    expectedFrontendDist: frontendDist,
+    available: ['/health', ...availableRoutes],
   });
 });
 
-const server = app.listen(
-  port,
-  '0.0.0.0',
-  () => {
+const server = app.listen(port, '0.0.0.0', () => {
+  console.log(`[api-server] listening on 0.0.0.0:${port}`);
+  console.log('[api-server] Kiwoom routes enabled at /api/kiwoom');
+
+  startPriceAlertMonitor();
+
+  if (hasFrontendBuild) {
+    console.log(`[api-server] serving frontend from ${frontendDist}`);
+  } else {
     console.log(
-      `[api-server] listening on 0.0.0.0:${port}`,
+      `[api-server] frontend dist not found: ${frontendDist}; api only mode`,
     );
-
-    console.log(
-      '[api-server] Kiwoom routes enabled at /api/kiwoom',
-    );
-
-    startPriceAlertMonitor();
-
-    if (frontendDist) {
-      console.log(
-        `[api-server] serving frontend from ${frontendDist}`,
-      );
-    } else {
-      console.log(
-        '[api-server] frontend dist not found, api only mode',
-      );
-    }
-  },
-);
+  }
+});
 
 attachRealtimeChartServer(server);
