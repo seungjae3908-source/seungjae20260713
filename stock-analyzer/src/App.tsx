@@ -19,6 +19,7 @@ const WatchlistPage = lazy(() => import('@/pages/watchlist'));
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
 const StockInfoPage = lazy(() => import('@/pages/stock-info'));
+const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
 const ThemesPage = lazy(() => import('@/pages/themes'));
 const LearnPage = lazy(() => import('@/pages/learn'));
@@ -93,6 +94,7 @@ function ApprovedRouter() {
         <Route path="/stocks" component={StocksPage} />
         <Route path="/auto-trading" component={ScannerPage} />
         <Route path="/stock-info" component={StockInfoPage} />
+        <Route path="/market-overview" component={MarketOverviewPage} />
         <Route path="/assets" component={PortfolioPage} />
         <Route path="/settings" component={MorePage} />
 
