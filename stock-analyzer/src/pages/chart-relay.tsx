@@ -41,7 +41,6 @@ import { InstrumentAlertButton } from '@/components/instrument-alert-modal';
 import {
   normalizeRealtimeTimeframe,
   REALTIME_CHART_TIMEFRAMES,
-  realtimeTimeframeLabel,
   toUpbitTimeframe,
   type RealtimeChartTimeframe,
 } from '@/lib/chart-preferences';
@@ -542,33 +541,42 @@ const ASSET_GROUPS = [
 
 type IntervalItem = { key: RealtimeChartTimeframe; label: string };
 
+function englishTimeframeLabel(key: RealtimeChartTimeframe): string {
+  if (key === 'ALL') return 'ALL';
+  if (key.endsWith('H')) return `${key.slice(0, -1)}h`;
+  if (key.endsWith('D')) return `${key.slice(0, -1)}d`;
+  if (key.endsWith('W')) return `${key.slice(0, -1)}w`;
+  if (key.endsWith('Y')) return `${key.slice(0, -1)}y`;
+  return key;
+}
+
 const STANDARD_INTERVALS: IntervalItem[] = REALTIME_CHART_TIMEFRAMES.map(
-  (key) => ({ key, label: realtimeTimeframeLabel(key) }),
+  (key) => ({ key, label: englishTimeframeLabel(key) }),
 );
 
 const CANDLE_INTERVAL_GROUPS: Array<{ label: string; items: IntervalItem[] }> = [
   {
-    label: '분봉',
+    label: 'Minutes',
     items: STANDARD_INTERVALS.filter((item) => ['1m', '3m', '5m', '15m', '30m'].includes(item.key)),
   },
   {
-    label: '시간봉',
+    label: 'Hours',
     items: STANDARD_INTERVALS.filter((item) => ['1H', '4H', '12H'].includes(item.key)),
   },
   {
-    label: '일봉',
+    label: 'Days',
     items: STANDARD_INTERVALS.filter((item) => ['1D', '3D', '5D', '15D'].includes(item.key)),
   },
   {
-    label: '주봉',
+    label: 'Weeks',
     items: STANDARD_INTERVALS.filter((item) => item.key === '1W'),
   },
   {
-    label: '월봉',
+    label: 'Months',
     items: STANDARD_INTERVALS.filter((item) => ['1M', '3M', '6M'].includes(item.key)),
   },
   {
-    label: '년봉',
+    label: 'Years',
     items: STANDARD_INTERVALS.filter((item) => ['1Y', '3Y', '5Y', '10Y', 'ALL'].includes(item.key)),
   },
 ];
@@ -582,11 +590,10 @@ const INDICATOR_SETTING_KEYS: Array<{ key: keyof ChartSettings; label: string }>
     ].includes(item.key),
   );
 
-const SIGNAL_SETTING_KEYS: Array<{ key: keyof ChartSettings; label: string }> =
+const SIGNAL_DISPLAY_SETTING_KEYS: Array<{ key: keyof ChartSettings; label: string }> =
   SETTING_LABELS.filter((item) =>
     [
-      'liveSignal', 'chartPattern', 'candlePattern', 'volumeSignal',
-      'indicatorSignal', 'highlight', 'target', 'stop', 'buyLevels',
+      'liveSignal', 'volumeSignal', 'indicatorSignal', 'highlight', 'target', 'stop', 'buyLevels',
       'sellLevels', 'ai',
     ].includes(item.key),
   );
@@ -3227,8 +3234,9 @@ function ChartSettingsModal({
   onClose: () => void;
   onApply: () => void;
 }) {
+  const [signalSection, setSignalSection] = useState<'display' | PatternKind>('display');
   const title =
-    panel === 'candle' ? '봉차트 설정' : panel === 'indicator' ? '지표차트 설정' : '신호차트 설정';
+    panel === 'candle' ? 'Candle Chart Settings' : panel === 'indicator' ? '지표차트 설정' : '신호차트 설정';
   const toggleSetting = (key: keyof ChartSettings) => {
     onSettingsChange({ ...settings, [key]: !settings[key] });
   };
@@ -3290,7 +3298,7 @@ function ChartSettingsModal({
               </div>
             ))}
             <p className="rounded-xl bg-secondary px-3 py-2 text-[10px] font-bold text-muted-foreground">
-              봉 주기는 하나만 선택합니다. 실제 휴장·무거래 구간에는 가짜 봉을 만들지 않습니다.
+              Select one timeframe. Closed-market and no-trade periods do not create artificial candles.
             </p>
           </div>
         )}
@@ -3353,45 +3361,46 @@ function ChartSettingsModal({
 
         {panel === 'signal' && (
           <div className="mt-3 space-y-4">
-            <div>
-              <p className="mb-2 text-[11px] font-black text-muted-foreground">신호 표시</p>
-              <div className="grid grid-cols-2 gap-2">
-                {SIGNAL_SETTING_KEYS.map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => toggleSetting(item.key)}
-                    className={cn(
-                      'rounded-xl border px-3 py-2.5 text-left text-[11px] font-black',
-                      settings[item.key]
-                        ? 'border-primary bg-primary/10 text-primary'
-                        : 'border-card-border bg-card text-muted-foreground',
-                    )}
-                  >
-                    {settings[item.key] ? '✓ ' : '□ '}{item.label}
-                  </button>
-                ))}
-              </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { key: 'display' as const, label: '신호 표시' },
+                { key: 'candle' as const, label: '캔들형 패턴' },
+                { key: 'chart' as const, label: '차트형 패턴' },
+              ].map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setSignalSection(item.key)}
+                  className={cn(
+                    'rounded-xl border px-2 py-3 text-[11px] font-black',
+                    signalSection === item.key
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-card-border bg-card text-muted-foreground',
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
             </div>
-            {patternGroups.map((group) => (
-              <div key={group.kind} className="rounded-2xl border border-card-border bg-card/40 p-3">
+
+            {signalSection === 'display' && (
+              <div className="rounded-2xl border border-card-border bg-card/40 p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div>
-                    <p className="text-[12px] font-black">{group.label}</p>
+                    <p className="text-[12px] font-black">신호 표시</p>
                     <p className="text-[9px] font-bold text-muted-foreground">
-                      {group.kind === 'candle'
-                        ? '한 개 또는 여러 캔들의 몸통·꼬리 관계'
-                        : '여러 봉에 걸친 추세·지지·저항 구조'}
+                      차트에 표시할 신호·가격선·AI 항목
                     </p>
                   </div>
                   <div className="flex shrink-0 gap-1">
                     <button
                       type="button"
                       onClick={() => {
-                        const groupNames = new Set(group.items.map((item) => normalizeSignalName(item.name)));
-                        onDisabledPatternsChange(
-                          new Set([...disabledPatternNames].filter((name) => !groupNames.has(name))),
-                        );
+                        const next = { ...settings };
+                        SIGNAL_DISPLAY_SETTING_KEYS.forEach((item) => {
+                          next[item.key] = true;
+                        });
+                        onSettingsChange(next);
                       }}
                       className="rounded-lg border border-card-border px-2 py-1 text-[9px] font-black"
                     >
@@ -3399,14 +3408,13 @@ function ChartSettingsModal({
                     </button>
                     <button
                       type="button"
-                      onClick={() =>
-                        onDisabledPatternsChange(
-                          new Set([
-                            ...disabledPatternNames,
-                            ...group.items.map((item) => normalizeSignalName(item.name)),
-                          ]),
-                        )
-                      }
+                      onClick={() => {
+                        const next = { ...settings };
+                        SIGNAL_DISPLAY_SETTING_KEYS.forEach((item) => {
+                          next[item.key] = false;
+                        });
+                        onSettingsChange(next);
+                      }}
                       className="rounded-lg border border-card-border px-2 py-1 text-[9px] font-black"
                     >
                       전체 해제
@@ -3414,27 +3422,126 @@ function ChartSettingsModal({
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  {group.items.map((item) => {
-                    const selected = !disabledPatternNames.has(normalizeSignalName(item.name));
-                    return (
-                      <button
-                        key={`${group.kind}:${item.name}`}
-                        type="button"
-                        onClick={() => togglePattern(item.name)}
-                        className={cn(
-                          'rounded-xl border px-3 py-2.5 text-left text-[11px] font-black',
-                          selected
-                            ? 'border-primary bg-primary/10 text-primary'
-                            : 'border-card-border bg-card text-muted-foreground',
-                        )}
-                      >
-                        {selected ? '✓ ' : '□ '}{item.name}
-                      </button>
-                    );
-                  })}
+                  {SIGNAL_DISPLAY_SETTING_KEYS.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => toggleSetting(item.key)}
+                      className={cn(
+                        'rounded-xl border px-3 py-2.5 text-left text-[11px] font-black',
+                        settings[item.key]
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-card-border bg-card text-muted-foreground',
+                      )}
+                    >
+                      {settings[item.key] ? '✓ ' : '□ '}{item.label}
+                    </button>
+                  ))}
                 </div>
               </div>
-            ))}
+            )}
+
+            {signalSection !== 'display' &&
+              patternGroups
+                .filter((group) => group.kind === signalSection)
+                .map((group) => {
+                  const groupSettingKey: keyof ChartSettings =
+                    group.kind === 'candle' ? 'candlePattern' : 'chartPattern';
+                  return (
+                    <div key={group.kind} className="rounded-2xl border border-card-border bg-card/40 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[12px] font-black">{group.label}</p>
+                          <p className="text-[9px] font-bold text-muted-foreground">
+                            {group.kind === 'candle'
+                              ? '한 개 또는 여러 캔들의 몸통·꼬리 관계'
+                              : '여러 봉에 걸친 추세·지지·저항 구조'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => toggleSetting(groupSettingKey)}
+                          className={cn(
+                            'shrink-0 rounded-lg border px-2 py-1 text-[9px] font-black',
+                            settings[groupSettingKey]
+                              ? 'border-primary bg-primary/10 text-primary'
+                              : 'border-card-border bg-card text-muted-foreground',
+                          )}
+                        >
+                          {settings[groupSettingKey] ? '표시 중' : '표시 꺼짐'}
+                        </button>
+                      </div>
+                      <div className="mb-2 flex justify-end gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const groupNames = new Set(
+                              group.items.map((item) => normalizeSignalName(item.name)),
+                            );
+                            onDisabledPatternsChange(
+                              new Set(
+                                [...disabledPatternNames].filter(
+                                  (name) => !groupNames.has(name),
+                                ),
+                              ),
+                            );
+                            onSettingsChange({ ...settings, [groupSettingKey]: true });
+                          }}
+                          className="rounded-lg border border-card-border px-2 py-1 text-[9px] font-black"
+                        >
+                          전체 선택
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onDisabledPatternsChange(
+                              new Set([
+                                ...disabledPatternNames,
+                                ...group.items.map((item) =>
+                                  normalizeSignalName(item.name),
+                                ),
+                              ]),
+                            );
+                            onSettingsChange({ ...settings, [groupSettingKey]: false });
+                          }}
+                          className="rounded-lg border border-card-border px-2 py-1 text-[9px] font-black"
+                        >
+                          전체 해제
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {group.items.map((item) => {
+                          const selected = !disabledPatternNames.has(
+                            normalizeSignalName(item.name),
+                          );
+                          return (
+                            <button
+                              key={`${group.kind}:${item.name}`}
+                              type="button"
+                              onClick={() => {
+                                togglePattern(item.name);
+                                if (!selected && !settings[groupSettingKey]) {
+                                  onSettingsChange({
+                                    ...settings,
+                                    [groupSettingKey]: true,
+                                  });
+                                }
+                              }}
+                              className={cn(
+                                'rounded-xl border px-3 py-2.5 text-left text-[11px] font-black',
+                                selected
+                                  ? 'border-primary bg-primary/10 text-primary'
+                                  : 'border-card-border bg-card text-muted-foreground',
+                              )}
+                            >
+                              {selected ? '✓ ' : '□ '}{item.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
           </div>
         )}
 
@@ -3444,14 +3551,14 @@ function ChartSettingsModal({
             onClick={onClose}
             className="rounded-xl border border-card-border py-3 text-xs font-black"
           >
-            취소
+            {panel === 'candle' ? 'Cancel' : '취소'}
           </button>
           <button
             type="button"
             onClick={onApply}
             className="rounded-xl bg-primary py-3 text-xs font-black text-primary-foreground"
           >
-            적용
+            {panel === 'candle' ? 'Apply' : '적용'}
           </button>
         </div>
       </div>
