@@ -1172,6 +1172,45 @@ const LowerIndicatorPanel = memo(function LowerIndicatorPanel({
       handleScale: true,
     });
     chartRef.current = chart;
+    const crosshairHandler = (param: MouseEventParams<Time>) => {
+      onHoverTime(typeof param.time === 'number' ? Number(param.time) : null);
+    };
+    chart.subscribeCrosshairMove(crosshairHandler);
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect?.width && rect.height) {
+        chart.applyOptions({ width: Math.max(rect.width, 1), height: Math.max(rect.height, 145) });
+      }
+    });
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      chart.unsubscribeCrosshairMove(crosshairHandler);
+      chart.remove();
+      chartRef.current = null;
+      valueSeriesRef.current = null;
+      signalSeriesRef.current = null;
+      histogramSeriesRef.current = null;
+      boundarySeriesRef.current = [];
+    };
+  }, [enabled.length, onHoverTime]);
+
+  useEffect(() => {
+    chartRef.current?.timeScale().applyOptions({ timeVisible, secondsVisible: false });
+  }, [timeVisible]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || enabled.length === 0) return;
+    if (valueSeriesRef.current) chart.removeSeries(valueSeriesRef.current);
+    if (signalSeriesRef.current) chart.removeSeries(signalSeriesRef.current);
+    if (histogramSeriesRef.current) chart.removeSeries(histogramSeriesRef.current);
+    for (const boundary of boundarySeriesRef.current) {
+      chart.removeSeries(boundary.series);
+    }
+    valueSeriesRef.current = null;
+    signalSeriesRef.current = null;
+    histogramSeriesRef.current = null;
     boundarySeriesRef.current = [];
     const addBoundary = (value: number, color = '#64748b') => {
       const series = chart.addLineSeries({
@@ -1219,32 +1258,7 @@ const LowerIndicatorPanel = memo(function LowerIndicatorPanel({
       }
     }
     firstFitRef.current = false;
-    const crosshairHandler = (param: MouseEventParams<Time>) => {
-      onHoverTime(typeof param.time === 'number' ? Number(param.time) : null);
-    };
-    chart.subscribeCrosshairMove(crosshairHandler);
-    const observer = new ResizeObserver((entries) => {
-      const rect = entries[0]?.contentRect;
-      if (rect?.width && rect.height) {
-        chart.applyOptions({ width: Math.max(rect.width, 1), height: Math.max(rect.height, 145) });
-      }
-    });
-    observer.observe(container);
-    return () => {
-      observer.disconnect();
-      chart.unsubscribeCrosshairMove(crosshairHandler);
-      chart.remove();
-      chartRef.current = null;
-      valueSeriesRef.current = null;
-      signalSeriesRef.current = null;
-      histogramSeriesRef.current = null;
-      boundarySeriesRef.current = [];
-    };
-  }, [active, enabled.length, onHoverTime]);
-
-  useEffect(() => {
-    chartRef.current?.timeScale().applyOptions({ timeVisible, secondsVisible: false });
-  }, [timeVisible]);
+  }, [active, enabled.length]);
 
   useEffect(() => {
     const chart = chartRef.current;
