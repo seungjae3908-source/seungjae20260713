@@ -1880,6 +1880,13 @@ router.get("/:ticker/candles", async (req, res) => {
 	const ticker = normalizeTicker(req.params.ticker);
 	const timeframe = normalizeTimeframe(req.query.tf ?? req.query.timeframe);
 	const quick = String(req.query.quick ?? "") === "1";
+	const requestedPages = Number(req.query.pages);
+	const maxPages =
+		Number.isFinite(requestedPages) && requestedPages > 0
+			? Math.min(300, Math.max(1, Math.floor(requestedPages)))
+			: quick
+				? 1
+				: undefined;
 
 	if (!ticker) {
 		res.status(400).json({
@@ -1892,7 +1899,7 @@ router.get("/:ticker/candles", async (req, res) => {
 		const meta = await MarketDataService.getCandlesMeta(
 			ticker,
 			timeframe as any,
-			quick ? { maxPages: 1 } : {},
+			maxPages ? { maxPages } : {},
 		);
 
 		res.json({
@@ -1904,6 +1911,12 @@ router.get("/:ticker/candles", async (req, res) => {
 			candles: meta.candles,
 			count: meta.candles.length,
 			updatedAt: meta.fetchedAt,
+			pagination: maxPages
+				? {
+						pagesLoaded: maxPages,
+						hasMore: maxPages < 300,
+					}
+				: null,
 		});
 	} catch (error) {
 		console.error("stock candles route error:", error);
