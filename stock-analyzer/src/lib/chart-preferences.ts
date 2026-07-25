@@ -29,9 +29,20 @@ export const REALTIME_CHART_TIMEFRAMES = [
   '30m',
   '1H',
   '4H',
+  '12H',
   '1D',
+  '3D',
+  '5D',
+  '15D',
   '1W',
   '1M',
+  '3M',
+  '6M',
+  '1Y',
+  '3Y',
+  '5Y',
+  '10Y',
+  'ALL',
 ] as const;
 
 export type RealtimeChartTimeframe =
@@ -46,13 +57,27 @@ const TIMEFRAME_ALIASES: Record<string, RealtimeChartTimeframe> = {
   '60m': '1H',
   '1h': '1H',
   '4h': '4H',
+  '12h': '12H',
   '1d': '1D',
   day: '1D',
+  '3d': '3D',
+  '5d': '5D',
+  '15d': '15D',
   '1w': '1W',
   week: '1W',
   '1mo': '1M',
   '1month': '1M',
   month: '1M',
+  '3mo': '3M',
+  '3month': '3M',
+  '6mo': '6M',
+  '6month': '6M',
+  '1y': '1Y',
+  year: '1Y',
+  '3y': '3Y',
+  '5y': '5Y',
+  '10y': '10Y',
+  all: 'ALL',
 };
 
 export function normalizeRealtimeTimeframe(
@@ -64,8 +89,8 @@ export function normalizeRealtimeTimeframe(
 
 export function toUpbitTimeframe(
   timeframe: RealtimeChartTimeframe,
-): { unit?: number; tf?: '1D' | '1W' | '1M' } | null {
-  if (timeframe === '1D' || timeframe === '1W' || timeframe === '1M') {
+): { unit?: number; tf?: RealtimeChartTimeframe } | null {
+  if (!['1m', '3m', '5m', '15m', '30m', '1H', '4H'].includes(timeframe)) {
     return { tf: timeframe };
   }
   const units: Partial<Record<RealtimeChartTimeframe, number>> = {
@@ -92,9 +117,20 @@ export function realtimeTimeframeLabel(
     '30m': '30분',
     '1H': '1시간',
     '4H': '4시간',
+    '12H': '12시간',
     '1D': '1일',
+    '3D': '3일',
+    '5D': '5일',
+    '15D': '15일',
     '1W': '1주',
     '1M': '1개월',
+    '3M': '3개월',
+    '6M': '6개월',
+    '1Y': '1년',
+    '3Y': '3년',
+    '5Y': '5년',
+    '10Y': '10년',
+    'ALL': '전체',
   };
   return labels[timeframe];
 }

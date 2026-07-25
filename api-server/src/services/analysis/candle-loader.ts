@@ -22,6 +22,13 @@ function looksLikeCoin(symbol: string): boolean {
   return false;
 }
 
+function hasEnoughBars(rows: Bar[], interval: string): boolean {
+  const minimum = /^(?:3D|5D|15D|1M|3M|6M|1Y|3Y|5Y|10Y|ALL)$/i.test(interval)
+    ? 2
+    : 30;
+  return rows.length >= minimum;
+}
+
 async function loadUpbit(symbol: string, interval: string): Promise<Bar[]> {
   const tf =
     interval === '1H'
@@ -88,7 +95,7 @@ export async function loadBars(
       if (!allowFutures) return [];
       try {
         const bars = await loadBitget(sym, interval);
-        if (bars.length >= 30) return bars;
+        if (hasEnoughBars(bars, interval)) return bars;
       } catch {
         /* 무시 */
       }
@@ -97,14 +104,14 @@ export async function loadBars(
     // 현물 요청: 업비트 우선, 실패 시 선물 폴백은 allowFutures 인 경우에만.
     try {
       const bars = await loadUpbit(sym, interval);
-      if (bars.length >= 30) return bars;
+      if (hasEnoughBars(bars, interval)) return bars;
     } catch {
       /* 아래 폴백으로 진행 */
     }
     if (allowFutures) {
       try {
         const alt = await loadBitget(sym, interval);
-        if (alt.length >= 30) return alt;
+        if (hasEnoughBars(alt, interval)) return alt;
       } catch {
         /* 무시 */
       }
@@ -118,14 +125,14 @@ export async function loadBars(
   if (looksLikeCoin(sym)) {
     try {
       const up = await loadUpbit(sym, interval);
-      if (up.length >= 30) return up;
+      if (hasEnoughBars(up, interval)) return up;
     } catch {
       /* 무시 */
     }
     if (allowFutures) {
       try {
         const bg = await loadBitget(sym, interval);
-        if (bg.length >= 30) return bg;
+        if (hasEnoughBars(bg, interval)) return bg;
       } catch {
         /* 무시 */
       }

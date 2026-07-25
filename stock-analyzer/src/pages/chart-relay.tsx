@@ -1,6 +1,6 @@
-// 차트중계 — 실시간 차트 생중계 / AI 차트 실시간 생중계 (표시 전용, 자동매매 실행 없음)
+// 차트중계 — 실시간 차트 분석 / 실시간 신호 분석 (표시 전용, 자동매매 실행 없음)
 // chart-broadcast.tsx 의 lightweight-charts 캔들/거래량 렌더링 방식과 폴링 패턴을 재사용한다.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -119,9 +119,19 @@ type ChartSettings = {
   ma20: boolean;
   ma60: boolean;
   ma120: boolean;
+  ema9: boolean;
+  ema20: boolean;
+  ema60: boolean;
   bollinger: boolean;
+  vwap: boolean;
+  ichimoku: boolean;
   rsi: boolean;
   macd: boolean;
+  atr: boolean;
+  cci: boolean;
+  obv: boolean;
+  williamsR: boolean;
+  roc: boolean;
   volumeMa20: boolean;
 };
 
@@ -131,13 +141,27 @@ type IndicatorPoint = {
   ma20: number | null;
   ma60: number | null;
   ma120: number | null;
+  ema9: number | null;
+  ema20: number | null;
+  ema60: number | null;
   bollingerMiddle: number | null;
   bollingerUpper: number | null;
   bollingerLower: number | null;
+  vwap: number | null;
+  ichimokuConversion: number | null;
+  ichimokuBase: number | null;
+  ichimokuSpanA: number | null;
+  ichimokuSpanB: number | null;
+  ichimokuLagging: number | null;
   rsi: number | null;
   macd: number | null;
   macdSignal: number | null;
   macdHistogram: number | null;
+  atr: number | null;
+  cci: number | null;
+  obv: number | null;
+  williamsR: number | null;
+  roc: number | null;
   volumeMa20: number | null;
 };
 
@@ -170,6 +194,7 @@ type TopSignalBanner = {
 };
 
 const SETTINGS_KEY = 'chart-relay-settings-v1';
+const PATTERN_FILTER_KEY = 'chart-relay-disabled-patterns-v1';
 const CANDLE_CACHE_PREFIX = 'chart-relay-candles-v1';
 const CANDLE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -189,9 +214,19 @@ const DEFAULT_SETTINGS: ChartSettings = {
   ma20: true,
   ma60: false,
   ma120: false,
-  bollinger: false,
-  rsi: false,
+  ema9: true,
+  ema20: true,
+  ema60: false,
+  bollinger: true,
+  vwap: true,
+  ichimoku: false,
+  rsi: true,
   macd: false,
+  atr: false,
+  cci: false,
+  obv: false,
+  williamsR: false,
+  roc: false,
   volumeMa20: false,
 };
 
@@ -207,13 +242,23 @@ const SETTING_LABELS: Array<{ key: keyof ChartSettings; label: string }> = [
   { key: 'sellLevels', label: '분할매도' },
   { key: 'ai', label: 'AI 분석' },
   { key: 'highlight', label: '신호 강조' },
-  { key: 'ma5', label: 'MA5' },
-  { key: 'ma20', label: 'MA20' },
-  { key: 'ma60', label: 'MA60' },
-  { key: 'ma120', label: 'MA120' },
+  { key: 'ma5', label: 'SMA5' },
+  { key: 'ma20', label: 'SMA20' },
+  { key: 'ma60', label: 'SMA60' },
+  { key: 'ma120', label: 'SMA120' },
+  { key: 'ema9', label: 'EMA9' },
+  { key: 'ema20', label: 'EMA20' },
+  { key: 'ema60', label: 'EMA60' },
   { key: 'bollinger', label: '볼린저밴드' },
+  { key: 'vwap', label: 'VWAP' },
+  { key: 'ichimoku', label: 'Ichimoku' },
   { key: 'rsi', label: 'RSI(14)' },
   { key: 'macd', label: 'MACD' },
+  { key: 'atr', label: 'ATR(14)' },
+  { key: 'cci', label: 'CCI(20)' },
+  { key: 'obv', label: 'OBV' },
+  { key: 'williamsR', label: 'Williams %R' },
+  { key: 'roc', label: 'ROC(12)' },
   { key: 'volumeMa20', label: '거래량 MA20' },
 ];
 
@@ -251,6 +296,48 @@ function signalAtCandle(signals: ChartSignal[], candle: CandlePoint) {
       return time >= Math.min(from ?? to!, to ?? from!) && time <= Math.max(from ?? to!, to ?? from!);
     })
     .sort((left, right) => priority[right.stage] - priority[left.stage])[0] ?? null;
+}
+
+function normalizeSignalName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, '');
+}
+
+function signalOccurrenceKey(signal: ChartSignal): string {
+  const from = toUnixSeconds(signal.overlay?.fromTime ?? signal.barTime) ?? 0;
+  const to = toUnixSeconds(signal.overlay?.toTime ?? signal.barTime) ?? from;
+  return [
+    signal.kind,
+    normalizeSignalName(signal.name),
+    Math.min(from, to),
+    Math.max(from, to),
+  ].join(':');
+}
+
+function dedupeSignalOccurrences(signals: ChartSignal[]): ChartSignal[] {
+  const stageRank: Record<ChartSignal['stage'], number> = {
+    START: 1,
+    DEVELOPING: 2,
+    COMPLETED: 3,
+    INVALIDATED: 4,
+  };
+  const grouped = new Map<string, ChartSignal>();
+  for (const signal of signals) {
+    const key = signalOccurrenceKey(signal);
+    const current = grouped.get(key);
+    if (!current) {
+      grouped.set(key, signal);
+      continue;
+    }
+    const currentTime = toEpochMilliseconds(current.occurredAt) ?? 0;
+    const nextTime = toEpochMilliseconds(signal.occurredAt) ?? 0;
+    if (
+      nextTime > currentTime ||
+      (nextTime === currentTime && stageRank[signal.stage] > stageRank[current.stage])
+    ) {
+      grouped.set(key, signal);
+    }
+  }
+  return [...grouped.values()];
 }
 
 function detectLocalPatternSignals(candles: CandlePoint[]): ChartSignal[] {
@@ -381,9 +468,19 @@ function settingsWithValue(value: boolean): ChartSettings {
     ma20: value,
     ma60: value,
     ma120: value,
+    ema9: value,
+    ema20: value,
+    ema60: value,
     bollinger: value,
+    vwap: value,
+    ichimoku: value,
     rsi: value,
     macd: value,
+    atr: value,
+    cci: value,
+    obv: value,
+    williamsR: value,
+    roc: value,
     volumeMa20: value,
   };
 }
@@ -414,6 +511,71 @@ const STANDARD_INTERVALS: IntervalItem[] = REALTIME_CHART_TIMEFRAMES.map(
   (key) => ({ key, label: realtimeTimeframeLabel(key) }),
 );
 
+const CANDLE_INTERVAL_GROUPS: Array<{ label: string; items: IntervalItem[] }> = [
+  {
+    label: '분봉',
+    items: STANDARD_INTERVALS.filter((item) => ['1m', '3m', '5m', '15m', '30m'].includes(item.key)),
+  },
+  {
+    label: '시간봉',
+    items: STANDARD_INTERVALS.filter((item) => ['1H', '4H', '12H'].includes(item.key)),
+  },
+  {
+    label: '일봉',
+    items: STANDARD_INTERVALS.filter((item) => ['1D', '3D', '5D', '15D'].includes(item.key)),
+  },
+  {
+    label: '주봉',
+    items: STANDARD_INTERVALS.filter((item) => item.key === '1W'),
+  },
+  {
+    label: '월봉',
+    items: STANDARD_INTERVALS.filter((item) => ['1M', '3M', '6M'].includes(item.key)),
+  },
+  {
+    label: '년봉',
+    items: STANDARD_INTERVALS.filter((item) => ['1Y', '3Y', '5Y', '10Y', 'ALL'].includes(item.key)),
+  },
+];
+
+const INDICATOR_SETTING_KEYS: Array<{ key: keyof ChartSettings; label: string }> =
+  SETTING_LABELS.filter((item) =>
+    [
+      'ma5', 'ma20', 'ma60', 'ma120', 'ema9', 'ema20', 'ema60',
+      'bollinger', 'vwap', 'ichimoku', 'rsi', 'macd', 'atr', 'cci',
+      'obv', 'williamsR', 'roc', 'volumeMa20',
+    ].includes(item.key),
+  );
+
+const SIGNAL_SETTING_KEYS: Array<{ key: keyof ChartSettings; label: string }> =
+  SETTING_LABELS.filter((item) =>
+    [
+      'liveSignal', 'chartPattern', 'candlePattern', 'volumeSignal',
+      'indicatorSignal', 'highlight', 'target', 'stop', 'buyLevels',
+      'sellLevels', 'ai',
+    ].includes(item.key),
+  );
+
+const DEFAULT_PATTERN_NAMES = [
+  '상승 장악형',
+  '하락 장악형',
+  '도지',
+  '망치형',
+  '역망치형',
+  '유성형',
+  '샛별형',
+  '석별형',
+  '박스권 상단 돌파',
+  '지지선 이탈',
+  '삼각수렴',
+  '상승 채널',
+  '하락 채널',
+  '이중바닥',
+  '이중천장',
+  '쌍바닥 후보',
+  '쌍봉 후보',
+];
+
 const DEFAULT_SYMBOL: Record<Asset, string> = {
   stockKR: '005930',
   stockUS: 'AAPL',
@@ -430,6 +592,19 @@ function finite(value: unknown): number | null {
   return null;
 }
 
+function parseCompactCandleTime(text: string): number | null {
+  const digits = text.replace(/\D/g, '');
+  if (digits.length < 8 || digits.length > 14) return null;
+  const year = Number(digits.slice(0, 4));
+  const month = Number(digits.slice(4, 6)) - 1;
+  const day = Number(digits.slice(6, 8));
+  const hour = digits.length >= 10 ? Number(digits.slice(8, 10)) : 0;
+  const minute = digits.length >= 12 ? Number(digits.slice(10, 12)) : 0;
+  const second = digits.length >= 14 ? Number(digits.slice(12, 14)) : 0;
+  const timestamp = Date.UTC(year, month, day, hour, minute, second);
+  return Number.isFinite(timestamp) ? Math.floor(timestamp / 1000) : null;
+}
+
 function toUnixSeconds(raw: unknown): number | null {
   if (typeof raw === 'number' && Number.isFinite(raw)) {
     if (raw > 1e12) return Math.floor(raw / 1000);
@@ -437,6 +612,10 @@ function toUnixSeconds(raw: unknown): number | null {
   }
   const text = String(raw ?? '').trim();
   if (!text) return null;
+  if (/^\d{8,14}$/.test(text)) {
+    const compact = parseCompactCandleTime(text);
+    if (compact != null) return compact;
+  }
   const numeric = Number(text);
   if (Number.isFinite(numeric) && numeric > 1e9) {
     return Math.floor(numeric > 1e12 ? numeric / 1000 : numeric);
@@ -606,6 +785,20 @@ function loadSettings(): ChartSettings {
   }
 }
 
+function loadDisabledPatterns(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(PATTERN_FILTER_KEY) ?? '[]');
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.map((value) => normalizeSignalName(String(value))).filter(Boolean)
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 function loadChartType(): ChartType {
   if (typeof window === 'undefined') return 'candles';
   return window.localStorage.getItem(CHART_TYPE_KEY) === 'line' ? 'line' : 'candles';
@@ -665,17 +858,117 @@ function calculateRsi(values: number[], period = 14): Array<number | null> {
   return result;
 }
 
-function calculateIndicators(candles: CandlePoint[]): IndicatorPoint[] {
+function calculateIndicators(candles: CandlePoint[], interval: string): IndicatorPoint[] {
   const closes = candles.map((candle) => candle.close);
   const volumes = candles.map((candle) => candle.volume);
   const ma5 = simpleMovingAverage(closes, 5);
   const ma20 = simpleMovingAverage(closes, 20);
   const ma60 = simpleMovingAverage(closes, 60);
   const ma120 = simpleMovingAverage(closes, 120);
+  const ema9 = exponentialMovingAverage(closes, 9);
+  const ema20 = exponentialMovingAverage(closes, 20);
+  const ema60 = exponentialMovingAverage(closes, 60);
   const volumeMa20 = simpleMovingAverage(volumes, 20);
   const rsi = calculateRsi(closes, 14);
   const ema12 = exponentialMovingAverage(closes, 12);
   const ema26 = exponentialMovingAverage(closes, 26);
+  const atr: Array<number | null> = new Array(candles.length).fill(null);
+  const cci: Array<number | null> = new Array(candles.length).fill(null);
+  const obv: Array<number | null> = new Array(candles.length).fill(null);
+  const williamsR: Array<number | null> = new Array(candles.length).fill(null);
+  const roc: Array<number | null> = new Array(candles.length).fill(null);
+  const vwap: Array<number | null> = new Array(candles.length).fill(null);
+  const ichimokuConversion: Array<number | null> = new Array(candles.length).fill(null);
+  const ichimokuBase: Array<number | null> = new Array(candles.length).fill(null);
+  const ichimokuSpanA: Array<number | null> = new Array(candles.length).fill(null);
+  const ichimokuSpanB: Array<number | null> = new Array(candles.length).fill(null);
+  const ichimokuLagging: Array<number | null> = new Array(candles.length).fill(null);
+
+  let previousAtr = 0;
+  let runningObv = 0;
+  let cumulativeVolume = 0;
+  let cumulativeTypicalVolume = 0;
+  let vwapSession = '';
+  const intraday = interval.endsWith('m') || interval.endsWith('H');
+  for (let index = 0; index < candles.length; index += 1) {
+    const candle = candles[index]!;
+    const typical = (candle.high + candle.low + candle.close) / 3;
+    const session = new Date(Number(candle.time) * 1000).toISOString().slice(0, 10);
+    if (intraday && session !== vwapSession) {
+      cumulativeVolume = 0;
+      cumulativeTypicalVolume = 0;
+      vwapSession = session;
+    }
+    cumulativeVolume += candle.volume;
+    cumulativeTypicalVolume += typical * candle.volume;
+    vwap[index] =
+      cumulativeVolume > 0 ? cumulativeTypicalVolume / cumulativeVolume : typical;
+
+    if (index > 0) {
+      const previous = candles[index - 1]!;
+      const trueRange = Math.max(
+        candle.high - candle.low,
+        Math.abs(candle.high - previous.close),
+        Math.abs(candle.low - previous.close),
+      );
+      if (index < 14) {
+        previousAtr += trueRange;
+      } else if (index === 14) {
+        previousAtr = (previousAtr + trueRange) / 14;
+        atr[index] = previousAtr;
+      } else {
+        previousAtr = (previousAtr * 13 + trueRange) / 14;
+        atr[index] = previousAtr;
+      }
+      if (candle.close > previous.close) runningObv += candle.volume;
+      else if (candle.close < previous.close) runningObv -= candle.volume;
+    }
+    obv[index] = runningObv;
+
+    if (index >= 19) {
+      const window = candles.slice(index - 19, index + 1);
+      const typicals = window.map((row) => (row.high + row.low + row.close) / 3);
+      const mean = typicals.reduce((sum, value) => sum + value, 0) / 20;
+      const meanDeviation =
+        typicals.reduce((sum, value) => sum + Math.abs(value - mean), 0) / 20;
+      cci[index] = meanDeviation > 0 ? (typical - mean) / (0.015 * meanDeviation) : 0;
+    }
+    if (index >= 13) {
+      const window = candles.slice(index - 13, index + 1);
+      const high = Math.max(...window.map((row) => row.high));
+      const low = Math.min(...window.map((row) => row.low));
+      williamsR[index] = high !== low ? ((high - candle.close) / (high - low)) * -100 : -50;
+    }
+    if (index >= 12 && closes[index - 12] !== 0) {
+      roc[index] = ((candle.close - closes[index - 12]!) / closes[index - 12]!) * 100;
+    }
+    const rangeMidpoint = (period: number): number | null => {
+      if (index < period - 1) return null;
+      const window = candles.slice(index - period + 1, index + 1);
+      return (
+        Math.max(...window.map((row) => row.high)) +
+        Math.min(...window.map((row) => row.low))
+      ) / 2;
+    };
+    ichimokuConversion[index] = rangeMidpoint(9);
+    ichimokuBase[index] = rangeMidpoint(26);
+    const spanSourceIndex = index - 26;
+    if (spanSourceIndex >= 0) {
+      const conversion = ichimokuConversion[spanSourceIndex];
+      const base = ichimokuBase[spanSourceIndex];
+      ichimokuSpanA[index] =
+        conversion == null || base == null ? null : (conversion + base) / 2;
+      const spanWindow = candles.slice(Math.max(0, spanSourceIndex - 51), spanSourceIndex + 1);
+      ichimokuSpanB[index] =
+        spanWindow.length < 52
+          ? null
+          : (
+              Math.max(...spanWindow.map((row) => row.high)) +
+              Math.min(...spanWindow.map((row) => row.low))
+            ) / 2;
+    }
+    if (index + 26 < candles.length) ichimokuLagging[index] = closes[index + 26]!;
+  }
   const macd: Array<number | null> = closes.map((_, index) => {
     const fast = ema12[index];
     const slow = ema26[index];
@@ -710,13 +1003,27 @@ function calculateIndicators(candles: CandlePoint[]): IndicatorPoint[] {
       ma20: ma20[index],
       ma60: ma60[index],
       ma120: ma120[index],
+      ema9: ema9[index],
+      ema20: ema20[index],
+      ema60: ema60[index],
       bollingerMiddle: ma20[index],
       bollingerUpper,
       bollingerLower,
+      vwap: vwap[index],
+      ichimokuConversion: ichimokuConversion[index],
+      ichimokuBase: ichimokuBase[index],
+      ichimokuSpanA: ichimokuSpanA[index],
+      ichimokuSpanB: ichimokuSpanB[index],
+      ichimokuLagging: ichimokuLagging[index],
       rsi: rsi[index],
       macd: macdValue,
       macdSignal: signal,
       macdHistogram: macdValue == null || signal == null ? null : macdValue - signal,
+      atr: atr[index],
+      cci: cci[index],
+      obv: obv[index],
+      williamsR: williamsR[index],
+      roc: roc[index],
       volumeMa20: volumeMa20[index],
     };
   });
@@ -804,8 +1111,204 @@ function indicatorText(value: number | null, digits = 2): string {
     : value.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
+type LowerIndicatorKey = 'rsi' | 'macd' | 'atr' | 'cci' | 'obv' | 'williamsR' | 'roc';
+
+const LOWER_INDICATOR_LABEL: Record<LowerIndicatorKey, string> = {
+  rsi: 'RSI',
+  macd: 'MACD',
+  atr: 'ATR',
+  cci: 'CCI',
+  obv: 'OBV',
+  williamsR: 'W%R',
+  roc: 'ROC',
+};
+
+const LowerIndicatorPanel = memo(function LowerIndicatorPanel({
+  indicators,
+  enabled,
+  timeVisible,
+  sourceKey,
+  onHoverTime,
+}: {
+  indicators: IndicatorPoint[];
+  enabled: LowerIndicatorKey[];
+  timeVisible: boolean;
+  sourceKey: string;
+  onHoverTime: (time: number | null) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const valueSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const signalSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const histogramSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const boundarySeriesRef = useRef<Array<{ value: number; series: ISeriesApi<'Line'> }>>([]);
+  const firstFitRef = useRef(false);
+  const fittedSourceRef = useRef(sourceKey);
+  const [active, setActive] = useState<LowerIndicatorKey>(enabled[0] ?? 'rsi');
+
+  useEffect(() => {
+    if (enabled.length > 0 && !enabled.includes(active)) setActive(enabled[0]!);
+  }, [active, enabled]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || enabled.length === 0) return;
+    const dark = document.documentElement.classList.contains('dark');
+    const chart = createChart(container, {
+      width: Math.max(container.clientWidth, 1),
+      height: Math.max(container.clientHeight, 145),
+      layout: {
+        background: { type: ColorType.Solid, color: 'transparent' },
+        textColor: dark ? '#94a3b8' : '#64748b',
+        fontSize: 10,
+      },
+      grid: {
+        vertLines: { color: 'rgba(100,116,139,0.08)' },
+        horzLines: { color: 'rgba(100,116,139,0.08)' },
+      },
+      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.12, bottom: 0.12 } },
+      timeScale: { borderVisible: false, timeVisible, secondsVisible: false },
+      handleScroll: true,
+      handleScale: true,
+    });
+    chartRef.current = chart;
+    boundarySeriesRef.current = [];
+    const addBoundary = (value: number, color = '#64748b') => {
+      const series = chart.addLineSeries({
+        color,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      boundarySeriesRef.current.push({ value, series });
+    };
+    if (active === 'macd') {
+      valueSeriesRef.current = chart.addLineSeries({ color: '#8b5cf6', lineWidth: 2, priceLineVisible: false });
+      signalSeriesRef.current = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, priceLineVisible: false });
+      histogramSeriesRef.current = chart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+      addBoundary(0);
+    } else {
+      const color =
+        active === 'atr'
+          ? '#f97316'
+          : active === 'obv'
+            ? '#06b6d4'
+            : active === 'roc'
+              ? '#22c55e'
+              : active === 'williamsR'
+                ? '#eab308'
+                : '#8b5cf6';
+      valueSeriesRef.current = chart.addLineSeries({
+        color,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      });
+      if (active === 'rsi') {
+        addBoundary(70, '#ef4444');
+        addBoundary(30, '#3b82f6');
+      } else if (active === 'cci') {
+        addBoundary(100, '#ef4444');
+        addBoundary(-100, '#3b82f6');
+      } else if (active === 'williamsR') {
+        addBoundary(-20, '#ef4444');
+        addBoundary(-80, '#3b82f6');
+      } else if (active === 'roc') {
+        addBoundary(0);
+      }
+    }
+    firstFitRef.current = false;
+    const crosshairHandler = (param: MouseEventParams<Time>) => {
+      onHoverTime(typeof param.time === 'number' ? Number(param.time) : null);
+    };
+    chart.subscribeCrosshairMove(crosshairHandler);
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect?.width && rect.height) {
+        chart.applyOptions({ width: Math.max(rect.width, 1), height: Math.max(rect.height, 145) });
+      }
+    });
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      chart.unsubscribeCrosshairMove(crosshairHandler);
+      chart.remove();
+      chartRef.current = null;
+      valueSeriesRef.current = null;
+      signalSeriesRef.current = null;
+      histogramSeriesRef.current = null;
+      boundarySeriesRef.current = [];
+    };
+  }, [active, enabled.length, onHoverTime]);
+
+  useEffect(() => {
+    chartRef.current?.timeScale().applyOptions({ timeVisible, secondsVisible: false });
+  }, [timeVisible]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (active === 'macd') {
+      valueSeriesRef.current?.setData(lineData(indicators, (point) => point.macd));
+      signalSeriesRef.current?.setData(lineData(indicators, (point) => point.macdSignal));
+      histogramSeriesRef.current?.setData(
+        indicators.flatMap((point) =>
+          point.macdHistogram == null
+            ? []
+            : [{
+                time: point.time,
+                value: point.macdHistogram,
+                color: point.macdHistogram >= 0 ? 'rgba(239,68,68,0.55)' : 'rgba(59,130,246,0.55)',
+              }],
+        ),
+      );
+    } else {
+      const field: Exclude<LowerIndicatorKey, 'macd'> = active;
+      valueSeriesRef.current?.setData(lineData(indicators, (point) => point[field]));
+    }
+    for (const boundary of boundarySeriesRef.current) {
+      boundary.series.setData(
+        indicators.map((point) => ({ time: point.time, value: boundary.value })),
+      );
+    }
+    if (fittedSourceRef.current !== sourceKey) {
+      fittedSourceRef.current = sourceKey;
+      firstFitRef.current = false;
+    }
+    if (!firstFitRef.current && indicators.length > 0) {
+      chart.timeScale().fitContent();
+      firstFitRef.current = true;
+    }
+  }, [active, indicators, sourceKey]);
+
+  if (enabled.length === 0) return null;
+  return (
+    <div className="border-t border-card-border">
+      <div className="flex min-h-[38px] items-center gap-1 overflow-x-auto px-2 py-1.5">
+        {enabled.map((key) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setActive(key)}
+            className={cn(
+              'shrink-0 rounded-lg border px-2 py-1 text-[10px] font-black',
+              active === key
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-card-border bg-card',
+            )}
+          >
+            {LOWER_INDICATOR_LABEL[key]}
+          </button>
+        ))}
+      </div>
+      <div ref={containerRef} className="h-[160px] min-h-[160px] w-full" />
+    </div>
+  );
+});
+
 // ── 차트 렌더러 (chart-broadcast.tsx 스타일 재사용) ──
-function RelayChart({
+const RelayChart = memo(function RelayChart({
   candles,
   timeVisible,
   settings,
@@ -813,6 +1316,7 @@ function RelayChart({
   activeSignalId,
   plan,
   asset,
+  interval,
   tab,
   sourceKey,
   canLoadOlder,
@@ -827,6 +1331,7 @@ function RelayChart({
   activeSignalId: string | null;
   plan: AiPlan | null;
   asset: Asset;
+  interval: string;
   tab: Tab;
   sourceKey: string;
   canLoadOlder: boolean;
@@ -850,12 +1355,26 @@ function RelayChart({
     ma60: null,
     ma120: null,
   });
+  const emaSeriesRef = useRef<Record<'ema9' | 'ema20' | 'ema60', ISeriesApi<'Line'> | null>>({
+    ema9: null,
+    ema20: null,
+    ema60: null,
+  });
   const bollingerSeriesRef = useRef<{
     middle: ISeriesApi<'Line'> | null;
     upper: ISeriesApi<'Line'> | null;
     lower: ISeriesApi<'Line'> | null;
   }>({ middle: null, upper: null, lower: null });
+  const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const ichimokuSeriesRef = useRef<{
+    conversion: ISeriesApi<'Line'> | null;
+    base: ISeriesApi<'Line'> | null;
+    spanA: ISeriesApi<'Line'> | null;
+    spanB: ISeriesApi<'Line'> | null;
+    lagging: ISeriesApi<'Line'> | null;
+  }>({ conversion: null, base: null, spanA: null, spanB: null, lagging: null });
   const volumeMaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const patternSeriesRef = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
   const rsiSeriesRef = useRef<{
     value: ISeriesApi<'Line'> | null;
     overbought: ISeriesApi<'Line'> | null;
@@ -870,6 +1389,7 @@ function RelayChart({
   const savedRangeRef = useRef<LogicalRange | null>(null);
   const firstFitRef = useRef(false);
   const previousCandlesRef = useRef<CandlePoint[]>([]);
+  const previousChartTypeRef = useRef<ChartType | null>(null);
   const candlesLengthRef = useRef(candles.length);
   const loadOlderArmedRef = useRef(true);
   const viewingHistoryRef = useRef(false);
@@ -885,8 +1405,40 @@ function RelayChart({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const fallbackFullscreenRef = useRef(false);
   const fullscreenHistoryRef = useRef(false);
+  const indicatorSourceRef = useRef(sourceKey);
+  const [indicators, setIndicators] = useState<IndicatorPoint[]>([]);
 
-  const indicators = useMemo(() => calculateIndicators(candles), [candles]);
+  useEffect(() => {
+    if (indicatorSourceRef.current !== sourceKey) {
+      indicatorSourceRef.current = sourceKey;
+      setIndicators([]);
+    }
+    const timer = window.setTimeout(() => {
+      setIndicators(calculateIndicators(candles, interval));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [candles, interval, sourceKey]);
+  const lowerIndicators = useMemo(
+    () =>
+      ([
+        settings.rsi && 'rsi',
+        settings.macd && 'macd',
+        settings.atr && 'atr',
+        settings.cci && 'cci',
+        settings.obv && 'obv',
+        settings.williamsR && 'williamsR',
+        settings.roc && 'roc',
+      ].filter(Boolean) as LowerIndicatorKey[]),
+    [
+      settings.atr,
+      settings.cci,
+      settings.macd,
+      settings.obv,
+      settings.roc,
+      settings.rsi,
+      settings.williamsR,
+    ],
+  );
   const indicatorByTime = useMemo(
     () => new Map(indicators.map((point) => [Number(point.time), point])),
     [indicators],
@@ -948,7 +1500,7 @@ function RelayChart({
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: {
         borderVisible: false,
-        mode: priceScaleMode(scaleType),
+        mode: priceScaleMode('normal'),
         scaleMargins: { top: 0.08, bottom: 0.24 },
       },
       timeScale: { borderVisible: false, timeVisible, secondsVisible: false, rightOffset: 5, barSpacing: 7 },
@@ -957,25 +1509,22 @@ function RelayChart({
     });
     chartRef.current = chart;
 
-    if (chartType === 'candles') {
-      candleSeriesRef.current = chart.addCandlestickSeries({
-        upColor: '#ef4444',
-        downColor: '#3b82f6',
-        wickUpColor: '#ef4444',
-        wickDownColor: '#3b82f6',
-        borderUpColor: '#ef4444',
-        borderDownColor: '#3b82f6',
-        priceLineVisible: true,
-        lastValueVisible: true,
-      });
-    } else {
-      closeSeriesRef.current = chart.addLineSeries({
-        color: '#8b5cf6',
-        lineWidth: 2,
-        priceLineVisible: true,
-        lastValueVisible: true,
-      });
-    }
+    candleSeriesRef.current = chart.addCandlestickSeries({
+      upColor: '#ef4444',
+      downColor: '#3b82f6',
+      wickUpColor: '#ef4444',
+      wickDownColor: '#3b82f6',
+      borderUpColor: '#ef4444',
+      borderDownColor: '#3b82f6',
+      priceLineVisible: true,
+      lastValueVisible: true,
+    });
+    closeSeriesRef.current = chart.addLineSeries({
+      color: '#8b5cf6',
+      lineWidth: 2,
+      priceLineVisible: true,
+      lastValueVisible: true,
+    });
 
     volumeSeriesRef.current = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
@@ -991,10 +1540,29 @@ function RelayChart({
       ma60: chart.addLineSeries({ color: '#10b981', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
       ma120: chart.addLineSeries({ color: '#ec4899', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
     };
+    emaSeriesRef.current = {
+      ema9: chart.addLineSeries({ color: '#facc15', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+      ema20: chart.addLineSeries({ color: '#fb7185', lineWidth: 2, priceLineVisible: false, lastValueVisible: false }),
+      ema60: chart.addLineSeries({ color: '#34d399', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+    };
     bollingerSeriesRef.current = {
       middle: chart.addLineSeries({ color: '#64748b', lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }),
       upper: chart.addLineSeries({ color: '#06b6d4', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
       lower: chart.addLineSeries({ color: '#06b6d4', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+    };
+    vwapSeriesRef.current = chart.addLineSeries({
+      color: '#f97316',
+      lineWidth: 2,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    ichimokuSeriesRef.current = {
+      conversion: chart.addLineSeries({ color: '#ef4444', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+      base: chart.addLineSeries({ color: '#3b82f6', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+      spanA: chart.addLineSeries({ color: '#22c55e', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+      spanB: chart.addLineSeries({ color: '#f97316', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }),
+      lagging: chart.addLineSeries({ color: '#a855f7', lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false }),
     };
     volumeMaSeriesRef.current = chart.addLineSeries({
       color: '#eab308',
@@ -1057,11 +1625,28 @@ function RelayChart({
       closeSeriesRef.current = null;
       volumeSeriesRef.current = null;
       maSeriesRef.current = { ma5: null, ma20: null, ma60: null, ma120: null };
+      emaSeriesRef.current = { ema9: null, ema20: null, ema60: null };
       bollingerSeriesRef.current = { middle: null, upper: null, lower: null };
+      vwapSeriesRef.current = null;
+      ichimokuSeriesRef.current = { conversion: null, base: null, spanA: null, spanB: null, lagging: null };
       volumeMaSeriesRef.current = null;
+      patternSeriesRef.current.clear();
       priceLinesRef.current = [];
     };
-  }, [chartType, isFullscreen, scaleType, timeVisible]);
+  }, []);
+
+  useEffect(() => {
+    chartRef.current?.priceScale('right').applyOptions({
+      mode: priceScaleMode(scaleType),
+    });
+  }, [scaleType]);
+
+  useEffect(() => {
+    chartRef.current?.timeScale().applyOptions({
+      timeVisible,
+      secondsVisible: false,
+    });
+  }, [timeVisible]);
 
   useEffect(() => {
     const container = rsiContainerRef.current;
@@ -1157,18 +1742,13 @@ function RelayChart({
     const chart = chartRef.current;
     const volumeSeries = volumeSeriesRef.current;
     if (!chart || !volumeSeries || candles.length < 2) return;
-    const candleData = candles.map((row) => {
-      const pattern = signalAtCandle(signals, row);
-      const color = pattern ? PATTERN_STAGE_META[pattern.stage].color : null;
-      return {
-        time: row.time,
-        open: row.open,
-        high: row.high,
-        low: row.low,
-        close: row.close,
-        ...(color ? { color, borderColor: color, wickColor: color } : {}),
-      };
-    });
+    const candleData = candles.map((row) => ({
+      time: row.time,
+      open: row.open,
+      high: row.high,
+      low: row.low,
+      close: row.close,
+    }));
     const closeData = candles.map((row) => ({ time: row.time, value: row.close }));
     const volumeData = candles.map((row) => ({
       time: row.time,
@@ -1177,47 +1757,64 @@ function RelayChart({
     }));
     const previous = previousCandlesRef.current;
     const tailOnly =
+      previousChartTypeRef.current === chartType &&
       previous.length > 0 &&
       (candles.length === previous.length || candles.length === previous.length + 1) &&
       previous.slice(0, -1).every((row, index) => Number(row.time) === Number(candles[index]?.time));
     if (tailOnly) {
       const latest = candles.at(-1)!;
-      const latestPattern = signalAtCandle(signals, latest);
-      const latestColor = latestPattern ? PATTERN_STAGE_META[latestPattern.stage].color : null;
-      candleSeriesRef.current?.update({
-        time: latest.time,
-        open: latest.open,
-        high: latest.high,
-        low: latest.low,
-        close: latest.close,
-        ...(latestColor
-          ? { color: latestColor, borderColor: latestColor, wickColor: latestColor }
-          : {}),
-      });
-      closeSeriesRef.current?.update({ time: latest.time, value: latest.close });
+      if (chartType === 'candles') {
+        candleSeriesRef.current?.update({
+          time: latest.time,
+          open: latest.open,
+          high: latest.high,
+          low: latest.low,
+          close: latest.close,
+        });
+      } else {
+        closeSeriesRef.current?.update({ time: latest.time, value: latest.close });
+      }
       volumeSeries.update({
         time: latest.time,
         value: latest.volume,
         color: latest.close >= latest.open ? 'rgba(239,68,68,0.42)' : 'rgba(59,130,246,0.42)',
       });
     } else {
-      candleSeriesRef.current?.setData(candleData);
-      closeSeriesRef.current?.setData(closeData);
+      candleSeriesRef.current?.setData(chartType === 'candles' ? candleData : []);
+      closeSeriesRef.current?.setData(chartType === 'line' ? closeData : []);
       volumeSeries.setData(volumeData);
     }
     previousCandlesRef.current = candles;
+    previousChartTypeRef.current = chartType;
 
     maSeriesRef.current.ma5?.setData(settings.ma5 ? lineData(indicators, (point) => point.ma5) : []);
     maSeriesRef.current.ma20?.setData(settings.ma20 ? lineData(indicators, (point) => point.ma20) : []);
     maSeriesRef.current.ma60?.setData(settings.ma60 ? lineData(indicators, (point) => point.ma60) : []);
     maSeriesRef.current.ma120?.setData(settings.ma120 ? lineData(indicators, (point) => point.ma120) : []);
+    emaSeriesRef.current.ema9?.setData(settings.ema9 ? lineData(indicators, (point) => point.ema9) : []);
+    emaSeriesRef.current.ema20?.setData(settings.ema20 ? lineData(indicators, (point) => point.ema20) : []);
+    emaSeriesRef.current.ema60?.setData(settings.ema60 ? lineData(indicators, (point) => point.ema60) : []);
     bollingerSeriesRef.current.middle?.setData(settings.bollinger ? lineData(indicators, (point) => point.bollingerMiddle) : []);
     bollingerSeriesRef.current.upper?.setData(settings.bollinger ? lineData(indicators, (point) => point.bollingerUpper) : []);
     bollingerSeriesRef.current.lower?.setData(settings.bollinger ? lineData(indicators, (point) => point.bollingerLower) : []);
+    vwapSeriesRef.current?.setData(settings.vwap ? lineData(indicators, (point) => point.vwap) : []);
+    ichimokuSeriesRef.current.conversion?.setData(settings.ichimoku ? lineData(indicators, (point) => point.ichimokuConversion) : []);
+    ichimokuSeriesRef.current.base?.setData(settings.ichimoku ? lineData(indicators, (point) => point.ichimokuBase) : []);
+    ichimokuSeriesRef.current.spanA?.setData(settings.ichimoku ? lineData(indicators, (point) => point.ichimokuSpanA) : []);
+    ichimokuSeriesRef.current.spanB?.setData(settings.ichimoku ? lineData(indicators, (point) => point.ichimokuSpanB) : []);
+    ichimokuSeriesRef.current.lagging?.setData(settings.ichimoku ? lineData(indicators, (point) => point.ichimokuLagging) : []);
     volumeMaSeriesRef.current?.setData(settings.volumeMa20 ? lineData(indicators, (point) => point.volumeMa20) : []);
 
     if (!firstFitRef.current) {
-      chart.timeScale().fitContent();
+      const visibleCount = isFullscreen ? 120 : 72;
+      if (candles.length <= visibleCount) {
+        chart.timeScale().fitContent();
+      } else {
+        chart.timeScale().setVisibleLogicalRange({
+          from: Math.max(0, candles.length - visibleCount),
+          to: candles.length - 1 + 4,
+        });
+      }
       firstFitRef.current = true;
     } else if (viewingHistoryRef.current && savedRangeRef.current) {
       chart.timeScale().setVisibleLogicalRange(savedRangeRef.current);
@@ -1228,14 +1825,99 @@ function RelayChart({
     candles,
     chartType,
     indicators,
+    isFullscreen,
     settings.bollinger,
+    settings.ema20,
+    settings.ema60,
+    settings.ema9,
+    settings.ichimoku,
     settings.ma120,
     settings.ma20,
     settings.ma5,
     settings.ma60,
+    settings.vwap,
     settings.volumeMa20,
-    signals,
   ]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const desired = new Set<string>();
+    if (tab === 'live' && settings.highlight && candles.length >= 2) {
+      const patternSignals = dedupeSignalOccurrences(signals)
+        .filter((signal) => signal.kind === 'chart' || signal.kind === 'candle')
+        .sort(
+          (left, right) =>
+            (toEpochMilliseconds(left.occurredAt) ?? 0) -
+            (toEpochMilliseconds(right.occurredAt) ?? 0),
+        )
+        .slice(-40);
+      const chartHigh = Math.max(...candles.map((candle) => candle.high));
+      const chartLow = Math.min(...candles.map((candle) => candle.low));
+      const chartRange = Math.max(chartHigh - chartLow, Math.abs(chartLow) * 0.01, 1);
+
+      patternSignals.forEach((signal, signalIndex) => {
+        const from = toUnixSeconds(signal.overlay?.fromTime ?? signal.barTime);
+        const to = toUnixSeconds(signal.overlay?.toTime ?? signal.barTime);
+        if (from == null && to == null) return;
+        const startTime = Math.min(from ?? to!, to ?? from!);
+        const endTime = Math.max(from ?? to!, to ?? from!);
+        const startIndex = candles.reduce(
+          (nearest, candle, index) =>
+            Math.abs(Number(candle.time) - startTime) <
+            Math.abs(Number(candles[nearest]!.time) - startTime)
+              ? index
+              : nearest,
+          0,
+        );
+        const endIndex = candles.reduce(
+          (nearest, candle, index) =>
+            Math.abs(Number(candle.time) - endTime) <
+            Math.abs(Number(candles[nearest]!.time) - endTime)
+              ? index
+              : nearest,
+          startIndex,
+        );
+        const left = Math.min(startIndex, endIndex);
+        const right = Math.max(startIndex, endIndex);
+        if (left === right) return;
+        const key = signalOccurrenceKey(signal);
+        desired.add(key);
+        const meta = PATTERN_STAGE_META[signal.stage];
+        let line = patternSeriesRef.current.get(key);
+        if (!line) {
+          line = chart.addLineSeries({
+            color: meta.color,
+            lineWidth: 3,
+            lineStyle: signal.stage === 'START' ? LineStyle.Dashed : LineStyle.Solid,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            crosshairMarkerVisible: false,
+          });
+          patternSeriesRef.current.set(key, line);
+        } else {
+          line.applyOptions({
+            color: meta.color,
+            lineWidth: 3,
+            lineStyle: signal.stage === 'START' ? LineStyle.Dashed : LineStyle.Solid,
+          });
+        }
+        const regionLow = Math.min(...candles.slice(left, right + 1).map((candle) => candle.low));
+        const lane = signalIndex % 3;
+        const railPrice = regionLow - chartRange * (0.008 + lane * 0.006);
+        line.setData([
+          { time: candles[left]!.time, value: railPrice },
+          { time: candles[right]!.time, value: railPrice },
+        ]);
+      });
+    }
+
+    for (const [key, series] of patternSeriesRef.current) {
+      if (desired.has(key)) continue;
+      chart.removeSeries(series);
+      patternSeriesRef.current.delete(key);
+    }
+  }, [candles, chartType, settings.highlight, signals, tab]);
 
   useEffect(() => {
     if (!settings.rsi || !rsiSeriesRef.current.value) return;
@@ -1268,11 +1950,56 @@ function RelayChart({
   }, [indicators, settings.macd]);
 
   useEffect(() => {
-    const series = candleSeriesRef.current ?? closeSeriesRef.current;
+    const series =
+      chartType === 'candles'
+        ? candleSeriesRef.current
+        : closeSeriesRef.current;
     if (!series) return;
     for (const line of priceLinesRef.current) series.removePriceLine(line);
     priceLinesRef.current = [];
     const markers: SeriesMarker<Time>[] = [];
+
+    if (tab === 'live' && settings.highlight && candles.length > 0) {
+      const patternSignals = dedupeSignalOccurrences(signals)
+        .filter((signal) => signal.kind === 'chart' || signal.kind === 'candle')
+        .sort(
+          (left, right) =>
+            (toEpochMilliseconds(left.occurredAt) ?? 0) -
+            (toEpochMilliseconds(right.occurredAt) ?? 0),
+        )
+        .slice(-40);
+      const nearestTime = (target: number): Time =>
+        candles.reduce((nearest, candle) =>
+          Math.abs(Number(candle.time) - target) <
+          Math.abs(Number(nearest.time) - target)
+            ? candle
+            : nearest,
+        ).time as Time;
+      for (const signal of patternSignals) {
+        const from = toUnixSeconds(signal.overlay?.fromTime ?? signal.barTime);
+        const to = toUnixSeconds(signal.overlay?.toTime ?? signal.barTime);
+        if (from == null && to == null) continue;
+        const start = nearestTime(Math.min(from ?? to!, to ?? from!));
+        const end = nearestTime(Math.max(from ?? to!, to ?? from!));
+        const meta = PATTERN_STAGE_META[signal.stage];
+        markers.push({
+          time: start,
+          position: 'belowBar',
+          color: meta.color,
+          shape: 'circle',
+          text: Number(start) === Number(end) ? `${signal.name} · ${meta.label}` : '시작',
+        });
+        if (Number(start) !== Number(end)) {
+          markers.push({
+            time: end,
+            position: 'belowBar',
+            color: meta.color,
+            shape: signal.stage === 'INVALIDATED' ? 'arrowDown' : 'square',
+            text: meta.label,
+          });
+        }
+      }
+    }
 
     if (tab === 'ai' && settings.ai && plan) {
       const candidates: Array<{ price: number | null; color: string; title: string; on: boolean }> = [
@@ -1360,7 +2087,9 @@ function RelayChart({
         });
       }
     }
-    series.setMarkers(markers);
+    series.setMarkers(
+      markers.sort((left, right) => Number(left.time) - Number(right.time)),
+    );
   }, [activeSignalId, candles, chartType, plan, settings, signals, tab]);
 
   useEffect(() => {
@@ -1506,7 +2235,7 @@ function RelayChart({
         </button>
       </div>
 
-      <div className="grid h-[236px] min-h-[236px] max-h-[236px] grid-cols-2 auto-rows-[18px] gap-x-3 gap-y-1 overflow-hidden border-b border-card-border px-2 py-2 font-mono text-[10px] font-bold tabular-nums sm:h-[140px] sm:min-h-[140px] sm:max-h-[140px] sm:grid-cols-4">
+      <div className="grid h-[236px] min-h-[236px] max-h-[236px] grid-cols-2 auto-rows-[18px] gap-x-3 gap-y-1 overflow-y-auto border-b border-card-border px-2 py-2 font-mono text-[10px] font-bold tabular-nums sm:h-[140px] sm:min-h-[140px] sm:max-h-[140px] sm:grid-cols-4">
         <span className="min-w-0 truncate whitespace-nowrap">시간 {selectedCandle ? formatCandleTime(selectedCandle.time) : '-'}</span>
         <span className="min-w-0 truncate whitespace-nowrap">시가 {selectedCandle ? formatPrice(selectedCandle.open, asset) : '-'}</span>
         <span className="min-w-0 truncate whitespace-nowrap">고가 {selectedCandle ? formatPrice(selectedCandle.high, asset) : '-'}</span>
@@ -1519,18 +2248,32 @@ function RelayChart({
             ? `${(((selectedCandle.close - selectedCandle.open) / selectedCandle.open) * 100).toFixed(2)}%`
             : '-'}
         </span>
-        <span className="min-w-0 truncate whitespace-nowrap">MA5 {indicatorText(selectedIndicator?.ma5 ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">MA20 {indicatorText(selectedIndicator?.ma20 ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">MA60 {indicatorText(selectedIndicator?.ma60 ?? null)}</span>
-        <span className="min-w-0 truncate whitespace-nowrap">MA120 {indicatorText(selectedIndicator?.ma120 ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">SMA5 {indicatorText(selectedIndicator?.ma5 ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">SMA20 {indicatorText(selectedIndicator?.ma20 ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">SMA60 {indicatorText(selectedIndicator?.ma60 ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">SMA120 {indicatorText(selectedIndicator?.ma120 ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">EMA9 {indicatorText(selectedIndicator?.ema9 ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">EMA20 {indicatorText(selectedIndicator?.ema20 ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">EMA60 {indicatorText(selectedIndicator?.ema60 ?? null)}</span>
         <span className="min-w-0 truncate whitespace-nowrap">BB 중앙 {indicatorText(selectedIndicator?.bollingerMiddle ?? null)}</span>
         <span className="min-w-0 truncate whitespace-nowrap">BB 상단 {indicatorText(selectedIndicator?.bollingerUpper ?? null)}</span>
         <span className="min-w-0 truncate whitespace-nowrap">BB 하단 {indicatorText(selectedIndicator?.bollingerLower ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">VWAP {indicatorText(selectedIndicator?.vwap ?? null)}</span>
         <span className="min-w-0 truncate whitespace-nowrap">거래량 MA20 {indicatorText(selectedIndicator?.volumeMa20 ?? null, 4)}</span>
         <span className="min-w-0 truncate whitespace-nowrap">RSI {indicatorText(selectedIndicator?.rsi ?? null)}</span>
         <span className="min-w-0 truncate whitespace-nowrap">MACD {indicatorText(selectedIndicator?.macd ?? null, 4)}</span>
         <span className="min-w-0 truncate whitespace-nowrap">Signal {indicatorText(selectedIndicator?.macdSignal ?? null, 4)}</span>
         <span className="min-w-0 truncate whitespace-nowrap">Histogram {indicatorText(selectedIndicator?.macdHistogram ?? null, 4)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">ATR {indicatorText(selectedIndicator?.atr ?? null, 4)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">CCI {indicatorText(selectedIndicator?.cci ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">OBV {indicatorText(selectedIndicator?.obv ?? null, 4)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">Williams %R {indicatorText(selectedIndicator?.williamsR ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">ROC {indicatorText(selectedIndicator?.roc ?? null, 4)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">일목 전환 {indicatorText(selectedIndicator?.ichimokuConversion ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">일목 기준 {indicatorText(selectedIndicator?.ichimokuBase ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">선행 A {indicatorText(selectedIndicator?.ichimokuSpanA ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">선행 B {indicatorText(selectedIndicator?.ichimokuSpanB ?? null)}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">후행 {indicatorText(selectedIndicator?.ichimokuLagging ?? null)}</span>
       </div>
 
       <div className="flex min-h-[38px] flex-wrap content-center gap-2 overflow-hidden border-b border-card-border px-2 py-1.5">
@@ -1540,31 +2283,20 @@ function RelayChart({
             {meta.label}
           </span>
         ))}
-        <span className="text-[9px] font-bold text-muted-foreground">색칠된 봉을 누르면 신호 상세가 열립니다.</span>
+        <span className="text-[9px] font-bold text-muted-foreground">마커·밑줄 구간을 누르면 신호 상세가 열립니다.</span>
       </div>
 
       <div
         ref={containerRef}
         className={cn('w-full', isFullscreen ? 'h-[55vh] min-h-[400px]' : 'h-[360px] min-h-[340px]')}
       />
-      {settings.rsi && (
-        <div className="border-t border-card-border">
-          <div className="flex items-center justify-between px-2 pt-1 text-[10px] font-black">
-            <span>RSI(14)</span>
-            {indicators.at(-1)?.rsi == null && <span className="text-muted-foreground">산출 불가 · 캔들 15개 이상 필요</span>}
-          </div>
-          <div ref={rsiContainerRef} className="h-[150px] w-full min-h-[145px]" />
-        </div>
-      )}
-      {settings.macd && (
-        <div className="border-t border-card-border">
-          <div className="flex items-center justify-between px-2 pt-1 text-[10px] font-black">
-            <span>MACD(12, 26, 9)</span>
-            {indicators.at(-1)?.macdSignal == null && <span className="text-muted-foreground">산출 불가 · 캔들 34개 이상 필요</span>}
-          </div>
-          <div ref={macdContainerRef} className="h-[150px] w-full min-h-[145px]" />
-        </div>
-      )}
+      <LowerIndicatorPanel
+        indicators={indicators}
+        enabled={lowerIndicators}
+        timeVisible={timeVisible}
+        sourceKey={sourceKey}
+        onHoverTime={setHoverTime}
+      />
 
       {(showLatest || isLoadingOlder) && (
         <div className="pointer-events-none sticky bottom-3 flex justify-center px-3">
@@ -1590,7 +2322,7 @@ function RelayChart({
       )}
     </div>
   );
-}
+});
 
 export default function ChartRelayPage() {
   const [location, navigate] = useLocation();
@@ -1637,8 +2369,16 @@ export default function ChartRelayPage() {
   const [tab, setTab] = useState<Tab>(initialRoute.tab);
   const [assetMenu, setAssetMenu] =
     useState<'stock' | 'coin' | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsPanel, setSettingsPanel] = useState<'candle' | 'indicator' | 'signal' | null>(null);
   const [settings, setSettings] = useState<ChartSettings>(() => loadSettings());
+  const [draftSettings, setDraftSettings] = useState<ChartSettings>(() => loadSettings());
+  const [draftInterval, setDraftInterval] = useState<string>(initialRoute.interval);
+  const [disabledPatternNames, setDisabledPatternNames] = useState<Set<string>>(
+    () => loadDisabledPatterns(),
+  );
+  const [draftDisabledPatternNames, setDraftDisabledPatternNames] = useState<Set<string>>(
+    () => loadDisabledPatterns(),
+  );
   const [activeSignalId, setActiveSignalId] = useState<string | null>(null);
   const [modalSignal, setModalSignal] = useState<ChartSignal | null>(null);
   const [olderCandles, setOlderCandles] = useState<CandlePoint[]>([]);
@@ -1665,6 +2405,14 @@ export default function ChartRelayPage() {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   }, [settings]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(
+      PATTERN_FILTER_KEY,
+      JSON.stringify([...disabledPatternNames]),
+    );
+  }, [disabledPatternNames]);
 
   useEffect(() => {
     setOlderCandles([]);
@@ -1767,7 +2515,7 @@ export default function ChartRelayPage() {
       const normalizedSymbol = symbol.trim().toUpperCase();
       const payload = await apiGet<AnyObj>(
         candleUrl(asset, normalizedSymbol, interval),
-        { timeoutMs: 90_000 },
+        { timeoutMs: 20_000 },
       );
 
       if (extractCandleRows(payload).length < 2) {
@@ -1781,10 +2529,12 @@ export default function ChartRelayPage() {
     refetchIntervalInBackground: true,
     refetchOnMount: 'always',
     refetchOnReconnect: true,
-    retry: 1,
-    retryDelay: 1_500,
+    retry: 0,
     initialData: () => readCachedCandles(asset, symbol, interval),
   });
+  const hasInitialCandleData =
+    hasMatchingRealtimeSnapshot ||
+    extractCandleRows(candleQuery.data ?? {}).length >= 2;
 
   const signalsQuery = useQuery({
     queryKey: signalsQueryKey,
@@ -1792,7 +2542,12 @@ export default function ChartRelayPage() {
       apiGet<AnyObj>(
         `/market/chart-signals?asset=${contract.assetParam}${contract.coinMarket ? `&coinMarket=${contract.coinMarket}` : ''}&symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`,
       ),
-    enabled: Boolean(symbol) && !futuresLocked && tab === 'live' && useRestFallback,
+    enabled:
+      Boolean(symbol) &&
+      !futuresLocked &&
+      tab === 'live' &&
+      useRestFallback &&
+      hasInitialCandleData,
     refetchInterval: useRestFallback ? 30_000 : false,
     refetchIntervalInBackground: true,
     retry: 1,
@@ -1804,7 +2559,12 @@ export default function ChartRelayPage() {
       apiGet<AiPlan>(
         `/market/ai-chart-plan?asset=${contract.assetParam}${contract.coinMarket ? `&coinMarket=${contract.coinMarket}` : ''}&symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`,
       ),
-    enabled: Boolean(symbol) && !futuresLocked && tab === 'ai' && useRestFallback,
+    enabled:
+      Boolean(symbol) &&
+      !futuresLocked &&
+      tab === 'ai' &&
+      useRestFallback &&
+      hasInitialCandleData,
     refetchInterval: useRestFallback ? 30_000 : false,
     refetchIntervalInBackground: true,
     retry: 1,
@@ -1962,8 +2722,12 @@ export default function ChartRelayPage() {
         mapped.push(signal);
       }
     }
-    return mapped;
-  }, [candles, signalsQuery.data, settings]);
+    return mapped.filter(
+      (signal) =>
+        (signal.kind !== 'chart' && signal.kind !== 'candle') ||
+        !disabledPatternNames.has(normalizeSignalName(signal.name)),
+    );
+  }, [candles, disabledPatternNames, signalsQuery.data, settings]);
 
   useEffect(() => {
     if (!settings.liveSignal) {
@@ -2109,6 +2873,31 @@ export default function ChartRelayPage() {
   ]);
   const timeVisible = /m|H/.test(interval);
   const intervalList = intervalsFor(asset);
+  const availablePatternNames = useMemo(() => {
+    const names = new Map(
+      DEFAULT_PATTERN_NAMES.map((name) => [normalizeSignalName(name), name]),
+    );
+    const raw = Array.isArray(signalsQuery.data?.signals)
+      ? (signalsQuery.data!.signals as AnyObj[])
+      : [];
+    raw.forEach((row) => {
+      if (row?.kind !== 'chart' && row?.kind !== 'candle') return;
+      const name = String(row?.name ?? '').trim();
+      if (name) names.set(normalizeSignalName(name), name);
+    });
+    signals.forEach((signal) => {
+      if (signal.kind === 'chart' || signal.kind === 'candle') {
+        names.set(normalizeSignalName(signal.name), signal.name);
+      }
+    });
+    return [...names.values()].sort((left, right) => left.localeCompare(right, 'ko'));
+  }, [signals, signalsQuery.data]);
+  const openSettingsPanel = (panel: 'candle' | 'indicator' | 'signal') => {
+    setDraftSettings(settings);
+    setDraftInterval(interval);
+    setDraftDisabledPatternNames(new Set(disabledPatternNames));
+    setSettingsPanel(panel);
+  };
   const isCoin = asset === 'coinSpot' || asset === 'coinFutures';
   const latestCandle = candles[candles.length - 1] ?? null;
   const previousCandle = candles[candles.length - 2] ?? null;
@@ -2155,6 +2944,13 @@ export default function ChartRelayPage() {
     setAssetMenu(null);
     setAsset(next);
   };
+  const requestLoadOlder = useCallback(() => {
+    void loadOlder();
+  }, [loadOlder]);
+  const selectSignal = useCallback((signal: ChartSignal) => {
+    setActiveSignalId(signal.id);
+    setModalSignal(signal);
+  }, []);
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain bg-background">
@@ -2170,7 +2966,7 @@ export default function ChartRelayPage() {
           </button>
           <div className="text-center">
             <h1 className="text-lg font-extrabold">차트중계</h1>
-            <p className="text-[11px] font-bold text-muted-foreground">실시간 차트·AI 생중계 (표시 전용)</p>
+            <p className="text-[11px] font-bold text-muted-foreground">실시간 차트·신호 분석 (표시 전용)</p>
           </div>
           <button
             type="button"
@@ -2362,31 +3158,21 @@ export default function ChartRelayPage() {
             }
             className="h-10 rounded-xl border border-card-border bg-card px-2 text-xs font-black"
           >
-            생중계 보기
+            분석 화면 보기
           </button>
         </div>
 
-        {/* 시간봉 선택 */}
-        <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1">
-          {intervalList.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => {
-                setIntervalState(item.key);
-                setActiveSignalId(null);
-              }}
-              className={cn(
-                'shrink-0 rounded-xl border px-3 py-2 text-xs font-extrabold',
-                interval === item.key
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-card-border bg-card text-muted-foreground',
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+        {/* 현재 봉 주기 */}
+        <button
+          type="button"
+          onClick={() => openSettingsPanel('candle')}
+          className="mt-3 flex w-full items-center justify-between rounded-2xl border border-card-border bg-card px-3 py-2.5 text-left"
+        >
+          <span className="text-[11px] font-bold text-muted-foreground">현재 봉 주기</span>
+          <span className="rounded-full bg-primary px-3 py-1 text-xs font-black text-primary-foreground">
+            {intervalList.find((item) => item.key === interval)?.label ?? interval}
+          </span>
+        </button>
 
         {/* 탭 */}
         <div className="mt-3 grid grid-cols-2 gap-2">
@@ -2416,61 +3202,28 @@ export default function ChartRelayPage() {
           </button>
         </div>
 
-        {/* 차트 설정 토글 패널 */}
-        <button
-          type="button"
-          onClick={() => setSettingsOpen((current) => !current)}
-          className="mt-3 flex w-full items-center justify-between rounded-2xl border border-card-border bg-card px-3 py-2.5 text-left"
-        >
-          <span className="inline-flex items-center gap-2 text-xs font-extrabold">
+        {/* 차트 설정 팝업 */}
+        <div className="mt-3 rounded-2xl border border-card-border bg-card p-3">
+          <p className="inline-flex items-center gap-2 text-xs font-extrabold">
             <Settings2 className="h-4 w-4 text-primary" /> 차트 설정 · 표시 항목
-          </span>
-        </button>
-        {settingsOpen && (
-          <div className="mt-2 rounded-2xl border border-card-border bg-card p-3">
-            <div className="flex flex-wrap gap-2">
-              {SETTING_LABELS.map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => setSettings((current) => ({ ...current, [item.key]: !current[item.key] }))}
-                  className={cn(
-                    'rounded-full border px-3 py-1.5 text-[11px] font-extrabold',
-                    settings[item.key]
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-card-border bg-background text-muted-foreground',
-                  )}
-                >
-                  {settings[item.key] ? '✓ ' : '+ '}
-                  {item.label}
-                </button>
-              ))}
-            </div>
-            <div className="mt-3 grid grid-cols-3 gap-2 border-t border-card-border pt-3">
+          </p>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {[
+              { key: 'candle' as const, label: '봉차트' },
+              { key: 'indicator' as const, label: '지표차트' },
+              { key: 'signal' as const, label: '신호차트' },
+            ].map((item) => (
               <button
+                key={item.key}
                 type="button"
-                onClick={() => setSettings(settingsWithValue(true))}
-                className="rounded-xl border border-card-border py-2 text-[10px] font-black"
+                onClick={() => openSettingsPanel(item.key)}
+                className="rounded-xl border border-card-border bg-background px-2 py-3 text-xs font-black"
               >
-                전체 켜기
+                {item.label}
               </button>
-              <button
-                type="button"
-                onClick={() => setSettings(settingsWithValue(false))}
-                className="rounded-xl border border-card-border py-2 text-[10px] font-black"
-              >
-                전체 끄기
-              </button>
-              <button
-                type="button"
-                onClick={() => setSettings(DEFAULT_SETTINGS)}
-                className="rounded-xl border border-card-border py-2 text-[10px] font-black"
-              >
-                기본값 복원
-              </button>
-            </div>
+            ))}
           </div>
-        )}
+        </div>
 
         {/* 본문 */}
         {futuresLocked ? (
@@ -2528,15 +3281,13 @@ export default function ChartRelayPage() {
                     activeSignalId={activeSignalId}
                     plan={plan}
                     asset={asset}
+                    interval={interval}
                     tab={tab}
                     sourceKey={sourceKey}
                     canLoadOlder={Boolean(historyCursor)}
                     isLoadingOlder={isLoadingOlder}
-                    onLoadOlder={() => void loadOlder()}
-                    onSignalSelect={(signal) => {
-                      setActiveSignalId(signal.id);
-                      setModalSignal(signal);
-                    }}
+                    onLoadOlder={requestLoadOlder}
+                    onSignalSelect={selectSignal}
                   />
                 )}
               </div>
@@ -2553,10 +3304,7 @@ export default function ChartRelayPage() {
                 query={signalsQuery}
                 signals={signals}
                 activeSignalId={activeSignalId}
-                onSelect={(signal) => {
-                  setActiveSignalId(signal.id);
-                  setModalSignal(signal);
-                }}
+                onSelect={selectSignal}
                 enabled={settings.liveSignal}
               />
             ) : (
@@ -2583,8 +3331,252 @@ export default function ChartRelayPage() {
           onClose={() => setModalSignal(null)}
         />
       )}
+      {settingsPanel && (
+        <ChartSettingsModal
+          panel={settingsPanel}
+          settings={draftSettings}
+          interval={draftInterval}
+          patternNames={availablePatternNames}
+          disabledPatternNames={draftDisabledPatternNames}
+          onSettingsChange={setDraftSettings}
+          onIntervalChange={setDraftInterval}
+          onDisabledPatternsChange={setDraftDisabledPatternNames}
+          onClose={() => setSettingsPanel(null)}
+          onApply={() => {
+            setSettings(draftSettings);
+            setDisabledPatternNames(new Set(draftDisabledPatternNames));
+            if (draftInterval !== interval) {
+              setIntervalState(draftInterval);
+              setActiveSignalId(null);
+            }
+            setSettingsPanel(null);
+          }}
+        />
+      )}
 
       <BottomNav />
+    </div>
+  );
+}
+
+function ChartSettingsModal({
+  panel,
+  settings,
+  interval,
+  patternNames,
+  disabledPatternNames,
+  onSettingsChange,
+  onIntervalChange,
+  onDisabledPatternsChange,
+  onClose,
+  onApply,
+}: {
+  panel: 'candle' | 'indicator' | 'signal';
+  settings: ChartSettings;
+  interval: string;
+  patternNames: string[];
+  disabledPatternNames: Set<string>;
+  onSettingsChange: (settings: ChartSettings) => void;
+  onIntervalChange: (interval: string) => void;
+  onDisabledPatternsChange: (patterns: Set<string>) => void;
+  onClose: () => void;
+  onApply: () => void;
+}) {
+  const title =
+    panel === 'candle' ? '봉차트 설정' : panel === 'indicator' ? '지표차트 설정' : '신호차트 설정';
+  const toggleSetting = (key: keyof ChartSettings) => {
+    onSettingsChange({ ...settings, [key]: !settings[key] });
+  };
+  const togglePattern = (name: string) => {
+    const normalized = normalizeSignalName(name);
+    const next = new Set(disabledPatternNames);
+    if (next.has(normalized)) next.delete(normalized);
+    else next.add(normalized);
+    onDisabledPatternsChange(next);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[95] flex items-end justify-center bg-black/60 p-3" onClick={onClose}>
+      <div
+        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-card-border bg-background p-4"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-base font-black">{title}</h3>
+          <button type="button" onClick={onClose} className="rounded-full border border-card-border p-2" aria-label="닫기">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {panel === 'candle' && (
+          <div className="mt-3 space-y-4">
+            {CANDLE_INTERVAL_GROUPS.map((group) => (
+              <div key={group.label}>
+                <p className="mb-2 text-[11px] font-black text-muted-foreground">{group.label}</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {group.items.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => onIntervalChange(item.key)}
+                      className={cn(
+                        'rounded-xl border px-2 py-2.5 text-[11px] font-black',
+                        interval === item.key
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-card-border bg-card',
+                      )}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <p className="rounded-xl bg-secondary px-3 py-2 text-[10px] font-bold text-muted-foreground">
+              봉 주기는 하나만 선택합니다. 실제 휴장·무거래 구간에는 가짜 봉을 만들지 않습니다.
+            </p>
+          </div>
+        )}
+
+        {panel === 'indicator' && (
+          <div className="mt-3">
+            <p className="mb-2 text-[10px] font-bold text-muted-foreground">
+              여러 지표를 동시에 선택할 수 있습니다. 하단 지표는 탭으로 표시됩니다.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {INDICATOR_SETTING_KEYS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => toggleSetting(item.key)}
+                  className={cn(
+                    'rounded-xl border px-3 py-2.5 text-left text-[11px] font-black',
+                    settings[item.key]
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-card-border bg-card text-muted-foreground',
+                  )}
+                >
+                  {settings[item.key] ? '✓ ' : '□ '}{item.label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const next = { ...settings };
+                  INDICATOR_SETTING_KEYS.forEach((item) => { next[item.key] = true; });
+                  onSettingsChange(next);
+                }}
+                className="rounded-xl border border-card-border py-2 text-[10px] font-black"
+              >
+                전체 선택
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = { ...settings };
+                  INDICATOR_SETTING_KEYS.forEach((item) => { next[item.key] = false; });
+                  onSettingsChange(next);
+                }}
+                className="rounded-xl border border-card-border py-2 text-[10px] font-black"
+              >
+                전체 해제
+              </button>
+              <button
+                type="button"
+                onClick={() => onSettingsChange({ ...settings, ...DEFAULT_SETTINGS })}
+                className="rounded-xl border border-card-border py-2 text-[10px] font-black"
+              >
+                추천 설정
+              </button>
+            </div>
+          </div>
+        )}
+
+        {panel === 'signal' && (
+          <div className="mt-3 space-y-4">
+            <div>
+              <p className="mb-2 text-[11px] font-black text-muted-foreground">신호 표시</p>
+              <div className="grid grid-cols-2 gap-2">
+                {SIGNAL_SETTING_KEYS.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => toggleSetting(item.key)}
+                    className={cn(
+                      'rounded-xl border px-3 py-2.5 text-left text-[11px] font-black',
+                      settings[item.key]
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-card-border bg-card text-muted-foreground',
+                    )}
+                  >
+                    {settings[item.key] ? '✓ ' : '□ '}{item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-[11px] font-black text-muted-foreground">캔들형·차트형 패턴</p>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onDisabledPatternsChange(new Set())}
+                    className="rounded-lg border border-card-border px-2 py-1 text-[9px] font-black"
+                  >
+                    전체 선택
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDisabledPatternsChange(new Set(patternNames.map(normalizeSignalName)))}
+                    className="rounded-lg border border-card-border px-2 py-1 text-[9px] font-black"
+                  >
+                    전체 해제
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {patternNames.map((name) => {
+                  const selected = !disabledPatternNames.has(normalizeSignalName(name));
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => togglePattern(name)}
+                      className={cn(
+                        'rounded-xl border px-3 py-2.5 text-left text-[11px] font-black',
+                        selected
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-card-border bg-card text-muted-foreground',
+                      )}
+                    >
+                      {selected ? '✓ ' : '□ '}{name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="sticky bottom-0 mt-4 grid grid-cols-2 gap-2 border-t border-card-border bg-background pt-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-card-border py-3 text-xs font-black"
+          >
+            취소
+          </button>
+          <button
+            type="button"
+            onClick={onApply}
+            className="rounded-xl bg-primary py-3 text-xs font-black text-primary-foreground"
+          >
+            적용
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2605,142 +3597,336 @@ function LiveSignalsPanel({
   const [importanceFilter, setImportanceFilter] = useState<'all' | SignalImportance>('all');
   const [kindFilter, setKindFilter] = useState<'all' | SignalKind>('all');
   const [sortMode, setSortMode] = useState<'latest' | 'importance'>('latest');
-  const visibleSignals = useMemo(() => {
-    const filtered = signals.filter((signal) => {
+  const [historyGroupKey, setHistoryGroupKey] = useState<string | null>(null);
+  const occurrences = useMemo(() => dedupeSignalOccurrences(signals), [signals]);
+  const groups = useMemo(() => {
+    const grouped = new Map<string, { key: string; latest: ChartSignal; history: ChartSignal[] }>();
+    for (const signal of occurrences) {
+      const key = `${signal.kind}:${normalizeSignalName(signal.name)}`;
+      const group = grouped.get(key);
+      if (!group) {
+        grouped.set(key, { key, latest: signal, history: [signal] });
+        continue;
+      }
+      group.history.push(signal);
+      if (
+        (toEpochMilliseconds(signal.occurredAt) ?? 0) >
+        (toEpochMilliseconds(group.latest.occurredAt) ?? 0)
+      ) {
+        group.latest = signal;
+      }
+    }
+    for (const group of grouped.values()) {
+      group.history.sort(
+        (left, right) =>
+          (toEpochMilliseconds(right.occurredAt) ?? 0) -
+          (toEpochMilliseconds(left.occurredAt) ?? 0),
+      );
+    }
+    return [...grouped.values()];
+  }, [occurrences]);
+  const visibleGroups = useMemo(() => {
+    const filtered = groups.filter(({ latest: signal }) => {
       if (importanceFilter !== 'all' && signalImportance(signal.importance) !== importanceFilter) return false;
       if (kindFilter !== 'all' && signal.kind !== kindFilter) return false;
       return true;
     });
     return [...filtered].sort((left, right) => {
       if (sortMode === 'importance') {
-        const rank = importanceRank(right.importance) - importanceRank(left.importance);
+        const rank =
+          importanceRank(right.latest.importance) -
+          importanceRank(left.latest.importance);
         if (rank !== 0) return rank;
       }
-      return (toEpochMilliseconds(right.occurredAt) ?? 0) - (toEpochMilliseconds(left.occurredAt) ?? 0);
+      return (
+        (toEpochMilliseconds(right.latest.occurredAt) ?? 0) -
+        (toEpochMilliseconds(left.latest.occurredAt) ?? 0)
+      );
     });
-  }, [importanceFilter, kindFilter, signals, sortMode]);
+  }, [groups, importanceFilter, kindFilter, sortMode]);
+  const historyGroup = groups.find((group) => group.key === historyGroupKey) ?? null;
 
   return (
-    <section className="mt-3">
-      <h2 className="text-sm font-extrabold">실시간 신호</h2>
-      <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">
-        조건을 만족하는 활성 신호만 표시됩니다. 신호를 누르면 차트 강조와 설명이 열립니다.
-      </p>
-      <div className="mt-2 grid grid-cols-3 gap-2">
-        <select
-          value={importanceFilter}
-          onChange={(event) => {
-            const value = event.target.value;
-            setImportanceFilter(
-              value === 'high' || value === 'medium' || value === 'low' ? value : 'all',
-            );
-          }}
-          aria-label="신호 중요도 필터"
-          className="min-w-0 rounded-xl border border-card-border bg-card px-2 py-2 text-[10px] font-black"
-        >
-          <option value="all">중요도 전체</option>
-          <option value="high">높음</option>
-          <option value="medium">중간</option>
-          <option value="low">낮음</option>
-        </select>
-        <select
-          value={kindFilter}
-          onChange={(event) => {
-            const value = event.target.value;
-            setKindFilter(
-              value === 'chart' || value === 'candle' || value === 'volume' || value === 'indicator'
-                ? value
-                : 'all',
-            );
-          }}
-          aria-label="신호 종류 필터"
-          className="min-w-0 rounded-xl border border-card-border bg-card px-2 py-2 text-[10px] font-black"
-        >
-          <option value="all">종류 전체</option>
-          <option value="chart">차트 패턴</option>
-          <option value="candle">캔들 패턴</option>
-          <option value="volume">거래량</option>
-          <option value="indicator">기술지표</option>
-        </select>
-        <select
-          value={sortMode}
-          onChange={(event) => setSortMode(event.target.value === 'importance' ? 'importance' : 'latest')}
-          aria-label="신호 정렬"
-          className="min-w-0 rounded-xl border border-card-border bg-card px-2 py-2 text-[10px] font-black"
-        >
-          <option value="latest">최신순</option>
-          <option value="importance">중요도순</option>
-        </select>
-      </div>
-      <div className="mt-2 space-y-2">
-        {!enabled ? (
-          <StateBox>설정에서 실시간 신호가 꺼져 있습니다.</StateBox>
-        ) : query.isLoading ? (
-          <StateBox>신호를 불러오는 중입니다.</StateBox>
-        ) : query.isError ? (
-          <StateBox error>데이터를 불러오지 못했습니다.</StateBox>
-        ) : signals.length === 0 ? (
-          <StateBox>현재 활성화된 신호가 없습니다.</StateBox>
-        ) : visibleSignals.length === 0 ? (
-          <StateBox>선택한 필터에 맞는 신호가 없습니다.</StateBox>
-        ) : (
-          <div className="relative ml-2 border-l-2 border-card-border pl-4">
-            {visibleSignals.map((signal) => {
-              const importance = signalImportance(signal.importance);
-              return (
-                <button
-                  key={signal.id}
-                  type="button"
-                  onClick={() => onSelect(signal)}
-                  className={cn(
-                    'relative mb-2 flex w-full items-center justify-between gap-3 rounded-2xl border p-3 text-left last:mb-0',
-                    activeSignalId === signal.id ? 'border-primary bg-primary/5' : 'border-card-border bg-card',
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'absolute -left-[23px] top-4 h-3 w-3 rounded-full border-2 border-background',
-                      importance === 'high'
-                        ? 'bg-destructive'
-                        : importance === 'medium'
-                          ? 'bg-warning'
-                          : 'bg-muted-foreground',
-                    )}
-                  />
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-1">
-                      <p className="truncate text-sm font-black">{signal.name}</p>
-                      <span
-                        className={cn(
-                          'rounded-full px-1.5 py-0.5 text-[9px] font-black',
-                          importance === 'high'
-                            ? 'bg-destructive/10 text-destructive'
-                            : importance === 'medium'
-                              ? 'bg-warning/10 text-warning'
-                              : 'bg-secondary text-muted-foreground',
-                        )}
-                      >
-                        {importance === 'high' ? '높음' : importance === 'medium' ? '중간' : '낮음'}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
-                      {signalKindLabel(signal.kind)}
-                      {signal.occurredAt ? ` · ${formatTime(signal.occurredAt)}` : ''}
-                    </p>
-                    {signal.meaningHere && (
-                      <p className="mt-1 line-clamp-2 text-[10px] font-bold leading-4 text-foreground">
-                        {signal.meaningHere}
-                      </p>
-                    )}
-                  </div>
-                  <span className="shrink-0 text-[10px] font-black text-muted-foreground">자세히</span>
-                </button>
+    <>
+      <section className="mt-3">
+        <h2 className="text-sm font-extrabold">실시간 신호</h2>
+        <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">
+          같은 신호는 최신 상태만 표시합니다. 항목을 누르면 지난 내역을 확인할 수 있습니다.
+        </p>
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          <select
+            value={importanceFilter}
+            onChange={(event) => {
+              const value = event.target.value;
+              setImportanceFilter(
+                value === 'high' || value === 'medium' || value === 'low' ? value : 'all',
               );
-            })}
+            }}
+            aria-label="신호 중요도 필터"
+            className="min-w-0 rounded-xl border border-card-border bg-card px-2 py-2 text-[10px] font-black"
+          >
+            <option value="all">중요도 전체</option>
+            <option value="high">높음</option>
+            <option value="medium">중간</option>
+            <option value="low">낮음</option>
+          </select>
+          <select
+            value={kindFilter}
+            onChange={(event) => {
+              const value = event.target.value;
+              setKindFilter(
+                value === 'chart' || value === 'candle' || value === 'volume' || value === 'indicator'
+                  ? value
+                  : 'all',
+              );
+            }}
+            aria-label="신호 종류 필터"
+            className="min-w-0 rounded-xl border border-card-border bg-card px-2 py-2 text-[10px] font-black"
+          >
+            <option value="all">종류 전체</option>
+            <option value="chart">차트 패턴</option>
+            <option value="candle">캔들 패턴</option>
+            <option value="volume">거래량</option>
+            <option value="indicator">기술지표</option>
+          </select>
+          <select
+            value={sortMode}
+            onChange={(event) => setSortMode(event.target.value === 'importance' ? 'importance' : 'latest')}
+            aria-label="신호 정렬"
+            className="min-w-0 rounded-xl border border-card-border bg-card px-2 py-2 text-[10px] font-black"
+          >
+            <option value="latest">최신순</option>
+            <option value="importance">중요도순</option>
+          </select>
+        </div>
+        <div className="mt-2 space-y-2">
+          {!enabled ? (
+            <StateBox>설정에서 실시간 신호가 꺼져 있습니다.</StateBox>
+          ) : query.isLoading && occurrences.length === 0 ? (
+            <StateBox>신호를 불러오는 중입니다.</StateBox>
+          ) : query.isError && occurrences.length === 0 ? (
+            <StateBox error>데이터를 불러오지 못했습니다.</StateBox>
+          ) : occurrences.length === 0 ? (
+            <StateBox>현재 활성화된 신호가 없습니다.</StateBox>
+          ) : visibleGroups.length === 0 ? (
+            <StateBox>선택한 필터에 맞는 신호가 없습니다.</StateBox>
+          ) : (
+            <div className="relative ml-2 border-l-2 border-card-border pl-4">
+              {visibleGroups.map((group) => {
+                const signal = group.latest;
+                const importance = signalImportance(signal.importance);
+                return (
+                  <button
+                    key={group.key}
+                    type="button"
+                    onClick={() => setHistoryGroupKey(group.key)}
+                    className={cn(
+                      'relative mb-2 flex w-full items-center justify-between gap-3 rounded-2xl border p-3 text-left last:mb-0',
+                      activeSignalId === signal.id ? 'border-primary bg-primary/5' : 'border-card-border bg-card',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'absolute -left-[23px] top-4 h-3 w-3 rounded-full border-2 border-background',
+                        importance === 'high'
+                          ? 'bg-destructive'
+                          : importance === 'medium'
+                            ? 'bg-warning'
+                            : 'bg-muted-foreground',
+                      )}
+                    />
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <p className="truncate text-sm font-black">{signal.name}</p>
+                        <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[9px] font-black text-muted-foreground">
+                          {PATTERN_STAGE_META[signal.stage].label}
+                        </span>
+                        {group.history.length > 1 && (
+                          <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-black text-primary">
+                            내역 {group.history.length}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
+                        {signalKindLabel(signal.kind)}
+                        {signal.occurredAt ? ` · ${formatTime(signal.occurredAt)}` : ''}
+                      </p>
+                      {signal.meaningHere && (
+                        <p className="mt-1 line-clamp-2 text-[10px] font-bold leading-4 text-foreground">
+                          {signal.meaningHere}
+                        </p>
+                      )}
+                    </div>
+                    <span className="shrink-0 text-[10px] font-black text-muted-foreground">지난 내역</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </section>
+      {historyGroup && (
+        <SignalHistoryModal
+          title={historyGroup.latest.name}
+          signals={historyGroup.history}
+          onClose={() => setHistoryGroupKey(null)}
+          onSelect={(signal) => {
+            setHistoryGroupKey(null);
+            onSelect(signal);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function SignalHistoryModal({
+  title,
+  signals,
+  onClose,
+  onSelect,
+}: {
+  title: string;
+  signals: ChartSignal[];
+  onClose: () => void;
+  onSelect: (signal: ChartSignal) => void;
+}) {
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [page, setPage] = useState(1);
+  const filtered = useMemo(() => {
+    const startTime = start ? new Date(start).getTime() : Number.NEGATIVE_INFINITY;
+    const endTime = end ? new Date(end).getTime() : Number.POSITIVE_INFINITY;
+    return signals.filter((signal) => {
+      const time = toEpochMilliseconds(signal.occurredAt) ?? 0;
+      return time >= startTime && time <= endTime;
+    });
+  }, [end, signals, start]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / 10));
+  const currentPage = Math.min(page, pageCount);
+  const rows = filtered.slice((currentPage - 1) * 10, currentPage * 10);
+  const quickRange = (days: number | null) => {
+    if (days == null) {
+      setStart('');
+      setEnd('');
+    } else {
+      const now = new Date();
+      const from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+      const localValue = (value: Date) => {
+        const offset = value.getTimezoneOffset() * 60_000;
+        return new Date(value.getTime() - offset).toISOString().slice(0, 16);
+      };
+      setStart(localValue(from));
+      setEnd(localValue(now));
+    }
+    setPage(1);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/60 p-3" onClick={onClose}>
+      <div
+        className="max-h-[88vh] w-full max-w-md overflow-y-auto rounded-2xl border border-card-border bg-background p-4"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-base font-black">{title}</h3>
+            <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
+              지난 내역 {signals.length}건 · 10개씩 표시
+            </p>
           </div>
-        )}
+          <button type="button" onClick={onClose} className="rounded-full border border-card-border p-2" aria-label="닫기">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <label className="text-[10px] font-black text-muted-foreground">
+            시작 시간
+            <input
+              type="datetime-local"
+              value={start}
+              onChange={(event) => {
+                setStart(event.target.value);
+                setPage(1);
+              }}
+              className="mt-1 w-full rounded-xl border border-card-border bg-card px-2 py-2 text-[10px] text-foreground"
+            />
+          </label>
+          <label className="text-[10px] font-black text-muted-foreground">
+            종료 시간
+            <input
+              type="datetime-local"
+              value={end}
+              onChange={(event) => {
+                setEnd(event.target.value);
+                setPage(1);
+              }}
+              className="mt-1 w-full rounded-xl border border-card-border bg-card px-2 py-2 text-[10px] text-foreground"
+            />
+          </label>
+        </div>
+        <div className="mt-2 grid grid-cols-4 gap-1">
+          {[
+            { label: '오늘', days: 1 },
+            { label: '7일', days: 7 },
+            { label: '30일', days: 30 },
+            { label: '전체', days: null },
+          ].map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              onClick={() => quickRange(item.days)}
+              className="rounded-lg border border-card-border bg-card py-1.5 text-[10px] font-black"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 space-y-2">
+          {rows.length === 0 ? (
+            <StateBox>선택한 시간에 해당하는 내역이 없습니다.</StateBox>
+          ) : (
+            rows.map((signal) => (
+              <button
+                key={signal.id}
+                type="button"
+                onClick={() => onSelect(signal)}
+                className="flex w-full items-center justify-between gap-3 rounded-xl border border-card-border bg-card p-3 text-left"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-black">
+                    {PATTERN_STAGE_META[signal.stage].label} · {formatTime(signal.occurredAt)}
+                  </p>
+                  <p className="mt-1 line-clamp-2 text-[10px] font-bold text-muted-foreground">
+                    {signal.meaningHere || signal.meaningGeneral}
+                  </p>
+                </div>
+                <span className="shrink-0 text-[10px] font-black text-primary">차트 보기</span>
+              </button>
+            ))
+          )}
+        </div>
+        <div className="mt-3 grid grid-cols-3 items-center gap-2">
+          <button
+            type="button"
+            disabled={currentPage <= 1}
+            onClick={() => setPage((value) => Math.max(1, value - 1))}
+            className="rounded-xl border border-card-border py-2 text-[10px] font-black disabled:opacity-40"
+          >
+            이전
+          </button>
+          <p className="text-center text-[10px] font-black">{currentPage} / {pageCount}</p>
+          <button
+            type="button"
+            disabled={currentPage >= pageCount}
+            onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
+            className="rounded-xl border border-card-border py-2 text-[10px] font-black disabled:opacity-40"
+          >
+            다음
+          </button>
+        </div>
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -2871,6 +4057,9 @@ function DataFreshness({ times, interval }: { times: FreshnessTimes; interval: s
     if (interval.endsWith('H') && Number.isFinite(numeric)) return numeric * 60;
     if (interval.endsWith('D') && Number.isFinite(numeric)) return numeric * 24 * 60;
     if (interval.endsWith('W') && Number.isFinite(numeric)) return numeric * 7 * 24 * 60;
+    if (interval.endsWith('M') && Number.isFinite(numeric)) return numeric * 30 * 24 * 60;
+    if (interval.endsWith('Y') && Number.isFinite(numeric)) return numeric * 365 * 24 * 60;
+    if (interval === 'ALL') return 10 * 365 * 24 * 60;
     return 5;
   })();
   const allowedGap = Math.max(10 * 60_000, intervalMinutes * 2 * 60_000);

@@ -49,9 +49,14 @@ type SharedFeed = {
   lastPlan: { view: string; target: number | null; stop: number | null } | null;
 };
 
-const STOCK_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '1H', '4H', '1D', '1W', '1M']);
-const SPOT_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '1H', '4H', '1D', '1W', '1M']);
-const FUTURES_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '1H', '4H', '1D', '1W', '1M']);
+const CHART_INTERVALS = [
+  '1m', '3m', '5m', '15m', '30m', '1H', '4H', '12H',
+  '1D', '3D', '5D', '15D', '1W', '1M', '3M', '6M',
+  '1Y', '3Y', '5Y', '10Y', 'ALL',
+];
+const STOCK_INTERVALS = new Set(CHART_INTERVALS);
+const SPOT_INTERVALS = new Set(CHART_INTERVALS);
+const FUTURES_INTERVALS = new Set(CHART_INTERVALS);
 const feeds = new Map<string, SharedFeed>();
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

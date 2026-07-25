@@ -723,7 +723,7 @@ async function tryCandlesProviderMeta(
   const ticker = cleanTicker((entry as any).ticker);
   const marketValue = normalizeMarketValue((entry as any).market, ticker);
   const timeframeText = String(timeframe ?? '1D');
-  const isIntraday = ['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H'].includes(
+    const isIntraday = ['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H', '12H'].includes(
     timeframeText,
   );
 
@@ -1027,7 +1027,7 @@ export class MarketDataService {
   ): Promise<CandlesMeta> {
     const entry = resolveEntry(ticker);
     const timeframeText = String(timeframe ?? '1D');
-    const intradayTtl = ['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H'].includes(
+    const intradayTtl = ['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H', '12H'].includes(
       timeframeText,
     )
       ? 15_000

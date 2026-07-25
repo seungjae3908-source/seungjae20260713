@@ -39,6 +39,72 @@ export interface UpbitTicker {
   tradingValue24h: number | null;
 }
 
+type CustomTimeframe = {
+  source: string;
+  factor: number;
+  calendar?: 'year';
+};
+
+const CUSTOM_TIMEFRAMES: Record<string, CustomTimeframe> = {
+  '12H': { source: '4H', factor: 3 },
+  '3D': { source: '1D', factor: 3 },
+  '5D': { source: '1D', factor: 5 },
+  '15D': { source: '1D', factor: 15 },
+  '3M': { source: '1M', factor: 3 },
+  '6M': { source: '1M', factor: 6 },
+  '1Y': { source: '1M', factor: 12, calendar: 'year' },
+  '3Y': { source: '1M', factor: 36 },
+  '5Y': { source: '1M', factor: 60 },
+  '10Y': { source: '1M', factor: 120 },
+  ALL: { source: '1M', factor: 1 },
+};
+
+function barTimestamp(row: Bar): number {
+  if (typeof row.time === 'number') {
+    return row.time > 1_000_000_000_000 ? row.time : row.time * 1000;
+  }
+  return Date.parse(String(row.time));
+}
+
+function aggregateBars(rows: Bar[], factor: number, calendar?: 'year'): Bar[] {
+  const ordered = rows
+    .filter((row) => Number.isFinite(barTimestamp(row)))
+    .slice()
+    .sort((left, right) => barTimestamp(left) - barTimestamp(right));
+  const groups: Bar[][] = [];
+  if (calendar === 'year') {
+    const byYear = new Map<number, Bar[]>();
+    for (const row of ordered) {
+      const year = new Date(barTimestamp(row)).getUTCFullYear();
+      const group = byYear.get(year) ?? [];
+      group.push(row);
+      byYear.set(year, group);
+    }
+    groups.push(
+      ...Array.from(byYear.keys())
+        .sort((left, right) => left - right)
+        .map((year) => byYear.get(year) ?? []),
+    );
+  } else {
+    for (let index = 0; index < ordered.length; index += Math.max(1, factor)) {
+      groups.push(ordered.slice(index, index + Math.max(1, factor)));
+    }
+  }
+  return groups.flatMap((group) => {
+    const first = group[0];
+    const last = group.at(-1);
+    if (!first || !last) return [];
+    return [{
+      time: first.time,
+      open: first.open,
+      high: Math.max(...group.map((row) => row.high)),
+      low: Math.min(...group.map((row) => row.low)),
+      close: last.close,
+      volume: group.reduce((sum, row) => sum + Number(row.volume ?? 0), 0),
+    }];
+  });
+}
+
 export async function fetchUpbitTopTickers(limit = 40): Promise<UpbitTicker[]> {
   const master = await fetchJson<any[]>(`${UPBIT_BASE}/v1/market/all?isDetails=false`);
   const markets = master
@@ -70,12 +136,31 @@ export async function fetchAllUpbitTickers(): Promise<UpbitTicker[]> {
 }
 
 export async function fetchUpbitCandles(symbol: string, count = 200, tf = '1D'): Promise<Bar[]> {
-  const tfPath = tf === '1D' ? 'days' : tf === '1W' ? 'weeks' : tf === '1M' ? 'months' : null;
+  const custom = CUSTOM_TIMEFRAMES[tf];
+  const source = custom?.source ?? tf;
+  const tfPath =
+    source === '1D'
+      ? 'days'
+      : source === '1W'
+        ? 'weeks'
+        : source === '1M'
+          ? 'months'
+          : null;
+  const minuteUnit =
+    source === '1H'
+      ? '60'
+      : source === '4H'
+        ? '240'
+        : String(source).replace(/[^0-9]/g, '') || '15';
+  const sourceCount = Math.min(
+    200,
+    Math.max(count, count * (custom?.factor ?? 1)),
+  );
   const url = tfPath
-    ? `${UPBIT_BASE}/v1/candles/${tfPath}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`
-    : `${UPBIT_BASE}/v1/candles/minutes/${encodeURIComponent(String(tf).replace(/[^0-9]/g, '') || '15')}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`;
+    ? `${UPBIT_BASE}/v1/candles/${tfPath}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${sourceCount}`
+    : `${UPBIT_BASE}/v1/candles/minutes/${encodeURIComponent(minuteUnit)}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${sourceCount}`;
   const rows = await fetchJson<any[]>(url);
-  return rows
+  const normalized = rows
     .slice()
     .reverse()
     .map((row) => ({
@@ -87,6 +172,9 @@ export async function fetchUpbitCandles(symbol: string, count = 200, tf = '1D'):
       volume: Number(row.candle_acc_trade_volume ?? 0),
     }))
     .filter((b) => Number.isFinite(b.open) && Number.isFinite(b.close));
+  return custom
+    ? aggregateBars(normalized, custom.factor, custom.calendar).slice(-count)
+    : normalized.slice(-count);
 }
 
 export interface BitgetTicker {
@@ -130,13 +218,19 @@ export async function fetchBitgetTopTickers(limit = 40): Promise<BitgetTicker[]>
 }
 
 export async function fetchBitgetCandles(symbol: string, limit = 200, granularity = '1D'): Promise<Bar[]> {
+  const custom = CUSTOM_TIMEFRAMES[granularity];
+  const providerGranularity = custom?.source ?? granularity;
+  const sourceLimit = Math.min(
+    1000,
+    Math.max(limit, limit * (custom?.factor ?? 1)),
+  );
   const payload = await fetchJson<any>(
-    `${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${encodeURIComponent(granularity)}&limit=${limit}`,
+    `${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${encodeURIComponent(providerGranularity)}&limit=${sourceLimit}`,
   );
   if (String(payload?.code ?? '') !== '00000' || !Array.isArray(payload?.data)) {
     throw new Error(`BITGET_${String(payload?.code ?? 'INVALID')}`);
   }
-  return payload.data
+  const normalized = payload.data
     .slice()
     .map((row: any[]) => ({
       time: Number(row[0]),
@@ -148,6 +242,9 @@ export async function fetchBitgetCandles(symbol: string, limit = 200, granularit
     }))
     .filter((b: Bar) => Number.isFinite(b.open) && Number.isFinite(b.close))
     .sort((a: Bar, b: Bar) => Number(a.time) - Number(b.time));
+  return custom
+    ? aggregateBars(normalized, custom.factor, custom.calendar).slice(-limit)
+    : normalized.slice(-limit);
 }
 
 export async function fetchPublicJson<T>(url: string): Promise<T> {

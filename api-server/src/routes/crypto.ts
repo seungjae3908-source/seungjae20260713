@@ -183,16 +183,54 @@ router.get('/crypto/spot/candles', async (req, res) => {
   const symbol = safeSymbol(req.query.symbol || 'BTC');
   const unit = Math.max(1, Math.min(240, Number(req.query.unit ?? 15) || 15));
   const count = Math.max(1, Math.min(200, Number(req.query.count ?? 120) || 120));
-  // tf=1D|1W|1M 이면 업비트 일/주/월봉, 없으면 기존 분봉 동작 유지.
+  const before = String(req.query.before ?? '').trim();
+  // tf가 있으면 일·주·월·사용자 집계봉, 없으면 기존 분봉 동작을 유지한다.
   const tf = String(req.query.tf ?? '').toUpperCase();
-  const tfPath = tf === '1D' ? 'days' : tf === '1W' ? 'weeks' : tf === '1M' ? 'months' : null;
-  const url = tfPath
-    ? `${UPBIT_BASE}/v1/candles/${tfPath}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`
-    : `${UPBIT_BASE}/v1/candles/minutes/${unit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`;
+  const custom = tf ? CUSTOM_GRANULARITY[tf] : undefined;
+  const source = custom?.source ?? tf;
+  const sourceUnit =
+    source === '1H'
+      ? 60
+      : source === '4H'
+        ? 240
+        : unit;
+  const tfPath =
+    source === '1D'
+      ? 'days'
+      : source === '1W'
+        ? 'weeks'
+        : source === '1M'
+          ? 'months'
+          : null;
+  const sourceCount = Math.min(200, Math.max(count, count * (custom?.factor ?? 1)));
+  const baseUrl = tfPath
+    ? `${UPBIT_BASE}/v1/candles/${tfPath}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${sourceCount}`
+    : `${UPBIT_BASE}/v1/candles/minutes/${sourceUnit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${sourceCount}`;
+  const url = before ? `${baseUrl}&to=${encodeURIComponent(before)}` : baseUrl;
   try {
     const rows = await fetchJson<any[]>(url);
-    const candles = rows.reverse().map((row) => ({ time: row.candle_date_time_kst, open: finite(row.opening_price), high: finite(row.high_price), low: finite(row.low_price), close: finite(row.trade_price), volume: finite(row.candle_acc_trade_volume), tradingValue: finite(row.candle_acc_trade_price) }));
-    return res.json({ ok: true, provider: 'upbit', fetchedAt: new Date().toISOString(), exchange: 'UPBIT', market: `KRW-${symbol}`, unit: tfPath ? tf : `${unit}m`, candles, count: candles.length, updatedAt: new Date().toISOString() });
+    const ordered = rows.slice().reverse();
+    const normalized = ordered.map((row) => ({ time: row.candle_date_time_kst, open: finite(row.opening_price), high: finite(row.high_price), low: finite(row.low_price), close: finite(row.trade_price), volume: finite(row.candle_acc_trade_volume), quoteVolume: finite(row.candle_acc_trade_price) }));
+    const candles = custom
+      ? aggregateCandles(normalized, tf, custom.factor, custom.calendar).slice(-count)
+      : normalized;
+    const earliestUtc = String(ordered[0]?.candle_date_time_utc ?? '').trim();
+    const nextBefore = earliestUtc ? `${earliestUtc.replace(/Z$/i, '')}Z` : null;
+    return res.json({
+      ok: true,
+      provider: 'upbit',
+      fetchedAt: new Date().toISOString(),
+      exchange: 'UPBIT',
+      market: `KRW-${symbol}`,
+      unit: tf || `${unit}m`,
+      candles,
+      count: candles.length,
+      pagination: {
+        nextBefore,
+        hasMore: rows.length >= sourceCount,
+      },
+      updatedAt: new Date().toISOString(),
+    });
   } catch (error) {
     console.error('upbit candles error:', error);
     return res.status(502).json({ ok: false, provider: 'upbit', exchange: 'UPBIT', candles: [], count: 0, error: 'UPBIT_CANDLES_UNAVAILABLE', message: '업비트 캔들 조회 실패 — 결과 0건이 아니라 조회 오류입니다.' });
@@ -250,7 +288,7 @@ router.get('/crypto/futures/tickers', async (req, res) => {
 
 
 type RawCandle = {
-  time: number | null;
+  time: number | string | null;
   open: number | null;
   high: number | null;
   low: number | null;
@@ -260,12 +298,20 @@ type RawCandle = {
 };
 
 const CUSTOM_GRANULARITY: Record<string, { source: string; factor: number; calendar?: 'year' }> = {
+  '12H': { source: '4H', factor: 3 },
+  '3D': { source: '1D', factor: 3 },
   '8H': { source: '4H', factor: 2 },
   '5D': { source: '1D', factor: 5 },
   '10D': { source: '1D', factor: 10 },
   '15D': { source: '1D', factor: 15 },
   '30D': { source: '1D', factor: 30 },
+  '3M': { source: '1M', factor: 3 },
+  '6M': { source: '1M', factor: 6 },
   '1Y': { source: '1M', factor: 12, calendar: 'year' },
+  '3Y': { source: '1M', factor: 36 },
+  '5Y': { source: '1M', factor: 60 },
+  '10Y': { source: '1M', factor: 120 },
+  'ALL': { source: '1M', factor: 1 },
 };
 
 function aggregateCandles(rows: RawCandle[], requested: string, factor: number, calendar?: 'year') {
@@ -275,7 +321,10 @@ function aggregateCandles(rows: RawCandle[], requested: string, factor: number, 
   if (calendar === 'year') {
     const byYear = new Map<number, RawCandle[]>();
     for (const row of valid) {
-      const year = new Date(Number(row.time)).getUTCFullYear();
+      const numeric = Number(row.time);
+      const timestamp = Number.isFinite(numeric) ? numeric : Date.parse(String(row.time));
+      if (!Number.isFinite(timestamp)) continue;
+      const year = new Date(timestamp).getUTCFullYear();
       const list = byYear.get(year) ?? [];
       list.push(row);
       byYear.set(year, list);
@@ -306,8 +355,13 @@ router.get('/crypto/futures/candles', async (req, res) => {
   const sourceGranularity = custom?.source ?? (direct.has(requested) ? requested : '15m');
   const outputLimit = Math.max(1, Math.min(1000, Number(req.query.limit ?? 200) || 200));
   const sourceLimit = Math.max(1, Math.min(1000, outputLimit * (custom?.factor ?? 1)));
+  const before = Number(req.query.before);
+  const endTime =
+    Number.isFinite(before) && before > 0
+      ? Math.max(0, Math.floor(before) - 1)
+      : null;
   try {
-    const payload = await fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${encodeURIComponent(sourceGranularity)}&limit=${sourceLimit}`);
+    const payload = await fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${encodeURIComponent(sourceGranularity)}&limit=${sourceLimit}${endTime == null ? '' : `&endTime=${endTime}`}`);
     if (String(payload?.code ?? '') !== '00000' || !Array.isArray(payload?.data)) throw new Error(`BITGET_${String(payload?.code ?? 'INVALID')}`);
     const raw: RawCandle[] = payload.data.reverse().map((row: any[]) => ({
       time: finite(row[0]),
@@ -335,6 +389,10 @@ router.get('/crypto/futures/candles', async (req, res) => {
       aggregationFactor: custom?.factor ?? 1,
       candles,
       count: candles.length,
+      pagination: {
+        nextBefore: raw[0]?.time ?? null,
+        hasMore: raw.length >= sourceLimit,
+      },
       updatedAt: now,
     });
   } catch (error) {
