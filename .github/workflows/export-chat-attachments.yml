@@ -1,0 +1,25 @@
+name: Export chat attachments
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export-files:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out files
+        uses: actions/checkout@v4
+      - name: Upload text files
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-chart-text-files
+          path: |
+            신호검색기_원본코드_자동매매혼재.txt
+            차트_AI_생중계_원본코드.txt
+          if-no-files-found: error
+          retention-days: 1
