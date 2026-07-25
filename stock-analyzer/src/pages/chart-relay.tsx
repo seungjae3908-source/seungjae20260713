@@ -170,6 +170,8 @@ type TopSignalBanner = {
 };
 
 const SETTINGS_KEY = 'chart-relay-settings-v1';
+const CANDLE_CACHE_PREFIX = 'chart-relay-candles-v1';
+const CANDLE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const DEFAULT_SETTINGS: ChartSettings = {
   liveSignal: true,
@@ -469,10 +471,56 @@ function normalizeCandles(rows: AnyObj[]): CandlePoint[] {
   return [...new Map(normalized.map((row) => [Number(row.time), row])).values()];
 }
 
+function candleCacheKey(asset: Asset, symbol: string, interval: string): string {
+  return `${CANDLE_CACHE_PREFIX}:${asset}:${symbol.trim().toUpperCase()}:${interval}`;
+}
+
+function readCachedCandles(asset: Asset, symbol: string, interval: string): AnyObj | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const raw = window.localStorage.getItem(candleCacheKey(asset, symbol, interval));
+    if (!raw) return undefined;
+    const cached = JSON.parse(raw) as { savedAt?: number; payload?: AnyObj };
+    if (
+      !cached.payload ||
+      !Number.isFinite(cached.savedAt) ||
+      Date.now() - Number(cached.savedAt) > CANDLE_CACHE_MAX_AGE_MS ||
+      extractCandleRows(cached.payload).length < 2
+    ) {
+      window.localStorage.removeItem(candleCacheKey(asset, symbol, interval));
+      return undefined;
+    }
+    return cached.payload;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeCachedCandles(asset: Asset, symbol: string, interval: string, payload: AnyObj): void {
+  if (typeof window === 'undefined' || extractCandleRows(payload).length < 2) return;
+  try {
+    window.localStorage.setItem(
+      candleCacheKey(asset, symbol, interval),
+      JSON.stringify({
+        savedAt: Date.now(),
+        payload: {
+          ok: true,
+          provider: payload.provider ?? 'cache',
+          fetchedAt: payload.fetchedAt ?? payload.updatedAt ?? new Date().toISOString(),
+          candles: extractCandleRows(payload).slice(-240),
+          pagination: payload.pagination ?? null,
+        },
+      }),
+    );
+  } catch {
+    // 저장 공간이 부족해도 실시간 차트 동작은 계속 유지한다.
+  }
+}
+
 function candleUrl(asset: Asset, symbol: string, interval: string): string {
   const s = encodeURIComponent(symbol);
   if (asset === 'stockKR' || asset === 'stockUS') {
-    return `/stocks/${s}/candles?tf=${encodeURIComponent(interval)}`;
+    return `/stocks/${s}/candles?tf=${encodeURIComponent(interval)}&quick=1`;
   }
   if (asset === 'coinSpot') {
     const normalized = normalizeRealtimeTimeframe(interval);
@@ -1714,7 +1762,7 @@ export default function ChartRelayPage() {
       const normalizedSymbol = symbol.trim().toUpperCase();
       const payload = await apiGet<AnyObj>(
         candleUrl(asset, normalizedSymbol, interval),
-        { timeoutMs: 20_000 },
+        { timeoutMs: 90_000 },
       );
 
       if (extractCandleRows(payload).length < 2) {
@@ -1730,6 +1778,7 @@ export default function ChartRelayPage() {
     refetchOnReconnect: true,
     retry: 1,
     retryDelay: 1_500,
+    initialData: () => readCachedCandles(asset, symbol, interval),
   });
 
   const signalsQuery = useQuery({
@@ -1803,6 +1852,11 @@ export default function ChartRelayPage() {
     () => normalizeCandles([...olderCandles, ...currentCandles]),
     [currentCandles, olderCandles],
   );
+
+  useEffect(() => {
+    if (!candleQuery.data || currentCandles.length < 2) return;
+    writeCachedCandles(asset, symbol, interval, candleQuery.data);
+  }, [asset, candleQuery.data, currentCandles.length, interval, symbol]);
 
   useEffect(() => {
     if (historyCursor !== undefined || !candleQuery.data) return;
@@ -2400,11 +2454,11 @@ export default function ChartRelayPage() {
             {/* 차트 영역 */}
             <section className="mt-3 overflow-hidden rounded-2xl border border-card-border bg-card">
               <div className="min-h-[360px] bg-background/30">
-                {candleQuery.isLoading ? (
+                {candleQuery.isLoading && candles.length < 2 ? (
                   <div className="flex h-[360px] items-center justify-center gap-2 text-sm font-bold text-muted-foreground">
                     <Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중...
                   </div>
-                ) : candleQuery.isError ? (
+                ) : candleQuery.isError && candles.length < 2 ? (
                   <div className="flex h-[360px] flex-col items-center justify-center px-6 text-center">
                     <ShieldAlert className="h-8 w-8 text-warning" />
                     <p className="mt-3 text-sm font-extrabold">차트 데이터를 불러오지 못했습니다.</p>
