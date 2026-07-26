@@ -171,26 +171,28 @@ function patchSettings(source: string) {
 }
 
 const globalUiScript = `
-function removeBackButtons() {
+function removeNativeBackButtons() {
   document.querySelectorAll('button, a').forEach((element) => {
+    if (element.getAttribute('aria-label') === '공통 뒤로가기') return;
+
     const label = (element.getAttribute('aria-label') || '').trim();
     const text = (element.textContent || '').replace(/\\s+/g, ' ').trim();
-    if (
+    const nativeBackLabel =
       label === '이전 화면' ||
       label === '뒤로가기' ||
-      text === '이전' ||
-      text === '이전 화면' ||
-      text === '뒤로가기'
-    ) {
-      element.remove();
-    }
+      label === '뒤로';
+    const headerArrow =
+      Boolean(element.closest('header')) &&
+      (text === '‹' || text === '←');
+
+    if (nativeBackLabel || headerArrow) element.remove();
   });
 }
-new MutationObserver(removeBackButtons).observe(document.documentElement, {
+new MutationObserver(removeNativeBackButtons).observe(document.documentElement, {
   childList: true,
   subtree: true,
 });
-removeBackButtons();
+removeNativeBackButtons();
 `;
 
 export function tradingHomeGlobalUiPatch(): Plugin {
