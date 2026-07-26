@@ -28,7 +28,6 @@ import { feedFiveMorePatch } from './feed-five-more-patch';
 import { infoTabFixPatch } from './info-tab-fix-patch';
 import { infoTabFinalScopePatch } from './info-tab-final-scope-patch';
 import { coinTechStocksFinalPatch } from './coin-tech-stocks-final-patch';
-import { krwTenThousandUnitPatch } from './krw-ten-thousand-unit-patch';
 import { globalDetailsPopupPatch } from './global-details-popup-patch';
 
 const require = createRequire(import.meta.url);
@@ -70,7 +69,6 @@ export default defineConfig({
     infoTabFixPatch(),
     infoTabFinalScopePatch(),
     coinTechStocksFinalPatch(),
-    krwTenThousandUnitPatch(),
     globalDetailsPopupPatch(),
     react(),
     tailwindcss(),
