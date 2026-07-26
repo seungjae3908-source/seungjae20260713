@@ -1,6 +1,7 @@
 import { Router, type IRouter } from 'express';
 import healthRouter from './health';
 import marketRouter from './market';
+import assetSearchRouter from './asset-search';
 import stocksRanking100Router from './stocks-ranking-100';
 import newsRouter from './news.route';
 import providerDebugRouter from './provider-debug';
@@ -43,6 +44,8 @@ router.use('/market/recommendations', requireMember);
 router.use('/market/undervalued', requireMember);
 // 종목 화면에서 limit=100을 요청할 때만 전용 100개 순위 응답을 사용합니다.
 router.use('/', stocksRanking100Router);
+// 국내·해외 종목명과 티커를 실제 검색 제공기관으로 통합 검색합니다.
+router.use('/', assetSearchRouter);
 router.use('/', marketRouter);
 
 router.use('/', newsRouter);
