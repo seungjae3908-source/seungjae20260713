@@ -397,6 +397,10 @@ function ApprovedRouter() {
 				<Route path="/tech/signal-scan" component={GatedSignalScanPage} />
 				<Route path="/tech/signal-scan/:market" component={GatedSignalScanPage} />
 				<Route path="/tech/chart-relay" component={GatedChartRelayPage} />
+				<Route path="/tech/chart-relay/stockKR" component={GatedChartRelayPage} />
+				<Route path="/tech/chart-relay/stockUS" component={GatedChartRelayPage} />
+				<Route path="/tech/chart-relay/coinSpot" component={GatedChartRelayPage} />
+				<Route path="/tech/chart-relay/coinFutures" component={GatedChartRelayPage} />
 				<Route path="/tech/chart-broadcast" component={GatedChartBroadcastPage} />
 				<Route path="/tech/auto-trade" component={GatedAutoTradePage} />
 				<Route path="/analysis/:market" component={GatedMarketAnalysisPage} />
