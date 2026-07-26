@@ -442,13 +442,27 @@ function hasUsableVolatility(
   return a.atrPercent >= 0.35 && a.atrPercent <= (futures ? 12 : 8);
 }
 
+function confirmationCount(
+  a: Analyzed,
+  futures: boolean,
+  timeframe: '15m' | '1D',
+  direction: 'long' | 'short',
+): number {
+  let count = 0;
+  if (a.volRatio != null && a.volRatio >= 0.8) count += 1;
+  if (hasUsableVolatility(a, futures, timeframe)) count += 1;
+  const riskReward =
+    direction === 'long' ? a.longRiskReward : a.shortRiskReward;
+  if (riskReward != null && riskReward >= (futures ? 1.8 : 1.5)) count += 1;
+  return count;
+}
+
 function isOptimizedLong(
   a: Analyzed,
   futures = false,
   timeframe: '15m' | '1D' = '1D',
 ): boolean {
   const minScore = futures ? FUTURES_MIN_SCORE : STOCK_MIN_SCORE;
-  const minRiskReward = futures ? 1.8 : 1.5;
   return (
     a.bullScore >= minScore &&
     a.bullScore - a.bearScore >= (futures ? 12 : 10) &&
@@ -460,11 +474,8 @@ function isOptimizedLong(
     a.rsiValue != null &&
     a.rsiValue >= 42 &&
     a.rsiValue <= 68 &&
-    a.volRatio != null &&
-    a.volRatio >= 0.8 &&
-    hasUsableVolatility(a, futures, timeframe) &&
-    a.longRiskReward != null &&
-    a.longRiskReward >= minRiskReward
+    confirmationCount(a, futures, timeframe, 'long') >=
+      (futures ? 3 : 2)
   );
 }
 
@@ -474,7 +485,6 @@ function isOptimizedShort(
   timeframe: '15m' | '1D' = '1D',
 ): boolean {
   const minScore = futures ? FUTURES_MIN_SCORE : STOCK_MIN_SCORE;
-  const minRiskReward = futures ? 1.8 : 1.5;
   return (
     a.bearScore >= minScore &&
     a.bearScore - a.bullScore >= (futures ? 12 : 10) &&
@@ -486,11 +496,36 @@ function isOptimizedShort(
     a.rsiValue != null &&
     a.rsiValue >= 32 &&
     a.rsiValue <= 58 &&
-    a.volRatio != null &&
-    a.volRatio >= 0.8 &&
-    hasUsableVolatility(a, futures, timeframe) &&
-    a.shortRiskReward != null &&
-    a.shortRiskReward >= minRiskReward
+    confirmationCount(a, futures, timeframe, 'short') >=
+      (futures ? 3 : 2)
+  );
+}
+
+function isStockWatchLong(a: Analyzed): boolean {
+  return (
+    a.bullScore >= 64 &&
+    a.bullScore - a.bearScore >= 6 &&
+    a.ma5 != null &&
+    a.ma20 != null &&
+    a.ma5 > a.ma20 &&
+    a.latest > a.ma20 &&
+    a.rsiValue != null &&
+    a.rsiValue >= 35 &&
+    a.rsiValue <= 72
+  );
+}
+
+function isStockWatchShort(a: Analyzed): boolean {
+  return (
+    a.bearScore >= 64 &&
+    a.bearScore - a.bullScore >= 6 &&
+    a.ma5 != null &&
+    a.ma20 != null &&
+    a.ma5 < a.ma20 &&
+    a.latest < a.ma20 &&
+    a.rsiValue != null &&
+    a.rsiValue >= 28 &&
+    a.rsiValue <= 62
   );
 }
 
@@ -525,7 +560,7 @@ function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
         'buy',
         i.analyzed.bullScore,
         bullBasis(i.analyzed),
-        '기술적 지표상 매수 관점이 우세한 후보(확정 매수 아님, 관찰 필요)',
+        '강한 매수 기준을 충족한 기술적 후보(확정 매수 아님)',
         dataAsOf,
       ),
     );
@@ -539,7 +574,43 @@ function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
         'sell',
         i.analyzed.bearScore,
         bearBasis(i.analyzed),
-        '기술적 지표상 매도/차익 관점이 우세한 후보(확정 매도 아님, 관찰 필요)',
+        '강한 매도 기준을 충족한 기술적 후보(확정 매도 아님)',
+        dataAsOf,
+      ),
+    );
+  const buyWatch = items
+    .filter(
+      (i) =>
+        !isOptimizedLong(i.analyzed, false, i.timeframe ?? '1D') &&
+        isStockWatchLong(i.analyzed),
+    )
+    .sort((a, b) => b.analyzed.bullScore - a.analyzed.bullScore)
+    .slice(0, GROUP_LIMIT)
+    .map((i) =>
+      makeCandidate(
+        i,
+        'buy',
+        i.analyzed.bullScore,
+        bullBasis(i.analyzed),
+        '매수 관찰 후보(강한 매수 확인조건 일부 부족)',
+        dataAsOf,
+      ),
+    );
+  const sellWatch = items
+    .filter(
+      (i) =>
+        !isOptimizedShort(i.analyzed, false, i.timeframe ?? '1D') &&
+        isStockWatchShort(i.analyzed),
+    )
+    .sort((a, b) => b.analyzed.bearScore - a.analyzed.bearScore)
+    .slice(0, GROUP_LIMIT)
+    .map((i) =>
+      makeCandidate(
+        i,
+        'sell',
+        i.analyzed.bearScore,
+        bearBasis(i.analyzed),
+        '매도 관찰 후보(강한 매도 확인조건 일부 부족)',
         dataAsOf,
       ),
     );
@@ -590,8 +661,10 @@ function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
     });
 
   return [
-    { key: 'buy', label: '매수 후보', candidates: buy },
-    { key: 'sell', label: '매도 후보', candidates: sell },
+    { key: 'buy', label: '강한 매수', candidates: buy },
+    { key: 'sell', label: '강한 매도', candidates: sell },
+    { key: 'buyWatch', label: '매수 관찰', candidates: buyWatch },
+    { key: 'sellWatch', label: '매도 관찰', candidates: sellWatch },
     { key: 'macd', label: 'MACD 전환', candidates: macdSignals },
     { key: 'volume', label: '거래량 확대', candidates: volumeSignals },
   ];
