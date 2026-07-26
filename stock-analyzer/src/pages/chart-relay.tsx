@@ -2499,27 +2499,20 @@ const RelayChart = memo(function RelayChart({
         {signalZones.map((zone) => (
           <div
             key={zone.id}
-            className="absolute overflow-visible rounded-md text-left"
+            className="absolute overflow-visible rounded-full text-left"
             style={{
               left: zone.left,
               top: zone.top,
               width: zone.width,
               height: zone.height,
-              minHeight: 12,
+              minHeight: 18,
               border: `${zone.prominent ? 3 : 2}px ${zone.dashed ? 'dashed' : 'solid'} ${zone.color}`,
-              backgroundColor: `${zone.color}${zone.prominent ? '40' : '2b'}`,
-              boxShadow: zone.prominent ? `0 0 0 2px ${zone.color}33, 0 0 16px ${zone.color}66` : 'none',
+              borderRadius: '9999px',
+              backgroundColor: `${zone.color}12`,
+              boxShadow: zone.prominent ? `0 0 0 2px ${zone.color}22, 0 0 12px ${zone.color}44` : 'none',
             }}
             aria-label={`${zone.label} 신호 구간 상세`}
           >
-            {(zone.prominent || (zone.width >= 56 && zone.height >= 20)) && (
-              <span
-                className="absolute left-1 top-1 max-w-[calc(100%-8px)] truncate rounded px-1.5 py-0.5 text-[8px] font-black text-white"
-                style={{ backgroundColor: `${zone.color}cc` }}
-              >
-                {zone.label}
-              </span>
-            )}
             <button
               type="button"
               onClick={() => onSignalSelect(zone.signal)}
