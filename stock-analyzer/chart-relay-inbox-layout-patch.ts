@@ -48,12 +48,13 @@ function patchChartRelay(source: string): string {
 
   const compactStatus = `        <div className="mt-2 flex items-center justify-center gap-2 text-center">\n          <span className="text-sm font-black text-foreground">\n            {displayStockName(symbol, symbol)}\n          </span>\n          <span\n            className={cn(\n              'text-xs font-black',\n              latestBarChangePercent == null\n                ? 'text-muted-foreground'\n                : latestBarChangePercent >= 0\n                  ? 'text-red-500'\n                  : 'text-blue-500',\n            )}\n          >\n            {latestBarChangePercent == null\n              ? '등락률 없음'\n              : \`\${latestBarChangePercent >= 0 ? '+' : ''}\${latestBarChangePercent.toFixed(2)}%\`}\n          </span>\n        </div>`;
 
-  code = replaceRequired(
-    code,
-    statusBlock,
-    compactStatus,
-    '현재 종목 상태 문구 축약',
-  );
+  if (code.includes(statusBlock)) {
+    code = code.replace(statusBlock, compactStatus);
+  } else if (!code.includes('displayStockName(symbol, symbol)')) {
+    throw new Error(
+      '[chart-relay-inbox-layout-patch] 현재 종목 상태 문구 축약 위치를 찾지 못했습니다.',
+    );
+  }
 
   const alertButton = `          <InstrumentAlertButton\n            symbol={symbol}\n            name={symbol}\n            assetType={asset}\n            market={watchMarket}\n            currency={watchCurrency}\n            currentPrice={latestPrice}\n            className="flex h-10 items-center justify-center gap-1 rounded-xl border border-card-border bg-card text-xs font-black"\n          />`;
 
