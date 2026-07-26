@@ -20,6 +20,7 @@ import { tradingHomeGlobalUiPatch } from './trading-home-global-ui-patch';
 import { settingsPopupSectionsPatch } from './settings-popup-sections-patch';
 import { settingsUniformExtraPatch } from './settings-uniform-extra-patch';
 import { requestedUiFixesPatch } from './requested-ui-fixes-patch';
+import { stockInfoFeedOnlyPatch } from './stock-info-feed-only-patch';
 import { krwTenThousandUnitPatch } from './krw-ten-thousand-unit-patch';
 import { globalDetailsPopupPatch } from './global-details-popup-patch';
 
@@ -54,6 +55,7 @@ export default defineConfig({
     settingsPopupSectionsPatch(),
     settingsUniformExtraPatch(),
     requestedUiFixesPatch(),
+    stockInfoFeedOnlyPatch(),
     krwTenThousandUnitPatch(),
     globalDetailsPopupPatch(),
     react(),
