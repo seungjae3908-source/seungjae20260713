@@ -34,6 +34,7 @@ import { apiGet, ApiError } from '@/lib/api';
 import { BottomNav } from '@/components/bottom-nav';
 import { memberGradeLabel, useMemberPermissions } from '@/lib/permissions';
 import { useAuth } from '@/lib/auth';
+import { getSupabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { useRealtimeChart } from '@/hooks/use-realtime-chart';
 import { FavoriteButton } from '@/components/favorite-button';
@@ -111,6 +112,7 @@ type AiPlan = {
 };
 
 type ChartLevelKind =
+  | 'average'
   | 'target'
   | 'stop'
   | 'support'
@@ -126,6 +128,12 @@ type ChartLevelInfo = {
   color: string;
   description: string;
   action: string;
+};
+
+type PortfolioChartPosition = {
+  quantity: number;
+  averagePrice: number;
+  totalCost: number;
 };
 
 type ChartSettings = {
@@ -840,6 +848,7 @@ function formatPrice(value: number | null, asset: Asset): string {
 function buildChartLevels(
   candles: CandlePoint[],
   plan: AiPlan | null,
+  position: PortfolioChartPosition | null,
 ): ChartLevelInfo[] {
   const recent = candles.slice(-60);
   const latest = recent.at(-1)?.close ?? null;
@@ -860,6 +869,26 @@ function buildChartLevels(
     if (price == null || !Number.isFinite(price) || price <= 0) return;
     levels.push({ id, kind, label, price, color, description, action });
   };
+
+  if (position) {
+    const profit =
+      latest == null ? null : (latest - position.averagePrice) * position.quantity;
+    const returnRate =
+      latest == null || position.averagePrice <= 0
+        ? null
+        : ((latest - position.averagePrice) / position.averagePrice) * 100;
+    add(
+      'portfolio-average',
+      'average',
+      '내 평단가',
+      position.averagePrice,
+      '#a855f7',
+      `포트폴리오에 저장된 보유수량 ${position.quantity.toLocaleString()}주와 총매입금액을 기준으로 계산한 가중평균 매입가격입니다.`,
+      returnRate == null || profit == null
+        ? '현재가를 확인하면 평단가 대비 등락률과 평가손익을 표시합니다.'
+        : `평단가 대비 ${returnRate >= 0 ? '+' : ''}${returnRate.toFixed(2)}% · 평가손익 ${profit >= 0 ? '+' : ''}${Math.round(profit).toLocaleString()}`,
+    );
+  }
 
   add(
     'support',
@@ -1475,6 +1504,7 @@ const RelayChart = memo(function RelayChart({
   signals,
   activeSignalId,
   plan,
+  position,
   asset,
   interval,
   tab,
@@ -1491,6 +1521,7 @@ const RelayChart = memo(function RelayChart({
   signals: ChartSignal[];
   activeSignalId: string | null;
   plan: AiPlan | null;
+  position: PortfolioChartPosition | null;
   asset: Asset;
   interval: string;
   tab: Tab;
@@ -1556,8 +1587,8 @@ const RelayChart = memo(function RelayChart({
   const [indicators, setIndicators] = useState<IndicatorPoint[]>([]);
   const [activeLevel, setActiveLevel] = useState<ChartLevelInfo | null>(null);
   const chartLevels = useMemo(
-    () => buildChartLevels(candles, plan),
-    [candles, plan],
+    () => buildChartLevels(candles, plan, position),
+    [candles, plan, position],
   );
 
   useEffect(() => {
@@ -2426,6 +2457,44 @@ export default function ChartRelayPage() {
 
   const futuresLocked = asset === 'coinFutures' && !canUseFutures;
   const sourceKey = `${asset}:${symbol.toUpperCase()}:${interval}`;
+  const portfolioPositionQuery = useQuery({
+    queryKey: ['chart-relay-portfolio-position', auth.user?.id ?? null, asset, symbol.toUpperCase()],
+    enabled:
+      Boolean(auth.configured && auth.user?.id && symbol) &&
+      (asset === 'stockKR' || asset === 'stockUS'),
+    queryFn: async (): Promise<PortfolioChartPosition | null> => {
+      const { data, error } = await getSupabase()
+        .from('portfolio_holdings')
+        .select('ticker,quantity,average_price')
+        .eq('user_id', auth.user.id)
+        .eq('ticker', symbol.toUpperCase());
+      if (error) throw error;
+      const rows = Array.isArray(data) ? data : [];
+      let quantity = 0;
+      let totalCost = 0;
+      for (const row of rows) {
+        const rowQuantity = Number(row.quantity);
+        const rowAverage = Number(row.average_price);
+        if (
+          !Number.isFinite(rowQuantity) ||
+          !Number.isFinite(rowAverage) ||
+          rowQuantity <= 0 ||
+          rowAverage <= 0
+        ) continue;
+        quantity += rowQuantity;
+        totalCost += rowQuantity * rowAverage;
+      }
+      if (quantity <= 0 || totalCost <= 0) return null;
+      return {
+        quantity,
+        totalCost,
+        averagePrice: totalCost / quantity,
+      };
+    },
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  const portfolioPosition = portfolioPositionQuery.data ?? null;
   const realtime = useRealtimeChart({
     asset,
     symbol,
@@ -3251,6 +3320,7 @@ export default function ChartRelayPage() {
                     signals={signals}
                     activeSignalId={activeSignalId}
                     plan={plan}
+                    position={portfolioPosition}
                     asset={asset}
                     interval={interval}
                     tab={tab}
