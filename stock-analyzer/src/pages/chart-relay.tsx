@@ -1583,6 +1583,7 @@ const RelayChart = memo(function RelayChart({
   const firstFitRef = useRef(false);
   const previousCandlesRef = useRef<CandlePoint[]>([]);
   const previousChartTypeRef = useRef<ChartType | null>(null);
+  const lastViewportSignalIdRef = useRef<string | null>(null);
   const candlesLengthRef = useRef(candles.length);
   const loadOlderArmedRef = useRef(true);
   const viewingHistoryRef = useRef(false);
@@ -1900,6 +1901,9 @@ const RelayChart = memo(function RelayChart({
     const chart = chartRef.current;
     const volumeSeries = volumeSeriesRef.current;
     if (!chart || !volumeSeries || candles.length < 2) return;
+    // 데이터 갱신 직전 사용자가 보고 있던 범위를 보존한다.
+    // 새 캔들이 추가돼도 차트가 임의로 최신 끝으로 이동하지 않게 한다.
+    const viewportBeforeUpdate = chart.timeScale().getVisibleLogicalRange();
     const candleData = candles.map((row) => ({
       time: row.time,
       open: row.open,
@@ -1974,10 +1978,10 @@ const RelayChart = memo(function RelayChart({
         });
       }
       firstFitRef.current = true;
-    } else if (viewingHistoryRef.current && savedRangeRef.current) {
-      chart.timeScale().setVisibleLogicalRange(savedRangeRef.current);
-    } else if (tailOnly) {
-      chart.timeScale().scrollToRealTime();
+      savedRangeRef.current = chart.timeScale().getVisibleLogicalRange();
+    } else if (viewportBeforeUpdate) {
+      chart.timeScale().setVisibleLogicalRange(viewportBeforeUpdate);
+      savedRangeRef.current = viewportBeforeUpdate;
     }
   }, [
     candles,
@@ -2318,8 +2322,15 @@ const RelayChart = memo(function RelayChart({
       markers.sort((left, right) => Number(left.time) - Number(right.time)),
     );
     const signal = signals.find((item) => item.id === activeSignalId);
+    if (!activeSignalId) {
+      lastViewportSignalIdRef.current = null;
+      return;
+    }
+    // 같은 선택 신호의 실시간 데이터가 갱신될 때마다 화면을 다시 이동시키지 않는다.
+    if (lastViewportSignalIdRef.current === activeSignalId) return;
     const target = toUnixSeconds(signal?.barTime ?? signal?.overlay?.fromTime);
     if (target == null) return;
+    lastViewportSignalIdRef.current = activeSignalId;
     let nearestIndex = 0;
     let nearestDistance = Number.POSITIVE_INFINITY;
     candles.forEach((candle, index) => {
@@ -2617,7 +2628,16 @@ const RelayChart = memo(function RelayChart({
             <button
               type="button"
               onClick={() => {
-                chartRef.current?.timeScale().scrollToRealTime();
+                const chart = chartRef.current;
+                if (chart && candles.length > 0) {
+                  const visibleCount = isFullscreen ? 120 : 72;
+                  const range = {
+                    from: Math.max(0, candles.length - visibleCount),
+                    to: candles.length - 1 + 4,
+                  };
+                  chart.timeScale().setVisibleLogicalRange(range);
+                  savedRangeRef.current = range;
+                }
                 viewingHistoryRef.current = false;
                 setShowLatest(false);
               }}
