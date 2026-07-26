@@ -12,6 +12,8 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { isInWatchlist } from '@/lib/stock-display';
+import { addChartRelayMessage } from '@/lib/chart-relay-message-store';
 
 type AnyObj = Record<string, any>;
 type Asset = 'stockKR' | 'stockUS' | 'coinSpot' | 'coinFutures';
@@ -232,6 +234,18 @@ export function PriceLevelAlertMonitor({
       const lastAlert = readLastAlert(symbol, interval, level);
       if (now - lastAlert < cooldownMs) continue;
       writeLastAlert(symbol, interval, level, now);
+      if (!isInWatchlist(symbol, asset)) continue;
+
+      addChartRelayMessage({
+        id: `price:${asset}:${symbol}:${interval}:${level.key}:${level.price}:${now}`,
+        kind: 'price',
+        symbol,
+        asset,
+        title: level.label,
+        summary: `기준 ${formatPrice(level.price, asset)} · 현재 ${formatPrice(currentPrice, asset)}`,
+        price: level.price,
+        occurredAt: new Date(now).toISOString(),
+      });
 
       const nextAlert: ReachedAlert = {
         ...level,
@@ -305,7 +319,7 @@ export function PriceLevelAlertMonitor({
         </div>
       </section>
 
-      {alerts.length > 0 && (
+      {false && alerts.length > 0 && (
         <div className="fixed left-1/2 top-[max(14px,env(safe-area-inset-top))] z-[130] w-[calc(100%-28px)] max-w-md -translate-x-1/2 space-y-2">
           {alerts.map((alert) => (
             <div
