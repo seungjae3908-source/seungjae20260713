@@ -79,12 +79,12 @@ function transformDetails(source: string) {
       </button>
       <dialog
         aria-label="${title}"
-        className="fixed inset-0 z-[120] m-auto flex h-full max-h-none w-full max-w-none items-center justify-center overflow-hidden bg-transparent p-4 backdrop:bg-black/60"
+        className="fixed inset-0 z-[120] m-auto h-full max-h-none w-full max-w-none overflow-hidden bg-transparent p-4 backdrop:bg-black/60"
         onClick={(event) => {
           if (event.target === event.currentTarget) event.currentTarget.close();
         }}
       >
-        <section className="mx-auto flex max-h-[88dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl">
+        <section className="absolute left-1/2 top-1/2 flex max-h-[88dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl">
           <header className="grid grid-cols-[40px_1fr_40px] items-center border-b border-card-border px-3 py-3">
             <span aria-hidden="true" />
             <h2 className="break-keep text-center text-base font-black leading-tight">${title}</h2>
