@@ -17,6 +17,7 @@ import { signalScanPlanPatch } from './signal-scan-plan-patch';
 import { focusedPageLayoutPatch } from './focused-page-layout-patch';
 import { tradingHomeGlobalUiPatch } from './trading-home-global-ui-patch';
 import { settingsPopupSectionsPatch } from './settings-popup-sections-patch';
+import { globalDetailsPopupPatch } from './global-details-popup-patch';
 
 const require = createRequire(import.meta.url);
 const lightweightChartsEntry = require.resolve('lightweight-charts');
@@ -46,6 +47,7 @@ export default defineConfig({
     focusedPageLayoutPatch(),
     tradingHomeGlobalUiPatch(),
     settingsPopupSectionsPatch(),
+    globalDetailsPopupPatch(),
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
