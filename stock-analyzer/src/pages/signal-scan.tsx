@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, RefreshCw, X } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 import { BottomNav } from '@/components/bottom-nav';
+import { SearchField } from '@/components/search-field';
 import { memberGradeLabel, useMemberPermissions } from '@/lib/permissions';
 import { useAuth } from '@/lib/auth';
 import { formatAppPercent, formatAppPrice } from '@/lib/stock-display';
@@ -190,6 +191,7 @@ export default function SignalScanPage() {
     useState<'stock' | 'coin' | null>(null);
   const [selected, setSelected] =
     useState<Candidate | null>(null);
+  const [searchText, setSearchText] = useState('');
 
   const market = routeMarket ?? stateMarket;
   const isFutures = market === 'futures';
@@ -236,6 +238,7 @@ export default function SignalScanPage() {
 
   const visibleCandidates = useMemo(() => {
     const rows: Candidate[] = [];
+    const needle = searchText.trim().normalize('NFKC').toLowerCase().replace(/\s+/g, '');
     const seen = new Set<string>();
 
     for (const group of groups) {
@@ -279,6 +282,16 @@ export default function SignalScanPage() {
         }
 
         if (!matches) continue;
+        if (
+          needle &&
+          ![candidate.name, candidate.ticker, candidate.market].some((value) =>
+            String(value ?? '')
+              .normalize('NFKC')
+              .toLowerCase()
+              .replace(/\s+/g, '')
+              .includes(needle),
+          )
+        ) continue;
 
         seen.add(key);
         rows.push(candidate);
@@ -291,14 +304,15 @@ export default function SignalScanPage() {
           (b.score ?? -1) - (a.score ?? -1) ||
           a.name.localeCompare(b.name, 'ko'),
       )
-      .slice(0, 10);
-  }, [groups, isFutures, signalFilter]);
+      .slice(0, needle ? 30 : 10);
+  }, [groups, isFutures, searchText, signalFilter]);
 
   const selectMarket = (next: ScanMarket) => {
     setSelected(null);
     setMarketMenu(null);
     setDirectionTab('buy');
     setSignalFilter('strongBuy');
+    setSearchText('');
 
     if (routeMarket) {
       navigate(`/tech/signal-scan/${next}`);
@@ -426,6 +440,14 @@ export default function SignalScanPage() {
           })}
         </div>
 
+        <SearchField
+          value={searchText}
+          onChange={setSearchText}
+          className="mt-3"
+          ariaLabel="신호 종목 검색"
+          placeholder="종목명·티커·상품코드 한 글자 검색"
+        />
+
         <div className="mt-3 grid grid-cols-4 gap-1">
           {signalFilters.map((filter) => (
             <button
@@ -493,7 +515,7 @@ export default function SignalScanPage() {
                     key={`${signalFilter}:${candidate.market}:${candidate.ticker}:${candidate.timeframe}`}
                     type="button"
                     onClick={() => setSelected(candidate)}
-                    className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left"
+                    className="flex w-full items-center gap-3 rounded-2xl border border-slate-700 bg-slate-900 p-3 text-left text-white shadow-md"
                   >
                     <span className="w-6 shrink-0 text-center text-sm font-black text-primary">
                       {index + 1}
