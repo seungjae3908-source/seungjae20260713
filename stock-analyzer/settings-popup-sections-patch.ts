@@ -63,9 +63,9 @@ function replaceDetails(source: string) {
           <button
             type="button"
             onClick={() => setSettingsPopup('${id}')}
-            className="flex h-[112px] w-full items-center justify-center rounded-3xl border border-card-border bg-card/90 px-5 py-4 text-center shadow-lg"
+            className="flex h-[76px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
           >
-            <span className="block min-w-0 flex-1 break-keep text-center text-base font-black">${title}</span>
+            <span className="block min-w-0 flex-1 break-keep text-center text-sm font-black">${title}</span>
           </button>
           <AppModal
             open={settingsPopup === '${id}'}
