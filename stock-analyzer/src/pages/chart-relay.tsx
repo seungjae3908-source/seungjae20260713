@@ -600,27 +600,27 @@ const STANDARD_INTERVALS: IntervalItem[] = REALTIME_CHART_TIMEFRAMES.map(
 
 const CANDLE_INTERVAL_GROUPS: Array<{ label: string; items: IntervalItem[] }> = [
   {
-    label: 'Minutes',
+    label: '분봉',
     items: STANDARD_INTERVALS.filter((item) => ['1m', '3m', '5m', '15m', '30m'].includes(item.key)),
   },
   {
-    label: 'Hours',
+    label: '시간봉',
     items: STANDARD_INTERVALS.filter((item) => ['1H', '4H', '12H'].includes(item.key)),
   },
   {
-    label: 'Days',
+    label: '일봉',
     items: STANDARD_INTERVALS.filter((item) => ['1D', '3D', '5D', '15D'].includes(item.key)),
   },
   {
-    label: 'Weeks',
+    label: '주봉',
     items: STANDARD_INTERVALS.filter((item) => item.key === '1W'),
   },
   {
-    label: 'Months',
+    label: '월봉',
     items: STANDARD_INTERVALS.filter((item) => ['1M', '3M', '6M'].includes(item.key)),
   },
   {
-    label: 'Years',
+    label: '연봉',
     items: STANDARD_INTERVALS.filter((item) => ['1Y', '3Y', '5Y', '10Y', 'ALL'].includes(item.key)),
   },
 ];
@@ -3637,9 +3637,6 @@ export default function ChartRelayPage() {
               activeSignalId={activeSignalId}
               onSignalSelect={selectSignal}
             />
-            <p className="mt-3 rounded-2xl border border-warning/40 bg-warning/10 px-3 py-2 text-center text-[10px] font-black text-warning">
-              AI 신호와 추천 가격은 참고용이며 실제 주문을 실행하지 않습니다.
-            </p>
           </>
         )}
       </div>
@@ -3711,7 +3708,7 @@ function ChartSettingsModal({
     panel === 'menu'
       ? '차트 설정'
       : panel === 'candle'
-        ? 'Candle Settings'
+        ? '캔들 설정'
         : panel === 'indicator'
           ? '지표 설정'
           : '신호 설정';
@@ -3739,9 +3736,9 @@ function ChartSettingsModal({
   ];
 
   return (
-    <div className="fixed inset-0 z-[95] flex items-end justify-center bg-black/60 p-3" onClick={onClose}>
+    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/60 p-2 sm:p-3" onClick={onClose}>
       <div
-        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-card-border bg-background p-4"
+        className="max-h-[calc(100dvh-16px)] w-full max-w-md overscroll-contain overflow-y-auto rounded-2xl border border-card-border bg-background p-4 sm:max-h-[90vh]"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-3">
@@ -3827,7 +3824,7 @@ function ChartSettingsModal({
               </div>
             ))}
             <p className="rounded-xl bg-secondary px-3 py-2 text-[10px] font-bold text-muted-foreground">
-              Select one timeframe. Closed-market and no-trade periods do not create artificial candles.
+              봉 주기를 하나 선택하세요. 휴장과 거래 없음 구간에는 임의 캔들을 만들지 않습니다.
             </p>
           </div>
         )}
@@ -4089,14 +4086,14 @@ function ChartSettingsModal({
               onClick={onClose}
               className="rounded-xl border border-card-border py-3 text-xs font-black"
             >
-              {panel === 'candle' ? 'Cancel' : '취소'}
+              취소
             </button>
             <button
               type="button"
               onClick={onApply}
               className="rounded-xl bg-primary py-3 text-xs font-black text-primary-foreground"
             >
-              {panel === 'candle' ? 'Apply' : '적용'}
+              적용
             </button>
           </div>
         )}
@@ -4669,9 +4666,6 @@ function ChartAnalysisTabs({
     <section className="mt-3 overflow-hidden rounded-2xl border border-card-border bg-card">
       <div className="border-b border-card-border p-3">
         <h2 className="text-sm font-black">차트 분석 의견</h2>
-        <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
-          매수·매도 판단 근거와 지난 신호를 탭별로 확인합니다.
-        </p>
         <div className="mt-3 grid grid-cols-4 gap-1.5">
           {tabs.map((item) => (
             <button
