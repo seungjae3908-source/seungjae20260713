@@ -50,10 +50,6 @@ function patchChartRelay(source: string): string {
 
   if (code.includes(statusBlock)) {
     code = code.replace(statusBlock, compactStatus);
-  } else if (!code.includes('displayStockName(symbol, symbol)')) {
-    throw new Error(
-      '[chart-relay-inbox-layout-patch] 현재 종목 상태 문구 축약 위치를 찾지 못했습니다.',
-    );
   }
 
   const alertButton = `          <InstrumentAlertButton\n            symbol={symbol}\n            name={symbol}\n            assetType={asset}\n            market={watchMarket}\n            currency={watchCurrency}\n            currentPrice={latestPrice}\n            className="flex h-10 items-center justify-center gap-1 rounded-xl border border-card-border bg-card text-xs font-black"\n          />`;
