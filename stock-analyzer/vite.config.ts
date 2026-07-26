@@ -31,7 +31,6 @@ import { coinTechStocksFinalPatch } from './coin-tech-stocks-final-patch';
 import { portfolioManwonInputPatch } from './portfolio-manwon-input-patch';
 import { newPagesTypeSafetyPatch } from './new-pages-type-safety-patch';
 import { krwTenThousandUnitPatch } from './krw-ten-thousand-unit-patch';
-import { detailContentStatusPatch } from './detail-content-status-patch';
 import { globalDetailsPopupPatch } from './global-details-popup-patch';
 
 const require = createRequire(import.meta.url);
@@ -76,7 +75,6 @@ export default defineConfig({
     portfolioManwonInputPatch(),
     newPagesTypeSafetyPatch(),
     krwTenThousandUnitPatch(),
-    detailContentStatusPatch(),
     globalDetailsPopupPatch(),
     react(),
     tailwindcss(),
