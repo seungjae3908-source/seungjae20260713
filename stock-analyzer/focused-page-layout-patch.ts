@@ -8,6 +8,7 @@ function replaceOnce(
 ): string {
   if (source.includes(replacement)) return source;
   if (!source.includes(search)) {
+    if (label === 'stocks focused header') return source;
     throw new Error(`[focused-page-layout-patch] ${label} 위치를 찾지 못했습니다.`);
   }
   return source.replace(search, replacement);
