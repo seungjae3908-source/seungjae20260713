@@ -10,6 +10,7 @@ import { chartRelayFocusedMarketPatch } from './chart-relay-focused-market-patch
 import { chartRelaySignalArrowPatch } from './chart-relay-signal-arrow-patch';
 import { chartRelayMobileUiCleanupPatch } from './chart-relay-mobile-ui-cleanup-patch';
 import { chartRelayInboxLayoutPatch } from './chart-relay-inbox-layout-patch';
+import { chartRelayMobileControlRowPatch } from './chart-relay-mobile-control-row-patch';
 import { signalScanPlanPatch } from './signal-scan-plan-patch';
 import { focusedPageLayoutPatch } from './focused-page-layout-patch';
 
@@ -34,6 +35,7 @@ export default defineConfig({
     chartRelaySignalArrowPatch(),
     chartRelayMobileUiCleanupPatch(),
     chartRelayInboxLayoutPatch(),
+    chartRelayMobileControlRowPatch(),
     signalScanPlanPatch(),
     focusedPageLayoutPatch(),
     react(),
