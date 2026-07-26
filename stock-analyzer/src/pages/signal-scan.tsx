@@ -34,6 +34,7 @@ type Candidate = {
   risks: string[];
   invalidation: string[];
   dataAsOf: string;
+  timeframe: '15m' | '1D' | '';
 };
 
 type ScanGroup = {
@@ -132,6 +133,10 @@ function normalizeCandidate(raw: AnyObj): Candidate {
     risks: toStrArr(raw.risks),
     invalidation: toStrArr(raw.invalidation),
     dataAsOf: String(raw.dataAsOf ?? raw.updatedAt ?? ''),
+    timeframe:
+      raw.timeframe === '15m' || raw.timeframe === '1D'
+        ? raw.timeframe
+        : '',
   };
 }
 
@@ -214,7 +219,7 @@ export default function SignalScanPage() {
         const candidate = normalizeCandidate(item);
         if (!candidate.ticker) continue;
 
-        const key = `${candidate.market}:${candidate.ticker}`;
+        const key = `${candidate.market}:${candidate.ticker}:${candidate.timeframe}`;
         if (seen.has(key)) continue;
 
         seen.add(key);
@@ -237,7 +242,7 @@ export default function SignalScanPage() {
       const groupDirection = directionKind(`${group.key} ${group.label}`);
 
       for (const candidate of group.candidates) {
-        const key = `${candidate.market}:${candidate.ticker}`;
+        const key = `${candidate.market}:${candidate.ticker}:${candidate.timeframe}`;
         if (seen.has(key)) continue;
 
         const candidateDirection =
@@ -485,7 +490,7 @@ export default function SignalScanPage() {
               <div className="space-y-2">
                 {visibleCandidates.map((candidate, index) => (
                   <button
-                    key={`${signalFilter}:${candidate.market}:${candidate.ticker}`}
+                    key={`${signalFilter}:${candidate.market}:${candidate.ticker}:${candidate.timeframe}`}
                     type="button"
                     onClick={() => setSelected(candidate)}
                     className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left"
@@ -506,6 +511,9 @@ export default function SignalScanPage() {
                           : ''}
                         {candidate.direction
                           ? ` · ${candidate.direction}`
+                          : ''}
+                        {candidate.timeframe
+                          ? ` · ${candidate.timeframe === '15m' ? '15분' : '일봉'}`
                           : ''}
                       </p>
 
@@ -589,6 +597,9 @@ function CandidateModal({
             <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">
               {candidate.ticker}
               {candidate.market ? ` · ${candidate.market}` : ''}
+              {candidate.timeframe
+                ? ` · ${candidate.timeframe === '15m' ? '15분' : '일봉'}`
+                : ''}
             </p>
           </div>
 
