@@ -18,7 +18,14 @@ import {
 import { cn } from '@/lib/utils';
 
 type PopupKind = 'markets' | 'tech' | 'info';
-type PopupStep = 'main' | 'stocks' | 'coins' | 'marketAnalysis';
+type PopupStep =
+  | 'main'
+  | 'stocks'
+  | 'coins'
+  | 'marketAnalysis'
+  | 'chartRelay'
+  | 'chartStocks'
+  | 'chartCoins';
 
 type NavItem = {
   href: string;
@@ -111,10 +118,38 @@ const COIN_ITEMS: PopupItem[] = [
   { label: '코인 선물', href: '/coins/futures', feature: 'futures' },
 ];
 
-const TECH_ITEMS: PopupItem[] = [
+const TECH_MAIN_ITEMS: PopupItem[] = [
   { label: '신호검색', href: '/tech/signal-scan' },
-  { label: '실시간 차트 분석', href: '/tech/chart-relay' },
+  { label: '차트중계', step: 'chartRelay' },
   { label: '자동매매', href: '/tech/auto-trade', feature: 'autoTrading' },
+];
+
+const CHART_RELAY_MAIN_ITEMS: PopupItem[] = [
+  { label: '주식', step: 'chartStocks' },
+  { label: '코인', step: 'chartCoins' },
+];
+
+const CHART_RELAY_STOCK_ITEMS: PopupItem[] = [
+  {
+    label: '국내주식',
+    href: '/tech/chart-relay?asset=stockKR&tab=live&focused=1',
+  },
+  {
+    label: '해외주식',
+    href: '/tech/chart-relay?asset=stockUS&tab=live&focused=1',
+  },
+];
+
+const CHART_RELAY_COIN_ITEMS: PopupItem[] = [
+  {
+    label: '코인 현물',
+    href: '/tech/chart-relay?asset=coinSpot&tab=live&focused=1',
+  },
+  {
+    label: '코인 선물',
+    href: '/tech/chart-relay?asset=coinFutures&tab=live&focused=1',
+    feature: 'futures',
+  },
 ];
 
 const INFO_MAIN_ITEMS: PopupItem[] = [
@@ -186,7 +221,13 @@ function isFullScreenLocation(location: string): boolean {
 }
 
 function popupTitle(kind: PopupKind, step: PopupStep): string {
-  if (kind === 'tech') return '기술 선택';
+  if (kind === 'tech') {
+    if (step === 'chartRelay') return '차트중계';
+    if (step === 'chartStocks') return '주식 차트중계';
+    if (step === 'chartCoins') return '코인 차트중계';
+    return '기술 선택';
+  }
+
   if (kind === 'markets') {
     if (step === 'stocks') return '주식';
     if (step === 'coins') return '코인';
@@ -241,8 +282,22 @@ export function BottomNav() {
     navigate('/search', { replace: true });
   };
 
+  const goPreviousStep = () => {
+    if (step === 'chartStocks' || step === 'chartCoins') {
+      setStep('chartRelay');
+      return;
+    }
+    setStep('main');
+  };
+
   const currentItems = useMemo<PopupItem[]>(() => {
-    if (popup === 'tech') return TECH_ITEMS;
+    if (popup === 'tech') {
+      if (step === 'chartRelay') return CHART_RELAY_MAIN_ITEMS;
+      if (step === 'chartStocks') return CHART_RELAY_STOCK_ITEMS;
+      if (step === 'chartCoins') return CHART_RELAY_COIN_ITEMS;
+      return TECH_MAIN_ITEMS;
+    }
+
     if (popup === 'markets') {
       if (step === 'stocks') return STOCK_ITEMS;
       if (step === 'coins') return COIN_ITEMS;
@@ -251,12 +306,14 @@ export function BottomNav() {
         { label: '코인', step: 'coins' },
       ];
     }
+
     if (popup === 'info') {
       if (step === 'stocks') return INFO_STOCK_ITEMS;
       if (step === 'coins') return INFO_COIN_ITEMS;
       if (step === 'marketAnalysis') return MARKET_ANALYSIS_ITEMS;
       return INFO_MAIN_ITEMS;
     }
+
     return [];
   }, [popup, step]);
 
@@ -306,10 +363,10 @@ export function BottomNav() {
               <X className="h-5 w-5" />
             </button>
 
-            {step !== 'main' && popup !== 'tech' && (
+            {step !== 'main' && (
               <button
                 type="button"
-                onClick={() => setStep('main')}
+                onClick={goPreviousStep}
                 aria-label="이전 선택"
                 className="absolute left-4 top-4 flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-[#171a21] text-white transition active:scale-95"
               >
