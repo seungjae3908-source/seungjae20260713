@@ -152,9 +152,12 @@ export function UnifiedAssetSearch({
         const symbol = String(row.symbol ?? '').trim().toUpperCase();
         const base = symbol.replace(/USDT$/, '');
         const alias = spotNames.get(base);
+        const displayName = String(
+          alias?.koreanName ?? alias?.englishName ?? base,
+        ).trim();
         return {
           symbol,
-          name: String(alias?.koreanName ?? alias?.englishName ?? base || symbol).trim(),
+          name: displayName || symbol,
           asset,
           marketLabel: '코인 선물',
           exchange: 'BITGET',
