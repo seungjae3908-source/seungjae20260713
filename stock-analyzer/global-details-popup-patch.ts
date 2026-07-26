@@ -84,7 +84,7 @@ function transformDetails(source: string) {
           if (event.target === event.currentTarget) event.currentTarget.close();
         }}
       >
-        <section className="absolute left-1/2 top-1/2 flex max-h-[88dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl">
+        <section className="absolute left-1/2 top-1/2 flex max-h-[88dvh] w-[calc(100%_-_2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl">
           <header className="grid grid-cols-[40px_1fr_40px] items-center border-b border-card-border px-3 py-3">
             <span aria-hidden="true" />
             <h2 className="break-keep text-center text-base font-black leading-tight">${title}</h2>
