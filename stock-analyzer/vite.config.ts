@@ -26,6 +26,7 @@ import { sixRequestedFixesPatch } from './six-requested-fixes-patch';
 import { currentRequestBatchPatch } from './current-request-batch-patch';
 import { feedFiveMorePatch } from './feed-five-more-patch';
 import { infoTabFixPatch } from './info-tab-fix-patch';
+import { infoTabFinalScopePatch } from './info-tab-final-scope-patch';
 import { portfolioManwonInputPatch } from './portfolio-manwon-input-patch';
 import { newPagesTypeSafetyPatch } from './new-pages-type-safety-patch';
 import { krwTenThousandUnitPatch } from './krw-ten-thousand-unit-patch';
@@ -69,6 +70,7 @@ export default defineConfig({
     currentRequestBatchPatch(),
     feedFiveMorePatch(),
     infoTabFixPatch(),
+    infoTabFinalScopePatch(),
     portfolioManwonInputPatch(),
     newPagesTypeSafetyPatch(),
     krwTenThousandUnitPatch(),
