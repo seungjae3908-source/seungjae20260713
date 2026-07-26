@@ -62,13 +62,14 @@ export function UnifiedAssetSearch({
 
   const stockMarket = asset === 'stockUS' ? 'US' : 'KR';
   const isStock = asset === 'stockKR' || asset === 'stockUS';
+  const isCoin = asset === 'coinSpot' || asset === 'coinFutures';
 
   const stockQuery = useQuery({
     queryKey: ['unified-asset-search', asset, debounced],
     queryFn: () =>
       apiGet<{ results?: AnyObj[] }>(
-        `/search/quotes?q=${encodeURIComponent(debounced)}&market=${stockMarket}&limit=30`,
-        { timeoutMs: 20_000 },
+        `/search/quotes?q=${encodeURIComponent(debounced)}&market=${stockMarket}&limit=30&enrich=0`,
+        { timeoutMs: 12_000 },
       ),
     enabled: isStock && debounced.length > 0,
     staleTime: 30_000,
@@ -77,15 +78,15 @@ export function UnifiedAssetSearch({
 
   const spotQuery = useQuery({
     queryKey: ['unified-asset-search', 'coin-spot-directory'],
-    queryFn: () => apiGet<AnyObj>('/crypto/spot/markets', { timeoutMs: 20_000 }),
-    enabled: asset === 'coinSpot' && debounced.length > 0,
+    queryFn: () => apiGet<AnyObj>('/crypto/spot/markets', { timeoutMs: 15_000 }),
+    enabled: isCoin && debounced.length > 0,
     staleTime: 10 * 60_000,
     retry: 1,
   });
 
   const futuresQuery = useQuery({
     queryKey: ['unified-asset-search', 'coin-futures-directory'],
-    queryFn: () => apiGet<AnyObj>('/crypto/futures/tickers', { timeoutMs: 20_000 }),
+    queryFn: () => apiGet<AnyObj>('/crypto/futures/tickers', { timeoutMs: 15_000 }),
     enabled: asset === 'coinFutures' && debounced.length > 0,
     staleTime: 60_000,
     retry: 1,
@@ -109,8 +110,10 @@ export function UnifiedAssetSearch({
         .slice(0, 30);
     }
 
+    const spotRows = arrayRows(spotQuery.data, ['markets']);
+
     if (asset === 'coinSpot') {
-      return arrayRows(spotQuery.data, ['markets'])
+      return spotRows
         .filter((row) =>
           [row.symbol, row.koreanName, row.englishName, row.market].some((item) =>
             normalize(item).includes(needle),
@@ -129,17 +132,29 @@ export function UnifiedAssetSearch({
         .slice(0, 30);
     }
 
+    const spotNames = new Map(
+      spotRows.map((row) => [String(row.symbol ?? '').toUpperCase(), row]),
+    );
+
     return arrayRows(futuresQuery.data, ['tickers'])
-      .filter((row) =>
-        [row.symbol, String(row.symbol ?? '').replace(/USDT$/, '')].some((item) =>
-          normalize(item).includes(needle),
-        ),
-      )
+      .filter((row) => {
+        const symbol = String(row.symbol ?? '').toUpperCase();
+        const base = symbol.replace(/USDT$/, '');
+        const alias = spotNames.get(base);
+        return [
+          symbol,
+          base,
+          alias?.koreanName,
+          alias?.englishName,
+        ].some((item) => normalize(item).includes(needle));
+      })
       .map((row) => {
         const symbol = String(row.symbol ?? '').trim().toUpperCase();
+        const base = symbol.replace(/USDT$/, '');
+        const alias = spotNames.get(base);
         return {
           symbol,
-          name: symbol.replace(/USDT$/, '') || symbol,
+          name: String(alias?.koreanName ?? alias?.englishName ?? base || symbol).trim(),
           asset,
           marketLabel: '코인 선물',
           exchange: 'BITGET',
@@ -183,7 +198,7 @@ export function UnifiedAssetSearch({
               ? '종목명 또는 종목코드 검색'
               : asset === 'coinSpot'
                 ? '코인명 또는 심볼 검색'
-                : '선물 심볼 검색')
+                : '코인명 또는 선물 심볼 검색')
           }
           className="min-w-0 flex-1 bg-transparent text-left text-sm font-bold outline-none"
         />
