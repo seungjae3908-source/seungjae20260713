@@ -1,0 +1,53 @@
+name: Selective Breakout Validation
+
+on:
+  push:
+    branches:
+      - agent/improved-multisymbol-backtest-20260726
+    paths:
+      - tools/backtest/selective_breakout_validation.py
+      - tools/backtest/improved_multisymbol_split_backtest.py
+      - .github/workflows/selective-breakout-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout isolated branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check numpy pandas requests
+
+      - name: Syntax check
+        run: |
+          python -m py_compile tools/backtest/improved_multisymbol_split_backtest.py
+          python -m py_compile tools/backtest/selective_breakout_validation.py
+
+      - name: Run selective public-data validation
+        run: python tools/backtest/selective_breakout_validation.py
+
+      - name: Commit generated results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/backtests/BITGET_5SYMBOL_45D_SELECTIVE_BREAKOUT.md \
+                  docs/backtests/BITGET_5SYMBOL_45D_SELECTIVE_BREAKOUT.json \
+                  docs/backtests/BITGET_5SYMBOL_45D_SELECTIVE_BREAKOUT_TRADES.csv \
+                  docs/backtests/BITGET_5SYMBOL_45D_SELECTIVE_BREAKOUT_RUNS.csv
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+          else
+            git commit -m "test: record selective breakout validation results [skip ci]"
+            git push
+          fi
