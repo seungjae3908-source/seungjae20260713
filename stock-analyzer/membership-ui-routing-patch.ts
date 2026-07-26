@@ -71,11 +71,10 @@ function patchBottomNav(source: string): string {
     'signal scan market items',
   );
 
-  code = replaceOnce(
-    code,
-    `{ label: '포트폴리오', href: '/portfolio' },`,
-    `{ label: '포트폴리오', href: '/portfolio', feature: 'portfolio' },`,
-    'portfolio popup permission',
+  // 포트폴리오 경로가 전체 자산 화면으로 바뀌어도 권한을 유지한다.
+  code = code.replace(
+    /(\{ label: '포트폴리오', href: '[^']+')(?!, feature: 'portfolio') \},/,
+    "$1, feature: 'portfolio' },",
   );
 
   code = replaceOnce(
