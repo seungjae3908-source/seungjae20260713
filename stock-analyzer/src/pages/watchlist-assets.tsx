@@ -80,7 +80,7 @@ export default function WatchlistAssetsPage() {
 
   const quoteMap = useMemo(() => {
     const rows = (quotes.data?.quotes ?? quotes.data?.tickers ?? []) as AnyObj[];
-    return new Map(rows.map((row) => [
+    return new Map<string, AnyObj>(rows.map((row): [string, AnyObj] => [
       String(row.ticker ?? row.symbol ?? row.market ?? '').replace(/^KRW-/, '').toUpperCase(),
       row,
     ]));
