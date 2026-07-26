@@ -1,0 +1,50 @@
+name: Improved Multi-Symbol Futures Backtest
+
+on:
+  push:
+    branches:
+      - agent/improved-multisymbol-backtest-20260726
+    paths:
+      - tools/backtest/improved_multisymbol_split_backtest.py
+      - .github/workflows/improved-multisymbol-backtest.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout isolated branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check numpy pandas requests
+
+      - name: Syntax check
+        run: python -m py_compile tools/backtest/improved_multisymbol_split_backtest.py
+
+      - name: Run public-data backtest
+        run: python tools/backtest/improved_multisymbol_split_backtest.py
+
+      - name: Commit generated results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/backtests/BITGET_3SYMBOL_45D_IMPROVED_COMPARISON.md \
+                  docs/backtests/BITGET_3SYMBOL_45D_IMPROVED_COMPARISON.json \
+                  docs/backtests/BITGET_3SYMBOL_45D_IMPROVED_COMPARISON_TRADES.csv \
+                  docs/backtests/BITGET_3SYMBOL_45D_IMPROVED_COMPARISON_RUNS.csv
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+          else
+            git commit -m "test: record improved multi-symbol backtest results [skip ci]"
+            git push
+          fi
