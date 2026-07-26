@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
-import { ArrowLeft, RefreshCw, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Download, RefreshCw, ShieldCheck } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { cn } from '@/lib/utils';
@@ -17,16 +17,20 @@ type ShadowPolicy = {
   maximumDailyLossKRW: number;
   maximumTotalLossKRW: number;
   allowedLeverage: number;
+  leverageByMarket: Record<ShadowMarket, number>;
 };
 
 type ShadowPosition = {
   id: string;
   market: ShadowMarket;
   symbol: string;
+  displayName: string;
   direction: ShadowDirection;
+  leverage: number;
   quantity: number;
   entryPrice: number;
   allocatedCapitalKRW: number;
+  positionNotionalKRW: number;
   stopPrice: number | null;
   targetPrice: number | null;
   openedAt: string;
@@ -41,11 +45,19 @@ type ShadowTrade = {
   id: string;
   market: ShadowMarket;
   symbol: string;
+  displayName: string;
   direction: ShadowDirection;
+  leverage: number;
   allocatedCapitalKRW: number;
+  positionNotionalKRW: number;
+  entryPrice: number;
+  exitPrice: number;
+  entryFeeKRW: number;
+  exitFeeKRW: number;
   netPnlKRW: number;
-  exitReason: string;
+  openedAt: string;
   closedAt: string;
+  exitReason: string;
 };
 
 type ShadowStatus = {
@@ -62,6 +74,7 @@ type ShadowStatus = {
     equityKRW: number;
     availableCapitalKRW: number;
     allocatedCapitalKRW: number;
+    totalOpenMarginKRW: number;
     realizedPnlKRW: number;
     unrealizedPnlKRW: number;
     dailyNetPnlKRW: number;
@@ -76,11 +89,15 @@ type ShadowStatus = {
   trades: ShadowTrade[];
 };
 
-const MARKET_TABS: Array<{ key: ShadowMarket; label: string; placeholder: string }> = [
+const MARKET_TABS: Array<{
+  key: ShadowMarket;
+  label: string;
+  placeholder: string;
+}> = [
   { key: 'KR', label: '국내주식', placeholder: '예: 005930' },
   { key: 'US', label: '해외주식', placeholder: '예: AAPL' },
   { key: 'UPBIT_SPOT', label: '코인 현물', placeholder: '예: BTC' },
-  { key: 'BITGET_FUTURES', label: '코인 선물', placeholder: '예: BTCUSDT' },
+  { key: 'BITGET_FUTURES', label: '코인 선물 5배', placeholder: '예: BTCUSDT' },
 ];
 
 function formatKrw(value: number | null | undefined) {
@@ -110,6 +127,17 @@ async function readApi<T>(response: Response): Promise<T> {
   return payload;
 }
 
+function downloadFile(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
 export default function AutoTradePage() {
   const [, navigate] = useLocation();
   const [status, setStatus] = useState<ShadowStatus | null>(null);
@@ -121,12 +149,22 @@ export default function AutoTradePage() {
   const [targetPrice, setTargetPrice] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const activeMarket = useMemo(
     () => MARKET_TABS.find((item) => item.key === market) ?? MARKET_TABS[0],
     [market],
   );
+
+  const selectedLeverage =
+    status?.policy.leverageByMarket?.[market] ??
+    (market === 'BITGET_FUTURES' ? 5 : 1);
+  const enteredCapital = Number(notionalKRW);
+  const estimatedTotalMargin =
+    Number.isFinite(enteredCapital) && enteredCapital > 0
+      ? enteredCapital * selectedLeverage
+      : 0;
 
   const loadStatus = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -202,6 +240,29 @@ export default function AutoTradePage() {
     }
   }
 
+  async function exportJournal() {
+    setExporting(true);
+    setError(null);
+    try {
+      const response = await authorizedFetch('/api/auto-trading/shadow/export.xls', {
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as {
+          message?: string;
+          error?: string;
+        };
+        throw new Error(payload.message ?? payload.error ?? `HTTP_${response.status}`);
+      }
+      const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      downloadFile(await response.blob(), `자동매매-매매일지-${date}.xls`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '엑셀 파일을 만들지 못했습니다.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const positionBlocked =
     !status ||
     status.account.disabled ||
@@ -222,7 +283,7 @@ export default function AutoTradePage() {
           <div className="text-center">
             <h1 className="text-lg font-extrabold">자동매매 1단계</h1>
             <p className="text-[11px] font-bold text-muted-foreground">
-              20만 원 실시간 섀도 계좌
+              20만 원 섀도 계좌 · 코인 선물 5배
             </p>
           </div>
           <button
@@ -237,7 +298,7 @@ export default function AutoTradePage() {
 
         <div className="mt-3 rounded-2xl border border-positive/40 bg-positive/10 p-3 text-center text-xs font-black text-positive">
           <ShieldCheck className="mr-1 inline h-4 w-4" />
-          실제 주문 0건 · 실제 자금은 사용하지 않습니다.
+          실제 주문 0건 · 5배는 비트겟 선물 가상계산에만 적용됩니다.
         </div>
 
         {error && (
@@ -268,13 +329,13 @@ export default function AutoTradePage() {
 
           <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
             <Metric label="사용 가능" value={formatKrw(status?.account.availableCapitalKRW)} />
-            <Metric label="운용 중" value={formatKrw(status?.account.allocatedCapitalKRW)} />
+            <Metric label="운용 원금" value={formatKrw(status?.account.allocatedCapitalKRW)} />
+            <Metric label="총 마진" value={formatKrw(status?.account.totalOpenMarginKRW)} />
             <Metric label="확정 손익" value={formatKrw(status?.account.realizedPnlKRW)} />
             <Metric label="평가 손익" value={formatKrw(status?.account.unrealizedPnlKRW)} />
             <Metric label="승률" value={`${(status?.account.winRate ?? 0).toFixed(1)}%`} />
             <Metric label="거래 수" value={`${status?.account.tradeCount ?? 0}회`} />
-            <Metric label="비용 추정" value={formatKrw(status?.account.totalFeesKRW)} />
-            <Metric label="슬리피지 추정" value={formatKrw(status?.account.estimatedSlippageKRW)} />
+            <Metric label="수수료" value={formatKrw(status?.account.totalFeesKRW)} />
           </div>
 
           {status?.account.disabled && (
@@ -288,7 +349,7 @@ export default function AutoTradePage() {
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-black">가상 진입</h2>
             <span className="text-[10px] font-bold text-muted-foreground">
-              1회 최대 {formatKrw(status?.policy.maximumNotionalPerPositionKRW ?? 20_000)}
+              1회 원금 최대 {formatKrw(status?.policy.maximumNotionalPerPositionKRW ?? 20_000)}
             </span>
           </div>
 
@@ -350,9 +411,14 @@ export default function AutoTradePage() {
           </div>
 
           <div className="mt-3 grid grid-cols-3 gap-2">
-            <Field label="가상 주문금액" value={notionalKRW} onChange={setNotionalKRW} />
+            <Field label="가상 원금" value={notionalKRW} onChange={setNotionalKRW} />
             <Field label="손절가(선택)" value={stopPrice} onChange={setStopPrice} />
             <Field label="목표가(선택)" value={targetPrice} onChange={setTargetPrice} />
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Metric label="적용 레버리지" value={`${selectedLeverage}배`} compact />
+            <Metric label="예상 총 마진" value={formatKrw(estimatedTotalMargin)} compact />
           </div>
 
           <button
@@ -365,7 +431,7 @@ export default function AutoTradePage() {
           </button>
 
           <p className="mt-2 text-center text-[10px] font-bold leading-4 text-muted-foreground">
-            비용과 슬리피지를 보수적으로 반영하며 실제 거래소 주문은 전송하지 않습니다.
+            5배는 손익뿐 아니라 수수료와 슬리피지에도 동일하게 반영됩니다.
           </p>
         </section>
 
@@ -381,9 +447,9 @@ export default function AutoTradePage() {
                 <div key={position.id} className="rounded-xl border border-card-border bg-background p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-sm font-black">{position.symbol}</p>
+                      <p className="text-sm font-black">{position.displayName || position.symbol}</p>
                       <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
-                        {position.market} · {position.direction} · {formatDate(position.openedAt)}
+                        {position.market} · {position.direction} · {position.leverage}배 · {formatDate(position.openedAt)}
                       </p>
                     </div>
                     <span
@@ -400,7 +466,8 @@ export default function AutoTradePage() {
                   <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
                     <Metric label="진입가" value={formatPrice(position.entryPrice)} compact />
                     <Metric label="현재가" value={formatPrice(position.currentPrice)} compact />
-                    <Metric label="운용금" value={formatKrw(position.allocatedCapitalKRW)} compact />
+                    <Metric label="원금" value={formatKrw(position.allocatedCapitalKRW)} compact />
+                    <Metric label="총 마진" value={formatKrw(position.positionNotionalKRW)} compact />
                     <Metric
                       label="수익률"
                       value={
@@ -410,7 +477,6 @@ export default function AutoTradePage() {
                       }
                       compact
                     />
-                    <Metric label="손절가" value={formatPrice(position.stopPrice)} compact />
                     <Metric label="목표가" value={formatPrice(position.targetPrice)} compact />
                   </div>
                   {position.quoteError && (
@@ -433,7 +499,24 @@ export default function AutoTradePage() {
         </section>
 
         <section className="mt-4 rounded-2xl border border-card-border bg-card p-4">
-          <h2 className="text-sm font-black">최근 가상 거래</h2>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-black">매매일지</h2>
+              <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
+                완료된 거래 전체를 엑셀로 내려받습니다.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={exporting || !status?.trades.length}
+              onClick={() => void exportJournal()}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-[11px] font-black text-primary disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Download className="h-3.5 w-3.5" />
+              {exporting ? '생성 중' : '엑셀 저장'}
+            </button>
+          </div>
+
           {!status?.trades.length ? (
             <p className="mt-3 text-center text-xs font-bold text-muted-foreground">
               완료된 가상 거래가 없습니다.
@@ -447,10 +530,13 @@ export default function AutoTradePage() {
                 >
                   <div className="min-w-0">
                     <p className="truncate text-xs font-black">
-                      {trade.symbol} · {trade.direction}
+                      {trade.displayName || trade.symbol} · {trade.direction} · {trade.leverage}배
                     </p>
                     <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
-                      {formatDate(trade.closedAt)}
+                      {formatDate(trade.openedAt)} → {formatDate(trade.closedAt)}
+                    </p>
+                    <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
+                      원금 {formatKrw(trade.allocatedCapitalKRW)} · 총 마진 {formatKrw(trade.positionNotionalKRW)}
                     </p>
                   </div>
                   <span
@@ -465,12 +551,17 @@ export default function AutoTradePage() {
               ))}
             </div>
           )}
+
+          <p className="mt-3 text-[10px] font-bold leading-4 text-muted-foreground">
+            엑셀 열: 종목명 / 구매일자 / 매도일자 / 진입가격 / 청산가격 / 원금 /
+            이익합산금액 / 이익률 / 수수료 / 총 마진
+          </p>
         </section>
 
         <p className="mt-4 text-center text-[10px] font-bold leading-4 text-muted-foreground">
-          정책 {status?.policy.version ?? 'shadow-200k-v1'} · 15초마다 시세 갱신
+          정책 {status?.policy.version ?? 'shadow-200k-v2-futures-5x'} · 15초마다 시세 갱신
           <br />
-          자동 신호 진입과 실제 주문은 다음 단계에서 별도 검증 후 연결합니다.
+          자동 신호 진입과 실제 주문은 별도 검증 전까지 연결하지 않습니다.
         </p>
       </div>
       <BottomNav />
