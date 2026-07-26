@@ -17,7 +17,7 @@ import {
 } from '@/lib/permissions';
 import { cn } from '@/lib/utils';
 
-type PopupKind = 'markets' | 'tech' | 'info';
+type PopupKind = 'markets' | 'watch' | 'tech' | 'info';
 type PopupStep =
   | 'main'
   | 'stocks'
@@ -25,7 +25,9 @@ type PopupStep =
   | 'marketAnalysis'
   | 'chartRelay'
   | 'chartStocks'
-  | 'chartCoins';
+  | 'chartCoins'
+  | 'watchlistAssets'
+  | 'alertAssets';
 
 type NavItem = {
   href: string;
@@ -69,6 +71,7 @@ const NAV_ITEMS: NavItem[] = [
     label: '관심',
     icon: Star,
     feature: 'basicChart',
+    popup: 'watch',
     match: (path) => path.startsWith('/watchlist') || path.startsWith('/alerts'),
   },
   {
@@ -90,6 +93,7 @@ const NAV_ITEMS: NavItem[] = [
     popup: 'info',
     match: (path) =>
       path.startsWith('/stock-info') ||
+      path.startsWith('/info/') ||
       path.startsWith('/learn') ||
       path.startsWith('/analysis/') ||
       path.startsWith('/portfolio'),
@@ -116,6 +120,25 @@ const STOCK_ITEMS: PopupItem[] = [
 const COIN_ITEMS: PopupItem[] = [
   { label: '코인 현물', href: '/coins/spot' },
   { label: '코인 선물', href: '/coins/futures', feature: 'futures' },
+];
+
+const WATCH_MAIN_ITEMS: PopupItem[] = [
+  { label: '관심종목', step: 'watchlistAssets' },
+  { label: '지정가알림', step: 'alertAssets' },
+];
+
+const WATCHLIST_ASSET_ITEMS: PopupItem[] = [
+  { label: '국내주식', href: '/watchlist/assets?view=watchlist&asset=stockKR' },
+  { label: '해외주식', href: '/watchlist/assets?view=watchlist&asset=stockUS' },
+  { label: '코인 현물', href: '/watchlist/assets?view=watchlist&asset=coinSpot' },
+  { label: '코인 선물', href: '/watchlist/assets?view=watchlist&asset=coinFutures', feature: 'futures' },
+];
+
+const ALERT_ASSET_ITEMS: PopupItem[] = [
+  { label: '국내주식', href: '/watchlist/assets?view=alerts&asset=stockKR' },
+  { label: '해외주식', href: '/watchlist/assets?view=alerts&asset=stockUS' },
+  { label: '코인 현물', href: '/watchlist/assets?view=alerts&asset=coinSpot' },
+  { label: '코인 선물', href: '/watchlist/assets?view=alerts&asset=coinFutures', feature: 'futures' },
 ];
 
 const TECH_MAIN_ITEMS: PopupItem[] = [
@@ -153,39 +176,40 @@ const CHART_RELAY_COIN_ITEMS: PopupItem[] = [
 ];
 
 const INFO_MAIN_ITEMS: PopupItem[] = [
-  { label: '주식 정보', step: 'stocks' },
-  { label: '코인 정보', step: 'coins' },
+  { label: '전체', href: '/portfolio/summary?asset=all&source=info' },
+  { label: '주식', step: 'stocks' },
+  { label: '코인', step: 'coins' },
   { label: '공부', href: '/learn' },
-  { label: '시황', step: 'marketAnalysis' },
-  { label: '포트폴리오', href: '/portfolio' },
+  { label: '증시현황', step: 'marketAnalysis' },
+  { label: '포트폴리오', href: '/portfolio/summary?asset=all&source=portfolio' },
 ];
 
 const INFO_STOCK_ITEMS: PopupItem[] = [
   {
     label: '국내주식 정보',
-    href: '/stock-info?asset=stock&market=KR',
+    href: '/stock-info?asset=stock&market=KR&focused=1',
   },
   {
     label: '해외주식 정보',
-    href: '/stock-info?asset=stock&market=US',
+    href: '/stock-info?asset=stock&market=US&focused=1',
   },
 ];
 
 const INFO_COIN_ITEMS: PopupItem[] = [
   {
     label: '코인 현물 정보',
-    href: '/stock-info?asset=coin&coinMarket=spot',
+    href: '/stock-info?asset=coin&coinMarket=spot&focused=1',
   },
   {
     label: '코인 선물 정보',
-    href: '/stock-info?asset=coin&coinMarket=futures',
+    href: '/stock-info?asset=coin&coinMarket=futures&focused=1',
     feature: 'futures',
   },
 ];
 
 const MARKET_ANALYSIS_ITEMS: PopupItem[] = [
-  { label: '국내 시황', href: '/analysis/KR' },
-  { label: '해외 시황', href: '/analysis/US' },
+  { label: '국내 증시현황', href: '/analysis/KR' },
+  { label: '해외 증시현황', href: '/analysis/US' },
 ];
 
 function splitLocation(location: string) {
@@ -212,6 +236,7 @@ function isFullScreenLocation(location: string): boolean {
     path.startsWith('/scanner') ||
     path.startsWith('/auto-trading') ||
     path.startsWith('/alerts') ||
+    path.startsWith('/watchlist/assets') ||
     path.startsWith('/portfolio') ||
     path.startsWith('/recommendations') ||
     path.startsWith('/account') ||
@@ -234,9 +259,15 @@ function popupTitle(kind: PopupKind, step: PopupStep): string {
     return '종목 선택';
   }
 
+  if (kind === 'watch') {
+    if (step === 'watchlistAssets') return '관심종목';
+    if (step === 'alertAssets') return '지정가알림';
+    return '관심 선택';
+  }
+
   if (step === 'stocks') return '주식 정보';
   if (step === 'coins') return '코인 정보';
-  if (step === 'marketAnalysis') return '시황';
+  if (step === 'marketAnalysis') return '증시현황';
   return '정보 선택';
 }
 
@@ -305,6 +336,12 @@ export function BottomNav() {
         { label: '주식', step: 'stocks' },
         { label: '코인', step: 'coins' },
       ];
+    }
+
+    if (popup === 'watch') {
+      if (step === 'watchlistAssets') return WATCHLIST_ASSET_ITEMS;
+      if (step === 'alertAssets') return ALERT_ASSET_ITEMS;
+      return WATCH_MAIN_ITEMS;
     }
 
     if (popup === 'info') {
@@ -390,7 +427,7 @@ export function BottomNav() {
                     }
                     if (item.href) moveToPage(item.href);
                   }}
-                  className="flex min-h-[56px] w-full items-center justify-center rounded-2xl border border-white/10 bg-[#171a21] px-4 py-3 text-base font-extrabold text-white transition hover:bg-[#20242d] active:scale-[0.98] active:bg-[#252a35]"
+                  className="flex min-h-[56px] w-full items-center justify-center rounded-2xl border border-white/10 bg-[#171a21] px-4 py-3 text-center text-base font-extrabold text-white transition hover:bg-[#20242d] active:scale-[0.98] active:bg-[#252a35]"
                 >
                   {item.label}
                 </button>
@@ -424,7 +461,7 @@ export function BottomNav() {
                   navigate(item.href);
                 }}
                 className={cn(
-                  'flex min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-2 text-[10px] font-extrabold transition',
+                  'flex min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-2 text-center text-[10px] font-extrabold transition',
                   active
                     ? 'text-primary'
                     : 'text-muted-foreground active:text-foreground',
