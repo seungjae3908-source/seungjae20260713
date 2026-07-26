@@ -62,13 +62,20 @@ export default function AccountPage() {
     setFoundLoginName('');
   }
 
-  async function submitLogin(event: FormEvent) {
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
+
+    // 모바일 브라우저·비밀번호 관리자 자동완성은 input 표시값과 React 상태가
+    // 순간적으로 어긋날 수 있으므로 제출 시 실제 폼 값을 기준으로 로그인한다.
+    const formData = new FormData(event.currentTarget);
+    const submittedId = String(formData.get('loginId') ?? loginId);
+    const submittedPassword = String(formData.get('loginPassword') ?? loginPassword);
+
     resetMessages();
     setBusy(true);
     try {
-      await auth.signIn(loginId, loginPassword, keepLogin);
+      await auth.signIn(submittedId, submittedPassword, keepLogin);
       await auth.refreshProfile();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '로그인에 실패했습니다.');
@@ -264,10 +271,10 @@ export default function AccountPage() {
             {tab === 'login' && (
               <form onSubmit={submitLogin} className="mt-5 space-y-4">
                 <Field label="아이디 또는 이메일">
-                  <input value={loginId} onChange={(event) => setLoginId(event.target.value)} minLength={1} maxLength={254} required autoComplete="username" className="input" />
+                  <input name="loginId" value={loginId} onChange={(event) => setLoginId(event.target.value)} minLength={1} maxLength={254} required autoComplete="username" className="input" />
                 </Field>
                 <Field label="비밀번호">
-                  <PasswordInput value={loginPassword} onChange={setLoginPassword} show={showLoginPassword} onToggle={() => setShowLoginPassword((v) => !v)} autoComplete="current-password" />
+                  <PasswordInput name="loginPassword" value={loginPassword} onChange={setLoginPassword} show={showLoginPassword} onToggle={() => setShowLoginPassword((v) => !v)} autoComplete="current-password" />
                 </Field>
                 <label className="flex items-center gap-2 text-xs font-extrabold">
                   <input type="checkbox" checked={keepLogin} onChange={(event) => setKeepLogin(event.target.checked)} className="h-4 w-4 rounded border-card-border" />
@@ -367,7 +374,8 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   );
 }
 
-function PasswordInput({ value, onChange, show, onToggle, autoComplete }: {
+function PasswordInput({ name, value, onChange, show, onToggle, autoComplete }: {
+  name?: string;
   value: string;
   onChange: (value: string) => void;
   show: boolean;
@@ -376,7 +384,7 @@ function PasswordInput({ value, onChange, show, onToggle, autoComplete }: {
 }) {
   return (
     <div className="relative">
-      <input type={show ? 'text' : 'password'} value={value} onChange={(event) => onChange(event.target.value)} minLength={8} maxLength={72} required autoComplete={autoComplete} className="input pr-11" />
+      <input name={name} type={show ? 'text' : 'password'} value={value} onChange={(event) => onChange(event.target.value)} minLength={8} maxLength={72} required autoComplete={autoComplete} className="input pr-11" />
       <button type="button" onClick={onToggle} aria-label={show ? '비밀번호 숨기기' : '비밀번호 표시'} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
         {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
       </button>
