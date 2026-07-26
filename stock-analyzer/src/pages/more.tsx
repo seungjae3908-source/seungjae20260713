@@ -329,12 +329,12 @@ export default function MorePage() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <header className="sticky top-0 z-20 border-b border-card-border bg-background/95 px-5 py-5 backdrop-blur">
+    <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-background">
+      <header className="border-b border-card-border bg-background px-5 py-5">
           <h1 className="text-center text-2xl font-black tracking-tight">설정</h1>
       </header>
 
-        <main className="flex-1 space-y-5 overflow-y-auto px-5 py-5 pb-28">
+        <main className="space-y-5 px-5 py-5 pb-28">
           <details className="group rounded-3xl border border-card-border bg-card/90 px-5 py-4 shadow-lg transition-all duration-200">
 
           <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4">
