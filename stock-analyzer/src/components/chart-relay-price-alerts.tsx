@@ -274,9 +274,6 @@ export function PriceLevelAlertMonitor({
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-sm font-black">목표가·손절가 도달 알림</h2>
-            <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
-              앱을 열어 둔 동안 가격이 목표가·분할매수·분할매도·손절가에 닿으면 즉시 알립니다.
-            </p>
           </div>
           <BellRing className="h-5 w-5 shrink-0 text-primary" />
         </div>
@@ -306,10 +303,6 @@ export function PriceLevelAlertMonitor({
             </span>
           )}
         </div>
-
-        <p className="mt-2 text-[9px] font-bold leading-4 text-muted-foreground">
-          현재 구현은 앱이 열려 있을 때 동작합니다. 앱을 완전히 닫은 상태의 백그라운드 푸시는 별도 서버 푸시 연결이 필요합니다.
-        </p>
       </section>
 
       {alerts.length > 0 && (
