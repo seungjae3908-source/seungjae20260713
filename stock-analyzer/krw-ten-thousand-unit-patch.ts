@@ -21,7 +21,7 @@ ${marker}`,
     );
   }
 
-  code = code.replace(
+  code = code.replaceAll(
     `return \`${'${Math.round(n * USD_KRW).toLocaleString()}'}원\`;`,
     `return formatKrwTenThousands(n * USD_KRW);`,
   );
