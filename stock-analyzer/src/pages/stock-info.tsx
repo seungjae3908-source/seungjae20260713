@@ -176,8 +176,11 @@ export default function StockInfoPage() {
 
 	const search = useQuery({
 		queryKey: ['stock-info-search', market, searchText.trim()],
-		queryFn: () => api.search(searchText.trim()),
-		enabled: asset === 'stock' && searchText.trim().length > 0,
+		queryFn: () =>
+			apiGet<{ results: SearchResult[] }>(
+				`/search/quotes?q=${encodeURIComponent(searchText.trim())}&market=${market}&limit=50&enrich=0`,
+			),
+		enabled: asset === 'stock' && searchText.trim().length >= 1,
 		staleTime: 30_000,
 	});
 
@@ -297,10 +300,10 @@ export default function StockInfoPage() {
 			) : (
 				<main className="space-y-4 px-4 pb-28 pt-4">
 					<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-						<label className="flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
+						<label className="flex h-11 items-center gap-2 rounded-2xl border border-slate-600 bg-slate-950 px-3 text-white shadow-lg">
 							<Search className="h-4 w-4 text-muted-foreground" />
-							<input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
-						{searchText && <button type="button" onClick={() => setSearchText('')} aria-label="검색 닫기"><X className="h-4 w-4 text-muted-foreground" /></button>}
+							<input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="이름·티커·상품코드 검색" className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-slate-400" />
+						{searchText && <button type="button" onClick={() => setSearchText('')} aria-label="검색 닫기"><X className="h-4 w-4 text-white" /></button>}
 						</label>
 						{searchText.trim().length > 0 && (
 							<div className="mt-3 max-h-44 space-y-1 overflow-y-auto">
@@ -308,7 +311,7 @@ export default function StockInfoPage() {
 								{search.isError && <InlineState tone="error">종목 목록을 불러오지 못했습니다.</InlineState>}
 								{!search.isLoading && !search.isError && candidates.length === 0 && <InlineState>검색 결과가 없습니다.</InlineState>}
 								{candidates.map((item: SearchResult) => (
-									<button key={`${item.market}:${item.ticker}`} type="button" onClick={() => { setSearchText(''); updateSelection({ ticker: item.ticker }); }} className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2', item.ticker === ticker ? 'bg-primary/10 text-primary' : 'bg-secondary/60')}>
+									<button key={`${item.market}:${item.ticker}`} type="button" onClick={() => { setSearchText(''); updateSelection({ ticker: item.ticker }); }} className={cn('flex w-full items-center justify-between rounded-xl border px-3 py-2 text-white', item.ticker === ticker ? 'border-primary bg-primary/30' : 'border-slate-700 bg-slate-900')}>
 										<span className="min-w-0 flex-1 truncate text-center text-sm font-black">{displayStockName(item.ticker, item.name, item.market)}</span>
 										<span className="ml-2 shrink-0 text-[10px] font-bold text-muted-foreground">{item.ticker}</span>
 									</button>
@@ -1001,10 +1004,10 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 				<div className={cn('mt-3 rounded-2xl px-3 py-2 text-xs font-black', connectionOk ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive')}>
 					{coinMarket === 'spot' ? '업비트' : '비트겟'} 공개 시세 · {status.isLoading ? '연결 확인 중' : connectionOk ? '정상' : '연결 오류'}
 				</div>
-				<label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
+				<label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-slate-600 bg-slate-950 px-3 text-white shadow-lg">
 					<Search className="h-4 w-4 text-muted-foreground" />
-					<input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
-				{searchText && <button type="button" onClick={() => setSearchText('')} aria-label="검색 닫기"><X className="h-4 w-4 text-muted-foreground" /></button>}
+					<input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="이름·티커·상품코드 검색" className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-slate-400" />
+				{searchText && <button type="button" onClick={() => setSearchText('')} aria-label="검색 닫기"><X className="h-4 w-4 text-white" /></button>}
 				</label>
 				{searchText.trim().length > 0 && (
 				<div className="mt-3 max-h-52 space-y-1 overflow-y-auto">
@@ -1013,7 +1016,7 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 					{filteredRows.map((item) => {
 						const itemSymbol = String(item.symbol);
 						return (
-							<button key={itemSymbol} type="button" onClick={() => { setSearchText(''); changeCoin(coinMarket, itemSymbol); }} className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2 text-left', itemSymbol === symbol ? 'bg-primary/10 text-primary' : 'bg-secondary/60')}>
+							<button key={itemSymbol} type="button" onClick={() => { setSearchText(''); changeCoin(coinMarket, itemSymbol); }} className={cn('flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-white', itemSymbol === symbol ? 'border-primary bg-primary/30' : 'border-slate-700 bg-slate-900')}>
 								<span className="min-w-0 truncate text-sm font-black">{displayCoinName(String(itemSymbol), item.koreanName, item.englishName)}</span>
 								<span className="ml-2 shrink-0 text-[10px] font-bold text-muted-foreground">{itemSymbol}</span>
 							</button>
