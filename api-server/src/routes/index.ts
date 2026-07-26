@@ -10,6 +10,7 @@ import kiwoomRouter from './kiwoom.routes';
 import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
+import cryptoSpotAutoRouter from './crypto-spot-auto';
 import backupRouter from './backup';
 import authRouter from './auth';
 import analysisRouter from './analysis';
@@ -43,6 +44,14 @@ router.use('/', marketRouter);
 
 router.use('/', newsRouter);
 router.use('/kiwoom', kiwoomRouter);
+
+// 코인 현물 실제 주문은 관리자만 사용하며 주문계획과 최종 승인을 분리합니다.
+router.use(
+  '/crypto/spot/auto',
+  requireMember,
+  requireAdmin,
+  cryptoSpotAutoRouter,
+);
 
 // 코인 선물 조회는 정회원 이상, 실제 자동매매 API는 관리자만 사용합니다.
 router.use('/crypto/futures/auto', requireMember, requireFullMember, requireAdmin);
