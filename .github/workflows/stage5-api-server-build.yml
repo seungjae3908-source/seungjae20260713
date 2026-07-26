@@ -1,0 +1,65 @@
+name: Stage 5 API server build verification
+
+on:
+  push:
+    branches:
+      - agent/long-pullback-market-context-collector-20260726
+    paths:
+      - api-server/src/services/bitget-market-context.service.ts
+      - api-server/src/routes/bitget-market-context.routes.ts
+      - api-server/src/routes/index.ts
+      - api-server/src/index.ts
+      - .github/workflows/stage5-api-server-build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install and build API server
+        id: build
+        continue-on-error: true
+        run: |
+          set +e
+          corepack enable
+          (pnpm install --frozen-lockfile && pnpm --filter @workspace/api-server build:server) 2>&1 | tee /tmp/stage5-server-build.log
+          code=${PIPESTATUS[0]}
+          mkdir -p docs/backtests
+          {
+            echo '# Stage 5 API server build report'
+            echo
+            echo "- started_from: $GITHUB_SHA"
+            echo "- exit_code: $code"
+            echo "- finished_at: $(date -u +%FT%TZ)"
+            echo
+            echo '```text'
+            tail -n 220 /tmp/stage5-server-build.log
+            echo '```'
+          } > docs/backtests/STAGE5_API_SERVER_BUILD_REPORT.md
+          exit $code
+
+      - name: Commit report
+        if: always()
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/backtests/STAGE5_API_SERVER_BUILD_REPORT.md
+          if git diff --cached --quiet; then
+            echo 'No report changes'
+            exit 0
+          fi
+          git commit -m 'test: record stage-five API server build [skip ci]'
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
