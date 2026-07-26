@@ -2073,8 +2073,9 @@ const RelayChart = memo(function RelayChart({
     }
 
     const latestCandleTime = Number(candles.at(-1)!.time);
-    const candidates = focusedSignal
-      ? [focusedSignal].map((signal) => {
+    const candidates = (
+      focusedSignal
+        ? [focusedSignal].map((signal) => {
         const range = signalDisplayRange(signal, latestCandleTime);
         if (!range) return null;
         const nearestIndex = (target: number) =>
@@ -2095,8 +2096,9 @@ const RelayChart = memo(function RelayChart({
           bearish: /하락|매도|약세|이탈|쌍봉|이중천장|석별|유성|데드크로스/.test(signal.name),
           name: normalizeSignalName(signal.name),
         };
-      })
-      .filter(Boolean) as Array<{
+        }).filter(Boolean)
+        : []
+    ) as Array<{
         signal: ChartSignal;
         left: number;
         right: number;
