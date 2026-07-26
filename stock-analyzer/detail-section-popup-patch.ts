@@ -11,17 +11,16 @@ function replaceSectionTags(segment: string): string {
 function replaceFunctionRange(
   source: string,
   startMarker: string,
-  endMarker?: string,
+  endMarker: string,
 ): string {
   const start = source.indexOf(startMarker);
   if (start < 0) return source;
-  const end = endMarker ? source.indexOf(endMarker, start + startMarker.length) : source.length;
-  if (endMarker && end < 0) return source;
-  const safeEnd = endMarker ? end : source.length;
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  if (end < 0) return source;
   return (
     source.slice(0, start) +
-    replaceSectionTags(source.slice(start, safeEnd)) +
-    source.slice(safeEnd)
+    replaceSectionTags(source.slice(start, end)) +
+    source.slice(end)
   );
 }
 
@@ -55,7 +54,7 @@ function patchDetail(source: string): string {
       <button
         type="button"
         onClick={() => setModalOpen(true)}
-        className="flex min-h-[76px] w-full flex-col items-center justify-center rounded-2xl border border-card-border bg-card px-4 py-3 text-center shadow-sm"
+        className="flex min-h-[72px] w-full flex-col items-center justify-center rounded-2xl border border-card-border bg-card px-4 py-3 text-center shadow-sm"
       >
         <span className="break-keep text-base font-extrabold leading-6">{title}</span>
         {subtitle && (
@@ -68,7 +67,7 @@ function patchDetail(source: string): string {
       {modalOpen && (
         <Modal title={title} subtitle={subtitle} onClose={() => setModalOpen(false)}>
           {actions && <div className="mb-3 flex items-center justify-center">{actions}</div>}
-          <div className="text-center">{children}</div>
+          <div className="overflow-x-hidden text-center">{children}</div>
         </Modal>
       )}
     </>
@@ -79,12 +78,13 @@ function patchDetail(source: string): string {
     code = code.replace(insertMarker, `${component}${insertMarker}`);
   }
 
-  // 개요·AI·재무·공시·뉴스만 팝업으로 바꾼다. ChartTab 범위는 의도적으로 제외한다.
+  // 개요·AI분석·재무제표·공시·뉴스만 중앙 팝업으로 바꿉니다.
+  // ChartTab 범위는 건드리지 않습니다.
   code = replaceFunctionRange(code, 'function OverviewTab(', 'function AiTab(');
   code = replaceFunctionRange(code, 'function AiTab(', 'function technicalSignalFocus(');
   code = replaceFunctionRange(code, 'function FinancialTab(', 'function FilingTab(');
   code = replaceFunctionRange(code, 'function FilingTab(', 'function NewsTab(');
-  code = replaceFunctionRange(code, 'function NewsTab(');
+  code = replaceFunctionRange(code, 'function NewsTab(', 'function MiniMetric(');
 
   return code;
 }
