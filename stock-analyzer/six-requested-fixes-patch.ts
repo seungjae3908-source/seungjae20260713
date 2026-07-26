@@ -23,7 +23,7 @@ function patchStocks(source: string): string {
     (segment) =>
       segment.replace(
         /\t\tstaleTime: 0,\n\t\trefetchInterval: 5_000,\n\t\trefetchOnMount: true,\n\t\trefetchOnWindowFocus: true,\n\t\trefetchOnReconnect: true,?/,
-        `\t\tstaleTime: 60_000,\n\t\tgcTime: 10 * 60_000,\n\t\tplaceholderData: (previous) => previous,\n\t\trefetchOnMount: false,\n\t\trefetchOnWindowFocus: false,\n\t\trefetchOnReconnect: true,`,
+        `\t\tstaleTime: 60_000,\n\t\tgcTime: 10 * 60_000,\n\t\trefetchOnMount: false,\n\t\trefetchOnWindowFocus: false,\n\t\trefetchOnReconnect: true,`,
       ),
   );
 
@@ -52,7 +52,7 @@ function patchSignalScan(source: string): string {
     (segment) =>
       segment.replace(
         `    refetchInterval: 60_000,`,
-        `    staleTime: 5 * 60_000,\n    gcTime: 15 * 60_000,\n    placeholderData: (previous) => previous,\n    refetchInterval: 5 * 60_000,\n    refetchOnMount: false,\n    refetchOnWindowFocus: false,\n    refetchOnReconnect: true,`,
+        `    staleTime: 5 * 60_000,\n    gcTime: 15 * 60_000,\n    refetchInterval: 5 * 60_000,\n    refetchOnMount: false,\n    refetchOnWindowFocus: false,\n    refetchOnReconnect: true,`,
       ),
   );
 }
