@@ -1600,6 +1600,7 @@ const RelayChart = memo(function RelayChart({
   const indicatorSourceRef = useRef(sourceKey);
   const [indicators, setIndicators] = useState<IndicatorPoint[]>([]);
   const [activeLevel, setActiveLevel] = useState<ChartLevelInfo | null>(null);
+  const [focusedSignal, setFocusedSignal] = useState<ChartSignal | null>(null);
   const [signalZones, setSignalZones] = useState<SignalZoneRect[]>([]);
   const [chartViewportVersion, setChartViewportVersion] = useState(0);
   const scheduleZoneLayout = useCallback(() => {
@@ -2072,14 +2073,8 @@ const RelayChart = memo(function RelayChart({
     }
 
     const latestCandleTime = Number(candles.at(-1)!.time);
-    const candidates = dedupeSignalOccurrences(signals)
-      .filter(
-        (signal) =>
-          signal.kind === 'chart' ||
-          signal.kind === 'candle' ||
-          /골든크로스|데드크로스/.test(signal.name),
-      )
-      .map((signal) => {
+    const candidates = focusedSignal
+      ? [focusedSignal].map((signal) => {
         const range = signalDisplayRange(signal, latestCandleTime);
         if (!range) return null;
         const nearestIndex = (target: number) =>
@@ -2171,8 +2166,8 @@ const RelayChart = memo(function RelayChart({
     candles,
     chartType,
     chartViewportVersion,
+    focusedSignal,
     settings.highlight,
-    signals,
     tab,
   ]);
 
@@ -2519,11 +2514,9 @@ const RelayChart = memo(function RelayChart({
       />
       <div className="pointer-events-none absolute inset-0 z-[2] overflow-hidden">
         {signalZones.map((zone) => (
-          <button
+          <div
             key={zone.id}
-            type="button"
-            onClick={() => onSignalSelect(zone.signal)}
-            className="pointer-events-auto absolute overflow-hidden rounded-md text-left"
+            className="absolute overflow-visible rounded-md text-left"
             style={{
               left: zone.left,
               top: zone.top,
@@ -2544,7 +2537,16 @@ const RelayChart = memo(function RelayChart({
                 {zone.label}
               </span>
             )}
-          </button>
+            <button
+              type="button"
+              onClick={() => onSignalSelect(zone.signal)}
+              className="pointer-events-auto absolute left-1/2 top-full mt-1 -translate-x-1/2 whitespace-nowrap rounded-full border-2 bg-background px-2 py-1 text-[10px] font-black shadow-lg"
+              style={{ borderColor: zone.color, color: zone.color }}
+              aria-label={`${zone.label} 상세 설명 열기`}
+            >
+              ↑ 여기
+            </button>
+          </div>
         ))}
       </div>
       {detectedChartSignals.length > 0 && (
@@ -2563,7 +2565,25 @@ const RelayChart = memo(function RelayChart({
                 <button
                   key={signal.id}
                   type="button"
-                  onClick={() => onSignalSelect(signal)}
+                  onClick={() => {
+                    setFocusedSignal(signal);
+                    const target = toUnixSeconds(signal.overlay?.fromTime ?? signal.barTime);
+                    if (target != null) {
+                      let nearestIndex = 0;
+                      let nearestDistance = Number.POSITIVE_INFINITY;
+                      candles.forEach((candle, index) => {
+                        const distance = Math.abs(Number(candle.time) - target);
+                        if (distance < nearestDistance) {
+                          nearestIndex = index;
+                          nearestDistance = distance;
+                        }
+                      });
+                      chartRef.current?.timeScale().setVisibleLogicalRange({
+                        from: Math.max(0, nearestIndex - 18),
+                        to: Math.min(candles.length - 1, nearestIndex + 18),
+                      });
+                    }
+                  }}
                   className="shrink-0 rounded-full border px-3 py-1.5 text-[10px] font-black shadow-sm"
                   style={{
                     borderColor: bearish ? '#3b82f6' : '#ef4444',
@@ -2577,7 +2597,7 @@ const RelayChart = memo(function RelayChart({
             })}
           </div>
           <p className="mt-1 text-[9px] font-bold text-muted-foreground">
-            누르면 해당 캔들 구간으로 이동하고 상세 설명이 열립니다.
+            항목을 누르면 해당 구간과 ‘↑ 여기’ 화살표 하나만 표시됩니다. 화살표를 누르면 설명이 열립니다.
           </p>
         </div>
       )}
