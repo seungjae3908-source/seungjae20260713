@@ -7,6 +7,7 @@ import { defineConfig } from 'vite';
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 import { chartRelayFeaturePatch } from './chart-relay-feature-patch';
 import { chartRelayFocusedMarketPatch } from './chart-relay-focused-market-patch';
+import { chartRelaySignalArrowPatch } from './chart-relay-signal-arrow-patch';
 import { signalScanPlanPatch } from './signal-scan-plan-patch';
 import { focusedPageLayoutPatch } from './focused-page-layout-patch';
 
@@ -28,6 +29,7 @@ export default defineConfig({
   plugins: [
     chartRelayFeaturePatch(),
     chartRelayFocusedMarketPatch(),
+    chartRelaySignalArrowPatch(),
     signalScanPlanPatch(),
     focusedPageLayoutPatch(),
     react(),
