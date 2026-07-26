@@ -529,7 +529,7 @@ export function AiRepairCenter() {
   };
 
   return (
-    <details className="group rounded-3xl border border-primary/30 bg-card p-4 text-center shadow-sm">
+    <details data-settings-uniform-card className="group rounded-2xl border border-primary/30 bg-card p-3 text-center shadow-sm">
       <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4\">
         <h2 className="w-full text-center text-sm font-extrabold">
           AI 진단 · 복구 센터
