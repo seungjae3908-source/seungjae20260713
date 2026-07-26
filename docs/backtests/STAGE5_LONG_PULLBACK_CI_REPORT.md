@@ -1,7 +1,7 @@
 # Stage 5 CI verification report
 
-- started_at: 2026-07-26T10:47:00Z
-- commit: ae47a1b229805b22cc6b8fda1861dc6da16a08a1
+- started_at: 2026-07-26T10:54:42Z
+- commit: 469f91f1baaa018d09aa8649aa06e839af8d637c
 
 ## Enable pnpm
 - exit_code: 0
@@ -17,11 +17,12 @@ Lockfile is up to date, resolution step is skipped
 Progress: resolved 1, reused 0, downloaded 0, added 0
 Packages: +650
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-Progress: resolved 650, reused 0, downloaded 146, added 8
-Progress: resolved 650, reused 0, downloaded 344, added 24
-Progress: resolved 650, reused 0, downloaded 480, added 36
+Progress: resolved 650, reused 0, downloaded 0, added 0
+Progress: resolved 650, reused 0, downloaded 61, added 0
+Progress: resolved 650, reused 0, downloaded 323, added 24
+Progress: resolved 650, reused 0, downloaded 446, added 32
+✓ Lockfile passes supply-chain policies (746 entries in 4.6s)
 Progress: resolved 650, reused 0, downloaded 650, added 650, done
-✓ Lockfile passes supply-chain policies (746 entries in 4.2s)
 .../esbuild@0.27.3/node_modules/esbuild postinstall$ node install.js
 .../esbuild@0.25.12/node_modules/esbuild postinstall$ node install.js
 .../esbuild@0.27.3/node_modules/esbuild postinstall: Done
@@ -30,7 +31,7 @@ Progress: resolved 650, reused 0, downloaded 650, added 650, done
 devDependencies:
 + typescript 5.9.3
 
-Done in 5.6s using pnpm v11.17.0
+Done in 6.7s using pnpm v11.17.0
 ```
 ## Frontend build
 - exit_code: 0
@@ -99,9 +100,9 @@ computing gzip size...
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 4.27s[39m
+[32m✓ built in 4.99s[39m
 ```
-## Backend typecheck
+## Full backend typecheck
 - exit_code: 2
 ```text
 $ tsc -p tsconfig.json --noEmit
@@ -115,11 +116,17 @@ src/services/financial.service.ts(106,9): error TS2339: Property 'getFinancials'
 [ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @workspace/api-server@0.0.0 typecheck: `tsc -p tsconfig.json --noEmit`
 Exit status 2
 ```
-## Collector policy and public API smoke test
-- exit_code: 1
+## Stage-five files typecheck
+- exit_code: 0
 ```text
-undefined
-[ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL] Command "esbuild" not found
+```
+## Collector policy and public API smoke test
+- exit_code: 0
+```text
+
+  ../../../../../../tmp/bitget-context-service.mjs  18.7kb
+
+⚡ Done in 3ms
 ```
 ## Stage-five backtest
 - exit_code: 1
@@ -143,9 +150,9 @@ Collecting certifi>=2023.5.7 (from requests)
 Collecting six>=1.5 (from python-dateutil>=2.8.2->pandas)
   Downloading six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
 Downloading numpy-2.5.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (16.7 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.7/16.7 MB 22.4 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.7/16.7 MB 54.6 MB/s  0:00:00
 Downloading pandas-3.0.5-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (11.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11.0/11.0 MB 67.9 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11.0/11.0 MB 45.4 MB/s  0:00:00
 Downloading requests-2.34.2-py3-none-any.whl (73 kB)
 Downloading charset_normalizer-3.4.9-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (224 kB)
 Downloading idna-3.18-py3-none-any.whl (65 kB)
@@ -157,21 +164,29 @@ Installing collected packages: urllib3, six, numpy, idna, charset_normalizer, ce
 
 Successfully installed certifi-2026.7.22 charset_normalizer-3.4.9 idna-3.18 numpy-2.5.1 pandas-3.0.5 python-dateutil-2.9.0.post0 requests-2.34.2 six-1.17.0 urllib3-2.7.0
 Traceback (most recent call last):
-  File "/home/runner/work/seungjae20260713/seungjae20260713/tools/backtest/long_pullback_retest_backtest.py", line 346, in <module>
+  File "/home/runner/work/seungjae20260713/seungjae20260713/tools/backtest/long_pullback_retest_backtest.py", line 347, in <module>
     main()
-  File "/home/runner/work/seungjae20260713/seungjae20260713/tools/backtest/long_pullback_retest_backtest.py", line 317, in main
-    funding = stage4.fetch_funding(session, symbol, start_ms, end_ms)
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/funding_veto_long_short_backtest.py", line 166, in fetch_funding
-    raise RuntimeError(f"{symbol}: no funding history in requested window")
-RuntimeError: BTCUSDT: no funding history in requested window
+  File "/home/runner/work/seungjae20260713/seungjae20260713/tools/backtest/long_pullback_retest_backtest.py", line 336, in main
+    result, generated = run_fold(stage3, base, symbol, frame, strategy, fold_start, fold_end)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/seungjae20260713/seungjae20260713/tools/backtest/long_pullback_retest_backtest.py", line 182, in run_fold
+    return stage3.recalc(result, generated), generated
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/funding_mark_walkforward_backtest.py", line 256, in recalc
+    total_funding_pnl_krw=sum(
+                          ^^^^
+  File "/tmp/funding_mark_walkforward_backtest.py", line 257, in <genexpr>
+    float(trade.get("funding_pnl_krw", 0)) for trade in trades
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: float() argument must be a string or a real number, not 'NoneType'
 ```
 
 ## Step outcomes
 - pnpm: success
 - install: success
 - frontend: success
-- backend: failure
-- smoke: failure
+- full_backend: failure
+- stage5_typecheck: success
+- smoke: success
 - backtest: failure
-- finished_at: 2026-07-26T10:47:57Z
+- finished_at: 2026-07-26T10:58:05Z
