@@ -11,14 +11,20 @@ export type ShadowMarket = 'KR' | 'US' | 'UPBIT_SPOT' | 'BITGET_FUTURES';
 export type ShadowDirection = 'LONG' | 'SHORT';
 
 export const SHADOW_POLICY = {
-  version: 'shadow-200k-v1',
+  version: 'shadow-200k-v2-futures-5x',
   startingCapitalKRW: 200_000,
   minimumNotionalKRW: 5_000,
   maximumNotionalPerPositionKRW: 20_000,
   maximumConcurrentPositions: 1,
   maximumDailyLossKRW: 4_000,
   maximumTotalLossKRW: 10_000,
-  allowedLeverage: 1,
+  allowedLeverage: 5,
+  leverageByMarket: {
+    KR: 1,
+    US: 1,
+    UPBIT_SPOT: 1,
+    BITGET_FUTURES: 5,
+  } satisfies Record<ShadowMarket, number>,
   feeBpsPerSide: {
     KR: 20,
     US: 25,
@@ -37,11 +43,14 @@ export type ShadowPosition = {
   id: string;
   market: ShadowMarket;
   symbol: string;
+  displayName: string;
   direction: ShadowDirection;
+  leverage: number;
   quantity: number;
   entryPrice: number;
   entryFxRate: number;
   allocatedCapitalKRW: number;
+  positionNotionalKRW: number;
   entryFeeKRW: number;
   estimatedEntrySlippageKRW: number;
   stopPrice: number | null;
@@ -56,13 +65,16 @@ export type ShadowTrade = {
   positionId: string;
   market: ShadowMarket;
   symbol: string;
+  displayName: string;
   direction: ShadowDirection;
+  leverage: number;
   quantity: number;
   entryPrice: number;
   exitPrice: number;
   entryFxRate: number;
   exitFxRate: number;
   allocatedCapitalKRW: number;
+  positionNotionalKRW: number;
   grossPnlKRW: number;
   entryFeeKRW: number;
   exitFeeKRW: number;
@@ -73,9 +85,22 @@ export type ShadowTrade = {
   closedAt: string;
 };
 
+export type ShadowTradeExportRow = {
+  displayName: string;
+  openedAt: string;
+  closedAt: string;
+  entryPrice: number;
+  exitPrice: number;
+  allocatedCapitalKRW: number;
+  cumulativeProfitKRW: number;
+  profitRatePercent: number;
+  feeKRW: number;
+  totalMarginKRW: number;
+};
+
 type ShadowAccount = {
   memberId: string;
-  version: 1;
+  version: 2;
   startedAt: string;
   updatedAt: string;
   disabled: boolean;
@@ -85,19 +110,20 @@ type ShadowAccount = {
 };
 
 type ShadowStore = {
-  version: 1;
+  version: 2;
   accounts: Record<string, ShadowAccount>;
 };
 
 type LiveQuote = {
   price: number;
   fxRate: number;
+  displayName: string;
   provider: string;
   fetchedAt: string;
 };
 
 let loaded = false;
-let store: ShadowStore = { version: 1, accounts: {} };
+let store: ShadowStore = { version: 2, accounts: {} };
 let writeQueue = Promise.resolve();
 
 function storageDirectory() {
@@ -119,7 +145,7 @@ function createAccount(memberId: string): ShadowAccount {
   const createdAt = nowIso();
   return {
     memberId,
-    version: 1,
+    version: 2,
     startedAt: createdAt,
     updatedAt: createdAt,
     disabled: false,
@@ -129,21 +155,117 @@ function createAccount(memberId: string): ShadowAccount {
   };
 }
 
+function finiteOr(value: unknown, fallback: number) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function normalizeMarket(value: unknown): ShadowMarket {
+  const market = String(value ?? '') as ShadowMarket;
+  return (['KR', 'US', 'UPBIT_SPOT', 'BITGET_FUTURES'] as const).includes(market)
+    ? market
+    : 'KR';
+}
+
+function migratePosition(raw: Partial<ShadowPosition>): ShadowPosition {
+  const market = normalizeMarket(raw.market);
+  const leverage = Math.max(
+    1,
+    finiteOr(raw.leverage, SHADOW_POLICY.leverageByMarket[market]),
+  );
+  const allocatedCapitalKRW = Math.max(0, finiteOr(raw.allocatedCapitalKRW, 0));
+  return {
+    id: String(raw.id ?? randomUUID()),
+    market,
+    symbol: String(raw.symbol ?? '').toUpperCase(),
+    displayName: String(raw.displayName ?? raw.symbol ?? '').trim() || 'UNKNOWN',
+    direction: raw.direction === 'SHORT' ? 'SHORT' : 'LONG',
+    leverage,
+    quantity: Math.max(0, finiteOr(raw.quantity, 0)),
+    entryPrice: Math.max(0, finiteOr(raw.entryPrice, 0)),
+    entryFxRate: Math.max(0, finiteOr(raw.entryFxRate, 1)),
+    allocatedCapitalKRW,
+    positionNotionalKRW: Math.max(
+      0,
+      finiteOr(raw.positionNotionalKRW, allocatedCapitalKRW * leverage),
+    ),
+    entryFeeKRW: Math.max(0, finiteOr(raw.entryFeeKRW, 0)),
+    estimatedEntrySlippageKRW: Math.max(
+      0,
+      finiteOr(raw.estimatedEntrySlippageKRW, 0),
+    ),
+    stopPrice: raw.stopPrice == null ? null : finiteOr(raw.stopPrice, 0),
+    targetPrice: raw.targetPrice == null ? null : finiteOr(raw.targetPrice, 0),
+    provider: String(raw.provider ?? 'legacy'),
+    sourceFetchedAt: String(raw.sourceFetchedAt ?? raw.openedAt ?? nowIso()),
+    openedAt: String(raw.openedAt ?? nowIso()),
+  };
+}
+
+function migrateTrade(raw: Partial<ShadowTrade>): ShadowTrade {
+  const market = normalizeMarket(raw.market);
+  const leverage = Math.max(
+    1,
+    finiteOr(raw.leverage, SHADOW_POLICY.leverageByMarket[market]),
+  );
+  const allocatedCapitalKRW = Math.max(0, finiteOr(raw.allocatedCapitalKRW, 0));
+  return {
+    id: String(raw.id ?? randomUUID()),
+    positionId: String(raw.positionId ?? ''),
+    market,
+    symbol: String(raw.symbol ?? '').toUpperCase(),
+    displayName: String(raw.displayName ?? raw.symbol ?? '').trim() || 'UNKNOWN',
+    direction: raw.direction === 'SHORT' ? 'SHORT' : 'LONG',
+    leverage,
+    quantity: Math.max(0, finiteOr(raw.quantity, 0)),
+    entryPrice: Math.max(0, finiteOr(raw.entryPrice, 0)),
+    exitPrice: Math.max(0, finiteOr(raw.exitPrice, 0)),
+    entryFxRate: Math.max(0, finiteOr(raw.entryFxRate, 1)),
+    exitFxRate: Math.max(0, finiteOr(raw.exitFxRate, 1)),
+    allocatedCapitalKRW,
+    positionNotionalKRW: Math.max(
+      0,
+      finiteOr(raw.positionNotionalKRW, allocatedCapitalKRW * leverage),
+    ),
+    grossPnlKRW: finiteOr(raw.grossPnlKRW, 0),
+    entryFeeKRW: Math.max(0, finiteOr(raw.entryFeeKRW, 0)),
+    exitFeeKRW: Math.max(0, finiteOr(raw.exitFeeKRW, 0)),
+    netPnlKRW: finiteOr(raw.netPnlKRW, 0),
+    estimatedSlippageKRW: Math.max(0, finiteOr(raw.estimatedSlippageKRW, 0)),
+    exitReason: String(raw.exitReason ?? 'LEGACY'),
+    openedAt: String(raw.openedAt ?? raw.closedAt ?? nowIso()),
+    closedAt: String(raw.closedAt ?? nowIso()),
+  };
+}
+
+function migrateAccount(memberId: string, raw: Partial<ShadowAccount>): ShadowAccount {
+  return {
+    memberId,
+    version: 2,
+    startedAt: String(raw.startedAt ?? nowIso()),
+    updatedAt: String(raw.updatedAt ?? nowIso()),
+    disabled: raw.disabled === true,
+    disabledReason: raw.disabledReason == null ? null : String(raw.disabledReason),
+    positions: Array.isArray(raw.positions) ? raw.positions.map(migratePosition) : [],
+    trades: Array.isArray(raw.trades) ? raw.trades.map(migrateTrade) : [],
+  };
+}
+
 async function ensureLoaded() {
   if (loaded) return;
   loaded = true;
   try {
     const raw = await readFile(storeFile(), 'utf8');
-    const parsed = JSON.parse(raw) as Partial<ShadowStore>;
-    store = {
-      version: 1,
-      accounts:
-        parsed.accounts && typeof parsed.accounts === 'object'
-          ? (parsed.accounts as Record<string, ShadowAccount>)
-          : {},
+    const parsed = JSON.parse(raw) as {
+      accounts?: Record<string, Partial<ShadowAccount>>;
     };
+    const accounts: Record<string, ShadowAccount> = {};
+    for (const [memberId, account] of Object.entries(parsed.accounts ?? {})) {
+      accounts[memberId] = migrateAccount(memberId, account);
+    }
+    store = { version: 2, accounts };
   } catch {
-    store = { version: 1, accounts: {} };
+    store = { version: 2, accounts: {} };
   }
 }
 
@@ -189,6 +311,10 @@ function bpsAmount(amount: number, bps: number) {
   return amount * (bps / 10_000);
 }
 
+function leverageFor(market: ShadowMarket) {
+  return SHADOW_POLICY.leverageByMarket[market];
+}
+
 function closedNetPnl(account: ShadowAccount) {
   return account.trades.reduce((sum, trade) => sum + trade.netPnlKRW, 0);
 }
@@ -200,6 +326,13 @@ function openEntryFees(account: ShadowAccount) {
 function allocatedCapital(account: ShadowAccount) {
   return account.positions.reduce(
     (sum, position) => sum + position.allocatedCapitalKRW,
+    0,
+  );
+}
+
+function totalOpenMargin(account: ShadowAccount) {
+  return account.positions.reduce(
+    (sum, position) => sum + position.positionNotionalKRW,
     0,
   );
 }
@@ -263,6 +396,7 @@ async function liveQuote(
     return {
       price,
       fxRate: market === 'US' ? await usdKrwRate() : 1,
+      displayName: String(quote.name ?? quote.companyName ?? symbol).trim() || symbol,
       provider: `market-data:${market}`,
       fetchedAt,
     };
@@ -275,6 +409,7 @@ async function liveQuote(
     return {
       price: finitePositive(row.price, '현재가'),
       fxRate: 1,
+      displayName: symbol,
       provider: 'upbit-public',
       fetchedAt,
     };
@@ -286,14 +421,14 @@ async function liveQuote(
   return {
     price: finitePositive(row.price, '현재가'),
     fxRate: await usdKrwRate(),
+    displayName: symbol,
     provider: 'bitget-public',
     fetchedAt,
   };
 }
 
 function markPnl(position: ShadowPosition, quote: LiveQuote) {
-  const entryValue =
-    position.entryPrice * position.quantity * position.entryFxRate;
+  const entryValue = position.entryPrice * position.quantity * position.entryFxRate;
   const currentValue = quote.price * position.quantity * quote.fxRate;
   return position.direction === 'LONG'
     ? currentValue - entryValue
@@ -384,6 +519,7 @@ export async function getShadowStatus(memberId: string) {
       equityKRW,
       availableCapitalKRW: availableCapital(account),
       allocatedCapitalKRW: allocatedCapital(account),
+      totalOpenMarginKRW: totalOpenMargin(account),
       realizedPnlKRW,
       unrealizedPnlKRW,
       dailyNetPnlKRW: dailyNetPnl(account),
@@ -435,18 +571,26 @@ export async function openShadowPosition(
   }
 
   const symbol = normalizeSymbol(market, input.symbol);
-  const notionalKRW = Math.round(finitePositive(input.notionalKRW, '주문금액'));
-  if (notionalKRW < SHADOW_POLICY.minimumNotionalKRW) {
-    throw new Error(`최소 가상 주문금액은 ${SHADOW_POLICY.minimumNotionalKRW.toLocaleString()}원입니다.`);
+  const allocatedCapitalKRW = Math.round(
+    finitePositive(input.notionalKRW, '원금'),
+  );
+  if (allocatedCapitalKRW < SHADOW_POLICY.minimumNotionalKRW) {
+    throw new Error(
+      `최소 가상 원금은 ${SHADOW_POLICY.minimumNotionalKRW.toLocaleString()}원입니다.`,
+    );
   }
-  if (notionalKRW > SHADOW_POLICY.maximumNotionalPerPositionKRW) {
-    throw new Error(`1회 최대 가상 주문금액은 ${SHADOW_POLICY.maximumNotionalPerPositionKRW.toLocaleString()}원입니다.`);
+  if (allocatedCapitalKRW > SHADOW_POLICY.maximumNotionalPerPositionKRW) {
+    throw new Error(
+      `1회 최대 가상 원금은 ${SHADOW_POLICY.maximumNotionalPerPositionKRW.toLocaleString()}원입니다.`,
+    );
   }
 
+  const leverage = leverageFor(market);
+  const positionNotionalKRW = allocatedCapitalKRW * leverage;
   const feeRate = SHADOW_POLICY.feeBpsPerSide[market] / 10_000;
   const slippageRate = SHADOW_POLICY.slippageBpsPerSide[market] / 10_000;
-  const entryFeeKRW = notionalKRW * feeRate;
-  if (availableCapital(account) < notionalKRW + entryFeeKRW) {
+  const entryFeeKRW = positionNotionalKRW * feeRate;
+  if (availableCapital(account) < allocatedCapitalKRW + entryFeeKRW) {
     throw new Error('가상계좌의 사용 가능 금액이 부족합니다.');
   }
 
@@ -455,7 +599,7 @@ export async function openShadowPosition(
     direction === 'LONG'
       ? quote.price * (1 + slippageRate)
       : quote.price * (1 - slippageRate);
-  const quantity = notionalKRW / (entryPrice * quote.fxRate);
+  const quantity = positionNotionalKRW / (entryPrice * quote.fxRate);
   const estimatedEntrySlippageKRW =
     Math.abs(entryPrice - quote.price) * quantity * quote.fxRate;
 
@@ -463,11 +607,14 @@ export async function openShadowPosition(
     id: randomUUID(),
     market,
     symbol,
+    displayName: quote.displayName,
     direction,
+    leverage,
     quantity,
     entryPrice,
     entryFxRate: quote.fxRate,
-    allocatedCapitalKRW: notionalKRW,
+    allocatedCapitalKRW,
+    positionNotionalKRW,
     entryFeeKRW,
     estimatedEntrySlippageKRW,
     stopPrice:
@@ -519,21 +666,23 @@ export async function closeShadowPosition(
   );
   const estimatedExitSlippageKRW =
     Math.abs(exitPrice - quote.price) * position.quantity * quote.fxRate;
-  const netPnlKRW =
-    grossPnlKRW - position.entryFeeKRW - exitFeeKRW;
+  const netPnlKRW = grossPnlKRW - position.entryFeeKRW - exitFeeKRW;
 
   const trade: ShadowTrade = {
     id: randomUUID(),
     positionId: position.id,
     market: position.market,
     symbol: position.symbol,
+    displayName: position.displayName || quote.displayName,
     direction: position.direction,
+    leverage: position.leverage,
     quantity: position.quantity,
     entryPrice: position.entryPrice,
     exitPrice,
     entryFxRate: position.entryFxRate,
     exitFxRate: quote.fxRate,
     allocatedCapitalKRW: position.allocatedCapitalKRW,
+    positionNotionalKRW: position.positionNotionalKRW,
     grossPnlKRW,
     entryFeeKRW: position.entryFeeKRW,
     exitFeeKRW,
@@ -552,6 +701,34 @@ export async function closeShadowPosition(
   account.updatedAt = nowIso();
   await saveStore();
   return getShadowStatus(memberId);
+}
+
+export async function getShadowTradeExportRows(
+  memberId: string,
+): Promise<ShadowTradeExportRow[]> {
+  const account = await accountFor(memberId);
+  let cumulativeProfitKRW = 0;
+  return account.trades
+    .slice()
+    .sort((left, right) => left.closedAt.localeCompare(right.closedAt))
+    .map((trade) => {
+      cumulativeProfitKRW += trade.netPnlKRW;
+      return {
+        displayName: trade.displayName || trade.symbol,
+        openedAt: trade.openedAt,
+        closedAt: trade.closedAt,
+        entryPrice: trade.entryPrice,
+        exitPrice: trade.exitPrice,
+        allocatedCapitalKRW: trade.allocatedCapitalKRW,
+        cumulativeProfitKRW,
+        profitRatePercent:
+          trade.allocatedCapitalKRW > 0
+            ? (trade.netPnlKRW / trade.allocatedCapitalKRW) * 100
+            : 0,
+        feeKRW: trade.entryFeeKRW + trade.exitFeeKRW,
+        totalMarginKRW: trade.positionNotionalKRW,
+      };
+    });
 }
 
 export async function resetShadowAccount(memberId: string) {
