@@ -215,40 +215,40 @@ export default function StockInfoPage() {
 	const quote = useQuery({
 		queryKey: ['stock-info-quote', ticker],
 		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/quote`),
-		enabled: asset === 'stock' && Boolean(ticker),
+		enabled: false,
 		refetchInterval: 30_000,
 	});
 	const profile = useQuery({
 		queryKey: ['stock-info-profile', ticker],
 		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/profile`),
-		enabled: asset === 'stock' && Boolean(ticker),
+		enabled: false,
 		staleTime: 5 * 60_000,
 	});
 	const financials = useQuery({
 		queryKey: ['stock-info-financials', ticker],
 		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/financials`),
-		enabled: asset === 'stock' && Boolean(ticker),
+		enabled: false,
 		staleTime: 5 * 60_000,
 	});
 	const flow = useQuery({
 		queryKey: ['stock-info-flow', ticker, flowPeriod],
 		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/market-flow?period=${flowPeriod}`),
-		enabled: asset === 'stock' && Boolean(ticker),
+		enabled: false,
 	});
 	const shortSelling = useQuery({
 		queryKey: ['stock-info-short', ticker, flowPeriod],
 		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/short-selling?period=${flowPeriod}`),
-		enabled: asset === 'stock' && Boolean(ticker),
+		enabled: false,
 	});
 	const news = useQuery({
 		queryKey: ['stock-info-news-all', ticker],
 		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/news?all=1`),
-		enabled: asset === 'stock' && Boolean(ticker),
+		enabled: false,
 	});
 	const disclosures = useQuery({
 		queryKey: ['stock-info-disclosures-all', ticker],
 		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/disclosures?all=1`),
-		enabled: asset === 'stock' && Boolean(ticker),
+		enabled: false,
 	});
 
 	const selectedName = displayStockName(ticker, text(quote.data?.name) ?? text(profile.data?.name) ?? ticker, market);
@@ -342,7 +342,7 @@ export default function StockInfoPage() {
 					/>
 
 
-					{ticker && (
+					{false && ticker && (
 						<>
 							{/* 항상 표시되는 최상단 종목 헤더 (종목명·현재가·등락률) */}
 							<section id="stock-info-selected" className="scroll-mt-4 rounded-3xl border border-primary/20 bg-primary/5 p-4 text-center shadow-sm">
