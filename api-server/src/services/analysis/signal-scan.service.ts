@@ -53,6 +53,7 @@ export interface ScanCandidate {
   risks: string[];
   invalidation: string[];
   dataAsOf: string;
+  timeframe?: '15m' | '1D';
 }
 
 export interface ScanGroup {
@@ -239,6 +240,7 @@ interface RawItem {
   currency: string;
   market: string;
   analyzed: Analyzed;
+  timeframe?: '15m' | '1D';
 }
 
 function makeCandidate(
@@ -289,6 +291,7 @@ function makeCandidate(
     risks,
     invalidation,
     dataAsOf,
+    timeframe: item.timeframe,
   };
 }
 
@@ -357,40 +360,63 @@ async function collectCoinSpot(): Promise<{ items: RawItem[]; scanned: number; p
 
 async function collectCoinFutures(): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
   const tickers = await fetchBitgetTopTickers(COIN_FUTURES_POOL);
-  let providerErrors = 0;
-  const settled = await Promise.allSettled(
-    tickers.map(async (t): Promise<RawItem | null> => {
-      const candles = await fetchBitgetCandles(t.symbol, 200, '1D');
-      const analyzed = analyze(candles);
-      if (!analyzed || t.price == null) return null;
-      return {
-        ticker: t.symbol,
-        name: t.symbol.replace(/USDT$/, ''),
-        price: t.price,
-        changePercent: t.changePercent,
-        currency: 'USDT',
-        market: 'futures',
-        analyzed,
-      };
+  const settled = await Promise.all(
+    tickers.map(async (t) => {
+      const sources = await Promise.allSettled([
+        fetchBitgetCandles(t.symbol, 200, '15m'),
+        fetchBitgetCandles(t.symbol, 200, '1D'),
+      ]);
+      const timeframes: Array<'15m' | '1D'> = ['15m', '1D'];
+      const items: RawItem[] = [];
+      let errors = 0;
+
+      sources.forEach((source, index) => {
+        if (source.status === 'rejected') {
+          errors += 1;
+          return;
+        }
+        const analyzed = analyze(source.value);
+        if (!analyzed || t.price == null) return;
+        items.push({
+          ticker: t.symbol,
+          name: t.symbol.replace(/USDT$/, ''),
+          price: t.price,
+          changePercent: t.changePercent,
+          currency: 'USDT',
+          market: 'futures',
+          analyzed,
+          timeframe: timeframes[index],
+        });
+      });
+
+      return { items, errors };
     }),
   );
-  const items: RawItem[] = [];
-  for (const r of settled) {
-    if (r.status === 'fulfilled') {
-      if (r.value) items.push(r.value);
-    } else {
-      providerErrors += 1;
-    }
-  }
-  return { items, scanned: tickers.length, providerErrors };
+
+  return {
+    items: settled.flatMap((result) => result.items),
+    scanned: tickers.length,
+    providerErrors: settled.reduce((sum, result) => sum + result.errors, 0),
+  };
 }
 
-function hasUsableVolatility(a: Analyzed, futures = false): boolean {
+function hasUsableVolatility(
+  a: Analyzed,
+  futures = false,
+  timeframe: '15m' | '1D' = '1D',
+): boolean {
   if (a.atrPercent == null) return false;
+  if (futures && timeframe === '15m') {
+    return a.atrPercent >= 0.08 && a.atrPercent <= 4;
+  }
   return a.atrPercent >= 0.35 && a.atrPercent <= (futures ? 12 : 8);
 }
 
-function isOptimizedLong(a: Analyzed, futures = false): boolean {
+function isOptimizedLong(
+  a: Analyzed,
+  futures = false,
+  timeframe: '15m' | '1D' = '1D',
+): boolean {
   const minScore = futures ? FUTURES_MIN_SCORE : STOCK_MIN_SCORE;
   const minRiskReward = futures ? 1.8 : 1.5;
   return (
@@ -406,13 +432,17 @@ function isOptimizedLong(a: Analyzed, futures = false): boolean {
     a.rsiValue <= 68 &&
     a.volRatio != null &&
     a.volRatio >= 0.8 &&
-    hasUsableVolatility(a, futures) &&
+    hasUsableVolatility(a, futures, timeframe) &&
     a.longRiskReward != null &&
     a.longRiskReward >= minRiskReward
   );
 }
 
-function isOptimizedShort(a: Analyzed, futures = false): boolean {
+function isOptimizedShort(
+  a: Analyzed,
+  futures = false,
+  timeframe: '15m' | '1D' = '1D',
+): boolean {
   const minScore = futures ? FUTURES_MIN_SCORE : STOCK_MIN_SCORE;
   const minRiskReward = futures ? 1.8 : 1.5;
   return (
@@ -428,29 +458,29 @@ function isOptimizedShort(a: Analyzed, futures = false): boolean {
     a.rsiValue <= 58 &&
     a.volRatio != null &&
     a.volRatio >= 0.8 &&
-    hasUsableVolatility(a, futures) &&
+    hasUsableVolatility(a, futures, timeframe) &&
     a.shortRiskReward != null &&
     a.shortRiskReward >= minRiskReward
   );
 }
 
-function isFuturesWatchLong(a: Analyzed): boolean {
+function isFuturesWatchLong(a: Analyzed, timeframe: '15m' | '1D'): boolean {
   return (
     a.bullScore > a.bearScore &&
     a.ma5 != null &&
     a.ma20 != null &&
     a.rsiValue != null &&
-    hasUsableVolatility(a, true)
+    hasUsableVolatility(a, true, timeframe)
   );
 }
 
-function isFuturesWatchShort(a: Analyzed): boolean {
+function isFuturesWatchShort(a: Analyzed, timeframe: '15m' | '1D'): boolean {
   return (
     a.bearScore > a.bullScore &&
     a.ma5 != null &&
     a.ma20 != null &&
     a.rsiValue != null &&
-    hasUsableVolatility(a, true)
+    hasUsableVolatility(a, true, timeframe)
   );
 }
 
@@ -492,28 +522,28 @@ function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
 function buildFuturesGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
   // 롱/숏: 단기 모멘텀 + 추세. 매수/매도 관점: 더 보수적 스윙 기준.
   const long = items
-    .filter((i) => isOptimizedLong(i.analyzed, true) && i.analyzed.recentMove > 0)
+    .filter((i) => isOptimizedLong(i.analyzed, true, i.timeframe ?? '1D') && i.analyzed.recentMove > 0)
     .sort((a, b) => b.analyzed.bullScore - a.analyzed.bullScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
       makeCandidate(i, 'long', i.analyzed.bullScore, bullBasis(i.analyzed), '단기 모멘텀·추세 기준 롱 관점 후보(고위험, 관찰 필요)', dataAsOf),
     );
   const short = items
-    .filter((i) => isOptimizedShort(i.analyzed, true) && i.analyzed.recentMove < 0)
+    .filter((i) => isOptimizedShort(i.analyzed, true, i.timeframe ?? '1D') && i.analyzed.recentMove < 0)
     .sort((a, b) => b.analyzed.bearScore - a.analyzed.bearScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
       makeCandidate(i, 'short', i.analyzed.bearScore, bearBasis(i.analyzed), '단기 모멘텀·추세 기준 숏 관점 후보(고위험, 관찰 필요)', dataAsOf),
     );
   const buyView = items
-    .filter((i) => isFuturesWatchLong(i.analyzed))
+    .filter((i) => isFuturesWatchLong(i.analyzed, i.timeframe ?? '1D'))
     .sort((a, b) => b.analyzed.bullScore - a.analyzed.bullScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
       makeCandidate(i, 'buy', i.analyzed.bullScore, bullBasis(i.analyzed), '차상위 스윙 매수 관찰 후보(강한 롱 신호 아님)', dataAsOf),
     );
   const sellView = items
-    .filter((i) => isFuturesWatchShort(i.analyzed))
+    .filter((i) => isFuturesWatchShort(i.analyzed, i.timeframe ?? '1D'))
     .sort((a, b) => b.analyzed.bearScore - a.analyzed.bearScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
