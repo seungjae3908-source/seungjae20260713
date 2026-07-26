@@ -1,8 +1,8 @@
 // 시장분석 전용 전체 화면 — 국내/해외/코인 시장 상태 분석. 실제 확보 데이터만 표시한다.
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 import { BottomNav } from '@/components/bottom-nav';
 import { cn } from '@/lib/utils';
@@ -44,7 +44,7 @@ const MARKET_LABEL: Record<MarketParam, string> = {
 };
 
 function parseMarket(path: string): MarketParam | null {
-	const match = path.split('?')[0].match(/^\/analysis\/([a-z]+)/);
+	const match = path.split('?')[0].match(/^\/analysis\/([a-zA-Z]+)/);
 	if (!match) return null;
 	const value = match[1].toLowerCase();
 	if (value === 'kr' || value === 'us' || value === 'coin') return value;
@@ -67,6 +67,7 @@ function formatDataAsOf(value: string | undefined): string {
 export default function MarketAnalysisPage() {
 	const [location, navigate] = useLocation();
 	const market = parseMarket(location);
+	const [selectedSection, setSelectedSection] = useState<AnalysisSection | null>(null);
 
 	const query = useQuery({
 		queryKey: ['market-analysis', market],
@@ -94,24 +95,18 @@ export default function MarketAnalysisPage() {
 	return (
 		<div className="h-full overflow-y-auto overscroll-contain bg-background">
 			<div className="mx-auto max-w-md px-4 pb-28 pt-4">
-				<header className="grid grid-cols-[40px_1fr_40px] items-center gap-3">
-					<button
-						type="button"
-						onClick={() => navigate('/stock-info')}
-						aria-label="뒤로"
-						className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"
-					>
-						<ArrowLeft className="h-4 w-4" />
-					</button>
-					<div className="text-center">
-						<h1 className="text-lg font-extrabold">시장분석</h1>
-						<p className="text-[11px] font-bold text-muted-foreground">{MARKET_LABEL[market]}</p>
+				<header className="relative flex min-h-[58px] items-center justify-center px-12 text-center">
+					<div className="min-w-0 text-center">
+						<h1 className="whitespace-nowrap text-center text-xl font-extrabold">시장분석</h1>
+						<p className="mt-1 whitespace-nowrap text-center text-[11px] font-bold text-muted-foreground">
+							{MARKET_LABEL[market]}
+						</p>
 					</div>
 					<button
 						type="button"
 						onClick={() => void query.refetch()}
 						aria-label="새로고침"
-						className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"
+						className="absolute right-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card"
 					>
 						<RefreshCw className={cn('h-4 w-4', query.isFetching && 'animate-spin')} />
 					</button>
@@ -122,7 +117,7 @@ export default function MarketAnalysisPage() {
 						<button
 							key={tab.key}
 							type="button"
-							onClick={() => navigate(`/analysis/${tab.key}`)}
+							onClick={() => navigate(`/analysis/${tab.key}?from=info`)}
 							className={cn(
 								'rounded-xl border px-2 py-2 text-center text-[11px] font-extrabold',
 								market === tab.key
@@ -148,7 +143,7 @@ export default function MarketAnalysisPage() {
 							<button
 								type="button"
 								onClick={() => void query.refetch()}
-								className="mt-2 block w-full rounded-xl border border-card-border bg-card py-2 text-xs font-black text-foreground"
+								className="mt-2 block w-full rounded-xl border border-card-border bg-card py-2 text-center text-xs font-black text-foreground"
 							>
 								다시 시도
 							</button>
@@ -156,67 +151,76 @@ export default function MarketAnalysisPage() {
 					) : sections.length === 0 ? (
 						<StateBox>분석 가능한 데이터가 없습니다.</StateBox>
 					) : (
-						sections.map((section) => <SectionCard key={section.key} section={section} />)
+						sections.map((section) => (
+							<button
+								key={section.key}
+								type="button"
+								onClick={() => setSelectedSection(section)}
+								className={cn(
+									'flex min-h-[72px] w-full items-center justify-center rounded-2xl border bg-card px-4 py-3 text-center shadow-sm',
+									section.highlight ? 'border-primary ring-1 ring-primary/40' : 'border-card-border',
+								)}
+							>
+								<span className="min-w-0 text-center">
+									<span className="block break-keep text-center text-sm font-black">{section.title}</span>
+									<span className="mt-1 block text-center text-[10px] font-bold text-muted-foreground">
+										눌러서 상세 보기
+									</span>
+								</span>
+							</button>
+						))
 					)}
 				</div>
 			</div>
-			<BottomNav />
-		</div>
-	);
-}
 
-function SectionCard({ section }: { section: AnalysisSection }) {
-	const items = section.items ?? [];
-	return (
-		<section
-			className={cn(
-				'rounded-2xl border bg-card p-4 shadow-sm',
-				section.highlight ? 'border-primary ring-1 ring-primary/40' : 'border-card-border',
-			)}
-		>
-			<div className="flex items-center justify-between gap-2">
-				<h2 className="text-sm font-black">{section.title}</h2>
-				{section.highlight && (
-					<span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-black text-primary">
-						현재 장 상태
-					</span>
-				)}
-			</div>
-
-			{section.unavailable ? (
-				<p className="mt-3 rounded-xl bg-secondary/60 p-3 text-center text-xs font-bold text-muted-foreground">
-					{section.unavailable}
-				</p>
-			) : items.length === 0 ? (
-				<p className="mt-3 rounded-xl bg-secondary/60 p-3 text-center text-xs font-bold text-muted-foreground">
-					분석 가능한 데이터가 없습니다.
-				</p>
-			) : (
-				<div className="mt-3 space-y-2">
-					{items.map((item, index) => (
-						<AnalysisRow key={`${item.label}:${index}`} item={item} />
-					))}
+			{selectedSection && (
+				<div className="fixed inset-0 z-[120] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={selectedSection.title}>
+					<button
+						type="button"
+						aria-label="팝업 닫기"
+						onClick={() => setSelectedSection(null)}
+						className="absolute inset-0 bg-black/70"
+					/>
+					<section className="relative z-10 flex max-h-[86dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl">
+						<header className="relative flex min-h-[58px] items-center justify-center border-b border-card-border px-14 text-center">
+							<h2 className="break-keep text-center text-base font-black">{selectedSection.title}</h2>
+							<button
+								type="button"
+								onClick={() => setSelectedSection(null)}
+								aria-label="닫기"
+								className="absolute right-3 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-secondary text-xl font-black"
+							>
+								×
+							</button>
+						</header>
+						<div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-4 text-center">
+							{selectedSection.unavailable ? (
+								<StateBox>{selectedSection.unavailable}</StateBox>
+							) : selectedSection.items.length === 0 ? (
+								<StateBox>분석 가능한 데이터가 없습니다.</StateBox>
+							) : (
+								selectedSection.items.map((item, index) => (
+									<AnalysisRow key={`${item.label}:${index}`} item={item} />
+								))
+							)}
+						</div>
+					</section>
 				</div>
 			)}
-		</section>
+
+			<BottomNav />
+		</div>
 	);
 }
 
 function AnalysisRow({ item }: { item: AnalysisItem }) {
 	const hasValue = item.value != null && item.value.trim().length > 0;
 	return (
-		<div className="flex items-start justify-between gap-3 rounded-xl bg-secondary/60 p-3">
-			<div className="min-w-0 flex-1">
-				<p className="text-[10px] font-bold text-muted-foreground">{item.label}</p>
-				{item.note && (
-					<p className="mt-0.5 break-keep text-[10px] font-semibold leading-relaxed text-muted-foreground">
-						{item.note}
-					</p>
-				)}
-			</div>
+		<div className="rounded-xl bg-secondary/60 p-3 text-center">
+			<p className="text-center text-[10px] font-bold text-muted-foreground">{item.label}</p>
 			<p
 				className={cn(
-					'shrink-0 break-words text-right text-xs font-black',
+					'mt-1 break-words text-center text-sm font-black',
 					!hasValue && 'text-muted-foreground',
 					hasValue && item.tone === 'up' && 'text-positive',
 					hasValue && item.tone === 'down' && 'text-destructive',
@@ -224,6 +228,11 @@ function AnalysisRow({ item }: { item: AnalysisItem }) {
 			>
 				{hasValue ? item.value : '데이터 없음'}
 			</p>
+			{item.note && (
+				<p className="mt-1 break-keep text-center text-[10px] font-semibold leading-relaxed text-muted-foreground">
+					{item.note}
+				</p>
+			)}
 		</div>
 	);
 }
