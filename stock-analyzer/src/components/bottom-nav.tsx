@@ -155,22 +155,22 @@ const CHART_RELAY_MAIN_ITEMS: PopupItem[] = [
 const CHART_RELAY_STOCK_ITEMS: PopupItem[] = [
   {
     label: '국내주식',
-    href: '/tech/chart-relay?asset=stockKR&tab=live&focused=1',
+    href: '/tech/chart-relay/stockKR?tab=live&focused=1',
   },
   {
     label: '해외주식',
-    href: '/tech/chart-relay?asset=stockUS&tab=live&focused=1',
+    href: '/tech/chart-relay/stockUS?tab=live&focused=1',
   },
 ];
 
 const CHART_RELAY_COIN_ITEMS: PopupItem[] = [
   {
     label: '코인 현물',
-    href: '/tech/chart-relay?asset=coinSpot&tab=live&focused=1',
+    href: '/tech/chart-relay/coinSpot?tab=live&focused=1',
   },
   {
     label: '코인 선물',
-    href: '/tech/chart-relay?asset=coinFutures&tab=live&focused=1',
+    href: '/tech/chart-relay/coinFutures?tab=live&focused=1',
     feature: 'futures',
   },
 ];
