@@ -1,14 +1,17 @@
-// 기술 허브 전체 화면 — 신호검색 / 차트중계 / 자동매매 3개 항목만 제공한다.
 import { useLocation } from 'wouter';
 import { Radar, LineChart, Bot, ChevronRight } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { useMemberPermissions, type AppFeature } from '@/lib/permissions';
 
-const ITEMS: Array<{
+type TechItem = {
   href: string;
   label: string;
   desc: string;
   icon: typeof Radar;
-}> = [
+  feature?: AppFeature;
+};
+
+const ITEMS: TechItem[] = [
   {
     href: '/tech/signal-scan',
     label: '신호검색',
@@ -24,13 +27,18 @@ const ITEMS: Array<{
   {
     href: '/tech/auto-trade',
     label: '자동매매',
-    desc: '주문창·포지션 현황 UI를 미리 확인합니다. (실주문 준비 중)',
+    desc: '가격 조건 감지와 사용자 승인 후 실제 주문을 관리합니다.',
     icon: Bot,
+    feature: 'autoTrading',
   },
 ];
 
 export default function TechPage() {
   const [, navigate] = useLocation();
+  const permissions = useMemberPermissions();
+  const visibleItems = ITEMS.filter(
+    (item) => !item.feature || permissions.has(item.feature),
+  );
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain bg-background">
@@ -38,12 +46,12 @@ export default function TechPage() {
         <header className="text-center">
           <h1 className="text-lg font-extrabold">기술</h1>
           <p className="mt-1 text-[11px] font-bold text-muted-foreground">
-            신호검색·차트중계·자동매매를 한 곳에서 이용합니다.
+            신호검색과 차트중계를 한 곳에서 이용합니다.
           </p>
         </header>
 
         <div className="mt-5 space-y-3">
-          {ITEMS.map((item) => {
+          {visibleItems.map((item) => {
             const Icon = item.icon;
             return (
               <button
