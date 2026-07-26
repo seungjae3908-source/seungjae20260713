@@ -47,7 +47,7 @@ export function memberGradeLabel(
 
 export function featureRequiredGradeLabel(feature: AppFeature): string {
   if (feature === 'autoTrading' || feature === 'admin') return '관리자';
-  if (feature === 'futures') return '정회원';
+  if (feature === 'futures' || feature === 'portfolio') return '정회원';
   return '준회원';
 }
 
@@ -63,7 +63,7 @@ export function hasMemberFeature(
     return role === 'admin';
   }
 
-  if (feature === 'futures') {
+  if (feature === 'futures' || feature === 'portfolio') {
     return role === 'full' || role === 'admin';
   }
 
