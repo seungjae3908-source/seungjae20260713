@@ -21,17 +21,59 @@ function removeExpandLabels(summaryInner: string) {
     .replace(/<span[^>]*className="[^"]*group-open:[^"]*"[^>]*>[\s\S]*?<\/span>/g, '');
 }
 
-function staticTitle(summaryInner: string) {
-  const withoutExpand = removeExpandLabels(summaryInner)
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\{[^}]+\}/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return withoutExpand || '상세 내용';
+function stripJsxExpressions(source: string) {
+  let result = '';
+  let depth = 0;
+  let quote: "'" | '"' | '`' | null = null;
+  let escaped = false;
+
+  for (const char of source) {
+    if (depth === 0) {
+      if (char === '{') {
+        depth = 1;
+        quote = null;
+        escaped = false;
+      } else {
+        result += char;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    else if (char === '}') depth -= 1;
+  }
+
+  return result;
 }
 
-function escapeAttribute(value: string) {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+function staticTitle(summaryInner: string) {
+  const withoutExpand = stripJsxExpressions(removeExpandLabels(summaryInner))
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&quot;|&#34;/g, '"')
+    .replace(/&apos;|&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!/[A-Za-z0-9가-힣]/.test(withoutExpand)) return '상세 내용';
+  return withoutExpand;
 }
 
 function transformDetails(source: string) {
@@ -63,7 +105,7 @@ function transformDetails(source: string) {
     const summaryInner = code.slice(summaryOpenEnd + 1, summaryEnd);
     const launcherInner = removeExpandLabels(summaryInner);
     const body = code.slice(summaryEnd + '</summary>'.length, matched.closeStart);
-    const title = escapeAttribute(staticTitle(summaryInner));
+    const titleLiteral = JSON.stringify(staticTitle(summaryInner));
     const replacement = `<>
       <button
         type="button"
@@ -78,7 +120,7 @@ function transformDetails(source: string) {
         </div>
       </button>
       <dialog
-        aria-label="${title}"
+        aria-label={${titleLiteral}}
         className="fixed inset-0 z-[120] m-auto h-full max-h-none w-full max-w-none overflow-hidden bg-transparent p-4 backdrop:bg-black/60"
         onClick={(event) => {
           if (event.target === event.currentTarget) event.currentTarget.close();
@@ -87,7 +129,7 @@ function transformDetails(source: string) {
         <section className="absolute left-1/2 top-1/2 flex max-h-[88dvh] w-[calc(100%_-_2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl">
           <header className="grid grid-cols-[40px_1fr_40px] items-center border-b border-card-border px-3 py-3">
             <span aria-hidden="true" />
-            <h2 className="break-keep text-center text-base font-black leading-tight">${title}</h2>
+            <h2 className="break-keep text-center text-base font-black leading-tight">{${titleLiteral}}</h2>
             <button
               type="button"
               aria-label="닫기"
