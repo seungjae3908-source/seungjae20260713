@@ -14,12 +14,21 @@ function replaceOnce(
 }
 
 function patchRelayChartLibrary(source: string): string {
-  return replaceOnce(
+  let code = replaceOnce(
     source,
     `  chart.subscribeClick((param: any) => {\n    for (const [series, explanation] of lineExplanations) {\n      if (param?.seriesData?.has?.(series)) {\n        showExplanationModal(explanation);\n        return;\n      }\n    }\n\n    if (!param?.point || !mainCandleSeries || priceLines.length === 0) return;`,
-    `  chart.subscribeClick((param: any) => {\n    const hoveredSeries = param?.hoveredSeries;\n    if (hoveredSeries && lineExplanations.has(hoveredSeries)) {\n      showExplanationModal(lineExplanations.get(hoveredSeries)!);\n      return;\n    }\n\n    if (!param?.point || !mainCandleSeries || priceLines.length === 0) return;`,
-    'indicator click hit test',
+    `  chart.subscribeClick((param: any) => {\n    const hoveredSeries = param?.hoveredSeries;\n    if (hoveredSeries && lineExplanations.has(hoveredSeries)) {\n      showExplanationModal(lineExplanations.get(hoveredSeries)!);\n      return;\n    }\n\n    if (!param?.point || !mainCandleSeries || priceLines.length === 0) return;\n    const clickedX = Number(param.point.x);\n    const labelZoneStart = Math.max(0, container.clientWidth - 150);\n    if (!Number.isFinite(clickedX) || clickedX < labelZoneStart) return;`,
+    'indicator and price-label click hit test',
   );
+
+  code = replaceOnce(
+    code,
+    `  if (title.includes('분할매수') || title.includes('차 매수')) {`,
+    `  if (title.includes('지지선')) {\n    return {\n      title,\n      summary: '최근 가격이 여러 번 하락을 멈추거나 반등한 하단 가격 구간입니다.',\n      reasons: [\n        '최근 20개 봉의 저가와 반복 반등 구간을 비교했습니다.',\n        '현재가가 지지선 위에서 유지되는지 확인합니다.',\n        '지지선 이탈 시 기존 상승 시나리오의 위험이 커질 수 있습니다.',\n      ],\n      caution: '지지선은 반드시 지켜지는 가격이 아니며 거래량을 동반한 이탈 여부를 함께 확인해야 합니다.',\n    };\n  }\n  if (title.includes('저항선')) {\n    return {\n      title,\n      summary: '최근 가격 상승이 여러 번 막히거나 매도 압력이 커진 상단 가격 구간입니다.',\n      reasons: [\n        '최근 20개 봉의 고가와 반복적으로 밀린 구간을 비교했습니다.',\n        '현재가가 저항선을 거래량과 함께 돌파하는지 확인합니다.',\n        '돌파하지 못하면 단기 매물 부담으로 다시 하락할 수 있습니다.',\n      ],\n      caution: '저항선 돌파만으로 매수하지 말고 종가 유지와 거래량을 함께 확인해야 합니다.',\n    };\n  }\n  if (title.includes('분할매수') || title.includes('차 매수')) {`,
+    'support resistance explanations',
+  );
+
+  return code;
 }
 
 function patchChartRelay(source: string): string {
@@ -69,7 +78,7 @@ function patchChartRelay(source: string): string {
 
   const oldPricePlan = `    if (tab === 'ai' && settings.ai && plan) {\n      const candidates: Array<{ price: number | null; color: string; title: string; on: boolean }> = [\n        { price: plan.target, color: '#f97316', title: '목표가', on: settings.target },\n        { price: plan.stop, color: '#0ea5e9', title: '손절가', on: settings.stop },\n        ...plan.buyLevels.slice(0, 3).map((price, index) => ({\n          price,\n          color: '#ef4444',\n          title: \`${'${index + 1}'}차 매수\`,\n          on: settings.buyLevels,\n        })),\n        ...plan.sellLevels.slice(0, 3).map((price, index) => ({\n          price,\n          color: '#3b82f6',\n          title: \`${'${index + 1}'}차 매도\`,\n          on: settings.sellLevels,\n        })),\n      ];`;
 
-  const newPricePlan = `    if (tab === 'live' && plan) {\n      const candidates: Array<{ price: number | null; color: string; title: string; on: boolean }> = [\n        { price: plan.target, color: '#f97316', title: '목표가', on: settings.target },\n        { price: plan.buyLevels[0] ?? null, color: '#ef4444', title: '1차 분할매수', on: settings.buyLevels && settings.buyLevel1 },\n        { price: plan.buyLevels[1] ?? null, color: '#ef4444', title: '2차 분할매수', on: settings.buyLevels && settings.buyLevel2 },\n        { price: plan.buyLevels[2] ?? null, color: '#ef4444', title: '3차 분할매수', on: settings.buyLevels && settings.buyLevel3 },\n        { price: plan.sellLevels[0] ?? null, color: '#3b82f6', title: '1차 분할매도', on: settings.sellLevels && settings.sellLevel1 },\n        { price: plan.sellLevels[1] ?? null, color: '#3b82f6', title: '2차 분할매도', on: settings.sellLevels && settings.sellLevel2 },\n        { price: plan.sellLevels[2] ?? null, color: '#3b82f6', title: '3차 분할매도', on: settings.sellLevels && settings.sellLevel3 },\n        { price: plan.stop, color: '#0ea5e9', title: '손절가', on: settings.stop },\n      ];`;
+  const newPricePlan = `    if (tab === 'live' && plan) {\n      const recentLevelCandles = candles.slice(-20);\n      const supportPrice = recentLevelCandles.length\n        ? Math.min(...recentLevelCandles.map((candle) => candle.low))\n        : null;\n      const resistancePrice = recentLevelCandles.length\n        ? Math.max(...recentLevelCandles.map((candle) => candle.high))\n        : null;\n      const candidates: Array<{ price: number | null; color: string; title: string; on: boolean }> = [\n        { price: plan.target, color: '#f97316', title: '목표가', on: settings.target },\n        { price: resistancePrice, color: '#a855f7', title: '저항선', on: true },\n        { price: plan.buyLevels[0] ?? null, color: '#ef4444', title: '1차 분할매수', on: settings.buyLevels && settings.buyLevel1 },\n        { price: plan.buyLevels[1] ?? null, color: '#ef4444', title: '2차 분할매수', on: settings.buyLevels && settings.buyLevel2 },\n        { price: plan.buyLevels[2] ?? null, color: '#ef4444', title: '3차 분할매수', on: settings.buyLevels && settings.buyLevel3 },\n        { price: plan.sellLevels[0] ?? null, color: '#3b82f6', title: '1차 분할매도', on: settings.sellLevels && settings.sellLevel1 },\n        { price: plan.sellLevels[1] ?? null, color: '#3b82f6', title: '2차 분할매도', on: settings.sellLevels && settings.sellLevel2 },\n        { price: plan.sellLevels[2] ?? null, color: '#3b82f6', title: '3차 분할매도', on: settings.sellLevels && settings.sellLevel3 },\n        { price: supportPrice, color: '#22c55e', title: '지지선', on: true },\n        { price: plan.stop, color: '#0ea5e9', title: '손절가', on: settings.stop },\n      ];`;
 
   code = replaceOnce(code, oldPricePlan, newPricePlan, 'live chart plan price lines');
 
