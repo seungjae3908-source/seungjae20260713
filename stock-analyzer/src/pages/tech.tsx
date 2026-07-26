@@ -41,11 +41,11 @@ export default function TechPage() {
   );
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-background">
-      <div className="mx-auto max-w-md px-4 pb-28 pt-6">
+    <div className="h-full w-full min-w-0 overflow-y-auto overscroll-contain bg-background">
+      <div className="w-full min-w-0 px-4 pb-28 pt-6">
         <header className="text-center">
           <h1 className="text-lg font-extrabold">기술</h1>
-          <p className="mt-1 text-[11px] font-bold text-muted-foreground">
+          <p className="mt-1 text-center text-[11px] font-bold text-muted-foreground">
             신호검색과 차트중계를 한 곳에서 이용합니다.
           </p>
         </header>
@@ -58,18 +58,20 @@ export default function TechPage() {
                 key={item.href}
                 type="button"
                 onClick={() => navigate(item.href)}
-                className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-4 text-left"
+                className="grid w-full grid-cols-[40px_minmax(0,1fr)_40px] items-center gap-3 rounded-2xl border border-card-border bg-card p-4 text-center"
               >
-                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-secondary text-primary">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-secondary text-primary">
                   <Icon className="h-5 w-5" />
                 </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-black">{item.label}</p>
-                  <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">
+                <span className="min-w-0 text-center">
+                  <span className="block text-center text-sm font-black">{item.label}</span>
+                  <span className="mt-1 block break-keep text-center text-[11px] font-bold leading-relaxed text-muted-foreground">
                     {item.desc}
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  </span>
+                </span>
+                <span className="flex h-10 w-10 items-center justify-center">
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </span>
               </button>
             );
           })}
