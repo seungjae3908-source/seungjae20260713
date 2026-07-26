@@ -16,6 +16,7 @@ type AnyObj = Record<string, any>;
 type ScanMarket = 'kr' | 'us' | 'spot' | 'futures';
 type DirectionTab = 'buy' | 'sell';
 type SignalFilter = 'strongBuy' | 'strongSell' | 'pattern' | 'volume';
+type ScanStyle = 'swing' | 'scalp';
 
 type Candidate = {
   ticker: string;
@@ -86,6 +87,13 @@ const FUTURES_SIGNAL_FILTERS: Array<{ key: SignalFilter; label: string }> = [
   { key: 'strongSell', label: '강한 숏' },
   { key: 'pattern', label: '매수 관찰' },
   { key: 'volume', label: '매도 관찰' },
+];
+
+const SCALP_SIGNAL_FILTERS: Array<{ key: SignalFilter; label: string }> = [
+  { key: 'strongBuy', label: '강한 단타 롱' },
+  { key: 'strongSell', label: '강한 단타 숏' },
+  { key: 'pattern', label: '단타 롱 관찰' },
+  { key: 'volume', label: '단타 숏 관찰' },
 ];
 
 function marketToQuery(market: ScanMarket): {
@@ -185,6 +193,7 @@ export default function SignalScanPage() {
     useState<ScanMarket>(routeMarket ?? 'kr');
   const [directionTab, setDirectionTab] =
     useState<DirectionTab>('buy');
+  const [scanStyle, setScanStyle] = useState<ScanStyle>('swing');
   const [signalFilter, setSignalFilter] =
     useState<SignalFilter>('strongBuy');
   const [marketMenu, setMarketMenu] =
@@ -259,9 +268,32 @@ export default function SignalScanPage() {
           );
 
         const score = candidate.score ?? 0;
+        const isScalpTimeframe = candidate.timeframe === '15m';
+        const hasScalpMomentum =
+          hasVolumeExpansion ||
+          /거래대금|돌파|단기|상승|하락|추세|지지|저항/.test(
+            `${basisText} ${candidate.volumeState} ${candidate.trendState}`,
+          );
         let matches = false;
 
-        if (isFutures) {
+        if (scanStyle === 'scalp') {
+          if (!isScalpTimeframe) continue;
+          if (signalFilter === 'strongBuy') {
+            matches =
+              candidateDirection === 'buy' &&
+              score >= 76 &&
+              hasScalpMomentum;
+          } else if (signalFilter === 'strongSell') {
+            matches =
+              candidateDirection === 'sell' &&
+              score >= 76 &&
+              hasScalpMomentum;
+          } else if (signalFilter === 'pattern') {
+            matches = candidateDirection === 'buy' && score >= 68;
+          } else {
+            matches = candidateDirection === 'sell' && score >= 68;
+          }
+        } else if (isFutures) {
           if (signalFilter === 'strongBuy') {
             matches = group.key === 'long';
           } else if (signalFilter === 'strongSell') {
@@ -305,7 +337,7 @@ export default function SignalScanPage() {
           a.name.localeCompare(b.name, 'ko'),
       )
       .slice(0, needle ? 30 : 10);
-  }, [groups, isFutures, searchText, signalFilter]);
+  }, [groups, isFutures, scanStyle, searchText, signalFilter]);
 
   const selectMarket = (next: ScanMarket) => {
     setSelected(null);
@@ -329,7 +361,7 @@ export default function SignalScanPage() {
     const params = new URLSearchParams({
       asset: chartAsset,
       symbol,
-      interval: '5m',
+      interval: candidate.timeframe || (scanStyle === 'scalp' ? '15m' : '1D'),
       tab: 'live',
     });
 
@@ -345,9 +377,12 @@ export default function SignalScanPage() {
     navigate(target);
   };
 
-  const signalFilters = isFutures
-    ? FUTURES_SIGNAL_FILTERS
-    : SPOT_SIGNAL_FILTERS;
+  const signalFilters =
+    scanStyle === 'scalp'
+      ? SCALP_SIGNAL_FILTERS
+      : isFutures
+        ? FUTURES_SIGNAL_FILTERS
+        : SPOT_SIGNAL_FILTERS;
 
   const candidateSectionLabel =
     signalFilters.find((item) => item.key === signalFilter)?.label ??
@@ -369,7 +404,7 @@ export default function SignalScanPage() {
           <div className="text-center">
             <h1 className="text-lg font-extrabold">신호검색</h1>
             <p className="text-[11px] font-bold text-muted-foreground">
-              기술적 신호 기반 후보
+              {scanStyle === 'scalp' ? '15분봉 단타 후보' : '15분봉·일봉 스윙 후보'}
             </p>
           </div>
 
@@ -388,6 +423,38 @@ export default function SignalScanPage() {
             />
           </button>
         </header>
+
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          {([
+            { key: 'swing' as const, label: '스윙용' },
+            { key: 'scalp' as const, label: '단타용 · 15분봉' },
+          ]).map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => {
+                setScanStyle(item.key);
+                setSelected(null);
+                setSignalFilter('strongBuy');
+                setDirectionTab('buy');
+              }}
+              className={cn(
+                'rounded-xl border px-3 py-2.5 text-xs font-black',
+                scanStyle === item.key
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-card-border bg-card text-muted-foreground',
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        {scanStyle === 'scalp' && (
+          <p className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-center text-[10px] font-bold text-warning">
+            실제 15분봉만 사용 · 거래량/거래대금·단기 추세·지지/저항을 함께 확인
+          </p>
+        )}
 
         <div className="relative mt-3 grid grid-cols-2 gap-2">
           {MARKET_GROUPS.map((group) => {
@@ -505,7 +572,7 @@ export default function SignalScanPage() {
                   {candidateSectionLabel}
                 </h2>
                 <p className="text-[10px] font-bold text-muted-foreground">
-                  최대 10종목
+                  {scanStyle === 'scalp' ? '15분봉 · 최대 10종목' : '최대 10종목'}
                 </p>
               </div>
 
