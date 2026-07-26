@@ -3,18 +3,20 @@ import type { Plugin } from 'vite';
 function patchBottomNav(source: string): string {
   let code = source;
 
-  code = code.replace(
-    "  | 'marketAnalysis'\n  | 'chartRelay'",
-    "  | 'marketAnalysis'\n  | 'study'\n  | 'chartRelay'",
-  );
+  if (!code.includes("  | 'study'")) {
+    code = code.replace(
+      "  | 'marketAnalysis'\n",
+      "  | 'marketAnalysis'\n  | 'study'\n",
+    );
+  }
 
   code = code.replace(
     "  { label: '공부', href: '/learn' },",
     "  { label: '공부', step: 'study' },",
   );
   code = code.replace(
-    "  { label: '포트폴리오', href: '/portfolio/summary?asset=all&source=portfolio' },",
-    "  { label: '포트폴리오', href: '/portfolio?from=info' },",
+    /  \{ label: '포트폴리오', href: '[^']+'(?:, feature: 'portfolio')? \},/,
+    "  { label: '포트폴리오', href: '/portfolio?from=info', feature: 'portfolio' },",
   );
 
   if (!code.includes('const STUDY_ITEMS: PopupItem[]')) {
