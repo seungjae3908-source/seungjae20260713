@@ -108,7 +108,7 @@ function transformDetails(source: string) {
     const body = code.slice(summaryEnd + '</summary>'.length, matched.closeStart);
     const titleLiteral = JSON.stringify(staticTitle(summaryInner));
     const launcherClass = openTag.includes('data-settings-uniform-card')
-      ? 'flex h-[112px] w-full items-center justify-center rounded-3xl border border-card-border bg-card px-4 py-3 text-center shadow-sm'
+      ? 'flex h-[64px] w-full items-center justify-center rounded-2xl border border-card-border bg-card px-4 py-2 text-center shadow-sm'
       : 'w-full rounded-2xl border border-card-border bg-card px-4 py-3 text-center shadow-sm';
     const replacement = `<>
       <button
