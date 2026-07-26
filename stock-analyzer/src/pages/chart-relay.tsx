@@ -3534,7 +3534,7 @@ export default function ChartRelayPage() {
                 : 'border-card-border bg-card text-muted-foreground',
             )}
           >
-            실시간 신호 분석
+            AI분석 생중계
           </button>
         </div>
 
@@ -3613,16 +3613,18 @@ export default function ChartRelayPage() {
               </p>
             )}
 
-            <LiveBroadcastPanel
-              realtimeLabel={realtimeLabel}
-              plan={plan}
-              signals={signals}
-              aiHistory={aiHistory}
-              latestPrice={latestPrice}
-              latestBarChangePercent={latestBarChangePercent}
-              asset={asset}
-              interval={interval}
-            />
+            {tab === 'ai' && (
+              <LiveBroadcastPanel
+                realtimeLabel={realtimeLabel}
+                plan={plan}
+                signals={signals}
+                aiHistory={aiHistory}
+                latestPrice={latestPrice}
+                latestBarChangePercent={latestBarChangePercent}
+                asset={asset}
+                interval={interval}
+              />
+            )}
             <ChartAnalysisTabs
               sourceKey={sourceKey}
               planQuery={planQuery}
@@ -4502,57 +4504,62 @@ function LiveBroadcastPanel({
         : 'text-warning';
 
   return (
-    <section className="mt-3 overflow-hidden rounded-2xl border border-card-border bg-card">
-      <div className="flex items-start justify-between gap-3 border-b border-card-border p-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
-            </span>
-            <p className="text-[10px] font-black text-emerald-500">LIVE · {realtimeLabel}</p>
-          </div>
-          <h2 className={cn('mt-1 truncate text-base font-black', tone)}>{title}</h2>
-          <p className="mt-1 text-[10px] font-bold text-muted-foreground">
-            {interval}봉 · 현재가 {formatPrice(latestPrice, asset)}
-            {latestBarChangePercent == null
-              ? ''
-              : ` · 직전 봉 대비 ${latestBarChangePercent >= 0 ? '+' : ''}${latestBarChangePercent.toFixed(2)}%`}
-          </p>
+    <section className="mt-3 overflow-hidden rounded-2xl border border-card-border bg-card text-center">
+      <div className="flex flex-col items-center justify-center gap-2 border-b border-card-border p-4 text-center">
+        <div className="flex items-center justify-center gap-2">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+          </span>
+          <p className="text-[10px] font-black text-emerald-500">LIVE · {realtimeLabel}</p>
         </div>
-        <span className="shrink-0 rounded-full border border-card-border bg-background px-2.5 py-1 text-[10px] font-black">
+        <h2 className={cn('text-center text-base font-black', tone)}>{title}</h2>
+        <p className="text-center text-[10px] font-bold text-muted-foreground">
+          {interval}봉 · 현재가 {formatPrice(latestPrice, asset)}
+          {latestBarChangePercent == null
+            ? ''
+            : ` · 직전 봉 대비 ${latestBarChangePercent >= 0 ? '+' : ''}${latestBarChangePercent.toFixed(2)}%`}
+        </p>
+        <span className="rounded-full border border-card-border bg-background px-3 py-1 text-[10px] font-black">
           {plan?.view ?? '중립'}
         </span>
       </div>
-      <div className="p-3">
-        <p className="text-[10px] font-black text-muted-foreground">실시간 중계</p>
+      <div className="p-4 text-center">
+        <p className="text-center text-[10px] font-black text-muted-foreground">AI 실시간 중계</p>
         {latestSignals.length === 0 && aiHistory.length === 0 ? (
           <p className="mt-2 rounded-xl bg-background px-3 py-3 text-[11px] font-bold text-muted-foreground">
             새 캔들과 신호를 기다리는 중입니다.
           </p>
         ) : (
-          <div className="relative mt-2 ml-1 border-l-2 border-card-border pl-4">
+          <div className="mt-3 space-y-3 text-center">
             {latestSignals.map((signal) => (
-              <div key={signalOccurrenceKey(signal)} className="relative mb-2 last:mb-0">
-                <span
-                  className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full border-2 border-card"
-                  style={{ backgroundColor: PATTERN_STAGE_META[signal.stage].color }}
-                />
-                <p className="text-[11px] font-black">
-                  {signal.name} · {PATTERN_STAGE_META[signal.stage].label}
-                </p>
-                <p className="mt-0.5 text-[9px] font-bold text-muted-foreground">
+              <div
+                key={signalOccurrenceKey(signal)}
+                className="rounded-xl border border-card-border bg-background px-3 py-2 text-center"
+              >
+                <div className="flex items-center justify-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: PATTERN_STAGE_META[signal.stage].color }}
+                  />
+                  <p className="text-center text-[11px] font-black">
+                    {signal.name} · {PATTERN_STAGE_META[signal.stage].label}
+                  </p>
+                </div>
+                <p className="mt-1 text-center text-[9px] font-bold text-muted-foreground">
                   {formatTime(signal.occurredAt)} · {signalKindLabel(signal.kind)}
                 </p>
               </div>
             ))}
             {aiHistory[0] && (
-              <div className="relative mt-2">
-                <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full border-2 border-card bg-primary" />
-                <p className="text-[11px] font-black">
-                  AI 관점 {aiHistory[0].previousView} → {aiHistory[0].nextView}
-                </p>
-                <p className="mt-0.5 text-[9px] font-bold text-muted-foreground">
+              <div className="rounded-xl border border-primary/30 bg-primary/5 px-3 py-2 text-center">
+                <div className="flex items-center justify-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-primary" />
+                  <p className="text-center text-[11px] font-black">
+                    AI 관점 {aiHistory[0].previousView} → {aiHistory[0].nextView}
+                  </p>
+                </div>
+                <p className="mt-1 text-center text-[9px] font-bold text-muted-foreground">
                   {formatTime(aiHistory[0].changedAt)} · 실제 계획 변경
                 </p>
               </div>
