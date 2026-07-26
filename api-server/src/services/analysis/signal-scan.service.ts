@@ -436,36 +436,30 @@ function isOptimizedShort(a: Analyzed, futures = false): boolean {
 
 function isFuturesWatchLong(a: Analyzed): boolean {
   return (
-    a.bullScore >= 68 &&
-    a.bullScore - a.bearScore >= 8 &&
-    a.trend === '상승추세' &&
+    a.bullScore >= 64 &&
+    a.bullScore - a.bearScore >= 6 &&
     a.ma5 != null &&
     a.ma20 != null &&
     a.ma5 > a.ma20 &&
     a.latest > a.ma20 &&
     a.rsiValue != null &&
-    a.rsiValue >= 40 &&
-    a.rsiValue <= 70 &&
-    a.volRatio != null &&
-    a.volRatio >= 0.7 &&
+    a.rsiValue >= 35 &&
+    a.rsiValue <= 72 &&
     hasUsableVolatility(a, true)
   );
 }
 
 function isFuturesWatchShort(a: Analyzed): boolean {
   return (
-    a.bearScore >= 68 &&
-    a.bearScore - a.bullScore >= 8 &&
-    a.trend === '하락추세' &&
+    a.bearScore >= 64 &&
+    a.bearScore - a.bullScore >= 6 &&
     a.ma5 != null &&
     a.ma20 != null &&
     a.ma5 < a.ma20 &&
     a.latest < a.ma20 &&
     a.rsiValue != null &&
-    a.rsiValue >= 30 &&
-    a.rsiValue <= 60 &&
-    a.volRatio != null &&
-    a.volRatio >= 0.7 &&
+    a.rsiValue >= 28 &&
+    a.rsiValue <= 65 &&
     hasUsableVolatility(a, true)
   );
 }
@@ -538,8 +532,8 @@ function buildFuturesGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
   return [
     { key: 'long', label: '롱 후보', candidates: long },
     { key: 'short', label: '숏 후보', candidates: short },
-    { key: 'buyView', label: '매수 관점', candidates: buyView },
-    { key: 'sellView', label: '매도 관점', candidates: sellView },
+    { key: 'buyView', label: '매수 관찰', candidates: buyView },
+    { key: 'sellView', label: '매도 관찰', candidates: sellView },
   ];
 }
 
