@@ -130,6 +130,18 @@ type ChartLevelInfo = {
   action: string;
 };
 
+type SignalZoneRect = {
+  id: string;
+  signal: ChartSignal;
+  label: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  color: string;
+  dashed: boolean;
+};
+
 type PortfolioChartPosition = {
   quantity: number;
   averagePrice: number;
@@ -1565,6 +1577,7 @@ const RelayChart = memo(function RelayChart({
   const volumeMaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const patternSeriesRef = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  const zoneFrameRef = useRef<number | null>(null);
   const savedRangeRef = useRef<LogicalRange | null>(null);
   const firstFitRef = useRef(false);
   const previousCandlesRef = useRef<CandlePoint[]>([]);
@@ -1586,6 +1599,17 @@ const RelayChart = memo(function RelayChart({
   const indicatorSourceRef = useRef(sourceKey);
   const [indicators, setIndicators] = useState<IndicatorPoint[]>([]);
   const [activeLevel, setActiveLevel] = useState<ChartLevelInfo | null>(null);
+  const [signalZones, setSignalZones] = useState<SignalZoneRect[]>([]);
+  const [chartViewportVersion, setChartViewportVersion] = useState(0);
+  const scheduleZoneLayout = useCallback(() => {
+    if (zoneFrameRef.current != null) {
+      window.cancelAnimationFrame(zoneFrameRef.current);
+    }
+    zoneFrameRef.current = window.requestAnimationFrame(() => {
+      zoneFrameRef.current = null;
+      setChartViewportVersion((value) => value + 1);
+    });
+  }, []);
   const chartLevels = useMemo(
     () => buildChartLevels(candles, plan, position),
     [candles, plan, position],
@@ -1767,6 +1791,7 @@ const RelayChart = memo(function RelayChart({
     const rangeHandler = (range: LogicalRange | null) => {
       if (!range) return;
       savedRangeRef.current = range;
+      scheduleZoneLayout();
       const rightEdge = candlesLengthRef.current - 1;
       const viewingHistory = range.to < rightEdge - 1;
       viewingHistoryRef.current = viewingHistory;
@@ -1782,12 +1807,17 @@ const RelayChart = memo(function RelayChart({
       const rect = entries[0]?.contentRect;
       if (rect?.width && rect.height) {
         chart.applyOptions({ width: Math.max(rect.width, 1), height: Math.max(rect.height, 340) });
+        scheduleZoneLayout();
       }
     });
     observer.observe(container);
     return () => {
       savedRangeRef.current = chart.timeScale().getVisibleLogicalRange();
       observer.disconnect();
+      if (zoneFrameRef.current != null) {
+        window.cancelAnimationFrame(zoneFrameRef.current);
+        zoneFrameRef.current = null;
+      }
       chart.unsubscribeClick(clickHandler);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(rangeHandler);
       chart.remove();
@@ -1804,7 +1834,7 @@ const RelayChart = memo(function RelayChart({
       patternSeriesRef.current.clear();
       priceLinesRef.current = [];
     };
-  }, []);
+  }, [scheduleZoneLayout]);
 
   useEffect(() => {
     chartRef.current?.priceScale('right').applyOptions({
@@ -2003,6 +2033,122 @@ const RelayChart = memo(function RelayChart({
       patternSeriesRef.current.delete(key);
     }
   }, [candles, chartType, settings.highlight, signals, tab]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series =
+      chartType === 'candles'
+        ? candleSeriesRef.current
+        : closeSeriesRef.current;
+    const container = containerRef.current;
+    if (
+      !chart ||
+      !series ||
+      !container ||
+      tab !== 'live' ||
+      !settings.highlight ||
+      candles.length < 2
+    ) {
+      setSignalZones([]);
+      return;
+    }
+
+    const latestCandleTime = Number(candles.at(-1)!.time);
+    const candidates = dedupeSignalOccurrences(signals)
+      .filter((signal) => signal.kind === 'chart' || signal.kind === 'candle')
+      .map((signal) => {
+        const range = signalDisplayRange(signal, latestCandleTime);
+        if (!range) return null;
+        const nearestIndex = (target: number) =>
+          candles.reduce(
+            (nearest, candle, index) =>
+              Math.abs(Number(candle.time) - target) <
+              Math.abs(Number(candles[nearest]!.time) - target)
+                ? index
+                : nearest,
+            0,
+          );
+        const startIndex = nearestIndex(range.start);
+        const endIndex = nearestIndex(range.end);
+        return {
+          signal,
+          left: Math.min(startIndex, endIndex),
+          right: Math.max(startIndex, endIndex),
+          bearish: /하락|매도|약세|이탈|쌍봉|이중천장|석별|유성|데드크로스/.test(signal.name),
+          name: normalizeSignalName(signal.name),
+        };
+      })
+      .filter(Boolean) as Array<{
+        signal: ChartSignal;
+        left: number;
+        right: number;
+        bearish: boolean;
+        name: string;
+      }>;
+
+    candidates.sort((left, right) => left.left - right.left);
+    const merged: typeof candidates = [];
+    for (const candidate of candidates) {
+      const previous = merged.at(-1);
+      if (
+        previous &&
+        previous.name === candidate.name &&
+        previous.bearish === candidate.bearish &&
+        candidate.left <= previous.right + 1
+      ) {
+        previous.right = Math.max(previous.right, candidate.right);
+        if (
+          (toEpochMilliseconds(candidate.signal.occurredAt) ?? 0) >
+          (toEpochMilliseconds(previous.signal.occurredAt) ?? 0)
+        ) {
+          previous.signal = candidate.signal;
+        }
+      } else {
+        merged.push({ ...candidate });
+      }
+    }
+
+    const containerTop = container.offsetTop;
+    const containerLeft = container.offsetLeft;
+    const rects: SignalZoneRect[] = [];
+    for (const item of merged.slice(-12)) {
+      const rows = candles.slice(item.left, item.right + 1);
+      if (rows.length === 0) continue;
+      const x1 = chart.timeScale().timeToCoordinate(candles[item.left]!.time);
+      const x2 = chart.timeScale().timeToCoordinate(candles[item.right]!.time);
+      const high = Math.max(...rows.map((candle) => candle.high));
+      const low = Math.min(...rows.map((candle) => candle.low));
+      const y1 = series.priceToCoordinate(high);
+      const y2 = series.priceToCoordinate(low);
+      if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
+      const barWidth = Math.max(6, Math.abs(x2 - x1) / Math.max(1, item.right - item.left));
+      const left = Math.min(x1, x2) - barWidth / 2 + containerLeft;
+      const right = Math.max(x1, x2) + barWidth / 2 + containerLeft;
+      const top = Math.min(y1, y2) + containerTop;
+      const bottom = Math.max(y1, y2) + containerTop;
+      rects.push({
+        id: `${signalOccurrenceKey(item.signal)}:${item.left}:${item.right}`,
+        signal: item.signal,
+        label: item.signal.name,
+        left,
+        top,
+        width: Math.max(8, right - left),
+        height: Math.max(12, bottom - top),
+        color: item.bearish ? '#3b82f6' : '#ef4444',
+        dashed:
+          item.signal.stage === 'START' ||
+          item.signal.stage === 'DEVELOPING',
+      });
+    }
+    setSignalZones(rects);
+  }, [
+    candles,
+    chartType,
+    chartViewportVersion,
+    settings.highlight,
+    signals,
+    tab,
+  ]);
 
   useEffect(() => {
     const series =
@@ -2345,6 +2491,35 @@ const RelayChart = memo(function RelayChart({
         ref={containerRef}
         className={cn('w-full', isFullscreen ? 'h-[55vh] min-h-[400px]' : 'h-[360px] min-h-[340px]')}
       />
+      <div className="pointer-events-none absolute inset-0 z-[2] overflow-hidden">
+        {signalZones.map((zone) => (
+          <button
+            key={zone.id}
+            type="button"
+            onClick={() => onSignalSelect(zone.signal)}
+            className="pointer-events-auto absolute overflow-hidden rounded-md text-left"
+            style={{
+              left: zone.left,
+              top: zone.top,
+              width: zone.width,
+              height: zone.height,
+              minHeight: 12,
+              border: `1px ${zone.dashed ? 'dashed' : 'solid'} ${zone.color}`,
+              backgroundColor: `${zone.color}18`,
+            }}
+            aria-label={`${zone.label} 신호 구간 상세`}
+          >
+            {zone.width >= 72 && zone.height >= 24 && (
+              <span
+                className="absolute left-1 top-1 max-w-[calc(100%-8px)] truncate rounded px-1.5 py-0.5 text-[8px] font-black text-white"
+                style={{ backgroundColor: `${zone.color}cc` }}
+              >
+                {zone.label}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
       <LowerIndicatorPanel
         indicators={indicators}
         enabled={lowerIndicators}
