@@ -163,21 +163,7 @@ function replaceSignalMarkers(source: string): string {
     throw new Error('[chart-relay-signal-arrow-patch] 신호 마커 또는 가격 계획 위치를 찾지 못했습니다.');
   }
 
-  const markerBlock = `    const markers: SeriesMarker<Time>[] = [];
-
-    if (tab === 'live' && settings.highlight && candles.length > 0) {
-      for (const arrow of signalArrowEntries(signals, candles)) {
-        markers.push({
-          time: arrow.time as Time,
-          position: arrow.position,
-          color: arrow.color,
-          shape: arrow.shape,
-          text: '',
-        });
-      }
-    }
-
-`;
+  const markerBlock = `    const markers: SeriesMarker<Time>[] = [];\n\n`;
 
   let code =
     source.slice(0, markerStart) +
@@ -248,7 +234,6 @@ function restorePositivePriceLines(source: string): string {
 
 function patchChartRelay(source: string): string {
   let code = insertSignalArrowHelpers(source);
-  code = replaceClickHandler(code);
   code = replaceSignalMarkers(code);
   code = restorePositivePriceLines(code);
   return code;
