@@ -5,7 +5,10 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import apiRouter from './routes';
-import { startPriceAlertMonitor } from './services/notification.service';
+import {
+  startPriceAlertMonitor,
+  startStrongSignalMonitor,
+} from './services/notification.service';
 // import { attachRealtimeChartServer } from './services/analysis/realtime-chart.service';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -149,6 +152,7 @@ const server = app.listen(port, '0.0.0.0', () => {
   );
 
   startPriceAlertMonitor();
+  startStrongSignalMonitor();
 
   if (hasFrontendBuild) {
     console.log(
