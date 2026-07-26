@@ -670,6 +670,11 @@ export default function StocksPage() {
 					ariaLabel={
 						isStock ? '종목 검색' : '코인 검색'
 					}
+					placeholder={
+						isStock
+							? '종목명·티커·상품코드 검색'
+							: '한글·영문 코인명·심볼 검색'
+					}
 				/>
 			</header>
 
