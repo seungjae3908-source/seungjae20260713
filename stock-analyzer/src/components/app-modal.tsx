@@ -35,7 +35,7 @@ export function AppModal({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 p-4 pb-24 sm:items-center sm:pb-4"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4"
       onMouseDown={onClose}
     >
       <section
@@ -43,7 +43,7 @@ export function AppModal({
         aria-modal="true"
         aria-label={title}
         className={cn(
-          'flex max-h-[78dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl',
+          'flex max-h-[88dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl',
           className,
         )}
         onMouseDown={(event) => event.stopPropagation()}
@@ -60,18 +60,10 @@ export function AppModal({
             <X className="h-4 w-4" />
           </button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 text-left">{children}</div>
-        <footer className="border-t border-card-border p-3">
-          {footer ?? (
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex w-full items-center justify-center rounded-2xl border border-card-border bg-secondary/70 px-4 py-3 text-sm font-black"
-            >
-              닫기
-            </button>
-          )}
-        </footer>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 text-left">
+          {children}
+        </div>
+        {footer ? <footer className="border-t border-card-border p-3">{footer}</footer> : null}
       </section>
     </div>
   );
