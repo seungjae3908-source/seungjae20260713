@@ -2680,7 +2680,11 @@ export default function ChartRelayPage() {
           : '';
 
     const params = new URLSearchParams(queryText);
-    const assetParam = params.get('asset');
+    const routeAsset =
+      typeof window !== 'undefined'
+        ? window.location.pathname.split('/').filter(Boolean).at(-1)
+        : undefined;
+    const assetParam = params.get('asset') ?? routeAsset;
     const symbolParam = params.get('symbol');
     const intervalParam = params.get('interval');
     const tabParam = params.get('tab');
