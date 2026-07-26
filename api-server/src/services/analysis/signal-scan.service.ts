@@ -434,6 +434,42 @@ function isOptimizedShort(a: Analyzed, futures = false): boolean {
   );
 }
 
+function isFuturesWatchLong(a: Analyzed): boolean {
+  return (
+    a.bullScore >= 68 &&
+    a.bullScore - a.bearScore >= 8 &&
+    a.trend === '상승추세' &&
+    a.ma5 != null &&
+    a.ma20 != null &&
+    a.ma5 > a.ma20 &&
+    a.latest > a.ma20 &&
+    a.rsiValue != null &&
+    a.rsiValue >= 40 &&
+    a.rsiValue <= 70 &&
+    a.volRatio != null &&
+    a.volRatio >= 0.7 &&
+    hasUsableVolatility(a, true)
+  );
+}
+
+function isFuturesWatchShort(a: Analyzed): boolean {
+  return (
+    a.bearScore >= 68 &&
+    a.bearScore - a.bullScore >= 8 &&
+    a.trend === '하락추세' &&
+    a.ma5 != null &&
+    a.ma20 != null &&
+    a.ma5 < a.ma20 &&
+    a.latest < a.ma20 &&
+    a.rsiValue != null &&
+    a.rsiValue >= 30 &&
+    a.rsiValue <= 60 &&
+    a.volRatio != null &&
+    a.volRatio >= 0.7 &&
+    hasUsableVolatility(a, true)
+  );
+}
+
 function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
   const buy = items
     .filter((i) => isOptimizedLong(i.analyzed))
@@ -486,18 +522,18 @@ function buildFuturesGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
       makeCandidate(i, 'short', i.analyzed.bearScore, bearBasis(i.analyzed), '단기 모멘텀·추세 기준 숏 관점 후보(고위험, 관찰 필요)', dataAsOf),
     );
   const buyView = items
-    .filter((i) => isOptimizedLong(i.analyzed, true))
+    .filter((i) => isFuturesWatchLong(i.analyzed))
     .sort((a, b) => b.analyzed.bullScore - a.analyzed.bullScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
-      makeCandidate(i, 'buy', i.analyzed.bullScore, bullBasis(i.analyzed), '보수적 스윙 매수 관점(추세 추종, 확정 아님)', dataAsOf),
+      makeCandidate(i, 'buy', i.analyzed.bullScore, bullBasis(i.analyzed), '차상위 스윙 매수 관찰 후보(강한 롱 신호 아님)', dataAsOf),
     );
   const sellView = items
-    .filter((i) => isOptimizedShort(i.analyzed, true))
+    .filter((i) => isFuturesWatchShort(i.analyzed))
     .sort((a, b) => b.analyzed.bearScore - a.analyzed.bearScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
-      makeCandidate(i, 'sell', i.analyzed.bearScore, bearBasis(i.analyzed), '보수적 스윙 매도 관점(추세 추종, 확정 아님)', dataAsOf),
+      makeCandidate(i, 'sell', i.analyzed.bearScore, bearBasis(i.analyzed), '차상위 스윙 매도 관찰 후보(강한 숏 신호 아님)', dataAsOf),
     );
   return [
     { key: 'long', label: '롱 후보', candidates: long },
