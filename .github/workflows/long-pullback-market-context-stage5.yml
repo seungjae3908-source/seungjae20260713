@@ -1,0 +1,124 @@
+name: Stage 5 long pullback and market context
+
+on:
+  push:
+    branches:
+      - agent/long-pullback-market-context-collector-20260726
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend build
+        run: rm -rf stock-analyzer/dist && pnpm --filter @workspace/stock-analyzer build
+
+      - name: Backend typecheck
+        run: pnpm --filter @workspace/api-server typecheck
+
+      - name: Bundle collector service for smoke test
+        run: pnpm exec esbuild api-server/src/services/bitget-market-context.service.ts --bundle --platform=node --format=esm --outfile=/tmp/bitget-context-service.mjs
+
+      - name: Policy and public collector smoke test
+        env:
+          BITGET_CONTEXT_DATA_DIR: /tmp/bitget-market-context
+          BITGET_CONTEXT_COLLECTOR_ENABLED: 'false'
+          BITGET_CONTEXT_COLLECTOR_INTERVAL_MS: '300000'
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFile } from 'node:fs/promises';
+          import {
+            collectBitgetMarketContextOnce,
+            evaluateLongPullbackContext,
+          } from '/tmp/bitget-context-service.mjs';
+
+          const now = Date.now();
+          const base = {
+            version: 'bitget-market-context.v1',
+            sampleId: 'TEST:1',
+            sampleBucket: 1,
+            symbol: 'TESTUSDT',
+            productType: 'USDT-FUTURES',
+            collectedAt: new Date(now).toISOString(),
+            sourceTimestamp: now,
+            market: {
+              price: 100, markPrice: 100, indexPrice: 100,
+              bidPrice: 99.99, askPrice: 100.01, spreadBps: 2,
+              markIndexPremium: 0, marketMarkGap: 0, fundingRate: 0.0001,
+              fundingRateIntervalHours: 8, nextFundingAt: null,
+            },
+            derivatives: {
+              openInterest: 1000,
+              openInterestChange5mPct: 0.2,
+              openInterestChange15mPct: 0.4,
+              openInterestChange1hPct: 1,
+              accountLongRatio: 0.5, accountShortRatio: 0.5, accountLongShortRatio: 1,
+              positionLongRatio: 0.5, positionShortRatio: 0.5, positionLongShortRatio: 1,
+              marketLongRatio: 0.5, marketShortRatio: 0.5, marketLongShortRatio: 1,
+            },
+            providerTimestamps: {
+              ticker: now, openInterest: now, accountLongShort: now,
+              positionLongShort: now, marketLongShort: now,
+            },
+          };
+          const safe = evaluateLongPullbackContext(base);
+          assert.equal(safe.longPullbackEligible, true);
+          const crowded = evaluateLongPullbackContext({
+            ...base,
+            derivatives: { ...base.derivatives, accountLongShortRatio: 2.2 },
+          });
+          assert.equal(crowded.longPullbackEligible, false);
+          assert.ok(crowded.blockReasons.includes('LONG_SIDE_CROWDED'));
+
+          const result = await collectBitgetMarketContextOnce(['BTCUSDT']);
+          assert.equal(result.failures.length, 0, JSON.stringify(result.failures));
+          assert.equal(result.collected.length, 1);
+          assert.equal(result.collected[0].symbol, 'BTCUSDT');
+          assert.equal(result.collected[0].policy.longPullbackEligible, false);
+          assert.ok(result.collected[0].policy.warnings.includes('OI_HISTORY_INSUFFICIENT'));
+          const day = result.collected[0].collectedAt.slice(0, 10);
+          const saved = await readFile(`/tmp/bitget-market-context/${day}/BTCUSDT.jsonl`, 'utf8');
+          assert.ok(saved.includes('bitget-market-context.v1'));
+          NODE
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backtest dependencies
+        run: pip install numpy pandas requests
+
+      - name: Run fifth-stage unseen-window backtest
+        run: python tools/backtest/long_pullback_retest_backtest.py
+
+      - name: Commit backtest result files
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/backtests/BITGET_5SYMBOL_OLDER89D_LONG_PULLBACK_RETEST_STAGE5*
+          if git diff --cached --quiet; then
+            echo 'No result changes'
+          else
+            git commit -m 'test: record stage-five long pullback results [skip ci]'
+            git push
+          fi
