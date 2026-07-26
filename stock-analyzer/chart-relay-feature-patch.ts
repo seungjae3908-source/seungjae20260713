@@ -8,6 +8,16 @@ function replaceOnce(
 ): string {
   if (source.includes(replacement)) return source;
   if (!source.includes(search)) {
+    const alreadyUsesInteractiveLevels =
+      source.includes('if (chartLevels.length > 0)') &&
+      source.includes('ChartLevelModal');
+    if (
+      alreadyUsesInteractiveLevels &&
+      (label === 'live chart plan price lines' ||
+        label === 'price line effect dependencies')
+    ) {
+      return source;
+    }
     throw new Error(`[chart-relay-feature-patch] ${label} 위치를 찾지 못했습니다.`);
   }
   return source.replace(search, replacement);
