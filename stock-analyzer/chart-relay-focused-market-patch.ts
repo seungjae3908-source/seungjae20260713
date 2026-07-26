@@ -87,11 +87,11 @@ function patchChartRelay(source: string): string {
     'dynamic relay page title',
   );
 
-  code = replaceOnce(
-    code,
+  // The inbox layout may already hide the in-page market switch in source.
+  // Keep that final state; otherwise apply focused-route hiding to the legacy layout.
+  code = code.replace(
     `<div className="relative mt-3 grid grid-cols-2 gap-2">\n          {ASSET_GROUPS.map((group) => {`,
     `<div className={cn('relative mt-3 grid grid-cols-2 gap-2', focusedRelay && 'hidden')}>\n          {ASSET_GROUPS.map((group) => {`,
-    'hide in-page market switch for focused route',
   );
 
   code = replaceOnce(
