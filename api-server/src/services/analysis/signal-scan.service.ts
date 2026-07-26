@@ -25,7 +25,11 @@ import {
   fetchBitgetCandles,
 } from './crypto-source';
 
-const SCAN_TTL = 5 * 60 * 1000;
+const STOCK_SCAN_TTL = 5 * 60 * 1000;
+const COIN_SCAN_TTL = 2 * 60 * 1000;
+const MIN_BARS = 60;
+const STOCK_MIN_SCORE = 72;
+const FUTURES_MIN_SCORE = 74;
 const GROUP_LIMIT = 10;
 const STOCK_POOL = 80;
 const COIN_SPOT_POOL = 40;
@@ -83,12 +87,15 @@ interface Analyzed {
   support: number | null;
   resistance: number | null;
   recentMove: number;
+  atrPercent: number | null;
+  longRiskReward: number | null;
+  shortRiskReward: number | null;
   bullScore: number;
   bearScore: number;
 }
 
 function analyze(bars: Bar[]): Analyzed | null {
-  if (bars.length < 30) return null;
+  if (bars.length < MIN_BARS) return null;
   const closes = bars.map((b) => b.close);
   const latest = last(closes);
   if (latest == null) return null;
@@ -116,31 +123,62 @@ function analyze(bars: Bar[]): Analyzed | null {
   const volRatio = base && base > 0 && latestVol != null ? latestVol / base : null;
   const { support, resistance } = supportResistance(bars, 60);
   const recentMove = pctChange(closes[closes.length - 20] ?? latest, latest);
+  const trueRanges = bars.slice(-15).map((bar, index, rows) => {
+    const previousClose = index > 0 ? rows[index - 1].close : bar.open;
+    return Math.max(
+      bar.high - bar.low,
+      Math.abs(bar.high - previousClose),
+      Math.abs(bar.low - previousClose),
+    );
+  });
+  const atr14 = avg(trueRanges.slice(-14));
+  const atrPercent = atr14 != null && latest > 0 ? (atr14 / latest) * 100 : null;
+  const longRisk = support != null && support < latest ? latest - support : null;
+  const longReward = resistance != null && resistance > latest ? resistance - latest : null;
+  const shortRisk = resistance != null && resistance > latest ? resistance - latest : null;
+  const shortReward = support != null && support < latest ? latest - support : null;
+  const longRiskReward =
+    longRisk != null && longRisk > 0 && longReward != null ? longReward / longRisk : null;
+  const shortRiskReward =
+    shortRisk != null && shortRisk > 0 && shortReward != null ? shortReward / shortRisk : null;
 
-  let bullScore = 50;
-  let bearScore = 50;
+  let bullScore = 42;
+  let bearScore = 42;
 
   if (ma20 != null && latest > ma20) bullScore += 8;
   else if (ma20 != null) bearScore += 8;
-  if (ma5 != null && ma20 != null && ma5 > ma20) bullScore += 6;
-  else if (ma5 != null && ma20 != null) bearScore += 6;
-  if (ma60 != null && latest > ma60) bullScore += 6;
-  else if (ma60 != null) bearScore += 6;
+  if (ma5 != null && ma20 != null && ma5 > ma20) bullScore += 8;
+  else if (ma5 != null && ma20 != null) bearScore += 8;
+  if (ma60 != null && latest > ma60) bullScore += 8;
+  else if (ma60 != null) bearScore += 8;
   if (trend === '상승추세') bullScore += 10;
   if (trend === '하락추세') bearScore += 10;
-  if (macdCrossUp) bullScore += 8;
-  if (macdCrossDown) bearScore += 8;
+  if (macdCrossUp) bullScore += 7;
+  if (macdCrossDown) bearScore += 7;
   if (rsiValue != null) {
-    if (rsiValue <= 35) bullScore += 6;
-    if (rsiValue >= 70) bearScore += 6;
-    if (rsiValue >= 55 && rsiValue < 70) bullScore += 4;
+    if (rsiValue >= 45 && rsiValue <= 65) bullScore += 6;
+    if (rsiValue >= 35 && rsiValue <= 55) bearScore += 3;
+    if (rsiValue >= 70) {
+      bullScore -= 8;
+      bearScore += 5;
+    }
+    if (rsiValue <= 30) {
+      bearScore -= 8;
+      bullScore += 5;
+    }
   }
-  if (volRatio != null && volRatio >= 1.5) {
-    if (latest > (ma20 ?? latest)) bullScore += 6;
-    else bearScore += 6;
+  if (volRatio != null) {
+    if (volRatio >= 1.2 && latest > (ma20 ?? latest)) bullScore += 7;
+    if (volRatio >= 1.2 && latest < (ma20 ?? latest)) bearScore += 7;
+    if (volRatio < 0.7) {
+      bullScore -= 6;
+      bearScore -= 6;
+    }
   }
-  if (recentMove > 8) bearScore += 4;
-  if (recentMove < -8) bullScore += 4;
+  if (longRiskReward != null && longRiskReward >= 1.5) bullScore += 5;
+  if (shortRiskReward != null && shortRiskReward >= 1.5) bearScore += 5;
+  if (recentMove > 12) bullScore -= 5;
+  if (recentMove < -12) bearScore -= 5;
 
   bullScore = Math.max(0, Math.min(100, Math.round(bullScore)));
   bearScore = Math.max(0, Math.min(100, Math.round(bearScore)));
@@ -161,6 +199,9 @@ function analyze(bars: Bar[]): Analyzed | null {
     support,
     resistance,
     recentMove,
+    atrPercent,
+    longRiskReward,
+    shortRiskReward,
     bullScore,
     bearScore,
   };
@@ -345,9 +386,58 @@ async function collectCoinFutures(): Promise<{ items: RawItem[]; scanned: number
   return { items, scanned: tickers.length, providerErrors };
 }
 
+function hasUsableVolatility(a: Analyzed, futures = false): boolean {
+  if (a.atrPercent == null) return false;
+  return a.atrPercent >= 0.35 && a.atrPercent <= (futures ? 12 : 8);
+}
+
+function isOptimizedLong(a: Analyzed, futures = false): boolean {
+  const minScore = futures ? FUTURES_MIN_SCORE : STOCK_MIN_SCORE;
+  const minRiskReward = futures ? 1.8 : 1.5;
+  return (
+    a.bullScore >= minScore &&
+    a.bullScore - a.bearScore >= (futures ? 12 : 10) &&
+    a.trend === '상승추세' &&
+    a.ma5 != null &&
+    a.ma20 != null &&
+    a.ma5 > a.ma20 &&
+    a.latest > a.ma20 &&
+    a.rsiValue != null &&
+    a.rsiValue >= 42 &&
+    a.rsiValue <= 68 &&
+    a.volRatio != null &&
+    a.volRatio >= 0.8 &&
+    hasUsableVolatility(a, futures) &&
+    a.longRiskReward != null &&
+    a.longRiskReward >= minRiskReward
+  );
+}
+
+function isOptimizedShort(a: Analyzed, futures = false): boolean {
+  const minScore = futures ? FUTURES_MIN_SCORE : STOCK_MIN_SCORE;
+  const minRiskReward = futures ? 1.8 : 1.5;
+  return (
+    a.bearScore >= minScore &&
+    a.bearScore - a.bullScore >= (futures ? 12 : 10) &&
+    a.trend === '하락추세' &&
+    a.ma5 != null &&
+    a.ma20 != null &&
+    a.ma5 < a.ma20 &&
+    a.latest < a.ma20 &&
+    a.rsiValue != null &&
+    a.rsiValue >= 32 &&
+    a.rsiValue <= 58 &&
+    a.volRatio != null &&
+    a.volRatio >= 0.8 &&
+    hasUsableVolatility(a, futures) &&
+    a.shortRiskReward != null &&
+    a.shortRiskReward >= minRiskReward
+  );
+}
+
 function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
   const buy = items
-    .filter((i) => i.analyzed.bullScore >= 58 && i.analyzed.bullScore >= i.analyzed.bearScore)
+    .filter((i) => isOptimizedLong(i.analyzed))
     .sort((a, b) => b.analyzed.bullScore - a.analyzed.bullScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
@@ -361,7 +451,7 @@ function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
       ),
     );
   const sell = items
-    .filter((i) => i.analyzed.bearScore >= 58 && i.analyzed.bearScore > i.analyzed.bullScore)
+    .filter((i) => isOptimizedShort(i.analyzed))
     .sort((a, b) => b.analyzed.bearScore - a.analyzed.bearScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
@@ -383,28 +473,28 @@ function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
 function buildFuturesGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
   // 롱/숏: 단기 모멘텀 + 추세. 매수/매도 관점: 더 보수적 스윙 기준.
   const long = items
-    .filter((i) => i.analyzed.bullScore >= 60 && i.analyzed.recentMove > 0)
+    .filter((i) => isOptimizedLong(i.analyzed, true) && i.analyzed.recentMove > 0)
     .sort((a, b) => b.analyzed.bullScore - a.analyzed.bullScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
       makeCandidate(i, 'long', i.analyzed.bullScore, bullBasis(i.analyzed), '단기 모멘텀·추세 기준 롱 관점 후보(고위험, 관찰 필요)', dataAsOf),
     );
   const short = items
-    .filter((i) => i.analyzed.bearScore >= 60 && i.analyzed.recentMove < 0)
+    .filter((i) => isOptimizedShort(i.analyzed, true) && i.analyzed.recentMove < 0)
     .sort((a, b) => b.analyzed.bearScore - a.analyzed.bearScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
       makeCandidate(i, 'short', i.analyzed.bearScore, bearBasis(i.analyzed), '단기 모멘텀·추세 기준 숏 관점 후보(고위험, 관찰 필요)', dataAsOf),
     );
   const buyView = items
-    .filter((i) => i.analyzed.trend === '상승추세' && i.analyzed.bullScore >= 58)
+    .filter((i) => isOptimizedLong(i.analyzed, true))
     .sort((a, b) => b.analyzed.bullScore - a.analyzed.bullScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
       makeCandidate(i, 'buy', i.analyzed.bullScore, bullBasis(i.analyzed), '보수적 스윙 매수 관점(추세 추종, 확정 아님)', dataAsOf),
     );
   const sellView = items
-    .filter((i) => i.analyzed.trend === '하락추세' && i.analyzed.bearScore >= 58)
+    .filter((i) => isOptimizedShort(i.analyzed, true))
     .sort((a, b) => b.analyzed.bearScore - a.analyzed.bearScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
@@ -422,8 +512,9 @@ export async function getSignalScan(
   asset: 'stock' | 'coin',
   market: string,
 ): Promise<SignalScanResult> {
-  const key = `signal-scan:v1:${asset}:${market}`;
-  return cached(key, SCAN_TTL, async () => {
+  const key = `signal-scan:v2-optimized:${asset}:${market}`;
+  const ttl = asset === 'coin' ? COIN_SCAN_TTL : STOCK_SCAN_TTL;
+  return cached(key, ttl, async () => {
     const generatedAt = new Date().toISOString();
     let collected: { items: RawItem[]; scanned: number; providerErrors: number };
     let groups: ScanGroup[];
