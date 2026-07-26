@@ -40,13 +40,7 @@ jobs:
           set +e
           corepack enable 2>&1 | tee /tmp/pnpm.log
           code=${PIPESTATUS[0]}
-          {
-            echo '## Enable pnpm'
-            echo "- exit_code: $code"
-            echo '```text'
-            tail -n 80 /tmp/pnpm.log
-            echo '```'
-          } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
+          { echo '## Enable pnpm'; echo "- exit_code: $code"; echo '```text'; tail -n 80 /tmp/pnpm.log; echo '```'; } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
           exit $code
 
       - name: Install workspace
@@ -56,13 +50,7 @@ jobs:
           set +e
           pnpm install --frozen-lockfile 2>&1 | tee /tmp/install.log
           code=${PIPESTATUS[0]}
-          {
-            echo '## Install workspace'
-            echo "- exit_code: $code"
-            echo '```text'
-            tail -n 120 /tmp/install.log
-            echo '```'
-          } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
+          { echo '## Install workspace'; echo "- exit_code: $code"; echo '```text'; tail -n 120 /tmp/install.log; echo '```'; } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
           exit $code
 
       - name: Frontend build
@@ -72,29 +60,27 @@ jobs:
           set +e
           (rm -rf stock-analyzer/dist && pnpm --filter @workspace/stock-analyzer build) 2>&1 | tee /tmp/frontend.log
           code=${PIPESTATUS[0]}
-          {
-            echo '## Frontend build'
-            echo "- exit_code: $code"
-            echo '```text'
-            tail -n 160 /tmp/frontend.log
-            echo '```'
-          } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
+          { echo '## Frontend build'; echo "- exit_code: $code"; echo '```text'; tail -n 160 /tmp/frontend.log; echo '```'; } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
           exit $code
 
-      - name: Backend typecheck
+      - name: Full backend typecheck
         id: backend
         continue-on-error: true
         run: |
           set +e
           pnpm --filter @workspace/api-server typecheck 2>&1 | tee /tmp/backend.log
           code=${PIPESTATUS[0]}
-          {
-            echo '## Backend typecheck'
-            echo "- exit_code: $code"
-            echo '```text'
-            tail -n 180 /tmp/backend.log
-            echo '```'
-          } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
+          { echo '## Full backend typecheck'; echo "- exit_code: $code"; echo '```text'; tail -n 180 /tmp/backend.log; echo '```'; } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
+          exit $code
+
+      - name: Stage-five files typecheck
+        id: targeted
+        continue-on-error: true
+        run: |
+          set +e
+          pnpm --dir api-server exec tsc --noEmit --target ESNext --module ESNext --moduleResolution bundler --strict --skipLibCheck --esModuleInterop --allowSyntheticDefaultImports --types node src/services/bitget-market-context.service.ts src/routes/bitget-market-context.routes.ts 2>&1 | tee /tmp/targeted.log
+          code=${PIPESTATUS[0]}
+          { echo '## Stage-five files typecheck'; echo "- exit_code: $code"; echo '```text'; tail -n 180 /tmp/targeted.log; echo '```'; } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
           exit $code
 
       - name: Collector policy smoke test
@@ -106,7 +92,7 @@ jobs:
           BITGET_CONTEXT_COLLECTOR_INTERVAL_MS: '300000'
         run: |
           set +e
-          pnpm exec esbuild api-server/src/services/bitget-market-context.service.ts --bundle --platform=node --format=esm --outfile=/tmp/bitget-context-service.mjs > /tmp/smoke.log 2>&1
+          pnpm --dir api-server exec esbuild src/services/bitget-market-context.service.ts --bundle --platform=node --format=esm --outfile=/tmp/bitget-context-service.mjs > /tmp/smoke.log 2>&1
           bundle_code=$?
           if [ "$bundle_code" -eq 0 ]; then
             node --input-type=module >> /tmp/smoke.log 2>&1 <<'NODE'
@@ -146,13 +132,7 @@ jobs:
           else
             code=$bundle_code
           fi
-          {
-            echo '## Collector policy and public API smoke test'
-            echo "- exit_code: $code"
-            echo '```text'
-            tail -n 180 /tmp/smoke.log
-            echo '```'
-          } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
+          { echo '## Collector policy and public API smoke test'; echo "- exit_code: $code"; echo '```text'; tail -n 180 /tmp/smoke.log; echo '```'; } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
           exit $code
 
       - uses: actions/setup-python@v5
@@ -166,13 +146,7 @@ jobs:
           set +e
           (pip install numpy pandas requests && python -m py_compile tools/backtest/long_pullback_retest_backtest.py && python tools/backtest/long_pullback_retest_backtest.py) 2>&1 | tee /tmp/backtest.log
           code=${PIPESTATUS[0]}
-          {
-            echo '## Stage-five backtest'
-            echo "- exit_code: $code"
-            echo '```text'
-            tail -n 220 /tmp/backtest.log
-            echo '```'
-          } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
+          { echo '## Stage-five backtest'; echo "- exit_code: $code"; echo '```text'; tail -n 220 /tmp/backtest.log; echo '```'; } >> docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
           exit $code
 
       - name: Finalize and commit report
@@ -184,7 +158,8 @@ jobs:
             echo "- pnpm: ${{ steps.pnpm.outcome }}"
             echo "- install: ${{ steps.install.outcome }}"
             echo "- frontend: ${{ steps.frontend.outcome }}"
-            echo "- backend: ${{ steps.backend.outcome }}"
+            echo "- full_backend: ${{ steps.backend.outcome }}"
+            echo "- stage5_typecheck: ${{ steps.targeted.outcome }}"
             echo "- smoke: ${{ steps.smoke.outcome }}"
             echo "- backtest: ${{ steps.backtest.outcome }}"
             echo "- finished_at: $(date -u +%FT%TZ)"
@@ -193,9 +168,7 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add docs/backtests/STAGE5_LONG_PULLBACK_CI_REPORT.md
           git add docs/backtests/BITGET_5SYMBOL_OLDER89D_LONG_PULLBACK_RETEST_STAGE5* 2>/dev/null || true
-          if git diff --cached --quiet; then
-            echo 'No report changes'
-          else
+          if git diff --cached --quiet; then echo 'No report changes'; else
             git commit -m 'test: record stage-five verification report [skip ci]'
             git push
           fi
