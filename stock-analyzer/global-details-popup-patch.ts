@@ -168,6 +168,10 @@ export function globalDetailsPopupPatch(): Plugin {
     transform(source, id) {
       const normalized = id.replace(/\\/g, '/').split('?')[0];
       if (!/\/src\/(?:pages|components)\/.*\.tsx$/.test(normalized)) return null;
+      // 종목상세는 detail-section-popup-patch가 개요·AI·재무·공시·뉴스를
+      // 이미 전용 Modal로 변환한다. 여기서 다시 <details>를 문자열 변환하면
+      // 중첩 JSX가 손상될 수 있으므로 중복 변환하지 않는다.
+      if (normalized.endsWith('/src/pages/detail.tsx')) return null;
       if (!source.includes('<details')) return null;
       const code = transformDetails(source);
       return code === source ? null : { code, map: null };
