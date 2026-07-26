@@ -1,0 +1,46 @@
+name: Preliminary BTCUSDT Backtest
+
+on:
+  push:
+    branches:
+      - agent/preliminary-backtest-btcusdt-20260726
+    paths:
+      - tools/backtest/preliminary_bitget_split_backtest.py
+      - .github/workflows/preliminary-btcusdt-backtest.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backtest dependencies
+        run: python -m pip install --disable-pip-version-check numpy pandas requests
+
+      - name: Run preliminary backtest
+        run: python tools/backtest/preliminary_bitget_split_backtest.py
+
+      - name: Commit generated results to isolated branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/backtests/BTCUSDT_15M_45D_PRELIMINARY.md \
+                  docs/backtests/BTCUSDT_15M_45D_PRELIMINARY.json \
+                  docs/backtests/BTCUSDT_15M_45D_PRELIMINARY_TRADES.csv
+          if git diff --cached --quiet; then
+            echo "No result changes"
+          else
+            git commit -m "test: record preliminary BTCUSDT backtest results [skip ci]"
+            git push
+          fi
