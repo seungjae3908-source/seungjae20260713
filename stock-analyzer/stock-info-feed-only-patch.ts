@@ -8,12 +8,7 @@ export function stockInfoFeedOnlyPatch(): Plugin {
       const normalized = id.replace(/\\/g, '/').split('?')[0];
       if (!normalized.endsWith('/src/pages/stock-info.tsx')) return null;
 
-      let code = source;
-      const detailMarker = `\t\t\t\t\t{ticker && (`;
-      if (code.includes(detailMarker)) {
-        code = code.replace(detailMarker, `\t\t\t\t\t{false && ticker && (`);
-      }
-
+      let code = source.replace(/\{ticker\s*&&\s*\(/, '{false && ticker && (');
       code = code.replaceAll(
         `enabled: asset === 'stock' && Boolean(ticker),`,
         `enabled: false,`,
