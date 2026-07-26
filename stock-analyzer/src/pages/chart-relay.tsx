@@ -38,7 +38,9 @@ import { getSupabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { useRealtimeChart } from '@/hooks/use-realtime-chart';
 import { FavoriteButton } from '@/components/favorite-button';
-import { InstrumentAlertButton } from '@/components/instrument-alert-modal';
+import { ChartRelayMessageInboxButton } from '@/components/chart-relay-message-inbox';
+import { addChartRelayMessage } from '@/lib/chart-relay-message-store';
+import { displayStockName, isInWatchlist } from '@/lib/stock-display';
 import {
   normalizeRealtimeTimeframe,
   REALTIME_CHART_TIMEFRAMES,
@@ -2731,6 +2733,28 @@ export default function ChartRelayPage() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [aiHistory, setAiHistory] = useState<AiPlanChange[]>([]);
   const [topBanners, setTopBanners] = useState<TopSignalBanner[]>([]);
+
+  useEffect(() => {
+    if (topBanners.length === 0) return;
+    if (!isInWatchlist(symbol, asset)) {
+      setTopBanners([]);
+      return;
+    }
+
+    topBanners.forEach((banner) => {
+      addChartRelayMessage({
+        id: `signal:${asset}:${symbol}:${banner.id}`,
+        kind: 'signal',
+        symbol,
+        asset,
+        title: banner.title,
+        summary: `${banner.direction} · ${formatPrice(banner.price, asset)} · 중요도 ${banner.importance}`,
+        price: banner.price,
+        occurredAt: banner.occurredAt,
+      });
+    });
+    setTopBanners([]);
+  }, [asset, symbol, topBanners]);
   const seenSignalIdsRef = useRef<Set<string>>(new Set());
   const bannerSourceRef = useRef<string>('');
   const seenAiChangeIdsRef = useRef<Set<string>>(new Set());
@@ -3341,7 +3365,7 @@ export default function ChartRelayPage() {
           </button>
         </header>
 
-        {topBanners.length > 0 && (
+        {false && topBanners.length > 0 && (
           <div className="mt-3 space-y-2" aria-live="polite">
             {topBanners.map((banner) => (
               <button
@@ -3395,7 +3419,7 @@ export default function ChartRelayPage() {
         )}
 
         {/* 자산 선택 */}
-        <div className="relative mt-3 grid grid-cols-2 gap-2">
+        <div className="hidden">
           {ASSET_GROUPS.map((group) => {
             const selectedGroup =
               group.key === 'stock'
@@ -3487,15 +3511,7 @@ export default function ChartRelayPage() {
             currency={watchCurrency}
             className="flex h-10 items-center justify-center gap-1 rounded-xl border border-card-border bg-card text-xs font-black text-warning"
           />
-          <InstrumentAlertButton
-            symbol={symbol}
-            name={symbol}
-            assetType={asset}
-            market={watchMarket}
-            currency={watchCurrency}
-            currentPrice={latestPrice}
-            className="flex h-10 items-center justify-center gap-1 rounded-xl border border-card-border bg-card text-xs font-black"
-          />
+          <ChartRelayMessageInboxButton />
           <button
             type="button"
             onClick={() =>
