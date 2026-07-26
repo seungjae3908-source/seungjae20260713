@@ -134,51 +134,63 @@ function patchScanner(source: string) {
   return code;
 }
 
-function patchBackButtons(source: string) {
-  return source
-    .replaceAll('aria-label="이전 화면"', 'aria-label="뒤로가기"')
-    .replaceAll('<span>이전</span>', '<span>뒤로가기</span>')
-    .replaceAll('>이전</button>', '>뒤로가기</button>');
-}
-
-function patchAppModal(source: string) {
-  return source.replace(
-    `className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 p-4 pb-24 sm:items-center sm:pb-4"`,
-    `className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4"`,
+function patchPortfolio(source: string) {
+  let code = source;
+  code = replaceOnce(
+    code,
+    `import { toKrw, weightPercent } from '@/lib/portfolio-calc';`,
+    `import { toKrw, weightPercent } from '@/lib/portfolio-calc';\nimport { PortfolioPlannerModals } from '@/components/portfolio-planner-modals';`,
+    'portfolio planner import',
   );
+
+  const summaryStart = code.indexOf('<PortfolioSummaryCard');
+  const navStart = code.indexOf(
+    '<div className="grid grid-cols-1 gap-2">',
+    summaryStart,
+  );
+  if (summaryStart < 0 || navStart < 0) {
+    throw new Error('[trading-home-global-ui-patch] 포트폴리오 계획 삽입 위치를 찾지 못했습니다.');
+  }
+  code =
+    code.slice(0, navStart) +
+    '<PortfolioPlannerModals />\n\n\t\t\t\t\t\t\t' +
+    code.slice(navStart);
+  return code;
 }
 
-const globalCloseScript = `
-function ensureDialogCloseButton(dialog) {
-  if (!(dialog instanceof HTMLElement)) return;
-  if (dialog.querySelector('[aria-label="닫기"], [aria-label*="창 닫기"], [data-global-dialog-close]')) return;
-  dialog.style.position = dialog.style.position || 'relative';
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.dataset.globalDialogClose = 'true';
-  button.setAttribute('aria-label', '닫기');
-  button.textContent = '×';
-  Object.assign(button.style, {
-    position: 'absolute', right: '12px', top: '12px', zIndex: '20',
-    width: '36px', height: '36px', borderRadius: '9999px',
-    border: '1px solid rgba(148,163,184,.35)',
-    background: 'rgba(15,23,42,.94)', color: '#fff',
-    fontSize: '24px', fontWeight: '900', lineHeight: '30px'
-  });
-  button.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const overlay = dialog.parentElement;
-    if (overlay) overlay.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    if (overlay) overlay.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-  });
-  dialog.appendChild(button);
+function patchSettings(source: string) {
+  return source
+    .replace(
+      'className="flex min-h-screen flex-col bg-background"',
+      'className="flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background"',
+    )
+    .replace(
+      'className="flex-1 space-y-5 overflow-y-auto px-5 py-5 pb-28"',
+      'className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 py-5 pb-[calc(7rem+env(safe-area-inset-bottom))]"',
+    );
 }
-function scanDialogs() {
-  document.querySelectorAll('[role="dialog"]').forEach(ensureDialogCloseButton);
+
+const globalUiScript = `
+function removeBackButtons() {
+  document.querySelectorAll('button, a').forEach((element) => {
+    const label = (element.getAttribute('aria-label') || '').trim();
+    const text = (element.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (
+      label === '이전 화면' ||
+      label === '뒤로가기' ||
+      text === '이전' ||
+      text === '이전 화면' ||
+      text === '뒤로가기'
+    ) {
+      element.remove();
+    }
+  });
 }
-new MutationObserver(scanDialogs).observe(document.documentElement, { childList: true, subtree: true });
-scanDialogs();
+new MutationObserver(removeBackButtons).observe(document.documentElement, {
+  childList: true,
+  subtree: true,
+});
+removeBackButtons();
 `;
 
 export function tradingHomeGlobalUiPatch(): Plugin {
@@ -196,22 +208,23 @@ export function tradingHomeGlobalUiPatch(): Plugin {
       if (normalized.endsWith('/src/pages/scanner.tsx')) {
         return { code: patchScanner(source), map: null };
       }
-      if (normalized.endsWith('/src/components/app-modal.tsx')) {
-        return { code: patchAppModal(source), map: null };
+      if (normalized.endsWith('/src/pages/portfolio.tsx')) {
+        return { code: patchPortfolio(source), map: null };
       }
-      if (/\/src\/(?:pages|components)\/.*\.tsx$/.test(normalized)) {
-        const code = patchBackButtons(source);
-        return code === source ? null : { code, map: null };
+      if (normalized.endsWith('/src/pages/more.tsx')) {
+        return { code: patchSettings(source), map: null };
       }
       return null;
     },
     transformIndexHtml() {
-      return [{
-        tag: 'script',
-        attrs: { type: 'module', id: 'global-dialog-close-button-guard' },
-        children: globalCloseScript,
-        injectTo: 'body',
-      }];
+      return [
+        {
+          tag: 'script',
+          attrs: { type: 'module', id: 'global-back-button-cleanup' },
+          children: globalUiScript,
+          injectTo: 'body',
+        },
+      ];
     },
   };
 }
