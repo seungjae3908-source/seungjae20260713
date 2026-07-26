@@ -1,5 +1,10 @@
 import webPush, { type PushSubscription } from 'web-push';
-import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
+import {
+  getSupabase,
+  hasSupabaseServerKey,
+  isSupabaseConfigured,
+} from '../lib/supabase';
+import { getSignalScan, type ScanCandidate } from './analysis/signal-scan.service';
 import { MarketDataService } from './market-data.service';
 
 export const DEFAULT_NOTIFICATION_TYPES = [
@@ -40,6 +45,8 @@ type DeliverNotificationInput = {
   app?: boolean;
   push?: boolean;
   metadata?: Record<string, unknown>;
+  repeatCount?: number;
+  repeatIntervalMs?: number;
 };
 
 type PriceAlertRow = {
@@ -68,6 +75,8 @@ type PriceAlertRow = {
 let vapidInitialized = false;
 let priceMonitorRunning = false;
 let priceMonitorTimer: NodeJS.Timeout | null = null;
+let strongSignalMonitorRunning = false;
+let strongSignalMonitorTimer: NodeJS.Timeout | null = null;
 
 export function isVapidReady(): boolean {
   return Boolean(
@@ -154,27 +163,44 @@ export async function deliverMemberNotification(
     if (error) throw error;
 
     const invalidEndpoints: string[] = [];
-    const payload = JSON.stringify({
-      title: input.title,
-      body: input.body,
-      url: input.url ?? '/alerts',
-      type: input.type,
-      metadata: input.metadata ?? {},
-    });
-
-    await Promise.all(
-      (data ?? []).map(async (row: any) => {
-        try {
-          await webPush.sendNotification(
-            row.subscription as PushSubscription,
-            payload,
-          );
-          pushSent += 1;
-        } catch {
-          invalidEndpoints.push(String(row.endpoint));
-        }
-      }),
+    const repeatCount = Math.max(1, Math.min(3, input.repeatCount ?? 1));
+    const repeatIntervalMs = Math.max(
+      1_000,
+      Math.min(30_000, input.repeatIntervalMs ?? 10_000),
     );
+
+    for (let repeatIndex = 1; repeatIndex <= repeatCount; repeatIndex += 1) {
+      const payload = JSON.stringify({
+        title: input.title,
+        body: input.body,
+        url: input.url ?? '/alerts',
+        type: input.type,
+        metadata: {
+          ...(input.metadata ?? {}),
+          repeatIndex,
+          repeatCount,
+        },
+      });
+
+      await Promise.all(
+        (data ?? []).map(async (row: any) => {
+          if (invalidEndpoints.includes(String(row.endpoint))) return;
+          try {
+            await webPush.sendNotification(
+              row.subscription as PushSubscription,
+              payload,
+            );
+            pushSent += 1;
+          } catch {
+            invalidEndpoints.push(String(row.endpoint));
+          }
+        }),
+      );
+
+      if (repeatIndex < repeatCount) {
+        await new Promise((resolve) => setTimeout(resolve, repeatIntervalMs));
+      }
+    }
 
     if (invalidEndpoints.length > 0) {
       await supabase
@@ -454,6 +480,171 @@ export async function runPriceAlertMonitorOnce(): Promise<{
   } finally {
     priceMonitorRunning = false;
   }
+}
+
+type StrongSignalMarket = {
+  asset: 'stock' | 'coin';
+  market: string;
+  routeMarket: 'kr' | 'us' | 'spot' | 'futures';
+  assetType: 'stock' | 'coin_spot' | 'coin_futures';
+  strongGroupKeys: string[];
+};
+
+const STRONG_SIGNAL_MARKETS: StrongSignalMarket[] = [
+  {
+    asset: 'stock',
+    market: 'KR',
+    routeMarket: 'kr',
+    assetType: 'stock',
+    strongGroupKeys: ['buy', 'sell'],
+  },
+  {
+    asset: 'stock',
+    market: 'US',
+    routeMarket: 'us',
+    assetType: 'stock',
+    strongGroupKeys: ['buy', 'sell'],
+  },
+  {
+    asset: 'coin',
+    market: 'spot',
+    routeMarket: 'spot',
+    assetType: 'coin_spot',
+    strongGroupKeys: ['buy', 'sell'],
+  },
+  {
+    asset: 'coin',
+    market: 'futures',
+    routeMarket: 'futures',
+    assetType: 'coin_futures',
+    strongGroupKeys: ['long', 'short'],
+  },
+];
+
+function strongSignalTitle(candidate: ScanCandidate): string {
+  if (candidate.direction === 'long') return `강한 롱 · ${candidate.name}`;
+  if (candidate.direction === 'short') return `강한 숏 · ${candidate.name}`;
+  if (candidate.direction === 'buy') return `강한 매수 · ${candidate.name}`;
+  return `강한 매도 · ${candidate.name}`;
+}
+
+export async function runStrongSignalMonitorOnce(): Promise<{
+  scannedMarkets: number;
+  signals: number;
+  deliveries: number;
+  skipped?: string;
+}> {
+  if (strongSignalMonitorRunning) {
+    return { scannedMarkets: 0, signals: 0, deliveries: 0, skipped: 'ALREADY_RUNNING' };
+  }
+  if (!isSupabaseConfigured() || !hasSupabaseServerKey()) {
+    return {
+      scannedMarkets: 0,
+      signals: 0,
+      deliveries: 0,
+      skipped: 'SERVICE_KEY_REQUIRED',
+    };
+  }
+
+  strongSignalMonitorRunning = true;
+  try {
+    const supabase = getSupabase();
+    const { data: recipientRows, error: recipientError } = await supabase
+      .from('notification_preferences')
+      .select('member_id,enabled_types,app_enabled,push_enabled')
+      .or('app_enabled.eq.true,push_enabled.eq.true')
+      .limit(500);
+    if (recipientError) throw recipientError;
+
+    const recipients = (recipientRows ?? []) as NotificationPreferences[];
+    if (recipients.length === 0) {
+      return { scannedMarkets: 0, signals: 0, deliveries: 0 };
+    }
+
+    const scans = await Promise.all(
+      STRONG_SIGNAL_MARKETS.map(async (spec) => ({
+        spec,
+        result: await getSignalScan(spec.asset, spec.market),
+      })),
+    );
+
+    const signals = scans.flatMap(({ spec, result }) =>
+      result.groups
+        .filter((group) => spec.strongGroupKeys.includes(group.key))
+        .flatMap((group) =>
+          group.candidates.map((candidate) => ({ spec, candidate })),
+        ),
+    );
+
+    let deliveries = 0;
+    await Promise.all(
+      signals.flatMap(({ spec, candidate }) =>
+        recipients.map(async (recipient) => {
+          const type =
+            candidate.direction === 'buy' || candidate.direction === 'long'
+              ? 'ai_strong_buy'
+              : 'ai_sell_signal';
+          const dateBucket = candidate.dataAsOf.slice(0, 10);
+          const result = await deliverMemberNotification({
+            memberId: recipient.member_id,
+            type,
+            title: strongSignalTitle(candidate),
+            body: `${candidate.ticker} · 점수 ${candidate.score} · 현재가 ${candidate.price.toLocaleString('ko-KR')}`,
+            url: `/tech/signal-scan/${spec.routeMarket}`,
+            app: recipient.app_enabled !== false,
+            push: recipient.push_enabled === true,
+            repeatCount: 3,
+            repeatIntervalMs: 10_000,
+            metadata: {
+              signalId: `strong-signal:${spec.market}:${candidate.ticker}:${candidate.direction}:${dateBucket}`,
+              assetType: spec.assetType,
+              market: spec.market,
+              symbol: candidate.ticker,
+              direction: candidate.direction,
+              score: candidate.score,
+              price: candidate.price,
+              importance: 'high',
+            },
+          });
+          if (result.appStored || result.pushSent > 0) deliveries += 1;
+        }),
+      ),
+    );
+
+    return {
+      scannedMarkets: scans.length,
+      signals: signals.length,
+      deliveries,
+    };
+  } finally {
+    strongSignalMonitorRunning = false;
+  }
+}
+
+export function startStrongSignalMonitor(): void {
+  if (strongSignalMonitorTimer) return;
+  const configured = Number(
+    process.env.STRONG_SIGNAL_MONITOR_INTERVAL_MS ?? 5 * 60_000,
+  );
+  const intervalMs = Math.max(
+    2 * 60_000,
+    Math.min(
+      30 * 60_000,
+      Number.isFinite(configured) ? configured : 5 * 60_000,
+    ),
+  );
+
+  const run = () => {
+    void runStrongSignalMonitorOnce().catch((error) => {
+      console.error('strong signal monitor error:', error);
+    });
+  };
+
+  const initialTimer = setTimeout(run, 20_000);
+  initialTimer.unref?.();
+  strongSignalMonitorTimer = setInterval(run, intervalMs);
+  strongSignalMonitorTimer.unref?.();
+  console.log(`[api-server] strong signal monitor enabled (${intervalMs}ms)`);
 }
 
 export function startPriceAlertMonitor(): void {
