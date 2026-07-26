@@ -110,6 +110,24 @@ type AiPlan = {
   dataAsOf: string | null;
 };
 
+type ChartLevelKind =
+  | 'target'
+  | 'stop'
+  | 'support'
+  | 'resistance'
+  | 'buy'
+  | 'sell';
+
+type ChartLevelInfo = {
+  id: string;
+  kind: ChartLevelKind;
+  label: string;
+  price: number;
+  color: string;
+  description: string;
+  action: string;
+};
+
 type ChartSettings = {
   liveSignal: boolean;
   chartPattern: boolean;
@@ -819,6 +837,99 @@ function formatPrice(value: number | null, asset: Asset): string {
   return `${Math.round(value).toLocaleString()}원`;
 }
 
+function buildChartLevels(
+  candles: CandlePoint[],
+  plan: AiPlan | null,
+): ChartLevelInfo[] {
+  const recent = candles.slice(-60);
+  const latest = recent.at(-1)?.close ?? null;
+  const support =
+    recent.length >= 5 ? Math.min(...recent.map((candle) => candle.low)) : null;
+  const resistance =
+    recent.length >= 5 ? Math.max(...recent.map((candle) => candle.high)) : null;
+  const levels: ChartLevelInfo[] = [];
+  const add = (
+    id: string,
+    kind: ChartLevelKind,
+    label: string,
+    price: number | null | undefined,
+    color: string,
+    description: string,
+    action: string,
+  ) => {
+    if (price == null || !Number.isFinite(price) || price <= 0) return;
+    levels.push({ id, kind, label, price, color, description, action });
+  };
+
+  add(
+    'support',
+    'support',
+    '지지선',
+    support,
+    '#10b981',
+    '최근 60개 실제 캔들 중 가장 낮은 저가를 기준으로 산출한 가격 방어 구간입니다.',
+    latest != null && support != null && latest < support
+      ? '현재가가 지지선 아래에 있어 지지 회복 여부를 확인합니다.'
+      : '종가가 지지선을 이탈하면 하락 위험이 커질 수 있습니다.',
+  );
+  add(
+    'resistance',
+    'resistance',
+    '저항선',
+    resistance,
+    '#f97316',
+    '최근 60개 실제 캔들 중 가장 높은 고가를 기준으로 산출한 상단 저항 구간입니다.',
+    latest != null && resistance != null && latest > resistance
+      ? '현재가가 저항선을 돌파해 돌파 유지 여부를 확인합니다.'
+      : '종가가 저항선을 돌파하고 유지되는지 확인합니다.',
+  );
+
+  if (plan) {
+    add(
+      'target',
+      'target',
+      '목표가',
+      plan.target,
+      '#f59e0b',
+      '현재 AI 차트 분석이 실제 가격·추세·지표를 바탕으로 제시한 참고 목표 가격입니다.',
+      '목표 도달만으로 매도하지 않고 거래량과 추세 유지 여부를 함께 확인합니다.',
+    );
+    add(
+      'stop',
+      'stop',
+      '손절가',
+      plan.stop,
+      '#0ea5e9',
+      '현재 AI 차트 관점이 무효화될 가능성이 높아지는 위험 관리 가격입니다.',
+      '종가 이탈과 분석 무효 조건을 함께 확인합니다.',
+    );
+    plan.buyLevels.slice(0, 3).forEach((price, index) =>
+      add(
+        `buy-${index + 1}`,
+        'buy',
+        `${index + 1}차 매수`,
+        price,
+        '#ef4444',
+        '한 번에 진입하지 않고 가격 구간을 나누어 관찰하기 위한 참고선입니다.',
+        '강한 매수 신호와 거래량 확인 없이 가격선만 보고 진입하지 않습니다.',
+      ),
+    );
+    plan.sellLevels.slice(0, 3).forEach((price, index) =>
+      add(
+        `sell-${index + 1}`,
+        'sell',
+        `${index + 1}차 매도`,
+        price,
+        '#3b82f6',
+        '목표 구간에서 비중을 나누어 관리하기 위한 참고선입니다.',
+        '추세와 목표 도달 여부를 함께 확인합니다.',
+      ),
+    );
+  }
+
+  return levels;
+}
+
 function intervalsFor(asset: Asset): IntervalItem[] {
   void asset;
   return STANDARD_INTERVALS;
@@ -1443,6 +1554,11 @@ const RelayChart = memo(function RelayChart({
   const fullscreenHistoryRef = useRef(false);
   const indicatorSourceRef = useRef(sourceKey);
   const [indicators, setIndicators] = useState<IndicatorPoint[]>([]);
+  const [activeLevel, setActiveLevel] = useState<ChartLevelInfo | null>(null);
+  const chartLevels = useMemo(
+    () => buildChartLevels(candles, plan),
+    [candles, plan],
+  );
 
   useEffect(() => {
     if (indicatorSourceRef.current !== sourceKey) {
@@ -1912,23 +2028,23 @@ const RelayChart = memo(function RelayChart({
       }
     }
 
-    if (tab === 'ai' && settings.ai && plan) {
-      const candidates: Array<{ price: number | null; color: string; title: string; on: boolean }> = [
-        { price: plan.target, color: '#f97316', title: '목표가', on: settings.target },
-        { price: plan.stop, color: '#0ea5e9', title: '손절가', on: settings.stop },
-        ...plan.buyLevels.slice(0, 3).map((price, index) => ({
-          price,
-          color: '#ef4444',
-          title: `${index + 1}차 매수`,
-          on: settings.buyLevels,
-        })),
-        ...plan.sellLevels.slice(0, 3).map((price, index) => ({
-          price,
-          color: '#3b82f6',
-          title: `${index + 1}차 매도`,
-          on: settings.sellLevels,
-        })),
-      ];
+    if (chartLevels.length > 0) {
+      const candidates: Array<{ price: number | null; color: string; title: string; on: boolean }> =
+        chartLevels.map((level) => ({
+          price: level.price,
+          color: level.color,
+          title: level.label,
+          on:
+            level.kind === 'support' || level.kind === 'resistance'
+              ? settings.highlight
+              : level.kind === 'target'
+                ? settings.target
+                : level.kind === 'stop'
+                  ? settings.stop
+                  : level.kind === 'buy'
+                    ? settings.buyLevels
+                    : settings.sellLevels,
+        }));
       const grouped = new Map<number, { color: string; titles: string[] }>();
       for (const candidate of candidates) {
         if (!candidate.on || candidate.price == null || !Number.isFinite(candidate.price)) continue;
@@ -2017,7 +2133,19 @@ const RelayChart = memo(function RelayChart({
       from: Math.max(0, nearestIndex - 24),
       to: Math.min(candles.length - 1, nearestIndex + 24),
     });
-  }, [activeSignalId, candles, signals]);
+  }, [
+    activeSignalId,
+    candles,
+    chartLevels,
+    chartType,
+    settings.buyLevels,
+    settings.highlight,
+    settings.sellLevels,
+    settings.stop,
+    settings.target,
+    signals,
+    tab,
+  ]);
 
   useEffect(() => {
     const fullscreenChange = () => {
@@ -2166,6 +2294,22 @@ const RelayChart = memo(function RelayChart({
         <span className="text-[9px] font-bold text-muted-foreground">마커·밑줄 구간을 누르면 신호 상세가 열립니다.</span>
       </div>
 
+      {chartLevels.length > 0 && (
+        <div className="flex gap-1.5 overflow-x-auto border-b border-card-border px-2 py-2 [scrollbar-width:none]">
+          {chartLevels.map((level) => (
+            <button
+              key={level.id}
+              type="button"
+              onClick={() => setActiveLevel(level)}
+              className="shrink-0 rounded-full border bg-card px-2.5 py-1 text-[10px] font-black"
+              style={{ borderColor: level.color, color: level.color }}
+            >
+              {level.label} · {formatPrice(level.price, asset)}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div
         ref={containerRef}
         className={cn('w-full', isFullscreen ? 'h-[55vh] min-h-[400px]' : 'h-[360px] min-h-[340px]')}
@@ -2176,6 +2320,16 @@ const RelayChart = memo(function RelayChart({
         timeVisible={timeVisible}
         sourceKey={sourceKey}
       />
+
+      {activeLevel && (
+        <ChartLevelModal
+          level={activeLevel}
+          currentPrice={candles.at(-1)?.close ?? null}
+          asset={asset}
+          interval={interval}
+          onClose={() => setActiveLevel(null)}
+        />
+      )}
 
       {(showLatest || isLoadingOlder) && (
         <div className="pointer-events-none sticky bottom-3 flex justify-center px-3">
@@ -4328,6 +4482,71 @@ function SignalModal({
           className="mt-4 w-full rounded-2xl bg-primary py-2.5 text-sm font-extrabold text-primary-foreground"
         >
           닫기
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ChartLevelModal({
+  level,
+  currentPrice,
+  asset,
+  interval,
+  onClose,
+}: {
+  level: ChartLevelInfo;
+  currentPrice: number | null;
+  asset: Asset;
+  interval: string;
+  onClose: () => void;
+}) {
+  const distance =
+    currentPrice != null && currentPrice > 0
+      ? ((level.price - currentPrice) / currentPrice) * 100
+      : null;
+  const intervalLabel =
+    intervalsFor(asset).find((item) => item.key === interval)?.label ?? interval;
+
+  return (
+    <div className="fixed inset-0 z-[95] flex items-end justify-center bg-black/60 p-3" onClick={onClose}>
+      <div
+        className="w-full max-w-md rounded-2xl border border-card-border bg-background p-4"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-black text-muted-foreground">{intervalLabel}봉 가격선 설명</p>
+            <h3 className="mt-1 text-base font-black" style={{ color: level.color }}>
+              {level.label} · {formatPrice(level.price, asset)}
+            </h3>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-card-border p-2" aria-label="닫기">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mt-3 space-y-3">
+          <ModalBlock title="의미" text={level.description} />
+          <ModalBlock title="확인 방법" text={level.action} />
+          <ModalBlock
+            title="현재가 대비 거리"
+            text={
+              distance == null
+                ? '현재가를 확인할 수 없습니다.'
+                : `${distance >= 0 ? '+' : ''}${distance.toFixed(2)}%`
+            }
+          />
+          <ModalBlock
+            title="현재가"
+            text={currentPrice == null ? '산출 불가' : formatPrice(currentPrice, asset)}
+          />
+          <ModalBlock
+            title="주의"
+            text="가격선은 실제 주문을 실행하지 않는 분석 참고선입니다. 다른 신호와 거래량을 함께 확인합니다."
+          />
+        </div>
+        <button type="button" onClick={onClose} className="mt-4 w-full rounded-2xl bg-primary py-2.5 text-sm font-black text-primary-foreground">
+          확인
         </button>
       </div>
     </div>
