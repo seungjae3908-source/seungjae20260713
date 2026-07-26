@@ -21,8 +21,10 @@ import { settingsPopupSectionsPatch } from './settings-popup-sections-patch';
 import { settingsUniformExtraPatch } from './settings-uniform-extra-patch';
 import { requestedUiFixesPatch } from './requested-ui-fixes-patch';
 import { stockInfoFeedOnlyPatch } from './stock-info-feed-only-patch';
+import { stocksCategoryLayoutPatch } from './stocks-category-layout-patch';
 import { krwTenThousandUnitPatch } from './krw-ten-thousand-unit-patch';
 import { detailContentStatusPatch } from './detail-content-status-patch';
+import { detailSectionPopupPatch } from './detail-section-popup-patch';
 import { globalDetailsPopupPatch } from './global-details-popup-patch';
 
 const require = createRequire(import.meta.url);
@@ -57,8 +59,10 @@ export default defineConfig({
     settingsUniformExtraPatch(),
     requestedUiFixesPatch(),
     stockInfoFeedOnlyPatch(),
+    stocksCategoryLayoutPatch(),
     krwTenThousandUnitPatch(),
     detailContentStatusPatch(),
+    detailSectionPopupPatch(),
     globalDetailsPopupPatch(),
     react(),
     tailwindcss(),
