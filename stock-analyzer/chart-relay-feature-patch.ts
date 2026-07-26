@@ -46,8 +46,8 @@ function patchChartRelay(source: string): string {
 
   code = replaceOnce(
     code,
-    "import { InstrumentAlertButton } from '@/components/instrument-alert-modal';",
-    "import { InstrumentAlertButton } from '@/components/instrument-alert-modal';\nimport { buildDisplayPlan, PlanLevelsPanel } from '@/components/chart-relay-enhancements';\nimport { DetailedSignalAnalysisWorkspace, PriceLevelAlertMonitor } from '@/components/chart-relay-price-alerts';",
+    "import { ChartRelayMessageInboxButton } from '@/components/chart-relay-message-inbox';",
+    "import { ChartRelayMessageInboxButton } from '@/components/chart-relay-message-inbox';\nimport { buildDisplayPlan, PlanLevelsPanel } from '@/components/chart-relay-enhancements';\nimport { DetailedSignalAnalysisWorkspace, PriceLevelAlertMonitor } from '@/components/chart-relay-price-alerts';",
     'enhancement imports',
   );
 
