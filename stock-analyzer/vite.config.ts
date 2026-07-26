@@ -15,6 +15,7 @@ import { chartRelayInboxLayoutPatch } from './chart-relay-inbox-layout-patch';
 import { chartRelayMobileControlRowPatch } from './chart-relay-mobile-control-row-patch';
 import { signalScanPlanPatch } from './signal-scan-plan-patch';
 import { focusedPageLayoutPatch } from './focused-page-layout-patch';
+import { tradingHomeGlobalUiPatch } from './trading-home-global-ui-patch';
 
 const require = createRequire(import.meta.url);
 const lightweightChartsEntry = require.resolve('lightweight-charts');
@@ -42,6 +43,7 @@ export default defineConfig({
     chartRelayMobileControlRowPatch(),
     signalScanPlanPatch(),
     focusedPageLayoutPatch(),
+    tradingHomeGlobalUiPatch(),
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
