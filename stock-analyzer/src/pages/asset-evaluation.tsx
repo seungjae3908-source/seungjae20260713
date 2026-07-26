@@ -87,7 +87,7 @@ export default function AssetEvaluationPage() {
       if (tickers.length) {
         const quoteBody = await fetchJson(`/quotes?tickers=${encodeURIComponent(tickers.join(','))}`).catch(() => ({}));
         const quotes = Array.isArray(quoteBody.quotes) ? quoteBody.quotes : [];
-        quoteMap = new Map(quotes.map((quote: AnyObj) => [String(quote.ticker ?? quote.symbol ?? '').toUpperCase(), quote]));
+        quoteMap = new Map<string, AnyObj>(quotes.map((quote: AnyObj): [string, AnyObj] => [String(quote.ticker ?? quote.symbol ?? '').toUpperCase(), quote]));
       }
       return rows.map((row: AnyObj) => ({ ...row, quote: quoteMap.get(String(row.ticker ?? '').toUpperCase()) }));
     },
@@ -150,8 +150,8 @@ export default function AssetEvaluationPage() {
       });
     }
 
-    const spotPriceMap = new Map(
-      ((spotTickers.data?.tickers ?? []) as AnyObj[]).map((row) => [
+    const spotPriceMap = new Map<string, AnyObj>(
+      ((spotTickers.data?.tickers ?? []) as AnyObj[]).map((row): [string, AnyObj] => [
         String(row.symbol ?? row.market ?? '').replace(/^KRW-/, '').toUpperCase(),
         row,
       ]),
