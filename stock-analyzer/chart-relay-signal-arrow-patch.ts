@@ -185,7 +185,10 @@ function replaceSignalMarkers(source: string): string {
   );
   const markerApply = code.indexOf('    series.setMarkers([]);', activeMarkerStart);
   if (activeMarkerStart >= 0 && markerApply >= 0) {
-    code = code.slice(0, activeMarkerStart) + code.slice(markerApply);
+    code =
+      code.slice(0, activeMarkerStart) +
+      '    }\n' +
+      code.slice(markerApply);
   }
 
   if (!code.includes('    series.setMarkers([]);')) {
