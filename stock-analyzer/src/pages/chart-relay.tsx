@@ -372,6 +372,10 @@ function signalPrediction(signal: ChartSignal): string {
   return '방향이 아직 확정되지 않았습니다. 다음 봉과 거래량, 지지·저항 반응을 함께 확인해야 합니다.';
 }
 
+function cleanSignalText(value: string): string {
+  return value.replace(/우선\s*확\s*인/g, '우선 확인');
+}
+
 function normalizeSignalName(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, '');
 }
@@ -4116,6 +4120,7 @@ function LiveSignalsPanel({
   const [kindFilter, setKindFilter] = useState<'all' | SignalKind>('all');
   const [sortMode, setSortMode] = useState<'latest' | 'importance'>('latest');
   const [historyGroupKey, setHistoryGroupKey] = useState<string | null>(null);
+  const [signalPage, setSignalPage] = useState(1);
   const occurrences = useMemo(() => dedupeSignalOccurrences(signals), [signals]);
   const groups = useMemo(() => {
     const grouped = new Map<string, { key: string; latest: ChartSignal; history: ChartSignal[] }>();
@@ -4162,7 +4167,19 @@ function LiveSignalsPanel({
       );
     });
   }, [groups, importanceFilter, kindFilter, sortMode]);
+  const signalPageCount = Math.max(
+    1,
+    Math.min(20, Math.ceil(visibleGroups.length / 5)),
+  );
+  const currentSignalPage = Math.min(signalPage, signalPageCount);
+  const pagedGroups = visibleGroups
+    .slice(0, 100)
+    .slice((currentSignalPage - 1) * 5, currentSignalPage * 5);
   const historyGroup = groups.find((group) => group.key === historyGroupKey) ?? null;
+
+  useEffect(() => {
+    setSignalPage(1);
+  }, [importanceFilter, kindFilter, sortMode, groups]);
 
   return (
     <>
@@ -4230,7 +4247,7 @@ function LiveSignalsPanel({
             <StateBox>선택한 필터에 맞는 신호가 없습니다.</StateBox>
           ) : (
             <div className="relative ml-2 border-l-2 border-card-border pl-4">
-              {visibleGroups.map((group) => {
+              {pagedGroups.map((group) => {
                 const signal = group.latest;
                 const importance = signalImportance(signal.importance);
                 return (
@@ -4279,6 +4296,31 @@ function LiveSignalsPanel({
                   </button>
                 );
               })}
+            </div>
+          )}
+          {enabled && visibleGroups.length > 0 && (
+            <div className="mt-3 grid grid-cols-3 items-center gap-2">
+              <button
+                type="button"
+                disabled={currentSignalPage <= 1}
+                onClick={() => setSignalPage((value) => Math.max(1, value - 1))}
+                className="rounded-xl border border-card-border bg-card py-2 text-[10px] font-black disabled:opacity-40"
+              >
+                이전
+              </button>
+              <p className="text-center text-[10px] font-black">
+                {currentSignalPage} / {signalPageCount}
+              </p>
+              <button
+                type="button"
+                disabled={currentSignalPage >= signalPageCount}
+                onClick={() =>
+                  setSignalPage((value) => Math.min(signalPageCount, value + 1))
+                }
+                className="rounded-xl border border-card-border bg-card py-2 text-[10px] font-black disabled:opacity-40"
+              >
+                다음
+              </button>
             </div>
           )}
         </div>
@@ -4929,13 +4971,13 @@ function SignalModal({
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-3" onClick={onClose}>
       <div
-        className="max-h-[68dvh] w-[92%] max-w-sm overflow-y-auto rounded-2xl border border-card-border bg-card p-3 text-center"
+        className="max-h-[60dvh] w-[88%] max-w-xs overflow-y-auto rounded-2xl border border-card-border bg-card p-3 text-center"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="grid grid-cols-[32px_1fr_32px] items-start gap-2">
           <span aria-hidden="true" />
           <div className="min-w-0 text-center">
-            <h3 className="text-base font-black">{signal.name}</h3>
+            <h3 className="text-base font-black">{cleanSignalText(signal.name)}</h3>
             <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">
               {signal.occurredAt ? formatTime(signal.occurredAt) : '시각 미상'} · {intervalLabel}봉
               {signal.price != null ? ` · ${formatPrice(signal.price, asset)}` : ''}
@@ -4976,10 +5018,10 @@ function SignalModal({
           {(signal.kind === 'candle' || signal.kind === 'chart') && (
             <SignalPatternPreview signal={signal} />
           )}
-          <ModalBlock title="핵심 판단" text={conciseText(signalPrediction(signal))} />
+          <ModalBlock title="핵심 판단" text={conciseText(cleanSignalText(signalPrediction(signal)))} />
           <ModalBlock
             title="현재 차트"
-            text={conciseText(signal.meaningHere || signal.meaningGeneral)}
+            text={conciseText(cleanSignalText(signal.meaningHere || signal.meaningGeneral))}
           />
           <ModalList title="확인할 것" items={signal.confirmations.slice(0, 2)} />
           <ModalList title="무효 조건" items={signal.invalidation.slice(0, 1)} />
