@@ -1590,6 +1590,7 @@ const RelayChart = memo(function RelayChart({
   const onSignalSelectRef = useRef(onSignalSelect);
   const signalsRef = useRef(signals);
   const candlesRef = useRef(candles);
+  const focusedPatternNameRef = useRef<string | null>(null);
   const canLoadOlderRef = useRef(canLoadOlder);
   const [chartType, setChartType] = useState<ChartType>(() => loadChartType());
   const [scaleType, setScaleType] = useState<PriceScaleType>('normal');
@@ -1689,6 +1690,10 @@ const RelayChart = memo(function RelayChart({
     signalsRef.current = signals;
     candlesRef.current = candles;
   }, [candles, signals]);
+
+  useEffect(() => {
+    focusedPatternNameRef.current = focusedPatternName;
+  }, [focusedPatternName]);
 
   useEffect(() => {
     firstFitRef.current = false;
@@ -1795,11 +1800,22 @@ const RelayChart = memo(function RelayChart({
     });
 
     const clickHandler = (param: MouseEventParams<Time>) => {
+      const focusedName = focusedPatternNameRef.current;
+      // 감지 패턴을 선택하지 않은 평상시에는 차트 클릭 설명을 완전히 비활성화한다.
+      if (!focusedName) return;
+
+      const focusedSignals = signalsRef.current.filter(
+        (signal) =>
+          (signal.kind === 'chart' || signal.kind === 'candle') &&
+          normalizeSignalName(signal.name) === focusedName,
+      );
+      if (focusedSignals.length === 0) return;
+
       const clickedPatternKey = [...patternSeriesRef.current.entries()].find(
         ([, series]) => param.seriesData.has(series),
       )?.[0];
       if (clickedPatternKey) {
-        const clickedSignal = signalsRef.current.find(
+        const clickedSignal = focusedSignals.find(
           (signal) => signalOccurrenceKey(signal) === clickedPatternKey,
         );
         if (clickedSignal) {
@@ -1807,11 +1823,14 @@ const RelayChart = memo(function RelayChart({
           return;
         }
       }
+
       if (typeof param.time !== 'number') return;
-      const candle = candlesRef.current.find((item) => Number(item.time) === Number(param.time));
+      const candle = candlesRef.current.find(
+        (item) => Number(item.time) === Number(param.time),
+      );
       if (!candle) return;
       const latestCandleTime = Number(candlesRef.current.at(-1)?.time ?? candle.time);
-      const signal = signalAtCandle(signalsRef.current, candle, latestCandleTime);
+      const signal = signalAtCandle(focusedSignals, candle, latestCandleTime);
       if (signal) onSignalSelectRef.current(signal);
     };
     chart.subscribeClick(clickHandler);
