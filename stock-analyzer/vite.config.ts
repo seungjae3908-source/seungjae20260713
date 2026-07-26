@@ -18,6 +18,7 @@ import { signalScanPlanPatch } from './signal-scan-plan-patch';
 import { focusedPageLayoutPatch } from './focused-page-layout-patch';
 import { tradingHomeGlobalUiPatch } from './trading-home-global-ui-patch';
 import { settingsPopupSectionsPatch } from './settings-popup-sections-patch';
+import { requestedUiFixesPatch } from './requested-ui-fixes-patch';
 import { globalDetailsPopupPatch } from './global-details-popup-patch';
 
 const require = createRequire(import.meta.url);
@@ -49,6 +50,7 @@ export default defineConfig({
     focusedPageLayoutPatch(),
     tradingHomeGlobalUiPatch(),
     settingsPopupSectionsPatch(),
+    requestedUiFixesPatch(),
     globalDetailsPopupPatch(),
     react(),
     tailwindcss(),
@@ -65,7 +67,9 @@ export default defineConfig({
           ),
 
           await import('@replit/vite-plugin-dev-banner').then((module) =>
-            module.devBanner(),
+            module.devBanner({
+              root: path.resolve(import.meta.dirname, '..'),
+            }),
           ),
         ]
       : []),
