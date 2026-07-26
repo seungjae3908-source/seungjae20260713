@@ -37,7 +37,6 @@ export function roleLabel(role?: StoredMemberRole | MembershipRole | null): stri
   return '정회원';
 }
 
-// 상태까지 반영한 회원 등급 표시 (승인 전에는 "일반회원")
 export function memberGradeLabel(
   profile: Pick<MemberProfile, 'role' | 'status'> | null | undefined,
 ): string {
@@ -46,11 +45,10 @@ export function memberGradeLabel(
   return roleLabel(profile.role);
 }
 
-// 각 기능을 사용하기 위해 필요한 최소 등급 안내 문구
 export function featureRequiredGradeLabel(feature: AppFeature): string {
   if (feature === 'autoTrading' || feature === 'admin') return '관리자';
-  if (feature === 'basicChart' || feature === 'newsInfo') return '준회원';
-  return '정회원';
+  if (feature === 'futures') return '정회원';
+  return '준회원';
 }
 
 export function hasMemberFeature(
@@ -60,21 +58,18 @@ export function hasMemberFeature(
   if (!profile || profile.status !== 'approved') return false;
 
   const role = normalizeMembershipRole(profile.role);
-  if (feature === 'basicChart' || feature === 'newsInfo') return true;
-  if (
-    feature === 'advancedAnalysis'
-    || feature === 'aiRealtimeChart'
-    || feature === 'watchlist'
-    || feature === 'portfolio'
-    || feature === 'signals'
-    || feature === 'futures'
-  ) {
-    return role === 'full' || role === 'admin';
-  }
+
   if (feature === 'autoTrading' || feature === 'admin') {
     return role === 'admin';
   }
-  return false;
+
+  if (feature === 'futures') {
+    return role === 'full' || role === 'admin';
+  }
+
+  // 승인된 준회원·정회원·관리자는 홈·종목·관심·기술·정보·설정의
+  // 일반 기능을 모두 사용할 수 있다.
+  return true;
 }
 
 export function useMemberPermissions(): MemberPermissions {
