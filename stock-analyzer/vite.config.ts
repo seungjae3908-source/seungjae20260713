@@ -20,7 +20,6 @@ import { tradingHomeGlobalUiPatch } from './trading-home-global-ui-patch';
 import { settingsPopupSectionsPatch } from './settings-popup-sections-patch';
 import { settingsUniformExtraPatch } from './settings-uniform-extra-patch';
 import { requestedUiFixesPatch } from './requested-ui-fixes-patch';
-import { stockInfoFeedOnlyPatch } from './stock-info-feed-only-patch';
 import { stocksCategoryLayoutPatch } from './stocks-category-layout-patch';
 import { sixRequestedFixesPatch } from './six-requested-fixes-patch';
 import { currentRequestBatchPatch } from './current-request-batch-patch';
@@ -61,7 +60,6 @@ export default defineConfig({
     settingsPopupSectionsPatch(),
     settingsUniformExtraPatch(),
     requestedUiFixesPatch(),
-    stockInfoFeedOnlyPatch(),
     stocksCategoryLayoutPatch(),
     sixRequestedFixesPatch(),
     currentRequestBatchPatch(),
