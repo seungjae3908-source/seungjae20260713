@@ -183,7 +183,7 @@ function replaceSignalMarkers(source: string): string {
   const activeMarkerStart = code.indexOf(
     '      const rawMarkerTime = toUnixSeconds(overlay?.fromTime ?? signal?.barTime);',
   );
-  const markerApply = code.indexOf('    series.setMarkers([]);', activeMarkerStart);
+  const markerApply = code.indexOf('    series.setMarkers(', activeMarkerStart);
   if (activeMarkerStart >= 0 && markerApply >= 0) {
     code =
       code.slice(0, activeMarkerStart) +
@@ -191,10 +191,26 @@ function replaceSignalMarkers(source: string): string {
       code.slice(markerApply);
   }
 
-  if (!code.includes('    series.setMarkers([]);')) {
-    throw new Error('[chart-relay-signal-arrow-patch] setMarkers 초기화 위치를 찾지 못했습니다.');
+  const setMarkersStart = code.indexOf('    series.setMarkers(');
+  if (setMarkersStart < 0) {
+    throw new Error('[chart-relay-signal-arrow-patch] setMarkers 적용 위치를 찾지 못했습니다.');
   }
-  code = code.replace('    series.setMarkers([]);', '    series.setMarkers(markers);');
+  const multilineEnd = code.indexOf('\n    );', setMarkersStart);
+  if (multilineEnd >= 0) {
+    code =
+      code.slice(0, setMarkersStart) +
+      '    series.setMarkers(markers);' +
+      code.slice(multilineEnd + '\n    );'.length);
+  } else {
+    const inlineEnd = code.indexOf(');', setMarkersStart);
+    if (inlineEnd < 0) {
+      throw new Error('[chart-relay-signal-arrow-patch] setMarkers 종료 위치를 찾지 못했습니다.');
+    }
+    code =
+      code.slice(0, setMarkersStart) +
+      '    series.setMarkers(markers);' +
+      code.slice(inlineEnd + 2);
+  }
 
   return code;
 }
