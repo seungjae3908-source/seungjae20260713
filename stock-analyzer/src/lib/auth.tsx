@@ -45,7 +45,7 @@ async function internalEmail(loginName: string) {
 
 function authMessage(cause: unknown) {
   const message = cause instanceof Error ? cause.message.toLowerCase() : '';
-  if (message.includes('invalid login')) return '아이디 또는 비밀번호가 맞지 않습니다.';
+  if (message.includes('invalid login') || message.includes('invalid credentials')) return '아이디 또는 비밀번호가 맞지 않습니다.';
   if (message.includes('already')) return '이미 사용 중인 아이디입니다.';
   if (message.includes('rate limit')) return '요청이 많습니다. 잠시 후 다시 시도해 주세요.';
   if (message.includes('session token')) return cause instanceof Error ? cause.message : '로그인 세션을 적용하지 못했습니다.';
@@ -102,17 +102,12 @@ function apiErrorMessage(payload: unknown, status: number) {
   return '로그인 서버 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.';
 }
 
-async function signInThroughApi(loginName: string, password: string) {
+async function signInThroughApi(identifier: string, password: string) {
   const response = await fetch('/api/auth/login', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      loginName,
-      login_name: normalizeName(loginName),
-      username: loginName,
-      password,
-    }),
+    body: JSON.stringify({ identifier, password }),
   });
 
   let payload: unknown = null;
