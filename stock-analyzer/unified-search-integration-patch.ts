@@ -157,6 +157,13 @@ function patchStocks(source: string): string {
   return code;
 }
 
+function patchApi(source: string): string {
+  return source.replace(
+    "apiGet<{ results: SearchResult[] }>(`/search?q=${enc(q)}`)",
+    "apiGet<{ results: SearchResult[] }>(`/search/quotes?q=${enc(q)}&market=ALL&limit=30&enrich=0`)",
+  );
+}
+
 export function unifiedSearchIntegrationPatch(): Plugin {
   return {
     name: 'unified-search-integration-patch',
@@ -171,6 +178,8 @@ export function unifiedSearchIntegrationPatch(): Plugin {
         code = patchSignalScan(code);
       } else if (normalized.endsWith('/src/pages/stocks.tsx')) {
         code = patchStocks(code);
+      } else if (normalized.endsWith('/src/lib/api.ts')) {
+        code = patchApi(code);
       }
 
       return code === source ? null : { code, map: null };
