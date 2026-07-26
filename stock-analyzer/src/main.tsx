@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import { ACCENT_COLOR_KEY } from '@/lib/stock-display';
+import '@/lib/global-search-enhancer';
 import App from './App';
 import './index.css';
 
