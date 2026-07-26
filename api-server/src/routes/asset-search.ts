@@ -47,7 +47,7 @@ function score(row: Row, query: string): number {
 
 async function fetchJson(url: string): Promise<any> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 7000);
+  const timer = setTimeout(() => controller.abort(), 5000);
   try {
     const response = await fetch(url, {
       signal: controller.signal,
@@ -184,6 +184,30 @@ function dedupe(rows: Row[], query: string, market: Market): Row[] {
     .map((item) => item.row);
 }
 
+function timeoutRows(ms: number): Promise<Row[]> {
+  return new Promise((resolve) => setTimeout(() => resolve([]), ms));
+}
+
+async function catalogSearch(query: string): Promise<Row[]> {
+  const rows = await Promise.race([
+    MarketDataService.search(query, 120),
+    timeoutRows(2200),
+  ]).catch(() => []);
+  return rows.map(
+    (row: any): Row => ({
+      ticker: String(row.ticker ?? '').trim().toUpperCase(),
+      name: String(row.name ?? row.ticker ?? '').trim(),
+      market: String(row.market).toUpperCase() === 'US' ? 'US' : 'KR',
+      currency: String(row.market).toUpperCase() === 'US' ? 'USD' : 'KRW',
+      assetType: String(row.assetType ?? 'STOCK'),
+      exchange: String(row.exchange ?? ''),
+      aliases: Array.isArray(row.aliases)
+        ? row.aliases.map((value: unknown) => String(value))
+        : [],
+    }),
+  );
+}
+
 async function quoteRow(row: Row): Promise<Record<string, unknown>> {
   const timeout = new Promise<null>((resolve) =>
     setTimeout(() => resolve(null), 3500),
@@ -210,6 +234,7 @@ async function quoteRow(row: Row): Promise<Record<string, unknown>> {
 router.get('/search/quotes', async (req, res) => {
   const q = String(req.query.q ?? '').trim();
   const market = marketOf(req.query.market);
+  const enrich = String(req.query.enrich ?? '1') !== '0';
   const limit = Math.max(
     1,
     Math.min(50, Math.trunc(Number(req.query.limit ?? 30)) || 30),
@@ -218,35 +243,20 @@ router.get('/search/quotes', async (req, res) => {
 
   try {
     const [catalog, kr, us] = await Promise.allSettled([
-      MarketDataService.search(q, 120),
+      catalogSearch(q),
       market === 'US' ? Promise.resolve([]) : naverSearch(q),
       market === 'KR' ? Promise.resolve([]) : yahooSearch(q),
     ]);
-    const catalogRows: Row[] =
-      catalog.status === 'fulfilled'
-        ? catalog.value.map((row: any) => ({
-            ticker: String(row.ticker ?? '').trim().toUpperCase(),
-            name: String(row.name ?? row.ticker ?? '').trim(),
-            market: String(row.market).toUpperCase() === 'US' ? 'US' : 'KR',
-            currency:
-              String(row.market).toUpperCase() === 'US' ? 'USD' : 'KRW',
-            assetType: String(row.assetType ?? 'STOCK'),
-            exchange: String(row.exchange ?? ''),
-            aliases: Array.isArray(row.aliases)
-              ? row.aliases.map((value: unknown) => String(value))
-              : [],
-          }))
-        : [];
     const rows = dedupe(
       [
-        ...catalogRows,
+        ...(catalog.status === 'fulfilled' ? catalog.value : []),
         ...(kr.status === 'fulfilled' ? kr.value : []),
         ...(us.status === 'fulfilled' ? us.value : []),
       ],
       q,
       market,
     ).slice(0, limit);
-    const results = await Promise.all(rows.map(quoteRow));
+    const results = enrich ? await Promise.all(rows.map(quoteRow)) : rows;
     return res.json({ q, market, results, count: results.length });
   } catch (error) {
     console.error('unified stock search error:', error);
