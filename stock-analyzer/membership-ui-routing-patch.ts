@@ -117,6 +117,39 @@ function patchSignalScan(source: string): string {
   return code;
 }
 
+function patchScanner(source: string): string {
+  let code = source;
+
+  code = replaceOnce(
+    code,
+    `  // 최초 진입 시에는 항상 가장 왼쪽 탭(조건검색)이 선택된다.\n  // 자동매매 설정·후보 화면은 사용자가 '자동매매' 버튼을 직접 눌렀을 때만 표시한다.\n  const [viewMode, setViewMode] = useState<ScannerViewMode>("condition");`,
+    `  const dedicatedAutoRoute =\n    location.startsWith('/tech/auto-trade') || location.startsWith('/auto-trading');\n  const [viewMode, setViewMode] = useState<ScannerViewMode>(\n    dedicatedAutoRoute ? 'auto' : 'condition',\n  );`,
+    'dedicated auto route initial tab',
+  );
+
+  code = replaceOnce(
+    code,
+    `  // 라우트가 바뀌어 새로 진입하면 다시 왼쪽 탭(조건검색)부터 시작한다.\n  useEffect(() => {\n    setViewMode("condition");\n  }, [location]);`,
+    `  useEffect(() => {\n    setViewMode(dedicatedAutoRoute ? 'auto' : 'condition');\n  }, [dedicatedAutoRoute, location]);`,
+    'dedicated auto route sync',
+  );
+
+  code = code.replace(
+    `<div className="mb-2 grid grid-cols-3 gap-2">`,
+    `<div className={cn('mb-2 grid grid-cols-3 gap-2', dedicatedAutoRoute && 'hidden')}>`,
+  );
+  code = code.replace(
+    `<div className="mb-2 grid grid-cols-2 gap-2">`,
+    `<div className={cn('mb-2 grid grid-cols-2 gap-2', dedicatedAutoRoute && 'hidden')}>`,
+  );
+  code = code.replace(
+    `<div className="grid grid-cols-2 gap-2">\n          {MARKET_OPTIONS.map((item) => (`,
+    `<div className={cn('grid grid-cols-2 gap-2', dedicatedAutoRoute && 'hidden')}>\n          {MARKET_OPTIONS.map((item) => (`,
+  );
+
+  return code;
+}
+
 function patchChartRelay(source: string): string {
   return replaceOnce(
     source,
@@ -150,6 +183,9 @@ export function membershipUiRoutingPatch(): Plugin {
       }
       if (normalized.endsWith('/src/pages/signal-scan.tsx')) {
         return { code: patchSignalScan(source), map: null };
+      }
+      if (normalized.endsWith('/src/pages/scanner.tsx')) {
+        return { code: patchScanner(source), map: null };
       }
       if (normalized.endsWith('/src/pages/chart-relay.tsx')) {
         return { code: patchChartRelay(source), map: null };
