@@ -1,0 +1,1471 @@
+{
+  "summary": {
+    "status": "PRELIMINARY_NOT_FINAL_STRATEGY",
+    "generated_at": "2026-07-26T08:44:53.646817+00:00",
+    "source": {
+      "exchange": "Bitget",
+      "endpoint": "/api/v2/mix/market/history-candles",
+      "symbol": "BTCUSDT",
+      "timeframe": "15m",
+      "candles": 4298,
+      "period_start": "2026-06-11T08:30:00+00:00",
+      "period_end": "2026-07-26T08:15:00+00:00"
+    },
+    "policy": {
+      "starting_capital_krw": 300000.0,
+      "max_planned_capital_krw": 30000.0,
+      "leverage": 5.0,
+      "risk_budget_krw": 3000.0,
+      "entry_splits": [
+        0.4,
+        0.3,
+        0.3
+      ],
+      "exit_splits": [
+        0.3,
+        0.3,
+        0.4
+      ],
+      "fee_bps_per_side": 12,
+      "slippage_bps_per_fill": 15
+    },
+    "results": {
+      "initial_equity_krw": 300000.0,
+      "final_equity_krw": 284799.44377438247,
+      "net_pnl_krw": -15200.556225617533,
+      "return_pct": -5.066852075205841,
+      "trades": 43,
+      "wins": 9,
+      "losses": 34,
+      "win_rate_pct": 20.930232558139537,
+      "profit_factor": 0.06221211376726299,
+      "average_win_krw": 112.04366586950701,
+      "average_loss_krw": -476.73380054244075,
+      "expectancy_per_trade_krw": -353.5013075724982,
+      "maximum_drawdown_pct": -5.066852075205844,
+      "maximum_consecutive_losses": 9,
+      "total_fees_krw": 6733.555174357786,
+      "estimated_slippage_cost_krw": 8416.943855318534,
+      "long": {
+        "trades": 20,
+        "win_rate_pct": 25.0,
+        "net_pnl_krw": -6785.208596433168
+      },
+      "short": {
+        "trades": 23,
+        "win_rate_pct": 17.391304347826086,
+        "net_pnl_krw": -8415.347629184256
+      },
+      "stages_filled": {
+        "1": 38,
+        "2": 5
+      },
+      "exit_reasons": {
+        "STOP": 43
+      },
+      "daily_stop_days": [
+        "2026-06-12",
+        "2026-06-13",
+        "2026-06-14",
+        "2026-06-17",
+        "2026-06-19",
+        "2026-06-20",
+        "2026-06-21",
+        "2026-06-22",
+        "2026-06-23",
+        "2026-06-24",
+        "2026-06-25",
+        "2026-06-26",
+        "2026-06-27",
+        "2026-06-28",
+        "2026-06-29",
+        "2026-06-30",
+        "2026-07-01",
+        "2026-07-03",
+        "2026-07-04",
+        "2026-07-05",
+        "2026-07-06",
+        "2026-07-07",
+        "2026-07-09",
+        "2026-07-10",
+        "2026-07-11",
+        "2026-07-12"
+      ],
+      "total_stop_triggered": true
+    },
+    "limitations": [
+      "Price/volume-only provisional baseline; not the final app signal engine.",
+      "Historical OI, funding, order book, news and liquidation data are not included.",
+      "Funding payments, outages and real fill failures are not modeled.",
+      "Stop-first is used when candle-level order is ambiguous.",
+      "One symbol and 45 days are insufficient for live deployment.",
+      "Past simulated performance does not guarantee future results."
+    ]
+  },
+  "trades": [
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-11 17:15:00+00:00",
+      "closed_at": "2026-06-11 17:15:00+00:00",
+      "signal_score": 100,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 62346.5397,
+      "net_pnl": -565.2041546480716,
+      "gross_pnl": -420.69931546950824,
+      "fees": 144.5048391785634,
+      "slippage": 180.63050881838933,
+      "return_pct": -4.710034622067264,
+      "exit_reason": "STOP",
+      "bars": 1,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-11 17:15:00+00:00",
+          "price": 62783.69214289471,
+          "qty": 0.9623629521174533,
+          "net": -565.2041546480716,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-06-11 20:15:00+00:00",
+      "closed_at": "2026-06-12 06:15:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 63599.055700000004,
+      "net_pnl": -592.4431800238999,
+      "gross_pnl": -448.9819583739486,
+      "fees": 143.46122164995126,
+      "slippage": 179.32592033635297,
+      "return_pct": -4.937026500199166,
+      "exit_reason": "STOP",
+      "bars": 41,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-12 06:15:00+00:00",
+          "price": 63123.14189035134,
+          "qty": 0.9434102336837054,
+          "net": -592.4431800238999,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-06-13 01:45:00+00:00",
+      "closed_at": "2026-06-13 02:30:00+00:00",
+      "signal_score": 100,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 63824.893950000005,
+      "net_pnl": -413.78050446350164,
+      "gross_pnl": -270.1046300195251,
+      "fees": 143.67587444397657,
+      "slippage": 179.59463940749006,
+      "return_pct": -3.4481708705291805,
+      "exit_reason": "STOP",
+      "bars": 4,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-13 02:30:00+00:00",
+          "price": 63537.57062722667,
+          "qty": 0.9400720672877827,
+          "net": -413.78050446350164,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-06-14 00:15:00+00:00",
+      "closed_at": "2026-06-14 04:45:00+00:00",
+      "signal_score": 80,
+      "stages": 2,
+      "planned_capital": 30000,
+      "used_capital": 21000.0,
+      "total_notional": 105000.0,
+      "average_entry": 64579.63657514647,
+      "net_pnl": -824.5713941169149,
+      "gross_pnl": -573.2593052832549,
+      "fees": 251.31208883366008,
+      "slippage": 314.13952802257506,
+      "return_pct": -3.926530448175785,
+      "exit_reason": "STOP",
+      "bars": 19,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-14 04:45:00+00:00",
+          "price": 64227.05678849396,
+          "qty": 1.6258995183074372,
+          "net": -824.5713941169149,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-06-15 00:45:00+00:00",
+      "closed_at": "2026-06-15 13:45:00+00:00",
+      "signal_score": 80,
+      "stages": 2,
+      "planned_capital": 30000,
+      "used_capital": 21000.0,
+      "total_notional": 105000.0,
+      "average_entry": 65769.44319055103,
+      "net_pnl": 564.5861205776969,
+      "gross_pnl": 817.5672012191599,
+      "fees": 252.981080641463,
+      "slippage": 316.2289018430597,
+      "return_pct": 2.688505336084271,
+      "exit_reason": "STOP",
+      "bars": 53,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 1,
+          "time": "2026-06-15 11:15:00+00:00",
+          "price": 66069.37187726502,
+          "qty": 0.4789458215228671,
+          "net": 67.87721174699828,
+          "reason": "TP1_1R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 2,
+          "time": "2026-06-15 12:45:00+00:00",
+          "price": 66467.95472876482,
+          "qty": 0.4789458215228671,
+          "net": 258.54772349398877,
+          "reason": "TP2_2R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-15 13:45:00+00:00",
+          "price": 66300.8734884038,
+          "qty": 0.6385944286971563,
+          "net": 238.16118533670982,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-06-15 15:00:00+00:00",
+      "closed_at": "2026-06-15 17:00:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 66647.12095000001,
+      "net_pnl": 10.699398148349871,
+      "gross_pnl": 154.88526046090294,
+      "fees": 144.18586231255307,
+      "slippage": 180.2330819069627,
+      "return_pct": 0.08916165123624893,
+      "exit_reason": "STOP",
+      "bars": 9,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 1,
+          "time": "2026-06-15 15:45:00+00:00",
+          "price": 66848.28773295374,
+          "qty": 0.27007918336793507,
+          "net": 11.065763308345709,
+          "reason": "TP1_1R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-15 17:00:00+00:00",
+          "price": 66806.68415462246,
+          "qty": 0.6301847611918485,
+          "net": -0.3663651599958371,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-06-15 18:15:00+00:00",
+      "closed_at": "2026-06-15 19:15:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 66871.65725,
+      "net_pnl": -516.7684603011146,
+      "gross_pnl": -373.2163198849766,
+      "fees": 143.552140416138,
+      "slippage": 179.4397395228642,
+      "return_pct": -4.306403835842622,
+      "exit_reason": "STOP",
+      "bars": 5,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-15 19:15:00+00:00",
+          "price": 66455.69735294243,
+          "qty": 0.8972411103210695,
+          "net": -516.7684603011146,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-06-16 07:00:00+00:00",
+      "closed_at": "2026-06-16 09:00:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 66508.6135,
+      "net_pnl": 1.9206289029451185,
+      "gross_pnl": 146.09594403578808,
+      "fees": 144.17531513284294,
+      "slippage": 180.21987812665355,
+      "return_pct": 0.016005240857875986,
+      "exit_reason": "STOP",
+      "bars": 9,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 1,
+          "time": "2026-06-16 08:45:00+00:00",
+          "price": 66676.88636674058,
+          "qty": 0.2706416365152462,
+          "net": 2.2869940629383407,
+          "reason": "TP1_1R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-16 09:00:00+00:00",
+          "price": 66667.84509701104,
+          "qty": 0.6314971518689079,
+          "net": -0.3663651599932223,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-06-16 10:15:00+00:00",
+      "closed_at": "2026-06-16 11:30:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 66612.06845,
+      "net_pnl": -486.49608327276746,
+      "gross_pnl": -342.907572359599,
+      "fees": 143.58851091316848,
+      "slippage": 179.4852709412845,
+      "return_pct": -4.054134027273062,
+      "exit_reason": "STOP",
+      "bars": 6,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-16 11:30:00+00:00",
+          "price": 66231.37207196599,
+          "qty": 0.9007376800652404,
+          "net": -486.49608327276746,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-06-17 02:30:00+00:00",
+      "closed_at": "2026-06-17 02:30:00+00:00",
+      "signal_score": 100,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 66168.1035,
+      "net_pnl": -466.64749307150845,
+      "gross_pnl": -323.035135233789,
+      "fees": 143.61235783771946,
+      "slippage": 179.5151243771154,
+      "return_pct": -3.888729108929237,
+      "exit_reason": "STOP",
+      "bars": 1,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-17 02:30:00+00:00",
+          "price": 65811.85979562857,
+          "qty": 0.9067813164691958,
+          "net": -466.64749307150845,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-19 04:30:00+00:00",
+      "closed_at": "2026-06-19 09:15:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 62601.65645,
+      "net_pnl": 14.10152523752047,
+      "gross_pnl": 157.9120308005598,
+      "fees": 143.81050556303933,
+      "slippage": 179.7638917246262,
+      "return_pct": 0.11751271031267058,
+      "exit_reason": "STOP",
+      "bars": 20,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 1,
+          "time": "2026-06-19 09:00:00+00:00",
+          "price": 62403.882755313956,
+          "qty": 0.2875323277488131,
+          "net": 13.734570397522539,
+          "reason": "TP1_1R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-19 09:15:00+00:00",
+          "price": 62451.04625482977,
+          "qty": 0.6709087647472306,
+          "net": 0.36695483999793055,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-19 10:30:00+00:00",
+      "closed_at": "2026-06-19 11:15:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 62382.98495,
+      "net_pnl": -477.2470860716948,
+      "gross_pnl": -332.847668869052,
+      "fees": 144.39941720264284,
+      "slippage": 180.4989287186424,
+      "return_pct": -3.977059050597457,
+      "exit_reason": "STOP",
+      "bars": 4,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-19 11:15:00+00:00",
+          "price": 62729.05213529501,
+          "qty": 0.9618007225542355,
+          "net": -477.2470860716948,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-19 12:30:00+00:00",
+      "closed_at": "2026-06-19 12:45:00+00:00",
+      "signal_score": 90,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 62436.30485,
+      "net_pnl": -453.4455942193715,
+      "gross_pnl": -309.07470457388285,
+      "fees": 144.37088964548866,
+      "slippage": 180.46332268125502,
+      "return_pct": -3.7787132851614293,
+      "exit_reason": "STOP",
+      "bars": 2,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-19 12:45:00+00:00",
+          "price": 62757.929557936644,
+          "qty": 0.9609793555872165,
+          "net": -453.4455942193715,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-20 13:30:00+00:00",
+      "closed_at": "2026-06-20 13:30:00+00:00",
+      "signal_score": 100,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 63221.92465000001,
+      "net_pnl": -414.4224934931235,
+      "gross_pnl": -270.09837544259244,
+      "fees": 144.3241180505311,
+      "slippage": 180.40494575294133,
+      "return_pct": -3.4535207791093625,
+      "exit_reason": "STOP",
+      "bars": 1,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-20 13:30:00+00:00",
+          "price": 63506.526969005325,
+          "qty": 0.9490378588150115,
+          "net": -414.4224934931235,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-21 08:15:00+00:00",
+      "closed_at": "2026-06-21 09:30:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 63990.669799999996,
+      "net_pnl": -361.1400422647647,
+      "gross_pnl": -216.8797865209396,
+      "fees": 144.2602557438251,
+      "slippage": 180.32523743204712,
+      "return_pct": -3.0095003522063726,
+      "exit_reason": "STOP",
+      "bars": 6,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-21 09:30:00+00:00",
+          "price": 64221.97451342593,
+          "qty": 0.9376366927792339,
+          "net": -361.1400422647647,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-22 19:00:00+00:00",
+      "closed_at": "2026-06-22 20:00:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 64222.5215,
+      "net_pnl": -520.0572969384311,
+      "gross_pnl": -375.6065690555645,
+      "fees": 144.45072788286666,
+      "slippage": 180.56297100548878,
+      "return_pct": -4.33381080782026,
+      "exit_reason": "STOP",
+      "bars": 5,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-22 20:00:00+00:00",
+          "price": 64624.561515945206,
+          "qty": 0.9342517017180647,
+          "net": -520.0572969384311,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-23 08:30:00+00:00",
+      "closed_at": "2026-06-23 08:30:00+00:00",
+      "signal_score": 85,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 61915.487250000006,
+      "net_pnl": -597.3273178845053,
+      "gross_pnl": -452.7839771119709,
+      "fees": 144.54334077253435,
+      "slippage": 180.67856372848564,
+      "return_pct": -4.977727649037544,
+      "exit_reason": "STOP",
+      "bars": 1,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-23 08:30:00+00:00",
+          "price": 62382.72625936468,
+          "qty": 0.9690628736835144,
+          "net": -597.3273178845053,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-24 08:15:00+00:00",
+      "closed_at": "2026-06-24 08:30:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 62543.84330000001,
+      "net_pnl": -436.3432237201819,
+      "gross_pnl": -291.99283232139624,
+      "fees": 144.3503913987857,
+      "slippage": 180.43773824951955,
+      "return_pct": -3.6361935310015157,
+      "exit_reason": "STOP",
+      "bars": 2,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-24 08:30:00+00:00",
+          "price": 62848.215865823884,
+          "qty": 0.9593270389893036,
+          "net": -436.3432237201819,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-25 10:45:00+00:00",
+      "closed_at": "2026-06-25 11:15:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 61264.86465,
+      "net_pnl": -0.09947551607745098,
+      "gross_pnl": 143.72805082293502,
+      "fees": 143.82752633901248,
+      "slippage": 179.78513582843908,
+      "return_pct": -0.0008289626339787581,
+      "exit_reason": "STOP",
+      "bars": 3,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 1,
+          "time": "2026-06-25 11:00:00+00:00",
+          "price": 61119.590847438274,
+          "qty": 0.29380624772179265,
+          "net": -0.4664303560742944,
+          "reason": "TP1_1R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-25 11:15:00+00:00",
+          "price": 61117.470575381805,
+          "qty": 0.6855479113508496,
+          "net": 0.3669548399968434,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-26 01:15:00+00:00",
+      "closed_at": "2026-06-26 03:15:00+00:00",
+      "signal_score": 90,
+      "stages": 2,
+      "planned_capital": 30000,
+      "used_capital": 21000.0,
+      "total_notional": 105000.0,
+      "average_entry": 59352.06980428695,
+      "net_pnl": 383.29561298910886,
+      "gross_pnl": 634.5341719827296,
+      "fees": 251.2385589936207,
+      "slippage": 314.05033305715995,
+      "return_pct": 1.8252172047100421,
+      "exit_reason": "STOP",
+      "bars": 9,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 1,
+          "time": "2026-06-26 02:00:00+00:00",
+          "price": 59046.68081242823,
+          "qty": 0.5307312803727156,
+          "net": 86.67398604970202,
+          "reason": "TP1_1R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 2,
+          "time": "2026-06-26 02:15:00+00:00",
+          "price": 58652.263715863075,
+          "qty": 0.5307312803727156,
+          "net": 296.25467209941013,
+          "reason": "TP2_2R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-26 03:15:00+00:00",
+          "price": 59209.27762714831,
+          "qty": 0.7076417071636207,
+          "net": 0.3669548399967084,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-26 10:45:00+00:00",
+      "closed_at": "2026-06-26 12:30:00+00:00",
+      "signal_score": 90,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 59443.40095,
+      "net_pnl": -625.8229859190144,
+      "gross_pnl": -481.24549132941917,
+      "fees": 144.5774945895953,
+      "slippage": 180.72119205731624,
+      "return_pct": -5.2151915493251195,
+      "exit_reason": "STOP",
+      "bars": 8,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-26 12:30:00+00:00",
+          "price": 59920.18209494124,
+          "qty": 1.009363512872828,
+          "net": -625.8229859190144,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-26 13:45:00+00:00",
+      "closed_at": "2026-06-26 13:45:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 59371.0097,
+      "net_pnl": -798.7990766338565,
+      "gross_pnl": -654.0142595224296,
+      "fees": 144.7848171114269,
+      "slippage": 180.97995706209934,
+      "return_pct": -6.656658971948805,
+      "exit_reason": "STOP",
+      "bars": 1,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-26 13:45:00+00:00",
+          "price": 60018.16781576741,
+          "qty": 1.01059423282808,
+          "net": -798.7990766338565,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-27 19:30:00+00:00",
+      "closed_at": "2026-06-27 21:15:00+00:00",
+      "signal_score": 100,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 60205.1566,
+      "net_pnl": -446.8420585904229,
+      "gross_pnl": -302.47908368999487,
+      "fees": 144.362974900428,
+      "slippage": 180.45344406784642,
+      "return_pct": -3.7236838215868575,
+      "exit_reason": "STOP",
+      "bars": 8,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-27 21:15:00+00:00",
+          "price": 60508.66994336301,
+          "qty": 0.9965923749461686,
+          "net": -446.8420585904229,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-28 00:15:00+00:00",
+      "closed_at": "2026-06-28 01:30:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 60022.53095,
+      "net_pnl": -459.40771613471827,
+      "gross_pnl": -315.02968051809654,
+      "fees": 144.37803561662173,
+      "slippage": 180.47224176653714,
+      "return_pct": -3.828397634455986,
+      "exit_reason": "STOP",
+      "bars": 6,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-28 01:30:00+00:00",
+          "price": 60337.6789291511,
+          "qty": 0.9996246251258754,
+          "net": -459.40771613471827,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-29 00:30:00+00:00",
+      "closed_at": "2026-06-29 00:45:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 59098.11965000001,
+      "net_pnl": -651.3129003012095,
+      "gross_pnl": -506.7048544758385,
+      "fees": 144.608045825371,
+      "slippage": 180.75932390426857,
+      "return_pct": -5.42760750251008,
+      "exit_reason": "STOP",
+      "bars": 2,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-29 00:45:00+00:00",
+          "price": 59597.20805195082,
+          "qty": 1.0152607283504322,
+          "net": -651.3129003012095,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-30 00:30:00+00:00",
+      "closed_at": "2026-06-30 04:15:00+00:00",
+      "signal_score": 80,
+      "stages": 2,
+      "planned_capital": 30000,
+      "used_capital": 21000.0,
+      "total_notional": 105000.0,
+      "average_entry": 59685.32887412671,
+      "net_pnl": 13.966773429893806,
+      "gross_pnl": 265.64799583489196,
+      "fees": 251.68122240499812,
+      "slippage": 314.60283357061525,
+      "return_pct": 0.06650844490425621,
+      "exit_reason": "STOP",
+      "bars": 16,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 1,
+          "time": "2026-06-30 04:00:00+00:00",
+          "price": 59517.03894449242,
+          "qty": 0.5277678885950663,
+          "net": 13.324602459902096,
+          "reason": "TP1_1R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-30 04:15:00+00:00",
+          "price": 59541.7349256549,
+          "qty": 1.2314584067218215,
+          "net": 0.6421709699917102,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-30 05:30:00+00:00",
+      "closed_at": "2026-06-30 05:30:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 59276.052350000005,
+      "net_pnl": -485.41910903854983,
+      "gross_pnl": -341.0098971619555,
+      "fees": 144.40921187659433,
+      "slippage": 180.51115372357003,
+      "return_pct": -4.045159241987915,
+      "exit_reason": "STOP",
+      "bars": 1,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-30 05:30:00+00:00",
+          "price": 59612.94769193401,
+          "qty": 1.0122131555881182,
+          "net": -485.41910903854983,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-30 06:45:00+00:00",
+      "closed_at": "2026-06-30 08:45:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 59458.678,
+      "net_pnl": 6.7311581741368975,
+      "gross_pnl": 150.55049757704444,
+      "fees": 143.81933940290753,
+      "slippage": 179.7749174858202,
+      "return_pct": 0.05609298478447415,
+      "exit_reason": "STOP",
+      "bars": 9,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 1,
+          "time": "2026-06-30 08:30:00+00:00",
+          "price": 59295.15078785619,
+          "qty": 0.30273125144154733,
+          "net": 6.364203334135507,
+          "reason": "TP1_1R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-30 08:45:00+00:00",
+          "price": 59315.6293395337,
+          "qty": 0.7063729200302772,
+          "net": 0.3669548400013909,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-30 10:00:00+00:00",
+      "closed_at": "2026-06-30 12:15:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 59266.46675,
+      "net_pnl": -3.7510749219709396,
+      "gross_pnl": 140.08082808432786,
+      "fees": 143.8319030062988,
+      "slippage": 179.79059846858524,
+      "return_pct": -0.031258957683091164,
+      "exit_reason": "STOP",
+      "bars": 10,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 1,
+          "time": "2026-06-30 12:00:00+00:00",
+          "price": 59137.940409961564,
+          "qty": 0.3037130604719236,
+          "net": -4.118029761970391,
+          "reason": "TP1_1R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-30 12:15:00+00:00",
+          "price": 59123.88052096951,
+          "qty": 0.7086638077678218,
+          "net": 0.3669548399994511,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-06-30 14:00:00+00:00",
+      "closed_at": "2026-06-30 14:00:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 58633.41775,
+      "net_pnl": -579.4992714558254,
+      "gross_pnl": -434.9772986973885,
+      "fees": 144.52197275843685,
+      "slippage": 180.65189371589142,
+      "return_pct": -4.829160595465211,
+      "exit_reason": "STOP",
+      "bars": 1,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-06-30 14:00:00+00:00",
+          "price": 59058.487844438176,
+          "qty": 1.0233072248291377,
+          "net": -579.4992714558254,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-07-01 00:30:00+00:00",
+      "closed_at": "2026-07-01 00:30:00+00:00",
+      "signal_score": 100,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 58284.14245,
+      "net_pnl": -489.79245524139577,
+      "gross_pnl": -345.3780016394285,
+      "fees": 144.4144536019673,
+      "slippage": 180.51769606677,
+      "return_pct": -4.0816037936782985,
+      "exit_reason": "STOP",
+      "bars": 1,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-01 00:30:00+00:00",
+          "price": 58619.64346077748,
+          "qty": 1.0294395263938554,
+          "net": -489.79245524139577,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "SHORT",
+      "opened_at": "2026-07-03 00:30:00+00:00",
+      "closed_at": "2026-07-03 01:00:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 61183.18735,
+      "net_pnl": -467.50936602172965,
+      "gross_pnl": -323.12162007763646,
+      "fees": 144.38774594409315,
+      "slippage": 180.48436149628577,
+      "return_pct": -3.895911383514414,
+      "exit_reason": "STOP",
+      "bars": 3,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-03 01:00:00+00:00",
+          "price": 61512.68086030076,
+          "qty": 0.9806615607776112,
+          "net": -467.50936602172965,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-07-04 00:15:00+00:00",
+      "closed_at": "2026-07-04 01:00:00+00:00",
+      "signal_score": 90,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 62878.676750000006,
+      "net_pnl": -469.286453161718,
+      "gross_pnl": -325.67726588077494,
+      "fees": 143.60918728094305,
+      "slippage": 179.51115522743197,
+      "return_pct": -3.9107204430143163,
+      "exit_reason": "STOP",
+      "bars": 4,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-04 01:00:00+00:00",
+          "price": 62537.374157897655,
+          "qty": 0.9542185539074658,
+          "net": -469.286453161718,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-07-05 08:00:00+00:00",
+      "closed_at": "2026-07-05 08:15:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 63083.4835,
+      "net_pnl": -396.3371843216535,
+      "gross_pnl": -252.64035274494745,
+      "fees": 143.69683157670607,
+      "slippage": 179.62087517705845,
+      "return_pct": -3.302809869347113,
+      "exit_reason": "STOP",
+      "bars": 2,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-05 08:15:00+00:00",
+          "price": 62817.859607936334,
+          "qty": 0.95112058927437,
+          "net": -396.3371843216535,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-07-06 00:15:00+00:00",
+      "closed_at": "2026-07-06 00:30:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 63653.73760000001,
+      "net_pnl": -505.4807633239727,
+      "gross_pnl": -361.91506139764994,
+      "fees": 143.56570192632282,
+      "slippage": 179.45671687663202,
+      "return_pct": -4.21233969436644,
+      "exit_reason": "STOP",
+      "bars": 2,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-06 00:30:00+00:00",
+          "price": 63269.78349413844,
+          "qty": 0.9425997947997949,
+          "net": -505.4807633239727,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-07-07 00:15:00+00:00",
+      "closed_at": "2026-07-07 01:30:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 64095.89985,
+      "net_pnl": -523.1620883799394,
+      "gross_pnl": -379.6176295353819,
+      "fees": 143.54445884455754,
+      "slippage": 179.4301231338012,
+      "return_pct": -4.359684069832828,
+      "exit_reason": "STOP",
+      "bars": 6,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-07 01:30:00+00:00",
+          "price": 63690.36762393343,
+          "qty": 0.9360973188677372,
+          "net": -523.1620883799394,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-07-09 01:15:00+00:00",
+      "closed_at": "2026-07-09 01:30:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 62466.65965,
+      "net_pnl": -496.96239244785005,
+      "gross_pnl": -353.3864561952844,
+      "fees": 143.57593625256567,
+      "slippage": 179.4695290026192,
+      "return_pct": -4.14135327039875,
+      "exit_reason": "STOP",
+      "bars": 2,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-09 01:30:00+00:00",
+          "price": 62098.745125265494,
+          "qty": 0.9605123811034452,
+          "net": -496.96239244785005,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-07-10 01:30:00+00:00",
+      "closed_at": "2026-07-10 02:00:00+00:00",
+      "signal_score": 90,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 63462.15065,
+      "net_pnl": 1.2581924586908286,
+      "gross_pnl": 145.4327117127461,
+      "fees": 144.17451925405527,
+      "slippage": 180.2188817836551,
+      "return_pct": 0.010484937155756905,
+      "exit_reason": "STOP",
+      "bars": 3,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 1,
+          "time": "2026-07-10 01:45:00+00:00",
+          "price": 63620.377345835936,
+          "qty": 0.2836336275344932,
+          "net": 1.6245576186870991,
+          "reason": "TP1_1R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-10 02:00:00+00:00",
+          "price": 63614.08855797871,
+          "qty": 0.6618117975804843,
+          "net": -0.3663651599962705,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-07-10 03:30:00+00:00",
+      "closed_at": "2026-07-10 08:30:00+00:00",
+      "signal_score": 80,
+      "stages": 2,
+      "planned_capital": 30000,
+      "used_capital": 21000.0,
+      "total_notional": 105000.0,
+      "average_entry": 64011.39679660034,
+      "net_pnl": 11.833582907220368,
+      "gross_pnl": 264.1505635835206,
+      "fees": 252.3169806763002,
+      "slippage": 315.39752982858255,
+      "return_pct": 0.056350394796287465,
+      "exit_reason": "STOP",
+      "bars": 21,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 1,
+          "time": "2026-07-10 08:15:00+00:00",
+          "price": 64190.58915993391,
+          "qty": 0.49209986934190714,
+          "net": 12.474721937216252,
+          "reason": "TP1_1R"
+        },
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-10 08:30:00+00:00",
+          "price": 64164.649682240924,
+          "qty": 1.14823302846445,
+          "net": -0.6411390299958839,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-07-10 09:45:00+00:00",
+      "closed_at": "2026-07-10 10:00:00+00:00",
+      "signal_score": 100,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 64514.52685,
+      "net_pnl": -458.3732600626284,
+      "gross_pnl": -314.7509612160877,
+      "fees": 143.62229884654067,
+      "slippage": 179.5275693055427,
+      "return_pct": -3.81977716718857,
+      "exit_reason": "STOP",
+      "bars": 2,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-10 10:00:00+00:00",
+          "price": 64176.093361026025,
+          "qty": 0.9300230960308128,
+          "net": -458.3732600626284,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-07-10 11:15:00+00:00",
+      "closed_at": "2026-07-10 12:45:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 64505.91395000001,
+      "net_pnl": -437.0598931604201,
+      "gross_pnl": -293.41198754547463,
+      "fees": 143.64790561494544,
+      "slippage": 179.55962585087164,
+      "return_pct": -3.642165776336834,
+      "exit_reason": "STOP",
+      "bars": 7,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-10 12:45:00+00:00",
+          "price": 64190.46714299156,
+          "qty": 0.9301472737291554,
+          "net": -437.0598931604201,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-07-11 00:30:00+00:00",
+      "closed_at": "2026-07-11 01:30:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 64172.314300000005,
+      "net_pnl": -402.6644973217049,
+      "gross_pnl": -258.97526764287636,
+      "fees": 143.68922967882855,
+      "slippage": 179.61135852973922,
+      "return_pct": -3.355537477680874,
+      "exit_reason": "STOP",
+      "bars": 5,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-11 01:30:00+00:00",
+          "price": 63895.33026214825,
+          "qty": 0.9349826425069416,
+          "net": -402.6644973217049,
+          "reason": "STOP"
+        }
+      ]
+    },
+    {
+      "direction": "LONG",
+      "opened_at": "2026-07-12 04:15:00+00:00",
+      "closed_at": "2026-07-12 04:15:00+00:00",
+      "signal_score": 80,
+      "stages": 1,
+      "planned_capital": 30000,
+      "used_capital": 12000.0,
+      "total_notional": 60000.0,
+      "average_entry": 64246.32515000001,
+      "net_pnl": -385.4728719984767,
+      "gross_pnl": -241.76298758357697,
+      "fees": 143.7098844148997,
+      "slippage": 179.63721573564294,
+      "return_pct": -3.212273933320639,
+      "exit_reason": "STOP",
+      "bars": 1,
+      "legs": [
+        {
+          "kind": "EXIT",
+          "stage": 0,
+          "time": "2026-07-12 04:15:00+00:00",
+          "price": 63987.45209150785,
+          "qty": 0.9339055558417413,
+          "net": -385.4728719984767,
+          "reason": "STOP"
+        }
+      ]
+    }
+  ]
+}
