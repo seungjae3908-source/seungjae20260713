@@ -80,7 +80,7 @@ export default function PortfolioPlanPage() {
 	const [allocMode, setAllocMode] = useState<AllocMode>('balanced');
 
 	const accumulation = useMemo(() => {
-		const m = Number(monthly || '0');
+		const m = Number(monthly || '0') * 10_000;
 		const r = Number(annualRate || '0');
 		return computeMonthlyAccumulation(m, months, r);
 	}, [monthly, months, annualRate]);
