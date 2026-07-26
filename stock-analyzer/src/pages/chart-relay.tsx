@@ -2206,50 +2206,8 @@ const RelayChart = memo(function RelayChart({
     priceLinesRef.current = [];
     const markers: SeriesMarker<Time>[] = [];
 
-    if (tab === 'live' && settings.highlight && candles.length > 0) {
-      const patternSignals = dedupeSignalOccurrences(signals)
-        .filter((signal) => signal.kind === 'chart' || signal.kind === 'candle')
-        .sort(
-          (left, right) =>
-            (toEpochMilliseconds(left.occurredAt) ?? 0) -
-            (toEpochMilliseconds(right.occurredAt) ?? 0),
-        )
-        .slice(-20);
-      const nearestTime = (target: number): Time =>
-        candles.reduce((nearest, candle) =>
-          Math.abs(Number(candle.time) - target) <
-          Math.abs(Number(nearest.time) - target)
-            ? candle
-            : nearest,
-        ).time as Time;
-      const latestCandleTime = Number(candles.at(-1)!.time);
-      for (const signal of patternSignals) {
-        const range = signalDisplayRange(signal, latestCandleTime);
-        if (!range) continue;
-        const start = nearestTime(range.start);
-        const end = nearestTime(range.end);
-        const meta = PATTERN_STAGE_META[signal.stage];
-        markers.push({
-          time: start,
-          position: 'belowBar',
-          color: meta.color,
-          shape: 'circle',
-          text: `시작 · ${signal.name}`,
-        });
-        if (Number(start) !== Number(end)) {
-          markers.push({
-            time: end,
-            position: 'belowBar',
-            color: meta.color,
-            shape: signal.stage === 'INVALIDATED' ? 'arrowDown' : 'square',
-            text:
-              signal.stage === 'START' || signal.stage === 'DEVELOPING'
-                ? `현재 · ${meta.label}`
-                : meta.label,
-          });
-        }
-      }
-    }
+    // 기본 상태에서는 캔들 모양을 가리지 않도록 신호 마커를 표시하지 않는다.
+    // 사용자가 아래 신호 버튼을 선택했을 때만 해당 구간과 화살표를 표시한다.
 
     if (chartLevels.length > 0) {
       const candidates: Array<{ price: number | null; color: string; title: string; on: boolean }> =
@@ -2330,10 +2288,10 @@ const RelayChart = memo(function RelayChart({
       if (markerTime != null && signal) {
         markers.push({
           time: markerTime as Time,
-          position: overlay?.type === 'candle' ? 'aboveBar' : 'belowBar',
+          position: 'belowBar',
           color: '#eab308',
-          shape: overlay?.type === 'candle' ? 'circle' : 'arrowUp',
-          text: signal.name,
+          shape: 'arrowUp',
+          text: '여기',
         });
       }
     }
@@ -2514,7 +2472,7 @@ const RelayChart = memo(function RelayChart({
             {meta.label}
           </span>
         ))}
-        <span className="text-[9px] font-bold text-muted-foreground">마커·밑줄 구간을 누르면 신호 상세가 열립니다.</span>
+        <span className="text-[9px] font-bold text-muted-foreground">신호를 선택하면 해당 구간과 ↑ 여기만 표시됩니다.</span>
       </div>
 
       {chartLevels.length > 0 && (
@@ -3127,7 +3085,11 @@ export default function ChartRelayPage() {
           id: signal.id,
           title: signal.name,
           direction:
-            /매도|하락|약세|이탈/.test(signal.name) ? '하락' : '상승/확인',
+            /매도|하락|약세|이탈|쌍봉|데드크로스/.test(signal.name)
+              ? '하락세 시작'
+              : /매수|상승|강세|돌파|쌍바닥|골든크로스|망치/.test(signal.name)
+                ? '상승세 시작'
+                : '방향 확인 중',
           price: signal.price,
           occurredAt: signal.occurredAt,
           importance: signal.importance || '산출 불가',
@@ -3619,6 +3581,16 @@ export default function ChartRelayPage() {
               </p>
             )}
 
+            <LiveBroadcastPanel
+              realtimeLabel={realtimeLabel}
+              plan={plan}
+              signals={signals}
+              aiHistory={aiHistory}
+              latestPrice={latestPrice}
+              latestBarChangePercent={latestBarChangePercent}
+              asset={asset}
+              interval={interval}
+            />
             <ChartAnalysisTabs
               sourceKey={sourceKey}
               planQuery={planQuery}
@@ -4450,6 +4422,116 @@ function SignalHistoryModal({
   );
 }
 
+function LiveBroadcastPanel({
+  realtimeLabel,
+  plan,
+  signals,
+  aiHistory,
+  latestPrice,
+  latestBarChangePercent,
+  asset,
+  interval,
+}: {
+  realtimeLabel: string;
+  plan: AiPlan | null;
+  signals: ChartSignal[];
+  aiHistory: AiPlanChange[];
+  latestPrice: number | null;
+  latestBarChangePercent: number | null;
+  asset: Asset;
+  interval: string;
+}) {
+  const latestSignals = useMemo(
+    () =>
+      dedupeSignalOccurrences(signals)
+        .sort(
+          (left, right) =>
+            (toEpochMilliseconds(right.occurredAt) ?? 0) -
+            (toEpochMilliseconds(left.occurredAt) ?? 0),
+        )
+        .slice(0, 5),
+    [signals],
+  );
+  const title =
+    plan?.view === '매수'
+      ? '상승세 시작 · 매수 조건 우세'
+      : plan?.view === '매도'
+        ? '하락세 시작 · 위험 관리 우선'
+        : latestBarChangePercent != null && latestBarChangePercent > 0
+          ? '상승 흐름 관찰 중'
+          : latestBarChangePercent != null && latestBarChangePercent < 0
+            ? '하락 흐름 관찰 중'
+            : '방향 탐색 중';
+  const tone =
+    plan?.view === '매수' || (plan?.view !== '매도' && (latestBarChangePercent ?? 0) > 0)
+      ? 'text-destructive'
+      : plan?.view === '매도' || (latestBarChangePercent ?? 0) < 0
+        ? 'text-blue-500'
+        : 'text-warning';
+
+  return (
+    <section className="mt-3 overflow-hidden rounded-2xl border border-card-border bg-card">
+      <div className="flex items-start justify-between gap-3 border-b border-card-border p-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+            </span>
+            <p className="text-[10px] font-black text-emerald-500">LIVE · {realtimeLabel}</p>
+          </div>
+          <h2 className={cn('mt-1 truncate text-base font-black', tone)}>{title}</h2>
+          <p className="mt-1 text-[10px] font-bold text-muted-foreground">
+            {interval}봉 · 현재가 {formatPrice(latestPrice, asset)}
+            {latestBarChangePercent == null
+              ? ''
+              : ` · 직전 봉 대비 ${latestBarChangePercent >= 0 ? '+' : ''}${latestBarChangePercent.toFixed(2)}%`}
+          </p>
+        </div>
+        <span className="shrink-0 rounded-full border border-card-border bg-background px-2.5 py-1 text-[10px] font-black">
+          {plan?.view ?? '중립'}
+        </span>
+      </div>
+      <div className="p-3">
+        <p className="text-[10px] font-black text-muted-foreground">실시간 중계</p>
+        {latestSignals.length === 0 && aiHistory.length === 0 ? (
+          <p className="mt-2 rounded-xl bg-background px-3 py-3 text-[11px] font-bold text-muted-foreground">
+            새 캔들과 신호를 기다리는 중입니다.
+          </p>
+        ) : (
+          <div className="relative mt-2 ml-1 border-l-2 border-card-border pl-4">
+            {latestSignals.map((signal) => (
+              <div key={signalOccurrenceKey(signal)} className="relative mb-2 last:mb-0">
+                <span
+                  className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full border-2 border-card"
+                  style={{ backgroundColor: PATTERN_STAGE_META[signal.stage].color }}
+                />
+                <p className="text-[11px] font-black">
+                  {signal.name} · {PATTERN_STAGE_META[signal.stage].label}
+                </p>
+                <p className="mt-0.5 text-[9px] font-bold text-muted-foreground">
+                  {formatTime(signal.occurredAt)} · {signalKindLabel(signal.kind)}
+                </p>
+              </div>
+            ))}
+            {aiHistory[0] && (
+              <div className="relative mt-2">
+                <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full border-2 border-card bg-primary" />
+                <p className="text-[11px] font-black">
+                  AI 관점 {aiHistory[0].previousView} → {aiHistory[0].nextView}
+                </p>
+                <p className="mt-0.5 text-[9px] font-bold text-muted-foreground">
+                  {formatTime(aiHistory[0].changedAt)} · 실제 계획 변경
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function ChartAnalysisTabs({
   sourceKey,
   planQuery,
@@ -4480,10 +4562,10 @@ function ChartAnalysisTabs({
   }, [sourceKey]);
 
   const tabs: Array<{ key: AnalysisTab; label: string }> = [
-    { key: 'summary', label: '종합 분석' },
-    { key: 'buy', label: '매수 의견' },
-    { key: 'sell', label: '매도 의견' },
-    { key: 'signals', label: '지난 신호' },
+    { key: 'summary', label: '분석 의견' },
+    { key: 'buy', label: '매수 전략' },
+    { key: 'sell', label: '매도 전략' },
+    { key: 'signals', label: '신호 기록' },
   ];
   const loadingState = !settings.ai ? (
     <StateBox>설정에서 AI 분석이 꺼져 있습니다.</StateBox>
@@ -4758,6 +4840,45 @@ function AiPlanPanel({
   );
 }
 
+function SignalPatternPreview({ signal }: { signal: ChartSignal }) {
+  const bearish = /하락|매도|약세|이탈|쌍봉|이중천장|석별|유성|데드크로스/.test(signal.name);
+  const count =
+    signal.kind === 'candle' && signal.overlay?.fromTime != null && signal.overlay?.toTime != null
+      ? 5
+      : signal.kind === 'candle'
+        ? 3
+        : 5;
+  const heights = bearish ? [34, 42, 28, 48, 38] : [30, 38, 50, 34, 46];
+  return (
+    <div className="rounded-2xl border border-card-border bg-background p-3">
+      <div className="flex items-end justify-center gap-2" aria-label={`${signal.name} 모양 예시`}>
+        {heights.slice(0, count).map((height, index) => {
+          const rising = bearish ? index < 2 : index >= 2;
+          const color = rising ? '#ef4444' : '#3b82f6';
+          return (
+            <span key={index} className="relative flex w-6 items-center justify-center" style={{ height: 58 }}>
+              <span className="absolute w-px" style={{ height: Math.min(56, height + 14), backgroundColor: color }} />
+              <span
+                className="relative w-4 rounded-[2px] border"
+                style={{ height, borderColor: color, backgroundColor: `${color}55` }}
+              />
+            </span>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-center text-[9px] font-bold text-muted-foreground">
+        패턴 이해용 모양 · 실제 가격은 뒤 차트의 선택 구간을 확인하세요.
+      </p>
+    </div>
+  );
+}
+
+function conciseText(value: string, max = 86): string {
+  const clean = value.replace(/\s+/g, ' ').trim();
+  if (!clean) return '설명 없음';
+  return clean.length > max ? `${clean.slice(0, max).trim()}…` : clean;
+}
+
 function SignalModal({
   signal,
   asset,
@@ -4816,13 +4937,17 @@ function SignalModal({
         </div>
 
         <div className="mt-3 space-y-3">
-          <ModalBlock title="예측 방향" text={signalPrediction(signal)} />
-          <ModalBlock title="중요한 이유" text={signal.importance} />
-          <ModalBlock title="일반적인 의미" text={signal.meaningGeneral} />
-          <ModalBlock title="현재 차트에서의 의미" text={signal.meaningHere} />
-          <ModalList title="추가 확인 조건" items={signal.confirmations} />
-          <ModalList title="무효화 조건" items={signal.invalidation} />
-          <ModalBlock title="위험 안내" text={signal.risk} />
+          {(signal.kind === 'candle' || signal.kind === 'chart') && (
+            <SignalPatternPreview signal={signal} />
+          )}
+          <ModalBlock title="핵심 판단" text={conciseText(signalPrediction(signal))} />
+          <ModalBlock
+            title="현재 차트"
+            text={conciseText(signal.meaningHere || signal.meaningGeneral)}
+          />
+          <ModalList title="확인할 것" items={signal.confirmations.slice(0, 2)} />
+          <ModalList title="무효 조건" items={signal.invalidation.slice(0, 1)} />
+          {signal.risk && <ModalBlock title="주의" text={conciseText(signal.risk, 64)} />}
         </div>
 
         <button
