@@ -28,7 +28,6 @@ import { feedFiveMorePatch } from './feed-five-more-patch';
 import { infoTabFixPatch } from './info-tab-fix-patch';
 import { infoTabFinalScopePatch } from './info-tab-final-scope-patch';
 import { coinTechStocksFinalPatch } from './coin-tech-stocks-final-patch';
-import { unifiedSearchIntegrationPatch } from './unified-search-integration-patch';
 import { portfolioManwonInputPatch } from './portfolio-manwon-input-patch';
 import { newPagesTypeSafetyPatch } from './new-pages-type-safety-patch';
 import { krwTenThousandUnitPatch } from './krw-ten-thousand-unit-patch';
@@ -74,7 +73,6 @@ export default defineConfig({
     infoTabFixPatch(),
     infoTabFinalScopePatch(),
     coinTechStocksFinalPatch(),
-    unifiedSearchIntegrationPatch(),
     portfolioManwonInputPatch(),
     newPagesTypeSafetyPatch(),
     krwTenThousandUnitPatch(),
