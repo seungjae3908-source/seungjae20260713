@@ -72,11 +72,18 @@ const MARKET_GROUPS = [
 ] as const;
 
 
-const SIGNAL_FILTERS: Array<{ key: SignalFilter; label: string }> = [
-  { key: 'strongBuy', label: '강한 매수' },
-  { key: 'strongSell', label: '강한 매도' },
-  { key: 'pattern', label: '패턴 감지' },
-  { key: 'volume', label: '거래량 신호' },
+const SPOT_SIGNAL_FILTERS: Array<{ key: SignalFilter; label: string }> = [
+  { key: 'strongBuy', label: '매수 우세' },
+  { key: 'strongSell', label: '매도 우세' },
+  { key: 'pattern', label: 'MACD 전환' },
+  { key: 'volume', label: '거래량 확대' },
+];
+
+const FUTURES_SIGNAL_FILTERS: Array<{ key: SignalFilter; label: string }> = [
+  { key: 'strongBuy', label: '강한 롱' },
+  { key: 'strongSell', label: '강한 숏' },
+  { key: 'pattern', label: '매수 관찰' },
+  { key: 'volume', label: '매도 관찰' },
 ];
 
 function marketToQuery(market: ScanMarket): {
@@ -236,36 +243,34 @@ export default function SignalScanPage() {
         const candidateDirection =
           directionKind(candidate.direction) ?? groupDirection;
 
-        const combinedText = [
-          candidate.verdict,
-          candidate.trendState,
-          candidate.volumeState,
-          ...candidate.basis,
-          ...candidate.risks,
-        ]
-          .join(' ')
-          .toLowerCase();
-
-        const hasPattern =
-          /패턴|돌파|이탈|장악|망치|유성|도지|쌍바닥|쌍봉|골든크로스|데드크로스/.test(
-            combinedText,
+        const basisText = candidate.basis.join(' ').toLowerCase();
+        const hasMacdTurn = /macd.*교차/.test(basisText);
+        const hasVolumeExpansion =
+          /거래량.*(증가|급증|폭증|확대)|volume.*(increase|surge)/.test(
+            basisText,
           );
 
-        const hasVolumeSignal =
-          /거래량|volume|급증|증가|폭증/.test(combinedText);
-
         const score = candidate.score ?? 0;
-
         let matches = false;
 
-        if (signalFilter === 'strongBuy') {
-          matches = candidateDirection === 'buy' && score >= 70;
+        if (isFutures) {
+          if (signalFilter === 'strongBuy') {
+            matches = group.key === 'long';
+          } else if (signalFilter === 'strongSell') {
+            matches = group.key === 'short';
+          } else if (signalFilter === 'pattern') {
+            matches = group.key === 'buyView';
+          } else {
+            matches = group.key === 'sellView';
+          }
+        } else if (signalFilter === 'strongBuy') {
+          matches = candidateDirection === 'buy' && score >= 72;
         } else if (signalFilter === 'strongSell') {
-          matches = candidateDirection === 'sell' && score >= 70;
+          matches = candidateDirection === 'sell' && score >= 72;
         } else if (signalFilter === 'pattern') {
-          matches = hasPattern;
+          matches = hasMacdTurn;
         } else {
-          matches = hasVolumeSignal;
+          matches = hasVolumeExpansion;
         }
 
         if (!matches) continue;
@@ -282,7 +287,7 @@ export default function SignalScanPage() {
           a.name.localeCompare(b.name, 'ko'),
       )
       .slice(0, 10);
-  }, [groups, signalFilter]);
+  }, [groups, isFutures, signalFilter]);
 
   const selectMarket = (next: ScanMarket) => {
     setSelected(null);
@@ -321,20 +326,13 @@ export default function SignalScanPage() {
     navigate(target);
   };
 
-  const activeDirection: DirectionTab =
-    signalFilter === 'strongSell' ? 'sell' : 'buy';
+  const signalFilters = isFutures
+    ? FUTURES_SIGNAL_FILTERS
+    : SPOT_SIGNAL_FILTERS;
 
   const candidateSectionLabel =
-    signalFilter === 'strongBuy'
-      ? isFutures
-        ? '강한 롱'
-        : '강한 매수'
-      : signalFilter === 'strongSell'
-        ? isFutures
-          ? '강한 숏'
-          : '강한 매도'
-        : SIGNAL_FILTERS.find((item) => item.key === signalFilter)?.label ??
-          '기술 신호';
+    signalFilters.find((item) => item.key === signalFilter)?.label ??
+    '기술 신호';
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain bg-background">
@@ -424,7 +422,7 @@ export default function SignalScanPage() {
         </div>
 
         <div className="mt-3 grid grid-cols-4 gap-1">
-          {SIGNAL_FILTERS.map((filter) => (
+          {signalFilters.map((filter) => (
             <button
               key={filter.key}
               type="button"
