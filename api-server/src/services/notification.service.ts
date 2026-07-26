@@ -45,8 +45,7 @@ type DeliverNotificationInput = {
   app?: boolean;
   push?: boolean;
   metadata?: Record<string, unknown>;
-  repeatCount?: number;
-  repeatIntervalMs?: number;
+  repeatDelaysMs?: number[];
 };
 
 type PriceAlertRow = {
@@ -163,13 +162,23 @@ export async function deliverMemberNotification(
     if (error) throw error;
 
     const invalidEndpoints: string[] = [];
-    const repeatCount = Math.max(1, Math.min(3, input.repeatCount ?? 1));
-    const repeatIntervalMs = Math.max(
-      1_000,
-      Math.min(30_000, input.repeatIntervalMs ?? 10_000),
-    );
+    const repeatDelaysMs = Array.isArray(input.repeatDelaysMs)
+      ? input.repeatDelaysMs
+          .slice(0, 3)
+          .map((value) => Math.max(0, Math.min(10 * 60_000, Number(value) || 0)))
+          .sort((left, right) => left - right)
+      : [0];
+    const repeatCount = Math.max(1, repeatDelaysMs.length);
 
     for (let repeatIndex = 1; repeatIndex <= repeatCount; repeatIndex += 1) {
+      const previousDelay = repeatIndex > 1 ? repeatDelaysMs[repeatIndex - 2] : 0;
+      const currentDelay = repeatDelaysMs[repeatIndex - 1] ?? previousDelay;
+      if (currentDelay > previousDelay) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, currentDelay - previousDelay),
+        );
+      }
+
       const payload = JSON.stringify({
         title: input.title,
         body: input.body,
@@ -197,9 +206,6 @@ export async function deliverMemberNotification(
         }),
       );
 
-      if (repeatIndex < repeatCount) {
-        await new Promise((resolve) => setTimeout(resolve, repeatIntervalMs));
-      }
     }
 
     if (invalidEndpoints.length > 0) {
@@ -522,10 +528,11 @@ const STRONG_SIGNAL_MARKETS: StrongSignalMarket[] = [
 ];
 
 function strongSignalTitle(candidate: ScanCandidate): string {
-  if (candidate.direction === 'long') return `강한 롱 · ${candidate.name}`;
-  if (candidate.direction === 'short') return `강한 숏 · ${candidate.name}`;
-  if (candidate.direction === 'buy') return `강한 매수 · ${candidate.name}`;
-  return `강한 매도 · ${candidate.name}`;
+  const timeframe = candidate.timeframe === '15m' ? '15분' : '일봉';
+  if (candidate.direction === 'long') return `강한 롱 · ${candidate.name} · ${timeframe}`;
+  if (candidate.direction === 'short') return `강한 숏 · ${candidate.name} · ${timeframe}`;
+  if (candidate.direction === 'buy') return `강한 매수 · ${candidate.name} · ${timeframe}`;
+  return `강한 매도 · ${candidate.name} · ${timeframe}`;
 }
 
 export async function runStrongSignalMonitorOnce(): Promise<{
@@ -589,18 +596,18 @@ export async function runStrongSignalMonitorOnce(): Promise<{
             memberId: recipient.member_id,
             type,
             title: strongSignalTitle(candidate),
-            body: `${candidate.ticker} · 점수 ${candidate.score} · 현재가 ${candidate.price.toLocaleString('ko-KR')}`,
+            body: `${candidate.ticker} · ${candidate.timeframe === '15m' ? '15분 단기' : '일봉 스윙'} · 점수 ${candidate.score} · 현재가 ${candidate.price.toLocaleString('ko-KR')}`,
             url: `/tech/signal-scan/${spec.routeMarket}`,
             app: recipient.app_enabled !== false,
             push: recipient.push_enabled === true,
-            repeatCount: 3,
-            repeatIntervalMs: 10_000,
+            repeatDelaysMs: [0, 2 * 60_000, 5 * 60_000],
             metadata: {
-              signalId: `strong-signal:${spec.market}:${candidate.ticker}:${candidate.direction}:${dateBucket}`,
+              signalId: `strong-signal:${spec.market}:${candidate.ticker}:${candidate.direction}:${candidate.timeframe ?? '1D'}:${dateBucket}`,
               assetType: spec.assetType,
               market: spec.market,
               symbol: candidate.ticker,
               direction: candidate.direction,
+              timeframe: candidate.timeframe ?? '1D',
               score: candidate.score,
               price: candidate.price,
               importance: 'high',
