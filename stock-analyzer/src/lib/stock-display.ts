@@ -370,6 +370,13 @@ export function formatAppPercent(value: unknown) {
   return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
 }
 
+function formatKrwTenThousands(value: number): string {
+  const scaled = value / 10_000;
+  const absolute = Math.abs(scaled);
+  const maximumFractionDigits = absolute >= 100 ? 0 : absolute >= 10 ? 1 : 2;
+  return `${scaled.toLocaleString('ko-KR', { maximumFractionDigits })}만원`;
+}
+
 export function formatAppPrice(value: unknown, currency: string) {
   const n =
     typeof value === 'number'
@@ -383,7 +390,7 @@ export function formatAppPrice(value: unknown, currency: string) {
   const mode = getCurrencyMode();
 
   if (mode === 'krw' && currency === 'USD') {
-    return `${Math.round(n * USD_KRW).toLocaleString()}원`;
+    return formatKrwTenThousands(n * USD_KRW);
   }
 
   if (mode === 'usd' && currency === 'KRW') {
@@ -401,14 +408,14 @@ export function formatAppPrice(value: unknown, currency: string) {
   // USDT(비트겟 선물 등)는 원화가 아니므로 절대 '원'으로 표기하지 않는다.
   if (currency === 'USDT') {
     if (mode === 'krw') {
-      return `${Math.round(n * USD_KRW).toLocaleString()}원`;
+      return formatKrwTenThousands(n * USD_KRW);
     }
     return `${n.toLocaleString(undefined, {
       maximumFractionDigits: n >= 100 ? 2 : 4,
     })} USDT`;
   }
 
-  return `${Math.round(n).toLocaleString()}원`;
+  return formatKrwTenThousands(n);
 }
 
 export function eventLabelKo(value: unknown) {
