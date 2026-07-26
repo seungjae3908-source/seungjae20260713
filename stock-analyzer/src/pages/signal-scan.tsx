@@ -426,8 +426,8 @@ export default function SignalScanPage() {
 
         <div className="mt-3 grid grid-cols-2 gap-2">
           {([
-            { key: 'swing' as const, label: '스윙용' },
             { key: 'scalp' as const, label: '단타용 · 15분봉' },
+            { key: 'swing' as const, label: '스윙용' },
           ]).map((item) => (
             <button
               key={item.key}
