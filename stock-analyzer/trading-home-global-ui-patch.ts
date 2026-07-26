@@ -171,7 +171,7 @@ function patchSettings(source: string) {
 }
 
 const globalUiScript = `
-function removeNativeBackButtons() {
+function hideNativeBackButtons() {
   document.querySelectorAll('button, a').forEach((element) => {
     if (element.getAttribute('aria-label') === '공통 뒤로가기') return;
 
@@ -185,14 +185,19 @@ function removeNativeBackButtons() {
       Boolean(element.closest('header')) &&
       (text === '‹' || text === '←');
 
-    if (nativeBackLabel || headerArrow) element.remove();
+    if (nativeBackLabel || headerArrow) {
+      element.style.visibility = 'hidden';
+      element.style.pointerEvents = 'none';
+      element.setAttribute('aria-hidden', 'true');
+      element.setAttribute('tabindex', '-1');
+    }
   });
 }
-new MutationObserver(removeNativeBackButtons).observe(document.documentElement, {
+new MutationObserver(hideNativeBackButtons).observe(document.documentElement, {
   childList: true,
   subtree: true,
 });
-removeNativeBackButtons();
+hideNativeBackButtons();
 `;
 
 export function tradingHomeGlobalUiPatch(): Plugin {
