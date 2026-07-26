@@ -23,6 +23,7 @@ import { requestedUiFixesPatch } from './requested-ui-fixes-patch';
 import { stockInfoFeedOnlyPatch } from './stock-info-feed-only-patch';
 import { stocksCategoryLayoutPatch } from './stocks-category-layout-patch';
 import { sixRequestedFixesPatch } from './six-requested-fixes-patch';
+import { currentRequestBatchPatch } from './current-request-batch-patch';
 import { krwTenThousandUnitPatch } from './krw-ten-thousand-unit-patch';
 import { detailContentStatusPatch } from './detail-content-status-patch';
 import { detailSectionPopupPatch } from './detail-section-popup-patch';
@@ -62,6 +63,7 @@ export default defineConfig({
     stockInfoFeedOnlyPatch(),
     stocksCategoryLayoutPatch(),
     sixRequestedFixesPatch(),
+    currentRequestBatchPatch(),
     krwTenThousandUnitPatch(),
     detailContentStatusPatch(),
     detailSectionPopupPatch(),
