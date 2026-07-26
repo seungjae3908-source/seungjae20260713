@@ -1,40 +1,44 @@
 import type { Plugin } from 'vite';
 
+const APPLIED_MARKER = 'data-stocks-category-layout="vertical"';
+
 function patchStocks(source: string): string {
-  let code = source;
-  const categoryStart = code.indexOf(
-    `\n\t\t\t\t<div className="mt-3 grid grid-cols-3 gap-2">\n\t\t\t\t\t{CATEGORIES.map`,
-  );
-  const searchStart = code.indexOf(`\n\t\t\t\t<SearchField`, categoryStart);
+  if (source.includes(APPLIED_MARKER)) return source;
 
-  if (categoryStart < 0 || searchStart < 0) {
-    throw new Error('[stocks-category-layout-patch] 기존 분류 버튼 위치를 찾지 못했습니다.');
-  }
+  const categoryPattern = /\n[ \t]*<div className="[^"]*grid[^"]*">[ \t\r\n]*\{CATEGORIES\.map\(\(item\) => \([\s\S]*?\)\)\}[ \t\r\n]*<\/div>[ \t\r\n]*/;
+  const categoryMatch = source.match(categoryPattern);
 
-  code = code.slice(0, categoryStart) + '\n' + code.slice(searchStart);
+  // 다른 선행 패치가 이미 분류 영역을 옮겼다면 빌드를 막지 않는다.
+  if (!categoryMatch) return source;
 
-  const mainMarker = `\t\t\t<main className="space-y-3 px-4 pb-28 pt-4">`;
-  if (!code.includes(mainMarker)) {
-    throw new Error('[stocks-category-layout-patch] 종목 본문 위치를 찾지 못했습니다.');
-  }
+  let code = source.replace(categoryPattern, '\n');
+  const headerClose = code.indexOf('</header>');
 
-  const categoryBlock = `${mainMarker}
-\t\t\t\t<section className="rounded-3xl border border-card-border bg-card p-3 shadow-sm">
-\t\t\t\t\t<div className="grid grid-cols-1 gap-2">
-\t\t\t\t\t\t{CATEGORIES.map((item) => (
-\t\t\t\t\t\t\t<button
-\t\t\t\t\t\t\t\tkey={item.key}
-\t\t\t\t\t\t\t\ttype="button"
-\t\t\t\t\t\t\t\tonClick={() => openCategory(item.key)}
-\t\t\t\t\t\t\t\tclassName="flex min-h-12 w-full items-center justify-center rounded-2xl border border-card-border bg-background px-4 py-3 text-center text-sm font-black"
-\t\t\t\t\t\t\t>
-\t\t\t\t\t\t\t\t{item.label}
-\t\t\t\t\t\t\t</button>
-\t\t\t\t\t\t))}
-\t\t\t\t\t</div>
-\t\t\t\t</section>`;
+  // 페이지 구조가 달라진 경우에도 앱 전체 빌드를 중단하지 않는다.
+  if (headerClose < 0) return source;
 
-  return code.replace(mainMarker, categoryBlock);
+  const categoryBlock = `
+        <section
+          data-stocks-category-layout="vertical"
+          className="mt-3 rounded-3xl border border-card-border bg-card p-3 shadow-sm"
+        >
+          <div className="grid grid-cols-1 gap-2">
+            {CATEGORIES.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => openCategory(item.key)}
+                className="flex min-h-12 w-full items-center justify-center rounded-2xl border border-card-border bg-background px-4 py-3 text-center text-sm font-black"
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </section>
+      `;
+
+  code = code.slice(0, headerClose) + categoryBlock + code.slice(headerClose);
+  return code;
 }
 
 export function stocksCategoryLayoutPatch(): Plugin {
@@ -44,7 +48,8 @@ export function stocksCategoryLayoutPatch(): Plugin {
     transform(source, id) {
       const normalized = id.replace(/\\/g, '/').split('?')[0];
       if (!normalized.endsWith('/src/pages/stocks.tsx')) return null;
-      return { code: patchStocks(source), map: null };
+      const code = patchStocks(source);
+      return code === source ? null : { code, map: null };
     },
   };
 }
