@@ -1974,7 +1974,7 @@ const RelayChart = memo(function RelayChart({
     if (!chart) return;
     const desired = new Set<string>();
     if (tab === 'live' && settings.highlight && candles.length >= 2) {
-      const patternSignals = dedupeSignalOccurrences(signals)
+      const patternSignals = (focusedSignal ? [focusedSignal] : [])
         .filter((signal) => signal.kind === 'chart' || signal.kind === 'candle')
         .sort(
           (left, right) =>
@@ -2051,7 +2051,7 @@ const RelayChart = memo(function RelayChart({
       chart.removeSeries(series);
       patternSeriesRef.current.delete(key);
     }
-  }, [candles, chartType, settings.highlight, signals, tab]);
+  }, [candles, chartType, focusedSignal, settings.highlight, tab]);
 
   useEffect(() => {
     const chart = chartRef.current;
