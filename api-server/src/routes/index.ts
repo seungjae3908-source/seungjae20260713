@@ -12,6 +12,8 @@ import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import cryptoSpotAutoRouter from './crypto-spot-auto';
+import bitgetMarketContextRouter from './bitget-market-context.routes';
+import bitgetForwardShadowRouter from './bitget-forward-shadow.routes';
 import backupRouter from './backup';
 import authRouter from './auth';
 import analysisRouter from './analysis';
@@ -54,6 +56,20 @@ router.use(
   requireMember,
   requireAdmin,
   cryptoSpotAutoRouter,
+);
+
+// 비트겟 공개 시장상태와 30만원 전진 섀도 검증. 실제 주문·개인계좌 API를 사용하지 않습니다.
+router.use(
+  '/crypto/futures/context',
+  requireMember,
+  requireFullMember,
+  bitgetMarketContextRouter,
+);
+router.use(
+  '/crypto/futures/forward-shadow',
+  requireMember,
+  requireFullMember,
+  bitgetForwardShadowRouter,
 );
 
 // 코인 선물 조회는 정회원 이상, 실제 자동매매 API는 관리자만 사용합니다.
