@@ -109,18 +109,6 @@ function patchStockInfo(source: string): string {
     'selected ticker feed page reset',
   );
 
-  code = replaceRequired(
-    code,
-    `\t\t\t\t\t{ticker && (`,
-    `\t\t\t\t\t{false && ticker && (`,
-    'hide duplicate selected stock detail',
-  );
-
-  code = code.replaceAll(
-    `enabled: asset === 'stock' && Boolean(ticker),`,
-    `enabled: false,`,
-  );
-
   return code;
 }
 
@@ -135,15 +123,103 @@ function patchDetail(source: string): string {
   code = replaceRequired(
     code,
     `      [\`/api/stocks/\${upper}/filings\`, \`/api/stocks/\${upper}/disclosures\`],`,
-    `      [\n        \`/api/stocks/\${upper}/disclosures?all=1\`,\n        \`/api/stocks/\${upper}/filings?all=1\`,\n        \`/api/stocks/\${upper}/disclosures\`,\n        \`/api/stocks/\${upper}/filings\`,\n      ],`,
+    `      [
+        \`/api/stocks/\${upper}/disclosures?all=1\`,
+        \`/api/stocks/\${upper}/filings?all=1\`,
+        \`/api/stocks/\${upper}/disclosures\`,
+        \`/api/stocks/\${upper}/filings\`,
+      ],`,
     'detail disclosure endpoints',
   );
 
   code = replaceRequired(
     code,
     `    tryJson<AnyObj>([\`/api/stocks/\${upper}/news\`], {}),`,
-    `    tryJson<AnyObj>(\n      [\`/api/stocks/\${upper}/news?all=1\`, \`/api/stocks/\${upper}/news\`],\n      {},\n    ),`,
+    `    tryJson<AnyObj>(
+      [\`/api/stocks/\${upper}/news?all=1\`, \`/api/stocks/\${upper}/news\`],
+      {},
+    ),`,
     'detail news endpoints',
+  );
+
+  code = replaceRequired(
+    code,
+    `  const filings = collectFilings(filingsRaw);
+  return {
+    financials: normalizeObject(financialRaw, ["financials", "data"]),
+    risk: normalizeObject(riskRaw, ["risk", "analysis", "data"]),
+    filings: filings.length ? filings : collectFilings(riskRaw),
+    news: collectNews(newsRaw),
+  };`,
+    `  let filings = collectFilings(filingsRaw);
+  let news = collectNews(newsRaw);
+  let specialFeedRaw: AnyObj = {};
+
+  if (filings.length === 0 || news.length === 0) {
+    const market = /^\\d{6}$/.test(upper) ? 'KR' : 'US';
+    specialFeedRaw = await tryJson<AnyObj>(
+      [\`/api/stocks/special-feed?asset=stock&market=\${market}&limit=2000\`],
+      {},
+    );
+    const matchingItems = (Array.isArray(specialFeedRaw?.items)
+      ? specialFeedRaw.items
+      : []
+    ).filter(
+      (item: AnyObj) =>
+        String(item?.ticker ?? '').trim().toUpperCase() === upper,
+    );
+
+    if (filings.length === 0) {
+      filings = matchingItems.filter(
+        (item: AnyObj) => String(item?.kind ?? '') === 'disclosure',
+      );
+    }
+    if (news.length === 0) {
+      news = matchingItems.filter(
+        (item: AnyObj) => String(item?.kind ?? '') === 'news',
+      );
+    }
+  }
+
+  if (filings.length === 0) {
+    filings = [
+      {
+        title: '공시 제공 상태',
+        report_nm: '공시 제공 상태',
+        summary:
+          firstText(filingsRaw?.summary, filingsRaw?.message, specialFeedRaw?.message) ??
+          (/^\\d{6}$/.test(upper)
+            ? 'DART 공시 제공처 연결을 확인하고 있습니다.'
+            : 'SEC EDGAR 공시 제공처 연결을 확인하고 있습니다.'),
+        source: /^\\d{6}$/.test(upper) ? 'DART' : 'SEC EDGAR',
+        date: new Date().toISOString(),
+        statusOnly: true,
+      },
+    ];
+  }
+
+  if (news.length === 0) {
+    news = [
+      {
+        title: '뉴스 제공 상태',
+        summary:
+          firstText(newsRaw?.summary, newsRaw?.message, specialFeedRaw?.message) ??
+          '뉴스 제공처 연결이 지연되어 관련 기사를 다시 확인하고 있습니다.',
+        source: '뉴스 제공처',
+        date: new Date().toISOString(),
+        publishedAt: new Date().toISOString(),
+        statusOnly: true,
+      },
+    ];
+  }
+
+  return {
+    financials: normalizeObject(financialRaw, ["financials", "data"]),
+    risk: normalizeObject(riskRaw, ["risk", "analysis", "data"]),
+    filings,
+    news,
+  };`,
+    'detail provider fallback content',
   );
 
   return code;
@@ -171,14 +247,60 @@ function patchHome(source: string): string {
 
 function patchScanner(source: string): string {
   let code = source;
-  code = code.replace(
-    `<h2 className="text-sm font-extrabold">자동매매 후보 종목</h2>`,
-    `<h2 className="text-sm font-extrabold">관리자 실제 주문 감시</h2>`,
+
+  code = replaceRequired(
+    code,
+    `import { cn } from "@/lib/utils";`,
+    `import { cn } from "@/lib/utils";\nimport { AdminAutoTradeMonitor } from '@/components/admin-auto-trade-monitor';`,
+    'admin monitor import',
   );
-  code = code.replace(
-    `최대 100개 후보를 모델점수순으로 비교하며, 주문 버튼을 누른 뒤 주문 내용을 한 번 더 승인한 1개 종목만 전송합니다.`,
-    `자동매매 후보와 보유 포지션의 목표가·손절가 도달을 감시합니다. 실제 주문은 주문계획을 확인하고 실행 버튼을 직접 눌렀을 때만 전송됩니다.`,
+
+  code = replaceRequired(
+    code,
+    `{viewMode === "auto" && (\n        <>\n        <ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />`,
+    `{viewMode === "auto" && (\n        <>\n        <AdminAutoTradeMonitor />\n        <ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />`,
+    'admin monitor auto-trading insertion',
   );
+
+  return code;
+}
+
+function patchPortfolioPlan(source: string): string {
+  let code = source;
+
+  code = replaceRequired(
+    code,
+    `\tconst [monthly, setMonthly] = useState('');`,
+    `\tconst [monthly, setMonthly] = useState('100');`,
+    'portfolio monthly default ten-thousand units',
+  );
+
+  code = replaceRequired(
+    code,
+    `\t\tconst m = Number(monthly || '0');`,
+    `\t\tconst m = Number(monthly || '0') * 10_000;`,
+    'portfolio monthly ten-thousand conversion',
+  );
+
+  code = code
+    .replace('월 투자금(원)', '월 투자금(만원)')
+    .replaceAll(
+      `<h2 className="text-sm font-black">`,
+      `<h2 className="text-center text-sm font-black">`,
+    )
+    .replaceAll(
+      `className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-3 text-sm font-bold outline-none focus:border-primary"`,
+      `className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-3 text-center text-sm font-bold outline-none focus:border-primary"`,
+    )
+    .replace(
+      `className="rounded-xl bg-secondary/60 p-2.5"`,
+      `className="flex min-h-[72px] flex-col items-center justify-center rounded-xl bg-secondary/60 p-2.5 text-center"`,
+    )
+    .replace(
+      `className="rounded-lg bg-background p-1.5"`,
+      `className="flex min-h-[64px] flex-col items-center justify-center rounded-lg bg-background p-1.5 text-center"`,
+    );
+
   return code;
 }
 
@@ -202,6 +324,9 @@ export function requestedUiFixesPatch(): Plugin {
       }
       if (normalized.endsWith('/src/pages/scanner.tsx')) {
         return { code: patchScanner(source), map: null };
+      }
+      if (normalized.endsWith('/src/pages/portfolio-plan.tsx')) {
+        return { code: patchPortfolioPlan(source), map: null };
       }
       return null;
     },
