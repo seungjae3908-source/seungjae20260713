@@ -1,0 +1,192 @@
+name: Stage 6 forward shadow verification
+
+on:
+  push:
+    branches:
+      - agent/forward-shadow-validation-stage6-20260726
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Initialize report
+        run: |
+          mkdir -p docs/backtests
+          {
+            echo '# Stage 6 forward shadow verification'
+            echo
+            echo "- commit: $GITHUB_SHA"
+            echo "- started_at: $(date -u +%FT%TZ)"
+            echo
+          } > docs/backtests/STAGE6_FORWARD_SHADOW_VERIFICATION.md
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install workspace
+        id: install
+        continue-on-error: true
+        run: |
+          set +e
+          corepack enable
+          pnpm install --frozen-lockfile 2>&1 | tee /tmp/install.log
+          code=${PIPESTATUS[0]}
+          { echo '## Install'; echo "- exit_code: $code"; echo '```text'; tail -n 100 /tmp/install.log; echo '```'; } >> docs/backtests/STAGE6_FORWARD_SHADOW_VERIFICATION.md
+          exit $code
+
+      - name: Frontend build
+        id: frontend
+        continue-on-error: true
+        run: |
+          set +e
+          (rm -rf stock-analyzer/dist && pnpm --filter @workspace/stock-analyzer build) 2>&1 | tee /tmp/frontend.log
+          code=${PIPESTATUS[0]}
+          { echo '## Frontend build'; echo "- exit_code: $code"; echo '```text'; tail -n 140 /tmp/frontend.log; echo '```'; } >> docs/backtests/STAGE6_FORWARD_SHADOW_VERIFICATION.md
+          exit $code
+
+      - name: Full backend typecheck
+        id: full_typecheck
+        continue-on-error: true
+        run: |
+          set +e
+          pnpm --filter @workspace/api-server typecheck 2>&1 | tee /tmp/full-typecheck.log
+          code=${PIPESTATUS[0]}
+          { echo '## Full backend typecheck'; echo "- exit_code: $code"; echo '```text'; tail -n 180 /tmp/full-typecheck.log; echo '```'; } >> docs/backtests/STAGE6_FORWARD_SHADOW_VERIFICATION.md
+          exit $code
+
+      - name: Stage-six targeted typecheck
+        id: targeted
+        continue-on-error: true
+        run: |
+          set +e
+          pnpm --dir api-server exec tsc --noEmit --target ESNext --module ESNext --moduleResolution bundler --strict --skipLibCheck --esModuleInterop --allowSyntheticDefaultImports --types node \
+            src/services/bitget-market-context.service.ts \
+            src/services/bitget-forward-shadow.service.ts \
+            src/routes/bitget-market-context.routes.ts \
+            src/routes/bitget-forward-shadow.routes.ts 2>&1 | tee /tmp/targeted.log
+          code=${PIPESTATUS[0]}
+          { echo '## Stage-six targeted typecheck'; echo "- exit_code: $code"; echo '```text'; tail -n 200 /tmp/targeted.log; echo '```'; } >> docs/backtests/STAGE6_FORWARD_SHADOW_VERIFICATION.md
+          exit $code
+
+      - name: API server bundle
+        id: server_build
+        continue-on-error: true
+        run: |
+          set +e
+          pnpm --filter @workspace/api-server build:server 2>&1 | tee /tmp/server-build.log
+          code=${PIPESTATUS[0]}
+          { echo '## API server bundle'; echo "- exit_code: $code"; echo '```text'; tail -n 160 /tmp/server-build.log; echo '```'; } >> docs/backtests/STAGE6_FORWARD_SHADOW_VERIFICATION.md
+          exit $code
+
+      - name: Pure strategy smoke test
+        id: strategy
+        continue-on-error: true
+        run: |
+          set +e
+          pnpm --dir api-server exec esbuild src/services/bitget-forward-shadow.service.ts --bundle --platform=node --format=esm --outfile=/tmp/stage6-forward.mjs > /tmp/strategy.log 2>&1
+          bundle_code=$?
+          if [ "$bundle_code" -eq 0 ]; then
+            node --input-type=module >> /tmp/strategy.log 2>&1 <<'NODE'
+          import assert from 'node:assert/strict';
+          import { evaluateLongPullbackCandles, FORWARD_SHADOW_POLICY } from '/tmp/stage6-forward.mjs';
+          assert.equal(FORWARD_SHADOW_POLICY.startingCapitalKRW, 300000);
+          assert.equal(FORWARD_SHADOW_POLICY.leverage, 5);
+          assert.deepEqual([...FORWARD_SHADOW_POLICY.entrySplits], [0.3, 0.3, 0.4]);
+          assert.equal(FORWARD_SHADOW_POLICY.realOrdersEnabled, false);
+          const short = evaluateLongPullbackCandles([]);
+          assert.equal(short.eligible, false);
+          assert.ok(short.reasons.includes('INSUFFICIENT_CANDLES'));
+          const candles = Array.from({ length: 260 }, (_, index) => {
+            const wave = Math.sin(index / 4) * 0.35;
+            const close = 100 + index * 0.025 + wave;
+            return { time: 1700000000000 + index * 900000, open: close - 0.08, high: close + 0.25,
+              low: close - 0.25, close, volume: 1000 + (index % 9) * 20, quoteVolume: close * 1000 };
+          });
+          const result = evaluateLongPullbackCandles(candles);
+          assert.ok(Number.isFinite(result.score));
+          assert.ok(Array.isArray(result.reasons));
+          assert.equal(result.candleTime, candles.at(-1).time);
+          NODE
+            code=$?
+          else
+            code=$bundle_code
+          fi
+          { echo '## Pure strategy smoke test'; echo "- exit_code: $code"; echo '```text'; tail -n 160 /tmp/strategy.log; echo '```'; } >> docs/backtests/STAGE6_FORWARD_SHADOW_VERIFICATION.md
+          exit $code
+
+      - name: Public data and shadow evaluation smoke test
+        id: public_smoke
+        continue-on-error: true
+        env:
+          BITGET_CONTEXT_DATA_DIR: /tmp/stage6-context
+          BITGET_FORWARD_SHADOW_DATA_DIR: /tmp/stage6-shadow
+          BITGET_CONTEXT_COLLECTOR_ENABLED: 'false'
+          BITGET_FORWARD_SHADOW_ENABLED: 'false'
+          BITGET_CONTEXT_SYMBOLS: BTCUSDT
+        run: |
+          set +e
+          pnpm --dir api-server exec esbuild src/services/bitget-market-context.service.ts --bundle --platform=node --format=esm --outfile=/tmp/stage6-context.mjs > /tmp/public-smoke.log 2>&1
+          context_code=$?
+          pnpm --dir api-server exec esbuild src/services/bitget-forward-shadow.service.ts --bundle --platform=node --format=esm --outfile=/tmp/stage6-forward-public.mjs >> /tmp/public-smoke.log 2>&1
+          forward_code=$?
+          if [ "$context_code" -eq 0 ] && [ "$forward_code" -eq 0 ]; then
+            node --input-type=module >> /tmp/public-smoke.log 2>&1 <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFile } from 'node:fs/promises';
+          import { collectBitgetMarketContextOnce } from '/tmp/stage6-context.mjs';
+          import { runForwardShadowOnce, getForwardShadowStatus } from '/tmp/stage6-forward-public.mjs';
+          const collected = await collectBitgetMarketContextOnce(['BTCUSDT']);
+          assert.equal(collected.failures.length, 0, JSON.stringify(collected.failures));
+          assert.equal(collected.collected.length, 1);
+          assert.equal(collected.collected[0].symbol, 'BTCUSDT');
+          const day = collected.collected[0].collectedAt.slice(0, 10);
+          const raw = await readFile(`/tmp/stage6-context/${day}/BTCUSDT.jsonl`, 'utf8');
+          assert.ok(raw.includes('bitget-market-context.v2'));
+          const run = await runForwardShadowOnce();
+          assert.ok(run.processed >= 1 || run.skipped === 'NO_CONTEXT_SNAPSHOTS');
+          const status = await getForwardShadowStatus();
+          assert.equal(status.mode, 'FORWARD_SHADOW');
+          assert.equal(status.realOrdersEnabled, false);
+          assert.equal(status.policy.startingCapitalKRW, 300000);
+          NODE
+            code=$?
+          else
+            code=1
+          fi
+          { echo '## Public data and shadow evaluation smoke test'; echo "- exit_code: $code"; echo '```text'; tail -n 220 /tmp/public-smoke.log; echo '```'; } >> docs/backtests/STAGE6_FORWARD_SHADOW_VERIFICATION.md
+          exit $code
+
+      - name: Finalize and commit report
+        if: always()
+        run: |
+          {
+            echo
+            echo '## Outcomes'
+            echo "- install: ${{ steps.install.outcome }}"
+            echo "- frontend: ${{ steps.frontend.outcome }}"
+            echo "- full_typecheck: ${{ steps.full_typecheck.outcome }}"
+            echo "- targeted: ${{ steps.targeted.outcome }}"
+            echo "- server_build: ${{ steps.server_build.outcome }}"
+            echo "- strategy: ${{ steps.strategy.outcome }}"
+            echo "- public_smoke: ${{ steps.public_smoke.outcome }}"
+            echo "- finished_at: $(date -u +%FT%TZ)"
+          } >> docs/backtests/STAGE6_FORWARD_SHADOW_VERIFICATION.md
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/backtests/STAGE6_FORWARD_SHADOW_VERIFICATION.md
+          if git diff --cached --quiet; then
+            echo 'No report changes'
+          else
+            git commit -m 'test: record stage-six forward shadow verification [skip ci]'
+            git push
+          fi
