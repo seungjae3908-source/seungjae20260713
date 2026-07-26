@@ -436,30 +436,20 @@ function isOptimizedShort(a: Analyzed, futures = false): boolean {
 
 function isFuturesWatchLong(a: Analyzed): boolean {
   return (
-    a.bullScore >= 64 &&
-    a.bullScore - a.bearScore >= 6 &&
+    a.bullScore > a.bearScore &&
     a.ma5 != null &&
     a.ma20 != null &&
-    a.ma5 > a.ma20 &&
-    a.latest > a.ma20 &&
     a.rsiValue != null &&
-    a.rsiValue >= 35 &&
-    a.rsiValue <= 72 &&
     hasUsableVolatility(a, true)
   );
 }
 
 function isFuturesWatchShort(a: Analyzed): boolean {
   return (
-    a.bearScore >= 64 &&
-    a.bearScore - a.bullScore >= 6 &&
+    a.bearScore > a.bullScore &&
     a.ma5 != null &&
     a.ma20 != null &&
-    a.ma5 < a.ma20 &&
-    a.latest < a.ma20 &&
     a.rsiValue != null &&
-    a.rsiValue >= 28 &&
-    a.rsiValue <= 65 &&
     hasUsableVolatility(a, true)
   );
 }
