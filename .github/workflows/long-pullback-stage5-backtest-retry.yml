@@ -1,0 +1,65 @@
+name: Stage 5 long pullback backtest retry
+
+on:
+  push:
+    branches:
+      - agent/long-pullback-market-context-collector-20260726
+    paths:
+      - tools/backtest/long_pullback_retest_backtest.py
+      - tools/backtest/run_long_pullback_retest_stage5.py
+      - .github/workflows/long-pullback-stage5-backtest-retry.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run backtest and save report
+        id: run
+        continue-on-error: true
+        run: |
+          mkdir -p docs/backtests
+          set +e
+          (pip install numpy pandas requests && \
+           python -m py_compile tools/backtest/long_pullback_retest_backtest.py tools/backtest/run_long_pullback_retest_stage5.py && \
+           python tools/backtest/run_long_pullback_retest_stage5.py) 2>&1 | tee /tmp/stage5-retry.log
+          code=${PIPESTATUS[0]}
+          {
+            echo '# Stage 5 backtest retry report'
+            echo
+            echo "- started_from: $GITHUB_SHA"
+            echo "- exit_code: $code"
+            echo "- finished_at: $(date -u +%FT%TZ)"
+            echo
+            echo '```text'
+            tail -n 260 /tmp/stage5-retry.log
+            echo '```'
+          } > docs/backtests/STAGE5_LONG_PULLBACK_BACKTEST_RETRY_REPORT.md
+          exit $code
+
+      - name: Commit results
+        if: always()
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/backtests/STAGE5_LONG_PULLBACK_BACKTEST_RETRY_REPORT.md
+          git add docs/backtests/BITGET_5SYMBOL_OLDER89D_LONG_PULLBACK_RETEST_STAGE5* 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo 'No result changes'
+            exit 0
+          fi
+          git commit -m 'test: record stage-five long pullback retry [skip ci]'
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
