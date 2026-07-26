@@ -426,6 +426,7 @@ function patchTech(source: string): string {
 export function sixRequestedFixesPatch(): Plugin {
   return {
     name: 'six-requested-fixes-patch',
+    enforce: 'pre',
     transform(source, id) {
       const normalized = id.replace(/\\/g, '/').split('?')[0];
 
