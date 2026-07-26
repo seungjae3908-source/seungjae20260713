@@ -543,9 +543,57 @@ function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
         dataAsOf,
       ),
     );
+  const macdSignals = items
+    .filter((i) => i.analyzed.macdCrossUp || i.analyzed.macdCrossDown)
+    .sort(
+      (a, b) =>
+        Math.max(b.analyzed.bullScore, b.analyzed.bearScore) -
+        Math.max(a.analyzed.bullScore, a.analyzed.bearScore),
+    )
+    .slice(0, GROUP_LIMIT)
+    .map((i) => {
+      const bullish =
+        i.analyzed.macdCrossUp &&
+        (!i.analyzed.macdCrossDown ||
+          i.analyzed.bullScore >= i.analyzed.bearScore);
+      return makeCandidate(
+        i,
+        bullish ? 'buy' : 'sell',
+        bullish ? i.analyzed.bullScore : i.analyzed.bearScore,
+        bullish ? bullBasis(i.analyzed) : bearBasis(i.analyzed),
+        bullish
+          ? 'MACD 상향 전환 관찰 후보(강한 매수 신호 아님)'
+          : 'MACD 하향 전환 관찰 후보(강한 매도 신호 아님)',
+        dataAsOf,
+      );
+    });
+
+  const volumeSignals = items
+    .filter((i) => i.analyzed.volRatio != null && i.analyzed.volRatio >= 1.5)
+    .sort(
+      (a, b) =>
+        (b.analyzed.volRatio ?? 0) - (a.analyzed.volRatio ?? 0),
+    )
+    .slice(0, GROUP_LIMIT)
+    .map((i) => {
+      const bullish = i.analyzed.bullScore >= i.analyzed.bearScore;
+      return makeCandidate(
+        i,
+        bullish ? 'buy' : 'sell',
+        bullish ? i.analyzed.bullScore : i.analyzed.bearScore,
+        bullish ? bullBasis(i.analyzed) : bearBasis(i.analyzed),
+        bullish
+          ? '거래량 확대와 상승 우위가 함께 나타난 관찰 후보'
+          : '거래량 확대와 하락 우위가 함께 나타난 관찰 후보',
+        dataAsOf,
+      );
+    });
+
   return [
     { key: 'buy', label: '매수 후보', candidates: buy },
     { key: 'sell', label: '매도 후보', candidates: sell },
+    { key: 'macd', label: 'MACD 전환', candidates: macdSignals },
+    { key: 'volume', label: '거래량 확대', candidates: volumeSignals },
   ];
 }
 
