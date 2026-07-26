@@ -59,29 +59,17 @@ router.use('/', portfolioRouter);
 // 관리자 라우터 내부에서도 회원·관리자 검사를 다시 수행합니다.
 router.use('/admin', adminRouter);
 
+// 이 아래 기능은 모두 승인된 준회원 이상만 접근합니다.
 router.use(requireMember);
 router.use('/debug', requireAdmin, providerDebugRouter);
-
-// 승인된 준회원 이상은 관심종목·알림·설정 백업을 사용할 수 있습니다.
-router.use('/notifications', pushRouter);
-router.use('/push', pushRouter);
-router.use('/watchlist', watchlistRouter);
 
 // 실제 주식 자동매매 API는 관리자만 접근합니다.
 router.use('/stocks/auto-trade', requireAdmin);
 
-// 기본·고급 주식 정보는 승인된 준회원 이상에게 제공합니다.
-router.use('/stocks/special-feed', stocksRouter);
-router.use('/stocks/:ticker/rating', stocksRouter);
-router.use('/stocks/:ticker/financials', stocksRouter);
-router.use('/stocks/:ticker/risk', stocksRouter);
-router.use('/stocks/:ticker/filings', stocksRouter);
-router.use('/stocks/:ticker/disclosures', stocksRouter);
-router.use('/stocks/:ticker/news', stocksRouter);
-router.use('/stocks/:ticker/market-flow', stocksRouter);
-router.use('/stocks/:ticker/short-selling', stocksRouter);
+// 관심종목·알림·설정 백업과 일반 주식 정보는 준회원 이상에게 제공합니다.
+router.use('/', pushRouter);
+router.use('/', watchlistRouter);
 router.use('/stocks', stocksRouter);
-
 router.use('/', secRouter);
 router.use('/backup', backupRouter);
 
