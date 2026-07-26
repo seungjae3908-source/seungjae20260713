@@ -1,0 +1,132 @@
+name: Stage 6 forward shadow smoke retry
+
+on:
+  push:
+    branches:
+      - agent/forward-shadow-validation-stage6-20260726
+    paths:
+      - .github/workflows/stage6-forward-shadow-smoke-retry.yml
+      - api-server/src/services/bitget-market-context.service.ts
+      - api-server/src/services/bitget-forward-shadow.service.ts
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Run CommonJS smoke tests
+        id: smoke
+        continue-on-error: true
+        env:
+          BITGET_CONTEXT_DATA_DIR: /tmp/stage6-context
+          BITGET_FORWARD_SHADOW_DATA_DIR: /tmp/stage6-shadow
+          BITGET_CONTEXT_COLLECTOR_ENABLED: 'false'
+          BITGET_FORWARD_SHADOW_ENABLED: 'false'
+          BITGET_CONTEXT_SYMBOLS: BTCUSDT
+        run: |
+          mkdir -p docs/backtests
+          set +e
+          pnpm --dir api-server exec esbuild src/services/bitget-market-context.service.ts --bundle --platform=node --format=cjs --outfile=/tmp/stage6-context.cjs > /tmp/stage6-smoke.log 2>&1
+          context_code=$?
+          pnpm --dir api-server exec esbuild src/services/bitget-forward-shadow.service.ts --bundle --platform=node --format=cjs --outfile=/tmp/stage6-forward.cjs >> /tmp/stage6-smoke.log 2>&1
+          forward_code=$?
+          if [ "$context_code" -eq 0 ] && [ "$forward_code" -eq 0 ]; then
+            node >> /tmp/stage6-smoke.log 2>&1 <<'NODE'
+          const assert = require('node:assert/strict');
+          const { readFile } = require('node:fs/promises');
+          const context = require('/tmp/stage6-context.cjs');
+          const forward = require('/tmp/stage6-forward.cjs');
+
+          assert.equal(forward.FORWARD_SHADOW_POLICY.startingCapitalKRW, 300000);
+          assert.equal(forward.FORWARD_SHADOW_POLICY.leverage, 5);
+          assert.deepEqual([...forward.FORWARD_SHADOW_POLICY.entrySplits], [0.3, 0.3, 0.4]);
+          assert.equal(forward.FORWARD_SHADOW_POLICY.realOrdersEnabled, false);
+
+          const short = forward.evaluateLongPullbackCandles([]);
+          assert.equal(short.eligible, false);
+          assert.ok(short.reasons.includes('INSUFFICIENT_CANDLES'));
+
+          const candles = Array.from({ length: 260 }, (_, index) => {
+            const wave = Math.sin(index / 4) * 0.35;
+            const close = 100 + index * 0.025 + wave;
+            return {
+              time: 1700000000000 + index * 900000,
+              open: close - 0.08,
+              high: close + 0.25,
+              low: close - 0.25,
+              close,
+              volume: 1000 + (index % 9) * 20,
+              quoteVolume: close * 1000,
+            };
+          });
+          const technical = forward.evaluateLongPullbackCandles(candles);
+          assert.ok(Number.isFinite(technical.score));
+          assert.ok(Array.isArray(technical.reasons));
+          assert.equal(technical.candleTime, candles.at(-1).time);
+
+          (async () => {
+            const collected = await context.collectBitgetMarketContextOnce(['BTCUSDT']);
+            assert.equal(collected.failures.length, 0, JSON.stringify(collected.failures));
+            assert.equal(collected.collected.length, 1);
+            const day = collected.collected[0].collectedAt.slice(0, 10);
+            const raw = await readFile(`/tmp/stage6-context/${day}/BTCUSDT.jsonl`, 'utf8');
+            assert.ok(raw.includes('bitget-market-context.v2'));
+
+            const run = await forward.runForwardShadowOnce();
+            assert.ok(run.processed >= 1 || run.skipped === 'NO_CONTEXT_SNAPSHOTS');
+            const status = await forward.getForwardShadowStatus();
+            assert.equal(status.mode, 'FORWARD_SHADOW');
+            assert.equal(status.realOrdersEnabled, false);
+            assert.equal(status.policy.startingCapitalKRW, 300000);
+            console.log(JSON.stringify({ collected: collected.collected.length, run, account: status.account }, null, 2));
+          })().catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+          NODE
+            code=$?
+          else
+            code=1
+          fi
+          {
+            echo '# Stage 6 CommonJS smoke retry'
+            echo
+            echo "- commit: $GITHUB_SHA"
+            echo "- exit_code: $code"
+            echo "- finished_at: $(date -u +%FT%TZ)"
+            echo
+            echo '```text'
+            tail -n 260 /tmp/stage6-smoke.log
+            echo '```'
+          } > docs/backtests/STAGE6_FORWARD_SHADOW_SMOKE_RETRY.md
+          exit $code
+
+      - name: Commit report
+        if: always()
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/backtests/STAGE6_FORWARD_SHADOW_SMOKE_RETRY.md
+          if git diff --cached --quiet; then
+            echo 'No report changes'
+          else
+            git commit -m 'test: record stage-six smoke retry [skip ci]'
+            git push
+          fi
