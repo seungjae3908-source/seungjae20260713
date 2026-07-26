@@ -46,7 +46,7 @@ function centerSimpleHeader(source: string, title: string): string {
 }
 
 function patchStockDetailTitle(source: string): string {
-  const titleIndex = source.indexOf('{companyName}</h1>');
+  const titleIndex = source.indexOf('{companyName');
   if (titleIndex < 0) return source;
   const headerStart = source.lastIndexOf('<header', titleIndex);
   const headerEnd = source.indexOf('</header>', titleIndex);
