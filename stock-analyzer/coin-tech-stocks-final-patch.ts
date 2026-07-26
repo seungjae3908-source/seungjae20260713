@@ -4,8 +4,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function centerSimpleHeader(source: string, title: string): string {
-  const titlePattern = new RegExp(`<h1 className="[^"]*">\\s*${escapeRegExp(title)}\\s*<\\/h1>`);
+function centerDynamicHeader(source: string, titleText: string): string {
+  const titlePattern = new RegExp(
+    `<h1 className="[^"]*">([\\s\\S]*?${escapeRegExp(titleText)})<\\/h1>`,
+  );
   const titleMatch = titlePattern.exec(source);
   if (!titleMatch) return source;
 
@@ -19,16 +21,17 @@ function centerSimpleHeader(source: string, title: string): string {
 
   segment = segment.replace(
     /<header className="[^"]*">/,
-    '<header className="relative flex min-h-[58px] w-full items-center justify-center px-12 text-center">',
+    '<header className="relative flex min-h-[68px] w-full items-center justify-center px-14 text-center">',
   );
 
   let controlIndex = 0;
   segment = segment.replace(/className="[^"]*h-9 w-9[^"]*"/g, (match) => {
-    const replacement = controlIndex === 0
-      ? 'className="absolute left-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card"'
-      : controlIndex === 1
-        ? 'className="absolute right-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card"'
-        : match;
+    const replacement =
+      controlIndex === 0
+        ? 'className="absolute left-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card"'
+        : controlIndex === 1
+          ? 'className="absolute right-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card"'
+          : match;
     controlIndex += 1;
     return replacement;
   });
@@ -40,11 +43,15 @@ function centerSimpleHeader(source: string, title: string): string {
 
   segment = segment.replace(
     /<div className="(?:min-w-0\s+)?text-center">/,
-    '<div className="min-w-0 text-center">',
+    '<div className="w-full min-w-0 text-center">',
   );
   segment = segment.replace(
     titlePattern,
-    `<h1 className="whitespace-nowrap text-center text-lg font-extrabold">${title}</h1>`,
+    '<h1 className="whitespace-nowrap text-center text-lg font-extrabold leading-tight">$1</h1>',
+  );
+  segment = segment.replace(
+    /<p className="text-\[11px\] font-bold text-muted-foreground">/,
+    '<p className="mt-1 break-keep text-center text-[11px] font-bold leading-4 text-muted-foreground">',
   );
 
   return source.slice(0, start) + segment + source.slice(end);
@@ -93,6 +100,30 @@ function patchStockInfo(source: string): string {
   return code;
 }
 
+function patchScannerAuto(source: string): string {
+  let code = source;
+  const start = code.indexOf('{viewMode === "auto" && (');
+  if (start < 0) return code;
+
+  const firstSection = code.indexOf('<section', start);
+  if (firstSection < 0) return code;
+
+  let intro = code.slice(start, firstSection);
+  intro = intro
+    .replace(/\s*<AdminAutoTradeMonitor\s*\/>/g, '')
+    .replace(
+      /\s*<ChartBroadcastPanel\s+market=\{market\}\s+onSignalChange=\{setChartTradeSignal\}\s*\/>/g,
+      '',
+    );
+
+  code = code.slice(0, start) + intro + code.slice(firstSection);
+  code = code.replace(
+    "import { AdminAutoTradeMonitor } from '@/components/admin-auto-trade-monitor';\n",
+    '',
+  );
+  return code;
+}
+
 function patchStocks(source: string): string {
   let code = source.replace(
     '`/market/movers?market=${mode.stockMarket}&_ts=${Date.now()}`',
@@ -138,9 +169,9 @@ export function coinTechStocksFinalPatch(): Plugin {
       let code = source;
 
       if (normalized.endsWith('/src/pages/stock-info.tsx')) code = patchStockInfo(code);
-      if (normalized.endsWith('/src/pages/signal-scan.tsx')) code = centerSimpleHeader(code, '신호검색');
-      if (normalized.endsWith('/src/pages/chart-relay.tsx')) code = centerSimpleHeader(code, '차트중계');
-      if (normalized.endsWith('/src/pages/auto-trade.tsx')) code = centerSimpleHeader(code, '자동매매');
+      if (normalized.endsWith('/src/pages/signal-scan.tsx')) code = centerDynamicHeader(code, '신호검색');
+      if (normalized.endsWith('/src/pages/chart-relay.tsx')) code = centerDynamicHeader(code, '차트중계');
+      if (normalized.endsWith('/src/pages/scanner.tsx')) code = patchScannerAuto(code);
       if (normalized.endsWith('/src/pages/stocks.tsx')) code = patchStocks(code);
       if (normalized.endsWith('/src/pages/detail.tsx')) code = patchStockDetailTitle(code);
 
