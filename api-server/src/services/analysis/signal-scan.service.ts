@@ -329,29 +329,28 @@ async function collectStock(market: 'KR' | 'US'): Promise<{ items: RawItem[]; sc
 async function collectCoinSpot(): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
   const tickers = await fetchUpbitTopTickers(COIN_SPOT_POOL);
   let providerErrors = 0;
-  const settled = await Promise.allSettled(
-    tickers.map(async (t): Promise<RawItem | null> => {
+  const items: RawItem[] = [];
+  // Upbit candle API permits only a small request burst. Sending the entire pool
+  // concurrently causes most symbols to fail with rate-limit responses.
+  for (const t of tickers) {
+    try {
       const candles = await fetchUpbitCandles(t.symbol, 200, '1D');
       const analyzed = analyze(candles);
-      if (!analyzed || t.price == null) return null;
-      return {
-        ticker: t.symbol,
-        name: t.symbol,
-        price: t.price,
-        changePercent: t.changePercent,
-        currency: 'KRW',
-        market: 'spot',
-        analyzed,
-      };
-    }),
-  );
-  const items: RawItem[] = [];
-  for (const r of settled) {
-    if (r.status === 'fulfilled') {
-      if (r.value) items.push(r.value);
-    } else {
+      if (analyzed && t.price != null) {
+        items.push({
+          ticker: t.symbol,
+          name: t.symbol,
+          price: t.price,
+          changePercent: t.changePercent,
+          currency: 'KRW',
+          market: 'spot',
+          analyzed,
+        });
+      }
+    } catch {
       providerErrors += 1;
     }
+    await new Promise((resolve) => setTimeout(resolve, 120));
   }
   return { items, scanned: tickers.length, providerErrors };
 }
