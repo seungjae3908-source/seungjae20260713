@@ -140,6 +140,7 @@ type SignalZoneRect = {
   height: number;
   color: string;
   dashed: boolean;
+  prominent: boolean;
 };
 
 type PortfolioChartPosition = {
@@ -1625,6 +1626,23 @@ const RelayChart = memo(function RelayChart({
     }, 0);
     return () => window.clearTimeout(timer);
   }, [candles, interval, sourceKey]);
+  const detectedChartSignals = useMemo(
+    () =>
+      dedupeSignalOccurrences(signals)
+        .filter(
+          (signal) =>
+            signal.kind === 'chart' ||
+            signal.kind === 'candle' ||
+            /골든크로스|데드크로스/.test(signal.name),
+        )
+        .sort(
+          (left, right) =>
+            (toEpochMilliseconds(right.occurredAt) ?? 0) -
+            (toEpochMilliseconds(left.occurredAt) ?? 0),
+        )
+        .slice(0, 8),
+    [signals],
+  );
   const lowerIndicators = useMemo(
     () =>
       ([
@@ -2055,7 +2073,12 @@ const RelayChart = memo(function RelayChart({
 
     const latestCandleTime = Number(candles.at(-1)!.time);
     const candidates = dedupeSignalOccurrences(signals)
-      .filter((signal) => signal.kind === 'chart' || signal.kind === 'candle')
+      .filter(
+        (signal) =>
+          signal.kind === 'chart' ||
+          signal.kind === 'candle' ||
+          /골든크로스|데드크로스/.test(signal.name),
+      )
       .map((signal) => {
         const range = signalDisplayRange(signal, latestCandleTime);
         if (!range) return null;
@@ -2138,6 +2161,9 @@ const RelayChart = memo(function RelayChart({
         dashed:
           item.signal.stage === 'START' ||
           item.signal.stage === 'DEVELOPING',
+        prominent:
+          signalImportance(item.signal.importance) === 'high' ||
+          /골든크로스|데드크로스|쌍바닥|쌍봉|이중바닥|이중천장/.test(item.signal.name),
       });
     }
     setSignalZones(rects);
@@ -2504,12 +2530,13 @@ const RelayChart = memo(function RelayChart({
               width: zone.width,
               height: zone.height,
               minHeight: 12,
-              border: `1px ${zone.dashed ? 'dashed' : 'solid'} ${zone.color}`,
-              backgroundColor: `${zone.color}18`,
+              border: `${zone.prominent ? 3 : 2}px ${zone.dashed ? 'dashed' : 'solid'} ${zone.color}`,
+              backgroundColor: `${zone.color}${zone.prominent ? '40' : '2b'}`,
+              boxShadow: zone.prominent ? `0 0 0 2px ${zone.color}33, 0 0 16px ${zone.color}66` : 'none',
             }}
             aria-label={`${zone.label} 신호 구간 상세`}
           >
-            {zone.width >= 72 && zone.height >= 24 && (
+            {(zone.prominent || (zone.width >= 56 && zone.height >= 20)) && (
               <span
                 className="absolute left-1 top-1 max-w-[calc(100%-8px)] truncate rounded px-1.5 py-0.5 text-[8px] font-black text-white"
                 style={{ backgroundColor: `${zone.color}cc` }}
@@ -2520,6 +2547,40 @@ const RelayChart = memo(function RelayChart({
           </button>
         ))}
       </div>
+      {detectedChartSignals.length > 0 && (
+        <div className="relative z-[3] border-y border-card-border bg-background/95 px-2 py-2">
+          <p className="text-[10px] font-black text-muted-foreground">감지된 차트 신호</p>
+          <div className="mt-1.5 flex gap-1.5 overflow-x-auto [scrollbar-width:none]">
+            {detectedChartSignals.map((signal) => {
+              const bearish = /하락|매도|약세|이탈|쌍봉|이중천장|석별|유성|데드크로스/.test(signal.name);
+              const label =
+                signal.kind === 'candle'
+                  ? `${signal.name} 캔들 감지`
+                  : /골든크로스|데드크로스/.test(signal.name)
+                    ? `${signal.name} 감지`
+                    : `${signal.name} 패턴 감지`;
+              return (
+                <button
+                  key={signal.id}
+                  type="button"
+                  onClick={() => onSignalSelect(signal)}
+                  className="shrink-0 rounded-full border px-3 py-1.5 text-[10px] font-black shadow-sm"
+                  style={{
+                    borderColor: bearish ? '#3b82f6' : '#ef4444',
+                    backgroundColor: bearish ? '#3b82f61f' : '#ef44441f',
+                    color: bearish ? '#3b82f6' : '#ef4444',
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-1 text-[9px] font-bold text-muted-foreground">
+            누르면 해당 캔들 구간으로 이동하고 상세 설명이 열립니다.
+          </p>
+        </div>
+      )}
       <LowerIndicatorPanel
         indicators={indicators}
         enabled={lowerIndicators}
