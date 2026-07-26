@@ -5,7 +5,9 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
+import { membershipUiRoutingPatch } from './membership-ui-routing-patch';
 import { chartRelayFeaturePatch } from './chart-relay-feature-patch';
+import { chartRelayAutoOrderPatch } from './chart-relay-auto-order-patch';
 import { chartRelayFocusedMarketPatch } from './chart-relay-focused-market-patch';
 import { chartRelaySignalArrowPatch } from './chart-relay-signal-arrow-patch';
 import { chartRelayMobileUiCleanupPatch } from './chart-relay-mobile-ui-cleanup-patch';
@@ -30,7 +32,9 @@ export default defineConfig({
   base: basePath,
 
   plugins: [
+    membershipUiRoutingPatch(),
     chartRelayFeaturePatch(),
+    chartRelayAutoOrderPatch(),
     chartRelayFocusedMarketPatch(),
     chartRelaySignalArrowPatch(),
     chartRelayMobileUiCleanupPatch(),
