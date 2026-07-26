@@ -2506,7 +2506,7 @@ const RelayChart = memo(function RelayChart({
       </div>
 
       {chartLevels.length > 0 && (
-        <div className="flex gap-1.5 overflow-x-auto border-b border-card-border px-2 py-2 [scrollbar-width:none]">
+        <div className="relative z-[3] flex gap-1.5 overflow-x-auto border-b border-card-border px-2 py-2 [scrollbar-width:none]">
           {chartLevels.map((level) => (
             <button
               key={level.id}
@@ -2583,16 +2583,19 @@ const RelayChart = memo(function RelayChart({
                   }}
                   className="shrink-0 rounded-full border-2 px-3 py-1.5 text-[10px] font-black shadow-sm"
                   style={{
-                    borderColor: bearish ? '#3b82f6' : '#ef4444',
+                    borderColor:
+                      focusedPatternName === normalizeSignalName(signal.name)
+                        ? bearish
+                          ? '#3b82f6'
+                          : '#ef4444'
+                        : '#334155',
                     backgroundColor:
                       focusedPatternName === normalizeSignalName(signal.name)
                         ? bearish
-                          ? '#3b82f650'
-                          : '#ef444450'
-                        : bearish
-                          ? '#3b82f61f'
-                          : '#ef44441f',
-                    color: bearish ? '#3b82f6' : '#ef4444',
+                          ? '#3b82f6'
+                          : '#ef4444'
+                        : '#020617',
+                    color: '#ffffff',
                   }}
                 >
                   {label}
@@ -3466,19 +3469,7 @@ export default function ChartRelayPage() {
             선택
           </button>
         </div>
-        <p className="mt-1.5 text-center text-[11px] font-bold text-muted-foreground">
-          현재 종목: <span className="font-black text-foreground">{symbol || '해당 종목 없음'}</span>
-          {' · '}실시간: <span title={realtime.error ?? undefined}>{realtimeLabel}</span>
-          {latestPrice != null && (
-            <>
-              {' · '}
-              <span className="font-black text-foreground">{formatPrice(latestPrice, asset)}</span>
-              {latestBarChangePercent != null
-                ? ` · 직전 봉 대비 ${latestBarChangePercent >= 0 ? '+' : ''}${latestBarChangePercent.toFixed(2)}%`
-                : ''}
-            </>
-          )}
-        </p>
+        {/* 검색창 아래의 중복 종목명·시세 줄은 제거한다. 차트와 AI 생중계에서만 표시한다. */}
         <div className="mt-2 grid grid-cols-3 gap-2">
           <FavoriteButton
             symbol={symbol}
@@ -3616,6 +3607,7 @@ export default function ChartRelayPage() {
             {tab === 'ai' && (
               <LiveBroadcastPanel
                 realtimeLabel={realtimeLabel}
+                symbol={symbol}
                 plan={plan}
                 signals={signals}
                 aiHistory={aiHistory}
@@ -4351,7 +4343,7 @@ function SignalHistoryModal({
   return (
     <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/60 p-3" onClick={onClose}>
       <div
-        className="max-h-[88vh] w-full max-w-md overflow-y-auto rounded-2xl border border-card-border bg-background p-4"
+        className="max-h-[72dvh] w-[92%] max-w-sm overflow-y-auto rounded-2xl border border-card-border bg-background p-3 text-center"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
@@ -4458,6 +4450,7 @@ function SignalHistoryModal({
 
 function LiveBroadcastPanel({
   realtimeLabel,
+  symbol,
   plan,
   signals,
   aiHistory,
@@ -4467,6 +4460,7 @@ function LiveBroadcastPanel({
   interval,
 }: {
   realtimeLabel: string;
+  symbol: string;
   plan: AiPlan | null;
   signals: ChartSignal[];
   aiHistory: AiPlanChange[];
@@ -4511,7 +4505,9 @@ function LiveBroadcastPanel({
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
             <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
           </span>
-          <p className="text-[10px] font-black text-emerald-500">LIVE · {realtimeLabel}</p>
+          <p className="text-center text-[10px] font-black text-emerald-500">
+            LIVE · {realtimeLabel} · <span className="text-foreground">{symbol}</span>
+          </p>
         </div>
         <h2 className={cn('text-center text-base font-black', tone)}>{title}</h2>
         <p className="text-center text-[10px] font-bold text-muted-foreground">
@@ -4520,8 +4516,8 @@ function LiveBroadcastPanel({
             ? ''
             : ` · 직전 봉 대비 ${latestBarChangePercent >= 0 ? '+' : ''}${latestBarChangePercent.toFixed(2)}%`}
         </p>
-        <span className="rounded-full border border-card-border bg-background px-3 py-1 text-[10px] font-black">
-          {plan?.view ?? '중립'}
+        <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[10px] font-black text-emerald-500">
+          라이브 방송
         </span>
       </div>
       <div className="p-4 text-center">
@@ -4933,11 +4929,12 @@ function SignalModal({
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-3" onClick={onClose}>
       <div
-        className="max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl border border-card-border bg-card p-4"
+        className="max-h-[68dvh] w-[92%] max-w-sm overflow-y-auto rounded-2xl border border-card-border bg-card p-3 text-center"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+        <div className="grid grid-cols-[32px_1fr_32px] items-start gap-2">
+          <span aria-hidden="true" />
+          <div className="min-w-0 text-center">
             <h3 className="text-base font-black">{signal.name}</h3>
             <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">
               {signal.occurredAt ? formatTime(signal.occurredAt) : '시각 미상'} · {intervalLabel}봉
@@ -4948,7 +4945,7 @@ function SignalModal({
             type="button"
             onClick={onClose}
             aria-label="닫기"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-card-border bg-background"
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-card-border bg-background"
           >
             <X className="h-4 w-4" />
           </button>
@@ -5022,13 +5019,14 @@ function ChartLevelModal({
     intervalsFor(asset).find((item) => item.key === interval)?.label ?? interval;
 
   return (
-    <div className="fixed inset-0 z-[95] flex items-end justify-center bg-black/60 p-3" onClick={onClose}>
+    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/60 p-3" onClick={onClose}>
       <div
-        className="w-full max-w-md rounded-2xl border border-card-border bg-background p-4"
+        className="max-h-[68dvh] w-[92%] max-w-sm overflow-y-auto rounded-2xl border border-card-border bg-background p-3 text-center"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-3">
-          <div>
+        <div className="grid grid-cols-[32px_1fr_32px] items-start gap-2">
+          <span aria-hidden="true" />
+          <div className="text-center">
             <p className="text-[10px] font-black text-muted-foreground">{intervalLabel}봉 가격선 설명</p>
             <h3 className="mt-1 text-base font-black" style={{ color: level.color }}>
               {level.label} · {formatPrice(level.price, asset)}
@@ -5069,8 +5067,8 @@ function ChartLevelModal({
 function ModalBlock({ title, text }: { title: string; text: string }) {
   return (
     <div>
-      <p className="text-[11px] font-black text-muted-foreground">{title}</p>
-      <p className="mt-1 break-keep text-xs font-bold leading-6 text-foreground">{text || '설명이 없습니다.'}</p>
+      <p className="text-center text-[10px] font-black text-muted-foreground">{title}</p>
+      <p className="mt-1 break-keep text-center text-[11px] font-bold leading-5 text-foreground">{text || '설명이 없습니다.'}</p>
     </div>
   );
 }
