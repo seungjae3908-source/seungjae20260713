@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Stage five: long-only breakout pullback/retest on a separate older window.
 
-Public Bitget data only. No account, API key or order endpoint. Historical OI and
-long/short ratios are deliberately not fabricated; the runtime collector stores
-those fields for future forward validation.
+Public Bitget market, mark and index candles only. Funding is explicitly excluded
+because the public funding-history endpoint did not return this older window.
+Historical OI and long/short ratios are not fabricated; the runtime collector
+stores them for later forward validation.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ MAX_TRADES_PER_RUN = 12
 OUT = Path("docs/backtests")
 STEM = "BITGET_5SYMBOL_OLDER89D_LONG_PULLBACK_RETEST_STAGE5"
 STRATEGIES = {
-    "HARD_VETO_LONG_REFERENCE": dict(
+    "MARK_INDEX_LONG_REFERENCE": dict(
         kind="improved", threshold=85, gap=20, entry=(.4, .3, .3),
         exit=(.3, .3, .4), targets=(1.5, 2.5, 4.0), stop="structure",
         add=True, hold=192, cooldown=24,
@@ -69,6 +70,20 @@ def window_bounds() -> tuple[int, int]:
     return end - DAYS * 86_400_000, end
 
 
+def enrich_without_funding(base: ModuleType, market: pd.DataFrame,
+                           mark: pd.DataFrame, index: pd.DataFrame) -> pd.DataFrame:
+    x = base.features(market)
+    x = x.join(mark[["open", "high", "low", "close"]].add_prefix("mark_"), how="inner")
+    x = x.join(index[["open", "high", "low", "close"]].add_prefix("index_"), how="inner")
+    x["market_mark_gap"] = (x.close - x.mark_close) / x.mark_close
+    x["mark_index_premium"] = (x.mark_close - x.index_close) / x.index_close
+    x["premium_med"] = x.mark_index_premium.abs().rolling(96).median()
+    x["premium_mad"] = (
+        (x.mark_index_premium.abs() - x.premium_med).abs().rolling(96).median()
+    )
+    return x.replace([np.inf, -np.inf], np.nan)
+
+
 def add_pullback_features(frame: pd.DataFrame) -> pd.DataFrame:
     x = frame.copy()
     breakout = (x.close > x.hi20) & (x.close > x.open)
@@ -80,21 +95,21 @@ def add_pullback_features(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def context_safe(row: pd.Series) -> bool:
-    needed = (
-        "mark_close", "index_close", "funding_rate", "market_mark_gap",
-        "mark_index_premium", "premium_med", "premium_mad",
-    )
+    needed = ("mark_close", "index_close", "market_mark_gap",
+              "mark_index_premium", "premium_med", "premium_mad")
     if any(pd.isna(row.get(name)) for name in needed):
         return False
-    median = float(row.premium_med)
-    mad = float(row.premium_mad)
-    premium_limit = max(.0010, median + 3 * mad)
+    premium_limit = max(.0010, float(row.premium_med) + 3 * float(row.premium_mad))
     return (
         abs(float(row.market_mark_gap)) <= .0012
         and abs(float(row.mark_index_premium)) <= premium_limit
-        and float(row.funding_rate) <= .00050
-        and abs(float(row.funding_rate)) <= .0015
     )
+
+
+def reference_score(base: ModuleType, row: pd.Series) -> tuple[int, int, str]:
+    lo, sh, regime = base.improved_score(row)
+    allowed = context_safe(row) and regime == "BULL" and lo >= 85 and sh <= 50
+    return (lo if allowed else 0), 0, regime
 
 
 def pullback_score(base: ModuleType, row: pd.Series) -> tuple[int, int, str]:
@@ -102,7 +117,7 @@ def pullback_score(base: ModuleType, row: pd.Series) -> tuple[int, int, str]:
     needed = (
         "atr", "adx", "h1_adx", "h1_slope", "h4_slope", "rsi", "hist",
         "vr", "e20", "e50", "range_atr", "recent_breakout", "retest_level",
-        "prev_close", "prev_low", "prev_e20", "prev_e50", "prev_hist",
+        "prev_close", "prev_low", "prev_e20", "prev_e50", "prev_hist", "prev_rsi",
     )
     if any(pd.isna(row.get(name)) for name in needed) or not context_safe(row):
         return 0, 0, "DATA_OR_CONTEXT_BLOCKED"
@@ -137,9 +152,7 @@ def pullback_score(base: ModuleType, row: pd.Series) -> tuple[int, int, str]:
     )
     quality = (
         bool(row.recent_breakout)
-        and previous_touched
-        and reclaimed
-        and momentum_recovery
+        and previous_touched and reclaimed and momentum_recovery
         and .05 <= distance_atr <= .75
         and .75 <= float(row.vr) <= 1.70
         and float(row.range_atr) <= 1.60
@@ -147,32 +160,25 @@ def pullback_score(base: ModuleType, row: pd.Series) -> tuple[int, int, str]:
     return (lo if trend and quality else 0), 0, regime
 
 
-def run_fold(
-    stage4: ModuleType,
-    stage3: ModuleType,
-    base: ModuleType,
-    symbol: str,
-    frame: pd.DataFrame,
-    funding: pd.DataFrame,
-    mark: pd.DataFrame,
-    strategy: str,
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def run_fold(stage3: ModuleType, base: ModuleType, symbol: str,
+             frame: pd.DataFrame, strategy: str, start: pd.Timestamp,
+             end: pd.Timestamp) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     sliced = frame.loc[(frame.index >= start) & (frame.index < end)].copy()
     original_features, original_score = base.features, base.score
     try:
         base.features = lambda data: data
-        if strategy == "HARD_VETO_LONG_REFERENCE":
-            base.score = lambda cfg, row: stage4.hard_veto_score(base, row, "LONG_ONLY")
-        else:
-            base.score = lambda cfg, row: pullback_score(base, row)
+        base.score = (
+            (lambda cfg, row: reference_score(base, row))
+            if strategy == "MARK_INDEX_LONG_REFERENCE"
+            else (lambda cfg, row: pullback_score(base, row))
+        )
         result, generated = base.simulate(symbol, sliced, strategy, STRATEGIES[strategy])
     finally:
         base.features, base.score = original_features, original_score
     generated = sorted(generated, key=lambda trade: trade["closed_at"])[:MAX_TRADES_PER_RUN]
     for trade in generated:
-        stage3.add_funding(trade, funding, mark)
+        trade["funding_pnl_krw"] = None
+        trade["funding_model"] = "EXCLUDED_UNAVAILABLE_FOR_WINDOW"
     return stage3.recalc(result, generated), generated
 
 
@@ -191,12 +197,10 @@ def aggregate(runs: list[dict[str, Any]], trades: list[dict[str, Any]], strategy
         ),
         average_return_pct=np.mean([run["return_pct"] for run in rr]),
         pooled_net_pnl_krw=sum(run["net_pnl_krw"] for run in rr),
-        trades=len(tt),
-        win_rate_pct=len(wins) / len(tt) * 100 if tt else 0,
+        trades=len(tt), win_rate_pct=len(wins) / len(tt) * 100 if tt else 0,
         profit_factor=gp / gl if gl else None,
         worst_maximum_drawdown_pct=min(run["maximum_drawdown_pct"] for run in rr),
         total_fees_krw=sum(run["total_fees_krw"] for run in rr),
-        total_funding_pnl_krw=sum(run["total_funding_pnl_krw"] for run in rr),
     )
 
 
@@ -205,10 +209,8 @@ def save(source: dict[str, Any], window_start: pd.Timestamp, window_end: pd.Time
          trades: list[dict[str, Any]]) -> None:
     aggregates = [aggregate(runs, trades, name) for name in STRATEGIES]
     primary = next(item for item in aggregates if item["strategy"] == "PULLBACK_RETEST_30_30_40")
-    oldest = sum(
-        run["net_pnl_krw"] for run in runs
-        if run["strategy"] == primary["strategy"] and run["fold"] == "FOLD_A_OLDEST"
-    )
+    oldest = sum(run["net_pnl_krw"] for run in runs
+                 if run["strategy"] == primary["strategy"] and run["fold"] == "FOLD_A_OLDEST")
     conditions = dict(
         combined_net_positive=primary["pooled_net_pnl_krw"] > 0,
         profit_factor_at_least_1_20=(primary["profit_factor"] or 0) >= 1.20,
@@ -219,11 +221,11 @@ def save(source: dict[str, Any], window_start: pd.Timestamp, window_end: pd.Time
     )
     now = datetime.now(timezone.utc).isoformat()
     summary = dict(
-        status="FIFTH_STAGE_LONG_PULLBACK_NOT_LIVE_READY",
-        generated_at=now,
+        status="FIFTH_STAGE_LONG_PULLBACK_NOT_LIVE_READY", generated_at=now,
         source=dict(exchange="Bitget", timeframe="15m", symbols=source,
                     validation_window=dict(start=window_start.isoformat(), end=window_end.isoformat()),
-                    endpoints=["history-candles", "history-mark-candles", "history-index-candles", "history-fund-rate"]),
+                    endpoints=["history-candles", "history-mark-candles", "history-index-candles"],
+                    funding="EXCLUDED_UNAVAILABLE_FOR_THIS_OLDER_WINDOW"),
         policy=dict(starting_capital_krw_per_run=300_000, max_planned_capital_krw=30_000,
                     leverage=5, primary_entry_splits=[.3, .3, .4], exit_splits=[.3, .3, .4],
                     fee_bps_per_fill=12, slippage_bps_per_fill=15,
@@ -232,8 +234,8 @@ def save(source: dict[str, Any], window_start: pd.Timestamp, window_end: pd.Time
         folds=[dict(name=name, start=start.isoformat(), end=end.isoformat()) for name, start, end in folds],
         aggregate=aggregates, runs=runs, pass_conditions=conditions, passed=all(conditions.values()),
         limitations=[
-            "Historical OI and long/short ratios are not fabricated; the runtime collector must build forward history.",
-            "The fifth-stage historical test uses price, volume, mark/index and funding only.",
+            "Funding is excluded rather than filled with a fabricated zero value.",
+            "Historical OI and long/short ratios are not fabricated; runtime collection builds forward history.",
             "All results are simulated and cannot justify live orders without forward shadow validation.",
         ],
     )
@@ -274,7 +276,8 @@ def save(source: dict[str, Any], window_start: pd.Timestamp, window_end: pd.Time
 - 원금 300,000원 / 거래당 최대 30,000원 / 5배
 - 기본 분할청산 30·30·40
 - 주 전략 분할진입 30·30·40, 비교안 40·30·30
-- 펀딩·마크·지수는 점수 가산 없이 차단에만 사용
+- 마크·지수 괴리는 점수 가산 없이 차단에만 사용
+- 과거 펀딩은 이 기간에 제공되지 않아 값을 만들지 않고 제외
 - 숏 신규진입 금지
 
 ## 전체 비교
@@ -307,19 +310,17 @@ def main() -> None:
     stage3 = stage4.load_stage3()
     base = stage3.load_base()
     session = requests.Session()
-    session.headers["User-Agent"] = "seungjae-long-pullback-stage5/1.0"
+    session.headers["User-Agent"] = "seungjae-long-pullback-stage5/2.0"
     start_ms, end_ms = window_bounds()
-    frames, marks, fundings, source = {}, {}, {}, {}
+    frames, source = {}, {}
     for symbol in SYMBOLS:
         market = stage4.fetch_candles(session, symbol, "/api/v2/mix/market/history-candles", start_ms, end_ms)
         mark = stage4.fetch_candles(session, symbol, "/api/v2/mix/market/history-mark-candles", start_ms, end_ms)
         index = stage4.fetch_candles(session, symbol, "/api/v2/mix/market/history-index-candles", start_ms, end_ms)
-        funding = stage4.fetch_funding(session, symbol, start_ms, end_ms)
-        frame = add_pullback_features(stage3.enrich(base, market, mark, index, funding))
-        frames[symbol], marks[symbol], fundings[symbol] = frame, mark, funding
+        frame = add_pullback_features(enrich_without_funding(base, market, mark, index))
+        frames[symbol] = frame
         source[symbol] = dict(candles=len(frame), period_start=frame.index[0].isoformat(),
-                              period_end=(frame.index[-1] + pd.Timedelta(minutes=15)).isoformat(),
-                              funding_records=len(funding))
+                              period_end=(frame.index[-1] + pd.Timedelta(minutes=15)).isoformat())
     common_start = max(frame.index[0] for frame in frames.values())
     common_end = min(frame.index[-1] for frame in frames.values()) + pd.Timedelta(minutes=15)
     span = (common_end - common_start) / 3
@@ -332,7 +333,7 @@ def main() -> None:
     for symbol, frame in frames.items():
         for fold_name, fold_start, fold_end in folds:
             for strategy in STRATEGIES:
-                result, generated = run_fold(stage4, stage3, base, symbol, frame, fundings[symbol], marks[symbol], strategy, fold_start, fold_end)
+                result, generated = run_fold(stage3, base, symbol, frame, strategy, fold_start, fold_end)
                 result.update(symbol=symbol, strategy=strategy, fold=fold_name,
                               fold_start=fold_start.isoformat(), fold_end=fold_end.isoformat())
                 runs.append(result)
