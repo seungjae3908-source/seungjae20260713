@@ -2442,8 +2442,8 @@ const RelayChart = memo(function RelayChart({
           'fixed inset-0 z-[80] overflow-y-auto p-2 [padding-bottom:max(12px,env(safe-area-inset-bottom))]',
       )}
     >
-      <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-2 border-b border-card-border px-2 py-2">
-        <div className="flex flex-wrap gap-1">
+      <div className="flex min-h-[52px] items-center gap-1 overflow-x-auto border-b border-card-border px-2 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={() => setChartType('candles')}
@@ -2467,23 +2467,23 @@ const RelayChart = memo(function RelayChart({
               );
             }}
             aria-label="가격축 방식"
-            className="rounded-lg border border-card-border bg-card px-2 py-1 text-[10px] font-black"
+            className="w-[112px] shrink-0 rounded-lg border border-card-border bg-card px-2 py-1 text-[10px] font-black"
           >
             <option value="normal">일반 가격축</option>
             <option value="logarithmic">로그 가격축</option>
             <option value="percentage">퍼센트 가격축</option>
           </select>
-          <span className="inline-flex items-center rounded-lg border border-card-border bg-card px-2 py-1 text-[10px] font-black text-primary">
+          <span className="inline-flex shrink-0 items-center justify-center rounded-lg border border-card-border bg-card px-2 py-1 text-[10px] font-black text-primary">
             {STANDARD_INTERVALS.find((item) => item.key === interval)?.label ?? interval}
           </span>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={onOpenSettings}
             aria-label="차트 설정"
             title="차트 설정"
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-card-border bg-card text-primary"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-card-border bg-card text-primary"
           >
             <Settings2 className="h-4 w-4" />
           </button>
@@ -2491,7 +2491,7 @@ const RelayChart = memo(function RelayChart({
             type="button"
             onClick={() => void toggleFullscreen()}
             aria-label={isFullscreen ? '전체화면 종료' : '차트 전체화면'}
-            className="flex h-9 items-center gap-1 rounded-lg border border-card-border bg-card px-2 text-[10px] font-black"
+            className="flex h-8 shrink-0 items-center gap-1 rounded-lg border border-card-border bg-card px-2 text-[10px] font-black"
           >
             {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             {isFullscreen ? '종료' : '전체화면'}
