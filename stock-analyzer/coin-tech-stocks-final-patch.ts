@@ -34,6 +34,11 @@ function centerSimpleHeader(source: string, title: string): string {
   });
 
   segment = segment.replace(
+    '<span className="absolute right-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card" />',
+    '<span aria-hidden="true" className="absolute right-0 top-1/2 h-9 w-9 -translate-y-1/2" />',
+  );
+
+  segment = segment.replace(
     /<div className="(?:min-w-0\s+)?text-center">/,
     '<div className="min-w-0 text-center">',
   );
