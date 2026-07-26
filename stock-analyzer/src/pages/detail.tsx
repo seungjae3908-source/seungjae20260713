@@ -8103,6 +8103,8 @@ function filingPlainSummary(item: AnyObj | undefined) {
     item.bodySummary,
     item.contentSummary,
     item.documentSummary,
+    item.summary,
+    item.message,
   );
   if (bodySummary) return bodySummary;
   const title = String(
@@ -8147,6 +8149,9 @@ function newsPlainSummary(item: AnyObj | undefined) {
     item.bodySummary,
     item.contentSummary,
     item.articleSummary,
+    item.summary,
+    item.description,
+    item.message,
   );
   if (bodySummary) return bodySummary;
   const source = String(
