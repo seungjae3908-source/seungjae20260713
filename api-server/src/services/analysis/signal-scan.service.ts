@@ -297,64 +297,94 @@ function makeCandidate(
 
 async function collectStock(market: 'KR' | 'US'): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
   const pool = CATALOG.filter((e) => e.market === market).slice(0, STOCK_POOL);
-  let providerErrors = 0;
-  const settled = await Promise.allSettled(
-    pool.map(async (entry): Promise<RawItem | null> => {
-      const [candles, quote] = await Promise.all([
-        MarketDataService.getCandles(entry.ticker, '1D'),
+  const settled = await Promise.all(
+    pool.map(async (entry) => {
+      const [quoteResult, intradayResult, dailyResult] = await Promise.allSettled([
         MarketDataService.getQuote(entry.ticker),
+        MarketDataService.getCandles(entry.ticker, '15m'),
+        MarketDataService.getCandles(entry.ticker, '1D'),
       ]);
-      const bars = toBars(candles as Bar[]);
-      const analyzed = analyze(bars);
-      if (!analyzed || !quote || !Number.isFinite(quote.price)) return null;
-      return {
-        ticker: entry.ticker,
-        name: entry.name,
-        price: quote.price,
-        changePercent: Number.isFinite(quote.changePercent) ? quote.changePercent : null,
-        currency: entry.currency,
-        market: entry.market,
-        analyzed,
-      };
+      if (
+        quoteResult.status === 'rejected' ||
+        !quoteResult.value ||
+        !Number.isFinite(quoteResult.value.price)
+      ) {
+        return { items: [] as RawItem[], errors: 1 };
+      }
+
+      const items: RawItem[] = [];
+      let errors = 0;
+      const candleResults = [intradayResult, dailyResult];
+      const timeframes: Array<'15m' | '1D'> = ['15m', '1D'];
+
+      candleResults.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          errors += 1;
+          return;
+        }
+        const analyzed = analyze(toBars(result.value as Bar[]));
+        if (!analyzed) return;
+        items.push({
+          ticker: entry.ticker,
+          name: entry.name,
+          price: quoteResult.value.price,
+          changePercent: Number.isFinite(quoteResult.value.changePercent)
+            ? quoteResult.value.changePercent
+            : null,
+          currency: entry.currency,
+          market: entry.market,
+          analyzed,
+          timeframe: timeframes[index],
+        });
+      });
+
+      return { items, errors };
     }),
   );
-  const items: RawItem[] = [];
-  for (const r of settled) {
-    if (r.status === 'fulfilled') {
-      if (r.value) items.push(r.value);
-    } else {
-      providerErrors += 1;
-    }
-  }
-  return { items, scanned: pool.length, providerErrors };
+
+  return {
+    items: settled.flatMap((result) => result.items),
+    scanned: pool.length,
+    providerErrors: settled.reduce((sum, result) => sum + result.errors, 0),
+  };
 }
 
 async function collectCoinSpot(): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
   const tickers = await fetchUpbitTopTickers(COIN_SPOT_POOL);
   let providerErrors = 0;
   const items: RawItem[] = [];
-  // Upbit candle API permits only a small request burst. Sending the entire pool
-  // concurrently causes most symbols to fail with rate-limit responses.
+
+  // Upbit candle API 호출 제한을 지키며 15분봉과 일봉을 순차 조회한다.
   for (const t of tickers) {
-    try {
-      const candles = await fetchUpbitCandles(t.symbol, 200, '1D');
-      const analyzed = analyze(candles);
-      if (analyzed && t.price != null) {
-        items.push({
-          ticker: t.symbol,
-          name: t.symbol,
-          price: t.price,
-          changePercent: t.changePercent,
-          currency: 'KRW',
-          market: 'spot',
-          analyzed,
+    const sources: Array<{ timeframe: '15m' | '1D'; candles: Bar[] | null }> = [];
+    for (const timeframe of ['15m', '1D'] as const) {
+      try {
+        sources.push({
+          timeframe,
+          candles: await fetchUpbitCandles(t.symbol, 200, timeframe),
         });
+      } catch {
+        providerErrors += 1;
       }
-    } catch {
-      providerErrors += 1;
+      await new Promise((resolve) => setTimeout(resolve, 120));
     }
-    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    for (const source of sources) {
+      const analyzed = source.candles ? analyze(source.candles) : null;
+      if (!analyzed || t.price == null) continue;
+      items.push({
+        ticker: t.symbol,
+        name: t.symbol,
+        price: t.price,
+        changePercent: t.changePercent,
+        currency: 'KRW',
+        market: 'spot',
+        analyzed,
+        timeframe: source.timeframe,
+      });
+    }
   }
+
   return { items, scanned: tickers.length, providerErrors };
 }
 
@@ -406,8 +436,8 @@ function hasUsableVolatility(
   timeframe: '15m' | '1D' = '1D',
 ): boolean {
   if (a.atrPercent == null) return false;
-  if (futures && timeframe === '15m') {
-    return a.atrPercent >= 0.08 && a.atrPercent <= 4;
+  if (timeframe === '15m') {
+    return a.atrPercent >= (futures ? 0.08 : 0.05) && a.atrPercent <= 4;
   }
   return a.atrPercent >= 0.35 && a.atrPercent <= (futures ? 12 : 8);
 }
@@ -486,7 +516,7 @@ function isFuturesWatchShort(a: Analyzed, timeframe: '15m' | '1D'): boolean {
 
 function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
   const buy = items
-    .filter((i) => isOptimizedLong(i.analyzed))
+    .filter((i) => isOptimizedLong(i.analyzed, false, i.timeframe ?? '1D'))
     .sort((a, b) => b.analyzed.bullScore - a.analyzed.bullScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
@@ -500,7 +530,7 @@ function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
       ),
     );
   const sell = items
-    .filter((i) => isOptimizedShort(i.analyzed))
+    .filter((i) => isOptimizedShort(i.analyzed, false, i.timeframe ?? '1D'))
     .sort((a, b) => b.analyzed.bearScore - a.analyzed.bearScore)
     .slice(0, GROUP_LIMIT)
     .map((i) =>
