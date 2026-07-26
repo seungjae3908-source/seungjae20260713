@@ -64,6 +64,15 @@ router.post('/login', async (req, res) => {
 
     const { data, error } = await getPublicAuthSupabase().auth.signInWithPassword({ email, password });
     if (error || !data.session) {
+      // 로그인 원문·토큰은 기록하지 않고 실패 원인과 입력 길이만 남긴다.
+      console.warn('[auth-login-failed]', {
+        identifierLength: identifier.length,
+        passwordLength: password.length,
+        identifierType: isEmail(identifier) ? 'email' : 'login_name',
+        providerStatus: error?.status ?? null,
+        providerCode: error?.code ?? null,
+        providerName: error?.name ?? null,
+      });
       return res.status(401).json({ ok: false, error: 'INVALID_LOGIN' });
     }
 
@@ -81,7 +90,13 @@ router.post('/login', async (req, res) => {
         token_type: data.session.token_type,
       },
     });
-  } catch {
+  } catch (cause) {
+    console.error('[auth-login-exception]', {
+      identifierLength: identifier.length,
+      passwordLength: password.length,
+      identifierType: isEmail(identifier) ? 'email' : 'login_name',
+      causeName: cause instanceof Error ? cause.name : typeof cause,
+    });
     return res.status(401).json({ ok: false, error: 'INVALID_LOGIN' });
   }
 });
