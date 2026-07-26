@@ -11,6 +11,7 @@ import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import cryptoSpotAutoRouter from './crypto-spot-auto';
+import bitgetMarketContextRouter from './bitget-market-context.routes';
 import backupRouter from './backup';
 import authRouter from './auth';
 import analysisRouter from './analysis';
@@ -51,6 +52,14 @@ router.use(
   requireMember,
   requireAdmin,
   cryptoSpotAutoRouter,
+);
+
+// 비트겟 공개 시장상태 수집·조회. 실제 주문이나 개인 계좌 API를 사용하지 않습니다.
+router.use(
+  '/crypto/futures/context',
+  requireMember,
+  requireFullMember,
+  bitgetMarketContextRouter,
 );
 
 // 코인 선물 조회는 정회원 이상, 실제 자동매매 API는 관리자만 사용합니다.
