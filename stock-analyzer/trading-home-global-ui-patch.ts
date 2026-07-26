@@ -31,8 +31,15 @@ function patchCoinSpotTools(source: string) {
   code = replaceOnce(
     code,
     `import { cn } from '@/lib/utils';`,
-    `import { cn } from '@/lib/utils';\nimport { AutoTradeJournalModal, UsdKrwCalculator } from '@/components/auto-trade-extras';\nimport { CoinSpotRealOrder } from '@/components/coin-spot-real-order';`,
+    `import { cn } from '@/lib/utils';\nimport { useMemberPermissions } from '@/lib/permissions';\nimport { AutoTradeJournalModal, UsdKrwCalculator } from '@/components/auto-trade-extras';\nimport { CoinSpotRealOrder } from '@/components/coin-spot-real-order';`,
     'coin spot extra imports',
+  );
+
+  code = replaceOnce(
+    code,
+    `  const assetMode = useAssetMode();`,
+    `  const assetMode = useAssetMode();\n  const permissions = useMemberPermissions();`,
+    'coin spot permissions',
   );
 
   code = replaceOnce(
@@ -40,6 +47,15 @@ function patchCoinSpotTools(source: string) {
     `  const [explanation, setExplanation] = useState<{ title: string; body: string } | null>(null);`,
     `  const [explanation, setExplanation] = useState<{ title: string; body: string } | null>(null);\n  const [journalOpen, setJournalOpen] = useState(false);`,
     'coin spot journal state',
+  );
+
+  code = code.replace(
+    `          ] as const).map(([key, label]) => (`,
+    `          ] as const).filter(([key]) => key !== 'auto' || permissions.canUseAutoTrading).map(([key, label]) => (`,
+  );
+  code = code.replace(
+    `{viewMode === 'auto' && (`,
+    `{viewMode === 'auto' && permissions.canUseAutoTrading && (`,
   );
 
   code = replaceOnce(
