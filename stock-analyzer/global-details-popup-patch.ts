@@ -88,6 +88,7 @@ function transformDetails(source: string) {
     if (!matched) break;
 
     const openEnd = code.indexOf('>', start);
+    const openTag = openEnd >= 0 ? code.slice(start, openEnd + 1) : '';
     const summaryStart = code.indexOf('<summary', openEnd);
     const summaryOpenEnd = code.indexOf('>', summaryStart);
     const summaryEnd = code.indexOf('</summary>', summaryOpenEnd);
@@ -106,6 +107,9 @@ function transformDetails(source: string) {
     const launcherInner = removeExpandLabels(summaryInner);
     const body = code.slice(summaryEnd + '</summary>'.length, matched.closeStart);
     const titleLiteral = JSON.stringify(staticTitle(summaryInner));
+    const launcherClass = openTag.includes('data-settings-uniform-card')
+      ? 'flex h-[112px] w-full items-center justify-center rounded-3xl border border-card-border bg-card px-4 py-3 text-center shadow-sm'
+      : 'w-full rounded-2xl border border-card-border bg-card px-4 py-3 text-center shadow-sm';
     const replacement = `<>
       <button
         type="button"
@@ -113,7 +117,7 @@ function transformDetails(source: string) {
           const dialog = event.currentTarget.nextElementSibling as HTMLDialogElement | null;
           dialog?.showModal();
         }}
-        className="w-full rounded-2xl border border-card-border bg-card px-4 py-3 text-center shadow-sm"
+        className="${launcherClass}"
       >
         <div className="min-w-0 break-keep text-center text-sm font-black leading-5">
           ${launcherInner}
