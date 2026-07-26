@@ -1,7 +1,7 @@
 # Stage 5 CI verification report
 
-- started_at: 2026-07-26T10:54:42Z
-- commit: 469f91f1baaa018d09aa8649aa06e839af8d637c
+- started_at: 2026-07-26T11:02:19Z
+- commit: 30945e499acfc9cb757b3cff45a03a02af687094
 
 ## Enable pnpm
 - exit_code: 0
@@ -18,10 +18,11 @@ Progress: resolved 1, reused 0, downloaded 0, added 0
 Packages: +650
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 Progress: resolved 650, reused 0, downloaded 0, added 0
-Progress: resolved 650, reused 0, downloaded 61, added 0
-Progress: resolved 650, reused 0, downloaded 323, added 24
-Progress: resolved 650, reused 0, downloaded 446, added 32
-✓ Lockfile passes supply-chain policies (746 entries in 4.6s)
+Progress: resolved 650, reused 0, downloaded 21, added 0
+Progress: resolved 650, reused 0, downloaded 132, added 8
+Progress: resolved 650, reused 0, downloaded 342, added 24
+✓ Lockfile passes supply-chain policies (746 entries in 4.9s)
+Progress: resolved 650, reused 0, downloaded 649, added 54
 Progress: resolved 650, reused 0, downloaded 650, added 650, done
 .../esbuild@0.27.3/node_modules/esbuild postinstall$ node install.js
 .../esbuild@0.25.12/node_modules/esbuild postinstall$ node install.js
@@ -31,7 +32,7 @@ Progress: resolved 650, reused 0, downloaded 650, added 650, done
 devDependencies:
 + typescript 5.9.3
 
-Done in 6.7s using pnpm v11.17.0
+Done in 7.4s using pnpm v11.17.0
 ```
 ## Frontend build
 - exit_code: 0
@@ -100,7 +101,7 @@ computing gzip size...
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 4.99s[39m
+[32m✓ built in 4.94s[39m
 ```
 ## Full backend typecheck
 - exit_code: 2
@@ -150,9 +151,9 @@ Collecting certifi>=2023.5.7 (from requests)
 Collecting six>=1.5 (from python-dateutil>=2.8.2->pandas)
   Downloading six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
 Downloading numpy-2.5.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (16.7 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.7/16.7 MB 54.6 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.7/16.7 MB 24.3 MB/s  0:00:00
 Downloading pandas-3.0.5-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (11.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11.0/11.0 MB 45.4 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11.0/11.0 MB 73.2 MB/s  0:00:00
 Downloading requests-2.34.2-py3-none-any.whl (73 kB)
 Downloading charset_normalizer-3.4.9-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (224 kB)
 Downloading idna-3.18-py3-none-any.whl (65 kB)
@@ -189,4 +190,4 @@ TypeError: float() argument must be a string or a real number, not 'NoneType'
 - stage5_typecheck: success
 - smoke: success
 - backtest: failure
-- finished_at: 2026-07-26T10:58:05Z
+- finished_at: 2026-07-26T11:05:35Z
