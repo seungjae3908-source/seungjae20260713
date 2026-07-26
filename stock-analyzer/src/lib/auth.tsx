@@ -18,6 +18,13 @@ type AuthContextValue = {
   signOut(): Promise<void>; refreshProfile(): Promise<void>;
 };
 
+type UnknownRecord = Record<string, unknown>;
+
+type ApiSessionTokens = {
+  accessToken: string;
+  refreshToken: string;
+};
+
 const AuthContext = createContext<AuthContextValue | null>(null);
 const normalizeName = (value: string) => value.trim().normalize('NFKC').toLowerCase();
 
@@ -41,7 +48,104 @@ function authMessage(cause: unknown) {
   if (message.includes('invalid login')) return '아이디 또는 비밀번호가 맞지 않습니다.';
   if (message.includes('already')) return '이미 사용 중인 아이디입니다.';
   if (message.includes('rate limit')) return '요청이 많습니다. 잠시 후 다시 시도해 주세요.';
+  if (message.includes('session token')) return cause instanceof Error ? cause.message : '로그인 세션을 적용하지 못했습니다.';
   return '계정 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.';
+}
+
+function asRecord(value: unknown): UnknownRecord | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as UnknownRecord
+    : null;
+}
+
+function readString(record: UnknownRecord | null, ...keys: string[]) {
+  for (const key of keys) {
+    const value = record?.[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function extractApiSessionTokens(payload: unknown): ApiSessionTokens | null {
+  const root = asRecord(payload);
+  const data = asRecord(root?.data);
+  const auth = asRecord(root?.auth);
+  const supabase = asRecord(root?.supabase);
+
+  const candidates = [
+    asRecord(root?.session),
+    asRecord(data?.session),
+    asRecord(auth?.session),
+    asRecord(supabase?.session),
+    data,
+    auth,
+    supabase,
+    root,
+  ];
+
+  for (const candidate of candidates) {
+    const accessToken = readString(candidate, 'access_token', 'accessToken');
+    const refreshToken = readString(candidate, 'refresh_token', 'refreshToken');
+    if (accessToken && refreshToken) return { accessToken, refreshToken };
+  }
+
+  return null;
+}
+
+function apiErrorMessage(payload: unknown, status: number) {
+  const record = asRecord(payload);
+  const message = readString(record, 'message', 'error_description', 'error');
+
+  if (status === 400 || status === 401) return '아이디 또는 비밀번호가 맞지 않습니다.';
+  if (status === 429) return '요청이 많습니다. 잠시 후 다시 시도해 주세요.';
+  if (message && message.length <= 160) return message;
+  return '로그인 서버 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.';
+}
+
+async function signInThroughApi(loginName: string, password: string) {
+  const response = await fetch('/api/auth/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      loginName,
+      login_name: normalizeName(loginName),
+      username: loginName,
+      password,
+    }),
+  });
+
+  let payload: unknown = null;
+  try {
+    payload = await response.json();
+  } catch {
+    // JSON이 아닌 오류 응답은 아래 공통 메시지로 처리합니다.
+  }
+
+  if (!response.ok) throw new Error(apiErrorMessage(payload, response.status));
+
+  const tokens = extractApiSessionTokens(payload);
+  if (!tokens) {
+    throw new Error('로그인 응답에 Supabase session token이 없습니다. API 응답의 access_token과 refresh_token을 확인해 주세요.');
+  }
+
+  const supabaseClient = getSupabase();
+  const { data, error } = await supabaseClient.auth.setSession({
+    access_token: tokens.accessToken,
+    refresh_token: tokens.refreshToken,
+  });
+
+  if (error || !data.session) {
+    throw new Error(`로그인 session token 적용에 실패했습니다${error?.message ? `: ${error.message}` : '.'}`);
+  }
+
+  const { data: verified, error: verifyError } = await supabaseClient.auth.getUser();
+  if (verifyError || !verified.user) {
+    await supabaseClient.auth.signOut({ scope: 'local' });
+    throw new Error(`로그인 session token 검증에 실패했습니다${verifyError?.message ? `: ${verifyError.message}` : '.'}`);
+  }
+
+  return data.session;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -80,8 +184,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session?.user?.app_metadata?.status === 'approved',
     async signIn(loginName, password) {
       const name = validate(loginName, password);
-      const { error } = await getSupabase().auth.signInWithPassword({ email: await internalEmail(name), password });
-      if (error) throw new Error(authMessage(error));
+      setLoading(true);
+      try {
+        const nextSession = await signInThroughApi(name, password);
+        setSession(nextSession);
+        await loadProfile(nextSession.user);
+      } catch (cause) {
+        setSession(null);
+        setProfile(null);
+        throw new Error(authMessage(cause));
+      } finally {
+        setLoading(false);
+      }
     },
     async signUp(loginName, password) {
       const name = validate(loginName, password); const normalized = normalizeName(name);
