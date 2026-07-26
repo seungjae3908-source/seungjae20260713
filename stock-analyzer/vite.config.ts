@@ -7,6 +7,7 @@ import { defineConfig } from 'vite';
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 import { chartRelayFeaturePatch } from './chart-relay-feature-patch';
 import { signalScanPlanPatch } from './signal-scan-plan-patch';
+import { focusedPageLayoutPatch } from './focused-page-layout-patch';
 
 const require = createRequire(import.meta.url);
 const lightweightChartsEntry = require.resolve('lightweight-charts');
@@ -26,6 +27,7 @@ export default defineConfig({
   plugins: [
     chartRelayFeaturePatch(),
     signalScanPlanPatch(),
+    focusedPageLayoutPatch(),
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
