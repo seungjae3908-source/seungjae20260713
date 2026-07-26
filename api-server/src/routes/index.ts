@@ -11,6 +11,7 @@ import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import cryptoSpotAutoRouter from './crypto-spot-auto';
+import shadowTradingRouter from './shadow-trading';
 import backupRouter from './backup';
 import authRouter from './auth';
 import analysisRouter from './analysis';
@@ -44,6 +45,14 @@ router.use('/', marketRouter);
 
 router.use('/', newsRouter);
 router.use('/kiwoom', kiwoomRouter);
+
+// 20만 원 가상계좌 섀도 모드. 실제 주문 API를 호출하지 않으며 관리자만 사용합니다.
+router.use(
+  '/auto-trading/shadow',
+  requireMember,
+  requireAdmin,
+  shadowTradingRouter,
+);
 
 // 코인 현물 실제 주문은 관리자만 사용하며 주문계획과 최종 승인을 분리합니다.
 router.use(
