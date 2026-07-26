@@ -23,7 +23,7 @@ function patchChartRelay(source: string): string {
     );
 
   code = code.replace(
-    'className="fixed inset-0 z-[95] flex items-end justify-center bg-black/60 p-3"',
+    /className="fixed inset-0 z-\[95\] flex items-(?:end|center) justify-center bg-black\/60 p-3"/,
     'className="fixed inset-0 z-[95] flex items-center justify-center bg-black/60 p-2 sm:p-3"',
   );
   code = code.replace(
@@ -32,32 +32,28 @@ function patchChartRelay(source: string): string {
   );
 
   code = code.replace(
-    'className="flex min-h-[52px] flex-wrap items-center justify-between gap-2 border-b border-card-border px-2 py-2"',
-    'className="flex min-h-[52px] flex-col items-stretch gap-2 border-b border-card-border px-2 py-2 sm:flex-row sm:items-center sm:justify-between"',
+    `      <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-2 border-b border-card-border px-2 py-2">\n        <div className="flex flex-wrap gap-1">`,
+    `      <div className="flex min-h-[52px] flex-col items-stretch gap-2 border-b border-card-border px-2 py-2 sm:flex-row sm:items-center sm:justify-between">\n        <div className="grid w-full grid-cols-[auto_auto_minmax(0,1fr)_auto] gap-1 sm:flex sm:w-auto sm:flex-wrap">`,
   );
   code = code.replace(
-    'className="flex flex-wrap gap-1"',
-    'className="grid w-full grid-cols-[auto_auto_minmax(0,1fr)_auto] gap-1 sm:flex sm:w-auto sm:flex-wrap"',
-  );
-  code = code.replace(
-    'className="rounded-lg border border-card-border bg-card px-2 py-1 text-[10px] font-black"',
-    'className="min-w-0 w-full rounded-lg border border-card-border bg-card px-2 py-1 text-[10px] font-black sm:w-auto"',
+    `            aria-label="가격축 방식"\n            className="rounded-lg border border-card-border bg-card px-2 py-1 text-[10px] font-black"`,
+    `            aria-label="가격축 방식"\n            className="min-w-0 w-full rounded-lg border border-card-border bg-card px-2 py-1 text-[10px] font-black sm:w-auto"`,
   );
   code = code.replace(
     'className="inline-flex items-center rounded-lg border border-card-border bg-card px-2 py-1 text-[10px] font-black text-primary"',
     'className="inline-flex min-w-0 items-center justify-center rounded-lg border border-card-border bg-card px-2 py-1 text-[10px] font-black text-primary"',
   );
   code = code.replace(
-    'className="flex items-center gap-1.5"',
-    'className="flex w-full items-center justify-end gap-1.5 sm:w-auto"',
+    `        </div>\n        <div className="flex items-center gap-1.5">\n          <button\n            type="button"\n            onClick={onOpenSettings}`,
+    `        </div>\n        <div className="flex w-full items-center justify-end gap-1.5 sm:w-auto">\n          <button\n            type="button"\n            onClick={onOpenSettings}`,
   );
 
   code = code.replace(
-    `        <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">\n          매수·매도 판단 근거와 지난 신호를 탭별로 확인합니다.\n        </p>\n`,
+    /\s*<p className="mt-0\.5 text-\[10px\] font-bold text-muted-foreground">\s*매수·매도 판단 근거와 지난 신호를 탭별로 확인합니다\.\s*<\/p>/,
     '',
   );
   code = code.replace(
-    `            <p className="mt-3 rounded-2xl border border-warning/40 bg-warning/10 px-3 py-2 text-center text-[10px] font-black text-warning">\n              AI 신호와 추천 가격은 참고용이며 실제 주문을 실행하지 않습니다.\n            </p>\n`,
+    /\s*<p className="mt-3 rounded-2xl border border-warning\/40 bg-warning\/10 px-3 py-2 text-center text-\[10px\] font-black text-warning">\s*AI 신호와 추천 가격은 참고용이며 실제 주문을 실행하지 않습니다\.\s*<\/p>/,
     '',
   );
 
@@ -67,11 +63,11 @@ function patchChartRelay(source: string): string {
 function patchPriceAlerts(source: string): string {
   return source
     .replace(
-      `            <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">\n              앱을 열어 둔 동안 가격이 목표가·분할매수·분할매도·손절가에 닿으면 즉시 알립니다.\n            </p>\n`,
+      /\s*<p className="mt-0\.5 text-\[10px\] font-bold text-muted-foreground">\s*앱을 열어 둔 동안 가격이 목표가·분할매수·분할매도·손절가에 닿으면 즉시 알립니다\.\s*<\/p>/,
       '',
     )
     .replace(
-      `        <p className="mt-2 text-[9px] font-bold leading-4 text-muted-foreground">\n          현재 구현은 앱이 열려 있을 때 동작합니다. 앱을 완전히 닫은 상태의 백그라운드 푸시는 별도 서버 푸시 연결이 필요합니다.\n        </p>\n`,
+      /\s*<p className="mt-2 text-\[9px\] font-bold leading-4 text-muted-foreground">\s*현재 구현은 앱이 열려 있을 때 동작합니다\. 앱을 완전히 닫은 상태의 백그라운드 푸시는 별도 서버 푸시 연결이 필요합니다\.\s*<\/p>/,
       '',
     );
 }
