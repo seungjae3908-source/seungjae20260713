@@ -1,0 +1,126 @@
+name: Stage 7 fixed-risk expectancy backtest
+
+on:
+  push:
+    branches:
+      - agent/fixed-risk-expectancy-backtest-stage7-20260726
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Initialize report
+        run: |
+          mkdir -p docs/backtests
+          {
+            echo '# Stage 7 fixed-risk expectancy verification'
+            echo
+            echo "- commit: $GITHUB_SHA"
+            echo "- started_at: $(date -u +%FT%TZ)"
+            echo
+          } > docs/backtests/STAGE7_FIXED_RISK_EXPECTANCY_VERIFICATION.md
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install workspace
+        id: install
+        continue-on-error: true
+        run: |
+          set +e
+          corepack enable
+          pnpm install --frozen-lockfile 2>&1 | tee /tmp/stage7-install.log
+          code=${PIPESTATUS[0]}
+          { echo '## Install'; echo "- exit_code: $code"; echo '```text'; tail -n 120 /tmp/stage7-install.log; echo '```'; } >> docs/backtests/STAGE7_FIXED_RISK_EXPECTANCY_VERIFICATION.md
+          exit $code
+
+      - name: Frontend build
+        id: frontend
+        continue-on-error: true
+        run: |
+          set +e
+          (rm -rf stock-analyzer/dist && pnpm --filter @workspace/stock-analyzer build) 2>&1 | tee /tmp/stage7-frontend.log
+          code=${PIPESTATUS[0]}
+          { echo '## Frontend build'; echo "- exit_code: $code"; echo '```text'; tail -n 160 /tmp/stage7-frontend.log; echo '```'; } >> docs/backtests/STAGE7_FIXED_RISK_EXPECTANCY_VERIFICATION.md
+          exit $code
+
+      - name: Backend typecheck
+        id: backend
+        continue-on-error: true
+        run: |
+          set +e
+          pnpm --filter @workspace/api-server typecheck 2>&1 | tee /tmp/stage7-backend.log
+          code=${PIPESTATUS[0]}
+          { echo '## Backend typecheck'; echo "- exit_code: $code"; echo '```text'; tail -n 180 /tmp/stage7-backend.log; echo '```'; } >> docs/backtests/STAGE7_FIXED_RISK_EXPECTANCY_VERIFICATION.md
+          exit $code
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        id: python_install
+        continue-on-error: true
+        run: |
+          set +e
+          pip install numpy pandas requests 2>&1 | tee /tmp/stage7-python-install.log
+          code=${PIPESTATUS[0]}
+          { echo '## Python dependencies'; echo "- exit_code: $code"; echo '```text'; tail -n 100 /tmp/stage7-python-install.log; echo '```'; } >> docs/backtests/STAGE7_FIXED_RISK_EXPECTANCY_VERIFICATION.md
+          exit $code
+
+      - name: Syntax and synthetic risk tests
+        id: self_test
+        continue-on-error: true
+        run: |
+          set +e
+          (python -m py_compile tools/backtest/fixed_risk_expectancy_portfolio_backtest.py && \
+           python tools/backtest/fixed_risk_expectancy_portfolio_backtest.py --self-test) 2>&1 | tee /tmp/stage7-self-test.log
+          code=${PIPESTATUS[0]}
+          { echo '## Syntax and synthetic risk tests'; echo "- exit_code: $code"; echo '```text'; tail -n 140 /tmp/stage7-self-test.log; echo '```'; } >> docs/backtests/STAGE7_FIXED_RISK_EXPECTANCY_VERIFICATION.md
+          exit $code
+
+      - name: Run public-data backtest
+        id: backtest
+        continue-on-error: true
+        run: |
+          set +e
+          python tools/backtest/fixed_risk_expectancy_portfolio_backtest.py 2>&1 | tee /tmp/stage7-backtest.log
+          code=${PIPESTATUS[0]}
+          { echo '## Public-data backtest'; echo "- exit_code: $code"; echo '```text'; tail -n 300 /tmp/stage7-backtest.log; echo '```'; } >> docs/backtests/STAGE7_FIXED_RISK_EXPECTANCY_VERIFICATION.md
+          exit $code
+
+      - name: Finalize and commit results
+        if: always()
+        run: |
+          {
+            echo
+            echo '## Outcomes'
+            echo "- install: ${{ steps.install.outcome }}"
+            echo "- frontend: ${{ steps.frontend.outcome }}"
+            echo "- backend: ${{ steps.backend.outcome }}"
+            echo "- python_install: ${{ steps.python_install.outcome }}"
+            echo "- self_test: ${{ steps.self_test.outcome }}"
+            echo "- backtest: ${{ steps.backtest.outcome }}"
+            echo "- finished_at: $(date -u +%FT%TZ)"
+          } >> docs/backtests/STAGE7_FIXED_RISK_EXPECTANCY_VERIFICATION.md
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/backtests/STAGE7_FIXED_RISK_EXPECTANCY_VERIFICATION.md
+          git add docs/backtests/BITGET_FIXED_RISK_EXPECTANCY_5SYMBOL_540D_STAGE7* 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo 'No result changes'
+            exit 0
+          fi
+          git commit -m 'test: record stage-seven fixed-risk expectancy results [skip ci]'
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
