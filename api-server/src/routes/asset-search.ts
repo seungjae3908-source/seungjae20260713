@@ -64,6 +64,80 @@ async function fetchJson(url: string): Promise<any> {
   }
 }
 
+function naverRow(item: any): Row | null {
+  const rawCode = String(
+    item.code ?? item.stockCode ?? item.localCode ?? item.symbol ?? '',
+  ).trim();
+  const name = String(
+    item.name ?? item.stockName ?? item.koreanName ?? item.label ?? '',
+  ).trim();
+  if (!rawCode || !name) return null;
+
+  const marketText = [
+    item.typeCode,
+    item.typeName,
+    item.market,
+    item.exchange,
+    item.exchangeCode,
+    item.nationCode,
+    item.nationName,
+    item.countryCode,
+  ]
+    .map((value) => String(value ?? '').toUpperCase())
+    .join(' ');
+  const krTicker = rawCode.replace(/\D/g, '').slice(-6);
+  if (/^\d{6}$/.test(krTicker) && !/NASDAQ|NYSE|AMEX|USA|UNITED STATES/.test(marketText)) {
+    return {
+      ticker: krTicker,
+      name,
+      market: 'KR',
+      currency: 'KRW',
+      assetType: marketText.includes('ETF')
+        ? 'ETF'
+        : marketText.includes('ETN')
+          ? 'ETN'
+          : 'STOCK',
+      exchange: marketText.includes('KOSDAQ') ? 'KOSDAQ' : 'KOSPI',
+      aliases: [item.englishName, item.english_name]
+        .map((value) => String(value ?? '').trim())
+        .filter(Boolean),
+    };
+  }
+
+  const usTicker = rawCode
+    .toUpperCase()
+    .replace(/\.(O|N|A|K)$/i, '')
+    .replace(/[^A-Z0-9.\-]/g, '')
+    .slice(0, 24);
+  const isUs =
+    /NASDAQ|NYSE|AMEX|USA|UNITED STATES|미국/.test(marketText) ||
+    /^[A-Z][A-Z0-9.\-]{0,23}$/.test(usTicker);
+  if (!isUs || !usTicker) return null;
+
+  return {
+    ticker: usTicker,
+    name,
+    market: 'US',
+    currency: 'USD',
+    assetType: marketText.includes('ETF') ? 'ETF' : 'STOCK',
+    exchange: marketText.includes('NASDAQ')
+      ? 'NASDAQ'
+      : marketText.includes('NYSE')
+        ? 'NYSE'
+        : marketText.includes('AMEX')
+          ? 'AMEX'
+          : String(item.exchange ?? item.typeName ?? ''),
+    aliases: [
+      item.englishName,
+      item.english_name,
+      item.shortName,
+      item.longName,
+    ]
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean),
+  };
+}
+
 async function naverSearch(query: string): Promise<Row[]> {
   try {
     const data = await fetchJson(
@@ -77,33 +151,7 @@ async function naverSearch(query: string): Promise<Row[]> {
           ? data.stocks
           : [];
     return items
-      .map((item: any): Row | null => {
-        const ticker = String(
-          item.code ?? item.stockCode ?? item.localCode ?? item.symbol ?? '',
-        )
-          .replace(/\D/g, '')
-          .slice(-6);
-        const name = String(
-          item.name ?? item.stockName ?? item.koreanName ?? item.label ?? '',
-        ).trim();
-        if (!/^\d{6}$/.test(ticker) || !name) return null;
-        const exchange = String(
-          item.typeCode ?? item.typeName ?? item.market ?? item.exchange ?? '',
-        ).toUpperCase();
-        return {
-          ticker,
-          name,
-          market: 'KR',
-          currency: 'KRW',
-          assetType: exchange.includes('ETF')
-            ? 'ETF'
-            : exchange.includes('ETN')
-              ? 'ETN'
-              : 'STOCK',
-          exchange: exchange.includes('KOSDAQ') ? 'KOSDAQ' : 'KOSPI',
-          aliases: [],
-        };
-      })
+      .map(naverRow)
       .filter((row: Row | null): row is Row => Boolean(row));
   } catch {
     return [];
@@ -210,7 +258,7 @@ async function catalogSearch(query: string): Promise<Row[]> {
 
 async function quoteRow(row: Row): Promise<Record<string, unknown>> {
   const timeout = new Promise<null>((resolve) =>
-    setTimeout(() => resolve(null), 3500),
+    setTimeout(() => resolve(null), 1200),
   );
   const quote = await Promise.race([
     MarketDataService.getQuoteRow(row.ticker),
@@ -242,16 +290,16 @@ router.get('/search/quotes', async (req, res) => {
   if (!q) return res.json({ q, market, results: [], count: 0 });
 
   try {
-    const [catalog, kr, us] = await Promise.allSettled([
+    const [catalog, naver, yahoo] = await Promise.allSettled([
       catalogSearch(q),
-      market === 'US' ? Promise.resolve([]) : naverSearch(q),
+      naverSearch(q),
       market === 'KR' ? Promise.resolve([]) : yahooSearch(q),
     ]);
     const rows = dedupe(
       [
         ...(catalog.status === 'fulfilled' ? catalog.value : []),
-        ...(kr.status === 'fulfilled' ? kr.value : []),
-        ...(us.status === 'fulfilled' ? us.value : []),
+        ...(naver.status === 'fulfilled' ? naver.value : []),
+        ...(yahoo.status === 'fulfilled' ? yahoo.value : []),
       ],
       q,
       market,
