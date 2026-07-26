@@ -474,8 +474,7 @@ function isOptimizedLong(
     a.rsiValue != null &&
     a.rsiValue >= 42 &&
     a.rsiValue <= 68 &&
-    confirmationCount(a, futures, timeframe, 'long') >=
-      (futures ? 3 : 2)
+    confirmationCount(a, futures, timeframe, 'long') >= 2
   );
 }
 
@@ -496,8 +495,7 @@ function isOptimizedShort(
     a.rsiValue != null &&
     a.rsiValue >= 32 &&
     a.rsiValue <= 58 &&
-    confirmationCount(a, futures, timeframe, 'short') >=
-      (futures ? 3 : 2)
+    confirmationCount(a, futures, timeframe, 'short') >= 2
   );
 }
 
@@ -701,8 +699,8 @@ function buildFuturesGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
       makeCandidate(i, 'sell', i.analyzed.bearScore, bearBasis(i.analyzed), '차상위 스윙 매도 관찰 후보(강한 숏 신호 아님)', dataAsOf),
     );
   return [
-    { key: 'long', label: '롱 후보', candidates: long },
-    { key: 'short', label: '숏 후보', candidates: short },
+    { key: 'long', label: '강한 롱', candidates: long },
+    { key: 'short', label: '강한 숏', candidates: short },
     { key: 'buyView', label: '매수 관찰', candidates: buyView },
     { key: 'sellView', label: '매도 관찰', candidates: sellView },
   ];
