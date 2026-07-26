@@ -139,10 +139,6 @@ function patchAutoTrade(source: string): string {
   return code;
 }
 
-function manwonExpression(expression: string): string {
-  return `\${(${expression}) / 10_000).toLocaleString('ko-KR', { maximumFractionDigits: Math.abs((${expression}) / 10_000) >= 100 ? 0 : Math.abs((${expression}) / 10_000) >= 10 ? 1 : 2 })}만원`;
-}
-
 function patchPortfolio(source: string, normalized: string): string {
   let code = source;
 
