@@ -15,9 +15,14 @@ function findMatchingDetails(source: string, start: number) {
   return null;
 }
 
-function staticTitle(summaryInner: string) {
-  const withoutExpand = summaryInner
+function removeExpandLabels(summaryInner: string) {
+  return summaryInner
     .replace(/<span[^>]*>\s*(?:펼치기|접기)\s*<\/span>/g, '')
+    .replace(/<span[^>]*className="[^"]*group-open:[^"]*"[^>]*>[\s\S]*?<\/span>/g, '');
+}
+
+function staticTitle(summaryInner: string) {
+  const withoutExpand = removeExpandLabels(summaryInner)
     .replace(/<[^>]+>/g, ' ')
     .replace(/\{[^}]+\}/g, ' ')
     .replace(/\s+/g, ' ')
@@ -56,6 +61,7 @@ function transformDetails(source: string) {
     }
 
     const summaryInner = code.slice(summaryOpenEnd + 1, summaryEnd);
+    const launcherInner = removeExpandLabels(summaryInner);
     const body = code.slice(summaryEnd + '</summary>'.length, matched.closeStart);
     const title = escapeAttribute(staticTitle(summaryInner));
     const replacement = `<>
@@ -67,13 +73,13 @@ function transformDetails(source: string) {
         }}
         className="w-full rounded-2xl border border-card-border bg-card px-4 py-3 text-center shadow-sm"
       >
-        <span className="block min-w-0 break-keep text-center text-sm font-black leading-5">
-          ${summaryInner}
-        </span>
+        <div className="min-w-0 break-keep text-center text-sm font-black leading-5">
+          ${launcherInner}
+        </div>
       </button>
       <dialog
         aria-label="${title}"
-        className="fixed inset-0 z-[120] m-auto h-full max-h-none w-full max-w-none overflow-hidden bg-transparent p-4 backdrop:bg-black/60"
+        className="fixed inset-0 z-[120] m-auto flex h-full max-h-none w-full max-w-none items-center justify-center overflow-hidden bg-transparent p-4 backdrop:bg-black/60"
         onClick={(event) => {
           if (event.target === event.currentTarget) event.currentTarget.close();
         }}
