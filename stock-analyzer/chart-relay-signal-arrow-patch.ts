@@ -151,10 +151,14 @@ function replaceSignalMarkers(source: string): string {
   const markerStart = source.indexOf(
     '    const markers: SeriesMarker<Time>[] = [];',
   );
-  const pricePlanStart = source.indexOf(
-    "    if (tab === 'live' && plan) {",
+  const interactiveLevelStart = source.indexOf(
+    '    if (chartLevels.length > 0) {',
     markerStart,
   );
+  const pricePlanStart =
+    interactiveLevelStart >= 0
+      ? interactiveLevelStart
+      : source.indexOf("    if (tab === 'live' && plan) {", markerStart);
   if (markerStart < 0 || pricePlanStart < 0) {
     throw new Error('[chart-relay-signal-arrow-patch] 신호 마커 또는 가격 계획 위치를 찾지 못했습니다.');
   }
