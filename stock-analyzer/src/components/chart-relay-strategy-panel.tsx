@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronRight, Gauge, ShieldAlert, Target, X } from 'lucide-react';
+import { Gauge, ShieldAlert, Target, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 type AnyObj = Record<string, any>;
@@ -120,7 +120,8 @@ function StrategyCell({
     <button
       type="button"
       onClick={onClick}
-      className="w-full rounded-2xl border border-card-border bg-background px-3 py-3 text-center"
+      aria-label={`${label} 산출 근거 보기`}
+      className="w-full rounded-2xl border border-card-border bg-background px-3 py-3 text-center transition active:scale-[0.98]"
     >
       <span className="block text-[10px] font-black text-muted-foreground">{label}</span>
       <span className={cn('mt-1 block text-sm font-black', tone)}>
@@ -128,9 +129,6 @@ function StrategyCell({
       </span>
       <span className="mt-1 block text-[9px] font-bold text-muted-foreground">
         현재가 대비 {percentFrom(currentPrice, value)}
-      </span>
-      <span className="mt-1 inline-flex items-center justify-center gap-1 text-[9px] font-bold text-primary">
-        근거 보기 <ChevronRight className="h-3 w-3" />
       </span>
     </button>
   );
@@ -197,6 +195,26 @@ export function ChartRelayStrategyPanel({
           </div>
         ) : (
           <>
+            <div className="mt-4 rounded-2xl border border-card-border bg-background p-3 text-center">
+              <Gauge className="mx-auto h-4 w-4 text-primary" />
+              <p className="mt-2 text-[10px] font-black text-muted-foreground">현재가</p>
+              <p className="mt-1 text-base font-black">{formatPrice(currentPrice, asset)}</p>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="rounded-xl bg-secondary p-2">
+                  <p className="text-[9px] font-black text-muted-foreground">현재 판단</p>
+                  <p className="mt-1 text-xs font-black">{String(plan.view ?? '중립')}</p>
+                </div>
+                <div className="rounded-xl bg-secondary p-2">
+                  <p className="text-[9px] font-black text-muted-foreground">산출 방식</p>
+                  <p className="mt-1 text-[10px] font-black">
+                    {plan.calculationSource === 'server'
+                      ? '서버 AI + 차트 보완'
+                      : '실시간 차트 계산'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <div className="mt-4 grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <div className="rounded-2xl bg-red-500/10 px-3 py-2 text-center text-xs font-black text-red-500">
@@ -279,26 +297,6 @@ export function ChartRelayStrategyPanel({
                     }
                   />
                 )}
-              </div>
-            </div>
-
-            <div className="mt-4 rounded-2xl border border-card-border bg-background p-3 text-center">
-              <Gauge className="mx-auto h-4 w-4 text-primary" />
-              <p className="mt-2 text-[10px] font-black text-muted-foreground">현재가</p>
-              <p className="mt-1 text-base font-black">{formatPrice(currentPrice, asset)}</p>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <div className="rounded-xl bg-secondary p-2">
-                  <p className="text-[9px] font-black text-muted-foreground">현재 판단</p>
-                  <p className="mt-1 text-xs font-black">{String(plan.view ?? '중립')}</p>
-                </div>
-                <div className="rounded-xl bg-secondary p-2">
-                  <p className="text-[9px] font-black text-muted-foreground">산출 방식</p>
-                  <p className="mt-1 text-[10px] font-black">
-                    {plan.calculationSource === 'server'
-                      ? '서버 AI + 차트 보완'
-                      : '실시간 차트 계산'}
-                  </p>
-                </div>
               </div>
             </div>
           </>
