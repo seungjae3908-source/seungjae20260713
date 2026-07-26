@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import apiRouter from './routes';
 import { startPriceAlertMonitor } from './services/notification.service';
+import { startBitgetMarketContextCollector } from './services/bitget-market-context.service';
 // import { attachRealtimeChartServer } from './services/analysis/realtime-chart.service';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -108,6 +109,8 @@ const availableRoutes = [
   '/api/kiwoom/rankings?market=US&type=tradingValue&limit=30',
   '/api/stocks/005930/quote',
   '/api/watchlist',
+  '/api/crypto/futures/context/status',
+  '/api/crypto/futures/context/latest?symbol=BTCUSDT',
 ];
 
 app.use((req, res) => {
@@ -149,6 +152,7 @@ const server = app.listen(port, '0.0.0.0', () => {
   );
 
   startPriceAlertMonitor();
+  startBitgetMarketContextCollector();
 
   if (hasFrontendBuild) {
     console.log(
