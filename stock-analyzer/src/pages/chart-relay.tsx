@@ -1998,7 +1998,9 @@ const RelayChart = memo(function RelayChart({
         });
       }
     }
-    series.setMarkers([]);
+    series.setMarkers(
+      markers.sort((left, right) => Number(left.time) - Number(right.time)),
+    );
     const signal = signals.find((item) => item.id === activeSignalId);
     const target = toUnixSeconds(signal?.barTime ?? signal?.overlay?.fromTime);
     if (target == null) return;
