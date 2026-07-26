@@ -30,6 +30,11 @@ function patchApp(source: string): string {
     'futures route gate',
   );
 
+  code = code.replaceAll(
+    `<FeatureGate feature="advancedAnalysis">\n\t\t\t<Portfolio`,
+    `<FeatureGate feature="portfolio">\n\t\t\t<Portfolio`,
+  );
+
   code = code.replace(
     `\t// 관심종목 서버 동기화·자동 백업은 정회원 이상 전용 API를 사용하므로\n\t// 준회원에게는 실행하지 않는다 (불필요한 403 방지).\n\tuseEffect(() => {\n\t\tif (auth.isFullMember) ensureWatchlistSync();\n\t}, [auth.isFullMember]);`,
     `\t// 승인된 준회원 이상은 관심종목 동기화와 설정 백업을 사용합니다.\n\tuseEffect(() => {\n\t\tif (auth.isApproved) ensureWatchlistSync();\n\t}, [auth.isApproved]);`,
@@ -64,6 +69,13 @@ function patchBottomNav(source: string): string {
     `const CHART_RELAY_MAIN_ITEMS: PopupItem[] = [`,
     `const SIGNAL_SCAN_MAIN_ITEMS: PopupItem[] = [\n  { label: '주식', step: 'signalStocks' },\n  { label: '코인', step: 'signalCoins' },\n];\n\nconst SIGNAL_SCAN_STOCK_ITEMS: PopupItem[] = [\n  { label: '국내주식', href: '/tech/signal-scan/kr' },\n  { label: '해외주식', href: '/tech/signal-scan/us' },\n];\n\nconst SIGNAL_SCAN_COIN_ITEMS: PopupItem[] = [\n  { label: '코인 현물', href: '/tech/signal-scan/spot' },\n  {\n    label: '코인 선물',\n    href: '/tech/signal-scan/futures',\n    feature: 'futures',\n  },\n];\n\nconst CHART_RELAY_MAIN_ITEMS: PopupItem[] = [`,
     'signal scan market items',
+  );
+
+  code = replaceOnce(
+    code,
+    `{ label: '포트폴리오', href: '/portfolio' },`,
+    `{ label: '포트폴리오', href: '/portfolio', feature: 'portfolio' },`,
+    'portfolio popup permission',
   );
 
   code = replaceOnce(
@@ -134,6 +146,10 @@ function patchScanner(source: string): string {
     'dedicated auto route sync',
   );
 
+  code = code.replace(
+    `<h1 className="text-xl font-extrabold">도구</h1>`,
+    `<h1 className="text-xl font-extrabold">{dedicatedAutoRoute ? '자동매매' : '도구'}</h1>`,
+  );
   code = code.replace(
     `<div className="mb-2 grid grid-cols-3 gap-2">`,
     `<div className={cn('mb-2 grid grid-cols-3 gap-2', dedicatedAutoRoute && 'hidden')}>`,
