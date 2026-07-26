@@ -25,6 +25,7 @@ import { stocksCategoryLayoutPatch } from './stocks-category-layout-patch';
 import { sixRequestedFixesPatch } from './six-requested-fixes-patch';
 import { currentRequestBatchPatch } from './current-request-batch-patch';
 import { feedFiveMorePatch } from './feed-five-more-patch';
+import { infoTabFixPatch } from './info-tab-fix-patch';
 import { portfolioManwonInputPatch } from './portfolio-manwon-input-patch';
 import { newPagesTypeSafetyPatch } from './new-pages-type-safety-patch';
 import { krwTenThousandUnitPatch } from './krw-ten-thousand-unit-patch';
@@ -67,6 +68,7 @@ export default defineConfig({
     sixRequestedFixesPatch(),
     currentRequestBatchPatch(),
     feedFiveMorePatch(),
+    infoTabFixPatch(),
     portfolioManwonInputPatch(),
     newPagesTypeSafetyPatch(),
     krwTenThousandUnitPatch(),
