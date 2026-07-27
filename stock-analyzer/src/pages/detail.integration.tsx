@@ -5017,7 +5017,7 @@ function PriceChartCanvas({
   const [analysisMarkersVisible, setAnalysisMarkersVisible] = useState(true);
   const [selectedMarkerDetails, setSelectedMarkerDetails] = useState<AnyObj[]>([]);
   const resolvedHeight = fullscreen
-    ? Math.max(resolvedHeight, Math.floor(window.innerHeight * 0.62))
+    ? Math.max(height, Math.floor(window.innerHeight * 0.62))
     : height;
 
   useEffect(() => {
