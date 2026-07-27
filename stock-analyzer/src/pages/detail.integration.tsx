@@ -3056,6 +3056,7 @@ function ChartTab({
             timeframe={timeframe}
             indicators={indicators}
             fullscreen={isFullscreen}
+            height={360}
             portfolioOverlay={basicOnly ? null : portfolioOverlay}
             autoSignal={showAutoTradingData ? autoSignal : null}
             studyFocus={basicOnly ? null : studyFocus}
