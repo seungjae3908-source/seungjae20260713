@@ -1,10 +1,16 @@
 // Builds the market-specific risk breakdown from real filing data:
 //  - US  (SEC EDGAR filing history)
 //  - KR  (DART disclosure history)
-import type { FilingCounts } from '../providers/sec-edgar';
 import type { DartRiskCounts } from '../providers/dart';
 
 export type RiskTone = 'positive' | 'neutral' | 'negative';
+
+interface FilingCounts {
+  offering: number;
+  reverseSplit: number;
+  delisting: number;
+  eightK: number;
+}
 
 export interface RiskItem {
   label: string;
