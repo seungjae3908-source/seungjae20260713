@@ -375,7 +375,7 @@ export default function StockInfoPage() {
 										<div className="flex items-center gap-2">
 											<div className="min-w-0 flex-1">
 												<p className="truncate text-xl font-black">{selectedName}</p>
-												<p className="mt-1 text-xs font-bold text-muted-foreground">{ticker} · {market === 'KR' ? '국내' : '해외'} · 기준 {formatDate(quote.data.updatedAt)}</p>
+												<p className="mt-1 text-xs font-bold text-muted-foreground">{ticker} · {market === 'KR' ? '국내' : '해외'} · 기준 {formatDate(quote.data?.updatedAt)}</p>
 											</div>
 											<button type="button" onClick={() => setWatchlisted(toggleWatchlistItem({ ticker, name: selectedName, market, currency }))} aria-label="관심종목" className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', watchlisted ? 'border-warning bg-warning/10 text-warning' : 'border-card-border')}>
 												<Star className={cn('h-5 w-5', watchlisted && 'fill-current')} />
