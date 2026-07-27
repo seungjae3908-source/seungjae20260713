@@ -44,7 +44,7 @@ function fmtNum(value: number, digits = 2): string {
 
 function fmtMoney(value: number, market: MarketTab): string {
 	if (!Number.isFinite(value)) return '-';
-	if (market === 'KR') return `${Math.round(value).toLocaleString()}원`;
+	if (market === 'KR') { const scaled = value / 10_000; return `${scaled.toLocaleString('ko-KR', { maximumFractionDigits: Math.abs(scaled) >= 100 ? 0 : Math.abs(scaled) >= 10 ? 1 : 2 })}만원`; }
 	if (market === 'COIN') return `${fmtNum(value)} USDT`;
 	return `$${fmtNum(value)}`;
 }
