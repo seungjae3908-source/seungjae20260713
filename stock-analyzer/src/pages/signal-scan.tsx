@@ -340,7 +340,7 @@ export default function SignalScanPage() {
           );
         const combinedText = `${basisText} ${candidate.verdict} ${candidate.trendState} ${candidate.volumeState}`.toLowerCase();
         const isOverheated = /과열|과매수|급등|overbought/.test(combinedText);
-        const isRisky = candidate.risks.length > 0 || /위험|경고|거래.?금지/.test(combinedText);
+        const isRisky = /거래.?금지|상장.?폐지|데이터.?오류|청산.?위험|투자.?주의/.test(combinedText);
         const conditionResults: Record<ConditionKey, boolean> = {
           score: score >= 70,
           volume: hasVolumeExpansion,
@@ -509,7 +509,7 @@ export default function SignalScanPage() {
           <div className="w-full min-w-0 text-center">
             <h1 className="whitespace-nowrap text-center text-lg font-extrabold leading-tight">신호검색</h1>
             <p className="mt-1 break-keep text-center text-[11px] font-bold leading-4 text-muted-foreground">
-              {scanStyle === 'scalp' ? '15분봉 단타 후보' : '15분봉·일봉 스윙 후보'}
+              {scanStyle === 'scalp'\n                ? '15분봉 단타 후보'\n                : scanStyle === 'swing'\n                  ? '15분봉·일봉 스윙 후보'\n                  : scanStyle === 'long'\n                    ? '일봉 중장기 후보'\n                    : '직접 설정 조건검색'}
             </p>
           </div>
 
