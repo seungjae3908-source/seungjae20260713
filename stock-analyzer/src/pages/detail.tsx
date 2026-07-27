@@ -448,18 +448,87 @@ async function fetchDetailAdvanced(
       {},
     ),
     tryJson<AnyObj>(
-      [`/api/stocks/${upper}/filings`, `/api/stocks/${upper}/disclosures`],
+      [
+        `/api/stocks/${upper}/disclosures?all=1`,
+        `/api/stocks/${upper}/filings?all=1`,
+        `/api/stocks/${upper}/disclosures`,
+        `/api/stocks/${upper}/filings`,
+      ],
       {},
     ),
-    tryJson<AnyObj>([`/api/stocks/${upper}/news`], {}),
+    tryJson<AnyObj>(
+      [`/api/stocks/${upper}/news?all=1`, `/api/stocks/${upper}/news`],
+      {},
+    ),
   ]);
 
-  const filings = collectFilings(filingsRaw);
+  let filings = collectFilings(filingsRaw);
+  let news = collectNews(newsRaw);
+  let specialFeedRaw: AnyObj = {};
+
+  if (filings.length === 0 || news.length === 0) {
+    const market = /^\d{6}$/.test(upper) ? 'KR' : 'US';
+    specialFeedRaw = await tryJson<AnyObj>(
+      [`/api/stocks/special-feed?asset=stock&market=${market}&limit=2000`],
+      {},
+    );
+    const matchingItems = (Array.isArray(specialFeedRaw?.items)
+      ? specialFeedRaw.items
+      : []
+    ).filter(
+      (item: AnyObj) =>
+        String(item?.ticker ?? '').trim().toUpperCase() === upper,
+    );
+
+    if (filings.length === 0) {
+      filings = matchingItems.filter(
+        (item: AnyObj) => String(item?.kind ?? '') === 'disclosure',
+      );
+    }
+    if (news.length === 0) {
+      news = matchingItems.filter(
+        (item: AnyObj) => String(item?.kind ?? '') === 'news',
+      );
+    }
+  }
+
+  if (filings.length === 0) {
+    filings = [
+      {
+        title: '공시 제공 상태',
+        report_nm: '공시 제공 상태',
+        summary:
+          firstText(filingsRaw?.summary, filingsRaw?.message, specialFeedRaw?.message) ??
+          (/^\d{6}$/.test(upper)
+            ? 'DART 공시 제공처 연결을 확인하고 있습니다.'
+            : 'SEC EDGAR 공시 제공처 연결을 확인하고 있습니다.'),
+        source: /^\d{6}$/.test(upper) ? 'DART' : 'SEC EDGAR',
+        date: new Date().toISOString(),
+        statusOnly: true,
+      },
+    ];
+  }
+
+  if (news.length === 0) {
+    news = [
+      {
+        title: '뉴스 제공 상태',
+        summary:
+          firstText(newsRaw?.summary, newsRaw?.message, specialFeedRaw?.message) ??
+          '뉴스 제공처 연결이 지연되어 관련 기사를 다시 확인하고 있습니다.',
+        source: '뉴스 제공처',
+        date: new Date().toISOString(),
+        publishedAt: new Date().toISOString(),
+        statusOnly: true,
+      },
+    ];
+  }
+
   return {
     financials: normalizeObject(financialRaw, ["financials", "data"]),
     risk: normalizeObject(riskRaw, ["risk", "analysis", "data"]),
-    filings: filings.length ? filings : collectFilings(riskRaw),
-    news: collectNews(newsRaw),
+    filings,
+    news,
   };
 }
 
@@ -1322,7 +1391,7 @@ export default function DetailPage() {
   const [alertOpen, setAlertOpen] = useState(false);
 
   const coreDetail = useQuery<DetailData>({
-    queryKey: ["stock-detail-core-v15", ticker],
+    queryKey: ["stock-detail-core-v16", ticker],
     queryFn: () => fetchDetailCore(ticker),
     enabled: Boolean(ticker),
     staleTime: 15_000,
@@ -1333,7 +1402,7 @@ export default function DetailPage() {
   });
 
   const identityDetail = useQuery<DetailIdentityData>({
-    queryKey: ["stock-detail-identity-v15", ticker],
+    queryKey: ["stock-detail-identity-v16", ticker],
     queryFn: () => fetchDetailIdentity(ticker),
     enabled: Boolean(ticker),
     staleTime: 60_000,
@@ -1344,7 +1413,7 @@ export default function DetailPage() {
   });
 
   const advancedDetail = useQuery<DetailAdvancedData>({
-    queryKey: ["stock-detail-advanced-v15", ticker],
+    queryKey: ["stock-detail-advanced-v16", ticker],
     queryFn: () => fetchDetailAdvanced(ticker),
     enabled: Boolean(
       ticker && permissions.canUseAdvancedAnalysis && coreDetail.data,
