@@ -395,7 +395,7 @@ router.get("/search", async (req, res) => {
 			.normalize("NFKC")
 			.toLowerCase()
 			.replace(/[^a-z0-9가-힣]/g, "");
-		const aliases = (result.aliases ?? []).map((alias) =>
+		const aliases: string[] = (result.aliases ?? []).map((alias: unknown) =>
 			String(alias)
 				.normalize("NFKC")
 				.toLowerCase()
@@ -405,10 +405,10 @@ router.get("/search", async (req, res) => {
 		if (name === needle) return 950;
 		if (name.startsWith(needle)) return 850;
 		if (ticker.startsWith(needle)) return 800;
-		if (aliases.some((alias) => alias.startsWith(needle))) return 750;
+		if (aliases.some((alias: string) => alias.startsWith(needle))) return 750;
 		if (name.includes(needle)) return 650;
 		if (ticker.includes(needle)) return 600;
-		if (aliases.some((alias) => alias.includes(needle))) return 550;
+		if (aliases.some((alias: string) => alias.includes(needle))) return 550;
 		return 0;
 	};
 
