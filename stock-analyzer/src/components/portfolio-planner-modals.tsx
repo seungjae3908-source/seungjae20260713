@@ -476,7 +476,11 @@ export function PortfolioPlannerModals() {
                 )
             : [];
           const sellLevels = Array.isArray(payload.sellLevels)
-            ? payload.sellLevels.map(finite).filter((value): value is number => value != null)
+            ? payload.sellLevels
+                .map(finite)
+                .filter((value: unknown): value is number =>
+                  typeof value === 'number',
+                )
             : [];
           const basis = Array.isArray(payload.basis) ? payload.basis.map(String).filter(Boolean) : [];
           const risks = Array.isArray(payload.risks) ? payload.risks.map(String).filter(Boolean) : [];
