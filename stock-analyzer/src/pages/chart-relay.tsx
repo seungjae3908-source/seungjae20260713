@@ -2012,13 +2012,15 @@ const RelayChart = memo(function RelayChart({
     if (!chart) return;
     const desired = new Set<string>();
     if (tab === 'live' && settings.highlight && candles.length >= 2) {
-      const patternSignals = focusedPatternName
-        ? dedupeSignalOccurrences(signals).filter(
-            (signal) =>
-              normalizeSignalName(signal.name) === focusedPatternName &&
-              (signal.kind === 'chart' || signal.kind === 'candle'),
-          )
-        : []
+      const patternSignals = (
+        focusedPatternName
+          ? dedupeSignalOccurrences(signals).filter(
+              (signal) =>
+                normalizeSignalName(signal.name) === focusedPatternName &&
+                (signal.kind === 'chart' || signal.kind === 'candle'),
+            )
+          : []
+      )
         .sort(
           (left, right) =>
             (toEpochMilliseconds(left.occurredAt) ?? 0) -
