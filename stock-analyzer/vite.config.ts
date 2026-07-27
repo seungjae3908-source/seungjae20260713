@@ -19,7 +19,6 @@ import { sixRequestedFixesPatch } from './six-requested-fixes-patch';
 import { currentRequestBatchPatch } from './current-request-batch-patch';
 import { feedFiveMorePatch } from './feed-five-more-patch';
 import { infoTabFixPatch } from './info-tab-fix-patch';
-import { coinTechStocksFinalPatch } from './coin-tech-stocks-final-patch';
 import { globalDetailsPopupPatch } from './global-details-popup-patch';
 
 const require = createRequire(import.meta.url);
@@ -52,7 +51,6 @@ export default defineConfig({
     currentRequestBatchPatch(),
     feedFiveMorePatch(),
     infoTabFixPatch(),
-    coinTechStocksFinalPatch(),
     globalDetailsPopupPatch(),
     react(),
     tailwindcss(),
