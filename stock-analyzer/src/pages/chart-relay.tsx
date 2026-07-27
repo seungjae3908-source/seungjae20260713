@@ -2228,11 +2228,12 @@ const RelayChart = memo(function RelayChart({
   ]);
 
   useEffect(() => {
+    const chart = chartRef.current;
     const series =
       chartType === 'candles'
         ? candleSeriesRef.current
         : closeSeriesRef.current;
-    if (!series) return;
+    if (!chart || !series) return;
     for (const line of priceLinesRef.current) series.removePriceLine(line);
     priceLinesRef.current = [];
     const markers: SeriesMarker<Time>[] = [];
@@ -2348,7 +2349,7 @@ const RelayChart = memo(function RelayChart({
         nearestDistance = distance;
       }
     });
-    chartRef.current.timeScale().setVisibleLogicalRange({
+    chart.timeScale().setVisibleLogicalRange({
       from: Math.max(0, nearestIndex - 24),
       to: Math.min(candles.length - 1, nearestIndex + 24),
     });
