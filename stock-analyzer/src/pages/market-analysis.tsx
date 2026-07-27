@@ -163,9 +163,6 @@ export default function MarketAnalysisPage() {
 							>
 								<span className="min-w-0 text-center">
 									<span className="block break-keep text-center text-sm font-black">{section.title}</span>
-									<span className="mt-1 block text-center text-[10px] font-bold text-muted-foreground">
-										눌러서 상세 보기
-									</span>
 								</span>
 							</button>
 						))
