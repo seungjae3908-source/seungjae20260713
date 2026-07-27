@@ -82,8 +82,8 @@ function patchChartRelay(source: string): string {
 
   code = replaceOnce(
     code,
-    `<h1 className="text-lg font-extrabold">차트중계</h1>\n            <p className="text-[11px] font-bold text-muted-foreground">실시간 차트·신호 분석 (표시 전용)</p>`,
-    `<h1 className="text-lg font-extrabold">{relayAssetLabel} 차트중계</h1>\n            <p className="text-[11px] font-bold text-muted-foreground">실시간 차트중계 · 실시간 AI분석</p>`,
+    `<h1 className="whitespace-nowrap text-center text-lg font-extrabold leading-tight">차트중계</h1>\n            <p className="mt-1 break-keep text-center text-[11px] font-bold leading-4 text-muted-foreground">실시간 차트·신호 분석 (표시 전용)</p>`,
+    `<h1 className="whitespace-nowrap text-center text-lg font-extrabold leading-tight">{relayAssetLabel} 차트중계</h1>\n            <p className="mt-1 break-keep text-center text-[11px] font-bold leading-4 text-muted-foreground">실시간 차트중계 · 실시간 AI분석</p>`,
     'dynamic relay page title',
   );
 
