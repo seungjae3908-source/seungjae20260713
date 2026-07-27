@@ -406,7 +406,7 @@ export default function StockInfoPage() {
 							<PriceAlertCard assetType="stock" market={market} symbol={ticker} currentPrice={finite(quote.data?.price)} currency={currency} />
 
 							<Section title="기업·업종" state={queryStateText(profile)}>
-								{profile.data && <div className="grid grid-cols-2 gap-2"><Metric label="업종" value={text(profile.data.industry) ?? '데이터 없음'} /><Metric label="산업" value={text(profile.data.sector) ?? '데이터 없음'} /><Metric label="국가" value={text(profile.data.country) ?? '데이터 없음'} /><Metric label="시장상태" value={text(quote.data?.marketStatus) ?? '제공기관 미지원'} /></div>}
+								{profile.data && <div className="grid grid-cols-2 gap-2"><Metric label="업종" value={text(profile.data?.industry) ?? '데이터 없음'} /><Metric label="산업" value={text(profile.data?.sector) ?? '데이터 없음'} /><Metric label="국가" value={text(profile.data?.country) ?? '데이터 없음'} /><Metric label="시장상태" value={text(quote.data?.marketStatus) ?? '제공기관 미지원'} /></div>}
 							</Section>
 
 							<Section title="재무요약" state={queryStateText(financials)} action={<Toggle values={[['quarterly', '분기별'], ['annual', '연별']]} value={financialPeriod} onChange={(value) => setFinancialPeriod(value as FinancialPeriod)} />}>
