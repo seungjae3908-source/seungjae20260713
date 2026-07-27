@@ -7,6 +7,7 @@ import {
 	useRoute,
 } from 'wouter';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ArrowLeft } from 'lucide-react';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SettingsProvider } from '@/lib/settings';
@@ -116,12 +117,37 @@ function MarketRouteRedirect({ to }: { to: string }) {
 	return <PageFallback />;
 }
 
+function GlobalBackButton() {
+	const [location, navigate] = useLocation();
+	const hidden =
+		location === '/' ||
+		location === '/home' ||
+		location.startsWith('/search');
+
+	if (hidden) return null;
+
+	return (
+		<button
+			type="button"
+			aria-label="공통 뒤로가기"
+			onClick={() => {
+				if (window.history.length > 1) window.history.back();
+				else navigate('/home', { replace: true });
+			}}
+			className="absolute left-3 top-3 z-[90] flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card shadow-sm"
+		>
+			<ArrowLeft className="h-4 w-4" />
+		</button>
+	);
+}
+
 function AppShell({ children }: { children: ReactNode }) {
 	return (
 		<div className="relative h-[100dvh] w-full overflow-hidden text-foreground">
 			<AppBackground />
 
 			<div className="relative z-10 mx-auto flex h-[100dvh] min-h-0 max-w-md flex-col overflow-hidden bg-background">
+				<GlobalBackButton />
 				<OfflineBanner />
 				<div className="min-h-0 flex-1 overflow-hidden">{children}</div>
 			</div>
