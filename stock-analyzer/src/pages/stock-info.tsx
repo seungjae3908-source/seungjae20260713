@@ -1006,7 +1006,7 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 		.slice(0, 100);
 	const selected = rows.find((item) => String(item.symbol).toUpperCase() === symbol) ?? null;
 	const currency = coinMarket === 'spot' ? 'KRW' : 'USDT';
-	const candles = (coinMarket === 'spot' ? spotCandles.data?.candles : futuresCandles.data?.candles) as AnyObj[] | undefined;
+	const candles = infoArrayRows(coinMarket === 'spot' ? spotCandles.data : futuresCandles.data, ['candles']);
 	const latestCandle = candles?.at(-1);
 	const connectionOk = coinMarket === 'spot' ? status.data?.upbit?.ok : status.data?.bitget?.ok;
 
@@ -1117,7 +1117,7 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 						<Metric label="총 매수잔량" value={metric(orderbook.data?.totalBidSize)} />
 					</div>
 					<div className="mt-3 max-h-72 space-y-1 overflow-y-auto">
-						{((orderbook.data?.units ?? []) as AnyObj[]).slice(0, 15).map((unit, index) => (
+						{infoArrayRows(orderbook.data, ['units']).slice(0, 15).map((unit, index) => (
 							<div key={index} className="grid grid-cols-4 gap-1 rounded-xl bg-secondary/60 p-2 text-center text-[10px] font-bold">
 								<span className="text-destructive">{money(unit.askPrice, 'KRW')}</span><span>{metric(unit.askSize)}</span><span>{metric(unit.bidSize)}</span><span className="text-positive">{money(unit.bidPrice, 'KRW')}</span>
 							</div>
