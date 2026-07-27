@@ -75,6 +75,19 @@ function queryState(location: string) {
 	return { asset, market, ticker };
 }
 
+function infoArrayRows(value: unknown, keys: string[] = []): AnyObj[] {
+	if (Array.isArray(value)) return value as AnyObj[];
+	if (!value || typeof value !== 'object') return [];
+	const record = value as AnyObj;
+	for (const key of keys) {
+		if (Array.isArray(record[key])) return record[key] as AnyObj[];
+	}
+	for (const key of ['items', 'rows', 'data', 'markets', 'tickers']) {
+		if (Array.isArray(record[key])) return record[key] as AnyObj[];
+	}
+	return [];
+}
+
 function finite(value: unknown): number | null {
 	const number = Number(value);
 	return Number.isFinite(number) ? number : null;
@@ -974,11 +987,14 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 		refetchInterval: 30_000,
 	});
 
+	const spotMarketRows = infoArrayRows(spotMarkets.data, ['markets']);
+	const spotTickerRows = infoArrayRows(spotTickers.data, ['tickers']);
+	const futuresRows = infoArrayRows(futuresTickers.data, ['tickers']);
 	const marketNames = new Map<string, AnyObj>(
-		((spotMarkets.data?.markets ?? []) as AnyObj[]).map((item) => [String(item.symbol), item]),
+		spotMarketRows.map((item): [string, AnyObj] => [String(item.symbol), item]),
 	);
-	const spotRows = ((spotTickers.data?.tickers ?? []) as AnyObj[]).map((item) => ({ ...item, ...(marketNames.get(String(item.symbol)) ?? {}) }));
-	const futureRows = (futuresTickers.data?.tickers ?? []) as AnyObj[];
+	const spotRows = spotTickerRows.map((item) => ({ ...item, ...(marketNames.get(String(item.symbol)) ?? {}) }));
+	const futureRows = futuresRows;
 	const rows = coinMarket === 'spot' ? spotRows : futureRows;
 	const filteredRows = rows
 		.filter((item) => {
@@ -1031,7 +1047,7 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 				market={coinMarket}
 				filter={coinFeedFilter}
 				onFilter={setCoinFeedFilter}
-				items={coinSpecialFeed.data?.items ?? []}
+				items={infoArrayRows(coinSpecialFeed.data, ['items']) as SpecialFeedItem[]}
 				nowMs={nowMs}
 				loading={coinSpecialFeed.isLoading}
 				fetching={coinSpecialFeed.isFetching}
