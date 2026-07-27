@@ -440,7 +440,7 @@ export default function StockInfoPage() {
 									<Metric label="공매도 비중" value={shortSelling.data?.available ? metric(shortSelling.data?.latest?.ratio, '%') : '데이터 없음'} />
 									<Metric label="대차잔고" value={shortSelling.data?.available ? metric(shortSelling.data?.latest?.balance) : '제공 불가'} />
 								</div>
-								{flow.data?.note && <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">{flow.data.note}</p>}
+								{flow.data?.note && <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">{flow.data?.note}</p>}
 							</Section>
 
 							<HistorySection title="최신 뉴스" rows={newsRows} latestCount={5} loading={news.isLoading} error={news.isError} titleOf={(row) => row.title} subtitleOf={(row) => `${row.source ?? '뉴스'} · ${row.date ?? '날짜 없음'}`} />
