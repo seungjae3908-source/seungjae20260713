@@ -2378,7 +2378,7 @@ function OverviewTab({
 
   return (
     <div className="flex flex-col gap-3">
-      <SectionCard
+      <PopupSectionCard
         title="개요"
         subtitle={industry ? `업종 ${industry}` : "회사 개요 정보"}
       >
@@ -2425,9 +2425,9 @@ function OverviewTab({
         <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">
           데이터 제공: {provider}
         </p>
-      </SectionCard>
+      </PopupSectionCard>
 
-      <SectionCard title="AI 간단요약" subtitle="현재 데이터 기준 참고용 분석">
+      <PopupSectionCard title="AI 간단요약" subtitle="현재 데이터 기준 참고용 분석">
         <div className="grid grid-cols-3 gap-2">
           <MiniMetric
             label="AI 점수"
@@ -2578,7 +2578,7 @@ function OverviewTab({
             </button>
           ))}
         </div>
-      </SectionCard>
+      </PopupSectionCard>
       {detailModal && (
         <Modal title={detailModal.title} onClose={() => setDetailModal(null)}>
           <p>{detailModal.text}</p>
@@ -2703,7 +2703,7 @@ function AiTab({
 
   return (
     <div className="space-y-3">
-      <SectionCard title="AI 종합 판단" subtitle="현재 데이터 기준">
+      <PopupSectionCard title="AI 종합 판단" subtitle="현재 데이터 기준">
         <div className="grid grid-cols-3 gap-2">
           <MiniMetric
             label="AI 점수"
@@ -2725,9 +2725,9 @@ function AiTab({
         </div>
 
         <InfoBox>{insights.opinionReason}</InfoBox>
-      </SectionCard>
+      </PopupSectionCard>
 
-      <CollapsibleSection
+      <PopupSectionCard
         title="차트"
         open={openSections.chart}
         onToggle={() => toggleSection("chart")}
@@ -2746,9 +2746,9 @@ function AiTab({
         >
           <SummaryItems items={insights.chartSummary} />
         </button>
-      </CollapsibleSection>
+      </PopupSectionCard>
 
-      <CollapsibleSection
+      <PopupSectionCard
         title="재무"
         open={openSections.financial}
         onToggle={() => toggleSection("financial")}
@@ -2767,9 +2767,9 @@ function AiTab({
         >
           <SummaryItems items={insights.financialSummary} />
         </button>
-      </CollapsibleSection>
+      </PopupSectionCard>
 
-      <CollapsibleSection
+      <PopupSectionCard
         title="최근 소식"
         open={openSections.news}
         onToggle={() => toggleSection("news")}
@@ -2817,9 +2817,9 @@ function AiTab({
             }
           />
         </div>
-      </CollapsibleSection>
+      </PopupSectionCard>
 
-      <CollapsibleSection
+      <PopupSectionCard
         title="AI 진입 계획"
         open={openSections.plan}
         onToggle={() => toggleSection("plan")}
@@ -2838,7 +2838,7 @@ function AiTab({
             />
           ))}
         </div>
-      </CollapsibleSection>
+      </PopupSectionCard>
 
       {analysisModal && (
         <Modal
@@ -7987,7 +7987,7 @@ function FinancialTab({
 
   return (
     <div className="flex flex-col gap-3">
-      <SectionCard
+      <PopupSectionCard
         title="핵심 지표"
         subtitle="지표를 누르면 자세한 설명이 나옵니다"
       >
@@ -8050,10 +8050,10 @@ function FinancialTab({
             </div>
           </Modal>
         )}
-      </SectionCard>
+      </PopupSectionCard>
 
       <div className="order-3">
-        <SectionCard
+        <PopupSectionCard
           title="재무 실적"
           subtitle={`막대가 높을수록 금액이 큽니다 · ${currency === "USD" ? "단위: USD million" : "단위: 백만원"}`}
         >
@@ -8097,11 +8097,11 @@ function FinancialTab({
               확인해 주세요.
             </p>
           )}
-        </SectionCard>
+        </PopupSectionCard>
       </div>
 
       <div className="order-2">
-        <SectionCard title="실적" subtitle="기간별 매출과 이익">
+        <PopupSectionCard title="실적" subtitle="기간별 매출과 이익">
           <div className="mb-3 grid grid-cols-2 gap-2">
             <button
               type="button"
@@ -8154,7 +8154,7 @@ function FinancialTab({
               선택한 기간의 실제 재무 데이터가 아직 확인되지 않았습니다.
             </p>
           )}
-        </SectionCard>
+        </PopupSectionCard>
       </div>
 
       {financialDetail && (
@@ -8457,10 +8457,10 @@ function FilingTab({
   );
   return (
     <div className="space-y-3">
-      <SectionCard title="최근 공시 요약" subtitle={`${source} 최신 공시 기준`}>
+      <PopupSectionCard title="최근 공시 요약" subtitle={`${source} 최신 공시 기준`}>
         <InfoBox>{recentSummary}</InfoBox>
-      </SectionCard>
-      <SectionCard
+      </PopupSectionCard>
+      <PopupSectionCard
         title="공시 원문"
         subtitle="최근 공시 5건을 표시합니다. 제목을 누르면 원문으로 이동합니다."
         actions={
@@ -8480,7 +8480,7 @@ function FilingTab({
             최근 확인된 공시가 없습니다.
           </p>
         )}
-      </SectionCard>
+      </PopupSectionCard>
       {moreOpen && (
         <Modal
           title="전체 공시"
@@ -8667,10 +8667,10 @@ function NewsTab({
   );
   return (
     <div className="space-y-3">
-      <SectionCard title="최근 뉴스 요약" subtitle="해당 종목 최신 기사 기준">
+      <PopupSectionCard title="최근 뉴스 요약" subtitle="해당 종목 최신 기사 기준">
         <InfoBox>{recentSummary}</InfoBox>
-      </SectionCard>
-      <SectionCard
+      </PopupSectionCard>
+      <PopupSectionCard
         title="뉴스 원문"
         subtitle="최근 뉴스 5건을 표시합니다. 제목을 누르면 원문으로 이동합니다."
         actions={
@@ -8690,7 +8690,7 @@ function NewsTab({
             최근 관련 뉴스가 없습니다.
           </p>
         )}
-      </SectionCard>
+      </PopupSectionCard>
       {moreOpen && (
         <Modal
           title="전체 뉴스"
@@ -8815,9 +8815,9 @@ function SignalBox({
 
 function SummaryCard({ title, items }: { title: string; items: string[] }) {
   return (
-    <SectionCard title={title}>
+    <PopupSectionCard title={title}>
       <SummaryItems items={items} />
-    </SectionCard>
+    </PopupSectionCard>
   );
 }
 
