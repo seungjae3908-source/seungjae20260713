@@ -6,7 +6,6 @@ import { SEC_USER_AGENT } from '../lib/config';
 import { ProviderError } from '../lib/errors';
 import { fetchJson } from '../lib/http';
 import { cached, TTL } from '../lib/cache';
-import type { FinancialRow } from '../sample/types';
 
 const HEADERS = {
   'User-Agent': SEC_USER_AGENT,
@@ -134,6 +133,13 @@ export interface CompanyFactsSummary {
   }>;
 }
 
+export interface FinancialFactRow {
+  label: string;
+  value: number;
+  unit: string;
+  period: string;
+}
+
 const FACT_KEYS: Array<{ key: string; label: string }> = [
   { key: 'RevenueFromContractWithCustomerExcludingAssessedTax', label: '매출액' },
   { key: 'Revenues', label: '매출액' },
@@ -220,7 +226,7 @@ export async function getRiskAnalysis(
   return { riskLevel, summary, events, filings };
 }
 
-export function mapFactsToFinancialRows(summary: CompanyFactsSummary): FinancialRow[] {
+export function mapFactsToFinancialRows(summary: CompanyFactsSummary): FinancialFactRow[] {
   return summary.facts.map((fact) => ({
     label: fact.label,
     value: fact.value,
