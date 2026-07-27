@@ -394,7 +394,7 @@ export default function StockInfoPage() {
 								{quote.data && (
 									<div className="grid grid-cols-2 gap-2">
 										<Metric label="전일대비" value={money(quote.data?.changeAmount, currency)} />
-										<Metric label="거래량" value={metric(quote.data.volume)} />
+										<Metric label="거래량" value={metric(quote.data?.volume)} />
 										<Metric label="시가" value={money(quote.data.open, currency)} />
 										<Metric label="고가 / 저가" value={`${money(quote.data.high, currency)} / ${money(quote.data.low, currency)}`} />
 										<Metric label="거래대금" value={money(quote.data.tradingValue, currency)} />
