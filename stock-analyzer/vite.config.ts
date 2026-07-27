@@ -13,7 +13,6 @@ import { chartRelayFocusedMarketPatch } from './chart-relay-focused-market-patch
 import { chartRelaySignalArrowPatch } from './chart-relay-signal-arrow-patch';
 import { focusedPageLayoutPatch } from './focused-page-layout-patch';
 import { tradingHomeGlobalUiPatch } from './trading-home-global-ui-patch';
-import { currentRequestBatchPatch } from './current-request-batch-patch';
 import { infoTabFixPatch } from './info-tab-fix-patch';
 import { globalDetailsPopupPatch } from './global-details-popup-patch';
 
@@ -41,7 +40,6 @@ export default defineConfig({
     chartRelaySignalArrowPatch(),
     focusedPageLayoutPatch(),
     tradingHomeGlobalUiPatch(),
-    currentRequestBatchPatch(),
     infoTabFixPatch(),
     globalDetailsPopupPatch(),
     react(),
