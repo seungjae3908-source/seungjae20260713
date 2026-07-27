@@ -1512,9 +1512,9 @@ export default function DetailPage() {
             ‹
           </button>
 
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate text-lg font-extrabold">{companyName}</h1>
+          <div className="absolute left-1/2 top-[30px] w-[calc(100%_-_184px)] -translate-x-1/2 -translate-y-1/2 text-center">
+            <div className="flex min-w-0 flex-wrap items-center justify-center gap-1.5">
+              <h1 className="max-w-full break-keep text-center text-lg font-extrabold leading-tight">{companyName || ticker}</h1>
 
               <span
                 className={cn(
@@ -1527,7 +1527,7 @@ export default function DetailPage() {
               </span>
             </div>
 
-            <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">
+            <p className="mt-0.5 text-center text-[11px] font-bold text-muted-foreground">
               {ticker}
             </p>
           </div>
