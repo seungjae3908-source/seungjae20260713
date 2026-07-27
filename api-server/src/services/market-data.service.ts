@@ -931,7 +931,7 @@ export class MarketDataService {
     const entries = dedupeEntries([
       ...catalogArray(),
       ...aliasEntries,
-      ...(query.length >= 2 ? await buildKrUniverseEntries() : []),
+      ...(query.length >= 1 ? await buildKrUniverseEntries() : []),
     ]);
 
     for (const entry of entries) {
