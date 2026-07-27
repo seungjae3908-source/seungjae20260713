@@ -23,6 +23,7 @@ type PopupStep =
   | 'stocks'
   | 'coins'
   | 'marketAnalysis'
+  | 'study'
   | 'chartRelay'
   | 'chartStocks'
   | 'chartCoins'
@@ -179,9 +180,9 @@ const INFO_MAIN_ITEMS: PopupItem[] = [
   { label: '전체', href: '/portfolio/summary?asset=all&source=info' },
   { label: '주식', step: 'stocks' },
   { label: '코인', step: 'coins' },
-  { label: '공부', href: '/learn' },
+  { label: '공부', step: 'study' },
   { label: '증시현황', step: 'marketAnalysis' },
-  { label: '포트폴리오', href: '/portfolio/summary?asset=all&source=portfolio' },
+  { label: '포트폴리오', href: '/portfolio?from=info', feature: 'portfolio' },
 ];
 
 const INFO_STOCK_ITEMS: PopupItem[] = [
@@ -207,9 +208,17 @@ const INFO_COIN_ITEMS: PopupItem[] = [
   },
 ];
 
+const STUDY_ITEMS: PopupItem[] = [
+  { label: '캔들·추세', href: '/learn?group=candle&from=info' },
+  { label: '차트지표', href: '/learn?group=indicator&from=info' },
+  { label: '매매신호', href: '/learn?group=signal&from=info' },
+  { label: '재무제표', href: '/learn?group=financial&from=info' },
+  { label: '가치지표', href: '/learn?group=value&from=info' },
+];
+
 const MARKET_ANALYSIS_ITEMS: PopupItem[] = [
-  { label: '국내 증시현황', href: '/analysis/KR' },
-  { label: '해외 증시현황', href: '/analysis/US' },
+  { label: '국내 증시현황', href: '/analysis/kr?from=info' },
+  { label: '해외 증시현황', href: '/analysis/us?from=info' },
 ];
 
 function splitLocation(location: string) {
@@ -268,6 +277,7 @@ function popupTitle(kind: PopupKind, step: PopupStep): string {
   if (step === 'stocks') return '주식 정보';
   if (step === 'coins') return '코인 정보';
   if (step === 'marketAnalysis') return '증시현황';
+  if (step === 'study') return '공부';
   return '정보 선택';
 }
 
@@ -301,16 +311,28 @@ export function BottomNav() {
 
   const moveToPage = (href: string) => {
     closePopup();
+    // 정보의 주식·코인은 같은 pathname에서 query만 바뀌므로
+    // 완전한 새 화면으로 다시 열어 이전 자산 상태가 남지 않게 한다.
+    if (href.startsWith('/stock-info?')) {
+      window.location.assign(href);
+      return;
+    }
     navigate(href);
   };
 
   const goBack = () => {
     closePopup();
+    const current = splitLocation(location);
+    const params = new URLSearchParams(current.query);
+    if (params.get('from') === 'info' || params.get('source') === 'info') {
+      navigate('/stock-info?asset=stock&market=KR&focused=1', { replace: true });
+      return;
+    }
     if (window.history.length > 1) {
       window.history.back();
       return;
     }
-    navigate('/search', { replace: true });
+    navigate('/stock-info?asset=stock&market=KR&focused=1', { replace: true });
   };
 
   const goPreviousStep = () => {
@@ -348,6 +370,7 @@ export function BottomNav() {
       if (step === 'stocks') return INFO_STOCK_ITEMS;
       if (step === 'coins') return INFO_COIN_ITEMS;
       if (step === 'marketAnalysis') return MARKET_ANALYSIS_ITEMS;
+      if (step === 'study') return STUDY_ITEMS;
       return INFO_MAIN_ITEMS;
     }
 
