@@ -89,23 +89,15 @@ export function validateBirth6(value: string): string {
   return birth6;
 }
 
-// 로그인 유지 여부: 유지 안 함이면 브라우저 세션이 끝날 때 로그아웃 처리합니다.
+// 로그인 유지 선택값은 UI 환경설정으로만 보관합니다.
+// 모바일 브라우저는 백그라운드 복귀 중 sessionStorage를 비울 수 있으므로,
+// 이 값으로 유효한 Supabase 세션을 강제 종료하지 않습니다.
 const KEEP_LOGIN_KEY = 'sj-keep-login';
-const SESSION_ALIVE_KEY = 'sj-session-alive';
 
 export function setKeepLogin(keep: boolean) {
   try {
     localStorage.setItem(KEEP_LOGIN_KEY, keep ? '1' : '0');
-    sessionStorage.setItem(SESSION_ALIVE_KEY, '1');
-  } catch { /* 저장 불가 환경에서는 항상 로그인 유지 */ }
-}
-
-function shouldDropRestoredSession(): boolean {
-  try {
-    return localStorage.getItem(KEEP_LOGIN_KEY) === '0' && sessionStorage.getItem(SESSION_ALIVE_KEY) !== '1';
-  } catch {
-    return false;
-  }
+  } catch { /* 저장 불가 환경에서는 Supabase 기본 세션 저장을 사용 */ }
 }
 
 function accountRedirectUrl(mode: 'email_confirmed' | 'login_name' | 'password') {
@@ -150,18 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void getSupabase().auth.getSession().then(async ({ data }) => {
       if (!mounted) return;
 
-      // "로그인 유지" 미선택 상태에서 브라우저를 완전히 닫았다 열면 로그아웃 처리
-      if (data.session && shouldDropRestoredSession()) {
-        await getSupabase().auth.signOut();
-        setSession(null);
-        setProfile(null);
-        setLoading(false);
-        return;
-      }
-      if (data.session) {
-        try { sessionStorage.setItem(SESSION_ALIVE_KEY, '1'); } catch { /* noop */ }
-      }
-
+      // Supabase가 복원한 유효한 세션은 모바일 백그라운드 복귀 후에도 유지합니다.
       setSession(data.session);
       await loadProfile(data.session?.user ?? null);
       setLoading(false);
