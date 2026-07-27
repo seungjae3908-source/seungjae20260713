@@ -74,7 +74,7 @@ export default function PortfolioPlanPage() {
 	);
 
 	// 월 적립식 입력
-	const [monthly, setMonthly] = useState('');
+	const [monthly, setMonthly] = useState('100');
 	const [months, setMonths] = useState(12);
 	const [annualRate, setAnnualRate] = useState('7');
 	const [allocMode, setAllocMode] = useState<AllocMode>('balanced');
@@ -254,11 +254,11 @@ export default function PortfolioPlanPage() {
 					<>
 						{/* 월 적립식 */}
 						<section className="mt-4 rounded-2xl border border-card-border bg-card p-4 shadow-sm">
-							<h2 className="text-sm font-black">월 적립식 시뮬레이션</h2>
+							<h2 className="text-center text-sm font-black">월 적립식 시뮬레이션</h2>
 							<div className="mt-3 grid grid-cols-2 gap-2">
 								<label className="block">
 									<span className="text-[10px] font-bold text-muted-foreground">
-										월 투자금(원)
+										월 투자금(만원)
 									</span>
 									<input
 										type="number"
@@ -267,7 +267,7 @@ export default function PortfolioPlanPage() {
 										value={monthly}
 										onChange={(e) => setMonthly(e.target.value)}
 										placeholder="0"
-										className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-3 text-sm font-bold outline-none focus:border-primary"
+										className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-3 text-center text-sm font-bold outline-none focus:border-primary"
 									/>
 								</label>
 								<label className="block">
@@ -281,7 +281,7 @@ export default function PortfolioPlanPage() {
 										value={annualRate}
 										onChange={(e) => setAnnualRate(e.target.value)}
 										placeholder="7"
-										className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-3 text-sm font-bold outline-none focus:border-primary"
+										className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-3 text-center text-sm font-bold outline-none focus:border-primary"
 									/>
 								</label>
 							</div>
@@ -312,7 +312,7 @@ export default function PortfolioPlanPage() {
 								<select
 									value={allocMode}
 									onChange={(e) => setAllocMode(e.target.value as AllocMode)}
-									className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-3 text-sm font-bold outline-none focus:border-primary"
+									className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-3 text-center text-sm font-bold outline-none focus:border-primary"
 								>
 									{(Object.keys(ALLOC_LABEL) as AllocMode[]).map((m) => (
 										<option key={m} value={m}>
@@ -356,7 +356,7 @@ export default function PortfolioPlanPage() {
 
 						{/* 현재 자산 비중 */}
 						<section className="mt-4 rounded-2xl border border-card-border bg-card p-4 shadow-sm">
-							<h2 className="text-sm font-black">현재 자산 비중</h2>
+							<h2 className="text-center text-sm font-black">현재 자산 비중</h2>
 							<div className="mt-3 grid grid-cols-2 gap-2">
 								<Row label="총자산(원화 환산)" value={fmtKrw(totalAssets)} />
 								<Row label="현금 비중" value={fmtPct(weights.cash)} />
@@ -378,7 +378,7 @@ export default function PortfolioPlanPage() {
 
 						{/* AI 배분안 */}
 						<section className="mt-4 rounded-2xl border border-card-border bg-card p-4 shadow-sm">
-							<h2 className="text-sm font-black">AI 배분안 (잔여 현금 기준)</h2>
+							<h2 className="text-center text-sm font-black">AI 배분안 (잔여 현금 기준)</h2>
 							<p className="mt-1 rounded-xl bg-amber-500/10 p-2 text-[10px] font-bold text-amber-600">
 								AI는 실제 주문을 실행할 수 없습니다. 아래는 참고용 배분 제안입니다.
 							</p>
@@ -441,7 +441,7 @@ export default function PortfolioPlanPage() {
 
 function Row({ label, value }: { label: string; value: string }) {
 	return (
-		<div className="rounded-xl bg-secondary/60 p-2.5">
+		<div className="flex min-h-[72px] flex-col items-center justify-center rounded-xl bg-secondary/60 p-2.5 text-center">
 			<p className="text-[10px] font-bold text-muted-foreground">{label}</p>
 			<p className="mt-0.5 break-words text-xs font-black">{value}</p>
 		</div>
@@ -450,7 +450,7 @@ function Row({ label, value }: { label: string; value: string }) {
 
 function MiniBox({ label, value }: { label: string; value: string }) {
 	return (
-		<div className="rounded-lg bg-background p-1.5">
+		<div className="flex min-h-[64px] flex-col items-center justify-center rounded-lg bg-background p-1.5 text-center">
 			<p className="text-[9px] font-bold text-muted-foreground">{label}</p>
 			<p className="mt-0.5 text-[11px] font-black">{value}</p>
 		</div>
