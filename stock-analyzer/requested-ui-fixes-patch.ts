@@ -246,23 +246,8 @@ function patchHome(source: string): string {
 }
 
 function patchScanner(source: string): string {
-  let code = source;
-
-  code = replaceRequired(
-    code,
-    `import { cn } from "@/lib/utils";`,
-    `import { cn } from "@/lib/utils";\nimport { AdminAutoTradeMonitor } from '@/components/admin-auto-trade-monitor';`,
-    'admin monitor import',
-  );
-
-  code = replaceRequired(
-    code,
-    `{viewMode === "auto" && (\n        <>\n        <ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />`,
-    `{viewMode === "auto" && (\n        <>\n        <AdminAutoTradeMonitor />\n        <ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />`,
-    'admin monitor auto-trading insertion',
-  );
-
-  return code;
+  // The final scanner source intentionally omits duplicate admin/chart panels.
+  return source;
 }
 
 function patchPortfolioPlan(source: string): string {
