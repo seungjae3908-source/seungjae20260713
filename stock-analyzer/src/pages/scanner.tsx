@@ -582,10 +582,15 @@ export default function ScannerPage() {
           : undefined,
       } as any),
     enabled: selected.length > 0,
-    refetchOnWindowFocus: true,
+    staleTime: 2 * 60_000,
+    gcTime: 15 * 60_000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
     refetchOnReconnect: true,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: 2 * 60_000,
+    refetchIntervalInBackground: false,
+    retry: 1,
+    placeholderData: (previous) => previous,
   });
 
   // 스캔 응답의 supportedIndicators를 우선 사용하고, 없으면 시드 목록을 사용한다.
@@ -946,11 +951,11 @@ export default function ScannerPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-background">
+    <div className="h-full w-full min-w-0 overflow-y-auto overscroll-contain bg-background">
       {/* 상단 고정 없음 — 제목·선택 3줄·기간·지표·종목보기가 한 페이지로 함께 스크롤. */}
-      <header className="border-b border-card-border px-4 pb-3 pt-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h1 className="text-xl font-extrabold">도구</h1>
+      <header className="w-full min-w-0 border-b border-card-border px-4 pb-3 pt-4">
+        <div className="mb-3 grid w-full grid-cols-[minmax(0,1fr)_40px] items-center gap-3">
+          <h1 className="min-w-0 text-center text-xl font-extrabold">도구</h1>
 
           {viewMode !== "chart" && (
             <button
@@ -1055,7 +1060,7 @@ export default function ScannerPage() {
         </div>
       </header>
 
-      <main className="space-y-4 p-4 pb-24">
+      <main className="w-full min-w-0 space-y-4 p-4 pb-24">
         {viewMode === "chart" && <ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />}
 
         {viewMode === "condition" && (
