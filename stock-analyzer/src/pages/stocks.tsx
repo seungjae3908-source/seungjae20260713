@@ -229,7 +229,7 @@ export default function StocksPage() {
 		queryKey: ['stocks-movers', mode.stockMarket],
 		queryFn: () =>
 			apiGet<AnyObj>(
-				`/market/movers?market=${mode.stockMarket}&_ts=${Date.now()}`,
+				`/market/movers?market=${mode.stockMarket}&limit=100&_ts=${Date.now()}`,
 			),
 		enabled: isStock,
 		staleTime: 0,
@@ -333,19 +333,15 @@ export default function StocksPage() {
 		if (!category || category === 'ai') return [];
 
 		const source =
-			category === 'volume'
-				? movers.data?.volume
-				: category === 'tradingValue'
-					? movers.data?.popular
-					: category === 'gainers'
-						? movers.data?.gainers
-						: category === 'losers'
-							? movers.data?.losers
-							: [
-									...((movers.data?.popular ?? []) as AnyObj[]),
-									...((movers.data?.volume ?? []) as AnyObj[]),
-									...((movers.data?.gainers ?? []) as AnyObj[]),
-								];
+			category === 'marketCap'
+				? movers.data?.marketCap
+				: category === 'volume'
+					? movers.data?.volume
+					: category === 'tradingValue'
+						? movers.data?.popular
+						: category === 'gainers'
+							? movers.data?.gainers
+							: movers.data?.losers;
 
 		return dedupe(
 			((source ?? []) as AnyObj[]),
