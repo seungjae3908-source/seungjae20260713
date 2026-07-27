@@ -1564,7 +1564,7 @@ export default function DetailPage() {
       className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background"
     >
       <header className="relative z-20 shrink-0 border-b border-card-border bg-background px-3 pb-2 pt-3">
-        <div className="grid grid-cols-[36px_minmax(0,1fr)_auto_36px_36px] items-center gap-2">
+        <div className="grid grid-cols-[36px_minmax(0,1fr)_36px_36px] items-center gap-2">
           <button
             type="button"
             aria-label="뒤로가기"
@@ -1591,22 +1591,6 @@ export default function DetailPage() {
 
             <p className="mt-0.5 text-center text-[11px] font-bold text-muted-foreground">
               {ticker}
-            </p>
-          </div>
-
-          <div className="shrink-0 text-right">
-            <p className="text-base font-extrabold">
-              {formatAppPrice(data?.quote?.price, currency)}
-            </p>
-
-            <p
-              className={cn(
-                "mt-0.5 text-xs font-extrabold",
-
-                changePositive ? "text-positive" : "text-destructive",
-              )}
-            >
-              {formatAppPercent(data?.quote?.changePercent)}
             </p>
           </div>
 
@@ -4109,7 +4093,7 @@ function ChartTab({
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-extrabold text-primary">
                   {index + 1}
                 </span>
-                <div className="min-w-0">
+                <div className="min-w-0 text-center">
                   <p className="text-[10px] font-bold text-muted-foreground">
                     {item.label}
                   </p>
