@@ -8,13 +8,23 @@ import * as sec from '../providers/sec-edgar';
 import * as dart from '../providers/dart';
 import * as finnhub from '../providers/finnhub';
 import * as naver from '../providers/naver';
-import type { FinancialsRaw } from '../providers/sec-edgar';
 import type {
   Financials,
   FinancialRatios,
   FinancialRow,
   HealthLevel,
 } from '../sample/types';
+
+interface FinancialsRaw {
+  annual: FinancialRow[];
+  quarterly: FinancialRow[];
+  latest: {
+    equity: number;
+    liabilities: number;
+    netIncome: number;
+    cash: number;
+  };
+}
 
 function yoy(
   rows: FinancialRow[],
