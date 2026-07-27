@@ -341,7 +341,7 @@ export default function MorePage() {
           <button
             type="button"
             onClick={() => setSettingsPopup('settings-popup-0')}
-            className="flex h-[76px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
+            className="flex h-[64px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
           >
             <span className="block min-w-0 flex-1 break-keep text-center text-sm font-black">계정 · 자산</span>
           </button>
@@ -394,7 +394,7 @@ export default function MorePage() {
           <button
             type="button"
             onClick={() => setSettingsPopup('settings-popup-1')}
-            className="flex h-[76px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
+            className="flex h-[64px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
           >
             <span className="block min-w-0 flex-1 break-keep text-center text-sm font-black">화면 설정</span>
           </button>
@@ -455,7 +455,7 @@ export default function MorePage() {
           <button
             type="button"
             onClick={() => setSettingsPopup('settings-popup-2')}
-            className="flex h-[76px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
+            className="flex h-[64px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
           >
             <span className="block min-w-0 flex-1 break-keep text-center text-sm font-black">휴대폰 알림</span>
           </button>
@@ -521,7 +521,7 @@ export default function MorePage() {
           <button
             type="button"
             onClick={() => setSettingsPopup('settings-popup-3')}
-            className="flex h-[76px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
+            className="flex h-[64px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
           >
             <span className="block min-w-0 flex-1 break-keep text-center text-sm font-black">관심종목 알림 종류</span>
           </button>
@@ -606,7 +606,7 @@ export default function MorePage() {
           <button
             type="button"
             onClick={() => setSettingsPopup('settings-popup-4')}
-            className="flex h-[76px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
+            className="flex h-[64px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
           >
             <span className="block min-w-0 flex-1 break-keep text-center text-sm font-black">서버 자동백업 / 복원</span>
           </button>
