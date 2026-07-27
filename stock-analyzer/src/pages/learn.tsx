@@ -778,16 +778,16 @@ function StudyTopicButton({
     <button
       type="button"
       onClick={onClick}
-      className="grid w-full grid-cols-[72px_minmax(0,1fr)_24px] items-center gap-3 rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm transition active:scale-[0.99]"
+      className="grid w-full grid-cols-[48px_minmax(0,1fr)_20px] items-center gap-2 rounded-2xl border border-card-border bg-card p-3 text-center shadow-sm transition active:scale-[0.99]"
     >
-      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-        <Icon className="h-7 w-7" />
+      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <Icon className="h-5 w-5" />
       </div>
 
       <div className="min-w-0">
-        <p className="text-lg font-extrabold">{topic.title}</p>
+        <p className="text-base font-extrabold">{topic.title}</p>
 
-        <p className="mt-1 break-keep text-sm font-semibold leading-relaxed text-muted-foreground">
+        <p className="mt-1 break-keep text-xs font-semibold leading-relaxed text-muted-foreground">
           {topic.short}
         </p>
       </div>
