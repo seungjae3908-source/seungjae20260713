@@ -2648,7 +2648,7 @@ const RelayChart = memo(function RelayChart({
                     to: candles.length - 1 + 4,
                   };
                   chart.timeScale().setVisibleLogicalRange(range);
-                  savedRangeRef.current = range;
+                  savedRangeRef.current = chart.timeScale().getVisibleLogicalRange();
                 }
                 viewingHistoryRef.current = false;
                 setShowLatest(false);
