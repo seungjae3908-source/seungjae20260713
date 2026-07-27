@@ -469,7 +469,11 @@ export function PortfolioPlannerModals() {
           const target = finite(payload.target);
           const stop = finite(payload.stop);
           const buyLevels = Array.isArray(payload.buyLevels)
-            ? payload.buyLevels.map(finite).filter((value): value is number => value != null)
+            ? payload.buyLevels
+                .map(finite)
+                .filter((value: unknown): value is number =>
+                  typeof value === 'number',
+                )
             : [];
           const sellLevels = Array.isArray(payload.sellLevels)
             ? payload.sellLevels.map(finite).filter((value): value is number => value != null)
