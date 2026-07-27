@@ -1,6 +1,6 @@
 // 신호검색 전체 화면 — 시장별 매수/매도 후보를 탭으로 최대 10개씩 표시한다.
 // 가짜 데이터 금지: 서버가 내려준 실제 후보만 사용하고, 없으면 빈 상태를 표시한다.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useRoute } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, RefreshCw, X } from 'lucide-react';
@@ -16,7 +16,10 @@ type AnyObj = Record<string, any>;
 type ScanMarket = 'kr' | 'us' | 'spot' | 'futures';
 type DirectionTab = 'buy' | 'sell';
 type SignalFilter = 'strongBuy' | 'strongSell' | 'pattern' | 'volume';
-type ScanStyle = 'swing' | 'scalp';
+type ScanStyle = 'scalp' | 'swing' | 'long' | 'custom';
+type MatchMode = 'and' | 'or';
+type SortMode = 'score' | 'change' | 'riskReward';
+type ConditionKey = 'score' | 'volume' | 'macd' | 'trend' | 'riskData';
 
 type Candidate = {
   ticker: string;
@@ -97,6 +100,24 @@ const SCALP_SIGNAL_FILTERS: Array<{ key: SignalFilter; label: string }> = [
   { key: 'pattern', label: '단타 롱 관찰' },
   { key: 'volume', label: '단타 숏 관찰' },
 ];
+
+const CONDITION_OPTIONS: Array<{ key: ConditionKey; label: string }> = [
+  { key: 'score', label: '점수 70 이상' },
+  { key: 'volume', label: '거래량 확대' },
+  { key: 'macd', label: 'MACD 전환' },
+  { key: 'trend', label: '추세 확인' },
+  { key: 'riskData', label: '위험정보 확인' },
+];
+
+function candidateRiskReward(candidate: Candidate): number | null {
+  const price = candidate.price;
+  const target = candidate.target;
+  const stop = candidate.stop;
+  if (price == null || target == null || stop == null) return null;
+  const reward = Math.abs(target - price);
+  const risk = Math.abs(price - stop);
+  return risk > 0 && Number.isFinite(reward / risk) ? reward / risk : null;
+}
 
 function marketToQuery(market: ScanMarket): {
   asset: 'stock' | 'coin';
@@ -197,7 +218,16 @@ export default function SignalScanPage() {
     useState<ScanMarket>(routeMarket ?? 'kr');
   const [directionTab, setDirectionTab] =
     useState<DirectionTab>('buy');
-  const [scanStyle, setScanStyle] = useState<ScanStyle>('swing');
+  const [scanStyle, setScanStyle] = useState<ScanStyle>('scalp');
+  const [matchMode, setMatchMode] = useState<MatchMode>('and');
+  const [sortMode, setSortMode] = useState<SortMode>('score');
+  const [selectedConditions, setSelectedConditions] = useState<ConditionKey[]>([
+    'score',
+    'volume',
+  ]);
+  const [excludeOverheated, setExcludeOverheated] = useState(true);
+  const [excludeRisky, setExcludeRisky] = useState(true);
+  const [savedNotice, setSavedNotice] = useState(false);
   const [signalFilter, setSignalFilter] =
     useState<SignalFilter>('strongBuy');
   const [marketMenu, setMarketMenu] =
@@ -205,6 +235,29 @@ export default function SignalScanPage() {
   const [selected, setSelected] =
     useState<Candidate | null>(null);
   const [searchText, setSearchText] = useState('');
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem('signal-scan-ui-preset-v1');
+      if (!raw) return;
+      const saved = JSON.parse(raw) as {
+        scanStyle?: ScanStyle;
+        matchMode?: MatchMode;
+        sortMode?: SortMode;
+        selectedConditions?: ConditionKey[];
+        excludeOverheated?: boolean;
+        excludeRisky?: boolean;
+      };
+      if (saved.scanStyle) setScanStyle(saved.scanStyle);
+      if (saved.matchMode) setMatchMode(saved.matchMode);
+      if (saved.sortMode) setSortMode(saved.sortMode);
+      if (Array.isArray(saved.selectedConditions)) setSelectedConditions(saved.selectedConditions);
+      if (typeof saved.excludeOverheated === 'boolean') setExcludeOverheated(saved.excludeOverheated);
+      if (typeof saved.excludeRisky === 'boolean') setExcludeRisky(saved.excludeRisky);
+    } catch {
+      // 손상된 로컬 설정은 무시한다.
+    }
+  }, []);
 
   const market = routeMarket ?? stateMarket;
   const isFutures = market === 'futures';
@@ -285,6 +338,18 @@ export default function SignalScanPage() {
           /거래대금|돌파|단기|상승|하락|추세|지지|저항/.test(
             `${basisText} ${candidate.volumeState} ${candidate.trendState}`,
           );
+        const combinedText = `${basisText} ${candidate.verdict} ${candidate.trendState} ${candidate.volumeState}`.toLowerCase();
+        const isOverheated = /과열|과매수|급등|overbought/.test(combinedText);
+        const isRisky = candidate.risks.length > 0 || /위험|경고|거래.?금지/.test(combinedText);
+        const conditionResults: Record<ConditionKey, boolean> = {
+          score: score >= 70,
+          volume: hasVolumeExpansion,
+          macd: hasMacdTurn,
+          trend: /상승|하락|강세|약세|추세|돌파/.test(combinedText),
+          riskData: candidate.risks.length > 0 || candidate.invalidation.length > 0,
+        };
+        if (excludeOverheated && isOverheated) continue;
+        if (excludeRisky && isRisky) continue;
         let matches = false;
 
         if (scanStyle === 'scalp') {
@@ -304,6 +369,17 @@ export default function SignalScanPage() {
           } else {
             matches = candidateDirection === 'sell' && score >= 68;
           }
+        } else if (scanStyle === 'custom') {
+          const checks = selectedConditions.map((key) => conditionResults[key]);
+          matches = checks.length > 0 && (matchMode === 'and' ? checks.every(Boolean) : checks.some(Boolean));
+          if (signalFilter === 'strongBuy') matches = matches && candidateDirection === 'buy';
+          if (signalFilter === 'strongSell') matches = matches && candidateDirection === 'sell';
+        } else if (scanStyle === 'long') {
+          matches =
+            candidate.timeframe === '1D' &&
+            score >= 70 &&
+            /추세|상승|회복|돌파|강세/.test(combinedText);
+          if (signalFilter === 'strongSell') matches = candidate.timeframe === '1D' && candidateDirection === 'sell' && score >= 70;
         } else if (isFutures) {
           if (signalFilter === 'strongBuy') {
             matches = group.key === 'long';
@@ -342,13 +418,31 @@ export default function SignalScanPage() {
     }
 
     return rows
-      .sort(
-        (a, b) =>
+      .sort((a, b) => {
+        if (sortMode === 'change') {
+          return (b.changePercent ?? -Infinity) - (a.changePercent ?? -Infinity);
+        }
+        if (sortMode === 'riskReward') {
+          return (candidateRiskReward(b) ?? -1) - (candidateRiskReward(a) ?? -1);
+        }
+        return (
           (b.score ?? -1) - (a.score ?? -1) ||
-          a.name.localeCompare(b.name, 'ko'),
-      )
+          a.name.localeCompare(b.name, 'ko')
+        );
+      })
       .slice(0, needle ? 30 : 10);
-  }, [groups, isFutures, scanStyle, searchText, signalFilter]);
+  }, [
+    excludeOverheated,
+    excludeRisky,
+    groups,
+    isFutures,
+    matchMode,
+    scanStyle,
+    searchText,
+    selectedConditions,
+    signalFilter,
+    sortMode,
+  ]);
 
   const selectMarket = (next: ScanMarket) => {
     setSelected(null);
@@ -435,10 +529,12 @@ export default function SignalScanPage() {
           </button>
         </header>
 
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="mt-3 grid grid-cols-4 gap-1.5">
           {([
             { key: 'scalp' as const, label: '단타용 · 15분봉' },
-            { key: 'swing' as const, label: '스윙용' },
+            { key: 'swing' as const, label: '스윙' },
+            { key: 'long' as const, label: '중장기' },
+            { key: 'custom' as const, label: '직접 설정' },
           ]).map((item) => (
             <button
               key={item.key}
@@ -450,7 +546,7 @@ export default function SignalScanPage() {
                 setDirectionTab('buy');
               }}
               className={cn(
-                'rounded-xl border px-3 py-2.5 text-xs font-black',
+                'min-w-0 rounded-xl border px-1.5 py-2.5 text-[11px] font-black',
                 scanStyle === item.key
                   ? 'border-primary bg-primary text-primary-foreground'
                   : 'border-card-border bg-card text-muted-foreground',
@@ -466,6 +562,100 @@ export default function SignalScanPage() {
             실제 15분봉만 사용 · 거래량/거래대금·단기 추세·지지/저항을 함께 확인
           </p>
         )}
+
+        <section className="mt-3 rounded-2xl border border-card-border bg-card p-3">
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-[10px] font-black text-muted-foreground">
+              조건 조합
+              <select
+                value={matchMode}
+                onChange={(event) => setMatchMode(event.target.value as MatchMode)}
+                className="mt-1 h-9 w-full rounded-xl border border-card-border bg-background px-3 text-xs font-black text-foreground"
+              >
+                <option value="and">AND · 모두 충족</option>
+                <option value="or">OR · 하나 이상</option>
+              </select>
+            </label>
+            <label className="text-[10px] font-black text-muted-foreground">
+              결과 정렬
+              <select
+                value={sortMode}
+                onChange={(event) => setSortMode(event.target.value as SortMode)}
+                className="mt-1 h-9 w-full rounded-xl border border-card-border bg-background px-3 text-xs font-black text-foreground"
+              >
+                <option value="score">신호 점수순</option>
+                <option value="change">등락률순</option>
+                <option value="riskReward">손익비순</option>
+              </select>
+            </label>
+          </div>
+
+          <p className="mt-3 text-[10px] font-black text-muted-foreground">조건 선택</p>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {CONDITION_OPTIONS.map((condition) => {
+              const active = selectedConditions.includes(condition.key);
+              return (
+                <button
+                  key={condition.key}
+                  type="button"
+                  onClick={() =>
+                    setSelectedConditions((current) =>
+                      active
+                        ? current.filter((key) => key !== condition.key)
+                        : [...current, condition.key],
+                    )
+                  }
+                  className={cn(
+                    'rounded-full border px-2.5 py-1.5 text-[10px] font-black',
+                    active
+                      ? 'border-primary bg-primary/15 text-primary'
+                      : 'border-card-border bg-background text-muted-foreground',
+                  )}
+                >
+                  {condition.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setExcludeOverheated((value) => !value)}
+              className={cn(
+                'rounded-xl border px-2 py-2 text-[10px] font-black',
+                excludeOverheated ? 'border-warning/50 bg-warning/10 text-warning' : 'border-card-border text-muted-foreground',
+              )}
+            >
+              과열 제외 {excludeOverheated ? 'ON' : 'OFF'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setExcludeRisky((value) => !value)}
+              className={cn(
+                'rounded-xl border px-2 py-2 text-[10px] font-black',
+                excludeRisky ? 'border-warning/50 bg-warning/10 text-warning' : 'border-card-border text-muted-foreground',
+              )}
+            >
+              위험 제외 {excludeRisky ? 'ON' : 'OFF'}
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              window.localStorage.setItem(
+                'signal-scan-ui-preset-v1',
+                JSON.stringify({ scanStyle, matchMode, sortMode, selectedConditions, excludeOverheated, excludeRisky }),
+              );
+              setSavedNotice(true);
+              window.setTimeout(() => setSavedNotice(false), 1800);
+            }}
+            className="mt-2 w-full rounded-xl border border-card-border bg-background py-2 text-[10px] font-black"
+          >
+            {savedNotice ? '조건 저장 완료' : '현재 조건 저장'}
+          </button>
+        </section>
 
         <div className="relative mt-3 grid grid-cols-2 gap-2">
           {MARKET_GROUPS.map((group) => {
@@ -635,6 +825,11 @@ export default function SignalScanPage() {
                           손절 {candidate.stop != null
                             ? formatAppPrice(candidate.stop, candidate.currency)
                             : '데이터 없음'}
+                        </span>
+                        <span className="text-emerald-400">
+                          손익비 {candidateRiskReward(candidate) != null
+                            ? `1:${candidateRiskReward(candidate)!.toFixed(2)}`
+                            : '계산 불가'}
                         </span>
                       </div>
                     </div>
