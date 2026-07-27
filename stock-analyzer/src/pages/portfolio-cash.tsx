@@ -59,14 +59,14 @@ function pickNumber(...values: Array<number | boolean | undefined | null>): numb
 }
 
 const CURRENCY_LABEL: Record<CashCurrency, string> = {
-	KRW: '원화 (KRW)',
+	KRW: '만원 (KRW)',
 	USD: '미국 달러 (USD)',
 	USDT: '테더 (USDT)',
 };
 
 function fmt(value: number, currency: CashCurrency): string {
 	if (!Number.isFinite(value)) return '-';
-	if (currency === 'KRW') return `${Math.round(value).toLocaleString()}원`;
+	if (currency === 'KRW') { const scaled = value / 10_000; return `${scaled.toLocaleString('ko-KR', { maximumFractionDigits: Math.abs(scaled) >= 100 ? 0 : Math.abs(scaled) >= 10 ? 1 : 2 })}만원`; }
 	const num = value.toLocaleString(undefined, {
 		minimumFractionDigits: 0,
 		maximumFractionDigits: 2,
