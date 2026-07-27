@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useDeferredValue, useMemo, useState  } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -193,18 +193,21 @@ export default function StocksPage() {
 	const [page, setPage] = useState(1);
 
 	const trimmed = query.trim();
-	const searching = trimmed.length > 0;
+	const deferredTrimmed = useDeferredValue(trimmed);
+	const searching = deferredTrimmed.length > 0;
 	const isStock = mode.asset === 'stock';
 
 	const stockRows = useQuery({
-		queryKey: ['stocks-directory', mode.stockMarket, trimmed],
-		queryFn: () => api.searchRows(trimmed),
+		queryKey: ['stocks-directory', mode.stockMarket, deferredTrimmed],
+		queryFn: () => api.searchRows(deferredTrimmed),
 		enabled: isStock && searching,
-		staleTime: 0,
-		refetchInterval: 5_000,
-		refetchOnMount: true,
-		refetchOnWindowFocus: true,
+		staleTime: 2 * 60_000,
+		gcTime: 15 * 60_000,
+		refetchOnMount: false,
+		refetchOnWindowFocus: false,
 		refetchOnReconnect: true,
+		retry: 1,
+		placeholderData: (previous) => previous,
 	});
 
 	const recommendations = useQuery({
@@ -217,12 +220,14 @@ export default function StocksPage() {
 			apiGet<RecoResponse>(
 				`/market/recommendations?market=${mode.stockMarket}&aiType=${aiGroup}&_ts=${Date.now()}`,
 			),
-		enabled: isStock,
-		staleTime: 0,
-		refetchInterval: 5_000,
-		refetchOnMount: true,
-		refetchOnWindowFocus: true,
+		enabled: isStock && !searching,
+		staleTime: 30_000,
+		gcTime: 10 * 60_000,
+		refetchInterval: 60_000,
+		refetchOnMount: false,
+		refetchOnWindowFocus: false,
 		refetchOnReconnect: true,
+		retry: 1,
 	});
 
 	const movers = useQuery({
@@ -231,12 +236,14 @@ export default function StocksPage() {
 			apiGet<AnyObj>(
 				`/market/movers?market=${mode.stockMarket}&limit=100&_ts=${Date.now()}`,
 			),
-		enabled: isStock,
-		staleTime: 0,
-		refetchInterval: 5_000,
-		refetchOnMount: true,
-		refetchOnWindowFocus: true,
+		enabled: isStock && !searching,
+		staleTime: 30_000,
+		gcTime: 10 * 60_000,
+		refetchInterval: 60_000,
+		refetchOnMount: false,
+		refetchOnWindowFocus: false,
 		refetchOnReconnect: true,
+		retry: 1,
 	});
 
 	const spotMarkets = useQuery({
