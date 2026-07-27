@@ -6,6 +6,7 @@ import { SEC_USER_AGENT } from '../lib/config';
 import { ProviderError } from '../lib/errors';
 import { fetchJson } from '../lib/http';
 import { cached, TTL } from '../lib/cache';
+import type { FinancialRow } from '../sample/types';
 
 const HEADERS = {
   'User-Agent': SEC_USER_AGENT,
@@ -233,4 +234,191 @@ export function mapFactsToFinancialRows(summary: CompanyFactsSummary): Financial
     unit: fact.unit,
     period: fact.end,
   }));
+}
+
+// --- Fundamentals (real annual/quarterly statements via SEC XBRL) -----------
+
+export interface FinancialsRaw {
+  annual: FinancialRow[];
+  quarterly: FinancialRow[];
+  latest: { equity: number; liabilities: number; netIncome: number; cash: number };
+}
+
+// Common stock (contributed capital) tags, used to populate `capital`.
+const CAPITAL_TAGS = [
+  'CommonStockValue',
+  'CommonStocksIncludingAdditionalPaidInCapital',
+];
+
+interface XbrlPoint {
+  start?: string;
+  end: string;
+  val: number;
+  form?: string;
+}
+
+interface XbrlConcept {
+  units?: Record<string, XbrlPoint[]>;
+}
+
+function daysBetween(a: string, b: string): number {
+  return Math.abs(
+    (new Date(b).getTime() - new Date(a).getTime()) / 86_400_000,
+  );
+}
+
+async function concept(cik: string, tag: string): Promise<XbrlPoint[]> {
+  try {
+    const data = await fetchJson<XbrlConcept>(
+      `https://data.sec.gov/api/xbrl/companyconcept/CIK${cik}/us-gaap/${tag}.json`,
+      { provider: 'sec-edgar', headers: HEADERS },
+    );
+    const units = data.units ?? {};
+    const key = Object.keys(units)[0];
+    return key ? units[key] : [];
+  } catch {
+    return [];
+  }
+}
+
+async function firstConcept(cik: string, tags: string[]): Promise<XbrlPoint[]> {
+  for (const t of tags) {
+    const pts = await concept(cik, t);
+    if (pts.length) return pts;
+  }
+  return [];
+}
+
+// Annual flow (income-statement) values keyed by fiscal-year-end year.
+function annualFlow(pts: XbrlPoint[]): Map<string, number> {
+  const byYear = new Map<string, number>();
+  for (const p of pts) {
+    if (p.form !== '10-K' || !p.start) continue;
+    const dur = daysBetween(p.start, p.end);
+    if (dur < 300 || dur > 400) continue;
+    byYear.set(p.end.slice(0, 4), p.val);
+  }
+  return byYear;
+}
+
+// Instant (balance-sheet) values keyed by year-end, taking the latest report.
+function instantByYear(pts: XbrlPoint[]): Map<string, number> {
+  const byYear = new Map<string, number>();
+  for (const p of [...pts].sort((a, b) => a.end.localeCompare(b.end))) {
+    if (p.start) continue;
+    if (p.form !== '10-K' && p.form !== '10-Q') continue;
+    byYear.set(p.end.slice(0, 4), p.val);
+  }
+  return byYear;
+}
+
+// Trailing quarterly flow datapoints (≈90-day periods), sorted by end date.
+function quarterlyFlow(pts: XbrlPoint[]): { end: string; val: number }[] {
+  const m = new Map<string, number>();
+  for (const p of pts) {
+    if (!p.start) continue;
+    if (p.form !== '10-Q' && p.form !== '10-K') continue;
+    const dur = daysBetween(p.start, p.end);
+    if (dur < 80 || dur > 100) continue;
+    m.set(p.end, p.val);
+  }
+  return [...m.entries()]
+    .map(([end, val]) => ({ end, val }))
+    .sort((a, b) => a.end.localeCompare(b.end));
+}
+
+function instantAt(pts: XbrlPoint[], end: string): number {
+  const exact = pts.find((p) => !p.start && p.end === end);
+  return exact ? exact.val : 0;
+}
+
+const REVENUE_TAGS = [
+  'RevenueFromContractWithCustomerExcludingAssessedTax',
+  'Revenues',
+  'SalesRevenueNet',
+];
+
+export async function getFinancials(ticker: string): Promise<FinancialsRaw> {
+  const cik = await getCikByTicker(ticker);
+  return cached(`sec:financials:${cik}`, TTL.financials, async () => {
+    const [rev, op, net, cash, liab, equity, capital] = await Promise.all([
+      firstConcept(cik, REVENUE_TAGS),
+      concept(cik, 'OperatingIncomeLoss'),
+      concept(cik, 'NetIncomeLoss'),
+      firstConcept(cik, [
+        'CashAndCashEquivalentsAtCarryingValue',
+        'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents',
+      ]),
+      concept(cik, 'Liabilities'),
+      concept(cik, 'StockholdersEquity'),
+      firstConcept(cik, CAPITAL_TAGS),
+    ]);
+
+    const revA = annualFlow(rev);
+    const opA = annualFlow(op);
+    const netA = annualFlow(net);
+    const cashA = instantByYear(cash);
+    const liabA = instantByYear(liab);
+    const equityA = instantByYear(equity);
+    const capitalA = instantByYear(capital);
+
+    // Anchor annual periods on the UNION of core income-statement concepts, so a
+    // company that reports NetIncome under a tag variant without a matching
+    // Revenues tag still yields coherent rows (rather than a silent empty set).
+    const years = [...new Set([...revA.keys(), ...netA.keys()])]
+      .sort()
+      .slice(-5);
+    const annual: FinancialRow[] = years.map((y) => {
+      const row: FinancialRow = {
+        period: y,
+        revenue: revA.get(y) ?? 0,
+        operatingIncome: opA.get(y) ?? 0,
+        netIncome: netA.get(y) ?? 0,
+        cash: cashA.get(y) ?? 0,
+        debt: liabA.get(y) ?? 0,
+      };
+
+      const eq = equityA.get(y);
+      if (eq != null) row.equity = eq;
+
+      const cap = capitalA.get(y);
+      if (cap != null) row.capital = cap;
+
+      return row;
+    });
+
+    // Below this coherence threshold the live view is too sparse to trust — throw
+    // so FinancialService falls back to the coherent sample model.
+    if (annual.length < 2) {
+      throw new ProviderError('UNAVAILABLE', 'sec-edgar', `sparse XBRL for ${ticker}`);
+    }
+
+    // Quarterly anchored on revenue if present, else net income.
+    const revQarr = quarterlyFlow(rev);
+    const netQarr = quarterlyFlow(net);
+    const anchor = revQarr.length ? revQarr : netQarr;
+    const revQ = new Map(revQarr.map((q) => [q.end, q.val]));
+    const opQ = new Map(quarterlyFlow(op).map((q) => [q.end, q.val]));
+    const netQ = new Map(netQarr.map((q) => [q.end, q.val]));
+    const quarterly: FinancialRow[] = anchor.slice(-4).map((q) => ({
+      period: q.end.slice(0, 7),
+      revenue: revQ.get(q.end) ?? 0,
+      operatingIncome: opQ.get(q.end) ?? 0,
+      netIncome: netQ.get(q.end) ?? 0,
+      cash: instantAt(cash, q.end),
+      debt: instantAt(liab, q.end),
+    }));
+
+    const latestYear = years[years.length - 1];
+    return {
+      annual,
+      quarterly,
+      latest: {
+        equity: latestYear ? equityA.get(latestYear) ?? 0 : 0,
+        liabilities: latestYear ? liabA.get(latestYear) ?? 0 : 0,
+        netIncome: latestYear ? netA.get(latestYear) ?? 0 : 0,
+        cash: latestYear ? cashA.get(latestYear) ?? 0 : 0,
+      },
+    };
+  });
 }
