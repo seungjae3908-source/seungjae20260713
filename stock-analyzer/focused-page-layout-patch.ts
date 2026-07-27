@@ -59,11 +59,10 @@ function patchStockInfoPage(source: string): string {
     'stock info focused state',
   );
 
-  code = replaceOnce(
-    code,
+  // Current source may already synchronize asset and market state.
+  code = code.replace(
     `\tuseEffect(() => {\n\t\tconst next = queryState(location);\n\t\tsetAsset(next.asset);\n\t\tsetMarket(next.market);\n\t\tsetTicker(next.ticker);\n\t\tsetWatchlisted(isInWatchlist(next.ticker));\n\t}, [location]);`,
     `\tuseEffect(() => {\n\t\tconst next = queryState(location);\n\t\tsetAsset(next.asset);\n\t\tsetMarket(next.market);\n\t\tsetTicker(next.ticker);\n\t\tsetWatchlisted(isInWatchlist(next.ticker));\n\n\t\tif (focusedInfo) {\n\t\t\tappMode.setAsset(next.asset);\n\t\t\tif (next.asset === 'stock') {\n\t\t\t\tappMode.setStockMarket(next.market);\n\t\t\t} else {\n\t\t\t\tappMode.setCoinMarket(focusedCoinMarket);\n\t\t\t}\n\t\t}\n\t\t// URL이 바뀔 때만 선택 정보 시장을 동기화한다.\n\t\t// eslint-disable-next-line react-hooks/exhaustive-deps\n\t}, [location]);`,
-    'stock info route sync',
   );
 
   code = replaceOnce(
