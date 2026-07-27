@@ -52,6 +52,20 @@ function finite(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+function issueSimpleAnalysis(issue: NewsIssue): string {
+  const source = `${issue.title} ${issue.summary}`.toLowerCase();
+  const positive = /상승|개선|증가|성장|호재|수주|계약|승인|흑자|완화|인하|돌파/.test(source);
+  const negative = /하락|악화|감소|악재|적자|규제|소송|위험|우려|인상|침체|급락/.test(source);
+
+  if (positive && !negative) {
+    return '관련 업종의 투자심리와 수급에 긍정적으로 작용할 가능성이 있습니다. 실제 가격 반응과 거래량을 함께 확인하세요.';
+  }
+  if (negative && !positive) {
+    return '관련 종목의 변동성과 하방 위험을 키울 수 있습니다. 장중 반응보다 종가와 후속 보도를 확인하세요.';
+  }
+  return '시장 방향을 단독으로 결정하기보다 지수 흐름·환율·수급과 함께 확인해야 하는 중립 이슈입니다.';
+}
+
 const VIEW_META: Record<
   MarketView,
   { tab: string; indexTitle: string; description: string }
@@ -333,9 +347,17 @@ export default function HomePage() {
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="line-clamp-2 text-xs font-black leading-5">
-                            {issue.summary}
+                            {issue.title || issue.summary}
                           </p>
-                          <p className="mt-1 text-[9px] font-bold text-muted-foreground">
+                          {issue.summary && issue.summary !== issue.title && (
+                            <p className="mt-1 line-clamp-2 text-[10px] font-semibold leading-4 text-muted-foreground">
+                              {issue.summary}
+                            </p>
+                          )}
+                          <p className="mt-2 rounded-xl bg-secondary/70 px-2.5 py-2 text-center text-[10px] font-bold leading-4 text-muted-foreground">
+                            간단 분석 · {issueSimpleAnalysis(issue)}
+                          </p>
+                          <p className="mt-1 text-center text-[9px] font-bold text-muted-foreground">
                             {issue.source}
                           </p>
                         </div>
