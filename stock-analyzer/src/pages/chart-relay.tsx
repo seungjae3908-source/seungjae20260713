@@ -2532,7 +2532,7 @@ const RelayChart = memo(function RelayChart({
 
       <div
         ref={containerRef}
-        className={cn('w-full', isFullscreen ? 'h-[55vh] min-h-[400px]' : 'h-[360px] min-h-[340px]')}
+        className={cn('w-full', isFullscreen ? 'h-[62vh] min-h-[440px]' : 'h-[420px] min-h-[380px]')}
       />
       <div className="pointer-events-none absolute inset-0 z-[2] overflow-hidden">
         {signalZones.map((zone) => (
@@ -3577,41 +3577,57 @@ export default function ChartRelayPage() {
           </button>
         </div>
 
-        {(asset === 'coinSpot' || asset === 'coinFutures') && (
-          <section className="mt-2 rounded-2xl border border-card-border bg-card p-3">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-black">
-                {asset === 'coinSpot' ? '현물 보유정보' : '선물 포지션'}
-              </p>
-              <span className="rounded-full bg-secondary px-2 py-1 text-[9px] font-black text-muted-foreground">
-                읽기 전용
-              </span>
-            </div>
-            {asset === 'coinSpot' ? (
-              spotAccount ? (
-                <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-                  <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">보유수량</p><p className="mt-1 truncate text-xs font-black">{Number(spotAccount.balance ?? 0).toLocaleString('ko-KR')}</p></div>
-                  <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">평균매수가</p><p className="mt-1 truncate text-xs font-black">{Number(spotAccount.averageBuyPrice ?? 0).toLocaleString('ko-KR')}</p></div>
-                  <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">주문대기</p><p className="mt-1 truncate text-xs font-black">{Number(spotAccount.locked ?? 0).toLocaleString('ko-KR')}</p></div>
-                </div>
-              ) : (
-                <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">
-                  {spotAccountsQuery.isLoading ? '업비트 보유정보 조회 중' : '선택 종목의 보유정보가 없습니다.'}
-                </p>
-              )
-            ) : futuresPosition ? (
+        <section className="mt-2 rounded-2xl border border-card-border bg-card p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-black">
+              {asset === 'stockKR'
+                ? '국내주식 보유정보'
+                : asset === 'stockUS'
+                  ? '해외주식 보유정보'
+                  : asset === 'coinSpot'
+                    ? '현물 보유정보'
+                    : '선물 포지션'}
+            </p>
+            <span className="rounded-full bg-secondary px-2 py-1 text-[9px] font-black text-muted-foreground">
+              읽기 전용
+            </span>
+          </div>
+          {asset === 'stockKR' || asset === 'stockUS' ? (
+            portfolioPosition ? (
               <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">방향·레버리지</p><p className="mt-1 truncate text-xs font-black">{String(futuresPosition.holdSide ?? '-').toUpperCase()} · {Number(futuresPosition.leverage ?? 0)}배</p></div>
-                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">평균진입가</p><p className="mt-1 truncate text-xs font-black">{Number(futuresPosition.openPriceAvg ?? 0).toLocaleString('ko-KR')}</p></div>
-                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">청산예상가</p><p className="mt-1 truncate text-xs font-black text-destructive">{Number(futuresPosition.liquidationPrice ?? 0).toLocaleString('ko-KR')}</p></div>
+                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">보유수량</p><p className="mt-1 truncate text-xs font-black">{portfolioPosition.quantity.toLocaleString('ko-KR')}</p></div>
+                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">평균매수가</p><p className="mt-1 truncate text-xs font-black">{portfolioPosition.averagePrice.toLocaleString('ko-KR')}</p></div>
+                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">총매수금액</p><p className="mt-1 truncate text-xs font-black">{portfolioPosition.totalCost.toLocaleString('ko-KR')}</p></div>
               </div>
             ) : (
               <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">
-                {futuresPositionsQuery.isLoading ? '비트겟 포지션 조회 중' : '선택 종목의 선물 포지션이 없습니다.'}
+                {portfolioPositionQuery.isLoading ? '포트폴리오 보유정보 조회 중' : '선택 종목의 보유정보가 없습니다.'}
               </p>
-            )}
-          </section>
-        )}
+            )
+          ) : asset === 'coinSpot' ? (
+            spotAccount ? (
+              <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">보유수량</p><p className="mt-1 truncate text-xs font-black">{Number(spotAccount.balance ?? 0).toLocaleString('ko-KR')}</p></div>
+                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">평균매수가</p><p className="mt-1 truncate text-xs font-black">{Number(spotAccount.averageBuyPrice ?? 0).toLocaleString('ko-KR')}</p></div>
+                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">주문대기</p><p className="mt-1 truncate text-xs font-black">{Number(spotAccount.locked ?? 0).toLocaleString('ko-KR')}</p></div>
+              </div>
+            ) : (
+              <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">
+                {spotAccountsQuery.isLoading ? '업비트 보유정보 조회 중' : '선택 종목의 보유정보가 없습니다.'}
+              </p>
+            )
+          ) : futuresPosition ? (
+            <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">방향·레버리지</p><p className="mt-1 truncate text-xs font-black">{String(futuresPosition.holdSide ?? '-').toUpperCase()} · {Number(futuresPosition.leverage ?? 0)}배</p></div>
+              <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">평균진입가</p><p className="mt-1 truncate text-xs font-black">{Number(futuresPosition.openPriceAvg ?? 0).toLocaleString('ko-KR')}</p></div>
+              <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">청산예상가</p><p className="mt-1 truncate text-xs font-black text-destructive">{Number(futuresPosition.liquidationPrice ?? 0).toLocaleString('ko-KR')}</p></div>
+            </div>
+          ) : (
+            <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">
+              {futuresPositionsQuery.isLoading ? '비트겟 포지션 조회 중' : '선택 종목의 선물 포지션이 없습니다.'}
+            </p>
+          )}
+        </section>
 
         {/* 탭 */}
         <div className="mt-3 grid grid-cols-2 gap-2">
@@ -3641,6 +3657,64 @@ export default function ChartRelayPage() {
           </button>
         </div>
 
+        <section className="mt-3 rounded-2xl border border-primary/25 bg-gradient-to-br from-primary/10 via-card to-card p-3 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="rounded-full bg-primary px-2 py-1 text-[9px] font-black text-primary-foreground">
+                  {asset === 'stockKR' ? '국내주식' : asset === 'stockUS' ? '해외주식' : asset === 'coinSpot' ? '코인 현물' : '코인 선물'}
+                </span>
+                <span className="rounded-full border border-card-border bg-background/70 px-2 py-1 text-[9px] font-black text-muted-foreground">
+                  {realtimeLabel}
+                </span>
+              </div>
+              <p className="mt-2 truncate text-lg font-black">{symbol}</p>
+              <p className="mt-1 text-[10px] font-bold text-muted-foreground">
+                실제 차트 데이터 · {STANDARD_INTERVALS.find((item) => item.key === interval)?.label ?? interval}
+              </p>
+            </div>
+            <div className="shrink-0 text-right">
+              <p className="text-lg font-black">{formatPrice(latestPrice, asset)}</p>
+              <p className={cn('mt-1 text-xs font-black', (latestBarChangePercent ?? 0) >= 0 ? 'text-red-500' : 'text-blue-500')}>
+                {latestBarChangePercent == null ? '변동 계산 중' : `${latestBarChangePercent >= 0 ? '+' : ''}${latestBarChangePercent.toFixed(2)}%`}
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-xl bg-background/70 p-2">
+              <p className="text-[9px] font-bold text-muted-foreground">AI 관점</p>
+              <p className={cn('mt-1 text-xs font-black', plan?.view === '매수' ? 'text-red-500' : plan?.view === '매도' ? 'text-blue-500' : 'text-foreground')}>
+                {plan?.view ?? '분석 중'}
+              </p>
+            </div>
+            <div className="rounded-xl bg-background/70 p-2">
+              <p className="text-[9px] font-bold text-muted-foreground">감지 신호</p>
+              <p className="mt-1 text-xs font-black">{signals.length}개</p>
+            </div>
+            <div className="rounded-xl bg-background/70 p-2">
+              <p className="text-[9px] font-bold text-muted-foreground">표시 모드</p>
+              <p className="mt-1 text-xs font-black">{tab === 'live' ? '차트중계' : 'AI 생중계'}</p>
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-5 gap-1">
+            {(['5m', '15m', '1H', '4H', '1D'] as RealtimeChartTimeframe[]).map((item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setIntervalState(item)}
+                className={cn(
+                  'rounded-lg border px-1 py-2 text-[10px] font-black',
+                  interval === item
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-card-border bg-background/70 text-muted-foreground',
+                )}
+              >
+                {englishTimeframeLabel(item)}
+              </button>
+            ))}
+          </div>
+        </section>
+
         {/* 본문 */}
         {futuresLocked ? (
           <div className="mt-3">
@@ -3652,13 +3726,13 @@ export default function ChartRelayPage() {
           <>
             {/* 차트 영역 */}
             <section className="mt-3 overflow-hidden rounded-2xl border border-card-border bg-card">
-              <div className="min-h-[360px] bg-background/30">
+              <div className="min-h-[420px] bg-background/30">
                 {candleQuery.isLoading && candles.length < 2 ? (
-                  <div className="flex h-[360px] items-center justify-center gap-2 text-sm font-bold text-muted-foreground">
+                  <div className="flex h-[420px] items-center justify-center gap-2 text-sm font-bold text-muted-foreground">
                     <Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중...
                   </div>
                 ) : candleQuery.isError && candles.length < 2 ? (
-                  <div className="flex h-[360px] flex-col items-center justify-center px-6 text-center">
+                  <div className="flex h-[420px] flex-col items-center justify-center px-6 text-center">
                     <ShieldAlert className="h-8 w-8 text-warning" />
                     <p className="mt-3 text-sm font-extrabold">차트 데이터를 불러오지 못했습니다.</p>
                     <p className="mt-1 text-xs text-muted-foreground">
@@ -3674,7 +3748,7 @@ export default function ChartRelayPage() {
                     </button>
                   </div>
                 ) : candles.length < 2 ? (
-                  <div className="flex h-[360px] flex-col items-center justify-center px-6 text-center">
+                  <div className="flex h-[420px] flex-col items-center justify-center px-6 text-center">
                     <p className="text-sm font-extrabold">현재 선택한 종목과 시간봉의 차트 데이터가 없습니다.</p>
                     <p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
                       다른 시간봉을 선택하거나 종목을 확인해 주세요.
