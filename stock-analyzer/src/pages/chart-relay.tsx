@@ -3338,18 +3338,18 @@ export default function ChartRelayPage() {
   return (
     <div className="h-full overflow-y-auto overscroll-contain bg-background">
       <div className="mx-auto max-w-md px-4 pb-28 pt-4">
-        <header className="grid grid-cols-[40px_1fr_40px] items-center gap-3">
+        <header className="relative flex min-h-[68px] w-full items-center justify-center px-14 text-center">
           <button
             type="button"
             onClick={() => navigate('/')}
             aria-label="뒤로"
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"
+            className="absolute left-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card"
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <div className="text-center">
-            <h1 className="text-lg font-extrabold">차트중계</h1>
-            <p className="text-[11px] font-bold text-muted-foreground">실시간 차트·신호 분석 (표시 전용)</p>
+          <div className="w-full min-w-0 text-center">
+            <h1 className="whitespace-nowrap text-center text-lg font-extrabold leading-tight">차트중계</h1>
+            <p className="mt-1 break-keep text-center text-[11px] font-bold leading-4 text-muted-foreground">실시간 차트·신호 분석 (표시 전용)</p>
           </div>
           <button
             type="button"
@@ -3359,7 +3359,7 @@ export default function ChartRelayPage() {
               else void planQuery.refetch();
             }}
             aria-label="새로고침"
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"
+            className="absolute right-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card"
           >
             <RefreshCw className={cn('h-4 w-4', candleQuery.isFetching && 'animate-spin')} />
           </button>
