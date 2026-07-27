@@ -52,8 +52,8 @@ function patchBottomNav(source: string): string {
 
   code = replaceOnce(
     code,
-    `  | 'marketAnalysis'\n  | 'chartRelay'`,
-    `  | 'marketAnalysis'\n  | 'signalScan'\n  | 'signalStocks'\n  | 'signalCoins'\n  | 'chartRelay'`,
+    `  | 'marketAnalysis'\n  | 'study'\n  | 'chartRelay'`,
+    `  | 'marketAnalysis'\n  | 'study'\n  | 'signalScan'\n  | 'signalStocks'\n  | 'signalCoins'\n  | 'chartRelay'`,
     'signal popup steps',
   );
 
