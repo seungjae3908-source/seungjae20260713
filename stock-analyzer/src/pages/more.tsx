@@ -20,6 +20,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { BottomNav } from "@/components/bottom-nav";
+import { AppModal } from '@/components/app-modal';
 import { AiRepairCenter } from "@/components/ai-repair-center";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -149,6 +150,7 @@ export default function MorePage() {
 
   const [backupStatus, setBackupStatus] = useState("파일 백업 대기 중");
   const [remoteBackupBusy, setRemoteBackupBusy] = useState(false);
+  const [settingsPopup, setSettingsPopup] = useState<string | null>(null);
 
   const isDark = settings.theme === "dark";
   const pushSupported = isPushSupported();
@@ -335,15 +337,21 @@ export default function MorePage() {
       </header>
 
         <main className="space-y-5 px-5 py-5 pb-28">
-          <details className="group rounded-3xl border border-card-border bg-card/90 px-5 py-4 shadow-lg transition-all duration-200">
+          <>
+          <button
+            type="button"
+            onClick={() => setSettingsPopup('settings-popup-0')}
+            className="flex h-[76px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
+          >
+            <span className="block min-w-0 flex-1 break-keep text-center text-sm font-black">계정 · 자산</span>
+          </button>
+          <AppModal
+            open={settingsPopup === 'settings-popup-0'}
+            onClose={() => setSettingsPopup(null)}
+            title="계정 · 자산"
+          >
+            <div className="space-y-3 overflow-x-hidden text-center">
 
-          <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4">
-            <span className="w-full text-center text-base font-black">계정 · 자산</span>
-            <span className="absolute right-0 text-sm font-extrabold text-primary font-bold font-bold font-bold font-bold">
-              <span className="group-open:hidden">펼치기</span>
-              <span className="hidden group-open:inline">접기</span>
-            </span>
-          </summary>
 
 
           <button
@@ -377,16 +385,26 @@ export default function MorePage() {
               </p>
             </div>
           </button>
-        </details>
+        
+            </div>
+          </AppModal>
+        </>
 
-        <details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-          <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4">
-            <span className="w-full text-center text-base font-black">화면 설정</span>
-            <span className="absolute right-0 text-sm font-extrabold text-primary font-bold font-bold font-bold font-bold">
-              <span className="group-open:hidden">펼치기</span>
-              <span className="hidden group-open:inline">접기</span>
-            </span>
-          </summary>
+        <>
+          <button
+            type="button"
+            onClick={() => setSettingsPopup('settings-popup-1')}
+            className="flex h-[76px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
+          >
+            <span className="block min-w-0 flex-1 break-keep text-center text-sm font-black">화면 설정</span>
+          </button>
+          <AppModal
+            open={settingsPopup === 'settings-popup-1'}
+            onClose={() => setSettingsPopup(null)}
+            title="화면 설정"
+          >
+            <div className="space-y-3 overflow-x-hidden text-center">
+
 
 
 
@@ -428,16 +446,26 @@ export default function MorePage() {
             </span>
           </button>
 
-        </details>
+        
+            </div>
+          </AppModal>
+        </>
 
-        <details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-          <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4">
-            <span className="w-full text-center text-base font-black">휴대폰 알림</span>
-            <span className="absolute right-0 text-sm font-extrabold text-primary font-bold font-bold font-bold font-bold">
-              <span className="group-open:hidden">펼치기</span>
-              <span className="hidden group-open:inline">접기</span>
-            </span>
-          </summary>
+        <>
+          <button
+            type="button"
+            onClick={() => setSettingsPopup('settings-popup-2')}
+            className="flex h-[76px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
+          >
+            <span className="block min-w-0 flex-1 break-keep text-center text-sm font-black">휴대폰 알림</span>
+          </button>
+          <AppModal
+            open={settingsPopup === 'settings-popup-2'}
+            onClose={() => setSettingsPopup(null)}
+            title="휴대폰 알림"
+          >
+            <div className="space-y-3 overflow-x-hidden text-center">
+
 
           <div className="mb-3">
 
@@ -484,16 +512,26 @@ export default function MorePage() {
           <p className="mt-2 break-keep text-sm font-bold leading-relaxed text-muted-foreground">
             현재 상태: {noticeStatus}
           </p>
-        </details>
+        
+            </div>
+          </AppModal>
+        </>
 
-        <details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-          <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4">
-            <span className="w-full text-center text-base font-black">관심종목 알림 종류</span>
-            <span className="absolute right-0 text-sm font-extrabold text-primary font-bold font-bold font-bold font-bold">
-              <span className="group-open:hidden">펼치기</span>
-              <span className="hidden group-open:inline">접기</span>
-            </span>
-          </summary>
+        <>
+          <button
+            type="button"
+            onClick={() => setSettingsPopup('settings-popup-3')}
+            className="flex h-[76px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
+          >
+            <span className="block min-w-0 flex-1 break-keep text-center text-sm font-black">관심종목 알림 종류</span>
+          </button>
+          <AppModal
+            open={settingsPopup === 'settings-popup-3'}
+            onClose={() => setSettingsPopup(null)}
+            title="관심종목 알림 종류"
+          >
+            <div className="space-y-3 overflow-x-hidden text-center">
+
 
           <div className="mb-3">
 
@@ -557,18 +595,28 @@ export default function MorePage() {
               );
             })}
           </div>
-        </details>
+        
+            </div>
+          </AppModal>
+        </>
 
         {auth.isAdmin ? <AiRepairCenter /> : null}
 
-        <details className="group rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-                                        <summary className="relative flex min-h-6 cursor-pointer list-none items-center justify-center px-10 text-center group-open:mb-4">
-            <span className="w-full text-center text-base font-black">서버 자동백업 / 복원</span>
-            <span className="absolute right-0 text-sm font-extrabold text-primary font-bold font-bold font-bold font-bold">
-              <span className="group-open:hidden">펼치기</span>
-              <span className="hidden group-open:inline">접기</span>
-            </span>
-          </summary>
+        <>
+          <button
+            type="button"
+            onClick={() => setSettingsPopup('settings-popup-4')}
+            className="flex h-[76px] w-full items-center justify-center rounded-2xl border border-card-border bg-card/90 px-4 py-3 text-center shadow-sm"
+          >
+            <span className="block min-w-0 flex-1 break-keep text-center text-sm font-black">서버 자동백업 / 복원</span>
+          </button>
+          <AppModal
+            open={settingsPopup === 'settings-popup-4'}
+            onClose={() => setSettingsPopup(null)}
+            title="서버 자동백업 / 복원"
+          >
+            <div className="space-y-3 overflow-x-hidden text-center">
+
 
                                         <div className="mt-4 grid grid-cols-2 gap-3">
             <button
@@ -591,7 +639,10 @@ export default function MorePage() {
               서버 백업 복원
             </button>
           </div>
-        </details>
+        
+            </div>
+          </AppModal>
+        </>
 
 
 
