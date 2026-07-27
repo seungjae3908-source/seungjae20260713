@@ -113,8 +113,8 @@ function patchSignalScan(source: string): string {
 
   code = replaceOnce(
     code,
-    `<h1 className="text-lg font-extrabold">신호검색</h1>`,
-    `<h1 className="text-lg font-extrabold">{marketTitle} 신호검색</h1>`,
+    `<h1 className="whitespace-nowrap text-center text-lg font-extrabold leading-tight">신호검색</h1>`,
+    `<h1 className="whitespace-nowrap text-center text-lg font-extrabold leading-tight">{marketTitle} 신호검색</h1>`,
     'signal scan dynamic heading',
   );
 
