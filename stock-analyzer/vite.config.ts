@@ -19,7 +19,6 @@ import { sixRequestedFixesPatch } from './six-requested-fixes-patch';
 import { currentRequestBatchPatch } from './current-request-batch-patch';
 import { feedFiveMorePatch } from './feed-five-more-patch';
 import { infoTabFixPatch } from './info-tab-fix-patch';
-import { infoTabFinalScopePatch } from './info-tab-final-scope-patch';
 import { coinTechStocksFinalPatch } from './coin-tech-stocks-final-patch';
 import { globalDetailsPopupPatch } from './global-details-popup-patch';
 
@@ -53,7 +52,6 @@ export default defineConfig({
     currentRequestBatchPatch(),
     feedFiveMorePatch(),
     infoTabFixPatch(),
-    infoTabFinalScopePatch(),
     coinTechStocksFinalPatch(),
     globalDetailsPopupPatch(),
     react(),
