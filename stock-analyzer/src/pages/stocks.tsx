@@ -650,20 +650,7 @@ export default function StocksPage() {
 
 				<AssetSwitch className="mt-3" />
 
-				<div className="mt-3 grid grid-cols-3 gap-2">
-					{CATEGORIES.map((item) => (
-						<button
-							key={item.key}
-							type="button"
-							onClick={() => openCategory(item.key)}
-							className="rounded-xl border border-card-border bg-card px-2 py-2.5 text-center text-[11px] font-black"
-						>
-							{item.label}
-						</button>
-					))}
-				</div>
-
-				<SearchField
+<SearchField
 					value={query}
 					onChange={setQuery}
 					className="mt-3"
@@ -676,7 +663,25 @@ export default function StocksPage() {
 							: '한글·영문 코인명·심볼 검색'
 					}
 				/>
-			</header>
+			
+        <section
+          data-stocks-category-layout="vertical"
+          className="mt-3 rounded-3xl border border-card-border bg-card p-3 shadow-sm"
+        >
+          <div className="grid grid-cols-1 gap-2">
+            {CATEGORIES.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => openCategory(item.key)}
+                className="flex min-h-12 w-full items-center justify-center rounded-2xl border border-card-border bg-background px-4 py-3 text-center text-sm font-black"
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </section>
+      </header>
 
 			<main className="space-y-3 px-4 pb-28 pt-4">
 				{!searching && (
