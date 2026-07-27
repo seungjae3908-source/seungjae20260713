@@ -8506,8 +8506,35 @@ function NewsTab({
   const [history, setHistory] = useState<AnyObj[] | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
-  const sorted = sortContentNewest(news);
-  const historySorted = sortContentNewest(history ?? news);
+  const liveNews = useQuery<AnyObj>({
+    queryKey: ["stock-detail-news-live-v2", ticker],
+    queryFn: async () => {
+      const direct = await tryJson<AnyObj>([`/api/stocks/${ticker}/news`], {});
+      let loaded = collectNews(direct);
+      if (!loaded.length) {
+        const market = /^\d{6}$/.test(ticker) ? "KR" : "US";
+        const feed = await tryJson<AnyObj>(
+          [`/api/stocks/special-feed?asset=stock&market=${market}&limit=500`],
+          {},
+        );
+        loaded = (Array.isArray(feed?.items) ? feed.items : []).filter(
+          (item: AnyObj) =>
+            String(item?.ticker ?? "").trim().toUpperCase() === ticker &&
+            String(item?.kind ?? "") === "news",
+        );
+      }
+      return { news: loaded };
+    },
+    enabled: Boolean(ticker),
+    staleTime: 2 * 60_000,
+    gcTime: 15 * 60_000,
+    retry: 1,
+    refetchOnWindowFocus: false,
+  });
+  const refreshedNews = collectNews(liveNews.data ?? {});
+  const resolvedNews = refreshedNews.length ? refreshedNews : news;
+  const sorted = sortContentNewest(resolvedNews);
+  const historySorted = sortContentNewest(history ?? resolvedNews);
   const recentSummary = sorted[0]
     ? newsPlainSummary(sorted[0])
     : summary || "최근 뉴스 요약 데이터가 부족합니다.";
