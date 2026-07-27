@@ -11,7 +11,17 @@ import { ProviderError } from '../lib/errors';
 import { fetchJson, fetchBuffer } from '../lib/http';
 import { cached, TTL } from '../lib/cache';
 import type { FinancialRow } from '../sample/types';
-import type { FinancialsRaw } from './sec-edgar';
+
+interface FinancialsRaw {
+  annual: FinancialRow[];
+  quarterly: FinancialRow[];
+  latest: {
+    equity: number;
+    liabilities: number;
+    netIncome: number;
+    cash: number;
+  };
+}
 
 const BASE = 'https://opendart.fss.or.kr/api';
 
