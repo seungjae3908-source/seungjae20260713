@@ -257,7 +257,7 @@ function currencyOf(market: Market, quote?: AnyObj | null): Currency {
 async function tryJson<T>(urls: string[], fallback: T): Promise<T> {
   for (const url of urls) {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    const timeout = window.setTimeout(() => controller.abort(), 8_000);
     try {
       const response = await authorizedFetch(url, {
         cache: "no-store",
@@ -448,16 +448,11 @@ async function fetchDetailAdvanced(
       {},
     ),
     tryJson<AnyObj>(
-      [
-        `/api/stocks/${upper}/disclosures?all=1`,
-        `/api/stocks/${upper}/filings?all=1`,
-        `/api/stocks/${upper}/disclosures`,
-        `/api/stocks/${upper}/filings`,
-      ],
+      [`/api/stocks/${upper}/filings`, `/api/stocks/${upper}/disclosures`],
       {},
     ),
     tryJson<AnyObj>(
-      [`/api/stocks/${upper}/news?all=1`, `/api/stocks/${upper}/news`],
+      [`/api/stocks/${upper}/news`],
       {},
     ),
   ]);
@@ -469,7 +464,7 @@ async function fetchDetailAdvanced(
   if (filings.length === 0 || news.length === 0) {
     const market = /^\d{6}$/.test(upper) ? 'KR' : 'US';
     specialFeedRaw = await tryJson<AnyObj>(
-      [`/api/stocks/special-feed?asset=stock&market=${market}&limit=2000`],
+      [`/api/stocks/special-feed?asset=stock&market=${market}&limit=500`],
       {},
     );
     const matchingItems = (Array.isArray(specialFeedRaw?.items)
@@ -1391,7 +1386,7 @@ export default function DetailPage() {
   const [alertOpen, setAlertOpen] = useState(false);
 
   const coreDetail = useQuery<DetailData>({
-    queryKey: ["stock-detail-core-v16", ticker],
+    queryKey: ["stock-detail-core-v17", ticker],
     queryFn: () => fetchDetailCore(ticker),
     enabled: Boolean(ticker),
     staleTime: 15_000,
@@ -1402,7 +1397,7 @@ export default function DetailPage() {
   });
 
   const identityDetail = useQuery<DetailIdentityData>({
-    queryKey: ["stock-detail-identity-v16", ticker],
+    queryKey: ["stock-detail-identity-v17", ticker],
     queryFn: () => fetchDetailIdentity(ticker),
     enabled: Boolean(ticker),
     staleTime: 60_000,
@@ -1413,11 +1408,9 @@ export default function DetailPage() {
   });
 
   const advancedDetail = useQuery<DetailAdvancedData>({
-    queryKey: ["stock-detail-advanced-v16", ticker],
+    queryKey: ["stock-detail-advanced-v17", ticker],
     queryFn: () => fetchDetailAdvanced(ticker),
-    enabled: Boolean(
-      ticker && permissions.canUseAdvancedAnalysis && coreDetail.data,
-    ),
+    enabled: Boolean(ticker && permissions.canUseAdvancedAnalysis),
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000,
     refetchInterval: 5 * 60_000,
