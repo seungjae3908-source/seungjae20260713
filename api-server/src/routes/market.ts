@@ -364,37 +364,64 @@ router.get("/config", (_req, res) => {
 
 router.get("/search", async (req, res) => {
 	const q = String(req.query.q ?? "").trim();
-
-	try {
-		const results = await MarketDataService.search(q, 80);
-		if (results.length > 0) {
-			res.json({ q, results });
-			return;
-		}
-	} catch {
-		// fallback below
-	}
-
-	const naverResults = await searchNaverStocks(q);
-	if (naverResults.length > 0) {
-		res.json({ q, results: naverResults });
+	if (!q) {
+		res.json({ q, results: [] });
 		return;
 	}
 
-	const needle = q.replace(/\s+/g, "").toLowerCase();
-	const results = FALLBACK_UNIVERSE.filter((stock) => {
-		const target = `${stock.ticker}${stock.name}`
-			.replace(/\s+/g, "")
-			.toLowerCase();
-		return !needle || target.includes(needle);
-	}).map((stock) => ({
-		ticker: stock.ticker,
-		name: stock.name,
-		market: stock.market,
-		currency: stock.currency,
-		assetType: "stock",
-		aliases: [],
-	}));
+	const [serviceResult, naverResult] = await Promise.allSettled([
+		MarketDataService.search(q, 80),
+		searchNaverStocks(q),
+	]);
+	const combined = [
+		...(serviceResult.status === "fulfilled" ? serviceResult.value : []),
+		...(naverResult.status === "fulfilled" ? naverResult.value : []),
+	];
+
+	const unique = new Map<string, (typeof combined)[number]>();
+	for (const result of combined) {
+		const key = `${String(result.market).toUpperCase()}:${normalizeTicker(result.ticker)}`;
+		const existing = unique.get(key);
+		if (!existing || (!existing.name && result.name)) unique.set(key, result);
+	}
+
+	const needle = q
+		.normalize("NFKC")
+		.toLowerCase()
+		.replace(/[^a-z0-9가-힣]/g, "");
+	const score = (result: (typeof combined)[number]): number => {
+		const ticker = normalizeTicker(result.ticker).toLowerCase();
+		const name = String(result.name ?? "")
+			.normalize("NFKC")
+			.toLowerCase()
+			.replace(/[^a-z0-9가-힣]/g, "");
+		const aliases = (result.aliases ?? []).map((alias) =>
+			String(alias)
+				.normalize("NFKC")
+				.toLowerCase()
+				.replace(/[^a-z0-9가-힣]/g, ""),
+		);
+		if (ticker === needle) return 1000;
+		if (name === needle) return 950;
+		if (name.startsWith(needle)) return 850;
+		if (ticker.startsWith(needle)) return 800;
+		if (aliases.some((alias) => alias.startsWith(needle))) return 750;
+		if (name.includes(needle)) return 650;
+		if (ticker.includes(needle)) return 600;
+		if (aliases.some((alias) => alias.includes(needle))) return 550;
+		return 0;
+	};
+
+	const results = [...unique.values()]
+		.map((result) => ({ result, rank: score(result) }))
+		.filter(({ rank }) => rank > 0)
+		.sort((left, right) =>
+			right.rank !== left.rank
+				? right.rank - left.rank
+				: String(left.result.ticker).localeCompare(String(right.result.ticker)),
+		)
+		.slice(0, 80)
+		.map(({ result }) => result);
 
 	res.json({ q, results });
 });
