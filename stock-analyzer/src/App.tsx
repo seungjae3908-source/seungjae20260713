@@ -43,6 +43,8 @@ const LearnPage = lazy(() => import('@/pages/learn'));
 const RankingPage = lazy(() => import('@/pages/ranking'));
 const MorePage = lazy(() => import('@/pages/more'));
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
+const AssetEvaluationPage = lazy(() => import('@/pages/asset-evaluation'));
+const WatchlistAssetsPage = lazy(() => import('@/pages/watchlist-assets'));
 const PortfolioCashPage = lazy(() => import('@/pages/portfolio-cash'));
 const PortfolioSimulatePage = lazy(() => import('@/pages/portfolio-simulate'));
 const PortfolioPlanPage = lazy(() => import('@/pages/portfolio-plan'));
@@ -145,8 +147,9 @@ function AppShell({ children }: { children: ReactNode }) {
 	return (
 		<div className="relative h-[100dvh] w-full overflow-hidden text-foreground">
 			<AppBackground />
+			<style>{`.requested-center-text :where(h1,h2,h3,h4,p,span,label,button,input,textarea,select,th,td){text-align:center!important}.requested-center-text input,.requested-center-text textarea{justify-content:center}.requested-center-text [class*="text-left"]{text-align:center!important}`}</style>
 
-			<div className="relative z-10 mx-auto flex h-[100dvh] min-h-0 max-w-md flex-col overflow-hidden bg-background">
+			<div className="requested-center-text relative z-10 mx-auto flex h-[100dvh] min-h-0 max-w-md flex-col overflow-hidden bg-background">
 				<GlobalBackButton />
 				<OfflineBanner />
 				<div className="min-h-0 flex-1 overflow-hidden">{children}</div>
@@ -248,6 +251,22 @@ function AdvancedPortfolioPage() {
 	return (
 		<FeatureGate feature="advancedAnalysis">
 			<PortfolioPage />
+		</FeatureGate>
+	);
+}
+
+function AdvancedAssetEvaluationPage() {
+	return (
+		<FeatureGate feature="advancedAnalysis">
+			<AssetEvaluationPage />
+		</FeatureGate>
+	);
+}
+
+function GatedWatchlistAssetsPage() {
+	return (
+		<FeatureGate feature="watchlist">
+			<WatchlistAssetsPage />
 		</FeatureGate>
 	);
 }
@@ -431,8 +450,10 @@ function ApprovedRouter() {
 				<Route path="/tech/auto-trade" component={GatedAutoTradePage} />
 				<Route path="/analysis/:market" component={GatedMarketAnalysisPage} />
 				<Route path="/learn" component={AdvancedLearnPage} />
+				<Route path="/watchlist/assets" component={GatedWatchlistAssetsPage} />
 				<Route path="/watchlist" component={GatedWatchlistPage} />
 				<Route path="/alerts" component={GatedAlertsPage} />
+				<Route path="/portfolio/summary" component={AdvancedAssetEvaluationPage} />
 				<Route path="/portfolio/cash" component={AdvancedPortfolioCashPage} />
 				<Route
 					path="/portfolio/simulate"
