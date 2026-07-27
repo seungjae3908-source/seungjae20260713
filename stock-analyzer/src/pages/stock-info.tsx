@@ -383,7 +383,7 @@ export default function StockInfoPage() {
 										</div>
 										<div className="mt-3 grid grid-cols-2 gap-2">
 											<Metric label="현재가" value={money(quote.data?.price, currency)} strong />
-											<Metric label="등락률" value={finite(quote.data.changePercent) == null ? '데이터 없음' : formatAppPercent(quote.data.changePercent)} tone={Number(quote.data.changePercent) >= 0 ? 'up' : 'down'} />
+											<Metric label="등락률" value={finite(quote.data?.changePercent) == null ? '데이터 없음' : formatAppPercent(quote.data?.changePercent)} tone={Number(quote.data?.changePercent) >= 0 ? 'up' : 'down'} />
 										</div>
 										<button type="button" onClick={() => navigate(`/stock/${encodeURIComponent(ticker)}`)} className="mt-3 flex w-full items-center justify-center gap-1 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground">상세 분석 <ChevronRight className="h-4 w-4" /></button>
 									</>
