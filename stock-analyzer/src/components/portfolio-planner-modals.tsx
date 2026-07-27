@@ -206,7 +206,9 @@ export function PortfolioPlannerModals() {
                 String(row.ticker ?? row.symbol ?? '').toUpperCase(),
                 Number(row.price ?? row.currentPrice),
               ] as const)
-              .filter(([, price]) => Number.isFinite(price)),
+              .filter((entry: readonly [string, number]) =>
+                Number.isFinite(entry[1]),
+              ),
           );
         }
       }
