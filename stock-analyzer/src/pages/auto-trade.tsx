@@ -36,7 +36,6 @@ export default function AutoTradePage() {
   const [, navigate] = useLocation();
 
   const [market, setMarket] = useState<OrderMarket>('kr');
-  const [symbol, setSymbol] = useState('');
   const [side, setSide] = useState<OrderSide>('buy');
   const [orderType, setOrderType] = useState<OrderType>('market');
   const [price, setPrice] = useState('');
@@ -99,19 +98,6 @@ export default function AutoTradePage() {
                 </button>
               ))}
             </div>
-          </div>
-
-          <div className="mt-3">
-            <label className="mb-1.5 block text-[11px] font-bold text-muted-foreground">
-              종목
-            </label>
-            <input
-              type="text"
-              value={symbol}
-              onChange={(event) => setSymbol(event.target.value)}
-              placeholder="예: 005930, AAPL, BTC"
-              className="w-full rounded-xl border border-card-border bg-background px-3 py-2.5 text-sm font-bold outline-none"
-            />
           </div>
 
           <div className="mt-3 grid grid-cols-2 gap-2">
