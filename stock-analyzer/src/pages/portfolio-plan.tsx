@@ -40,7 +40,8 @@ const PERIOD_OPTIONS = [3, 6, 12, 24, 36];
 
 function fmtKrw(value: number | null): string {
 	if (value == null || !Number.isFinite(value)) return '산출 불가';
-	return `${Math.round(value).toLocaleString()}원`;
+	const scaled = value / 10_000;
+	return `${scaled.toLocaleString('ko-KR', { maximumFractionDigits: Math.abs(scaled) >= 100 ? 0 : Math.abs(scaled) >= 10 ? 1 : 2 })}만원`;
 }
 
 function fmtPct(value: number): string {
