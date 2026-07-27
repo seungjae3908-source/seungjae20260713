@@ -4988,6 +4988,7 @@ function PriceChartCanvas({
   timeframe,
   indicators,
   fullscreen,
+  height,
   portfolioOverlay,
   autoSignal,
   studyFocus,
@@ -4998,6 +4999,7 @@ function PriceChartCanvas({
   timeframe: ChartTimeframe;
   indicators: ChartIndicatorSettings;
   fullscreen: boolean;
+  height: number;
   portfolioOverlay: PortfolioChartOverlay | null;
   autoSignal: ReturnType<typeof getAutoTradeSignal>;
   studyFocus: StudyChartFocus | null;
