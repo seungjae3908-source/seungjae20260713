@@ -490,7 +490,9 @@ export default function SignalScanPage() {
                       : 'border-card-border bg-card text-muted-foreground',
                   )}
                 >
-                  {group.label}
+                  {selectedGroup
+                    ? group.items.find((item) => item.key === market)?.label ?? group.label
+                    : group.label}
                   <ChevronDown className="h-3.5 w-3.5" />
                 </button>
 
