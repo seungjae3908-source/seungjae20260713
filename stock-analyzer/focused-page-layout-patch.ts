@@ -17,12 +17,13 @@ function replaceOnce(
 function patchStocksPage(source: string): string {
   let code = source;
 
-  code = replaceOnce(
-    code,
-    "import { useMemo, useState } from 'react';",
-    "import { useEffect, useMemo, useState } from 'react';",
-    'stocks react import',
-  );
+  if (!/import \\{[^}]*\\buseEffect\\b[^}]*\\} from 'react';/.test(code)) {
+    code = code.replace(
+      /import \\{([^}]*)\\} from 'react';/,
+      (_full, hooks: string) =>
+        `import { useEffect, ${hooks.trim()} } from 'react';`,
+    );
+  }
 
   code = replaceOnce(
     code,
