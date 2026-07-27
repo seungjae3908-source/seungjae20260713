@@ -220,7 +220,14 @@ export default function SignalScanPage() {
         `/market/signal-scan?asset=${asset}&market=${marketParam}`,
       ),
     enabled: !futuresLocked,
-    refetchInterval: 60_000,
+    staleTime: 5 * 60_000,
+    gcTime: 20 * 60_000,
+    refetchInterval: 5 * 60_000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+    retry: 1,
+    placeholderData: (previous) => previous,
   });
 
   const groups = useMemo<ScanGroup[]>(() => {
@@ -394,7 +401,7 @@ export default function SignalScanPage() {
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain bg-background">
-      <div className="mx-auto max-w-md px-4 pb-28 pt-4">
+      <div className="w-full min-w-0 px-4 pb-28 pt-4">
         <header className="relative flex min-h-[68px] w-full items-center justify-center px-14 text-center">
           <button
             type="button"
