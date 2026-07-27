@@ -71,8 +71,9 @@ function queryState(location: string) {
 	const params = new URLSearchParams(locationQuery || browserQuery);
 	const asset: AssetTab = params.get('asset') === 'coin' ? 'coin' : 'stock';
 	const market: MarketTab = params.get('market') === 'US' ? 'US' : 'KR';
-	const ticker = String(params.get('ticker') ?? '').toUpperCase();
-	return { asset, market, ticker };
+	const coinMarket: CoinMarketTab = params.get('coinMarket') === 'futures' ? 'futures' : 'spot';
+	const ticker = String(params.get('ticker') ?? params.get('symbol') ?? '').toUpperCase();
+	return { asset, market, ticker, coinMarket };
 }
 
 function infoArrayRows(value: unknown, keys: string[] = []): AnyObj[] {
@@ -122,6 +123,10 @@ function normalizeTitle(value: unknown) {
 		.replace(/[^0-9a-z가-힣]/g, '');
 }
 
+function specialFeedIdentity(item: SpecialFeedItem): string {
+	return [item.kind, item.ticker, normalizeTitle(item.title), item.url ?? ''].join('|');
+}
+
 function groupUnique<T extends AnyObj>(rows: T[], titleOf: (row: T) => unknown): T[] {
 	const grouped = new Map<string, T>();
 	for (const row of [...rows].sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')))) {
@@ -153,6 +158,9 @@ export default function StockInfoPage() {
 		setMarket(next.market);
 		setTicker(next.ticker);
 		setWatchlisted(isInWatchlist(next.ticker));
+		appMode.setAsset(next.asset);
+		if (next.asset === 'stock') appMode.setStockMarket(next.market);
+		else appMode.setCoinMarket(next.coinMarket);
 	}, [location]);
 
 	useEffect(() => {
@@ -497,7 +505,7 @@ function SpecialFeedPanel({
 					: '비트겟 선물';
 
 	const filteredItems = useMemo(() => {
-		return [...items]
+		return Array.from(new Map(items.map((item) => [specialFeedIdentity(item), item])).values())
 			.filter((item) =>
 				!selectedTicker ||
 				item.ticker.trim().toUpperCase() === selectedTicker.trim().toUpperCase(),
@@ -523,9 +531,9 @@ function SpecialFeedPanel({
 			});
 	}, [filter, items, nowMs, selectedTicker, view]);
 
-	const pageCount = Math.max(1, Math.ceil(filteredItems.length / 10));
-	const modalItems = filteredItems.slice((page - 1) * 10, page * 10);
-	const visibleItems = filteredItems.slice(0, 10);
+	const pageCount = Math.max(1, Math.ceil(filteredItems.length / 5));
+	const modalItems = filteredItems.slice(0, page * 5);
+	const visibleItems = filteredItems.slice(0, 5);
 
 	useEffect(() => {
 		setPage(1);
@@ -581,7 +589,7 @@ function SpecialFeedPanel({
 						<button
 							key={key}
 							type="button"
-							onClick={() => onFilter(key)}
+							onClick={() => { onFilter(key); setPage(1); setMoreOpen(true); }}
 							className={cn(
 								'min-w-0 whitespace-nowrap rounded-xl border px-1 py-2 text-[10px] font-black',
 								filter === key
@@ -621,7 +629,7 @@ function SpecialFeedPanel({
 							onOpenItem={() => onOpenItem(item)}
 						/>
 					))}
-					{!loading && !error && filteredItems.length > 10 && (
+					{!loading && !error && filteredItems.length > 5 && (
 						<button
 							type="button"
 							onClick={() => {
@@ -647,7 +655,7 @@ function SpecialFeedPanel({
 						<div className="flex items-center justify-between border-b border-card-border px-4 py-3">
 							<div>
 								<p className="text-sm font-black">{view === 'latest' ? '최신정보' : '보관함'} 더보기</p>
-								<p className="mt-0.5 text-[10px] font-bold text-muted-foreground">페이지당 10개 · 전체 {filteredItems.length}건</p>
+								<p className="mt-0.5 text-[10px] font-bold text-muted-foreground">페이지당 5개 · 전체 {filteredItems.length}건</p>
 							</div>
 							<button type="button" onClick={() => setMoreOpen(false)} aria-label="닫기" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border">
 								<X className="h-4 w-4" />
@@ -669,24 +677,15 @@ function SpecialFeedPanel({
 						</div>
 
 						<div className="flex items-center justify-between border-t border-card-border px-3 py-3">
-							<button
-								type="button"
-								onClick={() => setPage((value) => Math.max(1, value - 1))}
-								disabled={page <= 1}
-								className="inline-flex items-center gap-1 rounded-xl border border-card-border px-3 py-2 text-xs font-black disabled:opacity-40"
-							>
-								<ChevronLeft className="h-4 w-4" />
-								이전
-							</button>
-							<span className="text-xs font-black">{page} / {pageCount}</span>
+							<span className="text-xs font-black">{modalItems.length} / {filteredItems.length}건</span>
 							<button
 								type="button"
 								onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
 								disabled={page >= pageCount}
-								className="inline-flex items-center gap-1 rounded-xl border border-card-border px-3 py-2 text-xs font-black disabled:opacity-40"
+								className="inline-flex items-center gap-1 rounded-xl border border-card-border px-4 py-2 text-xs font-black text-primary disabled:opacity-40"
 							>
-								다음
-								<ChevronRight className="h-4 w-4" />
+								더보기
+								<ChevronDown className="h-4 w-4" />
 							</button>
 						</div>
 					</div>
