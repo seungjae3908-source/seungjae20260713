@@ -398,7 +398,7 @@ export default function StockInfoPage() {
 										<Metric label="시가" value={money(quote.data?.open, currency)} />
 										<Metric label="고가 / 저가" value={`${money(quote.data?.high, currency)} / ${money(quote.data?.low, currency)}`} />
 										<Metric label="거래대금" value={money(quote.data?.tradingValue, currency)} />
-										<Metric label="시가총액" value={money(quote.data.marketCap ?? financials.data?.marketCap, currency)} />
+										<Metric label="시가총액" value={money(quote.data?.marketCap ?? financials.data?.marketCap, currency)} />
 									</div>
 								)}
 							</Section>
