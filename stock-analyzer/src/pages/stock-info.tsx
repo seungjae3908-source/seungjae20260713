@@ -336,6 +336,7 @@ export default function StockInfoPage() {
 					<SpecialFeedPanel
 						asset="stock"
 						market={market}
+						selectedTicker={ticker}
 						filter={feedFilter}
 						onFilter={setFeedFilter}
 						items={specialFeed.data?.items ?? []}
@@ -449,6 +450,7 @@ export default function StockInfoPage() {
 function SpecialFeedPanel({
 	asset,
 	market,
+	selectedTicker,
 	filter,
 	onFilter,
 	items,
@@ -462,6 +464,7 @@ function SpecialFeedPanel({
 }: {
 	asset: AssetTab;
 	market: SpecialFeedMarket;
+	selectedTicker?: string;
 	filter: SpecialFeedFilter;
 	onFilter: (value: SpecialFeedFilter) => void;
 	items: SpecialFeedItem[];
@@ -495,6 +498,10 @@ function SpecialFeedPanel({
 
 	const filteredItems = useMemo(() => {
 		return [...items]
+			.filter((item) =>
+				!selectedTicker ||
+				item.ticker.trim().toUpperCase() === selectedTicker.trim().toUpperCase(),
+			)
 			.filter((item) => {
 				const archiveAt = Date.parse(item.archiveAt);
 				const fallbackArchiveAt = Date.parse(item.detectedAt) + 7 * 24 * 60 * 60_000;
@@ -514,7 +521,7 @@ function SpecialFeedPanel({
 				const bTime = Date.parse(b.sourceAt ?? b.detectedAt);
 				return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
 			});
-	}, [filter, items, nowMs, view]);
+	}, [filter, items, nowMs, selectedTicker, view]);
 
 	const pageCount = Math.max(1, Math.ceil(filteredItems.length / 10));
 	const modalItems = filteredItems.slice((page - 1) * 10, page * 10);
@@ -522,7 +529,7 @@ function SpecialFeedPanel({
 
 	useEffect(() => {
 		setPage(1);
-	}, [asset, filter, market, view]);
+	}, [asset, filter, market, selectedTicker, view]);
 
 	useEffect(() => {
 		if (page > pageCount) setPage(pageCount);
