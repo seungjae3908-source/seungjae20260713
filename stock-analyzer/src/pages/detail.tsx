@@ -8289,8 +8289,40 @@ function FilingTab({
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const source = market === "KR" ? "DART" : "SEC EDGAR";
-  const sorted = sortContentNewest(filings);
-  const historySorted = sortContentNewest(history ?? filings);
+  const liveFilings = useQuery<AnyObj>({
+    queryKey: ["stock-detail-filings-live-v2", ticker],
+    queryFn: async () => {
+      const [filingResponse, disclosureResponse] = await Promise.all([
+        tryJson<AnyObj>([`/api/stocks/${ticker}/filings`], {}),
+        tryJson<AnyObj>([`/api/stocks/${ticker}/disclosures`], {}),
+      ]);
+      let loaded = [
+        ...collectFilings(filingResponse),
+        ...collectFilings(disclosureResponse),
+      ];
+      if (!loaded.length) {
+        const feed = await tryJson<AnyObj>(
+          [`/api/stocks/special-feed?asset=stock&market=${market}&limit=500`],
+          {},
+        );
+        loaded = (Array.isArray(feed?.items) ? feed.items : []).filter(
+          (item: AnyObj) =>
+            String(item?.ticker ?? "").trim().toUpperCase() === ticker &&
+            String(item?.kind ?? "") === "disclosure",
+        );
+      }
+      return { filings: loaded };
+    },
+    enabled: Boolean(ticker),
+    staleTime: 2 * 60_000,
+    gcTime: 15 * 60_000,
+    retry: 1,
+    refetchOnWindowFocus: false,
+  });
+  const refreshedFilings = collectFilings(liveFilings.data ?? {});
+  const resolvedFilings = refreshedFilings.length ? refreshedFilings : filings;
+  const sorted = sortContentNewest(resolvedFilings);
+  const historySorted = sortContentNewest(history ?? resolvedFilings);
   const recentSummary = sorted[0]
     ? filingPlainSummary(sorted[0])
     : summary || "최근 공시 요약 데이터가 부족합니다.";
