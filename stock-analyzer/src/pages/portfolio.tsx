@@ -96,9 +96,9 @@ function money(
 		)}`;
 	}
 
-	return `${Math.round(
-		value,
-	).toLocaleString()}원`;
+	const scaled = value / 10_000;
+	const digits = Math.abs(scaled) >= 100 ? 0 : Math.abs(scaled) >= 10 ? 1 : 2;
+	return `${scaled.toLocaleString('ko-KR', { maximumFractionDigits: digits })}만원`;
 }
 
 function signedMoney(
@@ -1940,7 +1940,9 @@ type ExtendedSummary = {
 
 function krw(value: number | null | undefined): string {
 	if (value == null || !Number.isFinite(value)) return '산출 불가';
-	return `${Math.round(value).toLocaleString()}원`;
+	const scaled = value / 10_000;
+	const digits = Math.abs(scaled) >= 100 ? 0 : Math.abs(scaled) >= 10 ? 1 : 2;
+	return `${scaled.toLocaleString('ko-KR', { maximumFractionDigits: digits })}만원`;
 }
 
 function pct(value: number | null | undefined): string {
@@ -1995,7 +1997,7 @@ function PortfolioSummaryCard({
 			<div className="mt-3 grid grid-cols-2 gap-2">
 				<SummaryCell
 					label="주식 평가 (국내 KRW)"
-					value={`${Math.round(summary.krValue).toLocaleString()}원`}
+					value={krw(summary.krValue)}
 				/>
 				<SummaryCell
 					label="주식 평가 (해외 USD)"
