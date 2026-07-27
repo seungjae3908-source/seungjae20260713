@@ -2802,6 +2802,55 @@ export default function ChartRelayPage() {
     refetchInterval: 60_000,
   });
   const portfolioPosition = portfolioPositionQuery.data ?? null;
+  const spotAccountsQuery = useQuery({
+    queryKey: ['chart-relay-spot-account', auth.user?.id ?? null, symbol.toUpperCase()],
+    queryFn: () => apiGet<AnyObj>('/crypto/spot/accounts'),
+    enabled: Boolean(auth.user?.id && symbol) && asset === 'coinSpot',
+    retry: false,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+  });
+  const futuresPositionsQuery = useQuery({
+    queryKey: ['chart-relay-futures-position', auth.user?.id ?? null, symbol.toUpperCase()],
+    queryFn: () => apiGet<AnyObj>('/crypto/futures/positions'),
+    enabled: Boolean(auth.user?.id && symbol) && asset === 'coinFutures' && canUseFutures,
+    retry: false,
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+  });
+  const spotAccount = useMemo(() => {
+    if (asset !== 'coinSpot') return null;
+    const currency = symbol.toUpperCase().replace(/^KRW-/, '').replace(/USDT$/, '');
+    return ((spotAccountsQuery.data?.accounts ?? []) as AnyObj[]).find(
+      (row) => String(row.currency ?? '').toUpperCase() === currency,
+    ) ?? null;
+  }, [asset, spotAccountsQuery.data, symbol]);
+  const futuresPosition = useMemo(() => {
+    if (asset !== 'coinFutures') return null;
+    const selected = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return ((futuresPositionsQuery.data?.positions ?? []) as AnyObj[]).find((row) => {
+      const candidate = String(row.symbol ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      return candidate === selected || candidate.startsWith(selected) || selected.startsWith(candidate);
+    }) ?? null;
+  }, [asset, futuresPositionsQuery.data, symbol]);
+  const chartPosition = useMemo<PortfolioChartPosition | null>(() => {
+    if (portfolioPosition) return portfolioPosition;
+    if (spotAccount) {
+      const quantity = Number(spotAccount.balance ?? 0);
+      const averagePrice = Number(spotAccount.averageBuyPrice ?? 0);
+      if (quantity > 0 && averagePrice > 0) {
+        return { quantity, averagePrice, totalCost: quantity * averagePrice };
+      }
+    }
+    if (futuresPosition) {
+      const quantity = Math.abs(Number(futuresPosition.total ?? 0));
+      const averagePrice = Number(futuresPosition.openPriceAvg ?? 0);
+      if (quantity > 0 && averagePrice > 0) {
+        return { quantity, averagePrice, totalCost: quantity * averagePrice };
+      }
+    }
+    return null;
+  }, [futuresPosition, portfolioPosition, spotAccount]);
   const realtime = useRealtimeChart({
     asset,
     symbol,
@@ -3528,6 +3577,42 @@ export default function ChartRelayPage() {
           </button>
         </div>
 
+        {(asset === 'coinSpot' || asset === 'coinFutures') && (
+          <section className="mt-2 rounded-2xl border border-card-border bg-card p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-black">
+                {asset === 'coinSpot' ? '현물 보유정보' : '선물 포지션'}
+              </p>
+              <span className="rounded-full bg-secondary px-2 py-1 text-[9px] font-black text-muted-foreground">
+                읽기 전용
+              </span>
+            </div>
+            {asset === 'coinSpot' ? (
+              spotAccount ? (
+                <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">보유수량</p><p className="mt-1 truncate text-xs font-black">{Number(spotAccount.balance ?? 0).toLocaleString('ko-KR')}</p></div>
+                  <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">평균매수가</p><p className="mt-1 truncate text-xs font-black">{Number(spotAccount.averageBuyPrice ?? 0).toLocaleString('ko-KR')}</p></div>
+                  <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">주문대기</p><p className="mt-1 truncate text-xs font-black">{Number(spotAccount.locked ?? 0).toLocaleString('ko-KR')}</p></div>
+                </div>
+              ) : (
+                <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">
+                  {spotAccountsQuery.isLoading ? '업비트 보유정보 조회 중' : '선택 종목의 보유정보가 없습니다.'}
+                </p>
+              )
+            ) : futuresPosition ? (
+              <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">방향·레버리지</p><p className="mt-1 truncate text-xs font-black">{String(futuresPosition.holdSide ?? '-').toUpperCase()} · {Number(futuresPosition.leverage ?? 0)}배</p></div>
+                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">평균진입가</p><p className="mt-1 truncate text-xs font-black">{Number(futuresPosition.openPriceAvg ?? 0).toLocaleString('ko-KR')}</p></div>
+                <div className="rounded-xl bg-secondary p-2"><p className="text-[9px] font-bold text-muted-foreground">청산예상가</p><p className="mt-1 truncate text-xs font-black text-destructive">{Number(futuresPosition.liquidationPrice ?? 0).toLocaleString('ko-KR')}</p></div>
+              </div>
+            ) : (
+              <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">
+                {futuresPositionsQuery.isLoading ? '비트겟 포지션 조회 중' : '선택 종목의 선물 포지션이 없습니다.'}
+              </p>
+            )}
+          </section>
+        )}
+
         {/* 탭 */}
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button
@@ -3611,7 +3696,7 @@ export default function ChartRelayPage() {
                     signals={signals}
                     activeSignalId={activeSignalId}
                     plan={plan}
-                    position={portfolioPosition}
+                    position={chartPosition}
                     asset={asset}
                     interval={interval}
                     tab={tab}
