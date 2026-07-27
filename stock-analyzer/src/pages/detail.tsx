@@ -1855,6 +1855,47 @@ function SectionCard({
   );
 }
 
+function PopupSectionCard({
+  title,
+  subtitle,
+  actions,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  actions?: ReactNode;
+  children: ReactNode;
+  defaultOpen?: boolean;
+  open?: boolean;
+  onToggle?: () => void;
+}) {
+  const [modalOpen, setModalOpen] = useState(false);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setModalOpen(true)}
+        className="flex min-h-[72px] w-full flex-col items-center justify-center rounded-2xl border border-card-border bg-card px-4 py-3 text-center shadow-sm"
+      >
+        <span className="break-keep text-base font-extrabold leading-6">{title}</span>
+        {subtitle ? (
+          <span className="mt-1 break-keep text-[10px] font-bold leading-4 text-muted-foreground">
+            {subtitle}
+          </span>
+        ) : null}
+      </button>
+
+      {modalOpen ? (
+        <Modal title={title} subtitle={subtitle} onClose={() => setModalOpen(false)}>
+          {actions ? <div className="mb-3 flex items-center justify-center">{actions}</div> : null}
+          <div className="text-center">{children}</div>
+        </Modal>
+      ) : null}
+    </>
+  );
+}
+
 function inferCompanyBusiness(
   name: string,
   ticker: string,
