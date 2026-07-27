@@ -322,17 +322,17 @@ export default function PortfolioSimulatePage() {
 	return (
 		<div className="h-full overflow-y-auto overscroll-contain bg-background">
 			<div className="mx-auto max-w-md px-4 pb-28 pt-4">
-				<header className="grid grid-cols-[40px_1fr_40px] items-center gap-3">
+				<header className="relative flex min-h-[58px] items-center justify-center px-12 text-center">
 					<button
 						type="button"
 						onClick={() => navigate('/portfolio')}
 						aria-label="뒤로"
-						className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"
+						className="absolute left-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card"
 					>
 						<ArrowLeft className="h-4 w-4" />
 					</button>
-					<div className="text-center">
-						<h1 className="text-lg font-extrabold">추가 투자 시뮬레이션</h1>
+					<div className="min-w-0 text-center">
+						<h1 className="whitespace-nowrap text-center text-lg font-extrabold">추가 투자 시뮬레이션</h1>
 						<p className="text-[11px] font-bold text-muted-foreground">
 							가상 시뮬레이션 · 실제 주문 없음
 						</p>
@@ -341,7 +341,7 @@ export default function PortfolioSimulatePage() {
 						type="button"
 						onClick={() => void holdingsQuery.refetch()}
 						aria-label="새로고침"
-						className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"
+						className="absolute right-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card"
 					>
 						<RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
 					</button>
