@@ -15,7 +15,6 @@ import { signalScanPlanPatch } from './signal-scan-plan-patch';
 import { focusedPageLayoutPatch } from './focused-page-layout-patch';
 import { tradingHomeGlobalUiPatch } from './trading-home-global-ui-patch';
 import { requestedUiFixesPatch } from './requested-ui-fixes-patch';
-import { stocksCategoryLayoutPatch } from './stocks-category-layout-patch';
 import { sixRequestedFixesPatch } from './six-requested-fixes-patch';
 import { currentRequestBatchPatch } from './current-request-batch-patch';
 import { feedFiveMorePatch } from './feed-five-more-patch';
@@ -50,7 +49,6 @@ export default defineConfig({
     focusedPageLayoutPatch(),
     tradingHomeGlobalUiPatch(),
     requestedUiFixesPatch(),
-    stocksCategoryLayoutPatch(),
     sixRequestedFixesPatch(),
     currentRequestBatchPatch(),
     feedFiveMorePatch(),
