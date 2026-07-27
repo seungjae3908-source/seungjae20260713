@@ -31,6 +31,8 @@ type Candidate = {
   basis: string[];
   support: number | null;
   resistance: number | null;
+  target: number | null;
+  stop: number | null;
   volumeState: string;
   trendState: string;
   risks: string[];
@@ -137,6 +139,8 @@ function normalizeCandidate(raw: AnyObj): Candidate {
     basis: toStrArr(raw.basis ?? raw.reasons),
     support: toNum(raw.support),
     resistance: toNum(raw.resistance),
+    target: toNum(raw.target ?? raw.targetPrice ?? raw.aiTarget ?? raw.resistance),
+    stop: toNum(raw.stop ?? raw.stopPrice ?? raw.aiStop ?? raw.support),
     volumeState: String(raw.volumeState ?? ''),
     trendState: String(raw.trendState ?? ''),
     risks: toStrArr(raw.risks),
@@ -611,6 +615,19 @@ export default function SignalScanPage() {
                           {candidate.verdict}
                         </p>
                       )}
+
+                      <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[9px] font-black">
+                        <span className="text-orange-500">
+                          목표 {candidate.target != null
+                            ? formatAppPrice(candidate.target, candidate.currency)
+                            : '데이터 없음'}
+                        </span>
+                        <span className="text-cyan-500">
+                          손절 {candidate.stop != null
+                            ? formatAppPrice(candidate.stop, candidate.currency)
+                            : '데이터 없음'}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="shrink-0 text-right">
@@ -670,7 +687,7 @@ function CandidateModal({
 }) {
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 p-3 sm:items-center"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-3"
       onClick={onClose}
     >
       <div
@@ -768,6 +785,24 @@ function CandidateModal({
                     candidate.resistance,
                     candidate.currency,
                   )
+                : '데이터 없음'
+            }
+          />
+
+          <DetailField
+            label="차트 목표가"
+            value={
+              candidate.target != null
+                ? formatAppPrice(candidate.target, candidate.currency)
+                : '데이터 없음'
+            }
+          />
+
+          <DetailField
+            label="차트 손절가"
+            value={
+              candidate.stop != null
+                ? formatAppPrice(candidate.stop, candidate.currency)
                 : '데이터 없음'
             }
           />
