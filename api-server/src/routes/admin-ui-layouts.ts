@@ -9,6 +9,12 @@ import {
   getUserSupabase,
   hasSupabaseServerKey,
 } from '../lib/supabase';
+import {
+  createFileDraft,
+  listFileLayouts,
+  publishFileLayout,
+  rollbackFileLayout,
+} from '../lib/ui-layout-file-store';
 
 const router = Router();
 router.use(requireMember, requireAdmin);
@@ -358,7 +364,10 @@ router.get('/:pageKey', async (req: AuthenticatedRequest, res) => {
       layout: draft?.layout ?? published?.layout ?? null,
     });
   } catch {
-    return res.status(503).json({ error: 'UI_LAYOUT_STORAGE_NOT_READY' });
+    const versions = listFileLayouts(pageKey);
+    const draft = versions.find((item) => item.status === 'draft') ?? null;
+    const published = versions.find((item) => item.status === 'published') ?? null;
+    return res.json({ versions, draft, published, layout: draft?.layout ?? published?.layout ?? null, storage: 'local-fallback' });
   }
 });
 
@@ -390,7 +399,9 @@ async function createDraft(req: AuthenticatedRequest, res: Response) {
     const versions = await listVersions(req, pageKey);
     return res.status(201).json({ draft: data, version: data, versions });
   } catch {
-    return res.status(503).json({ error: 'UI_LAYOUT_SAVE_FAILED' });
+    const draft = createFileDraft(pageKey, layout, text(req.body?.note, 200) || null, req.member?.id ?? null);
+    const versions = listFileLayouts(pageKey);
+    return res.status(201).json({ draft, version: draft, versions, storage: 'local-fallback' });
   }
 }
 
@@ -474,7 +485,9 @@ async function publishLayout(req: AuthenticatedRequest, res: Response) {
     const versions = await listVersions(req, pageKey);
     return res.json({ published: data, version: data, versions });
   } catch {
-    return res.status(503).json({ error: 'UI_LAYOUT_PUBLISH_FAILED' });
+    const published = publishFileLayout(pageKey, layout, requestedId, req.member?.id ?? null);
+    const versions = listFileLayouts(pageKey);
+    return res.json({ published, version: published, versions, storage: 'local-fallback' });
   }
 }
 
@@ -525,7 +538,10 @@ async function rollbackLayout(req: AuthenticatedRequest, res: Response) {
     const versions = await listVersions(req, pageKey);
     return res.status(201).json({ draft: data, version: data, versions });
   } catch {
-    return res.status(503).json({ error: 'UI_LAYOUT_ROLLBACK_FAILED' });
+    const draft = rollbackFileLayout(pageKey, sourceId, req.member?.id ?? null);
+    if (!draft) return res.status(404).json({ error: 'UI_LAYOUT_NOT_FOUND' });
+    const versions = listFileLayouts(pageKey);
+    return res.status(201).json({ draft, version: draft, versions, storage: 'local-fallback' });
   }
 }
 
