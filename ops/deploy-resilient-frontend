@@ -14,10 +14,12 @@ FILES=(
   "stock-analyzer/src/App.tsx"
   "stock-analyzer/src/components/offline-banner.tsx"
   "stock-analyzer/src/pages/stocks.tsx"
+  "stock-analyzer/src/pages/signal-scan.tsx"
   "stock-analyzer/src/pages/chart-relay.tsx"
   "stock-analyzer/src/pages/detail.integration.tsx"
   "stock-analyzer/requested-ui-fixes-patch.ts"
   "stock-analyzer/focused-page-layout-patch.ts"
+  "stock-analyzer/membership-ui-routing-patch.ts"
 )
 
 restore_previous() {
