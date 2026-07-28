@@ -9,7 +9,15 @@ import {
 const router = Router();
 router.use(requireMember);
 
-const ALLOWED_PAGES = new Set(['settings']);
+const ALLOWED_PAGES = new Set([
+  'home',
+  'stocks',
+  'stock-info',
+  'tech',
+  'signal-scan',
+  'portfolio',
+  'settings',
+]);
 
 function memberDb(req: AuthenticatedRequest) {
   return hasSupabaseServerKey()
