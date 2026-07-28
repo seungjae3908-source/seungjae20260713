@@ -11,6 +11,8 @@ import stocksRouter from './stocks';
 import watchlistRouter from './watchlist';
 import kiwoomRouter from './kiwoom.routes';
 import adminRouter from './admin';
+import adminUiLayoutsRouter from './admin-ui-layouts';
+import uiLayoutsRouter from './ui-layouts';
 import aiRepairRouter from './ai-repair';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
@@ -76,6 +78,8 @@ router.use('/', portfolioRouter);
 // AI 복구센터는 관리자에게만 노출합니다. 작업 실행기가 없는 서버에서는
 // 404 대신 명시적인 비활성 상태를 반환합니다.
 router.use('/admin/ai-repair', requireMember, requireAdmin, aiRepairRouter);
+router.use('/admin/ui-layouts', adminUiLayoutsRouter);
+router.use('/ui-layouts', uiLayoutsRouter);
 
 // 관리자 라우터 내부에서도 회원·관리자 검사를 다시 수행합니다.
 router.use('/admin', adminRouter);
