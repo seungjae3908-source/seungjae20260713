@@ -41,9 +41,9 @@ export default function TechPage() {
   );
 
   return (
-    <div className="h-full w-full min-w-0 overflow-y-auto overscroll-contain bg-background">
+    <div data-ui-page="tech" className="h-full w-full min-w-0 overflow-y-auto overscroll-contain bg-background">
       <div className="w-full min-w-0 px-4 pb-28 pt-6">
-        <header className="text-center">
+        <header data-ui-component="tech.header" className="text-center">
           <h1 className="text-lg font-extrabold">기술</h1>
           <p className="mt-1 text-center text-[11px] font-bold text-muted-foreground">
             신호검색과 차트중계를 한 곳에서 이용합니다.
