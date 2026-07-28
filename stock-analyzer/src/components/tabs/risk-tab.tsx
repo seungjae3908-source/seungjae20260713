@@ -59,12 +59,12 @@ function EventDetailModal({
 
 	return (
 		<div
-			className="fixed inset-0 z-50 flex items-end justify-center sm:items-center"
+			className="fixed inset-0 z-50 flex items-center justify-center p-4"
 			role="dialog"
 			aria-modal="true"
 		>
 			<div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-			<div className="relative z-10 max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-card-border bg-card p-4 sm:rounded-2xl">
+			<div className="relative z-10 max-h-[85dvh] w-full max-w-md overflow-y-auto rounded-3xl border border-card-border bg-card p-4 shadow-2xl">
 				<div className="mb-3 flex items-start justify-between gap-2">
 					<div className="min-w-0">
 						<div className="mb-1 flex flex-wrap items-center gap-2">

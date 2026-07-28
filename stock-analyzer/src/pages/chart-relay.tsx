@@ -4565,7 +4565,7 @@ function SignalHistoryModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/60 p-3" onClick={onClose}>
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
         className="max-h-[72dvh] w-[92%] max-w-sm overflow-y-auto rounded-2xl border border-card-border bg-background p-3 text-center"
         onClick={(event) => event.stopPropagation()}
@@ -5148,7 +5148,7 @@ function SignalModal({
 }) {
   const intervalLabel = intervalsFor(asset).find((item) => item.key === interval)?.label ?? interval;
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-3" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
         className="max-h-[60dvh] w-[88%] max-w-xs overflow-y-auto rounded-2xl border border-card-border bg-card p-3 text-center"
         onClick={(event) => event.stopPropagation()}

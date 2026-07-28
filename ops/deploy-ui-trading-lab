@@ -22,13 +22,17 @@ FILES=(
   stock-analyzer/src/components/paper-trading-workbench.tsx
   stock-analyzer/src/components/portfolio-planner-modals.tsx
   stock-analyzer/src/components/signal-modal.tsx
+  stock-analyzer/src/components/tabs/financial-tab.tsx
+  stock-analyzer/src/components/tabs/risk-tab.tsx
   stock-analyzer/src/components/data-state.tsx
   stock-analyzer/src/components/bottom-nav.tsx
   stock-analyzer/src/index.css
   stock-analyzer/src/lib/ui-layout.ts
   stock-analyzer/src/pages/admin-ui-builder.tsx
   stock-analyzer/src/pages/asset-evaluation.tsx
+  stock-analyzer/src/pages/chart-relay.tsx
   stock-analyzer/src/pages/detail.tsx
+  stock-analyzer/src/pages/detail.integration.tsx
   stock-analyzer/src/pages/stock-info.tsx
   stock-analyzer/src/pages/home.tsx
   stock-analyzer/src/pages/stocks.tsx

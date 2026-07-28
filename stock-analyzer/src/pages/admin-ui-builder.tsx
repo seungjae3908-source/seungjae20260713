@@ -696,9 +696,9 @@ export default function AdminUiBuilderPage() {
       </div>
 
       {addOpen ? (
-        <div className="absolute inset-0 z-50 flex items-end bg-black/60" onClick={() => setAddOpen(false)}>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setAddOpen(false)}>
           <section
-            className="max-h-[82%] w-full overflow-y-auto rounded-t-[2rem] border-t border-card-border bg-background p-4 pb-8"
+            className="max-h-[82dvh] w-full max-w-md overflow-y-auto rounded-3xl border border-card-border bg-background p-4 shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mx-auto max-w-md">
@@ -780,9 +780,9 @@ export default function AdminUiBuilderPage() {
       ) : null}
 
       {propertyOpen && selected ? (
-        <div className="absolute inset-0 z-50 flex items-end bg-black/60" onClick={() => setPropertyOpen(false)}>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setPropertyOpen(false)}>
           <section
-            className="flex max-h-[88%] w-full flex-col rounded-t-[2rem] border-t border-card-border bg-background"
+            className="flex max-h-[88dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-background shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="shrink-0 border-b border-card-border p-4">
@@ -1126,8 +1126,8 @@ export default function AdminUiBuilderPage() {
       ) : null}
 
       {historyOpen ? (
-        <div className="absolute inset-0 z-50 flex items-end bg-black/60" onClick={() => setHistoryOpen(false)}>
-          <section className="max-h-[88%] w-full overflow-y-auto rounded-t-[2rem] border-t border-card-border bg-background p-4 pb-10" onClick={(event) => event.stopPropagation()}>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setHistoryOpen(false)}>
+          <section className="max-h-[88dvh] w-full max-w-md overflow-y-auto rounded-3xl border border-card-border bg-background p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <div className="mx-auto max-w-md">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-black">서버 버전 · 작업지시문</h2>

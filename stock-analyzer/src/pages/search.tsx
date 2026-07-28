@@ -1662,7 +1662,7 @@ export default function SearchPage() {
       <BottomNav />
 
       {asset === "stock" && watchlistOpen && (
-        <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 p-3 sm:items-center">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
           <button type="button" aria-label="닫기" className="absolute inset-0" onClick={() => setWatchlistOpen(false)} />
           <section className="relative z-10 flex max-h-[82dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-card p-4 shadow-2xl">
             <div className="flex items-center justify-between gap-3">
