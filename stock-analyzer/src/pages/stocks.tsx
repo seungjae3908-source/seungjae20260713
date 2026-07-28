@@ -670,10 +670,10 @@ export default function StocksPage() {
 				/>
 			
         <section
-          data-stocks-category-layout="vertical"
+          data-stocks-category-layout="compact-grid"
           className="mt-3 rounded-3xl border border-card-border bg-card p-3 shadow-sm"
         >
-          <div className="grid grid-cols-1 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {CATEGORIES.map((item) => (
               <button
                 key={item.key}
