@@ -15,6 +15,8 @@ FILES=(
   "stock-analyzer/src/index.css"
   "stock-analyzer/src/components/bottom-nav.tsx"
   "stock-analyzer/src/components/data-state.tsx"
+  "stock-analyzer/src/components/asset-switch.tsx"
+  "stock-analyzer/src/components/search-field.tsx"
   "stock-analyzer/src/components/offline-banner.tsx"
   "stock-analyzer/src/pages/home.tsx"
   "stock-analyzer/src/pages/stocks.tsx"
