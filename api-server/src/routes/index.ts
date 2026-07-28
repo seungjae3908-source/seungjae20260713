@@ -1,6 +1,7 @@
 import { Router, type IRouter } from 'express';
 import healthRouter from './health';
 import resilientQuotesRouter from './resilient-quotes';
+import resilientRankingsRouter from './resilient-rankings';
 import marketRouter from './market';
 import marketDashboardRouter from './market-dashboard';
 import assetSearchRouter from './asset-search';
@@ -50,8 +51,9 @@ router.use('/market/undervalued', requireMember);
 router.use('/', stocksRanking100Router);
 // 국내·해외 종목명과 티커를 실제 검색 제공기관으로 통합 검색합니다.
 router.use('/', assetSearchRouter);
-// 현재가 요청은 기존 market 라우터보다 먼저 보호 계층을 통과합니다.
+// 현재가·순위 요청은 기존 market 라우터보다 먼저 보호 계층을 통과합니다.
 router.use('/', resilientQuotesRouter);
+router.use('/', resilientRankingsRouter);
 router.use('/', marketRouter);
 router.use('/', marketDashboardRouter);
 

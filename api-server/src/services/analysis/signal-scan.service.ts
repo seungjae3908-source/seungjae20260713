@@ -35,6 +35,10 @@ const COIN_FUTURES_POOL = 40;
 const STOCK_SCAN_CONCURRENCY = 6;
 const COIN_SCAN_CONCURRENCY = 8;
 
+const STOCK_SCAN_TIMEOUT_MS = 25_000;
+const COIN_SCAN_TIMEOUT_MS = 18_000;
+const SIGNAL_SCAN_STALE_TTL_MS = 30 * 60 * 1000;
+
 export interface ScanCandidate {
   ticker: string;
   name: string;
@@ -67,20 +71,38 @@ export interface SignalScanResult {
   market: string;
   generatedAt: string;
   scanned: number;
+  completed: number;
   providerErrors: number;
+  partial: boolean;
+  timedOut: boolean;
   groups: ScanGroup[];
 }
 
+
+type CollectionResult = {
+  items: RawItem[];
+  scanned: number;
+  processed: number;
+  providerErrors: number;
+  timedOut: boolean;
+};
+
+const SCAN_DEADLINE_ERROR = 'SCAN_DEADLINE';
 
 async function allSettledLimited<T, R>(
   items: readonly T[],
   concurrency: number,
   worker: (item: T, index: number) => Promise<R>,
+  timeoutMs: number,
 ): Promise<PromiseSettledResult<R>[]> {
   const results =
     new Array<PromiseSettledResult<R>>(items.length);
 
+  const deadline =
+    Date.now() + Math.max(1_000, timeoutMs);
+
   let cursor = 0;
+
   const workerCount = Math.min(
     items.length,
     Math.max(1, Math.floor(concurrency)),
@@ -96,21 +118,60 @@ async function allSettledLimited<T, R>(
 
           if (index >= items.length) return;
 
+          const remaining =
+            deadline - Date.now();
+
+          if (remaining <= 0) {
+            results[index] = {
+              status: 'rejected',
+              reason: new Error(SCAN_DEADLINE_ERROR),
+            };
+            return;
+          }
+
+          let timer:
+            ReturnType<typeof setTimeout> | null = null;
+
           try {
+            const value = await Promise.race([
+              worker(items[index], index),
+              new Promise<R>((_resolve, reject) => {
+                timer = setTimeout(() => {
+                  reject(
+                    new Error(SCAN_DEADLINE_ERROR),
+                  );
+                }, remaining);
+                timer.unref?.();
+              }),
+            ]);
+
             results[index] = {
               status: 'fulfilled',
-              value: await worker(items[index], index),
+              value,
             };
           } catch (reason) {
             results[index] = {
               status: 'rejected',
               reason,
             };
+          } finally {
+            if (timer) clearTimeout(timer);
           }
+
+          if (Date.now() >= deadline) return;
         }
       },
     ),
   );
+
+  for (let index = 0; index < results.length; index += 1) {
+    if (!results[index]) {
+      results[index] = {
+        status: 'rejected',
+        reason: new Error(SCAN_DEADLINE_ERROR),
+      };
+    }
+  }
 
   return results;
 }
@@ -299,9 +360,11 @@ function makeCandidate(
   };
 }
 
-async function collectStock(market: 'KR' | 'US'): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
+async function collectStock(market: 'KR' | 'US'): Promise<CollectionResult> {
   const pool = CATALOG.filter((e) => e.market === market).slice(0, STOCK_POOL);
   let providerErrors = 0;
+  let processed = 0;
+  let timedOut = false;
   const settled = await allSettledLimited(
     pool,
     STOCK_SCAN_CONCURRENCY,
@@ -323,21 +386,37 @@ async function collectStock(market: 'KR' | 'US'): Promise<{ items: RawItem[]; sc
         analyzed,
       };
     },
+    STOCK_SCAN_TIMEOUT_MS,
   );
   const items: RawItem[] = [];
   for (const r of settled) {
     if (r.status === 'fulfilled') {
+      processed += 1;
       if (r.value) items.push(r.value);
     } else {
       providerErrors += 1;
+      if (
+        r.reason instanceof Error &&
+        r.reason.message === SCAN_DEADLINE_ERROR
+      ) {
+        timedOut = true;
+      }
     }
   }
-  return { items, scanned: pool.length, providerErrors };
+  return {
+    items,
+    scanned: pool.length,
+    processed,
+    providerErrors,
+    timedOut,
+  };
 }
 
-async function collectCoinSpot(): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
+async function collectCoinSpot(): Promise<CollectionResult> {
   const tickers = await fetchUpbitTopTickers(COIN_SPOT_POOL);
   let providerErrors = 0;
+  let processed = 0;
+  let timedOut = false;
   const settled = await allSettledLimited(
     tickers,
     COIN_SCAN_CONCURRENCY,
@@ -355,21 +434,37 @@ async function collectCoinSpot(): Promise<{ items: RawItem[]; scanned: number; p
         analyzed,
       };
     },
+    COIN_SCAN_TIMEOUT_MS,
   );
   const items: RawItem[] = [];
   for (const r of settled) {
     if (r.status === 'fulfilled') {
+      processed += 1;
       if (r.value) items.push(r.value);
     } else {
       providerErrors += 1;
+      if (
+        r.reason instanceof Error &&
+        r.reason.message === SCAN_DEADLINE_ERROR
+      ) {
+        timedOut = true;
+      }
     }
   }
-  return { items, scanned: tickers.length, providerErrors };
+  return {
+    items,
+    scanned: tickers.length,
+    processed,
+    providerErrors,
+    timedOut,
+  };
 }
 
-async function collectCoinFutures(): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
+async function collectCoinFutures(): Promise<CollectionResult> {
   const tickers = await fetchBitgetTopTickers(COIN_FUTURES_POOL);
   let providerErrors = 0;
+  let processed = 0;
+  let timedOut = false;
   const settled = await allSettledLimited(
     tickers,
     COIN_SCAN_CONCURRENCY,
@@ -387,16 +482,30 @@ async function collectCoinFutures(): Promise<{ items: RawItem[]; scanned: number
         analyzed,
       };
     },
+    COIN_SCAN_TIMEOUT_MS,
   );
   const items: RawItem[] = [];
   for (const r of settled) {
     if (r.status === 'fulfilled') {
+      processed += 1;
       if (r.value) items.push(r.value);
     } else {
       providerErrors += 1;
+      if (
+        r.reason instanceof Error &&
+        r.reason.message === SCAN_DEADLINE_ERROR
+      ) {
+        timedOut = true;
+      }
     }
   }
-  return { items, scanned: tickers.length, providerErrors };
+  return {
+    items,
+    scanned: tickers.length,
+    processed,
+    providerErrors,
+    timedOut,
+  };
 }
 
 function buildBuySellGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
@@ -476,10 +585,15 @@ export async function getSignalScan(
   asset: 'stock' | 'coin',
   market: string,
 ): Promise<SignalScanResult> {
-  const key = `signal-scan:v1:${asset}:${market}`;
+  const key = `signal-scan:v2:${asset}:${market}`;
+  const loaderTimeoutMs =
+    asset === 'stock'
+      ? STOCK_SCAN_TIMEOUT_MS + 2_000
+      : COIN_SCAN_TIMEOUT_MS + 2_000;
+
   return cached(key, SCAN_TTL, async () => {
     const generatedAt = new Date().toISOString();
-    let collected: { items: RawItem[]; scanned: number; providerErrors: number };
+    let collected: CollectionResult;
     let groups: ScanGroup[];
 
     if (asset === 'stock') {
@@ -500,8 +614,16 @@ export async function getSignalScan(
       market,
       generatedAt,
       scanned: collected.scanned,
+      completed: collected.processed,
       providerErrors: collected.providerErrors,
+      partial:
+        collected.timedOut ||
+        collected.providerErrors > 0,
+      timedOut: collected.timedOut,
       groups,
     };
+  }, {
+    staleTtlMs: SIGNAL_SCAN_STALE_TTL_MS,
+    loaderTimeoutMs,
   });
 }

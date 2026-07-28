@@ -2997,6 +2997,7 @@ export default function ChartRelayPage() {
     queryFn: () =>
       apiGet<AnyObj>(
         `/market/chart-signals?asset=${contract.assetParam}${contract.coinMarket ? `&coinMarket=${contract.coinMarket}` : ''}&symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`,
+        { timeoutMs: 12_000 },
       ),
     enabled:
       Boolean(symbol) &&
@@ -3006,7 +3007,8 @@ export default function ChartRelayPage() {
       hasInitialCandleData,
     refetchInterval: useRestFallback ? 30_000 : false,
     refetchIntervalInBackground: true,
-    retry: 1,
+    retry: 0,
+    placeholderData: (previous) => previous,
   });
 
   const planQuery = useQuery({
@@ -3014,6 +3016,7 @@ export default function ChartRelayPage() {
     queryFn: () =>
       apiGet<AiPlan>(
         `/market/ai-chart-plan?asset=${contract.assetParam}${contract.coinMarket ? `&coinMarket=${contract.coinMarket}` : ''}&symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`,
+        { timeoutMs: 15_000 },
       ),
     enabled:
       Boolean(symbol) &&
@@ -3023,7 +3026,8 @@ export default function ChartRelayPage() {
       hasInitialCandleData,
     refetchInterval: useRestFallback ? 30_000 : false,
     refetchIntervalInBackground: true,
-    retry: 1,
+    retry: 0,
+    placeholderData: (previous) => previous,
   });
 
   useEffect(() => {
@@ -3355,17 +3359,27 @@ export default function ChartRelayPage() {
       : asset === 'coinFutures'
         ? 'USDT'
         : 'KRW';
+  const hasChartData = candles.length >= 2;
+
   const realtimeLabel = realtime.status === 'live'
     ? `연결됨${realtime.provider ? ` · ${realtime.provider}` : ''}`
-    : realtime.status === 'connecting'
-      ? '연결 중'
-      : realtime.status === 'connected'
-        ? '구독 중'
-        : realtime.status === 'reconnecting'
-          ? '재연결 중'
-          : realtime.status === 'error'
-            ? '연결 오류 · REST 갱신 중'
-            : '대기';
+    : hasChartData
+      ? realtime.error === 'REALTIME_DISABLED'
+        ? 'REST 자동 갱신'
+        : realtime.status === 'connecting' ||
+            realtime.status === 'connected' ||
+            realtime.status === 'reconnecting'
+          ? 'REST 갱신 · 실시간 연결 대기'
+          : 'REST 자동 갱신'
+      : realtime.status === 'connecting'
+        ? '차트 연결 중'
+        : realtime.status === 'connected'
+          ? '차트 구독 중'
+          : realtime.status === 'reconnecting'
+            ? '차트 재연결 중'
+            : realtime.status === 'error'
+              ? 'REST 데이터 준비 중'
+              : '차트 준비 중';
 
   const submitSymbol = () => {
     const next = symbolInput.trim();
@@ -3684,7 +3698,14 @@ export default function ChartRelayPage() {
             <div className="rounded-xl bg-background/70 p-2">
               <p className="text-[9px] font-bold text-muted-foreground">AI 관점</p>
               <p className={cn('mt-1 text-xs font-black', plan?.view === '매수' ? 'text-red-500' : plan?.view === '매도' ? 'text-blue-500' : 'text-foreground')}>
-                {plan?.view ?? '분석 중'}
+                {plan?.view ??
+                  (!settings.ai
+                    ? '꺼짐'
+                    : planQuery.isError
+                      ? '분석 불가'
+                      : planQuery.isFetching
+                        ? '분석 중'
+                        : '데이터 없음')}
               </p>
             </div>
             <div className="rounded-xl bg-background/70 p-2">
@@ -4718,16 +4739,31 @@ function LiveBroadcastPanel({
         ? 'text-blue-500'
         : 'text-warning';
 
+  const isRealtimeLive =
+    realtimeLabel.startsWith('연결됨');
+
   return (
     <section className="mt-3 overflow-hidden rounded-2xl border border-card-border bg-card text-center">
       <div className="flex flex-col items-center justify-center gap-2 border-b border-card-border p-4 text-center">
         <div className="flex items-center justify-center gap-2">
           <span className="relative flex h-2.5 w-2.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+            {isRealtimeLive && (
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+            )}
+            <span
+              className={cn(
+                'relative inline-flex h-2.5 w-2.5 rounded-full',
+                isRealtimeLive ? 'bg-emerald-500' : 'bg-sky-500',
+              )}
+            />
           </span>
-          <p className="text-center text-[10px] font-black text-emerald-500">
-            LIVE · {realtimeLabel} · <span className="text-foreground">{symbol}</span>
+          <p
+            className={cn(
+              'text-center text-[10px] font-black',
+              isRealtimeLive ? 'text-emerald-500' : 'text-sky-500',
+            )}
+          >
+            {isRealtimeLive ? 'LIVE' : 'REST'} · {realtimeLabel} · <span className="text-foreground">{symbol}</span>
           </p>
         </div>
         <h2 className={cn('text-center text-base font-black', tone)}>{title}</h2>
@@ -4737,15 +4773,26 @@ function LiveBroadcastPanel({
             ? ''
             : ` · 직전 봉 대비 ${latestBarChangePercent >= 0 ? '+' : ''}${latestBarChangePercent.toFixed(2)}%`}
         </p>
-        <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[10px] font-black text-emerald-500">
-          라이브 방송
+        <span
+          className={cn(
+            'rounded-full border px-3 py-1 text-[10px] font-black',
+            isRealtimeLive
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500'
+              : 'border-sky-500/40 bg-sky-500/10 text-sky-500',
+          )}
+        >
+          {isRealtimeLive ? '라이브 방송' : 'REST 자동 갱신'}
         </span>
       </div>
       <div className="p-4 text-center">
-        <p className="text-center text-[10px] font-black text-muted-foreground">AI 실시간 중계</p>
+        <p className="text-center text-[10px] font-black text-muted-foreground">
+          {isRealtimeLive ? 'AI 실시간 중계' : 'AI REST 분석 갱신'}
+        </p>
         {latestSignals.length === 0 && aiHistory.length === 0 ? (
           <p className="mt-2 rounded-xl bg-background px-3 py-3 text-[11px] font-bold text-muted-foreground">
-            새 캔들과 신호를 기다리는 중입니다.
+            {isRealtimeLive
+              ? '새 캔들과 신호를 기다리는 중입니다.'
+              : '다음 REST 데이터 갱신을 기다리는 중입니다.'}
           </p>
         ) : (
           <div className="mt-3 space-y-3 text-center">
@@ -5003,9 +5050,9 @@ function AiPlanPanel({
       </p>
       {!settings.ai ? (
         <StateBox>설정에서 AI 분석이 꺼져 있습니다.</StateBox>
-      ) : query.isLoading ? (
+      ) : query.isLoading && !plan ? (
         <StateBox>AI 분석을 불러오는 중입니다.</StateBox>
-      ) : query.isError ? (
+      ) : query.isError && !plan ? (
         <StateBox error>데이터를 불러오지 못했습니다.</StateBox>
       ) : !plan ? (
         <StateBox>분석 가능한 데이터가 없습니다.</StateBox>

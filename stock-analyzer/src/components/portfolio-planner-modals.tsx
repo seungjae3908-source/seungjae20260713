@@ -199,14 +199,22 @@ export function PortfolioPlannerModals() {
         );
         if (response.ok) {
           const payload = await response.json();
-          const rows = Array.isArray(payload?.quotes) ? payload.quotes : [];
-          quoteMap = new Map(
+          const rows: AnyObj[] = Array.isArray(payload?.quotes)
+            ? (payload.quotes as AnyObj[])
+            : [];
+
+          quoteMap = new Map<string, number>(
             rows
-              .map((row: AnyObj) => [
-                String(row.ticker ?? row.symbol ?? '').toUpperCase(),
-                Number(row.price ?? row.currentPrice),
-              ] as const)
-              .filter(([, price]) => Number.isFinite(price)),
+              .map(
+                (row: AnyObj): readonly [string, number] => [
+                  String(row.ticker ?? row.symbol ?? '').toUpperCase(),
+                  Number(row.price ?? row.currentPrice),
+                ],
+              )
+              .filter(
+                (entry: readonly [string, number]) =>
+                  Boolean(entry[0]) && Number.isFinite(entry[1]),
+              ),
           );
         }
       }
@@ -467,10 +475,21 @@ export function PortfolioPlannerModals() {
           const target = finite(payload.target);
           const stop = finite(payload.stop);
           const buyLevels = Array.isArray(payload.buyLevels)
-            ? payload.buyLevels.map(finite).filter((value): value is number => value != null)
+            ? payload.buyLevels
+                .map((value: unknown) => finite(value))
+                .filter(
+                  (value: number | null): value is number =>
+                    value != null,
+                )
             : [];
+
           const sellLevels = Array.isArray(payload.sellLevels)
-            ? payload.sellLevels.map(finite).filter((value): value is number => value != null)
+            ? payload.sellLevels
+                .map((value: unknown) => finite(value))
+                .filter(
+                  (value: number | null): value is number =>
+                    value != null,
+                )
             : [];
           const basis = Array.isArray(payload.basis) ? payload.basis.map(String).filter(Boolean) : [];
           const risks = Array.isArray(payload.risks) ? payload.risks.map(String).filter(Boolean) : [];

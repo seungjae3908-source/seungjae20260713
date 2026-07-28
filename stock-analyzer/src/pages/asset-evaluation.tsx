@@ -85,8 +85,15 @@ export default function AssetEvaluationPage() {
       const tickers = rows.map((row: AnyObj) => String(row.ticker ?? '').toUpperCase()).filter(Boolean);
       let quoteMap = new Map<string, AnyObj>();
       if (tickers.length) {
-        const quoteBody = await fetchJson(`/quotes?tickers=${encodeURIComponent(tickers.join(','))}`).catch(() => ({}));
-        const quotes = Array.isArray(quoteBody.quotes) ? quoteBody.quotes : [];
+        const quoteBody = (
+          await fetchJson(
+            `/quotes?tickers=${encodeURIComponent(tickers.join(','))}`,
+          ).catch(() => ({}))
+        ) as AnyObj;
+
+        const quotes: AnyObj[] = Array.isArray(quoteBody.quotes)
+          ? (quoteBody.quotes as AnyObj[])
+          : [];
         quoteMap = new Map(quotes.map((quote: AnyObj) => [String(quote.ticker ?? quote.symbol ?? '').toUpperCase(), quote]));
       }
       return rows.map((row: AnyObj) => ({ ...row, quote: quoteMap.get(String(row.ticker ?? '').toUpperCase()) }));

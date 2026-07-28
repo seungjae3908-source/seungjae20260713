@@ -13,6 +13,7 @@ export function SearchField({
   className,
   autoFocus,
   ariaLabel = '검색',
+  placeholder,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -20,6 +21,7 @@ export function SearchField({
   className?: string;
   autoFocus?: boolean;
   ariaLabel?: string;
+  placeholder?: string;
 }) {
   const [focused, setFocused] = useState(false);
   const suggestions = useMemo(
@@ -57,7 +59,8 @@ export function SearchField({
           autoFocus={autoFocus}
           autoComplete="off"
           aria-label={ariaLabel}
-          className="min-w-0 flex-1 bg-transparent text-left text-sm font-bold outline-none"
+          placeholder={placeholder}
+          className="min-w-0 flex-1 bg-transparent text-left text-sm font-bold outline-none placeholder:text-muted-foreground"
         />
         {value && (
           <button
