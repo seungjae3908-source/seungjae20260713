@@ -114,25 +114,33 @@ export default function HomePage() {
   const summary = useQuery({
     queryKey: ['home-market-summary'],
     queryFn: () => api.summary(),
-    refetchInterval: 10_000,
-    refetchIntervalInBackground: true,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    placeholderData: (previous) => previous,
   });
 
   const coinTickers = useQuery({
     queryKey: ['home-coin-index'],
     queryFn: () => apiGet<AnyObj>('/crypto/spot/tickers'),
     enabled: view === 'COIN',
-    refetchInterval: 10_000,
-    refetchIntervalInBackground: true,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    placeholderData: (previous) => previous,
   });
 
   const briefing = useQuery({
     queryKey: ['home-market-news-briefing', view],
     queryFn: () =>
       apiGet<MarketNewsBriefing>(`/market/news-briefing?market=${view}`),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: true,
-    staleTime: 0,
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    placeholderData: (previous) => previous,
   });
 
   const stockIndices = useMemo(() => {
@@ -230,7 +238,7 @@ export default function HomePage() {
               </p>
             </div>
             <span className="rounded-full bg-secondary px-3 py-1.5 text-[9px] font-black text-muted-foreground">
-              10초 갱신
+              30초 갱신
             </span>
           </div>
 
