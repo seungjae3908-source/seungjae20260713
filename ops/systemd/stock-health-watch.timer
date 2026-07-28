@@ -1,0 +1,12 @@
+[Unit]
+Description=Run stock app health recovery every two minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=true
+Unit=stock-health-watch.service
+
+[Install]
+WantedBy=timers.target
