@@ -71,17 +71,37 @@ check_supabase() {
   [ "$code" = "200" ]
 }
 
-check_route_exists() {
-  local code
-  code="$(
-    curl -sS \
-      --connect-timeout 4 \
-      --max-time 30 \
-      -o /dev/null \
-      -w '%{http_code}' \
-      "http://127.0.0.1:8080/api/crypto/futures/scalp-scan?limit=1" 2>/dev/null || true
-  )"
-  [ "$code" != "000" ] && [ "$code" != "404" ] && [ -n "$code" ]
+check_protected_routes() {
+  local path code
+  local paths=(
+    "/api/stocks/005930/candles?tf=15m"
+    "/api/crypto/futures/candles?symbol=BTCUSDT&granularity=15m&limit=2"
+    "/api/market/signal-scan?asset=stock&market=KR"
+    "/api/market/signal-scan?asset=stock&market=US"
+    "/api/market/signal-scan?asset=coin&market=spot"
+    "/api/market/signal-scan?asset=coin&market=futures"
+  )
+
+  for path in "${paths[@]}"; do
+    code="$(
+      curl -sS \
+        --connect-timeout 4 \
+        --max-time 15 \
+        -o /dev/null \
+        -w '%{http_code}' \
+        "http://127.0.0.1:8080${path}" 2>/dev/null || true
+    )"
+    # 인증 없는 운영 점검에서 401/403은 보호 라우트가 존재한다는 정상 응답이다.
+    case "$code" in
+      200|400|401|403) ;;
+      *)
+        log "보호 API 검사 실패: ${path} HTTP ${code:-000}"
+        return 1
+        ;;
+    esac
+  done
+
+  return 0
 }
 
 check_search() {
@@ -126,12 +146,12 @@ check_all() {
     log "검사 실패: 삼성전자 검색"
     return 1
   }
-  check_route_exists || {
-    log "검사 실패: futures scalp-scan 라우트 없음"
+  check_protected_routes || {
+    log "검사 실패: 주식·코인 차트 또는 검색기 보호 라우트"
     return 1
   }
 
-  log "검사 통과: health, Supabase, search, scalp-scan"
+  log "검사 통과: health, Supabase, search, protected chart/search routes"
   return 0
 }
 
