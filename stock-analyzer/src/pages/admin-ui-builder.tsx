@@ -543,8 +543,7 @@ export default function AdminUiBuilderPage() {
                       !section.visible && 'opacity-40',
                     )}
                   >
-                    <button
-                      type="button"
+                    <div
                       onClick={() => setSelectedId(section.id)}
                       className={cn(
                         'relative flex w-full items-center gap-2 border bg-card px-3 py-3 shadow-sm transition',
@@ -619,7 +618,7 @@ export default function AdminUiBuilderPage() {
                           <ArrowDown className="h-3 w-3" />
                         </button>
                       </span>
-                    </button>
+                    </div>
                   </div>
                 ))}
 

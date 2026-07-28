@@ -165,7 +165,18 @@ function applyLayout(root: HTMLElement, layout: UiLayout) {
       orderedMainChildren.push(element);
     }
   }
-  orderedMainChildren.forEach((element) => main.appendChild(element));
+
+  const desiredOrder = orderedMainChildren.map(
+    (element) => element.dataset.uiLayoutNode || element.dataset.customUiNode || '',
+  );
+  const currentOrder = Array.from(main.children)
+    .filter((element): element is HTMLElement => element instanceof HTMLElement)
+    .map((element) => element.dataset.uiLayoutNode || element.dataset.customUiNode || '')
+    .filter(Boolean);
+
+  if (desiredOrder.join('|') !== currentOrder.join('|')) {
+    orderedMainChildren.forEach((element) => main.appendChild(element));
+  }
 }
 
 export default function UiLayoutRuntime() {
