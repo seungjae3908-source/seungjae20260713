@@ -170,8 +170,8 @@ export default function HomePage() {
       : stockIndices.filter((item) => Number(item.changePercent ?? 0) >= 0).length;
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-background text-center">
-      <header className="border-b border-card-border bg-background/90 px-4 py-4 backdrop-blur-xl">
+    <div data-ui-page="home" className="h-full overflow-y-auto overscroll-contain bg-background text-center">
+      <header data-ui-component="home.header" className="border-b border-card-border bg-background/90 px-4 py-4 backdrop-blur-xl">
         <div className="mx-auto flex max-w-md items-center justify-between gap-4">
           <div className="text-left">
             <p className="text-[10px] font-black text-primary">MARKET DASHBOARD</p>
@@ -186,7 +186,7 @@ export default function HomePage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-md space-y-4 px-4 pb-28 pt-4">
+      <main data-ui-component="home.market-summary" className="mx-auto max-w-md space-y-4 px-4 pb-28 pt-4">
         <section className="overflow-hidden rounded-3xl border border-card-border bg-card shadow-sm">
           <div className="bg-gradient-to-br from-primary/15 via-primary/5 to-transparent p-5">
             <div className="flex items-start justify-between gap-3 text-left">
