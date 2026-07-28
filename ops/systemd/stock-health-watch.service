@@ -9,6 +9,8 @@ ExecStart=/usr/local/sbin/stock-health-watch
 User=root
 Group=root
 Nice=10
+StateDirectory=stock-health-watch
+StateDirectoryMode=0750
 
 NoNewPrivileges=true
 PrivateTmp=true
