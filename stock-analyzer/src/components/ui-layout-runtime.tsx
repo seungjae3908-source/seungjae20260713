@@ -73,18 +73,22 @@ function radiusValue(section: UiSection) {
 function applyStyle(element: HTMLElement, section: UiSection) {
   element.dataset.uiLayoutNode = section.id;
   element.style.display = section.visible ? '' : 'none';
-  element.style.width = widthValue(section);
-  element.style.minHeight = minHeightValue(section);
-  element.style.marginTop = marginValue(section);
+  const preserveStructure =
+    section.component.startsWith('navigation.') || Boolean(section.parentId && !section.custom);
+  if (!preserveStructure) {
+    element.style.width = widthValue(section);
+    element.style.minHeight = minHeightValue(section);
+    element.style.marginTop = marginValue(section);
+    element.style.backgroundColor = section.backgroundColor || '';
+    element.style.borderColor = section.borderColor || '';
+    element.style.borderRadius = radiusValue(section);
+  }
   element.style.textAlign = section.align;
   element.style.opacity = String(section.opacity / 100);
   element.style.transform = `translate(${section.x}px, ${section.y}px)`;
   element.style.zIndex = String(section.zIndex);
   element.style.position = section.x || section.y || section.zIndex ? 'relative' : '';
-  element.style.backgroundColor = section.backgroundColor || '';
   element.style.color = section.textColor || '';
-  element.style.borderColor = section.borderColor || '';
-  element.style.borderRadius = radiusValue(section);
   element.style.setProperty('--ui-title-font-size', fontSizeValue(section));
   element.style.setProperty('--ui-title-font-weight', fontWeightValue(section));
   element.dataset.uiPopupTitle = section.popupTitle ?? '';
@@ -94,7 +98,7 @@ function applyStyle(element: HTMLElement, section: UiSection) {
   element.dataset.uiSourcePath = section.sourcePath ?? '';
 }
 
-function makeCustomNode(section: UiSection) {
+function makeCustomNode(section: UiSection, pageKey: UiPageKey) {
   const clickable =
     section.kind === 'button' ||
     section.kind === 'tab' ||
@@ -102,7 +106,8 @@ function makeCustomNode(section: UiSection) {
     section.kind === 'popup';
   const element = document.createElement(clickable ? 'button' : section.kind === 'text' ? 'p' : 'div');
   element.setAttribute('data-custom-ui-node', section.id);
-  element.setAttribute('type', clickable ? 'button' : '');
+  element.setAttribute('data-custom-ui-page', pageKey);
+  if (clickable) element.setAttribute('type', 'button');
   element.textContent = section.title || '새 항목';
   element.style.boxSizing = 'border-box';
   element.style.padding = section.kind === 'text' ? '6px 4px' : '12px 14px';
@@ -120,45 +125,59 @@ function makeCustomNode(section: UiSection) {
 }
 
 function applyLayout(root: HTMLElement, layout: UiLayout) {
-  root.querySelectorAll('[data-custom-ui-node]').forEach((node) => node.remove());
+  root
+    .querySelectorAll(`[data-custom-ui-page="${layout.pageKey}"]`)
+    .forEach((node) => node.remove());
 
-  const catalog = new Map(
-    UI_COMPONENT_CATALOG[layout.pageKey].map((item) => [item.component, item]),
-  );
+  const catalog = UI_COMPONENT_CATALOG[layout.pageKey];
+  const byComponent = new Map(layout.sections.map((section) => [section.component, section]));
   const resolved = new Map<string, HTMLElement>();
   const main = root.querySelector<HTMLElement>('main');
 
-  for (const section of layout.sections) {
-    const definition = catalog.get(section.component);
-    if (definition?.selector) {
-      const element = root.querySelector<HTMLElement>(definition.selector);
-      if (!element) continue;
-      resolved.set(section.id, element);
-      applyStyle(element, section);
-
-      if (definition.titleSelector && section.title) {
-        const title = element.querySelector<HTMLElement>(definition.titleSelector);
-        if (title) {
-          title.textContent = section.title;
-          title.style.fontSize = fontSizeValue(section);
-          title.style.fontWeight = fontWeightValue(section);
-          title.style.textAlign = section.align;
-          title.style.color = section.textColor || '';
-        }
-      }
+  for (const definition of catalog) {
+    if (!definition.selector) continue;
+    const element = root.querySelector<HTMLElement>(definition.selector);
+    if (!element) continue;
+    const section = byComponent.get(definition.component);
+    if (!section) {
+      element.style.display = 'none';
       continue;
     }
+    resolved.set(section.id, element);
+    applyStyle(element, section);
+    if (!section.visible) continue;
 
-    if (section.custom && main) {
-      const element = makeCustomNode(section);
-      resolved.set(section.id, element);
-      main.appendChild(element);
+    if (definition.replaceText && section.title) {
+      element.textContent = section.title;
+    } else if (definition.titleSelector && section.title) {
+      const title = element.querySelector<HTMLElement>(definition.titleSelector);
+      if (title) {
+        title.textContent = section.title;
+        title.style.fontSize = fontSizeValue(section);
+        title.style.fontWeight = fontWeightValue(section);
+        title.style.textAlign = section.align;
+        title.style.color = section.textColor || '';
+      }
+    } else if (section.kind === 'button' && section.title) {
+      element.setAttribute('aria-label', section.title);
     }
+  }
+
+  const customSections = layout.sections
+    .filter((section) => section.custom)
+    .sort((a, b) => a.order - b.order);
+
+  for (const section of customSections) {
+    const parent = section.parentId ? resolved.get(section.parentId) : main;
+    if (!parent) continue;
+    const element = makeCustomNode(section, layout.pageKey);
+    resolved.set(section.id, element);
+    parent.appendChild(element);
   }
 
   if (!main) return;
   const orderedMainChildren: HTMLElement[] = [];
-  for (const section of layout.sections) {
+  for (const section of layout.sections.filter((item) => !item.parentId)) {
     const element = resolved.get(section.id);
     if (!element) continue;
     if (element.parentElement === main || element.hasAttribute('data-custom-ui-node')) {
@@ -179,10 +198,22 @@ function applyLayout(root: HTMLElement, layout: UiLayout) {
   }
 }
 
+async function fetchLayout(pageKey: UiPageKey): Promise<UiLayout | null> {
+  try {
+    const response = await authorizedFetch(`/api/ui-layouts/${pageKey}/published`);
+    if (!response.ok) return null;
+    const body = (await response.json()) as { version?: { layout?: unknown } | null };
+    return body?.version?.layout ? normalizeUiLayout(body.version.layout, pageKey) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function UiLayoutRuntime() {
   const [location, navigate] = useLocation();
   const pageKey = useMemo(() => pageFromPath(location), [location]);
-  const [layout, setLayout] = useState<UiLayout | null>(null);
+  const [pageLayout, setPageLayout] = useState<UiLayout | null>(null);
+  const [navigationLayout, setNavigationLayout] = useState<UiLayout | null>(null);
   const [popup, setPopup] = useState<{
     title: string;
     content: string;
@@ -191,52 +222,56 @@ export default function UiLayoutRuntime() {
 
   useEffect(() => {
     let cancelled = false;
-    setLayout(null);
-    if (!pageKey) return () => undefined;
-
-    void authorizedFetch(`/api/ui-layouts/${pageKey}/published`)
-      .then(async (response) => {
-        if (!response.ok) return null;
-        return (await response.json()) as { version?: { layout?: unknown } | null };
-      })
-      .then((body) => {
-        if (cancelled || !body?.version?.layout) return;
-        setLayout(normalizeUiLayout(body.version.layout, pageKey));
-      })
-      .catch(() => undefined);
-
+    setPageLayout(null);
+    void fetchLayout('navigation').then((layout) => {
+      if (!cancelled) setNavigationLayout(layout);
+    });
+    if (pageKey) {
+      void fetchLayout(pageKey).then((layout) => {
+        if (!cancelled) setPageLayout(layout);
+      });
+    }
     return () => {
       cancelled = true;
     };
   }, [pageKey]);
 
   useEffect(() => {
-    if (!layout) return;
+    const layouts = [pageLayout, navigationLayout].filter((item): item is UiLayout => Boolean(item));
+    if (!layouts.length) return;
     const root = document.querySelector<HTMLElement>('[data-app-shell]');
     if (!root) return;
 
     let timer = 0;
     let applying = false;
+    let observer: MutationObserver;
+    const observe = () => observer.observe(root, { childList: true, subtree: true });
     const run = () => {
       if (applying) return;
       applying = true;
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
-        applyLayout(root, layout);
+        observer.disconnect();
+        layouts.forEach((layout) => applyLayout(root, layout));
         applying = false;
+        observe();
       }, 20);
     };
 
+    observer = new MutationObserver(() => run());
+    observe();
     run();
-    const observer = new MutationObserver(() => run());
-    observer.observe(root, { childList: true, subtree: true });
 
     return () => {
       window.clearTimeout(timer);
       observer.disconnect();
-      root.querySelectorAll('[data-custom-ui-node]').forEach((node) => node.remove());
+      layouts.forEach((layout) => {
+        root
+          .querySelectorAll(`[data-custom-ui-page="${layout.pageKey}"]`)
+          .forEach((node) => node.remove());
+      });
     };
-  }, [layout]);
+  }, [navigationLayout, pageLayout]);
 
   useEffect(() => {
     const handleClick = async (event: MouseEvent) => {
@@ -251,18 +286,21 @@ export default function UiLayoutRuntime() {
 
       if (title || content) {
         event.preventDefault();
+        event.stopImmediatePropagation();
         setPopup({ title: title || target.textContent?.trim() || '안내', content, position });
         return;
       }
 
       if (sourceType === 'route' && sourcePath.startsWith('/')) {
         event.preventDefault();
+        event.stopImmediatePropagation();
         navigate(sourcePath);
         return;
       }
 
       if (sourceType === 'api' && sourcePath.startsWith('/api/')) {
         event.preventDefault();
+        event.stopImmediatePropagation();
         setPopup({ title: '조회 중', content: '데이터를 불러오고 있습니다.', position: 'center' });
         try {
           const response = await authorizedFetch(sourcePath);

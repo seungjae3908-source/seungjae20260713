@@ -32,6 +32,7 @@ type PopupStep =
 type NavItem = {
   href: string;
   label: string;
+  editId: string;
   icon: typeof Home;
   feature: AppFeature;
   popup?: PopupKind;
@@ -49,6 +50,7 @@ const NAV_ITEMS: NavItem[] = [
   {
     href: '/',
     label: '홈',
+    editId: 'navigation.nav.home',
     icon: Home,
     feature: 'advancedAnalysis',
     match: (path) => path === '/' || path === '/home',
@@ -56,6 +58,7 @@ const NAV_ITEMS: NavItem[] = [
   {
     href: '/search',
     label: '종목',
+    editId: 'navigation.nav.markets',
     icon: TrendingUp,
     feature: 'basicChart',
     popup: 'markets',
@@ -69,6 +72,7 @@ const NAV_ITEMS: NavItem[] = [
   {
     href: '/watchlist',
     label: '관심',
+    editId: 'navigation.nav.watch',
     icon: Star,
     feature: 'basicChart',
     popup: 'watch',
@@ -77,6 +81,7 @@ const NAV_ITEMS: NavItem[] = [
   {
     href: '/tech',
     label: '기술',
+    editId: 'navigation.nav.tech',
     icon: Search,
     feature: 'aiRealtimeChart',
     popup: 'tech',
@@ -88,6 +93,7 @@ const NAV_ITEMS: NavItem[] = [
   {
     href: '/stock-info',
     label: '정보',
+    editId: 'navigation.nav.info',
     icon: Newspaper,
     feature: 'advancedAnalysis',
     popup: 'info',
@@ -101,6 +107,7 @@ const NAV_ITEMS: NavItem[] = [
   {
     href: '/more',
     label: '설정',
+    editId: 'navigation.nav.settings',
     icon: Settings,
     feature: 'basicChart',
     match: (path) =>
@@ -395,6 +402,7 @@ export function BottomNav() {
               type="button"
               onClick={closePopup}
               aria-label="팝업 닫기"
+              data-ui-edit={`navigation.popup.${popup}.${step}.close`}
               className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-[#171a21] text-white transition active:scale-95"
             >
               <X className="h-5 w-5" />
@@ -405,21 +413,23 @@ export function BottomNav() {
                 type="button"
                 onClick={goPreviousStep}
                 aria-label="이전 선택"
+                data-ui-edit={`navigation.popup.${popup}.${step}.back`}
                 className="absolute left-4 top-4 flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-[#171a21] text-white transition active:scale-95"
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
             )}
 
-            <h2 className="mb-5 px-12 text-center text-lg font-extrabold text-white">
+            <h2 data-ui-edit={`navigation.popup.${popup}.${step}.title`} className="mb-5 px-12 text-center text-lg font-extrabold text-white">
               {popupTitle(popup, step)}
             </h2>
 
-            <div className="grid grid-cols-1 gap-3">
-              {allowedPopupItems.map((item) => (
+            <div data-ui-edit={`navigation.popup.${popup}.${step}.items`} className="grid grid-cols-1 gap-3">
+              {allowedPopupItems.map((item, index) => (
                 <button
                   key={`${item.label}:${item.href ?? item.step}`}
                   type="button"
+                  data-ui-edit={`navigation.popup.${popup}.${step}.item.${index}`}
                   onClick={() => {
                     if (item.step) {
                       setStep(item.step);
@@ -452,6 +462,7 @@ export function BottomNav() {
               <button
                 key={item.href}
                 type="button"
+                data-ui-edit={item.editId}
                 onClick={() => {
                   if (item.popup) {
                     openPopup(item.popup);

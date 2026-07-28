@@ -17,6 +17,7 @@ const ALLOWED_PAGES = new Set([
   'signal-scan',
   'portfolio',
   'settings',
+  'navigation',
 ]);
 
 function memberDb(req: AuthenticatedRequest) {
