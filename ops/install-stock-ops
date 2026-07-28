@@ -6,6 +6,15 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="/usr/local/sbin"
 UNIT_DIR="/etc/systemd/system"
 
+install -d -m 0750 /var/lib/stock-health-watch /var/backups/stock-app || {
+  echo "상태·백업 폴더 생성 실패"
+  exit 1
+}
+install -d -m 0755 /var/lock || {
+  echo "잠금 폴더 확인 실패"
+  exit 1
+}
+
 install -m 0750 "$SOURCE_DIR/stockdeploy" "$BIN_DIR/stockdeploy" || {
   echo "stockdeploy 설치 실패"
   exit 1
@@ -37,6 +46,7 @@ install -m 0644 \
 }
 
 systemctl daemon-reload || exit 1
+systemctl reset-failed stock-health-watch.service >/dev/null 2>&1 || true
 systemctl enable --now stock-health-watch.timer || exit 1
 
 echo "설치 완료"
