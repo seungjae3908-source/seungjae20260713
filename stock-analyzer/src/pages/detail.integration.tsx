@@ -1,4 +1,5 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { apiGet } from '@/lib/api';
 import { useMemberPermissions } from '@/lib/permissions';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useRoute } from "wouter";
@@ -718,30 +719,33 @@ async function fetchChartCandles(
 ): Promise<CandlePoint[]> {
   const encodedTicker = encodeURIComponent(ticker);
   const encodedFrame = encodeURIComponent(timeframe);
-  const raw = await tryJson<AnyObj>(
-    [`/api/stocks/${encodedTicker}/candles?tf=${encodedFrame}`],
-    {},
-  );
+  try {
+    const raw = await apiGet<AnyObj>(
+      `/stocks/${encodedTicker}/candles?tf=${encodedFrame}`,
+      { timeoutMs: 20_000, staleIfErrorMs: 10 * 60_000 },
+    );
 
-  const rows = Array.isArray(raw?.candles)
-    ? raw.candles
-    : Array.isArray(raw?.data?.candles)
-      ? raw.data.candles
-      : Array.isArray(raw?.items)
-        ? raw.items
-        : Array.isArray(raw)
-          ? raw
-          : [];
+    const rows = Array.isArray(raw?.candles)
+      ? raw.candles
+      : Array.isArray(raw?.data?.candles)
+        ? raw.data.candles
+        : Array.isArray(raw?.items)
+          ? raw.items
+          : Array.isArray(raw)
+            ? raw
+            : [];
 
-  const normalized = normalizeCandles(rows);
-
-  if (normalized.length >= 2) {
-    return normalized;
+    const normalized = normalizeCandles(rows);
+    if (normalized.length >= 2) return normalized;
+  } catch {
+    // React Query가 이전 정상 캔들을 유지하도록 아래 폴백만 판단합니다.
   }
 
   // 다른 주기의 일봉을 분봉처럼 보여주면 실제 봉처럼 오해할 수 있으므로,
   // 초기 상세 조회와 같은 1일봉일 때만 기존 데이터를 사용합니다.
-  return timeframe === "1D" ? normalizeCandles(fallbackRows) : [];
+  const fallback = timeframe === "1D" ? normalizeCandles(fallbackRows) : [];
+  if (fallback.length >= 2) return fallback;
+  throw new Error("CHART_DATA_TEMPORARILY_UNAVAILABLE");
 }
 
 function sma(values: number[], period: number): number | null {
