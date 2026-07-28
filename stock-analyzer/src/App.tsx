@@ -1,3 +1,4 @@
+import { UiLayoutRuntime } from '@/components/ui-layout-runtime';
 import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import {
 	Route,
@@ -573,6 +574,7 @@ function App() {
 					<AssetModeProvider>
 						<TooltipProvider>
 							<WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+								<UiLayoutRuntime />
 								<AppShell>
 									<RootRouter />
 								</AppShell>
