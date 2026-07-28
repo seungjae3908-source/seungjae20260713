@@ -31,6 +31,10 @@ const STOCK_POOL = 80;
 const COIN_SPOT_POOL = 40;
 const COIN_FUTURES_POOL = 40;
 
+// 검색 범위는 유지하되 동시에 외부 공급자에 요청하는 수만 제한한다.
+const STOCK_SCAN_CONCURRENCY = 6;
+const COIN_SCAN_CONCURRENCY = 8;
+
 export interface ScanCandidate {
   ticker: string;
   name: string;
@@ -65,6 +69,50 @@ export interface SignalScanResult {
   scanned: number;
   providerErrors: number;
   groups: ScanGroup[];
+}
+
+
+async function allSettledLimited<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results =
+    new Array<PromiseSettledResult<R>>(items.length);
+
+  let cursor = 0;
+  const workerCount = Math.min(
+    items.length,
+    Math.max(1, Math.floor(concurrency)),
+  );
+
+  await Promise.all(
+    Array.from(
+      { length: workerCount },
+      async () => {
+        while (true) {
+          const index = cursor;
+          cursor += 1;
+
+          if (index >= items.length) return;
+
+          try {
+            results[index] = {
+              status: 'fulfilled',
+              value: await worker(items[index], index),
+            };
+          } catch (reason) {
+            results[index] = {
+              status: 'rejected',
+              reason,
+            };
+          }
+        }
+      },
+    ),
+  );
+
+  return results;
 }
 
 interface Analyzed {
@@ -254,8 +302,10 @@ function makeCandidate(
 async function collectStock(market: 'KR' | 'US'): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
   const pool = CATALOG.filter((e) => e.market === market).slice(0, STOCK_POOL);
   let providerErrors = 0;
-  const settled = await Promise.allSettled(
-    pool.map(async (entry): Promise<RawItem | null> => {
+  const settled = await allSettledLimited(
+    pool,
+    STOCK_SCAN_CONCURRENCY,
+    async (entry): Promise<RawItem | null> => {
       const [candles, quote] = await Promise.all([
         MarketDataService.getCandles(entry.ticker, '1D'),
         MarketDataService.getQuote(entry.ticker),
@@ -272,7 +322,7 @@ async function collectStock(market: 'KR' | 'US'): Promise<{ items: RawItem[]; sc
         market: entry.market,
         analyzed,
       };
-    }),
+    },
   );
   const items: RawItem[] = [];
   for (const r of settled) {
@@ -288,8 +338,10 @@ async function collectStock(market: 'KR' | 'US'): Promise<{ items: RawItem[]; sc
 async function collectCoinSpot(): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
   const tickers = await fetchUpbitTopTickers(COIN_SPOT_POOL);
   let providerErrors = 0;
-  const settled = await Promise.allSettled(
-    tickers.map(async (t): Promise<RawItem | null> => {
+  const settled = await allSettledLimited(
+    tickers,
+    COIN_SCAN_CONCURRENCY,
+    async (t): Promise<RawItem | null> => {
       const candles = await fetchUpbitCandles(t.symbol, 200, '1D');
       const analyzed = analyze(candles);
       if (!analyzed || t.price == null) return null;
@@ -302,7 +354,7 @@ async function collectCoinSpot(): Promise<{ items: RawItem[]; scanned: number; p
         market: 'spot',
         analyzed,
       };
-    }),
+    },
   );
   const items: RawItem[] = [];
   for (const r of settled) {
@@ -318,8 +370,10 @@ async function collectCoinSpot(): Promise<{ items: RawItem[]; scanned: number; p
 async function collectCoinFutures(): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
   const tickers = await fetchBitgetTopTickers(COIN_FUTURES_POOL);
   let providerErrors = 0;
-  const settled = await Promise.allSettled(
-    tickers.map(async (t): Promise<RawItem | null> => {
+  const settled = await allSettledLimited(
+    tickers,
+    COIN_SCAN_CONCURRENCY,
+    async (t): Promise<RawItem | null> => {
       const candles = await fetchBitgetCandles(t.symbol, 200, '1D');
       const analyzed = analyze(candles);
       if (!analyzed || t.price == null) return null;
@@ -332,7 +386,7 @@ async function collectCoinFutures(): Promise<{ items: RawItem[]; scanned: number
         market: 'futures',
         analyzed,
       };
-    }),
+    },
   );
   const items: RawItem[] = [];
   for (const r of settled) {
