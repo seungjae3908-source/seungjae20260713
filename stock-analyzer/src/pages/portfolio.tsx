@@ -1366,8 +1366,8 @@ export default function PortfolioPage() {
 	}
 
 	return (
-		<div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background text-foreground">
-			<header className="relative z-30 shrink-0 border-b border-card-border bg-background/95 px-4 py-4 backdrop-blur">
+		<div data-ui-page="portfolio" className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background text-foreground">
+			<header data-ui-component="portfolio.header" className="relative z-30 shrink-0 border-b border-card-border bg-background/95 px-4 py-4 backdrop-blur">
 				<div className="grid grid-cols-[80px_1fr_80px] items-center gap-2">
 					<span />
 					<h1 className="text-center text-xl font-extrabold">내 포트폴리오</h1>
@@ -1400,7 +1400,7 @@ export default function PortfolioPage() {
 					futuresPositions={coinFuturesPositions}
 				/>
 			) : (
-			<main className="flex-none px-4 pb-28 pt-4">
+			<main data-ui-component="portfolio.holdings" className="flex-none px-4 pb-28 pt-4">
 				{!auth.configured && (
 					<section className="rounded-3xl border border-amber-500/30 bg-amber-500/10 p-5">
 						<div className="flex items-start gap-3">
