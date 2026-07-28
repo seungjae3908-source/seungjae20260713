@@ -647,8 +647,8 @@ export default function StocksPage() {
 			: futuresTickers;
 
 	return (
-		<div className="h-full overflow-y-auto overscroll-contain bg-background">
-			<header className="border-b border-card-border px-4 pb-3 pt-4">
+		<div data-ui-page="stocks" className="h-full overflow-y-auto overscroll-contain bg-background">
+			<header data-ui-component="stocks.header" className="border-b border-card-border px-4 pb-3 pt-4">
 				<h1 className="text-center text-xl font-extrabold">
 					종목
 				</h1>
@@ -688,7 +688,7 @@ export default function StocksPage() {
         </section>
       </header>
 
-			<main className="space-y-3 px-4 pb-28 pt-4">
+			<main data-ui-component="stocks.list" className="space-y-3 px-4 pb-28 pt-4">
 				{!searching && (
 					<EmptyBox>
 						{isStock
