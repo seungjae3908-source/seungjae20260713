@@ -72,6 +72,32 @@ export function PaperTradingWorkbench({ asset, market, symbol, currentPrice, bar
     } finally { setTesting(false); }
   };
 
+  useEffect(() => {
+    if (bars.length < 120) return;
+    const last = bars[bars.length - 1];
+    const cacheKey = `paper-backtest:${asset}:${market}:${symbol}:${String(last?.time ?? last?.date ?? bars.length)}:${last?.close}`;
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) { setBacktest(JSON.parse(cached) as Backtest); return; }
+    } catch { /* 저장소가 막혀도 자동 검증은 계속합니다. */ }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setTesting(true);
+      void authorizedFetch('/api/strategy-lab/backtest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bars, feePct: asset === 'coin' ? 0.05 : 0.015, slippagePct: 0.05, maxRuns: 720 }),
+        signal: controller.signal,
+      }).then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.error ?? 'BACKTEST_FAILED');
+        setBacktest(payload as Backtest);
+        try { localStorage.setItem(cacheKey, JSON.stringify(payload)); } catch { /* noop */ }
+      }).catch(() => undefined).finally(() => setTesting(false));
+    }, 800);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [asset, market, symbol, bars]);
+
   return (
     <div className="space-y-3" data-ui-component="stock-info.trading">
       <section className="rounded-2xl border border-card-border bg-card p-3">
