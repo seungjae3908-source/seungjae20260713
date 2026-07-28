@@ -67,8 +67,10 @@ grep -q "pendingLoads" "$STAGE/src/lib/cache.ts" || {
   echo "FAILED: 동시요청 합치기 수정 누락"
   exit 1
 }
-grep -q "const STOCK_POOL = 36" "$STAGE/src/services/analysis/signal-scan.service.ts" || {
-  echo "FAILED: 신호검색 속도 개선 누락"
+grep -q "const STOCK_POOL = 16" "$STAGE/src/services/analysis/signal-scan.service.ts" &&
+grep -q "STOCK_CONCURRENCY = 4" "$STAGE/src/services/analysis/signal-scan.service.ts" &&
+grep -q "signal-scan:v3-bounded" "$STAGE/src/services/analysis/signal-scan.service.ts" || {
+  echo "FAILED: 신호검색 동시성·시간제한 개선 누락"
   exit 1
 }
 
@@ -89,6 +91,12 @@ fi
 
 [ -s "$API/dist/index.mjs" ] || {
   echo "FAILED: API 빌드 결과 없음"
+  restore_previous
+  exit 1
+}
+
+grep -q "signal-scan:v3-bounded" "$API/dist/index.mjs" || {
+  echo "FAILED: 신호검색 안정화 코드가 dist에 없음"
   restore_previous
   exit 1
 }
