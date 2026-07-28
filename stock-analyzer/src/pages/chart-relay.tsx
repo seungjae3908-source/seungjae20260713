@@ -2981,11 +2981,14 @@ export default function ChartRelayPage() {
       return payload;
     },
     enabled: Boolean(symbol.trim()) && !futuresLocked && useRestFallback,
+    staleTime: 10_000,
     refetchInterval: useRestFallback ? 20_000 : false,
-    refetchIntervalInBackground: true,
-    refetchOnMount: 'always',
+    refetchIntervalInBackground: false,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
     refetchOnReconnect: true,
-    retry: 0,
+    retry: 1,
+    placeholderData: (previous) => previous,
     initialData: () => readCachedCandles(asset, symbol, interval),
   });
   const hasInitialCandleData =
@@ -3005,7 +3008,7 @@ export default function ChartRelayPage() {
       useRestFallback &&
       hasInitialCandleData,
     refetchInterval: useRestFallback ? 30_000 : false,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     retry: 1,
   });
 
@@ -3022,7 +3025,7 @@ export default function ChartRelayPage() {
       useRestFallback &&
       hasInitialCandleData,
     refetchInterval: useRestFallback ? 30_000 : false,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     retry: 1,
   });
 
