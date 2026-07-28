@@ -1,66 +1,113 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 
 export type AppAsset = 'stock' | 'coin';
 export type StockMarketMode = 'KR' | 'US';
 export type CoinMarketMode = 'spot' | 'futures';
 
-interface AssetModeValue {
+interface AssetModeState {
   asset: AppAsset;
   stockMarket: StockMarketMode;
   coinMarket: CoinMarketMode;
+}
+
+interface AssetModeValue extends AssetModeState {
   setAsset: (value: AppAsset) => void;
   setStockMarket: (value: StockMarketMode) => void;
   setCoinMarket: (value: CoinMarketMode) => void;
 }
 
-const STORAGE_KEY = 'knowledge-info-asset-mode-v1';
+const DEFAULT_MODE: AssetModeState = {
+  asset: 'stock',
+  stockMarket: 'KR',
+  coinMarket: 'spot',
+};
+
 const AssetModeContext = createContext<AssetModeValue | null>(null);
 
-function readStored() {
-  if (typeof window === 'undefined') return { asset: 'stock' as AppAsset, stockMarket: 'KR' as StockMarketMode, coinMarket: 'spot' as CoinMarketMode };
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '{}');
-    return {
-      asset: parsed.asset === 'coin' ? 'coin' as AppAsset : 'stock' as AppAsset,
-      stockMarket: parsed.stockMarket === 'US' ? 'US' as StockMarketMode : 'KR' as StockMarketMode,
-      coinMarket: parsed.coinMarket === 'futures' ? 'futures' as CoinMarketMode : 'spot' as CoinMarketMode,
-    };
-  } catch {
-    return { asset: 'stock' as AppAsset, stockMarket: 'KR' as StockMarketMode, coinMarket: 'spot' as CoinMarketMode };
-  }
-}
+export function AssetModeProvider({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  /*
+   * 화면 이동용 탭은 마지막 선택을 저장하지 않는다.
+   *
+   * 앱을 새로 열면:
+   * 주식 → 국내
+   *
+   * 주식 버튼을 누르면:
+   * 주식 → 국내
+   *
+   * 코인 버튼을 누르면:
+   * 코인 → 현물·업비트
+   *
+   * 실제 자동매매 설정값·알림값·투자금 등은
+   * 각 기능 파일에서 기존 방식대로 별도 저장된다.
+   */
+  const [mode, setMode] = useState<AssetModeState>(DEFAULT_MODE);
 
-export function AssetModeProvider({ children }: { children: ReactNode }) {
-  const initial = useMemo(readStored, []);
-  const [asset, setAssetState] = useState<AppAsset>(initial.asset);
-  const [stockMarket, setStockMarketState] = useState<StockMarketMode>(initial.stockMarket);
-  const [coinMarket, setCoinMarketState] = useState<CoinMarketMode>(initial.coinMarket);
+  const value = useMemo<AssetModeValue>(
+    () => ({
+      asset: mode.asset,
+      stockMarket: mode.stockMarket,
+      coinMarket: mode.coinMarket,
 
-  const persist = (next: Partial<{ asset: AppAsset; stockMarket: StockMarketMode; coinMarket: CoinMarketMode }>) => {
-    const value = {
-      asset: next.asset ?? asset,
-      stockMarket: next.stockMarket ?? stockMarket,
-      coinMarket: next.coinMarket ?? coinMarket,
-    };
-    if (typeof window !== 'undefined') window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
-  };
+      setAsset: (asset) => {
+        setMode((current) => {
+          if (asset === 'stock') {
+            return {
+              ...current,
+              asset: 'stock',
+              stockMarket: 'KR',
+            };
+          }
 
-  const value = useMemo<AssetModeValue>(() => ({
-    asset,
-    stockMarket,
-    coinMarket,
-    setAsset: (next) => { persist({ asset: next }); setAssetState(next); },
-    setStockMarket: (next) => { persist({ stockMarket: next }); setStockMarketState(next); },
-    setCoinMarket: (next) => { persist({ coinMarket: next }); setCoinMarketState(next); },
-  // persist intentionally closes over the current three primitive values.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [asset, stockMarket, coinMarket]);
+          return {
+            ...current,
+            asset: 'coin',
+            coinMarket: 'spot',
+          };
+        });
+      },
 
-  return <AssetModeContext.Provider value={value}>{children}</AssetModeContext.Provider>;
+      setStockMarket: (stockMarket) => {
+        setMode((current) => ({
+          ...current,
+          stockMarket,
+        }));
+      },
+
+      setCoinMarket: (coinMarket) => {
+        setMode((current) => ({
+          ...current,
+          coinMarket,
+        }));
+      },
+    }),
+    [mode],
+  );
+
+  return (
+    <AssetModeContext.Provider value={value}>
+      {children}
+    </AssetModeContext.Provider>
+  );
 }
 
 export function useAssetMode() {
   const context = useContext(AssetModeContext);
-  if (!context) throw new Error('useAssetMode must be used inside AssetModeProvider');
+
+  if (!context) {
+    throw new Error(
+      'useAssetMode must be used inside AssetModeProvider',
+    );
+  }
+
   return context;
 }

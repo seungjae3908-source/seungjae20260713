@@ -283,12 +283,40 @@ export default function StockInfoPage() {
 						<Tab active={market === 'US'} onClick={() => updateSelection({ market: 'US' })}>해외</Tab>
 					</div>
 				)}
+
+				<div className="mt-3 grid grid-cols-2 gap-2">
+					<AnalysisEntry label="국내시장" onClick={() => navigate('/analysis/kr')} />
+					<AnalysisEntry label="해외시장" onClick={() => navigate('/analysis/us')} />
+					<AnalysisEntry label="코인시장" onClick={() => navigate('/analysis/coin')} />
+					<AnalysisEntry label="포트폴리오" onClick={() => navigate('/portfolio')} />
+				</div>
 			</header>
 
 			{asset === 'coin' ? (
 				<CoinInfo nowMs={nowMs} />
 			) : (
 				<main className="space-y-4 px-4 pb-28 pt-4">
+					<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+						<label className="flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
+							<Search className="h-4 w-4 text-muted-foreground" />
+							<input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
+						{searchText && <button type="button" onClick={() => setSearchText('')} aria-label="검색 닫기"><X className="h-4 w-4 text-muted-foreground" /></button>}
+						</label>
+						{searchText.trim().length > 0 && (
+							<div className="mt-3 max-h-44 space-y-1 overflow-y-auto">
+								{search.isLoading && <InlineState>종목 목록을 불러오는 중입니다.</InlineState>}
+								{search.isError && <InlineState tone="error">종목 목록을 불러오지 못했습니다.</InlineState>}
+								{!search.isLoading && !search.isError && candidates.length === 0 && <InlineState>검색 결과가 없습니다.</InlineState>}
+								{candidates.map((item: SearchResult) => (
+									<button key={`${item.market}:${item.ticker}`} type="button" onClick={() => { setSearchText(''); updateSelection({ ticker: item.ticker }); }} className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2', item.ticker === ticker ? 'bg-primary/10 text-primary' : 'bg-secondary/60')}>
+										<span className="min-w-0 flex-1 truncate text-center text-sm font-black">{displayStockName(item.ticker, item.name, item.market)}</span>
+										<span className="ml-2 shrink-0 text-[10px] font-bold text-muted-foreground">{item.ticker}</span>
+									</button>
+								))}
+							</div>
+						)}
+					</section>
+
 					<SpecialFeedPanel
 						asset="stock"
 						market={market}
@@ -310,29 +338,6 @@ export default function StockInfoPage() {
 						}}
 					/>
 
-					<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-						<label className="flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
-							<Search className="h-4 w-4 text-muted-foreground" />
-							<input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={market === 'KR' ? '국내 종목명·코드 검색' : '해외 종목명·티커·한글명 검색'} className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
-						</label>
-						{searchText.trim().length > 0 && (
-							<div className="mt-3 max-h-44 space-y-1 overflow-y-auto">
-								{search.isLoading && <InlineState>종목 목록을 불러오는 중입니다.</InlineState>}
-								{search.isError && <InlineState tone="error">종목 목록을 불러오지 못했습니다.</InlineState>}
-								{!search.isLoading && !search.isError && candidates.length === 0 && <InlineState>검색 결과가 없습니다.</InlineState>}
-								{candidates.map((item: SearchResult) => (
-									<button key={`${item.market}:${item.ticker}`} type="button" onClick={() => { setSearchText(''); updateSelection({ ticker: item.ticker }); }} className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2', item.ticker === ticker ? 'bg-primary/10 text-primary' : 'bg-secondary/60')}>
-										<span className="min-w-0 flex-1 truncate text-center text-sm font-black">{displayStockName(item.ticker, item.name, item.market)}</span>
-										<span className="ml-2 shrink-0 text-[10px] font-bold text-muted-foreground">{item.ticker}</span>
-									</button>
-								))}
-							</div>
-						)}
-					</section>
-
-					{!ticker && (
-						<InlineState>종목을 검색해 선택하면 실제 시세·재무·수급·공매도·뉴스·공시가 아래에 표시됩니다.</InlineState>
-					)}
 
 					{ticker && (
 						<>
@@ -453,7 +458,6 @@ function SpecialFeedPanel({
 	onOpenItem: (item: SpecialFeedItem) => void;
 }) {
 	const [view, setView] = useState<SpecialFeedView>('latest');
-	const [query, setQuery] = useState('');
 	const [moreOpen, setMoreOpen] = useState(false);
 	const [page, setPage] = useState(1);
 	const filters: Array<[SpecialFeedFilter, string]> = [
@@ -461,7 +465,7 @@ function SpecialFeedPanel({
 		['news', '뉴스'],
 		['positive', '호재'],
 		['negative', '악재'],
-		...(asset === 'stock' ? ([['disclosure', '중요공시']] as Array<[SpecialFeedFilter, string]>) : []),
+		['disclosure', '주요공시'],
 		['signal', '차트신호'],
 	];
 	const marketLabel =
@@ -474,7 +478,6 @@ function SpecialFeedPanel({
 					: '비트겟 선물';
 
 	const filteredItems = useMemo(() => {
-		const needle = query.trim().toLowerCase();
 		return [...items]
 			.filter((item) => {
 				const archiveAt = Date.parse(item.archiveAt);
@@ -490,17 +493,12 @@ function SpecialFeedPanel({
 				if (filter === 'disclosure') return item.kind === 'disclosure';
 				return item.kind === 'signal';
 			})
-			.filter((item) => {
-				if (!needle) return true;
-				return [item.name, item.ticker, item.title, item.summary, item.source]
-					.some((value) => String(value ?? '').toLowerCase().includes(needle));
-			})
 			.sort((a, b) => {
 				const aTime = Date.parse(a.sourceAt ?? a.detectedAt);
 				const bTime = Date.parse(b.sourceAt ?? b.detectedAt);
 				return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
 			});
-	}, [filter, items, nowMs, query, view]);
+	}, [filter, items, nowMs, view]);
 
 	const pageCount = Math.max(1, Math.ceil(filteredItems.length / 10));
 	const modalItems = filteredItems.slice((page - 1) * 10, page * 10);
@@ -508,7 +506,7 @@ function SpecialFeedPanel({
 
 	useEffect(() => {
 		setPage(1);
-	}, [asset, filter, market, query, view]);
+	}, [asset, filter, market, view]);
 
 	useEffect(() => {
 		if (page > pageCount) setPage(pageCount);
@@ -526,18 +524,7 @@ function SpecialFeedPanel({
 	return (
 		<>
 			<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-				<div className="text-center">
-					<h2 className="text-base font-black">특이정보</h2>
-					<p className="mt-1 break-keep text-[10px] font-bold leading-relaxed text-muted-foreground">
-						{marketLabel} {asset === 'stock' ? '앱 종목' : '코인'} {catalogSize ? `${catalogSize}개` : '전체'}를 순환 확인합니다.
-						1주일 이내는 최신으로, 1주일이 지나면 보관함의 지난 정보로 표시됩니다.
-					</p>
-					{fetching && !loading && (
-						<p className="mt-1 text-[10px] font-black text-primary">새 정보를 확인하는 중입니다.</p>
-					)}
-				</div>
-
-				<div className="mt-3 grid grid-cols-2 gap-2">
+				<div className="grid grid-cols-2 gap-2">
 					<button
 						type="button"
 						onClick={() => setView('latest')}
@@ -565,22 +552,8 @@ function SpecialFeedPanel({
 					</button>
 				</div>
 
-				<label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
-					<Search className="h-4 w-4 text-muted-foreground" />
-					<input
-						value={query}
-						onChange={(event) => setQuery(event.target.value)}
-						placeholder="종목·코인·제목·내용 검색"
-						className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
-					/>
-					{query && (
-						<button type="button" onClick={() => setQuery('')} aria-label="검색어 지우기">
-							<X className="h-4 w-4 text-muted-foreground" />
-						</button>
-					)}
-				</label>
 
-				<div className="mt-3 grid w-full grid-cols-5 gap-1">
+				<div className="mt-3 grid w-full grid-cols-6 gap-1">
 					{filters.map(([key, label]) => (
 						<button
 							key={key}
@@ -602,7 +575,7 @@ function SpecialFeedPanel({
 					{loading && <InlineState>{asset === 'stock' ? '종목' : '코인'}의 뉴스·호재·악재·차트신호를 확인하는 중입니다.</InlineState>}
 					{error && (
 						<div className="space-y-2">
-							<InlineState tone="error">특이정보를 불러오지 못했습니다.</InlineState>
+							<InlineState tone="error">정보를 불러오지 못했습니다.</InlineState>
 							<button
 								type="button"
 								onClick={onRetry}
@@ -806,6 +779,20 @@ function elapsedFeedText(value: string, nowMs: number) {
 	return `${days}일 전`;
 }
 
+// 시장분석 진입 카드 — 전체 화면으로 이동한다.
+function AnalysisEntry({ label, onClick }: { label: string; onClick: () => void }) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			className="flex items-center justify-between gap-2 rounded-2xl border border-card-border bg-card px-3 py-3 text-left shadow-sm"
+		>
+			<span className="min-w-0 flex-1 truncate text-sm font-black">{label}</span>
+			<ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+		</button>
+	);
+}
+
 function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
 	return <button type="button" onClick={onClick} className={cn('inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-3 py-2 text-sm font-black', active ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{children}</button>;
 }
@@ -1006,24 +993,6 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 
 	return (
 		<main className="space-y-4 px-4 pb-28 pt-4">
-			<SpecialFeedPanel
-				asset="coin"
-				market={coinMarket}
-				filter={coinFeedFilter}
-				onFilter={setCoinFeedFilter}
-				items={coinSpecialFeed.data?.items ?? []}
-				nowMs={nowMs}
-				loading={coinSpecialFeed.isLoading}
-				fetching={coinSpecialFeed.isFetching}
-				error={coinSpecialFeed.isError || coinSpecialFeed.data?.ok === false}
-				catalogSize={coinSpecialFeed.data?.catalogSize}
-				onRetry={() => { void coinSpecialFeed.refetch(); }}
-				onOpenItem={(item) => {
-					const nextMarket: CoinMarketTab = item.market === 'futures' ? 'futures' : 'spot';
-					changeCoin(nextMarket, item.ticker);
-				}}
-			/>
-
 			<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
 				<div className="grid grid-cols-2 gap-2">
 					<Tab active={coinMarket === 'spot'} onClick={() => changeCoin('spot')}>현물 · 업비트</Tab>
@@ -1034,7 +1003,8 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 				</div>
 				<label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
 					<Search className="h-4 w-4 text-muted-foreground" />
-					<input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={coinMarket === 'spot' ? '코인명·심볼 검색' : '선물 심볼 검색'} className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
+					<input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
+				{searchText && <button type="button" onClick={() => setSearchText('')} aria-label="검색 닫기"><X className="h-4 w-4 text-muted-foreground" /></button>}
 				</label>
 				{searchText.trim().length > 0 && (
 				<div className="mt-3 max-h-52 space-y-1 overflow-y-auto">
@@ -1053,7 +1023,24 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 				)}
 			</section>
 
-			{!symbol && <InlineState>코인을 검색해 선택하면 실제 시세·호가·캔들 정보가 아래에 표시됩니다.</InlineState>}
+			<SpecialFeedPanel
+				asset="coin"
+				market={coinMarket}
+				filter={coinFeedFilter}
+				onFilter={setCoinFeedFilter}
+				items={coinSpecialFeed.data?.items ?? []}
+				nowMs={nowMs}
+				loading={coinSpecialFeed.isLoading}
+				fetching={coinSpecialFeed.isFetching}
+				error={coinSpecialFeed.isError || coinSpecialFeed.data?.ok === false}
+				catalogSize={coinSpecialFeed.data?.catalogSize}
+				onRetry={() => { void coinSpecialFeed.refetch(); }}
+				onOpenItem={(item) => {
+					const nextMarket: CoinMarketTab = item.market === 'futures' ? 'futures' : 'spot';
+					changeCoin(nextMarket, item.ticker);
+				}}
+			/>
+
 
 			{symbol && (
 			<>

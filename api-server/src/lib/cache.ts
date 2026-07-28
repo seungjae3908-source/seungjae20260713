@@ -102,6 +102,7 @@ export async function cached<T>(
 
 export const TTL = {
   quote: 60 * 1000, // 1 min
+  candles: 10 * 60 * 1000, // 10 min (차트 캔들)
   news: 15 * 60 * 1000, // 15 min
   financials: 24 * 60 * 60 * 1000, // 24 h (rate-limit friendly)
   signals: 12 * 60 * 60 * 1000, // 12 h

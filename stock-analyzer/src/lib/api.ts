@@ -74,6 +74,7 @@ export interface QuoteRow extends SearchResult {
   riskLevel?: RiskLevel;
   volume?: number;
   tradingValue?: number;
+  marketCap?: number | null;
   per?: number | null;
   pbr?: number | null;
   roe?: number | null;
@@ -509,7 +510,9 @@ export interface ScanResult {
 
 export interface Movers {
   popular: QuoteRow[];
+  volume?: QuoteRow[];
   gainers: QuoteRow[];
+  losers?: QuoteRow[];
   risky: QuoteRow[];
   recommended: QuoteRow[];
   /**
@@ -596,11 +599,17 @@ const BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || '/api';
 
 const enc = encodeURIComponent;
 
-export async function apiGet<T>(path: string): Promise<T> {
+export async function apiGet<T>(
+  path: string,
+  options: { timeoutMs?: number } = {},
+): Promise<T> {
   const separator = path.includes('?') ? '&' : '?';
   const url = `${BASE}${path}${separator}_ts=${Date.now()}`;
   const res = await authorizedFetch(url, {
     cache: 'no-store',
+    // 요청이 영원히 걸려 무한 로딩이 되지 않도록 60초 타임아웃을 둡니다.
+    // (국내주식 1분봉 전체 조회는 첫 로딩에 40초 이상 걸릴 수 있음)
+    signal: AbortSignal.timeout(options.timeoutMs ?? 60_000),
     headers: {
       'Cache-Control': 'no-cache, no-store, max-age=0',
       Pragma: 'no-cache',

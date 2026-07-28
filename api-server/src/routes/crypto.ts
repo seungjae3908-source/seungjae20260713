@@ -1,5 +1,5 @@
 import { Router, type IRouter } from 'express';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { requireMember } from '../middleware/auth';
 import cryptoAutoRouter from './crypto-auto';
 
@@ -12,9 +12,14 @@ function base64Url(value: string | Buffer) {
   return Buffer.from(value).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
-function createUpbitToken(accessKey: string, secretKey: string) {
+function createUpbitToken(accessKey: string, secretKey: string, query = '') {
   const header = base64Url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = base64Url(JSON.stringify({ access_key: accessKey, nonce: randomUUID() }));
+  const claims: Record<string, string> = { access_key: accessKey, nonce: randomUUID() };
+  if (query) {
+    claims.query_hash = createHash('sha512').update(query).digest('hex');
+    claims.query_hash_alg = 'SHA512';
+  }
+  const payload = base64Url(JSON.stringify(claims));
   const signature = base64Url(createHmac('sha256', secretKey).update(`${header}.${payload}`).digest());
   return `${header}.${payload}.${signature}`;
 }
@@ -178,16 +183,54 @@ router.get('/crypto/spot/candles', async (req, res) => {
   const symbol = safeSymbol(req.query.symbol || 'BTC');
   const unit = Math.max(1, Math.min(240, Number(req.query.unit ?? 15) || 15));
   const count = Math.max(1, Math.min(200, Number(req.query.count ?? 120) || 120));
-  // tf=1D|1W|1M 이면 업비트 일/주/월봉, 없으면 기존 분봉 동작 유지.
+  const before = String(req.query.before ?? '').trim();
+  // tf가 있으면 일·주·월·사용자 집계봉, 없으면 기존 분봉 동작을 유지한다.
   const tf = String(req.query.tf ?? '').toUpperCase();
-  const tfPath = tf === '1D' ? 'days' : tf === '1W' ? 'weeks' : tf === '1M' ? 'months' : null;
-  const url = tfPath
-    ? `${UPBIT_BASE}/v1/candles/${tfPath}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`
-    : `${UPBIT_BASE}/v1/candles/minutes/${unit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`;
+  const custom = tf ? CUSTOM_GRANULARITY[tf] : undefined;
+  const source = custom?.source ?? tf;
+  const sourceUnit =
+    source === '1H'
+      ? 60
+      : source === '4H'
+        ? 240
+        : unit;
+  const tfPath =
+    source === '1D'
+      ? 'days'
+      : source === '1W'
+        ? 'weeks'
+        : source === '1M'
+          ? 'months'
+          : null;
+  const sourceCount = Math.min(200, Math.max(count, count * (custom?.factor ?? 1)));
+  const baseUrl = tfPath
+    ? `${UPBIT_BASE}/v1/candles/${tfPath}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${sourceCount}`
+    : `${UPBIT_BASE}/v1/candles/minutes/${sourceUnit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${sourceCount}`;
+  const url = before ? `${baseUrl}&to=${encodeURIComponent(before)}` : baseUrl;
   try {
     const rows = await fetchJson<any[]>(url);
-    const candles = rows.reverse().map((row) => ({ time: row.candle_date_time_kst, open: finite(row.opening_price), high: finite(row.high_price), low: finite(row.low_price), close: finite(row.trade_price), volume: finite(row.candle_acc_trade_volume), tradingValue: finite(row.candle_acc_trade_price) }));
-    return res.json({ ok: true, provider: 'upbit', fetchedAt: new Date().toISOString(), exchange: 'UPBIT', market: `KRW-${symbol}`, unit: tfPath ? tf : `${unit}m`, candles, count: candles.length, updatedAt: new Date().toISOString() });
+    const ordered = rows.slice().reverse();
+    const normalized = ordered.map((row) => ({ time: row.candle_date_time_kst, open: finite(row.opening_price), high: finite(row.high_price), low: finite(row.low_price), close: finite(row.trade_price), volume: finite(row.candle_acc_trade_volume), quoteVolume: finite(row.candle_acc_trade_price) }));
+    const candles = custom
+      ? aggregateCandles(normalized, tf, custom.factor, custom.calendar).slice(-count)
+      : normalized;
+    const earliestUtc = String(ordered[0]?.candle_date_time_utc ?? '').trim();
+    const nextBefore = earliestUtc ? `${earliestUtc.replace(/Z$/i, '')}Z` : null;
+    return res.json({
+      ok: true,
+      provider: 'upbit',
+      fetchedAt: new Date().toISOString(),
+      exchange: 'UPBIT',
+      market: `KRW-${symbol}`,
+      unit: tf || `${unit}m`,
+      candles,
+      count: candles.length,
+      pagination: {
+        nextBefore,
+        hasMore: rows.length >= sourceCount,
+      },
+      updatedAt: new Date().toISOString(),
+    });
   } catch (error) {
     console.error('upbit candles error:', error);
     return res.status(502).json({ ok: false, provider: 'upbit', exchange: 'UPBIT', candles: [], count: 0, error: 'UPBIT_CANDLES_UNAVAILABLE', message: '업비트 캔들 조회 실패 — 결과 0건이 아니라 조회 오류입니다.' });
@@ -243,16 +286,84 @@ router.get('/crypto/futures/tickers', async (req, res) => {
   }
 });
 
+
+type RawCandle = {
+  time: number | string | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+  quoteVolume: number | null;
+};
+
+const CUSTOM_GRANULARITY: Record<string, { source: string; factor: number; calendar?: 'year' }> = {
+  '12H': { source: '4H', factor: 3 },
+  '3D': { source: '1D', factor: 3 },
+  '8H': { source: '4H', factor: 2 },
+  '5D': { source: '1D', factor: 5 },
+  '10D': { source: '1D', factor: 10 },
+  '15D': { source: '1D', factor: 15 },
+  '30D': { source: '1D', factor: 30 },
+  '3M': { source: '1M', factor: 3 },
+  '6M': { source: '1M', factor: 6 },
+  '1Y': { source: '1M', factor: 12, calendar: 'year' },
+  '3Y': { source: '1M', factor: 36 },
+  '5Y': { source: '1M', factor: 60 },
+  '10Y': { source: '1M', factor: 120 },
+  'ALL': { source: '1M', factor: 1 },
+};
+
+function aggregateCandles(rows: RawCandle[], requested: string, factor: number, calendar?: 'year') {
+  const valid = rows.filter((row) => row.time != null && row.open != null && row.high != null && row.low != null && row.close != null);
+  if (factor <= 1) return valid;
+  const groups: RawCandle[][] = [];
+  if (calendar === 'year') {
+    const byYear = new Map<number, RawCandle[]>();
+    for (const row of valid) {
+      const numeric = Number(row.time);
+      const timestamp = Number.isFinite(numeric) ? numeric : Date.parse(String(row.time));
+      if (!Number.isFinite(timestamp)) continue;
+      const year = new Date(timestamp).getUTCFullYear();
+      const list = byYear.get(year) ?? [];
+      list.push(row);
+      byYear.set(year, list);
+    }
+    groups.push(...Array.from(byYear.keys()).sort((a, b) => a - b).map((year) => byYear.get(year) ?? []));
+  } else {
+    for (let index = 0; index < valid.length; index += factor) {
+      const chunk = valid.slice(index, index + factor);
+      if (chunk.length === factor || index + factor >= valid.length) groups.push(chunk);
+    }
+  }
+  return groups.filter((group) => group.length).map((group) => ({
+    time: group[0].time,
+    open: group[0].open,
+    high: Math.max(...group.map((row) => Number(row.high))),
+    low: Math.min(...group.map((row) => Number(row.low))),
+    close: group[group.length - 1].close,
+    volume: group.reduce((sum, row) => sum + Number(row.volume ?? 0), 0),
+    quoteVolume: group.reduce((sum, row) => sum + Number(row.quoteVolume ?? 0), 0),
+  }));
+}
+
 router.get('/crypto/futures/candles', async (req, res) => {
   const symbol = safeSymbol(req.query.symbol || 'BTCUSDT');
-  const allowed = new Set(['1m', '3m', '5m', '15m', '30m', '1H', '4H', '6H', '12H', '1D', '1W']);
-  const rawGranularity = String(req.query.granularity ?? '15m');
-  const granularity = allowed.has(rawGranularity) ? rawGranularity : '15m';
-  const limit = Math.max(1, Math.min(1000, Number(req.query.limit ?? 200) || 200));
+  const direct = new Set(['1m', '3m', '5m', '15m', '30m', '1H', '4H', '6H', '12H', '1D', '3D', '1W', '1M']);
+  const requested = String(req.query.granularity ?? '15m');
+  const custom = CUSTOM_GRANULARITY[requested];
+  const sourceGranularity = custom?.source ?? (direct.has(requested) ? requested : '15m');
+  const outputLimit = Math.max(1, Math.min(1000, Number(req.query.limit ?? 200) || 200));
+  const sourceLimit = Math.max(1, Math.min(1000, outputLimit * (custom?.factor ?? 1)));
+  const before = Number(req.query.before);
+  const endTime =
+    Number.isFinite(before) && before > 0
+      ? Math.max(0, Math.floor(before) - 1)
+      : null;
   try {
-    const payload = await fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${encodeURIComponent(granularity)}&limit=${limit}`);
+    const payload = await fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${encodeURIComponent(sourceGranularity)}&limit=${sourceLimit}${endTime == null ? '' : `&endTime=${endTime}`}`);
     if (String(payload?.code ?? '') !== '00000' || !Array.isArray(payload?.data)) throw new Error(`BITGET_${String(payload?.code ?? 'INVALID')}`);
-    const candles = payload.data.reverse().map((row: any[]) => ({
+    const raw: RawCandle[] = payload.data.reverse().map((row: any[]) => ({
       time: finite(row[0]),
       open: finite(row[1]),
       high: finite(row[2]),
@@ -261,6 +372,8 @@ router.get('/crypto/futures/candles', async (req, res) => {
       volume: finite(row[5]),
       quoteVolume: finite(row[6]),
     }));
+    const aggregated = custom ? aggregateCandles(raw, requested, custom.factor, custom.calendar) : raw;
+    const candles = aggregated.slice(-outputLimit);
     const now = new Date().toISOString();
     return res.json({
       ok: true,
@@ -269,10 +382,17 @@ router.get('/crypto/futures/candles', async (req, res) => {
       exchange: 'BITGET',
       symbol,
       productType: BITGET_PRODUCT_TYPE,
-      granularity,
-      timeframe: granularity,
+      granularity: requested,
+      timeframe: requested,
+      sourceGranularity,
+      aggregated: Boolean(custom),
+      aggregationFactor: custom?.factor ?? 1,
       candles,
       count: candles.length,
+      pagination: {
+        nextBefore: raw[0]?.time ?? null,
+        hasMore: raw.length >= sourceLimit,
+      },
       updatedAt: now,
     });
   } catch (error) {
@@ -301,6 +421,50 @@ router.get('/crypto/spot/accounts', requireMember, async (_req, res) => {
   } catch (error) {
     console.error('upbit accounts error:', error instanceof Error ? error.message : error);
     return res.status(502).json({ exchange: 'UPBIT', configured: true, accounts: [], error: 'UPBIT_ACCOUNTS_UNAVAILABLE' });
+  }
+});
+
+// 업비트 실제 체결·취소 주문을 자동매매 일지 화면에 표시합니다.
+router.get('/crypto/spot/journal', requireMember, async (req, res) => {
+  const accessKey = String(process.env.UPBIT_ACCESS_KEY ?? '').trim();
+  const secretKey = String(process.env.UPBIT_SECRET_KEY ?? '').trim();
+  if (!accessKey || !secretKey) {
+    return res.status(503).json({ exchange: 'UPBIT', configured: false, entries: [], error: 'UPBIT_PRIVATE_KEYS_NOT_CONFIGURED' });
+  }
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit ?? 100) || 100));
+  const query = new URLSearchParams({ limit: String(limit), order_by: 'desc' }).toString();
+  try {
+    const token = createUpbitToken(accessKey, secretKey, query);
+    const rows = await fetchJsonWithHeaders<any[]>(`${UPBIT_BASE}/v1/orders/closed?${query}`, { Authorization: `Bearer ${token}` });
+    const entries = rows.map((row) => {
+      const trades = Array.isArray(row.trades) ? row.trades : [];
+      const executedVolume = finite(row.executed_volume) ?? trades.reduce((sum: number, trade: any) => sum + Number(trade.volume ?? 0), 0);
+      const executedFunds = trades.reduce((sum: number, trade: any) => sum + Number(trade.funds ?? 0), 0);
+      const weightedAverage = executedVolume && executedFunds ? executedFunds / executedVolume : null;
+      const market = String(row.market ?? '');
+      return {
+        id: String(row.uuid ?? ''),
+        market,
+        symbol: market.replace(/^KRW-/, ''),
+        side: String(row.side ?? ''),
+        sideLabel: String(row.side ?? '') === 'bid' ? '매수' : String(row.side ?? '') === 'ask' ? '매도' : String(row.side ?? ''),
+        orderType: String(row.ord_type ?? ''),
+        state: String(row.state ?? ''),
+        price: finite(row.price),
+        averagePrice: finite(row.avg_price) ?? weightedAverage,
+        volume: finite(row.volume),
+        remainingVolume: finite(row.remaining_volume),
+        executedVolume,
+        executedFunds: executedFunds || null,
+        paidFee: finite(row.paid_fee),
+        tradesCount: Number(row.trades_count ?? trades.length ?? 0),
+        createdAt: String(row.created_at ?? ''),
+      };
+    });
+    return res.json({ ok: true, exchange: 'UPBIT', configured: true, entries, count: entries.length, updatedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error('upbit closed orders error:', error instanceof Error ? error.message : error);
+    return res.status(502).json({ exchange: 'UPBIT', configured: true, entries: [], error: 'UPBIT_JOURNAL_UNAVAILABLE', message: '업비트 실제 주문내역을 불러오지 못했습니다.' });
   }
 });
 

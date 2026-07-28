@@ -29,6 +29,13 @@ import {
 	rememberPurchaseDate,
 	syncPortfolioChartOverlays,
 } from '@/lib/portfolio-overlay';
+import { useUsdKrwRate, formatKstTime } from '@/lib/portfolio-fx';
+import {
+	fetchCashSettings,
+	isMissingCashTableError,
+	type CashSetting,
+} from '@/lib/portfolio-cash';
+import { toKrw, weightPercent } from '@/lib/portfolio-calc';
 
 type Market = 'KR' | 'US';
 type Currency = 'KRW' | 'USD';
@@ -46,13 +53,6 @@ interface Holding {
 	created_at: string;
 	currentPrice: number | null;
 	changePercent: number | null;
-}
-
-interface PortfolioSummary {
-	cost: number;
-	value: number;
-	profit: number;
-	rate: number;
 }
 
 interface ResolvedStock {
@@ -756,6 +756,14 @@ export default function PortfolioPage() {
 		retry: false,
 	});
 
+	const fx = useUsdKrwRate();
+	const cashQuery = useQuery<CashSetting[], Error>({
+		queryKey: ['portfolio-summary-cash', auth.user?.id ?? 'anon'],
+		queryFn: () => fetchCashSettings(auth.user!.id),
+		enabled: Boolean(auth.configured && auth.user),
+		retry: false,
+	});
+
 	const [
 		rows,
 		setRows,
@@ -1045,59 +1053,113 @@ export default function PortfolioPage() {
 		void load();
 	}, [load]);
 
-	const summary =
-		useMemo<PortfolioSummary>(
-			() => {
-				let cost = 0;
-				let value = 0;
+	// 확장 요약: 통화 구분 + 환율 통합 + 잔여 현금 반영.
+	const extendedSummary = useMemo(() => {
+		let krCost = 0;
+		let krValue = 0;
+		let usCost = 0;
+		let usValue = 0;
+		let coinValue = 0;
+		let hasCoin = false;
 
-				for (
-					const row of
-					rows
-				) {
-					const rowCost =
-						row.average_price *
-						row.quantity;
+		for (const row of rows) {
+			const current = row.currentPrice ?? row.average_price;
+			const cost = row.average_price * row.quantity;
+			const value = current * row.quantity;
+			// 기존 데이터에 코인 종목(currency USDT 또는 market COIN)이 있으면 반영.
+			const isCoin =
+				String((row as { market?: unknown }).market) === 'COIN' ||
+				String((row as { currency?: unknown }).currency) === 'USDT';
+			if (isCoin) {
+				hasCoin = true;
+				coinValue += value;
+			} else if (row.market === 'US') {
+				usCost += cost;
+				usValue += value;
+			} else {
+				krCost += cost;
+				krValue += value;
+			}
+		}
 
-					const current =
-						row.currentPrice ??
-						row.average_price;
+		// 현금 (통화별) — 원화 환산
+		const cashRows = cashQuery.data ?? [];
+		let cashKrw = 0;
+		let cashFxMissing = false;
+		let investableKrw = 0;
+		for (const c of cashRows) {
+			const krw = toKrw(c.amount, c.currency, fx.rate);
+			const invest = Math.max(0, c.amount - c.min_amount);
+			const investK = toKrw(invest, c.currency, fx.rate);
+			if (krw == null) {
+				if (c.amount > 0) cashFxMissing = true;
+			} else {
+				cashKrw += krw;
+			}
+			if (investK != null) investableKrw += investK;
+		}
 
-					const rowValue =
-						current *
-						row.quantity;
+		// 원화 환산 통합값 (해외/코인은 환율 적용)
+		const usValueKrw = toKrw(usValue, 'USD', fx.rate);
+		const coinValueKrw = toKrw(coinValue, 'USDT', fx.rate);
+		const fxOk = fx.rate != null;
 
-					cost +=
-						rowCost;
+		const stockValueKrw =
+			usValueKrw != null ? krValue + usValueKrw : null;
+		const totalValueKrw =
+			fxOk && usValueKrw != null && coinValueKrw != null
+				? krValue + usValueKrw + coinValueKrw + cashKrw
+				: null;
+		const usCostKrw = toKrw(usCost, 'USD', fx.rate);
+		const totalCostKrw =
+			fxOk && usCostKrw != null ? krCost + usCostKrw : null;
+		// 손익 = 평가금액(현금 제외) - 원금
+		const investValueKrw =
+			totalValueKrw != null ? totalValueKrw - cashKrw : null;
+		const profitKrw =
+			investValueKrw != null && totalCostKrw != null
+				? investValueKrw - totalCostKrw
+				: null;
+		const rate =
+			profitKrw != null && totalCostKrw != null && totalCostKrw > 0
+				? (profitKrw / totalCostKrw) * 100
+				: null;
 
-					value +=
-						rowValue;
-				}
+		const denomForWeights = totalValueKrw ?? 0;
+		const weights =
+			totalValueKrw != null && totalValueKrw > 0
+				? {
+						cash: weightPercent(cashKrw, denomForWeights),
+						kr: weightPercent(krValue, denomForWeights),
+						us: weightPercent(usValueKrw ?? 0, denomForWeights),
+						coin: weightPercent(coinValueKrw ?? 0, denomForWeights),
+					}
+				: null;
 
-				const profit =
-					value -
-					cost;
+		return {
+			krCost,
+			krValue,
+			usCost,
+			usValue,
+			coinValue,
+			hasCoin,
+			cashKrw,
+			cashFxMissing,
+			investableKrw,
+			cashRowsCount: cashRows.length,
+			stockValueKrw,
+			totalValueKrw,
+			totalCostKrw,
+			profitKrw,
+			rate,
+			weights,
+			fxOk,
+		};
+	}, [rows, cashQuery.data, fx.rate]);
 
-				const rate =
-					cost > 0
-						? (
-								profit /
-								cost
-							) *
-							100
-						: 0;
-
-				return {
-					cost,
-					value,
-					profit,
-					rate,
-				};
-			},
-			[
-				rows,
-			],
-		);
+	const cashMissing = Boolean(
+		cashQuery.error && isMissingCashTableError(cashQuery.error),
+	);
 
 	async function addHolding(
 		event:
@@ -1306,18 +1368,11 @@ export default function PortfolioPage() {
 	return (
 		<div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background text-foreground">
 			<header className="relative z-30 shrink-0 border-b border-card-border bg-background/95 px-4 py-4 backdrop-blur">
-				<div className="flex items-center justify-between gap-3">
-					<div className="min-w-0">
-						<h1 className="text-xl font-extrabold">
-							내 포트폴리오
-						</h1>
+				<div className="grid grid-cols-[80px_1fr_80px] items-center gap-2">
+					<span />
+					<h1 className="text-center text-xl font-extrabold">내 포트폴리오</h1>
 
-						<p className="mt-1 break-keep text-xs font-semibold text-muted-foreground">
-							매수가·수량·현재가와 손익을 한 번에 확인합니다.
-						</p>
-					</div>
-
-					<div className="flex shrink-0 gap-1">
+					<div className="flex shrink-0 justify-end gap-1">
 						<button
 							type="button"
 							onClick={() =>
@@ -1391,87 +1446,32 @@ export default function PortfolioPage() {
 					!auth.loading &&
 					auth.user && (
 						<div className="space-y-4">
-							<section className="rounded-3xl border border-card-border bg-card p-5 shadow-sm">
-								<div className="flex items-center justify-between gap-3">
-									<div className="flex min-w-0 items-center gap-2">
-										<WalletCards className="h-5 w-5 shrink-0 text-primary" />
+							<PortfolioSummaryCard
+								summary={extendedSummary}
+								fxRate={fx.rate}
+								fxUpdatedAt={fx.updatedAt}
+								cashMissing={cashMissing}
+								loading={loading}
+								onRefresh={() => void load()}
+							/>
 
-										<div className="min-w-0">
-											<h2 className="font-extrabold">
-												전체 평가
-											</h2>
-
-											<p className="mt-0.5 truncate text-[11px] font-bold text-muted-foreground">
-												{auth.displayName ??
-													'사용자'}님의 포트폴리오
-											</p>
-										</div>
-									</div>
-
-									<button
-										type="button"
-										onClick={() =>
-											void load()
-										}
-										disabled={
-											loading
-										}
-										className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl active:bg-muted disabled:opacity-50"
-										aria-label="새로고침"
-									>
-										<RefreshCw
-											className={cn(
-												'h-4 w-4',
-
-												loading &&
-													'animate-spin',
-											)}
-										/>
-									</button>
-								</div>
-
-								<p className="mt-4 text-2xl font-black">
-									{Math.round(
-										summary.value,
-									).toLocaleString()}
-								</p>
-
-								<div className="mt-3 grid grid-cols-2 gap-3">
-									<SummaryBox
-										label="평가손익"
-										value={
-											summary.profit >=
-											0
-												? `+${Math.round(
-														summary.profit,
-													).toLocaleString()}`
-												: Math.round(
-														summary.profit,
-													).toLocaleString()
-										}
-										positive={
-											summary.profit >=
-											0
-										}
-									/>
-
-									<SummaryBox
-										label="수익률"
-										value={signedPercent(
-											summary.rate,
-										)}
-										positive={
-											summary.rate >=
-											0
-										}
-									/>
-								</div>
-
-								<p className="mt-3 break-keep text-[11px] font-semibold leading-5 text-muted-foreground">
-									국내 원화와 미국 달러 보유분을 단순 합산한 값입니다.
-									환율 환산은 다음 단계에서 연결합니다.
-								</p>
-							</section>
+							<div className="grid grid-cols-1 gap-2">
+								<NavCard
+									title="잔여 현금 관리"
+									desc="통화별 현금·최소보유·계좌 잔액 조회"
+									onClick={() => navigate('/portfolio/cash')}
+								/>
+								<NavCard
+									title="추가 투자 시뮬레이션"
+									desc="추가 매수·시나리오·목표가 가상 계산"
+									onClick={() => navigate('/portfolio/simulate')}
+								/>
+								<NavCard
+									title="적립식 · AI 배분"
+									desc="월 적립식 예상·AI 배분안(참고용)"
+									onClick={() => navigate('/portfolio/plan')}
+								/>
+							</div>
 
 							<button
 								type="button"
@@ -1920,33 +1920,220 @@ function LoadingCard({
 	);
 }
 
-function SummaryBox({
+type ExtendedSummary = {
+	krValue: number;
+	usValue: number;
+	coinValue: number;
+	hasCoin: boolean;
+	cashKrw: number;
+	cashFxMissing: boolean;
+	investableKrw: number;
+	cashRowsCount: number;
+	stockValueKrw: number | null;
+	totalValueKrw: number | null;
+	totalCostKrw: number | null;
+	profitKrw: number | null;
+	rate: number | null;
+	weights: { cash: number; kr: number; us: number; coin: number } | null;
+	fxOk: boolean;
+};
+
+function krw(value: number | null | undefined): string {
+	if (value == null || !Number.isFinite(value)) return '산출 불가';
+	return `${Math.round(value).toLocaleString()}원`;
+}
+
+function pct(value: number | null | undefined): string {
+	if (value == null || !Number.isFinite(value)) return '-';
+	return `${value.toFixed(1)}%`;
+}
+
+function PortfolioSummaryCard({
+	summary,
+	fxRate,
+	fxUpdatedAt,
+	cashMissing,
+	loading,
+	onRefresh,
+}: {
+	summary: ExtendedSummary;
+	fxRate: number | null;
+	fxUpdatedAt: string | null;
+	cashMissing: boolean;
+	loading: boolean;
+	onRefresh: () => void;
+}) {
+	return (
+		<section className="rounded-3xl border border-card-border bg-card p-5 shadow-sm">
+			<div className="flex items-center justify-between gap-3">
+				<h2 className="text-base font-black">포트폴리오 요약</h2>
+				<button
+					type="button"
+					onClick={onRefresh}
+					disabled={loading}
+					className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl active:bg-muted disabled:opacity-50"
+					aria-label="새로고침"
+				>
+					<RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+				</button>
+			</div>
+			<p className="mt-1 text-[10px] font-bold text-muted-foreground">
+				적용 환율(USD/KRW){' '}
+				{fxRate != null ? fxRate.toLocaleString() : '산출 불가'} ·{' '}
+				{formatKstTime(fxUpdatedAt)}
+				{fxRate == null &&
+					' · 환율 없음으로 통합값은 산출 불가, 통화별 개별 표시'}
+			</p>
+
+			<div className="mt-3 rounded-2xl bg-muted/60 p-3">
+				<p className="text-[11px] font-bold text-muted-foreground">
+					총자산(현금 포함, 원화 환산)
+				</p>
+				<p className="mt-1 text-2xl font-black">{krw(summary.totalValueKrw)}</p>
+			</div>
+
+			<div className="mt-3 grid grid-cols-2 gap-2">
+				<SummaryCell
+					label="주식 평가 (국내 KRW)"
+					value={`${Math.round(summary.krValue).toLocaleString()}원`}
+				/>
+				<SummaryCell
+					label="주식 평가 (해외 USD)"
+					value={`$${summary.usValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+				/>
+				<SummaryCell
+					label="주식 평가 (통합·원화)"
+					value={krw(summary.stockValueKrw)}
+				/>
+				<SummaryCell
+					label="코인 평가"
+					value={
+						summary.hasCoin
+							? `${summary.coinValue.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDT`
+							: '보유 없음'
+					}
+				/>
+				<SummaryCell label="전체 투자 원금(원화)" value={krw(summary.totalCostKrw)} />
+				<SummaryCell
+					label="총손익(원화)"
+					value={krw(summary.profitKrw)}
+					tone={
+						summary.profitKrw == null
+							? undefined
+							: summary.profitKrw >= 0
+								? 'up'
+								: 'down'
+					}
+				/>
+				<SummaryCell label="총수익률" value={pct(summary.rate)} />
+				<SummaryCell label="잔여 현금(원화)" value={krw(summary.cashKrw)} />
+				<SummaryCell
+					label="추가 투자 가능(원화)"
+					value={krw(summary.investableKrw)}
+				/>
+			</div>
+
+			<div className="mt-3 rounded-2xl bg-secondary/60 p-3">
+				<p className="text-[11px] font-bold text-muted-foreground">자산 비중</p>
+				{summary.weights == null ? (
+					<p className="mt-1 text-xs font-bold text-muted-foreground">
+						환율 미확보 등으로 비중 산출 불가
+					</p>
+				) : (
+					<div className="mt-1 grid grid-cols-2 gap-1 text-[11px] font-bold">
+						<span>현금 {pct(summary.weights.cash)}</span>
+						<span>국내 {pct(summary.weights.kr)}</span>
+						<span>해외 {pct(summary.weights.us)}</span>
+						<span>코인 {pct(summary.weights.coin)}</span>
+					</div>
+				)}
+			</div>
+			<div className="mt-2 grid grid-cols-2 gap-2">
+				<SummaryCell
+					label="위험 집중도"
+					value={
+						summary.weights
+							? (() => {
+									const rows = [
+										['현금', summary.weights.cash],
+										['국내주식', summary.weights.kr],
+										['해외주식', summary.weights.us],
+										['코인', summary.weights.coin],
+									] as const;
+									const largest = [...rows].sort(
+										(left, right) => right[1] - left[1],
+									)[0];
+									return `${largest[0]} ${pct(largest[1])}`;
+								})()
+							: '산출 불가'
+					}
+				/>
+				<SummaryCell label="최신 AI 방향" value="분석 API 준비 중" />
+				<SummaryCell label="코인 현물 비중" value="구분 데이터 없음" />
+				<SummaryCell label="코인 선물 비중" value="구분 데이터 없음" />
+			</div>
+
+			<p className="mt-3 break-keep text-[10px] font-semibold leading-relaxed text-muted-foreground">
+				KRW/USD/USDT는 그대로 더하지 않고 위 환율을 적용해 원화로 통합했습니다.
+				USDT는 1 USDT≈1 USD로 가정합니다.
+				{summary.cashRowsCount === 0 &&
+					(cashMissing
+						? ' 현금 설정 테이블이 없어 잔여 현금은 0으로 표시됩니다.'
+						: ' 잔여 현금이 설정되지 않아 0으로 표시됩니다.')}
+				{summary.cashFxMissing && ' 일부 외화 현금은 환율 미확보로 제외되었습니다.'}
+			</p>
+		</section>
+	);
+}
+
+function SummaryCell({
 	label,
 	value,
-	positive,
+	tone,
 }: {
 	label: string;
 	value: string;
-	positive: boolean;
+	tone?: 'up' | 'down';
 }) {
 	return (
-		<div className="rounded-2xl bg-muted/60 p-3">
-			<p className="text-xs font-bold text-muted-foreground">
-				{label}
-			</p>
-
+		<div className="rounded-xl bg-secondary/60 p-2.5">
+			<p className="text-[10px] font-bold text-muted-foreground">{label}</p>
 			<p
 				className={cn(
-					'mt-1 font-extrabold',
-
-					positive
-						? 'text-positive'
-						: 'text-destructive',
+					'mt-0.5 break-words text-xs font-black',
+					tone === 'up' && 'text-positive',
+					tone === 'down' && 'text-destructive',
 				)}
 			>
 				{value}
 			</p>
 		</div>
+	);
+}
+
+function NavCard({
+	title,
+	desc,
+	onClick,
+}: {
+	title: string;
+	desc: string;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			className="flex w-full items-center justify-between gap-3 rounded-2xl border border-card-border bg-card p-4 text-left shadow-sm active:bg-muted"
+		>
+			<div className="min-w-0">
+				<p className="text-sm font-black">{title}</p>
+				<p className="mt-0.5 break-keep text-[11px] font-semibold text-muted-foreground">
+					{desc}
+				</p>
+			</div>
+			<span className="shrink-0 text-muted-foreground">›</span>
+		</button>
 	);
 }
 

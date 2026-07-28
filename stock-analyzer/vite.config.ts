@@ -1,15 +1,42 @@
 import path from 'path';
+import { createRequire } from 'node:module';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
-import { VitePWA } from 'vite-plugin-pwa';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
+import { membershipUiRoutingPatch } from './membership-ui-routing-patch';
+import { chartRelayFeaturePatch } from './chart-relay-feature-patch';
+import { chartRelayAutoOrderPatch } from './chart-relay-auto-order-patch';
+import { chartRelaySpotAutoSupportPatch } from './chart-relay-spot-auto-support-patch';
+import { chartRelayFocusedMarketPatch } from './chart-relay-focused-market-patch';
+import { chartRelaySignalArrowPatch } from './chart-relay-signal-arrow-patch';
+import { chartRelayMobileUiCleanupPatch } from './chart-relay-mobile-ui-cleanup-patch';
+import { chartRelayInboxLayoutPatch } from './chart-relay-inbox-layout-patch';
+import { chartRelayMobileControlRowPatch } from './chart-relay-mobile-control-row-patch';
+import { signalScanPlanPatch } from './signal-scan-plan-patch';
+import { focusedPageLayoutPatch } from './focused-page-layout-patch';
+import { tradingHomeGlobalUiPatch } from './trading-home-global-ui-patch';
+import { settingsPopupSectionsPatch } from './settings-popup-sections-patch';
+import { settingsUniformExtraPatch } from './settings-uniform-extra-patch';
+import { requestedUiFixesPatch } from './requested-ui-fixes-patch';
+import { stockInfoFeedOnlyPatch } from './stock-info-feed-only-patch';
+import { stocksCategoryLayoutPatch } from './stocks-category-layout-patch';
+import { sixRequestedFixesPatch } from './six-requested-fixes-patch';
+import { currentRequestBatchPatch } from './current-request-batch-patch';
+import { feedFiveMorePatch } from './feed-five-more-patch';
+import { infoTabFixPatch } from './info-tab-fix-patch';
+import { infoTabFinalScopePatch } from './info-tab-final-scope-patch';
+import { coinTechStocksFinalPatch } from './coin-tech-stocks-final-patch';
+import { portfolioManwonInputPatch } from './portfolio-manwon-input-patch';
+import { newPagesTypeSafetyPatch } from './new-pages-type-safety-patch';
+import { krwTenThousandUnitPatch } from './krw-ten-thousand-unit-patch';
+import { detailContentStatusPatch } from './detail-content-status-patch';
+import { globalDetailsPopupPatch } from './global-details-popup-patch';
 
-// PORT / BASE_PATH are provided by the workflow in dev. During a production
-// build (vite build) they may be unset, so fall back to safe defaults instead
-// of throwing — the port only matters for the dev/preview server, and the app
-// is served at the site root in production.
+const require = createRequire(import.meta.url);
+const lightweightChartsEntry = require.resolve('lightweight-charts');
+
 const rawPort = process.env.PORT;
 const port = rawPort ? Number(rawPort) : 5173;
 
@@ -21,122 +48,117 @@ const basePath = process.env.BASE_PATH ?? '/';
 
 export default defineConfig({
   base: basePath,
+
   plugins: [
+    membershipUiRoutingPatch(),
+    // chartRelayFeaturePatch(), // already integrated into chart-relay.tsx
+    // chartRelayAutoOrderPatch(), // already integrated into chart-relay.tsx
+    // chartRelaySpotAutoSupportPatch(), // already integrated into chart-relay.tsx
+    // chartRelayFocusedMarketPatch(), // already integrated into chart-relay.tsx
+    // chartRelaySignalArrowPatch(), // already integrated into chart-relay.tsx
+    // chartRelayMobileUiCleanupPatch(), // already integrated into chart-relay.tsx
+    // chartRelayInboxLayoutPatch(), // already integrated into chart-relay.tsx
+    // chartRelayMobileControlRowPatch(), // already integrated into chart-relay.tsx
+    // signalScanPlanPatch(), // already integrated into signal-scan.tsx
+    focusedPageLayoutPatch(),
+    tradingHomeGlobalUiPatch(),
+    settingsPopupSectionsPatch(),
+    settingsUniformExtraPatch(),
+    requestedUiFixesPatch(),
+    stockInfoFeedOnlyPatch(),
+    stocksCategoryLayoutPatch(),
+    sixRequestedFixesPatch(),
+    currentRequestBatchPatch(),
+    feedFiveMorePatch(),
+    infoTabFixPatch(),
+    infoTabFinalScopePatch(),
+    coinTechStocksFinalPatch(),
+    portfolioManwonInputPatch(),
+    newPagesTypeSafetyPatch(),
+    krwTenThousandUnitPatch(),
+    detailContentStatusPatch(),
+    globalDetailsPopupPatch(),
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
-    VitePWA({
-      registerType: 'autoUpdate',
-      // The Replit dev preview is proxied under a sub-path with HMR; a service
-      // worker there conflicts with tooling, so PWA is production-only.
-      disable: process.env.NODE_ENV !== 'production',
-      manifest: {
-        name: '지식정보',
-        short_name: '지식정보',
-        description: '주식·코인 정보, 분석, 알림과 승인형 자동매매',
-        lang: 'ko-KR',
-        theme_color: '#0b1220',
-        background_color: '#0b1220',
-        display: 'standalone',
-        orientation: 'portrait',
-        id: '/',
-        start_url: '/',
-        scope: '/',
-        icons: [
-          { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
-          {
-            src: 'icons/maskable-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'maskable',
-          },
-        ],
-      },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        importScripts: ['/push-sw.js'],
-        navigateFallbackDenylist: [/^\/api/],
-        runtimeCaching: [
-          {
-            // Live market/index/quote/chart data must never be served from an
-            // old service-worker cache entry.
-            urlPattern: ({ url }) =>
-              /\/api\/(market\/(home|summary|movers|alerts|scan|recommendations)|quotes|candles|crypto\/|kiwoom\/(rankings|quote)|stocks\/[^/]+\/(chart|candles|quote))/.test(
-                url.pathname,
-              ),
-            handler: 'NetworkOnly',
-          },
-          {
-            // Cache slower-changing API GETs so the last-seen data is
-            // available offline.
-            urlPattern: ({ url }) => url.pathname.includes('/api/'),
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'api-cache',
-              networkTimeoutSeconds: 8,
-              expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          {
-            urlPattern: ({ request }) => request.destination === 'font',
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'font-cache',
-              expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 30 },
-            },
-          },
-        ],
-      },
-    }),
+
     ...(process.env.NODE_ENV !== 'production' &&
     process.env.REPL_ID !== undefined &&
     process.env.ENABLE_REPLIT_EDITOR_PLUGINS === 'true'
       ? [
-          await import('@replit/vite-plugin-cartographer').then((m) =>
-            m.cartographer({
+          await import('@replit/vite-plugin-cartographer').then((module) =>
+            module.cartographer({
               root: path.resolve(import.meta.dirname, '..'),
             }),
           ),
-          await import('@replit/vite-plugin-dev-banner').then((m) =>
-            m.devBanner(),
+
+          await import('@replit/vite-plugin-dev-banner').then((module) =>
+            module.devBanner(),
           ),
         ]
       : []),
   ],
+
   resolve: {
-    alias: {
-      '@': path.resolve(import.meta.dirname, 'src'),
-      '@assets': path.resolve(
-        import.meta.dirname,
-        '..',
-        '..',
-        'attached_assets',
-      ),
-    },
+    alias: [
+      {
+        find: /^lightweight-charts-original$/,
+        replacement: lightweightChartsEntry,
+      },
+      {
+        find: /^lightweight-charts$/,
+        replacement: path.resolve(
+          import.meta.dirname,
+          'src/lib/lightweight-charts-relay-patch.ts',
+        ),
+      },
+      {
+        find: '@',
+        replacement: path.resolve(import.meta.dirname, 'src'),
+      },
+      {
+        find: '@assets',
+        replacement: path.resolve(
+          import.meta.dirname,
+          '..',
+          '..',
+          'attached_assets',
+        ),
+      },
+    ],
+
     dedupe: ['react', 'react-dom'],
   },
+
   root: path.resolve(import.meta.dirname),
+
   build: {
     outDir: path.resolve(import.meta.dirname, 'dist/public'),
     emptyOutDir: true,
   },
+
   server: {
     port,
     strictPort: true,
     host: '0.0.0.0',
     allowedHosts: true,
+
     proxy: {
       '/api': {
-        target: process.env.API_SERVER_URL ?? 'http://127.0.0.1:8080',
+        target:
+          process.env.API_SERVER_URL ??
+          'http://127.0.0.1:8080',
+
         changeOrigin: true,
+        ws: true,
       },
     },
+
     fs: {
       strict: true,
     },
   },
+
   preview: {
     port,
     host: '0.0.0.0',

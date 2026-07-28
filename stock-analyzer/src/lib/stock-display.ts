@@ -398,6 +398,16 @@ export function formatAppPrice(value: unknown, currency: string) {
     })}`;
   }
 
+  // USDT(비트겟 선물 등)는 원화가 아니므로 절대 '원'으로 표기하지 않는다.
+  if (currency === 'USDT') {
+    if (mode === 'krw') {
+      return `${Math.round(n * USD_KRW).toLocaleString()}원`;
+    }
+    return `${n.toLocaleString(undefined, {
+      maximumFractionDigits: n >= 100 ? 2 : 4,
+    })} USDT`;
+  }
+
   return `${Math.round(n).toLocaleString()}원`;
 }
 
@@ -438,6 +448,7 @@ export const WATCHLIST_CHANGE_EVENT = 'seungjae-watchlist-changed';
 export interface WatchlistItem {
   ticker: string;
   name: string;
+  assetType?: 'stockKR' | 'stockUS' | 'coinSpot' | 'coinFutures';
   market?: string;
   currency?: string;
   price?: number | null;
@@ -476,7 +487,7 @@ export function writeWatchlistItems(items: WatchlistItem[]): void {
   if (typeof window === 'undefined') return;
   const unique = new Map<string, WatchlistItem>();
   items.forEach((item) => {
-    unique.set(item.ticker.toUpperCase(), {
+    unique.set(`${item.assetType ?? 'stockKR'}:${item.ticker.toUpperCase()}`, {
       ...item,
       ticker: item.ticker.toUpperCase(),
     });
@@ -502,20 +513,31 @@ export function setWatchlistTargetPrice(
   );
 }
 
-export function isInWatchlist(ticker: string): boolean {
+export function isInWatchlist(ticker: string, assetType?: WatchlistItem['assetType']): boolean {
   return readWatchlistItems().some(
-    (item) => item.ticker.toUpperCase() === ticker.toUpperCase(),
+    (item) =>
+      item.ticker.toUpperCase() === ticker.toUpperCase() &&
+      (!assetType || (item.assetType ?? 'stockKR') === assetType),
   );
 }
 
 export function toggleWatchlistItem(item: WatchlistItem): boolean {
   const ticker = item.ticker.toUpperCase();
+  const assetType = item.assetType ?? 'stockKR';
   const current = readWatchlistItems();
-  const exists = current.some((row) => row.ticker.toUpperCase() === ticker);
+  const exists = current.some(
+    (row) =>
+      row.ticker.toUpperCase() === ticker &&
+      (row.assetType ?? 'stockKR') === assetType,
+  );
 
   const next = exists
-    ? current.filter((row) => row.ticker.toUpperCase() !== ticker)
-    : [...current, { ...item, ticker }];
+    ? current.filter(
+        (row) =>
+          row.ticker.toUpperCase() !== ticker ||
+          (row.assetType ?? 'stockKR') !== assetType,
+      )
+    : [...current, { ...item, ticker, assetType }];
 
   writeWatchlistItems(next);
 

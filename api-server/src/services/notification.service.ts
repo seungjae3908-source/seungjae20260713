@@ -7,8 +7,13 @@ export const DEFAULT_NOTIFICATION_TYPES = [
   'news_negative',
   'disclosure_positive',
   'disclosure_negative',
+  'ai_buy_signal',
   'ai_strong_buy',
   'ai_sell_signal',
+  'target_change',
+  'stop_change',
+  'risk_increase',
+  'realtime_error',
   'golden_cross',
   'volume_surge',
   'capital_event',
@@ -45,6 +50,12 @@ type PriceAlertRow = {
   symbol: string;
   direction: 'above' | 'below';
   target_price: number | string;
+  condition_type?:
+    | 'price_above'
+    | 'price_below'
+    | 'change_above'
+    | 'change_below';
+  target_value?: number | string;
   repeat_enabled: boolean;
   app_enabled: boolean;
   push_enabled: boolean;
@@ -110,6 +121,24 @@ export async function deliverMemberNotification(
     return { appStored: false, pushSent: 0, skipped: 'TYPE_DISABLED' };
   }
 
+  const signalId =
+    typeof input.metadata?.signalId === 'string' &&
+    input.metadata.signalId.trim().length > 0
+      ? input.metadata.signalId.trim().slice(0, 200)
+      : null;
+  if (signalId) {
+    const { data: duplicate, error: duplicateError } = await getSupabase()
+      .from('notification_history')
+      .select('id')
+      .eq('member_id', input.memberId)
+      .eq('signal_id', signalId)
+      .maybeSingle();
+    if (duplicateError) throw duplicateError;
+    if (duplicate) {
+      return { appStored: false, pushSent: 0, skipped: 'DUPLICATE_SIGNAL' };
+    }
+  }
+
   const appAllowed = input.app !== false && preferences.app_enabled !== false;
   const pushAllowed =
     input.push !== false && preferences.push_enabled === true && isVapidReady();
@@ -165,6 +194,20 @@ export async function deliverMemberNotification(
       body: input.body,
       url: input.url ?? null,
       channel: pushSent > 0 ? 'both' : 'app',
+      asset_type:
+        typeof input.metadata?.assetType === 'string'
+          ? input.metadata.assetType
+          : null,
+      symbol:
+        typeof input.metadata?.symbol === 'string'
+          ? input.metadata.symbol
+          : null,
+      signal_id: signalId,
+      importance:
+        typeof input.metadata?.importance === 'string'
+          ? input.metadata.importance
+          : null,
+      metadata: input.metadata ?? {},
     });
     if (error) throw error;
     appStored = true;
@@ -199,7 +242,12 @@ function cleanSymbol(value: unknown): string {
     .slice(0, 30);
 }
 
-async function readAlertPrice(alert: PriceAlertRow): Promise<number> {
+type AlertMarketSnapshot = {
+  price: number;
+  changePercent: number | null;
+};
+
+async function readAlertPrice(alert: PriceAlertRow): Promise<AlertMarketSnapshot> {
   const symbol = cleanSymbol(alert.symbol);
   if (!symbol) throw new Error('INVALID_SYMBOL');
 
@@ -208,25 +256,40 @@ async function readAlertPrice(alert: PriceAlertRow): Promise<number> {
     if (!quote || !Number.isFinite(quote.price) || quote.price <= 0) {
       throw new Error('STOCK_QUOTE_UNAVAILABLE');
     }
-    return quote.price;
+    return {
+      price: quote.price,
+      changePercent: Number.isFinite(quote.changePercent)
+        ? quote.changePercent
+        : null,
+    };
   }
 
   if (alert.asset_type === 'coin_spot') {
     const market = symbol.startsWith('KRW-') ? symbol : `KRW-${symbol}`;
-    const rows = await fetchJson<Array<{ trade_price?: unknown }>>(
+    const rows = await fetchJson<
+      Array<{ trade_price?: unknown; signed_change_rate?: unknown }>
+    >(
       `https://api.upbit.com/v1/ticker?markets=${encodeURIComponent(market)}`,
     );
     const price = Number(rows[0]?.trade_price);
     if (!Number.isFinite(price) || price <= 0) {
       throw new Error('UPBIT_QUOTE_UNAVAILABLE');
     }
-    return price;
+    const changeRate = Number(rows[0]?.signed_change_rate);
+    return {
+      price,
+      changePercent: Number.isFinite(changeRate) ? changeRate * 100 : null,
+    };
   }
 
   const futuresSymbol = symbol.endsWith('USDT') ? symbol : `${symbol}USDT`;
   const payload = await fetchJson<{
     code?: string;
-    data?: Array<{ lastPr?: unknown; markPrice?: unknown }>;
+    data?: Array<{
+      lastPr?: unknown;
+      markPrice?: unknown;
+      change24h?: unknown;
+    }>;
   }>(
     `https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES&symbol=${encodeURIComponent(futuresSymbol)}`,
   );
@@ -237,12 +300,38 @@ async function readAlertPrice(alert: PriceAlertRow): Promise<number> {
   if (!Number.isFinite(price) || price <= 0) {
     throw new Error('BITGET_QUOTE_UNAVAILABLE');
   }
-  return price;
+  const changeRate = Number(payload.data?.[0]?.change24h);
+  return {
+    price,
+    changePercent: Number.isFinite(changeRate) ? changeRate * 100 : null,
+  };
 }
 
-function isConditionMet(alert: PriceAlertRow, price: number): boolean {
-  const target = Number(alert.target_price);
-  return alert.direction === 'above' ? price >= target : price <= target;
+function conditionTypeOf(
+  alert: PriceAlertRow,
+): NonNullable<PriceAlertRow['condition_type']> {
+  if (
+    alert.condition_type === 'price_above' ||
+    alert.condition_type === 'price_below' ||
+    alert.condition_type === 'change_above' ||
+    alert.condition_type === 'change_below'
+  ) {
+    return alert.condition_type;
+  }
+  return alert.direction === 'above' ? 'price_above' : 'price_below';
+}
+
+function isConditionMet(
+  alert: PriceAlertRow,
+  snapshot: AlertMarketSnapshot,
+): boolean {
+  const condition = conditionTypeOf(alert);
+  const target = Number(alert.target_value ?? alert.target_price);
+  const current = condition.startsWith('change_')
+    ? snapshot.changePercent
+    : snapshot.price;
+  if (current == null || !Number.isFinite(current)) return false;
+  return condition.endsWith('_above') ? current >= target : current <= target;
 }
 
 function alertUrl(alert: PriceAlertRow): string {
@@ -274,25 +363,31 @@ async function evaluatePriceAlert(alert: PriceAlertRow): Promise<void> {
   }
 
   try {
-    const currentPrice = await readAlertPrice(alert);
-    const met = isConditionMet(alert, currentPrice);
+    const snapshot = await readAlertPrice(alert);
+    const currentPrice = snapshot.price;
+    const met = isConditionMet(alert, snapshot);
     const wasMet = alert.condition_met === true;
     const update: Record<string, unknown> = {
       condition_met: met,
       last_checked_price: currentPrice,
+      last_checked_change_percent: snapshot.changePercent,
       last_checked_at: now.toISOString(),
       last_error: null,
       updated_at: now.toISOString(),
     };
 
     if (met && !wasMet) {
-      const target = Number(alert.target_price);
-      const directionText = alert.direction === 'above' ? '이상' : '이하';
+      const condition = conditionTypeOf(alert);
+      const target = Number(alert.target_value ?? alert.target_price);
+      const directionText = condition.endsWith('_above') ? '이상' : '이하';
+      const isChange = condition.startsWith('change_');
       await deliverMemberNotification({
         memberId: alert.member_id,
         type: 'price_target',
-        title: `지정가 도달 · ${cleanSymbol(alert.symbol)}`,
-        body: `현재가 ${formatPrice(currentPrice, alert.asset_type)} · 설정가 ${formatPrice(target, alert.asset_type)} ${directionText}`,
+        title: `${isChange ? '등락률' : '지정가'} 조건 도달 · ${cleanSymbol(alert.symbol)}`,
+        body: isChange
+          ? `현재 등락률 ${snapshot.changePercent?.toFixed(2) ?? '산출 불가'}% · 설정값 ${target.toFixed(2)}% ${directionText}`
+          : `현재가 ${formatPrice(currentPrice, alert.asset_type)} · 설정가 ${formatPrice(target, alert.asset_type)} ${directionText}`,
         url: alertUrl(alert),
         app: alert.app_enabled,
         push: alert.push_enabled,
@@ -302,8 +397,11 @@ async function evaluatePriceAlert(alert: PriceAlertRow): Promise<void> {
           market: alert.market,
           symbol: cleanSymbol(alert.symbol),
           currentPrice,
-          targetPrice: target,
-          direction: alert.direction,
+          changePercent: snapshot.changePercent,
+          targetValue: target,
+          conditionType: condition,
+          signalId: `price-alert:${alert.id}:${now.toISOString()}`,
+          importance: 'high',
         },
       });
       update.last_triggered_at = now.toISOString();

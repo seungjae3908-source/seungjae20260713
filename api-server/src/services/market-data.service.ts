@@ -1,8 +1,5 @@
 // MarketDataService — quotes, candlesticks, company profiles and global search.
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-
 import {
   CATALOG,
   getCatalogEntry,
@@ -21,6 +18,7 @@ import { getKrUniverse } from '../providers/krx';
 import { providerStatus } from '../lib/config';
 import { getKiwoomChartCandles } from '../kiwoom-chart';
 import { cached, TTL } from '../lib/cache';
+import { CompanyIntelligenceService } from './company-intelligence.service';
 import type {
   Candle,
   CompanyProfile,
@@ -49,6 +47,7 @@ export interface QuoteRow {
   changePercent: number;
   volume: number;
   tradingValue: number;
+  marketCap?: number | null;
   high?: number;
   low?: number;
   open?: number;
@@ -59,12 +58,39 @@ export interface QuoteRow {
   rank?: number;
   exchange?: string;
   signals?: string[];
-  entry?: number;
-  take1?: number;
-  take2?: number;
-  stop?: number;
   riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH';
 }
+
+export interface SummaryItem {
+  key: string;
+  label: string;
+  price: number;
+  changePercent: number;
+  spark: number[];
+  unit: 'index' | 'krw' | 'usd';
+  ok: boolean;
+}
+
+const SUMMARY_DEFS: Array<{
+  key: string;
+  label: string;
+  symbol: string;
+  unit: SummaryItem['unit'];
+}> = [
+  { key: 'kospi', label: '코스피', symbol: '^KS11', unit: 'index' },
+  { key: 'kosdaq', label: '코스닥', symbol: '^KQ11', unit: 'index' },
+  { key: 'nasdaq', label: '나스닥', symbol: '^IXIC', unit: 'index' },
+  { key: 'sp500', label: 'S&P 500', symbol: '^GSPC', unit: 'index' },
+  { key: 'dow', label: '다우', symbol: '^DJI', unit: 'index' },
+  { key: 'russell', label: '러셀2000', symbol: '^RUT', unit: 'index' },
+  { key: 'vix', label: 'VIX', symbol: '^VIX', unit: 'index' },
+  { key: 'usdkrw', label: '원/달러', symbol: 'KRW=X', unit: 'krw' },
+  { key: 'btc', label: '비트코인', symbol: 'BTC-USD', unit: 'usd' },
+  { key: 'eth', label: '이더리움', symbol: 'ETH-USD', unit: 'usd' },
+  { key: 'gold', label: '금', symbol: 'GC=F', unit: 'usd' },
+  { key: 'oil', label: '유가(WTI)', symbol: 'CL=F', unit: 'usd' },
+];
+
 
 type LooseQuote = Partial<Quote> & {
   ticker?: string;
@@ -89,106 +115,6 @@ type LooseQuote = Partial<Quote> & {
   prevClose?: number;
   updatedAt?: string;
 };
-
-interface CandleDiskCache {
-  savedAt: number;
-  ticker: string;
-  timeframe: string;
-  candles: Candle[];
-  provider?: string;
-}
-
-function candleCacheDirectory(): string {
-  const configured = process.env.KIWOOM_CHART_CACHE_DIR?.trim();
-  if (configured) return path.resolve(configured);
-
-  const cwd = process.cwd();
-  const apiRoot = path.basename(cwd) === 'api-server'
-    ? cwd
-    : path.join(cwd, 'api-server');
-  return path.join(apiRoot, 'data', 'chart-cache');
-}
-
-function candleCachePath(ticker: string, timeframe: string): string {
-  const safeTicker = cleanTicker(ticker).replace(/[^0-9A-Z_-]/g, '');
-  const safeTimeframe = String(timeframe).replace(/[^0-9A-Z]/gi, '');
-  return path.join(candleCacheDirectory(), `${safeTicker}-${safeTimeframe}.json`);
-}
-
-function candleCacheTtl(timeframe: string): number {
-  return /m|H/.test(timeframe)
-    ? 2 * 60 * 1000
-    : 12 * 60 * 60 * 1000;
-}
-
-async function readCandleDiskCache(
-  ticker: string,
-  timeframe: string,
-): Promise<{ candles: Candle[]; fresh: boolean; provider: string; savedAt: number } | null> {
-  try {
-    const raw = await readFile(candleCachePath(ticker, timeframe), 'utf8');
-    const parsed = JSON.parse(raw) as CandleDiskCache;
-    if (!Array.isArray(parsed.candles) || parsed.candles.length < 2) return null;
-    return {
-      candles: parsed.candles,
-      provider: parsed.provider ?? 'unknown',
-      savedAt: Number(parsed.savedAt ?? 0),
-      fresh: Date.now() - Number(parsed.savedAt ?? 0) <= candleCacheTtl(timeframe),
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function writeCandleDiskCache(
-  ticker: string,
-  timeframe: string,
-  candles: Candle[],
-  provider?: string,
-): Promise<void> {
-  if (candles.length < 2) return;
-  try {
-    await mkdir(candleCacheDirectory(), { recursive: true });
-    const payload: CandleDiskCache = {
-      savedAt: Date.now(),
-      ticker: cleanTicker(ticker),
-      timeframe,
-      candles,
-      provider,
-    };
-    await writeFile(
-      candleCachePath(ticker, timeframe),
-      JSON.stringify(payload),
-      'utf8',
-    );
-  } catch (error) {
-    console.warn('chart disk cache write failed:', error);
-  }
-}
-
-function aggregateCachedCandles(
-  rows: Candle[],
-  size: number,
-): Candle[] {
-  if (size <= 1 || rows.length <= 1) return rows;
-
-  const result: Candle[] = [];
-  for (let index = 0; index < rows.length; index += size) {
-    const chunk = rows.slice(index, index + size);
-    if (chunk.length === 0) continue;
-
-    result.push({
-      time: chunk[0].time,
-      open: chunk[0].open,
-      high: Math.max(...chunk.map((item) => item.high)),
-      low: Math.min(...chunk.map((item) => item.low)),
-      close: chunk[chunk.length - 1].close,
-      volume: chunk.reduce((sum, item) => sum + item.volume, 0),
-    });
-  }
-
-  return result;
-}
 
 const EXTRA_ALIASES: Record<
   string,
@@ -568,7 +494,11 @@ function toSearchResult(entry: CatalogEntry): SearchResult {
     name: String((entry as any).name ?? ticker),
     market: String(marketValue),
     currency: String(currency),
-    assetType: classifyAssetType(String((entry as any).name ?? ticker), marketValue as Market, String((entry as any).assetType ?? "")),
+    assetType: classifyAssetType(
+      String((entry as any).name ?? ticker),
+      marketValue as any,
+      (entry as any).assetType,
+    ),
     aliases: ((entry as any).aliases ?? []) as string[],
   };
 }
@@ -633,11 +563,7 @@ function quotePreviousClose(q: LooseQuote, price: number): number {
   return safeNumber(q.previousClose ?? q.prevClose, price);
 }
 
-function quoteChangeAmount(
-  q: LooseQuote,
-  price: number,
-  previousClose: number,
-) {
+function quoteChangeAmount(q: LooseQuote, price: number, previousClose: number) {
   const direct = safeNumber(q.changeAmount ?? q.change, Number.NaN);
 
   if (Number.isFinite(direct)) return direct;
@@ -652,9 +578,7 @@ function quoteChangePercent(
   changeAmount: number,
 ) {
   const direct = safeNumber(
-    q.changePercent ??
-      q.regularMarketChangePercent ??
-      q.percent,
+    q.changePercent ?? q.regularMarketChangePercent ?? q.percent,
     Number.NaN,
   );
 
@@ -669,19 +593,14 @@ function defaultRating(): RatingResult {
   return scoreToRating(50);
 }
 
-function ratingFromQuote(
-  quote: LooseQuote,
-  entry: CatalogEntry,
-): RatingResult {
+function ratingFromQuote(quote: LooseQuote, entry: CatalogEntry): RatingResult {
   try {
     const scores = computeScores({
       quote,
       entry,
     } as any);
 
-    if (typeof scores === 'number') {
-      return scoreToRating(scores);
-    }
+    if (typeof scores === 'number') return scoreToRating(scores);
 
     if (typeof (scores as any)?.total === 'number') {
       return scoreToRating((scores as any).total);
@@ -697,26 +616,13 @@ function ratingFromQuote(
   }
 }
 
-function toQuoteRow(
-  entry: CatalogEntry,
-  quote: LooseQuote,
-): QuoteRow {
+function toQuoteRow(entry: CatalogEntry, quote: LooseQuote): QuoteRow {
   const ticker = cleanTicker((entry as any).ticker);
-  const marketValue = normalizeMarketValue(
-    (entry as any).market,
-    ticker,
-  );
-  const currency = normalizeCurrencyValue(
-    (entry as any).currency,
-    marketValue,
-  );
+  const marketValue = normalizeMarketValue((entry as any).market, ticker);
+  const currency = normalizeCurrencyValue((entry as any).currency, marketValue);
   const price = quotePrice(quote);
   const previousClose = quotePreviousClose(quote, price);
-  const changeAmount = quoteChangeAmount(
-    quote,
-    price,
-    previousClose,
-  );
+  const changeAmount = quoteChangeAmount(quote, price, previousClose);
   const changePercent = quoteChangePercent(
     quote,
     price,
@@ -725,92 +631,101 @@ function toQuoteRow(
   );
   const volume = safeNumber(quote.volume, 0);
   const tradingValue =
-    safeNumber(quote.tradingValue, 0) ||
-    Math.max(price * volume, 0);
+    safeNumber(quote.tradingValue, 0) || Math.max(price * volume, 0);
 
   return {
     ticker,
-    name: String(
-      (entry as any).name ??
-        quote.name ??
-        ticker,
-    ),
+    name: String((entry as any).name ?? quote.name ?? ticker),
     market: String(marketValue),
     currency: String(currency),
-    assetType: classifyAssetType(String((entry as any).name ?? ticker), marketValue as Market, String((entry as any).assetType ?? "")),
+    assetType: classifyAssetType(
+      String((entry as any).name ?? quote.name ?? ticker),
+      marketValue as any,
+      (entry as any).assetType,
+    ),
     price,
     changeAmount,
     changePercent,
     volume,
     tradingValue,
+    marketCap: safeNumber(quote.marketCap, 0) || null,
     high: safeNumber(quote.high, 0),
     low: safeNumber(quote.low, 0),
     open: safeNumber(quote.open, 0),
     previousClose,
-    updatedAt: String(
-      quote.updatedAt ??
-        new Date().toISOString(),
-    ),
+    updatedAt: String(quote.updatedAt ?? new Date().toISOString()),
     rating: ratingFromQuote(quote, entry),
   };
 }
 
-async function tryQuoteProvider(
-  entry: CatalogEntry,
-): Promise<LooseQuote | null> {
+async function tryQuoteProvider(entry: CatalogEntry): Promise<LooseQuote | null> {
   const providers = providerStatus();
-  const marketValue = normalizeMarketValue(
-    (entry as any).market,
-    (entry as any).ticker,
-  );
+  const marketValue = normalizeMarketValue((entry as any).market, (entry as any).ticker);
 
   const attempts: Array<() => Promise<unknown>> = [];
 
   if (marketValue === 'KR') {
-    attempts.push(() => naver.getQuote(entry));
-    attempts.push(() => yahoo.getQuote(entry));
-  } else {
-    attempts.push(() => yahoo.getQuote(entry));
-    if (providers.finnhub) attempts.push(() => finnhub.getQuote(entry));
+    attempts.push(() => (naver as any).getQuote?.(entry));
+    attempts.push(() => (naver as any).quote?.(entry));
   }
+
+  attempts.push(() => (yahoo as any).getQuote?.(entry));
+  attempts.push(() => (yahoo as any).quote?.(entry));
+
+  if (providers.finnhub) {
+    attempts.push(() => (finnhub as any).getQuote?.(entry));
+  }
+
 
   for (const attempt of attempts) {
     try {
       const result = await attempt();
-      if (!result || typeof result !== 'object') continue;
-      const quote = result as LooseQuote;
-      const price = quotePrice(quote);
-      if (price > 0 || quote.changePercent != null || quote.volume != null) {
-        return quote;
+
+      if (result && typeof result === 'object') {
+        const quote = result as LooseQuote;
+        const price = quotePrice(quote);
+
+        if (price > 0 || quote.changePercent != null || quote.volume != null) {
+          return quote;
+        }
       }
     } catch {
-      // Try the next live provider.
+      // Try next provider.
     }
   }
 
   return null;
 }
 
+type CandlesMeta = {
+  candles: Candle[];
+  provider: string;
+  fetchedAt: string;
+};
+
+type CandleFetchOptions = {
+  maxPages?: number;
+};
+
 async function tryCandlesProvider(
   entry: CatalogEntry,
   timeframe: Timeframe,
+): Promise<Candle[]> {
+  const { candles } = await tryCandlesProviderMeta(entry, timeframe);
+  return candles;
+}
+
+async function tryCandlesProviderMeta(
+  entry: CatalogEntry,
+  timeframe: Timeframe,
+  options: CandleFetchOptions = {},
 ): Promise<{ candles: Candle[]; provider: string }> {
-  const ticker = cleanTicker(
-    (entry as any).ticker,
+  const ticker = cleanTicker((entry as any).ticker);
+  const marketValue = normalizeMarketValue((entry as any).market, ticker);
+  const timeframeText = String(timeframe ?? '1D');
+    const isIntraday = ['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H', '12H'].includes(
+    timeframeText,
   );
-
-  const marketValue =
-    normalizeMarketValue(
-      (entry as any).market,
-      ticker,
-    );
-
-  const timeframeText =
-    String(
-      timeframe ??
-        '1D',
-    );
-  const minimumUsefulCandles = ['1D', '3D', '5D', '10D', 'ALL'].includes(timeframeText) ? 30 : 2;
 
   /*
    * 국내 종목은 키움증권 차트 API를 가장 먼저 사용합니다.
@@ -819,15 +734,20 @@ async function tryCandlesProvider(
    */
   if (marketValue === 'KR') {
     try {
-      const kiwoomRows =
-        await getKiwoomChartCandles(
+      const timeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("KIWOOM_TIMEOUT")), 10000);
+      });
+
+      const kiwoomRows = await Promise.race([
+        getKiwoomChartCandles(
           ticker,
           timeframeText,
-        );
+          options.maxPages,
+        ),
+        timeout,
+      ]);
 
-      if (
-        kiwoomRows.length >= minimumUsefulCandles
-      ) {
+      if (kiwoomRows.length >= 2) {
         return { candles: kiwoomRows as Candle[], provider: 'kiwoom' };
       }
     } catch (error) {
@@ -836,26 +756,31 @@ async function tryCandlesProvider(
         error,
       );
     }
+
+    // 네이버는 일봉만 제공한다. 키움 분봉/시간봉 조회가 실패했을 때
+    // 일봉을 분봉처럼 표시하지 않고 명시적인 빈 데이터로 반환한다.
+    if (isIntraday) return { candles: [], provider: 'none' };
   }
 
-  const attempts: Array<{ name: string; run: () => Promise<unknown> }> =
+  const attempts: Array<{ provider: string; run: () => Promise<unknown> }> =
     marketValue === 'KR'
       ? [
-          { name: 'naver', run: () => naver.getCandles(entry) },
-          { name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) },
+          { provider: 'yahoo', run: () => (yahoo as any).getCandles?.(entry, timeframe) },
+          { provider: 'yahoo', run: () => (yahoo as any).candles?.(entry, timeframe) },
+          { provider: 'naver', run: () => (naver as any).getCandles?.(entry, timeframe) },
+          { provider: 'naver', run: () => (naver as any).candles?.(entry, timeframe) },
         ]
-      : [{ name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) }];
+      : [
+          { provider: 'yahoo', run: () => (yahoo as any).getCandles?.(entry, timeframe) },
+          { provider: 'yahoo', run: () => (yahoo as any).candles?.(entry, timeframe) },
+        ];
 
   for (const attempt of attempts) {
     try {
-      const result =
-        await attempt.run();
+      const result = await attempt.run();
 
-      if (
-        Array.isArray(result) &&
-        result.length >= minimumUsefulCandles
-      ) {
-        return { candles: result as Candle[], provider: attempt.name };
+      if (Array.isArray(result) && result.length >= 2) {
+        return { candles: result as Candle[], provider: attempt.provider };
       }
     } catch {
       // Try next provider.
@@ -864,163 +789,154 @@ async function tryCandlesProvider(
 
   /*
    * 실제 금융 차트에 가짜 봉을 표시하지 않습니다.
-   * 제공처가 모두 실패하면 빈 배열을 반환합니다.
+   * 제공처가 모두 실패하면 빈 배열을 반환해 화면에 데이터 부족 안내를 표시합니다.
    */
   return { candles: [], provider: 'none' };
 }
 
-async function tryProfileProvider(
-  entry: CatalogEntry,
-): Promise<CompanyProfile> {
-  const attempts: Array<() => Promise<unknown>> = [
-    () => finnhub.getProfile(entry),
-    () => yahoo.getCompanyProfile(entry),
-    () => naver.getCompanyProfile(entry),
-  ];
+async function fetchSummaryItem(
+  definition: (typeof SUMMARY_DEFS)[number],
+): Promise<SummaryItem> {
+  try {
+    const indexProvider = (yahoo as any).getIndexQuote;
+    const quoteProvider = (yahoo as any).getQuote;
 
-  for (const attempt of attempts) {
-    try {
-      const result =
-        await attempt();
+    const raw =
+      typeof indexProvider === 'function'
+        ? await indexProvider(definition.symbol)
+        : typeof quoteProvider === 'function'
+          ? await quoteProvider(definition.symbol)
+          : null;
 
-      if (
-        result &&
-        typeof result === 'object'
-      ) {
-        return result as CompanyProfile;
-      }
-    } catch {
-      // Try next provider.
+    if (!raw || typeof raw !== 'object') {
+      throw new Error(`YAHOO_SUMMARY_EMPTY:${definition.symbol}`);
     }
+
+    const price = safeNumber(
+      (raw as any).price ??
+        (raw as any).currentPrice ??
+        (raw as any).regularMarketPrice,
+      0,
+    );
+
+    const previousClose = safeNumber(
+      (raw as any).previousClose ?? (raw as any).prevClose,
+      0,
+    );
+
+    const changeAmount = safeNumber(
+      (raw as any).changeAmount ?? (raw as any).change,
+      Number.NaN,
+    );
+
+    const directPercent = safeNumber(
+      (raw as any).changePercent ??
+        (raw as any).regularMarketChangePercent ??
+        (raw as any).percent,
+      Number.NaN,
+    );
+
+    const changePercent = Number.isFinite(directPercent)
+      ? directPercent
+      : previousClose > 0
+        ? ((Number.isFinite(changeAmount)
+            ? changeAmount
+            : price - previousClose) /
+            previousClose) *
+          100
+        : 0;
+
+    const spark = Array.isArray((raw as any).spark)
+      ? (raw as any).spark
+          .map((value: unknown) => safeNumber(value, 0))
+          .filter((value: number) => value > 0)
+      : [];
+
+    if (!(price > 0)) {
+      throw new Error(`YAHOO_SUMMARY_ZERO_PRICE:${definition.symbol}`);
+    }
+
+    return {
+      key: definition.key,
+      label: definition.label,
+      price,
+      changePercent,
+      spark,
+      unit: definition.unit,
+      ok: true,
+    };
+  } catch (error) {
+    console.error(
+      `market summary provider failed: ${definition.key} (${definition.symbol})`,
+      error,
+    );
+
+    return {
+      key: definition.key,
+      label: definition.label,
+      price: 0,
+      changePercent: 0,
+      spark: [],
+      unit: definition.unit,
+      ok: false,
+    };
   }
-
-  return {
-    ticker: cleanTicker(
-      (entry as any).ticker,
-    ),
-
-    name: String(
-      (entry as any).name ??
-        (entry as any).ticker,
-    ),
-
-    market: String(
-      (entry as any).market ??
-        '',
-    ),
-
-    currency: String(
-      (entry as any).currency ??
-        '',
-    ),
-
-    description:
-      '기업 정보를 확인 중입니다.',
-
-    sector: '',
-    industry: '',
-    country: String((entry as any).market === 'KR' ? '대한민국' : '미국'),
-    mainBusiness: '',
-    competitors: [],
-  } as CompanyProfile;
 }
 
-async function buildKrUniverseEntries(): Promise<
-  CatalogEntry[]
-> {
+async function buildKrUniverseEntries(): Promise<CatalogEntry[]> {
   try {
-    const rows =
-      await getKrUniverse();
+    const rows = await getKrUniverse();
 
-    if (!Array.isArray(rows)) {
-      return [];
-    }
+    if (!Array.isArray(rows)) return [];
 
     return rows
       .map((row: any) => {
-        const ticker =
-          cleanTicker(
-            row.ticker ??
-              row.code ??
-              row.symbol,
-          );
+        const ticker = cleanTicker(row.ticker ?? row.code ?? row.symbol);
+        const name = String(row.name ?? row.companyName ?? ticker);
 
-        const name =
-          String(
-            row.name ??
-              row.companyName ??
-              ticker,
-          );
+        if (!ticker) return null;
 
-        if (!ticker) {
-          return null;
-        }
-
-        return createEntry(
-          ticker,
+        return createEntry(ticker, name, 'KR' as Market, 'KRW' as Currency, [
           name,
-          'KR' as Market,
-          'KRW' as Currency,
-          [name],
-        );
+        ]);
       })
-      .filter(
-        (
-          entry,
-        ): entry is CatalogEntry =>
-          Boolean(entry),
-      );
+      .filter((entry): entry is CatalogEntry => Boolean(entry));
   } catch {
     return [];
   }
 }
 
 export class MarketDataService {
-  static async search(
-    q: string,
-    limit = 80,
-  ): Promise<SearchResult[]> {
-    const query =
-      String(
-        q ??
-          '',
-      ).trim();
+  static async getMarketSummary(): Promise<SummaryItem[]> {
+    return cached(
+      'market-summary:v2',
+      TTL.quote,
+      async () => Promise.all(SUMMARY_DEFS.map(fetchSummaryItem)),
+    );
+  }
 
-    const aliasEntries =
-      Object.entries(
-        EXTRA_ALIASES,
-      ).map(
-        (
-          [
-            ,
-            value,
-          ],
-        ) =>
-          createEntry(
-            value.ticker,
-            value.name,
-            value.market,
-            value.currency,
-            value.aliases,
-          ),
-      );
+  static async search(q: string, limit = 80): Promise<SearchResult[]> {
+    const query = String(q ?? '').trim();
 
-    const entries =
-      dedupeEntries([
-        ...catalogArray(),
+    const aliasEntries = Object.entries(EXTRA_ALIASES).map(([, value]) =>
+      createEntry(
+        value.ticker,
+        value.name,
+        value.market,
+        value.currency,
+        value.aliases,
+      ),
+    );
 
-        ...aliasEntries,
-
-        ...(query.length >= 2
-          ? await buildKrUniverseEntries()
-          : []),
-      ]);
+    const entries = dedupeEntries([
+      ...catalogArray(),
+      ...aliasEntries,
+      ...(query.length >= 2 ? await buildKrUniverseEntries() : []),
+    ]);
 
     for (const entry of entries) {
       try {
-        registerDynamicEntry(
-          entry,
-        );
+        registerDynamicEntry(entry);
       } catch {
         // Dynamic registration is optional.
       }
@@ -1029,324 +945,166 @@ export class MarketDataService {
     const scored = entries
       .map((entry) => ({
         entry,
-
-        score:
-          searchScore(
-            entry,
-            query,
-          ),
+        score: searchScore(entry, query),
       }))
-      .filter(
-        (item) =>
-          query
-            ? item.score > 0
-            : true,
-      )
+      .filter((item) => (query ? item.score > 0 : true))
       .sort((a, b) => {
-        if (
-          b.score !==
-          a.score
-        ) {
-          return (
-            b.score -
-            a.score
-          );
-        }
+        if (b.score !== a.score) return b.score - a.score;
 
-        return String(
-          (a.entry as any).ticker,
-        ).localeCompare(
-          String(
-            (b.entry as any).ticker,
-          ),
+        return String((a.entry as any).ticker).localeCompare(
+          String((b.entry as any).ticker),
         );
       })
-      .slice(
-        0,
-        limit,
-      )
-      .map(
-        (item) =>
-          toSearchResult(
-            item.entry,
-          ),
-      );
+      .slice(0, limit)
+      .map((item) => toSearchResult(item.entry));
 
     return scored;
   }
 
-  static async getQuote(
-    ticker: string,
-  ): Promise<Quote> {
-    const entry =
-      resolveEntry(
-        ticker,
-      );
+  static async getQuote(ticker: string): Promise<Quote> {
+    const entry = resolveEntry(ticker);
 
-    return cached(
-      `quote:${cleanTicker(ticker)}`,
+    return cached(`quote:${cleanTicker(ticker)}`, TTL.quote, async () => {
+      const providerQuote = await tryQuoteProvider(entry);
+      if (!providerQuote) {
+        throw new Error(`실시간 시세 제공기관에서 ${cleanTicker(ticker)} 데이터를 받지 못했습니다.`);
+      }
 
-      TTL.quote,
-
-      async () => {
-        const providerQuote =
-          await tryQuoteProvider(
-            entry,
-          );
-
-        if (!providerQuote) {
-          throw new Error(`QUOTE_UNAVAILABLE:${cleanTicker(ticker)}`);
-        }
-
-        const quote = providerQuote;
-
-        return {
-          ...quote,
-
-          ticker:
-            cleanTicker(
-              (entry as any).ticker,
-            ),
-
-          name: String(
-            (entry as any).name ??
-              (entry as any).ticker,
-          ),
-        } as Quote;
-      },
-    );
+      return {
+        ...providerQuote,
+        ticker: cleanTicker((entry as any).ticker),
+        name: String((entry as any).name ?? (entry as any).ticker),
+      } as Quote;
+    });
   }
 
-  static async getQuoteRow(
-    ticker: string,
-  ): Promise<QuoteRow | null> {
-    const entry =
-      resolveEntry(
-        ticker,
-      );
+  static async getQuoteRow(ticker: string): Promise<QuoteRow | null> {
+    const entry = resolveEntry(ticker);
 
     try {
-      const quote =
-        await this.getQuote(
-          ticker,
-        );
+      const quote = await this.getQuote(ticker);
 
-      return toQuoteRow(
-        entry,
-        quote as LooseQuote,
-      );
+      return toQuoteRow(entry, quote as LooseQuote);
     } catch {
       return null;
     }
   }
 
-  static async getQuotes(
-    tickers: string[],
-  ): Promise<QuoteRow[]> {
-    const rows =
-      await Promise.all(
-        tickers.map(
-          (ticker) =>
-            this.getQuoteRow(
-              ticker,
-            ),
-        ),
-      );
-
-    return rows.filter(
-      (
-        row,
-      ): row is QuoteRow =>
-        Boolean(row),
+  static async getQuotes(tickers: string[]): Promise<QuoteRow[]> {
+    const rows = await Promise.all(
+      tickers.map((ticker) => this.getQuoteRow(ticker)),
     );
+
+    return rows.filter((row): row is QuoteRow => Boolean(row));
   }
 
   static async getCandles(
     ticker: string,
-    timeframe: Timeframe =
-      '1D' as Timeframe,
+    timeframe: Timeframe = '1D' as Timeframe,
   ): Promise<Candle[]> {
     const meta = await MarketDataService.getCandlesMeta(ticker, timeframe);
     return meta.candles;
   }
 
-  /**
-   * 캔들과 함께 실제 데이터 공급자 이름과 조회 시각을 반환합니다.
-   * 디스크 캐시에서 읽은 경우 캐시에 기록된 공급자와 저장 시각을 사용합니다.
-   */
-  static async getCandlesMeta(
+  /** 실시간 구독 전용: 기존 캐시를 우회해 공급자의 최신 캔들을 조회합니다. */
+  static async getLiveCandlesMeta(
     ticker: string,
-    timeframe: Timeframe =
-      '1D' as Timeframe,
-  ): Promise<{ candles: Candle[]; provider: string; fetchedAt: string }> {
-    const entry =
-      resolveEntry(
-        ticker,
-      );
-    const timeframeText = String(timeframe);
-    // v2: 캐시 값 형태가 Candle[] → {candles, provider}로 바뀌어 키를 올린다.
-    // (Supabase 영속 캐시에 남아 있을 수 있는 구버전 배열과 충돌 방지)
-    const cacheKey = `candles:v2:${cleanTicker(ticker)}:${timeframeText}`;
-    const disk = await readCandleDiskCache(ticker, timeframeText);
-
-    if (disk?.fresh) {
-      return {
-        candles: disk.candles,
-        provider: disk.provider,
-        fetchedAt: new Date(disk.savedAt).toISOString(),
-      };
-    }
-
-    const aggregateDays = ({
-      '3D': 3,
-      '5D': 5,
-      '10D': 10,
-    } as Record<string, number>)[timeframeText];
-
-    if (!disk && aggregateDays) {
-      const dailyDisk = await readCandleDiskCache(ticker, '1D');
-      if (dailyDisk?.candles.length) {
-        const aggregated = aggregateCachedCandles(dailyDisk.candles, aggregateDays);
-        await writeCandleDiskCache(ticker, timeframeText, aggregated, dailyDisk.provider);
-        return {
-          candles: aggregated,
-          provider: dailyDisk.provider,
-          fetchedAt: new Date(dailyDisk.savedAt).toISOString(),
-        };
-      }
-    }
-
-    const load = async () => {
-      const result = await tryCandlesProvider(entry, timeframe);
-      await writeCandleDiskCache(ticker, timeframeText, result.candles, result.provider);
-      return result;
-    };
-
-    if (disk?.candles.length) {
-      void cached(cacheKey, candleCacheTtl(timeframeText), load).catch((error) => {
-        console.error('chart background refresh failed:', error);
-      });
-      return {
-        candles: disk.candles,
-        provider: disk.provider,
-        fetchedAt: new Date(disk.savedAt).toISOString(),
-      };
-    }
-
-    const result = await cached(cacheKey, candleCacheTtl(timeframeText), load);
-    // 방어: 혹시 구버전 캐시(Candle[])가 남아 있으면 감싸서 반환한다.
-    if (Array.isArray(result)) {
-      return {
-        candles: result as Candle[],
-        provider: 'unknown',
-        fetchedAt: new Date().toISOString(),
-      };
-    }
+    timeframe: Timeframe = '1D' as Timeframe,
+  ): Promise<CandlesMeta> {
+    const entry = resolveEntry(ticker);
+    const { candles, provider } = await tryCandlesProviderMeta(entry, timeframe, {
+      maxPages: 1,
+    });
     return {
-      candles: result.candles,
-      provider: result.provider,
+      candles,
+      provider,
       fetchedAt: new Date().toISOString(),
     };
   }
 
-  static async getCompanyProfile(
+  /**
+   * 캔들과 함께 실제 데이터 공급자 이름과 조회 시각을 반환합니다.
+   * 공급자가 모두 실패하면 빈 배열(provider: 'none')을 반환해
+   * 화면에서 데이터 부족 안내를 표시할 수 있게 합니다.
+   */
+  static async getCandlesMeta(
     ticker: string,
-  ): Promise<CompanyProfile> {
-    const entry =
-      resolveEntry(
-        ticker,
-      );
+    timeframe: Timeframe = '1D' as Timeframe,
+    options: CandleFetchOptions = {},
+  ): Promise<CandlesMeta> {
+    const entry = resolveEntry(ticker);
+    const timeframeText = String(timeframe ?? '1D');
+    const intradayTtl = ['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H', '12H'].includes(
+      timeframeText,
+    )
+      ? 15_000
+      : TTL.candles ?? TTL.quote;
+
+    // v3: 실시간 분봉 TTL과 공급자 정책 변경 전 캐시와 충돌하지 않도록 버전을 올린다.
+    return cached(
+      `candles:v4:${cleanTicker(ticker)}:${timeframeText}:pages:${options.maxPages ?? 'all'}`,
+      intradayTtl,
+      async () => {
+        const { candles, provider } = await tryCandlesProviderMeta(
+          entry,
+          timeframe,
+          options,
+        );
+
+        return {
+          candles,
+          provider,
+          fetchedAt: new Date().toISOString(),
+        };
+      },
+    );
+  }
+
+  static async getCompanyProfile(ticker: string): Promise<CompanyProfile> {
+    const entry = resolveEntry(ticker);
+    const normalizedTicker = cleanTicker(ticker);
 
     return cached(
-      `company:${cleanTicker(ticker)}`,
-
-      TTL.profile ??
-        TTL.quote,
-
-      async () =>
-        tryProfileProvider(
-          entry,
-        ),
+      `company:evidence:v2:${normalizedTicker}`,
+      TTL.profile ?? TTL.quote,
+      async () => CompanyIntelligenceService.getProfile({
+        ticker: normalizedTicker,
+        name: String((entry as any).name ?? normalizedTicker),
+        market: String((entry as any).market ?? ''),
+        currency: String((entry as any).currency ?? ''),
+        assetType: String((entry as any).assetType ?? ''),
+        exchange: String((entry as any).exchange ?? ''),
+      }) as Promise<CompanyProfile>,
     );
   }
 
-  static async getProfile(
-    ticker: string,
-  ): Promise<CompanyProfile> {
-    return this.getCompanyProfile(
-      ticker,
-    );
+  static async getProfile(ticker: string): Promise<CompanyProfile> {
+    return this.getCompanyProfile(ticker);
   }
 
-  static async getRating(
-    ticker: string,
-  ): Promise<RatingResult> {
-    const quote =
-      await this.getQuoteRow(
-        ticker,
-      );
+  static async getRating(ticker: string): Promise<RatingResult> {
+    const quote = await this.getQuoteRow(ticker);
 
-    return (
-      quote?.rating ??
-      defaultRating()
-    );
+    return quote?.rating ?? defaultRating();
   }
 
-  static async getCatalogEntry(
-    ticker: string,
-  ): Promise<CatalogEntry> {
-    return resolveEntry(
-      ticker,
-    );
+  static async getCatalogEntry(ticker: string): Promise<CatalogEntry> {
+    return resolveEntry(ticker);
   }
 
-  static async getUniverse(
-    marketValue?:
-      | 'ALL'
-      | 'KR'
-      | 'US',
-  ): Promise<SearchResult[]> {
-    const entries =
-      dedupeEntries([
-        ...catalogArray(),
+  static async getUniverse(marketValue?: 'ALL' | 'KR' | 'US'): Promise<SearchResult[]> {
+    const entries = dedupeEntries([...catalogArray(), ...(await buildKrUniverseEntries())]);
 
-        ...(await buildKrUniverseEntries()),
-      ]);
+    const filtered = entries.filter((entry) => {
+      if (!marketValue || marketValue === 'ALL') return true;
 
-    const filtered =
-      entries.filter(
-        (entry) => {
-          if (
-            !marketValue ||
-            marketValue ===
-              'ALL'
-          ) {
-            return true;
-          }
+      const ticker = cleanTicker((entry as any).ticker);
+      const entryMarket = normalizeMarketValue((entry as any).market, ticker);
 
-          const ticker =
-            cleanTicker(
-              (entry as any).ticker,
-            );
+      return String(entryMarket) === marketValue;
+    });
 
-          const entryMarket =
-            normalizeMarketValue(
-              (entry as any).market,
-              ticker,
-            );
-
-          return (
-            String(
-              entryMarket,
-            ) ===
-            marketValue
-          );
-        },
-      );
-
-    return filtered.map(
-      toSearchResult,
-    );
+    return filtered.map(toSearchResult);
   }
 }
 
