@@ -25,15 +25,15 @@ import {
   fetchBitgetCandles,
 } from './crypto-source';
 
-const STOCK_SCAN_TTL = 5 * 60 * 1000;
-const COIN_SCAN_TTL = 2 * 60 * 1000;
+const STOCK_SCAN_TTL = 10 * 60 * 1000;
+const COIN_SCAN_TTL = 5 * 60 * 1000;
 const MIN_BARS = 60;
 const STOCK_MIN_SCORE = 72;
 const FUTURES_MIN_SCORE = 74;
 const GROUP_LIMIT = 10;
-const STOCK_POOL = 80;
-const COIN_SPOT_POOL = 40;
-const COIN_FUTURES_POOL = 40;
+const STOCK_POOL = 36;
+const COIN_SPOT_POOL = 24;
+const COIN_FUTURES_POOL = 30;
 
 export interface ScanCandidate {
   ticker: string;
