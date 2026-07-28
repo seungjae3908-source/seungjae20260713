@@ -2971,7 +2971,7 @@ export default function ChartRelayPage() {
       const normalizedSymbol = symbol.trim().toUpperCase();
       const payload = await apiGet<AnyObj>(
         candleUrl(asset, normalizedSymbol, interval),
-        { timeoutMs: 20_000 },
+        { timeoutMs: 12_000, retries: 1, staleIfErrorMs: 10 * 60_000 },
       );
 
       if (extractCandleRows(payload).length < 2) {
