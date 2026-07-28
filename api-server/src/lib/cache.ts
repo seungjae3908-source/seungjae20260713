@@ -14,9 +14,16 @@ import { getSupabase, hasSupabaseServerKey } from './supabase';
 interface Entry<T> {
   value: T;
   expires: number;
+  staleUntil: number;
+}
+
+export interface CacheOptions {
+  staleTtlMs?: number;
+  loaderTimeoutMs?: number;
 }
 
 const store = new Map<string, Entry<unknown>>();
+const inflight = new Map<string, Promise<unknown>>();
 
 const PERSIST_TABLE = 'market_cache';
 const PERSIST_MIN_TTL_MS = 5 * 60 * 1000;
@@ -47,7 +54,11 @@ async function readPersistent<T>(key: string): Promise<Entry<T> | null> {
     if (!data) return null;
     const expires = Date.parse(data.expires_at as string);
     if (!Number.isFinite(expires) || expires <= Date.now()) return null;
-    return { value: data.payload as T, expires };
+    return {
+      value: data.payload as T,
+      expires,
+      staleUntil: expires,
+    };
   } catch (error) {
     warnPersistOnce('read', error);
     return null;
@@ -72,32 +83,111 @@ function writePersistent(key: string, value: unknown, ttlMs: number, expires: nu
     });
 }
 
+async function loadWithTimeout<T>(
+  key: string,
+  loader: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return loader();
+  }
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      loader(),
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              `CACHE_LOADER_TIMEOUT:${key}:${Math.round(timeoutMs)}`,
+            ),
+          );
+        }, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function cached<T>(
   key: string,
   ttlMs: number,
   loader: () => Promise<T>,
+  options: CacheOptions = {},
 ): Promise<T> {
   const now = Date.now();
   const hit = store.get(key) as Entry<T> | undefined;
+
   if (hit && hit.expires > now) {
     return hit.value;
   }
 
+  const hasStale =
+    Boolean(hit) &&
+    Number(hit?.staleUntil ?? 0) > now;
+
+  const staleValue = hasStale
+    ? hit!.value
+    : undefined;
+
   if (persistable(ttlMs)) {
     const persisted = await readPersistent<T>(key);
+
     if (persisted) {
       store.set(key, persisted);
       return persisted.value;
     }
   }
 
-  const value = await loader();
-  const expires = now + ttlMs;
-  store.set(key, { value, expires });
-  if (persistable(ttlMs)) {
-    writePersistent(key, value, ttlMs, expires);
+  const existing = inflight.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+
+  const task = (async (): Promise<T> => {
+    try {
+      const value = await loadWithTimeout(
+        key,
+        loader,
+        Number(options.loaderTimeoutMs ?? 0),
+      );
+
+      const savedAt = Date.now();
+      const expires = savedAt + Math.max(0, ttlMs);
+      const staleUntil =
+        expires + Math.max(0, Number(options.staleTtlMs ?? 0));
+
+      store.set(key, {
+        value,
+        expires,
+        staleUntil,
+      });
+
+      if (persistable(ttlMs)) {
+        writePersistent(key, value, ttlMs, expires);
+      }
+
+      return value;
+    } catch (error) {
+      if (hasStale) {
+        return staleValue as T;
+      }
+
+      throw error;
+    }
+  })();
+
+  inflight.set(key, task as Promise<unknown>);
+
+  try {
+    return await task;
+  } finally {
+    if (inflight.get(key) === task) {
+      inflight.delete(key);
+    }
   }
-  return value;
 }
 
 export const TTL = {

@@ -87,16 +87,33 @@ export default function RankingPage() {
     queryFn: () =>
       apiGet<AnyObj>(
         `/market/rankings?market=${parsed?.market}&category=${category}&page=${page}&limit=${PAGE_SIZE}&sort=${sort}`,
+        { timeoutMs: 15_000 },
       ),
     enabled: !!parsed && !isCoin,
+    retry: 0,
+    staleTime: 30_000,
+    gcTime: 10 * 60_000,
     refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+    placeholderData: (previous) => previous,
   });
 
   const coinQuery = useQuery({
     queryKey: ['ranking-coin', parsed?.market],
-    queryFn: () => apiGet<AnyObj>(`/crypto/${parsed?.market}/tickers`),
+    queryFn: () =>
+      apiGet<AnyObj>(
+        `/crypto/${parsed?.market}/tickers`,
+        { timeoutMs: 12_000 },
+      ),
     enabled: !!parsed && isCoin && (!isFutures || canUseFutures),
+    retry: 0,
+    staleTime: 10_000,
+    gcTime: 10 * 60_000,
     refetchInterval: 15_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+    placeholderData: (previous) => previous,
   });
 
   const coinRows = useMemo(() => {
@@ -148,6 +165,7 @@ export default function RankingPage() {
     ? coinRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
     : ((stockQuery.data?.rows ?? []) as AnyObj[]);
   const updatedAt = isCoin ? coinQuery.dataUpdatedAt : stockQuery.dataUpdatedAt;
+  const hasRows = pageRows.length > 0;
 
   const futuresLocked = isFutures && !canUseFutures;
 
@@ -193,6 +211,30 @@ export default function RankingPage() {
           </p>
         )}
 
+        {query.isFetching && hasRows && (
+          <p className="mt-2 text-center text-[10px] font-black text-primary">
+            기존 데이터를 표시하며 새 데이터를 확인 중입니다.
+          </p>
+        )}
+
+        {query.isError && hasRows && (
+          <p className="mt-2 text-center text-[10px] font-black text-warning">
+            새로고침에 실패해 마지막 정상 데이터를 표시합니다.
+          </p>
+        )}
+
+        {Boolean((query.data as AnyObj | undefined)?.isStale) && hasRows && (
+          <p className="mt-2 text-center text-[10px] font-black text-warning">
+            제공처 지연으로 이전 정상 데이터를 표시합니다.
+          </p>
+        )}
+
+        {Boolean((query.data as AnyObj | undefined)?.partial) && hasRows && (
+          <p className="mt-2 text-center text-[10px] font-black text-warning">
+            현재 확보된 일부 시장 결과를 먼저 표시합니다.
+          </p>
+        )}
+
         <div className="mt-3 space-y-2">
           {futuresLocked ? (
             <StateBox>
@@ -200,9 +242,9 @@ export default function RankingPage() {
             </StateBox>
           ) : isCoin && category === 'ai' ? (
             <StateBox>분석 가능한 데이터가 없습니다.</StateBox>
-          ) : query.isLoading ? (
-            <StateBox>데이터를 불러오는 중입니다.</StateBox>
-          ) : query.isError ? (
+          ) : query.isPending && !hasRows ? (
+            <StateBox>최대 15초 동안 데이터를 확인합니다.</StateBox>
+          ) : query.isError && !hasRows ? (
             <StateBox error>
               데이터를 불러오지 못했습니다.
               <button type="button" onClick={() => void query.refetch()} className="mt-2 block w-full rounded-xl border border-card-border bg-card py-2 text-xs font-black text-foreground">다시 시도</button>

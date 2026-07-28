@@ -4787,7 +4787,7 @@ function ProfessionalChart({
   timeframe,
   indicators,
   fullscreen,
-  height,
+  height = 360,
   portfolioOverlay,
   autoSignal,
   studyFocus,
@@ -4798,7 +4798,7 @@ function ProfessionalChart({
   timeframe: ChartTimeframe;
   indicators: ChartIndicatorSettings;
   fullscreen: boolean;
-  height: number;
+  height?: number;
   portfolioOverlay: PortfolioChartOverlay | null;
   autoSignal: ReturnType<typeof getAutoTradeSignal>;
   studyFocus: StudyChartFocus | null;
@@ -4813,8 +4813,14 @@ function ProfessionalChart({
   const [priceChart, setPriceChart] = useState<IChartApi | null>(null);
   const [volumeChart, setVolumeChart] = useState<IChartApi | null>(null);
   const [chartHeight, setChartHeight] = useState(() => {
-    const stored = Number(localStorage.getItem("sa-chart-main-height-v1") ?? 360);
-    return Number.isFinite(stored) ? Math.min(760, Math.max(260, stored)) : 360;
+    const stored = Number(
+      localStorage.getItem("sa-chart-main-height-v1") ??
+        height,
+    );
+
+    return Number.isFinite(stored)
+      ? Math.min(760, Math.max(260, stored))
+      : height;
   });
   const [volumeHeight, setVolumeHeight] = useState(() => {
     const stored = Number(localStorage.getItem("sa-chart-volume-height-v1") ?? 140);
@@ -4987,6 +4993,7 @@ function PriceChartCanvas({
   timeframe,
   indicators,
   fullscreen,
+  height,
   portfolioOverlay,
   autoSignal,
   studyFocus,
@@ -4997,6 +5004,7 @@ function PriceChartCanvas({
   timeframe: ChartTimeframe;
   indicators: ChartIndicatorSettings;
   fullscreen: boolean;
+  height: number;
   portfolioOverlay: PortfolioChartOverlay | null;
   autoSignal: ReturnType<typeof getAutoTradeSignal>;
   studyFocus: StudyChartFocus | null;
@@ -5013,8 +5021,8 @@ function PriceChartCanvas({
   const [signalLegendOpen, setSignalLegendOpen] = useState(false);
   const [analysisMarkersVisible, setAnalysisMarkersVisible] = useState(true);
   const [selectedMarkerDetails, setSelectedMarkerDetails] = useState<AnyObj[]>([]);
-  const resolvedHeight = fullscreen
-    ? Math.max(resolvedHeight, Math.floor(window.innerHeight * 0.62))
+  const resolvedHeight: number = fullscreen
+    ? Math.max(height, Math.floor(window.innerHeight * 0.62))
     : height;
 
   useEffect(() => {

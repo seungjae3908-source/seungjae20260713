@@ -187,14 +187,21 @@ export default function VisualUiBuilderCanvas({
                 투명도
                 <input
                   type="range"
-                  min={10}
+                  min={25}
                   max={100}
+                  step={25}
                   value={selected.opacity}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const raw = Number(event.target.value);
+                    const opacity = Math.min(
+                      100,
+                      Math.max(25, Math.round(raw / 25) * 25),
+                    ) as UiSection['opacity'];
+
                     onChange(
-                      patchSection(layout, selected.id, { opacity: Number(event.target.value) }),
-                    )
-                  }
+                      patchSection(layout, selected.id, { opacity }),
+                    );
+                  }}
                   className="mt-2 w-full"
                 />
               </label>
