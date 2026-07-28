@@ -1,0 +1,20 @@
+[Unit]
+Description=Stock app health check and safe recovery
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/stock-health-watch
+User=root
+Group=root
+Nice=10
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/stock-health-watch /var/lock /opt/stock-app /var/backups/stock-app
+
+[Install]
+WantedBy=multi-user.target
