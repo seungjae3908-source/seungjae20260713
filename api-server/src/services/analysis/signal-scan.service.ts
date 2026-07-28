@@ -31,9 +31,50 @@ const MIN_BARS = 60;
 const STOCK_MIN_SCORE = 72;
 const FUTURES_MIN_SCORE = 74;
 const GROUP_LIMIT = 10;
-const STOCK_POOL = 36;
-const COIN_SPOT_POOL = 24;
-const COIN_FUTURES_POOL = 30;
+// 공급자 제한을 넘기지 않으면서도 거래대금 상위 후보를 충분히 비교한다.
+const STOCK_POOL = 16;
+const COIN_SPOT_POOL = 16;
+const COIN_FUTURES_POOL = 18;
+const STOCK_CONCURRENCY = 4;
+const COIN_CONCURRENCY = 4;
+const PROVIDER_BUDGET_MS = 6_000;
+const INITIAL_SCAN_BUDGET_MS = 18_000;
+
+async function withBudget<T>(promise: Promise<T>, ms = PROVIDER_BUDGET_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('SCAN_PROVIDER_TIMEOUT')), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function mapLimit<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  worker: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  const runners = Array.from(
+    { length: Math.min(Math.max(1, concurrency), values.length) },
+    async () => {
+      while (true) {
+        const index = cursor;
+        cursor += 1;
+        if (index >= values.length) return;
+        results[index] = await worker(values[index], index);
+      }
+    },
+  );
+  await Promise.all(runners);
+  return results;
+}
 
 export interface ScanCandidate {
   ticker: string;
@@ -297,12 +338,14 @@ function makeCandidate(
 
 async function collectStock(market: 'KR' | 'US'): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
   const pool = CATALOG.filter((e) => e.market === market).slice(0, STOCK_POOL);
-  const settled = await Promise.all(
-    pool.map(async (entry) => {
+  const settled = await mapLimit(
+    pool,
+    STOCK_CONCURRENCY,
+    async (entry) => {
       const [quoteResult, intradayResult, dailyResult] = await Promise.allSettled([
-        MarketDataService.getQuote(entry.ticker),
-        MarketDataService.getCandles(entry.ticker, '15m'),
-        MarketDataService.getCandles(entry.ticker, '1D'),
+        withBudget(MarketDataService.getQuote(entry.ticker)),
+        withBudget(MarketDataService.getCandles(entry.ticker, '15m')),
+        withBudget(MarketDataService.getCandles(entry.ticker, '1D')),
       ]);
       if (
         quoteResult.status === 'rejected' ||
@@ -339,7 +382,7 @@ async function collectStock(market: 'KR' | 'US'): Promise<{ items: RawItem[]; sc
       });
 
       return { items, errors };
-    }),
+    },
   );
 
   return {
@@ -354,47 +397,51 @@ async function collectCoinSpot(): Promise<{ items: RawItem[]; scanned: number; p
   let providerErrors = 0;
   const items: RawItem[] = [];
 
-  // Upbit candle API 호출 제한을 지키며 15분봉과 일봉을 순차 조회한다.
-  for (const t of tickers) {
-    const sources: Array<{ timeframe: '15m' | '1D'; candles: Bar[] | null }> = [];
-    for (const timeframe of ['15m', '1D'] as const) {
-      try {
-        sources.push({
-          timeframe,
-          candles: await fetchUpbitCandles(t.symbol, 200, timeframe),
-        });
-      } catch {
-        providerErrors += 1;
+  // 순차 48회 호출 대신 제한된 동시성으로 조회해 초기 로딩을 줄이고
+  // 업비트의 요청 제한도 넘지 않도록 한다.
+  const settled = await mapLimit(tickers, COIN_CONCURRENCY, async (ticker) => {
+    const sources = await Promise.allSettled([
+      withBudget(fetchUpbitCandles(ticker.symbol, 200, '15m')),
+      withBudget(fetchUpbitCandles(ticker.symbol, 200, '1D')),
+    ]);
+    const timeframes: Array<'15m' | '1D'> = ['15m', '1D'];
+    const rows: RawItem[] = [];
+    let errors = 0;
+    sources.forEach((source, index) => {
+      if (source.status === 'rejected') {
+        errors += 1;
+        return;
       }
-      await new Promise((resolve) => setTimeout(resolve, 120));
-    }
-
-    for (const source of sources) {
-      const analyzed = source.candles ? analyze(source.candles) : null;
-      if (!analyzed || t.price == null) continue;
-      items.push({
-        ticker: t.symbol,
-        name: t.symbol,
-        price: t.price,
-        changePercent: t.changePercent,
+      const analyzed = analyze(source.value);
+      if (!analyzed || ticker.price == null) return;
+      rows.push({
+        ticker: ticker.symbol,
+        name: ticker.symbol,
+        price: ticker.price,
+        changePercent: ticker.changePercent,
         currency: 'KRW',
         market: 'spot',
         analyzed,
-        timeframe: source.timeframe,
+        timeframe: timeframes[index],
       });
-    }
-  }
+    });
+    return { items: rows, errors };
+  });
 
+  providerErrors = settled.reduce((sum, result) => sum + result.errors, 0);
+  items.push(...settled.flatMap((result) => result.items));
   return { items, scanned: tickers.length, providerErrors };
 }
 
 async function collectCoinFutures(): Promise<{ items: RawItem[]; scanned: number; providerErrors: number }> {
   const tickers = await fetchBitgetTopTickers(COIN_FUTURES_POOL);
-  const settled = await Promise.all(
-    tickers.map(async (t) => {
+  const settled = await mapLimit(
+    tickers,
+    COIN_CONCURRENCY,
+    async (t) => {
       const sources = await Promise.allSettled([
-        fetchBitgetCandles(t.symbol, 200, '15m'),
-        fetchBitgetCandles(t.symbol, 200, '1D'),
+        withBudget(fetchBitgetCandles(t.symbol, 200, '15m')),
+        withBudget(fetchBitgetCandles(t.symbol, 200, '1D')),
       ]);
       const timeframes: Array<'15m' | '1D'> = ['15m', '1D'];
       const items: RawItem[] = [];
@@ -420,7 +467,7 @@ async function collectCoinFutures(): Promise<{ items: RawItem[]; scanned: number
       });
 
       return { items, errors };
-    }),
+    },
   );
 
   return {
@@ -706,12 +753,15 @@ function buildFuturesGroups(items: RawItem[], dataAsOf: string): ScanGroup[] {
   ];
 }
 
-export async function getSignalScan(
+const lastSuccessfulScans = new Map<string, SignalScanResult>();
+const backgroundRefreshes = new Map<string, Promise<SignalScanResult>>();
+
+async function refreshSignalScan(
+  key: string,
+  ttl: number,
   asset: 'stock' | 'coin',
   market: string,
 ): Promise<SignalScanResult> {
-  const key = `signal-scan:v2-optimized:${asset}:${market}`;
-  const ttl = asset === 'coin' ? COIN_SCAN_TTL : STOCK_SCAN_TTL;
   return cached(key, ttl, async () => {
     const generatedAt = new Date().toISOString();
     let collected: { items: RawItem[]; scanned: number; providerErrors: number };
@@ -729,7 +779,7 @@ export async function getSignalScan(
       groups = buildBuySellGroups(collected.items, generatedAt);
     }
 
-    return {
+    const result: SignalScanResult = {
       ok: true,
       asset,
       market,
@@ -738,5 +788,36 @@ export async function getSignalScan(
       providerErrors: collected.providerErrors,
       groups,
     };
+    lastSuccessfulScans.set(key, result);
+    return result;
   });
+}
+
+export async function getSignalScan(
+  asset: 'stock' | 'coin',
+  market: string,
+): Promise<SignalScanResult> {
+  const key = `signal-scan:v3-bounded:${asset}:${market}`;
+  const ttl = asset === 'coin' ? COIN_SCAN_TTL : STOCK_SCAN_TTL;
+  const previous = lastSuccessfulScans.get(key);
+
+  // 직전 정상 결과가 있으면 즉시 반환하고 새 결과는 뒤에서 갱신한다.
+  if (previous) {
+    if (!backgroundRefreshes.has(key)) {
+      const refresh = refreshSignalScan(key, ttl, asset, market)
+        .catch((error) => {
+          console.warn(`[signal-scan] background refresh failed: ${key}`, error);
+          return previous;
+        })
+        .finally(() => backgroundRefreshes.delete(key));
+      backgroundRefreshes.set(key, refresh);
+    }
+    return previous;
+  }
+
+  // 서버 재시작 직후 첫 조회도 무한 대기하지 않도록 전체 시간 예산을 둔다.
+  return withBudget(
+    refreshSignalScan(key, ttl, asset, market),
+    INITIAL_SCAN_BUDGET_MS,
+  );
 }
