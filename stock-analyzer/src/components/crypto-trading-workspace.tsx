@@ -89,6 +89,14 @@ type PatternSignal = {
   label: string;
   direction: "LONG" | "SHORT" | "NEUTRAL";
   weight: number;
+  startIndex: number;
+  endIndex: number;
+  stage: "START" | "DEVELOPING" | "COMPLETED";
+};
+
+type PatternRegion = Omit<PatternSignal, "stage"> & {
+  stage: PatternSignal["stage"] | "INVALIDATED";
+  invalidatedCycles: number;
 };
 
 type Analysis = {
@@ -449,25 +457,25 @@ function detectPatterns(candles: Candle[], support: number, resistance: number) 
   const upperWick = last.high - Math.max(last.open, last.close);
 
   if (last.close > recentHigh && last.volume > (average(recent.map((row) => row.volume)) ?? 0) * 1.3) {
-    patterns.push({ key: "breakout", label: "거래량 동반 상단 돌파", direction: "LONG", weight: 14 });
+    patterns.push({ key: "breakout", label: "거래량 동반 상단 돌파", direction: "LONG", weight: 14, startIndex: Math.max(0, candles.length - 20), endIndex: candles.length - 1, stage: "COMPLETED" });
   }
   if (last.close < recentLow && last.volume > (average(recent.map((row) => row.volume)) ?? 0) * 1.3) {
-    patterns.push({ key: "breakdown", label: "거래량 동반 하단 이탈", direction: "SHORT", weight: 14 });
+    patterns.push({ key: "breakdown", label: "거래량 동반 하단 이탈", direction: "SHORT", weight: 14, startIndex: Math.max(0, candles.length - 20), endIndex: candles.length - 1, stage: "COMPLETED" });
   }
   if (previous.close < previous.open && last.close > last.open && last.open <= previous.close && last.close >= previous.open) {
-    patterns.push({ key: "bullish-engulf", label: "상승 장악형", direction: "LONG", weight: 8 });
+    patterns.push({ key: "bullish-engulf", label: "상승 장악형", direction: "LONG", weight: 8, startIndex: candles.length - 2, endIndex: candles.length - 1, stage: "COMPLETED" });
   }
   if (previous.close > previous.open && last.close < last.open && last.open >= previous.close && last.close <= previous.open) {
-    patterns.push({ key: "bearish-engulf", label: "하락 장악형", direction: "SHORT", weight: 8 });
+    patterns.push({ key: "bearish-engulf", label: "하락 장악형", direction: "SHORT", weight: 8, startIndex: candles.length - 2, endIndex: candles.length - 1, stage: "COMPLETED" });
   }
   if (lowerWick > body * 2 && lowerWick > upperWick * 1.5 && last.close > last.open) {
-    patterns.push({ key: "hammer", label: "망치형 반등", direction: "LONG", weight: 7 });
+    patterns.push({ key: "hammer", label: "망치형 반등", direction: "LONG", weight: 7, startIndex: candles.length - 1, endIndex: candles.length - 1, stage: "START" });
   }
   if (upperWick > body * 2 && upperWick > lowerWick * 1.5 && last.close < last.open) {
-    patterns.push({ key: "shooting-star", label: "유성형 반락", direction: "SHORT", weight: 7 });
+    patterns.push({ key: "shooting-star", label: "유성형 반락", direction: "SHORT", weight: 7, startIndex: candles.length - 1, endIndex: candles.length - 1, stage: "START" });
   }
   if (body / range < 0.12) {
-    patterns.push({ key: "doji", label: "도지·방향 대기", direction: "NEUTRAL", weight: 0 });
+    patterns.push({ key: "doji", label: "도지·방향 대기", direction: "NEUTRAL", weight: 0, startIndex: candles.length - 1, endIndex: candles.length - 1, stage: "START" });
   }
 
   const closes = candles.slice(-35).map((row) => row.close);
@@ -480,13 +488,13 @@ function detectPatterns(candles: Candle[], support: number, resistance: number) 
   if (localLows.length >= 2) {
     const [left, right] = localLows.slice(-2);
     if (right.index - left.index >= 4 && Math.abs(right.value - left.value) / Math.max(left.value, 1) < 0.012 && last.close > support) {
-      patterns.push({ key: "double-bottom", label: "쌍바닥 후보", direction: "LONG", weight: 9 });
+      patterns.push({ key: "double-bottom", label: "쌍바닥 후보", direction: "LONG", weight: 9, startIndex: Math.max(0, candles.length - closes.length + left.index), endIndex: Math.max(0, candles.length - closes.length + right.index), stage: "DEVELOPING" });
     }
   }
   if (localHighs.length >= 2) {
     const [left, right] = localHighs.slice(-2);
     if (right.index - left.index >= 4 && Math.abs(right.value - left.value) / Math.max(left.value, 1) < 0.012 && last.close < resistance) {
-      patterns.push({ key: "double-top", label: "쌍봉 후보", direction: "SHORT", weight: 9 });
+      patterns.push({ key: "double-top", label: "쌍봉 후보", direction: "SHORT", weight: 9, startIndex: Math.max(0, candles.length - closes.length + left.index), endIndex: Math.max(0, candles.length - closes.length + right.index), stage: "DEVELOPING" });
     }
   }
   return patterns.slice(0, 6);
@@ -894,6 +902,49 @@ function chartMarkers(candles: Candle[], analysis: Analysis) {
   ];
 }
 
+const PATTERN_STAGE_META = {
+  START: { label: "시작", color: "#eab308" },
+  DEVELOPING: { label: "진행", color: "#f97316" },
+  COMPLETED: { label: "완성", color: "#22c55e" },
+  INVALIDATED: { label: "이탈", color: "#ef4444" },
+} as const;
+
+function reconcilePatternRegions(
+  current: PatternSignal[],
+  previous: Map<string, PatternRegion>,
+) {
+  const next = new Map<string, PatternRegion>();
+  for (const pattern of current) {
+    next.set(pattern.key, { ...pattern, invalidatedCycles: 0 });
+  }
+  for (const [key, region] of previous) {
+    if (next.has(key)) continue;
+    const invalidatedCycles =
+      region.stage === "INVALIDATED" ? region.invalidatedCycles + 1 : 1;
+    if (invalidatedCycles <= 2) {
+      next.set(key, {
+        ...region,
+        stage: "INVALIDATED",
+        invalidatedCycles,
+      });
+    }
+  }
+  return next;
+}
+
+function patternAtIndex(regions: PatternRegion[], index: number) {
+  const matches = regions.filter(
+    (region) => index >= region.startIndex && index <= region.endIndex,
+  );
+  const priority: Record<PatternRegion["stage"], number> = {
+    START: 1,
+    DEVELOPING: 2,
+    COMPLETED: 3,
+    INVALIDATED: 4,
+  };
+  return matches.sort((left, right) => priority[right.stage] - priority[left.stage])[0] ?? null;
+}
+
 function FuturesChart({
   candles,
   analysis,
@@ -906,10 +957,32 @@ function FuturesChart({
   overlays: Record<OverlayKey, boolean>;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<AnyObj | null>(null);
+  const indicatorSeriesRef = useRef<AnyObj[]>([]);
+  const priceLinesRef = useRef<AnyObj[]>([]);
+  const previousCandlesRef = useRef<Candle[]>([]);
+  const previousRegionsRef = useRef<Map<string, PatternRegion>>(new Map());
+  const regionsRef = useRef<PatternRegion[]>([]);
+  const candlesRef = useRef<Candle[]>(candles);
+  const [chartRevision, setChartRevision] = useState(0);
+  const [selectedPattern, setSelectedPattern] = useState<PatternRegion | null>(null);
+
+  const patternRegions = useMemo(() => {
+    const next = reconcilePatternRegions(
+      analysis.patterns,
+      previousRegionsRef.current,
+    );
+    previousRegionsRef.current = next;
+    return [...next.values()];
+  }, [analysis.patterns, candles.at(-1)?.time]);
+
+  regionsRef.current = patternRegions;
+  candlesRef.current = candles;
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !candles.length) return;
+    if (!container) return;
     const dark = document.documentElement.classList.contains("dark");
     const chart = createChart(container, {
       width: container.clientWidth,
@@ -926,7 +999,7 @@ function FuturesChart({
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: {
         borderVisible: false,
-        scaleMargins: { top: 0.08, bottom: overlays.volume ? 0.22 : 0.08 },
+        scaleMargins: { top: 0.08, bottom: 0.22 },
       },
       timeScale: {
         borderVisible: false,
@@ -949,33 +1022,105 @@ function FuturesChart({
       priceLineVisible: true,
       lastValueVisible: true,
     });
-    candleSeries.setData(candles.map((row) => ({
-      time: row.time,
-      open: row.open,
-      high: row.high,
-      low: row.low,
-      close: row.close,
-    })));
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    previousCandlesRef.current = [];
+    setChartRevision((value) => value + 1);
 
-    if (overlays.ma5) addLine(chart, rollingSma(candles, 5), { color: "#f59e0b", lineWidth: 1, title: "MA5" });
-    if (overlays.ma20) addLine(chart, rollingSma(candles, 20), { color: "#8b5cf6", lineWidth: 2, title: "MA20" });
-    if (overlays.ma60) addLine(chart, rollingSma(candles, 60), { color: "#10b981", lineWidth: 1, title: "MA60" });
+    const clickHandler = (param: AnyObj) => {
+      if (param.time == null) return;
+      const index = candlesRef.current.findIndex(
+        (candle) => Number(candle.time) === Number(param.time),
+      );
+      if (index < 0) return;
+      setSelectedPattern(patternAtIndex(regionsRef.current, index));
+    };
+    chart.subscribeClick(clickHandler as any);
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width) chart.applyOptions({ width: Math.max(1, width) });
+    });
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      chart.unsubscribeClick(clickHandler as any);
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      indicatorSeriesRef.current = [];
+      priceLinesRef.current = [];
+    };
+  }, [timeframe]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    if (!chart || !candleSeries || !candles.length) return;
+    const rows = candles.map((row, index) => {
+      const region = patternAtIndex(patternRegions, index);
+      const patternColor = region ? PATTERN_STAGE_META[region.stage].color : null;
+      return {
+        time: row.time,
+        open: row.open,
+        high: row.high,
+        low: row.low,
+        close: row.close,
+        ...(patternColor
+          ? {
+              color: patternColor,
+              borderColor: patternColor,
+              wickColor: patternColor,
+            }
+          : {}),
+      };
+    });
+    const previous = previousCandlesRef.current;
+    const onlyLastChanged =
+      previous.length === candles.length &&
+      previous.length > 1 &&
+      previous.slice(0, -1).every((row, index) => row.time === candles[index]?.time);
+    if (onlyLastChanged) {
+      candleSeries.update(rows.at(-1)!);
+    } else {
+      candleSeries.setData(rows);
+      if (!previous.length) chart.timeScale().fitContent();
+    }
+    previousCandlesRef.current = candles;
+    candleSeries.setMarkers(
+      overlays.arrows ? (chartMarkers(candles, analysis) as any) : [],
+    );
+  }, [analysis, candles, overlays.arrows, patternRegions, chartRevision]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    if (!chart || !candleSeries || !candles.length) return;
+    for (const series of indicatorSeriesRef.current) chart.removeSeries(series as any);
+    indicatorSeriesRef.current = [];
+    for (const line of priceLinesRef.current) candleSeries.removePriceLine(line);
+    priceLinesRef.current = [];
+    const keep = (series: AnyObj) => {
+      indicatorSeriesRef.current.push(series);
+      return series;
+    };
+
+    if (overlays.ma5) keep(addLine(chart, rollingSma(candles, 5), { color: "#f59e0b", lineWidth: 1, title: "MA5" }));
+    if (overlays.ma20) keep(addLine(chart, rollingSma(candles, 20), { color: "#8b5cf6", lineWidth: 2, title: "MA20" }));
+    if (overlays.ma60) keep(addLine(chart, rollingSma(candles, 60), { color: "#10b981", lineWidth: 1, title: "MA60" }));
     if (overlays.bollinger) {
       const band = rollingBollinger(candles);
-      addLine(chart, band.upper, { color: "rgba(14,165,233,0.75)", lineWidth: 1, title: "BB 상단" });
-      addLine(chart, band.middle, { color: "rgba(14,165,233,0.35)", lineWidth: 1, lineStyle: LineStyle.Dashed, title: "BB 중심" });
-      addLine(chart, band.lower, { color: "rgba(14,165,233,0.75)", lineWidth: 1, title: "BB 하단" });
+      keep(addLine(chart, band.upper, { color: "rgba(14,165,233,0.75)", lineWidth: 1, title: "BB 상단" }));
+      keep(addLine(chart, band.middle, { color: "rgba(14,165,233,0.35)", lineWidth: 1, lineStyle: LineStyle.Dashed, title: "BB 중심" }));
+      keep(addLine(chart, band.lower, { color: "rgba(14,165,233,0.75)", lineWidth: 1, title: "BB 하단" }));
     }
-    if (overlays.vwap) {
-      addLine(chart, rollingVwap(candles), { color: "#06b6d4", lineWidth: 2, lineStyle: LineStyle.Dashed, title: "VWAP" });
-    }
+    if (overlays.vwap) keep(addLine(chart, rollingVwap(candles), { color: "#06b6d4", lineWidth: 2, lineStyle: LineStyle.Dashed, title: "VWAP" }));
     if (overlays.volume) {
-      const volumeSeries = chart.addHistogramSeries({
+      const volumeSeries = keep(chart.addHistogramSeries({
         priceFormat: { type: "volume" },
         priceScaleId: "volume",
         lastValueVisible: false,
         priceLineVisible: false,
-      });
+      }));
       volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
       volumeSeries.setData(candles.map((row) => ({
         time: row.time,
@@ -983,6 +1128,11 @@ function FuturesChart({
         color: row.close >= row.open ? "rgba(22,163,74,0.40)" : "rgba(220,38,38,0.40)",
       })));
     }
+    chart.applyOptions({
+      rightPriceScale: {
+        scaleMargins: { top: 0.08, bottom: overlays.volume ? 0.22 : 0.08 },
+      },
+    });
     if (overlays.levels) {
       const lines = [
         { price: analysis.resistance2, color: "#f97316", title: "2차 저항", style: LineStyle.Dotted },
@@ -992,31 +1142,45 @@ function FuturesChart({
       ];
       for (const line of lines) {
         if (!(line.price > 0)) continue;
-        candleSeries.createPriceLine({
+        priceLinesRef.current.push(candleSeries.createPriceLine({
           price: line.price,
           color: line.color,
           lineWidth: 1,
           lineStyle: line.style,
           axisLabelVisible: true,
           title: line.title,
-        });
+        }));
       }
     }
-    if (overlays.arrows) candleSeries.setMarkers(chartMarkers(candles, analysis) as any);
+  }, [analysis, candles, overlays, chartRevision]);
 
-    chart.timeScale().fitContent();
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width;
-      if (width) chart.applyOptions({ width: Math.max(1, width) });
-    });
-    observer.observe(container);
-    return () => {
-      observer.disconnect();
-      chart.remove();
-    };
-  }, [analysis, candles, overlays, timeframe]);
-
-  return <div ref={containerRef} className="h-[390px] w-full" />;
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1.5 border-b border-card-border bg-secondary/30 px-3 py-2">
+        {Object.entries(PATTERN_STAGE_META).map(([stage, meta]) => (
+          <span key={stage} className="flex items-center gap-1 text-[9px] font-black text-muted-foreground">
+            <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: meta.color }} />
+            {meta.label}
+          </span>
+        ))}
+      </div>
+      <div ref={containerRef} className="h-[390px] w-full" />
+      {selectedPattern && (
+        <button
+          type="button"
+          onClick={() => setSelectedPattern(null)}
+          className="w-full border-t border-card-border bg-secondary/50 px-3 py-2 text-left"
+        >
+          <p className="text-[10px] font-black" style={{ color: PATTERN_STAGE_META[selectedPattern.stage].color }}>
+            {selectedPattern.label} · {PATTERN_STAGE_META[selectedPattern.stage].label}
+          </p>
+          <p className="mt-1 text-[9px] font-bold text-muted-foreground">
+            {selectedPattern.startIndex + 1}번 봉부터 {selectedPattern.endIndex + 1}번 봉 · 차트의 다른 패턴 봉을 눌러 상세 확인
+          </p>
+        </button>
+      )}
+    </div>
+  );
 }
 
 export function CryptoTradingWorkspace({
@@ -1751,7 +1915,7 @@ export function CryptoTradingWorkspace({
         <section ref={chartSectionRef} className="scroll-mt-4 rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-[10px] font-black text-primary">실시간 차트 생중계</p>
+              <p className="text-[10px] font-black text-primary">실시간 차트 분석</p>
               <h2 className="mt-1 text-lg font-black">{symbol}</h2>
             </div>
             <div className="text-right">
@@ -1951,7 +2115,7 @@ export function CryptoTradingWorkspace({
         <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-black text-primary">AI 차트 실시간 생중계</p>
+              <p className="text-[10px] font-black text-primary">실시간 신호 분석</p>
               <h2 className="mt-1 text-sm font-black">봉·거래량·지표·패턴 변화</h2>
             </div>
             <button

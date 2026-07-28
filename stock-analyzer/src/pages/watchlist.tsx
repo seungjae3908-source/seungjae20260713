@@ -17,16 +17,13 @@ import {
   Trash2,
   TrendingDown,
   TrendingUp,
+  X,
 } from "lucide-react";
 import { useQuotes } from "@/hooks/use-stock-data";
 import { BottomNav } from "@/components/bottom-nav";
 import { LoadingState } from "@/components/data-state";
 import { api, apiGet, type SearchResult } from "@/lib/api";
 import { authorizedFetch } from "@/lib/auth-fetch";
-import {
-  classifyStock,
-  stockClassBadgeClass,
-} from "@/lib/stock-classifier";
 import {
   displayStockName,
   formatAppPercent,
@@ -35,6 +32,7 @@ import {
   setWatchlistTargetPrice,
   toggleWatchlistItem,
   WATCHLIST_CHANGE_EVENT,
+  writeWatchlistItems,
   type WatchlistItem,
 } from "@/lib/stock-display";
 import { cn } from "@/lib/utils";
@@ -55,6 +53,13 @@ type PriceAlertRow = {
   push_enabled?: boolean;
   created_at?: string;
   updated_at?: string;
+};
+
+type CoinTickerRow = {
+  symbol?: string;
+  price?: number | null;
+  changePercent?: number | null;
+  changePercent24h?: number | null;
 };
 
 export default function WatchlistPage() {
@@ -85,7 +90,13 @@ export default function WatchlistPage() {
     () =>
       Array.from(
         new Set([
-          ...items.map((item) => item.ticker),
+          ...items
+            .filter(
+              (item) =>
+                item.assetType !== "coinSpot" &&
+                item.assetType !== "coinFutures",
+            )
+            .map((item) => item.ticker),
           ...stockAlerts
             .map((row) => String(row.symbol ?? "").trim().toUpperCase())
             .filter(Boolean),
@@ -95,6 +106,35 @@ export default function WatchlistPage() {
   );
 
   const { data, isLoading } = useQuotes(tickers);
+  const spotItems = items.filter((item) => item.assetType === "coinSpot");
+  const futuresItems = items.filter((item) => item.assetType === "coinFutures");
+  const spotQuotes = useQuery({
+    queryKey: [
+      "watchlist-spot-quotes",
+      spotItems.map((item) => item.ticker).sort().join(","),
+    ],
+    queryFn: () =>
+      apiGet<{ tickers?: CoinTickerRow[]; updatedAt?: string }>(
+        `/crypto/spot/tickers?markets=${encodeURIComponent(
+          spotItems.map((item) => item.ticker).join(","),
+        )}`,
+      ),
+    enabled: spotItems.length > 0,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: true,
+    retry: 2,
+  });
+  const futuresQuotes = useQuery({
+    queryKey: ["watchlist-futures-quotes"],
+    queryFn: () =>
+      apiGet<{ tickers?: CoinTickerRow[]; updatedAt?: string }>(
+        "/crypto/futures/tickers",
+      ),
+    enabled: futuresItems.length > 0,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: true,
+    retry: 2,
+  });
 
   useEffect(() => {
     const refresh = () => setItems(readWatchlistItems());
@@ -121,20 +161,102 @@ export default function WatchlistPage() {
 
   const rows = useMemo(
     () =>
-      items.map((item) => ({
-        ...item,
-        ...(quoteMap.get(item.ticker.toUpperCase()) as AnyObj | undefined),
-      })),
-    [items, quoteMap],
+      items.map((item) => {
+        const assetType =
+          item.assetType ??
+          (item.market === "US" ? "stockUS" : "stockKR");
+        const coinRows =
+          assetType === "coinSpot"
+            ? spotQuotes.data?.tickers
+            : assetType === "coinFutures"
+              ? futuresQuotes.data?.tickers
+              : null;
+        const coinQuote = coinRows?.find(
+          (quote) =>
+            String(quote.symbol ?? "").toUpperCase() ===
+            item.ticker.toUpperCase(),
+        );
+        const cachedPlan = queryClient.getQueryData<Record<string, unknown>>([
+          "chart-relay-ai",
+          assetType,
+          item.ticker.toUpperCase(),
+          "5m",
+        ]);
+        const cachedSignals = queryClient.getQueryData<{
+          signals?: Array<Record<string, unknown>>;
+        }>([
+          "chart-relay-signals",
+          assetType,
+          item.ticker.toUpperCase(),
+          "5m",
+        ]);
+        return {
+          ...item,
+          assetType,
+          ...(quoteMap.get(item.ticker.toUpperCase()) as AnyObj | undefined),
+          ...(coinQuote
+            ? {
+                price: coinQuote.price,
+                changePercent:
+                  coinQuote.changePercent ?? coinQuote.changePercent24h,
+              }
+            : {}),
+          liveStatus:
+            assetType === "coinSpot"
+              ? spotQuotes.isError
+                ? "지연"
+                : "REST 갱신"
+              : assetType === "coinFutures"
+                ? futuresQuotes.isError
+                  ? "지연"
+                  : "REST 갱신"
+                : "REST 갱신",
+          updatedAt:
+            assetType === "coinSpot"
+              ? spotQuotes.data?.updatedAt
+              : assetType === "coinFutures"
+                ? futuresQuotes.data?.updatedAt
+                : new Date().toISOString(),
+          aiDirection: cachedPlan?.view,
+          latestSignal: cachedSignals?.signals?.[0]?.name,
+          confidence:
+            cachedPlan?.confidence ??
+            cachedPlan?.confidenceScore ??
+            cachedPlan?.probability,
+        };
+      }),
+    [
+      futuresQuotes.data,
+      futuresQuotes.isError,
+      items,
+      queryClient,
+      quoteMap,
+      spotQuotes.data,
+      spotQuotes.isError,
+    ],
   );
 
-  const remove = (
+  const remove = async (
     event: MouseEvent<HTMLButtonElement>,
     row: WatchlistItem,
   ) => {
     event.stopPropagation();
+    const previous = readWatchlistItems();
     toggleWatchlistItem(row);
     setItems(readWatchlistItems());
+    try {
+      const response = await authorizedFetch(
+        `/api/watchlist/${encodeURIComponent(row.ticker)}?asset=${encodeURIComponent(
+          row.assetType ?? (row.market === "US" ? "stockUS" : "stockKR"),
+        )}`,
+        { method: "DELETE" },
+      );
+      if (!response.ok) throw new Error(String(response.status));
+    } catch {
+      writeWatchlistItems(previous);
+      setItems(previous);
+      window.alert("관심종목 삭제에 실패해 이전 상태로 되돌렸습니다.");
+    }
   };
 
   const deletePriceAlert = async (id: string) => {
@@ -214,19 +336,24 @@ export default function WatchlistPage() {
         {tab === "watchlist" ? (
           items.length === 0 ? (
             <EmptyState />
-          ) : isLoading ? (
+          ) : isLoading ||
+            (spotItems.length > 0 && spotQuotes.isLoading) ||
+            (futuresItems.length > 0 && futuresQuotes.isLoading) ? (
             <LoadingState label="관심종목 불러오는 중..." />
           ) : (
             <div className="space-y-2">
               {rows.map((row) => (
                 <WatchCard
-                  key={row.ticker}
+                  key={`${row.assetType ?? "stockKR"}:${row.ticker}`}
                   row={row}
                   onOpen={() =>
                     navigate(
-                      `/stock/${row.ticker}?back=${encodeURIComponent(
-                        "/watchlist",
-                      )}`,
+                      `/tech/chart-relay?asset=${encodeURIComponent(
+                        row.assetType ??
+                          (row.market === "US" ? "stockUS" : "stockKR"),
+                      )}&symbol=${encodeURIComponent(
+                        row.ticker,
+                      )}&interval=5m`,
                     )
                   }
                   onRemove={remove}
@@ -445,10 +572,15 @@ function PriceAlertWorkspace({
                 setSuggestionsOpen(true);
                 setMessage(null);
               }}
-              placeholder="종목명 또는 종목코드 검색"
+              placeholder=""
               autoComplete="off"
-              className="min-w-0 flex-1 bg-transparent text-sm font-bold text-foreground outline-none placeholder:text-muted-foreground"
+              className="min-w-0 flex-1 bg-transparent text-sm font-bold text-foreground outline-none"
             />
+            {searchText && (
+              <button type="button" onClick={() => { setSearchText(""); setSelected(null); setSuggestionsOpen(false); }} aria-label="검색어 지우기" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </label>
 
           {suggestionsOpen && deferredSearch.length >= 1 && !selected && (
@@ -719,16 +851,39 @@ function WatchCard({
     row: WatchlistItem,
   ) => void;
 }) {
-  const market = row.market === "US" ? "US" : "KR";
-  const currency = row.currency === "USD" ? "USD" : "KRW";
+  const assetType =
+    row.assetType ?? (row.market === "US" ? "stockUS" : "stockKR");
+  const market = assetType === "stockUS" ? "US" : "KR";
+  const currency =
+    assetType === "stockUS"
+      ? "USD"
+      : assetType === "coinFutures"
+        ? "USDT"
+        : "KRW";
   const name = displayStockName(row.ticker, row.name, market);
   const positive = (row.changePercent ?? 0) >= 0;
-
-  const classification = classifyStock({
-    ...row,
-    aiScore: row.aiScore ?? row.rating?.score,
-    changePercent: row.changePercent,
-  });
+  const updatedTime = Date.parse(String(row.updatedAt ?? ""));
+  const delayed =
+    Number.isFinite(updatedTime) && Date.now() - updatedTime > 60_000;
+  const confidenceNumber = Number(row.confidence);
+  const confidence =
+    Number.isFinite(confidenceNumber)
+      ? `${Math.max(
+          0,
+          Math.min(
+            100,
+            confidenceNumber <= 1 ? confidenceNumber * 100 : confidenceNumber,
+          ),
+        ).toFixed(0)}%`
+      : "산출 불가";
+  const assetLabel =
+    assetType === "stockKR"
+      ? "국내주식"
+      : assetType === "stockUS"
+        ? "해외주식"
+        : assetType === "coinSpot"
+          ? "코인 현물"
+          : "코인 선물";
 
   return (
     <article
@@ -747,7 +902,7 @@ function WatchCard({
           </h2>
 
           <p className="mt-0.5 text-xs font-bold text-muted-foreground">
-            {market === "US" ? `티커 ${row.ticker}` : row.ticker}
+            {assetLabel} · {market === "US" ? `티커 ${row.ticker}` : row.ticker}
           </p>
         </div>
 
@@ -789,26 +944,41 @@ function WatchCard({
           </p>
         </div>
 
-        <div
-          className={cn(
-            "rounded-2xl border p-2",
-            stockClassBadgeClass(
-              (row as AnyObj).grade?.label ?? classification.label,
-            ),
-          )}
-        >
-          <p className="text-[11px]">분류</p>
-
-          <p className="mt-1 text-sm font-extrabold">
-            {(row as AnyObj).grade?.label ?? classification.label}
+        <div className="rounded-2xl border border-card-border bg-secondary/70 p-2">
+          <p className="text-[11px] text-muted-foreground">갱신 상태</p>
+          <p
+            className={cn(
+              "mt-1 text-xs font-extrabold",
+              delayed ? "text-warning" : "text-positive",
+            )}
+          >
+            {delayed ? "데이터 지연" : String(row.liveStatus ?? "REST 갱신")}
           </p>
         </div>
       </div>
 
       <TargetPriceRow row={row} />
 
-      <p className="mt-3 break-keep rounded-2xl bg-secondary/70 p-3 text-xs leading-relaxed text-muted-foreground">
-        {classification.reason}
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-xl bg-secondary/70 p-2">
+          <p className="text-[10px] font-bold text-muted-foreground">최신 AI 방향</p>
+          <p className="mt-1 text-xs font-black">
+            {String(row.aiDirection ?? "캐시 없음")}
+          </p>
+        </div>
+        <div className="rounded-xl bg-secondary/70 p-2">
+          <p className="text-[10px] font-bold text-muted-foreground">최신 신호</p>
+          <p className="mt-1 truncate text-xs font-black">
+            {String(row.latestSignal ?? "캐시 없음")}
+          </p>
+        </div>
+        <div className="rounded-xl bg-secondary/70 p-2">
+          <p className="text-[10px] font-bold text-muted-foreground">신뢰도</p>
+          <p className="mt-1 text-xs font-black">{confidence}</p>
+        </div>
+      </div>
+      <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">
+        AI 값은 기존 차트 분석 캐시가 있을 때만 표시하며 추가 분석 요청을 만들지 않습니다.
       </p>
     </article>
   );

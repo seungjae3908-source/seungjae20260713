@@ -21,22 +21,27 @@ interface TickerMapEntry {
 }
 
 async function getCikByTicker(ticker: string): Promise<string> {
-  const map = await cached('sec:tickermap', TTL.mapping, async () => {
-    const data = await fetchJson<Record<string, TickerMapEntry>>(
-      'https://www.sec.gov/files/company_tickers.json',
-      { provider: 'sec-edgar', headers: HEADERS },
-    );
-    const byTicker = new Map<string, string>();
-    for (const key of Object.keys(data)) {
-      const entry = data[key];
-      byTicker.set(
-        entry.ticker.toUpperCase(),
-        String(entry.cik_str).padStart(10, '0'),
+  // Map 인스턴스는 Supabase jsonb 캐시에 저장하면 일반 객체로 바뀌어
+  // 재시작 뒤 map.get 오류가 발생할 수 있습니다. JSON으로 안전하게 저장되는
+  // Record를 사용하고, 이전의 손상된 캐시를 피하려고 키 버전을 올립니다.
+  const byTicker = await cached<Record<string, string>>(
+    'sec:tickermap:v2',
+    TTL.mapping,
+    async () => {
+      const data = await fetchJson<Record<string, TickerMapEntry>>(
+        'https://www.sec.gov/files/company_tickers.json',
+        { provider: 'sec-edgar', headers: HEADERS },
       );
-    }
-    return byTicker;
-  });
-  const cik = map.get(ticker.toUpperCase());
+      const lookup: Record<string, string> = {};
+      for (const key of Object.keys(data)) {
+        const entry = data[key];
+        if (!entry?.ticker) continue;
+        lookup[entry.ticker.toUpperCase()] = String(entry.cik_str).padStart(10, '0');
+      }
+      return lookup;
+    },
+  );
+  const cik = byTicker[ticker.toUpperCase()];
   if (!cik) {
     throw new ProviderError('UNAVAILABLE', 'sec-edgar', `no CIK for ${ticker}`);
   }
@@ -187,234 +192,39 @@ export async function getCompanyFactsSummary(
   });
 }
 
-export interface FilingCounts {
-  offering: number; // S-1/S-3/424B — dilutive offerings
-  reverseSplit: number; // 8-K item 3.03 style structural changes (proxy)
-  delisting: number; // Form 25 / 25-NSE
-  eightK: number; // recent 8-K material events
-  totalRecent: number;
+export async function getRiskAnalysis(
+  ticker: string,
+): Promise<{
+  riskLevel: 'low' | 'medium' | 'high';
+  summary: string;
+  events: string[];
+  filings: SecFiling[];
+}> {
+  const filings = await getFilings(ticker, 40);
+  const text = filings
+    .map((f) => `${f.form} ${f.description}`.toLowerCase())
+    .join(' ');
+  const events: string[] = [];
+  if (/s-1|s-3|424b|prospectus/.test(text)) events.push('증자·신주발행 관련 공시');
+  if (/8-k/.test(text)) events.push('중요 경영사항 공시(8-K)');
+  if (/10-k/.test(text)) events.push('연차보고서(10-K)');
+  if (/10-q/.test(text)) events.push('분기보고서(10-Q)');
+  const dilutionCount = filings.filter((f) => /s-1|s-3|424b/i.test(`${f.form} ${f.description}`)).length;
+  const riskLevel = dilutionCount >= 3 ? 'high' : dilutionCount >= 1 ? 'medium' : 'low';
+  const summary =
+    riskLevel === 'high'
+      ? '최근 증자·신주발행 관련 공시가 반복되어 희석 위험을 주의해야 합니다.'
+      : riskLevel === 'medium'
+        ? '최근 증자·신주발행 관련 공시가 있어 희석 가능성을 확인해야 합니다.'
+        : '최근 공시에서 반복적인 증자·희석 신호가 두드러지지 않습니다.';
+  return { riskLevel, summary, events, filings };
 }
 
-// Rough form-based classification. Real filings, real counts per company.
-export async function getFilingCounts(ticker: string): Promise<FilingCounts> {
-  const cik = await getCikByTicker(ticker);
-  return cached(`sec:filings:${cik}`, TTL.risk, async () => {
-    const data = await fetchJson<Submissions>(
-      `https://data.sec.gov/submissions/CIK${cik}.json`,
-      { provider: 'sec-edgar', headers: HEADERS },
-    );
-    const forms = data.filings?.recent?.form ?? [];
-    const dates = data.filings?.recent?.filingDate ?? [];
-    const cutoff = Date.now() - 365 * 24 * 60 * 60 * 1000;
-
-    const counts: FilingCounts = {
-      offering: 0,
-      reverseSplit: 0,
-      delisting: 0,
-      eightK: 0,
-      totalRecent: 0,
-    };
-
-    for (let i = 0; i < forms.length; i++) {
-      const form = (forms[i] ?? '').toUpperCase();
-      const date = dates[i] ? new Date(dates[i]).getTime() : 0;
-      if (date < cutoff) continue;
-      counts.totalRecent++;
-      if (/^S-1|^S-3|^424B/.test(form)) counts.offering++;
-      if (form === '25' || form === '25-NSE') counts.delisting++;
-      if (form.startsWith('8-K')) counts.eightK++;
-    }
-    // Reverse splits are usually disclosed via 8-K item 3.03; without item-level
-    // parsing we use a conservative proxy: heavy 8-K + offering activity.
-    counts.reverseSplit =
-      counts.offering >= 2 && counts.eightK >= 6 ? 1 : 0;
-    return counts;
-  });
-}
-
-// --- Fundamentals (real annual/quarterly statements via SEC XBRL) -----------
-
-export interface FinancialsRaw {
-  annual: FinancialRow[];
-  quarterly: FinancialRow[];
-  latest: { equity: number; liabilities: number; netIncome: number; cash: number };
-}
-
-// Common stock (contributed capital) tags, used to populate `capital`.
-const CAPITAL_TAGS = [
-  'CommonStockValue',
-  'CommonStocksIncludingAdditionalPaidInCapital',
-];
-
-interface XbrlPoint {
-  start?: string;
-  end: string;
-  val: number;
-  form?: string;
-}
-
-interface XbrlConcept {
-  units?: Record<string, XbrlPoint[]>;
-}
-
-function daysBetween(a: string, b: string): number {
-  return Math.abs(
-    (new Date(b).getTime() - new Date(a).getTime()) / 86_400_000,
-  );
-}
-
-async function concept(cik: string, tag: string): Promise<XbrlPoint[]> {
-  try {
-    const data = await fetchJson<XbrlConcept>(
-      `https://data.sec.gov/api/xbrl/companyconcept/CIK${cik}/us-gaap/${tag}.json`,
-      { provider: 'sec-edgar', headers: HEADERS },
-    );
-    const units = data.units ?? {};
-    const key = Object.keys(units)[0];
-    return key ? units[key] : [];
-  } catch {
-    return [];
-  }
-}
-
-async function firstConcept(cik: string, tags: string[]): Promise<XbrlPoint[]> {
-  for (const t of tags) {
-    const pts = await concept(cik, t);
-    if (pts.length) return pts;
-  }
-  return [];
-}
-
-// Annual flow (income-statement) values keyed by fiscal-year-end year.
-function annualFlow(pts: XbrlPoint[]): Map<string, number> {
-  const byYear = new Map<string, number>();
-  for (const p of pts) {
-    if (p.form !== '10-K' || !p.start) continue;
-    const dur = daysBetween(p.start, p.end);
-    if (dur < 300 || dur > 400) continue;
-    byYear.set(p.end.slice(0, 4), p.val);
-  }
-  return byYear;
-}
-
-// Instant (balance-sheet) values keyed by year-end, taking the latest report.
-function instantByYear(pts: XbrlPoint[]): Map<string, number> {
-  const byYear = new Map<string, number>();
-  for (const p of [...pts].sort((a, b) => a.end.localeCompare(b.end))) {
-    if (p.start) continue;
-    if (p.form !== '10-K' && p.form !== '10-Q') continue;
-    byYear.set(p.end.slice(0, 4), p.val);
-  }
-  return byYear;
-}
-
-// Trailing quarterly flow datapoints (≈90-day periods), sorted by end date.
-function quarterlyFlow(pts: XbrlPoint[]): { end: string; val: number }[] {
-  const m = new Map<string, number>();
-  for (const p of pts) {
-    if (!p.start) continue;
-    if (p.form !== '10-Q' && p.form !== '10-K') continue;
-    const dur = daysBetween(p.start, p.end);
-    if (dur < 80 || dur > 100) continue;
-    m.set(p.end, p.val);
-  }
-  return [...m.entries()]
-    .map(([end, val]) => ({ end, val }))
-    .sort((a, b) => a.end.localeCompare(b.end));
-}
-
-function instantAt(pts: XbrlPoint[], end: string): number {
-  const exact = pts.find((p) => !p.start && p.end === end);
-  return exact ? exact.val : 0;
-}
-
-const REVENUE_TAGS = [
-  'RevenueFromContractWithCustomerExcludingAssessedTax',
-  'Revenues',
-  'SalesRevenueNet',
-];
-
-export async function getFinancials(ticker: string): Promise<FinancialsRaw> {
-  const cik = await getCikByTicker(ticker);
-  return cached(`sec:financials:${cik}`, TTL.financials, async () => {
-    const [rev, op, net, cash, liab, equity, capital] = await Promise.all([
-      firstConcept(cik, REVENUE_TAGS),
-      concept(cik, 'OperatingIncomeLoss'),
-      concept(cik, 'NetIncomeLoss'),
-      firstConcept(cik, [
-        'CashAndCashEquivalentsAtCarryingValue',
-        'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents',
-      ]),
-      concept(cik, 'Liabilities'),
-      concept(cik, 'StockholdersEquity'),
-      firstConcept(cik, CAPITAL_TAGS),
-    ]);
-
-    const revA = annualFlow(rev);
-    const opA = annualFlow(op);
-    const netA = annualFlow(net);
-    const cashA = instantByYear(cash);
-    const liabA = instantByYear(liab);
-    const equityA = instantByYear(equity);
-    const capitalA = instantByYear(capital);
-
-    // Anchor annual periods on the UNION of core income-statement concepts, so a
-    // company that reports NetIncome under a tag variant without a matching
-    // Revenues tag still yields coherent rows (rather than a silent empty set).
-    const years = [...new Set([...revA.keys(), ...netA.keys()])]
-      .sort()
-      .slice(-5);
-    const annual: FinancialRow[] = years.map((y) => {
-      const row: FinancialRow = {
-        period: y,
-        revenue: revA.get(y) ?? 0,
-        operatingIncome: opA.get(y) ?? 0,
-        netIncome: netA.get(y) ?? 0,
-        cash: cashA.get(y) ?? 0,
-        debt: liabA.get(y) ?? 0,
-      };
-
-      const eq = equityA.get(y);
-      if (eq != null) row.equity = eq;
-
-      const cap = capitalA.get(y);
-      if (cap != null) row.capital = cap;
-
-      return row;
-    });
-
-    // Below this coherence threshold the live view is too sparse to trust — throw
-    // so FinancialService falls back to the coherent sample model.
-    if (annual.length < 2) {
-      throw new ProviderError('UNAVAILABLE', 'sec-edgar', `sparse XBRL for ${ticker}`);
-    }
-
-    // Quarterly anchored on revenue if present, else net income.
-    const revQarr = quarterlyFlow(rev);
-    const netQarr = quarterlyFlow(net);
-    const anchor = revQarr.length ? revQarr : netQarr;
-    const revQ = new Map(revQarr.map((q) => [q.end, q.val]));
-    const opQ = new Map(quarterlyFlow(op).map((q) => [q.end, q.val]));
-    const netQ = new Map(netQarr.map((q) => [q.end, q.val]));
-    const quarterly: FinancialRow[] = anchor.slice(-4).map((q) => ({
-      period: q.end.slice(0, 7),
-      revenue: revQ.get(q.end) ?? 0,
-      operatingIncome: opQ.get(q.end) ?? 0,
-      netIncome: netQ.get(q.end) ?? 0,
-      cash: instantAt(cash, q.end),
-      debt: instantAt(liab, q.end),
-    }));
-
-    const latestYear = years[years.length - 1];
-    return {
-      annual,
-      quarterly,
-      latest: {
-        equity: latestYear ? equityA.get(latestYear) ?? 0 : 0,
-        liabilities: latestYear ? liabA.get(latestYear) ?? 0 : 0,
-        netIncome: latestYear ? netA.get(latestYear) ?? 0 : 0,
-        cash: latestYear ? cashA.get(latestYear) ?? 0 : 0,
-      },
-    };
-  });
+export function mapFactsToFinancialRows(summary: CompanyFactsSummary): FinancialRow[] {
+  return summary.facts.map((fact) => ({
+    label: fact.label,
+    value: fact.value,
+    unit: fact.unit,
+    period: fact.end,
+  }));
 }

@@ -213,11 +213,33 @@ export async function getQuote(
 
 export const quote = getQuote;
 
+interface YahooChartParams {
+  range: string;
+  interval: string;
+  aggregateSize?: number;
+  aggregateByDay?: boolean;
+}
+
 // 시간프레임별 야후 차트 range/interval 매핑 (차트용 장기 데이터).
-function chartParams(tf?: string): { range: string; interval: string } {
+function chartParams(tf?: string): YahooChartParams {
   // 주의: range=max는 야후가 굵은 버킷(약 168개)으로 뭉개서 반환한다.
   // period1/period2 명시가 전체 이력을 올바른 간격으로 준다.
   switch (String(tf ?? '1D')) {
+    case '1m':
+      return { range: '7d', interval: '1m' };
+    case '3m':
+      return { range: '7d', interval: '1m', aggregateSize: 3, aggregateByDay: true };
+    case '5m':
+      return { range: '1mo', interval: '5m' };
+    case '15m':
+      return { range: '2mo', interval: '15m' };
+    case '30m':
+      return { range: '2mo', interval: '30m' };
+    case '60m':
+    case '1H':
+      return { range: '2y', interval: '1h' };
+    case '4H':
+      return { range: '2y', interval: '1h', aggregateSize: 4, aggregateByDay: true };
     case '1W':
       return { range: '', interval: '1wk' };
     case '1M':
@@ -227,31 +249,85 @@ function chartParams(tf?: string): { range: string; interval: string } {
   }
 }
 
+function candleTimeValue(value: Candle['time']): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 1_000_000_000_000 ? value * 1000 : value;
+  }
+
+  const parsed = Date.parse(String(value ?? ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function aggregateCandles(rows: Candle[], size: number, byDay = false): Candle[] {
+  const sortedRows = [...rows].sort(
+    (a, b) => candleTimeValue(a.time) - candleTimeValue(b.time),
+  );
+  if (size <= 1 || sortedRows.length <= 1) return sortedRows;
+
+  const groups = byDay
+    ? [...sortedRows.reduce((map, row) => {
+        const key = new Date(candleTimeValue(row.time)).toISOString().slice(0, 10);
+        const group = map.get(key) ?? [];
+        group.push(row);
+        map.set(key, group);
+        return map;
+      }, new Map<string, Candle[]>()).values()]
+    : [sortedRows];
+  const result: Candle[] = [];
+
+  for (const group of groups) {
+    for (let index = 0; index < group.length; index += size) {
+      const chunk = group.slice(index, index + size);
+      if (chunk.length === 0) continue;
+      result.push({
+        time: chunk[0].time,
+        open: chunk[0].open,
+        high: Math.max(...chunk.map((item) => item.high)),
+        low: Math.min(...chunk.map((item) => item.low)),
+        close: chunk[chunk.length - 1].close,
+        volume: chunk.reduce((sum, item) => sum + item.volume, 0),
+      });
+    }
+  }
+
+  return result;
+}
+
 export async function getCandles(
   entryOrTicker: CatalogEntry | string,
   timeframe?: string,
 ): Promise<Candle[]> {
   const ticker = getTickerFromEntry(entryOrTicker);
   const symbol = yahooSymbol(ticker);
-  const result = await fetchYahooChart(symbol, chartParams(timeframe));
+  const params = chartParams(timeframe);
+  const result = await fetchYahooChart(symbol, params);
   const quote = result.indicators?.quote?.[0];
 
   if (!result.timestamp?.length || !quote) return [];
 
-  return result.timestamp
+  const rows = result.timestamp
     .map((timestamp, index) => {
       const close = safeNumber(quote.close?.[index]);
+      const open = safeNumber(quote.open?.[index], close);
+      const high = safeNumber(quote.high?.[index], close);
+      const low = safeNumber(quote.low?.[index], close);
 
       return {
         time: new Date(timestamp * 1000).toISOString(),
-        open: safeNumber(quote.open?.[index]),
-        high: safeNumber(quote.high?.[index]),
-        low: safeNumber(quote.low?.[index]),
+        open,
+        high: Math.max(high, open, close),
+        low: Math.min(low, open, close),
         close,
         volume: safeNumber(quote.volume?.[index]),
       } as Candle;
     })
     .filter((candle) => candle.close > 0);
+
+  return aggregateCandles(
+    rows,
+    params.aggregateSize ?? 1,
+    params.aggregateByDay ?? false,
+  );
 }
 
 export const candles = getCandles;

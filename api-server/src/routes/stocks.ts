@@ -168,7 +168,13 @@ router.get("/special-feed", async (req, res) => {
 	res.setHeader("Cache-Control", "no-store, max-age=0");
 
 	try {
-		const result = await SpecialFeedService.getFeed(asset, market, limit);
+		if (asset === "coin") {
+			// 특별 피드 서비스는 현재 국내/해외 주식(KR·US)만 지원합니다.
+			// 지원하지 않는 자산은 가짜 데이터 대신 명확한 오류 코드를 반환합니다.
+			res.status(501).json({ ok: false, error: "COIN_SPECIAL_FEED_NOT_SUPPORTED" });
+			return;
+		}
+		const result = await SpecialFeedService.getFeed(market as "KR" | "US", limit);
 		res.json(result);
 	} catch (error) {
 		console.error("special feed route error:", error);
@@ -224,81 +230,28 @@ function companyNameFromProfile(profile: any, ticker: string) {
 let dartCorpMapCache: Map<string, string> | null = null;
 
 async function getDartCorpCode(ticker: string, apiKey: string) {
-try {
-const sharedCorpCode = await getDartProviderCorpCode(ticker);
-if (sharedCorpCode) return sharedCorpCode;
-} catch {
-//  DART     ZIP   .
-}
+	try {
+		return await getDartProviderCorpCode(ticker);
+	} catch {
+		// Fall back to the route-local map below when the shared provider is unavailable.
+	}
 
-if (!dartCorpMapCache) {
-const response = await fetch(
-"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key=" +
-encodeURIComponent(apiKey),
-);
-
-if (!response.ok) {
-throw new Error("DART_CORP_CODE_HTTP_" + response.status);
-}
-
-const zipBytes = Buffer.from(await response.arrayBuffer());
-
-const { mkdtemp, writeFile, rm } =
-await import("node:fs/promises");
-const { tmpdir } = await import("node:os");
-const { join } = await import("node:path");
-const { execFileSync } = await import("node:child_process");
-const tempDirectory = await mkdtemp(
-join(tmpdir(), "dart-corp-code-"),
-);
-const zipPath = join(tempDirectory, "corpCode.zip");
-
-try {
-await writeFile(zipPath, zipBytes);
-
-const xml = execFileSync(
-"python3",
-[
-"-c",
-[
-"import sys, zipfile",
-"z = zipfile.ZipFile(sys.argv[1])",
-"name = next(n for n in z.namelist() if n.lower().endswith('.xml'))",
-"sys.stdout.buffer.write(z.read(name))",
-].join("; "),
-zipPath,
-],
-{
-encoding: "utf8",
-maxBuffer: 80 * 1024 * 1024,
-},
-);
-
-const map = new Map<string, string>();
-
-for (const block of xml.match(/<list>[\s\S]*?<\/list>/g) ?? []) {
-const stockCode = xmlTag(block, "stock_code").trim();
-const corpCode = xmlTag(block, "corp_code").trim();
-
-if (stockCode && corpCode) {
-map.set(stockCode, corpCode);
-}
-}
-
-if (!map.size) {
-throw new Error("DART_CORP_CODE_MAP_EMPTY");
-}
-
-dartCorpMapCache = map;
-} finally {
-await rm(tempDirectory, {
-recursive: true,
-force: true,
-});
-}
-}
-
-return dartCorpMapCache.get(ticker) ?? "";
+	if (!dartCorpMapCache) {
+		const response = await fetch(
+			"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key=" +
+				encodeURIComponent(apiKey),
+		);
+		if (!response.ok) throw new Error("DART_CORP_CODE_HTTP_" + response.status);
+		const xml = await response.text();
+		const map = new Map<string, string>();
+		for (const block of xml.match(/<list>[\s\S]*?<\/list>/g) ?? []) {
+			const stockCode = xmlTag(block, "stock_code");
+			const corpCode = xmlTag(block, "corp_code");
+			if (stockCode && corpCode) map.set(stockCode, corpCode);
+		}
+		dartCorpMapCache = map;
+	}
+	return dartCorpMapCache.get(ticker) ?? "";
 }
 
 async function fetchDartFilings(ticker: string, allHistory = false) {
@@ -1653,6 +1606,57 @@ router.get("/auto-trade/journal", async (req: AuthenticatedRequest, res) => {
 	return res.json({ ok: true, entries: autoTradeJournal.filter((entry) => entry.memberId === req.member!.id).reverse() });
 });
 
+// GET /api/stocks/auto-trade/positions — 앱의 실제 자동매매 체결로 보유 중인 포지션
+router.get("/auto-trade/positions", async (req: AuthenticatedRequest, res) => {
+	await ensureAutoTradePositionsLoaded();
+	const requestedMarket = req.query.market === "US" ? "US" : req.query.market === "KR" ? "KR" : null;
+	const source = [...autoTradePositions.values()]
+		.filter((position) => position.memberId === req.member!.id)
+		.filter((position) => !requestedMarket || position.market === requestedMarket)
+		.sort((a, b) => Date.parse(b.openedAt) - Date.parse(a.openedAt));
+
+	const positions = await Promise.all(source.map(async (position) => {
+		let currentPrice: number | null = null;
+		try {
+			const quote = await MarketDataService.getQuoteRow(position.ticker);
+			const value = Math.abs(Number(quote?.price ?? 0));
+			currentPrice = Number.isFinite(value) && value > 0 ? value : null;
+		} catch {
+			currentPrice = null;
+		}
+		const cost = position.entryPrice * position.quantity;
+		const marketValue = currentPrice == null ? null : currentPrice * position.quantity;
+		const profitAmount = marketValue == null ? null : marketValue - cost;
+		const profitPercent = currentPrice == null || position.entryPrice <= 0
+			? null
+			: Math.round((((currentPrice - position.entryPrice) / position.entryPrice) * 100) * 100) / 100;
+		return {
+			ticker: position.ticker,
+			name: position.name,
+			market: position.market,
+			currency: position.currency,
+			exchange: position.exchange,
+			quantity: position.quantity,
+			entryPrice: position.entryPrice,
+			currentPrice,
+			cost,
+			marketValue,
+			profitAmount,
+			profitPercent,
+			stopPrice: position.stopPrice,
+			targetPrice: position.targetPrice,
+			probability: position.probability,
+			reasons: position.reasons,
+			journalId: position.journalId,
+			openedAt: position.openedAt,
+			exitSignalReason: position.exitSignalReason ?? null,
+			exitSignalAt: position.exitSignalAt ?? null,
+		};
+	}));
+
+	return res.json({ ok: true, positions, count: positions.length, updatedAt: new Date().toISOString() });
+});
+
 // GET /api/stocks/:ticker/quote
 router.get("/:ticker/quote", async (req, res) => {
 	const ticker = normalizeTicker(req.params.ticker);
@@ -1875,6 +1879,14 @@ router.get("/:ticker/chart", async (req, res) => {
 router.get("/:ticker/candles", async (req, res) => {
 	const ticker = normalizeTicker(req.params.ticker);
 	const timeframe = normalizeTimeframe(req.query.tf ?? req.query.timeframe);
+	const quick = String(req.query.quick ?? "") === "1";
+	const requestedPages = Number(req.query.pages);
+	const maxPages =
+		Number.isFinite(requestedPages) && requestedPages > 0
+			? Math.min(300, Math.max(1, Math.floor(requestedPages)))
+			: quick
+				? 1
+				: undefined;
 
 	if (!ticker) {
 		res.status(400).json({
@@ -1887,6 +1899,7 @@ router.get("/:ticker/candles", async (req, res) => {
 		const meta = await MarketDataService.getCandlesMeta(
 			ticker,
 			timeframe as any,
+			maxPages ? { maxPages } : {},
 		);
 
 		res.json({
@@ -1898,6 +1911,12 @@ router.get("/:ticker/candles", async (req, res) => {
 			candles: meta.candles,
 			count: meta.candles.length,
 			updatedAt: meta.fetchedAt,
+			pagination: maxPages
+				? {
+						pagesLoaded: maxPages,
+						hasMore: maxPages < 300,
+					}
+				: null,
 		});
 	} catch (error) {
 		console.error("stock candles route error:", error);
@@ -2013,41 +2032,22 @@ router.get("/:ticker/filings", async (req, res) => {
 
 // GET /api/stocks/:ticker/disclosures
 router.get("/:ticker/disclosures", async (req, res) => {
-const ticker = normalizeTicker(req.params.ticker);
-const allHistory = String(req.query.all ?? "") === "1";
-res.setHeader("Cache-Control", "no-store, max-age=0");
-
-try {
-const items = await withLiveCache(
-`disclosures:v4:${ticker}:${allHistory ? "all" : "recent"}`,
-60_000,
-() => fetchAllFilings(ticker, allHistory),
-);
-
-res.json({
-ticker,
-disclosures: items,
-filings: items,
-items,
-summary: items.length
-? simpleDartSummary(items[0]) +
-(items.length > 1
-? "   " + items.length + " ."
-: "")
-: "  .",
-});
-} catch (error) {
-console.error("stock disclosures route error:", error);
-res.status(502).json({
-ticker,
-disclosures: [],
-filings: [],
-items: [],
-summary: /^\d{6}$/.test(ticker)
-? "DART   ."
-: "SEC EDGAR   .",
-});
-}
+	const ticker = normalizeTicker(req.params.ticker);
+	const allHistory = String(req.query.all ?? "") === "1";
+	res.setHeader("Cache-Control", "no-store, max-age=0");
+	try {
+		const result = await withLiveCache(`disclosures:v3:${ticker}:${allHistory ? "all" : "recent"}`, 60_000, () => FilingService.getFilings(ticker, { allHistory }));
+		if (!result) return res.status(404).json({ code: "TICKER_NOT_FOUND", message: "종목을 찾을 수 없습니다." });
+		res.json(result);
+	} catch (error) {
+		console.error("stock disclosures route error:", error);
+		res.json({
+			ticker,
+			disclosures: [],
+			items: [],
+			summary: /^\d{6}$/.test(ticker) ? "DART 연결을 확인해 주세요." : "SEC EDGAR 연결을 확인해 주세요.",
+		});
+	}
 });
 
 // GET /api/stocks/:ticker/news
@@ -2118,6 +2118,8 @@ type InvestorFlowRow = {
 	individual: number;
 	institution: number;
 	foreign: number;
+	volume?: number;
+	tradeValue?: number;
 	periodStart?: string;
 	periodEnd?: string;
 	tradingDays?: number;
@@ -2211,11 +2213,15 @@ function groupInvestorRows(
 			individual: 0,
 			institution: 0,
 			foreign: 0,
+			volume: 0,
+			tradeValue: 0,
 		};
 
 		current.individual += Number(row.individual ?? 0);
 		current.institution += Number(row.institution ?? 0);
 		current.foreign += Number(row.foreign ?? 0);
+		current.volume = Number(current.volume ?? 0) + Number(row.volume ?? 0);
+		current.tradeValue = Number(current.tradeValue ?? 0) + Number(row.tradeValue ?? 0);
 		current.tradingDays = Number(current.tradingDays ?? 0) + 1;
 
 		if (!current.periodStart || row.date < current.periodStart) {
@@ -2238,7 +2244,7 @@ function groupInvestorRows(
 		.map(({ periodKey: _periodKey, ...row }) => row);
 }
 
-function groupShortRows(rows: any[], period: string) {
+function groupShortRows(rows: any[], period: MarketFlowPeriod) {
 	if (period === "daily") return rows.slice(0, 30);
 	const grouped = new Map<string, any>();
 	for (const row of rows) {
@@ -2356,11 +2362,15 @@ router.get("/:ticker/market-flow", async (req, res) => {
 						cells.length >= 7,
 				)
 				.map((cells): InvestorFlowRow => {
+					const close = Math.abs(financeNumber(cells[1]));
+					const volume = Math.max(0, financeNumber(cells[4]));
 					const institution = financeNumber(cells[5]);
 					const foreign = financeNumber(cells[6]);
 
 					return {
 						date: cells[0],
+						volume,
+						tradeValue: close > 0 && volume > 0 ? close * volume : 0,
 						// 네이버 공개 표에는 개인 순매매가 별도 제공되지 않아
 						// 기관+외국인 순매매의 반대값으로 계산합니다.
 						individual: -(institution + foreign),
@@ -2391,9 +2401,9 @@ router.get("/:ticker/market-flow", async (req, res) => {
 					institution: Number(latest.institution ?? 0),
 					foreign: Number(latest.foreign ?? 0),
 					program: null,
-					volume: null,
-					value: null,
-					tradeValue: null,
+					volume: Number(latest.volume ?? 0) || null,
+					value: Number(latest.tradeValue ?? 0) || null,
+					tradeValue: Number(latest.tradeValue ?? 0) || null,
 				}
 			: {
 					individual: null,
@@ -2420,7 +2430,7 @@ router.get("/:ticker/market-flow", async (req, res) => {
 			updatedAt: new Date().toISOString(),
 			rawDailyCount: dailyRows.length,
 			note:
-				"개인은 기관·외국인 순매매의 반대값으로 추정한 참고치입니다. 화면 합계는 선택한 최신 기간 한 구간만 표시합니다.",
+				"개인은 기관·외국인 순매매의 반대값으로 추정한 참고치입니다. 거래량·거래대금은 같은 네이버 공개 일별 표를 선택 기간별로 합산합니다. 프로그램 순매매는 실제 제공 필드가 없어 임의 생성하지 않습니다.",
 		});
 	} catch (error) {
 		console.error("investor flow route error:", error);
@@ -2446,7 +2456,7 @@ router.get("/:ticker/market-flow", async (req, res) => {
 
 router.get("/:ticker/short-selling", async (req, res) => {
 	const ticker = normalizeTicker(req.params.ticker);
-	const period = String(req.query.period ?? "daily");
+	const period = normalizeMarketFlowPeriod(req.query.period);
 	if (!/^\d{6}$/.test(ticker)) {
 		return res.json({
 			ticker,
@@ -2532,5 +2542,4 @@ router.get("/:ticker/short-selling", async (req, res) => {
 		});
 	}
 });
-
 export default router;

@@ -20,7 +20,7 @@ import { computeIndicators } from '../sample/indicators';
 import { computeScanConditions, type SignalContext } from '../sample/accumulation';
 import type { Candle } from '../sample/types';
 
-export type RecoCategory = 'undervalued' | 'breakout';
+export type RecoCategory = 'undervalued' | 'accumulation' | 'bottom' | 'breakout';
 export type DataQuality = 'sufficient' | 'partial' | 'insufficient' | 'stale';
 
 export interface RecommendationRow {
@@ -74,7 +74,7 @@ export interface RecommendationResult {
 }
 
 const POOL_LIMIT = 150;
-const MAX_ROWS_PER_CATEGORY = 30;
+const MAX_ROWS_PER_CATEGORY = 100; // 분류당 최대 100개 (20개씩 5페이지)
 const REFRESH_MS = 5 * 60 * 1000;
 const STALE_DAYS = 7;
 // 유동성 하한(20일 평균 거래대금): KR 10억원, US $5M — 이보다 작으면 제외.
@@ -547,6 +547,207 @@ function buildBreakout(a: Analyzed): RecommendationRow | null {
   });
 }
 
+/** 매집 후보: 횡보 구간에서 거래량 유입 + 매도 압력 감소 + 지지선 유지. */
+function buildAccumulation(a: Analyzed): RecommendationRow | null {
+  const used: string[] = ['일봉(캔들)', '현재가/등락률', '거래량·거래대금', '이동평균선'];
+  const missing: string[] = [];
+  const reasons: string[] = [];
+
+  if (a.overheated) return null;
+  if (a.delistRisk) return null;
+  if (a.avgVol20 == null || a.avgVol20 <= 0) return null;
+
+  // 1) 횡보: 최근 20일 등락 ±12% 이내 (이미 급등/급락 중이면 매집으로 보지 않음).
+  if (a.gain20 == null || Math.abs(a.gain20) > 12) return null;
+  reasons.push(`최근 20거래일 등락 ${round2(a.gain20)}% (횡보 구간)`);
+
+  const n = a.candles.length;
+  const recent20 = a.candles.slice(n - 20);
+  const prev20 = a.candles.slice(Math.max(0, n - 40), n - 20);
+  if (recent20.length < 20 || prev20.length < 20) return null;
+
+  // 2) 거래량 유입: 최근 20일 평균 거래량이 직전 20일 대비 1.2배 이상.
+  const volRecent = recent20.reduce((s, c) => s + c.volume, 0) / recent20.length;
+  const volPrev = prev20.reduce((s, c) => s + c.volume, 0) / prev20.length;
+  if (volPrev <= 0) return null;
+  const volInflow = volRecent / volPrev;
+  if (volInflow < 1.2) return null;
+  reasons.push(`횡보 중 거래량 유입 (직전 20일 대비 ${round2(volInflow)}배)`);
+
+  // 3) 매도 압력 감소: 최근 20일 상승일 거래량 합 > 하락일 거래량 합.
+  let upVol = 0;
+  let downVol = 0;
+  for (let i = 1; i < recent20.length; i++) {
+    if (recent20[i].close >= recent20[i - 1].close) upVol += recent20[i].volume;
+    else downVol += recent20[i].volume;
+  }
+  if (downVol > 0 && upVol / downVol >= 1.1) {
+    reasons.push(`상승일 거래량이 하락일 대비 ${round2(upVol / downVol)}배 (매도 압력 감소)`);
+  } else if (downVol > 0 && upVol / downVol < 0.9) {
+    return null; // 하락일 거래량이 더 크면 분산(매도) 쪽에 가깝다.
+  }
+
+  // 4) 지지선 유지: 최근 20일 저가가 직전 박스 하단을 지키고 있음.
+  if (a.boxLow != null && a.support20 != null) {
+    if (a.support20 < a.boxLow * 0.97) return null;
+    reasons.push('직전 박스 하단 지지선 유지');
+  } else missing.push('박스권 기준');
+
+  if (a.boxConsolidation) reasons.push('장기 박스권 수렴 확인');
+
+  if (a.rsi != null) {
+    used.push('RSI');
+    if (a.rsi >= 72) return null;
+  } else missing.push('RSI');
+
+  if (a.ctx.newsScore != null) used.push('뉴스 감성 점수');
+  else missing.push('뉴스 데이터');
+
+  if (reasons.length < 3) return null;
+
+  const risks = baseRisks(a);
+  if (a.fin == null) risks.push('실제 재무 미확보 — 수급(거래량) 신호 위주 후보');
+
+  let stopLoss: number | null = null;
+  let stopBasis = '산출 불가 (유효한 지지선 없음)';
+  if (a.support20 != null && a.support20 < a.price) {
+    stopLoss = roundPrice(a.support20, a.entry.currency as 'KRW' | 'USD');
+    stopBasis = '최근 20거래일 지지선(저가)';
+  }
+  let targetPrice: number | null = null;
+  let targetBasis = '산출 불가 (유효한 저항선 없음)';
+  if (a.boxHigh != null && a.boxHigh > a.price) {
+    targetPrice = roundPrice(a.boxHigh, a.entry.currency as 'KRW' | 'USD');
+    targetBasis = '직전 60거래일 저항선(박스 상단)';
+  }
+
+  const score = Math.min(
+    100,
+    Math.round(
+      30 +
+        Math.min(20, (volInflow - 1.2) * 25) +
+        (downVol > 0 && upVol / downVol >= 1.1 ? 15 : 0) +
+        (a.boxConsolidation ? 10 : 0) +
+        (a.newsRisk === '낮음' ? 8 : 0) +
+        (a.boxLow != null && a.support20 != null ? 10 : 0),
+    ),
+  );
+
+  const dataQuality: DataQuality = missing.length === 0 ? 'sufficient' : missing.length <= 2 ? 'partial' : 'insufficient';
+  if (dataQuality === 'insufficient') return null;
+
+  return finalizeRow(a, 'accumulation', '매집 관찰 후보', reasons, used, missing, risks, score, {
+    targetPrice,
+    targetBasis,
+    stopLoss,
+    stopBasis,
+    shortTermOutlook: '횡보 중 수급 개선 신호 — 돌파 전 단계로 관찰 필요 (규칙 기반 판단)',
+    midTermOutlook: '거래량 유입이 이어지고 지지선이 유지되는지 확인 필요',
+    opinion: '관망',
+    dataQuality,
+  });
+}
+
+/** 바닥권 후보: 장기 저점 근접 + 과매도 + 하락 둔화 + 변동성 축소. */
+function buildBottom(a: Analyzed): RecommendationRow | null {
+  const used: string[] = ['일봉(캔들)', '현재가/등락률', '거래량·거래대금', 'RSI', '이동평균선'];
+  const missing: string[] = [];
+  const reasons: string[] = [];
+
+  if (a.delistRisk) return null;
+  if (a.overheated) return null;
+
+  const n = a.candles.length;
+  if (n < 120) return null;
+  const longSlice = a.candles.slice(Math.max(0, n - 240));
+  const longLow = Math.min(...longSlice.map((c) => c.low));
+  const longHigh = Math.max(...longSlice.map((c) => c.high));
+  if (!(longLow > 0) || !(longHigh > longLow)) return null;
+
+  // 1) 장기 저점 근접: 장기 구간 저가 대비 +15% 이내.
+  const aboveLow = ((a.price - longLow) / longLow) * 100;
+  if (aboveLow > 15) return null;
+  reasons.push(`장기(최대 240거래일) 저점 대비 +${round2(aboveLow)}% (저점 근접)`);
+  const drawdown = ((longHigh - a.price) / longHigh) * 100;
+  if (drawdown >= 30) reasons.push(`장기 고점 대비 -${round2(drawdown)}% 하락`);
+
+  // 2) 과매도 또는 과매도권 이탈 초기.
+  if (a.rsi == null) return null;
+  if (a.rsi > 45) return null;
+  reasons.push(`RSI ${round2(a.rsi)} (과매도권)`);
+
+  // 3) 하락 추세 둔화: 최근 5일 낙폭이 완화 (5일 등락 > -3%).
+  if (a.gain5 == null || a.gain5 < -3) return null;
+  reasons.push(`최근 5거래일 ${a.gain5 >= 0 ? '+' : ''}${round2(a.gain5)}% (하락 둔화)`);
+
+  // 4) 저점 상승: 최근 10일 저가가 그 이전 10일 저가보다 높음.
+  const last10 = a.candles.slice(n - 10);
+  const prior10 = a.candles.slice(n - 20, n - 10);
+  const low10 = Math.min(...last10.map((c) => c.low));
+  const priorLow10 = Math.min(...prior10.map((c) => c.low));
+  const higherLow = low10 >= priorLow10;
+  if (higherLow) reasons.push('최근 10거래일 저점이 직전 대비 상승 (저점 상승)');
+
+  // 5) 변동성 축소: ATR(14)이 가격 대비 축소 판단.
+  if (a.atr != null && a.price > 0) {
+    const atrPct = (a.atr / a.price) * 100;
+    if (atrPct <= 6) reasons.push(`변동성 축소 (ATR ${round2(atrPct)}%)`);
+    used.push('ATR(14)');
+  } else missing.push('ATR');
+
+  if (a.ctx.newsScore != null) used.push('뉴스 감성 점수');
+  else missing.push('뉴스 데이터');
+
+  if (reasons.length < 4) return null;
+
+  const risks = baseRisks(a);
+  risks.push('바닥 확인 전 추가 하락 가능 — 분할 관찰 필요');
+  if (a.fin == null) risks.push('실제 재무 미확보 — 기술적 신호 위주 후보');
+
+  let stopLoss: number | null = null;
+  let stopBasis = '산출 불가 (유효한 지지선 없음)';
+  if (longLow < a.price) {
+    stopLoss = roundPrice(longLow * 0.98, a.entry.currency as 'KRW' | 'USD');
+    stopBasis = '장기 저점 -2% 이탈 기준';
+  }
+  let targetPrice: number | null = null;
+  let targetBasis = '산출 불가 (유효한 저항선 없음)';
+  if (a.ma60 != null && a.ma60 > a.price) {
+    targetPrice = roundPrice(a.ma60, a.entry.currency as 'KRW' | 'USD');
+    targetBasis = '60일 이동평균 회복 기준';
+  } else if (a.boxHigh != null && a.boxHigh > a.price) {
+    targetPrice = roundPrice(a.boxHigh, a.entry.currency as 'KRW' | 'USD');
+    targetBasis = '직전 60거래일 저항선(박스 상단)';
+  }
+
+  const score = Math.min(
+    100,
+    Math.round(
+      25 +
+        (aboveLow <= 8 ? 15 : 8) +
+        (a.rsi <= 32 ? 15 : 8) +
+        (higherLow ? 12 : 0) +
+        (a.gain5 >= 0 ? 8 : 0) +
+        (a.atr != null && a.price > 0 && (a.atr / a.price) * 100 <= 6 ? 8 : 0) +
+        (a.newsRisk === '낮음' ? 6 : 0),
+    ),
+  );
+
+  const dataQuality: DataQuality = missing.length === 0 ? 'sufficient' : missing.length <= 2 ? 'partial' : 'insufficient';
+  if (dataQuality === 'insufficient') return null;
+
+  return finalizeRow(a, 'bottom', '바닥권 관찰 후보', reasons, used, missing, risks, score, {
+    targetPrice,
+    targetBasis,
+    stopLoss,
+    stopBasis,
+    shortTermOutlook: '바닥권 신호 관찰 단계 — 반등 확정 신호는 아님 (규칙 기반 판단)',
+    midTermOutlook: '저점 상승과 거래량 회복이 이어지는지 확인 필요',
+    opinion: '관망',
+    dataQuality,
+  });
+}
+
 function finalizeRow(
   a: Analyzed,
   category: RecoCategory,
@@ -591,7 +792,7 @@ function finalizeRow(
 async function getRecommendations(marketInput: string): Promise<RecommendationResult> {
   const market: 'KR' | 'US' = String(marketInput).toUpperCase() === 'US' ? 'US' : 'KR';
 
-  return cached(`reco:v1:${market}`, REFRESH_MS, async () => {
+  return cached(`reco:v2:${market}`, REFRESH_MS, async () => {
     const pool = CATALOG.filter(
       (e) => e.market === market && classifyAssetType(e.name, e.market) === 'STOCK',
     ).slice(0, POOL_LIMIT);
@@ -610,7 +811,7 @@ async function getRecommendations(marketInput: string): Promise<RecommendationRe
     const hist = await loadHistory();
     const rows: RecommendationRow[] = [];
 
-    for (const builder of [buildUndervalued, buildBreakout] as const) {
+    for (const builder of [buildUndervalued, buildAccumulation, buildBottom, buildBreakout] as const) {
       const built = analyzed
         .map((a) => {
           try {

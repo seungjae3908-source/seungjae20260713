@@ -2,6 +2,10 @@
 // Secrets). Keys are never bundled or sent to the client.
 import { ProviderError } from './errors';
 
+export function hasFinnhubKey(): boolean {
+  return Boolean(process.env['FINNHUB_API_KEY']);
+}
+
 export function getFinnhubKey(): string {
   const key = process.env['FINNHUB_API_KEY'];
   if (!key) throw new ProviderError('NOT_CONFIGURED', 'finnhub');
@@ -27,7 +31,7 @@ export const SEC_USER_AGENT =
 
 export function providerStatus() {
   return {
-    finnhub: Boolean(process.env['FINNHUB_API_KEY']),
+    finnhub: hasFinnhubKey(),
     alphavantage: Boolean(process.env['ALPHA_VANTAGE_API_KEY']),
     dart: Boolean(process.env['DART_API_KEY']),
     secEdgar: true, // free, no key required

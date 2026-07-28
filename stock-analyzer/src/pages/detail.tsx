@@ -1,9 +1,22 @@
-import { apiGet } from "@/lib/api";
-import { authorizedFetch } from '@/lib/auth-fetch';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { authorizedFetch } from "@/lib/auth-fetch";
+import { useMemberPermissions } from "@/lib/permissions";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useLocation, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Maximize2, Minimize2, Settings2 } from "lucide-react";
+import {
+  Bell,
+  ChevronDown,
+  Maximize2,
+  Minimize2,
+  Settings2,
+} from "lucide-react";
 import {
   ColorType,
   CrosshairMode,
@@ -14,6 +27,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { BottomNav } from "@/components/bottom-nav";
+import { PriceAlertCard } from "@/components/price-alert-card";
 import { buildAiInsights } from "@/lib/ai-insights";
 import {
   displayStockName,
@@ -359,52 +373,20 @@ function collectNews(data: AnyObj): AnyObj[] {
   );
 }
 
-async function fetchDetail(ticker: string): Promise<DetailData> {
-  const upper = ticker.toUpperCase();
+interface DetailIdentityData {
+  quote: AnyObj | null;
+  company: AnyObj | null;
+}
 
-  const [
-    quoteRaw,
-    companyRaw,
-    candlesRaw,
-    financialRaw,
-    riskRaw,
-    filingsRaw,
-    newsRaw,
-  ] = await Promise.all([
-    tryJson<AnyObj>(
-      [`/api/quotes?tickers=${upper}`, `/api/stocks/${upper}/quote`],
-      {},
-    ),
+interface DetailAdvancedData {
+  financials: AnyObj | null;
+  risk: AnyObj | null;
+  filings: AnyObj[];
+  news: AnyObj[];
+}
 
-    tryJson<AnyObj>(
-      [`/api/stocks/${upper}/company`, `/api/stocks/${upper}/profile`],
-      {},
-    ),
-
-    tryJson<AnyObj>(
-      [`/api/stocks/${upper}/candles?tf=1D`],
-      {},
-    ),
-
-    tryJson<AnyObj>([`/api/stocks/${upper}/financials`], {}),
-
-    tryJson<AnyObj>(
-      [`/api/stocks/${upper}/risk`, `/api/stocks/${upper}/analysis`],
-      {},
-    ),
-
-    tryJson<AnyObj>(
-      [
-        `/api/stocks/${upper}/filings`,
-        `/api/stocks/${upper}/disclosures`,
-      ],
-      {},
-    ),
-
-    tryJson<AnyObj>([`/api/stocks/${upper}/news`], {}),
-  ]);
-
-  const candleRows = Array.isArray(candlesRaw?.candles)
+function collectCandleRows(candlesRaw: AnyObj): AnyObj[] {
+  return Array.isArray(candlesRaw?.candles)
     ? candlesRaw.candles
     : Array.isArray(candlesRaw?.data?.candles)
       ? candlesRaw.data.candles
@@ -413,24 +395,70 @@ async function fetchDetail(ticker: string): Promise<DetailData> {
         : Array.isArray(candlesRaw)
           ? candlesRaw
           : [];
+}
+
+async function fetchDetailCore(ticker: string): Promise<DetailData> {
+  const upper = ticker.toUpperCase();
+  const candlesRaw = await tryJson<AnyObj>(
+    [`/api/stocks/${upper}/candles?tf=1D`],
+    {},
+  );
 
   return {
     ticker: upper,
+    quote: null,
+    company: null,
+    candles: collectCandleRows(candlesRaw),
+    financials: null,
+    risk: null,
+    filings: [],
+    news: [],
+  };
+}
 
+async function fetchDetailIdentity(
+  ticker: string,
+): Promise<DetailIdentityData> {
+  const upper = ticker.toUpperCase();
+  const [quoteRaw, companyRaw] = await Promise.all([
+    tryJson<AnyObj>(
+      [`/api/quotes?tickers=${upper}`, `/api/stocks/${upper}/quote`],
+      {},
+    ),
+    tryJson<AnyObj>(
+      [`/api/stocks/${upper}/company`, `/api/stocks/${upper}/profile`],
+      {},
+    ),
+  ]);
+
+  return {
     quote: normalizeQuote(upper, quoteRaw),
-
     company: normalizeObject(companyRaw, ["company", "profile", "data"]),
+  };
+}
 
-    candles: candleRows,
+async function fetchDetailAdvanced(
+  ticker: string,
+): Promise<DetailAdvancedData> {
+  const upper = ticker.toUpperCase();
+  const [financialRaw, riskRaw, filingsRaw, newsRaw] = await Promise.all([
+    tryJson<AnyObj>([`/api/stocks/${upper}/financials`], {}),
+    tryJson<AnyObj>(
+      [`/api/stocks/${upper}/risk`, `/api/stocks/${upper}/analysis`],
+      {},
+    ),
+    tryJson<AnyObj>(
+      [`/api/stocks/${upper}/filings`, `/api/stocks/${upper}/disclosures`],
+      {},
+    ),
+    tryJson<AnyObj>([`/api/stocks/${upper}/news`], {}),
+  ]);
 
+  const filings = collectFilings(filingsRaw);
+  return {
     financials: normalizeObject(financialRaw, ["financials", "data"]),
-
     risk: normalizeObject(riskRaw, ["risk", "analysis", "data"]),
-
-    filings: collectFilings(filingsRaw).length
-      ? collectFilings(filingsRaw)
-      : collectFilings(riskRaw),
-
+    filings: filings.length ? filings : collectFilings(riskRaw),
     news: collectNews(newsRaw),
   };
 }
@@ -888,11 +916,16 @@ function financialValue(...values: unknown[]): number | null {
   return value == null || value === 0 ? null : value;
 }
 
-function financialRows(financials: AnyObj | null, period: FinancialPeriod): AnyObj[] {
+function financialRows(
+  financials: AnyObj | null,
+  period: FinancialPeriod,
+): AnyObj[] {
   let rows: AnyObj[] = [];
   if (Array.isArray(financials?.[period])) rows = financials[period];
-  else if (period === "annual" && Array.isArray(financials?.yearly)) rows = financials.yearly;
-  else if (period === "quarterly" && Array.isArray(financials?.quarters)) rows = financials.quarters;
+  else if (period === "annual" && Array.isArray(financials?.yearly))
+    rows = financials.yearly;
+  else if (period === "quarterly" && Array.isArray(financials?.quarters))
+    rows = financials.quarters;
   else if (Array.isArray(financials?.rows)) rows = financials.rows;
 
   const now = new Date();
@@ -906,14 +939,29 @@ function financialRows(financials: AnyObj | null, period: FinancialPeriod): AnyO
     if (match) {
       const year = Number(match[1]);
       const month = Number(match[2] ?? (period === "annual" ? 12 : 1));
-      if (year > currentYear || (year === currentYear && month > currentMonth)) continue;
+      if (year > currentYear || (year === currentYear && month > currentMonth))
+        continue;
     }
     const row: AnyObj = { ...raw, period: label };
-    const hasValue = [row.revenue,row.sales,row.operatingIncome,row.netIncome,row.assets,row.totalAssets,row.liabilities,row.totalLiabilities,row.equity,row.capitalStock,row.operatingCashFlow].some((value) => financialValue(value) != null);
+    const hasValue = [
+      row.revenue,
+      row.sales,
+      row.operatingIncome,
+      row.netIncome,
+      row.assets,
+      row.totalAssets,
+      row.liabilities,
+      row.totalLiabilities,
+      row.equity,
+      row.capitalStock,
+      row.operatingCashFlow,
+    ].some((value) => financialValue(value) != null);
     if (!hasValue) continue;
     if (!unique.has(label)) unique.set(label, row);
   }
-  return [...unique.values()].sort((a, b) => String(b.period).localeCompare(String(a.period), "ko", { numeric: true }));
+  return [...unique.values()].sort((a, b) =>
+    String(b.period).localeCompare(String(a.period), "ko", { numeric: true }),
+  );
 }
 
 function evaluateFinancialMetric(
@@ -1252,35 +1300,88 @@ export default function DetailPage() {
   ];
 
   const [, navigate] = useLocation();
+  const permissions = useMemberPermissions();
 
   const ticker = String(params?.ticker ?? "").toUpperCase();
   const studyId = new URLSearchParams(window.location.search).get("study");
 
-  const [tab, setTab] = useState<DetailTab>(() => detailTabFromUrl(ticker));
+  const [tab, setTab] = useState<DetailTab>(() =>
+    permissions.canUseAdvancedAnalysis ? detailTabFromUrl(ticker) : "chart",
+  );
+  const visibleTabs = useMemo(
+    () =>
+      permissions.canUseAdvancedAnalysis
+        ? TABS
+        : TABS.filter((item) => item.key === "chart"),
+    [permissions.canUseAdvancedAnalysis],
+  );
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const restoredScrollRef = useRef<string | null>(null);
 
   const [watched, setWatched] = useState(() => isInWatchlist(ticker));
+  const [alertOpen, setAlertOpen] = useState(false);
 
-  const detail = useQuery<DetailData>({
-    queryKey: ["stock-detail-v13", ticker],
-
-    queryFn: () => fetchDetail(ticker),
-
+  const coreDetail = useQuery<DetailData>({
+    queryKey: ["stock-detail-core-v15", ticker],
+    queryFn: () => fetchDetailCore(ticker),
     enabled: Boolean(ticker),
-
-    staleTime: 0,
-
+    staleTime: 15_000,
     gcTime: 10 * 60_000,
-
     refetchInterval: 60_000,
-
     refetchIntervalInBackground: true,
-
     refetchOnWindowFocus: true,
   });
 
-  const data = detail.data;
+  const identityDetail = useQuery<DetailIdentityData>({
+    queryKey: ["stock-detail-identity-v15", ticker],
+    queryFn: () => fetchDetailIdentity(ticker),
+    enabled: Boolean(ticker),
+    staleTime: 60_000,
+    gcTime: 15 * 60_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+  });
+
+  const advancedDetail = useQuery<DetailAdvancedData>({
+    queryKey: ["stock-detail-advanced-v15", ticker],
+    queryFn: () => fetchDetailAdvanced(ticker),
+    enabled: Boolean(
+      ticker && permissions.canUseAdvancedAnalysis && coreDetail.data,
+    ),
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const data = useMemo<DetailData | undefined>(() => {
+    if (!coreDetail.data) return undefined;
+    const identityMerged: DetailData = {
+      ...coreDetail.data,
+      quote: identityDetail.data?.quote ?? coreDetail.data.quote,
+      company: identityDetail.data?.company ?? coreDetail.data.company,
+    };
+    if (!permissions.canUseAdvancedAnalysis || !advancedDetail.data) {
+      return identityMerged;
+    }
+    return {
+      ...identityMerged,
+      ...advancedDetail.data,
+    };
+  }, [
+    advancedDetail.data,
+    coreDetail.data,
+    identityDetail.data,
+    permissions.canUseAdvancedAnalysis,
+  ]);
+
+  const detail = {
+    data,
+    isLoading: coreDetail.isLoading,
+    isError: coreDetail.isError,
+  };
 
   const market = marketOf(ticker, data?.quote, data?.company);
 
@@ -1352,6 +1453,12 @@ export default function DetailPage() {
   const changePositive = (toNumber(data?.quote?.changePercent) ?? 0) >= 0;
 
   useEffect(() => {
+    if (!permissions.canUseAdvancedAnalysis && tab !== "chart") {
+      setTab("chart");
+    }
+  }, [permissions.canUseAdvancedAnalysis, tab]);
+
+  useEffect(() => {
     const state = readDetailState(ticker);
     sessionStorage.setItem(
       `sa-detail-state:${ticker}`,
@@ -1395,7 +1502,7 @@ export default function DetailPage() {
       className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background"
     >
       <header className="relative z-20 shrink-0 border-b border-card-border bg-background px-3 pb-2 pt-3">
-        <div className="grid grid-cols-[36px_minmax(0,1fr)_auto_36px] items-center gap-2">
+        <div className="grid grid-cols-[36px_minmax(0,1fr)_auto_36px_36px] items-center gap-2">
           <button
             type="button"
             aria-label="뒤로가기"
@@ -1443,6 +1550,15 @@ export default function DetailPage() {
 
           <button
             type="button"
+            aria-label="알림 설정"
+            onClick={() => setAlertOpen(true)}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card text-muted-foreground"
+          >
+            <Bell className="h-4 w-4" />
+          </button>
+
+          <button
+            type="button"
             aria-label="관심종목"
             onClick={() =>
               setWatched(
@@ -1466,8 +1582,13 @@ export default function DetailPage() {
           </button>
         </div>
 
-        <div className="mt-2 grid grid-cols-6 gap-1">
-          {TABS.map((item) => (
+        <div
+          className="mt-2 grid gap-1"
+          style={{
+            gridTemplateColumns: `repeat(${visibleTabs.length}, minmax(0, 1fr))`,
+          }}
+        >
+          {visibleTabs.map((item) => (
             <button
               key={item.key}
               type="button"
@@ -1500,8 +1621,9 @@ export default function DetailPage() {
           </CenterMessage>
         )}
 
-        {data && tab === "overview" && (
+        {permissions.canUseAdvancedAnalysis && data && tab === "overview" && (
           <OverviewTab
+            ticker={ticker}
             name={companyName}
             market={market}
             currency={currency}
@@ -1511,7 +1633,7 @@ export default function DetailPage() {
           />
         )}
 
-        {data && tab === "ai" && (
+        {permissions.canUseAdvancedAnalysis && data && tab === "ai" && (
           <AiTab
             market={market}
             currency={currency}
@@ -1529,14 +1651,16 @@ export default function DetailPage() {
             currentPrice={currentPrice}
             currency={currency}
             studyId={studyId}
+            basicOnly={!permissions.canUseAdvancedAnalysis}
+            showAutoTradingData={permissions.canUseAutoTrading}
           />
         )}
 
-        {data && tab === "financials" && (
+        {permissions.canUseAdvancedAnalysis && data && tab === "financials" && (
           <FinancialTab financials={data.financials} currency={currency} />
         )}
 
-        {data && tab === "filings" && (
+        {permissions.canUseAdvancedAnalysis && data && tab === "filings" && (
           <FilingTab
             ticker={ticker}
             market={market}
@@ -1545,10 +1669,53 @@ export default function DetailPage() {
           />
         )}
 
-        {data && tab === "news" && (
-          <NewsTab ticker={ticker} news={data.news} summary={insights.newsAiSummary} />
+        {permissions.canUseAdvancedAnalysis && data && tab === "news" && (
+          <NewsTab
+            ticker={ticker}
+            news={data.news}
+            summary={insights.newsAiSummary}
+          />
         )}
       </main>
+
+      {alertOpen && (
+        <Modal
+          title={`${companyName} 알림`}
+          onClose={() => setAlertOpen(false)}
+        >
+          <PriceAlertCard
+            assetType="stock"
+            market={market}
+            symbol={ticker}
+            currentPrice={currentPrice}
+            currency={currency}
+          />
+          {permissions.canUseAdvancedAnalysis && (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setAlertOpen(false);
+                  setTab("news");
+                }}
+                className="rounded-xl border border-card-border bg-secondary px-3 py-2 text-xs font-extrabold"
+              >
+                관련 뉴스
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAlertOpen(false);
+                  setTab("filings");
+                }}
+                className="rounded-xl border border-card-border bg-secondary px-3 py-2 text-xs font-extrabold"
+              >
+                관련 공시
+              </button>
+            </div>
+          )}
+        </Modal>
+      )}
 
       <BottomNav />
     </div>
@@ -1606,12 +1773,6 @@ function SectionCard({
             <span className="block break-keep text-base font-extrabold leading-6">
               {title}
             </span>
-
-            {subtitle && (
-              <span className="mt-0.5 block break-keep text-[11px] font-bold leading-5 text-muted-foreground">
-                {subtitle}
-              </span>
-            )}
           </span>
 
           <ChevronDown
@@ -1632,16 +1793,81 @@ function SectionCard({
   );
 }
 
-function inferCompanyBusiness(name: string, ticker: string, company: AnyObj | null) {
-  const direct = firstText(company?.industry, company?.sector, company?.business, company?.businessType, company?.category);
+function inferCompanyBusiness(
+  name: string,
+  ticker: string,
+  company: AnyObj | null,
+) {
+  const direct = firstText(
+    company?.industry,
+    company?.sector,
+    company?.business,
+    company?.businessType,
+    company?.category,
+  );
   const text = `${name} ${ticker} ${direct ?? ""}`.toLowerCase();
-  if (/삼성전자|하이닉스|nvidia|amd|intel|broadcom|micron|반도체/.test(text)) return "반도체·전자 기업으로 메모리, 시스템반도체, AI 연산칩 또는 관련 장비·부품 사업의 실적과 업황 영향을 크게 받습니다.";
-  if (/바이오|제약|pharma|therapeutics|셀트리온|삼성바이오|lilly|pfizer/.test(text)) return "바이오·제약 기업으로 신약, 바이오의약품, 임상, 허가, 생산계약과 연구개발 성과가 기업가치에 큰 영향을 줍니다.";
-  if (/현대차|기아|tesla|motor|rivian|자동차/.test(text)) return "자동차·모빌리티 기업으로 완성차 판매, 전기차, 배터리 원가, 환율과 글로벌 수요에 따라 실적이 움직입니다.";
-  if (/은행|증권|금융|bank|jpmorgan|visa/.test(text)) return "금융 기업으로 금리, 대출·예금, 수수료, 자산건전성 또는 결제 거래량이 핵심 실적 변수입니다.";
-  if (/소프트웨어|software|microsoft|alphabet|naver|카카오|oracle|meta/.test(text)) return "소프트웨어·인터넷 기업으로 플랫폼 이용자, 광고, 클라우드, 구독과 AI 서비스 성장이 핵심 사업입니다.";
-  if (/에너지|화학|oil|gas|battery|배터리/.test(text)) return "에너지·소재 기업으로 원자재 가격, 제품 스프레드, 설비 가동률과 전방산업 수요에 영향을 받습니다.";
-  return direct ? `${direct} 분야를 중심으로 사업을 영위하는 상장기업입니다. 매출 구성, 주요 고객, 경쟁력과 최근 실적을 함께 확인하세요.` : `${name}은(는) ${/^\d/.test(ticker) ? "대한민국" : "미국"} 상장기업입니다. 회사 개요 데이터가 부족해 재무제표·공시·뉴스의 사업 내용을 함께 확인해야 합니다.`;
+  if (/삼성전자|하이닉스|nvidia|amd|intel|broadcom|micron|반도체/.test(text))
+    return "반도체·전자 기업으로 메모리, 시스템반도체, AI 연산칩 또는 관련 장비·부품 사업의 실적과 업황 영향을 크게 받습니다.";
+  if (
+    /바이오|제약|pharma|therapeutics|셀트리온|삼성바이오|lilly|pfizer/.test(
+      text,
+    )
+  )
+    return "바이오·제약 기업으로 신약, 바이오의약품, 임상, 허가, 생산계약과 연구개발 성과가 기업가치에 큰 영향을 줍니다.";
+  if (/현대차|기아|tesla|motor|rivian|자동차/.test(text))
+    return "자동차·모빌리티 기업으로 완성차 판매, 전기차, 배터리 원가, 환율과 글로벌 수요에 따라 실적이 움직입니다.";
+  if (/은행|증권|금융|bank|jpmorgan|visa/.test(text))
+    return "금융 기업으로 금리, 대출·예금, 수수료, 자산건전성 또는 결제 거래량이 핵심 실적 변수입니다.";
+  if (
+    /소프트웨어|software|microsoft|alphabet|naver|카카오|oracle|meta/.test(text)
+  )
+    return "소프트웨어·인터넷 기업으로 플랫폼 이용자, 광고, 클라우드, 구독과 AI 서비스 성장이 핵심 사업입니다.";
+  if (/에너지|화학|oil|gas|battery|배터리/.test(text))
+    return "에너지·소재 기업으로 원자재 가격, 제품 스프레드, 설비 가동률과 전방산업 수요에 영향을 받습니다.";
+  return direct
+    ? `${direct} 분야를 중심으로 사업을 영위하는 상장기업입니다. 매출 구성, 주요 고객, 경쟁력과 최근 실적을 함께 확인하세요.`
+    : `${name}은(는) ${/^\d/.test(ticker) ? "대한민국" : "미국"} 상장기업입니다. 회사 개요 데이터가 부족해 재무제표·공시·뉴스의 사업 내용을 함께 확인해야 합니다.`;
+}
+
+function cleanCompanyOverview(
+  value: unknown,
+  name: string,
+  ticker: string,
+  company: AnyObj | null,
+) {
+  const fallback = inferCompanyBusiness(name, ticker, company);
+  let text = translateMarketText(String(value ?? ""))
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/[-_=]{4,}/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const looksLikeReportIndex =
+    /(요약재무정보|연결재무제표|별도재무제표|재무에 관한 사항|배당에 관한 사항|증권의 발행|감사인의 감사|임원 및 직원|주주에 관한 사항)/.test(
+      text,
+    ) ||
+    (text.match(/(?:^|\s)(?:[IVXⅠⅡⅢⅣⅤ]+|\d{1,3})[.)]?\s/g) ?? []).length >= 5;
+
+  if (!text || looksLikeReportIndex) return fallback;
+
+  const blocked = /(목차|사업보고서|분기보고서|반기보고서|재무제표|감사보고서)/;
+  const sentences = text
+    .split(/(?<=[.!?。！？])\s+|[\r\n]+/)
+    .map((sentence) => sentence.trim())
+    .filter(
+      (sentence) =>
+        sentence.length >= 20 &&
+        sentence.length <= 260 &&
+        !blocked.test(sentence),
+    );
+
+  const unique = [...new Set(sentences)].slice(0, 3);
+  const summary = unique.join(" ").trim();
+  return summary.length >= 30 ? summary : fallback;
 }
 
 type RiskGrade = "낮음" | "보통" | "높음" | "매우 높음" | "데이터 부족";
@@ -1666,17 +1892,32 @@ function computeRiskBreakdown(
   {
     const ratios = fin?.ratios ?? {};
     const debtRatio = firstNumber(ratios.debtRatio, fin?.debtRatio);
-    const annual = Array.isArray(fin?.annual) ? fin.annual : Array.isArray(fin?.yearly) ? fin.yearly : [];
-    const quarterly = Array.isArray(fin?.quarterly) ? fin.quarterly : Array.isArray(fin?.quarters) ? fin.quarters : [];
+    const annual = Array.isArray(fin?.annual)
+      ? fin.annual
+      : Array.isArray(fin?.yearly)
+        ? fin.yearly
+        : [];
+    const quarterly = Array.isArray(fin?.quarterly)
+      ? fin.quarterly
+      : Array.isArray(fin?.quarters)
+        ? fin.quarters
+        : [];
     const latest = quarterly[0] ?? annual[0] ?? null;
-    const netIncome = latest ? firstNumber(latest.netIncome, latest.profit) : null;
+    const netIncome = latest
+      ? firstNumber(latest.netIncome, latest.profit)
+      : null;
     if (debtRatio == null && netIncome == null) {
-      rows.push({ name: "재무 위험", grade: "데이터 부족", reason: "부채비율·순이익 데이터가 없습니다." });
+      rows.push({
+        name: "재무 위험",
+        grade: "데이터 부족",
+        reason: "부채비율·순이익 데이터가 없습니다.",
+      });
     } else {
       const deficit = netIncome != null && netIncome < 0;
       let grade: RiskGrade = "보통";
       if (deficit && debtRatio != null && debtRatio >= 200) grade = "매우 높음";
-      else if (deficit || (debtRatio != null && debtRatio >= 200)) grade = "높음";
+      else if (deficit || (debtRatio != null && debtRatio >= 200))
+        grade = "높음";
       else if (debtRatio != null && debtRatio < 100) grade = "낮음";
       rows.push({
         name: "재무 위험",
@@ -1692,11 +1933,16 @@ function computeRiskBreakdown(
     const per = firstNumber(ratios.per, quote?.per, quote?.pe);
     const pbr = firstNumber(ratios.pbr, quote?.pbr, quote?.pb);
     if (per == null && pbr == null) {
-      rows.push({ name: "밸류에이션 위험", grade: "데이터 부족", reason: "PER·PBR 데이터가 없습니다." });
+      rows.push({
+        name: "밸류에이션 위험",
+        grade: "데이터 부족",
+        reason: "PER·PBR 데이터가 없습니다.",
+      });
     } else {
       let grade: RiskGrade = "보통";
       const high = (per != null && per > 40) || (pbr != null && pbr > 5);
-      const low = (per != null && per > 0 && per < 10) && (pbr == null || pbr < 1.5);
+      const low =
+        per != null && per > 0 && per < 10 && (pbr == null || pbr < 1.5);
       const deficit = per != null && per <= 0;
       if (high) grade = "높음";
       else if (deficit) grade = "높음";
@@ -1712,7 +1958,11 @@ function computeRiskBreakdown(
   // 가격 변동성 위험 — 최근 캔들 일간 변동성
   {
     if (candles.length < 6) {
-      rows.push({ name: "가격 변동성 위험", grade: "데이터 부족", reason: "변동성 계산에 필요한 캔들이 부족합니다." });
+      rows.push({
+        name: "가격 변동성 위험",
+        grade: "데이터 부족",
+        reason: "변동성 계산에 필요한 캔들이 부족합니다.",
+      });
     } else {
       const recent = candles.slice(-20);
       const ranges = recent.map((c) => (c.high - c.low) / (c.close || 1));
@@ -1721,7 +1971,11 @@ function computeRiskBreakdown(
       if (avg >= 0.07) grade = "매우 높음";
       else if (avg >= 0.045) grade = "높음";
       else if (avg < 0.02) grade = "낮음";
-      rows.push({ name: "가격 변동성 위험", grade, reason: `최근 평균 일간 변동폭 약 ${(avg * 100).toFixed(1)}%` });
+      rows.push({
+        name: "가격 변동성 위험",
+        grade,
+        reason: `최근 평균 일간 변동폭 약 ${(avg * 100).toFixed(1)}%`,
+      });
     }
   }
 
@@ -1730,7 +1984,11 @@ function computeRiskBreakdown(
     const last = candles[candles.length - 1] ?? null;
     const tradeValue = last ? last.volume * last.close : null;
     if (tradeValue == null || tradeValue <= 0) {
-      rows.push({ name: "유동성 위험", grade: "데이터 부족", reason: "거래대금 데이터가 없습니다." });
+      rows.push({
+        name: "유동성 위험",
+        grade: "데이터 부족",
+        reason: "거래대금 데이터가 없습니다.",
+      });
     } else {
       const market = marketOf(data.ticker, quote, data.company);
       const threshold = market === "KR" ? 1_000_000_000 : 5_000_000; // 10억원 / $5M
@@ -1738,14 +1996,22 @@ function computeRiskBreakdown(
       let grade: RiskGrade = "보통";
       if (tradeValue < lowThreshold) grade = "높음";
       else if (tradeValue >= threshold) grade = "낮음";
-      rows.push({ name: "유동성 위험", grade, reason: `최근 거래대금 ${formatCompactMoney(tradeValue, currencyOf(market, quote))}` });
+      rows.push({
+        name: "유동성 위험",
+        grade,
+        reason: `최근 거래대금 ${formatCompactMoney(tradeValue, currencyOf(market, quote))}`,
+      });
     }
   }
 
   // 기술적 위험 — RSI / 이평 위치
   {
     if (!chartStats || chartStats.rsi == null) {
-      rows.push({ name: "기술적 위험", grade: "데이터 부족", reason: "기술 지표 계산 데이터가 부족합니다." });
+      rows.push({
+        name: "기술적 위험",
+        grade: "데이터 부족",
+        reason: "기술 지표 계산 데이터가 부족합니다.",
+      });
     } else {
       const rsi = chartStats.rsi;
       let grade: RiskGrade = "보통";
@@ -1753,7 +2019,11 @@ function computeRiskBreakdown(
       else if (rsi >= 70 || rsi <= 30) grade = "보통";
       else grade = "낮음";
       const trend = chartStats.trend;
-      rows.push({ name: "기술적 위험", grade, reason: `RSI ${rsi.toFixed(0)} · ${trend}` });
+      rows.push({
+        name: "기술적 위험",
+        grade,
+        reason: `RSI ${rsi.toFixed(0)} · ${trend}`,
+      });
     }
   }
 
@@ -1761,40 +2031,70 @@ function computeRiskBreakdown(
   {
     const news = Array.isArray(data.news) ? data.news : [];
     if (news.length === 0) {
-      rows.push({ name: "뉴스 위험", grade: "데이터 부족", reason: "수집된 뉴스가 없습니다." });
+      rows.push({
+        name: "뉴스 위험",
+        grade: "데이터 부족",
+        reason: "수집된 뉴스가 없습니다.",
+      });
     } else {
-      const negRe = /적자|하락|급락|감소|악재|소송|리콜|횡령|배임|하향|경고|부진|손실/;
-      const negCount = news.filter((n) => negRe.test(String(n.title ?? n.headline ?? ""))).length;
+      const negRe =
+        /적자|하락|급락|감소|악재|소송|리콜|횡령|배임|하향|경고|부진|손실/;
+      const negCount = news.filter((n) =>
+        negRe.test(String(n.title ?? n.headline ?? "")),
+      ).length;
       let grade: RiskGrade = "낮음";
       if (negCount >= 3) grade = "높음";
       else if (negCount >= 1) grade = "보통";
-      rows.push({ name: "뉴스 위험", grade, reason: negCount > 0 ? `부정적 표현 뉴스 ${negCount}건 감지` : `최근 뉴스 ${news.length}건에서 부정 신호 없음` });
+      rows.push({
+        name: "뉴스 위험",
+        grade,
+        reason:
+          negCount > 0
+            ? `부정적 표현 뉴스 ${negCount}건 감지`
+            : `최근 뉴스 ${news.length}건에서 부정 신호 없음`,
+      });
     }
   }
 
   const filings = Array.isArray(data.filings) ? data.filings : [];
-  const filingTitle = (f: AnyObj) => String(f.title ?? f.report_nm ?? f.report ?? f.form ?? "");
+  const filingTitle = (f: AnyObj) =>
+    String(f.title ?? f.report_nm ?? f.report ?? f.form ?? "");
 
   // 공시 위험 — 공시 존재 여부
   {
     if (filings.length === 0) {
-      rows.push({ name: "공시 위험", grade: "데이터 부족", reason: "수집된 공시가 없습니다." });
+      rows.push({
+        name: "공시 위험",
+        grade: "데이터 부족",
+        reason: "수집된 공시가 없습니다.",
+      });
     } else {
-      rows.push({ name: "공시 위험", grade: "낮음", reason: `최근 공시 ${filings.length}건 확인됨` });
+      rows.push({
+        name: "공시 위험",
+        grade: "낮음",
+        reason: `최근 공시 ${filings.length}건 확인됨`,
+      });
     }
   }
 
   // 오퍼링·유상증자 위험 — 공시 제목 키워드 검색
   {
     if (filings.length === 0) {
-      rows.push({ name: "오퍼링·유상증자 위험", grade: "데이터 부족", reason: "공시 데이터가 없습니다." });
+      rows.push({
+        name: "오퍼링·유상증자 위험",
+        grade: "데이터 부족",
+        reason: "공시 데이터가 없습니다.",
+      });
     } else {
       const re = /유상증자|전환사채|신주인수권|CB|BW|offering|dilut/i;
       const hits = filings.filter((f) => re.test(filingTitle(f)));
       rows.push({
         name: "오퍼링·유상증자 위험",
         grade: hits.length >= 2 ? "높음" : hits.length === 1 ? "보통" : "낮음",
-        reason: hits.length > 0 ? `유상증자·전환사채 관련 공시 ${hits.length}건` : "관련 공시 없음",
+        reason:
+          hits.length > 0
+            ? `유상증자·전환사채 관련 공시 ${hits.length}건`
+            : "관련 공시 없음",
       });
     }
   }
@@ -1802,14 +2102,22 @@ function computeRiskBreakdown(
   // 상장폐지·거래정지 위험 — 공시 키워드
   {
     if (filings.length === 0) {
-      rows.push({ name: "상장폐지·거래정지 위험", grade: "데이터 부족", reason: "공시 데이터가 없습니다." });
+      rows.push({
+        name: "상장폐지·거래정지 위험",
+        grade: "데이터 부족",
+        reason: "공시 데이터가 없습니다.",
+      });
     } else {
-      const re = /상장폐지|거래정지|관리종목|감사의견\s*거절|투자주의|투자경고|delist|going concern/i;
+      const re =
+        /상장폐지|거래정지|관리종목|감사의견\s*거절|투자주의|투자경고|delist|going concern/i;
       const hits = filings.filter((f) => re.test(filingTitle(f)));
       rows.push({
         name: "상장폐지·거래정지 위험",
         grade: hits.length > 0 ? "매우 높음" : "낮음",
-        reason: hits.length > 0 ? `관련 공시 ${hits.length}건 감지` : "관련 공시 없음",
+        reason:
+          hits.length > 0
+            ? `관련 공시 ${hits.length}건 감지`
+            : "관련 공시 없음",
       });
     }
   }
@@ -1822,24 +2130,47 @@ function computeRiskBreakdown(
       data.risk?.shortRatio,
     );
     if (shortRatio == null) {
-      rows.push({ name: "공매도 위험", grade: "데이터 부족", reason: "공매도 비중 데이터가 없습니다." });
+      rows.push({
+        name: "공매도 위험",
+        grade: "데이터 부족",
+        reason: "공매도 비중 데이터가 없습니다.",
+      });
     } else {
       let grade: RiskGrade = "보통";
       if (shortRatio >= 15) grade = "높음";
       else if (shortRatio < 5) grade = "낮음";
-      rows.push({ name: "공매도 위험", grade, reason: `공매도 비중 약 ${shortRatio.toFixed(1)}%` });
+      rows.push({
+        name: "공매도 위험",
+        grade,
+        reason: `공매도 비중 약 ${shortRatio.toFixed(1)}%`,
+      });
     }
   }
 
   // 수급 위험 — 외국인/기관 순매도 지속(quote/risk에 값이 있을 때만)
   {
-    const foreignNet = firstNumber(quote?.foreignNet, quote?.foreignNetBuy, data.risk?.foreignNet);
-    const instNet = firstNumber(quote?.institutionNet, quote?.instNetBuy, data.risk?.institutionNet);
+    const foreignNet = firstNumber(
+      quote?.foreignNet,
+      quote?.foreignNetBuy,
+      data.risk?.foreignNet,
+    );
+    const instNet = firstNumber(
+      quote?.institutionNet,
+      quote?.instNetBuy,
+      data.risk?.institutionNet,
+    );
     if (foreignNet == null && instNet == null) {
-      rows.push({ name: "수급 위험", grade: "데이터 부족", reason: "외국인·기관 순매수 데이터가 없습니다." });
+      rows.push({
+        name: "수급 위험",
+        grade: "데이터 부족",
+        reason: "외국인·기관 순매수 데이터가 없습니다.",
+      });
     } else {
-      const bothSell = (foreignNet != null && foreignNet < 0) && (instNet != null && instNet < 0);
-      const anySell = (foreignNet != null && foreignNet < 0) || (instNet != null && instNet < 0);
+      const bothSell =
+        foreignNet != null && foreignNet < 0 && instNet != null && instNet < 0;
+      const anySell =
+        (foreignNet != null && foreignNet < 0) ||
+        (instNet != null && instNet < 0);
       let grade: RiskGrade = "보통";
       if (bothSell) grade = "높음";
       else if (!anySell) grade = "낮음";
@@ -1870,6 +2201,7 @@ function riskGradeTone(grade: RiskGrade): string {
 }
 
 function OverviewTab({
+  ticker,
   name,
   market,
   currency,
@@ -1877,6 +2209,7 @@ function OverviewTab({
   insights,
   metrics,
 }: {
+  ticker: string;
   name: string;
   market: Market;
   currency: Currency;
@@ -1887,7 +2220,10 @@ function OverviewTab({
   const isPlaceholderDescription = (value: unknown): boolean => {
     const text = String(value ?? "").trim();
     if (!text) return true;
-    return /기업 정보입니다\.?$/.test(text) || /기업 정보를 확인 중입니다\.?$/.test(text);
+    return (
+      /기업 정보입니다\.?$/.test(text) ||
+      /기업 정보를 확인 중입니다\.?$/.test(text)
+    );
   };
 
   const rawDescription = firstText(
@@ -1897,12 +2233,24 @@ function OverviewTab({
     data.company?.summary,
     data.company?.companyDescription,
   );
-  const description = rawDescription && !isPlaceholderDescription(rawDescription) ? rawDescription : null;
+  const description = cleanCompanyOverview(
+    rawDescription && !isPlaceholderDescription(rawDescription)
+      ? rawDescription
+      : null,
+    name,
+    ticker,
+    data.company,
+  );
 
-  const chartStats = normalizeCandles(data.candles ?? []).length >= 2
-    ? calculateChartStats(normalizeCandles(data.candles ?? []))
-    : null;
+  const chartStats =
+    normalizeCandles(data.candles ?? []).length >= 2
+      ? calculateChartStats(normalizeCandles(data.candles ?? []))
+      : null;
   const riskRows = computeRiskBreakdown(data, chartStats);
+  const [detailModal, setDetailModal] = useState<{
+    title: string;
+    text: string;
+  } | null>(null);
 
   const marketCap = firstNumber(
     data.quote?.marketCap,
@@ -1914,8 +2262,16 @@ function OverviewTab({
 
   const industry = firstText(data.company?.industry, data.company?.sector);
   const exchange = firstText(data.company?.exchange, data.quote?.exchange);
-  const website = safeUrl(firstText(data.company?.website, data.company?.homepage, data.company?.hm_url));
-  const provider = firstText(data.company?.provider) ?? (market === "KR" ? "DART/네이버" : "SEC/Yahoo");
+  const website = safeUrl(
+    firstText(
+      data.company?.website,
+      data.company?.homepage,
+      data.company?.hm_url,
+    ),
+  );
+  const provider =
+    firstText(data.company?.provider) ??
+    (market === "KR" ? "DART/네이버" : "SEC/Yahoo");
 
   return (
     <div className="flex flex-col gap-3">
@@ -1927,7 +2283,10 @@ function OverviewTab({
           <div className="flex min-w-0 flex-col items-center gap-1">
             <p className="truncate text-base font-extrabold">{name}</p>
             <span className="shrink-0 rounded-full bg-secondary/70 px-2.5 py-1 text-[10px] font-extrabold text-muted-foreground">
-              시총 {marketCap != null ? formatCompactMoney(marketCap, currency) : "정보 없음"}
+              시총{" "}
+              {marketCap != null
+                ? formatCompactMoney(marketCap, currency)
+                : "정보 없음"}
             </span>
           </div>
         </div>
@@ -1938,12 +2297,15 @@ function OverviewTab({
           </p>
 
           <p className="mt-1 break-keep text-xs font-semibold leading-5 text-muted-foreground">
-            {description ? translateMarketText(description) : "회사 설명 데이터가 없습니다"}
+            {description}
           </p>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2">
           <MiniMetric label="업종·산업" value={industry ?? "정보 없음"} />
-          <MiniMetric label="시장(거래소)" value={exchange ?? (market === "KR" ? "국내" : "미국")} />
+          <MiniMetric
+            label="시장(거래소)"
+            value={exchange ?? (market === "KR" ? "국내" : "미국")}
+          />
         </div>
         {website && (
           <div className="mt-2 text-center">
@@ -1986,55 +2348,139 @@ function OverviewTab({
         <div className="mt-2 grid grid-cols-3 gap-2">
           <MiniMetric
             label="적정가"
-            value={metrics.fairPrice != null ? formatAppPrice(metrics.fairPrice, currency) : "산출 불가"}
+            value={
+              metrics.fairPrice != null
+                ? formatAppPrice(metrics.fairPrice, currency)
+                : "산출 불가"
+            }
             valueClassName="text-primary"
           />
 
           <MiniMetric
             label="목표가"
-            value={metrics.targetPrice != null ? formatAppPrice(metrics.targetPrice, currency) : "산출 불가"}
+            value={
+              metrics.targetPrice != null
+                ? formatAppPrice(metrics.targetPrice, currency)
+                : "산출 불가"
+            }
             valueClassName="text-positive"
           />
 
           <MiniMetric
             label="손절가"
-            value={metrics.stopPrice != null ? formatAppPrice(metrics.stopPrice, currency) : "산출 불가"}
+            value={
+              metrics.stopPrice != null
+                ? formatAppPrice(metrics.stopPrice, currency)
+                : "산출 불가"
+            }
             valueClassName="text-destructive"
           />
         </div>
 
         <p className="mb-1 mt-3 text-[10px] font-extrabold">핵심 투자 포인트</p>
 
-        <div className="space-y-2">
-          <SignalBox label="호재" text={positiveSummary(insights)} positive />
+        <div className="grid grid-cols-3 gap-2">
+          <SignalBox
+            label="호재"
+            text={positiveSummary(insights)}
+            positive
+            compact
+            onClick={() =>
+              setDetailModal({
+                title: "호재 근거",
+                text:
+                  [
+                    ...(insights.newsDisclosureSummary ?? []),
+                    ...(insights.financialSummary ?? []),
+                    ...(insights.chartSummary ?? []),
+                  ]
+                    .filter((row) =>
+                      /상승|증가|개선|성장|호재|긍정|강세|흑자|계약|수주|돌파|우수/.test(
+                        row,
+                      ),
+                    )
+                    .join(" ") || "현재 확인된 뚜렷한 호재가 없습니다.",
+              })
+            }
+          />
 
-          <SignalBox label="악재" text={negativeSummary(insights)} />
+          <SignalBox
+            label="악재"
+            text={negativeSummary(insights)}
+            compact
+            onClick={() =>
+              setDetailModal({
+                title: "악재 근거",
+                text:
+                  [
+                    ...(insights.riskSummary ?? []),
+                    ...(insights.newsDisclosureSummary ?? []),
+                    ...(insights.financialSummary ?? []),
+                  ]
+                    .filter((row) =>
+                      /하락|감소|악화|부진|악재|부정|약세|적자|위험|과열|부채|주의/.test(
+                        row,
+                      ),
+                    )
+                    .join(" ") || "현재 확인된 뚜렷한 악재가 없습니다.",
+              })
+            }
+          />
           <SignalBox
             label="리스크"
             text={insights.riskSummary?.[0] ?? metrics.riskCaption}
+            compact
+            onClick={() =>
+              setDetailModal({
+                title: "리스크 설명",
+                text:
+                  (insights.riskSummary ?? []).join(" ") ||
+                  metrics.riskCaption ||
+                  "현재 확인된 별도 리스크가 없습니다.",
+              })
+            }
           />
         </div>
 
-        <p className="mb-1 mt-4 text-center text-[10px] font-extrabold">세부 위험 분석</p>
+        <p className="mb-1 mt-4 text-center text-[10px] font-extrabold">
+          세부 위험 분석
+        </p>
         <div className="space-y-1.5">
           {riskRows.map((row) => (
-            <div
+            <button
               key={row.name}
-              className="rounded-xl bg-secondary/50 px-3 py-2 text-center"
+              type="button"
+              onClick={() =>
+                setDetailModal({
+                  title: `${row.name} 설명`,
+                  text: row.reason || "설명 데이터가 없습니다.",
+                })
+              }
+              className="w-full rounded-xl bg-secondary/50 px-3 py-2 text-center"
             >
               <div className="flex items-center justify-center gap-2">
                 <span className="text-[11px] font-extrabold">{row.name}</span>
-                <span className={cn("text-[11px] font-black", riskGradeTone(row.grade))}>
+                <span
+                  className={cn(
+                    "text-[11px] font-black",
+                    riskGradeTone(row.grade),
+                  )}
+                >
                   {row.grade}
                 </span>
               </div>
               <p className="mt-0.5 break-keep text-[10px] font-semibold leading-4 text-muted-foreground">
                 {row.reason}
               </p>
-            </div>
+            </button>
           ))}
         </div>
       </SectionCard>
+      {detailModal && (
+        <Modal title={detailModal.title} onClose={() => setDetailModal(null)}>
+          <p>{detailModal.text}</p>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -2052,6 +2498,10 @@ function AiTab({
   insights: ReturnType<typeof buildAiInsights>;
   metrics: CoreMetrics;
 }) {
+  const [analysisModal, setAnalysisModal] = useState<{
+    title: string;
+    text: string;
+  } | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<{
     label: string;
     value: string;
@@ -2118,7 +2568,10 @@ function AiTab({
     },
     {
       label: "손절 기준",
-      value: metrics.stopPrice != null ? formatAppPrice(metrics.stopPrice, currency) : "산출 불가",
+      value:
+        metrics.stopPrice != null
+          ? formatAppPrice(metrics.stopPrice, currency)
+          : "산출 불가",
       reason:
         "이 가격 아래에서 일봉이 마감하면 지지선이 무너져 기존 상승 시나리오가 틀렸을 가능성이 커집니다. 물타기보다 위험 축소를 우선합니다.",
       checklist: [
@@ -2130,7 +2583,10 @@ function AiTab({
     },
     {
       label: "목표가 · 분할매도",
-      value: metrics.targetPrice != null ? formatAppPrice(metrics.targetPrice, currency) : "산출 불가",
+      value:
+        metrics.targetPrice != null
+          ? formatAppPrice(metrics.targetPrice, currency)
+          : "산출 불가",
       reason:
         "목표가에 한 번에 모두 매도하지 않고 상승 강도와 거래량을 보며 나누어 이익을 확정합니다.",
       checklist: [
@@ -2173,7 +2629,20 @@ function AiTab({
         open={openSections.chart}
         onToggle={() => toggleSection("chart")}
       >
-        <SummaryItems items={insights.chartSummary} />
+        <button
+          type="button"
+          onClick={() =>
+            setAnalysisModal({
+              title: "차트 분석",
+              text:
+                (insights.chartSummary ?? []).join(" ") ||
+                "차트 분석 데이터가 부족합니다.",
+            })
+          }
+          className="w-full text-left"
+        >
+          <SummaryItems items={insights.chartSummary} />
+        </button>
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -2181,7 +2650,20 @@ function AiTab({
         open={openSections.financial}
         onToggle={() => toggleSection("financial")}
       >
-        <SummaryItems items={insights.financialSummary} />
+        <button
+          type="button"
+          onClick={() =>
+            setAnalysisModal({
+              title: "재무 분석",
+              text:
+                (insights.financialSummary ?? []).join(" ") ||
+                "재무 분석 데이터가 부족합니다.",
+            })
+          }
+          className="w-full text-left"
+        >
+          <SummaryItems items={insights.financialSummary} />
+        </button>
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -2189,10 +2671,48 @@ function AiTab({
         open={openSections.news}
         onToggle={() => toggleSection("news")}
       >
-        <div className="space-y-2">
-          <SignalBox label="호재" text={positiveSummary(insights)} positive />
+        <div className="grid grid-cols-2 gap-2">
+          <SignalBox
+            label="호재"
+            text={positiveSummary(insights)}
+            positive
+            compact
+            onClick={() =>
+              setAnalysisModal({
+                title: "최근 호재",
+                text:
+                  (insights.newsDisclosureSummary ?? [])
+                    .filter((row) =>
+                      /상승|증가|개선|성장|호재|긍정|강세|흑자|계약|수주|돌파|우수/.test(
+                        row,
+                      ),
+                    )
+                    .join(" ") || "최근 확인된 뚜렷한 호재가 없습니다.",
+              })
+            }
+          />
 
-          <SignalBox label="악재" text={negativeSummary(insights)} />
+          <SignalBox
+            label="악재"
+            text={negativeSummary(insights)}
+            compact
+            onClick={() =>
+              setAnalysisModal({
+                title: "최근 악재",
+                text:
+                  [
+                    ...(insights.riskSummary ?? []),
+                    ...(insights.newsDisclosureSummary ?? []),
+                  ]
+                    .filter((row) =>
+                      /하락|감소|악화|부진|악재|부정|약세|적자|위험|과열|부채|주의/.test(
+                        row,
+                      ),
+                    )
+                    .join(" ") || "최근 확인된 뚜렷한 악재가 없습니다.",
+              })
+            }
+          />
         </div>
       </CollapsibleSection>
 
@@ -2216,6 +2736,15 @@ function AiTab({
           ))}
         </div>
       </CollapsibleSection>
+
+      {analysisModal && (
+        <Modal
+          title={analysisModal.title}
+          onClose={() => setAnalysisModal(null)}
+        >
+          <p>{analysisModal.text}</p>
+        </Modal>
+      )}
 
       {selectedPlan && (
         <Modal
@@ -2243,9 +2772,32 @@ function AiTab({
 
 function technicalSignalFocus(title: string, text: string): StudyChartFocus {
   const lower = title.toLowerCase();
-  const preferredIndicator = lower.includes("rsi") ? "rsi" : lower.includes("macd") ? "macd" : lower.includes("볼린저") ? "bollinger" : lower.includes("거래량") || lower.includes("obv") ? "volume" : lower.includes("이동평균") || lower.includes("고점") ? "moving-average" : undefined;
-  const markerStrategy: StudyMarkerStrategy = lower.includes("거래량") ? "highest-volume" : lower.includes("고점") || lower.includes("돌파") ? "breakout" : lower.includes("과매도") || lower.includes("저점") ? "recent-low" : "latest";
-  return { id: `signal-${title}`, title, summary: text, markerText: `${title} 확인`, markerStrategy, preferredIndicator };
+  const preferredIndicator = lower.includes("rsi")
+    ? "rsi"
+    : lower.includes("macd")
+      ? "macd"
+      : lower.includes("볼린저")
+        ? "bollinger"
+        : lower.includes("거래량") || lower.includes("obv")
+          ? "volume"
+          : lower.includes("이동평균") || lower.includes("고점")
+            ? "moving-average"
+            : undefined;
+  const markerStrategy: StudyMarkerStrategy = lower.includes("거래량")
+    ? "highest-volume"
+    : lower.includes("고점") || lower.includes("돌파")
+      ? "breakout"
+      : lower.includes("과매도") || lower.includes("저점")
+        ? "recent-low"
+        : "latest";
+  return {
+    id: `signal-${title}`,
+    title,
+    summary: text,
+    markerText: `${title} 확인`,
+    markerStrategy,
+    preferredIndicator,
+  };
 }
 
 function ChartTab({
@@ -2255,6 +2807,8 @@ function ChartTab({
   currentPrice,
   currency,
   studyId,
+  basicOnly,
+  showAutoTradingData,
 }: {
   ticker: string;
   fallbackRows: AnyObj[];
@@ -2262,6 +2816,8 @@ function ChartTab({
   currentPrice: number | null;
   currency: Currency;
   studyId: string | null;
+  basicOnly: boolean;
+  showAutoTradingData: boolean;
 }) {
   const storageKey = `sa-chart-state:${ticker}`;
   const storedChartState = useMemo(() => {
@@ -2289,8 +2845,25 @@ function ChartTab({
     focus: StudyChartFocus;
   } | null>(null);
 
+  const [selectedPatternSignal, setSelectedPatternSignal] =
+    useState<PatternSignalOccurrence | null>(null);
+  const [patternModalOpen, setPatternModalOpen] = useState(false);
+  const [patternHistoryOpen, setPatternHistoryOpen] = useState(false);
+  const [levelExplanation, setLevelExplanation] = useState<{
+    title: string;
+    value: string;
+    text: string;
+  } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [signalPanelOpen, setSignalPanelOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [chartHeight, setChartHeight] = useState(() => {
+    const stored = Number(
+      localStorage.getItem(`sa-chart-price-height:${ticker}`) ?? 360,
+    );
+    return Number.isFinite(stored) ? Math.min(720, Math.max(260, stored)) : 360;
+  });
   const [technicalOpen, setTechnicalOpen] = useState(
     storedChartState.technicalOpen ?? true,
   );
@@ -2307,22 +2880,29 @@ function ChartTab({
       getPortfolioChartOverlay(ticker),
     );
   const [autoSignal, setAutoSignal] = useState(() =>
-    getAutoTradeSignal(ticker),
+    showAutoTradingData ? getAutoTradeSignal(ticker) : null,
   );
   const tradeJournal = useQuery<{ entries: AutoTradeChartEntry[] }>({
     queryKey: ["detail-auto-trade-journal", ticker],
     queryFn: async () => {
       const response = await authorizedFetch("/api/stocks/auto-trade/journal");
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload?.message || "매매일지 조회 실패");
-      return { entries: Array.isArray(payload?.entries) ? payload.entries : [] };
+      if (!response.ok)
+        throw new Error(payload?.message || "매매일지 조회 실패");
+      return {
+        entries: Array.isArray(payload?.entries) ? payload.entries : [],
+      };
     },
     staleTime: 15_000,
     refetchInterval: 30_000,
     retry: false,
+    enabled: showAutoTradingData,
   });
   const tradeEntries = useMemo(
-    () => (tradeJournal.data?.entries ?? []).filter((entry) => entry.ticker.toUpperCase() === ticker.toUpperCase()),
+    () =>
+      (tradeJournal.data?.entries ?? []).filter(
+        (entry) => entry.ticker.toUpperCase() === ticker.toUpperCase(),
+      ),
     [ticker, tradeJournal.data],
   );
   const studyFocus = useMemo(() => getStudyChartFocus(studyId), [studyId]);
@@ -2337,7 +2917,7 @@ function ChartTab({
   useEffect(() => {
     const refresh = () => {
       setPortfolioOverlay(getPortfolioChartOverlay(ticker));
-      setAutoSignal(getAutoTradeSignal(ticker));
+      setAutoSignal(showAutoTradingData ? getAutoTradeSignal(ticker) : null);
     };
 
     refresh();
@@ -2350,7 +2930,7 @@ function ChartTab({
       window.removeEventListener("sa-portfolio-overlay-updated", refresh);
       window.removeEventListener("sa-auto-trade-updated", refresh);
     };
-  }, [ticker]);
+  }, [showAutoTradingData, ticker]);
 
   useEffect(() => {
     if (!studyFocus?.preferredIndicator) return;
@@ -2368,6 +2948,44 @@ function ChartTab({
       return next;
     });
   }, [studyFocus?.id]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      `sa-chart-price-height:${ticker}`,
+      String(chartHeight),
+    );
+  }, [chartHeight, ticker]);
+
+  useEffect(() => {
+    setSelectedPatternSignal(null);
+    setPatternModalOpen(false);
+    setPatternHistoryOpen(false);
+  }, [ticker, timeframe]);
+
+  const beginPriceChartResize = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      const startY = event.clientY;
+      const startHeight = chartHeight;
+      const move = (moveEvent: PointerEvent) => {
+        setChartHeight(
+          Math.min(
+            720,
+            Math.max(260, startHeight + moveEvent.clientY - startY),
+          ),
+        );
+      };
+      const finish = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", finish);
+        document.body.style.userSelect = "";
+      };
+      document.body.style.userSelect = "none";
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", finish, { once: true });
+    },
+    [chartHeight],
+  );
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -2746,38 +3364,305 @@ function ChartTab({
     },
   ];
 
+  const buyScore = Math.max(
+    0,
+    Math.min(
+      100,
+      Math.round(
+        50 +
+          (stats.trend === "상승 우위"
+            ? 18
+            : stats.trend === "하락 우위"
+              ? -18
+              : 0) +
+          ((stats.rsi ?? 50) >= 45 && (stats.rsi ?? 50) <= 68
+            ? 12
+            : (stats.rsi ?? 50) >= 75
+              ? -10
+              : 0) +
+          ((stats.volumeRatio ?? 1) >= 1.5 ? 10 : 0) +
+          (stats.macd != null &&
+          stats.macdSignal != null &&
+          stats.macd >= stats.macdSignal
+            ? 10
+            : -5),
+      ),
+    ),
+  );
+  const sellScore = Math.max(0, Math.min(100, 100 - buyScore));
+  const liveDecision =
+    buyScore >= 68 ? "매수 우위" : buyScore <= 38 ? "매도 우위" : "관망";
+  const analysisBasePrice = latest?.close ?? currentPrice;
+  const technicalRisk =
+    analysisBasePrice == null
+      ? null
+      : Math.max(atr != null ? atr * 1.5 : 0, analysisBasePrice * 0.02);
+  const technicalMarket: Market = currency === "USD" ? "US" : "KR";
+  const technicalEntry =
+    analysisBasePrice == null
+      ? null
+      : roundPrice(analysisBasePrice, technicalMarket);
+  const technicalStop =
+    analysisBasePrice != null && technicalRisk != null
+      ? roundPrice(
+          Math.max(0, analysisBasePrice - technicalRisk),
+          technicalMarket,
+        )
+      : null;
+  const technicalTarget1 =
+    analysisBasePrice != null && technicalRisk != null
+      ? roundPrice(analysisBasePrice + technicalRisk, technicalMarket)
+      : null;
+  const technicalTarget2 =
+    analysisBasePrice != null && technicalRisk != null
+      ? roundPrice(analysisBasePrice + technicalRisk * 2, technicalMarket)
+      : null;
+  const technicalRiskAmount =
+    technicalEntry != null && technicalStop != null
+      ? technicalEntry - technicalStop
+      : null;
+  const technicalReward1 =
+    technicalEntry != null && technicalTarget1 != null
+      ? technicalTarget1 - technicalEntry
+      : null;
+  const technicalReward2 =
+    technicalEntry != null && technicalTarget2 != null
+      ? technicalTarget2 - technicalEntry
+      : null;
+  const technicalRiskReward1 =
+    technicalRiskAmount != null &&
+    technicalRiskAmount > 0 &&
+    technicalReward1 != null &&
+    technicalReward1 >= 0
+      ? technicalReward1 / technicalRiskAmount
+      : null;
+  const technicalRiskReward2 =
+    technicalRiskAmount != null &&
+    technicalRiskAmount > 0 &&
+    technicalReward2 != null &&
+    technicalReward2 >= 0
+      ? technicalReward2 / technicalRiskAmount
+      : null;
+  const technicalDataCount = [
+    stats.rsi,
+    stats.macd,
+    stats.macdSignal,
+    stats.volumeRatio,
+    atr,
+  ].filter((value) => value != null && Number.isFinite(value)).length;
+  const technicalConfidence = Math.min(
+    95,
+    Math.max(
+      35,
+      Math.round(
+        35 + Math.abs(buyScore - sellScore) * 0.45 + technicalDataCount * 3,
+      ),
+    ),
+  );
+  const technicalChartLevels = useMemo<TechnicalChartLevels | null>(
+    () =>
+      basicOnly
+        ? null
+        : {
+            entry: technicalEntry,
+            stop: technicalStop,
+            target1: technicalTarget1,
+            target2: technicalTarget2,
+          },
+    [
+      basicOnly,
+      technicalEntry,
+      technicalStop,
+      technicalTarget1,
+      technicalTarget2,
+    ],
+  );
+  const liveSignalRows = [
+    {
+      label: "추세",
+      value: stats.trend,
+      active: stats.trend !== "혼조" && stats.trend !== "확인 중",
+    },
+    {
+      label: "RSI",
+      value:
+        stats.rsi == null
+          ? "계산 중"
+          : `${stats.rsi.toFixed(1)} · ${stats.rsi >= 70 ? "과매수" : stats.rsi <= 30 ? "과매도" : "중립"}`,
+      active: stats.rsi != null,
+    },
+    {
+      label: "MACD",
+      value:
+        stats.macd == null || stats.macdSignal == null
+          ? "계산 중"
+          : stats.macd >= stats.macdSignal
+            ? "상승 교차 우위"
+            : "하락 교차 우위",
+      active: stats.macd != null,
+    },
+    {
+      label: "거래량",
+      value:
+        stats.volumeRatio == null
+          ? "계산 중"
+          : `${stats.volumeRatio.toFixed(1)}배${stats.volumeRatio >= 1.5 ? " · 증가" : ""}`,
+      active: (stats.volumeRatio ?? 0) >= 1.5,
+    },
+    {
+      label: "최근 봉",
+      value:
+        latest == null
+          ? "대기 중"
+          : latest.close >= latest.open
+            ? "양봉 진행"
+            : "음봉 진행",
+      active: latest != null,
+    },
+  ];
+
+  const chartRowsForSignals = useMemo(() => buildChartRows(candles), [candles]);
+  const candlePatternSignals = useMemo(
+    () => (basicOnly ? [] : buildCandlePatternSignals(chartRowsForSignals)),
+    [basicOnly, chartRowsForSignals],
+  );
+  const chartPatternSignals = useMemo(
+    () => (basicOnly ? [] : buildChartPatternSignals(chartRowsForSignals)),
+    [basicOnly, chartRowsForSignals],
+  );
+  const allPatternSignals = useMemo(
+    () => [...candlePatternSignals, ...chartPatternSignals],
+    [candlePatternSignals, chartPatternSignals],
+  );
+  const matchingPatternHistory = useMemo(() => {
+    if (!selectedPatternSignal) return [];
+    return allPatternSignals
+      .filter(
+        (item) =>
+          item.kind === selectedPatternSignal.kind &&
+          item.name === selectedPatternSignal.name,
+      )
+      .sort((a, b) => Number(b.endTime) - Number(a.endTime));
+  }, [allPatternSignals, selectedPatternSignal]);
+
+  const selectPatternSignal = useCallback((signal: PatternSignalOccurrence) => {
+    setSelectedPatternSignal(signal);
+    setPatternHistoryOpen(false);
+    setPatternModalOpen(true);
+  }, []);
+
+  const openTechnicalLevelExplanation = useCallback(
+    (level: TechnicalLevelKey) => {
+      const frame =
+        TIMEFRAMES.find((item) => item.key === timeframe)?.label ?? timeframe;
+      const volatilityBasis =
+        atr != null && analysisBasePrice != null
+          ? `ATR ${atr.toFixed(2)}의 1.5배와 기준가의 2% 중 더 큰 폭을 사용했습니다.`
+          : "ATR 데이터가 부족해 기준가의 2% 폭을 사용했습니다.";
+      const common = `${frame} 최신 봉 기준입니다. ${volatilityBasis} 실제 주문 가격이 아니라 차트 위험관리 참고값입니다.`;
+      const rows: Record<
+        TechnicalLevelKey,
+        { title: string; value: string; text: string }
+      > = {
+        entry: {
+          title: "매수가 산출 근거",
+          value: formatAppPrice(technicalEntry, currency),
+          text: `현재 매수가는 최신 봉 종가를 시장 호가 단위에 맞춰 반올림한 기준가입니다. ${common}`,
+        },
+        sell: {
+          title: "매도 판단 근거",
+          value: `${sellScore}점 · ${liveDecision}`,
+          text: `매도 점수는 하락 추세, RSI 과열, MACD 약세와 거래량 상태를 합산한 참고 점수입니다. 현재 매도 점수는 ${sellScore}점이며 종합 판단은 ${liveDecision}입니다. 목표가 도달, 손절가 이탈, 추세 약화 여부를 함께 확인합니다.`,
+        },
+        stop: {
+          title: "기술적 손절가 산출 근거",
+          value: formatAppPrice(technicalStop, currency),
+          text: `매수가에서 예상 변동 위험폭을 뺀 가격입니다. ${common} 종가가 손절가 아래에서 유지되면 현재 분석 가정이 무효화된 것으로 봅니다.`,
+        },
+        target1: {
+          title: "목표가 1 산출 근거",
+          value: formatAppPrice(technicalTarget1, currency),
+          text: `매수가에서 위험폭 1배를 더한 1차 목표입니다. 현재 손익비는 ${technicalRiskReward1 == null ? "산출 불가" : `1 : ${technicalRiskReward1.toFixed(1)}`}입니다. ${common}`,
+        },
+        target2: {
+          title: "목표가 2 산출 근거",
+          value: formatAppPrice(technicalTarget2, currency),
+          text: `매수가에서 위험폭 2배를 더한 2차 목표입니다. 현재 손익비는 ${technicalRiskReward2 == null ? "산출 불가" : `1 : ${technicalRiskReward2.toFixed(1)}`}입니다. 목표가 1 도달 후 일부 이익을 보호하는 방식으로 확인합니다. ${common}`,
+        },
+      };
+      setLevelExplanation(rows[level]);
+    },
+    [
+      analysisBasePrice,
+      atr,
+      currency,
+      liveDecision,
+      sellScore,
+      technicalEntry,
+      technicalRiskReward1,
+      technicalRiskReward2,
+      technicalStop,
+      technicalTarget1,
+      technicalTarget2,
+      timeframe,
+    ],
+  );
+
   const portfolioRate =
-    portfolioOverlay && currentPrice != null && portfolioOverlay.averagePrice > 0
-      ? ((currentPrice - portfolioOverlay.averagePrice) / portfolioOverlay.averagePrice) * 100
-      : portfolioOverlay?.rate ?? null;
-  const purchaseTimestamp = portfolioOverlay ? Date.parse(portfolioOverlay.purchaseDate) : Number.NaN;
-  const portfolioCandles = portfolioOverlay ? candles.filter((item) => {
-    const time = Date.parse(item.date);
-    return Number.isNaN(purchaseTimestamp) || Number.isNaN(time) || time >= purchaseTimestamp;
-  }) : [];
-  const highestAfterPurchase = portfolioCandles.length ? Math.max(...portfolioCandles.map((item) => item.high)) : null;
-  const highToCurrentRate = highestAfterPurchase && currentPrice != null ? ((currentPrice - highestAfterPurchase) / highestAfterPurchase) * 100 : null;
+    portfolioOverlay &&
+    currentPrice != null &&
+    portfolioOverlay.averagePrice > 0
+      ? ((currentPrice - portfolioOverlay.averagePrice) /
+          portfolioOverlay.averagePrice) *
+        100
+      : (portfolioOverlay?.rate ?? null);
+  const purchaseTimestamp = portfolioOverlay
+    ? Date.parse(portfolioOverlay.purchaseDate)
+    : Number.NaN;
+  const portfolioCandles = portfolioOverlay
+    ? candles.filter((item) => {
+        const time = Date.parse(item.date);
+        return (
+          Number.isNaN(purchaseTimestamp) ||
+          Number.isNaN(time) ||
+          time >= purchaseTimestamp
+        );
+      })
+    : [];
+  const highestAfterPurchase = portfolioCandles.length
+    ? Math.max(...portfolioCandles.map((item) => item.high))
+    : null;
+  const highToCurrentRate =
+    highestAfterPurchase && currentPrice != null
+      ? ((currentPrice - highestAfterPurchase) / highestAfterPurchase) * 100
+      : null;
 
   return (
     <div className="space-y-3">
-      {portfolioOverlay && (
+      {!basicOnly && portfolioOverlay && (
         <SectionCard
           title="내 포트폴리오 기준"
           subtitle={`수량 ${portfolioOverlay.quantity.toLocaleString("ko-KR")} · 차트에 내 평단과 매수 후 최고점을 표시합니다`}
         >
           <div className="grid grid-cols-2 gap-2">
             <div className="rounded-xl bg-secondary/70 p-3">
-              <p className="text-[10px] font-bold text-muted-foreground">내 평단가</p>
+              <p className="text-[10px] font-bold text-muted-foreground">
+                내 평단가
+              </p>
               <p className="mt-1 text-sm font-extrabold">
                 {formatAppPrice(portfolioOverlay.averagePrice, currency)}
               </p>
             </div>
             <div className="rounded-xl bg-secondary/70 p-3">
-              <p className="text-[10px] font-bold text-muted-foreground">현재 수익률</p>
+              <p className="text-[10px] font-bold text-muted-foreground">
+                현재 수익률
+              </p>
               <p
                 className={cn(
                   "mt-1 text-sm font-extrabold",
-                  (portfolioRate ?? 0) >= 0 ? "text-positive" : "text-destructive",
+                  (portfolioRate ?? 0) >= 0
+                    ? "text-positive"
+                    : "text-destructive",
                 )}
               >
                 {portfolioRate == null
@@ -2786,35 +3671,85 @@ function ChartTab({
               </p>
             </div>
             <div className="rounded-xl bg-secondary/70 p-3">
-              <p className="text-[10px] font-bold text-muted-foreground">매수 후 최고가</p>
-              <p className="mt-1 text-sm font-extrabold">{formatAppPrice(highestAfterPurchase, currency)}</p>
+              <p className="text-[10px] font-bold text-muted-foreground">
+                매수 후 최고가
+              </p>
+              <p className="mt-1 text-sm font-extrabold">
+                {formatAppPrice(highestAfterPurchase, currency)}
+              </p>
             </div>
             <div className="rounded-xl bg-secondary/70 p-3">
-              <p className="text-[10px] font-bold text-muted-foreground">최고점 대비 현재</p>
-              <p className={cn("mt-1 text-sm font-extrabold", (highToCurrentRate ?? 0) >= 0 ? "text-positive" : "text-destructive")}>{highToCurrentRate == null ? "확인 중" : `${highToCurrentRate >= 0 ? "+" : ""}${highToCurrentRate.toFixed(2)}%`}</p>
+              <p className="text-[10px] font-bold text-muted-foreground">
+                최고점 대비 현재
+              </p>
+              <p
+                className={cn(
+                  "mt-1 text-sm font-extrabold",
+                  (highToCurrentRate ?? 0) >= 0
+                    ? "text-positive"
+                    : "text-destructive",
+                )}
+              >
+                {highToCurrentRate == null
+                  ? "확인 중"
+                  : `${highToCurrentRate >= 0 ? "+" : ""}${highToCurrentRate.toFixed(2)}%`}
+              </p>
             </div>
           </div>
-          <p className="mt-2 break-keep text-[11px] font-semibold leading-5 text-muted-foreground">차트의 ‘내 평단’과 ‘매수후 최고’ 점선으로 현재 손익과 고점 대비 낙폭을 확인할 수 있습니다.</p>
+          <p className="mt-2 break-keep text-[11px] font-semibold leading-5 text-muted-foreground">
+            차트의 ‘내 평단’과 ‘매수후 최고’ 점선으로 현재 손익과 고점 대비
+            낙폭을 확인할 수 있습니다.
+          </p>
         </SectionCard>
       )}
 
-      {autoSignal && (
+      {!basicOnly && autoSignal && (
         <SectionCard
           title={autoSignal.label}
           subtitle={`${autoSignal.candidate.rank}순위 · 조건 충족 확률 ${autoSignal.candidate.probability}%`}
         >
           <p className="break-keep text-sm font-semibold leading-6 text-muted-foreground">
-            {autoSignal.candidate.reasons.join(" · ") || "선택 지표와 AI 점수 기준"} 조건으로 활성화되었습니다. 차트 최신 봉에 자동신호 위치와 손절·목표 기준선을 표시합니다.
+            {autoSignal.candidate.reasons.join(" · ") ||
+              "선택 지표와 AI 점수 기준"}{" "}
+            조건으로 활성화되었습니다. 차트 최신 봉에 자동신호 위치와 손절·목표
+            기준선을 표시합니다.
           </p>
         </SectionCard>
       )}
 
-      {studyFocus && (
+      {!basicOnly && studyFocus && (
         <SectionCard title={`주식공부 · ${studyFocus.title}`}>
           <p className="break-keep text-sm font-semibold leading-6 text-muted-foreground">
             {studyFocus.summary}
           </p>
         </SectionCard>
+      )}
+
+      {!basicOnly && (
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => setSignalPanelOpen(true)}
+            className="relative rounded-xl border border-positive/40 bg-positive/10 px-2 py-3 text-[11px] font-extrabold text-positive transition active:scale-[0.98]"
+          >
+            <span className="absolute right-2 top-2 h-2 w-2 animate-pulse rounded-full bg-positive" />
+            실시간 신호분석
+          </button>
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+            className="rounded-xl border border-card-border bg-card px-2 py-3 text-[11px] font-extrabold transition active:scale-[0.98]"
+          >
+            지난 내역
+          </button>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className="flex items-center justify-center gap-1 rounded-xl border border-card-border bg-card px-2 py-3 text-[11px] font-extrabold transition active:scale-[0.98]"
+          >
+            <Settings2 className="h-3.5 w-3.5" /> 환경설정
+          </button>
+        </div>
       )}
 
       <div
@@ -2826,18 +3761,9 @@ function ChartTab({
       >
         <SectionCard
           title="차트"
+          defaultOpen
           actions={
             <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setSettingsOpen(true)}
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-card-border bg-secondary text-foreground transition active:scale-95"
-                aria-label="차트 설정"
-                title="차트 설정"
-              >
-                <Settings2 className="h-4 w-4" />
-              </button>
-
               <button
                 type="button"
                 onClick={() => void toggleFullscreen()}
@@ -2856,7 +3782,9 @@ function ChartTab({
         >
           <div className="mb-2 flex items-center justify-between gap-2 px-1">
             <span className="rounded-lg bg-primary/10 px-2 py-1 text-[10px] font-extrabold text-primary">
-              현재 주기 · {TIMEFRAMES.find((item) => item.key === timeframe)?.label ?? timeframe}
+              현재 주기 ·{" "}
+              {TIMEFRAMES.find((item) => item.key === timeframe)?.label ??
+                timeframe}
             </span>
 
             <span className="text-[10px] font-bold text-muted-foreground">
@@ -2870,13 +3798,32 @@ function ChartTab({
             timeframe={timeframe}
             indicators={indicators}
             fullscreen={isFullscreen}
-            portfolioOverlay={portfolioOverlay}
-            autoSignal={autoSignal}
-            studyFocus={studyFocus}
-            tradeEntries={tradeEntries}
+            portfolioOverlay={basicOnly ? null : portfolioOverlay}
+            autoSignal={showAutoTradingData ? autoSignal : null}
+            studyFocus={basicOnly ? null : studyFocus}
+            tradeEntries={showAutoTradingData ? tradeEntries : []}
+            technicalLevels={technicalChartLevels}
+            priceHeight={chartHeight}
+            candleSignals={candlePatternSignals}
+            chartSignals={chartPatternSignals}
+            selectedSignal={selectedPatternSignal}
+            onSignalSelect={selectPatternSignal}
+            onTechnicalLevelSelect={openTechnicalLevelExplanation}
           />
 
-          {enabledIndicatorPanels.length > 0 && (
+          {!isFullscreen && (
+            <button
+              type="button"
+              onPointerDown={beginPriceChartResize}
+              className="mt-2 flex h-6 w-full touch-none cursor-row-resize items-center justify-center rounded-lg border border-card-border bg-secondary/70"
+              aria-label="가격 차트 높이 조절"
+              title="위아래로 끌어서 가격 차트 높이 조절"
+            >
+              <span className="h-1 w-14 rounded-full bg-muted-foreground/40" />
+            </button>
+          )}
+
+          {!basicOnly && enabledIndicatorPanels.length > 0 && (
             <div className="mt-2 grid grid-cols-3 gap-2">
               {enabledIndicatorPanels.map((item) => (
                 <div
@@ -2898,195 +3845,558 @@ function ChartTab({
         </SectionCard>
 
         {settingsOpen && (
-        <Modal title="차트 설정" onClose={() => setSettingsOpen(false)}>
-          <p className="mb-2 text-xs font-extrabold text-foreground">봉 주기</p>
-          <div className="grid grid-cols-3 gap-2 rounded-xl border border-card-border p-2">
-            {TIMEFRAMES.map((item) => (
+          <Modal title="차트 설정" onClose={() => setSettingsOpen(false)}>
+            <p className="mb-2 text-xs font-extrabold text-foreground">
+              봉 주기
+            </p>
+            <div className="grid grid-cols-3 gap-2 rounded-xl border border-card-border p-2">
+              {TIMEFRAMES.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setTimeframe(item.key)}
+                  className={cn(
+                    "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl px-2 py-2.5 text-[10px] font-extrabold",
+                    timeframe === item.key
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-secondary text-muted-foreground",
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            <p className="mb-2 mt-5 text-xs font-extrabold text-foreground">
+              가격 차트 지표
+            </p>
+            <div className="space-y-2">
+              {(
+                [
+                  ["sma5", "5 이동평균선"],
+                  ["sma20", "20 이동평균선"],
+                  ["sma60", "60 이동평균선"],
+                  ["sma120", "120 이동평균선"],
+                  ["volume", "거래량"],
+                  ["priceGrid", "가격 눈금선"],
+                  ["bollinger", "볼린저 밴드"],
+                  ["vwap", "VWAP 거래량가중평균"],
+                  ["ichimoku", "일목균형표"],
+                ] as const
+              ).map(([key, label]) => (
+                <ChartSettingToggle
+                  key={key}
+                  label={label}
+                  enabled={indicators[key]}
+                  onClick={() =>
+                    setIndicators((current) => ({
+                      ...current,
+                      [key]: !current[key],
+                    }))
+                  }
+                />
+              ))}
+            </div>
+
+            <p className="mb-2 mt-5 text-xs font-extrabold text-foreground">
+              보조지표 패널
+            </p>
+            <div className="space-y-2">
+              {(
+                [
+                  ["rsi", "RSI 상대강도지수"],
+                  ["macd", "MACD 추세·모멘텀"],
+                  ["stochastic", "스토캐스틱"],
+                  ["atr", "ATR 변동성"],
+                  ["cci", "CCI 추세 강도"],
+                  ["obv", "OBV 수급 방향"],
+                  ["williamsR", "Williams %R"],
+                  ["roc", "ROC 변화율"],
+                ] as const
+              ).map(([key, label]) => (
+                <ChartSettingToggle
+                  key={key}
+                  label={label}
+                  enabled={indicators[key]}
+                  onClick={() =>
+                    setIndicators((current) => ({
+                      ...current,
+                      [key]: !current[key],
+                    }))
+                  }
+                />
+              ))}
+            </div>
+
+            <p className="mb-2 mt-5 text-xs font-extrabold text-foreground">
+              차트 높이
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                [300, "작게"],
+                [360, "기본"],
+                [520, "크게"],
+              ].map(([height, label]) => (
+                <button
+                  key={String(height)}
+                  type="button"
+                  onClick={() => setChartHeight(Number(height))}
+                  className={cn(
+                    "rounded-xl px-3 py-2.5 text-xs font-extrabold",
+                    chartHeight === Number(height)
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-secondary text-muted-foreground",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[10px] font-semibold leading-4 text-muted-foreground">
+              현재 {Math.round(chartHeight)}px · 차트 아래 손잡이를 끌어
+              세밀하게 조절할 수 있습니다.
+            </p>
+
+            <div className="sticky bottom-0 mt-5 grid grid-cols-2 gap-2 border-t border-card-border bg-card pt-3">
               <button
-                key={item.key}
                 type="button"
-                onClick={() => setTimeframe(item.key)}
-                className={cn(
-                  "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl px-2 py-2.5 text-[10px] font-extrabold",
-                  timeframe === item.key
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-secondary text-muted-foreground",
-                )}
+                onClick={() => setIndicators({ ...DEFAULT_CHART_INDICATORS })}
+                className="rounded-xl border border-card-border bg-secondary px-3 py-3 text-xs font-extrabold"
               >
-                {item.label}
+                기본값 복원
               </button>
-            ))}
-          </div>
 
-          <p className="mb-2 mt-5 text-xs font-extrabold text-foreground">
-            가격 차트 지표
-          </p>
-          <div className="space-y-2">
-            {(
-              [
-                ["sma5", "5 이동평균선"],
-                ["sma20", "20 이동평균선"],
-                ["sma60", "60 이동평균선"],
-                ["sma120", "120 이동평균선"],
-                ["volume", "거래량"],
-                ["priceGrid", "가격 눈금선"],
-                ["bollinger", "볼린저 밴드"],
-                ["vwap", "VWAP 거래량가중평균"],
-                ["ichimoku", "일목균형표"],
-              ] as const
-            ).map(([key, label]) => (
-              <ChartSettingToggle
-                key={key}
-                label={label}
-                enabled={indicators[key]}
-                onClick={() =>
-                  setIndicators((current) => ({
-                    ...current,
-                    [key]: !current[key],
-                  }))
-                }
-              />
-            ))}
-          </div>
-
-          <p className="mb-2 mt-5 text-xs font-extrabold text-foreground">
-            보조지표 패널
-          </p>
-          <div className="space-y-2">
-            {(
-              [
-                ["rsi", "RSI 상대강도지수"],
-                ["macd", "MACD 추세·모멘텀"],
-                ["stochastic", "스토캐스틱"],
-                ["atr", "ATR 변동성"],
-                ["cci", "CCI 추세 강도"],
-                ["obv", "OBV 수급 방향"],
-                ["williamsR", "Williams %R"],
-                ["roc", "ROC 변화율"],
-              ] as const
-            ).map(([key, label]) => (
-              <ChartSettingToggle
-                key={key}
-                label={label}
-                enabled={indicators[key]}
-                onClick={() =>
-                  setIndicators((current) => ({
-                    ...current,
-                    [key]: !current[key],
-                  }))
-                }
-              />
-            ))}
-          </div>
-
-          <div className="sticky bottom-0 mt-5 grid grid-cols-2 gap-2 border-t border-card-border bg-card pt-3">
-            <button
-              type="button"
-              onClick={() => setIndicators({ ...DEFAULT_CHART_INDICATORS })}
-              className="rounded-xl border border-card-border bg-secondary px-3 py-3 text-xs font-extrabold"
-            >
-              기본값 복원
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSettingsOpen(false)}
-              className="rounded-xl bg-primary px-3 py-3 text-xs font-extrabold text-primary-foreground"
-            >
-              설정 완료
-            </button>
-          </div>
-        </Modal>
-      )}
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(false)}
+                className="rounded-xl bg-primary px-3 py-3 text-xs font-extrabold text-primary-foreground"
+              >
+                설정 완료
+              </button>
+            </div>
+          </Modal>
+        )}
       </div>
 
-      <SectionCard
-        title="기술지표"
-        subtitle="조건이 충족된 지표는 색으로 활성화됩니다"
-      >
-        <button
-          type="button"
-          onClick={() => setTechnicalOpen((value) => !value)}
-          className="mb-2 flex w-full items-center justify-between rounded-xl bg-secondary px-3 py-2 text-xs font-extrabold"
+      {!basicOnly && signalPanelOpen && (
+        <Modal
+          title="실시간 신호분석"
+          subtitle={`${TIMEFRAMES.find((item) => item.key === timeframe)?.label ?? timeframe} · 최신 봉 기준`}
+          onClose={() => setSignalPanelOpen(false)}
         >
-          <span>
-            {technicalOpen ? "기술지표가 펼쳐져 있습니다" : "기술지표 보기"}
-          </span>
-          <span>{technicalOpen ? "접기 ▲" : "열기 ▼"}</span>
-        </button>
-        {technicalOpen && (
-          <div className="grid grid-cols-2 gap-2">
-            {signals.map((item) => (
+          <div className="space-y-2">
+            {liveSignalRows.map((item, index) => (
               <button
-                key={item.title}
+                key={item.label}
                 type="button"
                 onClick={() =>
                   setExplanation({
-                    title: item.title,
-
-                    text: item.text,
-                    focus: technicalSignalFocus(item.title, item.text),
+                    title: item.label,
+                    text: `${item.label}: ${item.value}`,
+                    focus: technicalSignalFocus(item.label, item.value),
                   })
                 }
                 className={cn(
-                  "rounded-xl border p-3 text-left transition",
+                  "flex w-full items-center gap-3 rounded-xl border p-3 text-left",
                   item.active
-                    ? "border-positive/50 bg-positive/10 shadow-sm"
+                    ? "border-positive/40 bg-positive/10"
                     : "border-card-border bg-secondary/50",
                 )}
               >
-                <p className="text-[10px] font-bold text-muted-foreground">
-                  {item.title}
-                </p>
-
-                <p className="mt-1 text-base font-extrabold">{item.value}</p>
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-extrabold text-primary">
+                  {index + 1}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-bold text-muted-foreground">
+                    {item.label}
+                  </p>
+                  <p className="mt-0.5 break-keep text-xs font-extrabold">
+                    {item.value}
+                  </p>
+                </div>
               </button>
             ))}
           </div>
-        )}
-      </SectionCard>
-
-      <SectionCard
-        title="AI 차트 요약"
-        subtitle="현재 차트 흐름을 간단히 설명합니다"
-      >
-        <button
-          type="button"
-          onClick={() => setSummaryOpen((value) => !value)}
-          className="mb-2 flex w-full items-center justify-between rounded-xl bg-secondary px-3 py-2 text-xs font-extrabold"
-        >
-          <span>
-            {summaryOpen ? "차트요약이 펼쳐져 있습니다" : "차트요약 보기"}
-          </span>
-          <span>{summaryOpen ? "접기 ▲" : "열기 ▼"}</span>
-        </button>
-        {summaryOpen && (
-          <div className="space-y-2">
-            {insights.chartSummary.map((item, index) => (
-              <p
-                key={index}
-                className="break-keep rounded-xl bg-secondary/70 px-3 py-2 text-xs font-bold leading-relaxed text-muted-foreground"
-              >
-                {item}
-              </p>
-            ))}
+          <div className="mt-3 rounded-xl bg-primary/10 p-3 text-xs font-bold leading-5">
+            종합 판단 ·{" "}
+            <span
+              className={
+                liveDecision === "매수 우위"
+                  ? "text-positive"
+                  : liveDecision === "매도 우위"
+                    ? "text-destructive"
+                    : "text-primary"
+              }
+            >
+              {liveDecision}
+            </span>
+            <p className="mt-1 font-semibold text-muted-foreground">
+              봉이 갱신될 때 React Query의 최신 데이터로 다시 계산됩니다.
+              표시값은 분석 참고이며 주문 신호가 아닙니다.
+            </p>
           </div>
-        )}
-      </SectionCard>
-
-      <MarketFlowPanel ticker={ticker} />
-
-      <ShortSellingPanel ticker={ticker} />
-
-      {explanation && (
-        <Modal title={explanation.title} subtitle="실제 차트에서 조건 위치 확인" onClose={() => setExplanation(null)}>
-          <p className="mb-3">{explanation.text}</p>
-          <ProfessionalChart candles={candles} loading={chartQuery.isLoading} timeframe={timeframe} indicators={{ ...indicators, rsi: explanation.focus.preferredIndicator === "rsi" || indicators.rsi, macd: explanation.focus.preferredIndicator === "macd" || indicators.macd, bollinger: explanation.focus.preferredIndicator === "bollinger" || indicators.bollinger, volume: explanation.focus.preferredIndicator === "volume" || indicators.volume, sma20: explanation.focus.preferredIndicator === "moving-average" || indicators.sma20 }} fullscreen={false} portfolioOverlay={portfolioOverlay} autoSignal={autoSignal} studyFocus={explanation.focus} tradeEntries={tradeEntries} />
-          <div className="mt-3 rounded-xl bg-primary/10 p-3 text-xs font-semibold leading-5 text-muted-foreground"><p className="font-extrabold text-primary">왜 활성화됐나요?</p><p className="mt-1">현재 계산값이 해당 지표의 기준 범위에 들어왔기 때문입니다. 보라색 표시가 조건을 확인할 봉이며, 단일 지표만으로 주문하지 말고 거래량·추세·공시를 함께 확인하세요.</p></div>
         </Modal>
       )}
 
+      {!basicOnly && historyOpen && (
+        <Modal
+          title="지난 신호 내역"
+          subtitle={`현재 불러온 ${TIMEFRAMES.find((item) => item.key === timeframe)?.label ?? timeframe} 범위`}
+          onClose={() => setHistoryOpen(false)}
+        >
+          <div className="space-y-2">
+            {signals.filter((item) => item.active).length === 0 ? (
+              <p className="rounded-xl bg-secondary/60 p-4 text-center text-xs font-bold text-muted-foreground">
+                현재 조회 범위에서 활성화된 주요 신호가 없습니다.
+              </p>
+            ) : (
+              signals
+                .filter((item) => item.active)
+                .map((item) => (
+                  <button
+                    key={item.title}
+                    type="button"
+                    onClick={() =>
+                      setExplanation({
+                        title: item.title,
+                        text: item.text,
+                        focus: technicalSignalFocus(item.title, item.text),
+                      })
+                    }
+                    className="w-full rounded-xl border border-card-border bg-secondary/50 p-3 text-left"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-extrabold">{item.title}</p>
+                      <span className="rounded-full bg-positive/10 px-2 py-1 text-[9px] font-extrabold text-positive">
+                        활성
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] font-bold text-muted-foreground">
+                      {item.value}
+                    </p>
+                  </button>
+                ))
+            )}
+          </div>
+          <p className="mt-3 text-[10px] font-semibold leading-4 text-muted-foreground">
+            이번 1차 버전은 현재 로드된 캔들의 신호를 보여줍니다. 서버 저장형
+            날짜 검색·상태 병합·페이지네이션은 다음 단계에서 연결합니다.
+          </p>
+        </Modal>
+      )}
 
+      {!basicOnly && (
+        <>
+          <SectionCard title="실시간 차트분석" defaultOpen>
+            <div className="grid grid-cols-3 gap-2">
+              <MiniMetric
+                label="매수 점수"
+                value={`${buyScore}점`}
+                valueClassName="text-positive"
+              />
+              <MiniMetric
+                label="매도 점수"
+                value={`${sellScore}점`}
+                valueClassName="text-destructive"
+              />
+              <MiniMetric
+                label="종합 판단"
+                value={liveDecision}
+                valueClassName={
+                  liveDecision === "매수 우위"
+                    ? "text-positive"
+                    : liveDecision === "매도 우위"
+                      ? "text-destructive"
+                      : "text-primary"
+                }
+              />
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <MiniMetric
+                label="매수가"
+                value={formatAppPrice(technicalEntry, currency)}
+                valueClassName="text-amber-500"
+              />
+              <MiniMetric
+                label="기술적 손절가"
+                value={formatAppPrice(technicalStop, currency)}
+                valueClassName="text-destructive"
+              />
+              <MiniMetric
+                label="목표가 1"
+                value={formatAppPrice(technicalTarget1, currency)}
+                valueClassName="text-positive"
+              />
+              <MiniMetric
+                label="목표가 2"
+                value={formatAppPrice(technicalTarget2, currency)}
+                valueClassName="text-positive"
+              />
+            </div>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              <MiniMetric
+                label="손익비 1"
+                value={
+                  technicalRiskReward1 == null
+                    ? "산출 불가"
+                    : `1 : ${technicalRiskReward1.toFixed(1)}`
+                }
+              />
+              <MiniMetric
+                label="손익비 2"
+                value={
+                  technicalRiskReward2 == null
+                    ? "산출 불가"
+                    : `1 : ${technicalRiskReward2.toFixed(1)}`
+                }
+              />
+              <MiniMetric
+                label="신뢰도"
+                value={`${technicalConfidence}%`}
+                valueClassName="text-primary"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                setExplanation({
+                  title: "실시간 차트분석 근거",
+                  text: `${TIMEFRAMES.find((item) => item.key === timeframe)?.label ?? timeframe} 기준 ${stats.trend}, RSI ${stats.rsi?.toFixed(1) ?? "데이터 없음"}, 거래량 ${stats.volumeRatio?.toFixed(1) ?? "-"}배를 종합했습니다. 매수가는 최신 봉 종가 기준이며, 손절·목표가는 ATR 또는 기준가 2% 중 큰 폭을 사용한 기술적 참고값입니다. 신뢰도는 방향 점수 차이와 계산 가능한 지표 수를 반영합니다.`,
+                  focus: technicalSignalFocus(
+                    "실시간 차트분석",
+                    "최신 데이터 기준 분석입니다.",
+                  ),
+                })
+              }
+              className="mt-3 w-full rounded-xl bg-secondary/70 p-3 text-left text-xs font-bold leading-5 text-muted-foreground"
+            >
+              AI 근거 보기 ·{" "}
+              {TIMEFRAMES.find((item) => item.key === timeframe)?.label ??
+                timeframe}{" "}
+              · {stats.trend} · RSI {stats.rsi?.toFixed(1) ?? "-"} · 거래량{" "}
+              {stats.volumeRatio?.toFixed(1) ?? "-"}배
+            </button>
+            <p className="mt-2 text-[10px] font-semibold leading-4 text-muted-foreground">
+              매수가·손절가·목표가 1·2는 차트에도 가격선으로 표시됩니다. 실제
+              주문값이 아닌 변동성 기반 참고값입니다.
+            </p>
+          </SectionCard>
+
+          <SectionCard
+            title="기술지표"
+            defaultOpen
+            subtitle="조건이 충족된 지표는 색으로 활성화됩니다"
+          >
+            <button
+              type="button"
+              onClick={() => setTechnicalOpen((value) => !value)}
+              className="mb-2 flex w-full items-center justify-between rounded-xl bg-secondary px-3 py-2 text-xs font-extrabold"
+            >
+              <span>
+                {technicalOpen ? "기술지표가 펼쳐져 있습니다" : "기술지표 보기"}
+              </span>
+              <span>{technicalOpen ? "접기 ▲" : "열기 ▼"}</span>
+            </button>
+            {technicalOpen && (
+              <div className="grid grid-cols-2 gap-2">
+                {signals.map((item) => (
+                  <button
+                    key={item.title}
+                    type="button"
+                    onClick={() =>
+                      setExplanation({
+                        title: item.title,
+
+                        text: item.text,
+                        focus: technicalSignalFocus(item.title, item.text),
+                      })
+                    }
+                    className={cn(
+                      "rounded-xl border p-3 text-left transition",
+                      item.active
+                        ? "border-positive/50 bg-positive/10 shadow-sm"
+                        : "border-card-border bg-secondary/50",
+                    )}
+                  >
+                    <p className="text-[10px] font-bold text-muted-foreground">
+                      {item.title}
+                    </p>
+
+                    <p className="mt-1 text-base font-extrabold">
+                      {item.value}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="AI 차트 요약"
+            defaultOpen
+            subtitle="현재 차트 흐름을 간단히 설명합니다"
+          >
+            <button
+              type="button"
+              onClick={() => setSummaryOpen((value) => !value)}
+              className="mb-2 flex w-full items-center justify-between rounded-xl bg-secondary px-3 py-2 text-xs font-extrabold"
+            >
+              <span>
+                {summaryOpen ? "차트요약이 펼쳐져 있습니다" : "차트요약 보기"}
+              </span>
+              <span>{summaryOpen ? "접기 ▲" : "열기 ▼"}</span>
+            </button>
+            {summaryOpen && (
+              <div className="space-y-2">
+                {insights.chartSummary.map((item, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    onClick={() =>
+                      setExplanation({
+                        title: `AI 차트 요약 ${index + 1}`,
+                        text: item,
+                        focus: technicalSignalFocus("AI 차트 요약", item),
+                      })
+                    }
+                    className="w-full break-keep rounded-xl bg-secondary/70 px-3 py-2 text-left text-xs font-bold leading-relaxed text-muted-foreground"
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+            )}
+          </SectionCard>
+
+          <MarketFlowPanel ticker={ticker} />
+
+          <ShortSellingPanel ticker={ticker} />
+        </>
+      )}
+
+      {!basicOnly && explanation && (
+        <Modal
+          title={explanation.title}
+          subtitle="현재 메인 차트 기준 설명"
+          onClose={() => setExplanation(null)}
+        >
+          <p>{explanation.text}</p>
+          <div className="mt-3 rounded-xl bg-primary/10 p-3 text-xs font-semibold leading-5 text-muted-foreground">
+            <p className="font-extrabold text-primary">왜 활성화됐나요?</p>
+            <p className="mt-1">
+              현재 계산값이 해당 지표의 기준 범위에 들어왔기 때문입니다. 팝업
+              안에 차트를 새로 만들지 않아 로딩을 줄였으며, 메인 차트의
+              봉·거래량·추세를 함께 확인하세요.
+            </p>
+          </div>
+        </Modal>
+      )}
+
+      {!basicOnly && patternModalOpen && selectedPatternSignal && (
+        <Modal
+          title={`${selectedPatternSignal.kind === "candle" ? "봉 신호" : "차트 신호"} · ${selectedPatternSignal.name}`}
+          subtitle={`${selectedPatternSignal.dateLabel} · 차트가 해당 구간으로 이동했습니다`}
+          onClose={() => setPatternModalOpen(false)}
+        >
+          <div className="rounded-xl border border-card-border bg-secondary/50 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span
+                className="rounded-full px-2 py-1 text-[10px] font-extrabold text-white"
+                style={{ backgroundColor: selectedPatternSignal.color }}
+              >
+                {selectedPatternSignal.direction === "up"
+                  ? "상승 후보"
+                  : selectedPatternSignal.direction === "down"
+                    ? "하락 후보"
+                    : "중립"}
+              </span>
+              <span className="text-xs font-extrabold">
+                {formatAppPrice(selectedPatternSignal.price, currency)}
+              </span>
+            </div>
+            <p className="mt-3 text-sm font-extrabold text-foreground">
+              {selectedPatternSignal.reason}
+            </p>
+            <p className="mt-2 text-xs font-semibold leading-5 text-muted-foreground">
+              {selectedPatternSignal.explanation}
+            </p>
+          </div>
+          <div className="mt-3 rounded-xl bg-primary/10 p-3 text-xs font-semibold leading-5 text-muted-foreground">
+            차트에는 선택한 패턴 구간만 굵은 선으로 표시됩니다. 팝업을 닫으면
+            이동한 위치를 바로 확인할 수 있습니다.
+          </div>
+          <button
+            type="button"
+            onClick={() => setPatternHistoryOpen((value) => !value)}
+            className="mt-3 w-full rounded-xl border border-card-border bg-secondary px-3 py-3 text-xs font-extrabold text-foreground"
+          >
+            지난 차트 보기{" "}
+            {patternHistoryOpen
+              ? "접기 ▲"
+              : `열기 ▼ · ${matchingPatternHistory.length}건`}
+          </button>
+          {patternHistoryOpen && (
+            <div className="mt-2 max-h-60 space-y-2 overflow-y-auto">
+              {matchingPatternHistory.map((signal) => (
+                <button
+                  key={signal.id}
+                  type="button"
+                  onClick={() => setSelectedPatternSignal(signal)}
+                  className={cn(
+                    "w-full rounded-xl border p-3 text-left",
+                    signal.id === selectedPatternSignal.id
+                      ? "border-primary bg-primary/10"
+                      : "border-card-border bg-secondary/50",
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-extrabold">{signal.dateLabel}</p>
+                    <span
+                      className="text-[10px] font-extrabold"
+                      style={{ color: signal.color }}
+                    >
+                      {formatAppPrice(signal.price, currency)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[10px] font-semibold leading-4 text-muted-foreground">
+                    {signal.reason}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setPatternModalOpen(false);
+              setSelectedPatternSignal(null);
+            }}
+            className="mt-3 w-full rounded-xl px-3 py-2 text-xs font-bold text-muted-foreground"
+          >
+            차트 강조 해제
+          </button>
+        </Modal>
+      )}
+
+      {!basicOnly && levelExplanation && (
+        <Modal
+          title={levelExplanation.title}
+          subtitle="가격선 계산 근거"
+          onClose={() => setLevelExplanation(null)}
+        >
+          <div className="rounded-xl bg-secondary/60 p-4 text-center">
+            <p className="text-[10px] font-bold text-muted-foreground">
+              현재 표시값
+            </p>
+            <p className="mt-1 text-xl font-extrabold text-foreground">
+              {levelExplanation.value}
+            </p>
+          </div>
+          <p className="mt-3 text-xs font-semibold leading-6 text-muted-foreground">
+            {levelExplanation.text}
+          </p>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -3118,6 +4428,10 @@ function flowCompact(value: number): string {
 function MarketFlowPanel({ ticker }: { ticker: string }) {
   const [period, setPeriod] = useState<FlowPeriod>("daily");
   const [selectedActor, setSelectedActor] = useState<string | null>(null);
+  const [selectedFlowMetric, setSelectedFlowMetric] = useState<{
+    title: string;
+    text: string;
+  } | null>(null);
   const flow = useQuery<AnyObj>({
     queryKey: ["market-flow", ticker, period],
     queryFn: async () => {
@@ -3134,19 +4448,40 @@ function MarketFlowPanel({ ticker }: { ticker: string }) {
   const totals = flow.data?.totals ?? {};
   const hasProgram = totals.program != null;
   const actors = [
-    { key: "individual", label: "개인", value: Number(totals.individual ?? 0), has: totals.individual != null },
-    { key: "foreign", label: "외국인", value: Number(totals.foreign ?? 0), has: totals.foreign != null },
-    { key: "institution", label: "기관", value: Number(totals.institution ?? 0), has: totals.institution != null },
-    { key: "program", label: "프로그램", value: Number(totals.program ?? 0), has: hasProgram },
+    {
+      key: "individual",
+      label: "개인",
+      value: Number(totals.individual ?? 0),
+      has: totals.individual != null,
+    },
+    {
+      key: "foreign",
+      label: "외국인",
+      value: Number(totals.foreign ?? 0),
+      has: totals.foreign != null,
+    },
+    {
+      key: "institution",
+      label: "기관",
+      value: Number(totals.institution ?? 0),
+      has: totals.institution != null,
+    },
+    {
+      key: "program",
+      label: "프로그램",
+      value: Number(totals.program ?? 0),
+      has: hasProgram,
+    },
   ];
   const dominant = [...actors]
     .filter((a) => a.has)
     .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))[0];
-  const flowSummary = flow.data?.available && dominant
-    ? dominant.value >= 0
-      ? `${dominant.label} 매수가 가장 많아요. ${dominant.label} 수급이 이어지는지 조금 더 확인해 보세요.`
-      : `${dominant.label} 매도가 가장 많아요. 매도세가 이어지면 추가 하락 위험이 있어 주의가 필요합니다.`
-    : "투자자별 실제 매매 데이터를 확인 중입니다.";
+  const flowSummary =
+    flow.data?.available && dominant
+      ? dominant.value >= 0
+        ? `${dominant.label} 매수가 가장 많아요. ${dominant.label} 수급이 이어지는지 조금 더 확인해 보세요.`
+        : `${dominant.label} 매도가 가장 많아요. 매도세가 이어지면 추가 하락 위험이 있어 주의가 필요합니다.`
+      : "투자자별 실제 매매 데이터를 확인 중입니다.";
   const periodLabel = FLOW_PERIOD_LABEL[period];
   const provider = firstText(flow.data?.provider, flow.data?.source);
   const updatedAt = firstText(flow.data?.updatedAt, flow.data?.lastUpdated);
@@ -3158,7 +4493,7 @@ function MarketFlowPanel({ ticker }: { ticker: string }) {
       : "제공 불가";
 
   return (
-    <SectionCard title="수급현황" subtitle={summaryLine}>
+    <SectionCard title="수급현황" subtitle={summaryLine} defaultOpen>
       <div className="grid grid-cols-4 gap-1.5">
         {FLOW_PERIOD_TABS.map(([key, label]) => (
           <button
@@ -3198,7 +4533,9 @@ function MarketFlowPanel({ ticker }: { ticker: string }) {
                       : "border-card-border bg-secondary/50",
               )}
             >
-              <p className="text-[10px] font-bold text-muted-foreground">{actor.label}</p>
+              <p className="text-[10px] font-bold text-muted-foreground">
+                {actor.label}
+              </p>
               <p
                 className={cn(
                   "mt-1 text-sm font-extrabold",
@@ -3209,7 +4546,9 @@ function MarketFlowPanel({ ticker }: { ticker: string }) {
                       : "",
                 )}
               >
-                {!actor.has ? "제공 불가" : `${actor.value > 0 ? "+" : ""}${flowCompact(actor.value)}`}
+                {!actor.has
+                  ? "제공 불가"
+                  : `${actor.value > 0 ? "+" : ""}${flowCompact(actor.value)}`}
               </p>
               <p className="mt-1 text-[9px] font-bold text-muted-foreground">
                 {!actor.has ? "" : actor.value >= 0 ? "순매수" : "순매도"}
@@ -3219,8 +4558,40 @@ function MarketFlowPanel({ ticker }: { ticker: string }) {
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <FlowMetric label="거래량" value={totals.volume != null ? flowCompact(Number(totals.volume)) : "제공 불가"} />
-          <FlowMetric label="거래대금" value={totals.value != null || totals.tradeValue != null ? flowCompact(Number(totals.value ?? totals.tradeValue)) : "제공 불가"} />
+          <FlowMetric
+            label="거래량"
+            value={
+              totals.volume != null
+                ? flowCompact(Number(totals.volume))
+                : "제공 불가"
+            }
+            onClick={() =>
+              setSelectedFlowMetric({
+                title: "거래량 설명",
+                text:
+                  totals.volume != null
+                    ? `${periodLabel}에 체결된 실제 거래 수량의 합계입니다. 거래량 증가가 가격 방향과 함께 이어지는지 확인합니다.`
+                    : "현재 공급자 응답에 거래량 데이터가 없습니다.",
+              })
+            }
+          />
+          <FlowMetric
+            label="거래대금"
+            value={
+              totals.value != null || totals.tradeValue != null
+                ? flowCompact(Number(totals.value ?? totals.tradeValue))
+                : "제공 불가"
+            }
+            onClick={() =>
+              setSelectedFlowMetric({
+                title: "거래대금 설명",
+                text:
+                  totals.value != null || totals.tradeValue != null
+                    ? `${periodLabel} 거래량과 가격을 바탕으로 집계한 실제 거래대금입니다. 규모가 커질수록 시장 참여가 활발한지 확인할 수 있습니다.`
+                    : "현재 공급자 응답에 거래대금 데이터가 없습니다.",
+              })
+            }
+          />
         </div>
 
         <p className="mt-3 break-keep rounded-xl bg-secondary/70 p-3 text-center text-xs font-bold leading-relaxed text-muted-foreground">
@@ -3235,13 +4606,31 @@ function MarketFlowPanel({ ticker }: { ticker: string }) {
                 className="grid grid-cols-4 gap-1 rounded-xl border border-card-border px-2 py-2 text-center text-[10px]"
               >
                 <span>{row.date}</span>
-                <span className={Number(row.individual) >= 0 ? "text-positive" : "text-destructive"}>
+                <span
+                  className={
+                    Number(row.individual) >= 0
+                      ? "text-positive"
+                      : "text-destructive"
+                  }
+                >
                   개인 {flowCompact(Number(row.individual))}
                 </span>
-                <span className={Number(row.institution) >= 0 ? "text-positive" : "text-destructive"}>
+                <span
+                  className={
+                    Number(row.institution) >= 0
+                      ? "text-positive"
+                      : "text-destructive"
+                  }
+                >
                   기관 {flowCompact(Number(row.institution))}
                 </span>
-                <span className={Number(row.foreign) >= 0 ? "text-positive" : "text-destructive"}>
+                <span
+                  className={
+                    Number(row.foreign) >= 0
+                      ? "text-positive"
+                      : "text-destructive"
+                  }
+                >
                   외인 {flowCompact(Number(row.foreign))}
                 </span>
               </div>
@@ -3251,17 +4640,30 @@ function MarketFlowPanel({ ticker }: { ticker: string }) {
 
         <p className="mt-3 text-center text-[10px] font-bold text-muted-foreground">
           데이터 공급자: {provider ?? "제공 불가"}
-          {updatedAt ? ` · 갱신 ${new Date(updatedAt).toLocaleString("ko-KR")}` : ""}
+          {updatedAt
+            ? ` · 갱신 ${new Date(updatedAt).toLocaleString("ko-KR")}`
+            : ""}
         </p>
       </div>
 
       {selectedActor && (
-        <Modal title={`${selectedActor} 수급 설명`} onClose={() => setSelectedActor(null)}>
+        <Modal
+          title={`${selectedActor} 수급 설명`}
+          onClose={() => setSelectedActor(null)}
+        >
           <p>
             {flow.data?.available
               ? flowSummary
               : "현재 API에서 투자자별 순매매 데이터가 제공되지 않았습니다."}
           </p>
+        </Modal>
+      )}
+      {selectedFlowMetric && (
+        <Modal
+          title={selectedFlowMetric.title}
+          onClose={() => setSelectedFlowMetric(null)}
+        >
+          <p>{selectedFlowMetric.text}</p>
         </Modal>
       )}
     </SectionCard>
@@ -3271,6 +4673,10 @@ function MarketFlowPanel({ ticker }: { ticker: string }) {
 // 공매도현황 — 공매도 거래량/거래대금/비중/잔고, 대차잔고/변화량/이자율, 기준일, 공급자
 function ShortSellingPanel({ ticker }: { ticker: string }) {
   const [period, setPeriod] = useState<FlowPeriod>("daily");
+  const [selectedShortMetric, setSelectedShortMetric] = useState<{
+    title: string;
+    text: string;
+  } | null>(null);
   const shortSelling = useQuery<AnyObj>({
     queryKey: ["short-selling", ticker, period],
     queryFn: async () => {
@@ -3296,15 +4702,24 @@ function ShortSellingPanel({ ticker }: { ticker: string }) {
   const squeezeText = !available
     ? shortSelling.isLoading
       ? "공매도 최신 데이터를 확인 중입니다."
-      : String(shortSelling.data?.message ?? "현재 제공처에서 공매도 데이터가 내려오지 않았습니다. 새로고침해 다시 확인해 주세요.")
+      : String(
+          shortSelling.data?.message ??
+            "현재 제공처에서 공매도 데이터가 내려오지 않았습니다. 새로고침해 다시 확인해 주세요.",
+        )
     : squeezeScore >= 70
       ? "공매도 부담이 높아 주가가 급등하면 숏스퀴즈 가능성도 큽니다."
       : squeezeScore >= 40
         ? "공매도 잔고가 다소 있어 거래량 증가 여부를 함께 보세요."
         : "현재 수치만 보면 숏스퀴즈 가능성은 높지 않습니다.";
   const periodLabel = FLOW_PERIOD_LABEL[period];
-  const provider = firstText(shortSelling.data?.provider, shortSelling.data?.source);
-  const updatedAt = firstText(shortSelling.data?.updatedAt, shortSelling.data?.lastUpdated);
+  const provider = firstText(
+    shortSelling.data?.provider,
+    shortSelling.data?.source,
+  );
+  const updatedAt = firstText(
+    shortSelling.data?.updatedAt,
+    shortSelling.data?.lastUpdated,
+  );
   const baseDate = firstText(shortSelling.data?.rows?.[0]?.date) ?? "집계 중";
   const summaryLine = shortSelling.isLoading
     ? "공매도 데이터 확인 중"
@@ -3320,7 +4735,7 @@ function ShortSellingPanel({ ticker }: { ticker: string }) {
   };
 
   return (
-    <SectionCard title="공매도현황" subtitle={summaryLine}>
+    <SectionCard title="공매도현황" subtitle={summaryLine} defaultOpen>
       <div className="grid grid-cols-4 gap-1.5">
         {FLOW_PERIOD_TABS.map(([key, label]) => (
           <button
@@ -3345,32 +4760,127 @@ function ShortSellingPanel({ ticker }: { ticker: string }) {
         </p>
 
         <div className="grid grid-cols-2 gap-2">
-          <FlowMetric label="공매도 거래량" value={available ? metric(latest.shortVolume) : "제공 불가"} />
-          <FlowMetric label="공매도 거래대금" value={available ? metric(latest.shortValue) : "제공 불가"} />
-          <FlowMetric label="공매도 비중" value={available ? metric(latest.ratio, "%") : "제공 불가"} />
-          <FlowMetric label="공매도 잔고" value={available ? metric(latest.balance ?? latest.shortBalance) : "제공 불가"} />
+          <FlowMetric
+            label="공매도 거래량"
+            value={available ? metric(latest.shortVolume) : "제공 불가"}
+            onClick={() =>
+              setSelectedShortMetric({
+                title: "공매도 거래량 설명",
+                text: available
+                  ? "선택 기간에 공매도로 체결된 주식 수량입니다. 증가세가 이어지는지 가격 흐름과 함께 확인합니다."
+                  : "현재 공급자에서 공매도 거래량을 제공하지 않았습니다.",
+              })
+            }
+          />
+          <FlowMetric
+            label="공매도 거래대금"
+            value={available ? metric(latest.shortValue) : "제공 불가"}
+            onClick={() =>
+              setSelectedShortMetric({
+                title: "공매도 거래대금 설명",
+                text: available
+                  ? "공매도 체결금액의 합계입니다. 거래량뿐 아니라 실제 금액 규모를 확인하는 항목입니다."
+                  : "현재 공급자에서 공매도 거래대금을 제공하지 않았습니다.",
+              })
+            }
+          />
+          <FlowMetric
+            label="공매도 비중"
+            value={available ? metric(latest.ratio, "%") : "제공 불가"}
+            onClick={() =>
+              setSelectedShortMetric({
+                title: "공매도 비중 설명",
+                text: available
+                  ? `전체 거래 중 공매도가 차지한 비율은 ${metric(latest.ratio, "%")}입니다. 단독 수치보다 추세와 잔고를 함께 확인합니다.`
+                  : "현재 공급자에서 공매도 비중을 제공하지 않았습니다.",
+              })
+            }
+          />
+          <FlowMetric
+            label="공매도 잔고"
+            value={
+              available
+                ? metric(latest.balance ?? latest.shortBalance)
+                : "제공 불가"
+            }
+            onClick={() =>
+              setSelectedShortMetric({
+                title: "공매도 잔고 설명",
+                text: available
+                  ? "아직 상환되지 않은 공매도 잔량입니다. 잔고가 크면 향후 환매수 압력이 생길 수 있지만 즉시 상승을 뜻하지는 않습니다."
+                  : "현재 공급자에서 공매도 잔고를 제공하지 않았습니다.",
+              })
+            }
+          />
         </div>
 
         <div className="mt-2 grid grid-cols-3 gap-2">
-          <FlowMetric label="대차잔고" value={available ? metric(latest.loanBalance) : "제공 불가"} />
-          <FlowMetric label="대차 변화량" value={available ? metric(latest.loanChange) : "제공 불가"} />
-          <FlowMetric label="대차 이자율" value={available ? metric(latest.borrowRate, "%") : "제공 불가"} />
+          <FlowMetric
+            label="대차잔고"
+            value={available ? metric(latest.loanBalance) : "제공 불가"}
+            onClick={() =>
+              setSelectedShortMetric({
+                title: "대차잔고 설명",
+                text: available
+                  ? "주식을 빌린 뒤 아직 상환하지 않은 수량입니다. 공매도 가능 물량과 관련되지만 모두 공매도로 사용되는 것은 아닙니다."
+                  : "현재 공급자에서 대차잔고를 제공하지 않았습니다.",
+              })
+            }
+          />
+          <FlowMetric
+            label="대차 변화량"
+            value={available ? metric(latest.loanChange) : "제공 불가"}
+            onClick={() =>
+              setSelectedShortMetric({
+                title: "대차 변화량 설명",
+                text: available
+                  ? "직전 집계 대비 대차잔고 증감입니다. 증가하면 빌린 주식이 늘었고 감소하면 상환이 진행됐을 가능성이 있습니다."
+                  : "현재 공급자에서 대차 변화량을 제공하지 않았습니다.",
+              })
+            }
+          />
+          <FlowMetric
+            label="대차 이자율"
+            value={available ? metric(latest.borrowRate, "%") : "제공 불가"}
+            onClick={() =>
+              setSelectedShortMetric({
+                title: "대차 이자율 설명",
+                text: available
+                  ? "주식을 빌리는 비용입니다. 이자율이 높으면 차입 수요 또는 물량 부족이 반영됐을 수 있습니다."
+                  : "현재 공급자에서 대차 이자율을 제공하지 않았습니다.",
+              })
+            }
+          />
         </div>
 
-        <div className="mt-3 rounded-xl bg-secondary/70 p-3 text-center">
+        <button
+          type="button"
+          onClick={() =>
+            setSelectedShortMetric({
+              title: "숏스퀴즈 가능성 설명",
+              text: squeezeText,
+            })
+          }
+          className="mt-3 w-full rounded-xl bg-secondary/70 p-3 text-center"
+        >
           <div className="flex items-center justify-center gap-2">
             <p className="text-xs font-extrabold">숏스퀴즈 가능성</p>
-            <p className="text-sm font-black text-primary">{available ? `${squeezeScore}점` : "제공 불가"}</p>
+            <p className="text-sm font-black text-primary">
+              {available ? `${squeezeScore}점` : "제공 불가"}
+            </p>
           </div>
           <p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
             {squeezeText}
           </p>
-        </div>
+        </button>
 
         {!shortSelling.isLoading && !available && (
           <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center">
             <p className="break-keep text-xs font-bold leading-relaxed text-amber-700 dark:text-amber-300">
-              {String(shortSelling.data?.message ?? "공매도 원천 데이터가 비어 있습니다.")}
+              {String(
+                shortSelling.data?.message ??
+                  "공매도 원천 데이터가 비어 있습니다.",
+              )}
             </p>
             <button
               type="button"
@@ -3382,33 +4892,70 @@ function ShortSellingPanel({ ticker }: { ticker: string }) {
           </div>
         )}
 
-        {Array.isArray(shortSelling.data?.rows) && shortSelling.data.rows.length > 0 && (
-          <div className="mt-3 space-y-1.5">
-            {shortSelling.data.rows.slice(0, 7).map((row: AnyObj, index: number) => (
-              <div
-                key={row.date ?? index}
-                className="grid grid-cols-3 gap-2 rounded-xl border border-card-border px-3 py-2 text-center text-[10px] font-bold"
-              >
-                <span>{row.date}</span>
-                <span>공매도 {flowCompact(Number(row.shortVolume ?? 0))}</span>
-                <span>비중 {Number(row.ratio ?? 0).toFixed(2)}%</span>
-              </div>
-            ))}
-          </div>
-        )}
+        {Array.isArray(shortSelling.data?.rows) &&
+          shortSelling.data.rows.length > 0 && (
+            <div className="mt-3 space-y-1.5">
+              {shortSelling.data.rows
+                .slice(0, 7)
+                .map((row: AnyObj, index: number) => (
+                  <div
+                    key={row.date ?? index}
+                    className="grid grid-cols-3 gap-2 rounded-xl border border-card-border px-3 py-2 text-center text-[10px] font-bold"
+                  >
+                    <span>{row.date}</span>
+                    <span>
+                      공매도 {flowCompact(Number(row.shortVolume ?? 0))}
+                    </span>
+                    <span>비중 {Number(row.ratio ?? 0).toFixed(2)}%</span>
+                  </div>
+                ))}
+            </div>
+          )}
 
         <p className="mt-3 text-center text-[10px] font-bold text-muted-foreground">
           데이터 공급자: {provider ?? "제공 불가"}
-          {updatedAt ? ` · 갱신 ${new Date(updatedAt).toLocaleString("ko-KR")}` : ""}
+          {updatedAt
+            ? ` · 갱신 ${new Date(updatedAt).toLocaleString("ko-KR")}`
+            : ""}
         </p>
       </div>
+      {selectedShortMetric && (
+        <Modal
+          title={selectedShortMetric.title}
+          onClose={() => setSelectedShortMetric(null)}
+        >
+          <p>{selectedShortMetric.text}</p>
+        </Modal>
+      )}
     </SectionCard>
   );
 }
 
-function FlowMetric({ label, value }: { label: string; value: string }) {
+function FlowMetric({
+  label,
+  value,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  onClick?: () => void;
+}) {
+  const className =
+    "rounded-xl border border-card-border bg-secondary/50 p-3 text-center";
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(className, "transition active:scale-[0.98]")}
+      >
+        <p className="text-[10px] font-bold text-muted-foreground">{label}</p>
+        <p className="mt-1 text-sm font-extrabold">{value}</p>
+      </button>
+    );
+  }
   return (
-    <div className="rounded-xl border border-card-border bg-secondary/50 p-3 text-center">
+    <div className={className}>
       <p className="text-[10px] font-bold text-muted-foreground">{label}</p>
       <p className="mt-1 text-sm font-extrabold">{value}</p>
     </div>
@@ -3476,6 +5023,13 @@ interface SupportResistanceLevels {
   resistanceBasis: string;
 }
 
+interface TechnicalChartLevels {
+  entry: number | null;
+  stop: number | null;
+  target1: number | null;
+  target2: number | null;
+}
+
 function chartTimestamp(
   value: string,
   index: number,
@@ -3514,7 +5068,9 @@ function chartTimestamp(
     const month = Number(digitsOnly.slice(4, 6)) - 1;
     const day = Number(digitsOnly.slice(6, 8));
 
-    return Math.floor(new Date(year, month, day).getTime() / 1000) as UTCTimestamp;
+    return Math.floor(
+      new Date(year, month, day).getTime() / 1000,
+    ) as UTCTimestamp;
   }
 
   const numeric = Number(raw);
@@ -3679,9 +5235,7 @@ function vwapData(rows: ChartCandleRow[]): ChartLineData[] {
     return {
       time: item.time as Time,
       value:
-        cumulativeVolume > 0
-          ? cumulativeValue / cumulativeVolume
-          : item.close,
+        cumulativeVolume > 0 ? cumulativeValue / cumulativeVolume : item.close,
     };
   });
 }
@@ -3696,9 +5250,10 @@ function ichimokuData(rows: ChartCandleRow[]) {
     if (index < period - 1) return null;
     const range = rows.slice(index + 1 - period, index + 1);
     return (
-      Math.max(...range.map((item) => item.high)) +
-      Math.min(...range.map((item) => item.low))
-    ) / 2;
+      (Math.max(...range.map((item) => item.high)) +
+        Math.min(...range.map((item) => item.low))) /
+      2
+    );
   };
 
   for (let index = 0; index < rows.length; index += 1) {
@@ -3740,10 +5295,8 @@ function rsiValues(rows: ChartCandleRow[], period = 14): Array<number | null> {
 
   for (let index = period + 1; index < values.length; index += 1) {
     const change = values[index] - values[index - 1];
-    averageGain =
-      (averageGain * (period - 1) + Math.max(change, 0)) / period;
-    averageLoss =
-      (averageLoss * (period - 1) + Math.max(-change, 0)) / period;
+    averageGain = (averageGain * (period - 1) + Math.max(change, 0)) / period;
+    averageLoss = (averageLoss * (period - 1) + Math.max(-change, 0)) / period;
     result[index] =
       averageLoss === 0 ? 100 : 100 - 100 / (1 + averageGain / averageLoss);
   }
@@ -3761,7 +5314,8 @@ function stochasticValues(
     const window = rows.slice(index + 1 - period, index + 1);
     const high = Math.max(...window.map((item) => item.high));
     const low = Math.min(...window.map((item) => item.low));
-    result[index] = high === low ? 50 : ((rows[index].close - low) / (high - low)) * 100;
+    result[index] =
+      high === low ? 50 : ((rows[index].close - low) / (high - low)) * 100;
   }
 
   return result;
@@ -3800,7 +5354,8 @@ function cciValues(rows: ChartCandleRow[], period = 20): Array<number | null> {
     const values = typical.slice(index + 1 - period, index + 1);
     const mean = average(values);
     const deviation = average(values.map((value) => Math.abs(value - mean)));
-    result[index] = deviation === 0 ? 0 : (typical[index] - mean) / (0.015 * deviation);
+    result[index] =
+      deviation === 0 ? 0 : (typical[index] - mean) / (0.015 * deviation);
   }
 
   return result;
@@ -3832,7 +5387,8 @@ function williamsRValues(
     const window = rows.slice(index + 1 - period, index + 1);
     const high = Math.max(...window.map((item) => item.high));
     const low = Math.min(...window.map((item) => item.low));
-    result[index] = high === low ? -50 : ((high - rows[index].close) / (high - low)) * -100;
+    result[index] =
+      high === low ? -50 : ((high - rows[index].close) / (high - low)) * -100;
   }
 
   return result;
@@ -3843,16 +5399,14 @@ function rocValues(rows: ChartCandleRow[], period = 10): Array<number | null> {
 
   for (let index = period; index < rows.length; index += 1) {
     const previous = rows[index - period].close;
-    result[index] = previous === 0 ? 0 : ((rows[index].close / previous) - 1) * 100;
+    result[index] =
+      previous === 0 ? 0 : (rows[index].close / previous - 1) * 100;
   }
 
   return result;
 }
 
-function constantLine(
-  rows: ChartCandleRow[],
-  value: number,
-): ChartLineData[] {
+function constantLine(rows: ChartCandleRow[], value: number): ChartLineData[] {
   if (!rows.length) return [];
 
   return [
@@ -3982,7 +5536,9 @@ function mergeChartMarkers(markers: AnyObj[]): AnyObj[] {
   }
 
   return [...grouped.values()].sort(
-    (a, b) => Number(a.time) - Number(b.time) || String(a.position).localeCompare(String(b.position)),
+    (a, b) =>
+      Number(a.time) - Number(b.time) ||
+      String(a.position).localeCompare(String(b.position)),
   );
 }
 
@@ -4003,7 +5559,9 @@ function buildTechnicalSignalMarkers(
   ) => {
     const row = rows[index];
     if (!row) return;
-    const occurredAt = new Date(Number(row.time) * 1000).toLocaleString("ko-KR");
+    const occurredAt = new Date(Number(row.time) * 1000).toLocaleString(
+      "ko-KR",
+    );
     markers.push({
       time: row.time,
       position: direction === "up" ? "belowBar" : "aboveBar",
@@ -4020,17 +5578,47 @@ function buildTechnicalSignalMarkers(
     const short = smaArray(closes, 5);
     const long = smaArray(closes, 20);
     for (let index = 20; index < rows.length; index += 1) {
-      if (short[index - 1] == null || long[index - 1] == null || short[index] == null || long[index] == null) continue;
-      if (short[index - 1]! <= long[index - 1]! && short[index]! > long[index]!) add(index, "up", "골든크로스", "#22c55e", `5선 ${short[index]!.toFixed(2)}가 20선 ${long[index]!.toFixed(2)}를 상향 돌파`);
-      if (short[index - 1]! >= long[index - 1]! && short[index]! < long[index]!) add(index, "down", "데드크로스", "#ef4444", `5선 ${short[index]!.toFixed(2)}가 20선 ${long[index]!.toFixed(2)}를 하향 이탈`);
+      if (
+        short[index - 1] == null ||
+        long[index - 1] == null ||
+        short[index] == null ||
+        long[index] == null
+      )
+        continue;
+      if (short[index - 1]! <= long[index - 1]! && short[index]! > long[index]!)
+        add(
+          index,
+          "up",
+          "골든크로스",
+          "#22c55e",
+          `5선 ${short[index]!.toFixed(2)}가 20선 ${long[index]!.toFixed(2)}를 상향 돌파`,
+        );
+      if (short[index - 1]! >= long[index - 1]! && short[index]! < long[index]!)
+        add(
+          index,
+          "down",
+          "데드크로스",
+          "#ef4444",
+          `5선 ${short[index]!.toFixed(2)}가 20선 ${long[index]!.toFixed(2)}를 하향 이탈`,
+        );
     }
   }
 
   if (indicators.volume) {
     for (let index = 20; index < rows.length; index += 1) {
-      const base = average(rows.slice(index - 20, index).map((item) => item.volume));
+      const base = average(
+        rows.slice(index - 20, index).map((item) => item.volume),
+      );
       if (base > 0 && rows[index].volume >= base * 2) {
-        add(index, rows[index].close >= rows[index].open ? "up" : "down", rows[index].close >= rows[index].open ? "매수 거래량 증가" : "매도 거래량 증가", "#f59e0b", `현재 거래량 ${rows[index].volume.toLocaleString("ko-KR")} · 20봉 평균 ${Math.round(base).toLocaleString("ko-KR")} · ${(rows[index].volume / base).toFixed(2)}배`);
+        add(
+          index,
+          rows[index].close >= rows[index].open ? "up" : "down",
+          rows[index].close >= rows[index].open
+            ? "매수 거래량 증가"
+            : "매도 거래량 증가",
+          "#f59e0b",
+          `현재 거래량 ${rows[index].volume.toLocaleString("ko-KR")} · 20봉 평균 ${Math.round(base).toLocaleString("ko-KR")} · ${(rows[index].volume / base).toFixed(2)}배`,
+        );
       }
     }
   }
@@ -4039,8 +5627,22 @@ function buildTechnicalSignalMarkers(
     const values = rsiValues(rows);
     for (let index = 15; index < rows.length; index += 1) {
       if (values[index - 1] == null || values[index] == null) continue;
-      if (values[index - 1]! <= 30 && values[index]! > 30) add(index, "up", "RSI 과매도 탈출", "#a855f7", `RSI ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 기준 30 상향 돌파`);
-      if (values[index - 1]! >= 70 && values[index]! < 70) add(index, "down", "RSI 과매수 이탈", "#a855f7", `RSI ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 기준 70 하향 이탈`);
+      if (values[index - 1]! <= 30 && values[index]! > 30)
+        add(
+          index,
+          "up",
+          "RSI 과매도 탈출",
+          "#a855f7",
+          `RSI ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 기준 30 상향 돌파`,
+        );
+      if (values[index - 1]! >= 70 && values[index]! < 70)
+        add(
+          index,
+          "down",
+          "RSI 과매수 이탈",
+          "#a855f7",
+          `RSI ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 기준 70 하향 이탈`,
+        );
     }
   }
 
@@ -4048,13 +5650,41 @@ function buildTechnicalSignalMarkers(
     const fast = emaArray(closes, 12);
     const slow = emaArray(closes, 26);
     const macd = closes.map((_, index) =>
-      fast[index] != null && slow[index] != null ? fast[index]! - slow[index]! : null,
+      fast[index] != null && slow[index] != null
+        ? fast[index]! - slow[index]!
+        : null,
     );
     const signal = emaArray(macd, 9);
     for (let index = 1; index < rows.length; index += 1) {
-      if (macd[index - 1] == null || signal[index - 1] == null || macd[index] == null || signal[index] == null) continue;
-      if (macd[index - 1]! <= signal[index - 1]! && macd[index]! > signal[index]!) add(index, "up", "MACD 매수 전환", "#3b82f6", `MACD ${macd[index]!.toFixed(4)} · Signal ${signal[index]!.toFixed(4)} · 상향 교차`);
-      if (macd[index - 1]! >= signal[index - 1]! && macd[index]! < signal[index]!) add(index, "down", "MACD 매도 전환", "#3b82f6", `MACD ${macd[index]!.toFixed(4)} · Signal ${signal[index]!.toFixed(4)} · 하향 교차`);
+      if (
+        macd[index - 1] == null ||
+        signal[index - 1] == null ||
+        macd[index] == null ||
+        signal[index] == null
+      )
+        continue;
+      if (
+        macd[index - 1]! <= signal[index - 1]! &&
+        macd[index]! > signal[index]!
+      )
+        add(
+          index,
+          "up",
+          "MACD 매수 전환",
+          "#3b82f6",
+          `MACD ${macd[index]!.toFixed(4)} · Signal ${signal[index]!.toFixed(4)} · 상향 교차`,
+        );
+      if (
+        macd[index - 1]! >= signal[index - 1]! &&
+        macd[index]! < signal[index]!
+      )
+        add(
+          index,
+          "down",
+          "MACD 매도 전환",
+          "#3b82f6",
+          `MACD ${macd[index]!.toFixed(4)} · Signal ${signal[index]!.toFixed(4)} · 하향 교차`,
+        );
     }
   }
 
@@ -4062,30 +5692,92 @@ function buildTechnicalSignalMarkers(
     const values = stochasticValues(rows);
     for (let index = 15; index < rows.length; index += 1) {
       if (values[index - 1] == null || values[index] == null) continue;
-      if (values[index - 1]! <= 20 && values[index]! > 20) add(index, "up", "스토캐스틱 반등", "#06b6d4", `스토캐스틱 ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 기준 20 상향 돌파`);
-      if (values[index - 1]! >= 80 && values[index]! < 80) add(index, "down", "스토캐스틱 하락", "#06b6d4", `스토캐스틱 ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 기준 80 하향 이탈`);
+      if (values[index - 1]! <= 20 && values[index]! > 20)
+        add(
+          index,
+          "up",
+          "스토캐스틱 반등",
+          "#06b6d4",
+          `스토캐스틱 ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 기준 20 상향 돌파`,
+        );
+      if (values[index - 1]! >= 80 && values[index]! < 80)
+        add(
+          index,
+          "down",
+          "스토캐스틱 하락",
+          "#06b6d4",
+          `스토캐스틱 ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 기준 80 하향 이탈`,
+        );
     }
   }
 
   if (indicators.bollinger) {
     const band = bollingerData(rows);
-    const upper = new Map(band.upper.map((item) => [Number(item.time), item.value]));
-    const lower = new Map(band.lower.map((item) => [Number(item.time), item.value]));
+    const upper = new Map(
+      band.upper.map((item) => [Number(item.time), item.value]),
+    );
+    const lower = new Map(
+      band.lower.map((item) => [Number(item.time), item.value]),
+    );
     for (let index = 1; index < rows.length; index += 1) {
       const previousUpper = upper.get(Number(rows[index - 1].time));
       const currentUpper = upper.get(Number(rows[index].time));
       const previousLower = lower.get(Number(rows[index - 1].time));
       const currentLower = lower.get(Number(rows[index].time));
-      if (previousLower != null && currentLower != null && rows[index - 1].close <= previousLower && rows[index].close > currentLower) add(index, "up", "볼린저 하단 복귀", "#14b8a6", `종가 ${rows[index].close.toFixed(2)} · 하단밴드 ${currentLower.toFixed(2)} 위로 복귀`);
-      if (previousUpper != null && currentUpper != null && rows[index - 1].close >= previousUpper && rows[index].close < currentUpper) add(index, "down", "볼린저 상단 이탈", "#14b8a6", `종가 ${rows[index].close.toFixed(2)} · 상단밴드 ${currentUpper.toFixed(2)} 아래로 이탈`);
+      if (
+        previousLower != null &&
+        currentLower != null &&
+        rows[index - 1].close <= previousLower &&
+        rows[index].close > currentLower
+      )
+        add(
+          index,
+          "up",
+          "볼린저 하단 복귀",
+          "#14b8a6",
+          `종가 ${rows[index].close.toFixed(2)} · 하단밴드 ${currentLower.toFixed(2)} 위로 복귀`,
+        );
+      if (
+        previousUpper != null &&
+        currentUpper != null &&
+        rows[index - 1].close >= previousUpper &&
+        rows[index].close < currentUpper
+      )
+        add(
+          index,
+          "down",
+          "볼린저 상단 이탈",
+          "#14b8a6",
+          `종가 ${rows[index].close.toFixed(2)} · 상단밴드 ${currentUpper.toFixed(2)} 아래로 이탈`,
+        );
     }
   }
 
   if (indicators.vwap) {
     const values = vwapData(rows).map((item) => item.value);
     for (let index = 1; index < rows.length; index += 1) {
-      if (closes[index - 1] <= values[index - 1] && closes[index] > values[index]) add(index, "up", "VWAP 상향 돌파", "#06b6d4", `종가 ${closes[index].toFixed(2)} · VWAP ${values[index].toFixed(2)} 상향 돌파`);
-      if (closes[index - 1] >= values[index - 1] && closes[index] < values[index]) add(index, "down", "VWAP 하향 이탈", "#06b6d4", `종가 ${closes[index].toFixed(2)} · VWAP ${values[index].toFixed(2)} 하향 이탈`);
+      if (
+        closes[index - 1] <= values[index - 1] &&
+        closes[index] > values[index]
+      )
+        add(
+          index,
+          "up",
+          "VWAP 상향 돌파",
+          "#06b6d4",
+          `종가 ${closes[index].toFixed(2)} · VWAP ${values[index].toFixed(2)} 상향 돌파`,
+        );
+      if (
+        closes[index - 1] >= values[index - 1] &&
+        closes[index] < values[index]
+      )
+        add(
+          index,
+          "down",
+          "VWAP 하향 이탈",
+          "#06b6d4",
+          `종가 ${closes[index].toFixed(2)} · VWAP ${values[index].toFixed(2)} 하향 이탈`,
+        );
     }
   }
 
@@ -4093,8 +5785,22 @@ function buildTechnicalSignalMarkers(
     const values = cciValues(rows);
     for (let index = 1; index < rows.length; index += 1) {
       if (values[index - 1] == null || values[index] == null) continue;
-      if (values[index - 1]! <= -100 && values[index]! > -100) add(index, "up", "CCI 약세 탈출", "#22c55e", `CCI ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · -100 상향 돌파`);
-      if (values[index - 1]! >= 100 && values[index]! < 100) add(index, "down", "CCI 강세 이탈", "#22c55e", `CCI ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 100 하향 이탈`);
+      if (values[index - 1]! <= -100 && values[index]! > -100)
+        add(
+          index,
+          "up",
+          "CCI 약세 탈출",
+          "#22c55e",
+          `CCI ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · -100 상향 돌파`,
+        );
+      if (values[index - 1]! >= 100 && values[index]! < 100)
+        add(
+          index,
+          "down",
+          "CCI 강세 이탈",
+          "#22c55e",
+          `CCI ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 100 하향 이탈`,
+        );
     }
   }
 
@@ -4102,8 +5808,22 @@ function buildTechnicalSignalMarkers(
     const values = williamsRValues(rows);
     for (let index = 1; index < rows.length; index += 1) {
       if (values[index - 1] == null || values[index] == null) continue;
-      if (values[index - 1]! <= -80 && values[index]! > -80) add(index, "up", "Williams %R 반등", "#ec4899", `Williams %R ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · -80 상향 돌파`);
-      if (values[index - 1]! >= -20 && values[index]! < -20) add(index, "down", "Williams %R 하락", "#ec4899", `Williams %R ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · -20 하향 이탈`);
+      if (values[index - 1]! <= -80 && values[index]! > -80)
+        add(
+          index,
+          "up",
+          "Williams %R 반등",
+          "#ec4899",
+          `Williams %R ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · -80 상향 돌파`,
+        );
+      if (values[index - 1]! >= -20 && values[index]! < -20)
+        add(
+          index,
+          "down",
+          "Williams %R 하락",
+          "#ec4899",
+          `Williams %R ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · -20 하향 이탈`,
+        );
     }
   }
 
@@ -4111,12 +5831,456 @@ function buildTechnicalSignalMarkers(
     const values = rocValues(rows);
     for (let index = 1; index < rows.length; index += 1) {
       if (values[index - 1] == null || values[index] == null) continue;
-      if (values[index - 1]! <= 0 && values[index]! > 0) add(index, "up", "ROC 상승 전환", "#8b5cf6", `ROC ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 0 상향 돌파`);
-      if (values[index - 1]! >= 0 && values[index]! < 0) add(index, "down", "ROC 하락 전환", "#8b5cf6", `ROC ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 0 하향 이탈`);
+      if (values[index - 1]! <= 0 && values[index]! > 0)
+        add(
+          index,
+          "up",
+          "ROC 상승 전환",
+          "#8b5cf6",
+          `ROC ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 0 상향 돌파`,
+        );
+      if (values[index - 1]! >= 0 && values[index]! < 0)
+        add(
+          index,
+          "down",
+          "ROC 하락 전환",
+          "#8b5cf6",
+          `ROC ${values[index - 1]!.toFixed(2)} → ${values[index]!.toFixed(2)} · 0 하향 이탈`,
+        );
     }
   }
 
   return mergeChartMarkers(markers);
+}
+
+type PatternSignalKind = "candle" | "chart";
+type PatternSignalDirection = "up" | "down" | "neutral";
+
+interface PatternSignalOccurrence {
+  id: string;
+  kind: PatternSignalKind;
+  name: string;
+  direction: PatternSignalDirection;
+  color: string;
+  startIndex: number;
+  endIndex: number;
+  startTime: Time;
+  endTime: Time;
+  dateLabel: string;
+  price: number;
+  reason: string;
+  explanation: string;
+}
+
+type TechnicalLevelKey = "entry" | "sell" | "stop" | "target1" | "target2";
+
+function patternDirectionColor(direction: PatternSignalDirection): string {
+  if (direction === "up") return "#22c55e";
+  if (direction === "down") return "#ef4444";
+  return "#a855f7";
+}
+
+function patternDateLabel(row: ChartCandleRow): string {
+  return new Date(Number(row.time) * 1000).toLocaleString("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function buildCandlePatternSignals(
+  rows: ChartCandleRow[],
+): PatternSignalOccurrence[] {
+  if (rows.length < 2) return [];
+  const results: PatternSignalOccurrence[] = [];
+  const seen = new Set<string>();
+  const add = (
+    name: string,
+    direction: PatternSignalDirection,
+    startIndex: number,
+    endIndex: number,
+    reason: string,
+    explanation: string,
+  ) => {
+    const start = rows[Math.max(0, startIndex)];
+    const end = rows[Math.min(rows.length - 1, endIndex)];
+    if (!start || !end) return;
+    const id = `candle:${name}:${Number(start.time)}:${Number(end.time)}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    results.push({
+      id,
+      kind: "candle",
+      name,
+      direction,
+      color: patternDirectionColor(direction),
+      startIndex: Math.max(0, startIndex),
+      endIndex: Math.min(rows.length - 1, endIndex),
+      startTime: start.time,
+      endTime: end.time,
+      dateLabel: patternDateLabel(end),
+      price: end.close,
+      reason,
+      explanation,
+    });
+  };
+
+  for (let index = 1; index < rows.length; index += 1) {
+    const previous = rows[index - 1];
+    const current = rows[index];
+    const body = Math.abs(current.close - current.open);
+    const range = Math.max(current.high - current.low, Number.EPSILON);
+    const upperWick = current.high - Math.max(current.open, current.close);
+    const lowerWick = Math.min(current.open, current.close) - current.low;
+    const previousBody = Math.abs(previous.close - previous.open);
+
+    if (
+      previous.close < previous.open &&
+      current.close > current.open &&
+      current.open <= previous.close &&
+      current.close >= previous.open
+    ) {
+      add(
+        "상승장악형",
+        "up",
+        index - 1,
+        index,
+        "현재 양봉 몸통이 직전 음봉 몸통을 감쌌습니다.",
+        "매도 우위였던 직전 봉을 다음 양봉이 완전히 덮은 반전 후보입니다. 다음 봉의 고점 돌파와 거래량 증가가 함께 나오면 신뢰도가 높아집니다.",
+      );
+    }
+    if (
+      previous.close > previous.open &&
+      current.close < current.open &&
+      current.open >= previous.close &&
+      current.close <= previous.open
+    ) {
+      add(
+        "하락장악형",
+        "down",
+        index - 1,
+        index,
+        "현재 음봉 몸통이 직전 양봉 몸통을 감쌌습니다.",
+        "매수 우위였던 직전 봉을 다음 음봉이 완전히 덮은 하락 반전 후보입니다. 다음 봉의 저점 이탈과 거래량 증가를 함께 확인해야 합니다.",
+      );
+    }
+
+    if (body / range <= 0.1) {
+      add(
+        "도지",
+        "neutral",
+        index,
+        index,
+        "시가와 종가가 매우 가까워 매수·매도 힘이 균형을 이뤘습니다.",
+        "도지는 방향 확정 신호가 아니라 추세가 잠시 멈춘 상태입니다. 다음 봉이 도지의 고가 또는 저가 중 어느 쪽을 돌파하는지 확인합니다.",
+      );
+    }
+    if (
+      lowerWick >= Math.max(body * 2, range * 0.45) &&
+      upperWick <= range * 0.2
+    ) {
+      add(
+        "망치형",
+        "up",
+        index,
+        index,
+        "긴 아래꼬리 뒤 종가가 저가에서 회복했습니다.",
+        "장중 매도 압력이 강했지만 저가 매수가 들어와 가격을 끌어올린 봉입니다. 하락 추세 말미와 지지선 부근에서 의미가 커집니다.",
+      );
+    }
+    if (
+      upperWick >= Math.max(body * 2, range * 0.45) &&
+      lowerWick <= range * 0.2
+    ) {
+      add(
+        "역망치형",
+        current.close >= current.open ? "up" : "down",
+        index,
+        index,
+        "긴 위꼬리가 만들어져 장중 상단 가격에서 강한 공방이 있었습니다.",
+        "역망치형은 위치에 따라 반등 후보 또는 상승 실패 신호가 될 수 있습니다. 다음 봉의 고가 돌파 여부로 확인합니다.",
+      );
+    }
+
+    if (index >= 2) {
+      const first = rows[index - 2];
+      const middle = rows[index - 1];
+      const firstBody = Math.abs(first.close - first.open);
+      const middleBody = Math.abs(middle.close - middle.open);
+      if (
+        first.close < first.open &&
+        middleBody <= firstBody * 0.5 &&
+        current.close > current.open &&
+        current.close >= (first.open + first.close) / 2
+      ) {
+        add(
+          "샛별형",
+          "up",
+          index - 2,
+          index,
+          "큰 음봉 뒤 작은 몸통과 강한 양봉이 이어졌습니다.",
+          "3개 봉으로 구성된 상승 반전 후보입니다. 세 번째 양봉이 첫 번째 음봉 몸통의 절반 이상을 회복할 때 의미가 커집니다.",
+        );
+      }
+      if (
+        first.close > first.open &&
+        middleBody <= firstBody * 0.5 &&
+        current.close < current.open &&
+        current.close <= (first.open + first.close) / 2
+      ) {
+        add(
+          "석별형",
+          "down",
+          index - 2,
+          index,
+          "큰 양봉 뒤 작은 몸통과 강한 음봉이 이어졌습니다.",
+          "3개 봉으로 구성된 하락 반전 후보입니다. 세 번째 음봉이 첫 번째 양봉 몸통의 절반 이상을 되돌릴 때 의미가 커집니다.",
+        );
+      }
+      if (
+        first.close > first.open &&
+        middle.close > middle.open &&
+        current.close > current.open &&
+        first.close < middle.close &&
+        middle.close < current.close
+      ) {
+        add(
+          "적삼병",
+          "up",
+          index - 2,
+          index,
+          "종가가 연속으로 높아지는 3개의 양봉이 나타났습니다.",
+          "매수세가 3개 봉 동안 이어진 추세 강화 패턴입니다. 이미 급등한 자리에서는 추격매수 위험도 함께 확인합니다.",
+        );
+      }
+      if (
+        first.close < first.open &&
+        middle.close < middle.open &&
+        current.close < current.open &&
+        first.close > middle.close &&
+        middle.close > current.close
+      ) {
+        add(
+          "흑삼병",
+          "down",
+          index - 2,
+          index,
+          "종가가 연속으로 낮아지는 3개의 음봉이 나타났습니다.",
+          "매도세가 3개 봉 동안 이어진 추세 약화 패턴입니다. 지지선과 과매도 구간에서는 반등 가능성도 함께 확인합니다.",
+        );
+      }
+    }
+  }
+
+  return results.sort((a, b) => Number(a.endTime) - Number(b.endTime));
+}
+
+function buildChartPatternSignals(
+  rows: ChartCandleRow[],
+): PatternSignalOccurrence[] {
+  if (rows.length < 21) return [];
+  const results: PatternSignalOccurrence[] = [];
+  const seen = new Set<string>();
+  const closes = rows.map((row) => row.close);
+  const add = (
+    name: string,
+    direction: PatternSignalDirection,
+    startIndex: number,
+    endIndex: number,
+    reason: string,
+    explanation: string,
+  ) => {
+    const start = rows[Math.max(0, startIndex)];
+    const end = rows[Math.min(rows.length - 1, endIndex)];
+    if (!start || !end) return;
+    const id = `chart:${name}:${Number(start.time)}:${Number(end.time)}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    results.push({
+      id,
+      kind: "chart",
+      name,
+      direction,
+      color: patternDirectionColor(direction),
+      startIndex: Math.max(0, startIndex),
+      endIndex: Math.min(rows.length - 1, endIndex),
+      startTime: start.time,
+      endTime: end.time,
+      dateLabel: patternDateLabel(end),
+      price: end.close,
+      reason,
+      explanation,
+    });
+  };
+
+  const short = smaArray(closes, 5);
+  const long = smaArray(closes, 20);
+  for (let index = 20; index < rows.length; index += 1) {
+    if (
+      short[index - 1] != null &&
+      long[index - 1] != null &&
+      short[index] != null &&
+      long[index] != null
+    ) {
+      if (
+        short[index - 1]! <= long[index - 1]! &&
+        short[index]! > long[index]!
+      ) {
+        add(
+          "골든크로스",
+          "up",
+          Math.max(0, index - 8),
+          Math.min(rows.length - 1, index + 3),
+          `5선 ${short[index]!.toFixed(2)}가 20선 ${long[index]!.toFixed(2)}를 상향 돌파했습니다.`,
+          "단기 이동평균선이 중기 이동평균선을 위로 통과한 추세 전환 후보입니다. 거래량과 상위 시간봉 방향이 같을수록 신뢰도가 높아집니다.",
+        );
+      }
+      if (
+        short[index - 1]! >= long[index - 1]! &&
+        short[index]! < long[index]!
+      ) {
+        add(
+          "데드크로스",
+          "down",
+          Math.max(0, index - 8),
+          Math.min(rows.length - 1, index + 3),
+          `5선 ${short[index]!.toFixed(2)}가 20선 ${long[index]!.toFixed(2)}를 하향 이탈했습니다.`,
+          "단기 이동평균선이 중기 이동평균선을 아래로 통과한 약세 전환 후보입니다. 지지선 이탈과 거래량 증가가 함께 나오는지 확인합니다.",
+        );
+      }
+    }
+
+    const priorRows = rows.slice(index - 20, index);
+    const priorHigh = Math.max(...priorRows.map((row) => row.high));
+    const priorLow = Math.min(...priorRows.map((row) => row.low));
+    const averageVolume = average(priorRows.map((row) => row.volume));
+    if (rows[index].close > priorHigh) {
+      add(
+        averageVolume > 0 && rows[index].volume >= averageVolume * 1.5
+          ? "거래량 동반 돌파"
+          : "고점 돌파",
+        "up",
+        index - 20,
+        index,
+        `직전 20봉 고점 ${priorHigh.toLocaleString("ko-KR")}을 종가로 돌파했습니다.`,
+        "박스권 또는 이전 고점을 종가로 넘어선 추세 신호입니다. 돌파 후 이전 고점이 지지선으로 유지되는지 확인합니다.",
+      );
+    }
+    if (rows[index].close < priorLow) {
+      add(
+        averageVolume > 0 && rows[index].volume >= averageVolume * 1.5
+          ? "거래량 동반 이탈"
+          : "지지선 이탈",
+        "down",
+        index - 20,
+        index,
+        `직전 20봉 저점 ${priorLow.toLocaleString("ko-KR")}을 종가로 이탈했습니다.`,
+        "박스권 또는 이전 지지선을 종가로 내려간 약세 신호입니다. 이탈한 지지선이 저항선으로 바뀌는지 확인합니다.",
+      );
+    }
+  }
+
+  return results.sort((a, b) => Number(a.endTime) - Number(b.endTime));
+}
+
+function applyPatternSignalFocus(
+  chart: AnyObj | null,
+  focusSeries: AnyObj | null,
+  rows: ChartCandleRow[],
+  signal: PatternSignalOccurrence | null,
+) {
+  if (!chart || !focusSeries) return;
+  if (!signal || rows.length === 0) {
+    focusSeries.setData([]);
+    return;
+  }
+  const start = Math.max(0, Math.min(rows.length - 1, signal.startIndex));
+  const end = Math.max(start, Math.min(rows.length - 1, signal.endIndex));
+  let from = start;
+  let to = end;
+  if (from === to) {
+    from = Math.max(0, from - 1);
+    to = Math.min(rows.length - 1, to + 1);
+  }
+  focusSeries.applyOptions({ color: signal.color, lineWidth: 4 });
+  focusSeries.setData(
+    rows
+      .slice(from, to + 1)
+      .map((row) => ({ time: row.time, value: row.close })),
+  );
+  chart.timeScale().setVisibleLogicalRange({
+    from: Math.max(-0.5, start - 7),
+    to: Math.min(rows.length - 0.5, end + 7),
+  });
+}
+
+function PatternSignalPanel({
+  title,
+  subtitle,
+  signals,
+  selectedId,
+  onSelect,
+}: {
+  title: string;
+  subtitle: string;
+  signals: PatternSignalOccurrence[];
+  selectedId?: string;
+  onSelect: (signal: PatternSignalOccurrence) => void;
+}) {
+  const recent = signals.slice(-10).reverse();
+  return (
+    <section className="rounded-xl border border-card-border bg-background/70 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-extrabold">{title}</p>
+          <p className="mt-0.5 text-[9px] font-semibold text-muted-foreground">
+            {subtitle}
+          </p>
+        </div>
+        <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-extrabold text-primary">
+          {signals.length}개
+        </span>
+      </div>
+      {recent.length === 0 ? (
+        <p className="mt-2 rounded-lg bg-secondary/60 px-3 py-3 text-center text-[10px] font-bold text-muted-foreground">
+          현재 조회 범위에서 감지된 신호가 없습니다.
+        </p>
+      ) : (
+        <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+          {recent.map((signal) => (
+            <button
+              key={signal.id}
+              type="button"
+              onClick={() => onSelect(signal)}
+              className={cn(
+                "min-w-[132px] rounded-xl border px-3 py-2.5 text-left transition active:scale-[0.98]",
+                selectedId === signal.id
+                  ? "border-primary bg-primary/10 shadow-sm"
+                  : "border-card-border bg-secondary/50",
+              )}
+            >
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: signal.color }}
+                />
+                <p className="truncate text-[10px] font-extrabold">
+                  {signal.name}
+                </p>
+              </div>
+              <p className="mt-1 text-[9px] font-semibold text-muted-foreground">
+                {signal.dateLabel}
+              </p>
+              <p className="mt-1 line-clamp-2 text-[9px] font-bold leading-4">
+                {signal.reason}
+              </p>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 }
 
 interface NumberedSignal {
@@ -4161,7 +6325,12 @@ function buildNumberedSignals(rows: ChartCandleRow[]): NumberedSignal[] {
     const base = average(rows.slice(index - 20, index).map((r) => r.volume));
     if (base > 0 && rows[index].volume > base * 2.5) {
       const up = rows[index].close >= rows[index].open;
-      push(index, up ? "up" : "down", "거래량 급증", `거래량이 20봉 평균의 ${(rows[index].volume / base).toFixed(1)}배`);
+      push(
+        index,
+        up ? "up" : "down",
+        "거래량 급증",
+        `거래량이 20봉 평균의 ${(rows[index].volume / base).toFixed(1)}배`,
+      );
     }
   }
 
@@ -4170,9 +6339,17 @@ function buildNumberedSignals(rows: ChartCandleRow[]): NumberedSignal[] {
     const short = smaArray(closes, 5);
     const long = smaArray(closes, 20);
     for (let index = 20; index < rows.length; index += 1) {
-      if (short[index - 1] == null || long[index - 1] == null || short[index] == null || long[index] == null) continue;
-      if (short[index - 1]! <= long[index - 1]! && short[index]! > long[index]!) push(index, "up", "골든크로스", "5일선이 20일선을 상향 돌파");
-      if (short[index - 1]! >= long[index - 1]! && short[index]! < long[index]!) push(index, "down", "데드크로스", "5일선이 20일선을 하향 이탈");
+      if (
+        short[index - 1] == null ||
+        long[index - 1] == null ||
+        short[index] == null ||
+        long[index] == null
+      )
+        continue;
+      if (short[index - 1]! <= long[index - 1]! && short[index]! > long[index]!)
+        push(index, "up", "골든크로스", "5일선이 20일선을 상향 돌파");
+      if (short[index - 1]! >= long[index - 1]! && short[index]! < long[index]!)
+        push(index, "down", "데드크로스", "5일선이 20일선을 하향 이탈");
     }
   }
 
@@ -4181,8 +6358,20 @@ function buildNumberedSignals(rows: ChartCandleRow[]): NumberedSignal[] {
     const values = rsiValues(rows);
     for (let index = 15; index < rows.length; index += 1) {
       if (values[index - 1] == null || values[index] == null) continue;
-      if (values[index - 1]! <= 70 && values[index]! > 70) push(index, "down", "RSI 과매수", `RSI ${values[index]!.toFixed(0)} · 70 상회`);
-      if (values[index - 1]! >= 30 && values[index]! < 30) push(index, "up", "RSI 과매도", `RSI ${values[index]!.toFixed(0)} · 30 하회`);
+      if (values[index - 1]! <= 70 && values[index]! > 70)
+        push(
+          index,
+          "down",
+          "RSI 과매수",
+          `RSI ${values[index]!.toFixed(0)} · 70 상회`,
+        );
+      if (values[index - 1]! >= 30 && values[index]! < 30)
+        push(
+          index,
+          "up",
+          "RSI 과매도",
+          `RSI ${values[index]!.toFixed(0)} · 30 하회`,
+        );
     }
   }
 
@@ -4191,20 +6380,44 @@ function buildNumberedSignals(rows: ChartCandleRow[]): NumberedSignal[] {
     const fast = emaArray(closes, 12);
     const slow = emaArray(closes, 26);
     const macd = closes.map((_, index) =>
-      fast[index] != null && slow[index] != null ? fast[index]! - slow[index]! : null,
+      fast[index] != null && slow[index] != null
+        ? fast[index]! - slow[index]!
+        : null,
     );
     const signal = emaArray(macd, 9);
     for (let index = 1; index < rows.length; index += 1) {
-      if (macd[index - 1] == null || signal[index - 1] == null || macd[index] == null || signal[index] == null) continue;
-      if (macd[index - 1]! <= signal[index - 1]! && macd[index]! > signal[index]!) push(index, "up", "MACD 매수 전환", "MACD가 시그널선 상향 교차");
-      if (macd[index - 1]! >= signal[index - 1]! && macd[index]! < signal[index]!) push(index, "down", "MACD 매도 전환", "MACD가 시그널선 하향 교차");
+      if (
+        macd[index - 1] == null ||
+        signal[index - 1] == null ||
+        macd[index] == null ||
+        signal[index] == null
+      )
+        continue;
+      if (
+        macd[index - 1]! <= signal[index - 1]! &&
+        macd[index]! > signal[index]!
+      )
+        push(index, "up", "MACD 매수 전환", "MACD가 시그널선 상향 교차");
+      if (
+        macd[index - 1]! >= signal[index - 1]! &&
+        macd[index]! < signal[index]!
+      )
+        push(index, "down", "MACD 매도 전환", "MACD가 시그널선 하향 교차");
     }
   }
 
   // 박스권 돌파 — 직전 20봉 최고가 상향 돌파
   for (let index = 20; index < rows.length; index += 1) {
-    const priorHigh = Math.max(...rows.slice(index - 20, index).map((r) => r.high));
-    if (rows[index].close > priorHigh) push(index, "up", "박스권 돌파", `직전 20봉 고점 ${Math.round(priorHigh).toLocaleString("ko-KR")} 돌파`);
+    const priorHigh = Math.max(
+      ...rows.slice(index - 20, index).map((r) => r.high),
+    );
+    if (rows[index].close > priorHigh)
+      push(
+        index,
+        "up",
+        "박스권 돌파",
+        `직전 20봉 고점 ${Math.round(priorHigh).toLocaleString("ko-KR")} 돌파`,
+      );
   }
 
   // 발생 봉 시간 기준 정렬 후 최신 12건만
@@ -4224,9 +6437,23 @@ function indicatorPanelModel(
       title: "RSI (14)",
       latest: latest == null ? "-" : latest.toFixed(1),
       lines: [
-        { label: "RSI", color: "#a855f7", data: lineDataFromValues(rows, values) },
-        { label: "70", color: "#ef4444", data: constantLine(rows, 70), lineStyle: LineStyle.Dashed },
-        { label: "30", color: "#3b82f6", data: constantLine(rows, 30), lineStyle: LineStyle.Dashed },
+        {
+          label: "RSI",
+          color: "#a855f7",
+          data: lineDataFromValues(rows, values),
+        },
+        {
+          label: "70",
+          color: "#ef4444",
+          data: constantLine(rows, 70),
+          lineStyle: LineStyle.Dashed,
+        },
+        {
+          label: "30",
+          color: "#3b82f6",
+          data: constantLine(rows, 30),
+          lineStyle: LineStyle.Dashed,
+        },
       ],
     };
   }
@@ -4236,36 +6463,63 @@ function indicatorPanelModel(
     const fast = emaArray(closes, 12);
     const slow = emaArray(closes, 26);
     const macd = closes.map((_, index) =>
-      fast[index] != null && slow[index] != null ? fast[index]! - slow[index]! : null,
+      fast[index] != null && slow[index] != null
+        ? fast[index]! - slow[index]!
+        : null,
     );
     const signal = emaArray(macd, 9);
     const histogram = macd.map((value, index) =>
       value != null && signal[index] != null ? value - signal[index]! : null,
     );
     const latest = [...macd].reverse().find((value) => value != null) ?? null;
-  const latestClose = rows[rows.length - 1]?.close ?? 0;
-  const scale = latestClose > 0 ? latestClose : 1;
-  const displayMacd = macd.map((value) => value == null ? null : (value / scale) * 100);
-  const displaySignal = signal.map((value) => value == null ? null : (value / scale) * 100);
-  const displayHistogram = histogram.map((value) => value == null ? null : (value / scale) * 100);
-  const latestPercent = latest == null ? null : (latest / scale) * 100;
+    const latestClose = rows[rows.length - 1]?.close ?? 0;
+    const scale = latestClose > 0 ? latestClose : 1;
+    const displayMacd = macd.map((value) =>
+      value == null ? null : (value / scale) * 100,
+    );
+    const displaySignal = signal.map((value) =>
+      value == null ? null : (value / scale) * 100,
+    );
+    const displayHistogram = histogram.map((value) =>
+      value == null ? null : (value / scale) * 100,
+    );
+    const latestPercent = latest == null ? null : (latest / scale) * 100;
 
     return {
-    title: "MACD (12·26·9 · 현재가 대비 %)",
-    latest: latestPercent == null ? "-" : `${latestPercent >= 0 ? "+" : ""}${latestPercent.toFixed(3)}%`,
+      title: "MACD (12·26·9 · 현재가 대비 %)",
+      latest:
+        latestPercent == null
+          ? "-"
+          : `${latestPercent >= 0 ? "+" : ""}${latestPercent.toFixed(3)}%`,
       lines: [
-    { label: "MACD", color: "#3b82f6", data: lineDataFromValues(rows, displayMacd) },
-    { label: "Signal", color: "#f59e0b", data: lineDataFromValues(rows, displaySignal) },
-    { label: "0", color: "#64748b", data: constantLine(rows, 0), lineStyle: LineStyle.Dashed },
+        {
+          label: "MACD",
+          color: "#3b82f6",
+          data: lineDataFromValues(rows, displayMacd),
+        },
+        {
+          label: "Signal",
+          color: "#f59e0b",
+          data: lineDataFromValues(rows, displaySignal),
+        },
+        {
+          label: "0",
+          color: "#64748b",
+          data: constantLine(rows, 0),
+          lineStyle: LineStyle.Dashed,
+        },
       ],
-    histogram: displayHistogram.flatMap((value, index) =>
+      histogram: displayHistogram.flatMap((value, index) =>
         value == null
           ? []
-          : [{
-            time: rows[index].time as Time,
-            value,
-            color: value >= 0 ? "rgba(239,68,68,0.55)" : "rgba(59,130,246,0.55)",
-          }],
+          : [
+              {
+                time: rows[index].time as Time,
+                value,
+                color:
+                  value >= 0 ? "rgba(239,68,68,0.55)" : "rgba(59,130,246,0.55)",
+              },
+            ],
       ),
     };
   }
@@ -4277,9 +6531,23 @@ function indicatorPanelModel(
       title: "스토캐스틱 (14)",
       latest: latest == null ? "-" : latest.toFixed(1),
       lines: [
-        { label: "%K", color: "#06b6d4", data: lineDataFromValues(rows, values) },
-        { label: "80", color: "#ef4444", data: constantLine(rows, 80), lineStyle: LineStyle.Dashed },
-        { label: "20", color: "#3b82f6", data: constantLine(rows, 20), lineStyle: LineStyle.Dashed },
+        {
+          label: "%K",
+          color: "#06b6d4",
+          data: lineDataFromValues(rows, values),
+        },
+        {
+          label: "80",
+          color: "#ef4444",
+          data: constantLine(rows, 80),
+          lineStyle: LineStyle.Dashed,
+        },
+        {
+          label: "20",
+          color: "#3b82f6",
+          data: constantLine(rows, 20),
+          lineStyle: LineStyle.Dashed,
+        },
       ],
     };
   }
@@ -4289,8 +6557,17 @@ function indicatorPanelModel(
     const latest = [...values].reverse().find((value) => value != null) ?? null;
     return {
       title: "ATR (14)",
-      latest: latest == null ? "-" : latest.toLocaleString(undefined, { maximumFractionDigits: 2 }),
-      lines: [{ label: "ATR", color: "#f97316", data: lineDataFromValues(rows, values) }],
+      latest:
+        latest == null
+          ? "-"
+          : latest.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+      lines: [
+        {
+          label: "ATR",
+          color: "#f97316",
+          data: lineDataFromValues(rows, values),
+        },
+      ],
     };
   }
 
@@ -4301,9 +6578,23 @@ function indicatorPanelModel(
       title: "CCI (20)",
       latest: latest == null ? "-" : latest.toFixed(0),
       lines: [
-        { label: "CCI", color: "#22c55e", data: lineDataFromValues(rows, values) },
-        { label: "+100", color: "#ef4444", data: constantLine(rows, 100), lineStyle: LineStyle.Dashed },
-        { label: "-100", color: "#3b82f6", data: constantLine(rows, -100), lineStyle: LineStyle.Dashed },
+        {
+          label: "CCI",
+          color: "#22c55e",
+          data: lineDataFromValues(rows, values),
+        },
+        {
+          label: "+100",
+          color: "#ef4444",
+          data: constantLine(rows, 100),
+          lineStyle: LineStyle.Dashed,
+        },
+        {
+          label: "-100",
+          color: "#3b82f6",
+          data: constantLine(rows, -100),
+          lineStyle: LineStyle.Dashed,
+        },
       ],
     };
   }
@@ -4313,8 +6604,17 @@ function indicatorPanelModel(
     const latest = [...values].reverse().find((value) => value != null) ?? null;
     return {
       title: "OBV",
-      latest: latest == null ? "-" : latest.toLocaleString("ko-KR", { notation: "compact" }),
-      lines: [{ label: "OBV", color: "#14b8a6", data: lineDataFromValues(rows, values) }],
+      latest:
+        latest == null
+          ? "-"
+          : latest.toLocaleString("ko-KR", { notation: "compact" }),
+      lines: [
+        {
+          label: "OBV",
+          color: "#14b8a6",
+          data: lineDataFromValues(rows, values),
+        },
+      ],
     };
   }
 
@@ -4325,9 +6625,23 @@ function indicatorPanelModel(
       title: "Williams %R (14)",
       latest: latest == null ? "-" : latest.toFixed(1),
       lines: [
-        { label: "%R", color: "#ec4899", data: lineDataFromValues(rows, values) },
-        { label: "-20", color: "#ef4444", data: constantLine(rows, -20), lineStyle: LineStyle.Dashed },
-        { label: "-80", color: "#3b82f6", data: constantLine(rows, -80), lineStyle: LineStyle.Dashed },
+        {
+          label: "%R",
+          color: "#ec4899",
+          data: lineDataFromValues(rows, values),
+        },
+        {
+          label: "-20",
+          color: "#ef4444",
+          data: constantLine(rows, -20),
+          lineStyle: LineStyle.Dashed,
+        },
+        {
+          label: "-80",
+          color: "#3b82f6",
+          data: constantLine(rows, -80),
+          lineStyle: LineStyle.Dashed,
+        },
       ],
     };
   }
@@ -4336,10 +6650,20 @@ function indicatorPanelModel(
   const latest = [...values].reverse().find((value) => value != null) ?? null;
   return {
     title: "ROC (10)",
-    latest: latest == null ? "-" : `${latest >= 0 ? "+" : ""}${latest.toFixed(1)}%`,
+    latest:
+      latest == null ? "-" : `${latest >= 0 ? "+" : ""}${latest.toFixed(1)}%`,
     lines: [
-      { label: "ROC", color: "#8b5cf6", data: lineDataFromValues(rows, values) },
-      { label: "0", color: "#64748b", data: constantLine(rows, 0), lineStyle: LineStyle.Dashed },
+      {
+        label: "ROC",
+        color: "#8b5cf6",
+        data: lineDataFromValues(rows, values),
+      },
+      {
+        label: "0",
+        color: "#64748b",
+        data: constantLine(rows, 0),
+        lineStyle: LineStyle.Dashed,
+      },
     ],
   };
 }
@@ -4365,8 +6689,14 @@ function chartBaseOptions(height: number, showGrid: boolean) {
     },
     crosshair: {
       mode: CrosshairMode.Normal,
-      vertLine: { color: "rgba(148,163,184,0.6)", labelBackgroundColor: "#334155" },
-      horzLine: { color: "rgba(148,163,184,0.6)", labelBackgroundColor: "#334155" },
+      vertLine: {
+        color: "rgba(148,163,184,0.6)",
+        labelBackgroundColor: "#334155",
+      },
+      horzLine: {
+        color: "rgba(148,163,184,0.6)",
+        labelBackgroundColor: "#334155",
+      },
     },
     rightPriceScale: {
       borderColor: "rgba(148,163,184,0.25)",
@@ -4434,8 +6764,14 @@ function pickStudyMarkerRow(
     return [...recent].sort((a, b) => b.high - a.high)[0] ?? null;
   }
   if (strategy === "breakout") {
-    for (let index = Math.max(1, recent.length - 20); index < recent.length; index += 1) {
-      const previousHigh = Math.max(...recent.slice(0, index).map((row) => row.high));
+    for (
+      let index = Math.max(1, recent.length - 20);
+      index < recent.length;
+      index += 1
+    ) {
+      const previousHigh = Math.max(
+        ...recent.slice(0, index).map((row) => row.high),
+      );
       if (recent[index].close > previousHigh) return recent[index];
     }
   }
@@ -4447,9 +6783,13 @@ function nearestChartRow(rows: ChartCandleRow[], iso: string | null) {
   if (!iso || rows.length === 0) return null;
   const target = Date.parse(iso) / 1000;
   if (!Number.isFinite(target)) return null;
-  return rows.reduce((best, row) =>
-    Math.abs(Number(row.time) - target) < Math.abs(Number(best.time) - target) ? row : best,
-  rows[0]);
+  return rows.reduce(
+    (best, row) =>
+      Math.abs(Number(row.time) - target) < Math.abs(Number(best.time) - target)
+        ? row
+        : best,
+    rows[0],
+  );
 }
 
 function buildActualTradeMarkers(
@@ -4502,6 +6842,13 @@ function ProfessionalChart({
   autoSignal,
   studyFocus,
   tradeEntries,
+  technicalLevels,
+  priceHeight,
+  candleSignals,
+  chartSignals,
+  selectedSignal,
+  onSignalSelect,
+  onTechnicalLevelSelect,
 }: {
   candles: CandlePoint[];
   loading: boolean;
@@ -4512,12 +6859,21 @@ function ProfessionalChart({
   autoSignal: ReturnType<typeof getAutoTradeSignal>;
   studyFocus: StudyChartFocus | null;
   tradeEntries: AutoTradeChartEntry[];
+  technicalLevels: TechnicalChartLevels | null;
+  priceHeight: number;
+  candleSignals: PatternSignalOccurrence[];
+  chartSignals: PatternSignalOccurrence[];
+  selectedSignal: PatternSignalOccurrence | null;
+  onSignalSelect: (signal: PatternSignalOccurrence) => void;
+  onTechnicalLevelSelect: (level: TechnicalLevelKey) => void;
 }) {
   const rows = useMemo(() => buildChartRows(candles), [candles]);
   const [priceChart, setPriceChart] = useState<IChartApi | null>(null);
   const [volumeChart, setVolumeChart] = useState<IChartApi | null>(null);
   const [volumeHeight, setVolumeHeight] = useState(() => {
-    const stored = Number(localStorage.getItem("sa-chart-volume-height-v1") ?? 140);
+    const stored = Number(
+      localStorage.getItem("sa-chart-volume-height-v1") ?? 140,
+    );
     return Number.isFinite(stored) ? Math.min(300, Math.max(90, stored)) : 140;
   });
   const enabledPanels = (
@@ -4552,39 +6908,57 @@ function ProfessionalChart({
       priceChart.timeScale().setVisibleLogicalRange(range as any);
       syncing = false;
     };
-    priceChart.timeScale().subscribeVisibleLogicalRangeChange(priceToVolume as any);
-    volumeChart.timeScale().subscribeVisibleLogicalRangeChange(volumeToPrice as any);
+    priceChart
+      .timeScale()
+      .subscribeVisibleLogicalRangeChange(priceToVolume as any);
+    volumeChart
+      .timeScale()
+      .subscribeVisibleLogicalRangeChange(volumeToPrice as any);
     const initial = priceChart.timeScale().getVisibleLogicalRange();
     if (initial) volumeChart.timeScale().setVisibleLogicalRange(initial);
     return () => {
-      priceChart.timeScale().unsubscribeVisibleLogicalRangeChange(priceToVolume as any);
-      volumeChart.timeScale().unsubscribeVisibleLogicalRangeChange(volumeToPrice as any);
+      priceChart
+        .timeScale()
+        .unsubscribeVisibleLogicalRangeChange(priceToVolume as any);
+      volumeChart
+        .timeScale()
+        .unsubscribeVisibleLogicalRangeChange(volumeToPrice as any);
     };
   }, [priceChart, volumeChart, indicators.volume]);
 
-  const beginVolumeResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    const startY = event.clientY;
-    const startHeight = volumeHeight;
-    const maximum = fullscreen ? 420 : 300;
-    const move = (moveEvent: PointerEvent) => {
-      setVolumeHeight(Math.min(maximum, Math.max(90, startHeight + startY - moveEvent.clientY)));
-    };
-    const finish = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", finish);
-      document.body.style.userSelect = "";
-    };
-    document.body.style.userSelect = "none";
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", finish, { once: true });
-  }, [fullscreen, volumeHeight]);
+  const beginVolumeResize = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      const startY = event.clientY;
+      const startHeight = volumeHeight;
+      const maximum = fullscreen ? 420 : 300;
+      const move = (moveEvent: PointerEvent) => {
+        setVolumeHeight(
+          Math.min(
+            maximum,
+            Math.max(90, startHeight + startY - moveEvent.clientY),
+          ),
+        );
+      };
+      const finish = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", finish);
+        document.body.style.userSelect = "";
+      };
+      document.body.style.userSelect = "none";
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", finish, { once: true });
+    },
+    [fullscreen, volumeHeight],
+  );
 
   if (loading && rows.length < 2) {
     return <ChartPlaceholder text="실제 봉 데이터를 불러오는 중..." />;
   }
   if (rows.length < 2) {
-    return <ChartPlaceholder text="표시할 시가·고가·저가·종가 데이터가 부족합니다." />;
+    return (
+      <ChartPlaceholder text="표시할 시가·고가·저가·종가 데이터가 부족합니다." />
+    );
   }
 
   return (
@@ -4598,6 +6972,10 @@ function ProfessionalChart({
         autoSignal={autoSignal}
         studyFocus={studyFocus}
         tradeEntries={tradeEntries}
+        technicalLevels={technicalLevels}
+        priceHeight={priceHeight}
+        selectedSignal={selectedSignal}
+        onTechnicalLevelSelect={onTechnicalLevelSelect}
         onChartReady={setPriceChart}
       />
 
@@ -4622,8 +7000,28 @@ function ProfessionalChart({
       )}
 
       {enabledPanels.map(([kind]) => (
-        <IndicatorPanel key={kind} kind={kind} rows={rows} fullscreen={fullscreen} />
+        <IndicatorPanel
+          key={kind}
+          kind={kind}
+          rows={rows}
+          fullscreen={fullscreen}
+        />
       ))}
+
+      <PatternSignalPanel
+        title="봉 신호"
+        subtitle="신호를 누르면 해당 봉으로 이동하고 설명창이 열립니다"
+        signals={candleSignals}
+        selectedId={selectedSignal?.id}
+        onSelect={onSignalSelect}
+      />
+      <PatternSignalPanel
+        title="차트 신호"
+        subtitle="선택한 패턴 구간만 메인 차트에 굵은 선으로 표시합니다"
+        signals={chartSignals}
+        selectedId={selectedSignal?.id}
+        onSelect={onSignalSelect}
+      />
     </div>
   );
 }
@@ -4637,6 +7035,10 @@ function PriceChartCanvas({
   autoSignal,
   studyFocus,
   tradeEntries,
+  technicalLevels,
+  priceHeight,
+  selectedSignal,
+  onTechnicalLevelSelect,
   onChartReady,
 }: {
   rows: ChartCandleRow[];
@@ -4647,32 +7049,51 @@ function PriceChartCanvas({
   autoSignal: ReturnType<typeof getAutoTradeSignal>;
   studyFocus: StudyChartFocus | null;
   tradeEntries: AutoTradeChartEntry[];
+  technicalLevels: TechnicalChartLevels | null;
+  priceHeight: number;
+  selectedSignal: PatternSignalOccurrence | null;
+  onTechnicalLevelSelect: (level: TechnicalLevelKey) => void;
   onChartReady: (chart: IChartApi | null) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [signalLegendOpen, setSignalLegendOpen] = useState(false);
-  const [analysisMarkersVisible, setAnalysisMarkersVisible] = useState(true);
-  const [selectedMarkerDetails, setSelectedMarkerDetails] = useState<AnyObj[]>([]);
-  const height = fullscreen ? Math.max(430, Math.floor(window.innerHeight * 0.62)) : 360;
+  const [analysisMarkersVisible, setAnalysisMarkersVisible] = useState(false);
+  const chartApiRef = useRef<AnyObj | null>(null);
+  const focusSeriesRef = useRef<AnyObj | null>(null);
+  const selectedSignalRef = useRef<PatternSignalOccurrence | null>(
+    selectedSignal,
+  );
+  selectedSignalRef.current = selectedSignal;
+  const [selectedMarkerDetails, setSelectedMarkerDetails] = useState<AnyObj[]>(
+    [],
+  );
+  const height = fullscreen
+    ? Math.max(430, Math.floor(window.innerHeight * 0.62))
+    : priceHeight;
   const technicalMarkers = useMemo(
     () => buildTechnicalSignalMarkers(rows, indicators),
     [rows, indicators],
   );
-  const numberedSignals = useMemo(
-    () => buildNumberedSignals(rows),
-    [rows],
-  );
+  const numberedSignals = useMemo(() => buildNumberedSignals(rows), [rows]);
   const actualTradeMarkers = useMemo(
     () => buildActualTradeMarkers(rows, tradeEntries),
     [rows, tradeEntries],
   );
   const signalLegendItems = useMemo(() => {
-    const unique = new Map<string, { text: string; direction: "up" | "down"; color: string }>();
+    const unique = new Map<
+      string,
+      { text: string; direction: "up" | "down"; color: string }
+    >();
     for (const marker of technicalMarkers) {
       const text = String(marker.text ?? "기술지표 신호");
       const direction = marker.position === "belowBar" ? "up" : "down";
       const key = `${text}:${direction}`;
-      if (!unique.has(key)) unique.set(key, { text, direction, color: String(marker.color ?? "#64748b") });
+      if (!unique.has(key))
+        unique.set(key, {
+          text,
+          direction,
+          color: String(marker.color ?? "#64748b"),
+        });
     }
     return [...unique.values()].slice(0, 20);
   }, [technicalMarkers]);
@@ -4702,13 +7123,26 @@ function PriceChartCanvas({
       lastValueVisible: true,
     });
 
-    candleSeries.setData(rows.map((item) => ({
-      time: item.time,
-      open: item.open,
-      high: item.high,
-      low: item.low,
-      close: item.close,
-    })));
+    candleSeries.setData(
+      rows.map((item) => ({
+        time: item.time,
+        open: item.open,
+        high: item.high,
+        low: item.low,
+        close: item.close,
+      })),
+    );
+
+    const focusSeries = chart.addLineSeries({
+      color: selectedSignalRef.current?.color ?? "#a855f7",
+      lineWidth: 4,
+      lineStyle: LineStyle.Solid,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    chartApiRef.current = chart;
+    focusSeriesRef.current = focusSeries;
 
     if (portfolioOverlay?.averagePrice && portfolioOverlay.averagePrice > 0) {
       candleSeries.createPriceLine({
@@ -4720,8 +7154,14 @@ function PriceChartCanvas({
         title: "내 평단",
       });
       const purchaseTime = Date.parse(portfolioOverlay.purchaseDate);
-      const sincePurchase = rows.filter((row) => !Number.isFinite(purchaseTime) || Number(row.time) * 1000 >= purchaseTime);
-      const highestSincePurchase = sincePurchase.length ? Math.max(...sincePurchase.map((row) => row.high)) : null;
+      const sincePurchase = rows.filter(
+        (row) =>
+          !Number.isFinite(purchaseTime) ||
+          Number(row.time) * 1000 >= purchaseTime,
+      );
+      const highestSincePurchase = sincePurchase.length
+        ? Math.max(...sincePurchase.map((row) => row.high))
+        : null;
       if (highestSincePurchase && highestSincePurchase > 0) {
         candleSeries.createPriceLine({
           price: highestSincePurchase,
@@ -4754,6 +7194,47 @@ function PriceChartCanvas({
       });
     }
 
+    if (technicalLevels?.entry != null && technicalLevels.entry > 0) {
+      candleSeries.createPriceLine({
+        price: technicalLevels.entry,
+        color: "#f59e0b",
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "매수가",
+      });
+    }
+    if (technicalLevels?.stop != null && technicalLevels.stop > 0) {
+      candleSeries.createPriceLine({
+        price: technicalLevels.stop,
+        color: "#ef4444",
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "손절가",
+      });
+    }
+    if (technicalLevels?.target1 != null && technicalLevels.target1 > 0) {
+      candleSeries.createPriceLine({
+        price: technicalLevels.target1,
+        color: "#22c55e",
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "목표 1",
+      });
+    }
+    if (technicalLevels?.target2 != null && technicalLevels.target2 > 0) {
+      candleSeries.createPriceLine({
+        price: technicalLevels.target2,
+        color: "#10b981",
+        lineWidth: 2,
+        lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true,
+        title: "목표 2",
+      });
+    }
+
     const analysisMarkers: AnyObj[] = [...technicalMarkers];
     if (studyFocus) {
       const studyRow = pickStudyMarkerRow(rows, studyFocus.markerStrategy);
@@ -4783,34 +7264,33 @@ function PriceChartCanvas({
       });
     }
 
-    const mergedAnalysis: AnyObj[] = mergeChartMarkers(analysisMarkers).map((marker) => ({
-      ...marker,
-      text: "",
-    }) as AnyObj);
-    // 번호가 매겨진 실제 캔들 기반 신호 마커(①②… 대신 숫자). 분석 마커 토글과 함께 숨겨집니다.
-    const numberedMarkers: AnyObj[] = numberedSignals.map((signal) => ({
-      time: signal.time,
-      position: signal.direction === "up" ? "belowBar" : "aboveBar",
-      color: signal.color,
-      shape: signal.direction === "up" ? "arrowUp" : "arrowDown",
-      text: String(signal.number),
-      kind: "analysis",
-      title: `${signal.number}. ${signal.name}`,
-      detail: `${signal.dateLabel} · ${signal.direction === "up" ? "상승" : "하락"} 신호 · 당시가 ${Math.round(signal.price).toLocaleString("ko-KR")} · ${signal.reason}`,
-    }));
-    const analysisForDisplay = analysisMarkersVisible ? [...mergedAnalysis, ...numberedMarkers] : [];
-    const displayMarkers: AnyObj[] = [...analysisForDisplay, ...actualTradeMarkers]
-      .sort((a, b) => Number(a.time) - Number(b.time));
-    candleSeries.setMarkers(displayMarkers as any);
+    // 차트 위 모든 마커를 완전히 제거합니다.
+    // 시작/진행/현재/완성/이탈 텍스트, 패턴명, 숫자, 점, 화살표,
+    // 실제 체결 BUY/SELL 마커까지 캔들 위에는 렌더링하지 않습니다.
+    candleSeries.setMarkers([] as any);
 
-    const clickableMarkers = [
-      ...(analysisMarkersVisible ? [...analysisMarkers, ...numberedMarkers] : []),
-      ...actualTradeMarkers,
-    ];
     const clickHandler = (param: AnyObj) => {
-      if (param.time == null) return;
-      const matches = clickableMarkers.filter((marker) => Number(marker.time) === Number(param.time));
-      if (matches.length) setSelectedMarkerDetails(matches);
+      if (param.point?.y != null && technicalLevels) {
+        const levelCandidates: Array<
+          [TechnicalLevelKey, number | null | undefined]
+        > = [
+          ["entry", technicalLevels.entry],
+          ["stop", technicalLevels.stop],
+          ["target1", technicalLevels.target1],
+          ["target2", technicalLevels.target2],
+        ];
+        for (const [key, price] of levelCandidates) {
+          if (price == null || price <= 0) continue;
+          const coordinate = candleSeries.priceToCoordinate(price);
+          if (
+            coordinate != null &&
+            Math.abs(coordinate - Number(param.point.y)) <= 12
+          ) {
+            onTechnicalLevelSelect(key);
+            return;
+          }
+        }
+      }
     };
     chart.subscribeClick(clickHandler as any);
 
@@ -4852,18 +7332,82 @@ function PriceChartCanvas({
     }
 
     chart.timeScale().fitContent();
+    applyPatternSignalFocus(
+      chart,
+      focusSeries,
+      rows,
+      selectedSignalRef.current,
+    );
     const stopResize = attachChartResize(chart, container, height);
     return () => {
       chart.unsubscribeClick(clickHandler as any);
+      chartApiRef.current = null;
+      focusSeriesRef.current = null;
       onChartReady(null);
       stopResize();
       chart.remove();
     };
-  }, [rows, timeframe, indicators, height, portfolioOverlay, autoSignal, studyFocus, technicalMarkers, numberedSignals, actualTradeMarkers, analysisMarkersVisible, onChartReady]);
+  }, [
+    rows,
+    timeframe,
+    indicators,
+    height,
+    portfolioOverlay,
+    autoSignal,
+    studyFocus,
+    technicalLevels,
+    technicalMarkers,
+    numberedSignals,
+    actualTradeMarkers,
+    analysisMarkersVisible,
+    onChartReady,
+    onTechnicalLevelSelect,
+  ]);
+
+  useEffect(() => {
+    applyPatternSignalFocus(
+      chartApiRef.current,
+      focusSeriesRef.current,
+      rows,
+      selectedSignal,
+    );
+  }, [rows, selectedSignal]);
 
   return (
     <div className="overflow-hidden rounded-xl border border-card-border bg-secondary/20">
       <div ref={containerRef} className="w-full" style={{ height }} />
+      {technicalLevels && (
+        <div className="grid grid-cols-5 gap-1 border-t border-card-border bg-background/80 p-2">
+          {[
+            ["entry", "매수가", technicalLevels.entry, "text-amber-500"],
+            ["sell", "매도", null, "text-blue-500"],
+            ["stop", "손절가", technicalLevels.stop, "text-red-500"],
+            ["target1", "목표 1", technicalLevels.target1, "text-green-500"],
+            ["target2", "목표 2", technicalLevels.target2, "text-emerald-500"],
+          ].map(([key, label, value, textClass]) => (
+            <button
+              key={String(key)}
+              type="button"
+              onClick={() => onTechnicalLevelSelect(key as TechnicalLevelKey)}
+              className="min-w-0 rounded-lg bg-secondary/70 px-1 py-2 text-center transition active:scale-95"
+            >
+              <p
+                className={cn(
+                  "truncate text-[9px] font-extrabold",
+                  String(textClass),
+                )}
+              >
+                {String(label)}
+              </p>
+              <p className="mt-0.5 truncate text-[8px] font-bold text-muted-foreground">
+                {value == null
+                  ? "근거 보기"
+                  : Number(value).toLocaleString("ko-KR")}
+              </p>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-card-border px-3 py-2 text-[9px] font-bold text-muted-foreground">
         <span className="text-red-500">■ 상승봉</span>
         <span className="text-blue-500">■ 하락봉</span>
@@ -4871,9 +7415,25 @@ function PriceChartCanvas({
         {indicators.sma20 && <span className="text-green-500">━ 20일선</span>}
         {indicators.sma60 && <span className="text-purple-500">━ 60일선</span>}
         {indicators.sma120 && <span className="text-pink-500">━ 120일선</span>}
-        {indicators.bollinger && <span className="text-teal-500">┄ 볼린저</span>}
+        {indicators.bollinger && (
+          <span className="text-teal-500">┄ 볼린저</span>
+        )}
         {indicators.vwap && <span className="text-cyan-500">━ VWAP</span>}
-        {actualTradeMarkers.length > 0 && <span className="text-emerald-600">● BUY / ■ SELL 실제 체결</span>}
+        {technicalLevels?.entry != null && (
+          <span className="text-amber-500">┄ 매수가</span>
+        )}
+        {technicalLevels?.stop != null && (
+          <span className="text-red-500">┄ 손절가</span>
+        )}
+        {technicalLevels?.target1 != null && (
+          <span className="text-green-500">┄ 목표 1</span>
+        )}
+        {technicalLevels?.target2 != null && (
+          <span className="text-emerald-500">┈ 목표 2</span>
+        )}
+        {actualTradeMarkers.length > 0 && (
+          <span className="text-emerald-600">● BUY / ■ SELL 실제 체결</span>
+        )}
         {(technicalMarkers.length > 0 || numberedSignals.length > 0) && (
           <button
             type="button"
@@ -4891,19 +7451,30 @@ function PriceChartCanvas({
             aria-expanded={signalLegendOpen}
             className="rounded-full bg-primary/10 px-2 py-1 text-primary"
           >
-            신호 설명 {signalLegendOpen ? "접기 ▲" : "보기 ▼"} · {technicalMarkers.length}곳
+            신호 설명 {signalLegendOpen ? "접기 ▲" : "보기 ▼"} ·{" "}
+            {technicalMarkers.length}곳
           </button>
         )}
       </div>
       {signalLegendOpen && technicalMarkers.length > 0 && (
         <div className="border-t border-card-border bg-background/80 px-3 py-3">
           <p className="break-keep text-[10px] font-bold leading-4 text-muted-foreground">
-            ↑·↓는 분석 조건이며 주문이 아닙니다. 봉의 화살표를 누르면 발생시각·실제 값·판정근거를 확인할 수 있습니다. BUY/SELL 글자가 있는 원·사각형만 실제 체결입니다.
+            ↑·↓는 분석 조건이며 주문이 아닙니다. 봉의 화살표를 누르면
+            발생시각·실제 값·판정근거를 확인할 수 있습니다. BUY/SELL 글자가 있는
+            원·사각형만 실제 체결입니다.
           </p>
           <div className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
             {signalLegendItems.map((item) => (
-              <div key={`${item.text}:${item.direction}`} className="flex items-center gap-2 rounded-lg bg-secondary/60 px-2.5 py-2 text-[10px] font-bold">
-                <span className="text-base font-black" style={{ color: item.color }}>{item.direction === "up" ? "↑" : "↓"}</span>
+              <div
+                key={`${item.text}:${item.direction}`}
+                className="flex items-center gap-2 rounded-lg bg-secondary/60 px-2.5 py-2 text-[10px] font-bold"
+              >
+                <span
+                  className="text-base font-black"
+                  style={{ color: item.color }}
+                >
+                  {item.direction === "up" ? "↑" : "↓"}
+                </span>
                 <span>{item.text}</span>
               </div>
             ))}
@@ -4912,7 +7483,9 @@ function PriceChartCanvas({
       )}
       {analysisMarkersVisible && numberedSignals.length > 0 && (
         <div className="border-t border-card-border bg-background/80 px-3 py-3">
-          <p className="mb-2 text-center text-[11px] font-extrabold">신호 목록 · 최근 {numberedSignals.length}개</p>
+          <p className="mb-2 text-center text-[11px] font-extrabold">
+            신호 목록 · 최근 {numberedSignals.length}개
+          </p>
           <div className="space-y-1.5">
             {numberedSignals.map((signal) => (
               <div
@@ -4928,10 +7501,15 @@ function PriceChartCanvas({
                 <div className="min-w-0 flex-1 text-center">
                   <p className="break-keep">
                     <span style={{ color: signal.color }}>{signal.name}</span>
-                    <span className="text-muted-foreground"> · {signal.direction === "up" ? "상승" : "하락"}</span>
+                    <span className="text-muted-foreground">
+                      {" "}
+                      · {signal.direction === "up" ? "상승" : "하락"}
+                    </span>
                   </p>
                   <p className="mt-0.5 break-keep text-[9px] font-semibold leading-4 text-muted-foreground">
-                    {signal.dateLabel} · 당시가 {Math.round(signal.price).toLocaleString("ko-KR")} · {signal.reason}
+                    {signal.dateLabel} · 당시가{" "}
+                    {Math.round(signal.price).toLocaleString("ko-KR")} ·{" "}
+                    {signal.reason}
                   </p>
                 </div>
               </div>
@@ -4943,13 +7521,32 @@ function PriceChartCanvas({
         <div className="border-t border-card-border bg-background px-3 py-3">
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] font-extrabold">선택한 봉의 신호 상세</p>
-            <button type="button" onClick={() => setSelectedMarkerDetails([])} className="text-[10px] font-bold text-muted-foreground">닫기</button>
+            <button
+              type="button"
+              onClick={() => setSelectedMarkerDetails([])}
+              className="text-[10px] font-bold text-muted-foreground"
+            >
+              닫기
+            </button>
           </div>
           <div className="mt-2 space-y-2">
             {selectedMarkerDetails.map((marker, index) => (
-              <div key={`${marker.title ?? marker.text}:${index}`} className={cn("rounded-xl border p-2.5", marker.kind === "trade" ? "border-emerald-500/30 bg-emerald-500/5" : "border-card-border bg-secondary/50")}>
-                <p className="text-[10px] font-extrabold">{marker.title ?? marker.text}</p>
-                <p className="mt-1 break-keep text-[10px] font-semibold leading-4 text-muted-foreground">{marker.detail ?? "해당 봉에서 지표 전환 조건이 감지됐습니다."}</p>
+              <div
+                key={`${marker.title ?? marker.text}:${index}`}
+                className={cn(
+                  "rounded-xl border p-2.5",
+                  marker.kind === "trade"
+                    ? "border-emerald-500/30 bg-emerald-500/5"
+                    : "border-card-border bg-secondary/50",
+                )}
+              >
+                <p className="text-[10px] font-extrabold">
+                  {marker.title ?? marker.text}
+                </p>
+                <p className="mt-1 break-keep text-[10px] font-semibold leading-4 text-muted-foreground">
+                  {marker.detail ??
+                    "해당 봉에서 지표 전환 조건이 감지됐습니다."}
+                </p>
               </div>
             ))}
           </div>
@@ -4992,11 +7589,16 @@ function VolumeChartCanvas({
       priceLineVisible: false,
       lastValueVisible: true,
     });
-    volumeSeries.setData(rows.map((item) => ({
-      time: item.time,
-      value: item.volume,
-      color: item.close >= item.open ? "rgba(239,68,68,0.55)" : "rgba(59,130,246,0.55)",
-    })));
+    volumeSeries.setData(
+      rows.map((item) => ({
+        time: item.time,
+        value: item.volume,
+        color:
+          item.close >= item.open
+            ? "rgba(239,68,68,0.55)"
+            : "rgba(59,130,246,0.55)",
+      })),
+    );
     chart.timeScale().fitContent();
     const stopResize = attachChartResize(chart, container, height);
     return () => {
@@ -5010,7 +7612,9 @@ function VolumeChartCanvas({
     <section className="overflow-hidden rounded-xl border border-card-border bg-secondary/20">
       <div className="flex items-center justify-between border-b border-card-border px-3 py-2">
         <p className="text-[11px] font-extrabold">거래량</p>
-        <p className="text-[10px] font-bold text-muted-foreground">높이 {Math.round(height)}px · 가격 차트와 이동·확대 동기화</p>
+        <p className="text-[10px] font-bold text-muted-foreground">
+          높이 {Math.round(height)}px · 가격 차트와 이동·확대 동기화
+        </p>
       </div>
       <div ref={containerRef} className="w-full" style={{ height }} />
     </section>
@@ -5135,9 +7739,15 @@ function FinancialTab({
 
   const [selectedMetricKey, setSelectedMetricKey] =
     useState<FinancialMetricKey>("roe");
+  const [metricModalOpen, setMetricModalOpen] = useState(false);
+  const [financialDetail, setFinancialDetail] = useState<{
+    title: string;
+    text: string;
+  } | null>(null);
 
   // KR 주식은 백만원, US 주식은 USD 백만 단위로 표기합니다(원↔달러 환산 없음).
-  const financialUnitLabel = currency === "USD" ? "단위: USD million" : "단위: 백만원";
+  const financialUnitLabel =
+    currency === "USD" ? "단위: USD million" : "단위: 백만원";
 
   const ratios = financials?.ratios ?? financials?.metrics ?? {};
 
@@ -5226,27 +7836,45 @@ function FinancialTab({
     {
       label: "총자산",
       color: "bg-amber-500",
-      values: annualRows.map((row) => financialValue(row.assets, row.totalAssets)),
+      values: annualRows.map((row) =>
+        financialValue(row.assets, row.totalAssets),
+      ),
     },
     {
       label: "총부채",
       color: "bg-rose-500",
-      values: annualRows.map((row) => financialValue(row.debt, row.totalLiabilities, row.liabilities)),
+      values: annualRows.map((row) =>
+        financialValue(row.debt, row.totalLiabilities, row.liabilities),
+      ),
     },
     {
       label: "자본총계",
       color: "bg-indigo-500",
-      values: annualRows.map((row) => financialValue(row.equity, row.totalEquity, row.stockholdersEquity)),
+      values: annualRows.map((row) =>
+        financialValue(row.equity, row.totalEquity, row.stockholdersEquity),
+      ),
     },
     {
       label: "영업현금흐름",
       color: "bg-teal-500",
-      values: annualRows.map((row) => financialValue(row.operatingCashFlow, row.cashFromOperations, row.netCashProvidedByOperatingActivities)),
+      values: annualRows.map((row) =>
+        financialValue(
+          row.operatingCashFlow,
+          row.cashFromOperations,
+          row.netCashProvidedByOperatingActivities,
+        ),
+      ),
     },
     {
       label: "현금성자산",
       color: "bg-sky-500",
-      values: annualRows.map((row) => financialValue(row.cash, row.cashAndCashEquivalents, row.cashEquivalents)),
+      values: annualRows.map((row) =>
+        financialValue(
+          row.cash,
+          row.cashAndCashEquivalents,
+          row.cashEquivalents,
+        ),
+      ),
     },
   ];
 
@@ -5266,7 +7894,10 @@ function FinancialTab({
               key={metric.key}
               type="button"
               aria-pressed={selectedMetric.key === metric.key}
-              onClick={() => setSelectedMetricKey(metric.key)}
+              onClick={() => {
+                setSelectedMetricKey(metric.key);
+                setMetricModalOpen(true);
+              }}
               className={cn(
                 "rounded-xl border p-3 text-center transition-all active:scale-[0.98]",
 
@@ -5295,35 +7926,27 @@ function FinancialTab({
           ))}
         </div>
 
-        <div
-          key={selectedMetric.key}
-          role="status"
-          aria-live="polite"
-          className="mt-3 rounded-2xl border border-primary/30 bg-primary/5 p-3 shadow-sm"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-extrabold">
-                {selectedMetric.label} · {selectedMetric.status}
-              </p>
-              <p className="mt-1 text-[10px] font-bold text-muted-foreground">
-                선택한 지표 설명
-              </p>
-            </div>
-            <p className="text-lg font-extrabold text-primary">
+        {metricModalOpen && (
+          <Modal
+            title={`${selectedMetric.label} · ${selectedMetric.status}`}
+            onClose={() => setMetricModalOpen(false)}
+          >
+            <div className="mb-3 rounded-xl bg-primary/10 p-3 text-center text-lg font-extrabold text-primary">
               {selectedMetric.valueText}
-            </p>
-          </div>
-
-          <div className="mt-3 space-y-2">
-            <ExplanationBlock label="지표 뜻" text={selectedMetric.meaning} />
-            <ExplanationBlock
-              label="현재 수치 해석"
-              text={selectedMetric.interpretation}
-            />
-            <ExplanationBlock label="주의할 점" text={selectedMetric.caution} />
-          </div>
-        </div>
+            </div>
+            <div className="space-y-2">
+              <ExplanationBlock label="지표 뜻" text={selectedMetric.meaning} />
+              <ExplanationBlock
+                label="현재 수치 해석"
+                text={selectedMetric.interpretation}
+              />
+              <ExplanationBlock
+                label="주의할 점"
+                text={selectedMetric.caution}
+              />
+            </div>
+          </Modal>
+        )}
       </SectionCard>
 
       <div className="order-3">
@@ -5333,20 +7956,42 @@ function FinancialTab({
         >
           {annualRows.length ? (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {performanceCards.filter((card) => card.values.some((value) => value != null)).map((card) => (
-                <FinancialTrendCard
-                  key={card.label}
-                  label={card.label}
-                  values={card.values}
-                  periods={periodLabels}
-                  currency={currency}
-                  color={card.color}
-                />
-              ))}
+              {performanceCards
+                .filter((card) => card.values.some((value) => value != null))
+                .map((card) => (
+                  <FinancialTrendCard
+                    key={card.label}
+                    label={card.label}
+                    values={card.values}
+                    periods={periodLabels}
+                    currency={currency}
+                    color={card.color}
+                    onOpen={() => {
+                      const availableValues = card.values.filter(
+                        (value): value is number =>
+                          value != null && Number.isFinite(value),
+                      );
+                      const first = availableValues[0];
+                      const latest =
+                        availableValues[availableValues.length - 1];
+                      const direction =
+                        first == null || latest == null
+                          ? "흐름을 계산할 데이터가 부족합니다."
+                          : latest >= first
+                            ? "최근 값이 과거 값보다 증가하는 흐름입니다."
+                            : "최근 값이 과거 값보다 감소하는 흐름입니다.";
+                      setFinancialDetail({
+                        title: `${card.label} 설명`,
+                        text: `${card.label}의 연도별 실제 제공값을 비교한 차트입니다. ${direction} 단일 항목만으로 판단하지 말고 매출·이익·부채·현금흐름을 함께 확인하세요.`,
+                      });
+                    }}
+                  />
+                ))}
             </div>
           ) : (
             <p className="text-sm font-bold text-muted-foreground">
-              실제 재무 데이터 제공기관의 응답이 지연되고 있습니다. 잠시 후 다시 확인해 주세요.
+              실제 재무 데이터 제공기관의 응답이 지연되고 있습니다. 잠시 후 다시
+              확인해 주세요.
             </p>
           )}
         </SectionCard>
@@ -5389,7 +8034,18 @@ function FinancialTab({
           </p>
 
           {rows.length ? (
-            <FinancialPerformanceChart rows={rows} currency={currency} />
+            <button
+              type="button"
+              onClick={() =>
+                setFinancialDetail({
+                  title: `${period === "quarterly" ? "분기별" : "연별"} 실적 설명`,
+                  text: "매출액·영업이익·순이익의 실제 기간별 값을 비교합니다. 매출이 늘어도 이익이 줄 수 있으므로 세 항목의 방향과 일회성 요인을 함께 확인하세요.",
+                })
+              }
+              className="w-full text-left"
+            >
+              <FinancialPerformanceChart rows={rows} currency={currency} />
+            </button>
           ) : (
             <p className="text-sm font-bold text-muted-foreground">
               선택한 기간의 실제 재무 데이터가 아직 확인되지 않았습니다.
@@ -5398,6 +8054,14 @@ function FinancialTab({
         </SectionCard>
       </div>
 
+      {financialDetail && (
+        <Modal
+          title={financialDetail.title}
+          onClose={() => setFinancialDetail(null)}
+        >
+          <p>{financialDetail.text}</p>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -5435,6 +8099,12 @@ function cleanContentTitle(value: unknown, source = "") {
 
 function filingPlainSummary(item: AnyObj | undefined) {
   if (!item) return "최근 확인된 공시가 없습니다.";
+  const bodySummary = firstText(
+    item.bodySummary,
+    item.contentSummary,
+    item.documentSummary,
+  );
+  if (bodySummary) return bodySummary;
   const title = String(
     item.title ?? item.report_nm ?? item.report ?? item.form ?? "",
   ).trim();
@@ -5473,6 +8143,12 @@ function filingPlainSummary(item: AnyObj | undefined) {
 
 function newsPlainSummary(item: AnyObj | undefined) {
   if (!item) return "최근 확인된 관련 뉴스가 없습니다.";
+  const bodySummary = firstText(
+    item.bodySummary,
+    item.contentSummary,
+    item.articleSummary,
+  );
+  if (bodySummary) return bodySummary;
   const source = String(
     item.source ?? item.publisher ?? item.provider ?? "",
   ).trim();
@@ -5496,7 +8172,14 @@ function newsPlainSummary(item: AnyObj | undefined) {
 
 function contentTimestamp(item: AnyObj): number {
   const raw = String(
-    item.date ?? item.filingDate ?? item.rcept_dt ?? item.publishedAt ?? item.published_at ?? item.time ?? item.acceptedAt ?? "",
+    item.date ??
+      item.filingDate ??
+      item.rcept_dt ??
+      item.publishedAt ??
+      item.published_at ??
+      item.time ??
+      item.acceptedAt ??
+      "",
   ).trim();
   const digits = raw.replace(/\D/g, "");
   if (digits.length >= 8) {
@@ -5505,7 +8188,13 @@ function contentTimestamp(item: AnyObj): number {
     const day = Number(digits.slice(6, 8));
     const hour = Number(digits.slice(8, 10) || 0);
     const minute = Number(digits.slice(10, 12) || 0);
-    const parsedDigits = new Date(year, Math.max(0, month - 1), day, hour, minute).getTime();
+    const parsedDigits = new Date(
+      year,
+      Math.max(0, month - 1),
+      day,
+      hour,
+      minute,
+    ).getTime();
     if (Number.isFinite(parsedDigits)) return parsedDigits;
   }
   const parsed = Date.parse(raw);
@@ -5516,7 +8205,17 @@ function sortContentNewest(items: AnyObj[]) {
   return [...items].sort((a, b) => contentTimestamp(b) - contentTimestamp(a));
 }
 
-function FilingTab({ ticker, market, filings, summary }: { ticker: string; market: Market; filings: AnyObj[]; summary: string }) {
+function FilingTab({
+  ticker,
+  market,
+  filings,
+  summary,
+}: {
+  ticker: string;
+  market: Market;
+  filings: AnyObj[];
+  summary: string;
+}) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [history, setHistory] = useState<AnyObj[] | null>(null);
@@ -5525,7 +8224,9 @@ function FilingTab({ ticker, market, filings, summary }: { ticker: string; marke
   const source = market === "KR" ? "DART" : "SEC EDGAR";
   const sorted = sortContentNewest(filings);
   const historySorted = sortContentNewest(history ?? filings);
-  const recentSummary = sorted[0] ? filingPlainSummary(sorted[0]) : summary || "최근 공시 요약 데이터가 부족합니다.";
+  const recentSummary = sorted[0]
+    ? filingPlainSummary(sorted[0])
+    : summary || "최근 공시 요약 데이터가 부족합니다.";
   const pageCount = Math.max(1, Math.ceil(historySorted.length / 10));
   const pageItems = historySorted.slice((page - 1) * 10, page * 10);
 
@@ -5536,39 +8237,171 @@ function FilingTab({ ticker, market, filings, summary }: { ticker: string; marke
     setHistoryLoading(true);
     setHistoryError("");
     try {
-      const response = await apiGet<AnyObj>(
-        `/stocks/${encodeURIComponent(ticker)}/filings?all=1`,
+      const response = await tryJson<AnyObj>(
+        [`/api/stocks/${ticker}/filings?all=1`],
+        {},
       );
       const loaded = collectFilings(response);
       if (!loaded.length) throw new Error("EMPTY_FILING_HISTORY");
       setHistory(loaded);
     } catch {
-      setHistoryError("이전 공시를 불러오지 못했습니다. 잠시 후 다시 눌러 주세요.");
+      setHistoryError(
+        "이전 공시를 불러오지 못했습니다. 잠시 후 다시 눌러 주세요.",
+      );
     } finally {
       setHistoryLoading(false);
     }
   };
-  const renderItems = (items: AnyObj[]) => <div className="space-y-2">{items.map((item, index) => {
-    const title = cleanContentTitle(item.translatedTitle ?? item.title ?? item.report_nm ?? item.report ?? item.form ?? "공시 제목 확인 필요");
-    const form = String(item.form ?? item.formType ?? item.reportType ?? "").trim();
-    const date = formatContentDate(item.date ?? item.filingDate ?? item.rcept_dt ?? item.acceptedAt);
-    const url = filingOriginalUrl(item, market);
-    return <article key={`${String(item.rcept_no ?? item.accessionNumber ?? url ?? title)}:${index}`} className="rounded-xl border border-card-border bg-secondary/50 p-3">
-      {url ? <a href={url} target="_blank" rel="noopener noreferrer" className="block break-words text-sm font-extrabold leading-6 text-primary underline-offset-2 hover:underline">{title}</a> : <p className="break-words text-sm font-extrabold leading-6">{title}</p>}
-      <div className="mt-1.5 flex flex-wrap items-center gap-1.5"><span className="text-[10px] font-bold text-muted-foreground">{date}</span><span className="rounded-full bg-primary/10 px-2 py-1 text-[10px] font-extrabold text-primary">{source}</span>{Number(item.relatedCount ?? 1) > 1 && <span className="rounded-full bg-positive/10 px-2 py-1 text-[10px] font-extrabold text-positive">(중복 {Number(item.relatedCount)}건)</span>}{form && <span className="rounded-full bg-background px-2 py-1 text-[10px] font-bold text-muted-foreground">{form}</span>}</div>
-      <p className="mt-2 break-words rounded-lg bg-background/70 px-3 py-2 text-xs font-semibold leading-5 text-muted-foreground">{filingPlainSummary(item)}</p>
-    </article>;
-  })}</div>;
-  return <div className="space-y-3">
-    <SectionCard title="최근 공시 요약" subtitle={`${source} 최신 공시 기준`}><InfoBox>{recentSummary}</InfoBox></SectionCard>
-    <SectionCard title="공시 원문" subtitle="최근 공시 5건을 표시합니다. 제목을 누르면 원문으로 이동합니다." actions={<button type="button" onClick={() => void openHistory()} className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-extrabold text-primary">더보기</button>}>
-      {sorted.length ? renderItems(sorted.slice(0, 5)) : <p className="text-sm font-bold text-muted-foreground">최근 확인된 공시가 없습니다.</p>}
-    </SectionCard>
-    {moreOpen && <Modal title="전체 공시" subtitle={historyLoading ? "이전 공시를 불러오는 중" : `${historySorted.length}건 · 전체 이력 · 최신순`} onClose={() => setMoreOpen(false)}>{historyLoading ? <p className="rounded-xl bg-secondary/60 p-4 text-center text-sm font-extrabold text-primary">DART 이전 공시를 불러오고 있습니다…</p> : historyError ? <p className="rounded-xl bg-destructive/10 p-4 text-center text-sm font-bold text-destructive">{historyError}</p> : <>{renderItems(pageItems)}<div className="mt-4 flex items-center justify-between"><button type="button" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-xl border border-card-border px-4 py-2 text-xs font-extrabold disabled:opacity-40">이전</button><span className="text-xs font-extrabold">{page} / {pageCount}</span><button type="button" disabled={page >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))} className="rounded-xl border border-card-border px-4 py-2 text-xs font-extrabold disabled:opacity-40">다음</button></div></>}</Modal>}
-  </div>;
+  const renderItems = (items: AnyObj[]) => (
+    <div className="space-y-2">
+      {items.map((item, index) => {
+        const title = cleanContentTitle(
+          item.translatedTitle ??
+            item.title ??
+            item.report_nm ??
+            item.report ??
+            item.form ??
+            "공시 제목 확인 필요",
+        );
+        const form = String(
+          item.form ?? item.formType ?? item.reportType ?? "",
+        ).trim();
+        const date = formatContentDate(
+          item.date ?? item.filingDate ?? item.rcept_dt ?? item.acceptedAt,
+        );
+        const url = filingOriginalUrl(item, market);
+        return (
+          <article
+            key={`${String(item.rcept_no ?? item.accessionNumber ?? url ?? title)}:${index}`}
+            className="rounded-xl border border-card-border bg-secondary/50 p-3"
+          >
+            {url ? (
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block break-words text-sm font-extrabold leading-6 text-primary underline-offset-2 hover:underline"
+              >
+                {title}
+              </a>
+            ) : (
+              <p className="break-words text-sm font-extrabold leading-6">
+                {title}
+              </p>
+            )}
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-bold text-muted-foreground">
+                {date}
+              </span>
+              <span className="rounded-full bg-primary/10 px-2 py-1 text-[10px] font-extrabold text-primary">
+                {source}
+              </span>
+              {Number(item.relatedCount ?? 1) > 1 && (
+                <span className="rounded-full bg-positive/10 px-2 py-1 text-[10px] font-extrabold text-positive">
+                  (중복 {Number(item.relatedCount)}건)
+                </span>
+              )}
+              {form && (
+                <span className="rounded-full bg-background px-2 py-1 text-[10px] font-bold text-muted-foreground">
+                  {form}
+                </span>
+              )}
+            </div>
+            <p className="mt-2 break-words rounded-lg bg-background/70 px-3 py-2 text-xs font-semibold leading-5 text-muted-foreground">
+              {filingPlainSummary(item)}
+            </p>
+          </article>
+        );
+      })}
+    </div>
+  );
+  return (
+    <div className="space-y-3">
+      <SectionCard title="최근 공시 요약" subtitle={`${source} 최신 공시 기준`}>
+        <InfoBox>{recentSummary}</InfoBox>
+      </SectionCard>
+      <SectionCard
+        title="공시 원문"
+        subtitle="최근 공시 5건을 표시합니다. 제목을 누르면 원문으로 이동합니다."
+        actions={
+          <button
+            type="button"
+            onClick={() => void openHistory()}
+            className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-extrabold text-primary"
+          >
+            더보기
+          </button>
+        }
+      >
+        {sorted.length ? (
+          renderItems(sorted.slice(0, 5))
+        ) : (
+          <p className="text-sm font-bold text-muted-foreground">
+            최근 확인된 공시가 없습니다.
+          </p>
+        )}
+      </SectionCard>
+      {moreOpen && (
+        <Modal
+          title="전체 공시"
+          subtitle={
+            historyLoading
+              ? "이전 공시를 불러오는 중"
+              : `${historySorted.length}건 · 전체 이력 · 최신순`
+          }
+          onClose={() => setMoreOpen(false)}
+        >
+          {historyLoading ? (
+            <p className="rounded-xl bg-secondary/60 p-4 text-center text-sm font-extrabold text-primary">
+              DART 이전 공시를 불러오고 있습니다…
+            </p>
+          ) : historyError ? (
+            <p className="rounded-xl bg-destructive/10 p-4 text-center text-sm font-bold text-destructive">
+              {historyError}
+            </p>
+          ) : (
+            <>
+              {renderItems(pageItems)}
+              <div className="mt-4 flex items-center justify-between">
+                <button
+                  type="button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((value) => Math.max(1, value - 1))}
+                  className="rounded-xl border border-card-border px-4 py-2 text-xs font-extrabold disabled:opacity-40"
+                >
+                  이전
+                </button>
+                <span className="text-xs font-extrabold">
+                  {page} / {pageCount}
+                </span>
+                <button
+                  type="button"
+                  disabled={page >= pageCount}
+                  onClick={() =>
+                    setPage((value) => Math.min(pageCount, value + 1))
+                  }
+                  className="rounded-xl border border-card-border px-4 py-2 text-xs font-extrabold disabled:opacity-40"
+                >
+                  다음
+                </button>
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
 }
 
-function NewsTab({ ticker, news, summary }: { ticker: string; news: AnyObj[]; summary: string }) {
+function NewsTab({
+  ticker,
+  news,
+  summary,
+}: {
+  ticker: string;
+  news: AnyObj[];
+  summary: string;
+}) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [history, setHistory] = useState<AnyObj[] | null>(null);
@@ -5576,7 +8409,9 @@ function NewsTab({ ticker, news, summary }: { ticker: string; news: AnyObj[]; su
   const [historyError, setHistoryError] = useState("");
   const sorted = sortContentNewest(news);
   const historySorted = sortContentNewest(history ?? news);
-  const recentSummary = sorted[0] ? newsPlainSummary(sorted[0]) : summary || "최근 뉴스 요약 데이터가 부족합니다.";
+  const recentSummary = sorted[0]
+    ? newsPlainSummary(sorted[0])
+    : summary || "최근 뉴스 요약 데이터가 부족합니다.";
   const pageCount = Math.max(1, Math.ceil(historySorted.length / 10));
   const pageItems = historySorted.slice((page - 1) * 10, page * 10);
 
@@ -5595,30 +8430,150 @@ function NewsTab({ ticker, news, summary }: { ticker: string; news: AnyObj[]; su
       if (!loaded.length) throw new Error("EMPTY_NEWS_HISTORY");
       setHistory(loaded);
     } catch {
-      setHistoryError("이전 뉴스를 불러오지 못했습니다. 잠시 후 다시 눌러 주세요.");
+      setHistoryError(
+        "이전 뉴스를 불러오지 못했습니다. 잠시 후 다시 눌러 주세요.",
+      );
     } finally {
       setHistoryLoading(false);
     }
   };
-  const renderItems = (items: AnyObj[]) => <div className="space-y-2">{items.map((item, index) => {
-    const source = String(item.source ?? item.publisher ?? item.provider ?? "출처 확인").trim();
-    const title = cleanContentTitle(item.translatedTitle ?? item.title ?? item.headline ?? "뉴스 제목 확인 필요", source);
-    const url = articleOriginalUrl(item);
-    const date = formatContentDate(item.date ?? item.time ?? item.publishedAt ?? item.published_at);
-    const brief = newsPlainSummary(item);
-    return <article key={`${String(url ?? title)}:${index}`} className="rounded-xl border border-card-border bg-secondary/50 p-3">
-      {url ? <a href={url} target="_blank" rel="noopener noreferrer" className="block break-words text-[15px] font-extrabold leading-6 text-primary underline-offset-2 hover:underline">{title}</a> : <p className="break-words text-[15px] font-extrabold leading-6">{title}</p>}
-      <div className="mt-2 flex flex-wrap items-center gap-1.5"><span className="text-[10px] font-bold text-muted-foreground">{source} · {date}</span><span className="max-w-full truncate rounded-full bg-primary/10 px-2 py-1 text-[10px] font-extrabold text-primary">{eventLabelKo(title)}</span>{Number(item.relatedCount ?? 1) > 1 && <span className="rounded-full bg-positive/10 px-2 py-1 text-[10px] font-extrabold text-positive">(중복 {Number(item.relatedCount)}건)</span>}</div>
-      <p className="mt-2 break-words rounded-lg bg-background/70 px-3 py-2 text-xs font-semibold leading-5 text-muted-foreground"><span className="font-extrabold text-foreground">간단 브리핑 · </span>{brief}</p>
-    </article>;
-  })}</div>;
-  return <div className="space-y-3">
-    <SectionCard title="최근 뉴스 요약" subtitle="해당 종목 최신 기사 기준"><InfoBox>{recentSummary}</InfoBox></SectionCard>
-    <SectionCard title="뉴스 원문" subtitle="최근 뉴스 5건을 표시합니다. 제목을 누르면 원문으로 이동합니다." actions={<button type="button" onClick={() => void openHistory()} className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-extrabold text-primary">더보기</button>}>
-      {sorted.length ? renderItems(sorted.slice(0, 5)) : <p className="text-sm font-bold text-muted-foreground">최근 관련 뉴스가 없습니다.</p>}
-    </SectionCard>
-    {moreOpen && <Modal title="전체 뉴스" subtitle={historyLoading ? "이전 뉴스를 불러오는 중" : `${historySorted.length}건 · 제공처 전체 이력 · 최신순`} onClose={() => setMoreOpen(false)}>{historyLoading ? <p className="rounded-xl bg-secondary/60 p-4 text-center text-sm font-extrabold text-primary">이전 뉴스 전체를 불러오고 있습니다…</p> : historyError ? <p className="rounded-xl bg-destructive/10 p-4 text-center text-sm font-bold text-destructive">{historyError}</p> : <>{renderItems(pageItems)}<div className="mt-4 flex items-center justify-between"><button type="button" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-xl border border-card-border px-4 py-2 text-xs font-extrabold disabled:opacity-40">이전</button><span className="text-xs font-extrabold">{page} / {pageCount}</span><button type="button" disabled={page >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))} className="rounded-xl border border-card-border px-4 py-2 text-xs font-extrabold disabled:opacity-40">다음</button></div></>}</Modal>}
-  </div>;
+  const renderItems = (items: AnyObj[]) => (
+    <div className="space-y-2">
+      {items.map((item, index) => {
+        const source = String(
+          item.source ?? item.publisher ?? item.provider ?? "출처 확인",
+        ).trim();
+        const title = cleanContentTitle(
+          item.translatedTitle ??
+            item.title ??
+            item.headline ??
+            "뉴스 제목 확인 필요",
+          source,
+        );
+        const url = articleOriginalUrl(item);
+        const date = formatContentDate(
+          item.date ?? item.time ?? item.publishedAt ?? item.published_at,
+        );
+        const brief = newsPlainSummary(item);
+        return (
+          <article
+            key={`${String(url ?? title)}:${index}`}
+            className="rounded-xl border border-card-border bg-secondary/50 p-3"
+          >
+            {url ? (
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block break-words text-[15px] font-extrabold leading-6 text-primary underline-offset-2 hover:underline"
+              >
+                {title}
+              </a>
+            ) : (
+              <p className="break-words text-[15px] font-extrabold leading-6">
+                {title}
+              </p>
+            )}
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-bold text-muted-foreground">
+                {source} · {date}
+              </span>
+              <span className="max-w-full truncate rounded-full bg-primary/10 px-2 py-1 text-[10px] font-extrabold text-primary">
+                {eventLabelKo(title)}
+              </span>
+              {Number(item.relatedCount ?? 1) > 1 && (
+                <span className="rounded-full bg-positive/10 px-2 py-1 text-[10px] font-extrabold text-positive">
+                  (중복 {Number(item.relatedCount)}건)
+                </span>
+              )}
+            </div>
+            <p className="mt-2 break-words rounded-lg bg-background/70 px-3 py-2 text-xs font-semibold leading-5 text-muted-foreground">
+              <span className="font-extrabold text-foreground">
+                간단 브리핑 ·{" "}
+              </span>
+              {brief}
+            </p>
+          </article>
+        );
+      })}
+    </div>
+  );
+  return (
+    <div className="space-y-3">
+      <SectionCard title="최근 뉴스 요약" subtitle="해당 종목 최신 기사 기준">
+        <InfoBox>{recentSummary}</InfoBox>
+      </SectionCard>
+      <SectionCard
+        title="뉴스 원문"
+        subtitle="최근 뉴스 5건을 표시합니다. 제목을 누르면 원문으로 이동합니다."
+        actions={
+          <button
+            type="button"
+            onClick={() => void openHistory()}
+            className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-extrabold text-primary"
+          >
+            더보기
+          </button>
+        }
+      >
+        {sorted.length ? (
+          renderItems(sorted.slice(0, 5))
+        ) : (
+          <p className="text-sm font-bold text-muted-foreground">
+            최근 관련 뉴스가 없습니다.
+          </p>
+        )}
+      </SectionCard>
+      {moreOpen && (
+        <Modal
+          title="전체 뉴스"
+          subtitle={
+            historyLoading
+              ? "이전 뉴스를 불러오는 중"
+              : `${historySorted.length}건 · 제공처 전체 이력 · 최신순`
+          }
+          onClose={() => setMoreOpen(false)}
+        >
+          {historyLoading ? (
+            <p className="rounded-xl bg-secondary/60 p-4 text-center text-sm font-extrabold text-primary">
+              이전 뉴스 전체를 불러오고 있습니다…
+            </p>
+          ) : historyError ? (
+            <p className="rounded-xl bg-destructive/10 p-4 text-center text-sm font-bold text-destructive">
+              {historyError}
+            </p>
+          ) : (
+            <>
+              {renderItems(pageItems)}
+              <div className="mt-4 flex items-center justify-between">
+                <button
+                  type="button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((value) => Math.max(1, value - 1))}
+                  className="rounded-xl border border-card-border px-4 py-2 text-xs font-extrabold disabled:opacity-40"
+                >
+                  이전
+                </button>
+                <span className="text-xs font-extrabold">
+                  {page} / {pageCount}
+                </span>
+                <button
+                  type="button"
+                  disabled={page >= pageCount}
+                  onClick={() =>
+                    setPage((value) => Math.min(pageCount, value + 1))
+                  }
+                  className="rounded-xl border border-card-border px-4 py-2 text-xs font-extrabold disabled:opacity-40"
+                >
+                  다음
+                </button>
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
 }
 
 function MiniMetric({
@@ -5648,14 +8603,18 @@ function SignalBox({
   text,
   positive = false,
   compact = false,
+  onClick,
 }: {
   label: string;
   text: string;
   positive?: boolean;
   compact?: boolean;
+  onClick?: () => void;
 }) {
+  const Tag = onClick ? "button" : "div";
   return (
-    <div
+    <Tag
+      {...(onClick ? { type: "button" as const, onClick } : {})}
       className={cn(
         "rounded-xl border px-2.5 py-2",
         compact && "min-w-0 px-2 py-2 text-center",
@@ -5683,7 +8642,7 @@ function SignalBox({
       >
         {text}
       </p>
-    </div>
+    </Tag>
   );
 }
 
@@ -5840,7 +8799,9 @@ function FinancialPerformanceChart({
   const allValues = chartRows.flatMap((row) =>
     series
       .map((item) => item.value(row))
-      .filter((value): value is number => value != null && Number.isFinite(value)),
+      .filter(
+        (value): value is number => value != null && Number.isFinite(value),
+      ),
   );
   const maximum = Math.max(...allValues.map((value) => Math.abs(value)), 1);
   const width = 560;
@@ -5991,12 +8952,14 @@ function FinancialTrendCard({
   periods,
   currency,
   color,
+  onOpen,
 }: {
   label: string;
   values: Array<number | null>;
   periods: string[];
   currency: Currency;
   color: string;
+  onOpen?: () => void;
 }) {
   const available = values.filter(
     (value): value is number => value != null && Number.isFinite(value),
@@ -6007,7 +8970,11 @@ function FinancialTrendCard({
   const growing = latest != null && first != null && latest >= first;
 
   return (
-    <div className="rounded-2xl border border-card-border bg-secondary/35 p-3">
+    <button
+      type="button"
+      onClick={onOpen}
+      className="w-full rounded-2xl border border-card-border bg-secondary/35 p-3 text-left transition active:scale-[0.99]"
+    >
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-sm font-extrabold">{label}</p>
@@ -6054,7 +9021,7 @@ function FinancialTrendCard({
           );
         })}
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -6082,7 +9049,7 @@ function Modal({
   children: ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 p-3 sm:items-center">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
       <button
         type="button"
         aria-label="닫기"
@@ -6094,9 +9061,10 @@ function Modal({
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-lg font-extrabold">{title}</h3>
-
             {subtitle && (
-              <p className="mt-1 text-sm font-bold text-primary">{subtitle}</p>
+              <p className="mt-1 break-keep text-[11px] font-bold leading-4 text-muted-foreground">
+                {subtitle}
+              </p>
             )}
           </div>
 

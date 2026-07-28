@@ -11,6 +11,84 @@ import {
 
 const router: IRouter = Router();
 
+type PriceAlertAssetType = 'stock' | 'coin_spot' | 'coin_futures';
+type PriceAlertConditionType =
+  | 'price_above'
+  | 'price_below'
+  | 'change_above'
+  | 'change_below';
+
+const PRICE_ALERT_ASSETS: readonly PriceAlertAssetType[] = [
+  'stock',
+  'coin_spot',
+  'coin_futures',
+];
+const PRICE_ALERT_CONDITIONS: readonly PriceAlertConditionType[] = [
+  'price_above',
+  'price_below',
+  'change_above',
+  'change_below',
+];
+
+function isPriceAlertAsset(value: string): value is PriceAlertAssetType {
+  return PRICE_ALERT_ASSETS.some((item) => item === value);
+}
+
+function isPriceAlertCondition(
+  value: string,
+): value is PriceAlertConditionType {
+  return PRICE_ALERT_CONDITIONS.some((item) => item === value);
+}
+
+function parsePriceAlertBody(
+  body: unknown,
+):
+  | {
+      assetType: PriceAlertAssetType;
+      conditionType: PriceAlertConditionType;
+      market: string;
+      symbol: string;
+      targetValue: number;
+      repeatEnabled: boolean;
+      appEnabled: boolean;
+      pushEnabled: boolean;
+      enabled: boolean;
+      expiresAt: string | null;
+    }
+  | null {
+  if (!body || typeof body !== 'object') return null;
+  const raw = body as Record<string, unknown>;
+  const assetTypeText = String(raw.assetType ?? '');
+  const legacyDirection = String(raw.direction ?? '');
+  const conditionText = String(
+    raw.conditionType ??
+      (legacyDirection === 'below' ? 'price_below' : 'price_above'),
+  );
+  const symbol = String(raw.symbol ?? '').trim().toUpperCase();
+  const targetValue = Number(raw.targetValue ?? raw.targetPrice);
+  if (
+    !isPriceAlertAsset(assetTypeText) ||
+    !isPriceAlertCondition(conditionText) ||
+    !symbol ||
+    !Number.isFinite(targetValue) ||
+    (conditionText.startsWith('price_') && targetValue <= 0)
+  ) {
+    return null;
+  }
+  return {
+    assetType: assetTypeText,
+    conditionType: conditionText,
+    market: String(raw.market ?? ''),
+    symbol,
+    targetValue,
+    repeatEnabled: raw.repeatEnabled === true,
+    appEnabled: raw.appEnabled !== false,
+    pushEnabled: raw.pushEnabled !== false,
+    enabled: raw.enabled !== false,
+    expiresAt: raw.expiresAt ? String(raw.expiresAt) : null,
+  };
+}
+
 // 서비스 역할 키가 없으면 로그인한 회원 본인 토큰으로 DB에 접근한다 (RLS 준수).
 function db(req: AuthenticatedRequest) {
   return hasSupabaseServerKey() ? getSupabase() : getUserSupabase(req.accessToken!);
@@ -37,7 +115,8 @@ router.get('/notifications/preferences', async (req: AuthenticatedRequest, res) 
 router.put('/notifications/preferences', async (req: AuthenticatedRequest, res) => {
   const enabledTypes = Array.isArray(req.body?.enabledTypes)
     ? [...new Set<string>((req.body.enabledTypes as unknown[]).map(String))].filter(
-        (item: string) => DEFAULT_NOTIFICATION_TYPES.includes(item as any),
+        (item: string) =>
+          DEFAULT_NOTIFICATION_TYPES.some((allowed) => allowed === item),
       )
     : [...DEFAULT_NOTIFICATION_TYPES];
 
@@ -202,6 +281,24 @@ router.patch(
   },
 );
 
+router.patch(
+  '/notifications/history/read-all',
+  async (req: AuthenticatedRequest, res) => {
+    const { error } = await db(req)
+      .from('notification_history')
+      .update({ read_at: new Date().toISOString() })
+      .eq('member_id', req.member!.id)
+      .is('read_at', null);
+
+    if (error) {
+      return res
+        .status(500)
+        .json({ error: 'NOTIFICATION_HISTORY_UPDATE_FAILED' });
+    }
+    return res.json({ ok: true });
+  },
+);
+
 router.get(
   '/notifications/price-alerts',
   async (req: AuthenticatedRequest, res) => {
@@ -222,41 +319,25 @@ router.get(
 router.post(
   '/notifications/price-alerts',
   async (req: AuthenticatedRequest, res) => {
-    const assetType = ['stock', 'coin_spot', 'coin_futures'].includes(
-      String(req.body?.assetType),
-    )
-      ? String(req.body.assetType)
-      : null;
-
-    const direction = ['above', 'below'].includes(String(req.body?.direction))
-      ? String(req.body.direction)
-      : null;
-
-    const symbol = String(req.body?.symbol ?? '').trim().toUpperCase();
-    const targetPrice = Number(req.body?.targetPrice);
-
-    if (
-      !assetType ||
-      !direction ||
-      !symbol ||
-      !Number.isFinite(targetPrice) ||
-      targetPrice <= 0
-    ) {
+    const input = parsePriceAlertBody(req.body);
+    if (!input) {
       return res.status(400).json({ error: 'INVALID_PRICE_ALERT' });
     }
 
     const row = {
       member_id: req.member!.id,
-      asset_type: assetType,
-      market: String(req.body?.market ?? ''),
-      symbol,
-      direction,
-      target_price: targetPrice,
-      repeat_enabled: req.body?.repeatEnabled === true,
-      app_enabled: req.body?.appEnabled !== false,
-      push_enabled: req.body?.pushEnabled !== false,
-      expires_at: req.body?.expiresAt || null,
-      enabled: true,
+      asset_type: input.assetType,
+      market: input.market,
+      symbol: input.symbol,
+      direction: input.conditionType.endsWith('_above') ? 'above' : 'below',
+      target_price: input.targetValue,
+      condition_type: input.conditionType,
+      target_value: input.targetValue,
+      repeat_enabled: input.repeatEnabled,
+      app_enabled: input.appEnabled,
+      push_enabled: input.pushEnabled,
+      expires_at: input.expiresAt,
+      enabled: input.enabled,
       updated_at: new Date().toISOString(),
     };
 
@@ -264,7 +345,7 @@ router.post(
       .from('price_alerts')
       .upsert(row, {
         onConflict:
-          'member_id,asset_type,market,symbol,direction,target_price',
+          'member_id,asset_type,market,symbol,condition_type,target_value',
       })
       .select('*')
       .single();
@@ -273,6 +354,45 @@ router.post(
       return res.status(500).json({ error: 'PRICE_ALERT_SAVE_FAILED' });
     }
 
+    return res.json({ alert: data });
+  },
+);
+
+router.patch(
+  '/notifications/price-alerts/:id',
+  async (req: AuthenticatedRequest, res) => {
+    const input = parsePriceAlertBody(req.body);
+    if (!input) {
+      return res.status(400).json({ error: 'INVALID_PRICE_ALERT' });
+    }
+
+    const { data, error } = await db(req)
+      .from('price_alerts')
+      .update({
+        asset_type: input.assetType,
+        market: input.market,
+        symbol: input.symbol,
+        direction: input.conditionType.endsWith('_above') ? 'above' : 'below',
+        target_price: input.targetValue,
+        condition_type: input.conditionType,
+        target_value: input.targetValue,
+        repeat_enabled: input.repeatEnabled,
+        app_enabled: input.appEnabled,
+        push_enabled: input.pushEnabled,
+        expires_at: input.expiresAt,
+        enabled: input.enabled,
+        condition_met: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', req.params.id)
+      .eq('member_id', req.member!.id)
+      .select('*')
+      .maybeSingle();
+
+    if (error) {
+      return res.status(500).json({ error: 'PRICE_ALERT_UPDATE_FAILED' });
+    }
+    if (!data) return res.status(404).json({ error: 'PRICE_ALERT_NOT_FOUND' });
     return res.json({ alert: data });
   },
 );

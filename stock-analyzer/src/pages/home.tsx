@@ -1,20 +1,49 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, ChevronRight, RefreshCw, Search } from 'lucide-react';
+import {
+  BarChart3,
+  Clock3,
+  ExternalLink,
+  Flame,
+  Newspaper,
+  Sparkles,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
-import { AssetSwitch } from '@/components/asset-switch';
 import { useAssetMode } from '@/lib/asset-mode';
-import { api, apiGet, type QuoteRow, type SectorPopularData, type SectorPopularRow } from '@/lib/api';
-import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
+import { api, apiGet, type SummaryItem } from '@/lib/api';
+import { formatAppPercent, formatAppPrice } from '@/lib/stock-display';
 import { cn } from '@/lib/utils';
 
+type MarketView = 'KR' | 'US' | 'COIN';
 type AnyObj = Record<string, any>;
 
-function formatDateTime(now: Date) {
+interface NewsIssue {
+  title: string;
+  url: string;
+  source: string;
+  publishedAt: string;
+  summary: string;
+}
+
+interface MarketNewsBriefing {
+  market: MarketView;
+  asOf: string;
+  stance: '강세' | '중립' | '약세';
+  headline: string;
+  summary: string;
+  reasons: string[];
+  issues: NewsIssue[];
+  aiUsed: boolean;
+}
+
+function formatClock(now: Date) {
   return new Intl.DateTimeFormat('ko-KR', {
-    timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric',
-    weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    timeZone: 'Asia/Seoul',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
   }).format(now);
 }
 
@@ -23,301 +52,388 @@ function finite(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+const VIEW_META: Record<
+  MarketView,
+  { tab: string; indexTitle: string; description: string }
+> = {
+  KR: {
+    tab: '국내',
+    indexTitle: '국내 주요 지수',
+    description: '코스피와 코스닥 흐름',
+  },
+  US: {
+    tab: '해외',
+    indexTitle: '해외 주요 지수',
+    description: '나스닥과 S&P500 흐름',
+  },
+  COIN: {
+    tab: '코인',
+    indexTitle: '코인 주요 시세',
+    description: '비트코인·이더리움·리플 흐름',
+  },
+};
+
 export default function HomePage() {
-  const [, navigate] = useLocation();
   const mode = useAssetMode();
   const [now, setNow] = useState(() => new Date());
-
-  // 딥링크(?asset=coin|stock&marketMode=KR|US) 지원 — 검증·공유용, 기본 동작 불변.
-  useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    const asset = p.get('asset');
-    const mk = p.get('marketMode');
-    if (asset === 'coin' || asset === 'stock') mode.setAsset(asset);
-    if (mk === 'US' || mk === 'KR') mode.setStockMarket(mk);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const [view, setView] = useState<MarketView>(() => {
+    if (mode.asset === 'coin') return 'COIN';
+    return mode.stockMarket === 'US' ? 'US' : 'KR';
+  });
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (view === 'COIN') {
+      mode.setAsset('coin');
+      mode.setCoinMarket('spot');
+      return;
+    }
+    mode.setAsset('stock');
+    mode.setStockMarket(view);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
   const summary = useQuery({
     queryKey: ['home-market-summary'],
     queryFn: () => api.summary(),
-    enabled: mode.asset === 'stock',
     refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
   });
-  const sectorPopular = useQuery({
-    queryKey: ['home-sector-popular', mode.stockMarket],
-    queryFn: () => api.sectorPopular(mode.stockMarket),
-    enabled: mode.asset === 'stock',
-    refetchInterval: 30_000,
-  });
-  const cryptoStatus = useQuery({
-    queryKey: ['home-crypto-status'],
-    queryFn: () => apiGet<AnyObj>('/crypto/status'),
-    enabled: mode.asset === 'coin',
-    refetchInterval: 30_000,
-  });
-  const spotTickers = useQuery({
-    queryKey: ['home-crypto-spot-tickers'],
+
+  const coinTickers = useQuery({
+    queryKey: ['home-coin-index'],
     queryFn: () => apiGet<AnyObj>('/crypto/spot/tickers'),
-    enabled: mode.asset === 'coin' && mode.coinMarket === 'spot',
+    enabled: view === 'COIN',
     refetchInterval: 10_000,
-  });
-  const futuresTickers = useQuery({
-    queryKey: ['home-crypto-futures-tickers'],
-    queryFn: () => apiGet<AnyObj>('/crypto/futures/tickers'),
-    enabled: mode.asset === 'coin' && mode.coinMarket === 'futures',
-    refetchInterval: 8_000,
+    refetchIntervalInBackground: true,
   });
 
-  const cryptoRows = useMemo(() => {
-    const source = mode.coinMarket === 'spot'
-      ? ((spotTickers.data?.tickers ?? []) as AnyObj[])
-      : ((futuresTickers.data?.tickers ?? []) as AnyObj[]);
-    return [...source]
-      .sort((a, b) => Number(b.tradingValue24h ?? 0) - Number(a.tradingValue24h ?? 0))
-      .slice(0, 10);
-  }, [futuresTickers.data, mode.coinMarket, spotTickers.data]);
+  const briefing = useQuery({
+    queryKey: ['home-market-news-briefing', view],
+    queryFn: () =>
+      apiGet<MarketNewsBriefing>(`/market/news-briefing?market=${view}`),
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
+  });
 
-  const refresh = () => {
-    if (mode.asset === 'stock') {
-      void Promise.all([summary.refetch(), sectorPopular.refetch()]);
-    } else {
-      void Promise.all([cryptoStatus.refetch(), mode.coinMarket === 'spot' ? spotTickers.refetch() : futuresTickers.refetch()]);
-    }
-  };
+  const stockIndices = useMemo(() => {
+    const keys = view === 'KR' ? ['kospi', 'kosdaq'] : ['nasdaq', 'sp500'];
+    const items = (summary.data?.items ?? []) as SummaryItem[];
+    return keys
+      .map((key) =>
+        items.find((item) => String(item.key).toLowerCase() === key),
+      )
+      .filter((item): item is SummaryItem => Boolean(item));
+  }, [summary.data, view]);
+
+  const coinIndices = useMemo(() => {
+    const rows = (coinTickers.data?.tickers ?? []) as AnyObj[];
+    return ['BTC', 'ETH', 'XRP'].map((symbol) => {
+      const row = rows.find((item) =>
+        String(item.symbol ?? '').toUpperCase().includes(symbol),
+      );
+      return { symbol, row };
+    });
+  }, [coinTickers.data]);
+
+  const issueCount = briefing.data?.issues.length ?? 0;
+  const positiveIndices =
+    view === 'COIN'
+      ? coinIndices.filter(({ row }) => Number(row?.changePercent ?? 0) >= 0).length
+      : stockIndices.filter((item) => Number(item.changePercent ?? 0) >= 0).length;
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-background">
-      {/* 상단 고정 없음 — 제목부터 마지막 카드까지 페이지 전체가 하나의 세로 스크롤로 움직인다. */}
-      <header className="border-b border-card-border px-4 pb-3 pt-4">
-        <h1 className="text-2xl font-black">지식정보</h1>
-        {/* 갱신 시각 — 제목 아래 줄, 오른쪽 끝 정렬(크기·색·굵기 기존 유지) */}
-        <p className="mt-1 text-right text-[11px] font-bold text-muted-foreground">{formatDateTime(now)}</p>
-        {/* 종목 검색창 — 주식/코인 선택 버튼보다 위 */}
-        <button type="button" onClick={() => navigate('/stocks')} className="mt-3 flex w-full items-center gap-2 rounded-2xl border border-card-border bg-card px-4 py-3 text-left">
-          <Search className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-black text-muted-foreground">{mode.asset === 'stock' ? '종목 검색' : '코인 검색'}</span>
-        </button>
-        <AssetSwitch className="mt-3" />
-        {/* 지정가 알림·새로고침 — 주식 탭 영역 우측 정렬(종은 주식 탭에서만, 새로고침은 기존 동작 유지) */}
-        <div className="mt-2 flex justify-end gap-2">
-          {mode.asset === 'stock' && (
-            <button type="button" onClick={() => navigate('/alerts')} aria-label="알림" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><Bell className="h-4 w-4" /></button>
-          )}
-          <button type="button" onClick={refresh} aria-label="새로고침" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><RefreshCw className={cn('h-4 w-4', (summary.isFetching || sectorPopular.isFetching || spotTickers.isFetching || futuresTickers.isFetching) && 'animate-spin')} /></button>
+    <div className="h-full overflow-y-auto overscroll-contain bg-background text-center">
+      <header className="border-b border-card-border bg-background/90 px-4 py-4 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-md items-center justify-between gap-4">
+          <div className="text-left">
+            <p className="text-[10px] font-black text-primary">MARKET DASHBOARD</p>
+            <h1 className="mt-0.5 text-2xl font-black">지식정보</h1>
+          </div>
+          <div className="flex items-center gap-2 rounded-full border border-card-border bg-card px-3 py-2">
+            <Clock3 className="h-4 w-4 text-primary" />
+            <time className="text-xs font-black tabular-nums text-muted-foreground">
+              {formatClock(now)}
+            </time>
+          </div>
         </div>
       </header>
 
-      <main className="space-y-4 px-4 pb-28 pt-4">
-        {mode.asset === 'stock' ? (
-          <StockHome mode={mode.stockMarket} summary={summary.data?.items ?? []} sectorData={sectorPopular.data} summaryLoading={summary.isLoading} summaryError={summary.isError} sectorLoading={sectorPopular.isLoading} sectorError={sectorPopular.isError} onNavigate={navigate} />
-        ) : (
-          <CryptoHome mode={mode.coinMarket} status={cryptoStatus.data} rows={cryptoRows} loading={mode.coinMarket === 'spot' ? spotTickers.isLoading : futuresTickers.isLoading} error={mode.coinMarket === 'spot' ? spotTickers.isError : futuresTickers.isError} onNavigate={navigate} />
-        )}
+      <main className="mx-auto max-w-md space-y-4 px-4 pb-28 pt-4">
+        <section className="overflow-hidden rounded-3xl border border-card-border bg-card shadow-sm">
+          <div className="bg-gradient-to-br from-primary/15 via-primary/5 to-transparent p-5">
+            <div className="flex items-start justify-between gap-3 text-left">
+              <div>
+                <p className="text-[10px] font-black text-primary">오늘의 시장</p>
+                <h2 className="mt-1 text-xl font-black">오늘의 증시현황</h2>
+                <p className="mt-1 text-xs font-bold text-muted-foreground">
+                  주요 지수와 오늘의 이슈를 한눈에 확인합니다.
+                </p>
+              </div>
+              <BarChart3 className="h-7 w-7 shrink-0 text-primary" />
+            </div>
+
+            <div className="mt-4 grid grid-cols-3 gap-2 rounded-2xl bg-background/80 p-1.5">
+              {(Object.keys(VIEW_META) as MarketView[]).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setView(item)}
+                  className={cn(
+                    'rounded-xl px-3 py-2.5 text-sm font-black transition',
+                    view === item
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground',
+                  )}
+                >
+                  {VIEW_META[item].tab}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <SummaryChip label="선택 시장" value={VIEW_META[view].tab} />
+              <SummaryChip label="상승 지수" value={`${positiveIndices}개`} />
+              <SummaryChip label="주요 이슈" value={`${issueCount}건`} />
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3 text-left">
+            <div>
+              <p className="text-[10px] font-black text-primary">LIVE INDEX</p>
+              <h3 className="mt-1 text-base font-black">
+                {VIEW_META[view].indexTitle}
+              </h3>
+              <p className="mt-1 text-[10px] font-bold text-muted-foreground">
+                {VIEW_META[view].description}
+              </p>
+            </div>
+            <span className="rounded-full bg-secondary px-3 py-1.5 text-[9px] font-black text-muted-foreground">
+              10초 갱신
+            </span>
+          </div>
+
+          {view === 'COIN' ? (
+            <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {coinIndices.map(({ symbol, row }) => (
+                <IndexCard
+                  key={symbol}
+                  label={symbol}
+                  value={
+                    finite(row?.price) == null
+                      ? '데이터 없음'
+                      : formatAppPrice(Number(row?.price), 'KRW')
+                  }
+                  change={finite(row?.changePercent ?? row?.changePercent24h)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {stockIndices.map((item) => (
+                <IndexCard
+                  key={item.key}
+                  label={item.label}
+                  value={
+                    finite(item.price) == null
+                      ? '데이터 없음'
+                      : Number(item.price).toLocaleString(undefined, {
+                          maximumFractionDigits: 2,
+                        })
+                  }
+                  change={finite(item.changePercent)}
+                />
+              ))}
+              {!summary.isLoading && stockIndices.length === 0 && (
+                <div className="col-span-2">
+                  <State>현재 표시할 지수 데이터가 없습니다.</State>
+                </div>
+              )}
+            </div>
+          )}
+
+          {(summary.isLoading || (view === 'COIN' && coinTickers.isLoading)) && (
+            <State>지수 데이터를 불러오는 중입니다.</State>
+          )}
+          {(summary.isError || (view === 'COIN' && coinTickers.isError)) && (
+            <State error>지수 제공기관의 응답이 지연되고 있습니다.</State>
+          )}
+        </section>
+
+        <section className="overflow-hidden rounded-3xl border border-card-border bg-card shadow-sm">
+          <div className="bg-gradient-to-br from-orange-500/15 via-background to-background p-4">
+            <div className="flex items-start justify-between gap-3 text-left">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Flame className="h-5 w-5 text-orange-500" />
+                  <h3 className="text-base font-black">오늘의 이슈</h3>
+                </div>
+                <p className="mt-1 text-[10px] font-bold text-muted-foreground">
+                  뉴스와 시장 흐름을 묶어 핵심만 보여줍니다.
+                </p>
+              </div>
+              {briefing.data && <StanceBadge stance={briefing.data.stance} />}
+            </div>
+
+            {briefing.isLoading && (
+              <State>오늘의 주요 뉴스를 분석하고 있습니다.</State>
+            )}
+            {briefing.isError && (
+              <State error>뉴스 브리핑을 불러오지 못했습니다.</State>
+            )}
+
+            {briefing.data && (
+              <div className="mt-4 space-y-3">
+                <div className="rounded-2xl border border-orange-500/20 bg-background/90 p-4 text-left">
+                  <div className="flex items-start gap-2">
+                    <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-orange-500" />
+                    <div>
+                      <p className="text-sm font-black leading-6">
+                        {briefing.data.headline}
+                      </p>
+                      <p className="mt-2 whitespace-pre-line text-xs font-semibold leading-5 text-muted-foreground">
+                        {briefing.data.summary}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {briefing.data.reasons.length > 0 && (
+                  <div className="grid grid-cols-1 gap-2">
+                    {briefing.data.reasons.slice(0, 3).map((reason, index) => (
+                      <div
+                        key={`${reason}:${index}`}
+                        className="rounded-2xl bg-secondary/70 px-3 py-2.5 text-left text-[10px] font-bold leading-4"
+                      >
+                        {index + 1}. {reason}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {briefing.data.issues.length > 0 && (
+                  <div className="space-y-2">
+                    {briefing.data.issues.slice(0, 5).map((issue, index) => (
+                      <a
+                        key={`${issue.url}-${index}`}
+                        href={issue.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-start gap-3 rounded-2xl border border-card-border bg-background px-3 py-3 text-left"
+                      >
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10">
+                          <Newspaper className="h-4 w-4 text-primary" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="line-clamp-2 text-xs font-black leading-5">
+                            {issue.summary}
+                          </p>
+                          <p className="mt-1 text-[9px] font-bold text-muted-foreground">
+                            {issue.source}
+                          </p>
+                        </div>
+                        <ExternalLink className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
       </main>
+
       <BottomNav />
     </div>
   );
 }
 
-function StockHome({ mode, summary, sectorData, summaryLoading, summaryError, sectorLoading, sectorError, onNavigate }: { mode: 'KR' | 'US'; summary: AnyObj[]; sectorData?: SectorPopularData; summaryLoading: boolean; summaryError: boolean; sectorLoading: boolean; sectorError: boolean; onNavigate: (to: string) => void }) {
-  const wanted = mode === 'KR' ? ['kospi', 'kosdaq'] : ['nasdaq'];
-  const indices = summary.filter((item) => wanted.includes(String(item.key).toLowerCase()));
-  const sectors = sectorData?.sectors ?? [];
-  // 실제 인기(섹터 내 종목의 거래대금 합, 없으면 거래량 합) 기준 상위 5개만 세로 목록으로.
-  const topSectors = useMemo(() => {
-    const scored = sectors.map((sector) => ({
-      sector,
-      score: sector.rows.reduce((sum, row) => sum + (finite(row.tradingValue) ?? finite(row.volume) ?? 0), 0),
-      count: sector.rows.length,
-    }));
-    scored.sort((a, b) => (b.count > 0 ? 1 : 0) - (a.count > 0 ? 1 : 0) || b.score - a.score || b.count - a.count);
-    return scored.slice(0, 5).map((item) => item.sector);
-  }, [sectors]);
-  // 딥링크(?sector=키) 지원 — 해당 섹터 팝업을 바로 연다. 기본은 팝업 닫힘.
-  const [openSector, setOpenSector] = useState<string | null>(() => new URLSearchParams(window.location.search).get('sector'));
-  const selected = sectors.find((sector) => sector.key === openSector) ?? null;
+function SummaryChip({ label, value }: { label: string; value: string }) {
   return (
-    <>
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <div className="flex items-center justify-between"><h2 className="text-sm font-black">시장현황</h2><span className="text-[10px] font-bold text-muted-foreground">실제 제공기관 기준</span></div>
-        {summaryLoading && <State>시장 데이터를 불러오는 중입니다.</State>}
-        {summaryError && <State error>시장 데이터 제공기관이 지연되고 있습니다.</State>}
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          {indices.map((item) => {
-            const change = finite(item.changePercent);
-            return <InfoCard key={String(item.key)} label={String(item.label ?? item.key)} value={finite(item.price) == null ? '데이터 없음' : Number(item.price).toLocaleString(undefined, { maximumFractionDigits: 2 })} sub={change == null ? '등락 데이터 없음' : formatAppPercent(change)} tone={change == null ? undefined : change >= 0 ? 'up' : 'down'} />;
-          })}
-          {!summaryLoading && indices.length === 0 && <div className="col-span-2"><State>현재 제공된 지수 데이터가 없습니다.</State></div>}
-        </div>
-      </section>
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-black">섹터별 인기종목</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">{sectorData?.sortBasis ?? '거래대금 기준'}</p></div><button type="button" onClick={() => onNavigate('/stocks')} className="text-xs font-black text-primary">전체보기</button></div>
-        {sectorLoading && <State>섹터 데이터를 불러오는 중입니다.</State>}
-        {sectorError && <State error>섹터 데이터 제공기관이 지연되고 있습니다.</State>}
-        {/* 인기 섹터 상위 5개 — 세로 목록(가로 스크롤 없음). 종목은 팝업에서만 표시. */}
-        <div className="mt-3 space-y-2">
-          {topSectors.map((sector) => <SectorListButton key={sector.key} label={sector.label} onClick={() => setOpenSector(sector.key)} />)}
-        </div>
-        {!sectorLoading && !sectorError && topSectors.length === 0 && <State>현재 표시할 실제 섹터 데이터가 없습니다.</State>}
-      </section>
-      {selected && (
-        <SectorPopup title={`${selected.label} 인기종목`} sortBasis={sectorData?.sortBasis ?? '거래대금 기준'} onViewAll={() => onNavigate('/stocks')} onClose={() => setOpenSector(null)}>
-          {selected.rows.slice(0, 5).map((row, index) => <StockRow key={`${row.market}:${row.ticker}`} row={row} rank={row.rank ?? index + 1} onClick={() => onNavigate(`/stock/${encodeURIComponent(row.ticker)}`)} />)}
-          {selected.rows.length === 0 && <State>현재 표시할 실제 종목 데이터가 없습니다.</State>}
-        </SectorPopup>
-      )}
-    </>
-  );
-}
-
-// 검증 가능한 코인 분야 분류(정적). 근거가 명확한 널리 알려진 코인만 포함하며,
-// 근거 불명 코인은 어떤 분야에도 넣지 않는다. 가격·등락률은 실데이터에서 채운다.
-const COIN_SECTORS: { key: string; label: string; symbols: string[] }[] = [
-  { key: 'major', label: '주요 코인', symbols: ['BTC', 'ETH', 'XRP'] },
-  { key: 'smart-contract', label: '스마트계약', symbols: ['ETH', 'SOL', 'ADA'] },
-  { key: 'payment', label: '결제', symbols: ['XRP', 'BTC'] },
-  { key: 'defi', label: '디파이', symbols: ['UNI', 'AAVE', 'LINK'] },
-  { key: 'meme', label: '밈', symbols: ['DOGE', 'SHIB', 'PEPE'] },
-  { key: 'ai-data', label: 'AI·데이터', symbols: ['FET', 'GRT'] },
-  { key: 'gaming', label: '게임·메타버스', symbols: ['SAND', 'MANA', 'AXS'] },
-  { key: 'layer2', label: '레이어2', symbols: ['ARB', 'OP', 'POL'] },
-];
-
-// 심볼(KRW-BTC, BTCUSDT 등)에서 기초 심볼(BTC)만 추출.
-function baseCoinSymbol(symbol: string): string {
-  const raw = String(symbol ?? '').toUpperCase().trim();
-  const dashed = raw.includes('-') ? raw.split('-').pop() ?? raw : raw;
-  return dashed.replace(/(USDT|USDC|KRW|BTC)$/u, (m) => (dashed === m ? m : '')) || dashed;
-}
-
-function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 'spot' | 'futures'; status?: AnyObj; rows: AnyObj[]; loading: boolean; error: boolean; onNavigate: (to: string) => void }) {
-  const exchange = mode === 'spot' ? 'UPBIT' : 'BITGET';
-  const ok = mode === 'spot' ? status?.upbit?.ok : status?.bitget?.ok;
-  const btc = rows.find((row) => String(row.symbol).startsWith('BTC'));
-  const eth = rows.find((row) => String(row.symbol).startsWith('ETH'));
-  const xrp = rows.find((row) => String(row.symbol).startsWith('XRP'));
-
-  const bySymbol = useMemo(() => {
-    const map = new Map<string, AnyObj>();
-    for (const row of rows) {
-      const base = baseCoinSymbol(String(row.symbol));
-      if (!map.has(base)) map.set(base, row);
-    }
-    return map;
-  }, [rows]);
-
-  // 실제 거래대금 합 기준 상위 5개 분야만 세로 목록으로.
-  const rankedSectors = useMemo(() => {
-    const scored = COIN_SECTORS.map((sector) => {
-      const sectorRows = sector.symbols.map((symbol) => bySymbol.get(symbol)).filter((row): row is AnyObj => Boolean(row));
-      return { sector, sectorRows, score: sectorRows.reduce((sum, row) => sum + (finite(row.tradingValue24h) ?? 0), 0) };
-    });
-    // 실데이터가 있는 분야만 후보로 삼는다 — 시세가 전혀 없으면 목록 대신 정직한 안내 문구를 보여준다.
-    const withData = scored.filter((item) => item.sectorRows.length > 0);
-    withData.sort((a, b) => b.score - a.score);
-    return withData.slice(0, 5);
-  }, [bySymbol]);
-  // 딥링크(?coinCat=키) 지원 — 해당 분야 팝업을 바로 연다. 기본은 팝업 닫힘.
-  const [openSector, setOpenSector] = useState<string | null>(() => new URLSearchParams(window.location.search).get('coinCat'));
-  const selected = COIN_SECTORS.find((sector) => sector.key === openSector) ?? null;
-  const selectedRows = useMemo(
-    () => (selected ? selected.symbols.map((symbol) => bySymbol.get(symbol)).filter((row): row is AnyObj => Boolean(row)) : []),
-    [bySymbol, selected],
-  );
-
-  return (
-    <>
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <div className="flex items-center justify-between"><h2 className="text-sm font-black">{mode === 'spot' ? '코인 현물 시장' : '코인 선물 시장'}</h2><span className={cn('rounded-full px-2 py-1 text-[10px] font-black', ok ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive')}>{exchange} · {ok ? '정상' : '오류'}</span></div>
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          <CryptoSummary row={btc} label={`비트코인 (${mode === 'spot' ? 'BTC/KRW' : 'BTCUSDT'})`} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
-          <CryptoSummary row={eth} label={`이더리움 (${mode === 'spot' ? 'ETH/KRW' : 'ETHUSDT'})`} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
-          <CryptoSummary row={xrp} label={`리플 (${mode === 'spot' ? 'XRP/KRW' : 'XRPUSDT'})`} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
-        </div>
-        <p className="mt-2 text-[10px] font-bold text-muted-foreground">
-          {mode === 'spot' ? '업비트 공개 API' : '비트겟 공개 API'} 실시간 시세 기준
-        </p>
-        {mode === 'futures' && btc && <div className="mt-2 grid grid-cols-2 gap-2"><InfoCard label="BTC 펀딩비" value={finite(btc.fundingRate) == null ? '데이터 없음' : `${(Number(btc.fundingRate) * 100).toFixed(4)}%`} /><InfoCard label="BTC 미결제약정" value={finite(btc.openInterest) == null ? '데이터 없음' : Number(btc.openInterest).toLocaleString()} /></div>}
-      </section>
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <div className="flex items-center justify-between"><div><h2 className="text-sm font-black">분야별 인기코인</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">거래대금 기준</p></div><button type="button" onClick={() => onNavigate('/stocks')} className="text-xs font-black text-primary">전체보기</button></div>
-        {loading && <State>코인 시세를 불러오는 중입니다.</State>}
-        {error && <State error>거래소 시세를 불러오지 못했습니다.</State>}
-        {/* 인기 분야 상위 5개 — 세로 목록(가로 스크롤 없음). 코인은 팝업에서만 표시. */}
-        <div className="mt-3 space-y-2">
-          {rankedSectors.map(({ sector }) => <SectorListButton key={sector.key} label={sector.label} onClick={() => setOpenSector(sector.key)} />)}
-        </div>
-        {!loading && !error && rankedSectors.length === 0 && <State>현재 표시할 실제 분야 데이터가 없습니다.</State>}
-      </section>
-      {selected && (
-        <SectorPopup title={`${selected.label} 인기코인`} sortBasis="거래대금 기준" onViewAll={() => onNavigate('/stocks')} onClose={() => setOpenSector(null)}>
-          {selectedRows.slice(0, 5).map((row, index) => <CryptoRow key={String(row.symbol)} row={row} rank={index + 1} currency={mode === 'spot' ? 'KRW' : 'USDT'} onClick={() => onNavigate(`/stock-info?asset=coin&coinMarket=${mode}&symbol=${encodeURIComponent(String(row.symbol))}`)} />)}
-          {selectedRows.length === 0 && <State>현재 표시할 실제 종목 데이터가 없습니다.</State>}
-        </SectorPopup>
-      )}
-    </>
-  );
-}
-
-// 섹터 세로 목록의 한 줄 버튼 — 이름과 화살표 그룹을 카드 정중앙에 배치.
-function SectorListButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} className="flex w-full items-center justify-center gap-1.5 rounded-2xl border border-card-border bg-secondary/60 px-4 py-3 text-center">
-      <span className="min-w-0 break-keep text-sm font-black leading-tight">{label}</span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-    </button>
-  );
-}
-
-// 섹터를 눌렀을 때 뜨는 작은 하단 팝업 — 페이지 이동 없음, 하단 메뉴보다 위(z-[70]).
-function SectorPopup({ title, sortBasis, children, onViewAll, onClose }: { title: string; sortBasis: string; children: React.ReactNode; onViewAll: () => void; onClose: () => void }) {
-  // 키보드(Esc) 닫기 지원.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-  return (
-    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/60 p-4 pb-24" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-md overflow-hidden rounded-3xl border border-card-border bg-card shadow-lg" onClick={(event) => event.stopPropagation()}>
-        <div className="border-b border-card-border px-4 py-3 text-center">
-          <h3 className="break-keep text-sm font-black leading-tight">{title}</h3>
-          <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{sortBasis}</p>
-        </div>
-        <div className="max-h-[45vh] space-y-2 overflow-y-auto p-3">{children}</div>
-        <div className="grid grid-cols-2 gap-2 border-t border-card-border p-3">
-          <button type="button" onClick={onViewAll} className="inline-flex items-center justify-center rounded-xl border border-primary bg-primary px-3 py-2 text-center text-xs font-black text-primary-foreground">전체보기</button>
-          <button type="button" onClick={onClose} className="inline-flex items-center justify-center rounded-xl border border-card-border bg-secondary/60 px-3 py-2 text-center text-xs font-black">닫기</button>
-        </div>
-      </div>
+    <div className="rounded-xl border border-card-border bg-card/90 p-2">
+      <p className="text-[9px] font-bold text-muted-foreground">{label}</p>
+      <p className="mt-1 text-xs font-black">{value}</p>
     </div>
   );
 }
 
-function StockRow({ row, rank, onClick }: { row: QuoteRow | SectorPopularRow; rank: number; onClick: () => void }) {
-  return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl bg-secondary/60 p-3 text-left"><span className="w-6 text-center text-sm font-black text-primary">{rank}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayStockName(row.ticker, row.name, row.market)}</p><p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{row.ticker}</p></div><div className="text-right"><p className="text-xs font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('text-[10px] font-black', row.changePercent >= 0 ? 'text-positive' : 'text-destructive')}>{formatAppPercent(row.changePercent)}</p></div></button>;
+function IndexCard({
+  label,
+  value,
+  change,
+}: {
+  label: string;
+  value: string;
+  change: number | null;
+}) {
+  const positive = change != null && change >= 0;
+  const TrendIcon = positive ? TrendingUp : TrendingDown;
+
+  return (
+    <div className="rounded-2xl border border-card-border bg-background p-3 text-left">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-black text-muted-foreground">{label}</p>
+        {change != null && (
+          <span
+            className={cn(
+              'flex h-7 w-7 items-center justify-center rounded-full',
+              positive ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive',
+            )}
+          >
+            <TrendIcon className="h-3.5 w-3.5" />
+          </span>
+        )}
+      </div>
+      <p className="mt-2 truncate text-base font-black">{value}</p>
+      <p
+        className={cn(
+          'mt-1 text-xs font-black',
+          change == null
+            ? 'text-muted-foreground'
+            : positive
+              ? 'text-positive'
+              : 'text-destructive',
+        )}
+      >
+        {change == null ? '등락 데이터 없음' : formatAppPercent(change)}
+      </p>
+    </div>
+  );
 }
 
-function CryptoRow({ row, rank, currency, onClick }: { row: AnyObj; rank: number; currency: string; onClick: () => void }) {
-  const change = finite(row.changePercent ?? row.changePercent24h);
-  return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl bg-secondary/60 p-3 text-left"><span className="w-6 text-center text-sm font-black text-primary">{rank}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayCoinName(String(row.symbol), row.koreanName, row.englishName)}</p><p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{row.symbol}</p></div><div className="text-right"><p className="text-xs font-black">{formatAppPrice(Number(row?.price), currency)}</p><p className={cn('text-[10px] font-black', change == null ? 'text-muted-foreground' : change >= 0 ? 'text-positive' : 'text-destructive')}>{change == null ? '데이터 없음' : formatAppPercent(change)}</p></div></button>;
-}
-
-function CryptoSummary({ row, label, currency }: { row?: AnyObj; label: string; currency: string }) {
-  const change = finite(row?.changePercent ?? row?.changePercent24h);
-  return <InfoCard label={label} value={finite(row?.price) == null ? '데이터 없음' : formatAppPrice(Number(row?.price), currency)} sub={change == null ? '등락 데이터 없음' : formatAppPercent(change)} tone={change == null ? undefined : change >= 0 ? 'up' : 'down'} />;
-}
-
-function InfoCard({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'up' | 'down' }) {
-  return <div className="rounded-2xl bg-secondary/60 p-3"><p className="text-[10px] font-bold text-muted-foreground">{label}</p><p className="mt-1 text-sm font-black">{value}</p>{sub && <p className={cn('mt-1 text-[10px] font-black', tone === 'up' ? 'text-positive' : tone === 'down' ? 'text-destructive' : 'text-muted-foreground')}>{sub}</p>}</div>;
+function StanceBadge({ stance }: { stance: MarketNewsBriefing['stance'] }) {
+  return (
+    <span
+      className={cn(
+        'shrink-0 rounded-full px-3 py-1.5 text-xs font-black',
+        stance === '강세'
+          ? 'bg-positive/10 text-positive'
+          : stance === '약세'
+            ? 'bg-destructive/10 text-destructive'
+            : 'bg-secondary text-muted-foreground',
+      )}
+    >
+      {stance}
+    </span>
+  );
 }
 
 function State({ children, error }: { children: React.ReactNode; error?: boolean }) {
-  return <p className={cn('mt-3 rounded-2xl bg-secondary p-4 text-center text-xs font-bold text-muted-foreground', error && 'bg-destructive/10 text-destructive')}>{children}</p>;
+  return (
+    <p
+      className={cn(
+        'mt-3 rounded-2xl bg-secondary p-4 text-center text-xs font-bold text-muted-foreground',
+        error && 'bg-destructive/10 text-destructive',
+      )}
+    >
+      {children}
+    </p>
+  );
 }

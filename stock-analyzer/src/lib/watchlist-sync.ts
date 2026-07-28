@@ -14,13 +14,14 @@ import {
 } from './stock-display';
 
 const BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api';
-const DEVICE_KEY = 'seungjae_device_id_v1';
+const OWNER_KEY = 'seungjae_watchlist_owner_v2';
 // detail 페이지가 과거에 쓰던 별도 키 — 1회 병합 후 제거.
 const LEGACY_DETAIL_KEY = 'watchlist:tickers';
 
 interface ServerWatchlistItem {
   ticker: string;
   name: string;
+  assetType: 'stockKR' | 'stockUS' | 'coinSpot' | 'coinFutures';
   market: string | null;
   currency: string | null;
   targetPrice: number | null;
@@ -30,22 +31,6 @@ let installed = false;
 let serverDisabled = false;
 let warnedOnce = false;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
-
-export function getDeviceId(): string {
-  if (typeof window === 'undefined') return 'default';
-  try {
-    const existing = window.localStorage.getItem(DEVICE_KEY);
-    if (existing) return existing;
-    const id =
-      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? crypto.randomUUID()
-        : `dev-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
-    window.localStorage.setItem(DEVICE_KEY, id);
-    return id;
-  } catch {
-    return 'default';
-  }
-}
 
 function warn(message: string): void {
   if (warnedOnce) return;
@@ -77,6 +62,7 @@ function toServerItem(item: WatchlistItem) {
   return {
     ticker: item.ticker,
     name: item.name,
+    assetType: item.assetType ?? 'stockKR',
     market: item.market ?? null,
     currency: item.currency ?? null,
     targetPrice: typeof item.targetPrice === 'number' ? item.targetPrice : null,
@@ -85,17 +71,21 @@ function toServerItem(item: WatchlistItem) {
 
 function mergeServerIntoLocal(serverItems: ServerWatchlistItem[]): void {
   const map = new Map(
-    readWatchlistItems().map((item) => [item.ticker.toUpperCase(), item]),
+    readWatchlistItems().map((item) => [
+      `${item.assetType ?? 'stockKR'}:${item.ticker.toUpperCase()}`,
+      item,
+    ]),
   );
   let changed = false;
 
   for (const server of serverItems) {
-    const key = server.ticker.toUpperCase();
+    const key = `${server.assetType}:${server.ticker.toUpperCase()}`;
     const local = map.get(key);
     if (!local) {
       map.set(key, {
-        ticker: key,
-        name: server.name || key,
+        ticker: server.ticker.toUpperCase(),
+        assetType: server.assetType,
+        name: server.name || server.ticker.toUpperCase(),
         market: server.market ?? undefined,
         currency: server.currency ?? undefined,
         targetPrice: server.targetPrice,
@@ -108,6 +98,24 @@ function mergeServerIntoLocal(serverItems: ServerWatchlistItem[]): void {
   }
 
   if (changed) writeWatchlistItems(Array.from(map.values()));
+}
+
+function adoptServerOwner(ownerId: string, serverItems: ServerWatchlistItem[]): boolean {
+  const previousOwner = window.localStorage.getItem(OWNER_KEY);
+  window.localStorage.setItem(OWNER_KEY, ownerId);
+  if (!previousOwner || previousOwner === ownerId) return false;
+
+  writeWatchlistItems(
+    serverItems.map((item) => ({
+      ticker: item.ticker.toUpperCase(),
+      assetType: item.assetType,
+      name: item.name || item.ticker.toUpperCase(),
+      market: item.market ?? undefined,
+      currency: item.currency ?? undefined,
+      targetPrice: item.targetPrice,
+    })),
+  );
+  return true;
 }
 
 function migrateLegacyDetailKey(): void {
@@ -142,7 +150,6 @@ function schedulePush(): void {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        deviceId: getDeviceId(),
         items: readWatchlistItems().map(toServerItem),
       }),
     });
@@ -158,11 +165,13 @@ export function ensureWatchlistSync(): void {
   window.addEventListener(WATCHLIST_CHANGE_EVENT, schedulePush);
 
   void (async () => {
-    const res = await request<{ items: ServerWatchlistItem[] }>(
-      `/watchlist?deviceId=${encodeURIComponent(getDeviceId())}`,
-    );
+    const res = await request<{
+      items: ServerWatchlistItem[];
+      ownerId: string;
+    }>('/watchlist');
     if (!res) return;
-    mergeServerIntoLocal(res.items ?? []);
+    const ownerChanged = adoptServerOwner(res.ownerId, res.items ?? []);
+    if (!ownerChanged) mergeServerIntoLocal(res.items ?? []);
     schedulePush();
   })();
 }

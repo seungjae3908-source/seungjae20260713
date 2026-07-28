@@ -543,12 +543,19 @@ function SearchPanel({
 
   return (
     <div className="mt-2 rounded-2xl border border-card-border bg-card p-2">
-      <input
-        value={term}
-        onChange={(e) => onTerm(e.target.value)}
-        placeholder={assetKind === 'crypto' ? '코인 이름·심볼 검색' : '종목명·코드 검색'}
-        className="w-full rounded-lg border border-card-border bg-background px-3 py-2 text-sm font-semibold outline-none focus:border-primary"
-      />
+      <div className="relative">
+        <input
+          value={term}
+          onChange={(e) => onTerm(e.target.value)}
+          placeholder=""
+          className="w-full rounded-lg border border-card-border bg-background px-3 py-2 pr-10 text-sm font-semibold outline-none focus:border-primary"
+        />
+        {term && (
+          <button type="button" onClick={() => onTerm('')} aria-label="검색어 지우기" className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
       <div className="mt-2 max-h-56 space-y-1 overflow-y-auto">
         {assetKind === 'stock' ? (
           stockQuery.isLoading && term.trim() ? (

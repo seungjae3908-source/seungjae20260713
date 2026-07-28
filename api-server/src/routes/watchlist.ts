@@ -2,17 +2,13 @@
 // Honest 503 SUPABASE_NOT_CONFIGURED until a server (secret) key is present;
 // the frontend keeps working from localStorage and syncs when this comes up.
 import { Router, type IRouter } from 'express';
+import { type AuthenticatedRequest } from '../middleware/auth';
 import {
 	WatchlistService,
 	type WatchlistInput,
 } from '../services/watchlist.service';
 
 const router: IRouter = Router();
-
-function deviceIdOf(value: unknown): string {
-	const id = typeof value === 'string' ? value.trim() : '';
-	return id.length > 0 && id.length <= 128 ? id : 'default';
-}
 
 function guard(res: { status: (code: number) => { json: (body: unknown) => unknown } }): boolean {
 	if (WatchlistService.isAvailable()) return true;
@@ -28,30 +24,39 @@ function parseItem(body: unknown): WatchlistInput | null {
 		typeof raw.targetPrice === 'number' && Number.isFinite(raw.targetPrice) && raw.targetPrice > 0
 			? raw.targetPrice
 			: null;
+	const assetType = ['stockKR', 'stockUS', 'coinSpot', 'coinFutures'].includes(
+		String(raw.assetType),
+	)
+		? String(raw.assetType)
+		: String(raw.market).toUpperCase() === 'US'
+			? 'stockUS'
+			: 'stockKR';
 	return {
 		ticker: raw.ticker.trim(),
 		name: typeof raw.name === 'string' ? raw.name : undefined,
+		assetType,
 		market: typeof raw.market === 'string' ? raw.market : null,
 		currency: typeof raw.currency === 'string' ? raw.currency : null,
 		targetPrice,
 	};
 }
 
-// GET /api/watchlist?deviceId=...
-router.get('/watchlist', async (req, res) => {
+// GET /api/watchlist
+// 인증 미들웨어가 확인한 회원 ID만 저장 키로 사용한다.
+router.get('/watchlist', async (req: AuthenticatedRequest, res) => {
 	if (!guard(res)) return;
 	try {
-		const items = await WatchlistService.list(deviceIdOf(req.query.deviceId));
-		return res.json({ items });
+		const items = await WatchlistService.list(req.member!.id);
+		return res.json({ items, ownerId: req.member!.id });
 	} catch (error) {
 		console.error('[watchlist] list error:', error);
 		return res.status(502).json({ error: 'WATCHLIST_STORE_ERROR' });
 	}
 });
 
-// POST /api/watchlist/sync  { deviceId, items: WatchlistInput[] }
-// Replaces the device's set and returns the canonical list.
-router.post('/watchlist/sync', async (req, res) => {
+// POST /api/watchlist/sync  { items: WatchlistInput[] }
+// 현재 회원의 목록을 교체하고 정규화된 목록을 반환한다.
+router.post('/watchlist/sync', async (req: AuthenticatedRequest, res) => {
 	if (!guard(res)) return;
 	const body = (req.body ?? {}) as Record<string, unknown>;
 	const rawItems = Array.isArray(body.items) ? body.items : null;
@@ -63,25 +68,25 @@ router.post('/watchlist/sync', async (req, res) => {
 
 	try {
 		const saved = await WatchlistService.syncReplace(
-			deviceIdOf(body.deviceId),
+			req.member!.id,
 			items,
 		);
-		return res.json({ items: saved });
+		return res.json({ items: saved, ownerId: req.member!.id });
 	} catch (error) {
 		console.error('[watchlist] sync error:', error);
 		return res.status(502).json({ error: 'WATCHLIST_STORE_ERROR' });
 	}
 });
 
-// PUT /api/watchlist/:ticker  { deviceId, name?, market?, currency?, targetPrice? }
-router.put('/watchlist/:ticker', async (req, res) => {
+// PUT /api/watchlist/:ticker  { name?, market?, currency?, targetPrice? }
+router.put('/watchlist/:ticker', async (req: AuthenticatedRequest, res) => {
 	if (!guard(res)) return;
 	const body = (req.body ?? {}) as Record<string, unknown>;
 	const item = parseItem({ ...body, ticker: req.params.ticker });
 	if (!item) return res.status(400).json({ error: 'INVALID_ITEM' });
 
 	try {
-		await WatchlistService.upsert(deviceIdOf(body.deviceId), item);
+		await WatchlistService.upsert(req.member!.id, item);
 		return res.json({ ok: true });
 	} catch (error) {
 		console.error('[watchlist] upsert error:', error);
@@ -89,13 +94,14 @@ router.put('/watchlist/:ticker', async (req, res) => {
 	}
 });
 
-// DELETE /api/watchlist/:ticker?deviceId=...
-router.delete('/watchlist/:ticker', async (req, res) => {
+// DELETE /api/watchlist/:ticker
+router.delete('/watchlist/:ticker', async (req: AuthenticatedRequest, res) => {
 	if (!guard(res)) return;
 	try {
 		await WatchlistService.remove(
-			deviceIdOf(req.query.deviceId),
-			req.params.ticker,
+			req.member!.id,
+			String(req.params.ticker ?? ''),
+			typeof req.query.asset === 'string' ? req.query.asset : undefined,
 		);
 		return res.json({ ok: true });
 	} catch (error) {
