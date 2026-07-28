@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+set -u
+
+STAMP="$(date +%Y%m%d_%H%M%S)"
+BACKUP="/tmp/stock-log-config-backup-$STAMP"
+LOGROTATE_FILE="/etc/logrotate.d/pm2-stock-app"
+JOURNAL_DIR="/etc/systemd/journald.conf.d"
+JOURNAL_FILE="$JOURNAL_DIR/stock-app-limits.conf"
+
+command -v logrotate >/dev/null 2>&1 || {
+  echo "FAILED: logrotate 명령이 없습니다."
+  exit 1
+}
+
+mkdir -p "$BACKUP" "$JOURNAL_DIR" || exit 1
+[ ! -f "$LOGROTATE_FILE" ] || cp -a "$LOGROTATE_FILE" "$BACKUP/"
+[ ! -f "$JOURNAL_FILE" ] || cp -a "$JOURNAL_FILE" "$BACKUP/"
+
+cat >"$LOGROTATE_FILE" <<'EOF'
+/root/.pm2/logs/*.log {
+    daily
+    size 20M
+    rotate 5
+    missingok
+    notifempty
+    compress
+    dateext
+    copytruncate
+    su root root
+}
+EOF
+
+cat >"$JOURNAL_FILE" <<'EOF'
+[Journal]
+SystemMaxUse=150M
+RuntimeMaxUse=50M
+MaxRetentionSec=7day
+EOF
+
+if ! logrotate -d "$LOGROTATE_FILE" >/dev/null 2>&1; then
+  echo "FAILED: PM2 로그 순환 설정 문법 오류"
+  exit 1
+fi
+
+if ! systemctl restart systemd-journald; then
+  echo "FAILED: journald 설정 반영 실패"
+  exit 1
+fi
+
+journalctl --vacuum-size=150M >/dev/null 2>&1 || true
+logrotate -f "$LOGROTATE_FILE" >/dev/null 2>&1 || {
+  echo "FAILED: PM2 로그 첫 순환 실패"
+  exit 1
+}
+
+echo "LOG_LIMITS_CONFIGURED"
+echo "PM2_LOG_MAX_PER_FILE=20M"
+echo "PM2_LOG_RETAIN=5"
+echo "JOURNAL_MAX=150M"
+echo "BACKUP=$BACKUP"
+du -sh /root/.pm2/logs 2>/dev/null || true
+journalctl --disk-usage
+df -h /
