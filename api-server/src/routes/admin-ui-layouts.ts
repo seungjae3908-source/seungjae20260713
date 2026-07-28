@@ -397,7 +397,7 @@ async function publishLayout(req: AuthenticatedRequest, res: Response) {
       .single();
     if (error) throw error;
 
-    await audit(req, 'ui-layout.publish', pageKey, targetId, {
+    await audit(req, 'ui-layout.publish', pageKey, targetId!, {
       version: targetVersion,
     });
     const versions = await listVersions(req, pageKey);
