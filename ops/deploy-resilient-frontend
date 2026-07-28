@@ -17,6 +17,7 @@ FILES=(
   "stock-analyzer/src/pages/chart-relay.tsx"
   "stock-analyzer/src/pages/detail.integration.tsx"
   "stock-analyzer/requested-ui-fixes-patch.ts"
+  "stock-analyzer/focused-page-layout-patch.ts"
 )
 
 restore_previous() {
