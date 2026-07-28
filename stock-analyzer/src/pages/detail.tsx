@@ -1564,9 +1564,10 @@ export default function DetailPage() {
     <div
       ref={scrollContainerRef}
       onScroll={saveScrollPosition}
+      data-ui-page="stock-info"
       className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background"
     >
-      <header className="relative z-20 shrink-0 border-b border-card-border bg-background px-3 pb-2 pt-3">
+      <header data-ui-component="stock-info.header" className="relative z-20 shrink-0 border-b border-card-border bg-background px-3 pb-2 pt-3">
         <div className="grid grid-cols-[36px_minmax(0,1fr)_36px_36px] items-center gap-2">
           <button
             type="button"
