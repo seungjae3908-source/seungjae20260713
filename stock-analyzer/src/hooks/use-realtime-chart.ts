@@ -56,6 +56,7 @@ type SharedChannel = {
   listeners: Set<Listener>;
   state: RealtimeChartState;
   socket: WebSocket | null;
+  connectTimer: number | null;
   reconnectTimer: number | null;
   disposeTimer: number | null;
   reconnectAttempt: number;
@@ -64,6 +65,17 @@ type SharedChannel = {
 };
 
 const channels = new Map<string, SharedChannel>();
+
+const MAX_RECONNECT_ATTEMPTS = 4;
+const SOCKET_CONNECT_TIMEOUT_MS = 7_000;
+const CAPABILITY_SUCCESS_TTL_MS = 60_000;
+const CAPABILITY_FAILURE_TTL_MS = 15_000;
+
+let capabilityCache:
+  { enabled: boolean; expiresAt: number } | null = null;
+
+let capabilityInflight:
+  Promise<boolean> | null = null;
 const EMPTY_STATE: RealtimeChartState = {
   status: 'idle',
   snapshot: null,
@@ -72,14 +84,99 @@ const EMPTY_STATE: RealtimeChartState = {
   error: null,
 };
 
-function realtimeUrl(): string {
-  const apiBase = String(import.meta.env.VITE_API_BASE_URL ?? '/api').replace(/\/$/, '');
-  const url = new URL(
-    `${apiBase}/realtime/chart`,
-    typeof window === 'undefined' ? 'http://localhost' : window.location.origin,
+function apiUrl(path: string): URL {
+  const apiBase = String(
+    import.meta.env.VITE_API_BASE_URL ?? '/api',
+  ).replace(/\/$/, '');
+
+  return new URL(
+    `${apiBase}${path}`,
+    typeof window === 'undefined'
+      ? 'http://localhost'
+      : window.location.origin,
   );
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+}
+
+function realtimeUrl(): string {
+  const url = apiUrl('/realtime/chart');
+  url.protocol =
+    url.protocol === 'https:'
+      ? 'wss:'
+      : 'ws:';
   return url.toString();
+}
+
+async function realtimeCapabilityEnabled(): Promise<boolean> {
+  const now = Date.now();
+
+  if (
+    capabilityCache &&
+    capabilityCache.expiresAt > now
+  ) {
+    return capabilityCache.enabled;
+  }
+
+  if (capabilityInflight) {
+    return capabilityInflight;
+  }
+
+  const task = (async (): Promise<boolean> => {
+    try {
+      const response = await fetch(
+        apiUrl(`/ready?_ts=${Date.now()}`),
+        {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(4_000),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `REALTIME_CAPABILITY_HTTP_${response.status}`,
+        );
+      }
+
+      const payload =
+        await response.json() as {
+          realtimeChartEnabled?: boolean;
+        };
+
+      const enabled =
+        payload.realtimeChartEnabled === true;
+
+      capabilityCache = {
+        enabled,
+        expiresAt:
+          Date.now() +
+          (
+            enabled
+              ? CAPABILITY_SUCCESS_TTL_MS
+              : CAPABILITY_FAILURE_TTL_MS
+          ),
+      };
+
+      return enabled;
+    } catch {
+      capabilityCache = {
+        enabled: false,
+        expiresAt:
+          Date.now() +
+          CAPABILITY_FAILURE_TTL_MS,
+      };
+
+      return false;
+    }
+  })();
+
+  capabilityInflight = task;
+
+  try {
+    return await task;
+  } finally {
+    if (capabilityInflight === task) {
+      capabilityInflight = null;
+    }
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -158,6 +255,13 @@ function emit(channel: SharedChannel, changes: Partial<RealtimeChartState>): voi
   for (const listener of channel.listeners) listener(channel.state);
 }
 
+function clearConnectTimer(channel: SharedChannel): void {
+  if (channel.connectTimer != null) {
+    window.clearTimeout(channel.connectTimer);
+    channel.connectTimer = null;
+  }
+}
+
 function clearReconnect(channel: SharedChannel): void {
   if (channel.reconnectTimer != null) {
     window.clearTimeout(channel.reconnectTimer);
@@ -173,16 +277,35 @@ function scheduleReconnect(channel: SharedChannel): void {
   ) {
     return;
   }
+
+  if (
+    channel.reconnectAttempt >=
+    MAX_RECONNECT_ATTEMPTS
+  ) {
+    channel.reconnectAllowed = false;
+    emit(channel, {
+      status: 'error',
+      error: 'REALTIME_RETRY_EXHAUSTED',
+    });
+    return;
+  }
+
   channel.reconnectAttempt += 1;
+
   const delay = Math.min(
     15_000,
     1_000 * 2 ** Math.min(channel.reconnectAttempt - 1, 4),
   );
-  emit(channel, { status: 'reconnecting' });
-  channel.reconnectTimer = window.setTimeout(() => {
-    channel.reconnectTimer = null;
-    void connectChannel(channel);
-  }, delay);
+
+  emit(channel, {
+    status: 'reconnecting',
+  });
+
+  channel.reconnectTimer =
+    window.setTimeout(() => {
+      channel.reconnectTimer = null;
+      void connectChannel(channel);
+    }, delay);
 }
 
 async function connectChannel(channel: SharedChannel): Promise<void> {
@@ -202,13 +325,67 @@ async function connectChannel(channel: SharedChannel): Promise<void> {
   });
 
   try {
+    const capabilityEnabled =
+      await realtimeCapabilityEnabled();
+
+    if (
+      channel.listeners.size === 0 ||
+      channel.generation !== generation
+    ) {
+      return;
+    }
+
+    if (!capabilityEnabled) {
+      channel.reconnectAllowed = false;
+      emit(channel, {
+        status: 'error',
+        error: 'REALTIME_DISABLED',
+      });
+      return;
+    }
+
     const token = await accessToken();
     if (channel.listeners.size === 0 || channel.generation !== generation) return;
 
     const socket = new WebSocket(realtimeUrl());
     channel.socket = socket;
 
+    clearConnectTimer(channel);
+
+    channel.connectTimer =
+      window.setTimeout(() => {
+        channel.connectTimer = null;
+
+        if (
+          channel.generation !== generation ||
+          channel.socket !== socket ||
+          socket.readyState !==
+            WebSocket.CONNECTING
+        ) {
+          return;
+        }
+
+        emit(channel, {
+          status: 'error',
+          error: 'REALTIME_CONNECT_TIMEOUT',
+        });
+
+        try {
+          socket.close(
+            4000,
+            'CONNECT_TIMEOUT',
+          );
+        } catch {
+          if (channel.socket === socket) {
+            channel.socket = null;
+          }
+
+          scheduleReconnect(channel);
+        }
+      }, SOCKET_CONNECT_TIMEOUT_MS);
+
     socket.onopen = () => {
+      clearConnectTimer(channel);
       if (channel.generation !== generation || channel.listeners.size === 0) {
         socket.close(1000, 'STALE_CONNECTION');
         return;
@@ -284,6 +461,7 @@ async function connectChannel(channel: SharedChannel): Promise<void> {
     };
 
     socket.onerror = () => {
+      clearConnectTimer(channel);
       if (channel.generation !== generation || channel.socket !== socket) return;
       emit(channel, {
         status: 'error',
@@ -292,10 +470,12 @@ async function connectChannel(channel: SharedChannel): Promise<void> {
     };
 
     socket.onclose = () => {
+      clearConnectTimer(channel);
       if (channel.socket === socket) channel.socket = null;
       if (channel.generation === generation) scheduleReconnect(channel);
     };
   } catch (cause) {
+    clearConnectTimer(channel);
     if (channel.generation !== generation || channel.listeners.size === 0) return;
     const error =
       cause instanceof Error ? cause.message : 'REALTIME_CONNECTION_ERROR';
@@ -327,6 +507,7 @@ function channelFor(
     // 실제 연결 시도 직전에 connectChannel이 connecting으로 전환한다.
     state: { ...EMPTY_STATE },
     socket: null,
+    connectTimer: null,
     reconnectTimer: null,
     disposeTimer: null,
     reconnectAttempt: 0,
@@ -356,6 +537,7 @@ function subscribe(channel: SharedChannel, listener: Listener): () => void {
       if (channel.listeners.size > 0) return;
       channel.reconnectAllowed = false;
       channel.generation += 1;
+      clearConnectTimer(channel);
       clearReconnect(channel);
       const socket = channel.socket;
       channel.socket = null;

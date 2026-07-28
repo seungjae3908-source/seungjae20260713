@@ -56,7 +56,10 @@ type ScanResponse = {
   market: string;
   generatedAt?: string;
   scanned?: number;
-  providerErrors?: string[];
+  completed?: number;
+  providerErrors?: number;
+  partial?: boolean;
+  timedOut?: boolean;
   groups: ScanGroup[];
 };
 
@@ -271,6 +274,7 @@ export default function SignalScanPage() {
     queryFn: () =>
       apiGet<ScanResponse>(
         `/market/signal-scan?asset=${asset}&market=${marketParam}`,
+        { timeoutMs: 32_000 },
       ),
     enabled: !futuresLocked,
     staleTime: 5 * 60_000,
@@ -279,7 +283,7 @@ export default function SignalScanPage() {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
-    retry: 1,
+    retry: 0,
     placeholderData: (previous) => previous,
   });
 
@@ -751,6 +755,25 @@ export default function SignalScanPage() {
           ))}
         </div>
 
+        {!futuresLocked && query.isFetching && groups.length > 0 && (
+          <p className="mt-3 text-center text-[10px] font-black text-primary">
+            기존 결과를 표시하며 새 신호를 갱신 중입니다.
+          </p>
+        )}
+
+        {!futuresLocked && query.isError && groups.length > 0 && (
+          <p className="mt-3 text-center text-[10px] font-black text-warning">
+            새로고침에 실패해 마지막 정상 신호를 표시합니다.
+          </p>
+        )}
+
+        {!futuresLocked && query.data?.partial && (
+          <p className="mt-3 text-center text-[10px] font-black text-warning">
+            일부 결과 표시 · 처리 {query.data.completed ?? 0}/{query.data.scanned ?? 0}
+            {query.data.timedOut ? ' · 제한시간 종료' : ''}
+          </p>
+        )}
+
         <div className="mt-3">
           {futuresLocked ? (
             <StateBox>
@@ -758,9 +781,9 @@ export default function SignalScanPage() {
               {memberGradeLabel(auth?.profile ?? null)} · 등급 변경은
               관리자에게 문의해 주세요.
             </StateBox>
-          ) : query.isLoading ? (
-            <StateBox>데이터를 불러오는 중입니다.</StateBox>
-          ) : query.isError ? (
+          ) : query.isPending && groups.length === 0 ? (
+            <StateBox>최대 32초 동안 실제 신호를 분석합니다.</StateBox>
+          ) : query.isError && groups.length === 0 ? (
             <StateBox error>
               데이터를 불러오지 못했습니다.
               <button
