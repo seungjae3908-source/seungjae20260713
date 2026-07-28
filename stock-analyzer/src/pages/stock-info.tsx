@@ -288,9 +288,9 @@ export default function StockInfoPage() {
 	);
 
 	return (
-		<div className="h-full overflow-y-auto overscroll-contain bg-background">
+		<div data-ui-page="stock-info" className="h-full overflow-y-auto overscroll-contain bg-background">
 			{/* 상단 고정 없음 — 제목·탭·상세가 한 페이지로 함께 스크롤. */}
-			<header className="border-b border-card-border px-4 pb-3 pt-4">
+			<header data-ui-component="stock-info.header" className="border-b border-card-border px-4 pb-3 pt-4">
 				<h1 className="mb-3 text-center text-xl font-extrabold">정보</h1>
 
 				<div className="grid grid-cols-2 gap-2">
