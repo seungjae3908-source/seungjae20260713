@@ -15,7 +15,8 @@ export type UiNodeKind =
   | 'button'
   | 'text'
   | 'item'
-  | 'custom';
+  | 'card'
+  | 'popup';
 
 export type UiSectionWidth = 'full' | 'half' | 'third' | 'auto';
 export type UiSectionHeight = 'auto' | 'compact' | 'normal' | 'tall';
@@ -23,6 +24,9 @@ export type UiSectionSpacing = 'none' | 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 export type UiTextAlign = 'left' | 'center' | 'right';
 export type UiFontSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl';
 export type UiFontWeight = 'normal' | 'medium' | 'bold' | 'black';
+export type UiRadius = 'none' | 'sm' | 'md' | 'lg' | 'xl' | 'full';
+export type UiSourceType = 'none' | 'route' | 'api' | 'component';
+export type UiPopupPosition = 'center' | 'bottom' | 'top';
 
 export type UiSection = {
   id: string;
@@ -41,6 +45,19 @@ export type UiSection = {
   title?: string;
   route?: string;
   custom?: boolean;
+  backgroundColor?: string;
+  textColor?: string;
+  borderColor?: string;
+  radius: UiRadius;
+  x: number;
+  y: number;
+  zIndex: number;
+  sourceType: UiSourceType;
+  sourceKey?: string;
+  sourcePath?: string;
+  popupTitle?: string;
+  popupContent?: string;
+  popupPosition?: UiPopupPosition;
 };
 
 export type UiLayout = {
@@ -73,6 +90,12 @@ export type UiPageDefinition = {
   description: string;
 };
 
+export type UiSourceDefinition = {
+  key: string;
+  label: string;
+  value: string;
+};
+
 export const UI_PAGES: UiPageDefinition[] = [
   { key: 'home', label: '홈', description: '시장 요약과 주요 지수 화면' },
   { key: 'stocks', label: '종목', description: '국내·해외·코인 종목 화면' },
@@ -81,6 +104,24 @@ export const UI_PAGES: UiPageDefinition[] = [
   { key: 'signal-scan', label: '신호 검색', description: '신호 필터와 결과 화면' },
   { key: 'portfolio', label: '포트폴리오', description: '자산·현금·계획 화면' },
   { key: 'settings', label: '환경 설정', description: '계정·화면·알림·백업 화면' },
+];
+
+export const UI_ROUTE_SOURCES: UiSourceDefinition[] = [
+  { key: 'route.home', label: '홈으로 이동', value: '/home' },
+  { key: 'route.stocks', label: '종목으로 이동', value: '/stocks' },
+  { key: 'route.watchlist', label: '관심종목으로 이동', value: '/watchlist' },
+  { key: 'route.tech', label: '기술로 이동', value: '/tech' },
+  { key: 'route.signal-scan', label: '신호 검색으로 이동', value: '/tech/signal-scan' },
+  { key: 'route.portfolio', label: '포트폴리오로 이동', value: '/portfolio' },
+  { key: 'route.settings', label: '환경 설정으로 이동', value: '/settings' },
+  { key: 'route.account', label: '계정으로 이동', value: '/account' },
+];
+
+export const UI_API_SOURCES: UiSourceDefinition[] = [
+  { key: 'api.health', label: '서버 상태', value: '/api/health' },
+  { key: 'api.summary', label: '시장 요약', value: '/api/market/summary' },
+  { key: 'api.search', label: '종목 검색', value: '/api/search?q=삼성전자' },
+  { key: 'api.portfolio', label: '포트폴리오 조회', value: '/api/portfolio' },
 ];
 
 const section = (
@@ -158,29 +199,54 @@ export function getUiPageDefinition(pageKey: UiPageKey) {
   return UI_PAGES.find((page) => page.key === pageKey) ?? UI_PAGES[0];
 }
 
+function baseSection(
+  component: string,
+  kind: UiNodeKind,
+  title: string,
+  order: number,
+  custom: boolean,
+): UiSection {
+  return {
+    id: custom ? `${component}.${Date.now().toString(36)}.${order}` : component,
+    component,
+    kind,
+    parentId: null,
+    visible: true,
+    order,
+    width: 'full',
+    height: 'auto',
+    spacing: 'md',
+    align: 'center',
+    fontSize: 'md',
+    fontWeight: kind === 'text' ? 'bold' : 'black',
+    opacity: 100,
+    title,
+    custom,
+    backgroundColor: '',
+    textColor: '',
+    borderColor: '',
+    radius: 'xl',
+    x: 0,
+    y: 0,
+    zIndex: 0,
+    sourceType: 'none',
+    sourceKey: '',
+    sourcePath: '',
+    popupTitle: kind === 'popup' ? '새 팝업' : '',
+    popupContent: kind === 'popup' ? '팝업 내용을 입력하세요.' : '',
+    popupPosition: 'center',
+  };
+}
+
 export function createDefaultUiLayout(
   pageKey: UiPageKey = 'settings',
 ): UiLayout {
   return {
     schemaVersion: UI_LAYOUT_SCHEMA_VERSION,
     pageKey,
-    sections: UI_COMPONENT_CATALOG[pageKey].map((item, order) => ({
-      id: item.component,
-      component: item.component,
-      kind: item.kind,
-      parentId: null,
-      visible: true,
-      order,
-      width: 'full',
-      height: 'auto',
-      spacing: 'md',
-      align: 'center',
-      fontSize: 'md',
-      fontWeight: 'black',
-      opacity: 100,
-      title: item.label,
-      custom: false,
-    })),
+    sections: UI_COMPONENT_CATALOG[pageKey].map((item, order) =>
+      baseSection(item.component, item.kind, item.label, order, false),
+    ),
   };
 }
 
@@ -192,6 +258,16 @@ function safeId(value: unknown, fallback: string) {
 function safeRoute(value: unknown) {
   const route = String(value ?? '').trim();
   return route.startsWith('/') ? route.slice(0, 200) : undefined;
+}
+
+function safeColor(value: unknown) {
+  const color = String(value ?? '').trim();
+  return /^#[0-9a-f]{6}$/i.test(color) ? color.toUpperCase() : '';
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : fallback;
 }
 
 export function normalizeUiLayout(
@@ -210,14 +286,17 @@ export function normalizeUiLayout(
   const seen = new Set<string>();
   const sections: UiSection[] = [];
 
-  source.sections.forEach((raw, index) => {
+  source.sections.slice(0, 80).forEach((raw, index) => {
     if (!raw || typeof raw !== 'object') return;
     const item = raw as Partial<UiSection>;
     const component = String(item.component ?? '').trim();
     const custom = item.custom === true || component.startsWith('custom.');
     if ((!custom && !allowed.has(component)) || seen.has(String(item.id))) return;
 
-    const id = safeId(item.id, custom ? `custom.${Date.now()}.${index}` : component);
+    const id = safeId(
+      item.id,
+      custom ? `custom.node.${Date.now().toString(36)}.${index}` : component,
+    );
     seen.add(id);
 
     const width: UiSectionWidth =
@@ -256,18 +335,38 @@ export function normalizeUiLayout(
       item.opacity === 25 || item.opacity === 50 || item.opacity === 75
         ? item.opacity
         : 100;
+    const kind: UiNodeKind =
+      item.kind === 'tab' ||
+      item.kind === 'button' ||
+      item.kind === 'text' ||
+      item.kind === 'item' ||
+      item.kind === 'card' ||
+      item.kind === 'popup'
+        ? item.kind
+        : 'section';
+    const sourceType: UiSourceType =
+      item.sourceType === 'route' ||
+      item.sourceType === 'api' ||
+      item.sourceType === 'component'
+        ? item.sourceType
+        : 'none';
+    const radius: UiRadius =
+      item.radius === 'none' ||
+      item.radius === 'sm' ||
+      item.radius === 'md' ||
+      item.radius === 'lg' ||
+      item.radius === 'full'
+        ? item.radius
+        : 'xl';
+    const popupPosition: UiPopupPosition =
+      item.popupPosition === 'bottom' || item.popupPosition === 'top'
+        ? item.popupPosition
+        : 'center';
 
     sections.push({
       id,
-      component: custom ? component || 'custom.card' : component,
-      kind:
-        item.kind === 'tab' ||
-        item.kind === 'button' ||
-        item.kind === 'text' ||
-        item.kind === 'item' ||
-        item.kind === 'custom'
-          ? item.kind
-          : 'section',
+      component: custom ? component || `custom.${kind}` : component,
+      kind,
       parentId: typeof item.parentId === 'string' ? item.parentId : null,
       visible: item.visible !== false,
       order: Number.isFinite(Number(item.order)) ? Number(item.order) : index,
@@ -284,6 +383,31 @@ export function normalizeUiLayout(
           : undefined,
       route: safeRoute(item.route),
       custom,
+      backgroundColor: safeColor(item.backgroundColor),
+      textColor: safeColor(item.textColor),
+      borderColor: safeColor(item.borderColor),
+      radius,
+      x: Math.round(clampNumber(item.x, -240, 240)),
+      y: Math.round(clampNumber(item.y, -400, 400)),
+      zIndex: Math.round(clampNumber(item.zIndex, 0, 50)),
+      sourceType,
+      sourceKey:
+        typeof item.sourceKey === 'string' ? item.sourceKey.slice(0, 100) : '',
+      sourcePath:
+        sourceType === 'api'
+          ? safeRoute(item.sourcePath)
+          : sourceType === 'route'
+            ? safeRoute(item.sourcePath ?? item.route)
+            : '',
+      popupTitle:
+        typeof item.popupTitle === 'string'
+          ? item.popupTitle.trim().slice(0, 120)
+          : '',
+      popupContent:
+        typeof item.popupContent === 'string'
+          ? item.popupContent.trim().slice(0, 2000)
+          : '',
+      popupPosition,
     });
   });
 
@@ -307,17 +431,31 @@ export function moveUiSection(
   const sections = layout.sections.map((section) => ({ ...section }));
   const index = sections.findIndex((section) => section.id === sectionId);
   const target = index + direction;
-
   if (index < 0 || target < 0 || target >= sections.length) {
     return { ...layout, sections };
   }
-
   const [section] = sections.splice(index, 1);
   sections.splice(target, 0, section);
   sections.forEach((item, order) => {
     item.order = order;
   });
+  return { ...layout, sections };
+}
 
+export function moveUiSectionTo(
+  layout: UiLayout,
+  sectionId: string,
+  targetId: string,
+): UiLayout {
+  const sections = layout.sections.map((section) => ({ ...section }));
+  const from = sections.findIndex((section) => section.id === sectionId);
+  const target = sections.findIndex((section) => section.id === targetId);
+  if (from < 0 || target < 0 || from === target) return layout;
+  const [section] = sections.splice(from, 1);
+  sections.splice(target, 0, section);
+  sections.forEach((item, order) => {
+    item.order = order;
+  });
   return { ...layout, sections };
 }
 
@@ -325,6 +463,25 @@ export function removeUiSection(layout: UiLayout, sectionId: string): UiLayout {
   const sections = layout.sections
     .filter((section) => section.id !== sectionId)
     .map((section, order) => ({ ...section, order }));
+  return { ...layout, sections };
+}
+
+export function duplicateUiSection(layout: UiLayout, sectionId: string): UiLayout {
+  const source = layout.sections.find((section) => section.id === sectionId);
+  if (!source) return layout;
+  const copy: UiSection = {
+    ...source,
+    id: `custom.copy.${Date.now().toString(36)}`,
+    component: `custom.${source.kind}`,
+    custom: true,
+    title: `${source.title ?? '항목'} 복사본`,
+    order: source.order + 1,
+  };
+  const sections = layout.sections.map((section) => ({ ...section }));
+  sections.splice(source.order + 1, 0, copy);
+  sections.forEach((item, order) => {
+    item.order = order;
+  });
   return { ...layout, sections };
 }
 
@@ -343,23 +500,13 @@ export function addCatalogSection(
     ...layout,
     sections: [
       ...layout.sections,
-      {
-        id: definition.component,
-        component: definition.component,
-        kind: definition.kind,
-        parentId: null,
-        visible: true,
-        order: layout.sections.length,
-        width: 'full',
-        height: 'auto',
-        spacing: 'md',
-        align: 'center',
-        fontSize: 'md',
-        fontWeight: 'black',
-        opacity: 100,
-        title: definition.label,
-        custom: false,
-      },
+      baseSection(
+        definition.component,
+        definition.kind,
+        definition.label,
+        layout.sections.length,
+        false,
+      ),
     ],
   };
 }
@@ -368,36 +515,21 @@ export function addCustomUiSection(
   layout: UiLayout,
   kind: Exclude<UiNodeKind, 'section'> = 'button',
 ): UiLayout {
-  const id = `custom.${kind}.${Date.now().toString(36)}`;
-  const labels: Record<string, string> = {
+  const labels: Record<Exclude<UiNodeKind, 'section'>, string> = {
     tab: '새 탭',
     button: '새 버튼',
     text: '새 글씨',
     item: '새 항목',
-    custom: '새 카드',
+    card: '새 카드',
+    popup: '새 팝업 버튼',
   };
-  return {
-    ...layout,
-    sections: [
-      ...layout.sections,
-      {
-        id,
-        component: `custom.${kind}`,
-        kind,
-        parentId: null,
-        visible: true,
-        order: layout.sections.length,
-        width: 'full',
-        height: 'auto',
-        spacing: 'md',
-        align: 'center',
-        fontSize: 'md',
-        fontWeight: 'bold',
-        opacity: 100,
-        title: labels[kind] ?? '새 항목',
-        route: kind === 'button' || kind === 'tab' || kind === 'item' ? '/' : undefined,
-        custom: true,
-      },
-    ],
-  };
+  const section = baseSection(
+    `custom.${kind}`,
+    kind,
+    labels[kind],
+    layout.sections.length,
+    true,
+  );
+  if (kind === 'route' as UiNodeKind) section.sourceType = 'route';
+  return { ...layout, sections: [...layout.sections, section] };
 }
