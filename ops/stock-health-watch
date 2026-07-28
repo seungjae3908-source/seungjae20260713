@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+
+set -u
+
+ENV_FILE="${STOCK_APP_ENV_FILE:-/etc/stock-app.env}"
+APP="${STOCK_APP_PM2_NAME:-stock-app}"
+DEPLOY="${STOCKDEPLOY_BIN:-/usr/local/sbin/stockdeploy}"
+STATE_DIR="/var/lib/stock-health-watch"
+FAIL_FILE="$STATE_DIR/consecutive-failures"
+LOCK_FILE="/var/lock/stock-health-watch.lock"
+LOCAL_HEALTH="http://127.0.0.1:8080/api/health"
+
+log() {
+  logger -t stock-health-watch -- "$*"
+  printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+health_ok() {
+  [ "$(
+    curl -fsS \
+      --connect-timeout 3 \
+      --max-time 10 \
+      -o /dev/null \
+      -w '%{http_code}' \
+      "$LOCAL_HEALTH" 2>/dev/null || true
+  )" = "200" ]
+}
+
+load_env_safe() {
+  [ -r "$ENV_FILE" ] || return 1
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+
+  local key
+  for key in \
+    SUPABASE_URL \
+    SUPABASE_ANON_KEY \
+    SUPABASE_SERVICE_ROLE_KEY \
+    KIWOOM_APP_KEY \
+    KIWOOM_APP_SECRET \
+    KIWOOM_PROXY_KEY
+  do
+    [ -n "${!key:-}" ] || return 1
+  done
+}
+
+supabase_ok() {
+  [ "$(
+    curl -fsS \
+      --connect-timeout 3 \
+      --max-time 10 \
+      -o /dev/null \
+      -w '%{http_code}' \
+      -H "apikey: ${SUPABASE_ANON_KEY}" \
+      "${SUPABASE_URL%/}/auth/v1/settings" 2>/dev/null || true
+  )" = "200" ]
+}
+
+read_failures() {
+  local value=0
+  [ ! -r "$FAIL_FILE" ] || read -r value < "$FAIL_FILE"
+  [[ "$value" =~ ^[0-9]+$ ]] || value=0
+  printf '%s' "$value"
+}
+
+write_failures() {
+  printf '%s\n' "$1" > "$FAIL_FILE"
+}
+
+main() {
+  mkdir -p "$STATE_DIR" "$(dirname "$LOCK_FILE")" || exit 1
+  exec 9>"$LOCK_FILE"
+  flock -n 9 || exit 0
+
+  if ! load_env_safe; then
+    log "환경 파일 또는 필수 환경변수 누락. 자동 변경 없이 중단합니다."
+    exit 1
+  fi
+
+  if health_ok; then
+    write_failures 0
+    if ! supabase_ok; then
+      log "Supabase 연결 실패 감지. 외부 장애 가능성이 있어 롤백하지 않습니다."
+    fi
+    exit 0
+  fi
+
+  failures="$(read_failures)"
+  failures=$((failures + 1))
+  write_failures "$failures"
+  log "API health 실패 ${failures}/3"
+
+  if [ "$failures" -eq 1 ]; then
+    pm2 restart "$APP" --update-env >/dev/null 2>&1 || true
+    sleep 4
+    if health_ok; then
+      write_failures 0
+      log "PM2 환경 재적용 및 재시작으로 복구 완료"
+    fi
+    exit 0
+  fi
+
+  if [ "$failures" -lt 3 ]; then
+    exit 0
+  fi
+
+  if [ -x "$DEPLOY" ]; then
+    log "3회 연속 실패. 마지막 정상 빌드 복구를 시도합니다."
+    if "$DEPLOY" rollback; then
+      write_failures 0
+      log "자동 롤백 완료"
+      exit 0
+    fi
+  fi
+
+  log "자동 복구 실패. 무한 재시작을 방지하기 위해 추가 조치를 중단합니다."
+  exit 1
+}
+
+main "$@"
