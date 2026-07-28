@@ -707,6 +707,12 @@ type CandleFetchOptions = {
   maxPages?: number;
 };
 
+// 키움 인증·요청제한 장애가 반복될 때 모든 차트 요청이 10초씩 대기하지 않도록
+// 잠시 회로를 열고 기존 대체 공급자를 즉시 사용한다.
+let kiwoomChartCircuitOpenUntil = 0;
+const KIWOOM_CHART_SHORT_COOLDOWN_MS = 30_000;
+const KIWOOM_CHART_LONG_COOLDOWN_MS = 5 * 60_000;
+
 async function tryCandlesProvider(
   entry: CatalogEntry,
   timeframe: Timeframe,
@@ -732,7 +738,7 @@ async function tryCandlesProviderMeta(
    * kiwoom-chart.ts가 cont-yn / next-key를 끝까지 따라가므로
    * 일봉과 전체 차트는 상장일부터 현재까지의 데이터를 받을 수 있습니다.
    */
-  if (marketValue === 'KR') {
+  if (marketValue === 'KR' && Date.now() >= kiwoomChartCircuitOpenUntil) {
     try {
       const timeout = new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error("KIWOOM_TIMEOUT")), 10000);
@@ -748,18 +754,22 @@ async function tryCandlesProviderMeta(
       ]);
 
       if (kiwoomRows.length >= 2) {
+        kiwoomChartCircuitOpenUntil = 0;
         return { candles: kiwoomRows as Candle[], provider: 'kiwoom' };
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const longCooldown = /8001|1700|HTTP 429|요청 개수|인증에 실패/i.test(message);
+      kiwoomChartCircuitOpenUntil =
+        Date.now() +
+        (longCooldown
+          ? KIWOOM_CHART_LONG_COOLDOWN_MS
+          : KIWOOM_CHART_SHORT_COOLDOWN_MS);
       console.error(
-        `kiwoom chart provider failed: ticker=${ticker}, timeframe=${timeframeText}`,
+        `kiwoom chart provider failed: ticker=${ticker}, timeframe=${timeframeText}, cooldownMs=${kiwoomChartCircuitOpenUntil - Date.now()}`,
         error,
       );
     }
-
-    // 네이버는 일봉만 제공한다. 키움 분봉/시간봉 조회가 실패했을 때
-    // 일봉을 분봉처럼 표시하지 않고 명시적인 빈 데이터로 반환한다.
-    if (isIntraday) return { candles: [], provider: 'none' };
   }
 
   const attempts: Array<{ provider: string; run: () => Promise<unknown> }> =
@@ -767,8 +777,12 @@ async function tryCandlesProviderMeta(
       ? [
           { provider: 'yahoo', run: () => (yahoo as any).getCandles?.(entry, timeframe) },
           { provider: 'yahoo', run: () => (yahoo as any).candles?.(entry, timeframe) },
-          { provider: 'naver', run: () => (naver as any).getCandles?.(entry, timeframe) },
-          { provider: 'naver', run: () => (naver as any).candles?.(entry, timeframe) },
+          ...(!isIntraday
+            ? [
+                { provider: 'naver', run: () => (naver as any).getCandles?.(entry, timeframe) },
+                { provider: 'naver', run: () => (naver as any).candles?.(entry, timeframe) },
+              ]
+            : []),
         ]
       : [
           { provider: 'yahoo', run: () => (yahoo as any).getCandles?.(entry, timeframe) },
