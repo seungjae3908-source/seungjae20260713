@@ -57,7 +57,8 @@ function customNode(section: UiSection) {
     content.textContent = section.popupContent;
     node.append(content);
   }
-  if (section.route) node.addEventListener('click', () => { window.location.href = section.route; });
+  const route = section.route;
+  if (route) node.addEventListener('click', () => { window.location.href = route; });
   return node;
 }
 
