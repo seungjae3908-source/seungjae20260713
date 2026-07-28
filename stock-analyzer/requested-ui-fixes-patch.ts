@@ -140,15 +140,31 @@ function patchDetail(source: string): string {
     'detail disclosure endpoints',
   );
 
-  code = replaceRequired(
-    code,
-    `    tryJson<AnyObj>([\`/api/stocks/\${upper}/news\`], {}),`,
-    `    tryJson<AnyObj>(
+  const newsEndpointsWithAll = `    tryJson<AnyObj>(
       [\`/api/stocks/\${upper}/news?all=1\`, \`/api/stocks/\${upper}/news\`],
       {},
+    ),`;
+
+  if (!code.includes(newsEndpointsWithAll)) {
+    const newsEndpointCandidates = [
+      `    tryJson<AnyObj>([\`/api/stocks/\${upper}/news\`], {}),`,
+      `    tryJson<AnyObj>(
+      [\`/api/stocks/\${upper}/news\`],
+      {},
     ),`,
-    'detail news endpoints',
-  );
+    ];
+    const currentNewsEndpoints = newsEndpointCandidates.find((candidate) =>
+      code.includes(candidate),
+    );
+
+    if (!currentNewsEndpoints) {
+      throw new Error(
+        '[requested-ui-fixes-patch] detail news endpoints 위치를 찾지 못했습니다.',
+      );
+    }
+
+    code = code.replace(currentNewsEndpoints, newsEndpointsWithAll);
+  }
 
   code = replaceRequired(
     code,
