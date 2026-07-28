@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+
+ROOT=/opt/stock-app
+REPO=seungjae3908-source/seungjae20260713
+BRANCH=feature/detail-realtime-chart-integration
+STAMP=$(date +%Y%m%d_%H%M%S)
+STAGE=/tmp/stock-ui-trading-stage-$STAMP
+BACKUP=/tmp/stock-ui-trading-backup-$STAMP
+FAILED=0
+
+FILES=(
+  api-server/src/lib/ui-layout-file-store.ts
+  api-server/src/routes/admin-ui-layouts.ts
+  api-server/src/routes/ui-layouts.ts
+  api-server/src/routes/market-depth.ts
+  api-server/src/routes/strategy-lab.ts
+  api-server/src/routes/index.ts
+  api-server/src/services/strategy-lab.service.ts
+  stock-analyzer/src/App.tsx
+  stock-analyzer/src/components/ui-internal-editor.tsx
+  stock-analyzer/src/components/ui-layout-runtime.tsx
+  stock-analyzer/src/components/paper-trading-workbench.tsx
+  stock-analyzer/src/components/bottom-nav.tsx
+  stock-analyzer/src/lib/ui-layout.ts
+  stock-analyzer/src/pages/admin-ui-builder.tsx
+  stock-analyzer/src/pages/detail.tsx
+  stock-analyzer/src/pages/stock-info.tsx
+  stock-analyzer/src/pages/home.tsx
+  stock-analyzer/src/pages/stocks.tsx
+  stock-analyzer/src/pages/tech.tsx
+  stock-analyzer/src/pages/signal-scan.tsx
+  stock-analyzer/src/pages/portfolio.tsx
+  stock-analyzer/src/pages/more.tsx
+)
+
+fail() { echo "FAILED: $1"; FAILED=1; }
+
+rollback() {
+  echo "ROLLBACK: 선택 소스와 이전 빌드를 복구합니다."
+  if [ -f "$BACKUP/existing.list" ]; then
+    while IFS= read -r path; do
+      [ -f "$BACKUP/files/$path" ] && { mkdir -p "$ROOT/$(dirname "$path")"; cp -a "$BACKUP/files/$path" "$ROOT/$path"; }
+    done < "$BACKUP/existing.list"
+  fi
+  if [ -f "$BACKUP/new.list" ]; then
+    while IFS= read -r path; do
+      case "$path" in api-server/src/*|stock-analyzer/src/*) rm -f "$ROOT/$path" ;; esac
+    done < "$BACKUP/new.list"
+  fi
+  [ -d "$BACKUP/api-dist" ] && { rm -rf "$ROOT/api-server/dist"; cp -a "$BACKUP/api-dist" "$ROOT/api-server/dist"; }
+  [ -d "$BACKUP/front-dist" ] && { rm -rf "$ROOT/stock-analyzer/dist"; cp -a "$BACKUP/front-dist" "$ROOT/stock-analyzer/dist"; }
+  cd "$ROOT" || return
+  pm2 restart stock-app --update-env >/dev/null 2>&1 || true
+  echo "ROLLBACK_DONE backup=$BACKUP"
+}
+
+mkdir -p "$STAGE" "$BACKUP/files" || fail "임시 폴더 생성 실패"
+[ "$FAILED" -eq 0 ] || { rollback; exit 1; }
+
+for path in "${FILES[@]}"; do
+  mkdir -p "$STAGE/$(dirname "$path")" "$BACKUP/files/$(dirname "$path")"
+  if [ -f "$ROOT/$path" ]; then
+    echo "$path" >> "$BACKUP/existing.list"
+    cp -a "$ROOT/$path" "$BACKUP/files/$path" || { fail "백업 실패: $path"; break; }
+  else
+    echo "$path" >> "$BACKUP/new.list"
+  fi
+  gh api --method GET "repos/$REPO/contents/$path" -f "ref=$BRANCH" -H 'Accept: application/vnd.github.raw+json' > "$STAGE/$path" || { fail "GitHub 동기화 실패: $path"; break; }
+  [ -s "$STAGE/$path" ] || { fail "빈 파일 수신: $path"; break; }
+done
+
+if [ "$FAILED" -eq 0 ]; then
+  [ -d "$ROOT/api-server/dist" ] && cp -a "$ROOT/api-server/dist" "$BACKUP/api-dist"
+  [ -d "$ROOT/stock-analyzer/dist" ] && cp -a "$ROOT/stock-analyzer/dist" "$BACKUP/front-dist"
+fi
+
+if [ "$FAILED" -eq 0 ]; then
+  for path in "${FILES[@]}"; do
+    mkdir -p "$ROOT/$(dirname "$path")"
+    cp -a "$STAGE/$path" "$ROOT/$path" || { fail "소스 반영 실패: $path"; break; }
+  done
+fi
+
+if [ "$FAILED" -eq 0 ]; then
+  cd "$ROOT/api-server" || fail "API 폴더 이동 실패"
+  [ "$FAILED" -eq 0 ] && pnpm build:server || fail "API 빌드 실패"
+fi
+
+if [ "$FAILED" -eq 0 ]; then
+  grep -q "strategy-lab/backtest" "$ROOT/api-server/dist/index.mjs" || fail "백테스트 라우트 dist 미포함"
+  grep -q "market/depth" "$ROOT/api-server/dist/index.mjs" || fail "호가 라우트 dist 미포함"
+  grep -q "REAL_ORDER_NOT_SUPPORTED" "$ROOT/api-server/dist/index.mjs" || fail "실주문 차단 코드 dist 미포함"
+fi
+
+if [ "$FAILED" -eq 0 ]; then
+  cd "$ROOT/stock-analyzer" || fail "프론트 폴더 이동 실패"
+  [ "$FAILED" -eq 0 ] && pnpm typecheck || fail "프론트 타입검사 실패"
+  [ "$FAILED" -eq 0 ] && pnpm build || fail "프론트 빌드 실패"
+fi
+
+if [ "$FAILED" -eq 0 ]; then
+  grep -Rqs "반복 백테스트" "$ROOT/stock-analyzer/dist/public/assets" || fail "백테스트 UI 빌드 미포함"
+  grep -Rqs "드래그 편집기 열기" "$ROOT/stock-analyzer/dist/public/assets" || fail "UI 편집기 빌드 미포함"
+  grep -Rqs "실제 주문 전송 없음" "$ROOT/stock-analyzer/dist/public/assets" || fail "모의주문 안전문구 미포함"
+fi
+
+if [ "$FAILED" -eq 0 ]; then
+  cd "$ROOT" || fail "운영 폴더 이동 실패"
+  pm2 restart stock-app --update-env || fail "PM2 재시작 실패"
+fi
+
+if [ "$FAILED" -eq 0 ]; then
+  LOCAL=000
+  DOMAIN=000
+  for _ in 1 2 3 4 5 6; do
+    LOCAL=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/health || true)
+    DOMAIN=$(curl -sS -o /dev/null -w '%{http_code}' https://lsj119.duckdns.org/api/health || true)
+    [ "$LOCAL" = 200 ] && [ "$DOMAIN" = 200 ] && break
+    sleep 2
+  done
+  [ "$LOCAL" = 200 ] || fail "LOCAL health=$LOCAL"
+  [ "$DOMAIN" = 200 ] || fail "DOMAIN health=$DOMAIN"
+fi
+
+if [ "$FAILED" -eq 0 ]; then
+  DEPTH_CODE=$(curl -sS -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8080/api/market/depth?asset=coin&market=spot&symbol=BTC' || true)
+  BACKTEST_CODE=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"bars":[]}' 'http://127.0.0.1:8080/api/strategy-lab/backtest' || true)
+  UI_CODE=$(curl -sS -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8080/api/ui-layouts/home/published' || true)
+  case "$DEPTH_CODE" in 401|403) ;; *) fail "호가 보호 라우트 비정상 HTTP=$DEPTH_CODE" ;; esac
+  case "$BACKTEST_CODE" in 401|403) ;; *) fail "백테스트 보호 라우트 비정상 HTTP=$BACKTEST_CODE" ;; esac
+  case "$UI_CODE" in 401|403) ;; *) fail "UI 레이아웃 보호 라우트 비정상 HTTP=$UI_CODE" ;; esac
+fi
+
+if [ "$FAILED" -ne 0 ]; then
+  rollback
+  exit 1
+fi
+
+mkdir -p /var/lib/stock-app
+chmod 750 /var/lib/stock-app
+printf '%s\n' "$BRANCH" > "$BACKUP/branch"
+
+echo "DEPLOY_OK"
+echo "LOCAL_HEALTH=$LOCAL"
+echo "DOMAIN_HEALTH=$DOMAIN"
+echo "DEPTH_ROUTE=$DEPTH_CODE"
+echo "BACKTEST_ROUTE=$BACKTEST_CODE"
+echo "UI_LAYOUT_ROUTE=$UI_CODE"
+echo "REAL_ORDERS=BLOCKED"
+echo "BACKUP=$BACKUP"
