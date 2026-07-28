@@ -401,7 +401,7 @@ export function BottomNav() {
     <>
       {popup && (
         <div
-          className="fixed inset-0 z-[70] flex items-center justify-center px-5"
+          className="fixed inset-0 z-[70] flex items-end justify-center px-3 pb-[calc(env(safe-area-inset-bottom)+78px)] sm:items-center sm:px-5 sm:pb-0"
           onClick={closePopup}
           role="presentation"
         >
@@ -411,7 +411,7 @@ export function BottomNav() {
             role="dialog"
             aria-modal="true"
             aria-label={popupTitle(popup, step)}
-            className="relative z-10 w-full max-w-[350px] rounded-3xl border border-white/10 bg-[#090b10] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.8)]"
+            className="relative z-10 w-full max-w-md rounded-3xl border border-white/10 bg-[#090b10] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.8)] sm:p-5"
             onClick={(event) => event.stopPropagation()}
           >
             <button
@@ -460,7 +460,7 @@ export function BottomNav() {
         </div>
       )}
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/90 px-1 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-xl">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/95 px-1 pb-[env(safe-area-inset-bottom)] pt-1.5 shadow-[0_-8px_24px_rgba(0,0,0,0.14)] backdrop-blur-xl">
         <div
           className="mx-auto grid max-w-md gap-0.5"
           style={{
@@ -484,10 +484,10 @@ export function BottomNav() {
                   navigate(item.href);
                 }}
                 className={cn(
-                  'flex min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-2 text-center text-[10px] font-extrabold transition',
+                  'relative flex min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-2 text-center text-[10px] font-extrabold transition',
                   active
-                    ? 'text-primary'
-                    : 'text-muted-foreground active:text-foreground',
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-muted-foreground active:bg-secondary active:text-foreground',
                 )}
               >
                 <Icon
