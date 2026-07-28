@@ -48,58 +48,9 @@ function patchApp(source: string): string {
 }
 
 function patchBottomNav(source: string): string {
-  if (source.includes('const SIGNAL_SCAN_MAIN_ITEMS: PopupItem[]')) return source;
-  let code = source;
-
-  code = replaceOnce(
-    code,
-    `  | 'marketAnalysis'\n  | 'study'\n  | 'chartRelay'`,
-    `  | 'marketAnalysis'\n  | 'study'\n  | 'signalScan'\n  | 'signalStocks'\n  | 'signalCoins'\n  | 'chartRelay'`,
-    'signal popup steps',
-  );
-
-  code = replaceOnce(
-    code,
-    `const TECH_MAIN_ITEMS: PopupItem[] = [\n  { label: '신호검색', href: '/tech/signal-scan' },\n  { label: '차트중계', step: 'chartRelay' },`,
-    `const TECH_MAIN_ITEMS: PopupItem[] = [\n  { label: '신호검색', step: 'signalScan' },\n  { label: '차트중계', step: 'chartRelay' },`,
-    'signal scan popup entry',
-  );
-
-  code = replaceOnce(
-    code,
-    `const CHART_RELAY_MAIN_ITEMS: PopupItem[] = [`,
-    `const SIGNAL_SCAN_MAIN_ITEMS: PopupItem[] = [\n  { label: '주식', step: 'signalStocks' },\n  { label: '코인', step: 'signalCoins' },\n];\n\nconst SIGNAL_SCAN_STOCK_ITEMS: PopupItem[] = [\n  { label: '국내주식', href: '/tech/signal-scan/kr' },\n  { label: '해외주식', href: '/tech/signal-scan/us' },\n];\n\nconst SIGNAL_SCAN_COIN_ITEMS: PopupItem[] = [\n  { label: '코인 현물', href: '/tech/signal-scan/spot' },\n  {\n    label: '코인 선물',\n    href: '/tech/signal-scan/futures',\n    feature: 'futures',\n  },\n];\n\nconst CHART_RELAY_MAIN_ITEMS: PopupItem[] = [`,
-    'signal scan market items',
-  );
-
-  // 포트폴리오 경로가 전체 자산 화면으로 바뀌어도 권한을 유지한다.
-  code = code.replace(
-    /(\{ label: '포트폴리오', href: '[^']+')(?!, feature: 'portfolio') \},/,
-    "$1, feature: 'portfolio' },",
-  );
-
-  code = replaceOnce(
-    code,
-    `  if (kind === 'tech') {\n    if (step === 'chartRelay') return '차트중계';`,
-    `  if (kind === 'tech') {\n    if (step === 'signalScan') return '신호검색';\n    if (step === 'signalStocks') return '주식 신호검색';\n    if (step === 'signalCoins') return '코인 신호검색';\n    if (step === 'chartRelay') return '차트중계';`,
-    'signal popup titles',
-  );
-
-  code = replaceOnce(
-    code,
-    `    if (step === 'chartStocks' || step === 'chartCoins') {\n      setStep('chartRelay');\n      return;\n    }`,
-    `    if (step === 'chartStocks' || step === 'chartCoins') {\n      setStep('chartRelay');\n      return;\n    }\n    if (step === 'signalStocks' || step === 'signalCoins') {\n      setStep('signalScan');\n      return;\n    }`,
-    'signal popup back navigation',
-  );
-
-  code = replaceOnce(
-    code,
-    `    if (popup === 'tech') {\n      if (step === 'chartRelay') return CHART_RELAY_MAIN_ITEMS;`,
-    `    if (popup === 'tech') {\n      if (step === 'signalScan') return SIGNAL_SCAN_MAIN_ITEMS;\n      if (step === 'signalStocks') return SIGNAL_SCAN_STOCK_ITEMS;\n      if (step === 'signalCoins') return SIGNAL_SCAN_COIN_ITEMS;\n      if (step === 'chartRelay') return CHART_RELAY_MAIN_ITEMS;`,
-    'signal popup item routing',
-  );
-
-  return code;
+  // 현재 bottom-nav.tsx에는 운영 라우팅이 이미 소스로 반영되어 있다.
+  // 과거 문자열 치환 패치를 다시 적용하면 소스 형태 차이로 빌드가 중단되므로 그대로 사용한다.
+  return source;
 }
 
 function patchSignalScan(source: string): string {
