@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, RefreshCw, ShieldAlert, TrendingUp } from "lucide-react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { BottomNav } from "@/components/bottom-nav";
@@ -12,7 +12,33 @@ import {
   formatAppPrice,
 } from "@/lib/stock-display";
 
-type Category = "undervalued" | "breakout";
+type Category = "undervalued" | "accumulation" | "bottom" | "breakout";
+
+const CATEGORY_TABS: Array<{ key: Category; label: string }> = [
+  { key: "undervalued", label: "저평가" },
+  { key: "accumulation", label: "매집" },
+  { key: "bottom", label: "바닥권" },
+  { key: "breakout", label: "추세돌파" },
+];
+
+const CATEGORY_CRITERIA: Record<Category, string> = {
+  undervalued:
+    "선정 기준: 실제 재무 데이터 확보 + 밸류에이션 지표 2개 이상 충족 (참고용 분석)",
+  accumulation:
+    "선정 기준: 횡보 구간에서 거래량 유입·매도 압력 감소·지지선 유지 (관찰 필요)",
+  bottom:
+    "선정 기준: 장기 저점 근접 + 과매도(RSI) + 하락 둔화·저점 상승 (관찰 필요)",
+  breakout:
+    "선정 기준: 박스권 돌파 5일 이내 + 거래량 1.5배 이상 + 과열 아님 (분석 후보)",
+};
+
+const PAGE_SIZE = 20;
+const MAX_ROWS = 100;
+
+function categoryFromPath(path: string): Category {
+  const seg = path.split("?")[0].split("/")[2];
+  return (CATEGORY_TABS.find((t) => t.key === seg)?.key ?? "undervalued") as Category;
+}
 
 interface RecoRow {
   ticker: string;
@@ -71,9 +97,15 @@ const QUALITY_LABEL: Record<string, string> = {
 };
 
 export default function RecommendationsPage() {
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const [market, setMarket] = useState<"KR" | "US">("KR");
-  const [category, setCategory] = useState<Category>("undervalued");
+  const category = categoryFromPath(location);
+  const [page, setPage] = useState(1);
+
+  const setCategory = (next: Category) => {
+    setPage(1);
+    navigate(`/recommendations/${next}`);
+  };
 
   const query = useQuery({
     queryKey: ["recommendations", market],
@@ -84,27 +116,25 @@ export default function RecommendationsPage() {
   });
 
   const data = query.data;
-  const rows = (data?.rows ?? []).filter((row) => row.category === category);
+  const allRows = (data?.rows ?? [])
+    .filter((row) => row.category === category)
+    .slice(0, MAX_ROWS);
+  const totalPages = Math.max(1, Math.ceil(allRows.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const rows = allRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain bg-background">
       <div className="px-4 pb-28 pt-4">
-        <header className="mb-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => navigate("/home")}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-            <div>
-              <h1 className="text-xl font-extrabold">AI 추천</h1>
-              <p className="text-[10px] font-bold text-muted-foreground">
-                규칙 기반 분석 · AI(LLM) 미연결
-              </p>
-            </div>
-          </div>
+        <header className="mb-3 grid grid-cols-[40px_1fr_40px] items-center gap-3">
+          <button
+            type="button"
+            onClick={() => navigate("/home")}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <h1 className="text-center text-xl font-extrabold">AI 추천</h1>
           <button
             type="button"
             onClick={() => void query.refetch()}
@@ -133,32 +163,27 @@ export default function RecommendationsPage() {
             </button>
           ))}
         </div>
-        <div className="mb-3 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={() => setCategory("undervalued")}
-            className={cn(
-              "flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-sm font-extrabold",
-              category === "undervalued"
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-card-border bg-card text-muted-foreground",
-            )}
-          >
-            <ShieldAlert className="h-4 w-4" /> 저평가
-          </button>
-          <button
-            type="button"
-            onClick={() => setCategory("breakout")}
-            className={cn(
-              "flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-sm font-extrabold",
-              category === "breakout"
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-card-border bg-card text-muted-foreground",
-            )}
-          >
-            <TrendingUp className="h-4 w-4" /> 추세돌파
-          </button>
+        <div className="mb-3 grid grid-cols-4 gap-2">
+          {CATEGORY_TABS.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setCategory(tab.key)}
+              className={cn(
+                "flex items-center justify-center rounded-xl border px-1 py-2 text-xs font-extrabold",
+                category === tab.key
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-card-border bg-card text-muted-foreground",
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
+
+        <p className="mb-3 rounded-2xl border border-card-border bg-card p-3 text-center text-[11px] font-bold leading-relaxed text-muted-foreground">
+          {CATEGORY_CRITERIA[category]}
+        </p>
 
         {data && (
           <section className="mb-3 rounded-2xl border border-card-border bg-card p-3">
@@ -185,11 +210,10 @@ export default function RecommendationsPage() {
             주세요.
           </StateBox>
         )}
-        {!query.isLoading && !query.isError && rows.length === 0 && (
+        {!query.isLoading && !query.isError && allRows.length === 0 && (
           <StateBox>
-            현재 조건을 충족하는{" "}
-            {category === "undervalued" ? "저평가" : "초기 추세돌파"} 후보가
-            없습니다. (조건 미달 종목으로 채우지 않습니다)
+            현재 조건에 해당하는 종목이 없습니다. (조건 미달 종목으로 채우지
+            않습니다)
           </StateBox>
         )}
 
@@ -204,6 +228,26 @@ export default function RecommendationsPage() {
             />
           ))}
         </div>
+
+        {allRows.length > PAGE_SIZE && (
+          <div className="mt-4 flex items-center justify-center gap-1.5">
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPage(p)}
+                className={cn(
+                  "h-9 w-9 rounded-xl border text-sm font-extrabold",
+                  safePage === p
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-card-border bg-card text-muted-foreground",
+                )}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <BottomNav />
     </div>

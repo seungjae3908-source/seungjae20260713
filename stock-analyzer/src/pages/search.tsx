@@ -4,12 +4,15 @@ import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Search, TrendingDown, TrendingUp, X, Star } from "lucide-react";
 import { BottomNav } from "@/components/bottom-nav";
-import { CoinInfo } from "@/pages/stock-info";
+import { apiGet } from "@/lib/api";
 import {
+  displayCoinName,
   displayStockName,
   formatAppPercent,
   formatAppPrice,
 } from "@/lib/stock-display";
+import { useAuth } from "@/lib/auth";
+import { memberGradeLabel, useMemberPermissions } from "@/lib/permissions";
 import { classifyStock, stockClassBadgeClass } from "@/lib/stock-classifier";
 import { readWatchlistItems, WATCHLIST_CHANGE_EVENT } from "@/lib/stock-display";
 import { cn } from "@/lib/utils";
@@ -97,6 +100,26 @@ const RANK_TABS: Array<{
     label: "급하락",
   },
 ];
+
+// 코인도 주식(국내/해외)과 같은 인터페이스: 시장 토글 + 검색 + 순위 탭 + 목록
+type CoinMarketTab = "spot" | "futures";
+
+const COIN_MARKET_TABS: Array<{ key: CoinMarketTab; label: string }> = [
+  { key: "spot", label: "코인 현물" },
+  { key: "futures", label: "코인 선물" },
+];
+
+// AI추천은 주식 전용 데이터라 코인 탭에서는 제외한다(가짜 추천 금지).
+const COIN_RANK_TABS = RANK_TABS.filter((item) => item.key !== "recommended");
+
+function coinRowDescription(row: AnyObj, rank: RankType, market: Market, sourceLabel: string): string {
+  if (rank === "volume") return `거래량 ${formatLargeNumber(row.volume ?? null, market)} · ${sourceLabel} 실시간 시세 기준입니다.`;
+  if (rank === "tradingValue") return `거래대금 ${formatLargeNumber(row.tradingValue ?? null, market)} · ${sourceLabel} 실시간 시세 기준입니다.`;
+  if (rank === "marketCap") return `시가총액 ${formatLargeNumber(row.marketCap ?? null, market)} 기준 상위 코인입니다.`;
+  return rank === "gainers"
+    ? `${sourceLabel} 등락률 기준 급상승 코인입니다.`
+    : `${sourceLabel} 등락률 기준 급하락 코인입니다.`;
+}
 
 function toNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -962,10 +985,16 @@ async function fetchWatchlistRows(items: ReturnType<typeof readWatchlistItems>):
 
 export default function SearchPage() {
   const [location, navigate] = useLocation();
+  const auth = useAuth();
+  const permissions = useMemberPermissions();
+  const canUseFutures = permissions.has("futures");
+  const authProfileForGrade = auth.profile;
 
   const [asset, setAsset] = useState<AssetTab>(initialAsset);
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [market, setMarket] = useState<Market>(initialMarket);
+  const [coinMarket, setCoinMarket] = useState<CoinMarketTab>(() =>
+    new URLSearchParams(window.location.search).get("coinMarket") === "futures" ? "futures" : "spot",
+  );
 
   const [rank, setRank] = useState<RankType>(initialRank);
 
@@ -981,13 +1010,14 @@ export default function SearchPage() {
     setAsset(params.get("asset") === "coin" ? "coin" : "stock");
     if (params.get("asset") !== "coin") {
       setMarket(params.get("market") === "US" ? "US" : "KR");
+    } else {
+      setCoinMarket(params.get("coinMarket") === "futures" ? "futures" : "spot");
+    }
+    const rankParam = params.get("rank");
+    if (rankParam && RANK_TABS.some((item) => item.key === rankParam)) {
+      setRank(rankParam as RankType);
     }
   }, [location]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     const refresh = () => setWatchItems(readWatchlistItems());
@@ -1045,6 +1075,79 @@ export default function SearchPage() {
     [trimmedQuery, searchQuery.data, rankingQuery.data],
   );
 
+  // 코인 시세: 다른 화면과 같은 공용 캐시 키를 사용해 중복 폴링을 막는다.
+  const spotMarkets = useQuery({
+    queryKey: ["stocks-crypto-spot-markets"],
+    queryFn: () => apiGet<AnyObj>("/crypto/spot/markets"),
+    enabled: asset === "coin" && coinMarket === "spot",
+    staleTime: 10 * 60_000,
+  });
+  const spotTickers = useQuery({
+    queryKey: ["crypto-spot-tickers"],
+    queryFn: () => apiGet<AnyObj>("/crypto/spot/tickers"),
+    enabled: asset === "coin" && coinMarket === "spot",
+    refetchInterval: 15_000,
+  });
+  const futuresTickers = useQuery({
+    queryKey: ["crypto-futures-tickers"],
+    queryFn: () => apiGet<AnyObj>("/crypto/futures/tickers"),
+    enabled: asset === "coin" && coinMarket === "futures" && canUseFutures,
+    refetchInterval: 10_000,
+  });
+
+  // 코인 탭은 AI추천이 없으므로 주식에서 넘어온 rank가 recommended면 거래대금으로 대체한다.
+  const coinRank: RankType = rank === "recommended" ? "tradingValue" : rank;
+
+  const coinRows = useMemo<AnyObj[]>(() => {
+    if (asset !== "coin") return [];
+    const names = new Map<string, AnyObj>(
+      ((spotMarkets.data?.markets ?? []) as AnyObj[]).map((row) => [String(row.symbol), row]),
+    );
+    const base: AnyObj[] =
+      coinMarket === "spot"
+        ? ((spotTickers.data?.tickers ?? []) as AnyObj[]).map((row) => ({ ...row, ...(names.get(String(row.symbol)) ?? {}) }))
+        : ((futuresTickers.data?.tickers ?? []) as AnyObj[]);
+
+    const num = (value: unknown) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    const normalized: AnyObj[] = base.map((row) => ({
+      ...row,
+      price: num(row.price),
+      changePercent: num(row.changePercent ?? row.changePercent24h),
+      volume: num(row.volume ?? row.volume24h),
+      tradingValue: num(row.tradingValue ?? row.tradingValue24h),
+      marketCap: num(row.marketCap),
+    }));
+
+    if (trimmedQuery) {
+      const needle = trimmedQuery.toLowerCase();
+      return normalized
+        .filter((row) =>
+          [row.symbol, row.koreanName, row.englishName, displayCoinName(String(row.symbol), row.koreanName, row.englishName)]
+            .some((value) => String(value ?? "").toLowerCase().includes(needle)),
+        )
+        .slice(0, 30);
+    }
+
+    const metric =
+      coinRank === "gainers" || coinRank === "losers" ? "changePercent" : coinRank;
+    const sorted = normalized
+      .filter((row) => (coinRank === "marketCap" ? row.marketCap != null : true))
+      .sort((a, b) => {
+        const left = (a as AnyObj)[metric] ?? -Infinity;
+        const right = (b as AnyObj)[metric] ?? -Infinity;
+        return coinRank === "losers" ? left - right : right - left;
+      });
+    return sorted.slice(0, 30);
+  }, [asset, coinMarket, coinRank, futuresTickers.data, spotMarkets.data, spotTickers.data, trimmedQuery]);
+
+  const coinTickerQuery = coinMarket === "spot" ? spotTickers : futuresTickers;
+  // 스팟은 KRW(억/조), 선물은 USDT(K/M/B) 단위로 표기한다.
+  const coinNumberMarket: Market = coinMarket === "spot" ? "KR" : "US";
+  const coinSourceLabel = coinMarket === "spot" ? "업비트" : "비트겟";
+
   const isLoading = trimmedQuery
     ? searchQuery.isLoading
     : rankingQuery.isLoading;
@@ -1062,7 +1165,7 @@ export default function SearchPage() {
       return;
     }
 
-    navigate("/search?asset=coin&coinMarket=spot");
+    navigate(`/search?asset=coin&coinMarket=spot&rank=${rank}`);
   };
 
   const handleMarketChange = (nextMarket: Market) => {
@@ -1071,10 +1174,19 @@ export default function SearchPage() {
     navigate(`/search?asset=stock&market=${nextMarket}&rank=${rank}`);
   };
 
-  const handleRankChange = (nextRank: RankType) => {
-    setRank(nextRank);
+  const handleCoinMarketChange = (nextMarket: CoinMarketTab) => {
+    setCoinMarket(nextMarket);
+    navigate(`/search?asset=coin&coinMarket=${nextMarket}&rank=${rank}`);
+  };
 
-    navigate(`/search?asset=stock&market=${market}&rank=${nextRank}`);
+  // 순위 버튼은 같은 화면에 목록을 펼치지 않고 순위 전용 전체 화면으로 이동한다.
+  const handleRankChange = (nextRank: RankType) => {
+    if (asset === "coin") {
+      navigate(`/coins/${coinMarket}/ranking/${nextRank}`);
+      return;
+    }
+    const categoryPath = nextRank === "recommended" ? "ai" : nextRank;
+    navigate(`/stocks/${market.toLowerCase()}/ranking/${categoryPath}`);
   };
 
   const openDetail = (row: StockRow) => {
@@ -1088,7 +1200,7 @@ export default function SearchPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background">
       <header className="relative z-30 shrink-0 border-b border-card-border bg-background/95 px-4 pb-3 pt-5 backdrop-blur">
-        <h1 className="text-center text-2xl font-extrabold">종목</h1>
+        <h1 className="text-center text-xl font-extrabold">종목</h1>
 
         <div className="mt-4 grid grid-cols-2 gap-2">
           <button
@@ -1147,20 +1259,6 @@ export default function SearchPage() {
               </button>
             </div>
 
-            <div className="relative mt-3">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={
-                  market === "KR"
-                    ? "국내 종목명 또는 종목코드 검색"
-                    : "해외 종목명 또는 티커 검색"
-                }
-                className="h-12 w-full rounded-2xl border border-card-border bg-card pl-10 pr-4 text-sm font-bold outline-none placeholder:text-muted-foreground focus:border-primary"
-              />
-            </div>
-
             {!trimmedQuery && (
               <div className="mt-3 grid grid-cols-3 gap-2">
                 {RANK_TABS.map((item) => (
@@ -1180,12 +1278,229 @@ export default function SearchPage() {
                 ))}
               </div>
             )}
+
+            <div className="relative mt-3">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder=""
+                className="h-12 w-full rounded-2xl border border-card-border bg-card pl-10 pr-12 text-sm font-bold outline-none focus:border-primary"
+              />
+              {query && (
+                <button type="button" onClick={() => setQuery("")} aria-label="검색어 지우기" className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground">
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </>
+        )}
+
+        {asset === "coin" && (
+          <>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {COIN_MARKET_TABS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => handleCoinMarketChange(item.key)}
+                  className={cn(
+                    "inline-flex items-center justify-center rounded-2xl border px-3 py-2.5 text-center text-sm font-extrabold",
+                    coinMarket === item.key
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-card-border bg-card text-muted-foreground",
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            {!trimmedQuery && (
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                {COIN_RANK_TABS.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => handleRankChange(item.key)}
+                    className={cn(
+                      "inline-flex min-w-0 items-center justify-center rounded-2xl border px-2 py-2.5 text-center text-[11px] font-extrabold",
+                      coinRank === item.key
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-card-border bg-card text-muted-foreground",
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="relative mt-3">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder=""
+                className="h-12 w-full rounded-2xl border border-card-border bg-card pl-10 pr-12 text-sm font-bold outline-none focus:border-primary"
+              />
+              {query && (
+                <button type="button" onClick={() => setQuery("")} aria-label="검색어 지우기" className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground">
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           </>
         )}
       </header>
 
-      {asset === "coin" ? (
-        <CoinInfo nowMs={nowMs} basePath="/search" />
+      {asset === "coin" && coinMarket === "futures" && !canUseFutures ? (
+        <main className="flex-none px-4 pb-24 pt-4">
+          <section className="rounded-3xl border border-card-border bg-card p-8 text-center">
+            <p className="text-2xl">🔒</p>
+            <p className="mt-3 text-sm font-black">코인 선물은 정회원 이상만 볼 수 있습니다</p>
+            <p className="mt-2 text-xs font-bold text-muted-foreground">
+              현재 등급: {memberGradeLabel(authProfileForGrade)} · 등급 변경은 관리자에게 문의해 주세요.
+            </p>
+            <button
+              type="button"
+              onClick={() => handleCoinMarketChange("spot")}
+              className="mt-4 rounded-2xl bg-primary px-5 py-3 text-sm font-black text-primary-foreground"
+            >
+              코인 현물 보기
+            </button>
+          </section>
+        </main>
+      ) : asset === "coin" ? (
+        <main className="flex-none px-4 pb-24 pt-4">
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-extrabold">
+                {trimmedQuery ? "검색 결과" : rankTitle(coinRank)}
+              </h2>
+              <p className="mt-1 text-xs font-bold text-muted-foreground">
+                {coinMarket === "spot" ? "코인 현물 · 업비트" : "코인 선물 · 비트겟"} · {coinRows.length}개
+              </p>
+            </div>
+            {!trimmedQuery && (
+              <p className="text-[10px] font-bold text-muted-foreground">
+                실시간 갱신
+              </p>
+            )}
+          </div>
+
+          {coinTickerQuery.isLoading && (
+            <section className="rounded-3xl border border-card-border bg-card p-8 text-center">
+              <p className="text-sm font-bold text-muted-foreground">
+                코인 데이터를 불러오는 중...
+              </p>
+            </section>
+          )}
+
+          {coinTickerQuery.isError && (
+            <section className="rounded-3xl border border-destructive/30 bg-card p-8 text-center">
+              <p className="break-keep text-sm font-bold text-destructive">
+                코인 데이터를 불러오지 못했습니다. 잠시 후 새로고침해 주세요.
+              </p>
+            </section>
+          )}
+
+          {!coinTickerQuery.isLoading && !coinTickerQuery.isError && !coinRows.length && (
+            <section className="rounded-3xl border border-card-border bg-card p-8 text-center">
+              <p className="text-sm font-bold text-muted-foreground">
+                표시할 코인이 없습니다.
+              </p>
+            </section>
+          )}
+
+          <div className="space-y-3">
+            {coinRows.map((row, index) => {
+              const symbol = String(row.symbol ?? "");
+              const coinName = displayCoinName(symbol, row.koreanName, row.englishName);
+              const positive = (row.changePercent ?? 0) >= 0;
+              return (
+                <button
+                  key={`${coinMarket}:${symbol}`}
+                  type="button"
+                  onClick={() => navigate(`/stock-info?asset=coin&coinMarket=${coinMarket}&symbol=${encodeURIComponent(symbol)}`)}
+                  className="w-full rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm transition active:scale-[0.99]"
+                >
+                  <div className="grid grid-cols-[36px_minmax(0,1fr)_auto] items-start gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-sm font-extrabold text-primary">
+                      {index + 1}
+                    </div>
+
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <p className="truncate text-base font-extrabold">
+                          {coinName}
+                        </p>
+                        <span className="shrink-0 rounded-full border border-card-border px-2 py-0.5 text-[10px] font-extrabold text-muted-foreground">
+                          {coinMarket === "spot" ? "현물" : "선물"}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[11px] font-bold text-muted-foreground">
+                        {symbol}
+                      </p>
+                    </div>
+
+                    <div className="shrink-0 text-right">
+                      <p className="text-sm font-extrabold">
+                        {row.price == null ? "데이터 없음" : formatAppPrice(row.price, coinMarket === "spot" ? "KRW" : "USDT")}
+                      </p>
+                      <p
+                        className={cn(
+                          "mt-1 flex items-center justify-end gap-1 text-xs font-extrabold",
+                          positive ? "text-positive" : "text-destructive",
+                        )}
+                      >
+                        {positive ? (
+                          <TrendingUp className="h-3.5 w-3.5" />
+                        ) : (
+                          <TrendingDown className="h-3.5 w-3.5" />
+                        )}
+                        {formatAppPercent(row.changePercent)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-2xl bg-secondary/60 px-3 py-2.5">
+                    <p className="break-keep text-[11px] font-bold leading-relaxed text-muted-foreground">
+                      {coinRowDescription(row, coinRank, coinNumberMarket, coinSourceLabel)}
+                    </p>
+                  </div>
+
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    <div className="rounded-xl bg-secondary/40 px-2 py-2">
+                      <p className="text-[9px] font-bold text-muted-foreground">
+                        거래량
+                      </p>
+                      <p className="mt-1 text-xs font-extrabold">
+                        {formatLargeNumber(row.volume, coinNumberMarket)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-secondary/40 px-2 py-2">
+                      <p className="text-[9px] font-bold text-muted-foreground">
+                        거래대금
+                      </p>
+                      <p className="mt-1 text-xs font-extrabold">
+                        {formatLargeNumber(row.tradingValue, coinNumberMarket)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-secondary/40 px-2 py-2">
+                      <p className="text-[9px] font-bold text-muted-foreground">
+                        시총
+                      </p>
+                      <p className="mt-1 text-xs font-extrabold">
+                        {formatLargeNumber(row.marketCap, coinNumberMarket)}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </main>
       ) : (
       <main className="flex-none px-4 pb-24 pt-4">
         <div className="mb-3 flex items-end justify-between gap-3">

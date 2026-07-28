@@ -10,10 +10,22 @@ export type Timeframe =
 	| '15m'
 	| '30m'
 	| '60m'
+	| '1H'
 	| '4H'
+	| '12H'
 	| '1D'
+	| '3D'
+	| '5D'
+	| '15D'
 	| '1W'
-	| '1M';
+	| '1M'
+	| '3M'
+	| '6M'
+	| '1Y'
+	| '3Y'
+	| '5Y'
+	| '10Y'
+	| 'ALL';
 
 export type Rating =
 	| 'STRONG_BUY'

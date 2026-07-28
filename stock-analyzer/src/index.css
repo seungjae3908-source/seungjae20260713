@@ -202,4 +202,16 @@ input[type='search']::-webkit-search-results-decoration {
   [role='tablist'] {
     justify-content: flex-start;
   }
+
+  input,
+  textarea,
+  select {
+    text-align: center;
+  }
+
+  /* 각 화면의 기존 뒤로가기 버튼은 숨기고 AppShell 공통 버튼 하나만 사용합니다. */
+  [aria-label='뒤로'],
+  [aria-label='뒤로가기'] {
+    display: none !important;
+  }
 }

@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'wouter';
 import {
   Bell,
@@ -11,6 +11,7 @@ import {
 import { useAlertFeed } from '@/hooks/use-stock-data';
 import { BottomNav } from '@/components/bottom-nav';
 import { LoadingState, ErrorState } from '@/components/data-state';
+import { UnifiedNotificationSettings } from '@/components/unified-notification-settings';
 import { apiGet, type MarketAlert } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { classifyAlert, NOTIFICATION_LABELS } from '@/lib/notifications';
@@ -19,7 +20,20 @@ import { cn } from '@/lib/utils';
 type MarketTab = 'KR' | 'US';
 type ToneTab = 'all' | 'positive' | 'negative';
 type SourceTab = 'mine' | 'market';
-type NotificationHistoryRow = { id: string; notification_type: string; title: string; body: string; url: string | null; channel: string; read_at: string | null; created_at: string };
+type NotificationHistoryRow = {
+  id: string;
+  notification_type: string;
+  title: string;
+  body: string;
+  url: string | null;
+  channel: string;
+  read_at: string | null;
+  created_at: string;
+  asset_type?: string | null;
+  symbol?: string | null;
+  signal_id?: string | null;
+  importance?: string | null;
+};
 
 const IMPORTANCE: Record<
   MarketAlert['importance'],
@@ -125,12 +139,10 @@ export default function AlertsPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background">
       <header className="relative z-20 border-b border-card-border bg-background/90 px-4 pb-0 pt-4 backdrop-blur">
-        <div className="mb-3 flex items-center gap-2">
-          <Bell className="h-5 w-5 text-ai" />
-          <h1 className="text-xl font-bold">알림</h1>
-          <span className="ml-auto text-[11px] text-muted-foreground">
-            전체 종목 신호
-          </span>
+        <div className="mb-3 grid grid-cols-[32px_1fr_32px] items-center">
+          <Bell className="mx-auto h-5 w-5 text-ai" />
+          <h1 className="text-center text-xl font-extrabold">알림</h1>
+          <span />
         </div>
 
         <div className="mb-2 grid grid-cols-2 gap-2">
@@ -183,7 +195,17 @@ export default function AlertsPage() {
 
       <main className="flex-none p-3 pb-20">
         {source === 'mine' ? (
-          <NotificationHistoryList query={history} />
+          <div className="space-y-3">
+            <details className="rounded-2xl border border-card-border bg-card p-3">
+              <summary className="cursor-pointer text-center text-xs font-black">
+                내 알림 설정
+              </summary>
+              <div className="mt-3">
+                <UnifiedNotificationSettings />
+              </div>
+            </details>
+            <NotificationHistoryList query={history} />
+          </div>
         ) : (<>
         {feed.isLoading && <LoadingState label="시장 신호 수집 중..." />}
 
@@ -215,16 +237,91 @@ export default function AlertsPage() {
 }
 
 function NotificationHistoryList({ query }: { query: { data?: { notifications: NotificationHistoryRow[] }; isLoading: boolean; isError: boolean; refetch: () => unknown } }) {
+  const queryClient = useQueryClient();
+  const [markingAll, setMarkingAll] = useState(false);
   if (query.isLoading) return <LoadingState label="내 알림 이력을 불러오는 중입니다." />;
   if (query.isError) return <ErrorState onRetry={() => query.refetch()} />;
   const rows = query.data?.notifications ?? [];
   if (!rows.length) return <p className="py-16 text-center text-sm font-bold text-muted-foreground">아직 저장된 내 알림이 없습니다.</p>;
   const markRead = async (row: NotificationHistoryRow) => {
-    if (!row.read_at) await authorizedFetch(`/api/notifications/history/${encodeURIComponent(row.id)}/read`, { method: 'PATCH' });
-    if (row.url) window.location.href = row.url;
-    else await query.refetch();
+    if (!row.read_at) {
+      const response = await authorizedFetch(
+        `/api/notifications/history/${encodeURIComponent(row.id)}/read`,
+        { method: 'PATCH' },
+      );
+      if (!response.ok) return;
+      await queryClient.invalidateQueries({ queryKey: ['notification-history'] });
+    }
+    const fallbackUrl =
+      row.asset_type && row.symbol
+        ? `/tech/chart-relay?asset=${encodeURIComponent(row.asset_type)}&symbol=${encodeURIComponent(row.symbol)}&interval=5m`
+        : null;
+    if (row.url || fallbackUrl) window.location.href = row.url || fallbackUrl!;
   };
-  return <div className="space-y-2">{rows.map((row) => <button key={row.id} type="button" onClick={() => void markRead(row)} className={cn('w-full rounded-2xl border p-3 text-left', row.read_at ? 'border-card-border bg-card' : 'border-primary/40 bg-primary/5')}><div className="flex items-start gap-3"><Bell className={cn('mt-0.5 h-4 w-4 shrink-0', row.read_at ? 'text-muted-foreground' : 'text-primary')} /><div className="min-w-0 flex-1"><p className="break-keep text-sm font-black">{row.title}</p><p className="mt-1 break-keep text-xs font-bold leading-relaxed text-muted-foreground">{row.body || '내용 없음'}</p><p className="mt-2 text-[10px] font-bold text-muted-foreground">{row.notification_type} · {row.channel} · {relTime(row.created_at)}</p></div>{row.url && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}</div></button>)}</div>;
+
+  const markAll = async () => {
+    setMarkingAll(true);
+    try {
+      const response = await authorizedFetch('/api/notifications/history/read-all', {
+        method: 'PATCH',
+      });
+      if (response.ok) {
+        await queryClient.invalidateQueries({ queryKey: ['notification-history'] });
+      }
+    } finally {
+      setMarkingAll(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {rows.some((row) => !row.read_at) && (
+        <button
+          type="button"
+          onClick={() => void markAll()}
+          disabled={markingAll}
+          className="w-full rounded-xl border border-card-border bg-card py-2 text-xs font-black disabled:opacity-50"
+        >
+          {markingAll ? '읽음 처리 중' : '전체 읽음'}
+        </button>
+      )}
+      {rows.map((row) => (
+        <button
+          key={row.id}
+          type="button"
+          onClick={() => void markRead(row)}
+          className={cn(
+            'w-full rounded-2xl border p-3 text-left',
+            row.read_at
+              ? 'border-card-border bg-card'
+              : 'border-primary/40 bg-primary/5',
+          )}
+        >
+          <div className="flex items-start gap-3">
+            <Bell
+              className={cn(
+                'mt-0.5 h-4 w-4 shrink-0',
+                row.read_at ? 'text-muted-foreground' : 'text-primary',
+              )}
+            />
+            <div className="min-w-0 flex-1">
+              <p className="break-keep text-sm font-black">{row.title}</p>
+              <p className="mt-1 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
+                {row.body || '내용 없음'}
+              </p>
+              <p className="mt-2 text-[10px] font-bold text-muted-foreground">
+                {row.importance ? `${row.importance} · ` : ''}
+                {row.notification_type} · {row.channel} · {relTime(row.created_at)}
+              </p>
+            </div>
+            {(row.url || (row.asset_type && row.symbol)) && (
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+            )}
+          </div>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function MarketButton({

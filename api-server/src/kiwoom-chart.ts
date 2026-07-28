@@ -441,6 +441,7 @@ function dedupeAndSort(
 function aggregateCandles(
   rows: KiwoomChartCandle[],
   size: number,
+  keepTradingDaysSeparate = false,
 ): KiwoomChartCandle[] {
   if (
     size <= 1 ||
@@ -450,47 +451,58 @@ function aggregateCandles(
   }
 
   const result: KiwoomChartCandle[] = [];
+  const sourceGroups = keepTradingDaysSeparate
+    ? [...rows.reduce((groups, row) => {
+        const day = String(row.time).replace(/\D/g, '').slice(0, 8);
+        const group = groups.get(day) ?? [];
+        group.push(row);
+        groups.set(day, group);
+        return groups;
+      }, new Map<string, KiwoomChartCandle[]>()).values()]
+    : [rows];
 
-  for (
-    let index = 0;
-    index < rows.length;
-    index += size
-  ) {
-    const chunk = rows.slice(
-      index,
-      index + size,
-    );
+  for (const sourceRows of sourceGroups) {
+    for (
+      let index = 0;
+      index < sourceRows.length;
+      index += size
+    ) {
+      const chunk = sourceRows.slice(
+        index,
+        index + size,
+      );
 
-    if (chunk.length === 0) {
-      continue;
+      if (chunk.length === 0) {
+        continue;
+      }
+
+      result.push({
+        time: chunk[0].time,
+
+        open: chunk[0].open,
+
+        high: Math.max(
+          ...chunk.map(
+            (item) => item.high,
+          ),
+        ),
+
+        low: Math.min(
+          ...chunk.map(
+            (item) => item.low,
+          ),
+        ),
+
+        close:
+          chunk[chunk.length - 1].close,
+
+        volume: chunk.reduce(
+          (sum, item) =>
+            sum + item.volume,
+          0,
+        ),
+      });
     }
-
-    result.push({
-      time: chunk[0].time,
-
-      open: chunk[0].open,
-
-      high: Math.max(
-        ...chunk.map(
-          (item) => item.high,
-        ),
-      ),
-
-      low: Math.min(
-        ...chunk.map(
-          (item) => item.low,
-        ),
-      ),
-
-      close:
-        chunk[chunk.length - 1].close,
-
-      volume: chunk.reduce(
-        (sum, item) =>
-          sum + item.volume,
-        0,
-      ),
-    });
   }
 
   return result;
@@ -525,6 +537,7 @@ function requestSpec(
     "30m": "30",
     "1H": "60",
     "4H": "60",
+    "12H": "60",
   };
 
   if (minuteScope[tf]) {
@@ -553,6 +566,8 @@ function requestSpec(
       aggregateSize:
         tf === "4H"
           ? 4
+          : tf === "12H"
+            ? 12
           : 1,
     };
   }
@@ -577,7 +592,7 @@ function requestSpec(
     };
   }
 
-  if (tf === "1M") {
+  if (tf === "1M" || tf === "3M" || tf === "6M") {
     return {
       apiId: "ka10083",
 
@@ -590,10 +605,16 @@ function requestSpec(
       },
 
       maxPages: 100,
+      aggregateSize:
+        tf === "3M"
+          ? 3
+          : tf === "6M"
+            ? 6
+            : 1,
     };
   }
 
-  if (tf === "1Y") {
+  if (tf === "1Y" || tf === "3Y" || tf === "5Y" || tf === "10Y") {
     return {
       apiId: "ka10094",
 
@@ -606,6 +627,14 @@ function requestSpec(
       },
 
       maxPages: 60,
+      aggregateSize:
+        tf === "3Y"
+          ? 3
+          : tf === "5Y"
+            ? 5
+            : tf === "10Y"
+              ? 10
+              : 1,
     };
   }
 
@@ -614,6 +643,8 @@ function requestSpec(
       ? 3
       : tf === "5D"
         ? 5
+        : tf === "15D"
+          ? 15
         : tf === "10D"
           ? 10
           : 1;
@@ -748,6 +779,7 @@ async function fetchAllPages(
 export async function getKiwoomChartCandles(
   tickerValue: string,
   timeframeValue = "1D",
+  maxPagesOverride?: number,
 ): Promise<KiwoomChartCandle[]> {
   if (!isKiwoomConfigured()) {
     throw new Error(
@@ -773,10 +805,21 @@ export async function getKiwoomChartCandles(
       timeframeValue,
     );
 
-  const spec = requestSpec(
+  const baseSpec = requestSpec(
     ticker,
     timeframe,
   );
+  const spec =
+    Number.isFinite(maxPagesOverride) &&
+    Number(maxPagesOverride) > 0
+      ? {
+          ...baseSpec,
+          maxPages: Math.min(
+            baseSpec.maxPages,
+            Math.max(1, Math.floor(Number(maxPagesOverride))),
+          ),
+        }
+      : baseSpec;
 
   const rows =
     await fetchAllPages(spec);
@@ -785,6 +828,7 @@ export async function getKiwoomChartCandles(
     aggregateCandles(
       rows,
       spec.aggregateSize ?? 1,
+      timeframe === "4H" || timeframe === "12H",
     );
 
   if (

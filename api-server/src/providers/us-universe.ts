@@ -157,7 +157,8 @@ export async function getUsUniverse(): Promise<UsUniverseEntry[]> {
 		token,
 	)}`;
 
-	const res = await fetch(url);
+	// 타임아웃 없는 fetch는 상류 지연 시 서버 전체를 붙잡을 수 있어 15초 제한을 둡니다.
+const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
 
 	if (!res.ok) {
 		console.error('[us-universe] Finnhub failed:', res.status, res.statusText);
