@@ -3,6 +3,11 @@ import path from 'node:path';
 import { Router, type IRouter } from 'express';
 import * as naver from '../providers/naver';
 import * as yahoo from '../providers/yahoo';
+import {
+  clearApiResilienceCache,
+  getApiResilienceSnapshot,
+  resilientCall,
+} from '../lib/api-resilience';
 
 const router: IRouter = Router();
 
@@ -50,6 +55,13 @@ function safeRead(filePath: string) {
   }
 }
 
+function validQuote(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const row = value as Record<string, unknown>;
+  const price = Number(row.price ?? row.currentPrice ?? row.regularMarketPrice ?? 0);
+  return Number.isFinite(price) && price > 0;
+}
+
 async function testOneTicker(ticker: string) {
   const clean = normalizeTicker(ticker);
 
@@ -62,11 +74,24 @@ async function testOneTicker(ticker: string) {
 
   if (isKrTicker(clean)) {
     try {
-      const naverQuote = await naver.getQuote(clean);
+      const response = await resilientCall({
+        provider: 'naver',
+        key: `debug-quote:${clean}`,
+        operation: () => naver.getQuote(clean),
+        timeoutMs: 5_000,
+        retries: 1,
+        cacheTtlMs: 3_000,
+        staleTtlMs: 60_000,
+        validate: validQuote,
+      });
 
       result.naver = {
         ok: true,
-        quote: naverQuote,
+        source: response.source,
+        isStale: response.isStale,
+        fetchedAt: response.fetchedAt,
+        staleAgeMs: response.staleAgeMs,
+        quote: response.value,
       };
     } catch (error) {
       result.naver = {
@@ -82,11 +107,24 @@ async function testOneTicker(ticker: string) {
   }
 
   try {
-    const yahooQuote = await yahoo.getQuote(clean);
+    const response = await resilientCall({
+      provider: 'yahoo',
+      key: `debug-quote:${clean}`,
+      operation: () => yahoo.getQuote(clean),
+      timeoutMs: 5_000,
+      retries: 1,
+      cacheTtlMs: 3_000,
+      staleTtlMs: 60_000,
+      validate: validQuote,
+    });
 
     result.yahoo = {
       ok: true,
-      quote: yahooQuote,
+      source: response.source,
+      isStale: response.isStale,
+      fetchedAt: response.fetchedAt,
+      staleAgeMs: response.staleAgeMs,
+      quote: response.value,
     };
   } catch (error) {
     result.yahoo = {
@@ -104,7 +142,8 @@ router.get('/provider', async (req, res) => {
   const tickers = raw
     .split(',')
     .map((ticker) => normalizeTicker(ticker))
-    .filter(Boolean);
+    .filter(Boolean)
+    .slice(0, 20);
 
   const results = await Promise.all(tickers.map((ticker) => testOneTicker(ticker)));
 
@@ -113,6 +152,29 @@ router.get('/provider', async (req, res) => {
     testedAt: new Date().toISOString(),
     cwd: process.cwd(),
     results,
+    resilience: getApiResilienceSnapshot(),
+  });
+});
+
+// GET /api/debug/resilience
+router.get('/resilience', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.json({
+    ok: true,
+    checkedAt: new Date().toISOString(),
+    ...getApiResilienceSnapshot(),
+  });
+});
+
+// POST /api/debug/resilience/cache/clear?provider=naver
+router.post('/resilience/cache/clear', (req, res) => {
+  const provider = String(req.query.provider ?? '').trim() || undefined;
+  const removed = clearApiResilienceCache(provider);
+  res.json({
+    ok: true,
+    provider: provider ?? 'all',
+    removed,
+    clearedAt: new Date().toISOString(),
   });
 });
 
