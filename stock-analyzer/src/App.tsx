@@ -24,6 +24,7 @@ import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
 import { OfflineBanner } from '@/components/offline-banner';
 import { PageFallback } from '@/components/data-state';
 import { AutoBackupSync } from '@/lib/backup-sync';
+import { ApiError } from '@/lib/api';
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
 import DetailPage from '@/pages/detail';
@@ -57,11 +58,20 @@ const NotFound = lazy(() => import('@/pages/not-found'));
 const queryClient = new QueryClient({
 	defaultOptions: {
 		queries: {
-			refetchOnWindowFocus: true,
+			// 화면 복귀마다 전체 API를 다시 호출하지 않고, 짧은 신선도 구간 동안
+			// 직전 데이터를 유지해 로딩 깜빡임과 공급자 요청 폭주를 막습니다.
+			refetchOnWindowFocus: false,
 			refetchOnReconnect: true,
-			staleTime: 0,
+			staleTime: 30_000,
 			gcTime: 30 * 60 * 1000,
-			retry: 2,
+			placeholderData: (previousData: unknown) => previousData,
+			retry: (failureCount, error) => {
+				if (error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 425 && error.status !== 429) {
+					return false;
+				}
+				return failureCount < 1;
+			},
+			retryDelay: 1_000,
 		},
 	},
 });
