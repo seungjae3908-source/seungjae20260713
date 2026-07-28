@@ -28,6 +28,7 @@ import {
 } from "lightweight-charts";
 import { BottomNav } from "@/components/bottom-nav";
 import { PriceAlertCard } from "@/components/price-alert-card";
+import { PaperTradingWorkbench } from "@/components/paper-trading-workbench";
 import { buildAiInsights } from "@/lib/ai-insights";
 import {
   displayStockName,
@@ -59,6 +60,7 @@ type DetailTab =
   | "overview"
   | "ai"
   | "chart"
+  | "trading"
   | "financials"
   | "filings"
   | "news";
@@ -135,6 +137,7 @@ const TABS: Array<{ key: DetailTab; label: string }> = [
   { key: "overview", label: "개요" },
   { key: "ai", label: "AI분석" },
   { key: "chart", label: "차트" },
+  { key: "trading", label: "호가·모의" },
   { key: "financials", label: "재무제표" },
   { key: "filings", label: "공시" },
   { key: "news", label: "뉴스" },
@@ -1699,6 +1702,16 @@ export default function DetailPage() {
             studyId={studyId}
             basicOnly={!permissions.canUseAdvancedAnalysis}
             showAutoTradingData={permissions.canUseAutoTrading}
+          />
+        )}
+
+        {permissions.canUseAdvancedAnalysis && data && tab === "trading" && (
+          <PaperTradingWorkbench
+            asset="stock"
+            market={market}
+            symbol={ticker}
+            currentPrice={currentPrice}
+            bars={data.candles as any}
           />
         )}
 
