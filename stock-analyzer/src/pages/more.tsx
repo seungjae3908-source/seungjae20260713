@@ -332,12 +332,12 @@ export default function MorePage() {
   };
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-background">
-      <header className="border-b border-card-border bg-background px-5 py-5">
+    <div data-ui-page="settings" className="h-full min-h-0 overflow-y-auto overscroll-contain bg-background">
+      <header data-ui-component="settings.header" className="border-b border-card-border bg-background px-5 py-5">
           <h1 className="text-center text-2xl font-black tracking-tight">설정</h1>
       </header>
 
-        <main className="space-y-5 px-5 py-5 pb-28">
+        <main data-ui-component="settings.screen" className="space-y-5 px-5 py-5 pb-28">
           <>
           <button
             type="button"
