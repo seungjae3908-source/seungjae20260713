@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+
+set -u
+
+REPO="seungjae3908-source/seungjae20260713"
+BRANCH="feature/detail-realtime-chart-integration"
+STAGE="$(mktemp -d /tmp/stock-ops-install.XXXXXX)" || exit 1
+
+FILES=(
+  "ops/stockdeploy"
+  "ops/stock-health-watch"
+  "ops/install-stock-ops"
+  "ops/systemd/stock-health-watch.service"
+  "ops/systemd/stock-health-watch.timer"
+)
+
+if ! gh auth status >/dev/null 2>&1; then
+  echo "FAILED: GitHub 로그인이 필요합니다."
+  exit 1
+fi
+
+for relative in "${FILES[@]}"; do
+  target="$STAGE/${relative#ops/}"
+  mkdir -p "$(dirname "$target")" || exit 1
+
+  if ! gh api --method GET     "repos/$REPO/contents/$relative"     -f "ref=$BRANCH"     -H "Accept: application/vnd.github.raw+json" >"$target"; then
+    echo "FAILED: 다운로드 실패 $relative"
+    exit 1
+  fi
+
+  if [ ! -s "$target" ]; then
+    echo "FAILED: 빈 파일 $relative"
+    exit 1
+  fi
+done
+
+for script in stockdeploy stock-health-watch install-stock-ops; do
+  if ! bash -n "$STAGE/$script"; then
+    echo "FAILED: 문법 검사 $script"
+    exit 1
+  fi
+  chmod 750 "$STAGE/$script"
+done
+
+if ! bash "$STAGE/install-stock-ops"; then
+  echo "FAILED: 자동복구 도구 설치 실패"
+  exit 1
+fi
+
+echo "AUTO_RECOVERY_INSTALLED"
+echo "CHECK_INTERVAL=2min"
+echo "FIRST_FAILURE_ACTION=pm2_restart_with_env"
+echo "THIRD_FAILURE_ACTION=last_good_rollback"
+systemctl is-enabled stock-health-watch.timer 2>/dev/null || true
+systemctl is-active stock-health-watch.timer 2>/dev/null || true
