@@ -126,6 +126,20 @@ let tokenCache: {
   expiresAt: number;
 } | null = null;
 
+// 서버 시작 직후 여러 요청이 동시에 들어와도 토큰 발급은 한 번만 수행한다.
+let tokenIssueInflight: Promise<string> | null = null;
+
+// 키움 토큰 발급 한도 초과 시 모든 요청이 재발급을 반복하지 않도록 막는다.
+let tokenIssueCooldownUntil = 0;
+
+// 일반 API가 429를 반환하면 후속 요청도 같은 대기 시간을 공유한다.
+let requestRateLimitUntil = 0;
+
+const TOKEN_REFRESH_SAFETY_MS = 5 * 60 * 1000;
+const TOKEN_FALLBACK_SAFETY_MS = 60 * 1000;
+const TOKEN_ISSUE_COOLDOWN_MS = 5 * 60 * 1000;
+const REQUEST_RATE_LIMIT_MAX_BACKOFF_MS = 12_000;
+
 let requestQueue: Promise<void> = Promise.resolve();
 let nextRequestAt = 0;
 
@@ -141,11 +155,22 @@ async function waitForRequestSlot(): Promise<void> {
   });
 
   await previous;
-  const minimumInterval = isMockMode() ? 260 : 240;
-  const wait = Math.max(0, nextRequestAt - Date.now());
-  if (wait > 0) await sleep(wait);
-  nextRequestAt = Date.now() + minimumInterval;
-  release();
+
+  try {
+    const rateLimitWait = Math.max(
+      0,
+      requestRateLimitUntil - Date.now(),
+    );
+    if (rateLimitWait > 0) await sleep(rateLimitWait);
+
+    const minimumInterval = isMockMode() ? 260 : 240;
+    const requestWait = Math.max(0, nextRequestAt - Date.now());
+    if (requestWait > 0) await sleep(requestWait);
+
+    nextRequestAt = Date.now() + minimumInterval;
+  } finally {
+    release();
+  }
 }
 
 function isMockMode(): boolean {
@@ -318,6 +343,36 @@ function returnMessage(
     : "알 수 없는 키움 API 오류";
 }
 
+function tokenIsUsable(safetyMs: number): boolean {
+  return Boolean(
+    tokenCache &&
+      Date.now() < tokenCache.expiresAt - safetyMs,
+  );
+}
+
+function isRateLimitResponse(
+  response: Response,
+  data: Record<string, unknown>,
+): boolean {
+  const message = returnMessage(data);
+
+  return (
+    response.status === 429 ||
+    returnCode(data) === 1700 ||
+    /요청 개수|too many|rate limit/i.test(message)
+  );
+}
+
+function rateLimitBackoffMs(attempt: number): number {
+  const exponential = 800 * Math.pow(2, attempt);
+  const jitter = Math.floor(Math.random() * 250);
+
+  return Math.min(
+    REQUEST_RATE_LIMIT_MAX_BACKOFF_MS,
+    exponential + jitter,
+  );
+}
+
 export function clearKiwoomTokenCache(): void {
   tokenCache = null;
 }
@@ -357,27 +412,40 @@ export function getKiwoomStatus() {
         process.env.KIWOOM_PROXY_KEY?.trim(),
       ),
 
-    tokenCached: Boolean(
-      tokenCache &&
-        Date.now() <
-          tokenCache.expiresAt - 60_000,
+    tokenCached: tokenIsUsable(60_000),
+
+    tokenIssueInFlight: tokenIssueInflight !== null,
+
+    tokenIssueCooldownMs: Math.max(
+      0,
+      tokenIssueCooldownUntil - Date.now(),
+    ),
+
+    requestRateLimitCooldownMs: Math.max(
+      0,
+      requestRateLimitUntil - Date.now(),
     ),
   };
 }
 
-export async function getKiwoomToken(): Promise<string> {
-  if (
-    tokenCache &&
-    Date.now() <
-      tokenCache.expiresAt -
-        5 * 60 * 1000
-  ) {
-    return tokenCache.token;
+async function issueKiwoomToken(): Promise<string> {
+  const now = Date.now();
+
+  if (now < tokenIssueCooldownUntil) {
+    if (tokenIsUsable(TOKEN_FALLBACK_SAFETY_MS)) {
+      return tokenCache!.token;
+    }
+
+    const remainingSeconds = Math.ceil(
+      (tokenIssueCooldownUntil - now) / 1000,
+    );
+
+    throw new Error(
+      `키움 토큰 발급 재시도 대기 중입니다. ${remainingSeconds}초 후 다시 시도합니다.`,
+    );
   }
 
-  const controller =
-    new AbortController();
-
+  const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
     REQUEST_TIMEOUT_MS,
@@ -397,14 +465,9 @@ export async function getKiwoomToken(): Promise<string> {
         },
 
         body: JSON.stringify({
-          grant_type:
-            "client_credentials",
-          appkey: requireEnv(
-            "KIWOOM_APP_KEY",
-          ),
-          secretkey: requireEnv(
-            "KIWOOM_APP_SECRET",
-          ),
+          grant_type: "client_credentials",
+          appkey: requireEnv("KIWOOM_APP_KEY"),
+          secretkey: requireEnv("KIWOOM_APP_SECRET"),
         }),
 
         signal: controller.signal,
@@ -412,15 +475,23 @@ export async function getKiwoomToken(): Promise<string> {
     );
 
     const result =
-      (await readJson(
-        response,
-      )) as TokenResponse;
+      (await readJson(response)) as TokenResponse;
 
     if (
       !response.ok ||
       returnCode(result) !== 0 ||
       !result.token
     ) {
+      if (isRateLimitResponse(response, result)) {
+        tokenIssueCooldownUntil =
+          Date.now() + TOKEN_ISSUE_COOLDOWN_MS;
+      }
+
+      // 기존 토큰이 아직 실제 만료 전이면 재발급 실패 중에도 재사용한다.
+      if (tokenIsUsable(TOKEN_FALLBACK_SAFETY_MS)) {
+        return tokenCache!.token;
+      }
+
       throw new Error(
         `키움 토큰 발급 실패: ${returnMessage(result)} (HTTP ${response.status})`,
       );
@@ -429,12 +500,16 @@ export async function getKiwoomToken(): Promise<string> {
     tokenCache = {
       token: result.token,
       expiresAt:
-        Date.now() +
-        23 * 60 * 60 * 1000,
+        Date.now() + 23 * 60 * 60 * 1000,
     };
 
+    tokenIssueCooldownUntil = 0;
     return result.token;
   } catch (error) {
+    if (tokenIsUsable(TOKEN_FALLBACK_SAFETY_MS)) {
+      return tokenCache!.token;
+    }
+
     if (
       error instanceof Error &&
       error.name === "AbortError"
@@ -447,6 +522,28 @@ export async function getKiwoomToken(): Promise<string> {
     throw error;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+export async function getKiwoomToken(): Promise<string> {
+  if (tokenIsUsable(TOKEN_REFRESH_SAFETY_MS)) {
+    return tokenCache!.token;
+  }
+
+  // 이미 토큰을 발급 중이면 새 요청을 만들지 않고 같은 Promise를 공유한다.
+  if (tokenIssueInflight) {
+    return tokenIssueInflight;
+  }
+
+  const issue = issueKiwoomToken();
+  tokenIssueInflight = issue;
+
+  try {
+    return await issue;
+  } finally {
+    if (tokenIssueInflight === issue) {
+      tokenIssueInflight = null;
+    }
   }
 }
 
@@ -522,22 +619,31 @@ export async function kiwoomRequest<
     ) {
       const message = returnMessage(result);
       const rateLimited =
-        response.status === 429 ||
-        returnCode(result) === 1700 ||
-        /요청 개수|too many|rate limit/i.test(message);
+        isRateLimitResponse(response, result);
 
-      if (rateLimited && retryRateLimit < 4) {
-        clearTimeout(timeout);
-        await sleep(700 * Math.pow(2, retryRateLimit));
-        return kiwoomRequest<T>({
-          apiId,
-          path,
-          body,
-          contYn,
-          nextKey,
-          retryAuth,
-          retryRateLimit: retryRateLimit + 1,
-        });
+      if (rateLimited) {
+        const backoffMs =
+          rateLimitBackoffMs(retryRateLimit);
+
+        requestRateLimitUntil = Math.max(
+          requestRateLimitUntil,
+          Date.now() + backoffMs,
+        );
+
+        // 개별 요청들이 각각 재시도하지 않고 전역 대기 시간을 공유한다.
+        if (retryRateLimit < 3) {
+          clearTimeout(timeout);
+
+          return kiwoomRequest<T>({
+            apiId,
+            path,
+            body,
+            contYn,
+            nextKey,
+            retryAuth,
+            retryRateLimit: retryRateLimit + 1,
+          });
+        }
       }
 
       const authExpired =
