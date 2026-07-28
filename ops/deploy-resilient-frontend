@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+APP_ROOT="/opt/stock-app"
+FRONTEND="$APP_ROOT/stock-analyzer"
+REPO="seungjae3908-source/seungjae20260713"
+BRANCH="feature/detail-realtime-chart-integration"
+STAMP="$(date +%Y%m%d_%H%M%S)"
+BACKUP="/tmp/stock-frontend-backup-$STAMP"
+STAGE="/tmp/stock-frontend-stage-$STAMP"
+
+FILES=(
+  "stock-analyzer/src/lib/api.ts"
+  "stock-analyzer/src/App.tsx"
+  "stock-analyzer/src/components/offline-banner.tsx"
+  "stock-analyzer/src/pages/stocks.tsx"
+  "stock-analyzer/src/pages/chart-relay.tsx"
+  "stock-analyzer/src/pages/detail.integration.tsx"
+)
+
+restore_previous() {
+  echo "ROLLBACK: 이전 프론트 소스와 빌드를 복구합니다."
+  for relative in "${FILES[@]}"; do
+    local short="${relative#stock-analyzer/}"
+    if [ -f "$BACKUP/$short" ]; then
+      cp -a "$BACKUP/$short" "$FRONTEND/$short"
+    fi
+  done
+
+  if [ -d "$BACKUP/dist" ]; then
+    if [ -d "$FRONTEND/dist" ]; then
+      mv "$FRONTEND/dist" "$BACKUP/failed-dist-$STAMP"
+    fi
+    cp -a "$BACKUP/dist" "$FRONTEND/dist"
+  fi
+
+  cd "$APP_ROOT" || return 1
+  pm2 restart stock-app --update-env >/dev/null 2>&1 || true
+}
+
+if [ ! -d "$FRONTEND" ]; then
+  echo "FAILED: $FRONTEND 경로가 없습니다."
+  exit 1
+fi
+
+if ! gh auth status >/dev/null 2>&1; then
+  echo "FAILED: 서버의 GitHub 로그인이 필요합니다."
+  exit 1
+fi
+
+mkdir -p "$BACKUP" "$STAGE"
+
+for relative in "${FILES[@]}"; do
+  short="${relative#stock-analyzer/}"
+  source_file="$FRONTEND/$short"
+  stage_file="$STAGE/$short"
+  backup_file="$BACKUP/$short"
+
+  mkdir -p "$(dirname "$stage_file")" "$(dirname "$backup_file")"
+
+  if [ ! -f "$source_file" ]; then
+    echo "FAILED: 운영 파일 없음: $source_file"
+    exit 1
+  fi
+
+  cp -a "$source_file" "$backup_file"
+
+  if ! gh api --method GET     "repos/$REPO/contents/$relative"     -f "ref=$BRANCH"     -H "Accept: application/vnd.github.raw+json" >"$stage_file"; then
+    echo "FAILED: 허브 다운로드 실패: $relative"
+    exit 1
+  fi
+
+  if [ ! -s "$stage_file" ]; then
+    echo "FAILED: 내려받은 파일이 비었습니다: $relative"
+    exit 1
+  fi
+done
+
+if [ -d "$FRONTEND/dist" ]; then
+  cp -a "$FRONTEND/dist" "$BACKUP/dist"
+fi
+
+for relative in "${FILES[@]}"; do
+  short="${relative#stock-analyzer/}"
+  cp -a "$STAGE/$short" "$FRONTEND/$short"
+done
+
+cd "$FRONTEND" || {
+  restore_previous
+  exit 1
+}
+
+echo "BUILD: 프론트 운영 빌드를 시작합니다."
+if ! pnpm build; then
+  echo "FAILED: 프론트 빌드 실패"
+  restore_previous
+  exit 1
+fi
+
+if [ ! -s "$FRONTEND/dist/public/index.html" ]; then
+  echo "FAILED: 빌드 결과 index.html이 없습니다."
+  restore_previous
+  exit 1
+fi
+
+cd "$APP_ROOT" || {
+  restore_previous
+  exit 1
+}
+
+if ! pm2 restart stock-app --update-env; then
+  echo "FAILED: PM2 재시작 실패"
+  restore_previous
+  exit 1
+fi
+
+healthy=0
+for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+  local_code="$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/health 2>/dev/null || true)"
+  page_code="$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ 2>/dev/null || true)"
+  if [ "$local_code" = "200" ] && [ "$page_code" = "200" ]; then
+    healthy=1
+    break
+  fi
+  sleep 2
+done
+
+if [ "$healthy" != "1" ]; then
+  echo "FAILED: 재시작 후 로컬 서비스 검증 실패"
+  restore_previous
+  exit 1
+fi
+
+domain_health="$(curl -sS --max-time 12 -o /dev/null -w '%{http_code}' https://lsj119.duckdns.org/api/health 2>/dev/null || true)"
+domain_page="$(curl -sS --max-time 12 -o /dev/null -w '%{http_code}' https://lsj119.duckdns.org/ 2>/dev/null || true)"
+
+if [ "$domain_health" != "200" ] || [ "$domain_page" != "200" ]; then
+  echo "FAILED: 도메인 검증 실패 health=$domain_health page=$domain_page"
+  restore_previous
+  exit 1
+fi
+
+echo "DEPLOY_OK"
+echo "LOCAL_HEALTH=200"
+echo "LOCAL_PAGE=200"
+echo "DOMAIN_HEALTH=$domain_health"
+echo "DOMAIN_PAGE=$domain_page"
+echo "BACKUP=$BACKUP"
