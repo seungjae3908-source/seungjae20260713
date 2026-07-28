@@ -45,7 +45,18 @@ const PAGE_COMPONENTS: Record<string, Set<string>> = {
   ]),
   'signal-scan': new Set([
     'signal-scan.header',
+    'signal-scan.header.back',
+    'signal-scan.header.title',
+    'signal-scan.header.subtitle',
+    'signal-scan.header.refresh',
     'signal-scan.filters',
+    'signal-scan.mode-tabs',
+    'signal-scan.mode.scalp',
+    'signal-scan.mode.swing',
+    'signal-scan.mode.long',
+    'signal-scan.mode.custom',
+    'signal-scan.scalp-note',
+    'signal-scan.condition-panel',
     'signal-scan.summary',
     'signal-scan.results',
   ]),
@@ -55,6 +66,31 @@ const PAGE_COMPONENTS: Record<string, Set<string>> = {
     'portfolio.holdings',
     'portfolio.cash',
     'portfolio.plan',
+  ]),
+  navigation: new Set([
+    'navigation.nav.home',
+    'navigation.nav.markets',
+    'navigation.popup.markets.main.close',
+    'navigation.popup.markets.main.title',
+    'navigation.popup.markets.main.items',
+    'navigation.popup.markets.main.item.0',
+    'navigation.popup.markets.main.item.1',
+    'navigation.popup.markets.stocks.close',
+    'navigation.popup.markets.stocks.back',
+    'navigation.popup.markets.stocks.title',
+    'navigation.popup.markets.stocks.items',
+    'navigation.popup.markets.stocks.item.0',
+    'navigation.popup.markets.stocks.item.1',
+    'navigation.popup.markets.coins.close',
+    'navigation.popup.markets.coins.back',
+    'navigation.popup.markets.coins.title',
+    'navigation.popup.markets.coins.items',
+    'navigation.popup.markets.coins.item.0',
+    'navigation.popup.markets.coins.item.1',
+    'navigation.nav.watch',
+    'navigation.nav.tech',
+    'navigation.nav.info',
+    'navigation.nav.settings',
   ]),
   settings: new Set([
     'settings.header',
@@ -71,12 +107,41 @@ const PAGE_COMPONENTS: Record<string, Set<string>> = {
 
 const ALLOWED_ROUTES = new Set([
   '/home',
+  '/search',
   '/stocks',
+  '/stocks/kr',
+  '/stocks/us',
+  '/coins/spot',
+  '/coins/futures',
   '/watchlist',
+  '/watchlist/assets?view=watchlist&asset=stockKR',
+  '/watchlist/assets?view=watchlist&asset=stockUS',
+  '/watchlist/assets?view=watchlist&asset=coinSpot',
+  '/watchlist/assets?view=watchlist&asset=coinFutures',
+  '/watchlist/assets?view=alerts&asset=stockKR',
+  '/watchlist/assets?view=alerts&asset=stockUS',
+  '/watchlist/assets?view=alerts&asset=coinSpot',
+  '/watchlist/assets?view=alerts&asset=coinFutures',
   '/tech',
   '/tech/signal-scan',
+  '/tech/chart-relay?asset=stockKR&tab=live&focused=1',
+  '/tech/chart-relay?asset=stockUS&tab=live&focused=1',
+  '/tech/chart-relay?asset=coinSpot&tab=live&focused=1',
+  '/tech/chart-relay?asset=coinFutures&tab=live&focused=1',
+  '/tech/auto-trade',
   '/portfolio',
+  '/portfolio/summary?asset=all&source=info',
+  '/portfolio/summary?asset=all&source=portfolio',
+  '/stock-info',
+  '/stock-info?asset=stock&market=KR&focused=1',
+  '/stock-info?asset=stock&market=US&focused=1',
+  '/stock-info?asset=coin&coinMarket=spot&focused=1',
+  '/stock-info?asset=coin&coinMarket=futures&focused=1',
+  '/learn',
+  '/analysis/KR',
+  '/analysis/US',
   '/settings',
+  '/more',
   '/account',
 ]);
 
@@ -212,6 +277,12 @@ function normalizeLayout(value: unknown, pageKey: string) {
       popupContent: text(item.popupContent, 2000),
       popupPosition: enumValue(item.popupPosition, POPUP_POSITIONS, 'center'),
     });
+  }
+
+  const sectionIds = new Set(sections.map((section) => String(section.id)));
+  for (const section of sections) {
+    const parentId = section.parentId ? String(section.parentId) : '';
+    if (parentId && (!sectionIds.has(parentId) || parentId === section.id)) return null;
   }
 
   sections.sort((a, b) => Number(a.order) - Number(b.order));

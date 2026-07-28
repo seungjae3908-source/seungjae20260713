@@ -7,7 +7,8 @@ export type UiPageKey =
   | 'tech'
   | 'signal-scan'
   | 'portfolio'
-  | 'settings';
+  | 'settings'
+  | 'navigation';
 
 export type UiNodeKind =
   | 'section'
@@ -82,6 +83,8 @@ export type UiComponentDefinition = {
   kind: UiNodeKind;
   selector?: string;
   titleSelector?: string;
+  parentComponent?: string;
+  replaceText?: boolean;
 };
 
 export type UiPageDefinition = {
@@ -104,16 +107,46 @@ export const UI_PAGES: UiPageDefinition[] = [
   { key: 'signal-scan', label: '신호 검색', description: '신호 필터와 결과 화면' },
   { key: 'portfolio', label: '포트폴리오', description: '자산·현금·계획 화면' },
   { key: 'settings', label: '환경 설정', description: '계정·화면·알림·백업 화면' },
+  { key: 'navigation', label: '하단 메뉴', description: '하단 버튼과 연결 팝업 카테고리' },
 ];
 
 export const UI_ROUTE_SOURCES: UiSourceDefinition[] = [
   { key: 'route.home', label: '홈으로 이동', value: '/home' },
+  { key: 'route.search', label: '종목 선택으로 이동', value: '/search' },
   { key: 'route.stocks', label: '종목으로 이동', value: '/stocks' },
+  { key: 'route.stocks-kr', label: '국내주식으로 이동', value: '/stocks/kr' },
+  { key: 'route.stocks-us', label: '해외주식으로 이동', value: '/stocks/us' },
+  { key: 'route.coins-spot', label: '코인 현물로 이동', value: '/coins/spot' },
+  { key: 'route.coins-futures', label: '코인 선물로 이동', value: '/coins/futures' },
   { key: 'route.watchlist', label: '관심종목으로 이동', value: '/watchlist' },
+  { key: 'route.watch-stock-kr', label: '국내주식 관심종목', value: '/watchlist/assets?view=watchlist&asset=stockKR' },
+  { key: 'route.watch-stock-us', label: '해외주식 관심종목', value: '/watchlist/assets?view=watchlist&asset=stockUS' },
+  { key: 'route.watch-coin-spot', label: '코인 현물 관심종목', value: '/watchlist/assets?view=watchlist&asset=coinSpot' },
+  { key: 'route.watch-coin-futures', label: '코인 선물 관심종목', value: '/watchlist/assets?view=watchlist&asset=coinFutures' },
+  { key: 'route.alert-stock-kr', label: '국내주식 지정가알림', value: '/watchlist/assets?view=alerts&asset=stockKR' },
+  { key: 'route.alert-stock-us', label: '해외주식 지정가알림', value: '/watchlist/assets?view=alerts&asset=stockUS' },
+  { key: 'route.alert-coin-spot', label: '코인 현물 지정가알림', value: '/watchlist/assets?view=alerts&asset=coinSpot' },
+  { key: 'route.alert-coin-futures', label: '코인 선물 지정가알림', value: '/watchlist/assets?view=alerts&asset=coinFutures' },
   { key: 'route.tech', label: '기술로 이동', value: '/tech' },
   { key: 'route.signal-scan', label: '신호 검색으로 이동', value: '/tech/signal-scan' },
+  { key: 'route.chart-stock-kr', label: '국내주식 차트중계', value: '/tech/chart-relay?asset=stockKR&tab=live&focused=1' },
+  { key: 'route.chart-stock-us', label: '해외주식 차트중계', value: '/tech/chart-relay?asset=stockUS&tab=live&focused=1' },
+  { key: 'route.chart-coin-spot', label: '코인 현물 차트중계', value: '/tech/chart-relay?asset=coinSpot&tab=live&focused=1' },
+  { key: 'route.chart-coin-futures', label: '코인 선물 차트중계', value: '/tech/chart-relay?asset=coinFutures&tab=live&focused=1' },
+  { key: 'route.auto-trade', label: '자동매매 관리', value: '/tech/auto-trade' },
   { key: 'route.portfolio', label: '포트폴리오로 이동', value: '/portfolio' },
+  { key: 'route.info-summary', label: '정보 전체 요약', value: '/portfolio/summary?asset=all&source=info' },
+  { key: 'route.portfolio-summary', label: '포트폴리오 전체 요약', value: '/portfolio/summary?asset=all&source=portfolio' },
+  { key: 'route.stock-info', label: '종목 정보로 이동', value: '/stock-info' },
+  { key: 'route.info-stock-kr', label: '국내주식 정보', value: '/stock-info?asset=stock&market=KR&focused=1' },
+  { key: 'route.info-stock-us', label: '해외주식 정보', value: '/stock-info?asset=stock&market=US&focused=1' },
+  { key: 'route.info-coin-spot', label: '코인 현물 정보', value: '/stock-info?asset=coin&coinMarket=spot&focused=1' },
+  { key: 'route.info-coin-futures', label: '코인 선물 정보', value: '/stock-info?asset=coin&coinMarket=futures&focused=1' },
+  { key: 'route.learn', label: '공부로 이동', value: '/learn' },
+  { key: 'route.analysis-kr', label: '국내 증시현황', value: '/analysis/KR' },
+  { key: 'route.analysis-us', label: '해외 증시현황', value: '/analysis/US' },
   { key: 'route.settings', label: '환경 설정으로 이동', value: '/settings' },
+  { key: 'route.more', label: '설정 메뉴로 이동', value: '/more' },
   { key: 'route.account', label: '계정으로 이동', value: '/account' },
 ];
 
@@ -137,6 +170,24 @@ const section = (
   kind: 'section',
   selector,
   titleSelector,
+});
+
+const child = (
+  component: string,
+  label: string,
+  description: string,
+  parentComponent: string,
+  selector: string,
+  kind: UiNodeKind = 'text',
+  replaceText = true,
+): UiComponentDefinition => ({
+  component,
+  label,
+  description,
+  kind,
+  selector,
+  parentComponent,
+  replaceText,
 });
 
 export const UI_COMPONENT_CATALOG: Record<UiPageKey, UiComponentDefinition[]> = {
@@ -170,8 +221,19 @@ export const UI_COMPONENT_CATALOG: Record<UiPageKey, UiComponentDefinition[]> = 
     section('tech.auto', '자동매매 관리', '관리자용 자동매매 설정', 'main > *:nth-child(4)'),
   ],
   'signal-scan': [
-    section('signal-scan.header', '상단 제목', '신호 검색 화면 제목', 'header', 'h1'),
-    section('signal-scan.filters', '검색 조건', '시장·시간봉·신호 필터', 'main > *:nth-child(1)'),
+    section('signal-scan.header', '상단 제목', '신호 검색 화면 제목', '[data-ui-edit="signal-scan.header"]', 'h1'),
+    child('signal-scan.header.back', '뒤로 버튼', '기술 화면으로 돌아가는 버튼', 'signal-scan.header', '[data-ui-edit="signal-scan.header.back"]', 'button', false),
+    child('signal-scan.header.title', '신호검색 제목', '상단의 신호검색 글씨', 'signal-scan.header', '[data-ui-edit="signal-scan.header.title"]'),
+    child('signal-scan.header.subtitle', '상단 보조 문구', '단타·스윙 상태에 따라 표시되는 보조 글씨', 'signal-scan.header', '[data-ui-edit="signal-scan.header.subtitle"]'),
+    child('signal-scan.header.refresh', '새로고침 버튼', '신호 데이터를 다시 조회하는 버튼', 'signal-scan.header', '[data-ui-edit="signal-scan.header.refresh"]', 'button', false),
+    section('signal-scan.filters', '검색 조건', '시장·시간봉·신호 필터', '[data-ui-edit="signal-scan.filters"]'),
+    child('signal-scan.mode-tabs', '검색 방식 탭', '단타·스윙·중장기·직접설정 탭 묶음', 'signal-scan.filters', '[data-ui-edit="signal-scan.mode-tabs"]', 'section', false),
+    child('signal-scan.mode.scalp', '단타용 · 15분봉', '단타 검색 방식 버튼', 'signal-scan.mode-tabs', '[data-ui-edit="signal-scan.mode.scalp"]', 'tab'),
+    child('signal-scan.mode.swing', '스윙', '스윙 검색 방식 버튼', 'signal-scan.mode-tabs', '[data-ui-edit="signal-scan.mode.swing"]', 'tab'),
+    child('signal-scan.mode.long', '중장기', '중장기 검색 방식 버튼', 'signal-scan.mode-tabs', '[data-ui-edit="signal-scan.mode.long"]', 'tab'),
+    child('signal-scan.mode.custom', '직접 설정', '직접 조건 설정 버튼', 'signal-scan.mode-tabs', '[data-ui-edit="signal-scan.mode.custom"]', 'tab'),
+    child('signal-scan.scalp-note', '15분봉 안내 문구', '실제 15분봉·거래량·추세·지지저항 안내 글씨', 'signal-scan.filters', '[data-ui-edit="signal-scan.scalp-note"]'),
+    child('signal-scan.condition-panel', '조건 설정 상자', '조건 조합·정렬·제외 설정 상자', 'signal-scan.filters', '[data-ui-edit="signal-scan.condition-panel"]', 'section', false),
     section('signal-scan.summary', '검색 요약', '신호 개수와 상태 요약', 'main > *:nth-child(2)'),
     section('signal-scan.results', '검색 결과', '조건에 맞는 종목 결과', 'main > *:nth-child(3)'),
   ],
@@ -181,6 +243,31 @@ export const UI_COMPONENT_CATALOG: Record<UiPageKey, UiComponentDefinition[]> = 
     section('portfolio.holdings', '보유 종목', '보유 종목과 코인 목록', 'main > *:nth-child(2)'),
     section('portfolio.cash', '현금 설정', '현금과 투자 가능 금액', 'main > *:nth-child(3)'),
     section('portfolio.plan', '투자 계획', '시뮬레이션과 매수 계획', 'main > *:nth-child(4)'),
+  ],
+  navigation: [
+    section('navigation.nav.home', '홈', '하단 홈 버튼', '[data-ui-edit="navigation.nav.home"]', 'span:last-child'),
+    section('navigation.nav.markets', '종목', '하단 종목 버튼과 연결 팝업', '[data-ui-edit="navigation.nav.markets"]', 'span:last-child'),
+    child('navigation.popup.markets.main.close', '닫기 버튼', '종목 팝업 닫기 버튼', 'navigation.nav.markets', '[data-ui-edit="navigation.popup.markets.main.close"]', 'button', false),
+    child('navigation.popup.markets.main.title', '종목 선택', '종목 팝업 제목', 'navigation.nav.markets', '[data-ui-edit="navigation.popup.markets.main.title"]'),
+    child('navigation.popup.markets.main.items', '종목 카테고리 목록', '주식·코인 카테고리가 들어가는 영역', 'navigation.nav.markets', '[data-ui-edit="navigation.popup.markets.main.items"]', 'section', false),
+    child('navigation.popup.markets.main.item.0', '주식', '주식 하위 카테고리 버튼', 'navigation.popup.markets.main.items', '[data-ui-edit="navigation.popup.markets.main.item.0"]', 'item'),
+    child('navigation.popup.markets.main.item.1', '코인', '코인 하위 카테고리 버튼', 'navigation.popup.markets.main.items', '[data-ui-edit="navigation.popup.markets.main.item.1"]', 'item'),
+    child('navigation.popup.markets.stocks.close', '주식 팝업 닫기', '주식 선택 팝업 닫기 버튼', 'navigation.popup.markets.main.item.0', '[data-ui-edit="navigation.popup.markets.stocks.close"]', 'button', false),
+    child('navigation.popup.markets.stocks.back', '주식 팝업 뒤로', '종목 선택으로 돌아가는 버튼', 'navigation.popup.markets.main.item.0', '[data-ui-edit="navigation.popup.markets.stocks.back"]', 'button', false),
+    child('navigation.popup.markets.stocks.title', '주식', '주식 선택 팝업 제목', 'navigation.popup.markets.main.item.0', '[data-ui-edit="navigation.popup.markets.stocks.title"]'),
+    child('navigation.popup.markets.stocks.items', '주식 카테고리 목록', '국내·해외주식 버튼 영역', 'navigation.popup.markets.main.item.0', '[data-ui-edit="navigation.popup.markets.stocks.items"]', 'section', false),
+    child('navigation.popup.markets.stocks.item.0', '국내주식', '국내주식 화면 연결 버튼', 'navigation.popup.markets.stocks.items', '[data-ui-edit="navigation.popup.markets.stocks.item.0"]', 'item'),
+    child('navigation.popup.markets.stocks.item.1', '해외주식', '해외주식 화면 연결 버튼', 'navigation.popup.markets.stocks.items', '[data-ui-edit="navigation.popup.markets.stocks.item.1"]', 'item'),
+    child('navigation.popup.markets.coins.close', '코인 팝업 닫기', '코인 선택 팝업 닫기 버튼', 'navigation.popup.markets.main.item.1', '[data-ui-edit="navigation.popup.markets.coins.close"]', 'button', false),
+    child('navigation.popup.markets.coins.back', '코인 팝업 뒤로', '종목 선택으로 돌아가는 버튼', 'navigation.popup.markets.main.item.1', '[data-ui-edit="navigation.popup.markets.coins.back"]', 'button', false),
+    child('navigation.popup.markets.coins.title', '코인', '코인 선택 팝업 제목', 'navigation.popup.markets.main.item.1', '[data-ui-edit="navigation.popup.markets.coins.title"]'),
+    child('navigation.popup.markets.coins.items', '코인 카테고리 목록', '현물·선물 버튼 영역', 'navigation.popup.markets.main.item.1', '[data-ui-edit="navigation.popup.markets.coins.items"]', 'section', false),
+    child('navigation.popup.markets.coins.item.0', '코인 현물', '코인 현물 화면 연결 버튼', 'navigation.popup.markets.coins.items', '[data-ui-edit="navigation.popup.markets.coins.item.0"]', 'item'),
+    child('navigation.popup.markets.coins.item.1', '코인 선물', '코인 선물 화면 연결 버튼', 'navigation.popup.markets.coins.items', '[data-ui-edit="navigation.popup.markets.coins.item.1"]', 'item'),
+    section('navigation.nav.watch', '관심', '하단 관심 버튼', '[data-ui-edit="navigation.nav.watch"]', 'span:last-child'),
+    section('navigation.nav.tech', '기술', '하단 기술 버튼', '[data-ui-edit="navigation.nav.tech"]', 'span:last-child'),
+    section('navigation.nav.info', '정보', '하단 정보 버튼', '[data-ui-edit="navigation.nav.info"]', 'span:last-child'),
+    section('navigation.nav.settings', '설정', '하단 설정 버튼', '[data-ui-edit="navigation.nav.settings"]', 'span:last-child'),
   ],
   settings: [
     section('settings.header', '상단 제목', '환경 설정 화면 제목', 'header', 'h1'),
@@ -205,12 +292,13 @@ function baseSection(
   title: string,
   order: number,
   custom: boolean,
+  parentId: string | null = null,
 ): UiSection {
   return {
     id: custom ? `${component}.${Date.now().toString(36)}.${order}` : component,
     component,
     kind,
-    parentId: null,
+    parentId,
     visible: true,
     order,
     width: 'full',
@@ -245,7 +333,14 @@ export function createDefaultUiLayout(
     schemaVersion: UI_LAYOUT_SCHEMA_VERSION,
     pageKey,
     sections: UI_COMPONENT_CATALOG[pageKey].map((item, order) =>
-      baseSection(item.component, item.kind, item.label, order, false),
+      baseSection(
+        item.component,
+        item.kind,
+        item.label,
+        order,
+        false,
+        item.parentComponent ?? null,
+      ),
     ),
   };
 }
@@ -411,6 +506,28 @@ export function normalizeUiLayout(
     });
   });
 
+  const byComponent = new Map(sections.map((item) => [item.component, item]));
+  for (const definition of UI_COMPONENT_CATALOG[pageKey]) {
+    if (!definition.parentComponent || byComponent.has(definition.component)) continue;
+    const parent = byComponent.get(definition.parentComponent);
+    if (!parent) continue;
+    const added = baseSection(
+      definition.component,
+      definition.kind,
+      definition.label,
+      sections.length,
+      false,
+      parent.id,
+    );
+    sections.push(added);
+    byComponent.set(added.component, added);
+  }
+
+  const validIds = new Set(sections.map((item) => item.id));
+  sections.forEach((item) => {
+    if (item.parentId && !validIds.has(item.parentId)) item.parentId = null;
+  });
+
   sections.sort((a, b) => a.order - b.order);
   sections.forEach((item, order) => {
     item.order = order;
@@ -429,13 +546,19 @@ export function moveUiSection(
   direction: -1 | 1,
 ): UiLayout {
   const sections = layout.sections.map((section) => ({ ...section }));
-  const index = sections.findIndex((section) => section.id === sectionId);
+  const source = sections.find((section) => section.id === sectionId);
+  if (!source) return { ...layout, sections };
+  const siblings = sections
+    .filter((section) => section.parentId === source.parentId)
+    .sort((a, b) => a.order - b.order);
+  const index = siblings.findIndex((section) => section.id === sectionId);
   const target = index + direction;
-  if (index < 0 || target < 0 || target >= sections.length) {
-    return { ...layout, sections };
-  }
-  const [section] = sections.splice(index, 1);
-  sections.splice(target, 0, section);
+  if (index < 0 || target < 0 || target >= siblings.length) return { ...layout, sections };
+  const targetSection = siblings[target];
+  const sourceOrder = source.order;
+  source.order = targetSection.order;
+  targetSection.order = sourceOrder;
+  sections.sort((a, b) => a.order - b.order);
   sections.forEach((item, order) => {
     item.order = order;
   });
@@ -451,6 +574,7 @@ export function moveUiSectionTo(
   const from = sections.findIndex((section) => section.id === sectionId);
   const target = sections.findIndex((section) => section.id === targetId);
   if (from < 0 || target < 0 || from === target) return layout;
+  if (sections[from].parentId !== sections[target].parentId) return layout;
   const [section] = sections.splice(from, 1);
   sections.splice(target, 0, section);
   sections.forEach((item, order) => {
@@ -460,9 +584,27 @@ export function moveUiSectionTo(
 }
 
 export function removeUiSection(layout: UiLayout, sectionId: string): UiLayout {
-  const sections = layout.sections
-    .filter((section) => section.id !== sectionId)
-    .map((section, order) => ({ ...section, order }));
+  const target = layout.sections.find((section) => section.id === sectionId);
+  if (!target) return layout;
+  const affected = new Set<string>([sectionId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const section of layout.sections) {
+      if (section.parentId && affected.has(section.parentId) && !affected.has(section.id)) {
+        affected.add(section.id);
+        changed = true;
+      }
+    }
+  }
+  const sections = target.custom
+    ? layout.sections.filter((section) => !affected.has(section.id))
+    : layout.sections.map((section) =>
+        affected.has(section.id) ? { ...section, visible: false } : { ...section },
+      );
+  sections.forEach((section, order) => {
+    section.order = order;
+  });
   return { ...layout, sections };
 }
 
@@ -489,13 +631,27 @@ export function addCatalogSection(
   layout: UiLayout,
   component: string,
 ): UiLayout {
-  if (layout.sections.some((section) => section.component === component)) {
-    return layout;
+  const existing = layout.sections.find((section) => section.component === component);
+  if (existing) {
+    const sections = layout.sections.map((section) =>
+      section.id === existing.id ? { ...section, visible: true } : { ...section },
+    );
+    let parentId = existing.parentId;
+    while (parentId) {
+      const parent = sections.find((section) => section.id === parentId);
+      if (!parent) break;
+      parent.visible = true;
+      parentId = parent.parentId ?? null;
+    }
+    return { ...layout, sections };
   }
   const definition = UI_COMPONENT_CATALOG[layout.pageKey].find(
     (item) => item.component === component,
   );
   if (!definition) return layout;
+  const parent = definition.parentComponent
+    ? layout.sections.find((section) => section.component === definition.parentComponent)
+    : null;
   return {
     ...layout,
     sections: [
@@ -506,6 +662,7 @@ export function addCatalogSection(
         definition.label,
         layout.sections.length,
         false,
+        parent?.id ?? null,
       ),
     ],
   };
@@ -514,6 +671,7 @@ export function addCatalogSection(
 export function addCustomUiSection(
   layout: UiLayout,
   kind: Exclude<UiNodeKind, 'section'> = 'button',
+  parentId: string | null = null,
 ): UiLayout {
   const labels: Record<Exclude<UiNodeKind, 'section'>, string> = {
     tab: '새 탭',
@@ -529,6 +687,7 @@ export function addCustomUiSection(
     labels[kind],
     layout.sections.length,
     true,
+    parentId,
   );
   if (kind === 'route' as UiNodeKind) section.sourceType = 'route';
   return { ...layout, sections: [...layout.sections, section] };
