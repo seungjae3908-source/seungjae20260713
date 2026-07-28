@@ -102,6 +102,7 @@ function patchBottomNav(source: string): string {
 }
 
 function patchSignalScan(source: string): string {
+  if (source.includes('data-signal-market-grid="direct"')) return source;
   let code = source;
 
   code = replaceOnce(
