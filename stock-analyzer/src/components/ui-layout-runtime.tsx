@@ -85,19 +85,18 @@ export function UiLayoutRuntime() {
     const pageKey = pageFromPath(location);
     if (!pageKey) return;
     let active = true;
-    let observer: MutationObserver | null = null;
+    const timers: number[] = [];
     void authorizedFetch(`/api/ui-layouts/${pageKey}/published`, { cache: 'no-store' })
       .then((response) => response.ok ? response.json() : null)
       .then((payload) => {
         const layout = payload?.version?.layout as UiLayout | undefined;
         if (!active || !layout?.sections) return;
-        const run = () => applyLayout(pageKey, layout);
+        const run = () => { if (active) applyLayout(pageKey, layout); };
         run();
-        observer = new MutationObserver(() => window.requestAnimationFrame(run));
-        observer.observe(document.getElementById('root') ?? document.body, { childList: true, subtree: true });
+        timers.push(window.setTimeout(run, 100), window.setTimeout(run, 500));
       })
       .catch(() => undefined);
-    return () => { active = false; observer?.disconnect(); };
+    return () => { active = false; timers.forEach((timer) => window.clearTimeout(timer)); };
   }, [location]);
   return null;
 }
