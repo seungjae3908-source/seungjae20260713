@@ -2,6 +2,7 @@ import { Router, type IRouter } from 'express';
 import healthRouter from './health';
 import marketRouter from './market';
 import marketDashboardRouter from './market-dashboard';
+import marketDepthRouter from './market-depth';
 import assetSearchRouter from './asset-search';
 import stocksRanking100Router from './stocks-ranking-100';
 import newsRouter from './news.route';
@@ -51,6 +52,7 @@ router.use('/', stocksRanking100Router);
 router.use('/', assetSearchRouter);
 router.use('/', marketRouter);
 router.use('/', marketDashboardRouter);
+router.use('/', marketDepthRouter);
 
 router.use('/', newsRouter);
 router.use('/kiwoom', kiwoomRouter);
