@@ -166,9 +166,10 @@ function patchDetail(source: string): string {
     code = code.replace(currentNewsEndpoints, newsEndpointsWithAll);
   }
 
-  code = replaceRequired(
-    code,
-    `  const filings = collectFilings(filingsRaw);
+  if (!code.includes('  let specialFeedRaw: AnyObj = {};')) {
+    code = replaceRequired(
+      code,
+      `  const filings = collectFilings(filingsRaw);
   return {
     financials: normalizeObject(financialRaw, ["financials", "data"]),
     risk: normalizeObject(riskRaw, ["risk", "analysis", "data"]),
@@ -243,8 +244,9 @@ function patchDetail(source: string): string {
     filings,
     news,
   };`,
-    'detail provider fallback content',
-  );
+      'detail provider fallback content',
+    );
+  }
 
   return code;
 }
