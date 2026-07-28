@@ -496,19 +496,20 @@ export default function SignalScanPage() {
   return (
     <div className="h-full overflow-y-auto overscroll-contain bg-background">
       <div className="w-full min-w-0 px-4 pb-28 pt-4">
-        <header className="relative flex min-h-[68px] w-full items-center justify-center px-14 text-center">
+        <header data-ui-edit="signal-scan.header" className="relative flex min-h-[68px] w-full items-center justify-center px-14 text-center">
           <button
             type="button"
             onClick={() => navigate('/tech')}
             aria-label="뒤로"
+            data-ui-edit="signal-scan.header.back"
             className="absolute left-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card"
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
 
           <div className="w-full min-w-0 text-center">
-            <h1 className="whitespace-nowrap text-center text-lg font-extrabold leading-tight">신호검색</h1>
-            <p className="mt-1 break-keep text-center text-[11px] font-bold leading-4 text-muted-foreground">
+            <h1 data-ui-edit="signal-scan.header.title" className="whitespace-nowrap text-center text-lg font-extrabold leading-tight">신호검색</h1>
+            <p data-ui-edit="signal-scan.header.subtitle" className="mt-1 break-keep text-center text-[11px] font-bold leading-4 text-muted-foreground">
               {scanStyle === 'scalp'
                   ? '15분봉 단타 후보'
                   : scanStyle === 'swing'
@@ -523,6 +524,7 @@ export default function SignalScanPage() {
             type="button"
             onClick={() => void query.refetch()}
             aria-label="새로고침"
+            data-ui-edit="signal-scan.header.refresh"
             disabled={futuresLocked}
             className="absolute right-0 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-card-border bg-card"
           >
@@ -535,7 +537,7 @@ export default function SignalScanPage() {
           </button>
         </header>
 
-        <div className="mt-3 grid grid-cols-4 gap-1.5">
+        <div data-ui-edit="signal-scan.mode-tabs" className="mt-3 grid grid-cols-4 gap-1.5">
           {([
             { key: 'scalp' as const, label: '단타용 · 15분봉' },
             { key: 'swing' as const, label: '스윙' },
@@ -545,6 +547,7 @@ export default function SignalScanPage() {
             <button
               key={item.key}
               type="button"
+              data-ui-edit={`signal-scan.mode.${item.key}`}
               onClick={() => {
                 setScanStyle(item.key);
                 setSelected(null);
@@ -564,13 +567,13 @@ export default function SignalScanPage() {
         </div>
 
         {scanStyle === 'scalp' && (
-          <p className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-center text-[10px] font-bold text-warning">
+          <p data-ui-edit="signal-scan.scalp-note" className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-center text-[10px] font-bold text-warning">
             실제 15분봉만 사용 · 거래량/거래대금·단기 추세·지지/저항을 함께 확인
           </p>
         )}
 
-        <section className="mt-3 rounded-2xl border border-card-border bg-card p-3">
-          <div className="grid grid-cols-2 gap-2">
+        <section data-ui-edit="signal-scan.filters" className="mt-3 rounded-2xl border border-card-border bg-card p-3">
+          <div data-ui-edit="signal-scan.condition-panel" className="grid grid-cols-2 gap-2">
             <label className="text-[10px] font-black text-muted-foreground">
               조건 조합
               <select

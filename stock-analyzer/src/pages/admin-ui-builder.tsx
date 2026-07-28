@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAuth } from '@/lib/auth';
+import UiInternalEditor from '@/components/ui-internal-editor';
 import {
   UI_API_SOURCES,
   UI_COMPONENT_CATALOG,
@@ -272,6 +273,7 @@ export default function AdminUiBuilderPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [propertyOpen, setPropertyOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [internalParentId, setInternalParentId] = useState<string | null>(null);
   const [propertyTab, setPropertyTab] = useState<'basic' | 'font' | 'color' | 'position' | 'source' | 'popup'>('basic');
   const dragIdRef = useRef<string | null>(null);
 
@@ -281,10 +283,14 @@ export default function AdminUiBuilderPage() {
   );
   const page = getUiPageDefinition(pageKey);
   const catalog = UI_COMPONENT_CATALOG[pageKey];
-  const availableCatalog = catalog.filter(
-    (definition) =>
-      !layout.sections.some((section) => section.component === definition.component),
-  );
+  const availableCatalog = catalog.filter((definition) => {
+    if (definition.parentComponent) return false;
+    const found = layout.sections.find((section) => section.component === definition.component);
+    return !found || !found.visible;
+  });
+  const canvasSections = layout.sections
+    .filter((section) => !section.parentId && section.visible)
+    .sort((a, b) => a.order - b.order);
 
   const updateSection = (id: string, patch: Partial<UiSection>) => {
     setLayout((current) => ({
@@ -308,14 +314,16 @@ export default function AdminUiBuilderPage() {
       setLayout(normalized);
       setVersions(body.versions ?? []);
       setSelectedVersionId(body.draft?.id ?? body.published?.id ?? null);
-      setSelectedId(normalized.sections[0]?.id ?? null);
+      setSelectedId(normalized.sections.find((section) => !section.parentId && section.visible)?.id ?? null);
+      setInternalParentId(null);
       setStatus('');
     } catch (error) {
       const fallback = createDefaultUiLayout(targetPage);
       setLayout(fallback);
       setVersions([]);
       setSelectedVersionId(null);
-      setSelectedId(fallback.sections[0]?.id ?? null);
+      setSelectedId(fallback.sections.find((section) => !section.parentId && section.visible)?.id ?? null);
+      setInternalParentId(null);
       setStatus(`배치를 불러오지 못했습니다. ${error instanceof Error ? error.message : ''}`);
     } finally {
       setLoading(false);
@@ -522,7 +530,7 @@ export default function AdminUiBuilderPage() {
                 </p>
               </div>
               <span className="rounded-full bg-secondary px-2.5 py-1 text-[9px] font-black">
-                {layout.sections.length}개 항목
+                {canvasSections.length}개 항목
               </span>
             </div>
 
@@ -532,7 +540,7 @@ export default function AdminUiBuilderPage() {
               </div>
 
               <div className="flex flex-col items-center">
-                {layout.sections.map((section, index) => (
+                {canvasSections.map((section, index) => (
                   <div
                     key={section.id}
                     data-ui-node-id={section.id}
@@ -594,7 +602,21 @@ export default function AdminUiBuilderPage() {
                         </span>
                       </span>
 
-                      <span className="flex shrink-0 flex-col gap-1">
+                       {layout.sections.some((item) => item.parentId === section.id) ? (
+                         <button
+                           type="button"
+                           onClick={(event) => {
+                             event.stopPropagation();
+                             setSelectedId(section.id);
+                             setInternalParentId(section.id);
+                           }}
+                           className="shrink-0 rounded-xl border border-primary/30 bg-primary/10 px-2 py-2 text-[9px] font-black text-primary"
+                         >
+                           내부 수정
+                         </button>
+                       ) : null}
+
+                       <span className="flex shrink-0 flex-col gap-1">
                         <button
                           type="button"
                           disabled={index === 0}
@@ -608,7 +630,7 @@ export default function AdminUiBuilderPage() {
                         </button>
                         <button
                           type="button"
-                          disabled={index === layout.sections.length - 1}
+                           disabled={index === canvasSections.length - 1}
                           onClick={(event) => {
                             event.stopPropagation();
                             setLayout((current) => moveUiSection(current, section.id, 1));
@@ -622,7 +644,7 @@ export default function AdminUiBuilderPage() {
                   </div>
                 ))}
 
-                {layout.sections.length === 0 ? (
+                {canvasSections.length === 0 ? (
                   <button
                     type="button"
                     onClick={() => setAddOpen(true)}
@@ -734,7 +756,7 @@ export default function AdminUiBuilderPage() {
                       onClick={() => {
                         const next = addCatalogSection(layout, definition.component);
                         setLayout(next);
-                        setSelectedId(definition.component);
+                        setSelectedId(next.sections.find((section) => section.component === definition.component)?.id ?? null);
                         setAddOpen(false);
                       }}
                       className="flex w-full items-center justify-between rounded-2xl border border-card-border bg-card p-3 text-left"
@@ -826,6 +848,18 @@ export default function AdminUiBuilderPage() {
                       ]}
                       onChange={(value) => updateSection(selected.id, { kind: value })}
                     />
+                    {layout.sections.some((item) => item.parentId === selected.id) ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPropertyOpen(false);
+                          setInternalParentId(selected.id);
+                        }}
+                        className="flex w-full items-center justify-center gap-2 rounded-2xl border border-primary/40 bg-primary/10 p-3 text-sm font-black text-primary"
+                      >
+                        <Layers3 className="h-5 w-5" />내부 글씨·버튼·카테고리 수정
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => updateSection(selected.id, { visible: !selected.visible })}
@@ -1080,6 +1114,15 @@ export default function AdminUiBuilderPage() {
             </div>
           </section>
         </div>
+      ) : null}
+
+      {internalParentId ? (
+        <UiInternalEditor
+          layout={layout}
+          parentId={internalParentId}
+          onChange={setLayout}
+          onClose={() => setInternalParentId(null)}
+        />
       ) : null}
 
       {historyOpen ? (
