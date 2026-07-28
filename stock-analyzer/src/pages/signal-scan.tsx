@@ -164,6 +164,41 @@ function normalizeCandidate(raw: AnyObj): Candidate {
   };
 }
 
+const SIGNAL_SCAN_CACHE_MAX_AGE = 30 * 60_000;
+
+function signalScanStorageKey(asset: string, market: string): string {
+  return `signal-scan:last-good:${asset}:${market}`;
+}
+
+function readStoredSignalScan(
+  asset: string,
+  market: string,
+): { value: ScanResponse; storedAt: number } | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const raw = window.localStorage.getItem(signalScanStorageKey(asset, market));
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as { value?: ScanResponse; storedAt?: number };
+    if (!parsed.value?.ok || !Number.isFinite(parsed.storedAt)) return undefined;
+    if (Date.now() - Number(parsed.storedAt) > SIGNAL_SCAN_CACHE_MAX_AGE) return undefined;
+    return { value: parsed.value, storedAt: Number(parsed.storedAt) };
+  } catch {
+    return undefined;
+  }
+}
+
+function storeSignalScan(asset: string, market: string, value: ScanResponse): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      signalScanStorageKey(asset, market),
+      JSON.stringify({ value, storedAt: Date.now() }),
+    );
+  } catch {
+    // 저장 공간이 없으면 메모리 캐시만 사용한다.
+  }
+}
+
 function directionKind(value: string): DirectionTab | null {
   const text = value.trim().toLowerCase();
 
@@ -255,13 +290,20 @@ export default function SignalScanPage() {
   const futuresLocked = isFutures && !canUseFutures;
 
   const { asset, market: marketParam } = marketToQuery(market);
+  const storedScan = useMemo(
+    () => readStoredSignalScan(asset, marketParam),
+    [asset, marketParam],
+  );
 
   const query = useQuery({
     queryKey: ['signal-scan', asset, marketParam],
-    queryFn: () =>
-      apiGet<ScanResponse>(
+    queryFn: async () => {
+      const value = await apiGet<ScanResponse>(
         `/market/signal-scan?asset=${asset}&market=${marketParam}`,
-      ),
+      );
+      storeSignalScan(asset, marketParam, value);
+      return value;
+    },
     enabled: !futuresLocked,
     staleTime: 5 * 60_000,
     gcTime: 20 * 60_000,
@@ -269,7 +311,9 @@ export default function SignalScanPage() {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
-    retry: 1,
+    retry: 0,
+    initialData: storedScan?.value,
+    initialDataUpdatedAt: storedScan?.storedAt,
     placeholderData: (previous) => previous,
   });
 
