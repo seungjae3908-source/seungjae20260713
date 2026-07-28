@@ -722,7 +722,7 @@ async function fetchChartCandles(
   try {
     const raw = await apiGet<AnyObj>(
       `/stocks/${encodedTicker}/candles?tf=${encodedFrame}`,
-      { timeoutMs: 20_000, staleIfErrorMs: 10 * 60_000 },
+      { timeoutMs: 12_000, retries: 1, staleIfErrorMs: 10 * 60_000 },
     );
 
     const rows = Array.isArray(raw?.candles)
