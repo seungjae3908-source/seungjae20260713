@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useRoute } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ChevronDown, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, RefreshCw, X } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 import { BottomNav } from '@/components/bottom-nav';
 import { SearchField } from '@/components/search-field';
@@ -60,26 +60,16 @@ type ScanResponse = {
   groups: ScanGroup[];
 };
 
-const MARKET_GROUPS = [
-  {
-    key: 'stock',
-    label: '주식',
-    items: [
-      { key: 'kr' as ScanMarket, label: '국내주식' },
-      { key: 'us' as ScanMarket, label: '해외주식' },
-    ],
-  },
-  {
-    key: 'coin',
-    label: '코인',
-    items: [
-      { key: 'spot' as ScanMarket, label: '현물' },
-      { key: 'futures' as ScanMarket, label: '선물' },
-    ],
-  },
-] as const;
-
-
+const MARKET_OPTIONS: Array<{
+  key: ScanMarket;
+  label: string;
+  description: string;
+}> = [
+  { key: 'kr', label: '국내주식', description: 'KRX' },
+  { key: 'us', label: '해외주식', description: 'US' },
+  { key: 'spot', label: '코인 현물', description: 'SPOT' },
+  { key: 'futures', label: '코인 선물', description: 'FUTURES' },
+];
 const SPOT_SIGNAL_FILTERS: Array<{ key: SignalFilter; label: string }> = [
   { key: 'strongBuy', label: '매수 우세' },
   { key: 'strongSell', label: '매도 우세' },
@@ -230,8 +220,6 @@ export default function SignalScanPage() {
   const [savedNotice, setSavedNotice] = useState(false);
   const [signalFilter, setSignalFilter] =
     useState<SignalFilter>('strongBuy');
-  const [marketMenu, setMarketMenu] =
-    useState<'stock' | 'coin' | null>(null);
   const [selected, setSelected] =
     useState<Candidate | null>(null);
   const [searchText, setSearchText] = useState('');
@@ -260,6 +248,8 @@ export default function SignalScanPage() {
   }, []);
 
   const market = routeMarket ?? stateMarket;
+  const marketTitle =
+    MARKET_OPTIONS.find((item) => item.key === market)?.label ?? '시장';
   const isFutures = market === 'futures';
   const canUseFutures = permissions.has('futures');
   const futuresLocked = isFutures && !canUseFutures;
@@ -446,7 +436,6 @@ export default function SignalScanPage() {
 
   const selectMarket = (next: ScanMarket) => {
     setSelected(null);
-    setMarketMenu(null);
     setDirectionTab('buy');
     setSignalFilter('strongBuy');
     setSearchText('');
@@ -507,9 +496,17 @@ export default function SignalScanPage() {
           </button>
 
           <div className="w-full min-w-0 text-center">
-            <h1 className="whitespace-nowrap text-center text-lg font-extrabold leading-tight">신호검색</h1>
+            <h1 className="whitespace-nowrap text-center text-lg font-extrabold leading-tight">
+              {marketTitle} 신호검색
+            </h1>
             <p className="mt-1 break-keep text-center text-[11px] font-bold leading-4 text-muted-foreground">
-              {scanStyle === 'scalp'\n                ? '15분봉 단타 후보'\n                : scanStyle === 'swing'\n                  ? '15분봉·일봉 스윙 후보'\n                  : scanStyle === 'long'\n                    ? '일봉 중장기 후보'\n                    : '직접 설정 조건검색'}
+              {scanStyle === 'scalp'
+                ? '15분봉 단타 후보'
+                : scanStyle === 'swing'
+                  ? '15분봉·일봉 스윙 후보'
+                  : scanStyle === 'long'
+                    ? '일봉 중장기 후보'
+                    : '직접 설정 조건검색'}
             </p>
           </div>
 
@@ -529,7 +526,7 @@ export default function SignalScanPage() {
           </button>
         </header>
 
-        <div className="mt-3 grid grid-cols-4 gap-1.5">
+        <div className="mt-3 grid grid-cols-2 gap-2">
           {([
             { key: 'scalp' as const, label: '단타용 · 15분봉' },
             { key: 'swing' as const, label: '스윙' },
@@ -657,55 +654,36 @@ export default function SignalScanPage() {
           </button>
         </section>
 
-        <div className="relative mt-3 grid grid-cols-2 gap-2">
-          {MARKET_GROUPS.map((group) => {
-            const selectedGroup =
-              group.key === 'stock'
-                ? market === 'kr' || market === 'us'
-                : market === 'spot' || market === 'futures';
-
+        <div
+          data-signal-market-grid="direct"
+          className="mt-3 grid grid-cols-2 gap-2"
+          aria-label="검색 시장 선택"
+        >
+          {MARKET_OPTIONS.map((item) => {
+            const active = market === item.key;
             return (
-              <div key={group.key} className="relative">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setMarketMenu((current) =>
-                      current === group.key ? null : group.key,
-                    )
-                  }
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => selectMarket(item.key)}
+                aria-pressed={active}
+                className={cn(
+                  'min-h-[54px] rounded-2xl border px-3 py-2.5 text-center transition-colors',
+                  active
+                    ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                    : 'border-card-border bg-card text-muted-foreground',
+                )}
+              >
+                <span className="block text-xs font-black">{item.label}</span>
+                <span
                   className={cn(
-                    'flex w-full items-center justify-center gap-1 rounded-xl border px-2 py-2.5 text-xs font-extrabold',
-                    selectedGroup
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : 'border-card-border bg-card text-muted-foreground',
+                    'mt-0.5 block text-[9px] font-bold tracking-wide',
+                    active ? 'text-primary-foreground/75' : 'text-muted-foreground/70',
                   )}
                 >
-                  {selectedGroup
-                    ? group.items.find((item) => item.key === market)?.label ?? group.label
-                    : group.label}
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </button>
-
-                {marketMenu === group.key && (
-                  <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 overflow-hidden rounded-xl border border-card-border bg-card p-1 shadow-xl">
-                    {group.items.map((item) => (
-                      <button
-                        key={item.key}
-                        type="button"
-                        onClick={() => selectMarket(item.key)}
-                        className={cn(
-                          'block w-full rounded-lg px-3 py-2 text-center text-xs font-black',
-                          market === item.key
-                            ? 'bg-primary text-primary-foreground'
-                            : 'text-foreground hover:bg-secondary',
-                        )}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+                  {item.description}
+                </span>
+              </button>
             );
           })}
         </div>
