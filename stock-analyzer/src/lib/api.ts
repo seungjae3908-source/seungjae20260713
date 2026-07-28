@@ -599,37 +599,100 @@ const BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || '/api';
 
 const enc = encodeURIComponent;
 
+type ApiGetOptions = {
+  timeoutMs?: number;
+  retries?: number;
+  cacheMs?: number;
+  staleIfErrorMs?: number;
+};
+
+type CachedGet = { value: unknown; storedAt: number };
+
+const getCache = new Map<string, CachedGet>();
+const pendingGets = new Map<string, Promise<unknown>>();
+const PRIVATE_GET_PATH = /^\/(?:admin|auth|backup|portfolio|push)(?:\/|\?|$)/;
+
+function emitDataRecovery(detail: { state: 'fresh' | 'retrying' | 'stale'; path: string }) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('stock-app:data-recovery', { detail }));
+  }
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function retryDelay(attempt: number): Promise<void> {
+  const delay = 500 * 2 ** attempt + Math.floor(Math.random() * 250);
+  return new Promise((resolve) => window.setTimeout(resolve, delay));
+}
+
 export async function apiGet<T>(
   path: string,
-  options: { timeoutMs?: number } = {},
+  options: ApiGetOptions = {},
 ): Promise<T> {
-  const separator = path.includes('?') ? '&' : '?';
-  const url = `${BASE}${path}${separator}_ts=${Date.now()}`;
-  const res = await authorizedFetch(url, {
-    cache: 'no-store',
-    // 요청이 영원히 걸려 무한 로딩이 되지 않도록 60초 타임아웃을 둡니다.
-    // (국내주식 1분봉 전체 조회는 첫 로딩에 40초 이상 걸릴 수 있음)
-    signal: AbortSignal.timeout(options.timeoutMs ?? 60_000),
-    headers: {
-      'Cache-Control': 'no-cache, no-store, max-age=0',
-      Pragma: 'no-cache',
-    },
-  });
+  const cacheable = !PRIVATE_GET_PATH.test(path);
+  const cacheMs = options.cacheMs ?? 15_000;
+  const staleIfErrorMs = options.staleIfErrorMs ?? 5 * 60_000;
+  const cached = cacheable ? getCache.get(path) : undefined;
+  if (cached && Date.now() - cached.storedAt <= cacheMs) return cached.value as T;
 
-  if (!res.ok) {
-    let code = `HTTP_${res.status}`;
+  const pending = pendingGets.get(path);
+  if (pending) return pending as Promise<T>;
 
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) code = body.error;
-    } catch {
-      // ignore
+  const request = (async () => {
+    const retries = options.retries ?? 2;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        const res = await authorizedFetch(`${BASE}${path}`, {
+          signal: AbortSignal.timeout(options.timeoutMs ?? 45_000),
+          headers: { Accept: 'application/json' },
+        });
+
+        if (!res.ok) {
+          let code = `HTTP_${res.status}`;
+          try {
+            const body = (await res.json()) as { error?: string };
+            if (body.error) code = body.error;
+          } catch {
+            // 응답 본문이 JSON이 아니면 HTTP 상태 코드를 사용합니다.
+          }
+          const error = new ApiError(res.status, code);
+          if (!isRetryableStatus(res.status) || attempt === retries) throw error;
+          lastError = error;
+        } else {
+          const value = (await res.json()) as T;
+          if (cacheable) getCache.set(path, { value, storedAt: Date.now() });
+          emitDataRecovery({ state: 'fresh', path });
+          return value;
+        }
+      } catch (error) {
+        lastError = error;
+        if (error instanceof ApiError && !isRetryableStatus(error.status)) throw error;
+        if (attempt === retries) break;
+      }
+
+      emitDataRecovery({ state: 'retrying', path });
+      await retryDelay(attempt);
     }
 
-    throw new ApiError(res.status, code);
-  }
+    const fallback = cacheable ? getCache.get(path) : undefined;
+    if (fallback && Date.now() - fallback.storedAt <= staleIfErrorMs) {
+      emitDataRecovery({ state: 'stale', path });
+      return fallback.value as T;
+    }
 
-  return (await res.json()) as T;
+    throw lastError;
+  })();
+
+  pendingGets.set(path, request);
+  try {
+    return await request;
+  } finally {
+    pendingGets.delete(path);
+  }
 }
 
 function normalizeFrame(tf: ChartFrameInput): Timeframe {
