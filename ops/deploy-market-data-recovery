@@ -12,6 +12,7 @@ STAGE="/tmp/stock-api-recovery-stage-$STAMP"
 FILES=(
   "api-server/src/services/market-data.service.ts"
   "api-server/src/lib/cache.ts"
+  "api-server/src/services/analysis/signal-scan.service.ts"
 )
 
 restore_previous() {
@@ -64,6 +65,10 @@ grep -q "kiwoomChartCircuitOpenUntil" "$STAGE/src/services/market-data.service.t
 }
 grep -q "pendingLoads" "$STAGE/src/lib/cache.ts" || {
   echo "FAILED: 동시요청 합치기 수정 누락"
+  exit 1
+}
+grep -q "const STOCK_POOL = 36" "$STAGE/src/services/analysis/signal-scan.service.ts" || {
+  echo "FAILED: 신호검색 속도 개선 누락"
   exit 1
 }
 
