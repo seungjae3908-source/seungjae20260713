@@ -11,6 +11,7 @@ import {
   Download,
   Moon,
   ShieldCheck,
+  SlidersHorizontal,
   Smartphone,
   Sun,
   TrendingDown,
@@ -599,6 +600,29 @@ export default function MorePage() {
             </div>
           </AppModal>
         </>
+
+        {auth.isAdmin ? (
+          <section className="rounded-3xl border border-primary/30 bg-primary/10 p-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+                <SlidersHorizontal className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 flex-1 text-center">
+                <p className="text-base font-black">관리자 UI 편집</p>
+                <p className="mt-0.5 text-sm font-bold text-muted-foreground">
+                  화면 요소 이동 · 문구/글씨/정렬 변경 · 추가/숨김/복원 · 버전 되돌리기
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate("/admin/ui-builder")}
+              className="mt-3 w-full rounded-2xl bg-primary px-4 py-3 text-base font-black text-primary-foreground"
+            >
+              드래그 편집기 열기
+            </button>
+          </section>
+        ) : null}
 
         {auth.isAdmin ? <AiRepairCenter /> : null}
 
