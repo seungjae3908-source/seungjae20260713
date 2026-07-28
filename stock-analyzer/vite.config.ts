@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
+import { VitePWA } from 'vite-plugin-pwa';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 import { membershipUiRoutingPatch } from './membership-ui-routing-patch';
@@ -78,6 +79,26 @@ export default defineConfig({
     krwTenThousandUnitPatch(),
     detailContentStatusPatch(),
     globalDetailsPopupPatch(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      injectRegister: 'script',
+      manifest: false,
+      workbox: {
+        cleanupOutdatedCaches: true,
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/api\//, /^\/download\//],
+        globPatterns: [
+          '**/*.{js,css,html,ico,png,svg,webp,woff,woff2}',
+        ],
+        maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
+            handler: 'NetworkOnly',
+          },
+        ],
+      },
+    }),
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
