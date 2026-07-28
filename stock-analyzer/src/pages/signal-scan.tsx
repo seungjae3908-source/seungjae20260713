@@ -527,9 +527,9 @@ export default function SignalScanPage() {
     '기술 신호';
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-background">
+    <div data-ui-page="signal-scan" className="h-full overflow-y-auto overscroll-contain bg-background">
       <div className="w-full min-w-0 px-4 pb-28 pt-4">
-        <header className="relative flex min-h-[68px] w-full items-center justify-center px-14 text-center">
+        <header data-ui-component="signal-scan.header" className="relative flex min-h-[68px] w-full items-center justify-center px-14 text-center">
           <button
             type="button"
             onClick={() => navigate('/tech')}
