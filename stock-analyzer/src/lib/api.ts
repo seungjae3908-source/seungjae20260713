@@ -684,6 +684,7 @@ export async function apiGet<T>(
       return fallback.value as T;
     }
 
+    emitDataRecovery({ state: 'fresh', path });
     throw lastError;
   })();
 
