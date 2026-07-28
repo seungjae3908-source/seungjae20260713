@@ -44,7 +44,16 @@ export function PaperTradingWorkbench({ asset, market, symbol, currentPrice, bar
   const validOrder = useMemo(() => Number(price) > 0 && Number(quantity) > 0, [price, quantity]);
   const savePaperOrder = () => {
     if (!validOrder) return;
-    const next: PaperOrder[] = [{ id: crypto.randomUUID(), side, symbol, price: Number(price), quantity: Number(quantity), createdAt: new Date().toISOString(), status: 'paper' }, ...orders].slice(0, 100);
+    const order: PaperOrder = {
+      id: crypto.randomUUID(),
+      side,
+      symbol,
+      price: Number(price),
+      quantity: Number(quantity),
+      createdAt: new Date().toISOString(),
+      status: 'paper',
+    };
+    const next: PaperOrder[] = [order, ...orders].slice(0, 100);
     setOrders(next);
     localStorage.setItem(`paper-orders:${asset}:${market}:${symbol}`, JSON.stringify(next));
     window.dispatchEvent(new Event('sa-paper-orders-updated'));
