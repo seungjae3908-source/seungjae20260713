@@ -15,13 +15,16 @@ function replaceOnce(
 }
 
 function patchStocksPage(source: string): string {
-  let code = source;
+  if (source.includes('const focusedParams = useMemo(')) return source;
 
-  if (!/import \\{[^}]*\\buseEffect\\b[^}]*\\} from 'react';/.test(code)) {
+  let code = source;
+  const reactImport = /import\s*\{([^}]*)\}\s*from\s*['"]react['"];/;
+  const match = code.match(reactImport);
+  if (match && !/\buseEffect\b/.test(match[1] ?? '')) {
+    const hooks = String(match[1] ?? '').trim().replace(/\s+/g, ' ');
     code = code.replace(
-      /import \\{([^}]*)\\} from 'react';/,
-      (_full, hooks: string) =>
-        `import { useEffect, ${hooks.trim()} } from 'react';`,
+      reactImport,
+      `import { useEffect, ${hooks} } from 'react';`,
     );
   }
 
