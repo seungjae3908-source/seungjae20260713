@@ -13,6 +13,7 @@ import {
 	X,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { PaperTradingWorkbench } from '@/components/paper-trading-workbench';
 import { PriceAlertCard } from '@/components/price-alert-card';
 import { api, apiGet, type SearchResult } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
@@ -1131,6 +1132,14 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 					</div>
 				</Section>
 			)}
+
+			<PaperTradingWorkbench
+				asset="coin"
+				market={coinMarket}
+				symbol={symbol}
+				currentPrice={finite(selected?.price)}
+				bars={candles as any}
+			/>
 
 			<PriceAlertCard assetType={coinMarket === 'spot' ? 'coin_spot' : 'coin_futures'} market={coinMarket === 'spot' ? 'UPBIT' : 'BITGET'} symbol={symbol} currentPrice={finite(selected?.price)} currency={currency} />
 			</>
