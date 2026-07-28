@@ -91,9 +91,9 @@ export default function UiInternalEditor({ layout, parentId, onChange, onClose }
     layout.sections.some((section) => section.parentId === id);
 
   return (
-    <div className="absolute inset-0 z-[70] flex items-end bg-black/70" onClick={onClose}>
+    <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
       <section
-        className="flex max-h-[94%] w-full flex-col rounded-t-[2rem] border-t border-card-border bg-background"
+        className="flex max-h-[90%] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-background shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="shrink-0 border-b border-card-border p-4">

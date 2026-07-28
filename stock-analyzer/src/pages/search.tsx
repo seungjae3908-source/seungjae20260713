@@ -1047,13 +1047,15 @@ export default function SearchPage() {
 
     enabled: asset === "stock",
 
-    staleTime: 0,
+    staleTime: 60_000,
 
-    gcTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
 
-    refetchInterval: 10_000,
+    refetchInterval: 60_000,
 
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: false,
+
+    placeholderData: (previous) => previous,
   });
 
   const searchQuery = useQuery<StockRow[]>({
@@ -1063,11 +1065,11 @@ export default function SearchPage() {
 
     enabled: asset === "stock" && trimmedQuery.length > 0,
 
-    staleTime: 30_000,
+    staleTime: 5 * 60_000,
 
-    gcTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
 
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: false,
   });
 
   const rows = useMemo(
@@ -1086,13 +1088,19 @@ export default function SearchPage() {
     queryKey: ["crypto-spot-tickers"],
     queryFn: () => apiGet<AnyObj>("/crypto/spot/tickers"),
     enabled: asset === "coin" && coinMarket === "spot",
-    refetchInterval: 15_000,
+    staleTime: 30_000,
+    gcTime: 30 * 60_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
   });
   const futuresTickers = useQuery({
     queryKey: ["crypto-futures-tickers"],
     queryFn: () => apiGet<AnyObj>("/crypto/futures/tickers"),
     enabled: asset === "coin" && coinMarket === "futures" && canUseFutures,
-    refetchInterval: 10_000,
+    staleTime: 30_000,
+    gcTime: 30 * 60_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
   });
 
   // 코인 탭은 AI추천이 없으므로 주식에서 넘어온 rank가 recommended면 거래대금으로 대체한다.
@@ -1683,4 +1691,3 @@ export default function SearchPage() {
     </div>
   );
 }
-

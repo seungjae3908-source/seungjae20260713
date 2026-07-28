@@ -771,9 +771,9 @@ export default function SignalScanPage() {
               {memberGradeLabel(auth?.profile ?? null)} · 등급 변경은
               관리자에게 문의해 주세요.
             </StateBox>
-          ) : query.isLoading ? (
-            <StateBox>데이터를 불러오는 중입니다.</StateBox>
-          ) : query.isError ? (
+          ) : query.isLoading && !query.data ? (
+            <StateBox>첫 검색 데이터를 준비하고 있습니다. 완료 후 시장별 결과를 저장해 다음부터 즉시 표시합니다.</StateBox>
+          ) : query.isError && !query.data ? (
             <StateBox error>
               데이터를 불러오지 못했습니다.
               <button

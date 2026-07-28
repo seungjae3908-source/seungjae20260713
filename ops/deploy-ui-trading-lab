@@ -20,11 +20,14 @@ FILES=(
   stock-analyzer/src/components/ui-internal-editor.tsx
   stock-analyzer/src/components/ui-layout-runtime.tsx
   stock-analyzer/src/components/paper-trading-workbench.tsx
+  stock-analyzer/src/components/portfolio-planner-modals.tsx
+  stock-analyzer/src/components/signal-modal.tsx
   stock-analyzer/src/components/data-state.tsx
   stock-analyzer/src/components/bottom-nav.tsx
   stock-analyzer/src/index.css
   stock-analyzer/src/lib/ui-layout.ts
   stock-analyzer/src/pages/admin-ui-builder.tsx
+  stock-analyzer/src/pages/asset-evaluation.tsx
   stock-analyzer/src/pages/detail.tsx
   stock-analyzer/src/pages/stock-info.tsx
   stock-analyzer/src/pages/home.tsx
@@ -33,6 +36,7 @@ FILES=(
   stock-analyzer/src/pages/signal-scan.tsx
   stock-analyzer/src/pages/portfolio.tsx
   stock-analyzer/src/pages/more.tsx
+  stock-analyzer/src/pages/search.tsx
 )
 
 fail() { echo "FAILED: $1"; FAILED=1; }

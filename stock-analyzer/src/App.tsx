@@ -482,8 +482,8 @@ function ApprovedRouter() {
 				<Route path="/portfolio/plan" component={AdvancedPortfolioPlanPage} />
 				<Route path="/portfolio" component={AdvancedPortfolioPage} />
 				<Route path="/account" component={AccountPage} />
-				<Route path="/admin" component={AdminOnlyPage} />
 				<Route path="/admin/ui-builder" component={AdminUiBuilderOnlyPage} />
+				<Route path="/admin" component={AdminOnlyPage} />
 				<Route path="/more" component={MorePage} />
 				<Route path="/stock/:ticker" component={DetailPage} />
 				<Route path="/recommendations" component={AdvancedRecommendationsPage} />

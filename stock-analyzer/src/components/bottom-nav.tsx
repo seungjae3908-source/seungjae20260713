@@ -401,7 +401,7 @@ export function BottomNav() {
     <>
       {popup && (
         <div
-          className="fixed inset-0 z-[70] flex items-end justify-center px-3 pb-[calc(env(safe-area-inset-bottom)+78px)] sm:items-center sm:px-5 sm:pb-0"
+          className="fixed inset-0 z-[70] flex items-center justify-center px-4 py-[calc(env(safe-area-inset-top)+1rem)] pb-[calc(env(safe-area-inset-bottom)+1rem)]"
           onClick={closePopup}
           role="presentation"
         >
