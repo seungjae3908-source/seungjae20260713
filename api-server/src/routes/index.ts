@@ -3,6 +3,7 @@ import healthRouter from './health';
 import marketRouter from './market';
 import marketDashboardRouter from './market-dashboard';
 import marketDepthRouter from './market-depth';
+import strategyLabRouter from './strategy-lab';
 import assetSearchRouter from './asset-search';
 import stocksRanking100Router from './stocks-ranking-100';
 import newsRouter from './news.route';
@@ -46,54 +47,34 @@ router.use('/market/briefing', requireMember);
 router.use('/market/themes', requireMember);
 router.use('/market/scan', requireMember);
 router.use('/market/undervalued', requireMember);
-// 종목 화면에서 limit=100을 요청할 때만 전용 100개 순위 응답을 사용합니다.
 router.use('/', stocksRanking100Router);
-// 국내·해외 종목명과 티커를 실제 검색 제공기관으로 통합 검색합니다.
 router.use('/', assetSearchRouter);
 router.use('/', marketRouter);
 router.use('/', marketDashboardRouter);
 router.use('/', marketDepthRouter);
+router.use('/', strategyLabRouter);
 
 router.use('/', newsRouter);
 router.use('/kiwoom', kiwoomRouter);
 
-// 코인 현물 실제 주문은 관리자만 사용하며 주문계획과 최종 승인을 분리합니다.
 router.use(
   '/crypto/spot/auto',
   requireMember,
   requireAdmin,
   cryptoSpotAutoRouter,
 );
-
-// 코인 선물 조회는 정회원 이상, 실제 자동매매 API는 관리자만 사용합니다.
 router.use('/crypto/futures/auto', requireMember, requireFullMember, requireAdmin);
 router.use('/crypto/futures', requireMember, requireFullMember);
 router.use('/', cryptoRouter);
-
-// 시그널 스캔·차트 신호·AI 플랜·시장 분석.
-// 라우트 내부에서 승인회원/선물 권한을 추가 검사합니다.
 router.use('/', analysisRouter);
-
-// 잔액·포트폴리오 조회 라우트 내부 권한 검사 유지.
 router.use('/', portfolioRouter);
-
-// AI 복구센터는 관리자에게만 노출합니다. 작업 실행기가 없는 서버에서는
-// 404 대신 명시적인 비활성 상태를 반환합니다.
 router.use('/admin/ai-repair', requireMember, requireAdmin, aiRepairRouter);
 router.use('/admin/ui-layouts', adminUiLayoutsRouter);
 router.use('/ui-layouts', uiLayoutsRouter);
-
-// 관리자 라우터 내부에서도 회원·관리자 검사를 다시 수행합니다.
 router.use('/admin', adminRouter);
-
-// 이 아래 기능은 모두 승인된 준회원 이상만 접근합니다.
 router.use(requireMember);
 router.use('/debug', requireAdmin, providerDebugRouter);
-
-// 실제 주식 자동매매 API는 관리자만 접근합니다.
 router.use('/stocks/auto-trade', requireAdmin);
-
-// 관심종목·알림·설정 백업과 일반 주식 정보는 준회원 이상에게 제공합니다.
 router.use('/', pushRouter);
 router.use('/', watchlistRouter);
 router.use('/stocks', stocksRouter);
