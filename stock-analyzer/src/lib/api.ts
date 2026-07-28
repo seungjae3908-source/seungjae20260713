@@ -623,7 +623,7 @@ function isRetryableStatus(status: number): boolean {
 }
 
 function retryDelay(attempt: number): Promise<void> {
-  const delay = 500 * 2 ** attempt + Math.floor(Math.random() * 250);
+  const delay = 350 * 2 ** attempt + Math.floor(Math.random() * 150);
   return new Promise((resolve) => window.setTimeout(resolve, delay));
 }
 
@@ -641,13 +641,17 @@ export async function apiGet<T>(
   if (pending) return pending as Promise<T>;
 
   const request = (async () => {
-    const retries = options.retries ?? 2;
+    const heavyRequest = /\/(?:market\/signal-scan|market\/scan|market\/movers|recommendations)(?:\/|\?|$)/.test(path);
+    // 대형 검색기는 자체적으로 여러 공급자를 조회하므로 중복 재시도하지 않습니다.
+    // 일반 요청은 캐시가 있으면 한 번만 확인하고 곧바로 직전 정상값을 사용합니다.
+    const retries = options.retries ?? (heavyRequest || cached ? 0 : 1);
+    const timeoutMs = options.timeoutMs ?? (heavyRequest ? 45_000 : 15_000);
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
         const res = await authorizedFetch(`${BASE}${path}`, {
-          signal: AbortSignal.timeout(options.timeoutMs ?? 45_000),
+          signal: AbortSignal.timeout(timeoutMs),
           headers: { Accept: 'application/json' },
         });
 
