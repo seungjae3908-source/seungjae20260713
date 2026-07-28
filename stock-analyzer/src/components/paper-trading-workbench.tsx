@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { Activity, FlaskConical, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 type Bar = { date?: string; time?: string | number; open: number; high: number; low: number; close: number; volume: number };
@@ -42,6 +43,10 @@ export function PaperTradingWorkbench({ asset, market, symbol, currentPrice, bar
   });
 
   const validOrder = useMemo(() => Number(price) > 0 && Number(quantity) > 0, [price, quantity]);
+  const estimatedValue = useMemo(() => Number(price) * Number(quantity), [price, quantity]);
+  const bestAsk = depth.data?.levels.find(row => row.askPrice != null)?.askPrice ?? null;
+  const bestBid = depth.data?.levels.find(row => row.bidPrice != null)?.bidPrice ?? null;
+  const spread = bestAsk != null && bestBid != null ? bestAsk - bestBid : null;
   const savePaperOrder = () => {
     if (!validOrder) return;
     const order: PaperOrder = {
@@ -100,29 +105,39 @@ export function PaperTradingWorkbench({ asset, market, symbol, currentPrice, bar
 
   return (
     <div className="space-y-3" data-ui-component="stock-info.trading">
-      <section className="rounded-2xl border border-card-border bg-card p-3">
-        <div className="flex items-center justify-between gap-2 text-center">
-          <div><p className="font-black">실시간 호가</p><p className="text-[10px] font-bold text-muted-foreground">{depth.data?.provider ?? '조회 중'}{depth.data?.stale ? ' · 이전 정상값' : ''}</p></div>
+      <section className="market-panel overflow-hidden p-3">
+        <div className="flex items-center justify-between gap-2 text-left">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary"><Activity className="h-4 w-4" /></span>
+            <div><p className="font-black">실시간 호가</p><p className="text-[10px] font-bold text-muted-foreground">{depth.data?.provider ?? '조회 중'}{depth.data?.stale ? ' · 이전 정상값' : ''}</p></div>
+          </div>
           <span className="rounded-full bg-amber-500/15 px-2 py-1 text-[10px] font-black text-amber-500">조회 전용</span>
         </div>
         {depth.isLoading ? <p className="py-8 text-center text-sm font-bold text-muted-foreground">호가를 불러오는 중입니다.</p> : depth.data?.available ? (
-          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <div className="space-y-1">{depth.data.levels.slice().reverse().map((row, i) => <button type="button" key={`a-${i}`} onClick={() => row.askPrice && setPrice(String(row.askPrice))} className="grid w-full grid-cols-2 rounded-lg bg-blue-500/10 px-2 py-1.5 text-blue-500"><span>{format(row.askPrice)}</span><span>{format(row.askSize)}</span></button>)}</div>
-            <div className="space-y-1">{depth.data.levels.map((row, i) => <button type="button" key={`b-${i}`} onClick={() => row.bidPrice && setPrice(String(row.bidPrice))} className="grid w-full grid-cols-2 rounded-lg bg-red-500/10 px-2 py-1.5 text-red-500"><span>{format(row.bidPrice)}</span><span>{format(row.bidSize)}</span></button>)}</div>
+          <div className="mt-3 overflow-hidden rounded-xl border border-card-border">
+            <div className="grid grid-cols-2 bg-secondary/60 px-2 py-2 text-[10px] font-black text-muted-foreground"><span>매도호가 · 잔량</span><span>매수호가 · 잔량</span></div>
+            <div className="grid grid-cols-2 gap-px bg-card-border text-xs">
+              <div className="space-y-px bg-card">{depth.data.levels.slice().reverse().map((row, i) => <button type="button" key={`a-${i}`} onClick={() => row.askPrice && setPrice(String(row.askPrice))} className="grid w-full grid-cols-2 bg-blue-500/10 px-2 py-1.5 text-blue-500"><span className="market-number font-bold">{format(row.askPrice)}</span><span className="market-number opacity-70">{format(row.askSize)}</span></button>)}</div>
+              <div className="space-y-px bg-card">{depth.data.levels.map((row, i) => <button type="button" key={`b-${i}`} onClick={() => row.bidPrice && setPrice(String(row.bidPrice))} className="grid w-full grid-cols-2 bg-red-500/10 px-2 py-1.5 text-red-500"><span className="market-number font-bold">{format(row.bidPrice)}</span><span className="market-number opacity-70">{format(row.bidSize)}</span></button>)}</div>
+            </div>
+            <div className="flex justify-between bg-background/70 px-3 py-2 text-[10px] font-bold text-muted-foreground"><span>호가를 누르면 주문 가격에 입력</span><span className="market-number">스프레드 {format(spread)}</span></div>
           </div>
         ) : <p className="py-8 text-center text-sm font-bold text-muted-foreground">이 시장은 현재 호가 제공처가 없습니다. 가짜 호가는 표시하지 않습니다.</p>}
       </section>
 
-      <section className="rounded-2xl border border-primary/30 bg-card p-3">
-        <div className="text-center"><p className="font-black">모의 매매</p><p className="text-[10px] font-bold text-destructive">실제 주문 전송 없음 · 앱 내부 모의 기록만 저장</p></div>
+      <section className="market-panel border-primary/30 p-3">
+        <div className="flex items-center gap-2.5 text-left"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-positive/10 text-positive"><ShieldCheck className="h-4 w-4" /></span><div><p className="font-black">모의 매매</p><p className="text-[10px] font-bold text-muted-foreground">실제 자금 없이 주문 흐름 연습</p></div></div>
+        <div className="mt-3 flex items-center justify-center gap-1.5 rounded-xl border border-destructive/20 bg-destructive/5 px-3 py-2 text-[10px] font-black text-destructive"><LockKeyhole className="h-3.5 w-3.5" />실제 주문 전송 없음 · 앱 내부 기록만 저장</div>
         <div className="mt-3 grid grid-cols-2 gap-2">{(['buy','sell'] as const).map(value => <button key={value} type="button" onClick={() => setSide(value)} className={cn('rounded-xl py-2 text-sm font-black', side === value ? value === 'buy' ? 'bg-red-500 text-white' : 'bg-blue-500 text-white' : 'bg-secondary')}>{value === 'buy' ? '모의 매수' : '모의 매도'}</button>)}</div>
         <div className="mt-2 grid grid-cols-2 gap-2"><label className="text-center text-xs font-bold">가격<input inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} className="mt-1 w-full rounded-xl border border-card-border bg-background px-3 py-2 text-center" /></label><label className="text-center text-xs font-bold">수량<input inputMode="decimal" value={quantity} onChange={event => setQuantity(event.target.value)} className="mt-1 w-full rounded-xl border border-card-border bg-background px-3 py-2 text-center" /></label></div>
-        <button type="button" disabled={!validOrder} onClick={savePaperOrder} className="mt-3 w-full rounded-xl bg-primary py-3 text-sm font-black text-primary-foreground disabled:opacity-40">모의 주문 기록</button>
+        <div className="mt-2 flex items-center justify-between rounded-xl bg-secondary/60 px-3 py-2 text-xs"><span className="font-bold text-muted-foreground">예상 주문금액</span><strong className="market-number">{validOrder ? format(estimatedValue) : '—'}</strong></div>
+        <button type="button" disabled={!validOrder} onClick={savePaperOrder} className={cn('mt-3 w-full rounded-xl py-3 text-sm font-black text-white disabled:opacity-40', side === 'buy' ? 'bg-red-500' : 'bg-blue-500')}>{side === 'buy' ? '모의 매수 기록' : '모의 매도 기록'}</button>
         {orders.length > 0 && <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">이 종목 모의 기록 {orders.length}건 · 최근 {orders[0].side === 'buy' ? '매수' : '매도'} {format(orders[0].price)}</p>}
       </section>
 
-      <section className="rounded-2xl border border-card-border bg-card p-3 text-center">
-        <p className="font-black">반복 백테스트 · 자동 전략 선택</p><p className="mt-1 text-[10px] font-bold text-muted-foreground">훈련/검증 구간 분리 · 수수료/슬리피지 반영 · 최대 720개 조합</p>
+      <section className="market-panel p-3 text-center">
+        <div className="flex items-center gap-2.5 text-left"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-disclosure/10 text-disclosure"><FlaskConical className="h-4 w-4" /></span><div><p className="font-black">반복 백테스트</p><p className="text-[10px] font-bold text-muted-foreground">검증을 통과한 모의 전략만 제안</p></div></div>
+        <p className="mt-3 rounded-xl bg-secondary/50 px-3 py-2 text-[10px] font-bold text-muted-foreground">훈련/검증 구간 분리 · 수수료/슬리피지 반영 · 최대 720개 조합</p>
         <button type="button" disabled={testing || bars.length < 120} onClick={runBacktest} className="mt-3 w-full rounded-xl bg-secondary py-3 text-sm font-black disabled:opacity-40">{testing ? '720개 전략을 검증 중…' : bars.length < 120 ? `봉 데이터 부족 (${bars.length}/120)` : '반복 검증 시작'}</button>
         {backtest && <div className="mt-3 rounded-xl bg-background p-3"><p className={cn('font-black', backtest.accepted ? 'text-positive' : 'text-warning')}>{backtest.accepted ? '모의 전략 채택' : '검증 통과 전략 없음'}</p><p className="mt-1 text-xs font-bold text-muted-foreground">{backtest.runs}회 검증 · 실주문 차단 확인</p>{backtest.best && <p className="mt-2 text-xs font-bold">MA {backtest.best.params.fast}/{backtest.best.params.slow} · 손절 {backtest.best.params.stopPct}% · 익절 {backtest.best.params.takePct}%<br/>검증수익 {backtest.best.validation.netReturnPct.toFixed(2)}% · MDD {backtest.best.validation.maxDrawdownPct.toFixed(2)}%</p>}</div>}
       </section>

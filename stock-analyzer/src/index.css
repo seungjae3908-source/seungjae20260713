@@ -239,3 +239,170 @@ input[type='search']::-webkit-search-results-decoration {
 .app-safe-bottom {
   padding-bottom: calc(6.5rem + env(safe-area-inset-bottom));
 }
+
+/* Professional market workspace — shared across every screen. */
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  .dark {
+    color-scheme: dark;
+  }
+
+  body {
+    background:
+      radial-gradient(circle at 50% -12%, hsl(var(--primary) / 0.13), transparent 34rem),
+      hsl(var(--background));
+    font-feature-settings: 'tnum' 1, 'ss01' 1;
+  }
+
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.025em;
+  }
+
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
+  input,
+  select,
+  textarea {
+    border-radius: 0.875rem;
+  }
+
+  ::selection {
+    color: hsl(var(--primary-foreground));
+    background: hsl(var(--primary) / 0.85);
+  }
+}
+
+@layer components {
+  [data-ui-page] {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.25) transparent;
+    scrollbar-width: thin;
+  }
+
+  [data-ui-page]::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  [data-ui-page]::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: hsl(var(--muted-foreground) / 0.24);
+  }
+
+  [data-ui-page]:not([data-ui-page='navigation']) main {
+    animation: market-page-enter 220ms ease-out both;
+  }
+
+  [data-ui-component] {
+    position: relative;
+  }
+
+  .market-panel {
+    border: 1px solid hsl(var(--card-border) / 0.9);
+    border-radius: 1.25rem;
+    background:
+      linear-gradient(145deg, hsl(var(--card) / 0.98), hsl(var(--card) / 0.88));
+    box-shadow:
+      0 16px 40px hsl(225 50% 2% / 0.18),
+      inset 0 1px 0 hsl(0 0% 100% / 0.04);
+  }
+
+  .market-kicker {
+    color: hsl(var(--primary));
+    font-size: 0.625rem;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .market-number {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.035em;
+  }
+
+  .market-up {
+    color: hsl(var(--destructive));
+  }
+
+  .market-down {
+    color: hsl(var(--ai));
+  }
+
+  .market-skeleton {
+    overflow: hidden;
+    background: hsl(var(--muted) / 0.55);
+  }
+
+  .market-skeleton::after {
+    position: absolute;
+    inset: 0;
+    content: '';
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      hsl(var(--foreground) / 0.07),
+      transparent
+    );
+    animation: market-shimmer 1.35s infinite;
+  }
+
+  [data-ui-page='navigation'] {
+    padding-top: 0.4rem;
+    background:
+      linear-gradient(to bottom, hsl(var(--background) / 0.88), hsl(var(--background) / 0.98));
+    box-shadow:
+      0 -1px 0 hsl(var(--foreground) / 0.04),
+      0 -18px 40px hsl(225 60% 3% / 0.24);
+  }
+
+  [data-ui-page='navigation'] button {
+    min-height: 56px;
+  }
+
+  [data-ui-page='home'] > header {
+    background: hsl(var(--background) / 0.84);
+    backdrop-filter: blur(20px) saturate(1.25);
+    -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  }
+
+  [data-ui-page='home'] main > section,
+  [data-ui-page='search'] main > section,
+  [data-ui-page='portfolio'] main > section {
+    box-shadow: 0 12px 32px hsl(225 55% 3% / 0.12);
+  }
+}
+
+@keyframes market-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes market-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-ui-page]:not([data-ui-page='navigation']) main,
+  .market-skeleton::after {
+    animation: none;
+  }
+}

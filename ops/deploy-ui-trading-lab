@@ -20,7 +20,9 @@ FILES=(
   stock-analyzer/src/components/ui-internal-editor.tsx
   stock-analyzer/src/components/ui-layout-runtime.tsx
   stock-analyzer/src/components/paper-trading-workbench.tsx
+  stock-analyzer/src/components/data-state.tsx
   stock-analyzer/src/components/bottom-nav.tsx
+  stock-analyzer/src/index.css
   stock-analyzer/src/lib/ui-layout.ts
   stock-analyzer/src/pages/admin-ui-builder.tsx
   stock-analyzer/src/pages/detail.tsx
@@ -102,6 +104,7 @@ if [ "$FAILED" -eq 0 ]; then
   grep -Rqs "반복 백테스트" "$ROOT/stock-analyzer/dist/public/assets" || fail "백테스트 UI 빌드 미포함"
   grep -Rqs "드래그 편집기 열기" "$ROOT/stock-analyzer/dist/public/assets" || fail "UI 편집기 빌드 미포함"
   grep -Rqs "실제 주문 전송 없음" "$ROOT/stock-analyzer/dist/public/assets" || fail "모의주문 안전문구 미포함"
+  grep -Rqs "market-panel" "$ROOT/stock-analyzer/dist/public/assets" || fail "공통 주식앱 디자인 미포함"
 fi
 
 if [ "$FAILED" -eq 0 ]; then

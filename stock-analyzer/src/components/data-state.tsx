@@ -3,13 +3,13 @@ import { cn } from '@/lib/utils';
 
 export function LoadingState({ label = '불러오는 중...' }: { label?: string }) {
   return (
-    <div className="mx-auto my-4 flex w-full max-w-md flex-col items-center justify-center gap-3 rounded-3xl border border-card-border bg-card/90 px-5 py-10 text-muted-foreground shadow-sm">
+    <div role="status" aria-live="polite" className="market-panel mx-auto my-4 flex w-full max-w-md flex-col items-center justify-center gap-3 px-5 py-9 text-muted-foreground">
       <span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10">
         <Loader2 className="h-5 w-5 animate-spin text-primary" />
       </span>
       <span className="text-center text-xs font-bold">{label}</span>
-      <span className="text-center text-[10px] font-semibold text-muted-foreground/70">
-        이전 화면은 유지되며 완료되면 자동으로 갱신됩니다.
+      <span className="max-w-[240px] text-center text-[10px] font-semibold leading-4 text-muted-foreground/70">
+        연결이 늦어져도 이전 정상 데이터는 유지되며 완료되면 자동 갱신됩니다.
       </span>
     </div>
   );
@@ -18,7 +18,7 @@ export function LoadingState({ label = '불러오는 중...' }: { label?: string
 // Lightweight skeleton primitive — a subtle pulsing block used to reserve
 // layout while data loads, so the user never sees a blank screen.
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn('animate-pulse rounded-md bg-muted/40', className)} />;
+  return <div aria-hidden="true" className={cn('market-skeleton relative rounded-md', className)} />;
 }
 
 // A generic list of card-shaped skeletons for movers / alerts / undervalued.
@@ -26,7 +26,7 @@ export function CardListSkeleton({ count = 5 }: { count?: number }) {
   return (
     <div className="space-y-2">
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="rounded-2xl border border-card-border bg-card p-3.5">
+        <div key={i} className="market-panel p-3.5">
           <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1 space-y-2">
               <Skeleton className="h-4 w-28" />
@@ -45,7 +45,7 @@ export function CardListSkeleton({ count = 5 }: { count?: number }) {
 export function PageFallback() {
   return (
     <div className="flex h-full min-h-[240px] flex-1 items-center justify-center px-5 py-24 text-muted-foreground">
-      <div className="flex w-full max-w-sm flex-col items-center gap-3 rounded-3xl border border-card-border bg-card/90 px-5 py-10 shadow-sm">
+      <div role="status" aria-live="polite" className="market-panel flex w-full max-w-sm flex-col items-center gap-3 px-5 py-10">
         <span className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
         </span>
@@ -71,17 +71,20 @@ export function ErrorState({ code, onRetry }: { code?: string; onRetry?: () => v
   const message =
     (code && ERROR_MESSAGES[code]) ?? '데이터를 불러오지 못했습니다';
   return (
-    <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+    <div role="alert" className="market-panel mx-auto flex max-w-md flex-col items-center justify-center gap-3 px-5 py-12 text-center">
       {notFound ? (
         <SearchX className="h-7 w-7 text-muted-foreground" />
       ) : (
         <AlertCircle className="h-7 w-7 text-warning" />
       )}
-      <div className="text-sm font-medium">{message}</div>
+      <div className="text-sm font-black">{message}</div>
+      <p className="text-[10px] font-semibold leading-4 text-muted-foreground">
+        연결 상태를 자동 확인하고 있습니다. 잠시 후 다시 시도하면 이전 정상 데이터부터 표시됩니다.
+      </p>
       {onRetry && (
         <button
           onClick={onRetry}
-          className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+          className="rounded-xl border border-primary/30 bg-primary/10 px-4 py-2 text-xs font-black text-primary transition active:scale-95"
         >
           다시 시도
         </button>
