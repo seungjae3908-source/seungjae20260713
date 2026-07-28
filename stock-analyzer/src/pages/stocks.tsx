@@ -255,26 +255,28 @@ export default function StocksPage() {
 
 	const spotTickers = useQuery({
 		queryKey: ['crypto-spot-tickers'],
-		queryFn: () =>
-			apiGet<AnyObj>(`/crypto/spot/tickers?_ts=${Date.now()}`),
+		queryFn: () => apiGet<AnyObj>('/crypto/spot/tickers'),
 		enabled: !isStock && mode.coinMarket === 'spot',
-		staleTime: 0,
-		refetchInterval: 3_000,
-		refetchOnMount: true,
-		refetchOnWindowFocus: true,
+		staleTime: 5_000,
+		refetchInterval: 10_000,
+		refetchIntervalInBackground: false,
+		refetchOnMount: false,
+		refetchOnWindowFocus: false,
 		refetchOnReconnect: true,
+		placeholderData: (previous) => previous,
 	});
 
 	const futuresTickers = useQuery({
 		queryKey: ['crypto-futures-tickers'],
-		queryFn: () =>
-			apiGet<AnyObj>(`/crypto/futures/tickers?_ts=${Date.now()}`),
+		queryFn: () => apiGet<AnyObj>('/crypto/futures/tickers'),
 		enabled: !isStock && mode.coinMarket === 'futures',
-		staleTime: 0,
-		refetchInterval: 3_000,
-		refetchOnMount: true,
-		refetchOnWindowFocus: true,
+		staleTime: 5_000,
+		refetchInterval: 10_000,
+		refetchIntervalInBackground: false,
+		refetchOnMount: false,
+		refetchOnWindowFocus: false,
 		refetchOnReconnect: true,
+		placeholderData: (previous) => previous,
 	});
 
 	const spotNames = useMemo(
