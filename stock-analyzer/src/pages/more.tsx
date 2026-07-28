@@ -10,6 +10,7 @@ import {
   Bell,
   Download,
   Moon,
+  SlidersHorizontal,
   ShieldCheck,
   Smartphone,
   Sun,
@@ -558,6 +559,29 @@ export default function MorePage() {
             })}
           </div>
         </details>
+
+        {auth.isAdmin ? (
+          <section className="rounded-3xl border border-primary/30 bg-primary/10 p-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+                <SlidersHorizontal className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 flex-1 text-center">
+                <p className="text-base font-black">관리자 수정</p>
+                <p className="mt-0.5 text-sm font-bold text-muted-foreground">
+                  UI 배치 편집 · 버전 저장 · 작업지시문 생성
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate("/admin/ui-builder")}
+              className="mt-3 w-full rounded-2xl bg-primary px-4 py-3 text-base font-black text-primary-foreground"
+            >
+              UI 편집 열기
+            </button>
+          </section>
+        ) : null}
 
         {auth.isAdmin ? <AiRepairCenter /> : null}
 
