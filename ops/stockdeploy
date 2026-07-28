@@ -1,0 +1,318 @@
+#!/usr/bin/env bash
+
+set -u
+
+ROOT="${STOCK_APP_ROOT:-/opt/stock-app}"
+ENV_FILE="${STOCK_APP_ENV_FILE:-/etc/stock-app.env}"
+APP="${STOCK_APP_PM2_NAME:-stock-app}"
+BACKUP_ROOT="${STOCK_APP_BACKUP_ROOT:-/var/backups/stock-app}"
+LAST_GOOD="$BACKUP_ROOT/last-good"
+LOCK_FILE="/var/lock/stockdeploy.lock"
+LOCAL_HEALTH="http://127.0.0.1:8080/api/health"
+DOMAIN_HEALTH="${STOCK_APP_DOMAIN_HEALTH:-https://lsj119.duckdns.org/api/health}"
+
+log() {
+  printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+die() {
+  log "ERROR: $*"
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "필수 명령이 없습니다: $1"
+}
+
+load_env() {
+  [ -r "$ENV_FILE" ] || die "환경 파일을 읽을 수 없습니다: $ENV_FILE"
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+
+  local missing=()
+  local key
+  for key in \
+    SUPABASE_URL \
+    SUPABASE_ANON_KEY \
+    SUPABASE_SERVICE_ROLE_KEY \
+    KIWOOM_APP_KEY \
+    KIWOOM_APP_SECRET \
+    KIWOOM_PROXY_KEY
+  do
+    [ -n "${!key:-}" ] || missing+=("$key")
+  done
+
+  [ "${#missing[@]}" -eq 0 ] ||
+    die "필수 환경변수 누락: ${missing[*]}"
+}
+
+http_code() {
+  curl -kfsS \
+    --connect-timeout 4 \
+    --max-time 15 \
+    -o /dev/null \
+    -w '%{http_code}' \
+    "$1" 2>/dev/null || true
+}
+
+check_supabase() {
+  local code
+  code="$(
+    curl -fsS \
+      --connect-timeout 4 \
+      --max-time 15 \
+      -o /dev/null \
+      -w '%{http_code}' \
+      -H "apikey: ${SUPABASE_ANON_KEY}" \
+      "${SUPABASE_URL%/}/auth/v1/settings" 2>/dev/null || true
+  )"
+  [ "$code" = "200" ]
+}
+
+check_route_exists() {
+  local code
+  code="$(
+    curl -sS \
+      --connect-timeout 4 \
+      --max-time 30 \
+      -o /dev/null \
+      -w '%{http_code}' \
+      "http://127.0.0.1:8080/api/crypto/futures/scalp-scan?limit=1" 2>/dev/null || true
+  )"
+  [ "$code" != "000" ] && [ "$code" != "404" ] && [ -n "$code" ]
+}
+
+check_search() {
+  curl -fsS \
+    --connect-timeout 4 \
+    --max-time 20 \
+    "http://127.0.0.1:8080/api/search?q=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90" 2>/dev/null |
+    node -e '
+      let body = "";
+      process.stdin.on("data", chunk => body += chunk);
+      process.stdin.on("end", () => {
+        try {
+          const value = JSON.parse(body);
+          const rows = Array.isArray(value)
+            ? value
+            : value.results ?? value.items ?? value.data ?? [];
+          process.exit(Array.isArray(rows) && rows.length > 0 ? 0 : 1);
+        } catch {
+          process.exit(1);
+        }
+      });
+    '
+}
+
+check_all() {
+  local_code="$(http_code "$LOCAL_HEALTH")"
+  domain_code="$(http_code "$DOMAIN_HEALTH")"
+
+  [ "$local_code" = "200" ] || {
+    log "검사 실패: local health HTTP $local_code"
+    return 1
+  }
+  [ "$domain_code" = "200" ] || {
+    log "검사 실패: domain health HTTP $domain_code"
+    return 1
+  }
+  check_supabase || {
+    log "검사 실패: Supabase settings"
+    return 1
+  }
+  check_search || {
+    log "검사 실패: 삼성전자 검색"
+    return 1
+  }
+  check_route_exists || {
+    log "검사 실패: futures scalp-scan 라우트 없음"
+    return 1
+  }
+
+  log "검사 통과: health, Supabase, search, scalp-scan"
+  return 0
+}
+
+snapshot_last_good() {
+  local stage="$BACKUP_ROOT/.last-good.$$"
+  mkdir -p "$BACKUP_ROOT" || return 1
+  rm -rf "$stage"
+  mkdir -p "$stage/api-server" "$stage/stock-analyzer" || return 1
+
+  [ -d "$ROOT/api-server/dist" ] || return 1
+  cp -a "$ROOT/api-server/dist" "$stage/api-server/dist" || return 1
+
+  if [ -d "$ROOT/stock-analyzer/dist" ]; then
+    cp -a "$ROOT/stock-analyzer/dist" "$stage/stock-analyzer/dist" || return 1
+  fi
+
+  {
+    printf 'created_at=%s\n' "$(date -Iseconds)"
+    printf 'root=%s\n' "$ROOT"
+  } > "$stage/manifest"
+
+  rm -rf "$LAST_GOOD.previous"
+  [ ! -d "$LAST_GOOD" ] || mv "$LAST_GOOD" "$LAST_GOOD.previous"
+  mv "$stage" "$LAST_GOOD"
+}
+
+restore_last_good() {
+  [ -d "$LAST_GOOD/api-server/dist" ] ||
+    die "복구 가능한 마지막 정상 API 빌드가 없습니다."
+
+  log "마지막 정상 빌드 복구 시작"
+  rm -rf "$ROOT/api-server/dist.rollback"
+  [ ! -d "$ROOT/api-server/dist" ] ||
+    mv "$ROOT/api-server/dist" "$ROOT/api-server/dist.rollback"
+  cp -a "$LAST_GOOD/api-server/dist" "$ROOT/api-server/dist" ||
+    die "API dist 복구 실패"
+
+  if [ -d "$LAST_GOOD/stock-analyzer/dist" ]; then
+    rm -rf "$ROOT/stock-analyzer/dist.rollback"
+    [ ! -d "$ROOT/stock-analyzer/dist" ] ||
+      mv "$ROOT/stock-analyzer/dist" "$ROOT/stock-analyzer/dist.rollback"
+    cp -a "$LAST_GOOD/stock-analyzer/dist" "$ROOT/stock-analyzer/dist" ||
+      die "프론트 dist 복구 실패"
+  fi
+
+  load_env
+  pm2 restart "$APP" --update-env >/dev/null ||
+    die "복구 후 PM2 재시작 실패"
+  sleep 3
+  [ "$(http_code "$LOCAL_HEALTH")" = "200" ] ||
+    die "복구 후 local health 실패"
+  log "마지막 정상 빌드 복구 완료"
+}
+
+restart_and_verify() {
+  load_env
+  pm2 restart "$APP" --update-env >/dev/null || return 1
+
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    sleep 2
+    if check_all; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+deploy() {
+  local target="$1"
+  local before="$BACKUP_ROOT/predeploy-$(date '+%Y%m%d_%H%M%S')"
+
+  [ -d "$ROOT/api-server" ] || die "API 경로 없음"
+  [ -d "$ROOT/stock-analyzer" ] || die "프론트 경로 없음"
+  load_env
+
+  mkdir -p "$before/api-server" "$before/stock-analyzer" ||
+    die "배포 전 백업 폴더 생성 실패"
+  [ ! -d "$ROOT/api-server/dist" ] ||
+    cp -a "$ROOT/api-server/dist" "$before/api-server/dist"
+  [ ! -d "$ROOT/stock-analyzer/dist" ] ||
+    cp -a "$ROOT/stock-analyzer/dist" "$before/stock-analyzer/dist"
+
+  case "$target" in
+    api)
+      log "API 서버 빌드 시작"
+      pnpm --dir "$ROOT/api-server" run build:server ||
+        die "API 빌드 실패. 실행 중인 서비스는 변경되지 않았습니다."
+      ;;
+    frontend)
+      log "프론트 빌드 시작"
+      pnpm --dir "$ROOT/stock-analyzer" run build ||
+        die "프론트 빌드 실패. PM2를 재시작하지 않습니다."
+      ;;
+    all)
+      log "API 서버 빌드 시작"
+      pnpm --dir "$ROOT/api-server" run build:server ||
+        die "API 빌드 실패. PM2를 재시작하지 않습니다."
+      log "프론트 빌드 시작"
+      pnpm --dir "$ROOT/stock-analyzer" run build ||
+        die "프론트 빌드 실패. PM2를 재시작하지 않습니다."
+      ;;
+    *)
+      die "지원하지 않는 배포 대상: $target"
+      ;;
+  esac
+
+  if restart_and_verify; then
+    snapshot_last_good ||
+      log "WARNING: 마지막 정상 빌드 스냅샷 저장 실패"
+    log "배포 완료: $target"
+    return 0
+  fi
+
+  log "새 빌드 검증 실패. 배포 전 빌드로 자동 복구합니다."
+  [ ! -d "$before/api-server/dist" ] ||
+    {
+      rm -rf "$ROOT/api-server/dist"
+      cp -a "$before/api-server/dist" "$ROOT/api-server/dist"
+    }
+  [ ! -d "$before/stock-analyzer/dist" ] ||
+    {
+      rm -rf "$ROOT/stock-analyzer/dist"
+      cp -a "$before/stock-analyzer/dist" "$ROOT/stock-analyzer/dist"
+    }
+  load_env
+  pm2 restart "$APP" --update-env >/dev/null || true
+  die "배포 실패 및 이전 빌드 복구 완료"
+}
+
+status() {
+  load_env
+  pm2 describe "$APP" |
+    sed -n '/status/p;/script path/p;/uptime/p'
+  check_all
+}
+
+usage() {
+  cat <<'EOF'
+사용법:
+  stockdeploy api
+  stockdeploy frontend
+  stockdeploy all
+  stockdeploy init
+  stockdeploy status
+  stockdeploy rollback
+EOF
+}
+
+main() {
+  require_command curl
+  require_command node
+  require_command pnpm
+  require_command pm2
+  require_command flock
+
+  mkdir -p "$(dirname "$LOCK_FILE")" || die "잠금 폴더 생성 실패"
+  exec 9>"$LOCK_FILE"
+  flock -n 9 || die "다른 stockdeploy 작업이 실행 중입니다."
+
+  case "${1:-}" in
+    api|frontend|all)
+      deploy "$1"
+      ;;
+    status)
+      status
+      ;;
+    init)
+      load_env
+      check_all || die "현재 서비스가 정상 기준을 통과하지 못해 초기 스냅샷을 만들지 않습니다."
+      snapshot_last_good || die "초기 정상 빌드 스냅샷 저장 실패"
+      log "초기 정상 빌드 스냅샷 저장 완료"
+      ;;
+    rollback)
+      restore_last_good
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
