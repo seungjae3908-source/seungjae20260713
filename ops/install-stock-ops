@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+set -u
+
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN_DIR="/usr/local/sbin"
+UNIT_DIR="/etc/systemd/system"
+
+install -m 0750 "$SOURCE_DIR/stockdeploy" "$BIN_DIR/stockdeploy" || {
+  echo "stockdeploy 설치 실패"
+  exit 1
+}
+
+install -m 0750 "$SOURCE_DIR/stock-health-watch" "$BIN_DIR/stock-health-watch" || {
+  echo "stock-health-watch 설치 실패"
+  exit 1
+}
+
+install -m 0644 \
+  "$SOURCE_DIR/systemd/stock-health-watch.service" \
+  "$UNIT_DIR/stock-health-watch.service" || {
+  echo "service 설치 실패"
+  exit 1
+}
+
+install -m 0644 \
+  "$SOURCE_DIR/systemd/stock-health-watch.timer" \
+  "$UNIT_DIR/stock-health-watch.timer" || {
+  echo "timer 설치 실패"
+  exit 1
+}
+
+"$BIN_DIR/stockdeploy" init || {
+  echo "현재 서비스 검증 또는 초기 정상 스냅샷 생성 실패"
+  echo "감시 타이머는 활성화하지 않았습니다."
+  exit 1
+}
+
+systemctl daemon-reload || exit 1
+systemctl enable --now stock-health-watch.timer || exit 1
+
+echo "설치 완료"
+systemctl --no-pager status stock-health-watch.timer || true
