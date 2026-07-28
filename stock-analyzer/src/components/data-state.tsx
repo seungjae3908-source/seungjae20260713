@@ -3,9 +3,14 @@ import { cn } from '@/lib/utils';
 
 export function LoadingState({ label = '불러오는 중...' }: { label?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
-      <Loader2 className="h-6 w-6 animate-spin" />
-      <span className="text-sm">{label}</span>
+    <div className="mx-auto my-4 flex w-full max-w-md flex-col items-center justify-center gap-3 rounded-3xl border border-card-border bg-card/90 px-5 py-10 text-muted-foreground shadow-sm">
+      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10">
+        <Loader2 className="h-5 w-5 animate-spin text-primary" />
+      </span>
+      <span className="text-center text-xs font-bold">{label}</span>
+      <span className="text-center text-[10px] font-semibold text-muted-foreground/70">
+        이전 화면은 유지되며 완료되면 자동으로 갱신됩니다.
+      </span>
     </div>
   );
 }
@@ -39,8 +44,16 @@ export function CardListSkeleton({ count = 5 }: { count?: number }) {
 // Full-page fallback for lazily-loaded routes (Suspense boundary).
 export function PageFallback() {
   return (
-    <div className="flex flex-1 items-center justify-center py-24 text-muted-foreground">
-      <Loader2 className="h-6 w-6 animate-spin" />
+    <div className="flex h-full min-h-[240px] flex-1 items-center justify-center px-5 py-24 text-muted-foreground">
+      <div className="flex w-full max-w-sm flex-col items-center gap-3 rounded-3xl border border-card-border bg-card/90 px-5 py-10 shadow-sm">
+        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+        </span>
+        <p className="text-xs font-black text-foreground">화면을 준비하고 있습니다</p>
+        <p className="text-center text-[10px] font-semibold leading-4">
+          잠시만 기다리면 자동으로 표시됩니다.
+        </p>
+      </div>
     </div>
   );
 }
