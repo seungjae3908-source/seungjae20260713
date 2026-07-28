@@ -17,6 +17,8 @@ interface Entry<T> {
 }
 
 const store = new Map<string, Entry<unknown>>();
+const pendingLoads = new Map<string, Promise<unknown>>();
+const STALE_IF_ERROR_MS = 10 * 60 * 1000;
 
 const PERSIST_TABLE = 'market_cache';
 const PERSIST_MIN_TTL_MS = 5 * 60 * 1000;
@@ -83,21 +85,42 @@ export async function cached<T>(
     return hit.value;
   }
 
-  if (persistable(ttlMs)) {
-    const persisted = await readPersistent<T>(key);
-    if (persisted) {
-      store.set(key, persisted);
-      return persisted.value;
-    }
-  }
+  const pending = pendingLoads.get(key) as Promise<T> | undefined;
+  if (pending) return pending;
 
-  const value = await loader();
-  const expires = now + ttlMs;
-  store.set(key, { value, expires });
-  if (persistable(ttlMs)) {
-    writePersistent(key, value, ttlMs, expires);
+  const load = (async () => {
+    if (persistable(ttlMs)) {
+      const persisted = await readPersistent<T>(key);
+      if (persisted) {
+        store.set(key, persisted);
+        return persisted.value;
+      }
+    }
+
+    try {
+      const value = await loader();
+      const expires = Date.now() + ttlMs;
+      store.set(key, { value, expires });
+      if (persistable(ttlMs)) {
+        writePersistent(key, value, ttlMs, expires);
+      }
+      return value;
+    } catch (error) {
+      // 공급자의 짧은 장애에는 직전 정상값을 제한적으로 재사용한다.
+      if (hit && Date.now() <= hit.expires + STALE_IF_ERROR_MS) {
+        console.warn(`[cache] stale fallback used: ${key}`);
+        return hit.value;
+      }
+      throw error;
+    }
+  })();
+
+  pendingLoads.set(key, load);
+  try {
+    return await load;
+  } finally {
+    if (pendingLoads.get(key) === load) pendingLoads.delete(key);
   }
-  return value;
 }
 
 export const TTL = {
