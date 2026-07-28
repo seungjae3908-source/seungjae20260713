@@ -460,7 +460,7 @@ export function BottomNav() {
         </div>
       )}
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/95 px-1 pb-[env(safe-area-inset-bottom)] pt-1.5 shadow-[0_-8px_24px_rgba(0,0,0,0.14)] backdrop-blur-xl">
+      <nav data-ui-page="navigation" className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/95 px-1 pb-[env(safe-area-inset-bottom)] pt-1.5 shadow-[0_-8px_24px_rgba(0,0,0,0.14)] backdrop-blur-xl">
         <div
           className="mx-auto grid max-w-md gap-0.5"
           style={{
