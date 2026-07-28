@@ -4,32 +4,30 @@ set -uo pipefail
 
 ROOT="/opt/stock-app"
 API="$ROOT/api-server"
-SOURCE_REL="api-server/src/services/market-data.service.ts"
-SOURCE="$ROOT/$SOURCE_REL"
 REPO="seungjae3908-source/seungjae20260713"
 BRANCH="feature/detail-realtime-chart-integration"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP="/tmp/stock-api-recovery-backup-$STAMP"
 STAGE="/tmp/stock-api-recovery-stage-$STAMP"
+FILES=(
+  "api-server/src/services/market-data.service.ts"
+  "api-server/src/lib/cache.ts"
+)
 
 restore_previous() {
   echo "ROLLBACK: 이전 API 소스와 빌드를 복구합니다."
-  [ ! -f "$BACKUP/market-data.service.ts" ] ||
-    cp -a "$BACKUP/market-data.service.ts" "$SOURCE"
+  for relative in "${FILES[@]}"; do
+    short="${relative#api-server/}"
+    [ ! -f "$BACKUP/$short" ] || cp -a "$BACKUP/$short" "$API/$short"
+  done
 
   if [ -d "$BACKUP/dist" ]; then
-    [ ! -d "$API/dist" ] ||
-      mv "$API/dist" "$BACKUP/failed-dist-$STAMP"
+    [ ! -d "$API/dist" ] || mv "$API/dist" "$BACKUP/failed-dist-$STAMP"
     cp -a "$BACKUP/dist" "$API/dist"
   fi
 
   cd "$ROOT" || return 1
   pm2 restart stock-app --update-env >/dev/null 2>&1 || true
-}
-
-[ -f "$SOURCE" ] || {
-  echo "FAILED: 운영 API 소스가 없습니다."
-  exit 1
 }
 
 gh auth status >/dev/null 2>&1 || {
@@ -38,23 +36,44 @@ gh auth status >/dev/null 2>&1 || {
 }
 
 mkdir -p "$BACKUP" "$STAGE" || exit 1
-cp -a "$SOURCE" "$BACKUP/market-data.service.ts" || exit 1
 [ ! -d "$API/dist" ] || cp -a "$API/dist" "$BACKUP/dist"
 
-if ! gh api --method GET   "repos/$REPO/contents/$SOURCE_REL"   -f "ref=$BRANCH"   -H "Accept: application/vnd.github.raw+json" >"$STAGE/market-data.service.ts"; then
-  echo "FAILED: 허브 소스 다운로드 실패"
-  exit 1
-fi
+for relative in "${FILES[@]}"; do
+  short="${relative#api-server/}"
+  source_file="$API/$short"
+  stage_file="$STAGE/$short"
+  backup_file="$BACKUP/$short"
 
-if ! grep -q "kiwoomChartCircuitOpenUntil" "$STAGE/market-data.service.ts"; then
-  echo "FAILED: 회로 차단 수정이 없는 소스입니다."
-  exit 1
-fi
+  [ -f "$source_file" ] || {
+    echo "FAILED: 운영 API 소스 없음: $source_file"
+    exit 1
+  }
 
-cp -a "$STAGE/market-data.service.ts" "$SOURCE" || {
-  restore_previous
+  mkdir -p "$(dirname "$stage_file")" "$(dirname "$backup_file")" || exit 1
+  cp -a "$source_file" "$backup_file" || exit 1
+
+  if ! gh api --method GET     "repos/$REPO/contents/$relative"     -f "ref=$BRANCH"     -H "Accept: application/vnd.github.raw+json" >"$stage_file"; then
+    echo "FAILED: 허브 다운로드 실패: $relative"
+    exit 1
+  fi
+done
+
+grep -q "kiwoomChartCircuitOpenUntil" "$STAGE/src/services/market-data.service.ts" || {
+  echo "FAILED: 키움 회로 차단 수정 누락"
   exit 1
 }
+grep -q "pendingLoads" "$STAGE/src/lib/cache.ts" || {
+  echo "FAILED: 동시요청 합치기 수정 누락"
+  exit 1
+}
+
+for relative in "${FILES[@]}"; do
+  short="${relative#api-server/}"
+  cp -a "$STAGE/$short" "$API/$short" || {
+    restore_previous
+    exit 1
+  }
+done
 
 echo "BUILD: API 서버 빌드를 시작합니다."
 if ! pnpm --dir "$API" run build:server; then
@@ -63,11 +82,11 @@ if ! pnpm --dir "$API" run build:server; then
   exit 1
 fi
 
-if [ ! -s "$API/dist/index.mjs" ]; then
-  echo "FAILED: API 빌드 결과가 없습니다."
+[ -s "$API/dist/index.mjs" ] || {
+  echo "FAILED: API 빌드 결과 없음"
   restore_previous
   exit 1
-fi
+}
 
 cd "$ROOT" || {
   restore_previous
@@ -83,10 +102,7 @@ fi
 healthy=0
 for _attempt in 1 2 3 4 5 6 7 8 9 10; do
   code="$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/health 2>/dev/null || true)"
-  if [ "$code" = "200" ]; then
-    healthy=1
-    break
-  fi
+  if [ "$code" = "200" ]; then healthy=1; break; fi
   sleep 2
 done
 
@@ -103,12 +119,9 @@ search_count="$(
     process.stdin.on("data", chunk => body += chunk);
     process.stdin.on("end", () => {
       try {
-        const value = JSON.parse(body);
-        const rows = Array.isArray(value?.results) ? value.results : [];
-        process.stdout.write(String(rows.length));
-      } catch {
-        process.stdout.write("0");
-      }
+        const rows = JSON.parse(body)?.results ?? [];
+        process.stdout.write(String(Array.isArray(rows) ? rows.length : 0));
+      } catch { process.stdout.write("0"); }
     });
   '
 )"
@@ -126,7 +139,7 @@ if [ "$domain_code" != "200" ]; then
   exit 1
 fi
 
-echo "API_RECOVERY_DEPLOY_OK"
+echo "API_RESILIENCE_DEPLOY_OK"
 echo "LOCAL_HEALTH=200"
 echo "DOMAIN_HEALTH=200"
 echo "SEARCH_RESULTS=$search_count"
