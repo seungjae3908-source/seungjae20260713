@@ -5,6 +5,7 @@ import {
   getUserSupabase,
   hasSupabaseServerKey,
 } from '../lib/supabase';
+import { publishedFileLayout } from '../lib/ui-layout-file-store';
 
 const router = Router();
 router.use(requireMember);
@@ -43,11 +44,11 @@ router.get('/:pageKey/published', async (req: AuthenticatedRequest, res) => {
     .limit(1)
     .maybeSingle();
 
-  if (error) {
-    return res.status(503).json({ error: 'UI_LAYOUT_STORAGE_NOT_READY' });
+  if (error || !data) {
+    return res.json({ version: publishedFileLayout(pageKey) });
   }
 
-  return res.json({ version: data ?? null });
+  return res.json({ version: data });
 });
 
 export default router;
