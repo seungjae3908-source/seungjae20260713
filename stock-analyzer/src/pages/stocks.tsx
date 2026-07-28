@@ -688,7 +688,7 @@ export default function StocksPage() {
         </section>
       </header>
 
-			<main data-ui-component="stocks.list" className="space-y-3 px-4 pb-28 pt-4">
+			<main className="space-y-3 px-4 pb-28 pt-4">
 				{!searching && (
 					<EmptyBox>
 						{isStock
