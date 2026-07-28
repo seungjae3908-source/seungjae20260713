@@ -51,6 +51,7 @@ const PortfolioSimulatePage = lazy(() => import('@/pages/portfolio-simulate'));
 const PortfolioPlanPage = lazy(() => import('@/pages/portfolio-plan'));
 const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
+const AdminUiBuilderPage = lazy(() => import('@/pages/admin-ui-builder'));
 const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const NotFound = lazy(() => import('@/pages/not-found'));
@@ -393,6 +394,14 @@ function AdminOnlyPage() {
 	);
 }
 
+function AdminUiBuilderOnlyPage() {
+	return (
+		<FeatureGate feature="admin">
+			<AdminUiBuilderPage />
+		</FeatureGate>
+	);
+}
+
 function AdvancedCryptoHomeRedirect() {
 	return (
 		<FeatureGate feature="aiRealtimeChart">
@@ -473,6 +482,7 @@ function ApprovedRouter() {
 				<Route path="/portfolio" component={AdvancedPortfolioPage} />
 				<Route path="/account" component={AccountPage} />
 				<Route path="/admin" component={AdminOnlyPage} />
+				<Route path="/admin/ui-builder" component={AdminUiBuilderOnlyPage} />
 				<Route path="/more" component={MorePage} />
 				<Route path="/stock/:ticker" component={DetailPage} />
 				<Route path="/recommendations" component={AdvancedRecommendationsPage} />
