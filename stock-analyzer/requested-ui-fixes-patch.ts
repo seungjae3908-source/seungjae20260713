@@ -14,6 +14,14 @@ function replaceRequired(
 }
 
 function patchApp(source: string): string {
+  // App.tsx에 최종 UI가 이미 소스화된 경우 빌드 시 중복 패치를 하지 않는다.
+  if (
+    source.includes('function GlobalBackButton()') &&
+    source.includes('<GlobalBackButton />')
+  ) {
+    return source;
+  }
+
   let code = source;
 
   code = replaceRequired(
