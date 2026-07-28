@@ -48,6 +48,7 @@ function patchApp(source: string): string {
 }
 
 function patchBottomNav(source: string): string {
+  if (source.includes('const SIGNAL_SCAN_MAIN_ITEMS: PopupItem[]')) return source;
   let code = source;
 
   code = replaceOnce(
