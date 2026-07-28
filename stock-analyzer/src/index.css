@@ -215,3 +215,27 @@ input[type='search']::-webkit-search-results-decoration {
     display: none !important;
   }
 }
+
+
+/* Mobile application consistency */
+@layer base {
+  button,
+  a,
+  input,
+  select {
+    touch-action: manipulation;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid hsl(var(--primary));
+    outline-offset: 2px;
+  }
+}
+
+.app-safe-bottom {
+  padding-bottom: calc(6.5rem + env(safe-area-inset-bottom));
+}
