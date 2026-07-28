@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+ROOT="/opt/stock-app"
+API="$ROOT/api-server"
+SOURCE_REL="api-server/src/services/market-data.service.ts"
+SOURCE="$ROOT/$SOURCE_REL"
+REPO="seungjae3908-source/seungjae20260713"
+BRANCH="feature/detail-realtime-chart-integration"
+STAMP="$(date +%Y%m%d_%H%M%S)"
+BACKUP="/tmp/stock-api-recovery-backup-$STAMP"
+STAGE="/tmp/stock-api-recovery-stage-$STAMP"
+
+restore_previous() {
+  echo "ROLLBACK: 이전 API 소스와 빌드를 복구합니다."
+  [ ! -f "$BACKUP/market-data.service.ts" ] ||
+    cp -a "$BACKUP/market-data.service.ts" "$SOURCE"
+
+  if [ -d "$BACKUP/dist" ]; then
+    [ ! -d "$API/dist" ] ||
+      mv "$API/dist" "$BACKUP/failed-dist-$STAMP"
+    cp -a "$BACKUP/dist" "$API/dist"
+  fi
+
+  cd "$ROOT" || return 1
+  pm2 restart stock-app --update-env >/dev/null 2>&1 || true
+}
+
+[ -f "$SOURCE" ] || {
+  echo "FAILED: 운영 API 소스가 없습니다."
+  exit 1
+}
+
+gh auth status >/dev/null 2>&1 || {
+  echo "FAILED: GitHub 로그인이 필요합니다."
+  exit 1
+}
+
+mkdir -p "$BACKUP" "$STAGE" || exit 1
+cp -a "$SOURCE" "$BACKUP/market-data.service.ts" || exit 1
+[ ! -d "$API/dist" ] || cp -a "$API/dist" "$BACKUP/dist"
+
+if ! gh api --method GET   "repos/$REPO/contents/$SOURCE_REL"   -f "ref=$BRANCH"   -H "Accept: application/vnd.github.raw+json" >"$STAGE/market-data.service.ts"; then
+  echo "FAILED: 허브 소스 다운로드 실패"
+  exit 1
+fi
+
+if ! grep -q "kiwoomChartCircuitOpenUntil" "$STAGE/market-data.service.ts"; then
+  echo "FAILED: 회로 차단 수정이 없는 소스입니다."
+  exit 1
+fi
+
+cp -a "$STAGE/market-data.service.ts" "$SOURCE" || {
+  restore_previous
+  exit 1
+}
+
+echo "BUILD: API 서버 빌드를 시작합니다."
+if ! pnpm --dir "$API" run build:server; then
+  echo "FAILED: API 빌드 실패"
+  restore_previous
+  exit 1
+fi
+
+if [ ! -s "$API/dist/index.mjs" ]; then
+  echo "FAILED: API 빌드 결과가 없습니다."
+  restore_previous
+  exit 1
+fi
+
+cd "$ROOT" || {
+  restore_previous
+  exit 1
+}
+
+if ! pm2 restart stock-app --update-env; then
+  echo "FAILED: PM2 재시작 실패"
+  restore_previous
+  exit 1
+fi
+
+healthy=0
+for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+  code="$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/health 2>/dev/null || true)"
+  if [ "$code" = "200" ]; then
+    healthy=1
+    break
+  fi
+  sleep 2
+done
+
+if [ "$healthy" != "1" ]; then
+  echo "FAILED: API 헬스검사 실패"
+  restore_previous
+  exit 1
+fi
+
+search_count="$(
+  curl -sS --max-time 20     'http://127.0.0.1:8080/api/search?q=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90' 2>/dev/null |
+  node -e '
+    let body = "";
+    process.stdin.on("data", chunk => body += chunk);
+    process.stdin.on("end", () => {
+      try {
+        const value = JSON.parse(body);
+        const rows = Array.isArray(value?.results) ? value.results : [];
+        process.stdout.write(String(rows.length));
+      } catch {
+        process.stdout.write("0");
+      }
+    });
+  '
+)"
+
+if ! [[ "$search_count" =~ ^[1-9][0-9]*$ ]]; then
+  echo "FAILED: 삼성전자 검색 검증 실패"
+  restore_previous
+  exit 1
+fi
+
+domain_code="$(curl -sS --max-time 12 -o /dev/null -w '%{http_code}' https://lsj119.duckdns.org/api/health 2>/dev/null || true)"
+if [ "$domain_code" != "200" ]; then
+  echo "FAILED: 도메인 헬스검사 HTTP $domain_code"
+  restore_previous
+  exit 1
+fi
+
+echo "API_RECOVERY_DEPLOY_OK"
+echo "LOCAL_HEALTH=200"
+echo "DOMAIN_HEALTH=200"
+echo "SEARCH_RESULTS=$search_count"
+echo "BACKUP=$BACKUP"
