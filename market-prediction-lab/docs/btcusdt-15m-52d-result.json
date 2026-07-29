@@ -2,22 +2,22 @@
   "schemaVersion": 1,
   "status": "pass",
   "stage": "complete",
-  "verifiedAt": 1785366835401,
-  "durationMs": 5581,
+  "verifiedAt": 1785367373435,
+  "durationMs": 4914,
   "source": "github-actions-isolated-52d-validation",
   "market": "CRYPTO_FUTURES",
   "symbol": "BTCUSDT",
   "timeframe": "15m",
   "requestedDays": 52,
   "candleCount": 4991,
-  "firstTimestamp": 1780874100000,
-  "lastTimestamp": 1785365100000,
-  "latestAgeMs": 1734561,
+  "firstTimestamp": 1780875000000,
+  "lastTimestamp": 1785366000000,
+  "latestAgeMs": 1372633,
   "gaps": 0,
   "zeroVolume": 0,
   "maximumGapMs": 900000,
-  "rawCandleSnapshotSha256": "7e1c96aa98b5e1d90831716c1b0b3fcf0722bb8bf3399f14e3845538c72c2f1d",
-  "repairedCandleSnapshotSha256": "1dd449ba6a314adc5d47ec6c32ff46a0ea934221a6f10a9a847edf25ab50b0ee",
+  "rawCandleSnapshotSha256": "022762eebef0de8be72039ecf041bea88bad635680389885f4be684e581f72e1",
+  "repairedCandleSnapshotSha256": "71ea926697e91ab7b79ece8db7a45c3bdb227d0f2d599a67c5077bf64e58118f",
   "gapRepair": {
     "schemaVersion": 1,
     "initialGapCount": 0,
@@ -53,33 +53,33 @@
       "test": 178,
       "purgedBetweenTrainValidation": 2,
       "purgedBetweenValidationTest": 2,
-      "trainLastFutureTimestamp": 1784070000000,
-      "validationFirstAnchorTimestamp": 1784073600000,
-      "validationLastFutureTimestamp": 1784714400000,
-      "testFirstAnchorTimestamp": 1784718000000
+      "trainLastFutureTimestamp": 1784070900000,
+      "validationFirstAnchorTimestamp": 1784074500000,
+      "validationLastFutureTimestamp": 1784715300000,
+      "testFirstAnchorTimestamp": 1784718900000
     },
     "outputs": {
       "train": {
         "count": 837,
-        "sha256": "c18f64617396daf63b6e391a4d0c9ac67f0361e2f8ca5c41b86e27ecea468714"
+        "sha256": "8a9f51f90ef1a98251d0636643db7827b5558989f7df6997c3ad891e060d04d5"
       },
       "validation": {
         "count": 177,
-        "sha256": "206df17641b295a5ba045176c02b749914f90da6a3e40ccbe8371017786e49bb"
+        "sha256": "593548b612328548dad2fcaf579c144b964b42565797ab1a63a40b11648a070a"
       },
       "test": {
         "count": 178,
-        "sha256": "183c83e93b824333692a87c596ed29908b5a04be5c11b0d876ef8296ca8bf5de"
+        "sha256": "91c7a7fb0f2b67ffb891bf3fc4236c72b06500c3b783d3e3b5731e01886ede3d"
       }
     }
   },
   "futuresContext": {
-    "openInterestRaw": "33145.5537000000088",
-    "fundingRateRaw": "0.000052",
+    "openInterestRaw": "33157.238300000009",
+    "fundingRateRaw": "0.000051",
     "fundingIntervalHours": 8,
-    "marketPriceRaw": "63862.9",
-    "markPriceRaw": "63862.9",
-    "indexPriceRaw": "63894.5665",
+    "marketPriceRaw": "63984.7",
+    "markPriceRaw": "63986.1",
+    "indexPriceRaw": "64017.6175",
     "fundingHistoryCount": 100
   }
 }
