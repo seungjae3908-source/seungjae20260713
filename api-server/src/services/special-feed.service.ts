@@ -7,9 +7,25 @@ import { NewsService } from "./news.service";
 import { RiskAnalysisService } from "./risk-analysis.service";
 import { SignalService } from "./signal.service";
 
-export type SpecialFeedMarket = "KR" | "US";
+export type SpecialFeedMarket = "KR" | "US" | "spot" | "futures";
 export type SpecialFeedKind = "news" | "disclosure" | "signal";
 export type SpecialFeedTone = "positive" | "negative" | "neutral";
+export type SpecialFeedMarketState =
+  | "OK"
+  | "PARTIAL"
+  | "NOT_CONFIGURED"
+  | "ERROR";
+
+export interface SpecialFeedMarketStatus {
+  market: SpecialFeedMarket;
+  status: SpecialFeedMarketState;
+  source: string;
+  resultCount: number;
+  durationMs: number;
+  updatedAt: string;
+  warning: string | null;
+  staleUsed: boolean;
+}
 
 export interface SpecialFeedItem {
   id: string;
@@ -18,7 +34,7 @@ export interface SpecialFeedItem {
   ticker: string;
   name: string;
   market: SpecialFeedMarket;
-  currency: "KRW" | "USD";
+  currency: "KRW" | "USD" | "USDT";
   title: string;
   summary: string;
   source: string;
@@ -43,6 +59,7 @@ export interface SpecialFeedResponse {
   ttlMinutes: 60;
   refreshSeconds: 30;
   note: string;
+  marketStatus: SpecialFeedMarketStatus;
 }
 
 const FEED_TTL_MS = 60 * 60_000;
@@ -52,7 +69,7 @@ const NEWS_MAX_AGE_MS = 3 * 24 * 60 * 60_000;
 const DISCLOSURE_MAX_AGE_MS = 14 * 24 * 60 * 60_000;
 const MAX_ITEMS_PER_MARKET = 120;
 const DEFAULT_BATCH_SIZE = 8;
-const SNAPSHOT_VERSION = 1 as const;
+const SNAPSHOT_VERSION = 2 as const;
 const SNAPSHOT_READ_THROTTLE_MS = 1_000;
 
 const feedItems = new Map<string, SpecialFeedItem>();
@@ -63,16 +80,55 @@ let snapshotSavedAt = 0;
 let snapshotReadAt = 0;
 let snapshotLoadPromise: Promise<void> | null = null;
 
+interface MarketScanResult {
+  source: string;
+  resultCount: number;
+  scannedNow: number;
+  nextCursor: number;
+  warning?: string;
+}
+
 const marketState: Record<
   SpecialFeedMarket,
   {
     cursor: number;
     lastRefreshAt: number;
-    running: Promise<{ scannedNow: number; nextCursor: number }> | null;
+    running: Promise<MarketScanResult> | null;
   }
 > = {
   KR: { cursor: 0, lastRefreshAt: 0, running: null },
   US: { cursor: 0, lastRefreshAt: 0, running: null },
+  spot: { cursor: 0, lastRefreshAt: 0, running: null },
+  futures: { cursor: 0, lastRefreshAt: 0, running: null },
+};
+
+const MARKET_KEYS: readonly SpecialFeedMarket[] = [
+  "KR",
+  "US",
+  "spot",
+  "futures",
+];
+
+function initialMarketStatus(
+  market: SpecialFeedMarket,
+): SpecialFeedMarketStatus {
+  return {
+    market,
+    status: "NOT_CONFIGURED",
+    source: "none",
+    resultCount: 0,
+    durationMs: 0,
+    updatedAt: new Date(0).toISOString(),
+    warning: "NOT_YET_SCANNED",
+    staleUsed: false,
+  };
+}
+
+const marketStatuses: Record<SpecialFeedMarket, SpecialFeedMarketStatus> = {
+  KR: initialMarketStatus("KR"),
+  US: initialMarketStatus("US"),
+  spot: initialMarketStatus("spot"),
+  futures: initialMarketStatus("futures"),
 };
 
 interface SpecialFeedSnapshot {
@@ -80,6 +136,7 @@ interface SpecialFeedSnapshot {
   savedAt: number;
   items: SpecialFeedItem[];
   cursors: Record<SpecialFeedMarket, number>;
+  markets: Record<SpecialFeedMarket, SpecialFeedMarketStatus>;
 }
 
 function snapshotFilePath(): string {
@@ -99,9 +156,27 @@ function validSnapshotItem(value: unknown): value is SpecialFeedItem {
   return Boolean(
     row.id &&
       row.ticker &&
-      (row.market === "KR" || row.market === "US") &&
+      MARKET_KEYS.includes(row.market as SpecialFeedMarket) &&
       row.detectedAt &&
       row.expiresAt,
+  );
+}
+
+function validMarketStatus(
+  value: unknown,
+  market: SpecialFeedMarket,
+): value is SpecialFeedMarketStatus {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Partial<SpecialFeedMarketStatus>;
+  return Boolean(
+    row.market === market &&
+      ["OK", "PARTIAL", "NOT_CONFIGURED", "ERROR"].includes(
+        String(row.status),
+      ) &&
+      row.source &&
+      Number.isFinite(Number(row.resultCount)) &&
+      Number.isFinite(Number(row.durationMs)) &&
+      row.updatedAt,
   );
 }
 
@@ -130,14 +205,16 @@ async function syncSnapshotFromDisk(force = false): Promise<void> {
       for (const item of parsed.items.filter(validSnapshotItem)) {
         feedItems.set(item.id, item);
       }
-      marketState.KR.cursor = Math.max(
-        0,
-        Math.trunc(Number(parsed.cursors?.KR ?? 0)) || 0,
-      );
-      marketState.US.cursor = Math.max(
-        0,
-        Math.trunc(Number(parsed.cursors?.US ?? 0)) || 0,
-      );
+      for (const market of MARKET_KEYS) {
+        marketState[market].cursor = Math.max(
+          0,
+          Math.trunc(Number(parsed.cursors?.[market] ?? 0)) || 0,
+        );
+        const status = parsed.markets?.[market];
+        if (validMarketStatus(status, market)) {
+          marketStatuses[market] = status;
+        }
+      }
       snapshotSavedAt = savedAt;
       pruneState();
     } catch {
@@ -162,7 +239,10 @@ async function persistSnapshot(): Promise<void> {
     cursors: {
       KR: marketState.KR.cursor,
       US: marketState.US.cursor,
+      spot: marketState.spot.cursor,
+      futures: marketState.futures.cursor,
     },
+    markets: { ...marketStatuses },
   };
 
   await mkdir(path.dirname(target), { recursive: true });
@@ -568,7 +648,7 @@ function signalSummary(row: any, title: string): string {
   );
 }
 
-async function scanEntry(entry: CatalogEntry) {
+async function scanEntry(entry: CatalogEntry): Promise<boolean> {
   const [newsResult, riskResult, signalResult, quoteResult] =
     await Promise.allSettled([
       NewsService.getNews(entry.ticker),
@@ -698,6 +778,9 @@ async function scanEntry(entry: CatalogEntry) {
   }
 
   previousSignals.set(signalKey, current);
+  return [newsResult, riskResult, signalResult, quoteResult].some(
+    (result) => result.status === "fulfilled",
+  );
 }
 
 function batchSize() {
@@ -706,14 +789,20 @@ function batchSize() {
   return Math.max(2, Math.min(20, Math.trunc(configured)));
 }
 
-async function scanMarket(
-  market: SpecialFeedMarket,
-): Promise<{ scannedNow: number; nextCursor: number }> {
+async function scanStockMarket(
+  market: "KR" | "US",
+): Promise<MarketScanResult> {
   const state = marketState[market];
   const universe = CATALOG.filter((entry) => entry.market === market);
 
   if (universe.length === 0) {
-    return { scannedNow: 0, nextCursor: 0 };
+    return {
+      source: "catalog",
+      resultCount: 0,
+      scannedNow: 0,
+      nextCursor: 0,
+      warning: "EMPTY_MARKET_UNIVERSE",
+    };
   }
 
   const size = Math.min(batchSize(), universe.length);
@@ -723,30 +812,235 @@ async function scanMarket(
   );
 
   // 공급자 부하를 줄이기 위해 한 번에 4종목씩 처리합니다.
+  let succeeded = 0;
+  let failed = 0;
   for (let index = 0; index < batch.length; index += 4) {
     const chunk = batch.slice(index, index + 4);
-    await Promise.allSettled(chunk.map((entry) => scanEntry(entry)));
+    const rows = await Promise.allSettled(
+      chunk.map((entry) => scanEntry(entry)),
+    );
+    succeeded += rows.filter(
+      (row) => row.status === "fulfilled" && row.value,
+    ).length;
+    failed += rows.length - rows.filter(
+      (row) => row.status === "fulfilled" && row.value,
+    ).length;
   }
 
   state.cursor = (state.cursor + batch.length) % universe.length;
-  return { scannedNow: batch.length, nextCursor: state.cursor };
+  if (succeeded === 0 && batch.length > 0) {
+    const error = new Error(`${market}_MARKET_SCAN_FAILED`);
+    error.name = "MARKET_SCAN_FAILED";
+    throw error;
+  }
+  return {
+    source: market === "KR" ? "stock-providers-kr" : "stock-providers-us",
+    resultCount: succeeded,
+    scannedNow: batch.length,
+    nextCursor: state.cursor,
+    ...(failed > 0 ? { warning: `ENTRY_PARTIAL_FAILURE:${failed}` } : {}),
+  };
+}
+
+class SignalMarketError extends Error {
+  constructor(readonly code: string) {
+    super(code);
+    this.name = "SignalMarketError";
+  }
+}
+
+function cryptoProvider(market: "spot" | "futures"): string {
+  const variable =
+    market === "spot"
+      ? process.env.SIGNAL_SPOT_PROVIDER
+      : process.env.SIGNAL_FUTURES_PROVIDER;
+  return String(variable ?? "").trim().toLowerCase();
+}
+
+function signalProviderTimeoutMs(): number {
+  const value = Number(process.env.SIGNAL_PROVIDER_TIMEOUT_MS);
+  if (!Number.isFinite(value)) return 12_000;
+  return Math.max(1_000, Math.min(30_000, Math.trunc(value)));
+}
+
+async function fetchSignalJson<T>(url: string): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    signalProviderTimeoutMs(),
+  );
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "stock-signal-worker/1.0",
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new SignalMarketError(`HTTP_${response.status}`);
+    }
+    return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof SignalMarketError) throw error;
+    const code =
+      error && typeof error === "object" && "name" in error
+        ? String(error.name)
+        : "PROVIDER_ERROR";
+    throw new SignalMarketError(
+      code === "AbortError" ? "PROVIDER_TIMEOUT" : "PROVIDER_ERROR",
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function scanSpotMarket(): Promise<MarketScanResult> {
+  if (cryptoProvider("spot") !== "upbit") {
+    throw new SignalMarketError("SPOT_PROVIDER_NOT_CONFIGURED");
+  }
+
+  const state = marketState.spot;
+  const markets = await fetchSignalJson<Array<{ market?: unknown }>>(
+    "https://api.upbit.com/v1/market/all?isDetails=false",
+  );
+  const universe = markets
+    .map((row) => String(row.market ?? ""))
+    .filter((market) => market.startsWith("KRW-"));
+  if (universe.length === 0) {
+    throw new SignalMarketError("SPOT_EMPTY_MARKET_UNIVERSE");
+  }
+
+  const size = Math.min(batchSize(), universe.length);
+  const batch = Array.from(
+    { length: size },
+    (_, index) => universe[(state.cursor + index) % universe.length],
+  );
+  const tickers = await fetchSignalJson<
+    Array<{ market?: unknown; trade_price?: unknown }>
+  >(
+    `https://api.upbit.com/v1/ticker?markets=${encodeURIComponent(batch.join(","))}`,
+  );
+  const resultCount = tickers.filter((row) => {
+    const price = Number(row.trade_price);
+    return String(row.market ?? "").startsWith("KRW-") &&
+      Number.isFinite(price) &&
+      price > 0;
+  }).length;
+  if (resultCount === 0) {
+    throw new SignalMarketError("SPOT_TICKERS_UNAVAILABLE");
+  }
+
+  state.cursor = (state.cursor + batch.length) % universe.length;
+  return {
+    source: "upbit-public",
+    resultCount,
+    scannedNow: batch.length,
+    nextCursor: state.cursor,
+    ...(resultCount < batch.length
+      ? { warning: `ENTRY_PARTIAL_FAILURE:${batch.length - resultCount}` }
+      : {}),
+  };
+}
+
+async function scanFuturesMarket(): Promise<MarketScanResult> {
+  if (cryptoProvider("futures") !== "bitget") {
+    throw new SignalMarketError("FUTURES_PROVIDER_NOT_CONFIGURED");
+  }
+
+  const state = marketState.futures;
+  const payload = await fetchSignalJson<{
+    code?: unknown;
+    data?: Array<{
+      symbol?: unknown;
+      lastPr?: unknown;
+      markPrice?: unknown;
+    }>;
+  }>(
+    "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES",
+  );
+  if (String(payload.code ?? "") !== "00000" || !Array.isArray(payload.data)) {
+    throw new SignalMarketError(
+      `BITGET_${String(payload.code ?? "INVALID_RESPONSE")}`,
+    );
+  }
+
+  const universe = payload.data.filter((row) =>
+    String(row.symbol ?? "").endsWith("USDT"),
+  );
+  if (universe.length === 0) {
+    throw new SignalMarketError("FUTURES_EMPTY_MARKET_UNIVERSE");
+  }
+
+  const size = Math.min(batchSize(), universe.length);
+  const batch = Array.from(
+    { length: size },
+    (_, index) => universe[(state.cursor + index) % universe.length],
+  );
+  const resultCount = batch.filter((row) => {
+    const price = Number(row.markPrice ?? row.lastPr);
+    return Number.isFinite(price) && price > 0;
+  }).length;
+  if (resultCount === 0) {
+    throw new SignalMarketError("FUTURES_TICKERS_UNAVAILABLE");
+  }
+
+  state.cursor = (state.cursor + batch.length) % universe.length;
+  return {
+    source: "bitget-public",
+    resultCount,
+    scannedNow: batch.length,
+    nextCursor: state.cursor,
+    ...(resultCount < batch.length
+      ? { warning: `ENTRY_PARTIAL_FAILURE:${batch.length - resultCount}` }
+      : {}),
+  };
+}
+
+async function scanConfiguredMarket(
+  market: SpecialFeedMarket,
+): Promise<MarketScanResult> {
+  const forcedFailures = new Set(
+    String(process.env.SIGNAL_CANARY_FAIL_MARKETS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  if (
+    process.env.API_CANARY === "true" &&
+    forcedFailures.has(market)
+  ) {
+    throw new SignalMarketError(`${market.toUpperCase()}_PROVIDER_TIMEOUT`);
+  }
+
+  if (market === "KR" || market === "US") {
+    return scanStockMarket(market);
+  }
+  return market === "spot" ? scanSpotMarket() : scanFuturesMarket();
 }
 
 async function refreshMarket(
   market: SpecialFeedMarket,
-): Promise<{ scannedNow: number; nextCursor: number }> {
+): Promise<MarketScanResult> {
   const state = marketState[market];
   const now = Date.now();
 
   if (state.running) return state.running;
   if (now - state.lastRefreshAt < 20_000) {
-    return { scannedNow: 0, nextCursor: state.cursor };
+    const previous = marketStatuses[market];
+    return {
+      source: previous.source,
+      resultCount: previous.resultCount,
+      scannedNow: 0,
+      nextCursor: state.cursor,
+      warning: "REFRESH_THROTTLED",
+    };
   }
 
   state.running = (async () => {
     try {
       pruneState();
-      const result = await scanMarket(market);
+      const result = await scanConfiguredMarket(market);
       state.lastRefreshAt = Date.now();
       pruneState();
       return result;
@@ -776,33 +1070,105 @@ async function getFeed(
     market,
     items,
     count: items.length,
-    catalogSize: CATALOG.filter((entry) => entry.market === market).length,
+    catalogSize:
+      market === "KR" || market === "US"
+        ? CATALOG.filter((entry) => entry.market === market).length
+        : marketStatuses[market].resultCount,
     scannedNow: 0,
     nextCursor: marketState[market].cursor,
     updatedAt: new Date(snapshotSavedAt || Date.now()).toISOString(),
     ttlMinutes: 60,
     refreshSeconds: 30,
+    marketStatus: marketStatuses[market],
     note: snapshotSavedAt
       ? "signal worker가 순환 확인한 새 중요 뉴스·공시·차트신호를 표시합니다."
       : "signal worker snapshot을 기다리고 있습니다.",
   };
 }
 
+function marketErrorCode(error: unknown): string {
+  if (error instanceof SignalMarketError) return error.code;
+  if (error && typeof error === "object" && "code" in error) {
+    return String(error.code);
+  }
+  return error instanceof Error ? error.name : "UNKNOWN_ERROR";
+}
+
+async function runMarketScan(
+  market: SpecialFeedMarket,
+): Promise<SpecialFeedMarketStatus> {
+  const startedAt = Date.now();
+  const previous = marketStatuses[market];
+  try {
+    const result = await refreshMarket(market);
+    return {
+      market,
+      status: result.warning ? "PARTIAL" : "OK",
+      source: result.source,
+      resultCount: result.resultCount,
+      durationMs: Date.now() - startedAt,
+      updatedAt: new Date().toISOString(),
+      warning: result.warning ?? null,
+      staleUsed: false,
+    };
+  } catch (error) {
+    const warning = marketErrorCode(error);
+    const notConfigured = warning.endsWith("_PROVIDER_NOT_CONFIGURED");
+    const hasLastGood =
+      previous.resultCount > 0 &&
+      previous.source !== "none" &&
+      Date.parse(previous.updatedAt) > 0;
+    return {
+      market,
+      status: notConfigured
+        ? "NOT_CONFIGURED"
+        : hasLastGood
+          ? "PARTIAL"
+          : "ERROR",
+      source: hasLastGood ? previous.source : "none",
+      resultCount: hasLastGood ? previous.resultCount : 0,
+      durationMs: Date.now() - startedAt,
+      updatedAt: hasLastGood ? previous.updatedAt : new Date().toISOString(),
+      warning,
+      staleUsed: hasLastGood,
+    };
+  }
+}
+
 async function runWorkerScanOnce(): Promise<{
-  KR: { scannedNow: number; nextCursor: number };
-  US: { scannedNow: number; nextCursor: number };
+  markets: Record<SpecialFeedMarket, SpecialFeedMarketStatus>;
+  KR: SpecialFeedMarketStatus;
+  US: SpecialFeedMarketStatus;
+  spot: SpecialFeedMarketStatus;
+  futures: SpecialFeedMarketStatus;
   itemCount: number;
   savedAt: string;
 }> {
   await syncSnapshotFromDisk(true);
-  const [KR, US] = await Promise.all([
-    refreshMarket("KR"),
-    refreshMarket("US"),
-  ]);
+  const settled = await Promise.allSettled(MARKET_KEYS.map(runMarketScan));
+  settled.forEach((row, index) => {
+    const market = MARKET_KEYS[index];
+    marketStatuses[market] =
+      row.status === "fulfilled"
+        ? row.value
+        : {
+            market,
+            status: "ERROR",
+            source: marketStatuses[market].source,
+            resultCount: marketStatuses[market].resultCount,
+            durationMs: 0,
+            updatedAt: marketStatuses[market].updatedAt,
+            warning: marketErrorCode(row.reason),
+            staleUsed: marketStatuses[market].resultCount > 0,
+          };
+  });
   await persistSnapshot();
   return {
-    KR,
-    US,
+    markets: { ...marketStatuses },
+    KR: marketStatuses.KR,
+    US: marketStatuses.US,
+    spot: marketStatuses.spot,
+    futures: marketStatuses.futures,
     itemCount: feedItems.size,
     savedAt: new Date(snapshotSavedAt).toISOString(),
   };
