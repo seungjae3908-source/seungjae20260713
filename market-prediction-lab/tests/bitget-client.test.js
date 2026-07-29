@@ -59,3 +59,22 @@ test("public client fails closed for non-retryable Bitget code", async () => {
     return true;
   });
 });
+
+test("concurrent requests pass through one serialized pacing gate", async () => {
+  let clock = 1_000;
+  let calls = 0;
+  const sleeps = [];
+  const client = new BitgetPublicClient({
+    fetchImpl: async () => {
+      calls += 1;
+      return response({ payload: { code: "00000", msg: "success", data: [] } });
+    },
+    minIntervalMs: 100,
+    maxRetries: 0,
+    nowImpl: () => clock,
+    sleepImpl: async (ms) => { sleeps.push(ms); clock += ms; },
+  });
+  await Promise.all([client.get("/a"), client.get("/b"), client.get("/c")]);
+  assert.equal(calls, 3);
+  assert.deepEqual(sleeps, [100, 100]);
+});
