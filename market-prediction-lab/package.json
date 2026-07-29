@@ -1,6 +1,6 @@
 {
   "name": "market-prediction-lab",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,6 +12,7 @@
     "smoke": "node scripts/smoke-pipeline.js",
     "stress": "node scripts/stress-pipeline.js",
     "validate": "npm run check && npm test && npm run smoke && npm run stress && npm run fuzz",
-    "fuzz": "node scripts/fuzz-pipeline.js"
+    "fuzz": "node scripts/fuzz-pipeline.js",
+    "collect:bitget": "node scripts/collect-bitget.js"
   }
 }
