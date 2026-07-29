@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "status": "fail",
+  "stage": "verify_candles",
+  "verifiedAt": 1785365945759,
+  "durationMs": 4670,
+  "source": "github-actions-isolated-52d-validation",
+  "market": "CRYPTO_FUTURES",
+  "symbol": "BTCUSDT",
+  "timeframe": "15m",
+  "requestedDays": 52,
+  "error": {
+    "name": "Error",
+    "message": "timeframe gaps detected: 24",
+    "details": null,
+    "stack": [
+      "Error: timeframe gaps detected: 24",
+      "    at verifyLiveCollection (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/src/live-collection-verifier.js:78:23)",
+      "    at file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/scripts/run-52d-validation.js:60:19"
+    ]
+  }
+}
