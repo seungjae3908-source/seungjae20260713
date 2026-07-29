@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "status": "pass",
+  "verifiedAt": 1785365225092,
+  "source": "github-actions-isolated-live-smoke",
+  "provider": "bitget-public-v2",
+  "market": "CRYPTO_FUTURES",
+  "symbol": "BTCUSDT",
+  "timeframe": "15m",
+  "candleCount": 95,
+  "firstTimestamp": 1785279600000,
+  "lastTimestamp": 1785364200000,
+  "latestAgeMs": 1025038,
+  "gaps": 0,
+  "zeroVolume": 0,
+  "maximumGapMs": 900000,
+  "candleFileSha256": "83d292150193fc498c39214783fa2cfffbf375c203f74c16db1788f851939082",
+  "futuresContext": {
+    "collectedAt": 1785365224990,
+    "openInterest": 33111.57670000001,
+    "openInterestTimestamp": 1785365224493,
+    "fundingRate": 0.00006,
+    "fundingIntervalHours": 8,
+    "marketPrice": 63921.8,
+    "markPrice": 63921.9,
+    "indexPrice": 63955.6025,
+    "fundingHistoryCount": 100
+  }
+}
