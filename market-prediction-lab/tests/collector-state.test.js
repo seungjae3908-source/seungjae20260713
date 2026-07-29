@@ -57,3 +57,17 @@ test("context records append only when market content changes", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("existing state lock rejects a concurrent writer", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "collector-lock-"));
+  try {
+    const dataPath = join(directory, "data.json");
+    const statePath = join(directory, "state.json");
+    await import("node:fs/promises").then(({ writeFile }) => writeFile(`${statePath}.lock`, "locked\n"));
+    await assert.rejects(() => saveCollectedSnapshot({
+      dataPath, statePath, key: "candles:BTCUSDT", snapshot: { candles: [] },
+    }), /collector state is locked/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
