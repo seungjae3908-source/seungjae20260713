@@ -15,9 +15,20 @@ This collector is intentionally isolated from `api-server` and uses only Bitget 
 
 ## Pagination rule
 
-Bitget documents `endTime` as an exclusive boundary: the endpoint returns candles before that timestamp. The next backward-page cursor is therefore the oldest timestamp returned by the current page. Subtracting another candle interval would skip one candle at every page boundary.
+Bitget documents `endTime` as the boundary for candles before that timestamp. The next backward-page cursor is therefore the oldest timestamp returned by the current page. Subtracting another candle interval would skip one candle at every page boundary.
 
-The collector tests this behavior with a multi-page exclusive-end mock and asserts that every adjacent timestamp differs by exactly one timeframe interval.
+The collector tests this behavior with 5,000 candles across at least 25 pages and asserts that every adjacent timestamp differs by exactly one timeframe interval.
+
+## Targeted gap repair
+
+After the initial collection, the 52-day verifier scans every adjacent timestamp. When a real gap remains:
+
+1. Only the missing time window and one boundary candle on each side are requested again.
+2. Only candles actually returned by Bitget are merged.
+3. Existing finished candles are never silently overwritten; a value conflict fails closed.
+4. A second pass is allowed only when the missing-candle count decreased.
+5. Unresolved timestamps are written to `gap-repair-report.json` and the dataset build stops.
+6. No synthetic or interpolated candle is generated.
 
 ## Example
 
@@ -32,7 +43,7 @@ The initial ranges match Bitget's documented recent-candle availability. Longer 
 
 ## Live verification
 
-Temporary branch-only GitHub Actions jobs ran on 2026-07-30 KST and were deleted after completion. They performed the full standalone validation suite before contacting Bitget.
+A branch-only GitHub Actions workflow performs the full standalone validation suite before contacting Bitget. It is not a deployment workflow and does not access the production API or server.
 
 ### One-day smoke
 
@@ -48,10 +59,12 @@ Temporary branch-only GitHub Actions jobs ran on 2026-07-30 KST and were deleted
 
 ### 52-day validation
 
-The first long-range run detected 24 missing intervals. The count matched page boundaries, leading to the exclusive-`endTime` cursor fix. After the fix:
+The first long-range run detected 24 missing intervals. The count matched page boundaries, leading to the exclusive-page cursor fix. After the fix and targeted-repair layer:
 
 - Candles: 4,991
-- Time gaps: 0
+- Initial gaps: 0
+- Gap-repair requests required: 0
+- Remaining gaps: 0
 - Duplicates: 0
 - Out-of-order rows: 0
 - Rejected rows: 0
