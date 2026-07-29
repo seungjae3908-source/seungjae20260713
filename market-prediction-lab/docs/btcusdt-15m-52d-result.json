@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "status": "pass",
   "stage": "complete",
-  "verifiedAt": 1785366126215,
-  "durationMs": 5942,
+  "verifiedAt": 1785366835401,
+  "durationMs": 5581,
   "source": "github-actions-isolated-52d-validation",
   "market": "CRYPTO_FUTURES",
   "symbol": "BTCUSDT",
@@ -12,11 +12,22 @@
   "candleCount": 4991,
   "firstTimestamp": 1780874100000,
   "lastTimestamp": 1785365100000,
-  "latestAgeMs": 1025368,
+  "latestAgeMs": 1734561,
   "gaps": 0,
   "zeroVolume": 0,
   "maximumGapMs": 900000,
-  "candleSnapshotSha256": "ddc271428e223de3d7655ddb2a9be36033232b759c4b693d9dd7fe48e677cce0",
+  "rawCandleSnapshotSha256": "7e1c96aa98b5e1d90831716c1b0b3fcf0722bb8bf3399f14e3845538c72c2f1d",
+  "repairedCandleSnapshotSha256": "1dd449ba6a314adc5d47ec6c32ff46a0ea934221a6f10a9a847edf25ab50b0ee",
+  "gapRepair": {
+    "schemaVersion": 1,
+    "initialGapCount": 0,
+    "initialMissingCandleCount": 0,
+    "repairedCandleCount": 0,
+    "remainingGapCount": 0,
+    "remainingMissingCandleCount": 0,
+    "unresolvedGaps": [],
+    "attempts": []
+  },
   "normalizedQuality": {
     "candleCount": 4991,
     "duplicates": 0,
@@ -63,17 +74,12 @@
     }
   },
   "futuresContext": {
-    "openInterestRaw": "33133.3274000000092",
-    "fundingRateRaw": "0.000055",
+    "openInterestRaw": "33145.5537000000088",
+    "fundingRateRaw": "0.000052",
     "fundingIntervalHours": 8,
-    "marketPriceRaw": "63888.1",
-    "markPriceRaw": "63888.1",
-    "indexPriceRaw": "63920.039",
+    "marketPriceRaw": "63862.9",
+    "markPriceRaw": "63862.9",
+    "indexPriceRaw": "63894.5665",
     "fundingHistoryCount": 100
-  },
-  "notes": [
-    "The first long-range run found 24 page-boundary gaps.",
-    "The collector was fixed to respect Bitget's exclusive endTime boundary and the full validation was rerun successfully.",
-    "Raw live market data and temporary workflow files are not retained in the repository."
-  ]
+  }
 }
