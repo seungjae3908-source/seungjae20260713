@@ -70,5 +70,10 @@
     "markPriceRaw": "63888.1",
     "indexPriceRaw": "63920.039",
     "fundingHistoryCount": 100
-  }
+  },
+  "notes": [
+    "The first long-range run found 24 page-boundary gaps.",
+    "The collector was fixed to respect Bitget's exclusive endTime boundary and the full validation was rerun successfully.",
+    "Raw live market data and temporary workflow files are not retained in the repository."
+  ]
 }
