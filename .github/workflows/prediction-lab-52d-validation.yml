@@ -1,0 +1,100 @@
+name: Prediction Lab 52d Data Validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/prediction-lab-standalone
+    paths:
+      - .github/workflows/prediction-lab-52d-validation.yml
+      - market-prediction-lab/package.json
+      - market-prediction-lab/src/**
+      - market-prediction-lab/scripts/**
+      - market-prediction-lab/tests/**
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prediction-lab-52d-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-52d-dataset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout isolated branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/prediction-lab-standalone
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate standalone lab
+        id: validate
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: npm run validate
+
+      - name: Record validation-suite failure
+        if: steps.validate.outcome != 'success'
+        working-directory: market-prediction-lab
+        run: |
+          mkdir -p docs
+          cat > docs/btcusdt-15m-52d-result.json <<'JSON'
+          {
+            "schemaVersion": 1,
+            "status": "fail",
+            "stage": "standalone_validation_suite",
+            "source": "github-actions-isolated-52d-validation",
+            "market": "CRYPTO_FUTURES",
+            "symbol": "BTCUSDT",
+            "timeframe": "15m",
+            "requestedDays": 52,
+            "error": {
+              "name": "ValidationSuiteError",
+              "message": "npm run validate failed before live data collection"
+            }
+          }
+          JSON
+
+      - name: Run diagnosable 52-day collection and dataset validation
+        id: data_validation
+        if: steps.validate.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-52d-validation.js live-52d-data docs/btcusdt-15m-52d-result.json
+
+      - name: Display validation result
+        if: always()
+        working-directory: market-prediction-lab
+        run: |
+          test -f docs/btcusdt-15m-52d-result.json
+          cat docs/btcusdt-15m-52d-result.json
+
+      - name: Upload 52-day validation artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-btcusdt-15m-52d-${{ github.run_id }}
+          path: market-prediction-lab/live-52d-data
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Commit pass or failure report to isolated branch
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add market-prediction-lab/docs/btcusdt-15m-52d-result.json
+          git diff --cached --quiet && exit 0
+          git commit -m "test: record BTCUSDT 15m 52d validation"
+          git push origin HEAD:feature/prediction-lab-standalone
+
+      - name: Fail workflow when validation failed
+        if: always() && (steps.validate.outcome != 'success' || steps.data_validation.outcome != 'success')
+        run: exit 1
