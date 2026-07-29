@@ -26,7 +26,10 @@ test('worker waits for each cycle and releases lock on SIGTERM', async () => {
         active -= 1;
       },
     });
-    setTimeout(() => process.emit('SIGTERM'), 1_150);
+    setTimeout(() => {
+      process.emit('SIGTERM');
+      process.emit('SIGINT');
+    }, 1_150);
     await completion;
 
     assert.equal(maximumActive, 1);

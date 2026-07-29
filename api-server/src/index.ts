@@ -245,6 +245,8 @@ server.on('connection', (socket) => {
 });
 
 let shutdownPromise: Promise<void> | null = null;
+let shutdownState: 'running' | 'stopping' | 'stopped' = 'running';
+let shutdownSignalCount = 0;
 
 function shutdownTimeoutMs(): number {
   const configured = Number(process.env.API_SHUTDOWN_TIMEOUT_MS);
@@ -260,14 +262,28 @@ function safeErrorCode(error: unknown): string {
 }
 
 function shutdown(reason: string, requestedExitCode: number): Promise<void> {
-  if (shutdownPromise) return shutdownPromise;
+  shutdownSignalCount += 1;
+  if (shutdownPromise) {
+    console.log(
+      JSON.stringify({
+        event: 'api_shutdown_signal_ignored',
+        reason,
+        state: shutdownState,
+        signalCount: shutdownSignalCount,
+      }),
+    );
+    return shutdownPromise;
+  }
 
+  shutdownState = 'stopping';
   shutdownPromise = new Promise<void>((resolve) => {
     let finished = false;
     const finish = (exitCode: number) => {
       if (finished) return;
       finished = true;
+      shutdownState = 'stopped';
       process.exitCode = exitCode;
+      sockets.clear();
       console.log(
         JSON.stringify({
           event: 'api_stopped',
@@ -285,6 +301,7 @@ function shutdown(reason: string, requestedExitCode: number): Promise<void> {
       JSON.stringify({
         event: 'api_stopping',
         reason,
+        signalCount: shutdownSignalCount,
         openConnections: sockets.size,
       }),
     );
@@ -314,10 +331,10 @@ function shutdown(reason: string, requestedExitCode: number): Promise<void> {
   return shutdownPromise;
 }
 
-process.once('SIGTERM', () => {
+process.on('SIGTERM', () => {
   void shutdown('SIGTERM', 0);
 });
-process.once('SIGINT', () => {
+process.on('SIGINT', () => {
   void shutdown('SIGINT', 0);
 });
 process.on('unhandledRejection', (error) => {

@@ -24,11 +24,17 @@ const quoteFlights = new SingleFlight<string, StableSearchResponse<QuoteRow>>();
 const searchLastGood = new LastGoodCache<
   string,
   StableSearchResponse<SearchResult>
->();
+>({
+  maximumEntries: 200,
+  defaultMaxAgeMs: 30 * 60_000,
+});
 const quoteLastGood = new LastGoodCache<
   string,
   StableSearchResponse<QuoteRow>
->();
+>({
+  maximumEntries: 200,
+  defaultMaxAgeMs: 30 * 60_000,
+});
 const quoteProgress = new Map<string, QuoteRow[]>();
 
 const LAST_GOOD_MAX_AGE_MS = 30 * 60_000;
@@ -174,6 +180,9 @@ async function loadQuotes(
       (item) => item.status === 'rejected' || item.value == null,
     ).length;
     const rows = uniqueQuoteRows(collected);
+    if (tickers.length > 0 && rows.length === 0) {
+      throw new Error(`QUOTE_PROVIDER_UNAVAILABLE:${failed}`);
+    }
     const partial = symbols.partial || failed > 0;
     const warnings = [
       ...symbols.warnings,
@@ -257,4 +266,11 @@ async function searchQuotes(
 export const SearchService = {
   searchSymbols,
   searchQuotes,
+  getDiagnostics: () => ({
+    searchFlights: searchFlights.size,
+    quoteFlights: quoteFlights.size,
+    searchLastGood: searchLastGood.size,
+    quoteLastGood: quoteLastGood.size,
+    quoteProgress: quoteProgress.size,
+  }),
 };

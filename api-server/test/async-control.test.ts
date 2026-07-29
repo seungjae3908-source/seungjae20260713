@@ -49,6 +49,22 @@ test('LastGoodCache respects the maximum age', () => {
 
   assert.equal(cache.get('query', 500, 1_400)?.value, 'saved');
   assert.equal(cache.get('query', 500, 1_501), null);
+  assert.equal(cache.size, 0);
+});
+
+test('LastGoodCache retains only the configured newest entries', () => {
+  const cache = new LastGoodCache<string, string>({
+    maximumEntries: 2,
+    defaultMaxAgeMs: 60_000,
+  });
+  cache.set('first', '1', 1_000);
+  cache.set('second', '2', 2_000);
+  cache.set('third', '3', 3_000);
+
+  assert.equal(cache.size, 2);
+  assert.equal(cache.get('first', 60_000, 3_000), null);
+  assert.equal(cache.get('second', 60_000, 3_000)?.value, '2');
+  assert.equal(cache.get('third', 60_000, 3_000)?.value, '3');
 });
 
 test('mapWithConcurrency preserves result order and failures', async () => {

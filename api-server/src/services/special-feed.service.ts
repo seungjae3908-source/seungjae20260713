@@ -6,6 +6,7 @@ import { MarketDataService } from "./market-data.service";
 import { NewsService } from "./news.service";
 import { RiskAnalysisService } from "./risk-analysis.service";
 import { SignalService } from "./signal.service";
+import { getMemoryCacheDiagnostics } from "../lib/cache";
 
 export type SpecialFeedMarket = "KR" | "US" | "spot" | "futures";
 export type SpecialFeedKind = "news" | "disclosure" | "signal";
@@ -68,6 +69,10 @@ const SIGNAL_REPEAT_MS = 60 * 60_000;
 const NEWS_MAX_AGE_MS = 3 * 24 * 60 * 60_000;
 const DISCLOSURE_MAX_AGE_MS = 14 * 24 * 60 * 60_000;
 const MAX_ITEMS_PER_MARKET = 120;
+const MAX_STATIC_SEEN_ENTRIES = 5_000;
+const MAX_SIGNAL_REPEAT_ENTRIES = 5_000;
+const MAX_PREVIOUS_SIGNAL_TICKERS = 2_000;
+const PREVIOUS_SIGNAL_TTL_MS = 24 * 60 * 60_000;
 const DEFAULT_BATCH_SIZE = 8;
 const SNAPSHOT_VERSION = 2 as const;
 const SNAPSHOT_READ_THROTTLE_MS = 1_000;
@@ -75,10 +80,22 @@ const SNAPSHOT_READ_THROTTLE_MS = 1_000;
 const feedItems = new Map<string, SpecialFeedItem>();
 const staticSeenAt = new Map<string, number>();
 const lastSignalAddedAt = new Map<string, number>();
-const previousSignals = new Map<string, Set<string>>();
+const previousSignals = new Map<
+  string,
+  { signatures: Set<string>; seenAt: number }
+>();
 let snapshotSavedAt = 0;
 let snapshotReadAt = 0;
 let snapshotLoadPromise: Promise<void> | null = null;
+let lastSnapshotBytes = 0;
+let activeProviderTimers = 0;
+let activeWorkerScans = 0;
+const lastMarketResultLengths: Record<SpecialFeedMarket, number> = {
+  KR: 0,
+  US: 0,
+  spot: 0,
+  futures: 0,
+};
 
 interface MarketScanResult {
   source: string;
@@ -245,8 +262,10 @@ async function persistSnapshot(): Promise<void> {
     markets: { ...marketStatuses },
   };
 
+  const serialized = JSON.stringify(payload);
+  lastSnapshotBytes = Buffer.byteLength(serialized);
   await mkdir(path.dirname(target), { recursive: true });
-  await writeFile(temporary, JSON.stringify(payload), "utf8");
+  await writeFile(temporary, serialized, "utf8");
   await rename(temporary, target);
   snapshotSavedAt = savedAt;
 }
@@ -497,6 +516,26 @@ function classifySignalTone(value: unknown): SpecialFeedTone {
   return positive >= negative ? "positive" : "negative";
 }
 
+function trimOldestMap<K, V>(map: Map<K, V>, maximum: number): void {
+  while (map.size > maximum) {
+    const oldest = map.keys().next();
+    if (oldest.done) return;
+    map.delete(oldest.value);
+  }
+}
+
+function pruneTimedMap(
+  map: Map<string, number>,
+  ttlMs: number,
+  maximum: number,
+  now: number,
+): void {
+  for (const [key, savedAt] of map) {
+    if (now - savedAt > ttlMs) map.delete(key);
+  }
+  trimOldestMap(map, maximum);
+}
+
 function pruneState() {
   const now = Date.now();
 
@@ -504,15 +543,27 @@ function pruneState() {
     if (Date.parse(item.expiresAt) <= now) feedItems.delete(id);
   }
 
-  for (const [key, seenAt] of staticSeenAt) {
-    if (now - seenAt > STATIC_SEEN_TTL_MS) staticSeenAt.delete(key);
-  }
+  pruneTimedMap(
+    staticSeenAt,
+    STATIC_SEEN_TTL_MS,
+    MAX_STATIC_SEEN_ENTRIES,
+    now,
+  );
+  pruneTimedMap(
+    lastSignalAddedAt,
+    STATIC_SEEN_TTL_MS,
+    MAX_SIGNAL_REPEAT_ENTRIES,
+    now,
+  );
 
-  for (const [key, addedAt] of lastSignalAddedAt) {
-    if (now - addedAt > STATIC_SEEN_TTL_MS) lastSignalAddedAt.delete(key);
+  for (const [key, state] of previousSignals) {
+    if (now - state.seenAt > PREVIOUS_SIGNAL_TTL_MS) {
+      previousSignals.delete(key);
+    }
   }
+  trimOldestMap(previousSignals, MAX_PREVIOUS_SIGNAL_TICKERS);
 
-  for (const market of ["KR", "US"] as const) {
+  for (const market of MARKET_KEYS) {
     const rows = [...feedItems.values()]
       .filter((item) => item.market === market)
       .sort((a, b) => Date.parse(b.detectedAt) - Date.parse(a.detectedAt));
@@ -748,7 +799,8 @@ async function scanEntry(entry: CatalogEntry): Promise<boolean> {
   }
 
   const signalKey = `${entry.market}:${entry.ticker}`;
-  const before = previousSignals.get(signalKey) ?? new Set<string>();
+  const before =
+    previousSignals.get(signalKey)?.signatures ?? new Set<string>();
   const current = new Set<string>();
 
   if (signalResult.status === "fulfilled" && signalResult.value) {
@@ -777,7 +829,11 @@ async function scanEntry(entry: CatalogEntry): Promise<boolean> {
     }
   }
 
-  previousSignals.set(signalKey, current);
+  previousSignals.delete(signalKey);
+  previousSignals.set(signalKey, {
+    signatures: current,
+    seenAt: Date.now(),
+  });
   return [newsResult, riskResult, signalResult, quoteResult].some(
     (result) => result.status === "fulfilled",
   );
@@ -865,6 +921,7 @@ function signalProviderTimeoutMs(): number {
 
 async function fetchSignalJson<T>(url: string): Promise<T> {
   const controller = new AbortController();
+  activeProviderTimers += 1;
   const timeout = setTimeout(
     () => controller.abort(),
     signalProviderTimeoutMs(),
@@ -892,6 +949,7 @@ async function fetchSignalJson<T>(url: string): Promise<T> {
     );
   } finally {
     clearTimeout(timeout);
+    activeProviderTimers = Math.max(0, activeProviderTimers - 1);
   }
 }
 
@@ -1010,7 +1068,7 @@ async function scanConfiguredMarket(
     process.env.API_CANARY === "true" &&
     forcedFailures.has(market)
   ) {
-    throw new SignalMarketError(`${market.toUpperCase()}_PROVIDER_TIMEOUT`);
+    throw new SignalMarketError(`${market.toUpperCase()}_INJECTED_TIMEOUT`);
   }
 
   if (market === "KR" || market === "US") {
@@ -1101,6 +1159,7 @@ async function runMarketScan(
   const previous = marketStatuses[market];
   try {
     const result = await refreshMarket(market);
+    lastMarketResultLengths[market] = result.resultCount;
     return {
       market,
       status: result.warning ? "PARTIAL" : "OK",
@@ -1118,7 +1177,7 @@ async function runMarketScan(
       previous.resultCount > 0 &&
       previous.source !== "none" &&
       Date.parse(previous.updatedAt) > 0;
-    return {
+    const status: SpecialFeedMarketStatus = {
       market,
       status: notConfigured
         ? "NOT_CONFIGURED"
@@ -1132,7 +1191,62 @@ async function runMarketScan(
       warning,
       staleUsed: hasLastGood,
     };
+    lastMarketResultLengths[market] = status.resultCount;
+    return status;
   }
+}
+
+export interface SpecialFeedDiagnostics {
+  mapEntries: {
+    feedItems: number;
+    staticSeenAt: number;
+    lastSignalAddedAt: number;
+    previousSignals: number;
+    memoryCache: number;
+  };
+  setEntries: {
+    previousSignalSignatures: number;
+  };
+  marketResultLengths: Record<SpecialFeedMarket, number>;
+  lastGoodMarketCount: number;
+  snapshotBytes: number;
+  pendingPromises: number;
+  timerCount: number;
+  cache: ReturnType<typeof getMemoryCacheDiagnostics>;
+}
+
+function getDiagnostics(): SpecialFeedDiagnostics {
+  const cache = getMemoryCacheDiagnostics();
+  const previousSignalSignatures = [...previousSignals.values()].reduce(
+    (total, state) => total + state.signatures.size,
+    0,
+  );
+  return {
+    mapEntries: {
+      feedItems: feedItems.size,
+      staticSeenAt: staticSeenAt.size,
+      lastSignalAddedAt: lastSignalAddedAt.size,
+      previousSignals: previousSignals.size,
+      memoryCache: cache.entries,
+    },
+    setEntries: {
+      previousSignalSignatures,
+    },
+    marketResultLengths: { ...lastMarketResultLengths },
+    lastGoodMarketCount: MARKET_KEYS.filter((market) => {
+      const status = marketStatuses[market];
+      return status.resultCount > 0 && status.source !== "none";
+    }).length,
+    snapshotBytes: lastSnapshotBytes,
+    pendingPromises:
+      activeWorkerScans +
+      (snapshotLoadPromise ? 1 : 0) +
+      MARKET_KEYS.filter((market) => marketState[market].running).length +
+      cache.pendingLoads +
+      cache.pendingPersistentWrites,
+    timerCount: activeProviderTimers,
+    cache,
+  };
 }
 
 async function runWorkerScanOnce(): Promise<{
@@ -1143,38 +1257,48 @@ async function runWorkerScanOnce(): Promise<{
   futures: SpecialFeedMarketStatus;
   itemCount: number;
   savedAt: string;
+  diagnostics: SpecialFeedDiagnostics;
 }> {
-  await syncSnapshotFromDisk(true);
-  const settled = await Promise.allSettled(MARKET_KEYS.map(runMarketScan));
-  settled.forEach((row, index) => {
-    const market = MARKET_KEYS[index];
-    marketStatuses[market] =
-      row.status === "fulfilled"
-        ? row.value
-        : {
-            market,
-            status: "ERROR",
-            source: marketStatuses[market].source,
-            resultCount: marketStatuses[market].resultCount,
-            durationMs: 0,
-            updatedAt: marketStatuses[market].updatedAt,
-            warning: marketErrorCode(row.reason),
-            staleUsed: marketStatuses[market].resultCount > 0,
-          };
-  });
-  await persistSnapshot();
-  return {
-    markets: { ...marketStatuses },
-    KR: marketStatuses.KR,
-    US: marketStatuses.US,
-    spot: marketStatuses.spot,
-    futures: marketStatuses.futures,
-    itemCount: feedItems.size,
-    savedAt: new Date(snapshotSavedAt).toISOString(),
-  };
+  activeWorkerScans += 1;
+  try {
+    await syncSnapshotFromDisk(true);
+    const settled = await Promise.allSettled(MARKET_KEYS.map(runMarketScan));
+    settled.forEach((row, index) => {
+      const market = MARKET_KEYS[index];
+      marketStatuses[market] =
+        row.status === "fulfilled"
+          ? row.value
+          : {
+              market,
+              status: "ERROR",
+              source: marketStatuses[market].source,
+              resultCount: marketStatuses[market].resultCount,
+              durationMs: 0,
+              updatedAt: marketStatuses[market].updatedAt,
+              warning: marketErrorCode(row.reason),
+              staleUsed: marketStatuses[market].resultCount > 0,
+            };
+      lastMarketResultLengths[market] =
+        marketStatuses[market].resultCount;
+    });
+    await persistSnapshot();
+    return {
+      markets: { ...marketStatuses },
+      KR: marketStatuses.KR,
+      US: marketStatuses.US,
+      spot: marketStatuses.spot,
+      futures: marketStatuses.futures,
+      itemCount: feedItems.size,
+      savedAt: new Date(snapshotSavedAt).toISOString(),
+      diagnostics: getDiagnostics(),
+    };
+  } finally {
+    activeWorkerScans = Math.max(0, activeWorkerScans - 1);
+  }
 }
 
 export const SpecialFeedService = {
   getFeed,
   runWorkerScanOnce,
+  getDiagnostics,
 };
