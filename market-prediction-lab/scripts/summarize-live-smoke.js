@@ -53,12 +53,17 @@ const result = {
   futuresContext: {
     collectedAt: context.collectedAt,
     openInterest: context.openInterest,
+    openInterestRaw: context.openInterestRaw ?? null,
     openInterestTimestamp: context.openInterestTimestamp,
     fundingRate: context.fundingRate,
+    fundingRateRaw: context.fundingRateRaw ?? null,
     fundingIntervalHours: context.fundingIntervalHours,
     marketPrice: context.marketPrice,
+    marketPriceRaw: context.marketPriceRaw ?? null,
     markPrice: context.markPrice,
+    markPriceRaw: context.markPriceRaw ?? null,
     indexPrice: context.indexPrice,
+    indexPriceRaw: context.indexPriceRaw ?? null,
     fundingHistoryCount: Array.isArray(context.fundingHistory) ? context.fundingHistory.length : 0,
   },
 };
