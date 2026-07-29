@@ -19,6 +19,7 @@ import {
 } from "../src/tiny-model-training.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CLASS_NAMES = Object.freeze(["bullish", "neutral", "bearish"]);
 const SUITE_SPECS = Object.freeze([
   Object.freeze({ id: "btcusdt-futures-15m-52d", group: "crypto-futures-15m", market: "CRYPTO_FUTURES", symbol: "BTCUSDT", timeframe: "15m", days: 52, lookback: 200, horizon: 8, stride: 4 }),
   Object.freeze({ id: "ethusdt-futures-15m-52d", group: "crypto-futures-15m", market: "CRYPTO_FUTURES", symbol: "ETHUSDT", timeframe: "15m", days: 52, lookback: 200, horizon: 8, stride: 4 }),
@@ -70,6 +71,12 @@ function metricSummary(metrics) {
     perClass: metrics.perClass,
     confusion: metrics.confusion,
   };
+}
+
+function directionCounts(records) {
+  const counts = Object.fromEntries(CLASS_NAMES.map((name) => [name, 0]));
+  for (const record of records) counts[record.label.direction] += 1;
+  return counts;
 }
 
 async function collectDataset({ client, spec, suiteEndTime, outputRoot }) {
@@ -159,6 +166,11 @@ async function collectDataset({ client, spec, suiteEndTime, outputRoot }) {
       },
       records: records.length,
       split: split.report,
+      classCounts: {
+        train: directionCounts(split.train),
+        validation: directionCounts(split.validation),
+        test: directionCounts(split.test),
+      },
       baselineTest: metricSummary(baselineTest),
       outputs: portableOutputs(manifest.outputs),
       candleSha256: sha256Json(snapshot),
@@ -174,8 +186,46 @@ function combineSplits(datasets) {
   });
 }
 
+async function writeResearchHold({ group, datasets, split, outputRoot, candidateRoot, reason, classCounts }) {
+  const artifact = {
+    schemaVersion: 1,
+    status: "research_hold",
+    reason,
+    group,
+    crossSymbol: new Set(datasets.map((dataset) => dataset.spec.symbol)).size >= 2,
+    sourceDatasets: datasets.map((dataset) => dataset.spec.id),
+    classCounts,
+    splitSizes: {
+      train: split.train.length,
+      validation: split.validation.length,
+      test: split.test.length,
+    },
+    model: null,
+  };
+  await writeJsonAtomically(resolve(outputRoot, "models", `${group}.json`), artifact);
+  await writeJsonAtomically(resolve(candidateRoot, `${group}.json`), artifact);
+  return artifact;
+}
+
 async function trainGroup({ group, datasets, outputRoot, candidateRoot }) {
   const split = combineSplits(datasets);
+  const classCounts = {
+    train: directionCounts(split.train),
+    validation: directionCounts(split.validation),
+    test: directionCounts(split.test),
+  };
+  if (CLASS_NAMES.some((name) => classCounts.train[name] < 30 || classCounts.validation[name] < 10 || classCounts.test[name] < 10)) {
+    return writeResearchHold({
+      group,
+      datasets,
+      split,
+      outputRoot,
+      candidateRoot,
+      reason: "insufficient_class_coverage",
+      classCounts,
+    });
+  }
+
   const model = trainTinySoftmaxModel(split.train, {
     featureOrder: BASELINE_MODEL.featureOrder,
     id: `tiny-softmax-${group}-v1`,
@@ -205,6 +255,7 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot }) {
     group,
     crossSymbol,
     sourceDatasets: datasets.map((dataset) => dataset.spec.id),
+    classCounts,
     featureLimitations: [
       "price_volume_features_only",
       "historical_open_interest_not_yet_time_aligned",
@@ -223,6 +274,7 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot }) {
     status: artifact.status,
     crossSymbol,
     sourceDatasets: artifact.sourceDatasets,
+    classCounts,
     modelId: calibrated.id,
     modelSha256: sha256Json(calibrated),
     temperature: calibrated.temperature,
@@ -238,7 +290,7 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot }) {
 
 const outputRoot = resolve(process.argv[2] ?? "live-market-suite");
 const reportPath = resolve(process.argv[3] ?? "docs/market-suite-result.json");
-const candidateRoot = resolve(process.argv[4] ?? "models/candidates");
+const candidateRoot = resolve(process.argv[4] ?? "docs/candidate-models");
 const suiteEndTime = Date.now();
 const suiteStartedAt = Date.now();
 const client = new BitgetPublicClient({ minIntervalMs: 160, maxRetries: 4, timeoutMs: 12_000 });
