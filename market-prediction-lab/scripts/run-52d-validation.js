@@ -25,6 +25,13 @@ function serializeError(error) {
   };
 }
 
+function portableOutputs(outputs) {
+  return Object.fromEntries(Object.entries(outputs).map(([name, output]) => [name, {
+    count: output.count,
+    sha256: output.sha256,
+  }]));
+}
+
 const outputRoot = resolve(process.argv[2] ?? "live-52d-data");
 const reportPath = resolve(process.argv[3] ?? "docs/btcusdt-15m-52d-result.json");
 const market = "CRYPTO_FUTURES";
@@ -120,7 +127,7 @@ try {
       stride,
       recordCount: records.length,
       splitReport: manifest.splitReport,
-      outputs: manifest.outputs,
+      outputs: portableOutputs(manifest.outputs),
     },
     futuresContext: {
       openInterestRaw: context.openInterestRaw,
