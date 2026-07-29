@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 const VOLATILE_HASH_KEYS = new Set(["collectedAt", "requestTime", "savedAt", "updatedAt"]);
@@ -22,6 +22,27 @@ async function writeJsonAtomically(filePath, value) {
   const temporaryPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await rename(temporaryPath, filePath);
+}
+
+async function withStateLock(statePath, operation) {
+  await mkdir(dirname(statePath), { recursive: true });
+  const lockPath = `${statePath}.lock`;
+  let handle;
+  try {
+    handle = await open(lockPath, "wx", 0o600);
+    await handle.writeFile(`${JSON.stringify({ pid: process.pid, createdAt: Date.now() })}\n`, "utf8");
+  } catch (error) {
+    if (error?.code === "EEXIST") throw new Error(`collector state is locked: ${statePath}`);
+    throw error;
+  }
+  try {
+    return await operation();
+  } finally {
+    await handle?.close();
+    await unlink(lockPath).catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+  }
 }
 
 export async function readCollectorState(filePath) {
@@ -50,27 +71,49 @@ function assertKey(key) {
 
 export async function saveCollectedSnapshot({ dataPath, statePath, key, snapshot }) {
   assertKey(key);
-  const hash = sha256Object(snapshot);
-  const state = await readCollectorState(statePath);
-  if (state.entries[key]?.hash === hash) {
-    return Object.freeze({ changed: false, hash, dataPath: state.entries[key].dataPath });
+  return withStateLock(statePath, async () => {
+    const hash = sha256Object(snapshot);
+    const state = await readCollectorState(statePath);
+    if (state.entries[key]?.hash === hash) {
+      return Object.freeze({ changed: false, hash, dataPath: state.entries[key].dataPath });
+    }
+    await writeJsonAtomically(dataPath, snapshot);
+    state.entries[key] = { hash, dataPath, collectedAt: snapshot.collectedAt ?? Date.now() };
+    await saveCollectorState(statePath, state);
+    return Object.freeze({ changed: true, hash, dataPath });
+  });
+}
+
+async function readLastJsonlRecord(filePath) {
+  try {
+    const content = await readFile(filePath, "utf8");
+    const lines = content.trimEnd().split("\n");
+    if (lines.length === 0 || lines[0] === "") return null;
+    return JSON.parse(lines.at(-1));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
   }
-  await writeJsonAtomically(dataPath, snapshot);
-  state.entries[key] = { hash, dataPath, collectedAt: snapshot.collectedAt ?? Date.now() };
-  await saveCollectorState(statePath, state);
-  return Object.freeze({ changed: true, hash, dataPath });
 }
 
 export async function appendCollectedRecord({ filePath, statePath, key, record }) {
   assertKey(key);
-  const hash = sha256Object(record);
-  const state = await readCollectorState(statePath);
-  if (state.entries[key]?.hash === hash) {
-    return Object.freeze({ changed: false, hash, filePath });
-  }
-  await mkdir(dirname(filePath), { recursive: true });
-  await appendFile(filePath, `${JSON.stringify(record)}\n`, { encoding: "utf8", flag: "a", mode: 0o600 });
-  state.entries[key] = { hash, dataPath: filePath, collectedAt: record.collectedAt ?? Date.now() };
-  await saveCollectorState(statePath, state);
-  return Object.freeze({ changed: true, hash, filePath });
+  return withStateLock(statePath, async () => {
+    const hash = sha256Object(record);
+    const state = await readCollectorState(statePath);
+    if (state.entries[key]?.hash === hash) {
+      return Object.freeze({ changed: false, hash, filePath });
+    }
+    const lastRecord = await readLastJsonlRecord(filePath);
+    if (lastRecord?.contentHash === hash) {
+      state.entries[key] = { hash, dataPath: filePath, collectedAt: record.collectedAt ?? Date.now() };
+      await saveCollectorState(statePath, state);
+      return Object.freeze({ changed: false, hash, filePath });
+    }
+    await mkdir(dirname(filePath), { recursive: true });
+    await appendFile(filePath, `${JSON.stringify({ ...record, contentHash: hash })}\n`, { encoding: "utf8", flag: "a", mode: 0o600 });
+    state.entries[key] = { hash, dataPath: filePath, collectedAt: record.collectedAt ?? Date.now() };
+    await saveCollectorState(statePath, state);
+    return Object.freeze({ changed: true, hash, filePath });
+  });
 }
