@@ -10,7 +10,10 @@ import {
 	type KiwoomUsExchange,
 } from "../providers/kiwoom";
 import { FilingService } from "../services/filing.service";
-import { SpecialFeedService } from "../services/special-feed.service";
+import {
+	SpecialFeedService,
+	type SpecialFeedMarket,
+} from "../services/special-feed.service";
 import { SignalService } from "../services/signal.service";
 import { computeIndicators } from "../sample/indicators";
 import { computeScores } from "../sample/scores";
@@ -155,7 +158,7 @@ function normalizeTicker(value: unknown) {
 router.get("/special-feed", async (req, res) => {
 	const asset = String(req.query.asset ?? "stock").toLowerCase() === "coin" ? "coin" : "stock";
 	const rawMarket = String(req.query.market ?? (asset === "coin" ? "spot" : "KR"));
-	const market =
+	const market: SpecialFeedMarket =
 		asset === "coin"
 			? rawMarket.toLowerCase() === "futures"
 				? "futures"
@@ -168,10 +171,6 @@ router.get("/special-feed", async (req, res) => {
 	res.setHeader("Cache-Control", "no-store, max-age=0");
 
 	try {
-		if (market !== "KR" && market !== "US") {
-			throw new Error("SPECIAL_FEED_UNSUPPORTED_MARKET");
-		}
-
 		const result = await SpecialFeedService.getFeed(market, limit);
 		res.json(result);
 	} catch (error) {

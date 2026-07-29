@@ -37,7 +37,7 @@ type DeliverNotificationInput = {
   metadata?: Record<string, unknown>;
 };
 
-type PriceAlertRow = {
+export type PriceAlertRow = {
   id: string;
   member_id: string;
   asset_type: 'stock' | 'coin_spot' | 'coin_futures';
@@ -53,6 +53,28 @@ type PriceAlertRow = {
   last_triggered_at: string | null;
   condition_met?: boolean | null;
 };
+
+export interface PriceAlertMonitorResult {
+  checked: number;
+  eligible: number;
+  deduplicated: number;
+  wouldSend: number;
+  skipped: number;
+  actualSent: number;
+  dryRun: boolean;
+  skipReason?: string;
+}
+
+export interface PriceAlertMonitorDependencies {
+  configured: () => boolean;
+  loadAlerts: () => Promise<PriceAlertRow[]>;
+  readPrice: (alert: PriceAlertRow) => Promise<number>;
+}
+
+export interface PriceAlertMonitorOptions {
+  dryRun?: boolean;
+  dependencies?: PriceAlertMonitorDependencies;
+}
 
 let vapidInitialized = false;
 let priceMonitorRunning = false;
@@ -261,15 +283,16 @@ function formatPrice(value: number, assetType: PriceAlertRow['asset_type']): str
   return value.toLocaleString('ko-KR', { maximumFractionDigits: 4 });
 }
 
-async function evaluatePriceAlert(alert: PriceAlertRow): Promise<void> {
+async function evaluatePriceAlert(alert: PriceAlertRow): Promise<number> {
   const supabase = getSupabase();
   const now = new Date();
+  let actualSent = 0;
   if (alert.expires_at && Date.parse(alert.expires_at) <= now.getTime()) {
     await supabase
       .from('price_alerts')
       .update({ enabled: false, updated_at: now.toISOString() })
       .eq('id', alert.id);
-    return;
+    return 0;
   }
 
   try {
@@ -287,7 +310,7 @@ async function evaluatePriceAlert(alert: PriceAlertRow): Promise<void> {
     if (met && !wasMet) {
       const target = Number(alert.target_price);
       const directionText = alert.direction === 'above' ? '이상' : '이하';
-      await deliverMemberNotification({
+      const delivery = await deliverMemberNotification({
         memberId: alert.member_id,
         type: 'price_target',
         title: `지정가 도달 · ${cleanSymbol(alert.symbol)}`,
@@ -307,6 +330,14 @@ async function evaluatePriceAlert(alert: PriceAlertRow): Promise<void> {
       });
       update.last_triggered_at = now.toISOString();
       if (!alert.repeat_enabled) update.enabled = false;
+      actualSent = delivery.appStored || delivery.pushSent > 0 ? 1 : 0;
+
+      const { error } = await supabase
+        .from('price_alerts')
+        .update(update)
+        .eq('id', alert.id);
+      if (error) throw error;
+      return actualSent;
     }
 
     const { error } = await supabase
@@ -314,6 +345,7 @@ async function evaluatePriceAlert(alert: PriceAlertRow): Promise<void> {
       .update(update)
       .eq('id', alert.id);
     if (error) throw error;
+    return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await supabase
@@ -324,34 +356,121 @@ async function evaluatePriceAlert(alert: PriceAlertRow): Promise<void> {
         updated_at: now.toISOString(),
       })
       .eq('id', alert.id);
+    return actualSent;
   }
 }
 
-export async function runPriceAlertMonitorOnce(): Promise<{
-  checked: number;
-  skipped?: string;
-}> {
-  if (priceMonitorRunning) return { checked: 0, skipped: 'ALREADY_RUNNING' };
-  if (!isSupabaseConfigured()) return { checked: 0, skipped: 'SUPABASE_NOT_CONFIGURED' };
+async function loadActivePriceAlerts(): Promise<PriceAlertRow[]> {
+  const now = new Date().toISOString();
+  const { data, error } = await getSupabase()
+    .from('price_alerts')
+    .select('*')
+    .eq('enabled', true)
+    .or(`expires_at.is.null,expires_at.gt.${now}`)
+    .order('updated_at', { ascending: true })
+    .limit(500);
+  if (error) throw error;
+  return (data ?? []) as PriceAlertRow[];
+}
+
+const defaultPriceAlertDependencies: PriceAlertMonitorDependencies = {
+  configured: isSupabaseConfigured,
+  loadAlerts: loadActivePriceAlerts,
+  readPrice: readAlertPrice,
+};
+
+function emptyMonitorResult(
+  dryRun: boolean,
+  skipReason?: string,
+): PriceAlertMonitorResult {
+  return {
+    checked: 0,
+    eligible: 0,
+    deduplicated: 0,
+    wouldSend: 0,
+    skipped: 0,
+    actualSent: 0,
+    dryRun,
+    ...(skipReason ? { skipReason } : {}),
+  };
+}
+
+async function evaluateDryRun(
+  alerts: PriceAlertRow[],
+  dependencies: PriceAlertMonitorDependencies,
+): Promise<PriceAlertMonitorResult> {
+  const result: PriceAlertMonitorResult = {
+    checked: alerts.length,
+    eligible: 0,
+    deduplicated: 0,
+    wouldSend: 0,
+    skipped: 0,
+    actualSent: 0,
+    dryRun: true,
+  };
+
+  for (let index = 0; index < alerts.length; index += 5) {
+    const rows = await Promise.allSettled(
+      alerts.slice(index, index + 5).map(async (alert) => {
+        if (
+          alert.expires_at &&
+          Date.parse(alert.expires_at) <= Date.now()
+        ) {
+          return 'skipped' as const;
+        }
+
+        const currentPrice = await dependencies.readPrice(alert);
+        if (!isConditionMet(alert, currentPrice)) return 'skipped' as const;
+        if (alert.condition_met === true) return 'deduplicated' as const;
+        return 'wouldSend' as const;
+      }),
+    );
+
+    for (const row of rows) {
+      if (row.status === 'rejected' || row.value === 'skipped') {
+        result.skipped += 1;
+      } else if (row.value === 'deduplicated') {
+        result.eligible += 1;
+        result.deduplicated += 1;
+      } else {
+        result.eligible += 1;
+        result.wouldSend += 1;
+      }
+    }
+  }
+
+  return result;
+}
+
+export async function runPriceAlertMonitorOnce(
+  options: PriceAlertMonitorOptions = {},
+): Promise<PriceAlertMonitorResult> {
+  const dryRun = options.dryRun === true;
+  const dependencies = options.dependencies ?? defaultPriceAlertDependencies;
+  if (priceMonitorRunning) {
+    return emptyMonitorResult(dryRun, 'ALREADY_RUNNING');
+  }
+  if (!dependencies.configured()) {
+    return emptyMonitorResult(dryRun, 'SUPABASE_NOT_CONFIGURED');
+  }
 
   priceMonitorRunning = true;
   try {
-    const now = new Date().toISOString();
-    const { data, error } = await getSupabase()
-      .from('price_alerts')
-      .select('*')
-      .eq('enabled', true)
-      .or(`expires_at.is.null,expires_at.gt.${now}`)
-      .order('updated_at', { ascending: true })
-      .limit(500);
-    if (error) throw error;
-
-    const alerts = (data ?? []) as PriceAlertRow[];
+    const alerts = await dependencies.loadAlerts();
+    if (dryRun) return evaluateDryRun(alerts, dependencies);
     // API 제공처 과부하를 피하기 위해 작은 묶음으로 순차 처리합니다.
+    let actualSent = 0;
     for (let index = 0; index < alerts.length; index += 5) {
-      await Promise.all(alerts.slice(index, index + 5).map(evaluatePriceAlert));
+      const sent = await Promise.all(
+        alerts.slice(index, index + 5).map(evaluatePriceAlert),
+      );
+      actualSent += sent.reduce((total, value) => total + value, 0);
     }
-    return { checked: alerts.length };
+    return {
+      ...emptyMonitorResult(false),
+      checked: alerts.length,
+      actualSent,
+    };
   } finally {
     priceMonitorRunning = false;
   }

@@ -7,6 +7,8 @@
     "dev": "pnpm run build && NODE_ENV=development node --enable-source-maps ./dist/index.mjs",
     "build:frontend": "pnpm --dir ../stock-analyzer run build",
     "build:server": "node ./build.mjs",
+    "build:canary": "node ./scripts/build-canary.mjs",
+    "canary:local": "node ./scripts/run-local-canary.mjs",
     "build": "pnpm run build:frontend && pnpm run build:server",
     "start": "pnpm run build && NODE_ENV=development node --enable-source-maps ./dist/index.mjs",
     "start:signal-worker": "node --enable-source-maps ./dist/signal-worker.mjs",
