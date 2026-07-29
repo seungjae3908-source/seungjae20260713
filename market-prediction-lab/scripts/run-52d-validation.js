@@ -3,6 +3,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { BitgetPublicClient } from "../src/bitget-public-client.js";
 import { collectBitgetCandles, collectBitgetFuturesContext } from "../src/bitget-candle-collector.js";
+import { repairBitgetCandleGaps } from "../src/candle-gap-repair.js";
 import { verifyLiveCollection } from "../src/live-collection-verifier.js";
 import { normalizeCandleRows } from "../src/normalizers.js";
 import { buildTrainingRecords } from "../src/training-dataset.js";
@@ -32,6 +33,10 @@ function portableOutputs(outputs) {
   }]));
 }
 
+function sha256Json(value) {
+  return createHash("sha256").update(`${JSON.stringify(value, null, 2)}\n`).digest("hex");
+}
+
 const outputRoot = resolve(process.argv[2] ?? "live-52d-data");
 const reportPath = resolve(process.argv[3] ?? "docs/btcusdt-15m-52d-result.json");
 const market = "CRYPTO_FUTURES";
@@ -49,7 +54,7 @@ try {
   const endTime = Date.now();
   const startTime = endTime - (days * 24 * 60 * 60 * 1000);
   const client = new BitgetPublicClient({ minIntervalMs: 150, maxRetries: 4, timeoutMs: 10_000 });
-  const snapshot = await collectBitgetCandles({
+  const rawSnapshot = await collectBitgetCandles({
     client,
     market,
     symbol,
@@ -61,7 +66,46 @@ try {
     },
   });
   const rawPath = resolve(outputRoot, "raw-candles.json");
-  await writeJsonAtomically(rawPath, snapshot);
+  await writeJsonAtomically(rawPath, rawSnapshot);
+
+  stage = "repair_candle_gaps";
+  const repair = await repairBitgetCandleGaps({
+    client,
+    market,
+    symbol,
+    timeframe,
+    candles: rawSnapshot.candles,
+    maxPasses: 2,
+    onAttempt: (attempt) => console.log(JSON.stringify({ stage: "repair_candle_gaps", ...attempt })),
+  });
+  const repairReport = {
+    schemaVersion: 1,
+    initialGapCount: repair.initialGapCount,
+    initialMissingCandleCount: repair.initialMissingCandleCount,
+    repairedCandleCount: repair.repairedCandleCount,
+    remainingGapCount: repair.remainingGapCount,
+    remainingMissingCandleCount: repair.remainingMissingCandleCount,
+    unresolvedGaps: repair.unresolvedGaps,
+    attempts: repair.attempts,
+  };
+  await writeJsonAtomically(resolve(outputRoot, "gap-repair-report.json"), repairReport);
+
+  const snapshot = Object.freeze({
+    ...rawSnapshot,
+    collectedAt: Date.now(),
+    candles: repair.candles,
+    repair: Object.freeze(repairReport),
+  });
+  await writeJsonAtomically(resolve(outputRoot, "repaired-candles.json"), snapshot);
+  if (repair.remainingMissingCandleCount > 0) {
+    const error = new Error(`unresolved timeframe gaps after targeted repair: ${repair.remainingMissingCandleCount}`);
+    error.details = {
+      remainingGapCount: repair.remainingGapCount,
+      remainingMissingCandleCount: repair.remainingMissingCandleCount,
+      unresolvedGaps: repair.unresolvedGaps,
+    };
+    throw error;
+  }
 
   stage = "verify_candles";
   const quality = verifyLiveCollection(snapshot, { minCandles: 4_900 });
@@ -100,7 +144,6 @@ try {
   await writeJsonAtomically(resolve(outputRoot, "futures-context.json"), context);
 
   stage = "write_summary";
-  const rawText = `${JSON.stringify(snapshot, null, 2)}\n`;
   const result = {
     schemaVersion: 1,
     status: "pass",
@@ -119,7 +162,9 @@ try {
     gaps: quality.gaps,
     zeroVolume: quality.zeroVolume,
     maximumGapMs: quality.maximumGapMs,
-    candleSnapshotSha256: createHash("sha256").update(rawText).digest("hex"),
+    rawCandleSnapshotSha256: sha256Json(rawSnapshot),
+    repairedCandleSnapshotSha256: sha256Json(snapshot),
+    gapRepair: repairReport,
     normalizedQuality: normalized.quality,
     training: {
       lookback,
