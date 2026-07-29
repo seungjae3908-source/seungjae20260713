@@ -31,27 +31,35 @@ const external = [
 	'web-push',
 ];
 
-await build({
-	entryPoints: [path.resolve(rootDir, 'src/index.ts')],
-	outfile: path.resolve(outDir, 'index.mjs'),
-	bundle: true,
-	platform: 'node',
-	format: 'esm',
-	target: 'node20',
-	sourcemap: true,
-	minify: false,
-	packages: 'external',
-	external,
-	banner: {
-		js: `
+const entryPoints = [
+	{ source: 'src/index.ts', output: 'index.mjs' },
+	{ source: 'src/workers/signal-worker.ts', output: 'signal-worker.mjs' },
+	{ source: 'src/workers/alert-worker.ts', output: 'alert-worker.mjs' },
+];
+
+for (const entry of entryPoints) {
+	await build({
+		entryPoints: [path.resolve(rootDir, entry.source)],
+		outfile: path.resolve(outDir, entry.output),
+		bundle: true,
+		platform: 'node',
+		format: 'esm',
+		target: 'node20',
+		sourcemap: true,
+		minify: false,
+		packages: 'external',
+		external,
+		banner: {
+			js: `
 import { createRequire as __createRequire } from 'node:module';
 const require = __createRequire(import.meta.url);
 `,
-	},
-	define: {
-		'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
-	},
-	logLevel: 'info',
-});
+		},
+		define: {
+			'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
+		},
+		logLevel: 'info',
+	});
 
-console.log('[api-server] built dist/index.mjs');
+	console.log(`[api-server] built dist/${entry.output}`);
+}

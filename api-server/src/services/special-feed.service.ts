@@ -1,3 +1,6 @@
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
+
 import { CATALOG, type CatalogEntry } from "../data/catalog";
 import { MarketDataService } from "./market-data.service";
 import { NewsService } from "./news.service";
@@ -49,11 +52,16 @@ const NEWS_MAX_AGE_MS = 3 * 24 * 60 * 60_000;
 const DISCLOSURE_MAX_AGE_MS = 14 * 24 * 60 * 60_000;
 const MAX_ITEMS_PER_MARKET = 120;
 const DEFAULT_BATCH_SIZE = 8;
+const SNAPSHOT_VERSION = 1 as const;
+const SNAPSHOT_READ_THROTTLE_MS = 1_000;
 
 const feedItems = new Map<string, SpecialFeedItem>();
 const staticSeenAt = new Map<string, number>();
 const lastSignalAddedAt = new Map<string, number>();
 const previousSignals = new Map<string, Set<string>>();
+let snapshotSavedAt = 0;
+let snapshotReadAt = 0;
+let snapshotLoadPromise: Promise<void> | null = null;
 
 const marketState: Record<
   SpecialFeedMarket,
@@ -66,6 +74,102 @@ const marketState: Record<
   KR: { cursor: 0, lastRefreshAt: 0, running: null },
   US: { cursor: 0, lastRefreshAt: 0, running: null },
 };
+
+interface SpecialFeedSnapshot {
+  version: typeof SNAPSHOT_VERSION;
+  savedAt: number;
+  items: SpecialFeedItem[];
+  cursors: Record<SpecialFeedMarket, number>;
+}
+
+function snapshotFilePath(): string {
+  const configured = process.env.SPECIAL_FEED_CACHE_FILE?.trim();
+  if (configured) return path.resolve(configured);
+
+  const cwd = process.cwd();
+  const apiRoot = path.basename(cwd) === "api-server"
+    ? cwd
+    : path.join(cwd, "api-server");
+  return path.join(apiRoot, "data", "worker", "special-feed-v1.json");
+}
+
+function validSnapshotItem(value: unknown): value is SpecialFeedItem {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Partial<SpecialFeedItem>;
+  return Boolean(
+    row.id &&
+      row.ticker &&
+      (row.market === "KR" || row.market === "US") &&
+      row.detectedAt &&
+      row.expiresAt,
+  );
+}
+
+async function syncSnapshotFromDisk(force = false): Promise<void> {
+  const now = Date.now();
+  if (!force && now - snapshotReadAt < SNAPSHOT_READ_THROTTLE_MS) return;
+  if (snapshotLoadPromise) return snapshotLoadPromise;
+
+  snapshotReadAt = now;
+  snapshotLoadPromise = (async () => {
+    try {
+      const parsed = JSON.parse(
+        await readFile(snapshotFilePath(), "utf8"),
+      ) as Partial<SpecialFeedSnapshot>;
+      const savedAt = Number(parsed.savedAt ?? 0);
+      if (
+        parsed.version !== SNAPSHOT_VERSION ||
+        !Number.isFinite(savedAt) ||
+        savedAt <= snapshotSavedAt ||
+        !Array.isArray(parsed.items)
+      ) {
+        return;
+      }
+
+      feedItems.clear();
+      for (const item of parsed.items.filter(validSnapshotItem)) {
+        feedItems.set(item.id, item);
+      }
+      marketState.KR.cursor = Math.max(
+        0,
+        Math.trunc(Number(parsed.cursors?.KR ?? 0)) || 0,
+      );
+      marketState.US.cursor = Math.max(
+        0,
+        Math.trunc(Number(parsed.cursors?.US ?? 0)) || 0,
+      );
+      snapshotSavedAt = savedAt;
+      pruneState();
+    } catch {
+      // 첫 실행이거나 아직 worker snapshot이 없으면 빈 feed를 유지합니다.
+    }
+  })().finally(() => {
+    snapshotLoadPromise = null;
+  });
+
+  return snapshotLoadPromise;
+}
+
+async function persistSnapshot(): Promise<void> {
+  pruneState();
+  const savedAt = Date.now();
+  const target = snapshotFilePath();
+  const temporary = `${target}.${process.pid}.tmp`;
+  const payload: SpecialFeedSnapshot = {
+    version: SNAPSHOT_VERSION,
+    savedAt,
+    items: [...feedItems.values()],
+    cursors: {
+      KR: marketState.KR.cursor,
+      US: marketState.US.cursor,
+    },
+  };
+
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(temporary, JSON.stringify(payload), "utf8");
+  await rename(temporary, target);
+  snapshotSavedAt = savedAt;
+}
 
 const POSITIVE_WORDS = [
   "공급계약",
@@ -658,7 +762,7 @@ async function getFeed(
   market: SpecialFeedMarket,
   limit = 80,
 ): Promise<SpecialFeedResponse> {
-  const refresh = await refreshMarket(market);
+  await syncSnapshotFromDisk();
   pruneState();
 
   const items = [...feedItems.values()]
@@ -673,15 +777,38 @@ async function getFeed(
     items,
     count: items.length,
     catalogSize: CATALOG.filter((entry) => entry.market === market).length,
-    scannedNow: refresh.scannedNow,
-    nextCursor: refresh.nextCursor,
-    updatedAt: new Date().toISOString(),
+    scannedNow: 0,
+    nextCursor: marketState[market].cursor,
+    updatedAt: new Date(snapshotSavedAt || Date.now()).toISOString(),
     ttlMinutes: 60,
     refreshSeconds: 30,
-    note: "현재 앱 종목 목록을 순환 확인합니다. 새 중요 뉴스·공시·차트신호는 감지 시점부터 1시간 동안만 표시됩니다.",
+    note: snapshotSavedAt
+      ? "signal worker가 순환 확인한 새 중요 뉴스·공시·차트신호를 표시합니다."
+      : "signal worker snapshot을 기다리고 있습니다.",
+  };
+}
+
+async function runWorkerScanOnce(): Promise<{
+  KR: { scannedNow: number; nextCursor: number };
+  US: { scannedNow: number; nextCursor: number };
+  itemCount: number;
+  savedAt: string;
+}> {
+  await syncSnapshotFromDisk(true);
+  const [KR, US] = await Promise.all([
+    refreshMarket("KR"),
+    refreshMarket("US"),
+  ]);
+  await persistSnapshot();
+  return {
+    KR,
+    US,
+    itemCount: feedItems.size,
+    savedAt: new Date(snapshotSavedAt).toISOString(),
   };
 }
 
 export const SpecialFeedService = {
   getFeed,
+  runWorkerScanOnce,
 };

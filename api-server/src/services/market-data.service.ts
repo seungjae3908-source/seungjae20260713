@@ -19,6 +19,12 @@ import * as naver from '../providers/naver';
 import * as finnhub from '../providers/finnhub';
 import { getKrUniverse } from '../providers/krx';
 import { providerStatus } from '../lib/config';
+import {
+  LastGoodCache,
+  OperationTimeoutError,
+  SingleFlight,
+  withTimeout,
+} from '../lib/async-control';
 import { getKiwoomChartCandles } from '../kiwoom-chart';
 import { cached, TTL } from '../lib/cache';
 import type {
@@ -97,6 +103,12 @@ interface CandleDiskCache {
   timeframe: string;
   candles: Candle[];
   provider?: string;
+}
+
+export interface MarketSearchResult {
+  results: SearchResult[];
+  partial: boolean;
+  warnings: string[];
 }
 
 const CANDLE_CACHE_VERSION = 'v3' as const;
@@ -1022,154 +1034,166 @@ async function tryProfileProvider(
   } as CompanyProfile;
 }
 
-async function buildKrUniverseEntries(): Promise<
-  CatalogEntry[]
-> {
-  try {
-    const rows =
-      await getKrUniverse();
+interface KrUniverseResult {
+  entries: CatalogEntry[];
+  partial: boolean;
+  warning?: string;
+}
 
-    if (!Array.isArray(rows)) {
-      return [];
+const krUniverseFlights = new SingleFlight<string, CatalogEntry[]>();
+const krUniverseLastGood = new LastGoodCache<string, CatalogEntry[]>();
+const KR_UNIVERSE_LAST_GOOD_MS = 24 * 60 * 60_000;
+
+function krUniverseTimeoutMs(): number {
+  const configured = Number(process.env.SEARCH_UNIVERSE_TIMEOUT_MS);
+  if (!Number.isFinite(configured)) return 1_800;
+  return Math.max(500, Math.min(5_000, Math.trunc(configured)));
+}
+
+function toKrUniverseEntries(rows: unknown): CatalogEntry[] {
+  if (!Array.isArray(rows)) return [];
+
+  return rows
+    .map((row: any) => {
+      const ticker = cleanTicker(row.ticker ?? row.code ?? row.symbol);
+      const name = String(row.name ?? row.companyName ?? ticker);
+      if (!ticker) return null;
+
+      return createEntry(
+        ticker,
+        name,
+        'KR' as Market,
+        'KRW' as Currency,
+        [name],
+      );
+    })
+    .filter((entry): entry is CatalogEntry => Boolean(entry));
+}
+
+async function loadKrUniverseEntries(): Promise<CatalogEntry[]> {
+  const entries = toKrUniverseEntries(await getKrUniverse());
+  if (entries.length > 0) {
+    krUniverseLastGood.set('KR', entries);
+  }
+  return entries;
+}
+
+async function buildKrUniverseEntries(): Promise<KrUniverseResult> {
+  const pending = krUniverseFlights.run('KR', loadKrUniverseEntries);
+
+  try {
+    const entries = await withTimeout(
+      pending,
+      krUniverseTimeoutMs(),
+      'KR search universe',
+    );
+    if (entries.length > 0) {
+      return { entries, partial: false };
     }
 
-    return rows
-      .map((row: any) => {
-        const ticker =
-          cleanTicker(
-            row.ticker ??
-              row.code ??
-              row.symbol,
-          );
-
-        const name =
-          String(
-            row.name ??
-              row.companyName ??
-              ticker,
-          );
-
-        if (!ticker) {
-          return null;
-        }
-
-        return createEntry(
-          ticker,
-          name,
-          'KR' as Market,
-          'KRW' as Currency,
-          [name],
-        );
-      })
-      .filter(
-        (
-          entry,
-        ): entry is CatalogEntry =>
-          Boolean(entry),
-      );
-  } catch {
-    return [];
+    const cached = krUniverseLastGood.get('KR', KR_UNIVERSE_LAST_GOOD_MS);
+    return {
+      entries: cached?.value ?? [],
+      partial: true,
+      warning: cached
+        ? 'KR_UNIVERSE_EMPTY_LAST_GOOD'
+        : 'KR_UNIVERSE_EMPTY_CATALOG_FALLBACK',
+    };
+  } catch (error) {
+    const cached = krUniverseLastGood.get('KR', KR_UNIVERSE_LAST_GOOD_MS);
+    const reason =
+      error instanceof OperationTimeoutError
+        ? 'KR_UNIVERSE_TIMEOUT'
+        : 'KR_UNIVERSE_PROVIDER_ERROR';
+    return {
+      entries: cached?.value ?? [],
+      partial: true,
+      warning: `${reason}_${cached ? 'LAST_GOOD' : 'CATALOG_FALLBACK'}`,
+    };
   }
 }
 
+function aliasCatalogEntries(): CatalogEntry[] {
+  return Object.values(EXTRA_ALIASES).map((value) =>
+    createEntry(
+      value.ticker,
+      value.name,
+      value.market,
+      value.currency,
+      value.aliases,
+    ),
+  );
+}
+
+function searchCatalogEntries(
+  query: string,
+  limit: number,
+  extras: CatalogEntry[] = [],
+): SearchResult[] {
+  const entries = dedupeEntries([
+    ...catalogArray(),
+    ...aliasCatalogEntries(),
+    ...extras,
+  ]);
+
+  for (const entry of entries) {
+    try {
+      registerDynamicEntry(entry);
+    } catch {
+      // Dynamic registration is optional.
+    }
+  }
+
+  return entries
+    .map((entry) => ({ entry, score: searchScore(entry, query) }))
+    .filter((item) => (query ? item.score > 0 : true))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return String((a.entry as any).ticker).localeCompare(
+        String((b.entry as any).ticker),
+      );
+    })
+    .slice(0, limit)
+    .map((item) => toSearchResult(item.entry));
+}
+
+function shouldLoadKrUniverse(query: string): boolean {
+  const compact = query.replace(/\s+/g, '');
+  return /[가-힣]/u.test(compact) || /^\d{2,6}$/.test(compact);
+}
+
 export class MarketDataService {
+  static searchLocal(q: string, limit = 80): SearchResult[] {
+    const query = String(q ?? '').trim();
+    return searchCatalogEntries(query, limit);
+  }
+
+  static async searchWithMeta(
+    q: string,
+    limit = 80,
+  ): Promise<MarketSearchResult> {
+    const query = String(q ?? '').trim();
+    if (query.length < 2 || !shouldLoadKrUniverse(query)) {
+      return {
+        results: searchCatalogEntries(query, limit),
+        partial: false,
+        warnings: [],
+      };
+    }
+
+    const universe = await buildKrUniverseEntries();
+    return {
+      results: searchCatalogEntries(query, limit, universe.entries),
+      partial: universe.partial,
+      warnings: universe.warning ? [universe.warning] : [],
+    };
+  }
+
   static async search(
     q: string,
     limit = 80,
   ): Promise<SearchResult[]> {
-    const query =
-      String(
-        q ??
-          '',
-      ).trim();
-
-    const aliasEntries =
-      Object.entries(
-        EXTRA_ALIASES,
-      ).map(
-        (
-          [
-            ,
-            value,
-          ],
-        ) =>
-          createEntry(
-            value.ticker,
-            value.name,
-            value.market,
-            value.currency,
-            value.aliases,
-          ),
-      );
-
-    const entries =
-      dedupeEntries([
-        ...catalogArray(),
-
-        ...aliasEntries,
-
-        ...(query.length >= 2
-          ? await buildKrUniverseEntries()
-          : []),
-      ]);
-
-    for (const entry of entries) {
-      try {
-        registerDynamicEntry(
-          entry,
-        );
-      } catch {
-        // Dynamic registration is optional.
-      }
-    }
-
-    const scored = entries
-      .map((entry) => ({
-        entry,
-
-        score:
-          searchScore(
-            entry,
-            query,
-          ),
-      }))
-      .filter(
-        (item) =>
-          query
-            ? item.score > 0
-            : true,
-      )
-      .sort((a, b) => {
-        if (
-          b.score !==
-          a.score
-        ) {
-          return (
-            b.score -
-            a.score
-          );
-        }
-
-        return String(
-          (a.entry as any).ticker,
-        ).localeCompare(
-          String(
-            (b.entry as any).ticker,
-          ),
-        );
-      })
-      .slice(
-        0,
-        limit,
-      )
-      .map(
-        (item) =>
-          toSearchResult(
-            item.entry,
-          ),
-      );
-
-    return scored;
+    return (await this.searchWithMeta(q, limit)).results;
   }
 
   static async getQuote(
@@ -1402,7 +1426,7 @@ export class MarketDataService {
       dedupeEntries([
         ...catalogArray(),
 
-        ...(await buildKrUniverseEntries()),
+        ...(await buildKrUniverseEntries()).entries,
       ]);
 
     const filtered =

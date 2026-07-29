@@ -56,7 +56,6 @@ type PriceAlertRow = {
 
 let vapidInitialized = false;
 let priceMonitorRunning = false;
-let priceMonitorTimer: NodeJS.Timeout | null = null;
 
 export function isVapidReady(): boolean {
   return Boolean(
@@ -356,22 +355,4 @@ export async function runPriceAlertMonitorOnce(): Promise<{
   } finally {
     priceMonitorRunning = false;
   }
-}
-
-export function startPriceAlertMonitor(): void {
-  if (priceMonitorTimer) return;
-  const configured = Number(process.env.PRICE_ALERT_MONITOR_INTERVAL_MS ?? 60_000);
-  const intervalMs = Math.max(30_000, Math.min(15 * 60_000, Number.isFinite(configured) ? configured : 60_000));
-
-  const run = () => {
-    void runPriceAlertMonitorOnce().catch((error) => {
-      console.error('price alert monitor error:', error);
-    });
-  };
-
-  const initialTimer = setTimeout(run, 10_000);
-  initialTimer.unref?.();
-  priceMonitorTimer = setInterval(run, intervalMs);
-  priceMonitorTimer.unref?.();
-  console.log(`[api-server] price alert monitor enabled (${intervalMs}ms)`);
 }
