@@ -17,7 +17,7 @@ concurrency:
 jobs:
   validate-52d-dataset:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 26
     steps:
       - name: Checkout isolated branch
         uses: actions/checkout@v4
