@@ -9,6 +9,7 @@
 import { getCatalogEntry, type CatalogEntry } from '../data/catalog';
 import { getCompanyNews } from '../providers/finnhub';
 import { fetchText } from '../lib/http';
+import { reportProviderFallback } from '../lib/provider-context';
 import type { NewsData, NewsItem } from '../sample/types';
 
 type Tone = 'positive' | 'negative';
@@ -190,6 +191,7 @@ async function getNews(ticker: string): Promise<NewsData | null> {
       try {
         items = await usItems(entry);
       } catch (err) {
+        reportProviderFallback('FINNHUB_NEWS_GOOGLE_FALLBACK');
         console.error(`finnhub news failed for ${ticker}, falling back to google news:`, err);
         items = [];
       }

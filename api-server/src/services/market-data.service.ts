@@ -27,6 +27,7 @@ import {
 } from '../lib/async-control';
 import { getKiwoomChartCandles } from '../kiwoom-chart';
 import { cached, TTL } from '../lib/cache';
+import { reportProviderFallback } from '../lib/provider-context';
 import type {
   Candle,
   CompanyProfile,
@@ -861,19 +862,21 @@ async function tryQuoteProvider(
     (entry as any).ticker,
   );
 
-  const attempts: Array<() => Promise<unknown>> = [];
+  const attempts: Array<{ name: string; run: () => Promise<unknown> }> = [];
 
   if (marketValue === 'KR') {
-    attempts.push(() => naver.getQuote(entry));
-    attempts.push(() => yahoo.getQuote(entry));
+    attempts.push({ name: 'naver', run: () => naver.getQuote(entry) });
+    attempts.push({ name: 'yahoo', run: () => yahoo.getQuote(entry) });
   } else {
-    attempts.push(() => yahoo.getQuote(entry));
-    if (providers.finnhub) attempts.push(() => finnhub.getQuote(entry));
+    attempts.push({ name: 'yahoo', run: () => yahoo.getQuote(entry) });
+    if (providers.finnhub) {
+      attempts.push({ name: 'finnhub', run: () => finnhub.getQuote(entry) });
+    }
   }
 
-  for (const attempt of attempts) {
+  for (const [index, attempt] of attempts.entries()) {
     try {
-      const result = await attempt();
+      const result = await attempt.run();
       if (!result || typeof result !== 'object') continue;
       const quote = result as LooseQuote;
       const price = quotePrice(quote);
@@ -882,6 +885,11 @@ async function tryQuoteProvider(
       }
     } catch {
       // Try the next live provider.
+    }
+    if (index < attempts.length - 1) {
+      reportProviderFallback(
+        `${marketValue}_${attempt.name.toUpperCase()}_QUOTE_FALLBACK`,
+      );
     }
   }
 
