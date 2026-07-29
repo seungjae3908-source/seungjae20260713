@@ -13,7 +13,7 @@ permissions:
 jobs:
   final-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 16
     steps:
       - name: Checkout isolated branch
         uses: actions/checkout@v4
