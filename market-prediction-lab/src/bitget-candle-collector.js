@@ -96,6 +96,8 @@ export async function collectBitgetCandles({
   const granularity = (isFutures ? FUTURES_GRANULARITY : SPOT_GRANULARITY)[timeframe];
   const pageLimit = 200;
   const all = [];
+  // Bitget's endTime is exclusive (candles before this timestamp). Aligning down
+  // excludes the still-open candle and keeps every closed page boundary intact.
   let cursorEnd = alignDown(endTime, intervalMs);
   let page = 0;
   let previousOldest = Number.POSITIVE_INFINITY;
@@ -112,28 +114,35 @@ export async function collectBitgetCandles({
     if (!Array.isArray(payload.data)) throw new TypeError("Bitget candle response data must be an array");
     if (payload.data.length === 0) break;
 
-    const batch = sortAndDeduplicate(payload.data.map(normalizeBitgetCandle))
-      .filter((candle) => candle.timestamp >= startTime && candle.timestamp <= endTime);
-    if (batch.length === 0) {
-      const rawOldest = Math.min(...payload.data.map((row) => Number(row[0])).filter(Number.isFinite));
-      if (!Number.isFinite(rawOldest) || rawOldest >= previousOldest) break;
-      previousOldest = rawOldest;
-      cursorEnd = rawOldest - intervalMs;
-      continue;
+    const normalizedPage = sortAndDeduplicate(payload.data.map(normalizeBitgetCandle));
+    const batch = normalizedPage.filter((candle) => candle.timestamp >= startTime && candle.timestamp < cursorEnd);
+    const rawOldest = normalizedPage[0]?.timestamp;
+    if (!Number.isFinite(rawOldest)) throw new TypeError("Bitget candle page does not contain a valid timestamp");
+    if (rawOldest >= previousOldest) {
+      throw new Error("pagination did not move backward; collection stopped to prevent an infinite loop");
     }
 
-    all.push(...batch);
-    page += 1;
-    await onPage?.(Object.freeze({ page, received: batch.length, oldest: batch[0].timestamp, newest: batch.at(-1).timestamp }));
-    const oldest = batch[0].timestamp;
-    if (oldest >= previousOldest) throw new Error("pagination did not move backward; collection stopped to prevent an infinite loop");
-    previousOldest = oldest;
-    cursorEnd = oldest - intervalMs;
+    if (batch.length > 0) {
+      all.push(...batch);
+      page += 1;
+      await onPage?.(Object.freeze({
+        page,
+        received: batch.length,
+        oldest: batch[0].timestamp,
+        newest: batch.at(-1).timestamp,
+      }));
+    }
+
+    previousOldest = rawOldest;
+    // endTime is exclusive, so using the oldest returned timestamp requests the
+    // immediately preceding candle on the next page. Subtracting an interval here
+    // would skip exactly one candle at every page boundary.
+    cursorEnd = rawOldest;
     if (payload.data.length < pageLimit) break;
   }
 
   const candles = sortAndDeduplicate(all)
-    .filter((candle) => candle.timestamp >= startTime && candle.timestamp <= endTime)
+    .filter((candle) => candle.timestamp >= startTime && candle.timestamp < alignDown(endTime, intervalMs))
     .slice(-maxCandles);
   if (candles.length < 60) throw new Error(`not enough candles collected: ${candles.length}`);
   return Object.freeze({
