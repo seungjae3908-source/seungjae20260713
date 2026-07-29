@@ -106,7 +106,9 @@ function safeEnvironment(extra = {}) {
     SPECIAL_FEED_BATCH_SIZE: '2',
     SPECIAL_FEED_CACHE_FILE: path.join(runDir, 'special-feed.snapshot.json'),
     SIGNAL_WORKER_INTERVAL_MS: '20000',
-    SIGNAL_PROVIDER_TIMEOUT_MS: '10000',
+    SIGNAL_PROVIDER_TIMEOUT_MS: '8000',
+    SIGNAL_MARKET_TIMEOUT_MS: '22000',
+    SIGNAL_CYCLE_TIMEOUT_MS: '25000',
     SIGNAL_SPOT_PROVIDER: process.env.CANARY_SPOT_PROVIDER ?? 'upbit',
     SIGNAL_FUTURES_PROVIDER: 'bitget',
     PRICE_ALERT_MONITOR_INTERVAL_MS: '30000',
@@ -225,7 +227,10 @@ function signalProcess(child, signal) {
 const requestMetrics = {
   durations: [],
   total: 0,
+  status2xx: 0,
+  status4xx: 0,
   status5xx: 0,
+  orderApiCalls: 0,
   timeouts: 0,
   fallbacks: 0,
   fallbackByMarketReason: {},
@@ -290,6 +295,12 @@ function primaryFallbackReason(reasons) {
 
 async function request(pathname, options = {}) {
   const { metricMarket = 'unknown', ...fetchOptions } = options;
+  if (
+    /\/(?:orders?|trade|buy|sell)(?:\/|$)/i.test(pathname) ||
+    String(fetchOptions.method ?? 'GET').toUpperCase() !== 'GET'
+  ) {
+    requestMetrics.orderApiCalls += 1;
+  }
   const startedAt = performance.now();
   requestMetrics.total += 1;
   try {
@@ -303,7 +314,13 @@ async function request(pathname, options = {}) {
     });
     const duration = performance.now() - startedAt;
     requestMetrics.durations.push(duration);
-    if (response.status >= 500) requestMetrics.status5xx += 1;
+    if (response.status >= 200 && response.status < 300) {
+      requestMetrics.status2xx += 1;
+    } else if (response.status >= 400 && response.status < 500) {
+      requestMetrics.status4xx += 1;
+    } else if (response.status >= 500) {
+      requestMetrics.status5xx += 1;
+    }
     const body = await response.json().catch(() => ({}));
     if (
       body?.partial === true ||
@@ -562,6 +579,51 @@ try {
   signalPreflight.unconfigured = unconfiguredCycle.result?.markets;
   await stopProcess('signal-unconfigured');
 
+  const providerTimeout = startProcess(
+    'signal-provider-timeout',
+    bundlePaths.signal,
+    {
+      SIGNAL_PROVIDER_TIMEOUT_MS: '1000',
+      SIGNAL_MARKET_TIMEOUT_MS: '5000',
+      SIGNAL_CYCLE_TIMEOUT_MS: '8000',
+      SIGNAL_CANARY_TIMEOUT_PROVIDERS: 'dart,finnhub-news',
+    },
+  );
+  const providerTimeoutCycle = await waitForEvent(
+    'signal-provider-timeout',
+    (event) => event.event === 'worker_cycle',
+    15_000,
+  );
+  signalPreflight.providerTimeout = {
+    durationMs: providerTimeoutCycle.durationMs,
+    markets: providerTimeoutCycle.result?.markets,
+    cycle: providerTimeoutCycle.result?.cycle,
+    diagnostics: providerTimeoutCycle.result?.diagnostics,
+  };
+  await stopProcess('signal-provider-timeout');
+
+  const cycleTimeout = startProcess(
+    'signal-cycle-timeout',
+    bundlePaths.signal,
+    {
+      SIGNAL_MARKET_TIMEOUT_MS: '60000',
+      SIGNAL_CYCLE_TIMEOUT_MS: '8000',
+      SIGNAL_CANARY_HANG_MARKETS: 'KR,US,spot,futures',
+    },
+  );
+  const cycleTimeoutEvent = await waitForEvent(
+    'signal-cycle-timeout',
+    (event) => event.event === 'worker_cycle',
+    15_000,
+  );
+  signalPreflight.cycleTimeout = {
+    durationMs: cycleTimeoutEvent.durationMs,
+    markets: cycleTimeoutEvent.result?.markets,
+    cycle: cycleTimeoutEvent.result?.cycle,
+    diagnostics: cycleTimeoutEvent.diagnostics,
+  };
+  await stopProcess('signal-cycle-timeout');
+
   let signal = startProcess('signal-main', bundlePaths.signal);
   const firstSignalCycle = await waitForEvent(
     'signal-main',
@@ -582,6 +644,9 @@ try {
     const label = `signal-forced-failure-${market}`;
     const failedMarket = startProcess(label, bundlePaths.signal, {
       SIGNAL_CANARY_FAIL_MARKETS: market,
+      SIGNAL_PROVIDER_TIMEOUT_MS: '1000',
+      SIGNAL_MARKET_TIMEOUT_MS: '5000',
+      SIGNAL_CYCLE_TIMEOUT_MS: '8000',
     });
     const failedCycle = await waitForEvent(
       label,
@@ -674,6 +739,8 @@ try {
           elapsedMinutes: Number((elapsedMs / 60_000).toFixed(2)),
           rssMiB: Number((rssBytes / 1024 / 1024).toFixed(2)),
           requests: requestMetrics.total,
+          status2xx: requestMetrics.status2xx,
+          status4xx: requestMetrics.status4xx,
           status5xx: requestMetrics.status5xx,
           fallbacks: requestMetrics.fallbacks,
           fallbackByMarketReason:
@@ -836,7 +903,10 @@ const result = {
           durations.length
         : 0,
     maximumMs: durations.length > 0 ? Math.max(...durations) : 0,
+    status2xx: requestMetrics.status2xx,
+    status4xx: requestMetrics.status4xx,
     status5xx: requestMetrics.status5xx,
+    orderApiCalls: requestMetrics.orderApiCalls,
     timeouts: requestMetrics.timeouts,
     fallbacks: requestMetrics.fallbacks,
     fallbackByMarketReason:
@@ -920,8 +990,14 @@ const forcedFailuresPassed = ['KR', 'US', 'spot', 'futures'].every(
   (market) => {
     const row = signalPreflight.failuresByMarket?.[market];
     return (
-      row?.failed?.staleUsed === true &&
       row?.failed?.status === 'PARTIAL' &&
+      (
+        row?.failed?.staleUsed === true ||
+        (
+          Number(row?.failed?.resultCount ?? 0) === 0 &&
+          row?.failed?.source === 'none'
+        )
+      ) &&
       Object.values(row.peers ?? {}).every(
         (peer) => peer?.status !== 'ERROR',
       )
@@ -933,6 +1009,30 @@ const gcPassed =
   [10, 20, 30, 45].every(
     (minute) => gcResults[minute]?.available === true,
   );
+const providerTimeoutPassed =
+  Number(signalPreflight.providerTimeout?.durationMs ?? Infinity) <= 3_000 &&
+  Number(
+    signalPreflight.providerTimeout?.cycle?.providerTotals?.['KR:dart']
+      ?.timeouts ?? 0,
+  ) > 0 &&
+  Number(signalPreflight.providerTimeout?.diagnostics?.timerCount ?? -1) === 0 &&
+  Number(
+    signalPreflight.providerTimeout?.diagnostics?.cache?.pendingLoads ?? -1,
+  ) === 0 &&
+  Number(
+    signalPreflight.providerTimeout?.diagnostics?.pendingPromises ?? -1,
+  ) === 0;
+const cycleTimeoutPassed =
+  signalPreflight.cycleTimeout?.cycle?.timedOut === true &&
+  signalPreflight.cycleTimeout?.cycle?.failureCode ===
+    'SIGNAL_CYCLE_TIMEOUT' &&
+  Number(signalPreflight.cycleTimeout?.durationMs ?? Infinity) <= 10_000 &&
+  Number(
+    signalPreflight.cycleTimeout?.diagnostics?.worker?.timerCount ?? -1,
+  ) === 0 &&
+  Number(
+    signalPreflight.cycleTimeout?.diagnostics?.worker?.pendingPromises ?? -1,
+  ) === 0;
 
 if (
   !duplicateBlocked ||
@@ -942,7 +1042,10 @@ if (
   !unconfiguredExplicit ||
   !forcedFailuresPassed ||
   !gcPassed ||
+  !providerTimeoutPassed ||
+  !cycleTimeoutPassed ||
   actualNotifications !== 0 ||
+  requestMetrics.orderApiCalls !== 0 ||
   !result.workers.alertDryRunOnly
 ) {
   process.exitCode = 1;

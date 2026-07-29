@@ -7,6 +7,7 @@ import { NewsService } from "./news.service";
 import { RiskAnalysisService } from "./risk-analysis.service";
 import { SignalService } from "./signal.service";
 import { getMemoryCacheDiagnostics } from "../lib/cache";
+import { runWithProviderSignal } from "../lib/provider-context";
 
 export type SpecialFeedMarket = "KR" | "US" | "spot" | "futures";
 export type SpecialFeedKind = "news" | "disclosure" | "signal";
@@ -90,6 +91,8 @@ let snapshotLoadPromise: Promise<void> | null = null;
 let lastSnapshotBytes = 0;
 let activeProviderTimers = 0;
 let activeWorkerScans = 0;
+let signalCycleNumber = 0;
+let lastCycleMetrics: SignalCycleMetrics | null = null;
 const lastMarketResultLengths: Record<SpecialFeedMarket, number> = {
   KR: 0,
   US: 0,
@@ -125,6 +128,301 @@ const MARKET_KEYS: readonly SpecialFeedMarket[] = [
   "spot",
   "futures",
 ];
+
+type ProviderCallState =
+  | "OK"
+  | "FALLBACK"
+  | "TIMEOUT"
+  | "ERROR"
+  | "ABORTED";
+
+interface ProviderCallMetric {
+  market: SpecialFeedMarket;
+  provider: string;
+  startedAtMs: number;
+  finishedAtMs: number;
+  durationMs: number;
+  timeoutMs: number;
+  status: ProviderCallState;
+  code: string | null;
+}
+
+interface ProviderAggregate {
+  calls: number;
+  completed: number;
+  timeouts: number;
+  errors: number;
+  aborted: number;
+  totalDurationMs: number;
+  maximumDurationMs: number;
+  lastGood: number;
+  fallback: number;
+}
+
+export interface SignalCycleMetrics {
+  cycleNumber: number;
+  startedAtMs: number;
+  finishedAtMs: number;
+  durationMs: number;
+  timeoutMs: number;
+  timedOut: boolean;
+  failureCode: string | null;
+  providerCalls: ProviderCallMetric[];
+  providerTotals: Record<string, ProviderAggregate>;
+  marketTotals: Record<
+    SpecialFeedMarket,
+    {
+      startedAtMs: number;
+      finishedAtMs: number;
+      durationMs: number;
+      status: SpecialFeedMarketState;
+      warning: string | null;
+      lastGood: number;
+      fallback: number;
+    }
+  >;
+}
+
+interface CycleTelemetry {
+  cycleNumber: number;
+  startedAtMs: number;
+  providerCalls: ProviderCallMetric[];
+}
+
+class SignalDeadlineError extends Error {
+  constructor(readonly code: string) {
+    super(code);
+    this.name = "SignalDeadlineError";
+  }
+}
+
+function boundedSignalTimeout(
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = Number(process.env[name]);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
+}
+
+function providerTimeoutMs(provider: string): number {
+  const defaultTimeout = boundedSignalTimeout(
+    "SIGNAL_PROVIDER_TIMEOUT_MS",
+    8_000,
+    1_000,
+    30_000,
+  );
+  const variable =
+    provider.startsWith("dart")
+      ? "SIGNAL_DART_TIMEOUT_MS"
+      : provider.startsWith("finnhub")
+        ? "SIGNAL_FINNHUB_TIMEOUT_MS"
+        : provider === "kr-quote"
+          ? "SIGNAL_KR_QUOTE_TIMEOUT_MS"
+          : provider === "us-quote"
+            ? "SIGNAL_US_QUOTE_TIMEOUT_MS"
+            : provider === "upbit"
+              ? "SIGNAL_UPBIT_TIMEOUT_MS"
+              : provider === "bitget"
+                ? "SIGNAL_BITGET_TIMEOUT_MS"
+                : "SIGNAL_PROVIDER_TIMEOUT_MS";
+  return boundedSignalTimeout(variable, defaultTimeout, 1_000, 30_000);
+}
+
+function marketTimeoutMs(): number {
+  return boundedSignalTimeout(
+    "SIGNAL_MARKET_TIMEOUT_MS",
+    22_000,
+    5_000,
+    60_000,
+  );
+}
+
+function cycleTimeoutMs(): number {
+  return boundedSignalTimeout(
+    "SIGNAL_CYCLE_TIMEOUT_MS",
+    25_000,
+    8_000,
+    90_000,
+  );
+}
+
+function errorCode(error: unknown): string {
+  if (error && typeof error === "object" && "code" in error) {
+    return String(error.code);
+  }
+  return error instanceof Error ? error.name : "UNKNOWN_ERROR";
+}
+
+async function runProviderCall<T>(
+  telemetry: CycleTelemetry,
+  market: SpecialFeedMarket,
+  provider: string,
+  parentSignal: AbortSignal,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const startedAtMs = Date.now();
+  const timeoutMs = providerTimeoutMs(provider);
+  const controller = new AbortController();
+  let timeoutReached = false;
+  const abortFromParent = () => controller.abort(parentSignal.reason);
+  if (parentSignal.aborted) abortFromParent();
+  else parentSignal.addEventListener("abort", abortFromParent, { once: true });
+  activeProviderTimers += 1;
+  const timeout = setTimeout(() => {
+    timeoutReached = true;
+    controller.abort(new SignalDeadlineError(`${provider.toUpperCase()}_TIMEOUT`));
+  }, timeoutMs);
+  if (telemetry.cycleNumber === 1) {
+    console.log(JSON.stringify({
+      event: "signal_provider_start",
+      cycleNumber: telemetry.cycleNumber,
+      market,
+      provider,
+      startedAtMs,
+      timeoutMs,
+    }));
+  }
+
+  let status: ProviderCallState = "OK";
+  let code: string | null = null;
+  const fallbackCodes = new Set<string>();
+  let rejectOnAbort: (() => void) | null = null;
+  const forcedTimeouts = new Set(
+    String(process.env.SIGNAL_CANARY_TIMEOUT_PROVIDERS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  const execute = () => {
+    if (
+      process.env.API_CANARY === "true" &&
+      forcedTimeouts.has(provider)
+    ) {
+      return new Promise<T>((_, reject) => {
+        const onAbort = () => {
+          controller.signal.removeEventListener("abort", onAbort);
+          reject(new SignalDeadlineError(`${provider.toUpperCase()}_TIMEOUT`));
+        };
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+        if (controller.signal.aborted) onAbort();
+      });
+    }
+    return operation(controller.signal);
+  };
+  try {
+    const deadline = new Promise<never>((_, reject) => {
+      rejectOnAbort = () => {
+        controller.signal.removeEventListener("abort", rejectOnAbort!);
+        reject(
+          timeoutReached
+            ? new SignalDeadlineError(`${provider.toUpperCase()}_TIMEOUT`)
+            : new SignalDeadlineError(`${provider.toUpperCase()}_ABORTED`),
+        );
+      };
+      controller.signal.addEventListener("abort", rejectOnAbort, { once: true });
+      if (controller.signal.aborted) rejectOnAbort();
+    });
+    return await Promise.race([
+      runWithProviderSignal(
+        controller.signal,
+        execute,
+        (fallbackCode) => fallbackCodes.add(fallbackCode),
+      ),
+      deadline,
+    ]);
+  } catch (error) {
+    code = errorCode(error);
+    status = timeoutReached || code.includes("TIMEOUT")
+      ? "TIMEOUT"
+      : parentSignal.aborted || code.includes("ABORT")
+        ? "ABORTED"
+        : "ERROR";
+    throw error;
+  } finally {
+    if (status === "OK" && fallbackCodes.size > 0) {
+      status = "FALLBACK";
+      code = [...fallbackCodes].sort().join("|");
+    }
+    clearTimeout(timeout);
+    parentSignal.removeEventListener("abort", abortFromParent);
+    if (rejectOnAbort) {
+      controller.signal.removeEventListener("abort", rejectOnAbort);
+    }
+    activeProviderTimers = Math.max(0, activeProviderTimers - 1);
+    const finishedAtMs = Date.now();
+    const metric: ProviderCallMetric = {
+      market,
+      provider,
+      startedAtMs,
+      finishedAtMs,
+      durationMs: finishedAtMs - startedAtMs,
+      timeoutMs,
+      status,
+      code,
+    };
+    telemetry.providerCalls.push(metric);
+    if (telemetry.cycleNumber === 1 || status !== "OK") {
+      console.log(JSON.stringify({
+        event: "signal_provider_end",
+        cycleNumber: telemetry.cycleNumber,
+        ...metric,
+      }));
+    }
+  }
+}
+
+async function runWithDeadline<T>(
+  parentSignal: AbortSignal,
+  timeoutMs: number,
+  code: string,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timeoutReached = false;
+  const abortFromParent = () => controller.abort(parentSignal.reason);
+  if (parentSignal.aborted) abortFromParent();
+  else parentSignal.addEventListener("abort", abortFromParent, { once: true });
+  activeProviderTimers += 1;
+  const timeout = setTimeout(() => {
+    timeoutReached = true;
+    controller.abort(new SignalDeadlineError(code));
+  }, timeoutMs);
+  const running = operation(controller.signal);
+  let rejectOnAbort: (() => void) | null = null;
+  try {
+    const deadline = new Promise<never>((_, reject) => {
+      rejectOnAbort = () => {
+        controller.signal.removeEventListener("abort", rejectOnAbort!);
+        reject(
+          new SignalDeadlineError(
+            timeoutReached ? code : "SIGNAL_CYCLE_ABORTED",
+          ),
+        );
+      };
+      controller.signal.addEventListener("abort", rejectOnAbort, { once: true });
+      if (controller.signal.aborted) rejectOnAbort();
+    });
+    return await Promise.race([running, deadline]);
+  } catch (error) {
+    if (controller.signal.aborted) {
+      await Promise.race([
+        running.then(() => undefined, () => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+      ]);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    parentSignal.removeEventListener("abort", abortFromParent);
+    if (rejectOnAbort) {
+      controller.signal.removeEventListener("abort", rejectOnAbort);
+    }
+    activeProviderTimers = Math.max(0, activeProviderTimers - 1);
+  }
+}
 
 function initialMarketStatus(
   market: SpecialFeedMarket,
@@ -699,13 +997,42 @@ function signalSummary(row: any, title: string): string {
   );
 }
 
-async function scanEntry(entry: CatalogEntry): Promise<boolean> {
+async function scanEntry(
+  entry: CatalogEntry,
+  signal: AbortSignal,
+  telemetry: CycleTelemetry,
+): Promise<boolean> {
+  const isUs = entry.market === "US";
   const [newsResult, riskResult, signalResult, quoteResult] =
     await Promise.allSettled([
-      NewsService.getNews(entry.ticker),
-      RiskAnalysisService.getRisk(entry.ticker),
-      SignalService.getReport(entry.ticker),
-      MarketDataService.getQuote(entry.ticker),
+      runProviderCall(
+        telemetry,
+        entry.market,
+        isUs ? "finnhub-news" : "google-news",
+        signal,
+        () => NewsService.getNews(entry.ticker),
+      ),
+      runProviderCall(
+        telemetry,
+        entry.market,
+        isUs ? "sec-edgar" : "dart",
+        signal,
+        () => RiskAnalysisService.getRisk(entry.ticker),
+      ),
+      runProviderCall(
+        telemetry,
+        entry.market,
+        isUs ? "finnhub-signal" : "dart-signal",
+        signal,
+        () => SignalService.getReport(entry.ticker),
+      ),
+      runProviderCall(
+        telemetry,
+        entry.market,
+        isUs ? "us-quote" : "kr-quote",
+        signal,
+        () => MarketDataService.getQuote(entry.ticker),
+      ),
     ]);
 
   const quote = quoteResult.status === "fulfilled" ? quoteResult.value : null;
@@ -847,8 +1174,11 @@ function batchSize() {
 
 async function scanStockMarket(
   market: "KR" | "US",
+  signal: AbortSignal,
+  telemetry: CycleTelemetry,
 ): Promise<MarketScanResult> {
   const state = marketState[market];
+  const providerMetricOffset = telemetry.providerCalls.length;
   const universe = CATALOG.filter((entry) => entry.market === market);
 
   if (universe.length === 0) {
@@ -873,7 +1203,7 @@ async function scanStockMarket(
   for (let index = 0; index < batch.length; index += 4) {
     const chunk = batch.slice(index, index + 4);
     const rows = await Promise.allSettled(
-      chunk.map((entry) => scanEntry(entry)),
+      chunk.map((entry) => scanEntry(entry, signal, telemetry)),
     );
     succeeded += rows.filter(
       (row) => row.status === "fulfilled" && row.value,
@@ -889,12 +1219,29 @@ async function scanStockMarket(
     error.name = "MARKET_SCAN_FAILED";
     throw error;
   }
+  const providerFailures = telemetry.providerCalls
+    .slice(providerMetricOffset)
+    .filter(
+      (call) =>
+        call.market === market &&
+        (call.status === "TIMEOUT" || call.status === "ERROR"),
+    );
+  const timeoutCount = providerFailures.filter(
+    (call) => call.status === "TIMEOUT",
+  ).length;
+  const errorCount = providerFailures.length - timeoutCount;
+  const warnings = [
+    ...(failed > 0 ? [`ENTRY_PARTIAL_FAILURE:${failed}`] : []),
+    ...(providerFailures.length > 0
+      ? [`PROVIDER_PARTIAL_FAILURE:timeout=${timeoutCount},error=${errorCount}`]
+      : []),
+  ];
   return {
     source: market === "KR" ? "stock-providers-kr" : "stock-providers-us",
     resultCount: succeeded,
     scannedNow: batch.length,
     nextCursor: state.cursor,
-    ...(failed > 0 ? { warning: `ENTRY_PARTIAL_FAILURE:${failed}` } : {}),
+    ...(warnings.length > 0 ? { warning: warnings.join("|") } : {}),
   };
 }
 
@@ -913,47 +1260,51 @@ function cryptoProvider(market: "spot" | "futures"): string {
   return String(variable ?? "").trim().toLowerCase();
 }
 
-function signalProviderTimeoutMs(): number {
-  const value = Number(process.env.SIGNAL_PROVIDER_TIMEOUT_MS);
-  if (!Number.isFinite(value)) return 12_000;
-  return Math.max(1_000, Math.min(30_000, Math.trunc(value)));
-}
-
-async function fetchSignalJson<T>(url: string): Promise<T> {
-  const controller = new AbortController();
-  activeProviderTimers += 1;
-  const timeout = setTimeout(
-    () => controller.abort(),
-    signalProviderTimeoutMs(),
-  );
-  try {
-    const response = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "stock-signal-worker/1.0",
-      },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new SignalMarketError(`HTTP_${response.status}`);
+async function fetchSignalJson<T>(
+  url: string,
+  market: "spot" | "futures",
+  provider: "upbit" | "bitget",
+  signal: AbortSignal,
+  telemetry: CycleTelemetry,
+): Promise<T> {
+  return runProviderCall(
+    telemetry,
+    market,
+    provider,
+    signal,
+    async (providerSignal) => {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "stock-signal-worker/1.0",
+        },
+        signal: providerSignal,
+      });
+      if (!response.ok) {
+        throw new SignalMarketError(`HTTP_${response.status}`);
+      }
+      return (await response.json()) as T;
+    } catch (error) {
+      if (error instanceof SignalMarketError) throw error;
+      const code =
+        error && typeof error === "object" && "name" in error
+          ? String(error.name)
+          : "PROVIDER_ERROR";
+      throw new SignalMarketError(
+        code === "AbortError"
+          ? `${provider.toUpperCase()}_TIMEOUT`
+          : `${provider.toUpperCase()}_ERROR`,
+      );
     }
-    return (await response.json()) as T;
-  } catch (error) {
-    if (error instanceof SignalMarketError) throw error;
-    const code =
-      error && typeof error === "object" && "name" in error
-        ? String(error.name)
-        : "PROVIDER_ERROR";
-    throw new SignalMarketError(
-      code === "AbortError" ? "PROVIDER_TIMEOUT" : "PROVIDER_ERROR",
-    );
-  } finally {
-    clearTimeout(timeout);
-    activeProviderTimers = Math.max(0, activeProviderTimers - 1);
-  }
+    },
+  );
 }
 
-async function scanSpotMarket(): Promise<MarketScanResult> {
+async function scanSpotMarket(
+  signal: AbortSignal,
+  telemetry: CycleTelemetry,
+): Promise<MarketScanResult> {
   if (cryptoProvider("spot") !== "upbit") {
     throw new SignalMarketError("SPOT_PROVIDER_NOT_CONFIGURED");
   }
@@ -961,6 +1312,10 @@ async function scanSpotMarket(): Promise<MarketScanResult> {
   const state = marketState.spot;
   const markets = await fetchSignalJson<Array<{ market?: unknown }>>(
     "https://api.upbit.com/v1/market/all?isDetails=false",
+    "spot",
+    "upbit",
+    signal,
+    telemetry,
   );
   const universe = markets
     .map((row) => String(row.market ?? ""))
@@ -978,6 +1333,10 @@ async function scanSpotMarket(): Promise<MarketScanResult> {
     Array<{ market?: unknown; trade_price?: unknown }>
   >(
     `https://api.upbit.com/v1/ticker?markets=${encodeURIComponent(batch.join(","))}`,
+    "spot",
+    "upbit",
+    signal,
+    telemetry,
   );
   const resultCount = tickers.filter((row) => {
     const price = Number(row.trade_price);
@@ -1001,7 +1360,10 @@ async function scanSpotMarket(): Promise<MarketScanResult> {
   };
 }
 
-async function scanFuturesMarket(): Promise<MarketScanResult> {
+async function scanFuturesMarket(
+  signal: AbortSignal,
+  telemetry: CycleTelemetry,
+): Promise<MarketScanResult> {
   if (cryptoProvider("futures") !== "bitget") {
     throw new SignalMarketError("FUTURES_PROVIDER_NOT_CONFIGURED");
   }
@@ -1016,6 +1378,10 @@ async function scanFuturesMarket(): Promise<MarketScanResult> {
     }>;
   }>(
     "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES",
+    "futures",
+    "bitget",
+    signal,
+    telemetry,
   );
   if (String(payload.code ?? "") !== "00000" || !Array.isArray(payload.data)) {
     throw new SignalMarketError(
@@ -1057,7 +1423,28 @@ async function scanFuturesMarket(): Promise<MarketScanResult> {
 
 async function scanConfiguredMarket(
   market: SpecialFeedMarket,
+  signal: AbortSignal,
+  telemetry: CycleTelemetry,
 ): Promise<MarketScanResult> {
+  const hangingMarkets = new Set(
+    String(process.env.SIGNAL_CANARY_HANG_MARKETS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  if (
+    process.env.API_CANARY === "true" &&
+    hangingMarkets.has(market)
+  ) {
+    await new Promise<never>((_, reject) => {
+      const onAbort = () => {
+        signal.removeEventListener("abort", onAbort);
+        reject(new SignalMarketError(`${market.toUpperCase()}_INJECTED_HANG_ABORTED`));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+  }
   const forcedFailures = new Set(
     String(process.env.SIGNAL_CANARY_FAIL_MARKETS ?? "")
       .split(",")
@@ -1072,13 +1459,17 @@ async function scanConfiguredMarket(
   }
 
   if (market === "KR" || market === "US") {
-    return scanStockMarket(market);
+    return scanStockMarket(market, signal, telemetry);
   }
-  return market === "spot" ? scanSpotMarket() : scanFuturesMarket();
+  return market === "spot"
+    ? scanSpotMarket(signal, telemetry)
+    : scanFuturesMarket(signal, telemetry);
 }
 
 async function refreshMarket(
   market: SpecialFeedMarket,
+  signal: AbortSignal,
+  telemetry: CycleTelemetry,
 ): Promise<MarketScanResult> {
   const state = marketState[market];
   const now = Date.now();
@@ -1098,7 +1489,7 @@ async function refreshMarket(
   state.running = (async () => {
     try {
       pruneState();
-      const result = await scanConfiguredMarket(market);
+      const result = await scanConfiguredMarket(market, signal, telemetry);
       state.lastRefreshAt = Date.now();
       pruneState();
       return result;
@@ -1154,11 +1545,18 @@ function marketErrorCode(error: unknown): string {
 
 async function runMarketScan(
   market: SpecialFeedMarket,
+  signal: AbortSignal,
+  telemetry: CycleTelemetry,
 ): Promise<SpecialFeedMarketStatus> {
   const startedAt = Date.now();
   const previous = marketStatuses[market];
   try {
-    const result = await refreshMarket(market);
+    const result = await runWithDeadline(
+      signal,
+      marketTimeoutMs(),
+      `${market.toUpperCase()}_MARKET_TIMEOUT`,
+      (marketSignal) => refreshMarket(market, marketSignal, telemetry),
+    );
     lastMarketResultLengths[market] = result.resultCount;
     return {
       market,
@@ -1181,9 +1579,7 @@ async function runMarketScan(
       market,
       status: notConfigured
         ? "NOT_CONFIGURED"
-        : hasLastGood
-          ? "PARTIAL"
-          : "ERROR",
+        : "PARTIAL",
       source: hasLastGood ? previous.source : "none",
       resultCount: hasLastGood ? previous.resultCount : 0,
       durationMs: Date.now() - startedAt,
@@ -1212,6 +1608,7 @@ export interface SpecialFeedDiagnostics {
   snapshotBytes: number;
   pendingPromises: number;
   timerCount: number;
+  lastCycle: SignalCycleMetrics | null;
   cache: ReturnType<typeof getMemoryCacheDiagnostics>;
 }
 
@@ -1245,8 +1642,51 @@ function getDiagnostics(): SpecialFeedDiagnostics {
       cache.pendingLoads +
       cache.pendingPersistentWrites,
     timerCount: activeProviderTimers,
+    lastCycle: lastCycleMetrics,
     cache,
   };
+}
+
+function providerTotals(
+  calls: ProviderCallMetric[],
+): Record<string, ProviderAggregate> {
+  const totals: Record<string, ProviderAggregate> = {};
+  for (const call of calls) {
+    const key = `${call.market}:${call.provider}`;
+    const aggregate = totals[key] ?? {
+      calls: 0,
+      completed: 0,
+      timeouts: 0,
+      errors: 0,
+      aborted: 0,
+      totalDurationMs: 0,
+      maximumDurationMs: 0,
+      lastGood: 0,
+      fallback: 0,
+    };
+    aggregate.calls += 1;
+    aggregate.completed +=
+      call.status === "OK" || call.status === "FALLBACK" ? 1 : 0;
+    aggregate.timeouts += call.status === "TIMEOUT" ? 1 : 0;
+    aggregate.errors += call.status === "ERROR" ? 1 : 0;
+    aggregate.aborted += call.status === "ABORTED" ? 1 : 0;
+    aggregate.fallback += call.status === "FALLBACK" ? 1 : 0;
+    aggregate.totalDurationMs += call.durationMs;
+    aggregate.maximumDurationMs = Math.max(
+      aggregate.maximumDurationMs,
+      call.durationMs,
+    );
+    totals[key] = aggregate;
+  }
+  for (const market of MARKET_KEYS) {
+    const status = marketStatuses[market];
+    for (const [key, aggregate] of Object.entries(totals)) {
+      if (!key.startsWith(`${market}:`)) continue;
+      aggregate.lastGood +=
+        status.staleUsed && aggregate.completed === 0 ? 1 : 0;
+    }
+  }
+  return totals;
 }
 
 async function runWorkerScanOnce(): Promise<{
@@ -1257,32 +1697,137 @@ async function runWorkerScanOnce(): Promise<{
   futures: SpecialFeedMarketStatus;
   itemCount: number;
   savedAt: string;
+  cycle: SignalCycleMetrics;
   diagnostics: SpecialFeedDiagnostics;
 }> {
   activeWorkerScans += 1;
+  let scanReleased = false;
+  const cycleNumber = ++signalCycleNumber;
+  const startedAtMs = Date.now();
+  const timeoutMs = cycleTimeoutMs();
+  const telemetry: CycleTelemetry = {
+    cycleNumber,
+    startedAtMs,
+    providerCalls: [],
+  };
+  const rootController = new AbortController();
+  const marketStartedAt = new Map<SpecialFeedMarket, number>();
+  const marketFinishedAt = new Map<SpecialFeedMarket, number>();
+  const completedMarkets = new Set<SpecialFeedMarket>();
+  let timedOut = false;
+  let failureCode: string | null = null;
   try {
-    await syncSnapshotFromDisk(true);
-    const settled = await Promise.allSettled(MARKET_KEYS.map(runMarketScan));
-    settled.forEach((row, index) => {
-      const market = MARKET_KEYS[index];
-      marketStatuses[market] =
-        row.status === "fulfilled"
-          ? row.value
-          : {
-              market,
-              status: "ERROR",
-              source: marketStatuses[market].source,
-              resultCount: marketStatuses[market].resultCount,
-              durationMs: 0,
-              updatedAt: marketStatuses[market].updatedAt,
-              warning: marketErrorCode(row.reason),
-              staleUsed: marketStatuses[market].resultCount > 0,
-            };
-      lastMarketResultLengths[market] =
-        marketStatuses[market].resultCount;
-    });
-    await persistSnapshot();
-    return {
+    await runWithDeadline(
+      rootController.signal,
+      timeoutMs,
+      "SIGNAL_CYCLE_TIMEOUT",
+      async (cycleSignal) => {
+        await syncSnapshotFromDisk(true);
+        const settled = await Promise.allSettled(
+          MARKET_KEYS.map(async (market) => {
+            marketStartedAt.set(market, Date.now());
+            try {
+              const status = await runMarketScan(
+                market,
+                cycleSignal,
+                telemetry,
+              );
+              marketStatuses[market] = status;
+              return status;
+            } finally {
+              completedMarkets.add(market);
+              marketFinishedAt.set(market, Date.now());
+            }
+          }),
+        );
+        settled.forEach((row, index) => {
+          if (row.status === "fulfilled") return;
+          const market = MARKET_KEYS[index];
+          const previous = marketStatuses[market];
+          const hasLastGood = previous.resultCount > 0 &&
+            previous.source !== "none";
+          marketStatuses[market] = {
+            market,
+            status: hasLastGood ? "PARTIAL" : "ERROR",
+            source: hasLastGood ? previous.source : "none",
+            resultCount: hasLastGood ? previous.resultCount : 0,
+            durationMs: Date.now() - (marketStartedAt.get(market) ?? startedAtMs),
+            updatedAt: hasLastGood
+              ? previous.updatedAt
+              : new Date().toISOString(),
+            warning: marketErrorCode(row.reason),
+            staleUsed: hasLastGood,
+          };
+        });
+        await persistSnapshot();
+      },
+    );
+  } catch (error) {
+    failureCode = marketErrorCode(error);
+    timedOut = failureCode === "SIGNAL_CYCLE_TIMEOUT";
+    rootController.abort(error);
+    for (const market of MARKET_KEYS) {
+      if (completedMarkets.has(market)) continue;
+      const previous = marketStatuses[market];
+      const hasLastGood = previous.resultCount > 0 &&
+        previous.source !== "none";
+      marketStatuses[market] = {
+        market,
+        status: "PARTIAL",
+        source: hasLastGood ? previous.source : "none",
+        resultCount: hasLastGood ? previous.resultCount : 0,
+        durationMs: Date.now() - (marketStartedAt.get(market) ?? startedAtMs),
+        updatedAt: hasLastGood ? previous.updatedAt : new Date().toISOString(),
+        warning: failureCode,
+        staleUsed: hasLastGood,
+      };
+      marketFinishedAt.set(market, Date.now());
+    }
+    try {
+      await persistSnapshot();
+    } catch {
+      failureCode = `${failureCode}:SNAPSHOT_WRITE_FAILED`;
+    }
+  }
+
+  const finishedAtMs = Date.now();
+  for (const market of MARKET_KEYS) {
+    lastMarketResultLengths[market] = marketStatuses[market].resultCount;
+  }
+  const marketTotals = Object.fromEntries(
+    MARKET_KEYS.map((market) => {
+      const marketStart = marketStartedAt.get(market) ?? startedAtMs;
+      const marketFinish = marketFinishedAt.get(market) ?? finishedAtMs;
+      const status = marketStatuses[market];
+      return [
+        market,
+        {
+          startedAtMs: marketStart,
+          finishedAtMs: marketFinish,
+          durationMs: marketFinish - marketStart,
+          status: status.status,
+          warning: status.warning,
+          lastGood: status.staleUsed ? 1 : 0,
+          fallback: status.status === "PARTIAL" ? 1 : 0,
+        },
+      ];
+    }),
+  ) as SignalCycleMetrics["marketTotals"];
+  lastCycleMetrics = {
+    cycleNumber,
+    startedAtMs,
+    finishedAtMs,
+    durationMs: finishedAtMs - startedAtMs,
+    timeoutMs,
+    timedOut,
+    failureCode,
+    providerCalls: telemetry.providerCalls,
+    providerTotals: providerTotals(telemetry.providerCalls),
+    marketTotals,
+  };
+
+  try {
+    const result = {
       markets: { ...marketStatuses },
       KR: marketStatuses.KR,
       US: marketStatuses.US,
@@ -1290,10 +1835,18 @@ async function runWorkerScanOnce(): Promise<{
       futures: marketStatuses.futures,
       itemCount: feedItems.size,
       savedAt: new Date(snapshotSavedAt).toISOString(),
+      cycle: lastCycleMetrics,
+    };
+    activeWorkerScans = Math.max(0, activeWorkerScans - 1);
+    scanReleased = true;
+    return {
+      ...result,
       diagnostics: getDiagnostics(),
     };
   } finally {
-    activeWorkerScans = Math.max(0, activeWorkerScans - 1);
+    if (!scanReleased) {
+      activeWorkerScans = Math.max(0, activeWorkerScans - 1);
+    }
   }
 }
 

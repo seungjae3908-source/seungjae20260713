@@ -1,5 +1,6 @@
 import type { CatalogEntry } from '../data/catalog';
 import type { Candle, Quote } from '../sample/types';
+import { currentProviderSignal } from '../lib/provider-context';
 
 type NaverPollItem = {
   cd?: string;
@@ -72,6 +73,7 @@ function dateToIso(localDate: string) {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, {
+    signal: currentProviderSignal(),
     headers: {
       accept: 'application/json,text/plain,*/*',
       'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -90,6 +92,7 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 async function fetchText(url: string): Promise<string> {
   const res = await fetch(url, {
+    signal: currentProviderSignal(),
     headers: {
       accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',

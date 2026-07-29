@@ -1,5 +1,6 @@
 import type { CatalogEntry } from '../data/catalog';
 import type { Candle, Quote } from '../sample/types';
+import { currentProviderSignal } from '../lib/provider-context';
 
 type YahooChartQuote = {
   open?: Array<number | null>;
@@ -73,6 +74,7 @@ function yahooSymbol(ticker: string) {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, {
+    signal: currentProviderSignal(),
     redirect: 'follow',
     headers: {
       accept: 'application/json,text/plain,*/*',

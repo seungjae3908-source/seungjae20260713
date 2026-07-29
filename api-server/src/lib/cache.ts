@@ -10,6 +10,7 @@
 // is missing, or a call fails, we log once and behave exactly like the old
 // memory-only cache. Loader errors are never cached in either tier.
 import { getSupabase, hasSupabaseServerKey } from './supabase';
+import { currentProviderSignal } from './provider-context';
 
 interface Entry<T> {
   value: T;
@@ -103,11 +104,13 @@ function persistable(ttlMs: number): boolean {
 
 async function readPersistent<T>(key: string): Promise<Entry<T> | null> {
   try {
-    const { data, error } = await getSupabase()
+    let request = getSupabase()
       .from(PERSIST_TABLE)
       .select('payload,expires_at')
-      .eq('cache_key', key)
-      .maybeSingle();
+      .eq('cache_key', key);
+    const signal = currentProviderSignal();
+    if (signal) request = request.abortSignal(signal);
+    const { data, error } = await request.maybeSingle();
     if (error) throw new Error(error.message);
     if (!data) return null;
     const expires = Date.parse(data.expires_at as string);
@@ -171,6 +174,8 @@ export async function cached<T>(
   if (pending) return pending;
 
   const operation = (async () => {
+    const signal = currentProviderSignal();
+    if (signal?.aborted) throw signal.reason ?? new Error('PROVIDER_ABORTED');
     if (persistable(ttlMs)) {
       const persisted = await readPersistent<T>(key);
       if (persisted) {
@@ -180,6 +185,7 @@ export async function cached<T>(
     }
 
     const value = await loader();
+    if (signal?.aborted) throw signal.reason ?? new Error('PROVIDER_ABORTED');
     const expires = Date.now() + ttlMs;
     saveMemoryEntry(key, {
       value,

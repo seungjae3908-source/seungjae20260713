@@ -1,21 +1,50 @@
 import { ProviderError } from './errors';
+import { currentProviderSignal } from './provider-context';
 
 interface FetchOpts {
   provider: string;
   headers?: Record<string, string>;
   timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+function requestAbort(
+  timeoutMs: number,
+  explicitSignal?: AbortSignal,
+): {
+  signal: AbortSignal;
+  timedOut: () => boolean;
+  cleanup: () => void;
+} {
+  const parent = explicitSignal ?? currentProviderSignal();
+  const controller = new AbortController();
+  let timeoutReached = false;
+  const abortFromParent = () => controller.abort(parent?.reason);
+  if (parent?.aborted) abortFromParent();
+  else parent?.addEventListener('abort', abortFromParent, { once: true });
+  const timeout = setTimeout(() => {
+    timeoutReached = true;
+    controller.abort(new Error('PROVIDER_TIMEOUT'));
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    timedOut: () => timeoutReached,
+    cleanup: () => {
+      clearTimeout(timeout);
+      parent?.removeEventListener('abort', abortFromParent);
+    },
+  };
 }
 
 export async function fetchJson<T = unknown>(
   url: string,
   opts: FetchOpts,
 ): Promise<T> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10000);
+  const abort = requestAbort(opts.timeoutMs ?? 10000, opts.signal);
   try {
     const res = await fetch(url, {
       headers: opts.headers,
-      signal: controller.signal,
+      signal: abort.signal,
     });
     if (res.status === 429) {
       throw new ProviderError('RATE_LIMITED', opts.provider);
@@ -30,8 +59,15 @@ export async function fetchJson<T = unknown>(
     return (await res.json()) as T;
   } catch (err) {
     if (err instanceof ProviderError) throw err;
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new ProviderError('UPSTREAM_ERROR', opts.provider, 'timeout');
+    if (
+      abort.signal.aborted ||
+      (err instanceof Error && err.name === 'AbortError')
+    ) {
+      throw new ProviderError(
+        'UPSTREAM_ERROR',
+        opts.provider,
+        abort.timedOut() ? 'timeout' : 'aborted',
+      );
     }
     throw new ProviderError(
       'UPSTREAM_ERROR',
@@ -39,7 +75,7 @@ export async function fetchJson<T = unknown>(
       err instanceof Error ? err.message : 'network error',
     );
   } finally {
-    clearTimeout(timeout);
+    abort.cleanup();
   }
 }
 
@@ -47,12 +83,11 @@ export async function fetchText(
   url: string,
   opts: FetchOpts,
 ): Promise<string> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10000);
+  const abort = requestAbort(opts.timeoutMs ?? 10000, opts.signal);
   try {
     const res = await fetch(url, {
       headers: opts.headers,
-      signal: controller.signal,
+      signal: abort.signal,
     });
     if (res.status === 429) {
       throw new ProviderError('RATE_LIMITED', opts.provider);
@@ -67,8 +102,15 @@ export async function fetchText(
     return await res.text();
   } catch (err) {
     if (err instanceof ProviderError) throw err;
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new ProviderError('UPSTREAM_ERROR', opts.provider, 'timeout');
+    if (
+      abort.signal.aborted ||
+      (err instanceof Error && err.name === 'AbortError')
+    ) {
+      throw new ProviderError(
+        'UPSTREAM_ERROR',
+        opts.provider,
+        abort.timedOut() ? 'timeout' : 'aborted',
+      );
     }
     throw new ProviderError(
       'UPSTREAM_ERROR',
@@ -76,7 +118,7 @@ export async function fetchText(
       err instanceof Error ? err.message : 'network error',
     );
   } finally {
-    clearTimeout(timeout);
+    abort.cleanup();
   }
 }
 
@@ -84,12 +126,11 @@ export async function fetchBuffer(
   url: string,
   opts: FetchOpts,
 ): Promise<Buffer> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 20000);
+  const abort = requestAbort(opts.timeoutMs ?? 20000, opts.signal);
   try {
     const res = await fetch(url, {
       headers: opts.headers,
-      signal: controller.signal,
+      signal: abort.signal,
     });
     if (!res.ok) {
       throw new ProviderError(
@@ -101,12 +142,22 @@ export async function fetchBuffer(
     return Buffer.from(await res.arrayBuffer());
   } catch (err) {
     if (err instanceof ProviderError) throw err;
+    if (
+      abort.signal.aborted ||
+      (err instanceof Error && err.name === 'AbortError')
+    ) {
+      throw new ProviderError(
+        'UPSTREAM_ERROR',
+        opts.provider,
+        abort.timedOut() ? 'timeout' : 'aborted',
+      );
+    }
     throw new ProviderError(
       'UPSTREAM_ERROR',
       opts.provider,
       err instanceof Error ? err.message : 'network error',
     );
   } finally {
-    clearTimeout(timeout);
+    abort.cleanup();
   }
 }
