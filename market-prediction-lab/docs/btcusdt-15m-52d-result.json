@@ -1,85 +1,14 @@
 {
   "schemaVersion": 1,
-  "status": "pass",
-  "stage": "complete",
-  "verifiedAt": 1785367434394,
-  "durationMs": 6640,
+  "status": "fail",
+  "stage": "standalone_validation_suite",
   "source": "github-actions-isolated-52d-validation",
   "market": "CRYPTO_FUTURES",
   "symbol": "BTCUSDT",
   "timeframe": "15m",
   "requestedDays": 52,
-  "candleCount": 4991,
-  "firstTimestamp": 1780875000000,
-  "lastTimestamp": 1785366000000,
-  "latestAgeMs": 1433405,
-  "gaps": 0,
-  "zeroVolume": 0,
-  "maximumGapMs": 900000,
-  "rawCandleSnapshotSha256": "c9600aec7b4bd056b8f761c0e47434ca32f6b28a242398ac8f5d14ad7e2d7dd7",
-  "repairedCandleSnapshotSha256": "e2b0af4cdc2ebbcb05d3d50c0aaf55496863ca298a5434b40b2d60353ed73427",
-  "gapRepair": {
-    "schemaVersion": 1,
-    "initialGapCount": 0,
-    "initialMissingCandleCount": 0,
-    "repairedCandleCount": 0,
-    "remainingGapCount": 0,
-    "remainingMissingCandleCount": 0,
-    "unresolvedGaps": [],
-    "attempts": []
-  },
-  "normalizedQuality": {
-    "candleCount": 4991,
-    "duplicates": 0,
-    "outOfOrder": 0,
-    "gaps": 0,
-    "zeroVolume": 0,
-    "maximumGapMs": 900000,
-    "status": "clean",
-    "issues": [],
-    "duplicateRowsRemoved": 0,
-    "rejectedRows": 0,
-    "rejected": []
-  },
-  "training": {
-    "lookback": 200,
-    "horizon": 8,
-    "stride": 4,
-    "recordCount": 1196,
-    "splitReport": {
-      "total": 1196,
-      "train": 837,
-      "validation": 177,
-      "test": 178,
-      "purgedBetweenTrainValidation": 2,
-      "purgedBetweenValidationTest": 2,
-      "trainLastFutureTimestamp": 1784070900000,
-      "validationFirstAnchorTimestamp": 1784074500000,
-      "validationLastFutureTimestamp": 1784715300000,
-      "testFirstAnchorTimestamp": 1784718900000
-    },
-    "outputs": {
-      "train": {
-        "count": 837,
-        "sha256": "8a9f51f90ef1a98251d0636643db7827b5558989f7df6997c3ad891e060d04d5"
-      },
-      "validation": {
-        "count": 177,
-        "sha256": "593548b612328548dad2fcaf579c144b964b42565797ab1a63a40b11648a070a"
-      },
-      "test": {
-        "count": 178,
-        "sha256": "91c7a7fb0f2b67ffb891bf3fc4236c72b06500c3b783d3e3b5731e01886ede3d"
-      }
-    }
-  },
-  "futuresContext": {
-    "openInterestRaw": "33155.233900000009",
-    "fundingRateRaw": "0.000051",
-    "fundingIntervalHours": 8,
-    "marketPriceRaw": "63993.8",
-    "markPriceRaw": "63997.1",
-    "indexPriceRaw": "64029.468",
-    "fundingHistoryCount": 100
+  "error": {
+    "name": "ValidationSuiteError",
+    "message": "npm run validate failed before live data collection"
   }
 }
