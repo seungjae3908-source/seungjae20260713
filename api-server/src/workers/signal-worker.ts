@@ -11,12 +11,16 @@ const intervalMs = boundedWorkerInterval(
   20_000,
   15 * 60_000,
 );
+if (!process.env.MEMORY_CACHE_MAX_ENTRIES) {
+  process.env.MEMORY_CACHE_MAX_ENTRIES = '400';
+}
 
 void runWorker({
   name: 'signal-worker',
   lockName: 'signal-worker',
   intervalMs,
   run: () => SpecialFeedService.runWorkerScanOnce(),
+  diagnostics: () => SpecialFeedService.getDiagnostics(),
 }).catch((error) => {
   const code =
     error instanceof WorkerAlreadyRunningError

@@ -1041,7 +1041,10 @@ interface KrUniverseResult {
 }
 
 const krUniverseFlights = new SingleFlight<string, CatalogEntry[]>();
-const krUniverseLastGood = new LastGoodCache<string, CatalogEntry[]>();
+const krUniverseLastGood = new LastGoodCache<string, CatalogEntry[]>({
+  maximumEntries: 1,
+  defaultMaxAgeMs: 24 * 60 * 60_000,
+});
 const KR_UNIVERSE_LAST_GOOD_MS = 24 * 60 * 60_000;
 
 function krUniverseTimeoutMs(): number {

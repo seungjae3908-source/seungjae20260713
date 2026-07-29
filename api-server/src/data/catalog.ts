@@ -291,10 +291,18 @@ const BY_TICKER = new Map(CATALOG.map((e) => [e.ticker.toUpperCase(), e]));
 // symbol the user just found — but which isn't in the curated catalog — still
 // resolves (with its real name) when they open its detail page.
 const DYNAMIC = new Map<string, CatalogEntry>();
+const DYNAMIC_MAX_ENTRIES = 5_000;
 
 export function registerDynamicEntry(e: CatalogEntry): void {
   const k = e.ticker.toUpperCase();
-  if (!BY_TICKER.has(k)) DYNAMIC.set(k, e);
+  if (BY_TICKER.has(k)) return;
+  DYNAMIC.delete(k);
+  DYNAMIC.set(k, e);
+  while (DYNAMIC.size > DYNAMIC_MAX_ENTRIES) {
+    const oldest = DYNAMIC.keys().next();
+    if (oldest.done) break;
+    DYNAMIC.delete(oldest.value);
+  }
 }
 
 export function getCatalogEntry(ticker: string): CatalogEntry | undefined {
