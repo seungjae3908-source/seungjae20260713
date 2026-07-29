@@ -5,7 +5,7 @@ import { collectBitgetCandles, collectBitgetFuturesContext, normalizeBitgetCandl
 const INTERVAL = 15 * 60 * 1000;
 const START = Date.UTC(2026, 0, 1);
 
-function rows(count = 260) {
+function rows(count = 460) {
   return Array.from({ length: count }, (_, index) => {
     const timestamp = START + index * INTERVAL;
     const open = 100 + index * 0.1;
@@ -21,14 +21,15 @@ test("normalizer validates Bitget array candles", () => {
   assert.throws(() => normalizeBitgetCandle(["1", "10", "8", "9", "10", "1"]), /invalid OHLCV/);
 });
 
-test("collector paginates backward, sorts and removes duplicates", async () => {
+test("collector respects exclusive endTime, paginates without page-boundary gaps, sorts and deduplicates", async () => {
   const source = rows();
   let calls = 0;
   const client = {
     get: async (_path, params) => {
       calls += 1;
       const end = Number(params.endTime);
-      const eligible = source.filter((row) => Number(row[0]) <= end);
+      // Bitget documents endTime as exclusive: return candles before endTime.
+      const eligible = source.filter((row) => Number(row[0]) < end);
       const page = eligible.slice(-200);
       return { code: "00000", data: calls === 1 ? [...page, page[0]] : page };
     },
@@ -39,11 +40,14 @@ test("collector paginates backward, sorts and removes duplicates", async () => {
     symbol: "BTCUSDT",
     timeframe: "15m",
     startTime: START,
-    endTime: START + 259 * INTERVAL,
+    endTime: START + 460 * INTERVAL,
   });
-  assert.equal(result.candles.length, 260);
-  assert.equal(new Set(result.candles.map((c) => c.timestamp)).size, 260);
-  assert.ok(calls >= 2);
+  assert.equal(result.candles.length, 460);
+  assert.equal(new Set(result.candles.map((candle) => candle.timestamp)).size, 460);
+  for (let index = 1; index < result.candles.length; index += 1) {
+    assert.equal(result.candles[index].timestamp - result.candles[index - 1].timestamp, INTERVAL);
+  }
+  assert.ok(calls >= 3);
 });
 
 test("collector rejects stalled pagination", async () => {
