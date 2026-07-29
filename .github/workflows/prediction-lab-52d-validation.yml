@@ -1,0 +1,150 @@
+name: Prediction Lab 52d Data Validation
+
+on:
+  push:
+    branches:
+      - feature/prediction-lab-standalone
+    paths:
+      - .github/workflows/prediction-lab-52d-validation.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prediction-lab-52d-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-52d-dataset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout isolated branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/prediction-lab-standalone
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate standalone lab
+        working-directory: market-prediction-lab
+        run: npm run validate
+
+      - name: Collect BTCUSDT futures 15m 52-day data
+        working-directory: market-prediction-lab
+        run: >-
+          node scripts/collect-bitget.js
+          --market CRYPTO_FUTURES
+          --symbol BTCUSDT
+          --timeframe 15m
+          --days 52
+          --output live-52d-data
+
+      - name: Verify 52-day live collection
+        working-directory: market-prediction-lab
+        run: >-
+          node scripts/verify-live-collection.js
+          --input live-52d-data/crypto_futures/BTCUSDT/candles-15m.json
+          --min-candles 4900
+          --report live-52d-data/quality-report.json
+
+      - name: Ingest and normalize collected snapshot
+        working-directory: market-prediction-lab
+        run: >-
+          node scripts/ingest-snapshot.js
+          --input live-52d-data/crypto_futures/BTCUSDT/candles-15m.json
+          --output live-52d-data/ingested
+          --market CRYPTO_FUTURES
+          --symbol BTCUSDT
+          --timeframe 15m
+          --format canonical-object
+          --source bitget-public-live-52d
+
+      - name: Resolve normalized snapshot path
+        working-directory: market-prediction-lab
+        run: |
+          normalized=$(find live-52d-data/ingested/normalized/CRYPTO_FUTURES/BTCUSDT/15m -type f -name '*.normalized.json' | sort | head -n 1)
+          test -n "$normalized"
+          echo "NORMALIZED_SNAPSHOT=$normalized" >> "$GITHUB_ENV"
+
+      - name: Build purged walk-forward dataset
+        working-directory: market-prediction-lab
+        run: >-
+          node scripts/build-dataset.js
+          --input "$NORMALIZED_SNAPSHOT"
+          --output live-52d-data/dataset/BTCUSDT-15m
+          --lookback 200
+          --horizon 8
+          --stride 4
+
+      - name: Write 52-day validation summary
+        working-directory: market-prediction-lab
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { mkdir, readFile, writeFile } from 'node:fs/promises';
+          const quality = JSON.parse(await readFile('live-52d-data/quality-report.json', 'utf8'));
+          const manifest = JSON.parse(await readFile('live-52d-data/dataset/BTCUSDT-15m/manifest.json', 'utf8'));
+          const normalized = JSON.parse(await readFile(process.env.NORMALIZED_SNAPSHOT, 'utf8'));
+          const contextLines = (await readFile('live-52d-data/crypto_futures/BTCUSDT/futures-context.jsonl', 'utf8')).trim().split('\n');
+          const context = JSON.parse(contextLines.at(-1));
+          const candleBytes = await readFile('live-52d-data/crypto_futures/BTCUSDT/candles-15m.json');
+          const result = {
+            schemaVersion: 1,
+            status: 'pass',
+            verifiedAt: Date.now(),
+            source: 'github-actions-isolated-52d-validation',
+            market: quality.market,
+            symbol: quality.symbol,
+            timeframe: quality.timeframe,
+            candleCount: quality.candleCount,
+            firstTimestamp: quality.firstTimestamp,
+            lastTimestamp: quality.lastTimestamp,
+            latestAgeMs: quality.latestAgeMs,
+            gaps: quality.gaps,
+            zeroVolume: quality.zeroVolume,
+            maximumGapMs: quality.maximumGapMs,
+            candleFileSha256: createHash('sha256').update(candleBytes).digest('hex'),
+            normalizedQuality: normalized.quality,
+            training: {
+              lookback: 200,
+              horizon: 8,
+              stride: 4,
+              splitReport: manifest.splitReport,
+              outputs: manifest.outputs,
+            },
+            futuresContext: {
+              openInterestRaw: context.openInterestRaw,
+              fundingRateRaw: context.fundingRateRaw,
+              fundingIntervalHours: context.fundingIntervalHours,
+              marketPriceRaw: context.marketPriceRaw,
+              markPriceRaw: context.markPriceRaw,
+              indexPriceRaw: context.indexPriceRaw,
+              fundingHistoryCount: Array.isArray(context.fundingHistory) ? context.fundingHistory.length : 0,
+            },
+          };
+          await mkdir('docs', { recursive: true });
+          await writeFile('docs/btcusdt-15m-52d-result.json', `${JSON.stringify(result, null, 2)}\n`);
+          console.log(JSON.stringify(result, null, 2));
+          NODE
+
+      - name: Upload 52-day validation artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-btcusdt-15m-52d-${{ github.run_id }}
+          path: market-prediction-lab/live-52d-data
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Commit 52-day validation summary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add market-prediction-lab/docs/btcusdt-15m-52d-result.json
+          git diff --cached --quiet && exit 0
+          git commit -m "test: record BTCUSDT 15m 52d validation"
+          git push origin HEAD:feature/prediction-lab-standalone
