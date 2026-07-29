@@ -5,11 +5,11 @@
 ## 격리 원칙
 
 - `api-server`, `stock-analyzer`, 루트 `package.json`, `pnpm-workspace.yaml`을 수정하지 않습니다.
-- 기존 API를 호출하거나 라우트를 추가하지 않습니다.
+- 기존 앱 API를 호출·수정하거나 라우트를 추가하지 않습니다.
 - 환경변수, 인증, Supabase, PM2, Caddy, 운영 DB에 접근하지 않습니다.
 - 외부 패키지가 없으며 Node.js 20 이상 기본 기능만 사용합니다.
 - 운영 서버에서 모델 학습이나 LLM을 실행하지 않습니다.
-- 입력은 사용자가 내보낸 JSON 스냅샷만 받습니다.
+- 입력은 사용자가 내보낸 JSON 스냅샷 또는 승인된 공개 읽기 전용 시장데이터 수집기만 받습니다.
 
 ## 구현 범위
 
@@ -25,6 +25,7 @@
 - 예측 결과와 실제 결과 자동 매칭
 - 예측 구간이 겹치지 않는 purged walk-forward train/validation/test 분할
 - JSONL 데이터셋 및 해시 manifest 원자적 저장
+- Bitget 공개 GET 시장데이터 그림자 수집과 OI·펀딩비 이력 누적
 
 ## 전체 검증
 
@@ -48,7 +49,27 @@ node scripts/ingest-snapshot.js \
   --source manual-export
 ```
 
-기존 API에는 연결하지 않으며, 파일로 내보낸 데이터만 격리 저장합니다.
+기존 앱 API에는 연결하지 않으며, 파일로 내보낸 데이터만 격리 저장합니다.
+
+## Bitget 공개 데이터 그림자 수집
+
+```bash
+npm run collect:bitget -- \
+  --market CRYPTO_FUTURES \
+  --symbol BTCUSDT \
+  --timeframe 15m \
+  --days 52
+```
+
+이 명령은 Bitget 공개 시장데이터 GET 엔드포인트만 사용합니다. API 키·서명·패스프레이즈가 없고 계좌·포지션·주문 API를 호출하지 않습니다. PM2·cron·systemd에는 등록하지 않은 수동 오프라인 명령입니다.
+
+- 캔들은 역방향 페이지네이션으로 수집하고 타임스탬프 중복을 제거합니다.
+- 429·일시적 서버 오류는 제한된 횟수만 재시도합니다.
+- 페이지가 과거로 이동하지 않으면 무한 반복 방지를 위해 실패 처리합니다.
+- 캔들 스냅샷은 원자적으로 교체하고 내용 해시가 같으면 다시 쓰지 않습니다.
+- 선물 OI·펀딩비·시장가·마크가격·지수가격은 값이 변경될 때만 이력에 추가합니다.
+
+자세한 내용은 `docs/bitget-shadow-collection.md`를 확인합니다.
 
 ## 학습 데이터셋 생성
 
