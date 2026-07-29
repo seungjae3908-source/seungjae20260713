@@ -1,22 +1,77 @@
 {
   "schemaVersion": 1,
-  "status": "fail",
-  "stage": "verify_candles",
-  "verifiedAt": 1785365945759,
-  "durationMs": 4670,
+  "status": "pass",
+  "stage": "complete",
+  "verifiedAt": 1785366126215,
+  "durationMs": 5942,
   "source": "github-actions-isolated-52d-validation",
   "market": "CRYPTO_FUTURES",
   "symbol": "BTCUSDT",
   "timeframe": "15m",
   "requestedDays": 52,
-  "error": {
-    "name": "Error",
-    "message": "timeframe gaps detected: 24",
-    "details": null,
-    "stack": [
-      "Error: timeframe gaps detected: 24",
-      "    at verifyLiveCollection (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/src/live-collection-verifier.js:78:23)",
-      "    at file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/scripts/run-52d-validation.js:60:19"
-    ]
+  "candleCount": 4991,
+  "firstTimestamp": 1780874100000,
+  "lastTimestamp": 1785365100000,
+  "latestAgeMs": 1025368,
+  "gaps": 0,
+  "zeroVolume": 0,
+  "maximumGapMs": 900000,
+  "candleSnapshotSha256": "ddc271428e223de3d7655ddb2a9be36033232b759c4b693d9dd7fe48e677cce0",
+  "normalizedQuality": {
+    "candleCount": 4991,
+    "duplicates": 0,
+    "outOfOrder": 0,
+    "gaps": 0,
+    "zeroVolume": 0,
+    "maximumGapMs": 900000,
+    "status": "clean",
+    "issues": [],
+    "duplicateRowsRemoved": 0,
+    "rejectedRows": 0,
+    "rejected": []
+  },
+  "training": {
+    "lookback": 200,
+    "horizon": 8,
+    "stride": 4,
+    "recordCount": 1196,
+    "splitReport": {
+      "total": 1196,
+      "train": 837,
+      "validation": 177,
+      "test": 178,
+      "purgedBetweenTrainValidation": 2,
+      "purgedBetweenValidationTest": 2,
+      "trainLastFutureTimestamp": 1784070000000,
+      "validationFirstAnchorTimestamp": 1784073600000,
+      "validationLastFutureTimestamp": 1784714400000,
+      "testFirstAnchorTimestamp": 1784718000000
+    },
+    "outputs": {
+      "train": {
+        "path": "/home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/live-52d-data/dataset/train.jsonl",
+        "count": 837,
+        "sha256": "c18f64617396daf63b6e391a4d0c9ac67f0361e2f8ca5c41b86e27ecea468714"
+      },
+      "validation": {
+        "path": "/home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/live-52d-data/dataset/validation.jsonl",
+        "count": 177,
+        "sha256": "206df17641b295a5ba045176c02b749914f90da6a3e40ccbe8371017786e49bb"
+      },
+      "test": {
+        "path": "/home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/live-52d-data/dataset/test.jsonl",
+        "count": 178,
+        "sha256": "183c83e93b824333692a87c596ed29908b5a04be5c11b0d876ef8296ca8bf5de"
+      }
+    }
+  },
+  "futuresContext": {
+    "openInterestRaw": "33133.3274000000092",
+    "fundingRateRaw": "0.000055",
+    "fundingIntervalHours": 8,
+    "marketPriceRaw": "63888.1",
+    "markPriceRaw": "63888.1",
+    "indexPriceRaw": "63920.039",
+    "fundingHistoryCount": 100
   }
 }
