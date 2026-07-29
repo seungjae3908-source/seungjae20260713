@@ -64,7 +64,8 @@ test("softmax trainer, validation calibration and test evaluation are determinis
 });
 
 test("trainer rejects datasets missing one of the three classes", () => {
-  const records = syntheticRecords(120).filter((record) => record.label.direction !== "neutral");
+  const records = syntheticRecords(180).filter((record) => record.label.direction !== "neutral");
+  assert.ok(records.length >= 90);
   assert.throws(() => trainTinySoftmaxModel(records, { featureOrder: FEATURE_ORDER }), /all three classes/);
 });
 
