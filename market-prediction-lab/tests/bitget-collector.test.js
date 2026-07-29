@@ -55,19 +55,23 @@ test("collector rejects stalled pagination", async () => {
   }), /pagination did not move backward/);
 });
 
-test("futures context combines OI, funding and mark/index prices", async () => {
+test("futures context combines values and preserves exact decimal strings", async () => {
   const client = {
     get: async (path) => {
-      if (path.endsWith("open-interest")) return { data: { openInterestList: [{ symbol: "BTCUSDT", size: "123.4" }], ts: "1000" } };
-      if (path.endsWith("current-fund-rate")) return { data: [{ fundingRate: "0.0001", fundingRateInterval: "8" }] };
-      if (path.endsWith("history-fund-rate")) return { data: [{ fundingRate: "0.0002", fundingTime: "900" }] };
-      if (path.endsWith("symbol-price")) return { data: [{ price: "10", markPrice: "10.1", indexPrice: "9.9" }] };
+      if (path.endsWith("open-interest")) return { data: { openInterestList: [{ symbol: "BTCUSDT", size: "33111.5767" }], ts: "1000" } };
+      if (path.endsWith("current-fund-rate")) return { data: [{ fundingRate: "0.000060", fundingRateInterval: "8" }] };
+      if (path.endsWith("history-fund-rate")) return { data: [{ fundingRate: "0.000200", fundingTime: "900" }] };
+      if (path.endsWith("symbol-price")) return { data: [{ price: "10.0000", markPrice: "10.1000", indexPrice: "9.9000" }] };
       throw new Error("unexpected path");
     },
   };
   const context = await collectBitgetFuturesContext({ client, symbol: "BTCUSDT" });
-  assert.equal(context.openInterest, 123.4);
+  assert.equal(context.openInterestRaw, "33111.5767");
+  assert.equal(context.openInterest, 33111.5767);
+  assert.equal(context.fundingRateRaw, "0.000060");
   assert.equal(context.fundingIntervalHours, 8);
+  assert.equal(context.markPriceRaw, "10.1000");
   assert.equal(context.markPrice, 10.1);
+  assert.equal(context.fundingHistory[0].rateRaw, "0.000200");
   assert.equal(context.fundingHistory.length, 1);
 });
