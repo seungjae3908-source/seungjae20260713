@@ -66,12 +66,21 @@ export class BitgetPublicClient {
     this.randomImpl = randomImpl;
     this.userAgent = userAgent;
     this.nextRequestAt = 0;
+    this.requestGate = Promise.resolve();
   }
 
   async #respectRateLimit() {
-    const waitMs = this.nextRequestAt - this.nowImpl();
-    if (waitMs > 0) await this.sleepImpl(waitMs);
-    this.nextRequestAt = this.nowImpl() + this.minIntervalMs;
+    let release;
+    const previous = this.requestGate;
+    this.requestGate = new Promise((resolve) => { release = resolve; });
+    await previous;
+    try {
+      const waitMs = this.nextRequestAt - this.nowImpl();
+      if (waitMs > 0) await this.sleepImpl(waitMs);
+      this.nextRequestAt = this.nowImpl() + this.minIntervalMs;
+    } finally {
+      release();
+    }
   }
 
   #backoffMs(attempt, response) {
