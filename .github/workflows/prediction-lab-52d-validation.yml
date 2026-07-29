@@ -38,13 +38,18 @@ jobs:
         id: validate
         continue-on-error: true
         working-directory: market-prediction-lab
-        run: npm run validate
+        shell: bash
+        run: |
+          mkdir -p docs
+          set +e
+          npm run validate 2>&1 | tee docs/validation-run.log
+          exit ${PIPESTATUS[0]}
 
       - name: Record validation-suite failure
         if: steps.validate.outcome != 'success'
         working-directory: market-prediction-lab
         run: |
-          mkdir -p docs
+          tail -n 200 docs/validation-run.log > docs/validation-failure.log
           cat > docs/market-suite-result.json <<'JSON'
           {
             "schemaVersion": 1,
@@ -53,10 +58,15 @@ jobs:
             "source": "github-actions-isolated-multi-market-suite",
             "error": {
               "name": "ValidationSuiteError",
-              "message": "npm run validate failed before live data collection"
+              "message": "npm run validate failed before live data collection; see docs/validation-failure.log"
             }
           }
           JSON
+
+      - name: Clear previous validation failure log
+        if: steps.validate.outcome == 'success'
+        working-directory: market-prediction-lab
+        run: rm -f docs/validation-failure.log
 
       - name: Collect, validate, train and compare candidates
         id: market_suite
@@ -81,12 +91,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Commit summary and research candidates
+      - name: Commit summary, diagnostics and research candidates
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add market-prediction-lab/docs/market-suite-result.json
+          git add -A market-prediction-lab/docs/market-suite-result.json market-prediction-lab/docs/validation-failure.log
           if [ -d market-prediction-lab/models/candidates ]; then
             git add market-prediction-lab/models/candidates/*.json
           fi
