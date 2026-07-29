@@ -73,7 +73,7 @@ jobs:
         if: steps.validate.outcome == 'success'
         continue-on-error: true
         working-directory: market-prediction-lab
-        run: node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json models/candidates
+        run: node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json docs/candidate-models
 
       - name: Display market-suite result
         if: always()
@@ -96,10 +96,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A market-prediction-lab/docs/market-suite-result.json market-prediction-lab/docs/validation-failure.log
-          if [ -d market-prediction-lab/models/candidates ]; then
-            git add market-prediction-lab/models/candidates/*.json
-          fi
+          git add -A market-prediction-lab/docs
           git diff --cached --quiet && exit 0
           git commit -m "test: record multi-market prediction candidates"
           git pull --rebase origin feature/prediction-lab-standalone
