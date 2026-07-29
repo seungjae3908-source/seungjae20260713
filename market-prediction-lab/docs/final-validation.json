@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "status": "pass",
+  "validatedAt": 1785366491874,
+  "source": "github-actions-isolated-final-validation",
+  "nodeVersion": "v20.20.2",
+  "command": "npm run validate",
+  "includes": [
+    "syntax",
+    "unit",
+    "compatibility",
+    "smoke",
+    "stress",
+    "fuzz"
+  ]
+}
