@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "status": "fail",
+  "stage": "standalone_validation_suite",
+  "source": "github-actions-isolated-multi-market-suite",
+  "error": {
+    "name": "ValidationSuiteError",
+    "message": "npm run validate failed before live data collection"
+  }
+}
