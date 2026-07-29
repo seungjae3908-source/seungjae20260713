@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "status": "pass",
   "stage": "complete",
-  "verifiedAt": 1785367373435,
-  "durationMs": 4914,
+  "verifiedAt": 1785367434394,
+  "durationMs": 6640,
   "source": "github-actions-isolated-52d-validation",
   "market": "CRYPTO_FUTURES",
   "symbol": "BTCUSDT",
@@ -12,12 +12,12 @@
   "candleCount": 4991,
   "firstTimestamp": 1780875000000,
   "lastTimestamp": 1785366000000,
-  "latestAgeMs": 1372633,
+  "latestAgeMs": 1433405,
   "gaps": 0,
   "zeroVolume": 0,
   "maximumGapMs": 900000,
-  "rawCandleSnapshotSha256": "022762eebef0de8be72039ecf041bea88bad635680389885f4be684e581f72e1",
-  "repairedCandleSnapshotSha256": "71ea926697e91ab7b79ece8db7a45c3bdb227d0f2d599a67c5077bf64e58118f",
+  "rawCandleSnapshotSha256": "c9600aec7b4bd056b8f761c0e47434ca32f6b28a242398ac8f5d14ad7e2d7dd7",
+  "repairedCandleSnapshotSha256": "e2b0af4cdc2ebbcb05d3d50c0aaf55496863ca298a5434b40b2d60353ed73427",
   "gapRepair": {
     "schemaVersion": 1,
     "initialGapCount": 0,
@@ -74,12 +74,12 @@
     }
   },
   "futuresContext": {
-    "openInterestRaw": "33157.238300000009",
+    "openInterestRaw": "33155.233900000009",
     "fundingRateRaw": "0.000051",
     "fundingIntervalHours": 8,
-    "marketPriceRaw": "63984.7",
-    "markPriceRaw": "63986.1",
-    "indexPriceRaw": "64017.6175",
+    "marketPriceRaw": "63993.8",
+    "markPriceRaw": "63997.1",
+    "indexPriceRaw": "64029.468",
     "fundingHistoryCount": 100
   }
 }
