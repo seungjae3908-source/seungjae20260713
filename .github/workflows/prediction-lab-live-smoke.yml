@@ -6,6 +6,7 @@ on:
       - feature/prediction-lab-standalone
     paths:
       - .github/workflows/prediction-lab-live-smoke.yml
+      - market-prediction-lab/**
   workflow_dispatch:
 
 permissions:
