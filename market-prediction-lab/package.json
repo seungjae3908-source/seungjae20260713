@@ -1,16 +1,17 @@
 {
   "name": "market-prediction-lab",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=20.0.0"
   },
   "scripts": {
-    "check": "node --check src/contracts.js && node --check src/indicators.js && node --check src/rules.js && node --check src/tiny-model.js && node --check src/forecast.js && node --check src/outcomes.js && node --check src/dataset-store.js && node --check src/engine.js && node --check scripts/smoke.js && node --check scripts/stress.js",
+    "check": "node scripts/check-all.js",
     "test": "node --test tests/*.test.js",
-    "smoke": "node scripts/smoke.js",
-    "stress": "node scripts/stress.js",
-    "validate": "npm run check && npm test && npm run smoke"
+    "smoke": "node scripts/smoke-pipeline.js",
+    "stress": "node scripts/stress-pipeline.js",
+    "validate": "npm run check && npm test && npm run smoke && npm run stress && npm run fuzz",
+    "fuzz": "node scripts/fuzz-pipeline.js"
   }
 }
