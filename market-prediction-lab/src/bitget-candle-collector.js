@@ -28,6 +28,15 @@ function toFiniteNumber(value, label) {
   return number;
 }
 
+function toDecimalString(value, label) {
+  const text = String(value ?? "").trim();
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(text)) {
+    throw new TypeError(`${label} must be a decimal value`);
+  }
+  if (!Number.isFinite(Number(text))) throw new TypeError(`${label} must be finite`);
+  return text;
+}
+
 export function normalizeBitgetCandle(row, index = 0) {
   if (!Array.isArray(row) || row.length < 6) throw new TypeError(`candle row ${index} is invalid`);
   const candle = {
@@ -151,23 +160,37 @@ export async function collectBitgetFuturesContext({ client, symbol, productType 
   const oiItem = openInterest.data?.openInterestList?.[0];
   const fundingItem = currentFunding.data?.[0];
   const priceItem = symbolPrice.data?.[0];
+  const openInterestRaw = oiItem ? toDecimalString(oiItem.size, "openInterest") : null;
+  const fundingRateRaw = fundingItem ? toDecimalString(fundingItem.fundingRate, "fundingRate") : null;
+  const marketPriceRaw = priceItem ? toDecimalString(priceItem.price, "marketPrice") : null;
+  const markPriceRaw = priceItem ? toDecimalString(priceItem.markPrice, "markPrice") : null;
+  const indexPriceRaw = priceItem ? toDecimalString(priceItem.indexPrice, "indexPrice") : null;
   return Object.freeze({
     schemaVersion: 1,
     provider: "bitget-public-v2",
     collectedAt: Date.now(),
     symbol,
     productType,
-    openInterest: oiItem ? toFiniteNumber(oiItem.size, "openInterest") : null,
+    openInterest: openInterestRaw === null ? null : toFiniteNumber(openInterestRaw, "openInterest"),
+    openInterestRaw,
     openInterestTimestamp: openInterest.data?.ts ? toFiniteNumber(openInterest.data.ts, "openInterestTimestamp") : null,
-    fundingRate: fundingItem ? toFiniteNumber(fundingItem.fundingRate, "fundingRate") : null,
+    fundingRate: fundingRateRaw === null ? null : toFiniteNumber(fundingRateRaw, "fundingRate"),
+    fundingRateRaw,
     fundingIntervalHours: fundingItem ? toFiniteNumber(fundingItem.fundingRateInterval, "fundingRateInterval") : null,
-    marketPrice: priceItem ? toFiniteNumber(priceItem.price, "marketPrice") : null,
-    markPrice: priceItem ? toFiniteNumber(priceItem.markPrice, "markPrice") : null,
-    indexPrice: priceItem ? toFiniteNumber(priceItem.indexPrice, "indexPrice") : null,
-    fundingHistory: Object.freeze((fundingHistory.data ?? []).map((item, index) => Object.freeze({
-      timestamp: toFiniteNumber(item.fundingTime, `fundingHistory[${index}].fundingTime`),
-      rate: toFiniteNumber(item.fundingRate, `fundingHistory[${index}].fundingRate`),
-    })).sort((a, b) => a.timestamp - b.timestamp)),
+    marketPrice: marketPriceRaw === null ? null : toFiniteNumber(marketPriceRaw, "marketPrice"),
+    marketPriceRaw,
+    markPrice: markPriceRaw === null ? null : toFiniteNumber(markPriceRaw, "markPrice"),
+    markPriceRaw,
+    indexPrice: indexPriceRaw === null ? null : toFiniteNumber(indexPriceRaw, "indexPrice"),
+    indexPriceRaw,
+    fundingHistory: Object.freeze((fundingHistory.data ?? []).map((item, index) => {
+      const rateRaw = toDecimalString(item.fundingRate, `fundingHistory[${index}].fundingRate`);
+      return Object.freeze({
+        timestamp: toFiniteNumber(item.fundingTime, `fundingHistory[${index}].fundingTime`),
+        rate: toFiniteNumber(rateRaw, `fundingHistory[${index}].fundingRate`),
+        rateRaw,
+      });
+    }).sort((a, b) => a.timestamp - b.timestamp)),
   });
 }
 
