@@ -6,7 +6,6 @@ umask 077
 REPOSITORY="${REPOSITORY:-seungjae3908-source/seungjae20260713}"
 DEPLOY_HOST="${DEPLOY_HOST:-lsj119.duckdns.org}"
 DEPLOY_USER="${DEPLOY_USER:-root}"
-DEPLOY_PR="${DEPLOY_PR:-6}"
 KEY_FILE="${KEY_FILE:-/root/.ssh/stock-app-github-actions-ed25519}"
 AUTHORIZED_KEYS="${AUTHORIZED_KEYS:-/root/.ssh/authorized_keys}"
 
@@ -87,14 +86,11 @@ printf '%s' "$KNOWN_HOSTS_LINE" | gh secret set PROD_SSH_KNOWN_HOSTS --repo "$RE
 
 echo "[bootstrap] deployment secrets registered"
 
-if gh pr view "$DEPLOY_PR" --repo "$REPOSITORY" >/dev/null 2>&1; then
-  gh pr ready "$DEPLOY_PR" --repo "$REPOSITORY" >/dev/null 2>&1 || true
-  gh pr merge "$DEPLOY_PR" \
-    --repo "$REPOSITORY" \
-    --squash \
-    --delete-branch
-  echo "[bootstrap] PR #$DEPLOY_PR merged; first automatic deployment has started"
+if gh workflow run production-deploy.yml \
+  --repo "$REPOSITORY" \
+  --ref main \
+  -f ref=main >/dev/null 2>&1; then
+  echo "[bootstrap] first automatic deployment requested"
 else
-  echo "[bootstrap] PR #$DEPLOY_PR was not found; secrets are ready, but nothing was merged" >&2
-  exit 5
+  echo "[bootstrap] secrets are ready; deployment will run on the next main update" >&2
 fi
