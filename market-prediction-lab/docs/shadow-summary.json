@@ -1,12 +1,12 @@
 {
   "schemaVersion": 2,
   "status": "pass",
-  "generatedAt": 1785383749386,
+  "generatedAt": 1785383901413,
   "groups": {
     "crypto-futures-15m": {
       "status": "pass",
       "schemaVersion": 2,
-      "generatedAt": 1785383752784,
+      "generatedAt": 1785383907088,
       "filter": {
         "modelId": "tiny-softmax-crypto-futures-15m-v1-calibrated",
         "referenceModelId": "tiny-linear-baseline-v0"
@@ -513,23 +513,23 @@
       },
       "contexts": {
         "BTCUSDT": {
-          "openInterestRaw": "33258.8436000000089",
-          "openInterestTimestamp": 1785383750546,
+          "openInterestRaw": "33259.0802000000088",
+          "openInterestTimestamp": 1785383903574,
           "fundingRateRaw": "0.0001",
-          "markPriceRaw": "64185.1"
+          "markPriceRaw": "64141.9"
         },
         "ETHUSDT": {
-          "openInterestRaw": "759845.380000000423",
-          "openInterestTimestamp": 1785383752172,
+          "openInterestRaw": "759590.63000000044",
+          "openInterestTimestamp": 1785383906347,
           "fundingRateRaw": "0.000042",
-          "markPriceRaw": "1910.62"
+          "markPriceRaw": "1909.1"
         }
       }
     },
     "crypto-futures-1h": {
       "status": "pass",
       "schemaVersion": 2,
-      "generatedAt": 1785383755297,
+      "generatedAt": 1785383910511,
       "filter": {
         "modelId": "tiny-softmax-crypto-futures-1h-v1-calibrated",
         "referenceModelId": "tiny-linear-baseline-v0"
@@ -565,16 +565,16 @@
       },
       "contexts": {
         "BTCUSDT": {
-          "openInterestRaw": "33258.8436000000089",
-          "openInterestTimestamp": 1785383753436,
+          "openInterestRaw": "33259.0802000000088",
+          "openInterestTimestamp": 1785383908070,
           "fundingRateRaw": "0.0001",
-          "markPriceRaw": "64179.4"
+          "markPriceRaw": "64140.6"
         },
         "ETHUSDT": {
-          "openInterestRaw": "759845.380000000423",
-          "openInterestTimestamp": 1785383754697,
+          "openInterestRaw": "759590.63000000044",
+          "openInterestTimestamp": 1785383909776,
           "fundingRateRaw": "0.000042",
-          "markPriceRaw": "1910.35"
+          "markPriceRaw": "1909.22"
         }
       }
     }
