@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "status": "pass",
   "stage": "complete",
-  "verifiedAt": 1785371323217,
+  "verifiedAt": 1785371391669,
   "source": "github-actions-isolated-derivatives-suite",
-  "suiteEndTime": 1785371303569,
+  "suiteEndTime": 1785371373886,
   "datasets": [
     {
       "id": "btcusdt-futures-15m-52d",
