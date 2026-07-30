@@ -1,6 +1,6 @@
 {
   "name": "market-prediction-lab",
-  "version": "0.4.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -9,10 +9,14 @@
   "scripts": {
     "check": "node scripts/check-all.js",
     "test": "node --test tests/*.test.js",
+    "test:temporal": "node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/market-structure-history.test.js tests/model-ensemble.test.js tests/shadow-ledger.test.js",
     "smoke": "node scripts/smoke-pipeline.js",
     "stress": "node scripts/stress-pipeline.js",
-    "validate": "npm run check && npm test && npm run smoke && npm run stress && npm run fuzz",
     "fuzz": "node scripts/fuzz-pipeline.js",
-    "collect:bitget": "node scripts/collect-bitget.js"
+    "validate": "npm run check && npm test && npm run smoke && npm run stress && npm run fuzz",
+    "collect:bitget": "node scripts/collect-bitget.js",
+    "research:funding": "node scripts/run-derivatives-suite.js",
+    "research:structure": "node scripts/run-market-structure-suite.js",
+    "shadow:cycle": "node scripts/run-shadow-cycle.js"
   }
 }
