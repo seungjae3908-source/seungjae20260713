@@ -28,7 +28,9 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 3
 fi
 
-DEPLOY_PORT="${DEPLOY_PORT:-$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }')}"
+if [[ -z "${DEPLOY_PORT:-}" ]]; then
+  DEPLOY_PORT="$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }' || true)"
+fi
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
 
 mkdir -p "$(dirname "$KEY_FILE")"
