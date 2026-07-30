@@ -13,14 +13,10 @@ import { BASELINE_MODEL } from "../src/tiny-model.js";
 import { calibrateTemperature, evaluateTinyModel, trainTinySoftmaxModel } from "../src/tiny-model-training.js";
 import { selectProbabilityEnsemble } from "../src/model-ensemble.js";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_MS = 86_400_000;
 const FEATURE_ORDER = Object.freeze([
   ...BASELINE_MODEL.featureOrder,
-  "basisRate",
-  "fundingRateChange",
-  "fundingRateZScore",
-  "markPremium",
-  "marketMarkSpread",
+  "basisRate", "fundingRateChange", "fundingRateZScore", "markPremium", "marketMarkSpread",
 ]);
 const SPECS = Object.freeze([
   Object.freeze({ id: "btcusdt-futures-15m-52d", group: "crypto-futures-15m", symbol: "BTCUSDT", timeframe: "15m", days: 52, lookback: 200, horizon: 8, stride: 4 }),
@@ -72,52 +68,33 @@ async function loadV1Model(group) {
 async function collectDataset({ client, spec, suiteEndTime, outputRoot }) {
   const startTime = suiteEndTime - spec.days * DAY_MS;
   const raw = await collectBitgetCandles({
-    client,
-    market: "CRYPTO_FUTURES",
-    symbol: spec.symbol,
-    timeframe: spec.timeframe,
-    startTime,
-    endTime: suiteEndTime,
+    client, market: "CRYPTO_FUTURES", symbol: spec.symbol, timeframe: spec.timeframe, startTime, endTime: suiteEndTime,
   });
   const repair = await repairBitgetCandleGaps({
-    client,
-    market: "CRYPTO_FUTURES",
-    symbol: spec.symbol,
-    timeframe: spec.timeframe,
-    candles: raw.candles,
+    client, market: "CRYPTO_FUTURES", symbol: spec.symbol, timeframe: spec.timeframe, candles: raw.candles,
   });
   if (repair.remainingMissingCandleCount > 0) throw new Error(`unresolved market candle gaps: ${repair.remainingMissingCandleCount}`);
   const normalized = normalizeCandleRows(repair.candles, {
-    market: "CRYPTO_FUTURES",
-    symbol: spec.symbol,
-    timeframe: spec.timeframe,
-    format: "canonical-object",
-    source: `bitget-public-market-structure-${spec.id}`,
-    strict: true,
+    market: "CRYPTO_FUTURES", symbol: spec.symbol, timeframe: spec.timeframe,
+    format: "canonical-object", source: `bitget-public-market-structure-${spec.id}`, strict: true,
   });
   if (normalized.quality.status !== "clean") throw new Error(`market quality is ${normalized.quality.status}`);
 
   const [funding, mark, index] = await Promise.all([
-    collectFundingRateHistory({ client, symbol: spec.symbol, startTime: startTime - 12 * 60 * 60 * 1000, endTime: suiteEndTime }),
+    collectFundingRateHistory({ client, symbol: spec.symbol, startTime: startTime - 43_200_000, endTime: suiteEndTime }),
     collectBitgetDerivedCandles({ client, kind: "mark", symbol: spec.symbol, timeframe: spec.timeframe, startTime, endTime: suiteEndTime }),
     collectBitgetDerivedCandles({ client, kind: "index", symbol: spec.symbol, timeframe: spec.timeframe, startTime, endTime: suiteEndTime }),
   ]);
   const provider = createTemporalMarketStructureProvider({
-    fundingHistory: funding.records,
-    markCandles: mark.candles,
-    indexCandles: index.candles,
+    fundingHistory: funding.records, markCandles: mark.candles, indexCandles: index.candles,
   });
   const records = buildTrainingRecords(normalized, {
-    lookback: spec.lookback,
-    horizon: spec.horizon,
-    stride: spec.stride,
-    derivativesFeatureProvider: provider,
+    lookback: spec.lookback, horizon: spec.horizon, stride: spec.stride, derivativesFeatureProvider: provider,
   });
   const coverage = summarizeStructureCoverage(records);
   if (coverage.fundingCoverage < 0.9) throw new Error(`funding coverage below 90%: ${coverage.fundingCoverage}`);
   if (coverage.structureCoverage < 0.98) throw new Error(`structure coverage below 98%: ${coverage.structureCoverage}`);
   const split = walkForwardSplit(records, { trainRatio: 0.7, validationRatio: 0.15 });
-
   const datasetRoot = resolve(outputRoot, "datasets", spec.id);
   await writeJsonAtomically(resolve(datasetRoot, "coverage.json"), coverage);
   await writeJsonAtomically(resolve(datasetRoot, "funding-history.json"), funding);
@@ -125,23 +102,13 @@ async function collectDataset({ client, spec, suiteEndTime, outputRoot }) {
     spec,
     split,
     summary: {
-      id: spec.id,
-      status: "pass",
-      symbol: spec.symbol,
-      timeframe: spec.timeframe,
-      marketCandles: normalized.candles.length,
-      markCandles: mark.candles.length,
-      indexCandles: index.candles.length,
-      fundingRecords: funding.records.length,
-      fundingCoverage: coverage.fundingCoverage,
-      structureCoverage: coverage.structureCoverage,
-      records: records.length,
-      split: split.report,
+      id: spec.id, status: "pass", symbol: spec.symbol, timeframe: spec.timeframe,
+      marketCandles: normalized.candles.length, markCandles: mark.candles.length, indexCandles: index.candles.length,
+      fundingRecords: funding.records.length, fundingCoverage: coverage.fundingCoverage,
+      structureCoverage: coverage.structureCoverage, records: records.length, split: split.report,
       hashes: {
-        market: sha256Json(normalized.candles),
-        mark: sha256Json(mark.candles),
-        index: sha256Json(index.candles),
-        funding: sha256Json(funding.records),
+        market: sha256Json(normalized.candles), mark: sha256Json(mark.candles),
+        index: sha256Json(index.candles), funding: sha256Json(funding.records),
       },
     },
   };
@@ -161,17 +128,17 @@ function compareMetrics(reference, candidate) {
   });
 }
 
-function strictPromotion({ overall, perDataset, temperature, minimumCoverage, promotedStatus }) {
+function strictPromotion({ overall, perDataset, temperature, temperatureCeiling = 5, minimumCoverage, promotedStatus }) {
   const reasons = [];
   if (minimumCoverage < 0.98) reasons.push("structure_coverage_below_gate");
   if (overall.logLossImprovement < 0.005) reasons.push("overall_log_loss_improvement_insufficient");
   if (overall.macroF1Delta < 0) reasons.push("overall_macro_f1_regressed");
   if (overall.accuracyDelta < -0.005) reasons.push("overall_accuracy_regressed");
-  if (temperature >= 4.999) reasons.push("temperature_hit_search_ceiling");
-  for (const [datasetId, comparison] of Object.entries(perDataset)) {
-    if (comparison.logLossImprovement < -0.01) reasons.push(`${datasetId}:log_loss_regressed`);
-    if (comparison.macroF1Delta < -0.01) reasons.push(`${datasetId}:macro_f1_regressed`);
-    if (comparison.accuracyDelta < -0.02) reasons.push(`${datasetId}:accuracy_regressed`);
+  if (temperature >= temperatureCeiling - 1e-6) reasons.push("temperature_hit_search_ceiling");
+  for (const [datasetId, item] of Object.entries(perDataset)) {
+    if (item.logLossImprovement < -0.01) reasons.push(`${datasetId}:log_loss_regressed`);
+    if (item.macroF1Delta < -0.01) reasons.push(`${datasetId}:macro_f1_regressed`);
+    if (item.accuracyDelta < -0.02) reasons.push(`${datasetId}:accuracy_regressed`);
   }
   return Object.freeze({
     promoted: reasons.length === 0,
@@ -185,8 +152,7 @@ function evaluatePerDataset(datasets, referenceModel, candidateModel) {
     const reference = evaluateTinyModel(dataset.split.test, referenceModel);
     const candidate = evaluateTinyModel(dataset.split.test, candidateModel);
     return [dataset.spec.id, {
-      reference: metricSummary(reference),
-      candidate: metricSummary(candidate),
+      reference: metricSummary(reference), candidate: metricSummary(candidate),
       comparison: compareMetrics(reference, candidate),
     }];
   }));
@@ -198,95 +164,59 @@ async function trainGroup({ group, datasets, candidateRoot, ensembleRoot }) {
   const test = combine(datasets, "test");
   const referenceModel = await loadV1Model(group);
   const trained = trainTinySoftmaxModel(train, {
-    featureOrder: FEATURE_ORDER,
-    id: `tiny-softmax-${group}-market-structure-v3`,
-    epochs: 800,
-    learningRate: 0.055,
-    l2: 0.006,
-    patience: 90,
+    featureOrder: FEATURE_ORDER, id: `tiny-softmax-${group}-market-structure-v3`,
+    epochs: 800, learningRate: 0.055, l2: 0.006, patience: 90,
   });
-  const candidateModel = calibrateTemperature(validation, trained, { minTemperature: 0.5, maxTemperature: 5, step: 0.05 });
+  const v3Model = calibrateTemperature(validation, trained, { minTemperature: 0.5, maxTemperature: 5, step: 0.05 });
   const referenceMetrics = evaluateTinyModel(test, referenceModel);
-  const candidateMetrics = evaluateTinyModel(test, candidateModel);
-  const overall = compareMetrics(referenceMetrics, candidateMetrics);
-  const perDataset = evaluatePerDataset(datasets, referenceModel, candidateModel);
+  const v3Metrics = evaluateTinyModel(test, v3Model);
   const minimumCoverage = Math.min(...datasets.map((dataset) => dataset.summary.structureCoverage));
-  const promotion = strictPromotion({
-    overall,
-    perDataset: Object.fromEntries(Object.entries(perDataset).map(([id, value]) => [id, value.comparison])),
-    temperature: candidateModel.temperature,
-    minimumCoverage,
-    promotedStatus: "shadow_candidate_v3",
+  const v3PerDataset = evaluatePerDataset(datasets, referenceModel, v3Model);
+  const v3Comparison = compareMetrics(referenceMetrics, v3Metrics);
+  const v3Promotion = strictPromotion({
+    overall: v3Comparison,
+    perDataset: Object.fromEntries(Object.entries(v3PerDataset).map(([id, value]) => [id, value.comparison])),
+    temperature: v3Model.temperature, temperatureCeiling: 5, minimumCoverage, promotedStatus: "shadow_candidate_v3",
   });
-  const artifact = {
-    schemaVersion: 1,
-    status: promotion.status,
-    group,
-    sourceDatasets: datasets.map((dataset) => dataset.spec.id),
-    temporalSafety: {
-      fundingAtOrBeforeAnchorOnly: true,
-      markAndIndexExactAnchorMatchOnly: true,
-      historicalOpenInterestInvented: false,
-      currentValuesAppliedToPast: false,
-    },
-    featureOrder: FEATURE_ORDER,
-    coverage: Object.fromEntries(datasets.map((dataset) => [dataset.spec.id, {
-      funding: dataset.summary.fundingCoverage,
-      structure: dataset.summary.structureCoverage,
-    }])),
-    model: candidateModel,
-    referenceTest: metricSummary(referenceMetrics),
-    candidateTest: metricSummary(candidateMetrics),
-    comparison: overall,
-    promotion,
-    perDataset,
+  const temporalSafety = {
+    fundingAtOrBeforeAnchorOnly: true, markAndIndexExactAnchorMatchOnly: true,
+    historicalOpenInterestInvented: false, currentValuesAppliedToPast: false,
   };
-  await writeJsonAtomically(resolve(candidateRoot, `${group}-market-structure-v3.json`), artifact);
+  const coverage = Object.fromEntries(datasets.map((dataset) => [dataset.spec.id, {
+    funding: dataset.summary.fundingCoverage, structure: dataset.summary.structureCoverage,
+  }]));
+  const v3Artifact = {
+    schemaVersion: 1, status: v3Promotion.status, group,
+    sourceDatasets: datasets.map((dataset) => dataset.spec.id), temporalSafety,
+    featureOrder: FEATURE_ORDER, coverage, model: v3Model,
+    referenceTest: metricSummary(referenceMetrics), candidateTest: metricSummary(v3Metrics),
+    comparison: v3Comparison, promotion: v3Promotion, perDataset: v3PerDataset,
+  };
+  await writeJsonAtomically(resolve(candidateRoot, `${group}-market-structure-v3.json`), v3Artifact);
 
   const selected = selectProbabilityEnsemble(validation, {
-    id: `tiny-ensemble-${group}-v1-v3-v4`,
-    referenceModel,
-    alternateModel: candidateModel,
-    weightStep: 0.05,
-    minTemperature: 0.5,
-    maxTemperature: 3,
-    temperatureStep: 0.05,
+    id: `tiny-ensemble-${group}-v1-v3-v4`, referenceModel, alternateModel: v3Model,
+    weightStep: 0.05, minTemperature: 0.5, maxTemperature: 5, temperatureStep: 0.05,
   });
-  const ensembleMetrics = evaluateTinyModel(test, selected.model);
-  const ensembleOverall = compareMetrics(referenceMetrics, ensembleMetrics);
-  const ensemblePerDataset = evaluatePerDataset(datasets, referenceModel, selected.model);
-  const ensemblePromotion = strictPromotion({
-    overall: ensembleOverall,
-    perDataset: Object.fromEntries(Object.entries(ensemblePerDataset).map(([id, value]) => [id, value.comparison])),
-    temperature: selected.model.temperature,
-    minimumCoverage,
+  const v4Metrics = evaluateTinyModel(test, selected.model);
+  const v4PerDataset = evaluatePerDataset(datasets, referenceModel, selected.model);
+  const v4Comparison = compareMetrics(referenceMetrics, v4Metrics);
+  const v4Promotion = strictPromotion({
+    overall: v4Comparison,
+    perDataset: Object.fromEntries(Object.entries(v4PerDataset).map(([id, value]) => [id, value.comparison])),
+    temperature: selected.model.temperature, temperatureCeiling: 5, minimumCoverage,
     promotedStatus: "shadow_candidate_v4",
   });
-  if (selected.selection.alternateWeight <= 0) {
-    ensemblePromotion.reasons.push?.("alternate_model_weight_is_zero");
-  }
-  const finalEnsemblePromotion = selected.selection.alternateWeight <= 0
-    ? Object.freeze({ promoted: false, status: "research_hold", reasons: Object.freeze([...ensemblePromotion.reasons, "alternate_model_weight_is_zero"]) })
-    : ensemblePromotion;
-  const ensembleArtifact = {
-    schemaVersion: 1,
-    status: finalEnsemblePromotion.status,
-    group,
+  const v4Artifact = {
+    schemaVersion: 1, status: v4Promotion.status, group,
     sourceDatasets: datasets.map((dataset) => dataset.spec.id),
-    selectionUsesValidationOnly: true,
-    testUsedForSelection: false,
-    temporalSafety: artifact.temporalSafety,
-    coverage: artifact.coverage,
-    selection: selected.selection,
-    model: selected.model,
-    referenceTest: metricSummary(referenceMetrics),
-    candidateTest: metricSummary(ensembleMetrics),
-    comparison: ensembleOverall,
-    promotion: finalEnsemblePromotion,
-    perDataset: ensemblePerDataset,
+    selectionUsesValidationOnly: true, testUsedForSelection: false,
+    temporalSafety, coverage, selection: selected.selection, model: selected.model,
+    referenceTest: metricSummary(referenceMetrics), candidateTest: metricSummary(v4Metrics),
+    comparison: v4Comparison, promotion: v4Promotion, perDataset: v4PerDataset,
   };
-  await writeJsonAtomically(resolve(ensembleRoot, `${group}-ensemble-v4.json`), ensembleArtifact);
-  return Object.freeze({ v3: artifact, v4: ensembleArtifact });
+  await writeJsonAtomically(resolve(ensembleRoot, `${group}-ensemble-v4.json`), v4Artifact);
+  return Object.freeze({ v3: v3Artifact, v4: v4Artifact });
 }
 
 const outputRoot = resolve(process.argv[2] ?? "live-market-structure-suite");
