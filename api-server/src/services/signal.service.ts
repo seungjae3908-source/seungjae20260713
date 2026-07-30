@@ -97,6 +97,43 @@ async function getReport(ticker: string): Promise<SignalReport | null> {
   });
 }
 
+/**
+ * 특별피드용 기술적 신호 계산.
+ *
+ * 특별피드는 뉴스와 공시를 별도 공급자 호출로 이미 수집하므로,
+ * 여기서 재무·공시·뉴스를 다시 조회하지 않는다. 캔들과 기술지표만
+ * 사용해 중복 네트워크 호출과 공급자 timeout을 방지한다.
+ */
+async function getTechnicalReport(
+  ticker: string,
+): Promise<SignalReport | null> {
+  const entry = getCatalogEntry(ticker);
+
+  if (!entry) return null;
+
+  const candles =
+    await MarketDataService.getCachedCandles(
+      ticker,
+      '1D',
+    );
+
+  // 신선한 일봉 캐시가 없으면 외부 공급자를 호출하지 않고
+  // 이번 특별피드 주기에서 해당 종목을 건너뜁니다.
+  if (candles.length < 30) return null;
+
+  const indicators = computeIndicators(candles);
+  const ctx: SignalContext = {
+    currency: entry.currency,
+  };
+
+  return computeSignalReport(
+    candles,
+    indicators,
+    ctx,
+  );
+}
+
+
 export interface ScanCard {
   ticker: string;
   name: string;
@@ -585,5 +622,6 @@ export const SUPPORTED_SCAN_INDICATORS = SUPPORTED_INDICATORS;
 
 export const SignalService = {
   getReport,
+  getTechnicalReport,
   scan,
 };

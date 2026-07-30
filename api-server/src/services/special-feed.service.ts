@@ -364,7 +364,12 @@ async function runProviderCall<T>(
       code,
     };
     telemetry.providerCalls.push(metric);
-    if (telemetry.cycleNumber === 1 || status !== "OK") {
+    if (
+      telemetry.cycleNumber === 1 ||
+      status === "TIMEOUT" ||
+      status === "ERROR" ||
+      status === "ABORTED"
+    ) {
       console.log(JSON.stringify({
         event: "signal_provider_end",
         cycleNumber: telemetry.cycleNumber,
@@ -1022,9 +1027,9 @@ async function scanEntry(
       runProviderCall(
         telemetry,
         entry.market,
-        isUs ? "finnhub-signal" : "dart-signal",
+        "technical-signal",
         signal,
-        () => SignalService.getReport(entry.ticker),
+        () => SignalService.getTechnicalReport(entry.ticker),
       ),
       runProviderCall(
         telemetry,
