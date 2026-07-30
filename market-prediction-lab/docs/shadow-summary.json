@@ -1,12 +1,12 @@
 {
   "schemaVersion": 2,
   "status": "pass",
-  "generatedAt": 1785372981725,
+  "generatedAt": 1785373119937,
   "groups": {
     "crypto-futures-15m": {
       "status": "pass",
       "schemaVersion": 2,
-      "generatedAt": 1785372985244,
+      "generatedAt": 1785373123471,
       "filter": {
         "modelId": "tiny-softmax-crypto-futures-15m-v1-calibrated",
         "referenceModelId": "tiny-linear-baseline-v0"
@@ -42,23 +42,23 @@
       },
       "contexts": {
         "BTCUSDT": {
-          "openInterestRaw": "33337.1650000000088",
-          "openInterestTimestamp": 1785372983027,
-          "fundingRateRaw": "0.00005",
-          "markPriceRaw": "63597.4"
+          "openInterestRaw": "33344.8138000000088",
+          "openInterestTimestamp": 1785373121180,
+          "fundingRateRaw": "0.000051",
+          "markPriceRaw": "63634.1"
         },
         "ETHUSDT": {
-          "openInterestRaw": "756694.970000000418",
-          "openInterestTimestamp": 1785372984649,
-          "fundingRateRaw": "0.000039",
-          "markPriceRaw": "1893.45"
+          "openInterestRaw": "756563.730000000425",
+          "openInterestTimestamp": 1785373122801,
+          "fundingRateRaw": "0.000038",
+          "markPriceRaw": "1895.54"
         }
       }
     },
     "crypto-futures-1h": {
       "status": "pass",
       "schemaVersion": 2,
-      "generatedAt": 1785372987755,
+      "generatedAt": 1785373126007,
       "filter": {
         "modelId": "tiny-softmax-crypto-futures-1h-v1-calibrated",
         "referenceModelId": "tiny-linear-baseline-v0"
@@ -94,16 +94,16 @@
       },
       "contexts": {
         "BTCUSDT": {
-          "openInterestRaw": "33337.1650000000088",
-          "openInterestTimestamp": 1785372985912,
-          "fundingRateRaw": "0.00005",
-          "markPriceRaw": "63597.4"
+          "openInterestRaw": "33344.8138000000088",
+          "openInterestTimestamp": 1785373124112,
+          "fundingRateRaw": "0.000051",
+          "markPriceRaw": "63630.1"
         },
         "ETHUSDT": {
-          "openInterestRaw": "756694.970000000418",
-          "openInterestTimestamp": 1785372987165,
-          "fundingRateRaw": "0.000039",
-          "markPriceRaw": "1893.4"
+          "openInterestRaw": "756563.730000000425",
+          "openInterestTimestamp": 1785373125381,
+          "fundingRateRaw": "0.000038",
+          "markPriceRaw": "1895.7"
         }
       }
     }
