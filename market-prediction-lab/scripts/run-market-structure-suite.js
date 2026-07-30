@@ -11,6 +11,7 @@ import { buildTrainingRecords } from "../src/training-dataset.js";
 import { walkForwardSplit } from "../src/walk-forward.js";
 import { BASELINE_MODEL } from "../src/tiny-model.js";
 import { calibrateTemperature, evaluateTinyModel, trainTinySoftmaxModel } from "../src/tiny-model-training.js";
+import { selectProbabilityEnsemble } from "../src/model-ensemble.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FEATURE_ORDER = Object.freeze([
@@ -160,7 +161,7 @@ function compareMetrics(reference, candidate) {
   });
 }
 
-function strictPromotion({ overall, perDataset, temperature, minimumCoverage }) {
+function strictPromotion({ overall, perDataset, temperature, minimumCoverage, promotedStatus }) {
   const reasons = [];
   if (minimumCoverage < 0.98) reasons.push("structure_coverage_below_gate");
   if (overall.logLossImprovement < 0.005) reasons.push("overall_log_loss_improvement_insufficient");
@@ -174,12 +175,24 @@ function strictPromotion({ overall, perDataset, temperature, minimumCoverage }) 
   }
   return Object.freeze({
     promoted: reasons.length === 0,
-    status: reasons.length === 0 ? "shadow_candidate_v3" : "research_hold",
+    status: reasons.length === 0 ? promotedStatus : "research_hold",
     reasons: Object.freeze(reasons),
   });
 }
 
-async function trainGroup({ group, datasets, candidateRoot }) {
+function evaluatePerDataset(datasets, referenceModel, candidateModel) {
+  return Object.fromEntries(datasets.map((dataset) => {
+    const reference = evaluateTinyModel(dataset.split.test, referenceModel);
+    const candidate = evaluateTinyModel(dataset.split.test, candidateModel);
+    return [dataset.spec.id, {
+      reference: metricSummary(reference),
+      candidate: metricSummary(candidate),
+      comparison: compareMetrics(reference, candidate),
+    }];
+  }));
+}
+
+async function trainGroup({ group, datasets, candidateRoot, ensembleRoot }) {
   const train = combine(datasets, "train");
   const validation = combine(datasets, "validation");
   const test = combine(datasets, "test");
@@ -196,20 +209,14 @@ async function trainGroup({ group, datasets, candidateRoot }) {
   const referenceMetrics = evaluateTinyModel(test, referenceModel);
   const candidateMetrics = evaluateTinyModel(test, candidateModel);
   const overall = compareMetrics(referenceMetrics, candidateMetrics);
-  const perDataset = Object.fromEntries(datasets.map((dataset) => {
-    const reference = evaluateTinyModel(dataset.split.test, referenceModel);
-    const candidate = evaluateTinyModel(dataset.split.test, candidateModel);
-    return [dataset.spec.id, {
-      reference: metricSummary(reference),
-      candidate: metricSummary(candidate),
-      comparison: compareMetrics(reference, candidate),
-    }];
-  }));
+  const perDataset = evaluatePerDataset(datasets, referenceModel, candidateModel);
+  const minimumCoverage = Math.min(...datasets.map((dataset) => dataset.summary.structureCoverage));
   const promotion = strictPromotion({
     overall,
     perDataset: Object.fromEntries(Object.entries(perDataset).map(([id, value]) => [id, value.comparison])),
     temperature: candidateModel.temperature,
-    minimumCoverage: Math.min(...datasets.map((dataset) => dataset.summary.structureCoverage)),
+    minimumCoverage,
+    promotedStatus: "shadow_candidate_v3",
   });
   const artifact = {
     schemaVersion: 1,
@@ -235,12 +242,57 @@ async function trainGroup({ group, datasets, candidateRoot }) {
     perDataset,
   };
   await writeJsonAtomically(resolve(candidateRoot, `${group}-market-structure-v3.json`), artifact);
-  return artifact;
+
+  const selected = selectProbabilityEnsemble(validation, {
+    id: `tiny-ensemble-${group}-v1-v3-v4`,
+    referenceModel,
+    alternateModel: candidateModel,
+    weightStep: 0.05,
+    minTemperature: 0.5,
+    maxTemperature: 3,
+    temperatureStep: 0.05,
+  });
+  const ensembleMetrics = evaluateTinyModel(test, selected.model);
+  const ensembleOverall = compareMetrics(referenceMetrics, ensembleMetrics);
+  const ensemblePerDataset = evaluatePerDataset(datasets, referenceModel, selected.model);
+  const ensemblePromotion = strictPromotion({
+    overall: ensembleOverall,
+    perDataset: Object.fromEntries(Object.entries(ensemblePerDataset).map(([id, value]) => [id, value.comparison])),
+    temperature: selected.model.temperature,
+    minimumCoverage,
+    promotedStatus: "shadow_candidate_v4",
+  });
+  if (selected.selection.alternateWeight <= 0) {
+    ensemblePromotion.reasons.push?.("alternate_model_weight_is_zero");
+  }
+  const finalEnsemblePromotion = selected.selection.alternateWeight <= 0
+    ? Object.freeze({ promoted: false, status: "research_hold", reasons: Object.freeze([...ensemblePromotion.reasons, "alternate_model_weight_is_zero"]) })
+    : ensemblePromotion;
+  const ensembleArtifact = {
+    schemaVersion: 1,
+    status: finalEnsemblePromotion.status,
+    group,
+    sourceDatasets: datasets.map((dataset) => dataset.spec.id),
+    selectionUsesValidationOnly: true,
+    testUsedForSelection: false,
+    temporalSafety: artifact.temporalSafety,
+    coverage: artifact.coverage,
+    selection: selected.selection,
+    model: selected.model,
+    referenceTest: metricSummary(referenceMetrics),
+    candidateTest: metricSummary(ensembleMetrics),
+    comparison: ensembleOverall,
+    promotion: finalEnsemblePromotion,
+    perDataset: ensemblePerDataset,
+  };
+  await writeJsonAtomically(resolve(ensembleRoot, `${group}-ensemble-v4.json`), ensembleArtifact);
+  return Object.freeze({ v3: artifact, v4: ensembleArtifact });
 }
 
 const outputRoot = resolve(process.argv[2] ?? "live-market-structure-suite");
 const reportPath = resolve(process.argv[3] ?? "docs/market-structure-suite-result.json");
 const candidateRoot = resolve(process.argv[4] ?? "docs/candidate-models-v3");
+const ensembleRoot = resolve(process.argv[5] ?? "docs/candidate-models-v4");
 const suiteEndTime = Date.now();
 const client = new BitgetPublicClient({ minIntervalMs: 180, maxRetries: 4, timeoutMs: 12_000 });
 const datasets = [];
@@ -265,7 +317,7 @@ for (const group of [...new Set(SPECS.map((spec) => spec.group))]) {
     continue;
   }
   try {
-    models[group] = await trainGroup({ group, datasets: groupDatasets, candidateRoot });
+    models[group] = await trainGroup({ group, datasets: groupDatasets, candidateRoot, ensembleRoot });
   } catch (error) {
     models[group] = { status: "training_failed", error: serializeError(error) };
   }
@@ -274,7 +326,7 @@ for (const group of [...new Set(SPECS.map((spec) => spec.group))]) {
 const technicalFailures = datasetResults.filter((result) => result.status !== "pass").length
   + Object.values(models).filter((model) => ["not_trained", "training_failed"].includes(model.status)).length;
 const report = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   status: technicalFailures === 0 ? "pass" : "fail",
   stage: "complete",
   verifiedAt: Date.now(),
@@ -286,6 +338,8 @@ const report = {
     usesPublicMarketDataOnly: true,
     exactTemporalJoinRequired: true,
     historicalOpenInterestInvented: false,
+    ensembleSelectionUsesValidationOnly: true,
+    testUsedForSelection: false,
     modifiesExistingAppApi: false,
     modelDeployment: false,
   },
