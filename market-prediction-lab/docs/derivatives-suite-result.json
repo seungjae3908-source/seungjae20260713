@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "status": "fail",
+  "stage": "complete",
+  "verifiedAt": 1785371055734,
+  "source": "github-actions-isolated-derivatives-suite",
+  "suiteEndTime": 1785371041841,
+  "datasets": [
+    {
+      "id": "btcusdt-futures-15m-52d",
+      "status": "fail",
+      "symbol": "BTCUSDT",
+      "timeframe": "15m",
+      "error": {
+        "name": "TypeError",
+        "message": "funding[0].fundingRate is invalid",
+        "details": null,
+        "stack": [
+          "TypeError: funding[0].fundingRate is invalid",
+          "    at normalizeFundingRateRecord (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/src/derivatives-history.js:37:11)",
+          "    at Array.map (<anonymous>)",
+          "    at createTemporalDerivativesProvider (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/src/derivatives-history.js:140:47)",
+          "    at collectDataset (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/scripts/run-derivatives-suite.js:100:20)",
+          "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+          "    at async file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/scripts/run-derivatives-suite.js:236:21"
+        ]
+      }
+    },
+    {
+      "id": "ethusdt-futures-15m-52d",
+      "status": "fail",
+      "symbol": "ETHUSDT",
+      "timeframe": "15m",
+      "error": {
+        "name": "TypeError",
+        "message": "funding[0].fundingRate is invalid",
+        "details": null,
+        "stack": [
+          "TypeError: funding[0].fundingRate is invalid",
+          "    at normalizeFundingRateRecord (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/src/derivatives-history.js:37:11)",
+          "    at Array.map (<anonymous>)",
+          "    at createTemporalDerivativesProvider (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/src/derivatives-history.js:140:47)",
+          "    at collectDataset (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/scripts/run-derivatives-suite.js:100:20)",
+          "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+          "    at async file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/scripts/run-derivatives-suite.js:236:21"
+        ]
+      }
+    },
+    {
+      "id": "btcusdt-futures-1h-83d",
+      "status": "fail",
+      "symbol": "BTCUSDT",
+      "timeframe": "1h",
+      "error": {
+        "name": "TypeError",
+        "message": "funding[0].fundingRate is invalid",
+        "details": null,
+        "stack": [
+          "TypeError: funding[0].fundingRate is invalid",
+          "    at normalizeFundingRateRecord (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/src/derivatives-history.js:37:11)",
+          "    at Array.map (<anonymous>)",
+          "    at createTemporalDerivativesProvider (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/src/derivatives-history.js:140:47)",
+          "    at collectDataset (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/scripts/run-derivatives-suite.js:100:20)",
+          "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+          "    at async file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/scripts/run-derivatives-suite.js:236:21"
+        ]
+      }
+    },
+    {
+      "id": "ethusdt-futures-1h-83d",
+      "status": "fail",
+      "symbol": "ETHUSDT",
+      "timeframe": "1h",
+      "error": {
+        "name": "TypeError",
+        "message": "funding[0].fundingRate is invalid",
+        "details": null,
+        "stack": [
+          "TypeError: funding[0].fundingRate is invalid",
+          "    at normalizeFundingRateRecord (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/src/derivatives-history.js:37:11)",
+          "    at Array.map (<anonymous>)",
+          "    at createTemporalDerivativesProvider (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/src/derivatives-history.js:140:47)",
+          "    at collectDataset (file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/scripts/run-derivatives-suite.js:100:20)",
+          "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+          "    at async file:///home/runner/work/seungjae20260713/seungjae20260713/market-prediction-lab/scripts/run-derivatives-suite.js:236:21"
+        ]
+      }
+    }
+  ],
+  "models": {
+    "crypto-futures-15m": {
+      "status": "not_trained",
+      "reason": "one_or_more_datasets_failed"
+    },
+    "crypto-futures-1h": {
+      "status": "not_trained",
+      "reason": "one_or_more_datasets_failed"
+    }
+  },
+  "safety": {
+    "usesPublicMarketDataOnly": true,
+    "openInterestHistoricalBackfillInvented": false,
+    "futureDataLeakageAllowed": false,
+    "modifiesExistingAppApi": false,
+    "modelDeployment": false
+  }
+}
