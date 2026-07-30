@@ -167,8 +167,12 @@ export function calculateFeatures(input) {
     institutionNetRatio: clamp(marketFeatures.institutionNetRatio ?? 0, -1, 1),
     openInterestChange: clamp(derivativesFeatures.openInterestChange ?? 0, -1, 1),
     fundingRate: clamp(derivativesFeatures.fundingRate ?? 0, -0.05, 0.05),
+    fundingRateChange: clamp(derivativesFeatures.fundingRateChange ?? 0, -0.05, 0.05),
+    fundingRateZScore: clamp(derivativesFeatures.fundingRateZScore ?? 0, -8, 8),
     longShortBias: clamp((derivativesFeatures.longShortRatio ?? 1) - 1, -2, 2),
     basisRate: clamp(derivativesFeatures.basisRate ?? 0, -0.2, 0.2),
+    markPremium: clamp(derivativesFeatures.markPremium ?? 0, -0.2, 0.2),
+    marketMarkSpread: clamp(derivativesFeatures.marketMarkSpread ?? 0, -0.2, 0.2),
   };
 
   for (const [key, value] of Object.entries(features)) {
