@@ -1,12 +1,12 @@
 {
   "schemaVersion": 2,
   "createdAt": 1785371456399,
-  "updatedAt": 1785383749386,
+  "updatedAt": 1785383901413,
   "groups": {
     "crypto-futures-15m": {
       "schemaVersion": 2,
       "createdAt": 1785371456399,
-      "updatedAt": 1785383749386,
+      "updatedAt": 1785383901413,
       "openInterestSnapshots": [
         {
           "symbol": "BTCUSDT",
@@ -67,6 +67,16 @@
           "symbol": "ETHUSDT",
           "timestamp": 1785383752172,
           "valueRaw": "759845.380000000423"
+        },
+        {
+          "symbol": "BTCUSDT",
+          "timestamp": 1785383903574,
+          "valueRaw": "33259.0802000000088"
+        },
+        {
+          "symbol": "ETHUSDT",
+          "timestamp": 1785383906347,
+          "valueRaw": "759590.63000000044"
         }
       ],
       "records": [
@@ -665,7 +675,7 @@
     "crypto-futures-1h": {
       "schemaVersion": 2,
       "createdAt": 1785371456399,
-      "updatedAt": 1785383749386,
+      "updatedAt": 1785383901413,
       "openInterestSnapshots": [
         {
           "symbol": "BTCUSDT",
@@ -726,6 +736,16 @@
           "symbol": "ETHUSDT",
           "timestamp": 1785383754697,
           "valueRaw": "759845.380000000423"
+        },
+        {
+          "symbol": "BTCUSDT",
+          "timestamp": 1785383908070,
+          "valueRaw": "33259.0802000000088"
+        },
+        {
+          "symbol": "ETHUSDT",
+          "timestamp": 1785383909776,
+          "valueRaw": "759590.63000000044"
         }
       ],
       "records": [
