@@ -5,14 +5,34 @@
 //       code), which is how Korean outlets index coverage.
 //
 // Items without a real http(s) URL are dropped (cards must open a real
-// article). On live failure we fall back to the deterministic sample feed.
+// article). On live failure we fall back to another real provider only.
 import { getCatalogEntry, type CatalogEntry } from '../data/catalog';
-import { getCompanyNews } from '../providers/finnhub';
+import { isFinnhubConfigured } from '../lib/config';
 import { fetchText } from '../lib/http';
 import { reportProviderFallback } from '../lib/provider-context';
+import { getCompanyNews } from '../providers/finnhub';
 import type { NewsData, NewsItem } from '../sample/types';
 
 type Tone = 'positive' | 'negative';
+
+let finnhubNotConfiguredLogged = false;
+
+function errorDetails(error: unknown): { code: string; message: string } {
+  if (error && typeof error === 'object') {
+    const code =
+      'code' in error && typeof error.code === 'string'
+        ? error.code
+        : error instanceof Error
+          ? error.name
+          : 'UNKNOWN_ERROR';
+    const message =
+      error instanceof Error
+        ? error.message
+        : 'Unknown provider failure';
+    return { code, message };
+  }
+  return { code: 'UNKNOWN_ERROR', message: String(error) };
+}
 
 function dateFromUnix(value?: number): string {
   if (!value) return new Date().toISOString().slice(0, 10);
@@ -47,16 +67,24 @@ const NEG_KO = [
 
 function toneFromText(text: string, kr: boolean): Tone {
   const lower = text.toLowerCase();
-  const pos = (kr ? POS_KO : POS_EN).filter((w) => lower.includes(w.toLowerCase())).length;
-  const neg = (kr ? NEG_KO : NEG_EN).filter((w) => lower.includes(w.toLowerCase())).length;
+  const pos = (kr ? POS_KO : POS_EN).filter((w) =>
+    lower.includes(w.toLowerCase()),
+  ).length;
+  const neg = (kr ? NEG_KO : NEG_EN).filter((w) =>
+    lower.includes(w.toLowerCase()),
+  ).length;
   return pos >= neg ? 'positive' : 'negative';
 }
 
 function splitNews(items: NewsItem[]): NewsData {
   const positive = items.filter((n) => n.tone === 'positive');
   const negative = items.filter((n) => n.tone === 'negative');
-  const pos = positive.length ? positive : items.slice(0, Math.ceil(items.length / 2));
-  const neg = negative.length ? negative : items.slice(Math.ceil(items.length / 2));
+  const pos = positive.length
+    ? positive
+    : items.slice(0, Math.ceil(items.length / 2));
+  const neg = negative.length
+    ? negative
+    : items.slice(Math.ceil(items.length / 2));
   const total = pos.length + neg.length || 1;
   return {
     positive: pos,
@@ -83,7 +111,7 @@ async function usItems(entry: CatalogEntry): Promise<NewsItem[]> {
     });
 }
 
-// --- Google News RSS (KR) ---------------------------------------------------
+// --- Google News RSS --------------------------------------------------------
 
 function decodeXml(s: string): string {
   return s
@@ -98,8 +126,8 @@ function decodeXml(s: string): string {
 }
 
 function pick(block: string, re: RegExp): string {
-  const m = block.match(re);
-  return m ? m[1] : '';
+  const match = block.match(re);
+  return match ? match[1] : '';
 }
 
 async function krItems(entry: CatalogEntry): Promise<NewsItem[]> {
@@ -111,17 +139,21 @@ async function krItems(entry: CatalogEntry): Promise<NewsItem[]> {
 
   const items: NewsItem[] = [];
   const re = /<item>([\s\S]*?)<\/item>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml)) !== null && items.length < 16) {
-    const block = m[1];
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(xml)) !== null && items.length < 16) {
+    const block = match[1];
     const title = decodeXml(pick(block, /<title>([\s\S]*?)<\/title>/));
     const url = decodeXml(pick(block, /<link>([\s\S]*?)<\/link>/));
     const pub = pick(block, /<pubDate>([\s\S]*?)<\/pubDate>/);
     const srcUrl = pick(block, /<source[^>]*url="([^"]*)"/);
-    const srcName = decodeXml(pick(block, /<source[^>]*>([\s\S]*?)<\/source>/));
+    const srcName = decodeXml(
+      pick(block, /<source[^>]*>([\s\S]*?)<\/source>/),
+    );
     if (!title || !url || !url.startsWith('http')) continue;
 
-    const date = pub ? new Date(pub).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const date = pub
+      ? new Date(pub).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
     items.push({
       title,
       source: srcName || domainFromUrl(srcUrl || url),
@@ -134,7 +166,6 @@ async function krItems(entry: CatalogEntry): Promise<NewsItem[]> {
   return items;
 }
 
-// 미국 종목: Finnhub 실패 시 구글 뉴스 RSS(영문, 실제 기사)로 폴백한다.
 async function usItemsFromGoogle(entry: CatalogEntry): Promise<NewsItem[]> {
   const query = encodeURIComponent(`${entry.name} stock`);
   const xml = await fetchText(
@@ -144,17 +175,21 @@ async function usItemsFromGoogle(entry: CatalogEntry): Promise<NewsItem[]> {
 
   const items: NewsItem[] = [];
   const re = /<item>([\s\S]*?)<\/item>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml)) !== null && items.length < 16) {
-    const block = m[1];
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(xml)) !== null && items.length < 16) {
+    const block = match[1];
     const title = decodeXml(pick(block, /<title>([\s\S]*?)<\/title>/));
     const url = decodeXml(pick(block, /<link>([\s\S]*?)<\/link>/));
     const pub = pick(block, /<pubDate>([\s\S]*?)<\/pubDate>/);
     const srcUrl = pick(block, /<source[^>]*url="([^"]*)"/);
-    const srcName = decodeXml(pick(block, /<source[^>]*>([\s\S]*?)<\/source>/));
+    const srcName = decodeXml(
+      pick(block, /<source[^>]*>([\s\S]*?)<\/source>/),
+    );
     if (!title || !url || !url.startsWith('http')) continue;
 
-    const date = pub ? new Date(pub).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const date = pub
+      ? new Date(pub).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
     items.push({
       title,
       source: srcName || domainFromUrl(srcUrl || url),
@@ -187,22 +222,59 @@ async function getNews(ticker: string): Promise<NewsData | null> {
     if (entry.market === 'KR') {
       items = await krItems(entry);
     } else {
-      // 미국: Finnhub 우선, 실패(키 없음 등) 시 구글 뉴스 RSS(실제 기사)로 폴백.
-      try {
-        items = await usItems(entry);
-      } catch (err) {
+      // Finnhub 키가 없으면 예외를 종목마다 만들지 않고 Google News로 바로
+      // 전환한다. 설정 누락은 프로세스당 한 번만 구조화 로그로 남긴다.
+      if (isFinnhubConfigured()) {
+        try {
+          items = await usItems(entry);
+        } catch (error) {
+          reportProviderFallback('FINNHUB_NEWS_GOOGLE_FALLBACK');
+          const details = errorDetails(error);
+          console.log(
+            JSON.stringify({
+              event: 'news_provider_fallback',
+              ticker,
+              provider: 'finnhub',
+              fallback: 'google-news',
+              code: details.code,
+              message: details.message,
+            }),
+          );
+        }
+      } else {
         reportProviderFallback('FINNHUB_NEWS_GOOGLE_FALLBACK');
-        console.error(`finnhub news failed for ${ticker}, falling back to google news:`, err);
-        items = [];
+        if (!finnhubNotConfiguredLogged) {
+          finnhubNotConfiguredLogged = true;
+          console.log(
+            JSON.stringify({
+              event: 'provider_not_configured',
+              provider: 'finnhub',
+              feature: 'company-news',
+              fallback: 'google-news',
+            }),
+          );
+        }
       }
+
       if (items.length === 0) {
         items = await usItemsFromGoogle(entry);
       }
     }
-    const filtered = items.filter((n) => n.url && n.url.startsWith('http'));
+
+    const filtered = items.filter(
+      (item) => item.url && item.url.startsWith('http'),
+    );
     return splitNews(filtered);
-  } catch (err) {
-    console.error(`live news failed for ${ticker}:`, err);
+  } catch (error) {
+    const details = errorDetails(error);
+    console.error(
+      JSON.stringify({
+        event: 'news_provider_failed',
+        ticker,
+        code: details.code,
+        message: details.message,
+      }),
+    );
     throw new NewsProviderError('뉴스 공급자 호출에 실패했습니다.');
   }
 }
