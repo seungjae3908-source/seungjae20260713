@@ -22,7 +22,7 @@ concurrency:
 jobs:
   validate-and-train:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout isolated branch
         uses: actions/checkout@v4
@@ -68,40 +68,52 @@ jobs:
         working-directory: market-prediction-lab
         run: rm -f docs/validation-failure.log
 
-      - name: Collect, validate, train and compare candidates
+      - name: Collect, validate, train and compare price-volume candidates
         id: market_suite
         if: steps.validate.outcome == 'success'
         continue-on-error: true
         working-directory: market-prediction-lab
         run: node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json docs/candidate-models
 
-      - name: Display market-suite result
+      - name: Collect historical funding and compare temporal candidates
+        id: derivatives_suite
+        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-derivatives-suite.js live-derivatives-suite docs/derivatives-suite-result.json docs/candidate-models-v2
+
+      - name: Display suite results
         if: always()
         working-directory: market-prediction-lab
         run: |
           test -f docs/market-suite-result.json
           cat docs/market-suite-result.json
+          if [ -f docs/derivatives-suite-result.json ]; then
+            cat docs/derivatives-suite-result.json
+          fi
 
-      - name: Upload isolated market-suite artifact
+      - name: Upload isolated validation artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: prediction-lab-market-suite-${{ github.run_id }}
-          path: market-prediction-lab/live-market-suite
+          name: prediction-lab-suites-${{ github.run_id }}
+          path: |
+            market-prediction-lab/live-market-suite
+            market-prediction-lab/live-derivatives-suite
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Commit summary, diagnostics and research candidates
+      - name: Commit summaries, diagnostics and research candidates
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A market-prediction-lab/docs
           git diff --cached --quiet && exit 0
-          git commit -m "test: record multi-market prediction candidates"
+          git commit -m "test: record temporal derivatives candidates"
           git pull --rebase origin feature/prediction-lab-standalone
           git push origin HEAD:feature/prediction-lab-standalone
 
-      - name: Fail workflow when validation failed
-        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success')
+      - name: Fail workflow when technical validation failed
+        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success')
         run: exit 1
