@@ -4,6 +4,7 @@ set -Eeuo pipefail
 umask 077
 
 TARGET_SHA="${1:-}"
+SOURCE_DIR="${SOURCE_DIR:-}"
 LIVE_DIR="${LIVE_DIR:-/opt/stock-app}"
 PM2_NAME="${PM2_NAME:-stock-app}"
 LIVE_PORT="${LIVE_PORT:-8080}"
@@ -14,41 +15,76 @@ RELEASE_ROOT="${RELEASE_ROOT:-/opt/stock-app-releases}"
 BACKUP_ROOT="${BACKUP_ROOT:-/opt/stock-app-backups}"
 MIN_FREE_KB="${MIN_FREE_KB:-1200000}"
 LOCK_FILE="${LOCK_FILE:-/var/lock/stock-app-deploy.lock}"
+DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-$LIVE_DIR/.deploy}"
 
 if [[ -z "$TARGET_SHA" ]]; then
   echo "[deploy] target SHA is required" >&2
   exit 2
 fi
 
-for command_name in git node pnpm pm2 curl flock df awk; do
+if [[ -z "$SOURCE_DIR" ]] || [[ ! -d "$SOURCE_DIR/.git" ]]; then
+  echo "[deploy] SOURCE_DIR must point to a temporary Git checkout" >&2
+  exit 3
+fi
+
+if [[ ! -d "$LIVE_DIR" ]]; then
+  echo "[deploy] live directory not found: $LIVE_DIR" >&2
+  exit 4
+fi
+
+for command_name in git node pnpm pm2 curl flock df awk rsync tar; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "[deploy] missing command: $command_name" >&2
-    exit 3
+    exit 5
   }
 done
 
-[[ -d "$LIVE_DIR/.git" ]] || {
-  echo "[deploy] live repository not found: $LIVE_DIR" >&2
-  exit 4
-}
-
-mkdir -p "$RELEASE_ROOT" "$BACKUP_ROOT" "$(dirname "$LOCK_FILE")"
+mkdir -p "$RELEASE_ROOT" "$BACKUP_ROOT" "$DEPLOY_STATE_DIR" "$(dirname "$LOCK_FILE")"
 exec 9>"$LOCK_FILE"
 flock -n 9 || {
   echo "[deploy] another deployment is already running" >&2
-  exit 5
+  exit 6
 }
 
-TARGET_SHA="$(git -C "$LIVE_DIR" rev-parse "$TARGET_SHA^{commit}")"
-CURRENT_SHA="$(git -C "$LIVE_DIR" rev-parse HEAD)"
+TARGET_SHA="$(git -C "$SOURCE_DIR" rev-parse "$TARGET_SHA^{commit}")"
+CURRENT_SHA="legacy"
+if [[ -s "$DEPLOY_STATE_DIR/current-sha" ]]; then
+  CURRENT_SHA="$(tr -d '[:space:]' < "$DEPLOY_STATE_DIR/current-sha")"
+fi
+
 SHORT_SHA="${TARGET_SHA:0:10}"
+CURRENT_LABEL="${CURRENT_SHA:0:10}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RELEASE_DIR="$RELEASE_ROOT/$STAMP-$SHORT_SHA"
-BACKUP_DIR="$BACKUP_ROOT/$STAMP-${CURRENT_SHA:0:10}"
+BACKUP_DIR="$BACKUP_ROOT/$STAMP-$CURRENT_LABEL"
 CANARY_ENV="$(mktemp /tmp/stock-app-canary-env.XXXXXX)"
 CANARY_LOG="$(mktemp /tmp/stock-app-canary-log.XXXXXX)"
 CANARY_PID=""
-WORKTREE_CREATED=0
+RELEASE_CREATED=0
+
+sync_source_tree() {
+  local source_root="$1"
+  local destination_root="$2"
+
+  mkdir -p "$destination_root"
+  rsync -a --delete \
+    --exclude='.git/' \
+    --exclude='.github/' \
+    --exclude='node_modules/' \
+    --exclude='*/node_modules/' \
+    --exclude='api-server/dist/' \
+    --exclude='stock-analyzer/dist/' \
+    --exclude='.env' \
+    --exclude='.env.*' \
+    --exclude='*/.env' \
+    --exclude='*/.env.*' \
+    --exclude='.deploy/' \
+    --exclude='logs/' \
+    --exclude='*/logs/' \
+    --exclude='uploads/' \
+    --exclude='*/uploads/' \
+    "$source_root/" "$destination_root/"
+}
 
 cleanup() {
   if [[ -n "$CANARY_PID" ]] && kill -0 "$CANARY_PID" 2>/dev/null; then
@@ -58,9 +94,8 @@ cleanup() {
 
   rm -f "$CANARY_ENV" "$CANARY_LOG"
 
-  if [[ "$WORKTREE_CREATED" == "1" ]] && [[ -d "$RELEASE_DIR" ]]; then
-    git -C "$LIVE_DIR" worktree remove --force "$RELEASE_DIR" >/dev/null 2>&1 || true
-    git -C "$LIVE_DIR" worktree prune >/dev/null 2>&1 || true
+  if [[ "$RELEASE_CREATED" == "1" ]] && [[ -d "$RELEASE_DIR" ]]; then
+    rm -rf -- "$RELEASE_DIR"
   fi
 }
 trap cleanup EXIT
@@ -113,17 +148,19 @@ probe_data() {
 }
 
 restore_backup() {
-  echo "[rollback] restoring commit $CURRENT_SHA"
+  echo "[rollback] restoring previous production snapshot"
 
-  git -C "$LIVE_DIR" reset --hard "$CURRENT_SHA"
-  (
-    cd "$LIVE_DIR"
-    pnpm install --frozen-lockfile
-  )
+  sync_source_tree "$BACKUP_DIR/source" "$LIVE_DIR"
 
   rm -rf "$LIVE_DIR/api-server/dist" "$LIVE_DIR/stock-analyzer/dist"
   [[ -d "$BACKUP_DIR/api-server-dist" ]] && cp -a "$BACKUP_DIR/api-server-dist" "$LIVE_DIR/api-server/dist"
   [[ -d "$BACKUP_DIR/stock-analyzer-dist" ]] && cp -a "$BACKUP_DIR/stock-analyzer-dist" "$LIVE_DIR/stock-analyzer/dist"
+
+  if [[ "$CURRENT_SHA" == "legacy" ]]; then
+    rm -f "$DEPLOY_STATE_DIR/current-sha"
+  else
+    printf '%s\n' "$CURRENT_SHA" > "$DEPLOY_STATE_DIR/current-sha"
+  fi
 
   pm2 restart "$PM2_NAME"
   pm2 save
@@ -139,12 +176,6 @@ restore_backup() {
 FREE_KB="$(df -Pk "$LIVE_DIR" | awk 'NR==2 {print $4}')"
 if [[ -z "$FREE_KB" ]] || (( FREE_KB < MIN_FREE_KB )); then
   echo "[deploy] insufficient disk space: ${FREE_KB:-unknown}KB free, ${MIN_FREE_KB}KB required" >&2
-  exit 6
-fi
-
-if ! git -C "$LIVE_DIR" diff --quiet || ! git -C "$LIVE_DIR" diff --cached --quiet; then
-  echo "[deploy] tracked changes exist in $LIVE_DIR; refusing to overwrite them" >&2
-  git -C "$LIVE_DIR" status --short --untracked-files=no
   exit 7
 fi
 
@@ -153,11 +184,19 @@ if ! pm2 describe "$PM2_NAME" >/dev/null 2>&1; then
   exit 8
 fi
 
-echo "[deploy] current=$CURRENT_SHA target=$TARGET_SHA"
-echo "[deploy] preparing isolated release: $RELEASE_DIR"
+if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]; then
+  echo "[deploy] target is already active: $TARGET_SHA"
+  probe_health "http://127.0.0.1:$LIVE_PORT"
+  probe_data "http://127.0.0.1:$LIVE_PORT"
+  exit 0
+fi
 
-git -C "$LIVE_DIR" worktree add --detach "$RELEASE_DIR" "$TARGET_SHA"
-WORKTREE_CREATED=1
+mkdir -p "$RELEASE_DIR"
+RELEASE_CREATED=1
+
+echo "[deploy] current=$CURRENT_SHA target=$TARGET_SHA"
+echo "[deploy] exporting isolated release: $RELEASE_DIR"
+git -C "$SOURCE_DIR" archive "$TARGET_SHA" | tar -x -C "$RELEASE_DIR"
 
 for relative_env in \
   .env \
@@ -244,23 +283,27 @@ wait "$CANARY_PID" 2>/dev/null || true
 CANARY_PID=""
 
 echo "[deploy] canary passed; creating rollback backup"
-mkdir -p "$BACKUP_DIR"
-printf '%s\n' "$CURRENT_SHA" >"$BACKUP_DIR/previous-sha.txt"
+mkdir -p "$BACKUP_DIR/source"
+sync_source_tree "$LIVE_DIR" "$BACKUP_DIR/source"
+printf '%s\n' "$CURRENT_SHA" > "$BACKUP_DIR/previous-sha.txt"
 [[ -d "$LIVE_DIR/api-server/dist" ]] && cp -a "$LIVE_DIR/api-server/dist" "$BACKUP_DIR/api-server-dist"
 [[ -d "$LIVE_DIR/stock-analyzer/dist" ]] && cp -a "$LIVE_DIR/stock-analyzer/dist" "$BACKUP_DIR/stock-analyzer-dist"
 
 set +e
 (
   set -Eeuo pipefail
-  git -C "$LIVE_DIR" reset --hard "$TARGET_SHA"
 
-  cd "$LIVE_DIR"
-  pnpm install --frozen-lockfile
+  sync_source_tree "$RELEASE_DIR" "$LIVE_DIR"
+  (
+    cd "$LIVE_DIR"
+    pnpm install --frozen-lockfile
+  )
 
   rm -rf "$LIVE_DIR/api-server/dist" "$LIVE_DIR/stock-analyzer/dist"
   cp -a "$RELEASE_DIR/api-server/dist" "$LIVE_DIR/api-server/dist"
   mkdir -p "$LIVE_DIR/stock-analyzer"
   cp -a "$RELEASE_DIR/stock-analyzer/dist" "$LIVE_DIR/stock-analyzer/dist"
+  printf '%s\n' "$TARGET_SHA" > "$DEPLOY_STATE_DIR/current-sha"
 
   pm2 restart "$PM2_NAME"
   pm2 save
@@ -283,7 +326,6 @@ fi
 
 echo "[deploy] production deployment succeeded: $TARGET_SHA"
 
-# Keep only the three newest rollback backups.
 mapfile -t OLD_BACKUPS < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | awk 'NR>3 {print $2}')
 for old_backup in "${OLD_BACKUPS[@]:-}"; do
   [[ -n "$old_backup" ]] && rm -rf -- "$old_backup"
