@@ -1,6 +1,12 @@
 import { Router, type Request, type Response } from 'express';
 import { requireCommandHubToken } from '../middleware/command-hub-auth';
 import {
+  createCheckJob,
+  getCheckJob,
+  getCommandHubRunnerConfig,
+  listCheckJobs,
+} from '../services/command-hub-job.service';
+import {
   getCommandHubConfig,
   getDiskStatus,
   getGitStatus,
@@ -46,7 +52,7 @@ function sendUnexpectedError(
 
   res.status(500).json({
     ok: false,
-    error: 'COMMAND_HUB_READ_FAILED',
+    error: 'COMMAND_HUB_OPERATION_FAILED',
     action,
     message,
   });
@@ -56,6 +62,7 @@ router.use(requireCommandHubToken);
 
 router.get('/health', async (req, res) => {
   const config = getCommandHubConfig();
+  const runner = getCommandHubRunnerConfig();
 
   await audit(req, 'health', true);
 
@@ -66,6 +73,7 @@ router.get('/health', async (req, res) => {
     writeActionsEnabled: config.writeActionsEnabled,
     projectRoot: config.projectRoot,
     pm2AppName: config.pm2AppName,
+    runner,
     checkedAt: new Date().toISOString(),
   });
 });
@@ -175,6 +183,88 @@ router.get('/snapshot', async (req, res) => {
   } catch (error) {
     sendUnexpectedError(req, res, 'snapshot', error);
   }
+});
+
+router.get('/checks', async (req, res) => {
+  const jobs = listCheckJobs().map((job) => ({
+    id: job.id,
+    action: job.action,
+    status: job.status,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt,
+    durationMs: job.durationMs,
+    exitCode: job.exitCode,
+  }));
+
+  await audit(req, 'checks.list', true, { count: jobs.length });
+
+  res.json({
+    ok: true,
+    runner: getCommandHubRunnerConfig(),
+    jobs,
+  });
+});
+
+router.post('/checks', async (req, res) => {
+  try {
+    const job = createCheckJob(req.body?.action);
+
+    await audit(req, 'checks.create', true, {
+      jobId: job.id,
+      action: job.action,
+    });
+
+    res.status(202).json({
+      ok: true,
+      message: 'Fixed validation job queued.',
+      job,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    const status =
+      message === 'COMMAND_HUB_RUNNER_DISABLED'
+        ? 503
+        : message === 'COMMAND_HUB_INVALID_CHECK_ACTION'
+          ? 400
+          : 500;
+
+    await audit(req, 'checks.create', false, { message });
+
+    res.status(status).json({
+      ok: false,
+      error: message,
+      allowedActions: getCommandHubRunnerConfig().actions,
+    });
+  }
+});
+
+router.get('/checks/:jobId', async (req, res) => {
+  const job = getCheckJob(req.params.jobId);
+
+  if (!job) {
+    await audit(req, 'checks.get', false, {
+      jobId: req.params.jobId,
+      reason: 'not_found',
+    });
+
+    res.status(404).json({
+      ok: false,
+      error: 'COMMAND_HUB_JOB_NOT_FOUND',
+    });
+    return;
+  }
+
+  await audit(req, 'checks.get', true, {
+    jobId: job.id,
+    action: job.action,
+    status: job.status,
+  });
+
+  res.json({
+    ok: true,
+    job,
+  });
 });
 
 export default router;
