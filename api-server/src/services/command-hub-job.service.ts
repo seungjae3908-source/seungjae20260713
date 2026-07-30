@@ -205,7 +205,6 @@ async function executeJob(jobId: string): Promise<void> {
     return;
   }
 
-  activeJobId = jobId;
   job.status = 'running';
   job.startedAt = new Date().toISOString();
 
@@ -239,6 +238,8 @@ function drainQueue(): void {
   if (!nextJobId) {
     return;
   }
+
+  activeJobId = nextJobId;
 
   setImmediate(() => {
     void executeJob(nextJobId);
