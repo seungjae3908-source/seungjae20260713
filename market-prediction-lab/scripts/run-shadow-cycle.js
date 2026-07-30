@@ -5,6 +5,7 @@ import { BASELINE_MODEL } from "../src/tiny-model.js";
 import { BitgetPublicClient } from "../src/bitget-public-client.js";
 import { collectBitgetCandles, collectBitgetFuturesContext } from "../src/bitget-candle-collector.js";
 import { collectFundingRateHistory, createTemporalDerivativesProvider } from "../src/derivatives-history.js";
+import { collectBitgetDerivedCandles, createTemporalMarketStructureProvider } from "../src/market-structure-history.js";
 import {
   createShadowPrediction,
   evaluateShadowPromotion,
@@ -46,15 +47,19 @@ function serializeError(error) {
 async function loadModelSelection(group) {
   const v1Artifact = await readJsonOptional(resolve("docs/candidate-models", `${group}.json`), null);
   if (!v1Artifact?.model?.trained) throw new Error(`v1 candidate is missing for ${group}`);
+  const v4Artifact = await readJsonOptional(resolve("docs/candidate-models-v4", `${group}-ensemble-v4.json`), null);
+  if (v4Artifact?.status === "shadow_candidate_v4" && v4Artifact?.model?.trained) {
+    return Object.freeze({ candidate: v4Artifact.model, reference: v1Artifact.model, source: "ensemble-v4-vs-v1", requiresMarketStructure: true });
+  }
   const v3Artifact = await readJsonOptional(resolve("docs/candidate-models-v3", `${group}-market-structure-v3.json`), null);
   if (v3Artifact?.status === "shadow_candidate_v3" && v3Artifact?.model?.trained) {
-    return Object.freeze({ candidate: v3Artifact.model, reference: v1Artifact.model, source: "market-structure-v3-vs-v1" });
+    return Object.freeze({ candidate: v3Artifact.model, reference: v1Artifact.model, source: "market-structure-v3-vs-v1", requiresMarketStructure: true });
   }
   const v2Artifact = await readJsonOptional(resolve("docs/candidate-models-v2", `${group}-funding-v2.json`), null);
   if (v2Artifact?.status === "shadow_candidate_v2" && v2Artifact?.model?.trained) {
-    return Object.freeze({ candidate: v2Artifact.model, reference: v1Artifact.model, source: "funding-v2-vs-v1" });
+    return Object.freeze({ candidate: v2Artifact.model, reference: v1Artifact.model, source: "funding-v2-vs-v1", requiresMarketStructure: false });
   }
-  return Object.freeze({ candidate: v1Artifact.model, reference: BASELINE_MODEL, source: "v1-vs-rule-baseline" });
+  return Object.freeze({ candidate: v1Artifact.model, reference: BASELINE_MODEL, source: "v1-vs-rule-baseline", requiresMarketStructure: false });
 }
 
 function addOpenInterestSnapshot(snapshots, symbol, context) {
@@ -81,6 +86,14 @@ function settleAvailable(groupState, candlesBySymbol) {
   return { ...groupState, records };
 }
 
+function mergeTemporalFeatures(base, structure) {
+  if (!structure) return base;
+  return Object.freeze({
+    derivativesFeatures: Object.freeze({ ...base.derivativesFeatures, ...structure.derivativesFeatures }),
+    featureAvailability: Object.freeze({ ...base.featureAvailability, ...structure.featureAvailability }),
+  });
+}
+
 async function processGroup({ client, config, previousGroupState, cycleTime }) {
   const selection = await loadModelSelection(config.group);
   let groupState = {
@@ -92,6 +105,8 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
   };
   const candlesBySymbol = {};
   const fundingBySymbol = {};
+  const markBySymbol = {};
+  const indexBySymbol = {};
   const contextBySymbol = {};
 
   for (const symbol of config.symbols) {
@@ -112,6 +127,12 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
       startTime: startTime - 12 * 60 * 60 * 1000,
       endTime,
     });
+    if (selection.requiresMarketStructure) {
+      [markBySymbol[symbol], indexBySymbol[symbol]] = await Promise.all([
+        collectBitgetDerivedCandles({ client, kind: "mark", symbol, timeframe: config.timeframe, startTime, endTime }),
+        collectBitgetDerivedCandles({ client, kind: "index", symbol, timeframe: config.timeframe, startTime, endTime }),
+      ]);
+    }
     const context = await collectBitgetFuturesContext({ client, symbol });
     contextBySymbol[symbol] = {
       openInterestRaw: context.openInterestRaw,
@@ -129,11 +150,19 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
     if (candles.length < config.lookback) throw new Error(`not enough shadow candles for ${symbol} ${config.timeframe}`);
     const history = candles.slice(-config.lookback);
     const anchor = history.at(-1);
-    const provider = createTemporalDerivativesProvider({
+    const baseProvider = createTemporalDerivativesProvider({
       fundingHistory: fundingBySymbol[symbol].records,
       openInterestSnapshots: groupState.openInterestSnapshots.filter((row) => row.symbol === symbol),
     });
-    const temporal = provider({ anchorTimestamp: anchor.timestamp });
+    const baseTemporal = baseProvider({ anchorTimestamp: anchor.timestamp });
+    const structureTemporal = selection.requiresMarketStructure
+      ? createTemporalMarketStructureProvider({
+          fundingHistory: fundingBySymbol[symbol].records,
+          markCandles: markBySymbol[symbol].candles,
+          indexCandles: indexBySymbol[symbol].candles,
+        })({ anchorTimestamp: anchor.timestamp, history })
+      : null;
+    const temporal = mergeTemporalFeatures(baseTemporal, structureTemporal);
     const commonInput = {
       market: "CRYPTO_FUTURES",
       symbol,
@@ -182,6 +211,7 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
         source: selection.source,
         candidateModelId: selection.candidate.id,
         referenceModelId: selection.reference.id,
+        requiresMarketStructure: selection.requiresMarketStructure,
       },
       contexts: contextBySymbol,
     },
