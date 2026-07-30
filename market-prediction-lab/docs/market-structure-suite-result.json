@@ -2,9 +2,9 @@
   "schemaVersion": 2,
   "status": "pass",
   "stage": "complete",
-  "verifiedAt": 1785372802766,
+  "verifiedAt": 1785373011550,
   "source": "github-actions-isolated-market-structure-suite",
-  "suiteEndTime": 1785372751078,
+  "suiteEndTime": 1785372955175,
   "datasets": [
     {
       "id": "btcusdt-futures-15m-52d",
