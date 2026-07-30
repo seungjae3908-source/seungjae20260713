@@ -16,17 +16,49 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    paths:
+      - .github/workflows/production-deploy.yml
+      - ops/deploy-production.sh
+      - ops/bootstrap-production-deploy.sh
 
 permissions:
   contents: read
 
 concurrency:
-  group: stock-app-production
+  group: stock-app-production-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'live' }}
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate deployment automation
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate shell syntax
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n ops/deploy-production.sh
+          bash -n ops/bootstrap-production-deploy.sh
+
+      - name: Verify required deployment safeguards
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -q 'flock -n' ops/deploy-production.sh
+          grep -q 'restore_backup' ops/deploy-production.sh
+          grep -q 'CANARY_PORT' ops/deploy-production.sh
+          grep -q 'probe_data' ops/deploy-production.sh
+
   deploy:
     name: Canary, deploy, verify, rollback
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
