@@ -2,34 +2,62 @@
 // Secrets). Keys are never bundled or sent to the client.
 import { ProviderError } from './errors';
 
+function readSecret(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
+}
+
+export function isFinnhubConfigured(): boolean {
+  return Boolean(readSecret('FINNHUB_API_KEY'));
+}
+
 export function getFinnhubKey(): string {
-  const key = process.env['FINNHUB_API_KEY'];
+  const key = readSecret('FINNHUB_API_KEY');
   if (!key) throw new ProviderError('NOT_CONFIGURED', 'finnhub');
   return key;
 }
 
 export function getAlphaVantageKey(): string {
-  const key = process.env['ALPHA_VANTAGE_API_KEY'];
+  const key = readSecret('ALPHA_VANTAGE_API_KEY');
   if (!key) throw new ProviderError('NOT_CONFIGURED', 'alphavantage');
   return key;
 }
 
 export function getDartKey(): string {
-  const key = process.env['DART_API_KEY'];
+  const key = readSecret('DART_API_KEY');
   if (!key) throw new ProviderError('NOT_CONFIGURED', 'dart');
   return key;
 }
 
-// SEC EDGAR requires a descriptive User-Agent with contact info (no API key).
-// SEC requires "<name> <email>" format and blocks generic/absent UAs.
-export const SEC_USER_AGENT =
-  process.env['SEC_USER_AGENT'] ?? 'stock-analyzer support@example.com';
+// SEC EDGAR requires a descriptive User-Agent with contact information.
+// Example: "Seungjae Stock App contact@example.com"
+const SEC_CONTACT_EMAIL_PATTERN =
+  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
+
+export const SEC_USER_AGENT = readSecret('SEC_USER_AGENT') ?? '';
+
+export function isSecUserAgentConfigured(): boolean {
+  return (
+    SEC_USER_AGENT.length >= 15 &&
+    SEC_CONTACT_EMAIL_PATTERN.test(SEC_USER_AGENT)
+  );
+}
+
+export function assertSecUserAgentConfigured(): void {
+  if (isSecUserAgentConfigured()) return;
+
+  throw new ProviderError(
+    'NOT_CONFIGURED',
+    'sec-edgar',
+    'SEC_USER_AGENT must include an application name and a reachable contact email',
+  );
+}
 
 export function providerStatus() {
   return {
-    finnhub: Boolean(process.env['FINNHUB_API_KEY']),
-    alphavantage: Boolean(process.env['ALPHA_VANTAGE_API_KEY']),
-    dart: Boolean(process.env['DART_API_KEY']),
-    secEdgar: true, // free, no key required
+    finnhub: isFinnhubConfigured(),
+    alphavantage: Boolean(readSecret('ALPHA_VANTAGE_API_KEY')),
+    dart: Boolean(readSecret('DART_API_KEY')),
+    secEdgar: isSecUserAgentConfigured(),
   };
 }
