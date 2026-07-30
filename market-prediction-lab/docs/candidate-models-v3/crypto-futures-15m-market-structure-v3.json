@@ -1,0 +1,527 @@
+{
+  "schemaVersion": 1,
+  "status": "research_hold",
+  "group": "crypto-futures-15m",
+  "sourceDatasets": [
+    "btcusdt-futures-15m-52d",
+    "ethusdt-futures-15m-52d"
+  ],
+  "temporalSafety": {
+    "fundingAtOrBeforeAnchorOnly": true,
+    "markAndIndexExactAnchorMatchOnly": true,
+    "historicalOpenInterestInvented": false,
+    "currentValuesAppliedToPast": false
+  },
+  "featureOrder": [
+    "return5",
+    "return20",
+    "emaGap",
+    "rsiCentered",
+    "macdHistogramPct",
+    "atrPct",
+    "volumeRatio",
+    "trendSlope",
+    "sentimentScore",
+    "benchmarkReturn",
+    "foreignNetRatio",
+    "institutionNetRatio",
+    "openInterestChange",
+    "fundingRate",
+    "longShortBias",
+    "basisRate",
+    "fundingRateChange",
+    "fundingRateZScore",
+    "markPremium",
+    "marketMarkSpread"
+  ],
+  "coverage": {
+    "btcusdt-futures-15m-52d": {
+      "funding": 1,
+      "structure": 1
+    },
+    "ethusdt-futures-15m-52d": {
+      "funding": 1,
+      "structure": 1
+    }
+  },
+  "model": {
+    "id": "tiny-softmax-crypto-futures-15m-market-structure-v3-calibrated",
+    "trained": true,
+    "modelType": "multinomial-logistic-regression",
+    "featureOrder": [
+      "return5",
+      "return20",
+      "emaGap",
+      "rsiCentered",
+      "macdHistogramPct",
+      "atrPct",
+      "volumeRatio",
+      "trendSlope",
+      "sentimentScore",
+      "benchmarkReturn",
+      "foreignNetRatio",
+      "institutionNetRatio",
+      "openInterestChange",
+      "fundingRate",
+      "longShortBias",
+      "basisRate",
+      "fundingRateChange",
+      "fundingRateZScore",
+      "markPremium",
+      "marketMarkSpread"
+    ],
+    "normalization": {
+      "mean": [
+        0.00023914918160095576,
+        0.00061123541218638,
+        0.0003499216427718039,
+        0.018910053339307044,
+        0.0000035537634408602057,
+        0.003525368530465955,
+        1.1077217215053752,
+        0.000022883518518518487,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.000025856033452807623,
+        0,
+        -0.0004752182795698923,
+        -8.422939068100334e-8,
+        0.07136235344086027,
+        -0.0004515371804062128,
+        -0.000023692670250896044
+      ],
+      "scale": [
+        0.005662180697215764,
+        0.01144063292604233,
+        0.005092971758639264,
+        0.22939564237916454,
+        0.0008998596110288454,
+        0.001676039685443869,
+        1.0723106545686147,
+        0.0006373727300036578,
+        0.000001,
+        0.000001,
+        0.000001,
+        0.000001,
+        0.000001,
+        0.00004384823876791244,
+        0.000001,
+        0.0001054042619707762,
+        0.00004821959874882993,
+        1.0676077522368355,
+        0.00008228636341168211,
+        0.000054581058614474614
+      ]
+    },
+    "temperature": 0.95,
+    "classes": {
+      "bullish": {
+        "bias": -0.010420061395620427,
+        "weights": [
+          0.09409145950277858,
+          -0.04547864317539591,
+          -0.04585231199170362,
+          -0.11488977781845507,
+          0.03644372061346934,
+          0.038013583187839026,
+          0.10128165680169422,
+          -0.10214979337860665,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0.034079621882671336,
+          0,
+          -0.013848951191189287,
+          -0.05954268889449738,
+          -0.03810049798063035,
+          -0.006231616152177522,
+          -0.018695467628547572
+        ]
+      },
+      "neutral": {
+        "bias": 0.0007488033446044108,
+        "weights": [
+          -0.12195638594556918,
+          0.02416859631339002,
+          0.0035311317769772597,
+          0.09599664747839529,
+          -0.0028413302435364583,
+          -0.05676520473790425,
+          -0.0942569603446523,
+          0.025414798814895057,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0.01323293300351468,
+          0,
+          0.027152226050936423,
+          0.03581600740940578,
+          0.03049296330348912,
+          -0.012157409031859768,
+          0.07031453862492079
+        ]
+      },
+      "bearish": {
+        "bias": 0.009671258051016022,
+        "weights": [
+          0.027864926442790518,
+          0.02131004686200588,
+          0.04232118021472619,
+          0.018893130340060005,
+          -0.03360239036993282,
+          0.01875162155006528,
+          -0.0070246964570420635,
+          0.07673499456371144,
+          0,
+          0,
+          0,
+          0,
+          0,
+          -0.04731255488618605,
+          0,
+          -0.013303274859747105,
+          0.023726681485091522,
+          0.007607534677141235,
+          0.018389025184037306,
+          -0.051619070996373265
+        ]
+      }
+    },
+    "training": {
+      "sampleCount": 1674,
+      "classCounts": {
+        "bullish": 567,
+        "neutral": 569,
+        "bearish": 538
+      },
+      "epochsRun": 800,
+      "learningRate": 0.055,
+      "l2": 0.006,
+      "weightedTrainingLoss": 1.0755387320499894
+    },
+    "calibration": {
+      "sampleCount": 354,
+      "validationLogLoss": 1.0849898256158086
+    }
+  },
+  "referenceTest": {
+    "sampleCount": 356,
+    "accuracy": 0.46348314606741575,
+    "balancedAccuracy": 0.4377781449726433,
+    "macroF1": 0.42420377564307477,
+    "logLoss": 1.0842962458875256,
+    "brier": 0.6555636937475998,
+    "expectedCalibrationError": 0.07476418932921351,
+    "perClass": {
+      "bullish": {
+        "support": 107,
+        "precision": 0.3709677419354839,
+        "recall": 0.42990654205607476,
+        "f1": 0.3982683982683983
+      },
+      "neutral": {
+        "support": 143,
+        "precision": 0.49746192893401014,
+        "recall": 0.6853146853146853,
+        "f1": 0.5764705882352941
+      },
+      "bearish": {
+        "support": 106,
+        "precision": 0.6,
+        "recall": 0.19811320754716982,
+        "f1": 0.29787234042553196
+      }
+    },
+    "confusion": {
+      "bullish": {
+        "bullish": 46,
+        "neutral": 54,
+        "bearish": 7
+      },
+      "neutral": {
+        "bullish": 38,
+        "neutral": 98,
+        "bearish": 7
+      },
+      "bearish": {
+        "bullish": 40,
+        "neutral": 45,
+        "bearish": 21
+      }
+    }
+  },
+  "candidateTest": {
+    "sampleCount": 356,
+    "accuracy": 0.44662921348314605,
+    "balancedAccuracy": 0.42698795943373624,
+    "macroF1": 0.4177645066635643,
+    "logLoss": 1.0770351183772517,
+    "brier": 0.6506647753258578,
+    "expectedCalibrationError": 0.054333270945786445,
+    "perClass": {
+      "bullish": {
+        "support": 107,
+        "precision": 0.3582089552238806,
+        "recall": 0.4485981308411215,
+        "f1": 0.3983402489626556
+      },
+      "neutral": {
+        "support": 143,
+        "precision": 0.4943820224719101,
+        "recall": 0.6153846153846154,
+        "f1": 0.5482866043613708
+      },
+      "bearish": {
+        "support": 106,
+        "precision": 0.5227272727272727,
+        "recall": 0.2169811320754717,
+        "f1": 0.30666666666666664
+      }
+    },
+    "confusion": {
+      "bullish": {
+        "bullish": 48,
+        "neutral": 51,
+        "bearish": 8
+      },
+      "neutral": {
+        "bullish": 42,
+        "neutral": 88,
+        "bearish": 13
+      },
+      "bearish": {
+        "bullish": 44,
+        "neutral": 39,
+        "bearish": 23
+      }
+    }
+  },
+  "comparison": {
+    "logLossImprovement": 0.007261127510273857,
+    "macroF1Delta": -0.006439268979510471,
+    "accuracyDelta": -0.016853932584269704,
+    "brierImprovement": 0.00489891842174206,
+    "eceImprovement": 0.020430918383427067
+  },
+  "promotion": {
+    "promoted": false,
+    "status": "research_hold",
+    "reasons": [
+      "overall_macro_f1_regressed",
+      "overall_accuracy_regressed",
+      "ethusdt-futures-15m-52d:macro_f1_regressed",
+      "ethusdt-futures-15m-52d:accuracy_regressed"
+    ]
+  },
+  "perDataset": {
+    "btcusdt-futures-15m-52d": {
+      "reference": {
+        "sampleCount": 178,
+        "accuracy": 0.46629213483146065,
+        "balancedAccuracy": 0.40420547437978865,
+        "macroF1": 0.3754806572416635,
+        "logLoss": 1.0719542012114895,
+        "brier": 0.6481076664208545,
+        "expectedCalibrationError": 0.0861261523949438,
+        "perClass": {
+          "bullish": {
+            "support": 48,
+            "precision": 0.3333333333333333,
+            "recall": 0.4166666666666667,
+            "f1": 0.3703703703703704
+          },
+          "neutral": {
+            "support": 83,
+            "precision": 0.5267857142857143,
+            "recall": 0.7108433734939759,
+            "f1": 0.6051282051282051
+          },
+          "bearish": {
+            "support": 47,
+            "precision": 0.6666666666666666,
+            "recall": 0.0851063829787234,
+            "f1": 0.1509433962264151
+          }
+        },
+        "confusion": {
+          "bullish": {
+            "bullish": 20,
+            "neutral": 28,
+            "bearish": 0
+          },
+          "neutral": {
+            "bullish": 22,
+            "neutral": 59,
+            "bearish": 2
+          },
+          "bearish": {
+            "bullish": 18,
+            "neutral": 25,
+            "bearish": 4
+          }
+        }
+      },
+      "candidate": {
+        "sampleCount": 178,
+        "accuracy": 0.47191011235955055,
+        "balancedAccuracy": 0.4142260531487653,
+        "macroF1": 0.3904177505057916,
+        "logLoss": 1.0629222029732253,
+        "brier": 0.642173630233372,
+        "expectedCalibrationError": 0.09185500039999998,
+        "perClass": {
+          "bullish": {
+            "support": 48,
+            "precision": 0.3387096774193548,
+            "recall": 0.4375,
+            "f1": 0.3818181818181818
+          },
+          "neutral": {
+            "support": 83,
+            "precision": 0.5523809523809524,
+            "recall": 0.6987951807228916,
+            "f1": 0.6170212765957448
+          },
+          "bearish": {
+            "support": 47,
+            "precision": 0.45454545454545453,
+            "recall": 0.10638297872340426,
+            "f1": 0.17241379310344826
+          }
+        },
+        "confusion": {
+          "bullish": {
+            "bullish": 21,
+            "neutral": 25,
+            "bearish": 2
+          },
+          "neutral": {
+            "bullish": 21,
+            "neutral": 58,
+            "bearish": 4
+          },
+          "bearish": {
+            "bullish": 20,
+            "neutral": 22,
+            "bearish": 5
+          }
+        }
+      },
+      "comparison": {
+        "logLossImprovement": 0.009031998238264283,
+        "macroF1Delta": 0.014937093264128065,
+        "accuracyDelta": 0.005617977528089901,
+        "brierImprovement": 0.00593403618748245,
+        "eceImprovement": -0.005728848005056186
+      }
+    },
+    "ethusdt-futures-15m-52d": {
+      "reference": {
+        "sampleCount": 178,
+        "accuracy": 0.4606741573033708,
+        "balancedAccuracy": 0.45960451977401134,
+        "macroF1": 0.4490196328295572,
+        "logLoss": 1.0966382905635628,
+        "brier": 0.6630197210743455,
+        "expectedCalibrationError": 0.07327752299943811,
+        "perClass": {
+          "bullish": {
+            "support": 59,
+            "precision": 0.40625,
+            "recall": 0.4406779661016949,
+            "f1": 0.42276422764227645
+          },
+          "neutral": {
+            "support": 60,
+            "precision": 0.4588235294117647,
+            "recall": 0.65,
+            "f1": 0.5379310344827586
+          },
+          "bearish": {
+            "support": 59,
+            "precision": 0.5862068965517241,
+            "recall": 0.288135593220339,
+            "f1": 0.38636363636363635
+          }
+        },
+        "confusion": {
+          "bullish": {
+            "bullish": 26,
+            "neutral": 26,
+            "bearish": 7
+          },
+          "neutral": {
+            "bullish": 16,
+            "neutral": 39,
+            "bearish": 5
+          },
+          "bearish": {
+            "bullish": 22,
+            "neutral": 20,
+            "bearish": 17
+          }
+        }
+      },
+      "candidate": {
+        "sampleCount": 178,
+        "accuracy": 0.42134831460674155,
+        "balancedAccuracy": 0.4209039548022599,
+        "macroF1": 0.41821530261099144,
+        "logLoss": 1.0911480337812796,
+        "brier": 0.6591559204183436,
+        "expectedCalibrationError": 0.019908087381460753,
+        "perClass": {
+          "bullish": {
+            "support": 59,
+            "precision": 0.375,
+            "recall": 0.4576271186440678,
+            "f1": 0.41221374045801523
+          },
+          "neutral": {
+            "support": 60,
+            "precision": 0.410958904109589,
+            "recall": 0.5,
+            "f1": 0.45112781954887216
+          },
+          "bearish": {
+            "support": 59,
+            "precision": 0.5454545454545454,
+            "recall": 0.3050847457627119,
+            "f1": 0.391304347826087
+          }
+        },
+        "confusion": {
+          "bullish": {
+            "bullish": 27,
+            "neutral": 26,
+            "bearish": 6
+          },
+          "neutral": {
+            "bullish": 21,
+            "neutral": 30,
+            "bearish": 9
+          },
+          "bearish": {
+            "bullish": 24,
+            "neutral": 17,
+            "bearish": 18
+          }
+        }
+      },
+      "comparison": {
+        "logLossImprovement": 0.005490256782283209,
+        "macroF1Delta": -0.030804330218565767,
+        "accuracyDelta": -0.039325842696629254,
+        "brierImprovement": 0.0038638006560018923,
+        "eceImprovement": 0.05336943561797736
+      }
+    }
+  }
+}
