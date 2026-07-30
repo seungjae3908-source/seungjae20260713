@@ -25,7 +25,7 @@ async function audit(
   action: string,
   success: boolean,
   details?: Record<string, unknown>,
-) {
+): Promise<void> {
   await writeCommandHubAuditEvent({
     action,
     success,
@@ -39,7 +39,7 @@ function sendUnexpectedError(
   res: Response,
   action: string,
   error: unknown,
-) {
+): void {
   const message = error instanceof Error ? error.message : 'Unknown error';
 
   void audit(req, action, false, { message });
@@ -76,11 +76,15 @@ router.get('/server/status', async (req, res) => {
       getDiskStatus(),
       getPm2Status(),
     ]);
+    const success = disk.exitCode === 0 && pm2.ok;
 
-    await audit(req, 'server.status', true);
+    await audit(req, 'server.status', success, {
+      diskExitCode: disk.exitCode,
+      pm2Ok: pm2.ok,
+    });
 
     res.json({
-      ok: true,
+      ok: success,
       mode: 'read-only',
       system: getSystemStatus(),
       disk,
@@ -131,8 +135,8 @@ router.get('/git/status', async (req, res) => {
     const git = await getGitStatus();
     const success =
       git.status.exitCode === 0 &&
-      git.commit.exitCode === 0 &&
-      git.branch.exitCode === 0;
+      git.branch.length > 0 &&
+      git.commit.length > 0;
 
     await audit(req, 'git.status', success, {
       branch: git.branch,
@@ -155,6 +159,8 @@ router.get('/snapshot', async (req, res) => {
     const success =
       snapshot.disk.exitCode === 0 &&
       snapshot.git.status.exitCode === 0 &&
+      snapshot.git.branch.length > 0 &&
+      snapshot.git.commit.length > 0 &&
       snapshot.pm2.ok &&
       snapshot.logs.command.exitCode === 0;
 
