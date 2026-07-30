@@ -1,58 +1,72 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "status": "pass",
-  "generatedAt": 1785371549985,
+  "generatedAt": 1785372981725,
   "groups": {
     "crypto-futures-15m": {
       "status": "pass",
-      "schemaVersion": 1,
-      "generatedAt": 1785371553682,
-      "total": 2,
+      "schemaVersion": 2,
+      "generatedAt": 1785372985244,
+      "filter": {
+        "modelId": "tiny-softmax-crypto-futures-15m-v1-calibrated",
+        "referenceModelId": "tiny-linear-baseline-v0"
+      },
+      "totalAllModelPairs": 4,
+      "total": 4,
       "settled": 0,
-      "pending": 2,
+      "pending": 4,
       "firstAnchorTimestamp": 1785370500000,
-      "lastAnchorTimestamp": 1785370500000,
+      "lastAnchorTimestamp": 1785371400000,
       "candidate": null,
       "reference": null,
       "comparison": null,
       "bySymbol": {},
       "byRegime": {},
+      "byModelPair": {},
       "promotion": {
         "approved": false,
         "status": "shadow_continue",
+        "qualifiedRegimes": [],
         "reasons": [
           "insufficient_settled_samples",
           "insufficient_elapsed_shadow_period",
+          "insufficient_regime_coverage",
           "no_settled_comparison"
         ]
       },
       "modelSelection": {
         "source": "v1-vs-rule-baseline",
         "candidateModelId": "tiny-softmax-crypto-futures-15m-v1-calibrated",
-        "referenceModelId": "tiny-linear-baseline-v0"
+        "referenceModelId": "tiny-linear-baseline-v0",
+        "requiresMarketStructure": false
       },
       "contexts": {
         "BTCUSDT": {
-          "openInterestRaw": "33339.6175000000084",
-          "openInterestTimestamp": 1785371551349,
-          "fundingRateRaw": "0.000045",
-          "markPriceRaw": "63863"
+          "openInterestRaw": "33337.1650000000088",
+          "openInterestTimestamp": 1785372983027,
+          "fundingRateRaw": "0.00005",
+          "markPriceRaw": "63597.4"
         },
         "ETHUSDT": {
-          "openInterestRaw": "758439.740000000426",
-          "openInterestTimestamp": 1785371553013,
-          "fundingRateRaw": "0.000047",
-          "markPriceRaw": "1905.72"
+          "openInterestRaw": "756694.970000000418",
+          "openInterestTimestamp": 1785372984649,
+          "fundingRateRaw": "0.000039",
+          "markPriceRaw": "1893.45"
         }
       }
     },
     "crypto-futures-1h": {
       "status": "pass",
-      "schemaVersion": 1,
-      "generatedAt": 1785371556458,
-      "total": 2,
+      "schemaVersion": 2,
+      "generatedAt": 1785372987755,
+      "filter": {
+        "modelId": "tiny-softmax-crypto-futures-1h-v1-calibrated",
+        "referenceModelId": "tiny-linear-baseline-v0"
+      },
+      "totalAllModelPairs": 4,
+      "total": 4,
       "settled": 0,
-      "pending": 2,
+      "pending": 4,
       "firstAnchorTimestamp": 1785366000000,
       "lastAnchorTimestamp": 1785366000000,
       "candidate": null,
@@ -60,32 +74,36 @@
       "comparison": null,
       "bySymbol": {},
       "byRegime": {},
+      "byModelPair": {},
       "promotion": {
         "approved": false,
         "status": "shadow_continue",
+        "qualifiedRegimes": [],
         "reasons": [
           "insufficient_settled_samples",
           "insufficient_elapsed_shadow_period",
+          "insufficient_regime_coverage",
           "no_settled_comparison"
         ]
       },
       "modelSelection": {
         "source": "v1-vs-rule-baseline",
         "candidateModelId": "tiny-softmax-crypto-futures-1h-v1-calibrated",
-        "referenceModelId": "tiny-linear-baseline-v0"
+        "referenceModelId": "tiny-linear-baseline-v0",
+        "requiresMarketStructure": false
       },
       "contexts": {
         "BTCUSDT": {
-          "openInterestRaw": "33339.6175000000084",
-          "openInterestTimestamp": 1785371554333,
-          "fundingRateRaw": "0.000045",
-          "markPriceRaw": "63863.1"
+          "openInterestRaw": "33337.1650000000088",
+          "openInterestTimestamp": 1785372985912,
+          "fundingRateRaw": "0.00005",
+          "markPriceRaw": "63597.4"
         },
         "ETHUSDT": {
-          "openInterestRaw": "758439.740000000426",
-          "openInterestTimestamp": 1785371555822,
-          "fundingRateRaw": "0.000047",
-          "markPriceRaw": "1905.58"
+          "openInterestRaw": "756694.970000000418",
+          "openInterestTimestamp": 1785372987165,
+          "fundingRateRaw": "0.000039",
+          "markPriceRaw": "1893.4"
         }
       }
     }
@@ -95,6 +113,7 @@
     "usesAccountOrOrderApi": false,
     "modifiesExistingAppApi": false,
     "backfillsHistoricalOpenInterest": false,
+    "mixesModelPairsInPromotionMetrics": false,
     "deploysModel": false
   }
 }
