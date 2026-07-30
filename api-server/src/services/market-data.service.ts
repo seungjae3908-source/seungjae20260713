@@ -1293,6 +1293,54 @@ export class MarketDataService {
     );
   }
 
+  /**
+   * 디스크에 저장된 신선한 캔들만 반환합니다.
+   *
+   * 외부 공급자, 키움 프록시, 네이버, Yahoo를 호출하지 않습니다.
+   * 특별피드 worker가 제한 시간 안에 기술 신호를 계산할 때 사용합니다.
+   */
+  static async getCachedCandles(
+    ticker: string,
+    timeframe: Timeframe =
+      '1D' as Timeframe,
+  ): Promise<Candle[]> {
+    const timeframeText = String(timeframe);
+    const disk = await readCandleDiskCache(
+      ticker,
+      timeframeText,
+    );
+
+    if (
+      disk?.fresh &&
+      disk.candles.length >= 2
+    ) {
+      return disk.candles;
+    }
+
+    const aggregateDays =
+      DAILY_AGGREGATE_SIZES[timeframeText];
+
+    if (aggregateDays) {
+      const dailyDisk =
+        await readCandleDiskCache(
+          ticker,
+          '1D',
+        );
+
+      if (
+        dailyDisk?.fresh &&
+        dailyDisk.candles.length >= 2
+      ) {
+        return aggregateCachedCandles(
+          dailyDisk.candles,
+          aggregateDays,
+        );
+      }
+    }
+
+    return [];
+  }
+
   static async getCandles(
     ticker: string,
     timeframe: Timeframe =

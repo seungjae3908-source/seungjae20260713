@@ -79,6 +79,35 @@ function summarizeSignalWorkerResult(result: unknown): UnknownRecord {
   };
 }
 
+function summarizeSignalWorkerDiagnostics(
+  value: unknown,
+): UnknownRecord {
+  const diagnostics = asRecord(value);
+  const lastCycle = asRecord(diagnostics.lastCycle);
+
+  return {
+    mapEntries: diagnostics.mapEntries ?? null,
+    setEntries: diagnostics.setEntries ?? null,
+    marketResultLengths: diagnostics.marketResultLengths ?? null,
+    lastGoodMarketCount: finiteNumber(
+      diagnostics.lastGoodMarketCount,
+    ),
+    snapshotBytes: finiteNumber(diagnostics.snapshotBytes),
+    pendingPromises: finiteNumber(diagnostics.pendingPromises),
+    timerCount: finiteNumber(diagnostics.timerCount),
+    cache: diagnostics.cache ?? null,
+    lastCycle: {
+      cycleNumber: finiteNumber(lastCycle.cycleNumber),
+      durationMs: finiteNumber(lastCycle.durationMs),
+      timeoutMs: finiteNumber(lastCycle.timeoutMs),
+      timedOut: Boolean(lastCycle.timedOut),
+      failureCode: lastCycle.failureCode ?? null,
+      providerTotals: lastCycle.providerTotals ?? null,
+      marketTotals: lastCycle.marketTotals ?? null,
+    },
+  };
+}
+
 async function main(): Promise<void> {
   // SEC requests with an invalid one-character or generic User-Agent are
   // rejected with 403. Refuse to start the scan loop until the deployment
@@ -93,7 +122,10 @@ async function main(): Promise<void> {
       const result = await SpecialFeedService.runWorkerScanOnce();
       return summarizeSignalWorkerResult(result);
     },
-    diagnostics: () => SpecialFeedService.getDiagnostics(),
+    diagnostics: () =>
+      summarizeSignalWorkerDiagnostics(
+        SpecialFeedService.getDiagnostics(),
+      ),
   });
 }
 
