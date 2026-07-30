@@ -25,7 +25,7 @@ export function buildProbabilityEnsemble({
   assertModel(referenceModel, "referenceModel");
   assertModel(alternateModel, "alternateModel");
   if (typeof id !== "string" || id.length === 0) throw new TypeError("id is required");
-  if (!(alternateWeight >= 0 && alternateWeight <= 1)) throw new RangeError("alternateWeight must be in [0, 1]");
+  if (!(alternateWeight > 0 && alternateWeight <= 1)) throw new RangeError("alternateWeight must be in (0, 1]");
   if (!(temperature >= 0.2 && temperature <= 5)) throw new RangeError("temperature must be in [0.2, 5]");
   return Object.freeze({
     id,
@@ -57,7 +57,7 @@ export function selectProbabilityEnsemble(validationRecords, {
   if (!(temperatureStep > 0 && temperatureStep <= 0.5)) throw new RangeError("temperatureStep is invalid");
 
   let best = null;
-  for (let weight = 0; weight <= 1 + 1e-9; weight += weightStep) {
+  for (let weight = weightStep; weight <= 1 + 1e-9; weight += weightStep) {
     const normalizedWeight = Math.min(1, Math.round(weight * 1e6) / 1e6);
     for (let temperature = minTemperature; temperature <= maxTemperature + 1e-9; temperature += temperatureStep) {
       const model = buildProbabilityEnsemble({
@@ -68,7 +68,7 @@ export function selectProbabilityEnsemble(validationRecords, {
         temperature,
       });
       const metrics = evaluateTinyModel(validationRecords, model);
-      const complexityPenalty = normalizedWeight > 0 && normalizedWeight < 1 ? 1e-8 : 0;
+      const complexityPenalty = normalizedWeight < 1 ? 1e-8 : 0;
       const objective = metrics.logLoss + complexityPenalty;
       if (!best || objective < best.objective - 1e-12
           || (Math.abs(objective - best.objective) <= 1e-12 && normalizedWeight < best.alternateWeight)) {
