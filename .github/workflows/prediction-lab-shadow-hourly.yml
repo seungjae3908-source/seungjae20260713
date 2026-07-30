@@ -1,0 +1,222 @@
+name: Prediction Lab Hourly Shadow Validation
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/prediction-lab-shadow-hourly.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prediction-lab-hourly-shadow-validation
+  cancel-in-progress: false
+
+env:
+  SHADOW_BRANCH: feature/prediction-lab-standalone
+  LAB_DIR: market-prediction-lab
+
+jobs:
+  shadow-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout isolated Prediction Lab branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHADOW_BRANCH }}
+          fetch-depth: 0
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Inspect current shadow decision
+        id: inspect
+        working-directory: ${{ env.LAB_DIR }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+
+          const output = (name, value) => {
+            appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          };
+
+          const summary = JSON.parse(readFileSync("docs/shadow-summary.json", "utf8"));
+          const groups = Object.entries(summary.groups ?? {});
+          const failures = groups.filter(([, group]) => group?.status === "fail");
+
+          if (summary.status === "fail" || failures.length > 0) {
+            console.error("Existing technical shadow failure detected. No files will be changed.");
+            for (const [name, group] of failures) {
+              console.error(JSON.stringify({
+                group: name,
+                stage: group?.stage ?? group?.error?.stage ?? "shadow_cycle",
+                error: group?.error ?? null,
+              }, null, 2));
+            }
+            if (failures.length === 0) {
+              console.error(JSON.stringify({
+                stage: summary.stage ?? summary.error?.stage ?? "shadow_summary",
+                error: summary.error ?? null,
+              }, null, 2));
+            }
+            output("decision", "technical_failure");
+            process.exit(0);
+          }
+
+          const ready = groups.filter(([, group]) =>
+            group?.promotion?.status === "integration_review_ready"
+          );
+
+          if (ready.length > 0) {
+            console.log("Integration review is ready. Shadow trigger will not be changed.");
+            for (const [name, group] of ready) {
+              console.log(JSON.stringify({
+                group: name,
+                modelId: group?.filter?.modelId ?? group?.modelSelection?.candidateModelId ?? null,
+                referenceModelId: group?.filter?.referenceModelId ?? group?.modelSelection?.referenceModelId ?? null,
+                total: group?.total ?? 0,
+                settled: group?.settled ?? 0,
+                pending: group?.pending ?? 0,
+                firstAnchorTimestamp: group?.firstAnchorTimestamp ?? null,
+                lastAnchorTimestamp: group?.lastAnchorTimestamp ?? null,
+                candidate: group?.candidate ?? null,
+                reference: group?.reference ?? null,
+                comparison: group?.comparison ?? null,
+                bySymbol: group?.bySymbol ?? {},
+                byRegime: group?.byRegime ?? {},
+              }, null, 2));
+            }
+            output("decision", "integration_review_ready");
+            process.exit(0);
+          }
+
+          console.log("Shadow validation is still in progress.");
+          for (const [name, group] of groups) {
+            console.log(`${name}: ${group?.promotion?.status ?? "unknown"}, settled=${group?.settled ?? 0}, pending=${group?.pending ?? 0}`);
+          }
+          output("decision", "shadow_continue");
+          NODE
+
+      - name: Validate isolated shadow modules
+        id: preflight
+        if: steps.inspect.outputs.decision == 'shadow_continue'
+        continue-on-error: true
+        working-directory: ${{ env.LAB_DIR }}
+        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js
+
+      - name: Record preflight failure
+        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome != 'success'
+        working-directory: ${{ env.LAB_DIR }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          import { writeFileSync } from "node:fs";
+          const report = {
+            schemaVersion: 2,
+            status: "fail",
+            generatedAt: Date.now(),
+            stage: "preflight_tests",
+            error: {
+              name: "ShadowPreflightError",
+              message: "isolated shadow module tests failed before trigger update",
+            },
+            safety: {
+              usesPublicMarketDataOnly: true,
+              usesAccountOrOrderApi: false,
+              modifiesExistingAppApi: false,
+              deploysModel: false,
+            },
+          };
+          writeFileSync("docs/shadow-summary.json", `${JSON.stringify(report, null, 2)}\n`);
+          NODE
+
+      - name: Update independent shadow trigger
+        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome == 'success'
+        working-directory: ${{ env.LAB_DIR }}
+        run: |
+          node <<'NODE'
+          import { writeFileSync } from "node:fs";
+          const trigger = {
+            schemaVersion: 1,
+            requestedAt: Date.now(),
+            reason: "hourly-shadow-validation",
+            branchOnly: true,
+            deploy: false,
+          };
+          writeFileSync("docs/shadow-trigger.json", `${JSON.stringify(trigger, null, 2)}\n`);
+          console.log(JSON.stringify(trigger, null, 2));
+          NODE
+
+      - name: Run one independent live shadow cycle
+        id: shadow
+        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome == 'success'
+        continue-on-error: true
+        working-directory: ${{ env.LAB_DIR }}
+        run: node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json
+
+      - name: Record cycle failure
+        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome == 'success' && steps.shadow.outcome != 'success'
+        working-directory: ${{ env.LAB_DIR }}
+        shell: bash
+        run: |
+          if [ ! -f docs/shadow-summary.json ]; then
+            cat > docs/shadow-summary.json <<'JSON'
+          {
+            "schemaVersion": 2,
+            "status": "fail",
+            "stage": "shadow_cycle",
+            "error": {
+              "name": "ShadowCycleError",
+              "message": "shadow cycle failed before writing its own report"
+            },
+            "safety": {
+              "usesPublicMarketDataOnly": true,
+              "usesAccountOrOrderApi": false,
+              "modifiesExistingAppApi": false,
+              "deploysModel": false
+            }
+          }
+          JSON
+          fi
+
+      - name: Display resulting shadow summary
+        if: steps.inspect.outputs.decision == 'shadow_continue' && always()
+        working-directory: ${{ env.LAB_DIR }}
+        run: cat docs/shadow-summary.json
+
+      - name: Commit isolated shadow files
+        if: steps.inspect.outputs.decision == 'shadow_continue' && always()
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            market-prediction-lab/docs/shadow-trigger.json \
+            market-prediction-lab/docs/shadow-state.json \
+            market-prediction-lab/docs/shadow-summary.json
+          git diff --cached --quiet && exit 0
+          git commit -m "data: run hourly isolated shadow validation"
+          git pull --rebase origin "${SHADOW_BRANCH}"
+          git push origin "HEAD:${SHADOW_BRANCH}"
+
+      - name: Stop on existing technical failure
+        if: steps.inspect.outputs.decision == 'technical_failure'
+        run: exit 1
+
+      - name: Stop when preflight failed
+        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome != 'success'
+        run: exit 1
+
+      - name: Stop when shadow cycle failed
+        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome == 'success' && steps.shadow.outcome != 'success'
+        run: exit 1
