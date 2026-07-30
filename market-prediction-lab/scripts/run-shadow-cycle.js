@@ -159,7 +159,9 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
       featureAvailability: temporal.featureAvailability,
       generatedAt: cycleTime,
     });
-    groupState = upsertShadowPrediction(groupState, record);
+    if (!groupState.records.some((existing) => existing.id === record.id)) {
+      groupState = upsertShadowPrediction(groupState, record);
+    }
   }
 
   const summary = summarizeShadowState(groupState);
