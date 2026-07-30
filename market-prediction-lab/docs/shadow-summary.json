@@ -1,22 +1,22 @@
 {
   "schemaVersion": 2,
   "status": "pass",
-  "generatedAt": 1785373119937,
+  "generatedAt": 1785376821736,
   "groups": {
     "crypto-futures-15m": {
       "status": "pass",
       "schemaVersion": 2,
-      "generatedAt": 1785373123471,
+      "generatedAt": 1785376825430,
       "filter": {
         "modelId": "tiny-softmax-crypto-futures-15m-v1-calibrated",
         "referenceModelId": "tiny-linear-baseline-v0"
       },
-      "totalAllModelPairs": 4,
-      "total": 4,
+      "totalAllModelPairs": 6,
+      "total": 6,
       "settled": 0,
-      "pending": 4,
+      "pending": 6,
       "firstAnchorTimestamp": 1785370500000,
-      "lastAnchorTimestamp": 1785371400000,
+      "lastAnchorTimestamp": 1785375900000,
       "candidate": null,
       "reference": null,
       "comparison": null,
@@ -42,33 +42,33 @@
       },
       "contexts": {
         "BTCUSDT": {
-          "openInterestRaw": "33344.8138000000088",
-          "openInterestTimestamp": 1785373121180,
-          "fundingRateRaw": "0.000051",
-          "markPriceRaw": "63634.1"
+          "openInterestRaw": "33247.8075000000094",
+          "openInterestTimestamp": 1785376823128,
+          "fundingRateRaw": "0.000087",
+          "markPriceRaw": "64273.3"
         },
         "ETHUSDT": {
-          "openInterestRaw": "756563.730000000425",
-          "openInterestTimestamp": 1785373122801,
-          "fundingRateRaw": "0.000038",
-          "markPriceRaw": "1895.54"
+          "openInterestRaw": "754314.890000000447",
+          "openInterestTimestamp": 1785376824782,
+          "fundingRateRaw": "0.000041",
+          "markPriceRaw": "1916.76"
         }
       }
     },
     "crypto-futures-1h": {
       "status": "pass",
       "schemaVersion": 2,
-      "generatedAt": 1785373126007,
+      "generatedAt": 1785376827992,
       "filter": {
         "modelId": "tiny-softmax-crypto-futures-1h-v1-calibrated",
         "referenceModelId": "tiny-linear-baseline-v0"
       },
-      "totalAllModelPairs": 4,
-      "total": 4,
+      "totalAllModelPairs": 6,
+      "total": 6,
       "settled": 0,
-      "pending": 4,
+      "pending": 6,
       "firstAnchorTimestamp": 1785366000000,
-      "lastAnchorTimestamp": 1785366000000,
+      "lastAnchorTimestamp": 1785373200000,
       "candidate": null,
       "reference": null,
       "comparison": null,
@@ -94,16 +94,16 @@
       },
       "contexts": {
         "BTCUSDT": {
-          "openInterestRaw": "33344.8138000000088",
-          "openInterestTimestamp": 1785373124112,
-          "fundingRateRaw": "0.000051",
-          "markPriceRaw": "63630.1"
+          "openInterestRaw": "33247.8075000000094",
+          "openInterestTimestamp": 1785376826100,
+          "fundingRateRaw": "0.000087",
+          "markPriceRaw": "64272.4"
         },
         "ETHUSDT": {
-          "openInterestRaw": "756563.730000000425",
-          "openInterestTimestamp": 1785373125381,
-          "fundingRateRaw": "0.000038",
-          "markPriceRaw": "1895.7"
+          "openInterestRaw": "754314.890000000447",
+          "openInterestTimestamp": 1785376827382,
+          "fundingRateRaw": "0.000041",
+          "markPriceRaw": "1916.73"
         }
       }
     }
