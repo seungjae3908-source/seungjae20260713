@@ -84,7 +84,7 @@ function settleAvailable(groupState, candlesBySymbol) {
 async function processGroup({ client, config, previousGroupState, cycleTime }) {
   const selection = await loadModelSelection(config.group);
   let groupState = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     createdAt: previousGroupState?.createdAt ?? cycleTime,
     updatedAt: cycleTime,
     openInterestSnapshots: [...(previousGroupState?.openInterestSnapshots ?? [])],
@@ -168,7 +168,10 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
     }
   }
 
-  const summary = summarizeShadowState(groupState);
+  const summary = summarizeShadowState(groupState, {
+    modelId: selection.candidate.id,
+    referenceModelId: selection.reference.id,
+  });
   const promotion = evaluateShadowPromotion(summary);
   return {
     state: { ...groupState, updatedAt: cycleTime },
@@ -188,14 +191,15 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
 const statePath = resolve(process.argv[2] ?? "docs/shadow-state.json");
 const summaryPath = resolve(process.argv[3] ?? "docs/shadow-summary.json");
 const cycleTime = Date.now();
-const previous = await readJsonOptional(statePath, { schemaVersion: 1, createdAt: cycleTime, groups: {} });
+const previous = await readJsonOptional(statePath, { schemaVersion: 2, createdAt: cycleTime, groups: {} });
 const client = new BitgetPublicClient({ minIntervalMs: 180, maxRetries: 4, timeoutMs: 12_000 });
-const nextState = { schemaVersion: 1, createdAt: previous.createdAt ?? cycleTime, updatedAt: cycleTime, groups: {} };
-const nextSummary = { schemaVersion: 1, status: "pass", generatedAt: cycleTime, groups: {}, safety: {
+const nextState = { schemaVersion: 2, createdAt: previous.createdAt ?? cycleTime, updatedAt: cycleTime, groups: {} };
+const nextSummary = { schemaVersion: 2, status: "pass", generatedAt: cycleTime, groups: {}, safety: {
   usesPublicMarketDataOnly: true,
   usesAccountOrOrderApi: false,
   modifiesExistingAppApi: false,
   backfillsHistoricalOpenInterest: false,
+  mixesModelPairsInPromotionMetrics: false,
   deploysModel: false,
 } };
 
