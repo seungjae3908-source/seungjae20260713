@@ -55,6 +55,8 @@ jobs:
           grep -q 'restore_backup' ops/deploy-production.sh
           grep -q 'CANARY_PORT' ops/deploy-production.sh
           grep -q 'probe_data' ops/deploy-production.sh
+          grep -q 'SOURCE_DIR' ops/deploy-production.sh
+          grep -q 'sync_source_tree' ops/deploy-production.sh
 
   deploy:
     name: Canary, deploy, verify, rollback
@@ -72,6 +74,7 @@ jobs:
       TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
       DATA_PROBE_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.data_probe_path || '/api/quotes?tickers=005930' }}
       PUBLIC_BASE_URL: https://lsj119.duckdns.org
+      REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
 
     steps:
       - name: Validate deployment secrets
@@ -101,8 +104,8 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          remote_env="$(printf 'TARGET_REF=%q DATA_PROBE_PATH=%q PUBLIC_BASE_URL=%q' \
-            "$TARGET_REF" "$DATA_PROBE_PATH" "$PUBLIC_BASE_URL")"
+          remote_env="$(printf 'TARGET_REF=%q DATA_PROBE_PATH=%q PUBLIC_BASE_URL=%q REPOSITORY_URL=%q' \
+            "$TARGET_REF" "$DATA_PROBE_PATH" "$PUBLIC_BASE_URL" "$REPOSITORY_URL")"
 
           ssh \
             -i ~/.ssh/id_ed25519 \
@@ -117,25 +120,26 @@ jobs:
           PM2_NAME=stock-app
           LIVE_PORT=8080
           CANARY_PORT=18081
+          SOURCE_DIR="$(mktemp -d /tmp/stock-app-source.XXXXXX)"
 
-          [[ -d "$LIVE_DIR/.git" ]] || {
-            echo "Live repository not found: $LIVE_DIR" >&2
+          cleanup_remote() {
+            rm -rf -- "$SOURCE_DIR"
+          }
+          trap cleanup_remote EXIT
+
+          git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$SOURCE_DIR"
+          git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_REF"
+          TARGET_SHA="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD^{commit})"
+          git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
+
+          DEPLOY_SCRIPT="$SOURCE_DIR/ops/deploy-production.sh"
+          [[ -f "$DEPLOY_SCRIPT" ]] || {
+            echo "Deployment script not found in target revision" >&2
             exit 1
           }
-
-          git -C "$LIVE_DIR" fetch --no-tags origin "$TARGET_REF"
-          TARGET_SHA="$(git -C "$LIVE_DIR" rev-parse FETCH_HEAD^{commit})"
-          DEPLOY_SCRIPT="$(mktemp /tmp/stock-app-deploy.XXXXXX)"
-
-          if git -C "$LIVE_DIR" cat-file -e "$TARGET_SHA:ops/deploy-production.sh" 2>/dev/null; then
-            git -C "$LIVE_DIR" show "$TARGET_SHA:ops/deploy-production.sh" > "$DEPLOY_SCRIPT"
-          else
-            git -C "$LIVE_DIR" fetch --no-tags origin main
-            git -C "$LIVE_DIR" show FETCH_HEAD:ops/deploy-production.sh > "$DEPLOY_SCRIPT"
-          fi
-
           chmod 700 "$DEPLOY_SCRIPT"
 
+          SOURCE_DIR="$SOURCE_DIR" \
           LIVE_DIR="$LIVE_DIR" \
           PM2_NAME="$PM2_NAME" \
           LIVE_PORT="$LIVE_PORT" \
@@ -143,8 +147,6 @@ jobs:
           DATA_PROBE_PATH="$DATA_PROBE_PATH" \
           PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
           "$DEPLOY_SCRIPT" "$TARGET_SHA"
-
-          rm -f "$DEPLOY_SCRIPT"
           REMOTE
 
       - name: Deployment summary
