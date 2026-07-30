@@ -13,6 +13,11 @@ on:
         required: false
         default: /api/quotes?tickers=005930
         type: string
+      force_rebuild:
+        description: Rebuild even when the selected commit is already active
+        required: false
+        default: true
+        type: boolean
   push:
     branches:
       - main
@@ -57,6 +62,8 @@ jobs:
           grep -q 'probe_data' ops/deploy-production.sh
           grep -q 'SOURCE_DIR' ops/deploy-production.sh
           grep -q 'sync_source_tree' ops/deploy-production.sh
+          grep -q 'FORCE_REBUILD' .github/workflows/production-deploy.yml
+          grep -q 'FORCE_MARKED' .github/workflows/production-deploy.yml
 
   deploy:
     name: Canary, deploy, verify, rollback
@@ -73,6 +80,7 @@ jobs:
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
       TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
       DATA_PROBE_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.data_probe_path || '/api/quotes?tickers=005930' }}
+      FORCE_REBUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.force_rebuild || false }}
       PUBLIC_BASE_URL: https://lsj119.duckdns.org
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
 
@@ -104,8 +112,8 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          remote_env="$(printf 'TARGET_REF=%q DATA_PROBE_PATH=%q PUBLIC_BASE_URL=%q REPOSITORY_URL=%q' \
-            "$TARGET_REF" "$DATA_PROBE_PATH" "$PUBLIC_BASE_URL" "$REPOSITORY_URL")"
+          remote_env="$(printf 'TARGET_REF=%q DATA_PROBE_PATH=%q FORCE_REBUILD=%q PUBLIC_BASE_URL=%q REPOSITORY_URL=%q' \
+            "$TARGET_REF" "$DATA_PROBE_PATH" "$FORCE_REBUILD" "$PUBLIC_BASE_URL" "$REPOSITORY_URL")"
 
           ssh \
             -i ~/.ssh/id_ed25519 \
@@ -121,9 +129,24 @@ jobs:
           LIVE_PORT=8080
           CANARY_PORT=18081
           SOURCE_DIR="$(mktemp -d /tmp/stock-app-source.XXXXXX)"
+          STATE_FILE="$LIVE_DIR/.deploy/current-sha"
+          SAVED_STATE=""
+          FORCE_MARKED=0
 
           cleanup_remote() {
+            local status=$?
+
+            if (( status != 0 )) && [[ "$FORCE_MARKED" == "1" ]]; then
+              mkdir -p "$(dirname "$STATE_FILE")"
+              if [[ -n "$SAVED_STATE" ]]; then
+                printf '%s\n' "$SAVED_STATE" > "$STATE_FILE"
+              else
+                rm -f "$STATE_FILE"
+              fi
+            fi
+
             rm -rf -- "$SOURCE_DIR"
+            return "$status"
           }
           trap cleanup_remote EXIT
 
@@ -131,6 +154,16 @@ jobs:
           git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_REF"
           TARGET_SHA="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD^{commit})"
           git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
+
+          if [[ "$FORCE_REBUILD" == "true" ]] && [[ -s "$STATE_FILE" ]]; then
+            ACTIVE_SHA="$(tr -d '[:space:]' < "$STATE_FILE")"
+            if [[ "$ACTIVE_SHA" == "$TARGET_SHA" ]]; then
+              SAVED_STATE="$ACTIVE_SHA"
+              printf 'force-rebuild-%s\n' "$(date -u +%Y%m%dT%H%M%SZ)" > "$STATE_FILE"
+              FORCE_MARKED=1
+              echo "[deploy] forcing rebuild for active revision: $TARGET_SHA"
+            fi
+          fi
 
           DEPLOY_SCRIPT="$SOURCE_DIR/ops/deploy-production.sh"
           [[ -f "$DEPLOY_SCRIPT" ]] || {
@@ -157,6 +190,7 @@ jobs:
             echo '## Production deployment succeeded'
             echo
             echo "- Target: \`$TARGET_REF\`"
+            echo "- Force rebuild: \`$FORCE_REBUILD\`"
             echo '- PM2 process: `stock-app`'
             echo '- Live port: `8080`'
             echo '- Canary port: `18081`'
