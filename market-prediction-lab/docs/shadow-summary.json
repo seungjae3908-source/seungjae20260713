@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "status": "pass",
-  "generatedAt": 1785371456399,
+  "generatedAt": 1785371549985,
   "groups": {
     "crypto-futures-15m": {
       "status": "pass",
       "schemaVersion": 1,
-      "generatedAt": 1785371459793,
+      "generatedAt": 1785371553682,
       "total": 2,
       "settled": 0,
       "pending": 2,
@@ -33,23 +33,23 @@
       },
       "contexts": {
         "BTCUSDT": {
-          "openInterestRaw": "33339.5725000000079",
-          "openInterestTimestamp": 1785371457548,
+          "openInterestRaw": "33339.6175000000084",
+          "openInterestTimestamp": 1785371551349,
           "fundingRateRaw": "0.000045",
-          "markPriceRaw": "63954.4"
+          "markPriceRaw": "63863"
         },
         "ETHUSDT": {
-          "openInterestRaw": "758351.660000000414",
-          "openInterestTimestamp": 1785371459162,
+          "openInterestRaw": "758439.740000000426",
+          "openInterestTimestamp": 1785371553013,
           "fundingRateRaw": "0.000047",
-          "markPriceRaw": "1909.24"
+          "markPriceRaw": "1905.72"
         }
       }
     },
     "crypto-futures-1h": {
       "status": "pass",
       "schemaVersion": 1,
-      "generatedAt": 1785371462330,
+      "generatedAt": 1785371556458,
       "total": 2,
       "settled": 0,
       "pending": 2,
@@ -76,16 +76,16 @@
       },
       "contexts": {
         "BTCUSDT": {
-          "openInterestRaw": "33339.5725000000079",
-          "openInterestTimestamp": 1785371460424,
+          "openInterestRaw": "33339.6175000000084",
+          "openInterestTimestamp": 1785371554333,
           "fundingRateRaw": "0.000045",
-          "markPriceRaw": "63954.4"
+          "markPriceRaw": "63863.1"
         },
         "ETHUSDT": {
-          "openInterestRaw": "758351.660000000414",
-          "openInterestTimestamp": 1785371461709,
+          "openInterestRaw": "758439.740000000426",
+          "openInterestTimestamp": 1785371555822,
           "fundingRateRaw": "0.000047",
-          "markPriceRaw": "1909.23"
+          "markPriceRaw": "1905.58"
         }
       }
     }
