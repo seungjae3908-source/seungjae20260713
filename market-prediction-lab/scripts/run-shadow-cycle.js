@@ -46,6 +46,10 @@ function serializeError(error) {
 async function loadModelSelection(group) {
   const v1Artifact = await readJsonOptional(resolve("docs/candidate-models", `${group}.json`), null);
   if (!v1Artifact?.model?.trained) throw new Error(`v1 candidate is missing for ${group}`);
+  const v3Artifact = await readJsonOptional(resolve("docs/candidate-models-v3", `${group}-market-structure-v3.json`), null);
+  if (v3Artifact?.status === "shadow_candidate_v3" && v3Artifact?.model?.trained) {
+    return Object.freeze({ candidate: v3Artifact.model, reference: v1Artifact.model, source: "market-structure-v3-vs-v1" });
+  }
   const v2Artifact = await readJsonOptional(resolve("docs/candidate-models-v2", `${group}-funding-v2.json`), null);
   if (v2Artifact?.status === "shadow_candidate_v2" && v2Artifact?.model?.trained) {
     return Object.freeze({ candidate: v2Artifact.model, reference: v1Artifact.model, source: "funding-v2-vs-v1" });
