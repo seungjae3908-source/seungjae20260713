@@ -32,12 +32,13 @@ function uniqueSorted(records, valueKey) {
 
 export function normalizeFundingRateRecord(raw, index = 0) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new TypeError(`funding[${index}] is invalid`);
-  const rateRaw = String(raw.fundingRate ?? "").trim();
+  const rateSource = raw.rateRaw ?? raw.fundingRate ?? raw.rate;
+  const rateRaw = String(rateSource ?? "").trim();
   if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(rateRaw)) {
     throw new TypeError(`funding[${index}].fundingRate is invalid`);
   }
   const rate = finiteNumber(rateRaw, `funding[${index}].fundingRate`);
-  const timestamp = positiveTimestamp(raw.fundingTime, `funding[${index}].fundingTime`);
+  const timestamp = positiveTimestamp(raw.timestamp ?? raw.fundingTime, `funding[${index}].fundingTime`);
   return Object.freeze({ timestamp, rate, rateRaw });
 }
 
