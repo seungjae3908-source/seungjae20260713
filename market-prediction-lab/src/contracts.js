@@ -107,8 +107,12 @@ export function validatePredictionInput(raw) {
     ? Object.freeze({
         openInterestChange: validateOptionalNumber(raw.derivativesFeatures.openInterestChange, "derivativesFeatures.openInterestChange"),
         fundingRate: validateOptionalNumber(raw.derivativesFeatures.fundingRate, "derivativesFeatures.fundingRate"),
+        fundingRateChange: validateOptionalNumber(raw.derivativesFeatures.fundingRateChange, "derivativesFeatures.fundingRateChange"),
+        fundingRateZScore: validateOptionalNumber(raw.derivativesFeatures.fundingRateZScore, "derivativesFeatures.fundingRateZScore"),
         longShortRatio: validateOptionalNumber(raw.derivativesFeatures.longShortRatio, "derivativesFeatures.longShortRatio"),
         basisRate: validateOptionalNumber(raw.derivativesFeatures.basisRate, "derivativesFeatures.basisRate"),
+        markPremium: validateOptionalNumber(raw.derivativesFeatures.markPremium, "derivativesFeatures.markPremium"),
+        marketMarkSpread: validateOptionalNumber(raw.derivativesFeatures.marketMarkSpread, "derivativesFeatures.marketMarkSpread"),
       })
     : Object.freeze({});
 
