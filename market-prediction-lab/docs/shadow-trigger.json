@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "requestedAt": 1785372000000,
-  "reason": "initial-shadow-bootstrap",
+  "requestedAt": 1785372300000,
+  "reason": "idempotence-and-oi-snapshot-check",
   "branchOnly": true,
   "deploy": false
 }
