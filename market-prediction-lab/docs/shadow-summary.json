@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "status": "pass",
+  "generatedAt": 1785371456399,
+  "groups": {
+    "crypto-futures-15m": {
+      "status": "pass",
+      "schemaVersion": 1,
+      "generatedAt": 1785371459793,
+      "total": 2,
+      "settled": 0,
+      "pending": 2,
+      "firstAnchorTimestamp": 1785370500000,
+      "lastAnchorTimestamp": 1785370500000,
+      "candidate": null,
+      "reference": null,
+      "comparison": null,
+      "bySymbol": {},
+      "byRegime": {},
+      "promotion": {
+        "approved": false,
+        "status": "shadow_continue",
+        "reasons": [
+          "insufficient_settled_samples",
+          "insufficient_elapsed_shadow_period",
+          "no_settled_comparison"
+        ]
+      },
+      "modelSelection": {
+        "source": "v1-vs-rule-baseline",
+        "candidateModelId": "tiny-softmax-crypto-futures-15m-v1-calibrated",
+        "referenceModelId": "tiny-linear-baseline-v0"
+      },
+      "contexts": {
+        "BTCUSDT": {
+          "openInterestRaw": "33339.5725000000079",
+          "openInterestTimestamp": 1785371457548,
+          "fundingRateRaw": "0.000045",
+          "markPriceRaw": "63954.4"
+        },
+        "ETHUSDT": {
+          "openInterestRaw": "758351.660000000414",
+          "openInterestTimestamp": 1785371459162,
+          "fundingRateRaw": "0.000047",
+          "markPriceRaw": "1909.24"
+        }
+      }
+    },
+    "crypto-futures-1h": {
+      "status": "pass",
+      "schemaVersion": 1,
+      "generatedAt": 1785371462330,
+      "total": 2,
+      "settled": 0,
+      "pending": 2,
+      "firstAnchorTimestamp": 1785366000000,
+      "lastAnchorTimestamp": 1785366000000,
+      "candidate": null,
+      "reference": null,
+      "comparison": null,
+      "bySymbol": {},
+      "byRegime": {},
+      "promotion": {
+        "approved": false,
+        "status": "shadow_continue",
+        "reasons": [
+          "insufficient_settled_samples",
+          "insufficient_elapsed_shadow_period",
+          "no_settled_comparison"
+        ]
+      },
+      "modelSelection": {
+        "source": "v1-vs-rule-baseline",
+        "candidateModelId": "tiny-softmax-crypto-futures-1h-v1-calibrated",
+        "referenceModelId": "tiny-linear-baseline-v0"
+      },
+      "contexts": {
+        "BTCUSDT": {
+          "openInterestRaw": "33339.5725000000079",
+          "openInterestTimestamp": 1785371460424,
+          "fundingRateRaw": "0.000045",
+          "markPriceRaw": "63954.4"
+        },
+        "ETHUSDT": {
+          "openInterestRaw": "758351.660000000414",
+          "openInterestTimestamp": 1785371461709,
+          "fundingRateRaw": "0.000047",
+          "markPriceRaw": "1909.23"
+        }
+      }
+    }
+  },
+  "safety": {
+    "usesPublicMarketDataOnly": true,
+    "usesAccountOrOrderApi": false,
+    "modifiesExistingAppApi": false,
+    "backfillsHistoricalOpenInterest": false,
+    "deploysModel": false
+  }
+}
