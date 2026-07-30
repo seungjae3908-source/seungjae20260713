@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "requestedAt": 1785373200000,
-  "reason": "final-active-model-pair-and-regime-gate-check",
+  "requestedAt": 1785373093753,
+  "reason": "hourly-shadow-validation",
   "branchOnly": true,
   "deploy": false
 }
