@@ -41,6 +41,10 @@ function classifyRegime(features = {}) {
   return Object.freeze({ trend, volatility, key: `${trend}:${volatility}` });
 }
 
+function modelPairKey(record) {
+  return `${record.modelId}::${record.referenceModelId}`;
+}
+
 export function createShadowPrediction({
   modelGroup,
   modelId,
@@ -68,14 +72,15 @@ export function createShadowPrediction({
   finite(atrPct, "atrPct");
   const candidate = normalizeProbabilities(candidateProbabilities, "candidateProbabilities");
   const reference = normalizeProbabilities(referenceProbabilities, "referenceProbabilities");
-  const id = createHash("sha256").update([modelGroup, modelId, symbol, timeframe, anchorTimestamp, horizon].join("|")).digest("hex");
+  const id = createHash("sha256").update([modelGroup, modelId, referenceModelId, symbol, timeframe, anchorTimestamp, horizon].join("|")).digest("hex");
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     id,
     status: "pending",
     modelGroup,
     modelId,
     referenceModelId,
+    modelPair: `${modelId}::${referenceModelId}`,
     market,
     symbol,
     timeframe,
@@ -134,7 +139,7 @@ export function upsertShadowPrediction(state, prediction, { maxRecords = 10000 }
   records.push(prediction);
   records.sort((left, right) => left.anchorTimestamp - right.anchorTimestamp || left.id.localeCompare(right.id));
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     createdAt: state.createdAt ?? Date.now(),
     updatedAt: Date.now(),
     openInterestSnapshots: Object.freeze([...(state.openInterestSnapshots ?? [])]),
@@ -199,15 +204,28 @@ function groupMetrics(records, keySelector) {
   }]));
 }
 
-export function summarizeShadowState(state) {
-  const records = Array.isArray(state?.records) ? state.records : [];
+function comparison(candidate, reference) {
+  return candidate && reference ? Object.freeze({
+    accuracyDelta: candidate.accuracy - reference.accuracy,
+    macroF1Delta: candidate.macroF1 - reference.macroF1,
+    logLossImprovement: reference.logLoss - candidate.logLoss,
+    brierImprovement: reference.brier - candidate.brier,
+  }) : null;
+}
+
+export function summarizeShadowState(state, { modelId, referenceModelId } = {}) {
+  const allRecords = Array.isArray(state?.records) ? state.records : [];
+  const records = allRecords.filter((record) => (modelId === undefined || record.modelId === modelId)
+    && (referenceModelId === undefined || record.referenceModelId === referenceModelId));
   const settled = records.filter((record) => record.status === "settled");
   const pending = records.length - settled.length;
   const candidate = metrics(metricRows(settled, "candidate"));
   const reference = metrics(metricRows(settled, "reference"));
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: Date.now(),
+    filter: Object.freeze({ modelId: modelId ?? null, referenceModelId: referenceModelId ?? null }),
+    totalAllModelPairs: allRecords.length,
     total: records.length,
     settled: settled.length,
     pending,
@@ -215,14 +233,10 @@ export function summarizeShadowState(state) {
     lastAnchorTimestamp: records.at(-1)?.anchorTimestamp ?? null,
     candidate,
     reference,
-    comparison: candidate && reference ? Object.freeze({
-      accuracyDelta: candidate.accuracy - reference.accuracy,
-      macroF1Delta: candidate.macroF1 - reference.macroF1,
-      logLossImprovement: reference.logLoss - candidate.logLoss,
-      brierImprovement: reference.brier - candidate.brier,
-    }) : null,
+    comparison: comparison(candidate, reference),
     bySymbol: groupMetrics(settled, (record) => record.symbol),
     byRegime: groupMetrics(settled, (record) => record.regime.key),
+    byModelPair: groupMetrics(allRecords.filter((record) => record.status === "settled"), modelPairKey),
   });
 }
 
@@ -230,6 +244,8 @@ export function evaluateShadowPromotion(summary, {
   minSettled = 300,
   minPerSymbol = 100,
   minElapsedMs = 28 * 24 * 60 * 60 * 1000,
+  minRegimeSamples = 30,
+  minQualifiedRegimes = 2,
 } = {}) {
   const reasons = [];
   if (!summary || typeof summary !== "object") throw new TypeError("summary is required");
@@ -243,6 +259,13 @@ export function evaluateShadowPromotion(summary, {
       if (group.candidate.macroF1 < group.reference.macroF1 - 0.01) reasons.push(`${symbol}:macro_f1_regressed`);
     }
   }
+  const qualifiedRegimes = Object.entries(summary.byRegime ?? {})
+    .filter(([, group]) => (group.candidate?.sampleCount ?? 0) >= minRegimeSamples);
+  if (qualifiedRegimes.length < minQualifiedRegimes) reasons.push("insufficient_regime_coverage");
+  for (const [regime, group] of qualifiedRegimes) {
+    if (group.candidate.logLoss > group.reference.logLoss + 0.015) reasons.push(`${regime}:log_loss_regressed`);
+    if (group.candidate.macroF1 < group.reference.macroF1 - 0.02) reasons.push(`${regime}:macro_f1_regressed`);
+  }
   if (!summary.comparison) reasons.push("no_settled_comparison");
   else {
     if (summary.comparison.logLossImprovement < 0.01) reasons.push("log_loss_improvement_below_gate");
@@ -252,6 +275,7 @@ export function evaluateShadowPromotion(summary, {
   return Object.freeze({
     approved: reasons.length === 0,
     status: reasons.length === 0 ? "integration_review_ready" : "shadow_continue",
+    qualifiedRegimes: qualifiedRegimes.map(([regime]) => regime),
     reasons: Object.freeze(reasons),
   });
 }
