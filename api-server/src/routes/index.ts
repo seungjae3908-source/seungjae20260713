@@ -11,6 +11,7 @@ import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import backupRouter from './backup';
+import commandHubRouter from './command-hub';
 import { requireAdmin, requireMember } from '../middleware/auth';
 
 const router: IRouter = Router();
@@ -27,6 +28,13 @@ router.use('/', marketRouter);
 router.use('/', newsRouter);
 router.use('/kiwoom', kiwoomRouter);
 router.use('/', cryptoRouter);
+
+// -------------------------------------------------------------------
+// AI Command Hub routes
+// Protected by COMMAND_HUB_TOKEN inside commandHubRouter.
+// Phase 1 is strictly read-only and cannot modify files or run writes.
+// -------------------------------------------------------------------
+router.use('/command-hub', commandHubRouter);
 
 // -------------------------------------------------------------------
 // Admin routes (auth + admin role required — checked inside adminRouter)
