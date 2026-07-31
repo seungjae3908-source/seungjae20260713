@@ -11,7 +11,7 @@ PM2_APP="${PM2_APP:-stock-app}"
 BACKUPS="${BACKUPS:-/opt/stock-app-backups}"
 REAL_LOGIN_TEST="${REAL_LOGIN_TEST:-1}"
 LOGIN_PATHS="${LOGIN_PATHS:-/api/auth/login,/api/login,/auth/login}"
-SESSION_PATHS="${SESSION_PATHS:-/api/auth/session,/api/auth/me,/api/me}"
+SESSION_PATHS="${SESSION_PATHS:-/api/auth/session,/api/auth/me,/api/me,/api/user/me,/api/account/me,/api/profile}"
 RUN="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 BK="$BACKUPS/auth-repair-$RUN"
 TMP="$(mktemp -d)"
@@ -109,6 +109,14 @@ if [[ "$REAL_LOGIN_TEST" == 1 ]]; then
   if [[ -s "$TOKEN" ]]; then node -e 'const fs=require("fs"),t=fs.readFileSync(process.argv[1],"utf8").trim().replace(/["\\]/g,m=>"\\"+m);fs.writeFileSync(process.argv[2],`header = "Authorization: Bearer ${t}"\n`,{mode:0o600})' "$TOKEN" "$CFG"; else : > "$CFG"; fi
   OK=0; IFS=',' read -r -a SARR <<< "$SESSION_PATHS"
   for s in "${SARR[@]}"; do SB="$TMP/session"; SH="$(curl -sS --connect-timeout 5 --max-time 20 --config "$CFG" -b "$CJAR" -o "$SB" -w '%{http_code}' "$PUBLIC$s")" || continue; if [[ "$SH" =~ ^2 ]] && ! has "$SB" LOGIN_REQUIRED; then OK=1; log "SESSION_PATH=$s"; log "SESSION_RELOAD_HTTP=$SH"; break; fi; done
+  if ((OK==0)) && [[ -s "$TOKEN" ]]; then
+    ANON="$(pm2_json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const p of JSON.parse(s||"[]")){const e=p.pm2_env||{};for(const k of ["SUPABASE_ANON_KEY","VITE_SUPABASE_ANON_KEY"]){const v=e[k]??e.env?.[k];if(typeof v==="string"&&v.length>20){process.stdout.write(v);return}}}})')"
+    if [[ -n "$ANON" ]]; then
+      node -e 'const fs=require("fs"),a=process.argv[1].replace(/["\\]/g,m=>"\\"+m);fs.appendFileSync(process.argv[2],`header = "apikey: ${a}"\n`,{mode:0o600})' "$ANON" "$CFG"; unset ANON
+      SB="$TMP/supabase-user"; SH="$(curl -sS --connect-timeout 5 --max-time 20 --config "$CFG" -o "$SB" -w '%{http_code}' "$PUBLIC/auth/v1/user")" || true
+      if [[ "$SH" == 200 ]]; then OK=1; log 'SESSION_PATH=/auth/v1/user'; log 'SESSION_RELOAD_HTTP=200'; fi
+    fi
+  fi
   ((OK==1)) || fail 'session_reload_failed'; log 'REAL_LOGIN_AND_SESSION_RELOAD=OK'
 fi
 
