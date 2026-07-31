@@ -11,34 +11,6 @@ const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 export const isSupabaseConfigured = Boolean(url && anonKey);
 
 let client: SupabaseClient | null = null;
-const memoryStorage = new Map<string, string>();
-
-const resilientStorage = {
-  getItem(key: string): string | null {
-    try {
-      return window.localStorage.getItem(key) ?? memoryStorage.get(key) ?? null;
-    } catch {
-      return memoryStorage.get(key) ?? null;
-    }
-  },
-  setItem(key: string, value: string): void {
-    memoryStorage.set(key, value);
-    try {
-      window.localStorage.setItem(key, value);
-    } catch {
-      // Keep the session for the current page even when browser storage is
-      // temporarily unavailable (private mode, quota or WebView restrictions).
-    }
-  },
-  removeItem(key: string): void {
-    memoryStorage.delete(key);
-    try {
-      window.localStorage.removeItem(key);
-    } catch {
-      // The in-memory copy was already removed.
-    }
-  },
-};
 
 /**
  * Returns the shared Supabase client. Throws an honest error when the
@@ -48,21 +20,11 @@ export function getSupabase(): SupabaseClient {
   if (client) return client;
 
   if (!url || !anonKey) {
-    throw new Error('로그인 서비스 연결 정보가 없습니다.');
+    throw new Error(
+      'Supabase가 설정되지 않았습니다: VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY 환경변수가 필요합니다.',
+    );
   }
 
-  client = createClient(url, anonKey, {
-    auth: {
-      autoRefreshToken: true,
-      persistSession: true,
-      detectSessionInUrl: true,
-      storage: resilientStorage,
-    },
-    global: {
-      headers: {
-        'X-Client-Info': 'seungjae-stock-web',
-      },
-    },
-  });
+  client = createClient(url, anonKey);
   return client;
 }
