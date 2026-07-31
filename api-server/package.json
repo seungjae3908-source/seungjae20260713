@@ -10,6 +10,8 @@
     "build:canary": "node ./scripts/build-canary.mjs",
     "canary:local": "node ./scripts/run-local-canary.mjs",
     "canary:pm2-cutover": "node ./scripts/validate-pm2-cutover.mjs",
+    "auth:preflight": "node ./scripts/stockdeploy-preflight.mjs",
+    "stockdeploy:check": "pnpm run auth:preflight && pnpm --dir ../stock-analyzer run typecheck && pnpm run typecheck && pnpm run test && pnpm run build:canary && pnpm run canary:pm2-cutover",
     "build": "pnpm run build:frontend && pnpm run build:server",
     "start": "pnpm run build && NODE_ENV=development node --enable-source-maps ./dist/index.mjs",
     "start:signal-worker": "node --enable-source-maps ./dist/signal-worker.mjs",
