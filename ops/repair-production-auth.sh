@@ -17,7 +17,7 @@ ROUTES_SOURCE="$APP_ROOT/api-server/src/routes/index.ts"
 DIST_DIR="$APP_ROOT/api-server/dist"
 DIST_ENTRY="$DIST_DIR/index.mjs"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-BACKUP_DIR="$BACKUP_ROOT/$STAMP"
+BACKUP_DIR=""
 TMP_DIR="$(mktemp -d /tmp/stock-app-auth-repair.XXXXXX)"
 PM2_FILE="$TMP_DIR/pm2.json"
 BACKUP_READY=0
@@ -49,7 +49,7 @@ const file = process.argv[2];
 const target = process.argv[3];
 const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
 const matches = rows.filter((row) => String(row?.name ?? '') === target);
-process.stdout.write(`${matches.length} ${String(matches[0]?.pm2_env?.status ?? '')}`);
+process.stdout.write(`${matches.length} ${String(matches[0]?.pm2_env?.status ?? '')}\n`);
 NODE
   )
   [[ "$count" == "1" ]] || fail "pm2_process_count_${count}_for_${PM2_NAME}"
@@ -183,6 +183,7 @@ restore_previous_dist() {
 
     printf '[auth-repair] previous dist restored; only %s restarted\n' "$PM2_NAME" >&2
   else
+    [[ -n "$BACKUP_DIR" ]] && rm -rf -- "$BACKUP_DIR"
     printf '[auth-repair] rollback backup was not ready; no files changed\n' >&2
   fi
 
@@ -214,6 +215,7 @@ flock -n 9 || fail "another_auth_repair_is_running"
 assert_exact_app_process
 assert_workers_disabled
 
+BACKUP_DIR="$(mktemp -d "$BACKUP_ROOT/${STAMP}.XXXXXX")"
 mkdir -p "$BACKUP_DIR/source/api-server/src/routes"
 cp -a "$DIST_DIR" "$BACKUP_DIR/api-server-dist"
 cp -a "$AUTH_SOURCE" "$BACKUP_DIR/source/api-server/src/routes/auth.ts"
