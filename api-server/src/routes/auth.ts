@@ -28,6 +28,9 @@ function isInvalidCredentials(message: string): boolean {
 }
 
 router.post('/login', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+
   const identifier = typeof req.body?.identifier === 'string'
     ? req.body.identifier.trim()
     : '';
