@@ -10,6 +10,7 @@ import { getDartKey } from '../lib/config';
 import { ProviderError } from '../lib/errors';
 import { fetchJson, fetchBuffer } from '../lib/http';
 import { cached, TTL } from '../lib/cache';
+import { reportProviderFallback } from '../lib/provider-context';
 import type { FinancialRow } from '../sample/types';
 import type { FinancialsRaw } from './sec-edgar';
 
@@ -109,6 +110,7 @@ async function getCorpMap(): Promise<Map<string, string>> {
       // disk copy — even stale — use it so disclosures stay live. corp_code
       // rarely changes, so a stale mapping is safe.
       if (disk) {
+        reportProviderFallback('DART_CORP_MAP_STALE_DISK');
         corpMapMem = { map: disk.map, expires: now + 60 * 60 * 1000 };
         return disk.map;
       }

@@ -10,7 +10,10 @@ import {
 	type KiwoomUsExchange,
 } from "../providers/kiwoom";
 import { FilingService } from "../services/filing.service";
-import { SpecialFeedService } from "../services/special-feed.service";
+import {
+	SpecialFeedService,
+	type SpecialFeedMarket,
+} from "../services/special-feed.service";
 import { SignalService } from "../services/signal.service";
 import { computeIndicators } from "../sample/indicators";
 import { computeScores } from "../sample/scores";
@@ -155,7 +158,7 @@ function normalizeTicker(value: unknown) {
 router.get("/special-feed", async (req, res) => {
 	const asset = String(req.query.asset ?? "stock").toLowerCase() === "coin" ? "coin" : "stock";
 	const rawMarket = String(req.query.market ?? (asset === "coin" ? "spot" : "KR"));
-	const market =
+	const market: SpecialFeedMarket =
 		asset === "coin"
 			? rawMarket.toLowerCase() === "futures"
 				? "futures"
@@ -168,7 +171,7 @@ router.get("/special-feed", async (req, res) => {
 	res.setHeader("Cache-Control", "no-store, max-age=0");
 
 	try {
-		const result = await SpecialFeedService.getFeed(asset, market, limit);
+		const result = await SpecialFeedService.getFeed(market, limit);
 		res.json(result);
 	} catch (error) {
 		console.error("special feed route error:", error);
@@ -2238,7 +2241,7 @@ function groupInvestorRows(
 		.map(({ periodKey: _periodKey, ...row }) => row);
 }
 
-function groupShortRows(rows: any[], period: string) {
+function groupShortRows(rows: any[], period: MarketFlowPeriod) {
 	if (period === "daily") return rows.slice(0, 30);
 	const grouped = new Map<string, any>();
 	for (const row of rows) {
@@ -2446,7 +2449,7 @@ router.get("/:ticker/market-flow", async (req, res) => {
 
 router.get("/:ticker/short-selling", async (req, res) => {
 	const ticker = normalizeTicker(req.params.ticker);
-	const period = String(req.query.period ?? "daily");
+	const period = normalizeMarketFlowPeriod(req.query.period);
 	if (!/^\d{6}$/.test(ticker)) {
 		return res.json({
 			ticker,

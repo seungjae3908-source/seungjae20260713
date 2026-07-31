@@ -447,9 +447,13 @@ function normalizeRows(rows: AnyObj[], market: Market): StockRow[] {
   }));
 }
 
-async function fetchJson(url: string): Promise<AnyObj> {
+async function fetchJson(
+  url: string,
+  init: RequestInit = {},
+): Promise<AnyObj> {
   const response = await authorizedFetch(url, {
     cache: "no-store",
+    ...init,
   });
 
   if (!response.ok) {
@@ -811,8 +815,12 @@ async function fetchMoverRows(
 async function fetchSearchRows(
   query: string,
   market: Market,
+  signal?: AbortSignal,
 ): Promise<StockRow[]> {
-  const data = await fetchJson(`/api/search?q=${encodeURIComponent(query)}`);
+  const data = await fetchJson(
+    `/api/search?q=${encodeURIComponent(query)}`,
+    { signal },
+  );
 
   const rows = firstArray(data, ["results", "items", "rows", "data"]);
 
@@ -1009,6 +1017,15 @@ export default function SearchPage() {
   });
 
   const trimmedQuery = query.trim();
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setDebouncedQuery(trimmedQuery),
+      250,
+    );
+    return () => window.clearTimeout(timer);
+  }, [trimmedQuery]);
 
   const rankingQuery = useQuery<StockRow[]>({
     queryKey: ["stock-list-page-v5", market, rank],
@@ -1027,17 +1044,22 @@ export default function SearchPage() {
   });
 
   const searchQuery = useQuery<StockRow[]>({
-    queryKey: ["stock-search-page-v2", market, trimmedQuery],
+    queryKey: ["stock-search-page-v3", market, debouncedQuery],
 
-    queryFn: () => fetchSearchRows(trimmedQuery, market),
+    queryFn: ({ signal }) =>
+      fetchSearchRows(debouncedQuery, market, signal),
 
-    enabled: asset === "stock" && trimmedQuery.length > 0,
+    enabled: asset === "stock" && debouncedQuery.length > 0,
 
     staleTime: 30_000,
 
     gcTime: 5 * 60_000,
 
-    refetchOnWindowFocus: true,
+    retry: 1,
+
+    refetchOnWindowFocus: false,
+
+    placeholderData: (previous) => previous,
   });
 
   const rows = useMemo(
@@ -1046,7 +1068,7 @@ export default function SearchPage() {
   );
 
   const isLoading = trimmedQuery
-    ? searchQuery.isLoading
+    ? searchQuery.isLoading || trimmedQuery !== debouncedQuery
     : rankingQuery.isLoading;
 
   const isError = trimmedQuery ? searchQuery.isError : rankingQuery.isError;

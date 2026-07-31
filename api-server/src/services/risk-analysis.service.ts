@@ -18,6 +18,7 @@ import {
   type EventType,
   type RiskEventKind,
 } from '../lib/filing-classify';
+import { reportProviderFallback } from '../lib/provider-context';
 import type {
   RiskAnalysis,
   RiskEvent,
@@ -324,6 +325,7 @@ export const RiskAnalysisService = {
         feedOk = true;
       }
     } catch (err) {
+      reportProviderFallback('FILING_FEED_EMPTY_FALLBACK');
       console.error('risk filing feed unavailable:', err);
     }
 

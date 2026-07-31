@@ -140,6 +140,9 @@ importers:
       thread-stream:
         specifier: 3.1.0
         version: 3.1.0
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
 
   mockup-sandbox:
     devDependencies:

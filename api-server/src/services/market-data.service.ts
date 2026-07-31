@@ -19,8 +19,15 @@ import * as naver from '../providers/naver';
 import * as finnhub from '../providers/finnhub';
 import { getKrUniverse } from '../providers/krx';
 import { providerStatus } from '../lib/config';
+import {
+  LastGoodCache,
+  OperationTimeoutError,
+  SingleFlight,
+  withTimeout,
+} from '../lib/async-control';
 import { getKiwoomChartCandles } from '../kiwoom-chart';
 import { cached, TTL } from '../lib/cache';
+import { reportProviderFallback } from '../lib/provider-context';
 import type {
   Candle,
   CompanyProfile,
@@ -91,12 +98,27 @@ type LooseQuote = Partial<Quote> & {
 };
 
 interface CandleDiskCache {
+  version: 'v3';
   savedAt: number;
   ticker: string;
   timeframe: string;
   candles: Candle[];
   provider?: string;
 }
+
+export interface MarketSearchResult {
+  results: SearchResult[];
+  partial: boolean;
+  warnings: string[];
+}
+
+const CANDLE_CACHE_VERSION = 'v3' as const;
+const DAILY_AGGREGATE_SIZES: Record<string, number> = {
+  '3D': 3,
+  '5D': 5,
+  '10D': 10,
+  '20D': 20,
+};
 
 function candleCacheDirectory(): string {
   const configured = process.env.KIWOOM_CHART_CACHE_DIR?.trim();
@@ -112,7 +134,10 @@ function candleCacheDirectory(): string {
 function candleCachePath(ticker: string, timeframe: string): string {
   const safeTicker = cleanTicker(ticker).replace(/[^0-9A-Z_-]/g, '');
   const safeTimeframe = String(timeframe).replace(/[^0-9A-Z]/gi, '');
-  return path.join(candleCacheDirectory(), `${safeTicker}-${safeTimeframe}.json`);
+  return path.join(
+    candleCacheDirectory(),
+    `${CANDLE_CACHE_VERSION}-${safeTicker}-${safeTimeframe}.json`,
+  );
 }
 
 function candleCacheTtl(timeframe: string): number {
@@ -128,6 +153,7 @@ async function readCandleDiskCache(
   try {
     const raw = await readFile(candleCachePath(ticker, timeframe), 'utf8');
     const parsed = JSON.parse(raw) as CandleDiskCache;
+    if (parsed.version !== CANDLE_CACHE_VERSION) return null;
     if (!Array.isArray(parsed.candles) || parsed.candles.length < 2) return null;
     return {
       candles: parsed.candles,
@@ -150,6 +176,7 @@ async function writeCandleDiskCache(
   try {
     await mkdir(candleCacheDirectory(), { recursive: true });
     const payload: CandleDiskCache = {
+      version: CANDLE_CACHE_VERSION,
       savedAt: Date.now(),
       ticker: cleanTicker(ticker),
       timeframe,
@@ -166,28 +193,99 @@ async function writeCandleDiskCache(
   }
 }
 
+function candleTimeValue(value: Candle['time']): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 1_000_000_000_000 ? value * 1000 : value;
+  }
+
+  const text = String(value ?? '').trim();
+  const compactDate = text.match(/^(\d{4})(\d{2})(\d{2})/);
+  if (compactDate) {
+    return Date.UTC(
+      Number(compactDate[1]),
+      Number(compactDate[2]) - 1,
+      Number(compactDate[3]),
+    );
+  }
+
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sortCandles(rows: Candle[]): Candle[] {
+  return [...rows].sort(
+    (a, b) => candleTimeValue(a.time) - candleTimeValue(b.time),
+  );
+}
+
+function aggregateCandleChunk(chunk: Candle[]): Candle {
+  return {
+    time: chunk[0].time,
+    open: chunk[0].open,
+    high: Math.max(...chunk.map((item) => item.high)),
+    low: Math.min(...chunk.map((item) => item.low)),
+    close: chunk[chunk.length - 1].close,
+    volume: chunk.reduce((sum, item) => sum + item.volume, 0),
+  };
+}
+
 function aggregateCachedCandles(
   rows: Candle[],
   size: number,
 ): Candle[] {
-  if (size <= 1 || rows.length <= 1) return rows;
+  const sortedRows = sortCandles(rows);
+  if (size <= 1 || sortedRows.length <= 1) return sortedRows;
 
   const result: Candle[] = [];
-  for (let index = 0; index < rows.length; index += size) {
-    const chunk = rows.slice(index, index + size);
+  for (let index = 0; index < sortedRows.length; index += size) {
+    const chunk = sortedRows.slice(index, index + size);
     if (chunk.length === 0) continue;
 
-    result.push({
-      time: chunk[0].time,
-      open: chunk[0].open,
-      high: Math.max(...chunk.map((item) => item.high)),
-      low: Math.min(...chunk.map((item) => item.low)),
-      close: chunk[chunk.length - 1].close,
-      volume: chunk.reduce((sum, item) => sum + item.volume, 0),
-    });
+    result.push(aggregateCandleChunk(chunk));
   }
 
   return result;
+}
+
+function calendarCandleKey(candle: Candle, timeframe: string): string {
+  const date = new Date(candleTimeValue(candle.time));
+
+  if (timeframe === '1Y') return String(date.getUTCFullYear());
+  if (timeframe === '1M') return date.toISOString().slice(0, 7);
+
+  const monday = new Date(date);
+  const daysFromMonday = (monday.getUTCDay() + 6) % 7;
+  monday.setUTCDate(monday.getUTCDate() - daysFromMonday);
+  return monday.toISOString().slice(0, 10);
+}
+
+function aggregateCalendarCandles(
+  rows: Candle[],
+  timeframe: '1W' | '1M' | '1Y',
+): Candle[] {
+  const groups = sortCandles(rows).reduce((map, candle) => {
+    const key = calendarCandleKey(candle, timeframe);
+    const group = map.get(key) ?? [];
+    group.push(candle);
+    map.set(key, group);
+    return map;
+  }, new Map<string, Candle[]>());
+
+  return [...groups.values()].map(aggregateCandleChunk);
+}
+
+function aggregateDailyProviderCandles(
+  rows: Candle[],
+  timeframe: string,
+): Candle[] {
+  const aggregateSize = DAILY_AGGREGATE_SIZES[timeframe];
+  if (aggregateSize) return aggregateCachedCandles(rows, aggregateSize);
+
+  if (timeframe === '1W' || timeframe === '1M' || timeframe === '1Y') {
+    return aggregateCalendarCandles(rows, timeframe);
+  }
+
+  return sortCandles(rows);
 }
 
 const EXTRA_ALIASES: Record<
@@ -764,19 +862,21 @@ async function tryQuoteProvider(
     (entry as any).ticker,
   );
 
-  const attempts: Array<() => Promise<unknown>> = [];
+  const attempts: Array<{ name: string; run: () => Promise<unknown> }> = [];
 
   if (marketValue === 'KR') {
-    attempts.push(() => naver.getQuote(entry));
-    attempts.push(() => yahoo.getQuote(entry));
+    attempts.push({ name: 'naver', run: () => naver.getQuote(entry) });
+    attempts.push({ name: 'yahoo', run: () => yahoo.getQuote(entry) });
   } else {
-    attempts.push(() => yahoo.getQuote(entry));
-    if (providers.finnhub) attempts.push(() => finnhub.getQuote(entry));
+    attempts.push({ name: 'yahoo', run: () => yahoo.getQuote(entry) });
+    if (providers.finnhub) {
+      attempts.push({ name: 'finnhub', run: () => finnhub.getQuote(entry) });
+    }
   }
 
-  for (const attempt of attempts) {
+  for (const [index, attempt] of attempts.entries()) {
     try {
-      const result = await attempt();
+      const result = await attempt.run();
       if (!result || typeof result !== 'object') continue;
       const quote = result as LooseQuote;
       const price = quotePrice(quote);
@@ -785,6 +885,11 @@ async function tryQuoteProvider(
       }
     } catch {
       // Try the next live provider.
+    }
+    if (index < attempts.length - 1) {
+      reportProviderFallback(
+        `${marketValue}_${attempt.name.toUpperCase()}_QUOTE_FALLBACK`,
+      );
     }
   }
 
@@ -810,7 +915,8 @@ async function tryCandlesProvider(
       timeframe ??
         '1D',
     );
-  const minimumUsefulCandles = ['1D', '3D', '5D', '10D', 'ALL'].includes(timeframeText) ? 30 : 2;
+  const isIntradayTimeframe = ['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H'].includes(timeframeText);
+  const minimumUsefulCandles = ['1D', '3D', '5D', '10D', '20D', 'ALL'].includes(timeframeText) ? 30 : 2;
 
   /*
    * 국내 종목은 키움증권 차트 API를 가장 먼저 사용합니다.
@@ -836,12 +942,23 @@ async function tryCandlesProvider(
         error,
       );
     }
+
+    if (isIntradayTimeframe) {
+      return { candles: [], provider: 'none' };
+    }
   }
 
   const attempts: Array<{ name: string; run: () => Promise<unknown> }> =
     marketValue === 'KR'
       ? [
-          { name: 'naver', run: () => naver.getCandles(entry) },
+          {
+            name: 'naver',
+            run: async () => {
+              if (timeframeText === 'ALL') return [];
+              const rows = await naver.getCandles(entry);
+              return aggregateDailyProviderCandles(rows, timeframeText);
+            },
+          },
           { name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) },
         ]
       : [{ name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) }];
@@ -925,154 +1042,169 @@ async function tryProfileProvider(
   } as CompanyProfile;
 }
 
-async function buildKrUniverseEntries(): Promise<
-  CatalogEntry[]
-> {
-  try {
-    const rows =
-      await getKrUniverse();
+interface KrUniverseResult {
+  entries: CatalogEntry[];
+  partial: boolean;
+  warning?: string;
+}
 
-    if (!Array.isArray(rows)) {
-      return [];
+const krUniverseFlights = new SingleFlight<string, CatalogEntry[]>();
+const krUniverseLastGood = new LastGoodCache<string, CatalogEntry[]>({
+  maximumEntries: 1,
+  defaultMaxAgeMs: 24 * 60 * 60_000,
+});
+const KR_UNIVERSE_LAST_GOOD_MS = 24 * 60 * 60_000;
+
+function krUniverseTimeoutMs(): number {
+  const configured = Number(process.env.SEARCH_UNIVERSE_TIMEOUT_MS);
+  if (!Number.isFinite(configured)) return 1_800;
+  return Math.max(500, Math.min(5_000, Math.trunc(configured)));
+}
+
+function toKrUniverseEntries(rows: unknown): CatalogEntry[] {
+  if (!Array.isArray(rows)) return [];
+
+  return rows
+    .map((row: any) => {
+      const ticker = cleanTicker(row.ticker ?? row.code ?? row.symbol);
+      const name = String(row.name ?? row.companyName ?? ticker);
+      if (!ticker) return null;
+
+      return createEntry(
+        ticker,
+        name,
+        'KR' as Market,
+        'KRW' as Currency,
+        [name],
+      );
+    })
+    .filter((entry): entry is CatalogEntry => Boolean(entry));
+}
+
+async function loadKrUniverseEntries(): Promise<CatalogEntry[]> {
+  const entries = toKrUniverseEntries(await getKrUniverse());
+  if (entries.length > 0) {
+    krUniverseLastGood.set('KR', entries);
+  }
+  return entries;
+}
+
+async function buildKrUniverseEntries(): Promise<KrUniverseResult> {
+  const pending = krUniverseFlights.run('KR', loadKrUniverseEntries);
+
+  try {
+    const entries = await withTimeout(
+      pending,
+      krUniverseTimeoutMs(),
+      'KR search universe',
+    );
+    if (entries.length > 0) {
+      return { entries, partial: false };
     }
 
-    return rows
-      .map((row: any) => {
-        const ticker =
-          cleanTicker(
-            row.ticker ??
-              row.code ??
-              row.symbol,
-          );
-
-        const name =
-          String(
-            row.name ??
-              row.companyName ??
-              ticker,
-          );
-
-        if (!ticker) {
-          return null;
-        }
-
-        return createEntry(
-          ticker,
-          name,
-          'KR' as Market,
-          'KRW' as Currency,
-          [name],
-        );
-      })
-      .filter(
-        (
-          entry,
-        ): entry is CatalogEntry =>
-          Boolean(entry),
-      );
-  } catch {
-    return [];
+    const cached = krUniverseLastGood.get('KR', KR_UNIVERSE_LAST_GOOD_MS);
+    return {
+      entries: cached?.value ?? [],
+      partial: true,
+      warning: cached
+        ? 'KR_UNIVERSE_EMPTY_LAST_GOOD'
+        : 'KR_UNIVERSE_EMPTY_CATALOG_FALLBACK',
+    };
+  } catch (error) {
+    const cached = krUniverseLastGood.get('KR', KR_UNIVERSE_LAST_GOOD_MS);
+    const reason =
+      error instanceof OperationTimeoutError
+        ? 'KR_UNIVERSE_TIMEOUT'
+        : 'KR_UNIVERSE_PROVIDER_ERROR';
+    return {
+      entries: cached?.value ?? [],
+      partial: true,
+      warning: `${reason}_${cached ? 'LAST_GOOD' : 'CATALOG_FALLBACK'}`,
+    };
   }
 }
 
+function aliasCatalogEntries(): CatalogEntry[] {
+  return Object.values(EXTRA_ALIASES).map((value) =>
+    createEntry(
+      value.ticker,
+      value.name,
+      value.market,
+      value.currency,
+      value.aliases,
+    ),
+  );
+}
+
+function searchCatalogEntries(
+  query: string,
+  limit: number,
+  extras: CatalogEntry[] = [],
+): SearchResult[] {
+  const entries = dedupeEntries([
+    ...catalogArray(),
+    ...aliasCatalogEntries(),
+    ...extras,
+  ]);
+
+  for (const entry of entries) {
+    try {
+      registerDynamicEntry(entry);
+    } catch {
+      // Dynamic registration is optional.
+    }
+  }
+
+  return entries
+    .map((entry) => ({ entry, score: searchScore(entry, query) }))
+    .filter((item) => (query ? item.score > 0 : true))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return String((a.entry as any).ticker).localeCompare(
+        String((b.entry as any).ticker),
+      );
+    })
+    .slice(0, limit)
+    .map((item) => toSearchResult(item.entry));
+}
+
+function shouldLoadKrUniverse(query: string): boolean {
+  const compact = query.replace(/\s+/g, '');
+  return /[가-힣]/u.test(compact) || /^\d{2,6}$/.test(compact);
+}
+
 export class MarketDataService {
+  static searchLocal(q: string, limit = 80): SearchResult[] {
+    const query = String(q ?? '').trim();
+    return searchCatalogEntries(query, limit);
+  }
+
+  static async searchWithMeta(
+    q: string,
+    limit = 80,
+  ): Promise<MarketSearchResult> {
+    const query = String(q ?? '').trim();
+    if (query.length < 2 || !shouldLoadKrUniverse(query)) {
+      return {
+        results: searchCatalogEntries(query, limit),
+        partial: false,
+        warnings: [],
+      };
+    }
+
+    const universe = await buildKrUniverseEntries();
+    return {
+      results: searchCatalogEntries(query, limit, universe.entries),
+      partial: universe.partial,
+      warnings: universe.warning ? [universe.warning] : [],
+    };
+  }
+
   static async search(
     q: string,
     limit = 80,
   ): Promise<SearchResult[]> {
-    const query =
-      String(
-        q ??
-          '',
-      ).trim();
-
-    const aliasEntries =
-      Object.entries(
-        EXTRA_ALIASES,
-      ).map(
-        (
-          [
-            ,
-            value,
-          ],
-        ) =>
-          createEntry(
-            value.ticker,
-            value.name,
-            value.market,
-            value.currency,
-            value.aliases,
-          ),
-      );
-
-    const entries =
-      dedupeEntries([
-        ...catalogArray(),
-
-        ...aliasEntries,
-
-        ...(query.length >= 2
-          ? await buildKrUniverseEntries()
-          : []),
-      ]);
-
-    for (const entry of entries) {
-      try {
-        registerDynamicEntry(
-          entry,
-        );
-      } catch {
-        // Dynamic registration is optional.
-      }
-    }
-
-    const scored = entries
-      .map((entry) => ({
-        entry,
-
-        score:
-          searchScore(
-            entry,
-            query,
-          ),
-      }))
-      .filter(
-        (item) =>
-          query
-            ? item.score > 0
-            : true,
-      )
-      .sort((a, b) => {
-        if (
-          b.score !==
-          a.score
-        ) {
-          return (
-            b.score -
-            a.score
-          );
-        }
-
-        return String(
-          (a.entry as any).ticker,
-        ).localeCompare(
-          String(
-            (b.entry as any).ticker,
-          ),
-        );
-      })
-      .slice(
-        0,
-        limit,
-      )
-      .map(
-        (item) =>
-          toSearchResult(
-            item.entry,
-          ),
-      );
-
-    return scored;
+    return (await this.searchWithMeta(q, limit)).results;
   }
 
   static async getQuote(
@@ -1161,6 +1293,54 @@ export class MarketDataService {
     );
   }
 
+  /**
+   * 디스크에 저장된 신선한 캔들만 반환합니다.
+   *
+   * 외부 공급자, 키움 프록시, 네이버, Yahoo를 호출하지 않습니다.
+   * 특별피드 worker가 제한 시간 안에 기술 신호를 계산할 때 사용합니다.
+   */
+  static async getCachedCandles(
+    ticker: string,
+    timeframe: Timeframe =
+      '1D' as Timeframe,
+  ): Promise<Candle[]> {
+    const timeframeText = String(timeframe);
+    const disk = await readCandleDiskCache(
+      ticker,
+      timeframeText,
+    );
+
+    if (
+      disk?.fresh &&
+      disk.candles.length >= 2
+    ) {
+      return disk.candles;
+    }
+
+    const aggregateDays =
+      DAILY_AGGREGATE_SIZES[timeframeText];
+
+    if (aggregateDays) {
+      const dailyDisk =
+        await readCandleDiskCache(
+          ticker,
+          '1D',
+        );
+
+      if (
+        dailyDisk?.fresh &&
+        dailyDisk.candles.length >= 2
+      ) {
+        return aggregateCachedCandles(
+          dailyDisk.candles,
+          aggregateDays,
+        );
+      }
+    }
+
+    return [];
+  }
+
   static async getCandles(
     ticker: string,
     timeframe: Timeframe =
@@ -1184,9 +1364,8 @@ export class MarketDataService {
         ticker,
       );
     const timeframeText = String(timeframe);
-    // v2: 캐시 값 형태가 Candle[] → {candles, provider}로 바뀌어 키를 올린다.
-    // (Supabase 영속 캐시에 남아 있을 수 있는 구버전 배열과 충돌 방지)
-    const cacheKey = `candles:v2:${cleanTicker(ticker)}:${timeframeText}`;
+    // v3: 잘못된 시간 프레임 매핑으로 저장된 메모리·디스크 캐시와 분리합니다.
+    const cacheKey = `candles:${CANDLE_CACHE_VERSION}:${cleanTicker(ticker)}:${timeframeText}`;
     const disk = await readCandleDiskCache(ticker, timeframeText);
 
     if (disk?.fresh) {
@@ -1197,11 +1376,7 @@ export class MarketDataService {
       };
     }
 
-    const aggregateDays = ({
-      '3D': 3,
-      '5D': 5,
-      '10D': 10,
-    } as Record<string, number>)[timeframeText];
+    const aggregateDays = DAILY_AGGREGATE_SIZES[timeframeText];
 
     if (!disk && aggregateDays) {
       const dailyDisk = await readCandleDiskCache(ticker, '1D');
@@ -1310,7 +1485,7 @@ export class MarketDataService {
       dedupeEntries([
         ...catalogArray(),
 
-        ...(await buildKrUniverseEntries()),
+        ...(await buildKrUniverseEntries()).entries,
       ]);
 
     const filtered =

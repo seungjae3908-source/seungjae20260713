@@ -21,6 +21,7 @@ interface RequestSpec {
   body: Record<string, unknown>;
   maxPages: number;
   aggregateSize?: number;
+  aggregateByDay?: boolean;
 }
 
 const CHART_PATH = "/api/dostk/chart";
@@ -441,56 +442,73 @@ function dedupeAndSort(
 function aggregateCandles(
   rows: KiwoomChartCandle[],
   size: number,
+  byDay = false,
 ): KiwoomChartCandle[] {
+  const sortedRows = dedupeAndSort(rows);
+
   if (
     size <= 1 ||
-    rows.length <= 1
+    sortedRows.length <= 1
   ) {
-    return rows;
+    return sortedRows;
   }
 
   const result: KiwoomChartCandle[] = [];
 
-  for (
-    let index = 0;
-    index < rows.length;
-    index += size
-  ) {
-    const chunk = rows.slice(
-      index,
-      index + size,
-    );
+  const groups = byDay
+    ? [...sortedRows.reduce((map, row) => {
+        const day = String(row.time ?? "")
+          .replace(/\D/g, "")
+          .slice(0, 8);
+        const group = map.get(day) ?? [];
+        group.push(row);
+        map.set(day, group);
+        return map;
+      }, new Map<string, KiwoomChartCandle[]>()).values()]
+    : [sortedRows];
 
-    if (chunk.length === 0) {
-      continue;
+  for (const group of groups) {
+    for (
+      let index = 0;
+      index < group.length;
+      index += size
+    ) {
+      const chunk = group.slice(
+        index,
+        index + size,
+      );
+
+      if (chunk.length === 0) {
+        continue;
+      }
+
+      result.push({
+        time: chunk[0].time,
+
+        open: chunk[0].open,
+
+        high: Math.max(
+          ...chunk.map(
+            (item) => item.high,
+          ),
+        ),
+
+        low: Math.min(
+          ...chunk.map(
+            (item) => item.low,
+          ),
+        ),
+
+        close:
+          chunk[chunk.length - 1].close,
+
+        volume: chunk.reduce(
+          (sum, item) =>
+            sum + item.volume,
+          0,
+        ),
+      });
     }
-
-    result.push({
-      time: chunk[0].time,
-
-      open: chunk[0].open,
-
-      high: Math.max(
-        ...chunk.map(
-          (item) => item.high,
-        ),
-      ),
-
-      low: Math.min(
-        ...chunk.map(
-          (item) => item.low,
-        ),
-      ),
-
-      close:
-        chunk[chunk.length - 1].close,
-
-      volume: chunk.reduce(
-        (sum, item) =>
-          sum + item.volume,
-        0,
-      ),
-    });
   }
 
   return result;
@@ -523,6 +541,7 @@ function requestSpec(
     "5m": "5",
     "15m": "15",
     "30m": "30",
+    "60m": "60",
     "1H": "60",
     "4H": "60",
   };
@@ -554,6 +573,9 @@ function requestSpec(
         tf === "4H"
           ? 4
           : 1,
+
+      aggregateByDay:
+        tf === "4H",
     };
   }
 
@@ -614,13 +636,15 @@ function requestSpec(
       ? 3
       : tf === "5D"
         ? 5
+        : tf === "20D"
+          ? 20
         : tf === "10D"
           ? 10
           : 1;
 
   /*
    * 1D와 ALL은 모두 일봉 전체를 조회합니다.
-   * 3D·5D·10D는 전체 일봉을 받은 뒤 묶습니다.
+   * 3D·5D·10D·20D는 전체 일봉을 받은 뒤 묶습니다.
    */
   return {
     apiId: "ka10081",
@@ -785,6 +809,7 @@ export async function getKiwoomChartCandles(
     aggregateCandles(
       rows,
       spec.aggregateSize ?? 1,
+      spec.aggregateByDay ?? false,
     );
 
   if (

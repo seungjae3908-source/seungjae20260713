@@ -8,6 +8,7 @@ import { ThemesService } from '../services/themes.service';
 import { SectorPopularService } from '../services/sector-popular.service';
 import { SignalService } from '../services/signal.service';
 import { RecommendationService } from '../services/recommendation.service';
+import { SearchService } from '../services/search.service';
 
 const router: IRouter = Router();
 
@@ -107,26 +108,30 @@ router.get('/config', (_req, res) => {
 
 router.get('/search', async (req, res) => {
   const q = String(req.query.q ?? '').trim();
-  try {
-    const results = await MarketDataService.search(q, q ? 100 : 500);
-    return res.json({ q, results, count: results.length, updatedAt: new Date().toISOString() });
-  } catch (error) {
-    console.error('market search error:', error);
-    return res.status(502).json({ q, results: [], count: 0, error: 'SEARCH_PROVIDER_ERROR' });
-  }
+  const result = await SearchService.searchSymbols(q, q ? 100 : 500);
+  return res.json({
+    q,
+    results: result.results,
+    count: result.results.length,
+    updatedAt: result.updatedAt,
+    partial: result.partial,
+    source: result.source,
+    warnings: result.warnings,
+  });
 });
 
 router.get('/search/quotes', async (req, res) => {
   const q = String(req.query.q ?? '').trim();
-  try {
-    const matches = await MarketDataService.search(q, 100);
-    const quotes = await MarketDataService.getQuotes(matches.map((item) => item.ticker));
-    const rows = uniqueRows(quotes);
-    return res.json({ q, results: rows, count: rows.length, updatedAt: new Date().toISOString() });
-  } catch (error) {
-    console.error('market quote search error:', error);
-    return res.status(502).json({ q, results: [], count: 0, error: 'QUOTE_SEARCH_PROVIDER_ERROR' });
-  }
+  const result = await SearchService.searchQuotes(q, 100);
+  return res.json({
+    q,
+    results: result.results,
+    count: result.results.length,
+    updatedAt: result.updatedAt,
+    partial: result.partial,
+    source: result.source,
+    warnings: result.warnings,
+  });
 });
 
 router.get('/quotes', async (req, res) => {
