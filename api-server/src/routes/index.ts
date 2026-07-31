@@ -11,7 +11,6 @@ import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import backupRouter from './backup';
-import authRouter from './auth';
 import { requireAdmin, requireMember } from '../middleware/auth';
 
 const router: IRouter = Router();
@@ -24,7 +23,6 @@ router.get('/', (_req, res) => {
 });
 
 router.use('/', healthRouter);
-router.use('/auth', authRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
 router.use('/kiwoom', kiwoomRouter);
