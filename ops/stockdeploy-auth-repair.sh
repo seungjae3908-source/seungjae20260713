@@ -25,7 +25,10 @@ count_app(){ pm2_json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("e
 wait_app(){ for _ in $(seq 1 30); do [[ "$(count_app)" == 1 ]] && return 0; sleep 1; done; return 1; }
 
 health(){
-  local label="$1" base="$2" out="$TMP/$label.health" code
+  local label base out code
+  label="$1"
+  base="$2"
+  out="$TMP/$label.health"
   code="$(curl -sS --connect-timeout 5 --max-time 15 -o "$out" -w '%{http_code}' -H 'Cache-Control: no-cache' "$base/api/health?authrepair=$RUN")" || return 1
   [[ "$code" == 200 ]] || return 1
   node -e 'const fs=require("fs");let x;try{x=JSON.parse(fs.readFileSync(process.argv[1],"utf8"))}catch{process.exit(1)};if(!(x&&(x.ok===true||x.status==="ok"||x.status==="healthy")))process.exit(1)' "$out" || return 1
