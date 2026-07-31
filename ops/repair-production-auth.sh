@@ -19,6 +19,7 @@ DIST_ENTRY="$DIST_DIR/index.mjs"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_DIR="$BACKUP_ROOT/$STAMP"
 TMP_DIR="$(mktemp -d /tmp/stock-app-auth-repair.XXXXXX)"
+PM2_FILE="$TMP_DIR/pm2.json"
 BACKUP_READY=0
 ROLLBACK_RUNNING=0
 
@@ -35,22 +36,20 @@ cleanup() {
   rm -rf -- "$TMP_DIR"
 }
 
-pm2_json() {
-  pm2 jlist
+refresh_pm2_file() {
+  pm2 jlist > "$PM2_FILE"
 }
 
 assert_exact_app_process() {
-  local json count status
-  json="$(pm2_json)" || fail "pm2_jlist_failed"
-  read -r count status < <(printf '%s' "$json" | node - "$PM2_NAME" <<'NODE'
-let source = '';
-process.stdin.on('data', (chunk) => { source += chunk; });
-process.stdin.on('end', () => {
-  const target = process.argv[2];
-  const rows = JSON.parse(source || '[]');
-  const matches = rows.filter((row) => String(row?.name ?? '') === target);
-  process.stdout.write(`${matches.length} ${String(matches[0]?.pm2_env?.status ?? '')}`);
-});
+  local count status
+  refresh_pm2_file || fail "pm2_jlist_failed"
+  read -r count status < <(node - "$PM2_FILE" "$PM2_NAME" <<'NODE'
+const fs = require('node:fs');
+const file = process.argv[2];
+const target = process.argv[3];
+const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
+const matches = rows.filter((row) => String(row?.name ?? '') === target);
+process.stdout.write(`${matches.length} ${String(matches[0]?.pm2_env?.status ?? '')}`);
 NODE
   )
   [[ "$count" == "1" ]] || fail "pm2_process_count_${count}_for_${PM2_NAME}"
@@ -58,24 +57,21 @@ NODE
 }
 
 assert_workers_disabled() {
-  local json matches
-  json="$(pm2_json)" || fail "pm2_jlist_failed"
-  matches="$(printf '%s' "$json" | node <<'NODE'
-let source = '';
-process.stdin.on('data', (chunk) => { source += chunk; });
-process.stdin.on('end', () => {
-  const rows = JSON.parse(source || '[]');
-  const dangerous = rows
-    .filter((row) => {
-      const name = String(row?.name ?? '');
-      const status = String(row?.pm2_env?.status ?? '');
-      const related =
-        /(?:signal|alert|order).*worker|worker.*(?:signal|alert|order)|auto[-_ ]?trading/i.test(name);
-      return related && status === 'online';
-    })
-    .map((row) => String(row?.name ?? ''));
-  process.stdout.write(dangerous.join(','));
-});
+  local matches
+  refresh_pm2_file || fail "pm2_jlist_failed"
+  matches="$(node - "$PM2_FILE" <<'NODE'
+const fs = require('node:fs');
+const rows = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const dangerous = rows
+  .filter((row) => {
+    const name = String(row?.name ?? '');
+    const status = String(row?.pm2_env?.status ?? '');
+    const related =
+      /(?:signal|alert|order).*worker|worker.*(?:signal|alert|order)|auto[-_ ]?trading/i.test(name);
+    return related && status === 'online';
+  })
+  .map((row) => String(row?.name ?? ''));
+process.stdout.write(dangerous.join(','));
 NODE
   )"
   [[ -z "$matches" ]] || fail "order_related_process_online:${matches}"
@@ -94,8 +90,7 @@ health_once() {
 
   node - "$output_file" <<'NODE'
 const fs = require('node:fs');
-const file = process.argv[2];
-const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (!(value && value.ok === true)) process.exit(1);
 NODE
 }
@@ -149,14 +144,8 @@ NODE
 
   node - "$response_file" "$http_code" <<'NODE'
 const fs = require('node:fs');
-const file = process.argv[2];
+const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const status = Number(process.argv[3]);
-let value = null;
-try {
-  value = JSON.parse(fs.readFileSync(file, 'utf8'));
-} catch {
-  process.exit(2);
-}
 if (value?.error === 'LOGIN_REQUIRED') process.exit(3);
 if (status !== 401 || value?.error !== 'INVALID_CREDENTIALS') process.exit(4);
 NODE
@@ -209,7 +198,7 @@ on_error() {
 trap cleanup EXIT
 trap on_error ERR
 
-for command_name in node pnpm pm2 curl flock cp rm mkdir sha256sum; do
+for command_name in node pnpm pm2 curl flock cp rm mkdir sha256sum grep; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing_command:${command_name}"
 done
 
@@ -237,12 +226,14 @@ sha256sum \
 BACKUP_READY=1
 log "backup=$BACKUP_DIR"
 
-# Intentionally server-only. Do not run frontend builds, migrations, env edits,
-# Caddy changes, package installation, pm2 save or any worker command.
-(
+# Server-only repair: no frontend build, migration, environment edit, proxy
+# change, package installation, persistent PM2-state update or worker command.
+if ! (
   cd "$APP_ROOT/api-server"
   pnpm run build:server
-)
+); then
+  fail "build_server_failed"
+fi
 
 [[ -f "$DIST_ENTRY" ]] || fail "new_api_dist_missing"
 node --check "$DIST_ENTRY"
@@ -253,7 +244,7 @@ log "build:server and route bundle checks=OK"
 
 assert_workers_disabled
 pm2 restart "$PM2_NAME" >/dev/null
-log "pm2 restarted=$PM2_NAME (pm2 save was not run)"
+log "pm2 restarted=$PM2_NAME; persistent PM2 state unchanged"
 
 wait_for_health "local" "$LOCAL_URL"
 wait_for_health "public" "$PUBLIC_URL"
