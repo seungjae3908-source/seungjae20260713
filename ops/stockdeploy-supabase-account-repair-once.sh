@@ -224,11 +224,15 @@ if (!tokenKey) stop('supabase_token_key_missing');
 
 console.log('SUPABASE_ADMIN_CONFIG=OK');
 
-const adminHeaders = {
-  apikey: serviceKey,
-  Authorization: `Bearer ${serviceKey}`,
+function elevatedHeaders(key, extra = {}) {
+  const headers = { apikey: key, ...extra };
+  if (!key.startsWith('sb_secret_')) headers.Authorization = `Bearer ${key}`;
+  return headers;
+}
+
+const adminHeaders = elevatedHeaders(serviceKey, {
   'Content-Type': 'application/json',
-};
+});
 
 const users = [];
 for (let page = 1; page <= 100; page += 1) {
@@ -250,11 +254,9 @@ try {
     `&login_name=eq.${encodeURIComponent(normalized)}&limit=2`;
   const profileResponse = await fetch(profileUrl, {
     method: 'GET',
-    headers: {
-      apikey: serviceKey,
-      Authorization: `Bearer ${serviceKey}`,
+    headers: elevatedHeaders(serviceKey, {
       Accept: 'application/json',
-    },
+    }),
   });
   if (profileResponse.ok) {
     const parsed = await profileResponse.json();
@@ -349,12 +351,10 @@ try {
     `${supabaseUrl}/rest/v1/profiles?on_conflict=id`,
     {
       method: 'POST',
-      headers: {
-        apikey: serviceKey,
-        Authorization: `Bearer ${serviceKey}`,
+      headers: elevatedHeaders(serviceKey, {
         'Content-Type': 'application/json',
         Prefer: 'resolution=merge-duplicates,return=minimal',
-      },
+      }),
       body: JSON.stringify([{
         id: targetUser.id,
         login_name: normalized,
@@ -375,7 +375,6 @@ const tokenData = await fetchJson(
     method: 'POST',
     headers: {
       apikey: tokenKey,
-      Authorization: `Bearer ${tokenKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ email: internalEmail, password }),
