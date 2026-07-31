@@ -86,7 +86,7 @@ router.post('/login', async (req, res) => {
         token_type: data.session.token_type,
       },
       user: {
-        id: data.user.id,
+        id: data.session.user.id,
       },
     });
   } catch {
