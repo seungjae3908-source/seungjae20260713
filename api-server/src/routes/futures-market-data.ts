@@ -5,6 +5,7 @@ import {
   getFuturesMarketSnapshot,
   getFuturesMarketStatus,
 } from '../services/futures-market-data.service';
+import { getFuturesContractRules } from '../services/futures-contract-rules.service';
 
 const router: IRouter = Router();
 
@@ -52,6 +53,20 @@ router.get('/crypto/futures/:symbol/snapshot', async (req, res) => {
   try {
     const data = await getFuturesMarketSnapshot(req.params.symbol);
     return res.json({ ok: true, data });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+router.get('/crypto/futures/:symbol/contract-rules', async (req, res) => {
+  try {
+    const data = await getFuturesContractRules(req.params.symbol);
+    return res.json({
+      ok: true,
+      publicDataOnly: true,
+      orderCapability: false,
+      data,
+    });
   } catch (error) {
     return sendError(res, error);
   }
