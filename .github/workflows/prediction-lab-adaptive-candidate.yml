@@ -1,0 +1,65 @@
+name: Prediction Lab Adaptive Candidate
+
+on:
+  schedule:
+    - cron: "47 * * * *"
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/prediction-lab-adaptive-candidate.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prediction-lab-adaptive-candidate
+  cancel-in-progress: false
+
+env:
+  SHADOW_BRANCH: feature/prediction-lab-standalone
+  LAB_DIR: market-prediction-lab
+
+jobs:
+  adaptive-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout isolated Prediction Lab branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHADOW_BRANCH }}
+          fetch-depth: 0
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run adaptive candidate safety tests
+        working-directory: ${{ env.LAB_DIR }}
+        run: node --test tests/adaptive-shadow-candidate.test.js tests/model-ensemble.test.js tests/shadow-ledger.test.js
+
+      - name: Build adaptive candidates from chronological live shadow data
+        working-directory: ${{ env.LAB_DIR }}
+        run: node scripts/build-adaptive-shadow-candidate.js
+
+      - name: Display adaptive candidate report
+        working-directory: ${{ env.LAB_DIR }}
+        run: cat docs/adaptive-shadow-candidate-summary.json
+
+      - name: Commit isolated adaptive candidate artifacts
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            market-prediction-lab/docs/adaptive-candidates \
+            market-prediction-lab/docs/adaptive-shadow-candidate-summary.json \
+            market-prediction-lab/docs/candidate-models-v2
+          git diff --cached --quiet && exit 0
+          git commit -m "data: evaluate adaptive live-shadow candidates"
+          git pull --rebase origin "${SHADOW_BRANCH}"
+          git push origin "HEAD:${SHADOW_BRANCH}"
