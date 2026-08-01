@@ -56,7 +56,8 @@ test('quantity step applies when stricter than quantity precision', () => {
 test('final risk quantity uses the effective contract step', () => {
   const result = calculate({ quantityStep: 0.01, quantityPrecision: 3 });
   assert.equal(result.effectiveQuantityStep, 0.01);
-  assert.equal((result.recommendedQuantity ?? 0) % 0.01, 0);
+  const quantity = result.recommendedQuantity ?? 0;
+  assert.ok(Math.abs(quantity / 0.01 - Math.round(quantity / 0.01)) < 1e-9);
 });
 
 test('minimum quantity is checked after flooring', () => {
