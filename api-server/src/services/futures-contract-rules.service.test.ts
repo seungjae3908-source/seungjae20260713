@@ -38,7 +38,7 @@ test('normalizes quantity and price precision', () => {
   assert.equal(result.pricePrecision, 1);
 });
 
-test('derives price step only from priceEndStep and pricePlace', () => {
+test('derives price step only from documented priceEndStep and pricePlace', () => {
   assert.equal(rules().priceStep, 0.1);
   assert.equal(rules({ priceEndStep: '5', pricePlace: '2' }).priceStep, 0.05);
 });
@@ -49,19 +49,16 @@ test('normalizes minimum and maximum leverage when provided', () => {
   assert.equal(result.maximumLeverage, 125);
 });
 
-test('keeps maintenance margin rate null when contracts field is absent', () => {
+test('keeps maintenance margin rate null because contracts response does not provide it', () => {
   const result = rules();
   assert.equal(result.maintenanceMarginRate, null);
   assert.ok(result.warnings.some((warning) => warning.includes('유지증거금률')));
 });
 
-test('maps maintenance margin rate only when exact field is present', () => {
-  assert.equal(rules({ minMaintainMarginRate: '0.005' }).maintenanceMarginRate, 0.005);
-});
-
-test('maps contract size only when exact field is present', () => {
-  assert.equal(rules({ contractSize: '0.001' }).contractSize, 0.001);
-  assert.equal(rules().contractSize, null);
+test('ignores undocumented maintenance and contract size lookalike fields', () => {
+  const result = rules({ minMaintainMarginRate: '0.005', contractSize: '0.001' });
+  assert.equal(result.maintenanceMarginRate, null);
+  assert.equal(result.contractSize, null);
 });
 
 test('empty numeric strings become null', () => {
@@ -96,7 +93,6 @@ test('negative rule values are rejected', () => {
     volumePlace: '-3',
     pricePlace: '-1',
     maxLever: '-10',
-    minMaintainMarginRate: '-0.01',
   });
   assert.equal(result.quantityStep, null);
   assert.equal(result.minimumQuantity, null);
@@ -104,13 +100,14 @@ test('negative rule values are rejected', () => {
   assert.equal(result.quantityPrecision, null);
   assert.equal(result.pricePrecision, null);
   assert.equal(result.maximumLeverage, null);
-  assert.equal(result.maintenanceMarginRate, null);
 });
 
-test('inactive contract is clearly insufficient', () => {
-  const result = rules({ symbolStatus: 'off' });
-  assert.equal(result.status, 'insufficient');
-  assert.ok(result.warnings.some((warning) => warning.includes('비활성')));
+test('non-normal contract statuses are clearly insufficient', () => {
+  for (const symbolStatus of ['listed', 'maintain', 'limit_open', 'restrictedAPI', 'off']) {
+    const result = rules({ symbolStatus });
+    assert.equal(result.status, 'insufficient');
+    assert.ok(result.warnings.some((warning) => warning.includes('normal')));
+  }
 });
 
 test('missing fields remain null and emit minimum rule warning', () => {
