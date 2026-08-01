@@ -1,4 +1,4 @@
-import { Router, type IRouter } from 'express';
+import { Router, type IRouter, type Response } from 'express';
 import {
   FuturesMarketDataError,
   getFuturesCandles,
@@ -8,7 +8,7 @@ import {
 
 const router: IRouter = Router();
 
-function sendError(res: Parameters<Parameters<IRouter['get']>[1]>[1], error: unknown) {
+function sendError(res: Response, error: unknown) {
   if (error instanceof FuturesMarketDataError) {
     return res.status(error.statusCode).json({
       ok: false,
