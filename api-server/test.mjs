@@ -8,26 +8,32 @@ const root = process.cwd();
 const repositoryRoot = path.resolve(root, '..');
 const mode = process.argv[2] ?? 'all';
 const groups = {
-  unit: [
+  phase2: [
     path.join(root, 'src/services/futures-market-data.service.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/futures-market-format.test.ts'),
   ],
+  risk: [
+    path.join(root, 'src/services/trading-risk-engine.service.test.ts'),
+  ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
+    path.join(root, 'src/routes/trading-risk.smoke.test.ts'),
   ],
 };
 
-if (!['all', 'unit', 'smoke'].includes(mode)) {
+groups.unit = [...groups.phase2, ...groups.risk];
+const allowedModes = ['all', 'unit', 'phase2', 'risk', 'smoke'];
+if (!allowedModes.includes(mode)) {
   throw new Error(`Unknown test mode: ${mode}`);
 }
 
 const entries = mode === 'all' ? [...groups.unit, ...groups.smoke] : groups[mode];
-const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'futures-market-tests-'));
+const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'application-tests-'));
 const outputFiles = [];
 
 try {
   for (const [index, entryPoint] of entries.entries()) {
-    const outputFile = path.join(temporaryDirectory, `futures-market-${index}.test.cjs`);
+    const outputFile = path.join(temporaryDirectory, `application-${index}.test.cjs`);
     await build({
       entryPoints: [entryPoint],
       outfile: outputFile,
