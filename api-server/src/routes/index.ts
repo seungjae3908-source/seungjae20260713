@@ -10,6 +10,7 @@ import kiwoomRouter from './kiwoom.routes';
 import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
+import futuresMarketDataRouter from './futures-market-data';
 import backupRouter from './backup';
 import { requireAdmin, requireMember } from '../middleware/auth';
 
@@ -26,6 +27,7 @@ router.use('/', healthRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
 router.use('/kiwoom', kiwoomRouter);
+router.use('/', futuresMarketDataRouter);
 router.use('/', cryptoRouter);
 
 // -------------------------------------------------------------------
