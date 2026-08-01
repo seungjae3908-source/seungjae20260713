@@ -1,0 +1,45 @@
+name: Phase4 Playwright Lockfile Bootstrap
+
+on:
+  push:
+    branches:
+      - feature/futures-contract-rules-ui-phase4
+    paths:
+      - .github/workflows/phase4-playwright-lockfile-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update-lockfile:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Phase 4 branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/futures-contract-rules-ui-phase4
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Add Playwright test dependency and update lockfile
+        run: pnpm --dir stock-analyzer add -D @playwright/test@1.61.1 --lockfile-only
+
+      - name: Commit generated manifest and lockfile
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/phase4-playwright-lockfile-bootstrap.yml
+          git add stock-analyzer/package.json pnpm-lock.yaml
+          git commit -m "test: add Playwright browser dependency"
+          git push origin HEAD:feature/futures-contract-rules-ui-phase4
