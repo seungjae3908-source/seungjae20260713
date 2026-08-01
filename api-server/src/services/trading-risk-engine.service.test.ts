@@ -327,5 +327,5 @@ test('missing exchange quantity rules do not fabricate values', () => {
     minimumNotional: null,
   }));
   assert.ok((result.recommendedQuantity ?? 0) > 0);
-  assert.ok(result.warnings.includes('실제 거래소 최소 수량 규칙은 미확인입니다.'));
+  assert.ok(result.warnings.includes('거래소 최소 주문 규칙을 확인할 수 없습니다.'));
 });
