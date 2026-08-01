@@ -1,0 +1,141 @@
+openapi: 3.1.0
+info:
+  title: Seungjae AI Command Hub
+  version: 0.2.0
+  description: |
+    승재 주식 앱 서버의 상태, Git, PM2와 로그를 조회합니다.
+    선택적으로 고정된 typecheck 및 build 검사 작업을 실행합니다.
+    임의 셸, 파일 수정, 재시작, 배포와 데이터베이스 변경은 지원하지 않습니다.
+servers:
+  - url: https://YOUR_SERVER_DOMAIN
+    description: 실제 HTTPS 서버 주소로 변경하세요.
+security:
+  - bearerAuth: []
+paths:
+  /api/command-hub/health:
+    get:
+      operationId: getCommandHubHealth
+      summary: Command Hub 연결과 실행기 상태 확인
+      responses:
+        '200':
+          description: 연결 성공
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: 인증 실패 }
+        '503': { description: COMMAND_HUB_TOKEN 미설정 }
+  /api/command-hub/server/status:
+    get:
+      operationId: getServerStatus
+      summary: 서버, 디스크와 PM2 상태 조회
+      responses:
+        '200':
+          description: 서버 상태
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /api/command-hub/pm2/status:
+    get:
+      operationId: getPm2Status
+      summary: PM2 프로세스 상태 조회
+      responses:
+        '200':
+          description: PM2 상태
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /api/command-hub/pm2/logs:
+    get:
+      operationId: getPm2Logs
+      summary: 마스킹된 최근 PM2 로그 조회
+      parameters:
+        - name: lines
+          in: query
+          required: false
+          schema: { type: integer, minimum: 20, maximum: 500, default: 120 }
+      responses:
+        '200':
+          description: 최근 PM2 로그
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /api/command-hub/git/status:
+    get:
+      operationId: getGitStatus
+      summary: Git 브랜치, HEAD와 변경 상태 조회
+      responses:
+        '200':
+          description: Git 상태
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /api/command-hub/snapshot:
+    get:
+      operationId: getCommandHubSnapshot
+      summary: 오류 분석용 전체 진단 자료 조회
+      parameters:
+        - name: lines
+          in: query
+          required: false
+          schema: { type: integer, minimum: 20, maximum: 500, default: 120 }
+      responses:
+        '200':
+          description: 전체 진단 스냅샷
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /api/command-hub/checks:
+    get:
+      operationId: listCommandHubChecks
+      summary: 최근 고정 검사 작업 목록 조회
+      responses:
+        '200':
+          description: 작업 목록
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    post:
+      operationId: runCommandHubCheck
+      summary: 고정된 검사 작업 실행
+      description: COMMAND_HUB_RUNNER_ENABLED=true일 때만 typecheck, build-server 또는 build-all을 실행합니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [typecheck, build-server, build-all]
+      responses:
+        '202':
+          description: 작업 대기열 등록
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '400': { description: 허용되지 않은 작업 }
+        '503': { description: 검사 실행기 비활성 }
+  /api/command-hub/checks/{jobId}:
+    get:
+      operationId: getCommandHubCheck
+      summary: 검사 작업 진행 상태와 결과 조회
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 작업 결과
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '404': { description: 작업을 찾을 수 없음 }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-token
