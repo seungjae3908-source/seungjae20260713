@@ -300,9 +300,10 @@ test('desktop 1440x900 renders contract rules and completes long and short risk 
   });
   expect(riskBodies[1]).toMatchObject({ side: 'short' });
 
-  const inputCount = await page.locator('input').count();
+  const riskPanel = page.getByTestId('trading-risk-preview-panel');
+  const inputCount = await riskPanel.locator('input').count();
   for (let index = 0; index < inputCount; index += 1) {
-    const input = page.locator('input').nth(index);
+    const input = riskPanel.locator('input').nth(index);
     const id = await input.getAttribute('id');
     expect(id).toBeTruthy();
     await expect(page.locator(`label[for="${id}"]`)).toHaveCount(1);
