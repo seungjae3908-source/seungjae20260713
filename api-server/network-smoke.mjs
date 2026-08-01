@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 
 const root = process.cwd();
 const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'futures-network-smoke-'));
-const outputFile = path.join(temporaryDirectory, 'futures-network-smoke.mjs');
+const outputFile = path.join(temporaryDirectory, 'futures-network-smoke.cjs');
 
 try {
   await build({
@@ -14,7 +14,7 @@ try {
     outfile: outputFile,
     bundle: true,
     platform: 'node',
-    format: 'esm',
+    format: 'cjs',
     target: 'node20',
     sourcemap: 'inline',
     logLevel: 'warning',
