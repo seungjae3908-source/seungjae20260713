@@ -20,8 +20,8 @@ export default defineConfig({
     video: 'retain-on-failure',
   },
   webServer: {
-    command: 'VITE_PHASE4_E2E=true pnpm run dev -- --port 4173',
-    url: 'http://127.0.0.1:4173/__phase4-risk-e2e',
+    command: 'VITE_PHASE4_E2E=true pnpm exec vite --config vite.config.ts --host 127.0.0.1 --port 4173',
+    url: 'http://127.0.0.1:4173',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
