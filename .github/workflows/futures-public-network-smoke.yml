@@ -7,6 +7,10 @@ on:
       - feature/futures-market-data-phase2
     paths:
       - .github/workflows/futures-public-network-smoke.yml
+      - api-server/network-smoke.mjs
+      - api-server/src/routes/futures-market-data.network-smoke.ts
+      - api-server/src/routes/futures-market-data.ts
+      - api-server/src/services/futures-market-data.service.ts
 
 permissions:
   contents: read
