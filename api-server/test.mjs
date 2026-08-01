@@ -27,13 +27,13 @@ const outputFiles = [];
 
 try {
   for (const [index, entryPoint] of entries.entries()) {
-    const outputFile = path.join(temporaryDirectory, `futures-market-${index}.test.mjs`);
+    const outputFile = path.join(temporaryDirectory, `futures-market-${index}.test.cjs`);
     await build({
       entryPoints: [entryPoint],
       outfile: outputFile,
       bundle: true,
       platform: 'node',
-      format: 'esm',
+      format: 'cjs',
       target: 'node20',
       sourcemap: 'inline',
       logLevel: 'warning',
