@@ -7,6 +7,7 @@ import {
   type DataStatus,
 } from '@/lib/futures-market-data';
 import { formatFundingRatePercent } from '@/lib/futures-market-format';
+import { TradingRiskPreviewPanel } from '@/components/trading-risk-preview-panel';
 import { cn } from '@/lib/utils';
 
 const STATUS_LABEL: Record<DataStatus, string> = {
@@ -89,65 +90,73 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
   };
 
   return (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+    <div className="space-y-4">
+      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-primary" />
+              <p className="text-[10px] font-black text-primary">선물 공개 시장 데이터</p>
+            </div>
+            <h2 className="mt-1 text-sm font-black">{symbol} · Bitget</h2>
+            <p className="mt-1 text-[9px] font-bold text-muted-foreground">
+              공개 시세 전용 · 주문 기능 없음
+            </p>
+          </div>
           <div className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-primary" />
-            <p className="text-[10px] font-black text-primary">선물 공개 시장 데이터</p>
-          </div>
-          <h2 className="mt-1 text-sm font-black">{symbol} · Bitget</h2>
-          <p className="mt-1 text-[9px] font-bold text-muted-foreground">
-            공개 시세 전용 · 주문 기능 없음
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={cn('rounded-full border px-2.5 py-1 text-[9px] font-black', statusClass(status))}>
-            {STATUS_LABEL[status]}
-          </span>
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-background"
-            aria-label="선물 공개 데이터 새로고침"
-          >
-            <RefreshCw className={cn('h-4 w-4', (statusQuery.isFetching || snapshotQuery.isFetching) && 'animate-spin')} />
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <Metric label="마크가격" value={numberText(snapshot?.markPrice ?? null, ' USDT')} />
-        <Metric label="인덱스가격" value={numberText(snapshot?.indexPrice ?? null, ' USDT')} />
-        <Metric label="미결제약정 OI" value={numberText(snapshot?.openInterest ?? null)} />
-        <Metric label="OI 변화율 · 서버 관측" value={percentText(snapshot?.openInterestChangePercent ?? null, 3)} />
-        <Metric label="펀딩비" value={formatFundingRatePercent(snapshot?.fundingRate)} />
-        <Metric label="다음 펀딩" value={dateText(snapshot?.nextFundingAt)} />
-        <Metric label="베이시스" value={percentText(snapshot?.basisPercent ?? null, 4)} />
-        <Metric label="호가 스프레드" value={percentText(snapshot?.spreadPercent ?? null, 4)} />
-      </div>
-
-      <p className="mt-2 text-[9px] font-bold leading-relaxed text-muted-foreground">
-        OI 변화율은 서버가 수집한 이전 OI 표본과 비교한 값입니다. 서버 재시작 후에는 표본이 다시 쌓여야 합니다.
-      </p>
-
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[9px] font-bold text-muted-foreground">
-        <span>출처 · {snapshot?.source ?? statusQuery.data?.provider ?? '확인 불가'}</span>
-        <span>마지막 갱신 · {dateText(snapshot?.updatedAt ?? statusQuery.data?.updatedAt)}</span>
-      </div>
-
-      {warnings.length > 0 && (
-        <div className="mt-3 rounded-2xl border border-warning/20 bg-warning/10 p-3">
-          <p className="text-[10px] font-black text-warning">데이터 안내</p>
-          <div className="mt-1 space-y-1">
-            {warnings.map((warning) => (
-              <p key={warning} className="text-[9px] font-bold leading-relaxed text-warning">
-                · {warning}
-              </p>
-            ))}
+            <span className={cn('rounded-full border px-2.5 py-1 text-[9px] font-black', statusClass(status))}>
+              {STATUS_LABEL[status]}
+            </span>
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-background"
+              aria-label="선물 공개 데이터 새로고침"
+            >
+              <RefreshCw className={cn('h-4 w-4', (statusQuery.isFetching || snapshotQuery.isFetching) && 'animate-spin')} />
+            </button>
           </div>
         </div>
-      )}
-    </section>
+
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <Metric label="마크가격" value={numberText(snapshot?.markPrice ?? null, ' USDT')} />
+          <Metric label="인덱스가격" value={numberText(snapshot?.indexPrice ?? null, ' USDT')} />
+          <Metric label="미결제약정 OI" value={numberText(snapshot?.openInterest ?? null)} />
+          <Metric label="OI 변화율 · 서버 관측" value={percentText(snapshot?.openInterestChangePercent ?? null, 3)} />
+          <Metric label="펀딩비" value={formatFundingRatePercent(snapshot?.fundingRate)} />
+          <Metric label="다음 펀딩" value={dateText(snapshot?.nextFundingAt)} />
+          <Metric label="베이시스" value={percentText(snapshot?.basisPercent ?? null, 4)} />
+          <Metric label="호가 스프레드" value={percentText(snapshot?.spreadPercent ?? null, 4)} />
+        </div>
+
+        <p className="mt-2 text-[9px] font-bold leading-relaxed text-muted-foreground">
+          OI 변화율은 서버가 수집한 이전 OI 표본과 비교한 값입니다. 서버 재시작 후에는 표본이 다시 쌓여야 합니다.
+        </p>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[9px] font-bold text-muted-foreground">
+          <span>출처 · {snapshot?.source ?? statusQuery.data?.provider ?? '확인 불가'}</span>
+          <span>마지막 갱신 · {dateText(snapshot?.updatedAt ?? statusQuery.data?.updatedAt)}</span>
+        </div>
+
+        {warnings.length > 0 && (
+          <div className="mt-3 rounded-2xl border border-warning/20 bg-warning/10 p-3">
+            <p className="text-[10px] font-black text-warning">데이터 안내</p>
+            <div className="mt-1 space-y-1">
+              {warnings.map((warning) => (
+                <p key={warning} className="text-[9px] font-bold leading-relaxed text-warning">
+                  · {warning}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+
+      <TradingRiskPreviewPanel
+        symbol={symbol}
+        snapshot={snapshot}
+        snapshotLoading={snapshotQuery.isLoading || snapshotQuery.isFetching}
+      />
+    </div>
   );
 }

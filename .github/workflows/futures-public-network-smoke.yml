@@ -13,12 +13,9 @@ on:
   push:
     branches:
       - main
-      - feature/futures-market-data-phase2
       - "feature/**"
     paths:
       - .github/workflows/futures-public-network-smoke.yml
-      - .github/workflows/application-ci-verified.yml
-      - .github/workflows/ci.yml
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - package.json
@@ -31,7 +28,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: phase2-application-ci-${{ github.ref }}
+  group: application-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -81,10 +78,13 @@ jobs:
       - name: Typecheck backend
         run: pnpm --dir api-server run typecheck
 
-      - name: Run futures unit tests
-        run: pnpm --dir api-server run test:unit
+      - name: Run Phase 2 futures tests
+        run: pnpm --dir api-server run test:phase2
 
-      - name: Run futures route smoke tests
+      - name: Run Phase 3 trading risk tests
+        run: pnpm --dir api-server run test:risk
+
+      - name: Run API smoke tests
         run: pnpm --dir api-server run test:smoke
 
       - name: Build frontend production bundle
