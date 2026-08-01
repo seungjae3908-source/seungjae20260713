@@ -2,7 +2,7 @@
 
 ## Scope
 
-This phase inspects the existing GitHub repository and adds repository-level CI only. It does not enable deployment, real orders, automatic trading, database migrations, or exchange credential changes.
+This phase inspects the existing GitHub repository, adds repository-level CI, and fixes only the existing type errors exposed by that CI. It does not enable deployment, real orders, automatic trading, database migrations, or exchange credential changes.
 
 ## Repository identity
 
@@ -56,6 +56,34 @@ Specialized GitHub Actions workflows exist for prediction-lab and deployment-rel
 - Tests: no script defined
 
 The new workflow intentionally uses only scripts confirmed in the repository. It does not deploy and does not read or print secrets.
+
+## CI-discovered existing errors
+
+The first general CI run passed frontend typecheck and then found three existing backend type errors in `api-server/src/routes/stocks.ts`:
+
+1. The stock-only `SpecialFeedService.getFeed(market, limit)` contract was called with three arguments: asset, market, and limit.
+2. The short-selling grouping helper accepted a general `string` and passed it into functions requiring `MarketFlowPeriod`.
+3. The short-selling route did not normalize its period query before aggregation.
+
+Minimal fixes:
+
+- Coin special-feed requests now return an explicit `501` unsupported response with no fabricated stock feed.
+- Stock special-feed calls now use the service's actual `(KR | US, limit)` contract.
+- Short-selling periods now use the existing `normalizeMarketFlowPeriod` function and typed aggregation contract.
+
+These changes do not touch any order route or trading provider.
+
+## Final GitHub Actions result
+
+`Application CI` run #8 completed successfully.
+
+- Frozen-lockfile dependency installation: success
+- Frontend typecheck: success
+- Backend typecheck: success
+- Lint: unavailable because no script is defined
+- Tests: unavailable because no script is defined
+- Frontend production build: success
+- Backend production build: success
 
 ## Current implementation assessment
 
@@ -161,7 +189,8 @@ type NormalizedCandle = {
 ## Phase 1 changes
 
 - Added `.github/workflows/ci.yml`.
-- Added this inspection report.
+- Added and finalized this inspection report.
+- Fixed three pre-existing backend type errors exposed by CI in `api-server/src/routes/stocks.ts`.
 - No production deployment workflow was changed.
 - No database file was changed.
 - No order route was changed.
