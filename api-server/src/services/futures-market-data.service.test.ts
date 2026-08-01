@@ -7,6 +7,7 @@ import {
   classifyDataStatus,
   normalizeBitgetCandles,
   normalizeFuturesSymbol,
+  resolveSnapshotTimestampStatus,
   toFiniteNumber,
 } from './futures-market-data.service';
 
@@ -100,4 +101,27 @@ test('empty candle data is insufficient without fabricated rows', () => {
   assert.equal(result.status, 'insufficient');
   assert.deepEqual(result.data, []);
   assert.ok(result.warnings.some((warning) => warning.includes('사용 가능한 캔들')));
+});
+
+test('snapshot without exchange timestamp is insufficient instead of live', () => {
+  const result = resolveSnapshotTimestampStatus({
+    now: 1_700_000_000_000,
+    sourceTimestamps: [null, undefined, '', Number.NaN],
+    availableCoreValues: 5,
+  });
+  assert.equal(result.sourceTimestamp, null);
+  assert.equal(result.status, 'insufficient');
+  assert.equal(result.warning, '거래소 데이터 시각을 확인할 수 없습니다.');
+});
+
+test('snapshot keeps live status when a valid exchange timestamp exists', () => {
+  const now = 1_700_000_000_000;
+  const result = resolveSnapshotTimestampStatus({
+    now,
+    sourceTimestamps: [now - 10_000],
+    availableCoreValues: 5,
+  });
+  assert.equal(result.sourceTimestamp, now - 10_000);
+  assert.equal(result.status, 'live');
+  assert.equal(result.warning, null);
 });
