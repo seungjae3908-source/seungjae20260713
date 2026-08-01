@@ -1,0 +1,187 @@
+name: Phase 2 finalize
+
+on:
+  push:
+    branches:
+      - feature/futures-market-data-phase2
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout phase 2 branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/futures-market-data-phase2
+          fetch-depth: 0
+
+      - name: Apply timestamp classification fix and tests
+        shell: python
+        run: |
+          from pathlib import Path
+
+          service_path = Path('api-server/src/services/futures-market-data.service.ts')
+          service = service_path.read_text(encoding='utf-8')
+
+          helper_anchor = "  return input.now <= staleAt ? 'live' : 'delayed';\n}\n\nexport function normalizeBitgetCandles"
+          helper_replacement = """  return input.now <= staleAt ? 'live' : 'delayed';
+}
+
+export function resolveSnapshotTimestampStatus(input: {
+  now: number;
+  sourceTimestamps: unknown[];
+  availableCoreValues: number;
+}): {
+  sourceTimestamp: number | null;
+  status: DataStatus;
+  warning: string | null;
+} {
+  const sourceTimes = input.sourceTimestamps
+    .map(normalizeTimestamp)
+    .filter((value): value is number => value != null);
+  const sourceTimestamp = sourceTimes.length ? Math.max(...sourceTimes) : null;
+  return {
+    sourceTimestamp,
+    status: classifyDataStatus({
+      now: input.now,
+      lastTimestamp: sourceTimestamp,
+      count: input.availableCoreValues,
+      minimumCount: 2,
+    }),
+    warning: sourceTimestamp == null
+      ? '거래소 데이터 시각을 확인할 수 없습니다.'
+      : null,
+  };
+}
+
+export function normalizeBitgetCandles"""
+          if helper_anchor not in service:
+              raise SystemExit('Timestamp helper anchor not found')
+          service = service.replace(helper_anchor, helper_replacement, 1)
+
+          old_block = """  const sourceTimes = [
+    ticker?.ts,
+    priceRow?.ts,
+    oiData?.ts,
+    payloadRequestTime(tickerPayload),
+    payloadRequestTime(pricePayload),
+    payloadRequestTime(oiPayload),
+  ]
+    .map(normalizeTimestamp)
+    .filter((value): value is number => value != null);
+  const sourceTimestamp = sourceTimes.length ? Math.max(...sourceTimes) : now;
+  const availableCoreValues = [price, markPrice, indexPrice, openInterest, fundingRate]
+    .filter((value) => value != null).length;
+  const status = classifyDataStatus({
+    now,
+    lastTimestamp: sourceTimestamp,
+    count: availableCoreValues,
+    minimumCount: 2,
+  });
+"""
+          new_block = """  const availableCoreValues = [price, markPrice, indexPrice, openInterest, fundingRate]
+    .filter((value) => value != null).length;
+  const timestampStatus = resolveSnapshotTimestampStatus({
+    now,
+    sourceTimestamps: [
+      ticker?.ts,
+      priceRow?.ts,
+      oiData?.ts,
+      payloadRequestTime(tickerPayload),
+      payloadRequestTime(pricePayload),
+      payloadRequestTime(oiPayload),
+    ],
+    availableCoreValues,
+  });
+  const sourceTimestamp = timestampStatus.sourceTimestamp;
+  const status = timestampStatus.status;
+  if (timestampStatus.warning) warnings.push(timestampStatus.warning);
+"""
+          if old_block not in service:
+              raise SystemExit('Snapshot timestamp block not found')
+          service = service.replace(old_block, new_block, 1)
+          service = service.replace(
+              '    updatedAt: new Date(sourceTimestamp).toISOString(),',
+              '    updatedAt: new Date(sourceTimestamp ?? now).toISOString(),',
+              1,
+          )
+          service_path.write_text(service, encoding='utf-8')
+
+          test_path = Path('api-server/src/services/futures-market-data.service.test.ts')
+          tests = test_path.read_text(encoding='utf-8')
+          tests = tests.replace(
+              '  normalizeFuturesSymbol,\n  toFiniteNumber,',
+              '  normalizeFuturesSymbol,\n  resolveSnapshotTimestampStatus,\n  toFiniteNumber,',
+              1,
+          )
+          tests += """
+
+test('snapshot without exchange timestamp is insufficient instead of live', () => {
+  const result = resolveSnapshotTimestampStatus({
+    now: 1_000_000,
+    sourceTimestamps: [null, undefined, '', Number.NaN],
+    availableCoreValues: 5,
+  });
+  assert.equal(result.sourceTimestamp, null);
+  assert.equal(result.status, 'insufficient');
+  assert.equal(result.warning, '거래소 데이터 시각을 확인할 수 없습니다.');
+});
+
+test('snapshot keeps live status when a valid exchange timestamp exists', () => {
+  const result = resolveSnapshotTimestampStatus({
+    now: 1_000_000,
+    sourceTimestamps: [990_000],
+    availableCoreValues: 5,
+  });
+  assert.equal(result.sourceTimestamp, 990_000_000);
+  assert.equal(result.status, 'delayed');
+  assert.equal(result.warning, null);
+});
+"""
+          test_path.write_text(tests, encoding='utf-8')
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate patched source
+        run: |
+          pnpm --dir stock-analyzer run typecheck
+          pnpm --dir api-server run typecheck
+          pnpm --dir api-server run test:unit
+          pnpm --dir api-server run test:smoke
+          pnpm --dir stock-analyzer run build
+          pnpm --dir api-server run build:server
+
+      - name: Real Bitget public network smoke
+        id: network_smoke
+        continue-on-error: true
+        run: pnpm --dir api-server run smoke:futures:network
+
+      - name: Remove one-time workflow and commit validated changes
+        if: success() || steps.network_smoke.outcome == 'failure'
+        run: |
+          git rm .github/workflows/phase2-finalize.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add api-server/src/services/futures-market-data.service.ts api-server/src/services/futures-market-data.service.test.ts
+          git commit -m "fix: prevent futures timestamp live misclassification"
+          git push origin HEAD:feature/futures-market-data-phase2
