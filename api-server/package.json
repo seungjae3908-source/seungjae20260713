@@ -12,7 +12,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node ./test.mjs all",
     "test:unit": "node ./test.mjs unit",
-    "test:smoke": "node ./test.mjs smoke"
+    "test:smoke": "node ./test.mjs smoke",
+    "smoke:futures:network": "node ./network-smoke.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.2",
