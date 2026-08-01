@@ -5,6 +5,7 @@ import { formatFundingRatePercent } from './futures-market-format';
 test('funding rate converts decimal ratio to percent', () => {
   assert.equal(formatFundingRatePercent(0.000068), '0.0068%');
   assert.equal(formatFundingRatePercent(-0.000068), '-0.0068%');
+  assert.equal(formatFundingRatePercent(0.01), '1.0000%');
 });
 
 test('funding rate keeps zero and hides invalid values', () => {
