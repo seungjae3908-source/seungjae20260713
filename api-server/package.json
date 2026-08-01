@@ -12,6 +12,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node ./test.mjs all",
     "test:unit": "node ./test.mjs unit",
+    "test:phase2": "node ./test.mjs phase2",
+    "test:risk": "node ./test.mjs risk",
     "test:smoke": "node ./test.mjs smoke",
     "smoke:futures:network": "node ./network-smoke.mjs"
   },
