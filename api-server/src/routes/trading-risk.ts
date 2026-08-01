@@ -41,6 +41,10 @@ function optionalNumber(body: Record<string, unknown>, key: string) {
   return body[key] == null || (typeof body[key] === 'number' && Number.isFinite(body[key]));
 }
 
+function optionalStatus(body: Record<string, unknown>, key: string) {
+  return body[key] == null || DATA_STATUSES.has(String(body[key]) as RiskDataStatus);
+}
+
 function parseRiskInput(body: unknown): RiskEngineInput | null {
   if (!isObject(body)) return null;
   const requiredNumbers = [
@@ -58,9 +62,12 @@ function parseRiskInput(body: unknown): RiskEngineInput | null {
     'targetPrice1',
     'targetPrice2',
     'quantityStep',
+    'quantityPrecision',
     'minimumQuantity',
     'minimumNotional',
     'maintenanceMarginRate',
+    'maximumLeverage',
+    'appMaximumLeverage',
     'dailyRealizedPnl',
     'weeklyRealizedPnl',
     'consecutiveLosses',
@@ -69,11 +76,15 @@ function parseRiskInput(body: unknown): RiskEngineInput | null {
   ];
   if (!requiredNumbers.every((key) => requiredNumber(body, key))) return null;
   if (!optionalNumbers.every((key) => optionalNumber(body, key))) return null;
+  if (!optionalStatus(body, 'contractRulesStatus')) return null;
 
   const market = String(body.market ?? '') as RiskEngineInput['market'];
   const side = String(body.side ?? '') as TradeSide;
   const symbol = String(body.symbol ?? '').trim().toUpperCase();
   const dataStatus = String(body.dataStatus ?? 'insufficient') as RiskDataStatus;
+  const contractRulesStatus = body.contractRulesStatus == null
+    ? undefined
+    : String(body.contractRulesStatus) as RiskDataStatus;
   if (!MARKETS.has(market) || !SIDES.has(side) || !DATA_STATUSES.has(dataStatus)) return null;
   if (!/^[A-Z0-9._-]{1,30}$/.test(symbol)) return null;
 
@@ -93,9 +104,13 @@ function parseRiskInput(body: unknown): RiskEngineInput | null {
     slippageRate: body.slippageRate as number,
     estimatedFundingRate: body.estimatedFundingRate as number,
     quantityStep: body.quantityStep as number | null | undefined,
+    quantityPrecision: body.quantityPrecision as number | null | undefined,
     minimumQuantity: body.minimumQuantity as number | null | undefined,
     minimumNotional: body.minimumNotional as number | null | undefined,
     maintenanceMarginRate: body.maintenanceMarginRate as number | null | undefined,
+    maximumLeverage: body.maximumLeverage as number | null | undefined,
+    appMaximumLeverage: body.appMaximumLeverage as number | null | undefined,
+    contractRulesStatus,
     dailyRealizedPnl: body.dailyRealizedPnl as number | undefined,
     weeklyRealizedPnl: body.weeklyRealizedPnl as number | undefined,
     consecutiveLosses: body.consecutiveLosses as number | undefined,
