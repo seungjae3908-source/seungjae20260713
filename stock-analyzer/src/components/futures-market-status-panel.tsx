@@ -6,6 +6,7 @@ import {
   getFuturesMarketStatus,
   type DataStatus,
 } from '@/lib/futures-market-data';
+import { formatFundingRatePercent } from '@/lib/futures-market-format';
 import { cn } from '@/lib/utils';
 
 const STATUS_LABEL: Record<DataStatus, string> = {
@@ -119,15 +120,16 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
         <Metric label="마크가격" value={numberText(snapshot?.markPrice ?? null, ' USDT')} />
         <Metric label="인덱스가격" value={numberText(snapshot?.indexPrice ?? null, ' USDT')} />
         <Metric label="미결제약정 OI" value={numberText(snapshot?.openInterest ?? null)} />
-        <Metric label="OI 변화율" value={percentText(snapshot?.openInterestChangePercent ?? null, 3)} />
-        <Metric
-          label="펀딩비"
-          value={snapshot?.fundingRate == null ? '데이터 없음' : percentText(snapshot.fundingRate * 100, 4)}
-        />
+        <Metric label="OI 변화율 · 서버 관측" value={percentText(snapshot?.openInterestChangePercent ?? null, 3)} />
+        <Metric label="펀딩비" value={formatFundingRatePercent(snapshot?.fundingRate)} />
         <Metric label="다음 펀딩" value={dateText(snapshot?.nextFundingAt)} />
         <Metric label="베이시스" value={percentText(snapshot?.basisPercent ?? null, 4)} />
         <Metric label="호가 스프레드" value={percentText(snapshot?.spreadPercent ?? null, 4)} />
       </div>
+
+      <p className="mt-2 text-[9px] font-bold leading-relaxed text-muted-foreground">
+        OI 변화율은 서버가 수집한 이전 OI 표본과 비교한 값입니다. 서버 재시작 후에는 표본이 다시 쌓여야 합니다.
+      </p>
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[9px] font-bold text-muted-foreground">
         <span>출처 · {snapshot?.source ?? statusQuery.data?.provider ?? '확인 불가'}</span>
