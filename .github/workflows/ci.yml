@@ -12,6 +12,7 @@ on:
   push:
     branches:
       - main
+      - feature/futures-market-data-phase2
       - "feature/**"
   workflow_dispatch:
 
