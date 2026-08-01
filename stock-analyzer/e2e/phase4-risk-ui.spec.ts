@@ -272,7 +272,7 @@ test('desktop 1440x900 renders contract rules and completes long and short risk 
   await openWorkspace(page);
   await expect(page.getByText('분석용 리스크 미리보기입니다. 실제 주문은 전송되지 않습니다.')).toBeVisible();
   await expect(page.getByTestId('quantity-step')).toContainText('0.001');
-  await expect(page.getByText('최대 10배')).toBeVisible();
+  await expect(page.getByTestId('contract-rules-card').getByText('최대 10배', { exact: true })).toBeVisible();
   await expect(page.getByText('125배')).toBeVisible();
   await expect(page.getByLabel('진입가 · markPrice 기준')).toHaveValue('100');
   await expect(page.getByLabel('예상 펀딩비율 (소수)')).toHaveValue('0.0001');
