@@ -28,9 +28,13 @@ export type RiskEngineInput = {
   estimatedFundingRate: number;
 
   quantityStep?: number | null;
+  quantityPrecision?: number | null;
   minimumQuantity?: number | null;
   minimumNotional?: number | null;
   maintenanceMarginRate?: number | null;
+  maximumLeverage?: number | null;
+  appMaximumLeverage?: number | null;
+  contractRulesStatus?: RiskDataStatus;
 
   dailyRealizedPnl?: number;
   weeklyRealizedPnl?: number;
@@ -50,6 +54,9 @@ export type RiskBlockCode =
   | 'INVALID_RISK_PERCENT'
   | 'INVALID_COST_RATE'
   | 'DATA_NOT_LIVE'
+  | 'CONTRACT_RULES_NOT_LIVE'
+  | 'LEVERAGE_EXCEEDS_EXCHANGE_LIMIT'
+  | 'LEVERAGE_EXCEEDS_APP_LIMIT'
   | 'RISK_REWARD_TOO_LOW'
   | 'DAILY_LOSS_LIMIT'
   | 'WEEKLY_LOSS_LIMIT'
@@ -90,6 +97,10 @@ export type RiskEngineResult = {
   estimatedLiquidationPrice: number | null;
   stopToLiquidationDistancePercent: number | null;
 
+  effectiveQuantityStep: number | null;
+  appMaximumLeverage: number | null;
+  exchangeMaximumLeverage: number | null;
+
   calculatedAt: string;
 };
 
@@ -106,7 +117,17 @@ export const TRADING_RISK_POLICY = Object.freeze({
   defaultMaintenanceMarginRate: 0.005,
   minimumStopLiquidationBufferPercent: 0.5,
   maximumAdjustmentIterations: 1_000,
+  cryptoFuturesAppMaximumLeverage: 10,
 });
+
+const DATA_STATUSES = new Set<RiskDataStatus>([
+  'live',
+  'delayed',
+  'cached',
+  'disconnected',
+  'error',
+  'insufficient',
+]);
 
 const unique = <T>(values: T[]) => [...new Set(values)];
 
@@ -122,19 +143,49 @@ function nonNegativeOptional(value: number | undefined) {
   return value == null || (finite(value) && value >= 0);
 }
 
+function validPrecision(value: number | null | undefined) {
+  return value == null || (finite(value) && Number.isInteger(value) && value >= 0 && value <= 12);
+}
+
 function decimalPlaces(value: number) {
   const text = value.toString().toLowerCase();
   if (text.includes('e-')) return Math.min(12, Number(text.split('e-')[1] ?? 0));
   return Math.min(12, text.includes('.') ? text.split('.')[1]?.length ?? 0 : 0);
 }
 
-export function floorQuantityToStep(value: number, step: number | null | undefined) {
+export function effectiveQuantityStep(
+  quantityStep: number | null | undefined,
+  quantityPrecision: number | null | undefined,
+): number | null {
+  const precisionStep = quantityPrecision == null ? null : 10 ** -quantityPrecision;
+  const candidates = [quantityStep, precisionStep]
+    .filter((value): value is number => finite(value) && value > 0);
+  return candidates.length ? Math.max(...candidates) : null;
+}
+
+export function floorQuantityToRules(
+  value: number,
+  quantityStep: number | null | undefined,
+  quantityPrecision: number | null | undefined,
+) {
   if (!finite(value) || value <= 0) return 0;
+  const step = effectiveQuantityStep(quantityStep, quantityPrecision);
   if (step == null) return value;
-  if (!finite(step) || step <= 0) return 0;
-  const scale = 10 ** decimalPlaces(step);
-  const scaledValue = Math.floor((value * scale + Number.EPSILON) / (step * scale));
-  return Number(((scaledValue * step * scale) / scale).toFixed(decimalPlaces(step)));
+
+  const decimals = Math.min(
+    12,
+    Math.max(decimalPlaces(step), quantityPrecision ?? 0),
+  );
+  const scale = 10 ** decimals;
+  const stepUnits = Math.max(1, Math.round(step * scale));
+  const valueUnits = Math.floor(value * scale + 1e-9);
+  const flooredUnits = Math.floor(valueUnits / stepUnits) * stepUnits;
+  return Number((flooredUnits / scale).toFixed(decimals));
+}
+
+/** Phase 3 compatibility export. */
+export function floorQuantityToStep(value: number, step: number | null | undefined) {
+  return floorQuantityToRules(value, step, null);
 }
 
 function baseResult(calculatedAt: string): RiskEngineResult {
@@ -162,6 +213,9 @@ function baseResult(calculatedAt: string): RiskEngineResult {
     breakEvenPrice: null,
     estimatedLiquidationPrice: null,
     stopToLiquidationDistancePercent: null,
+    effectiveQuantityStep: null,
+    appMaximumLeverage: null,
+    exchangeMaximumLeverage: null,
     calculatedAt,
   };
 }
@@ -221,11 +275,16 @@ export function validateRiskEngineInput(input: RiskEngineInput): RiskBlockCode[]
     addBlock(blocks, 'INVALID_COST_RATE');
   }
 
-  if (!positiveOptional(input.quantityStep) || !positiveOptional(input.minimumQuantity)) {
+  if (!positiveOptional(input.quantityStep) || !validPrecision(input.quantityPrecision)) {
     addBlock(blocks, 'MINIMUM_QUANTITY');
   }
-  if (!positiveOptional(input.minimumNotional)) {
-    addBlock(blocks, 'MINIMUM_NOTIONAL');
+  if (!positiveOptional(input.minimumQuantity)) addBlock(blocks, 'MINIMUM_QUANTITY');
+  if (!positiveOptional(input.minimumNotional)) addBlock(blocks, 'MINIMUM_NOTIONAL');
+  if (!positiveOptional(input.maximumLeverage) || !positiveOptional(input.appMaximumLeverage)) {
+    addBlock(blocks, 'INVALID_LEVERAGE');
+  }
+  if (input.contractRulesStatus != null && !DATA_STATUSES.has(input.contractRulesStatus)) {
+    addBlock(blocks, 'CONTRACT_RULES_NOT_LIVE');
   }
   if (
     !nonNegativeOptional(input.openExposure) ||
@@ -326,6 +385,27 @@ export function calculateTradingRisk(
     return result;
   }
 
+  const appMaximumLeverage = input.market === 'crypto-futures'
+    ? input.appMaximumLeverage ?? TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage
+    : input.appMaximumLeverage ?? null;
+  result.appMaximumLeverage = appMaximumLeverage;
+  result.exchangeMaximumLeverage = input.maximumLeverage ?? null;
+  if (appMaximumLeverage != null && input.leverage > appMaximumLeverage) {
+    addBlock(blocks, 'LEVERAGE_EXCEEDS_APP_LIMIT');
+  }
+  if (input.maximumLeverage != null && input.leverage > input.maximumLeverage) {
+    addBlock(blocks, 'LEVERAGE_EXCEEDS_EXCHANGE_LIMIT');
+  }
+
+  if (input.contractRulesStatus != null && input.contractRulesStatus !== 'live') {
+    addBlock(blocks, 'CONTRACT_RULES_NOT_LIVE');
+    warnings.push(
+      input.contractRulesStatus === 'cached'
+        ? '캐시 계약 규칙은 확인용으로만 사용하며 진입 가능 판정은 차단합니다.'
+        : `계약 규칙 상태가 ${input.contractRulesStatus}이므로 진입 가능 판정을 차단합니다.`,
+    );
+  }
+
   const maximumRiskAmount = input.accountBalance * (input.riskPercent / 100);
   const stopDistance = input.side === 'long'
     ? input.entryPrice - input.stopLossPrice
@@ -354,8 +434,13 @@ export function calculateTradingRisk(
   }
 
   const rawQuantity = maximumRiskAmount / perUnitMaximumLoss;
-  let recommendedQuantity = floorQuantityToStep(rawQuantity, input.quantityStep);
-  const step = input.quantityStep ?? null;
+  const step = effectiveQuantityStep(input.quantityStep, input.quantityPrecision);
+  result.effectiveQuantityStep = step;
+  let recommendedQuantity = floorQuantityToRules(
+    rawQuantity,
+    input.quantityStep,
+    input.quantityPrecision,
+  );
 
   const costsFor = (quantity: number) => {
     const notional = input.entryPrice * quantity;
@@ -376,7 +461,11 @@ export function calculateTradingRisk(
     costs.maximumLoss > maximumRiskAmount + tolerance &&
     iterations < TRADING_RISK_POLICY.maximumAdjustmentIterations
   ) {
-    recommendedQuantity = floorQuantityToStep(recommendedQuantity - step, step);
+    recommendedQuantity = floorQuantityToRules(
+      recommendedQuantity - step,
+      step,
+      input.quantityPrecision,
+    );
     costs = costsFor(recommendedQuantity);
     iterations += 1;
   }
@@ -407,7 +496,7 @@ export function calculateTradingRisk(
   }
 
   if (input.quantityStep == null || input.minimumQuantity == null || input.minimumNotional == null) {
-    warnings.push('실제 거래소 최소 수량 규칙은 미확인입니다.');
+    warnings.push('거래소 최소 주문 규칙을 확인할 수 없습니다.');
   }
   if (input.minimumQuantity != null && recommendedQuantity < input.minimumQuantity) {
     addBlock(blocks, 'MINIMUM_QUANTITY');
