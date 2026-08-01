@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "status": "pass",
+  "generatedAt": 1785591272651,
+  "source": "isolated-live-shadow-adaptive-candidate-builder",
+  "results": {
+    "crypto-futures-15m": {
+      "status": "research_hold",
+      "reason": "insufficient_live_shadow_samples",
+      "reasons": [],
+      "settled": 30,
+      "modelId": null,
+      "promotedToShadowSlot": false
+    },
+    "crypto-futures-1h": {
+      "status": "research_hold",
+      "reason": "insufficient_live_shadow_samples",
+      "reasons": [],
+      "settled": 26,
+      "modelId": null,
+      "promotedToShadowSlot": false
+    }
+  },
+  "safety": {
+    "usesPublicMarketDataOnly": true,
+    "usesAccountOrOrderApi": false,
+    "modifiesExistingAppApi": false,
+    "overwritesShadowHistory": false,
+    "deploysModel": false
+  }
+}
