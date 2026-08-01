@@ -9,7 +9,8 @@
     "build:server": "node ./build.mjs",
     "build": "pnpm run build:frontend && pnpm run build:server",
     "start": "pnpm run build && NODE_ENV=development node --enable-source-maps ./dist/index.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node ./test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.2",
