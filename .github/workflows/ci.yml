@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   validate:
-    name: Typecheck and build
+    name: Typecheck, test, and build
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -46,10 +46,11 @@ jobs:
       - name: Typecheck backend
         run: pnpm --dir api-server run typecheck
 
+      - name: Test futures market normalization
+        run: pnpm --dir api-server run test
+
       - name: Report unavailable checks
-        run: |
-          echo "Lint: no lint script is defined in the inspected package.json files."
-          echo "Tests: no test script is defined in the inspected package.json files."
+        run: echo "Lint: no lint script is defined in the inspected package.json files."
 
       - name: Build frontend production bundle
         run: pnpm --dir stock-analyzer run build
