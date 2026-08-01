@@ -220,6 +220,33 @@ export function classifyDataStatus(input: {
   return input.now <= staleAt ? 'live' : 'delayed';
 }
 
+export function resolveSnapshotTimestampStatus(input: {
+  now: number;
+  sourceTimestamps: unknown[];
+  availableCoreValues: number;
+}): {
+  sourceTimestamp: number | null;
+  status: DataStatus;
+  warning: string | null;
+} {
+  const sourceTimes = input.sourceTimestamps
+    .map(normalizeTimestamp)
+    .filter((value): value is number => value != null);
+  const sourceTimestamp = sourceTimes.length ? Math.max(...sourceTimes) : null;
+  return {
+    sourceTimestamp,
+    status: classifyDataStatus({
+      now: input.now,
+      lastTimestamp: sourceTimestamp,
+      count: input.availableCoreValues,
+      minimumCount: 2,
+    }),
+    warning: sourceTimestamp == null
+      ? '거래소 데이터 시각을 확인할 수 없습니다.'
+      : null,
+  };
+}
+
 export function normalizeBitgetCandles(
   rows: unknown,
   symbol: string,
@@ -552,25 +579,23 @@ async function buildSnapshot(symbol: string): Promise<FuturesMarketSnapshot> {
     warnings.push('bid·ask 관계가 올바르지 않아 스프레드를 계산하지 않았습니다.');
   }
 
-  const sourceTimes = [
-    ticker?.ts,
-    priceRow?.ts,
-    oiData?.ts,
-    payloadRequestTime(tickerPayload),
-    payloadRequestTime(pricePayload),
-    payloadRequestTime(oiPayload),
-  ]
-    .map(normalizeTimestamp)
-    .filter((value): value is number => value != null);
-  const sourceTimestamp = sourceTimes.length ? Math.max(...sourceTimes) : now;
   const availableCoreValues = [price, markPrice, indexPrice, openInterest, fundingRate]
     .filter((value) => value != null).length;
-  const status = classifyDataStatus({
+  const timestampStatus = resolveSnapshotTimestampStatus({
     now,
-    lastTimestamp: sourceTimestamp,
-    count: availableCoreValues,
-    minimumCount: 2,
+    sourceTimestamps: [
+      ticker?.ts,
+      priceRow?.ts,
+      oiData?.ts,
+      payloadRequestTime(tickerPayload),
+      payloadRequestTime(pricePayload),
+      payloadRequestTime(oiPayload),
+    ],
+    availableCoreValues,
   });
+  const sourceTimestamp = timestampStatus.sourceTimestamp;
+  const status = timestampStatus.status;
+  if (timestampStatus.warning) warnings.push(timestampStatus.warning);
 
   return {
     symbol,
@@ -593,7 +618,7 @@ async function buildSnapshot(symbol: string): Promise<FuturesMarketSnapshot> {
     source: BITGET_SOURCE,
     status,
     isDelayed: status === 'delayed',
-    updatedAt: new Date(sourceTimestamp).toISOString(),
+    updatedAt: new Date(sourceTimestamp ?? now).toISOString(),
     warnings: uniqueWarnings(warnings),
   };
 }
