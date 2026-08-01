@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { RefreshCw, ShieldCheck } from 'lucide-react';
 import {
+  getFuturesContractRules,
   getFuturesMarketSnapshot,
   getFuturesMarketStatus,
   type DataStatus,
@@ -47,7 +48,7 @@ function dateText(value: string | null | undefined) {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-card-border bg-background p-3">
+    <div className="min-w-0 rounded-2xl border border-card-border bg-background p-3">
       <p className="text-[9px] font-black text-muted-foreground">{label}</p>
       <p className="mt-1 break-words text-[11px] font-black">{value}</p>
     </div>
@@ -70,6 +71,15 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
     refetchIntervalInBackground: true,
     retry: 1,
   });
+  const contractRulesQuery = useQuery({
+    queryKey: ['futures-public-contract-rules', symbol],
+    queryFn: () => getFuturesContractRules(symbol),
+    enabled: Boolean(symbol),
+    staleTime: 5 * 60_000,
+    refetchInterval: 10 * 60_000,
+    refetchIntervalInBackground: true,
+    retry: 1,
+  });
 
   const snapshot = snapshotQuery.data;
   const status: DataStatus = snapshotQuery.isError || statusQuery.isError
@@ -86,34 +96,38 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
   );
 
   const refresh = async () => {
-    await Promise.allSettled([statusQuery.refetch(), snapshotQuery.refetch()]);
+    await Promise.allSettled([
+      statusQuery.refetch(),
+      snapshotQuery.refetch(),
+      contractRulesQuery.refetch(),
+    ]);
   };
 
   return (
-    <div className="space-y-4">
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <div className="flex items-start justify-between gap-3">
-          <div>
+    <div className="min-w-0 space-y-4" data-testid="futures-market-and-risk-panels">
+      <section className="min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-primary" />
+              <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
               <p className="text-[10px] font-black text-primary">선물 공개 시장 데이터</p>
             </div>
-            <h2 className="mt-1 text-sm font-black">{symbol} · Bitget</h2>
+            <h2 className="mt-1 truncate text-sm font-black">{symbol} · Bitget</h2>
             <p className="mt-1 text-[9px] font-bold text-muted-foreground">
               공개 시세 전용 · 주문 기능 없음
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <span className={cn('rounded-full border px-2.5 py-1 text-[9px] font-black', statusClass(status))}>
               {STATUS_LABEL[status]}
             </span>
             <button
               type="button"
               onClick={() => void refresh()}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-background"
-              aria-label="선물 공개 데이터 새로고침"
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-background focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              aria-label="선물 공개 데이터와 계약 규칙 새로고침"
             >
-              <RefreshCw className={cn('h-4 w-4', (statusQuery.isFetching || snapshotQuery.isFetching) && 'animate-spin')} />
+              <RefreshCw className={cn('h-4 w-4', (statusQuery.isFetching || snapshotQuery.isFetching || contractRulesQuery.isFetching) && 'animate-spin')} />
             </button>
           </div>
         </div>
@@ -139,9 +153,9 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
         </div>
 
         {warnings.length > 0 && (
-          <div className="mt-3 rounded-2xl border border-warning/20 bg-warning/10 p-3">
+          <div className="mt-3 rounded-2xl border border-warning/20 bg-warning/10 p-3" role="status" aria-label="선물 시장 데이터 안내">
             <p className="text-[10px] font-black text-warning">데이터 안내</p>
-            <div className="mt-1 space-y-1">
+            <div className="mt-1 max-h-32 space-y-1 overflow-y-auto overscroll-contain">
               {warnings.map((warning) => (
                 <p key={warning} className="text-[9px] font-bold leading-relaxed text-warning">
                   · {warning}
@@ -156,6 +170,9 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
         symbol={symbol}
         snapshot={snapshot}
         snapshotLoading={snapshotQuery.isLoading || snapshotQuery.isFetching}
+        contractRules={contractRulesQuery.data}
+        contractRulesLoading={contractRulesQuery.isLoading || contractRulesQuery.isFetching}
+        contractRulesError={contractRulesQuery.isError}
       />
     </div>
   );
