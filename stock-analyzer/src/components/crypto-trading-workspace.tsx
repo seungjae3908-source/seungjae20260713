@@ -37,6 +37,7 @@ import { apiGet } from "@/lib/api";
 import { BottomNav } from "@/components/bottom-nav";
 import { useAssetMode } from "@/lib/asset-mode";
 import { cn } from "@/lib/utils";
+import { FuturesMarketStatusPanel } from "@/components/futures-market-status-panel";
 
 export type CryptoWorkspaceViewMode = "condition" | "chart" | "auto";
 
@@ -1632,6 +1633,7 @@ export function CryptoTradingWorkspace({
       </header>
 
       <main className="space-y-4 px-4 pb-28 pt-4">
+        <FuturesMarketStatusPanel symbol={symbol} />
       <div ref={scannerSectionRef} className="scroll-mt-4 rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <div>
