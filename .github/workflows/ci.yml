@@ -2,10 +2,18 @@ name: Application CI
 
 on:
   pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
   push:
     branches:
       - main
       - "feature/**"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,7 +24,7 @@ concurrency:
 
 jobs:
   validate:
-    name: Typecheck, test, and build
+    name: Typecheck, test, smoke, and build
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -37,7 +45,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install workspace dependencies
+      - name: Install workspace dependencies with frozen lockfile
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck frontend
@@ -46,8 +54,11 @@ jobs:
       - name: Typecheck backend
         run: pnpm --dir api-server run typecheck
 
-      - name: Test futures market normalization
-        run: pnpm --dir api-server run test
+      - name: Run futures unit tests
+        run: pnpm --dir api-server run test:unit
+
+      - name: Run futures route smoke tests
+        run: pnpm --dir api-server run test:smoke
 
       - name: Report unavailable checks
         run: echo "Lint: no lint script is defined in the inspected package.json files."
