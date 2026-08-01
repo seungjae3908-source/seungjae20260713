@@ -30,7 +30,19 @@ router.use('/crypto/futures', (_req, res, next) => {
 
 router.get('/crypto/futures/status', async (_req, res) => {
   try {
-    return res.json(await getFuturesMarketStatus());
+    const [registry, probe] = await Promise.all([
+      getFuturesMarketStatus(),
+      getFuturesMarketSnapshot('BTCUSDT'),
+    ]);
+    return res.json({
+      ...registry,
+      status: probe.status,
+      connection: probe.status,
+      updatedAt: probe.updatedAt,
+      warnings: [...new Set([...registry.warnings, ...probe.warnings])],
+      publicDataOnly: true,
+      orderCapability: false,
+    });
   } catch (error) {
     return sendError(res, error);
   }
