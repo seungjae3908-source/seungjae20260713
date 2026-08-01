@@ -60,19 +60,13 @@ function positiveNumber(value: unknown): number | null {
   return parsed != null && parsed > 0 ? parsed : null;
 }
 
-function nonNegativeNumber(value: unknown): number | null {
-  const parsed = toFiniteNumber(value);
-  return parsed != null && parsed >= 0 ? parsed : null;
-}
-
 function nonNegativeInteger(value: unknown): number | null {
   const parsed = toFiniteNumber(value);
   return parsed != null && Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function tradableStatus(value: unknown) {
-  const status = String(value ?? '').trim().toLowerCase();
-  return status === 'normal' || status === 'listed';
+function isNormalTradingStatus(value: unknown) {
+  return String(value ?? '').trim().toLowerCase() === 'normal';
 }
 
 function priceStepFrom(row: JsonObject, pricePrecision: number | null) {
@@ -83,8 +77,9 @@ function priceStepFrom(row: JsonObject, pricePrecision: number | null) {
 }
 
 /**
- * Maps only fields that are present in Bitget's public contracts response.
- * Unknown or malformed values remain null and are never replaced by exchange-like defaults.
+ * Maps only fields documented for Bitget GET /api/v2/mix/market/contracts.
+ * Maintenance margin belongs to a separate tier endpoint and contractSize is not
+ * documented by this contracts response, so both remain null in Phase 4.
  */
 export function normalizeBitgetContractRules(
   row: unknown,
@@ -104,12 +99,14 @@ export function normalizeBitgetContractRules(
       : 'delayed';
 
   if (!isObject(row)) warnings.push('Bitget contracts 응답 행 형식이 올바르지 않습니다.');
-  if (!tradableStatus(object.symbolStatus)) {
+  if (!isNormalTradingStatus(object.symbolStatus)) {
     status = 'insufficient';
-    warnings.push('거래 중단 또는 비활성 상태의 선물 심볼입니다.');
+    warnings.push(
+      `계약 상태 ${String(object.symbolStatus ?? 'unknown')}는 정상 거래 상태(normal)가 아닙니다.`,
+    );
   }
   if (updatedTimestamp == null) {
-    warnings.push('거래소 계약 규칙의 갱신 시각을 확인할 수 없습니다.');
+    warnings.push('거래소 계약 규칙의 응답 시각을 확인할 수 없습니다.');
   }
 
   const quantityPrecision = nonNegativeInteger(object.volumePlace);
@@ -119,9 +116,9 @@ export function normalizeBitgetContractRules(
   const minimumNotional = positiveNumber(object.minTradeUSDT);
   const minimumLeverage = positiveNumber(object.minLever);
   const maximumLeverage = positiveNumber(object.maxLever);
-  const maintenanceMarginRate = nonNegativeNumber(object.minMaintainMarginRate);
-  const contractSize = positiveNumber(object.contractSize);
   const priceStep = priceStepFrom(object, pricePrecision);
+  const maintenanceMarginRate = null;
+  const contractSize = null;
 
   if (quantityStep == null || minimumQuantity == null || minimumNotional == null) {
     warnings.push('거래소 최소 주문 규칙을 확인할 수 없습니다.');
@@ -129,12 +126,8 @@ export function normalizeBitgetContractRules(
   if (quantityPrecision == null) warnings.push('수량 소수점 자릿수를 확인할 수 없습니다.');
   if (pricePrecision == null || priceStep == null) warnings.push('가격 단위를 확인할 수 없습니다.');
   if (maximumLeverage == null) warnings.push('거래소 최대 레버리지를 확인할 수 없습니다.');
-  if (maintenanceMarginRate == null) {
-    warnings.push('유지증거금률은 Bitget contracts 응답에서 확인되지 않아 null입니다.');
-  }
-  if (contractSize == null) {
-    warnings.push('계약 크기는 Bitget contracts 응답에서 확인되지 않아 null입니다.');
-  }
+  warnings.push('유지증거금률은 contracts 응답 필드가 아니므로 이번 단계에서는 null입니다.');
+  warnings.push('계약 크기는 contracts 응답에서 확인되지 않아 null입니다.');
 
   return {
     symbol,
@@ -179,9 +172,6 @@ async function fetchBitgetContract(symbol: string): Promise<FuturesContractRules
       .find((item) => String(item.symbol ?? '').trim().toUpperCase() === symbol);
     if (!row) {
       throw new FuturesMarketDataError(400, 'INVALID_FUTURES_SYMBOL', '지원하지 않는 선물 심볼입니다.');
-    }
-    if (!tradableStatus(row.symbolStatus)) {
-      throw new FuturesMarketDataError(400, 'FUTURES_CONTRACT_INACTIVE', '현재 거래 가능한 선물 심볼이 아닙니다.');
     }
     return normalizeBitgetContractRules(row, symbol, payload.requestTime);
   } catch (error) {
