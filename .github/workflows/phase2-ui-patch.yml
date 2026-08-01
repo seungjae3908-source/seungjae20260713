@@ -1,0 +1,55 @@
+name: Phase 2 workspace patch
+
+on:
+  push:
+    branches:
+      - feature/futures-market-data-phase2
+
+permissions:
+  contents: write
+
+jobs:
+  apply-workspace-patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout phase 2 branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/futures-market-data-phase2
+          fetch-depth: 0
+
+      - name: Apply exact minimal UI integration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('stock-analyzer/src/components/crypto-trading-workspace.tsx')
+          source = path.read_text(encoding='utf-8')
+
+          old_import = 'import { cn } from "@/lib/utils";\n'
+          new_import = old_import + 'import { FuturesMarketStatusPanel } from "@/components/futures-market-status-panel";\n'
+          if new_import not in source:
+              if old_import not in source:
+                  raise SystemExit('Expected workspace import anchor was not found.')
+              source = source.replace(old_import, new_import, 1)
+
+          old_main = '      <main className="space-y-4 px-4 pb-28 pt-4">\n'
+          new_main = old_main + '        <FuturesMarketStatusPanel symbol={symbol} />\n'
+          if new_main not in source:
+              if old_main not in source:
+                  raise SystemExit('Expected workspace main anchor was not found.')
+              source = source.replace(old_main, new_main, 1)
+
+          path.write_text(source, encoding='utf-8')
+
+      - name: Remove temporary workflow and commit
+        run: |
+          git rm .github/workflows/phase2-ui-patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add stock-analyzer/src/components/crypto-trading-workspace.tsx
+          git commit -m "feat: expose futures market status in workspace"
+          git push origin HEAD:feature/futures-market-data-phase2
