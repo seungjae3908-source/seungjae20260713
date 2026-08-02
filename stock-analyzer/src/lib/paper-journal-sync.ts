@@ -1,4 +1,6 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { createBatchIdempotencyKey, JOURNAL_SYNC_BATCH_SIZE } from './paper-journal-batching';
+export { createBatchIdempotencyKey, JOURNAL_SYNC_BATCH_SIZE, MAX_IDEMPOTENCY_KEY_LENGTH } from './paper-journal-batching';
 
 export type JournalRecordKind = 'account' | 'order' | 'position' | 'fill' | 'journal';
 export type JournalSyncRecord = { kind: JournalRecordKind; id: string; version: number; updatedAt: string; deletedAt: string | null; payload: Record<string, unknown> };
@@ -45,14 +47,6 @@ export type TradingReviewDataset = {
 };
 
 export const JOURNAL_DELETE_CONFIRMATION = 'DELETE MY PAPER JOURNAL';
-export const JOURNAL_SYNC_BATCH_SIZE = 500;
-export const MAX_IDEMPOTENCY_KEY_LENGTH = 160;
-
-export function createBatchIdempotencyKey(base: string, index: number) {
-  const suffix = `:batch-${index}`;
-  if (suffix.length >= MAX_IDEMPOTENCY_KEY_LENGTH) throw new Error('배치 idempotency suffix가 너무 깁니다.');
-  return `${base.slice(0, MAX_IDEMPOTENCY_KEY_LENGTH - suffix.length)}${suffix}`;
-}
 
 function safeError(body: unknown, fallback: string) {
   if (body && typeof body === 'object') {
