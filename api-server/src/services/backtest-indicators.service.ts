@@ -14,15 +14,21 @@ export function smaSeries(values: readonly number[], period: number): NullableSe
   const result: NullableSeries = Array(values.length).fill(null);
   if (!validPeriod(period)) return result;
   let sum = 0;
+  let invalidCount = 0;
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
-    if (!finite(value)) {
-      sum = 0;
-      continue;
+    if (finite(value)) sum += value;
+    else invalidCount += 1;
+
+    if (index >= period) {
+      const removed = values[index - period];
+      if (finite(removed)) sum -= removed;
+      else invalidCount = Math.max(0, invalidCount - 1);
     }
-    sum += value;
-    if (index >= period) sum -= values[index - period];
-    if (index >= period - 1 && finite(sum)) result[index] = sum / period;
+
+    if (index >= period - 1 && invalidCount === 0 && finite(sum)) {
+      result[index] = sum / period;
+    }
   }
   return result;
 }
