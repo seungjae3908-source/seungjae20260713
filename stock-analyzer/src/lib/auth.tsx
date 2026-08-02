@@ -1,29 +1,46 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import {
+  deriveMemberTier,
+  hasCapability,
+  permissionsFor,
+  type MemberCapability,
+  type MemberTier,
+} from '../../../packages/member-access/src/index.js';
 
 export type MemberProfile = {
   id: string;
   login_name: string;
   display_name: string;
-  role: 'user' | 'admin';
+  role: string;
   status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'withdrawn';
+  membership_level?: MemberTier | null;
+  is_active?: boolean | null;
+  permissions_updated_at?: string | null;
+  updated_at?: string | null;
 };
 
 type AuthContextValue = {
-  configured: boolean; loading: boolean; session: Session | null; user: User | null;
-  profile: MemberProfile | null; displayName: string | null; isAdmin: boolean; isApproved: boolean;
+  configured: boolean;
+  loading: boolean;
+  session: Session | null;
+  user: User | null;
+  profile: MemberProfile | null;
+  displayName: string | null;
+  membershipLevel: MemberTier;
+  permissions: Readonly<Record<MemberCapability, boolean>>;
+  can(capability: MemberCapability): boolean;
+  isAdmin: boolean;
+  isApproved: boolean;
   signIn(loginName: string, password: string): Promise<void>;
   signUp(loginName: string, password: string): Promise<void>;
-  signOut(): Promise<void>; refreshProfile(): Promise<void>;
+  signOut(): Promise<void>;
+  refreshProfile(): Promise<void>;
 };
 
 type UnknownRecord = Record<string, unknown>;
-
-type ApiSessionTokens = {
-  accessToken: string;
-  refreshToken: string;
-};
+type ApiSessionTokens = { accessToken: string; refreshToken: string };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const normalizeName = (value: string) => value.trim().normalize('NFKC').toLowerCase();
@@ -53,9 +70,7 @@ function authMessage(cause: unknown) {
 }
 
 function asRecord(value: unknown): UnknownRecord | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as UnknownRecord
-    : null;
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : null;
 }
 
 function readString(record: UnknownRecord | null, ...keys: string[]) {
@@ -71,31 +86,21 @@ function extractApiSessionTokens(payload: unknown): ApiSessionTokens | null {
   const data = asRecord(root?.data);
   const auth = asRecord(root?.auth);
   const supabase = asRecord(root?.supabase);
-
   const candidates = [
-    asRecord(root?.session),
-    asRecord(data?.session),
-    asRecord(auth?.session),
-    asRecord(supabase?.session),
-    data,
-    auth,
-    supabase,
-    root,
+    asRecord(root?.session), asRecord(data?.session), asRecord(auth?.session),
+    asRecord(supabase?.session), data, auth, supabase, root,
   ];
-
   for (const candidate of candidates) {
     const accessToken = readString(candidate, 'access_token', 'accessToken');
     const refreshToken = readString(candidate, 'refresh_token', 'refreshToken');
     if (accessToken && refreshToken) return { accessToken, refreshToken };
   }
-
   return null;
 }
 
 function apiErrorMessage(payload: unknown, status: number) {
   const record = asRecord(payload);
   const message = readString(record, 'message', 'error_description', 'error');
-
   if (status === 400 || status === 401) return '아이디 또는 비밀번호가 맞지 않습니다.';
   if (status === 429) return '요청이 많습니다. 잠시 후 다시 시도해 주세요.';
   if (message && message.length <= 160) return message;
@@ -104,42 +109,23 @@ function apiErrorMessage(payload: unknown, status: number) {
 
 async function signInThroughApi(identifier: string, password: string) {
   const response = await fetch('/api/auth/login', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ identifier, password }),
   });
-
   let payload: unknown = null;
-  try {
-    payload = await response.json();
-  } catch {
-    // JSON이 아닌 오류 응답은 아래 공통 메시지로 처리합니다.
-  }
-
+  try { payload = await response.json(); } catch { /* common safe message below */ }
   if (!response.ok) throw new Error(apiErrorMessage(payload, response.status));
-
   const tokens = extractApiSessionTokens(payload);
-  if (!tokens) {
-    throw new Error('로그인 응답에 Supabase session token이 없습니다. API 응답의 access_token과 refresh_token을 확인해 주세요.');
-  }
+  if (!tokens) throw new Error('로그인 응답에 Supabase session token이 없습니다.');
 
-  const supabaseClient = getSupabase();
-  const { data, error } = await supabaseClient.auth.setSession({
-    access_token: tokens.accessToken,
-    refresh_token: tokens.refreshToken,
-  });
-
-  if (error || !data.session) {
-    throw new Error(`로그인 session token 적용에 실패했습니다${error?.message ? `: ${error.message}` : '.'}`);
-  }
-
-  const { data: verified, error: verifyError } = await supabaseClient.auth.getUser();
+  const client = getSupabase();
+  const { data, error } = await client.auth.setSession({ access_token: tokens.accessToken, refresh_token: tokens.refreshToken });
+  if (error || !data.session) throw new Error(`로그인 session token 적용에 실패했습니다${error?.message ? `: ${error.message}` : '.'}`);
+  const { data: verified, error: verifyError } = await client.auth.getUser();
   if (verifyError || !verified.user) {
-    await supabaseClient.auth.signOut({ scope: 'local' });
-    throw new Error(`로그인 session token 검증에 실패했습니다${verifyError?.message ? `: ${verifyError.message}` : '.'}`);
+    await client.auth.signOut({ scope: 'local' });
+    throw new Error('로그인 session token 검증에 실패했습니다.');
   }
-
   return data.session;
 }
 
@@ -150,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function loadProfile(user: User | null) {
     if (!user) { setProfile(null); return; }
-    const { data } = await getSupabase().from('profiles').select('id,login_name,display_name,role,status').eq('id', user.id).maybeSingle();
+    const { data } = await getSupabase().from('profiles').select('*').eq('id', user.id).maybeSingle();
     setProfile((data as MemberProfile | null) ?? null);
   }
 
@@ -159,24 +145,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let mounted = true;
     void getSupabase().auth.getSession().then(async ({ data }) => {
       if (!mounted) return;
-      setSession(data.session); await loadProfile(data.session?.user ?? null); setLoading(false);
+      setSession(data.session);
+      await loadProfile(data.session?.user ?? null);
+      if (mounted) setLoading(false);
     });
     const { data: sub } = getSupabase().auth.onAuthStateChange((_event, next) => {
-      setSession(next); void loadProfile(next?.user ?? null).finally(() => setLoading(false));
+      setSession(next);
+      void loadProfile(next?.user ?? null).finally(() => { if (mounted) setLoading(false); });
     });
     return () => { mounted = false; sub.subscription.unsubscribe(); };
   }, []);
 
+  useEffect(() => {
+    if (!session?.user) return;
+    let active = true;
+    const refresh = () => { if (active) void loadProfile(session.user); };
+    const visibility = () => { if (document.visibilityState === 'visible') refresh(); };
+    const timer = window.setInterval(refresh, 30_000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', visibility);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', visibility);
+    };
+  }, [session?.user?.id]);
+
+  const membershipLevel = deriveMemberTier(profile);
+  const permissions = permissionsFor(profile);
   const value = useMemo<AuthContextValue>(() => ({
-    configured: isSupabaseConfigured, loading, session, user: session?.user ?? null, profile,
+    configured: isSupabaseConfigured,
+    loading,
+    session,
+    user: session?.user ?? null,
+    profile,
     displayName: profile?.display_name ?? (session?.user?.user_metadata?.display_name as string | undefined) ?? null,
-    isAdmin:
-        (profile?.status === 'approved' && profile.role === 'admin') ||
-        (session?.user?.app_metadata?.status === 'approved' &&
-          session?.user?.app_metadata?.role === 'admin'),
-      isApproved:
-        profile?.status === 'approved' ||
-        session?.user?.app_metadata?.status === 'approved',
+    membershipLevel,
+    permissions,
+    can: (capability) => hasCapability(profile, capability),
+    isAdmin: permissions.canManageMembers,
+    isApproved: permissions.canAccessBasicInfo,
     async signIn(loginName, password) {
       const name = validate(loginName, password);
       setLoading(true);
@@ -185,21 +194,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(nextSession);
         await loadProfile(nextSession.user);
       } catch (cause) {
-        setSession(null);
-        setProfile(null);
-        throw new Error(authMessage(cause));
-      } finally {
-        setLoading(false);
-      }
+        setSession(null); setProfile(null); throw new Error(authMessage(cause));
+      } finally { setLoading(false); }
     },
     async signUp(loginName, password) {
-      const name = validate(loginName, password); const normalized = normalizeName(name);
-      const { data, error } = await getSupabase().auth.signUp({ email: await internalEmail(normalized), password, options: { data: { display_name: name, login_name: normalized } } });
+      const name = validate(loginName, password);
+      const normalized = normalizeName(name);
+      const { data, error } = await getSupabase().auth.signUp({
+        email: await internalEmail(normalized), password,
+        options: { data: { display_name: name, login_name: normalized } },
+      });
       if (error || data.user?.identities?.length === 0) throw new Error(authMessage(error ?? new Error('already')));
     },
     async signOut() { const { error } = await getSupabase().auth.signOut(); if (error) throw error; },
     async refreshProfile() { await loadProfile(session?.user ?? null); },
-  }), [loading, profile, session]);
+  }), [loading, membershipLevel, permissions, profile, session]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
