@@ -52,6 +52,13 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function storedMemberTier(profile: MemberAdministrationProfile): MemberTier {
+  if (typeof profile.membership_level === 'string' && MEMBER_TIERS.includes(profile.membership_level as MemberTier)) {
+    return profile.membership_level as MemberTier;
+  }
+  return deriveMemberTier(profile);
+}
+
 export function parseMemberChangeRequest(value: unknown): MemberChangeRequest {
   if (!isObject(value)) {
     throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 변경 요청 형식을 확인하세요.');
@@ -78,7 +85,7 @@ export function parseMemberChangeRequest(value: unknown): MemberChangeRequest {
 }
 
 export function isActiveAdmin(profile: MemberAdministrationProfile) {
-  return profile.is_active !== false && deriveMemberTier(profile) === 'admin';
+  return profile.is_active !== false && storedMemberTier(profile) === 'admin';
 }
 
 export function planMemberChange(
@@ -88,7 +95,9 @@ export function planMemberChange(
   activeAdminCount: number,
   now = new Date(),
 ): MemberChangePlan {
-  const currentTier = deriveMemberTier(current);
+  // Authorization treats inactive members as pending, but administration must
+  // preserve their stored tier so a reactivation does not silently demote them.
+  const currentTier = storedMemberTier(current);
   const currentActive = current.is_active !== false;
   const nextTier = request.membershipLevel ?? currentTier;
   const nextActive = request.isActive ?? currentActive;
