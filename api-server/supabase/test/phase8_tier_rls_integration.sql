@@ -1,5 +1,14 @@
 \set ON_ERROR_STOP on
 
+-- Model the table privileges Supabase assigns to its API roles. Keep this
+-- fixture self-contained because rollback drops the tables (and their grants),
+-- then the verification script recreates them before running this file again.
+grant usage on schema public, auth to authenticated, anon;
+grant execute on function auth.uid() to authenticated, anon;
+grant execute on function public.current_membership_level() to authenticated, anon;
+grant select, insert, update, delete on all tables in schema public to authenticated, anon;
+grant usage, select on all sequences in schema public to authenticated, anon;
+
 -- Assign the explicit tier introduced by Phase 8 after the compatibility
 -- migration has converted legacy approved users to regular.
 update public.profiles
