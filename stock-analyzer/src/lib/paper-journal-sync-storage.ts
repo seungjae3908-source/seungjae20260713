@@ -174,12 +174,23 @@ export function saveJournalSyncMetadata(storage: StorageLike, userId: string, me
 }
 
 function currentPayloads(state: PaperTradingState) {
+  const ordersById = new Map(state.orders.map((order) => [order.id, order]));
   return [
     { kind: 'account' as const, id: state.account.id, payload: state.account as unknown as Record<string, unknown> },
     ...state.orders.map((payload) => ({ kind: 'order' as const, id: payload.id, payload: payload as unknown as Record<string, unknown> })),
     ...state.positions.map((payload) => ({ kind: 'position' as const, id: payload.id, payload: payload as unknown as Record<string, unknown> })),
     ...state.fills.map((payload) => ({ kind: 'fill' as const, id: payload.id, payload: payload as unknown as Record<string, unknown> })),
-    ...state.journal.map((payload) => ({ kind: 'journal' as const, id: payload.id, payload: payload as unknown as Record<string, unknown> })),
+    ...state.journal.map((payload) => {
+      const order = ordersById.get(payload.orderId);
+      return {
+        kind: 'journal' as const,
+        id: payload.id,
+        payload: {
+          ...(payload as unknown as Record<string, unknown>),
+          riskPercent: order?.riskResult?.actualRiskPercent ?? null,
+        },
+      };
+    }),
   ];
 }
 
@@ -297,8 +308,8 @@ export function applyJournalSnapshot(
   const metadata = structuredClone(loaded.metadata);
   updateMetadataRecords(metadata, snapshot.records);
   metadata.lastSyncAt = snapshot.serverTime;
-  metadata.downloadedCount = snapshot.records.length;
-  metadata.status = metadata.conflicts.length ? 'conflict' : 'completed';
+  metadata.downloadedCount += snapshot.records.length;
+  metadata.status = metadata.conflicts.length ? 'conflict' : metadata.failedCount ? 'failed' : 'completed';
   saveJournalSyncMetadata(storage, userId, metadata);
   return { state: applyServerRecords(state, snapshot.records), metadata };
 }
@@ -313,7 +324,7 @@ export function applyConflictResolution(
   const metadata = structuredClone(loaded.metadata);
   updateMetadataRecords(metadata, result.records);
   metadata.conflicts = metadata.conflicts.filter((conflict) => conflict.id !== result.conflictId);
-  metadata.status = metadata.conflicts.length ? 'conflict' : 'completed';
+  metadata.status = metadata.conflicts.length ? 'conflict' : metadata.failedCount ? 'failed' : 'completed';
   metadata.lastSyncAt = result.serverTime;
   saveJournalSyncMetadata(storage, userId, metadata);
   return { state: applyServerRecords(state, result.records), metadata };
@@ -323,6 +334,14 @@ export function markJournalSyncOffline(storage: StorageLike, userId: string, mes
   const metadata = structuredClone(loadJournalSyncMetadata(storage, userId).metadata);
   metadata.status = 'offline';
   metadata.warning = message;
+  return saveJournalSyncMetadata(storage, userId, metadata);
+}
+
+export function markJournalSyncFailed(storage: StorageLike, userId: string, message = '동기화에 실패했습니다. 로컬 기록은 유지됩니다.') {
+  const metadata = structuredClone(loadJournalSyncMetadata(storage, userId).metadata);
+  metadata.status = 'failed';
+  metadata.failedCount = Math.max(1, metadata.failedCount);
+  metadata.warning = message.slice(0, 500);
   return saveJournalSyncMetadata(storage, userId, metadata);
 }
 
