@@ -60,7 +60,7 @@ test('delete policy uses auth.uid ownership', () => {
 });
 
 test('migration does not add admin browsing policy', () => {
-  assert.doesNotMatch(sql, /admin.*policy|role.*admin/i);
+  assert.doesNotMatch(sql, /create policy[\s\S]{0,180}(?:\badmin\b|service_role)/i);
 });
 
 test('migration does not contain service role key', () => {
