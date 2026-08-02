@@ -37,9 +37,12 @@ function optionalNumber(body: Record<string, unknown>, key: string) {
 
 function parseRequest(body: unknown): BacktestRequest {
   if (!isObject(body)) throw new BacktestValidationError('INVALID_REQUEST', 'JSON 요청 본문이 필요합니다.');
-  const parameters = isObject(body.parameters)
-    ? Object.fromEntries(Object.entries(body.parameters).filter(([, value]) => typeof value === 'number' || typeof value === 'boolean'))
-    : {};
+  const parameters: Record<string, number | boolean> = {};
+  if (isObject(body.parameters)) {
+    for (const [key, value] of Object.entries(body.parameters)) {
+      if (typeof value === 'number' || typeof value === 'boolean') parameters[key] = value;
+    }
+  }
   const trailingInput = isObject(body.trailingStop) ? body.trailingStop : null;
   const splitInput = isObject(body.validationSplit) ? body.validationSplit : null;
   const request: BacktestRequest = {
