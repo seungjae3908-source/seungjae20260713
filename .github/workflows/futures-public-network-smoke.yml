@@ -76,6 +76,8 @@ jobs:
         run: pnpm --dir api-server run test:phase7
       - name: Run Phase 8 release candidate tests
         run: pnpm --dir api-server run test:phase8
+      - name: Run Phase 9 privacy-safe AI review tests
+        run: pnpm --dir api-server run test:phase9
       - name: Run API smoke tests
         run: pnpm --dir api-server run test:smoke
       - name: Build frontend production bundle
@@ -118,7 +120,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: phase8-playwright-${{ github.run_id }}
+          name: phase9-playwright-${{ github.run_id }}
           path: |
             stock-analyzer/test-results
             stock-analyzer/playwright-report
@@ -247,6 +249,44 @@ jobs:
             const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Security integration run ${context.runId}: ${result}`, context: 'security-integration/verified' });
 
+  ai-privacy:
+    name: AI privacy, prompt, output, and outbound verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Publish pending AI privacy status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `AI privacy run ${context.runId}: running`, context: 'ai-privacy/verified' });
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9, run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20", cache: pnpm, cache-dependency-path: pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+      - name: Run mock provider and privacy tests
+        run: pnpm --dir api-server run test:phase9
+      - name: Build frontend for secret inspection
+        run: pnpm --dir stock-analyzer run build
+      - name: Verify AI privacy and zero outbound contract
+        id: ai
+        working-directory: api-server
+        run: node ./scripts/verify-phase9-ai-privacy.mjs
+      - name: Publish AI privacy result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ steps.ai.outcome }}' || 'failure';
+            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
+            if (runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued','in_progress','completed','waiting','pending','requested'].includes(run.status))) return;
+            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `AI privacy run ${context.runId}: ${result}`, context: 'ai-privacy/verified' });
+
   publish-validation:
     name: Publish Application CI conclusion
     needs:
@@ -254,6 +294,7 @@ jobs:
       - browser-ui
       - database-rls
       - security-integration
+      - ai-privacy
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -261,7 +302,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const results = ['${{ needs.validate.result }}', '${{ needs.browser-ui.result }}', '${{ needs.database-rls.result }}', '${{ needs.security-integration.result }}'];
+            const results = ['${{ needs.validate.result }}', '${{ needs.browser-ui.result }}', '${{ needs.database-rls.result }}', '${{ needs.security-integration.result }}', '${{ needs.ai-privacy.result }}'];
             const result = results.every((item) => item === 'success') ? 'success' : results.some((item) => item === 'cancelled') ? 'cancelled' : 'failure';
             const sha = context.payload.pull_request?.head?.sha ?? context.sha;
             const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });

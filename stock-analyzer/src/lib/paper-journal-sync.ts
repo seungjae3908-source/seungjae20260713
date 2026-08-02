@@ -45,6 +45,9 @@ export type TradingReviewDataset = {
   timeMetrics: AnalyticsMetricGroup[]; representativeTrades: Array<{ anonymizedId: string; side: 'long'|'short'; strategy: string|null; riskPercent: number|null; rMultiple: number|null; netPnlPercent: number|null; exitReason: string; ruleViolations: string[] }>;
   excludedFields: string[]; warnings: string[];
 };
+export type TradingAiReviewResult = { summary: string; strengths: Array<{ title:string; explanation:string; evidenceIds:string[]; confidence:'low'|'medium'|'high' }>; riskPatterns:Array<{title:string;explanation:string;evidenceIds:string[];confidence:'low'|'medium'|'high';certainty:'confirmed'|'candidate'|'insufficient'}>; costObservations:Array<{title:string;explanation:string;evidenceIds:string[]}>; ruleCompliance:Array<{rule:string;status:'good'|'warning'|'insufficient';explanation:string}>; practiceActions:Array<{priority:1|2|3;action:string;reason:string;measurableTarget:string}>; nextTradeChecklist:string[]; limitations:string[]; disclaimer:string };
+export type AiReviewPreview = { dataset: TradingReviewDataset; includedFields:string[]; excludedFields:string[]; warnings:string[] };
+export type GeneratedAiReview = { providerRequestId:string|null; model:string; generatedAt:string; result:TradingAiReviewResult; usage:{inputUnits:number|null;outputUnits:number|null} };
 
 export const JOURNAL_DELETE_CONFIRMATION = 'DELETE MY PAPER JOURNAL';
 
@@ -173,4 +176,17 @@ export async function buildTradingReviewDataset(periodStart?: string, periodEnd?
   assertAnalysisEnvelope(body);
   if (!response.ok || body?.ok !== true) throw new Error(safeError(body, '복기용 구조화 데이터를 준비하지 못했습니다.'));
   return body?.result as TradingReviewDataset;
+}
+
+export async function previewTradingAiReview(periodStart?: string, periodEnd?: string, signal?: AbortSignal) {
+  const response = await authorizedFetch('/api/paper-journal/ai-review/preview', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({periodStart:periodStart||null,periodEnd:periodEnd||null}), signal });
+  const body=await parseJson(response); if (!body || body.mode!=='ai-review-preview' || body.externalAiCalled!==false || body.orderSubmitted!==false || body.exchangeRequestSent!==false) throw new Error('AI 복기 미리보기 안전 계약을 확인하지 못했습니다.');
+  if (!response.ok || body.ok!==true) throw new Error(safeError((body.error as Record<string,unknown>)??body,'AI 복기 미리보기를 만들지 못했습니다.'));
+  return body.result as AiReviewPreview;
+}
+export async function generateTradingAiReview(input:{periodStart?:string;periodEnd?:string;consent:boolean;reviewStyle:'concise'|'detailed';idempotencyKey:string},signal?:AbortSignal){
+  const response=await authorizedFetch('/api/paper-journal/ai-review/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...input,locale:'ko-KR'}),signal}); const body=await parseJson(response);
+  if(!body||body.mode!=='ai-review-only'||body.orderSubmitted!==false||body.exchangeRequestSent!==false)throw new Error('AI 복기 생성 안전 계약을 확인하지 못했습니다.');
+  if(!response.ok||body.ok!==true||body.externalAiCalled!==true)throw new Error(safeError((body.error as Record<string,unknown>)??body,'AI 복기를 생성하지 못했습니다.'));
+  return body.result as GeneratedAiReview;
 }
