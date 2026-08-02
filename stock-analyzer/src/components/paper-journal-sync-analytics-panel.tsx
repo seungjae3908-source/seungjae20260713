@@ -16,6 +16,7 @@ import {
   applyJournalSnapshot,
   applyJournalSyncResult,
   loadJournalSyncMetadata,
+  markJournalSyncFailed,
   markJournalSyncOffline,
   prepareJournalSync,
   type JournalSyncMetadata,
@@ -117,11 +118,12 @@ export function PaperJournalSyncAnalyticsPanel({
           : `업로드 ${result.uploaded.length}건, 다운로드 ${applied.metadata.downloadedCount}건을 동기화했습니다.`);
       onLocalStateChanged?.();
     } catch (cause) {
+      const message = cause instanceof Error ? cause.message : '거래일지를 동기화하지 못했습니다.';
       const next = online
-        ? { ...loadJournalSyncMetadata(rootStorage, userId).metadata, status: 'failed' as const }
+        ? markJournalSyncFailed(rootStorage, userId, message)
         : markJournalSyncOffline(rootStorage, userId);
       setMetadata(next);
-      setError(cause instanceof Error ? cause.message : '거래일지를 동기화하지 못했습니다.');
+      setError(message);
     } finally {
       setBusy(false);
     }
