@@ -59,6 +59,16 @@ function storedMemberTier(profile: MemberAdministrationProfile): MemberTier {
   return deriveMemberTier(profile);
 }
 
+export function sanitizeMemberSearch(value: unknown) {
+  if (typeof value !== 'string') return '';
+  return value
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N} _.\-]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
+
 export function parseMemberChangeRequest(value: unknown): MemberChangeRequest {
   if (!isObject(value)) {
     throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 변경 요청 형식을 확인하세요.');
