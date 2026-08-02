@@ -6,6 +6,8 @@ The GitHub connector used by the project can read and write repository data but 
 
 The bridge does not deploy staging itself. It validates one owner command and then calls the existing `.github/workflows/staging-readiness.yml` workflow through GitHub's workflow-dispatch API.
 
+GitHub documents that workflows using the repository `GITHUB_TOKEN` can trigger `workflow_dispatch` runs, and that both the dispatch target and an `issue_comment` workflow must exist on the default branch. This bridge therefore runs from `main` and dispatches the target workflow from `main`.
+
 ## Control issue
 
 Only issue `#23`, titled `Staging Readiness Control`, is accepted.
