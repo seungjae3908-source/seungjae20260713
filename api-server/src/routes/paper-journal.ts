@@ -1,4 +1,4 @@
-import { Router, type IRouter, type Request } from 'express';
+import { Router, type IRouter, type Request, type Response } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { calculatePaperJournalAnalytics, createTradingReviewDataset } from '../services/paper-journal-analytics.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
@@ -170,7 +170,7 @@ export function createPaperJournalRouter(
 }
 
 function handleError(
-  response: Parameters<IRouter['use']>[0] extends never ? never : any,
+  response: Response,
   cause: unknown,
   fallbackCode: string,
   fallbackMessage: string,
