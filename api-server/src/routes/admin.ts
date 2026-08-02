@@ -10,6 +10,7 @@ import {
   isActiveAdmin,
   parseMemberChangeRequest,
   planMemberChange,
+  sanitizeMemberSearch,
   type MemberAdministrationProfile,
   type MemberChangeRequest,
 } from '../services/member-administration.service';
@@ -18,18 +19,9 @@ const router = Router();
 router.use(requireAuthenticated, requireAdmin);
 
 const PROFILE_FIELDS = [
-  'id',
-  'login_name',
-  'display_name',
-  'membership_level',
-  'is_active',
-  'status',
-  'role',
-  'approved_at',
-  'approved_by',
-  'created_at',
-  'updated_at',
-  'permissions_updated_at',
+  'id', 'login_name', 'display_name', 'membership_level', 'is_active',
+  'status', 'role', 'approved_at', 'approved_by', 'created_at',
+  'updated_at', 'permissions_updated_at',
 ].join(',');
 
 type AdminProfileRow = MemberAdministrationProfile & {
@@ -42,12 +34,6 @@ type AdminProfileRow = MemberAdministrationProfile & {
 
 function adminDb(req: AuthenticatedRequest) {
   return hasSupabaseServerKey() ? getSupabase() : getUserSupabase(req.accessToken!);
-}
-
-function safeQuery(value: unknown) {
-  return typeof value === 'string'
-    ? value.trim().normalize('NFKC').replace(/[,%()]/g, '').slice(0, 80)
-    : '';
 }
 
 function routeId(value: string | string[] | undefined) {
@@ -83,19 +69,10 @@ async function applyMemberChange(
   try {
     const db = adminDb(req);
     const { data: currentData, error: currentError } = await db
-      .from('profiles')
-      .select(PROFILE_FIELDS)
-      .eq('id', targetId)
-      .single();
+      .from('profiles').select(PROFILE_FIELDS).eq('id', targetId).single();
     if (currentError || !currentData) return res.status(404).json({ error: 'MEMBER_NOT_FOUND' });
     const current = currentData as unknown as AdminProfileRow;
-
-    const plan = planMemberChange(
-      current,
-      requested,
-      req.member!.id,
-      await activeAdminCount(req),
-    );
+    const plan = planMemberChange(current, requested, req.member!.id, await activeAdminCount(req));
     const rollback = {
       membership_level: current.membership_level,
       is_active: current.is_active,
@@ -108,11 +85,8 @@ async function applyMemberChange(
     };
 
     const { data: memberData, error: updateError } = await db
-      .from('profiles')
-      .update(plan.changes)
-      .eq('id', targetId)
-      .select(PROFILE_FIELDS)
-      .single();
+      .from('profiles').update(plan.changes).eq('id', targetId)
+      .select(PROFILE_FIELDS).single();
     if (updateError || !memberData) throw new Error('MEMBER_UPDATE_FAILED');
     const member = memberData as unknown as AdminProfileRow;
 
@@ -148,14 +122,15 @@ async function applyMemberChange(
 }
 
 router.get('/members', async (req: AuthenticatedRequest, res) => {
-  const search = safeQuery(req.query.search);
-  const membershipLevel = safeQuery(req.query.membershipLevel);
+  const search = sanitizeMemberSearch(req.query.search);
+  const requestedTier = sanitizeMemberSearch(req.query.membershipLevel);
+  const membershipLevel = ['pending', 'associate', 'regular', 'admin'].includes(requestedTier)
+    ? requestedTier
+    : '';
   try {
     let query = adminDb(req)
-      .from('profiles')
-      .select(PROFILE_FIELDS)
-      .order('created_at', { ascending: false })
-      .limit(500);
+      .from('profiles').select(PROFILE_FIELDS)
+      .order('created_at', { ascending: false }).limit(500);
     if (membershipLevel) query = query.eq('membership_level', membershipLevel);
     if (search) query = query.or(`login_name.ilike.%${search}%,display_name.ilike.%${search}%`);
     const { data, error } = await query;
@@ -170,10 +145,7 @@ router.get('/members/:id', async (req: AuthenticatedRequest, res) => {
   try {
     const id = routeId(req.params.id);
     const { data, error } = await adminDb(req)
-      .from('profiles')
-      .select(PROFILE_FIELDS)
-      .eq('id', id)
-      .single();
+      .from('profiles').select(PROFILE_FIELDS).eq('id', id).single();
     if (error || !data) return res.status(404).json({ error: 'MEMBER_NOT_FOUND' });
     return res.json({ ok: true, member: data as unknown as AdminProfileRow });
   } catch (cause) {
@@ -184,11 +156,7 @@ router.get('/members/:id', async (req: AuthenticatedRequest, res) => {
 router.post('/members/:id/approve', async (req: AuthenticatedRequest, res) => {
   try {
     const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
-    const requested = parseMemberChangeRequest({
-      membershipLevel: 'associate',
-      isActive: true,
-      reason,
-    });
+    const requested = parseMemberChangeRequest({ membershipLevel: 'associate', isActive: true, reason });
     return applyMemberChange(req, res, routeId(req.params.id), requested);
   } catch (cause) {
     return sendAdminError(res, cause, 'MEMBER_APPROVAL_FAILED');
@@ -205,13 +173,12 @@ router.patch('/members/:id', async (req: AuthenticatedRequest, res) => {
 });
 
 router.get('/audit-logs', async (req: AuthenticatedRequest, res) => {
-  const targetUserId = safeQuery(req.query.targetUserId);
+  const targetUserId = sanitizeMemberSearch(req.query.targetUserId);
   try {
     let query = adminDb(req)
       .from('member_permission_audit')
       .select('id,actor_id,target_user_id,action,before_value,after_value,reason,created_at')
-      .order('created_at', { ascending: false })
-      .limit(500);
+      .order('created_at', { ascending: false }).limit(500);
     if (targetUserId) query = query.eq('target_user_id', targetUserId);
     const { data, error } = await query;
     if (error) throw new Error('AUDIT_LIST_FAILED');
