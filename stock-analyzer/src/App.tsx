@@ -29,10 +29,13 @@ const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
+const BacktestsPage = lazy(() => import('@/pages/backtests'));
 const NotFound = lazy(() => import('@/pages/not-found'));
 const Phase4RiskE2EPage = lazy(() => import('@/pages/phase4-risk-e2e'));
+const Phase5BacktestE2EPage = lazy(() => import('@/pages/phase5-backtest-e2e'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
+const phase5E2EEnabled = import.meta.env.VITE_PHASE5_E2E === 'true';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -112,6 +115,7 @@ function ApprovedRouter() {
         <Route path="/more" component={MorePage} />
         <Route path="/stock/:ticker" component={DetailPage} />
         <Route path="/recommendations" component={RecommendationsPage} />
+        <Route path="/backtests" component={BacktestsPage} />
         <Route path="/crypto" component={CryptoHomeRedirect} />
         <Route path="/crypto/search" component={CryptoSearchRedirect} />
         <Route path="/crypto/:symbol" component={CryptoDetailRedirect} />
@@ -125,9 +129,8 @@ function RootRouter() {
   return (
     <Suspense fallback={<PageFallback />}>
       <Switch>
-        {phase4E2EEnabled ? (
-          <Route path="/__phase4-risk-e2e" component={Phase4RiskE2EPage} />
-        ) : null}
+        {phase4E2EEnabled ? <Route path="/__phase4-risk-e2e" component={Phase4RiskE2EPage} /> : null}
+        {phase5E2EEnabled ? <Route path="/__phase5-backtest-e2e" component={Phase5BacktestE2EPage} /> : null}
         <Route path="/install" component={InstallPage} />
         <Route component={AuthenticatedApp} />
       </Switch>
