@@ -15,14 +15,19 @@ const groups = {
   risk: [
     path.join(root, 'src/services/trading-risk-engine.service.test.ts'),
   ],
+  phase4: [
+    path.join(root, 'src/services/futures-contract-rules.service.test.ts'),
+    path.join(root, 'src/services/trading-risk-contract-rules.test.ts'),
+  ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
     path.join(root, 'src/routes/trading-risk.smoke.test.ts'),
+    path.join(root, 'src/routes/futures-contract-rules.smoke.test.ts'),
   ],
 };
 
-groups.unit = [...groups.phase2, ...groups.risk];
-const allowedModes = ['all', 'unit', 'phase2', 'risk', 'smoke'];
+groups.unit = [...groups.phase2, ...groups.risk, ...groups.phase4];
+const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'smoke'];
 if (!allowedModes.includes(mode)) {
   throw new Error(`Unknown test mode: ${mode}`);
 }
