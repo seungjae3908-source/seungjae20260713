@@ -84,6 +84,7 @@ export function PaperTradingPanel({
   const [confirming, setConfirming] = useState(false);
   const [resetStep, setResetStep] = useState(false);
   const [journalFilter, setJournalFilter] = useState('all');
+  const [closeQuantities, setCloseQuantities] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const requestSequence = useRef(0);
 
@@ -113,7 +114,27 @@ export function PaperTradingPanel({
       .catch((cause) => { if (sequence === requestSequence.current) setError(cause instanceof Error ? cause.message : '시장 데이터를 불러오지 못했습니다.'); });
   }, [form.symbol, loadMarket, loadRules]);
 
-  const update = <K extends keyof FormValues>(key: K, value: FormValues[K]) => setForm((current) => ({ ...current, [key]: value }));
+  const update = <K extends keyof FormValues,>(key: K, value: FormValues[K]) => setForm((current) => ({ ...current, [key]: value }));
+
+  const changeSide = (side: FormValues['side']) => {
+    const price = market?.markPrice ?? market?.price ?? 100;
+    setForm((current) => ({
+      ...current,
+      side,
+      stopLossPrice: side === 'long' ? price * 0.98 : price * 1.02,
+      takeProfitPrice1: String(side === 'long' ? price * 1.04 : price * 0.96),
+      takeProfitPrice2: String(side === 'long' ? price * 1.08 : price * 0.92),
+    }));
+  };
+
+  const estimatedRiskReward = useMemo(() => {
+    const entry = market?.askPrice ?? market?.bidPrice ?? market?.markPrice ?? market?.price ?? null;
+    const target = form.takeProfitPrice1 === '' ? null : Number(form.takeProfitPrice1);
+    if (entry == null || target == null || !Number.isFinite(target)) return null;
+    const risk = Math.abs(entry - form.stopLossPrice);
+    const reward = Math.abs(target - entry);
+    return risk > 0 && Number.isFinite(reward) ? reward / risk : null;
+  }, [form.stopLossPrice, form.takeProfitPrice1, market]);
 
   const localBlocks = useMemo(() => {
     const blocks: string[] = [];
@@ -232,7 +253,7 @@ export function PaperTradingPanel({
         <h2 className="mb-3 font-bold">모의주문</h2>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Field label="종목"><input className={inputClass} value={form.symbol} onChange={(e) => update('symbol', e.target.value.toUpperCase())} /></Field>
-          <Field label="롱·숏"><select className={inputClass} value={form.side} onChange={(e) => update('side', e.target.value as FormValues['side'])}><option value="long">롱</option><option value="short">숏</option></select></Field>
+          <Field label="롱·숏"><select className={inputClass} value={form.side} onChange={(e) => changeSide(e.target.value as FormValues['side'])}><option value="long">롱</option><option value="short">숏</option></select></Field>
           <Field label="주문 유형"><select className={inputClass} value={form.orderType} onChange={(e) => update('orderType', e.target.value as FormValues['orderType'])}><option value="market">시장가</option><option value="limit">지정가</option><option value="stop_market">스탑 시장가</option></select></Field>
           <Field label="수량 (비우면 추천)"><input className={inputClass} type="number" min="0" step="any" value={form.quantity} onChange={(e) => update('quantity', e.target.value)} /></Field>
           <Field label="레버리지"><input className={inputClass} type="number" min="1" max="10" value={form.leverage} onChange={(e) => update('leverage', Number(e.target.value))} /></Field>
@@ -245,11 +266,11 @@ export function PaperTradingPanel({
           <Field label="목표 2 비율"><input className={inputClass} type="number" min="0" max="100" value={form.targetClosePercent2} onChange={(e) => update('targetClosePercent2', Number(e.target.value))} /></Field>
           <Field label="거래당 위험률 %"><input className={inputClass} type="number" min="0.01" max="1" step="0.01" value={form.riskPercent} onChange={(e) => update('riskPercent', Number(e.target.value))} /></Field>
         </div>
-        <div className="mt-3 rounded-xl border border-border bg-muted/50 p-3 text-xs"><div>시장 상태: <b>{market?.status ?? '불러오는 중'}</b> / 계약 규칙: <b>{rules?.status ?? '불러오는 중'}</b></div><div className="mt-1">현재가 {number(market?.price)} · bid {number(market?.bidPrice)} · ask {number(market?.askPrice)} · 예상 최대손실 {money(state.account.equity * form.riskPercent / 100)}</div>{localBlocks.map((block) => <div className="mt-1 text-destructive" key={block}>• {block}</div>)}</div>
+        <div className="mt-3 rounded-xl border border-border bg-muted/50 p-3 text-xs"><div>시장 상태: <b>{market?.status ?? '불러오는 중'}</b> / 계약 규칙: <b>{rules?.status ?? '불러오는 중'}</b></div><div className="mt-1">현재가 {number(market?.price)} · bid {number(market?.bidPrice)} · ask {number(market?.askPrice)} · 예상 최대손실 {money(state.account.equity * form.riskPercent / 100)} · 예상 손익비 {number(estimatedRiskReward)}</div>{localBlocks.map((block) => <div className="mt-1 text-destructive" key={block}>• {block}</div>)}</div>
         <button data-testid="paper-submit" className="mt-3 min-h-11 w-full rounded-xl bg-primary px-4 font-bold text-primary-foreground disabled:opacity-50" disabled={busy || localBlocks.length > 0}>{busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : null}모의주문</button>
       </form>
 
-      <section className="rounded-2xl border border-border bg-card p-4" data-testid="paper-positions"><h2 className="mb-3 font-bold">포지션</h2>{openPositions.length === 0 ? <p className="text-sm text-muted-foreground">열린 모의포지션이 없습니다.</p> : openPositions.map((position) => <article className="mb-3 rounded-xl border border-border p-3" key={position.id}><div className="flex flex-wrap justify-between gap-2"><b>{position.symbol} {position.side === 'long' ? '롱' : '숏'}</b><span>{position.status}</span></div><div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4"><span>진입 {number(position.entryPrice)}</span><span>현재 {number(position.currentPrice)}</span><span>잔여 {number(position.remainingQuantity)}</span><span>미실현 {money(position.unrealizedPnl)}</span><span>손절 {number(position.stopLossPrice)}</span><span>목표 {number(position.takeProfitPrice1)} / {number(position.takeProfitPrice2)}</span></div><div className="mt-3 grid grid-cols-4 gap-2">{([25, 50, 75, 100] as const).map((percent) => <button type="button" className={buttonClass} disabled={busy || !market} key={percent} onClick={() => market && void runAction({ type: 'close_position', eventId: eventId(`close-${percent}`), positionId: position.id, percentage: percent, market, reason: percent === 100 ? 'manual_close' : 'partial_close' })}>{percent === 100 ? '전체청산' : `${percent}%`}</button>)}</div></article>)}</section>
+      <section className="rounded-2xl border border-border bg-card p-4" data-testid="paper-positions"><h2 className="mb-3 font-bold">포지션</h2>{openPositions.length === 0 ? <p className="text-sm text-muted-foreground">열린 모의포지션이 없습니다.</p> : openPositions.map((position) => <article className="mb-3 rounded-xl border border-border p-3" key={position.id}><div className="flex flex-wrap justify-between gap-2"><b>{position.symbol} {position.side === 'long' ? '롱' : '숏'}</b><span>{position.status}</span></div><div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4"><span>진입 {number(position.entryPrice)}</span><span>현재 {number(position.currentPrice)}</span><span>잔여 {number(position.remainingQuantity)}</span><span>미실현 {money(position.unrealizedPnl)}</span><span>청산가격 근사 {number(state.orders.find((order) => order.id === position.orderId)?.riskResult?.estimatedLiquidationPrice)}</span><span>손절 {number(position.stopLossPrice)}</span><span>목표 {number(position.takeProfitPrice1)} / {number(position.takeProfitPrice2)}</span></div><div className="mt-3 grid grid-cols-4 gap-2">{([25, 50, 75, 100] as const).map((percent) => <button type="button" className={buttonClass} disabled={busy || !market} key={percent} onClick={() => market && void runAction({ type: 'close_position', eventId: eventId(`close-${percent}`), positionId: position.id, percentage: percent, market, reason: percent === 100 ? 'manual_close' : 'partial_close' })}>{percent === 100 ? '전체청산' : `${percent}%`}</button>)}</div><div className="mt-2 grid grid-cols-[1fr_auto] gap-2"><input aria-label={`${position.symbol} 직접 청산 수량`} className={inputClass} type="number" min="0" step="any" value={closeQuantities[position.id] ?? ''} onChange={(e) => setCloseQuantities((current) => ({ ...current, [position.id]: e.target.value }))} placeholder="직접 수량" /><button type="button" className={buttonClass} disabled={busy || !market || !(Number(closeQuantities[position.id]) > 0)} onClick={() => market && void runAction({ type: 'close_position', eventId: eventId('close-quantity'), positionId: position.id, quantity: Number(closeQuantities[position.id]), market, reason: 'partial_close' })}>수량 청산</button></div></article>)}</section>
 
       <section className="rounded-2xl border border-border bg-card p-4" data-testid="paper-orders"><h2 className="mb-3 font-bold">주문 목록</h2><div className="space-y-2">{state.orders.length === 0 ? <p className="text-sm text-muted-foreground">모의주문이 없습니다.</p> : [...state.orders].reverse().map((order) => <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border p-3 text-xs" key={order.id}><span>{order.symbol} · {order.side} · {order.orderType} · <b>{order.status}</b></span>{order.status === 'pending' ? <button type="button" className={buttonClass} disabled={busy} onClick={() => void runAction({ type: 'cancel_order', eventId: eventId('cancel'), orderId: order.id })}>취소</button> : null}{order.rejectionCodes.length ? <span className="w-full text-destructive">{order.rejectionCodes.join(', ')}</span> : null}</div>)}</div></section>
 
