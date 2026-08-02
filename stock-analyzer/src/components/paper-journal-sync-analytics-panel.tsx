@@ -22,6 +22,7 @@ import {
   type JournalSyncMetadata,
 } from '@/lib/paper-journal-sync-storage';
 import { loadPaperState, savePaperState, type StorageLike } from '@/lib/paper-trading';
+import { TradingAiReviewPanel } from './trading-ai-review-panel';
 
 const buttonClass = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-border px-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50';
 const number = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 });
@@ -225,5 +226,6 @@ export function PaperJournalSyncAnalyticsPanel({
       <p className="mt-2 text-sm">개인정보를 제외한 구조화된 복기 데이터만 준비합니다.</p>
       {review ? <div className="mt-3 rounded-xl border border-border p-3 text-xs" data-testid="review-dataset-result"><div>표본: {review.sampleSize}건 · 대표 거래: {review.representativeTrades.length}건</div><div className="mt-1 break-words">제외 필드: {review.excludedFields.join(', ')}</div></div> : null}
     </div>
+    <TradingAiReviewPanel userId={userId} periodStart={periodStart} periodEnd={periodEnd} />
   </section>;
 }
