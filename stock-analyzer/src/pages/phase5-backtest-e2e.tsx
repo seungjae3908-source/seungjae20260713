@@ -80,7 +80,7 @@ function fixtureResult(values: BacktestFormValues): BacktestResult {
 
 export default function Phase5BacktestE2EPage() {
   return <BacktestResearchPanel compact execute={async (values) => {
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await new Promise((resolve) => setTimeout(resolve, 500));
     return fixtureResult(values);
   }} />;
 }
