@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${DATABASE_URL:?DATABASE_URL is required for disposable Phase 8 verification}"
+: "${PGHOST:=127.0.0.1}"
+: "${PGPORT:=5432}"
+: "${PGUSER:=phase8}"
+: "${PGDATABASE:=phase8}"
+: "${PGPASSWORD:?PGPASSWORD is required for disposable Phase 8 verification}"
+export PGPASSWORD
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PSQL=(psql "${DATABASE_URL}" --no-psqlrc --set=ON_ERROR_STOP=1)
+PSQL=(psql --host "${PGHOST}" --port "${PGPORT}" --username "${PGUSER}" --dbname "${PGDATABASE}" --no-psqlrc --set=ON_ERROR_STOP=1)
 
 run_sql() {
   local label="$1"
