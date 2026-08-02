@@ -148,7 +148,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
           <Field label="시간봉"><select id="backtest-timeframe" className={inputClass} value={values.timeframe} onChange={(event) => update('timeframe', event.target.value)}>{['1m', '5m', '15m', '30m', '1H', '4H', '1D'].map((item) => <option key={item}>{item}</option>)}</select></Field>
           <Field label="시작일"><input id="backtest-start" className={inputClass} type="date" value={values.startDate} onChange={(event) => update('startDate', event.target.value)} /></Field>
           <Field label="종료일"><input id="backtest-end" className={inputClass} type="date" value={values.endDate} onChange={(event) => update('endDate', event.target.value)} /></Field>
-          <Field label="초기 자본"><input className={inputClass} type="number" min="1" step="100" inputMode="decimal" value={values.initialCapital} onChange={(event) => update('initialCapital', Number(event.target.value))} /></Field>
+          <Field label="초기 자본"><input className={inputClass} type="number" min="1" step="any" inputMode="decimal" value={values.initialCapital} onChange={(event) => update('initialCapital', Number(event.target.value))} /></Field>
           <Field label="전략"><select id="backtest-strategy" className={inputClass} value={values.strategy} onChange={(event) => update('strategy', event.target.value as BacktestFormValues['strategy'])}><option value="trend_pullback">추세 눌림목</option><option value="breakout">고점·저점 돌파</option><option value="vwap_reclaim">UTC VWAP 회복</option></select></Field>
           <Field label="방향"><select className={inputClass} value={values.side} onChange={(event) => update('side', event.target.value as BacktestFormValues['side'])}><option value="both">롱·숏</option><option value="long">롱</option><option value="short">숏</option></select></Field>
           <Field label="위험률 %"><input className={inputClass} type="number" min="0.01" max="1" step="0.01" inputMode="decimal" value={values.riskPercent} onChange={(event) => update('riskPercent', Number(event.target.value))} /></Field>
@@ -164,7 +164,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
           <Field label="목표 값"><input className={inputClass} type="number" min="0.01" step="0.1" inputMode="decimal" value={values.takeProfitValue} onChange={(event) => update('takeProfitValue', Number(event.target.value))} /></Field>
         </div>
         <label className="mt-3 flex min-h-10 items-center gap-2 rounded-lg border border-border px-3 text-sm"><input type="checkbox" checked={values.trailingEnabled} onChange={(event) => update('trailingEnabled', event.target.checked)} />트레일링 스톱 사용</label>
-        <button type="submit" disabled={loading} className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60" data-testid="run-backtest">
+        <button type="submit" disabled={loading} aria-busy={loading} className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60" data-testid="run-backtest">
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
           {loading ? '백테스트 계산 중' : '백테스트 실행'}
         </button>
