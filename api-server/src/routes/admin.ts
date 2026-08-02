@@ -32,6 +32,14 @@ const PROFILE_FIELDS = [
   'permissions_updated_at',
 ].join(',');
 
+type AdminProfileRow = MemberAdministrationProfile & {
+  login_name?: string | null;
+  display_name?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  created_at?: string | null;
+};
+
 function adminDb(req: AuthenticatedRequest) {
   return hasSupabaseServerKey() ? getSupabase() : getUserSupabase(req.accessToken!);
 }
@@ -40,6 +48,14 @@ function safeQuery(value: unknown) {
   return typeof value === 'string'
     ? value.trim().normalize('NFKC').replace(/[,%()]/g, '').slice(0, 80)
     : '';
+}
+
+function routeId(value: string | string[] | undefined) {
+  const id = Array.isArray(value) ? value[0] : value;
+  if (!id || !/^[A-Za-z0-9._:-]{1,160}$/.test(id)) {
+    throw new MemberAdministrationError('INVALID_MEMBER_ID', '회원 ID를 확인하세요.');
+  }
+  return id;
 }
 
 function sendAdminError(res: any, cause: unknown, fallback: string) {
@@ -54,7 +70,8 @@ async function activeAdminCount(req: AuthenticatedRequest) {
     .from('profiles')
     .select('id,role,status,membership_level,is_active');
   if (error) throw new Error('ACTIVE_ADMIN_COUNT_FAILED');
-  return (data ?? []).filter((profile) => isActiveAdmin(profile as MemberAdministrationProfile)).length;
+  const profiles = (data ?? []) as unknown as AdminProfileRow[];
+  return profiles.filter((profile) => isActiveAdmin(profile)).length;
 }
 
 async function applyMemberChange(
@@ -65,15 +82,16 @@ async function applyMemberChange(
 ) {
   try {
     const db = adminDb(req);
-    const { data: current, error: currentError } = await db
+    const { data: currentData, error: currentError } = await db
       .from('profiles')
       .select(PROFILE_FIELDS)
       .eq('id', targetId)
       .single();
-    if (currentError || !current) return res.status(404).json({ error: 'MEMBER_NOT_FOUND' });
+    if (currentError || !currentData) return res.status(404).json({ error: 'MEMBER_NOT_FOUND' });
+    const current = currentData as unknown as AdminProfileRow;
 
     const plan = planMemberChange(
-      current as MemberAdministrationProfile,
+      current,
       requested,
       req.member!.id,
       await activeAdminCount(req),
@@ -89,13 +107,14 @@ async function applyMemberChange(
       updated_at: current.updated_at,
     };
 
-    const { data: member, error: updateError } = await db
+    const { data: memberData, error: updateError } = await db
       .from('profiles')
       .update(plan.changes)
       .eq('id', targetId)
       .select(PROFILE_FIELDS)
       .single();
-    if (updateError || !member) throw new Error('MEMBER_UPDATE_FAILED');
+    if (updateError || !memberData) throw new Error('MEMBER_UPDATE_FAILED');
+    const member = memberData as unknown as AdminProfileRow;
 
     const { error: auditError } = await db.from('member_permission_audit').insert({
       actor_id: req.member!.id,
@@ -141,20 +160,25 @@ router.get('/members', async (req: AuthenticatedRequest, res) => {
     if (search) query = query.or(`login_name.ilike.%${search}%,display_name.ilike.%${search}%`);
     const { data, error } = await query;
     if (error) throw new Error('MEMBER_LIST_FAILED');
-    return res.json({ ok: true, members: data ?? [] });
+    return res.json({ ok: true, members: (data ?? []) as unknown as AdminProfileRow[] });
   } catch (cause) {
     return sendAdminError(res, cause, 'MEMBER_LIST_FAILED');
   }
 });
 
 router.get('/members/:id', async (req: AuthenticatedRequest, res) => {
-  const { data, error } = await adminDb(req)
-    .from('profiles')
-    .select(PROFILE_FIELDS)
-    .eq('id', req.params.id)
-    .single();
-  if (error || !data) return res.status(404).json({ error: 'MEMBER_NOT_FOUND' });
-  return res.json({ ok: true, member: data });
+  try {
+    const id = routeId(req.params.id);
+    const { data, error } = await adminDb(req)
+      .from('profiles')
+      .select(PROFILE_FIELDS)
+      .eq('id', id)
+      .single();
+    if (error || !data) return res.status(404).json({ error: 'MEMBER_NOT_FOUND' });
+    return res.json({ ok: true, member: data as unknown as AdminProfileRow });
+  } catch (cause) {
+    return sendAdminError(res, cause, 'MEMBER_DETAIL_FAILED');
+  }
 });
 
 router.post('/members/:id/approve', async (req: AuthenticatedRequest, res) => {
@@ -165,7 +189,7 @@ router.post('/members/:id/approve', async (req: AuthenticatedRequest, res) => {
       isActive: true,
       reason,
     });
-    return applyMemberChange(req, res, req.params.id, requested);
+    return applyMemberChange(req, res, routeId(req.params.id), requested);
   } catch (cause) {
     return sendAdminError(res, cause, 'MEMBER_APPROVAL_FAILED');
   }
@@ -174,7 +198,7 @@ router.post('/members/:id/approve', async (req: AuthenticatedRequest, res) => {
 router.patch('/members/:id', async (req: AuthenticatedRequest, res) => {
   try {
     const requested = parseMemberChangeRequest(req.body);
-    return applyMemberChange(req, res, req.params.id, requested);
+    return applyMemberChange(req, res, routeId(req.params.id), requested);
   } catch (cause) {
     return sendAdminError(res, cause, 'MEMBER_UPDATE_FAILED');
   }
