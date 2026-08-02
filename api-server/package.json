@@ -20,6 +20,8 @@
     "test:phase7": "node ./test.mjs phase7",
     "test:phase8": "node ./test.mjs phase8",
     "test:phase9": "node ./test.mjs phase9",
+    "test:phase10:safety": "node ./scripts/verify-phase10-deployment-safety.mjs",
+    "test:phase10:staging": "node ./scripts/verify-phase10-staging-readiness.mjs --environment",
     "test:smoke": "node ./test.mjs smoke",
     "smoke:futures:network": "node ./network-smoke.mjs"
   },
