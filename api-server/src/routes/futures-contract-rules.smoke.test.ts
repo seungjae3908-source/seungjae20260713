@@ -5,8 +5,6 @@ import type { AddressInfo } from 'node:net';
 import futuresMarketDataRouter from './futures-market-data';
 import { resetFuturesContractRulesStateForTests } from '../services/futures-contract-rules.service';
 
-const FIXED_NOW = Date.UTC(2026, 7, 2, 0, 0, 0);
-
 async function startServer() {
   const app = express();
   app.use('/api', futuresMarketDataRouter);
@@ -31,6 +29,7 @@ async function safeJson(response: Response) {
 
 test('contract rules route returns public read-only rules and rejects an unknown symbol', async () => {
   resetFuturesContractRulesStateForTests();
+  const providerRequestTime = Date.now();
   const nativeFetch = globalThis.fetch;
   globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
     const raw = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
@@ -54,7 +53,7 @@ test('contract rules route returns public read-only rules and rejects an unknown
     return new Response(JSON.stringify({
       code: '00000',
       msg: 'success',
-      requestTime: FIXED_NOW,
+      requestTime: providerRequestTime,
       data,
     }), {
       status: 200,
@@ -82,7 +81,7 @@ test('contract rules route returns public read-only rules and rejects an unknown
     assert.equal(data.maximumLeverage, 125);
     assert.equal(data.maintenanceMarginRate, null);
     assert.equal(data.status, 'live');
-    assert.equal(typeof data.updatedAt, 'string');
+    assert.equal(data.updatedAt, new Date(providerRequestTime).toISOString());
     assert.ok(Array.isArray(data.warnings));
     assert.equal('order' in data, false);
     assert.equal('apiKey' in data, false);
