@@ -46,6 +46,13 @@ export type TradingReviewDataset = {
 
 export const JOURNAL_DELETE_CONFIRMATION = 'DELETE MY PAPER JOURNAL';
 export const JOURNAL_SYNC_BATCH_SIZE = 500;
+export const MAX_IDEMPOTENCY_KEY_LENGTH = 160;
+
+export function createBatchIdempotencyKey(base: string, index: number) {
+  const suffix = `:batch-${index}`;
+  if (suffix.length >= MAX_IDEMPOTENCY_KEY_LENGTH) throw new Error('배치 idempotency suffix가 너무 깁니다.');
+  return `${base.slice(0, MAX_IDEMPOTENCY_KEY_LENGTH - suffix.length)}${suffix}`;
+}
 
 function safeError(body: unknown, fallback: string) {
   if (body && typeof body === 'object') {
@@ -96,7 +103,7 @@ export async function syncJournalRecords(
     if (signal?.aborted) throw new DOMException('동기화가 중단되었습니다.', 'AbortError');
     const index = Math.floor(offset / JOURNAL_SYNC_BATCH_SIZE);
     results.push(await syncSingleBatch({
-      idempotencyKey: `${input.idempotencyKey}:batch-${index}`.slice(0, 160),
+      idempotencyKey: createBatchIdempotencyKey(input.idempotencyKey, index),
       clientTime: input.clientTime,
       records: input.records.slice(offset, offset + JOURNAL_SYNC_BATCH_SIZE),
     }, signal));
