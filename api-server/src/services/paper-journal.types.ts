@@ -186,6 +186,14 @@ export type TradingAiReviewResult = {
   disclaimer: string;
 };
 
+export type AiProviderCallState = {
+  attempted: boolean;
+  completed: boolean;
+  reused: boolean;
+};
+
+export type AiReviewRateLimitScope = 'process';
+
 export type AnalysisOnlyResult<T> = {
   ok: true;
   mode: typeof JOURNAL_ANALYSIS_MODE;
@@ -211,6 +219,7 @@ export class PaperJournalError extends Error {
     public readonly code: string,
     message: string,
     public readonly statusCode = 400,
+    public readonly providerCall?: AiProviderCallState,
   ) {
     super(message);
     this.name = 'PaperJournalError';

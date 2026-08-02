@@ -11,6 +11,7 @@ import {
 import {
   JOURNAL_ANALYSIS_MODE,
   PaperJournalError,
+  type AiProviderCallState,
   type PaperJournalRepository,
 } from '../services/paper-journal.types';
 import { hasCapability } from '../../../packages/member-access/src/index.js';
@@ -177,7 +178,7 @@ export function createPaperJournalRouter(
   });
 
   router.post('/paper-journal/ai-review/preview', async (request: AuthenticatedRequest, response) => {
-    const envelope = (payload: Record<string, unknown>) => ({ mode: 'ai-review-preview', externalAiCalled: false, orderSubmitted: false, exchangeRequestSent: false, ...payload });
+    const envelope = (payload: Record<string, unknown>) => ({ mode: 'ai-review-preview', externalAiCalled: false, providerCall: { attempted: false, completed: false, reused: false }, rateLimitScope: 'process', orderSubmitted: false, exchangeRequestSent: false, ...payload });
     if (requestSize(request) > MAX_REQUEST_BYTES) return response.status(413).json(envelope({ ok: false, error: { code: 'REQUEST_TOO_LARGE', message: '요청 크기가 제한을 초과했습니다.' } }));
     try {
       const userId = requireAiReview(request); const body = isObject(request.body) ? request.body : {};
@@ -188,14 +189,14 @@ export function createPaperJournalRouter(
   });
 
   router.post('/paper-journal/ai-review/generate', async (request: AuthenticatedRequest, response) => {
-    const envelope = (payload: Record<string, unknown>) => ({ mode: 'ai-review-only', externalAiCalled: false, orderSubmitted: false, exchangeRequestSent: false, ...payload });
+    const envelope = (payload: Record<string, unknown>) => ({ mode: 'ai-review-only', externalAiCalled: false, providerCall: { attempted: false, completed: false, reused: false }, rateLimitScope: 'process', orderSubmitted: false, exchangeRequestSent: false, ...payload });
     if (requestSize(request) > MAX_REQUEST_BYTES) return response.status(413).json(envelope({ ok: false, error: { code: 'REQUEST_TOO_LARGE', message: '요청 크기가 제한을 초과했습니다.' } }));
     try {
       const userId = requireAiReview(request); const body = isObject(request.body) ? request.body : {};
       if ('user_id' in body || 'userId' in body || 'dataset' in body) throw new PaperJournalError('CLIENT_DATASET_FORBIDDEN', '분석 데이터는 서버에서 생성합니다.');
       const dataset = buildAiReviewDataset(await repositoryFactory(request).listJournalPayloads(userId), body.periodStart, body.periodEnd, now());
-      const result = await generateTradingAiReview({ userId, consent: body.consent === true, idempotencyKey: typeof body.idempotencyKey === 'string' ? body.idempotencyKey : '', locale: typeof body.locale === 'string' ? body.locale.slice(0, 12) : 'ko-KR', reviewStyle: body.reviewStyle === 'detailed' ? 'detailed' : 'concise', dataset, provider: reviewProvider, now: now() });
-      return response.json({ ...envelope({ ok: true, result }), externalAiCalled: true });
+      const outcome = await generateTradingAiReview({ userId, consent: body.consent === true, idempotencyKey: typeof body.idempotencyKey === 'string' ? body.idempotencyKey : '', locale: typeof body.locale === 'string' ? body.locale.slice(0, 12) : 'ko-KR', reviewStyle: body.reviewStyle === 'detailed' ? 'detailed' : 'concise', dataset, provider: reviewProvider, now: now() });
+      return response.json({ ...envelope({ ok: true, result: outcome.review }), externalAiCalled: outcome.providerCall.attempted, providerCall: outcome.providerCall, rateLimitScope: outcome.rateLimitScope });
     } catch (cause) { return handleAiError(response, cause, envelope); }
   });
 
@@ -204,7 +205,8 @@ export function createPaperJournalRouter(
 
 function handleAiError(response: Response, cause: unknown, envelope: (payload: Record<string, unknown>) => Record<string, unknown>) {
   const error = cause instanceof PaperJournalError ? cause : new PaperJournalError('AI_REVIEW_FAILED', 'AI 거래 복기를 처리하지 못했습니다.', 500);
-  return response.status(error.statusCode).json(envelope({ ok: false, error: { code: error.code, message: error.message } }));
+  const providerCall: AiProviderCallState = error.providerCall ?? { attempted: false, completed: false, reused: false };
+  return response.status(error.statusCode).json({ ...envelope({ ok: false, error: { code: error.code, message: error.message } }), externalAiCalled: providerCall.attempted, providerCall, rateLimitScope: 'process' });
 }
 
 function handleError(
