@@ -57,7 +57,9 @@ for (const file of distFiles) {
   if (/\.(?:js|css|html|json|map)$/i.test(file)) bundle += await readFile(file, 'utf8');
 }
 assert(!/(?:SUPABASE_SERVICE_ROLE_KEY|service_role)/i.test(bundle), 'frontend production bundle contains service-role material');
-assert(!/(?:private note|private@example\.com|originalUserNote)/i.test(bundle), 'frontend production bundle contains private journal fixture material');
+// Exclusion-field labels such as originalUserNote are an expected public
+// contract. Only fixture values or actual private content are treated as leaks.
+assert(!/(?:private note|private@example\.com|user\d+@example\.com)/i.test(bundle), 'frontend production bundle contains private journal fixture material');
 
 const reviewSource = await text('api-server/src/services/paper-journal-analytics.service.ts');
 for (const excluded of ['email', 'name', 'birthDate', 'apiKey', 'secret', 'accountNumber', 'originalUserNote', 'internalDatabaseUuid', 'fullOrderPayload']) {
