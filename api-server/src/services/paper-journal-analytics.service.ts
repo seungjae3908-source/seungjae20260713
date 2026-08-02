@@ -55,7 +55,7 @@ function normalizeTrade(payload: Record<string, unknown>): NormalizedTrade | nul
   const slippage = finite(payload.slippageCost) ? payload.slippageCost : 0;
   const funding = finite(payload.fundingCost) ? payload.fundingCost : 0;
   return {
-    id: text(payload.id, text(payload.tradeId, 'unknown')),
+    id: text(payload.tradeId, text(payload.id, 'unknown')),
     side,
     symbol: text(payload.symbol, 'unknown').toUpperCase(),
     strategy: text(payload.strategyName) || null,
