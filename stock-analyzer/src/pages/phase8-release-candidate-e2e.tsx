@@ -64,11 +64,13 @@ export default function Phase8ReleaseCandidateE2EPage() {
     setCompleted(0); setSyncStatus('local-only'); setFailure(false);
   }
 
-  function applyAdminChange() {
+  function applyAdminChange(targetTier = memberTier, targetActive = memberActive) {
     if (reason.trim().length < 3) { setAdminError('변경 사유를 3자 이상 입력하세요.'); return; }
     setAdminError('');
+    setMemberTier(targetTier);
+    setMemberActive(targetActive);
     const before = 'pending/active';
-    const after = `${memberTier}/${memberActive ? 'active' : 'inactive'}`;
+    const after = `${targetTier}/${targetActive ? 'active' : 'inactive'}`;
     setAudit((items) => [`대상=test-member · before=${before} · after=${after} · reason=${reason.trim()} · actor=admin-a`, ...items]);
   }
 
@@ -112,7 +114,7 @@ export default function Phase8ReleaseCandidateE2EPage() {
         <p className="mt-1 text-xs text-muted-foreground">개인 거래 메모와 원본 거래기록은 표시하지 않습니다.</p>
         <div className="mt-4 grid gap-2 sm:grid-cols-2"><label className="text-xs font-bold">대상 회원 등급<select aria-label="대상 회원 등급" value={memberTier} onChange={(event) => setMemberTier(event.target.value as MemberTier)} className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-2"><option value="pending">pending</option><option value="associate">associate</option><option value="regular">regular</option><option value="admin">admin</option></select></label><label className="text-xs font-bold">활성 상태<select aria-label="대상 회원 활성 상태" value={memberActive ? 'active' : 'inactive'} onChange={(event) => setMemberActive(event.target.value === 'active')} className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-2"><option value="active">active</option><option value="inactive">inactive</option></select></label></div>
         <label className="mt-3 block text-xs font-bold">변경 사유<input aria-label="관리자 변경 사유" value={reason} onChange={(event) => setReason(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-3" /></label>
-        <div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => { setMemberTier('associate'); applyAdminChange(); }} className="rounded-xl border border-primary px-3 py-2 text-sm font-bold">준회원 승인</button><button type="button" onClick={applyAdminChange} className="rounded-xl bg-primary px-3 py-2 text-sm font-bold text-primary-foreground">등급·활성 변경</button><button type="button" onClick={() => setAdminError('LAST_ACTIVE_ADMIN_PROTECTED')} className="rounded-xl border border-destructive px-3 py-2 text-sm font-bold text-destructive" data-testid="phase8-last-admin-protect">마지막 관리자 제거 시도</button></div>
+        <div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => applyAdminChange('associate', true)} className="rounded-xl border border-primary px-3 py-2 text-sm font-bold">준회원 승인</button><button type="button" onClick={() => applyAdminChange()} className="rounded-xl bg-primary px-3 py-2 text-sm font-bold text-primary-foreground">등급·활성 변경</button><button type="button" onClick={() => setAdminError('LAST_ACTIVE_ADMIN_PROTECTED')} className="rounded-xl border border-destructive px-3 py-2 text-sm font-bold text-destructive" data-testid="phase8-last-admin-protect">마지막 관리자 제거 시도</button></div>
         {adminError ? <p role="alert" className="mt-3 rounded-xl bg-destructive/10 p-3 text-sm font-bold text-destructive">{adminError}</p> : null}
         <div className="mt-4 space-y-2" data-testid="phase8-audit-log">{audit.map((item, index) => <p key={`${item}-${index}`} className="rounded-xl bg-secondary/50 p-2 text-xs">{item}</p>)}{!audit.length ? <p className="text-xs text-muted-foreground">변경 이력 없음</p> : null}</div>
       </section> : null}
