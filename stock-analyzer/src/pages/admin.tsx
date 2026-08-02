@@ -63,7 +63,8 @@ export default function AdminPage() {
   async function submitChange(member: AdminMember, membershipLevel: MemberTier, isActive: boolean, reason: string) {
     setError(''); setNotice('');
     if (reason.trim().length < 3) { setError('변경 사유를 3자 이상 입력하세요.'); return; }
-    const summary = `${member.display_name}\n${MEMBER_TIER_LABELS[member.membership_level ?? auth.membershipLevel]} → ${MEMBER_TIER_LABELS[membershipLevel]}\n활성 상태: ${member.is_active !== false ? '활성' : '비활성'} → ${isActive ? '활성' : '비활성'}\n사유: ${reason.trim()}`;
+    const currentTier = member.membership_level ?? (member.role === 'admin' ? 'admin' : member.status === 'approved' ? 'regular' : 'pending');
+    const summary = `${member.display_name}\n${MEMBER_TIER_LABELS[currentTier]} → ${MEMBER_TIER_LABELS[membershipLevel]}\n활성 상태: ${member.is_active !== false ? '활성' : '비활성'} → ${isActive ? '활성' : '비활성'}\n사유: ${reason.trim()}`;
     if (!window.confirm(`다음 회원 변경을 적용할까요?\n\n${summary}`)) return;
     try {
       await adminFetch(`/members/${member.id}`, token, {
@@ -109,7 +110,7 @@ export default function AdminPage() {
       {members.isLoading && <p>회원 목록을 불러오는 중입니다.</p>}
       {members.error && <p className="text-destructive">{members.error.message}</p>}
       <section className="space-y-3" aria-label="회원 목록">
-        {members.data?.members.map((member) => <MemberCard key={member.id} member={member} onApprove={approve} onSubmit={submitChange} />)}
+        {members.data?.members.map((member) => <MemberCard key={`${member.id}:${member.membership_level ?? member.status}:${member.is_active !== false}`} member={member} onApprove={approve} onSubmit={submitChange} />)}
       </section>
 
       <section className="rounded-3xl border border-card-border bg-card p-4" aria-label="권한 변경 감사 이력">
