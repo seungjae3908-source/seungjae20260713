@@ -19,6 +19,7 @@
     "test:phase6": "node ./test.mjs phase6",
     "test:phase7": "node ./test.mjs phase7",
     "test:phase8": "node ./test.mjs phase8",
+    "test:phase9": "node ./test.mjs phase9",
     "test:smoke": "node ./test.mjs smoke",
     "smoke:futures:network": "node ./network-smoke.mjs"
   },

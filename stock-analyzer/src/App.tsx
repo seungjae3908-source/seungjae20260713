@@ -39,12 +39,14 @@ const Phase5BacktestE2EPage = lazy(() => import('@/pages/phase5-backtest-e2e'));
 const Phase6PaperTradingE2EPage = lazy(() => import('@/pages/phase6-paper-trading-e2e'));
 const Phase7JournalSyncE2EPage = lazy(() => import('@/pages/phase7-journal-sync-e2e'));
 const Phase8ReleaseCandidateE2EPage = lazy(() => import('@/pages/phase8-release-candidate-e2e'));
+const Phase9AiReviewE2EPage = lazy(() => import('@/pages/phase9-ai-review-e2e'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
 const phase5E2EEnabled = import.meta.env.VITE_PHASE5_E2E === 'true';
 const phase6E2EEnabled = import.meta.env.VITE_PHASE6_E2E === 'true';
 const phase7E2EEnabled = import.meta.env.VITE_PHASE7_E2E === 'true';
 const phase8E2EEnabled = import.meta.env.VITE_PHASE8_E2E === 'true';
+const phase9E2EEnabled = import.meta.env.VITE_PHASE9_E2E === 'true';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
@@ -129,6 +131,7 @@ function RootRouter() {
     {phase6E2EEnabled ? <Route path="/__phase6-paper-trading-e2e" component={Phase6PaperTradingE2EPage} /> : null}
     {phase7E2EEnabled ? <Route path="/__phase7-journal-sync-e2e" component={Phase7JournalSyncE2EPage} /> : null}
     {phase8E2EEnabled ? <Route path="/__phase8-release-candidate-e2e" component={Phase8ReleaseCandidateE2EPage} /> : null}
+    {phase9E2EEnabled ? <Route path="/__phase9-ai-review-e2e" component={Phase9AiReviewE2EPage} /> : null}
     <Route path="/install" component={InstallPage} />
     <Route component={AuthenticatedApp} />
   </Switch></Suspense>;
