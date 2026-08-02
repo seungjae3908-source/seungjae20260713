@@ -5,6 +5,7 @@ import {
   isActiveAdmin,
   parseMemberChangeRequest,
   planMemberChange,
+  sanitizeMemberSearch,
 } from './member-administration.service';
 
 const NOW = new Date('2026-08-02T08:00:00.000Z');
@@ -13,10 +14,7 @@ const ADMIN = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 function profile(overrides: Record<string, unknown> = {}) {
   return {
     id: '11111111-1111-1111-1111-111111111111',
-    role: 'user',
-    status: 'pending',
-    membership_level: 'pending',
-    is_active: true,
+    role: 'user', status: 'pending', membership_level: 'pending', is_active: true,
     ...overrides,
   };
 }
@@ -71,8 +69,9 @@ test('deactivation records suspended compatibility status', () => {
   assert.equal(plan.changes.approved_at, null);
 });
 
-test('reactivation restores approved state', () => {
+test('reactivation restores stored associate tier and approved state', () => {
   const plan = planMemberChange(profile({ membership_level: 'associate', is_active: false, status: 'suspended' }), { isActive: true, reason: '계정 재활성화' }, ADMIN, 1, NOW);
+  assert.equal(plan.changes.membership_level, 'associate');
   assert.equal(plan.changes.status, 'approved');
   assert.equal(plan.changes.is_active, true);
 });
@@ -115,8 +114,33 @@ test('permission timestamp uses server time', () => {
   assert.equal(plan.changes.updated_at, NOW.toISOString());
 });
 
-test('active admin detection uses normalized tier and active flag', () => {
+test('active admin detection uses stored tier and active flag', () => {
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved' })), true);
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved', is_active: false })), false);
   assert.equal(isActiveAdmin(profile({ role: 'admin', status: 'approved', membership_level: null })), true);
+});
+
+test('member search preserves Korean, letters, digits and safe punctuation', () => {
+  assert.equal(sanitizeMemberSearch('  승재 User_01-test.name  '), '승재 User_01-test.name');
+});
+
+test('member search removes PostgREST filter injection delimiters', () => {
+  const sanitized = sanitizeMemberSearch('x%),role.eq.admin,(display_name.ilike.*');
+  assert.doesNotMatch(sanitized, /[%(),*]/);
+  assert.equal(sanitized, 'xrole.eq.admindisplay_name.ilike.');
+});
+
+test('member search removes SQL quotes and comment syntax', () => {
+  const sanitized = sanitizeMemberSearch("' OR 1=1; -- 관리자");
+  assert.doesNotMatch(sanitized, /[';=]/);
+  assert.equal(sanitized, 'OR 11 -- 관리자');
+});
+
+test('member search applies Unicode normalization and maximum length', () => {
+  const sanitized = sanitizeMemberSearch('Ａ'.repeat(100));
+  assert.equal(sanitized, 'A'.repeat(80));
+});
+
+test('non-string member search becomes empty', () => {
+  assert.equal(sanitizeMemberSearch({ malicious: true }), '');
 });
