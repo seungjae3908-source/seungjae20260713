@@ -13,7 +13,6 @@ on:
   push:
     branches:
       - main
-      - "feature/**"
     paths:
       - .github/workflows/futures-public-network-smoke.yml
       - pnpm-lock.yaml
@@ -24,11 +23,12 @@ on:
       - packages/**
 
 permissions:
+  actions: read
   contents: read
   statuses: write
 
 concurrency:
-  group: application-ci-${{ github.ref }}
+  group: application-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -61,7 +61,7 @@ jobs:
       - name: Typecheck frontend
         run: pnpm --dir stock-analyzer run typecheck
       - name: Typecheck backend
-        run: pnpm --dir api-server run typecheck
+        run: pnpm --dir stock-analyzer exec tsc -p ../api-server/tsconfig.json --noEmit
       - name: Run Phase 2 futures tests
         run: pnpm --dir api-server run test:phase2
       - name: Run Phase 3 trading risk tests
@@ -131,6 +131,13 @@ jobs:
           script: |
             const result = '${{ steps.browser.outcome }}' || 'failure';
             const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
+            const superseded = runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested'].includes(run.status));
+            if (superseded) {
+              core.notice('Newer workflow run exists for this HEAD; skipping stale browser status update.');
+              return;
+            }
             const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Browser UI run ${context.runId}: ${result}`, context: 'browser-ui/verified' });
 
@@ -179,6 +186,13 @@ jobs:
           script: |
             const result = '${{ steps.database.outcome }}' || 'failure';
             const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
+            const superseded = runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested'].includes(run.status));
+            if (superseded) {
+              core.notice('Newer workflow run exists for this HEAD; skipping stale database status update.');
+              return;
+            }
             const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Database RLS run ${context.runId}: ${result}`, context: 'database-rls/verified' });
 
@@ -223,6 +237,13 @@ jobs:
           script: |
             const result = '${{ steps.security.outcome }}' || 'failure';
             const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
+            const superseded = runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested'].includes(run.status));
+            if (superseded) {
+              core.notice('Newer workflow run exists for this HEAD; skipping stale security status update.');
+              return;
+            }
             const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Security integration run ${context.runId}: ${result}`, context: 'security-integration/verified' });
 
@@ -243,6 +264,13 @@ jobs:
             const results = ['${{ needs.validate.result }}', '${{ needs.browser-ui.result }}', '${{ needs.database-rls.result }}', '${{ needs.security-integration.result }}'];
             const result = results.every((item) => item === 'success') ? 'success' : results.some((item) => item === 'cancelled') ? 'cancelled' : 'failure';
             const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
+            const superseded = runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested'].includes(run.status));
+            if (superseded) {
+              core.notice('Newer workflow run exists for this HEAD; skipping stale application status update.');
+              return;
+            }
             const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: ${result}`, context: 'application-ci/verified' });
 
@@ -277,5 +305,12 @@ jobs:
           script: |
             const result = '${{ steps.network.outcome }}';
             const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
+            const superseded = runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested'].includes(run.status));
+            if (superseded) {
+              core.notice('Newer workflow run exists for this HEAD; skipping stale network status update.');
+              return;
+            }
             const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Bitget network smoke run ${context.runId}: ${result}`, context: 'futures-public-network-smoke/verified' });
