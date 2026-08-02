@@ -174,6 +174,26 @@ export type TradingReviewDataset = {
   warnings: string[];
 };
 
+export type TradingAiReviewResult = {
+  summary: string;
+  strengths: Array<{ title: string; explanation: string; evidenceIds: string[]; confidence: 'low' | 'medium' | 'high' }>;
+  riskPatterns: Array<{ title: string; explanation: string; evidenceIds: string[]; confidence: 'low' | 'medium' | 'high'; certainty: AnalysisCertainty }>;
+  costObservations: Array<{ title: string; explanation: string; evidenceIds: string[] }>;
+  ruleCompliance: Array<{ rule: string; status: 'good' | 'warning' | 'insufficient'; explanation: string }>;
+  practiceActions: Array<{ priority: 1 | 2 | 3; action: string; reason: string; measurableTarget: string }>;
+  nextTradeChecklist: string[];
+  limitations: string[];
+  disclaimer: string;
+};
+
+export type AiProviderCallState = {
+  attempted: boolean;
+  completed: boolean;
+  reused: boolean;
+};
+
+export type AiReviewRateLimitScope = 'process';
+
 export type AnalysisOnlyResult<T> = {
   ok: true;
   mode: typeof JOURNAL_ANALYSIS_MODE;
@@ -199,6 +219,7 @@ export class PaperJournalError extends Error {
     public readonly code: string,
     message: string,
     public readonly statusCode = 400,
+    public readonly providerCall?: AiProviderCallState,
   ) {
     super(message);
     this.name = 'PaperJournalError';
