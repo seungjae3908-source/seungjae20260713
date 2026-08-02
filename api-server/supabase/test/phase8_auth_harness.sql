@@ -53,11 +53,15 @@ grant select on public.profiles to anon;
 insert into auth.users (id, email) values
   ('11111111-1111-1111-1111-111111111111', 'user-a@test.invalid'),
   ('22222222-2222-2222-2222-222222222222', 'user-b@test.invalid'),
+  ('33333333-3333-3333-3333-333333333333', 'associate@test.invalid'),
+  ('44444444-4444-4444-4444-444444444444', 'pending@test.invalid'),
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'admin@test.invalid')
 on conflict (id) do nothing;
 
 insert into public.profiles (id, login_name, display_name, role, status, approved_at) values
   ('11111111-1111-1111-1111-111111111111', 'user-a', 'User A', 'user', 'approved', now()),
   ('22222222-2222-2222-2222-222222222222', 'user-b', 'User B', 'user', 'approved', now()),
+  ('33333333-3333-3333-3333-333333333333', 'associate', 'Associate', 'user', 'approved', now()),
+  ('44444444-4444-4444-4444-444444444444', 'pending', 'Pending', 'user', 'pending', null),
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'admin', 'Admin', 'admin', 'approved', now())
 on conflict (id) do nothing;
