@@ -1,5 +1,9 @@
 import type { PaperTradingState, StorageLike } from './paper-trading';
-import { PAPER_STORAGE_KEY } from './paper-trading-storage';
+import {
+  PAPER_ARCHIVE_KEY,
+  PAPER_STORAGE_KEY,
+  loadPaperArchive,
+} from './paper-trading-storage';
 import type {
   ConflictResolutionResult,
   JournalConflict,
@@ -12,8 +16,10 @@ import type {
 
 export const JOURNAL_SYNC_STORAGE_SCHEMA_VERSION = 2;
 export const JOURNAL_SYNC_STORAGE_PREFIX = 'seungjae.paper-trading.v2';
+export const JOURNAL_ARCHIVE_STORAGE_PREFIX = 'seungjae.paper-journal-archive.v1';
 export const JOURNAL_SYNC_METADATA_PREFIX = 'seungjae.paper-journal-sync.v2';
 export const LEGACY_OWNER_KEY = 'seungjae.paper-trading.v1.owner';
+// Warning thresholds only. Phase 8 does not silently trim records or conflicts.
 export const JOURNAL_SYNC_LIMITS = Object.freeze({ metadataRecords: 2_700, conflicts: 200 });
 
 export type SyncMetadataRecord = {
@@ -75,6 +81,10 @@ export function namespacedPaperStorageKey(userId: string) {
   return `${JOURNAL_SYNC_STORAGE_PREFIX}:${paperOwnerNamespace(userId)}`;
 }
 
+export function namespacedPaperArchiveKey(userId: string) {
+  return `${JOURNAL_ARCHIVE_STORAGE_PREFIX}:${paperOwnerNamespace(userId)}`;
+}
+
 export function syncMetadataStorageKey(userId: string) {
   return `${JOURNAL_SYNC_METADATA_PREFIX}:${paperOwnerNamespace(userId)}`;
 }
@@ -113,18 +123,16 @@ function migrateLegacyIfEligible(storage: StorageLike, userId: string, now: Date
 }
 
 export function createUserPaperStorage(storage: StorageLike, userId: string, now = new Date()): StorageLike {
-  const targetKey = namespacedPaperStorageKey(userId);
+  const stateKey = namespacedPaperStorageKey(userId);
+  const archiveKey = namespacedPaperArchiveKey(userId);
+  const remap = (key: string) => key === PAPER_STORAGE_KEY ? stateKey : key === PAPER_ARCHIVE_KEY ? archiveKey : key;
   return {
     getItem(key) {
-      if (key !== PAPER_STORAGE_KEY) return storage.getItem(key);
-      return migrateLegacyIfEligible(storage, userId, now).value;
+      if (key === PAPER_STORAGE_KEY) return migrateLegacyIfEligible(storage, userId, now).value;
+      return storage.getItem(remap(key));
     },
-    setItem(key, value) {
-      storage.setItem(key === PAPER_STORAGE_KEY ? targetKey : key, value);
-    },
-    removeItem(key) {
-      storage.removeItem(key === PAPER_STORAGE_KEY ? targetKey : key);
-    },
+    setItem(key, value) { storage.setItem(remap(key), value); },
+    removeItem(key) { storage.removeItem(remap(key)); },
   };
 }
 
@@ -154,13 +162,19 @@ export function loadJournalSyncMetadata(storage: StorageLike, userId: string, no
 }
 
 function repairMetadata(metadata: JournalSyncMetadata): JournalSyncMetadata {
-  const entries = Object.entries(metadata.records ?? {}).slice(-JOURNAL_SYNC_LIMITS.metadataRecords);
+  const records = metadata.records && typeof metadata.records === 'object' && !Array.isArray(metadata.records)
+    ? metadata.records
+    : {};
+  const conflicts = Array.isArray(metadata.conflicts) ? metadata.conflicts : [];
+  const warnings: string[] = [];
+  if (Object.keys(records).length > JOURNAL_SYNC_LIMITS.metadataRecords) warnings.push('동기화 메타데이터가 장기 보존 기준을 넘었습니다. 자동 삭제하지 않았습니다.');
+  if (conflicts.length > JOURNAL_SYNC_LIMITS.conflicts) warnings.push('미해결 충돌이 많습니다. 충돌을 자동 폐기하지 않았습니다.');
   return {
     ...metadata,
     schemaVersion: 2,
-    records: Object.fromEntries(entries),
-    conflicts: (metadata.conflicts ?? []).slice(-JOURNAL_SYNC_LIMITS.conflicts),
-    warning: String(metadata.warning ?? '').slice(0, 500),
+    records,
+    conflicts,
+    warning: [String(metadata.warning ?? '').slice(0, 500), ...warnings].filter(Boolean).join(' ').slice(0, 1_000),
   };
 }
 
@@ -173,21 +187,22 @@ export function saveJournalSyncMetadata(storage: StorageLike, userId: string, me
   return repaired;
 }
 
-function currentPayloads(state: PaperTradingState) {
+function currentPayloads(state: PaperTradingState, archivedJournal: PaperTradingState['journal']) {
   const ordersById = new Map(state.orders.map((order) => [order.id, order]));
+  const journalById = new Map([...archivedJournal, ...state.journal].map((entry) => [entry.id, entry]));
   return [
     { kind: 'account' as const, id: state.account.id, payload: state.account as unknown as Record<string, unknown> },
     ...state.orders.map((payload) => ({ kind: 'order' as const, id: payload.id, payload: payload as unknown as Record<string, unknown> })),
     ...state.positions.map((payload) => ({ kind: 'position' as const, id: payload.id, payload: payload as unknown as Record<string, unknown> })),
     ...state.fills.map((payload) => ({ kind: 'fill' as const, id: payload.id, payload: payload as unknown as Record<string, unknown> })),
-    ...state.journal.map((payload) => {
+    ...[...journalById.values()].map((payload) => {
       const order = ordersById.get(payload.orderId);
       return {
         kind: 'journal' as const,
         id: payload.id,
         payload: {
           ...(payload as unknown as Record<string, unknown>),
-          riskPercent: order?.riskResult?.actualRiskPercent ?? null,
+          riskPercent: order?.riskResult?.actualRiskPercent ?? (payload as unknown as Record<string, unknown>).riskPercent ?? null,
         },
       };
     }),
@@ -198,19 +213,16 @@ function recordKey(kind: JournalRecordKind, id: string) {
   return `${kind}:${id}`;
 }
 
-export function prepareJournalSync(
-  storage: StorageLike,
-  userId: string,
-  state: PaperTradingState,
-  now = new Date(),
-) {
+export function prepareJournalSync(storage: StorageLike, userId: string, state: PaperTradingState, now = new Date()) {
   const loaded = loadJournalSyncMetadata(storage, userId, now);
   const metadata = structuredClone(loaded.metadata);
   const at = now.toISOString();
   const records: JournalSyncRecord[] = [];
   const currentKeys = new Set<string>();
+  const userStorage = createUserPaperStorage(storage, userId, now);
+  const archive = loadPaperArchive(userStorage);
 
-  for (const item of currentPayloads(state)) {
+  for (const item of currentPayloads(state, archive.journal)) {
     if (containsForbidden(item.payload)) throw new Error('로컬 기록에 Secret 유사 필드가 있어 동기화하지 않았습니다.');
     const key = recordKey(item.kind, item.id);
     currentKeys.add(key);
@@ -231,16 +243,17 @@ export function prepareJournalSync(
 
   for (const [key, previous] of Object.entries(metadata.records)) {
     if (currentKeys.has(key)) continue;
-    const next = previous.deletedAt
-      ? previous
-      : { ...previous, version: previous.version + 1, hash: fnv1a('{}'), updatedAt: at, deletedAt: at };
+    const next = previous.deletedAt ? previous : { ...previous, version: previous.version + 1, hash: fnv1a('{}'), updatedAt: at, deletedAt: at };
     metadata.records[key] = next;
     records.push({ kind: next.kind, id: next.id, version: next.version, updatedAt: next.updatedAt, deletedAt: next.deletedAt, payload: {} });
   }
 
   metadata.status = 'pending';
+  if (archive.journal.length) {
+    metadata.warning = `활성 거래일지 500개를 넘은 과거 기록 ${archive.journal.length}건을 사용자별 archive에 보존하고 동기화 대상에 포함했습니다.`;
+  }
   saveJournalSyncMetadata(storage, userId, metadata);
-  return { records, metadata };
+  return { records, metadata, archiveCount: archive.journal.length };
 }
 
 function replaceById<T extends { id: string }>(items: T[], id: string, payload: Record<string, unknown>, deleted: boolean) {
@@ -277,35 +290,23 @@ function updateMetadataRecords(metadata: JournalSyncMetadata, records: readonly 
   }
 }
 
-export function applyJournalSyncResult(
-  storage: StorageLike,
-  userId: string,
-  state: PaperTradingState,
-  result: JournalSyncResult,
-) {
-  const loaded = loadJournalSyncMetadata(storage, userId);
-  const metadata = structuredClone(loaded.metadata);
+export function applyJournalSyncResult(storage: StorageLike, userId: string, state: PaperTradingState, result: JournalSyncResult) {
+  const metadata = structuredClone(loadJournalSyncMetadata(storage, userId).metadata);
   const applied = [...result.uploaded, ...result.downloaded];
   updateMetadataRecords(metadata, applied);
   metadata.lastSyncAt = result.serverTime;
-  metadata.uploadedCount = result.uploaded.length;
-  metadata.downloadedCount = result.downloaded.length;
+  metadata.uploadedCount += result.uploaded.length;
+  metadata.downloadedCount += result.downloaded.length;
   metadata.failedCount = result.failed.length;
-  metadata.conflicts = result.conflicts;
+  metadata.conflicts = [...metadata.conflicts.filter((existing) => !result.conflicts.some((next) => next.id === existing.id)), ...result.conflicts];
   metadata.warning = result.warnings.join(' ');
-  metadata.status = result.conflicts.length ? 'conflict' : result.failed.length ? 'failed' : 'completed';
+  metadata.status = metadata.conflicts.length ? 'conflict' : result.failed.length ? 'failed' : 'completed';
   saveJournalSyncMetadata(storage, userId, metadata);
   return { state: applyServerRecords(state, applied), metadata };
 }
 
-export function applyJournalSnapshot(
-  storage: StorageLike,
-  userId: string,
-  state: PaperTradingState,
-  snapshot: JournalSnapshotResult,
-) {
-  const loaded = loadJournalSyncMetadata(storage, userId);
-  const metadata = structuredClone(loaded.metadata);
+export function applyJournalSnapshot(storage: StorageLike, userId: string, state: PaperTradingState, snapshot: JournalSnapshotResult) {
+  const metadata = structuredClone(loadJournalSyncMetadata(storage, userId).metadata);
   updateMetadataRecords(metadata, snapshot.records);
   metadata.lastSyncAt = snapshot.serverTime;
   metadata.downloadedCount += snapshot.records.length;
@@ -314,14 +315,8 @@ export function applyJournalSnapshot(
   return { state: applyServerRecords(state, snapshot.records), metadata };
 }
 
-export function applyConflictResolution(
-  storage: StorageLike,
-  userId: string,
-  state: PaperTradingState,
-  result: ConflictResolutionResult,
-) {
-  const loaded = loadJournalSyncMetadata(storage, userId);
-  const metadata = structuredClone(loaded.metadata);
+export function applyConflictResolution(storage: StorageLike, userId: string, state: PaperTradingState, result: ConflictResolutionResult) {
+  const metadata = structuredClone(loadJournalSyncMetadata(storage, userId).metadata);
   updateMetadataRecords(metadata, result.records);
   metadata.conflicts = metadata.conflicts.filter((conflict) => conflict.id !== result.conflictId);
   metadata.status = metadata.conflicts.length ? 'conflict' : metadata.failedCount ? 'failed' : 'completed';
@@ -347,5 +342,6 @@ export function markJournalSyncFailed(storage: StorageLike, userId: string, mess
 
 export function clearUserJournalNamespace(storage: StorageLike, userId: string) {
   storage.removeItem(namespacedPaperStorageKey(userId));
+  storage.removeItem(namespacedPaperArchiveKey(userId));
   storage.removeItem(syncMetadataStorageKey(userId));
 }
