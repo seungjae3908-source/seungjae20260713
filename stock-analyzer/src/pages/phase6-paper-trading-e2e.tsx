@@ -81,8 +81,11 @@ async function execute(input: PaperTradingState, action: PaperTradingAction): Pr
   }
 
   const position = state.positions.find((item) => item.id === action.positionId)!;
-  const percentage = action.percentage ?? 100;
-  const closeQuantity = percentage === 100 ? position.remainingQuantity : position.remainingQuantity * percentage / 100;
+  const closeQuantity = action.quantity ?? (
+    action.percentage === 100 || action.percentage == null
+      ? position.remainingQuantity
+      : position.remainingQuantity * action.percentage / 100
+  );
   position.remainingQuantity = Math.max(0, position.remainingQuantity - closeQuantity);
   position.status = position.remainingQuantity <= 1e-9 ? 'closed' : 'partially_closed';
   position.realizedPnl += closeQuantity * 100; position.unrealizedPnl = 0;
@@ -114,5 +117,9 @@ const candle: NormalizedCandle = { timestamp: Date.parse('2026-08-02T02:45:00Z')
   quoteVolume: 10_000_000, timeframe: '15m', symbol: 'BTCUSDT', market: 'crypto-futures', source: 'fixture', isClosed: true, isDelayed: false, updatedAt: NOW };
 
 export default function Phase6PaperTradingE2EPage() {
-  return <PaperTradingPanel compact execute={execute} loadMarket={async () => snapshot} loadRules={async () => rules} loadCandle={async () => candle} />;
+  const errorMode = new URLSearchParams(window.location.search).get('mode') === 'error';
+  const fixtureExecute = errorMode
+    ? async () => { await new Promise((resolve) => setTimeout(resolve, 120)); throw new Error('모의거래 fixture 오류입니다.'); }
+    : execute;
+  return <PaperTradingPanel compact execute={fixtureExecute} loadMarket={async () => snapshot} loadRules={async () => rules} loadCandle={async () => candle} />;
 }
