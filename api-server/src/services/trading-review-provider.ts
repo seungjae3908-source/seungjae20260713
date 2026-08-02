@@ -6,8 +6,8 @@ export interface TradingReviewProvider { generateReview(input: TradingReviewProv
 
 const forbiddenKey = /^(?:email|name|birth(?:date)?|phone|user_?id|userId|.*uuid|account(?:number)?|api_?key|apiKey|secret|.*token|authorization|memo|note|storageKey|ipAddress|privateKey)$/i;
 const secretValue = /(?:bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{12,}|eyJ[a-z0-9_-]{12,}\.)/i;
-const unsafeOutput = /(?:보장\s*수익|손실.{0,12}레버리지|레버리지.{0,12}(?:확대|늘리)|(?:매수|매도).{0,12}(?:하세요|하라)|API\s*Key|시스템\s*프롬프트|입금|출금)/i;
-const restatedCoreMetric = /(?:승률|순손익|평균\s*R|Profit\s*Factor|총\s*비용|손절\s*준수율|규칙\s*위반률).{0,24}(?:[-+]?\d[\d,.]*\s*%?)/i;
+const unsafeOutput = /(?:보장\s*(?:수익|수익률)|확정(?:적)?\s*(?:수익|상승)|손실.{0,20}레버리지|레버리지.{0,20}(?:확대|늘리)|(?:매수|매도).{0,16}(?:하세요|하라|진입)|(?:api\s*key|secret|token).{0,20}(?:주세요|입력|공개|전송)|입금|출금|송금|시스템\s*프롬프트|\b(?:buy|sell)\s+now\b|\benter\s+(?:a\s+)?(?:long|short)\b|\bguaranteed\s+(?:return|profit)s?\b|\b(?:certain|definite)\s+(?:future\s+)?profits?\b|\bwill\s+(?:definitely\s+)?profit\b|\bdouble\s+down\b|\bincrease\s+leverage.{0,24}(?:recover|loss)|\b(?:api\s*key|secret|token)s?\b.{0,24}\b(?:give|provide|send|share|show|reveal|enter|input)\b|\b(?:give|provide|send|share|show|reveal|enter|input)\b.{0,24}\b(?:api\s*key|secret|token)s?\b|\b(?:reveal|show|print|expose)\b.{0,20}\bsystem\s+prompt\b|\b(?:deposit|withdraw|transfer|send)\b.{0,20}\b(?:money|funds?|crypto|cash)\b|\b(?:visit|open|follow|browse)\b.{0,16}(?:https?:\/\/|www\.|\burl\b|\blink\b)|\b(?:call|invoke|use)\b.{0,16}\btools?\b|\b(?:execute|run)\b.{0,16}\b(?:code|script|command)\b)/i;
+const restatedCoreMetric = /(?:승률|순손익|기대값|평균\s*r|profit\s*factor|총\s*비용|손절\s*준수율|규칙\s*위반률|win\s*rate|net\s*pnl|expectancy|average\s*r|total\s*costs?|stop\s*adherence|rule\s*violation\s*rate).{0,24}(?:[-+]?\d[\d,.]*\s*%?)/i;
 
 export function assertPrivacySafeDataset(dataset: TradingReviewDataset) {
   const visit = (value: unknown, path = '$'): void => {
@@ -22,12 +22,28 @@ export function assertPrivacySafeDataset(dataset: TradingReviewDataset) {
   visit(dataset);
 }
 
-const text = (value: unknown, max = 1200) => typeof value === 'string' ? value.replace(/[<>]/g, '').trim().slice(0, max) : '';
+export function normalizeAiOutputText(value: unknown, max = 1200) {
+  if (typeof value !== 'string') return '';
+  return value
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/[<>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
 const evidenceSet = (dataset: TradingReviewDataset) => new Set(dataset.representativeTrades.map((item) => item.anonymizedId));
 export function validateTradingAiReview(value: unknown, dataset: TradingReviewDataset): TradingAiReviewResult {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new PaperJournalError('AI_REVIEW_INVALID_RESPONSE', 'AI 응답 형식이 올바르지 않습니다.', 502);
   const source = value as Record<string, unknown>; const evidence = evidenceSet(dataset);
-  const safe = (value: unknown) => { const result = text(value); if (unsafeOutput.test(result)) throw new PaperJournalError('AI_REVIEW_UNSAFE_OUTPUT', '안전하지 않은 AI 출력이 차단되었습니다.', 502); if (restatedCoreMetric.test(result)) throw new PaperJournalError('AI_REVIEW_METRIC_RESTATEMENT', '핵심 수치는 서버 계산 결과만 표시할 수 있습니다.', 502); return result; };
+  const safe = (value: unknown) => {
+    const result = normalizeAiOutputText(value);
+    const comparable = result.toLocaleLowerCase('en-US');
+    if (unsafeOutput.test(comparable)) throw new PaperJournalError('AI_REVIEW_UNSAFE_OUTPUT', '안전하지 않은 AI 출력이 차단되었습니다.', 502);
+    if (restatedCoreMetric.test(comparable)) throw new PaperJournalError('AI_REVIEW_METRIC_RESTATEMENT', '핵심 수치는 서버 계산 결과만 표시할 수 있습니다.', 502);
+    return result;
+  };
   const list = (key: string) => Array.isArray(source[key]) ? source[key] as Record<string, unknown>[] : [];
   const ids = (value: unknown) => Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string' && evidence.has(id)).slice(0, 12) : [];
   const confidence = (v: unknown) => v === 'high' || v === 'medium' ? v : 'low';

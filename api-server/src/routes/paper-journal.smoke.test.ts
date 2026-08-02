@@ -47,10 +47,10 @@ const reviewProvider: TradingReviewProvider = { async generateReview(input) {
   } };
 } };
 
-async function startServer(options: { authenticated?: boolean; repository?: PaperJournalRepository; throwFactory?: boolean; reviewProvider?: TradingReviewProvider | null } = {}) {
+async function startServer(options: { authenticated?: boolean; repository?: PaperJournalRepository; throwFactory?: boolean; reviewProvider?: TradingReviewProvider | null; memberTier?: string } = {}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
-  if (options.authenticated !== false) app.use('/api', (req: any, _res, next) => { req.member = { id: USER, membership_level: 'regular', status: 'approved', is_active: true }; req.accessToken = 'test-token'; next(); });
+  if (options.authenticated !== false) app.use('/api', (req: any, _res, next) => { req.member = { id: USER, membership_level: options.memberTier ?? 'regular', status: 'approved', is_active: true }; req.accessToken = 'test-token'; next(); });
   const repository = options.repository ?? createRepository();
   app.use('/api', createPaperJournalRouter({
     repositoryFactory: () => {
@@ -182,6 +182,7 @@ test('AI review preview regenerates a privacy-safe server dataset without outbou
     const raw = await response.text();
     const body = JSON.parse(raw);
     assert.equal(response.status, 200); assert.equal(body.mode, 'ai-review-preview'); assert.equal(body.externalAiCalled, false);
+    assert.deepEqual(body.providerCall, { attempted: false, completed: false, reused: false }); assert.equal(body.rateLimitScope, 'process');
     assert.equal(body.orderSubmitted, false); assert.equal(body.exchangeRequestSent, false); assert.equal(body.result.dataset.sampleSize, 10);
     assert.doesNotMatch(raw, /private@example\.com|private note/);
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
@@ -193,6 +194,7 @@ test('AI review generate requires explicit consent', async () => {
     const response = await fetch(`${baseUrl}/api/paper-journal/ai-review/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idempotencyKey: 'phase9:smoke:no-consent' }) });
     const body = await safeJson(response);
     assert.equal(response.status, 400); assert.equal(body.error.code, 'AI_REVIEW_CONSENT_REQUIRED'); assert.equal(body.externalAiCalled, false);
+    assert.deepEqual(body.providerCall, { attempted: false, completed: false, reused: false }); assert.equal(body.rateLimitScope, 'process');
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 
@@ -202,7 +204,28 @@ test('AI review generate calls only the injected provider and keeps the no-order
     const response = await fetch(`${baseUrl}/api/paper-journal/ai-review/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ consent: true, idempotencyKey: 'phase9:smoke:generate', locale: 'ko-KR' }) });
     const body = await safeJson(response);
     assert.equal(response.status, 200); assert.equal(body.mode, 'ai-review-only'); assert.equal(body.externalAiCalled, true);
+    assert.deepEqual(body.providerCall, { attempted: true, completed: true, reused: false }); assert.equal(body.rateLimitScope, 'process');
     assert.equal(body.orderSubmitted, false); assert.equal(body.exchangeRequestSent, false); assert.equal(body.result.model, 'mock');
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('AI review provider unavailable is a preflight failure', async () => {
+  const { server, baseUrl } = await startServer({ reviewProvider: null });
+  try {
+    const response = await fetch(`${baseUrl}/api/paper-journal/ai-review/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ consent: true, idempotencyKey: 'phase9:smoke:unavailable' }) });
+    const body = await safeJson(response);
+    assert.equal(response.status, 503); assert.equal(body.externalAiCalled, false); assert.deepEqual(body.providerCall, { attempted: false, completed: false, reused: false });
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('AI review permission rejection occurs before provider call', async () => {
+  let calls = 0;
+  const counting: TradingReviewProvider = { async generateReview(input) { calls += 1; return reviewProvider.generateReview(input, AbortSignal.timeout(1000)); } };
+  const { server, baseUrl } = await startServer({ memberTier: 'associate', reviewProvider: counting });
+  try {
+    const response = await fetch(`${baseUrl}/api/paper-journal/ai-review/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ consent: true, idempotencyKey: 'phase9:smoke:permission' }) });
+    const body = await safeJson(response);
+    assert.equal(response.status, 403); assert.equal(calls, 0); assert.equal(body.externalAiCalled, false); assert.deepEqual(body.providerCall, { attempted: false, completed: false, reused: false });
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 
