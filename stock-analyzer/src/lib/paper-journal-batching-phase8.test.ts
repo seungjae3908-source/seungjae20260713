@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createBatchIdempotencyKey, MAX_IDEMPOTENCY_KEY_LENGTH } from './paper-journal-sync';
+import { createBatchIdempotencyKey, MAX_IDEMPOTENCY_KEY_LENGTH } from './paper-journal-batching';
 
 test('batch idempotency key preserves suffix for 160-character base', () => {
   const key = createBatchIdempotencyKey('x'.repeat(160), 12);
