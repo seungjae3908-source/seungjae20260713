@@ -65,9 +65,10 @@ async function authenticate(req: AuthenticatedRequest, res: Response): Promise<b
     return false;
   }
 
-  req.member = profile as MemberProfile;
+  const member = profile as unknown as MemberProfile;
+  req.member = member;
   req.accessToken = token;
-  req.membershipLevel = deriveMemberTier(profile);
+  req.membershipLevel = deriveMemberTier(member);
   return true;
 }
 
