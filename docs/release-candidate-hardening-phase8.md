@@ -16,36 +16,44 @@ externalAiCalled=false
 
 ## 실제 임시 DB 검증 방식
 
-GitHub Actions `database-rls` job에서 `postgres:16-alpine` service container를 한 번 생성한다. 연결 정보는 CI 전용 고정값이며 운영 Supabase URL이나 키를 사용하지 않는다. 스크립트는 URL을 출력하지 않고 `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD`로 `psql`을 실행한다.
+GitHub Actions `database-rls` job에서 `postgres:16-alpine` service container를 생성한다. 연결 정보는 CI 전용이며 운영 Supabase URL이나 키를 사용하지 않는다. 검증 스크립트는 연결 URL을 출력하지 않고 `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD`를 사용한다.
 
 검증 순서:
 
-1. `api-server/supabase/test/phase8_auth_harness.sql`로 `auth.users`, `auth.uid()`, `authenticated`, `anon`, 레거시 `profiles`를 만든다.
-2. Phase 7 migration을 실제 적용한다.
-3. Phase 8 회원 권한 migration을 실제 적용한다.
-4. 두 migration을 다시 실행해 idempotent DDL을 확인한다.
-5. 실제 SQL 세션 역할과 JWT subject claim을 바꿔 RLS CRUD를 실행한다.
-6. 의도적으로 트랜잭션 실패를 일으켜 일부 객체가 남지 않는지 확인한다.
-7. Phase 8, Phase 7 순서로 rollback SQL을 실행한다.
-8. 잔여 테이블·컬럼·함수 부재를 확인한다.
-9. 두 migration을 다시 적용하고 테이블·RLS·회원 컬럼을 재검증한다.
+1. `phase8_auth_harness.sql`로 임시 `auth.users`, `auth.uid()`, `authenticated`, `anon`, 레거시 `profiles`를 만든다.
+2. Phase 7 paper-journal migration을 실제 적용한다.
+3. Phase 8 회원 4등급 migration을 실제 적용한다.
+4. Phase 8 paper capability RLS overlay를 실제 적용한다.
+5. 세 migration을 재실행해 idempotent DDL 동작을 확인한다.
+6. SQL 세션 role과 JWT subject claim을 바꿔 소유권 및 등급 RLS CRUD를 실행한다.
+7. 의도적인 transaction 실패 후 부분 객체가 남지 않는지 확인한다.
+8. capability overlay, 회원 migration, Phase 7 migration 순서로 rollback한다.
+9. 잔여 테이블·컬럼·함수 부재를 확인한다.
+10. 세 migration을 다시 적용하고 RLS를 재검증한다.
 
 운영 DB에는 migration을 적용하지 않는다.
 
 ## Migration apply·rollback
 
-Phase 7:
+Phase 7 paper storage:
 
 ```text
 api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql
 api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.down.sql
 ```
 
-Phase 8:
+Phase 8 member permissions:
 
 ```text
 api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql
 api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.down.sql
+```
+
+Phase 8 paper capability RLS overlay:
+
+```text
+api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql
+api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.down.sql
 ```
 
 Phase 7 테이블:
@@ -61,11 +69,18 @@ Phase 7 테이블:
 
 Phase 8은 `profiles`에 `membership_level`, `is_active`, `permissions_updated_at`을 추가하고 `member_permission_audit`를 만든다. 기존 승인 사용자는 `regular`, 기존 승인 관리자는 `admin`, 나머지는 `pending`으로 호환 매핑한다.
 
-## RLS 통합 결과 기준
+Phase 7의 `auth.uid() = user_id` 소유권 정책만으로는 준회원이 Supabase를 직접 호출하는 우회를 막을 수 없다. 따라서 Phase 8 overlay는 6개 paper 테이블의 CRUD 정책에 다음 조건을 함께 요구한다.
 
-실제 DB 쿼리로 다음을 검증한다.
+```sql
+auth.uid() = user_id
+and public.current_membership_level() in ('regular', 'admin')
+```
 
-사용자 A:
+rollback 시에는 Phase 7의 소유권 전용 정책으로 복원한 뒤 회원 helper를 제거한다.
+
+## 실제 RLS 통합 기준
+
+### 정회원 사용자 A
 
 - 자기 account 조회
 - 자기 order 생성
@@ -74,24 +89,36 @@ Phase 8은 `profiles`에 `membership_level`, `is_active`, `permissions_updated_a
 - 자기 journal 조회
 - 자기 sync state 변경
 
-사용자 B:
+### 정회원 사용자 B
 
 - A의 6개 테이블 행 조회 결과 0건
-- A 행 update/delete 영향 0건
+- A 행 update·delete 영향 0건
 - A의 `user_id`를 넣은 insert가 RLS 오류
-- 같은 record ID를 B 소유 범위에서 생성 가능
+- 동일 record ID를 B 소유 범위에서 생성 가능
 
-비로그인 `anon`:
+### 준회원
+
+- 유효한 인증 subject와 자기 UUID를 사용해도 paper-table 조회 결과 0건
+- 자기 account insert 차단
+- paper row update·delete 차단
+- API 가드뿐 아니라 직접 Supabase CRUD도 차단
+
+### 승인대기
+
+- 유효한 인증 subject가 있어도 paper journal 조회·생성 차단
+
+### 비로그인 `anon`
 
 - 조회 결과 0건
 - insert RLS 오류
-- update/delete 영향 0건
+- update·delete 영향 0건
 
-관리자:
+### 관리자
 
-- 회원 profile과 권한 감사 이력만 접근
-- paper journal과 원본 메모에 대한 관리자 정책 없음
-- 관리자 claim으로도 다른 사용자의 paper journal 조회 결과 0건
+- 회원 profile과 권한 감사 이력 접근 가능
+- 자기 소유 paper 데이터는 regular 기능으로 사용 가능
+- 다른 사용자의 paper journal과 원본 메모 조회 결과 0건
+- 관리자에게 개인 거래기록 전체를 허용하는 정책 없음
 
 ## 회원 4등급과 권한 매트릭스
 
@@ -122,7 +149,17 @@ regular   = 정회원
 admin     = 관리자
 ```
 
-서버는 매 요청마다 로그인 사용자와 현재 DB profile을 읽는다. 클라이언트 body, app metadata 또는 client role은 권한 근거가 아니다. 프런트는 포커스·탭 복귀 및 30초 주기로 profile을 다시 읽어 등급 변경을 반영한다.
+서버는 매 요청마다 로그인 사용자와 현재 DB profile을 읽는다. 클라이언트 body, app metadata 또는 client role은 권한 근거가 아니다. 프런트는 포커스·탭 복귀와 30초 주기로 profile을 다시 읽어 등급 변경을 반영한다.
+
+권한은 다음 위치에서 같은 매트릭스를 사용한다.
+
+- 프런트 메뉴 표시
+- 프런트 route guard와 직접 URL 접근
+- 백엔드 API capability middleware
+- paper-table DB RLS
+- 관리자 변경 후 profile·session refresh
+
+버튼만 숨기고 API 또는 DB 접근을 허용하지 않는다.
 
 ## 관리자 안전성
 
@@ -172,6 +209,7 @@ viewport:
 - 높은 version 우선
 - 서버 시각보다 version 우선
 - 사용자·idempotency key별 in-flight Promise 공유
+- 500개 초과 요청의 batch별 고유 idempotency key
 - 부분 실패는 성공·실패 항목 분리
 - 오프라인과 실패 상태에서도 로컬 상태·tombstone 유지
 - localStorage 손상 시 원문 backup 후 복구
@@ -194,11 +232,11 @@ archive: seungjae.paper-journal-archive.v1:<hashed namespace>
 - 서버 repository는 종류별 500개 hard limit을 제거하고 range pagination으로 끝까지 조회
 - 사용자의 명시적 export 전에 archive 자동 삭제 없음
 
-archive 삭제 UI와 장기 cold-storage 이동은 이번 범위를 넘으므로 설계·경고와 데이터 보존까지만 구현한다.
+archive 삭제 UI와 장기 cold-storage 이동은 이번 범위를 넘으므로 설계·warning과 데이터 보존까지만 구현한다.
 
 ## 부하 측정
 
-CI는 절대적인 짧은 시간 기준으로 flaky 실패를 만들지 않는다. 각 작업의 실행시간과 heap 증감량을 `[phase8-performance]` JSON 로그로 남기고 15초 이상의 장시간 이벤트 루프 점유만 실패로 판정한다.
+CI는 각 작업의 실행시간과 heap 증감량을 `[phase8-performance]` JSON 로그로 남긴다. 환경에 따라 흔들리는 짧은 절대 기준 대신 15초 이상의 장시간 이벤트 루프 점유를 실패로 판정한다.
 
 측정 대상:
 
@@ -227,6 +265,7 @@ CI는 절대적인 짧은 시간 기준으로 flaky 실패를 만들지 않는�
 - `__proto__`, `prototype`, `constructor`
 - 잘못된 cursor와 conflict ID
 - stack trace·Secret을 포함하지 않는 오류
+- 준회원·승인대기 사용자의 직접 DB paper 접근
 
 ## CI
 
@@ -250,8 +289,9 @@ security-integration/verified
 - 기존 Phase 2~7 테스트 유지
 - Phase 8 신규 테스트 성공
 - API smoke 성공
-- 임시 DB migration apply·rollback·reapply 성공
-- 실제 RLS A/B/비로그인/관리자 통합 성공
+- 세 migration의 실제 apply·idempotent rerun·rollback·reapply 성공
+- 실제 RLS A/B/준회원/승인대기/비로그인/관리자 통합 성공
+- 프런트 메뉴·route와 백엔드 API 권한 테스트 성공
 - Playwright 전체 성공
 - 보안·bundle 검사 성공
 - 프런트·백엔드 production build 성공
@@ -260,7 +300,7 @@ security-integration/verified
 
 ## 남은 미검증
 
-최종 CI 후 실제 결과와 함께 갱신한다. 자동화 범위 밖으로 남길 수 있는 항목:
+최종 CI 결과와 함께 확정한다. 자동화 범위 밖으로 남길 수 있는 항목:
 
 - 실제 운영 Supabase migration 적용 시간과 rollback
 - 운영 데이터량에서의 lock·index 생성 시간
