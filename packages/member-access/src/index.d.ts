@@ -9,6 +9,7 @@ export type MemberCapability =
   | 'canAccessPaperTrading'
   | 'canAccessJournalSync'
   | 'canAccessTradingAnalytics'
+  | 'canAccessAiTradingReview'
   | 'canManageMembers';
 
 export type MemberAccessProfile = {

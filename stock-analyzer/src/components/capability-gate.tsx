@@ -13,6 +13,7 @@ const CAPABILITY_LABELS: Record<MemberCapability, string> = {
   canAccessPaperTrading: '모의매매',
   canAccessJournalSync: '거래일지 동기화',
   canAccessTradingAnalytics: '거래 분석',
+  canAccessAiTradingReview: 'AI 거래 복기',
   canManageMembers: '회원 관리',
 };
 

@@ -17,7 +17,7 @@ const expected: Record<MemberTier, MemberCapability[]> = {
   regular: [
     'canAccessBasicInfo', 'canAccessSpot', 'canAccessFutures',
     'canAccessRiskPreview', 'canAccessBacktests', 'canAccessPaperTrading',
-    'canAccessJournalSync', 'canAccessTradingAnalytics',
+    'canAccessJournalSync', 'canAccessTradingAnalytics', 'canAccessAiTradingReview',
   ],
   admin: [...MEMBER_CAPABILITIES],
 };
