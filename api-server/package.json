@@ -14,6 +14,7 @@
     "test:unit": "node ./test.mjs unit",
     "test:phase2": "node ./test.mjs phase2",
     "test:risk": "node ./test.mjs risk",
+    "test:phase4": "node ./test.mjs phase4",
     "test:smoke": "node ./test.mjs smoke",
     "smoke:futures:network": "node ./network-smoke.mjs"
   },

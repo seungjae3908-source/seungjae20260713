@@ -45,11 +45,14 @@ async function main() {
     const health = await getJson(baseUrl, '/api/healthz');
     const status = await getJson(baseUrl, '/api/crypto/futures/status');
     const snapshot = await getJson(baseUrl, '/api/crypto/futures/BTCUSDT/snapshot');
+    const contractRules = await getJson(baseUrl, '/api/crypto/futures/BTCUSDT/contract-rules');
     const candles = await getJson(baseUrl, '/api/crypto/futures/BTCUSDT/candles?timeframe=15m&limit=100');
 
     const statusBody = status.body as Record<string, unknown> | null;
     const snapshotBody = snapshot.body as Record<string, unknown> | null;
     const snapshotData = snapshotBody?.data as Record<string, unknown> | undefined;
+    const contractBody = contractRules.body as Record<string, unknown> | null;
+    const contractData = contractBody?.data as Record<string, unknown> | undefined;
     const candlesBody = candles.body as Record<string, unknown> | null;
     const candleData = Array.isArray(candlesBody?.data) ? candlesBody.data : [];
 
@@ -78,6 +81,19 @@ async function main() {
         updatedAt: snapshotData?.updatedAt ?? null,
         warnings: snapshotData?.warnings ?? [],
       },
+      contractRules: {
+        httpStatus: contractRules.httpStatus,
+        publicDataOnly: contractBody?.publicDataOnly ?? null,
+        orderCapability: contractBody?.orderCapability ?? null,
+        symbol: contractData?.symbol ?? null,
+        status: contractData?.status ?? null,
+        quantityStep: contractData?.quantityStep ?? null,
+        minimumQuantity: contractData?.minimumQuantity ?? null,
+        minimumNotional: contractData?.minimumNotional ?? null,
+        maximumLeverage: contractData?.maximumLeverage ?? null,
+        updatedAt: contractData?.updatedAt ?? null,
+        warnings: contractData?.warnings ?? [],
+      },
       candles: {
         httpStatus: candles.httpStatus,
         symbol: candlesBody?.symbol ?? null,
@@ -90,15 +106,25 @@ async function main() {
         health.sensitiveTextDetected ||
         status.sensitiveTextDetected ||
         snapshot.sensitiveTextDetected ||
+        contractRules.sensitiveTextDetected ||
         candles.sensitiveTextDetected,
     };
 
     console.log(JSON.stringify(report, null, 2));
 
-    const requiredStatuses = [health.httpStatus, status.httpStatus, snapshot.httpStatus, candles.httpStatus];
+    const requiredStatuses = [
+      health.httpStatus,
+      status.httpStatus,
+      snapshot.httpStatus,
+      contractRules.httpStatus,
+      candles.httpStatus,
+    ];
     if (requiredStatuses.some((code) => code !== 200)) process.exitCode = 1;
     if (report.sensitiveTextDetected) process.exitCode = 1;
     if (report.status.orderCapability !== false) process.exitCode = 1;
+    if (report.contractRules.publicDataOnly !== true) process.exitCode = 1;
+    if (report.contractRules.orderCapability !== false) process.exitCode = 1;
+    if (report.contractRules.symbol !== 'BTCUSDT') process.exitCode = 1;
     if (report.candles.count < 1) process.exitCode = 1;
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

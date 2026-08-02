@@ -23,9 +23,13 @@ export type RiskEngineInput = {
   estimatedFundingRate: number;
 
   quantityStep?: number | null;
+  quantityPrecision?: number | null;
   minimumQuantity?: number | null;
   minimumNotional?: number | null;
   maintenanceMarginRate?: number | null;
+  maximumLeverage?: number | null;
+  appMaximumLeverage?: number | null;
+  contractRulesStatus?: DataStatus;
 
   dailyRealizedPnl?: number;
   weeklyRealizedPnl?: number;
@@ -45,6 +49,9 @@ export type RiskBlockCode =
   | 'INVALID_RISK_PERCENT'
   | 'INVALID_COST_RATE'
   | 'DATA_NOT_LIVE'
+  | 'CONTRACT_RULES_NOT_LIVE'
+  | 'LEVERAGE_EXCEEDS_EXCHANGE_LIMIT'
+  | 'LEVERAGE_EXCEEDS_APP_LIMIT'
   | 'RISK_REWARD_TOO_LOW'
   | 'DAILY_LOSS_LIMIT'
   | 'WEEKLY_LOSS_LIMIT'
@@ -78,6 +85,9 @@ export type RiskEngineResult = {
   breakEvenPrice: number | null;
   estimatedLiquidationPrice: number | null;
   stopToLiquidationDistancePercent: number | null;
+  effectiveQuantityStep: number | null;
+  appMaximumLeverage: number | null;
+  exchangeMaximumLeverage: number | null;
   calculatedAt: string;
 };
 
@@ -90,11 +100,15 @@ export type RiskPreviewResponse = {
   message?: string;
 };
 
-export async function previewTradingRisk(input: RiskEngineInput): Promise<RiskPreviewResponse> {
+export async function previewTradingRisk(
+  input: RiskEngineInput,
+  signal?: AbortSignal,
+): Promise<RiskPreviewResponse> {
   const response = await authorizedFetch('/api/trading/risk/preview', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
+    signal,
   });
   const payload = await response.json().catch(() => null) as RiskPreviewResponse | null;
   if (!payload || typeof payload !== 'object') {
