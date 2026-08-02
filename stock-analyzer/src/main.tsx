@@ -21,11 +21,11 @@ function applyInitialAccent() {
 		document.documentElement.style.setProperty('--ring', color);
 	} catch {
 		document.documentElement.style.setProperty('--primary', ACCENTS.blue);
-		document.documentElement.style.setProperty('--ring', ACCENTS.blue);
 	}
 }
 
 function registerServiceWorker() {
+	if (import.meta.env.VITE_PHASE4_E2E === 'true') return;
 	if (!('serviceWorker' in navigator)) return;
 
 	window.addEventListener('load', () => {

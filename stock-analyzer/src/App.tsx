@@ -30,6 +30,9 @@ const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const NotFound = lazy(() => import('@/pages/not-found'));
+const Phase4RiskE2EPage = lazy(() => import('@/pages/phase4-risk-e2e'));
+
+const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,7 +46,6 @@ const queryClient = new QueryClient({
   },
 });
 
-// /crypto* 경로: 자산 모드를 코인으로 전환한 뒤 기존 코인 화면으로 이동한다.
 function useCryptoRedirect(target: (symbol?: string) => string, symbol?: string) {
   const mode = useAssetMode();
   const [, navigate] = useLocation();
@@ -98,7 +100,6 @@ function ApprovedRouter() {
         <Route path="/assets" component={PortfolioPage} />
         <Route path="/settings" component={MorePage} />
 
-        {/* 기존 주소는 즐겨찾기와 이전 설치본 호환을 위해 유지합니다. */}
         <Route path="/search" component={SearchPage} />
         <Route path="/scanner" component={ScannerPage} />
         <Route path="/themes" component={ThemesPage} />
@@ -111,7 +112,6 @@ function ApprovedRouter() {
         <Route path="/more" component={MorePage} />
         <Route path="/stock/:ticker" component={DetailPage} />
         <Route path="/recommendations" component={RecommendationsPage} />
-        {/* 코인 전용 경로 — 기존 코인 화면(자산 모드 코인)으로 연결한다. */}
         <Route path="/crypto" component={CryptoHomeRedirect} />
         <Route path="/crypto/search" component={CryptoSearchRedirect} />
         <Route path="/crypto/:symbol" component={CryptoDetailRedirect} />
@@ -125,6 +125,9 @@ function RootRouter() {
   return (
     <Suspense fallback={<PageFallback />}>
       <Switch>
+        {phase4E2EEnabled ? (
+          <Route path="/__phase4-risk-e2e" component={Phase4RiskE2EPage} />
+        ) : null}
         <Route path="/install" component={InstallPage} />
         <Route component={AuthenticatedApp} />
       </Switch>
@@ -161,14 +164,14 @@ function App() {
       <AuthProvider>
         <SettingsProvider>
           <AssetModeProvider>
-          <TooltipProvider>
-            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-              <AppShell>
-                <RootRouter />
-              </AppShell>
-            </WouterRouter>
-            <Toaster />
-          </TooltipProvider>
+            <TooltipProvider>
+              <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+                <AppShell>
+                  <RootRouter />
+                </AppShell>
+              </WouterRouter>
+              <Toaster />
+            </TooltipProvider>
           </AssetModeProvider>
         </SettingsProvider>
       </AuthProvider>

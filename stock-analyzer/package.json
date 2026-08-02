@@ -7,7 +7,8 @@
     "dev": "vite --config vite.config.ts --host 0.0.0.0",
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:e2e": "playwright test -c playwright.config.ts"
   },
   "dependencies": {
     "@radix-ui/react-toast": "^1.2.18",
@@ -17,6 +18,7 @@
     "recharts": "^2.15.4"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@replit/vite-plugin-runtime-error-modal": "catalog:",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "catalog:",

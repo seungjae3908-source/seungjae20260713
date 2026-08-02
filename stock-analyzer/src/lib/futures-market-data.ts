@@ -50,6 +50,24 @@ export type FuturesMarketSnapshot = {
   warnings: string[];
 };
 
+export type FuturesContractRules = {
+  symbol: string;
+  source: 'bitget';
+  quantityStep: number | null;
+  minimumQuantity: number | null;
+  minimumNotional: number | null;
+  quantityPrecision: number | null;
+  pricePrecision: number | null;
+  priceStep: number | null;
+  minimumLeverage: number | null;
+  maximumLeverage: number | null;
+  maintenanceMarginRate: number | null;
+  contractSize: number | null;
+  status: DataStatus;
+  updatedAt: string;
+  warnings: string[];
+};
+
 export type FuturesMarketStatus = {
   ok: true;
   provider: 'bitget';
@@ -68,6 +86,13 @@ type SnapshotResponse = {
   data: FuturesMarketSnapshot;
 };
 
+type ContractRulesResponse = {
+  ok: true;
+  publicDataOnly: true;
+  orderCapability: false;
+  data: FuturesContractRules;
+};
+
 export function getFuturesMarketStatus() {
   return apiGet<FuturesMarketStatus>('/crypto/futures/status');
 }
@@ -75,6 +100,13 @@ export function getFuturesMarketStatus() {
 export async function getFuturesMarketSnapshot(symbol: string) {
   const response = await apiGet<SnapshotResponse>(
     `/crypto/futures/${encodeURIComponent(symbol)}/snapshot`,
+  );
+  return response.data;
+}
+
+export async function getFuturesContractRules(symbol: string) {
+  const response = await apiGet<ContractRulesResponse>(
+    `/crypto/futures/${encodeURIComponent(symbol)}/contract-rules`,
   );
   return response.data;
 }
