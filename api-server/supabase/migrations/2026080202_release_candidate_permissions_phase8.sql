@@ -73,7 +73,7 @@ as $function$
 $function$;
 
 revoke all on function public.current_membership_level() from public;
-grant execute on function public.current_membership_level() to authenticated;
+grant execute on function public.current_membership_level() to anon, authenticated;
 
 alter table public.profiles enable row level security;
 
