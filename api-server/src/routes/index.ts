@@ -12,6 +12,7 @@ import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import futuresMarketDataRouter from './futures-market-data';
 import tradingRiskRouter from './trading-risk';
+import backtestsRouter from './backtests';
 import backupRouter from './backup';
 import { requireAdmin, requireMember } from '../middleware/auth';
 
@@ -41,6 +42,7 @@ router.use('/admin', adminRouter);
 // -------------------------------------------------------------------
 router.use(requireMember);
 router.use('/', tradingRiskRouter);
+router.use('/', backtestsRouter);
 router.use('/debug', requireAdmin, providerDebugRouter);
 router.use('/', pushRouter);
 router.use('/', watchlistRouter);
