@@ -87,6 +87,9 @@ jobs:
       - name: Run Phase 4 contract rules and risk regression tests
         run: pnpm --dir api-server run test:phase4
 
+      - name: Run Phase 5 backtest tests
+        run: pnpm --dir api-server run test:phase5
+
       - name: Run API smoke tests
         run: pnpm --dir api-server run test:smoke
 
@@ -97,7 +100,7 @@ jobs:
         run: pnpm --dir api-server run build:server
 
   browser-ui:
-    name: Playwright desktop and mobile risk UI
+    name: Playwright desktop and mobile application UI
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -147,7 +150,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: phase4-playwright-${{ github.run_id }}
+          name: phase5-playwright-${{ github.run_id }}
           path: |
             stock-analyzer/test-results
             stock-analyzer/playwright-report
