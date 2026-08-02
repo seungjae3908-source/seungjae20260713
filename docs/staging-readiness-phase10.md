@@ -2,12 +2,9 @@
 
 ## Purpose
 
-Phase 10 prepares an isolated staging environment and determines only one of two outcomes:
+Phase 10 prepares an isolated staging environment and gathers evidence for a later production decision.
 
-- `운영 배포 승인 가능`
-- `운영 배포 승인 보류`
-
-It does not deploy production, change the production database, or enable real trading.
+A successful staging run does **not** by itself grant production approval. The workflow does not deploy production, change the production database, or enable real trading.
 
 ## Production deployment gate
 
@@ -23,9 +20,12 @@ A production request must provide an exact 40-character commit SHA. Before the `
    - `database-rls/verified`
    - `security-integration/verified`
    - `ai-privacy/verified`
-   - `futures-public-network-smoke/verified`
+   - `futures-public-network-smoke/verified`;
+4. a completed, successful `Application CI` workflow run exists for the exact SHA from a `push` event on `main`.
 
-The repository administrator must separately configure the GitHub `production` environment with required reviewers, deployment-branch restrictions, and self-review prevention where available. If those settings cannot be inspected, production approval remains on hold.
+Status contexts alone are not accepted as sufficient CI provenance.
+
+The repository administrator must separately configure and directly verify the GitHub `production` environment with required reviewers, deployment-branch restrictions, and self-review prevention where available. If those settings cannot be inspected, production approval remains on hold.
 
 ## Staging isolation
 
@@ -66,6 +66,8 @@ STAGING_ADMIN_PASSWORD
 
 Secret values must never be committed, included in artifacts, printed in logs, returned by APIs, or exposed in the frontend bundle.
 
+The workflow writes the staging URL, database URL, and AI key to a temporary mode-`600` file, copies it over SSH, sources it remotely, and deletes it. These values are not placed in the SSH remote command line. Release directories do not retain `.env.staging`; only the active staging runtime receives one atomic mode-`600` file.
+
 ## Immutable staging deployment
 
 The staging workflow accepts only an exact SHA that is contained in `main`. The remote host fetches that SHA, resolves it again, and refuses deployment if it differs.
@@ -77,7 +79,7 @@ APP_ENV=staging
 DEPLOY_SHA=<exact SHA>
 ```
 
-The health endpoint should report the deployment SHA when supported. The workflow also verifies the SHA stored under the staging deployment state directory.
+The workflow verifies the health endpoint and the SHA stored under the staging deployment state directory. Deployment locking uses a non-inherited `flock` wrapper so a canary or long-lived PM2 process cannot retain the lock after the deployment command exits.
 
 ## Migration drill
 
@@ -103,7 +105,7 @@ Real staging accounts must verify all four enforcement layers: visible controls,
 - `regular`: futures and opt-in AI analysis allowed; real orders denied
 - `admin`: member management allowed; automatic access to another user's private journal denied
 
-Missing accounts or mock-only verification cannot produce an approval-possible verdict.
+Missing accounts or mock-only verification cannot produce a successful staging-readiness result.
 
 ## AI provider verification
 
@@ -129,27 +131,30 @@ Checks include login for all four roles, refresh and session recovery, role chan
 
 ## Backup and recovery
 
-The staging deploy script creates an isolated source backup and SHA-256 checksum manifest before promotion. A failed deployment restores the previous staging snapshot and deployment SHA.
+The staging deploy script creates an isolated source backup and SHA-256 checksum manifest before promotion. Failed post-promotion verification restores the previous staging snapshot, runtime SHA, active release metadata, and PM2 process.
 
-The full readiness workflow must also verify:
+The explicit staging-only destructive drill requires a real previous SHA that differs from the target SHA and verifies:
 
-- backup checksum;
-- rejection of damaged backups;
-- delete and restore drill;
-- failed deployment rollback;
-- redeployment of the same SHA;
-- recovery of the previous SHA;
-- recovery time and data-loss window;
-- no Secret, Authorization header, or personal information in logs.
+1. the original backup checksum;
+2. rejection of a deliberately corrupted copy of the backup;
+3. deletion and restoration of the active staging frontend entry file from the immutable release;
+4. an intentional `after-promotion` failure and automatic rollback;
+5. recovery of the real previous staging snapshot and previous SHA;
+6. redeployment of the requested target SHA;
+7. redeployment of the same SHA again;
+8. recovery time and a zero application-file loss window;
+9. real PM2 or application logs exist and contain no credential pattern, configured staging Secret, account email, or password.
+
+Missing previous-SHA evidence, missing logs, damaged checksum acceptance, skipped checks, failed health recovery, or any incomplete drill causes the workflow to fail.
 
 ## Verdict policy
 
-`운영 배포 승인 가능` is allowed only when the real staging environment, four real accounts, server AI provider, migration drill, browser tests, backup and recovery drill, latest SHA, and all verification checks succeed with zero failures, cancellations, or skipped required checks.
-
-Any missing environment, account, Secret, recovery target, or unverified GitHub production-environment protection results in:
+A successful staging workflow means only that the staging evidence passed. It records:
 
 ```text
 운영 배포 승인 보류
 ```
 
-Phase 10 does not merge itself and does not execute production deployment.
+Production approval can be considered only after direct verification of the GitHub `production` environment reviewers, deployment-branch restrictions, and self-review protection, followed by a separate user decision.
+
+Phase 10 does not merge itself and does not execute production deployment automatically.
