@@ -1,14 +1,7 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
 
 export type JournalRecordKind = 'account' | 'order' | 'position' | 'fill' | 'journal';
-export type JournalSyncRecord = {
-  kind: JournalRecordKind;
-  id: string;
-  version: number;
-  updatedAt: string;
-  deletedAt: string | null;
-  payload: Record<string, unknown>;
-};
+export type JournalSyncRecord = { kind: JournalRecordKind; id: string; version: number; updatedAt: string; deletedAt: string | null; payload: Record<string, unknown> };
 export type StoredJournalSyncRecord = JournalSyncRecord & { createdAt: string; serverUpdatedAt: string };
 export type JournalConflict = {
   id: string; kind: JournalRecordKind; recordId: string; version: number;
@@ -52,6 +45,7 @@ export type TradingReviewDataset = {
 };
 
 export const JOURNAL_DELETE_CONFIRMATION = 'DELETE MY PAPER JOURNAL';
+export const JOURNAL_SYNC_BATCH_SIZE = 500;
 
 function safeError(body: unknown, fallback: string) {
   if (body && typeof body === 'object') {
@@ -78,7 +72,7 @@ function assertAnalysisEnvelope(body: Record<string, unknown> | null) {
   }
 }
 
-export async function syncJournalRecords(
+async function syncSingleBatch(
   input: { idempotencyKey: string; clientTime: string; records: JournalSyncRecord[] },
   signal?: AbortSignal,
 ) {
@@ -89,6 +83,42 @@ export async function syncJournalRecords(
   assertSyncEnvelope(body);
   if (!response.ok || body?.ok !== true) throw new Error(safeError(body, '거래일지를 동기화하지 못했습니다.'));
   return body as unknown as JournalSyncResult;
+}
+
+export async function syncJournalRecords(
+  input: { idempotencyKey: string; clientTime: string; records: JournalSyncRecord[] },
+  signal?: AbortSignal,
+) {
+  if (input.records.length <= JOURNAL_SYNC_BATCH_SIZE) return syncSingleBatch(input, signal);
+
+  const results: JournalSyncResult[] = [];
+  for (let offset = 0; offset < input.records.length; offset += JOURNAL_SYNC_BATCH_SIZE) {
+    if (signal?.aborted) throw new DOMException('동기화가 중단되었습니다.', 'AbortError');
+    const index = Math.floor(offset / JOURNAL_SYNC_BATCH_SIZE);
+    results.push(await syncSingleBatch({
+      idempotencyKey: `${input.idempotencyKey}:batch-${index}`.slice(0, 160),
+      clientTime: input.clientTime,
+      records: input.records.slice(offset, offset + JOURNAL_SYNC_BATCH_SIZE),
+    }, signal));
+  }
+
+  const latest = results.at(-1)!;
+  const largestSkew = results.reduce((selected, result) => Math.abs(result.clockSkewMs) > Math.abs(selected) ? result.clockSkewMs : selected, 0);
+  return {
+    ok: true,
+    mode: 'journal-sync-only',
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+    idempotencyKey: input.idempotencyKey,
+    serverTime: latest.serverTime,
+    uploaded: results.flatMap((result) => result.uploaded),
+    downloaded: results.flatMap((result) => result.downloaded),
+    unchanged: results.flatMap((result) => result.unchanged),
+    conflicts: results.flatMap((result) => result.conflicts),
+    failed: results.flatMap((result) => result.failed),
+    warnings: [...new Set(results.flatMap((result) => result.warnings))],
+    clockSkewMs: largestSkew,
+  } satisfies JournalSyncResult;
 }
 
 export async function getJournalSnapshot(cursor: string | null = null, limit = 100, signal?: AbortSignal) {
