@@ -11,6 +11,8 @@ import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
 import { OfflineBanner } from '@/components/offline-banner';
 import { PageFallback } from '@/components/data-state';
 import { AutoBackupSync } from '@/lib/backup-sync';
+import { CapabilityGate } from '@/components/capability-gate';
+import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
 
@@ -36,158 +38,112 @@ const Phase4RiskE2EPage = lazy(() => import('@/pages/phase4-risk-e2e'));
 const Phase5BacktestE2EPage = lazy(() => import('@/pages/phase5-backtest-e2e'));
 const Phase6PaperTradingE2EPage = lazy(() => import('@/pages/phase6-paper-trading-e2e'));
 const Phase7JournalSyncE2EPage = lazy(() => import('@/pages/phase7-journal-sync-e2e'));
+const Phase8ReleaseCandidateE2EPage = lazy(() => import('@/pages/phase8-release-candidate-e2e'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
 const phase5E2EEnabled = import.meta.env.VITE_PHASE5_E2E === 'true';
 const phase6E2EEnabled = import.meta.env.VITE_PHASE6_E2E === 'true';
 const phase7E2EEnabled = import.meta.env.VITE_PHASE7_E2E === 'true';
+const phase8E2EEnabled = import.meta.env.VITE_PHASE8_E2E === 'true';
 
 const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchOnWindowFocus: true,
-      refetchOnReconnect: true,
-      staleTime: 0,
-      gcTime: 30 * 60 * 1000,
-      retry: 2,
-    },
-  },
+  defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
 
 function useCryptoRedirect(target: (symbol?: string) => string, symbol?: string) {
   const mode = useAssetMode();
   const [, navigate] = useLocation();
   useEffect(() => {
-    mode.setAsset('coin');
-    navigate(target(symbol), { replace: true });
+    mode.setAsset('coin'); navigate(target(symbol), { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }
 
-function CryptoHomeRedirect() {
-  useCryptoRedirect(() => '/home');
-  return <PageFallback />;
-}
-
-function CryptoSearchRedirect() {
-  useCryptoRedirect(() => '/stocks');
-  return <PageFallback />;
-}
-
+function CryptoHomeRedirect() { useCryptoRedirect(() => '/home'); return <PageFallback />; }
+function CryptoSearchRedirect() { useCryptoRedirect(() => '/stocks'); return <PageFallback />; }
 function CryptoDetailRedirect() {
   const [, params] = useRoute('/crypto/:symbol') as [boolean, { symbol?: string } | null];
-  useCryptoRedirect(
-    (symbol) => `/stock-info?asset=coin&coinMarket=spot&symbol=${encodeURIComponent(String(symbol ?? 'BTC').toUpperCase())}`,
-    params?.symbol,
-  );
+  useCryptoRedirect((symbol) => `/stock-info?asset=coin&coinMarket=spot&symbol=${encodeURIComponent(String(symbol ?? 'BTC').toUpperCase())}`, params?.symbol);
   return <PageFallback />;
 }
 
 function AppShell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="relative h-[100dvh] w-full overflow-hidden text-foreground">
-      <AppBackground />
-      <div className="relative z-10 mx-auto flex h-[100dvh] min-h-0 max-w-md flex-col overflow-hidden bg-background">
-        <OfflineBanner />
-        <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
-      </div>
-    </div>
-  );
+  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div className="relative z-10 mx-auto flex h-[100dvh] min-h-0 max-w-md flex-col overflow-hidden bg-background"><OfflineBanner /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
+}
+
+function gated(capability: MemberCapability, child: React.ReactNode) {
+  return <CapabilityGate capability={capability}>{child}</CapabilityGate>;
+}
+
+function ScannerAccess() { return gated('canAccessRiskPreview', <ScannerPage />); }
+function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
+function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPage />); }
+function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
+function PaperTradingAccess() { return gated('canAccessPaperTrading', <PaperTradingPage />); }
+function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
+function StockInfoAccess() {
+  const [location] = useLocation();
+  const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : window.location.search.slice(1);
+  const params = new URLSearchParams(query);
+  if (params.get('asset') === 'coin') {
+    return gated(params.get('coinMarket') === 'futures' ? 'canAccessFutures' : 'canAccessSpot', <StockInfoPage />);
+  }
+  return gated('canAccessBasicInfo', <StockInfoPage />);
 }
 
 function ApprovedRouter() {
-  return (
-    <Suspense fallback={<PageFallback />}>
-      <Switch>
-        <Route path="/" component={HomePage} />
-        <Route path="/home" component={HomePage} />
-        <Route path="/stocks" component={StocksPage} />
-        <Route path="/auto-trading" component={ScannerPage} />
-        <Route path="/stock-info" component={StockInfoPage} />
-        <Route path="/market-overview" component={MarketOverviewPage} />
-        <Route path="/assets" component={PortfolioPage} />
-        <Route path="/settings" component={MorePage} />
-
-        <Route path="/search" component={SearchPage} />
-        <Route path="/scanner" component={ScannerPage} />
-        <Route path="/themes" component={ThemesPage} />
-        <Route path="/learn" component={LearnPage} />
-        <Route path="/watchlist" component={WatchlistPage} />
-        <Route path="/alerts" component={AlertsPage} />
-        <Route path="/portfolio" component={PortfolioPage} />
-        <Route path="/account" component={AccountPage} />
-        <Route path="/admin" component={AdminPage} />
-        <Route path="/more" component={MorePage} />
-        <Route path="/stock/:ticker" component={DetailPage} />
-        <Route path="/recommendations" component={RecommendationsPage} />
-        <Route path="/backtests" component={BacktestsPage} />
-        <Route path="/paper-trading" component={PaperTradingPage} />
-        <Route path="/crypto" component={CryptoHomeRedirect} />
-        <Route path="/crypto/search" component={CryptoSearchRedirect} />
-        <Route path="/crypto/:symbol" component={CryptoDetailRedirect} />
-        <Route component={NotFound} />
-      </Switch>
-    </Suspense>
-  );
+  return <Suspense fallback={<PageFallback />}><Switch>
+    <Route path="/" component={HomePage} />
+    <Route path="/home" component={HomePage} />
+    <Route path="/stocks" component={StocksPage} />
+    <Route path="/auto-trading" component={ScannerAccess} />
+    <Route path="/stock-info" component={StockInfoAccess} />
+    <Route path="/market-overview" component={MarketOverviewPage} />
+    <Route path="/assets" component={PortfolioAccess} />
+    <Route path="/settings" component={MorePage} />
+    <Route path="/search" component={SearchPage} />
+    <Route path="/scanner" component={ScannerAccess} />
+    <Route path="/themes" component={ThemesPage} />
+    <Route path="/learn" component={LearnPage} />
+    <Route path="/watchlist" component={WatchlistPage} />
+    <Route path="/alerts" component={AlertsPage} />
+    <Route path="/portfolio" component={PortfolioAccess} />
+    <Route path="/account" component={AccountPage} />
+    <Route path="/admin" component={AdminAccess} />
+    <Route path="/more" component={MorePage} />
+    <Route path="/stock/:ticker" component={DetailPage} />
+    <Route path="/recommendations" component={RecommendationsAccess} />
+    <Route path="/backtests" component={BacktestsAccess} />
+    <Route path="/paper-trading" component={PaperTradingAccess} />
+    <Route path="/crypto" component={CryptoHomeRedirect} />
+    <Route path="/crypto/search" component={CryptoSearchRedirect} />
+    <Route path="/crypto/:symbol" component={CryptoDetailRedirect} />
+    <Route component={NotFound} />
+  </Switch></Suspense>;
 }
 
 function RootRouter() {
-  return (
-    <Suspense fallback={<PageFallback />}>
-      <Switch>
-        {phase4E2EEnabled ? <Route path="/__phase4-risk-e2e" component={Phase4RiskE2EPage} /> : null}
-        {phase5E2EEnabled ? <Route path="/__phase5-backtest-e2e" component={Phase5BacktestE2EPage} /> : null}
-        {phase6E2EEnabled ? <Route path="/__phase6-paper-trading-e2e" component={Phase6PaperTradingE2EPage} /> : null}
-        {phase7E2EEnabled ? <Route path="/__phase7-journal-sync-e2e" component={Phase7JournalSyncE2EPage} /> : null}
-        <Route path="/install" component={InstallPage} />
-        <Route component={AuthenticatedApp} />
-      </Switch>
-    </Suspense>
-  );
+  return <Suspense fallback={<PageFallback />}><Switch>
+    {phase4E2EEnabled ? <Route path="/__phase4-risk-e2e" component={Phase4RiskE2EPage} /> : null}
+    {phase5E2EEnabled ? <Route path="/__phase5-backtest-e2e" component={Phase5BacktestE2EPage} /> : null}
+    {phase6E2EEnabled ? <Route path="/__phase6-paper-trading-e2e" component={Phase6PaperTradingE2EPage} /> : null}
+    {phase7E2EEnabled ? <Route path="/__phase7-journal-sync-e2e" component={Phase7JournalSyncE2EPage} /> : null}
+    {phase8E2EEnabled ? <Route path="/__phase8-release-candidate-e2e" component={Phase8ReleaseCandidateE2EPage} /> : null}
+    <Route path="/install" component={InstallPage} />
+    <Route component={AuthenticatedApp} />
+  </Switch></Suspense>;
 }
 
 function AuthenticatedApp() {
   const auth = useAuth();
-
-  useEffect(() => {
-    if (auth.isApproved) ensureWatchlistSync();
-  }, [auth.isApproved]);
-
+  useEffect(() => { if (auth.isApproved) ensureWatchlistSync(); }, [auth.isApproved]);
   if (auth.loading) return <PageFallback />;
-
-  if (!auth.configured || !auth.isApproved) {
-    return (
-      <Suspense fallback={<PageFallback />}>
-        <AccountPage />
-      </Suspense>
-    );
-  }
-
-  return <>
-    <AutoBackupSync />
-    <ApprovedRouter />
-  </>;
+  if (!auth.configured || !auth.isApproved) return <Suspense fallback={<PageFallback />}><AccountPage /></Suspense>;
+  return <><AutoBackupSync /><ApprovedRouter /></>;
 }
 
 function App() {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <SettingsProvider>
-          <AssetModeProvider>
-            <TooltipProvider>
-              <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-                <AppShell>
-                  <RootRouter />
-                </AppShell>
-              </WouterRouter>
-              <Toaster />
-            </TooltipProvider>
-          </AssetModeProvider>
-        </SettingsProvider>
-      </AuthProvider>
-    </QueryClientProvider>
-  );
+  return <QueryClientProvider client={queryClient}><AuthProvider><SettingsProvider><AssetModeProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RootRouter /></AppShell></WouterRouter><Toaster /></TooltipProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
 }
 
 export default App;

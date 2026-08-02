@@ -33,6 +33,14 @@ const groups = {
     path.join(root, 'src/services/paper-journal-migration.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-sync-storage.test.ts'),
   ],
+  phase8: [
+    path.join(root, 'src/services/member-access-phase8.test.ts'),
+    path.join(root, 'src/services/member-administration.service.test.ts'),
+    path.join(root, 'src/services/release-candidate-phase8.test.ts'),
+    path.join(root, 'src/routes/member-access-phase8.smoke.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-archive-phase8.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-batching-phase8.test.ts'),
+  ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
     path.join(root, 'src/routes/trading-risk.smoke.test.ts'),
@@ -43,8 +51,8 @@ const groups = {
   ],
 };
 
-groups.unit = [...groups.phase2, ...groups.risk, ...groups.phase4, ...groups.phase5, ...groups.phase6, ...groups.phase7];
-const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'smoke'];
+groups.unit = [...groups.phase2, ...groups.risk, ...groups.phase4, ...groups.phase5, ...groups.phase6, ...groups.phase7, ...groups.phase8];
+const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'smoke'];
 if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 
 const entries = mode === 'all' ? [...groups.unit, ...groups.smoke] : groups[mode];
@@ -55,21 +63,14 @@ try {
   for (const [index, entryPoint] of entries.entries()) {
     const outputFile = path.join(temporaryDirectory, `application-${index}.test.cjs`);
     await build({
-      entryPoints: [entryPoint],
-      outfile: outputFile,
-      bundle: true,
-      platform: 'node',
-      format: 'cjs',
-      target: 'node20',
-      sourcemap: 'inline',
-      logLevel: 'warning',
+      entryPoints: [entryPoint], outfile: outputFile, bundle: true, platform: 'node',
+      format: 'cjs', target: 'node20', sourcemap: 'inline', logLevel: 'warning',
     });
     outputFiles.push(outputFile);
   }
 
   const result = spawnSync(process.execPath, ['--test', ...outputFiles], {
-    cwd: repositoryRoot,
-    stdio: 'inherit',
+    cwd: repositoryRoot, stdio: 'inherit',
   });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;

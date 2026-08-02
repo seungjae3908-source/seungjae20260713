@@ -16,37 +16,64 @@ import backtestsRouter from './backtests';
 import paperTradingRouter from './paper-trading';
 import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
-import { requireAdmin, requireMember } from '../middleware/auth';
+import {
+  requireAdmin,
+  requireAuthenticated,
+  requireCapability,
+} from '../middleware/auth';
 
 const router: IRouter = Router();
 
-// -------------------------------------------------------------------
-// Public routes (no auth required)
-// -------------------------------------------------------------------
 router.get('/', (_req, res) => {
   res.json({ ok: true, service: 'seungjae-stock-api' });
 });
 
+// Health/config probes remain public. Every data or analysis route below this
+// point resolves the current database profile before checking capabilities.
 router.use('/', healthRouter);
+
+// Admin routes perform their own authenticated + admin capability checks.
+router.use('/admin', adminRouter);
+
+router.use(requireAuthenticated);
+
+const privateExchangeDisabled = (_req: unknown, res: any) => res.status(403).json({
+  ok: false,
+  error: 'PRIVATE_EXCHANGE_API_DISABLED',
+  orderSubmitted: false,
+  exchangeRequestSent: false,
+  message: 'Release Candidate에서는 거래소 비공개 계좌·포지션·주문 API를 호출하지 않습니다.',
+});
+
+// Explicitly block every existing private/actual-trading path before the
+// legacy crypto router can reach it. crypto-auto.ts itself remains untouched.
+router.use('/crypto/futures/auto', privateExchangeDisabled);
+router.get('/crypto/spot/accounts', privateExchangeDisabled);
+router.get('/crypto/futures/account', privateExchangeDisabled);
+router.get('/crypto/futures/positions', privateExchangeDisabled);
+
+router.use('/crypto/spot', requireCapability('canAccessSpot'));
+router.use('/crypto/futures', requireCapability('canAccessFutures'));
+router.use('/crypto', requireCapability('canAccessBasicInfo'));
+router.use('/', cryptoRouter);
+
+router.use('/futures', requireCapability('canAccessFutures'));
+router.use('/crypto/futures', requireCapability('canAccessFutures'));
+router.use('/', futuresMarketDataRouter);
+
+router.use('/trading-risk', requireCapability('canAccessRiskPreview'));
+router.use('/', tradingRiskRouter);
+router.use('/backtests', requireCapability('canAccessBacktests'));
+router.use('/', backtestsRouter);
+router.use('/paper-trading', requireCapability('canAccessPaperTrading'));
+router.use('/', paperTradingRouter);
+router.use('/paper-journal', requireCapability('canAccessJournalSync'));
+router.use('/', paperJournalRouter);
+
+router.use(requireCapability('canAccessBasicInfo'));
 router.use('/', marketRouter);
 router.use('/', newsRouter);
 router.use('/kiwoom', kiwoomRouter);
-router.use('/', futuresMarketDataRouter);
-router.use('/', cryptoRouter);
-
-// -------------------------------------------------------------------
-// Admin routes (auth + admin role required — checked inside adminRouter)
-// -------------------------------------------------------------------
-router.use('/admin', adminRouter);
-
-// -------------------------------------------------------------------
-// Authenticated routes (login required)
-// -------------------------------------------------------------------
-router.use(requireMember);
-router.use('/', tradingRiskRouter);
-router.use('/', backtestsRouter);
-router.use('/', paperTradingRouter);
-router.use('/', paperJournalRouter);
 router.use('/debug', requireAdmin, providerDebugRouter);
 router.use('/', pushRouter);
 router.use('/', watchlistRouter);
