@@ -62,7 +62,7 @@ test('sync failure remains visible and requires explicit retry', async ({ page }
   const errors = await open(page);
   await chooseTier(page, 'regular');
   await runSteps(page, 0, 7);
-  await page.getByText('동기화 실패 모사').check();
+  await page.getByLabel('동기화 실패 모사').check();
   await page.getByTestId('phase8-step-8').click();
   await expect(page.getByTestId('phase8-sync-status')).toContainText('failed');
   await expect(page.getByTestId('phase8-retry')).toBeVisible();
