@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-const root = path.resolve(process.cwd());
+const cwd = process.cwd();
+const root = path.basename(cwd) === 'api-server' ? path.resolve(cwd, '..') : path.resolve(cwd);
 const read = (relative) => readFile(path.join(root, relative), 'utf8');
 const assert = (condition, message) => {
   if (!condition) throw new Error(`[phase10-deployment-safety] ${message}`);
