@@ -93,6 +93,9 @@ jobs:
       - name: Run Phase 6 paper trading tests
         run: pnpm --dir api-server run test:phase6
 
+      - name: Run Phase 7 journal sync and analytics tests
+        run: pnpm --dir api-server run test:phase7
+
       - name: Run API smoke tests
         run: pnpm --dir api-server run test:smoke
 
@@ -153,7 +156,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: phase6-playwright-${{ github.run_id }}
+          name: phase7-playwright-${{ github.run_id }}
           path: |
             stock-analyzer/test-results
             stock-analyzer/playwright-report
