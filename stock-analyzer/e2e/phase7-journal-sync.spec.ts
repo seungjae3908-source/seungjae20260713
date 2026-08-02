@@ -43,11 +43,13 @@ test('sync failure remains visible and local data stays retryable', async ({ pag
 test('offline mode preserves local workflow and avoids automatic retry', async ({ page, context }) => {
   await open(page);
   await context.setOffline(true);
-  await page.reload();
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
   await expect(page.getByText('오프라인입니다. 모의매매와 로컬 거래일지는 계속 사용할 수 있으며 자동 무한 재시도하지 않습니다.')).toBeVisible();
   await page.getByTestId('journal-sync-button').click();
   await expect(page.getByTestId('journal-sync-status')).toContainText('오프라인');
+  await expect(page.getByTestId('journal-sync-button')).toBeEnabled();
   await context.setOffline(false);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
 });
 
 test('conflict is explicit and server version choice resolves it', async ({ page }) => {
