@@ -5,12 +5,12 @@ async function assertNoHorizontalOverflow(page: Page) {
   expect(overflow).toBeLessThanOrEqual(1);
 }
 
-async function openAt(page: Page, width: number, height: number) {
+async function openAt(page: Page, width: number, height: number, path = '/__phase6-paper-trading-e2e') {
   await page.setViewportSize({ width, height });
   const errors: string[] = [];
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('pageerror', (error) => errors.push(error.message));
-  await page.goto('/__phase6-paper-trading-e2e');
+  await page.goto(path);
   await expect(page.getByTestId('paper-trading-page')).toBeVisible();
   await expect(page.getByText('모의매매입니다. 실제 거래소 주문은 전송되지 않습니다.')).toBeVisible();
   await expect.poll(() => errors).toEqual([]);
@@ -76,6 +76,32 @@ for (const viewport of [
     await assertNoHorizontalOverflow(page);
   });
 }
+
+test('short paper position uses valid directional risk fields', async ({ page }) => {
+  await openAt(page, 1440, 900);
+  await page.getByLabel('롱·숏').selectOption('short');
+  await expect(page.getByText('숏 손절가는 진입가보다 높아야 합니다.')).toHaveCount(0);
+  await page.getByTestId('paper-submit').click();
+  await page.getByTestId('confirm-paper-order').click();
+  await expect(page.getByTestId('paper-positions').getByText('BTCUSDT 숏')).toBeVisible();
+});
+
+test('direct quantity closes only the requested portion', async ({ page }) => {
+  await openAt(page, 1440, 900);
+  await page.getByTestId('paper-submit').click();
+  await page.getByTestId('confirm-paper-order').click();
+  await page.getByLabel('BTCUSDT 직접 청산 수량').fill('0.002');
+  await page.getByRole('button', { name: '수량 청산' }).click();
+  await expect(page.getByTestId('paper-positions').getByText('partially_closed')).toBeVisible();
+});
+
+test('execution error clears busy state and renders safe alert', async ({ page }) => {
+  await openAt(page, 390, 844, '/__phase6-paper-trading-e2e?mode=error');
+  await page.getByTestId('paper-submit').tap();
+  await page.getByTestId('confirm-paper-order').tap();
+  await expect(page.getByRole('alert')).toContainText('모의거래 fixture 오류입니다.');
+  await expect(page.getByTestId('paper-submit')).toBeEnabled();
+});
 
 test('invalid stop blocks confirmation path', async ({ page }) => {
   await openAt(page, 390, 844);
