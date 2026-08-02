@@ -16,6 +16,7 @@ export const MEMBER_CAPABILITIES = Object.freeze([
   'canAccessPaperTrading',
   'canAccessJournalSync',
   'canAccessTradingAnalytics',
+  'canAccessAiTradingReview',
   'canManageMembers',
 ]);
 
@@ -33,6 +34,7 @@ const REGULAR = Object.freeze({
   canAccessPaperTrading: true,
   canAccessJournalSync: true,
   canAccessTradingAnalytics: true,
+  canAccessAiTradingReview: true,
 });
 const ADMIN = Object.freeze({ ...REGULAR, canManageMembers: true });
 

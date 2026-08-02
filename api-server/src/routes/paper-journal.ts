@@ -13,12 +13,16 @@ import {
   PaperJournalError,
   type PaperJournalRepository,
 } from '../services/paper-journal.types';
+import { hasCapability } from '../../../packages/member-access/src/index.js';
+import { buildAiReviewDataset, generateTradingAiReview, previewAiReview } from '../services/trading-ai-review.service';
+import { configuredTradingReviewProvider, type TradingReviewProvider } from '../services/trading-review-provider';
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 
 type PaperJournalDependencies = {
   repositoryFactory: (request: AuthenticatedRequest) => PaperJournalRepository;
   now: () => Date;
+  reviewProvider: TradingReviewProvider | null;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -74,6 +78,12 @@ export function createPaperJournalRouter(
   const router: IRouter = Router();
   const repositoryFactory = dependencies.repositoryFactory ?? defaultRepositoryFactory;
   const now = dependencies.now ?? (() => new Date());
+  const reviewProvider = dependencies.reviewProvider === undefined ? configuredTradingReviewProvider() : dependencies.reviewProvider;
+
+  const requireAiReview = (request: AuthenticatedRequest) => {
+    if (!request.member || !hasCapability(request.member, 'canAccessAiTradingReview')) throw new PaperJournalError('CAPABILITY_REQUIRED', 'AI 거래 복기는 정회원과 관리자만 사용할 수 있습니다.', request.member ? 403 : 401);
+    return request.member.id;
+  };
 
   router.post('/paper-journal/sync', async (request: AuthenticatedRequest, response) => {
     if (requestSize(request) > MAX_REQUEST_BYTES) {
@@ -166,7 +176,35 @@ export function createPaperJournalRouter(
     }
   });
 
+  router.post('/paper-journal/ai-review/preview', async (request: AuthenticatedRequest, response) => {
+    const envelope = (payload: Record<string, unknown>) => ({ mode: 'ai-review-preview', externalAiCalled: false, orderSubmitted: false, exchangeRequestSent: false, ...payload });
+    if (requestSize(request) > MAX_REQUEST_BYTES) return response.status(413).json(envelope({ ok: false, error: { code: 'REQUEST_TOO_LARGE', message: '요청 크기가 제한을 초과했습니다.' } }));
+    try {
+      const userId = requireAiReview(request); const body = isObject(request.body) ? request.body : {};
+      if ('user_id' in body || 'userId' in body) throw new PaperJournalError('CLIENT_USER_ID_FORBIDDEN', '사용자 ID는 로그인 세션에서만 결정됩니다.');
+      const dataset = buildAiReviewDataset(await repositoryFactory(request).listJournalPayloads(userId), body.periodStart, body.periodEnd, now());
+      return response.json(envelope({ ok: true, result: previewAiReview(dataset) }));
+    } catch (cause) { return handleAiError(response, cause, envelope); }
+  });
+
+  router.post('/paper-journal/ai-review/generate', async (request: AuthenticatedRequest, response) => {
+    const envelope = (payload: Record<string, unknown>) => ({ mode: 'ai-review-only', externalAiCalled: false, orderSubmitted: false, exchangeRequestSent: false, ...payload });
+    if (requestSize(request) > MAX_REQUEST_BYTES) return response.status(413).json(envelope({ ok: false, error: { code: 'REQUEST_TOO_LARGE', message: '요청 크기가 제한을 초과했습니다.' } }));
+    try {
+      const userId = requireAiReview(request); const body = isObject(request.body) ? request.body : {};
+      if ('user_id' in body || 'userId' in body || 'dataset' in body) throw new PaperJournalError('CLIENT_DATASET_FORBIDDEN', '분석 데이터는 서버에서 생성합니다.');
+      const dataset = buildAiReviewDataset(await repositoryFactory(request).listJournalPayloads(userId), body.periodStart, body.periodEnd, now());
+      const result = await generateTradingAiReview({ userId, consent: body.consent === true, idempotencyKey: typeof body.idempotencyKey === 'string' ? body.idempotencyKey : '', locale: typeof body.locale === 'string' ? body.locale.slice(0, 12) : 'ko-KR', reviewStyle: body.reviewStyle === 'detailed' ? 'detailed' : 'concise', dataset, provider: reviewProvider, now: now() });
+      return response.json({ ...envelope({ ok: true, result }), externalAiCalled: true });
+    } catch (cause) { return handleAiError(response, cause, envelope); }
+  });
+
   return router;
+}
+
+function handleAiError(response: Response, cause: unknown, envelope: (payload: Record<string, unknown>) => Record<string, unknown>) {
+  const error = cause instanceof PaperJournalError ? cause : new PaperJournalError('AI_REVIEW_FAILED', 'AI 거래 복기를 처리하지 못했습니다.', 500);
+  return response.status(error.statusCode).json(envelope({ ok: false, error: { code: error.code, message: error.message } }));
 }
 
 function handleError(

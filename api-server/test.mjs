@@ -41,6 +41,10 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-archive-phase8.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-batching-phase8.test.ts'),
   ],
+  phase9: [
+    path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
+  ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
     path.join(root, 'src/routes/trading-risk.smoke.test.ts'),
@@ -51,8 +55,8 @@ const groups = {
   ],
 };
 
-groups.unit = [...groups.phase2, ...groups.risk, ...groups.phase4, ...groups.phase5, ...groups.phase6, ...groups.phase7, ...groups.phase8];
-const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'smoke'];
+groups.unit = [...groups.phase2, ...groups.risk, ...groups.phase4, ...groups.phase5, ...groups.phase6, ...groups.phase7, ...groups.phase8, ...groups.phase9];
+const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'smoke'];
 if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 
 const entries = mode === 'all' ? [...groups.unit, ...groups.smoke] : groups[mode];
