@@ -39,6 +39,7 @@ const groups = {
     path.join(root, 'src/services/release-candidate-phase8.test.ts'),
     path.join(root, 'src/routes/member-access-phase8.smoke.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-archive-phase8.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-batching-phase8.test.ts'),
   ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
