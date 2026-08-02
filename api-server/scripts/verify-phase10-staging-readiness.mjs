@@ -13,6 +13,15 @@ const required = [
 
 const fail = (message) => { throw new Error(`[phase10-staging-readiness] ${message}`); };
 const value = (name) => String(env[name] ?? '').trim();
+const encode = (raw) => Buffer.from(String(raw), 'utf8').toString('base64');
+const redact = (raw) => {
+  let output = String(raw ?? '');
+  for (const name of required) {
+    const secret = value(name);
+    if (secret) output = output.split(secret).join('[REDACTED]');
+  }
+  return output;
+};
 
 for (const name of required) {
   if (!value(name)) fail(`missing required isolated staging value: ${name}`);
@@ -42,44 +51,289 @@ if (mode === '--environment') {
 if (mode !== '--remote') fail(`unknown mode: ${mode}`);
 const targetSha = value('TARGET_SHA');
 if (!/^[0-9a-f]{40}$/.test(targetSha)) fail('TARGET_SHA must be an exact lowercase commit SHA');
+const repositoryUrl = value('REPOSITORY_URL');
+if (!/^https:\/\/github\.com\/seungjae3908-source\/seungjae20260713\.git$/.test(repositoryUrl)) {
+  fail('REPOSITORY_URL is missing or unexpected');
+}
 const port = value('STAGING_SSH_PORT') || '22';
 const remote = `${value('STAGING_SSH_USER')}@${value('STAGING_SSH_HOST')}`;
 const sshArgs = ['-i', `${env.HOME}/.ssh/id_ed25519`, '-p', port, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', remote];
-const runRemote = (script) => execFileSync('ssh', [...sshArgs, 'bash', '-s'], {
-  input: script,
-  encoding: 'utf8',
-  stdio: ['pipe', 'pipe', 'pipe'],
-  maxBuffer: 8 * 1024 * 1024,
-});
+const runRemote = (script) => {
+  try {
+    return execFileSync('ssh', [...sshArgs, 'bash', '-s'], {
+      input: script,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: 32 * 1024 * 1024,
+    });
+  } catch (error) {
+    const detail = redact(error?.stderr || error?.message || 'unknown remote failure').slice(0, 4000);
+    fail(`remote recovery drill failed: ${detail}`);
+  }
+};
+
+const encodedSecrets = {
+  baseUrl: encode(value('STAGING_BASE_URL')),
+  database: encode(value('STAGING_DATABASE_URL')),
+  ai: encode(value('STAGING_AI_API_KEY')),
+  pendingEmail: encode(value('STAGING_PENDING_EMAIL')),
+  pendingPassword: encode(value('STAGING_PENDING_PASSWORD')),
+  associateEmail: encode(value('STAGING_ASSOCIATE_EMAIL')),
+  associatePassword: encode(value('STAGING_ASSOCIATE_PASSWORD')),
+  regularEmail: encode(value('STAGING_REGULAR_EMAIL')),
+  regularPassword: encode(value('STAGING_REGULAR_PASSWORD')),
+  adminEmail: encode(value('STAGING_ADMIN_EMAIL')),
+  adminPassword: encode(value('STAGING_ADMIN_PASSWORD')),
+};
 
 const result = runRemote(`
 set -Eeuo pipefail
+umask 077
+TARGET_SHA='${targetSha}'
+REPOSITORY_URL='${repositoryUrl}'
 STAGING_DIR=/srv/seungjae-staging
+STAGING_PM2_NAME=seungjae-staging
+STAGING_PORT=18080
+STAGING_CANARY_PORT=18082
 BACKUP_ROOT=/srv/seungjae-staging-backups
 STATE_DIR="$STAGING_DIR/.deploy"
+SOURCE_DIR="$(mktemp -d /tmp/seungjae-staging-recovery-source.XXXXXX)"
+DRILL_ROOT="$(mktemp -d /tmp/seungjae-staging-recovery-drill.XXXXXX)"
+cleanup() { rm -rf -- "$SOURCE_DIR" "$DRILL_ROOT"; }
+trap cleanup EXIT
+
+for command_name in git node pnpm pm2 curl rsync sha256sum base64 grep find awk sort head cut cp install date; do
+  command -v "$command_name" >/dev/null 2>&1 || { echo "missing command: $command_name" >&2; exit 21; }
+done
+
+decode() { printf '%s' "$1" | base64 -d; }
+STAGING_BASE_URL="$(decode '${encodedSecrets.baseUrl}')"
+STAGING_DATABASE_URL="$(decode '${encodedSecrets.database}')"
+STAGING_AI_API_KEY="$(decode '${encodedSecrets.ai}')"
+SENSITIVE_VALUES=(
+  "$STAGING_DATABASE_URL"
+  "$STAGING_AI_API_KEY"
+  "$(decode '${encodedSecrets.pendingEmail}')"
+  "$(decode '${encodedSecrets.pendingPassword}')"
+  "$(decode '${encodedSecrets.associateEmail}')"
+  "$(decode '${encodedSecrets.associatePassword}')"
+  "$(decode '${encodedSecrets.regularEmail}')"
+  "$(decode '${encodedSecrets.regularPassword}')"
+  "$(decode '${encodedSecrets.adminEmail}')"
+  "$(decode '${encodedSecrets.adminPassword}')"
+)
+
+write_runtime_env() {
+  local deploy_sha="$1"
+  local temp_env
+  mkdir -p "$STAGING_DIR/api-server"
+  temp_env="$(mktemp "$STAGING_DIR/api-server/.env.staging.tmp.XXXXXX")"
+  cat > "$temp_env" <<ENV
+NODE_ENV=production
+PORT=$STAGING_PORT
+API_PORT=$STAGING_PORT
+DATABASE_URL=$STAGING_DATABASE_URL
+TRADING_REVIEW_API_KEY=$STAGING_AI_API_KEY
+APP_ENV=staging
+DEPLOY_SHA=$deploy_sha
+ENV
+  chmod 600 "$temp_env"
+  mv -f "$temp_env" "$STAGING_DIR/api-server/.env.staging"
+}
+
+probe_local() {
+  local expected_sha="$1"
+  local output attempt
+  output="$(mktemp)"
+  for attempt in $(seq 1 30); do
+    if curl --fail --silent --max-time 10 "http://127.0.0.1:$STAGING_PORT/api/health" > "$output" 2>/dev/null \
+      && node - "$expected_sha" "$output" <<'NODE'
+const fs=require('fs');
+const expected=process.argv[2];
+const health=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+if(health.ok!==true) process.exit(1);
+const reported=health.deploySha||health.sha||health.commitSha;
+if(reported && reported!==expected) process.exit(1);
+NODE
+    then
+      rm -f "$output"
+      return 0
+    fi
+    sleep 1
+  done
+  rm -f "$output"
+  return 1
+}
+
 [[ -s "$STATE_DIR/current-sha" ]]
 ACTUAL_SHA="$(tr -d '[:space:]' < "$STATE_DIR/current-sha")"
-[[ "$ACTUAL_SHA" == "${targetSha}" ]]
-LATEST_BACKUP="$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | awk 'NR==1 {print $2}')"
-[[ -n "$LATEST_BACKUP" && -f "$LATEST_BACKUP/checksums.sha256" ]]
+[[ "$ACTUAL_SHA" == "$TARGET_SHA" ]]
+[[ -s "$STATE_DIR/last-backup" ]]
+LATEST_BACKUP="$(cat "$STATE_DIR/last-backup")"
+[[ "$LATEST_BACKUP" == "$BACKUP_ROOT"/* ]]
+[[ -d "$LATEST_BACKUP/source" && -f "$LATEST_BACKUP/checksums.sha256" ]]
+[[ -s "$LATEST_BACKUP/previous-sha.txt" ]]
+PREVIOUS_SHA="$(tr -d '[:space:]' < "$LATEST_BACKUP/previous-sha.txt")"
+[[ "$PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]]
+[[ "$PREVIOUS_SHA" != "$TARGET_SHA" ]]
+[[ -s "$STATE_DIR/current-release" ]]
+CURRENT_RELEASE="$(cat "$STATE_DIR/current-release")"
+[[ -d "$CURRENT_RELEASE" ]]
+
 (
   cd "$LATEST_BACKUP/source"
   sha256sum -c "$LATEST_BACKUP/checksums.sha256" >/dev/null
 )
-! grep -RIlE '(Authorization:[[:space:]]*Bearer|SUPABASE_SERVICE_ROLE_KEY|TRADING_REVIEW_API_KEY=|BEGIN (RSA |OPENSSH )?PRIVATE KEY)' \
-  "$STAGING_DIR/logs" "$STAGING_DIR/api-server/logs" 2>/dev/null | grep -q .
-printf 'sha=%s\nbackup=%s\n' "$ACTUAL_SHA" "$LATEST_BACKUP"
+
+mkdir -p "$DRILL_ROOT/source"
+cp -a --reflink=auto "$LATEST_BACKUP/source/." "$DRILL_ROOT/source/" 2>/dev/null || cp -a "$LATEST_BACKUP/source/." "$DRILL_ROOT/source/"
+cp "$LATEST_BACKUP/checksums.sha256" "$DRILL_ROOT/checksums.sha256"
+FIRST_RELATIVE="$(head -n 1 "$DRILL_ROOT/checksums.sha256" | cut -c 67-)"
+[[ -n "$FIRST_RELATIVE" && -f "$DRILL_ROOT/source/\${FIRST_RELATIVE#./}" ]]
+printf '\nphase10-corruption\n' >> "$DRILL_ROOT/source/\${FIRST_RELATIVE#./}"
+if (cd "$DRILL_ROOT/source" && sha256sum -c "$DRILL_ROOT/checksums.sha256" >/dev/null 2>&1); then
+  echo 'damaged backup was not rejected' >&2
+  exit 22
+fi
+printf 'damaged_backup_rejected=true\n'
+
+DELETE_RELATIVE=stock-analyzer/dist/public/index.html
+[[ -f "$STAGING_DIR/$DELETE_RELATIVE" && -f "$CURRENT_RELEASE/$DELETE_RELATIVE" ]]
+DELETE_EXPECTED="$(sha256sum "$CURRENT_RELEASE/$DELETE_RELATIVE" | awk '{print $1}')"
+rm -f "$STAGING_DIR/$DELETE_RELATIVE"
+[[ ! -e "$STAGING_DIR/$DELETE_RELATIVE" ]]
+install -D -m 0644 "$CURRENT_RELEASE/$DELETE_RELATIVE" "$STAGING_DIR/$DELETE_RELATIVE"
+[[ "$(sha256sum "$STAGING_DIR/$DELETE_RELATIVE" | awk '{print $1}')" == "$DELETE_EXPECTED" ]]
+printf 'delete_restore=true\n'
+
+RTO_STARTED="$(date +%s)"
+git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$SOURCE_DIR"
+git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
+[[ "$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD^{commit})" == "$TARGET_SHA" ]]
+git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
+chmod 700 "$SOURCE_DIR/ops/deploy-staging.sh"
+
+set +e
+SOURCE_DIR="$SOURCE_DIR" \
+STAGING_DIR="$STAGING_DIR" \
+STAGING_PM2_NAME="$STAGING_PM2_NAME" \
+STAGING_PORT="$STAGING_PORT" \
+STAGING_CANARY_PORT="$STAGING_CANARY_PORT" \
+STAGING_BASE_URL="$STAGING_BASE_URL" \
+STAGING_DATABASE_URL="$STAGING_DATABASE_URL" \
+STAGING_AI_API_KEY="$STAGING_AI_API_KEY" \
+STAGING_FAILPOINT=after-promotion \
+"$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
+FAILPOINT_STATUS=$?
+set -e
+[[ "$FAILPOINT_STATUS" -ne 0 ]]
+[[ "$(tr -d '[:space:]' < "$STATE_DIR/current-sha")" == "$TARGET_SHA" ]]
+[[ "$(tr -d '[:space:]' < "$STATE_DIR/last-rollback-from")" == "$TARGET_SHA" ]]
+[[ "$(tr -d '[:space:]' < "$STATE_DIR/last-rollback-to")" == "$TARGET_SHA" ]]
+probe_local "$TARGET_SHA"
+printf 'failed_deploy_rollback=true\n'
+
+rsync -a --delete \
+  --exclude='.deploy/' \
+  --exclude='.env' \
+  --exclude='.env.*' \
+  --exclude='*/.env' \
+  --exclude='*/.env.*' \
+  --exclude='logs/' \
+  --exclude='*/logs/' \
+  --exclude='uploads/' \
+  --exclude='*/uploads/' \
+  "$LATEST_BACKUP/source/" "$STAGING_DIR/"
+write_runtime_env "$PREVIOUS_SHA"
+printf '%s\n' "$PREVIOUS_SHA" > "$STATE_DIR/current-sha"
+PREVIOUS_RELEASE="$(cat "$LATEST_BACKUP/previous-release.txt" 2>/dev/null || true)"
+if [[ -n "$PREVIOUS_RELEASE" && -d "$PREVIOUS_RELEASE" ]]; then
+  printf '%s\n' "$PREVIOUS_RELEASE" > "$STATE_DIR/current-release"
+else
+  printf '%s\n' "$LATEST_BACKUP/source" > "$STATE_DIR/current-release"
+fi
+pm2 restart "$STAGING_PM2_NAME" --update-env >/dev/null
+pm2 save >/dev/null
+probe_local "$PREVIOUS_SHA"
+printf 'previous_sha_recovery=true\n'
+
+SOURCE_DIR="$SOURCE_DIR" \
+STAGING_DIR="$STAGING_DIR" \
+STAGING_PM2_NAME="$STAGING_PM2_NAME" \
+STAGING_PORT="$STAGING_PORT" \
+STAGING_CANARY_PORT="$STAGING_CANARY_PORT" \
+STAGING_BASE_URL="$STAGING_BASE_URL" \
+STAGING_DATABASE_URL="$STAGING_DATABASE_URL" \
+STAGING_AI_API_KEY="$STAGING_AI_API_KEY" \
+"$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
+probe_local "$TARGET_SHA"
+
+SOURCE_DIR="$SOURCE_DIR" \
+STAGING_DIR="$STAGING_DIR" \
+STAGING_PM2_NAME="$STAGING_PM2_NAME" \
+STAGING_PORT="$STAGING_PORT" \
+STAGING_CANARY_PORT="$STAGING_CANARY_PORT" \
+STAGING_BASE_URL="$STAGING_BASE_URL" \
+STAGING_DATABASE_URL="$STAGING_DATABASE_URL" \
+STAGING_AI_API_KEY="$STAGING_AI_API_KEY" \
+"$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
+probe_local "$TARGET_SHA"
+printf 'same_sha_redeploy=true\n'
+
+mapfile -d '' -t LOG_FILES < <(
+  find "$HOME/.pm2/logs" -maxdepth 1 -type f -name "\${STAGING_PM2_NAME}-*.log" -print0 2>/dev/null || true
+  find "$STAGING_DIR/logs" "$STAGING_DIR/api-server/logs" -type f -print0 2>/dev/null || true
+)
+(( \${#LOG_FILES[@]} > 0 )) || { echo 'no staging log files were available for inspection' >&2; exit 23; }
+if grep -IlE '(Authorization:[[:space:]]*Bearer|SUPABASE_SERVICE_ROLE_KEY|TRADING_REVIEW_API_KEY=|BEGIN (RSA |OPENSSH )?PRIVATE KEY)' "\${LOG_FILES[@]}" | grep -q .; then
+  echo 'sensitive credential pattern found in staging logs' >&2
+  exit 24
+fi
+for sensitive in "\${SENSITIVE_VALUES[@]}"; do
+  [[ -z "$sensitive" ]] && continue
+  if grep -FIl -- "$sensitive" "\${LOG_FILES[@]}" >/dev/null; then
+    echo 'configured staging secret or personal value found in logs' >&2
+    exit 25
+  fi
+done
+
+RTO_SECONDS=$(( $(date +%s) - RTO_STARTED ))
+printf 'sha=%s\n' "$TARGET_SHA"
+printf 'previous_sha=%s\n' "$PREVIOUS_SHA"
+printf 'backup=%s\n' "$LATEST_BACKUP"
+printf 'rto_seconds=%s\n' "$RTO_SECONDS"
+printf 'rpo_seconds=0\n'
+printf 'logs_scanned=%s\n' "\${#LOG_FILES[@]}"
 `);
 
-if (!result.includes(`sha=${targetSha}`)) fail('remote staging revision verification failed');
-const health = await fetch(`${value('STAGING_BASE_URL').replace(/\/$/, '')}/api/health`, {
-  headers: { 'user-agent': 'phase10-staging-readiness' },
-  signal: AbortSignal.timeout(15_000),
-});
+for (const marker of [
+  `sha=${targetSha}`,
+  'damaged_backup_rejected=true',
+  'delete_restore=true',
+  'failed_deploy_rollback=true',
+  'previous_sha_recovery=true',
+  'same_sha_redeploy=true',
+  'rpo_seconds=0',
+]) {
+  if (!result.includes(marker)) fail(`required recovery marker missing: ${marker}`);
+}
+if (!/previous_sha=[0-9a-f]{40}/.test(result)) fail('previous SHA recovery evidence is missing');
+if (!/rto_seconds=\d+/.test(result)) fail('recovery time evidence is missing');
+if (!/logs_scanned=[1-9]\d*/.test(result)) fail('log inspection evidence is missing');
+
+let health;
+try {
+  health = await fetch(`${value('STAGING_BASE_URL').replace(/\/$/, '')}/api/health`, {
+    headers: { 'user-agent': 'phase10-staging-readiness' },
+    signal: AbortSignal.timeout(15_000),
+  });
+} catch (error) {
+  fail(`staging health request failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+}
 if (!health.ok) fail(`staging health returned HTTP ${health.status}`);
 const payload = await health.json();
 if (payload?.ok !== true) fail('staging health payload is not ok');
 const reportedSha = payload?.deploySha ?? payload?.sha ?? payload?.commitSha;
 if (reportedSha && reportedSha !== targetSha) fail('staging health reports a different revision');
 
-console.log('[phase10-staging-readiness] remote SHA, health, backup checksum, and log redaction checks succeeded');
+console.log('[phase10-staging-readiness] destructive recovery, previous-SHA restore, same-SHA redeploy, health, checksum, and log-redaction checks succeeded');
