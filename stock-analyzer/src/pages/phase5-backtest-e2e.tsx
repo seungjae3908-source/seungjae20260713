@@ -22,9 +22,25 @@ function fixtureResult(values: BacktestFormValues): BacktestResult {
     exitReason: index % 3 === 0 ? 'stop_loss' : 'take_profit',
     marketRegime: index % 2 === 0 ? 'uptrend' : 'ranging',
   }));
-  const equityCurve = Array.from({ length: 25 }, (_, index) => ({ timestamp: START + index * 24 * 60 * 60_000, equity: 10_000 + index * 6 - (index % 4) * 3 }));
-  const drawdownCurve = equityCurve.slice(1).map((point, index) => ({ timestamp: point.timestamp, drawdown: index % 4 * 3, drawdownPercent: index % 4 * 0.03 }));
-  const performance = { trades: 12, wins: 8, losses: 4, winRate: 66.67, netPnl: 96, averageRMultiple: 0.27, expectancy: 8, profitFactor: 1.8 };
+  const equityCurve = Array.from({ length: 25 }, (_, index) => ({
+    timestamp: START + index * 24 * 60 * 60_000,
+    equity: 10_000 + index * 6 - (index % 4) * 3,
+  }));
+  const drawdownCurve = equityCurve.slice(1).map((point, index) => ({
+    timestamp: point.timestamp,
+    drawdown: index % 4 * 3,
+    drawdownPercent: index % 4 * 0.03,
+  }));
+  const performance = {
+    trades: 12,
+    wins: 8,
+    losses: 4,
+    winRate: 66.67,
+    netPnl: 96,
+    averageRMultiple: 0.27,
+    expectancy: 8,
+    profitFactor: 1.8,
+  };
   return {
     ok: true,
     mode: 'backtest-only',
@@ -64,7 +80,10 @@ function fixtureResult(values: BacktestFormValues): BacktestResult {
       { startTime: START + 20 * 24 * 60 * 60_000, endTime: START + 30 * 24 * 60 * 60_000, totalTrades: 8, netPnl: 64, maximumDrawdown: 28, expectancy: 8 },
     ],
     monthlyPerformance: [{ month: '2026-01', trades: 24, netPnl: 144, returnPercent: 1.44 }],
-    regimePerformance: [{ regime: 'uptrend', trades: 12, netPnl: 100, winRate: 75 }, { regime: 'ranging', trades: 12, netPnl: 44, winRate: 58.3 }],
+    regimePerformance: [
+      { regime: 'uptrend', trades: 12, netPnl: 100, winRate: 75 },
+      { regime: 'ranging', trades: 12, netPnl: 44, winRate: 58.3 },
+    ],
     equityCurve,
     drawdownCurve,
     trades,
@@ -78,9 +97,63 @@ function fixtureResult(values: BacktestFormValues): BacktestResult {
   };
 }
 
+function emptyFixtureResult(values: BacktestFormValues): BacktestResult {
+  const base = fixtureResult(values);
+  const emptyPerformance = {
+    trades: 0,
+    wins: 0,
+    losses: 0,
+    winRate: 0,
+    netPnl: 0,
+    averageRMultiple: 0,
+    expectancy: 0,
+    profitFactor: null,
+  };
+  return {
+    ...base,
+    finalCapital: values.initialCapital,
+    totalReturnPercent: 0,
+    annualizedReturnPercent: null,
+    totalTrades: 0,
+    winningTrades: 0,
+    losingTrades: 0,
+    winRate: 0,
+    expectancy: 0,
+    profitFactor: null,
+    averageRMultiple: 0,
+    maximumDrawdown: 0,
+    maximumDrawdownPercent: 0,
+    sharpeRatio: null,
+    sortinoRatio: null,
+    calmarRatio: null,
+    totalFees: 0,
+    totalSlippage: 0,
+    totalFunding: 0,
+    longPerformance: emptyPerformance,
+    shortPerformance: emptyPerformance,
+    validationPerformance: [
+      { ...emptyPerformance, name: 'training', startTime: START, endTime: START + 18 * 24 * 60 * 60_000, maximumDrawdown: 0, maximumDrawdownPercent: 0 },
+      { ...emptyPerformance, name: 'validation', startTime: START + 18 * 24 * 60 * 60_000, endTime: START + 24 * 24 * 60 * 60_000, maximumDrawdown: 0, maximumDrawdownPercent: 0 },
+      { ...emptyPerformance, name: 'test', startTime: START + 24 * 24 * 60 * 60_000, endTime: START + 30 * 24 * 60 * 60_000, maximumDrawdown: 0, maximumDrawdownPercent: 0 },
+    ],
+    walkForward: [],
+    monthlyPerformance: [],
+    regimePerformance: [],
+    equityCurve: [],
+    drawdownCurve: [],
+    trades: [],
+    warnings: [
+      '조건을 충족한 거래가 없어 성과 표본이 비어 있습니다.',
+      'OHLC 한 봉에서 손절과 목표가가 모두 도달하면 보수적으로 손절을 우선합니다.',
+    ],
+  };
+}
+
 export default function Phase5BacktestE2EPage() {
   return <BacktestResearchPanel compact execute={async (values) => {
     await new Promise((resolve) => setTimeout(resolve, 500));
+    if (values.symbol === 'ERRORUSDT') throw new Error('fixture 백테스트 오류');
+    if (values.symbol === 'EMPTYUSDT') return emptyFixtureResult(values);
     return fixtureResult(values);
   }} />;
 }
