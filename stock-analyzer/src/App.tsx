@@ -35,10 +35,12 @@ const NotFound = lazy(() => import('@/pages/not-found'));
 const Phase4RiskE2EPage = lazy(() => import('@/pages/phase4-risk-e2e'));
 const Phase5BacktestE2EPage = lazy(() => import('@/pages/phase5-backtest-e2e'));
 const Phase6PaperTradingE2EPage = lazy(() => import('@/pages/phase6-paper-trading-e2e'));
+const Phase7JournalSyncE2EPage = lazy(() => import('@/pages/phase7-journal-sync-e2e'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
 const phase5E2EEnabled = import.meta.env.VITE_PHASE5_E2E === 'true';
 const phase6E2EEnabled = import.meta.env.VITE_PHASE6_E2E === 'true';
+const phase7E2EEnabled = import.meta.env.VITE_PHASE7_E2E === 'true';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -136,6 +138,7 @@ function RootRouter() {
         {phase4E2EEnabled ? <Route path="/__phase4-risk-e2e" component={Phase4RiskE2EPage} /> : null}
         {phase5E2EEnabled ? <Route path="/__phase5-backtest-e2e" component={Phase5BacktestE2EPage} /> : null}
         {phase6E2EEnabled ? <Route path="/__phase6-paper-trading-e2e" component={Phase6PaperTradingE2EPage} /> : null}
+        {phase7E2EEnabled ? <Route path="/__phase7-journal-sync-e2e" component={Phase7JournalSyncE2EPage} /> : null}
         <Route path="/install" component={InstallPage} />
         <Route component={AuthenticatedApp} />
       </Switch>
