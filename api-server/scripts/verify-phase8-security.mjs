@@ -56,6 +56,9 @@ assert(automationRepository.includes('hasSupabaseServerKey') && automationReposi
 assert(automationMigration.includes('revoke all on public.trade_exchange_connections from anon, authenticated')
   && !automationMigration.includes('select(encrypted_credentials)'),
   'encrypted credential column is readable by browser roles');
+assert(automationRoute.includes("router.post('/admin/emergency-stop', requireAdmin")
+  && automationMigration.includes('revoke all on public.trade_system_controls from anon, authenticated'),
+  'persistent global emergency stop is not restricted to an admin route and service-only storage');
 assert(!automationUi.includes('credentials:'), 'frontend contains an exchange credential payload');
 assert(!/(?:trade-automation|trade-execution|place-order|\/v1\/orders)/i.test(`${aiChatRoute}\n${aiChatService}`), 'AI chat imports or calls the trading execution surface');
 
