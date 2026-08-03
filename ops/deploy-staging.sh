@@ -10,14 +10,16 @@ STAGING_PM2_NAME="${STAGING_PM2_NAME:-seungjae-staging}"
 STAGING_PORT="${STAGING_PORT:-18080}"
 STAGING_CANARY_PORT="${STAGING_CANARY_PORT:-18082}"
 STAGING_BASE_URL="${STAGING_BASE_URL:-}"
-STAGING_DATABASE_URL="${STAGING_DATABASE_URL:-}"
-STAGING_AI_API_KEY="${STAGING_AI_API_KEY:-}"
+STAGING_SUPABASE_URL="${STAGING_SUPABASE_URL:-}"
+STAGING_SUPABASE_ANON_KEY="${STAGING_SUPABASE_ANON_KEY:-}"
+STAGING_SUPABASE_SECRET_KEY="${STAGING_SUPABASE_SECRET_KEY:-}"
 STAGING_FAILPOINT="${STAGING_FAILPOINT:-}"
 RELEASE_ROOT="${RELEASE_ROOT:-/srv/seungjae-staging-releases}"
 BACKUP_ROOT="${BACKUP_ROOT:-/srv/seungjae-staging-backups}"
 LOCK_FILE="${LOCK_FILE:-/var/lock/seungjae-staging-deploy.lock}"
 STATE_DIR="$STAGING_DIR/.deploy"
 MIN_FREE_KB="${MIN_FREE_KB:-800000}"
+PM2_CONFIG="$STAGING_DIR/api-server/ecosystem.staging.cjs"
 
 fail() { echo "[staging] $1" >&2; exit "${2:-1}"; }
 
@@ -27,14 +29,20 @@ fail() { echo "[staging] $1" >&2; exit "${2:-1}"; }
 [[ "$STAGING_PM2_NAME" == seungjae-staging* ]] || fail 'staging PM2 name is not isolated' 5
 [[ "$STAGING_PORT" != 8080 && "$STAGING_CANARY_PORT" != 18081 ]] || fail 'production ports are forbidden' 6
 [[ -n "$STAGING_BASE_URL" ]] || fail 'STAGING_BASE_URL is required' 7
-[[ -n "$STAGING_DATABASE_URL" ]] || fail 'STAGING_DATABASE_URL is required' 8
-[[ -n "$STAGING_AI_API_KEY" ]] || fail 'STAGING_AI_API_KEY is required' 9
-[[ "$STAGING_BASE_URL" != *'lsj119.duckdns.org'* ]] || fail 'production URL is forbidden' 10
-[[ "$STAGING_DATABASE_URL" != *'prod'* && "$STAGING_DATABASE_URL" != *'production'* ]] || fail 'production-like database URL is forbidden' 11
-[[ -z "$STAGING_FAILPOINT" || "$STAGING_FAILPOINT" == after-promotion ]] || fail 'unknown staging failpoint' 12
+[[ "$STAGING_BASE_URL" != *'lsj119.duckdns.org'* ]] || fail 'production URL is forbidden' 8
+[[ -z "$STAGING_FAILPOINT" || "$STAGING_FAILPOINT" == after-promotion ]] || fail 'unknown staging failpoint' 9
+
+SUPABASE_VALUE_COUNT=0
+[[ -n "$STAGING_SUPABASE_URL" ]] && ((SUPABASE_VALUE_COUNT += 1))
+[[ -n "$STAGING_SUPABASE_ANON_KEY" ]] && ((SUPABASE_VALUE_COUNT += 1))
+[[ -n "$STAGING_SUPABASE_SECRET_KEY" ]] && ((SUPABASE_VALUE_COUNT += 1))
+if (( SUPABASE_VALUE_COUNT > 0 )); then
+  [[ -n "$STAGING_SUPABASE_URL" ]] || fail 'STAGING_SUPABASE_URL is required when Supabase is enabled' 10
+  [[ -n "$STAGING_SUPABASE_ANON_KEY" ]] || fail 'STAGING_SUPABASE_ANON_KEY is required when Supabase is enabled' 11
+fi
 
 for command_name in git node pnpm pm2 curl flock df awk rsync tar sha256sum sort xargs install; do
-  command -v "$command_name" >/dev/null 2>&1 || fail "missing command: $command_name" 13
+  command -v "$command_name" >/dev/null 2>&1 || fail "missing command: $command_name" 12
 done
 
 mkdir -p "$STAGING_DIR" "$RELEASE_ROOT" "$BACKUP_ROOT" "$STATE_DIR" "$(dirname "$LOCK_FILE")"
@@ -44,19 +52,19 @@ if [[ "${STAGING_LOCK_HELD:-}" != 1 ]]; then
   lock_status=$?
   set -e
   if [[ "$lock_status" == 200 ]]; then
-    fail 'another staging deployment is running' 14
+    fail 'another staging deployment is running' 13
   fi
   exit "$lock_status"
 fi
 
 FREE_KB="$(df -Pk "$STAGING_DIR" | awk 'NR==2 {print $4}')"
-[[ -n "$FREE_KB" ]] && (( FREE_KB >= MIN_FREE_KB )) || fail "insufficient staging disk space: ${FREE_KB:-unknown}KB" 15
+[[ -n "$FREE_KB" ]] && (( FREE_KB >= MIN_FREE_KB )) || fail "insufficient staging disk space: ${FREE_KB:-unknown}KB" 14
 
 RESOLVED_SHA="$(git -C "$SOURCE_DIR" rev-parse "$TARGET_SHA^{commit}")"
-[[ "$RESOLVED_SHA" == "$TARGET_SHA" ]] || fail 'resolved SHA mismatch' 16
+[[ "$RESOLVED_SHA" == "$TARGET_SHA" ]] || fail 'resolved SHA mismatch' 15
 CURRENT_SHA="none"
 [[ -s "$STATE_DIR/current-sha" ]] && CURRENT_SHA="$(tr -d '[:space:]' < "$STATE_DIR/current-sha")"
-[[ "$CURRENT_SHA" == none || "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'stored staging SHA is invalid' 17
+[[ "$CURRENT_SHA" == none || "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'stored staging SHA is invalid' 16
 CURRENT_RELEASE=""
 [[ -s "$STATE_DIR/current-release" ]] && CURRENT_RELEASE="$(cat "$STATE_DIR/current-release")"
 CURRENT_DEPLOYED_AT=""
@@ -121,17 +129,43 @@ write_runtime_env() {
   local temp_env
   mkdir -p "$env_dir"
   temp_env="$(mktemp "$env_dir/.env.staging.tmp.XXXXXX")"
-  cat > "$temp_env" <<ENV
-NODE_ENV=production
-PORT=$STAGING_PORT
-API_PORT=$STAGING_PORT
-DATABASE_URL=$STAGING_DATABASE_URL
-TRADING_REVIEW_API_KEY=$STAGING_AI_API_KEY
-APP_ENV=staging
-DEPLOY_SHA=$deploy_sha
-ENV
+  {
+    printf 'NODE_ENV=production\n'
+    printf 'PORT=%s\n' "$STAGING_PORT"
+    printf 'API_PORT=%s\n' "$STAGING_PORT"
+    printf 'APP_ENV=staging\n'
+    printf 'DEPLOY_SHA=%s\n' "$deploy_sha"
+    [[ -n "$STAGING_SUPABASE_URL" ]] && printf 'SUPABASE_URL=%s\n' "$STAGING_SUPABASE_URL"
+    [[ -n "$STAGING_SUPABASE_ANON_KEY" ]] && printf 'SUPABASE_ANON_KEY=%s\n' "$STAGING_SUPABASE_ANON_KEY"
+    [[ -n "$STAGING_SUPABASE_SECRET_KEY" ]] && printf 'SUPABASE_SECRET_KEY=%s\n' "$STAGING_SUPABASE_SECRET_KEY"
+  } > "$temp_env"
   chmod 600 "$temp_env"
   mv -f "$temp_env" "$env_dir/.env.staging"
+}
+
+write_pm2_config() {
+  mkdir -p "$STAGING_DIR/api-server"
+  node - "$PM2_CONFIG" "$STAGING_PM2_NAME" "$STAGING_DIR/api-server" <<'NODE'
+const fs = require('node:fs');
+const [configPath, name, cwd] = process.argv.slice(2);
+const config = `module.exports = ${JSON.stringify({
+  apps: [{
+    name,
+    cwd,
+    script: './dist/index.mjs',
+    node_args: ['--enable-source-maps', '--env-file=.env.staging'],
+    autorestart: true,
+    restart_delay: 1000,
+  }],
+}, null, 2)};\n`;
+fs.writeFileSync(configPath, config, { mode: 0o600 });
+NODE
+  chmod 600 "$PM2_CONFIG"
+}
+
+start_or_reload_staging() {
+  write_pm2_config
+  pm2 startOrReload "$PM2_CONFIG" --only "$STAGING_PM2_NAME" --update-env
 }
 
 restore_backup() {
@@ -145,14 +179,14 @@ restore_backup() {
     if [[ "$CURRENT_PM2_PRESENT" == 0 ]]; then
       pm2 delete "$STAGING_PM2_NAME" >/dev/null 2>&1 || true
     else
-      pm2 restart "$STAGING_PM2_NAME" --update-env >/dev/null 2>&1 || restore_status=1
+      start_or_reload_staging >/dev/null 2>&1 || restore_status=1
     fi
   else
     write_runtime_env "$CURRENT_SHA" || restore_status=1
     printf '%s\n' "$CURRENT_SHA" > "$STATE_DIR/current-sha"
     if [[ -n "$CURRENT_RELEASE" ]]; then printf '%s\n' "$CURRENT_RELEASE" > "$STATE_DIR/current-release"; else rm -f "$STATE_DIR/current-release"; fi
     if [[ -n "$CURRENT_DEPLOYED_AT" ]]; then printf '%s\n' "$CURRENT_DEPLOYED_AT" > "$STATE_DIR/deployed-at"; else rm -f "$STATE_DIR/deployed-at"; fi
-    pm2 restart "$STAGING_PM2_NAME" --update-env >/dev/null 2>&1 || restore_status=1
+    start_or_reload_staging >/dev/null 2>&1 || restore_status=1
   fi
   pm2 save >/dev/null 2>&1 || true
   if [[ "$CURRENT_SHA" != none ]]; then
@@ -187,16 +221,26 @@ git -C "$SOURCE_DIR" archive "$TARGET_SHA" | tar -x -C "$RELEASE_DIR"
 (
   cd "$RELEASE_DIR"
   pnpm install --frozen-lockfile
-  NODE_ENV=production pnpm --filter @workspace/api-server run build
+  VITE_SUPABASE_URL="$STAGING_SUPABASE_URL" \
+  VITE_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY" \
+  NODE_ENV=production \
+  pnpm --filter @workspace/api-server run build
 )
 
-[[ -f "$RELEASE_DIR/api-server/dist/index.mjs" ]] || fail 'API build output missing' 18
-[[ -f "$RELEASE_DIR/stock-analyzer/dist/public/index.html" ]] || fail 'frontend build output missing' 19
+[[ -f "$RELEASE_DIR/api-server/dist/index.mjs" ]] || fail 'API build output missing' 17
+[[ -f "$RELEASE_DIR/stock-analyzer/dist/public/index.html" ]] || fail 'frontend build output missing' 18
 
 (
   cd "$RELEASE_DIR/api-server"
-  nohup env PORT="$STAGING_CANARY_PORT" API_PORT="$STAGING_CANARY_PORT" NODE_ENV=production APP_ENV=staging DEPLOY_SHA="$TARGET_SHA" \
-    DATABASE_URL="$STAGING_DATABASE_URL" TRADING_REVIEW_API_KEY="$STAGING_AI_API_KEY" \
+  nohup env \
+    PORT="$STAGING_CANARY_PORT" \
+    API_PORT="$STAGING_CANARY_PORT" \
+    NODE_ENV=production \
+    APP_ENV=staging \
+    DEPLOY_SHA="$TARGET_SHA" \
+    SUPABASE_URL="$STAGING_SUPABASE_URL" \
+    SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY" \
+    SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY" \
     node --enable-source-maps ./dist/index.mjs >"$CANARY_LOG" 2>&1 &
   echo $! > "$RELEASE_DIR/.canary.pid"
 )
@@ -204,7 +248,7 @@ CANARY_PID="$(cat "$RELEASE_DIR/.canary.pid")"
 
 if ! probe_health_url "http://127.0.0.1:$STAGING_CANARY_PORT/api/health" "$TARGET_SHA" "$CANARY_HEALTH" 20 2; then
   tail -n 120 "$CANARY_LOG" >&2 || true
-  fail 'canary health check failed' 20
+  fail 'canary health check failed' 19
 fi
 kill "$CANARY_PID" 2>/dev/null || true
 wait "$CANARY_PID" 2>/dev/null || true
@@ -239,20 +283,15 @@ rsync -a --delete \
 write_runtime_env "$TARGET_SHA"
 printf '%s\n' "$TARGET_SHA" > "$STATE_DIR/current-sha"
 
-if pm2 describe "$STAGING_PM2_NAME" >/dev/null 2>&1; then
-  pm2 restart "$STAGING_PM2_NAME" --update-env
-else
-  cd "$STAGING_DIR/api-server"
-  pm2 start ./dist/index.mjs --name "$STAGING_PM2_NAME" --node-args='--enable-source-maps' --update-env
-fi
+start_or_reload_staging
 pm2 save
 
 if [[ "$STAGING_FAILPOINT" == after-promotion ]]; then
   fail 'intentional staging failpoint after promotion' 90
 fi
 
-probe_health_url "http://127.0.0.1:$STAGING_PORT/api/health" "$TARGET_SHA" "$LIVE_HEALTH" 30 1 || fail 'live staging health check failed' 21
-probe_health_url "${STAGING_BASE_URL%/}/api/health" "$TARGET_SHA" "$LIVE_HEALTH" 10 2 || fail 'external staging health check failed' 22
+probe_health_url "http://127.0.0.1:$STAGING_PORT/api/health" "$TARGET_SHA" "$LIVE_HEALTH" 30 1 || fail 'live staging health check failed' 20
+probe_health_url "${STAGING_BASE_URL%/}/api/health" "$TARGET_SHA" "$LIVE_HEALTH" 10 2 || fail 'external staging health check failed' 21
 
 printf '%s\n' "$RELEASE_DIR" > "$STATE_DIR/current-release"
 printf '%s\n' "$BACKUP_DIR" > "$STATE_DIR/last-backup"
