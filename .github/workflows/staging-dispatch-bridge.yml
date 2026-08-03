@@ -42,9 +42,10 @@ jobs:
       github.event.issue.state == 'open' &&
       github.event.issue.title == 'Staging Readiness Control' &&
       github.event.comment.user.login == 'seungjae3908-source' &&
-      github.event.comment.author_association == 'OWNER'
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-staging ')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     permissions:
       actions: write
       contents: read
@@ -80,7 +81,7 @@ jobs:
           const body = String(process.env.COMMENT_BODY ?? '').trim();
           const match = /^\/run-staging ([0-9a-fA-F]{40})(.*)$/.exec(body);
           if (!match) {
-            console.error('Exact command required: /run-staging <40-character-main-sha> [--deploy] [--full-validation] [--destructive]');
+            console.error('Exact command required: /run-staging <40-character-current-main-sha> [--deploy] [--full-validation] [--destructive]');
             process.exit(1);
           }
 
@@ -107,7 +108,7 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `destructive=${destructive ? 'true' : 'false'}\n`);
           NODE
 
-      - name: Require exact SHA contained in main
+      - name: Require exact current main SHA
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
         run: |
@@ -117,6 +118,11 @@ jobs:
           git cat-file -e "$TARGET_SHA^{commit}"
           git merge-base --is-ancestor "$TARGET_SHA" origin/main || {
             echo 'Requested staging SHA is not contained in main.' >&2
+            exit 1
+          }
+          MAIN_SHA="$(git rev-parse origin/main^{commit})"
+          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || {
+            echo "Staging dispatch requires the exact current main SHA: $MAIN_SHA" >&2
             exit 1
           }
 
@@ -174,7 +180,7 @@ jobs:
               core.setFailed('No successful Application CI push run on main exists for the requested SHA.');
             }
 
-      - name: Dispatch existing staging readiness workflow
+      - name: Dispatch and confirm staging readiness run
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
@@ -186,6 +192,7 @@ jobs:
         with:
           script: |
             const workflowId = 'staging-readiness.yml';
+            const bridgeRunUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const workflow = await github.rest.actions.getWorkflow({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -196,6 +203,43 @@ jobs:
               return;
             }
 
+            const listMatchingRuns = async () => {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForWorkflow, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+                event: 'workflow_dispatch',
+                branch: 'main',
+                per_page: 100,
+              });
+              return runs
+                .filter((run) => run.event === 'workflow_dispatch' && run.head_sha === process.env.TARGET_SHA)
+                .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+            };
+
+            const existingActiveRun = (await listMatchingRuns()).find((run) => run.status !== 'completed');
+            if (existingActiveRun) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number(process.env.CONTROL_ISSUE),
+                body: [
+                  'Staging readiness dispatch was not duplicated.',
+                  '',
+                  `- Target SHA: \`${process.env.TARGET_SHA}\``,
+                  `- Existing Run ID: \`${existingActiveRun.id}\``,
+                  `- Existing Run: [Open GitHub Actions run](${existingActiveRun.html_url})`,
+                  `- Existing status: \`${existingActiveRun.status}\``,
+                  `- Bridge Run ID: \`${context.runId}\``,
+                  `- Bridge Run: [Open bridge run](${bridgeRunUrl})`,
+                  '- Production deployment executed: `false`',
+                  `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+                ].join('\n'),
+              });
+              return;
+            }
+
+            const dispatchStartedAt = Date.now();
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -209,20 +253,67 @@ jobs:
               },
             });
 
+            let dispatchedRun = null;
+            for (let attempt = 1; attempt <= 15; attempt += 1) {
+              await new Promise((resolve) => setTimeout(resolve, attempt === 1 ? 2000 : 4000));
+              const matchingRuns = await listMatchingRuns();
+              dispatchedRun = matchingRuns.find((run) => Date.parse(run.created_at) >= dispatchStartedAt - 5000) ?? null;
+              if (dispatchedRun) break;
+            }
+
+            if (!dispatchedRun) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number(process.env.CONTROL_ISSUE),
+                body: [
+                  'Staging readiness dispatch failed to materialize a workflow run.',
+                  '',
+                  `- Target SHA: \`${process.env.TARGET_SHA}\``,
+                  '- Dispatch API call returned without an error: `true`',
+                  '- Matching Staging Readiness Run created: `false`',
+                  `- Bridge Run ID: \`${context.runId}\``,
+                  `- Bridge Run: [Open bridge run](${bridgeRunUrl})`,
+                  '- Production deployment executed: `false`',
+                  `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+                ].join('\n'),
+              });
+              core.setFailed('Dispatch API returned without error, but no matching Staging Readiness workflow run was created.');
+              return;
+            }
+
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: dispatchedRun.id,
+              per_page: 100,
+            });
+            const jobLines = jobs.length
+              ? jobs.map((job) => `- ${job.name}: \`${job.status}\` / \`${job.conclusion ?? 'pending'}\` (job ID: \`${job.id}\`)`)
+              : ['- Jobs are not visible yet.'];
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: Number(process.env.CONTROL_ISSUE),
               body: [
-                'Staging readiness dispatch accepted.',
+                'Staging readiness workflow run created.',
                 '',
                 `- Target SHA: \`${process.env.TARGET_SHA}\``,
                 `- Action: \`${process.env.STAGING_ACTION}\``,
+                `- Run ID: \`${dispatchedRun.id}\``,
+                `- Run: [Open GitHub Actions run](${dispatchedRun.html_url})`,
+                `- Status: \`${dispatchedRun.status}\``,
                 `- Full account/browser validation: \`${process.env.RUN_FULL_VALIDATION}\``,
                 `- Destructive staging-only recovery drill: \`${process.env.RUN_DESTRUCTIVE_RECOVERY_DRILL}\``,
+                `- Bridge Run ID: \`${context.runId}\``,
+                `- Bridge Run: [Open bridge run](${bridgeRunUrl})`,
                 '- Workflow: `Staging Readiness`',
                 '- Ref: `main`',
                 '- Production deployment executed: `false`',
                 `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+                '',
+                'Jobs:',
+                ...jobLines,
               ].join('\n'),
             });
