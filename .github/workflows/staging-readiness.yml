@@ -7,8 +7,21 @@ on:
         description: Exact 40-character commit SHA from main to validate in staging
         required: true
         type: string
+      action:
+        description: Preflight only, or deploy after preflight succeeds
+        required: true
+        default: preflight
+        type: choice
+        options:
+          - preflight
+          - deploy
+      run_full_validation:
+        description: Require Supabase configuration and run four-account browser validation after deployment
+        required: true
+        default: false
+        type: boolean
       run_destructive_recovery_drill:
-        description: Run the staging-only backup, delete, restore, failpoint rollback, and previous-SHA drill
+        description: Require staging DB configuration and run staging-only destructive recovery drills after deployment
         required: true
         default: false
         type: boolean
@@ -24,19 +37,25 @@ concurrency:
 
 jobs:
   validate-input:
-    name: Validate isolated staging configuration
+    name: Preflight all isolated staging configuration
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: staging
     outputs:
       target_sha: ${{ steps.target.outputs.sha }}
     env:
+      STAGING_ACTION: ${{ inputs.action }}
+      STAGING_RUN_FULL_VALIDATION: ${{ inputs.run_full_validation }}
+      STAGING_RUN_DESTRUCTIVE_RECOVERY_DRILL: ${{ inputs.run_destructive_recovery_drill }}
       STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
       STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
       STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
       STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
       STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
       STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
       STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
       STAGING_AI_API_KEY: ${{ secrets.STAGING_AI_API_KEY }}
       STAGING_PENDING_EMAIL: ${{ secrets.STAGING_PENDING_EMAIL }}
@@ -66,22 +85,42 @@ jobs:
           git cat-file -e "$TARGET_SHA^{commit}"
           git merge-base --is-ancestor "$TARGET_SHA" origin/main || { echo 'SHA is not contained in main.' >&2; exit 1; }
           echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
-      - name: Reject missing or production-like staging values
-        run: node api-server/scripts/verify-phase10-staging-readiness.mjs --environment
+      - name: Report every missing or invalid staging setting
+        run: node api-server/scripts/verify-phase10-staging-readiness.mjs --preflight
+      - name: Record non-mutating preflight result
+        if: success() && inputs.action == 'preflight'
+        run: |
+          {
+            echo '## Staging preflight succeeded'
+            echo
+            echo "- Staging SHA checked: \`${{ steps.target.outputs.sha }}\`"
+            echo '- Server or application changed: `false`'
+            echo '- PM2 changed: `false`'
+            echo '- Database changed: `false`'
+            echo '- Production changed: `false`'
+            echo '- Next action: select `deploy` only after this preflight is green.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   deploy-and-verify:
-    name: Deploy isolated staging revision and run approved checks
+    name: Non-destructive isolated staging deployment
+    if: inputs.action == 'deploy'
     needs: validate-input
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: staging
     env:
       TARGET_SHA: ${{ needs.validate-input.outputs.target_sha }}
+      STAGING_RUN_FULL_VALIDATION: ${{ inputs.run_full_validation }}
+      STAGING_RUN_DESTRUCTIVE_RECOVERY_DRILL: ${{ inputs.run_destructive_recovery_drill }}
       STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
       STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
       STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
       STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
       STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
       STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
       STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
       STAGING_AI_API_KEY: ${{ secrets.STAGING_AI_API_KEY }}
       STAGING_PENDING_EMAIL: ${{ secrets.STAGING_PENDING_EMAIL }}
@@ -131,8 +170,9 @@ jobs:
           trap cleanup EXIT
           {
             printf 'STAGING_BASE_URL=%q\n' "$STAGING_BASE_URL"
-            printf 'STAGING_DATABASE_URL=%q\n' "$STAGING_DATABASE_URL"
-            printf 'STAGING_AI_API_KEY=%q\n' "$STAGING_AI_API_KEY"
+            printf 'STAGING_SUPABASE_URL=%q\n' "$STAGING_SUPABASE_URL"
+            printf 'STAGING_SUPABASE_ANON_KEY=%q\n' "$STAGING_SUPABASE_ANON_KEY"
+            printf 'STAGING_SUPABASE_SECRET_KEY=%q\n' "$STAGING_SUPABASE_SECRET_KEY"
           } > "$local_secret_file"
           chmod 600 "$local_secret_file"
           scp -q -i ~/.ssh/id_ed25519 -P "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
@@ -160,42 +200,43 @@ jobs:
           SOURCE_DIR="$SOURCE_DIR" \
           STAGING_DIR=/srv/seungjae-staging \
           STAGING_PM2_NAME=seungjae-staging \
-          STAGING_PORT=18080 \
-          STAGING_CANARY_PORT=18082 \
+          STAGING_PORT=18083 \
+          STAGING_CANARY_PORT=18084 \
           STAGING_BASE_URL="$STAGING_BASE_URL" \
-          STAGING_DATABASE_URL="$STAGING_DATABASE_URL" \
-          STAGING_AI_API_KEY="$STAGING_AI_API_KEY" \
+          STAGING_SUPABASE_URL="$STAGING_SUPABASE_URL" \
+          STAGING_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY" \
+          STAGING_SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY" \
           "$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
           REMOTE
+      - name: Run full staging account and browser verification
+        if: inputs.run_full_validation == true
+        env:
+          PHASE10_STAGING_E2E: "true"
+          STAGING_TARGET_SHA: ${{ env.TARGET_SHA }}
+        run: pnpm --dir stock-analyzer exec playwright test e2e/phase10-staging-readiness.spec.ts
       - name: Run explicitly approved staging DB migration and rollback drill
         if: inputs.run_destructive_recovery_drill == true
         env:
           DATABASE_URL: ${{ env.STAGING_DATABASE_URL }}
         run: bash api-server/scripts/verify-phase8-db.sh
-      - name: Run real staging account and browser verification
-        env:
-          PHASE10_STAGING_E2E: "true"
-          STAGING_TARGET_SHA: ${{ env.TARGET_SHA }}
-        run: pnpm --dir stock-analyzer exec playwright test e2e/phase10-staging-readiness.spec.ts
       - name: Run destructive staging-only recovery and log-redaction drills
         if: inputs.run_destructive_recovery_drill == true
         run: node api-server/scripts/verify-phase10-staging-readiness.mjs --remote
       - name: Record staging result without granting production approval
         if: success()
         env:
+          RUN_FULL_VALIDATION: ${{ inputs.run_full_validation }}
           RUN_DESTRUCTIVE_RECOVERY_DRILL: ${{ inputs.run_destructive_recovery_drill }}
         run: |
           {
             echo '## Staging readiness verification succeeded'
             echo
             echo "- Staging SHA: \`$TARGET_SHA\`"
+            echo '- Isolated staging deployment: `true`'
+            echo "- Full account/browser validation: \`$RUN_FULL_VALIDATION\`"
+            echo "- Destructive staging-only recovery drill: \`$RUN_DESTRUCTIVE_RECOVERY_DRILL\`"
             echo '- Production deployment executed: `false`'
             echo '- Production database changed: `false`'
-            if [[ "$RUN_DESTRUCTIVE_RECOVERY_DRILL" == "true" ]]; then
-              echo '- Destructive recovery drill: `passed`'
-            else
-              echo '- Destructive recovery drill: `skipped (not approved)`'
-            fi
             echo '- Verdict: `운영 배포 승인 보류`'
             echo '- Reason: GitHub `production` environment reviewers, branch restrictions, and self-review protection require separate direct verification.'
           } >> "$GITHUB_STEP_SUMMARY"

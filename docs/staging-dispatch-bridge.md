@@ -2,98 +2,51 @@
 
 ## Purpose
 
-The GitHub connector used by the project can read and write repository data but cannot call the GitHub Actions `workflow_dispatch` endpoint directly. This bridge adds a narrow, auditable control path without weakening the existing `Staging Readiness` workflow.
+The bridge accepts one owner-only command on issue `#23` (`Staging Readiness Control`) and dispatches `.github/workflows/staging-readiness.yml` from `main`.
 
-The bridge does not deploy staging itself. It validates one owner command and then calls the existing `.github/workflows/staging-readiness.yml` workflow through GitHub's workflow-dispatch API.
+It never reads staging secrets and never targets production.
 
-GitHub documents that workflows using the repository `GITHUB_TOKEN` can trigger `workflow_dispatch` runs, and that both the dispatch target and an `issue_comment` workflow must exist on the default branch. This bridge therefore runs from `main` and dispatches the target workflow from `main`.
+## Commands
 
-## Control issue
-
-Only issue `#23`, titled `Staging Readiness Control`, is accepted.
-
-The issue must remain open and the command must be a newly created issue comment. Pull request comments and comments on any other issue are ignored.
-
-## Exact commands
-
-The default command deploys and verifies staging without the destructive DB rollback or file delete/restore recovery drills:
+Preflight is the default and changes nothing on the server:
 
 ```text
 /run-staging <exact-40-character-main-sha>
 ```
 
-The destructive staging-only drills require the repository owner to add the exact opt-in flag after receiving separate approval:
+Explicit non-destructive deployment:
 
 ```text
-/run-staging <exact-40-character-main-sha> --destructive
+/run-staging <exact-40-character-main-sha> --deploy
 ```
 
-Example:
+Deployment plus four-account browser validation:
 
 ```text
-/run-staging f2cdbd1a8ae42d2fd6a5caba3e875f057053021c --destructive
+/run-staging <exact-40-character-main-sha> --deploy --full-validation
 ```
 
-No abbreviated SHA, alternate flag, or additional text is accepted. Omitting `--destructive` is the non-destructive default.
+The existing staging-only destructive drill remains an additional explicit flag and must never be used without separate approval:
 
-## Authorization
+```text
+/run-staging <exact-40-character-main-sha> --deploy --destructive
+```
 
-The dispatch job runs only when all of these conditions are true:
+Flags may not be duplicated and no unknown text is accepted. `--full-validation` and `--destructive` require `--deploy`.
 
-- comment author login is exactly `seungjae3908-source`;
-- GitHub reports the comment author's association as `OWNER`;
-- issue number is exactly `23`;
-- issue title is exactly `Staging Readiness Control`;
-- issue is open;
-- the comment is on an issue, not a pull request;
-- the event is a newly created comment.
+## Authorization and CI gate
 
-The privileged `actions: write` and `issues: write` permissions exist only on the issue-comment dispatch job. Pull request validation runs with read-only permissions.
+The command is accepted only when the issue remains open, the author is exactly `seungjae3908-source`, GitHub reports `OWNER`, and the comment is a newly created issue comment rather than a pull request comment.
 
-## Revision and CI validation
+Before dispatch, the bridge verifies that the SHA exists in `main`, all six required status contexts succeeded, and a successful `Application CI` push run exists on `main` for the same SHA.
 
-Before dispatching, the bridge:
+## Dispatch inputs
 
-1. parses an exact 40-character SHA;
-2. verifies that Git can resolve it as a commit;
-3. verifies that it is contained in `main`;
-4. requires all six successful status contexts:
-   - `application-ci/verified`
-   - `browser-ui/verified`
-   - `database-rls/verified`
-   - `security-integration/verified`
-   - `ai-privacy/verified`
-   - `futures-public-network-smoke/verified`
-5. requires a successful completed `Application CI` workflow run produced by a `push` event on `main` for that exact SHA.
+The bridge forwards:
 
-Status strings alone are not sufficient.
+- `sha`
+- `action` (`preflight` or `deploy`)
+- `run_full_validation`
+- `run_destructive_recovery_drill`
 
-## Dispatch boundary
-
-The bridge dispatches only:
-
-- workflow: `staging-readiness.yml`
-- ref: `main`
-- input `sha`: validated SHA
-- input `run_destructive_recovery_drill`: `false` by default, or `true` only when the owner command includes `--destructive`
-
-It does not read staging secrets. The existing staging workflow owns the `staging` GitHub environment, its secrets, server connection, isolated path, isolated PM2 process, isolated ports, staging database, browser tests, and destructive recovery drills.
-
-The bridge contains no production secret names, production paths, production workflow target, production deployment call, or production database action.
-
-## Result comment
-
-After GitHub accepts the dispatch request, the bridge writes an acknowledgement to issue `#23` containing:
-
-- target SHA;
-- dispatched workflow;
-- `main` ref;
-- destructive drill state (`false` by default);
-- confirmation that production deployment was not executed;
-- source command comment ID.
-
-A successful acknowledgement means GitHub accepted the dispatch request. The actual staging result must still be verified from the `Staging Readiness` workflow jobs and logs.
-
-## Failure behavior
-
-Malformed, unauthorized, stale, non-main, or unverified requests fail or are skipped without dispatching staging. The bridge does not substitute another SHA, infer destructive approval, retry with altered inputs, or fall back to production.
+Omitting `--deploy` always results in preflight-only behavior.
