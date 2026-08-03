@@ -19,7 +19,7 @@ assert(
 );
 assert(!deployScript.includes('ecosystem.staging.cjs'), 'legacy CJS PM2 config must not return');
 assert(
-  deployScript.includes("exec node --enable-source-maps --env-file=.env.staging ./dist/index.mjs"),
+  deployScript.includes("exec node --enable-source-maps '--env-file=.env.staging' ./dist/index.mjs"),
   'runtime launcher must load the protected staging env file directly with Node',
 );
 assert(
