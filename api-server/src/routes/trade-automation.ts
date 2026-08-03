@@ -1,0 +1,205 @@
+import { Router, type IRouter, type Response } from 'express';
+import { createSupabaseTradingRepository, safeConnections, type TradingRepository } from '../services/trade-automation.repository';
+import { liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
+import { TradeExecutionService } from '../services/trade-execution.service';
+import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
+import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import type { AuthenticatedRequest } from '../middleware/auth';
+import type { TradingExchange, TradingPlanInput } from '../services/trade-automation.types';
+
+const router: IRouter = Router();
+const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom']);
+let repositoryFactoryForTests: ((userId: string) => TradingRepository) | null = null;
+
+export function setTradeAutomationRepositoryFactoryForTests(
+  factory: ((userId: string) => TradingRepository) | null,
+) {
+  repositoryFactoryForTests = factory;
+}
+
+function context(req: AuthenticatedRequest) {
+  if (!req.member?.id) throw new Error('LOGIN_REQUIRED');
+  const repository = repositoryFactoryForTests
+    ? repositoryFactoryForTests(req.member.id)
+    : req.accessToken
+      ? createSupabaseTradingRepository(req.accessToken, req.member.id)
+      : (() => { throw new Error('LOGIN_REQUIRED'); })();
+  return {
+    userId: req.member.id,
+    repository,
+    automation: new TradeAutomationService(repository),
+    execution: new TradeExecutionService(repository),
+  };
+}
+
+function exchangeValue(value: unknown): TradingExchange {
+  const exchange = String(value ?? '').toLowerCase() as TradingExchange;
+  if (!EXCHANGES.has(exchange)) throw new Error('UNSUPPORTED_EXCHANGE');
+  return exchange;
+}
+
+function errorResponse(res: Response, error: unknown) {
+  const code = error instanceof Error ? error.message.split(':')[0] : 'TRADE_AUTOMATION_FAILED';
+  const status = code === 'LOGIN_REQUIRED' ? 401
+    : code.includes('NOT_FOUND') ? 404
+      : code.includes('STORAGE') || code.includes('MASTER_KEY') ? 503 : 400;
+  return res.status(status).json({ ok: false, error: code, secretExposed: false, orderSubmitted: false });
+}
+
+router.get('/status', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const [policy, connections, orders] = await Promise.all([
+      repository.getPolicy(userId), repository.getConnections(userId), repository.listOrders(userId),
+    ]);
+    return res.json({
+      ok: true,
+      policy,
+      connections: safeConnections(connections),
+      emergencyStopped: policy.emergencyStopped || process.env.TRADING_EMERGENCY_STOP === 'true',
+      liveExecutionServerEnabled: {
+        bitget: liveExecutionEnabled('bitget'),
+        upbit: liveExecutionEnabled('upbit'),
+        kiwoom: liveExecutionEnabled('kiwoom'),
+      },
+      credentialVault: credentialConfigurationStatus(),
+      lastOrder: orders[0] ?? null,
+      actualOrderSubmittedByStatusRequest: false,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.put('/policy', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const policy = normalizeTradingPolicy(req.body);
+    const enablingAutomatic = policy.mode === 'automatic' || policy.automaticEnabled
+      || Object.values(policy.exchangeEnabled).some(Boolean);
+    if (enablingAutomatic && req.body?.confirmation?.acknowledged !== true) {
+      return res.status(409).json({ ok: false, error: 'AUTOMATIC_TRADING_CONFIRMATION_REQUIRED' });
+    }
+    if (policy.mode !== 'automatic') {
+      policy.automaticEnabled = false;
+      policy.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false };
+      policy.enabledAssets = { bitget: [], upbit: [], kiwoom: [] };
+    }
+    await repository.savePolicy(userId, policy);
+    return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const exchange = exchangeValue(req.params.exchange);
+    const credentials = req.body?.credentials;
+    if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) throw new Error('CREDENTIALS_REQUIRED');
+    const permissions = Array.isArray(req.body?.permissions) ? req.body.permissions.map(String).map((item: string) => item.toLowerCase()) : [];
+    if (permissions.some((item: string) => item.includes('withdraw') || item.includes('출금'))) {
+      throw new Error('WITHDRAWAL_PERMISSION_NOT_ALLOWED');
+    }
+    const allowedKeys: Record<TradingExchange, string[]> = {
+      bitget: ['apiKey', 'secretKey', 'passphrase'],
+      upbit: ['accessKey', 'secretKey'],
+      kiwoom: ['appKey', 'secretKey'],
+    };
+    const safeCredentials = Object.fromEntries(allowedKeys[exchange].map((key) => [key, String(credentials[key] ?? '').trim()]));
+    if (Object.values(safeCredentials).some((value) => !value)) throw new Error('CREDENTIALS_INCOMPLETE');
+    const accountMode = req.body?.accountMode === 'live' ? 'live' : req.body?.accountMode === 'mock' ? 'mock' : 'paper';
+    await repository.saveConnection({
+      userId, exchange, accountMode, configured: true,
+      encryptedCredentials: encryptTradingCredentials(safeCredentials),
+      lastVerifiedAt: null, lastErrorCode: null, updatedAt: new Date().toISOString(),
+    });
+    return res.json({ ok: true, exchange, accountMode, configured: true, credentialsReturned: false });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/plans', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository, automation } = context(req);
+    const input = req.body as TradingPlanInput;
+    exchangeValue(input.exchange);
+    const [policy, existingOrders] = await Promise.all([repository.getPolicy(userId), repository.listOrders(userId)]);
+    const today = new Date().toISOString().slice(0, 10);
+    const persistedDailyOrders = existingOrders.filter((order) => order.createdAt.slice(0, 10) === today).length;
+    input.marketSnapshot = {
+      ...input.marketSnapshot,
+      dailyOrderCount: Math.max(Number(input.marketSnapshot?.dailyOrderCount ?? 0), persistedDailyOrders),
+    };
+    const result = await automation.createPlan(userId, input, policy,
+      policy.emergencyStopped || process.env.TRADING_EMERGENCY_STOP === 'true');
+    if (!result.plan) return res.status(409).json({ ok: false, error: 'RISK_CHECK_BLOCKED', decision: result.decision, orderSubmitted: false });
+    if (policy.mode === 'automatic' && policy.automaticEnabled && result.plan.state === 'PLANNED') {
+      const submitted = await automation.beginAutomaticPlan(userId, result.plan.id);
+      const { order, duplicate } = await automation.createOrder(userId, submitted);
+      const executed = await new TradeExecutionService(repository).execute(userId, submitted, order);
+      return res.json({ ok: true, plan: submitted, order: executed, duplicate: result.duplicate || duplicate });
+    }
+    return res.json({ ok: true, plan: result.plan, duplicate: result.duplicate, orderSubmitted: false });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, automation, execution } = context(req);
+    if (req.body?.approved !== true) return res.status(409).json({ ok: false, error: 'EXPLICIT_APPROVAL_REQUIRED' });
+    const plan = await automation.approvePlan(userId, String(req.params.id));
+    const { order, duplicate } = await automation.createOrder(userId, plan);
+    const result = duplicate ? order : await execution.execute(userId, plan, order);
+    return res.json({ ok: true, plan, order: result, duplicate });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/plans/:id/invalidate', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, automation, execution } = context(req);
+    const result = await automation.invalidatePlan(userId, String(req.params.id));
+    const order = result.order?.state === 'CANCEL_REQUESTED'
+      ? await execution.cancel(userId, result.plan, result.order) : result.order;
+    return res.json({ ok: true, ...result, order, immediateMarketLiquidation: false, additionalApprovalRequired: true });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const current = await repository.getPolicy(userId);
+    const policy = normalizeTradingPolicy({
+      ...current, automaticEnabled: false, emergencyStopped: true, mode: 'approval',
+      exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
+    });
+    await repository.savePolicy(userId, policy);
+    return res.json({ ok: true, emergencyStopped: true, newOrdersBlocked: true, existingOrdersCanceled: false });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.get('/orders', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const [orders, events] = await Promise.all([repository.listOrders(userId), repository.listEvents(userId)]);
+    return res.json({ ok: true, orders, events });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/orders/:id/cancel', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository, execution } = context(req);
+    const order = await repository.getOrder(userId, String(req.params.id));
+    if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');
+    const plan = await repository.getPlan(userId, order.planId);
+    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+    const canceled = await execution.cancel(userId, plan, order);
+    return res.json({ ok: true, order: canceled, filledQuantityPreserved: canceled.filledQuantity });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/recovery/scan', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, automation } = context(req);
+    const orders = await automation.recoverOpenOrders(userId);
+    return res.json({ ok: true, recoveryRequired: orders.length, exchangeOrdersSubmitted: false });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+export default router;
