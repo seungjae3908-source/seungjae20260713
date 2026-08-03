@@ -5,25 +5,39 @@ grant select, insert, update, delete on public.trade_automation_profiles,
 grant select(user_id, exchange, account_mode, configured, last_verified_at, last_error_code, created_at, updated_at)
   on public.trade_exchange_connections to authenticated, anon;
 
-do $global_stop_service_only$
-declare
-  authenticated_select boolean := has_table_privilege('authenticated', 'public.trade_system_controls', 'select');
-  authenticated_insert boolean := has_table_privilege('authenticated', 'public.trade_system_controls', 'insert');
-  authenticated_update boolean := has_table_privilege('authenticated', 'public.trade_system_controls', 'update');
-  authenticated_delete boolean := has_table_privilege('authenticated', 'public.trade_system_controls', 'delete');
-  anon_select boolean := has_table_privilege('anon', 'public.trade_system_controls', 'select');
-  anon_insert boolean := has_table_privilege('anon', 'public.trade_system_controls', 'insert');
-  anon_update boolean := has_table_privilege('anon', 'public.trade_system_controls', 'update');
-  anon_delete boolean := has_table_privilege('anon', 'public.trade_system_controls', 'delete');
+set session authorization authenticated;
+do $authenticated_global_stop_service_only$
 begin
-  if authenticated_select or authenticated_insert or authenticated_update or authenticated_delete
-    or anon_select or anon_insert or anon_update or anon_delete then
-    raise exception 'global stop ACL auth[s=%,i=%,u=%,d=%] anon[s=%,i=%,u=%,d=%]',
-      authenticated_select, authenticated_insert, authenticated_update, authenticated_delete,
-      anon_select, anon_insert, anon_update, anon_delete;
-  end if;
+  begin
+    perform emergency_stopped from public.trade_system_controls where control_key = 'global';
+    raise exception 'authenticated member can read the global emergency stop control';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.trade_system_controls set emergency_stopped = false where control_key = 'global';
+    raise exception 'authenticated member can change the global emergency stop control';
+  exception when insufficient_privilege then null;
+  end;
 end
-$global_stop_service_only$;
+$authenticated_global_stop_service_only$;
+reset session authorization;
+
+set session authorization anon;
+do $anonymous_global_stop_service_only$
+begin
+  begin
+    perform emergency_stopped from public.trade_system_controls where control_key = 'global';
+    raise exception 'anonymous user can read the global emergency stop control';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.trade_system_controls set emergency_stopped = false where control_key = 'global';
+    raise exception 'anonymous user can change the global emergency stop control';
+  exception when insufficient_privilege then null;
+  end;
+end
+$anonymous_global_stop_service_only$;
+reset session authorization;
 
 set role authenticated;
 select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
