@@ -6,16 +6,22 @@ grant select(user_id, exchange, account_mode, configured, last_verified_at, last
   on public.trade_exchange_connections to authenticated, anon;
 
 do $global_stop_service_only$
+declare
+  browser_acl text;
 begin
-  if exists (
-    select 1
-    from pg_class candidate
-    cross join lateral aclexplode(coalesce(candidate.relacl, acldefault('r', candidate.relowner))) privilege
-    left join pg_roles grantee_role on grantee_role.oid = privilege.grantee
-    where candidate.oid = 'public.trade_system_controls'::regclass
-      and (privilege.grantee = 0 or grantee_role.rolname in ('authenticated', 'anon'))
-  ) then
-    raise exception 'browser role or PUBLIC has a direct privilege on the global emergency stop control';
+  select string_agg(
+    coalesce(grantee_role.rolname, 'PUBLIC') || ':' || privilege.privilege_type,
+    ', ' order by coalesce(grantee_role.rolname, 'PUBLIC'), privilege.privilege_type
+  )
+  into browser_acl
+  from pg_class candidate
+  cross join lateral aclexplode(coalesce(candidate.relacl, acldefault('r', candidate.relowner))) privilege
+  left join pg_roles grantee_role on grantee_role.oid = privilege.grantee
+  where candidate.oid = 'public.trade_system_controls'::regclass
+    and (privilege.grantee = 0 or grantee_role.rolname in ('authenticated', 'anon'));
+
+  if browser_acl is not null then
+    raise exception 'browser role or PUBLIC has direct global-stop ACL entries: %', browser_acl;
   end if;
 
   if not (select relrowsecurity from pg_class where oid = 'public.trade_system_controls'::regclass) then
