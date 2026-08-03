@@ -293,8 +293,6 @@ ROLLBACK_REQUIRED=1
 rsync -a --delete \
   --exclude='.git/' \
   --exclude='.github/' \
-  --exclude='node_modules/' \
-  --exclude='*/node_modules/' \
   --exclude='.env' \
   --exclude='.env.*' \
   --exclude='*/.env' \
