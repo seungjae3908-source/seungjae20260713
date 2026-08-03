@@ -4,161 +4,69 @@
 
 Phase 10 prepares an isolated staging environment and gathers evidence for a later production decision.
 
-A successful staging run does **not** by itself grant production approval. The workflow does not deploy production, change the production database, or enable real trading.
+A successful staging run does **not** grant production approval. This workflow never deploys production, changes the production database, enables real trading, or touches `/opt/stock-app` or the `stock-app` PM2 process.
 
-## Production deployment gate
+## Two-step staging procedure
 
-Production deployment is manual only. The workflow does not run on a push to `main`.
+The workflow now defaults to `action=preflight`.
 
-A production request must provide an exact 40-character commit SHA. Before the `production` environment approval step, the workflow verifies that:
+1. **Preflight only**
+   - validates the exact SHA;
+   - reports every missing or invalid setting name in one run;
+   - does not connect to the staging server;
+   - does not change files, PM2, the app, or any database.
+2. **Non-destructive deploy**
+   - runs only when `action=deploy`;
+   - starts only after the same aggregate preflight passes;
+   - uses `/srv/seungjae-staging`, `seungjae-staging`, port `18080`, and canary port `18082`;
+   - performs build, canary health, backup, promotion, live health, and automatic rollback on failure.
 
-1. the revision exists as a commit;
-2. the revision is contained in `main`;
-3. the latest commit statuses are successful for:
-   - `application-ci/verified`
-   - `browser-ui/verified`
-   - `database-rls/verified`
-   - `security-integration/verified`
-   - `ai-privacy/verified`
-   - `futures-public-network-smoke/verified`;
-4. a completed, successful `Application CI` workflow run exists for the exact SHA from a `push` event on `main`.
+`run_full_validation` and `run_destructive_recovery_drill` are separate opt-in scopes. Both default to `false`.
 
-Status contexts alone are not accepted as sufficient CI provenance.
+## Settings by scope
 
-The repository administrator must separately configure and directly verify the GitHub `production` environment with required reviewers, deployment-branch restrictions, and self-review prevention where available. If those settings cannot be inspected, production approval remains on hold.
+| Setting | Required for | Where the value comes from |
+|---|---|---|
+| `STAGING_SSH_HOST` | Preflight and deploy | Staging server public IP: `158.247.235.32` |
+| `STAGING_SSH_USER` | Preflight and deploy | SSH login user: `root` |
+| `STAGING_SSH_PRIVATE_KEY` | Preflight and deploy | The private half of the SSH key whose public half is in `/root/.ssh/authorized_keys` on the staging server |
+| `STAGING_BASE_URL` | Preflight and deploy | The dedicated HTTPS URL routed to staging port `18080`; it must not be `https://lsj119.duckdns.org` |
+| `STAGING_SSH_PORT` | Optional | SSH daemon port; omit to use `22` |
+| `STAGING_SSH_KNOWN_HOSTS` | Optional | Output of `ssh-keyscan -H -p <port> 158.247.235.32`; when omitted, the workflow scans the host during the run |
+| `STAGING_SUPABASE_URL` | Full account/browser validation | URL of the staging-only Supabase project |
+| `STAGING_SUPABASE_ANON_KEY` | Full account/browser validation | Publishable anon key from the staging-only Supabase project |
+| `STAGING_SUPABASE_SECRET_KEY` | Full account/browser validation | Server secret/service-role key from the staging-only Supabase project |
+| `STAGING_PENDING_EMAIL` / `PASSWORD` | Full account/browser validation | Real staging account in pending state |
+| `STAGING_ASSOCIATE_EMAIL` / `PASSWORD` | Full account/browser validation | Real approved associate staging account |
+| `STAGING_REGULAR_EMAIL` / `PASSWORD` | Full account/browser validation | Real approved regular staging account |
+| `STAGING_ADMIN_EMAIL` / `PASSWORD` | Full account/browser validation | Real staging admin account |
+| `STAGING_DATABASE_URL` | Explicit DB migration/recovery drill only | PostgreSQL URL for an isolated staging database; never production |
+| `STAGING_AI_API_KEY` | Not required by current readiness workflow | Optional future external-provider validation only; current readiness tests intentionally require no external AI call |
 
-## Staging isolation
+All private keys, passwords, database URLs, and API keys belong only in GitHub **Environment → staging → Environment secrets**. They must not be pasted into chat, committed, printed, or stored in workflow artifacts.
 
-Staging uses only:
+## Why DB, AI, and accounts are not minimal deploy requirements
 
-- GitHub environment: `staging`
-- secret names beginning with `STAGING_`
-- installation root: `/srv/seungjae-staging`
-- PM2 process: `seungjae-staging`
-- live port: `18080`
-- canary port: `18082`
-- a staging-only HTTPS URL
-- a staging-only database URL
-- a server-only staging AI provider key
+The API process and `/api/health` start without a database migration URL or external AI key. The runtime database integration used by authentication is Supabase and is lazy: missing Supabase values make authenticated routes return an honest configuration error, but do not prevent the health-only minimal deployment from starting.
 
-The staging workflow rejects production identifiers, the production URL, production paths, production process names, and missing isolated values.
+The four account pairs are consumed only by `phase10-staging-readiness.spec.ts`, so they are required only when `run_full_validation=true`.
 
-## Required staging secrets
+`STAGING_DATABASE_URL` is consumed by the explicit `verify-phase8-db.sh` migration/rollback drill. It is therefore required only when `run_destructive_recovery_drill=true`.
 
-```text
-STAGING_SSH_HOST
-STAGING_SSH_USER
-STAGING_SSH_PORT
-STAGING_SSH_PRIVATE_KEY
-STAGING_SSH_KNOWN_HOSTS
-STAGING_BASE_URL
-STAGING_DATABASE_URL
-STAGING_AI_API_KEY
-STAGING_PENDING_EMAIL
-STAGING_PENDING_PASSWORD
-STAGING_ASSOCIATE_EMAIL
-STAGING_ASSOCIATE_PASSWORD
-STAGING_REGULAR_EMAIL
-STAGING_REGULAR_PASSWORD
-STAGING_ADMIN_EMAIL
-STAGING_ADMIN_PASSWORD
-```
+The current full browser suite verifies that the privacy-safe AI path does not place orders and does not require an external provider call. `STAGING_AI_API_KEY` is not a readiness prerequisite.
 
-Secret values must never be committed, included in artifacts, printed in logs, returned by APIs, or exposed in the frontend bundle.
+## Runtime environment handling
 
-The workflow writes the staging URL, database URL, and AI key to a temporary mode-`600` file, copies it over SSH, sources it remotely, and deletes it. These values are not placed in the SSH remote command line. Release directories do not retain `.env.staging`; only the active staging runtime receives one atomic mode-`600` file.
+The frontend build receives only the staging Supabase URL and publishable anon key when full configuration is present.
 
-## Immutable staging deployment
+The backend receives a mode-`600` `.env.staging` containing staging-only runtime values. PM2 starts or reloads `seungjae-staging` with Node's `--env-file=.env.staging`, so the protected file is actually loaded by the live process. Release directories do not retain copied secret files.
 
-The staging workflow accepts only an exact SHA that is contained in `main`. The remote host fetches that SHA, resolves it again, and refuses deployment if it differs.
+## Production gate
 
-The application receives:
+Production remains manual-only. A production request must provide an exact 40-character SHA contained in `main` and all six required successful CI contexts with a matching successful `Application CI` push run on `main`.
 
-```text
-APP_ENV=staging
-DEPLOY_SHA=<exact SHA>
-```
-
-The workflow verifies the health endpoint and the SHA stored under the staging deployment state directory. Deployment locking uses a non-inherited `flock` wrapper so a canary or long-lived PM2 process cannot retain the lock after the deployment command exits.
-
-## Non-destructive default
-
-`run_destructive_recovery_drill` defaults to `false`. In that mode the workflow deploys the requested staging revision and runs the real account and browser verification, but skips the database apply/rollback/reapply drill and the staging file delete/restore, failpoint rollback, and previous-SHA recovery drills. Destructive checks run only when the repository owner explicitly supplies `--destructive` after separate approval.
-
-## Explicitly approved migration drill
-
-When `run_destructive_recovery_drill` is explicitly `true`, the staging database drill must perform:
-
-1. backup;
-2. Phase 7 through current migration apply;
-3. schema and residual-object inspection;
-4. user, role, capability, and RLS verification;
-5. rollback;
-6. existing-data verification after rollback;
-7. reapply;
-8. user, role, capability, and RLS re-verification.
-
-No migration is applied to the production database.
-
-## Four-role verification
-
-Real staging accounts must verify all four enforcement layers: visible controls, direct URLs, backend APIs, and database RLS.
-
-- `pending`: approval-waiting experience only
-- `associate`: basic information allowed; futures and AI denied
-- `regular`: futures and opt-in AI analysis allowed; real orders denied
-- `admin`: member management allowed; automatic access to another user's private journal denied
-
-Missing accounts or mock-only verification cannot produce a successful staging-readiness result.
-
-## AI provider verification
-
-The provider key exists only on the staging server. Verification covers:
-
-- zero outbound calls before consent;
-- zero outbound calls when membership is denied;
-- successful opt-in request;
-- 429, 5xx, timeout, and invalid JSON;
-- no provider secret in frontend, response, logs, or artifacts;
-- zero actual orders and zero private exchange calls;
-- the documented process-local rate-limit limitation.
-
-## Browser verification
-
-The real staging URL is tested at:
-
-- 1440×900
-- 390×844
-- 360×740
-
-Checks include login for all four roles, refresh and session recovery, role changes, AI preview and consent, local result handling, no horizontal overflow, no console errors, and no uncaught exceptions.
-
-## Explicitly approved backup and recovery
-
-The staging deploy script creates an isolated source backup and SHA-256 checksum manifest before promotion. Failed post-promotion verification restores the previous staging snapshot, runtime SHA, active release metadata, and PM2 process.
-
-When separately approved, the explicit staging-only destructive drill requires a real previous SHA that differs from the target SHA and verifies:
-
-1. the original backup checksum;
-2. rejection of a deliberately corrupted copy of the backup;
-3. deletion and restoration of the active staging frontend entry file from the immutable release;
-4. an intentional `after-promotion` failure and automatic rollback;
-5. recovery of the real previous staging snapshot and previous SHA;
-6. redeployment of the requested target SHA;
-7. redeployment of the same SHA again;
-8. recovery time and a zero application-file loss window;
-9. real PM2 or application logs exist and contain no credential pattern, configured staging Secret, account email, or password.
-
-Missing previous-SHA evidence, missing logs, damaged checksum acceptance, skipped checks, failed health recovery, or any incomplete drill causes the workflow to fail.
-
-## Verdict policy
-
-A successful staging workflow means only that the staging evidence passed. It records:
+The final verdict remains:
 
 ```text
 운영 배포 승인 보류
 ```
-
-Production approval can be considered only after direct verification of the GitHub `production` environment reviewers, deployment-branch restrictions, and self-review protection, followed by a separate user decision.
-
-Phase 10 does not merge itself and does not execute production deployment automatically.
