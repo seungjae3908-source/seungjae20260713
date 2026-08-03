@@ -20,7 +20,7 @@
     "test:phase7": "node ./test.mjs phase7",
     "test:phase8": "node ./test.mjs phase8",
     "test:phase9": "node ./test.mjs phase9",
-    "test:phase12": "node ./test.mjs phase12",
+    "test:phase12": "node ./test.mjs phase12 && node ./scripts/verify-staging-deploy-script-contract.mjs",
     "test:phase10:safety": "node ./scripts/verify-phase10-deployment-safety.mjs",
     "test:phase10:staging": "node ./scripts/verify-phase10-staging-readiness.mjs --environment",
     "test:smoke": "node ./test.mjs smoke",
@@ -42,7 +42,7 @@
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.7",
-    "@types/cookie-parser": "^1.4.10",
+    "@types/cookie-parser": "^0.5.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "catalog:",
