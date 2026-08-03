@@ -25,7 +25,7 @@ for (const [width, height] of [[360, 800], [390, 844], [430, 932]] as const) {
     await page.getByRole('button', { name: 'AI 차트 분석기에서 보기', exact: true }).click();
     await expect(page).toHaveURL(/\/ai-chart\?/);
     await expect(page.getByRole('heading', { name: 'AI 차트 분석기' })).toBeVisible();
-    await expect(page.getByText('AI 점수').locator('..')).toContainText('88');
+    await expect(page.getByTestId('analysis-signal-score')).toContainText('88');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 }
@@ -42,7 +42,7 @@ test('desktop technical workspace keeps AI search, chart, and analysis together'
   await scanner.getByRole('button', { name: 'AI 차트 분석기에서 보기', exact: true }).click();
   await expect(page).toHaveURL(/\/__phase11-technical-workspace-e2e$/);
   await expect(page.getByText('SK하이닉스', { exact: true }).last()).toBeVisible();
-  await expect(page.getByText('AI 점수').last().locator('..')).toContainText('88');
+  await expect(page.getByTestId('analysis-signal-score')).toContainText('88');
 });
 
 test('AI chat handles send, refusal response, and cancellation-safe UI', async ({ page }) => {
