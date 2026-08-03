@@ -5,7 +5,6 @@ import { MarketDataService } from './market-data.service';
 import { FinancialService } from './financial.service';
 import { RiskAnalysisService } from './risk-analysis.service';
 import { NewsService } from './news.service';
-import { computeScores } from '../sample/scores';
 import { computeIndicators } from '../sample/indicators';
 import {
   computeSignalReport,
@@ -37,6 +36,7 @@ export async function buildContext(entry: CatalogEntry): Promise<SignalContext> 
 
   if (fin.status === 'fulfilled' && fin.value) {
     const f = fin.value;
+    ctx.financialSource = f.source ?? 'live';
 
     ctx.financials = {
       revenueGrowth: f.growth?.revenue,
@@ -50,6 +50,7 @@ export async function buildContext(entry: CatalogEntry): Promise<SignalContext> 
   }
 
   if (risk.status === 'fulfilled' && risk.value) {
+    ctx.riskDataAvailable = risk.value.feedAvailable;
     const positive: string[] = [];
     const negative: string[] = [];
 
@@ -74,7 +75,7 @@ export async function buildContext(entry: CatalogEntry): Promise<SignalContext> 
     ctx.positiveEvents = Array.from(new Set(positive));
   }
 
-  if (news.status === 'fulfilled' && news.value) {
+  if (news.status === 'fulfilled' && news.value && ((news.value.positive?.length ?? 0) + (news.value.negative?.length ?? 0) > 0)) {
     ctx.newsScore = news.value.sentimentScore;
     ctx.newsPositive = news.value.positive?.length ?? 0;
     ctx.newsNegative = news.value.negative?.length ?? 0;
@@ -115,7 +116,17 @@ export interface ScanCard {
   stop: string[];
   matchCount: number;
   selectedCount: number;
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'UNAVAILABLE';
+  riskScore: number | null;
+  liquidity: number | null;
+  marketCap: number | null;
+  dataState: 'ok' | 'unavailable' | 'insufficient' | 'delayed' | 'stale';
+  analyzedAt: string;
+  scoreBreakdown: Record<string, ScoreFactor>;
 }
+
+type ScoreFactorStatus = 'ok' | 'unavailable' | 'insufficient' | 'delayed' | 'stale';
+type ScoreFactor = { score: number | null; status: ScoreFactorStatus; reasons: string[] };
 
 type ScanKey =
   | 'accumulation'
@@ -404,6 +415,112 @@ export interface ScanFilters {
   volumeThreshold?: number;
   // Minimum latest trading value (latest close * latest volume).
   tradingValueThreshold?: number;
+  marketCapThreshold?: number;
+  minimumScore?: number;
+  maximumRiskScore?: number;
+  volumeLookbackDays?: number;
+  tradingValueLookbackDays?: number;
+  timeframe?: string;
+}
+
+const SCAN_TIMEFRAMES = new Set(['5m', '15m', '60m', '4H', '1D']);
+
+function scanTimeframe(value: unknown, market: string): '5m' | '15m' | '60m' | '4H' | '1D' {
+  const normalized = String(value ?? '1D') === '1H' ? '60m' : String(value ?? '1D');
+  if (String(market).toUpperCase() === 'US' && normalized === '4H') throw new Error('SCAN_TIMEFRAME_UNSUPPORTED:US:4H');
+  return SCAN_TIMEFRAMES.has(normalized) ? normalized as '5m' | '15m' | '60m' | '4H' | '1D' : '1D';
+}
+
+function boundedLookback(value: unknown, fallback = 20): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 60 ? parsed : fallback;
+}
+
+function candleDataState(candles: Awaited<ReturnType<typeof MarketDataService.getCandles>>, timeframe: string): ScanCard['dataState'] {
+  if (!candles.length) return 'unavailable';
+  if (candles.length < 20) return 'insufficient';
+  const rawTime = candles.at(-1)?.time;
+  const latest = typeof rawTime === 'number'
+    ? (rawTime > 10_000_000_000 ? rawTime : rawTime * 1_000)
+    : Date.parse(String(rawTime ?? ''));
+  if (!Number.isFinite(latest)) return 'delayed';
+  const staleAfter = timeframe === '1D'
+    ? 5 * 24 * 60 * 60_000
+    : timeframe === '4H'
+      ? 12 * 60 * 60_000
+      : timeframe === '60m'
+        ? 3 * 60 * 60_000
+        : timeframe === '15m'
+          ? 45 * 60_000
+          : 20 * 60_000;
+  return Date.now() - latest > staleAfter ? 'stale' : 'ok';
+}
+
+function dataStateRank(state: ScanCard['dataState']): number {
+  return state === 'ok' ? 4 : state === 'delayed' ? 3 : state === 'stale' ? 2 : state === 'insufficient' ? 1 : 0;
+}
+
+function factor(score: number | null, status: ScoreFactorStatus, reasons: string[]): ScoreFactor {
+  return { score: score == null ? null : Math.max(0, Math.min(100, Math.round(score))), status, reasons };
+}
+
+function scoreBreakdown(
+  cond: ScanConditions,
+  candles: Awaited<ReturnType<typeof MarketDataService.getCandles>>,
+  ctx: SignalContext,
+  liquidity: number | null,
+  dataState: ScanCard['dataState'],
+  marketChangePercent: number | null,
+): Record<string, ScoreFactor> {
+  const latestVolume = candles.at(-1)?.volume ?? null;
+  const baseline = avg(candles.slice(-21, -1).map((item) => item.volume));
+  const volumeRatio = latestVolume != null && baseline > 0 ? latestVolume / baseline : null;
+  const riskEvents = (ctx.negativeEvents?.length ?? 0);
+  const financialValues = [ctx.financials?.per, ctx.financials?.pbr, ctx.financials?.roe].filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
+  return {
+    trend: factor(cond.score, dataState === 'ok' ? 'ok' : dataState, [`기술 조건 점수 ${Math.round(cond.score)}`]),
+    volume: volumeRatio == null
+      ? factor(null, 'insufficient', ['거래량 평균을 계산할 봉이 부족합니다.'])
+      : factor(Math.min(100, volumeRatio * 50), dataState === 'ok' ? 'ok' : dataState, [`최근 평균 대비 거래량 ${volumeRatio.toFixed(2)}배`]),
+    liquidity: liquidity == null
+      ? factor(null, 'unavailable', ['거래대금 데이터가 제공되지 않았습니다.'])
+      : factor(Math.min(100, Math.log10(Math.max(liquidity, 1)) * 8), 'ok', [`가격×거래량 ${Math.round(liquidity)}`]),
+    technical: factor(cond.confidence, dataState === 'ok' ? 'ok' : dataState, [`기술 신뢰도 ${Math.round(cond.confidence)}`]),
+    news: ctx.newsScore == null
+      ? factor(null, 'unavailable', ['뉴스 점수를 제공하지 못했습니다.'])
+      : factor((ctx.newsScore + 100) / 2, 'ok', [`긍정 ${ctx.newsPositive ?? 0}건 · 부정 ${ctx.newsNegative ?? 0}건`]),
+    financial: financialValues.length && ctx.financialSource === 'live'
+      ? factor(50 + Math.min(25, Math.max(-25, (ctx.financials?.roe ?? 0))), 'ok', [`재무 지표 ${financialValues.length}개 사용`])
+      : factor(null, 'unavailable', ['사용 가능한 재무 지표가 없습니다.']),
+    market: marketChangePercent == null
+      ? factor(null, 'unavailable', ['시장 지수 등락률을 제공하지 못했습니다.'])
+      : factor(50 + marketChangePercent * 5, 'ok', [`시장 지수 등락률 ${marketChangePercent.toFixed(2)}%`]),
+    risk: ctx.riskDataAvailable
+      ? factor(Math.max(0, 100 - riskEvents * 20), 'ok', riskEvents ? [`부정 위험 이벤트 ${riskEvents}건 반영`] : ['공시·위험 데이터에서 확정된 부정 이벤트가 없습니다.'])
+      : factor(null, 'unavailable', ['공시·위험 데이터를 제공하지 못했습니다.']),
+  };
+}
+
+const SCORE_WEIGHTS: Record<string, number> = {
+  trend: 0.22,
+  volume: 0.12,
+  liquidity: 0.10,
+  technical: 0.20,
+  news: 0.10,
+  financial: 0.16,
+  market: 0.10,
+};
+
+export function computeLiveAiScore(breakdown: Record<string, ScoreFactor>): number {
+  const available = Object.entries(SCORE_WEIGHTS)
+    .map(([key, weight]) => ({ score: breakdown[key]?.status === 'ok' ? breakdown[key]?.score : null, weight }))
+    .filter((item): item is { score: number; weight: number } => typeof item.score === 'number' && Number.isFinite(item.score));
+  if (!available.length) return 0;
+  const weightTotal = available.reduce((sum, item) => sum + item.weight, 0);
+  const base = available.reduce((sum, item) => sum + item.score * item.weight, 0) / weightTotal;
+  const riskSafety = breakdown.risk?.score;
+  const riskDeduction = typeof riskSafety === 'number' ? Math.max(0, 100 - riskSafety) * 0.2 : 0;
+  return Math.max(0, Math.min(100, Math.round(base - riskDeduction)));
 }
 
 // Maximum scan cards returned (raised from 30 → ~100).
@@ -414,7 +531,7 @@ const SCAN_POOL_LIMIT = 200;
 // Full list of supported indicator keys (exact strings the frontend may send).
 // Both the internal keys AND their Korean labels are accepted by
 // normalizeSelected(); the labels are the canonical display strings.
-const SUPPORTED_INDICATORS: string[] = Object.values(SCAN_LABELS);
+const SUPPORTED_INDICATORS: string[] = Array.from(new Set([...Object.values(SCAN_LABELS), '시총']));
 
 async function scan(
   market: string,
@@ -427,11 +544,13 @@ async function scan(
   supportedIndicators: string[];
   scanned: number;
   excludedCount: number;
-  appliedFilters: { volumeThreshold: number | null; tradingValueThreshold: number | null };
+  appliedFilters: { volumeThreshold: number | null; tradingValueThreshold: number | null; marketCapThreshold: number | null; minimumScore: number | null; maximumRiskScore: number | null };
+  timeframe: string;
 }> {
   const keys = normalizeSelected(selected);
+  const includesMarketCap = selected.some((item) => item.trim() === '시총');
   const active: ScanKey[] =
-    keys.length > 0 ? keys : ['volume_accum', 'ma_breakout', 'ai_high'];
+    keys.length > 0 ? keys : includesMarketCap ? [] : ['volume_accum', 'ma_breakout', 'ai_high'];
 
   const volumeThreshold =
     typeof filters.volumeThreshold === 'number' && filters.volumeThreshold > 0
@@ -442,8 +561,31 @@ async function scan(
     filters.tradingValueThreshold > 0
       ? filters.tradingValueThreshold
       : null;
+  const marketCapThreshold =
+    typeof filters.marketCapThreshold === 'number' && Number.isFinite(filters.marketCapThreshold) && filters.marketCapThreshold > 0
+      ? filters.marketCapThreshold
+      : null;
+  const minimumScore = typeof filters.minimumScore === 'number' && Number.isFinite(filters.minimumScore)
+    ? Math.max(0, Math.min(100, filters.minimumScore))
+    : null;
+  const maximumRiskScore = typeof filters.maximumRiskScore === 'number' && Number.isFinite(filters.maximumRiskScore)
+    ? Math.max(0, Math.min(100, filters.maximumRiskScore))
+    : null;
+  const timeframe = scanTimeframe(filters.timeframe, market);
+  const volumeLookback = boundedLookback(filters.volumeLookbackDays);
+  const tradingValueLookback = boundedLookback(filters.tradingValueLookbackDays);
 
   const pool = CATALOG.filter(marketFilter(market)).slice(0, limit);
+  const targetMarkets = market === 'KR' || market === 'US' ? [market] : ['KR', 'US'];
+  const marketMoves = new Map<string, number>();
+  await Promise.all(targetMarkets.map(async (targetMarket) => {
+    try {
+      const quote = await MarketDataService.getQuote(targetMarket === 'KR' ? '^KS11' : '^GSPC');
+      if (Number.isFinite(quote.changePercent)) marketMoves.set(targetMarket, quote.changePercent);
+    } catch {
+      // Market context is optional and is reported as unavailable per card.
+    }
+  }));
 
   // 공급자 오류(데이터 조회 실패)와 조건 미충족을 구분해 집계한다.
   let providerErrors = 0;
@@ -452,7 +594,7 @@ async function scan(
     pool.map(async (entry): Promise<ScanCard | null> => {
       try {
         const [candles, quote, ctx] = await Promise.all([
-          MarketDataService.getCandles(entry.ticker, '1D'),
+          MarketDataService.getCandles(entry.ticker, timeframe),
           MarketDataService.getQuote(entry.ticker),
           buildContext(entry),
         ]);
@@ -466,13 +608,13 @@ async function scan(
         // "평소(최근 평균) 대비 %": 100 = 평균 수준, 150 = 평균보다 50% 많음.
         // We compare the latest bar against a ~20-bar recent-average baseline,
         // NOT an absolute share count (which would be meaningless as a filter).
-        const recentBars = candles.slice(-21, -1);
+        const recentBars = candles.slice(-(Math.max(volumeLookback, tradingValueLookback) + 1), -1);
         const latestVolume =
           candles.length > 0 ? candles[candles.length - 1].volume : null;
 
         if (volumeThreshold != null) {
           const avgVolume = recentBars.length
-            ? avg(recentBars.map((c) => c.volume))
+            ? avg(candles.slice(-(volumeLookback + 1), -1).map((c) => c.volume))
             : null;
           if (
             latestVolume == null ||
@@ -488,7 +630,7 @@ async function scan(
           const latestTradingValue =
             latestVolume != null ? latestVolume * quote.price : null;
           const avgTradingValue = recentBars.length
-            ? avg(recentBars.map((c) => c.volume * c.close))
+            ? avg(candles.slice(-(tradingValueLookback + 1), -1).map((c) => c.volume * c.close))
             : null;
           if (
             latestTradingValue == null ||
@@ -503,6 +645,14 @@ async function scan(
         const matched: string[] = [];
         const missing: string[] = [];
 
+        const marketCap = typeof quote.marketCap === 'number' && Number.isFinite(quote.marketCap) && quote.marketCap > 0
+          ? quote.marketCap
+          : null;
+        if (includesMarketCap) {
+          if (marketCap != null && (marketCapThreshold == null || marketCap >= marketCapThreshold)) matched.push('시총');
+          else missing.push('시총');
+        }
+
         for (const key of active) {
           const passed = conditionValue(key, cond, candles, ctx);
           const label = SCAN_LABELS[key];
@@ -516,10 +666,16 @@ async function scan(
         const report = await getReport(entry.ticker);
         const accumulation = report?.accumulation;
 
-        // Canonical investment score — same computeScores().overall used by the
-        // overview / analysis endpoints and movers rows. Do NOT invent a
-        // separate scoring formula for lists.
-        const { overall } = computeScores(entry.ticker);
+        const liquidity = typeof quote.volume === 'number' && Number.isFinite(quote.volume) ? quote.price * quote.volume : null;
+        const dataState = candleDataState(candles, timeframe);
+        const negativeEvents = ctx.negativeEvents?.length ?? 0;
+        const riskScore = ctx.riskDataAvailable
+          ? Math.min(100, negativeEvents * 25 + (dataState === 'stale' ? 20 : dataState === 'insufficient' ? 10 : 0))
+          : null;
+        const breakdown = scoreBreakdown(cond, candles, ctx, liquidity, dataState, marketMoves.get(entry.market) ?? null);
+        const liveScore = computeLiveAiScore(breakdown);
+        if (minimumScore != null && liveScore < minimumScore) return null;
+        if (maximumRiskScore != null && (riskScore == null || riskScore > maximumRiskScore)) return null;
 
         return {
           ticker: entry.ticker,
@@ -529,7 +685,7 @@ async function scan(
           assetType: classifyAssetType(entry.name, entry.market),
           price: quote.price,
           changePercent: quote.changePercent,
-          score: overall,
+          score: liveScore,
           confidence: cond.confidence,
           matched: Array.from(new Set(matched)),
           missing: Array.from(new Set(missing)),
@@ -544,7 +700,14 @@ async function scan(
               ? accumulation.strategy.stop
               : [`최근 지지선 이탈 시 ${Math.round(quote.price * 0.94 * 100) / 100} 부근 손절`],
           matchCount: matched.length,
-          selectedCount: active.length,
+          selectedCount: active.length + (includesMarketCap ? 1 : 0),
+          riskLevel: riskScore == null ? 'UNAVAILABLE' : riskScore >= 60 ? 'HIGH' : riskScore >= 25 ? 'MEDIUM' : 'LOW',
+          riskScore,
+          liquidity,
+          marketCap,
+          dataState,
+          analyzedAt: new Date().toISOString(),
+          scoreBreakdown: breakdown,
         };
       } catch {
         // 데이터 조회 실패(공급자 오류) — 조건 미충족(null 반환 경로)과 구분.
@@ -566,18 +729,19 @@ async function scan(
 
   const cards = settled
     .filter((card): card is ScanCard => card !== null)
-    .sort((a, b) => b.matchCount - a.matchCount || b.score - a.score)
+    .sort((a, b) => b.score - a.score || b.confidence - a.confidence || (b.liquidity ?? -1) - (a.liquidity ?? -1) || b.matchCount - a.matchCount || (a.riskScore ?? 100) - (b.riskScore ?? 100) || dataStateRank(b.dataState) - dataStateRank(a.dataState))
     .slice(0, SCAN_CARD_LIMIT);
 
   const survived = settled.filter((card) => card !== null).length;
 
   return {
     cards,
-    selected: active.map((key) => SCAN_LABELS[key]),
+    selected: [...active.map((key) => SCAN_LABELS[key]), ...(includesMarketCap ? ['시총'] : [])],
     supportedIndicators: SUPPORTED_INDICATORS,
     scanned: pool.length,
     excludedCount: pool.length - survived,
-    appliedFilters: { volumeThreshold, tradingValueThreshold },
+    appliedFilters: { volumeThreshold, tradingValueThreshold, marketCapThreshold, minimumScore, maximumRiskScore },
+    timeframe,
   };
 }
 
