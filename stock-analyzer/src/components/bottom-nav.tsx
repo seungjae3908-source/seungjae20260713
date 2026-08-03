@@ -2,18 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import {
   BarChart3, BookOpen, Bot, BriefcaseBusiness, CandlestickChart, Home, Layers3, Newspaper,
-  Search, Settings, Star, TrendingUp,
+  Power, Search, Settings, Star, TrendingUp,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 import type { MemberCapability } from '../../../packages/member-access/src/index.js';
 
 const INFO_PATHS = ['/stock-info', '/learn', '/market-overview', '/portfolio', '/assets', '/ai-chat'];
-const TECH_PATHS = ['/scanner', '/ai-chart'];
+const TECH_PATHS = ['/scanner', '/ai-chart', '/auto-trading'];
 
 const TECH_MENU_ITEMS = [
   { href: '/scanner', label: 'AI 검색기', icon: Search },
   { href: '/ai-chart', label: 'AI 차트 분석기', icon: CandlestickChart },
+  { href: '/auto-trading', label: '자동매매', icon: Power },
 ] as const;
 
 const INFO_MENU_ITEMS: Array<{
