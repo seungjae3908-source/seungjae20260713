@@ -8,6 +8,7 @@ on:
       - .github/workflows/staging-dispatch-bridge.yml
       - .github/workflows/staging-readiness.yml
       - api-server/scripts/verify-phase10-deployment-safety.mjs
+      - api-server/scripts/verify-phase10-staging-dispatch-run-confirmation.mjs
       - docs/staging-dispatch-bridge.md
 
 permissions:
@@ -31,6 +32,7 @@ jobs:
         with:
           node-version: "20"
       - run: node api-server/scripts/verify-phase10-deployment-safety.mjs
+      - run: node api-server/scripts/verify-phase10-staging-dispatch-run-confirmation.mjs
 
   dispatch:
     name: Dispatch owner-approved isolated staging readiness
@@ -45,7 +47,7 @@ jobs:
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/run-staging ')
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     permissions:
       actions: write
       contents: read
@@ -192,6 +194,7 @@ jobs:
         with:
           script: |
             const workflowId = 'staging-readiness.yml';
+            const apiVersion = '2026-03-10';
             const bridgeRunUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const workflow = await github.rest.actions.getWorkflow({
               owner: context.repo.owner,
@@ -203,21 +206,18 @@ jobs:
               return;
             }
 
-            const listMatchingRuns = async () => {
-              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForWorkflow, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: workflowId,
-                event: 'workflow_dispatch',
-                branch: 'main',
-                per_page: 100,
-              });
-              return runs
-                .filter((run) => run.event === 'workflow_dispatch' && run.head_sha === process.env.TARGET_SHA)
-                .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
-            };
-
-            const existingActiveRun = (await listMatchingRuns()).find((run) => run.status !== 'completed');
+            const matchingRuns = await github.paginate(github.rest.actions.listWorkflowRunsForWorkflow, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              event: 'workflow_dispatch',
+              branch: 'main',
+              per_page: 100,
+            });
+            const existingActiveRun = matchingRuns
+              .filter((run) => run.event === 'workflow_dispatch' && run.head_sha === process.env.TARGET_SHA)
+              .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
+              .find((run) => run.status !== 'completed');
             if (existingActiveRun) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
@@ -239,8 +239,7 @@ jobs:
               return;
             }
 
-            const dispatchStartedAt = Date.now();
-            await github.rest.actions.createWorkflowDispatch({
+            const dispatchResponse = await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: workflowId,
@@ -251,41 +250,72 @@ jobs:
                 run_full_validation: process.env.RUN_FULL_VALIDATION,
                 run_destructive_recovery_drill: process.env.RUN_DESTRUCTIVE_RECOVERY_DRILL,
               },
+              return_run_details: true,
+              headers: {
+                accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': apiVersion,
+              },
             });
 
-            let dispatchedRun = null;
-            for (let attempt = 1; attempt <= 15; attempt += 1) {
-              await new Promise((resolve) => setTimeout(resolve, attempt === 1 ? 2000 : 4000));
-              const matchingRuns = await listMatchingRuns();
-              dispatchedRun = matchingRuns.find((run) => Date.parse(run.created_at) >= dispatchStartedAt - 5000) ?? null;
-              if (dispatchedRun) break;
-            }
-
-            if (!dispatchedRun) {
+            const returnedRunId = Number(dispatchResponse.data?.workflow_run_id);
+            if (dispatchResponse.status !== 200 || !Number.isSafeInteger(returnedRunId) || returnedRunId <= 0) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: Number(process.env.CONTROL_ISSUE),
                 body: [
-                  'Staging readiness dispatch failed to materialize a workflow run.',
+                  'Staging readiness dispatch did not return workflow run details.',
                   '',
                   `- Target SHA: \`${process.env.TARGET_SHA}\``,
-                  '- Dispatch API call returned without an error: `true`',
-                  '- Matching Staging Readiness Run created: `false`',
+                  `- API version: \`${apiVersion}\``,
+                  `- HTTP status: \`${dispatchResponse.status}\``,
+                  '- Valid Run ID returned: `false`',
                   `- Bridge Run ID: \`${context.runId}\``,
                   `- Bridge Run: [Open bridge run](${bridgeRunUrl})`,
                   '- Production deployment executed: `false`',
                   `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
                 ].join('\n'),
               });
-              core.setFailed('Dispatch API returned without error, but no matching Staging Readiness workflow run was created.');
+              core.setFailed('Current workflow dispatch API did not return a valid workflow Run ID.');
+              return;
+            }
+
+            const runResponse = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: returnedRunId,
+            });
+            const dispatchedRun = runResponse.data;
+            const runMatches = dispatchedRun.event === 'workflow_dispatch'
+              && dispatchedRun.head_branch === 'main'
+              && dispatchedRun.head_sha === process.env.TARGET_SHA;
+            if (!runMatches) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number(process.env.CONTROL_ISSUE),
+                body: [
+                  'Staging readiness dispatch returned a mismatched workflow run.',
+                  '',
+                  `- Target SHA: \`${process.env.TARGET_SHA}\``,
+                  `- Returned Run ID: \`${returnedRunId}\``,
+                  `- Returned event: \`${dispatchedRun.event}\``,
+                  `- Returned branch: \`${dispatchedRun.head_branch}\``,
+                  `- Returned SHA: \`${dispatchedRun.head_sha}\``,
+                  `- Bridge Run ID: \`${context.runId}\``,
+                  `- Bridge Run: [Open bridge run](${bridgeRunUrl})`,
+                  '- Production deployment executed: `false`',
+                  `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+                ].join('\n'),
+              });
+              core.setFailed('Workflow dispatch API returned a run that did not match the exact requested main revision.');
               return;
             }
 
             const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              run_id: dispatchedRun.id,
+              run_id: returnedRunId,
               per_page: 100,
             });
             const jobLines = jobs.length
@@ -301,7 +331,8 @@ jobs:
                 '',
                 `- Target SHA: \`${process.env.TARGET_SHA}\``,
                 `- Action: \`${process.env.STAGING_ACTION}\``,
-                `- Run ID: \`${dispatchedRun.id}\``,
+                `- API version: \`${apiVersion}\``,
+                `- Run ID: \`${returnedRunId}\``,
                 `- Run: [Open GitHub Actions run](${dispatchedRun.html_url})`,
                 `- Status: \`${dispatchedRun.status}\``,
                 `- Full account/browser validation: \`${process.env.RUN_FULL_VALIDATION}\``,
