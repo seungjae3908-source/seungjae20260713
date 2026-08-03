@@ -42,7 +42,10 @@ assert(!staging.includes('https://lsj119.duckdns.org'), 'staging workflow must n
 assert(staging.includes('/srv/seungjae-staging'), 'staging workflow must use the isolated staging path');
 assert(staging.includes('STAGING_DATABASE_URL'), 'staging workflow must require a staging database');
 assert(staging.includes('STAGING_AI_API_KEY'), 'staging workflow must require a server-side staging AI key');
-assert(staging.includes('run_destructive_recovery_drill'), 'staging workflow must require explicit destructive drill consent');
+assert(/run_destructive_recovery_drill:[\s\S]*?default:\s*false/.test(staging), 'staging workflow must default destructive recovery to false');
+assert(!staging.includes('Require explicit destructive drill consent'), 'staging workflow must not force the destructive recovery drill');
+assert(/Run explicitly approved staging DB migration and rollback drill[\s\S]*?if:\s*inputs\.run_destructive_recovery_drill == true[\s\S]*?verify-phase8-db\.sh/.test(staging), 'staging DB rollback drill must run only with explicit destructive approval');
+assert(/Run destructive staging-only recovery and log-redaction drills[\s\S]*?if:\s*inputs\.run_destructive_recovery_drill == true[\s\S]*?--remote/.test(staging), 'staging file deletion and recovery drills must run only with explicit destructive approval');
 assert(staging.includes('scp -q'), 'staging secrets must be transferred through a temporary protected file');
 assert(!staging.includes("printf 'TARGET_SHA=%q STAGING_BASE_URL=%q STAGING_DATABASE_URL=%q STAGING_AI_API_KEY=%q"), 'staging secrets must not be placed in the remote process command line');
 assert(!staging.includes('운영 배포 승인 가능'), 'staging success alone must never grant production approval');
@@ -56,7 +59,8 @@ assert(dispatchBridge.includes("github.event.issue.state == 'open'"), 'dispatch 
 assert(dispatchBridge.includes("github.event.issue.title == 'Staging Readiness Control'"), 'dispatch bridge must require the exact control issue title');
 assert(dispatchBridge.includes("github.event.comment.user.login == 'seungjae3908-source'"), 'dispatch bridge must require the repository owner login');
 assert(dispatchBridge.includes("github.event.comment.author_association == 'OWNER'"), 'dispatch bridge must require OWNER author association');
-assert(dispatchBridge.includes('/run-staging ([0-9a-fA-F]{40}) --destructive'), 'dispatch bridge must require the exact destructive staging command');
+assert(dispatchBridge.includes('/run-staging ([0-9a-fA-F]{40})( --destructive)?'), 'dispatch bridge must default to non-destructive staging and accept only the explicit destructive flag');
+assert(dispatchBridge.includes("destructive=${match[2] ? 'true' : 'false'}"), 'dispatch bridge must derive destructive approval only from the explicit flag');
 assert(dispatchBridge.includes('git merge-base --is-ancestor'), 'dispatch bridge must require a SHA contained in main');
 assert(dispatchBridge.includes('actions: write'), 'dispatch job must explicitly request Actions write permission');
 assert(dispatchBridge.includes('issues: write'), 'dispatch job must explicitly request issue comment permission');
@@ -74,7 +78,8 @@ for (const status of [
 }
 assert(dispatchBridge.includes("workflowId = 'staging-readiness.yml'"), 'dispatch bridge must target only the staging readiness workflow');
 assert(dispatchBridge.includes("ref: 'main'"), 'dispatch bridge must dispatch the workflow from main');
-assert(dispatchBridge.includes("run_destructive_recovery_drill: 'true'"), 'dispatch bridge must always enable the destructive staging drill');
+assert(dispatchBridge.includes('run_destructive_recovery_drill: process.env.RUN_DESTRUCTIVE_RECOVERY_DRILL'), 'dispatch bridge must forward the parsed destructive approval state');
+assert(!dispatchBridge.includes("run_destructive_recovery_drill: 'true'"), 'dispatch bridge must not force the destructive staging drill');
 assert(dispatchBridge.includes('actions.createWorkflowDispatch'), 'dispatch bridge must use the workflow dispatch API');
 assert(!dispatchBridge.includes('production-deploy.yml'), 'dispatch bridge must never target the production deployment workflow');
 assert(!dispatchBridge.includes('/opt/stock-app'), 'dispatch bridge must never reference the production install path');
@@ -105,4 +110,4 @@ for (const marker of [
 assert(stagingVerifier.includes('no staging log files were available for inspection'), 'missing logs must fail rather than count as a clean scan');
 assert(stagingVerifier.includes('configured staging secret or personal value found in logs'), 'known staging secrets and personal values must be checked in logs');
 
-console.log('[phase10-deployment-safety] production is manual-only; staging dispatch is owner-only through control issue #23; verified main-push CI provenance is required; staging secrets remain isolated; destructive recovery evidence is mandatory; production approval remains on hold');
+console.log('[phase10-deployment-safety] production is manual-only; staging dispatch is owner-only through control issue #23; verified main-push CI provenance is required; staging secrets remain isolated; destructive recovery is explicit opt-in and defaults to skipped; production approval remains on hold');
