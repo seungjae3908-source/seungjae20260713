@@ -9,7 +9,7 @@ set -euo pipefail
 export PGPASSWORD
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PSQL=(psql --host "${PGHOST}" --port "${PGPORT}" --username "${PGUSER}" --dbname "${PGDATABASE}" --no-psqlrc --set=ON_ERROR_STOP=1)
+PSQL=(psql --host "$PGHOST" --port "$PGPORT" --username "$PGUSER" --dbname "$PGDATABASE" --no-psqlrc --set=ON_ERROR_STOP=1)
 
 run_sql() {
   local label="$1"
@@ -18,7 +18,19 @@ run_sql() {
   "${PSQL[@]}" --file "${ROOT_DIR}/${path}"
 }
 
-run_sql "create isolated auth harness" "api-server/supabase/test/phase8_auth_harness.sql"
+run_sql "create empty Supabase auth bootstrap harness" "api-server/supabase/test/staging_bootstrap_auth_harness.sql"
+
+echo "[phase8-db] apply isolated staging bootstrap"
+STAGING_SUPABASE_URL=https://stagingbootstrapci.supabase.co \
+STAGING_BOOTSTRAP_CI=true \
+node "${ROOT_DIR}/api-server/scripts/bootstrap-staging-supabase.mjs"
+
+echo "[phase8-db] reapply isolated staging bootstrap idempotently"
+STAGING_SUPABASE_URL=https://stagingbootstrapci.supabase.co \
+STAGING_BOOTSTRAP_CI=true \
+node "${ROOT_DIR}/api-server/scripts/bootstrap-staging-supabase.mjs"
+
+run_sql "seed exact four-tier auth fixtures" "api-server/supabase/test/phase8_auth_harness.sql"
 run_sql "apply Phase 7 migration" "api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql"
 run_sql "apply Phase 8 permission migration" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql"
 run_sql "apply Phase 8 paper capability RLS" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
@@ -56,4 +68,4 @@ run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.s
 run_sql "recheck trade automation RLS after reapply" "api-server/supabase/test/trade_automation_rls_integration.sql"
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
-echo "[phase8-db] disposable database verification completed"
+echo "[phase8-db] disposable database and staging bootstrap verification completed"
