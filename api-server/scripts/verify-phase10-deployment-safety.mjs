@@ -83,6 +83,7 @@ assert(!dispatchBridge.includes('production-deploy.yml'), 'staging bridge must n
 
 for (const marker of [
   'target_sha', 'deployed_sha', 'total', 'passed', 'failed', 'skipped',
+  'bootstrap_status', 'bootstrap_schema_version', 'bootstrap_idempotency_passes',
   'console_errors', 'unexpected_http_errors', 'pm2_status', 'restart_count',
   'ephemeral_accounts_created', 'ephemeral_accounts_deleted', 'ephemeral_profiles_remaining',
   'release_ready', 'verdict',
@@ -90,6 +91,7 @@ for (const marker of [
   assert(verdictBuilder.includes(marker), `verdict builder is missing ${marker}`);
 }
 assert(verdictBuilder.includes('failed === 0 && skipped === 0'), 'release_ready must require failed=0 and skipped=0');
+assert(verdictBuilder.includes('staging-bootstrap-verification.json'), 'verdict must require bootstrap evidence');
 assert(verdictBuilder.includes('staging-account-provisioning.json'), 'verdict must require ephemeral account provisioning evidence');
 assert(verdictBuilder.includes('staging-account-cleanup.json'), 'verdict must require ephemeral account cleanup evidence');
 assert(verdictVerifier.includes('verdict.release_ready !== true'), 'production verdict verifier must require release_ready=true');
@@ -204,6 +206,16 @@ const temp = await mkdtemp(path.join(os.tmpdir(), 'staging-verdict-contract-'));
 try {
   await mkdir(temp, { recursive: true });
   const sha = 'a'.repeat(40);
+  await writeFile(path.join(temp, 'staging-bootstrap-verification.json'), JSON.stringify({
+    status: 'passed',
+    schema_version: '20260804.1',
+    atomic_transaction: true,
+    idempotency_passes: 2,
+    auth_users_copied: 0,
+    profile_rows_copied: 0,
+    storage_objects_copied: 0,
+    credentials_recorded: false,
+  }));
   await writeFile(path.join(temp, 'playwright-report.json'), JSON.stringify({
     suites: [{ specs: [{ title: 'sample', tests: [{ projectName: 'chromium', status: 'expected', results: [{ status: 'passed' }] }] }] }],
   }));
@@ -247,4 +259,4 @@ try {
   await rm(temp, { recursive: true, force: true });
 }
 
-console.log('[phase10-deployment-safety] ephemeral four-tier staging accounts, cleanup, production-project rejection, full staging validation, zero-skip verdict artifact, exact-SHA production revalidation, manual protected production deployment, and rollback contract verified');
+console.log('[phase10-deployment-safety] ephemeral four-tier staging accounts, cleanup, production-project rejection, atomic bootstrap evidence, full staging validation, zero-skip verdict artifact, exact-SHA production revalidation, manual protected production deployment, and rollback contract verified');
