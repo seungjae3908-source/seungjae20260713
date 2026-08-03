@@ -16,6 +16,7 @@ import backtestsRouter from './backtests';
 import paperTradingRouter from './paper-trading';
 import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
+import aiChatRouter from './ai-chat';
 import {
   requireAdmin,
   requireAuthenticated,
@@ -71,6 +72,7 @@ router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/', paperJournalRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
+router.use('/', aiChatRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
 router.use('/kiwoom', kiwoomRouter);

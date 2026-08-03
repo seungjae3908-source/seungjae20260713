@@ -214,16 +214,32 @@ export async function getQuote(
 export const quote = getQuote;
 
 // 시간프레임별 야후 차트 range/interval 매핑 (차트용 장기 데이터).
-function chartParams(tf?: string): { range: string; interval: string } {
+export function yahooChartParams(tf?: string): { range: string; interval: string } {
   // 주의: range=max는 야후가 굵은 버킷(약 168개)으로 뭉개서 반환한다.
   // period1/period2 명시가 전체 이력을 올바른 간격으로 준다.
   switch (String(tf ?? '1D')) {
+    case '1m':
+      return { range: '7d', interval: '1m' };
+    case '5m':
+      return { range: '1mo', interval: '5m' };
+    case '15m':
+      return { range: '1mo', interval: '15m' };
+    case '30m':
+      return { range: '1mo', interval: '30m' };
+    case '60m':
+    case '1H':
+      return { range: '2y', interval: '60m' };
+    case '3m':
+    case '4H':
+      throw new Error(`YAHOO_UNSUPPORTED_TIMEFRAME:${String(tf)}`);
     case '1W':
       return { range: '', interval: '1wk' };
     case '1M':
       return { range: '', interval: '1mo' };
-    default:
+    case '1D':
       return { range: '10y', interval: '1d' };
+    default:
+		throw new Error(`YAHOO_UNSUPPORTED_TIMEFRAME:${String(tf)}`);
   }
 }
 
@@ -233,7 +249,7 @@ export async function getCandles(
 ): Promise<Candle[]> {
   const ticker = getTickerFromEntry(entryOrTicker);
   const symbol = yahooSymbol(ticker);
-  const result = await fetchYahooChart(symbol, chartParams(timeframe));
+  const result = await fetchYahooChart(symbol, yahooChartParams(timeframe));
   const quote = result.indicators?.quote?.[0];
 
   if (!result.timestamp?.length || !quote) return [];

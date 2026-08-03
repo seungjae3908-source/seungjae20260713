@@ -838,10 +838,11 @@ async function tryCandlesProvider(
     }
   }
 
+  const intraday = ['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H'].includes(timeframeText);
   const attempts: Array<{ name: string; run: () => Promise<unknown> }> =
     marketValue === 'KR'
       ? [
-          { name: 'naver', run: () => naver.getCandles(entry) },
+		  ...(!intraday ? [{ name: 'naver', run: () => naver.getCandles(entry) }] : []),
           { name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) },
         ]
       : [{ name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) }];
@@ -1188,8 +1189,14 @@ export class MarketDataService {
     // (Supabase 영속 캐시에 남아 있을 수 있는 구버전 배열과 충돌 방지)
     const cacheKey = `candles:v2:${cleanTicker(ticker)}:${timeframeText}`;
     const disk = await readCandleDiskCache(ticker, timeframeText);
+    const aggregateDays = ({
+      '3D': 3,
+      '5D': 5,
+      '10D': 10,
+      '20D': 20,
+    } as Record<string, number>)[timeframeText];
 
-    if (disk?.fresh) {
+    if (disk?.fresh && !aggregateDays) {
       return {
         candles: disk.candles,
         provider: disk.provider,
@@ -1197,23 +1204,15 @@ export class MarketDataService {
       };
     }
 
-    const aggregateDays = ({
-      '3D': 3,
-      '5D': 5,
-      '10D': 10,
-    } as Record<string, number>)[timeframeText];
-
-    if (!disk && aggregateDays) {
-      const dailyDisk = await readCandleDiskCache(ticker, '1D');
-      if (dailyDisk?.candles.length) {
-        const aggregated = aggregateCachedCandles(dailyDisk.candles, aggregateDays);
-        await writeCandleDiskCache(ticker, timeframeText, aggregated, dailyDisk.provider);
-        return {
-          candles: aggregated,
-          provider: dailyDisk.provider,
-          fetchedAt: new Date(dailyDisk.savedAt).toISOString(),
-        };
-      }
+    if (aggregateDays) {
+      const daily = await this.getCandlesMeta(ticker, '1D');
+      const aggregated = aggregateCachedCandles(daily.candles, aggregateDays);
+      await writeCandleDiskCache(ticker, timeframeText, aggregated, daily.provider);
+      return {
+        candles: aggregated,
+        provider: `${daily.provider}:aggregated-${aggregateDays}D`,
+        fetchedAt: daily.fetchedAt,
+      };
     }
 
     const load = async () => {
