@@ -23,7 +23,7 @@ function fallbackSelection(): AnalysisSelection {
   };
 }
 
-export default function AiChartPage({ embedded = false }: { embedded?: boolean } = {}) {
+export default function AiChartPage({ embedded = false }: { embedded?: boolean }) {
   const [location, navigate] = useLocation();
   const state = useAnalysisSelection();
   const fromUrl = useMemo(() => selectionFromSearch(location.includes('?') ? location.slice(location.indexOf('?')) : ''), [location]);
