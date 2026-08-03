@@ -1,4 +1,5 @@
-import { TradeAutomationSettings, type TradeAutomationStatus } from '@/components/trade-automation-settings';
+import AutoTradingPage from '@/pages/auto-trading';
+import type { TradeAutomationStatus } from '@/components/trade-automation-settings';
 
 const FIXTURE: TradeAutomationStatus = {
   policy: {
@@ -20,7 +21,5 @@ const FIXTURE: TradeAutomationStatus = {
 };
 
 export default function Phase12TradeAutomationE2EPage() {
-  return <main className="min-h-[100dvh] overflow-y-auto bg-background p-3">
-    <div className="mx-auto max-w-3xl"><h1 className="mb-3 text-xl font-black">거래 자동화 안전 설정</h1><TradeAutomationSettings fixture={FIXTURE} /></div>
-  </main>;
+  return <AutoTradingPage fixture={FIXTURE} />;
 }
