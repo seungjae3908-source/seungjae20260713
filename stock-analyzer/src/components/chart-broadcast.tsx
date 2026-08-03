@@ -37,11 +37,16 @@ import {
 import { authorizedFetch } from "@/lib/auth-fetch";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import {
+  buildChartAnalysis,
+  shouldAppendTimeline,
+  type ChartAnalysis,
+} from "@/lib/chart-analysis";
 
 export type ChartBroadcastMarket = "KR" | "US";
 
 type AnyObj = Record<string, any>;
-type ChartTimeframe =
+export type ChartTimeframe =
 	| "1m"
 	| "3m"
 	| "5m"
@@ -83,6 +88,7 @@ type CandlePoint = {
 	low: number;
 	close: number;
 	volume: number;
+	isClosed: boolean;
 };
 
 type SearchRow = {
@@ -105,7 +111,7 @@ type LevelSnapshot = {
 
 type MarketContext = {
 	label: string;
-	changePercent: number;
+	changePercent: number | null;
 	bias: number;
 	sources: string[];
 };
@@ -129,7 +135,7 @@ type TechnicalSnapshot = {
 	bullishPatternScore: number;
 	bearishPatternScore: number;
 	marketLabel: string;
-	marketChangePercent: number;
+	marketChangePercent: number | null;
 	marketBias: number;
 };
 
@@ -149,6 +155,8 @@ type FeedItem = {
 	at: Date;
 	signal: SignalKind;
 	text: string;
+	status: ChartAnalysis["status"];
+	analysis: ChartAnalysis;
 };
 
 type ChartPayload = {
@@ -178,6 +186,9 @@ export type ChartBroadcastSignal = {
 type Props = {
 	market: ChartBroadcastMarket;
 	onSignalChange?: (signal: ChartBroadcastSignal) => void;
+	onAnalysisChange?: (analysis: ChartAnalysis) => void;
+	onSelectionChange?: (selection: { ticker: string; name: string; market: ChartBroadcastMarket; timeframe: ChartTimeframe }) => void;
+	initialSelection?: { ticker: string; name: string; market: ChartBroadcastMarket; timeframe?: string } | null;
 };
 
 const TIMEFRAMES: Array<{ key: ChartTimeframe; label: string }> = [
@@ -376,14 +387,24 @@ function normalizeCandles(rows: AnyObj[], timeframe: ChartTimeframe): CandlePoin
 			const sourceTime = String(
 				row?.time ?? row?.date ?? row?.datetime ?? row?.timestamp ?? row?.dt ?? "",
 			);
+			const time = candleTime(sourceTime, index, rows.length, timeframe);
+			const explicitClosed = typeof row?.isClosed === "boolean"
+				? row.isClosed
+				: typeof row?.closed === "boolean"
+					? row.closed
+					: typeof row?.final === "boolean"
+						? row.final
+						: null;
+			const derivedClosed = timeframe !== "5D" && timeframe !== "20D" && Date.now() / 1000 >= Number(time) + timeframeSeconds(timeframe) + 60;
 			return {
-				time: candleTime(sourceTime, index, rows.length, timeframe),
+				time,
 				sourceTime,
 				open,
 				high: Math.max(high, open, close),
 				low: Math.min(low, open, close),
 				close,
 				volume: Math.max(volume ?? 0, 0),
+				isClosed: explicitClosed ?? derivedClosed,
 			} satisfies CandlePoint;
 		})
 		.filter((row: CandlePoint | null): row is CandlePoint => row != null)
@@ -448,11 +469,11 @@ async function fetchMarketContext(market: ChartBroadcastMarket): Promise<MarketC
 	const changes = source
 		.map((row: AnyObj) => Number(row?.changePercent ?? row?.change_pct ?? row?.flu_rt ?? row?.changeRate))
 		.filter((value: number) => Number.isFinite(value));
-	const averageChange = changes.length ? changes.reduce((sum: number, value: number) => sum + value, 0) / changes.length : 0;
+	const averageChange = changes.length ? changes.reduce((sum: number, value: number) => sum + value, 0) / changes.length : null;
 	return {
 		label: market === "KR" ? "코스피·코스닥" : "S&P500·나스닥",
 		changePercent: averageChange,
-		bias: clamp(averageChange * 4, -10, 10),
+		bias: averageChange == null ? 0 : clamp(averageChange * 4, -10, 10),
 		sources: tickers,
 	};
 }
@@ -805,7 +826,9 @@ function buildOpinion(snapshot: TechnicalSnapshot): LiveOpinion {
 			? -snapshot.marketBias
 			: 0;
 	const confidence = Math.round(clamp(52 + trendScore + volumeScore + rsiScore + signalScore + patternScore + directionAdjustedMarket, 5, 95));
-	const marketText = `${snapshot.marketLabel} ${snapshot.marketChangePercent >= 0 ? "+" : ""}${snapshot.marketChangePercent.toFixed(2)}%`;
+	const marketText = snapshot.marketChangePercent == null
+		? `${snapshot.marketLabel} unavailable`
+		: `${snapshot.marketLabel} ${snapshot.marketChangePercent >= 0 ? "+" : ""}${snapshot.marketChangePercent.toFixed(2)}%`;
 	const patternText = snapshot.patterns.length ? ` · 패턴 ${snapshot.patterns.join("/")}` : "";
 	summary = `${summary} · 시장 ${marketText}${patternText}`;
 
@@ -922,14 +945,19 @@ function ChartCanvas({
 	overlays,
 	snapshot,
 	opinion,
+	resetKey,
+	focusTime,
 }: {
 	candles: CandlePoint[];
 	timeframe: ChartTimeframe;
 	overlays: Record<OverlayKey, boolean>;
 	snapshot: TechnicalSnapshot;
 	opinion: LiveOpinion;
+	resetKey: string;
+	focusTime?: number;
 }) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
+	const instanceRef = useRef<AnyObj | null>(null);
 
 	useEffect(() => {
 		const container = containerRef.current;
@@ -970,30 +998,21 @@ function ChartCanvas({
 			priceLineVisible: true,
 			lastValueVisible: true,
 		});
-		candleSeries.setData(
-			candles.map((row) => ({
-				time: row.time,
-				open: row.open,
-				high: row.high,
-				low: row.low,
-				close: row.close,
-			})),
-		);
-
-		if (overlays.ma5) addLine(chart, seriesSma(candles, 5), { color: "#f59e0b", lineWidth: 1, title: "MA5" });
-		if (overlays.ma20) addLine(chart, seriesSma(candles, 20), { color: "#8b5cf6", lineWidth: 2, title: "MA20" });
-		if (overlays.ma60) addLine(chart, seriesSma(candles, 60), { color: "#10b981", lineWidth: 1, title: "MA60" });
-		if (overlays.ma120) addLine(chart, seriesSma(candles, 120), { color: "#ec4899", lineWidth: 1, title: "MA120" });
+		const series: AnyObj = { chart, candle: candleSeries, priceLines: [] };
+		if (overlays.ma5) series.ma5 = addLine(chart, seriesSma(candles, 5), { color: "#f59e0b", lineWidth: 1, title: "MA5" });
+		if (overlays.ma20) series.ma20 = addLine(chart, seriesSma(candles, 20), { color: "#8b5cf6", lineWidth: 2, title: "MA20" });
+		if (overlays.ma60) series.ma60 = addLine(chart, seriesSma(candles, 60), { color: "#10b981", lineWidth: 1, title: "MA60" });
+		if (overlays.ma120) series.ma120 = addLine(chart, seriesSma(candles, 120), { color: "#ec4899", lineWidth: 1, title: "MA120" });
 
 		if (overlays.bollinger) {
 			const band = seriesBollinger(candles);
-			addLine(chart, band.upper, { color: "rgba(14,165,233,0.72)", lineWidth: 1, title: "BB 상단" });
-			addLine(chart, band.middle, { color: "rgba(14,165,233,0.35)", lineWidth: 1, lineStyle: LineStyle.Dashed, title: "BB 중심" });
-			addLine(chart, band.lower, { color: "rgba(14,165,233,0.72)", lineWidth: 1, title: "BB 하단" });
+			series.bollingerUpper = addLine(chart, band.upper, { color: "rgba(14,165,233,0.72)", lineWidth: 1, title: "BB 상단" });
+			series.bollingerMiddle = addLine(chart, band.middle, { color: "rgba(14,165,233,0.35)", lineWidth: 1, lineStyle: LineStyle.Dashed, title: "BB 중심" });
+			series.bollingerLower = addLine(chart, band.lower, { color: "rgba(14,165,233,0.72)", lineWidth: 1, title: "BB 하단" });
 		}
 
 		if (overlays.vwap) {
-			addLine(chart, seriesVwap(candles), {
+			series.vwap = addLine(chart, seriesVwap(candles), {
 				color: "#06b6d4",
 				lineWidth: 2,
 				lineStyle: LineStyle.Dashed,
@@ -1009,13 +1028,7 @@ function ChartCanvas({
 				priceLineVisible: false,
 			});
 			volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-			volumeSeries.setData(
-				candles.map((row) => ({
-					time: row.time,
-					value: row.volume,
-					color: row.close >= row.open ? "rgba(239,68,68,0.42)" : "rgba(59,130,246,0.42)",
-				})),
-			);
+			series.volume = volumeSeries;
 		}
 
 		if (overlays.levels) {
@@ -1027,20 +1040,17 @@ function ChartCanvas({
 			];
 			for (const line of priceLines) {
 				if (!Number.isFinite(line.price)) continue;
-				candleSeries.createPriceLine({
+				series.priceLines.push(candleSeries.createPriceLine({
 					price: line.price,
 					color: line.color,
 					lineWidth: 1,
 					lineStyle: line.style,
 					axisLabelVisible: true,
 					title: line.title,
-				});
+				}));
 			}
 		}
-
-		if (overlays.arrows) candleSeries.setMarkers(markerRows(candles, opinion) as any);
-
-		chart.timeScale().fitContent();
+		instanceRef.current = series;
 		const observer = new ResizeObserver((entries) => {
 			const width = entries[0]?.contentRect.width;
 			if (width) chart.applyOptions({ width: Math.max(width, 1) });
@@ -1048,29 +1058,93 @@ function ChartCanvas({
 		observer.observe(container);
 		return () => {
 			observer.disconnect();
+			instanceRef.current = null;
 			chart.remove();
 		};
-	}, [candles, timeframe, overlays, snapshot, opinion]);
+	}, [timeframe, overlays]);
+
+	useEffect(() => {
+		const series = instanceRef.current;
+		if (!series) return;
+		series.candle.setData(candles.map((row) => ({ time: row.time, open: row.open, high: row.high, low: row.low, close: row.close })));
+		series.ma5?.setData(seriesSma(candles, 5));
+		series.ma20?.setData(seriesSma(candles, 20));
+		series.ma60?.setData(seriesSma(candles, 60));
+		series.ma120?.setData(seriesSma(candles, 120));
+		if (series.bollingerUpper || series.bollingerMiddle || series.bollingerLower) {
+			const band = seriesBollinger(candles);
+			series.bollingerUpper?.setData(band.upper);
+			series.bollingerMiddle?.setData(band.middle);
+			series.bollingerLower?.setData(band.lower);
+		}
+		series.vwap?.setData(seriesVwap(candles));
+		series.volume?.setData(candles.map((row) => ({ time: row.time, value: row.volume, color: row.close >= row.open ? "rgba(239,68,68,0.42)" : "rgba(59,130,246,0.42)" })));
+		const levelPrices = [snapshot.levels.resistance2, snapshot.levels.resistance1, snapshot.levels.support1, snapshot.levels.support2];
+		series.priceLines.forEach((line: AnyObj, index: number) => line.applyOptions({ price: levelPrices[index] }));
+		series.candle.setMarkers(overlays.arrows ? markerRows(candles, opinion) as any : []);
+	}, [candles, opinion, overlays.arrows, snapshot]);
+
+	useEffect(() => {
+		instanceRef.current?.chart.timeScale().fitContent();
+	}, [resetKey, timeframe, overlays]);
+
+	useEffect(() => {
+		if (!Number.isFinite(focusTime)) return;
+		const span = timeframeSeconds(timeframe);
+		instanceRef.current?.chart.timeScale().setVisibleRange({
+			from: Math.max(0, Number(focusTime) - span * 24) as UTCTimestamp,
+			to: (Number(focusTime) + span * 8) as UTCTimestamp,
+		});
+	}, [focusTime, timeframe]);
 
 	return <div ref={containerRef} className="h-[390px] w-full" />;
 }
 
-export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
+function validTimeframe(value: string | undefined, market: ChartBroadcastMarket): ChartTimeframe {
+	const supported = TIMEFRAMES.some((item) => item.key === value) && !(market === "US" && (value === "3m" || value === "4H"));
+	return supported ? value as ChartTimeframe : "5m";
+}
+
+function chartDataStatus(updatedAt: string | undefined, timeframe: ChartTimeframe, candleCount: number, failed: boolean) {
+	if (failed) return "unavailable";
+	if (candleCount < 2) return "insufficient";
+	const timestamp = Date.parse(String(updatedAt ?? ""));
+	if (!Number.isFinite(timestamp)) return "delayed";
+	const age = Date.now() - timestamp;
+	const interval = timeframeSeconds(timeframe) * 1_000;
+	const staleAfter = timeframe.endsWith("D") ? interval * 5 : Math.max(interval * 3, 30 * 60_000);
+	const delayedAfter = timeframe.endsWith("D") ? interval * 2 : Math.max(interval * 2, 10 * 60_000);
+	return age > staleAfter ? "stale" : age > delayedAfter ? "delayed" : "ok";
+}
+
+export function ChartBroadcastPanel({ market, onSignalChange, onAnalysisChange, onSelectionChange, initialSelection }: Props) {
 	const [query, setQuery] = useState("");
-	const [selectedStock, setSelectedStock] = useState<SearchRow>(() => DEFAULT_STOCKS[market]);
-	const [timeframe, setTimeframe] = useState<ChartTimeframe>("5m");
+	const [selectedStock, setSelectedStock] = useState<SearchRow>(() => initialSelection?.ticker
+		? { ticker: initialSelection.ticker, name: initialSelection.name || initialSelection.ticker, market: initialSelection.market, currency: initialSelection.market === "US" ? "USD" : "KRW", price: null, changePercent: null }
+		: DEFAULT_STOCKS[market]);
+	const [timeframe, setTimeframe] = useState<ChartTimeframe>(() => validTimeframe(initialSelection?.timeframe, market));
 	const [live, setLive] = useState(true);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [overlays, setOverlays] = useState<Record<OverlayKey, boolean>>(DEFAULT_OVERLAYS);
 	const [feed, setFeed] = useState<FeedItem[]>([]);
+	const [focusTime, setFocusTime] = useState<number | undefined>();
 	const lastFeedKey = useRef("");
 	const trimmed = query.trim();
 
 	useEffect(() => {
+		if (initialSelection?.ticker && initialSelection.market === market) {
+			setSelectedStock({ ticker: initialSelection.ticker, name: initialSelection.name || initialSelection.ticker, market, currency: market === "US" ? "USD" : "KRW", price: null, changePercent: null });
+			setTimeframe(validTimeframe(initialSelection.timeframe, market));
+			setFeed([]);
+			setFocusTime(undefined);
+			lastFeedKey.current = "";
+			return;
+		}
 		const fallback = DEFAULT_STOCKS[market];
 		setSelectedStock((current) => (current.market === market ? current : fallback));
+		setTimeframe((current) => validTimeframe(current, market));
 		setQuery("");
-	}, [market]);
+	}, [initialSelection?.ticker, initialSelection?.market, initialSelection?.name, initialSelection?.timeframe, market]);
 
 	const search = useQuery({
 		queryKey: ["chart-broadcast-search", market, trimmed],
@@ -1098,7 +1172,7 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 	});
 	const marketContext: MarketContext = marketContextQuery.data ?? {
 		label: market === "KR" ? "코스피·코스닥" : "S&P500·나스닥",
-		changePercent: 0,
+		changePercent: null,
 		bias: 0,
 		sources: [],
 	};
@@ -1115,23 +1189,51 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 		() => (snapshot ? buildOpinion(snapshot) : null),
 		[snapshot],
 	);
+	const analysis = useMemo(() => {
+		if (!snapshot || !opinion || !candles.length) return null;
+		const latest = candles.at(-1)!;
+		return buildChartAnalysis({
+			symbol: selectedStock.ticker,
+			market,
+			timeframe,
+			latestTime: Number(latest.time),
+			currentPrice: snapshot.currentPrice,
+			previousClose: snapshot.previousClose,
+			trend: snapshot.trend,
+			rsi: snapshot.rsi,
+			macd: snapshot.macd,
+			volumeRatio: snapshot.volumeRatio,
+			support: snapshot.levels.support1,
+			resistance: snapshot.levels.resistance1,
+			signal: opinion.signal,
+			confidence: opinion.confidence,
+			title: opinion.title,
+			summary: opinion.summary,
+			patterns: snapshot.patterns,
+			source: chart.data?.provider ?? "market-data",
+			isClosedCandle: latest.isClosed,
+		});
+	}, [candles, chart.data?.provider, market, opinion, selectedStock.ticker, snapshot, timeframe]);
 
 	useEffect(() => {
-		if (!opinion || !candles.length) return;
-		const latest = candles.at(-1)!;
-		const key = `${selectedStock.ticker}:${timeframe}:${latest.time}:${opinion.signal}:${Math.round(opinion.entryPrice)}`;
+		if (!opinion || !analysis) return;
+		const key = `${analysis.id}:${analysis.status}:${analysis.confidence}`;
 		if (lastFeedKey.current === key) return;
 		lastFeedKey.current = key;
-		setFeed((current) => [
-			{
-				id: `${Date.now()}:${key}`,
-				at: new Date(),
-				signal: opinion.signal,
-				text: opinion.event,
-			},
-			...current,
-		].slice(0, 20));
-	}, [candles, opinion, selectedStock.ticker, timeframe]);
+		setFeed((current) => {
+			const previous = current[0]?.analysis ?? null;
+			if (!shouldAppendTimeline(previous, analysis)) return current;
+			return [{ id: key, at: new Date(analysis.detectedAt), signal: opinion.signal, text: opinion.event, status: analysis.status, analysis }, ...current].slice(0, 20);
+		});
+	}, [analysis, opinion]);
+
+	useEffect(() => {
+		if (analysis) onAnalysisChange?.(analysis);
+	}, [analysis, onAnalysisChange]);
+
+	useEffect(() => {
+		onSelectionChange?.({ ticker: selectedStock.ticker, name: selectedStock.name, market, timeframe });
+	}, [market, onSelectionChange, selectedStock.name, selectedStock.ticker, timeframe]);
 
 	useEffect(() => {
 		if (!opinion || !snapshot || !onSignalChange) return;
@@ -1154,7 +1256,9 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 	};
 
 	const updatedAt = chart.data?.updatedAt ?? chart.data?.fetchedAt;
+	const dataStatus = chartDataStatus(updatedAt, timeframe, candles.length, chart.isError);
 	const searchRows = search.data ?? [];
+	const availableTimeframes = TIMEFRAMES.filter((item) => market === "KR" || (item.key !== "3m" && item.key !== "4H"));
 
 	return (
 		<div className="space-y-4">
@@ -1175,7 +1279,7 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 						)}
 					>
 						{live ? <CirclePause className="h-3.5 w-3.5" /> : <CirclePlay className="h-3.5 w-3.5" />}
-						{live ? "생중계 중" : "일시정지"}
+						{live ? "자동 갱신 중" : "갱신 일시정지"}
 					</button>
 				</div>
 
@@ -1211,8 +1315,9 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 									type="button"
 									onClick={() => {
 										setSelectedStock(row);
-										setQuery("");
-										setFeed([]);
+									setQuery("");
+									setFeed([]);
+									setFocusTime(undefined);
 										lastFeedKey.current = "";
 									}}
 									className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-secondary"
@@ -1244,6 +1349,7 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 							</div>
 							<p className="mt-1 text-[11px] font-bold text-muted-foreground">
 								{chart.data?.provider ? `제공처 ${chart.data.provider}` : "실제 차트 데이터 연결"}
+								{` · 상태 ${dataStatus}`}
 								{updatedAt ? ` · ${new Date(updatedAt).toLocaleTimeString("ko-KR")}` : ""}
 							</p>
 						</div>
@@ -1258,13 +1364,14 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 					</div>
 
 					<div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-						{TIMEFRAMES.map((item) => (
+						{availableTimeframes.map((item) => (
 							<button
 								key={item.key}
 								type="button"
 								onClick={() => {
 									setTimeframe(item.key);
 									setFeed([]);
+									setFocusTime(undefined);
 									lastFeedKey.current = "";
 								}}
 								className={cn(
@@ -1338,7 +1445,7 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 							<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">다른 시간봉을 선택하거나 제공처 연결 상태를 확인하세요. 임시 가격은 만들지 않습니다.</p>
 						</div>
 					) : (
-						<ChartCanvas candles={candles} timeframe={timeframe} overlays={overlays} snapshot={snapshot} opinion={opinion} />
+						<ChartCanvas candles={candles} timeframe={timeframe} overlays={overlays} snapshot={snapshot} opinion={opinion} resetKey={`${selectedStock.ticker}:${timeframe}`} focusTime={focusTime} />
 					)}
 				</div>
 			</section>
@@ -1349,7 +1456,7 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 						<div className="flex items-center justify-between border-b border-card-border px-4 py-3">
 							<div className="flex items-center gap-2">
 								<span className={cn("h-2.5 w-2.5 rounded-full", live ? "animate-pulse bg-destructive" : "bg-muted-foreground")} />
-								<h2 className="text-sm font-black">AI 차트 생중계</h2>
+								<h2 className="text-sm font-black">AI 차트 분석 타임라인</h2>
 							</div>
 							<span className="text-[10px] font-extrabold text-muted-foreground">{TIMEFRAMES.find((item) => item.key === timeframe)?.label}봉</span>
 						</div>
@@ -1357,13 +1464,13 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 							{feed.length ? (
 								<div className="space-y-2">
 									{feed.map((item) => (
-										<article key={item.id} className="grid grid-cols-[70px_minmax(0,1fr)] gap-2 rounded-2xl bg-background px-3 py-3">
+									<button type="button" key={item.id} onClick={() => setFocusTime(item.analysis.points[0]?.time)} className="grid w-full grid-cols-[70px_minmax(0,1fr)] gap-2 rounded-2xl bg-background px-3 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
 											<time className="text-[10px] font-bold text-muted-foreground">{item.at.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>
 											<div>
-												<span className={cn("inline-flex rounded-full border px-2 py-0.5 text-[9px] font-black", signalClass(item.signal))}>{signalLabel(item.signal)}</span>
+												<span className={cn("inline-flex rounded-full border px-2 py-0.5 text-[9px] font-black", signalClass(item.signal))}>{item.status} · {signalLabel(item.signal)}</span>
 												<p className="mt-1.5 break-keep text-[11px] font-bold leading-5 text-foreground">{item.text}</p>
 											</div>
-										</article>
+									</button>
 									))}
 								</div>
 							) : (
@@ -1375,7 +1482,7 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 					<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
 						<div className="flex items-start justify-between gap-3">
 							<div className="min-w-0">
-								<p className="text-[11px] font-extrabold text-primary">실시간 AI 기술분석</p>
+								<p className="text-[11px] font-extrabold text-primary">AI 차트 분석기</p>
 								<h2 className="mt-1 text-lg font-black">{opinion.title}</h2>
 							</div>
 							<div className={cn("shrink-0 rounded-full border px-3 py-1.5 text-xs font-black", signalClass(opinion.signal))}>{signalLabel(opinion.signal)}</div>
@@ -1387,7 +1494,7 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 							<MetricCard icon={<Activity className="h-4 w-4" />} label="현재 추세" value={snapshot.trend} />
 							<MetricCard icon={<Gauge className="h-4 w-4" />} label="신뢰도" value={`${opinion.confidence}/100`} />
 							<MetricCard icon={<TrendingUp className="h-4 w-4" />} label="현재가" value={formatPrice(snapshot.currentPrice, market)} />
-							<MetricCard icon={<Gauge className="h-4 w-4" />} label={snapshot.marketLabel} value={`${snapshot.marketChangePercent >= 0 ? "+" : ""}${snapshot.marketChangePercent.toFixed(2)}%`} />
+							<MetricCard icon={<Gauge className="h-4 w-4" />} label={snapshot.marketLabel} value={snapshot.marketChangePercent == null ? "unavailable" : `${snapshot.marketChangePercent >= 0 ? "+" : ""}${snapshot.marketChangePercent.toFixed(2)}%`} />
 							<MetricCard icon={<BarChart3 className="h-4 w-4" />} label="거래량" value={`${snapshot.volumeRatio.toFixed(2)}배`} />
 						</div>
 
@@ -1415,7 +1522,7 @@ export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
 			)}
 
 			<p className="px-1 text-[10px] font-semibold leading-4 text-muted-foreground">
-				차트중계는 실제 시세·봉 데이터를 기반으로 한 기술적 분석 보조 기능입니다. 진입·매도 문구는 주문 실행이 아니라 조건 알림이며, 자동매매 주문 기능과 분리되어 있습니다.
+				AI 차트 분석기는 실제 시세·봉 데이터를 REST 갱신으로 분석하는 보조 기능입니다. 공급자가 캔들 완료 여부를 제공하지 않으면 forming으로 표시합니다. 분석 문구는 주문 실행이 아니며 자동매매 주문 기능과 분리되어 있습니다.
 			</p>
 		</div>
 	);

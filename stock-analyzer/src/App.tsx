@@ -8,6 +8,7 @@ import { ensureWatchlistSync } from '@/lib/watchlist-sync';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { AppBackground } from '@/components/app-background';
 import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
+import { AnalysisSelectionProvider } from '@/lib/analysis-selection';
 import { OfflineBanner } from '@/components/offline-banner';
 import { PageFallback } from '@/components/data-state';
 import { AutoBackupSync } from '@/lib/backup-sync';
@@ -40,6 +41,9 @@ const Phase6PaperTradingE2EPage = lazy(() => import('@/pages/phase6-paper-tradin
 const Phase7JournalSyncE2EPage = lazy(() => import('@/pages/phase7-journal-sync-e2e'));
 const Phase8ReleaseCandidateE2EPage = lazy(() => import('@/pages/phase8-release-candidate-e2e'));
 const Phase9AiReviewE2EPage = lazy(() => import('@/pages/phase9-ai-review-e2e'));
+const AiChartPage = lazy(() => import('@/pages/ai-chart'));
+const AiChatPage = lazy(() => import('@/pages/ai-chat'));
+const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
 const phase5E2EEnabled = import.meta.env.VITE_PHASE5_E2E === 'true';
@@ -47,6 +51,7 @@ const phase6E2EEnabled = import.meta.env.VITE_PHASE6_E2E === 'true';
 const phase7E2EEnabled = import.meta.env.VITE_PHASE7_E2E === 'true';
 const phase8E2EEnabled = import.meta.env.VITE_PHASE8_E2E === 'true';
 const phase9E2EEnabled = import.meta.env.VITE_PHASE9_E2E === 'true';
+const phase11E2EEnabled = import.meta.env.VITE_PHASE11_E2E === 'true';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
@@ -70,14 +75,18 @@ function CryptoDetailRedirect() {
 }
 
 function AppShell({ children }: { children: React.ReactNode }) {
-  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div className="relative z-10 mx-auto flex h-[100dvh] min-h-0 max-w-md flex-col overflow-hidden bg-background"><OfflineBanner /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
+  const [location] = useLocation();
+  const wide = location.startsWith('/scanner') || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
+  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {
   return <CapabilityGate capability={capability}>{child}</CapabilityGate>;
 }
 
-function ScannerAccess() { return gated('canAccessRiskPreview', <ScannerPage />); }
+function ScannerAccess() { return gated('canAccessRiskPreview', <TechnicalWorkspacePage />); }
+function AiChartAccess() { return gated('canAccessRiskPreview', <AiChartPage />); }
+function AiChatAccess() { return gated('canAccessBasicInfo', <AiChatPage />); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
 function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
@@ -105,6 +114,8 @@ function ApprovedRouter() {
     <Route path="/settings" component={MorePage} />
     <Route path="/search" component={SearchPage} />
     <Route path="/scanner" component={ScannerAccess} />
+    <Route path="/ai-chart" component={AiChartAccess} />
+    <Route path="/ai-chat" component={AiChatAccess} />
     <Route path="/themes" component={ThemesPage} />
     <Route path="/learn" component={LearnPage} />
     <Route path="/watchlist" component={WatchlistPage} />
@@ -132,9 +143,21 @@ function RootRouter() {
     {phase7E2EEnabled ? <Route path="/__phase7-journal-sync-e2e" component={Phase7JournalSyncE2EPage} /> : null}
     {phase8E2EEnabled ? <Route path="/__phase8-release-candidate-e2e" component={Phase8ReleaseCandidateE2EPage} /> : null}
     {phase9E2EEnabled ? <Route path="/__phase9-ai-review-e2e" component={Phase9AiReviewE2EPage} /> : null}
+    {phase11E2EEnabled ? <Route path="/__phase11-ai-workspace-e2e" component={ScannerRoute} /> : null}
+    {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
+    {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
+    {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
     <Route path="/install" component={InstallPage} />
     <Route component={AuthenticatedApp} />
   </Switch></Suspense>;
+}
+
+function ScannerRoute() {
+  return <ScannerPage />;
+}
+
+function AiChartRoute() {
+  return <AiChartPage />;
 }
 
 function AuthenticatedApp() {
@@ -146,7 +169,7 @@ function AuthenticatedApp() {
 }
 
 function App() {
-  return <QueryClientProvider client={queryClient}><AuthProvider><SettingsProvider><AssetModeProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RootRouter /></AppShell></WouterRouter><Toaster /></TooltipProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
+  return <QueryClientProvider client={queryClient}><AuthProvider><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RootRouter /></AppShell></WouterRouter><Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
 }
 
 export default App;
