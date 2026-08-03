@@ -114,6 +114,6 @@ grant select, insert, update, delete on public.trade_automation_profiles,
 revoke all on public.trade_exchange_connections from anon, authenticated;
 grant select(user_id, exchange, account_mode, configured, last_verified_at, last_error_code, created_at, updated_at)
   on public.trade_exchange_connections to authenticated;
-revoke all on public.trade_system_controls from anon, authenticated;
+revoke all privileges on table public.trade_system_controls from public, anon, authenticated;
 
 commit;
