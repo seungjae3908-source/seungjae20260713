@@ -18,7 +18,7 @@ The workflow now defaults to `action=preflight`.
 2. **Non-destructive deploy**
    - runs only when `action=deploy`;
    - starts only after the same aggregate preflight passes;
-   - uses `/srv/seungjae-staging`, `seungjae-staging`, port `18080`, and canary port `18082`;
+   - uses `/srv/seungjae-staging`, `seungjae-staging`, port `18083`, and canary port `18084`;
    - performs build, canary health, backup, promotion, live health, and automatic rollback on failure.
 
 `run_full_validation` and `run_destructive_recovery_drill` are separate opt-in scopes. Both default to `false`.
@@ -30,7 +30,7 @@ The workflow now defaults to `action=preflight`.
 | `STAGING_SSH_HOST` | Preflight and deploy | Staging server public IP: `158.247.235.32` |
 | `STAGING_SSH_USER` | Preflight and deploy | SSH login user: `root` |
 | `STAGING_SSH_PRIVATE_KEY` | Preflight and deploy | The private half of the SSH key whose public half is in `/root/.ssh/authorized_keys` on the staging server |
-| `STAGING_BASE_URL` | Preflight and deploy | The dedicated HTTPS URL routed to staging port `18080`; it must not be `https://lsj119.duckdns.org` |
+| `STAGING_BASE_URL` | Preflight and deploy | `https://lsj119-staging.duckdns.org`, routed by Caddy to staging port `18083`; it must not be `https://lsj119.duckdns.org` |
 | `STAGING_SSH_PORT` | Optional | SSH daemon port; omit to use `22` |
 | `STAGING_SSH_KNOWN_HOSTS` | Optional | Output of `ssh-keyscan -H -p <port> 158.247.235.32`; when omitted, the workflow scans the host during the run |
 | `STAGING_SUPABASE_URL` | Full account/browser validation | URL of the staging-only Supabase project |
