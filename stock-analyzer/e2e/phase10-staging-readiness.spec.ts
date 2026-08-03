@@ -1,6 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, type Page, type TestInfo } from '@playwright/test';
+import {
+  provisionEphemeralStagingAccounts,
+  type StagingAccountCredentials,
+  type StagingAccountLifecycle,
+} from './support/staging-account-lifecycle';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
 const required = (name: string): string => {
@@ -9,29 +14,17 @@ const required = (name: string): string => {
   return value;
 };
 
-function stagingAccount(emailName: string, passwordName: string) {
-  const configuredEmail = required(emailName);
-  const loginName = configuredEmail.split('@', 1)[0]?.trim() ?? '';
-  if (!/^[가-힣a-zA-Z0-9 _.-]{2,20}$/.test(loginName)) {
-    throw new Error(`${emailName} local part must be a valid 2-20 character application login ID`);
-  }
-  return { loginName, password: required(passwordName) };
-}
-
 const targetSha = stagingMode ? required('STAGING_TARGET_SHA').toLowerCase() : '';
 const artifactDir = path.resolve(process.env.STAGING_ARTIFACT_DIR ?? '../staging-artifacts');
 const diagnosticsPath = path.join(artifactDir, 'staging-browser-results.json');
-const accounts = stagingMode ? {
-  pending: stagingAccount('STAGING_PENDING_EMAIL', 'STAGING_PENDING_PASSWORD'),
-  associate: stagingAccount('STAGING_ASSOCIATE_EMAIL', 'STAGING_ASSOCIATE_PASSWORD'),
-  regular: stagingAccount('STAGING_REGULAR_EMAIL', 'STAGING_REGULAR_PASSWORD'),
-  admin: stagingAccount('STAGING_ADMIN_EMAIL', 'STAGING_ADMIN_PASSWORD'),
-} : {
+const emptyAccounts: StagingAccountCredentials = {
   pending: { loginName: '', password: '' },
   associate: { loginName: '', password: '' },
   regular: { loginName: '', password: '' },
   admin: { loginName: '', password: '' },
 };
+let accounts = emptyAccounts;
+let accountLifecycle: StagingAccountLifecycle | null = null;
 
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
 const diagnostics: {
@@ -128,7 +121,16 @@ function errorsFor(testInfo: TestInfo) {
 
 test.describe('real staging release readiness', () => {
   test.describe.configure({ mode: 'serial' });
-  test.skip(!stagingMode, 'Requires isolated staging, exact SHA, and four staging-only accounts');
+  test.skip(!stagingMode, 'Requires isolated staging, exact SHA, and ephemeral staging-only accounts');
+
+  test.beforeAll(async () => {
+    accountLifecycle = await provisionEphemeralStagingAccounts({
+      supabaseUrl: required('STAGING_SUPABASE_URL'),
+      supabaseSecretKey: required('STAGING_SUPABASE_SECRET_KEY'),
+      artifactDir,
+    });
+    accounts = accountLifecycle.accounts;
+  });
 
   test.beforeEach(async ({ page }, testInfo) => {
     attachDiagnostics(page, testInfo);
@@ -142,9 +144,17 @@ test.describe('real staging release readiness', () => {
     expect(errors.http, 'unexpected browser HTTP 4xx/5xx or failed requests').toEqual([]);
   });
 
-  test.afterAll(() => {
-    fs.mkdirSync(artifactDir, { recursive: true });
-    fs.writeFileSync(diagnosticsPath, `${JSON.stringify(diagnostics, null, 2)}\n`, 'utf8');
+  test.afterAll(async () => {
+    let cleanupError: unknown = null;
+    try {
+      await accountLifecycle?.cleanup();
+    } catch (cause) {
+      cleanupError = cause;
+    } finally {
+      fs.mkdirSync(artifactDir, { recursive: true });
+      fs.writeFileSync(diagnosticsPath, `${JSON.stringify(diagnostics, null, 2)}\n`, 'utf8');
+    }
+    if (cleanupError) throw cleanupError;
   });
 
   test('anonymous: health, login boundary, and protected API denial', async ({ page }) => {

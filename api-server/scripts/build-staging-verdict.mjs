@@ -17,6 +17,8 @@ const playwright = readJson('playwright-report.json');
 const browser = readJson('staging-browser-results.json');
 const runtime = readJson('staging-runtime-verification.json');
 const database = readJson('staging-database-verification.json');
+const accountProvisioning = readJson('staging-account-provisioning.json');
+const accountCleanup = readJson('staging-account-cleanup.json');
 
 let passed = 0;
 let failed = 0;
@@ -70,6 +72,30 @@ addCheck(
   fullValidation ? 'passed' : 'skipped',
   fullValidation ? 'STAGING_RUN_FULL_VALIDATION=true' : 'STAGING_RUN_FULL_VALIDATION was not true',
 );
+
+if (!accountProvisioning) {
+  addCheck('ephemeral staging account provisioning', 'failed', 'staging-account-provisioning.json is missing');
+} else {
+  addCheck(
+    'ephemeral staging account provisioning',
+    accountProvisioning.status === 'passed' ? 'passed' : 'failed',
+    accountProvisioning.status === 'passed'
+      ? `${Number(accountProvisioning.created ?? 0)} temporary accounts created; credentials_recorded=${String(accountProvisioning.credentials_recorded)}`
+      : String(accountProvisioning.detail ?? 'temporary account provisioning failed'),
+  );
+}
+
+if (!accountCleanup) {
+  addCheck('ephemeral staging account cleanup', 'failed', 'staging-account-cleanup.json is missing');
+} else {
+  addCheck(
+    'ephemeral staging account cleanup',
+    accountCleanup.status === 'passed' ? 'passed' : 'failed',
+    accountCleanup.status === 'passed'
+      ? `${Number(accountCleanup.deleted ?? 0)} temporary accounts deleted; profiles_remaining=${Number(accountCleanup.profiles_remaining ?? -1)}`
+      : String(accountCleanup.detail ?? 'temporary account cleanup failed'),
+  );
+}
 
 const playwrightChecks = countPlaywright(playwright);
 if (!playwright) {
@@ -133,6 +159,9 @@ const result = {
   page_errors: pageErrors,
   unhandled_rejections: unhandledRejections,
   unexpected_http_errors: unexpectedHttpErrors,
+  ephemeral_accounts_created: Number(accountProvisioning?.created ?? 0),
+  ephemeral_accounts_deleted: Number(accountCleanup?.deleted ?? 0),
+  ephemeral_profiles_remaining: Number(accountCleanup?.profiles_remaining ?? -1),
   pm2_status: pm2Status,
   restart_count: restartCount,
   restart_count_delta: restartDelta,
