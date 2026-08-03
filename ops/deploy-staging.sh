@@ -19,7 +19,7 @@ BACKUP_ROOT="${BACKUP_ROOT:-/srv/seungjae-staging-backups}"
 LOCK_FILE="${LOCK_FILE:-/var/lock/seungjae-staging-deploy.lock}"
 STATE_DIR="$STAGING_DIR/.deploy"
 MIN_FREE_KB="${MIN_FREE_KB:-800000}"
-PM2_CONFIG="$STAGING_DIR/api-server/ecosystem.staging.cjs"
+PM2_CONFIG="$STAGING_DIR/api-server/ecosystem.staging.json"
 
 fail() { echo "[staging] $1" >&2; exit "${2:-1}"; }
 
@@ -148,7 +148,7 @@ write_pm2_config() {
   node - "$PM2_CONFIG" "$STAGING_PM2_NAME" "$STAGING_DIR/api-server" <<'NODE'
 const fs = require('node:fs');
 const [configPath, name, cwd] = process.argv.slice(2);
-const config = `module.exports = ${JSON.stringify({
+const config = {
   apps: [{
     name,
     cwd,
@@ -157,10 +157,11 @@ const config = `module.exports = ${JSON.stringify({
     autorestart: true,
     restart_delay: 1000,
   }],
-}, null, 2)};\n`;
-fs.writeFileSync(configPath, config, { mode: 0o600 });
+};
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 NODE
   chmod 600 "$PM2_CONFIG"
+  node -e "const fs=require('node:fs'); const config=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); if (!Array.isArray(config.apps) || config.apps.length !== 1) process.exit(1);" "$PM2_CONFIG"
 }
 
 start_or_reload_staging() {
@@ -171,11 +172,11 @@ start_or_reload_staging() {
 restore_backup() {
   local restore_status=0
   echo '[staging] restoring previous staging snapshot after failed verification' >&2
+  rm -f "$STAGING_DIR/api-server/.env.staging"
   sync_snapshot_tree "$BACKUP_DIR/source" "$STAGING_DIR" || restore_status=1
 
   if [[ "$CURRENT_SHA" == none ]]; then
     rm -f "$STATE_DIR/current-sha" "$STATE_DIR/current-release" "$STATE_DIR/deployed-at"
-    rm -f "$STAGING_DIR/api-server/.env.staging"
     if [[ "$CURRENT_PM2_PRESENT" == 0 ]]; then
       pm2 delete "$STAGING_PM2_NAME" >/dev/null 2>&1 || true
     else
