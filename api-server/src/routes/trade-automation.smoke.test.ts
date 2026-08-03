@@ -10,10 +10,17 @@ const USER = '11111111-1111-1111-1111-111111111111';
 const repository = new InMemoryTradingRepository();
 const MASTER_KEY = Buffer.alloc(32, 9).toString('base64');
 
-async function startServer(authenticated = true) {
+async function startServer(authenticated = true, role: 'regular' | 'admin' = 'regular') {
   const app = express();
   app.use(express.json());
-  if (authenticated) app.use((req, _res, next) => { req.member = { id: USER }; req.accessToken = 'test'; next(); });
+  if (authenticated) app.use((req, _res, next) => {
+    req.member = {
+      id: USER, login_name: 'test', display_name: 'test', role, membership_level: role,
+      status: 'approved', is_active: true,
+    };
+    req.accessToken = 'test';
+    next();
+  });
   app.use('/api/trade-automation', router);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
@@ -24,9 +31,10 @@ async function close(server: import('node:http').Server) {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-test.beforeEach(() => {
+test.beforeEach(async () => {
   setTradeAutomationRepositoryFactoryForTests(() => repository);
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+  await repository.setGlobalEmergencyStop(false, USER);
 });
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
@@ -62,6 +70,45 @@ test('automatic policy cannot be enabled without explicit final confirmation', a
     assert.equal(response.status, 409);
     assert.equal((await response.json()).error, 'AUTOMATIC_TRADING_CONFIRMATION_REQUIRED');
   } finally { await close(server); }
+});
+
+test('persistent global emergency stop requires admin capability and exact confirmation', async () => {
+  const regular = await startServer(true, 'regular');
+  try {
+    const denied = await fetch(`${regular.baseUrl}/api/trade-automation/admin/emergency-stop`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stopped: true, confirmation: 'STOP_ALL_TRADING' }),
+    });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).error, 'ADMIN_REQUIRED');
+  } finally { await close(regular.server); }
+
+  const admin = await startServer(true, 'admin');
+  try {
+    const missingConfirmation = await fetch(`${admin.baseUrl}/api/trade-automation/admin/emergency-stop`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stopped: true }),
+    });
+    assert.equal(missingConfirmation.status, 409);
+
+    const stopped = await fetch(`${admin.baseUrl}/api/trade-automation/admin/emergency-stop`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stopped: true, confirmation: 'STOP_ALL_TRADING' }),
+    });
+    assert.equal(stopped.status, 200);
+    const stoppedBody = await stopped.json();
+    assert.equal(stoppedBody.persistentGlobalEmergencyStopped, true);
+    assert.equal(stoppedBody.automaticTradingEnabledByThisRequest, false);
+
+    const status = await fetch(`${admin.baseUrl}/api/trade-automation/status`);
+    assert.equal((await status.json()).emergencyStopSources.persistentGlobal, true);
+
+    const resumed = await fetch(`${admin.baseUrl}/api/trade-automation/admin/emergency-stop`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stopped: false, confirmation: 'RESUME_NEW_ORDER_EVALUATION' }),
+    });
+    assert.equal(resumed.status, 200);
+    assert.equal((await resumed.json()).automaticTradingEnabledByThisRequest, false);
+  } finally { await close(admin.server); }
 });
 
 test('connection registration rejects withdrawal permission and does not echo secrets', async () => {

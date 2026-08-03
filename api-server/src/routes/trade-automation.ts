@@ -4,7 +4,7 @@ import { liveExecutionEnabled, TradeAutomationService } from '../services/trade-
 import { TradeExecutionService } from '../services/trade-execution.service';
 import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
-import type { AuthenticatedRequest } from '../middleware/auth';
+import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import type { TradingExchange, TradingPlanInput } from '../services/trade-automation.types';
 
 const router: IRouter = Router();
@@ -49,14 +49,21 @@ function errorResponse(res: Response, error: unknown) {
 router.get('/status', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
-    const [policy, connections, orders] = await Promise.all([
+    const [policy, connections, orders, persistentGlobalStop] = await Promise.all([
       repository.getPolicy(userId), repository.getConnections(userId), repository.listOrders(userId),
+      repository.getGlobalEmergencyStop(),
     ]);
+    const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
     return res.json({
       ok: true,
       policy,
       connections: safeConnections(connections),
-      emergencyStopped: policy.emergencyStopped || process.env.TRADING_EMERGENCY_STOP === 'true',
+      emergencyStopped: policy.emergencyStopped || persistentGlobalStop || environmentGlobalStop,
+      emergencyStopSources: {
+        member: policy.emergencyStopped,
+        persistentGlobal: persistentGlobalStop,
+        environmentGlobal: environmentGlobalStop,
+      },
       liveExecutionServerEnabled: {
         bitget: liveExecutionEnabled('bitget'),
         upbit: liveExecutionEnabled('upbit'),
@@ -120,7 +127,9 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
     const { userId, repository, automation } = context(req);
     const input = req.body as TradingPlanInput;
     exchangeValue(input.exchange);
-    const [policy, existingOrders] = await Promise.all([repository.getPolicy(userId), repository.listOrders(userId)]);
+    const [policy, existingOrders, persistentGlobalStop] = await Promise.all([
+      repository.getPolicy(userId), repository.listOrders(userId), repository.getGlobalEmergencyStop(),
+    ]);
     const today = new Date().toISOString().slice(0, 10);
     const persistedDailyOrders = existingOrders.filter((order) => order.createdAt.slice(0, 10) === today).length;
     input.marketSnapshot = {
@@ -128,7 +137,7 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
       dailyOrderCount: Math.max(Number(input.marketSnapshot?.dailyOrderCount ?? 0), persistedDailyOrders),
     };
     const result = await automation.createPlan(userId, input, policy,
-      policy.emergencyStopped || process.env.TRADING_EMERGENCY_STOP === 'true');
+      policy.emergencyStopped || persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true');
     if (!result.plan) return res.status(409).json({ ok: false, error: 'RISK_CHECK_BLOCKED', decision: result.decision, orderSubmitted: false });
     if (policy.mode === 'automatic' && policy.automaticEnabled && result.plan.state === 'PLANNED') {
       const submitted = await automation.beginAutomaticPlan(userId, result.plan.id);
@@ -171,6 +180,26 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
     });
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, emergencyStopped: true, newOrdersBlocked: true, existingOrdersCanceled: false });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/admin/emergency-stop', requireAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    if (typeof req.body?.stopped !== 'boolean') throw new Error('EMERGENCY_STOP_VALUE_REQUIRED');
+    const expectedConfirmation = req.body.stopped ? 'STOP_ALL_TRADING' : 'RESUME_NEW_ORDER_EVALUATION';
+    if (req.body?.confirmation !== expectedConfirmation) {
+      return res.status(409).json({ ok: false, error: 'GLOBAL_EMERGENCY_STOP_CONFIRMATION_REQUIRED' });
+    }
+    await repository.setGlobalEmergencyStop(req.body.stopped, userId);
+    const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
+    return res.json({
+      ok: true,
+      persistentGlobalEmergencyStopped: req.body.stopped,
+      effectiveGlobalEmergencyStopped: req.body.stopped || environmentGlobalStop,
+      automaticTradingEnabledByThisRequest: false,
+      existingOrdersCanceled: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 

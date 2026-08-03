@@ -3,6 +3,17 @@
 -- of this feature PR approval.
 begin;
 
+create table if not exists public.trade_system_controls (
+  control_key text primary key check (control_key = 'global'),
+  emergency_stopped boolean not null default false,
+  changed_by uuid references auth.users(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+
+insert into public.trade_system_controls(control_key, emergency_stopped)
+values ('global', false)
+on conflict (control_key) do nothing;
+
 create table if not exists public.trade_automation_profiles (
   user_id uuid primary key references auth.users(id) on delete cascade,
   payload jsonb not null default '{"mode":"approval","automaticEnabled":false,"emergencyStopped":false}'::jsonb,
@@ -74,6 +85,7 @@ alter table public.trade_exchange_connections enable row level security;
 alter table public.trade_order_plans enable row level security;
 alter table public.trade_orders enable row level security;
 alter table public.trade_order_events enable row level security;
+alter table public.trade_system_controls enable row level security;
 
 do $trade_rls$
 declare
@@ -102,5 +114,6 @@ grant select, insert, update, delete on public.trade_automation_profiles,
 revoke all on public.trade_exchange_connections from anon, authenticated;
 grant select(user_id, exchange, account_mode, configured, last_verified_at, last_error_code, created_at, updated_at)
   on public.trade_exchange_connections to authenticated;
+revoke all on public.trade_system_controls from anon, authenticated;
 
 commit;
