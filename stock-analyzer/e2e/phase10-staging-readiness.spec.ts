@@ -9,19 +9,28 @@ const required = (name: string): string => {
   return value;
 };
 
+function stagingAccount(emailName: string, passwordName: string) {
+  const configuredEmail = required(emailName);
+  const loginName = configuredEmail.split('@', 1)[0]?.trim() ?? '';
+  if (!/^[가-힣a-zA-Z0-9 _.-]{2,20}$/.test(loginName)) {
+    throw new Error(`${emailName} local part must be a valid 2-20 character application login ID`);
+  }
+  return { loginName, password: required(passwordName) };
+}
+
 const targetSha = stagingMode ? required('STAGING_TARGET_SHA').toLowerCase() : '';
 const artifactDir = path.resolve(process.env.STAGING_ARTIFACT_DIR ?? '../staging-artifacts');
 const diagnosticsPath = path.join(artifactDir, 'staging-browser-results.json');
 const accounts = stagingMode ? {
-  pending: { email: required('STAGING_PENDING_EMAIL'), password: required('STAGING_PENDING_PASSWORD') },
-  associate: { email: required('STAGING_ASSOCIATE_EMAIL'), password: required('STAGING_ASSOCIATE_PASSWORD') },
-  regular: { email: required('STAGING_REGULAR_EMAIL'), password: required('STAGING_REGULAR_PASSWORD') },
-  admin: { email: required('STAGING_ADMIN_EMAIL'), password: required('STAGING_ADMIN_PASSWORD') },
+  pending: stagingAccount('STAGING_PENDING_EMAIL', 'STAGING_PENDING_PASSWORD'),
+  associate: stagingAccount('STAGING_ASSOCIATE_EMAIL', 'STAGING_ASSOCIATE_PASSWORD'),
+  regular: stagingAccount('STAGING_REGULAR_EMAIL', 'STAGING_REGULAR_PASSWORD'),
+  admin: stagingAccount('STAGING_ADMIN_EMAIL', 'STAGING_ADMIN_PASSWORD'),
 } : {
-  pending: { email: '', password: '' },
-  associate: { email: '', password: '' },
-  regular: { email: '', password: '' },
-  admin: { email: '', password: '' },
+  pending: { loginName: '', password: '' },
+  associate: { loginName: '', password: '' },
+  regular: { loginName: '', password: '' },
+  admin: { loginName: '', password: '' },
 };
 
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
@@ -79,12 +88,12 @@ async function settle(page: Page) {
   await page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => undefined);
 }
 
-async function login(page: Page, email: string, password: string) {
+async function login(page: Page, loginName: string, password: string) {
   await page.goto('/login');
   const nameInput = page.locator('input[type="email"], input[name="email"], input[autocomplete="username"]').first();
   const passwordInput = page.locator('input[type="password"], input[name="password"], input[autocomplete="current-password"]').first();
   await expect(nameInput).toBeVisible();
-  await nameInput.fill(email);
+  await nameInput.fill(loginName);
   await passwordInput.fill(password);
   await page.getByRole('button', { name: /^로그인$|sign in|log in/i }).click();
   await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 30_000 });
@@ -160,7 +169,7 @@ test.describe('real staging release readiness', () => {
   ] as const) {
     test(`${name}: login, refresh session retention, responsive layout, and logout`, async ({ page }) => {
       await page.setViewportSize({ width, height });
-      await login(page, accounts.regular.email, accounts.regular.password);
+      await login(page, accounts.regular.loginName, accounts.regular.password);
       await expectMembership(page, /정회원/);
       await page.reload();
       await settle(page);
@@ -171,7 +180,7 @@ test.describe('real staging release readiness', () => {
   }
 
   test('pending: approval-waiting account cannot enter approved UI, URL, or API', async ({ page }) => {
-    await login(page, accounts.pending.email, accounts.pending.password);
+    await login(page, accounts.pending.loginName, accounts.pending.password);
     await expectMembership(page, /승인대기/);
     await expect(page.getByText(/관리자 승인 대기 중/)).toBeVisible();
     await page.goto('/stock-info');
@@ -182,7 +191,7 @@ test.describe('real staging release readiness', () => {
   });
 
   test('associate: basic stock and spot access allowed; futures, AI-risk, portfolio, and APIs denied', async ({ page }) => {
-    await login(page, accounts.associate.email, accounts.associate.password);
+    await login(page, accounts.associate.loginName, accounts.associate.password);
     await expectMembership(page, /준회원/);
     await expectHealthyRoute(page, '/');
     await expectHealthyRoute(page, '/stock-info?asset=stock&market=KR&symbol=005930');
@@ -202,7 +211,7 @@ test.describe('real staging release readiness', () => {
   });
 
   test('regular: futures, scanner, paper trading, and safe AI preview are available without real orders', async ({ page }) => {
-    await login(page, accounts.regular.email, accounts.regular.password);
+    await login(page, accounts.regular.loginName, accounts.regular.password);
     await expectMembership(page, /정회원/);
     await expectHealthyRoute(page, '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
     await expectHealthyRoute(page, '/scanner');
@@ -218,7 +227,7 @@ test.describe('real staging release readiness', () => {
   });
 
   test('admin: member management is allowed while another users private journal remains blocked', async ({ page }) => {
-    await login(page, accounts.admin.email, accounts.admin.password);
+    await login(page, accounts.admin.loginName, accounts.admin.password);
     await expectMembership(page, /관리자/);
     await expectHealthyRoute(page, '/admin');
     await expect(page.locator('body')).toContainText(/회원|member/i);
@@ -232,7 +241,7 @@ test.describe('real staging release readiness', () => {
   ] as const) {
     test(`${name}: major screens, search/detail, domestic/overseas/coin, watchlist, alerts, and settings`, async ({ page }) => {
       await page.setViewportSize({ width, height });
-      await login(page, accounts.regular.email, accounts.regular.password);
+      await login(page, accounts.regular.loginName, accounts.regular.password);
       for (const route of [
         '/',
         '/search',
@@ -253,7 +262,7 @@ test.describe('real staging release readiness', () => {
   }
 
   test('bottom navigation and popup menus traverse every visible destination', async ({ page }) => {
-    await login(page, accounts.regular.email, accounts.regular.password);
+    await login(page, accounts.regular.loginName, accounts.regular.password);
     await page.goto('/');
     const nav = page.locator('nav');
     await expect(nav).toBeVisible();
