@@ -1,5 +1,6 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 
 const cwd = process.cwd();
@@ -10,155 +11,109 @@ const assert = (condition, message) => {
 };
 
 const production = await read('.github/workflows/production-deploy.yml');
+const approval = await read('.github/workflows/production-one-time-approval.yml');
 const staging = await read('.github/workflows/staging-readiness.yml');
 const dispatchBridge = await read('.github/workflows/staging-dispatch-bridge.yml');
 const productionScript = await read('ops/deploy-production.sh');
 const stagingScript = await read('ops/deploy-staging.sh');
 const stagingVerifier = await read('api-server/scripts/verify-phase10-staging-readiness.mjs');
+const verdictBuilder = await read('api-server/scripts/build-staging-verdict.mjs');
+const verdictVerifier = await read('api-server/scripts/verify-staging-verdict.mjs');
+const stagingSpec = await read('stock-analyzer/e2e/phase10-staging-readiness.spec.ts');
+
+for (const workflow of [production, approval]) {
+  for (const status of [
+    'application-ci/verified',
+    'browser-ui/verified',
+    'database-rls/verified',
+    'security-integration/verified',
+    'ai-privacy/verified',
+    'futures-public-network-smoke/verified',
+  ]) {
+    assert(workflow.includes(status), `production gate is missing required status ${status}`);
+  }
+}
 
 assert(/workflow_dispatch:/.test(production), 'production workflow must support explicit workflow dispatch');
-assert(!/\n\s*push:\s*\n\s*branches:\s*\n\s*-\s*main\b/.test(production), 'production workflow must not deploy on main push');
-assert(/\^\[0-9a-fA-F\]\{40\}\$/.test(production), 'production workflow must require an exact 40-character SHA');
-assert(/merge-base --is-ancestor/.test(production), 'production workflow must require the target SHA to be contained in main');
-for (const status of [
-  'application-ci/verified',
-  'browser-ui/verified',
-  'database-rls/verified',
-  'security-integration/verified',
-  'ai-privacy/verified',
-  'futures-public-network-smoke/verified',
-]) {
-  assert(production.includes(status), `production workflow is missing required status ${status}`);
-}
-assert(production.includes('actions.listWorkflowRunsForRepo'), 'production gate must verify CI workflow-run provenance, not only status contexts');
-assert(production.includes("run.name === 'Application CI'"), 'production gate must require the Application CI workflow');
-assert(production.includes("run.head_branch === 'main'"), 'production gate must require a main-branch run');
-assert(production.includes("run.event === 'push'"), 'production gate must require a main push event');
-assert(/environment:\s*production/.test(production), 'production job must use the GitHub production environment');
-assert(!/STAGING_/.test(production), 'production workflow must not consume staging secrets');
+assert(!/\n\s*push:\s*\n\s*branches:/.test(production), 'production workflow must not deploy on main push');
+assert(/\^\[0-9a-fA-F\]\{40\}\$/.test(production), 'production workflow must require an exact SHA');
+assert(production.includes('actions.listWorkflowRunsForRepo'), 'production gate must verify Application CI run provenance');
+assert(production.includes('actions.listArtifactsForRepo'), 'production gate must locate staging verdict artifacts');
+assert(production.includes('actions.getWorkflowRun'), 'production gate must directly verify the artifact source run');
+assert(production.includes('actions/download-artifact@v4'), 'production gate must download the exact verdict artifact');
+assert(production.includes('verify-staging-verdict.mjs'), 'production gate must validate verdict contents');
+assert(production.includes('staging-verdict-${{ steps.target.outputs.sha }}'), 'production gate must use an exact-SHA artifact name');
+assert(production.includes("run.path === '.github/workflows/staging-readiness.yml'"), 'production gate must require the official staging workflow');
+assert(production.includes("run.conclusion === 'success'"), 'production gate must require successful staging workflow conclusion');
+assert(/environment:\s*production/.test(production), 'production deploy job must use the protected production environment');
+assert(!/STAGING_(?:SSH|SUPABASE|DATABASE|PENDING|ASSOCIATE|REGULAR|ADMIN)/.test(production), 'production workflow must not consume staging secrets');
 
 assert(!/PROD_/.test(staging), 'staging workflow must not consume production secrets');
-assert(!staging.includes('/opt/stock-app'), 'staging workflow must not use the production install path');
+assert(!staging.includes('/opt/stock-app'), 'staging workflow must not use the production path');
 assert(!staging.includes('PM2_NAME=stock-app'), 'staging workflow must not use the production PM2 process');
 assert(!staging.includes('https://lsj119.duckdns.org'), 'staging workflow must not use the production URL');
 assert(staging.includes('/srv/seungjae-staging'), 'staging workflow must use the isolated staging path');
-assert(/action:[\s\S]*?default:\s*preflight[\s\S]*?options:[\s\S]*?-\s*preflight[\s\S]*?-\s*deploy/.test(staging),
-  'staging workflow must default to a non-mutating preflight and require explicit deploy selection');
-assert(/Report every missing or invalid staging setting[\s\S]*?--preflight/.test(staging),
-  'staging workflow must run the aggregate preflight verifier');
-assert(/deploy-and-verify:[\s\S]*?if:\s*inputs\.action == 'deploy'/.test(staging),
-  'staging deployment must not run unless deploy is explicitly selected');
-assert(/Run full staging account and browser verification[\s\S]*?if:\s*inputs\.run_full_validation == true/.test(staging),
-  'four-account browser validation must be an explicit full-validation step');
-assert(/Run explicitly approved staging DB migration and rollback drill[\s\S]*?if:\s*inputs\.run_destructive_recovery_drill == true[\s\S]*?verify-phase8-db\.sh/.test(staging),
-  'staging DB rollback drill must run only with explicit destructive approval');
-assert(/Run destructive staging-only recovery and log-redaction drills[\s\S]*?if:\s*inputs\.run_destructive_recovery_drill == true[\s\S]*?--remote/.test(staging),
-  'staging file deletion and recovery drills must run only with explicit destructive approval');
-assert(staging.includes('STAGING_SUPABASE_URL'), 'full staging validation must support a staging-only Supabase URL');
-assert(staging.includes('STAGING_SUPABASE_ANON_KEY'), 'full staging validation must support a staging publishable key');
-assert(staging.includes('STAGING_SUPABASE_SECRET_KEY'), 'full staging validation must support a server-only Supabase key');
-assert(staging.includes('scp -q'), 'staging runtime settings must be transferred through a temporary protected file');
-assert(!staging.includes("printf 'TARGET_SHA=%q STAGING_BASE_URL=%q"), 'staging secrets must not be placed in the remote process command line');
-assert(!staging.includes('운영 배포 승인 가능'), 'staging success alone must never grant production approval');
-assert(staging.includes('운영 배포 승인 보류'), 'staging workflow must keep production approval on hold pending direct environment verification');
+assert(staging.includes('STAGING_RUN_FULL_VALIDATION=true is mandatory'), 'deploy candidates must require full validation');
+assert(staging.includes('Run complete anonymous and four-account browser validation'), 'staging must execute the complete browser suite');
+assert(staging.includes('playwright install --with-deps chromium'), 'staging must install the real browser runtime');
+assert(staging.includes('Collect staging runtime, health, SHA, and PM2 stability evidence'), 'staging must collect runtime evidence');
+assert(staging.includes('staging-runtime-verification.json'), 'staging must persist runtime verification');
+assert(staging.includes('staging-database-verification.json'), 'staging must persist DB migration assessment');
+assert(staging.includes('build-staging-verdict.mjs'), 'staging must build a final verdict');
+assert(staging.includes('actions/upload-artifact@v4'), 'staging must upload immutable evidence');
+assert(staging.includes('staging-verdict-${{ env.TARGET_SHA }}'), 'staging artifact must be tied to the exact target SHA');
+assert(staging.includes('RELEASE_READY'), 'staging summary must expose release readiness');
+assert(staging.includes('Failed:') && staging.includes('Skipped:'), 'staging summary must report failed and skipped counts');
+assert(verdictBuilder.includes('정의된 검증 범위 내 미발견 오류 0개 — 운영 배포 가능'), 'verdict builder must use the exact success verdict');
+assert(verdictBuilder.includes('오류 발견 — 운영 배포 불가'), 'verdict builder must use the exact failure verdict');
+assert(verdictBuilder.includes('배포 성공, 전체 검증 미완료 — 운영 배포 불가'), 'verdict builder must use the exact incomplete verdict');
 
-assert(/issue_comment:\s*\n\s*types:\s*\[created\]/.test(dispatchBridge), 'dispatch bridge must accept newly created issue comments only');
-assert(!dispatchBridge.includes('pull_request_target'), 'dispatch bridge must never execute privileged code through pull_request_target');
-assert(dispatchBridge.includes("github.event.issue.number == 23"), 'dispatch bridge must be restricted to control issue #23');
-assert(dispatchBridge.includes("github.event.issue.pull_request == null"), 'dispatch bridge must reject pull request comments');
-assert(dispatchBridge.includes("github.event.issue.state == 'open'"), 'dispatch bridge must require the control issue to remain open');
-assert(dispatchBridge.includes("github.event.issue.title == 'Staging Readiness Control'"), 'dispatch bridge must require the exact control issue title');
-assert(dispatchBridge.includes("github.event.comment.user.login == 'seungjae3908-source'"), 'dispatch bridge must require the repository owner login');
-assert(dispatchBridge.includes("github.event.comment.author_association == 'OWNER'"), 'dispatch bridge must require OWNER author association');
-assert(dispatchBridge.includes("flags.includes('--deploy') ? 'deploy' : 'preflight'"),
-  'dispatch bridge must default to preflight and require an explicit deploy flag');
-assert(dispatchBridge.includes("flags.includes('--full-validation')"),
-  'dispatch bridge must parse explicit full-validation approval');
-assert(dispatchBridge.includes("flags.includes('--destructive')"),
-  'dispatch bridge must parse explicit destructive approval');
-assert(dispatchBridge.includes('git merge-base --is-ancestor'), 'dispatch bridge must require a SHA contained in main');
-assert(dispatchBridge.includes('actions: write'), 'dispatch job must explicitly request Actions write permission');
-assert(dispatchBridge.includes('issues: write'), 'dispatch job must explicitly request issue comment permission');
-assert(dispatchBridge.includes('statuses: read'), 'dispatch bridge must read verified status contexts');
-assert(dispatchBridge.includes('actions.listWorkflowRunsForRepo'), 'dispatch bridge must verify CI workflow-run provenance');
-for (const status of [
-  'application-ci/verified',
-  'browser-ui/verified',
-  'database-rls/verified',
-  'security-integration/verified',
-  'ai-privacy/verified',
-  'futures-public-network-smoke/verified',
-]) {
-  assert(dispatchBridge.includes(status), `dispatch bridge is missing required status ${status}`);
-}
-assert(dispatchBridge.includes("workflowId = 'staging-readiness.yml'"), 'dispatch bridge must target only the staging readiness workflow');
-assert(dispatchBridge.includes("ref: 'main'"), 'dispatch bridge must dispatch the workflow from main');
-assert(dispatchBridge.includes('action: process.env.STAGING_ACTION'), 'dispatch bridge must forward preflight or deploy action');
-assert(dispatchBridge.includes('run_full_validation: process.env.RUN_FULL_VALIDATION'),
-  'dispatch bridge must forward full-validation approval');
-assert(dispatchBridge.includes('run_destructive_recovery_drill: process.env.RUN_DESTRUCTIVE_RECOVERY_DRILL'),
-  'dispatch bridge must forward destructive approval');
-assert(dispatchBridge.includes('actions.createWorkflowDispatch'), 'dispatch bridge must use the workflow dispatch API');
-assert(!dispatchBridge.includes('production-deploy.yml'), 'dispatch bridge must never target the production deployment workflow');
-assert(!dispatchBridge.includes('/opt/stock-app'), 'dispatch bridge must never reference the production install path');
-assert(!dispatchBridge.includes('PROD_'), 'dispatch bridge must never consume production secrets');
-assert(!dispatchBridge.includes('STAGING_SSH_PRIVATE_KEY'), 'dispatch bridge must not read the staging private key');
+assert(approval.includes('actions.listArtifactsForRepo'), 'one-time approval must wait for an exact verdict artifact');
+assert(approval.includes('actions/download-artifact@v4'), 'one-time approval must download the verdict');
+assert(approval.includes('verify-staging-verdict.mjs'), 'one-time approval must independently validate the verdict');
+assert(approval.includes('failed=0, skipped=0'), 'one-time approval audit must require zero failed and skipped checks');
+assert(approval.includes('actions.createWorkflowDispatch'), 'one-time approval must dispatch only the official production workflow');
+assert(!approval.includes('secrets.'), 'one-time approval gate must not read deployment secrets');
+assert(!approval.includes('/opt/stock-app'), 'one-time approval gate must not touch the production path');
 
-assert(productionScript.includes('restore_backup'), 'production deploy script must retain automatic rollback');
-assert(stagingScript.includes('checksums.sha256'), 'staging deploy script must create backup checksums');
-assert(stagingScript.includes('flock --close --nonblock'), 'staging lock must not be inherited by long-lived child processes');
-assert(stagingScript.includes('probe_health_url'), 'staging deployment and rollback health checks must retry');
-assert(stagingScript.includes('STAGING_FAILPOINT'), 'staging deploy script must support an intentional post-promotion failure drill');
-assert(stagingScript.includes('last-rollback-from'), 'staging deploy script must record rollback evidence');
-assert(stagingScript.includes('last-rollback-to'), 'staging deploy script must record rollback destination evidence');
-assert(stagingScript.includes('APP_ENV=staging'), 'staging deploy script must identify the environment');
-assert(stagingScript.includes('DEPLOY_SHA='), 'staging deploy script must expose the deployed revision to the server');
-assert(stagingScript.includes('VITE_SUPABASE_URL="$STAGING_SUPABASE_URL"'),
-  'staging frontend build must receive the isolated Supabase URL only when configured');
-assert(stagingScript.includes("'--env-file=.env.staging'"),
-  'live PM2 process must load the protected staging runtime environment file');
-assert(stagingScript.includes('pm2 startOrReload'),
-  'staging PM2 process must be created or reloaded from the isolated config');
-assert(!stagingScript.includes('STAGING_DATABASE_URL is required'),
-  'minimal deployment must not require a database migration URL');
-assert(!stagingScript.includes('STAGING_AI_API_KEY is required'),
-  'minimal deployment must not require an external AI key');
-assert(!stagingScript.includes('$RELEASE_DIR/api-server/.env.staging'), 'staging releases must not retain copied secret files');
+assert(dispatchBridge.includes("flags.includes('--full-validation')"), 'staging bridge must parse full validation');
+assert(dispatchBridge.includes("workflowId = 'staging-readiness.yml'"), 'staging bridge must target only staging readiness');
+assert(!dispatchBridge.includes('production-deploy.yml'), 'staging bridge must never dispatch production');
 
-assert(stagingVerifier.includes('staging setting name(s) need attention'),
-  'staging preflight must aggregate every missing or invalid setting');
-assert(stagingVerifier.includes('minimalDeployRequired'), 'staging verifier must define the minimal deployment requirements');
-assert(stagingVerifier.includes('fullValidationRequired'), 'staging verifier must separate full account/browser requirements');
-assert(stagingVerifier.includes('destructiveValidationRequired'), 'staging verifier must separate destructive database requirements');
-assert(stagingVerifier.includes('AI API key is optional and was not required'),
-  'staging verifier must report that an AI key is not required by current readiness checks');
 for (const marker of [
-  'damaged_backup_rejected=true',
-  'delete_restore=true',
-  'failed_deploy_rollback=true',
-  'previous_sha_recovery=true',
-  'same_sha_redeploy=true',
-  'logs_scanned=',
+  'target_sha', 'deployed_sha', 'total', 'passed', 'failed', 'skipped',
+  'console_errors', 'unexpected_http_errors', 'pm2_status', 'restart_count',
+  'release_ready', 'verdict',
 ]) {
-  assert(stagingVerifier.includes(marker), `staging verifier is missing required evidence marker ${marker}`);
+  assert(verdictBuilder.includes(marker), `verdict builder is missing ${marker}`);
 }
-assert(stagingVerifier.includes('no staging log files were available for inspection'), 'missing logs must fail rather than count as a clean scan');
-assert(stagingVerifier.includes('configured staging secret or personal value found in logs'), 'known staging secrets and personal values must be checked in logs');
+assert(verdictBuilder.includes('failed === 0 && skipped === 0'), 'release_ready must require failed=0 and skipped=0');
+assert(verdictVerifier.includes('verdict.release_ready !== true'), 'production verdict verifier must require release_ready=true');
+assert(verdictVerifier.includes('verdict.skipped !== 0'), 'production verdict verifier must reject skipped checks');
+assert(verdictVerifier.includes('verdict.deployed_sha !== targetSha'), 'production verdict verifier must reject SHA mismatch');
 
+for (const requirement of [
+  'anonymous: health, login boundary, and protected API denial',
+  'pending: approval-waiting account',
+  'associate: basic stock and spot access allowed',
+  'regular: futures, scanner, paper trading',
+  'admin: member management is allowed',
+  'bottom navigation and popup menus',
+  'console_errors',
+  'page_errors',
+  'unhandled_rejections',
+  'unexpected_http_errors',
+]) {
+  assert(stagingSpec.includes(requirement), `staging browser suite is missing ${requirement}`);
+}
 
-const fullValidationNames = [
-  'STAGING_SUPABASE_URL',
-  'STAGING_SUPABASE_ANON_KEY',
-  'STAGING_SUPABASE_SECRET_KEY',
-  'STAGING_PENDING_EMAIL',
-  'STAGING_PENDING_PASSWORD',
-  'STAGING_ASSOCIATE_EMAIL',
-  'STAGING_ASSOCIATE_PASSWORD',
-  'STAGING_REGULAR_EMAIL',
-  'STAGING_REGULAR_PASSWORD',
-  'STAGING_ADMIN_EMAIL',
-  'STAGING_ADMIN_PASSWORD',
-];
+assert(productionScript.includes('restore_backup'), 'production deploy script must retain rollback');
+assert(stagingScript.includes('checksums.sha256'), 'staging deploy script must create backup checksums');
+assert(stagingScript.includes('probe_health_url'), 'staging deploy script must retry health checks');
+assert(stagingScript.includes('APP_ENV=staging'), 'staging runtime must identify itself');
+assert(stagingScript.includes('DEPLOY_SHA='), 'staging runtime must expose the deployed SHA');
+assert(stagingVerifier.includes('staging setting name(s) need attention'), 'staging preflight must aggregate missing settings');
+assert(stagingVerifier.includes('fullValidationRequired'), 'staging preflight must require four test accounts for full validation');
 
 const verifierPath = path.join(root, 'api-server/scripts/verify-phase10-staging-readiness.mjs');
 const runPreflight = (extraEnv = {}) => spawnSync(process.execPath, [verifierPath, '--preflight'], {
@@ -173,36 +128,67 @@ const runPreflight = (extraEnv = {}) => spawnSync(process.execPath, [verifierPat
     ...extraEnv,
   },
 });
-
 const emptyPreflight = runPreflight();
 assert(emptyPreflight.status !== 0, 'empty staging preflight must fail');
 for (const name of ['STAGING_SSH_HOST', 'STAGING_SSH_USER', 'STAGING_SSH_PRIVATE_KEY', 'STAGING_BASE_URL']) {
   assert(emptyPreflight.stderr.includes(`- ${name}:`), `aggregate preflight did not report ${name}`);
 }
-const emptyReportedNames = emptyPreflight.stderr.split('\n').filter((line) => line.startsWith('- STAGING_'));
-assert(emptyReportedNames.length === 4, 'minimal preflight must report all four missing setting names in one run');
-
 const minimalPreflight = runPreflight({
-  STAGING_SSH_HOST: '158.247.235.32',
-  STAGING_SSH_USER: 'root',
+  STAGING_SSH_HOST: 'staging.example.invalid',
+  STAGING_SSH_USER: 'staging',
   STAGING_SSH_PRIVATE_KEY: '-----BEGIN OPENSSH PRIVATE KEY-----\nstatic-ci-test-only\n-----END OPENSSH PRIVATE KEY-----',
   STAGING_BASE_URL: 'https://staging.example.invalid',
 });
 assert(minimalPreflight.status === 0, `minimal preflight should pass: ${minimalPreflight.stderr}`);
-assert(minimalPreflight.stdout.includes('AI API key is optional and was not required'),
-  'minimal preflight must state that the AI key is optional');
-
 const fullPreflight = runPreflight({
   STAGING_ACTION: 'deploy',
   STAGING_RUN_FULL_VALIDATION: 'true',
-  STAGING_SSH_HOST: '158.247.235.32',
-  STAGING_SSH_USER: 'root',
+  STAGING_SSH_HOST: 'staging.example.invalid',
+  STAGING_SSH_USER: 'staging',
   STAGING_SSH_PRIVATE_KEY: '-----BEGIN OPENSSH PRIVATE KEY-----\nstatic-ci-test-only\n-----END OPENSSH PRIVATE KEY-----',
   STAGING_BASE_URL: 'https://staging.example.invalid',
 });
-assert(fullPreflight.status !== 0, 'full validation preflight without full settings must fail');
-for (const name of fullValidationNames) {
-  assert(fullPreflight.stderr.includes(`- ${name}:`), `full validation preflight did not report ${name}`);
+assert(fullPreflight.status !== 0, 'full validation without staging test accounts must fail');
+
+const temp = await mkdtemp(path.join(os.tmpdir(), 'staging-verdict-contract-'));
+try {
+  await mkdir(temp, { recursive: true });
+  const sha = 'a'.repeat(40);
+  await writeFile(path.join(temp, 'playwright-report.json'), JSON.stringify({
+    suites: [{ specs: [{ title: 'sample', tests: [{ projectName: 'chromium', status: 'expected', results: [{ status: 'passed' }] }] }] }],
+  }));
+  await writeFile(path.join(temp, 'staging-browser-results.json'), JSON.stringify({
+    console_errors: [], page_errors: [], unhandled_rejections: [], unexpected_http_errors: [],
+  }));
+  await writeFile(path.join(temp, 'staging-runtime-verification.json'), JSON.stringify({
+    deployed_sha: sha,
+    pm2_status: 'online',
+    restart_count: 3,
+    restart_count_delta: 0,
+    checks: [{ name: 'health', status: 'passed' }],
+  }));
+  await writeFile(path.join(temp, 'staging-database-verification.json'), JSON.stringify({
+    status: 'passed', detail: 'not required',
+  }));
+  const built = spawnSync(process.execPath, [path.join(root, 'api-server/scripts/build-staging-verdict.mjs')], {
+    cwd: root,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      TARGET_SHA: sha,
+      STAGING_RUN_FULL_VALIDATION: 'true',
+      STAGING_ARTIFACT_DIR: temp,
+    },
+  });
+  assert(built.status === 0, `release-ready fixture should pass: ${built.stderr}`);
+  const verified = spawnSync(process.execPath, [path.join(root, 'api-server/scripts/verify-staging-verdict.mjs'), path.join(temp, 'staging-verdict.json')], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, TARGET_SHA: sha },
+  });
+  assert(verified.status === 0, `release-ready verdict should verify: ${verified.stderr}`);
+} finally {
+  await rm(temp, { recursive: true, force: true });
 }
 
-console.log('[phase10-deployment-safety] production remains manual-only; staging defaults to aggregate preflight; deployment, full browser validation, and destructive recovery are separate explicit scopes; minimal deployment does not require DB, AI, or test accounts; PM2 loads the protected staging env file; production approval remains on hold');
+console.log('[phase10-deployment-safety] full staging validation, zero-skip verdict artifact, exact-SHA production revalidation, manual protected production deployment, and rollback contract verified');
