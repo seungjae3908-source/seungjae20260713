@@ -32,7 +32,7 @@ export default defineConfig({
     ignoreHTTPSErrors: false,
   },
   webServer: stagingMode ? undefined : {
-    command: 'VITE_PHASE4_E2E=true VITE_PHASE5_E2E=true VITE_PHASE6_E2E=true VITE_PHASE7_E2E=true VITE_PHASE8_E2E=true VITE_PHASE9_E2E=true pnpm exec vite --config vite.config.ts --host 127.0.0.1 --port 4173',
+    command: 'VITE_PHASE4_E2E=true VITE_PHASE5_E2E=true VITE_PHASE6_E2E=true VITE_PHASE7_E2E=true VITE_PHASE8_E2E=true VITE_PHASE9_E2E=true VITE_PHASE11_E2E=true pnpm exec vite --config vite.config.ts --host 127.0.0.1 --port 4173',
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
