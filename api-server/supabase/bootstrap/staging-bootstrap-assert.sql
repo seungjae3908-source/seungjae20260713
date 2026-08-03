@@ -97,10 +97,10 @@ begin
     'push_subscriptions_member_idx',
     'notification_history_member_created_idx',
     'price_alerts_member_idx',
-    'paper_journal_entries_user_created_idx',
+    'paper_journal_entries_user_updated_idx',
     'member_permission_audit_target_idx',
-    'trade_order_plans_user_status_idx',
-    'trade_orders_user_created_idx'
+    'trade_plans_user_updated_idx',
+    'trade_orders_user_updated_idx'
   ]
   loop
     if to_regclass(format('public.%I', required_index)) is null then
@@ -136,16 +136,32 @@ begin
   if not has_table_privilege('authenticated', 'public.profiles', 'SELECT') then
     raise exception 'authenticated role cannot read its permitted profile';
   end if;
-  if has_table_privilege('authenticated', 'public.watchlist_items', 'SELECT,INSERT,UPDATE,DELETE') then
+  if has_table_privilege('authenticated', 'public.watchlist_items', 'SELECT')
+     or has_table_privilege('authenticated', 'public.watchlist_items', 'INSERT')
+     or has_table_privilege('authenticated', 'public.watchlist_items', 'UPDATE')
+     or has_table_privilege('authenticated', 'public.watchlist_items', 'DELETE') then
     raise exception 'authenticated role unexpectedly has direct watchlist server-table privileges';
   end if;
-  if has_table_privilege('authenticated', 'public.market_cache', 'SELECT,INSERT,UPDATE,DELETE') then
+  if has_table_privilege('authenticated', 'public.market_cache', 'SELECT')
+     or has_table_privilege('authenticated', 'public.market_cache', 'INSERT')
+     or has_table_privilege('authenticated', 'public.market_cache', 'UPDATE')
+     or has_table_privilege('authenticated', 'public.market_cache', 'DELETE') then
     raise exception 'authenticated role unexpectedly has direct market cache privileges';
   end if;
-  if not has_table_privilege('service_role', 'public.profiles', 'SELECT,INSERT,UPDATE,DELETE') then
+  if not (
+    has_table_privilege('service_role', 'public.profiles', 'SELECT')
+    and has_table_privilege('service_role', 'public.profiles', 'INSERT')
+    and has_table_privilege('service_role', 'public.profiles', 'UPDATE')
+    and has_table_privilege('service_role', 'public.profiles', 'DELETE')
+  ) then
     raise exception 'service_role lacks profile administration privileges';
   end if;
-  if not has_table_privilege('service_role', 'public.watchlist_items', 'SELECT,INSERT,UPDATE,DELETE') then
+  if not (
+    has_table_privilege('service_role', 'public.watchlist_items', 'SELECT')
+    and has_table_privilege('service_role', 'public.watchlist_items', 'INSERT')
+    and has_table_privilege('service_role', 'public.watchlist_items', 'UPDATE')
+    and has_table_privilege('service_role', 'public.watchlist_items', 'DELETE')
+  ) then
     raise exception 'service_role lacks watchlist server privileges';
   end if;
 
