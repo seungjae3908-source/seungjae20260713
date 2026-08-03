@@ -6,16 +6,21 @@ grant select(user_id, exchange, account_mode, configured, last_verified_at, last
   on public.trade_exchange_connections to authenticated, anon;
 
 do $global_stop_service_only$
+declare
+  authenticated_select boolean := has_table_privilege('authenticated', 'public.trade_system_controls', 'select');
+  authenticated_insert boolean := has_table_privilege('authenticated', 'public.trade_system_controls', 'insert');
+  authenticated_update boolean := has_table_privilege('authenticated', 'public.trade_system_controls', 'update');
+  authenticated_delete boolean := has_table_privilege('authenticated', 'public.trade_system_controls', 'delete');
+  anon_select boolean := has_table_privilege('anon', 'public.trade_system_controls', 'select');
+  anon_insert boolean := has_table_privilege('anon', 'public.trade_system_controls', 'insert');
+  anon_update boolean := has_table_privilege('anon', 'public.trade_system_controls', 'update');
+  anon_delete boolean := has_table_privilege('anon', 'public.trade_system_controls', 'delete');
 begin
-  if has_table_privilege('authenticated', 'public.trade_system_controls', 'select')
-    or has_table_privilege('authenticated', 'public.trade_system_controls', 'insert')
-    or has_table_privilege('authenticated', 'public.trade_system_controls', 'update')
-    or has_table_privilege('authenticated', 'public.trade_system_controls', 'delete')
-    or has_table_privilege('anon', 'public.trade_system_controls', 'select')
-    or has_table_privilege('anon', 'public.trade_system_controls', 'insert')
-    or has_table_privilege('anon', 'public.trade_system_controls', 'update')
-    or has_table_privilege('anon', 'public.trade_system_controls', 'delete') then
-    raise exception 'browser role has a privilege on the global emergency stop control';
+  if authenticated_select or authenticated_insert or authenticated_update or authenticated_delete
+    or anon_select or anon_insert or anon_update or anon_delete then
+    raise exception 'global stop ACL auth[s=%,i=%,u=%,d=%] anon[s=%,i=%,u=%,d=%]',
+      authenticated_select, authenticated_insert, authenticated_update, authenticated_delete,
+      anon_select, anon_insert, anon_update, anon_delete;
   end if;
 end
 $global_stop_service_only$;
