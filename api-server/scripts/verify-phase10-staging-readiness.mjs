@@ -15,17 +15,14 @@ const fullValidationRequired = [
   'STAGING_SUPABASE_URL',
   'STAGING_SUPABASE_ANON_KEY',
   'STAGING_SUPABASE_SECRET_KEY',
-  'STAGING_PENDING_EMAIL',
-  'STAGING_PENDING_PASSWORD',
-  'STAGING_ASSOCIATE_EMAIL',
-  'STAGING_ASSOCIATE_PASSWORD',
-  'STAGING_REGULAR_EMAIL',
-  'STAGING_REGULAR_PASSWORD',
-  'STAGING_ADMIN_EMAIL',
-  'STAGING_ADMIN_PASSWORD',
 ];
 
 const destructiveValidationRequired = ['STAGING_DATABASE_URL'];
+const knownProductionSupabaseProjectRefs = new Set([
+  // Production project confirmed by the repository owner. A staging run must
+  // fail before deployment or ephemeral account creation when this ref is used.
+  'bawcbkoyovbeajkrnduq',
+]);
 
 const sensitiveNames = [
   ...minimalDeployRequired,
@@ -67,7 +64,7 @@ function collectConfigurationErrors({
 
   requireNames(minimalDeployRequired, 'preflight and non-destructive staging deployment');
   if (requireFullValidation) {
-    requireNames(fullValidationRequired, 'full account and browser validation');
+    requireNames(fullValidationRequired, 'ephemeral account provisioning and full browser validation');
   }
   if (requireDestructiveValidation) {
     requireNames(destructiveValidationRequired, 'explicit staging-only database/recovery validation');
@@ -104,8 +101,21 @@ function collectConfigurationErrors({
   }
 
   const supabaseUrl = value('STAGING_SUPABASE_URL');
-  if (supabaseUrl && !/^https:\/\//i.test(supabaseUrl)) {
-    add('STAGING_SUPABASE_URL', 'must use HTTPS');
+  if (supabaseUrl) {
+    try {
+      const parsed = new URL(supabaseUrl);
+      if (parsed.protocol !== 'https:') {
+        add('STAGING_SUPABASE_URL', 'must use HTTPS');
+      }
+      const projectMatch = /^([a-z0-9]+)\.supabase\.co$/i.exec(parsed.hostname);
+      if (!projectMatch) {
+        add('STAGING_SUPABASE_URL', 'must use the standard isolated <project-ref>.supabase.co host');
+      } else if (knownProductionSupabaseProjectRefs.has(projectMatch[1].toLowerCase())) {
+        add('STAGING_SUPABASE_URL', 'resolves to the known production Supabase project');
+      }
+    } catch {
+      add('STAGING_SUPABASE_URL', 'must be a valid HTTPS URL');
+    }
   }
 
   const anonKey = value('STAGING_SUPABASE_ANON_KEY');
@@ -128,22 +138,6 @@ function collectConfigurationErrors({
   const aiKey = value('STAGING_AI_API_KEY');
   if (aiKey && aiKey.length < 12) {
     add('STAGING_AI_API_KEY', 'is configured but too short to be plausible');
-  }
-
-  const emails = [
-    'STAGING_PENDING_EMAIL',
-    'STAGING_ASSOCIATE_EMAIL',
-    'STAGING_REGULAR_EMAIL',
-    'STAGING_ADMIN_EMAIL',
-  ];
-  const configuredEmails = emails.filter((name) => value(name));
-  for (const name of configuredEmails) {
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value(name))) {
-      add(name, 'must be a valid email address');
-    }
-  }
-  if (requireFullValidation && new Set(emails.map((name) => value(name).toLowerCase())).size !== 4) {
-    for (const name of emails) add(name, 'all four staging account emails must be distinct');
   }
 
   const forbiddenFragments = [
@@ -190,10 +184,13 @@ if (mode === '--preflight') {
 
   const checked = [
     'minimal deployment',
-    requireFullValidation ? 'full account/browser validation' : null,
+    requireFullValidation ? 'ephemeral account provisioning and full account/browser validation' : null,
     requireDestructiveValidation ? 'explicit destructive staging validation' : null,
   ].filter(Boolean).join(', ');
   console.log(`[phase10-staging-readiness] preflight passed for: ${checked}`);
+  if (requireFullValidation) {
+    console.log('[phase10-staging-readiness] four validation accounts will be created temporarily and deleted by the browser suite');
+  }
   console.log('[phase10-staging-readiness] AI API key is optional and was not required');
   process.exit(0);
 }
@@ -247,14 +244,6 @@ const encodedSecrets = {
   supabaseAnonKey: encode(value('STAGING_SUPABASE_ANON_KEY')),
   supabaseSecretKey: encode(value('STAGING_SUPABASE_SECRET_KEY')),
   ai: encode(value('STAGING_AI_API_KEY')),
-  pendingEmail: encode(value('STAGING_PENDING_EMAIL')),
-  pendingPassword: encode(value('STAGING_PENDING_PASSWORD')),
-  associateEmail: encode(value('STAGING_ASSOCIATE_EMAIL')),
-  associatePassword: encode(value('STAGING_ASSOCIATE_PASSWORD')),
-  regularEmail: encode(value('STAGING_REGULAR_EMAIL')),
-  regularPassword: encode(value('STAGING_REGULAR_PASSWORD')),
-  adminEmail: encode(value('STAGING_ADMIN_EMAIL')),
-  adminPassword: encode(value('STAGING_ADMIN_PASSWORD')),
 };
 
 const result = runRemote(`
@@ -290,14 +279,6 @@ SENSITIVE_VALUES=(
   "$STAGING_SUPABASE_ANON_KEY"
   "$STAGING_SUPABASE_SECRET_KEY"
   "$STAGING_AI_API_KEY"
-  "$(decode '${encodedSecrets.pendingEmail}')"
-  "$(decode '${encodedSecrets.pendingPassword}')"
-  "$(decode '${encodedSecrets.associateEmail}')"
-  "$(decode '${encodedSecrets.associatePassword}')"
-  "$(decode '${encodedSecrets.regularEmail}')"
-  "$(decode '${encodedSecrets.regularPassword}')"
-  "$(decode '${encodedSecrets.adminEmail}')"
-  "$(decode '${encodedSecrets.adminPassword}')"
 )
 
 write_runtime_env() {
