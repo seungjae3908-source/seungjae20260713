@@ -1,0 +1,32 @@
+name: Staging Dispatch Run Confirmation CI
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/staging-dispatch-bridge.yml
+      - .github/workflows/staging-dispatch-run-confirmation-ci.yml
+      - api-server/scripts/verify-phase10-staging-dispatch-run-confirmation.mjs
+      - docs/staging-dispatch-bridge.md
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/staging-dispatch-bridge.yml
+      - .github/workflows/staging-dispatch-run-confirmation-ci.yml
+      - api-server/scripts/verify-phase10-staging-dispatch-run-confirmation.mjs
+      - docs/staging-dispatch-bridge.md
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify dispatch requires a materialized staging run
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: node api-server/scripts/verify-phase10-staging-dispatch-run-confirmation.mjs
