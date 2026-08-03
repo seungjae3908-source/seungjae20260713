@@ -4,7 +4,7 @@
 
 The bridge accepts one owner-only command on issue `#23` (`Staging Readiness Control`) and dispatches `.github/workflows/staging-readiness.yml` from `main`.
 
-It never reads staging secrets and never targets production. API acceptance is not deployment evidence: the bridge reports success only after GitHub exposes the actual workflow Run ID for the requested revision.
+It never reads staging secrets and never targets production. API acceptance is not deployment evidence: the bridge reports success only after GitHub returns and independently verifies the actual workflow Run ID for the requested revision.
 
 ## Commands
 
@@ -55,13 +55,14 @@ Omitting `--deploy` always results in preflight-only behavior.
 
 Before creating a new dispatch, the bridge checks for an existing queued or in-progress `Staging Readiness` workflow_dispatch run for the same exact current `main` SHA. When one exists, it reports that Run ID and does not create a duplicate.
 
-After the official dispatch API returns, the bridge polls the `Staging Readiness` workflow-run list and requires a matching run that:
+The dispatch request pins GitHub REST API version `2026-03-10`, sends the recommended GitHub JSON media type, and sets `return_run_details: true`. A valid response must have HTTP status `200` and include a positive integer `workflow_run_id`.
+
+The bridge then fetches that exact Run ID and independently verifies that it:
 
 - uses event `workflow_dispatch`;
 - uses branch `main`;
-- has `head_sha` equal to the requested exact current `main` SHA;
-- was created after the dispatch request began.
+- has `head_sha` equal to the requested exact current `main` SHA.
 
-Only then does it post `Staging readiness workflow run created` with the actual workflow Run ID, run link, status, visible Job IDs, source command comment ID, and bridge Run ID.
+Only then does it post `Staging readiness workflow run created` with the actual workflow Run ID, run link, status, visible Job IDs, source command comment ID, API version, and bridge Run ID.
 
-If no matching run materializes, the bridge fails instead of claiming success. Its failure comment includes the bridge Run ID and link so the original logs can be inspected. The bridge never treats a successful API response alone as a successful workflow creation.
+A response without valid run details or a returned Run that does not match the exact event, branch, and SHA fails the bridge. The bridge does not use timestamp polling as a substitute for an exact Run ID and never treats an empty or deprecated API response as successful workflow creation.
