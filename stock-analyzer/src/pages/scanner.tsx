@@ -532,7 +532,7 @@ function LoadingBox() {
   );
 }
 
-export default function ScannerPage({ embedded = false }: { embedded?: boolean } = {}) {
+export default function ScannerPage({ embedded = false }: { embedded?: boolean }) {
   const [location, navigate] = useLocation();
   const assetMode = useAssetMode();
   const analysisSelection = useAnalysisSelection();
