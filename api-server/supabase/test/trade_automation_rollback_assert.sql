@@ -3,7 +3,7 @@ do $trade_rollback$
 declare candidate_table text;
 begin
   foreach candidate_table in array array[
-    'trade_automation_profiles', 'trade_exchange_connections', 'trade_order_plans',
+    'trade_system_controls', 'trade_automation_profiles', 'trade_exchange_connections', 'trade_order_plans',
     'trade_orders', 'trade_order_events'
   ] loop
     if to_regclass('public.' || candidate_table) is not null then
