@@ -17,6 +17,10 @@ const port = Number(
     8080,
 );
 
+const deploySha = /^[0-9a-f]{40}$/.test(String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase())
+  ? String(process.env.DEPLOY_SHA).trim().toLowerCase()
+  : null;
+
 app.disable('x-powered-by');
 
 app.use(
@@ -43,6 +47,7 @@ app.get('/health', (_req, res) => {
     ok: true,
     service: 'api-server',
     route: '/health',
+    deploySha,
     time: new Date().toISOString(),
   });
 });
@@ -52,6 +57,7 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     service: 'api-server',
     route: '/api/health',
+    deploySha,
     time: new Date().toISOString(),
   });
 });

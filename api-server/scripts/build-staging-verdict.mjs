@@ -13,6 +13,7 @@ const readJson = (name) => {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 };
 
+const bootstrap = readJson('staging-bootstrap-verification.json');
 const playwright = readJson('playwright-report.json');
 const browser = readJson('staging-browser-results.json');
 const runtime = readJson('staging-runtime-verification.json');
@@ -73,27 +74,55 @@ addCheck(
   fullValidation ? 'STAGING_RUN_FULL_VALIDATION=true' : 'STAGING_RUN_FULL_VALIDATION was not true',
 );
 
+if (!bootstrap) {
+  addCheck('allowlisted staging Supabase bootstrap', 'failed', 'staging-bootstrap-verification.json is missing');
+} else {
+  const bootstrapOk = bootstrap.status === 'passed'
+    && bootstrap.atomic_transaction === true
+    && Number(bootstrap.idempotency_passes) === 2
+    && Number(bootstrap.auth_users_copied) === 0
+    && Number(bootstrap.profile_rows_copied) === 0
+    && Number(bootstrap.storage_objects_copied) === 0
+    && bootstrap.credentials_recorded === false;
+  addCheck(
+    'allowlisted staging Supabase bootstrap',
+    bootstrapOk ? 'passed' : 'failed',
+    bootstrapOk
+      ? `schema_version=${String(bootstrap.schema_version ?? '')}; atomic=true; idempotency_passes=2; copied_rows=0`
+      : String(bootstrap.detail ?? 'bootstrap artifact did not satisfy the isolation and atomicity contract'),
+  );
+}
+
+const accountsCreated = Number(accountProvisioning?.created ?? 0);
+const provisioningOk = accountProvisioning?.status === 'passed'
+  && accountsCreated === 4
+  && accountProvisioning.credentials_recorded === false;
 if (!accountProvisioning) {
   addCheck('ephemeral staging account provisioning', 'failed', 'staging-account-provisioning.json is missing');
 } else {
   addCheck(
     'ephemeral staging account provisioning',
-    accountProvisioning.status === 'passed' ? 'passed' : 'failed',
-    accountProvisioning.status === 'passed'
-      ? `${Number(accountProvisioning.created ?? 0)} temporary accounts created; credentials_recorded=${String(accountProvisioning.credentials_recorded)}`
-      : String(accountProvisioning.detail ?? 'temporary account provisioning failed'),
+    provisioningOk ? 'passed' : 'failed',
+    provisioningOk
+      ? '4 temporary accounts created; credentials_recorded=false'
+      : String(accountProvisioning.detail ?? `expected 4 temporary accounts without recorded credentials; created=${accountsCreated}`),
   );
 }
 
+const accountsDeleted = Number(accountCleanup?.deleted ?? 0);
+const profilesRemaining = Number(accountCleanup?.profiles_remaining ?? -1);
+const cleanupOk = accountCleanup?.status === 'passed'
+  && accountsDeleted === 4
+  && profilesRemaining === 0;
 if (!accountCleanup) {
   addCheck('ephemeral staging account cleanup', 'failed', 'staging-account-cleanup.json is missing');
 } else {
   addCheck(
     'ephemeral staging account cleanup',
-    accountCleanup.status === 'passed' ? 'passed' : 'failed',
-    accountCleanup.status === 'passed'
-      ? `${Number(accountCleanup.deleted ?? 0)} temporary accounts deleted; profiles_remaining=${Number(accountCleanup.profiles_remaining ?? -1)}`
-      : String(accountCleanup.detail ?? 'temporary account cleanup failed'),
+    cleanupOk ? 'passed' : 'failed',
+    cleanupOk
+      ? '4 temporary accounts deleted; profiles_remaining=0'
+      : String(accountCleanup.detail ?? `expected deleted=4 and profiles_remaining=0; deleted=${accountsDeleted}; profiles_remaining=${profilesRemaining}`),
   );
 }
 
@@ -155,13 +184,16 @@ const result = {
   passed,
   failed,
   skipped,
+  bootstrap_status: String(bootstrap?.status ?? 'missing'),
+  bootstrap_schema_version: String(bootstrap?.schema_version ?? ''),
+  bootstrap_idempotency_passes: Number(bootstrap?.idempotency_passes ?? 0),
   console_errors: consoleErrors,
   page_errors: pageErrors,
   unhandled_rejections: unhandledRejections,
   unexpected_http_errors: unexpectedHttpErrors,
-  ephemeral_accounts_created: Number(accountProvisioning?.created ?? 0),
-  ephemeral_accounts_deleted: Number(accountCleanup?.deleted ?? 0),
-  ephemeral_profiles_remaining: Number(accountCleanup?.profiles_remaining ?? -1),
+  ephemeral_accounts_created: accountsCreated,
+  ephemeral_accounts_deleted: accountsDeleted,
+  ephemeral_profiles_remaining: profilesRemaining,
   pm2_status: pm2Status,
   restart_count: restartCount,
   restart_count_delta: restartDelta,

@@ -14,6 +14,8 @@ const guard = await read('api-server/supabase/bootstrap/staging-empty-project-gu
 const base = await read('api-server/supabase/bootstrap/staging-allowlist-base.sql');
 const assertion = await read('api-server/supabase/bootstrap/staging-bootstrap-assert.sql');
 const runner = await read('api-server/scripts/apply-staging-supabase-bootstrap.mjs');
+const verdict = await read('api-server/scripts/build-staging-verdict.mjs');
+const serverEntry = await read('api-server/src/index.ts');
 const playwright = await read('stock-analyzer/playwright.config.ts');
 const dbVerifier = await read('api-server/scripts/verify-phase8-db.sh');
 const authHarness = await read('api-server/supabase/test/staging_bootstrap_auth_harness.sql');
@@ -86,4 +88,20 @@ assert(!authHarness.includes('insert into auth.users'), 'empty CI harness must n
 assert(triggerTest.includes('delete from auth.users'), 'trigger integration must test Auth cleanup');
 assert(triggerTest.includes('profile remained after Auth user deletion'), 'trigger integration must verify profile cascade');
 
-console.log('[staging-bootstrap-contract] allowlist, atomicity, isolation, trigger cleanup, no-user-copy, and no-manual-account-secret contracts verified');
+for (const marker of [
+  "readJson('staging-bootstrap-verification.json')",
+  'bootstrap.atomic_transaction === true',
+  'Number(bootstrap.idempotency_passes) === 2',
+  'Number(bootstrap.auth_users_copied) === 0',
+  'Number(bootstrap.profile_rows_copied) === 0',
+  'Number(bootstrap.storage_objects_copied) === 0',
+  'accountsCreated === 4',
+  'accountsDeleted === 4',
+  'profilesRemaining === 0',
+]) {
+  assert(verdict.includes(marker), `release verdict is missing ${marker}`);
+}
+assert(serverEntry.includes('process.env.DEPLOY_SHA'), 'health response must read the immutable deploy SHA');
+assert(serverEntry.includes('deploySha,'), 'health response must expose deploySha');
+
+console.log('[staging-bootstrap-contract] allowlist, atomicity, isolation, health SHA, exact account cleanup, no-user-copy, and no-manual-account-secret contracts verified');
