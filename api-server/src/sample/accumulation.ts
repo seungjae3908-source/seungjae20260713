@@ -60,6 +60,7 @@ export interface SignalReport {
 
 // Normalised context the service builds from financial / risk / news services.
 export interface SignalContext {
+  financialSource?: 'live' | 'sample';
   financials?: {
     revenueGrowth?: number[]; // recent YoY/QoQ %
     profitGrowth?: number[];
@@ -71,6 +72,7 @@ export interface SignalContext {
   } | null;
   negativeEvents?: string[]; // event codes: OFFERING/CB/BW/ATM/관리종목/상장폐지 ...
   positiveEvents?: string[]; // SUPPLY_CONTRACT/DIVIDEND/자사주 ...
+  riskDataAvailable?: boolean;
   newsScore?: number | null; // -100..100
   newsPositive?: number; // count
   newsNegative?: number; // count

@@ -10,6 +10,7 @@ import { useLocation } from "wouter";
 import {
   ChevronDown,
   ChevronRight,
+  BookmarkPlus,
   HelpCircle,
   Plus,
   RefreshCw,
@@ -38,8 +39,14 @@ import {
   formatAppPercent,
   formatAppPrice,
   normalizePlanText,
+  toggleWatchlistItem,
 } from "@/lib/stock-display";
 import { cn } from "@/lib/utils";
+import {
+  selectionQuery,
+  useAnalysisSelection,
+  type AnalysisSelection,
+} from "@/lib/analysis-selection";
 import {
 	assessAutoTradeCandidate,
   closeAutoTradePosition,
@@ -57,6 +64,25 @@ type AnyObj = Record<string, unknown>;
 type MarketFilter = "KR" | "US";
 type ScannerViewMode = "condition" | "chart" | "auto";
 type ThresholdOption = number;
+type ScannerTimeframe = "5m" | "15m" | "1H" | "4H" | "1D";
+type SavedSearch = {
+  id: string;
+  name: string;
+  assetType: "stock";
+  market: MarketFilter;
+  timeframe: ScannerTimeframe;
+  selected: string[];
+  preset: string | null;
+  volumeThreshold: ThresholdOption;
+  tradingValueThreshold: ThresholdOption;
+  volumeLookbackDays: number;
+  tradingValueLookbackDays: number;
+  marketCapThreshold: number;
+  minimumScore: number;
+  maximumRiskScore: number;
+  createdAt: string;
+  updatedAt: string;
+};
 type AutoTradeJournalEntry = {
   id: string;
   ticker: string;
@@ -166,6 +192,44 @@ const THRESHOLD_STORAGE_KEY = "scanner.threshold.v1";
 const MARKET_OPTIONS: MarketFilter[] = ["KR", "US"];
 const DEFAULT_MARKET: MarketFilter = "KR";
 const MARKET_STORAGE_KEY = "scanner-market";
+const SAVED_SEARCHES_KEY = "sa-saved-searches-v1";
+const SCANNER_TIMEFRAMES: Array<{ value: ScannerTimeframe; label: string }> = [
+  { value: "5m", label: "5분" },
+  { value: "15m", label: "15분" },
+  { value: "1H", label: "1시간" },
+  { value: "4H", label: "4시간" },
+  { value: "1D", label: "일봉" },
+];
+
+function loadSavedSearches(): SavedSearch[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const value = JSON.parse(window.localStorage.getItem(SAVED_SEARCHES_KEY) ?? "[]");
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item) => item && typeof item.id === "string" && Array.isArray(item.selected))
+      .slice(0, 20)
+      .map((item) => ({
+        ...item,
+        assetType: "stock",
+        market: item.market === "US" ? "US" : "KR",
+        timeframe: SCANNER_TIMEFRAMES.some((option) => option.value === item.timeframe) ? item.timeframe : "1D",
+        selected: item.selected.map(String).filter(Boolean).slice(0, 40),
+        preset: typeof item.preset === "string" ? item.preset : null,
+        volumeThreshold: Number.isFinite(Number(item.volumeThreshold)) ? Number(item.volumeThreshold) : DEFAULT_THRESHOLD,
+        tradingValueThreshold: Number.isFinite(Number(item.tradingValueThreshold)) ? Number(item.tradingValueThreshold) : DEFAULT_THRESHOLD,
+        volumeLookbackDays: Number.isFinite(Number(item.volumeLookbackDays)) ? Number(item.volumeLookbackDays) : 5,
+        tradingValueLookbackDays: Number.isFinite(Number(item.tradingValueLookbackDays)) ? Number(item.tradingValueLookbackDays) : 5,
+        marketCapThreshold: Number.isFinite(Number(item.marketCapThreshold)) ? Number(item.marketCapThreshold) : 1_000_000_000,
+        minimumScore: Number.isFinite(Number(item.minimumScore)) ? Number(item.minimumScore) : 0,
+        maximumRiskScore: Number.isFinite(Number(item.maximumRiskScore)) ? Number(item.maximumRiskScore) : 100,
+        createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
+        updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : new Date().toISOString(),
+      }));
+  } catch {
+    return [];
+  }
+}
 
 // 임계값이 영향을 주는 지표 (거래량/거래대금 증가 계열)
 const VOLUME_INDICATORS = ["거래량 증가"];
@@ -381,6 +445,11 @@ function matchedLabels(card: AnyObj): string[] {
   return [];
 }
 
+function dataStateRank(value: unknown): number {
+  const state = String(value ?? "unavailable");
+  return state === "ok" ? 4 : state === "delayed" ? 3 : state === "stale" ? 2 : state === "insufficient" ? 1 : 0;
+}
+
 function resultMatchesSelectedAnd(card: AnyObj, selected: string[]) {
   if (!selected.length) return false;
 
@@ -389,21 +458,6 @@ function resultMatchesSelectedAnd(card: AnyObj, selected: string[]) {
   if (!matched.length) return false;
 
   return selected.every((label) => matched.includes(label));
-}
-
-function sortByMatch(cards: AnyObj[], selected: string[]) {
-  return [...cards].sort((a, b) => {
-    const aMatched = matchedLabels(a).filter((label) =>
-      selected.includes(label),
-    ).length;
-    const bMatched = matchedLabels(b).filter((label) =>
-      selected.includes(label),
-    ).length;
-
-    if (aMatched !== bMatched) return bMatched - aMatched;
-
-    return scoreOf(b) - scoreOf(a);
-  });
 }
 
 function heuristicIndicatorMatch(
@@ -472,19 +526,21 @@ function LoadingBox() {
   return (
     <div className="rounded-3xl border border-card-border bg-card p-8 text-center">
       <p className="break-keep text-sm font-bold leading-relaxed text-muted-foreground">
-        조건검색 결과 불러오는 중...
+        AI 검색 결과 불러오는 중...
       </p>
     </div>
   );
 }
 
-export default function ScannerPage() {
+export default function ScannerPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [location, navigate] = useLocation();
   const assetMode = useAssetMode();
+  const analysisSelection = useAnalysisSelection();
   // 최초 진입 시에는 항상 가장 왼쪽 탭(조건검색)이 선택된다.
   // 자동매매 설정·후보 화면은 사용자가 '자동매매' 버튼을 직접 눌렀을 때만 표시한다.
   const [viewMode, setViewMode] = useState<ScannerViewMode>("condition");
   const [market, setMarket] = useState<MarketFilter>(DEFAULT_MARKET);
+  const [timeframe, setTimeframe] = useState<ScannerTimeframe>("1D");
   const [selected, setSelected] = useState<string[]>(DEFAULT_SELECTED);
   const [helpOpen, setHelpOpen] = useState<string | null>(null);
   const [finderOpen, setFinderOpen] = useState(false);
@@ -499,6 +555,8 @@ export default function ScannerPage() {
   const [marketCapThreshold, setMarketCapThreshold] = useState<number>(
     MARKET_CAP_OPTIONS[0],
   );
+  const [minimumScore, setMinimumScore] = useState(0);
+  const [maximumRiskScore, setMaximumRiskScore] = useState(100);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [thresholdOpen, setThresholdOpen] = useState<string | null>(null);
   const [autoSettings, setAutoSettings] = useState<AutoTradeSettings>(() =>
@@ -511,6 +569,12 @@ export default function ScannerPage() {
   const [candidateListOpen, setCandidateListOpen] = useState(false);
   const [conditionResultsOpen, setConditionResultsOpen] = useState(false);
   const [chartTradeSignal, setChartTradeSignal] = useState<ChartBroadcastSignal | null>(null);
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>(loadSavedSearches);
+  const [savedSearchMessage, setSavedSearchMessage] = useState("");
+
+  useEffect(() => {
+    if (market === "US" && timeframe === "4H") setTimeframe("1H");
+  }, [market, timeframe]);
 
   const autoTradeStatus = useQuery({
     queryKey: ["auto-trade-status"],
@@ -558,6 +622,9 @@ export default function ScannerPage() {
   const usesTradingValue = selected.some((label) =>
     TRADING_VALUE_INDICATORS.includes(label),
   );
+  const usesMarketCap = selected.some((label) =>
+    MARKET_CAP_INDICATORS.includes(label),
+  );
 
   const scan = useQuery({
     queryKey: [
@@ -568,6 +635,10 @@ export default function ScannerPage() {
       tradingValueThreshold,
       volumeLookbackDays,
       tradingValueLookbackDays,
+      marketCapThreshold,
+      minimumScore,
+      maximumRiskScore,
+      timeframe,
     ],
     queryFn: () =>
       api.scan(selected, market, {
@@ -575,11 +646,15 @@ export default function ScannerPage() {
         tradingValueThreshold: usesTradingValue
           ? tradingValueThreshold
           : undefined,
+        marketCapThreshold: usesMarketCap ? marketCapThreshold : undefined,
+        minimumScore: minimumScore > 0 ? minimumScore : undefined,
+        maximumRiskScore: maximumRiskScore < 100 ? maximumRiskScore : undefined,
         volumeLookbackDays: usesVolume ? volumeLookbackDays : undefined,
         tradingValueLookbackDays: usesTradingValue
           ? tradingValueLookbackDays
           : undefined,
-      } as any),
+        timeframe,
+      }),
     enabled: selected.length > 0,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
@@ -628,13 +703,21 @@ export default function ScannerPage() {
       );
     });
 
-    return sortByMatch(filtered, selected);
+    return [...filtered].sort((a, b) =>
+      scoreOf(b) - scoreOf(a) ||
+      (toNumber(b.confidence) ?? -1) - (toNumber(a.confidence) ?? -1) ||
+      (toNumber(b.liquidity) ?? -1) - (toNumber(a.liquidity) ?? -1) ||
+      matchedLabels(b).filter((label) => selected.includes(label)).length - matchedLabels(a).filter((label) => selected.includes(label)).length ||
+      (toNumber(a.riskScore) ?? 100) - (toNumber(b.riskScore) ?? 100) ||
+      dataStateRank(b.dataState) - dataStateRank(a.dataState)
+    );
   }, [
     scan.data,
     selectedKey,
     volumeThreshold,
     tradingValueThreshold,
     marketCapThreshold,
+    timeframe,
   ]);
 
   const autoCandidates = useMemo<AutoTradeCandidate[]>(() => {
@@ -918,6 +1001,80 @@ export default function ScannerPage() {
     setThresholdOpen(null);
   };
 
+  const persistSavedSearches = (items: SavedSearch[]) => {
+    setSavedSearches(items);
+    window.localStorage.setItem(SAVED_SEARCHES_KEY, JSON.stringify(items));
+  };
+
+  const saveCurrentSearch = () => {
+    if (!selected.length) return;
+    const now = new Date().toISOString();
+    const presetLabel = STRATEGY_PRESETS.find((item) => item.key === activePreset)?.label;
+    const name = `${market === "KR" ? "국내" : "미국"} ${presetLabel ?? selected.slice(0, 2).join("+")} · ${SCANNER_TIMEFRAMES.find((item) => item.value === timeframe)?.label}`;
+    const item: SavedSearch = {
+      id: `saved:${Date.now()}`,
+      name,
+      assetType: "stock",
+      market,
+      timeframe,
+      selected: [...selected],
+      preset: activePreset,
+      volumeThreshold,
+      tradingValueThreshold,
+      volumeLookbackDays,
+      tradingValueLookbackDays,
+      marketCapThreshold,
+      minimumScore,
+      maximumRiskScore,
+      createdAt: now,
+      updatedAt: now,
+    };
+    persistSavedSearches([item, ...savedSearches].slice(0, 20));
+    setSavedSearchMessage(`저장됨 · ${name}`);
+  };
+
+  const restoreSavedSearch = (id: string) => {
+    const item = savedSearches.find((saved) => saved.id === id);
+    if (!item) return;
+    chooseMarket(item.market);
+    setTimeframe(item.timeframe);
+    setSelected(item.selected);
+    setActivePreset(item.preset);
+    setVolumeThreshold(item.volumeThreshold);
+    setTradingValueThreshold(item.tradingValueThreshold);
+    setVolumeLookbackDays(item.volumeLookbackDays);
+    setTradingValueLookbackDays(item.tradingValueLookbackDays);
+    setMarketCapThreshold(item.marketCapThreshold);
+    setMinimumScore(item.minimumScore);
+    setMaximumRiskScore(item.maximumRiskScore);
+    setSavedSearchMessage(`복원됨 · ${item.name}`);
+  };
+
+  const openInAiChart = (card: AnyObj, rank: number) => {
+    const ticker = String(card.ticker ?? "").trim().toUpperCase();
+    if (!ticker) return;
+    const next: AnalysisSelection = {
+      assetType: "stock",
+      market: cardMarket(card),
+      symbol: ticker,
+      ticker,
+      displayName: displayStockName(ticker, String(card.name ?? ticker), cardMarket(card)),
+      timeframe,
+      searchRunId: String((scan.data as any)?.searchRunId ?? "") || undefined,
+      signalScore: scoreOf(card),
+      signalRank: rank,
+      confidence: toNumber(card.confidence) ?? undefined,
+      riskLevel: String(card.riskLevel ?? "") || undefined,
+      matchedSignals: matchedLabels(card),
+      reasons: Array.isArray(card.scoreBreakdown)
+        ? (card.scoreBreakdown as string[])
+        : Object.values((card.scoreBreakdown as Record<string, any> | undefined) ?? {}).flatMap((value) => Array.isArray(value?.reasons) ? value.reasons : []).slice(0, 20),
+      selectedAt: new Date().toISOString(),
+    };
+    analysisSelection.select(next);
+    if (!embedded) navigate(`/ai-chart?${selectionQuery(next)}`);
+  };
+
   const toggleHelp = (event: MouseEvent<HTMLButtonElement>, label: string) => {
     event.stopPropagation();
     setHelpOpen((current) => (current === label ? null : label));
@@ -934,11 +1091,11 @@ export default function ScannerPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-background">
+    <div className={cn("h-full overflow-y-auto overscroll-contain bg-background", embedded && "pb-4")}>
       {/* 상단 고정 없음 — 제목·선택 3줄·기간·지표·종목보기가 한 페이지로 함께 스크롤. */}
       <header className="border-b border-card-border px-4 pb-3 pt-4">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h1 className="text-xl font-extrabold">도구</h1>
+          <div><p className="text-[11px] font-extrabold text-primary">기술탭</p><h1 className="text-xl font-extrabold">AI 검색기</h1></div>
 
           {viewMode !== "chart" && (
             <button
@@ -953,8 +1110,8 @@ export default function ScannerPage() {
           )}
         </div>
 
-        {/* 1행: 조건검색/차트중계/자동매매 */}
-        <div className="mb-2 grid grid-cols-3 gap-2">
+        {/* 기존 3개 기능 경계를 유지하면서 정식 사용자 명칭만 적용한다. */}
+        {!embedded && <div className="mb-2 grid grid-cols-3 gap-2">
           <button
             type="button"
             onClick={() => setViewMode("condition")}
@@ -965,7 +1122,7 @@ export default function ScannerPage() {
                 : "border-card-border bg-card text-muted-foreground",
             )}
           >
-            조건검색
+            AI 검색기
           </button>
           <button
             type="button"
@@ -980,7 +1137,7 @@ export default function ScannerPage() {
                 : "border-card-border bg-card text-muted-foreground",
             )}
           >
-            차트중계
+            AI 차트 분석기
           </button>
           <button
             type="button"
@@ -994,7 +1151,7 @@ export default function ScannerPage() {
           >
             자동매매
           </button>
-        </div>
+        </div>}
 
         {/* 2행: 주식/코인 */}
         <div className="mb-2 grid grid-cols-2 gap-2">
@@ -1048,6 +1205,21 @@ export default function ScannerPage() {
 
         {viewMode === "condition" && (
           <>
+        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div><h2 className="text-sm font-extrabold">검색 기준</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">실제 공급자가 지원하는 시간봉만 요청합니다.</p></div>
+            <button type="button" onClick={saveCurrentSearch} disabled={!selected.length} className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-extrabold text-primary disabled:opacity-40"><BookmarkPlus className="h-3.5 w-3.5" />저장 검색</button>
+          </div>
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+            {SCANNER_TIMEFRAMES.filter((item) => market === "KR" || item.value !== "4H").map((item) => <button key={item.value} type="button" onClick={() => setTimeframe(item.value)} className={cn("shrink-0 rounded-xl border px-3 py-2 text-xs font-extrabold", timeframe === item.value ? "border-primary bg-primary text-primary-foreground" : "border-card-border bg-background text-muted-foreground")}>{item.label}</button>)}
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <label className="rounded-xl border border-card-border bg-background px-3 py-2 text-[10px] font-bold text-muted-foreground">최소 AI 점수<select aria-label="최소 AI 점수" value={minimumScore} onChange={(event) => setMinimumScore(Number(event.target.value))} className="mt-1 block w-full bg-transparent text-xs font-extrabold text-foreground outline-none">{[0, 50, 60, 70, 80].map((value) => <option key={value} value={value}>{value === 0 ? '제한 없음' : `${value}점 이상`}</option>)}</select></label>
+            <label className="rounded-xl border border-card-border bg-background px-3 py-2 text-[10px] font-bold text-muted-foreground">최대 위험 점수<select aria-label="최대 위험 점수" value={maximumRiskScore} onChange={(event) => setMaximumRiskScore(Number(event.target.value))} className="mt-1 block w-full bg-transparent text-xs font-extrabold text-foreground outline-none">{[100, 75, 50, 25].map((value) => <option key={value} value={value}>{value === 100 ? '제한 없음' : `${value}점 이하`}</option>)}</select></label>
+          </div>
+          {savedSearches.length ? <select aria-label="저장 검색 복원" defaultValue="" onChange={(event) => { restoreSavedSearch(event.target.value); event.currentTarget.value = ""; }} className="mt-3 h-10 w-full rounded-xl border border-card-border bg-background px-3 text-xs font-bold"><option value="" disabled>저장 검색 불러오기</option>{savedSearches.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : null}
+          {savedSearchMessage ? <p className="mt-2 text-[10px] font-bold text-primary">{savedSearchMessage}</p> : null}
+        </section>
         <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <div className="mb-3">
             <h2 className="text-sm font-extrabold">투자 기간별 추천 조건</h2>
@@ -1448,7 +1620,7 @@ export default function ScannerPage() {
           <div className="mt-3 space-y-2">
             {autoCandidates.length === 0 ? (
               <p className="rounded-2xl bg-secondary/70 px-3 py-4 text-center text-xs font-bold text-muted-foreground">
-                조건검색 결과가 나오면 모델점수순 후보 목록을 표시합니다.
+                AI 검색 결과가 나오면 모델점수순 후보 목록을 표시합니다.
               </p>
             ) : (
               <>
@@ -1695,7 +1867,7 @@ export default function ScannerPage() {
         {scan.isError && (
           <div className="rounded-3xl border border-card-border bg-card p-6 text-center">
             <p className="break-keep text-sm font-bold leading-relaxed text-destructive">
-              조건검색 결과를 불러오지 못했습니다.
+              AI 검색 결과를 불러오지 못했습니다.
             </p>
 
             <button
@@ -1724,7 +1896,7 @@ export default function ScannerPage() {
         )}
 
         <div className="space-y-2">
-          {cards.map((card) => (
+          {cards.map((card, index) => (
             <ScannerCard
               key={`${String(card.market)}:${String(card.ticker)}`}
               card={card}
@@ -1736,6 +1908,13 @@ export default function ScannerPage() {
                   )}`,
                 )
               }
+              onAnalyze={() => openInAiChart(card, index + 1)}
+              onAlert={() => {
+                const ticker = String(card.ticker ?? '').toUpperCase();
+                const market = cardMarket(card);
+                toggleWatchlistItem({ ticker, name: String(card.name ?? ticker), market, currency: cardCurrency(card) });
+                navigate(`/stock-info?asset=stock&market=${market}&ticker=${encodeURIComponent(ticker)}`);
+              }}
             />
           ))}
         </div>
@@ -1821,7 +2000,7 @@ export default function ScannerPage() {
                               : "border-card-border bg-background",
                           )}
                         >
-                          {[10, 50, 100][index]}억 이상
+                          {market === "KR" ? `${[10, 50, 100][index]}억 이상` : `$${[1, 5, 10][index]}B 이상`}
                         </button>
                       ))}
                     </div>
@@ -1945,7 +2124,7 @@ export default function ScannerPage() {
         </div>
       )}
 
-      <BottomNav />
+      {!embedded && <BottomNav />}
     </div>
   );
 }
@@ -2082,10 +2261,14 @@ function ScannerCard({
   card,
   selected,
   onOpen,
+  onAnalyze,
+  onAlert,
 }: {
   card: AnyObj;
   selected: string[];
   onOpen: () => void;
+  onAnalyze: () => void;
+  onAlert: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const market = cardMarket(card);
@@ -2098,6 +2281,7 @@ function ScannerCard({
   const changePercent = toNumber(card.changePercent) ?? 0;
   const positive = changePercent >= 0;
   const aiScore = scoreOf(card);
+  const scoreBreakdown = Object.entries((card.scoreBreakdown as Record<string, { score?: unknown; status?: unknown; reasons?: unknown }> | undefined) ?? {});
 
   const matched = matchedLabels(card);
   const matchedSelected = selected.filter((label) =>
@@ -2188,6 +2372,12 @@ function ScannerCard({
             />
           </div>
 
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+            <InfoBox label="신뢰도" value={`${toNumber(card.confidence) ?? "-"}${toNumber(card.confidence) == null ? "" : "%"}`} />
+            <InfoBox label="위험도" value={String(card.riskLevel ?? "-")} />
+            <InfoBox label="데이터" value={String(card.dataState ?? "unavailable")} />
+          </div>
+
           <div
             className={cn(
               "mt-3 rounded-2xl border px-3 py-2 text-center text-xs font-extrabold break-keep leading-relaxed",
@@ -2230,16 +2420,15 @@ function ScannerCard({
             기대기간: {String(card.expectedPeriod || "단기 추세 확인 필요")} ·
             조건 일치 {matchedSelected}/{selected.length}
           </p>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpen();
-            }}
-            className="mt-3 w-full rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground"
-          >
-            종목 상세 보기
-          </button>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <button type="button" onClick={(event) => { event.stopPropagation(); onOpen(); }} className="rounded-2xl border border-card-border bg-background px-3 py-3 text-xs font-extrabold">종목 상세</button>
+            <button type="button" onClick={(event) => { event.stopPropagation(); onAlert(); }} className="rounded-2xl border border-card-border bg-background px-3 py-3 text-xs font-extrabold">관심·알림</button>
+            <button type="button" onClick={(event) => { event.stopPropagation(); onAnalyze(); }} className="rounded-2xl bg-primary px-3 py-3 text-xs font-extrabold text-primary-foreground">AI 차트 분석기에서 보기</button>
+          </div>
+
+          {scoreBreakdown.length ? <div className="mt-3 grid grid-cols-2 gap-2">
+            {scoreBreakdown.map(([key, value]) => <div key={key} className="rounded-2xl border border-card-border bg-background p-2.5 text-xs"><div className="flex items-center justify-between gap-2"><span className="font-extrabold capitalize">{key}</span><strong>{toNumber(value.score) ?? '-'}</strong></div><p className="mt-1 text-[9px] font-bold text-muted-foreground">{String(value.status ?? 'unavailable')}</p><p className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{Array.isArray(value.reasons) ? value.reasons.map(String).join(' · ') : '근거 없음'}</p></div>)}
+          </div> : null}
         </>
       )}
     </article>
