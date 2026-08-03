@@ -20,6 +20,7 @@ LOCK_FILE="${LOCK_FILE:-/var/lock/seungjae-staging-deploy.lock}"
 STATE_DIR="$STAGING_DIR/.deploy"
 MIN_FREE_KB="${MIN_FREE_KB:-800000}"
 PM2_CONFIG="$STAGING_DIR/api-server/ecosystem.staging.json"
+PM2_LAUNCHER="$STAGING_DIR/api-server/run-staging.sh"
 
 fail() { echo "[staging] $1" >&2; exit "${2:-1}"; }
 
@@ -41,7 +42,7 @@ if (( SUPABASE_VALUE_COUNT > 0 )); then
   [[ -n "$STAGING_SUPABASE_ANON_KEY" ]] || fail 'STAGING_SUPABASE_ANON_KEY is required when Supabase is enabled' 11
 fi
 
-for command_name in git node pnpm pm2 curl flock df awk rsync tar sha256sum sort xargs install; do
+for command_name in git node pnpm pm2 curl flock df awk rsync tar sha256sum sort xargs install ss; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing command: $command_name" 12
 done
 
@@ -143,6 +144,17 @@ write_runtime_env() {
   mv -f "$temp_env" "$env_dir/.env.staging"
 }
 
+write_pm2_launcher() {
+  mkdir -p "$STAGING_DIR/api-server"
+  cat > "$PM2_LAUNCHER" <<'LAUNCHER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ -r .env.staging ]] || { echo '[staging] runtime env file is missing' >&2; exit 64; }
+exec node --enable-source-maps --env-file=.env.staging ./dist/index.mjs
+LAUNCHER
+  chmod 700 "$PM2_LAUNCHER"
+}
+
 write_pm2_config() {
   mkdir -p "$STAGING_DIR/api-server"
   node - "$PM2_CONFIG" "$STAGING_PM2_NAME" "$STAGING_DIR/api-server" <<'NODE'
@@ -152,8 +164,8 @@ const config = {
   apps: [{
     name,
     cwd,
-    script: './dist/index.mjs',
-    node_args: ['--enable-source-maps', '--env-file=.env.staging'],
+    script: './run-staging.sh',
+    interpreter: '/bin/bash',
     autorestart: true,
     restart_delay: 1000,
   }],
@@ -161,12 +173,24 @@ const config = {
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 NODE
   chmod 600 "$PM2_CONFIG"
-  node -e "const fs=require('node:fs'); const config=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); if (!Array.isArray(config.apps) || config.apps.length !== 1) process.exit(1);" "$PM2_CONFIG"
+  node -e "const fs=require('node:fs'); const config=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); const app=config.apps?.[0]; if (!app || config.apps.length !== 1 || app.script !== './run-staging.sh' || app.interpreter !== '/bin/bash') process.exit(1);" "$PM2_CONFIG"
 }
 
 start_or_reload_staging() {
+  write_pm2_launcher
   write_pm2_config
   pm2 startOrReload "$PM2_CONFIG" --only "$STAGING_PM2_NAME" --update-env
+}
+
+print_live_diagnostics() {
+  echo '[staging] live process diagnostics' >&2
+  pm2 describe "$STAGING_PM2_NAME" >&2 || true
+  pm2 logs "$STAGING_PM2_NAME" --lines 120 --nostream >&2 || true
+  ss -lntp "sport = :$STAGING_PORT" >&2 || true
+  if [[ -s "$LIVE_HEALTH" ]]; then
+    echo '[staging] last live health response' >&2
+    cat "$LIVE_HEALTH" >&2 || true
+  fi
 }
 
 restore_backup() {
@@ -291,8 +315,14 @@ if [[ "$STAGING_FAILPOINT" == after-promotion ]]; then
   fail 'intentional staging failpoint after promotion' 90
 fi
 
-probe_health_url "http://127.0.0.1:$STAGING_PORT/api/health" "$TARGET_SHA" "$LIVE_HEALTH" 30 1 || fail 'live staging health check failed' 20
-probe_health_url "${STAGING_BASE_URL%/}/api/health" "$TARGET_SHA" "$LIVE_HEALTH" 10 2 || fail 'external staging health check failed' 21
+if ! probe_health_url "http://127.0.0.1:$STAGING_PORT/api/health" "$TARGET_SHA" "$LIVE_HEALTH" 30 1; then
+  print_live_diagnostics
+  fail 'live staging health check failed' 20
+fi
+if ! probe_health_url "${STAGING_BASE_URL%/}/api/health" "$TARGET_SHA" "$LIVE_HEALTH" 10 2; then
+  print_live_diagnostics
+  fail 'external staging health check failed' 21
+fi
 
 printf '%s\n' "$RELEASE_DIR" > "$STATE_DIR/current-release"
 printf '%s\n' "$BACKUP_DIR" > "$STATE_DIR/last-backup"
