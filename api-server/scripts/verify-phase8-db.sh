@@ -10,6 +10,9 @@ export PGPASSWORD
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PSQL=(psql --host "$PGHOST" --port "$PGPORT" --username "$PGUSER" --dbname "$PGDATABASE" --no-psqlrc --set=ON_ERROR_STOP=1)
+BOOTSTRAP_ARTIFACT_DIR="$(mktemp -d)"
+cleanup() { rm -rf -- "$BOOTSTRAP_ARTIFACT_DIR"; }
+trap cleanup EXIT
 
 run_sql() {
   local label="$1"
@@ -20,25 +23,32 @@ run_sql() {
 
 run_sql "create empty Supabase auth bootstrap harness" "api-server/supabase/test/staging_bootstrap_auth_harness.sql"
 
-echo "[phase8-db] apply isolated staging bootstrap"
+echo "[phase8-db] apply atomic two-pass isolated staging bootstrap"
+CI=true \
+STAGING_BOOTSTRAP_ALLOW_DISPOSABLE_CI=true \
 STAGING_SUPABASE_URL=https://stagingbootstrapci.supabase.co \
-STAGING_BOOTSTRAP_CI=true \
-node "${ROOT_DIR}/api-server/scripts/bootstrap-staging-supabase.mjs"
+STAGING_DATABASE_URL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" \
+STAGING_ARTIFACT_DIR="$BOOTSTRAP_ARTIFACT_DIR" \
+node "${ROOT_DIR}/api-server/scripts/apply-staging-supabase-bootstrap.mjs"
 
-echo "[phase8-db] reapply isolated staging bootstrap idempotently"
-STAGING_SUPABASE_URL=https://stagingbootstrapci.supabase.co \
-STAGING_BOOTSTRAP_CI=true \
-node "${ROOT_DIR}/api-server/scripts/bootstrap-staging-supabase.mjs"
+node - "$BOOTSTRAP_ARTIFACT_DIR/staging-bootstrap-verification.json" <<'NODE'
+const fs = require('node:fs');
+const file = process.argv[2];
+const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+if (value.status !== 'passed') throw new Error('staging bootstrap artifact did not pass');
+if (value.atomic_transaction !== true) throw new Error('staging bootstrap was not atomic');
+if (value.idempotency_passes !== 2) throw new Error('staging bootstrap did not run twice');
+if (value.auth_users_copied !== 0 || value.profile_rows_copied !== 0 || value.storage_objects_copied !== 0) {
+  throw new Error('staging bootstrap copied forbidden data');
+}
+NODE
 
+run_sql "verify Auth profile trigger and deletion cascade" "api-server/supabase/test/staging_bootstrap_trigger_integration.sql"
 run_sql "seed exact four-tier auth fixtures" "api-server/supabase/test/phase8_auth_harness.sql"
-run_sql "apply Phase 7 migration" "api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql"
-run_sql "apply Phase 8 permission migration" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql"
-run_sql "apply Phase 8 paper capability RLS" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
-run_sql "apply trade automation storage and RLS" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
-run_sql "re-run Phase 7 migration idempotently" "api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql"
-run_sql "re-run Phase 8 permission migration idempotently" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql"
-run_sql "re-run Phase 8 paper capability RLS idempotently" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
-run_sql "re-run trade automation migration idempotently" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
+run_sql "apply Phase 7 migration idempotently" "api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql"
+run_sql "apply Phase 8 permission migration idempotently" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql"
+run_sql "apply Phase 8 paper capability RLS idempotently" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
+run_sql "apply trade automation storage and RLS idempotently" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
 # Verify the service-only trading control before legacy Phase 8 fixtures grant
 # broad table privileges for paper-journal RLS checks.
 run_sql "execute trade automation ownership RLS queries" "api-server/supabase/test/trade_automation_rls_integration.sql"
@@ -68,4 +78,4 @@ run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.s
 run_sql "recheck trade automation RLS after reapply" "api-server/supabase/test/trade_automation_rls_integration.sql"
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
-echo "[phase8-db] disposable database and staging bootstrap verification completed"
+echo "[phase8-db] disposable database and atomic staging bootstrap verification completed"
