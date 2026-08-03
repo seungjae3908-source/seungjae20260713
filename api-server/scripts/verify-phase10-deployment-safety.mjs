@@ -64,9 +64,9 @@ assert(staging.includes('actions/upload-artifact@v4'), 'staging must upload immu
 assert(staging.includes('staging-verdict-${{ env.TARGET_SHA }}'), 'staging artifact must be tied to the exact target SHA');
 assert(staging.includes('RELEASE_READY'), 'staging summary must expose release readiness');
 assert(staging.includes('Failed:') && staging.includes('Skipped:'), 'staging summary must report failed and skipped counts');
-assert(staging.includes('정의된 검증 범위 내 미발견 오류 0개 — 운영 배포 가능'), 'staging must use the exact success verdict');
-assert(staging.includes('오류 발견 — 운영 배포 불가'), 'staging must use the exact failure verdict');
-assert(staging.includes('배포 성공, 전체 검증 미완료 — 운영 배포 불가'), 'staging must use the exact incomplete verdict');
+assert(verdictBuilder.includes('정의된 검증 범위 내 미발견 오류 0개 — 운영 배포 가능'), 'verdict builder must use the exact success verdict');
+assert(verdictBuilder.includes('오류 발견 — 운영 배포 불가'), 'verdict builder must use the exact failure verdict');
+assert(verdictBuilder.includes('배포 성공, 전체 검증 미완료 — 운영 배포 불가'), 'verdict builder must use the exact incomplete verdict');
 
 assert(approval.includes('actions.listArtifactsForRepo'), 'one-time approval must wait for an exact verdict artifact');
 assert(approval.includes('actions/download-artifact@v4'), 'one-time approval must download the verdict');
