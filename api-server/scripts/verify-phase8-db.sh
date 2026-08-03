@@ -27,8 +27,8 @@ run_sql "re-run Phase 7 migration idempotently" "api-server/supabase/migrations/
 run_sql "re-run Phase 8 permission migration idempotently" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql"
 run_sql "re-run Phase 8 paper capability RLS idempotently" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
 run_sql "re-run trade automation migration idempotently" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
-# Verify the service-only trading control before the legacy Phase 8 harness grants
-# broad table privileges for its own paper-journal RLS checks.
+# Verify the service-only trading control before legacy Phase 8 fixtures grant
+# broad table privileges for paper-journal RLS checks.
 run_sql "execute trade automation ownership RLS queries" "api-server/supabase/test/trade_automation_rls_integration.sql"
 run_sql "execute real ownership RLS integration queries" "api-server/supabase/test/phase8_rls_integration.sql"
 run_sql "execute real membership-tier RLS integration queries" "api-server/supabase/test/phase8_tier_rls_integration.sql"
@@ -51,7 +51,9 @@ run_sql "reapply Phase 8 permission migration" "api-server/supabase/migrations/2
 run_sql "reapply Phase 8 paper capability RLS" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
 run_sql "reapply trade automation migration" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
 run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.sql"
-run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
+# Recheck the service-only trading control before the tier fixture re-grants all
+# tables to the API roles for its isolated compatibility assertions.
 run_sql "recheck trade automation RLS after reapply" "api-server/supabase/test/trade_automation_rls_integration.sql"
+run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
 echo "[phase8-db] disposable database verification completed"
