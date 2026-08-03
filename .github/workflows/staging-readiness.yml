@@ -200,8 +200,8 @@ jobs:
           SOURCE_DIR="$SOURCE_DIR" \
           STAGING_DIR=/srv/seungjae-staging \
           STAGING_PM2_NAME=seungjae-staging \
-          STAGING_PORT=18080 \
-          STAGING_CANARY_PORT=18082 \
+          STAGING_PORT=18083 \
+          STAGING_CANARY_PORT=18084 \
           STAGING_BASE_URL="$STAGING_BASE_URL" \
           STAGING_SUPABASE_URL="$STAGING_SUPABASE_URL" \
           STAGING_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY" \
