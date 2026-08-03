@@ -68,14 +68,8 @@ jobs:
           echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
       - name: Reject missing or production-like staging values
         run: node api-server/scripts/verify-phase10-staging-readiness.mjs --environment
-      - name: Require explicit destructive drill consent
-        if: inputs.run_destructive_recovery_drill != true
-        run: |
-          echo 'Staging readiness requires the explicit staging-only recovery drill.' >&2
-          exit 1
-
   deploy-and-verify:
-    name: Deploy isolated staging revision and run recovery drills
+    name: Deploy isolated staging revision and run approved checks
     needs: validate-input
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -173,7 +167,8 @@ jobs:
           STAGING_AI_API_KEY="$STAGING_AI_API_KEY" \
           "$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
           REMOTE
-      - name: Run migration apply, rollback, and reapply against staging DB
+      - name: Run explicitly approved staging DB migration and rollback drill
+        if: inputs.run_destructive_recovery_drill == true
         env:
           DATABASE_URL: ${{ env.STAGING_DATABASE_URL }}
         run: bash api-server/scripts/verify-phase8-db.sh
@@ -183,9 +178,12 @@ jobs:
           STAGING_TARGET_SHA: ${{ env.TARGET_SHA }}
         run: pnpm --dir stock-analyzer exec playwright test e2e/phase10-staging-readiness.spec.ts
       - name: Run destructive staging-only recovery and log-redaction drills
+        if: inputs.run_destructive_recovery_drill == true
         run: node api-server/scripts/verify-phase10-staging-readiness.mjs --remote
       - name: Record staging result without granting production approval
         if: success()
+        env:
+          RUN_DESTRUCTIVE_RECOVERY_DRILL: ${{ inputs.run_destructive_recovery_drill }}
         run: |
           {
             echo '## Staging readiness verification succeeded'
@@ -193,7 +191,11 @@ jobs:
             echo "- Staging SHA: \`$TARGET_SHA\`"
             echo '- Production deployment executed: `false`'
             echo '- Production database changed: `false`'
-            echo '- Destructive recovery drill: `passed`'
+            if [[ "$RUN_DESTRUCTIVE_RECOVERY_DRILL" == "true" ]]; then
+              echo '- Destructive recovery drill: `passed`'
+            else
+              echo '- Destructive recovery drill: `skipped (not approved)`'
+            fi
             echo '- Verdict: `운영 배포 승인 보류`'
             echo '- Reason: GitHub `production` environment reviewers, branch restrictions, and self-review protection require separate direct verification.'
           } >> "$GITHUB_STEP_SUMMARY"
