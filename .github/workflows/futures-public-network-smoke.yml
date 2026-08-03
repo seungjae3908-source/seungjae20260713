@@ -78,6 +78,8 @@ jobs:
         run: pnpm --dir api-server run test:phase8
       - name: Run Phase 9 privacy-safe AI review tests
         run: pnpm --dir api-server run test:phase9
+      - name: Run trade automation safety and adapter tests
+        run: pnpm --dir api-server run test:phase12
       - name: Run API smoke tests
         run: pnpm --dir api-server run test:smoke
       - name: Build frontend production bundle
