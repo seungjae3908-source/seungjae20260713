@@ -413,17 +413,641 @@ function computeAccumulation(
     factors.financials = { strength: null, weight: 8, pass: '', fail: 'ì¬ë¬´ ë°ì´í„°ê°€ ì—†ìŠµë‹ˆë‹¤.' };
   }
 
-  // ÛÎ»¶‰Ëkºwµç@€€€€€Á½Í¥Ñ¥Ù”œ°4(€€€€€…Œ¹Á…ÍÍ•¹Í±¥” À°€Ğ¤°4(€€€€€…Œ¹™…¥±•¹Í±¥” À°€Ğ¤°4(€€€€€€Ÿ®ÂW²*“ªÚ0ƒ¶Vc®. ƒ®Ú¶V€ƒ®“²"`ƒ¶nƒªÆÃ®zc®~$ƒ®>g®Â`ƒ®>3¶23®–ğƒ¶fW²vã¶Vc²ã²jP¸œ°4(€€€€€…Œ¹‘…Ñ…EÕ…±¥Ñä°4(€€€€¤°4(€€¤ì4(4(€€¼¼ƒ®>3¶20ƒ²z®ÂT€¡IM$ƒ¶V²jP¤4(€¥˜€ …ÉÍ¥I•…‘ä¤ì4(€€€½ÕĞ¹ÁÕÍ ¡¹…M¥¹…° ‰É•…­½ÕÑ}¥µµ¥¹•¹Ğœ°€Ÿ®>3¶20ƒ²z®ÂTœ°€ÑÉ•¹œ°€Á½Í¥Ñ¥Ù”œ°IM%}5%MM%9¤¤ì4(€ô•±Í”ì4(€€€½¹ÍĞ¹•…ÉQ½À€ô‰½á!¤€ø€À€üÁÉ¥”€¼‰½á!¤€è€Àì4(€€€½¹ÍĞ…Ñ¥Ù”€ô¹•…ÉQ½À€øô€À¸äØ€˜˜Ù½±I…Ñ¥¼€øô€Ä¸Ì€˜˜ÉÍ¤€øô€ÔÀ€˜˜ÉÍ¤€ğ€ÜÀì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€‰É•…­½ÕÑ}¥µµ¥¹•¹Ğœ°4(€€€€€€€€Ÿ®>3¶20ƒ²z®ÂTœ°4(€€€€€€€€ÑÉ•¹œ°4(€€€€€€€…Ñ¥Ù”°4(€€€€€€€…Ñ¥Ù”€ü€ØÀ€¬5…Ñ ¹µ¥¸ ÌÔ°€¡Ù½±I…Ñ¥¼€´€Ä¸Ì¤€¨€ÌÀ¤€è¹•…ÉQ½À€¨€ØÀ°4(€€€€€€€Ñ•¡½¹˜°4(€€€€€€€€Á½Í¥Ñ¥Ù”œ°4(€€€€€€€…Ñ¥Ù”€ümƒ®ÂW²*“ªÚ0ƒ²®.  ‘í‰½á!¤¹Ñ½¥á• È¥ô¤ƒªŞó²‚D°ƒªÆÃ®zc®~$€‘íÙ½±I…Ñ¥¼¹Ñ½¥á• Ä¥÷®ÂÁt€èmt°4(€€€€€€€…Ñ¥Ù”€ümt€èlŸ²‚¶V·²€ƒªŞó²‚Dƒ®bC®*PƒªÆÃ®zc®~$ƒ®>g®Âc²vĞƒ®Ú²†Ç¶V§®.#®.¸t°4(€€€€€€€€Ÿ®>3¶20ƒ².pƒ²²z°ƒ®>3¶20ƒ².“¶2 £²r_ªò³®š°¯ªÆÃ®zc®~$ƒªÂC²0¤ƒ².pƒªÒ®w¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€ô4(4(€€¼¼ƒ²ÚS²àƒ².s²zD€¡5ØÀƒ¶V²jP¤4(€¥˜€ …µ„ØÁI•…‘ä¤ì4(€€€½ÕĞ¹ÁÕÍ ¡¹…M¥¹…° ÑÉ•¹‘}ÍÑ…ÉĞœ°€Ÿ²ÚS²àƒ².s²zDœ°€ÑÉ•¹œ°€Á½Í¥Ñ¥Ù”œ°5ØÁ}5%MM%9¤¤ì4(€ô•±Í”ì4(€€€½¹ÍĞ…Ñ¥Ù”€ôµ„ÈÀ€„ô¹Õ±°€˜˜µ„ÈÀ€øµ„ØÀ€˜˜ÁÉ¥”€øµ„ÈÀ€˜˜€¡Í±½Á”¡¥¹¹µ„ÈÀ°€Ô¤€üü€À¤€ø€Àì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€ÑÉ•¹‘}ÍÑ…ÉĞœ°4(€€€€€€€€Ÿ²ÚS²àƒ².s²zDœ°4(€€€€€€€€ÑÉ•¹œ°4(€€€€€€€…Ñ¥Ù”°4(€€€€€€€…Ñ¥Ù”€ü€Øà€è€ÌÀ°4(€€€€€€€Ñ•¡½¹˜°4(€€€€€€€€Á½Í¥Ñ¥Ù”œ°4(€€€€€€€…Ñ¥Ù”€ülŸªÂªÊ§²vĞ5ÈÀƒ²r°5ÈÀù5ØÀƒ²‚W®ÂÃ²^Ğƒ²²zt€èmt°4(€€€€€€€…Ñ¥Ù”€ümt€èlŸ²‚W®ÂÃ²^Ğƒ²‚¶fc²vĞƒ²V²ƒ¶fW²vã®Bc² ƒ²V+²Vc²*×®.#®.¸t°4(€€€€€€€€Ÿ²Ò#ªâÀƒ®"3®šó²^C²pƒ®Ú¶V€ƒ®“²"`°5ÈÀƒ²vÓ¶ ƒ².pƒ²C²‚#¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€ô4(4(€€¼¼ƒªÎ£®Nƒ¶³®†s²*€¼ƒ®6Ã®Ns¶³®†s²*€¡5ØÀƒ¶V²jP¤4(€¥˜€ …µ„ØÁI•…‘ä¤ì4(€€€½ÕĞ¹ÁÕÍ ¡¹…M¥¹…° ½±‘•¹}É½ÍÌœ°€ŸªÎ£®Nƒ¶³®†s²*œ°€ÑÉ•¹œ°€Á½Í¥Ñ¥Ù”œ°5ØÁ}5%MM%9¤¤ì4(€€€½ÕĞ¹ÁÕÍ ¡¹…M¥¹…° ‘•…‘}É½ÍÌœ°€Ÿ®6Ã®Ns¶³®†s²*œ°€ÑÉ•¹œ°€¹•…Ñ¥Ù”œ°5ØÁ}5%MM%9¤¤ì4(€ô•±Í”ì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€½±‘•¹}É½ÍÌœ°4(€€€€€€€€ŸªÎ£®Nƒ¶³®†s²*œ°4(€€€€€€€€ÑÉ•¹œ°4(€€€€€€€½±‘•¸°4(€€€€€€€½±‘•¸€ü€ÜÀ€è€ÈÔ°4(€€€€€€€Ñ•¡½¹˜°4(€€€€€€€€Á½Í¥Ñ¥Ù”œ°4(€€€€€€€½±‘•¸€ül5ÈÃªÂ 5ØÃ²vƒ²¶Z”ƒ®>3¶20t€èmt°4(€€€€€€€½±‘•¸€ümt€èlŸ²ÖsªŞğƒªÎ£®Nƒ¶³®†s²*“ªÂ ƒ²^²*×®.#®.¸t°4(€€€€€€€€ŸªÆÃ®zc®~$ƒ®>g®Â`ƒ²^³®Ú®–ğƒ¶fW²vã¶VcªÎ€ƒ®"3®šó®ª§²^C²pƒ²²z¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€‘•…‘}É½ÍÌœ°4(€€€€€€€€Ÿ®6Ã®Ns¶³®†s²*œ°4(€€€€€€€€ÑÉ•¹œ°4(€€€€€€€‘•…°4(€€€€€€€‘•…€ü€ÜÀ€è€ÈÔ°4(€€€€€€€Ñ•¡½¹˜°4(€€€€€€€€¹•…Ñ¥Ù”œ°4(€€€€€€€‘•…€ül5ÈÃªÂ 5ØÃ²vƒ¶Vc¶Z”ƒ®>3¶20t€èmt°4(€€€€€€€‘•…€ümt€èlŸ²ÖsªŞğƒ®6Ã®Ns¶³®†s²*“ªÂ ƒ²^²*×®.#®.¸t°4(€€€€€€€€Ÿ®ÎÓ²r€ƒ².pƒ®æ²’Dƒ²ÚW²0°ƒ®Âc®NÇ²v ƒ®“®>ƒªâÃ¶j3®†pƒ¶fs²j§¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€ô4(4(€€¼¼ƒªÎó²^Ğ€¡IM$ƒ¶V²jP¤4(€¥˜€ …ÉÍ¥I•…‘ä¤ì4(€€€½ÕĞ¹ÁÕÍ ¡¹…M¥¹…° ½Ù•É¡•…Ñ•œ°€ŸªÎó²^Ğœ°€µ½µ•¹ÑÕ´œ°€¹•…Ñ¥Ù”œ°IM%}5%MM%9¤¤ì4(€ô•±Í”ì4(€€€½¹ÍĞ…‰½Ù•5„ÈÀ€ôµ„ÈÀ€„ô¹Õ±°€˜˜µ„ÈÀ€ø€À€ü€¡ÁÉ¥”€´µ„ÈÀ¤€¼µ„ÈÀ€è€Àì4(€€€½¹ÍĞ…Ñ¥Ù”€ôÉÍ¤€øô€ÜÀ€˜˜…‰½Ù•5„ÈÀ€ø€À¸Äì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€½Ù•É¡•…Ñ•œ°4(€€€€€€€€ŸªÎó²^Ğœ°4(€€€€€€€€µ½µ•¹ÑÕ´œ°4(€€€€€€€…Ñ¥Ù”°4(€€€€€€€…Ñ¥Ù”€ü€ØÔ€èÉÍ¤°4(€€€€€€€Ñ•¡½¹˜°4(€€€€€€€€¹•…Ñ¥Ù”œ°4(€€€€€€€…Ñ¥Ù”€ümIM$€‘íÉÍ¤¹Ñ½¥á• À¥ô°5ÈÀƒ®2®æ€¬‘ì¡…‰½Ù•5„ÈÀ€¨€ÄÀÀ¤¹Ñ½¥á• À¥ô”ƒ²vÓªÊ¥t€èmt°4(€€€€€€€…Ñ¥Ù”€ümt€èlŸªÎó²^ĞƒªÖ³ªÂ²vĞƒ²V®.g®.#®.¸t°4(€€€€€€€€Ÿ².ƒªŞpƒ²²zƒ²zC²‚p°ƒ®Ú¶V€ƒ²v×²‚#®†pƒ®š³²*“¶³®–ğƒªÒ®š³¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€ô4(4(€€¼¼ƒ²ÚS²àƒ²vÓ¶ €¡5ØÀƒ¶V²jP¤4(€¥˜€¡µ„ØÀ€ôô¹Õ±°¤ì4(€€€½ÕĞ¹ÁÕÍ ¡¹…M¥¹…° ÑÉ•¹‘}‰É•…¬œ°€Ÿ²ÚS²àƒ²vÓ¶ œ°€ÑÉ•¹œ°€¹•…Ñ¥Ù”œ°5ØÁ}5%MM%9¤¤ì4(€ô•±Í”ì4(€€€½¹ÍĞ…Ñ¥Ù”€ôÁÉ¥”€ğµ„ØÀ€˜˜ÁÉ¥”€ğ‰½á1¼€¨€Ä¸ÀÄì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€ÑÉ•¹‘}‰É•…¬œ°4(€€€€€€€€Ÿ²ÚS²àƒ²vÓ¶ œ°4(€€€€€€€€ÑÉ•¹œ°4(€€€€€€€…Ñ¥Ù”°4(€€€€€€€…Ñ¥Ù”€ü€ØÔ€è€ÌÀ°4(€€€€€€€Ñ•¡½¹˜°4(€€€€€€€€¹•…Ñ¥Ù”œ°4(€€€€€€€…Ñ¥Ù”€ül5ØÀƒ®Â<ƒ®ÂW²*“ªÚ0ƒ¶Vc®. ƒ²vÓ¶ t€èmt°4(€€€€€€€…Ñ¥Ù”€ümt€èlŸ²ÚS²àƒ²vÓ¶#²vĞƒ¶fW²vã®Bc² ƒ²V+²Vc²*×®.#®.¸t°4(€€€€€€€€Ÿ²C²‚ ƒªâÃ²’ ƒ²’²"`°ƒ²z³²²z²v ƒ²² ƒ¶j3®ÎÔƒ¶fW²vàƒ¶n®†pƒ®¾ã®£²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€ô4(4(€€¼¼ƒªÆÃ®zc®~$ƒ¶>·®Âp4(€ì4(€€€½¹ÍĞ…Ñ¥Ù”€ôÙ½±I…Ñ¥¼€øô€Ìì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€Ù½±Õµ•}•áÁ±½Í¥½¸œ°4(€€€€€€€€ŸªÆÃ®zc®~$ƒ¶>·®Âpœ°4(€€€€€€€€Ù½±Õµ”œ°4(€€€€€€€…Ñ¥Ù”°4(€€€€€€€…Ñ¥Ù”€ü5…Ñ ¹µ¥¸ äÔ°€ØÀ€¬€¡Ù½±I…Ñ¥¼€´€Ì¤€¨€ÄÀ¤€èÙ½±I…Ñ¥¼€¨€ÈÀ°4(€€€€€€€€ÜÔ°4(€€€€€€€€Á½Í¥Ñ¥Ù”œ°4(€€€€€€€…Ñ¥Ù”€ümƒªÆÃ®zc®~'²vĞ€ÈÃ®Ò$ƒ¶>'ªŞƒ²v`€‘íÙ½±I…Ñ¥¼¹Ñ½¥á• Ä¥÷®ÂÁt€èmt°4(€€€€€€€…Ñ¥Ù”€ümt€èlŸªÆÃ®zc®~'²v ƒ¶>'ªŞ€ƒ²"c²’²z®.#®.¸t°4(€€€€€€€€Ÿ®Â§¶Z”£²ZD¿²v3®Ò$§ªÎğƒ²r²æ`£®ÂS®.”¿ªÎƒ²‚@§®–ğƒ¶V£ªî`ƒ¶fW²vã¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€ô4(4(€€¼¼ƒ².ƒªÎƒªÂ €¼ƒ².ƒ²‚ªÂ €£²ŠªÂ®0ƒ¶V²jP¤4(€½ÕĞ¹ÁÕÍ  4(€€€µ¬ 4(€€€€€€¹•İ}¡¥ œ°4(€€€€€€Ÿ².ƒªÎƒªÂ œ°4(€€€€€€ÑÉ•¹œ°4(€€€€€ÁÉ¥”€øô¡¥±°€¨€À¸äää°4(€€€€€ÁÉ¥”€øô¡¥±°€¨€À¸äää€ü€ÜÀ€è€¡ÁÉ¥”€¼¡¥±°¤€¨€ØÀ°4(€€€€€Ñ•¡½¹˜°4(€€€€€€Á½Í¥Ñ¥Ù”œ°4(€€€€€ÁÉ¥”€øô¡¥±°€¨€À¸äää€ülŸªâÃªÂƒ®
-Ğƒ²ÖsªÎƒªÂ ƒªÊ÷².€t€èmt°4(€€€€€ÁÉ¥”€øô¡¥±°€¨€À¸äää€ümt€èlŸ².ƒªÎƒªÂªÂ ƒ²V®.g®.#®.¸t°4(€€€€€€Ÿ®"3®šó®ª¤ƒ®Ú¶V€ƒ²²z°ƒªÆÃ®zc®~$ƒªÂC²0ƒ².pƒ²v×²‚#¶Vc²ã²jP¸œ°4(€€€€¤°4(€€¤ì4(€½ÕĞ¹ÁÕÍ  4(€€€µ¬ 4(€€€€€€¹•İ}±½Üœ°4(€€€€€€Ÿ².ƒ²‚ªÂ œ°4(€€€€€€ÑÉ•¹œ°4(€€€€€ÁÉ¥”€ğô±½±°€¨€Ä¸ÀÀÄ°4(€€€€€ÁÉ¥”€ğô±½±°€¨€Ä¸ÀÀÄ€ü€ÜÀ€è€ÌÀ°4(€€€€€Ñ•¡½¹˜°4(€€€€€€¹•…Ñ¥Ù”œ°4(€€€€€ÁÉ¥”€ğô±½±°€¨€Ä¸ÀÀÄ€ülŸªâÃªÂƒ®
-Ğƒ²Ös²‚ªÂ ƒªÊ÷².€t€èmt°4(€€€€€ÁÉ¥”€ğô±½±°€¨€Ä¸ÀÀÄ€ümt€èlŸ².ƒ²‚ªÂªÂ ƒ²V®.g®.#®.¸t°4(€€€€€€Ÿ²®Ú®–àƒ²‚²‚@ƒ®“²"`ƒ²zC²‚p°ƒ®Âc®NÇ
-ßªÆÃ®zc®~$ƒ¶fW²vàƒ¶nƒ²‚GªŞó¶Vc²ã²jP¸œ°4(€€€€¤°4(€€¤ì4(4(€€¼¼ƒ®"3®šó®ª¤€¡5ØÀ€¬IM$ƒ¶V²jP¤4(€¥˜€ …µ„ØÁI•…‘äñğ€…ÉÍ¥I•…‘ä¤ì4(€€€½ÕĞ¹ÁÕÍ ¡¹…M¥¹…° ÁÕ±±‰…¬œ°€Ÿ®"3®šó®ª¤œ°€ÑÉ•¹œ°€Á½Í¥Ñ¥Ù”œ°€…µ„ØÁI•…‘ä€ü5ØÁ}5%MM%9€èIM%}5%MM%9¤¤ì4(€ô•±Í”ì4(€€€½¹ÍĞÕÁÑÉ•¹€ôµ„ÈÀ€„ô¹Õ±°€˜˜µ„ÈÀ€øµ„ØÀì4(€€€½¹ÍĞ¹•…É5„ÈÀ€ôµ„ÈÀ€„ô¹Õ±°€˜˜µ„ÈÀ€ø€À€ü5…Ñ ¹…‰Ì¡ÁÉ¥”€´µ„ÈÀ¤€¼µ„ÈÀ€ğ€À¸ÀÌ€è™…±Í”ì4(€€€½¹ÍĞ…Ñ¥Ù”€ôÕÁÑÉ•¹€˜˜¹•…É5„ÈÀ€˜˜ÉÍ¤€øô€ĞÀ€˜˜ÉÍ¤€ğô€ØÀ€˜˜ÁÉ¥”€øô€¡µ„ÈÀ€üü€À¤ì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€ÁÕ±±‰…¬œ°4(€€€€€€€€Ÿ®"3®šó®ª¤œ°4(€€€€€€€€ÑÉ•¹œ°4(€€€€€€€…Ñ¥Ù”°4(€€€€€€€…Ñ¥Ù”€ü€ØØ€è€ÌÀ°4(€€€€€€€Ñ•¡½¹˜°4(€€€€€€€€Á½Í¥Ñ¥Ù”œ°4(€€€€€€€…Ñ¥Ù”€ülŸ²²*ç²ÚS²àƒ²’D5ÈÀƒ²² ƒ®ÚªŞğƒ²†Ã²‚Tt€èmt°4(€€€€€€€…Ñ¥Ù”€ümt€èlŸ²²*ç²ÚS²àƒ®"3®šó®ª¤ƒ²†ÃªÆÓ²vĞƒ²V®.g®.#®.¸t°4(€€€€€€€€5ÈÀƒ²² ƒ¶fW²vàƒ¶nƒ®Ú¶V€ƒ²²z°ƒ²² ƒ²vÓ¶ ƒ².pƒ²C²‚#¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€ô4(4(€€¼¼ƒ²ÚS²àƒ²‚¶f`€¡5€¬5ØÀƒ¶V²jP¤4(€¥˜€ …µ…‘I•…‘äñğ€…µ„ØÁI•…‘ä¤ì4(€€€½ÕĞ¹ÁÕÍ ¡¹…M¥¹…° ÑÉ•¹‘}É•Ù•ÉÍ…°œ°€Ÿ²ÚS²àƒ²‚¶f`œ°€µ½µ•¹ÑÕ´œ°€Á½Í¥Ñ¥Ù”œ°€…µ…‘I•…‘ä€ü5}5%MM%9€è5ØÁ}5%MM%9¤¤ì4(€ô•±Í”ì4(€€€½¹ÍĞµ…‘UÀ€ôµAÉ•Ø€ğôÍAÉ•Ø€˜˜µ9½Ü€øÍ9½Üì4(€€€½¹ÍĞ‘½İ¹±…ÑÑ•¸€ô€¡Í±½Á”¡¥¹¹µ„ØÀ°€ÄÀ¤€üü€´ÄÀ¤€ø€´È€˜˜€¡Í±½Á”¡¥¹¹µ„ØÀ°€ÈÀ¤€üü€À¤€ğ€Àì4(€€€½¹ÍĞ…Ñ¥Ù”€ôµ…‘UÀ€˜˜‘½İ¹±…ÑÑ•¸ì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€ÑÉ•¹‘}É•Ù•ÉÍ…°œ°4(€€€€€€€€Ÿ²ÚS²àƒ²‚¶f`œ°4(€€€€€€€€µ½µ•¹ÑÕ´œ°4(€€€€€€€…Ñ¥Ù”°4(€€€€€€€…Ñ¥Ù”€ü€ØĞ€è€ÌÀ°4(€€€€€€€Ñ•¡½¹˜°4(€€€€€€€€Á½Í¥Ñ¥Ù”œ°4(€€€€€€€…Ñ¥Ù”€ül5ƒ²¶Z”ƒªÖC²Â €¬ƒ¶Vc®v÷²ÚS²àƒ®FS¶fPt€èmt°4(€€€€€€€…Ñ¥Ù”€ümt€èlŸ²ÚS²àƒ²‚¶f`ƒ².ƒ¶bãªÂ ƒ²V²ƒ²V÷¶V§®.#®.¸t°4(€€€€€€€€Ÿ²‚¶f`ƒ²Ò#ªâÀƒ®Ú¶V€ƒ²²z°ƒ²²‚ƒ²‚²‚@ƒ²vÓ¶ ƒ².pƒ²C²‚#¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€ô4(4(€€¼¼ƒ²‚¶>'ªÂ €¼ƒªÎƒ¶>'ªÂ ƒŠPƒ²z³®²Ğƒ¶V²jP¸4(€¥˜€¡Ñà¹™¥¹…¹¥…±Ì€˜˜€¡Ñà¹™¥¹…¹¥…±Ì¹Á•È€„ô¹Õ±°ñğÑà¹™¥¹…¹¥…±Ì¹Á‰È€„ô¹Õ±°¤¤ì4(€€€½¹ÍĞ˜€ôÑà¹™¥¹…¹¥…±Ìì4(€€€½¹ÍĞ¡•…À€ô€¡˜¹Á•È€„ô¹Õ±°€˜˜˜¹Á•È€ø€À€˜˜˜¹Á•È€ğ€ÄÀ¤ñğ€¡˜¹Á‰È€„ô¹Õ±°€˜˜˜¹Á‰È€ø€À€˜˜˜¹Á‰È€ğ€Ä¤ì4(€€€½¹ÍĞÉ¥ €ô€¡˜¹Á•È€„ô¹Õ±°€˜˜˜¹Á•È€ø€ĞÀ¤ñğ€¡˜¹Á‰È€„ô¹Õ±°€˜˜˜¹Á‰È€ø€Ô¤ì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€Õ¹‘•ÉÙ…±Õ•œ°4(€€€€€€€€Ÿ²‚¶>'ªÂ œ°4(€€€€€€€€Ù…±Õ…Ñ¥½¸œ°4(€€€€€€€¡•…À°4(€€€€€€€¡•…À€ü€ØÔ€è€ÌÔ°4(€€€€€€€€ØÔ°4(€€€€€€€€Á½Í¥Ñ¥Ù”œ°4(€€€€€€€¡•…À€ümAH€‘í˜¹Á•Èü¹Ñ½¥á• Ä¤€üü€ŸŠPô°A	H€‘í˜¹Á‰Èü¹Ñ½¥á• È¤€üü€ŸŠP÷®†pƒ®
-»²v ƒ¶:át€èmt°4(€€€€€€€¡•…À€ümt€èlŸ®Âã®–c²^C²vÓ²c²vĞƒ¶*ç®Î¶z ƒ®
-»² ƒ²V+²*×®.#®.¸t°4(€€€€€€€€Ÿ².“²‚ƒªÂs²ƒ²vĞƒ®>g®Âc®Bc®*S² ƒ¶fW²vàƒ¶nƒ²’G²z—ªâÀƒªÒ²‚C²ró®†pƒ²‚GªŞó¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€½Ù•ÉÙ…±Õ•œ°4(€€€€€€€€ŸªÎƒ¶>'ªÂ œ°4(€€€€€€€€Ù…±Õ…Ñ¥½¸œ°4(€€€€€€€É¥ °4(€€€€€€€É¥ €ü€ØÔ€è€ÌÔ°4(€€€€€€€€ØÔ°4(€€€€€€€€¹•…Ñ¥Ù”œ°4(€€€€€€€É¥ €ümAH€‘í˜¹Á•Èü¹Ñ½¥á• Ä¤€üü€ŸŠPô°A	H€‘í˜¹Á‰Èü¹Ñ½¥á• È¤€üü€ŸŠP÷®†pƒ®K²v ƒ¶:át€èmt°4(€€€€€€€É¥ €ümt€èlŸ®Âã®–c²^C²vÓ²c²vĞƒ¶*ç®Î¶z ƒ®K² ƒ²V+²*×®.#®.¸t°4(€€€€€€€€Ÿ²Ç²z—²Äƒ®2®æƒªÎó®>¶Vs² ƒ²‚CªÊ¶VcªÎ€ƒ²ÚSªÊ¤ƒ®“²"c®–ğƒ²zC²‚s¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€ô•±Í”ì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ Õ¹‘•ÉÙ…±Õ•œ°€Ÿ²‚¶>'ªÂ œ°€Ù…±Õ…Ñ¥½¸œ°™…±Í”°€À°€ÈÀ°€¹•ÕÑÉ…°œ°mt°lŸ²z³®²Ğ¡AH½A	H¤ƒ®6Ã²vÓ¶ÃªÂ ƒ®Ú²†Ç¶V§®.#®.¸t°€Ÿ®6Ã²vÓ¶Àƒ®Ú²†Ç²ró®†pƒ².ƒ®ŠÃ®>ƒ®
-»²v0œ°€¥¹ÍÕ™™¥¥•¹Ğœ¤°4(€€€€¤ì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ ½Ù•ÉÙ…±Õ•œ°€ŸªÎƒ¶>'ªÂ œ°€Ù…±Õ…Ñ¥½¸œ°™…±Í”°€À°€ÈÀ°€¹•ÕÑÉ…°œ°mt°lŸ²z³®²Ğ¡AH½A	H¤ƒ®6Ã²vÓ¶ÃªÂ ƒ®Ú²†Ç¶V§®.#®.¸t°€Ÿ®6Ã²vÓ¶Àƒ®Ú²†Ç²ró®†pƒ².ƒ®ŠÃ®>ƒ®
-»²v0œ°€¥¹ÍÕ™™¥¥•¹Ğœ¤°4(€€€€¤ì4(€ô4(4(€€¼¼ƒ¶bã²z°ƒªÎ×².p€¼ƒ²V²z°ƒªÎ×².p4(€¥˜€¡Ñà¹Á½Í¥Ñ¥Ù•Ù•¹ÑÌñğÑà¹¹•…Ñ¥Ù•Ù•¹ÑÌ¤ì4(€€€½¹ÍĞÁ½Ì€ôÑà¹Á½Í¥Ñ¥Ù•Ù•¹ÑÌ€üümtì4(€€€½¹ÍĞ¹•œ€ôÑà¹¹•…Ñ¥Ù•Ù•¹ÑÌ€üümtì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€Á½Í¥Ñ¥Ù•}‘¥Í±½ÍÕÉ”œ°4(€€€€€€€€Ÿ¶bã²z°ƒªÎ×².pœ°4(€€€€€€€€‘¥Í±½ÍÕÉ”œ°4(€€€€€€€Á½Ì¹±•¹Ñ €ø€À°4(€€€€€€€Á½Ì¹±•¹Ñ €ø€À€ü€ØÔ€è€ÌÀ°4(€€€€€€€€ÜÀ°4(€€€€€€€€Á½Í¥Ñ¥Ù”œ°4(€€€€€€€Á½Ì¹±•¹Ñ €ø€À€ümƒªâ7²‚TƒªÎ×².pè€‘íÁ½Ì¹©½¥¸ œ°€œ¥õt€èmt°4(€€€€€€€Á½Ì¹±•¹Ñ €ø€À€ümt€èlŸ²ÖsªŞğƒ¶bã²z³²ÄƒªÎ×².sªÂ ƒ²^²*×®.#®.¸t°4(€€€€€€€€ŸªÎ×².s²v`ƒ².“²#²‚ƒ²b¶Z”£ªÎ²VôƒªŞs®ª£
-ß²²7²Ä§²vƒ¶fW²vã¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ 4(€€€€€€€€¹•…Ñ¥Ù•}‘¥Í±½ÍÕÉ”œ°4(€€€€€€€€Ÿ²V²z°ƒªÎ×².pœ°4(€€€€€€€€‘¥Í±½ÍÕÉ”œ°4(€€€€€€€¹•œ¹±•¹Ñ €ø€À°4(€€€€€€€¹•œ¹±•¹Ñ €ø€À€ü€ØÔ€è€ÌÀ°4(€€€€€€€€ÜÀ°4(€€€€€€€€¹•…Ñ¥Ù”œ°4(€€€€€€€¹•œ¹±•¹Ñ €ø€À€ümƒ²r¶^`ƒªÎ×².pè€‘í¹•œ¹©½¥¸ œ°€œ¥õt€èmt°4(€€€€€€€¹•œ¹±•¹Ñ €ø€À€ümt€èlŸ²ÖsªŞğƒ²V²z³²ÄƒªÎ×².sªÂ ƒ²^²*×®.#®.¸t°4(€€€€€€€€Ÿ²rƒ²²šw²zC
-İ½	\ƒ®NÄƒ¶v³²tƒ²vÓ²*#®*Pƒ®æ²’Dƒ²ÚW²3®†pƒ®2²vG¶Vc²ã²jP¸œ°4(€€€€€€¤°4(€€€€¤ì4(€ô•±Í”ì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ Á½Í¥Ñ¥Ù•}‘¥Í±½ÍÕÉ”œ°€Ÿ¶bã²z°ƒªÎ×².pœ°€‘¥Í±½ÍÕÉ”œ°™…±Í”°€À°€ÈÀ°€¹•ÕÑÉ…°œ°mt°lŸªÎ×².pƒ®6Ã²vÓ¶ÃªÂ ƒ®Ú²†Ç¶V§®.#®.¸t°€Ÿ®6Ã²vÓ¶Àƒ®Ú²†Ç²ró®†pƒ².ƒ®ŠÃ®>ƒ®
-»²v0œ°€¥¹ÍÕ™™¥¥•¹Ğœ¤°4(€€€€¤ì4(€€€½ÕĞ¹ÁÕÍ  4(€€€€€µ¬ ¹•…Ñ¥Ù•}‘¥Í±½ÍÕÉ”œ°€Ÿ²V²z°ƒªÎ×².pœ°€‘¥Í±½ÍÕÉ”œ°™…±Í”°€À°€ÈÀ°€¹•ÕÑÉ…°œ°mt°lŸªÎ×².pƒ®6Ã²vÓ¶ÃªÂ ƒ®Ú²†Ç¶V§®.#®.¸t°€Ÿ®6Ã²vÓ¶Àƒ®Ú²†Ç²ró®†pƒ².ƒ®ŠÃ®>ƒ®
-»²v0œ°€¥¹ÍÕ™™¥¥•¹Ğœ¤°4(€€€€¤ì4(€ô4(4(€É•ÑÕÉ¸½ÕĞì4)ô4(4)•áÁ½ÉĞ™Õ¹Ñ¥½¸½µÁÕÑ•M¥¹…±I•Á½ÉĞ 4(€…¹‘±•Ìè…¹‘±•mt°4(€¥¹è%¹‘¥…Ñ½ÉM•É¥•Ì°4(€ÑàèM¥¹…±½¹Ñ•áĞ€ôíô°4(€…Í=˜€ô¹•Ü…Ñ” ¤¹Ñ½%M=MÑÉ¥¹œ ¤°4(¤èM¥¹…±I•Á½ÉĞì4(€¥˜€ ……¹‘±•Ìñğ…¹‘±•Ì¹±•¹Ñ €ğ€ÌÀ¤ì4(€€€½¹ÍĞ•µÁÑäèÕµÕ±…Ñ¥½¹I•ÍÕ±Ğ€ôì4(€€€€€Í½É”è€À°4(€€€€€ÍÑ…ÉÌè€Ä°4(€€€€€±…‰•°è€Ÿ®6Ã²vÓ¶Àƒ®Ú²†Ç²ró®†pƒ².ƒ®ŠÃ®>ƒ®
-»²v0œ°4(€€€€€½¹™¥‘•¹”è€À°4(€€€€€‰É•…­½ÕÑAÉ½‰…‰¥±¥Ñäè€À°4(€€€€€•áÁ•Ñ•‘A•É¥½è€ŸŠPœ°4(€€€€€Á…ÍÍ•èmt°4(€€€€€™…¥±•èlŸªÂªÊ¤ƒ®6Ã²vÓ¶ÃªÂ ƒ®Ú²†Ç¶V§®.#®.€ ÌÃ®Ò$ƒ®¾ã®0¤¸t°4(€€€€€ÍÑÉ…Ñ•äèì•¹ÑÉäèmt°Ñ…­”èmt°ÍÑ½Àèmt°…ÕÑ¥½¸èlŸ®6Ã²vÓ¶Àƒ®Ú²†Ç²ró®†pƒ².ƒ®ŠÃ®>ƒ®
-»²v0tô°4(€€€€€‘…Ñ…EÕ…±¥Ñäè€¥¹ÍÕ™™¥¥•¹Ğœ°4(€€€ôì4(€€€½¹ÍĞÉ•…Í½¸€ô€ŸªÂªÊ¤ƒ®6Ã²vÓ¶ÃªÂ ƒ®Ú²†Ç¶V§®.#®.€ ÌÃ®Ò$ƒ®¾ã®0¤¸œì4(€€€É•ÑÕÉ¸ì…Í=˜°…ÕµÕ±…Ñ¥½¸è•µÁÑä°Í¥¹…±Ìè¥¹ÍÕ™™¥¥•¹ÑM¥¹…±Ì¡É•…Í½¸¤°‘…Ñ…EÕ…±¥Ñäè€¥¹ÍÕ™™¥¥•¹Ğœôì4(€ô4(€½¹ÍĞ…ÕµÕ±…Ñ¥½¸€ô½µÁÕÑ•ÕµÕ±…Ñ¥½¸¡…¹‘±•Ì°¥¹°Ñà¤ì4(€½¹ÍĞÍ¥¹…±Ì€ô½µÁÕÑ•M¥¹…±Ì¡…¹‘±•Ì°¥¹°Ñà°…ÕµÕ±…Ñ¥½¸¤ì4(€É•ÑÕÉ¸ì…Í=˜°…ÕµÕ±…Ñ¥½¸°Í¥¹…±Ì°‘…Ñ…EÕ…±¥Ñäè…ÕµÕ±…Ñ¥½¸¹‘…Ñ…EÕ…±¥Ñäôì4)ô4(4(¼¼€´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´4(¼¼M…¹¹•È½¹‘¥Ñ¥½¹ÌƒŠPÑ¡”É…¹Õ±…È…¹‘±”µ½¹±ä¡•­‰½á•ÌÑ¡”Í…¹¹•È½™™•ÉÌ¸4(¼¼¹Õ±±€µ•…¹Ì€‰‘…Ñ„¹½Ğ…Ù…¥±…‰±”ˆ€£ªâÃªÒ ¿²fãªÖ·²vàƒ²"cªâ$¤ƒŠH¹•Ù•È„µ…Ñ °±½Ü½¹˜¸4(¼¼€´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´´4(4)•áÁ½ÉĞ¥¹Ñ•É™…”M…¹½¹‘¥Ñ¥½¹Ìì4(€Í½É”è¹Õµ‰•Èì€¼¼…ÕµÕ±…Ñ¥½¸Í½É”4(€½¹™¥‘•¹”è¹Õµ‰•Èì4(€…ÕµÕ±…Ñ¥½¸è‰½½±•…¸ì4(€‰½á}½¹Í½±¥‘…Ñ¥½¸è‰½½±•…¸ì4(€½‰Ù}É¥Í¥¹œè‰½½±•…¸ì4(€Ù½±Õµ•}…Õ´è‰½½±•…¸ì4(€‰½±±¥¹•É}ÍÅÕ••é”è‰½½±•…¸ì4(€ÉÍ¥}É•½Ù•Éäè‰½½±•…¸ì4(€µ…‘}ÑÕÉ¸è‰½½±•…¸ì4(€¥¹ÍÑ}…ÕµÕ±…Ñ¥½¸è‰½½±•…¸ğ¹Õ±°ì4(€™½É•¥¹}…ÕµÕ±…Ñ¥½¸è‰½½±•…¸ğ¹Õ±°ì4)ô4(4)•áÁ½ÉĞ™Õ¹Ñ¥½¸½µÁÕÑ•M…¹½¹‘¥Ñ¥½¹Ì¡…¹‘±•Ìè…¹‘±•mt°¥¹è%¹‘¥…Ñ½ÉM•É¥•Ì¤èM…¹½¹‘¥Ñ¥½¹Ìğ¹Õ±°ì4(€¥˜€ ……¹‘±•Ìñğ…¹‘±•Ì¹±•¹Ñ €ğ€ÌÀ¤É•ÑÕÉ¸¹Õ±°ì4(€½¹ÍĞ¸€ô…¹‘±•Ì¹±•¹Ñ ì4(€½¹ÍĞ±½Í•Ì€ô…¹‘±•Ì¹µ…À ¡Œ¤€ôøŒ¹±½Í”¤ì4(€½¹ÍĞ…Œ€ô½µÁÕÑ•ÕµÕ±…Ñ¥½¸¡…¹‘±•Ì°¥¹°íô¤ì4(4(€½¹ÍĞÉ••¹Ñ]¥¸€ô5…Ñ ¹µ¥¸ ÈÀ°¸€´€Ä¤ì4(€½¹ÍĞ‰½á]¥¸€ô5…Ñ ¹µ¥¸ àÀ°¸€´€Ä¤ì4(4(€€¼¼‰½à½¹Í½±¥‘…Ñ¥½¸4(€½¹ÍĞ‰½áM±¥”€ô±½Í•Ì¹Í±¥”¡¸€´‰½á]¥¸¤ì4(€½¹ÍĞ‰½áI…¹”€ô5…Ñ ¹µ¥¸ ¸¸¹‰½áM±¥”¤€ø€À€ü€¡5…Ñ ¹µ…à ¸¸¹‰½áM±¥”¤€´5…Ñ ¹µ¥¸ ¸¸¹‰½áM±¥”¤¤€¼5…Ñ ¹µ¥¸ ¸¸¹‰½áM±¥”¤€è€Äì4(€½¹ÍĞ¡…±˜€ô5…Ñ ¹™±½½È¡‰½á]¥¸€¼€È¤ì4(€½¹ÍĞ½±‘1½Ü€ô5…Ñ ¹µ¥¸ ¸¸¹±½Í•Ì¹Í±¥”¡¸€´‰½á]¥¸°¸€´¡…±˜¤¤ì4(€½¹ÍĞ¹•İ1½Ü€ô5…Ñ ¹µ¥¸ ¸¸¹±½Í•Ì¹Í±¥”¡¸€´¡…±˜¤¤ì4(€½¹ÍĞ‰½á}½¹Í½±¥‘…Ñ¥½¸€ô‰½áI…¹”€ğô€À¸Èà€˜˜¹•İ1½Ü€øô½±‘1½Ü€¨€À¸ääì4(4(€€¼¼=	XÉ¥Í¥¹œ4(€½¹ÍĞ½‰Ø€ô½‰ÙM•É¥•Ì¡…¹‘±•Ì¤ì4(€½¹ÍĞ½‰Ù}É¥Í¥¹œ€ô€¡Í±½Á”¡½‰Ø°É••¹Ñ]¥¸¤€üü€À¤€ø€Àì4(4(€€¼¼Ù½±Õµ”…ÕµÕ±…Ñ¥½¸4(€±•ĞÕÁY½°€ô€Àì4(€±•Ğ‘½İ¹Y½°€ô€Àì4(€™½È€¡±•Ğ¤€ô¸€´É••¹Ñ]¥¸ì¤€ğ¸ì¤¬¬¤ì4(€€€¥˜€¡…¹‘±•Ím¥t¹±½Í”€øô…¹‘±•Ím¤€´€Åt¹±½Í”¤ÕÁY½°€¬ô…¹‘±•Ím¥t¹Ù½±Õµ”ì4(€€€•±Í”‘½İ¹Y½°€¬ô…¹‘±•Ím¥t¹Ù½±Õµ”ì4(€ô4(€½¹ÍĞÙ½±Õµ•}…Õ´€ôÕÁY½°€ø‘½İ¹Y½°€¨€Ä¸Äì4(4(€€¼¼‰½±±¥¹•ÈÍÅÕ••é”4(€½¹ÍĞ‰ˆ€ô‰½±±¥¹•È¡±½Í•Ì°€ÈÀ°€È¤ì4(€½¹ÍĞİ9½Ü€ô±…ÍĞ¡‰ˆ¹İ¥‘Ñ ¤€üü¹Õ±°ì4(€½¹ÍĞİM±¥”€ô‰ˆ¹İ¥‘Ñ ¹Í±¥”¡¸€´‰½á]¥¸¤¹™¥±Ñ•È ¡Ø¤èØ¥Ì¹Õµ‰•È€ôøØ€„ô¹Õ±°¤ì4(€½¹ÍĞİÙœ€ôİM±¥”¹±•¹Ñ €üİM±¥”¹É•‘Õ” ¡„°ˆ¤€ôø„€¬ˆ°€À¤€¼İM±¥”¹±•¹Ñ €è¹Õ±°ì4(€½¹ÍĞ‰½±±¥¹•É}ÍÅÕ••é”€ôİ9½Ü€„ô¹Õ±°€˜˜İÙœ€„ô¹Õ±°€˜˜İ9½Ü€ğİÙœ€¨€À¸àÔì4(4(€€¼¼IM$•Í…Á¥¹œ½Ù•ÉÍ½±4(€½¹ÍĞÈ€ô±…ÍĞ¡¥¹¹ÉÍ¤¤€üü¹Õ±°ì4(€½¹ÍĞÉA…ÍĞ€ô¥¹¹ÉÍ¥m¸€´€Ä€´É••¹Ñ]¥¹t€üü¹Õ±°ì4(€½¹ÍĞÉÍ¥}É•½Ù•Éä€ôÈ€„ô¹Õ±°€˜˜ÉA…ÍĞ€„ô¹Õ±°€˜˜ÉA…ÍĞ€ğ€ÌÔ€˜˜È€øÉA…ÍĞì4(4(€€¼¼5ÑÕÉ¹¥¹œÕÀ4(€½¹ÍĞ¡¥ÍĞ€ô¥¹¹µ…¹¡¥ÍĞì4(€½¹ÍĞ¡9½Ü€ô±…ÍĞ¡¡¥ÍĞ¤€üü¹Õ±°ì4(€½¹ÍĞ¡A…ÍĞ€ô¡¥ÍÑm¸€´€Ít€üü¹Õ±°ì4(€½¹ÍĞµ9½Ü€ô±…ÍĞ¡¥¹¹µ…¹µ…¤€üü¹Õ±°ì4(€½¹ÍĞµAÉ•Ø€ô¥¹¹µ…¹µ…‘m¸€´€Ét€üü¹Õ±°ì4(€½¹ÍĞÍ9½Ü€ô±…ÍĞ¡¥¹¹µ…¹Í¥¹…°¤€üü¹Õ±°ì4(€½¹ÍĞÍAÉ•Ø€ô¥¹¹µ…¹Í¥¹…±m¸€´€Ét€üü¹Õ±°ì4(€½¹ÍĞÉ½ÍÌ€ôµ9½Ü€„ô¹Õ±°€˜˜Í9½Ü€„ô¹Õ±°€˜˜µAÉ•Ø€„ô¹Õ±°€˜˜ÍAÉ•Ø€„ô¹Õ±°€˜˜µAÉ•Ø€ğôÍAÉ•Ø€˜˜µ9½Ü€øÍ9½Üì4(€½¹ÍĞµ…‘}ÑÕÉ¸€ôÉ½ÍÌñğ€¡¡9½Ü€„ô¹Õ±°€˜˜¡A…ÍĞ€„ô¹Õ±°€˜˜¡9½Ü€ø¡A…ÍĞ€˜˜¡9½Ü€ø€µ5…Ñ ¹…‰Ì¡¡A…ÍĞ¤¤ì4(4(€É•ÑÕÉ¸ì4(€€€Í½É”è…Œ¹Í½É”°4(€€€½¹™¥‘•¹”è…Œ¹½¹™¥‘•¹”°4(€€€…ÕµÕ±…Ñ¥½¸è…Œ¹Í½É”€øô€ØÀ°4(€€€‰½á}½¹Í½±¥‘…Ñ¥½¸°4(€€€½‰Ù}É¥Í¥¹œ°4(€€€Ù½±Õµ•}…Õ´°4(€€€‰½±±¥¹•É}ÍÅÕ••é”°4(€€€ÉÍ¥}É•½Ù•Éä°4(€€€µ…‘}ÑÕÉ¸°4(€€€¥¹ÍÑ}…ÕµÕ±…Ñ¥½¸è¹Õ±°°4(€€€™½É•¥¹}…ÕµÕ±…Ñ¥½¸è¹Õ±°°4(€ôì4)ô4
+  // Aggregate.
+  const applicable = Object.values(factors).filter((f) => f.strength != null);
+  const totalWeight = Object.values(factors).reduce((a, f) => a + f.weight, 0);
+  const applicableWeight = applicable.reduce((a, f) => a + f.weight, 0);
+  const weightedStrength = applicable.reduce((a, f) => a + f.weight * (f.strength as number), 0);
+  const score = applicableWeight > 0 ? Math.round((weightedStrength / applicableWeight) * 100) : 0;
+
+  const passed: string[] = [];
+  const failed: string[] = [];
+  for (const f of Object.values(factors)) {
+    if (f.strength == null) {
+      if (f.fail) failed.push(f.fail);
+      continue;
+    }
+    if (f.strength >= 0.6) passed.push(f.pass);
+    else if (f.strength < 0.5) failed.push(f.fail);
+  }
+
+  // Confidence: how much of the model is actually backed by data + series length.
+  const coverage = applicableWeight / totalWeight;
+  const lengthFactor = Math.min(1, n / 180);
+  const confidence = Math.round(coverage * lengthFactor * 100);
+
+  const dataQuality: DataQuality =
+    n < 40 ? 'insufficient' : coverage < 0.75 ? 'partial' : 'ok';
+
+  // Breakout probability: accumulation + squeeze/volume proximity to resistance.
+  const nearResistance = boxHi > 0 ? price / boxHi : 0; // â†’ 1 as price nears box top
+  let breakout = score * 0.7;
+  if (factors.bollinger.strength && factors.bollinger.strength >= 0.6) breakout += 8;
+  if (factors.volume.strength && factors.volume.strength >= 0.6) breakout += 8;
+  if (nearResistance >= 0.95) breakout += 6;
+  const breakoutProbability = Math.max(0, Math.min(95, Math.round(breakout)));
+
+  const expectedPeriod = score >= 75 ? '1~3ì£¼' : score >= 55 ? '2~4ì£¼' : '4~8ì£¼';
+  const stars = Math.max(1, Math.min(5, Math.ceil(score / 20)));
+  const label =
+    score >= 80
+      ? 'ë§¤ì§‘ ì§„í–‰ ê°€ëŠ¥ì„± ë§¤ìš° ë†’ìŒ'
+      : score >= 65
+        ? 'ë§¤ì§‘ ì§„í–‰ ê°€ëŠ¥ì„± ë†’ìŒ'
+        : score >= 50
+          ? 'ë§¤ì§‘ ê´€ì°° í•„ìš”'
+          : score >= 35
+            ? 'ë§¤ì§‘ ì´ˆê¸° ë‹¨ê³„'
+            : 'ë§¤ì§‘ ì‹ í˜¸ ì•½í•¨';
+
+  const cur = ctx.currency;
+  const ma20v = last(ind.ma20) ?? price;
+  const strategy = {
+    entry: [
+      `ë°•ìŠ¤ê¶Œ í•˜ë‹¨(ì•½ ${roundTo(boxLo, cur)}) ë¶€ê·¼ì—ì„œ ë¶„í•  ì§„ì…`,
+      `MA20(ì•½ ${roundTo(ma20v, cur)}) íšŒë³µ í™•ì¸ í›„ 1ì°¨ ì§„ì…`,
+      `ë°•ìŠ¤ê¶Œ ìƒë‹¨(ì•½ ${roundTo(boxHi, cur)}) ê±°ë˜ëŸ‰ ë™ë°˜ ëŒíŒŒ ì‹œ ì¶”ê°€ ì§„ì…`,
+    ],
+    take: [
+      `ë°•ìŠ¤ê¶Œ ìƒë‹¨(ì•½ ${roundTo(boxHi, cur)}) 1ì°¨ ìµì ˆ`,
+      'ì „ê³ ì  ëŒíŒŒ ì‹œ ì¼ë¶€ ë¬¼ëŸ‰ í™€ë”©',
+      'ê±°ë˜ëŸ‰ ê¸‰ê° ì‹œ ë¶„í•  ìµì ˆ',
+    ],
+    stop: [
+      `ë°•ìŠ¤ê¶Œ í•˜ë‹¨(ì•½ ${roundTo(boxLo, cur)}) ì´íƒˆ ì‹œ ì†ì ˆ`,
+      `ì§ì „ ì €ì (ì•½ ${roundTo(recentLo, cur)}) ì´íƒˆ ì‹œ ì†ì ˆ`,
+      'ì•…ì¬ ê³µì‹œ ë˜ëŠ” ê±°ë˜ëŸ‰ ë™ë°˜ ì¥ëŒ€ìŒë´‰ ë°œìƒ ì‹œ ì†ì ˆ',
+    ],
+    caution: [
+      'ë§¤ì§‘ ì‹ í˜¸ëŠ” í™•ì •ì´ ì•„ë‹ˆë¼ ê°€ëŠ¥ì„± ì‹ í˜¸ì…ë‹ˆë‹¤.',
+      'ëŒíŒŒ í™•ì¸ ì „ì—ëŠ” ë¹„ì¤‘ì„ ì‘ê²Œ ì¡ìœ¼ì„¸ìš”.',
+      'ê±°ë˜ëŸ‰ ì—†ëŠ” ìƒìŠ¹ì€ ì‹ ë¢°ë„ê°€ ë‚®ìŠµë‹ˆë‹¤.',
+    ],
+  };
+
+  return {
+    score,
+    stars,
+    label,
+    confidence,
+    breakoutProbability,
+    expectedPeriod,
+    passed,
+    failed,
+    strategy,
+    dataQuality,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// AI chart signals
+// ---------------------------------------------------------------------------
+
+function mk(
+  key: string,
+  label: string,
+  category: SignalCategory,
+  active: boolean,
+  score: number,
+  confidence: number,
+  tone: Tone,
+  reasons: string[],
+  missing: string[],
+  action: string,
+  dataQuality: DataQuality = 'ok',
+): AiSignal {
+  return {
+    key,
+    label,
+    category,
+    active,
+    score: Math.max(0, Math.min(100, Math.round(score))),
+    confidence: Math.max(0, Math.min(100, Math.round(confidence))),
+    tone,
+    reasons,
+    missing,
+    action,
+    dataQuality,
+  };
+}
+
+const INSUFFICIENT_ACTION = 'ë°ì´í„° ë¶€ì¡±ìœ¼ë¡œ ì‹ ë¢°ë„ ë‚®ìŒ';
+
+// Canonical signal set â€” used to emit a full "insufficient" list when the price
+// history is too short to compute anything, so the API/UI always explain why a
+// signal is unavailable instead of silently dropping it.
+const SIGNAL_META: { key: string; label: string; category: SignalCategory; tone: Tone }[] = [
+  { key: 'accumulation', label: 'ë°”ë‹¥ê¶Œ ë§¤ì§‘', category: 'accumulation', tone: 'positive' },
+  { key: 'breakout_imminent', label: 'ëŒíŒŒ ì„ë°•', category: 'trend', tone: 'positive' },
+  { key: 'trend_start', label: 'ì¶”ì„¸ ì‹œì‘', category: 'trend', tone: 'positive' },
+  { key: 'golden_cross', label: 'ê³¨ë“ í¬ë¡œìŠ¤', category: 'trend', tone: 'positive' },
+  { key: 'dead_cross', label: 'ë°ë“œí¬ë¡œìŠ¤', category: 'trend', tone: 'negative' },
+  { key: 'overheated', label: 'ê³¼ì—´', category: 'momentum', tone: 'negative' },
+  { key: 'trend_break', label: 'ì¶”ì„¸ ì´íƒˆ', category: 'trend', tone: 'negative' },
+  { key: 'volume_explosion', label: 'ê±°ë˜ëŸ‰ í­ë°œ', category: 'volume', tone: 'positive' },
+  { key: 'new_high', label: 'ì‹ ê³ ê°€', category: 'trend', tone: 'positive' },
+  { key: 'new_low', label: 'ì‹ ì €ê°€', category: 'trend', tone: 'negative' },
+  { key: 'pullback', label: 'ëˆŒë¦¼ëª©', category: 'trend', tone: 'positive' },
+  { key: 'trend_reversal', label: 'ì¶”ì„¸ ì „í™˜', category: 'momentum', tone: 'positive' },
+  { key: 'undervalued', label: 'ì €í‰ê°€', category: 'valuation', tone: 'positive' },
+  { key: 'overvalued', label: 'ê³ í‰ê°€', category: 'valuation', tone: 'negative' },
+  { key: 'positive_disclosure', label: 'í˜¸ì¬ ê³µì‹œ', category: 'disclosure', tone: 'positive' },
+  { key: 'negative_disclosure', label: 'ì•…ì¬ ê³µì‹œ', category: 'disclosure', tone: 'negative' },
+];
+
+function insufficientSignals(reason: string): AiSignal[] {
+  return SIGNAL_META.map((m) =>
+    mk(m.key, m.label, m.category, false, 0, 10, m.tone, [], [reason], INSUFFICIENT_ACTION, 'insufficient'),
+  );
+}
+
+function naSignal(
+  key: string,
+  label: string,
+  category: SignalCategory,
+  tone: Tone,
+  missing: string,
+): AiSignal {
+  return mk(key, label, category, false, 0, 12, tone, [], [missing], INSUFFICIENT_ACTION, 'insufficient');
+}
+
+function computeSignals(
+  candles: Candle[],
+  ind: IndicatorSeries,
+  ctx: SignalContext,
+  acc: AccumulationResult,
+): AiSignal[] {
+  const n = candles.length;
+  const closes = candles.map((c) => c.close);
+  const price = closes[n - 1];
+  const out: AiSignal[] = [];
+
+  const ma20 = last(ind.ma20) ?? null;
+  const ma60 = last(ind.ma60) ?? null;
+  const ma20Prev = ind.ma20[n - 2] ?? null;
+  const ma60Prev = ind.ma60[n - 2] ?? null;
+  const rsi = last(ind.rsi) ?? null;
+  const rsiPrev = ind.rsi[n - 1 - Math.min(15, n - 1)] ?? null;
+
+  const win = Math.min(20, n - 1);
+  const avgVol = candles.slice(n - win - 1, n - 1).reduce((s, c) => s + c.volume, 0) / win;
+  const volRatio = avgVol > 0 ? candles[n - 1].volume / avgVol : 0;
+
+  const boxWin = Math.min(80, n - 1);
+  const boxHi = Math.max(...closes.slice(n - boxWin));
+  const boxLo = Math.min(...closes.slice(n - boxWin));
+  const hiAll = Math.max(...closes);
+  const loAll = Math.min(...closes);
+
+  const macd = ind.macd;
+  const mNow = last(macd.macd) ?? null;
+  const mPrev = macd.macd[n - 2] ?? null;
+  const sNow = last(macd.signal) ?? null;
+  const sPrev = macd.signal[n - 2] ?? null;
+  const golden =
+    ma20 != null && ma60 != null && ma20Prev != null && ma60Prev != null && ma20Prev <= ma60Prev && ma20 > ma60;
+  const dead =
+    ma20 != null && ma60 != null && ma20Prev != null && ma60Prev != null && ma20Prev >= ma60Prev && ma20 < ma60;
+
+  // Confidence scales with how much price history backs the technicals.
+  const techConf = Math.round(60 + Math.min(1, n / 150) * 30); // 60..90
+  // Prerequisite availability for indicator-dependent signals.
+  const ma60Ready = ma60 != null && ma60Prev != null;
+  const rsiReady = rsi != null;
+  const macdReady = mNow != null && sNow != null && mPrev != null && sPrev != null;
+  const MA60_MISSING = 'ì¤‘ê¸° ì´ë™í‰ê· (MA60) ê³„ì‚°ì— í•„ìš”í•œ ë°ì´í„°ê°€ ë¶€ì¡±í•©ë‹ˆë‹¤.';
+  const RSI_MISSING = 'RSI ê³„ì‚°ì— í•„ìš”í•œ ë°ì´í„°ê°€ ë¶€ì¡±í•©ë‹ˆë‹¤.';
+  const MACD_MISSING = 'MACD ê³„ì‚°ì— í•„ìš”í•œ ë°ì´í„°ê°€ ë¶€ì¡±í•©ë‹ˆë‹¤.';
+
+  // ë°”ë‹¥ê¶Œ ë§¤ì§‘
+  out.push(
+    mk(
+      'accumulation',
+      'ë°”ë‹¥ê¶Œ ë§¤ì§‘',
+      'accumulation',
+      acc.score >= 60,
+      acc.score,
+      acc.confidence,
+      'positive',
+      acc.passed.slice(0, 4),
+      acc.failed.slice(0, 4),
+      'ë°•ìŠ¤ê¶Œ í•˜ë‹¨ ë¶„í•  ë§¤ìˆ˜ í›„ ê±°ë˜ëŸ‰ ë™ë°˜ ëŒíŒŒë¥¼ í™•ì¸í•˜ì„¸ìš”.',
+      acc.dataQuality,
+    ),
+  );
+
+  // ëŒíŒŒ ì„ë°• (RSI í•„ìš”)
+  if (!rsiReady) {
+    out.push(naSignal('breakout_imminent', 'ëŒíŒŒ ì„ë°•', 'trend', 'positive', RSI_MISSING));
+  } else {
+    const nearTop = boxHi > 0 ? price / boxHi : 0;
+    const active = nearTop >= 0.96 && volRatio >= 1.3 && rsi >= 50 && rsi < 70;
+    out.push(
+      mk(
+        'breakout_imminent',
+        'ëŒíŒŒ ì„ë°•',
+        'trend',
+        active,
+        active ? 60 + Math.min(35, (volRatio - 1.3) * 30) : nearTop * 60,
+        techConf,
+        'positive',
+        active ? [`ë°•ìŠ¤ê¶Œ ìƒë‹¨(${boxHi.toFixed(2)}) ê·¼ì ‘, ê±°ë˜ëŸ‰ ${volRatio.toFixed(1)}ë°°`] : [],
+        active ? [] : ['ì €í•­ì„  ê·¼ì ‘ ë˜ëŠ” ê±°ë˜ëŸ‰ ë™ë°˜ì´ ë¶€ì¡±í•©ë‹ˆë‹¤.'],
+        'ëŒíŒŒ ì‹œ ì§„ì…, ëŒíŒŒ ì‹¤íŒ¨(ìœ—ê¼¬ë¦¬+ê±°ë˜ëŸ‰ ê°ì†Œ) ì‹œ ê´€ë§í•˜ì„¸ìš”.',
+      ),
+    );
+  }
+
+  // ì¶”ì„¸ ì‹œì‘ (MA60 í•„ìš”)
+  if (!ma60Ready) {
+    out.push(naSignal('trend_start', 'ì¶”ì„¸ ì‹œì‘', 'trend', 'positive', MA60_MISSING));
+  } else {
+    const active = ma20 != null && ma20 > ma60 && price > ma20 && (slope(ind.ma20, 5) ?? 0) > 0;
+    out.push(
+      mk(
+        'trend_start',
+        'ì¶”ì„¸ ì‹œì‘',
+        'trend',
+        active,
+        active ? 68 : 30,
+        techConf,
+        'positive',
+        active ? ['ê°€ê²©ì´ MA20 ìœ„, MA20>MA60 ì •ë°°ì—´ ì§„ì…'] : [],
+        active ? [] : ['ì •ë°°ì—´ ì „í™˜ì´ ì•„ì§ í™•ì¸ë˜ì§€ ì•Šì•˜ìŠµë‹ˆë‹¤.'],
+        'ì´ˆê¸° ëˆŒë¦¼ì—ì„œ ë¶„í•  ë§¤ìˆ˜, MA20 ì´íƒˆ ì‹œ ì†ì ˆí•˜ì„¸ìš”.',
+      ),
+    );
+  }
+
+  // ê³¨ë“ í¬ë¡œìŠ¤ / ë°ë“œí¬ë¡œìŠ¤ (MA60 í•„ìš”)
+  if (!ma60Ready) {
+    out.push(naSignal('golden_cross', 'ê³¨ë“ í¬ë¡œìŠ¤', 'trend', 'positive', MA60_MISSING));
+    out.push(naSignal('dead_cross', 'ë°ë“œí¬ë¡œìŠ¤', 'trend', 'negative', MA60_MISSING));
+  } else {
+    out.push(
+      mk(
+        'golden_cross',
+        'ê³¨ë“ í¬ë¡œìŠ¤',
+        'trend',
+        golden,
+        golden ? 70 : 25,
+        techConf,
+        'positive',
+        golden ? ['MA20ê°€ MA60ì„ ìƒí–¥ ëŒíŒŒ'] : [],
+        golden ? [] : ['ìµœê·¼ ê³¨ë“ í¬ë¡œìŠ¤ê°€ ì—†ìŠµë‹ˆë‹¤.'],
+        'ê±°ë˜ëŸ‰ ë™ë°˜ ì—¬ë¶€ë¥¼ í™•ì¸í•˜ê³  ëˆŒë¦¼ëª©ì—ì„œ ì§„ì…í•˜ì„¸ìš”.',
+      ),
+    );
+    out.push(
+      mk(
+        'dead_cross',
+        'ë°ë“œí¬ë¡œìŠ¤',
+        'trend',
+        dead,
+        dead ? 70 : 25,
+        techConf,
+        'negative',
+        dead ? ['MA20ê°€ MA60ì„ í•˜í–¥ ëŒíŒŒ'] : [],
+        dead ? [] : ['ìµœê·¼ ë°ë“œí¬ë¡œìŠ¤ê°€ ì—†ìŠµë‹ˆë‹¤.'],
+        'ë³´ìœ  ì‹œ ë¹„ì¤‘ ì¶•ì†Œ, ë°˜ë“±ì€ ë§¤ë„ ê¸°íšŒë¡œ í™œìš©í•˜ì„¸ìš”.',
+      ),
+    );
+  }
+
+  // ê³¼ì—´ (RSI í•„ìš”)
+  if (!rsiReady) {
+    out.push(naSignal('overheated', 'ê³¼ì—´', 'momentum', 'negative', RSI_MISSING));
+  } else {
+    const aboveMa20 = ma20 != null && ma20 > 0 ? (price - ma20) / ma20 : 0;
+    const active = rsi >= 70 && aboveMa20 > 0.1;
+    out.push(
+      mk(
+        'overheated',
+        'ê³¼ì—´',
+        'momentum',
+        active,
+        active ? 65 : rsi,
+        techConf,
+        'negative',
+        active ? [`RSI ${rsi.toFixed(0)}, MA20 ëŒ€ë¹„ +${(aboveMa20 * 100).toFixed(0)}% ì´ê²©`] : [],
+        active ? [] : ['ê³¼ì—´ êµ¬ê°„ì´ ì•„ë‹™ë‹ˆë‹¤.'],
+        'ì‹ ê·œ ì§„ì… ìì œ, ë¶„í•  ìµì ˆë¡œ ë¦¬ìŠ¤í¬ë¥¼ ê´€ë¦¬í•˜ì„¸ìš”.',
+      ),
+    );
+  }
+
+  // ì¶”ì„¸ ì´íƒˆ (MA60 í•„ìš”)
+  if (ma60 == null) {
+    out.push(naSignal('trend_break', 'ì¶”ì„¸ ì´íƒˆ', 'trend', 'negative', MA60_MISSING));
+  } else {
+    const active = price < ma60 && price < boxLo * 1.01;
+    out.push(
+      mk(
+        'trend_break',
+        'ì¶”ì„¸ ì´íƒˆ',
+        'trend',
+        active,
+        active ? 65 : 30,
+        techConf,
+        'negative',
+        active ? ['MA60 ë° ë°•ìŠ¤ê¶Œ í•˜ë‹¨ ì´íƒˆ'] : [],
+        active ? [] : ['ì¶”ì„¸ ì´íƒˆì´ í™•ì¸ë˜ì§€ ì•Šì•˜ìŠµë‹ˆë‹¤.'],
+        'ì†ì ˆ ê¸°ì¤€ ì¤€ìˆ˜, ì¬ì§„ì…ì€ ì§€ì§€ íšŒë³µ í™•ì¸ í›„ë¡œ ë¯¸ë£¨ì„¸ìš”.',
+      ),
+    );
+  }
+
+  // ê±°ë˜ëŸ‰ í­ë°œ
+  {
+    const active = volRatio >= 3;
+    out.push(
+      mk(
+        'volume_explosion',
+        'ê±°ë˜ëŸ‰ í­ë°œ',
+        'volume',
+        active,
+        active ? Math.min(95, 60 + (volRatio - 3) * 10) : volRatio * 20,
+        75,
+        'positive',
+        active ? [`ê±°ë˜ëŸ‰ì´ 20ë´‰ í‰ê· ì˜ ${volRatio.toFixed(1)}ë°°`] : [],
+        active ? [] : ['ê±°ë˜ëŸ‰ì€ í‰ê·  ìˆ˜ì¤€ì…ë‹ˆë‹¤.'],
+        'ë°©í–¥(ì–‘/ìŒë´‰)ê³¼ ìœ„ì¹˜(ë°”ë‹¥/ê³ ì )ë¥¼ í•¨ê»˜ í™•ì¸í•˜ì„¸ìš”.',
+      ),
+    );
+  }
+
+  // ì‹ ê³ ê°€ / ì‹ ì €ê°€ (ì¢…ê°€ë§Œ í•„ìš”)
+  out.push(
+    mk(
+      'new_high',
+      'ì‹ ê³ ê°€',
+      'trend',
+      price >= hiAll * 0.999,
+      price >= hiAll * 0.999 ? 70 : (price / hiAll) * 60,
+      techConf,
+      'positive',
+      price >= hiAll * 0.999 ? ['ê¸°ê°„ ë‚´ ìµœê³ ê°€ ê²½ì‹ '] : [],
+      price >= hiAll * 0.999 ? [] : ['ì‹ ê³ ê°€ê°€ ì•„ë‹™ë‹ˆë‹¤.'],
+      'ëˆŒë¦¼ëª© ë¶„í•  ì§„ì…, ê±°ë˜ëŸ‰ ê°ì†Œ ì‹œ ìµì ˆí•˜ì„¸ìš”.',
+    ),
+  );
+  out.push(
+    mk(
+      'new_low',
+      'ì‹ ì €ê°€',
+      'trend',
+      price <= loAll * 1.001,
+      price <= loAll * 1.001 ? 70 : 30,
+      techConf,
+      'negative',
+      price <= loAll * 1.001 ? ['ê¸°ê°„ ë‚´ ìµœì €ê°€ ê²½ì‹ '] : [],
+      price <= loAll * 1.001 ? [] : ['ì‹ ì €ê°€ê°€ ì•„ë‹™ë‹ˆë‹¤.'],
+      'ì„£ë¶€ë¥¸ ì €ì  ë§¤ìˆ˜ ìì œ, ë°˜ë“±Â·ê±°ë˜ëŸ‰ í™•ì¸ í›„ ì ‘ê·¼í•˜ì„¸ìš”.',
+    ),
+  );
+
+  // ëˆŒë¦¼ëª© (MA60 + RSI í•„ìš”)
+  if (!ma60Ready || !rsiReady) {
+    out.push(naSignal('pullback', 'ëˆŒë¦¼ëª©', 'trend', 'positive', !ma60Ready ? MA60_MISSING : RSI_MISSING));
+  } else {
+    const uptrend = ma20 != null && ma20 > ma60;
+    const nearMa20 = ma20 != null && ma20 > 0 ? Math.abs(price - ma20) / ma20 < 0.03 : false;
+    const active = uptrend && nearMa20 && rsi >= 40 && rsi <= 60 && price >= (ma20 ?? 0);
+    out.push(
+      mk(
+        'pullback',
+        'ëˆŒë¦¼ëª©',
+        'trend',
+        active,
+        active ? 66 : 30,
+        techConf,
+        'positive',
+        active ? ['ìƒìŠ¹ì¶”ì„¸ ì¤‘ MA20 ì§€ì§€ ë¶€ê·¼ ì¡°ì •'] : [],
+        active ? [] : ['ìƒìŠ¹ì¶”ì„¸ ëˆŒë¦¼ëª© ì¡°ê±´ì´ ì•„ë‹™ë‹ˆë‹¤.'],
+        'MA20 ì§€ì§€ í™•ì¸ í›„ ë¶„í•  ì§„ì…, ì§€ì§€ ì´íƒˆ ì‹œ ì†ì ˆí•˜ì„¸ìš”.',
+      ),
+    );
+  }
+
+  // ì¶”ì„¸ ì „í™˜ (MACD + MA60 í•„ìš”)
+  if (!macdReady || !ma60Ready) {
+    out.push(naSignal('trend_reversal', 'ì¶”ì„¸ ì „í™˜', 'momentum', 'positive', !macdReady ? MACD_MISSING : MA60_MISSING));
+  } else {
+    const macdUp = mPrev <= sPrev && mNow > sNow;
+    const downFlatten = (slope(ind.ma60, 10) ?? -10) > -2 && (slope(ind.ma60, 20) ?? 0) < 0;
+    const active = macdUp && downFlatten;
+    out.push(
+      mk(
+        'trend_reversal',
+        'ì¶”ì„¸ ì „í™˜',
+        'momentum',
+        active,
+        active ? 64 : 30,
+        techConf,
+        'positive',
+        active ? ['MACD ìƒí–¥ êµì°¨ + í•˜ë½ì¶”ì„¸ ë‘”í™”'] : [],
+        active ? [] : ['ì¶”ì„¸ ì „í™˜ ì‹ í˜¸ê°€ ì•„ì§ ì•½í•©ë‹ˆë‹¤.'],
+        'ì „í™˜ ì´ˆê¸° ë¶„í•  ì§„ì…, ì§ì „ ì €ì  ì´íƒˆ ì‹œ ì†ì ˆí•˜ì„¸ìš”.',
+      ),
+    );
+  }
+
+  // ì €í‰ê°€ / ê³ í‰ê°€ â€” ì¬ë¬´ í•„ìš”.
+  if (ctx.financials && (ctx.financials.per != null || ctx.financials.pbr != null)) {
+    const f = ctx.financials;
+    const cheap = (f.per != null && f.per > 0 && f.per < 10) || (f.pbr != null && f.pbr > 0 && f.pbr < 1);
+    const rich = (f.per != null && f.per > 40) || (f.pbr != null && f.pbr > 5);
+    out.push(
+      mk(
+        'undervalued',
+        'ì €í‰ê°€',
+        'valuation',
+        cheap,
+        cheap ? 65 : 35,
+        65,
+        'positive',
+        cheap ? [`PER ${f.per?.toFixed(1) ?? 'â€”'}, PBR ${f.pbr?.toFixed(2) ?? 'â€”'}ë¡œ ë‚®ì€ í¸`] : [],
+        cheap ? [] : ['ë°¸ë¥˜ì—ì´ì…˜ì´ íŠ¹ë³„íˆ ë‚®ì§€ ì•ŠìŠµë‹ˆë‹¤.'],
+        'ì‹¤ì  ê°œì„ ì´ ë™ë°˜ë˜ëŠ”ì§€ í™•ì¸ í›„ ì¤‘ì¥ê¸° ê´€ì ìœ¼ë¡œ ì ‘ê·¼í•˜ì„¸ìš”.',
+      ),
+    );
+    out.push(
+      mk(
+        'overvalued',
+        'ê³ í‰ê°€',
+        'valuation',
+        rich,
+        rich ? 65 : 35,
+        65,
+        'negative',
+        rich ? [`PER ${f.per?.toFixed(1) ?? 'â€”'}, PBR ${f.pbr?.toFixed(2) ?? 'â€”'}ë¡œ ë†’ì€ í¸`] : [],
+        rich ? [] : ['ë°¸ë¥˜ì—ì´ì…˜ì´ íŠ¹ë³„íˆ ë†’ì§€ ì•ŠìŠµë‹ˆë‹¤.'],
+        'ì„±ì¥ì„± ëŒ€ë¹„ ê³¼ë„í•œì§€ ì ê²€í•˜ê³  ì¶”ê²© ë§¤ìˆ˜ë¥¼ ìì œí•˜ì„¸ìš”.',
+      ),
+    );
+  } else {
+    out.push(
+      mk('undervalued', 'ì €í‰ê°€', 'valuation', false, 0, 20, 'neutral', [], ['ì¬ë¬´(PER/PBR) ë°ì´í„°ê°€ ë¶€ì¡±í•©ë‹ˆë‹¤.'], 'ë°ì´í„° ë¶€ì¡±ìœ¼ë¡œ ì‹ ë¢°ë„ ë‚®ìŒ', 'insufficient'),
+    );
+    out.push(
+      mk('overvalued', 'ê³ í‰ê°€', 'valuation', false, 0, 20, 'neutral', [], ['ì¬ë¬´(PER/PBR) ë°ì´í„°ê°€ ë¶€ì¡±í•©ë‹ˆë‹¤.'], 'ë°ì´í„° ë¶€ì¡±ìœ¼ë¡œ ì‹ ë¢°ë„ ë‚®ìŒ', 'insufficient'),
+    );
+  }
+
+  // í˜¸ì¬ ê³µì‹œ / ì•…ì¬ ê³µì‹œ
+  if (ctx.positiveEvents || ctx.negativeEvents) {
+    const pos = ctx.positiveEvents ?? [];
+    const neg = ctx.negativeEvents ?? [];
+    out.push(
+      mk(
+        'positive_disclosure',
+        'í˜¸ì¬ ê³µì‹œ',
+        'disclosure',
+        pos.length > 0,
+        pos.length > 0 ? 65 : 30,
+        70,
+        'positive',
+        pos.length > 0 ? [`ê¸ì • ê³µì‹œ: ${pos.join(', ')}`] : [],
+        pos.length > 0 ? [] : ['ìµœê·¼ í˜¸ì¬ì„± ê³µì‹œê°€ ì—†ìŠµë‹ˆë‹¤.'],
+        'ê³µì‹œì˜ ì‹¤ì§ˆì  ì˜í–¥(ê³„ì•½ ê·œëª¨Â·ì§€ì†ì„±)ì„ í™•ì¸í•˜ì„¸ìš”.',
+      ),
+    );
+    out.push(
+      mk(
+        'negative_disclosure',
+        'ì•…ì¬ ê³µì‹œ',
+        'disclosure',
+        neg.length > 0,
+        neg.length > 0 ? 65 : 30,
+        70,
+        'negative',
+        neg.length > 0 ? [`ìœ„í—˜ ê³µì‹œ: ${neg.join(', ')}`] : [],
+        neg.length > 0 ? [] : ['ìµœê·¼ ì•…ì¬ì„± ê³µì‹œê°€ ì—†ìŠµë‹ˆë‹¤.'],
+        'ìœ ìƒì¦ìÂ·CB/BW ë“± í¬ì„ ì´ìŠˆëŠ” ë¹„ì¤‘ ì¶•ì†Œë¡œ ëŒ€ì‘í•˜ì„¸ìš”.',
+      ),
+    );
+  } else {
+    out.push(
+      mk('positive_disclosure', 'í˜¸ì¬ ê³µì‹œ', 'disclosure', false, 0, 20, 'neutral', [], ['ê³µì‹œ ë°ì´í„°ê°€ ë¶€ì¡±í•©ë‹ˆë‹¤.'], 'ë°ì´í„° ë¶€ì¡±ìœ¼ë¡œ ì‹ ë¢°ë„ ë‚®ìŒ', 'insufficient'),
+    );
+    out.push(
+      mk('negative_disclosure', 'ì•…ì¬ ê³µì‹œ', 'disclosure', false, 0, 20, 'neutral', [], ['ê³µì‹œ ë°ì´í„°ê°€ ë¶€ì¡±í•©ë‹ˆë‹¤.'], 'ë°ì´í„° ë¶€ì¡±ìœ¼ë¡œ ì‹ ë¢°ë„ ë‚®ìŒ', 'insufficient'),
+    );
+  }
+
+  return out;
+}
+
+export function computeSignalReport(
+  candles: Candle[],
+  ind: IndicatorSeries,
+  ctx: SignalContext = {},
+  asOf = new Date().toISOString(),
+): SignalReport {
+  if (!candles || candles.length < 30) {
+    const empty: AccumulationResult = {
+      score: 0,
+      stars: 1,
+      label: 'ë°ì´í„° ë¶€ì¡±ìœ¼ë¡œ ì‹ ë¢°ë„ ë‚®ìŒ',
+      confidence: 0,
+      breakoutProbability: 0,
+      expectedPeriod: 'â€”',
+      passed: [],
+      failed: ['ê°€ê²© ë°ì´í„°ê°€ ë¶€ì¡±í•©ë‹ˆë‹¤ (30ë´‰ ë¯¸ë§Œ).'],
+      strategy: { entry: [], take: [], stop: [], caution: ['ë°ì´í„° ë¶€ì¡±ìœ¼ë¡œ ì‹ ë¢°ë„ ë‚®ìŒ'] },
+      dataQuality: 'insufficient',
+    };
+    const reason = 'ê°€ê²© ë°ì´í„°ê°€ ë¶€ì¡±í•©ë‹ˆë‹¤ (30ë´‰ ë¯¸ë§Œ).';
+    return { asOf, accumulation: empty, signals: insufficientSignals(reason), dataQuality: 'insufficient' };
+  }
+  const accumulation = computeAccumulation(candles, ind, ctx);
+  const signals = computeSignals(candles, ind, ctx, accumulation);
+  return { asOf, accumulation, signals, dataQuality: accumulation.dataQuality };
+}
+
+// ---------------------------------------------------------------------------
+// Scanner conditions â€” the granular candle-only checkboxes the scanner offers.
+// `null` means "data not available" (ê¸°ê´€/ì™¸êµ­ì¸ ìˆ˜ê¸‰) â†’ never a match, low conf.
+// ---------------------------------------------------------------------------
+
+export interface ScanConditions {
+  score: number; // accumulation score
+  confidence: number;
+  accumulation: boolean;
+  box_consolidation: boolean;
+  obv_rising: boolean;
+  volume_accum: boolean;
+  bollinger_squeeze: boolean;
+  rsi_recovery: boolean;
+  macd_turn: boolean;
+  inst_accumulation: boolean | null;
+  foreign_accumulation: boolean | null;
+}
+
+export function computeScanConditions(candles: Candle[], ind: IndicatorSeries): ScanConditions | null {
+  if (!candles || candles.length < 30) return null;
+  const n = candles.length;
+  const closes = candles.map((c) => c.close);
+  const acc = computeAccumulation(candles, ind, {});
+
+  const recentWin = Math.min(20, n - 1);
+  const boxWin = Math.min(80, n - 1);
+
+  // box consolidation
+  const boxSlice = closes.slice(n - boxWin);
+  const boxRange = Math.min(...boxSlice) > 0 ? (Math.max(...boxSlice) - Math.min(...boxSlice)) / Math.min(...boxSlice) : 1;
+  const half = Math.floor(boxWin / 2);
+  const oldLow = Math.min(...closes.slice(n - boxWin, n - half));
+  const newLow = Math.min(...closes.slice(n - half));
+  const box_consolidation = boxRange <= 0.28 && newLow >= oldLow * 0.99;
+
+  // OBV rising
+  const obv = obvSeries(candles);
+  const obv_rising = (slope(obv, recentWin) ?? 0) > 0;
+
+  // volume accumulation
+  let upVol = 0;
+  let downVol = 0;
+  for (let i = n - recentWin; i < n; i++) {
+    if (candles[i].close >= candles[i - 1].close) upVol += candles[i].volume;
+    else downVol += candles[i].volume;
+  }
+  const volume_accum = upVol > downVol * 1.1;
+
+  // bollinger squeeze
+  const bb = bollinger(closes, 20, 2);
+  const wNow = last(bb.width) ?? null;
+  const wSlice = bb.width.slice(n - boxWin).filter((v): v is number => v != null);
+  const wAvg = wSlice.length ? wSlice.reduce((a, b) => a + b, 0) / wSlice.length : null;
+  const bollinger_squeeze = wNow != null && wAvg != null && wNow < wAvg * 0.85;
+
+  // RSI escaping oversold
+  const r = last(ind.rsi) ?? null;
+  const rPast = ind.rsi[n - 1 - recentWin] ?? null;
+  const rsi_recovery = r != null && rPast != null && rPast < 35 && r > rPast;
+
+  // MACD turning up
+  const hist = ind.macd.hist;
+  const hNow = last(hist) ?? null;
+  const hPast = hist[n - 3] ?? null;
+  const mNow = last(ind.macd.macd) ?? null;
+  const mPrev = ind.macd.macd[n - 2] ?? null;
+  const sNow = last(ind.macd.signal) ?? null;
+  const sPrev = ind.macd.signal[n - 2] ?? null;
+  const cross = mNow != null && sNow != null && mPrev != null && sPrev != null && mPrev <= sPrev && mNow > sNow;
+  const macd_turn = cross || (hNow != null && hPast != null && hNow > hPast && hNow > -Math.abs(hPast));
+
+  return {
+    score: acc.score,
+    confidence: acc.confidence,
+    accumulation: acc.score >= 60,
+    box_consolidation,
+    obv_rising,
+    volume_accum,
+    bollinger_squeeze,
+    rsi_recovery,
+    macd_turn,
+    inst_accumulation: null,
+    foreign_accumulation: null,
+  };
+}
