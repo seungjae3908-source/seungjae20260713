@@ -29,6 +29,7 @@ import type {
 export interface RiskResult extends RiskAnalysis {
   filings: FilingItem[];
   disclosures: DisclosureItem[];
+  feedAvailable: boolean;
 }
 
 const DELISTING_KEYWORDS = [
@@ -357,6 +358,7 @@ export const RiskAnalysisService = {
       explanation: overallExplanation(entry.market, items, count, feedOk),
       filings,
       disclosures,
+      feedAvailable: feedOk,
     };
   },
 };

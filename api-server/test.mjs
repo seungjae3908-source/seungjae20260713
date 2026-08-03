@@ -43,7 +43,12 @@ const groups = {
   ],
   phase9: [
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
+    path.join(root, 'src/services/ai-chat.service.test.ts'),
+    path.join(root, 'src/services/signal-score.test.ts'),
+    path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/analysis-selection.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-analysis.test.ts'),
   ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),

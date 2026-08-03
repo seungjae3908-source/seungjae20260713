@@ -1,14 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import {
-  BarChart3, BookOpen, BriefcaseBusiness, Home, Layers3, Newspaper,
+  BarChart3, BookOpen, Bot, BriefcaseBusiness, CandlestickChart, Home, Layers3, Newspaper,
   Search, Settings, Star, TrendingUp,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 import type { MemberCapability } from '../../../packages/member-access/src/index.js';
 
-const INFO_PATHS = ['/stock-info', '/learn', '/market-overview', '/portfolio', '/assets'];
+const INFO_PATHS = ['/stock-info', '/learn', '/market-overview', '/portfolio', '/assets', '/ai-chat'];
+const TECH_PATHS = ['/scanner', '/ai-chart'];
+
+const TECH_MENU_ITEMS = [
+  { href: '/scanner', label: 'AI 검색기', icon: Search },
+  { href: '/ai-chart', label: 'AI 차트 분석기', icon: CandlestickChart },
+] as const;
 
 const INFO_MENU_ITEMS: Array<{
   href: string; label: string; icon: typeof Newspaper; capability?: MemberCapability;
@@ -16,6 +22,7 @@ const INFO_MENU_ITEMS: Array<{
   { href: '/stock-info', label: '정보', icon: Newspaper },
   { href: '/learn', label: '공부', icon: BookOpen },
   { href: '/market-overview', label: '시황', icon: BarChart3 },
+  { href: '/ai-chat', label: 'AI 채팅', icon: Bot },
   { href: '/portfolio', label: '포트폴리오', icon: BriefcaseBusiness, capability: 'canAccessPaperTrading' },
 ];
 
@@ -31,7 +38,7 @@ const ITEMS: Array<{
   { href: '/search', label: '종목', icon: TrendingUp, match: (path) => path === '/search' || path.startsWith('/stock/') },
   { href: '/themes', label: '테마', icon: Layers3, match: (path) => path.startsWith('/themes') },
   { href: '/watchlist', label: '관심', icon: Star, match: (path) => path.startsWith('/watchlist') || path.startsWith('/alerts') },
-  { href: '/scanner', label: '기술', icon: Search, capability: 'canAccessRiskPreview', match: (path) => path.startsWith('/scanner') },
+  { href: '/scanner', label: '기술', icon: Search, popup: true, capability: 'canAccessRiskPreview', match: (path) => TECH_PATHS.some((item) => path.startsWith(item)) },
   { href: '/stock-info', label: '정보', icon: Newspaper, popup: true, match: (path) => INFO_PATHS.some((item) => path.startsWith(item)) },
   { href: '/more', label: '설정', icon: Settings, match: (path) => path.startsWith('/more') || path.startsWith('/settings') || path.startsWith('/account') || path.startsWith('/login') },
 ];
@@ -44,18 +51,18 @@ export function BottomNav() {
   const [location, navigate] = useLocation();
   const auth = useAuth();
   const path = cleanPath(location);
-  const [infoOpen, setInfoOpen] = useState(false);
-  const infoMenuRef = useRef<HTMLDivElement>(null);
+  const [openMenu, setOpenMenu] = useState<'tech' | 'info' | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const visibleItems = ITEMS.filter((item) => !item.capability || auth.can(item.capability));
   const visibleInfoItems = INFO_MENU_ITEMS.filter((item) => !item.capability || auth.can(item.capability));
 
-  useEffect(() => { setInfoOpen(false); }, [location]);
+  useEffect(() => { setOpenMenu(null); }, [location]);
 
   useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
-      if (infoMenuRef.current && !infoMenuRef.current.contains(event.target as Node)) setInfoOpen(false);
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setOpenMenu(null);
     }
-    function handleKeyDown(event: KeyboardEvent) { if (event.key === 'Escape') setInfoOpen(false); }
+    function handleKeyDown(event: KeyboardEvent) { if (event.key === 'Escape') setOpenMenu(null); }
     document.addEventListener('pointerdown', handlePointerDown);
     document.addEventListener('keydown', handleKeyDown);
     return () => {
@@ -64,7 +71,7 @@ export function BottomNav() {
     };
   }, []);
 
-  function moveTo(href: string) { setInfoOpen(false); navigate(href); }
+  function moveTo(href: string) { setOpenMenu(null); navigate(href); }
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/90 px-1 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-xl">
@@ -76,11 +83,14 @@ export function BottomNav() {
           const active = item.match(path);
           const Icon = item.icon;
           if (item.popup) {
+            const menuType = item.label === '기술' ? 'tech' : 'info';
+            const menuOpen = openMenu === menuType;
+            const menuItems = menuType === 'tech' ? TECH_MENU_ITEMS : visibleInfoItems;
             return (
-              <div key={item.href} ref={infoMenuRef} className="relative min-w-0">
-                {infoOpen && (
-                  <div role="menu" aria-label="정보 메뉴" className="absolute bottom-full right-0 z-50 mb-3 w-44 overflow-hidden rounded-2xl border border-card-border bg-card p-2 shadow-2xl">
-                    {visibleInfoItems.map((menuItem) => {
+              <div key={item.href} ref={menuOpen ? menuRef : undefined} className="relative min-w-0">
+                {menuOpen && (
+                  <div role="menu" aria-label={`${item.label} 메뉴`} className="absolute bottom-full right-0 z-50 mb-3 w-48 overflow-hidden rounded-2xl border border-card-border bg-card p-2 shadow-2xl">
+                    {menuItems.map((menuItem) => {
                       const MenuIcon = menuItem.icon;
                       const menuActive = path.startsWith(menuItem.href);
                       return (
@@ -91,8 +101,8 @@ export function BottomNav() {
                     })}
                   </div>
                 )}
-                <button type="button" aria-haspopup="menu" aria-expanded={infoOpen} onClick={() => setInfoOpen((previous) => !previous)} className={cn('flex w-full min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-2 text-[10px] font-extrabold transition', active || infoOpen ? 'text-primary' : 'text-muted-foreground active:text-foreground')}>
-                  <Icon className={cn('mb-1 h-5 w-5', active || infoOpen ? 'text-primary' : 'text-muted-foreground')} />
+                <button type="button" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setOpenMenu((previous) => previous === menuType ? null : menuType)} className={cn('flex w-full min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-2 text-[10px] font-extrabold transition', active || menuOpen ? 'text-primary' : 'text-muted-foreground active:text-foreground')}>
+                  <Icon className={cn('mb-1 h-5 w-5', active || menuOpen ? 'text-primary' : 'text-muted-foreground')} />
                   <span className="truncate">{item.label}</span>
                 </button>
               </div>
