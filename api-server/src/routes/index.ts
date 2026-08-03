@@ -17,6 +17,7 @@ import paperTradingRouter from './paper-trading';
 import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
+import tradeAutomationRouter from './trade-automation';
 import {
   requireAdmin,
   requireAuthenticated,
@@ -52,6 +53,10 @@ router.use('/crypto/futures/auto', privateExchangeDisabled);
 router.get('/crypto/spot/accounts', privateExchangeDisabled);
 router.get('/crypto/futures/account', privateExchangeDisabled);
 router.get('/crypto/futures/positions', privateExchangeDisabled);
+// Legacy stock auto-order endpoints include US live-order support and a shared
+// execution key. They stay blocked; the member-scoped trade-automation router
+// below is the only supported integration surface.
+router.use('/stocks/auto-trade', privateExchangeDisabled);
 
 router.use('/crypto/spot', requireCapability('canAccessSpot'));
 router.use('/crypto/futures', requireCapability('canAccessFutures'));
@@ -70,6 +75,8 @@ router.use('/paper-trading', requireCapability('canAccessPaperTrading'));
 router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/', paperJournalRouter);
+router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
+router.use('/trade-automation', tradeAutomationRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
 router.use('/', aiChatRouter);
