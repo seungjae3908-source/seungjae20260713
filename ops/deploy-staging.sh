@@ -150,7 +150,7 @@ write_pm2_launcher() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 [[ -r .env.staging ]] || { echo '[staging] runtime env file is missing' >&2; exit 64; }
-exec node --enable-source-maps --env-file=.env.staging ./dist/index.mjs
+exec node --enable-source-maps '--env-file=.env.staging' ./dist/index.mjs
 LAUNCHER
   chmod 700 "$PM2_LAUNCHER"
 }
