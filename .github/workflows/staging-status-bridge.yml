@@ -31,7 +31,7 @@ jobs:
       - run: node api-server/scripts/verify-phase10-staging-status-bridge.mjs
 
   status:
-    name: Report owner-requested staging readiness status
+    name: Report owner-requested staging release verdict
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
@@ -53,7 +53,6 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-
       - name: Parse exact owner status command
         id: command
         env:
@@ -78,7 +77,6 @@ jobs:
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1].toLowerCase()}\n`);
           NODE
-
       - name: Require an immutable revision contained in main
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
@@ -91,91 +89,103 @@ jobs:
             echo 'Status query SHA must be contained in current main.' >&2
             exit 1
           }
-
-      - name: Read latest matching staging workflow run and jobs
+      - name: Locate exact staging verdict artifact and source Run
+        id: lookup
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
-          CONTROL_ISSUE: ${{ github.event.issue.number }}
-          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
         with:
           script: |
             const targetSha = process.env.TARGET_SHA;
-            const workflowId = 'staging-readiness.yml';
-            const workflow = await github.rest.actions.getWorkflow({
+            const artifactName = `staging-verdict-${targetSha}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: workflowId,
-            });
-            if (workflow.data.state !== 'active') {
-              core.setFailed(`Workflow ${workflowId} is not active.`);
-              return;
-            }
-
-            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForWorkflow, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: workflowId,
-              event: 'workflow_dispatch',
-              branch: 'main',
+              name: artifactName,
               per_page: 100,
             });
-            const matchingRuns = runs
-              .filter((run) => run.event === 'workflow_dispatch' && run.head_sha === targetSha)
+            const candidates = artifacts
+              .filter((artifact) => !artifact.expired && artifact.workflow_run?.head_sha === targetSha)
               .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
-            const run = matchingRuns[0];
-            if (!run) {
-              await github.rest.issues.createComment({
+            for (const artifact of candidates) {
+              const response = await github.rest.actions.getWorkflowRun({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: Number(process.env.CONTROL_ISSUE),
-                body: [
-                  'No matching staging readiness run was found.',
-                  '',
-                  `- Target SHA: \`${targetSha}\``,
-                  '- Required event: `workflow_dispatch`',
-                  '- Required branch: `main`',
-                  '- Production deployment executed: `false`',
-                  `- Source status comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
-                ].join('\n'),
+                run_id: artifact.workflow_run.id,
               });
-              core.setFailed('No matching Staging Readiness workflow_dispatch run exists for the requested main-contained SHA.');
-              return;
+              const run = response.data;
+              if (run.event === 'workflow_dispatch'
+                && run.head_branch === 'main'
+                && run.head_sha === targetSha
+                && run.path === '.github/workflows/staging-readiness.yml') {
+                core.setOutput('found', 'true');
+                core.setOutput('run_id', String(run.id));
+                core.setOutput('run_url', run.html_url);
+                core.setOutput('status', run.status);
+                core.setOutput('conclusion', run.conclusion ?? 'pending');
+                return;
+              }
             }
-
-            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              run_id: run.id,
-              per_page: 100,
-            });
-            const jobLines = jobs.length
-              ? jobs.map((job) => `- ${job.name}: \`${job.status}\` / \`${job.conclusion ?? 'pending'}\` (job ID: \`${job.id}\`)`)
-              : ['- No jobs are visible yet.'];
-            const verdict = run.status === 'completed'
-              ? (run.conclusion === 'success' ? '스테이징 검증 성공' : '스테이징 검증 실패 또는 중단')
-              : '스테이징 검증 진행 중';
-
+            core.setOutput('found', 'false');
+      - name: Download exact staging verdict
+        if: steps.lookup.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-verdict-${{ steps.command.outputs.sha }}
+          path: staging-verdict
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.lookup.outputs.run_id }}
+      - name: Report exact staging verdict without modifying workflows
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          FOUND: ${{ steps.lookup.outputs.found }}
+          RUN_ID: ${{ steps.lookup.outputs.run_id }}
+          RUN_URL: ${{ steps.lookup.outputs.run_url }}
+          RUN_STATUS: ${{ steps.lookup.outputs.status }}
+          RUN_CONCLUSION: ${{ steps.lookup.outputs.conclusion }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const lines = ['Staging release verdict status report.', '', `- Target SHA: \`${process.env.TARGET_SHA}\``];
+            if (process.env.FOUND !== 'true') {
+              lines.push(
+                '- Exact staging verdict artifact found: `false`',
+                '- RELEASE_READY: `false`',
+                '- Verdict: `배포 성공 여부와 무관하게 전체 검증 결과가 없어 운영 배포 불가`',
+              );
+            } else {
+              const verdict = JSON.parse(fs.readFileSync('staging-verdict/staging-verdict.json', 'utf8'));
+              lines.push(
+                `- Run ID: \`${process.env.RUN_ID}\``,
+                `- Run: [Open GitHub Actions run](${process.env.RUN_URL})`,
+                `- Status: \`${process.env.RUN_STATUS}\``,
+                `- Conclusion: \`${process.env.RUN_CONCLUSION}\``,
+                `- Deployed SHA: \`${verdict.deployed_sha}\``,
+                `- Total: \`${verdict.total}\``,
+                `- Passed: \`${verdict.passed}\``,
+                `- Failed: \`${verdict.failed}\``,
+                `- Skipped: \`${verdict.skipped}\``,
+                `- Console errors: \`${verdict.console_errors}\``,
+                `- Unexpected HTTP errors: \`${verdict.unexpected_http_errors}\``,
+                `- PM2: \`${verdict.pm2_status}\``,
+                `- Restart count: \`${verdict.restart_count}\``,
+                `- RELEASE_READY: \`${verdict.release_ready}\``,
+                `- Verdict: \`${verdict.verdict}\``,
+              );
+            }
+            lines.push(
+              '- Production deployment executed: `false`',
+              '- Production database changed: `false`',
+              `- Source status comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+              '',
+              'This command is read-only. It does not dispatch, rerun, approve, cancel, or modify a workflow.',
+            );
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: Number(process.env.CONTROL_ISSUE),
-              body: [
-                'Staging readiness status report.',
-                '',
-                `- Target SHA: \`${targetSha}\``,
-                `- Run ID: \`${run.id}\``,
-                `- Run: [Open GitHub Actions run](${run.html_url})`,
-                `- Status: \`${run.status}\``,
-                `- Conclusion: \`${run.conclusion ?? 'pending'}\``,
-                `- Verdict: \`${verdict}\``,
-                '- Production deployment executed: `false`',
-                '- Production database changed: `false`',
-                `- Source status comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
-                '',
-                'Jobs:',
-                ...jobLines,
-                '',
-                'This command is read-only. It does not dispatch, rerun, approve, cancel, or modify a workflow.',
-              ].join('\n'),
+              issue_number: 23,
+              body: lines.join('\n'),
             });
