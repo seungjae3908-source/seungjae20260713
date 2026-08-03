@@ -44,6 +44,7 @@ const Phase9AiReviewE2EPage = lazy(() => import('@/pages/phase9-ai-review-e2e'))
 const AiChartPage = lazy(() => import('@/pages/ai-chart'));
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
 const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
+const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
 const phase5E2EEnabled = import.meta.env.VITE_PHASE5_E2E === 'true';
@@ -52,6 +53,7 @@ const phase7E2EEnabled = import.meta.env.VITE_PHASE7_E2E === 'true';
 const phase8E2EEnabled = import.meta.env.VITE_PHASE8_E2E === 'true';
 const phase9E2EEnabled = import.meta.env.VITE_PHASE9_E2E === 'true';
 const phase11E2EEnabled = import.meta.env.VITE_PHASE11_E2E === 'true';
+const phase12E2EEnabled = import.meta.env.VITE_PHASE12_E2E === 'true';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
@@ -146,6 +148,7 @@ function RootRouter() {
     {phase11E2EEnabled ? <Route path="/__phase11-ai-workspace-e2e" component={ScannerRoute} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
+    {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
     {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
     <Route path="/install" component={InstallPage} />
     <Route component={AuthenticatedApp} />
