@@ -24,7 +24,8 @@ on:
       - ops/deploy-production.sh
       - ops/deploy-staging.sh
       - api-server/scripts/verify-phase10-deployment-safety.mjs
-      - api-server/scripts/verify-phase10-staging-readiness.mjs
+      - api-server/scripts/build-staging-verdict.mjs
+      - api-server/scripts/verify-staging-verdict.mjs
 
 permissions:
   actions: read
@@ -55,16 +56,20 @@ jobs:
         run: node api-server/scripts/verify-phase10-deployment-safety.mjs
 
   approval-gate:
-    name: Validate immutable main revision and verified CI provenance
+    name: Validate immutable main revision, CI provenance, and exact staging verdict
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     outputs:
       target_sha: ${{ steps.target.outputs.sha }}
+      staging_run_id: ${{ steps.verdict-artifact.outputs.run_id }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: Require an immutable commit from main
         id: target
         env:
@@ -98,7 +103,6 @@ jobs:
               'ai-privacy/verified',
               'futures-public-network-smoke/verified',
             ];
-
             const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -110,12 +114,11 @@ jobs:
             for (const status of statuses) {
               if (!latest.has(status.context)) latest.set(status.context, status.state);
             }
-            const failed = required.filter((name) => latest.get(name) !== 'success');
-            if (failed.length) {
-              core.setFailed(`Required successful statuses missing: ${failed.join(', ')}`);
+            const missing = required.filter((name) => latest.get(name) !== 'success');
+            if (missing.length) {
+              core.setFailed(`Required successful statuses missing: ${missing.join(', ')}`);
               return;
             }
-
             const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -136,6 +139,74 @@ jobs:
             if (!verifiedRun) {
               core.setFailed('No successful Application CI push run on main exists for the requested SHA. Status contexts alone are not sufficient.');
             }
+      - name: Locate successful exact-SHA staging verdict artifact
+        id: verdict-artifact
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const artifactName = `staging-verdict-${targetSha}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: artifactName,
+              per_page: 100,
+            });
+            const candidates = artifacts
+              .filter((artifact) => !artifact.expired && artifact.workflow_run?.head_sha === targetSha)
+              .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+            let accepted = null;
+            for (const artifact of candidates) {
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: artifact.workflow_run.id,
+              });
+              const run = response.data;
+              const valid = run.event === 'workflow_dispatch'
+                && run.head_branch === 'main'
+                && run.head_sha === targetSha
+                && run.path === '.github/workflows/staging-readiness.yml'
+                && run.status === 'completed'
+                && run.conclusion === 'success';
+              if (valid) {
+                accepted = { artifact, run };
+                break;
+              }
+            }
+            if (!accepted) {
+              core.setFailed(`No successful Staging Readiness run with artifact ${artifactName} exists for the exact target SHA.`);
+              return;
+            }
+            core.setOutput('run_id', String(accepted.run.id));
+            core.setOutput('artifact_id', String(accepted.artifact.id));
+            core.info(`Exact staging verdict artifact accepted from Run ID ${accepted.run.id}.`);
+      - name: Download exact staging verdict artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-verdict-${{ steps.target.outputs.sha }}
+          path: staging-verdict
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.verdict-artifact.outputs.run_id }}
+      - name: Require release_ready true, exact SHA, zero failures, and zero skipped checks
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
+      - name: Record accepted staging evidence
+        run: |
+          {
+            echo '## Production approval gate passed'
+            echo
+            echo "- Target SHA: \`${{ steps.target.outputs.sha }}\`"
+            echo "- Staging Run ID: \`${{ steps.verdict-artifact.outputs.run_id }}\`"
+            echo '- staging-verdict.json: `release_ready=true`'
+            echo '- Failed checks: `0`'
+            echo '- Skipped checks: `0`'
+            echo '- Production deployment has not started yet.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
     name: Approved canary, production deploy, verify, and rollback
@@ -229,5 +300,7 @@ jobs:
             echo '- Trigger: explicit workflow dispatch only'
             echo '- Environment: `production`'
             echo '- CI provenance: successful `Application CI` push run on `main` required'
+            echo "- Release-ready staging evidence Run ID: \`${{ needs.approval-gate.outputs.staging_run_id }}\`"
+            echo '- staging-verdict.json: exact SHA, failed=0, skipped=0, release_ready=true'
             echo '- Rollback: automatic on failed verification'
           } >> "$GITHUB_STEP_SUMMARY"

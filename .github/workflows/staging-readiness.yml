@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       action:
-        description: Preflight only, or deploy after preflight succeeds
+        description: Preflight only, or deploy and run the complete release gate
         required: true
         default: preflight
         type: choice
@@ -16,12 +16,12 @@ on:
           - preflight
           - deploy
       run_full_validation:
-        description: Require Supabase configuration and run four-account browser validation after deployment
+        description: Required for every deploy candidate; runs anonymous plus four-account browser validation
         required: true
         default: false
         type: boolean
       run_destructive_recovery_drill:
-        description: Require staging DB configuration and run staging-only destructive recovery drills after deployment
+        description: Run staging-only destructive recovery and log-redaction drills
         required: true
         default: false
         type: boolean
@@ -85,6 +85,16 @@ jobs:
           git cat-file -e "$TARGET_SHA^{commit}"
           git merge-base --is-ancestor "$TARGET_SHA" origin/main || { echo 'SHA is not contained in main.' >&2; exit 1; }
           echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+      - name: Require complete validation for a deployment candidate
+        if: inputs.action == 'deploy'
+        env:
+          RUN_FULL_VALIDATION: ${{ inputs.run_full_validation }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$RUN_FULL_VALIDATION" == "true" ]] || {
+            echo 'STAGING_RUN_FULL_VALIDATION=true is mandatory for every staging deployment candidate.' >&2
+            exit 1
+          }
       - name: Report every missing or invalid staging setting
         run: node api-server/scripts/verify-phase10-staging-readiness.mjs --preflight
       - name: Record non-mutating preflight result
@@ -98,20 +108,21 @@ jobs:
             echo '- PM2 changed: `false`'
             echo '- Database changed: `false`'
             echo '- Production changed: `false`'
-            echo '- Next action: select `deploy` only after this preflight is green.'
+            echo '- A deploy candidate must be re-run with `run_full_validation=true`.'
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy-and-verify:
-    name: Non-destructive isolated staging deployment
+    name: Non-destructive staging deployment and full release validation
     if: inputs.action == 'deploy'
     needs: validate-input
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     environment: staging
     env:
       TARGET_SHA: ${{ needs.validate-input.outputs.target_sha }}
       STAGING_RUN_FULL_VALIDATION: ${{ inputs.run_full_validation }}
       STAGING_RUN_DESTRUCTIVE_RECOVERY_DRILL: ${{ inputs.run_destructive_recovery_drill }}
+      STAGING_ARTIFACT_DIR: ${{ github.workspace }}/staging-artifacts
       STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
       STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
       STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
@@ -134,6 +145,8 @@ jobs:
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 9
@@ -143,6 +156,8 @@ jobs:
           node-version: "20"
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      - name: Prepare staging artifact directory
+        run: mkdir -p "$STAGING_ARTIFACT_DIR"
       - run: pnpm install --frozen-lockfile
       - name: Configure staging SSH
         run: |
@@ -156,6 +171,7 @@ jobs:
             ssh-keyscan -p "$STAGING_SSH_PORT" -H "$STAGING_SSH_HOST" > ~/.ssh/known_hosts
           fi
       - name: Deploy exact revision to isolated staging
+        id: deploy
         env:
           REMOTE_SECRET_FILE: /tmp/seungjae-staging-${{ github.run_id }}-${{ github.run_attempt }}.env
         run: |
@@ -208,35 +224,198 @@ jobs:
           STAGING_SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY" \
           "$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
           REMOTE
-      - name: Run full staging account and browser verification
-        if: inputs.run_full_validation == true
+      - name: Collect staging runtime, health, SHA, and PM2 stability evidence
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          remote_initial="$STAGING_ARTIFACT_DIR/runtime-initial.json"
+          remote_final="$STAGING_ARTIFACT_DIR/runtime-final.json"
+          external_health="$STAGING_ARTIFACT_DIR/external-health.json"
+
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" "TARGET_SHA=$(printf '%q' "$TARGET_SHA") bash -s" > "$remote_initial" <<'REMOTE'
+          set -Eeuo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { execFileSync } = require('node:child_process');
+          const stateDir = '/srv/seungjae-staging/.deploy';
+          const current = fs.readFileSync(`${stateDir}/current-sha`, 'utf8').trim();
+          const lastBackup = fs.existsSync(`${stateDir}/last-backup`) ? fs.readFileSync(`${stateDir}/last-backup`, 'utf8').trim() : '';
+          const previousPath = lastBackup ? `${lastBackup}/previous-sha.txt` : '';
+          const previous = previousPath && fs.existsSync(previousPath) ? fs.readFileSync(previousPath, 'utf8').trim() : '';
+          const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+          const processInfo = processes.find((item) => item.name === 'seungjae-staging');
+          const health = JSON.parse(execFileSync('curl', ['--fail', '--silent', '--show-error', '--max-time', '15', 'http://127.0.0.1:18083/api/health'], { encoding: 'utf8' }));
+          console.log(JSON.stringify({
+            target_sha: process.env.TARGET_SHA,
+            deployed_sha: current,
+            previous_sha: previous,
+            pm2_status: processInfo?.pm2_env?.status ?? 'missing',
+            restart_count: Number(processInfo?.pm2_env?.restart_time ?? -1),
+            internal_health: health,
+          }));
+          NODE
+          REMOTE
+
+          curl --fail --silent --show-error --max-time 20 "$STAGING_BASE_URL/api/health" > "$external_health"
+          sleep 20
+
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" "bash -s" > "$remote_final" <<'REMOTE'
+          set -Eeuo pipefail
+          node - <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+          const processInfo = processes.find((item) => item.name === 'seungjae-staging');
+          console.log(JSON.stringify({
+            pm2_status: processInfo?.pm2_env?.status ?? 'missing',
+            restart_count: Number(processInfo?.pm2_env?.restart_time ?? -1),
+          }));
+          NODE
+          REMOTE
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const dir = process.env.STAGING_ARTIFACT_DIR;
+          const target = process.env.TARGET_SHA;
+          const initial = JSON.parse(fs.readFileSync(path.join(dir, 'runtime-initial.json'), 'utf8'));
+          const final = JSON.parse(fs.readFileSync(path.join(dir, 'runtime-final.json'), 'utf8'));
+          const external = JSON.parse(fs.readFileSync(path.join(dir, 'external-health.json'), 'utf8'));
+          const internalSha = String(initial.internal_health?.deploySha ?? initial.internal_health?.sha ?? initial.internal_health?.commitSha ?? '').toLowerCase();
+          const externalSha = String(external?.deploySha ?? external?.sha ?? external?.commitSha ?? '').toLowerCase();
+          const delta = Number(final.restart_count) - Number(initial.restart_count);
+          const checks = [
+            { name: 'deployed SHA matches target', status: initial.deployed_sha === target ? 'passed' : 'failed', detail: initial.deployed_sha },
+            { name: 'internal health check', status: initial.internal_health?.ok === true ? 'passed' : 'failed', detail: JSON.stringify(initial.internal_health) },
+            { name: 'internal health SHA matches target', status: internalSha === target ? 'passed' : 'failed', detail: internalSha },
+            { name: 'external health check', status: external?.ok === true ? 'passed' : 'failed', detail: JSON.stringify(external) },
+            { name: 'external health SHA matches target', status: externalSha === target ? 'passed' : 'failed', detail: externalSha },
+            { name: 'PM2 process online', status: final.pm2_status === 'online' ? 'passed' : 'failed', detail: final.pm2_status },
+            { name: 'PM2 restart count stable', status: delta === 0 ? 'passed' : 'failed', detail: `${initial.restart_count} -> ${final.restart_count}` },
+          ];
+          const result = {
+            target_sha: target,
+            deployed_sha: initial.deployed_sha,
+            previous_sha: initial.previous_sha,
+            pm2_status: final.pm2_status,
+            restart_count: Number(final.restart_count),
+            restart_count_delta: delta,
+            checks,
+          };
+          fs.writeFileSync(path.join(dir, 'staging-runtime-verification.json'), `${JSON.stringify(result, null, 2)}\n`);
+          NODE
+      - name: Install Chromium for real staging validation
+        if: steps.deploy.outcome == 'success'
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+      - name: Run complete anonymous and four-account browser validation
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
         env:
           PHASE10_STAGING_E2E: "true"
           STAGING_TARGET_SHA: ${{ env.TARGET_SHA }}
-        run: pnpm --dir stock-analyzer exec playwright test e2e/phase10-staging-readiness.spec.ts
-      - name: Run explicitly approved staging DB migration and rollback drill
-        if: inputs.run_destructive_recovery_drill == true
-        env:
-          DATABASE_URL: ${{ env.STAGING_DATABASE_URL }}
-        run: bash api-server/scripts/verify-phase8-db.sh
-      - name: Run destructive staging-only recovery and log-redaction drills
-        if: inputs.run_destructive_recovery_drill == true
-        run: node api-server/scripts/verify-phase10-staging-readiness.mjs --remote
-      - name: Record staging result without granting production approval
-        if: success()
-        env:
-          RUN_FULL_VALIDATION: ${{ inputs.run_full_validation }}
-          RUN_DESTRUCTIVE_RECOVERY_DRILL: ${{ inputs.run_destructive_recovery_drill }}
+        run: pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts e2e/phase10-staging-readiness.spec.ts
+      - name: Assess and run required staging database and recovery validation
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
         run: |
-          {
-            echo '## Staging readiness verification succeeded'
-            echo
-            echo "- Staging SHA: \`$TARGET_SHA\`"
-            echo '- Isolated staging deployment: `true`'
-            echo "- Full account/browser validation: \`$RUN_FULL_VALIDATION\`"
-            echo "- Destructive staging-only recovery drill: \`$RUN_DESTRUCTIVE_RECOVERY_DRILL\`"
-            echo '- Production deployment executed: `false`'
-            echo '- Production database changed: `false`'
-            echo '- Verdict: `운영 배포 승인 보류`'
-            echo '- Reason: GitHub `production` environment reviewers, branch restrictions, and self-review protection require separate direct verification.'
-          } >> "$GITHUB_STEP_SUMMARY"
+          set -Eeuo pipefail
+          result_file="$STAGING_ARTIFACT_DIR/staging-database-verification.json"
+          previous_sha="$(node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.env.STAGING_ARTIFACT_DIR+'/staging-runtime-verification.json'));process.stdout.write(String(p.previous_sha||''))")"
+          status=passed
+          detail='No migration-affecting files changed; database migration and rollback drill not required.'
+          migration_required=false
+
+          if [[ ! "$previous_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            status=failed
+            detail='Previous deployed SHA could not be established, so migration need could not be assessed.'
+          else
+            git fetch --no-tags origin "$previous_sha" "$TARGET_SHA"
+            changed_files="$(git diff --name-only "$previous_sha" "$TARGET_SHA")"
+            if grep -Eq '(^|/)(supabase/migrations|migrations|database/migrations|api-server/db)(/|$)' <<< "$changed_files"; then
+              migration_required=true
+              if [[ -z "$STAGING_DATABASE_URL" ]]; then
+                status=failed
+                detail='Migration-affecting files changed but STAGING_DATABASE_URL is missing.'
+              else
+                set +e
+                DATABASE_URL="$STAGING_DATABASE_URL" bash api-server/scripts/verify-phase8-db.sh
+                db_rc=$?
+                set -e
+                if (( db_rc != 0 )); then
+                  status=failed
+                  detail='Required staging database migration and rollback verification failed.'
+                else
+                  detail='Migration-affecting files changed and staging migration/rollback verification passed.'
+                fi
+              fi
+            fi
+          fi
+
+          if [[ "$STAGING_RUN_DESTRUCTIVE_RECOVERY_DRILL" == "true" ]]; then
+            set +e
+            node api-server/scripts/verify-phase10-staging-readiness.mjs --remote
+            recovery_rc=$?
+            set -e
+            if (( recovery_rc != 0 )); then
+              status=failed
+              detail="$detail Destructive staging recovery/log-redaction verification failed."
+            else
+              detail="$detail Destructive staging recovery/log-redaction verification passed."
+            fi
+          fi
+
+          STATUS="$status" DETAIL="$detail" MIGRATION_REQUIRED="$migration_required" node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const result = {
+            status: process.env.STATUS,
+            migration_required: process.env.MIGRATION_REQUIRED === 'true',
+            destructive_recovery_requested: process.env.STAGING_RUN_DESTRUCTIVE_RECOVERY_DRILL === 'true',
+            detail: process.env.DETAIL,
+          };
+          fs.writeFileSync(path.join(process.env.STAGING_ARTIFACT_DIR, 'staging-database-verification.json'), `${JSON.stringify(result, null, 2)}\n`);
+          NODE
+          [[ "$status" == "passed" ]]
+      - name: Build final staging release verdict
+        if: always()
+        run: node api-server/scripts/build-staging-verdict.mjs
+      - name: Upload immutable staging verdict and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-verdict-${{ env.TARGET_SHA }}
+          path: staging-artifacts
+          if-no-files-found: error
+          retention-days: 30
+      - name: Write staging quality gate summary
+        if: always()
+        run: |
+          node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require('node:fs');
+          const file = `${process.env.STAGING_ARTIFACT_DIR}/staging-verdict.json`;
+          console.log('## Staging release quality gate');
+          console.log('');
+          if (!fs.existsSync(file)) {
+            console.log('- RELEASE_READY: `false`');
+            console.log('- Verdict: `오류 발견 — 운영 배포 불가`');
+            console.log('- staging-verdict.json: missing');
+            process.exit(0);
+          }
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          console.log(`- Target SHA: \`${value.target_sha}\``);
+          console.log(`- Deployed SHA: \`${value.deployed_sha}\``);
+          console.log(`- Total: \`${value.total}\``);
+          console.log(`- Passed: \`${value.passed}\``);
+          console.log(`- Failed: \`${value.failed}\``);
+          console.log(`- Skipped: \`${value.skipped}\``);
+          console.log(`- Console errors: \`${value.console_errors}\``);
+          console.log(`- Unexpected HTTP errors: \`${value.unexpected_http_errors}\``);
+          console.log(`- PM2: \`${value.pm2_status}\``);
+          console.log(`- Restart count: \`${value.restart_count}\``);
+          console.log(`- RELEASE_READY: \`${value.release_ready}\``);
+          console.log(`- Verdict: \`${value.verdict}\``);
+          console.log('- Production deployment executed: `false`');
+          console.log('- Production database changed: `false`');
+          NODE
