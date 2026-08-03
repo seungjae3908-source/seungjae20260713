@@ -20,6 +20,7 @@ const stagingVerifier = await read('api-server/scripts/verify-phase10-staging-re
 const verdictBuilder = await read('api-server/scripts/build-staging-verdict.mjs');
 const verdictVerifier = await read('api-server/scripts/verify-staging-verdict.mjs');
 const stagingSpec = await read('stock-analyzer/e2e/phase10-staging-readiness.spec.ts');
+const stagingAccountLifecycle = await read('stock-analyzer/e2e/support/staging-account-lifecycle.ts');
 
 for (const workflow of [production, approval]) {
   for (const status of [
@@ -83,11 +84,14 @@ assert(!dispatchBridge.includes('production-deploy.yml'), 'staging bridge must n
 for (const marker of [
   'target_sha', 'deployed_sha', 'total', 'passed', 'failed', 'skipped',
   'console_errors', 'unexpected_http_errors', 'pm2_status', 'restart_count',
+  'ephemeral_accounts_created', 'ephemeral_accounts_deleted', 'ephemeral_profiles_remaining',
   'release_ready', 'verdict',
 ]) {
   assert(verdictBuilder.includes(marker), `verdict builder is missing ${marker}`);
 }
 assert(verdictBuilder.includes('failed === 0 && skipped === 0'), 'release_ready must require failed=0 and skipped=0');
+assert(verdictBuilder.includes('staging-account-provisioning.json'), 'verdict must require ephemeral account provisioning evidence');
+assert(verdictBuilder.includes('staging-account-cleanup.json'), 'verdict must require ephemeral account cleanup evidence');
 assert(verdictVerifier.includes('verdict.release_ready !== true'), 'production verdict verifier must require release_ready=true');
 assert(verdictVerifier.includes('verdict.skipped !== 0'), 'production verdict verifier must reject skipped checks');
 assert(verdictVerifier.includes('verdict.deployed_sha !== targetSha'), 'production verdict verifier must reject SHA mismatch');
@@ -107,13 +111,34 @@ for (const requirement of [
   assert(stagingSpec.includes(requirement), `staging browser suite is missing ${requirement}`);
 }
 
+assert(stagingSpec.includes('provisionEphemeralStagingAccounts'), 'staging browser suite must provision temporary accounts at runtime');
+assert(stagingSpec.includes('accountLifecycle?.cleanup()'), 'staging browser suite must clean temporary accounts in afterAll');
+assert(!stagingSpec.includes('STAGING_PENDING_EMAIL'), 'staging browser suite must not require manually configured account credentials');
+for (const marker of [
+  'auth.admin.createUser',
+  'email_confirm: true',
+  ".from('profiles')",
+  'membership_level',
+  'auth.admin.deleteUser',
+  'removeStaleValidationUsers',
+  'staging-account-provisioning.json',
+  'staging-account-cleanup.json',
+  'credentials_recorded: false',
+  'bawcbkoyovbeajkrnduq',
+]) {
+  assert(stagingAccountLifecycle.includes(marker), `ephemeral staging account lifecycle is missing ${marker}`);
+}
+assert(stagingAccountLifecycle.includes('finally') || stagingAccountLifecycle.includes('catch'), 'ephemeral account lifecycle must clean up on provisioning failure');
+
 assert(productionScript.includes('restore_backup'), 'production deploy script must retain rollback');
 assert(stagingScript.includes('checksums.sha256'), 'staging deploy script must create backup checksums');
 assert(stagingScript.includes('probe_health_url'), 'staging deploy script must retry health checks');
 assert(stagingScript.includes('APP_ENV=staging'), 'staging runtime must identify itself');
 assert(stagingScript.includes('DEPLOY_SHA='), 'staging runtime must expose the deployed SHA');
 assert(stagingVerifier.includes('staging setting name(s) need attention'), 'staging preflight must aggregate missing settings');
-assert(stagingVerifier.includes('fullValidationRequired'), 'staging preflight must require four test accounts for full validation');
+assert(stagingVerifier.includes('fullValidationRequired'), 'staging preflight must require isolated Supabase admin configuration for full validation');
+assert(!stagingVerifier.includes('STAGING_PENDING_EMAIL'), 'staging preflight must not require manual validation account credentials');
+assert(stagingVerifier.includes('knownProductionSupabaseProjectRefs'), 'staging preflight must reject the known production Supabase project');
 
 const verifierPath = path.join(root, 'api-server/scripts/verify-phase10-staging-readiness.mjs');
 const runPreflight = (extraEnv = {}) => spawnSync(process.execPath, [verifierPath, '--preflight'], {
@@ -133,22 +158,47 @@ assert(emptyPreflight.status !== 0, 'empty staging preflight must fail');
 for (const name of ['STAGING_SSH_HOST', 'STAGING_SSH_USER', 'STAGING_SSH_PRIVATE_KEY', 'STAGING_BASE_URL']) {
   assert(emptyPreflight.stderr.includes(`- ${name}:`), `aggregate preflight did not report ${name}`);
 }
-const minimalPreflight = runPreflight({
+const minimal = {
   STAGING_SSH_HOST: 'staging.example.invalid',
   STAGING_SSH_USER: 'staging',
   STAGING_SSH_PRIVATE_KEY: '-----BEGIN OPENSSH PRIVATE KEY-----\nstatic-ci-test-only\n-----END OPENSSH PRIVATE KEY-----',
   STAGING_BASE_URL: 'https://staging.example.invalid',
-});
+};
+const minimalPreflight = runPreflight(minimal);
 assert(minimalPreflight.status === 0, `minimal preflight should pass: ${minimalPreflight.stderr}`);
-const fullPreflight = runPreflight({
+
+const missingSupabasePreflight = runPreflight({
+  ...minimal,
   STAGING_ACTION: 'deploy',
   STAGING_RUN_FULL_VALIDATION: 'true',
-  STAGING_SSH_HOST: 'staging.example.invalid',
-  STAGING_SSH_USER: 'staging',
-  STAGING_SSH_PRIVATE_KEY: '-----BEGIN OPENSSH PRIVATE KEY-----\nstatic-ci-test-only\n-----END OPENSSH PRIVATE KEY-----',
-  STAGING_BASE_URL: 'https://staging.example.invalid',
 });
-assert(fullPreflight.status !== 0, 'full validation without staging test accounts must fail');
+assert(missingSupabasePreflight.status !== 0, 'full validation without isolated Supabase settings must fail');
+for (const name of ['STAGING_SUPABASE_URL', 'STAGING_SUPABASE_ANON_KEY', 'STAGING_SUPABASE_SECRET_KEY']) {
+  assert(missingSupabasePreflight.stderr.includes(`- ${name}:`), `full validation did not report ${name}`);
+}
+
+const isolatedSupabase = {
+  STAGING_SUPABASE_URL: 'https://stageproject123.supabase.co',
+  STAGING_SUPABASE_ANON_KEY: 'sb_publishable_static_ci_test_only_1234567890',
+  STAGING_SUPABASE_SECRET_KEY: 'sb_secret_static_ci_test_only_1234567890',
+};
+const fullPreflight = runPreflight({
+  ...minimal,
+  ...isolatedSupabase,
+  STAGING_ACTION: 'deploy',
+  STAGING_RUN_FULL_VALIDATION: 'true',
+});
+assert(fullPreflight.status === 0, `full validation with three isolated Supabase settings should pass: ${fullPreflight.stderr}`);
+
+const productionSupabasePreflight = runPreflight({
+  ...minimal,
+  ...isolatedSupabase,
+  STAGING_SUPABASE_URL: 'https://bawcbkoyovbeajkrnduq.supabase.co',
+  STAGING_ACTION: 'deploy',
+  STAGING_RUN_FULL_VALIDATION: 'true',
+});
+assert(productionSupabasePreflight.status !== 0, 'known production Supabase project must be rejected');
+assert(productionSupabasePreflight.stderr.includes('known production Supabase project'), 'production Supabase rejection reason must be explicit');
 
 const temp = await mkdtemp(path.join(os.tmpdir(), 'staging-verdict-contract-'));
 try {
@@ -159,6 +209,12 @@ try {
   }));
   await writeFile(path.join(temp, 'staging-browser-results.json'), JSON.stringify({
     console_errors: [], page_errors: [], unhandled_rejections: [], unexpected_http_errors: [],
+  }));
+  await writeFile(path.join(temp, 'staging-account-provisioning.json'), JSON.stringify({
+    status: 'passed', created: 4, credentials_recorded: false,
+  }));
+  await writeFile(path.join(temp, 'staging-account-cleanup.json'), JSON.stringify({
+    status: 'passed', deleted: 4, profiles_remaining: 0,
   }));
   await writeFile(path.join(temp, 'staging-runtime-verification.json'), JSON.stringify({
     deployed_sha: sha,
@@ -191,4 +247,4 @@ try {
   await rm(temp, { recursive: true, force: true });
 }
 
-console.log('[phase10-deployment-safety] full staging validation, zero-skip verdict artifact, exact-SHA production revalidation, manual protected production deployment, and rollback contract verified');
+console.log('[phase10-deployment-safety] ephemeral four-tier staging accounts, cleanup, production-project rejection, full staging validation, zero-skip verdict artifact, exact-SHA production revalidation, manual protected production deployment, and rollback contract verified');
