@@ -27,13 +27,19 @@ export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
 export class TradeAutomationService {
   constructor(private repository: TradingRepository) {}
 
+  private async emergencyStopActive(userId: string, policy: TradingPolicy) {
+    return policy.emergencyStopped
+      || process.env.TRADING_EMERGENCY_STOP === 'true'
+      || await this.repository.getGlobalEmergencyStop();
+  }
+
   async createPlan(userId: string, input: TradingPlanInput, policy: TradingPolicy, emergencyStopped: boolean) {
     const idempotencyKey = tradingIdempotencyKey(userId, input);
     const duplicate = await this.repository.findPlanByIdempotency(userId, idempotencyKey);
     if (duplicate) return { plan: duplicate, duplicate: true, decision: { allowed: true, blockCodes: [], warnings: [] } };
 
     const decision = evaluateTradingPlan(input, policy, {
-      emergencyStopped,
+      emergencyStopped: emergencyStopped || await this.emergencyStopActive(userId, policy),
       serverLiveEnabled: input.accountMode !== 'live' || liveExecutionEnabled(input.exchange),
     });
     if (!decision.allowed) return { plan: null, duplicate: false, decision };
@@ -62,7 +68,7 @@ export class TradeAutomationService {
     }
     const policy = await this.repository.getPolicy(userId);
     const decision = evaluateTradingPlan(plan, policy, {
-      emergencyStopped: policy.emergencyStopped || process.env.TRADING_EMERGENCY_STOP === 'true',
+      emergencyStopped: await this.emergencyStopActive(userId, policy),
       serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
     });
     if (!decision.allowed) {
@@ -79,6 +85,8 @@ export class TradeAutomationService {
     const plan = await this.repository.getPlan(userId, planId);
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
     if (plan.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
+    const policy = await this.repository.getPolicy(userId);
+    if (await this.emergencyStopActive(userId, policy)) throw new Error('EMERGENCY_STOP_ACTIVE');
     plan.state = 'SUBMITTED'; plan.updatedAt = new Date().toISOString();
     await this.repository.savePlan(plan);
     return plan;

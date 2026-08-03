@@ -12,6 +12,8 @@ import {
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 
 export interface TradingRepository {
+  getGlobalEmergencyStop(): Promise<boolean>;
+  setGlobalEmergencyStop(stopped: boolean, changedBy: string): Promise<void>;
   getPolicy(userId: string): Promise<TradingPolicy>;
   savePolicy(userId: string, policy: TradingPolicy): Promise<TradingPolicy>;
   getConnections(userId: string): Promise<ExchangeConnection[]>;
@@ -29,12 +31,15 @@ export interface TradingRepository {
 }
 
 export class InMemoryTradingRepository implements TradingRepository {
+  private globalEmergencyStopped = false;
   private policies = new Map<string, TradingPolicy>();
   private connections = new Map<string, ExchangeConnection>();
   private plans = new Map<string, TradingPlan>();
   private orders = new Map<string, TradingOrder>();
   private events: TradingOrderEvent[] = [];
 
+  async getGlobalEmergencyStop() { return this.globalEmergencyStopped; }
+  async setGlobalEmergencyStop(stopped: boolean, _changedBy: string) { this.globalEmergencyStopped = stopped; }
   async getPolicy(userId: string) { return this.policies.get(userId) ?? normalizeTradingPolicy(DEFAULT_TRADING_POLICY); }
   async savePolicy(userId: string, policy: TradingPolicy) { this.policies.set(userId, policy); return policy; }
   async getConnections(userId: string) { return [...this.connections.values()].filter((item) => item.userId === userId); }
@@ -72,6 +77,25 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
   };
   const owned = (userId: string) => assertOwner(userId, authenticatedUserId);
   return {
+    async getGlobalEmergencyStop() {
+      if (!hasSupabaseServerKey()) return true;
+      try {
+        const { data, error } = await getSupabase().from('trade_system_controls')
+          .select('emergency_stopped').eq('control_key', 'global').maybeSingle();
+        if (error || !data) return true;
+        return data.emergency_stopped === true;
+      } catch {
+        return true;
+      }
+    },
+    async setGlobalEmergencyStop(stopped, changedBy) {
+      owned(changedBy);
+      const { error } = await secureClient().from('trade_system_controls').upsert({
+        control_key: 'global', emergency_stopped: stopped, changed_by: changedBy,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'control_key' });
+      if (error) throw databaseError();
+    },
     async getPolicy(userId) {
       owned(userId);
       const { data, error } = await client.from('trade_automation_profiles').select('payload')
