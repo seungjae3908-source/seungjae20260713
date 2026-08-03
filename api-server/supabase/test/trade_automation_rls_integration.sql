@@ -5,39 +5,31 @@ grant select, insert, update, delete on public.trade_automation_profiles,
 grant select(user_id, exchange, account_mode, configured, last_verified_at, last_error_code, created_at, updated_at)
   on public.trade_exchange_connections to authenticated, anon;
 
-set session authorization authenticated;
-do $authenticated_global_stop_service_only$
+do $global_stop_service_only$
 begin
-  begin
-    perform emergency_stopped from public.trade_system_controls where control_key = 'global';
-    raise exception 'authenticated member can read the global emergency stop control';
-  exception when insufficient_privilege then null;
-  end;
-  begin
-    update public.trade_system_controls set emergency_stopped = false where control_key = 'global';
-    raise exception 'authenticated member can change the global emergency stop control';
-  exception when insufficient_privilege then null;
-  end;
-end
-$authenticated_global_stop_service_only$;
-reset session authorization;
+  if exists (
+    select 1
+    from pg_class candidate
+    cross join lateral aclexplode(coalesce(candidate.relacl, acldefault('r', candidate.relowner))) privilege
+    left join pg_roles grantee_role on grantee_role.oid = privilege.grantee
+    where candidate.oid = 'public.trade_system_controls'::regclass
+      and (privilege.grantee = 0 or grantee_role.rolname in ('authenticated', 'anon'))
+  ) then
+    raise exception 'browser role or PUBLIC has a direct privilege on the global emergency stop control';
+  end if;
 
-set session authorization anon;
-do $anonymous_global_stop_service_only$
-begin
-  begin
-    perform emergency_stopped from public.trade_system_controls where control_key = 'global';
-    raise exception 'anonymous user can read the global emergency stop control';
-  exception when insufficient_privilege then null;
-  end;
-  begin
-    update public.trade_system_controls set emergency_stopped = false where control_key = 'global';
-    raise exception 'anonymous user can change the global emergency stop control';
-  exception when insufficient_privilege then null;
-  end;
+  if not (select relrowsecurity from pg_class where oid = 'public.trade_system_controls'::regclass) then
+    raise exception 'global emergency stop control does not have RLS enabled';
+  end if;
+
+  if exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'trade_system_controls'
+  ) then
+    raise exception 'browser-visible RLS policy exists on the service-only global emergency stop control';
+  end if;
 end
-$anonymous_global_stop_service_only$;
-reset session authorization;
+$global_stop_service_only$;
 
 set role authenticated;
 select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
