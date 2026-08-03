@@ -1,63 +1,231 @@
 import { execFileSync } from 'node:child_process';
 
-const mode = process.argv[2] ?? '--environment';
+const requestedMode = process.argv[2] ?? '--preflight';
+const mode = requestedMode === '--environment' ? '--preflight' : requestedMode;
 const env = process.env;
-const required = [
-  'STAGING_SSH_HOST', 'STAGING_SSH_USER', 'STAGING_SSH_PRIVATE_KEY', 'STAGING_BASE_URL',
-  'STAGING_DATABASE_URL', 'STAGING_AI_API_KEY',
-  'STAGING_PENDING_EMAIL', 'STAGING_PENDING_PASSWORD',
-  'STAGING_ASSOCIATE_EMAIL', 'STAGING_ASSOCIATE_PASSWORD',
-  'STAGING_REGULAR_EMAIL', 'STAGING_REGULAR_PASSWORD',
-  'STAGING_ADMIN_EMAIL', 'STAGING_ADMIN_PASSWORD',
+
+const minimalDeployRequired = [
+  'STAGING_SSH_HOST',
+  'STAGING_SSH_USER',
+  'STAGING_SSH_PRIVATE_KEY',
+  'STAGING_BASE_URL',
 ];
 
-const fail = (message) => { throw new Error(`[phase10-staging-readiness] ${message}`); };
+const fullValidationRequired = [
+  'STAGING_SUPABASE_URL',
+  'STAGING_SUPABASE_ANON_KEY',
+  'STAGING_SUPABASE_SECRET_KEY',
+  'STAGING_PENDING_EMAIL',
+  'STAGING_PENDING_PASSWORD',
+  'STAGING_ASSOCIATE_EMAIL',
+  'STAGING_ASSOCIATE_PASSWORD',
+  'STAGING_REGULAR_EMAIL',
+  'STAGING_REGULAR_PASSWORD',
+  'STAGING_ADMIN_EMAIL',
+  'STAGING_ADMIN_PASSWORD',
+];
+
+const destructiveValidationRequired = ['STAGING_DATABASE_URL'];
+
+const sensitiveNames = [
+  ...minimalDeployRequired,
+  ...fullValidationRequired,
+  ...destructiveValidationRequired,
+  'STAGING_AI_API_KEY',
+  'STAGING_SSH_KNOWN_HOSTS',
+];
+
 const value = (name) => String(env[name] ?? '').trim();
+const enabled = (name) => value(name).toLowerCase() === 'true';
 const encode = (raw) => Buffer.from(String(raw), 'utf8').toString('base64');
+const fail = (message) => { throw new Error(`[phase10-staging-readiness] ${message}`); };
+
 const redact = (raw) => {
   let output = String(raw ?? '');
-  for (const name of required) {
+  for (const name of sensitiveNames) {
     const secret = value(name);
     if (secret) output = output.split(secret).join('[REDACTED]');
   }
   return output;
 };
 
-for (const name of required) {
-  if (!value(name)) fail(`missing required isolated staging value: ${name}`);
-}
+function collectConfigurationErrors({
+  requireFullValidation = false,
+  requireDestructiveValidation = false,
+} = {}) {
+  const failures = new Map();
+  const add = (name, message) => {
+    const messages = failures.get(name) ?? [];
+    if (!messages.includes(message)) messages.push(message);
+    failures.set(name, messages);
+  };
+  const requireNames = (names, reason) => {
+    for (const name of names) {
+      if (!value(name)) add(name, `missing; required for ${reason}`);
+    }
+  };
 
-const forbiddenFragments = ['lsj119.duckdns.org', '/opt/stock-app', 'stock-app-production'];
-for (const [name, raw] of Object.entries(env)) {
-  if (!name.startsWith('STAGING_')) continue;
-  const normalized = String(raw ?? '').toLowerCase();
-  for (const forbidden of forbiddenFragments) {
-    if (normalized.includes(forbidden.toLowerCase())) fail(`${name} contains a production identifier`);
+  requireNames(minimalDeployRequired, 'preflight and non-destructive staging deployment');
+  if (requireFullValidation) {
+    requireNames(fullValidationRequired, 'full account and browser validation');
   }
-}
-if (/\b(?:prod|production)\b/i.test(value('STAGING_DATABASE_URL'))) fail('staging database URL looks like production');
-if (!/^https:\/\//i.test(value('STAGING_BASE_URL'))) fail('staging base URL must use HTTPS');
-if (new Set([
-  value('STAGING_PENDING_EMAIL'), value('STAGING_ASSOCIATE_EMAIL'),
-  value('STAGING_REGULAR_EMAIL'), value('STAGING_ADMIN_EMAIL'),
-]).size !== 4) fail('four distinct staging accounts are required');
-if (value('STAGING_AI_API_KEY').length < 12) fail('staging AI key is not plausibly configured');
+  if (requireDestructiveValidation) {
+    requireNames(destructiveValidationRequired, 'explicit staging-only database/recovery validation');
+  }
 
-if (mode === '--environment') {
-  console.log('[phase10-staging-readiness] isolated URL, DB, AI secret, SSH target, and four distinct accounts are configured');
+  const action = value('STAGING_ACTION');
+  if (action && !['preflight', 'deploy'].includes(action)) {
+    add('STAGING_ACTION', 'must be preflight or deploy');
+  }
+
+  for (const flagName of [
+    'STAGING_RUN_FULL_VALIDATION',
+    'STAGING_RUN_DESTRUCTIVE_RECOVERY_DRILL',
+  ]) {
+    const flag = value(flagName);
+    if (flag && !['true', 'false'].includes(flag.toLowerCase())) {
+      add(flagName, 'must be true or false');
+    }
+  }
+
+  const port = value('STAGING_SSH_PORT');
+  if (port && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535)) {
+    add('STAGING_SSH_PORT', 'must be an integer from 1 to 65535');
+  }
+
+  const privateKey = value('STAGING_SSH_PRIVATE_KEY');
+  if (privateKey && !/-----BEGIN (?:OPENSSH|RSA|EC) PRIVATE KEY-----/.test(privateKey)) {
+    add('STAGING_SSH_PRIVATE_KEY', 'does not look like a complete supported SSH private key');
+  }
+
+  const baseUrl = value('STAGING_BASE_URL');
+  if (baseUrl && !/^https:\/\//i.test(baseUrl)) {
+    add('STAGING_BASE_URL', 'must use HTTPS');
+  }
+
+  const supabaseUrl = value('STAGING_SUPABASE_URL');
+  if (supabaseUrl && !/^https:\/\//i.test(supabaseUrl)) {
+    add('STAGING_SUPABASE_URL', 'must use HTTPS');
+  }
+
+  const anonKey = value('STAGING_SUPABASE_ANON_KEY');
+  const secretKey = value('STAGING_SUPABASE_SECRET_KEY');
+  if (anonKey && anonKey.length < 20) {
+    add('STAGING_SUPABASE_ANON_KEY', 'is too short to be a plausible Supabase key');
+  }
+  if (secretKey && secretKey.length < 20) {
+    add('STAGING_SUPABASE_SECRET_KEY', 'is too short to be a plausible Supabase server key');
+  }
+  if (anonKey && secretKey && anonKey === secretKey) {
+    add('STAGING_SUPABASE_SECRET_KEY', 'must not be identical to the publishable anon key');
+  }
+
+  const databaseUrl = value('STAGING_DATABASE_URL');
+  if (databaseUrl && !/^postgres(?:ql)?:\/\//i.test(databaseUrl)) {
+    add('STAGING_DATABASE_URL', 'must be a PostgreSQL connection URL');
+  }
+
+  const aiKey = value('STAGING_AI_API_KEY');
+  if (aiKey && aiKey.length < 12) {
+    add('STAGING_AI_API_KEY', 'is configured but too short to be plausible');
+  }
+
+  const emails = [
+    'STAGING_PENDING_EMAIL',
+    'STAGING_ASSOCIATE_EMAIL',
+    'STAGING_REGULAR_EMAIL',
+    'STAGING_ADMIN_EMAIL',
+  ];
+  const configuredEmails = emails.filter((name) => value(name));
+  for (const name of configuredEmails) {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value(name))) {
+      add(name, 'must be a valid email address');
+    }
+  }
+  if (requireFullValidation && new Set(emails.map((name) => value(name).toLowerCase())).size !== 4) {
+    for (const name of emails) add(name, 'all four staging account emails must be distinct');
+  }
+
+  const forbiddenFragments = [
+    'lsj119.duckdns.org',
+    '/opt/stock-app',
+    'stock-app-production',
+    'pm2_name=stock-app',
+  ];
+  for (const [name, raw] of Object.entries(env)) {
+    if (!name.startsWith('STAGING_')) continue;
+    const normalized = String(raw ?? '').toLowerCase();
+    for (const forbidden of forbiddenFragments) {
+      if (normalized.includes(forbidden.toLowerCase())) {
+        add(name, `contains forbidden production identifier: ${forbidden}`);
+      }
+    }
+  }
+  if (databaseUrl && /\b(?:prod|production)\b/i.test(databaseUrl)) {
+    add('STAGING_DATABASE_URL', 'looks like a production database URL');
+  }
+
+  return failures;
+}
+
+function printConfigurationErrors(failures) {
+  console.error(`[phase10-staging-readiness] ${failures.size} staging setting name(s) need attention:`);
+  for (const [name, messages] of failures) {
+    console.error(`- ${name}: ${messages.join('; ')}`);
+  }
+  console.error('[phase10-staging-readiness] no server, PM2 process, database, or application files were changed');
+}
+
+if (mode === '--preflight') {
+  const requireFullValidation = enabled('STAGING_RUN_FULL_VALIDATION');
+  const requireDestructiveValidation = enabled('STAGING_RUN_DESTRUCTIVE_RECOVERY_DRILL');
+  const failures = collectConfigurationErrors({
+    requireFullValidation,
+    requireDestructiveValidation,
+  });
+  if (failures.size) {
+    printConfigurationErrors(failures);
+    process.exit(1);
+  }
+
+  const checked = [
+    'minimal deployment',
+    requireFullValidation ? 'full account/browser validation' : null,
+    requireDestructiveValidation ? 'explicit destructive staging validation' : null,
+  ].filter(Boolean).join(', ');
+  console.log(`[phase10-staging-readiness] preflight passed for: ${checked}`);
+  console.log('[phase10-staging-readiness] AI API key is optional and was not required');
   process.exit(0);
 }
 
 if (mode !== '--remote') fail(`unknown mode: ${mode}`);
+
+const failures = collectConfigurationErrors({
+  requireFullValidation: enabled('STAGING_RUN_FULL_VALIDATION'),
+  requireDestructiveValidation: true,
+});
+if (failures.size) {
+  printConfigurationErrors(failures);
+  process.exit(1);
+}
+
 const targetSha = value('TARGET_SHA');
 if (!/^[0-9a-f]{40}$/.test(targetSha)) fail('TARGET_SHA must be an exact lowercase commit SHA');
 const repositoryUrl = value('REPOSITORY_URL');
 if (!/^https:\/\/github\.com\/seungjae3908-source\/seungjae20260713\.git$/.test(repositoryUrl)) {
   fail('REPOSITORY_URL is missing or unexpected');
 }
+
 const port = value('STAGING_SSH_PORT') || '22';
 const remote = `${value('STAGING_SSH_USER')}@${value('STAGING_SSH_HOST')}`;
-const sshArgs = ['-i', `${env.HOME}/.ssh/id_ed25519`, '-p', port, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', remote];
+const sshArgs = [
+  '-i', `${env.HOME}/.ssh/id_ed25519`,
+  '-p', port,
+  '-o', 'BatchMode=yes',
+  '-o', 'ConnectTimeout=15',
+  remote,
+];
+
 const runRemote = (script) => {
   try {
     return execFileSync('ssh', [...sshArgs, 'bash', '-s'], {
@@ -75,6 +243,9 @@ const runRemote = (script) => {
 const encodedSecrets = {
   baseUrl: encode(value('STAGING_BASE_URL')),
   database: encode(value('STAGING_DATABASE_URL')),
+  supabaseUrl: encode(value('STAGING_SUPABASE_URL')),
+  supabaseAnonKey: encode(value('STAGING_SUPABASE_ANON_KEY')),
+  supabaseSecretKey: encode(value('STAGING_SUPABASE_SECRET_KEY')),
   ai: encode(value('STAGING_AI_API_KEY')),
   pendingEmail: encode(value('STAGING_PENDING_EMAIL')),
   pendingPassword: encode(value('STAGING_PENDING_PASSWORD')),
@@ -109,9 +280,15 @@ done
 decode() { printf '%s' "$1" | base64 -d; }
 STAGING_BASE_URL="$(decode '${encodedSecrets.baseUrl}')"
 STAGING_DATABASE_URL="$(decode '${encodedSecrets.database}')"
+STAGING_SUPABASE_URL="$(decode '${encodedSecrets.supabaseUrl}')"
+STAGING_SUPABASE_ANON_KEY="$(decode '${encodedSecrets.supabaseAnonKey}')"
+STAGING_SUPABASE_SECRET_KEY="$(decode '${encodedSecrets.supabaseSecretKey}')"
 STAGING_AI_API_KEY="$(decode '${encodedSecrets.ai}')"
 SENSITIVE_VALUES=(
   "$STAGING_DATABASE_URL"
+  "$STAGING_SUPABASE_URL"
+  "$STAGING_SUPABASE_ANON_KEY"
+  "$STAGING_SUPABASE_SECRET_KEY"
   "$STAGING_AI_API_KEY"
   "$(decode '${encodedSecrets.pendingEmail}')"
   "$(decode '${encodedSecrets.pendingPassword}')"
@@ -128,15 +305,16 @@ write_runtime_env() {
   local temp_env
   mkdir -p "$STAGING_DIR/api-server"
   temp_env="$(mktemp "$STAGING_DIR/api-server/.env.staging.tmp.XXXXXX")"
-  cat > "$temp_env" <<ENV
-NODE_ENV=production
-PORT=$STAGING_PORT
-API_PORT=$STAGING_PORT
-DATABASE_URL=$STAGING_DATABASE_URL
-TRADING_REVIEW_API_KEY=$STAGING_AI_API_KEY
-APP_ENV=staging
-DEPLOY_SHA=$deploy_sha
-ENV
+  {
+    printf 'NODE_ENV=production\n'
+    printf 'PORT=%s\n' "$STAGING_PORT"
+    printf 'API_PORT=%s\n' "$STAGING_PORT"
+    printf 'APP_ENV=staging\n'
+    printf 'DEPLOY_SHA=%s\n' "$deploy_sha"
+    [[ -n "$STAGING_SUPABASE_URL" ]] && printf 'SUPABASE_URL=%s\n' "$STAGING_SUPABASE_URL"
+    [[ -n "$STAGING_SUPABASE_ANON_KEY" ]] && printf 'SUPABASE_ANON_KEY=%s\n' "$STAGING_SUPABASE_ANON_KEY"
+    [[ -n "$STAGING_SUPABASE_SECRET_KEY" ]] && printf 'SUPABASE_SECRET_KEY=%s\n' "$STAGING_SUPABASE_SECRET_KEY"
+  } > "$temp_env"
   chmod 600 "$temp_env"
   mv -f "$temp_env" "$STAGING_DIR/api-server/.env.staging"
 }
@@ -213,17 +391,23 @@ git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
 git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
 chmod 700 "$SOURCE_DIR/ops/deploy-staging.sh"
 
+deploy_target() {
+  local failpoint="\${1:-}"
+  SOURCE_DIR="$SOURCE_DIR" \
+  STAGING_DIR="$STAGING_DIR" \
+  STAGING_PM2_NAME="$STAGING_PM2_NAME" \
+  STAGING_PORT="$STAGING_PORT" \
+  STAGING_CANARY_PORT="$STAGING_CANARY_PORT" \
+  STAGING_BASE_URL="$STAGING_BASE_URL" \
+  STAGING_SUPABASE_URL="$STAGING_SUPABASE_URL" \
+  STAGING_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY" \
+  STAGING_SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY" \
+  STAGING_FAILPOINT="$failpoint" \
+  "$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
+}
+
 set +e
-SOURCE_DIR="$SOURCE_DIR" \
-STAGING_DIR="$STAGING_DIR" \
-STAGING_PM2_NAME="$STAGING_PM2_NAME" \
-STAGING_PORT="$STAGING_PORT" \
-STAGING_CANARY_PORT="$STAGING_CANARY_PORT" \
-STAGING_BASE_URL="$STAGING_BASE_URL" \
-STAGING_DATABASE_URL="$STAGING_DATABASE_URL" \
-STAGING_AI_API_KEY="$STAGING_AI_API_KEY" \
-STAGING_FAILPOINT=after-promotion \
-"$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
+deploy_target after-promotion
 FAILPOINT_STATUS=$?
 set -e
 [[ "$FAILPOINT_STATUS" -ne 0 ]]
@@ -257,26 +441,9 @@ pm2 save >/dev/null
 probe_local "$PREVIOUS_SHA"
 printf 'previous_sha_recovery=true\n'
 
-SOURCE_DIR="$SOURCE_DIR" \
-STAGING_DIR="$STAGING_DIR" \
-STAGING_PM2_NAME="$STAGING_PM2_NAME" \
-STAGING_PORT="$STAGING_PORT" \
-STAGING_CANARY_PORT="$STAGING_CANARY_PORT" \
-STAGING_BASE_URL="$STAGING_BASE_URL" \
-STAGING_DATABASE_URL="$STAGING_DATABASE_URL" \
-STAGING_AI_API_KEY="$STAGING_AI_API_KEY" \
-"$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
+deploy_target
 probe_local "$TARGET_SHA"
-
-SOURCE_DIR="$SOURCE_DIR" \
-STAGING_DIR="$STAGING_DIR" \
-STAGING_PM2_NAME="$STAGING_PM2_NAME" \
-STAGING_PORT="$STAGING_PORT" \
-STAGING_CANARY_PORT="$STAGING_CANARY_PORT" \
-STAGING_BASE_URL="$STAGING_BASE_URL" \
-STAGING_DATABASE_URL="$STAGING_DATABASE_URL" \
-STAGING_AI_API_KEY="$STAGING_AI_API_KEY" \
-"$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
+deploy_target
 probe_local "$TARGET_SHA"
 printf 'same_sha_redeploy=true\n'
 
@@ -285,7 +452,7 @@ mapfile -d '' -t LOG_FILES < <(
   find "$STAGING_DIR/logs" "$STAGING_DIR/api-server/logs" -type f -print0 2>/dev/null || true
 )
 (( \${#LOG_FILES[@]} > 0 )) || { echo 'no staging log files were available for inspection' >&2; exit 23; }
-if grep -IlE '(Authorization:[[:space:]]*Bearer|SUPABASE_SERVICE_ROLE_KEY|TRADING_REVIEW_API_KEY=|BEGIN (RSA |OPENSSH )?PRIVATE KEY)' "\${LOG_FILES[@]}" | grep -q .; then
+if grep -IlE '(Authorization:[[:space:]]*Bearer|SUPABASE_(?:SECRET|SERVICE_ROLE)_KEY=|TRADING_REVIEW_API_KEY=|BEGIN (RSA |OPENSSH )?PRIVATE KEY)' "\${LOG_FILES[@]}" | grep -q .; then
   echo 'sensitive credential pattern found in staging logs' >&2
   exit 24
 fi
