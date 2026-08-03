@@ -20,7 +20,7 @@ for (const [width, height] of [[360, 800], [390, 844], [430, 932]] as const) {
     await page.reload();
     await page.getByLabel('저장 검색 복원').selectOption({ index: 1 });
     await expect(page.getByText(/복원됨/)).toBeVisible();
-    await page.getByRole('button', { name: '종목보기', exact: true }).click();
+    await page.getByRole('button', { name: /^종목보기/ }).click();
     await page.getByText('SK하이닉스', { exact: true }).last().click();
     await page.getByRole('button', { name: 'AI 차트 분석기에서 보기' }).click();
     await expect(page).toHaveURL(/\/ai-chart\?/);
@@ -37,7 +37,7 @@ test('desktop technical workspace keeps AI search, chart, and analysis together'
   await expect(page.getByRole('heading', { name: 'AI 검색기' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'AI 차트 분석기' })).toBeVisible();
   const scanner = page.locator('aside').first();
-  await scanner.getByRole('button', { name: '종목보기', exact: true }).click();
+  await scanner.getByRole('button', { name: /^종목보기/ }).click();
   await scanner.getByText('SK하이닉스', { exact: true }).click();
   await scanner.getByRole('button', { name: 'AI 차트 분석기에서 보기' }).click();
   await expect(page).toHaveURL(/\/__phase11-technical-workspace-e2e$/);
