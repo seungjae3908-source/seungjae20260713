@@ -81,9 +81,13 @@ DEPLOY_SHA=<exact SHA>
 
 The workflow verifies the health endpoint and the SHA stored under the staging deployment state directory. Deployment locking uses a non-inherited `flock` wrapper so a canary or long-lived PM2 process cannot retain the lock after the deployment command exits.
 
-## Migration drill
+## Non-destructive default
 
-The staging database drill must perform:
+`run_destructive_recovery_drill` defaults to `false`. In that mode the workflow deploys the requested staging revision and runs the real account and browser verification, but skips the database apply/rollback/reapply drill and the staging file delete/restore, failpoint rollback, and previous-SHA recovery drills. Destructive checks run only when the repository owner explicitly supplies `--destructive` after separate approval.
+
+## Explicitly approved migration drill
+
+When `run_destructive_recovery_drill` is explicitly `true`, the staging database drill must perform:
 
 1. backup;
 2. Phase 7 through current migration apply;
@@ -129,11 +133,11 @@ The real staging URL is tested at:
 
 Checks include login for all four roles, refresh and session recovery, role changes, AI preview and consent, local result handling, no horizontal overflow, no console errors, and no uncaught exceptions.
 
-## Backup and recovery
+## Explicitly approved backup and recovery
 
 The staging deploy script creates an isolated source backup and SHA-256 checksum manifest before promotion. Failed post-promotion verification restores the previous staging snapshot, runtime SHA, active release metadata, and PM2 process.
 
-The explicit staging-only destructive drill requires a real previous SHA that differs from the target SHA and verifies:
+When separately approved, the explicit staging-only destructive drill requires a real previous SHA that differs from the target SHA and verifies:
 
 1. the original backup checksum;
 2. rejection of a deliberately corrupted copy of the backup;

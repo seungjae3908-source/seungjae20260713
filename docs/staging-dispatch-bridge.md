@@ -14,7 +14,15 @@ Only issue `#23`, titled `Staging Readiness Control`, is accepted.
 
 The issue must remain open and the command must be a newly created issue comment. Pull request comments and comments on any other issue are ignored.
 
-## Exact command
+## Exact commands
+
+The default command deploys and verifies staging without the destructive DB rollback or file delete/restore recovery drills:
+
+```text
+/run-staging <exact-40-character-main-sha>
+```
+
+The destructive staging-only drills require the repository owner to add the exact opt-in flag after receiving separate approval:
 
 ```text
 /run-staging <exact-40-character-main-sha> --destructive
@@ -26,7 +34,7 @@ Example:
 /run-staging f2cdbd1a8ae42d2fd6a5caba3e875f057053021c --destructive
 ```
 
-No abbreviated SHA, alternate flag, additional text, or missing `--destructive` flag is accepted.
+No abbreviated SHA, alternate flag, or additional text is accepted. Omitting `--destructive` is the non-destructive default.
 
 ## Authorization
 
@@ -67,7 +75,7 @@ The bridge dispatches only:
 - workflow: `staging-readiness.yml`
 - ref: `main`
 - input `sha`: validated SHA
-- input `run_destructive_recovery_drill`: `true`
+- input `run_destructive_recovery_drill`: `false` by default, or `true` only when the owner command includes `--destructive`
 
 It does not read staging secrets. The existing staging workflow owns the `staging` GitHub environment, its secrets, server connection, isolated path, isolated PM2 process, isolated ports, staging database, browser tests, and destructive recovery drills.
 
@@ -80,7 +88,7 @@ After GitHub accepts the dispatch request, the bridge writes an acknowledgement 
 - target SHA;
 - dispatched workflow;
 - `main` ref;
-- destructive drill state;
+- destructive drill state (`false` by default);
 - confirmation that production deployment was not executed;
 - source command comment ID.
 
@@ -88,4 +96,4 @@ A successful acknowledgement means GitHub accepted the dispatch request. The act
 
 ## Failure behavior
 
-Malformed, unauthorized, stale, non-main, or unverified requests fail or are skipped without dispatching staging. The bridge does not substitute another SHA, disable the destructive drill, retry with altered inputs, or fall back to production.
+Malformed, unauthorized, stale, non-main, or unverified requests fail or are skipped without dispatching staging. The bridge does not substitute another SHA, infer destructive approval, retry with altered inputs, or fall back to production.
