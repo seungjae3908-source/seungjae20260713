@@ -52,6 +52,8 @@ jobs:
       statuses: read
     outputs:
       target_sha: ${{ steps.command.outputs.sha }}
+      action: ${{ steps.command.outputs.action }}
+      run_full_validation: ${{ steps.command.outputs.full }}
       run_destructive_recovery_drill: ${{ steps.command.outputs.destructive }}
     steps:
       - uses: actions/checkout@v4
@@ -76,13 +78,33 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const body = String(process.env.COMMENT_BODY ?? '').trim();
-          const match = /^\/run-staging ([0-9a-fA-F]{40})( --destructive)?$/.exec(body);
+          const match = /^\/run-staging ([0-9a-fA-F]{40})(.*)$/.exec(body);
           if (!match) {
-            console.error('Exact command required: /run-staging <40-character-main-sha> [--destructive]');
+            console.error('Exact command required: /run-staging <40-character-main-sha> [--deploy] [--full-validation] [--destructive]');
             process.exit(1);
           }
+
+          const flags = match[2].trim() ? match[2].trim().split(/\s+/) : [];
+          const allowed = new Set(['--deploy', '--full-validation', '--destructive']);
+          const unknown = flags.filter((flag) => !allowed.has(flag));
+          const duplicates = flags.filter((flag, index) => flags.indexOf(flag) !== index);
+          if (unknown.length || duplicates.length) {
+            console.error(`Unknown or duplicate staging flags: ${[...new Set([...unknown, ...duplicates])].join(', ')}`);
+            process.exit(1);
+          }
+
+          const action = flags.includes('--deploy') ? 'deploy' : 'preflight';
+          const full = flags.includes('--full-validation');
+          const destructive = flags.includes('--destructive');
+          if (action === 'preflight' && (full || destructive)) {
+            console.error('--full-validation and --destructive require --deploy.');
+            process.exit(1);
+          }
+
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1].toLowerCase()}\n`);
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `destructive=${match[2] ? 'true' : 'false'}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `action=${action}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `full=${full ? 'true' : 'false'}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `destructive=${destructive ? 'true' : 'false'}\n`);
           NODE
 
       - name: Require exact SHA contained in main
@@ -156,6 +178,8 @@ jobs:
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
+          STAGING_ACTION: ${{ steps.command.outputs.action }}
+          RUN_FULL_VALIDATION: ${{ steps.command.outputs.full }}
           RUN_DESTRUCTIVE_RECOVERY_DRILL: ${{ steps.command.outputs.destructive }}
           CONTROL_ISSUE: ${{ github.event.issue.number }}
           SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
@@ -179,6 +203,8 @@ jobs:
               ref: 'main',
               inputs: {
                 sha: process.env.TARGET_SHA,
+                action: process.env.STAGING_ACTION,
+                run_full_validation: process.env.RUN_FULL_VALIDATION,
                 run_destructive_recovery_drill: process.env.RUN_DESTRUCTIVE_RECOVERY_DRILL,
               },
             });
@@ -191,9 +217,11 @@ jobs:
                 'Staging readiness dispatch accepted.',
                 '',
                 `- Target SHA: \`${process.env.TARGET_SHA}\``,
+                `- Action: \`${process.env.STAGING_ACTION}\``,
+                `- Full account/browser validation: \`${process.env.RUN_FULL_VALIDATION}\``,
+                `- Destructive staging-only recovery drill: \`${process.env.RUN_DESTRUCTIVE_RECOVERY_DRILL}\``,
                 '- Workflow: `Staging Readiness`',
                 '- Ref: `main`',
-                `- Destructive staging-only recovery drill: \`${process.env.RUN_DESTRUCTIVE_RECOVERY_DRILL}\``,
                 '- Production deployment executed: `false`',
                 `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
               ].join('\n'),
