@@ -39,9 +39,6 @@ type AuthContextValue = {
   refreshProfile(): Promise<void>;
 };
 
-type UnknownRecord = Record<string, unknown>;
-type ApiSessionTokens = { accessToken: string; refreshToken: string };
-
 const AuthContext = createContext<AuthContextValue | null>(null);
 const normalizeName = (value: string) => value.trim().normalize('NFKC').toLowerCase();
 
@@ -69,58 +66,14 @@ function authMessage(cause: unknown) {
   return '계정 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.';
 }
 
-function asRecord(value: unknown): UnknownRecord | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : null;
-}
-
-function readString(record: UnknownRecord | null, ...keys: string[]) {
-  for (const key of keys) {
-    const value = record?.[key];
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return null;
-}
-
-function extractApiSessionTokens(payload: unknown): ApiSessionTokens | null {
-  const root = asRecord(payload);
-  const data = asRecord(root?.data);
-  const auth = asRecord(root?.auth);
-  const supabase = asRecord(root?.supabase);
-  const candidates = [
-    asRecord(root?.session), asRecord(data?.session), asRecord(auth?.session),
-    asRecord(supabase?.session), data, auth, supabase, root,
-  ];
-  for (const candidate of candidates) {
-    const accessToken = readString(candidate, 'access_token', 'accessToken');
-    const refreshToken = readString(candidate, 'refresh_token', 'refreshToken');
-    if (accessToken && refreshToken) return { accessToken, refreshToken };
-  }
-  return null;
-}
-
-function apiErrorMessage(payload: unknown, status: number) {
-  const record = asRecord(payload);
-  const message = readString(record, 'message', 'error_description', 'error');
-  if (status === 400 || status === 401) return '아이디 또는 비밀번호가 맞지 않습니다.';
-  if (status === 429) return '요청이 많습니다. 잠시 후 다시 시도해 주세요.';
-  if (message && message.length <= 160) return message;
-  return '로그인 서버 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.';
-}
-
-async function signInThroughApi(identifier: string, password: string) {
-  const response = await fetch('/api/auth/login', {
-    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ identifier, password }),
-  });
-  let payload: unknown = null;
-  try { payload = await response.json(); } catch { /* common safe message below */ }
-  if (!response.ok) throw new Error(apiErrorMessage(payload, response.status));
-  const tokens = extractApiSessionTokens(payload);
-  if (!tokens) throw new Error('로그인 응답에 Supabase session token이 없습니다.');
-
+async function signInWithSupabase(loginName: string, password: string) {
   const client = getSupabase();
-  const { data, error } = await client.auth.setSession({ access_token: tokens.accessToken, refresh_token: tokens.refreshToken });
-  if (error || !data.session) throw new Error(`로그인 session token 적용에 실패했습니다${error?.message ? `: ${error.message}` : '.'}`);
+  const { data, error } = await client.auth.signInWithPassword({
+    email: await internalEmail(loginName),
+    password,
+  });
+  if (error || !data.session) throw error ?? new Error('Invalid login credentials');
+
   const { data: verified, error: verifyError } = await client.auth.getUser();
   if (verifyError || !verified.user) {
     await client.auth.signOut({ scope: 'local' });
@@ -190,7 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const name = validate(loginName, password);
       setLoading(true);
       try {
-        const nextSession = await signInThroughApi(name, password);
+        const nextSession = await signInWithSupabase(name, password);
         setSession(nextSession);
         await loadProfile(nextSession.user);
       } catch (cause) {
