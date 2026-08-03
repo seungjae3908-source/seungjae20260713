@@ -14,22 +14,18 @@ Preflight is the default and changes nothing on the server:
 /run-staging <exact-40-character-current-main-sha>
 ```
 
-Explicit non-destructive deployment:
-
-```text
-/run-staging <exact-40-character-current-main-sha> --deploy
-```
-
-Deployment plus four-account browser validation:
+Every staging deployment candidate must run the complete account and browser validation gate:
 
 ```text
 /run-staging <exact-40-character-current-main-sha> --deploy --full-validation
 ```
 
-The staging-only destructive drill remains an additional explicit flag and must never be used without separate approval:
+A deployment command without `--full-validation` is rejected. A successful application deployment without complete validation is not release-ready and cannot be used for production promotion.
+
+The staging-only destructive recovery and log-redaction drill remains an additional explicit flag:
 
 ```text
-/run-staging <exact-40-character-current-main-sha> --deploy --destructive
+/run-staging <exact-40-character-current-main-sha> --deploy --full-validation --destructive
 ```
 
 Flags may not be duplicated and no unknown text is accepted. `--full-validation` and `--destructive` require `--deploy`.
@@ -49,11 +45,11 @@ The bridge forwards:
 - `run_full_validation`
 - `run_destructive_recovery_drill`
 
-Omitting `--deploy` always results in preflight-only behavior.
+Omitting `--deploy` always results in preflight-only behavior. Selecting `--deploy` always requires `run_full_validation=true`.
 
 ## Run creation confirmation
 
-Before creating a new dispatch, the bridge checks for an existing queued or in-progress `Staging Readiness` workflow_dispatch run for the same exact current `main` SHA. When one exists, it reports that Run ID and does not create a duplicate.
+Before creating a new dispatch, the bridge checks repository workflow runs for an existing queued or in-progress official `Staging Readiness` workflow_dispatch run for the same exact current `main` SHA. When one exists, it reports that Run ID and does not create a duplicate.
 
 The dispatch request pins GitHub REST API version `2026-03-10`, sends the recommended GitHub JSON media type, and sets `return_run_details: true`. A valid response must have HTTP status `200` and include a positive integer `workflow_run_id`.
 
@@ -61,8 +57,9 @@ The bridge then fetches that exact Run ID and independently verifies that it:
 
 - uses event `workflow_dispatch`;
 - uses branch `main`;
-- has `head_sha` equal to the requested exact current `main` SHA.
+- has `head_sha` equal to the requested exact current `main` SHA;
+- is `.github/workflows/staging-readiness.yml`.
 
-Only then does it post `Staging readiness workflow run created` with the actual workflow Run ID, run link, status, visible Job IDs, source command comment ID, API version, and bridge Run ID.
+Only then does it post `Staging readiness workflow run created` with the actual workflow Run ID, run link, status, full-validation flag, destructive-drill flag, source command comment ID, and bridge Run ID.
 
-A response without valid run details or a returned Run that does not match the exact event, branch, and SHA fails the bridge. The bridge does not use timestamp polling as a substitute for an exact Run ID and never treats an empty or deprecated API response as successful workflow creation.
+A response without valid run details or a returned Run that does not match the exact workflow, event, branch, and SHA fails the bridge. The bridge does not use timestamp polling as a substitute for an exact Run ID and never treats an empty or deprecated API response as successful workflow creation.
