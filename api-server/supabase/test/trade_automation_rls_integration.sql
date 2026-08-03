@@ -8,6 +8,21 @@ grant select(user_id, exchange, account_mode, configured, last_verified_at, last
 set role authenticated;
 select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
 
+do $global_stop_service_only$
+begin
+  begin
+    perform emergency_stopped from public.trade_system_controls where control_key = 'global';
+    raise exception 'member can read the global emergency stop control';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.trade_system_controls set emergency_stopped = false where control_key = 'global';
+    raise exception 'member can change the global emergency stop control';
+  exception when insufficient_privilege then null;
+  end;
+end
+$global_stop_service_only$;
+
 insert into public.trade_automation_profiles(user_id, payload)
 values ('11111111-1111-1111-1111-111111111111', '{"mode":"approval","automaticEnabled":false}');
 insert into public.trade_order_plans(user_id, id, idempotency_key, state, payload)

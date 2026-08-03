@@ -178,6 +178,34 @@ test('approval rechecks signal freshness and expires stale plans before order cr
   assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
 });
 
+test('persistent global emergency stop blocks plan creation, approval, and automatic submission', async () => {
+  const repository = new InMemoryTradingRepository();
+  const service = new TradeAutomationService(repository);
+  const approvalPolicy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  const approvalPlan = await service.createPlan(USER_A, plan({ signalId: 'global-stop-approval' }), approvalPolicy, false);
+  assert.ok(approvalPlan.plan);
+
+  await repository.setGlobalEmergencyStop(true, USER_A);
+  await assert.rejects(() => service.approvePlan(USER_A, approvalPlan.plan!.id), /TRADE_PLAN_RISK_RECHECK_FAILED/);
+  const blocked = await service.createPlan(USER_A, plan({ signalId: 'global-stop-new-plan' }), approvalPolicy, false);
+  assert.equal(blocked.plan, null);
+  assert.ok(blocked.decision.blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
+
+  await repository.setGlobalEmergencyStop(false, USER_A);
+  const automaticPolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'automatic', automaticEnabled: true,
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false },
+    enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [] },
+    enabledStrategies: ['breakout-v1'],
+  });
+  await repository.savePolicy(USER_A, automaticPolicy);
+  const automaticPlan = await service.createPlan(USER_A, plan({ signalId: 'global-stop-automatic' }), automaticPolicy, false);
+  assert.equal(automaticPlan.plan?.state, 'PLANNED');
+  await repository.setGlobalEmergencyStop(true, USER_A);
+  await assert.rejects(() => service.beginAutomaticPlan(USER_A, automaticPlan.plan!.id), /EMERGENCY_STOP_ACTIVE/);
+});
+
 test('paper execution has zero outbound calls and restart scan marks an accepted order for reconciliation', async () => {
   const repository = new InMemoryTradingRepository();
   const automation = new TradeAutomationService(repository);
