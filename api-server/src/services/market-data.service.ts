@@ -475,11 +475,878 @@ function safeNumber(value: unknown, fallback = 0): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
 
   if (typeof value === 'string') {
-    const p×Ş¼¶‰ËkºwµçQÕÉ¸‘•™…Õ±ÑI…Ñ¥¹œ ¤ì4(€ô…Ñ ì4(€€€É•ÑÕÉ¸‘•™…Õ±ÑI…Ñ¥¹œ ¤ì4(€ô4)ô4(4)™Õ¹Ñ¥½¸Ñ½EÕ½Ñ•I½Ü 4(€•¹ÑÉäè…Ñ…±½¹ÑÉä°4(€ÅÕ½Ñ”è1½½Í•EÕ½Ñ”°4(¤èEÕ½Ñ•I½Üì4(€½¹ÍĞÑ¥­•È€ô±•…¹Q¥­•È ¡•¹ÑÉä…Ì…¹ä¤¹Ñ¥­•È¤ì4(€½¹ÍĞµ…É­•ÑY…±Õ”€ô¹½Éµ…±¥é•5…É­•ÑY…±Õ” 4(€€€€¡•¹ÑÉä…Ì…¹ä¤¹µ…É­•Ğ°4(€€€Ñ¥­•È°4(€€¤ì4(€½¹ÍĞÕÉÉ•¹ä€ô¹½Éµ…±¥é•ÕÉÉ•¹åY…±Õ” 4(€€€€¡•¹ÑÉä…Ì…¹ä¤¹ÕÉÉ•¹ä°4(€€€µ…É­•ÑY…±Õ”°4(€€¤ì4(€½¹ÍĞÁÉ¥”€ôÅÕ½Ñ•AÉ¥”¡ÅÕ½Ñ”¤ì4(€½¹ÍĞÁÉ•Ù¥½ÕÍ±½Í”€ôÅÕ½Ñ•AÉ•Ù¥½ÕÍ±½Í”¡ÅÕ½Ñ”°ÁÉ¥”¤ì4(€½¹ÍĞ¡…¹•µ½Õ¹Ğ€ôÅÕ½Ñ•¡…¹•µ½Õ¹Ğ 4(€€€ÅÕ½Ñ”°4(€€€ÁÉ¥”°4(€€€ÁÉ•Ù¥½ÕÍ±½Í”°4(€€¤ì4(€½¹ÍĞ¡…¹•A•É•¹Ğ€ôÅÕ½Ñ•¡…¹•A•É•¹Ğ 4(€€€ÅÕ½Ñ”°4(€€€ÁÉ¥”°4(€€€ÁÉ•Ù¥½ÕÍ±½Í”°4(€€€¡…¹•µ½Õ¹Ğ°4(€€¤ì4(€½¹ÍĞÙ½±Õµ”€ôÍ…™•9Õµ‰•È¡ÅÕ½Ñ”¹Ù½±Õµ”°€À¤ì4(€½¹ÍĞÑÉ…‘¥¹Y…±Õ”€ô4(€€€Í…™•9Õµ‰•È¡ÅÕ½Ñ”¹ÑÉ…‘¥¹Y…±Õ”°€À¤ñğ4(€€€5…Ñ ¹µ…à¡ÁÉ¥”€¨Ù½±Õµ”°€À¤ì4(4(€É•ÑÕÉ¸ì4(€€€Ñ¥­•È°4(€€€¹…µ”èMÑÉ¥¹œ 4(€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹¹…µ”€üü4(€€€€€€€ÅÕ½Ñ”¹¹…µ”€üü4(€€€€€€€Ñ¥­•È°4(€€€€¤°4(€€€µ…É­•ĞèMÑÉ¥¹œ¡µ…É­•ÑY…±Õ”¤°4(€€€ÕÉÉ•¹äèMÑÉ¥¹œ¡ÕÉÉ•¹ä¤°4(€€€…ÍÍ•ÑQåÁ”è±…ÍÍ¥™åÍÍ•ÑQåÁ”¡MÑÉ¥¹œ ¡•¹ÑÉä…Ì…¹ä¤¹¹…µ”€üüÑ¥­•È¤°µ…É­•ÑY…±Õ”…Ì5…É­•Ğ°MÑÉ¥¹œ ¡•¹ÑÉä…Ì…¹ä¤¹…ÍÍ•ÑQåÁ”€üü€ˆˆ¤¤°4(€€€ÁÉ¥”°4(€€€¡…¹•µ½Õ¹Ğ°4(€€€¡…¹•A•É•¹Ğ°4(€€€Ù½±Õµ”°4(€€€ÑÉ…‘¥¹Y…±Õ”°4(€€€¡¥ èÍ…™•9Õµ‰•È¡ÅÕ½Ñ”¹¡¥ °€À¤°4(€€€±½ÜèÍ…™•9Õµ‰•È¡ÅÕ½Ñ”¹±½Ü°€À¤°4(€€€½Á•¸èÍ…™•9Õµ‰•È¡ÅÕ½Ñ”¹½Á•¸°€À¤°4(€€€ÁÉ•Ù¥½ÕÍ±½Í”°4(€€€ÕÁ‘…Ñ•‘ĞèMÑÉ¥¹œ 4(€€€€€ÅÕ½Ñ”¹ÕÁ‘…Ñ•‘Ğ€üü4(€€€€€€€¹•Ü…Ñ” ¤¹Ñ½%M=MÑÉ¥¹œ ¤°4(€€€€¤°4(€€€É…Ñ¥¹œèÉ…Ñ¥¹É½µEÕ½Ñ”¡ÅÕ½Ñ”°•¹ÑÉä¤°4(€ôì4)ô4(4)…Íå¹Œ™Õ¹Ñ¥½¸ÑÉåEÕ½Ñ•AÉ½Ù¥‘•È 4(€•¹ÑÉäè…Ñ…±½¹ÑÉä°4(¤èAÉ½µ¥Í”ñ1½½Í•EÕ½Ñ”ğ¹Õ±°øì4(€½¹ÍĞÁÉ½Ù¥‘•ÉÌ€ôÁÉ½Ù¥‘•ÉMÑ…ÑÕÌ ¤ì4(€½¹ÍĞµ…É­•ÑY…±Õ”€ô¹½Éµ…±¥é•5…É­•ÑY…±Õ” 4(€€€€¡•¹ÑÉä…Ì…¹ä¤¹µ…É­•Ğ°4(€€€€¡•¹ÑÉä…Ì…¹ä¤¹Ñ¥­•È°4(€€¤ì4(4(€½¹ÍĞ…ÑÑ•µÁÑÌèÉÉ…äğ ¤€ôøAÉ½µ¥Í”ñÕ¹­¹½İ¸øø€ômtì4(4(€¥˜€¡µ…É­•ÑY…±Õ”€ôôô€-Hœ¤ì4(€€€…ÑÑ•µÁÑÌ¹ÁÕÍ   ¤€ôø¹…Ù•È¹•ÑEÕ½Ñ”¡•¹ÑÉä¤¤ì4(€€€…ÑÑ•µÁÑÌ¹ÁÕÍ   ¤€ôøå…¡½¼¹•ÑEÕ½Ñ”¡•¹ÑÉä¤¤ì4(€ô•±Í”ì4(€€€…ÑÑ•µÁÑÌ¹ÁÕÍ   ¤€ôøå…¡½¼¹•ÑEÕ½Ñ”¡•¹ÑÉä¤¤ì4(€€€¥˜€¡ÁÉ½Ù¥‘•ÉÌ¹™¥¹¹¡Õˆ¤…ÑÑ•µÁÑÌ¹ÁÕÍ   ¤€ôø™¥¹¹¡Õˆ¹•ÑEÕ½Ñ”¡•¹ÑÉä¤¤ì4(€ô4(4(€™½È€¡½¹ÍĞ…ÑÑ•µÁĞ½˜…ÑÑ•µÁÑÌ¤ì4(€€€ÑÉäì4(€€€€€½¹ÍĞÉ•ÍÕ±Ğ€ô…İ…¥Ğ…ÑÑ•µÁĞ ¤ì4(€€€€€¥˜€ …É•ÍÕ±ĞñğÑåÁ•½˜É•ÍÕ±Ğ€„ôô€½‰©•Ğœ¤½¹Ñ¥¹Õ”ì4(€€€€€½¹ÍĞÅÕ½Ñ”€ôÉ•ÍÕ±Ğ…Ì1½½Í•EÕ½Ñ”ì4(€€€€€½¹ÍĞÁÉ¥”€ôÅÕ½Ñ•AÉ¥”¡ÅÕ½Ñ”¤ì4(€€€€€¥˜€¡ÁÉ¥”€ø€ÀñğÅÕ½Ñ”¹¡…¹•A•É•¹Ğ€„ô¹Õ±°ñğÅÕ½Ñ”¹Ù½±Õµ”€„ô¹Õ±°¤ì4(€€€€€€€É•ÑÕÉ¸ÅÕ½Ñ”ì4(€€€€€ô4(€€€ô…Ñ ì4(€€€€€€¼¼QÉäÑ¡”¹•áĞ±¥Ù”ÁÉ½Ù¥‘•È¸4(€€€ô4(€ô4(4(€É•ÑÕÉ¸¹Õ±°ì4)ô4(4)…Íå¹Œ™Õ¹Ñ¥½¸ÑÉå…¹‘±•ÍAÉ½Ù¥‘•È 4(€•¹ÑÉäè…Ñ…±½¹ÑÉä°4(€Ñ¥µ•™É…µ”èQ¥µ•™É…µ”°4(¤èAÉ½µ¥Í”ñì…¹‘±•Ìè…¹‘±•mtìÁÉ½Ù¥‘•ÈèÍÑÉ¥¹œôøì4(€½¹ÍĞÑ¥­•È€ô±•…¹Q¥­•È 4(€€€€¡•¹ÑÉä…Ì…¹ä¤¹Ñ¥­•È°4(€€¤ì4(4(€½¹ÍĞµ…É­•ÑY…±Õ”€ô4(€€€¹½Éµ…±¥é•5…É­•ÑY…±Õ” 4(€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹µ…É­•Ğ°4(€€€€€Ñ¥­•È°4(€€€€¤ì4(4(€½¹ÍĞÑ¥µ•™É…µ•Q•áĞ€ô4(€€€MÑÉ¥¹œ 4(€€€€€Ñ¥µ•™É…µ”€üü4(€€€€€€€€œÅœ°4(€€€€¤ì4(€½¹ÍĞµ¥¹¥µÕµUÍ•™Õ±…¹‘±•Ì€ôlœÅœ°€œÍœ°€œÕœ°€œÄÁœ°€10t¹¥¹±Õ‘•Ì¡Ñ¥µ•™É…µ•Q•áĞ¤€ü€ÌÀ€è€Èì4(4(€€¼¨4(€€€¨ƒªÖ·®
-Ğƒ²Š®ª§²v ƒ¶
-“²n²šwªÚ0ƒ²Â£¶*àA'®–ğƒªÂ²z”ƒ®¢ó²‚ ƒ²
-³²j§¶V§®.#®.¸4(€€€¨­¥İ½½´µ¡…ÉĞ¹ÑÏªÂ ½¹Ğµå¸€¼¹•áĞµ­•ç®–ğƒ®wªæ3² ƒ®RÃ®vóªÂ®¾®†p4(€€€¨ƒ²vó®Ò'ªÎğƒ²‚²ÊĞƒ²Â£¶*ã®*Pƒ²²z—²vó®Ú¶Àƒ¶b²z³ªæ3²²v`ƒ®6Ã²vÓ¶Ã®–ğƒ®Âo²vƒ²"`ƒ²z#²*×®.#®.¸4(€€€¨¼4(€¥˜€¡µ…É­•ÑY…±Õ”€ôôô€-Hœ¤ì4(€€€ÑÉäì4(€€€€€½¹ÍĞ­¥İ½½µI½İÌ€ô4(€€€€€€€…İ…¥Ğ•Ñ-¥İ½½µ¡…ÉÑ…¹‘±•Ì 4(€€€€€€€€€Ñ¥­•È°4(€€€€€€€€€Ñ¥µ•™É…µ•Q•áĞ°4(€€€€€€€€¤ì4(4(€€€€€¥˜€ 4(€€€€€€€­¥İ½½µI½İÌ¹±•¹Ñ €øôµ¥¹¥µÕµUÍ•™Õ±…¹‘±•Ì4(€€€€€€¤ì4(€€€€€€€É•ÑÕÉ¸ì…¹‘±•Ìè­¥İ½½µI½İÌ…Ì…¹‘±•mt°ÁÉ½Ù¥‘•Èè€­¥İ½½´œôì4(€€€€€ô4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹Í½±”¹•ÉÉ½È 4(€€€€€€€­¥İ½½´¡…ÉĞÁÉ½Ù¥‘•È™…¥±•èÑ¥­•Èô‘íÑ¥­•Éô°Ñ¥µ•™É…µ”ô‘íÑ¥µ•™É…µ•Q•áÑõ€°4(€€€€€€€•ÉÉ½È°4(€€€€€€¤ì4(€€€ô4(€ô4(4(€½¹ÍĞ¥¹ÑÉ…‘…ä€ôlœÅ´œ°€œÍ´œ°€œÕ´œ°€œÄÕ´œ°€œÌÁ´œ°€œØÁ´œ°€œÅ œ°€œÑ t¹¥¹±Õ‘•Ì¡Ñ¥µ•™É…µ•Q•áĞ¤ì(€½¹ÍĞ…ÑÑ•µÁÑÌèÉÉ…äñì¹…µ”èÍÑÉ¥¹œìÉÕ¸è€ ¤€ôøAÉ½µ¥Í”ñÕ¹­¹½İ¸øôø€ô(€€€µ…É­•ÑY…±Õ”€ôôô€-Hœ(€€€€€€ül($$€€¸¸¸ …¥¹ÑÉ…‘…ä€ümì¹…µ”è€¹…Ù•Èœ°ÉÕ¸è€ ¤€ôø¹…Ù•È¹•Ñ…¹‘±•Ì¡•¹ÑÉä¤õt€èmt¤°(€€€€€€€€€ì¹…µ”è€å…¡½¼œ°ÉÕ¸è€ ¤€ôøå…¡½¼¹•Ñ…¹‘±•Ì¡•¹ÑÉä°MÑÉ¥¹œ¡Ñ¥µ•™É…µ”¤¤ô°(€€€€€€€t(€€€€€€èmì¹…µ”è€å…¡½¼œ°ÉÕ¸è€ ¤€ôøå…¡½¼¹•Ñ…¹‘±•Ì¡•¹ÑÉä°MÑÉ¥¹œ¡Ñ¥µ•™É…µ”¤¤õtì4(4(€™½È€¡½¹ÍĞ…ÑÑ•µÁĞ½˜…ÑÑ•µÁÑÌ¤ì4(€€€ÑÉäì4(€€€€€½¹ÍĞÉ•ÍÕ±Ğ€ô4(€€€€€€€…İ…¥Ğ…ÑÑ•µÁĞ¹ÉÕ¸ ¤ì4(4(€€€€€¥˜€ 4(€€€€€€€ÉÉ…ä¹¥ÍÉÉ…ä¡É•ÍÕ±Ğ¤€˜˜4(€€€€€€€É•ÍÕ±Ğ¹±•¹Ñ €øôµ¥¹¥µÕµUÍ•™Õ±…¹‘±•Ì4(€€€€€€¤ì4(€€€€€€€É•ÑÕÉ¸ì…¹‘±•ÌèÉ•ÍÕ±Ğ…Ì…¹‘±•mt°ÁÉ½Ù¥‘•Èè…ÑÑ•µÁĞ¹¹…µ”ôì4(€€€€€ô4(€€€ô…Ñ ì4(€€€€€€¼¼QÉä¹•áĞÁÉ½Ù¥‘•È¸4(€€€ô4(€ô4(4(€€¼¨4(€€€¨ƒ².“²‚pƒªâ#²rÔƒ²Â£¶*ã²^@ƒªÂ²pƒ®Ò'²vƒ¶Fs².s¶Vc² ƒ²V+²*×®.#®.¸4(€€€¨ƒ²‚sªÎ×²ÊcªÂ ƒ®ª£®F@ƒ².“¶2£¶Vc®¦Ğƒ®æ ƒ®ÂÃ²^Ó²vƒ®Âc¶fc¶V§®.#®.¸4(€€€¨¼4(€É•ÑÕÉ¸ì…¹‘±•Ìèmt°ÁÉ½Ù¥‘•Èè€¹½¹”œôì4)ô4(4)…Íå¹Œ™Õ¹Ñ¥½¸ÑÉåAÉ½™¥±•AÉ½Ù¥‘•È 4(€•¹ÑÉäè…Ñ…±½¹ÑÉä°4(¤èAÉ½µ¥Í”ñ½µÁ…¹åAÉ½™¥±”øì4(€½¹ÍĞ…ÑÑ•µÁÑÌèÉÉ…äğ ¤€ôøAÉ½µ¥Í”ñÕ¹­¹½İ¸øø€ôl4(€€€€ ¤€ôø™¥¹¹¡Õˆ¹•ÑAÉ½™¥±”¡•¹ÑÉä¤°4(€€€€ ¤€ôøå…¡½¼¹•Ñ½µÁ…¹åAÉ½™¥±”¡•¹ÑÉä¤°4(€€€€ ¤€ôø¹…Ù•È¹•Ñ½µÁ…¹åAÉ½™¥±”¡•¹ÑÉä¤°4(€tì4(4(€™½È€¡½¹ÍĞ…ÑÑ•µÁĞ½˜…ÑÑ•µÁÑÌ¤ì4(€€€ÑÉäì4(€€€€€½¹ÍĞÉ•ÍÕ±Ğ€ô4(€€€€€€€…İ…¥Ğ…ÑÑ•µÁĞ ¤ì4(4(€€€€€¥˜€ 4(€€€€€€€É•ÍÕ±Ğ€˜˜4(€€€€€€€ÑåÁ•½˜É•ÍÕ±Ğ€ôôô€½‰©•Ğœ4(€€€€€€¤ì4(€€€€€€€É•ÑÕÉ¸É•ÍÕ±Ğ…Ì½µÁ…¹åAÉ½™¥±”ì4(€€€€€ô4(€€€ô…Ñ ì4(€€€€€€¼¼QÉä¹•áĞÁÉ½Ù¥‘•È¸4(€€€ô4(€ô4(4(€É•ÑÕÉ¸ì4(€€€Ñ¥­•Èè±•…¹Q¥­•È 4(€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹Ñ¥­•È°4(€€€€¤°4(4(€€€¹…µ”èMÑÉ¥¹œ 4(€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹¹…µ”€üü4(€€€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹Ñ¥­•È°4(€€€€¤°4(4(€€€µ…É­•ĞèMÑÉ¥¹œ 4(€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹µ…É­•Ğ€üü4(€€€€€€€€œœ°4(€€€€¤°4(4(€€€ÕÉÉ•¹äèMÑÉ¥¹œ 4(€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹ÕÉÉ•¹ä€üü4(€€€€€€€€œœ°4(€€€€¤°4(4(€€€‘•ÍÉ¥ÁÑ¥½¸è4(€€€€€€ŸªâÃ²^ƒ²‚W®ÎÓ®–ğƒ¶fW²vàƒ²’G²z®.#®.¸œ°4(4(€€€Í•Ñ½Èè€œœ°4(€€€¥¹‘ÕÍÑÉäè€œœ°4(€€€½Õ¹ÑÉäèMÑÉ¥¹œ ¡•¹ÑÉä…Ì…¹ä¤¹µ…É­•Ğ€ôôô€-Hœ€ü€Ÿ®2¶Vs®¾óªÖ´œ€è€Ÿ®¾ãªÖ´œ¤°4(€€€µ…¥¹	ÕÍ¥¹•ÍÌè€œœ°4(€€€½µÁ•Ñ¥Ñ½ÉÌèmt°4(€ô…Ì½µÁ…¹åAÉ½™¥±”ì4)ô4(4)…Íå¹Œ™Õ¹Ñ¥½¸‰Õ¥±‘-ÉU¹¥Ù•ÉÍ•¹ÑÉ¥•Ì ¤èAÉ½µ¥Í”ğ4(€…Ñ…±½¹ÑÉåmt4(øì4(€ÑÉäì4(€€€½¹ÍĞÉ½İÌ€ô4(€€€€€…İ…¥Ğ•Ñ-ÉU¹¥Ù•ÉÍ” ¤ì4(4(€€€¥˜€ …ÉÉ…ä¹¥ÍÉÉ…ä¡É½İÌ¤¤ì4(€€€€€É•ÑÕÉ¸mtì4(€€€ô4(4(€€€É•ÑÕÉ¸É½İÌ4(€€€€€€¹µ…À ¡É½Üè…¹ä¤€ôøì4(€€€€€€€½¹ÍĞÑ¥­•È€ô4(€€€€€€€€€±•…¹Q¥­•È 4(€€€€€€€€€€€É½Ü¹Ñ¥­•È€üü4(€€€€€€€€€€€€€É½Ü¹½‘”€üü4(€€€€€€€€€€€€€É½Ü¹Íåµ‰½°°4(€€€€€€€€€€¤ì4(4(€€€€€€€½¹ÍĞ¹…µ”€ô4(€€€€€€€€€MÑÉ¥¹œ 4(€€€€€€€€€€€É½Ü¹¹…µ”€üü4(€€€€€€€€€€€€€É½Ü¹½µÁ…¹å9…µ”€üü4(€€€€€€€€€€€€€Ñ¥­•È°4(€€€€€€€€€€¤ì4(4(€€€€€€€¥˜€ …Ñ¥­•È¤ì4(€€€€€€€€€É•ÑÕÉ¸¹Õ±°ì4(€€€€€€€ô4(4(€€€€€€€É•ÑÕÉ¸É•…Ñ•¹ÑÉä 4(€€€€€€€€€Ñ¥­•È°4(€€€€€€€€€¹…µ”°4(€€€€€€€€€€-Hœ…Ì5…É­•Ğ°4(€€€€€€€€€€-I\œ…ÌÕÉÉ•¹ä°4(€€€€€€€€€m¹…µ•t°4(€€€€€€€€¤ì4(€€€€€ô¤4(€€€€€€¹™¥±Ñ•È 4(€€€€€€€€ 4(€€€€€€€€€•¹ÑÉä°4(€€€€€€€€¤è•¹ÑÉä¥Ì…Ñ…±½¹ÑÉä€ôø4(€€€€€€€€€	½½±•…¸¡•¹ÑÉä¤°4(€€€€€€¤ì4(€ô…Ñ ì4(€€€É•ÑÕÉ¸mtì4(€ô4)ô4(4)•áÁ½ÉĞ±…ÍÌ5…É­•Ñ…Ñ…M•ÉÙ¥”ì4(€ÍÑ…Ñ¥Œ…Íå¹ŒÍ•…É  4(€€€ÄèÍÑÉ¥¹œ°4(€€€±¥µ¥Ğ€ô€àÀ°4(€€¤èAÉ½µ¥Í”ñM•…É¡I•ÍÕ±Ñmtøì4(€€€½¹ÍĞÅÕ•Éä€ô4(€€€€€MÑÉ¥¹œ 4(€€€€€€€Ä€üü4(€€€€€€€€€€œœ°4(€€€€€€¤¹ÑÉ¥´ ¤ì4(4(€€€½¹ÍĞ…±¥…Í¹ÑÉ¥•Ì€ô4(€€€€€=‰©•Ğ¹•¹ÑÉ¥•Ì 4(€€€€€€€aQI}1%ML°4(€€€€€€¤¹µ…À 4(€€€€€€€€ 4(€€€€€€€€€l4(€€€€€€€€€€€€°4(€€€€€€€€€€€Ù…±Õ”°4(€€€€€€€€€t°4(€€€€€€€€¤€ôø4(€€€€€€€€€É•…Ñ•¹ÑÉä 4(€€€€€€€€€€€Ù…±Õ”¹Ñ¥­•È°4(€€€€€€€€€€€Ù…±Õ”¹¹…µ”°4(€€€€€€€€€€€Ù…±Õ”¹µ…É­•Ğ°4(€€€€€€€€€€€Ù…±Õ”¹ÕÉÉ•¹ä°4(€€€€€€€€€€€Ù…±Õ”¹…±¥…Í•Ì°4(€€€€€€€€€€¤°4(€€€€€€¤ì4(4(€€€½¹ÍĞ•¹ÑÉ¥•Ì€ô4(€€€€€‘•‘ÕÁ•¹ÑÉ¥•Ì¡l4(€€€€€€€€¸¸¹…Ñ…±½ÉÉ…ä ¤°4(4(€€€€€€€€¸¸¹…±¥…Í¹ÑÉ¥•Ì°4(4(€€€€€€€€¸¸¸¡ÅÕ•Éä¹±•¹Ñ €øô€È4(€€€€€€€€€€ü…İ…¥Ğ‰Õ¥±‘-ÉU¹¥Ù•ÉÍ•¹ÑÉ¥•Ì ¤4(€€€€€€€€€€èmt¤°4(€€€€€t¤ì4(4(€€€™½È€¡½¹ÍĞ•¹ÑÉä½˜•¹ÑÉ¥•Ì¤ì4(€€€€€ÑÉäì4(€€€€€€€É•¥ÍÑ•Éå¹…µ¥¹ÑÉä 4(€€€€€€€€€•¹ÑÉä°4(€€€€€€€€¤ì4(€€€€€ô…Ñ ì4(€€€€€€€€¼¼å¹…µ¥ŒÉ•¥ÍÑÉ…Ñ¥½¸¥Ì½ÁÑ¥½¹…°¸4(€€€€€ô4(€€€ô4(4(€€€½¹ÍĞÍ½É•€ô•¹ÑÉ¥•Ì4(€€€€€€¹µ…À ¡•¹ÑÉä¤€ôø€¡ì4(€€€€€€€•¹ÑÉä°4(4(€€€€€€€Í½É”è4(€€€€€€€€€Í•…É¡M½É” 4(€€€€€€€€€€€•¹ÑÉä°4(€€€€€€€€€€€ÅÕ•Éä°4(€€€€€€€€€€¤°4(€€€€€ô¤¤4(€€€€€€¹™¥±Ñ•È 4(€€€€€€€€¡¥Ñ•´¤€ôø4(€€€€€€€€€ÅÕ•Éä4(€€€€€€€€€€€€ü¥Ñ•´¹Í½É”€ø€À4(€€€€€€€€€€€€èÑÉÕ”°4(€€€€€€¤4(€€€€€€¹Í½ÉĞ ¡„°ˆ¤€ôøì4(€€€€€€€¥˜€ 4(€€€€€€€€€ˆ¹Í½É”€„ôô4(€€€€€€€€€„¹Í½É”4(€€€€€€€€¤ì4(€€€€€€€€€É•ÑÕÉ¸€ 4(€€€€€€€€€€€ˆ¹Í½É”€´4(€€€€€€€€€€€„¹Í½É”4(€€€€€€€€€€¤ì4(€€€€€€€ô4(4(€€€€€€€É•ÑÕÉ¸MÑÉ¥¹œ 4(€€€€€€€€€€¡„¹•¹ÑÉä…Ì…¹ä¤¹Ñ¥­•È°4(€€€€€€€€¤¹±½…±•½µÁ…É” 4(€€€€€€€€€MÑÉ¥¹œ 4(€€€€€€€€€€€€¡ˆ¹•¹ÑÉä…Ì…¹ä¤¹Ñ¥­•È°4(€€€€€€€€€€¤°4(€€€€€€€€¤ì4(€€€€€ô¤4(€€€€€€¹Í±¥” 4(€€€€€€€€À°4(€€€€€€€±¥µ¥Ğ°4(€€€€€€¤4(€€€€€€¹µ…À 4(€€€€€€€€¡¥Ñ•´¤€ôø4(€€€€€€€€€Ñ½M•…É¡I•ÍÕ±Ğ 4(€€€€€€€€€€€¥Ñ•´¹•¹ÑÉä°4(€€€€€€€€€€¤°4(€€€€€€¤ì4(4(€€€É•ÑÕÉ¸Í½É•ì4(€ô4(4(€ÍÑ…Ñ¥Œ…Íå¹Œ•ÑEÕ½Ñ” 4(€€€Ñ¥­•ÈèÍÑÉ¥¹œ°4(€€¤èAÉ½µ¥Í”ñEÕ½Ñ”øì4(€€€½¹ÍĞ•¹ÑÉä€ô4(€€€€€É•Í½±Ù•¹ÑÉä 4(€€€€€€€Ñ¥­•È°4(€€€€€€¤ì4(4(€€€É•ÑÕÉ¸…¡• 4(€€€€€ÅÕ½Ñ”è‘í±•…¹Q¥­•È¡Ñ¥­•È¥õ€°4(4(€€€€€QQ0¹ÅÕ½Ñ”°4(4(€€€€€…Íå¹Œ€ ¤€ôøì4(€€€€€€€½¹ÍĞÁÉ½Ù¥‘•ÉEÕ½Ñ”€ô4(€€€€€€€€€…İ…¥ĞÑÉåEÕ½Ñ•AÉ½Ù¥‘•È 4(€€€€€€€€€€€•¹ÑÉä°4(€€€€€€€€€€¤ì4(4(€€€€€€€¥˜€ …ÁÉ½Ù¥‘•ÉEÕ½Ñ”¤ì4(€€€€€€€€€Ñ¡É½Ü¹•ÜÉÉ½È¡EU=Q}U9Y%1	1è‘í±•…¹Q¥­•È¡Ñ¥­•È¥õ€¤ì4(€€€€€€€ô4(4(€€€€€€€½¹ÍĞÅÕ½Ñ”€ôÁÉ½Ù¥‘•ÉEÕ½Ñ”ì4(4(€€€€€€€É•ÑÕÉ¸ì4(€€€€€€€€€€¸¸¹ÅÕ½Ñ”°4(4(€€€€€€€€€Ñ¥­•Èè4(€€€€€€€€€€€±•…¹Q¥­•È 4(€€€€€€€€€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹Ñ¥­•È°4(€€€€€€€€€€€€¤°4(4(€€€€€€€€€¹…µ”èMÑÉ¥¹œ 4(€€€€€€€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹¹…µ”€üü4(€€€€€€€€€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹Ñ¥­•È°4(€€€€€€€€€€¤°4(€€€€€€€ô…ÌEÕ½Ñ”ì4(€€€€€ô°4(€€€€¤ì4(€ô4(4(€ÍÑ…Ñ¥Œ…Íå¹Œ•ÑEÕ½Ñ•I½Ü 4(€€€Ñ¥­•ÈèÍÑÉ¥¹œ°4(€€¤èAÉ½µ¥Í”ñEÕ½Ñ•I½Üğ¹Õ±°øì4(€€€½¹ÍĞ•¹ÑÉä€ô4(€€€€€É•Í½±Ù•¹ÑÉä 4(€€€€€€€Ñ¥­•È°4(€€€€€€¤ì4(4(€€€ÑÉäì4(€€€€€½¹ÍĞÅÕ½Ñ”€ô4(€€€€€€€…İ…¥ĞÑ¡¥Ì¹•ÑEÕ½Ñ” 4(€€€€€€€€€Ñ¥­•È°4(€€€€€€€€¤ì4(4(€€€€€É•ÑÕÉ¸Ñ½EÕ½Ñ•I½Ü 4(€€€€€€€•¹ÑÉä°4(€€€€€€€ÅÕ½Ñ”…Ì1½½Í•EÕ½Ñ”°4(€€€€€€¤ì4(€€€ô…Ñ ì4(€€€€€É•ÑÕÉ¸¹Õ±°ì4(€€€ô4(€ô4(4(€ÍÑ…Ñ¥Œ…Íå¹Œ•ÑEÕ½Ñ•Ì 4(€€€Ñ¥­•ÉÌèÍÑÉ¥¹mt°4(€€¤èAÉ½µ¥Í”ñEÕ½Ñ•I½İmtøì4(€€€½¹ÍĞÉ½İÌ€ô4(€€€€€…İ…¥ĞAÉ½µ¥Í”¹…±° 4(€€€€€€€Ñ¥­•ÉÌ¹µ…À 4(€€€€€€€€€€¡Ñ¥­•È¤€ôø4(€€€€€€€€€€€Ñ¡¥Ì¹•ÑEÕ½Ñ•I½Ü 4(€€€€€€€€€€€€€Ñ¥­•È°4(€€€€€€€€€€€€¤°4(€€€€€€€€¤°4(€€€€€€¤ì4(4(€€€É•ÑÕÉ¸É½İÌ¹™¥±Ñ•È 4(€€€€€€ 4(€€€€€€€É½Ü°4(€€€€€€¤èÉ½Ü¥ÌEÕ½Ñ•I½Ü€ôø4(€€€€€€€	½½±•…¸¡É½Ü¤°4(€€€€¤ì4(€ô4(4(€ÍÑ…Ñ¥Œ…Íå¹Œ•Ñ…¹‘±•Ì 4(€€€Ñ¥­•ÈèÍÑÉ¥¹œ°4(€€€Ñ¥µ•™É…µ”èQ¥µ•™É…µ”€ô4(€€€€€€œÅœ…ÌQ¥µ•™É…µ”°4(€€¤èAÉ½µ¥Í”ñ…¹‘±•mtøì4(€€€½¹ÍĞµ•Ñ„€ô…İ…¥Ğ5…É­•Ñ…Ñ…M•ÉÙ¥”¹•Ñ…¹‘±•Í5•Ñ„¡Ñ¥­•È°Ñ¥µ•™É…µ”¤ì4(€€€É•ÑÕÉ¸µ•Ñ„¹…¹‘±•Ìì4(€ô4(4(€€¼¨¨4(€€€¨ƒ²êS®N“ªÎğƒ¶V£ªî`ƒ².“²‚pƒ®6Ã²vÓ¶ÀƒªÎ×ªâ'²z@ƒ²vÓ®šªÎğƒ²†Ã¶j0ƒ².sªÂ²vƒ®Âc¶fc¶V§®.#®.¸4(€€€¨ƒ®RS²*“¶°ƒ²êC².s²^C²pƒ²v÷²v ƒªÊ÷²jÀƒ²êC².s²^@ƒªâÃ®†w®BpƒªÎ×ªâ'²zC²f ƒ²‚²z”ƒ².sªÂ²vƒ²
-³²j§¶V§®.#®.¸4(€€€¨¼4(€ÍÑ…Ñ¥Œ…Íå¹Œ•Ñ…¹‘±•Í5•Ñ„ 4(€€€Ñ¥­•ÈèÍÑÉ¥¹œ°4(€€€Ñ¥µ•™É…µ”èQ¥µ•™É…µ”€ô4(€€€€€€œÅœ…ÌQ¥µ•™É…µ”°4(€€¤èAÉ½µ¥Í”ñì…¹‘±•Ìè…¹‘±•mtìÁÉ½Ù¥‘•ÈèÍÑÉ¥¹œì™•Ñ¡•‘ĞèÍÑÉ¥¹œôøì4(€€€½¹ÍĞ•¹ÑÉä€ô4(€€€€€É•Í½±Ù•¹ÑÉä 4(€€€€€€€Ñ¥­•È°4(€€€€€€¤ì4(€€€½¹ÍĞÑ¥µ•™É…µ•Q•áĞ€ôMÑÉ¥¹œ¡Ñ¥µ•™É…µ”¤ì4(€€€€¼¼ØÈèƒ²êC².pƒªÂHƒ¶bW¶sªÂ …¹‘±•mtƒŠHí…¹‘±•Ì°ÁÉ½Ù¥‘•É÷®†pƒ®ÂS®3²ZĞƒ¶
-“®–ğƒ²b³®šÃ®.¸4(€€€€¼¼€¡MÕÁ…‰…Í”ƒ²b²4ƒ²êC².s²^@ƒ®
-£²Vƒ²z#²vƒ²"`ƒ²z#®*PƒªÖ³®Ê²‚ƒ®ÂÃ²^ÓªÎğƒ²Ú§®>0ƒ®Â§² ¤4(€€€½¹ÍĞ…¡•-•ä€ô…¹‘±•ÌéØÈè‘í±•…¹Q¥­•È¡Ñ¥­•È¥ôè‘íÑ¥µ•™É…µ•Q•áÑõ€ì(€€€½¹ÍĞ‘¥Í¬€ô…İ…¥ĞÉ•…‘…¹‘±•¥Í­…¡”¡Ñ¥­•È°Ñ¥µ•™É…µ•Q•áĞ¤ì(€€€½¹ÍĞ…É•…Ñ•…åÌ€ô€¡ì(€€€€€€œÍœè€Ì°(€€€€€€œÕœè€Ô°(€€€€€€œÄÁœè€ÄÀ°(€€€€€€œÈÁœè€ÈÀ°(€€€ô…ÌI•½ÉñÍÑÉ¥¹œ°¹Õµ‰•Èø¥mÑ¥µ•™É…µ•Q•áÑtì((€€€¥˜€¡‘¥Í¬ü¹™É•Í €˜˜€……É•…Ñ•…åÌ¤ì(€€€€€É•ÑÕÉ¸ì4(€€€€€€€…¹‘±•Ìè‘¥Í¬¹…¹‘±•Ì°4(€€€€€€€ÁÉ½Ù¥‘•Èè‘¥Í¬¹ÁÉ½Ù¥‘•È°4(€€€€€€€™•Ñ¡•‘Ğè¹•Ü…Ñ”¡‘¥Í¬¹Í…Ù•‘Ğ¤¹Ñ½%M=MÑÉ¥¹œ ¤°4(€€€€€ôì4(€€€ô4(4(€€€¥˜€¡…É•…Ñ•…åÌ¤ì(€€€€€½¹ÍĞ‘…¥±ä€ô…İ…¥ĞÑ¡¥Ì¹•Ñ…¹‘±•Í5•Ñ„¡Ñ¥­•È°€œÅœ¤ì(€€€€€½¹ÍĞ…É•…Ñ•€ô…É•…Ñ•…¡•‘…¹‘±•Ì¡‘…¥±ä¹…¹‘±•Ì°…É•…Ñ•…åÌ¤ì(€€€€€…İ…¥ĞİÉ¥Ñ•…¹‘±•¥Í­…¡”¡Ñ¥­•È°Ñ¥µ•™É…µ•Q•áĞ°…É•…Ñ•°‘…¥±ä¹ÁÉ½Ù¥‘•È¤ì(€€€€€É•ÑÕÉ¸ì(€€€€€€€…¹‘±•Ìè…É•…Ñ•°(€€€€€€€ÁÉ½Ù¥‘•Èè€‘í‘…¥±ä¹ÁÉ½Ù¥‘•Éôé…É•…Ñ•´‘í…É•…Ñ•…åÍõ€°(€€€€€€€™•Ñ¡•‘Ğè‘…¥±ä¹™•Ñ¡•‘Ğ°(€€€€€ôì(€€€ô(4(€€€½¹ÍĞ±½…€ô…Íå¹Œ€ ¤€ôøì4(€€€€€½¹ÍĞÉ•ÍÕ±Ğ€ô…İ…¥ĞÑÉå…¹‘±•ÍAÉ½Ù¥‘•È¡•¹ÑÉä°Ñ¥µ•™É…µ”¤ì4(€€€€€…İ…¥ĞİÉ¥Ñ•…¹‘±•¥Í­…¡”¡Ñ¥­•È°Ñ¥µ•™É…µ•Q•áĞ°É•ÍÕ±Ğ¹…¹‘±•Ì°É•ÍÕ±Ğ¹ÁÉ½Ù¥‘•È¤ì4(€€€€€É•ÑÕÉ¸É•ÍÕ±Ğì4(€€€ôì4(4(€€€¥˜€¡‘¥Í¬ü¹…¹‘±•Ì¹±•¹Ñ ¤ì4(€€€€€Ù½¥…¡•¡…¡•-•ä°…¹‘±•…¡•QÑ°¡Ñ¥µ•™É…µ•Q•áĞ¤°±½…¤¹…Ñ  ¡•ÉÉ½È¤€ôøì4(€€€€€€€½¹Í½±”¹•ÉÉ½È ¡…ÉĞ‰…­É½Õ¹É•™É•Í ™…¥±•èœ°•ÉÉ½È¤ì4(€€€€€ô¤ì4(€€€€€É•ÑÕÉ¸ì4(€€€€€€€…¹‘±•Ìè‘¥Í¬¹…¹‘±•Ì°4(€€€€€€€ÁÉ½Ù¥‘•Èè‘¥Í¬¹ÁÉ½Ù¥‘•È°4(€€€€€€€™•Ñ¡•‘Ğè¹•Ü…Ñ”¡‘¥Í¬¹Í…Ù•‘Ğ¤¹Ñ½%M=MÑÉ¥¹œ ¤°4(€€€€€ôì4(€€€ô4(4(€€€½¹ÍĞÉ•ÍÕ±Ğ€ô…İ…¥Ğ…¡•¡…¡•-•ä°…¹‘±•…¡•QÑ°¡Ñ¥µ•™É…µ•Q•áĞ¤°±½…¤ì4(€€€€¼¼ƒ®Â§²ZĞèƒ¶bç².pƒªÖ³®Ê²‚ƒ²êC².p¡…¹‘±•mt§ªÂ ƒ®
-£²Vƒ²z#²ró®¦ĞƒªÂC².ã²pƒ®Âc¶fc¶Vs®.¸4(€€€¥˜€¡ÉÉ…ä¹¥ÍÉÉ…ä¡É•ÍÕ±Ğ¤¤ì4(€€€€€É•ÑÕÉ¸ì4(€€€€€€€…¹‘±•ÌèÉ•ÍÕ±Ğ…Ì…¹‘±•mt°4(€€€€€€€ÁÉ½Ù¥‘•Èè€Õ¹­¹½İ¸œ°4(€€€€€€€™•Ñ¡•‘Ğè¹•Ü…Ñ” ¤¹Ñ½%M=MÑÉ¥¹œ ¤°4(€€€€€ôì4(€€€ô4(€€€É•ÑÕÉ¸ì4(€€€€€…¹‘±•ÌèÉ•ÍÕ±Ğ¹…¹‘±•Ì°4(€€€€€ÁÉ½Ù¥‘•ÈèÉ•ÍÕ±Ğ¹ÁÉ½Ù¥‘•È°4(€€€€€™•Ñ¡•‘Ğè¹•Ü…Ñ” ¤¹Ñ½%M=MÑÉ¥¹œ ¤°4(€€€ôì4(€ô4(4(€ÍÑ…Ñ¥Œ…Íå¹Œ•Ñ½µÁ…¹åAÉ½™¥±” 4(€€€Ñ¥­•ÈèÍÑÉ¥¹œ°4(€€¤èAÉ½µ¥Í”ñ½µÁ…¹åAÉ½™¥±”øì4(€€€½¹ÍĞ•¹ÑÉä€ô4(€€€€€É•Í½±Ù•¹ÑÉä 4(€€€€€€€Ñ¥­•È°4(€€€€€€¤ì4(4(€€€É•ÑÕÉ¸…¡• 4(€€€€€½µÁ…¹äè‘í±•…¹Q¥­•È¡Ñ¥­•È¥õ€°4(4(€€€€€QQ0¹ÁÉ½™¥±”€üü4(€€€€€€€QQ0¹ÅÕ½Ñ”°4(4(€€€€€…Íå¹Œ€ ¤€ôø4(€€€€€€€ÑÉåAÉ½™¥±•AÉ½Ù¥‘•È 4(€€€€€€€€€•¹ÑÉä°4(€€€€€€€€¤°4(€€€€¤ì4(€ô4(4(€ÍÑ…Ñ¥Œ…Íå¹Œ•ÑAÉ½™¥±” 4(€€€Ñ¥­•ÈèÍÑÉ¥¹œ°4(€€¤èAÉ½µ¥Í”ñ½µÁ…¹åAÉ½™¥±”øì4(€€€É•ÑÕÉ¸Ñ¡¥Ì¹•Ñ½µÁ…¹åAÉ½™¥±” 4(€€€€€Ñ¥­•È°4(€€€€¤ì4(€ô4(4(€ÍÑ…Ñ¥Œ…Íå¹Œ•ÑI…Ñ¥¹œ 4(€€€Ñ¥­•ÈèÍÑÉ¥¹œ°4(€€¤èAÉ½µ¥Í”ñI…Ñ¥¹I•ÍÕ±Ğøì4(€€€½¹ÍĞÅÕ½Ñ”€ô4(€€€€€…İ…¥ĞÑ¡¥Ì¹•ÑEÕ½Ñ•I½Ü 4(€€€€€€€Ñ¥­•È°4(€€€€€€¤ì4(4(€€€É•ÑÕÉ¸€ 4(€€€€€ÅÕ½Ñ”ü¹É…Ñ¥¹œ€üü4(€€€€€‘•™…Õ±ÑI…Ñ¥¹œ ¤4(€€€€¤ì4(€ô4(4(€ÍÑ…Ñ¥Œ…Íå¹Œ•Ñ…Ñ…±½¹ÑÉä 4(€€€Ñ¥­•ÈèÍÑÉ¥¹œ°4(€€¤èAÉ½µ¥Í”ñ…Ñ…±½¹ÑÉäøì4(€€€É•ÑÕÉ¸É•Í½±Ù•¹ÑÉä 4(€€€€€Ñ¥­•È°4(€€€€¤ì4(€ô4(4(€ÍÑ…Ñ¥Œ…Íå¹Œ•ÑU¹¥Ù•ÉÍ” 4(€€€µ…É­•ÑY…±Õ”üè4(€€€€€ğ€10œ4(€€€€€ğ€-Hœ4(€€€€€ğ€ULœ°4(€€¤èAÉ½µ¥Í”ñM•…É¡I•ÍÕ±Ñmtøì4(€€€½¹ÍĞ•¹ÑÉ¥•Ì€ô4(€€€€€‘•‘ÕÁ•¹ÑÉ¥•Ì¡l4(€€€€€€€€¸¸¹…Ñ…±½ÉÉ…ä ¤°4(4(€€€€€€€€¸¸¸¡…İ…¥Ğ‰Õ¥±‘-ÉU¹¥Ù•ÉÍ•¹ÑÉ¥•Ì ¤¤°4(€€€€€t¤ì4(4(€€€½¹ÍĞ™¥±Ñ•É•€ô4(€€€€€•¹ÑÉ¥•Ì¹™¥±Ñ•È 4(€€€€€€€€¡•¹ÑÉä¤€ôøì4(€€€€€€€€€¥˜€ 4(€€€€€€€€€€€€…µ…É­•ÑY…±Õ”ñğ4(€€€€€€€€€€€µ…É­•ÑY…±Õ”€ôôô4(€€€€€€€€€€€€€€10œ4(€€€€€€€€€€¤ì4(€€€€€€€€€€€É•ÑÕÉ¸ÑÉÕ”ì4(€€€€€€€€€ô4(4(€€€€€€€€€½¹ÍĞÑ¥­•È€ô4(€€€€€€€€€€€±•…¹Q¥­•È 4(€€€€€€€€€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹Ñ¥­•È°4(€€€€€€€€€€€€¤ì4(4(€€€€€€€€€½¹ÍĞ•¹ÑÉå5…É­•Ğ€ô4(€€€€€€€€€€€¹½Éµ…±¥é•5…É­•ÑY…±Õ” 4(€€€€€€€€€€€€€€¡•¹ÑÉä…Ì…¹ä¤¹µ…É­•Ğ°4(€€€€€€€€€€€€€Ñ¥­•È°4(€€€€€€€€€€€€¤ì4(4(€€€€€€€€€É•ÑÕÉ¸€ 4(€€€€€€€€€€€MÑÉ¥¹œ 4(€€€€€€€€€€€€€•¹ÑÉå5…É­•Ğ°4(€€€€€€€€€€€€¤€ôôô4(€€€€€€€€€€€µ…É­•ÑY…±Õ”4(€€€€€€€€€€¤ì4(€€€€€€€ô°4(€€€€€€¤ì4(4(€€€É•ÑÕÉ¸™¥±Ñ•É•¹µ…À 4(€€€€€Ñ½M•…É¡I•ÍÕ±Ğ°4(€€€€¤ì4(€ô4)ô4(4)•áÁ½ÉĞ‘•™…Õ±Ğ5…É­•Ñ…Ñ…M•ÉÙ¥”ì4(
+    const parsed = Number(value.replace(/,/g, ''));
+
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return fallback;
+}
+
+function cleanTicker(ticker: string): string {
+  return String(ticker ?? '').trim().toUpperCase();
+}
+
+function normalizeText(value: string): string {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[()ï¼»ï¼½\[\]{}Â·.,_\-]/g, '');
+}
+
+function isKrTicker(ticker: string): boolean {
+  return /^\d/.test(ticker);
+}
+
+function normalizeMarketValue(value: unknown, ticker: string): Market {
+  const text = String(value ?? '').toUpperCase();
+
+  if (text.includes('KR') || text.includes('KOSPI') || text.includes('KOSDAQ')) {
+    return 'KR' as Market;
+  }
+
+  if (text.includes('US') || text.includes('NASDAQ') || text.includes('NYSE')) {
+    return 'US' as Market;
+  }
+
+  return (isKrTicker(ticker) ? 'KR' : 'US') as Market;
+}
+
+function normalizeCurrencyValue(value: unknown, marketValue: Market): Currency {
+  const text = String(value ?? '').toUpperCase();
+
+  if (text === 'KRW' || text === 'USD') return text as Currency;
+
+  return (marketValue === 'KR' ? 'KRW' : 'USD') as Currency;
+}
+
+function catalogArray(): CatalogEntry[] {
+  const base = Array.isArray(CATALOG) ? CATALOG : [];
+
+  return dedupeEntries([...base, ...FALLBACK_CATALOG]);
+}
+
+function dedupeEntries(entries: CatalogEntry[]): CatalogEntry[] {
+  const map = new Map<string, CatalogEntry>();
+
+  for (const entry of entries) {
+    const ticker = cleanTicker((entry as any).ticker);
+
+    if (!ticker) continue;
+
+    const prev = map.get(ticker);
+
+    map.set(ticker, {
+      ...(prev as any),
+      ...(entry as any),
+      ticker,
+      name: (entry as any).name || (prev as any)?.name || ticker,
+      market: normalizeMarketValue((entry as any).market, ticker),
+      currency: normalizeCurrencyValue(
+        (entry as any).currency,
+        normalizeMarketValue((entry as any).market, ticker),
+      ),
+      aliases: Array.from(
+        new Set([
+          ...(((prev as any)?.aliases ?? []) as string[]),
+          ...(((entry as any).aliases ?? []) as string[]),
+        ]),
+      ),
+    } as CatalogEntry);
+  }
+
+  return Array.from(map.values());
+}
+
+function toSearchResult(entry: CatalogEntry): SearchResult {
+  const ticker = cleanTicker((entry as any).ticker);
+  const marketValue = normalizeMarketValue((entry as any).market, ticker);
+  const currency = normalizeCurrencyValue((entry as any).currency, marketValue);
+
+  return {
+    ticker,
+    name: String((entry as any).name ?? ticker),
+    market: String(marketValue),
+    currency: String(currency),
+    assetType: classifyAssetType(String((entry as any).name ?? ticker), marketValue as Market, String((entry as any).assetType ?? "")),
+    aliases: ((entry as any).aliases ?? []) as string[],
+  };
+}
+
+function searchScore(entry: CatalogEntry, query: string): number {
+  const q = normalizeText(query);
+  const ticker = normalizeText((entry as any).ticker);
+  const name = normalizeText((entry as any).name);
+  const aliases = (((entry as any).aliases ?? []) as string[]).map(normalizeText);
+
+  if (!q) return 1;
+  if (ticker === q) return 1000;
+  if (name === q) return 950;
+  if (aliases.some((alias) => alias === q)) return 900;
+  if (ticker.startsWith(q)) return 800;
+  if (name.startsWith(q)) return 700;
+  if (aliases.some((alias) => alias.startsWith(q))) return 650;
+  if (ticker.includes(q)) return 500;
+  if (name.includes(q)) return 450;
+  if (aliases.some((alias) => alias.includes(q))) return 400;
+
+  return 0;
+}
+
+function fallbackEntryFor(ticker: string): CatalogEntry {
+  const clean = cleanTicker(ticker);
+  const marketValue = normalizeMarketValue(undefined, clean);
+  const currency = normalizeCurrencyValue(undefined, marketValue);
+
+  return createEntry(clean, clean, marketValue, currency, []);
+}
+
+function resolveEntry(ticker: string): CatalogEntry {
+  const clean = cleanTicker(ticker);
+
+  const fromCatalog = getCatalogEntry(clean);
+
+  if (fromCatalog) return fromCatalog;
+
+  const fromFallback = catalogArray().find(
+    (entry) => cleanTicker((entry as any).ticker) === clean,
+  );
+
+  if (fromFallback) return fromFallback;
+
+  return fallbackEntryFor(clean);
+}
+
+function quotePrice(q: LooseQuote): number {
+  return safeNumber(
+    q.price ??
+      q.currentPrice ??
+      q.regularMarketPrice ??
+      q.close ??
+      q.previousClose ??
+      q.prevClose,
+    0,
+  );
+}
+
+function quotePreviousClose(q: LooseQuote, price: number): number {
+  return safeNumber(q.previousClose ?? q.prevClose, price);
+}
+
+function quoteChangeAmount(
+  q: LooseQuote,
+  price: number,
+  previousClose: number,
+) {
+  const direct = safeNumber(q.changeAmount ?? q.change, Number.NaN);
+
+  if (Number.isFinite(direct)) return direct;
+
+  return price - previousClose;
+}
+
+function quoteChangePercent(
+  q: LooseQuote,
+  price: number,
+  previousClose: number,
+  changeAmount: number,
+) {
+  const direct = safeNumber(
+    q.changePercent ??
+      q.regularMarketChangePercent ??
+      q.percent,
+    Number.NaN,
+  );
+
+  if (Number.isFinite(direct)) return direct;
+
+  if (previousClose === 0) return 0;
+
+  return (changeAmount / previousClose) * 100;
+}
+
+function defaultRating(): RatingResult {
+  return scoreToRating(50);
+}
+
+function ratingFromQuote(
+  quote: LooseQuote,
+  entry: CatalogEntry,
+): RatingResult {
+  try {
+    const scores = computeScores({
+      quote,
+      entry,
+    } as any);
+
+    if (typeof scores === 'number') {
+      return scoreToRating(scores);
+    }
+
+    if (typeof (scores as any)?.total === 'number') {
+      return scoreToRating((scores as any).total);
+    }
+
+    if (typeof (scores as any)?.score === 'number') {
+      return scoreToRating((scores as any).score);
+    }
+
+    return defaultRating();
+  } catch {
+    return defaultRating();
+  }
+}
+
+function toQuoteRow(
+  entry: CatalogEntry,
+  quote: LooseQuote,
+): QuoteRow {
+  const ticker = cleanTicker((entry as any).ticker);
+  const marketValue = normalizeMarketValue(
+    (entry as any).market,
+    ticker,
+  );
+  const currency = normalizeCurrencyValue(
+    (entry as any).currency,
+    marketValue,
+  );
+  const price = quotePrice(quote);
+  const previousClose = quotePreviousClose(quote, price);
+  const changeAmount = quoteChangeAmount(
+    quote,
+    price,
+    previousClose,
+  );
+  const changePercent = quoteChangePercent(
+    quote,
+    price,
+    previousClose,
+    changeAmount,
+  );
+  const volume = safeNumber(quote.volume, 0);
+  const tradingValue =
+    safeNumber(quote.tradingValue, 0) ||
+    Math.max(price * volume, 0);
+
+  return {
+    ticker,
+    name: String(
+      (entry as any).name ??
+        quote.name ??
+        ticker,
+    ),
+    market: String(marketValue),
+    currency: String(currency),
+    assetType: classifyAssetType(String((entry as any).name ?? ticker), marketValue as Market, String((entry as any).assetType ?? "")),
+    price,
+    changeAmount,
+    changePercent,
+    volume,
+    tradingValue,
+    high: safeNumber(quote.high, 0),
+    low: safeNumber(quote.low, 0),
+    open: safeNumber(quote.open, 0),
+    previousClose,
+    updatedAt: String(
+      quote.updatedAt ??
+        new Date().toISOString(),
+    ),
+    rating: ratingFromQuote(quote, entry),
+  };
+}
+
+async function tryQuoteProvider(
+  entry: CatalogEntry,
+): Promise<LooseQuote | null> {
+  const providers = providerStatus();
+  const marketValue = normalizeMarketValue(
+    (entry as any).market,
+    (entry as any).ticker,
+  );
+
+  const attempts: Array<() => Promise<unknown>> = [];
+
+  if (marketValue === 'KR') {
+    attempts.push(() => naver.getQuote(entry));
+    attempts.push(() => yahoo.getQuote(entry));
+  } else {
+    attempts.push(() => yahoo.getQuote(entry));
+    if (providers.finnhub) attempts.push(() => finnhub.getQuote(entry));
+  }
+
+  for (const attempt of attempts) {
+    try {
+      const result = await attempt();
+      if (!result || typeof result !== 'object') continue;
+      const quote = result as LooseQuote;
+      const price = quotePrice(quote);
+      if (price > 0 || quote.changePercent != null || quote.volume != null) {
+        return quote;
+      }
+    } catch {
+      // Try the next live provider.
+    }
+  }
+
+  return null;
+}
+
+async function tryCandlesProvider(
+  entry: CatalogEntry,
+  timeframe: Timeframe,
+): Promise<{ candles: Candle[]; provider: string }> {
+  const ticker = cleanTicker(
+    (entry as any).ticker,
+  );
+
+  const marketValue =
+    normalizeMarketValue(
+      (entry as any).market,
+      ticker,
+    );
+
+  const timeframeText =
+    String(
+      timeframe ??
+        '1D',
+    );
+  const minimumUsefulCandles = ['1D', '3D', '5D', '10D', 'ALL'].includes(timeframeText) ? 30 : 2;
+
+  /*
+   * êµ­ë‚´ ì¢…ëª©ì€ í‚¤ì›€ì¦ê¶Œ ì°¨íŠ¸ APIë¥¼ ê°€ì¥ ë¨¼ì € ì‚¬ìš©í•©ë‹ˆë‹¤.
+   * kiwoom-chart.tsê°€ cont-yn / next-keyë¥¼ ëê¹Œì§€ ë”°ë¼ê°€ë¯€ë¡œ
+   * ì¼ë´‰ê³¼ ì „ì²´ ì°¨íŠ¸ëŠ” ìƒì¥ì¼ë¶€í„° í˜„ì¬ê¹Œì§€ì˜ ë°ì´í„°ë¥¼ ë°›ì„ ìˆ˜ ìˆìŠµë‹ˆë‹¤.
+   */
+  if (marketValue === 'KR') {
+    try {
+      const kiwoomRows =
+        await getKiwoomChartCandles(
+          ticker,
+          timeframeText,
+        );
+
+      if (
+        kiwoomRows.length >= minimumUsefulCandles
+      ) {
+        return { candles: kiwoomRows as Candle[], provider: 'kiwoom' };
+      }
+    } catch (error) {
+      console.error(
+        `kiwoom chart provider failed: ticker=${ticker}, timeframe=${timeframeText}`,
+        error,
+      );
+    }
+  }
+
+  const intraday = ['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H'].includes(timeframeText);
+  const attempts: Array<{ name: string; run: () => Promise<unknown> }> =
+    marketValue === 'KR'
+      ? [
+		  ...(!intraday ? [{ name: 'naver', run: () => naver.getCandles(entry) }] : []),
+          { name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) },
+        ]
+      : [{ name: 'yahoo', run: () => yahoo.getCandles(entry, String(timeframe)) }];
+
+  for (const attempt of attempts) {
+    try {
+      const result =
+        await attempt.run();
+
+      if (
+        Array.isArray(result) &&
+        result.length >= minimumUsefulCandles
+      ) {
+        return { candles: result as Candle[], provider: attempt.name };
+      }
+    } catch {
+      // Try next provider.
+    }
+  }
+
+  /*
+   * ì‹¤ì œ ê¸ˆìœµ ì°¨íŠ¸ì— ê°€ì§œ ë´‰ì„ í‘œì‹œí•˜ì§€ ì•ŠìŠµë‹ˆë‹¤.
+   * ì œê³µì²˜ê°€ ëª¨ë‘ ì‹¤íŒ¨í•˜ë©´ ë¹ˆ ë°°ì—´ì„ ë°˜í™˜í•©ë‹ˆë‹¤.
+   */
+  return { candles: [], provider: 'none' };
+}
+
+async function tryProfileProvider(
+  entry: CatalogEntry,
+): Promise<CompanyProfile> {
+  const attempts: Array<() => Promise<unknown>> = [
+    () => finnhub.getProfile(entry),
+    () => yahoo.getCompanyProfile(entry),
+    () => naver.getCompanyProfile(entry),
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      const result =
+        await attempt();
+
+      if (
+        result &&
+        typeof result === 'object'
+      ) {
+        return result as CompanyProfile;
+      }
+    } catch {
+      // Try next provider.
+    }
+  }
+
+  return {
+    ticker: cleanTicker(
+      (entry as any).ticker,
+    ),
+
+    name: String(
+      (entry as any).name ??
+        (entry as any).ticker,
+    ),
+
+    market: String(
+      (entry as any).market ??
+        '',
+    ),
+
+    currency: String(
+      (entry as any).currency ??
+        '',
+    ),
+
+    description:
+      'ê¸°ì—… ì •ë³´ë¥¼ í™•ì¸ ì¤‘ì…ë‹ˆë‹¤.',
+
+    sector: '',
+    industry: '',
+    country: String((entry as any).market === 'KR' ? 'ëŒ€í•œë¯¼êµ­' : 'ë¯¸êµ­'),
+    mainBusiness: '',
+    competitors: [],
+  } as CompanyProfile;
+}
+
+async function buildKrUniverseEntries(): Promise<
+  CatalogEntry[]
+> {
+  try {
+    const rows =
+      await getKrUniverse();
+
+    if (!Array.isArray(rows)) {
+      return [];
+    }
+
+    return rows
+      .map((row: any) => {
+        const ticker =
+          cleanTicker(
+            row.ticker ??
+              row.code ??
+              row.symbol,
+          );
+
+        const name =
+          String(
+            row.name ??
+              row.companyName ??
+              ticker,
+          );
+
+        if (!ticker) {
+          return null;
+        }
+
+        return createEntry(
+          ticker,
+          name,
+          'KR' as Market,
+          'KRW' as Currency,
+          [name],
+        );
+      })
+      .filter(
+        (
+          entry,
+        ): entry is CatalogEntry =>
+          Boolean(entry),
+      );
+  } catch {
+    return [];
+  }
+}
+
+export class MarketDataService {
+  static async search(
+    q: string,
+    limit = 80,
+  ): Promise<SearchResult[]> {
+    const query =
+      String(
+        q ??
+          '',
+      ).trim();
+
+    const aliasEntries =
+      Object.entries(
+        EXTRA_ALIASES,
+      ).map(
+        (
+          [
+            ,
+            value,
+          ],
+        ) =>
+          createEntry(
+            value.ticker,
+            value.name,
+            value.market,
+            value.currency,
+            value.aliases,
+          ),
+      );
+
+    const entries =
+      dedupeEntries([
+        ...catalogArray(),
+
+        ...aliasEntries,
+
+        ...(query.length >= 2
+          ? await buildKrUniverseEntries()
+          : []),
+      ]);
+
+    for (const entry of entries) {
+      try {
+        registerDynamicEntry(
+          entry,
+        );
+      } catch {
+        // Dynamic registration is optional.
+      }
+    }
+
+    const scored = entries
+      .map((entry) => ({
+        entry,
+
+        score:
+          searchScore(
+            entry,
+            query,
+          ),
+      }))
+      .filter(
+        (item) =>
+          query
+            ? item.score > 0
+            : true,
+      )
+      .sort((a, b) => {
+        if (
+          b.score !==
+          a.score
+        ) {
+          return (
+            b.score -
+            a.score
+          );
+        }
+
+        return String(
+          (a.entry as any).ticker,
+        ).localeCompare(
+          String(
+            (b.entry as any).ticker,
+          ),
+        );
+      })
+      .slice(
+        0,
+        limit,
+      )
+      .map(
+        (item) =>
+          toSearchResult(
+            item.entry,
+          ),
+      );
+
+    return scored;
+  }
+
+  static async getQuote(
+    ticker: string,
+  ): Promise<Quote> {
+    const entry =
+      resolveEntry(
+        ticker,
+      );
+
+    return cached(
+      `quote:${cleanTicker(ticker)}`,
+
+      TTL.quote,
+
+      async () => {
+        const providerQuote =
+          await tryQuoteProvider(
+            entry,
+          );
+
+        if (!providerQuote) {
+          throw new Error(`QUOTE_UNAVAILABLE:${cleanTicker(ticker)}`);
+        }
+
+        const quote = providerQuote;
+
+        return {
+          ...quote,
+
+          ticker:
+            cleanTicker(
+              (entry as any).ticker,
+            ),
+
+          name: String(
+            (entry as any).name ??
+              (entry as any).ticker,
+          ),
+        } as Quote;
+      },
+    );
+  }
+
+  static async getQuoteRow(
+    ticker: string,
+  ): Promise<QuoteRow | null> {
+    const entry =
+      resolveEntry(
+        ticker,
+      );
+
+    try {
+      const quote =
+        await this.getQuote(
+          ticker,
+        );
+
+      return toQuoteRow(
+        entry,
+        quote as LooseQuote,
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  static async getQuotes(
+    tickers: string[],
+  ): Promise<QuoteRow[]> {
+    const rows =
+      await Promise.all(
+        tickers.map(
+          (ticker) =>
+            this.getQuoteRow(
+              ticker,
+            ),
+        ),
+      );
+
+    return rows.filter(
+      (
+        row,
+      ): row is QuoteRow =>
+        Boolean(row),
+    );
+  }
+
+  static async getCandles(
+    ticker: string,
+    timeframe: Timeframe =
+      '1D' as Timeframe,
+  ): Promise<Candle[]> {
+    const meta = await MarketDataService.getCandlesMeta(ticker, timeframe);
+    return meta.candles;
+  }
+
+  /**
+   * ìº”ë“¤ê³¼ í•¨ê»˜ ì‹¤ì œ ë°ì´í„° ê³µê¸‰ì ì´ë¦„ê³¼ ì¡°íšŒ ì‹œê°ì„ ë°˜í™˜í•©ë‹ˆë‹¤.
+   * ë””ìŠ¤í¬ ìºì‹œì—ì„œ ì½ì€ ê²½ìš° ìºì‹œì— ê¸°ë¡ëœ ê³µê¸‰ìì™€ ì €ì¥ ì‹œê°ì„ ì‚¬ìš©í•©ë‹ˆë‹¤.
+   */
+  static async getCandlesMeta(
+    ticker: string,
+    timeframe: Timeframe =
+      '1D' as Timeframe,
+  ): Promise<{ candles: Candle[]; provider: string; fetchedAt: string }> {
+    const entry =
+      resolveEntry(
+        ticker,
+      );
+    const timeframeText = String(timeframe);
+    // v2: ìºì‹œ ê°’ í˜•íƒœê°€ Candle[] â†’ {candles, provider}ë¡œ ë°”ë€Œì–´ í‚¤ë¥¼ ì˜¬ë¦°ë‹¤.
+    // (Supabase ì˜ì† ìºì‹œì— ë‚¨ì•„ ìˆì„ ìˆ˜ ìˆëŠ” êµ¬ë²„ì „ ë°°ì—´ê³¼ ì¶©ëŒ ë°©ì§€)
+    const cacheKey = `candles:v2:${cleanTicker(ticker)}:${timeframeText}`;
+    const disk = await readCandleDiskCache(ticker, timeframeText);
+    const aggregateDays = ({
+      '3D': 3,
+      '5D': 5,
+      '10D': 10,
+      '20D': 20,
+    } as Record<string, number>)[timeframeText];
+
+    if (disk?.fresh && !aggregateDays) {
+      return {
+        candles: disk.candles,
+        provider: disk.provider,
+        fetchedAt: new Date(disk.savedAt).toISOString(),
+      };
+    }
+
+    if (aggregateDays) {
+      const daily = await this.getCandlesMeta(ticker, '1D');
+      const aggregated = aggregateCachedCandles(daily.candles, aggregateDays);
+      await writeCandleDiskCache(ticker, timeframeText, aggregated, daily.provider);
+      return {
+        candles: aggregated,
+        provider: `${daily.provider}:aggregated-${aggregateDays}D`,
+        fetchedAt: daily.fetchedAt,
+      };
+    }
+
+    const load = async () => {
+      const result = await tryCandlesProvider(entry, timeframe);
+      await writeCandleDiskCache(ticker, timeframeText, result.candles, result.provider);
+      return result;
+    };
+
+    if (disk?.candles.length) {
+      void cached(cacheKey, candleCacheTtl(timeframeText), load).catch((error) => {
+        console.error('chart background refresh failed:', error);
+      });
+      return {
+        candles: disk.candles,
+        provider: disk.provider,
+        fetchedAt: new Date(disk.savedAt).toISOString(),
+      };
+    }
+
+    const result = await cached(cacheKey, candleCacheTtl(timeframeText), load);
+    // ë°©ì–´: í˜¹ì‹œ êµ¬ë²„ì „ ìºì‹œ(Candle[])ê°€ ë‚¨ì•„ ìˆìœ¼ë©´ ê°ì‹¸ì„œ ë°˜í™˜í•œë‹¤.
+    if (Array.isArray(result)) {
+      return {
+        candles: result as Candle[],
+        provider: 'unknown',
+        fetchedAt: new Date().toISOString(),
+      };
+    }
+    return {
+      candles: result.candles,
+      provider: result.provider,
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
+  static async getCompanyProfile(
+    ticker: string,
+  ): Promise<CompanyProfile> {
+    const entry =
+      resolveEntry(
+        ticker,
+      );
+
+    return cached(
+      `company:${cleanTicker(ticker)}`,
+
+      TTL.profile ??
+        TTL.quote,
+
+      async () =>
+        tryProfileProvider(
+          entry,
+        ),
+    );
+  }
+
+  static async getProfile(
+    ticker: string,
+  ): Promise<CompanyProfile> {
+    return this.getCompanyProfile(
+      ticker,
+    );
+  }
+
+  static async getRating(
+    ticker: string,
+  ): Promise<RatingResult> {
+    const quote =
+      await this.getQuoteRow(
+        ticker,
+      );
+
+    return (
+      quote?.rating ??
+      defaultRating()
+    );
+  }
+
+  static async getCatalogEntry(
+    ticker: string,
+  ): Promise<CatalogEntry> {
+    return resolveEntry(
+      ticker,
+    );
+  }
+
+  static async getUniverse(
+    marketValue?:
+      | 'ALL'
+      | 'KR'
+      | 'US',
+  ): Promise<SearchResult[]> {
+    const entries =
+      dedupeEntries([
+        ...catalogArray(),
+
+        ...(await buildKrUniverseEntries()),
+      ]);
+
+    const filtered =
+      entries.filter(
+        (entry) => {
+          if (
+            !marketValue ||
+            marketValue ===
+              'ALL'
+          ) {
+            return true;
+          }
+
+          const ticker =
+            cleanTicker(
+              (entry as any).ticker,
+            );
+
+          const entryMarket =
+            normalizeMarketValue(
+              (entry as any).market,
+              ticker,
+            );
+
+          return (
+            String(
+              entryMarket,
+            ) ===
+            marketValue
+          );
+        },
+      );
+
+    return filtered.map(
+      toSearchResult,
+    );
+  }
+}
+
+export default MarketDataService;
