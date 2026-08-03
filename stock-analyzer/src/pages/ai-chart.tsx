@@ -88,7 +88,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             <h2 className="mt-1 text-lg font-black">{selection.displayName}</h2>
             <p className="mt-1 text-xs font-bold text-muted-foreground">{selection.ticker} · {selection.market} · {selection.timeframe}</p>
             <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-              <div className="rounded-2xl bg-background p-2"><p className="text-[10px] text-muted-foreground">AI 점수</p><strong>{selection.signalScore ?? '-'}</strong></div>
+              <div data-testid="analysis-signal-score" className="rounded-2xl bg-background p-2"><p className="text-[10px] text-muted-foreground">AI 점수</p><strong>{selection.signalScore ?? '-'}</strong></div>
               <div className="rounded-2xl bg-background p-2"><p className="text-[10px] text-muted-foreground">신뢰도</p><strong>{selection.confidence ?? '-'}</strong></div>
               <div className="rounded-2xl bg-background p-2"><p className="text-[10px] text-muted-foreground">위험</p><strong>{selection.riskLevel ?? '-'}</strong></div>
             </div>
