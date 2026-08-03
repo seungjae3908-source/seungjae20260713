@@ -95,6 +95,8 @@ const BACKUP_PREFIXES = [
 	"seungjae",
 	"stock-analyzer",
 	"sa-settings",
+	"sa-saved-searches",
+	"sa-analysis-selection",
 ];
 
 function readBackupData() {

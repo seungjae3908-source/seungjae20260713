@@ -37,11 +37,16 @@ import {
 import { authorizedFetch } from "@/lib/auth-fetch";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import {
+  buildChartAnalysis,
+  shouldAppendTimeline,
+  type ChartAnalysis,
+} from "@/lib/chart-analysis";
 
 export type ChartBroadcastMarket = "KR" | "US";
 
 type AnyObj = Record<string, any>;
-type ChartTimeframe =
+export type ChartTimeframe =
 	| "1m"
 	| "3m"
 	| "5m"
@@ -83,6 +88,7 @@ type CandlePoint = {
 	low: number;
 	close: number;
 	volume: number;
+	isClosed: boolean;
 };
 
 type SearchRow = {
@@ -105,7 +111,7 @@ type LevelSnapshot = {
 
 type MarketContext = {
 	label: string;
-	changePercent: number;
+	changePercent: number | null;
 	bias: number;
 	sources: string[];
 };
@@ -129,7 +135,7 @@ type TechnicalSnapshot = {
 	bullishPatternScore: number;
 	bearishPatternScore: number;
 	marketLabel: string;
-	marketChangePercent: number;
+	marketChangePercent: number | null;
 	marketBias: number;
 };
 
@@ -149,6 +155,8 @@ type FeedItem = {
 	at: Date;
 	signal: SignalKind;
 	text: string;
+	status: ChartAnalysis["status"];
+	analysis: ChartAnalysis;
 };
 
 type ChartPayload = {
@@ -178,6 +186,9 @@ export type ChartBroadcastSignal = {
 type Props = {
 	market: ChartBroadcastMarket;
 	onSignalChange?: (signal: ChartBroadcastSignal) => void;
+	onAnalysisChange?: (analysis: ChartAnalysis) => void;
+	onSelectionChange?: (selection: { ticker: string; name: string; market: ChartBroadcastMarket; timeframe: ChartTimeframe }) => void;
+	initialSelection?: { ticker: string; name: string; market: ChartBroadcastMarket; timeframe?: string } | null;
 };
 
 const TIMEFRAMES: Array<{ key: ChartTimeframe; label: string }> = [
@@ -376,14 +387,24 @@ function normalizeCandles(rows: AnyObj[], timeframe: ChartTimeframe): CandlePoin
 			const sourceTime = String(
 				row?.time ?? row?.date ?? row?.datetime ?? row?.timestamp ?? row?.dt ?? "",
 			);
+			const time = candleTime(sourceTime, index, rows.length, timeframe);
+			const explicitClosed = typeof row?.isClosed === "boolean"
+				? row.isClosed
+				: typeof row?.closed === "boolean"
+					? row.closed
+					: typeof row?.final === "boolean"
+						? row.final
+						: null;
+			const derivedClosed = timeframe !== "5D" && timeframe !== "20D" && Date.now() / 1000 >= Number(time) + timeframeSeconds(timeframe) + 60;
 			return {
-				time: candleTime(sourceTime, index, rows.length, timeframe),
+				time,
 				sourceTime,
 				open,
 				high: Math.max(high, open, close),
 				low: Math.min(low, open, close),
 				close,
 				volume: Math.max(volume ?? 0, 0),
+				isClosed: explicitClosed ?? derivedClosed,
 			} satisfies CandlePoint;
 		})
 		.filter((row: CandlePoint | null): row is CandlePoint => row != null)
@@ -448,11 +469,11 @@ async function fetchMarketContext(market: ChartBroadcastMarket): Promise<MarketC
 	const changes = source
 		.map((row: AnyObj) => Number(row?.changePercent ?? row?.change_pct ?? row?.flu_rt ?? row?.changeRate))
 		.filter((value: number) => Number.isFinite(value));
-	const averageChange = changes.length ? changes.reduce((sum: number, value: number) => sum + value, 0) / changes.length : 0;
+	const averageChange = changes.length ? changes.reduce((sum: number, value: number) => sum + value, 0) / changes.length : null;
 	return {
 		label: market === "KR" ? "ì½”ìŠ¤í”¼Â·ì½”ìŠ¤ë‹¥" : "S&P500Â·ë‚˜ìŠ¤ë‹¥",
 		changePercent: averageChange,
-		bias: clamp(averageChange * 4, -10, 10),
+		bias: averageChange == null ? 0 : clamp(averageChange * 4, -10, 10),
 		sources: tickers,
 	};
 }
@@ -500,961 +521,18 @@ function atr(candles: CandlePoint[], period = 14): number {
 			Math.max(
 				current.high - current.low,
 				Math.abs(current.high - previous.close),
-				Math.abs(current.low - previous.close),
-			),
-		);
-	}
-	return average(ranges) ?? 0;
-}
-
-function seriesSma(candles: CandlePoint[], period: number) {
-	const rows: Array<{ time: Time; value: number }> = [];
-	for (let index = period - 1; index < candles.length; index += 1) {
-		const value = average(candles.slice(index - period + 1, index + 1).map((row) => row.close));
-		if (value != null) rows.push({ time: candles[index].time, value });
-	}
-	return rows;
-}
-
-function seriesBollinger(candles: CandlePoint[], period = 20, multiplier = 2) {
-	const upper: Array<{ time: Time; value: number }> = [];
-	const middle: Array<{ time: Time; value: number }> = [];
-	const lower: Array<{ time: Time; value: number }> = [];
-	for (let index = period - 1; index < candles.length; index += 1) {
-		const values = candles.slice(index - period + 1, index + 1).map((row) => row.close);
-		const mean = average(values);
-		if (mean == null) continue;
-		const variance = average(values.map((value) => (value - mean) ** 2)) ?? 0;
-		const deviation = Math.sqrt(variance);
-		upper.push({ time: candles[index].time, value: mean + deviation * multiplier });
-		middle.push({ time: candles[index].time, value: mean });
-		lower.push({ time: candles[index].time, value: mean - deviation * multiplier });
-	}
-	return { upper, middle, lower };
-}
-
-function seriesVwap(candles: CandlePoint[]) {
-	let cumulativeValue = 0;
-	let cumulativeVolume = 0;
-	return candles
-		.map((row) => {
-			const typical = (row.high + row.low + row.close) / 3;
-			cumulativeValue += typical * row.volume;
-			cumulativeVolume += row.volume;
-			if (cumulativeVolume <= 0) return null;
-			return { time: row.time as Time, value: cumulativeValue / cumulativeVolume };
-		})
-		.filter((row): row is { time: Time; value: number } => row != null);
-}
-
-function clusterLevels(values: number[], tolerance = 0.0035): number[] {
-	const sorted = [...values].sort((a, b) => a - b);
-	const clusters: number[][] = [];
-	for (const value of sorted) {
-		const current = clusters.at(-1);
-		if (!current) {
-			clusters.push([value]);
-			continue;
-		}
-		const center = average(current) ?? value;
-		if (Math.abs(value - center) / Math.max(center, 1) <= tolerance) current.push(value);
-		else clusters.push([value]);
-	}
-	return clusters
-		.filter((cluster) => cluster.length >= 1)
-		.map((cluster) => average(cluster) ?? cluster[0]);
-}
-
-function detectLevels(candles: CandlePoint[]): LevelSnapshot {
-	const latest = candles.at(-1)!;
-	const history = candles.slice(-141, -1);
-	const highs: number[] = [];
-	const lows: number[] = [];
-
-	for (let index = 2; index < history.length - 2; index += 1) {
-		const row = history[index];
-		if (
-			row.high >= history[index - 1].high &&
-			row.high >= history[index - 2].high &&
-			row.high >= history[index + 1].high &&
-			row.high >= history[index + 2].high
-		) {
-			highs.push(row.high);
-		}
-		if (
-			row.low <= history[index - 1].low &&
-			row.low <= history[index - 2].low &&
-			row.low <= history[index + 1].low &&
-			row.low <= history[index + 2].low
-		) {
-			lows.push(row.low);
-		}
-	}
-
-	if (!highs.length) highs.push(...history.slice(-40).map((row) => row.high));
-	if (!lows.length) lows.push(...history.slice(-40).map((row) => row.low));
-
-	const highLevels = clusterLevels(highs);
-	const lowLevels = clusterLevels(lows);
-	const current = latest.close;
-	const fallbackAtr = Math.max(atr(candles), current * 0.008);
-	const supports = lowLevels.filter((value) => value < current).sort((a, b) => b - a);
-	const resistances = highLevels.filter((value) => value > current).sort((a, b) => a - b);
-	const crossedHighs = highLevels.filter((value) => value <= current).sort((a, b) => b - a);
-	const crossedLows = lowLevels.filter((value) => value >= current).sort((a, b) => a - b);
-
-	return {
-		support1: supports[0] ?? current - fallbackAtr,
-		support2: supports[1] ?? current - fallbackAtr * 2,
-		resistance1: resistances[0] ?? current + fallbackAtr,
-		resistance2: resistances[1] ?? current + fallbackAtr * 2,
-		breakoutLevel: crossedHighs[0] ?? null,
-		breakdownLevel: crossedLows[0] ?? supports[0] ?? null,
-	};
-}
-
-function detectChartPatterns(candles: CandlePoint[]) {
-	const patterns: string[] = [];
-	let bullishScore = 0;
-	let bearishScore = 0;
-	if (candles.length < 8) return { patterns, bullishScore, bearishScore };
-	const latest = candles.at(-1)!;
-	const previous = candles.at(-2)!;
-	const body = Math.abs(latest.close - latest.open);
-	const range = Math.max(latest.high - latest.low, Number.EPSILON);
-	const lowerWick = Math.min(latest.open, latest.close) - latest.low;
-	const upperWick = latest.high - Math.max(latest.open, latest.close);
-
-	if (previous.close < previous.open && latest.close > latest.open && latest.open <= previous.close && latest.close >= previous.open) {
-		patterns.push("ìƒìŠ¹ ì¥ì•…í˜•");
-		bullishScore += 8;
-	}
-	if (previous.close > previous.open && latest.close < latest.open && latest.open >= previous.close && latest.close <= previous.open) {
-		patterns.push("í•˜ë½ ì¥ì•…í˜•");
-		bearishScore += 8;
-	}
-	if (lowerWick > body * 2 && lowerWick > upperWick * 1.5 && latest.close > latest.open) {
-		patterns.push("ë§ì¹˜í˜• ë°˜ë“±");
-		bullishScore += 7;
-	}
-	if (upperWick > body * 2 && upperWick > lowerWick * 1.5 && latest.close < latest.open) {
-		patterns.push("ìœ ì„±í˜• ë°˜ë½");
-		bearishScore += 7;
-	}
-	if (body / range < 0.12) patterns.push("ë„ì§€Â·ë°©í–¥ ëŒ€ê¸°");
-
-	const closes = candles.slice(-40).map((row) => row.close);
-	const lows = closes
-		.map((value, index) => ({ value, index }))
-		.filter((row) => row.index > 0 && row.index < closes.length - 1 && row.value <= closes[row.index - 1] && row.value <= closes[row.index + 1]);
-	const highs = closes
-		.map((value, index) => ({ value, index }))
-		.filter((row) => row.index > 0 && row.index < closes.length - 1 && row.value >= closes[row.index - 1] && row.value >= closes[row.index + 1]);
-	if (lows.length >= 2) {
-		const [left, right] = lows.slice(-2);
-		if (right.index - left.index >= 4 && Math.abs(right.value - left.value) / Math.max(left.value, 1) < 0.012) {
-			patterns.push("ìŒë°”ë‹¥ í›„ë³´");
-			bullishScore += 9;
-		}
-	}
-	if (highs.length >= 2) {
-		const [left, right] = highs.slice(-2);
-		if (right.index - left.index >= 4 && Math.abs(right.value - left.value) / Math.max(left.value, 1) < 0.012) {
-			patterns.push("ìŒë´‰ í›„ë³´");
-			bearishScore += 9;
-		}
-	}
-	return { patterns: [...new Set(patterns)].slice(0, 5), bullishScore, bearishScore };
-}
-
-function technicalSnapshot(candles: CandlePoint[], marketContext: MarketContext): TechnicalSnapshot {
-	const latest = candles.at(-1)!;
-	const previous = candles.at(-2) ?? latest;
-	const closes = candles.map((row) => row.close);
-	const volumes = candles.map((row) => row.volume);
-	const sma5 = sma(closes, 5);
-	const sma20 = sma(closes, 20);
-	const sma60 = sma(closes, 60);
-	const sma120 = sma(closes, 120);
-	const rsiValue = rsi(closes);
-	const ema12 = ema(closes, 12);
-	const ema26 = ema(closes, 26);
-	const macd = ema12 != null && ema26 != null ? ema12 - ema26 : null;
-	const macdValues: number[] = [];
-	for (let index = 26; index <= closes.length; index += 1) {
-		const fast = ema(closes.slice(0, index), 12);
-		const slow = ema(closes.slice(0, index), 26);
-		if (fast != null && slow != null) macdValues.push(fast - slow);
-	}
-	const macdSignal = ema(macdValues, 9);
-	const averageVolume = average(volumes.slice(-21, -1));
-	const volumeRatio = averageVolume && averageVolume > 0 ? latest.volume / averageVolume : 1;
-	const upTrend =
-		sma5 != null &&
-		sma20 != null &&
-		latest.close > sma5 &&
-		sma5 > sma20 &&
-		(sma60 == null || sma20 >= sma60 * 0.995);
-	const downTrend =
-		sma5 != null &&
-		sma20 != null &&
-		latest.close < sma5 &&
-		sma5 < sma20 &&
-		(sma60 == null || sma20 <= sma60 * 1.005);
-	const patternSnapshot = detectChartPatterns(candles);
-
-	return {
-		currentPrice: latest.close,
-		previousClose: previous.close,
-		changePercent:
-			previous.close !== 0 ? ((latest.close - previous.close) / previous.close) * 100 : 0,
-		sma5,
-		sma20,
-		sma60,
-		sma120,
-		rsi: rsiValue,
-		macd,
-		macdSignal,
-		atr: atr(candles),
-		volumeRatio,
-		trend: upTrend ? "ìƒìŠ¹" : downTrend ? "í•˜ë½" : "ì¤‘ë¦½",
-		levels: detectLevels(candles),
-		patterns: patternSnapshot.patterns,
-		bullishPatternScore: patternSnapshot.bullishScore,
-		bearishPatternScore: patternSnapshot.bearishScore,
-		marketLabel: marketContext.label,
-		marketChangePercent: marketContext.changePercent,
-		marketBias: marketContext.bias,
-	};
-}
-
-function clamp(value: number, min: number, max: number) {
-	return Math.max(min, Math.min(max, value));
-}
-
-function buildOpinion(snapshot: TechnicalSnapshot): LiveOpinion {
-	const { currentPrice, previousClose, rsi: rsiValue, volumeRatio, trend, levels } = snapshot;
-	const buffer = Math.max(snapshot.atr * 0.12, currentPrice * 0.001);
-	const breakout =
-		levels.breakoutLevel != null &&
-		previousClose <= levels.breakoutLevel &&
-		currentPrice > levels.breakoutLevel + buffer &&
-		volumeRatio >= 1.35;
-	const breakdown =
-		levels.breakdownLevel != null &&
-		previousClose >= levels.breakdownLevel &&
-		currentPrice < levels.breakdownLevel - buffer &&
-		volumeRatio >= 1.15;
-	const nearResistance = currentPrice >= levels.resistance1 * 0.995;
-	const nearSupport = currentPrice <= levels.support1 * 1.005;
-	const overbought = rsiValue != null && rsiValue >= 72;
-	const oversold = rsiValue != null && rsiValue <= 30;
-
-	let signal: SignalKind = "WATCH";
-	let title = "ì§„ì… ì¡°ê±´ ëŒ€ê¸°";
-	let summary = `${formatRawPrice(levels.resistance1)} ì €í•­ ëŒíŒŒ ë˜ëŠ” ${formatRawPrice(levels.support1)} ì§€ì§€ ë°˜ë“±ì„ í™•ì¸í•˜ì„¸ìš”.`;
-
-	if (breakdown) {
-		signal = "STOP";
-		title = "ì§€ì§€ì„  ì´íƒˆ Â· ë§¤ë„ ìš°ì„ ";
-		summary = `${formatRawPrice(levels.breakdownLevel!)} ì§€ì§€ì„ ì„ ê±°ë˜ëŸ‰ê³¼ í•¨ê»˜ ì´íƒˆí–ˆìŠµë‹ˆë‹¤. ë´‰ ë§ˆê°ê¹Œì§€ íšŒë³µí•˜ì§€ ëª»í•˜ë©´ ì†ì ˆ ë˜ëŠ” ë¹„ì¤‘ ì¶•ì†Œê°€ ìš°ì„ ì…ë‹ˆë‹¤.`;
-	} else if (breakout && !overbought) {
-		signal = "ENTER";
-		title = "ëŒíŒŒ ì§„ì… ì¡°ê±´ ì¶©ì¡±";
-		summary = `${formatRawPrice(levels.breakoutLevel!)} ì €í•­ì„ ê±°ë˜ëŸ‰ ${volumeRatio.toFixed(1)}ë°°ë¡œ ëŒíŒŒí–ˆìŠµë‹ˆë‹¤. í˜„ì¬ ë´‰ì´ ëŒíŒŒì„  ìœ„ì—ì„œ ë§ˆê°í•˜ë©´ ë¶„í•  ì§„ì… ì‹ í˜¸ì…ë‹ˆë‹¤.`;
-	} else if (nearResistance && overbought) {
-		signal = "TAKE_PROFIT";
-		title = "ì €í•­ì„  Â· ê³¼ì—´ êµ¬ê°„";
-		summary = `ì €í•­ì„  ê·¼ì²˜ì—ì„œ RSIê°€ ${rsiValue?.toFixed(0)}ì…ë‹ˆë‹¤. ì‹ ê·œ ì¶”ê²©ë³´ë‹¤ ë³´ìœ  ë¬¼ëŸ‰ ë¶„í• ë§¤ë„ë¥¼ ìš°ì„  í™•ì¸í•˜ì„¸ìš”.`;
-	} else if (trend === "ìƒìŠ¹" && nearSupport && !overbought) {
-		signal = "ENTER";
-		title = "ì§€ì§€ì„  ë°˜ë“± ì§„ì… í›„ë³´";
-		summary = `${formatRawPrice(levels.support1)} ì§€ì§€ì„  ë¶€ê·¼ì—ì„œ ìƒìŠ¹ ì¶”ì„¸ê°€ ìœ ì§€ë©ë‹ˆë‹¤. ë°˜ë“± ì–‘ë´‰ê³¼ ê±°ë˜ëŸ‰ ì¦ê°€ê°€ í™•ì¸ë˜ë©´ ë¶„í•  ì§„ì… í›„ë³´ì…ë‹ˆë‹¤.`;
-	} else if (trend === "ìƒìŠ¹") {
-		signal = "HOLD";
-		title = "ìƒìŠ¹ ì¶”ì„¸ ìœ ì§€";
-		summary = `ë‹¨ê¸° ì´ë™í‰ê· ì´ ìƒìŠ¹ ë°°ì—´ì…ë‹ˆë‹¤. ${formatRawPrice(levels.support1)} ì´íƒˆ ì „ê¹Œì§€ ë³´ìœ  ê´€ì ì´ë©°, ${formatRawPrice(levels.resistance1)} ëŒíŒŒ ì‹œ ì¶”ê°€ ìƒìŠ¹ì„ í™•ì¸í•©ë‹ˆë‹¤.`;
-	} else if (trend === "í•˜ë½" && !oversold) {
-		signal = "EXIT";
-		title = "í•˜ë½ ì¶”ì„¸ Â· ì‹ ê·œ ì§„ì… ë³´ë¥˜";
-		summary = `ë‹¨ê¸° ì´ë™í‰ê· ì´ í•˜ë½ ë°°ì—´ì…ë‹ˆë‹¤. ë°˜ë“± ì‹œ ë¹„ì¤‘ ì¶•ì†Œë¥¼ ìš°ì„ í•˜ê³  ${formatRawPrice(levels.resistance1)} íšŒë³µ ì „ê¹Œì§€ ì‹ ê·œ ì§„ì…ì„ ë³´ë¥˜í•©ë‹ˆë‹¤.`;
-	} else if (oversold) {
-		signal = "WATCH";
-		title = "ê³¼ë§¤ë„ ë°˜ë“± ê´€ì°°";
-		summary = `RSIê°€ ${rsiValue?.toFixed(0)}ë¡œ ê³¼ë§¤ë„ê¶Œì…ë‹ˆë‹¤. ì§€ì§€ì„  ë°˜ë“±ì´ í™•ì¸ë˜ê¸° ì „ì—ëŠ” í•˜ë½ ì¤‘ ë¬¼íƒ€ê¸°ë¥¼ í”¼í•˜ì„¸ìš”.`;
-	}
-
-	const entryPrice =
-		signal === "ENTER"
-			? currentPrice
-			: Math.max(currentPrice, levels.resistance1 + buffer);
-	const stopByAtr = entryPrice - Math.max(snapshot.atr * 1.25, entryPrice * 0.008);
-	const stopPrice = Math.min(levels.support1 - buffer, stopByAtr);
-	const risk = Math.max(entryPrice - stopPrice, entryPrice * 0.005);
-	const targetPrice = Math.max(levels.resistance2, entryPrice + risk * 1.8);
-	const trendScore = trend === "ìƒìŠ¹" ? 18 : trend === "í•˜ë½" ? -15 : 0;
-	const volumeScore = clamp((volumeRatio - 1) * 18, -8, 20);
-	const rsiScore =
-		rsiValue == null ? 0 : rsiValue >= 42 && rsiValue <= 68 ? 10 : rsiValue >= 78 ? -12 : 0;
-	const signalScore =
-		signal === "ENTER" ? 20 : signal === "HOLD" ? 12 : signal === "STOP" ? -15 : 0;
-	const patternScore = snapshot.bullishPatternScore - snapshot.bearishPatternScore;
-	const directionAdjustedMarket = signal === "ENTER" || signal === "HOLD"
-		? snapshot.marketBias
-		: signal === "STOP" || signal === "EXIT" || signal === "TAKE_PROFIT"
-			? -snapshot.marketBias
-			: 0;
-	const confidence = Math.round(clamp(52 + trendScore + volumeScore + rsiScore + signalScore + patternScore + directionAdjustedMarket, 5, 95));
-	const marketText = `${snapshot.marketLabel} ${snapshot.marketChangePercent >= 0 ? "+" : ""}${snapshot.marketChangePercent.toFixed(2)}%`;
-	const patternText = snapshot.patterns.length ? ` Â· íŒ¨í„´ ${snapshot.patterns.join("/")}` : "";
-	summary = `${summary} Â· ì‹œì¥ ${marketText}${patternText}`;
-
-	return {
-		signal,
-		title,
-		summary,
-		confidence,
-		entryPrice,
-		targetPrice,
-		stopPrice,
-		event: `${title}: ${summary}`,
-	};
-}
-
-function formatRawPrice(value: number): string {
-	if (!Number.isFinite(value)) return "í™•ì¸ í•„ìš”";
-	return value >= 1000
-		? Math.round(value).toLocaleString()
-		: value.toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
-
-function formatPrice(value: number | null, market: ChartBroadcastMarket): string {
-	if (value == null || !Number.isFinite(value)) return "í™•ì¸ í•„ìš”";
-	if (market === "US") {
-		return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-	}
-	return `${Math.round(value).toLocaleString()}ì›`;
-}
-
-function formatPercent(value: number | null): string {
-	if (value == null || !Number.isFinite(value)) return "-";
-	return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
-}
-
-function signalLabel(signal: SignalKind): string {
-	const labels: Record<SignalKind, string> = {
-		ENTER: "ì§„ì…",
-		WATCH: "ê´€ì°°",
-		HOLD: "ë³´ìœ ",
-		TAKE_PROFIT: "ë¶„í• ë§¤ë„",
-		EXIT: "ë¹„ì¤‘ì¶•ì†Œ",
-		STOP: "ì†ì ˆê²½ê³ ",
-	};
-	return labels[signal];
-}
-
-function signalClass(signal: SignalKind): string {
-	if (signal === "ENTER" || signal === "HOLD") return "border-destructive/30 bg-destructive/10 text-destructive";
-	if (signal === "STOP" || signal === "EXIT") return "border-blue-500/30 bg-blue-500/10 text-blue-500";
-	if (signal === "TAKE_PROFIT") return "border-warning/30 bg-warning/10 text-warning";
-	return "border-card-border bg-secondary text-muted-foreground";
-}
-
-function addLine(
-	chart: IChartApi,
-	data: Array<{ time: Time; value: number }>,
-	options: AnyObj,
-): ISeriesApi<"Line"> | null {
-	if (!data.length) return null;
-	const series = chart.addLineSeries(options);
-	series.setData(data);
-	return series;
-}
-
-function markerRows(candles: CandlePoint[], opinion: LiveOpinion) {
-	const markers: AnyObj[] = [];
-	const ma20 = seriesSma(candles, 20);
-	const maByTime = new Map(ma20.map((row) => [Number(row.time), row.value]));
-
-	for (let index = Math.max(20, candles.length - 70); index < candles.length; index += 1) {
-		const previous = candles[index - 1];
-		const current = candles[index];
-		const previousMa = maByTime.get(Number(previous.time));
-		const currentMa = maByTime.get(Number(current.time));
-		if (previousMa == null || currentMa == null) continue;
-		if (previous.close <= previousMa && current.close > currentMa) {
-			markers.push({
-				time: current.time,
-				position: "belowBar",
-				color: "#ef4444",
-				shape: "arrowUp",
-				text: "20ì´í‰ ìƒí–¥",
-			});
-		} else if (previous.close >= previousMa && current.close < currentMa) {
-			markers.push({
-				time: current.time,
-				position: "aboveBar",
-				color: "#3b82f6",
-				shape: "arrowDown",
-				text: "20ì´í‰ í•˜í–¥",
-			});
-		}
-	}
-
-	const latest = candles.at(-1);
-	if (latest) {
-		const isBuy = opinion.signal === "ENTER" || opinion.signal === "HOLD";
-		markers.push({
-			time: latest.time,
-			position: isBuy ? "belowBar" : "aboveBar",
-			color: isBuy ? "#ef4444" : "#3b82f6",
-			shape: isBuy ? "arrowUp" : "arrowDown",
-			text: signalLabel(opinion.signal),
-		});
-	}
-
-	return markers.slice(-18);
-}
-
-function ChartCanvas({
-	candles,
-	timeframe,
-	overlays,
-	snapshot,
-	opinion,
-}: {
-	candles: CandlePoint[];
-	timeframe: ChartTimeframe;
-	overlays: Record<OverlayKey, boolean>;
-	snapshot: TechnicalSnapshot;
-	opinion: LiveOpinion;
-}) {
-	const containerRef = useRef<HTMLDivElement | null>(null);
-
-	useEffect(() => {
-		const container = containerRef.current;
-		if (!container || candles.length < 2) return;
-		const dark = document.documentElement.classList.contains("dark");
-		const chart = createChart(container, {
-			width: Math.max(container.clientWidth, 1),
-			height: 390,
-			layout: {
-				background: { type: ColorType.Solid, color: "transparent" },
-				textColor: dark ? "#94a3b8" : "#64748b",
-				fontSize: 11,
-			},
-			grid: {
-				vertLines: { color: dark ? "rgba(148,163,184,0.08)" : "rgba(100,116,139,0.10)" },
-				horzLines: { color: dark ? "rgba(148,163,184,0.08)" : "rgba(100,116,139,0.10)" },
-			},
-			crosshair: { mode: CrosshairMode.Normal },
-			rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: overlays.volume ? 0.22 : 0.08 } },
-			timeScale: {
-				borderVisible: false,
-				timeVisible: /m|H/.test(timeframe),
-				secondsVisible: false,
-				rightOffset: 5,
-				barSpacing: /m|H/.test(timeframe) ? 8 : 7,
-			},
-			handleScroll: true,
-			handleScale: true,
-		});
-
-		const candleSeries = chart.addCandlestickSeries({
-			upColor: "#ef4444",
-			downColor: "#3b82f6",
-			wickUpColor: "#ef4444",
-			wickDownColor: "#3b82f6",
-			borderUpColor: "#ef4444",
-			borderDownColor: "#3b82f6",
-			priceLineVisible: true,
-			lastValueVisible: true,
-		});
-		candleSeries.setData(
-			candles.map((row) => ({
-				time: row.time,
-				open: row.open,
-				high: row.high,
-				low: row.low,
-				close: row.close,
-			})),
-		);
-
-		if (overlays.ma5) addLine(chart, seriesSma(candles, 5), { color: "#f59e0b", lineWidth: 1, title: "MA5" });
-		if (overlays.ma20) addLine(chart, seriesSma(candles, 20), { color: "#8b5cf6", lineWidth: 2, title: "MA20" });
-		if (overlays.ma60) addLine(chart, seriesSma(candles, 60), { color: "#10b981", lineWidth: 1, title: "MA60" });
-		if (overlays.ma120) addLine(chart, seriesSma(candles, 120), { color: "#ec4899", lineWidth: 1, title: "MA120" });
-
-		if (overlays.bollinger) {
-			const band = seriesBollinger(candles);
-			addLine(chart, band.upper, { color: "rgba(14,165,233,0.72)", lineWidth: 1, title: "BB ìƒë‹¨" });
-			addLine(chart, band.middle, { color: "rgba(14,165,233,0.35)", lineWidth: 1, lineStyle: LineStyle.Dashed, title: "BB ì¤‘ì‹¬" });
-			addLine(chart, band.lower, { color: "rgba(14,165,233,0.72)", lineWidth: 1, title: "BB í•˜ë‹¨" });
-		}
-
-		if (overlays.vwap) {
-			addLine(chart, seriesVwap(candles), {
-				color: "#06b6d4",
-				lineWidth: 2,
-				lineStyle: LineStyle.Dashed,
-				title: "VWAP",
-			});
-		}
-
-		if (overlays.volume) {
-			const volumeSeries = chart.addHistogramSeries({
-				priceFormat: { type: "volume" },
-				priceScaleId: "volume",
-				lastValueVisible: false,
-				priceLineVisible: false,
-			});
-			volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-			volumeSeries.setData(
-				candles.map((row) => ({
-					time: row.time,
-					value: row.volume,
-					color: row.close >= row.open ? "rgba(239,68,68,0.42)" : "rgba(59,130,246,0.42)",
-				})),
-			);
-		}
-
-		if (overlays.levels) {
-			const priceLines = [
-				{ price: snapshot.levels.resistance2, color: "#f97316", title: "2ì°¨ ì €í•­", style: LineStyle.Dotted },
-				{ price: snapshot.levels.resistance1, color: "#ef4444", title: "1ì°¨ ì €í•­", style: LineStyle.Dashed },
-				{ price: snapshot.levels.support1, color: "#3b82f6", title: "1ì°¨ ì§€ì§€", style: LineStyle.Dashed },
-				{ price: snapshot.levels.support2, color: "#06b6d4", title: "2ì°¨ ì§€ì§€", style: LineStyle.Dotted },
-			];
-			for (const line of priceLines) {
-				if (!Number.isFinite(line.price)) continue;
-				candleSeries.createPriceLine({
-					price: line.price,
-					color: line.color,
-					lineWidth: 1,
-					lineStyle: line.style,
-					axisLabelVisible: true,
-					title: line.title,
-				});
-			}
-		}
-
-		if (overlays.arrows) candleSeries.setMarkers(markerRows(candles, opinion) as any);
-
-		chart.timeScale().fitContent();
-		const observer = new ResizeObserver((entries) => {
-			const width = entries[0]?.contentRect.width;
-			if (width) chart.applyOptions({ width: Math.max(width, 1) });
-		});
-		observer.observe(container);
-		return () => {
-			observer.disconnect();
-			chart.remove();
-		};
-	}, [candles, timeframe, overlays, snapshot, opinion]);
-
-	return <div ref={containerRef} className="h-[390px] w-full" />;
-}
-
-export function ChartBroadcastPanel({ market, onSignalChange }: Props) {
-	const [query, setQuery] = useState("");
-	const [selectedStock, setSelectedStock] = useState<SearchRow>(() => DEFAULT_STOCKS[market]);
-	const [timeframe, setTimeframe] = useState<ChartTimeframe>("5m");
-	const [live, setLive] = useState(true);
-	const [settingsOpen, setSettingsOpen] = useState(false);
-	const [overlays, setOverlays] = useState<Record<OverlayKey, boolean>>(DEFAULT_OVERLAYS);
-	const [feed, setFeed] = useState<FeedItem[]>([]);
-	const lastFeedKey = useRef("");
-	const trimmed = query.trim();
-
-	useEffect(() => {
-		const fallback = DEFAULT_STOCKS[market];
-		setSelectedStock((current) => (current.market === market ? current : fallback));
-		setQuery("");
-	}, [market]);
-
-	const search = useQuery({
-		queryKey: ["chart-broadcast-search", market, trimmed],
-		queryFn: async () => normalizeSearchRows(await api.searchRows(trimmed), market),
-		enabled: trimmed.length > 0,
-		staleTime: 30_000,
-	});
-
-	const chart = useQuery({
-		queryKey: ["chart-broadcast", selectedStock.ticker, timeframe],
-		queryFn: () => fetchChart(selectedStock.ticker, timeframe),
-		enabled: Boolean(selectedStock.ticker),
-		refetchInterval: live ? (/m|H/.test(timeframe) ? 5_000 : 15_000) : false,
-		refetchIntervalInBackground: true,
-		refetchOnWindowFocus: true,
-		refetchOnReconnect: true,
-	});
-
-	const marketContextQuery = useQuery({
-		queryKey: ["chart-broadcast-market-context", market],
-		queryFn: () => fetchMarketContext(market),
-		refetchInterval: live ? 15_000 : false,
-		refetchIntervalInBackground: true,
-		retry: 1,
-	});
-	const marketContext: MarketContext = marketContextQuery.data ?? {
-		label: market === "KR" ? "ì½”ìŠ¤í”¼Â·ì½”ìŠ¤ë‹¥" : "S&P500Â·ë‚˜ìŠ¤ë‹¥",
-		changePercent: 0,
-		bias: 0,
-		sources: [],
-	};
-
-	const candles = useMemo(
-		() => normalizeCandles(chart.data?.candles ?? [], timeframe),
-		[chart.data?.candles, timeframe],
-	);
-	const snapshot = useMemo(
-		() => (candles.length >= 2 ? technicalSnapshot(candles, marketContext) : null),
-		[candles, marketContext.bias, marketContext.changePercent, marketContext.label],
-	);
-	const opinion = useMemo(
-		() => (snapshot ? buildOpinion(snapshot) : null),
-		[snapshot],
-	);
-
-	useEffect(() => {
-		if (!opinion || !candles.length) return;
-		const latest = candles.at(-1)!;
-		const key = `${selectedStock.ticker}:${timeframe}:${latest.time}:${opinion.signal}:${Math.round(opinion.entryPrice)}`;
-		if (lastFeedKey.current === key) return;
-		lastFeedKey.current = key;
-		setFeed((current) => [
-			{
-				id: `${Date.now()}:${key}`,
-				at: new Date(),
-				signal: opinion.signal,
-				text: opinion.event,
-			},
-			...current,
-		].slice(0, 20));
-	}, [candles, opinion, selectedStock.ticker, timeframe]);
-
-	useEffect(() => {
-		if (!opinion || !snapshot || !onSignalChange) return;
-		onSignalChange({
-			ticker: selectedStock.ticker,
-			market,
-			signal: opinion.signal,
-			confidence: opinion.confidence,
-			title: opinion.title,
-			summary: opinion.summary,
-			currentPrice: snapshot.currentPrice,
-			marketBias: snapshot.marketBias,
-			patterns: snapshot.patterns,
-			generatedAt: new Date().toISOString(),
-		});
-	}, [market, onSignalChange, opinion, selectedStock.ticker, snapshot]);
-
-	const toggleOverlay = (key: OverlayKey) => {
-		setOverlays((current) => ({ ...current, [key]: !current[key] }));
-	};
-
-	const updatedAt = chart.data?.updatedAt ?? chart.data?.fetchedAt;
-	const searchRows = search.data ?? [];
-
-	return (
-		<div className="space-y-4">
-			<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-				<div className="flex items-start justify-between gap-3">
-					<div>
-						<p className="text-[11px] font-extrabold text-primary">ì¢…ëª© ê²€ìƒ‰</p>
-						<h2 className="mt-1 text-base font-black">ì°¨íŠ¸ ë¶ˆëŸ¬ì˜¤ê¸°</h2>
-					</div>
-					<button
-						type="button"
-						onClick={() => setLive((current) => !current)}
-						className={cn(
-							"inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-extrabold",
-							live
-								? "border-destructive/30 bg-destructive/10 text-destructive"
-								: "border-card-border bg-background text-muted-foreground",
-						)}
-					>
-						{live ? <CirclePause className="h-3.5 w-3.5" /> : <CirclePlay className="h-3.5 w-3.5" />}
-						{live ? "ìƒì¤‘ê³„ ì¤‘" : "ì¼ì‹œì •ì§€"}
-					</button>
-				</div>
-
-				<div className="relative mt-3">
-					<Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-					<input
-						value={query}
-						onChange={(event) => setQuery(event.target.value)}
-						placeholder={market === "KR" ? "ì¢…ëª©ëª… ë˜ëŠ” ì¢…ëª©ì½”ë“œ ê²€ìƒ‰" : "íšŒì‚¬ëª… ë˜ëŠ” í‹°ì»¤ ê²€ìƒ‰"}
-						className="h-11 w-full rounded-2xl border border-card-border bg-background pl-10 pr-10 text-sm font-bold outline-none focus:border-primary"
-					/>
-					{query && (
-						<button
-							type="button"
-							onClick={() => setQuery("")}
-							className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-						>
-							<X className="h-4 w-4" />
-						</button>
-					)}
-				</div>
-
-				{trimmed && (
-					<div className="mt-2 max-h-64 overflow-y-auto rounded-2xl border border-card-border bg-background p-2">
-						{search.isLoading ? (
-							<div className="flex items-center justify-center gap-2 px-3 py-5 text-xs font-bold text-muted-foreground">
-								<Loader2 className="h-4 w-4 animate-spin" /> ê²€ìƒ‰ ì¤‘...
-							</div>
-						) : searchRows.length ? (
-							searchRows.map((row) => (
-								<button
-									key={`${row.market}:${row.ticker}`}
-									type="button"
-									onClick={() => {
-										setSelectedStock(row);
-										setQuery("");
-										setFeed([]);
-										lastFeedKey.current = "";
-									}}
-									className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-secondary"
-								>
-									<div className="min-w-0">
-										<p className="truncate text-sm font-extrabold">{row.name}</p>
-										<p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.ticker}</p>
-									</div>
-									<div className="text-right">
-										<p className="text-xs font-extrabold">{formatPrice(row.price, row.market)}</p>
-										<p className={cn("mt-0.5 text-[11px] font-bold", (row.changePercent ?? 0) > 0 ? "text-destructive" : (row.changePercent ?? 0) < 0 ? "text-blue-500" : "text-muted-foreground")}>{formatPercent(row.changePercent)}</p>
-									</div>
-								</button>
-							))
-						) : (
-							<p className="px-3 py-5 text-center text-xs font-bold text-muted-foreground">ê²€ìƒ‰ ê²°ê³¼ê°€ ì—†ìŠµë‹ˆë‹¤.</p>
-						)}
-					</div>
-				)}
-			</section>
-
-			<section className="overflow-hidden rounded-3xl border border-card-border bg-card shadow-sm">
-				<div className="border-b border-card-border p-4">
-					<div className="flex items-start justify-between gap-3">
-						<div className="min-w-0">
-							<div className="flex flex-wrap items-center gap-2">
-								<h2 className="truncate text-lg font-black">{selectedStock.name}</h2>
-								<span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-extrabold text-muted-foreground">{selectedStock.ticker}</span>
-							</div>
-							<p className="mt-1 text-[11px] font-bold text-muted-foreground">
-								{chart.data?.provider ? `ì œê³µì²˜ ${chart.data.provider}` : "ì‹¤ì œ ì°¨íŠ¸ ë°ì´í„° ì—°ê²°"}
-								{updatedAt ? ` Â· ${new Date(updatedAt).toLocaleTimeString("ko-KR")}` : ""}
-							</p>
-						</div>
-						<button
-							type="button"
-							onClick={() => void chart.refetch()}
-							className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-card-border bg-background"
-							title="ì°¨íŠ¸ ìƒˆë¡œê³ ì¹¨"
-						>
-							<RefreshCw className={cn("h-4 w-4", chart.isFetching && "animate-spin")} />
-						</button>
-					</div>
-
-					<div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-						{TIMEFRAMES.map((item) => (
-							<button
-								key={item.key}
-								type="button"
-								onClick={() => {
-									setTimeframe(item.key);
-									setFeed([]);
-									lastFeedKey.current = "";
-								}}
-								className={cn(
-									"shrink-0 rounded-xl border px-3 py-2 text-xs font-extrabold",
-									timeframe === item.key
-										? "border-primary bg-primary text-primary-foreground"
-										: "border-card-border bg-background text-muted-foreground",
-								)}
-							>
-								{item.label}
-							</button>
-						))}
-					</div>
-
-					<button
-						type="button"
-						onClick={() => setSettingsOpen((current) => !current)}
-						className="mt-3 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background px-3 py-2.5 text-left"
-					>
-						<span className="inline-flex items-center gap-2 text-xs font-extrabold">
-							<Settings2 className="h-4 w-4 text-primary" />
-							ì°¨íŠ¸ ì§€í‘œ ì„ íƒ Â· ì¶”ê°€/í•´ì œ
-						</span>
-						{settingsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-					</button>
-
-					{settingsOpen && (
-						<div className="mt-2 space-y-3 rounded-2xl border border-card-border bg-background p-3">
-							{(["ì°¨íŠ¸ì„ ", "ì‹ í˜¸", "ë³´ì¡°ì§€í‘œ"] as const).map((group) => (
-								<div key={group}>
-									<p className="mb-2 text-[10px] font-black text-muted-foreground">{group}</p>
-									<div className="flex flex-wrap gap-2">
-										{OVERLAYS.filter((item) => item.group === group).map((item) => (
-											<button
-												key={item.key}
-												type="button"
-												onClick={() => toggleOverlay(item.key)}
-												className={cn(
-													"rounded-full border px-3 py-1.5 text-[11px] font-extrabold",
-													overlays[item.key]
-														? "border-primary bg-primary/10 text-primary"
-														: "border-card-border bg-card text-muted-foreground",
-												)}
-											>
-												{overlays[item.key] ? "âœ“ " : "+ "}{item.label}
-											</button>
-										))}
-									</div>
-								</div>
-							))}
-						</div>
-					)}
-				</div>
-
-				<div className="min-h-[390px] bg-background/30">
-					{chart.isLoading ? (
-						<div className="flex h-[390px] items-center justify-center gap-2 text-sm font-bold text-muted-foreground">
-							<Loader2 className="h-5 w-5 animate-spin" /> ì°¨íŠ¸ ë¶ˆëŸ¬ì˜¤ëŠ” ì¤‘...
-						</div>
-					) : chart.isError ? (
-						<div className="flex h-[390px] flex-col items-center justify-center px-6 text-center">
-							<ShieldAlert className="h-8 w-8 text-warning" />
-							<p className="mt-3 text-sm font-extrabold">ì°¨íŠ¸ ë°ì´í„°ë¥¼ ë¶ˆëŸ¬ì˜¤ì§€ ëª»í–ˆìŠµë‹ˆë‹¤.</p>
-							<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">{chart.error instanceof Error ? chart.error.message : "í•´ë‹¹ ì‹œê°„ë´‰ ë°ì´í„° ì œê³µ ì—¬ë¶€ë¥¼ í™•ì¸í•˜ì„¸ìš”."}</p>
-							<button type="button" onClick={() => void chart.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-extrabold text-primary-foreground">ë‹¤ì‹œ ì‹œë„</button>
-						</div>
-					) : candles.length < 2 || !snapshot || !opinion ? (
-						<div className="flex h-[390px] flex-col items-center justify-center px-6 text-center">
-							<BarChart3 className="h-8 w-8 text-muted-foreground" />
-							<p className="mt-3 text-sm font-extrabold">í‘œì‹œí•  ì‹¤ì œ ë´‰ ë°ì´í„°ê°€ ì—†ìŠµë‹ˆë‹¤.</p>
-							<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">ë‹¤ë¥¸ ì‹œê°„ë´‰ì„ ì„ íƒí•˜ê±°ë‚˜ ì œê³µì²˜ ì—°ê²° ìƒíƒœë¥¼ í™•ì¸í•˜ì„¸ìš”. ì„ì‹œ ê°€ê²©ì€ ë§Œë“¤ì§€ ì•ŠìŠµë‹ˆë‹¤.</p>
-						</div>
-					) : (
-						<ChartCanvas candles={candles} timeframe={timeframe} overlays={overlays} snapshot={snapshot} opinion={opinion} />
-					)}
-				</div>
-			</section>
-
-			{snapshot && opinion && (
-				<>
-					<section className="overflow-hidden rounded-3xl border border-card-border bg-card shadow-sm">
-						<div className="flex items-center justify-between border-b border-card-border px-4 py-3">
-							<div className="flex items-center gap-2">
-								<span className={cn("h-2.5 w-2.5 rounded-full", live ? "animate-pulse bg-destructive" : "bg-muted-foreground")} />
-								<h2 className="text-sm font-black">AI ì°¨íŠ¸ ìƒì¤‘ê³„</h2>
-							</div>
-							<span className="text-[10px] font-extrabold text-muted-foreground">{TIMEFRAMES.find((item) => item.key === timeframe)?.label}ë´‰</span>
-						</div>
-						<div className="max-h-72 overflow-y-auto p-3">
-							{feed.length ? (
-								<div className="space-y-2">
-									{feed.map((item) => (
-										<article key={item.id} className="grid grid-cols-[70px_minmax(0,1fr)] gap-2 rounded-2xl bg-background px-3 py-3">
-											<time className="text-[10px] font-bold text-muted-foreground">{item.at.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>
-											<div>
-												<span className={cn("inline-flex rounded-full border px-2 py-0.5 text-[9px] font-black", signalClass(item.signal))}>{signalLabel(item.signal)}</span>
-												<p className="mt-1.5 break-keep text-[11px] font-bold leading-5 text-foreground">{item.text}</p>
-											</div>
-										</article>
-									))}
-								</div>
-							) : (
-								<p className="rounded-2xl bg-background px-3 py-5 text-center text-xs font-bold text-muted-foreground">ìƒˆ ë´‰ê³¼ ë¶„ì„ ì‹ í˜¸ë¥¼ ê¸°ë‹¤ë¦¬ëŠ” ì¤‘ì…ë‹ˆë‹¤.</p>
-							)}
-						</div>
-					</section>
-
-					<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-						<div className="flex items-start justify-between gap-3">
-							<div className="min-w-0">
-								<p className="text-[11px] font-extrabold text-primary">ì‹¤ì‹œê°„ AI ê¸°ìˆ ë¶„ì„</p>
-								<h2 className="mt-1 text-lg font-black">{opinion.title}</h2>
-							</div>
-							<div className={cn("shrink-0 rounded-full border px-3 py-1.5 text-xs font-black", signalClass(opinion.signal))}>{signalLabel(opinion.signal)}</div>
-						</div>
-
-						<p className="mt-3 break-keep rounded-2xl bg-secondary/70 px-3 py-3 text-xs font-bold leading-6 text-foreground">{opinion.summary}</p>
-
-						<div className="mt-3 grid grid-cols-2 gap-2">
-							<MetricCard icon={<Activity className="h-4 w-4" />} label="í˜„ì¬ ì¶”ì„¸" value={snapshot.trend} />
-							<MetricCard icon={<Gauge className="h-4 w-4" />} label="ì‹ ë¢°ë„" value={`${opinion.confidence}/100`} />
-							<MetricCard icon={<TrendingUp className="h-4 w-4" />} label="í˜„ì¬ê°€" value={formatPrice(snapshot.currentPrice, market)} />
-							<MetricCard icon={<Gauge className="h-4 w-4" />} label={snapshot.marketLabel} value={`${snapshot.marketChangePercent >= 0 ? "+" : ""}${snapshot.marketChangePercent.toFixed(2)}%`} />
-							<MetricCard icon={<BarChart3 className="h-4 w-4" />} label="ê±°ë˜ëŸ‰" value={`${snapshot.volumeRatio.toFixed(2)}ë°°`} />
-						</div>
-
-						<div className="mt-3 grid grid-cols-3 gap-2">
-							<PlanCard tone="entry" label="ì§„ì… ê¸°ì¤€" value={formatPrice(opinion.entryPrice, market)} />
-							<PlanCard tone="target" label="ëª©í‘œê°€" value={formatPrice(opinion.targetPrice, market)} />
-							<PlanCard tone="stop" label="ì†ì ˆ ê¸°ì¤€" value={formatPrice(opinion.stopPrice, market)} />
-						</div>
-
-						<div className="mt-3 grid grid-cols-2 gap-2">
-							<LevelCard label="1ì°¨ ì €í•­" value={formatPrice(snapshot.levels.resistance1, market)} tone="resistance" />
-							<LevelCard label="2ì°¨ ì €í•­" value={formatPrice(snapshot.levels.resistance2, market)} tone="resistance" />
-							<LevelCard label="1ì°¨ ì§€ì§€" value={formatPrice(snapshot.levels.support1, market)} tone="support" />
-							<LevelCard label="2ì°¨ ì§€ì§€" value={formatPrice(snapshot.levels.support2, market)} tone="support" />
-						</div>
-
-						<div className="mt-3 grid grid-cols-3 gap-2">
-							{overlays.rsi && <SmallIndicator label="RSI" value={snapshot.rsi == null ? "-" : snapshot.rsi.toFixed(1)} />}
-							{overlays.macd && <SmallIndicator label="MACD" value={snapshot.macd == null ? "-" : snapshot.macd.toFixed(3)} />}
-							{overlays.atr && <SmallIndicator label="ATR" value={formatPrice(snapshot.atr, market)} />}
-							{snapshot.patterns.map((pattern) => <SmallIndicator key={pattern} label="ì°¨íŠ¸íŒ¨í„´" value={pattern} />)}
-						</div>
-					</section>
-				</>
-			)}
-
-			<p className="px-1 text-[10px] font-semibold leading-4 text-muted-foreground">
-				ì°¨íŠ¸ì¤‘ê³„ëŠ” ì‹¤ì œ ì‹œì„¸Â·ë´‰ ë°ì´í„°ë¥¼ ê¸°ë°˜ìœ¼ë¡œ í•œ ê¸°ìˆ ì  ë¶„ì„ ë³´ì¡° ê¸°ëŠ¥ì…ë‹ˆë‹¤. ì§„ì…Â·ë§¤ë„ ë¬¸êµ¬ëŠ” ì£¼ë¬¸ ì‹¤í–‰ì´ ì•„ë‹ˆë¼ ì¡°ê±´ ì•Œë¦¼ì´ë©°, ìë™ë§¤ë§¤ ì£¼ë¬¸ ê¸°ëŠ¥ê³¼ ë¶„ë¦¬ë˜ì–´ ìˆìŠµë‹ˆë‹¤.
-			</p>
-		</div>
-	);
-}
-
-function MetricCard({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-	return (
-		<div className="rounded-2xl border border-card-border bg-background p-3">
-			<div className="flex items-center gap-1.5 text-primary">{icon}<span className="text-[10px] font-extrabold text-muted-foreground">{label}</span></div>
-			<p className="mt-2 text-sm font-black">{value}</p>
-		</div>
-	);
-}
-
-function PlanCard({ tone, label, value }: { tone: "entry" | "target" | "stop"; label: string; value: string }) {
-	const Icon = tone === "entry" ? TrendingUp : tone === "target" ? Target : TrendingDown;
-	return (
-		<div className={cn("rounded-2xl border p-3", tone === "entry" ? "border-destructive/20 bg-destructive/5" : tone === "target" ? "border-warning/20 bg-warning/5" : "border-blue-500/20 bg-blue-500/5")}>
-			<Icon className={cn("h-4 w-4", tone === "entry" ? "text-destructive" : tone === "target" ? "text-warning" : "text-blue-500")} />
-			<p className="mt-2 text-[10px] font-extrabold text-muted-foreground">{label}</p>
-			<p className="mt-1 break-keep text-xs font-black">{value}</p>
-		</div>
-	);
-}
-
-function LevelCard({ label, value, tone }: { label: string; value: string; tone: "support" | "resistance" }) {
-	return (
-		<div className="flex items-center justify-between gap-2 rounded-2xl border border-card-border bg-background px-3 py-2.5">
-			<span className={cn("text-[10px] font-extrabold", tone === "support" ? "text-blue-500" : "text-destructive")}>{label}</span>
-			<strong className="text-xs">{value}</strong>
-		</div>
-	);
-}
-
-function SmallIndicator({ label, value }: { label: string; value: string }) {
-	return (
-		<div className="rounded-2xl bg-secondary/70 px-3 py-2.5 text-center">
-			<p className="text-[10px] font-extrabold text-muted-foreground">{label}</p>
-			<p className="mt-1 text-xs font-black">{value}</p>
-		</div>
-	);
-}
+				Math.abs(cur×M·ÒÚ$z{-®éÜj×UW6R6Æ74æÖSÒ&‚Ó2ãRrÓ2ãR"óâ¢Ä6—&6ÆUÆ’6Æ74æÖSÒ&‚Ó2ãRrÓ2ãR"óçĞĞ —¶Æ—fRò.Éé¸ù’«ÈºÊI"¢.«ÈºÉÛÎÈ¹ÎÊ	^Êx'Ğ “Âö'WGFöãàĞ “ÂöF—càĞ Ğ “ÆF—b6Æ74æÖSÒ'&VÆF—fR×BÓ2#àĞ “Å6V&6‚6Æ74æÖSÒ'ö–çFW"ÖWfVçG2ÖæöæR'6öÇWFRÆVgBÓ2F÷Óó"‚ÓBrÓB×G&ç6ÆFR×’Óó"FW‡BÖ×WFVBÖf÷&Vw&÷VæB"óàĞ “Æ–çW@Ğ —fÇVS×·VW'—ĞĞ –öä6†ævS×²†WfVçB’Óâ6WEVW'’†WfVçBçF&vWBçfÇVR—ĞĞ —Æ6V†öÆFW#×¶Ö&¶WBÓÓÒ$µ""ò.Ê(^ºªº¨R¹‰¸©BÊ(^ºªËÙN¹9Â«(È8’"¢.Ù¨ÎÈ*Îº¨R¹‰¸©BØ»ËºB«(È8’'ĞĞ –6Æ74æÖSÒ&‚ÓrÖgVÆÂ&÷VæFVBÓ'†Â&÷&FW"&÷&FW"Ö6&BÖ&÷&FW"&rÖ&6¶w&÷VæBÂÓ"ÓFW‡B×6ÒföçBÖ&öÆB÷WFÆ–æRÖæöæRfö7W3¦&÷&FW"×&–Ö'’ Ğ ’óàĞ —·VW'’bb€Ğ “Æ'WGFöàĞ —G—SÒ&'WGFöâ Ğ –öä6Æ–6³×²‚’Óâ6WEVW'’‚""—ĞĞ –6Æ74æÖSÒ&'6öÇWFR&–v‡BÓ2F÷Óó"×G&ç6ÆFR×’Óó"FW‡BÖ×WFVBÖf÷&Vw&÷VæB Ğ “àĞ “Å‚6Æ74æÖSÒ&‚ÓBrÓB"óàĞ “Âö'WGFöãàĞ ’—ĞĞ “ÂöF—càĞ Ğ —·G&–ÖÖVBbb€Ğ “ÆF—b6Æ74æÖSÒ&×BÓ"Ö‚Ö‚ÓcB÷fW&fÆ÷r×’ÖWFò&÷VæFVBÓ'†Â&÷&FW"&÷&FW"Ö6&BÖ&÷&FW"&rÖ&6¶w&÷VæBÓ"#àĞ —·6V&6‚æ—4ÆöF–ærò€Ğ “ÆF—b6Æ74æÖSÒ&fÆW‚—FV×2Ö6VçFW"§W7F–g’Ö6VçFW"vÓ"‚Ó2’ÓRFW‡B×‡2föçBÖ&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#àĞ “ÄÆöFW#"6Æ74æÖSÒ&‚ÓBrÓBæ–ÖFR×7–â"óâ«(È8’ÊIââàĞ “ÂöF—càĞ ’’¢6V&6…&÷w2æÆVæwF‚ò€Ğ —6V&6…&÷w2æÖ‚‡&÷r’Óâ€Ğ “Æ'WGFöàĞ –¶W“×¶G·&÷ræÖ&¶WGÓ¢G·&÷rçF–6¶W'ÖĞĞ —G—SÒ&'WGFöâ Ğ –öä6Æ–6³×²‚’Óâ°Ğ —6WE6VÆV7FVE7Fö6²‡&÷r“°Ğ —6WEVW'’‚""“° —6WDfVVB…µÒ“° —6WDfö7W5F–ÖR‡VæFVf–æVB“° –Æ7DfVVD¶W’æ7W'&VçBÒ"#°Ğ —×ĞĞ –6Æ74æÖSÒ&fÆW‚rÖgVÆÂ—FV×2Ö6VçFW"§W7F–g’Ö&WGvVVâvÓ2&÷VæFVB×†Â‚Ó2’Ó"ãRFW‡BÖÆVgBG&ç6—F–öâ†÷fW#¦&r×6V6öæF'’ Ğ “àĞ “ÆF—b6Æ74æÖSÒ&Ö–â×rÓ#àĞ “Ç6Æ74æÖSÒ'G'Væ6FRFW‡B×6ÒföçBÖW‡G&&öÆB#ç·&÷rææÖWÓÂ÷àĞ “Ç6Æ74æÖSÒ&×BÓãRFW‡BÕ³…ÒföçBÖ&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#ç·&÷rçF–6¶W'ÓÂ÷àĞ “ÂöF—càĞ “ÆF—b6Æ74æÖSÒ'FW‡B×&–v‡B#àĞ “Ç6Æ74æÖSÒ'FW‡B×‡2föçBÖW‡G&&öÆB#ç¶f÷&ÖE&–6R‡&÷rç&–6RÂ&÷ræÖ&¶WB—ÓÂ÷àĞ “Ç6Æ74æÖS×¶6â‚&×BÓãRFW‡BÕ³…ÒföçBÖ&öÆB"Â‡&÷ræ6†ævUW&6VçBóò’âò'FW‡BÖFW7G'V7F—fR"¢‡&÷ræ6†ævUW&6VçBóò’Âò'FW‡BÖ&ÇVRÓS"¢'FW‡BÖ×WFVBÖf÷&Vw&÷VæB"—Óç¶f÷&ÖEW&6VçB‡&÷ræ6†ævUW&6VçB—ÓÂ÷àĞ “ÂöF—càĞ “Âö'WGFöãàĞ ’’Ğ ’’¢€Ğ “Ç6Æ74æÖSÒ'‚Ó2’ÓRFW‡BÖ6VçFW"FW‡B×‡2föçBÖ&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#î«(È8’«+«;Î«ÉxnÈ«^¸¸¸ºBãÂ÷àĞ ’—ĞĞ “ÂöF—càĞ ’—ĞĞ “Â÷6V7F–öãàĞ Ğ “Ç6V7F–öâ6Æ74æÖSÒ&÷fW&fÆ÷rÖ†–FFVâ&÷VæFVBÓ7†Â&÷&FW"&÷&FW"Ö6&BÖ&÷&FW"&rÖ6&B6†F÷r×6Ò#àĞ “ÆF—b6Æ74æÖSÒ&&÷&FW"Ö"&÷&FW"Ö6&BÖ&÷&FW"ÓB#àĞ “ÆF—b6Æ74æÖSÒ&fÆW‚—FV×2×7F'B§W7F–g’Ö&WGvVVâvÓ2#àĞ “ÆF—b6Æ74æÖSÒ&Ö–â×rÓ#àĞ “ÆF—b6Æ74æÖSÒ&fÆW‚fÆW‚×w&—FV×2Ö6VçFW"vÓ"#àĞ “Æƒ"6Æ74æÖSÒ'G'Væ6FRFW‡BÖÆrföçBÖ&Æ6²#ç·6VÆV7FVE7Fö6²ææÖWÓÂöƒ#àĞ “Ç7â6Æ74æÖSÒ'&÷VæFVBÖgVÆÂ&r×6V6öæF'’‚Ó"’ÓFW‡BÕ³…ÒföçBÖW‡G&&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#ç·6VÆV7FVE7Fö6²çF–6¶W'ÓÂ÷7ãàĞ “ÂöF—càĞ “Ç6Æ74æÖSÒ&×BÓFW‡BÕ³…ÒföçBÖ&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#à —¶6†'BæFFòç&÷f–FW"òÊ	Î«;^Ë)‚G¶6†'BæFFç&÷f–FW'Ö¢.ÈºNÊ	ÂË
+Ø«‚¸ÛÉÛNØKÉ{«+'Ğ —¶+rÈ8Ø9ÂG¶FF7FGW7ÖĞ —·WFFVDBò+rG¶æWrFFR‡WFFVDB’çFôÆö6ÆUF–ÖU7G&–ær‚&¶òÔµ""—Ö¢"'Ğ “Â÷àĞ “ÂöF—càĞ “Æ'WGFöàĞ —G—SÒ&'WGFöâ Ğ –öä6Æ–6³×²‚’Óâfö–B6†'Bç&VfWF6‚‚—ĞĞ –6Æ74æÖSÒ&fÆW‚‚Ó’rÓ’6‡&–æ²Ó—FV×2Ö6VçFW"§W7F–g’Ö6VçFW"&÷VæFVBÖgVÆÂ&÷&FW"&÷&FW"Ö6&BÖ&÷&FW"&rÖ&6¶w&÷VæB Ğ —F—FÆSÒ.Ë
+Ø«‚È8ºÎ«:Ëš‚ Ğ “àĞ “Å&Vg&W6„7r6Æ74æÖS×¶6â‚&‚ÓBrÓB"Â6†'Bæ—4fWF6†–ærbb&æ–ÖFR×7–â"—ÒóàĞ “Âö'WGFöãàĞ “ÂöF—càĞ Ğ “ÆF—b6Æ74æÖSÒ&×BÓ2fÆW‚vÓ"÷fW&fÆ÷r×‚ÖWFò"Ó#àĞ —¶f–Æ&ÆUF–ÖVg&ÖW2æÖ‚†—FVÒ’Óâ€ “Æ'WGFöàĞ –¶W“×¶—FVÒæ¶W—ĞĞ —G—SÒ&'WGFöâ Ğ –öä6Æ–6³×²‚’Óâ°Ğ —6WEF–ÖVg&ÖR†—FVÒæ¶W’“° —6WDfVVB…µÒ“° —6WDfö7W5F–ÖR‡VæFVf–æVB“° –Æ7DfVVD¶W’æ7W'&VçBÒ"#°Ğ —×ĞĞ –6Æ74æÖS×¶6â€Ğ ’'6‡&–æ²Ó&÷VæFVB×†Â&÷&FW"‚Ó2’Ó"FW‡B×‡2föçBÖW‡G&&öÆB"ÀĞ —F–ÖVg&ÖRÓÓÒ—FVÒæ¶WĞ “ò&&÷&FW"×&–Ö'’&r×&–Ö'’FW‡B×&–Ö'’Öf÷&Vw&÷VæB Ğ “¢&&÷&FW"Ö6&BÖ&÷&FW"&rÖ&6¶w&÷VæBFW‡BÖ×WFVBÖf÷&Vw&÷VæB"ÀĞ ’—ĞĞ “àĞ —¶—FVÒæÆ&VÇĞĞ “Âö'WGFöãàĞ ’’—ĞĞ “ÂöF—càĞ Ğ “Æ'WGFöàĞ —G—SÒ&'WGFöâ Ğ –öä6Æ–6³×²‚’Óâ6WE6WGF–æw4÷Vâ‚†7W'&VçB’Óâ7W'&VçB—ĞĞ –6Æ74æÖSÒ&×BÓ2fÆW‚rÖgVÆÂ—FV×2Ö6VçFW"§W7F–g’Ö&WGvVVâ&÷VæFVBÓ'†Â&÷&FW"&÷&FW"Ö6&BÖ&÷&FW"&rÖ&6¶w&÷VæB‚Ó2’Ó"ãRFW‡BÖÆVgB Ğ “àĞ “Ç7â6Æ74æÖSÒ&–æÆ–æRÖfÆW‚—FV×2Ö6VçFW"vÓ"FW‡B×‡2föçBÖW‡G&&öÆB#àĞ “Å6WGF–æw3"6Æ74æÖSÒ&‚ÓBrÓBFW‡B×&–Ö'’"óàĞ Ë
+Ø«‚ÊxÙÂÈJØ9Ò+rËiN«şÙ[NÊ	ÀĞ “Â÷7ãàĞ —·6WGF–æw4÷VâòÄ6†Wg&öåW6Æ74æÖSÒ&‚ÓBrÓB"óâ¢Ä6†Wg&öäF÷vâ6Æ74æÖSÒ&‚ÓBrÓB"óçĞĞ “Âö'WGFöãàĞ Ğ —·6WGF–æw4÷Vâbb€Ğ “ÆF—b6Æ74æÖSÒ&×BÓ"76R×’Ó2&÷VæFVBÓ'†Â&÷&FW"&÷&FW"Ö6&BÖ&÷&FW"&rÖ&6¶w&÷VæBÓ2#àĞ —²…².Ë
+Ø«ÈJ"Â.ÈºÙ‹‚"Â.»;NÊÊxÙÂ%Ò26öç7B’æÖ‚†w&÷W’Óâ€Ğ “ÆF—b¶W“×¶w&÷WÓàĞ “Ç6Æ74æÖSÒ&Ö"Ó"FW‡BÕ³…ÒföçBÖ&Æ6²FW‡BÖ×WFVBÖf÷&Vw&÷VæB#ç¶w&÷WÓÂ÷àĞ “ÆF—b6Æ74æÖSÒ&fÆW‚fÆW‚×w&vÓ"#àĞ —´õdU$Ä•2æf–ÇFW"‚†—FVÒ’Óâ—FVÒæw&÷WÓÓÒw&÷W’æÖ‚†—FVÒ’Óâ€Ğ “Æ'WGFöàĞ –¶W“×¶—FVÒæ¶W—ĞĞ —G—SÒ&'WGFöâ Ğ –öä6Æ–6³×²‚’ÓâFövvÆT÷fW&Æ’†—FVÒæ¶W’—ĞĞ –6Æ74æÖS×¶6â€Ğ ’'&÷VæFVBÖgVÆÂ&÷&FW"‚Ó2’ÓãRFW‡BÕ³…ÒföçBÖW‡G&&öÆB"ÀĞ –÷fW&Æ—5¶—FVÒæ¶W•ĞĞ “ò&&÷&FW"×&–Ö'’&r×&–Ö'’óFW‡B×&–Ö'’ Ğ “¢&&÷&FW"Ö6&BÖ&÷&FW"&rÖ6&BFW‡BÖ×WFVBÖf÷&Vw&÷VæB"ÀĞ ’—ĞĞ “àĞ —¶÷fW&Æ—5¶—FVÒæ¶W•Òò.)É2"¢"²'×¶—FVÒæÆ&VÇĞĞ “Âö'WGFöãàĞ ’’—ĞĞ “ÂöF—càĞ “ÂöF—càĞ ’’—ĞĞ “ÂöF—càĞ ’—ĞĞ “ÂöF—càĞ Ğ “ÆF—b6Æ74æÖSÒ&Ö–âÖ‚Õ³3“…Ò&rÖ&6¶w&÷VæBó3#àĞ —¶6†'Bæ—4ÆöF–ærò€Ğ “ÆF—b6Æ74æÖSÒ&fÆW‚‚Õ³3“…Ò—FV×2Ö6VçFW"§W7F–g’Ö6VçFW"vÓ"FW‡B×6ÒföçBÖ&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#àĞ “ÄÆöFW#"6Æ74æÖSÒ&‚ÓRrÓRæ–ÖFR×7–â"óâË
+Ø«‚»h¹úÎÉŠN¸©BÊIââàĞ “ÂöF—càĞ ’’¢6†'Bæ—4W'&÷"ò€Ğ “ÆF—b6Æ74æÖSÒ&fÆW‚‚Õ³3“…ÒfÆW‚Ö6öÂ—FV×2Ö6VçFW"§W7F–g’Ö6VçFW"‚ÓbFW‡BÖ6VçFW"#àĞ “Å6†–VÆDÆW'B6Æ74æÖSÒ&‚Ó‚rÓ‚FW‡B×v&æ–ær"óàĞ “Ç6Æ74æÖSÒ&×BÓ2FW‡B×6ÒföçBÖW‡G&&öÆB#îË
+Ø«‚¸ÛÉÛNØKº[Â»h¹úÎÉŠNÊxº«¾ÙhÈ«^¸¸¸ºBãÂ÷àĞ “Ç6Æ74æÖSÒ&×BÓ'&V²Ö¶VWFW‡B×‡2ÆVF–ær×&VÆ†VBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#ç¶6†'BæW'&÷"–ç7Fæ6VöbW'&÷"ò6†'BæW'&÷"æÖW76vR¢.Ù[N¸»’È¹Î«N»H’¸ÛÉÛNØKÊ	Î«;RÉzÎ»hº[ÂÙ™^ÉÛÙYÈKÉ©Bâ'ÓÂ÷àĞ “Æ'WGFöâG—SÒ&'WGFöâ"öä6Æ–6³×²‚’Óâfö–B6†'Bç&VfWF6‚‚—Ò6Æ74æÖSÒ&×BÓB&÷VæFVBÖgVÆÂ&r×&–Ö'’‚ÓB’Ó"FW‡B×‡2föçBÖW‡G&&öÆBFW‡B×&–Ö'’Öf÷&Vw&÷VæB#î¸ºNÈ¹ÂÈ¹Î¸øCÂö'WGFöãàĞ “ÂöF—càĞ ’’¢6æFÆW2æÆVæwF‚Â"ÇÂ6æ6†÷BÇÂ÷–æ–öâò€Ğ “ÆF—b6Æ74æÖSÒ&fÆW‚‚Õ³3“…ÒfÆW‚Ö6öÂ—FV×2Ö6VçFW"§W7F–g’Ö6VçFW"‚ÓbFW‡BÖ6VçFW"#àĞ “Ä&$6†'C26Æ74æÖSÒ&‚Ó‚rÓ‚FW‡BÖ×WFVBÖf÷&Vw&÷VæB"óàĞ “Ç6Æ74æÖSÒ&×BÓ2FW‡B×6ÒföçBÖW‡G&&öÆB#îÙÎÈ¹ÎÙZÈºNÊ	Â»H’¸ÛÉÛNØK«ÉxnÈ«^¸¸¸ºBãÂ÷àĞ “Ç6Æ74æÖSÒ&×BÓ'&V²Ö¶VWFW‡B×‡2ÆVF–ær×&VÆ†VBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#î¸ºNº[‚È¹Î«N»HÉØBÈJØ9ŞÙY«¸)‚Ê	Î«;^Ë)‚É{«+È8Ø9Îº[ÂÙ™^ÉÛÙYÈKÉ©BâÉèNÈ¹Â««*ÉØºxÎ¹:NÊxÉX®È«^¸¸¸ºBãÂ÷àĞ “ÂöF—càĞ ’’¢€Ğ “Ä6†'D6çf26æFÆW3×¶6æFÆW7ÒF–ÖVg&ÖS×·F–ÖVg&ÖWÒ÷fW&Æ—3×¶÷fW&Æ—7Ò6æ6†÷C×·6æ6†÷GÒ÷–æ–öã×¶÷–æ–öçÒ&W6WD¶W“×¶G·6VÆV7FVE7Fö6²çF–6¶W'Ó¢G·F–ÖVg&ÖWÖÒfö7W5F–ÖS×¶fö7W5F–ÖWÒóà ’—ĞĞ “ÂöF—càĞ “Â÷6V7F–öãàĞ Ğ —·6æ6†÷Bbb÷–æ–öâbb€Ğ “ÃàĞ “Ç6V7F–öâ6Æ74æÖSÒ&÷fW&fÆ÷rÖ†–FFVâ&÷VæFVBÓ7†Â&÷&FW"&÷&FW"Ö6&BÖ&÷&FW"&rÖ6&B6†F÷r×6Ò#àĞ “ÆF—b6Æ74æÖSÒ&fÆW‚—FV×2Ö6VçFW"§W7F–g’Ö&WGvVVâ&÷&FW"Ö"&÷&FW"Ö6&BÖ&÷&FW"‚ÓB’Ó2#àĞ “ÆF—b6Æ74æÖSÒ&fÆW‚—FV×2Ö6VçFW"vÓ"#àĞ “Ç7â6Æ74æÖS×¶6â‚&‚Ó"ãRrÓ"ãR&÷VæFVBÖgVÆÂ"ÂÆ—fRò&æ–ÖFR×VÇ6R&rÖFW7G'V7F—fR"¢&&rÖ×WFVBÖf÷&Vw&÷VæB"—ÒóàĞ “Æƒ"6Æ74æÖSÒ'FW‡B×6ÒföçBÖ&Æ6²#ä’Ë
+Ø«‚»hNÈIÒØ8ÉèN¹ÛÎÉÛƒÂöƒ#à “ÂöF—càĞ “Ç7â6Æ74æÖSÒ'FW‡BÕ³…ÒföçBÖW‡G&&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#çµD”ÔTe$ÔU2æf–æB‚†—FVÒ’Óâ—FVÒæ¶W’ÓÓÒF–ÖVg&ÖR“òæÆ&VÇŞ»H“Â÷7ãàĞ “ÂöF—càĞ “ÆF—b6Æ74æÖSÒ&Ö‚Ö‚Ós"÷fW&fÆ÷r×’ÖWFòÓ2#àĞ —¶fVVBæÆVæwF‚ò€Ğ “ÆF—b6Æ74æÖSÒ'76R×’Ó"#àĞ —¶fVVBæÖ‚†—FVÒ’Óâ€Ğ “Æ'WGFöâG—SÒ&'WGFöâ"¶W“×¶—FVÒæ–GÒöä6Æ–6³×²‚’Óâ6WDfö7W5F–ÖR†—FVÒææÇ—6—2çö–çG5³ÓòçF–ÖR—Ò6Æ74æÖSÒ&w&–BrÖgVÆÂw&–BÖ6öÇ2Õ³s…öÖ–æÖ‚ƒÃg"•ÒvÓ"&÷VæFVBÓ'†Â&rÖ&6¶w&÷VæB‚Ó2’Ó2FW‡BÖÆVgBfö7W2×f—6–&ÆS¦÷WFÆ–æRÖæöæRfö7W2×f—6–&ÆS§&–ærÓ"fö7W2×f—6–&ÆS§&–ær×&–Ö'’#à “ÇF–ÖR6Æ74æÖSÒ'FW‡BÕ³…ÒföçBÖ&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#ç¶—FVÒæBçFôÆö6ÆUF–ÖU7G&–ær‚&¶òÔµ""Â²†÷W#¢#"ÖF–v—B"ÂÖ–çWFS¢#"ÖF–v—B"Â6V6öæC¢#"ÖF–v—B"Ò—ÓÂ÷F–ÖSàĞ “ÆF—càĞ “Ç7â6Æ74æÖS×¶6â‚&–æÆ–æRÖfÆW‚&÷VæFVBÖgVÆÂ&÷&FW"‚Ó"’ÓãRFW‡BÕ³—…ÒföçBÖ&Æ6²"Â6–væÄ6Æ72†—FVÒç6–væÂ’—Óç¶—FVÒç7FGW7Ò+r·6–væÄÆ&VÂ†—FVÒç6–væÂ—ÓÂ÷7ãà “Ç6Æ74æÖSÒ&×BÓãR'&V²Ö¶VWFW‡BÕ³…ÒföçBÖ&öÆBÆVF–ærÓRFW‡BÖf÷&Vw&÷VæB#ç¶—FVÒçFW‡GÓÂ÷àĞ “ÂöF—càĞ “Âö'WGFöãà ’’—ĞĞ “ÂöF—càĞ ’’¢€Ğ “Ç6Æ74æÖSÒ'&÷VæFVBÓ'†Â&rÖ&6¶w&÷VæB‚Ó2’ÓRFW‡BÖ6VçFW"FW‡B×‡2föçBÖ&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#îÈ8‚»H«;Â»hNÈIÒÈºÙ‹º[Â«‹¸ºNºjÎ¸©BÊIÉè^¸¸¸ºBãÂ÷àĞ ’—ĞĞ “ÂöF—càĞ “Â÷6V7F–öãàĞ Ğ “Ç6V7F–öâ6Æ74æÖSÒ'&÷VæFVBÓ7†Â&÷&FW"&÷&FW"Ö6&BÖ&÷&FW"&rÖ6&BÓB6†F÷r×6Ò#àĞ “ÆF—b6Æ74æÖSÒ&fÆW‚—FV×2×7F'B§W7F–g’Ö&WGvVVâvÓ2#àĞ “ÆF—b6Æ74æÖSÒ&Ö–â×rÓ#àĞ “Ç6Æ74æÖSÒ'FW‡BÕ³…ÒföçBÖW‡G&&öÆBFW‡B×&–Ö'’#ä’Ë
+Ø«‚»hNÈIŞ«‹Â÷à “Æƒ"6Æ74æÖSÒ&×BÓFW‡BÖÆrföçBÖ&Æ6²#ç¶÷–æ–öâçF—FÆWÓÂöƒ#àĞ “ÂöF—càĞ “ÆF—b6Æ74æÖS×¶6â‚'6‡&–æ²Ó&÷VæFVBÖgVÆÂ&÷&FW"‚Ó2’ÓãRFW‡B×‡2föçBÖ&Æ6²"Â6–væÄ6Æ72†÷–æ–öâç6–væÂ’—Óç·6–væÄÆ&VÂ†÷–æ–öâç6–væÂ—ÓÂöF—càĞ “ÂöF—càĞ Ğ “Ç6Æ74æÖSÒ&×BÓ2'&V²Ö¶VW&÷VæFVBÓ'†Â&r×6V6öæF'’ós‚Ó2’Ó2FW‡B×‡2föçBÖ&öÆBÆVF–ærÓbFW‡BÖf÷&Vw&÷VæB#ç¶÷–æ–öâç7VÖÖ'—ÓÂ÷àĞ Ğ “ÆF—b6Æ74æÖSÒ&×BÓ2w&–Bw&–BÖ6öÇ2Ó"vÓ"#àĞ “ÄÖWG&–46&B–6öã×³Ä7F—f—G’6Æ74æÖSÒ&‚ÓBrÓB"óçÒÆ&VÃÒ.ÙˆNÉêÂËiNÈK‚"fÇVS×·6æ6†÷BçG&VæGÒóàĞ “ÄÖWG&–46&B–6öã×³ÄvVvR6Æ74æÖSÒ&‚ÓBrÓB"óçÒÆ&VÃÒ.Èºº+¸øB"fÇVS×¶G¶÷–æ–öâæ6öæf–FVæ6WÒóÒóàĞ “ÄÖWG&–46&B–6öã×³ÅG&VæF–æuW6Æ74æÖSÒ&‚ÓBrÓB"óçÒÆ&VÃÒ.ÙˆNÉêÎ«"fÇVS×¶f÷&ÖE&–6R‡6æ6†÷Bæ7W'&VçE&–6RÂÖ&¶WB—ÒóàĞ “ÄÖWG&–46&B–6öã×³ÄvVvR6Æ74æÖSÒ&‚ÓBrÓB"óçÒÆ&VÃ×·6æ6†÷BæÖ&¶WDÆ&VÇÒfÇVS×·6æ6†÷BæÖ&¶WD6†ævUW&6VçBÓÒçVÆÂò'Væf–Æ&ÆR"¢G·6æ6†÷BæÖ&¶WD6†ævUW&6VçBãÒò"²"¢"'ÒG·6æ6†÷BæÖ&¶WD6†ævUW&6VçBçFôf—†VBƒ"—ÒVÒóà “ÄÖWG&–46&B–6öã×³Ä&$6†'C26Æ74æÖSÒ&‚ÓBrÓB"óçÒÆ&VÃÒ.«¹é¹ø’"fÇVS×¶G·6æ6†÷BçföÇVÖU&F–òçFôf—†VBƒ"—Ş»ÒóàĞ “ÂöF—càĞ Ğ “ÆF—b6Æ74æÖSÒ&×BÓ2w&–Bw&–BÖ6öÇ2Ó2vÓ"#àĞ “ÅÆä6&BFöæSÒ&VçG'’"Æ&VÃÒ.ÊxNÉèR«‹ÊH"fÇVS×¶f÷&ÖE&–6R†÷–æ–öâæVçG'•&–6RÂÖ&¶WB—ÒóàĞ “ÅÆä6&BFöæSÒ'F&vWB"Æ&VÃÒ.ºªÙÎ«"fÇVS×¶f÷&ÖE&–6R†÷–æ–öâçF&vWE&–6RÂÖ&¶WB—ÒóàĞ “ÅÆä6&BFöæSÒ'7F÷"Æ&VÃÒ.ÈiÊ‚«‹ÊH"fÇVS×¶f÷&ÖE&–6R†÷–æ–öâç7F÷&–6RÂÖ&¶WB—ÒóàĞ “ÂöF—càĞ Ğ “ÆF—b6Æ74æÖSÒ&×BÓ2w&–Bw&–BÖ6öÇ2Ó"vÓ"#àĞ “ÄÆWfVÄ6&BÆ&VÃÒ#Ë
+‚ÊÙZÒ"fÇVS×¶f÷&ÖE&–6R‡6æ6†÷BæÆWfVÇ2ç&W6—7Fæ6SÂÖ&¶WB—ÒFöæSÒ'&W6—7Fæ6R"óàĞ “ÄÆWfVÄ6&BÆ&VÃÒ#.Ë
+‚ÊÙZÒ"fÇVS×¶f÷&ÖE&–6R‡6æ6†÷BæÆWfVÇ2ç&W6—7Fæ6S"ÂÖ&¶WB—ÒFöæSÒ'&W6—7Fæ6R"óàĞ “ÄÆWfVÄ6&BÆ&VÃÒ#Ë
+‚ÊxÊx"fÇVS×¶f÷&ÖE&–6R‡6æ6†÷BæÆWfVÇ2ç7W÷'CÂÖ&¶WB—ÒFöæSÒ'7W÷'B"óàĞ “ÄÆWfVÄ6&BÆ&VÃÒ#.Ë
+‚ÊxÊx"fÇVS×¶f÷&ÖE&–6R‡6æ6†÷BæÆWfVÇ2ç7W÷'C"ÂÖ&¶WB—ÒFöæSÒ'7W÷'B"óàĞ “ÂöF—càĞ Ğ “ÆF—b6Æ74æÖSÒ&×BÓ2w&–Bw&–BÖ6öÇ2Ó2vÓ"#àĞ —¶÷fW&Æ—2ç'6’bbÅ6ÖÆÄ–æF–6F÷"Æ&VÃÒ%%4’"fÇVS×·6æ6†÷Bç'6’ÓÒçVÆÂò"Ò"¢6æ6†÷Bç'6’çFôf—†VBƒ—ÒóçĞĞ —¶÷fW&Æ—2æÖ6BbbÅ6ÖÆÄ–æF–6F÷"Æ&VÃÒ$Ô4B"fÇVS×·6æ6†÷BæÖ6BÓÒçVÆÂò"Ò"¢6æ6†÷BæÖ6BçFôf—†VBƒ2—ÒóçĞĞ —¶÷fW&Æ—2æG"bbÅ6ÖÆÄ–æF–6F÷"Æ&VÃÒ$E""fÇVS×¶f÷&ÖE&–6R‡6æ6†÷BæG"ÂÖ&¶WB—ÒóçĞĞ —·6æ6†÷BçGFW&ç2æÖ‚‡GFW&â’ÓâÅ6ÖÆÄ–æF–6F÷"¶W“×·GFW&çÒÆ&VÃÒ.Ë
+Ø«ØÊØKB"fÇVS×·GFW&çÒóâ—ĞĞ “ÂöF—càĞ “Â÷6V7F–öãàĞ “ÂóàĞ ’—ĞĞ Ğ “Ç6Æ74æÖSÒ'‚ÓFW‡BÕ³…ÒföçB×6VÖ–&öÆBÆVF–ærÓBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#àĞ ”’Ë
+Ø«‚»hNÈIŞ«‹¸©BÈºNÊ	ÂÈ¹ÎÈKŒ+~»H’¸ÛÉÛNØKº[Â$U5B«ÈºÉËÎºÂ»hNÈIŞÙY¸©B»;NÊ«‹¸ª^Éè^¸¸¸ºBâ«;^«ˆÉé«Ë©N¹:BÉ˜Nº8ÂÉzÎ»hº[ÂÊ	Î«;^ÙYÊxÉX®ÉËÎº›Bf÷&Ö–æ~ÉËÎºÂÙÎÈ¹ÎÙZ¸¸¸ºBâ»hNÈIÒºË«ZÎ¸©BÊ;ÎºË‚ÈºNÙhÉÛBÉXN¸¸º›Éé¸ùºzNºzBÊ;ÎºË‚«‹¸ª^«;Â»hNºjÎ¹	ÉkBÉèÈ«^¸¸¸ºBà “Â÷àĞ “ÂöF—càĞ ’“°Ğ§ĞĞ Ğ¦gVæ7F–öâÖWG&–46&B‡²–6öâÂÆ&VÂÂfÇVRÓ¢²–6öã¢&V7DæöFS²Æ&VÃ¢7G&–æs²fÇVS¢7G&–ærÒ’°Ğ —&WGW&â€Ğ “ÆF—b6Æ74æÖSÒ'&÷VæFVBÓ'†Â&÷&FW"&÷&FW"Ö6&BÖ&÷&FW"&rÖ&6¶w&÷VæBÓ2#àĞ “ÆF—b6Æ74æÖSÒ&fÆW‚—FV×2Ö6VçFW"vÓãRFW‡B×&–Ö'’#ç¶–6öçÓÇ7â6Æ74æÖSÒ'FW‡BÕ³…ÒföçBÖW‡G&&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#ç¶Æ&VÇÓÂ÷7ããÂöF—càĞ “Ç6Æ74æÖSÒ&×BÓ"FW‡B×6ÒföçBÖ&Æ6²#ç·fÇVWÓÂ÷àĞ “ÂöF—càĞ ’“°Ğ§ĞĞ Ğ¦gVæ7F–öâÆä6&B‡²FöæRÂÆ&VÂÂfÇVRÓ¢²FöæS¢&VçG'’"Â'F&vWB"Â'7F÷#²Æ&VÃ¢7G&–æs²fÇVS¢7G&–ærÒ’°Ğ –6öç7B–6öâÒFöæRÓÓÒ&VçG'’"òG&VæF–æuW¢FöæRÓÓÒ'F&vWB"òF&vWB¢G&VæF–ætF÷vã°Ğ —&WGW&â€Ğ “ÆF—b6Æ74æÖS×¶6â‚'&÷VæFVBÓ'†Â&÷&FW"Ó2"ÂFöæRÓÓÒ&VçG'’"ò&&÷&FW"ÖFW7G'V7F—fRó#&rÖFW7G'V7F—fRóR"¢FöæRÓÓÒ'F&vWB"ò&&÷&FW"×v&æ–æró#&r×v&æ–æróR"¢&&÷&FW"Ö&ÇVRÓSó#&rÖ&ÇVRÓSóR"—ÓàĞ “Ä–6öâ6Æ74æÖS×¶6â‚&‚ÓBrÓB"ÂFöæRÓÓÒ&VçG'’"ò'FW‡BÖFW7G'V7F—fR"¢FöæRÓÓÒ'F&vWB"ò'FW‡B×v&æ–ær"¢'FW‡BÖ&ÇVRÓS"—ÒóàĞ “Ç6Æ74æÖSÒ&×BÓ"FW‡BÕ³…ÒföçBÖW‡G&&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#ç¶Æ&VÇÓÂ÷àĞ “Ç6Æ74æÖSÒ&×BÓ'&V²Ö¶VWFW‡B×‡2föçBÖ&Æ6²#ç·fÇVWÓÂ÷àĞ “ÂöF—càĞ ’“°Ğ§ĞĞ Ğ¦gVæ7F–öâÆWfVÄ6&B‡²Æ&VÂÂfÇVRÂFöæRÓ¢²Æ&VÃ¢7G&–æs²fÇVS¢7G&–æs²FöæS¢'7W÷'B"Â'&W6—7Fæ6R"Ò’°Ğ —&WGW&â€Ğ “ÆF—b6Æ74æÖSÒ&fÆW‚—FV×2Ö6VçFW"§W7F–g’Ö&WGvVVâvÓ"&÷VæFVBÓ'†Â&÷&FW"&÷&FW"Ö6&BÖ&÷&FW"&rÖ&6¶w&÷VæB‚Ó2’Ó"ãR#àĞ “Ç7â6Æ74æÖS×¶6â‚'FW‡BÕ³…ÒföçBÖW‡G&&öÆB"ÂFöæRÓÓÒ'7W÷'B"ò'FW‡BÖ&ÇVRÓS"¢'FW‡BÖFW7G'V7F—fR"—Óç¶Æ&VÇÓÂ÷7ãàĞ “Ç7G&öær6Æ74æÖSÒ'FW‡B×‡2#ç·fÇVWÓÂ÷7G&öæsàĞ “ÂöF—càĞ ’“°Ğ§ĞĞ Ğ¦gVæ7F–öâ6ÖÆÄ–æF–6F÷"‡²Æ&VÂÂfÇVRÓ¢²Æ&VÃ¢7G&–æs²fÇVS¢7G&–ærÒ’°Ğ —&WGW&â€Ğ “ÆF—b6Æ74æÖSÒ'&÷VæFVBÓ'†Â&r×6V6öæF'’ós‚Ó2’Ó"ãRFW‡BÖ6VçFW"#àĞ “Ç6Æ74æÖSÒ'FW‡BÕ³…ÒföçBÖW‡G&&öÆBFW‡BÖ×WFVBÖf÷&Vw&÷VæB#ç¶Æ&VÇÓÂ÷àĞ “Ç6Æ74æÖSÒ&×BÓFW‡B×‡2föçBÖ&Æ6²#ç·fÇVWÓÂ÷àĞ “ÂöF—càĞ ’“°Ğ§Ğ 

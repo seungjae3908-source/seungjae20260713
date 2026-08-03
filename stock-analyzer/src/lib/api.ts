@@ -499,12 +499,22 @@ export interface ScanCard {
   matchCount: number;
   selectedCount: number;
   assetType?: AssetType;
+  riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH' | 'UNAVAILABLE';
+  riskScore?: number | null;
+  liquidity?: number | null;
+  marketCap?: number | null;
+  dataState?: 'ok' | 'unavailable' | 'insufficient' | 'delayed' | 'stale';
+  analyzedAt?: string;
+  scoreBreakdown?: Record<string, { score: number | null; status: 'ok' | 'unavailable' | 'insufficient' | 'delayed' | 'stale'; reasons: string[] }>;
 }
 
 export interface ScanResult {
   cards: ScanCard[];
   selected: string[];
   supportedIndicators?: string[];
+  fetchedAt?: string;
+  searchRunId?: string;
+  timeframe?: string;
 }
 
 export interface Movers {
@@ -766,7 +776,7 @@ export const api = {
   scan: (
     indicators: string[],
     market: string,
-    opts?: { volumeThreshold?: number; tradingValueThreshold?: number },
+    opts?: { volumeThreshold?: number; tradingValueThreshold?: number; marketCapThreshold?: number; minimumScore?: number; maximumRiskScore?: number; volumeLookbackDays?: number; tradingValueLookbackDays?: number; timeframe?: string },
   ) => {
     const params = new URLSearchParams({
       indicators: indicators.join(','),
@@ -776,6 +786,15 @@ export const api = {
       params.set('volumeThreshold', String(opts.volumeThreshold));
     if (opts?.tradingValueThreshold != null)
       params.set('tradingValueThreshold', String(opts.tradingValueThreshold));
+    if (opts?.marketCapThreshold != null)
+      params.set('marketCapThreshold', String(opts.marketCapThreshold));
+    if (opts?.minimumScore != null) params.set('minimumScore', String(opts.minimumScore));
+    if (opts?.maximumRiskScore != null) params.set('maximumRiskScore', String(opts.maximumRiskScore));
+    if (opts?.volumeLookbackDays != null)
+      params.set('volumeLookbackDays', String(opts.volumeLookbackDays));
+    if (opts?.tradingValueLookbackDays != null)
+      params.set('tradingValueLookbackDays', String(opts.tradingValueLookbackDays));
+    if (opts?.timeframe) params.set('timeframe', opts.timeframe);
     return apiGet<ScanResult>(`/market/scan?${params.toString()}`);
   },
 
