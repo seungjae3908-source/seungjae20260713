@@ -143,13 +143,21 @@ function RootRouter() {
     {phase7E2EEnabled ? <Route path="/__phase7-journal-sync-e2e" component={Phase7JournalSyncE2EPage} /> : null}
     {phase8E2EEnabled ? <Route path="/__phase8-release-candidate-e2e" component={Phase8ReleaseCandidateE2EPage} /> : null}
     {phase9E2EEnabled ? <Route path="/__phase9-ai-review-e2e" component={Phase9AiReviewE2EPage} /> : null}
-    {phase11E2EEnabled ? <Route path="/__phase11-ai-workspace-e2e" component={ScannerPage} /> : null}
+    {phase11E2EEnabled ? <Route path="/__phase11-ai-workspace-e2e" component={ScannerRoute} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
-    {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartPage} /> : null}
+    {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
     <Route path="/install" component={InstallPage} />
     <Route component={AuthenticatedApp} />
   </Switch></Suspense>;
+}
+
+function ScannerRoute() {
+  return <ScannerPage />;
+}
+
+function AiChartRoute() {
+  return <AiChartPage />;
 }
 
 function AuthenticatedApp() {
