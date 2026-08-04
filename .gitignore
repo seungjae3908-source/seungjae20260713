@@ -24,3 +24,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.backup-*
+
+# Browser test artifacts
+stock-analyzer/playwright-report/
+stock-analyzer/test-results/
