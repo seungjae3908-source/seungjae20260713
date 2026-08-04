@@ -8,6 +8,7 @@ import { enforceMemberTradingPolicy, resumeMemberTradingPolicy } from '../servic
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import type {
   TradingExchange,
+  TradingPlan,
   TradingPlanInput,
   TradingPlanRevalidationInput,
 } from '../services/trade-automation.types';
@@ -49,6 +50,11 @@ function errorResponse(res: Response, error: unknown) {
     : code.includes('NOT_FOUND') ? 404
       : code.includes('STORAGE') || code.includes('MASTER_KEY') ? 503 : 400;
   return res.status(status).json({ ok: false, error: code, secretExposed: false, orderSubmitted: false });
+}
+
+function safePlanView(plan: TradingPlan) {
+  const { userId: _userId, idempotencyKey: _idempotencyKey, ...safe } = plan;
+  return { ...safe, internalIdentityExposed: false };
 }
 
 router.get('/status', async (req: AuthenticatedRequest, res) => {
@@ -136,6 +142,21 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
   } catch (error) { return errorResponse(res, error); }
 });
 
+router.get('/plans', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const requestedState = typeof req.query.state === 'string' ? req.query.state.trim() : '';
+    const plans = await repository.listPlans(userId);
+    const filtered = requestedState ? plans.filter((plan) => plan.state === requestedState) : plans;
+    return res.json({
+      ok: true,
+      plans: filtered.slice(0, 100).map(safePlanView),
+      internalIdentityExposed: false,
+      actualOrderSubmittedByListRequest: false,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
 router.post('/plans', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository, automation } = context(req);
@@ -157,9 +178,9 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
       const submitted = await automation.beginAutomaticPlan(userId, result.plan.id);
       const { order, duplicate } = await automation.createOrder(userId, submitted);
       const executed = await new TradeExecutionService(repository).execute(userId, submitted, order);
-      return res.json({ ok: true, plan: submitted, order: executed, duplicate: result.duplicate || duplicate });
+      return res.json({ ok: true, plan: safePlanView(submitted), order: executed, duplicate: result.duplicate || duplicate });
     }
-    return res.json({ ok: true, plan: result.plan, duplicate: result.duplicate, orderSubmitted: false });
+    return res.json({ ok: true, plan: safePlanView(result.plan), duplicate: result.duplicate, orderSubmitted: false });
   } catch (error) { return errorResponse(res, error); }
 });
 
@@ -171,7 +192,7 @@ router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
     const plan = await automation.approvePlan(userId, String(req.params.id), revalidation);
     const { order, duplicate } = await automation.createOrder(userId, plan);
     const result = duplicate ? order : await execution.execute(userId, plan, order);
-    return res.json({ ok: true, plan, order: result, duplicate });
+    return res.json({ ok: true, plan: safePlanView(plan), order: result, duplicate });
   } catch (error) { return errorResponse(res, error); }
 });
 
@@ -181,7 +202,7 @@ router.post('/plans/:id/invalidate', async (req: AuthenticatedRequest, res) => {
     const result = await automation.invalidatePlan(userId, String(req.params.id));
     const order = result.order?.state === 'CANCEL_REQUESTED'
       ? await execution.cancel(userId, result.plan, result.order) : result.order;
-    return res.json({ ok: true, ...result, order, immediateMarketLiquidation: false, additionalApprovalRequired: true });
+    return res.json({ ok: true, plan: safePlanView(result.plan), order, filledQuantityPreserved: result.filledQuantityPreserved, immediateMarketLiquidation: false, additionalApprovalRequired: true });
   } catch (error) { return errorResponse(res, error); }
 });
 
