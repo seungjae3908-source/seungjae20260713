@@ -49,7 +49,8 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const [location, navigate] = useLocation();
   const state = useAnalysisSelection();
   const selectSelection = state.select;
-  const search = location.includes('?') ? location.slice(location.indexOf('?')) : '';
+  const browserSearch = typeof window === 'undefined' ? '' : window.location.search;
+  const search = location.includes('?') ? location.slice(location.indexOf('?')) : browserSearch;
   const externalMode = useMemo(() => isExternalChartSearch(search), [search]);
   const externalSyncId = useMemo(() => chartSyncIdFromSearch(search), [search]);
   const fromUrl = useMemo(() => selectionFromSearch(search), [search]);
@@ -158,8 +159,8 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       publishSelection(merged);
     }
     const nextLocation = buildChartPath(merged, externalMode ? syncSessionIdRef.current : undefined);
-    if (!embedded && location !== nextLocation) navigate(nextLocation, { replace: true });
-  }, [embedded, externalMode, location, navigate, publishSelection, selectSelection, selection]);
+    if (!embedded && `${window.location.pathname}${window.location.search}` !== nextLocation) navigate(nextLocation, { replace: true });
+  }, [embedded, externalMode, navigate, publishSelection, selectSelection, selection]);
 
   const openExternalWindow = useCallback(() => {
     const currentPopup = popupRef.current;
