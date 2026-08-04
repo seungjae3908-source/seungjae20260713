@@ -5,6 +5,7 @@ import base64
 import binascii
 import gzip
 import json
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -37,37 +38,59 @@ def decode_payload(encoded: str) -> dict[str, str] | None:
     return payload
 
 
+def remove_positions(value: str, positions: tuple[int, ...]) -> str:
+    blocked = set(positions)
+    return "".join(char for index, char in enumerate(value) if index not in blocked)
+
+
+def boundary_groups(parts: list[str], radius: int) -> list[tuple[int, ...]]:
+    groups: list[tuple[int, ...]] = []
+    offset = 0
+    total = sum(len(part) for part in parts)
+    for part in parts[:-1]:
+        offset += len(part)
+        start = max(0, offset - radius)
+        end = min(total, offset + radius + 1)
+        groups.append(tuple(range(start, end)))
+    return groups
+
+
 def recover_payload(parts: list[str]) -> tuple[dict[str, str], str]:
     encoded = "".join(parts)
     direct = decode_payload(encoded)
     if direct is not None:
         return direct, "direct"
 
-    # The publication transport introduced exactly one duplicated base64 character
-    # at a manually split chunk boundary. Search only boundary neighborhoods and
-    # require a valid gzip stream, strict JSON, and the exact expected file set.
-    if len(encoded) % 4 != 1:
+    excess = len(encoded) % 4
+    if excess not in {1, 2}:
         raise RuntimeError(
-            f"Prompt Compiler payload length is invalid and not single-character recoverable: {len(encoded)}"
+            f"Prompt Compiler payload length is not boundary-recoverable: {len(encoded)}"
         )
-    boundaries: list[int] = []
-    offset = 0
-    for part in parts[:-1]:
-        offset += len(part)
-        boundaries.append(offset)
-    candidate_positions: set[int] = set()
-    for boundary in boundaries:
-        start = max(0, boundary - 256)
-        end = min(len(encoded), boundary + 256)
-        candidate_positions.update(range(start, end))
-    candidate_positions.update(range(0, min(64, len(encoded))))
-    candidate_positions.update(range(max(0, len(encoded) - 64), len(encoded)))
 
-    for position in sorted(candidate_positions):
-        candidate = encoded[:position] + encoded[position + 1 :]
-        payload = decode_payload(candidate)
-        if payload is not None:
-            return payload, f"removed_duplicate_at_{position}"
+    # Manual transport can duplicate one character at one or two chunk joins.
+    # Search compact boundary neighborhoods only. A candidate is accepted only
+    # when gzip, UTF-8, strict JSON, and the exact expected file set all verify.
+    for radius in (2, 4, 8, 16, 32):
+        groups = boundary_groups(parts, radius)
+        if excess == 1:
+            for group_index, group in enumerate(groups):
+                for position in group:
+                    payload = decode_payload(remove_positions(encoded, (position,)))
+                    if payload is not None:
+                        return payload, f"removed_duplicate_boundary_{group_index}_at_{position}"
+            continue
+
+        for first_group, second_group in combinations(range(len(groups)), 2):
+            for first_position in groups[first_group]:
+                for second_position in groups[second_group]:
+                    positions = tuple(sorted((first_position, second_position)))
+                    payload = decode_payload(remove_positions(encoded, positions))
+                    if payload is not None:
+                        return payload, (
+                            "removed_duplicates_"
+                            f"boundary_{first_group}_at_{positions[0]}_"
+                            f"boundary_{second_group}_at_{positions[1]}"
+                        )
     raise RuntimeError(
         "Prompt Compiler payload could not be recovered from validated chunk-boundary candidates"
     )
@@ -79,6 +102,7 @@ def main() -> int:
     parts = [path.read_text(encoding="utf-8").strip() for path in CHUNKS]
     if any(not part for part in parts):
         raise RuntimeError("Prompt Compiler payload contains an empty chunk")
+    print(json.dumps({"chunk_lengths": [len(part) for part in parts], "total": sum(map(len, parts))}))
     files, recovery = recover_payload(parts)
     for relative, content in files.items():
         target = (ROOT / relative).resolve()
