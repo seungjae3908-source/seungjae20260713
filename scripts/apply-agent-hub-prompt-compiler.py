@@ -47,9 +47,14 @@ def decode_payload(encoded: str) -> dict[str, str] | None:
     return payload
 
 
-def remove_positions(value: str, positions: tuple[int, ...]) -> str:
-    blocked = set(positions)
-    return "".join(char for index, char in enumerate(value) if index not in blocked)
+def remove_one(value: str, position: int) -> str:
+    return value[:position] + value[position + 1 :]
+
+
+def remove_two(value: str, first: int, second: int) -> str:
+    if first > second:
+        first, second = second, first
+    return value[:first] + value[first + 1 : second] + value[second + 1 :]
 
 
 def boundary_groups(parts: list[str], radius: int) -> list[tuple[int, ...]]:
@@ -76,29 +81,35 @@ def recover_payload(parts: list[str]) -> tuple[dict[str, str], str]:
             f"Prompt Compiler payload length is not boundary-recoverable: {len(encoded)}"
         )
 
-    # Manual transport can duplicate one character at one or two chunk joins.
-    # Search compact boundary neighborhoods only. A candidate is accepted only
-    # when gzip, UTF-8, strict JSON, and the exact expected file set all verify.
-    for radius in (2, 4, 8, 16, 32):
+    # Manual transport can duplicate one or two characters at chunk joins.
+    # Try exact/small neighborhoods first, including two duplicates at one join.
+    for radius in (0, 1, 2, 4, 8, 16, 32):
         groups = boundary_groups(parts, radius)
         if excess == 1:
             for group_index, group in enumerate(groups):
                 for position in group:
-                    payload = decode_payload(remove_positions(encoded, (position,)))
+                    payload = decode_payload(remove_one(encoded, position))
                     if payload is not None:
                         return payload, f"removed_duplicate_boundary_{group_index}_at_{position}"
             continue
 
+        for group_index, group in enumerate(groups):
+            for first_position, second_position in combinations(group, 2):
+                payload = decode_payload(remove_two(encoded, first_position, second_position))
+                if payload is not None:
+                    return payload, (
+                        f"removed_duplicates_boundary_{group_index}_"
+                        f"at_{first_position}_{second_position}"
+                    )
         for first_group, second_group in combinations(range(len(groups)), 2):
             for first_position in groups[first_group]:
                 for second_position in groups[second_group]:
-                    positions = tuple(sorted((first_position, second_position)))
-                    payload = decode_payload(remove_positions(encoded, positions))
+                    payload = decode_payload(remove_two(encoded, first_position, second_position))
                     if payload is not None:
                         return payload, (
                             "removed_duplicates_"
-                            f"boundary_{first_group}_at_{positions[0]}_"
-                            f"boundary_{second_group}_at_{positions[1]}"
+                            f"boundary_{first_group}_at_{first_position}_"
+                            f"boundary_{second_group}_at_{second_position}"
                         )
     raise RuntimeError(
         "Prompt Compiler payload could not be recovered from validated chunk-boundary candidates"
@@ -111,7 +122,15 @@ def main() -> int:
     parts = [path.read_text(encoding="utf-8").strip() for path in CHUNKS]
     if any(not part for part in parts):
         raise RuntimeError("Prompt Compiler payload contains an empty chunk")
-    print(json.dumps({"chunk_lengths": [len(part) for part in parts], "total": sum(map(len, parts))}))
+    print(
+        json.dumps(
+            {
+                "chunk_lengths": [len(part) for part in parts],
+                "chunk_edges": [f"{part[:8]}...{part[-8:]}" for part in parts],
+                "total": sum(map(len, parts)),
+            }
+        )
+    )
     files, recovery = recover_payload(parts)
     for relative, content in files.items():
         target = (ROOT / relative).resolve()
