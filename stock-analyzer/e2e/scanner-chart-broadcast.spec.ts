@@ -479,7 +479,7 @@ test.describe('mobile scanner legacy ChartBroadcastPanel contract', () => {
 
     await page.getByRole('button', { name: '해외', exact: true }).click();
     await expect(page.getByRole('heading', { name: '애플', exact: true })).toBeVisible();
-    await expect(currentPrice).toContainText('3,040원');
+    await expect(currentPrice).toContainText('$3,040.00');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
     const unexpectedHttpErrors = evidence.apiHttpErrors.filter(
