@@ -51,6 +51,29 @@ def safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
     return members
 
 
+def patch_coordinator_guard() -> None:
+    path = ROOT / "scripts/agent_hub_coordinator_v2.py"
+    text = path.read_text(encoding="utf-8")
+    function_marker = "def parse_candidate(raw: str, compiled: CompiledPrompt, policy: Mapping[str, Any], report: WorkerReport) -> ProposedAction:\n"
+    model_guard = '        "stop_conditions": candidate["stop_conditions"],\n'
+    if function_marker not in text or model_guard not in text:
+        raise RuntimeError("coordinator guard patch target missing")
+    deterministic_guard = (
+        'DETERMINISTIC_STOP_CONDITIONS = (\n'
+        '    "Stop on scope violation, stale HEAD, command expiry, file ownership conflict, "\n'
+        '    "failed validation, sensitive-data detection, or any approval-required or prohibited action."\n'
+        ')\n\n\n'
+    )
+    replacement = (
+        '        # Model stop-condition prose is untrusted evidence, not policy input.\n'
+        '        # The deterministic guard prevents prompt injection and negative-context false positives.\n'
+        '        "stop_conditions": DETERMINISTIC_STOP_CONDITIONS,\n'
+    )
+    text = text.replace(function_marker, deterministic_guard + function_marker, 1)
+    text = text.replace(model_guard, replacement, 1)
+    path.write_text(text, encoding="utf-8")
+
+
 def main() -> int:
     if not PARTS or [path.name for path in PARTS] != [f".agent-hub-v2-integration.part{i:02d}" for i in range(9)]:
         raise RuntimeError("integration bundle parts missing")
@@ -60,6 +83,7 @@ def main() -> int:
     with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
         members = safe_members(archive)
         archive.extractall(ROOT, members=members, filter="data")
+    patch_coordinator_guard()
 
     run("python3", "-m", "json.tool", ".github/agent-hub/policy.json")
     run("python3", "-m", "json.tool", ".github/agent-hub/workers.json")
