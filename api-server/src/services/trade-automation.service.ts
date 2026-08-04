@@ -3,7 +3,13 @@ import { assertOrderTransition } from './trade-order-state-machine.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingRepository } from './trade-automation.repository';
 import type {
-  TradingOrder, TradingOrderEvent, TradingOrderState, TradingPlan, TradingPlanInput, TradingPolicy,
+  TradingOrder,
+  TradingOrderEvent,
+  TradingOrderState,
+  TradingPlan,
+  TradingPlanInput,
+  TradingPlanRevalidationInput,
+  TradingPolicy,
 } from './trade-automation.types';
 
 const APPROVAL_TTL_MS = 10 * 60_000;
@@ -24,6 +30,19 @@ export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
   return global && perExchange[exchange];
 }
 
+function applyRevalidation(plan: TradingPlan, revalidation: TradingPlanRevalidationInput) {
+  plan.marketSnapshot = revalidation.marketSnapshot;
+  plan.signalState = revalidation.signalState ?? plan.signalState;
+  plan.signalExpiresAt = revalidation.signalExpiresAt ?? plan.signalExpiresAt;
+  plan.entryPrice = revalidation.entryPrice ?? plan.entryPrice;
+  plan.entryZoneLow = revalidation.entryZoneLow ?? plan.entryZoneLow;
+  plan.entryZoneHigh = revalidation.entryZoneHigh ?? plan.entryZoneHigh;
+  plan.estimatedSlippagePercent = revalidation.estimatedSlippagePercent ?? plan.estimatedSlippagePercent;
+  plan.averageSpreadPercent = revalidation.averageSpreadPercent ?? plan.averageSpreadPercent;
+  plan.economics = revalidation.economics ?? plan.economics;
+  plan.updatedAt = new Date().toISOString();
+}
+
 export class TradeAutomationService {
   constructor(private repository: TradingRepository) {}
 
@@ -31,6 +50,16 @@ export class TradeAutomationService {
     return policy.emergencyStopped
       || process.env.TRADING_EMERGENCY_STOP === 'true'
       || await this.repository.getGlobalEmergencyStop();
+  }
+
+  private async recheck(userId: string, plan: TradingPlan, policy?: TradingPolicy) {
+    const currentPolicy = policy ?? await this.repository.getPolicy(userId);
+    const decision = evaluateTradingPlan(plan, currentPolicy, {
+      emergencyStopped: await this.emergencyStopActive(userId, currentPolicy),
+      serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
+    });
+    plan.riskAssessment = decision.optimization ?? null;
+    return decision;
   }
 
   async createPlan(userId: string, input: TradingPlanInput, policy: TradingPolicy, emergencyStopped: boolean) {
@@ -52,12 +81,13 @@ export class TradeAutomationService {
       state: approvalRequired ? 'APPROVAL_PENDING' : 'PLANNED',
       approvalExpiresAt: approvalRequired ? new Date(now.getTime() + APPROVAL_TTL_MS).toISOString() : null,
       approvedAt: null, createdAt: now.toISOString(), updatedAt: now.toISOString(),
+      riskAssessment: decision.optimization ?? null,
     };
     await this.repository.savePlan(plan);
     return { plan, duplicate: false, decision };
   }
 
-  async approvePlan(userId: string, planId: string) {
+  async approvePlan(userId: string, planId: string, revalidation?: TradingPlanRevalidationInput | null) {
     const plan = await this.repository.getPlan(userId, planId);
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
     if (plan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
@@ -66,11 +96,10 @@ export class TradeAutomationService {
       await this.repository.savePlan(plan);
       throw new Error('TRADE_PLAN_EXPIRED');
     }
+    if (plan.accountMode === 'live' && !revalidation) throw new Error('TRADE_PLAN_REVALIDATION_REQUIRED');
+    if (revalidation) applyRevalidation(plan, revalidation);
     const policy = await this.repository.getPolicy(userId);
-    const decision = evaluateTradingPlan(plan, policy, {
-      emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
-    });
+    const decision = await this.recheck(userId, plan, policy);
     if (!decision.allowed) {
       plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
       await this.repository.savePlan(plan);
@@ -86,7 +115,12 @@ export class TradeAutomationService {
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
     if (plan.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
     const policy = await this.repository.getPolicy(userId);
-    if (await this.emergencyStopActive(userId, policy)) throw new Error('EMERGENCY_STOP_ACTIVE');
+    const decision = await this.recheck(userId, plan, policy);
+    if (!decision.allowed) {
+      plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+      await this.repository.savePlan(plan);
+      throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
+    }
     plan.state = 'SUBMITTED'; plan.updatedAt = new Date().toISOString();
     await this.repository.savePlan(plan);
     return plan;
@@ -96,6 +130,8 @@ export class TradeAutomationService {
     const existing = await this.repository.findOrderByPlan(userId, plan.id);
     if (existing) return { order: existing, duplicate: true };
     if (plan.state !== 'SUBMITTED') throw new Error('TRADE_PLAN_NOT_SUBMITTED');
+    const decision = await this.recheck(userId, plan);
+    if (!decision.allowed) throw new Error(`TRADE_ORDER_FINAL_RISK_CHECK_FAILED:${decision.blockCodes.join(',')}`);
     const now = new Date().toISOString();
     const order: TradingOrder = {
       id: randomUUID(), userId, planId: plan.id, exchange: plan.exchange,
@@ -105,7 +141,13 @@ export class TradeAutomationService {
       createdAt: now, updatedAt: now,
     };
     await this.repository.saveOrder(order);
-    await this.event(order, null, 'SUBMITTED', 'ORDER_CREATED', { accountMode: plan.accountMode });
+    await this.event(order, null, 'SUBMITTED', 'ORDER_CREATED', {
+      accountMode: plan.accountMode,
+      expectedValueR: plan.riskAssessment?.expectedValueR ?? null,
+      riskBudgetKrw: plan.riskAssessment?.riskBudgetKrw ?? null,
+      maximumOrderKrw: plan.riskAssessment?.maximumOrderKrw ?? null,
+      pilotStage: plan.riskAssessment?.pilotStage ?? null,
+    });
     return { order, duplicate: false };
   }
 
