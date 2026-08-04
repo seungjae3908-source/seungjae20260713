@@ -56,6 +56,7 @@ const groups = {
   phase12: [
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
   ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
