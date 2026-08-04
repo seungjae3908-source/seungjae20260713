@@ -87,7 +87,7 @@ test('plan queue is owner scoped, redacted, filterable, and never submits an ord
   } finally { await close(server); }
 });
 
-test('concurrent plan creation and approval produce one paper order and no exchange request', async () => {
+test('concurrent plan creation and approval produce one claimed paper execution and no exchange request', async () => {
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER, normalizeTradingPolicy(DEFAULT_TRADING_POLICY));
   await repository.saveConnection({
@@ -122,11 +122,10 @@ test('concurrent plan creation and approval produce one paper order and no excha
       });
       return { status: response.status, body: await response.json() };
     }));
-    assert.deepEqual(approveResults.map((item) => item.status).sort((a, b) => a - b), [200, 400]);
-    const approved = approveResults.find((item) => item.status === 200);
-    const rejected = approveResults.find((item) => item.status === 400);
-    assert.equal(approved?.body.order.state, 'FILLED');
-    assert.equal(rejected?.body.error, 'TRADE_PLAN_NOT_APPROVAL_PENDING');
+    assert.deepEqual(approveResults.map((item) => item.status), [200, 200]);
+    assert.equal(approveResults.filter((item) => item.body.executionClaimed === true).length, 1);
+    assert.equal(approveResults.filter((item) => item.body.duplicate === true).length, 1);
+    assert.equal(approveResults.filter((item) => item.body.order.state === 'FILLED').length, 2);
 
     const orders = await repository.listOrders(USER);
     assert.equal(orders.length, 1);
