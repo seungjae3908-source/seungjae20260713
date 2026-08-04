@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { Router, type IRouter, type Response } from 'express';
 import {
   createSupabaseTradingRepository,
@@ -37,6 +38,18 @@ function context(req: AuthenticatedRequest) {
     automation: new TradeAutomationService(repository),
     execution: new TradeExecutionService(repository),
   };
+}
+
+function signalMonitorAuthorized(req: AuthenticatedRequest) {
+  const expected = String(process.env.SIGNAL_MONITOR_TOKEN ?? '').trim();
+  if (!expected) throw new Error('SIGNAL_MONITOR_NOT_CONFIGURED');
+  const provided = String(req.header('x-signal-monitor-token') ?? '').trim();
+  const expectedBuffer = Buffer.from(expected);
+  const providedBuffer = Buffer.from(provided);
+  if (expectedBuffer.length !== providedBuffer.length
+    || !timingSafeEqual(expectedBuffer, providedBuffer)) {
+    throw new Error('SIGNAL_MONITOR_UNAUTHORIZED');
+  }
 }
 
 function finiteNumber(value: unknown, code: string) {
@@ -142,9 +155,15 @@ function safeApprovalItem(
     leverage: plan.leverage ?? null,
     signalReasons: stringList(plan.signalReasons),
     signalWarnings: stringList(plan.signalWarnings),
-    signalScore: Number.isFinite(Number(plan.signalScore)) ? Number(plan.signalScore) : null,
-    signalConfidence: Number.isFinite(Number(plan.signalConfidence)) ? Number(plan.signalConfidence) : null,
-    signalRiskReward: Number.isFinite(Number(plan.signalRiskReward)) ? Number(plan.signalRiskReward) : null,
+    signalScore: plan.signalScore == null || !Number.isFinite(Number(plan.signalScore))
+      ? null
+      : Number(plan.signalScore),
+    signalConfidence: plan.signalConfidence == null || !Number.isFinite(Number(plan.signalConfidence))
+      ? null
+      : Number(plan.signalConfidence),
+    signalRiskReward: plan.signalRiskReward == null || !Number.isFinite(Number(plan.signalRiskReward))
+      ? null
+      : Number(plan.signalRiskReward),
     signalState: plan.signalState ?? 'WATCHING',
     signalInvalidationReason: plan.signalInvalidationReason ?? null,
     state: plan.state,
@@ -158,10 +177,12 @@ function safeApprovalItem(
 function errorResponse(res: Response, error: unknown) {
   const code = error instanceof Error ? error.message.split(':')[0] : 'TRADE_SIGNAL_APPROVAL_FAILED';
   const status = code === 'LOGIN_REQUIRED' ? 401
-    : code.includes('NOT_FOUND') ? 404
-      : code.includes('STORAGE') ? 503
-        : code.includes('NOT_APPROVABLE') || code.includes('EXPIRED') ? 409
-          : 400;
+    : code === 'SIGNAL_MONITOR_UNAUTHORIZED' ? 403
+      : code === 'SIGNAL_MONITOR_NOT_CONFIGURED' ? 503
+        : code.includes('NOT_FOUND') ? 404
+          : code.includes('STORAGE') ? 503
+            : code.includes('NOT_APPROVABLE') || code.includes('EXPIRED') ? 409
+              : 400;
   return res.status(status).json({
     ok: false,
     error: code,
@@ -217,6 +238,7 @@ router.get('/plans/:id/approval-status', async (req: AuthenticatedRequest, res) 
 
 router.post('/plans/:id/revalidate', async (req: AuthenticatedRequest, res) => {
   try {
+    signalMonitorAuthorized(req);
     const { userId, automation, execution } = context(req);
     const result = await automation.revalidatePlan(
       userId,
