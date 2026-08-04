@@ -78,9 +78,11 @@ router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
+// Scanner paper approvals must be intercepted before the generic exchange
+// execution route. Non-scanner plans call next() and keep the existing path.
+router.use('/trade-automation', scannerApprovalRouter);
 router.use('/trade-automation', tradeAutomationRouter);
 router.use('/trade-automation', tradeSignalApprovalRouter);
-router.use('/trade-automation', scannerApprovalRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
 router.use('/', aiChatRouter);
