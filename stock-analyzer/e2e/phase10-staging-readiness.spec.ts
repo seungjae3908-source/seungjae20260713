@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { test, expect, type Page, type TestInfo } from '@playwright/test';
+import { test, expect, type Page, type Request, type TestInfo } from '@playwright/test';
 import {
   provisionEphemeralStagingAccounts,
   type StagingAccountCredentials,
@@ -25,6 +25,7 @@ const emptyAccounts: StagingAccountCredentials = {
 };
 let accounts = emptyAccounts;
 let accountLifecycle: StagingAccountLifecycle | null = null;
+const expectedLogoutAbortPages = new WeakSet<Page>();
 
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
 const diagnostics: {
@@ -32,12 +33,37 @@ const diagnostics: {
   page_errors: Diagnostic[];
   unhandled_rejections: Diagnostic[];
   unexpected_http_errors: Diagnostic[];
+  expected_logout_aborts: Diagnostic[];
 } = {
   console_errors: [],
   page_errors: [],
   unhandled_rejections: [],
   unexpected_http_errors: [],
+  expected_logout_aborts: [],
 };
+
+function diagnosticUrl(raw: string) {
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return '[invalid-url]';
+  }
+}
+
+function isExpectedLogoutAbort(page: Page, request: Request) {
+  if (!expectedLogoutAbortPages.has(page)) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(request.url());
+  } catch {
+    return false;
+  }
+  return request.method() === 'POST'
+    && parsed.pathname === '/auth/v1/logout'
+    && parsed.searchParams.get('scope') === 'global'
+    && request.failure()?.errorText === 'net::ERR_ABORTED';
+}
 
 function recordUnhandled(testName: string, url: string, detail: string) {
   if (/unhandled|uncaught.*promise|promise rejection/i.test(detail)) {
@@ -50,28 +76,36 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
     const detail = message.text();
-    diagnostics.console_errors.push({ test: testName, url: page.url(), detail });
-    recordUnhandled(testName, page.url(), detail);
+    const url = diagnosticUrl(page.url());
+    diagnostics.console_errors.push({ test: testName, url, detail });
+    recordUnhandled(testName, url, detail);
   });
   page.on('pageerror', (error) => {
-    diagnostics.page_errors.push({ test: testName, url: page.url(), detail: error.message });
-    recordUnhandled(testName, page.url(), error.message);
+    const url = diagnosticUrl(page.url());
+    diagnostics.page_errors.push({ test: testName, url, detail: error.message });
+    recordUnhandled(testName, url, error.message);
   });
   page.on('response', (response) => {
     if (response.status() < 400) return;
     diagnostics.unexpected_http_errors.push({
       test: testName,
-      url: response.url(),
+      url: diagnosticUrl(response.url()),
       status: response.status(),
       detail: `${response.request().method()} ${response.status()} ${response.statusText()}`,
     });
   });
   page.on('requestfailed', (request) => {
+    const detail = `${request.method()} ${request.failure()?.errorText ?? 'request failed'}`;
+    const url = diagnosticUrl(request.url());
+    if (isExpectedLogoutAbort(page, request)) {
+      diagnostics.expected_logout_aborts.push({ test: testName, url, status: 0, detail });
+      return;
+    }
     diagnostics.unexpected_http_errors.push({
       test: testName,
-      url: request.url(),
+      url,
       status: 0,
-      detail: `${request.method()} ${request.failure()?.errorText ?? 'request failed'}`,
+      detail,
     });
   });
 }
@@ -97,8 +131,14 @@ async function login(page: Page, loginName: string, password: string) {
 }
 
 async function logout(page: Page) {
-  await page.getByRole('button', { name: /로그아웃|sign out/i }).click();
-  await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
+  expectedLogoutAbortPages.add(page);
+  try {
+    await page.getByRole('button', { name: /로그아웃|sign out/i }).click();
+    await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(300);
+  } finally {
+    expectedLogoutAbortPages.delete(page);
+  }
 }
 
 async function expectMembership(page: Page, label: RegExp) {
