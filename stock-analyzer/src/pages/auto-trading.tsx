@@ -1,11 +1,12 @@
 import { BottomNav } from '@/components/bottom-nav';
+import { CapabilityGate } from '@/components/capability-gate';
 import {
   TradeAutomationSettings,
   type TradeAutomationStatus,
 } from '@/components/trade-automation-settings';
 
 export default function AutoTradingPage({ fixture }: { fixture?: TradeAutomationStatus }) {
-  return (
+  const content = (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <header className="border-b border-card-border bg-background/90 px-4 pb-4 pt-5 text-center glass">
         <h1 className="text-xl font-extrabold">자동매매</h1>
@@ -21,4 +22,9 @@ export default function AutoTradingPage({ fixture }: { fixture?: TradeAutomation
       <BottomNav />
     </div>
   );
+
+  // Test fixtures exercise the isolated component without a real account.
+  // Every real user route remains protected by the administrator-only gate.
+  if (fixture) return content;
+  return <CapabilityGate capability="canPlaceOrders">{content}</CapabilityGate>;
 }
