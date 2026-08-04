@@ -45,11 +45,24 @@ jobs:
         run: python3 scripts/agent_hub_free.py --self-test
 
   model-smoke:
-    if: github.event_name == 'push' && github.event.head_commit.message == 'run free GitHub Models smoke'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout branch
+        uses: actions/checkout@v6
+
+      - name: Decide whether to run one-time model smoke
+        id: gate
+        run: |
+          if [ "$(git log -1 --pretty=%s)" = "run free GitHub Models smoke" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Call GitHub Models free inference once
+        if: steps.gate.outputs.run == 'true'
         id: models
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -105,6 +118,7 @@ jobs:
           PY
 
       - name: Record model smoke success in Agent Hub
+        if: steps.gate.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SELECTED_MODEL: ${{ steps.models.outputs.model }}
