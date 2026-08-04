@@ -86,6 +86,33 @@ router.use('/kiwoom', kiwoomRouter);
 router.use('/debug', requireAdmin, providerDebugRouter);
 router.use('/', pushRouter);
 router.use('/', watchlistRouter);
+
+// The coin special-feed provider is optional. A disconnected provider is an
+// empty, non-fatal feature state rather than a browser-visible HTTP failure.
+// This handler remains behind authentication and canAccessBasicInfo.
+router.get('/stocks/special-feed', (req, res, next) => {
+  const asset = String(req.query.asset ?? 'stock').trim().toLowerCase();
+  if (asset !== 'coin') {
+    next();
+    return;
+  }
+
+  const market = String(req.query.market ?? 'spot').trim().toLowerCase() === 'futures'
+    ? 'futures'
+    : 'spot';
+
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.status(200).json({
+    ok: false,
+    asset: 'coin',
+    market,
+    items: [],
+    count: 0,
+    updatedAt: new Date().toISOString(),
+    message: '코인 특이정보 피드는 아직 연결되지 않았습니다.',
+  });
+});
+
 router.use('/stocks', stocksRouter);
 router.use('/', secRouter);
 router.use('/backup', backupRouter);
