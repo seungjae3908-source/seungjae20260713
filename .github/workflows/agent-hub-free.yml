@@ -1,0 +1,63 @@
+name: Free Agent Hub
+
+on:
+  push:
+    branches:
+      - agent/free-github-agent-hub
+    paths:
+      - .github/workflows/agent-hub-free.yml
+      - scripts/agent_hub_free.py
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+concurrency:
+  group: free-agent-hub-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v6
+
+      - name: Compile processor
+        run: python3 -m py_compile scripts/agent_hub_free.py
+
+      - name: Run processor self-test
+        run: python3 scripts/agent_hub_free.py --self-test
+
+  process-report:
+    if: >-
+      github.event_name != 'push' &&
+      (
+        github.event_name != 'issue_comment' ||
+        (
+          github.event.issue.number == 62 &&
+          !github.event.issue.pull_request &&
+          contains(github.event.comment.body, '[WORKER_REPORT]') &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+
+      - name: Process latest worker report
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUB_ISSUE_NUMBER: '62'
+          AGENT_HUB_MODELS: openai/gpt-4o-mini,microsoft/Phi-4-mini-instruct
+        run: python3 scripts/agent_hub_free.py
