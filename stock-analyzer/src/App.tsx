@@ -21,6 +21,7 @@ const DetailPage = lazy(() => import('@/pages/detail'));
 const WatchlistPage = lazy(() => import('@/pages/watchlist'));
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
+const ScannerApprovalPage = lazy(() => import('@/pages/scanner-approval'));
 const StockInfoPage = lazy(() => import('@/pages/stock-info'));
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
@@ -54,6 +55,7 @@ const phase8E2EEnabled = import.meta.env.VITE_PHASE8_E2E === 'true';
 const phase9E2EEnabled = import.meta.env.VITE_PHASE9_E2E === 'true';
 const phase11E2EEnabled = import.meta.env.VITE_PHASE11_E2E === 'true';
 const phase12E2EEnabled = import.meta.env.VITE_PHASE12_E2E === 'true';
+const scannerApprovalE2EEnabled = import.meta.env.VITE_SCANNER_APPROVAL_E2E === 'true';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
@@ -78,7 +80,7 @@ function CryptoDetailRedirect() {
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-  const wide = location.startsWith('/scanner') || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
+  const wide = (location.startsWith('/scanner') && !location.startsWith('/scanner-approval')) || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
   return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
 }
 
@@ -87,6 +89,7 @@ function gated(capability: MemberCapability, child: React.ReactNode) {
 }
 
 function ScannerAccess() { return gated('canAccessRiskPreview', <TechnicalWorkspacePage />); }
+function ScannerApprovalAccess() { return gated('canAccessPaperTrading', <ScannerApprovalPage />); }
 function AiChartAccess() { return gated('canAccessRiskPreview', <AiChartPage />); }
 function AiChatAccess() { return gated('canAccessBasicInfo', <AiChatPage />); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
@@ -110,6 +113,7 @@ function ApprovedRouter() {
     <Route path="/home" component={HomePage} />
     <Route path="/stocks" component={StocksPage} />
     <Route path="/auto-trading" component={ScannerAccess} />
+    <Route path="/scanner-approval" component={ScannerApprovalAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
     <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
@@ -149,6 +153,7 @@ function RootRouter() {
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
+    {scannerApprovalE2EEnabled ? <Route path="/__scanner-approval-e2e" component={ScannerApprovalPage} /> : null}
     {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
     <Route path="/login" component={AccountPage} />
     <Route path="/install" component={InstallPage} />
