@@ -156,6 +156,31 @@ test('creates a server-verified KR paper approval plan and clamps investment to 
   assert.match(result.plan.signalReasons.join(' '), /서버 재계산 AI 점수 84/);
 });
 
+test('re-entry in the same idempotency bucket creates a new signal and approval plan id', async () => {
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    totalCapitalKrw: 1_000_000,
+    maxOrderKrw: 500_000,
+    maxAssetPercent: 30,
+  }));
+  const service = new ScannerApprovalPlanService(repository, dependencies());
+  const first = await service.createPaperPlan(USER, request());
+  first.plan.state = 'EXPIRED';
+  first.plan.signalState = 'INVALIDATED';
+  first.plan.signalInvalidationReason = 'SCANNER_AND_CONDITIONS_NOT_MAINTAINED';
+  first.plan.updatedAt = new Date(NOW.getTime() + 1).toISOString();
+  await repository.savePlan(first.plan);
+
+  const reentered = await service.createPaperPlan(USER, request());
+  assert.equal(reentered.duplicate, false);
+  assert.notEqual(reentered.plan.id, first.plan.id);
+  assert.notEqual(reentered.plan.signalId, first.plan.signalId);
+  assert.equal(reentered.plan.signalId, `${first.plan.signalId}:reentry:2`);
+  assert.equal(reentered.plan.state, 'APPROVAL_PENDING');
+  assert.equal(reentered.approval?.approvalEnabled, true);
+});
+
 test('requires strict AND match and blocks missing, stale, or high-risk scanner results', async () => {
   const cases = [
     { card: { missing: ['5일선 돌파'], matched: ['거래량 증가'] }, error: /SCANNER_AND_CONDITIONS_NOT_MAINTAINED/ },
