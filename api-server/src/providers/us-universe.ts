@@ -1,8 +1,6 @@
 import { type CatalogEntry } from '../data/catalog';
 import {
 	classifyAssetType,
-	isInverse,
-	isLeveraged,
 	type AssetType,
 } from '../data/asset-type';
 
@@ -60,26 +58,22 @@ function normalizeExchange(mic?: string): UsUniverseEntry['exchange'] {
 }
 
 function cleanTicker(symbol?: string): string {
-	return (symbol ?? '').trim().toUpperCase();
+	return (symbol ?? '').normalize('NFKC').trim().toUpperCase();
 }
 
 function cleanName(row: FinnhubSymbolRow): string {
 	return (
-		row.description?.trim() ||
-		row.displaySymbol?.trim() ||
-		row.symbol?.trim() ||
+		row.description?.normalize('NFKC').trim() ||
+		row.displaySymbol?.normalize('NFKC').trim() ||
+		row.symbol?.normalize('NFKC').trim() ||
 		''
 	);
 }
 
 function isProbablyTradableSymbol(ticker: string): boolean {
-	if (!ticker) return false;
-	if (ticker.length > 8) return false;
-	if (ticker.includes('.')) return false;
-	if (ticker.includes('/')) return false;
-	if (ticker.includes(' ')) return false;
-
-	return /^[A-Z]+$/.test(ticker);
+	if (!ticker || ticker.length > 15) return false;
+	if (ticker.includes('/') || ticker.includes(' ')) return false;
+	return /^[A-Z0-9]+(?:[.-][A-Z0-9]+)*$/.test(ticker);
 }
 
 function detectAssetType(row: FinnhubSymbolRow): AssetType {
@@ -146,28 +140,33 @@ export async function getUsUniverse(): Promise<UsUniverseEntry[]> {
 		return cache.rows;
 	}
 
+	const lastGoodRows = cache?.rows ?? [];
 	const token = finnhubKey();
 
 	if (!token) {
 		console.error('[us-universe] Missing FINNHUB_API_KEY');
-		return [];
+		return lastGoodRows;
 	}
 
-	const url = `${BASE}/stock/symbol?exchange=US&token=${encodeURIComponent(
-		token,
-	)}`;
+	const url = `${BASE}/stock/symbol?exchange=US&token=${encodeURIComponent(token)}`;
 
-	const res = await fetch(url);
+	let res: Response;
+	try {
+		res = await fetch(url);
+	} catch (error) {
+		console.error('[us-universe] Finnhub request failed:', error);
+		return lastGoodRows;
+	}
 
 	if (!res.ok) {
 		console.error('[us-universe] Finnhub failed:', res.status, res.statusText);
-		return [];
+		return lastGoodRows;
 	}
 
 	const json = (await res.json()) as unknown;
 
 	if (!Array.isArray(json)) {
-		return [];
+		return lastGoodRows;
 	}
 
 	const seen = new Set<string>();
@@ -176,7 +175,10 @@ export async function getUsUniverse(): Promise<UsUniverseEntry[]> {
 	for (const row of json as FinnhubSymbolRow[]) {
 		const ticker = cleanTicker(row.symbol);
 		if (!isProbablyTradableSymbol(ticker)) continue;
-		if (seen.has(ticker)) continue;
+
+		const exchange = normalizeExchange(row.mic);
+		const uniqueKey = `${exchange}:${ticker}`;
+		if (seen.has(uniqueKey)) continue;
 
 		const name = cleanName(row);
 		if (!name) continue;
@@ -184,7 +186,7 @@ export async function getUsUniverse(): Promise<UsUniverseEntry[]> {
 		const assetType = detectAssetType(row);
 		if (!allowedAssetType(assetType)) continue;
 
-		seen.add(ticker);
+		seen.add(uniqueKey);
 
 		rows.push({
 			ticker,
@@ -192,7 +194,7 @@ export async function getUsUniverse(): Promise<UsUniverseEntry[]> {
 			market: 'US',
 			currency: 'USD',
 			assetType,
-			exchange: normalizeExchange(row.mic),
+			exchange,
 			rawType: row.type ?? '',
 		});
 	}
@@ -200,9 +202,10 @@ export async function getUsUniverse(): Promise<UsUniverseEntry[]> {
 	rows.sort((a, b) => {
 		const ex = a.exchange.localeCompare(b.exchange);
 		if (ex !== 0) return ex;
-
 		return a.ticker.localeCompare(b.ticker);
 	});
+
+	if (rows.length === 0) return lastGoodRows;
 
 	cache = {
 		at: Date.now(),
