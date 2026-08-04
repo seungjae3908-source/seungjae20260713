@@ -50,6 +50,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Call GitHub Models free inference once
+        id: models
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -93,6 +94,8 @@ jobs:
                   content = data['choices'][0]['message']['content'].strip()
                   if 'AGENT_HUB_MODELS_OK' not in content:
                       raise RuntimeError(f'unexpected model response: {content[:200]}')
+                  with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+                      output.write(f'model={model}\n')
                   print(json.dumps({'status': 'success', 'model': model}))
                   break
               except (HTTPError, KeyError, IndexError, RuntimeError) as exc:
@@ -100,6 +103,19 @@ jobs:
           else:
               raise SystemExit('all model smoke attempts failed: ' + ' | '.join(errors))
           PY
+
+      - name: Record model smoke success in Agent Hub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SELECTED_MODEL: ${{ steps.models.outputs.model }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/issues/62/comments" \
+            -f body="[AGENT_HUB_SMOKE]
+          status: success
+          provider: GitHub Models free inference
+          model: ${SELECTED_MODEL}
+          commit: ${GITHUB_SHA}
+          safety: no repository write, merge, deploy, deletion, permission change, or live order"
 
   process-report:
     if: >-
