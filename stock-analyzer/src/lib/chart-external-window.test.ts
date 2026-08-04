@@ -49,11 +49,11 @@ test('chart window messages reject malformed or unsupported payloads', () => {
   assert.equal(parseChartWindowMessage({ type: 'selection', sourceId: 'source-a', sentAt: Date.now(), selection: { market: 'UNKNOWN' } }), null);
 });
 
-test('external chart control remains desktop fine-pointer only', () => {
-  assert.equal(isDesktopChartViewport(1440, true), true);
-  assert.equal(isDesktopChartViewport(1024, true), true);
-  assert.equal(isDesktopChartViewport(1023, true), false);
-  assert.equal(isDesktopChartViewport(1440, false), false);
+test('external chart control remains desktop only without excluding touch-capable PCs', () => {
+  assert.equal(isDesktopChartViewport(1440, false), true);
+  assert.equal(isDesktopChartViewport(1024, false), true);
+  assert.equal(isDesktopChartViewport(1023, false), false);
+  assert.equal(isDesktopChartViewport(1440, true), false);
 });
 
 test('popup geometry stays inside the available desktop screen', () => {
