@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { PriceAlertCard } from '@/components/price-alert-card';
+import { StockAnalysisHub } from '@/components/stock-analysis-hub';
 import { api, apiGet, type SearchResult } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice, toggleWatchlistItem, isInWatchlist } from '@/lib/stock-display';
@@ -302,10 +303,20 @@ export default function StockInfoPage() {
 		: financeData.quarterly ?? financeData.quarters) as AnyObj[] | undefined;
 	const financeLatest = financeRows?.[0] ?? null;
 	const ratios = financeData.ratios ?? {};
-	const newsRows = groupUnique((news.data?.news ?? news.data?.items ?? []) as AnyObj[], (row) => row.title);
-	const disclosureRows = groupUnique(
-		([...(disclosures.data?.disclosures ?? []), ...(disclosures.data?.filings ?? [])]) as AnyObj[],
-		(row) => row.report ?? `${row.form ?? ''}${row.description ?? ''}`,
+	const newsRows = useMemo(
+		() => groupUnique((news.data?.news ?? news.data?.items ?? []) as AnyObj[], (row) => row.title),
+		[news.data],
+	);
+	const disclosureRows = useMemo(
+		() => groupUnique(
+			([...(disclosures.data?.disclosures ?? []), ...(disclosures.data?.filings ?? [])]) as AnyObj[],
+			(row) => row.report ?? `${row.form ?? ''}${row.description ?? ''}`,
+		),
+		[disclosures.data],
+	);
+	const analysisSpecialEvents = useMemo(
+		() => (specialFeed.data?.items ?? []).filter((item) => item.ticker.toUpperCase() === ticker && item.market === market),
+		[market, specialFeed.data?.items, ticker],
 	);
 
 	return (
@@ -405,6 +416,20 @@ export default function StockInfoPage() {
 									</>
 								)}
 							</section>
+
+							<StockAnalysisHub
+								ticker={ticker}
+								name={selectedName}
+								market={market}
+								currency={currency}
+								quote={quote.data}
+								profile={profile.data}
+								financials={financials.data}
+								news={newsRows}
+								disclosures={disclosureRows}
+								specialEvents={analysisSpecialEvents}
+								loading={quote.isLoading || profile.isLoading || financials.isLoading || news.isLoading || disclosures.isLoading}
+							/>
 
 							<Section title="기본정보" state={queryStateText(quote)} onRetry={() => { void quote.refetch(); }}>
 								{quote.data && (

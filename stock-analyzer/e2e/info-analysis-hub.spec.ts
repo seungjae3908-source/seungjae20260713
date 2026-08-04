@@ -175,7 +175,6 @@ test('RGTI analysis hub explains score, events, financials, price, factors, conf
   let mode: Mode = 'balanced';
   const clean = diagnostics(page);
   await installAnalysisMocks(page, () => mode);
-  await page.addInitScript(() => localStorage.clear());
   await page.goto('/stock-info?asset=stock&market=US&ticker=RGTI');
 
   const hub = page.getByTestId('stock-analysis-hub');
@@ -203,7 +202,7 @@ test('RGTI analysis hub explains score, events, financials, price, factors, conf
   await expect(hub.getByText('왜 떨어질 수 있나?', { exact: true })).toBeVisible();
   await expect(hub.getByText('기계적 관찰 가격', { exact: true })).toBeVisible();
 
-  await hub.getByText('분석 신뢰도', { exact: true }).click();
+  await hub.locator('summary').filter({ hasText: /^분석 신뢰도/ }).click();
   await expect(hub.getByText('경쟁사 최신 정량 비교자료', { exact: true })).toBeVisible();
   clean();
 });
@@ -212,7 +211,6 @@ test('a newly confirmed development failure records the reason and lowers the ou
   let mode: Mode = 'positive';
   const clean = diagnostics(page);
   await installAnalysisMocks(page, () => mode);
-  await page.addInitScript(() => localStorage.clear());
   await page.goto('/stock-info?asset=stock&market=US&ticker=RGTI');
   const hub = page.getByTestId('stock-analysis-hub');
   await expect(hub.getByText(/공급 계약 체결/).first()).toBeVisible();
@@ -232,7 +230,6 @@ test('missing sector and financial data lowers confidence but never creates a bl
   let mode: Mode = 'missing';
   const clean = diagnostics(page);
   await installAnalysisMocks(page, () => mode);
-  await page.addInitScript(() => localStorage.clear());
   await page.goto('/stock-info?asset=stock&market=US&ticker=RGTI');
 
   const hub = page.getByTestId('stock-analysis-hub');
