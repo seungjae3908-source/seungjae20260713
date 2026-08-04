@@ -5,6 +5,7 @@ import base64
 import binascii
 import gzip
 import json
+import zlib
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,15 @@ def decode_payload(encoded: str) -> dict[str, str] | None:
         compressed = base64.b64decode(encoded.encode("ascii"), validate=True)
         decoded = gzip.decompress(compressed)
         payload: Any = json.loads(decoded.decode("utf-8"))
-    except (UnicodeEncodeError, UnicodeDecodeError, binascii.Error, gzip.BadGzipFile, EOFError, json.JSONDecodeError):
+    except (
+        UnicodeEncodeError,
+        UnicodeDecodeError,
+        binascii.Error,
+        gzip.BadGzipFile,
+        zlib.error,
+        EOFError,
+        json.JSONDecodeError,
+    ):
         return None
     if not isinstance(payload, dict) or set(payload) != EXPECTED_PATHS:
         return None
