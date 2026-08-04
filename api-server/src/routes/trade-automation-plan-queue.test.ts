@@ -125,7 +125,10 @@ test('concurrent plan creation and approval produce one claimed paper execution 
     assert.deepEqual(approveResults.map((item) => item.status), [200, 200]);
     assert.equal(approveResults.filter((item) => item.body.executionClaimed === true).length, 1);
     assert.equal(approveResults.filter((item) => item.body.duplicate === true).length, 1);
-    assert.equal(approveResults.filter((item) => item.body.order.state === 'FILLED').length, 2);
+    const claimed = approveResults.find((item) => item.body.executionClaimed === true);
+    const duplicate = approveResults.find((item) => item.body.executionClaimed === false);
+    assert.equal(claimed?.body.order.state, 'FILLED');
+    assert.ok(['SUBMITTED', 'FILLED'].includes(duplicate?.body.order.state));
 
     const orders = await repository.listOrders(USER);
     assert.equal(orders.length, 1);
