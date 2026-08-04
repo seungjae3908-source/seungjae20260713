@@ -90,7 +90,7 @@ jobs:
                   }
               ],
               'generationConfig': {
-                  'maxOutputTokens': 128,
+                  'maxOutputTokens': 512,
                   'thinkingConfig': {'thinkingLevel': 'low'},
               },
           }
@@ -100,7 +100,7 @@ jobs:
               headers={
                   'Content-Type': 'application/json',
                   'x-goog-api-key': os.environ['GEMINI_API_KEY'],
-                  'User-Agent': 'free-agent-hub-smoke/2.2',
+                  'User-Agent': 'free-agent-hub-smoke/2.3',
               },
               method='POST',
           )
