@@ -56,6 +56,7 @@ const groups = {
     path.join(root, 'src/services/trade-signal-lifecycle.service.test.ts'),
     path.join(root, 'src/routes/trade-signal-approval.smoke.test.ts'),
     path.join(root, 'src/services/scanner-approval-plan.service.test.ts'),
+    path.join(root, 'src/services/scanner-approval-revalidation.service.test.ts'),
     path.join(root, 'src/routes/scanner-approval.smoke.test.ts'),
   ],
   smoke: [
