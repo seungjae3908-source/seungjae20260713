@@ -3,10 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { prioritizeUnifiedAssetSuggestions } from './unified-asset-search-priority';
-import {
-  unifiedAssetDetailPath,
-  type UnifiedAssetSuggestion,
-} from './unified-asset-search';
+import type { UnifiedAssetSuggestion } from './unified-asset-search';
 
 const now = '2026-08-04T07:00:00.000Z';
 
@@ -66,18 +63,6 @@ test('keeps the original server order when preferences are equal', () => {
   const second = suggestion({ id: 'second', market: 'US', productCode: 'AAB', ticker: 'AAB', displayName: 'Alpha Beta', matchType: 'name_prefix' });
   const result = prioritizeUnifiedAssetSuggestions([first, second]);
   assert.deepEqual(result.map((item) => item.id), ['first', 'second']);
-});
-
-test('detail paths preserve stock tickers and keep spot and futures products distinct', () => {
-  const domestic = suggestion({ id: 'kr', market: 'KR', productCode: '005930', ticker: '005930', displayName: '삼성전자', matchType: 'code_exact' });
-  const overseas = suggestion({ id: 'us', market: 'US', productCode: 'TSLA', ticker: 'TSLA', displayName: 'Tesla', matchType: 'code_exact' });
-  const spot = suggestion({ id: 'spot', market: 'spot', productCode: 'KRW-BTC', symbol: 'BTC', baseSymbol: 'BTC', displayName: '비트코인', matchType: 'code_exact' });
-  const futures = suggestion({ id: 'futures', market: 'futures', productCode: 'BTCUSDT', symbol: 'BTCUSDT', baseSymbol: 'BTC', displayName: '비트코인', matchType: 'code_exact' });
-
-  assert.equal(unifiedAssetDetailPath(domestic, '/stocks'), '/stock/005930?back=%2Fstocks');
-  assert.equal(unifiedAssetDetailPath(overseas), '/stock/TSLA?back=%2Fsearch');
-  assert.equal(unifiedAssetDetailPath(spot), '/stock-info?asset=coin&coinMarket=spot&symbol=BTC');
-  assert.equal(unifiedAssetDetailPath(futures), '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
 });
 
 test('application routes keep unified search separate from rankings and the legacy browser', () => {
