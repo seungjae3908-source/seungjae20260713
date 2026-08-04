@@ -112,6 +112,41 @@ test('plan compare-and-set applies one expected-state transition only', async ()
   assert.equal((await repository.getPlan(USER, submitted.id))?.state, 'SUBMITTED');
 });
 
+test('concurrent repository CAS and order inserts produce one winner', async () => {
+  const repository = new InMemoryTradingRepository();
+  const service = new TradeAutomationService(repository);
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  const created = await service.createPlan(USER, input('atomic-race'), policy, false);
+  assert.ok(created.plan);
+
+  const firstSubmitted: TradingPlan = {
+    ...created.plan,
+    state: 'SUBMITTED',
+    approvedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const secondSubmitted: TradingPlan = {
+    ...firstSubmitted,
+    approvedAt: new Date(Date.now() + 1).toISOString(),
+    updatedAt: new Date(Date.now() + 1).toISOString(),
+  };
+  const casResults = await Promise.all([
+    repository.compareAndSetPlan(firstSubmitted, 'APPROVAL_PENDING'),
+    repository.compareAndSetPlan(secondSubmitted, 'APPROVAL_PENDING'),
+  ]);
+  assert.equal(casResults.filter(Boolean).length, 1);
+
+  const persisted = await repository.getPlan(USER, created.plan.id);
+  assert.ok(persisted);
+  const orderResults = await Promise.all([
+    repository.insertOrder(order(persisted)),
+    repository.insertOrder(order(persisted)),
+  ]);
+  assert.equal(orderResults.filter((result) => result.inserted).length, 1);
+  assert.equal(new Set(orderResults.map((result) => result.order.id)).size, 1);
+  assert.equal((await repository.listOrders(USER)).length, 1);
+});
+
 test('atomic repository returns the existing order for one plan and client order id', async () => {
   const repository = new InMemoryTradingRepository();
   const service = new TradeAutomationService(repository);
