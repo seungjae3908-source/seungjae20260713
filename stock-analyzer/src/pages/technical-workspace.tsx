@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
+import { CapabilityGate } from '@/components/capability-gate';
 import { ScannerSavedSearchManager } from '@/components/scanner-saved-search-manager';
 import { useAssetMode } from '@/lib/asset-mode';
 import AiChartPage from '@/pages/ai-chart';
@@ -27,19 +28,25 @@ export default function TechnicalWorkspacePage() {
   const [location] = useLocation();
   const assetMode = useAssetMode();
 
-  if (location.startsWith('/auto-trading')) return <AutoTradingPage />;
+  if (location.startsWith('/auto-trading')) {
+    return <CapabilityGate capability="canAccessPaperTrading"><AutoTradingPage /></CapabilityGate>;
+  }
   if (assetMode.asset === 'coin') {
     return assetMode.coinMarket === 'futures'
-      ? <CryptoFuturesScannerPage />
-      : <CryptoSpotScannerPage />;
+      ? <CapabilityGate capability="canAccessFutures"><CryptoFuturesScannerPage /></CapabilityGate>
+      : <CapabilityGate capability="canAccessSpot"><CryptoSpotScannerPage /></CapabilityGate>;
   }
-  if (!desktop) return <><ScannerPage /><ScannerSavedSearchManager /></>;
+  if (!desktop) {
+    return <CapabilityGate capability="canAccessRiskPreview"><ScannerPage /><ScannerSavedSearchManager /></CapabilityGate>;
+  }
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(340px,0.72fr)_minmax(0,2fr)] overflow-hidden bg-background pb-20">
-      <aside className="min-h-0 overflow-hidden border-r border-card-border"><ScannerPage embedded /></aside>
-      <section className="min-h-0 overflow-hidden"><AiChartPage embedded /></section>
-      <ScannerSavedSearchManager />
-      <BottomNav />
-    </div>
+    <CapabilityGate capability="canAccessRiskPreview">
+      <div className="grid h-full min-h-0 grid-cols-[minmax(340px,0.72fr)_minmax(0,2fr)] overflow-hidden bg-background pb-20">
+        <aside className="min-h-0 overflow-hidden border-r border-card-border"><ScannerPage embedded /></aside>
+        <section className="min-h-0 overflow-hidden"><AiChartPage embedded /></section>
+        <ScannerSavedSearchManager />
+        <BottomNav />
+      </div>
+    </CapabilityGate>
   );
 }
