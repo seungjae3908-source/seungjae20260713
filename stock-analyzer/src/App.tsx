@@ -34,6 +34,7 @@ const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const BacktestsPage = lazy(() => import('@/pages/backtests'));
 const PaperTradingPage = lazy(() => import('@/pages/paper-trading'));
+const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
 const NotFound = lazy(() => import('@/pages/not-found'));
 const Phase4RiskE2EPage = lazy(() => import('@/pages/phase4-risk-e2e'));
 const Phase5BacktestE2EPage = lazy(() => import('@/pages/phase5-backtest-e2e'));
@@ -78,7 +79,10 @@ function CryptoDetailRedirect() {
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-  const wide = location.startsWith('/scanner') || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
+  const wide = location.startsWith('/scanner')
+    || location.startsWith('/ai-chart')
+    || location.startsWith('/auto-trading')
+    || location.startsWith('/__phase11-technical-workspace-e2e');
   return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
 }
 
@@ -93,6 +97,7 @@ function RecommendationsAccess() { return gated('canAccessRiskPreview', <Recomme
 function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingAccess() { return gated('canAccessPaperTrading', <PaperTradingPage />); }
+function AutoTradingAccess() { return gated('canManageMembers', <AutoTradingPage />); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
 function StockInfoAccess() {
   const [location] = useLocation();
@@ -109,7 +114,7 @@ function ApprovedRouter() {
     <Route path="/" component={HomePage} />
     <Route path="/home" component={HomePage} />
     <Route path="/stocks" component={StocksPage} />
-    <Route path="/auto-trading" component={ScannerAccess} />
+    <Route path="/auto-trading" component={AutoTradingAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
     <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
