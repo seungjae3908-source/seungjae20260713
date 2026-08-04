@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { test, expect, type Page, type TestInfo } from '@playwright/test';
+import { test, expect, type Page, type Request, type TestInfo } from '@playwright/test';
 import {
   provisionEphemeralStagingAccounts,
   type StagingAccountCredentials,
@@ -27,17 +27,61 @@ let accounts = emptyAccounts;
 let accountLifecycle: StagingAccountLifecycle | null = null;
 
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
+type LogoutObservation = { candidates: Diagnostic[] };
+const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const diagnostics: {
   console_errors: Diagnostic[];
   page_errors: Diagnostic[];
   unhandled_rejections: Diagnostic[];
   unexpected_http_errors: Diagnostic[];
+  expected_logout_aborts: Diagnostic[];
 } = {
   console_errors: [],
   page_errors: [],
   unhandled_rejections: [],
   unexpected_http_errors: [],
+  expected_logout_aborts: [],
 };
+
+function diagnosticUrl(raw: string) {
+  try {
+    const parsed = new URL(raw);
+    if (
+      parsed.pathname === '/auth/v1/logout'
+      && parsed.searchParams.size === 1
+      && parsed.searchParams.get('scope') === 'global'
+    ) {
+      return '/auth/v1/logout?scope=global';
+    }
+    return parsed.pathname || '/';
+  } catch {
+    return '[invalid-url]';
+  }
+}
+
+function diagnosticText(raw: string) {
+  return raw
+    .replace(/https?:\/\/[^\s"'`<>]+/gi, '[redacted-url]')
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[redacted-token]')
+    .replace(/\b(?:sb_publishable|sb_secret|service_role|anon)_[A-Za-z0-9._-]+\b/gi, '[redacted-key]')
+    .replace(/((?:authorization|apikey|api[_-]?key|token|password|secret|key)\s*[:=]\s*)([^\s,;]+)/gi, '$1[redacted]');
+}
+
+function isExpectedLogoutAbort(request: Request) {
+  let parsed: URL;
+  try {
+    parsed = new URL(request.url());
+  } catch {
+    return false;
+  }
+  const query = [...parsed.searchParams.entries()];
+  return request.method() === 'POST'
+    && parsed.pathname === '/auth/v1/logout'
+    && query.length === 1
+    && query[0]?.[0] === 'scope'
+    && query[0]?.[1] === 'global'
+    && request.failure()?.errorText === 'net::ERR_ABORTED';
+}
 
 function recordUnhandled(testName: string, url: string, detail: string) {
   if (/unhandled|uncaught.*promise|promise rejection/i.test(detail)) {
@@ -49,30 +93,40 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   const testName = testInfo.titlePath.join(' > ');
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
-    const detail = message.text();
-    diagnostics.console_errors.push({ test: testName, url: page.url(), detail });
-    recordUnhandled(testName, page.url(), detail);
+    const detail = diagnosticText(message.text());
+    const url = diagnosticUrl(page.url());
+    diagnostics.console_errors.push({ test: testName, url, detail });
+    recordUnhandled(testName, url, detail);
   });
   page.on('pageerror', (error) => {
-    diagnostics.page_errors.push({ test: testName, url: page.url(), detail: error.message });
-    recordUnhandled(testName, page.url(), error.message);
+    const url = diagnosticUrl(page.url());
+    const detail = diagnosticText(error.message);
+    diagnostics.page_errors.push({ test: testName, url, detail });
+    recordUnhandled(testName, url, detail);
   });
   page.on('response', (response) => {
     if (response.status() < 400) return;
     diagnostics.unexpected_http_errors.push({
       test: testName,
-      url: response.url(),
+      url: diagnosticUrl(response.url()),
       status: response.status(),
-      detail: `${response.request().method()} ${response.status()} ${response.statusText()}`,
+      detail: diagnosticText(`${response.request().method()} ${response.status()} ${response.statusText()}`),
     });
   });
   page.on('requestfailed', (request) => {
-    diagnostics.unexpected_http_errors.push({
+    const detail = diagnosticText(`${request.method()} ${request.failure()?.errorText ?? 'request failed'}`);
+    const diagnostic: Diagnostic = {
       test: testName,
-      url: request.url(),
+      url: diagnosticUrl(request.url()),
       status: 0,
-      detail: `${request.method()} ${request.failure()?.errorText ?? 'request failed'}`,
-    });
+      detail,
+    };
+    const observation = activeLogoutObservations.get(page);
+    if (observation && isExpectedLogoutAbort(request)) {
+      observation.candidates.push(diagnostic);
+      return;
+    }
+    diagnostics.unexpected_http_errors.push(diagnostic);
   });
 }
 
@@ -97,8 +151,38 @@ async function login(page: Page, loginName: string, password: string) {
 }
 
 async function logout(page: Page) {
-  await page.getByRole('button', { name: /로그아웃|sign out/i }).click();
-  await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
+  const logoutButton = page.getByRole('button', { name: /로그아웃|sign out/i });
+  await expect(logoutButton).toBeVisible();
+  const observation: LogoutObservation = { candidates: [] };
+  activeLogoutObservations.set(page, observation);
+  let confirmed = false;
+  try {
+    await logoutButton.click();
+    await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(300);
+
+    await page.reload();
+    await settle(page);
+    await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toHaveCount(0);
+
+    const protectedResponse = await page.request.get('/api/paper-journal/snapshot');
+    expect(
+      [401, 403],
+      `protected API remained accessible after logout: ${protectedResponse.status()}`,
+    ).toContain(protectedResponse.status());
+
+    confirmed = true;
+    diagnostics.expected_logout_aborts.push(...observation.candidates);
+  } finally {
+    activeLogoutObservations.delete(page);
+    if (!confirmed && observation.candidates.length > 0) {
+      diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({
+        ...item,
+        detail: `unconfirmed logout abort: ${item.detail}`,
+      })));
+    }
+  }
 }
 
 async function expectMembership(page: Page, label: RegExp) {
