@@ -44,6 +44,63 @@ jobs:
       - name: Run processor self-test
         run: python3 scripts/agent_hub_free.py --self-test
 
+  model-smoke:
+    if: github.event_name == 'push' && github.event.head_commit.message == 'run free GitHub Models smoke'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call GitHub Models free inference once
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+
+          models = (
+              'openai/gpt-4o-mini',
+              'microsoft/Phi-4-mini-instruct',
+          )
+          errors = []
+          for model in models:
+              payload = {
+                  'model': model,
+                  'messages': [
+                      {
+                          'role': 'user',
+                          'content': 'Reply with exactly: AGENT_HUB_MODELS_OK',
+                      }
+                  ],
+                  'temperature': 0,
+                  'max_tokens': 30,
+              }
+              request = Request(
+                  'https://models.github.ai/inference/chat/completions',
+                  data=json.dumps(payload).encode('utf-8'),
+                  headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f"Bearer {os.environ['GITHUB_TOKEN']}",
+                      'Content-Type': 'application/json',
+                      'User-Agent': 'free-agent-hub-smoke/1.0',
+                  },
+                  method='POST',
+              )
+              try:
+                  with urlopen(request, timeout=60) as response:
+                      data = json.loads(response.read().decode('utf-8'))
+                  content = data['choices'][0]['message']['content'].strip()
+                  if 'AGENT_HUB_MODELS_OK' not in content:
+                      raise RuntimeError(f'unexpected model response: {content[:200]}')
+                  print(json.dumps({'status': 'success', 'model': model}))
+                  break
+              except (HTTPError, KeyError, IndexError, RuntimeError) as exc:
+                  errors.append(f'{model}: {exc}')
+          else:
+              raise SystemExit('all model smoke attempts failed: ' + ' | '.join(errors))
+          PY
+
   process-report:
     if: >-
       github.event_name != 'push' &&
