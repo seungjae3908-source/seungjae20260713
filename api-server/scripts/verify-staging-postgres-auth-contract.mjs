@@ -10,6 +10,7 @@ const assert = (condition, message) => {
 };
 
 const workflow = await read('.github/workflows/staging-postgres-auth-gate.yml');
+const stagingReadiness = await read('.github/workflows/staging-readiness.yml');
 const probe = await read('api-server/scripts/verify-staging-postgres-auth.mjs');
 
 for (const marker of [
@@ -50,4 +51,18 @@ for (const marker of [
 assert(!probe.includes('console.log(target.password)'), 'probe must not print the database password');
 assert(!probe.includes('console.log(env.STAGING_DATABASE_URL)'), 'probe must not print the database URL');
 
-console.log('[staging-postgres-auth-contract] exact-SHA owner gate, read-only authentication, redacted diagnostics, success-only staging dispatch, and production isolation verified');
+const deployJobStart = stagingReadiness.indexOf('  deploy-and-verify:');
+assert(deployJobStart >= 0, 'staging readiness deploy job is missing');
+const deployJob = stagingReadiness.slice(deployJobStart);
+assert(deployJob.includes('node-version: "22"'), 'staging account lifecycle must run on Node.js 22');
+assert(
+  deployJob.includes('Require Node 22+ for Supabase ephemeral account lifecycle'),
+  'staging readiness must fail closed when the account lifecycle runtime is older than Node.js 22',
+);
+assert(
+  deployJob.indexOf('Require Node 22+ for Supabase ephemeral account lifecycle')
+    < deployJob.indexOf('Run complete anonymous and four-account browser validation'),
+  'Node.js runtime guard must execute before the staging account and browser lifecycle',
+);
+
+console.log('[staging-postgres-auth-contract] exact-SHA owner gate, read-only authentication, Node 22 account lifecycle, redacted diagnostics, success-only staging dispatch, and production isolation verified');
