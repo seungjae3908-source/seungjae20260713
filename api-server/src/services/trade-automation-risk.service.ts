@@ -155,7 +155,11 @@ export function evaluateTradingPlan(
   }
 
   if (plan.exchange === 'kiwoom') {
-    if (plan.market !== 'KR' || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'KIWOOM_DOMESTIC_ONLY');
+    const validSide = plan.side === 'buy' || plan.side === 'sell';
+    const validMarket = plan.accountMode === 'paper'
+      ? plan.market === 'KR' || plan.market === 'US'
+      : plan.market === 'KR';
+    if (!validMarket || !validSide) add(blockCodes, 'KIWOOM_DOMESTIC_ONLY');
     if (!Number.isSafeInteger(plan.quantity) || Number(plan.quantity) <= 0) add(blockCodes, 'KIWOOM_QUANTITY_INVALID');
     if (plan.accountMode !== 'mock' && plan.accountMode !== 'live' && plan.accountMode !== 'paper') add(blockCodes, 'KIWOOM_ACCOUNT_MODE_INVALID');
   }
