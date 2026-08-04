@@ -34,6 +34,7 @@ PROCESSED_MARKER_PREFIX = "<!-- agent-hub-processed:"
 ERROR_MARKER_PREFIX = "<!-- agent-hub-error:"
 MAX_MODEL_OUTPUT_CHARS = 6000
 MAX_REPORT_CHARS = 12000
+ALLOWED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 REQUIRED_COMMAND_FIELDS = (
     "source_task_id",
@@ -249,6 +250,9 @@ def find_latest_pending_report(comments: list[dict[str, Any]]) -> Report | None:
             continue
         if marker_for(ERROR_MARKER_PREFIX, comment_id) in all_bodies:
             continue
+        association = str(comment.get("author_association") or "").upper()
+        if association not in ALLOWED_AUTHOR_ASSOCIATIONS:
+            continue
         user = comment.get("user") or {}
         author = str(user.get("login") or "unknown")
         if author.endswith("[bot]"):
@@ -329,17 +333,33 @@ def format_error(report: Report, message: str) -> str:
 def run_self_test() -> None:
     report_body = """[WORKER_REPORT]\ntask_id: demo-1\nworker: prediction-lab\nbranch: feature/demo\nstatus: completed\napproval_required: no\n"""
     comments = [
-        {"id": 11, "body": report_body, "user": {"login": "tester"}},
+        {
+            "id": 11,
+            "body": report_body,
+            "author_association": "OWNER",
+            "user": {"login": "tester"},
+        },
     ]
     report = find_latest_pending_report(comments)
     assert report is not None
     assert report.task_id == "demo-1"
     assert report.fields["branch"] == "feature/demo"
 
+    untrusted = [
+        {
+            "id": 10,
+            "body": report_body,
+            "author_association": "NONE",
+            "user": {"login": "outsider"},
+        },
+    ]
+    assert find_latest_pending_report(untrusted) is None
+
     processed = comments + [
         {
             "id": 12,
             "body": marker_for(PROCESSED_MARKER_PREFIX, 11),
+            "author_association": "NONE",
             "user": {"login": "github-actions[bot]"},
         }
     ]
