@@ -17,6 +17,45 @@ export type TradingOrderState =
   | 'EXPIRED'
   | 'RECOVERY_REQUIRED';
 
+export type TradingSignalState =
+  | 'WATCHING'
+  | 'READY_FOR_APPROVAL'
+  | 'WEAKENED'
+  | 'INVALIDATED'
+  | 'EXPIRED';
+
+export type TradingSignalStateEvent = {
+  fromState: TradingSignalState | null;
+  toState: TradingSignalState;
+  reason: string;
+  score: number;
+  confidence: number;
+  coreConditionsMaintained: boolean;
+  riskReward: number | null;
+  dataTimestamp: string;
+  createdAt: string;
+};
+
+export type TradingSignalValidationInput = {
+  score: number;
+  confidence: number;
+  coreConditionsMaintained: boolean;
+  riskReward?: number | null;
+  reasons?: string[];
+  warnings?: string[];
+  dataTimestamp: string;
+  invalidationReason?: string | null;
+};
+
+export type TradingApprovalStatus = {
+  approvalEnabled: boolean;
+  signalState: TradingSignalState;
+  planState: TradingOrderState;
+  reasonCode: string | null;
+  expiresAt: string | null;
+  lastValidatedAt: string;
+};
+
 export const DEFAULT_TRADING_POLICY = Object.freeze({
   mode: 'approval' as TradingMode,
   automaticEnabled: false,
@@ -101,6 +140,15 @@ export type TradingPlanInput = {
   reduceOnly?: boolean;
   invalidateAction?: 'hold' | 'reduce' | 'close';
   signalReasons: string[];
+  signalWarnings?: string[];
+  signalScore?: number;
+  signalConfidence?: number;
+  minimumSignalScore?: number;
+  minimumSignalConfidence?: number;
+  minimumRiskReward?: number;
+  signalRiskReward?: number | null;
+  signalCoreConditionsMaintained?: boolean;
+  signalExpiresAt?: string | null;
   marketSnapshot: TradingMarketSnapshot;
 };
 
@@ -111,6 +159,19 @@ export type TradingPlan = TradingPlanInput & {
   state: TradingOrderState;
   approvalExpiresAt: string | null;
   approvedAt: string | null;
+  signalState: TradingSignalState;
+  signalScore: number;
+  signalConfidence: number;
+  minimumSignalScore: number;
+  minimumSignalConfidence: number;
+  minimumRiskReward: number;
+  signalRiskReward: number | null;
+  signalCoreConditionsMaintained: boolean;
+  signalExpiresAt: string;
+  lastSignalValidatedAt: string;
+  signalWarnings: string[];
+  signalInvalidationReason: string | null;
+  signalStateHistory: TradingSignalStateEvent[];
   createdAt: string;
   updatedAt: string;
 };
