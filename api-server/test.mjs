@@ -61,6 +61,7 @@ const groups = {
     path.join(root, 'src/services/trade-automation-atomic-repository.test.ts'),
     path.join(root, 'src/services/trade-automation-admin-surface.test.ts'),
     path.join(root, 'src/services/trade-execution-reconciliation.test.ts'),
+    path.join(root, 'src/services/trade-execution-ambiguous-response.test.ts'),
     path.join(root, 'src/routes/trade-automation-admin-api.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-plan-queue.test.ts'),
