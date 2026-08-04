@@ -87,21 +87,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const signingOutRef = useRef(false);
+  const sessionRef = useRef<Session | null>(null);
   const profileLoadQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  function applySession(next: Session | null) {
+    sessionRef.current = next;
+    setSession(next);
+  }
 
   function loadProfile(user: User | null): Promise<void> {
     if (!user) {
       setProfile(null);
       return Promise.resolve();
     }
-    if (signingOutRef.current) return Promise.resolve();
+    if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return Promise.resolve();
 
     const queued = profileLoadQueueRef.current
       .catch(() => undefined)
       .then(async () => {
-        if (signingOutRef.current) return;
+        if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return;
         const { data } = await getSupabase().from('profiles').select('*').eq('id', user.id).maybeSingle();
-        if (!signingOutRef.current) setProfile((data as MemberProfile | null) ?? null);
+        if (!signingOutRef.current && sessionRef.current?.user.id === user.id) {
+          setProfile((data as MemberProfile | null) ?? null);
+        }
       });
 
     profileLoadQueueRef.current = queued.catch(() => undefined);
@@ -113,12 +121,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let mounted = true;
     void getSupabase().auth.getSession().then(async ({ data }) => {
       if (!mounted) return;
-      setSession(data.session);
+      applySession(data.session);
       await loadProfile(data.session?.user ?? null);
       if (mounted) setLoading(false);
     });
     const { data: sub } = getSupabase().auth.onAuthStateChange((_event, next) => {
-      setSession(next);
+      applySession(next);
       void loadProfile(next?.user ?? null).finally(() => { if (mounted) setLoading(false); });
     });
     return () => { mounted = false; sub.subscription.unsubscribe(); };
@@ -161,10 +169,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(true);
       try {
         const nextSession = await signInWithSupabase(name, password);
-        setSession(nextSession);
+        applySession(nextSession);
         await loadProfile(nextSession.user);
       } catch (cause) {
-        setSession(null); setProfile(null); throw new Error(authMessage(cause));
+        applySession(null); setProfile(null); throw new Error(authMessage(cause));
       } finally { setLoading(false); }
     },
     async signUp(loginName, password) {
@@ -184,7 +192,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await profileLoadQueueRef.current;
         const { error } = await getSupabase().auth.signOut();
         if (error) throw error;
-        setSession(null);
+        applySession(null);
         setProfile(null);
       } finally {
         signingOutRef.current = false;
