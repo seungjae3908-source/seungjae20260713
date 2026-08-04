@@ -254,7 +254,7 @@ export function PatternAwareUnifiedChartCanvas({
       instanceRef.current = null;
       chart.remove();
     };
-  }, [candles.length, indicators, onCandleSelect, overlays, timeframe]);
+  }, [onCandleSelect, overlays, timeframe]);
 
   useEffect(() => {
     const instance = instanceRef.current;
