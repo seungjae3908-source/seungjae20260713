@@ -71,7 +71,7 @@ function finite(value: unknown): number | null {
 
 function parseCompactDate(value: string): number | null {
   const digits = value.replace(/\D/g, '');
-  if (digits.length < 8 || digits.length > 14) return null;
+  if (![8, 10, 12, 14].includes(digits.length)) return null;
   const year = Number(digits.slice(0, 4));
   const month = Number(digits.slice(4, 6)) - 1;
   const day = Number(digits.slice(6, 8));
@@ -94,6 +94,15 @@ function parseCompactDate(value: string): number | null {
   return Math.floor(timestamp / 1_000);
 }
 
+function numericEpoch(text: string): number | null {
+  if (!/^\d+$/.test(text)) return null;
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric)) return null;
+  if (text.length === 13 && numeric > 10_000_000_000) return Math.floor(numeric / 1_000);
+  if (text.length === 10 && numeric > 1_000_000_000) return Math.floor(numeric);
+  return null;
+}
+
 export function parseChartCandleTime(raw: unknown): number | null {
   if (typeof raw === 'number' && Number.isFinite(raw)) {
     if (raw > 10_000_000_000) return Math.floor(raw / 1_000);
@@ -103,12 +112,12 @@ export function parseChartCandleTime(raw: unknown): number | null {
 
   const text = String(raw ?? '').trim();
   if (!text) return null;
-  if (/^\d{8,14}$/.test(text)) return parseCompactDate(text);
 
-  const numeric = Number(text);
-  if (Number.isFinite(numeric) && numeric > 1_000_000_000) {
-    return Math.floor(numeric > 10_000_000_000 ? numeric / 1_000 : numeric);
-  }
+  const compactCandidate = /^(19|20)\d+$/.test(text) ? parseCompactDate(text) : null;
+  if (compactCandidate != null) return compactCandidate;
+
+  const epochCandidate = numericEpoch(text);
+  if (epochCandidate != null) return epochCandidate;
 
   const parsed = Date.parse(text);
   return Number.isFinite(parsed) ? Math.floor(parsed / 1_000) : null;
