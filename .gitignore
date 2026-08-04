@@ -18,6 +18,11 @@ api-server/data/
 .env.*
 !.env.example
 
+# Gemini CLI and GitHub Action runtime
+.gemini/
+gemini-artifacts/
+gha-creds-*.json
+
 # OS/editor
 .DS_Store
 Thumbs.db
