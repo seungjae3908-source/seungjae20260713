@@ -48,18 +48,32 @@ async function runWithTimeout<Result>(
   timeoutMs: number,
 ): Promise<Result> {
   let timer: NodeJS.Timeout | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(
+      controller.signal.reason instanceof Error
+        ? controller.signal.reason
+        : new Error('Bounded work item aborted'),
+    );
+    controller.signal.addEventListener('abort', onAbort, { once: true });
+    removeAbortListener = () => controller.signal.removeEventListener('abort', onAbort);
+  });
+
   try {
     return await Promise.race([
       task,
+      aborted,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
-          controller.abort(new BoundedWorkTimeoutError(timeoutMs));
-          reject(new BoundedWorkTimeoutError(timeoutMs));
+          const error = new BoundedWorkTimeoutError(timeoutMs);
+          controller.abort(error);
+          reject(error);
         }, timeoutMs);
       }),
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+    removeAbortListener?.();
   }
 }
 
