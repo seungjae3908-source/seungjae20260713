@@ -48,6 +48,7 @@ const AiChartPage = lazy(() => import('@/pages/ai-chart'));
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
 const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
+const Phase12TradeAutomationAccessE2EPage = lazy(() => import('@/pages/phase12-trade-automation-access-e2e'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
 const phase5E2EEnabled = import.meta.env.VITE_PHASE5_E2E === 'true';
@@ -107,7 +108,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const wide = scannerRoute
     || location.startsWith('/ai-chart')
     || location.startsWith('/auto-trading')
-    || location.startsWith('/__phase11-technical-workspace-e2e');
+    || location.startsWith('/__phase11-technical-workspace-e2e')
+    || location.startsWith('/__phase12-trade-automation-access-e2e');
   return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
 }
 
@@ -179,6 +181,7 @@ function RootRouter() {
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
+    {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-access-e2e" component={Phase12TradeAutomationAccessE2EPage} /> : null}
     {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
     <Route path="/login" component={AccountPage} />
     <Route path="/install" component={InstallPage} />
