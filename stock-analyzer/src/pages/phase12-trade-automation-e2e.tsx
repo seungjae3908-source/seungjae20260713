@@ -1,6 +1,7 @@
 import AutoTradingPage from '@/pages/auto-trading';
 import type { TradeAutomationStatus } from '@/components/trade-automation-settings';
 import type { TradeApprovalQueueItem } from '@/components/trade-approval-queue';
+import type { TradeSignalAlertItem } from '@/components/trade-signal-alerts';
 
 const FIXTURE: TradeAutomationStatus = {
   policy: {
@@ -23,6 +24,25 @@ const FIXTURE: TradeAutomationStatus = {
 
 const READY_AT = '2099-08-04T05:00:00.000Z';
 const EXPIRES_AT = '2099-08-04T05:10:00.000Z';
+
+const ALERT_FIXTURE: TradeSignalAlertItem[] = [
+  {
+    id: 'ready-plan:1:maintained', planId: 'ready-plan', signalId: 'signal-ready',
+    symbol: 'BTC', market: 'KRW', exchange: 'upbit', kind: 'CONDITION_MAINTAINED', cycle: 1,
+    title: 'BTC 조건 유지 확인', message: '점수 82 · 신뢰도 78% · 현재 조건 유지 중',
+    eventState: 'READY_FOR_APPROVAL', currentSignalState: 'READY_FOR_APPROVAL',
+    approvalEnabled: true, approvalReasonCode: null, approvalExpiresAt: EXPIRES_AT,
+    score: 82, confidence: 78, reasonCode: 'SIGNAL_READY', createdAt: READY_AT,
+  },
+  {
+    id: 'invalid-plan:1:released', planId: 'invalid-plan', signalId: 'signal-invalid',
+    symbol: '005930', market: 'KR', exchange: 'kiwoom', kind: 'CONDITION_RELEASED', cycle: 1,
+    title: '005930 조건 해제', message: 'SIGNAL_CORE_CONDITION_BROKEN · 주문 승인 불가',
+    eventState: 'INVALIDATED', currentSignalState: 'INVALIDATED', approvalEnabled: false,
+    approvalReasonCode: 'SIGNAL_INVALIDATED', approvalExpiresAt: EXPIRES_AT,
+    score: 59, confidence: 54, reasonCode: 'SIGNAL_CORE_CONDITION_BROKEN', createdAt: READY_AT,
+  },
+];
 
 const APPROVAL_FIXTURE: TradeApprovalQueueItem[] = [
   {
@@ -102,5 +122,5 @@ const APPROVAL_FIXTURE: TradeApprovalQueueItem[] = [
 ];
 
 export default function Phase12TradeAutomationE2EPage() {
-  return <AutoTradingPage fixture={FIXTURE} approvalFixture={APPROVAL_FIXTURE} />;
+  return <AutoTradingPage fixture={FIXTURE} approvalFixture={APPROVAL_FIXTURE} alertFixture={ALERT_FIXTURE} />;
 }
