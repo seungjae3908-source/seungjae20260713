@@ -89,7 +89,7 @@ for (const width of [360, 390, 430]) {
 
     await page.getByRole('button', { name: '코인 선물', exact: true }).click();
     await expect(page.getByRole('heading', { name: '코인 선물 신호검색기' })).toBeVisible();
-    await expect(page.getByText('BTCUSDT', { exact: true })).toBeVisible();
+    await expect(page.getByText(/위 · BTCUSDT$/)).toBeVisible();
     await expect(page.getByText(/비트코인/)).toHaveCount(0);
     await expect(page.getByText(/비공개 계좌·포지션·주문·자동매매 API를 호출하거나 버튼으로 노출하지 않습니다/)).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
@@ -113,7 +113,7 @@ test('desktop scanner keeps results usable and handles partial providers', async
 
   await page.getByRole('button', { name: '코인 선물', exact: true }).click();
   await expect(page.getByText(/일부 캔들 공급자 실패 1건/)).toBeVisible();
-  await expect(page.getByText('BTCUSDT', { exact: true })).toBeVisible();
+  await expect(page.getByText(/위 · BTCUSDT$/)).toBeVisible();
   await expect(page.getByText(/공급자 기준/)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
