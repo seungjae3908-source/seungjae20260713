@@ -14,7 +14,7 @@ test('auto trading remains administrator-only across route, menu, settings, API,
   assert.doesNotMatch(app, /<Route path="\/auto-trading" component=\{ScannerAccess\} \/>/);
   assert.match(app, /const phase12E2EEnabled = import\.meta\.env\.VITE_PHASE12_E2E === 'true';/);
   assert.match(app, /\{phase12E2EEnabled \? <Route path="\/__phase12-trade-automation-e2e"/);
-  assert.doesNotMatch(app, /<Route path="\/__phase12-trade-automation-e2e" component=\{Phase12TradeAutomationE2EPage\} \/>\s*(?!: null)/);
+  assert.match(app, /\{phase12E2EEnabled \? <Route path="\/__phase12-trade-automation-access-e2e"/);
 
   const bottomNav = source('stock-analyzer/src/components/bottom-nav.tsx');
   assert.match(bottomNav, /href: '\/auto-trading'.*capability: 'canManageMembers'/);
