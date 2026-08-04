@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feature/unified-asset-search
+  pull_request:
+    branches:
+      - feature/unified-asset-search
   workflow_dispatch:
 
 permissions:
