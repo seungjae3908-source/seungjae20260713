@@ -117,12 +117,29 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     href: APP_ROUTES.scanner,
     label: '기술',
     icon: 'technical',
-    capability: 'canAccessRiskPreview',
     exactPaths: [APP_ROUTES.scanner, APP_ROUTES.aiChart, APP_ROUTES.autoTrading],
     menu: [
-      { id: 'scanner', href: APP_ROUTES.scanner, label: 'AI 검색기', icon: 'search' },
-      { id: 'ai-chart', href: APP_ROUTES.aiChart, label: 'AI 차트 분석기', icon: 'chart' },
-      { id: 'auto-trading', href: APP_ROUTES.autoTrading, label: '승인형 주문', icon: 'power' },
+      {
+        id: 'scanner',
+        href: APP_ROUTES.scanner,
+        label: 'AI 검색기',
+        icon: 'search',
+        capability: 'canAccessRiskPreview',
+      },
+      {
+        id: 'ai-chart',
+        href: APP_ROUTES.aiChart,
+        label: 'AI 차트 분석기',
+        icon: 'chart',
+        capability: 'canAccessRiskPreview',
+      },
+      {
+        id: 'auto-trading',
+        href: APP_ROUTES.autoTrading,
+        label: '승인형 주문',
+        icon: 'power',
+        capability: 'canAccessPaperTrading',
+      },
     ],
   },
   {
