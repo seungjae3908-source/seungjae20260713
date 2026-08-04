@@ -13,10 +13,19 @@ for (const width of [360, 390, 430]) {
     await expect(safety).toContainText('+0.15R');
     await expect(safety).toContainText('50건');
     await expect(safety).toContainText('선물 1회 위험');
+    await expect(page.getByTestId('trade-recovery-control')).toContainText('재주문하지 않고');
     await expect(page.getByTestId('trade-approval-queue')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 }
+
+test('query-only recovery control never reports an order resubmission', async ({ page }) => {
+  await page.goto('/__phase12-trade-automation-e2e');
+  const recovery = page.getByTestId('trade-recovery-control');
+  await recovery.getByRole('button', { name: '거래소 상태 조회·복구' }).click();
+  await expect(recovery.getByRole('status')).toContainText('재주문 0건');
+  await expect(recovery).toContainText('주문 생성·재전송·취소를 수행하지 않습니다.');
+});
 
 test('approval queue enables valid paper plan and disables weakened live plan', async ({ page }) => {
   await page.goto('/__phase12-trade-automation-e2e');
