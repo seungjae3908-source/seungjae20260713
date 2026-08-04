@@ -5,13 +5,20 @@ on:
     branches:
       - agent/free-github-agent-hub
       - agent/agent-hub-executor-v1
+      - agent/prompt-compiler-v1
     paths:
       - .github/workflows/agent-hub-free.yml
       - .github/workflows/agent-hub-executor.yml
       - scripts/agent_hub_free.py
+      - scripts/agent_hub_prompt_compiler.py
+      - scripts/agent_hub_prompt_types.py
+      - scripts/agent_hub_prompt_report.py
+      - scripts/agent_hub_prompt_policy.py
+      - scripts/test_agent_hub_prompt_compiler.py
       - scripts/agent_hub_executor.py
       - scripts/agent_hub_executor_report.py
       - docs/agent-hub-free.md
+      - docs/agent-hub-prompt-compiler.md
       - docs/agent-hub-executor.md
   pull_request:
     branches: [main]
@@ -19,9 +26,15 @@ on:
       - .github/workflows/agent-hub-free.yml
       - .github/workflows/agent-hub-executor.yml
       - scripts/agent_hub_free.py
+      - scripts/agent_hub_prompt_compiler.py
+      - scripts/agent_hub_prompt_types.py
+      - scripts/agent_hub_prompt_report.py
+      - scripts/agent_hub_prompt_policy.py
+      - scripts/test_agent_hub_prompt_compiler.py
       - scripts/agent_hub_executor.py
       - scripts/agent_hub_executor_report.py
       - docs/agent-hub-free.md
+      - docs/agent-hub-prompt-compiler.md
       - docs/agent-hub-executor.md
   issue_comment:
     types: [created]
@@ -46,10 +59,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Compile processors
-        run: python3 -m py_compile scripts/agent_hub_free.py scripts/agent_hub_executor.py scripts/agent_hub_executor_report.py
+        run: >-
+          python3 -m py_compile
+          scripts/agent_hub_free.py
+          scripts/agent_hub_prompt_compiler.py
+          scripts/agent_hub_prompt_types.py
+          scripts/agent_hub_prompt_report.py
+          scripts/agent_hub_prompt_policy.py
+          scripts/test_agent_hub_prompt_compiler.py
+          scripts/agent_hub_executor.py
+          scripts/agent_hub_executor_report.py
       - name: Run self-tests
         run: |
           python3 scripts/agent_hub_free.py --self-test
+          python3 scripts/test_agent_hub_prompt_compiler.py
           python3 scripts/agent_hub_executor.py --self-test
           python3 scripts/agent_hub_executor_report.py --self-test
 
@@ -105,6 +128,7 @@ jobs:
           HUB_ISSUE_NUMBER: '62'
         run: python3 scripts/agent_hub_executor_report.py
       - name: Generate next command
+        id: hub
         if: github.event_name != 'repository_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -113,7 +137,7 @@ jobs:
           AGENT_HUB_GEMINI_MODELS: gemini-3.1-flash-lite
         run: python3 scripts/agent_hub_free.py
       - name: Wake controlled executor
-        if: github.event_name != 'repository_dispatch'
+        if: github.event_name != 'repository_dispatch' && steps.hub.outputs.executor_ready == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type='agent-hub-command-ready'
