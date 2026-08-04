@@ -12,9 +12,25 @@ for (const width of [360, 390, 430]) {
     await expect(safety).toContainText('+0.15R');
     await expect(safety).toContainText('50건');
     await expect(safety).toContainText('선물 1회 위험');
+    await expect(page.getByTestId('trade-approval-queue')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 }
+
+test('approval queue enables valid paper plan and disables weakened live plan', async ({ page }) => {
+  await page.goto('/__phase12-trade-automation-e2e');
+  const paper = page.getByTestId('approval-plan-paper-plan');
+  const live = page.getByTestId('approval-plan-live-plan');
+
+  await expect(paper).toContainText('현재 표시 조건 통과');
+  await expect(paper.getByRole('button', { name: 'Paper 승인 실행' })).toBeEnabled();
+  await expect(live).toContainText('신호가 약화 상태');
+  await expect(live.getByRole('button', { name: 'Live 재검증 대기' })).toBeDisabled();
+
+  await paper.getByRole('button', { name: 'Paper 승인 실행' }).click();
+  await expect(page.getByTestId('trade-approval-queue').getByRole('status')).toContainText('Paper 주문을 승인');
+  await expect(paper.getByRole('button', { name: 'Paper 승인 실행' })).toBeDisabled();
+});
 
 test('automatic mode requires detailed risk confirmation and safe emergency resume', async ({ page }) => {
   await page.goto('/__phase12-trade-automation-e2e');
