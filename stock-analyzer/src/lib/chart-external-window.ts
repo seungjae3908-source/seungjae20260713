@@ -59,8 +59,8 @@ export function buildChartPath(selection: AnalysisSelection, external: boolean):
     : `/ai-chart?${selectionQuery(selection)}`;
 }
 
-export function isDesktopChartViewport(width: number, finePointer: boolean): boolean {
-  return Number.isFinite(width) && width >= 1024 && finePointer;
+export function isDesktopChartViewport(width: number, mobileUserAgent: boolean): boolean {
+  return Number.isFinite(width) && width >= 1024 && !mobileUserAgent;
 }
 
 export function externalChartWindowFeatures(screen: ScreenBounds): string {
