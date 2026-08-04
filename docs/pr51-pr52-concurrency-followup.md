@@ -11,14 +11,15 @@
 | 항목 | PR #51 | PR #52 |
 | --- | --- | --- |
 | 브랜치 | `agent/auto-trading-optimization-guardrails` | `agent/ai-scanner-approval-lifecycle` |
-| 확인 HEAD | `28ee12ce8e75b8a1119a8dbd7a5e21a97bf368a6` | `8d7e3e8083ec88ac0d4ce19c30d0a4aa9a55940d` |
+| 분석 대상 HEAD | `28ee12ce8e75b8a1119a8dbd7a5e21a97bf368a6` | `8d7e3e8083ec88ac0d4ce19c30d0a4aa9a55940d` |
 | 상태 | open, Draft, 미병합, mergeable | open, Draft, 미병합, mergeable |
 | 최신 Application CI | `30899985584` success | `30898902907` success |
 | 필수 status | 6/6 success | 6/6 success |
 | Playwright | 57 passed, 10 staging-only skipped | 61 passed, 10 staging-only skipped |
 | failed / flaky | 0 / 0 | 0 / 0 |
+| 최신 main 대비 | ahead 29, behind 5, diverged | ahead 77, behind 6, diverged |
 
-현재 main은 `1987b74799d213b63d065c63a7c8c3b675a863f4`이며, 이번 점검에서 main 반영이나 병합은 수행하지 않는다.
+최신 main은 `ddc679065781e40f46dc6f13962d6039bccd4e58`이다. 이번 점검에서 main 반영이나 병합은 수행하지 않는다.
 
 ## 2. 최근 추가된 안전 보강
 
