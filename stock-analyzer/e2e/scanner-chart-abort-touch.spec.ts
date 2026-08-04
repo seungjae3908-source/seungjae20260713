@@ -333,6 +333,7 @@ async function expectTouchTarget(locator: Locator, label: string) {
   await expect(locator, `${label}가 화면에 보여야 합니다.`).toBeVisible();
   const box = await locator.boundingBox();
   expect(box, `${label}의 bounding box가 있어야 합니다.`).not.toBeNull();
+  console.log(`[touch-target] ${label}: ${box!.width.toFixed(2)}x${box!.height.toFixed(2)}`);
   expect(box!.height, `${label} 높이`).toBeGreaterThanOrEqual(44);
   expect(box!.width, `${label} 너비`).toBeGreaterThanOrEqual(44);
   return box!;
@@ -394,7 +395,7 @@ test.describe('legacy scanner chart abort and touch geometry', () => {
     await stopIsolatedVite();
   });
 
-  test('records stale-response protection while legacy HTTP requests remain in flight', async ({ page }) => {
+  test('aborts stale legacy HTTP requests on timeframe and market changes', async ({ page }) => {
     const state: MockState = {
       delayOneMinute: false,
       failChart: false,
@@ -413,9 +414,9 @@ test.describe('legacy scanner chart abort and touch geometry', () => {
     await expect.poll(() => state.startedChartRequests.filter((url) => url.includes('tf=1m')).length).toBe(1);
     await page.getByRole('button', { name: '15분', exact: true }).click();
     await expect(currentPrice).toContainText('2,040원');
+    await expect.poll(() => evidence.chartAborts.filter(({ url }) => url.includes('tf=1m')).length).toBe(1);
     await page.waitForTimeout(2_150);
     await expect(currentPrice).toContainText('2,040원');
-    expect(evidence.chartAborts.filter(({ url }) => url.includes('tf=1m'))).toHaveLength(0);
     await expect(page.getByText('차트 데이터를 불러오지 못했습니다.', { exact: true })).toHaveCount(0);
 
     await page.getByRole('button', { name: '1분', exact: true }).click();
@@ -423,12 +424,13 @@ test.describe('legacy scanner chart abort and touch geometry', () => {
     await page.getByRole('button', { name: '해외', exact: true }).click();
     await expect(page.getByRole('heading', { name: '애플', exact: true })).toBeVisible();
     await expect(currentPrice).toContainText('$3,040.00');
+    await expect.poll(() => evidence.chartAborts.filter(({ url }) => url.includes('tf=1m')).length).toBe(2);
     await page.waitForTimeout(2_150);
     await expect(currentPrice).toContainText('$3,040.00');
-    expect(evidence.chartAborts.filter(({ url }) => url.includes('tf=1m'))).toHaveLength(0);
     await expect(page.getByText('차트 데이터를 불러오지 못했습니다.', { exact: true })).toHaveCount(0);
 
-    expect(evidence.chartAborts).toEqual([]);
+    expect(evidence.chartAborts).toHaveLength(2);
+    expect(evidence.chartAborts.every(({ errorText }) => /ERR_ABORTED|NS_BINDING_ABORTED/i.test(errorText))).toBe(true);
     expect(evidence.unexpectedRequestFailures).toEqual([]);
     expect(evidence.consoleErrors).toEqual([]);
     expect(evidence.pageErrors).toEqual([]);
@@ -461,6 +463,7 @@ test.describe('legacy scanner chart abort and touch geometry', () => {
     await expect(page.getByText('현재가', { exact: true }).locator('xpath=../..')).toContainText('140원');
     await page.getByRole('button', { name: '자동 갱신 중', exact: true }).click();
     await expectTouchTarget(page.getByRole('button', { name: '자동 갱신 중', exact: true }), '자동 갱신 버튼');
+    await expectTouchTarget(page.getByPlaceholder('종목명 또는 종목코드 검색'), '종목 검색 입력');
     await expectTouchTarget(page.getByTitle('차트 새로고침'), '차트 새로고침 버튼');
     await expectTouchTarget(page.getByRole('button', { name: '1분', exact: true }), '1분 시간봉 버튼');
     await expectTouchTarget(page.getByRole('button', { name: '15분', exact: true }), '15분 시간봉 버튼');
