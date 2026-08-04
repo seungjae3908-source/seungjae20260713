@@ -13,6 +13,22 @@ import type {
 } from './trade-automation.types';
 
 const APPROVAL_TTL_MS = 10 * 60_000;
+const operationLocks = new Map<string, Promise<void>>();
+
+async function withOperationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = operationLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  const queued = previous.catch(() => undefined).then(() => current);
+  operationLocks.set(key, queued);
+  await previous.catch(() => undefined);
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (operationLocks.get(key) === queued) operationLocks.delete(key);
+  }
+}
 
 export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
   return createHash('sha256').update([
@@ -64,91 +80,99 @@ export class TradeAutomationService {
 
   async createPlan(userId: string, input: TradingPlanInput, policy: TradingPolicy, emergencyStopped: boolean) {
     const idempotencyKey = tradingIdempotencyKey(userId, input);
-    const duplicate = await this.repository.findPlanByIdempotency(userId, idempotencyKey);
-    if (duplicate) return { plan: duplicate, duplicate: true, decision: { allowed: true, blockCodes: [], warnings: [] } };
+    return withOperationLock(`create-plan:${userId}:${idempotencyKey}`, async () => {
+      const duplicate = await this.repository.findPlanByIdempotency(userId, idempotencyKey);
+      if (duplicate) return { plan: duplicate, duplicate: true, decision: { allowed: true, blockCodes: [], warnings: [] } };
 
-    const decision = evaluateTradingPlan(input, policy, {
-      emergencyStopped: emergencyStopped || await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: input.accountMode !== 'live' || liveExecutionEnabled(input.exchange),
+      const decision = evaluateTradingPlan(input, policy, {
+        emergencyStopped: emergencyStopped || await this.emergencyStopActive(userId, policy),
+        serverLiveEnabled: input.accountMode !== 'live' || liveExecutionEnabled(input.exchange),
+      });
+      if (!decision.allowed) return { plan: null, duplicate: false, decision };
+
+      const now = new Date();
+      const approvalRequired = policy.mode === 'approval';
+      const plan: TradingPlan = {
+        ...input,
+        id: randomUUID(), userId, idempotencyKey,
+        state: approvalRequired ? 'APPROVAL_PENDING' : 'PLANNED',
+        approvalExpiresAt: approvalRequired ? new Date(now.getTime() + APPROVAL_TTL_MS).toISOString() : null,
+        approvedAt: null, createdAt: now.toISOString(), updatedAt: now.toISOString(),
+        riskAssessment: decision.optimization ?? null,
+      };
+      await this.repository.savePlan(plan);
+      return { plan, duplicate: false, decision };
     });
-    if (!decision.allowed) return { plan: null, duplicate: false, decision };
-
-    const now = new Date();
-    const approvalRequired = policy.mode === 'approval';
-    const plan: TradingPlan = {
-      ...input,
-      id: randomUUID(), userId, idempotencyKey,
-      state: approvalRequired ? 'APPROVAL_PENDING' : 'PLANNED',
-      approvalExpiresAt: approvalRequired ? new Date(now.getTime() + APPROVAL_TTL_MS).toISOString() : null,
-      approvedAt: null, createdAt: now.toISOString(), updatedAt: now.toISOString(),
-      riskAssessment: decision.optimization ?? null,
-    };
-    await this.repository.savePlan(plan);
-    return { plan, duplicate: false, decision };
   }
 
   async approvePlan(userId: string, planId: string, revalidation?: TradingPlanRevalidationInput | null) {
-    const plan = await this.repository.getPlan(userId, planId);
-    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
-    if (plan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
-    if (!plan.approvalExpiresAt || Date.parse(plan.approvalExpiresAt) <= Date.now()) {
-      plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+    return withOperationLock(`plan:${userId}:${planId}`, async () => {
+      const plan = await this.repository.getPlan(userId, planId);
+      if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+      if (plan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
+      if (!plan.approvalExpiresAt || Date.parse(plan.approvalExpiresAt) <= Date.now()) {
+        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+        await this.repository.savePlan(plan);
+        throw new Error('TRADE_PLAN_EXPIRED');
+      }
+      if (plan.accountMode === 'live' && !revalidation) throw new Error('TRADE_PLAN_REVALIDATION_REQUIRED');
+      if (revalidation) applyRevalidation(plan, revalidation);
+      const policy = await this.repository.getPolicy(userId);
+      const decision = await this.recheck(userId, plan, policy);
+      if (!decision.allowed) {
+        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+        await this.repository.savePlan(plan);
+        throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
+      }
+      plan.state = 'SUBMITTED'; plan.approvedAt = new Date().toISOString(); plan.updatedAt = plan.approvedAt;
       await this.repository.savePlan(plan);
-      throw new Error('TRADE_PLAN_EXPIRED');
-    }
-    if (plan.accountMode === 'live' && !revalidation) throw new Error('TRADE_PLAN_REVALIDATION_REQUIRED');
-    if (revalidation) applyRevalidation(plan, revalidation);
-    const policy = await this.repository.getPolicy(userId);
-    const decision = await this.recheck(userId, plan, policy);
-    if (!decision.allowed) {
-      plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
-      await this.repository.savePlan(plan);
-      throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
-    }
-    plan.state = 'SUBMITTED'; plan.approvedAt = new Date().toISOString(); plan.updatedAt = plan.approvedAt;
-    await this.repository.savePlan(plan);
-    return plan;
+      return plan;
+    });
   }
 
   async beginAutomaticPlan(userId: string, planId: string) {
-    const plan = await this.repository.getPlan(userId, planId);
-    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
-    if (plan.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
-    const policy = await this.repository.getPolicy(userId);
-    const decision = await this.recheck(userId, plan, policy);
-    if (!decision.allowed) {
-      plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+    return withOperationLock(`plan:${userId}:${planId}`, async () => {
+      const plan = await this.repository.getPlan(userId, planId);
+      if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+      if (plan.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
+      const policy = await this.repository.getPolicy(userId);
+      const decision = await this.recheck(userId, plan, policy);
+      if (!decision.allowed) {
+        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+        await this.repository.savePlan(plan);
+        throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
+      }
+      plan.state = 'SUBMITTED'; plan.updatedAt = new Date().toISOString();
       await this.repository.savePlan(plan);
-      throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
-    }
-    plan.state = 'SUBMITTED'; plan.updatedAt = new Date().toISOString();
-    await this.repository.savePlan(plan);
-    return plan;
+      return plan;
+    });
   }
 
   async createOrder(userId: string, plan: TradingPlan) {
-    const existing = await this.repository.findOrderByPlan(userId, plan.id);
-    if (existing) return { order: existing, duplicate: true };
-    if (plan.state !== 'SUBMITTED') throw new Error('TRADE_PLAN_NOT_SUBMITTED');
-    const decision = await this.recheck(userId, plan);
-    if (!decision.allowed) throw new Error(`TRADE_ORDER_FINAL_RISK_CHECK_FAILED:${decision.blockCodes.join(',')}`);
-    const now = new Date().toISOString();
-    const order: TradingOrder = {
-      id: randomUUID(), userId, planId: plan.id, exchange: plan.exchange,
-      clientOrderId: `sj-${plan.exchange}-${plan.idempotencyKey.slice(0, 20)}`,
-      exchangeOrderId: null, state: 'SUBMITTED', requestedQuantity: plan.quantity ?? null,
-      filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
-      createdAt: now, updatedAt: now,
-    };
-    await this.repository.saveOrder(order);
-    await this.event(order, null, 'SUBMITTED', 'ORDER_CREATED', {
-      accountMode: plan.accountMode,
-      expectedValueR: plan.riskAssessment?.expectedValueR ?? null,
-      riskBudgetKrw: plan.riskAssessment?.riskBudgetKrw ?? null,
-      maximumOrderKrw: plan.riskAssessment?.maximumOrderKrw ?? null,
-      pilotStage: plan.riskAssessment?.pilotStage ?? null,
+    return withOperationLock(`plan:${userId}:${plan.id}`, async () => {
+      const existing = await this.repository.findOrderByPlan(userId, plan.id);
+      if (existing) return { order: existing, duplicate: true };
+      if (plan.state !== 'SUBMITTED') throw new Error('TRADE_PLAN_NOT_SUBMITTED');
+      const decision = await this.recheck(userId, plan);
+      if (!decision.allowed) throw new Error(`TRADE_ORDER_FINAL_RISK_CHECK_FAILED:${decision.blockCodes.join(',')}`);
+      const now = new Date().toISOString();
+      const order: TradingOrder = {
+        id: randomUUID(), userId, planId: plan.id, exchange: plan.exchange,
+        clientOrderId: `sj-${plan.exchange}-${plan.idempotencyKey.slice(0, 20)}`,
+        exchangeOrderId: null, state: 'SUBMITTED', requestedQuantity: plan.quantity ?? null,
+        filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
+        createdAt: now, updatedAt: now,
+      };
+      await this.repository.saveOrder(order);
+      await this.event(order, null, 'SUBMITTED', 'ORDER_CREATED', {
+        accountMode: plan.accountMode,
+        expectedValueR: plan.riskAssessment?.expectedValueR ?? null,
+        riskBudgetKrw: plan.riskAssessment?.riskBudgetKrw ?? null,
+        maximumOrderKrw: plan.riskAssessment?.maximumOrderKrw ?? null,
+        pilotStage: plan.riskAssessment?.pilotStage ?? null,
+      });
+      return { order, duplicate: false };
     });
-    return { order, duplicate: false };
   }
 
   async transition(order: TradingOrder, toState: TradingOrderState, reason: string, metadata: Record<string, unknown> = {}) {
