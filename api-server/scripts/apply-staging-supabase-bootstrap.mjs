@@ -98,6 +98,7 @@ async function buildAtomicSql(projectRef) {
     'api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql',
     'api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql',
     'api-server/supabase/migrations/2026080301_trade_automation_integration.sql',
+    'api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql',
   ];
   const assertionPath = 'api-server/supabase/bootstrap/staging-bootstrap-assert.sql';
   const plain = await Promise.all(plainFiles.map(async (file) => `\n-- ${file}\n${await read(file)}`));
