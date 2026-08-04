@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import { assertOrderTransition } from './trade-order-state-machine.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
@@ -14,20 +15,31 @@ import type {
 
 const APPROVAL_TTL_MS = 10 * 60_000;
 const operationLocks = new Map<string, Promise<void>>();
+const operationLockContext = new AsyncLocalStorage<ReadonlySet<string>>();
 
 async function withOperationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const heldLocks = operationLockContext.getStore();
+  if (heldLocks?.has(key)) return operation();
+
   const previous = operationLocks.get(key) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => { release = resolve; });
   const queued = previous.catch(() => undefined).then(() => current);
   operationLocks.set(key, queued);
   await previous.catch(() => undefined);
+
+  const nextLocks = new Set(heldLocks ?? []);
+  nextLocks.add(key);
   try {
-    return await operation();
+    return await operationLockContext.run(nextLocks, operation);
   } finally {
     release();
     if (operationLocks.get(key) === queued) operationLocks.delete(key);
   }
+}
+
+export function withTradePlanLock<T>(userId: string, planId: string, operation: () => Promise<T>) {
+  return withOperationLock(`plan:${userId}:${planId}`, operation);
 }
 
 export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
@@ -78,6 +90,11 @@ export class TradeAutomationService {
     return decision;
   }
 
+  async executionBlockedByEmergencyStop(userId: string) {
+    const policy = await this.repository.getPolicy(userId);
+    return this.emergencyStopActive(userId, policy);
+  }
+
   async createPlan(userId: string, input: TradingPlanInput, policy: TradingPolicy, emergencyStopped: boolean) {
     const idempotencyKey = tradingIdempotencyKey(userId, input);
     return withOperationLock(`create-plan:${userId}:${idempotencyKey}`, async () => {
@@ -106,7 +123,7 @@ export class TradeAutomationService {
   }
 
   async approvePlan(userId: string, planId: string, revalidation?: TradingPlanRevalidationInput | null) {
-    return withOperationLock(`plan:${userId}:${planId}`, async () => {
+    return withTradePlanLock(userId, planId, async () => {
       const plan = await this.repository.getPlan(userId, planId);
       if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
       if (plan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
@@ -131,7 +148,7 @@ export class TradeAutomationService {
   }
 
   async beginAutomaticPlan(userId: string, planId: string) {
-    return withOperationLock(`plan:${userId}:${planId}`, async () => {
+    return withTradePlanLock(userId, planId, async () => {
       const plan = await this.repository.getPlan(userId, planId);
       if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
       if (plan.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
@@ -149,74 +166,89 @@ export class TradeAutomationService {
   }
 
   async createOrder(userId: string, plan: TradingPlan) {
-    return withOperationLock(`plan:${userId}:${plan.id}`, async () => {
+    return withTradePlanLock(userId, plan.id, async () => {
       const existing = await this.repository.findOrderByPlan(userId, plan.id);
       if (existing) return { order: existing, duplicate: true };
-      if (plan.state !== 'SUBMITTED') throw new Error('TRADE_PLAN_NOT_SUBMITTED');
-      const decision = await this.recheck(userId, plan);
+      const currentPlan = await this.repository.getPlan(userId, plan.id) ?? plan;
+      if (currentPlan.state !== 'SUBMITTED') throw new Error('TRADE_PLAN_NOT_SUBMITTED');
+      const decision = await this.recheck(userId, currentPlan);
       if (!decision.allowed) throw new Error(`TRADE_ORDER_FINAL_RISK_CHECK_FAILED:${decision.blockCodes.join(',')}`);
       const now = new Date().toISOString();
       const order: TradingOrder = {
-        id: randomUUID(), userId, planId: plan.id, exchange: plan.exchange,
-        clientOrderId: `sj-${plan.exchange}-${plan.idempotencyKey.slice(0, 20)}`,
-        exchangeOrderId: null, state: 'SUBMITTED', requestedQuantity: plan.quantity ?? null,
+        id: randomUUID(), userId, planId: currentPlan.id, exchange: currentPlan.exchange,
+        clientOrderId: `sj-${currentPlan.exchange}-${currentPlan.idempotencyKey.slice(0, 20)}`,
+        exchangeOrderId: null, state: 'SUBMITTED', requestedQuantity: currentPlan.quantity ?? null,
         filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
         createdAt: now, updatedAt: now,
       };
       await this.repository.saveOrder(order);
       await this.event(order, null, 'SUBMITTED', 'ORDER_CREATED', {
-        accountMode: plan.accountMode,
-        expectedValueR: plan.riskAssessment?.expectedValueR ?? null,
-        riskBudgetKrw: plan.riskAssessment?.riskBudgetKrw ?? null,
-        maximumOrderKrw: plan.riskAssessment?.maximumOrderKrw ?? null,
-        pilotStage: plan.riskAssessment?.pilotStage ?? null,
+        accountMode: currentPlan.accountMode,
+        expectedValueR: currentPlan.riskAssessment?.expectedValueR ?? null,
+        riskBudgetKrw: currentPlan.riskAssessment?.riskBudgetKrw ?? null,
+        maximumOrderKrw: currentPlan.riskAssessment?.maximumOrderKrw ?? null,
+        pilotStage: currentPlan.riskAssessment?.pilotStage ?? null,
       });
       return { order, duplicate: false };
     });
   }
 
   async transition(order: TradingOrder, toState: TradingOrderState, reason: string, metadata: Record<string, unknown> = {}) {
-    const from = order.state;
-    assertOrderTransition(from, toState);
-    order.state = toState; order.updatedAt = new Date().toISOString();
-    if (typeof metadata.exchangeOrderId === 'string') order.exchangeOrderId = metadata.exchangeOrderId;
-    if (typeof metadata.filledQuantity === 'number') order.filledQuantity = metadata.filledQuantity;
-    if (typeof metadata.averageFillPrice === 'number') order.averageFillPrice = metadata.averageFillPrice;
-    if (typeof metadata.errorCode === 'string') order.lastErrorCode = metadata.errorCode;
-    await this.repository.saveOrder(order);
-    await this.event(order, from, toState, reason, metadata);
-    return order;
+    return withTradePlanLock(order.userId, order.planId, async () => {
+      const current = await this.repository.getOrder(order.userId, order.id) ?? order;
+      const from = current.state;
+      if (from === toState && from !== 'PARTIALLY_FILLED') {
+        Object.assign(order, current);
+        return order;
+      }
+      assertOrderTransition(from, toState);
+      current.state = toState; current.updatedAt = new Date().toISOString();
+      if (typeof metadata.exchangeOrderId === 'string') current.exchangeOrderId = metadata.exchangeOrderId;
+      if (typeof metadata.filledQuantity === 'number') current.filledQuantity = metadata.filledQuantity;
+      if (typeof metadata.averageFillPrice === 'number') current.averageFillPrice = metadata.averageFillPrice;
+      if (typeof metadata.errorCode === 'string') current.lastErrorCode = metadata.errorCode;
+      await this.repository.saveOrder(current);
+      await this.event(current, from, toState, reason, metadata);
+      Object.assign(order, current);
+      return order;
+    });
   }
 
   async recoverOpenOrders(userId: string) {
     const orders = await this.repository.listOrders(userId);
-    const recoverable = orders.filter((order) => ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED'].includes(order.state));
-    for (const order of recoverable) {
-      if (order.state !== 'RECOVERY_REQUIRED') {
-        await this.transition(order, 'RECOVERY_REQUIRED', 'SERVER_RESTART_RECONCILIATION_REQUIRED');
-      }
+    const recovered: TradingOrder[] = [];
+    for (const candidate of orders) {
+      const order = await withTradePlanLock(userId, candidate.planId, async () => {
+        const current = await this.repository.getOrder(userId, candidate.id);
+        if (!current || !['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED'].includes(current.state)) return null;
+        return this.transition(current, 'RECOVERY_REQUIRED', 'SERVER_RESTART_RECONCILIATION_REQUIRED');
+      });
+      if (order) recovered.push(order);
     }
-    return recoverable;
+    return recovered;
   }
 
   async invalidatePlan(userId: string, planId: string) {
-    const plan = await this.repository.getPlan(userId, planId);
-    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
-    const order = await this.repository.findOrderByPlan(userId, planId);
-    if (!order) {
-      if (plan.state === 'APPROVAL_PENDING' || plan.state === 'PLANNED') {
-        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
-        await this.repository.savePlan(plan);
+    return withTradePlanLock(userId, planId, async () => {
+      const plan = await this.repository.getPlan(userId, planId);
+      if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+      const order = await this.repository.findOrderByPlan(userId, planId);
+      if (!order) {
+        if (plan.state === 'APPROVAL_PENDING' || plan.state === 'PLANNED' || plan.state === 'SUBMITTED') {
+          plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+          await this.repository.savePlan(plan);
+        }
+        return { plan, order: null, filledQuantityPreserved: 0 };
       }
-      return { plan, order: null, filledQuantityPreserved: 0 };
-    }
-    if (order.state === 'ACCEPTED' || order.state === 'PARTIALLY_FILLED') {
-      await this.transition(order, 'CANCEL_REQUESTED', 'SIGNAL_INVALIDATED_CANCEL_UNFILLED_REMAINDER', {
-        filledQuantity: order.filledQuantity,
-        invalidateAction: plan.invalidateAction ?? 'hold',
-      });
-    }
-    return { plan, order, filledQuantityPreserved: order.filledQuantity };
+      const currentOrder = await this.repository.getOrder(userId, order.id) ?? order;
+      if (currentOrder.state === 'SUBMITTED' || currentOrder.state === 'ACCEPTED' || currentOrder.state === 'PARTIALLY_FILLED') {
+        await this.transition(currentOrder, 'CANCEL_REQUESTED', 'SIGNAL_INVALIDATED_CANCEL_UNFILLED_REMAINDER', {
+          filledQuantity: currentOrder.filledQuantity,
+          invalidateAction: plan.invalidateAction ?? 'hold',
+        });
+      }
+      return { plan, order: currentOrder, filledQuantityPreserved: currentOrder.filledQuantity };
+    });
   }
 
   private async event(
