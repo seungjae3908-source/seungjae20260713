@@ -12,6 +12,14 @@ import {
 } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 
+export type AtomicPlanOrderResult = {
+  plan: TradingPlan;
+  order: TradingOrder;
+  transitioned: boolean;
+  orderInserted: boolean;
+  executionClaimed: boolean;
+};
+
 export interface TradingRepository {
   getGlobalEmergencyStop(): Promise<boolean>;
   setGlobalEmergencyStop(stopped: boolean, changedBy: string): Promise<void>;
@@ -25,6 +33,13 @@ export interface TradingRepository {
   listPlans(userId: string): Promise<TradingPlan[]>;
   insertPlan(plan: TradingPlan): Promise<{ plan: TradingPlan; inserted: boolean }>;
   compareAndSetPlan(plan: TradingPlan, expectedState: TradingOrderState): Promise<TradingPlan | null>;
+  submitPlanAndCreateOrder(
+    plan: TradingPlan,
+    expectedState: TradingOrderState,
+    order: TradingOrder,
+    event: TradingOrderEvent,
+    executionClaimId: string,
+  ): Promise<AtomicPlanOrderResult | null>;
   savePlan(plan: TradingPlan): Promise<void>;
   getOrder(userId: string, id: string): Promise<TradingOrder | null>;
   findOrderByPlan(userId: string, planId: string): Promise<TradingOrder | null>;
@@ -35,6 +50,10 @@ export interface TradingRepository {
   listEvents(userId: string): Promise<TradingOrderEvent[]>;
 }
 
+function copy<T>(value: T): T {
+  return structuredClone(value);
+}
+
 export class InMemoryTradingRepository implements TradingRepository {
   private globalEmergencyStopped = false;
   private policies = new Map<string, TradingPolicy>();
@@ -42,53 +61,140 @@ export class InMemoryTradingRepository implements TradingRepository {
   private plans = new Map<string, TradingPlan>();
   private orders = new Map<string, TradingOrder>();
   private events: TradingOrderEvent[] = [];
+  private executionClaims = new Map<string, string>();
 
   async getGlobalEmergencyStop() { return this.globalEmergencyStopped; }
   async setGlobalEmergencyStop(stopped: boolean, _changedBy: string) { this.globalEmergencyStopped = stopped; }
-  async getPolicy(userId: string) { return this.policies.get(userId) ?? normalizeTradingPolicy(DEFAULT_TRADING_POLICY); }
-  async savePolicy(userId: string, policy: TradingPolicy) { this.policies.set(userId, policy); return policy; }
-  async getConnections(userId: string) { return [...this.connections.values()].filter((item) => item.userId === userId); }
-  async getConnection(userId: string, exchange: TradingExchange) { return this.connections.get(`${userId}:${exchange}`) ?? null; }
-  async saveConnection(connection: ExchangeConnection) { this.connections.set(`${connection.userId}:${connection.exchange}`, connection); }
-  async findPlanByIdempotency(userId: string, key: string) {
-    return [...this.plans.values()].find((item) => item.userId === userId && item.idempotencyKey === key) ?? null;
+  async getPolicy(userId: string) {
+    return copy(this.policies.get(userId) ?? normalizeTradingPolicy(DEFAULT_TRADING_POLICY));
   }
-  async getPlan(userId: string, id: string) { const value = this.plans.get(id); return value?.userId === userId ? value : null; }
+  async savePolicy(userId: string, policy: TradingPolicy) {
+    const stored = copy(policy);
+    this.policies.set(userId, stored);
+    return copy(stored);
+  }
+  async getConnections(userId: string) {
+    return [...this.connections.values()].filter((item) => item.userId === userId).map(copy);
+  }
+  async getConnection(userId: string, exchange: TradingExchange) {
+    const value = this.connections.get(`${userId}:${exchange}`);
+    return value ? copy(value) : null;
+  }
+  async saveConnection(connection: ExchangeConnection) {
+    this.connections.set(`${connection.userId}:${connection.exchange}`, copy(connection));
+  }
+  async findPlanByIdempotency(userId: string, key: string) {
+    const value = [...this.plans.values()]
+      .find((item) => item.userId === userId && item.idempotencyKey === key);
+    return value ? copy(value) : null;
+  }
+  async getPlan(userId: string, id: string) {
+    const value = this.plans.get(id);
+    return value?.userId === userId ? copy(value) : null;
+  }
   async listPlans(userId: string) {
     return [...this.plans.values()]
       .filter((item) => item.userId === userId)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .map(copy);
   }
   async insertPlan(plan: TradingPlan) {
     const existing = [...this.plans.values()]
       .find((item) => item.userId === plan.userId && item.idempotencyKey === plan.idempotencyKey);
-    if (existing) return { plan: existing, inserted: false };
-    this.plans.set(plan.id, plan);
-    return { plan, inserted: true };
+    if (existing) return { plan: copy(existing), inserted: false };
+    const stored = copy(plan);
+    this.plans.set(stored.id, stored);
+    return { plan: copy(stored), inserted: true };
   }
   async compareAndSetPlan(plan: TradingPlan, expectedState: TradingOrderState) {
     const current = this.plans.get(plan.id);
     if (!current || current.userId !== plan.userId || current.state !== expectedState) return null;
-    this.plans.set(plan.id, plan);
-    return plan;
+    const stored = copy(plan);
+    this.plans.set(stored.id, stored);
+    return copy(stored);
   }
-  async savePlan(plan: TradingPlan) { this.plans.set(plan.id, plan); }
-  async getOrder(userId: string, id: string) { const value = this.orders.get(id); return value?.userId === userId ? value : null; }
+  async submitPlanAndCreateOrder(
+    plan: TradingPlan,
+    expectedState: TradingOrderState,
+    order: TradingOrder,
+    event: TradingOrderEvent,
+    executionClaimId: string,
+  ) {
+    const currentPlan = this.plans.get(plan.id);
+    if (!currentPlan || currentPlan.userId !== plan.userId) return null;
+    if (currentPlan.state !== expectedState && currentPlan.state !== 'SUBMITTED') return null;
+    if (plan.state !== 'SUBMITTED'
+      || order.userId !== plan.userId
+      || order.planId !== plan.id
+      || event.userId !== order.userId
+      || event.orderId !== order.id
+      || event.reason !== 'ORDER_CREATED'
+      || event.toState !== 'SUBMITTED') {
+      throw new Error('TRADE_ATOMIC_INPUT_INVALID');
+    }
+
+    let persistedOrder = [...this.orders.values()].find((item) => item.userId === order.userId
+      && (item.planId === order.planId
+        || (item.exchange === order.exchange && item.clientOrderId === order.clientOrderId))) ?? null;
+    if (persistedOrder && (persistedOrder.planId !== order.planId
+      || persistedOrder.exchange !== order.exchange
+      || persistedOrder.clientOrderId !== order.clientOrderId)) {
+      throw new Error('TRADE_ATOMIC_ORDER_CONFLICT');
+    }
+
+    const transitioned = currentPlan.state === expectedState;
+    if (transitioned) this.plans.set(plan.id, copy(plan));
+    const persistedPlan = this.plans.get(plan.id);
+    if (!persistedPlan || persistedPlan.state !== 'SUBMITTED') return null;
+
+    let orderInserted = false;
+    if (!persistedOrder) {
+      persistedOrder = copy(order);
+      this.orders.set(persistedOrder.id, persistedOrder);
+      this.events.push(copy(event));
+      orderInserted = true;
+    }
+
+    let executionClaimed = false;
+    if (persistedOrder.state === 'SUBMITTED' && !this.executionClaims.has(persistedOrder.id)) {
+      this.executionClaims.set(persistedOrder.id, executionClaimId);
+      executionClaimed = true;
+    }
+
+    return {
+      plan: copy(persistedPlan),
+      order: copy(persistedOrder),
+      transitioned,
+      orderInserted,
+      executionClaimed,
+    };
+  }
+  async savePlan(plan: TradingPlan) { this.plans.set(plan.id, copy(plan)); }
+  async getOrder(userId: string, id: string) {
+    const value = this.orders.get(id);
+    return value?.userId === userId ? copy(value) : null;
+  }
   async findOrderByPlan(userId: string, planId: string) {
-    return [...this.orders.values()].find((item) => item.userId === userId && item.planId === planId) ?? null;
+    const value = [...this.orders.values()].find((item) => item.userId === userId && item.planId === planId);
+    return value ? copy(value) : null;
   }
   async insertOrder(order: TradingOrder) {
     const existing = [...this.orders.values()].find((item) => item.userId === order.userId
       && (item.planId === order.planId
         || (item.exchange === order.exchange && item.clientOrderId === order.clientOrderId))) ?? null;
-    if (existing) return { order: existing, inserted: false };
-    this.orders.set(order.id, order);
-    return { order, inserted: true };
+    if (existing) return { order: copy(existing), inserted: false };
+    const stored = copy(order);
+    this.orders.set(stored.id, stored);
+    return { order: copy(stored), inserted: true };
   }
-  async saveOrder(order: TradingOrder) { this.orders.set(order.id, order); }
-  async listOrders(userId: string) { return [...this.orders.values()].filter((item) => item.userId === userId); }
-  async appendEvent(event: TradingOrderEvent) { this.events.push(event); }
-  async listEvents(userId: string) { return this.events.filter((item) => item.userId === userId); }
+  async saveOrder(order: TradingOrder) { this.orders.set(order.id, copy(order)); }
+  async listOrders(userId: string) {
+    return [...this.orders.values()].filter((item) => item.userId === userId).map(copy);
+  }
+  async appendEvent(event: TradingOrderEvent) { this.events.push(copy(event)); }
+  async listEvents(userId: string) {
+    return this.events.filter((item) => item.userId === userId).map(copy);
+  }
 }
 
 function databaseError() {
@@ -126,6 +232,20 @@ function orderRow(order: TradingOrder) {
     state: order.state,
     payload: order,
     updated_at: order.updatedAt,
+  };
+}
+
+function atomicResult(data: unknown): AtomicPlanOrderResult | null {
+  const candidate = Array.isArray(data) ? data[0] : data;
+  if (!candidate || typeof candidate !== 'object') return null;
+  const row = candidate as Record<string, unknown>;
+  if (!row.plan_payload || !row.order_payload) return null;
+  return {
+    plan: row.plan_payload as TradingPlan,
+    order: row.order_payload as TradingOrder,
+    transitioned: row.transitioned === true,
+    orderInserted: row.order_inserted === true,
+    executionClaimed: row.execution_claimed === true,
   };
 }
 
@@ -244,6 +364,20 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
         .select('payload').maybeSingle();
       if (error) throw databaseError();
       return data?.payload as TradingPlan | null;
+    },
+    async submitPlanAndCreateOrder(plan, expectedState, order, event, executionClaimId) {
+      owned(plan.userId);
+      assertOwner(order.userId, authenticatedUserId);
+      assertOwner(event.userId, authenticatedUserId);
+      const { data, error } = await client.rpc('submit_trade_plan_order', {
+        p_expected_state: expectedState,
+        p_plan_payload: plan,
+        p_order_payload: order,
+        p_event_payload: event,
+        p_execution_claim_id: executionClaimId,
+      });
+      if (error) throw databaseError();
+      return atomicResult(data);
     },
     async savePlan(plan) {
       owned(plan.userId);
