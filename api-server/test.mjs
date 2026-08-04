@@ -45,10 +45,13 @@ const groups = {
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
     path.join(root, 'src/services/ai-chat.service.test.ts'),
     path.join(root, 'src/services/signal-score.test.ts'),
+    path.join(root, 'src/services/bounded-scanner.service.test.ts'),
+    path.join(root, 'src/lib/bounded-work-pool.test.ts'),
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/analysis-selection.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-analysis.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/scanner-request.test.ts'),
   ],
   phase12: [
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
@@ -60,6 +63,7 @@ const groups = {
     path.join(root, 'src/services/trade-execution-reconciliation.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-plan-queue.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
   ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
@@ -68,6 +72,7 @@ const groups = {
     path.join(root, 'src/routes/backtests.smoke.test.ts'),
     path.join(root, 'src/routes/paper-trading.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
+    path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
   ],
 };
 
