@@ -44,6 +44,7 @@ const groups = {
   phase9: [
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
     path.join(root, 'src/services/ai-chat.service.test.ts'),
+    path.join(root, 'src/services/ai-feature-explanation.service.test.ts'),
     path.join(root, 'src/services/signal-score.test.ts'),
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
