@@ -1,0 +1,38 @@
+name: Agent Hub v4 Bootstrap
+
+on:
+  push:
+    branches: [agent/agent-hub-coordinator-v2]
+    paths:
+      - scripts/.agent-hub-v4-bundle/**
+      - scripts/apply_agent_hub_v4_bundle.py
+      - .github/workflows/agent-hub-v4-bootstrap.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-hub-v4-bootstrap-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[agent-hub-v4-final]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: agent/agent-hub-coordinator-v2
+          fetch-depth: 0
+      - name: Apply and validate coordinator bundle
+        run: python3 scripts/apply_agent_hub_v4_bundle.py
+      - name: Commit final Agent Hub v4 files
+        run: |
+          set -Eeuo pipefail
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Strengthen free Agent Hub coordinator [agent-hub-v4-final]'
+          git push origin HEAD:agent/agent-hub-coordinator-v2
