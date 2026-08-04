@@ -55,6 +55,7 @@ const groups = {
     path.join(root, 'src/services/trade-automation-optimization.test.ts'),
     path.join(root, 'src/services/trade-automation-policy-guard.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
+    path.join(root, 'src/routes/trade-automation-plan-queue.test.ts'),
   ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
