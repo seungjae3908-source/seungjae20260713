@@ -5,9 +5,13 @@ import {
 } from '../services/trade-automation.repository';
 import { TradeAutomationService } from '../services/trade-automation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
+import { approvalStatus } from '../services/trade-signal-lifecycle.service';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import type {
+  TradingApprovalStatus,
   TradingMarketSnapshot,
+  TradingPlan,
+  TradingSignalState,
   TradingSignalValidationInput,
 } from '../services/trade-automation.types';
 
@@ -101,6 +105,56 @@ function validationValue(value: unknown): TradingSignalValidationInput {
   };
 }
 
+function unavailableApproval(plan: TradingPlan): TradingApprovalStatus {
+  return {
+    approvalEnabled: false,
+    signalState: (plan.signalState ?? 'WATCHING') as TradingSignalState,
+    planState: plan.state,
+    reasonCode: 'SIGNAL_REVALIDATION_REQUIRED',
+    expiresAt: plan.approvalExpiresAt,
+    lastValidatedAt: plan.lastSignalValidatedAt ?? plan.updatedAt,
+  };
+}
+
+function safeApprovalItem(
+  plan: TradingPlan,
+  order: { state: string; filledQuantity: number; updatedAt: string; lastErrorCode: string | null } | null,
+) {
+  const approval = plan.signalState && plan.lastSignalValidatedAt
+    ? approvalStatus(plan)
+    : unavailableApproval(plan);
+  return {
+    id: plan.id,
+    exchange: plan.exchange,
+    accountMode: plan.accountMode,
+    strategyId: plan.strategyId,
+    signalId: plan.signalId,
+    symbol: plan.symbol,
+    market: plan.market,
+    side: plan.side,
+    orderType: plan.orderType,
+    estimatedKrw: plan.estimatedKrw,
+    quantity: plan.quantity ?? null,
+    limitPrice: plan.limitPrice ?? null,
+    stopPrice: plan.stopPrice,
+    targetPrices: plan.targetPrices,
+    splitRatios: plan.splitRatios,
+    leverage: plan.leverage ?? null,
+    signalReasons: stringList(plan.signalReasons),
+    signalWarnings: stringList(plan.signalWarnings),
+    signalScore: Number.isFinite(Number(plan.signalScore)) ? Number(plan.signalScore) : null,
+    signalConfidence: Number.isFinite(Number(plan.signalConfidence)) ? Number(plan.signalConfidence) : null,
+    signalRiskReward: Number.isFinite(Number(plan.signalRiskReward)) ? Number(plan.signalRiskReward) : null,
+    signalState: plan.signalState ?? 'WATCHING',
+    signalInvalidationReason: plan.signalInvalidationReason ?? null,
+    state: plan.state,
+    approvalExpiresAt: plan.approvalExpiresAt,
+    updatedAt: plan.updatedAt,
+    approval,
+    order,
+  };
+}
+
 function errorResponse(res: Response, error: unknown) {
   const code = error instanceof Error ? error.message.split(':')[0] : 'TRADE_SIGNAL_APPROVAL_FAILED';
   const status = code === 'LOGIN_REQUIRED' ? 401
@@ -115,6 +169,41 @@ function errorResponse(res: Response, error: unknown) {
     approvalEnabled: false,
   });
 }
+
+router.get('/approval-queue', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const [plans, orders] = await Promise.all([
+      repository.listPlans(userId),
+      repository.listOrders(userId),
+    ]);
+    const orderByPlan = new Map(
+      orders.map((order) => [order.planId, {
+        state: order.state,
+        filledQuantity: order.filledQuantity,
+        updatedAt: order.updatedAt,
+        lastErrorCode: order.lastErrorCode,
+      }]),
+    );
+    const cutoff = Date.now() - 24 * 60 * 60_000;
+    const items = plans
+      .filter((plan) => ['APPROVAL_PENDING', 'PLANNED', 'SUBMITTED'].includes(plan.state)
+        || Date.parse(plan.updatedAt) >= cutoff)
+      .slice(0, 50)
+      .map((plan) => safeApprovalItem(plan, orderByPlan.get(plan.id) ?? null));
+    return res.json({
+      ok: true,
+      items,
+      count: items.length,
+      updatedAt: new Date().toISOString(),
+      credentialsExposed: false,
+      accountBalancesExposed: false,
+      orderSubmitted: false,
+    });
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+});
 
 router.get('/plans/:id/approval-status', async (req: AuthenticatedRequest, res) => {
   try {
