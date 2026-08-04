@@ -95,7 +95,7 @@ export function applyScannerSignalLifecycle(
     let cycle = existing?.cycle ?? 1;
     if (
       existing
-      && ['INVALIDATED', 'EXPIRED'].includes(existing.state)
+      && ['WEAKENED', 'INVALIDATED', 'EXPIRED'].includes(existing.state)
       && card.strongSignalEligible
     ) {
       cycle += 1;
@@ -108,7 +108,7 @@ export function applyScannerSignalLifecycle(
     const signalId = cycle === 1 ? baseSignalId : `${baseSignalId}:cycle:${cycle}`;
     const nextCard: ScannerSignalCard = { ...card, signalId, signalState: state };
     const idempotencyKey = alertKey(signalId, card.expiresAt);
-    let lastAlertKey = existing?.lastAlertKey ?? null;
+    let lastAlertKey = resetCycle ? null : existing?.lastAlertKey ?? null;
     if (state === 'READY_FOR_APPROVAL' && lastAlertKey !== idempotencyKey) {
       alerts.push(alertFrom(nextCard, idempotencyKey));
       lastAlertKey = idempotencyKey;
