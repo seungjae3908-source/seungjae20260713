@@ -146,6 +146,7 @@ test('automatic submission reruns the full risk gate and expires stale signals',
   }), policy, false);
   assert.equal(created.plan?.state, 'PLANNED');
   created.plan!.marketSnapshot.observedAt = new Date(Date.now() - 60_000).toISOString();
+  await repository.savePlan(created.plan!);
   await assert.rejects(() => service.beginAutomaticPlan(USER_ID, created.plan!.id), /TRADE_PLAN_RISK_RECHECK_FAILED/);
   assert.equal((await repository.getPlan(USER_ID, created.plan!.id))?.state, 'EXPIRED');
 });
