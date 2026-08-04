@@ -22,6 +22,7 @@ const universe: ScannerUniverseEntry = {
   assetType: 'STOCK',
   exchange: 'KRX',
   listingStatus: 'LISTED',
+  source: 'krx-symbol-master',
 };
 
 function factor(score: number | null, status: 'ok' | 'unavailable' = 'ok') {
