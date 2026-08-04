@@ -4,6 +4,7 @@ import { liveExecutionEnabled, TradeAutomationService } from '../services/trade-
 import { TradeExecutionService } from '../services/trade-execution.service';
 import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import { enforceMemberTradingPolicy, resumeMemberTradingPolicy } from '../services/trade-automation-policy-guard.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import type {
   TradingExchange,
@@ -83,7 +84,9 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
 router.put('/policy', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
-    const policy = normalizeTradingPolicy(req.body);
+    const current = await repository.getPolicy(userId);
+    const candidate = normalizeTradingPolicy({ ...req.body, pilotStage: current.pilotStage });
+    const policy = enforceMemberTradingPolicy(candidate, current);
     const enablingAutomatic = policy.mode === 'automatic' || policy.automaticEnabled
       || Object.values(policy.exchangeEnabled).some(Boolean);
     if (enablingAutomatic && req.body?.confirmation?.acknowledged !== true) {
@@ -95,7 +98,14 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
       policy.enabledAssets = { bitget: [], upbit: [], kiwoom: [] };
     }
     await repository.savePolicy(userId, policy);
-    return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
+    return res.json({
+      ok: true,
+      policy,
+      defaultOff: !policy.automaticEnabled,
+      safetyDowngradeAllowed: false,
+      pilotStageManagedSeparately: true,
+      emergencyStopRequiresConfirmedResume: true,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
@@ -185,6 +195,29 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
     });
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, emergencyStopped: true, newOrdersBlocked: true, existingOrdersCanceled: false });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/resume', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    if (req.body?.confirmation !== 'RESUME_NEW_ORDER_EVALUATION') {
+      return res.status(409).json({ ok: false, error: 'TRADING_RESUME_CONFIRMATION_REQUIRED' });
+    }
+    if (process.env.TRADING_EMERGENCY_STOP === 'true' || await repository.getGlobalEmergencyStop()) {
+      return res.status(409).json({ ok: false, error: 'GLOBAL_EMERGENCY_STOP_ACTIVE' });
+    }
+    const current = await repository.getPolicy(userId);
+    const policy = resumeMemberTradingPolicy(current);
+    await repository.savePolicy(userId, policy);
+    return res.json({
+      ok: true,
+      policy,
+      emergencyStopped: false,
+      automaticTradingEnabledByThisRequest: false,
+      exchangesEnabledByThisRequest: false,
+      requiresFreshSignalEvaluation: true,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
