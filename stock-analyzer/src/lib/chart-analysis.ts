@@ -195,6 +195,18 @@ function statusLabel(status: ChartAnalysisStatus): string {
   return labels[status];
 }
 
+function transitionTargetLabel(status: ChartAnalysisStatus): string {
+  const labels: Record<ChartAnalysisStatus, string> = {
+    forming: '형성 중으로',
+    candidate: '후보로',
+    confirmed: '확정으로',
+    weakened: '약화로',
+    invalidated: '무효화로',
+    expired: '만료로',
+  };
+  return labels[status];
+}
+
 function specializedCopy(
   input: ChartAnalysisInput,
   descriptor: PatternDescriptor,
@@ -260,7 +272,7 @@ function specializedCopy(
 function transitionReason(previous: ChartAnalysis | null | undefined, nextStatus: ChartAnalysisStatus): string {
   if (!previous) return `${statusLabel(nextStatus)} 상태로 최초 감지`;
   if (previous.status === nextStatus) return `${statusLabel(nextStatus)} 상태 유지`;
-  return `${statusLabel(previous.status)}에서 ${statusLabel(nextStatus)}로 변경`;
+  return `${statusLabel(previous.status)}에서 ${transitionTargetLabel(nextStatus)} 변경`;
 }
 
 export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
