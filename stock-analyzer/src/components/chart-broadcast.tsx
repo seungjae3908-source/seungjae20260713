@@ -42,6 +42,7 @@ import {
   shouldAppendTimeline,
   type ChartAnalysis,
 } from "@/lib/chart-analysis";
+import { normalizeChartCandles } from "@/lib/chart-candle-normalizer";
 
 export type ChartBroadcastMarket = "KR" | "US";
 
@@ -328,89 +329,17 @@ function timeframeSeconds(timeframe: ChartTimeframe): number {
 	return map[timeframe];
 }
 
-function parseCompactDate(value: string): number | null {
-	const digits = value.replace(/\D/g, "");
-	if (digits.length < 8) return null;
-	const year = Number(digits.slice(0, 4));
-	const month = Number(digits.slice(4, 6)) - 1;
-	const day = Number(digits.slice(6, 8));
-	const hour = digits.length >= 10 ? Number(digits.slice(8, 10)) : 0;
-	const minute = digits.length >= 12 ? Number(digits.slice(10, 12)) : 0;
-	const second = digits.length >= 14 ? Number(digits.slice(12, 14)) : 0;
-	const timestamp = Date.UTC(year, month, day, hour, minute, second);
-	return Number.isFinite(timestamp) ? Math.floor(timestamp / 1000) : null;
-}
-
-function candleTime(
-	raw: unknown,
-	index: number,
-	total: number,
-	timeframe: ChartTimeframe,
-): UTCTimestamp {
-	if (typeof raw === "number" && Number.isFinite(raw)) {
-		if (raw > 10_000_000_000) return Math.floor(raw / 1000) as UTCTimestamp;
-		if (raw > 1_000_000_000) return Math.floor(raw) as UTCTimestamp;
-	}
-
-	const text = String(raw ?? "").trim();
-	if (text) {
-		if (/^\d{8,14}$/.test(text)) {
-			const parsed = parseCompactDate(text);
-			if (parsed != null) return parsed as UTCTimestamp;
-		}
-		const numeric = Number(text);
-		if (Number.isFinite(numeric) && numeric > 1_000_000_000) {
-			return Math.floor(numeric > 10_000_000_000 ? numeric / 1000 : numeric) as UTCTimestamp;
-		}
-		const parsed = Date.parse(text);
-		if (Number.isFinite(parsed)) return Math.floor(parsed / 1000) as UTCTimestamp;
-	}
-
-	const end = Math.floor(Date.now() / 1000);
-	return (end - Math.max(total - index - 1, 0) * timeframeSeconds(timeframe)) as UTCTimestamp;
-}
-
 function normalizeCandles(rows: AnyObj[], timeframe: ChartTimeframe): CandlePoint[] {
-	const normalized = rows
-		.map((row, index) => {
-			const close = finite(
-				row?.close ?? row?.closePrice ?? row?.cur_prc ?? row?.currentPrice ?? row?.price,
-			);
-			const open = finite(row?.open ?? row?.openPrice ?? row?.open_prc ?? close);
-			const high = finite(row?.high ?? row?.highPrice ?? row?.high_prc ?? open ?? close);
-			const low = finite(row?.low ?? row?.lowPrice ?? row?.low_prc ?? open ?? close);
-			const volume = finite(
-				row?.volume ?? row?.acc_trde_qty ?? row?.tradeVolume ?? row?.tradingVolume ?? 0,
-			);
-			if (close == null || open == null || high == null || low == null) return null;
-
-			const sourceTime = String(
-				row?.time ?? row?.date ?? row?.datetime ?? row?.timestamp ?? row?.dt ?? "",
-			);
-			const time = candleTime(sourceTime, index, rows.length, timeframe);
-			const explicitClosed = typeof row?.isClosed === "boolean"
-				? row.isClosed
-				: typeof row?.closed === "boolean"
-					? row.closed
-					: typeof row?.final === "boolean"
-						? row.final
-						: null;
-			const derivedClosed = timeframe !== "5D" && timeframe !== "20D" && Date.now() / 1000 >= Number(time) + timeframeSeconds(timeframe) + 60;
-			return {
-				time,
-				sourceTime,
-				open,
-				high: Math.max(high, open, close),
-				low: Math.min(low, open, close),
-				close,
-				volume: Math.max(volume ?? 0, 0),
-				isClosed: explicitClosed ?? derivedClosed,
-			} satisfies CandlePoint;
-		})
-		.filter((row: CandlePoint | null): row is CandlePoint => row != null)
-		.sort((a, b) => Number(a.time) - Number(b.time));
-
-	return [...new Map(normalized.map((row) => [Number(row.time), row])).values()];
+	return normalizeChartCandles(rows, timeframe).candles.map((row) => ({
+		time: row.time as UTCTimestamp,
+		sourceTime: row.sourceTime,
+		open: row.open,
+		high: row.high,
+		low: row.low,
+		close: row.close,
+		volume: row.volume,
+		isClosed: row.isClosed,
+	}));
 }
 
 async function fetchChart(ticker: string, timeframe: ChartTimeframe): Promise<ChartPayload> {
