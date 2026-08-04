@@ -94,6 +94,75 @@ router.use('/kiwoom', kiwoomRouter);
 router.use('/debug', requireAdmin, providerDebugRouter);
 router.use('/', pushRouter);
 router.use('/', watchlistRouter);
+
+// The coin special-feed provider is optional. A disconnected provider is an
+// empty, non-fatal feature state rather than a browser-visible HTTP failure.
+// This handler remains behind authentication and canAccessBasicInfo.
+router.get('/stocks/special-feed', (req, res, next) => {
+  const asset = String(req.query.asset ?? 'stock').trim().toLowerCase();
+  if (asset !== 'coin') {
+    next();
+    return;
+  }
+
+  const market = String(req.query.market ?? 'spot').trim().toLowerCase() === 'futures'
+    ? 'futures'
+    : 'spot';
+
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.status(200).json({
+    ok: false,
+    asset: 'coin',
+    market,
+    items: [],
+    count: 0,
+    updatedAt: new Date().toISOString(),
+    message: '코인 특이정보 피드는 아직 연결되지 않았습니다.',
+  });
+});
+
+// Financial statements are an optional detail panel backed by public upstream
+// providers. Preserve every successful response, but convert only the exact
+// provider-delay contract from this one endpoint into an explicit unavailable
+// state. Other endpoints and all other 4xx/5xx responses remain untouched.
+router.use('/stocks/:ticker/financials', (req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = ((body: unknown) => {
+    const payload = body && typeof body === 'object'
+      ? body as Record<string, unknown>
+      : null;
+
+    if (res.statusCode !== 503 || payload?.code !== 'FINANCIAL_PROVIDER_DELAY') {
+      return originalJson(body);
+    }
+
+    const ticker = String(payload.ticker ?? req.params.ticker ?? '').trim().toUpperCase();
+    const unavailableFinancials = {
+      annual: [],
+      yearly: [],
+      quarterly: [],
+      quarters: [],
+      ratios: {},
+      source: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    res.statusCode = 200;
+    return originalJson({
+      ...payload,
+      ok: false,
+      available: false,
+      ticker,
+      financials: unavailableFinancials,
+      ...unavailableFinancials,
+      items: [],
+      summary: '재무 데이터 제공기관의 응답이 지연되고 있습니다.',
+    });
+  }) as typeof res.json;
+
+  next();
+});
+
 router.use('/stocks', stocksRouter);
 router.use('/', secRouter);
 router.use('/backup', backupRouter);
