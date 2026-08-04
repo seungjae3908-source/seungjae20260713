@@ -235,10 +235,57 @@ caddy_route_map() {
   '
 }
 
-route_dial_for_host() {
+pm2_pid_for_name() {
+  local expected_name="$1"
+  command -v pm2 >/dev/null 2>&1 || return 0
+  pm2 jlist 2>/dev/null | node -e '
+    const expected = process.argv[1];
+    let input = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      try {
+        const row = JSON.parse(input).find((candidate) => String(candidate.name ?? "") === expected);
+        const pid = Number(row?.pid ?? 0);
+        if (Number.isInteger(pid) && pid > 0) process.stdout.write(String(pid));
+      } catch {}
+    });
+  ' "$expected_name"
+}
+
+listening_dial_for_pid() {
+  local pid="$1"
+  [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 0 ]] || return 0
+  ss -H -ltnp 2>/dev/null \
+    | awk -v expected="pid=${pid}," 'index($0, expected) { print $4; exit }' \
+    | awk '
+      {
+        value=$0;
+        sub(/^\[/, "", value);
+        sub(/\]$/, "", value);
+        port=value;
+        sub(/^.*:/, "", port);
+        if (port !~ /^[0-9]+$/) next;
+        print "127.0.0.1:" port;
+      }
+    '
+}
+
+caddy_route_has_dial() {
   local routes="$1"
   local host="$2"
-  printf '%s\n' "$routes" | awk -F'|' -v expected="$host" '$1 == expected { print $2; exit }'
+  local dial="$3"
+  local expected_port="${dial##*:}"
+  [[ "$expected_port" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$routes" \
+    | awk -F'|' -v expected_host="$host" -v expected_port="$expected_port" '
+        $1 == expected_host {
+          port=$2;
+          sub(/^.*:/, "", port);
+          if (port == expected_port) found=1;
+        }
+        END { exit(found ? 0 : 1) }
+      '
 }
 
 socket_port_is_listening() {
@@ -496,19 +543,31 @@ fi
 
 section 'caddy_route_mapping'
 caddy_routes="$(caddy_route_map)"
-production_dial="$(route_dial_for_host "$caddy_routes" 'lsj119.duckdns.org')"
-staging_dial="$(route_dial_for_host "$caddy_routes" 'lsj119-staging.duckdns.org')"
+production_pid="$(pm2_pid_for_name 'stock-app')"
+staging_pid="$(pm2_pid_for_name 'seungjae-staging')"
+production_dial="$(listening_dial_for_pid "$production_pid")"
+staging_dial="$(listening_dial_for_pid "$staging_pid")"
 printf '%s\n' "$caddy_routes" | while IFS='|' read -r host dial; do
   [[ -n "$host" && -n "$dial" ]] || continue
   printf 'CADDY_ROUTE\thost=%s\tport=%s\n' "$host" "${dial##*:}"
 done
-if [[ -z "$production_dial" ]]; then record_failure 'production_internal_route_unresolved'; fi
-if [[ -z "$staging_dial" ]]; then record_failure 'staging_internal_route_unresolved'; fi
+printf 'INTERNAL_ROUTE\ttarget=production\tpm2_name=stock-app\tpid=%s\tdial=%s\n' \
+  "${production_pid:-unavailable}" "${production_dial:-unavailable}"
+printf 'INTERNAL_ROUTE\ttarget=staging\tpm2_name=seungjae-staging\tpid=%s\tdial=%s\n' \
+  "${staging_pid:-unavailable}" "${staging_dial:-unavailable}"
+if [[ -z "$production_dial" ]]; then record_failure 'production_internal_socket_unresolved'; fi
+if [[ -z "$staging_dial" ]]; then record_failure 'staging_internal_socket_unresolved'; fi
 if [[ -n "$production_dial" ]] && ! socket_port_is_listening "$production_dial"; then
   record_failure 'production_internal_socket_not_listening'
 fi
 if [[ -n "$staging_dial" ]] && ! socket_port_is_listening "$staging_dial"; then
   record_failure 'staging_internal_socket_not_listening'
+fi
+if [[ -n "$production_dial" ]] && ! caddy_route_has_dial "$caddy_routes" 'lsj119.duckdns.org' "$production_dial"; then
+  record_failure 'production_caddy_route_mismatch'
+fi
+if [[ -n "$staging_dial" ]] && ! caddy_route_has_dial "$caddy_routes" 'lsj119-staging.duckdns.org' "$staging_dial"; then
+  record_failure 'staging_caddy_route_mismatch'
 fi
 
 section 'health_verification'
