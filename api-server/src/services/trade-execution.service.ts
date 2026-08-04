@@ -1,5 +1,5 @@
 import type { TradingRepository } from './trade-automation.repository';
-import { TradeAutomationService, liveExecutionEnabled } from './trade-automation.service';
+import { TradeAutomationService, liveExecutionEnabled, withTradePlanLock } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import {
   prepareBitgetAccount,
@@ -136,112 +136,132 @@ export class TradeExecutionService {
   }
 
   async execute(userId: string, plan: TradingPlan, order: TradingOrder) {
-    const connection = await this.repository.getConnection(userId, plan.exchange);
-    if (!connection?.configured || !connection.encryptedCredentials) {
-      return this.automation.transition(order, 'REJECTED', 'EXCHANGE_CONNECTION_NOT_CONFIGURED', {
-        errorCode: 'EXCHANGE_CONNECTION_NOT_CONFIGURED',
-      });
-    }
-    if (connection.accountMode !== plan.accountMode) {
-      return this.automation.transition(order, 'REJECTED', 'ACCOUNT_MODE_MISMATCH', { errorCode: 'ACCOUNT_MODE_MISMATCH' });
-    }
-
-    if (plan.accountMode === 'paper' || (plan.accountMode === 'mock' && plan.exchange !== 'kiwoom')) {
-      await this.automation.transition(order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED');
-      return this.automation.transition(order, 'FILLED', 'PAPER_BROKER_FILLED', {
-        exchangeOrderId: `paper-${order.clientOrderId}`,
-        filledQuantity: plan.quantity ?? 0,
-        averageFillPrice: plan.limitPrice ?? (plan.quoteAmount && plan.quantity ? plan.quoteAmount / plan.quantity : null),
-      });
-    }
-
-    const mockKiwoom = plan.exchange === 'kiwoom' && plan.accountMode === 'mock';
-    if (!mockKiwoom && !liveExecutionEnabled(plan.exchange)) {
-      return this.automation.transition(order, 'REJECTED', 'LIVE_EXECUTION_DISABLED', { errorCode: 'LIVE_EXECUTION_DISABLED' });
-    }
-    if (mockKiwoom && process.env.KIWOOM_MOCK_ORDER_ENABLED !== 'true') {
-      return this.automation.transition(order, 'REJECTED', 'KIWOOM_MOCK_EXECUTION_DISABLED', { errorCode: 'KIWOOM_MOCK_EXECUTION_DISABLED' });
-    }
-
-    try {
-      const credentials = decryptTradingCredentials(connection.encryptedCredentials);
-      const result = plan.exchange === 'bitget'
-        ? await this.executeBitget(plan, order, credentials as BitgetCredentials)
-        : plan.exchange === 'upbit'
-          ? await this.executeUpbit(plan, order, credentials as UpbitCredentials)
-          : await this.executeKiwoom(plan, order, credentials as KiwoomCredentials, mockKiwoom);
-      await this.automation.transition(order, 'ACCEPTED', 'EXCHANGE_ACCEPTED', { exchangeOrderId: result.orderId });
-      if (result.reconciliationRequired) {
-        return this.automation.transition(order, 'RECOVERY_REQUIRED', 'POST_ORDER_RECONCILIATION_REQUIRED', {
-          errorCode: 'POST_ORDER_QUERY_FAILED',
+    return withTradePlanLock(userId, plan.id, async () => {
+      const persisted = await this.repository.getOrder(userId, order.id);
+      if (persisted) Object.assign(order, persisted);
+      if (order.state !== 'SUBMITTED') return order;
+      if (await this.automation.executionBlockedByEmergencyStop(userId)) {
+        return this.automation.transition(order, 'REJECTED', 'EMERGENCY_STOP_ACTIVE', {
+          errorCode: 'EMERGENCY_STOP_ACTIVE',
         });
       }
-      return order;
-    } catch (error) {
-      const errorCode = error instanceof Error ? error.message.split(':')[0] : 'EXCHANGE_REQUEST_FAILED';
-      if (errorCode === 'EXCHANGE_TIMEOUT') {
-        return this.automation.transition(order, 'RECOVERY_REQUIRED', 'AMBIGUOUS_EXCHANGE_TIMEOUT', { errorCode });
+
+      const connection = await this.repository.getConnection(userId, plan.exchange);
+      if (!connection?.configured || !connection.encryptedCredentials) {
+        return this.automation.transition(order, 'REJECTED', 'EXCHANGE_CONNECTION_NOT_CONFIGURED', {
+          errorCode: 'EXCHANGE_CONNECTION_NOT_CONFIGURED',
+        });
       }
-      return this.automation.transition(order, 'REJECTED', 'EXCHANGE_REJECTED', { errorCode });
-    }
+      if (connection.accountMode !== plan.accountMode) {
+        return this.automation.transition(order, 'REJECTED', 'ACCOUNT_MODE_MISMATCH', { errorCode: 'ACCOUNT_MODE_MISMATCH' });
+      }
+
+      if (plan.accountMode === 'paper' || (plan.accountMode === 'mock' && plan.exchange !== 'kiwoom')) {
+        await this.automation.transition(order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED');
+        return this.automation.transition(order, 'FILLED', 'PAPER_BROKER_FILLED', {
+          exchangeOrderId: `paper-${order.clientOrderId}`,
+          filledQuantity: plan.quantity ?? 0,
+          averageFillPrice: plan.limitPrice ?? (plan.quoteAmount && plan.quantity ? plan.quoteAmount / plan.quantity : null),
+        });
+      }
+
+      const mockKiwoom = plan.exchange === 'kiwoom' && plan.accountMode === 'mock';
+      if (!mockKiwoom && !liveExecutionEnabled(plan.exchange)) {
+        return this.automation.transition(order, 'REJECTED', 'LIVE_EXECUTION_DISABLED', { errorCode: 'LIVE_EXECUTION_DISABLED' });
+      }
+      if (mockKiwoom && process.env.KIWOOM_MOCK_ORDER_ENABLED !== 'true') {
+        return this.automation.transition(order, 'REJECTED', 'KIWOOM_MOCK_EXECUTION_DISABLED', { errorCode: 'KIWOOM_MOCK_EXECUTION_DISABLED' });
+      }
+      if (await this.automation.executionBlockedByEmergencyStop(userId)) {
+        return this.automation.transition(order, 'REJECTED', 'EMERGENCY_STOP_ACTIVE', {
+          errorCode: 'EMERGENCY_STOP_ACTIVE',
+        });
+      }
+
+      try {
+        const credentials = decryptTradingCredentials(connection.encryptedCredentials);
+        const result = plan.exchange === 'bitget'
+          ? await this.executeBitget(plan, order, credentials as BitgetCredentials)
+          : plan.exchange === 'upbit'
+            ? await this.executeUpbit(plan, order, credentials as UpbitCredentials)
+            : await this.executeKiwoom(plan, order, credentials as KiwoomCredentials, mockKiwoom);
+        await this.automation.transition(order, 'ACCEPTED', 'EXCHANGE_ACCEPTED', { exchangeOrderId: result.orderId });
+        if (result.reconciliationRequired) {
+          return this.automation.transition(order, 'RECOVERY_REQUIRED', 'POST_ORDER_RECONCILIATION_REQUIRED', {
+            errorCode: 'POST_ORDER_QUERY_FAILED',
+          });
+        }
+        return order;
+      } catch (error) {
+        const errorCode = error instanceof Error ? error.message.split(':')[0] : 'EXCHANGE_REQUEST_FAILED';
+        if (errorCode === 'EXCHANGE_TIMEOUT') {
+          return this.automation.transition(order, 'RECOVERY_REQUIRED', 'AMBIGUOUS_EXCHANGE_TIMEOUT', { errorCode });
+        }
+        return this.automation.transition(order, 'REJECTED', 'EXCHANGE_REJECTED', { errorCode });
+      }
+    });
   }
 
   async cancel(userId: string, plan: TradingPlan, order: TradingOrder) {
-    if (['FILLED', 'CANCELED', 'REJECTED', 'EXPIRED'].includes(order.state)) return order;
-    if (order.state !== 'CANCEL_REQUESTED') {
-      await this.automation.transition(order, 'CANCEL_REQUESTED', 'USER_OR_SIGNAL_CANCEL_REQUESTED', {
-        filledQuantity: order.filledQuantity,
-      });
-    }
-    if (plan.accountMode === 'paper' || (plan.accountMode === 'mock' && plan.exchange !== 'kiwoom')) {
-      return this.automation.transition(order, 'CANCELED', 'PAPER_BROKER_CANCELED', {
-        filledQuantity: order.filledQuantity,
-      });
-    }
-
-    const connection = await this.repository.getConnection(userId, plan.exchange);
-    if (!connection?.configured || !connection.encryptedCredentials || connection.accountMode !== plan.accountMode) {
-      return this.automation.transition(order, 'RECOVERY_REQUIRED', 'CANCEL_CONNECTION_UNAVAILABLE', {
-        errorCode: 'CANCEL_CONNECTION_UNAVAILABLE',
-      });
-    }
-    const mockKiwoom = plan.exchange === 'kiwoom' && plan.accountMode === 'mock';
-    if ((!mockKiwoom && !liveExecutionEnabled(plan.exchange))
-      || (mockKiwoom && process.env.KIWOOM_MOCK_ORDER_ENABLED !== 'true')) {
-      return this.automation.transition(order, 'RECOVERY_REQUIRED', 'CANCEL_EXECUTION_DISABLED', {
-        errorCode: 'CANCEL_EXECUTION_DISABLED',
-      });
-    }
-
-    try {
-      const credentials = decryptTradingCredentials(connection.encryptedCredentials);
-      if (plan.exchange === 'bitget') {
-        assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
-          prepareBitgetCancel(credentials as BitgetCredentials, plan.symbol, order.clientOrderId)));
-      } else if (plan.exchange === 'upbit') {
-        assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
-          prepareUpbitCancel(credentials as UpbitCredentials, order.clientOrderId)));
-      } else {
-        const baseUrl = mockKiwoom ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
-        const kiwoomCredentials = credentials as KiwoomCredentials;
-        const tokenPayload = assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomToken(kiwoomCredentials)));
-        const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
-        if (!token || !order.exchangeOrderId) throw new Error('KIWOOM_CANCEL_CONTEXT_MISSING');
-        assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomCancel(
-          { ...kiwoomCredentials, accessToken: token },
-          { symbol: plan.symbol, orderNo: order.exchangeOrderId,
-            quantity: Math.max(0, Number(order.requestedQuantity ?? 0) - order.filledQuantity) },
-        )));
+    return withTradePlanLock(userId, plan.id, async () => {
+      const persisted = await this.repository.getOrder(userId, order.id);
+      if (persisted) Object.assign(order, persisted);
+      if (['FILLED', 'CANCELED', 'REJECTED', 'EXPIRED'].includes(order.state)) return order;
+      if (order.state !== 'CANCEL_REQUESTED') {
+        await this.automation.transition(order, 'CANCEL_REQUESTED', 'USER_OR_SIGNAL_CANCEL_REQUESTED', {
+          filledQuantity: order.filledQuantity,
+        });
       }
-      return this.automation.transition(order, 'CANCELED', 'EXCHANGE_CANCEL_ACCEPTED', {
-        filledQuantity: order.filledQuantity,
-      });
-    } catch (error) {
-      const errorCode = error instanceof Error ? error.message.split(':')[0] : 'EXCHANGE_CANCEL_FAILED';
-      return this.automation.transition(order, 'RECOVERY_REQUIRED', 'EXCHANGE_CANCEL_REQUIRES_RECONCILIATION', {
-        errorCode,
-      });
-    }
+      if (plan.accountMode === 'paper' || (plan.accountMode === 'mock' && plan.exchange !== 'kiwoom')) {
+        return this.automation.transition(order, 'CANCELED', 'PAPER_BROKER_CANCELED', {
+          filledQuantity: order.filledQuantity,
+        });
+      }
+
+      const connection = await this.repository.getConnection(userId, plan.exchange);
+      if (!connection?.configured || !connection.encryptedCredentials || connection.accountMode !== plan.accountMode) {
+        return this.automation.transition(order, 'RECOVERY_REQUIRED', 'CANCEL_CONNECTION_UNAVAILABLE', {
+          errorCode: 'CANCEL_CONNECTION_UNAVAILABLE',
+        });
+      }
+      const mockKiwoom = plan.exchange === 'kiwoom' && plan.accountMode === 'mock';
+      if ((!mockKiwoom && !liveExecutionEnabled(plan.exchange))
+        || (mockKiwoom && process.env.KIWOOM_MOCK_ORDER_ENABLED !== 'true')) {
+        return this.automation.transition(order, 'RECOVERY_REQUIRED', 'CANCEL_EXECUTION_DISABLED', {
+          errorCode: 'CANCEL_EXECUTION_DISABLED',
+        });
+      }
+
+      try {
+        const credentials = decryptTradingCredentials(connection.encryptedCredentials);
+        if (plan.exchange === 'bitget') {
+          assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
+            prepareBitgetCancel(credentials as BitgetCredentials, plan.symbol, order.clientOrderId)));
+        } else if (plan.exchange === 'upbit') {
+          assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
+            prepareUpbitCancel(credentials as UpbitCredentials, order.clientOrderId)));
+        } else {
+          const baseUrl = mockKiwoom ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
+          const kiwoomCredentials = credentials as KiwoomCredentials;
+          const tokenPayload = assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomToken(kiwoomCredentials)));
+          const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
+          if (!token || !order.exchangeOrderId) throw new Error('KIWOOM_CANCEL_CONTEXT_MISSING');
+          assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomCancel(
+            { ...kiwoomCredentials, accessToken: token },
+            { symbol: plan.symbol, orderNo: order.exchangeOrderId,
+              quantity: Math.max(0, Number(order.requestedQuantity ?? 0) - order.filledQuantity) },
+          )));
+        }
+        return this.automation.transition(order, 'CANCELED', 'EXCHANGE_CANCEL_ACCEPTED', {
+          filledQuantity: order.filledQuantity,
+        });
+      } catch (error) {
+        const errorCode = error instanceof Error ? error.message.split(':')[0] : 'EXCHANGE_CANCEL_FAILED';
+        return this.automation.transition(order, 'RECOVERY_REQUIRED', 'EXCHANGE_CANCEL_REQUIRES_RECONCILIATION', {
+          errorCode,
+        });
+      }
+    });
   }
 
   private async executeBitget(plan: TradingPlan, order: TradingOrder, credentials: BitgetCredentials) {
