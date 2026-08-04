@@ -20,6 +20,7 @@ import {
   externalChartWindowFeatures,
   isDesktopChartViewport,
   isExternalChartSearch,
+  mergeChartRouteSelection,
   parseChartWindowMessage,
 } from '@/lib/chart-external-window';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
@@ -54,9 +55,10 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const externalMode = useMemo(() => isExternalChartSearch(search), [search]);
   const externalSyncId = useMemo(() => chartSyncIdFromSearch(search), [search]);
   const fromUrl = useMemo(() => selectionFromSearch(search), [search]);
-  const selection = useMemo<AnalysisSelection>(() => fromUrl
-    ? { ...(state.selection?.ticker === fromUrl.ticker ? state.selection : {}), ...fromUrl }
-    : state.selection ?? fallbackSelection(), [fromUrl, state.selection]);
+  const selection = useMemo<AnalysisSelection>(
+    () => mergeChartRouteSelection(fromUrl, state.selection) ?? fallbackSelection(),
+    [fromUrl, state.selection],
+  );
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(null);
@@ -67,12 +69,6 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const popupPollRef = useRef<number | null>(null);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
-
-  useEffect(() => {
-    if (fromUrl) selectSelection({ ...state.selection, ...fromUrl, selectedAt: state.selection?.selectedAt ?? fromUrl.selectedAt } as AnalysisSelection);
-    // URL selection is authoritative only when the URL changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromUrl?.ticker, fromUrl?.market, fromUrl?.timeframe]);
 
   useEffect(() => {
     if (embedded || externalMode || typeof window === 'undefined') {
