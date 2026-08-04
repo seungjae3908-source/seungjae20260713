@@ -1,0 +1,88 @@
+name: Temporary Staging Artifact Security Patch
+
+on:
+  push:
+    branches:
+      - security/sanitize-staging-playwright-artifacts
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: contains(github.event.head_commit.message, '[artifact-security-bootstrap]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/sanitize-staging-playwright-artifacts
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Apply deterministic artifact security patch
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: expected one match, found {text.count(old)}')
+              target.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              'stock-analyzer/playwright.config.ts',
+              "    trace: 'retain-on-failure',",
+              "    trace: stagingMode ? 'off' : 'retain-on-failure',",
+          )
+
+          replace_once(
+              'api-server/package.json',
+              'node ./scripts/verify-server-readonly-diagnostics-contract.mjs",',
+              'node ./scripts/verify-server-readonly-diagnostics-contract.mjs && node ./scripts/verify-staging-artifact-sanitization-contract.mjs",',
+          )
+
+          replace_once(
+              '.github/workflows/staging-readiness.yml',
+              '''      - name: Upload immutable staging verdict and diagnostics
+                if: always()
+                uses: actions/upload-artifact@v4''',
+              '''      - name: Sanitize and verify staging artifacts before upload
+                id: sanitize_artifacts
+                if: always()
+                run: node api-server/scripts/sanitize-staging-playwright-artifacts.mjs "$STAGING_ARTIFACT_DIR"
+              - name: Upload immutable staging verdict and diagnostics
+                if: always() && steps.sanitize_artifacts.outcome == 'success'
+                uses: actions/upload-artifact@v4''',
+          )
+          PY
+          rm -f .github/workflows/tmp-staging-artifact-security-patch.yml
+          git diff --check
+      - name: Validate sanitizer and application contracts
+        run: |
+          set -Eeuo pipefail
+          pnpm install --frozen-lockfile
+          node api-server/scripts/verify-staging-artifact-sanitization-contract.mjs
+          pnpm --dir stock-analyzer run typecheck
+          pnpm --dir api-server run typecheck
+          pnpm --dir api-server run test:phase12
+          pnpm --dir stock-analyzer run build
+          pnpm --dir api-server run build:server
+      - name: Commit artifact security patch
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet && { echo 'No security patch changes produced.' >&2; exit 1; }
+          git commit -m 'security: sanitize staging Playwright artifacts before upload'
+          git push origin HEAD:security/sanitize-staging-playwright-artifacts
