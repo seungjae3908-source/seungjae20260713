@@ -2,6 +2,7 @@ import { CATALOG, type CatalogEntry } from '../data/catalog';
 import { classifyAssetType } from '../data/asset-type';
 import { runBoundedWorkPool } from '../lib/bounded-work-pool';
 import { computeIndicators } from '../sample/indicators';
+import type { Timeframe } from '../sample/types';
 import {
   computeScanConditions,
   computeSignalReport,
@@ -25,7 +26,13 @@ export const SCAN_EXECUTION_LIMITS = Object.freeze({
 
 const SCAN_CARD_LIMIT = 100;
 const SCAN_POOL_LIMIT = 200;
-const SCAN_TIMEFRAMES = new Set(['5m', '15m', '60m', '4H', '1D']);
+const SCAN_TIMEFRAMES = ['5m', '15m', '60m', '4H', '1D'] as const satisfies readonly Timeframe[];
+
+export type ScannerTimeframe = (typeof SCAN_TIMEFRAMES)[number];
+
+function isScannerTimeframe(value: string): value is ScannerTimeframe {
+  return SCAN_TIMEFRAMES.some((timeframe) => timeframe === value);
+}
 
 type ScanKey =
   | 'accumulation'
@@ -140,7 +147,7 @@ export interface BoundedScanResult {
     minimumScore: number | null;
     maximumRiskScore: number | null;
   };
-  timeframe: string;
+  timeframe: ScannerTimeframe;
   partial: boolean;
   timedOut: boolean;
   elapsedMs: number;
@@ -153,7 +160,7 @@ export interface BoundedScanResult {
 
 export interface BoundedScannerDependencies {
   catalog: readonly CatalogEntry[];
-  getCandles: (ticker: string, timeframe: string) => Promise<CandleList>;
+  getCandles: (ticker: string, timeframe: ScannerTimeframe) => Promise<CandleList>;
   getQuote: (ticker: string) => Promise<Quote>;
   getContext: (entry: CatalogEntry) => Promise<SignalContext>;
   now: () => number;
@@ -209,14 +216,12 @@ function percentChange(from: number, to: number): number {
   return from ? ((to - from) / Math.abs(from)) * 100 : 0;
 }
 
-function scanTimeframe(value: unknown, market: string): '5m' | '15m' | '60m' | '4H' | '1D' {
+function scanTimeframe(value: unknown, market: string): ScannerTimeframe {
   const normalized = String(value ?? '1D') === '1H' ? '60m' : String(value ?? '1D');
   if (String(market).toUpperCase() === 'US' && normalized === '4H') {
     throw new Error('SCAN_TIMEFRAME_UNSUPPORTED:US:4H');
   }
-  return SCAN_TIMEFRAMES.has(normalized)
-    ? normalized as '5m' | '15m' | '60m' | '4H' | '1D'
-    : '1D';
+  return isScannerTimeframe(normalized) ? normalized : '1D';
 }
 
 function boundedLookback(value: unknown, fallback = 20): number {
@@ -234,7 +239,7 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new ScanRequestAbortedError();
 }
 
-function candleDataState(candles: CandleList, timeframe: string): ScanCard['dataState'] {
+function candleDataState(candles: CandleList, timeframe: ScannerTimeframe): ScanCard['dataState'] {
   if (!candles.length) return 'unavailable';
   if (candles.length < 20) return 'insufficient';
   const rawTime = candles.at(-1)?.time;
@@ -419,7 +424,7 @@ function createCard(
   matched: string[],
   missing: string[],
   selectedCount: number,
-  timeframe: string,
+  timeframe: ScannerTimeframe,
   marketMove: number | null,
 ): ScanCard {
   const report = computeSignalReport(candles, computeIndicators(candles), context);
