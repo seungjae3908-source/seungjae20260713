@@ -1,0 +1,195 @@
+name: Read-only Shared Server Diagnostics
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: shared-server-readonly-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    name: Read-only shared server resource and incident diagnostics
+    if: >-
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/run-server-diagnostics ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: staging
+    env:
+      DIAGNOSTIC_DIR: ${{ github.workspace }}/server-diagnostics-artifacts
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Parse exact owner diagnostics command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == "seungjae3908-source" ]] || { echo 'Only the repository owner may run shared server diagnostics.' >&2; exit 1; }
+          [[ "$AUTHOR_ASSOCIATION" == "OWNER" ]] || { echo 'Command author is not the repository owner.' >&2; exit 1; }
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-server-diagnostics ([0-9a-fA-F]{40}) ([0-9]{8,20}) (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /run-server-diagnostics <40-character-incident-sha> <staging-run-id> <incident-utc-time>');
+            process.exit(1);
+          }
+          const incident = new Date(match[3]);
+          if (!Number.isFinite(incident.getTime())) {
+            console.error('Incident UTC time is invalid.');
+            process.exit(1);
+          }
+          const start = new Date(incident.getTime() - 10 * 60_000).toISOString();
+          const end = new Date(incident.getTime() + 10 * 60_000).toISOString();
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1].toLowerCase()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `run_id=${match[2]}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `incident_at=${incident.toISOString()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `incident_start=${start}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `incident_end=${end}\n`);
+          NODE
+
+      - name: Require incident SHA contained in current main
+        env:
+          INCIDENT_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$INCIDENT_SHA"
+          git cat-file -e "$INCIDENT_SHA^{commit}"
+          git merge-base --is-ancestor "$INCIDENT_SHA" origin/main || {
+            echo 'Incident SHA is not contained in current main.' >&2
+            exit 1
+          }
+
+      - name: Configure SSH without exposing credentials
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh "$DIAGNOSTIC_DIR"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$STAGING_SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$STAGING_SSH_PORT" -H "$STAGING_SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Run read-only diagnostics over SSH
+        id: diagnostics
+        env:
+          INCIDENT_START: ${{ steps.command.outputs.incident_start }}
+          INCIDENT_END: ${{ steps.command.outputs.incident_end }}
+          INCIDENT_RUN_ID: ${{ steps.command.outputs.run_id }}
+        run: |
+          set -Eeuo pipefail
+          artifact="$DIAGNOSTIC_DIR/server-resource-diagnostics.txt"
+          remote_command="$(printf 'INCIDENT_START=%q INCIDENT_END=%q INCIDENT_RUN_ID=%q bash -s' \
+            "$INCIDENT_START" "$INCIDENT_END" "$INCIDENT_RUN_ID")"
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$remote_command" \
+            < ops/server-readonly-diagnostics.sh > "$artifact"
+          grep -Fx 'READ_ONLY_DIAGNOSTICS_COMPLETE' "$artifact" >/dev/null
+
+      - name: Enforce diagnostic redaction contract
+        run: |
+          set -Eeuo pipefail
+          artifact="$DIAGNOSTIC_DIR/server-resource-diagnostics.txt"
+          if grep -Eiq -- \
+            '-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----|https?://|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|(authorization|apikey|api_key|password|token|secret)[=:][^<[:space:]]|STAGING_[A-Z0-9_]+=' \
+            "$artifact"; then
+            echo 'Diagnostic artifact contains a prohibited sensitive pattern.' >&2
+            exit 1
+          fi
+
+      - name: Write non-sensitive diagnostic metadata
+        env:
+          INCIDENT_SHA: ${{ steps.command.outputs.sha }}
+          INCIDENT_RUN_ID: ${{ steps.command.outputs.run_id }}
+          INCIDENT_AT: ${{ steps.command.outputs.incident_at }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const result = {
+            status: 'passed',
+            mode: 'read_only',
+            incident_sha: process.env.INCIDENT_SHA,
+            incident_run_id: process.env.INCIDENT_RUN_ID,
+            incident_at: process.env.INCIDENT_AT,
+            server_files_written: 0,
+            server_files_deleted: 0,
+            server_processes_restarted: 0,
+            deployment_executed: false,
+            production_deployment_executed: false,
+            secret_values_recorded: false,
+            source_run_id: process.env.GITHUB_RUN_ID,
+            source_run_attempt: process.env.GITHUB_RUN_ATTEMPT,
+          };
+          fs.writeFileSync(
+            path.join(process.env.DIAGNOSTIC_DIR, 'server-resource-diagnostics-metadata.json'),
+            `${JSON.stringify(result, null, 2)}\n`,
+          );
+          NODE
+
+      - name: Upload read-only server diagnostics
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-readonly-diagnostics-${{ steps.command.outputs.run_id }}
+          path: server-diagnostics-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record read-only diagnostics result
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          INCIDENT_SHA: ${{ steps.command.outputs.sha }}
+          INCIDENT_RUN_ID: ${{ steps.command.outputs.run_id }}
+          INCIDENT_AT: ${{ steps.command.outputs.incident_at }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostics.outcome }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            const passed = process.env.DIAGNOSTIC_OUTCOME === 'success';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                passed ? 'Read-only shared server diagnostics completed.' : 'Read-only shared server diagnostics failed without changing the server.',
+                '',
+                `- Incident SHA: \`${process.env.INCIDENT_SHA}\``,
+                `- Incident Staging Run ID: \`${process.env.INCIDENT_RUN_ID}\``,
+                `- Incident UTC time: \`${process.env.INCIDENT_AT}\``,
+                `- Diagnostics Run ID: \`${context.runId}\``,
+                `- Diagnostics status: \`${passed ? 'completed' : 'failed'}\``,
+                '- Server files deleted: `0`',
+                '- Server processes restarted or stopped: `0`',
+                '- Staging deployment executed: `false`',
+                '- Production deployment executed: `false`',
+                '- Production database changed: `false`',
+                '- Secret values recorded: `false`',
+                `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+              ].join('\n'),
+            });
+            if (!passed) core.setFailed('Read-only server diagnostics did not complete.');
