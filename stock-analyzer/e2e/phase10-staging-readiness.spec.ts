@@ -25,9 +25,10 @@ const emptyAccounts: StagingAccountCredentials = {
 };
 let accounts = emptyAccounts;
 let accountLifecycle: StagingAccountLifecycle | null = null;
-const expectedLogoutAbortPages = new WeakSet<Page>();
 
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
+type LogoutObservation = { candidates: Diagnostic[] };
+const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const diagnostics: {
   console_errors: Diagnostic[];
   page_errors: Diagnostic[];
@@ -45,23 +46,40 @@ const diagnostics: {
 function diagnosticUrl(raw: string) {
   try {
     const parsed = new URL(raw);
-    return `${parsed.pathname}${parsed.search}`;
+    if (
+      parsed.pathname === '/auth/v1/logout'
+      && parsed.searchParams.size === 1
+      && parsed.searchParams.get('scope') === 'global'
+    ) {
+      return '/auth/v1/logout?scope=global';
+    }
+    return parsed.pathname || '/';
   } catch {
     return '[invalid-url]';
   }
 }
 
-function isExpectedLogoutAbort(page: Page, request: Request) {
-  if (!expectedLogoutAbortPages.has(page)) return false;
+function diagnosticText(raw: string) {
+  return raw
+    .replace(/https?:\/\/[^\s"'`<>]+/gi, '[redacted-url]')
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[redacted-token]')
+    .replace(/\b(?:sb_publishable|sb_secret|service_role|anon)_[A-Za-z0-9._-]+\b/gi, '[redacted-key]')
+    .replace(/((?:authorization|apikey|api[_-]?key|token|password|secret|key)\s*[:=]\s*)([^\s,;]+)/gi, '$1[redacted]');
+}
+
+function isExpectedLogoutAbort(request: Request) {
   let parsed: URL;
   try {
     parsed = new URL(request.url());
   } catch {
     return false;
   }
+  const query = [...parsed.searchParams.entries()];
   return request.method() === 'POST'
     && parsed.pathname === '/auth/v1/logout'
-    && parsed.searchParams.get('scope') === 'global'
+    && query.length === 1
+    && query[0]?.[0] === 'scope'
+    && query[0]?.[1] === 'global'
     && request.failure()?.errorText === 'net::ERR_ABORTED';
 }
 
@@ -75,15 +93,16 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   const testName = testInfo.titlePath.join(' > ');
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
-    const detail = message.text();
+    const detail = diagnosticText(message.text());
     const url = diagnosticUrl(page.url());
     diagnostics.console_errors.push({ test: testName, url, detail });
     recordUnhandled(testName, url, detail);
   });
   page.on('pageerror', (error) => {
     const url = diagnosticUrl(page.url());
-    diagnostics.page_errors.push({ test: testName, url, detail: error.message });
-    recordUnhandled(testName, url, error.message);
+    const detail = diagnosticText(error.message);
+    diagnostics.page_errors.push({ test: testName, url, detail });
+    recordUnhandled(testName, url, detail);
   });
   page.on('response', (response) => {
     if (response.status() < 400) return;
@@ -91,22 +110,23 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       test: testName,
       url: diagnosticUrl(response.url()),
       status: response.status(),
-      detail: `${response.request().method()} ${response.status()} ${response.statusText()}`,
+      detail: diagnosticText(`${response.request().method()} ${response.status()} ${response.statusText()}`),
     });
   });
   page.on('requestfailed', (request) => {
-    const detail = `${request.method()} ${request.failure()?.errorText ?? 'request failed'}`;
-    const url = diagnosticUrl(request.url());
-    if (isExpectedLogoutAbort(page, request)) {
-      diagnostics.expected_logout_aborts.push({ test: testName, url, status: 0, detail });
-      return;
-    }
-    diagnostics.unexpected_http_errors.push({
+    const detail = diagnosticText(`${request.method()} ${request.failure()?.errorText ?? 'request failed'}`);
+    const diagnostic: Diagnostic = {
       test: testName,
-      url,
+      url: diagnosticUrl(request.url()),
       status: 0,
       detail,
-    });
+    };
+    const observation = activeLogoutObservations.get(page);
+    if (observation && isExpectedLogoutAbort(request)) {
+      observation.candidates.push(diagnostic);
+      return;
+    }
+    diagnostics.unexpected_http_errors.push(diagnostic);
   });
 }
 
@@ -131,13 +151,37 @@ async function login(page: Page, loginName: string, password: string) {
 }
 
 async function logout(page: Page) {
-  expectedLogoutAbortPages.add(page);
+  const logoutButton = page.getByRole('button', { name: /로그아웃|sign out/i });
+  await expect(logoutButton).toBeVisible();
+  const observation: LogoutObservation = { candidates: [] };
+  activeLogoutObservations.set(page, observation);
+  let confirmed = false;
   try {
-    await page.getByRole('button', { name: /로그아웃|sign out/i }).click();
+    await logoutButton.click();
     await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
     await page.waitForTimeout(300);
+
+    await page.reload();
+    await settle(page);
+    await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toHaveCount(0);
+
+    const protectedResponse = await page.request.get('/api/paper-journal/snapshot');
+    expect(
+      [401, 403],
+      `protected API remained accessible after logout: ${protectedResponse.status()}`,
+    ).toContain(protectedResponse.status());
+
+    confirmed = true;
+    diagnostics.expected_logout_aborts.push(...observation.candidates);
   } finally {
-    expectedLogoutAbortPages.delete(page);
+    activeLogoutObservations.delete(page);
+    if (!confirmed && observation.candidates.length > 0) {
+      diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({
+        ...item,
+        detail: `unconfirmed logout abort: ${item.detail}`,
+      })));
+    }
   }
 }
 
