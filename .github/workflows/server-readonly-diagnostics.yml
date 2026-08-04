@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   diagnose:
-    name: Read-only shared server resource and incident diagnostics
+    name: Read-only shared server resource and service diagnostics
     if: >-
       github.event.issue.number == 23 &&
       github.event.issue.title == 'Staging Readiness Control' &&
@@ -49,14 +49,19 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const body = String(process.env.COMMENT_BODY ?? '').trim();
-          const match = /^\/run-server-diagnostics ([0-9a-fA-F]{40}) ([0-9]{8,20}) (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)$/.exec(body);
+          const match = /^\/run-server-diagnostics ([0-9a-fA-F]{40}) ([0-9]{8,20}) (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40}) ((?:[0-9]{1,3}\.){3}[0-9]{1,3})$/.exec(body);
           if (!match) {
-            console.error('Exact command required: /run-server-diagnostics <40-character-incident-sha> <staging-run-id> <incident-utc-time>');
+            console.error('Exact command required: /run-server-diagnostics <40-character-main-sha> <staging-run-id> <incident-utc-time> <production-sha> <staging-sha> <expected-public-ip>');
             process.exit(1);
           }
           const incident = new Date(match[3]);
           if (!Number.isFinite(incident.getTime())) {
             console.error('Incident UTC time is invalid.');
+            process.exit(1);
+          }
+          const octets = match[6].split('.').map(Number);
+          if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+            console.error('Expected public IPv4 address is invalid.');
             process.exit(1);
           }
           const start = new Date(incident.getTime() - 10 * 60_000).toISOString();
@@ -66,17 +71,20 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `incident_at=${incident.toISOString()}\n`);
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `incident_start=${start}\n`);
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `incident_end=${end}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `production_sha=${match[4].toLowerCase()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `staging_sha=${match[5].toLowerCase()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `public_ip=${match[6]}\n`);
           NODE
 
-      - name: Require incident SHA contained in current main
+      - name: Require diagnostics SHA contained in current main
         env:
-          INCIDENT_SHA: ${{ steps.command.outputs.sha }}
+          DIAGNOSTIC_SHA: ${{ steps.command.outputs.sha }}
         run: |
           set -Eeuo pipefail
-          git fetch --no-tags origin main "$INCIDENT_SHA"
-          git cat-file -e "$INCIDENT_SHA^{commit}"
-          git merge-base --is-ancestor "$INCIDENT_SHA" origin/main || {
-            echo 'Incident SHA is not contained in current main.' >&2
+          git fetch --no-tags origin main "$DIAGNOSTIC_SHA"
+          git cat-file -e "$DIAGNOSTIC_SHA^{commit}"
+          git merge-base --is-ancestor "$DIAGNOSTIC_SHA" origin/main || {
+            echo 'Diagnostics SHA is not contained in current main.' >&2
             exit 1
           }
 
@@ -98,11 +106,15 @@ jobs:
           INCIDENT_START: ${{ steps.command.outputs.incident_start }}
           INCIDENT_END: ${{ steps.command.outputs.incident_end }}
           INCIDENT_RUN_ID: ${{ steps.command.outputs.run_id }}
+          EXPECTED_PRODUCTION_SHA: ${{ steps.command.outputs.production_sha }}
+          EXPECTED_STAGING_SHA: ${{ steps.command.outputs.staging_sha }}
+          EXPECTED_PUBLIC_IP: ${{ steps.command.outputs.public_ip }}
         run: |
           set -Eeuo pipefail
           artifact="$DIAGNOSTIC_DIR/server-resource-diagnostics.txt"
-          remote_command="$(printf 'INCIDENT_START=%q INCIDENT_END=%q INCIDENT_RUN_ID=%q bash -s' \
-            "$INCIDENT_START" "$INCIDENT_END" "$INCIDENT_RUN_ID")"
+          remote_command="$(printf 'INCIDENT_START=%q INCIDENT_END=%q INCIDENT_RUN_ID=%q EXPECTED_PRODUCTION_SHA=%q EXPECTED_STAGING_SHA=%q EXPECTED_PUBLIC_IP=%q bash -s' \
+            "$INCIDENT_START" "$INCIDENT_END" "$INCIDENT_RUN_ID" \
+            "$EXPECTED_PRODUCTION_SHA" "$EXPECTED_STAGING_SHA" "$EXPECTED_PUBLIC_IP")"
           ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" \
             -o BatchMode=yes -o ConnectTimeout=15 \
             "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$remote_command" \
@@ -110,36 +122,64 @@ jobs:
           grep -Fx 'READ_ONLY_DIAGNOSTICS_COMPLETE' "$artifact" >/dev/null
 
       - name: Enforce diagnostic redaction contract
+        if: steps.diagnostics.outcome == 'success'
         run: |
           set -Eeuo pipefail
           artifact="$DIAGNOSTIC_DIR/server-resource-diagnostics.txt"
           if grep -Eiq -- \
-            '-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----|https?://|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|(authorization|apikey|api_key|password|token|secret)[=:][^<[:space:]]|STAGING_[A-Z0-9_]+=' \
+            '-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----|https?://|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|(authorization|apikey|api_key|password|token|secret)[=:][[:space:]]*(Bearer[[:space:]]+)?[^<[:space:]]|([?&](token|apikey|api_key|key|secret|password)=)[^&<[:space:]]+|STAGING_[A-Z0-9_]+=|PRODUCTION_[A-Z0-9_]+=' \
             "$artifact"; then
             echo 'Diagnostic artifact contains a prohibited sensitive pattern.' >&2
             exit 1
           fi
 
+      - name: Check service verification verdict
+        id: verification
+        if: steps.diagnostics.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          artifact="$DIAGNOSTIC_DIR/server-resource-diagnostics.txt"
+          grep -Fx 'service_verification_status=passed' "$artifact" >/dev/null
+          [[ "$(grep -c '^HEALTH' "$artifact")" -eq 4 ]]
+          [[ "$(grep -c '^HEALTH.*status=200' "$artifact")" -eq 4 ]]
+          [[ "$(grep -c '^HEALTH.*timeout=0' "$artifact")" -eq 4 ]]
+          [[ "$(grep -c '^HEALTH.*server_error=0' "$artifact")" -eq 4 ]]
+          [[ "$(grep -c '^HEALTH.*sha_match=1' "$artifact")" -eq 4 ]]
+
       - name: Write non-sensitive diagnostic metadata
+        if: always() && steps.command.outcome == 'success'
         env:
-          INCIDENT_SHA: ${{ steps.command.outputs.sha }}
+          DIAGNOSTIC_SHA: ${{ steps.command.outputs.sha }}
           INCIDENT_RUN_ID: ${{ steps.command.outputs.run_id }}
           INCIDENT_AT: ${{ steps.command.outputs.incident_at }}
+          EXPECTED_PRODUCTION_SHA: ${{ steps.command.outputs.production_sha }}
+          EXPECTED_STAGING_SHA: ${{ steps.command.outputs.staging_sha }}
+          EXPECTED_PUBLIC_IP: ${{ steps.command.outputs.public_ip }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostics.outcome }}
+          VERIFICATION_OUTCOME: ${{ steps.verification.outcome }}
         run: |
           node <<'NODE'
           const fs = require('node:fs');
           const path = require('node:path');
           const result = {
-            status: 'passed',
+            status: process.env.DIAGNOSTIC_OUTCOME === 'success' && process.env.VERIFICATION_OUTCOME === 'success'
+              ? 'passed'
+              : 'failed',
             mode: 'read_only',
-            incident_sha: process.env.INCIDENT_SHA,
+            diagnostic_sha: process.env.DIAGNOSTIC_SHA,
             incident_run_id: process.env.INCIDENT_RUN_ID,
             incident_at: process.env.INCIDENT_AT,
+            expected_production_sha: process.env.EXPECTED_PRODUCTION_SHA,
+            expected_staging_sha: process.env.EXPECTED_STAGING_SHA,
+            expected_public_ip: process.env.EXPECTED_PUBLIC_IP,
+            service_verification_status: process.env.VERIFICATION_OUTCOME === 'success' ? 'passed' : 'failed',
             server_files_written: 0,
             server_files_deleted: 0,
             server_processes_restarted: 0,
             deployment_executed: false,
             production_deployment_executed: false,
+            database_changed: false,
             secret_values_recorded: false,
             source_run_id: process.env.GITHUB_RUN_ID,
             source_run_attempt: process.env.GITHUB_RUN_ATTEMPT,
@@ -163,26 +203,32 @@ jobs:
         if: always() && steps.command.outcome == 'success'
         uses: actions/github-script@v7
         env:
-          INCIDENT_SHA: ${{ steps.command.outputs.sha }}
+          DIAGNOSTIC_SHA: ${{ steps.command.outputs.sha }}
           INCIDENT_RUN_ID: ${{ steps.command.outputs.run_id }}
           INCIDENT_AT: ${{ steps.command.outputs.incident_at }}
+          EXPECTED_PRODUCTION_SHA: ${{ steps.command.outputs.production_sha }}
+          EXPECTED_STAGING_SHA: ${{ steps.command.outputs.staging_sha }}
           DIAGNOSTIC_OUTCOME: ${{ steps.diagnostics.outcome }}
+          VERIFICATION_OUTCOME: ${{ steps.verification.outcome }}
           SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
         with:
           script: |
-            const passed = process.env.DIAGNOSTIC_OUTCOME === 'success';
+            const passed = process.env.DIAGNOSTIC_OUTCOME === 'success' && process.env.VERIFICATION_OUTCOME === 'success';
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: 23,
               body: [
-                passed ? 'Read-only shared server diagnostics completed.' : 'Read-only shared server diagnostics failed without changing the server.',
+                passed ? 'Read-only shared server service verification completed.' : 'Read-only shared server service verification failed without changing the server.',
                 '',
-                `- Incident SHA: \`${process.env.INCIDENT_SHA}\``,
+                `- Diagnostics SHA: \`${process.env.DIAGNOSTIC_SHA}\``,
                 `- Incident Staging Run ID: \`${process.env.INCIDENT_RUN_ID}\``,
                 `- Incident UTC time: \`${process.env.INCIDENT_AT}\``,
+                `- Expected production SHA: \`${process.env.EXPECTED_PRODUCTION_SHA}\``,
+                `- Expected staging SHA: \`${process.env.EXPECTED_STAGING_SHA}\``,
                 `- Diagnostics Run ID: \`${context.runId}\``,
-                `- Diagnostics status: \`${passed ? 'completed' : 'failed'}\``,
+                `- Diagnostics status: \`${process.env.DIAGNOSTIC_OUTCOME}\``,
+                `- Service verification status: \`${process.env.VERIFICATION_OUTCOME === 'success' ? 'passed' : 'failed'}\``,
                 '- Server files deleted: `0`',
                 '- Server processes restarted or stopped: `0`',
                 '- Staging deployment executed: `false`',
@@ -192,4 +238,4 @@ jobs:
                 `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
               ].join('\n'),
             });
-            if (!passed) core.setFailed('Read-only server diagnostics did not complete.');
+            if (!passed) core.setFailed('Read-only server service verification did not pass.');
