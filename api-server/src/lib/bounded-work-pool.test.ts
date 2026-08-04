@@ -64,21 +64,33 @@ test('per-item timeout is explicit and aborts the timed-out worker signal', asyn
 });
 
 test('global deadline prevents new work from starting after the budget is exhausted', async () => {
-  const started: number[] = [];
-  const result = await runBoundedWorkPool(
-    Array.from({ length: 30 }, (_, index) => index),
-    async (item, _index, signal) => {
-      started.push(item);
-      await delay(28, signal);
-      return item;
-    },
-    { concurrency: 2, deadlineMs: 75, itemTimeoutMs: 60 },
-  );
+  const repetitions = 25;
 
-  assert.equal(result.deadlineReached, true);
-  assert.ok(result.startedCount < 30);
-  assert.equal(started.length, result.startedCount);
-  assert.ok(result.maxConcurrency <= 2);
+  for (let iteration = 0; iteration < repetitions; iteration += 1) {
+    let fakeNow = 0;
+    const started: number[] = [];
+    const result = await runBoundedWorkPool(
+      Array.from({ length: 30 }, (_, index) => index),
+      async (item) => {
+        started.push(item);
+        fakeNow += 40;
+        return item;
+      },
+      {
+        concurrency: 2,
+        deadlineMs: 75,
+        itemTimeoutMs: 60,
+        now: () => fakeNow,
+      },
+    );
+
+    assert.deepEqual(started, [0, 1]);
+    assert.equal(result.deadlineReached, true);
+    assert.equal(result.startedCount, 2);
+    assert.ok(result.startedCount < 30);
+    assert.equal(started.length, result.startedCount);
+    assert.equal(result.maxConcurrency, 2);
+  }
 });
 
 test('provider rejections remain distinct from timeouts', async () => {
