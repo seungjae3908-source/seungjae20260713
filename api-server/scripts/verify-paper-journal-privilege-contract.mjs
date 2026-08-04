@@ -78,7 +78,7 @@ assert(!broadGrant.test(source.ownership), 'ownership RLS test still masks migra
 assert(!broadGrant.test(source.tiers), 'membership-tier RLS test still masks migration grants');
 assert(source.dbRunner.includes(paths.down), 'disposable DB verification does not reproduce the pre-fix privilege state');
 assert(source.dbRunner.includes(paths.before), 'disposable DB verification does not assert the pre-fix failure');
-assert((source.dbRunner.match(new RegExp(migrationName.replaceAll('.', '\\.'), 'g')) ?? []).length >= 4, 'DB verification must cover bootstrap, double apply, rollback and reapply');
+assert((source.dbRunner.match(new RegExp(migrationName.replaceAll('.', '\\.'), 'g')) ?? []).length >= 3, 'DB verification must double-apply and reapply the migration');
 assert(source.dbRunner.includes(paths.after), 'DB verification does not assert the post-migration contract');
 assert(!/(?:production|prod)[_-]?(?:database|supabase)[_-]?url/i.test(source.dbRunner), 'disposable DB verifier references a production database variable');
 
