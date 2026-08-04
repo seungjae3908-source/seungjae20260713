@@ -7,13 +7,19 @@ import {
   TradeAutomationSettings,
   type TradeAutomationStatus,
 } from '@/components/trade-automation-settings';
+import {
+  TradeSignalAlerts,
+  type TradeSignalAlertItem,
+} from '@/components/trade-signal-alerts';
 
 export default function AutoTradingPage({
   fixture,
   approvalFixture,
+  alertFixture,
 }: {
   fixture?: TradeAutomationStatus;
   approvalFixture?: TradeApprovalQueueItem[];
+  alertFixture?: TradeSignalAlertItem[];
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -25,6 +31,7 @@ export default function AutoTradingPage({
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-24">
         <div className="mx-auto w-full max-w-3xl space-y-4">
+          <TradeSignalAlerts fixture={alertFixture} />
           <TradeApprovalQueue fixture={approvalFixture} />
           <TradeAutomationSettings fixture={fixture} />
         </div>
