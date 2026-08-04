@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
+import { requireAdmin } from '../middleware/auth';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { TradeAutomationService } from '../services/trade-automation.service';
@@ -16,14 +17,14 @@ async function serverFor(repository: InMemoryTradingRepository) {
   app.use(express.json());
   app.use((req, _res, next) => {
     req.member = {
-      id: USER, login_name: 'queue-test', display_name: 'queue-test', role: 'regular',
-      membership_level: 'regular', status: 'approved', is_active: true,
+      id: USER, login_name: 'queue-test', display_name: 'queue-test', role: 'admin',
+      membership_level: 'admin', status: 'approved', is_active: true,
     };
     req.accessToken = 'test';
     next();
   });
   setTradeAutomationRepositoryFactoryForTests(() => repository);
-  app.use('/api/trade-automation', router);
+  app.use('/api/trade-automation', requireAdmin, router);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
   return { server, baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
