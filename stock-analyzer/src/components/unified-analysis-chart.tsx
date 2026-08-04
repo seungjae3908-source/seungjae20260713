@@ -12,11 +12,7 @@ import {
   BarChart3,
   ChevronDown,
   ChevronUp,
-  Expand,
   Loader2,
-  LocateFixed,
-  Maximize2,
-  Minimize2,
   RefreshCw,
   Search,
   Settings2,
@@ -24,15 +20,7 @@ import {
   TrendingUp,
   X,
 } from 'lucide-react';
-import {
-  ColorType,
-  CrosshairMode,
-  LineStyle,
-  createChart,
-  type IChartApi,
-  type ISeriesApi,
-  type UTCTimestamp,
-} from 'lightweight-charts';
+import { PatternAwareUnifiedChartCanvas } from '@/components/pattern-aware-unified-chart-canvas';
 import { SelectedCandleDetailPanel } from '@/components/selected-candle-detail';
 import { api } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
@@ -43,9 +31,7 @@ import {
 } from '@/lib/chart-analysis';
 import type { NormalizedChartCandle } from '@/lib/chart-candle-normalizer';
 import {
-  bollingerSeries,
   computeChartIndicators,
-  indicatorSeries,
   type ChartIndicatorResult,
 } from '@/lib/chart-indicator-engine';
 import { analyzeChartStructure } from '@/lib/chart-structure-engine';
@@ -80,18 +66,6 @@ type OverlayKey =
   | 'macd'
   | 'atr';
 
-type LineKey =
-  | 'sma5'
-  | 'sma20'
-  | 'sma60'
-  | 'sma120'
-  | 'ema12'
-  | 'ema26'
-  | 'vwap'
-  | 'bollingerUpper'
-  | 'bollingerMiddle'
-  | 'bollingerLower';
-
 type SearchCandidate = {
   symbol: string;
   name: string;
@@ -112,13 +86,6 @@ type PriceLevels = {
 type TimelineItem = {
   key: string;
   analysis: ChartAnalysis;
-};
-
-type ChartInstance = {
-  chart: IChartApi;
-  candle: ISeriesApi<'Candlestick'>;
-  volume?: ISeriesApi<'Histogram'>;
-  lines: Partial<Record<LineKey, ISeriesApi<'Line'>>>;
 };
 
 type Props = {
@@ -368,8 +335,8 @@ function buildCurrentAnalysis(input: {
     rsi: current?.rsi14 ?? null,
     macd: current?.macd ?? null,
     volumeRatio,
-    support: pattern?.type === 'double-top' ? pattern.neckline : input.levels.support,
-    resistance: pattern?.type === 'double-bottom' ? pattern.neckline : input.levels.resistance,
+    support: pattern?.type === 'double-top' ? pattern.neckline : pattern?.type === 'double-bottom' ? pattern.invalidationLevel : input.levels.support,
+    resistance: pattern?.type === 'double-bottom' ? pattern.neckline : pattern?.type === 'double-top' ? pattern.invalidationLevel : input.levels.resistance,
     signal,
     confidence,
     title,
@@ -383,241 +350,6 @@ function buildCurrentAnalysis(input: {
     dataStatus: unifiedChartDataStatus(input.data, false),
     engineVersion: 'unified-chart-v1',
   });
-}
-
-function addLine(
-  chart: IChartApi,
-  rows: Array<{ time: number; value: number }>,
-  options: Record<string, unknown>,
-): ISeriesApi<'Line'> | undefined {
-  if (!rows.length) return undefined;
-  const series = chart.addLineSeries(options);
-  series.setData(rows.map((row) => ({ time: row.time as UTCTimestamp, value: row.value })));
-  return series;
-}
-
-function setLineData(
-  series: ISeriesApi<'Line'> | undefined,
-  rows: Array<{ time: number; value: number }>,
-): void {
-  series?.setData(rows.map((row) => ({ time: row.time as UTCTimestamp, value: row.value })));
-}
-
-function UnifiedChartCanvas({
-  candles,
-  indicators,
-  levels,
-  analysis,
-  overlays,
-  timeframe,
-  resetKey,
-  onCandleSelect,
-}: {
-  candles: NormalizedChartCandle[];
-  indicators: ChartIndicatorResult;
-  levels: PriceLevels;
-  analysis: ChartAnalysis | null;
-  overlays: Record<OverlayKey, boolean>;
-  timeframe: UnifiedChartTimeframe;
-  resetKey: string;
-  onCandleSelect: (time: number) => void;
-}) {
-  const wrapperRef = useRef<HTMLDivElement | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const instanceRef = useRef<ChartInstance | null>(null);
-  const [fullscreen, setFullscreen] = useState(false);
-
-  useEffect(() => {
-    const onFullscreenChange = () => setFullscreen(document.fullscreenElement === wrapperRef.current);
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
-  }, []);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || candles.length < 2) return;
-    const dark = document.documentElement.classList.contains('dark');
-    const chart = createChart(container, {
-      width: Math.max(container.clientWidth, 1),
-      height: Math.max(container.clientHeight, 390),
-      layout: {
-        background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: dark ? '#cbd5e1' : '#475569',
-        fontSize: 11,
-      },
-      grid: {
-        vertLines: { color: dark ? 'rgba(148,163,184,0.08)' : 'rgba(100,116,139,0.10)' },
-        horzLines: { color: dark ? 'rgba(148,163,184,0.08)' : 'rgba(100,116,139,0.10)' },
-      },
-      crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: {
-        visible: true,
-        borderVisible: true,
-        scaleMargins: { top: 0.08, bottom: overlays.volume ? 0.24 : 0.08 },
-      },
-      timeScale: {
-        visible: true,
-        borderVisible: true,
-        timeVisible: timeframe !== '1D',
-        secondsVisible: false,
-        rightOffset: 6,
-        barSpacing: timeframe.endsWith('m') ? 8 : 7,
-      },
-      handleScroll: {
-        mouseWheel: true,
-        pressedMouseMove: true,
-        horzTouchDrag: true,
-        vertTouchDrag: false,
-      },
-      handleScale: {
-        axisPressedMouseMove: true,
-        mouseWheel: true,
-        pinch: true,
-      },
-    });
-    const candle = chart.addCandlestickSeries({
-      upColor: '#ef4444',
-      downColor: '#3b82f6',
-      wickUpColor: '#ef4444',
-      wickDownColor: '#3b82f6',
-      borderUpColor: '#ef4444',
-      borderDownColor: '#3b82f6',
-      priceLineVisible: true,
-      lastValueVisible: true,
-    });
-    const instance: ChartInstance = { chart, candle, lines: {} };
-    if (overlays.sma5) instance.lines.sma5 = addLine(chart, indicatorSeries(indicators, 'sma5'), { color: '#f59e0b', lineWidth: 1, title: 'SMA5' });
-    if (overlays.sma20) instance.lines.sma20 = addLine(chart, indicatorSeries(indicators, 'sma20'), { color: '#8b5cf6', lineWidth: 2, title: 'SMA20' });
-    if (overlays.sma60) instance.lines.sma60 = addLine(chart, indicatorSeries(indicators, 'sma60'), { color: '#10b981', lineWidth: 1, title: 'SMA60' });
-    if (overlays.sma120) instance.lines.sma120 = addLine(chart, indicatorSeries(indicators, 'sma120'), { color: '#ec4899', lineWidth: 1, title: 'SMA120' });
-    if (overlays.ema12) instance.lines.ema12 = addLine(chart, indicatorSeries(indicators, 'ema12'), { color: '#f97316', lineWidth: 1, title: 'EMA12' });
-    if (overlays.ema26) instance.lines.ema26 = addLine(chart, indicatorSeries(indicators, 'ema26'), { color: '#0ea5e9', lineWidth: 1, title: 'EMA26' });
-    if (overlays.vwap) instance.lines.vwap = addLine(chart, indicatorSeries(indicators, 'vwap'), { color: '#06b6d4', lineWidth: 2, lineStyle: LineStyle.Dashed, title: 'VWAP' });
-    if (overlays.bollinger) {
-      const band = bollingerSeries(indicators);
-      instance.lines.bollingerUpper = addLine(chart, band.upper, { color: 'rgba(14,165,233,0.75)', lineWidth: 1, title: 'BB 상단' });
-      instance.lines.bollingerMiddle = addLine(chart, band.middle, { color: 'rgba(14,165,233,0.38)', lineWidth: 1, lineStyle: LineStyle.Dashed, title: 'BB 중심' });
-      instance.lines.bollingerLower = addLine(chart, band.lower, { color: 'rgba(14,165,233,0.75)', lineWidth: 1, title: 'BB 하단' });
-    }
-    if (overlays.volume) {
-      const volume = chart.addHistogramSeries({
-        priceFormat: { type: 'volume' },
-        priceScaleId: 'volume',
-        lastValueVisible: false,
-        priceLineVisible: false,
-      });
-      volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-      instance.volume = volume;
-    }
-    if (overlays.levels) {
-      const levelRows = [
-        { price: levels.resistance2, color: '#f97316', title: '2차 저항', style: LineStyle.Dotted },
-        { price: levels.resistance, color: '#ef4444', title: '1차 저항', style: LineStyle.Dashed },
-        { price: levels.support, color: '#3b82f6', title: '1차 지지', style: LineStyle.Dashed },
-        { price: levels.support2, color: '#06b6d4', title: '2차 지지', style: LineStyle.Dotted },
-        { price: levels.targetReference, color: '#a855f7', title: '목표 참고', style: LineStyle.Dotted },
-        { price: levels.invalidationReference, color: '#64748b', title: '무효 기준', style: LineStyle.Dotted },
-      ];
-      for (const row of levelRows) {
-        if (!Number.isFinite(row.price) || row.price <= 0) continue;
-        candle.createPriceLine({
-          price: row.price,
-          color: row.color,
-          lineWidth: 1,
-          lineStyle: row.style,
-          axisLabelVisible: true,
-          title: row.title,
-        });
-      }
-    }
-    const handleClick: Parameters<IChartApi['subscribeClick']>[0] = (param) => {
-      if (typeof param.time === 'number' && Number.isFinite(param.time)) {
-        onCandleSelect(param.time);
-      }
-    };
-    chart.subscribeClick(handleClick);
-    instanceRef.current = instance;
-    const observer = new ResizeObserver((entries) => {
-      const rect = entries[0]?.contentRect;
-      if (!rect) return;
-      chart.applyOptions({ width: Math.max(rect.width, 1), height: Math.max(rect.height, 390) });
-    });
-    observer.observe(container);
-    return () => {
-      observer.disconnect();
-      chart.unsubscribeClick(handleClick);
-      instanceRef.current = null;
-      chart.remove();
-    };
-  }, [onCandleSelect, overlays, timeframe]);
-
-  useEffect(() => {
-    const instance = instanceRef.current;
-    if (!instance) return;
-    instance.candle.setData(candles.map((row) => ({
-      time: row.time as UTCTimestamp,
-      open: row.open,
-      high: row.high,
-      low: row.low,
-      close: row.close,
-    })));
-    setLineData(instance.lines.sma5, indicatorSeries(indicators, 'sma5'));
-    setLineData(instance.lines.sma20, indicatorSeries(indicators, 'sma20'));
-    setLineData(instance.lines.sma60, indicatorSeries(indicators, 'sma60'));
-    setLineData(instance.lines.sma120, indicatorSeries(indicators, 'sma120'));
-    setLineData(instance.lines.ema12, indicatorSeries(indicators, 'ema12'));
-    setLineData(instance.lines.ema26, indicatorSeries(indicators, 'ema26'));
-    setLineData(instance.lines.vwap, indicatorSeries(indicators, 'vwap'));
-    const band = bollingerSeries(indicators);
-    setLineData(instance.lines.bollingerUpper, band.upper);
-    setLineData(instance.lines.bollingerMiddle, band.middle);
-    setLineData(instance.lines.bollingerLower, band.lower);
-    instance.volume?.setData(candles.map((row) => ({
-      time: row.time as UTCTimestamp,
-      value: row.volume,
-      color: row.close >= row.open ? 'rgba(239,68,68,0.42)' : 'rgba(59,130,246,0.42)',
-    })));
-    const markers = analysis && overlays.markers
-      ? [{
-          time: candles.at(-1)!.time as UTCTimestamp,
-          position: analysis.bias === 'bearish' ? 'aboveBar' : 'belowBar',
-          color: analysis.bias === 'bearish' ? '#3b82f6' : analysis.bias === 'bullish' ? '#ef4444' : '#64748b',
-          shape: analysis.bias === 'bearish' ? 'arrowDown' : 'arrowUp',
-          text: `${analysis.status} · ${analysis.bias}`,
-        }]
-      : [];
-    instance.candle.setMarkers(markers as never[]);
-  }, [analysis, candles, indicators, overlays.markers]);
-
-  useEffect(() => {
-    instanceRef.current?.chart.timeScale().fitContent();
-  }, [resetKey]);
-
-  const toggleFullscreen = useCallback(async () => {
-    const wrapper = wrapperRef.current;
-    if (!wrapper) return;
-    try {
-      if (document.fullscreenElement === wrapper) await document.exitFullscreen();
-      else await wrapper.requestFullscreen();
-    } catch {
-      // Fullscreen may be blocked by the browser; the chart remains usable.
-    }
-  }, []);
-
-  return (
-    <div
-      ref={wrapperRef}
-      data-testid="unified-chart-wrapper"
-      className={cn('relative overflow-hidden bg-background', fullscreen && 'h-[100dvh] w-screen')}
-    >
-      <div className="absolute right-2 top-2 z-10 flex gap-1 rounded-xl border border-card-border bg-background/90 p-1 shadow-sm backdrop-blur">
-        <ChartControl label="전체 데이터 맞춤" testId="chart-fit-content" onClick={() => instanceRef.current?.chart.timeScale().fitContent()}><Expand className="h-4 w-4" /></ChartControl>
-        <ChartControl label="최신 캔들로 이동" testId="chart-latest-candle" onClick={() => instanceRef.current?.chart.timeScale().scrollToRealTime()}><LocateFixed className="h-4 w-4" /></ChartControl>
-        <ChartControl label={fullscreen ? '전체화면 해제' : '전체화면'} testId="chart-fullscreen" onClick={() => void toggleFullscreen()}>{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</ChartControl>
-      </div>
-      <div ref={containerRef} data-testid="unified-chart-canvas" className={cn('h-[390px] w-full touch-pan-y', fullscreen && 'h-[100dvh]')} />
-    </div>
-  );
 }
 
 export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisChange }: Props) {
@@ -799,7 +531,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           {settingsOpen && <div className="mt-2 flex flex-wrap gap-2 rounded-2xl border border-card-border bg-background p-3">{OVERLAY_OPTIONS.map((item) => <button key={item.key} type="button" data-testid={`overlay-${item.key}`} onClick={() => toggleOverlay(item.key)} className={cn('rounded-full border px-3 py-1.5 text-[11px] font-extrabold', overlays[item.key] ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card text-muted-foreground')}>{overlays[item.key] ? '✓ ' : '+ '}{item.label}</button>)}</div>}
         </div>
         <div className="min-h-[390px] bg-background/30">
-          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <UnifiedChartCanvas candles={candles} indicators={indicators} levels={levels} analysis={analysis} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} onCandleSelect={handleCandleSelect} />}
+          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas candles={candles} indicators={indicators} levels={levels} analysis={analysis} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
         </div>
       </section>
 
@@ -820,10 +552,6 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       <p className="px-1 text-[10px] font-semibold leading-4 text-muted-foreground">국내주식·미국주식·업비트 현물·비트겟 선물의 공개 시세를 읽기 전용으로 분석합니다. 주문 API와 연결하지 않으며 실제 주문을 실행하지 않습니다.</p>
     </div>
   );
-}
-
-function ChartControl({ label, testId, onClick, children }: { label: string; testId: string; onClick: () => void; children: ReactNode }) {
-  return <button type="button" data-testid={testId} title={label} aria-label={label} onClick={onClick} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-secondary">{children}</button>;
 }
 
 function Centered({ children, tall = false }: { children: ReactNode; tall?: boolean }) {
