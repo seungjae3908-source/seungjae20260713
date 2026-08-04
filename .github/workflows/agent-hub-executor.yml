@@ -1,0 +1,227 @@
+name: Agent Hub Executor
+
+on:
+  push:
+    branches: [agent/agent-hub-executor-v1]
+    paths:
+      - .github/workflows/agent-hub-executor.yml
+      - .github/workflows/agent-hub-free.yml
+      - scripts/agent_hub_executor.py
+      - scripts/agent_hub_executor_report.py
+      - docs/agent-hub-executor.md
+      - .gitignore
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/agent-hub-executor.yml
+      - .github/workflows/agent-hub-free.yml
+      - scripts/agent_hub_executor.py
+      - scripts/agent_hub_executor_report.py
+      - docs/agent-hub-executor.md
+      - .gitignore
+  repository_dispatch:
+    types: [agent-hub-command-ready]
+  schedule:
+    - cron: '37 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-hub-executor-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compile and test processors
+        run: |
+          python3 -m py_compile scripts/agent_hub_executor.py scripts/agent_hub_executor_report.py
+          python3 scripts/agent_hub_executor.py --self-test
+          python3 scripts/agent_hub_executor_report.py --self-test
+
+  gemini-executor-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Reject tracked Gemini configuration
+        run: test -z "$(git ls-files '.gemini/**')"
+      - name: Check Gemini secret
+        id: secret
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: echo "configured=$([[ -n \"$GEMINI_API_KEY\" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Run read-only Gemini smoke
+        if: steps.secret.outputs.configured == 'true'
+        id: smoke
+        uses: google-github-actions/run-gemini-cli@v0.1.22
+        env:
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
+          GEMINI_CLI_HOME: ${{ runner.temp }}/agent-hub-smoke-home
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          gemini_cli_version: '0.52.0'
+          gemini_model: gemini-3.1-flash-lite
+          upload_artifacts: false
+          prompt: Read package.json without modifying files. Reply exactly AGENT_HUB_EXECUTOR_OK.
+          settings: |
+            {"model":{"maxSessionTurns":10},"tools":{"core":["read_file","glob","grep_search","list_directory"],"sandboxNetworkAccess":false},"security":{"blockGitExtensions":true,"environmentVariableRedaction":{"enabled":true}},"admin":{"extensions":{"enabled":false},"mcp":{"enabled":false},"skills":{"enabled":false}},"telemetry":{"enabled":false}}
+      - name: Verify smoke remained read-only
+        if: steps.secret.outputs.configured == 'true'
+        env:
+          SUMMARY: ${{ steps.smoke.outputs.summary }}
+        run: |
+          case "$SUMMARY" in *AGENT_HUB_EXECUTOR_OK*) ;; *) exit 1 ;; esac
+          rm -rf .gemini gemini-artifacts
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+  execute:
+    if: github.event_name == 'repository_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Reject tracked Gemini configuration
+        run: test -z "$(git ls-files '.gemini/**')"
+      - name: Prepare trusted command
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUB_ISSUE_NUMBER: '62'
+        run: python3 scripts/agent_hub_executor.py prepare
+      - name: Verify Gemini secret
+        if: steps.prepare.outputs.should_run == 'true'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: test -n "$GEMINI_API_KEY"
+      - name: Create isolated branch
+        if: steps.prepare.outputs.should_run == 'true'
+        env:
+          WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
+        run: |
+          git fetch origin main
+          if git ls-remote --exit-code --heads origin "$WORK_BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$WORK_BRANCH"
+            git switch --force-create "$WORK_BRANCH" "origin/$WORK_BRANCH"
+          else
+            git switch --create "$WORK_BRANCH" origin/main
+          fi
+      - name: Run read-only Gemini
+        if: steps.prepare.outputs.should_run == 'true' && steps.prepare.outputs.execution_mode == 'read_only'
+        id: read
+        uses: google-github-actions/run-gemini-cli@v0.1.22
+        env:
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
+          GEMINI_CLI_HOME: ${{ runner.temp }}/agent-hub-read-home
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          gemini_cli_version: '0.52.0'
+          gemini_model: gemini-3.1-flash-lite
+          upload_artifacts: false
+          prompt: ${{ steps.prepare.outputs.prompt }}
+          settings: |
+            {"model":{"maxSessionTurns":30},"tools":{"core":["read_file","glob","grep_search","list_directory"],"sandboxNetworkAccess":false},"security":{"blockGitExtensions":true,"environmentVariableRedaction":{"enabled":true}},"admin":{"extensions":{"enabled":false},"mcp":{"enabled":false},"skills":{"enabled":false}},"telemetry":{"enabled":false}}
+      - name: Run code-change Gemini
+        if: steps.prepare.outputs.should_run == 'true' && steps.prepare.outputs.execution_mode == 'code_change'
+        id: write
+        uses: google-github-actions/run-gemini-cli@v0.1.22
+        env:
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
+          GEMINI_CLI_HOME: ${{ runner.temp }}/agent-hub-write-home
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          gemini_cli_version: '0.52.0'
+          gemini_model: gemini-3.1-flash-lite
+          upload_artifacts: false
+          prompt: ${{ steps.prepare.outputs.prompt }}
+          settings: |
+            {"model":{"maxSessionTurns":40},"tools":{"core":["read_file","write_file","replace","glob","grep_search","list_directory"],"sandboxNetworkAccess":false},"security":{"blockGitExtensions":true,"environmentVariableRedaction":{"enabled":true}},"admin":{"extensions":{"enabled":false},"mcp":{"enabled":false},"skills":{"enabled":false}},"telemetry":{"enabled":false}}
+      - name: Validate diff safety
+        if: steps.prepare.outputs.should_run == 'true'
+        id: diff
+        env:
+          EXECUTION_MODE: ${{ steps.prepare.outputs.execution_mode }}
+          BASE_REF: origin/main
+        run: |
+          rm -rf .gemini gemini-artifacts
+          python3 scripts/agent_hub_executor.py validate-diff
+      - uses: pnpm/action-setup@v4
+        if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
+        with: {version: 9}
+      - uses: actions/setup-node@v4
+        if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
+        with: {node-version: 20, cache: pnpm}
+      - name: Deterministic validation
+        if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir stock-analyzer run typecheck
+          pnpm --dir api-server run typecheck
+          pnpm --dir api-server run test:smoke
+      - name: Commit and push
+        if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
+        id: commit
+        env:
+          WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
+          TASK: ${{ steps.prepare.outputs.source_task_id }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m "agent: execute ${TASK}"
+          git push --set-upstream origin "$WORK_BRANCH"
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Open Draft PR
+        if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
+          TASK: ${{ steps.prepare.outputs.source_task_id }}
+        run: |
+          url="$(gh pr list --state open --head "$WORK_BRANCH" --json url --jq '.[0].url // empty')"
+          if [ -z "$url" ]; then
+            url="$(gh pr create --draft --base main --head "$WORK_BRANCH" --title "Agent task: ${TASK}" --body 'Controlled Agent Hub change. Validation completed. User review and explicit merge approval are required.')"
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+      - name: Post executor report
+        id: report
+        if: always() && steps.prepare.outputs.should_run == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUB_ISSUE_NUMBER: '62'
+          COMMAND_COMMENT_ID: ${{ steps.prepare.outputs.command_comment_id }}
+          SOURCE_TASK_ID: ${{ steps.prepare.outputs.source_task_id }}
+          WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
+          EXECUTION_MODE: ${{ steps.prepare.outputs.execution_mode }}
+          AUTO_STEP: ${{ steps.prepare.outputs.auto_step }}
+          AUTO_LIMIT: ${{ steps.prepare.outputs.auto_limit }}
+          RESULT_STATUS: ${{ job.status == 'success' && 'completed' || 'failed' }}
+          HEAD_SHA: ${{ steps.commit.outputs.head_sha || github.sha }}
+          CHECKS: diff=${{ steps.diff.conclusion }}; deterministic-validation=${{ steps.diff.outputs.has_changes == 'true' && 'completed' || 'not-required' }}
+          SUMMARY: ${{ steps.write.outputs.summary || steps.read.outputs.summary || 'No Gemini summary.' }}
+          PR_URL: ${{ steps.pr.outputs.url || 'none' }}
+          HAS_CHANGES: ${{ steps.diff.outputs.has_changes || 'false' }}
+        run: python3 scripts/agent_hub_executor.py post-report
+      - name: Wake Hub
+        if: always() && steps.report.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type='agent-executor-report-ready'

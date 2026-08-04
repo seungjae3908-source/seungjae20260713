@@ -4,25 +4,35 @@ on:
   push:
     branches:
       - agent/free-github-agent-hub
+      - agent/agent-hub-executor-v1
     paths:
       - .github/workflows/agent-hub-free.yml
+      - .github/workflows/agent-hub-executor.yml
       - scripts/agent_hub_free.py
-  pull_request:
-    branches:
-      - main
-    paths:
-      - .github/workflows/agent-hub-free.yml
-      - scripts/agent_hub_free.py
+      - scripts/agent_hub_executor.py
+      - scripts/agent_hub_executor_report.py
       - docs/agent-hub-free.md
+      - docs/agent-hub-executor.md
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/agent-hub-free.yml
+      - .github/workflows/agent-hub-executor.yml
+      - scripts/agent_hub_free.py
+      - scripts/agent_hub_executor.py
+      - scripts/agent_hub_executor_report.py
+      - docs/agent-hub-free.md
+      - docs/agent-hub-executor.md
   issue_comment:
     types: [created]
+  repository_dispatch:
+    types: [agent-executor-report-ready]
   schedule:
     - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: free-agent-hub-${{ github.repository }}
@@ -34,139 +44,76 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout branch
-        uses: actions/checkout@v6
-
-      - name: Compile processor
-        run: python3 -m py_compile scripts/agent_hub_free.py
-
-      - name: Run processor self-test
-        run: python3 scripts/agent_hub_free.py --self-test
+      - uses: actions/checkout@v6
+      - name: Compile processors
+        run: python3 -m py_compile scripts/agent_hub_free.py scripts/agent_hub_executor.py scripts/agent_hub_executor_report.py
+      - name: Run self-tests
+        run: |
+          python3 scripts/agent_hub_free.py --self-test
+          python3 scripts/agent_hub_executor.py --self-test
+          python3 scripts/agent_hub_executor_report.py --self-test
 
   gemini-smoke:
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout pull request head
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Check Gemini secret configuration
+      - name: Check Gemini secret
         id: secret
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          if [ -n "$GEMINI_API_KEY" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "GEMINI_API_KEY is not configured yet; live smoke is skipped."
-          fi
-
+        run: echo "configured=$([[ -n \"$GEMINI_API_KEY\" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Call Gemini free API once
         if: steps.secret.outputs.configured == 'true'
-        id: gemini
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python3 - <<'PY'
-          import json
-          import os
-          from urllib.error import HTTPError
-          from urllib.request import Request, urlopen
-
-          model = 'gemini-3.1-flash-lite'
-          endpoint = (
-              'https://generativelanguage.googleapis.com/v1beta/models/'
-              f'{model}:generateContent'
-          )
-          payload = {
-              'contents': [
-                  {
-                      'role': 'user',
-                      'parts': [{'text': 'Reply with exactly: AGENT_HUB_GEMINI_OK'}],
-                  }
-              ],
-              'generationConfig': {
-                  'maxOutputTokens': 512,
-                  'thinkingConfig': {'thinkingLevel': 'low'},
-              },
-          }
-          request = Request(
-              endpoint,
-              data=json.dumps(payload).encode('utf-8'),
-              headers={
-                  'Content-Type': 'application/json',
-                  'x-goog-api-key': os.environ['GEMINI_API_KEY'],
-                  'User-Agent': 'free-agent-hub-smoke/2.3',
-              },
-              method='POST',
-          )
-          try:
-              with urlopen(request, timeout=60) as response:
-                  data = json.loads(response.read().decode('utf-8'))
-          except HTTPError as exc:
-              detail = exc.read().decode('utf-8', errors='replace')
-              raise SystemExit(f'Gemini HTTP {exc.code}: {detail[:800]}') from exc
-
-          candidates = data.get('candidates') or []
-          if not candidates:
-              raise SystemExit(f'Gemini returned no candidates: {json.dumps(data)[:800]}')
-          candidate = candidates[0]
-          parts = (candidate.get('content') or {}).get('parts') or []
-          content = ''.join(
-              part.get('text', '') for part in parts if isinstance(part, dict)
-          ).strip()
-          if 'AGENT_HUB_GEMINI_OK' not in content:
-              finish_reason = candidate.get('finishReason', 'unknown')
-              raise SystemExit(
-                  f'unexpected Gemini response; finishReason={finish_reason}; '
-                  f'content={content[:200]}'
-              )
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-              output.write(f'model={model}\n')
-          print(json.dumps({'status': 'success', 'model': model}))
+          import json,os
+          from urllib.request import Request,urlopen
+          model='gemini-3.1-flash-lite'
+          payload={'contents':[{'role':'user','parts':[{'text':'Reply exactly AGENT_HUB_GEMINI_OK'}]}],'generationConfig':{'maxOutputTokens':512,'thinkingConfig':{'thinkingLevel':'low'}}}
+          req=Request(f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','x-goog-api-key':os.environ['GEMINI_API_KEY']},method='POST')
+          with urlopen(req,timeout=60) as r: data=json.loads(r.read())
+          text=''.join(p.get('text','') for p in data['candidates'][0].get('content',{}).get('parts',[]))
+          assert 'AGENT_HUB_GEMINI_OK' in text, text[:200]
           PY
-
-      - name: Record Gemini smoke success in Agent Hub
-        if: steps.secret.outputs.configured == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SELECTED_MODEL: ${{ steps.gemini.outputs.model }}
-        run: |
-          gh api "repos/${GITHUB_REPOSITORY}/issues/62/comments" \
-            -f body="[AGENT_HUB_SMOKE]
-          status: success
-          provider: Gemini Developer API free tier
-          model: ${SELECTED_MODEL}
-          commit: ${{ github.event.pull_request.head.sha }}
-          safety: no repository write, merge, deploy, deletion, permission change, or live order"
 
   process-report:
     if: >-
-      github.event_name != 'push' &&
-      github.event_name != 'pull_request' &&
-      (
-        github.event_name != 'issue_comment' ||
-        (
-          github.event.issue.number == 62 &&
-          !github.event.issue.pull_request &&
-          contains(github.event.comment.body, '[WORKER_REPORT]') &&
-          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-        )
-      )
+      github.event_name != 'push' && github.event_name != 'pull_request' &&
+      (github.event_name != 'issue_comment' ||
+       (github.event.issue.number == 62 && !github.event.issue.pull_request &&
+        contains(github.event.comment.body, '[WORKER_REPORT]') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)))
+    permissions:
+      contents: read
+      issues: write
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout default branch
-        uses: actions/checkout@v6
-
-      - name: Process latest worker report
+      - uses: actions/checkout@v6
+      - name: Finalize executor report
+        if: github.event_name == 'repository_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUB_ISSUE_NUMBER: '62'
+        run: python3 scripts/agent_hub_executor_report.py
+      - name: Generate next command
+        if: github.event_name != 'repository_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           HUB_ISSUE_NUMBER: '62'
           AGENT_HUB_GEMINI_MODELS: gemini-3.1-flash-lite
         run: python3 scripts/agent_hub_free.py
+      - name: Wake controlled executor
+        if: github.event_name != 'repository_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type='agent-hub-command-ready'
