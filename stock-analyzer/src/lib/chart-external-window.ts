@@ -2,7 +2,7 @@ import {
   normalizeAnalysisSelection,
   selectionQuery,
   type AnalysisSelection,
-} from '@/lib/analysis-selection';
+} from './analysis-selection';
 
 export const CHART_EXTERNAL_WINDOW_CHANNEL = 'stock-app-ai-chart-window-v1';
 export const CHART_EXTERNAL_WINDOW_NAME = 'stock-app-ai-chart-external';
@@ -59,12 +59,16 @@ export function isDesktopChartViewport(width: number, finePointer: boolean): boo
 }
 
 export function externalChartWindowFeatures(screen: ScreenBounds): string {
-  const availableWidth = Math.max(960, Number(screen.availWidth) || 1280);
-  const availableHeight = Math.max(720, Number(screen.availHeight) || 800);
-  const width = Math.min(1440, Math.max(960, Math.floor(availableWidth * 0.86)));
-  const height = Math.min(1000, Math.max(720, Math.floor(availableHeight * 0.9)));
-  const left = Math.max(Number(screen.availLeft) || 0, (Number(screen.availLeft) || 0) + Math.floor((availableWidth - width) / 2));
-  const top = Math.max(Number(screen.availTop) || 0, (Number(screen.availTop) || 0) + Math.floor((availableHeight - height) / 2));
+  const availableWidth = Math.max(320, Number(screen.availWidth) || 1280);
+  const availableHeight = Math.max(480, Number(screen.availHeight) || 800);
+  const preferredWidth = Math.max(960, Math.floor(availableWidth * 0.86));
+  const preferredHeight = Math.max(720, Math.floor(availableHeight * 0.9));
+  const width = Math.min(1440, availableWidth, preferredWidth);
+  const height = Math.min(1000, availableHeight, preferredHeight);
+  const originLeft = Number(screen.availLeft) || 0;
+  const originTop = Number(screen.availTop) || 0;
+  const left = originLeft + Math.max(0, Math.floor((availableWidth - width) / 2));
+  const top = originTop + Math.max(0, Math.floor((availableHeight - height) / 2));
 
   return [
     'popup=yes',
