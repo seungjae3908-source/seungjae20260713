@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import { TradeAutomationService } from '../services/trade-automation.service';
 import { DEFAULT_TRADING_POLICY } from '../services/trade-automation.types';
 
 const USER = '22222222-2222-2222-2222-222222222222';
@@ -139,4 +140,72 @@ test('concurrent plan creation and approval produce one paper order and no excha
     globalThis.fetch = nativeFetch;
     await close(server);
   }
+});
+
+test('separate service instances sharing one repository create one plan and one order', async () => {
+  const repository = new InMemoryTradingRepository();
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  await repository.savePolicy(USER, policy);
+
+  const firstService = new TradeAutomationService(repository);
+  const secondService = new TradeAutomationService(repository);
+  const createResults = await Promise.all([
+    firstService.createPlan(USER, paperPlan(), policy, false),
+    secondService.createPlan(USER, paperPlan(), policy, false),
+  ]);
+
+  assert.equal(createResults.filter((result) => result.duplicate).length, 1);
+  assert.equal(new Set(createResults.map((result) => result.plan?.id)).size, 1);
+  assert.equal((await repository.listPlans(USER)).length, 1);
+
+  const planId = createResults[0].plan.id;
+  const approvalResults = await Promise.allSettled([
+    firstService.approvePlan(USER, planId),
+    secondService.approvePlan(USER, planId),
+  ]);
+  assert.equal(approvalResults.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(approvalResults.filter((result) => result.status === 'rejected').length, 1);
+  const rejected = approvalResults.find((result) => result.status === 'rejected');
+  assert.equal(rejected.reason?.message, 'TRADE_PLAN_NOT_APPROVAL_PENDING');
+
+  const approvedPlan = approvalResults.find((result) => result.status === 'fulfilled').value;
+  const orderResults = await Promise.all([
+    firstService.createOrder(USER, approvedPlan),
+    secondService.createOrder(USER, approvedPlan),
+  ]);
+  assert.equal(orderResults.filter((result) => result.duplicate).length, 1);
+  assert.equal(new Set(orderResults.map((result) => result.order.id)).size, 1);
+  assert.equal((await repository.listOrders(USER)).length, 1);
+
+  const orderCreatedEvents = (await repository.listEvents(USER))
+    .filter((event) => event.reason === 'ORDER_CREATED');
+  assert.equal(orderCreatedEvents.length, 1);
+});
+
+test('service recreation does not recreate or recover a completed order', async () => {
+  const repository = new InMemoryTradingRepository();
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  await repository.savePolicy(USER, policy);
+
+  const originalService = new TradeAutomationService(repository);
+  const created = await originalService.createPlan(USER, paperPlan(), policy, false);
+  const approvedPlan = await originalService.approvePlan(USER, created.plan.id);
+  const createdOrder = await originalService.createOrder(USER, approvedPlan);
+  await originalService.transition(createdOrder.order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED');
+  await originalService.transition(createdOrder.order, 'FILLED', 'PAPER_BROKER_FILLED', {
+    filledQuantity: createdOrder.order.requestedQuantity ?? 0,
+    averageFillPrice: approvedPlan.entryPrice,
+  });
+
+  const eventsBeforeRestart = await repository.listEvents(USER);
+  const restartedService = new TradeAutomationService(repository);
+  const duplicate = await restartedService.createOrder(USER, approvedPlan);
+  const recoverable = await restartedService.recoverOpenOrders(USER);
+
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.order.id, createdOrder.order.id);
+  assert.equal(duplicate.order.state, 'FILLED');
+  assert.deepEqual(recoverable, []);
+  assert.equal((await repository.listOrders(USER)).length, 1);
+  assert.equal((await repository.listEvents(USER)).length, eventsBeforeRestart.length);
 });
