@@ -384,8 +384,12 @@ jobs:
       - name: Build final staging release verdict
         if: always()
         run: node api-server/scripts/build-staging-verdict.mjs
-      - name: Upload immutable staging verdict and diagnostics
+      - name: Sanitize and verify staging artifacts before upload
+        id: sanitize_artifacts
         if: always()
+        run: node api-server/scripts/sanitize-staging-playwright-artifacts.mjs "$STAGING_ARTIFACT_DIR"
+      - name: Upload immutable staging verdict and diagnostics
+        if: always() && steps.sanitize_artifacts.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: staging-verdict-${{ env.TARGET_SHA }}
