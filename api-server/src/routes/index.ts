@@ -75,7 +75,10 @@ router.use('/paper-trading', requireCapability('canAccessPaperTrading'));
 router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/', paperJournalRouter);
-router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
+// Automatic trading is intentionally restricted to administrators. This guard
+// runs after database-backed authentication and before every status, policy,
+// connection, plan, order, emergency-stop, and recovery endpoint.
+router.use('/trade-automation', requireAdmin);
 router.use('/trade-automation', tradeAutomationRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
