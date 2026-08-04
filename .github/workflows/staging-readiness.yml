@@ -153,9 +153,12 @@ jobs:
           run_install: false
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      - name: Require Node 22+ for Supabase ephemeral account lifecycle
+        run: |
+          node -e "const major=Number(process.versions.node.split('.')[0]); if (major < 22) { console.error('Node.js 22+ is required for the staging Supabase account lifecycle.'); process.exit(1); }"
       - name: Prepare staging artifact directory
         run: mkdir -p "$STAGING_ARTIFACT_DIR"
       - run: pnpm install --frozen-lockfile
