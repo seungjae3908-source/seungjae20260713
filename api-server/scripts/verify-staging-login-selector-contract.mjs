@@ -12,6 +12,10 @@ const app = await readFile(
   path.join(root, 'stock-analyzer/src/App.tsx'),
   'utf8',
 );
+const auth = await readFile(
+  path.join(root, 'stock-analyzer/src/lib/auth.tsx'),
+  'utf8',
+);
 const routes = await readFile(
   path.join(root, 'api-server/src/routes/index.ts'),
   'utf8',
@@ -64,6 +68,7 @@ assert(spec.includes('[401, 403]'), 'protected API must be denied with 401 or 40
 assert(spec.includes('unconfirmed logout abort:'), 'unconfirmed candidates must return to unexpected HTTP errors');
 assert(spec.includes('diagnostics.unexpected_http_errors.push(diagnostic);'), 'all non-matching failed requests must remain unexpected');
 assert(spec.includes('if (response.status() < 400) return;'), 'all browser 4xx and 5xx responses must remain unexpected');
+assert(!spec.includes("'/rest/v1/profiles'"), 'profile request aborts must be eliminated in the app, never allowlisted in staging diagnostics');
 
 assert(spec.includes("return parsed.pathname || '/';"), 'diagnostic URLs must omit hosts and arbitrary query strings');
 assert(spec.includes("'[redacted-url]'"), 'absolute URLs must be redacted from diagnostic details');
@@ -91,4 +96,29 @@ assert(routes.includes("res.status(200).json({"), 'unconnected coin feed must de
 assert(routes.includes("items: []"), 'unconnected coin feed must return an empty item list');
 assert(routes.includes("ok: false"), 'unconnected coin feed must remain visibly marked as unavailable');
 
-console.log('[staging-login-selector-contract] logout classification, diagnostic redaction, optional coin-feed degradation, and pre-navigation settlement are locked down');
+assert(auth.includes('useMemo, useRef, useState'), 'auth provider must import useRef for logout coordination');
+assert(auth.includes('const signingOutRef = useRef(false);'), 'auth provider must track an active logout barrier');
+assert(auth.includes('const profileLoadQueueRef = useRef<Promise<void>>(Promise.resolve());'), 'auth provider must track every profile load in a serial queue');
+assert(auth.includes('if (signingOutRef.current) return Promise.resolve();'), 'new profile loads must stop after logout begins');
+assert(auth.includes("profileLoadQueueRef.current\n      .catch(() => undefined)"), 'profile loads must remain serial even after an earlier load failure');
+assert(auth.includes('profileLoadQueueRef.current = queued.catch(() => undefined);'), 'profile queue failures must not permanently block later logout');
+assert(auth.includes('if (!signingOutRef.current) setProfile'), 'late profile responses must not restore profile state during logout');
+assert(auth.includes('if (active && !signingOutRef.current) void loadProfile(session.user);'), 'timer, focus, and visibility refreshes must stop during logout');
+
+const authSignOutIndex = auth.indexOf('async signOut() {');
+const logoutBarrierIndex = auth.indexOf('signingOutRef.current = true;', authSignOutIndex);
+const drainIndex = auth.indexOf('await profileLoadQueueRef.current;', authSignOutIndex);
+const globalLogoutIndex = auth.indexOf('await getSupabase().auth.signOut();', authSignOutIndex);
+const clearSessionIndex = auth.indexOf('setSession(null);', globalLogoutIndex);
+const releaseBarrierIndex = auth.indexOf('signingOutRef.current = false;', globalLogoutIndex);
+assert(authSignOutIndex >= 0, 'auth provider global signOut implementation is missing');
+assert(
+  logoutBarrierIndex > authSignOutIndex
+    && drainIndex > logoutBarrierIndex
+    && globalLogoutIndex > drainIndex,
+  'logout must raise the barrier, drain profile requests, and only then call Supabase global signOut',
+);
+assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must explicitly clear the local session');
+assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session and profile cleanup finish');
+
+console.log('[staging-login-selector-contract] logout classification, profile-request drain, diagnostic redaction, optional coin-feed degradation, and navigation stability are locked down');
