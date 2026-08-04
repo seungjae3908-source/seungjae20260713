@@ -56,6 +56,7 @@ const groups = {
   ],
   search: [
     path.join(root, 'src/services/unified-asset-search.service.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/unified-asset-search.test.ts'),
     path.join(root, 'src/routes/unified-search.smoke.test.ts'),
   ],
   smoke: [
@@ -69,7 +70,7 @@ const groups = {
   ],
 };
 
-groups.unit = [...groups.phase2, ...groups.risk, ...groups.phase4, ...groups.phase5, ...groups.phase6, ...groups.phase7, ...groups.phase8, ...groups.phase9, ...groups.phase12, groups.search[0]];
+groups.unit = [...groups.phase2, ...groups.risk, ...groups.phase4, ...groups.phase5, ...groups.phase6, ...groups.phase7, ...groups.phase8, ...groups.phase9, ...groups.phase12, groups.search[0], groups.search[1]];
 const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'search', 'smoke'];
 if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 
