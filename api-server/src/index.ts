@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import apiRouter from './routes';
+import boundedMarketScanRouter from './routes/bounded-market-scan';
 import { startPriceAlertMonitor } from './services/notification.service';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -64,7 +65,9 @@ app.get('/api/health', (_req, res) => {
 
 /*
  * API 라우트는 반드시 프론트 정적 파일보다 먼저 등록합니다.
+ * 기존 market router의 무제한 scan 구현보다 bounded route를 먼저 고정합니다.
  */
+app.use('/api/market/scan', boundedMarketScanRouter);
 app.use('/api', apiRouter);
 
 const frontendDistCandidates = [
