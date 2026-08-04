@@ -40,6 +40,10 @@ function sameSelection(left: AnalysisSelection, right: AnalysisSelection): boole
     && left.displayName === right.displayName;
 }
 
+function isMobileUserAgent(userAgent: string): boolean {
+  return /Android|iPhone|iPad|iPod|Mobile|IEMobile|Opera Mini/i.test(userAgent);
+}
+
 export default function AiChartPage({ embedded = false }: { embedded?: boolean }) {
   const [location, navigate] = useLocation();
   const state = useAnalysisSelection();
@@ -71,15 +75,13 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       setExternalControlAvailable(false);
       return;
     }
-    const pointer = window.matchMedia('(pointer: fine)');
-    const update = () => setExternalControlAvailable(isDesktopChartViewport(window.innerWidth, pointer.matches));
+    const update = () => setExternalControlAvailable(
+      typeof BroadcastChannel !== 'undefined'
+      && isDesktopChartViewport(window.innerWidth, isMobileUserAgent(window.navigator.userAgent)),
+    );
     update();
-    pointer.addEventListener('change', update);
     window.addEventListener('resize', update);
-    return () => {
-      pointer.removeEventListener('change', update);
-      window.removeEventListener('resize', update);
-    };
+    return () => window.removeEventListener('resize', update);
   }, [embedded, externalMode]);
 
   const publishSelection = useCallback((next: AnalysisSelection) => {
