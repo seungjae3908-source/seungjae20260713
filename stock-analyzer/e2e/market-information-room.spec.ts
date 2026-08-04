@@ -1,8 +1,8 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 
 const NOW = '2026-08-05T00:00:00.000Z';
 
-function fulfill(route: Parameters<Page['route']>[1] extends (route: infer R) => unknown ? R : never, body: unknown, status = 200) {
+function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
 }
 
@@ -214,7 +214,7 @@ test('all four market information routes support direct entry and refresh', asyn
   for (const [path, title, exchange] of routes) {
     await page.goto(path);
     await expect(page.getByRole('heading', { name: title })).toBeVisible();
-    await expect(page.getByText(new RegExp(exchange))).toBeVisible();
+    await expect(page.getByText(new RegExp(`^${exchange} ·`)).first()).toBeVisible();
     await page.reload();
     await expect(page.getByRole('heading', { name: title })).toBeVisible();
   }
@@ -226,9 +226,9 @@ test('rapid KR to US change never applies the delayed KR ranking', async ({ page
   await page.goto('/stocks/kr');
   await openInformationMenu(page);
   await page.getByRole('menuitem', { name: '해외', exact: true }).click();
-  await expect(page.getByText('Apple Inc.', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('애플', { exact: true }).first()).toBeVisible();
   await page.waitForTimeout(1000);
-  await expect(page.getByText('Apple Inc.', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('애플', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('삼성전자', { exact: true })).toHaveCount(0);
   diagnostics.assertClean();
 });
@@ -254,11 +254,11 @@ test('search results never cross the selected market', async ({ page }) => {
   await page.goto('/stocks/kr');
   await page.getByRole('textbox', { name: '국내주식 정보 검색' }).fill('공통');
   await expect(page.getByText('삼성전자', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText('Apple Inc.', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('애플', { exact: true })).toHaveCount(0);
 
   await page.goto('/stocks/us');
   await page.getByRole('textbox', { name: '미국주식 정보 검색' }).fill('common');
-  await expect(page.getByText('Apple Inc.', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('애플', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('삼성전자', { exact: true })).toHaveCount(0);
   diagnostics.assertClean();
 });
