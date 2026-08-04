@@ -57,6 +57,7 @@ const groups = {
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
     path.join(root, 'src/services/market-information.service.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/market-information.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
   ],
   smoke: [
