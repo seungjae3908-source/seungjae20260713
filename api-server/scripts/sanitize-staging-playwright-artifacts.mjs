@@ -56,7 +56,10 @@ function sanitizeJson(value) {
 function sanitizeText(filePath, text) {
   if (path.extname(filePath).toLowerCase() === '.json') {
     try {
-      return `${JSON.stringify(sanitizeJson(JSON.parse(text)), null, 2)}\n`;
+      const parsed = JSON.parse(text);
+      const sanitized = sanitizeJson(parsed);
+      if (JSON.stringify(sanitized) === JSON.stringify(parsed)) return text;
+      return `${JSON.stringify(sanitized, null, 2)}\n`;
     } catch {
       // Invalid JSON is still scanned and sanitized as text, then fails later if unsafe.
     }
