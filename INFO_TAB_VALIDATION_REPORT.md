@@ -15,3 +15,15 @@
 - Required Application CI jobs on the validated source tree: 6 passed, 0 failed
 - Generated `dist`, Playwright report, test result, and APK changes: removed from the feature diff
 - Deployment, Supabase, secrets, and real-order execution: not performed
+
+## Analysis Hub Extension
+
+- Baseline main SHA: `ddc679065781e40f46dc6f13962d6039bccd4e58`
+- Deterministic stock analysis engine scenarios: passed
+- Sector modules: quantum, semiconductor, biotech, AI/software, automotive, financial, general
+- Event impact and source-confirmation weighting: passed
+- Information analysis hub Playwright scenarios: passed
+- Full Playwright regression after analysis extension: passed
+- Frontend/backend typecheck and build: passed
+- Backend default/risk/phase4-9/smoke regression: passed
+- OpenAI dependency, deployment, Supabase, Secret, permission, and live-order changes: none

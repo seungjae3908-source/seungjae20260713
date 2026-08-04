@@ -531,7 +531,7 @@ function evidenceFromRow(row: AnyRecord, sourceType: AnalysisEvidence['sourceTyp
 }
 
 function collectEvidence(input: StockAnalysisInput): AnalysisEvidence[] {
-  const sourceRows: Array<[AnyRecord, AnalysisEvidence['sourceType']]> = [
+  const sourceRows: ReadonlyArray<readonly [AnyRecord, AnalysisEvidence['sourceType']]> = [
     ...rows(input.news).map((row) => [row, 'news'] as const),
     ...rows(input.disclosures).map((row) => [row, 'disclosure'] as const),
     ...rows(input.specialEvents).map((row) => [row, text(row.kind) === 'disclosure' ? 'disclosure' : text(row.kind) === 'signal' ? 'signal' : 'news'] as const),

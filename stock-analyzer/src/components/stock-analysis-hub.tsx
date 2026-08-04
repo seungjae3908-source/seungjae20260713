@@ -246,6 +246,7 @@ export function StockAnalysisHub({
   const [revision, setRevision] = useState<RevisionView | null>(null);
 
   useEffect(() => {
+    if (loading || !quote || !profile || !financials) return;
     const key = historyKey(market, ticker);
     const previousHistory = readHistory(key);
     const current = compactSnapshot(analysis);
@@ -257,7 +258,7 @@ export function StockAnalysisHub({
     if (nextHistory !== previousHistory) writeHistory(key, nextHistory);
     setHistory(nextHistory);
     setRevision(comparison);
-  }, [analysis, market, ticker]);
+  }, [analysis, financials, loading, market, profile, quote, ticker]);
 
   return (
     <section data-testid="stock-analysis-hub" className="space-y-3">
@@ -439,8 +440,9 @@ function SummaryMetric({ label, value, sub, icon, className, valueClassName }: {
 }
 
 function AnalysisSection({ title, summary, defaultOpen = false, children }: { title: string; summary: string; defaultOpen?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <details defaultOpen={defaultOpen} className="group rounded-3xl border border-card-border bg-card shadow-sm">
+    <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)} className="group rounded-3xl border border-card-border bg-card shadow-sm">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 [&::-webkit-details-marker]:hidden">
         <span className="min-w-0 flex-1 text-center">
           <span className="block text-sm font-black">{title}</span>
