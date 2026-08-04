@@ -37,6 +37,7 @@ const groups = {
     path.join(root, 'src/services/member-access-phase8.test.ts'),
     path.join(root, 'src/services/member-administration.service.test.ts'),
     path.join(root, 'src/services/release-candidate-phase8.test.ts'),
+    path.join(root, 'src/services/admin-order-access.test.ts'),
     path.join(root, 'src/routes/member-access-phase8.smoke.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-archive-phase8.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-batching-phase8.test.ts'),
