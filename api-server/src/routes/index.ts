@@ -1,6 +1,7 @@
 import { Router, type IRouter } from 'express';
 import healthRouter from './health';
 import marketRouter from './market';
+import marketInformationRouter from './market-information';
 import newsRouter from './news.route';
 import providerDebugRouter from './provider-debug';
 import pushRouter from './push';
@@ -57,6 +58,13 @@ router.get('/crypto/futures/positions', privateExchangeDisabled);
 // execution key. They stay blocked; the member-scoped trade-automation router
 // below is the only supported integration surface.
 router.use('/stocks/auto-trade', privateExchangeDisabled);
+
+// Market information rooms are read-only and capability-scoped. The service
+// itself only permits whitelisted public GET endpoints; private exchange paths
+// are neither imported nor reachable from this router.
+router.use('/market-information/coins-spot', requireCapability('canAccessSpot'));
+router.use('/market-information/coins-futures', requireCapability('canAccessFutures'));
+router.use('/market-information', requireCapability('canAccessBasicInfo'), marketInformationRouter);
 
 router.use('/crypto/spot', requireCapability('canAccessSpot'));
 router.use('/crypto/futures', requireCapability('canAccessFutures'));

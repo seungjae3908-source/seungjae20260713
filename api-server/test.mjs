@@ -56,6 +56,7 @@ const groups = {
   phase12: [
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
+    path.join(root, 'src/services/market-information.service.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
   ],
   smoke: [
@@ -66,6 +67,7 @@ const groups = {
     path.join(root, 'src/routes/paper-trading.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
+    path.join(root, 'src/routes/market-information.smoke.test.ts'),
   ],
 };
 
