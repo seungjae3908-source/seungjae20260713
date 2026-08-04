@@ -128,12 +128,17 @@ export class TradeAutomationService {
 
   async approvePlan(userId: string, planId: string, revalidation?: TradingPlanRevalidationInput | null) {
     return withTradePlanLock(userId, planId, async () => {
-      const plan = await this.repository.getPlan(userId, planId);
-      if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
-      if (plan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
+      const storedPlan = await this.repository.getPlan(userId, planId);
+      if (!storedPlan) throw new Error('TRADE_PLAN_NOT_FOUND');
+      if (storedPlan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
+      const plan: TradingPlan = { ...storedPlan };
       if (!plan.approvalExpiresAt || Date.parse(plan.approvalExpiresAt) <= Date.now()) {
-        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
-        const expired = await this.repository.compareAndSetPlan(plan, 'APPROVAL_PENDING');
+        const expiredCandidate: TradingPlan = {
+          ...plan,
+          state: 'EXPIRED',
+          updatedAt: new Date().toISOString(),
+        };
+        const expired = await this.repository.compareAndSetPlan(expiredCandidate, 'APPROVAL_PENDING');
         if (!expired) throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
         throw new Error('TRADE_PLAN_EXPIRED');
       }
@@ -142,37 +147,54 @@ export class TradeAutomationService {
       const policy = await this.repository.getPolicy(userId);
       const decision = await this.recheck(userId, plan, policy);
       if (!decision.allowed) {
-        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
-        const expired = await this.repository.compareAndSetPlan(plan, 'APPROVAL_PENDING');
+        const expiredCandidate: TradingPlan = {
+          ...plan,
+          state: 'EXPIRED',
+          updatedAt: new Date().toISOString(),
+        };
+        const expired = await this.repository.compareAndSetPlan(expiredCandidate, 'APPROVAL_PENDING');
         if (!expired) throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
         throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
       }
-      plan.state = 'SUBMITTED'; plan.approvedAt = new Date().toISOString(); plan.updatedAt = plan.approvedAt;
-      const submitted = await this.repository.compareAndSetPlan(plan, 'APPROVAL_PENDING');
+      const approvedAt = new Date().toISOString();
+      const submittedCandidate: TradingPlan = {
+        ...plan,
+        state: 'SUBMITTED',
+        approvedAt,
+        updatedAt: approvedAt,
+      };
+      const submitted = await this.repository.compareAndSetPlan(submittedCandidate, 'APPROVAL_PENDING');
       if (!submitted) throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
-      Object.assign(plan, submitted);
-      return plan;
+      return submitted;
     });
   }
 
   async beginAutomaticPlan(userId: string, planId: string) {
     return withTradePlanLock(userId, planId, async () => {
-      const plan = await this.repository.getPlan(userId, planId);
-      if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
-      if (plan.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
+      const storedPlan = await this.repository.getPlan(userId, planId);
+      if (!storedPlan) throw new Error('TRADE_PLAN_NOT_FOUND');
+      if (storedPlan.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
+      const plan: TradingPlan = { ...storedPlan };
       const policy = await this.repository.getPolicy(userId);
       const decision = await this.recheck(userId, plan, policy);
       if (!decision.allowed) {
-        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
-        const expired = await this.repository.compareAndSetPlan(plan, 'PLANNED');
+        const expiredCandidate: TradingPlan = {
+          ...plan,
+          state: 'EXPIRED',
+          updatedAt: new Date().toISOString(),
+        };
+        const expired = await this.repository.compareAndSetPlan(expiredCandidate, 'PLANNED');
         if (!expired) throw new Error('TRADE_PLAN_NOT_READY');
         throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
       }
-      plan.state = 'SUBMITTED'; plan.updatedAt = new Date().toISOString();
-      const submitted = await this.repository.compareAndSetPlan(plan, 'PLANNED');
+      const submittedCandidate: TradingPlan = {
+        ...plan,
+        state: 'SUBMITTED',
+        updatedAt: new Date().toISOString(),
+      };
+      const submitted = await this.repository.compareAndSetPlan(submittedCandidate, 'PLANNED');
       if (!submitted) throw new Error('TRADE_PLAN_NOT_READY');
-      Object.assign(plan, submitted);
-      return plan;
+      return submitted;
     });
   }
 
