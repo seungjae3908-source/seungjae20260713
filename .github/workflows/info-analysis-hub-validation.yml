@@ -90,7 +90,36 @@ jobs:
         run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
 
       - name: Run analysis hub browser scenarios
-        run: pnpm --dir stock-analyzer exec playwright test e2e/info-analysis-hub.spec.ts --reporter=line
+        id: analysis_browser
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm --dir stock-analyzer exec playwright test e2e/info-analysis-hub.spec.ts --reporter=line 2>&1 | tee /tmp/info-analysis-hub-browser.log
+
+      - name: Persist analysis hub browser diagnostics
+        if: steps.analysis_browser.outcome == 'failure'
+        shell: bash
+        run: |
+          {
+            echo '# Information Analysis Hub Browser Failure'
+            echo
+            echo '## Playwright output'
+            echo '```text'
+            tail -n 700 /tmp/info-analysis-hub-browser.log
+            echo '```'
+            echo
+            echo '## Error contexts'
+            find stock-analyzer/test-results -type f \( -name 'error-context.md' -o -name '*.txt' \) -print | while read -r file; do
+              echo
+              echo "### ${file}"
+              sed -n '1,300p' "$file"
+            done
+          } > INFO_ANALYSIS_HUB_BROWSER_FAILURE.md
+          git add INFO_ANALYSIS_HUB_BROWSER_FAILURE.md
+          git commit -m 'chore: capture information analysis hub browser failure'
+          git push origin HEAD:feature/stock-info-self-analysis-v1
+          exit 1
 
       - name: Run full browser regression
         run: pnpm --dir stock-analyzer run test:e2e
@@ -116,6 +145,7 @@ jobs:
         run: |
           git restore --worktree --staged api-server/dist stock-analyzer/dist 2>/dev/null || true
           rm -rf stock-analyzer/playwright-report stock-analyzer/test-results
+          rm -f INFO_ANALYSIS_HUB_BROWSER_FAILURE.md
           git rm .github/workflows/info-analysis-hub-validation.yml scripts/apply-info-analysis-hub.py
 
       - name: Commit validated source changes
