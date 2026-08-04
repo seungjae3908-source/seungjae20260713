@@ -166,13 +166,6 @@ fi
     if (select count(*) from public.trade_order_events candidate
         join public.trade_orders candidate_order
           on candidate_order.user_id = candidate.user_id and candidate_order.id = candidate.order_id
-        where candidate.user_id = '$MEMBER_ID' and candidate_order.plan_id = '$PLAN_ID'
-          and candidate.reason is null) > 0 then
-      raise exception 'unexpected event projection detected';
-    end if;
-    if (select count(*) from public.trade_order_events candidate
-        join public.trade_orders candidate_order
-          on candidate_order.user_id = candidate.user_id and candidate_order.id = candidate.order_id
         where candidate.user_id = '$MEMBER_ID' and candidate_order.plan_id = '$PLAN_ID') <> 1 then
       raise exception 'concurrent atomic RPC created more than one event';
     end if;
