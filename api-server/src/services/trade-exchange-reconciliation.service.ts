@@ -1,6 +1,7 @@
 import type { TradingRepository } from './trade-automation.repository';
 import { TradeAutomationService, withTradePlanLock } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
+import { recordRecoveryAttempt } from './trade-recovery-audit.service';
 import {
   prepareBitgetOrderQuery,
   prepareKiwoomToken,
@@ -231,7 +232,8 @@ export class TradeExchangeReconciliationService {
 
       const connection = await this.repository.getConnection(userId, plan.exchange);
       if (!connection?.configured || !connection.encryptedCredentials || connection.accountMode !== plan.accountMode) {
-        await this.automation.recordRecoveryAttempt(
+        await recordRecoveryAttempt(
+          this.repository,
           current,
           'RECONCILIATION_CONNECTION_UNAVAILABLE',
           'RECONCILIATION_CONNECTION_UNAVAILABLE',
@@ -287,7 +289,8 @@ export class TradeExchangeReconciliationService {
         unresolvedCode = exchangeErrorCode(error);
       }
 
-      await this.automation.recordRecoveryAttempt(
+      await recordRecoveryAttempt(
+        this.repository,
         current,
         resolution ? 'RECONCILIATION_QUERY_RESOLVED' : 'RECONCILIATION_QUERY_UNRESOLVED',
         resolution ? null : unresolvedCode,
@@ -303,7 +306,6 @@ export class TradeExchangeReconciliationService {
         exchangeOrderId: resolution.exchangeOrderId,
         filledQuantity: resolution.filledQuantity,
         averageFillPrice: resolution.averageFillPrice,
-        errorCode: null,
       });
       Object.assign(order, current);
       return { order, resolved: true, querySent };
@@ -317,7 +319,8 @@ export class TradeExchangeReconciliationService {
     for (const order of orders) {
       const plan = await this.repository.getPlan(userId, order.planId);
       if (!plan) {
-        await this.automation.recordRecoveryAttempt(
+        await recordRecoveryAttempt(
+          this.repository,
           order,
           'RECONCILIATION_PLAN_MISSING',
           'TRADE_PLAN_NOT_FOUND',
