@@ -86,6 +86,23 @@ test('latest request wins, keyboard selection works, and spot/futures stay separ
   await expect(page.getByRole('listbox', { name: '통합 자산 자동완성 결과' })).toBeHidden();
 });
 
+test('all asset groups navigate to their exact existing detail routes', async ({ page }) => {
+  await mockSearch(page);
+
+  const selectAndExpect = async (query: string, optionName: RegExp, expectedUrl: RegExp) => {
+    await page.goto('/__phase11-unified-search-e2e');
+    const input = page.getByRole('combobox', { name: '통합 자산 검색' });
+    await input.fill(query);
+    await page.getByRole('option', { name: optionName }).click();
+    await expect(page).toHaveURL(expectedUrl);
+  };
+
+  await selectAndExpect('005930', /삼성전자.*005930/, /\/stock\/005930\?back=%2Fsearch$/);
+  await selectAndExpect('TSLA', /테슬라.*TSLA/, /\/stock\/TSLA\?back=%2Fsearch$/);
+  await selectAndExpect('KRW-BTC', /비트코인.*UPBIT.*BTC\/KRW/, /\/stock-info\?asset=coin&coinMarket=spot&symbol=BTC$/);
+  await selectAndExpect('BTCUSDT', /비트코인.*BITGET.*BTCUSDT/, /\/stock-info\?asset=coin&coinMarket=futures&symbol=BTCUSDT$/);
+});
+
 test('watchlist and recent searches prioritize equal-tier suggestions', async ({ page }) => {
   await page.addInitScript(({ recent, watchlist }) => {
     window.localStorage.setItem('unified-asset-search:recent:v1', JSON.stringify(recent));
