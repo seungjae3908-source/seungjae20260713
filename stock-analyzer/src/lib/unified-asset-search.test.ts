@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  prioritizeUnifiedAssetSuggestions,
-  type UnifiedAssetSuggestion,
-} from './unified-asset-search';
+import { prioritizeUnifiedAssetSuggestions } from './unified-asset-search-priority';
+import type { UnifiedAssetSuggestion } from './unified-asset-search';
 
 const now = '2026-08-04T07:00:00.000Z';
 
