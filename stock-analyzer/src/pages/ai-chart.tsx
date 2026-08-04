@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Database, ShieldAlert } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, Database, MonitorUp, ShieldAlert, X } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { ChartBroadcastPanel, type ChartBroadcastMarket } from '@/components/chart-broadcast';
@@ -9,6 +9,19 @@ import {
   useAnalysisSelection,
   type AnalysisSelection,
 } from '@/lib/analysis-selection';
+import {
+  buildChartPath,
+  buildExternalChartPath,
+  chartSelectionKey,
+  CHART_EXTERNAL_WINDOW_CHANNEL,
+  CHART_EXTERNAL_WINDOW_NAME,
+  createChartWindowMessage,
+  createChartWindowSourceId,
+  externalChartWindowFeatures,
+  isDesktopChartViewport,
+  isExternalChartSearch,
+  parseChartWindowMessage,
+} from '@/lib/chart-external-window';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
 
 function fallbackSelection(): AnalysisSelection {
@@ -23,20 +36,104 @@ function fallbackSelection(): AnalysisSelection {
   };
 }
 
+function sameSelection(left: AnalysisSelection, right: AnalysisSelection): boolean {
+  return chartSelectionKey(left) === chartSelectionKey(right)
+    && left.displayName === right.displayName;
+}
+
 export default function AiChartPage({ embedded = false }: { embedded?: boolean }) {
   const [location, navigate] = useLocation();
   const state = useAnalysisSelection();
-  const fromUrl = useMemo(() => selectionFromSearch(location.includes('?') ? location.slice(location.indexOf('?')) : ''), [location]);
+  const search = location.includes('?') ? location.slice(location.indexOf('?')) : '';
+  const externalMode = useMemo(() => isExternalChartSearch(search), [search]);
+  const fromUrl = useMemo(() => selectionFromSearch(search), [search]);
   const selection = useMemo<AnalysisSelection>(() => fromUrl
     ? { ...(state.selection?.ticker === fromUrl.ticker ? state.selection : {}), ...fromUrl }
     : state.selection ?? fallbackSelection(), [fromUrl, state.selection]);
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
+  const [externalControlAvailable, setExternalControlAvailable] = useState(false);
+  const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(null);
+  const sourceIdRef = useRef(createChartWindowSourceId());
+  const channelRef = useRef<BroadcastChannel | null>(null);
+  const popupRef = useRef<Window | null>(null);
+  const popupPollRef = useRef<number | null>(null);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
 
   useEffect(() => {
     if (fromUrl) state.select({ ...state.selection, ...fromUrl, selectedAt: state.selection?.selectedAt ?? fromUrl.selectedAt } as AnalysisSelection);
     // URL selection is authoritative only when the URL changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromUrl?.ticker, fromUrl?.market, fromUrl?.timeframe]);
+
+  useEffect(() => {
+    if (embedded || externalMode || typeof window === 'undefined') {
+      setExternalControlAvailable(false);
+      return;
+    }
+    const pointer = window.matchMedia('(pointer: fine)');
+    const update = () => setExternalControlAvailable(isDesktopChartViewport(window.innerWidth, pointer.matches));
+    update();
+    pointer.addEventListener('change', update);
+    window.addEventListener('resize', update);
+    return () => {
+      pointer.removeEventListener('change', update);
+      window.removeEventListener('resize', update);
+    };
+  }, [embedded, externalMode]);
+
+  const publishSelection = useCallback((next: AnalysisSelection) => {
+    channelRef.current?.postMessage(createChartWindowMessage('selection', sourceIdRef.current, next));
+  }, []);
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') {
+      if (externalMode) setExternalWindowStatus('이 브라우저는 외부 차트 동기화를 지원하지 않습니다.');
+      return;
+    }
+
+    const channel = new BroadcastChannel(CHART_EXTERNAL_WINDOW_CHANNEL);
+    channelRef.current = channel;
+    channel.onmessage = (event: MessageEvent<unknown>) => {
+      const message = parseChartWindowMessage(event.data);
+      if (!message || message.sourceId === sourceIdRef.current) return;
+
+      if (message.type === 'ready') {
+        channel.postMessage(createChartWindowMessage('selection', sourceIdRef.current, selectionRef.current));
+        return;
+      }
+      if (message.type === 'closed') {
+        if (!externalMode) {
+          popupRef.current = null;
+          setExternalWindowStatus('외부 차트 창이 닫혔습니다.');
+        }
+        return;
+      }
+      if (sameSelection(selectionRef.current, message.selection)) return;
+
+      state.select(message.selection);
+      setAnalysis(null);
+      navigate(buildChartPath(message.selection, externalMode), { replace: true });
+      setExternalWindowStatus(externalMode ? '원래 앱의 차트 선택을 동기화했습니다.' : '외부 창의 차트 선택을 동기화했습니다.');
+    };
+
+    const notifyClosed = () => {
+      if (externalMode) channel.postMessage(createChartWindowMessage('closed', sourceIdRef.current));
+    };
+    window.addEventListener('beforeunload', notifyClosed);
+    if (externalMode) channel.postMessage(createChartWindowMessage('ready', sourceIdRef.current));
+
+    return () => {
+      notifyClosed();
+      window.removeEventListener('beforeunload', notifyClosed);
+      channel.close();
+      if (channelRef.current === channel) channelRef.current = null;
+    };
+  }, [externalMode, navigate, state]);
+
+  useEffect(() => () => {
+    if (popupPollRef.current != null) window.clearInterval(popupPollRef.current);
+  }, []);
 
   const market: ChartBroadcastMarket = selection.market === 'US' ? 'US' : 'KR';
   const updateSelection = useCallback((next: { ticker: string; name: string; market: ChartBroadcastMarket; timeframe: string }) => {
@@ -51,26 +148,84 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       selectedAt: selection.ticker === next.ticker ? selection.selectedAt : new Date().toISOString(),
     };
     const changed = selection.ticker !== merged.ticker || selection.market !== merged.market || selection.timeframe !== merged.timeframe || selection.displayName !== merged.displayName;
-    if (changed) state.select(merged);
-    const nextLocation = `/ai-chart?${selectionQuery(merged)}`;
+    if (changed) {
+      state.select(merged);
+      publishSelection(merged);
+    }
+    const nextLocation = buildChartPath(merged, externalMode);
     if (!embedded && location !== nextLocation) navigate(nextLocation, { replace: true });
-  }, [embedded, location, navigate, selection, state]);
+  }, [embedded, externalMode, location, navigate, publishSelection, selection, state]);
+
+  const openExternalWindow = useCallback(() => {
+    const currentPopup = popupRef.current;
+    if (currentPopup && !currentPopup.closed) {
+      currentPopup.focus();
+      publishSelection(selectionRef.current);
+      setExternalWindowStatus('이미 열린 외부 차트 창으로 이동했습니다.');
+      return;
+    }
+
+    const popup = window.open(
+      buildExternalChartPath(selectionRef.current),
+      CHART_EXTERNAL_WINDOW_NAME,
+      externalChartWindowFeatures(window.screen),
+    );
+    if (!popup) {
+      setExternalWindowStatus('팝업이 차단되었습니다. 이 사이트의 팝업을 허용한 뒤 다시 시도하세요.');
+      return;
+    }
+
+    popupRef.current = popup;
+    popup.focus();
+    setExternalWindowStatus('외부 차트 창을 열었습니다. 종목·시장·시간봉 변경이 양쪽에 동기화됩니다.');
+    window.setTimeout(() => publishSelection(selectionRef.current), 250);
+
+    if (popupPollRef.current != null) window.clearInterval(popupPollRef.current);
+    popupPollRef.current = window.setInterval(() => {
+      if (!popup.closed) return;
+      popupRef.current = null;
+      if (popupPollRef.current != null) window.clearInterval(popupPollRef.current);
+      popupPollRef.current = null;
+      setExternalWindowStatus('외부 차트 창이 닫혔습니다.');
+    }, 1_000);
+  }, [publishSelection]);
 
   return (
-    <div className={`h-full overflow-y-auto overscroll-contain bg-background ${embedded ? 'pb-4' : 'pb-24'}`}>
+    <div className={`h-full overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
       <header className="sticky top-0 z-20 border-b border-card-border bg-background/95 px-4 py-3 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center gap-3">
-          {!embedded && <button type="button" aria-label="AI 검색기로 돌아가기" onClick={() => navigate('/scanner')} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-card-border bg-card"><ArrowLeft className="h-4 w-4" /></button>}
+          {!embedded && !externalMode && <button type="button" aria-label="AI 검색기로 돌아가기" onClick={() => navigate('/scanner')} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-card-border bg-card"><ArrowLeft className="h-4 w-4" /></button>}
+          {externalMode && <button type="button" aria-label="외부 차트 창 닫기" onClick={() => window.close()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-card-border bg-card"><X className="h-4 w-4" /></button>}
           <div className="min-w-0 flex-1">
             <p className="text-[11px] font-extrabold text-primary">기술탭</p>
-            <h1 className="truncate text-lg font-black">AI 차트 분석기</h1>
+            <h1 className="truncate text-lg font-black">AI 차트 분석기{externalMode ? ' · 외부 창' : ''}</h1>
           </div>
-          <div className="text-right text-[10px] font-bold text-muted-foreground">
-            <p>{market === 'KR' ? '국내주식' : '미국주식'} · {selection.timeframe}</p>
-            <p>REST 갱신형</p>
+          <div className="flex shrink-0 items-center gap-2">
+            {externalControlAvailable && (
+              <button
+                type="button"
+                onClick={openExternalWindow}
+                className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-card-border bg-card px-3 text-[11px] font-extrabold"
+              >
+                <MonitorUp className="h-4 w-4 text-primary" />
+                외부 창
+              </button>
+            )}
+            <div className="text-right text-[10px] font-bold text-muted-foreground">
+              <p>{market === 'KR' ? '국내주식' : '미국주식'} · {selection.timeframe}</p>
+              <p>{externalMode ? '동기화 창' : 'REST 갱신형'}</p>
+            </div>
           </div>
         </div>
       </header>
+
+      {externalWindowStatus && (
+        <div role="status" className="mx-auto mt-3 max-w-7xl px-4">
+          <p className="rounded-2xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] font-bold text-muted-foreground">
+            {externalWindowStatus}
+          </p>
+        </div>
+      )}
 
       <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
         <section className="min-w-0">
@@ -111,7 +266,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
           <p className="flex gap-2 rounded-2xl border border-warning/30 bg-warning/5 p-3 text-[10px] font-semibold leading-4 text-muted-foreground"><ShieldAlert className="h-4 w-4 shrink-0 text-warning" />진행 중 캔들의 분석은 forming 또는 candidate로만 표시합니다. 공급자가 완료 여부를 제공하지 않으면 확정으로 승격하지 않습니다.</p>
         </aside>
       </main>
-      {!embedded && <BottomNav />}
+      {!embedded && !externalMode && <BottomNav />}
     </div>
   );
 }
