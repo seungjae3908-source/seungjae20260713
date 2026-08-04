@@ -1,4 +1,4 @@
-import { Router, type IRouter, type Response } from 'express';
+import { Router, type IRouter, type NextFunction, type Response } from 'express';
 import {
   createSupabaseTradingRepository,
   type TradingRepository,
@@ -9,6 +9,7 @@ import {
   type ScannerApprovalPlanRequest,
 } from '../services/scanner-approval-plan.service';
 import type { AuthenticatedRequest } from '../middleware/auth';
+import type { TradingPlan } from '../services/trade-automation.types';
 
 const router: IRouter = Router();
 let repositoryFactoryForTests: ((userId: string) => TradingRepository) | null = null;
@@ -68,19 +69,89 @@ function requestValue(body: unknown): ScannerApprovalPlanRequest {
   };
 }
 
+function isScannerPaperPlan(plan: TradingPlan | null): plan is TradingPlan {
+  return Boolean(plan
+    && plan.accountMode === 'paper'
+    && plan.exchange === 'kiwoom'
+    && plan.market === 'KR'
+    && plan.strategyId.startsWith('scanner-'));
+}
+
 function errorResponse(res: Response, error: unknown) {
   const raw = error instanceof Error ? error.message : 'SCANNER_APPROVAL_FAILED';
   const code = raw.split(':')[0];
   const status = code === 'LOGIN_REQUIRED' ? 401
     : code.includes('NOT_FOUND') ? 404
       : code.includes('NOT_AVAILABLE') || code.includes('NOT_MAINTAINED') || code.includes('BLOCKED')
-        || code.includes('INVALIDATED') || code.includes('EXPIRED') ? 409
+        || code.includes('INVALIDATED') || code.includes('EXPIRED') || code.includes('NOT_APPROVABLE') ? 409
         : code.includes('UNAVAILABLE') || code.includes('PROVIDER') ? 503
           : 400;
   return res.status(status).json({
     ok: false,
     error: code,
     orderSubmitted: false,
+    liveOrderSubmitted: false,
+    exchangeRequestSent: false,
+  });
+}
+
+async function approveScannerPaperPlan(req: AuthenticatedRequest, res: Response) {
+  if (req.body?.approved !== true) {
+    return res.status(409).json({
+      ok: false,
+      error: 'EXPLICIT_APPROVAL_REQUIRED',
+      orderSubmitted: false,
+      liveOrderSubmitted: false,
+      exchangeRequestSent: false,
+    });
+  }
+  const { userId, repository, automation } = context(req);
+  const stored = await repository.getPlan(userId, String(req.params.id));
+  if (!stored) throw new Error('TRADE_PLAN_NOT_FOUND');
+  if (!isScannerPaperPlan(stored)) throw new Error('SCANNER_PAPER_APPROVAL_ONLY');
+  if (!Number.isSafeInteger(stored.quantity) || Number(stored.quantity) <= 0) {
+    throw new Error('SCANNER_PAPER_QUANTITY_INVALID');
+  }
+  const existingOrder = await repository.findOrderByPlan(userId, stored.id);
+  if (existingOrder) {
+    return res.json({
+      ok: true,
+      plan: stored,
+      order: existingOrder,
+      duplicate: true,
+      paperOrderCreated: true,
+      liveOrderSubmitted: false,
+      exchangeRequestSent: false,
+    });
+  }
+  const plan = await automation.approvePlan(userId, stored.id);
+  const created = await automation.createOrder(userId, plan);
+  if (created.duplicate) {
+    return res.json({
+      ok: true,
+      plan,
+      order: created.order,
+      duplicate: true,
+      paperOrderCreated: true,
+      liveOrderSubmitted: false,
+      exchangeRequestSent: false,
+    });
+  }
+  const quantity = Number(plan.quantity);
+  const averageFillPrice = quantity > 0 ? plan.estimatedKrw / quantity : null;
+  await automation.transition(created.order, 'ACCEPTED', 'SCANNER_PAPER_BROKER_ACCEPTED', {
+    exchangeOrderId: `paper-scanner-${created.order.clientOrderId}`,
+  });
+  const order = await automation.transition(created.order, 'FILLED', 'SCANNER_PAPER_BROKER_FILLED', {
+    filledQuantity: quantity,
+    averageFillPrice,
+  });
+  return res.json({
+    ok: true,
+    plan,
+    order,
+    duplicate: false,
+    paperOrderCreated: true,
     liveOrderSubmitted: false,
     exchangeRequestSent: false,
   });
@@ -102,58 +173,20 @@ router.post('/scanner/plans', async (req: AuthenticatedRequest, res) => {
   }
 });
 
+router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res, next: NextFunction) => {
+  try {
+    const { userId, repository } = context(req);
+    const plan = await repository.getPlan(userId, String(req.params.id));
+    if (!isScannerPaperPlan(plan)) return next();
+    return await approveScannerPaperPlan(req, res);
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+});
+
 router.post('/plans/:id/approve-paper', async (req: AuthenticatedRequest, res) => {
   try {
-    if (req.body?.approved !== true) {
-      return res.status(409).json({
-        ok: false,
-        error: 'EXPLICIT_APPROVAL_REQUIRED',
-        orderSubmitted: false,
-        liveOrderSubmitted: false,
-        exchangeRequestSent: false,
-      });
-    }
-    const { userId, repository, automation } = context(req);
-    const stored = await repository.getPlan(userId, String(req.params.id));
-    if (!stored) throw new Error('TRADE_PLAN_NOT_FOUND');
-    if (stored.accountMode !== 'paper' || stored.exchange !== 'kiwoom'
-      || stored.market !== 'KR' || !stored.strategyId.startsWith('scanner-')) {
-      throw new Error('SCANNER_PAPER_APPROVAL_ONLY');
-    }
-    if (!Number.isSafeInteger(stored.quantity) || Number(stored.quantity) <= 0) {
-      throw new Error('SCANNER_PAPER_QUANTITY_INVALID');
-    }
-    const plan = await automation.approvePlan(userId, stored.id);
-    const created = await automation.createOrder(userId, plan);
-    if (created.duplicate) {
-      return res.json({
-        ok: true,
-        plan,
-        order: created.order,
-        duplicate: true,
-        paperOrderCreated: true,
-        liveOrderSubmitted: false,
-        exchangeRequestSent: false,
-      });
-    }
-    const quantity = Number(plan.quantity);
-    const averageFillPrice = quantity > 0 ? plan.estimatedKrw / quantity : null;
-    await automation.transition(created.order, 'ACCEPTED', 'SCANNER_PAPER_BROKER_ACCEPTED', {
-      exchangeOrderId: `paper-scanner-${created.order.clientOrderId}`,
-    });
-    const order = await automation.transition(created.order, 'FILLED', 'SCANNER_PAPER_BROKER_FILLED', {
-      filledQuantity: quantity,
-      averageFillPrice,
-    });
-    return res.json({
-      ok: true,
-      plan,
-      order,
-      duplicate: false,
-      paperOrderCreated: true,
-      liveOrderSubmitted: false,
-      exchangeRequestSent: false,
-    });
+    return await approveScannerPaperPlan(req, res);
   } catch (error) {
     return errorResponse(res, error);
   }
