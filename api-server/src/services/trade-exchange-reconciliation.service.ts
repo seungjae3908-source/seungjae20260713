@@ -31,6 +31,8 @@ type ReconciliationOutcome = {
   order: TradingOrder;
   resolved: boolean;
   querySent: boolean;
+  authenticationRequests: number;
+  statusQueries: number;
 };
 
 const BASE_URLS = {
@@ -78,9 +80,19 @@ async function sendReadOnlyExchangeRequest(baseUrl: string, request: PreparedExc
       body: request.body,
       signal: controller.signal,
     });
-    const payload = await response.json().catch(() => ({})) as unknown;
+    const text = await response.text();
     if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
-    return isRecord(payload) ? payload : { data: payload };
+    if (!text.trim()) throw new Error('EXCHANGE_EMPTY_RESPONSE');
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text) as unknown;
+    } catch {
+      throw new Error('EXCHANGE_INVALID_JSON');
+    }
+    if (isRecord(payload)) return payload;
+    if (Array.isArray(payload)) return { data: payload };
+    throw new Error('EXCHANGE_INVALID_RESPONSE');
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw new Error('EXCHANGE_TIMEOUT');
     if (error instanceof TypeError) throw new Error('EXCHANGE_NETWORK_ERROR');
@@ -91,9 +103,13 @@ async function sendReadOnlyExchangeRequest(baseUrl: string, request: PreparedExc
 }
 
 function assertBitgetSuccess(payload: ExchangePayload) {
-  if (String(payload.code ?? '') !== '00000') {
-    throw new Error(`BITGET_${String(payload.code ?? 'INVALID_RESPONSE')}`);
+  const rawCode = payload.code;
+  if (rawCode === undefined || rawCode === null || String(rawCode) !== '00000') {
+    throw new Error(rawCode === undefined || rawCode === null
+      ? 'BITGET_INVALID_RESPONSE'
+      : `BITGET_${String(rawCode)}`);
   }
+  if (!Object.prototype.hasOwnProperty.call(payload, 'data')) throw new Error('BITGET_INVALID_RESPONSE');
   return payload.data;
 }
 
@@ -110,32 +126,33 @@ function assertKiwoomSuccess(payload: ExchangePayload) {
   return payload;
 }
 
-function bitgetResolution(payload: unknown, fallbackOrderId: string | null): ReconciliationResolution | null {
+function bitgetResolution(payload: unknown, order: TradingOrder): ReconciliationResolution | null {
   const rows = Array.isArray(payload) ? payload.filter(isRecord) : isRecord(payload) ? [payload] : [];
   const row = rows[0];
   if (!row) return null;
+  const returnedClientId = String(row.clientOid ?? row.client_order_id ?? '').trim();
+  if (returnedClientId && returnedClientId !== order.clientOrderId) return null;
   const state = String(row.state ?? row.status ?? '').toLowerCase();
   const filledQuantity = finiteNumber(
     row.baseVolume ?? row.filledQty ?? row.accBaseVolume ?? row.filledQuantity,
     0,
   );
   const averageFillPrice = positiveNumber(row.priceAvg ?? row.avgPrice ?? row.averagePrice);
-  const exchangeOrderId = String(row.orderId ?? row.order_id ?? fallbackOrderId ?? '').trim() || null;
 
   if (['live', 'new', 'init', 'not_trigger', 'pending'].includes(state)) {
-    return { state: filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED', exchangeOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
+    return { state: filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED', exchangeOrderId: order.clientOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
   }
   if (['partial_fill', 'partially_filled', 'partial-filled'].includes(state)) {
-    return { state: 'PARTIALLY_FILLED', exchangeOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
+    return { state: 'PARTIALLY_FILLED', exchangeOrderId: order.clientOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
   }
   if (['filled', 'full_fill', 'fully_filled'].includes(state)) {
-    return { state: 'FILLED', exchangeOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
+    return { state: 'FILLED', exchangeOrderId: order.clientOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
   }
   if (['cancelled', 'canceled'].includes(state)) {
-    return { state: 'CANCELED', exchangeOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
+    return { state: 'CANCELED', exchangeOrderId: order.clientOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
   }
   if (['rejected', 'failed'].includes(state)) {
-    return { state: 'REJECTED', exchangeOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
+    return { state: 'REJECTED', exchangeOrderId: order.clientOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
   }
   return null;
 }
@@ -155,11 +172,13 @@ function upbitAverageFill(payload: ExchangePayload) {
   return quantity > 0 ? funds / quantity : positiveNumber(payload.avg_price ?? payload.average_price);
 }
 
-function upbitResolution(payload: ExchangePayload, fallbackOrderId: string | null): ReconciliationResolution | null {
+function upbitResolution(payload: ExchangePayload, order: TradingOrder): ReconciliationResolution | null {
+  const returnedIdentifier = String(payload.identifier ?? '').trim();
+  if (returnedIdentifier && returnedIdentifier !== order.clientOrderId) return null;
   const state = String(payload.state ?? '').toLowerCase();
   const filledQuantity = finiteNumber(payload.executed_volume ?? payload.filled_volume, 0);
   const averageFillPrice = upbitAverageFill(payload);
-  const exchangeOrderId = String(payload.uuid ?? payload.identifier ?? fallbackOrderId ?? '').trim() || null;
+  const exchangeOrderId = String(payload.uuid ?? order.exchangeOrderId ?? order.clientOrderId).trim() || null;
 
   if (['wait', 'watch'].includes(state)) {
     return { state: filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED', exchangeOrderId, filledQuantity, averageFillPrice, reason: 'UPBIT_ORDER_RECONCILED' };
@@ -177,13 +196,7 @@ function upbitResolution(payload: ExchangePayload, fallbackOrderId: string | nul
 }
 
 function nestedRows(payload: ExchangePayload) {
-  const candidates: unknown[] = [
-    payload.data,
-    payload.output,
-    payload.orders,
-    payload.list,
-    payload.unfilled,
-  ];
+  const candidates: unknown[] = [payload.data, payload.output, payload.orders, payload.list, payload.unfilled];
   const rows: ExchangePayload[] = [];
   for (const candidate of candidates) {
     if (Array.isArray(candidate)) rows.push(...candidate.filter(isRecord));
@@ -200,7 +213,7 @@ function kiwoomResolution(payload: ExchangePayload, order: TradingOrder): Reconc
   if (!order.exchangeOrderId) return null;
   const row = nestedRows(payload).find((candidate) => String(
     candidate.ord_no ?? candidate.order_no ?? candidate.orderNo ?? '',
-  ) === order.exchangeOrderId);
+  ).trim() === order.exchangeOrderId);
   if (!row) return null;
   const filledQuantity = finiteNumber(row.cntr_qty ?? row.filled_qty ?? row.exec_qty, order.filledQuantity);
   const remainingQuantity = finiteNumber(row.oso_qty ?? row.unfilled_qty ?? row.remain_qty, 0);
@@ -227,7 +240,7 @@ export class TradeExchangeReconciliationService {
       const current = persisted ?? structuredClone(order);
       if (current.state !== 'RECOVERY_REQUIRED') {
         Object.assign(order, current);
-        return { order, resolved: true, querySent: false };
+        return { order, resolved: true, querySent: false, authenticationRequests: 0, statusQueries: 0 };
       }
 
       const connection = await this.repository.getConnection(userId, plan.exchange);
@@ -239,29 +252,30 @@ export class TradeExchangeReconciliationService {
           'RECONCILIATION_CONNECTION_UNAVAILABLE',
         );
         Object.assign(order, current);
-        return { order, resolved: false, querySent: false };
+        return { order, resolved: false, querySent: false, authenticationRequests: 0, statusQueries: 0 };
       }
 
       let resolution: ReconciliationResolution | null = null;
       let unresolvedCode = 'EXCHANGE_ORDER_STATUS_UNCONFIRMED';
-      let querySent = false;
+      let authenticationRequests = 0;
+      let statusQueries = 0;
       try {
         const credentials = decryptTradingCredentials(connection.encryptedCredentials);
         if (plan.exchange === 'bitget') {
-          querySent = true;
+          statusQueries += 1;
           const payload = assertBitgetSuccess(await sendReadOnlyExchangeRequest(
             BASE_URLS.bitget,
             prepareBitgetOrderQuery(credentials as BitgetCredentials, current.clientOrderId),
           ));
-          resolution = bitgetResolution(payload, current.exchangeOrderId);
+          resolution = bitgetResolution(payload, current);
           unresolvedCode = 'BITGET_ORDER_STATUS_UNCONFIRMED';
         } else if (plan.exchange === 'upbit') {
-          querySent = true;
+          statusQueries += 1;
           const payload = assertUpbitSuccess(await sendReadOnlyExchangeRequest(
             BASE_URLS.upbit,
             prepareUpbitOrderQuery(credentials as UpbitCredentials, current.clientOrderId),
           ));
-          resolution = upbitResolution(payload, current.exchangeOrderId);
+          resolution = upbitResolution(payload, current);
           unresolvedCode = 'UPBIT_ORDER_STATUS_UNCONFIRMED';
         } else if (!current.exchangeOrderId) {
           unresolvedCode = 'KIWOOM_EXCHANGE_ORDER_ID_UNKNOWN';
@@ -269,7 +283,7 @@ export class TradeExchangeReconciliationService {
           const mock = plan.accountMode === 'mock';
           const baseUrl = mock ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
           const kiwoomCredentials = credentials as KiwoomCredentials;
-          querySent = true;
+          authenticationRequests += 1;
           const tokenPayload = assertKiwoomSuccess(await sendReadOnlyExchangeRequest(
             baseUrl,
             prepareKiwoomToken(kiwoomCredentials),
@@ -278,6 +292,7 @@ export class TradeExchangeReconciliationService {
             tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '',
           );
           if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
+          statusQueries += 1;
           const unfilled = assertKiwoomSuccess(await sendReadOnlyExchangeRequest(
             baseUrl,
             prepareKiwoomUnfilled({ ...kiwoomCredentials, accessToken: token }),
@@ -289,17 +304,18 @@ export class TradeExchangeReconciliationService {
         unresolvedCode = exchangeErrorCode(error);
       }
 
+      const querySent = statusQueries > 0;
       await recordRecoveryAttempt(
         this.repository,
         current,
         resolution ? 'RECONCILIATION_QUERY_RESOLVED' : 'RECONCILIATION_QUERY_UNRESOLVED',
         resolution ? null : unresolvedCode,
-        { querySent, exchange: plan.exchange },
+        { querySent, authenticationRequests, statusQueries, exchange: plan.exchange },
       );
 
       if (!resolution) {
         Object.assign(order, current);
-        return { order, resolved: false, querySent };
+        return { order, resolved: false, querySent, authenticationRequests, statusQueries };
       }
 
       await this.automation.transition(current, resolution.state, resolution.reason, {
@@ -308,7 +324,7 @@ export class TradeExchangeReconciliationService {
         averageFillPrice: resolution.averageFillPrice,
       });
       Object.assign(order, current);
-      return { order, resolved: true, querySent };
+      return { order, resolved: true, querySent, authenticationRequests, statusQueries };
     });
   }
 
@@ -325,7 +341,13 @@ export class TradeExchangeReconciliationService {
           'RECONCILIATION_PLAN_MISSING',
           'TRADE_PLAN_NOT_FOUND',
         );
-        results.push({ order, resolved: false, querySent: false });
+        results.push({
+          order,
+          resolved: false,
+          querySent: false,
+          authenticationRequests: 0,
+          statusQueries: 0,
+        });
         continue;
       }
       results.push(await this.reconcileOrder(userId, plan, order));
@@ -334,7 +356,9 @@ export class TradeExchangeReconciliationService {
       orders: results.map((result) => result.order),
       resolved: results.filter((result) => result.resolved).length,
       unresolved: results.filter((result) => !result.resolved).length,
-      queriesSent: results.filter((result) => result.querySent).length,
+      queriesSent: results.reduce((sum, result) => sum + result.statusQueries, 0),
+      authenticationRequests: results.reduce((sum, result) => sum + result.authenticationRequests, 0),
+      statusQueries: results.reduce((sum, result) => sum + result.statusQueries, 0),
     };
   }
 }
