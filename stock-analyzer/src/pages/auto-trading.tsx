@@ -3,8 +3,14 @@ import {
   TradeAutomationSettings,
   type TradeAutomationStatus,
 } from '@/components/trade-automation-settings';
+import {
+  TradeApprovalQueue,
+  type TradeApprovalPlan,
+} from '@/components/trade-approval-queue';
 
-export default function AutoTradingPage({ fixture }: { fixture?: TradeAutomationStatus }) {
+type AutoTradingFixture = TradeAutomationStatus & { plans?: TradeApprovalPlan[] };
+
+export default function AutoTradingPage({ fixture }: { fixture?: AutoTradingFixture }) {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <header className="border-b border-card-border bg-background/90 px-4 pb-4 pt-5 text-center glass">
@@ -16,6 +22,10 @@ export default function AutoTradingPage({ fixture }: { fixture?: TradeAutomation
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-24">
         <div className="mx-auto w-full max-w-3xl">
           <TradeAutomationSettings fixture={fixture} />
+          <TradeApprovalQueue
+            fixturePlans={fixture?.plans}
+            emergencyStopped={fixture ? fixture.emergencyStopped : undefined}
+          />
         </div>
       </main>
       <BottomNav />
