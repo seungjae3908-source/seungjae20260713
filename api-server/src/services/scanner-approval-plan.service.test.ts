@@ -7,7 +7,10 @@ import { DEFAULT_TRADING_POLICY, type TradingPlan } from './trade-automation.typ
 import type { Candle } from '../sample/types';
 
 const USER = '11111111-1111-1111-1111-111111111111';
-const NOW = new Date('2026-08-04T05:20:00.000Z');
+// Keep the market snapshot fresh relative to the real risk engine clock. A
+// fixed historical instant makes this otherwise-valid fixture fail closed as
+// stale when CI runs later.
+const NOW = new Date();
 
 function candles(base = 70_000, count = 30): Candle[] {
   return Array.from({ length: count }, (_, index) => {
