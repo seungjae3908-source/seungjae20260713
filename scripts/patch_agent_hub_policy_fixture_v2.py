@@ -20,6 +20,8 @@ def main() -> int:
     text = replace_once(text, 'branch="feature/prediction-lab-standalone",', 'branch="feature/integration-plan",')
     text = replace_once(text, 'allowed_paths=("market-prediction-lab/**",),', 'allowed_paths=("docs/integration-plan.md",),')
     text = replace_once(text, 'json.dumps({"target_worker":"prediction-lab"})', 'json.dumps({"target_worker":"integration-planner"})')
+    text = replace_once(text, 'branch="ops/release",', 'branch="ops/read-only-release",')
+    text = replace_once(text, 'allowed_paths=("ops/**",),', 'allowed_paths=("docs/ops-readiness.md",),')
     TARGET.write_text(text, encoding="utf-8")
     for cache in ROOT.rglob("__pycache__"):
         if cache.is_dir():
