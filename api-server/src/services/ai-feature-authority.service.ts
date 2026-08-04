@@ -127,14 +127,8 @@ async function authoritativeTradePlanRequest(
   const repository = repositoryFor(context);
 
   let plan: TradingPlan | null;
-  let policy: TradingPolicy;
-  let persistentGlobalStop: boolean;
   try {
-    [plan, policy, persistentGlobalStop] = await Promise.all([
-      repository.getPlan(context.userId, planId),
-      repository.getPolicy(context.userId),
-      repository.getGlobalEmergencyStop(),
-    ]);
+    plan = await repository.getPlan(context.userId, planId);
   } catch {
     throw new AiChatError(
       'AI_FEATURE_AUTHORITY_STORAGE_UNAVAILABLE',
@@ -155,6 +149,21 @@ async function authoritativeTradePlanRequest(
       'AI_FEATURE_ACCOUNT_MODE_UNSUPPORTED',
       'mock 주문계획은 현재 구조화 AI 설명 계약에서 지원하지 않습니다.',
       409,
+    );
+  }
+
+  let policy: TradingPolicy;
+  let persistentGlobalStop: boolean;
+  try {
+    [policy, persistentGlobalStop] = await Promise.all([
+      repository.getPolicy(context.userId),
+      repository.getGlobalEmergencyStop(),
+    ]);
+  } catch {
+    throw new AiChatError(
+      'AI_FEATURE_AUTHORITY_STORAGE_UNAVAILABLE',
+      '서버 권위 주문계획 정책을 읽을 수 없습니다.',
+      503,
     );
   }
 
