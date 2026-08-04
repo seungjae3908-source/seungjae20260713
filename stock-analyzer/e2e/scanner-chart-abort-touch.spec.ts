@@ -462,7 +462,7 @@ test.describe('legacy scanner chart abort and touch geometry', () => {
     await chartTab.click();
     await expect(page.getByText('현재가', { exact: true }).locator('xpath=../..')).toContainText('140원');
     await page.getByRole('button', { name: '자동 갱신 중', exact: true }).click();
-    await expectTouchTarget(page.getByRole('button', { name: '자동 갱신 중', exact: true }), '자동 갱신 버튼');
+    await expectTouchTarget(page.getByRole('button', { name: '갱신 일시정지', exact: true }), '자동 갱신 버튼');
     await expectTouchTarget(page.getByPlaceholder('종목명 또는 종목코드 검색'), '종목 검색 입력');
     await expectTouchTarget(page.getByTitle('차트 새로고침'), '차트 새로고침 버튼');
     await expectTouchTarget(page.getByRole('button', { name: '1분', exact: true }), '1분 시간봉 버튼');
