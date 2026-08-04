@@ -132,6 +132,13 @@ function patternDescriptor(patterns: string[], trend: string): PatternDescriptor
   };
 }
 
+function effectiveBias(input: ChartAnalysisInput, descriptor: PatternDescriptor): ChartAnalysisBias {
+  if (descriptor.type === 'double-top' || descriptor.type === 'double-bottom') return descriptor.bias;
+  if (input.signal === 'STOP' || input.signal === 'EXIT' || input.signal === 'TAKE_PROFIT') return 'bearish';
+  if (input.signal === 'ENTER' || input.signal === 'HOLD') return 'bullish';
+  return descriptor.bias;
+}
+
 export function createStableAnalysisId(input: {
   engineVersion: string;
   market: string;
@@ -258,6 +265,7 @@ function transitionReason(previous: ChartAnalysis | null | undefined, nextStatus
 
 export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
   const descriptor = patternDescriptor(input.patterns, input.trend);
+  const bias = effectiveBias(input, descriptor);
   const engineVersion = input.engineVersion ?? DEFAULT_ENGINE_VERSION;
   const status = deriveStatus(input, descriptor);
   const detectedAt = new Date(finite(input.latestTime) * 1000).toISOString();
@@ -270,7 +278,7 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
     type: descriptor.type,
     subtype: descriptor.subtype,
     anchorTimes,
-    bias: descriptor.bias,
+    bias,
   });
   const previous = input.previousAnalysis?.id === id ? input.previousAnalysis : null;
   const copy = specializedCopy(input, descriptor, status);
@@ -295,7 +303,7 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
     market: input.market,
     timeframe: input.timeframe,
     status,
-    bias: descriptor.bias,
+    bias,
     confidence: Math.round(clamp(input.confidence, 0, 100)),
     createdAt: previous?.createdAt ?? detectedAt,
     detectedAt,
