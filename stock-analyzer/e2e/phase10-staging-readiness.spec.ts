@@ -81,6 +81,10 @@ async function settle(page: Page) {
   await page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => undefined);
 }
 
+function loginSubmitButton(page: Page) {
+  return page.locator('form').getByRole('button', { name: /^로그인$|sign in|log in/i });
+}
+
 async function login(page: Page, loginName: string, password: string) {
   await page.goto('/login');
   const nameInput = page.locator('input[type="email"], input[name="email"], input[autocomplete="username"]').first();
@@ -88,13 +92,13 @@ async function login(page: Page, loginName: string, password: string) {
   await expect(nameInput).toBeVisible();
   await nameInput.fill(loginName);
   await passwordInput.fill(password);
-  await page.getByRole('button', { name: /^로그인$|sign in|log in/i }).click();
+  await loginSubmitButton(page).click();
   await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 30_000 });
 }
 
 async function logout(page: Page) {
   await page.getByRole('button', { name: /로그아웃|sign out/i }).click();
-  await expect(page.getByRole('button', { name: /^로그인$|sign in|log in/i })).toBeVisible({ timeout: 20_000 });
+  await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
 }
 
 async function expectMembership(page: Page, label: RegExp) {
@@ -166,7 +170,7 @@ test.describe('real staging release readiness', () => {
     expect(reportedSha).toBe(targetSha);
 
     await page.goto('/paper-trading');
-    await expect(page.getByRole('button', { name: /^로그인$|sign in|log in/i })).toBeVisible();
+    await expect(loginSubmitButton(page)).toBeVisible();
     await expect(page.locator('nav')).toHaveCount(0);
 
     const protectedResponse = await page.request.get('/api/paper-journal/snapshot');
