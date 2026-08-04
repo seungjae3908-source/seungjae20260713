@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
-import { requireAdmin } from '../middleware/auth';
+import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
 
 const USER = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
@@ -14,7 +14,8 @@ async function start(role: 'regular' | 'admin') {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.member = {
+    const authenticated = req as AuthenticatedRequest;
+    authenticated.member = {
       id: USER,
       login_name: 'admin-contract',
       display_name: 'Admin Contract',
@@ -23,8 +24,8 @@ async function start(role: 'regular' | 'admin') {
       status: 'approved',
       is_active: true,
     };
-    req.membershipLevel = role;
-    req.accessToken = 'test-token';
+    authenticated.membershipLevel = role;
+    authenticated.accessToken = 'test-token';
     next();
   });
   app.use('/api/trade-automation', requireAdmin, router);
