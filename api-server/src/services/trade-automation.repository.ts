@@ -100,7 +100,7 @@ function assertOwner(actual: string, expected: string) {
 }
 
 function isUniqueViolation(error: unknown) {
-  return Boolean(error) && typeof error === 'object'
+  return error !== null && typeof error === 'object'
     && 'code' in error && String((error as { code?: unknown }).code) === '23505';
 }
 
