@@ -1,0 +1,900 @@
+name: Temporary Scanner Bounded Patch
+
+on:
+  push:
+    branches:
+      - fix/scanner-bounded-staging-readiness
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: contains(github.event.head_commit.message, '[scanner-patch-bootstrap]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/scanner-bounded-staging-readiness
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Apply deterministic scanner patch
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: expected one match, found {text.count(old)}')
+              file.write_text(text.replace(old, new, 1))
+
+          # Make external aborts settle immediately even when a provider ignores AbortSignal.
+          replace_once(
+              'api-server/src/lib/bounded-work-pool.ts',
+              '''async function runWithTimeout<Result>(
+            task: Promise<Result>,
+            controller: AbortController,
+            timeoutMs: number,
+          ): Promise<Result> {
+            let timer: NodeJS.Timeout | undefined;
+            try {
+              return await Promise.race([
+                task,
+                new Promise<never>((_resolve, reject) => {
+                  timer = setTimeout(() => {
+                    controller.abort(new BoundedWorkTimeoutError(timeoutMs));
+                    reject(new BoundedWorkTimeoutError(timeoutMs));
+                  }, timeoutMs);
+                }),
+              ]);
+            } finally {
+              if (timer) clearTimeout(timer);
+            }
+          }
+          ''',
+              '''async function runWithTimeout<Result>(
+            task: Promise<Result>,
+            controller: AbortController,
+            timeoutMs: number,
+          ): Promise<Result> {
+            let timer: NodeJS.Timeout | undefined;
+            let removeAbortListener: (() => void) | undefined;
+            const aborted = new Promise<never>((_resolve, reject) => {
+              const onAbort = () => reject(
+                controller.signal.reason instanceof Error
+                  ? controller.signal.reason
+                  : new Error('Bounded work item aborted'),
+              );
+              controller.signal.addEventListener('abort', onAbort, { once: true });
+              removeAbortListener = () => controller.signal.removeEventListener('abort', onAbort);
+            });
+            try {
+              return await Promise.race([
+                task,
+                aborted,
+                new Promise<never>((_resolve, reject) => {
+                  timer = setTimeout(() => {
+                    const error = new BoundedWorkTimeoutError(timeoutMs);
+                    controller.abort(error);
+                    reject(error);
+                  }, timeoutMs);
+                }),
+              ]);
+            } finally {
+              if (timer) clearTimeout(timer);
+              removeAbortListener?.();
+            }
+          }
+          ''',
+          )
+
+          signal_path = Path('api-server/src/services/signal.service.ts')
+          signal = signal_path.read_text()
+          signal = signal.replace(
+              "import { computeIndicators } from '../sample/indicators';\n",
+              "import { computeIndicators } from '../sample/indicators';\nimport { runBoundedWorkPool } from '../lib/bounded-work-pool';\n",
+              1,
+          )
+
+          marker = '// Maximum scan cards returned (raised from 30 → ~100).'
+          before, sep, tail = signal.partition(marker)
+          if not sep:
+              raise SystemExit('signal.service.ts: scan marker missing')
+
+          old_signature = '''async function scan(
+            market: string,
+            selected: string[],
+            filters: ScanFilters = {},
+            limit = SCAN_POOL_LIMIT,
+          ): Promise<{
+            cards: ScanCard[];
+            selected: string[];
+            supportedIndicators: string[];
+            scanned: number;
+            excludedCount: number;
+            appliedFilters: { volumeThreshold: number | null; tradingValueThreshold: number | null; marketCapThreshold: number | null; minimumScore: number | null; maximumRiskScore: number | null };
+            timeframe: string;
+          }> {'''
+          new_signature = '''export const SCAN_EXECUTION_LIMITS = Object.freeze({
+            deadlineMs: 12_000,
+            itemTimeoutMs: 4_000,
+            concurrency: 6,
+          });
+
+          export interface ScanExecutionOptions {
+            signal?: AbortSignal;
+            deadlineMs?: number;
+            itemTimeoutMs?: number;
+            concurrency?: number;
+          }
+
+          export interface ScanResult {
+            cards: ScanCard[];
+            selected: string[];
+            supportedIndicators: string[];
+            scanned: number;
+            requestedCount: number;
+            completedCount: number;
+            providerErrorCount: number;
+            timeoutCount: number;
+            excludedCount: number;
+            appliedFilters: { volumeThreshold: number | null; tradingValueThreshold: number | null; marketCapThreshold: number | null; minimumScore: number | null; maximumRiskScore: number | null };
+            timeframe: string;
+            partial: boolean;
+            timedOut: boolean;
+            elapsedMs: number;
+            dataState: 'complete' | 'partial';
+            message: string;
+            maxConcurrency: number;
+            deadlineMs: number;
+            itemTimeoutMs: number;
+          }
+
+          export class ScanProviderUnavailableError extends Error {
+            readonly code = 'SCAN_PROVIDER_ERROR';
+            readonly provider = 'market-data';
+
+            constructor(message: string) {
+              super(message);
+              this.name = 'ScanProviderUnavailableError';
+            }
+          }
+
+          export class ScanAbortedError extends Error {
+            constructor() {
+              super('Scanner request aborted');
+              this.name = 'AbortError';
+            }
+          }
+
+          function executionLimit(value: number | undefined, fallback: number, maximum: number): number {
+            return Number.isInteger(value) && Number(value) > 0
+              ? Math.min(Number(value), maximum)
+              : fallback;
+          }
+
+          function throwIfScanAborted(signal?: AbortSignal): void {
+            if (signal?.aborted) throw new ScanAbortedError();
+          }
+
+          async function scan(
+            market: string,
+            selected: string[],
+            filters: ScanFilters = {},
+            execution: ScanExecutionOptions = {},
+            limit = SCAN_POOL_LIMIT,
+          ): Promise<ScanResult> {'''
+          if tail.count(old_signature) != 1:
+              raise SystemExit(f'signal.service.ts: signature matches={tail.count(old_signature)}')
+          tail = tail.replace(old_signature, new_signature, 1)
+
+          old_context = '''  const pool = CATALOG.filter(marketFilter(market)).slice(0, limit);
+            const targetMarkets = market === 'KR' || market === 'US' ? [market] : ['KR', 'US'];
+            const marketMoves = new Map<string, number>();
+            await Promise.all(targetMarkets.map(async (targetMarket) => {
+              try {
+                const quote = await MarketDataService.getQuote(targetMarket === 'KR' ? '^KS11' : '^GSPC');
+                if (Number.isFinite(quote.changePercent)) marketMoves.set(targetMarket, quote.changePercent);
+              } catch {
+                // Market context is optional and is reported as unavailable per card.
+              }
+            }));
+
+            // 공급자 오류(데이터 조회 실패)와 조건 미충족을 구분해 집계한다.
+            let providerErrors = 0;
+
+            const settled = await Promise.all(
+              pool.map(async (entry): Promise<ScanCard | null> => {
+                try {
+                  const [candles, quote, ctx] = await Promise.all(['''
+          new_context = '''  const pool = CATALOG.filter(marketFilter(market)).slice(0, limit);
+            const targetMarkets = market === 'KR' || market === 'US' ? [market] : ['KR', 'US'];
+            const marketMoves = new Map<string, number>();
+            const scanStartedAt = Date.now();
+            const deadlineMs = executionLimit(execution.deadlineMs, SCAN_EXECUTION_LIMITS.deadlineMs, SCAN_EXECUTION_LIMITS.deadlineMs);
+            const itemTimeoutMs = executionLimit(execution.itemTimeoutMs, SCAN_EXECUTION_LIMITS.itemTimeoutMs, deadlineMs);
+            const concurrency = executionLimit(execution.concurrency, SCAN_EXECUTION_LIMITS.concurrency, 16);
+
+            throwIfScanAborted(execution.signal);
+            await runBoundedWorkPool(
+              targetMarkets,
+              async (targetMarket, _index, signal) => {
+                try {
+                  const quote = await MarketDataService.getQuote(targetMarket === 'KR' ? '^KS11' : '^GSPC');
+                  if (!signal.aborted && Number.isFinite(quote.changePercent)) {
+                    marketMoves.set(targetMarket, quote.changePercent);
+                  }
+                } catch {
+                  // Market context is optional and is reported as unavailable per card.
+                }
+              },
+              {
+                concurrency: 2,
+                deadlineMs: Math.min(1_200, deadlineMs),
+                itemTimeoutMs: Math.min(1_000, itemTimeoutMs),
+                signal: execution.signal,
+              },
+            );
+            throwIfScanAborted(execution.signal);
+            const remainingDeadlineMs = Math.max(1, deadlineMs - (Date.now() - scanStartedAt));
+
+            const poolResult = await runBoundedWorkPool(
+              pool,
+              async (entry, _index, signal): Promise<ScanCard | null> => {
+                  throwIfScanAborted(signal);
+                  const [candles, quote, ctx] = await Promise.all(['''
+          if tail.count(old_context) != 1:
+              raise SystemExit(f'signal.service.ts: context matches={tail.count(old_context)}')
+          tail = tail.replace(old_context, new_context, 1)
+
+          tail = tail.replace(
+              '''        const report = await getReport(entry.ticker);
+                  const accumulation = report?.accumulation;''',
+              '''        const report = computeSignalReport(candles, indicators, ctx);
+                  const accumulation = report.accumulation;''',
+              1,
+          )
+
+          old_close = '''      } catch {
+                // 데이터 조회 실패(공급자 오류) — 조건 미충족(null 반환 경로)과 구분.
+                providerErrors += 1;
+                return null;
+              }
+            }),
+          );
+
+          // 풀의 대부분에서 데이터 조회 자체가 실패하면 "결과 0건"이 아니라
+          // 공급자 오류로 명시적으로 실패시킨다.
+          if (pool.length > 0 && providerErrors >= Math.max(10, Math.ceil(pool.length * 0.8))) {
+            const err = new Error(
+              `SCAN_PROVIDER_ERROR: ${providerErrors}/${pool.length} 종목 데이터 조회 실패 (시세 공급자 장애)`,
+            );
+            (err as any).provider = 'market-data';
+            throw err;
+          }
+
+          const cards = settled'''
+          new_close = '''              },
+              {
+                concurrency,
+                deadlineMs: remainingDeadlineMs,
+                itemTimeoutMs: Math.min(itemTimeoutMs, remainingDeadlineMs),
+                signal: execution.signal,
+              },
+            );
+            throwIfScanAborted(execution.signal);
+
+            const settled: Array<ScanCard | null> = [];
+            for (const outcome of poolResult.outcomes) {
+              if (outcome.status === 'fulfilled') settled.push(outcome.value ?? null);
+            }
+            const completedCount = poolResult.fulfilledCount;
+            const providerErrors = poolResult.rejectedCount;
+            const timeoutCount = poolResult.timedOutCount;
+            const failureCount = providerErrors + timeoutCount;
+            const severeFailure = poolResult.startedCount > 0
+              && failureCount >= Math.max(3, Math.ceil(poolResult.startedCount * 0.8))
+              && completedCount < Math.min(3, pool.length);
+
+            // 신뢰 가능한 종목 처리가 전혀 없거나 대부분 실패하면 빈 성공으로 위장하지 않는다.
+            if (pool.length > 0 && (completedCount === 0 || severeFailure)) {
+              throw new ScanProviderUnavailableError(
+                `SCAN_PROVIDER_ERROR: completed=${completedCount}, providerErrors=${providerErrors}, timeouts=${timeoutCount}, started=${poolResult.startedCount}`,
+              );
+            }
+
+            const cards = settled'''
+          if tail.count(old_close) != 1:
+              raise SystemExit(f'signal.service.ts: close matches={tail.count(old_close)}')
+          tail = tail.replace(old_close, new_close, 1)
+
+          old_return = '''  return {
+            cards,
+            selected: [...active.map((key) => SCAN_LABELS[key]), ...(includesMarketCap ? ['시총'] : [])],
+            supportedIndicators: SUPPORTED_INDICATORS,
+            scanned: pool.length,
+            excludedCount: pool.length - survived,
+            appliedFilters: { volumeThreshold, tradingValueThreshold, marketCapThreshold, minimumScore, maximumRiskScore },
+            timeframe,
+          };'''
+          new_return = '''  const elapsedMs = Date.now() - scanStartedAt;
+            const partial = poolResult.deadlineReached
+              || poolResult.startedCount < pool.length
+              || timeoutCount > 0
+              || providerErrors > 0;
+            const dataState: ScanResult['dataState'] = partial ? 'partial' : 'complete';
+            const message = partial
+              ? `일부 데이터가 지연되어 ${completedCount}/${pool.length}종목 처리 결과를 반환했습니다.`
+              : cards.length === 0
+                ? '스캔은 정상 완료됐지만 조건에 맞는 종목이 없습니다.'
+                : `${completedCount}종목 스캔을 정상 완료했습니다.`;
+
+            return {
+              cards,
+              selected: [...active.map((key) => SCAN_LABELS[key]), ...(includesMarketCap ? ['시총'] : [])],
+              supportedIndicators: SUPPORTED_INDICATORS,
+              scanned: poolResult.startedCount,
+              requestedCount: pool.length,
+              completedCount,
+              providerErrorCount: providerErrors,
+              timeoutCount,
+              excludedCount: Math.max(0, completedCount - survived),
+              appliedFilters: { volumeThreshold, tradingValueThreshold, marketCapThreshold, minimumScore, maximumRiskScore },
+              timeframe,
+              partial,
+              timedOut: timeoutCount > 0 || poolResult.deadlineReached,
+              elapsedMs,
+              dataState,
+              message,
+              maxConcurrency: poolResult.maxConcurrency,
+              deadlineMs,
+              itemTimeoutMs,
+            };'''
+          if tail.count(old_return) != 1:
+              raise SystemExit(f'signal.service.ts: return matches={tail.count(old_return)}')
+          tail = tail.replace(old_return, new_return, 1)
+          signal_path.write_text(before + marker + tail)
+
+          # Route: propagate disconnect abort and expose bounded result metadata.
+          market_path = Path('api-server/src/routes/market.ts')
+          market = market_path.read_text()
+          old_call = '''  try {
+              const result = await SignalService.scan(scope, indicators, filters);
+              // 결과 0건은 "조건에 맞는 종목 없음"(200)이며 오류(5xx)와 구분한다.
+              return res.json({'''
+          new_call = '''  const controller = new AbortController();
+            const abortRequest = () => {
+              if (!res.writableEnded && !controller.signal.aborted) {
+                controller.abort(new Error('SCAN_CLIENT_DISCONNECTED'));
+              }
+            };
+            req.once('aborted', abortRequest);
+            res.once('close', abortRequest);
+            try {
+              const result = await SignalService.scan(scope, indicators, filters, { signal: controller.signal });
+              // 결과 0건은 "조건에 맞는 종목 없음"(200)이며 오류(5xx)와 구분한다.
+              return res.json({'''
+          if market.count(old_call) != 1:
+              raise SystemExit(f'market.ts: call matches={market.count(old_call)}')
+          market = market.replace(old_call, new_call, 1)
+          old_meta = '''      scanned: result.scanned,
+                excludedCount: result.excludedCount,
+                updatedAt: new Date().toISOString(),
+              });
+            } catch (error) {
+              console.error('market scan error:', error);
+              return res.status(502).json({'''
+          new_meta = '''      scanned: result.scanned,
+                requestedCount: result.requestedCount,
+                completedCount: result.completedCount,
+                providerErrorCount: result.providerErrorCount,
+                timeoutCount: result.timeoutCount,
+                excludedCount: result.excludedCount,
+                partial: result.partial,
+                timedOut: result.timedOut,
+                elapsedMs: result.elapsedMs,
+                dataState: result.dataState,
+                message: result.message,
+                maxConcurrency: result.maxConcurrency,
+                deadlineMs: result.deadlineMs,
+                itemTimeoutMs: result.itemTimeoutMs,
+                updatedAt: new Date().toISOString(),
+              });
+            } catch (error) {
+              if (controller.signal.aborted || res.writableEnded) return;
+              console.error('market scan error:', error);
+              return res.status(502).json({'''
+          if market.count(old_meta) != 1:
+              raise SystemExit(f'market.ts: metadata matches={market.count(old_meta)}')
+          market = market.replace(old_meta, new_meta, 1)
+          old_end = '''      message: '조건검색 데이터 공급자 오류 — 결과 0건이 아니라 조회 실패입니다.',
+              });
+            }
+          });'''
+          new_end = '''      message: '조건검색 데이터 공급자 오류 — 결과 0건이 아니라 조회 실패입니다.',
+              });
+            } finally {
+              req.removeListener('aborted', abortRequest);
+              res.removeListener('close', abortRequest);
+            }
+          });'''
+          if market.count(old_end) != 1:
+              raise SystemExit(f'market.ts: end matches={market.count(old_end)}')
+          market_path.write_text(market.replace(old_end, new_end, 1))
+
+          # API client: forward AbortSignal and extend the response contract.
+          api_path = Path('stock-analyzer/src/lib/api.ts')
+          api = api_path.read_text()
+          api = api.replace(
+              'export async function apiGet<T>(path: string): Promise<T> {',
+              'export async function apiGet<T>(path: string, options: { signal?: AbortSignal } = {}): Promise<T> {',
+              1,
+          )
+          api = api.replace(
+              "    headers: {\n      'Cache-Control': 'no-cache, no-store, max-age=0',",
+              "    signal: options.signal,\n    headers: {\n      'Cache-Control': 'no-cache, no-store, max-age=0',",
+              1,
+          )
+          old_scan_result = '''export interface ScanResult {
+            cards: ScanCard[];
+            selected: string[];
+            supportedIndicators?: string[];
+            fetchedAt?: string;
+            searchRunId?: string;
+            timeframe?: string;
+          }'''
+          new_scan_result = '''export interface ScanResult {
+            ok: boolean;
+            cards: ScanCard[];
+            selected: string[];
+            supportedIndicators?: string[];
+            fetchedAt?: string;
+            searchRunId?: string;
+            timeframe?: string;
+            partial: boolean;
+            timedOut: boolean;
+            completedCount: number;
+            providerErrorCount: number;
+            timeoutCount: number;
+            scanned: number;
+            requestedCount: number;
+            elapsedMs: number;
+            dataState: 'complete' | 'partial';
+            message: string;
+          }'''
+          if api.count(old_scan_result) != 1:
+              raise SystemExit(f'api.ts: ScanResult matches={api.count(old_scan_result)}')
+          api = api.replace(old_scan_result, new_scan_result, 1)
+          api = api.replace(
+              '''    opts?: { volumeThreshold?: number; tradingValueThreshold?: number; marketCapThreshold?: number; minimumScore?: number; maximumRiskScore?: number; volumeLookbackDays?: number; tradingValueLookbackDays?: number; timeframe?: string },
+            ) => {''',
+              '''    opts?: { volumeThreshold?: number; tradingValueThreshold?: number; marketCapThreshold?: number; minimumScore?: number; maximumRiskScore?: number; volumeLookbackDays?: number; tradingValueLookbackDays?: number; timeframe?: string },
+              signal?: AbortSignal,
+            ) => {''',
+              1,
+          )
+          api = api.replace(
+              "    return apiGet<ScanResult>(`/market/scan?${params.toString()}`);",
+              "    return apiGet<ScanResult>(`/market/scan?${params.toString()}`, { signal });",
+              1,
+          )
+          api_path.write_text(api)
+
+          # Scanner query consumes the signal and renders explicit states.
+          scanner_path = Path('stock-analyzer/src/pages/scanner.tsx')
+          scanner = scanner_path.read_text()
+          scanner = scanner.replace('import { api } from "@/lib/api";', 'import { api, type ScanResult } from "@/lib/api";', 1)
+          scanner = scanner.replace(
+              '''    queryFn: () =>
+                api.scan(selected, market, {''',
+              '''    queryFn: ({ signal }) =>
+                api.scan(selected, market, {''',
+              1,
+          )
+          scanner = scanner.replace(
+              '''        timeframe,
+                  }),
+                enabled: selected.length > 0,''',
+              '''        timeframe,
+                  }, signal),
+                enabled: selected.length > 0,
+                retry: false,''',
+              1,
+          )
+          scanner = scanner.replace(
+              '''  const cards = useMemo(() => {
+                const response = scan.data as''',
+              '''  const scanResult = scan.data as ScanResult | undefined;
+            const cards = useMemo(() => {
+                const response = scan.data as''',
+              1,
+          )
+          scanner = scanner.replace(
+              '<div className={cn("h-full overflow-y-auto overscroll-contain bg-background", embedded && "pb-4")}>',
+              '<div data-testid="scanner-root" className={cn("h-full overflow-y-auto overscroll-contain bg-background", embedded && "pb-4")}>',
+              1,
+          )
+          old_states = '''        {scan.isLoading && <LoadingBox />}
+
+                  {scan.isError && (
+                    <div className="rounded-3xl border border-card-border bg-card p-6 text-center">
+                      <p className="break-keep text-sm font-bold leading-relaxed text-destructive">
+                        AI 검색 결과를 불러오지 못했습니다.
+                      </p>
+
+                      <button
+                        type="button"
+                        onClick={() => void scan.refetch()}
+                        className="mt-3 rounded-full bg-primary px-4 py-2 text-xs font-bold text-primary-foreground"
+                      >
+                        다시 시도
+                      </button>
+                    </div>
+                  )}
+
+                  {scan.data && cards.length === 0 && (
+                    <div className="rounded-3xl border border-card-border bg-card p-6 text-center">
+                      <p className="break-keep text-sm font-bold leading-relaxed">
+                        조건에 맞는 종목이 없습니다. (조회는 정상 — 오류 아님)
+                      </p>
+
+                      <p className="mt-2 break-keep text-xs leading-relaxed text-muted-foreground">
+                        {(scan.data as any)?.scanned != null
+                          ? `${(scan.data as any).scanned}종목 검사 · ${(scan.data as any).excludedCount ?? 0}종목 조건 미충족 제외 · `
+                          : ''}
+                        지표를 줄이거나 시장을 바꿔 보세요.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">'''
+          new_states = '''        {scan.isLoading && <div data-testid="scanner-loading"><LoadingBox /></div>}
+
+                  {scan.isError && (
+                    <div data-testid="scanner-provider-error" className="rounded-3xl border border-destructive/40 bg-card p-6 text-center">
+                      <p className="break-keep text-sm font-bold leading-relaxed text-destructive">
+                        조건검색 데이터 공급자 오류로 신뢰 가능한 결과를 만들지 못했습니다.
+                      </p>
+                      <p className="mt-2 text-xs text-muted-foreground">빈 결과로 처리하지 않았습니다. 공급자 상태를 확인한 뒤 다시 시도하세요.</p>
+                      <button
+                        type="button"
+                        onClick={() => void scan.refetch()}
+                        className="mt-3 rounded-full bg-primary px-4 py-2 text-xs font-bold text-primary-foreground"
+                      >
+                        다시 시도
+                      </button>
+                    </div>
+                  )}
+
+                  {scanResult?.partial && (
+                    <div data-testid="scanner-partial" className="rounded-3xl border border-amber-500/40 bg-amber-500/10 p-5">
+                      <p className="text-sm font-extrabold text-amber-700">일부 데이터 지연 · 부분 결과</p>
+                      <p className="mt-2 break-keep text-xs leading-relaxed text-muted-foreground">{scanResult.message}</p>
+                      <p className="mt-2 text-[11px] font-bold text-muted-foreground">
+                        완료 {scanResult.completedCount}/{scanResult.requestedCount} · timeout {scanResult.timeoutCount} · 공급자 오류 {scanResult.providerErrorCount} · {scanResult.elapsedMs}ms
+                      </p>
+                    </div>
+                  )}
+
+                  {scanResult && !scanResult.partial && cards.length === 0 && (
+                    <div data-testid="scanner-empty" className="rounded-3xl border border-card-border bg-card p-6 text-center">
+                      <p className="break-keep text-sm font-bold leading-relaxed">
+                        조건에 맞는 종목이 없습니다. (조회는 정상 — 오류 아님)
+                      </p>
+                      <p className="mt-2 break-keep text-xs leading-relaxed text-muted-foreground">
+                        {scanResult.completedCount}종목 정상 완료 · 지표를 줄이거나 시장을 바꿔 보세요.
+                      </p>
+                    </div>
+                  )}
+
+                  {scanResult && !scanResult.partial && cards.length > 0 && (
+                    <div data-testid="scanner-success" className="sr-only">검색 완료</div>
+                  )}
+
+                  <div className="space-y-2">'''
+          if scanner.count(old_states) != 1:
+              raise SystemExit(f'scanner.tsx: state matches={scanner.count(old_states)}')
+          scanner_path.write_text(scanner.replace(old_states, new_states, 1))
+
+          # Real staging scanner verification waits for the actual API, not generic networkidle.
+          e2e_path = Path('stock-analyzer/e2e/phase10-staging-readiness.spec.ts')
+          e2e = e2e_path.read_text()
+          marker = '''async function expectDeniedRoute(page: Page, route: string) {'''
+          helper = '''async function expectHealthyScannerRoute(page: Page) {
+            const scanResponsePromise = page.waitForResponse((response) => {
+              const url = new URL(response.url());
+              return response.request().method() === 'GET' && url.pathname === '/api/market/scan';
+            }, { timeout: 20_000 });
+            const documentResponse = await page.goto('/scanner', { waitUntil: 'domcontentloaded' });
+            if (documentResponse) expect(documentResponse.status(), `/scanner returned HTTP ${documentResponse.status()}`).toBeLessThan(400);
+            await expect(page.getByTestId('scanner-root')).toBeVisible();
+            const scanResponse = await scanResponsePromise;
+            expect(scanResponse.status(), `scanner API returned HTTP ${scanResponse.status()}`).toBeLessThan(500);
+            expect(scanResponse.ok(), 'scanner API must return a bounded 2xx response').toBeTruthy();
+            const body = await scanResponse.json() as {
+              ok?: boolean;
+              partial?: boolean;
+              elapsedMs?: number;
+              dataState?: string;
+            };
+            expect(body.ok).toBe(true);
+            expect(Number(body.elapsedMs)).toBeLessThanOrEqual(15_000);
+            expect(['complete', 'partial']).toContain(body.dataState);
+            await page.getByRole('button', { name: /종목보기/ }).click();
+            if (body.partial) {
+              await expect(page.getByTestId('scanner-partial')).toBeVisible();
+            } else {
+              await expect(page.locator('[data-testid="scanner-empty"], [data-testid="scanner-success"]')).toBeVisible();
+            }
+          }
+
+          async function expectDeniedRoute(page: Page, route: string) {'''
+          if e2e.count(marker) != 1:
+              raise SystemExit(f'phase10 spec helper marker matches={e2e.count(marker)}')
+          e2e = e2e.replace(marker, helper, 1)
+          if e2e.count("    await expectHealthyRoute(page, '/scanner');") != 1:
+              raise SystemExit('phase10 spec scanner call missing')
+          e2e = e2e.replace("    await expectHealthyRoute(page, '/scanner');", "    await expectHealthyScannerRoute(page);", 1)
+          e2e_path.write_text(e2e)
+
+          # Register bounded scanner tests.
+          test_path = Path('api-server/test.mjs')
+          test_mjs = test_path.read_text()
+          test_mjs = test_mjs.replace(
+              "    path.join(root, 'src/services/signal-score.test.ts'),\n",
+              "    path.join(root, 'src/services/signal-score.test.ts'),\n    path.join(root, 'src/lib/bounded-work-pool.test.ts'),\n    path.join(root, 'src/services/scanner-bounded-contract.test.ts'),\n    path.join(repositoryRoot, 'stock-analyzer/src/lib/scanner-request.test.ts'),\n",
+              1,
+          )
+          test_mjs = test_mjs.replace(
+              "    path.join(root, 'src/routes/paper-journal.smoke.test.ts'),\n",
+              "    path.join(root, 'src/routes/paper-journal.smoke.test.ts'),\n    path.join(root, 'src/routes/market-scan.smoke.test.ts'),\n",
+              1,
+          )
+          test_path.write_text(test_mjs)
+          PY
+
+          cat > api-server/src/services/scanner-bounded-contract.test.ts <<'EOF'
+          import test from 'node:test';
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import path from 'node:path';
+
+          const root = process.cwd();
+          const repositoryRoot = path.resolve(root, '..');
+          const source = (relative: string) => readFileSync(path.join(repositoryRoot, relative), 'utf8');
+
+          test('scanner server has fixed deadline, item timeout, bounded concurrency, and no full-pool Promise.all', () => {
+            const service = source('api-server/src/services/signal.service.ts');
+            assert.match(service, /deadlineMs:\s*12_000/);
+            assert.match(service, /itemTimeoutMs:\s*4_000/);
+            assert.match(service, /concurrency:\s*6/);
+            assert.match(service, /runBoundedWorkPool\(\s*pool/);
+            assert.doesNotMatch(service, /Promise\.all\(\s*pool\.map/);
+            assert.match(service, /completedCount/);
+            assert.match(service, /providerErrorCount/);
+            assert.match(service, /timeoutCount/);
+            assert.match(service, /deadlineReached/);
+          });
+
+          test('scanner reuses the already fetched candles and context for matched cards', () => {
+            const service = source('api-server/src/services/signal.service.ts');
+            const scanTail = service.slice(service.indexOf('async function scan('));
+            assert.match(scanTail, /computeSignalReport\(candles, indicators, ctx\)/);
+            assert.doesNotMatch(scanTail, /await getReport\(entry\.ticker\)/);
+          });
+
+          test('scanner route passes disconnect cancellation and keeps provider failure strict', () => {
+            const route = source('api-server/src/routes/market.ts');
+            assert.match(route, /new AbortController\(\)/);
+            assert.match(route, /req\.once\('aborted'/);
+            assert.match(route, /SignalService\.scan\(scope, indicators, filters, \{ signal: controller\.signal \}\)/);
+            assert.match(route, /res\.status\(502\)/);
+            assert.match(route, /partial: result\.partial/);
+          });
+
+          test('scanner client consumes TanStack AbortSignal and exposes explicit result states', () => {
+            const page = source('stock-analyzer/src/pages/scanner.tsx');
+            const api = source('stock-analyzer/src/lib/api.ts');
+            assert.match(page, /queryFn: \(\{ signal \}\) =>/);
+            assert.match(page, /}, signal\)/);
+            assert.match(page, /scanner-loading/);
+            assert.match(page, /scanner-success/);
+            assert.match(page, /scanner-empty/);
+            assert.match(page, /scanner-partial/);
+            assert.match(page, /scanner-provider-error/);
+            assert.match(api, /signal\?: AbortSignal/);
+            assert.match(api, /signal: options\.signal/);
+          });
+
+          test('staging scanner test waits for the real API response without mocking or generic networkidle', () => {
+            const spec = source('stock-analyzer/e2e/phase10-staging-readiness.spec.ts');
+            const helperStart = spec.indexOf('async function expectHealthyScannerRoute');
+            const helperEnd = spec.indexOf('async function expectDeniedRoute', helperStart);
+            const helper = spec.slice(helperStart, helperEnd);
+            assert.match(helper, /waitForResponse/);
+            assert.match(helper, /\/api\/market\/scan/);
+            assert.match(helper, /20_000/);
+            assert.match(helper, /scanner-root/);
+            assert.match(helper, /scanner-partial/);
+            assert.doesNotMatch(helper, /networkidle/);
+            assert.doesNotMatch(spec, /expectHealthyRoute\(page, '\/scanner'\)/);
+            assert.doesNotMatch(helper, /page\.route\(/);
+          });
+          EOF
+
+          cat > api-server/src/routes/market-scan.smoke.test.ts <<'EOF'
+          import test from 'node:test';
+          import assert from 'node:assert/strict';
+          import express from 'express';
+          import type { AddressInfo } from 'node:net';
+          import marketRouter from './market';
+          import { SignalService, ScanProviderUnavailableError, type ScanResult } from '../services/signal.service';
+
+          const baseResult = (overrides: Partial<ScanResult> = {}): ScanResult => ({
+            cards: [],
+            selected: ['거래량 증가'],
+            supportedIndicators: ['거래량 증가'],
+            scanned: 2,
+            requestedCount: 2,
+            completedCount: 2,
+            providerErrorCount: 0,
+            timeoutCount: 0,
+            excludedCount: 2,
+            appliedFilters: {
+              volumeThreshold: null,
+              tradingValueThreshold: null,
+              marketCapThreshold: null,
+              minimumScore: null,
+              maximumRiskScore: null,
+            },
+            timeframe: '1D',
+            partial: false,
+            timedOut: false,
+            elapsedMs: 120,
+            dataState: 'complete',
+            message: '스캔은 정상 완료됐지만 조건에 맞는 종목이 없습니다.',
+            maxConcurrency: 2,
+            deadlineMs: 12_000,
+            itemTimeoutMs: 4_000,
+            ...overrides,
+          });
+
+          async function withServer(run: (baseUrl: string) => Promise<void>) {
+            const app = express();
+            app.use('/api', marketRouter);
+            const server = app.listen(0, '127.0.0.1');
+            await new Promise<void>((resolve, reject) => {
+              server.once('listening', resolve);
+              server.once('error', reject);
+            });
+            try {
+              const address = server.address() as AddressInfo;
+              await run(`http://127.0.0.1:${address.port}`);
+            } finally {
+              await new Promise<void>((resolve) => server.close(() => resolve()));
+            }
+          }
+
+          test('normal zero-match scan is a complete HTTP 200 empty result', async () => {
+            const original = SignalService.scan;
+            SignalService.scan = async () => baseResult();
+            try {
+              await withServer(async (baseUrl) => {
+                const response = await fetch(`${baseUrl}/api/market/scan?market=KR&indicators=거래량%20증가`);
+                assert.equal(response.status, 200);
+                const body = await response.json() as Record<string, unknown>;
+                assert.equal(body.ok, true);
+                assert.equal(body.partial, false);
+                assert.equal(body.dataState, 'complete');
+                assert.deepEqual(body.cards, []);
+              });
+            } finally {
+              SignalService.scan = original;
+            }
+          });
+
+          test('some item timeouts return an explicit partial 200 result', async () => {
+            const original = SignalService.scan;
+            SignalService.scan = async () => baseResult({
+              scanned: 5,
+              requestedCount: 10,
+              completedCount: 4,
+              timeoutCount: 1,
+              excludedCount: 4,
+              partial: true,
+              timedOut: true,
+              elapsedMs: 11_900,
+              dataState: 'partial',
+              message: '일부 데이터가 지연됐습니다.',
+              maxConcurrency: 6,
+            });
+            try {
+              await withServer(async (baseUrl) => {
+                const response = await fetch(`${baseUrl}/api/market/scan?market=KR`);
+                assert.equal(response.status, 200);
+                const body = await response.json() as Record<string, unknown>;
+                assert.equal(body.partial, true);
+                assert.equal(body.timedOut, true);
+                assert.equal(body.timeoutCount, 1);
+                assert.equal(body.dataState, 'partial');
+              });
+            } finally {
+              SignalService.scan = original;
+            }
+          });
+
+          test('unreliable provider scan remains a strict 502 failure', async () => {
+            const original = SignalService.scan;
+            const originalError = console.error;
+            SignalService.scan = async () => {
+              throw new ScanProviderUnavailableError('provider unavailable');
+            };
+            console.error = () => undefined;
+            try {
+              await withServer(async (baseUrl) => {
+                const response = await fetch(`${baseUrl}/api/market/scan?market=KR`);
+                assert.equal(response.status, 502);
+                const body = await response.json() as Record<string, unknown>;
+                assert.equal(body.ok, false);
+                assert.equal(body.error, 'SCAN_PROVIDER_ERROR');
+                assert.deepEqual(body.cards, []);
+              });
+            } finally {
+              console.error = originalError;
+              SignalService.scan = original;
+            }
+          });
+
+          test('scanner smoke sends no order-capable requests', async () => {
+            const original = SignalService.scan;
+            SignalService.scan = async () => baseResult();
+            const requested: string[] = [];
+            try {
+              await withServer(async (baseUrl) => {
+                const url = `${baseUrl}/api/market/scan?market=US&timeframe=1D`;
+                requested.push(url);
+                const response = await fetch(url);
+                assert.equal(response.status, 200);
+              });
+              assert.equal(requested.length, 1);
+              assert.ok(requested.every((url) => url.includes('/api/market/scan')));
+              assert.ok(requested.every((url) => !/(?:order|trade|position|execute|approve)/i.test(new URL(url).pathname)));
+            } finally {
+              SignalService.scan = original;
+            }
+          });
+          EOF
+
+          rm -f .github/workflows/tmp-scanner-bounded-patch.yml
+          git diff --check
+      - name: Install and validate scanner patch
+        run: |
+          set -Eeuo pipefail
+          pnpm install --frozen-lockfile
+          pnpm --dir stock-analyzer run typecheck
+          pnpm --dir api-server run typecheck
+          pnpm --dir api-server run test:phase9
+          pnpm --dir api-server run test:smoke
+          pnpm --dir stock-analyzer run build
+          pnpm --dir api-server run build:server
+      - name: Commit scanner patch
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet && { echo 'No patch changes produced.' >&2; exit 1; }
+          git commit -m 'fix: bound scanner requests and readiness verification'
+          git push origin HEAD:fix/scanner-bounded-staging-readiness
