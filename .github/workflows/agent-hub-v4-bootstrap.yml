@@ -7,6 +7,12 @@ on:
       - scripts/.agent-hub-v4-bundle/**
       - scripts/apply_agent_hub_v4_bundle.py
       - .github/workflows/agent-hub-v4-bootstrap.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/.agent-hub-v4-bundle/**
+      - scripts/apply_agent_hub_v4_bundle.py
+      - .github/workflows/agent-hub-v4-bootstrap.yml
 
 permissions:
   contents: write
@@ -17,7 +23,7 @@ concurrency:
 
 jobs:
   apply:
-    if: ${{ !contains(github.event.head_commit.message, '[agent-hub-v4-final]') }}
+    if: ${{ github.event_name == 'pull_request' || !contains(github.event.head_commit.message, '[agent-hub-v4-final]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
