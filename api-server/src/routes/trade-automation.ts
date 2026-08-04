@@ -5,7 +5,11 @@ import { TradeExecutionService } from '../services/trade-execution.service';
 import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
-import type { TradingExchange, TradingPlanInput } from '../services/trade-automation.types';
+import type {
+  TradingExchange,
+  TradingPlanInput,
+  TradingPlanRevalidationInput,
+} from '../services/trade-automation.types';
 
 const router: IRouter = Router();
 const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom']);
@@ -153,7 +157,8 @@ router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, automation, execution } = context(req);
     if (req.body?.approved !== true) return res.status(409).json({ ok: false, error: 'EXPLICIT_APPROVAL_REQUIRED' });
-    const plan = await automation.approvePlan(userId, String(req.params.id));
+    const revalidation = req.body?.revalidation as TradingPlanRevalidationInput | undefined;
+    const plan = await automation.approvePlan(userId, String(req.params.id), revalidation);
     const { order, duplicate } = await automation.createOrder(userId, plan);
     const result = duplicate ? order : await execution.execute(userId, plan, order);
     return res.json({ ok: true, plan, order: result, duplicate });
