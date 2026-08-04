@@ -23,7 +23,6 @@ on:
 permissions:
   contents: read
   issues: write
-  models: read
 
 concurrency:
   group: free-agent-hub-${{ github.repository }}
@@ -44,7 +43,7 @@ jobs:
       - name: Run processor self-test
         run: python3 scripts/agent_hub_free.py --self-test
 
-  model-smoke:
+  gemini-smoke:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -54,20 +53,23 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Decide whether to run one-time model smoke
-        id: gate
+      - name: Check Gemini secret configuration
+        id: secret
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          if [ "$(git log -1 --pretty=%s)" = "run free GitHub Models smoke" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
+          if [ -n "$GEMINI_API_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
           else
-            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "GEMINI_API_KEY is not configured yet; live smoke is skipped."
           fi
 
-      - name: Call GitHub Models free inference once
-        if: steps.gate.outputs.run == 'true'
-        id: models
+      - name: Call Gemini free API once
+        if: steps.secret.outputs.configured == 'true'
+        id: gemini
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python3 - <<'PY'
           import json
@@ -75,62 +77,61 @@ jobs:
           from urllib.error import HTTPError
           from urllib.request import Request, urlopen
 
-          models = (
-              'openai/gpt-4o-mini',
-              'microsoft/Phi-4-mini-instruct',
+          model = 'gemini-3.5-flash'
+          endpoint = (
+              'https://generativelanguage.googleapis.com/v1beta/models/'
+              f'{model}:generateContent'
           )
-          errors = []
-          for model in models:
-              payload = {
-                  'model': model,
-                  'messages': [
-                      {
-                          'role': 'user',
-                          'content': 'Reply with exactly: AGENT_HUB_MODELS_OK',
-                      }
-                  ],
+          payload = {
+              'contents': [
+                  {
+                      'role': 'user',
+                      'parts': [{'text': 'Reply with exactly: AGENT_HUB_GEMINI_OK'}],
+                  }
+              ],
+              'generationConfig': {
                   'temperature': 0,
-                  'max_tokens': 30,
-              }
-              request = Request(
-                  'https://models.github.ai/inference/chat/completions',
-                  data=json.dumps(payload).encode('utf-8'),
-                  headers={
-                      'Accept': 'application/vnd.github+json',
-                      'Authorization': f"Bearer {os.environ['GITHUB_TOKEN']}",
-                      'Content-Type': 'application/json',
-                      'User-Agent': 'free-agent-hub-smoke/1.0',
-                  },
-                  method='POST',
-              )
-              try:
-                  with urlopen(request, timeout=60) as response:
-                      data = json.loads(response.read().decode('utf-8'))
-                  content = data['choices'][0]['message']['content'].strip()
-                  if 'AGENT_HUB_MODELS_OK' not in content:
-                      raise RuntimeError(f'unexpected model response: {content[:200]}')
-                  with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-                      output.write(f'model={model}\n')
-                  print(json.dumps({'status': 'success', 'model': model}))
-                  break
-              except (HTTPError, KeyError, IndexError, RuntimeError) as exc:
-                  errors.append(f'{model}: {exc}')
-          else:
-              raise SystemExit('all model smoke attempts failed: ' + ' | '.join(errors))
+                  'maxOutputTokens': 30,
+              },
+          }
+          request = Request(
+              endpoint,
+              data=json.dumps(payload).encode('utf-8'),
+              headers={
+                  'Content-Type': 'application/json',
+                  'x-goog-api-key': os.environ['GEMINI_API_KEY'],
+                  'User-Agent': 'free-agent-hub-smoke/2.0',
+              },
+              method='POST',
+          )
+          try:
+              with urlopen(request, timeout=60) as response:
+                  data = json.loads(response.read().decode('utf-8'))
+          except HTTPError as exc:
+              detail = exc.read().decode('utf-8', errors='replace')
+              raise SystemExit(f'Gemini HTTP {exc.code}: {detail[:800]}') from exc
+
+          parts = data['candidates'][0]['content']['parts']
+          content = ''.join(part.get('text', '') for part in parts).strip()
+          if 'AGENT_HUB_GEMINI_OK' not in content:
+              raise SystemExit(f'unexpected Gemini response: {content[:200]}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'model={model}\n')
+          print(json.dumps({'status': 'success', 'model': model}))
           PY
 
-      - name: Record model smoke success in Agent Hub
-        if: steps.gate.outputs.run == 'true'
+      - name: Record Gemini smoke success in Agent Hub
+        if: steps.secret.outputs.configured == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SELECTED_MODEL: ${{ steps.models.outputs.model }}
+          SELECTED_MODEL: ${{ steps.gemini.outputs.model }}
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/issues/62/comments" \
             -f body="[AGENT_HUB_SMOKE]
           status: success
-          provider: GitHub Models free inference
+          provider: Gemini Developer API free tier
           model: ${SELECTED_MODEL}
-          commit: ${GITHUB_SHA}
+          commit: ${{ github.event.pull_request.head.sha }}
           safety: no repository write, merge, deploy, deletion, permission change, or live order"
 
   process-report:
@@ -155,6 +156,7 @@ jobs:
       - name: Process latest worker report
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           HUB_ISSUE_NUMBER: '62'
-          AGENT_HUB_MODELS: openai/gpt-4o-mini,microsoft/Phi-4-mini-instruct
+          AGENT_HUB_GEMINI_MODELS: gemini-3.5-flash
         run: python3 scripts/agent_hub_free.py
