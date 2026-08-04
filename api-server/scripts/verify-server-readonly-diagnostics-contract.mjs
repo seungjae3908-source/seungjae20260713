@@ -199,8 +199,27 @@ assert(workflow.includes('STAGING_SSH_PRIVATE_KEY'), 'workflow must use the isol
 assert(workflow.includes('Exact command required: /run-server-diagnostics'), 'owner command must be exact and auditable');
 assert(workflow.includes('Diagnostics SHA is not contained in current main.'), 'diagnostics SHA ancestry check is required');
 assert(workflow.includes('Diagnostic artifact contains a prohibited sensitive pattern.'), 'artifact redaction must fail closed');
+assert(workflow.includes('Diagnostic artifact contains a prohibited environment assignment.'), 'uppercase environment assignment redaction must fail closed');
+assert(workflow.includes('grep -Eiq --'), 'secret and URL redaction must remain case-insensitive');
+assert(workflow.includes('grep -Eq --'), 'uppercase environment assignment redaction must be case-sensitive');
+assert(workflow.includes('(^|[^A-Za-z0-9_])(STAGING|PRODUCTION)_[A-Z0-9_]+='),
+  'workflow must detect explicit uppercase staging or production environment assignments');
 assert(workflow.includes('https?://'), 'artifact redaction must reject leaked URLs');
 assert(workflow.includes('(authorization|apikey|api_key|password|token|secret)'), 'artifact redaction must reject authentication material');
+assert(!workflow.includes("[^&<[:space:]]+|STAGING_[A-Z0-9_]+=|PRODUCTION_[A-Z0-9_]+='"),
+  'case-insensitive sensitive-value grep must not contain uppercase environment assignment alternatives');
+
+const environmentAssignmentPattern = /(^|[^A-Za-z0-9_])(STAGING|PRODUCTION)_[A-Z0-9_]+=/m;
+for (const safeLine of [
+  'production_health_status=healthy',
+  'production_identity_source=deploy-marker',
+  'production_legacy_health_contract=true',
+  'staging_health_status=healthy',
+]) {
+  assert(!environmentAssignmentPattern.test(safeLine), `safe lowercase diagnostic field must not be rejected: ${safeLine}`);
+}
+assert(environmentAssignmentPattern.test('STAGING_DATABASE_URL=redacted'), 'uppercase staging environment assignment must be rejected');
+assert(environmentAssignmentPattern.test('PRODUCTION_API_TOKEN=redacted'), 'uppercase production environment assignment must be rejected');
 
 const productionGate = (fixture) => {
   const internal = fixture.productionInternal;
@@ -316,4 +335,4 @@ const strictPostDeployResult = productionGate(strictPostDeploy);
 assert(strictPostDeployResult.passed && strictPostDeployResult.source === 'health-response' && !strictPostDeployResult.legacy,
   'post-production verification must pass only with matching Health SHA responses');
 
-console.log('[server-readonly-diagnostics-contract] exact legacy SHA pre-upgrade bridge, artifact-source routing, strict post-deploy and staging SHA verification, zero-change evidence, Caddy/PM2/IP/deploy-marker identity, redaction, owner gate, staging-only environment, and no-mutation contracts verified');
+console.log('[server-readonly-diagnostics-contract] exact legacy SHA pre-upgrade bridge, artifact-source routing, strict post-deploy and staging SHA verification, case-sensitive environment redaction, zero-change evidence, Caddy/PM2/IP/deploy-marker identity, owner gate, staging-only environment, and no-mutation contracts verified');
