@@ -5,9 +5,12 @@ import { getKiwoomDomesticOrderbook } from '../providers/kiwoom';
 import { TradeAutomationService } from './trade-automation.service';
 import type { TradingRepository } from './trade-automation.repository';
 import type {
+  ScannerPlanContext,
   TradingMarketSnapshot,
+  TradingPlan,
   TradingPlanInput,
   TradingPolicy,
+  TradingSignalValidationInput,
 } from './trade-automation.types';
 import type { Candle, Timeframe } from '../sample/types';
 
@@ -15,6 +18,7 @@ const ALLOWED_TIMEFRAMES = new Set(['5m', '15m', '1H', '60m', '4H', '1D']);
 const DEFAULT_SPLIT_RATIOS = [40, 30, 30];
 const SIGNAL_TTL_MS = 10 * 60_000;
 const IDEMPOTENCY_BUCKET_MS = 5 * 60_000;
+const DEFAULT_MAX_ENTRY_DRIFT_PERCENT = 2.5;
 
 export type ScannerApprovalPlanRequest = {
   market: 'KR' | 'US';
@@ -61,6 +65,16 @@ function clamp(value: unknown, minimum: number, maximum: number, fallback: numbe
   return Math.min(maximum, Math.max(minimum, finite(value, fallback)));
 }
 
+function boundedLookback(value: unknown, fallback = 20) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 60 ? parsed : fallback;
+}
+
+function positiveOrNull(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function normalizedSymbol(value: unknown) {
   const symbol = String(value ?? '').trim().toUpperCase().replace(/^(KR|US)[:.]/, '');
   if (!/^[0-9A-Z._-]{1,20}$/.test(symbol)) throw new Error('SCANNER_SYMBOL_INVALID');
@@ -81,6 +95,10 @@ function normalizedTimeframe(value: unknown) {
     throw new Error('SCANNER_TIMEFRAME_UNSUPPORTED');
   }
   return timeframe;
+}
+
+function providerTimeframe(value: string): Timeframe {
+  return (value === '1H' ? '60m' : value) as Timeframe;
 }
 
 function normalizedSplitRatios(value: unknown) {
@@ -189,6 +207,37 @@ function strictAndMatched(card: ScannerCard, selected: string[]) {
   return selected.every((condition) => matched.has(condition)) && card.missing.length === 0;
 }
 
+function scanFilters(context: ScannerPlanContext) {
+  return {
+    volumeThreshold: context.volumeThreshold ?? undefined,
+    tradingValueThreshold: context.tradingValueThreshold ?? undefined,
+    marketCapThreshold: context.marketCapThreshold ?? undefined,
+    volumeLookbackDays: context.volumeLookbackDays,
+    tradingValueLookbackDays: context.tradingValueLookbackDays,
+    minimumScore: context.minimumScore,
+    maximumRiskScore: context.maximumRiskScore,
+    timeframe: context.timeframe,
+  };
+}
+
+function invalidationReason(
+  card: ScannerCard | undefined,
+  context: ScannerPlanContext,
+  selected: string[],
+  entryDriftPercent: number,
+) {
+  if (!card) return 'SCANNER_SIGNAL_NOT_FOUND';
+  if (!strictAndMatched(card, selected)) return 'SCANNER_AND_CONDITIONS_NOT_MAINTAINED';
+  if (card.dataState !== 'ok') return `SCANNER_DATA_${card.dataState.toUpperCase()}`;
+  if (card.score < context.minimumScore) return 'SCANNER_SCORE_BELOW_MINIMUM';
+  if (card.confidence < context.minimumConfidence) return 'SCANNER_CONFIDENCE_BELOW_MINIMUM';
+  if (card.riskScore == null || card.riskScore > context.maximumRiskScore || card.riskLevel === 'HIGH') {
+    return 'SCANNER_RISK_BLOCKED';
+  }
+  if (entryDriftPercent > context.maxEntryDriftPercent) return 'SCANNER_ENTRY_PRICE_DRIFTED';
+  return null;
+}
+
 export class ScannerApprovalPlanService {
   private dependencies: ScannerApprovalDependencies;
 
@@ -197,6 +246,58 @@ export class ScannerApprovalPlanService {
     dependencies: Partial<ScannerApprovalDependencies> = {},
   ) {
     this.dependencies = { ...DEFAULT_DEPENDENCIES, ...dependencies };
+  }
+
+  async revalidatePaperPlan(_userId: string, plan: TradingPlan): Promise<TradingSignalValidationInput> {
+    const context = plan.scannerContext;
+    if (!context || context.market !== 'KR' || !context.selectedConditions.length) {
+      throw new Error('SCANNER_REVALIDATION_CONTEXT_MISSING');
+    }
+    const now = this.dependencies.now();
+    const [scan, quote, minuteCandles, orderbookRaw] = await Promise.all([
+      this.dependencies.scan('KR', context.selectedConditions, scanFilters(context), 200),
+      this.dependencies.getQuote(plan.symbol),
+      this.dependencies.getCandles(plan.symbol, '1m'),
+      this.dependencies.getOrderbook(plan.symbol),
+    ]);
+    const selected = scan.selected;
+    const card = scan.cards.find((item) => item.ticker.toUpperCase() === plan.symbol.toUpperCase());
+    const currentPrice = finite((quote as { price?: number }).price, 0);
+    if (currentPrice <= 0) throw new Error('SCANNER_PRICE_INVALID');
+    const originalPrice = plan.quantity && plan.quantity > 0
+      ? plan.estimatedKrw / plan.quantity
+      : currentPrice;
+    const entryDriftPercent = originalPrice > 0
+      ? Math.abs(currentPrice - originalPrice) / originalPrice * 100
+      : Number.POSITIVE_INFINITY;
+    const orderbook = parseKiwoomTopOfBook(orderbookRaw as Record<string, unknown>);
+    const reason = invalidationReason(card, context, selected, entryDriftPercent);
+    const marketSnapshot: TradingMarketSnapshot = {
+      ...plan.marketSnapshot,
+      observedAt: now.toISOString(),
+      dataDelayMs: 0,
+      oneMinuteMovePercent: oneMinuteMove(minuteCandles),
+      spreadPercent: orderbook.spreadPercent,
+      orderbookGapPercent: orderbook.spreadPercent,
+    };
+    return {
+      score: card?.score ?? 0,
+      confidence: card?.confidence ?? 0,
+      coreConditionsMaintained: reason == null,
+      riskReward: plan.signalRiskReward,
+      reasons: card
+        ? [
+          ...card.matched,
+          `승인 직전 서버 재계산 AI 점수 ${card.score}`,
+          `현재가 변동 ${entryDriftPercent.toFixed(2)}%`,
+          `최우선 호가 스프레드 ${orderbook.spreadPercent.toFixed(3)}%`,
+        ]
+        : plan.signalReasons,
+      warnings: reason ? [...plan.signalWarnings, reason] : plan.signalWarnings,
+      dataTimestamp: now.toISOString(),
+      invalidationReason: reason,
+      marketSnapshot,
+    };
   }
 
   async createPaperPlan(userId: string, request: ScannerApprovalPlanRequest) {
@@ -212,6 +313,20 @@ export class ScannerApprovalPlanService {
     const minimumScore = clamp(request.minimumScore, 0, 100, 70);
     const minimumConfidence = clamp(request.minimumConfidence, 0, 100, 60);
     const maximumRiskScore = clamp(request.maximumRiskScore, 0, 60, 50);
+    const scannerContext: ScannerPlanContext = {
+      market: 'KR',
+      timeframe,
+      selectedConditions,
+      volumeThreshold: positiveOrNull(request.volumeThreshold),
+      tradingValueThreshold: positiveOrNull(request.tradingValueThreshold),
+      marketCapThreshold: positiveOrNull(request.marketCapThreshold),
+      volumeLookbackDays: boundedLookback(request.volumeLookbackDays),
+      tradingValueLookbackDays: boundedLookback(request.tradingValueLookbackDays),
+      minimumScore,
+      minimumConfidence,
+      maximumRiskScore,
+      maxEntryDriftPercent: DEFAULT_MAX_ENTRY_DRIFT_PERCENT,
+    };
     const policy = await this.repository.getPolicy(userId);
     const requestedInvestmentKrw = Math.floor(clamp(
       request.requestedInvestmentKrw,
@@ -220,18 +335,9 @@ export class ScannerApprovalPlanService {
       Math.min(policy.maxOrderKrw, policy.totalCapitalKrw * policy.maxAssetPercent / 100),
     ));
 
-    const filters = {
-      volumeThreshold: request.volumeThreshold,
-      tradingValueThreshold: request.tradingValueThreshold,
-      marketCapThreshold: request.marketCapThreshold,
-      volumeLookbackDays: request.volumeLookbackDays,
-      tradingValueLookbackDays: request.tradingValueLookbackDays,
-      minimumScore,
-      maximumRiskScore,
-      timeframe,
-    };
-    const scan = await this.dependencies.scan('KR', selectedConditions, filters, 200);
+    const scan = await this.dependencies.scan('KR', selectedConditions, scanFilters(scannerContext), 200);
     const selected = scan.selected;
+    scannerContext.selectedConditions = selected;
     const card = scan.cards.find((item) => item.ticker.toUpperCase() === symbol);
     if (!card) throw new Error('SCANNER_SIGNAL_NOT_FOUND');
     if (!strictAndMatched(card, selected)) throw new Error('SCANNER_AND_CONDITIONS_NOT_MAINTAINED');
@@ -244,7 +350,7 @@ export class ScannerApprovalPlanService {
 
     const [quote, candles, minuteCandles, orderbookRaw, plans, orders] = await Promise.all([
       this.dependencies.getQuote(symbol),
-      this.dependencies.getCandles(symbol, (timeframe === '1H' ? '60m' : timeframe) as Timeframe),
+      this.dependencies.getCandles(symbol, providerTimeframe(timeframe)),
       this.dependencies.getCandles(symbol, '1m'),
       this.dependencies.getOrderbook(symbol),
       this.repository.listPlans(userId),
@@ -255,8 +361,8 @@ export class ScannerApprovalPlanService {
     const duplicatePlan = activePlans.find((item) => item.exchange === 'kiwoom'
       && item.market === 'KR' && item.symbol === symbol);
     const duplicateOrder = activeOrders.find((order) => {
-      const plan = plans.find((item) => item.id === order.planId);
-      return plan?.exchange === 'kiwoom' && plan.market === 'KR' && plan.symbol === symbol;
+      const storedPlan = plans.find((item) => item.id === order.planId);
+      return storedPlan?.exchange === 'kiwoom' && storedPlan.market === 'KR' && storedPlan.symbol === symbol;
     });
     if (duplicatePlan || duplicateOrder) throw new Error('SCANNER_DUPLICATE_ACTIVE_SYMBOL');
 
@@ -339,6 +445,7 @@ export class ScannerApprovalPlanService {
       signalRiskReward: exitPlan.riskReward,
       signalCoreConditionsMaintained: true,
       signalExpiresAt: new Date(now.getTime() + SIGNAL_TTL_MS).toISOString(),
+      scannerContext,
       marketSnapshot,
     };
     const approvalPolicy: TradingPolicy = {
