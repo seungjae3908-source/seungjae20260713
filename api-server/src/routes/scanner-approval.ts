@@ -13,13 +13,14 @@ import type { TradingPlan } from '../services/trade-automation.types';
 
 const router: IRouter = Router();
 let repositoryFactoryForTests: ((userId: string) => TradingRepository) | null = null;
+type ScannerApprovalService = Pick<ScannerApprovalPlanService, 'createPaperPlan' | 'revalidatePaperPlan'>;
 let scannerServiceFactoryForTests:
-  | ((repository: TradingRepository) => Pick<ScannerApprovalPlanService, 'createPaperPlan'>)
+  | ((repository: TradingRepository) => ScannerApprovalService)
   | null = null;
 
 export function setScannerApprovalFactoriesForTests(
   repositoryFactory: ((userId: string) => TradingRepository) | null,
-  serviceFactory: ((repository: TradingRepository) => Pick<ScannerApprovalPlanService, 'createPaperPlan'>) | null = null,
+  serviceFactory: ((repository: TradingRepository) => ScannerApprovalService) | null = null,
 ) {
   repositoryFactoryForTests = repositoryFactory;
   scannerServiceFactoryForTests = serviceFactory;
@@ -83,7 +84,8 @@ function errorResponse(res: Response, error: unknown) {
   const status = code === 'LOGIN_REQUIRED' ? 401
     : code.includes('NOT_FOUND') ? 404
       : code.includes('NOT_AVAILABLE') || code.includes('NOT_MAINTAINED') || code.includes('BLOCKED')
-        || code.includes('INVALIDATED') || code.includes('EXPIRED') || code.includes('NOT_APPROVABLE') ? 409
+        || code.includes('INVALIDATED') || code.includes('EXPIRED') || code.includes('NOT_APPROVABLE')
+        || code.includes('DRIFTED') ? 409
         : code.includes('UNAVAILABLE') || code.includes('PROVIDER') ? 503
           : 400;
   return res.status(status).json({
@@ -105,7 +107,7 @@ async function approveScannerPaperPlan(req: AuthenticatedRequest, res: Response)
       exchangeRequestSent: false,
     });
   }
-  const { userId, repository, automation } = context(req);
+  const { userId, repository, automation, scanner } = context(req);
   const stored = await repository.getPlan(userId, String(req.params.id));
   if (!stored) throw new Error('TRADE_PLAN_NOT_FOUND');
   if (!isScannerPaperPlan(stored)) throw new Error('SCANNER_PAPER_APPROVAL_ONLY');
@@ -124,6 +126,15 @@ async function approveScannerPaperPlan(req: AuthenticatedRequest, res: Response)
       exchangeRequestSent: false,
     });
   }
+
+  // The click itself is not trusted. Re-run the original scanner conditions,
+  // fresh quote, one-minute volatility and top-of-book before state transition.
+  const validation = await scanner.revalidatePaperPlan(userId, stored);
+  const revalidated = await automation.revalidatePlan(userId, stored.id, validation);
+  if (!revalidated.approval.approvalEnabled) {
+    throw new Error(`TRADE_PLAN_SIGNAL_NOT_APPROVABLE:${revalidated.approval.reasonCode ?? 'UNKNOWN'}`);
+  }
+
   const plan = await automation.approvePlan(userId, stored.id);
   const created = await automation.createOrder(userId, plan);
   if (created.duplicate) {
@@ -152,6 +163,7 @@ async function approveScannerPaperPlan(req: AuthenticatedRequest, res: Response)
     order,
     duplicate: false,
     paperOrderCreated: true,
+    serverRevalidatedAt: plan.lastSignalValidatedAt,
     liveOrderSubmitted: false,
     exchangeRequestSent: false,
   });
