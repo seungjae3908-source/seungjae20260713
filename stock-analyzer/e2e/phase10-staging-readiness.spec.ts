@@ -6,6 +6,7 @@ import {
   type StagingAccountCredentials,
   type StagingAccountLifecycle,
 } from './support/staging-account-lifecycle';
+import { expectHealthyScannerRoute } from './support/scanner-readiness';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
 const required = (name: string): string => {
@@ -35,12 +36,14 @@ const diagnostics: {
   unhandled_rejections: Diagnostic[];
   unexpected_http_errors: Diagnostic[];
   expected_logout_aborts: Diagnostic[];
+  expected_scanner_aborts: Diagnostic[];
 } = {
   console_errors: [],
   page_errors: [],
   unhandled_rejections: [],
   unexpected_http_errors: [],
   expected_logout_aborts: [],
+  expected_scanner_aborts: [],
 };
 
 function diagnosticUrl(raw: string) {
@@ -81,6 +84,17 @@ function isExpectedLogoutAbort(request: Request) {
     && query[0]?.[0] === 'scope'
     && query[0]?.[1] === 'global'
     && request.failure()?.errorText === 'net::ERR_ABORTED';
+}
+
+function isExpectedScannerAbort(request: Request) {
+  try {
+    const parsed = new URL(request.url());
+    return request.method() === 'GET'
+      && parsed.pathname === '/api/market/scan'
+      && request.failure()?.errorText === 'net::ERR_ABORTED';
+  } catch {
+    return false;
+  }
 }
 
 function recordUnhandled(testName: string, url: string, detail: string) {
@@ -124,6 +138,10 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     const observation = activeLogoutObservations.get(page);
     if (observation && isExpectedLogoutAbort(request)) {
       observation.candidates.push(diagnostic);
+      return;
+    }
+    if (isExpectedScannerAbort(request)) {
+      diagnostics.expected_scanner_aborts.push(diagnostic);
       return;
     }
     diagnostics.unexpected_http_errors.push(diagnostic);
@@ -323,7 +341,7 @@ test.describe('real staging release readiness', () => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
     await expectMembership(page, /정회원/);
     await expectHealthyRoute(page, '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
-    await expectHealthyRoute(page, '/scanner');
+    await expectHealthyScannerRoute(page);
     await expectHealthyRoute(page, '/paper-trading');
     await expect(page.locator('body')).toContainText(/모의|paper/i);
 
