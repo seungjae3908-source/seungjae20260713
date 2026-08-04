@@ -71,7 +71,8 @@ run_sql "apply Phase 8 permission migration idempotently" "api-server/supabase/m
 run_sql "apply Phase 8 paper capability RLS idempotently" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
 run_sql "apply trade automation storage and RLS idempotently" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
 run_sql "apply trade automation admin-only RLS idempotently" "api-server/supabase/migrations/2026080401_trade_automation_admin_only.sql"
-run_sql "apply atomic trade execution RPC idempotently" "api-server/supabase/migrations/2026080402_trade_order_atomic_execution.sql"
+run_sql "apply atomic trade execution RPC" "api-server/supabase/migrations/2026080402_trade_order_atomic_execution.sql"
+run_sql "reapply atomic trade execution RPC idempotently" "api-server/supabase/migrations/2026080402_trade_order_atomic_execution.sql"
 # Verify the service-only trading control before legacy Phase 8 fixtures grant
 # broad table privileges for paper-journal RLS checks.
 run_sql "execute trade automation admin-only ownership RLS queries" "api-server/supabase/test/trade_automation_admin_only_rls_integration.sql"
@@ -87,6 +88,7 @@ fi
 "${PSQL[@]}" --command "do \$\$ begin if to_regclass('public.phase8_partial_failure_probe') is not null then raise exception 'partial migration object remained'; end if; end \$\$;"
 
 run_sql "rollback atomic trade execution RPC" "api-server/supabase/migrations/2026080402_trade_order_atomic_execution.down.sql"
+run_sql "assert atomic trade execution rollback scope" "api-server/supabase/test/trade_automation_atomic_execution_rollback_assert.sql"
 run_sql "rollback trade automation admin-only RLS" "api-server/supabase/migrations/2026080401_trade_automation_admin_only.down.sql"
 run_sql "rollback trade automation migration" "api-server/supabase/migrations/2026080301_trade_automation_integration.down.sql"
 run_sql "assert trade automation rollback cleanup" "api-server/supabase/test/trade_automation_rollback_assert.sql"
