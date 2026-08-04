@@ -21,6 +21,7 @@ export interface TradingRepository {
   saveConnection(connection: ExchangeConnection): Promise<void>;
   findPlanByIdempotency(userId: string, key: string): Promise<TradingPlan | null>;
   getPlan(userId: string, id: string): Promise<TradingPlan | null>;
+  listPlans(userId: string): Promise<TradingPlan[]>;
   savePlan(plan: TradingPlan): Promise<void>;
   getOrder(userId: string, id: string): Promise<TradingOrder | null>;
   findOrderByPlan(userId: string, planId: string): Promise<TradingOrder | null>;
@@ -49,6 +50,11 @@ export class InMemoryTradingRepository implements TradingRepository {
     return [...this.plans.values()].find((item) => item.userId === userId && item.idempotencyKey === key) ?? null;
   }
   async getPlan(userId: string, id: string) { const value = this.plans.get(id); return value?.userId === userId ? value : null; }
+  async listPlans(userId: string) {
+    return [...this.plans.values()]
+      .filter((item) => item.userId === userId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
   async savePlan(plan: TradingPlan) { this.plans.set(plan.id, plan); }
   async getOrder(userId: string, id: string) { const value = this.orders.get(id); return value?.userId === userId ? value : null; }
   async findOrderByPlan(userId: string, planId: string) {
@@ -149,6 +155,13 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
         .eq('user_id', userId).eq('id', id).maybeSingle();
       if (error) throw databaseError();
       return data?.payload as TradingPlan | null;
+    },
+    async listPlans(userId) {
+      owned(userId);
+      const { data, error } = await client.from('trade_order_plans').select('payload')
+        .eq('user_id', userId).order('updated_at', { ascending: false }).limit(100);
+      if (error) throw databaseError();
+      return (data ?? []).map((row) => row.payload as TradingPlan);
     },
     async savePlan(plan) {
       owned(plan.userId);
