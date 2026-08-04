@@ -129,9 +129,15 @@ jobs:
           set -Eeuo pipefail
           artifact="$DIAGNOSTIC_DIR/server-resource-diagnostics.txt"
           if grep -Eiq -- \
-            '-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----|https?://|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|(authorization|apikey|api_key|password|token|secret)[=:][[:space:]]*(Bearer[[:space:]]+)?[^<[:space:]]|([?&](token|apikey|api_key|key|secret|password)=)[^&<[:space:]]+|STAGING_[A-Z0-9_]+=|PRODUCTION_[A-Z0-9_]+=' \
+            '-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----|https?://|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|(authorization|apikey|api_key|password|token|secret)[=:][[:space:]]*(Bearer[[:space:]]+)?[^<[:space:]]|([?&](token|apikey|api_key|key|secret|password)=)[^&<[:space:]]+' \
             "$artifact"; then
             echo 'Diagnostic artifact contains a prohibited sensitive pattern.' >&2
+            exit 1
+          fi
+          if grep -Eq -- \
+            '(^|[^A-Za-z0-9_])(STAGING|PRODUCTION)_[A-Z0-9_]+=' \
+            "$artifact"; then
+            echo 'Diagnostic artifact contains a prohibited environment assignment.' >&2
             exit 1
           fi
 
