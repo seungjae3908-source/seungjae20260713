@@ -71,6 +71,47 @@ function applyRevalidation(plan: TradingPlan, revalidation: TradingPlanRevalidat
   plan.updatedAt = new Date().toISOString();
 }
 
+function copyPlan(plan: TradingPlan) {
+  return structuredClone(plan);
+}
+
+function buildOrder(plan: TradingPlan): TradingOrder {
+  const now = new Date().toISOString();
+  return {
+    id: randomUUID(), userId: plan.userId, planId: plan.id, exchange: plan.exchange,
+    clientOrderId: `sj-${plan.exchange}-${plan.idempotencyKey.slice(0, 20)}`,
+    exchangeOrderId: null, state: 'SUBMITTED', requestedQuantity: plan.quantity ?? null,
+    filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
+    createdAt: now, updatedAt: now,
+  };
+}
+
+function buildOrderCreatedEvent(plan: TradingPlan, order: TradingOrder): TradingOrderEvent {
+  return {
+    id: randomUUID(),
+    userId: order.userId,
+    orderId: order.id,
+    fromState: null,
+    toState: 'SUBMITTED',
+    reason: 'ORDER_CREATED',
+    metadata: {
+      accountMode: plan.accountMode,
+      expectedValueR: plan.riskAssessment?.expectedValueR ?? null,
+      riskBudgetKrw: plan.riskAssessment?.riskBudgetKrw ?? null,
+      maximumOrderKrw: plan.riskAssessment?.maximumOrderKrw ?? null,
+      pilotStage: plan.riskAssessment?.pilotStage ?? null,
+    },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+type AtomicSubmissionResult = {
+  plan: TradingPlan;
+  order: TradingOrder;
+  duplicate: boolean;
+  executionClaimed: boolean;
+};
+
 export class TradeAutomationService {
   constructor(private repository: TradingRepository) {}
 
@@ -88,6 +129,32 @@ export class TradeAutomationService {
     });
     plan.riskAssessment = decision.optimization ?? null;
     return decision;
+  }
+
+  private async atomicSubmit(
+    plan: TradingPlan,
+    expectedState: TradingOrderState,
+  ): Promise<AtomicSubmissionResult> {
+    const order = buildOrder(plan);
+    const event = buildOrderCreatedEvent(plan, order);
+    const result = await this.repository.submitPlanAndCreateOrder(
+      plan,
+      expectedState,
+      order,
+      event,
+      randomUUID(),
+    );
+    if (!result) {
+      throw new Error(expectedState === 'APPROVAL_PENDING'
+        ? 'TRADE_PLAN_NOT_APPROVAL_PENDING'
+        : 'TRADE_PLAN_NOT_READY');
+    }
+    return {
+      plan: result.plan,
+      order: result.order,
+      duplicate: !result.transitioned || !result.orderInserted,
+      executionClaimed: result.executionClaimed,
+    };
   }
 
   async executionBlockedByEmergencyStop(userId: string) {
@@ -128,17 +195,13 @@ export class TradeAutomationService {
 
   async approvePlan(userId: string, planId: string, revalidation?: TradingPlanRevalidationInput | null) {
     return withTradePlanLock(userId, planId, async () => {
-      const storedPlan = await this.repository.getPlan(userId, planId);
-      if (!storedPlan) throw new Error('TRADE_PLAN_NOT_FOUND');
-      if (storedPlan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
-      const plan: TradingPlan = { ...storedPlan };
+      const stored = await this.repository.getPlan(userId, planId);
+      if (!stored) throw new Error('TRADE_PLAN_NOT_FOUND');
+      if (stored.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
+      const plan = copyPlan(stored);
       if (!plan.approvalExpiresAt || Date.parse(plan.approvalExpiresAt) <= Date.now()) {
-        const expiredCandidate: TradingPlan = {
-          ...plan,
-          state: 'EXPIRED',
-          updatedAt: new Date().toISOString(),
-        };
-        const expired = await this.repository.compareAndSetPlan(expiredCandidate, 'APPROVAL_PENDING');
+        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+        const expired = await this.repository.compareAndSetPlan(plan, 'APPROVAL_PENDING');
         if (!expired) throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
         throw new Error('TRADE_PLAN_EXPIRED');
       }
@@ -147,54 +210,93 @@ export class TradeAutomationService {
       const policy = await this.repository.getPolicy(userId);
       const decision = await this.recheck(userId, plan, policy);
       if (!decision.allowed) {
-        const expiredCandidate: TradingPlan = {
-          ...plan,
-          state: 'EXPIRED',
-          updatedAt: new Date().toISOString(),
-        };
-        const expired = await this.repository.compareAndSetPlan(expiredCandidate, 'APPROVAL_PENDING');
+        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+        const expired = await this.repository.compareAndSetPlan(plan, 'APPROVAL_PENDING');
         if (!expired) throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
         throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
       }
-      const approvedAt = new Date().toISOString();
-      const submittedCandidate: TradingPlan = {
-        ...plan,
-        state: 'SUBMITTED',
-        approvedAt,
-        updatedAt: approvedAt,
-      };
-      const submitted = await this.repository.compareAndSetPlan(submittedCandidate, 'APPROVAL_PENDING');
+      plan.state = 'SUBMITTED'; plan.approvedAt = new Date().toISOString(); plan.updatedAt = plan.approvedAt;
+      const submitted = await this.repository.compareAndSetPlan(plan, 'APPROVAL_PENDING');
       if (!submitted) throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
       return submitted;
     });
   }
 
-  async beginAutomaticPlan(userId: string, planId: string) {
+  async approvePlanAndCreateOrder(
+    userId: string,
+    planId: string,
+    revalidation?: TradingPlanRevalidationInput | null,
+  ): Promise<AtomicSubmissionResult> {
     return withTradePlanLock(userId, planId, async () => {
-      const storedPlan = await this.repository.getPlan(userId, planId);
-      if (!storedPlan) throw new Error('TRADE_PLAN_NOT_FOUND');
-      if (storedPlan.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
-      const plan: TradingPlan = { ...storedPlan };
+      const stored = await this.repository.getPlan(userId, planId);
+      if (!stored) throw new Error('TRADE_PLAN_NOT_FOUND');
+      if (stored.state === 'SUBMITTED') return this.atomicSubmit(copyPlan(stored), 'APPROVAL_PENDING');
+      if (stored.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
+
+      const plan = copyPlan(stored);
+      if (!plan.approvalExpiresAt || Date.parse(plan.approvalExpiresAt) <= Date.now()) {
+        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+        const expired = await this.repository.compareAndSetPlan(plan, 'APPROVAL_PENDING');
+        if (!expired) throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
+        throw new Error('TRADE_PLAN_EXPIRED');
+      }
+      if (plan.accountMode === 'live' && !revalidation) throw new Error('TRADE_PLAN_REVALIDATION_REQUIRED');
+      if (revalidation) applyRevalidation(plan, revalidation);
       const policy = await this.repository.getPolicy(userId);
       const decision = await this.recheck(userId, plan, policy);
       if (!decision.allowed) {
-        const expiredCandidate: TradingPlan = {
-          ...plan,
-          state: 'EXPIRED',
-          updatedAt: new Date().toISOString(),
-        };
-        const expired = await this.repository.compareAndSetPlan(expiredCandidate, 'PLANNED');
+        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+        const expired = await this.repository.compareAndSetPlan(plan, 'APPROVAL_PENDING');
+        if (!expired) throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
+        throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
+      }
+      plan.state = 'SUBMITTED';
+      plan.approvedAt = new Date().toISOString();
+      plan.updatedAt = plan.approvedAt;
+      return this.atomicSubmit(plan, 'APPROVAL_PENDING');
+    });
+  }
+
+  async beginAutomaticPlan(userId: string, planId: string) {
+    return withTradePlanLock(userId, planId, async () => {
+      const stored = await this.repository.getPlan(userId, planId);
+      if (!stored) throw new Error('TRADE_PLAN_NOT_FOUND');
+      if (stored.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
+      const plan = copyPlan(stored);
+      const policy = await this.repository.getPolicy(userId);
+      const decision = await this.recheck(userId, plan, policy);
+      if (!decision.allowed) {
+        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+        const expired = await this.repository.compareAndSetPlan(plan, 'PLANNED');
         if (!expired) throw new Error('TRADE_PLAN_NOT_READY');
         throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
       }
-      const submittedCandidate: TradingPlan = {
-        ...plan,
-        state: 'SUBMITTED',
-        updatedAt: new Date().toISOString(),
-      };
-      const submitted = await this.repository.compareAndSetPlan(submittedCandidate, 'PLANNED');
+      plan.state = 'SUBMITTED'; plan.updatedAt = new Date().toISOString();
+      const submitted = await this.repository.compareAndSetPlan(plan, 'PLANNED');
       if (!submitted) throw new Error('TRADE_PLAN_NOT_READY');
       return submitted;
+    });
+  }
+
+  async beginAutomaticPlanAndCreateOrder(userId: string, planId: string): Promise<AtomicSubmissionResult> {
+    return withTradePlanLock(userId, planId, async () => {
+      const stored = await this.repository.getPlan(userId, planId);
+      if (!stored) throw new Error('TRADE_PLAN_NOT_FOUND');
+      if (stored.state === 'SUBMITTED') return this.atomicSubmit(copyPlan(stored), 'PLANNED');
+      if (stored.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
+
+      const plan = copyPlan(stored);
+      const policy = await this.repository.getPolicy(userId);
+      const decision = await this.recheck(userId, plan, policy);
+      if (!decision.allowed) {
+        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
+        const expired = await this.repository.compareAndSetPlan(plan, 'PLANNED');
+        if (!expired) throw new Error('TRADE_PLAN_NOT_READY');
+        throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
+      }
+      plan.state = 'SUBMITTED';
+      plan.updatedAt = new Date().toISOString();
+      return this.atomicSubmit(plan, 'PLANNED');
     });
   }
 
@@ -202,34 +304,23 @@ export class TradeAutomationService {
     return withTradePlanLock(userId, plan.id, async () => {
       const existing = await this.repository.findOrderByPlan(userId, plan.id);
       if (existing) return { order: existing, duplicate: true };
-      const currentPlan = await this.repository.getPlan(userId, plan.id) ?? plan;
+      const persistedPlan = await this.repository.getPlan(userId, plan.id) ?? plan;
+      const currentPlan = copyPlan(persistedPlan);
       if (currentPlan.state !== 'SUBMITTED') throw new Error('TRADE_PLAN_NOT_SUBMITTED');
       const decision = await this.recheck(userId, currentPlan);
       if (!decision.allowed) throw new Error(`TRADE_ORDER_FINAL_RISK_CHECK_FAILED:${decision.blockCodes.join(',')}`);
-      const now = new Date().toISOString();
-      const order: TradingOrder = {
-        id: randomUUID(), userId, planId: currentPlan.id, exchange: currentPlan.exchange,
-        clientOrderId: `sj-${currentPlan.exchange}-${currentPlan.idempotencyKey.slice(0, 20)}`,
-        exchangeOrderId: null, state: 'SUBMITTED', requestedQuantity: currentPlan.quantity ?? null,
-        filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
-        createdAt: now, updatedAt: now,
-      };
+      const order = buildOrder(currentPlan);
       const persisted = await this.repository.insertOrder(order);
       if (!persisted.inserted) return { order: persisted.order, duplicate: true };
-      await this.event(persisted.order, null, 'SUBMITTED', 'ORDER_CREATED', {
-        accountMode: currentPlan.accountMode,
-        expectedValueR: currentPlan.riskAssessment?.expectedValueR ?? null,
-        riskBudgetKrw: currentPlan.riskAssessment?.riskBudgetKrw ?? null,
-        maximumOrderKrw: currentPlan.riskAssessment?.maximumOrderKrw ?? null,
-        pilotStage: currentPlan.riskAssessment?.pilotStage ?? null,
-      });
+      const event = buildOrderCreatedEvent(currentPlan, persisted.order);
+      await this.repository.appendEvent(event);
       return { order: persisted.order, duplicate: false };
     });
   }
 
   async transition(order: TradingOrder, toState: TradingOrderState, reason: string, metadata: Record<string, unknown> = {}) {
     return withTradePlanLock(order.userId, order.planId, async () => {
-      const current = await this.repository.getOrder(order.userId, order.id) ?? order;
+      const current = await this.repository.getOrder(order.userId, order.id) ?? structuredClone(order);
       const from = current.state;
       if (from === toState && from !== 'PARTIALLY_FILLED') {
         Object.assign(order, current);
