@@ -6,6 +6,7 @@ import {
   type StagingAccountCredentials,
   type StagingAccountLifecycle,
 } from './support/staging-account-lifecycle';
+import { expectHealthyScannerRoute } from './support/scanner-readiness';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
 const required = (name: string): string => {
@@ -35,12 +36,14 @@ const diagnostics: {
   unhandled_rejections: Diagnostic[];
   unexpected_http_errors: Diagnostic[];
   expected_logout_aborts: Diagnostic[];
+  expected_scanner_aborts: Diagnostic[];
 } = {
   console_errors: [],
   page_errors: [],
   unhandled_rejections: [],
   unexpected_http_errors: [],
   expected_logout_aborts: [],
+  expected_scanner_aborts: [],
 };
 
 function diagnosticUrl(raw: string) {
@@ -81,6 +84,17 @@ function isExpectedLogoutAbort(request: Request) {
     && query[0]?.[0] === 'scope'
     && query[0]?.[1] === 'global'
     && request.failure()?.errorText === 'net::ERR_ABORTED';
+}
+
+function isExpectedScannerAbort(request: Request) {
+  try {
+    const parsed = new URL(request.url());
+    return request.method() === 'GET'
+      && parsed.pathname === '/api/market/scan'
+      && request.failure()?.errorText === 'net::ERR_ABORTED';
+  } catch {
+    return false;
+  }
 }
 
 function recordUnhandled(testName: string, url: string, detail: string) {
@@ -126,13 +140,20 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       observation.candidates.push(diagnostic);
       return;
     }
+    if (isExpectedScannerAbort(request)) {
+      diagnostics.expected_scanner_aborts.push(diagnostic);
+      return;
+    }
     diagnostics.unexpected_http_errors.push(diagnostic);
   });
 }
 
 async function settle(page: Page) {
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => undefined);
+  for (let pass = 0; pass < 2; pass += 1) {
+    await page.waitForLoadState('networkidle', { timeout: 30_000 });
+    await page.waitForTimeout(300);
+  }
 }
 
 function loginSubmitButton(page: Page) {
@@ -190,11 +211,19 @@ async function expectMembership(page: Page, label: RegExp) {
 }
 
 async function expectHealthyRoute(page: Page, route: string) {
+  await settle(page);
   const response = await page.goto(route, { waitUntil: 'domcontentloaded' });
   if (response) expect(response.status(), `${route} returned HTTP ${response.status()}`).toBeLessThan(400);
   await settle(page);
   await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
   await expect(page.locator('body')).not.toBeEmpty();
+}
+
+async function expectDeniedRoute(page: Page, route: string) {
+  await settle(page);
+  await page.goto(route, { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('capability-denied')).toBeVisible();
+  await settle(page);
 }
 
 function errorsFor(testInfo: TestInfo) {
@@ -281,7 +310,8 @@ test.describe('real staging release readiness', () => {
     await login(page, accounts.pending.loginName, accounts.pending.password);
     await expectMembership(page, /승인대기/);
     await expect(page.getByText(/관리자 승인 대기 중/)).toBeVisible();
-    await page.goto('/stock-info');
+    await settle(page);
+    await page.goto('/stock-info', { waitUntil: 'domcontentloaded' });
     await expect(page.getByText(/관리자 승인 대기 중/)).toBeVisible();
     await expect(page.locator('nav')).toHaveCount(0);
     const response = await page.request.get('/api/paper-journal/snapshot');
@@ -292,7 +322,7 @@ test.describe('real staging release readiness', () => {
     await login(page, accounts.associate.loginName, accounts.associate.password);
     await expectMembership(page, /준회원/);
     await expectHealthyRoute(page, '/');
-    await expectHealthyRoute(page, '/stock-info?asset=stock&market=KR&symbol=005930');
+    await expectHealthyRoute(page, '/stock-info?asset=stock&market=KR&ticker=005930');
     await expectHealthyRoute(page, '/stock-info?asset=coin&coinMarket=spot&symbol=BTC');
 
     for (const route of [
@@ -300,8 +330,7 @@ test.describe('real staging release readiness', () => {
       '/scanner',
       '/portfolio',
     ]) {
-      await page.goto(route);
-      await expect(page.getByTestId('capability-denied')).toBeVisible();
+      await expectDeniedRoute(page, route);
     }
 
     const response = await page.request.post('/api/paper-journal/ai-review/preview', { data: {} });
@@ -312,7 +341,7 @@ test.describe('real staging release readiness', () => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
     await expectMembership(page, /정회원/);
     await expectHealthyRoute(page, '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
-    await expectHealthyRoute(page, '/scanner');
+    await expectHealthyScannerRoute(page);
     await expectHealthyRoute(page, '/paper-trading');
     await expect(page.locator('body')).toContainText(/모의|paper/i);
 
@@ -344,8 +373,8 @@ test.describe('real staging release readiness', () => {
         '/',
         '/search',
         '/stock/005930',
-        '/stock-info?asset=stock&market=KR&symbol=005930',
-        '/stock-info?asset=stock&market=US&symbol=AAPL',
+        '/stock-info?asset=stock&market=KR&ticker=005930',
+        '/stock-info?asset=stock&market=US&ticker=AAPL',
         '/stock-info?asset=coin&coinMarket=spot&symbol=BTC',
         '/watchlist',
         '/alerts',
@@ -361,25 +390,30 @@ test.describe('real staging release readiness', () => {
 
   test('bottom navigation and popup menus traverse every visible destination', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
-    await page.goto('/');
+    await expectHealthyRoute(page, '/');
     const nav = page.locator('nav');
     await expect(nav).toBeVisible();
 
     for (const label of ['홈', '종목', '테마', '관심', '설정']) {
+      await settle(page);
       await nav.getByRole('button', { name: label, exact: true }).click();
       await settle(page);
     }
 
+    await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
     for (const label of ['AI 검색기', 'AI 차트 분석기', '자동매매']) {
+      await settle(page);
       await page.getByRole('menuitem', { name: label, exact: true }).click();
       await settle(page);
       await nav.getByRole('button', { name: '기술', exact: true }).click();
     }
     await page.keyboard.press('Escape');
 
+    await settle(page);
     await nav.getByRole('button', { name: '정보', exact: true }).click();
     for (const label of ['정보', '공부', '시황', 'AI 채팅', '포트폴리오']) {
+      await settle(page);
       await page.getByRole('menuitem', { name: label, exact: true }).click();
       await settle(page);
       await nav.getByRole('button', { name: '정보', exact: true }).click();
