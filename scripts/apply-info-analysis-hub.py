@@ -56,6 +56,22 @@ component = replace_once(
     "  }, [analysis, financials, loading, market, profile, quote, ticker]);",
     "analysis history dependencies",
 )
+component = replace_once(
+    component,
+    "function AnalysisSection({ title, summary, defaultOpen = false, children }: { title: string; summary: string; defaultOpen?: boolean; children: ReactNode }) {\n  return (\n    <details defaultOpen={defaultOpen} className=\"group rounded-3xl border border-card-border bg-card shadow-sm\">",
+    "function AnalysisSection({ title, summary, defaultOpen = false, children }: { title: string; summary: string; defaultOpen?: boolean; children: ReactNode }) {\n  const [open, setOpen] = useState(defaultOpen);\n  return (\n    <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)} className=\"group rounded-3xl border border-card-border bg-card shadow-sm\">",
+    "controlled details default state",
+)
 write(component_path, component)
 
-print('[info-analysis-hub] information page connected; query arrays memoized; completed-data revision storage enabled')
+engine_path = "stock-analyzer/src/lib/stock-analysis-engine.ts"
+engine = read(engine_path)
+engine = replace_once(
+    engine,
+    "  const sourceRows: Array<[AnyRecord, AnalysisEvidence['sourceType']]> = [",
+    "  const sourceRows: ReadonlyArray<readonly [AnyRecord, AnalysisEvidence['sourceType']]> = [",
+    "readonly evidence tuple collection",
+)
+write(engine_path, engine)
+
+print('[info-analysis-hub] information page connected; query arrays memoized; completed-data revision storage enabled; React and tuple types aligned')
