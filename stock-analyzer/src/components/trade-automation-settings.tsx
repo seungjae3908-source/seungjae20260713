@@ -9,6 +9,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 
 type Exchange = 'bitget' | 'upbit' | 'kiwoom';
@@ -80,14 +81,16 @@ const DEFAULT_POLICY: Policy = {
 };
 
 export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
+  const auth = useAuth();
+  const authorized = Boolean(fixture) || auth.can('canManageMembers');
   const [status, setStatus] = useState<Status | null>(fixture ?? null);
   const [draft, setDraft] = useState<Policy>(fixture?.policy ?? DEFAULT_POLICY);
-  const [loading, setLoading] = useState(!fixture);
+  const [loading, setLoading] = useState(!fixture && authorized);
   const [message, setMessage] = useState('');
   const [confirming, setConfirming] = useState(false);
 
   async function load() {
-    if (fixture) return;
+    if (fixture || !authorized) return;
     setLoading(true);
     try {
       const response = await authorizedFetch('/api/trade-automation/status');
@@ -178,6 +181,8 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
   const activeExchanges = (Object.keys(draft.exchangeEnabled) as Exchange[]).filter((key) => draft.exchangeEnabled[key]);
   const needsConfirmation = draft.mode === 'automatic' || draft.automaticEnabled || activeExchanges.length > 0;
   const stopped = draft.emergencyStopped || status?.emergencyStopped === true;
+
+  if (!authorized) return null;
 
   return <section className="rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm" data-testid="trade-automation-settings">
     <div className="flex items-start justify-between gap-3">
