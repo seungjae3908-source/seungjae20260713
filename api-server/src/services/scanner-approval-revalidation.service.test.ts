@@ -96,7 +96,7 @@ function service(currentPrice: number) {
   return new ScannerApprovalPlanService(new InMemoryTradingRepository(), {
     scan: async () => ({
       cards: [{
-        ticker: '005930', name: '삼성전자', market: 'KR', currency: 'KRW', assetType: 'COMMON_STOCK',
+        ticker: '005930', name: '삼성전자', market: 'KR', currency: 'KRW', assetType: 'STOCK',
         price: currentPrice, changePercent: 1, score: 84, confidence: 79,
         matched: ['거래량 증가', '5일선 돌파'], missing: [], breakoutProbability: 80,
         expectedPeriod: '단기', entry: [], stop: [], matchCount: 2, selectedCount: 2,
@@ -110,7 +110,15 @@ function service(currentPrice: number) {
       appliedFilters: { volumeThreshold: null, tradingValueThreshold: null, marketCapThreshold: null, minimumScore: 70, maximumRiskScore: 50 },
       timeframe: '1D',
     }),
-    getQuote: async () => ({ price: currentPrice, changeAmount: 0, changePercent: 0, volume: 1_000_000, marketCap: 1 }),
+    getQuote: async () => ({
+      price: currentPrice,
+      changeAmount: 0,
+      changePercent: 0,
+      volume: 1_000_000,
+      marketCap: 1,
+      week52High: 80_000,
+      week52Low: 50_000,
+    }),
     getCandles: async () => minuteCandles(),
     getOrderbook: async () => ({ sel_fpr_bid: String(currentPrice + 10), buy_fpr_bid: String(currentPrice), tot_sel_req: '1000', tot_buy_req: '1200' }),
     now: () => NOW,
