@@ -55,7 +55,10 @@ for (const forbidden of [
 ]) {
   assert(!helper.includes(forbidden), `safe diagnostic helper references forbidden content: ${forbidden}`);
 }
-assert(helper.includes("errorCode: 'NON_JSON_RESPONSE'"), 'non-JSON responses must fail closed without raw text');
+assert(
+  /errorCode:\s*status\s*>=\s*400\s*\?\s*'NON_JSON_RESPONSE'\s*:\s*null/.test(helper),
+  'non-JSON error responses must fail closed without raw text',
+);
 assert(helper.includes("errorCode: 'UNRECOGNIZED_ERROR_CODE'"), 'unknown error codes must not be copied');
 assert(helper.includes('SAFE_ERROR_MESSAGES'), 'safe messages must use an exact allowlist');
 assert(helperTest.includes('records only allowlisted preview failure fields'), 'safe failure diagnostic test is missing');
