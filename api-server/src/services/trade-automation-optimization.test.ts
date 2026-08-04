@@ -119,7 +119,7 @@ test('approval requires a fresh live revalidation and invalidated conditions exp
       entryPrice: 100_000, entryZoneLow: 99_000, entryZoneHigh: 101_000,
       estimatedSlippagePercent: 0.1, averageSpreadPercent: 0.1, economics: created.plan!.economics,
     }), /TRADE_PLAN_RISK_RECHECK_FAILED/);
-    assert.equal(created.plan!.state, 'EXPIRED');
+    assert.equal((await repository.getPlan(USER_ID, created.plan!.id))?.state, 'EXPIRED');
   } finally {
     if (previous.global === undefined) delete process.env.ORDER_EXECUTION_ENABLED;
     else process.env.ORDER_EXECUTION_ENABLED = previous.global;
@@ -147,5 +147,5 @@ test('automatic submission reruns the full risk gate and expires stale signals',
   assert.equal(created.plan?.state, 'PLANNED');
   created.plan!.marketSnapshot.observedAt = new Date(Date.now() - 60_000).toISOString();
   await assert.rejects(() => service.beginAutomaticPlan(USER_ID, created.plan!.id), /TRADE_PLAN_RISK_RECHECK_FAILED/);
-  assert.equal(created.plan!.state, 'EXPIRED');
+  assert.equal((await repository.getPlan(USER_ID, created.plan!.id))?.state, 'EXPIRED');
 });
