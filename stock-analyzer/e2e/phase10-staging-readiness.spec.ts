@@ -7,6 +7,10 @@ import {
   type StagingAccountLifecycle,
 } from './support/staging-account-lifecycle';
 import { expectHealthyScannerRoute } from './support/scanner-readiness';
+import {
+  collectSafeApiDiagnostic,
+  type SafeApiDiagnostic,
+} from './support/safe-api-diagnostic';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
 const required = (name: string): string => {
@@ -37,6 +41,7 @@ const diagnostics: {
   unexpected_http_errors: Diagnostic[];
   expected_logout_aborts: Diagnostic[];
   expected_scanner_aborts: Diagnostic[];
+  api_diagnostics: SafeApiDiagnostic[];
 } = {
   console_errors: [],
   page_errors: [],
@@ -44,6 +49,7 @@ const diagnostics: {
   unexpected_http_errors: [],
   expected_logout_aborts: [],
   expected_scanner_aborts: [],
+  api_diagnostics: [],
 };
 
 function diagnosticUrl(raw: string) {
@@ -346,11 +352,18 @@ test.describe('real staging release readiness', () => {
     await expect(page.locator('body')).toContainText(/모의|paper/i);
 
     const preview = await page.request.post('/api/paper-journal/ai-review/preview', { data: {} });
-    expect(preview.ok()).toBeTruthy();
-    const previewBody = await preview.json();
-    expect(previewBody.externalAiCalled).toBe(false);
-    expect(previewBody.orderSubmitted).toBe(false);
-    expect(previewBody.exchangeRequestSent).toBe(false);
+    const previewDiagnostic = await collectSafeApiDiagnostic(preview, {
+      testStep: 'regular-ai-preview',
+      requestPath: '/api/paper-journal/ai-review/preview',
+    });
+    diagnostics.api_diagnostics.push(previewDiagnostic);
+    expect(
+      preview.ok(),
+      `safe AI preview diagnostic: ${JSON.stringify(previewDiagnostic)}`,
+    ).toBeTruthy();
+    expect(previewDiagnostic.externalAiCalled).toBe(false);
+    expect(previewDiagnostic.orderSubmitted).toBe(false);
+    expect(previewDiagnostic.exchangeRequestSent).toBe(false);
   });
 
   test('admin: member management is allowed while another users private journal remains blocked', async ({ page }) => {
