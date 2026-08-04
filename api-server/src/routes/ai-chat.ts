@@ -3,6 +3,9 @@ import type { AuthenticatedRequest } from '../middleware/auth';
 import { requireCapability } from '../middleware/auth';
 import { AiChatError, answerAiChat } from '../services/ai-chat.service';
 import {
+  resolveAuthoritativeFeatureRequest,
+} from '../services/ai-feature-authority.service';
+import {
   generateStructuredFeatureExplanation,
   type AiFeatureTask,
 } from '../services/ai-feature-explanation.service';
@@ -23,23 +26,6 @@ function acceptUserRequest(userId: string, now = Date.now()): boolean {
   return bucket.count <= 20;
 }
 
-function featureRequest(task: AiFeatureTask, value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new AiChatError('AI_FEATURE_INVALID_INPUT', '구조화 AI 기능 설명 요청 형식이 올바르지 않습니다.', 400);
-  }
-  const row = value as Record<string, unknown>;
-  const allowed = new Set(['taskVersion', 'sourceVersion', 'payload']);
-  if (Object.keys(row).some((key) => !allowed.has(key))) {
-    throw new AiChatError('AI_FEATURE_INVALID_INPUT', '허용되지 않은 구조화 AI 라우트 필드가 포함되어 있습니다.', 400);
-  }
-  return {
-    task,
-    taskVersion: row.taskVersion,
-    sourceVersion: row.sourceVersion,
-    payload: row.payload,
-  };
-}
-
 function featureExplanationHandler(task: AiFeatureTask): RequestHandler {
   return async (request, res) => {
     const req = request as AuthenticatedRequest;
@@ -49,6 +35,8 @@ function featureExplanationHandler(task: AiFeatureTask): RequestHandler {
         error: req.member ? 'AI_FEATURE_RATE_LIMITED' : 'LOGIN_REQUIRED',
         message: req.member ? 'AI 기능 설명 요청이 많습니다. 잠시 후 다시 시도해 주세요.' : '로그인이 필요합니다.',
         advisoryOnly: true,
+        inputAuthority: 'server-authoritative-required',
+        authoritativeStateUsed: false,
         mutationPerformed: false,
         orderRequestSent: false,
       });
@@ -62,14 +50,22 @@ function featureExplanationHandler(task: AiFeatureTask): RequestHandler {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
 
     try {
+      const authoritativeRequest = await resolveAuthoritativeFeatureRequest(
+        task,
+        req.body ?? {},
+        {
+          userId: req.member.id,
+          accessToken: req.accessToken,
+        },
+      );
       const result = await generateStructuredFeatureExplanation(
-        featureRequest(task, req.body ?? {}),
+        authoritativeRequest,
         { externalSignal: controller.signal },
       );
       return res.json({
         ok: true,
-        inputAuthority: 'validated-client-snapshot',
-        authoritativeStateUsed: false,
+        inputAuthority: 'server-authoritative',
+        authoritativeStateUsed: true,
         mutationPerformed: false,
         orderRequestSent: false,
         ...result,
@@ -83,6 +79,8 @@ function featureExplanationHandler(task: AiFeatureTask): RequestHandler {
         error: error.code,
         message: error.message,
         advisoryOnly: true,
+        inputAuthority: 'server-authoritative-required',
+        authoritativeStateUsed: false,
         mutationPerformed: false,
         orderRequestSent: false,
       });
