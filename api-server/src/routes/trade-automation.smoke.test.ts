@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
+import { requireAdmin } from '../middleware/auth';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { DEFAULT_TRADING_POLICY } from '../services/trade-automation.types';
@@ -12,7 +13,7 @@ const USER = '11111111-1111-1111-1111-111111111111';
 const repository = new InMemoryTradingRepository();
 const MASTER_KEY = Buffer.alloc(32, 9).toString('base64');
 
-async function startServer(authenticated = true, role: 'regular' | 'admin' = 'regular') {
+async function startServer(authenticated = true, role: 'regular' | 'admin' = 'admin') {
   const app = express();
   app.use(express.json());
   if (authenticated) app.use((req, _res, next) => {
@@ -23,7 +24,7 @@ async function startServer(authenticated = true, role: 'regular' | 'admin' = 're
     req.accessToken = 'test';
     next();
   });
-  app.use('/api/trade-automation', router);
+  app.use('/api/trade-automation', requireAdmin, router);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
   return { server, baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
@@ -44,11 +45,12 @@ test.after(() => {
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
 });
 
-test('status is authenticated, defaults off, and never returns credential values', async () => {
+test('status requires an administrator, defaults off, and never returns credential values', async () => {
   const unauthenticated = await startServer(false);
   try {
     const response = await fetch(`${unauthenticated.baseUrl}/api/trade-automation/status`);
-    assert.equal(response.status, 401);
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error, 'ADMIN_REQUIRED');
   } finally { await close(unauthenticated.server); }
 
   const authenticated = await startServer();
@@ -63,6 +65,26 @@ test('status is authenticated, defaults off, and never returns credential values
   } finally { await close(authenticated.server); }
 });
 
+test('regular members cannot view, configure, submit, or reconcile auto trading', async () => {
+  const { server, baseUrl } = await startServer(true, 'regular');
+  try {
+    for (const request of [
+      { path: '/status', method: 'GET' },
+      { path: '/policy', method: 'PUT', body: '{}' },
+      { path: '/plans', method: 'POST', body: '{}' },
+      { path: '/recovery/scan', method: 'POST', body: '{}' },
+    ]) {
+      const response = await fetch(`${baseUrl}/api/trade-automation${request.path}`, {
+        method: request.method,
+        headers: { 'content-type': 'application/json' },
+        body: request.body,
+      });
+      assert.equal(response.status, 403, request.path);
+      assert.equal((await response.json()).error, 'ADMIN_REQUIRED', request.path);
+    }
+  } finally { await close(server); }
+});
+
 test('automatic policy cannot be enabled without explicit final confirmation', async () => {
   const { server, baseUrl } = await startServer();
   try {
@@ -75,7 +97,7 @@ test('automatic policy cannot be enabled without explicit final confirmation', a
   } finally { await close(server); }
 });
 
-test('member settings cannot weaken safety, advance pilot, or silently clear emergency stop', async () => {
+test('administrator settings cannot weaken safety, advance pilot, or silently clear emergency stop', async () => {
   const { server, baseUrl } = await startServer();
   try {
     const weakened = await fetch(`${baseUrl}/api/trade-automation/policy`, {
