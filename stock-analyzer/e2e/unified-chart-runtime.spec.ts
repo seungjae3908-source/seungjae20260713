@@ -162,13 +162,17 @@ test('desktop chart changes market and timeframe, ignores a late request, persis
   await page.getByTestId('chart-fit-content').click();
   await page.getByTestId('chart-latest-candle').click();
   await page.getByTestId('chart-fullscreen').click();
-  await page.keyboard.press('Escape');
-  await page.getByText('지표 설정 · 브라우저 저장').click();
+  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
+  await page.evaluate(async () => {
+    if (document.fullscreenElement) await document.exitFullscreen();
+  });
+  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(false);
+  await page.getByRole('button', { name: /지표 설정/ }).click();
   await page.getByTestId('overlay-sma20').click();
   await expect(page.getByTestId('overlay-sma20')).toContainText('+ SMA20');
   await page.reload();
   await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
-  await page.getByText('지표 설정 · 브라우저 저장').click();
+  await page.getByRole('button', { name: /지표 설정/ }).click();
   await expect(page.getByTestId('overlay-sma20')).toContainText('+ SMA20');
 
   expect(errors.consoleErrors, `console errors: ${errors.consoleErrors.join('\n')}`).toEqual([]);
@@ -179,7 +183,7 @@ test('desktop chart changes market and timeframe, ignores a late request, persis
 test('invalid, empty, rate-limited, and recovered chart responses stay explicit', async ({ page }) => {
   const errors = monitorBrowserErrors(page);
   await mockChartApis(page, { rateLimitStockCalls: 2 });
-  await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m');
+  await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%A0%84%EC%9E%90&timeframe=5m');
   await expect(page.getByTestId('chart-error-state')).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('RATE_LIMITED');
   await page.getByRole('button', { name: '다시 시도' }).click();
