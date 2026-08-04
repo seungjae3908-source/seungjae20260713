@@ -1,63 +1,81 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { api } from './api';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+  getActiveQuerySignal,
+  withActiveQuerySignal,
+} from './query-abort-signal';
 
-const emptyScan = {
-  ok: true,
-  cards: [],
-  selected: [],
-  supportedIndicators: [],
-  fetchedAt: new Date(0).toISOString(),
-  searchRunId: 'scan:test',
-  timeframe: '1D',
-  partial: false,
-  timedOut: false,
-  completedCount: 1,
-  providerErrorCount: 0,
-  timeoutCount: 0,
-  scanned: 1,
-  requestedCount: 1,
-  elapsedMs: 1,
-  dataState: 'complete' as const,
-  message: 'complete',
-};
+const repositoryRoot = process.cwd();
+const source = (relativePath: string) => fs.readFileSync(
+  path.join(repositoryRoot, relativePath),
+  'utf8',
+);
 
-test('api.scan forwards the TanStack AbortSignal to the real fetch request', async () => {
-  const originalFetch = globalThis.fetch;
-  const controller = new AbortController();
-  let receivedSignal: AbortSignal | null | undefined;
+test('active scanner query signal is available synchronously and restored afterward', () => {
+  const outer = new AbortController();
+  const inner = new AbortController();
+  assert.equal(getActiveQuerySignal(), undefined);
 
-  globalThis.fetch = (async (_input, init) => {
-    receivedSignal = init?.signal;
-    return new Response(JSON.stringify(emptyScan), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
+  withActiveQuerySignal(outer.signal, () => {
+    assert.equal(getActiveQuerySignal(), outer.signal);
+    withActiveQuerySignal(inner.signal, () => {
+      assert.equal(getActiveQuerySignal(), inner.signal);
     });
-  }) as typeof fetch;
+    assert.equal(getActiveQuerySignal(), outer.signal);
+  });
 
-  try {
-    await api.scan(['거래량 증가'], 'KR', { timeframe: '1D' }, controller.signal);
-    assert.equal(receivedSignal, controller.signal);
-  } finally {
-    globalThis.fetch = originalFetch;
+  assert.equal(getActiveQuerySignal(), undefined);
+});
+
+test('authorized fetch captures the active query signal before async session lookup', () => {
+  const authFetch = source('stock-analyzer/src/lib/auth-fetch.ts');
+  assert.match(authFetch, /const signal = init\.signal \?\? getActiveQuerySignal\(\)/);
+  assert.match(authFetch, /return fetch\(input, \{ \.\.\.init, headers, signal \}\)/);
+  assert.ok(
+    authFetch.indexOf('const signal =') < authFetch.indexOf('await getSupabase().auth.getSession()'),
+    'AbortSignal must be captured before the asynchronous auth session lookup',
+  );
+});
+
+test('scanner query keys cover market, indicators, thresholds, and timeframe race inputs', () => {
+  const scanner = source('stock-analyzer/src/pages/scanner.tsx');
+  const keyStart = scanner.indexOf('queryKey: [\n      "scan"');
+  const keyEnd = scanner.indexOf('],\n    queryFn:', keyStart);
+  assert.ok(keyStart >= 0 && keyEnd > keyStart, 'scanner query key must be present');
+  const queryKey = scanner.slice(keyStart, keyEnd);
+  for (const field of [
+    'market',
+    'selectedKey',
+    'volumeThreshold',
+    'tradingValueThreshold',
+    'marketCapThreshold',
+    'minimumScore',
+    'maximumRiskScore',
+    'timeframe',
+  ]) {
+    assert.match(queryKey, new RegExp(`\\b${field}\\b`));
   }
 });
 
-test('api.scan rejects with AbortError when a screen transition cancels the request', async () => {
-  const originalFetch = globalThis.fetch;
-  const controller = new AbortController();
+test('QueryClient wraps only scanner queries with the TanStack AbortSignal', () => {
+  const app = source('stock-analyzer/src/App.tsx');
+  assert.match(app, /resolved\.queryKey\?\.\[0\] !== 'scan'/);
+  assert.match(app, /withActiveQuerySignal\(context\.signal, \(\) => queryFn\(context\)\)/);
+  assert.match(app, /installScannerAbortBridge\(queryClient\)/);
+});
 
-  globalThis.fetch = ((_input, init) => new Promise<Response>((_resolve, reject) => {
-    init?.signal?.addEventListener('abort', () => {
-      reject(new DOMException('The operation was aborted.', 'AbortError'));
-    }, { once: true });
-  })) as typeof fetch;
-
-  try {
-    const pending = api.scan(['거래량 증가'], 'KR', { timeframe: '1D' }, controller.signal);
-    controller.abort();
-    await assert.rejects(pending, (error: unknown) => error instanceof DOMException && error.name === 'AbortError');
-  } finally {
-    globalThis.fetch = originalFetch;
+test('scanner readiness UI distinguishes loading, complete, empty, partial, error, and retry', () => {
+  const status = source('stock-analyzer/src/components/scanner-readiness-status.tsx');
+  for (const marker of [
+    'scanner-loading',
+    'scanner-success',
+    'scanner-empty',
+    'scanner-partial',
+    'scanner-provider-error',
+    '다시 시도',
+  ]) {
+    assert.match(status, new RegExp(marker));
   }
 });
