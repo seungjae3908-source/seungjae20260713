@@ -45,6 +45,7 @@ export type TradingSignalValidationInput = {
   warnings?: string[];
   dataTimestamp: string;
   invalidationReason?: string | null;
+  marketSnapshot?: TradingMarketSnapshot;
 };
 
 export type TradingApprovalStatus = {
