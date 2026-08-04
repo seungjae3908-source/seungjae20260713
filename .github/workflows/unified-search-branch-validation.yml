@@ -6,7 +6,7 @@ on:
       - feature/unified-asset-search
   pull_request:
     branches:
-      - feature/unified-asset-search
+      - main
   workflow_dispatch:
 
 permissions:
