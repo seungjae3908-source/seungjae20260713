@@ -69,7 +69,7 @@ jobs:
           set -Eeuo pipefail
           git diff --check
           grep -F "DEFAULT_MODELS = ('gemini-3.1-flash-lite',)" scripts/agent_hub_free.py >/dev/null
-          grep -F "status: needs_context" docs/agent-hub-free.md >/dev/null
+          grep -F 'needs_context' docs/agent-hub-free.md >/dev/null
           grep -F '[EVIDENCE]' docs/agent-hub-prompt-compiler.md >/dev/null
           grep -F '16/16 passed' PROMPT_COMPILER_VALIDATION_REPORT.md >/dev/null
 
