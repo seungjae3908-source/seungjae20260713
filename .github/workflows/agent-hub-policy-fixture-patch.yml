@@ -1,0 +1,60 @@
+name: Agent Hub Policy Fixture Patch
+
+on:
+  push:
+    branches: [agent/agent-hub-coordinator-v2]
+    paths:
+      - scripts/patch_agent_hub_policy_fixture_v2.py
+      - .github/workflows/agent-hub-policy-fixture-patch.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/patch_agent_hub_policy_fixture_v2.py
+      - .github/workflows/agent-hub-policy-fixture-patch.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-hub-policy-fixture-patch-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: agent/agent-hub-coordinator-v2
+          fetch-depth: 0
+      - name: Detect fixture patch
+        id: gate
+        run: echo "apply=$([[ -f scripts/patch_agent_hub_policy_fixture_v2.py ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Apply fixture alignment and run complete Agent Hub tests
+        if: steps.gate.outputs.apply == 'true'
+        env:
+          PYTHONPATH: scripts
+        run: |
+          python3 scripts/patch_agent_hub_policy_fixture_v2.py
+          python3 -m json.tool .github/agent-hub/policy.json >/dev/null
+          python3 -m json.tool .github/agent-hub/workers.json >/dev/null
+          python3 -m py_compile scripts/agent_hub_policy.py scripts/agent_hub_contract_v2.py scripts/agent_hub_prompt_compiler_v2.py scripts/agent_hub_coordinator_v2.py scripts/agent_hub_executor.py scripts/agent_hub_executor_gate_v2.py scripts/agent_hub_executor_report_v2.py scripts/test_agent_hub_v2.py scripts/test_agent_hub_executor_v2.py
+          python3 scripts/agent_hub_policy.py
+          python3 scripts/agent_hub_contract_v2.py
+          python3 scripts/agent_hub_prompt_compiler_v2.py
+          python3 scripts/agent_hub_coordinator_v2.py --self-test
+          python3 scripts/agent_hub_executor_gate_v2.py --self-test
+          python3 scripts/agent_hub_executor_report_v2.py --self-test
+          python3 scripts/test_agent_hub_v2.py
+          python3 scripts/test_agent_hub_executor_v2.py
+          git diff --check
+      - name: Commit verified fixture alignment
+        if: steps.gate.outputs.apply == 'true'
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Align policy self-test with schema-v2 workers'
+          git push origin HEAD:agent/agent-hub-coordinator-v2
