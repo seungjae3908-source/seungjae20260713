@@ -49,8 +49,8 @@ export function parseStagingDatabaseTarget(raw, projectRef) {
     || [...KNOWN_PRODUCTION_PROJECT_REFS].some((ref) => hostname.includes(ref) || usernameLower.includes(ref))) {
     throw new Error('production_project_rejected');
   }
-  if (!directHost && !(poolerHost && poolerUserMatches)) throw new Error('project_mismatch');
   if (poolerHost && !poolerUserMatches) throw new Error('username_format');
+  if (!directHost && !poolerHost) throw new Error('project_mismatch');
   if (!parsed.password) throw new Error('password_missing');
 
   return {
