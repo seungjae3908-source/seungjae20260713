@@ -30,13 +30,14 @@ class CoordinatedRepository extends InMemoryTradingRepository {
   blockNextSubmittedPlanSave() { this.blockSubmittedSave = true; }
   blockNextConnectionRead() { this.blockConnectionRead = true; }
 
-  override async savePlan(plan: TradingPlan) {
-    await super.savePlan(plan);
-    if (this.blockSubmittedSave && plan.state === 'SUBMITTED') {
+  override async compareAndSetPlan(plan: TradingPlan, expectedState: TradingPlan['state']) {
+    const result = await super.compareAndSetPlan(plan, expectedState);
+    if (this.blockSubmittedSave && result?.state === 'SUBMITTED') {
       this.blockSubmittedSave = false;
       this.submittedSaveReached.resolve();
       await this.releaseSubmittedSave.promise;
     }
+    return result;
   }
 
   override async getConnection(userId: string, exchange: TradingExchange) {
@@ -101,8 +102,9 @@ test('invalidation queued during approval expires the submitted plan before orde
 
   const approved = await approval;
   const invalidated = await invalidation;
-  assert.equal(approved.state, 'EXPIRED');
+  assert.equal(approved.state, 'SUBMITTED');
   assert.equal(invalidated.plan.state, 'EXPIRED');
+  assert.equal((await repository.getPlan(USER, approved.id))?.state, 'EXPIRED');
   assert.equal(invalidated.order, null);
   await assert.rejects(() => automation.createOrder(USER, approved), /TRADE_PLAN_NOT_SUBMITTED/);
   assert.equal((await repository.listOrders(USER)).length, 0);
