@@ -8,6 +8,7 @@ export const APP_ROUTES = {
   unifiedSearchAlias: '/search',
   unifiedMarketRankings: '/market-rankings',
   unifiedMarketBrowser: '/market-browser',
+  recommendations: '/recommendations',
   themes: '/themes',
   watchlist: '/watchlist',
   alerts: '/alerts',
@@ -16,6 +17,8 @@ export const APP_ROUTES = {
   scanner: '/scanner',
   aiChart: '/ai-chart',
   autoTrading: '/auto-trading',
+  backtests: '/backtests',
+  paperTrading: '/paper-trading',
   learn: '/learn',
   marketOverview: '/market-overview',
   aiChat: '/ai-chat',
@@ -25,6 +28,12 @@ export const APP_ROUTES = {
   settingsAlias: '/settings',
   account: '/account',
   login: '/login',
+  admin: '/admin',
+  install: '/install',
+  cryptoHomeRedirect: '/crypto',
+  cryptoSearchRedirect: '/crypto/search',
+  cryptoDetailPrefix: '/crypto/',
+  testRoutePrefix: '/__',
 } as const;
 
 export const UNIFIED_SEARCH_ROUTE_CONTRACT = {
@@ -74,6 +83,17 @@ export interface NavigationGroup {
   menu?: readonly NavigationMenuItem[];
 }
 
+export interface AppRoutePresentation {
+  id: string;
+  title: string;
+  breadcrumb: readonly string[];
+  groupId?: NavigationGroupId;
+  exactPaths?: readonly string[];
+  pathPrefixes?: readonly string[];
+  transient?: boolean;
+  testOnly?: boolean;
+}
+
 export const APP_NAVIGATION: readonly NavigationGroup[] = [
   {
     id: 'home',
@@ -92,6 +112,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
       APP_ROUTES.legacyMarketRankings,
       APP_ROUTES.unifiedMarketRankings,
       APP_ROUTES.unifiedMarketBrowser,
+      APP_ROUTES.recommendations,
       APP_ROUTES.themes,
       APP_ROUTES.watchlist,
       APP_ROUTES.alerts,
@@ -117,7 +138,13 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     href: APP_ROUTES.scanner,
     label: '기술',
     icon: 'technical',
-    exactPaths: [APP_ROUTES.scanner, APP_ROUTES.aiChart, APP_ROUTES.autoTrading],
+    exactPaths: [
+      APP_ROUTES.scanner,
+      APP_ROUTES.aiChart,
+      APP_ROUTES.autoTrading,
+      APP_ROUTES.backtests,
+      APP_ROUTES.paperTrading,
+    ],
     menu: [
       {
         id: 'scanner',
@@ -172,8 +199,44 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     href: APP_ROUTES.settings,
     label: '설정',
     icon: 'settings',
-    exactPaths: [APP_ROUTES.settings, APP_ROUTES.settingsAlias, APP_ROUTES.account, APP_ROUTES.login],
+    exactPaths: [
+      APP_ROUTES.settings,
+      APP_ROUTES.settingsAlias,
+      APP_ROUTES.account,
+      APP_ROUTES.login,
+      APP_ROUTES.admin,
+    ],
   },
+] as const;
+
+export const APP_ROUTE_PRESENTATIONS: readonly AppRoutePresentation[] = [
+  { id: 'home', title: '홈', breadcrumb: ['홈'], groupId: 'home', exactPaths: [APP_ROUTES.home, APP_ROUTES.homeAlias] },
+  { id: 'asset-search', title: '종목 검색·탐색', breadcrumb: ['종목', '종목 검색·탐색'], groupId: 'assets', exactPaths: [APP_ROUTES.assets] },
+  { id: 'market-rankings', title: '시장 순위', breadcrumb: ['종목', '시장 순위'], groupId: 'assets', exactPaths: [APP_ROUTES.legacyMarketRankings, APP_ROUTES.unifiedMarketRankings] },
+  { id: 'market-browser', title: '시장 탐색', breadcrumb: ['종목', '시장 탐색'], groupId: 'assets', exactPaths: [APP_ROUTES.unifiedMarketBrowser] },
+  { id: 'recommendations', title: 'AI 추천', breadcrumb: ['종목', 'AI 추천'], groupId: 'assets', exactPaths: [APP_ROUTES.recommendations] },
+  { id: 'themes', title: '테마', breadcrumb: ['종목', '테마'], groupId: 'assets', exactPaths: [APP_ROUTES.themes] },
+  { id: 'watchlist', title: '관심종목', breadcrumb: ['종목', '관심종목'], groupId: 'assets', exactPaths: [APP_ROUTES.watchlist] },
+  { id: 'alerts', title: '알림', breadcrumb: ['종목', '알림'], groupId: 'assets', exactPaths: [APP_ROUTES.alerts] },
+  { id: 'stock-detail', title: '종목 상세', breadcrumb: ['종목', '종목 상세'], groupId: 'assets', pathPrefixes: [APP_ROUTES.stockDetailPrefix] },
+  { id: 'stock-info', title: '종목 정보', breadcrumb: ['종목', '종목 정보'], groupId: 'assets', exactPaths: [APP_ROUTES.stockInfo] },
+  { id: 'scanner', title: 'AI 검색기', breadcrumb: ['기술', 'AI 검색기'], groupId: 'technical', exactPaths: [APP_ROUTES.scanner] },
+  { id: 'ai-chart', title: 'AI 차트 분석기', breadcrumb: ['기술', 'AI 차트 분석기'], groupId: 'technical', exactPaths: [APP_ROUTES.aiChart] },
+  { id: 'auto-trading', title: '승인형 주문', breadcrumb: ['기술', '승인형 주문'], groupId: 'technical', exactPaths: [APP_ROUTES.autoTrading] },
+  { id: 'backtests', title: '코인 선물 백테스트 연구', breadcrumb: ['기술', '백테스트'], groupId: 'technical', exactPaths: [APP_ROUTES.backtests] },
+  { id: 'paper-trading', title: '모의매매', breadcrumb: ['기술', '모의매매'], groupId: 'technical', exactPaths: [APP_ROUTES.paperTrading] },
+  { id: 'market-overview', title: '시황', breadcrumb: ['정보', '시황'], groupId: 'information', exactPaths: [APP_ROUTES.marketOverview] },
+  { id: 'learn', title: '공부', breadcrumb: ['정보', '공부'], groupId: 'information', exactPaths: [APP_ROUTES.learn] },
+  { id: 'ai-chat', title: 'AI 정보', breadcrumb: ['정보', 'AI 정보'], groupId: 'information', exactPaths: [APP_ROUTES.aiChat] },
+  { id: 'portfolio', title: '포트폴리오', breadcrumb: ['정보', '포트폴리오'], groupId: 'information', exactPaths: [APP_ROUTES.portfolio, APP_ROUTES.assetsPortfolio] },
+  { id: 'settings', title: '설정', breadcrumb: ['설정'], groupId: 'settings', exactPaths: [APP_ROUTES.settings, APP_ROUTES.settingsAlias] },
+  { id: 'account', title: '계정', breadcrumb: ['설정', '계정'], groupId: 'settings', exactPaths: [APP_ROUTES.account, APP_ROUTES.login] },
+  { id: 'admin', title: '회원 관리', breadcrumb: ['설정', '회원 관리'], groupId: 'settings', exactPaths: [APP_ROUTES.admin] },
+  { id: 'install', title: '앱 설치', breadcrumb: ['앱 설치'], exactPaths: [APP_ROUTES.install] },
+  { id: 'crypto-home-redirect', title: '암호화폐 홈 이동', breadcrumb: ['홈'], exactPaths: [APP_ROUTES.cryptoHomeRedirect], transient: true },
+  { id: 'crypto-search-redirect', title: '암호화폐 검색 이동', breadcrumb: ['종목', '종목 검색·탐색'], exactPaths: [APP_ROUTES.cryptoSearchRedirect], transient: true },
+  { id: 'crypto-detail-redirect', title: '암호화폐 상세 이동', breadcrumb: ['종목', '종목 정보'], pathPrefixes: [APP_ROUTES.cryptoDetailPrefix], transient: true },
+  { id: 'test-only', title: '테스트 전용', breadcrumb: ['테스트 전용'], pathPrefixes: [APP_ROUTES.testRoutePrefix], testOnly: true },
 ] as const;
 
 export function cleanAppPath(location: string): string {
@@ -191,4 +254,12 @@ export function navigationGroupMatches(group: NavigationGroup, location: string)
 export function navigationMenuItemMatches(item: NavigationMenuItem, location: string): boolean {
   const path = cleanAppPath(location);
   return path === item.href || path === item.postUnifiedSearchHref;
+}
+
+export function resolveAppRoutePresentation(location: string): AppRoutePresentation | null {
+  const path = cleanAppPath(location);
+  return APP_ROUTE_PRESENTATIONS.find((item) => Boolean(
+    item.exactPaths?.includes(path) ||
+    item.pathPrefixes?.some((prefix) => path.startsWith(prefix)),
+  )) ?? null;
 }
