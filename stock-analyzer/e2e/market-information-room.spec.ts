@@ -1,6 +1,8 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 const NOW = '2026-08-05T00:00:00.000Z';
+const E2E_USER_ID = '11111111-1111-4111-8111-111111111111';
+const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 
 function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
@@ -11,7 +13,37 @@ type Diagnostics = {
   forbiddenRequests: string[];
 };
 
+async function installApprovedSession(page: Page): Promise<void> {
+  await page.addInitScript(({ storageKey, userId }) => {
+    const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value))
+      .replaceAll('+', '-')
+      .replaceAll('/', '_')
+      .replaceAll('=', '');
+    const expiresAt = 4_102_444_800;
+    const accessToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: userId, role: 'authenticated', exp: expiresAt })}.e2e`;
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      access_token: accessToken,
+      refresh_token: 'e2e-refresh-token',
+      expires_in: 3600,
+      expires_at: expiresAt,
+      token_type: 'bearer',
+      user: {
+        id: userId,
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: 'e2e-information-room@accounts.invalid',
+        app_metadata: { provider: 'email', providers: ['email'] },
+        user_metadata: { display_name: '정보방 검증 관리자' },
+        identities: [],
+        created_at: '2026-08-05T00:00:00.000Z',
+      },
+    }));
+  }, { storageKey: E2E_AUTH_STORAGE_KEY, userId: E2E_USER_ID });
+}
+
 async function mockInformationApi(page: Page, options: { delayKrMovers?: number } = {}): Promise<Diagnostics> {
+  await installApprovedSession(page);
+
   const errors: string[] = [];
   const forbiddenRequests: string[] = [];
   const unexpectedHttp: string[] = [];
@@ -28,6 +60,36 @@ async function mockInformationApi(page: Page, options: { delayKrMovers?: number 
     if (response.url().includes('/api/') && response.status() >= 400) {
       unexpectedHttp.push(`${response.status()} ${response.url()}`);
     }
+  });
+
+  await page.route('**/__e2e-supabase/**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/rest/v1/profiles')) {
+      return fulfill(route, {
+        id: E2E_USER_ID,
+        login_name: 'e2e-information-admin',
+        display_name: '정보방 검증 관리자',
+        role: 'admin',
+        status: 'approved',
+        membership_level: 'admin',
+        is_active: true,
+        permissions_updated_at: NOW,
+        updated_at: NOW,
+      });
+    }
+    if (url.pathname.endsWith('/auth/v1/user')) {
+      return fulfill(route, {
+        id: E2E_USER_ID,
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: 'e2e-information-room@accounts.invalid',
+        app_metadata: { provider: 'email', providers: ['email'] },
+        user_metadata: { display_name: '정보방 검증 관리자' },
+        identities: [],
+        created_at: NOW,
+      });
+    }
+    return fulfill(route, { ok: true });
   });
 
   await page.route('**/api/**', async (route) => {
