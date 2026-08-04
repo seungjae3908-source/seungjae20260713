@@ -206,15 +206,19 @@ async function postRoute(
         response.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         response.on('end', () => {
           const text = Buffer.concat(chunks).toString('utf8');
-          try {
-            resolve({
-              statusCode: response.statusCode ?? 0,
-              body: text ? JSON.parse(text) as Record<string, unknown> : {},
-              text,
-            });
-          } catch (cause) {
-            reject(cause);
+          let parsedBody: Record<string, unknown> = {};
+          if (text) {
+            try {
+              parsedBody = JSON.parse(text) as Record<string, unknown>;
+            } catch {
+              parsedBody = {};
+            }
           }
+          resolve({
+            statusCode: response.statusCode ?? 0,
+            body: parsedBody,
+            text,
+          });
         });
       });
       clientRequest.once('error', reject);
