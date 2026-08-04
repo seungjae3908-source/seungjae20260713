@@ -100,3 +100,56 @@ test('ranks active products above delisted products for otherwise equivalent mat
   const inactive = document({ assetType: 'coin', market: 'futures', exchange: 'BITGET', productCode: 'NEW-OLD', symbol: 'NEW-OLD', englishName: 'New Coin', displayName: 'New Coin', aliases: ['new'], baseSymbol: 'NEW', active: false });
   assert.equal(searchUnifiedAssetDocuments([inactive, active], 'New Coin')[0]?.document.id, active.id);
 });
+
+const krCoverage = [
+  ['005930', '삼성전자', 'Samsung Electronics'],
+  ['000660', 'SK하이닉스', 'SK Hynix'],
+  ['005380', '현대차', 'Hyundai Motor'],
+  ['035420', '네이버', 'NAVER'],
+  ['035720', '카카오', 'Kakao'],
+  ['051910', 'LG화학', 'LG Chem'],
+  ['207940', '삼성바이오로직스', 'Samsung Biologics'],
+  ['068270', '셀트리온', 'Celltrion'],
+  ['005490', 'POSCO홀딩스', 'POSCO Holdings'],
+  ['105560', 'KB금융', 'KB Financial'],
+] as const;
+const usCoverage = [
+  ['TSLA', '테슬라', 'Tesla'], ['NVDA', '엔비디아', 'NVIDIA'], ['AAPL', '애플', 'Apple'],
+  ['MSFT', '마이크로소프트', 'Microsoft'], ['AMZN', '아마존', 'Amazon'], ['GOOGL', '구글', 'Alphabet'],
+  ['META', '메타', 'Meta Platforms'], ['AMD', 'AMD', 'Advanced Micro Devices'], ['COIN', '코인베이스', 'Coinbase'],
+  ['PLTR', '팔란티어', 'Palantir Technologies'],
+] as const;
+const coinCoverage = [
+  ['BTC', '비트코인', 'Bitcoin'], ['ETH', '이더리움', 'Ethereum'], ['XRP', '리플', 'XRP'],
+  ['SOL', '솔라나', 'Solana'], ['DOGE', '도지코인', 'Dogecoin'], ['ADA', '에이다', 'Cardano'],
+  ['AVAX', '아발란체', 'Avalanche'], ['LINK', '체인링크', 'Chainlink'], ['DOT', '폴카닷', 'Polkadot'],
+  ['TRX', '트론', 'TRON'],
+] as const;
+
+const broadCoverageDocuments = [
+  ...krCoverage.map(([ticker, koreanName, englishName], index) => document({ assetType: 'stock', market: 'KR', exchange: 'KOSPI', productCode: ticker, ticker, koreanName, englishName, displayName: koreanName, liquidityRank: index + 1 })),
+  ...usCoverage.map(([ticker, koreanName, englishName], index) => document({ assetType: 'stock', market: 'US', exchange: 'NASDAQ', productCode: ticker, ticker, koreanName, englishName, displayName: koreanName, liquidityRank: index + 1 })),
+  ...coinCoverage.flatMap(([symbol, koreanName, englishName], index) => [
+    document({ assetType: 'coin', market: 'spot', exchange: 'UPBIT', productCode: `KRW-${symbol}`, symbol, koreanName, englishName, displayName: koreanName, aliases: [`${symbol}/KRW`, `${symbol}-KRW`], baseSymbol: symbol, quoteCurrency: 'KRW', liquidityRank: index + 1 }),
+    document({ assetType: 'coin', market: 'futures', exchange: 'BITGET', productCode: `${symbol}USDT`, symbol: `${symbol}USDT`, koreanName, englishName, displayName: koreanName, aliases: [`${symbol}/USDT`, `${symbol}-USDT`], baseSymbol: symbol, quoteCurrency: 'USDT', liquidityRank: index + 1 }),
+  ]),
+];
+
+test('covers at least ten supported assets in every market group', () => {
+  for (const [ticker, koreanName, englishName] of krCoverage) {
+    assert.equal(searchUnifiedAssetDocuments(broadCoverageDocuments, ticker, { market: 'KR' })[0]?.document.productCode, ticker);
+    assert.equal(searchUnifiedAssetDocuments(broadCoverageDocuments, koreanName, { market: 'KR' })[0]?.document.productCode, ticker);
+    assert.equal(searchUnifiedAssetDocuments(broadCoverageDocuments, englishName, { market: 'KR' })[0]?.document.productCode, ticker);
+  }
+  for (const [ticker, koreanName, englishName] of usCoverage) {
+    assert.equal(searchUnifiedAssetDocuments(broadCoverageDocuments, ticker, { market: 'US' })[0]?.document.productCode, ticker);
+    assert.equal(searchUnifiedAssetDocuments(broadCoverageDocuments, koreanName, { market: 'US' })[0]?.document.productCode, ticker);
+    assert.equal(searchUnifiedAssetDocuments(broadCoverageDocuments, englishName, { market: 'US' })[0]?.document.productCode, ticker);
+  }
+  for (const [symbol, koreanName, englishName] of coinCoverage) {
+    assert.equal(searchUnifiedAssetDocuments(broadCoverageDocuments, `${symbol}/KRW`, { market: 'spot' })[0]?.document.productCode, `KRW-${symbol}`);
+    assert.equal(searchUnifiedAssetDocuments(broadCoverageDocuments, `${symbol}USDT`, { market: 'futures' })[0]?.document.productCode, `${symbol}USDT`);
+    assert.equal(searchUnifiedAssetDocuments(broadCoverageDocuments, koreanName, { market: 'spot' })[0]?.document.baseSymbol, symbol);
+    assert.equal(searchUnifiedAssetDocuments(broadCoverageDocuments, englishName, { market: 'futures' })[0]?.document.baseSymbol, symbol);
+  }
+});
