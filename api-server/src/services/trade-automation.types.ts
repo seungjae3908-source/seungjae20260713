@@ -57,6 +57,21 @@ export type TradingApprovalStatus = {
   lastValidatedAt: string;
 };
 
+export type ScannerPlanContext = {
+  market: 'KR';
+  timeframe: string;
+  selectedConditions: string[];
+  volumeThreshold: number | null;
+  tradingValueThreshold: number | null;
+  marketCapThreshold: number | null;
+  volumeLookbackDays: number;
+  tradingValueLookbackDays: number;
+  minimumScore: number;
+  minimumConfidence: number;
+  maximumRiskScore: number;
+  maxEntryDriftPercent: number;
+};
+
 export const DEFAULT_TRADING_POLICY = Object.freeze({
   mode: 'approval' as TradingMode,
   automaticEnabled: false,
@@ -150,6 +165,7 @@ export type TradingPlanInput = {
   signalRiskReward?: number | null;
   signalCoreConditionsMaintained?: boolean;
   signalExpiresAt?: string | null;
+  scannerContext?: ScannerPlanContext | null;
   marketSnapshot: TradingMarketSnapshot;
 };
 
