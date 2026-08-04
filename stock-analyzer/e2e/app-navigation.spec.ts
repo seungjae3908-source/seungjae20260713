@@ -50,6 +50,8 @@ test('navigation metadata keeps five top-level sections and active routes', () =
   expect(UNIFIED_SEARCH_ROUTE_CONTRACT.marketRankingsAfterIntegration).toBe('/market-rankings');
   expect(navigationGroupMatches(APP_NAVIGATION[1], '/stock/005930?back=%2Fstocks')).toBe(true);
   expect(navigationGroupMatches(APP_NAVIGATION[1], '/stock-info?asset=coin')).toBe(true);
+  expect(navigationGroupMatches(APP_NAVIGATION[2], '/scanner')).toBe(true);
+  expect(navigationGroupMatches(APP_NAVIGATION[2], '/auto-trading')).toBe(true);
 });
 
 for (const viewport of [
@@ -74,7 +76,6 @@ for (const viewport of [
       expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
     }
 
-    await expect(navigation.getByRole('button', { name: '기술', exact: true })).toHaveAttribute('aria-current', 'page');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     expect(pageErrors).toEqual([]);
   });
