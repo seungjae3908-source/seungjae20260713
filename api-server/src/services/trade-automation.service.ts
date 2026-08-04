@@ -106,6 +106,7 @@ export class TradeAutomationService {
     const plan = await this.repository.getPlan(userId, planId);
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
     this.hydrateSignalLifecycle(plan);
+    if (validation.marketSnapshot) plan.marketSnapshot = validation.marketSnapshot;
     const previousSignalState = plan.signalState;
     const { evaluation } = applySignalValidation(plan, validation);
     const signalTerminal = evaluation.state === 'INVALIDATED' || evaluation.state === 'EXPIRED';
