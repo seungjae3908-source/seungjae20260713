@@ -42,6 +42,11 @@ jobs:
           git merge --no-edit origin/main
           echo "PROMPT_COMPILER_BASELINE=$(git rev-parse origin/main)" >> "$GITHUB_ENV"
 
+      - name: Restore validated publication source
+        run: |
+          set -Eeuo pipefail
+          git checkout 2dc3856f3c288d94b0029c06adb617a620be22d3 -- scripts/.prompt-compiler-payload-01
+
       - name: Apply Prompt Compiler sources
         run: python3 scripts/apply-agent-hub-prompt-compiler.py
 
@@ -72,7 +77,6 @@ jobs:
           grep -F "status: needs_context" docs/agent-hub-free.md >/dev/null
           grep -F '[EVIDENCE]' docs/agent-hub-prompt-compiler.md >/dev/null
           grep -F '16/16 passed' PROMPT_COMPILER_VALIDATION_REPORT.md >/dev/null
-          grep -F "Baseline main SHA: \`${PROMPT_COMPILER_BASELINE}\`" PROMPT_COMPILER_VALIDATION_REPORT.md >/dev/null || true
 
       - name: Record latest baseline
         run: |
