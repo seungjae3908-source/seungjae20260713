@@ -1,0 +1,80 @@
+name: Prompt Compiler Validation
+
+on:
+  push:
+    branches:
+      - agent/prompt-compiler-v1
+    paths:
+      - scripts/apply-agent-hub-prompt-compiler.py
+      - .github/workflows/prompt-compiler-validation.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prompt-compiler-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-commit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Prompt Compiler branch
+        uses: actions/checkout@v6
+        with:
+          ref: agent/prompt-compiler-v1
+          fetch-depth: 0
+
+      - name: Require isolated branch
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git branch --show-current)" == 'agent/prompt-compiler-v1' ]]
+          [[ "$(git rev-parse origin/main)" == '8cdac7965e6bfb5c9b2a72e0ab00a784bdc0733e' ]]
+
+      - name: Apply Prompt Compiler sources
+        run: python3 scripts/apply-agent-hub-prompt-compiler.py
+
+      - name: Compile all Agent Hub processors
+        run: |
+          python3 -m py_compile \
+            scripts/agent_hub_free.py \
+            scripts/agent_hub_prompt_types.py \
+            scripts/agent_hub_prompt_report.py \
+            scripts/agent_hub_prompt_compiler.py \
+            scripts/agent_hub_prompt_policy.py \
+            scripts/test_agent_hub_prompt_compiler.py \
+            scripts/agent_hub_executor.py \
+            scripts/agent_hub_executor_report.py
+
+      - name: Run Prompt Compiler and existing Hub tests
+        run: |
+          python3 scripts/agent_hub_free.py --self-test
+          python3 scripts/test_agent_hub_prompt_compiler.py
+          python3 scripts/agent_hub_executor.py --self-test
+          python3 scripts/agent_hub_executor_report.py --self-test
+
+      - name: Validate safety contracts
+        run: |
+          set -Eeuo pipefail
+          git diff --check
+          grep -F "DEFAULT_MODELS = ('gemini-3.1-flash-lite',)" scripts/agent_hub_free.py >/dev/null
+          grep -F "status: needs_context" docs/agent-hub-free.md >/dev/null
+          grep -F '[EVIDENCE]' docs/agent-hub-prompt-compiler.md >/dev/null
+          grep -F '16/16 passed' PROMPT_COMPILER_VALIDATION_REPORT.md >/dev/null
+
+      - name: Remove temporary publication files
+        run: |
+          rm -f scripts/apply-agent-hub-prompt-compiler.py
+          rm -f scripts/.prompt-compiler-payload-*
+          rm -f .github/workflows/prompt-compiler-validation.yml
+
+      - name: Commit validated Prompt Compiler
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat: add Agent Hub Prompt Compiler'
+          git push origin HEAD:agent/prompt-compiler-v1
