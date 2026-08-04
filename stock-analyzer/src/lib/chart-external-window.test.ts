@@ -3,7 +3,9 @@ import test from 'node:test';
 import {
   buildChartPath,
   buildExternalChartPath,
+  chartExternalWindowChannel,
   chartSelectionKey,
+  chartSyncIdFromSearch,
   createChartWindowMessage,
   externalChartWindowFeatures,
   isDesktopChartViewport,
@@ -22,8 +24,8 @@ const selection: AnalysisSelection = {
   selectedAt: '2026-08-05T00:00:00.000Z',
 };
 
-test('external chart path preserves the validated chart context', () => {
-  const path = buildExternalChartPath(selection);
+test('external chart path preserves the validated chart context and isolated sync id', () => {
+  const path = buildExternalChartPath(selection, 'sync-a');
   const query = path.slice(path.indexOf('?'));
   const params = new URLSearchParams(query);
 
@@ -32,8 +34,11 @@ test('external chart path preserves the validated chart context', () => {
   assert.equal(params.get('ticker'), 'BTCUSDT');
   assert.equal(params.get('timeframe'), '15m');
   assert.equal(params.get('chartWindow'), 'external');
+  assert.equal(params.get('chartSync'), 'sync-a');
   assert.equal(isExternalChartSearch(query), true);
-  assert.equal(buildChartPath(selection, false).includes('chartWindow=external'), false);
+  assert.equal(chartSyncIdFromSearch(query), 'sync-a');
+  assert.equal(chartExternalWindowChannel('sync-a'), 'stock-app-ai-chart-window-v1:sync-a');
+  assert.equal(buildChartPath(selection).includes('chartWindow=external'), false);
 });
 
 test('chart selection key changes only when the data context changes', () => {
