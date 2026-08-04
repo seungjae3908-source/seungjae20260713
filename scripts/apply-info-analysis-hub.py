@@ -74,4 +74,18 @@ engine = replace_once(
 )
 write(engine_path, engine)
 
-print('[info-analysis-hub] information page connected; query arrays memoized; completed-data revision storage enabled; React and tuple types aligned')
+e2e_path = "stock-analyzer/e2e/info-analysis-hub.spec.ts"
+e2e = read(e2e_path)
+clear_history = "  await page.addInitScript(() => localStorage.clear());\n"
+if e2e.count(clear_history) != 3:
+    raise RuntimeError("unexpected analysis history reset count")
+e2e = e2e.replace(clear_history, "")
+e2e = replace_once(
+    e2e,
+    "  await hub.getByText('분석 신뢰도', { exact: true }).click();",
+    "  await hub.locator('summary').filter({ hasText: /^분석 신뢰도/ }).click();",
+    "confidence section selector",
+)
+write(e2e_path, e2e)
+
+print('[info-analysis-hub] information page connected; completed-data revision storage enabled; browser reload preserves analysis history; selectors aligned')
