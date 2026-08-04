@@ -6,6 +6,7 @@ import {
   type TradingExchange,
   type TradingOrder,
   type TradingOrderEvent,
+  type TradingOrderState,
   type TradingPlan,
   type TradingPolicy,
 } from './trade-automation.types';
@@ -22,9 +23,12 @@ export interface TradingRepository {
   findPlanByIdempotency(userId: string, key: string): Promise<TradingPlan | null>;
   getPlan(userId: string, id: string): Promise<TradingPlan | null>;
   listPlans(userId: string): Promise<TradingPlan[]>;
+  insertPlan(plan: TradingPlan): Promise<{ plan: TradingPlan; inserted: boolean }>;
+  compareAndSetPlan(plan: TradingPlan, expectedState: TradingOrderState): Promise<TradingPlan | null>;
   savePlan(plan: TradingPlan): Promise<void>;
   getOrder(userId: string, id: string): Promise<TradingOrder | null>;
   findOrderByPlan(userId: string, planId: string): Promise<TradingOrder | null>;
+  insertOrder(order: TradingOrder): Promise<{ order: TradingOrder; inserted: boolean }>;
   saveOrder(order: TradingOrder): Promise<void>;
   listOrders(userId: string): Promise<TradingOrder[]>;
   appendEvent(event: TradingOrderEvent): Promise<void>;
@@ -55,10 +59,31 @@ export class InMemoryTradingRepository implements TradingRepository {
       .filter((item) => item.userId === userId)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
+  async insertPlan(plan: TradingPlan) {
+    const existing = await this.findPlanByIdempotency(plan.userId, plan.idempotencyKey);
+    if (existing) return { plan: existing, inserted: false };
+    this.plans.set(plan.id, plan);
+    return { plan, inserted: true };
+  }
+  async compareAndSetPlan(plan: TradingPlan, expectedState: TradingOrderState) {
+    const current = await this.getPlan(plan.userId, plan.id);
+    if (!current || current.state !== expectedState) return null;
+    this.plans.set(plan.id, plan);
+    return plan;
+  }
   async savePlan(plan: TradingPlan) { this.plans.set(plan.id, plan); }
   async getOrder(userId: string, id: string) { const value = this.orders.get(id); return value?.userId === userId ? value : null; }
   async findOrderByPlan(userId: string, planId: string) {
     return [...this.orders.values()].find((item) => item.userId === userId && item.planId === planId) ?? null;
+  }
+  async insertOrder(order: TradingOrder) {
+    const existing = await this.findOrderByPlan(order.userId, order.planId)
+      ?? [...this.orders.values()].find((item) => item.userId === order.userId
+        && item.exchange === order.exchange && item.clientOrderId === order.clientOrderId)
+      ?? null;
+    if (existing) return { order: existing, inserted: false };
+    this.orders.set(order.id, order);
+    return { order, inserted: true };
   }
   async saveOrder(order: TradingOrder) { this.orders.set(order.id, order); }
   async listOrders(userId: string) { return [...this.orders.values()].filter((item) => item.userId === userId); }
@@ -74,6 +99,36 @@ function assertOwner(actual: string, expected: string) {
   if (actual !== expected) throw new Error('USER_SCOPE_MISMATCH');
 }
 
+function isUniqueViolation(error: unknown) {
+  return Boolean(error) && typeof error === 'object'
+    && 'code' in error && String((error as { code?: unknown }).code) === '23505';
+}
+
+function planRow(plan: TradingPlan) {
+  return {
+    user_id: plan.userId,
+    id: plan.id,
+    idempotency_key: plan.idempotencyKey,
+    state: plan.state,
+    payload: plan,
+    approval_expires_at: plan.approvalExpiresAt,
+    updated_at: plan.updatedAt,
+  };
+}
+
+function orderRow(order: TradingOrder) {
+  return {
+    user_id: order.userId,
+    id: order.id,
+    plan_id: order.planId,
+    client_order_id: order.clientOrderId,
+    exchange: order.exchange,
+    state: order.state,
+    payload: order,
+    updated_at: order.updatedAt,
+  };
+}
+
 export function createSupabaseTradingRepository(accessToken: string, authenticatedUserId: string): TradingRepository {
   if (!accessToken || !authenticatedUserId) throw new Error('LOGIN_REQUIRED');
   const client = getUserSupabase(accessToken);
@@ -82,6 +137,20 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
     return getSupabase();
   };
   const owned = (userId: string) => assertOwner(userId, authenticatedUserId);
+  const selectPlanByIdempotency = async (userId: string, key: string) => {
+    owned(userId);
+    const { data, error } = await client.from('trade_order_plans').select('payload')
+      .eq('user_id', userId).eq('idempotency_key', key).maybeSingle();
+    if (error) throw databaseError();
+    return data?.payload as TradingPlan | null;
+  };
+  const selectOrderByPlan = async (userId: string, planId: string) => {
+    owned(userId);
+    const { data, error } = await client.from('trade_orders').select('payload')
+      .eq('user_id', userId).eq('plan_id', planId).maybeSingle();
+    if (error) throw databaseError();
+    return data?.payload as TradingOrder | null;
+  };
   return {
     async getGlobalEmergencyStop() {
       if (!hasSupabaseServerKey()) return true;
@@ -143,11 +212,7 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
       if (error) throw databaseError();
     },
     async findPlanByIdempotency(userId, key) {
-      owned(userId);
-      const { data, error } = await client.from('trade_order_plans').select('payload')
-        .eq('user_id', userId).eq('idempotency_key', key).maybeSingle();
-      if (error) throw databaseError();
-      return data?.payload as TradingPlan | null;
+      return selectPlanByIdempotency(userId, key);
     },
     async getPlan(userId, id) {
       owned(userId);
@@ -163,13 +228,26 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
       if (error) throw databaseError();
       return (data ?? []).map((row) => row.payload as TradingPlan);
     },
+    async insertPlan(plan) {
+      owned(plan.userId);
+      const { error } = await client.from('trade_order_plans').insert(planRow(plan));
+      if (!error) return { plan, inserted: true };
+      if (!isUniqueViolation(error)) throw databaseError();
+      const existing = await selectPlanByIdempotency(plan.userId, plan.idempotencyKey);
+      if (!existing) throw databaseError();
+      return { plan: existing, inserted: false };
+    },
+    async compareAndSetPlan(plan, expectedState) {
+      owned(plan.userId);
+      const { data, error } = await client.from('trade_order_plans').update(planRow(plan))
+        .eq('user_id', plan.userId).eq('id', plan.id).eq('state', expectedState)
+        .select('payload').maybeSingle();
+      if (error) throw databaseError();
+      return data?.payload as TradingPlan | null;
+    },
     async savePlan(plan) {
       owned(plan.userId);
-      const { error } = await client.from('trade_order_plans').upsert({
-        user_id: plan.userId, id: plan.id, idempotency_key: plan.idempotencyKey,
-        state: plan.state, payload: plan, approval_expires_at: plan.approvalExpiresAt,
-        updated_at: plan.updatedAt,
-      }, { onConflict: 'user_id,id' });
+      const { error } = await client.from('trade_order_plans').upsert(planRow(plan), { onConflict: 'user_id,id' });
       if (error) throw databaseError();
     },
     async getOrder(userId, id) {
@@ -180,18 +258,20 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
       return data?.payload as TradingOrder | null;
     },
     async findOrderByPlan(userId, planId) {
-      owned(userId);
-      const { data, error } = await client.from('trade_orders').select('payload')
-        .eq('user_id', userId).eq('plan_id', planId).maybeSingle();
-      if (error) throw databaseError();
-      return data?.payload as TradingOrder | null;
+      return selectOrderByPlan(userId, planId);
+    },
+    async insertOrder(order) {
+      owned(order.userId);
+      const { error } = await client.from('trade_orders').insert(orderRow(order));
+      if (!error) return { order, inserted: true };
+      if (!isUniqueViolation(error)) throw databaseError();
+      const existing = await selectOrderByPlan(order.userId, order.planId);
+      if (!existing) throw databaseError();
+      return { order: existing, inserted: false };
     },
     async saveOrder(order) {
       owned(order.userId);
-      const { error } = await client.from('trade_orders').upsert({
-        user_id: order.userId, id: order.id, plan_id: order.planId, client_order_id: order.clientOrderId,
-        exchange: order.exchange, state: order.state, payload: order, updated_at: order.updatedAt,
-      }, { onConflict: 'user_id,id' });
+      const { error } = await client.from('trade_orders').upsert(orderRow(order), { onConflict: 'user_id,id' });
       if (error) throw databaseError();
     },
     async listOrders(userId) {
