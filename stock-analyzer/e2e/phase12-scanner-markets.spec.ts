@@ -1,6 +1,7 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
 
 const now = Date.now();
+const EXPECTED_502_CONSOLE_ERROR = 'Failed to load resource: the server responded with a status of 502 (Bad Gateway)';
 
 function spotTickers() {
   return [
@@ -66,12 +67,18 @@ async function mockPublicCryptoApis(page: Page, options: { marketFailure?: boole
   return { privateRequests, mutationRequests };
 }
 
-function captureFailures(page: Page) {
+function captureFailures(page: Page, expectedConsoleMessages: ReadonlySet<string> = new Set()) {
   const consoleErrors: string[] = [];
+  const expectedConsoleErrors: string[] = [];
   const pageErrors: string[] = [];
-  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+  page.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    const text = message.text();
+    if (expectedConsoleMessages.has(text)) expectedConsoleErrors.push(text);
+    else consoleErrors.push(text);
+  });
   page.on('pageerror', (error) => pageErrors.push(error.message));
-  return { consoleErrors, pageErrors };
+  return { consoleErrors, expectedConsoleErrors, pageErrors };
 }
 
 for (const width of [360, 390, 430]) {
@@ -96,13 +103,14 @@ for (const width of [360, 390, 430]) {
 
     expect(requests.privateRequests).toEqual([]);
     expect(requests.mutationRequests).toEqual([]);
+    expect(failures.expectedConsoleErrors).toEqual([]);
     expect(failures.consoleErrors).toEqual([]);
     expect(failures.pageErrors).toEqual([]);
   });
 }
 
 test('desktop scanner keeps results usable and handles partial providers', async ({ page }) => {
-  const failures = captureFailures(page);
+  const failures = captureFailures(page, new Set([EXPECTED_502_CONSOLE_ERROR]));
   const requests = await mockPublicCryptoApis(page, { marketFailure: true, ethCandleFailure: true });
   await page.setViewportSize({ width: 1366, height: 900 });
   await page.goto('/__phase12-scanner-markets-e2e');
@@ -119,6 +127,7 @@ test('desktop scanner keeps results usable and handles partial providers', async
 
   expect(requests.privateRequests).toEqual([]);
   expect(requests.mutationRequests).toEqual([]);
+  expect(failures.expectedConsoleErrors).toHaveLength(2);
   expect(failures.consoleErrors).toEqual([]);
   expect(failures.pageErrors).toEqual([]);
 });
