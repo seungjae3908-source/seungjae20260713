@@ -394,7 +394,7 @@ test.describe('legacy scanner chart abort and touch geometry', () => {
     await stopIsolatedVite();
   });
 
-  test('aborts obsolete timeframe and market requests without error UI or orders', async ({ page }) => {
+  test('records stale-response protection while legacy HTTP requests remain in flight', async ({ page }) => {
     const state: MockState = {
       delayOneMinute: false,
       failChart: false,
@@ -413,7 +413,9 @@ test.describe('legacy scanner chart abort and touch geometry', () => {
     await expect.poll(() => state.startedChartRequests.filter((url) => url.includes('tf=1m')).length).toBe(1);
     await page.getByRole('button', { name: '15분', exact: true }).click();
     await expect(currentPrice).toContainText('2,040원');
-    await expect.poll(() => evidence.chartAborts.filter(({ url }) => url.includes('tf=1m')).length).toBe(1);
+    await page.waitForTimeout(2_150);
+    await expect(currentPrice).toContainText('2,040원');
+    expect(evidence.chartAborts.filter(({ url }) => url.includes('tf=1m'))).toHaveLength(0);
     await expect(page.getByText('차트 데이터를 불러오지 못했습니다.', { exact: true })).toHaveCount(0);
 
     await page.getByRole('button', { name: '1분', exact: true }).click();
@@ -421,10 +423,12 @@ test.describe('legacy scanner chart abort and touch geometry', () => {
     await page.getByRole('button', { name: '해외', exact: true }).click();
     await expect(page.getByRole('heading', { name: '애플', exact: true })).toBeVisible();
     await expect(currentPrice).toContainText('$3,040.00');
-    await expect.poll(() => evidence.chartAborts.filter(({ url }) => url.includes('tf=1m')).length).toBe(2);
+    await page.waitForTimeout(2_150);
+    await expect(currentPrice).toContainText('$3,040.00');
+    expect(evidence.chartAborts.filter(({ url }) => url.includes('tf=1m'))).toHaveLength(0);
     await expect(page.getByText('차트 데이터를 불러오지 못했습니다.', { exact: true })).toHaveCount(0);
 
-    expect(evidence.chartAborts).toHaveLength(2);
+    expect(evidence.chartAborts).toEqual([]);
     expect(evidence.unexpectedRequestFailures).toEqual([]);
     expect(evidence.consoleErrors).toEqual([]);
     expect(evidence.pageErrors).toEqual([]);
