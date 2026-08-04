@@ -768,10 +768,10 @@ def run_self_test(policy_path: Path = POLICY_PATH, workers_path: Path = WORKERS_
 
     base = "a" * 40
     proposal = Proposal(
-        target_worker="prediction-lab",
+        target_worker="integration-planner",
         action_type="modify_feature_branch",
-        branch="feature/prediction-lab-standalone",
-        allowed_paths=("market-prediction-lab/**",),
+        branch="feature/integration-plan",
+        allowed_paths=("docs/integration-plan.md",),
         forbidden_paths=("ops/**",),
         instruction="기능 브랜치에서 모델 평가 테스트를 보완한다.",
         validation="정적 테스트와 단위 테스트를 실행한다.",
@@ -798,8 +798,8 @@ def run_self_test(policy_path: Path = POLICY_PATH, workers_path: Path = WORKERS_
     check(all(field in d.approval_details for field in policy["approval_request_fields"]), "merge approval fields missing")
 
     ops_p = Proposal(
-        target_worker="operations-worker", action_type="staging_deploy", branch="ops/release",
-        allowed_paths=("ops/**",), forbidden_paths=("production/**",),
+        target_worker="operations-worker", action_type="staging_deploy", branch="ops/read-only-release",
+        allowed_paths=("docs/ops-readiness.md",), forbidden_paths=("production/**",),
         instruction="승인 후 staging deploy 준비", validation="readiness 검증",
         stop_conditions="승인 없으면 중단", approval_details={}
     )
@@ -847,7 +847,7 @@ def run_self_test(policy_path: Path = POLICY_PATH, workers_path: Path = WORKERS_
     check(not command_expired(fields, datetime(2026,8,4,0,10,tzinfo=timezone.utc)), "fresh command expired")
     check(command_expired(fields, datetime(2026,8,4,1,0,tzinfo=timezone.utc)), "expired command not detected")
 
-    missing = json.dumps({"target_worker":"prediction-lab"})
+    missing = json.dumps({"target_worker":"integration-planner"})
     try:
         parse_proposal(missing, policy)
     except PolicyError:
