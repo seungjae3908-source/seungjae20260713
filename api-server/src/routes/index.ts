@@ -116,6 +116,48 @@ router.get('/stocks/special-feed', (req, res, next) => {
   });
 });
 
+// Financial statements are an optional detail panel backed by public upstream
+// providers. Preserve every successful response, but convert only the exact
+// provider-delay contract from this one endpoint into an explicit unavailable
+// state. Other endpoints and all other 4xx/5xx responses remain untouched.
+router.use('/stocks/:ticker/financials', (req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = ((body: unknown) => {
+    const payload = body && typeof body === 'object'
+      ? body as Record<string, unknown>
+      : null;
+
+    if (res.statusCode !== 503 || payload?.code !== 'FINANCIAL_PROVIDER_DELAY') {
+      return originalJson(body);
+    }
+
+    const ticker = String(payload.ticker ?? req.params.ticker ?? '').trim().toUpperCase();
+    const unavailableFinancials = {
+      annual: [],
+      yearly: [],
+      quarterly: [],
+      quarters: [],
+      ratios: {},
+      source: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    res.statusCode = 200;
+    return originalJson({
+      ...payload,
+      ok: false,
+      available: false,
+      ticker,
+      financials: unavailableFinancials,
+      ...unavailableFinancials,
+      items: [],
+      summary: '재무 데이터 제공기관의 응답이 지연되고 있습니다.',
+    });
+  }) as typeof res.json;
+
+  next();
+});
+
 router.use('/stocks', stocksRouter);
 router.use('/', secRouter);
 router.use('/backup', backupRouter);
