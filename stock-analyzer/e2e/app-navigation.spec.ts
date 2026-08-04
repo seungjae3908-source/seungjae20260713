@@ -23,6 +23,37 @@ async function mockNavigationRuntime(page: Page) {
   }));
 }
 
+function observeNavigationRuntime(page: Page) {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  const unexpectedHttpErrors: string[] = [];
+  const orderRequests: string[] = [];
+
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('response', (response) => {
+    if (response.status() >= 400) unexpectedHttpErrors.push(`${response.status()} ${response.url()}`);
+  });
+  page.on('request', (request) => {
+    const method = request.method();
+    if (
+      method !== 'GET' &&
+      /\/api\/.*(?:order|trade|approve|execute)/i.test(request.url())
+    ) {
+      orderRequests.push(`${method} ${request.url()}`);
+    }
+  });
+
+  return () => {
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+    expect(unexpectedHttpErrors).toEqual([]);
+    expect(orderRequests).toEqual([]);
+  };
+}
+
 test('navigation metadata keeps five top-level sections and active routes', () => {
   expect(APP_NAVIGATION.map((item) => item.id)).toEqual([
     'home',
@@ -59,8 +90,7 @@ for (const viewport of [
   { name: 'desktop', width: 1440, height: 900 },
 ] as const) {
   test(`${viewport.name} navigation exposes five accessible top-level controls`, async ({ page }) => {
-    const pageErrors: string[] = [];
-    page.on('pageerror', (error) => pageErrors.push(error.message));
+    const assertCleanRuntime = observeNavigationRuntime(page);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockNavigationRuntime(page);
     await page.goto('/__phase11-technical-workspace-e2e');
@@ -77,11 +107,12 @@ for (const viewport of [
     }
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-    expect(pageErrors).toEqual([]);
+    assertCleanRuntime();
   });
 }
 
 test('keyboard navigation opens, moves through, and closes the asset menu', async ({ page }) => {
+  const assertCleanRuntime = observeNavigationRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await mockNavigationRuntime(page);
   await page.goto('/__phase11-technical-workspace-e2e');
@@ -103,9 +134,11 @@ test('keyboard navigation opens, moves through, and closes the asset menu', asyn
   await items.nth(4).press('Escape');
   await expect(menu).toBeHidden();
   await expect(assetsTrigger).toBeFocused();
+  assertCleanRuntime();
 });
 
 test('asset menu reaches the existing search entry without redefining search routes', async ({ page }) => {
+  const assertCleanRuntime = observeNavigationRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await mockNavigationRuntime(page);
   await page.goto('/__phase11-technical-workspace-e2e');
@@ -114,4 +147,5 @@ test('asset menu reaches the existing search entry without redefining search rou
   await navigation.getByRole('button', { name: '종목', exact: true }).click();
   await page.getByRole('menuitem', { name: '종목 검색·탐색', exact: true }).click();
   await expect(page).toHaveURL(/\/stocks$/);
+  assertCleanRuntime();
 });
