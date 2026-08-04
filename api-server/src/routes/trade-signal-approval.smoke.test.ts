@@ -104,6 +104,32 @@ test('approval status endpoint requires authentication', async () => {
   }
 });
 
+test('approval queue returns safe plan summaries without account balances or credentials', async () => {
+  const repository = new InMemoryTradingRepository();
+  const automation = new TradeAutomationService(repository);
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  await repository.savePolicy(USER, policy);
+  const created = await automation.createPlan(USER, planInput('queue-safe-shape'), policy, false);
+  assert.ok(created.plan);
+
+  const { server, baseUrl } = await startServer(repository);
+  try {
+    const response = await fetch(`${baseUrl}/api/trade-automation/approval-queue`);
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.doesNotMatch(text, /availableBalance|accountValueKrw|idempotencyKey|userId|encryptedCredentials|accessKey|secretKey/);
+    const body = JSON.parse(text);
+    assert.equal(body.count, 1);
+    assert.equal(body.items[0].id, created.plan.id);
+    assert.equal(body.items[0].approval.approvalEnabled, true);
+    assert.equal(body.accountBalancesExposed, false);
+    assert.equal(body.credentialsExposed, false);
+    assert.equal(body.orderSubmitted, false);
+  } finally {
+    await close(server);
+  }
+});
+
 test('weakening disables approval without submitting an order', async () => {
   const repository = new InMemoryTradingRepository();
   const automation = new TradeAutomationService(repository);
