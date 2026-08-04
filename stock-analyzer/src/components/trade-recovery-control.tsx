@@ -59,7 +59,7 @@ export function TradeRecoveryControl({ fixture = false }: { fixture?: boolean })
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-extrabold">불명확 주문 재조정·복구</h2>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            timeout·네트워크·5xx 이후에는 같은 주문을 다시 보내지 않고 client order ID로 상태만 조회합니다.
+            timeout·네트워크·5xx 이후에는 같은 주문을 재주문하지 않고 client order ID로 상태만 조회합니다.
             확인되지 않으면 RECOVERY_REQUIRED 상태로 멈춥니다.
           </p>
         </div>
