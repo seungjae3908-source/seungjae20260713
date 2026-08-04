@@ -124,7 +124,6 @@ export function TradeSignalAlerts({ fixture }: { fixture?: TradeSignalAlertItem[
       const notification = new window.Notification(alert.title, {
         body: `${alert.message} · ${stateLabel(alert.currentSignalState)}`,
         tag: alert.id,
-        renotify: false,
       });
       notification.onclick = () => {
         window.focus();
