@@ -1,12 +1,16 @@
 import { test, expect } from '@playwright/test';
 
 for (const width of [360, 390, 430]) {
-  test(`trade automation defaults off and fits ${width}px mobile`, async ({ page }) => {
+  test(`trade approval queue fits ${width}px mobile and fails closed`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/__phase12-trade-automation-e2e');
-    await expect(page.getByRole('heading', { name: '자동매매', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '승인형 주문', exact: true })).toBeVisible();
     await expect(page.getByText('기본값은 모두 OFF이며 AI 채팅은 주문 권한이 없습니다.')).toBeVisible();
     await expect(page.getByTestId('connection-bitget')).toContainText('Paper 연결됨');
+    await expect(page.getByTestId('approval-plan-ready-plan')).toContainText('승인 가능');
+    await expect(page.getByTestId('approval-plan-invalid-plan')).toContainText('신호 무효');
+    await expect(page.getByTestId('approve-plan-ready-plan')).toBeEnabled();
+    await expect(page.getByTestId('approve-plan-invalid-plan')).toBeDisabled();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 }
