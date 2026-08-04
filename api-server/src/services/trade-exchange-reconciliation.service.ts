@@ -138,21 +138,24 @@ function bitgetResolution(payload: unknown, order: TradingOrder): Reconciliation
     0,
   );
   const averageFillPrice = positiveNumber(row.priceAvg ?? row.avgPrice ?? row.averagePrice);
+  const exchangeOrderId = String(
+    row.orderId ?? order.exchangeOrderId ?? order.clientOrderId,
+  ).trim() || order.clientOrderId;
 
   if (['live', 'new', 'init', 'not_trigger', 'pending'].includes(state)) {
-    return { state: filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED', exchangeOrderId: order.clientOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
+    return { state: filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED', exchangeOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
   }
   if (['partial_fill', 'partially_filled', 'partial-filled'].includes(state)) {
-    return { state: 'PARTIALLY_FILLED', exchangeOrderId: order.clientOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
+    return { state: 'PARTIALLY_FILLED', exchangeOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
   }
   if (['filled', 'full_fill', 'fully_filled'].includes(state)) {
-    return { state: 'FILLED', exchangeOrderId: order.clientOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
+    return { state: 'FILLED', exchangeOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
   }
   if (['cancelled', 'canceled'].includes(state)) {
-    return { state: 'CANCELED', exchangeOrderId: order.clientOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
+    return { state: 'CANCELED', exchangeOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
   }
   if (['rejected', 'failed'].includes(state)) {
-    return { state: 'REJECTED', exchangeOrderId: order.clientOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
+    return { state: 'REJECTED', exchangeOrderId, filledQuantity, averageFillPrice, reason: 'BITGET_ORDER_RECONCILED' };
   }
   return null;
 }
