@@ -342,7 +342,11 @@ function normalizeCandles(rows: AnyObj[], timeframe: ChartTimeframe): CandlePoin
 	}));
 }
 
-async function fetchChart(ticker: string, timeframe: ChartTimeframe): Promise<ChartPayload> {
+async function fetchChart(
+	ticker: string,
+	timeframe: ChartTimeframe,
+	signal?: AbortSignal,
+): Promise<ChartPayload> {
 	const encodedTicker = encodeURIComponent(ticker);
 	const encodedFrame = encodeURIComponent(timeframe);
 	const urls = [
@@ -353,7 +357,7 @@ async function fetchChart(ticker: string, timeframe: ChartTimeframe): Promise<Ch
 	let lastError = "차트 데이터를 불러오지 못했습니다.";
 	for (const url of urls) {
 		try {
-			const response = await authorizedFetch(url, { cache: "no-store" });
+			const response = await authorizedFetch(url, { cache: "no-store", signal });
 			const payload = (await response.json().catch(() => ({}))) as AnyObj;
 			if (!response.ok) {
 				lastError = String(payload?.message ?? payload?.error ?? `HTTP ${response.status}`);
@@ -377,15 +381,22 @@ async function fetchChart(ticker: string, timeframe: ChartTimeframe): Promise<Ch
 				indicators: payload?.indicators,
 			};
 		} catch (error) {
+			if (signal?.aborted) throw error;
 			lastError = error instanceof Error ? error.message : lastError;
 		}
 	}
 	throw new Error(lastError);
 }
 
-async function fetchMarketContext(market: ChartBroadcastMarket): Promise<MarketContext> {
+async function fetchMarketContext(
+	market: ChartBroadcastMarket,
+	signal?: AbortSignal,
+): Promise<MarketContext> {
 	const tickers = market === "KR" ? ["^KS11", "^KQ11"] : ["^GSPC", "^IXIC"];
-	const response = await authorizedFetch(`/api/quotes?tickers=${encodeURIComponent(tickers.join(","))}`, { cache: "no-store" });
+	const response = await authorizedFetch(
+		`/api/quotes?tickers=${encodeURIComponent(tickers.join(","))}`,
+		{ cache: "no-store", signal },
+	);
 	const payload = (await response.json().catch(() => ({}))) as AnyObj;
 	if (!response.ok) throw new Error(String(payload?.message ?? payload?.error ?? `HTTP_${response.status}`));
 	const source = Array.isArray(payload?.quotes)
@@ -1084,7 +1095,7 @@ export function ChartBroadcastPanel({ market, onSignalChange, onAnalysisChange, 
 
 	const chart = useQuery({
 		queryKey: ["chart-broadcast", selectedStock.ticker, timeframe],
-		queryFn: () => fetchChart(selectedStock.ticker, timeframe),
+		queryFn: ({ signal }) => fetchChart(selectedStock.ticker, timeframe, signal),
 		enabled: Boolean(selectedStock.ticker),
 		refetchInterval: live ? (/m|H/.test(timeframe) ? 5_000 : 15_000) : false,
 		refetchIntervalInBackground: true,
@@ -1094,7 +1105,7 @@ export function ChartBroadcastPanel({ market, onSignalChange, onAnalysisChange, 
 
 	const marketContextQuery = useQuery({
 		queryKey: ["chart-broadcast-market-context", market],
-		queryFn: () => fetchMarketContext(market),
+		queryFn: ({ signal }) => fetchMarketContext(market, signal),
 		refetchInterval: live ? 15_000 : false,
 		refetchIntervalInBackground: true,
 		retry: 1,
@@ -1201,7 +1212,7 @@ export function ChartBroadcastPanel({ market, onSignalChange, onAnalysisChange, 
 						type="button"
 						onClick={() => setLive((current) => !current)}
 						className={cn(
-							"inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-extrabold",
+							"inline-flex min-h-11 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-extrabold",
 							live
 								? "border-destructive/30 bg-destructive/10 text-destructive"
 								: "border-card-border bg-background text-muted-foreground",
@@ -1249,7 +1260,7 @@ export function ChartBroadcastPanel({ market, onSignalChange, onAnalysisChange, 
 									setFocusTime(undefined);
 										lastFeedKey.current = "";
 									}}
-									className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-secondary"
+									className="flex min-h-11 w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-secondary"
 								>
 									<div className="min-w-0">
 										<p className="truncate text-sm font-extrabold">{row.name}</p>
@@ -1285,7 +1296,7 @@ export function ChartBroadcastPanel({ market, onSignalChange, onAnalysisChange, 
 						<button
 							type="button"
 							onClick={() => void chart.refetch()}
-							className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-card-border bg-background"
+							className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-card-border bg-background"
 							title="차트 새로고침"
 						>
 							<RefreshCw className={cn("h-4 w-4", chart.isFetching && "animate-spin")} />
@@ -1304,7 +1315,7 @@ export function ChartBroadcastPanel({ market, onSignalChange, onAnalysisChange, 
 									lastFeedKey.current = "";
 								}}
 								className={cn(
-									"shrink-0 rounded-xl border px-3 py-2 text-xs font-extrabold",
+									"min-h-11 min-w-11 shrink-0 rounded-xl border px-3 py-2 text-xs font-extrabold",
 									timeframe === item.key
 										? "border-primary bg-primary text-primary-foreground"
 										: "border-card-border bg-background text-muted-foreground",
@@ -1318,7 +1329,7 @@ export function ChartBroadcastPanel({ market, onSignalChange, onAnalysisChange, 
 					<button
 						type="button"
 						onClick={() => setSettingsOpen((current) => !current)}
-						className="mt-3 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background px-3 py-2.5 text-left"
+						className="mt-3 flex min-h-11 w-full items-center justify-between rounded-2xl border border-card-border bg-background px-3 py-2.5 text-left"
 					>
 						<span className="inline-flex items-center gap-2 text-xs font-extrabold">
 							<Settings2 className="h-4 w-4 text-primary" />
@@ -1365,7 +1376,7 @@ export function ChartBroadcastPanel({ market, onSignalChange, onAnalysisChange, 
 							<ShieldAlert className="h-8 w-8 text-warning" />
 							<p className="mt-3 text-sm font-extrabold">차트 데이터를 불러오지 못했습니다.</p>
 							<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">{chart.error instanceof Error ? chart.error.message : "해당 시간봉 데이터 제공 여부를 확인하세요."}</p>
-							<button type="button" onClick={() => void chart.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-extrabold text-primary-foreground">다시 시도</button>
+							<button type="button" onClick={() => void chart.refetch()} className="mt-4 min-h-11 rounded-full bg-primary px-4 py-2 text-xs font-extrabold text-primary-foreground">다시 시도</button>
 						</div>
 					) : candles.length < 2 || !snapshot || !opinion ? (
 						<div className="flex h-[390px] flex-col items-center justify-center px-6 text-center">
