@@ -359,8 +359,9 @@ function collectNews(data: AnyObj): AnyObj[] {
   );
 }
 
-async function fetchDetail(ticker: string): Promise<DetailData> {
+async function fetchDetail(ticker: string, requestedMarket?: Market): Promise<DetailData> {
   const upper = ticker.toUpperCase();
+  const withMarket = (url: string) => requestedMarket ? `${url}${url.includes('?') ? '&' : '?'}market=${requestedMarket}` : url;
 
   const [
     quoteRaw,
@@ -372,36 +373,36 @@ async function fetchDetail(ticker: string): Promise<DetailData> {
     newsRaw,
   ] = await Promise.all([
     tryJson<AnyObj>(
-      [`/api/quotes?tickers=${upper}`, `/api/stocks/${upper}/quote`],
+      [withMarket(`/api/quotes?tickers=${upper}`), withMarket(`/api/stocks/${upper}/quote`)],
       {},
     ),
 
     tryJson<AnyObj>(
-      [`/api/stocks/${upper}/company`, `/api/stocks/${upper}/profile`],
+      [withMarket(`/api/stocks/${upper}/company`), withMarket(`/api/stocks/${upper}/profile`)],
       {},
     ),
 
     tryJson<AnyObj>(
-      [`/api/stocks/${upper}/candles?tf=1D`],
+      [withMarket(`/api/stocks/${upper}/candles?tf=1D`)],
       {},
     ),
 
-    tryJson<AnyObj>([`/api/stocks/${upper}/financials`], {}),
+    tryJson<AnyObj>([withMarket(`/api/stocks/${upper}/financials`)], {}),
 
     tryJson<AnyObj>(
-      [`/api/stocks/${upper}/risk`, `/api/stocks/${upper}/analysis`],
+      [withMarket(`/api/stocks/${upper}/risk`), withMarket(`/api/stocks/${upper}/analysis`)],
       {},
     ),
 
     tryJson<AnyObj>(
       [
-        `/api/stocks/${upper}/filings`,
-        `/api/stocks/${upper}/disclosures`,
+        withMarket(`/api/stocks/${upper}/filings`),
+        withMarket(`/api/stocks/${upper}/disclosures`),
       ],
       {},
     ),
 
-    tryJson<AnyObj>([`/api/stocks/${upper}/news`], {}),
+    tryJson<AnyObj>([withMarket(`/api/stocks/${upper}/news`)], {}),
   ]);
 
   const candleRows = Array.isArray(candlesRaw?.candles)
@@ -441,9 +442,10 @@ function currentBackPath(): string {
   if (!raw) return "/search";
 
   try {
-    return decodeURIComponent(raw);
+    const decoded = decodeURIComponent(raw);
+    return decoded.startsWith("/") && !decoded.startsWith("//") ? decoded : "/search";
   } catch {
-    return raw;
+    return raw.startsWith("/") && !raw.startsWith("//") ? raw : "/search";
   }
 }
 
@@ -1223,23 +1225,27 @@ interface DetailSavedState {
   scrollTopByTab?: Partial<Record<DetailTab, number>>;
 }
 
-function readDetailState(ticker: string): DetailSavedState {
+function detailStateKey(ticker: string, market?: Market) {
+  return `sa-detail-state:${market ?? "AUTO"}:${ticker}`;
+}
+
+function readDetailState(ticker: string, market?: Market): DetailSavedState {
   try {
     return JSON.parse(
-      sessionStorage.getItem(`sa-detail-state:${ticker}`) ?? "{}",
+      sessionStorage.getItem(detailStateKey(ticker, market)) ?? "{}",
     ) as DetailSavedState;
   } catch {
     return {};
   }
 }
 
-function detailTabFromUrl(ticker: string): DetailTab {
+function detailTabFromUrl(ticker: string, market?: Market): DetailTab {
   const raw = new URLSearchParams(window.location.search).get("tab");
   if (raw === "financial") return "financials";
 
   if (TABS.some((item) => item.key === raw)) return raw as DetailTab;
 
-  const saved = readDetailState(ticker).tab;
+  const saved = readDetailState(ticker, market).tab;
   return TABS.some((item) => item.key === saved) ? saved! : "overview";
 }
 
@@ -1254,18 +1260,20 @@ export default function DetailPage() {
   const [, navigate] = useLocation();
 
   const ticker = String(params?.ticker ?? "").toUpperCase();
-  const studyId = new URLSearchParams(window.location.search).get("study");
+  const searchParams = new URLSearchParams(window.location.search);
+  const studyId = searchParams.get("study");
+  const requestedMarket: Market | null = searchParams.get("market") === "KR" ? "KR" : searchParams.get("market") === "US" ? "US" : null;
 
-  const [tab, setTab] = useState<DetailTab>(() => detailTabFromUrl(ticker));
+  const [tab, setTab] = useState<DetailTab>(() => detailTabFromUrl(ticker, requestedMarket ?? undefined));
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const restoredScrollRef = useRef<string | null>(null);
 
-  const [watched, setWatched] = useState(() => isInWatchlist(ticker));
+  const [watched, setWatched] = useState(() => isInWatchlist(ticker, requestedMarket ?? undefined));
 
   const detail = useQuery<DetailData>({
-    queryKey: ["stock-detail-v13", ticker],
+    queryKey: ["stock-detail-v14", requestedMarket ?? "AUTO", ticker],
 
-    queryFn: () => fetchDetail(ticker),
+    queryFn: () => fetchDetail(ticker, requestedMarket ?? undefined),
 
     enabled: Boolean(ticker),
 
@@ -1282,9 +1290,11 @@ export default function DetailPage() {
 
   const data = detail.data;
 
-  const market = marketOf(ticker, data?.quote, data?.company);
+  const market = requestedMarket ?? marketOf(ticker, data?.quote, data?.company);
 
   const currency = currencyOf(market, data?.quote);
+
+  useEffect(() => { setWatched(isInWatchlist(ticker, market)); }, [market, ticker]);
 
   const companyName = displayStockName(
     ticker,
@@ -1352,34 +1362,34 @@ export default function DetailPage() {
   const changePositive = (toNumber(data?.quote?.changePercent) ?? 0) >= 0;
 
   useEffect(() => {
-    const state = readDetailState(ticker);
+    const state = readDetailState(ticker, market);
     sessionStorage.setItem(
-      `sa-detail-state:${ticker}`,
+      detailStateKey(ticker, market),
       JSON.stringify({ ...state, tab }),
     );
 
     const url = new URL(window.location.href);
     url.searchParams.set("tab", tab);
     window.history.replaceState(window.history.state, "", url);
-  }, [ticker, tab]);
+  }, [market, ticker, tab]);
 
   useEffect(() => {
     if (!data) return;
-    const restoreKey = `${ticker}:${tab}`;
+    const restoreKey = `${market}:${ticker}:${tab}`;
     if (restoredScrollRef.current === restoreKey) return;
     restoredScrollRef.current = restoreKey;
 
-    const savedTop = readDetailState(ticker).scrollTopByTab?.[tab] ?? 0;
+    const savedTop = readDetailState(ticker, market).scrollTopByTab?.[tab] ?? 0;
     requestAnimationFrame(() => {
       scrollContainerRef.current?.scrollTo({ top: savedTop });
     });
-  }, [ticker, tab, data]);
+  }, [market, ticker, tab, data]);
 
   const saveScrollPosition = () => {
     const top = scrollContainerRef.current?.scrollTop ?? 0;
-    const state = readDetailState(ticker);
+    const state = readDetailState(ticker, market);
     sessionStorage.setItem(
-      `sa-detail-state:${ticker}`,
+      detailStateKey(ticker, market),
       JSON.stringify({
         ...state,
         tab,
@@ -1494,11 +1504,7 @@ export default function DetailPage() {
           <CenterMessage>종목 데이터를 불러오는 중...</CenterMessage>
         )}
 
-        {detail.isError && (
-          <CenterMessage error>
-            종목 데이터를 불러오지 못했습니다.
-          </CenterMessage>
-        )}
+        {detail.isError && <div className="space-y-3"><CenterMessage error>종목 데이터를 불러오지 못했습니다.</CenterMessage><button type="button" onClick={() => { void detail.refetch(); }} className="w-full rounded-2xl border border-card-border bg-card px-4 py-3 text-sm font-black">상세 데이터 다시 불러오기</button></div>}
 
         {data && tab === "overview" && (
           <OverviewTab

@@ -25,7 +25,7 @@ function formatPercent(value: unknown): string {
 }
 
 function averageChange(group: SectorPopularGroup): number | null {
-  const values = group.rows
+  const values = (Array.isArray(group.rows) ? group.rows : [])
     .map((row) => finite(row.changePercent))
     .filter((value): value is number => value != null);
 
@@ -228,7 +228,7 @@ export default function MarketOverviewPage() {
                     </span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    {sector.rows.slice(0, 3).map((row) => (
+                    {(Array.isArray(sector.rows) ? sector.rows : []).slice(0, 3).map((row) => (
                       <button
                         key={`${row.market}:${row.ticker}`}
                         type="button"
@@ -257,9 +257,9 @@ export default function MarketOverviewPage() {
 
           {!briefing.isLoading && !briefing.isError && briefing.data && (
             <div className="mt-3 rounded-2xl border border-card-border bg-background/60 p-4">
-              <p className="text-base font-black leading-6">{briefing.data.headline}</p>
+              <p className="text-base font-black leading-6">{typeof briefing.data.headline === 'string' && briefing.data.headline.trim() ? briefing.data.headline : '시장 브리핑 요약이 제공되지 않았습니다.'}</p>
               <div className="mt-3 space-y-2">
-                {briefing.data.lines.slice(0, 5).map((line, index) => (
+                {(Array.isArray(briefing.data.lines) ? briefing.data.lines : []).slice(0, 5).map((line, index) => (
                   <p key={`${index}:${line}`} className="text-sm font-semibold leading-6 text-muted-foreground">
                     {line}
                   </p>

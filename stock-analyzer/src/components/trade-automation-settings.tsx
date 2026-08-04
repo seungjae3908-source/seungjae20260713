@@ -45,9 +45,23 @@ const DEFAULT_POLICY: Policy = {
   maxDailyOrders: 10, maxConsecutiveLosses: 3, bitgetLeverage: 2,
 };
 
+function normalizePolicy(value?: Partial<Policy> | null): Policy {
+  return {
+    ...DEFAULT_POLICY,
+    ...(value ?? {}),
+    exchangeEnabled: { ...DEFAULT_POLICY.exchangeEnabled, ...(value?.exchangeEnabled ?? {}) },
+    enabledAssets: {
+      bitget: Array.isArray(value?.enabledAssets?.bitget) ? value.enabledAssets.bitget : [],
+      upbit: Array.isArray(value?.enabledAssets?.upbit) ? value.enabledAssets.upbit : [],
+      kiwoom: Array.isArray(value?.enabledAssets?.kiwoom) ? value.enabledAssets.kiwoom : [],
+    },
+    enabledStrategies: Array.isArray(value?.enabledStrategies) ? value.enabledStrategies : [],
+  };
+}
+
 export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
   const [status, setStatus] = useState<Status | null>(fixture ?? null);
-  const [draft, setDraft] = useState<Policy>(fixture?.policy ?? DEFAULT_POLICY);
+  const [draft, setDraft] = useState<Policy>(() => normalizePolicy(fixture?.policy));
   const [loading, setLoading] = useState(!fixture);
   const [message, setMessage] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -57,9 +71,18 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
     setLoading(true);
     try {
       const response = await authorizedFetch('/api/trade-automation/status');
-      const payload = await response.json() as Status & { error?: string };
+      const payload = await response.json() as Partial<Status> & { error?: string };
       if (!response.ok) throw new Error(payload.error ?? '설정을 불러오지 못했습니다.');
-      setStatus(payload); setDraft(payload.policy); setMessage('');
+      if (!payload.policy) throw new Error('거래 설정 데이터가 올바르지 않습니다.');
+      const policy = normalizePolicy(payload.policy);
+      setStatus({
+        policy,
+        connections: Array.isArray(payload.connections) ? payload.connections : [],
+        emergencyStopped: Boolean(payload.emergencyStopped ?? policy.emergencyStopped),
+        credentialVault: payload.credentialVault ?? { encryptionConfigured: false, keyValueExposed: false },
+        lastOrder: payload.lastOrder ?? null,
+      });
+      setDraft(policy); setMessage('');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '설정을 불러오지 못했습니다.');
     } finally { setLoading(false); }

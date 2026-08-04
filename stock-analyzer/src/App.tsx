@@ -54,6 +54,7 @@ const phase8E2EEnabled = import.meta.env.VITE_PHASE8_E2E === 'true';
 const phase9E2EEnabled = import.meta.env.VITE_PHASE9_E2E === 'true';
 const phase11E2EEnabled = import.meta.env.VITE_PHASE11_E2E === 'true';
 const phase12E2EEnabled = import.meta.env.VITE_PHASE12_E2E === 'true';
+const infoTabE2EEnabled = import.meta.env.VITE_INFO_TAB_E2E === 'true';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
@@ -139,6 +140,14 @@ function ApprovedRouter() {
 
 function RootRouter() {
   return <Suspense fallback={<PageFallback />}><Switch>
+    {infoTabE2EEnabled ? <Route path="/stock-info" component={StockInfoPage} /> : null}
+    {infoTabE2EEnabled ? <Route path="/stock/:ticker" component={DetailPage} /> : null}
+    {infoTabE2EEnabled ? <Route path="/watchlist" component={WatchlistPage} /> : null}
+    {infoTabE2EEnabled ? <Route path="/portfolio" component={PortfolioPage} /> : null}
+    {infoTabE2EEnabled ? <Route path="/market-overview" component={MarketOverviewPage} /> : null}
+    {infoTabE2EEnabled ? <Route path="/stocks" component={StocksPage} /> : null}
+    {infoTabE2EEnabled ? <Route path="/themes" component={ThemesPage} /> : null}
+    {infoTabE2EEnabled ? <Route path="/more" component={MorePage} /> : null}
     {phase4E2EEnabled ? <Route path="/__phase4-risk-e2e" component={Phase4RiskE2EPage} /> : null}
     {phase5E2EEnabled ? <Route path="/__phase5-backtest-e2e" component={Phase5BacktestE2EPage} /> : null}
     {phase6E2EEnabled ? <Route path="/__phase6-paper-trading-e2e" component={Phase6PaperTradingE2EPage} /> : null}

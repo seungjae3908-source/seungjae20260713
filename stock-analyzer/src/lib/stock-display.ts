@@ -472,61 +472,75 @@ export function readWatchlistItems(): WatchlistItem[] {
   }
 }
 
+function normalizeWatchlistTicker(value: unknown): string {
+  return String(value ?? '').trim().toUpperCase();
+}
+
+function normalizeWatchlistMarket(value: unknown): string {
+  const market = String(value ?? '').trim().toUpperCase();
+  return market || 'UNKNOWN';
+}
+
+export function watchlistItemKey(
+  item: Pick<WatchlistItem, 'ticker' | 'market'>,
+): string {
+  return `${normalizeWatchlistMarket(item.market)}:${normalizeWatchlistTicker(item.ticker)}`;
+}
+
+function watchlistMatches(row: WatchlistItem, ticker: string, market?: string): boolean {
+  if (normalizeWatchlistTicker(row.ticker) !== normalizeWatchlistTicker(ticker)) return false;
+  if (!market) return true;
+  const rowMarket = normalizeWatchlistMarket(row.market);
+  const targetMarket = normalizeWatchlistMarket(market);
+  return rowMarket === targetMarket || rowMarket === 'UNKNOWN';
+}
+
 export function writeWatchlistItems(items: WatchlistItem[]): void {
   if (typeof window === 'undefined') return;
   const unique = new Map<string, WatchlistItem>();
   items.forEach((item) => {
-    unique.set(item.ticker.toUpperCase(), {
-      ...item,
-      ticker: item.ticker.toUpperCase(),
-    });
+    const ticker = normalizeWatchlistTicker(item.ticker);
+    if (!ticker) return;
+    const market = String(item.market ?? '').trim().toUpperCase();
+    const normalized: WatchlistItem = { ...item, ticker, ...(market ? { market } : {}) };
+    unique.set(watchlistItemKey(normalized), normalized);
   });
-  window.localStorage.setItem(
-    WATCHLIST_KEY,
-    JSON.stringify(Array.from(unique.values())),
-  );
+  window.localStorage.setItem(WATCHLIST_KEY, JSON.stringify(Array.from(unique.values())));
   window.dispatchEvent(new Event(WATCHLIST_CHANGE_EVENT));
 }
 
 export function setWatchlistTargetPrice(
   ticker: string,
   targetPrice: number | null,
+  market?: string,
 ): void {
-  const upper = ticker.toUpperCase();
   const items = readWatchlistItems();
-  if (!items.some((row) => row.ticker.toUpperCase() === upper)) return;
+  if (!items.some((row) => watchlistMatches(row, ticker, market))) return;
   writeWatchlistItems(
-    items.map((row) =>
-      row.ticker.toUpperCase() === upper ? { ...row, targetPrice } : row,
-    ),
+    items.map((row) => watchlistMatches(row, ticker, market) ? { ...row, targetPrice } : row),
   );
 }
 
-export function isInWatchlist(ticker: string): boolean {
-  return readWatchlistItems().some(
-    (item) => item.ticker.toUpperCase() === ticker.toUpperCase(),
-  );
+export function isInWatchlist(ticker: string, market?: string): boolean {
+  if (!normalizeWatchlistTicker(ticker)) return false;
+  return readWatchlistItems().some((item) => watchlistMatches(item, ticker, market));
 }
 
 export function toggleWatchlistItem(item: WatchlistItem): boolean {
-  const ticker = item.ticker.toUpperCase();
+  const ticker = normalizeWatchlistTicker(item.ticker);
+  if (!ticker) return false;
+  const market = String(item.market ?? '').trim().toUpperCase();
   const current = readWatchlistItems();
-  const exists = current.some((row) => row.ticker.toUpperCase() === ticker);
-
+  const exists = current.some((row) => watchlistMatches(row, ticker, market || undefined));
   const next = exists
-    ? current.filter((row) => row.ticker.toUpperCase() !== ticker)
-    : [...current, { ...item, ticker }];
+    ? current.filter((row) => !watchlistMatches(row, ticker, market || undefined))
+    : [...current, { ...item, ticker, ...(market ? { market } : {}) }];
 
   writeWatchlistItems(next);
 
-  if (
-    typeof Notification !== 'undefined' &&
-    Notification.permission === 'granted'
-  ) {
+  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
     new Notification(exists ? '관심종목 해제' : '관심종목 추가', {
-      body: `${item.name || ticker} ${
-        exists ? '관심종목에서 삭제했습니다.' : '관심종목에 추가했습니다.'
-      }`,
+      body: `${item.name || ticker} ${exists ? '관심종목에서 삭제했습니다.' : '관심종목에 추가했습니다.'}`,
     });
   }
 
