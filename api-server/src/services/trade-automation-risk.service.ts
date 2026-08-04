@@ -1,3 +1,4 @@
+import { evaluateTradingOptimization } from './trade-automation-optimization.service';
 import {
   DEFAULT_TRADING_POLICY,
   type TradingPlanInput,
@@ -30,6 +31,8 @@ function normalizedList(value: unknown, maximum: number) {
 export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | undefined): TradingPolicy {
   const input = value ?? {};
   const leverage = Number(input.bitgetLeverage);
+  const pilotStage = input.pilotStage === 'limited-50' || input.pilotStage === 'validated'
+    ? input.pilotStage : 'approval-20';
   return {
     mode: input.mode === 'automatic' ? 'automatic' : 'approval',
     automaticEnabled: input.automaticEnabled === true,
@@ -53,6 +56,22 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     maxDailyOrders: Math.round(clampNumber(input.maxDailyOrders, 1, 100, DEFAULT_TRADING_POLICY.maxDailyOrders)),
     maxConsecutiveLosses: Math.round(clampNumber(input.maxConsecutiveLosses, 1, 20, DEFAULT_TRADING_POLICY.maxConsecutiveLosses)),
     bitgetLeverage: leverage === 3 ? 3 : 2,
+    riskOptimizationEnabled: input.riskOptimizationEnabled !== false,
+    pilotStage,
+    riskPerTradePercent: {
+      bitget: clampNumber(input.riskPerTradePercent?.bitget, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.bitget),
+      upbit: clampNumber(input.riskPerTradePercent?.upbit, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.upbit),
+      kiwoom: clampNumber(input.riskPerTradePercent?.kiwoom, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.kiwoom),
+    },
+    totalDailyLossLimitPercent: clampNumber(input.totalDailyLossLimitPercent, 0.1, 2, DEFAULT_TRADING_POLICY.totalDailyLossLimitPercent),
+    minExpectedValueR: clampNumber(input.minExpectedValueR, 0, 2, DEFAULT_TRADING_POLICY.minExpectedValueR),
+    minStrategySampleSize: Math.round(clampNumber(input.minStrategySampleSize, 20, 10_000, DEFAULT_TRADING_POLICY.minStrategySampleSize)),
+    minProfitFactor: clampNumber(input.minProfitFactor, 1, 5, DEFAULT_TRADING_POLICY.minProfitFactor),
+    maxStrategyDrawdownPercent: clampNumber(input.maxStrategyDrawdownPercent, 1, 50, DEFAULT_TRADING_POLICY.maxStrategyDrawdownPercent),
+    maxEstimatedSlippagePercent: clampNumber(input.maxEstimatedSlippagePercent, 0.01, 2, DEFAULT_TRADING_POLICY.maxEstimatedSlippagePercent),
+    maxAverageSpreadPercent: clampNumber(input.maxAverageSpreadPercent, 0.01, 2, DEFAULT_TRADING_POLICY.maxAverageSpreadPercent),
+    maxCorrelatedExposurePercent: clampNumber(input.maxCorrelatedExposurePercent, 1, 100, DEFAULT_TRADING_POLICY.maxCorrelatedExposurePercent),
+    maxEconomicsAgeHours: clampNumber(input.maxEconomicsAgeHours, 1, 168, DEFAULT_TRADING_POLICY.maxEconomicsAgeHours),
   };
 }
 
@@ -129,7 +148,7 @@ export function evaluateTradingPlan(
 
   if (plan.exchange === 'bitget') {
     if (!['long', 'short', 'buy', 'sell'].includes(plan.side)) add(blockCodes, 'BITGET_SIDE_INVALID');
-    if (plan.leverage !== 2 && plan.leverage !== 3) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
+    if (plan.leverage !== 1 && plan.leverage !== 2 && plan.leverage !== 3) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
     if ((plan.leverage ?? 0) > 3) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
     if (plan.marginMode !== 'crossed' && plan.marginMode !== 'isolated') add(blockCodes, 'BITGET_MARGIN_MODE_REQUIRED');
     if (snapshot.existingPositionSide && snapshot.existingPositionSide !== plan.side && !plan.reduceOnly) {
@@ -167,5 +186,20 @@ export function evaluateTradingPlan(
   if (plan.targetPrices.length === 0 || !finitePositive(plan.stopPrice)) add(blockCodes, 'EXIT_PLAN_REQUIRED');
   if (plan.invalidateAction === 'close') warnings.push('조건 무효화 시 청산은 위험관리 재검사 후에만 실행됩니다.');
 
-  return { allowed: blockCodes.length === 0, blockCodes, warnings };
+  const hasOptimizationContext = plan.accountMode === 'live'
+    || plan.economics != null
+    || plan.signalState != null
+    || plan.signalExpiresAt != null
+    || plan.entryPrice != null
+    || plan.entryZoneLow != null
+    || plan.entryZoneHigh != null
+    || plan.estimatedSlippagePercent != null
+    || plan.averageSpreadPercent != null;
+  const optimization = hasOptimizationContext ? evaluateTradingOptimization(plan, policy) : undefined;
+  if (optimization) {
+    for (const code of optimization.blockCodes) add(blockCodes, code);
+    for (const warning of optimization.warnings) if (!warnings.includes(warning)) warnings.push(warning);
+  }
+
+  return { allowed: blockCodes.length === 0, blockCodes, warnings, optimization };
 }
