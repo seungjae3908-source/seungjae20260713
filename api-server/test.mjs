@@ -51,6 +51,7 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-analysis.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-live-timeline.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-candle-normalizer.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-indicator-engine.test.ts'),
   ],
   phase12: [
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
