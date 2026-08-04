@@ -10,6 +10,8 @@ import { normalizeTradingPolicy } from '../services/trade-automation-risk.servic
 import { DEFAULT_TRADING_POLICY } from '../services/trade-automation.types';
 
 const USER = '11111111-1111-1111-1111-111111111111';
+const MONITOR_TOKEN = 'test-signal-monitor-token';
+process.env.SIGNAL_MONITOR_TOKEN = MONITOR_TOKEN;
 
 async function startServer(repository: InMemoryTradingRepository, authenticated = true) {
   const app = express();
@@ -90,7 +92,10 @@ function planInput(signalId: string) {
   };
 }
 
-test.after(() => setTradeSignalApprovalRepositoryFactoryForTests(null));
+test.after(() => {
+  setTradeSignalApprovalRepositoryFactoryForTests(null);
+  delete process.env.SIGNAL_MONITOR_TOKEN;
+});
 
 test('approval status endpoint requires authentication', async () => {
   const repository = new InMemoryTradingRepository();
@@ -130,6 +135,37 @@ test('approval queue returns safe plan summaries without account balances or cre
   }
 });
 
+test('untrusted clients cannot forge signal revalidation', async () => {
+  const repository = new InMemoryTradingRepository();
+  const automation = new TradeAutomationService(repository);
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  await repository.savePolicy(USER, policy);
+  const created = await automation.createPlan(USER, planInput('route-forgery-block'), policy, false);
+  const { server, baseUrl } = await startServer(repository);
+  try {
+    const now = new Date().toISOString();
+    const response = await fetch(`${baseUrl}/api/trade-automation/plans/${created.plan.id}/revalidate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-signal-monitor-token': 'wrong-token' },
+      body: JSON.stringify({
+        score: 100,
+        confidence: 100,
+        coreConditionsMaintained: true,
+        riskReward: 10,
+        dataTimestamp: now,
+        marketSnapshot: { ...created.plan.marketSnapshot, observedAt: now },
+      }),
+    });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error, 'SIGNAL_MONITOR_UNAUTHORIZED');
+    const stored = await repository.getPlan(USER, created.plan.id);
+    assert.equal(stored.signalScore, 82);
+    assert.equal(stored.signalConfidence, 78);
+  } finally {
+    await close(server);
+  }
+});
+
 test('weakening disables approval without submitting an order', async () => {
   const repository = new InMemoryTradingRepository();
   const automation = new TradeAutomationService(repository);
@@ -145,7 +181,7 @@ test('weakening disables approval without submitting an order', async () => {
     const now = new Date().toISOString();
     const response = await fetch(`${baseUrl}/api/trade-automation/plans/${created.plan.id}/revalidate`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-signal-monitor-token': MONITOR_TOKEN },
       body: JSON.stringify({
         score: 68,
         confidence: 63,
@@ -184,7 +220,7 @@ test('condition invalidation cancels only the unfilled remainder and preserves f
     const now = new Date().toISOString();
     const response = await fetch(`${baseUrl}/api/trade-automation/plans/${created.plan.id}/revalidate`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-signal-monitor-token': MONITOR_TOKEN },
       body: JSON.stringify({
         score: 80,
         confidence: 80,
