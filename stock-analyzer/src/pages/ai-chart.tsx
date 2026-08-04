@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Database, MonitorUp, ShieldAlert, X } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
@@ -46,19 +46,22 @@ function isMobileUserAgent(userAgent: string): boolean {
   return /Android|iPhone|iPad|iPod|Mobile|IEMobile|Opera Mini/i.test(userAgent);
 }
 
+function currentBrowserSearch(): string {
+  return typeof window === 'undefined' ? '' : window.location.search;
+}
+
 export default function AiChartPage({ embedded = false }: { embedded?: boolean }) {
-  const [location, navigate] = useLocation();
+  const [, navigate] = useLocation();
   const state = useAnalysisSelection();
   const selectSelection = state.select;
-  const browserSearch = typeof window === 'undefined' ? '' : window.location.search;
-  const search = location.includes('?') ? location.slice(location.indexOf('?')) : browserSearch;
-  const externalMode = useMemo(() => isExternalChartSearch(search), [search]);
-  const externalSyncId = useMemo(() => chartSyncIdFromSearch(search), [search]);
-  const fromUrl = useMemo(() => selectionFromSearch(search), [search]);
-  const selection = useMemo<AnalysisSelection>(
-    () => mergeChartRouteSelection(fromUrl, state.selection) ?? fallbackSelection(),
-    [fromUrl, state.selection],
-  );
+  const initialSearchRef = useRef(currentBrowserSearch());
+  const externalMode = isExternalChartSearch(initialSearchRef.current);
+  const externalSyncId = chartSyncIdFromSearch(initialSearchRef.current);
+  const [selection, setSelection] = useState<AnalysisSelection>(() => (
+    mergeChartRouteSelection(selectionFromSearch(initialSearchRef.current), state.selection)
+    ?? state.selection
+    ?? fallbackSelection()
+  ));
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(null);
@@ -88,9 +91,27 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     channelRef.current?.postMessage(createChartWindowMessage('selection', sourceIdRef.current, next));
   }, []);
 
+  const applySelection = useCallback((next: AnalysisSelection, publish: boolean) => {
+    if (sameSelection(selectionRef.current, next)) return;
+    selectionRef.current = next;
+    setSelection(next);
+    selectSelection(next);
+    setAnalysis(null);
+    if (publish) publishSelection(next);
+
+    if (!embedded && typeof window !== 'undefined') {
+      const nextLocation = buildChartPath(next, externalMode ? syncSessionIdRef.current : undefined);
+      if (`${window.location.pathname}${window.location.search}` !== nextLocation) {
+        navigate(nextLocation, { replace: true });
+      }
+    }
+  }, [embedded, externalMode, navigate, publishSelection, selectSelection]);
+
   useEffect(() => {
-    if (typeof BroadcastChannel === 'undefined') {
-      if (externalMode) setExternalWindowStatus('이 브라우저는 외부 차트 동기화를 지원하지 않습니다.');
+    if (embedded || typeof BroadcastChannel === 'undefined') {
+      if (externalMode && typeof BroadcastChannel === 'undefined') {
+        setExternalWindowStatus('이 브라우저는 외부 차트 동기화를 지원하지 않습니다.');
+      }
       return;
     }
 
@@ -111,12 +132,8 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         }
         return;
       }
-      if (sameSelection(selectionRef.current, message.selection)) return;
 
-      selectSelection(message.selection);
-      setAnalysis(null);
-      navigate(buildChartPath(message.selection, externalMode ? syncSessionIdRef.current : undefined), { replace: true });
-      setExternalWindowStatus(externalMode ? '원래 앱의 차트 선택을 동기화했습니다.' : '외부 창의 차트 선택을 동기화했습니다.');
+      applySelection(message.selection, false);
     };
 
     const notifyClosed = () => {
@@ -131,7 +148,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       channel.close();
       if (channelRef.current === channel) channelRef.current = null;
     };
-  }, [externalMode, navigate, selectSelection]);
+  }, [applySelection, embedded, externalMode]);
 
   useEffect(() => () => {
     if (popupPollRef.current != null) window.clearInterval(popupPollRef.current);
@@ -139,24 +156,19 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   const market: ChartBroadcastMarket = selection.market === 'US' ? 'US' : 'KR';
   const updateSelection = useCallback((next: { ticker: string; name: string; market: ChartBroadcastMarket; timeframe: string }) => {
+    const current = selectionRef.current;
     const merged: AnalysisSelection = {
-      ...selection,
+      ...current,
       assetType: 'stock',
       market: next.market,
       symbol: next.ticker,
       ticker: next.ticker,
       displayName: next.name,
       timeframe: next.timeframe,
-      selectedAt: selection.ticker === next.ticker ? selection.selectedAt : new Date().toISOString(),
+      selectedAt: current.ticker === next.ticker ? current.selectedAt : new Date().toISOString(),
     };
-    const changed = selection.ticker !== merged.ticker || selection.market !== merged.market || selection.timeframe !== merged.timeframe || selection.displayName !== merged.displayName;
-    if (changed) {
-      selectSelection(merged);
-      publishSelection(merged);
-    }
-    const nextLocation = buildChartPath(merged, externalMode ? syncSessionIdRef.current : undefined);
-    if (!embedded && `${window.location.pathname}${window.location.search}` !== nextLocation) navigate(nextLocation, { replace: true });
-  }, [embedded, externalMode, navigate, publishSelection, selectSelection, selection]);
+    applySelection(merged, true);
+  }, [applySelection]);
 
   const openExternalWindow = useCallback(() => {
     const currentPopup = popupRef.current;
