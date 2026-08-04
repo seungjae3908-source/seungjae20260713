@@ -11,8 +11,9 @@ import {
 import {
   buildChartPath,
   buildExternalChartPath,
+  chartExternalWindowChannel,
   chartSelectionKey,
-  CHART_EXTERNAL_WINDOW_CHANNEL,
+  chartSyncIdFromSearch,
   CHART_EXTERNAL_WINDOW_NAME,
   createChartWindowMessage,
   createChartWindowSourceId,
@@ -50,6 +51,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const selectSelection = state.select;
   const search = location.includes('?') ? location.slice(location.indexOf('?')) : '';
   const externalMode = useMemo(() => isExternalChartSearch(search), [search]);
+  const externalSyncId = useMemo(() => chartSyncIdFromSearch(search), [search]);
   const fromUrl = useMemo(() => selectionFromSearch(search), [search]);
   const selection = useMemo<AnalysisSelection>(() => fromUrl
     ? { ...(state.selection?.ticker === fromUrl.ticker ? state.selection : {}), ...fromUrl }
@@ -58,6 +60,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(null);
   const sourceIdRef = useRef(createChartWindowSourceId());
+  const syncSessionIdRef = useRef(externalSyncId || createChartWindowSourceId());
   const channelRef = useRef<BroadcastChannel | null>(null);
   const popupRef = useRef<Window | null>(null);
   const popupPollRef = useRef<number | null>(null);
@@ -94,7 +97,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       return;
     }
 
-    const channel = new BroadcastChannel(CHART_EXTERNAL_WINDOW_CHANNEL);
+    const channel = new BroadcastChannel(chartExternalWindowChannel(syncSessionIdRef.current));
     channelRef.current = channel;
     channel.onmessage = (event: MessageEvent<unknown>) => {
       const message = parseChartWindowMessage(event.data);
@@ -115,7 +118,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
       selectSelection(message.selection);
       setAnalysis(null);
-      navigate(buildChartPath(message.selection, externalMode), { replace: true });
+      navigate(buildChartPath(message.selection, externalMode ? syncSessionIdRef.current : undefined), { replace: true });
       setExternalWindowStatus(externalMode ? '원래 앱의 차트 선택을 동기화했습니다.' : '외부 창의 차트 선택을 동기화했습니다.');
     };
 
@@ -154,7 +157,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       selectSelection(merged);
       publishSelection(merged);
     }
-    const nextLocation = buildChartPath(merged, externalMode);
+    const nextLocation = buildChartPath(merged, externalMode ? syncSessionIdRef.current : undefined);
     if (!embedded && location !== nextLocation) navigate(nextLocation, { replace: true });
   }, [embedded, externalMode, location, navigate, publishSelection, selectSelection, selection]);
 
@@ -168,7 +171,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     }
 
     const popup = window.open(
-      buildExternalChartPath(selectionRef.current),
+      buildExternalChartPath(selectionRef.current, syncSessionIdRef.current),
       CHART_EXTERNAL_WINDOW_NAME,
       externalChartWindowFeatures(window.screen),
     );
