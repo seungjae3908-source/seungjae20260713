@@ -56,6 +56,29 @@ jobs:
       - name: Typecheck backend
         run: pnpm --dir api-server run typecheck
 
+      - name: Lint unified search contract tests
+        run: >-
+          pnpm dlx @biomejs/biome@2.4.16 lint --error-on-warnings
+          stock-analyzer/src/lib/unified-asset-search.test.ts
+          stock-analyzer/e2e/unified-asset-search.spec.ts
+
+      - name: Scan unified search contract tests for forbidden patterns
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          files=(
+            stock-analyzer/src/lib/unified-asset-search.test.ts
+            stock-analyzer/e2e/unified-asset-search.spec.ts
+          )
+          for file in "${files[@]}"; do
+            test -f "$file"
+          done
+          pattern='as[[:space:]]+any|@ts-ignore|eval[[:space:]]*\(|new[[:space:]]+Function[[:space:]]*\(|child_process|process\.env|/api/trade-automation|/api/stocks/auto-trade|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|client[_-]?secret|api[_-]?key[[:space:]]*[:=]'
+          if grep -nEi "$pattern" "${files[@]}"; then
+            echo 'Unified search contract tests contain a forbidden type bypass, dynamic execution, secret, or order endpoint pattern.' >&2
+            exit 1
+          fi
+
       - name: Run unified search unit and API tests
         run: cd api-server && node ./test.mjs search
 
