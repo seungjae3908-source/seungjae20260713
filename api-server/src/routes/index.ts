@@ -19,6 +19,7 @@ import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
 import tradeSignalApprovalRouter from './trade-signal-approval';
+import tradeSignalAlertsRouter from './trade-signal-alerts';
 import scannerApprovalRouter from './scanner-approval';
 import {
   requireAdmin,
@@ -83,6 +84,7 @@ router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
 router.use('/trade-automation', scannerApprovalRouter);
 router.use('/trade-automation', tradeAutomationRouter);
 router.use('/trade-automation', tradeSignalApprovalRouter);
+router.use('/trade-automation', tradeSignalAlertsRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
 router.use('/', aiChatRouter);
