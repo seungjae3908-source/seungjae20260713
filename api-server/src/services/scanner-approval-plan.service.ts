@@ -122,9 +122,9 @@ export function parseKiwoomTopOfBook(value: Record<string, unknown>) {
   };
 }
 
-function previousCloseMove(candles: Candle[]) {
+function oneMinuteMove(candles: Candle[]) {
   const recent = candles.filter((item) => Number.isFinite(item.close) && item.close > 0).slice(-2);
-  if (recent.length < 2) return 0;
+  if (recent.length < 2) throw new Error('SCANNER_MINUTE_DATA_INSUFFICIENT');
   return ((recent[1].close - recent[0].close) / recent[0].close) * 100;
 }
 
@@ -149,21 +149,24 @@ export function buildLongExitPlan(price: number, candles: Candle[]) {
   if (!Number.isFinite(price) || price <= 0) throw new Error('SCANNER_PRICE_INVALID');
   const recent = candles.slice(-20);
   if (recent.length < 10) throw new Error('SCANNER_CANDLES_INSUFFICIENT');
-  const support = Math.min(...recent.map((item) => item.low).filter((item) => Number.isFinite(item) && item > 0));
+  const lows = recent.map((item) => item.low).filter((item) => Number.isFinite(item) && item > 0);
+  if (!lows.length) throw new Error('SCANNER_CANDLES_INVALID');
+  const support = Math.min(...lows);
   const atr = averageTrueRange(candles) ?? price * 0.02;
   const volatilityStop = price - Math.max(atr * 1.5, price * 0.015);
   const structuralStop = support * 0.995;
   const rawStop = Math.max(volatilityStop, structuralStop);
-  const stopPrice = Math.max(price * 0.92, Math.min(price * 0.99, rawStop));
+  const stopPrice = Math.max(1, Math.round(Math.max(price * 0.92, Math.min(price * 0.99, rawStop))));
   const riskPerShare = price - stopPrice;
   if (!Number.isFinite(riskPerShare) || riskPerShare <= 0) throw new Error('SCANNER_STOP_PLAN_INVALID');
+  const firstTarget = Math.round(price + riskPerShare * 1.5);
+  const secondTarget = Math.round(price + riskPerShare * 2.5);
+  const riskReward = (firstTarget - price) / riskPerShare;
+  if (!Number.isFinite(riskReward) || riskReward < 1.45) throw new Error('SCANNER_RISK_REWARD_INVALID');
   return {
-    stopPrice: Math.max(1, Math.round(stopPrice)),
-    targetPrices: [
-      Math.round(price + riskPerShare * 1.5),
-      Math.round(price + riskPerShare * 2.5),
-    ],
-    riskReward: 1.5,
+    stopPrice,
+    targetPrices: [firstTarget, secondTarget],
+    riskReward,
     atr,
     support,
   };
@@ -213,8 +216,8 @@ export class ScannerApprovalPlanService {
     const requestedInvestmentKrw = Math.floor(clamp(
       request.requestedInvestmentKrw,
       5_000,
-      Math.min(policy.maxOrderKrw, policy.totalCapitalKrw),
-      Math.min(policy.maxOrderKrw, policy.totalCapitalKrw),
+      policy.maxOrderKrw,
+      Math.min(policy.maxOrderKrw, policy.totalCapitalKrw * policy.maxAssetPercent / 100),
     ));
 
     const filters = {
@@ -247,40 +250,52 @@ export class ScannerApprovalPlanService {
       this.repository.listPlans(userId),
       this.repository.listOrders(userId),
     ]);
+    const activePlans = plans.filter((item) => activePlanStates(item.state));
+    const activeOrders = orders.filter((item) => activeOrderStates(item.state));
+    const duplicatePlan = activePlans.find((item) => item.exchange === 'kiwoom'
+      && item.market === 'KR' && item.symbol === symbol);
+    const duplicateOrder = activeOrders.find((order) => {
+      const plan = plans.find((item) => item.id === order.planId);
+      return plan?.exchange === 'kiwoom' && plan.market === 'KR' && plan.symbol === symbol;
+    });
+    if (duplicatePlan || duplicateOrder) throw new Error('SCANNER_DUPLICATE_ACTIVE_SYMBOL');
+
     const price = finite((quote as { price?: number }).price, 0);
     if (price <= 0) throw new Error('SCANNER_PRICE_INVALID');
     const orderbook = parseKiwoomTopOfBook(orderbookRaw as Record<string, unknown>);
     const exitPlan = buildLongExitPlan(price, candles);
-    const quantity = Math.floor(requestedInvestmentKrw / price);
+    const activeReservedKrw = activePlans.reduce((sum, item) => sum + finite(item.estimatedKrw, 0), 0);
+    const availableCapitalKrw = Math.max(0, policy.totalCapitalKrw - activeReservedKrw);
+    const assetCapacityKrw = Math.max(0, policy.totalCapitalKrw * policy.maxAssetPercent / 100);
+    const safeInvestmentKrw = Math.floor(Math.min(
+      requestedInvestmentKrw,
+      policy.maxOrderKrw,
+      availableCapitalKrw,
+      assetCapacityKrw,
+    ));
+    if (safeInvestmentKrw < 5_000) throw new Error('SCANNER_RISK_CAPACITY_EXHAUSTED');
+    const quantity = Math.floor(safeInvestmentKrw / price);
     if (!Number.isSafeInteger(quantity) || quantity <= 0) throw new Error('SCANNER_ORDER_AMOUNT_TOO_SMALL');
     const estimatedKrw = Math.floor(quantity * price);
     const now = this.dependencies.now();
     const today = now.toISOString().slice(0, 10);
-    const activeOrders = orders.filter((item) => activeOrderStates(item.state));
-    const activePlans = plans.filter((item) => activePlanStates(item.state));
-    const symbolExposureKrw = activePlans
-      .filter((item) => item.exchange === 'kiwoom' && item.market === 'KR' && item.symbol === symbol)
-      .reduce((sum, item) => sum + finite(item.estimatedKrw, 0), 0);
     const openPositionCount = new Set(activeOrders.map((item) => item.planId)).size;
     const dailyOrderCount = orders.filter((item) => item.createdAt.slice(0, 10) === today).length;
-    const existingPlan = activePlans.find((item) => item.exchange === 'kiwoom' && item.market === 'KR' && item.symbol === symbol);
     const marketSnapshot: TradingMarketSnapshot = {
       observedAt: now.toISOString(),
       dataDelayMs: 0,
-      oneMinuteMovePercent: previousCloseMove(minuteCandles),
+      oneMinuteMovePercent: oneMinuteMove(minuteCandles),
       spreadPercent: orderbook.spreadPercent,
       orderbookGapPercent: orderbook.spreadPercent,
       halted: false,
-      availableBalance: policy.totalCapitalKrw,
+      availableBalance: availableCapitalKrw,
       accountValueKrw: policy.totalCapitalKrw,
       dailyPnlPercent: 0,
-      assetExposurePercent: policy.totalCapitalKrw > 0
-        ? (symbolExposureKrw / policy.totalCapitalKrw) * 100
-        : 100,
+      assetExposurePercent: 0,
       openPositionCount,
       dailyOrderCount,
       consecutiveLosses: 0,
-      existingPositionSide: existingPlan?.side ?? null,
+      existingPositionSide: null,
     };
     const conditionHash = planHash(selected);
     const bucket = Math.floor(now.getTime() / IDEMPOTENCY_BUCKET_MS);
@@ -315,7 +330,7 @@ export class ScannerApprovalPlanService {
       reduceOnly: false,
       invalidateAction: 'hold',
       signalReasons: reasons,
-      signalWarnings: [],
+      signalWarnings: ['Paper 계획은 실계좌 손익·연속손실 수치를 사용하지 않습니다.'],
       signalScore: card.score,
       signalConfidence: card.confidence,
       minimumSignalScore: minimumScore,
