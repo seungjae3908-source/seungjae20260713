@@ -51,6 +51,7 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/analysis-selection.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-analysis.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-external-window.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/scanner-request.test.ts'),
   ],
   phase12: [
