@@ -5,6 +5,12 @@ import {
   parseChartCandleTime,
   type ChartCandleTimeframe,
 } from './chart-candle-normalizer';
+import {
+  UnifiedChartDataError,
+  buildUnifiedChartUrls,
+  fetchUnifiedChartData,
+  normalizeUnifiedSymbol,
+} from './unified-chart-data';
 
 function candle(time: unknown, close: number, extra: Record<string, unknown> = {}) {
   return {
@@ -96,4 +102,115 @@ test('all supported timeframes normalize without changing their source timestamp
     assert.equal(result.candles[0].time, 1_700_000_000);
     assert.equal(result.candles[0].isClosed, true);
   }
+});
+
+test('multi-market request builder maps every required market and timeframe', () => {
+  assert.deepEqual(
+    buildUnifiedChartUrls({ market: 'KR', symbol: '005930', timeframe: '1m' }),
+    ['/api/stocks/005930/chart?tf=1m', '/api/stocks/005930/candles?tf=1m'],
+  );
+  assert.deepEqual(
+    buildUnifiedChartUrls({ market: 'US', symbol: 'aapl', timeframe: '4H' }),
+    ['/api/stocks/AAPL/chart?tf=4H', '/api/stocks/AAPL/candles?tf=4H'],
+  );
+  assert.deepEqual(
+    buildUnifiedChartUrls({ market: 'UPBIT', symbol: 'KRW-BTC', timeframe: '1H' }),
+    ['/api/crypto/spot/candles?symbol=BTC&count=200&unit=60'],
+  );
+  assert.deepEqual(
+    buildUnifiedChartUrls({ market: 'UPBIT', symbol: 'BTC', timeframe: '1D' }),
+    ['/api/crypto/spot/candles?symbol=BTC&count=200&tf=1D'],
+  );
+  assert.deepEqual(
+    buildUnifiedChartUrls({ market: 'BITGET', symbol: 'btc-usdt', timeframe: '15m' }),
+    ['/api/crypto/futures/candles?symbol=BTCUSDT&granularity=15m&limit=300'],
+  );
+});
+
+test('symbols are normalized without silently replacing an invalid market symbol', () => {
+  assert.equal(normalizeUnifiedSymbol('KR', ' 005930 '), '005930');
+  assert.equal(normalizeUnifiedSymbol('US', 'brk.b'), 'BRK.B');
+  assert.equal(normalizeUnifiedSymbol('UPBIT', 'KRW-BTC'), 'BTC');
+  assert.equal(normalizeUnifiedSymbol('BITGET', 'btc/usdt'), 'BTCUSDT');
+  assert.equal(normalizeUnifiedSymbol('KR', 'INVALID'), '');
+});
+
+test('stock chart falls back only after a missing primary route and keeps strict normalization', async () => {
+  const calls: string[] = [];
+  const result = await fetchUnifiedChartData({
+    market: 'KR',
+    symbol: '005930',
+    timeframe: '5m',
+    fetcher: async (input) => {
+      calls.push(String(input));
+      if (calls.length === 1) {
+        return new Response(JSON.stringify({ error: 'NOT_FOUND' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({
+        provider: 'test',
+        fetchedAt: '2026-08-04T00:00:00.000Z',
+        candles: [
+          candle(1_700_000_000, 100),
+          candle('invalid-time', 999),
+          candle(1_700_000_300, 101),
+        ],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(result.normalization.candles.length, 2);
+  assert.equal(result.normalization.droppedRows, 1);
+  assert.equal(result.provider, 'test');
+});
+
+test('HTTP 429 is classified as retryable rate limiting without using the fallback route', async () => {
+  let calls = 0;
+  await assert.rejects(
+    fetchUnifiedChartData({
+      market: 'US',
+      symbol: 'AAPL',
+      timeframe: '1m',
+      fetcher: async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ message: 'RATE_LIMITED' }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof UnifiedChartDataError);
+      assert.equal(error.kind, 'rate-limited');
+      assert.equal(error.status, 429);
+      assert.equal(error.retryable, true);
+      return true;
+    },
+  );
+  assert.equal(calls, 1);
+});
+
+test('malformed successful payload is rejected and an empty candle list stays explicit', async () => {
+  await assert.rejects(
+    fetchUnifiedChartData({
+      market: 'UPBIT',
+      symbol: 'BTC',
+      timeframe: '15m',
+      fetcher: async () => new Response('not-json', { status: 200 }),
+    }),
+    (error: unknown) => error instanceof UnifiedChartDataError && error.kind === 'malformed-response',
+  );
+
+  const empty = await fetchUnifiedChartData({
+    market: 'BITGET',
+    symbol: 'EMPTYUSDT',
+    timeframe: '15m',
+    fetcher: async () => new Response(JSON.stringify({ provider: 'test', candles: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  });
+  assert.equal(empty.normalization.candles.length, 0);
 });
