@@ -93,14 +93,15 @@ jobs:
 
       - name: Remove temporary publication files
         run: |
+          rm -rf scripts/__pycache__
           rm -f scripts/apply-agent-hub-prompt-compiler.py
           rm -f scripts/.prompt-compiler-payload-*
-          rm -f .github/workflows/prompt-compiler-validation.yml
+          git restore .github/workflows/agent-hub-free.yml
 
-      - name: Commit validated Prompt Compiler
+      - name: Commit validated Prompt Compiler source
         run: |
           set -Eeuo pipefail
           git add -A
           git diff --cached --check
-          git commit -m 'feat: add Agent Hub Prompt Compiler'
+          git commit -m 'feat: add Agent Hub Prompt Compiler source'
           git push origin HEAD:agent/prompt-compiler-v1
