@@ -11,6 +11,20 @@ import { DEFAULT_TRADING_POLICY } from '../services/trade-automation.types';
 
 const USER = '11111111-1111-1111-1111-111111111111';
 
+function validRevalidation(plan: Record<string, any>) {
+  const now = new Date().toISOString();
+  return {
+    score: 84,
+    confidence: 79,
+    coreConditionsMaintained: true,
+    riskReward: 1.5,
+    reasons: ['server revalidated'],
+    warnings: [],
+    dataTimestamp: now,
+    marketSnapshot: { ...plan.marketSnapshot, observedAt: now },
+  };
+}
+
 async function startServer(
   repository: InMemoryTradingRepository,
   serviceFactory = () => ({
@@ -22,6 +36,7 @@ async function startServer(
       liveOrderEnabled: false,
       received: request,
     }),
+    revalidatePaperPlan: async (_userId: string, plan: Record<string, any>) => validRevalidation(plan),
   }),
   authenticated = true,
 ) {
@@ -85,6 +100,20 @@ function paperPlanInput(signalId: string) {
     signalRiskReward: 1.5,
     signalCoreConditionsMaintained: true,
     signalExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    scannerContext: {
+      market: 'KR',
+      timeframe: '1D',
+      selectedConditions: ['거래량 증가', '5일선 돌파'],
+      volumeThreshold: null,
+      tradingValueThreshold: null,
+      marketCapThreshold: null,
+      volumeLookbackDays: 20,
+      tradingValueLookbackDays: 20,
+      minimumScore: 70,
+      minimumConfidence: 60,
+      maximumRiskScore: 50,
+      maxEntryDriftPercent: 2.5,
+    },
     marketSnapshot: {
       observedAt: now,
       dataDelayMs: 0,
@@ -132,6 +161,7 @@ test('scanner plan route allowlists inputs and ignores forged price or score fie
         liveOrderEnabled: false,
       };
     },
+    revalidatePaperPlan: async (_userId: string, plan: Record<string, any>) => validRevalidation(plan),
   }));
   try {
     const response = await fetch(`${baseUrl}/api/trade-automation/scanner/plans`, {
@@ -161,7 +191,7 @@ test('scanner plan route allowlists inputs and ignores forged price or score fie
   }
 });
 
-test('paper approval requires explicit confirmation and fills without exchange connection', async () => {
+test('paper approval requires explicit confirmation, server revalidation, and fills without exchange connection', async () => {
   const repository = new InMemoryTradingRepository();
   const policy = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
@@ -173,14 +203,22 @@ test('paper approval requires explicit confirmation and fills without exchange c
   const automation = new TradeAutomationService(repository);
   const created = await automation.createPlan(USER, paperPlanInput('paper-route'), policy, false);
   assert.ok(created.plan);
+  let revalidationCalls = 0;
 
-  const { server, baseUrl } = await startServer(repository);
+  const { server, baseUrl } = await startServer(repository, () => ({
+    createPaperPlan: async () => { throw new Error('not used'); },
+    revalidatePaperPlan: async (_userId: string, plan: Record<string, any>) => {
+      revalidationCalls += 1;
+      return validRevalidation(plan);
+    },
+  }));
   try {
     const denied = await fetch(`${baseUrl}/api/trade-automation/plans/${created.plan.id}/approve-paper`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
     });
     assert.equal(denied.status, 409);
     assert.equal((await denied.json()).error, 'EXPLICIT_APPROVAL_REQUIRED');
+    assert.equal(revalidationCalls, 0);
 
     const nativeFetch = globalThis.fetch;
     let outbound = 0;
@@ -195,6 +233,7 @@ test('paper approval requires explicit confirmation and fills without exchange c
       });
       assert.equal(approved.status, 200);
       const body = await approved.json();
+      assert.equal(revalidationCalls, 1);
       assert.equal(body.order.state, 'FILLED');
       assert.equal(body.order.filledQuantity, 4);
       assert.equal(body.paperOrderCreated, true);
@@ -204,6 +243,39 @@ test('paper approval requires explicit confirmation and fills without exchange c
     } finally {
       globalThis.fetch = nativeFetch;
     }
+  } finally {
+    await close(server);
+  }
+});
+
+test('condition break at final approval expires the plan and creates zero orders', async () => {
+  const repository = new InMemoryTradingRepository();
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  await repository.savePolicy(USER, policy);
+  const automation = new TradeAutomationService(repository);
+  const created = await automation.createPlan(USER, paperPlanInput('final-revalidation-break'), policy, false);
+  assert.ok(created.plan);
+  const { server, baseUrl } = await startServer(repository, () => ({
+    createPaperPlan: async () => { throw new Error('not used'); },
+    revalidatePaperPlan: async (_userId: string, plan: Record<string, any>) => ({
+      ...validRevalidation(plan),
+      score: 40,
+      confidence: 40,
+      coreConditionsMaintained: false,
+      invalidationReason: 'SCANNER_AND_CONDITIONS_NOT_MAINTAINED',
+    }),
+  }));
+  try {
+    const response = await fetch(`${baseUrl}/api/trade-automation/plans/${created.plan.id}/approve`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved: true }),
+    });
+    assert.equal(response.status, 409);
+    const body = await response.json();
+    assert.equal(body.error, 'TRADE_PLAN_SIGNAL_NOT_APPROVABLE');
+    const stored = await repository.getPlan(USER, created.plan.id);
+    assert.equal(stored.state, 'EXPIRED');
+    assert.equal(stored.signalState, 'INVALIDATED');
+    assert.equal((await repository.listOrders(USER)).length, 0);
   } finally {
     await close(server);
   }
