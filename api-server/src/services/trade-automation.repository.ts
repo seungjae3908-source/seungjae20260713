@@ -60,14 +60,15 @@ export class InMemoryTradingRepository implements TradingRepository {
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
   async insertPlan(plan: TradingPlan) {
-    const existing = await this.findPlanByIdempotency(plan.userId, plan.idempotencyKey);
+    const existing = [...this.plans.values()]
+      .find((item) => item.userId === plan.userId && item.idempotencyKey === plan.idempotencyKey);
     if (existing) return { plan: existing, inserted: false };
     this.plans.set(plan.id, plan);
     return { plan, inserted: true };
   }
   async compareAndSetPlan(plan: TradingPlan, expectedState: TradingOrderState) {
-    const current = await this.getPlan(plan.userId, plan.id);
-    if (!current || current.state !== expectedState) return null;
+    const current = this.plans.get(plan.id);
+    if (!current || current.userId !== plan.userId || current.state !== expectedState) return null;
     this.plans.set(plan.id, plan);
     return plan;
   }
@@ -77,10 +78,9 @@ export class InMemoryTradingRepository implements TradingRepository {
     return [...this.orders.values()].find((item) => item.userId === userId && item.planId === planId) ?? null;
   }
   async insertOrder(order: TradingOrder) {
-    const existing = await this.findOrderByPlan(order.userId, order.planId)
-      ?? [...this.orders.values()].find((item) => item.userId === order.userId
-        && item.exchange === order.exchange && item.clientOrderId === order.clientOrderId)
-      ?? null;
+    const existing = [...this.orders.values()].find((item) => item.userId === order.userId
+      && (item.planId === order.planId
+        || (item.exchange === order.exchange && item.clientOrderId === order.clientOrderId))) ?? null;
     if (existing) return { order: existing, inserted: false };
     this.orders.set(order.id, order);
     return { order, inserted: true };
