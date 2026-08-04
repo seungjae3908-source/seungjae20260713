@@ -1,3 +1,5 @@
+import type { ScannerTradingSignal } from './scanner-approval.types';
+
 export type TradingExchange = 'bitget' | 'upbit' | 'kiwoom';
 export type TradingMode = 'approval' | 'automatic';
 export type TradingAccountMode = 'paper' | 'mock' | 'live';
@@ -102,6 +104,11 @@ export type TradingPlanInput = {
   invalidateAction?: 'hold' | 'reduce' | 'close';
   signalReasons: string[];
   marketSnapshot: TradingMarketSnapshot;
+  scannerSignal?: ScannerTradingSignal | null;
+  scannerApprovedTotalKrw?: number | null;
+  scannerEntryLegSequence?: 1 | 2 | 3 | null;
+  scannerParentPlanId?: string | null;
+  approvalNonce?: string | null;
 };
 
 export type TradingPlan = TradingPlanInput & {
