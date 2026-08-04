@@ -88,6 +88,7 @@ assert(spec.includes('/stock-info?asset=stock&market=KR&ticker=005930'), 'stock 
 
 const capabilityIndex = routes.indexOf("router.use(requireCapability('canAccessBasicInfo'));");
 const coinFeedIndex = routes.indexOf("router.get('/stocks/special-feed'");
+const financialDelayIndex = routes.indexOf("router.use('/stocks/:ticker/financials'");
 const stocksRouterIndex = routes.indexOf("router.use('/stocks', stocksRouter);");
 assert(capabilityIndex >= 0 && coinFeedIndex > capabilityIndex, 'optional coin feed must remain behind basic-info authorization');
 assert(stocksRouterIndex > coinFeedIndex, 'optional coin feed fallback must run before the stock feed router');
@@ -95,6 +96,26 @@ assert(routes.includes("if (asset !== 'coin')"), 'stock feed requests must conti
 assert(routes.includes("res.status(200).json({"), 'unconnected coin feed must degrade through an HTTP 200 response');
 assert(routes.includes("items: []"), 'unconnected coin feed must return an empty item list');
 assert(routes.includes("ok: false"), 'unconnected coin feed must remain visibly marked as unavailable');
+
+assert(
+  financialDelayIndex > capabilityIndex && financialDelayIndex < stocksRouterIndex,
+  'financial provider degradation must remain authorized and scoped before the stock router',
+);
+assert(
+  routes.includes("res.statusCode !== 503 || payload?.code !== 'FINANCIAL_PROVIDER_DELAY'"),
+  'only the exact 503 FINANCIAL_PROVIDER_DELAY response may be degraded',
+);
+assert(routes.includes('const originalJson = res.json.bind(res);'), 'successful financial responses must pass through the original serializer');
+assert(routes.includes('res.statusCode = 200;'), 'the exact provider delay must become a non-error HTTP response');
+assert(routes.includes('available: false'), 'provider delay must remain explicitly unavailable');
+assert(routes.includes('financials: unavailableFinancials'), 'provider delay must preserve the frontend financials response shape');
+assert(routes.includes('annual: []') && routes.includes('quarterly: []'), 'unavailable financial data must use empty statement arrays');
+assert(routes.includes('source: null'), 'unavailable financial data must not claim a provider source');
+assert(
+  (routes.match(/FINANCIAL_PROVIDER_DELAY/g) ?? []).length === 1,
+  'financial delay conversion must not broaden to additional endpoints or error codes',
+);
+assert(!routes.includes('res.statusCode >= 500'), 'generic server errors must never be converted into successful responses');
 
 assert(auth.includes('useMemo, useRef, useState'), 'auth provider must import useRef for logout coordination');
 assert(auth.includes('const signingOutRef = useRef(false);'), 'auth provider must track an active logout barrier');
@@ -121,4 +142,4 @@ assert(
 assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must explicitly clear the local session');
 assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session and profile cleanup finish');
 
-console.log('[staging-login-selector-contract] logout classification, profile-request drain, diagnostic redaction, optional coin-feed degradation, and navigation stability are locked down');
+console.log('[staging-login-selector-contract] logout classification, profile-request drain, diagnostic redaction, optional provider degradation, and navigation stability are locked down');
