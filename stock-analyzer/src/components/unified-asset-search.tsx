@@ -12,11 +12,16 @@ import { AlertTriangle, Clock3, Loader2, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   fetchUnifiedAssetSuggestions,
+  prioritizeUnifiedAssetSuggestions,
   type UnifiedAssetFilter,
   type UnifiedAssetSuggestion,
   type UnifiedAssetSuggestResponse,
   type UnifiedMarketFilter,
 } from '@/lib/unified-asset-search';
+import {
+  readWatchlistItems,
+  WATCHLIST_CHANGE_EVENT,
+} from '@/lib/stock-display';
 
 const RECENT_KEY = 'unified-asset-search:recent:v1';
 const GROUP_ORDER: UnifiedMarketFilter[] = ['KR', 'US', 'spot', 'futures'];
@@ -28,6 +33,7 @@ const GROUP_LABEL: Record<UnifiedMarketFilter, string> = {
 };
 
 function readRecent(): UnifiedAssetSuggestion[] {
+  if (typeof window === 'undefined') return [];
   try {
     const parsed = JSON.parse(window.localStorage.getItem(RECENT_KEY) ?? '[]');
     return Array.isArray(parsed) ? parsed.slice(0, 8) : [];
@@ -39,6 +45,10 @@ function readRecent(): UnifiedAssetSuggestion[] {
 function saveRecent(item: UnifiedAssetSuggestion) {
   const next = [item, ...readRecent().filter((recent) => recent.id !== item.id)].slice(0, 8);
   window.localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+}
+
+function readSearchWatchlist() {
+  return readWatchlistItems().map((item) => ({ ticker: item.ticker, market: item.market }));
 }
 
 function marketDescription(item: UnifiedAssetSuggestion) {
@@ -86,14 +96,32 @@ export function UnifiedAssetSearch({
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [recent, setRecent] = useState<UnifiedAssetSuggestion[]>(() => readRecent());
+  const [watchlist, setWatchlist] = useState(() => readSearchWatchlist());
   const [popupStyle, setPopupStyle] = useState<CSSProperties>({});
   const trimmed = query.trim();
 
   const filteredRecent = useMemo(() => recent.filter((item) =>
     (asset === 'all' || item.assetType === asset) && (!market || item.market === market),
   ), [asset, market, recent]);
-  const items = trimmed ? response?.results ?? [] : filteredRecent;
+  const prioritizedResults = useMemo(() => prioritizeUnifiedAssetSuggestions(
+    response?.results ?? [],
+    {
+      recentIds: recent.map((item) => item.id),
+      watchlist,
+    },
+  ), [recent, response?.results, watchlist]);
+  const items = trimmed ? prioritizedResults : filteredRecent;
   const open = focused && (trimmed.length > 0 || filteredRecent.length > 0);
+
+  useEffect(() => {
+    const updateWatchlist = () => setWatchlist(readSearchWatchlist());
+    window.addEventListener(WATCHLIST_CHANGE_EVENT, updateWatchlist);
+    window.addEventListener('storage', updateWatchlist);
+    return () => {
+      window.removeEventListener(WATCHLIST_CHANGE_EVENT, updateWatchlist);
+      window.removeEventListener('storage', updateWatchlist);
+    };
+  }, []);
 
   const updatePopupPosition = useCallback(() => {
     const rect = inputRef.current?.getBoundingClientRect();
