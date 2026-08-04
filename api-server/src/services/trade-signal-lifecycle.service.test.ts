@@ -204,10 +204,11 @@ test('invalidating after partial fill preserves the fill and requests cancellati
   const created = await service.createPlan(USER, input({
     signalId: 'partial-fill-invalidation',
     quantity: 10,
-    quoteAmount: null,
+    quoteAmount: 100_000,
     marketSnapshot: { ...input().marketSnapshot, observedAt: new Date().toISOString() },
     signalExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
   }), policy, false);
+  assert.ok(created.plan);
   const approved = await service.approvePlan(USER, created.plan!.id);
   const { order } = await service.createOrder(USER, approved);
   await service.transition(order, 'ACCEPTED', 'TEST_ACCEPTED');
