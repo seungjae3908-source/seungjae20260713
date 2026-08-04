@@ -8,10 +8,40 @@ export LC_ALL=C
 : "${EXPECTED_PRODUCTION_SHA:?EXPECTED_PRODUCTION_SHA is required}"
 : "${EXPECTED_STAGING_SHA:?EXPECTED_STAGING_SHA is required}"
 : "${EXPECTED_PUBLIC_IP:?EXPECTED_PUBLIC_IP is required}"
+: "${VERIFICATION_PHASE:?VERIFICATION_PHASE is required}"
+
+readonly LEGACY_PRODUCTION_SHA='85be5c7cae0c5da7b8d9c4147b0198da9eba8452'
+case "$VERIFICATION_PHASE" in
+  pre-production-upgrade|post-production-deploy) ;;
+  *)
+    printf 'Invalid verification phase.\n' >&2
+    exit 2
+    ;;
+esac
 
 verification_failures=0
 health_checks=0
 health_failures=0
+public_ip_match=0
+production_marker_match=0
+staging_marker_match=0
+caddy_validation_valid=0
+stock_app_status=missing
+stock_app_cwd=missing
+production_internal_status=unavailable
+production_internal_timeout=1
+production_internal_server_error=0
+production_internal_sha_present=0
+production_internal_sha_match=not_applicable
+production_internal_service=''
+production_internal_ok=''
+production_external_status=unavailable
+production_external_timeout=1
+production_external_server_error=0
+production_external_sha_present=0
+production_external_sha_match=not_applicable
+production_external_service=''
+production_external_ok=''
 
 section() {
   printf '\n===== %s =====\n' "$1"
@@ -31,6 +61,12 @@ sanitize() {
 record_failure() {
   verification_failures=$((verification_failures + 1))
   printf 'VERIFICATION_FAILURE\t%s\n' "$1" | sanitize
+}
+
+field_value() {
+  local fields="$1"
+  local key="$2"
+  printf '%s\n' "$fields" | tr '\t' '\n' | awk -F= -v expected="$key" '$1 == expected {sub(/^[^=]*=/, ""); print; exit}'
 }
 
 low_io_du() {
@@ -335,7 +371,7 @@ health_probe() {
   local target="$1"
   local url="$2"
   local expected_sha="$3"
-  local response curl_rc meta body status total content_type timeout_flag server_error fields actual_sha sha_match
+  local response curl_rc meta body status total content_type timeout_flag server_error fields actual_sha sha_present sha_match service ok parse_error probe_failed
 
   health_checks=$((health_checks + 1))
   response="$(curl --get --silent --show-error \
@@ -364,24 +400,137 @@ health_probe() {
   [[ "$status" =~ ^5[0-9][0-9]$ ]] && server_error=1
 
   fields="$(printf '%s' "$body" | health_allowed_fields)"
-  actual_sha="$(printf '%s\n' "$fields" | tr '\t' '\n' | awk -F= '$1 == "sha" {print $2; exit}')"
-  sha_match=0
-  [[ -n "$actual_sha" && "$actual_sha" == "$expected_sha" ]] && sha_match=1
+  actual_sha="$(field_value "$fields" sha)"
+  service="$(field_value "$fields" service)"
+  ok="$(field_value "$fields" ok)"
+  parse_error="$(field_value "$fields" parse_error)"
+  sha_present=0
+  sha_match=not_applicable
+  if [[ -n "$actual_sha" ]]; then
+    sha_present=1
+    sha_match=0
+    [[ "$actual_sha" == "$expected_sha" ]] && sha_match=1
+  fi
 
-  printf 'HEALTH\ttarget=%s\tstatus=%s\ttotal_seconds=%s\ttimeout=%s\tserver_error=%s\tcontent_type=%s\texpected_sha=%s\tsha_match=%s' \
-    "$target" "$status" "$total" "$timeout_flag" "$server_error" "$content_type" "$expected_sha" "$sha_match"
+  printf 'HEALTH\ttarget=%s\tstatus=%s\ttotal_seconds=%s\ttimeout=%s\tserver_error=%s\tcontent_type=%s\texpected_sha=%s\tsha_present=%s\tsha_match=%s' \
+    "$target" "$status" "$total" "$timeout_flag" "$server_error" "$content_type" "$expected_sha" "$sha_present" "$sha_match"
   [[ -n "$fields" ]] && printf '\t%s' "$fields"
   printf '\n'
 
-  if [[ "$curl_rc" -ne 0 || "$status" != 200 || "$timeout_flag" -ne 0 || "$server_error" -ne 0 || "$sha_match" -ne 1 ]]; then
+  case "$target" in
+    production-internal)
+      production_internal_status="$status"
+      production_internal_timeout="$timeout_flag"
+      production_internal_server_error="$server_error"
+      production_internal_sha_present="$sha_present"
+      production_internal_sha_match="$sha_match"
+      production_internal_service="$service"
+      production_internal_ok="$ok"
+      ;;
+    production-external)
+      production_external_status="$status"
+      production_external_timeout="$timeout_flag"
+      production_external_server_error="$server_error"
+      production_external_sha_present="$sha_present"
+      production_external_sha_match="$sha_match"
+      production_external_service="$service"
+      production_external_ok="$ok"
+      ;;
+  esac
+
+  probe_failed=0
+  if [[ "$curl_rc" -ne 0 || "$status" != 200 || "$timeout_flag" -ne 0 || "$server_error" -ne 0 || "$parse_error" == 1 ]]; then
+    probe_failed=1
+  fi
+  if [[ "$target" == staging-* && ( "$sha_present" -ne 1 || "$sha_match" != 1 ) ]]; then
+    probe_failed=1
+  fi
+  if [[ "$target" == production-* && "$sha_present" -eq 1 && "$sha_match" != 1 ]]; then
+    probe_failed=1
+  fi
+  if [[ "$probe_failed" -ne 0 ]]; then
     health_failures=$((health_failures + 1))
     record_failure "health_${target}"
   fi
 }
 
+evaluate_production_identity() {
+  local transport_healthy=0
+  local service_consistent=0
+  local infrastructure_identity_ready=0
+  local both_sha_present=0
+  local both_sha_absent=0
+  local strict_sha_match=0
+  local production_health_status=failed
+  local production_identity_verified=false
+  local production_identity_source=unverified
+  local production_legacy_health_contract=false
+  local production_health_sha_present=mixed
+  local production_health_sha_match=false
+
+  if [[ "$production_internal_status" == 200 && "$production_external_status" == 200 &&
+        "$production_internal_timeout" -eq 0 && "$production_external_timeout" -eq 0 &&
+        "$production_internal_server_error" -eq 0 && "$production_external_server_error" -eq 0 &&
+        "$production_internal_ok" == true && "$production_external_ok" == true ]]; then
+    transport_healthy=1
+  fi
+  if [[ -n "$production_internal_service" &&
+        "$production_internal_service" == "$production_external_service" ]]; then
+    service_consistent=1
+  fi
+  if [[ "$production_marker_match" -eq 1 && "$caddy_active" == active &&
+        "$caddy_validation_valid" -eq 1 && "$stock_app_status" == online &&
+        "$stock_app_cwd" == /opt/stock-app && "$public_ip_match" -eq 1 ]]; then
+    infrastructure_identity_ready=1
+  fi
+  if [[ "$production_internal_sha_present" -eq 1 && "$production_external_sha_present" -eq 1 ]]; then
+    both_sha_present=1
+    production_health_sha_present=true
+  fi
+  if [[ "$production_internal_sha_present" -eq 0 && "$production_external_sha_present" -eq 0 ]]; then
+    both_sha_absent=1
+    production_health_sha_present=false
+  fi
+  if [[ "$production_internal_sha_match" == 1 && "$production_external_sha_match" == 1 ]]; then
+    strict_sha_match=1
+  fi
+
+  if [[ "$transport_healthy" -eq 1 && "$service_consistent" -eq 1 &&
+        "$infrastructure_identity_ready" -eq 1 && "$both_sha_present" -eq 1 &&
+        "$strict_sha_match" -eq 1 ]]; then
+    production_health_status=healthy
+    production_identity_verified=true
+    production_identity_source=health-response
+    production_legacy_health_contract=false
+    production_health_sha_match=true
+  elif [[ "$transport_healthy" -eq 1 && "$service_consistent" -eq 1 &&
+          "$infrastructure_identity_ready" -eq 1 && "$both_sha_absent" -eq 1 &&
+          "$VERIFICATION_PHASE" == pre-production-upgrade &&
+          "$EXPECTED_PRODUCTION_SHA" == "$LEGACY_PRODUCTION_SHA" &&
+          "$production_sha" == "$LEGACY_PRODUCTION_SHA" ]]; then
+    production_health_status=healthy
+    production_identity_verified=true
+    production_identity_source=deploy-marker
+    production_legacy_health_contract=true
+    production_health_sha_match=not_applicable
+  else
+    health_failures=$((health_failures + 1))
+    record_failure 'production_identity_verification'
+  fi
+
+  section 'production_identity_verification'
+  printf 'production_health_status=%s\n' "$production_health_status"
+  printf 'production_identity_verified=%s\n' "$production_identity_verified"
+  printf 'production_identity_source=%s\n' "$production_identity_source"
+  printf 'production_legacy_health_contract=%s\n' "$production_legacy_health_contract"
+  printf 'production_health_sha_present=%s\n' "$production_health_sha_present"
+  printf 'production_health_sha_match=%s\n' "$production_health_sha_match"
+  printf 'production_internal_external_service_match=%s\n' "$([[ "$service_consistent" -eq 1 ]] && printf true || printf false)"
+}
+
 section 'diagnostic_identity'
-printf 'mode=read_only\nincident_run_id=%s\nincident_start=%s\nincident_end=%s\ncollected_at=%s\n' \
-  "$INCIDENT_RUN_ID" "$INCIDENT_START" "$INCIDENT_END" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf 'mode=read_only\nverification_phase=%s\nincident_run_id=%s\nincident_start=%s\nincident_end=%s\ncollected_at=%s\n' \
+  "$VERIFICATION_PHASE" "$INCIDENT_RUN_ID" "$INCIDENT_START" "$INCIDENT_END" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf 'hostname='; hostname 2>/dev/null | sanitize || true
 printf 'hostname_static='; hostnamectl --static 2>/dev/null | sanitize || true
 printf 'kernel='; uname -srmo 2>/dev/null | sanitize || true
@@ -391,7 +540,9 @@ printf 'cpu_count='; getconf _NPROCESSORS_ONLN 2>/dev/null || true
 current_public_ip="$(public_ipv4)"
 printf 'public_ip=%s\n' "${current_public_ip:-unavailable}"
 printf 'expected_public_ip=%s\n' "$EXPECTED_PUBLIC_IP"
-if [[ "$current_public_ip" != "$EXPECTED_PUBLIC_IP" ]]; then
+if [[ "$current_public_ip" == "$EXPECTED_PUBLIC_IP" ]]; then
+  public_ip_match=1
+else
   record_failure 'public_ip_mismatch'
 fi
 
@@ -477,12 +628,14 @@ find /srv /opt -maxdepth 5 -type f \
 
 production_sha="$(sed -n '1p' /opt/stock-app/.deploy/current-sha 2>/dev/null | tr -d '\r\n')"
 staging_sha="$(sed -n '1p' /srv/seungjae-staging/.deploy/current-sha 2>/dev/null | tr -d '\r\n')"
+if [[ "$production_sha" == "$EXPECTED_PRODUCTION_SHA" ]]; then production_marker_match=1; fi
+if [[ "$staging_sha" == "$EXPECTED_STAGING_SHA" ]]; then staging_marker_match=1; fi
 printf 'SHA_CHECK\ttarget=production\tactual=%s\texpected=%s\tmatch=%s\n' \
-  "${production_sha:-unavailable}" "$EXPECTED_PRODUCTION_SHA" "$([[ "$production_sha" == "$EXPECTED_PRODUCTION_SHA" ]] && printf 1 || printf 0)"
+  "${production_sha:-unavailable}" "$EXPECTED_PRODUCTION_SHA" "$production_marker_match"
 printf 'SHA_CHECK\ttarget=staging\tactual=%s\texpected=%s\tmatch=%s\n' \
-  "${staging_sha:-unavailable}" "$EXPECTED_STAGING_SHA" "$([[ "$staging_sha" == "$EXPECTED_STAGING_SHA" ]] && printf 1 || printf 0)"
-[[ "$production_sha" == "$EXPECTED_PRODUCTION_SHA" ]] || record_failure 'production_state_sha_mismatch'
-[[ "$staging_sha" == "$EXPECTED_STAGING_SHA" ]] || record_failure 'staging_state_sha_mismatch'
+  "${staging_sha:-unavailable}" "$EXPECTED_STAGING_SHA" "$staging_marker_match"
+[[ "$production_marker_match" -eq 1 ]] || record_failure 'production_state_sha_mismatch'
+[[ "$staging_marker_match" -eq 1 ]] || record_failure 'staging_state_sha_mismatch'
 
 section 'current_release_links'
 find /srv /opt -maxdepth 4 -type l \
@@ -497,6 +650,9 @@ section 'pm2_safe_inventory'
 pm2_safe_inventory
 pm2_checks="$(pm2_required_checks)"
 printf '%s\n' "$pm2_checks"
+production_pm2_check="$(printf '%s\n' "$pm2_checks" | awk -F'\t' '$1 == "PM2_CHECK" && $2 == "name=stock-app" {print; exit}')"
+stock_app_status="$(field_value "$production_pm2_check" status)"
+stock_app_cwd="$(field_value "$production_pm2_check" cwd)"
 while IFS= read -r pm2_check; do
   [[ -n "$pm2_check" ]] || continue
   [[ "$pm2_check" == *$'\tmatch=1' ]] || record_failure 'pm2_required_process_mismatch'
@@ -520,8 +676,8 @@ printf 'CADDY_SERVICE\tactive_state=%s\n' "${caddy_active:-unavailable}"
 if command -v caddy >/dev/null 2>&1; then
   caddy_validation="$(caddy validate --config /etc/caddy/Caddyfile 2>&1)"
   caddy_validation_rc=$?
-  printf 'CADDY_VALIDATE\tvalid=%s\texit_code=%s\n' \
-    "$([[ "$caddy_validation_rc" -eq 0 ]] && printf 1 || printf 0)" "$caddy_validation_rc"
+  if [[ "$caddy_validation_rc" -eq 0 ]]; then caddy_validation_valid=1; fi
+  printf 'CADDY_VALIDATE\tvalid=%s\texit_code=%s\n' "$caddy_validation_valid" "$caddy_validation_rc"
   if [[ "$caddy_validation_rc" -ne 0 ]]; then
     printf '%s\n' "$caddy_validation" | tail -n 30 | sanitize
     record_failure 'caddy_config_invalid'
@@ -579,6 +735,7 @@ if [[ -n "$staging_dial" ]]; then
   health_probe 'staging-internal' "http://${staging_dial}/api/health" "$EXPECTED_STAGING_SHA"
 fi
 health_probe 'staging-external' 'https://lsj119-staging.duckdns.org/api/health' "$EXPECTED_STAGING_SHA"
+evaluate_production_identity
 
 section 'caddy_boot_logs'
 if command -v journalctl >/dev/null 2>&1; then
