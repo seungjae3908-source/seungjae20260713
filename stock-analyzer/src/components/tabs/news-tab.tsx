@@ -19,12 +19,11 @@ function sentimentTone(score: number): Tone {
   return "warning";
 }
 
-function openNews(url?: string) {
-  if (!url || !url.startsWith("http")) {
-    alert("원문 링크를 사용할 수 없습니다.");
-    return;
-  }
+function safeNewsUrl(url?: string): string | null {
+  return url && /^https?:\/\//i.test(url) ? url : null;
+}
 
+function openNews(url: string) {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
@@ -93,12 +92,17 @@ function NewsList({ items }: { items: ExtendedNewsItem[] }) {
     <ul className="space-y-2">
       {items.map((n, i) => {
         const accuracy = sourceAccuracy(n);
+        const originalUrl = safeNewsUrl(n.url);
 
         return (
           <li key={i}>
             <button
-              onClick={() => openNews(n.url)}
-              className="w-full rounded-xl bg-secondary/40 p-3 text-left transition-colors hover:bg-secondary/70"
+              type="button"
+              onClick={() => originalUrl && openNews(originalUrl)}
+              disabled={!originalUrl}
+              aria-disabled={!originalUrl}
+              title={originalUrl ? "뉴스 원문 새 창에서 열기" : "원문 링크를 사용할 수 없습니다."}
+              className="w-full rounded-xl bg-secondary/40 p-3 text-left transition-colors hover:bg-secondary/70 disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:bg-secondary/40"
             >
               <div className="flex items-start gap-3">
                 <SourceLogo domain={n.sourceDomain} name={n.source} />
@@ -132,9 +136,16 @@ function NewsList({ items }: { items: ExtendedNewsItem[] }) {
                       출처 확인
                     </span>
 
-                    <span className="rounded-full bg-blue-500/15 px-2 py-1 text-blue-400">
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-1",
+                        originalUrl
+                          ? "bg-blue-500/15 text-blue-400"
+                          : "bg-muted text-muted-foreground",
+                      )}
+                    >
                       <ExternalLink className="mr-1 inline h-3 w-3" />
-                      원문 보기
+                      {originalUrl ? "원문 보기" : "원문 링크 없음"}
                     </span>
                   </div>
 
@@ -143,7 +154,7 @@ function NewsList({ items }: { items: ExtendedNewsItem[] }) {
                   </div>
                 </div>
 
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
               </div>
             </button>
           </li>
