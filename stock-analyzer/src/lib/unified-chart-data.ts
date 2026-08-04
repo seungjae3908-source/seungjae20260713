@@ -1,10 +1,9 @@
-import { authorizedFetch } from '@/lib/auth-fetch';
 import {
   normalizeChartCandles,
   type ChartCandleNormalizationResult,
   type ChartCandleTimeframe,
-} from '@/lib/chart-candle-normalizer';
-import type { AnalysisAssetType, AnalysisMarket } from '@/lib/analysis-selection';
+} from './chart-candle-normalizer';
+import type { AnalysisAssetType, AnalysisMarket } from './analysis-selection';
 
 export type UnifiedChartTimeframe =
   | '1m'
@@ -259,7 +258,7 @@ export async function fetchUnifiedChartData(input: {
     symbol,
     timeframe: input.timeframe,
   });
-  const fetcher = input.fetcher ?? authorizedFetch;
+  const fetcher = input.fetcher ?? globalThis.fetch.bind(globalThis);
   const linked = createLinkedSignal(input.signal, input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let lastError: UnifiedChartDataError | null = null;
 
