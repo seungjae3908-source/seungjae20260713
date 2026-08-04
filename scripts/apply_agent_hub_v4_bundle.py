@@ -33,6 +33,11 @@ def run(*args: str) -> None:
     subprocess.run(args, cwd=ROOT, check=True)
 
 
+def normalize_text(content: str) -> str:
+    normalized = "\n".join(line.rstrip() for line in content.splitlines())
+    return normalized + ("\n" if content.endswith("\n") else "")
+
+
 chunks = sorted(BUNDLE_DIR.glob("chunk-*.txt"))
 if len(chunks) != 7:
     raise SystemExit(f"expected 7 bundle chunks, found {len(chunks)}")
@@ -51,7 +56,7 @@ if set(payload) != EXPECTED_PATHS:
 for relative, content in payload.items():
     target = ROOT / relative
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
+    target.write_text(normalize_text(content), encoding="utf-8")
 
 json.loads((ROOT / ".github/agent-hub/policy.json").read_text(encoding="utf-8"))
 json.loads((ROOT / ".github/agent-hub/workers.json").read_text(encoding="utf-8"))
