@@ -60,7 +60,7 @@ jobs:
 
       - name: Run unified search unit and API tests
         id: search_tests
-        run: pnpm --dir api-server run test:search
+        run: cd api-server && node ./test.mjs search
 
       - name: Run backend regression tests
         id: backend_regression
