@@ -12,6 +12,10 @@ const app = await readFile(
   path.join(root, 'stock-analyzer/src/App.tsx'),
   'utf8',
 );
+const routes = await readFile(
+  path.join(root, 'api-server/src/routes/index.ts'),
+  'utf8',
+);
 const assert = (condition, message) => {
   if (!condition) throw new Error(`[staging-login-selector-contract] ${message}`);
 };
@@ -67,4 +71,24 @@ assert(spec.includes("'[redacted-token]'"), 'JWT-like tokens must be redacted fr
 assert(spec.includes("'[redacted-key]'"), 'Supabase-style keys must be redacted from diagnostic details');
 assert(spec.includes("'$1[redacted]'"), 'named password, token, secret, and key values must be redacted');
 
-console.log('[staging-login-selector-contract] login selectors, approved /login routing, and eight-condition global logout abort classification are locked down');
+assert(spec.includes('for (let pass = 0; pass < 2; pass += 1)'), 'network settlement must require two quiet passes');
+assert(spec.includes("await page.waitForLoadState('networkidle', { timeout: 30_000 });"), 'network settlement must fail instead of swallowing a timeout');
+assert(!spec.includes("waitForLoadState('networkidle', { timeout: 20_000 }).catch"), 'network-idle timeouts must not be ignored');
+assert(
+  spec.indexOf('await settle(page);\n  const response = await page.goto(route') >= 0,
+  'healthy route navigation must settle the previous page before leaving it',
+);
+assert(spec.includes('async function expectDeniedRoute(page: Page, route: string)'), 'denied route navigation must share a pre-navigation settlement helper');
+assert(spec.includes('/stock-info?asset=stock&market=KR&ticker=005930'), 'stock staging routes must use the application ticker query parameter');
+
+const capabilityIndex = routes.indexOf("router.use(requireCapability('canAccessBasicInfo'));");
+const coinFeedIndex = routes.indexOf("router.get('/stocks/special-feed'");
+const stocksRouterIndex = routes.indexOf("router.use('/stocks', stocksRouter);");
+assert(capabilityIndex >= 0 && coinFeedIndex > capabilityIndex, 'optional coin feed must remain behind basic-info authorization');
+assert(stocksRouterIndex > coinFeedIndex, 'optional coin feed fallback must run before the stock feed router');
+assert(routes.includes("if (asset !== 'coin')"), 'stock feed requests must continue to the real stock router');
+assert(routes.includes("res.status(200).json({"), 'unconnected coin feed must degrade through an HTTP 200 response');
+assert(routes.includes("items: []"), 'unconnected coin feed must return an empty item list');
+assert(routes.includes("ok: false"), 'unconnected coin feed must remain visibly marked as unavailable');
+
+console.log('[staging-login-selector-contract] logout classification, diagnostic redaction, optional coin-feed degradation, and pre-navigation settlement are locked down');
