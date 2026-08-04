@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import {
@@ -86,11 +86,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [loading, setLoading] = useState(isSupabaseConfigured);
+  const signingOutRef = useRef(false);
+  const profileLoadQueueRef = useRef<Promise<void>>(Promise.resolve());
 
-  async function loadProfile(user: User | null) {
-    if (!user) { setProfile(null); return; }
-    const { data } = await getSupabase().from('profiles').select('*').eq('id', user.id).maybeSingle();
-    setProfile((data as MemberProfile | null) ?? null);
+  function loadProfile(user: User | null): Promise<void> {
+    if (!user) {
+      setProfile(null);
+      return Promise.resolve();
+    }
+    if (signingOutRef.current) return Promise.resolve();
+
+    const queued = profileLoadQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (signingOutRef.current) return;
+        const { data } = await getSupabase().from('profiles').select('*').eq('id', user.id).maybeSingle();
+        if (!signingOutRef.current) setProfile((data as MemberProfile | null) ?? null);
+      });
+
+    profileLoadQueueRef.current = queued.catch(() => undefined);
+    return queued;
   }
 
   useEffect(() => {
@@ -112,7 +127,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!session?.user) return;
     let active = true;
-    const refresh = () => { if (active) void loadProfile(session.user); };
+    const refresh = () => {
+      if (active && !signingOutRef.current) void loadProfile(session.user);
+    };
     const visibility = () => { if (document.visibilityState === 'visible') refresh(); };
     const timer = window.setInterval(refresh, 30_000);
     window.addEventListener('focus', refresh);
@@ -159,7 +176,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       if (error || data.user?.identities?.length === 0) throw new Error(authMessage(error ?? new Error('already')));
     },
-    async signOut() { const { error } = await getSupabase().auth.signOut(); if (error) throw error; },
+    async signOut() {
+      if (signingOutRef.current) return;
+      signingOutRef.current = true;
+      setLoading(true);
+      try {
+        await profileLoadQueueRef.current;
+        const { error } = await getSupabase().auth.signOut();
+        if (error) throw error;
+        setSession(null);
+        setProfile(null);
+      } finally {
+        signingOutRef.current = false;
+        setLoading(false);
+      }
+    },
     async refreshProfile() { await loadProfile(session?.user ?? null); },
   }), [loading, membershipLevel, permissions, profile, session]);
 
