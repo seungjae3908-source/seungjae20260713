@@ -1,10 +1,13 @@
 \set ON_ERROR_STOP on
 
 -- Keep only the role/schema/function fixture required by the disposable
--- PostgreSQL harness. Table privileges must come from the real migrations.
+-- PostgreSQL harness. Paper privileges must come from the real migration.
 grant usage on schema public, auth to authenticated, anon;
 grant execute on function auth.uid() to authenticated, anon;
 grant execute on function public.current_membership_level() to authenticated;
+-- Member administration is outside the paper privilege migration. Preserve
+-- only the exact audit-table fixture privilege required by this legacy test.
+grant select, insert on table public.member_permission_audit to authenticated;
 
 do $schema_assertions$
 declare
