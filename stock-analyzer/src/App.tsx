@@ -150,6 +150,7 @@ function RootRouter() {
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
     {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
+    <Route path="/login" component={AccountPage} />
     <Route path="/install" component={InstallPage} />
     <Route component={AuthenticatedApp} />
   </Switch></Suspense>;
