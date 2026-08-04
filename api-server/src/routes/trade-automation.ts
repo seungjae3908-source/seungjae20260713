@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Response } from 'express';
 import { createSupabaseTradingRepository, safeConnections, type TradingRepository } from '../services/trade-automation.repository';
 import { liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
-import { TradeExecutionService } from '../services/trade-execution.service';
+import { TradeExecutionCoordinator } from '../services/trade-execution-coordinator.service';
 import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { enforceMemberTradingPolicy, resumeMemberTradingPolicy } from '../services/trade-automation-policy-guard.service';
@@ -34,7 +34,7 @@ function context(req: AuthenticatedRequest) {
     userId: req.member.id,
     repository,
     automation: new TradeAutomationService(repository),
-    execution: new TradeExecutionService(repository),
+    execution: new TradeExecutionCoordinator(repository),
   };
 }
 
@@ -159,7 +159,7 @@ router.get('/plans', async (req: AuthenticatedRequest, res) => {
 
 router.post('/plans', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, repository, automation } = context(req);
+    const { userId, repository, automation, execution } = context(req);
     const input = req.body as TradingPlanInput;
     exchangeValue(input.exchange);
     const [policy, existingOrders, persistentGlobalStop] = await Promise.all([
@@ -177,7 +177,7 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
     if (policy.mode === 'automatic' && policy.automaticEnabled && result.plan.state === 'PLANNED') {
       const submission = await automation.beginAutomaticPlanAndCreateOrder(userId, result.plan.id);
       const executed = submission.executionClaimed
-        ? await new TradeExecutionService(repository).execute(userId, submission.plan, submission.order)
+        ? await execution.execute(userId, submission.plan, submission.order)
         : submission.order;
       return res.json({
         ok: true,
@@ -296,11 +296,41 @@ router.post('/orders/:id/cancel', async (req: AuthenticatedRequest, res) => {
   } catch (error) { return errorResponse(res, error); }
 });
 
+router.post('/orders/:id/reconcile', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository, execution } = context(req);
+    const order = await repository.getOrder(userId, String(req.params.id));
+    if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');
+    const plan = await repository.getPlan(userId, order.planId);
+    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+    const result = await execution.reconcileOrder(userId, plan, order);
+    return res.json({
+      ok: true,
+      order: result.order,
+      resolved: result.resolved,
+      querySent: result.querySent,
+      orderResubmitted: false,
+      exchangeOrdersSubmitted: false,
+      exchangeCancelsSubmitted: false,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
 router.post('/recovery/scan', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, automation } = context(req);
-    const orders = await automation.recoverOpenOrders(userId);
-    return res.json({ ok: true, recoveryRequired: orders.length, exchangeOrdersSubmitted: false });
+    const { userId, execution } = context(req);
+    const result = await execution.reconcileRecoverableOrders(userId);
+    return res.json({
+      ok: true,
+      recoveryRequired: result.unresolved,
+      resolved: result.resolved,
+      unresolved: result.unresolved,
+      queriesSent: result.queriesSent,
+      orders: result.orders,
+      orderResubmitted: false,
+      exchangeOrdersSubmitted: false,
+      exchangeCancelsSubmitted: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
