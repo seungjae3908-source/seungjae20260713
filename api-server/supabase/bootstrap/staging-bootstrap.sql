@@ -11,4 +11,5 @@
 \ir ../migrations/2026080202_release_candidate_permissions_phase8.sql
 \ir ../migrations/2026080203_phase8_paper_capability_rls.sql
 \ir ../migrations/2026080301_trade_automation_integration.sql
+\ir ../migrations/2026080501_paper_journal_authenticated_privileges.sql
 \ir staging-bootstrap-assert.sql

@@ -45,12 +45,18 @@ NODE
 
 run_sql "verify Auth profile trigger and deletion cascade" "api-server/supabase/test/staging_bootstrap_trigger_integration.sql"
 run_sql "seed exact four-tier auth fixtures" "api-server/supabase/test/phase8_auth_harness.sql"
+
+# Reproduce the exact pre-fix privilege state on the disposable CI database,
+# then prove the new migration alone restores authenticated CRUD access.
+run_sql "remove paper API-role privileges for pre-migration reproduction" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.down.sql"
+run_sql "assert pre-migration paper privilege failure" "api-server/supabase/test/paper_journal_privileges_before_migration.sql"
 run_sql "apply Phase 7 migration idempotently" "api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql"
 run_sql "apply Phase 8 permission migration idempotently" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql"
 run_sql "apply Phase 8 paper capability RLS idempotently" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
 run_sql "apply trade automation storage and RLS idempotently" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
-# Verify the service-only trading control before legacy Phase 8 fixtures grant
-# broad table privileges for paper-journal RLS checks.
+run_sql "apply authenticated paper privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
+run_sql "reapply authenticated paper privileges idempotently" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
+run_sql "verify explicit paper privileges and anon denial" "api-server/supabase/test/paper_journal_privileges_integration.sql"
 run_sql "execute trade automation ownership RLS queries" "api-server/supabase/test/trade_automation_rls_integration.sql"
 run_sql "execute real ownership RLS integration queries" "api-server/supabase/test/phase8_rls_integration.sql"
 run_sql "execute real membership-tier RLS integration queries" "api-server/supabase/test/phase8_tier_rls_integration.sql"
@@ -62,6 +68,7 @@ if "${PSQL[@]}" --command "begin; create table public.phase8_partial_failure_pro
 fi
 "${PSQL[@]}" --command "do \$\$ begin if to_regclass('public.phase8_partial_failure_probe') is not null then raise exception 'partial migration object remained'; end if; end \$\$;"
 
+run_sql "rollback authenticated paper privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.down.sql"
 run_sql "rollback trade automation migration" "api-server/supabase/migrations/2026080301_trade_automation_integration.down.sql"
 run_sql "assert trade automation rollback cleanup" "api-server/supabase/test/trade_automation_rollback_assert.sql"
 run_sql "rollback Phase 8 paper capability RLS" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.down.sql"
@@ -72,9 +79,9 @@ run_sql "reapply Phase 7 migration" "api-server/supabase/migrations/2026080201_j
 run_sql "reapply Phase 8 permission migration" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql"
 run_sql "reapply Phase 8 paper capability RLS" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
 run_sql "reapply trade automation migration" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
+run_sql "reapply authenticated paper privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
 run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.sql"
-# Recheck the service-only trading control before the tier fixture re-grants all
-# tables to the API roles for its isolated compatibility assertions.
+run_sql "recheck explicit paper privileges after reapply" "api-server/supabase/test/paper_journal_privileges_integration.sql"
 run_sql "recheck trade automation RLS after reapply" "api-server/supabase/test/trade_automation_rls_integration.sql"
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
