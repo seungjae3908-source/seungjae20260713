@@ -7,6 +7,7 @@ import {
   TradeApprovalQueue,
   type TradeApprovalPlan,
 } from '@/components/trade-approval-queue';
+import { TradeRecoveryControl } from '@/components/trade-recovery-control';
 
 type AutoTradingFixture = TradeAutomationStatus & { plans?: TradeApprovalPlan[] };
 
@@ -28,6 +29,7 @@ export default function AutoTradingPage({ fixture }: { fixture?: AutoTradingFixt
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-24">
         <div className="mx-auto w-full max-w-3xl">
           <TradeAutomationSettings fixture={fixture} />
+          <TradeRecoveryControl fixture={Boolean(fixture)} />
           <TradeApprovalQueue
             fixturePlans={fixture?.plans}
             emergencyStopped={fixture ? fixture.emergencyStopped : undefined}
