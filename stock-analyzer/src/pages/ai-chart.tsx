@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
-import { ChartBroadcastPanel, type ChartBroadcastMarket } from '@/components/chart-broadcast';
+import { UnifiedAnalysisChart } from '@/components/unified-analysis-chart';
 import {
   selectionFromSearch,
   selectionQuery,
@@ -19,6 +19,7 @@ import {
   type AnalysisSelection,
 } from '@/lib/analysis-selection';
 import type { ChartAnalysis, ChartAnalysisBias, ChartAnalysisStatus } from '@/lib/chart-analysis';
+import { unifiedMarketLabel } from '@/lib/unified-chart-data';
 import { cn } from '@/lib/utils';
 
 function fallbackSelection(): AnalysisSelection {
@@ -96,26 +97,16 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromUrl?.ticker, fromUrl?.market, fromUrl?.timeframe]);
 
-  const market: ChartBroadcastMarket = selection.market === 'US' ? 'US' : 'KR';
   const updateSelection = useCallback(
-    (next: { ticker: string; name: string; market: ChartBroadcastMarket; timeframe: string }) => {
-      const merged: AnalysisSelection = {
-        ...selection,
-        assetType: 'stock',
-        market: next.market,
-        symbol: next.ticker,
-        ticker: next.ticker,
-        displayName: next.name,
-        timeframe: next.timeframe,
-        selectedAt: selection.ticker === next.ticker ? selection.selectedAt : new Date().toISOString(),
-      };
+    (next: AnalysisSelection) => {
       const changed =
-        selection.ticker !== merged.ticker ||
-        selection.market !== merged.market ||
-        selection.timeframe !== merged.timeframe ||
-        selection.displayName !== merged.displayName;
-      if (changed) state.select(merged);
-      const nextLocation = `/ai-chart?${selectionQuery(merged)}`;
+        selection.ticker !== next.ticker ||
+        selection.market !== next.market ||
+        selection.timeframe !== next.timeframe ||
+        selection.displayName !== next.displayName ||
+        selection.assetType !== next.assetType;
+      if (changed) state.select(next);
+      const nextLocation = `/ai-chart?${selectionQuery(next)}`;
       if (!embedded && location !== nextLocation) navigate(nextLocation, { replace: true });
     },
     [embedded, location, navigate, selection, state],
@@ -144,24 +135,18 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             <h1 className="truncate text-lg font-black">AI 차트 생중계</h1>
           </div>
           <div className="text-right text-[10px] font-bold text-muted-foreground">
-            <p>{market === 'KR' ? '국내주식' : '미국주식'} · {selection.timeframe}</p>
-            <p>실제 캔들 REST 갱신</p>
+            <p>{unifiedMarketLabel(selection.market)} · {selection.timeframe}</p>
+            <p>공개 시세 읽기 전용</p>
           </div>
         </div>
       </header>
 
       <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
         <section className="min-w-0">
-          <ChartBroadcastPanel
-            market={market}
-            initialSelection={{
-              ticker: selection.ticker,
-              name: selection.displayName,
-              market,
-              timeframe: selection.timeframe,
-            }}
-            onAnalysisChange={setAnalysis}
+          <UnifiedAnalysisChart
+            selection={selection}
             onSelectionChange={updateSelection}
+            onAnalysisChange={setAnalysis}
           />
         </section>
 
@@ -190,7 +175,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
               </div>
             </div>
             <p className="mt-3 text-[10px] font-semibold leading-4 text-muted-foreground">
-              종목이나 시간봉이 변경되면 이전 분석을 비우고 새 컨텍스트의 실제 캔들이 준비된 뒤 다시 판정합니다.
+              시장·종목·시간봉이 변경되면 이전 분석을 비우고 마지막 요청의 유효한 실제 캔들만 반영합니다.
             </p>
           </section>
 
@@ -279,7 +264,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
           <p className="flex gap-2 rounded-2xl border border-warning/30 bg-warning/5 p-3 text-[10px] font-semibold leading-4 text-muted-foreground">
             <ShieldAlert className="h-4 w-4 shrink-0 text-warning" />
-            진행 중 캔들은 형성 중으로 표시하고, 패턴 확정은 완료된 봉의 확인 조건을 통과한 경우에만 수행합니다. 이 화면은 분석 보조 기능이며 주문을 실행하지 않습니다.
+            진행 중 캔들은 형성 중으로 표시하고, 패턴 확정은 완료된 봉의 확인 조건을 통과한 경우에만 수행합니다. 국내주식·미국주식·코인 현물·코인 선물을 읽기 전용으로 분석하며 주문을 실행하지 않습니다.
           </p>
         </aside>
       </main>
