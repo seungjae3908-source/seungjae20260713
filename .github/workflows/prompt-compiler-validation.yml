@@ -7,6 +7,12 @@ on:
     paths:
       - scripts/apply-agent-hub-prompt-compiler.py
       - .github/workflows/prompt-compiler-validation.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/apply-agent-hub-prompt-compiler.py
+      - .github/workflows/prompt-compiler-validation.yml
 
 permissions:
   contents: write
