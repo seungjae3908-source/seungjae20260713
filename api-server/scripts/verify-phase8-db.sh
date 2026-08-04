@@ -21,9 +21,25 @@ run_sql() {
   "${PSQL[@]}" --file "${ROOT_DIR}/${path}"
 }
 
-run_trade_atomic_race() {
-  echo "[phase8-db] verify two-session trade plan and order atomicity"
+set_atomic_fixture_tier() {
+  local membership="$1"
+  local role="$2"
+  "${PSQL[@]}" --quiet --command "
+    update public.profiles
+    set membership_level = '${membership}', role = '${role}', permissions_updated_at = now()
+    where id = '11111111-1111-1111-1111-111111111111';
+  " >/dev/null
+}
+
+run_trade_atomic_suite() {
+  # Existing deterministic atomicity fixtures use user 111... . Promote that
+  # disposable fixture only for the duration of this suite, then restore its
+  # regular tier before the remaining membership tests run.
+  set_atomic_fixture_tier admin admin
+  run_sql "verify admin trade plan and order atomicity contracts" "api-server/supabase/test/trade_automation_atomicity_integration.sql"
+  echo "[phase8-db] verify two-session admin trade plan and order atomicity"
   bash "${ROOT_DIR}/api-server/scripts/verify-trade-atomic-race.sh"
+  set_atomic_fixture_tier regular user
 }
 
 run_sql "create empty Supabase auth bootstrap harness" "api-server/supabase/test/staging_bootstrap_auth_harness.sql"
@@ -57,9 +73,8 @@ run_sql "apply trade automation storage and RLS idempotently" "api-server/supaba
 run_sql "apply trade automation admin-only RLS idempotently" "api-server/supabase/migrations/2026080401_trade_automation_admin_only.sql"
 # Verify the service-only trading control before legacy Phase 8 fixtures grant
 # broad table privileges for paper-journal RLS checks.
-run_sql "execute trade automation admin-only ownership RLS queries" "api-server/supabase/test/trade_automation_rls_integration.sql"
-run_sql "verify trade plan and order atomicity contracts" "api-server/supabase/test/trade_automation_atomicity_integration.sql"
-run_trade_atomic_race
+run_sql "execute trade automation admin-only ownership RLS queries" "api-server/supabase/test/trade_automation_admin_only_rls_integration.sql"
+run_trade_atomic_suite
 run_sql "execute real ownership RLS integration queries" "api-server/supabase/test/phase8_rls_integration.sql"
 run_sql "execute real membership-tier RLS integration queries" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
@@ -85,9 +100,8 @@ run_sql "reapply trade automation admin-only RLS" "api-server/supabase/migration
 run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.sql"
 # Recheck the service-only trading control before the tier fixture re-grants all
 # tables to the API roles for its isolated compatibility assertions.
-run_sql "recheck trade automation admin-only RLS after reapply" "api-server/supabase/test/trade_automation_rls_integration.sql"
-run_sql "recheck trade atomicity after reapply" "api-server/supabase/test/trade_automation_atomicity_integration.sql"
-run_trade_atomic_race
+run_sql "recheck trade automation admin-only RLS after reapply" "api-server/supabase/test/trade_automation_admin_only_rls_integration.sql"
+run_trade_atomic_suite
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
 echo "[phase8-db] disposable database and atomic staging bootstrap verification completed"
