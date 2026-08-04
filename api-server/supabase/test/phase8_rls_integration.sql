@@ -1,12 +1,10 @@
 \set ON_ERROR_STOP on
 
--- Grants model what Supabase gives its authenticated/anon API roles.
+-- Keep only the role/schema/function fixture required by the disposable
+-- PostgreSQL harness. Table privileges must come from the real migrations.
 grant usage on schema public, auth to authenticated, anon;
 grant execute on function auth.uid() to authenticated, anon;
 grant execute on function public.current_membership_level() to authenticated;
-grant select, insert, update, delete on all tables in schema public to authenticated;
-grant select, insert, update, delete on all tables in schema public to anon;
-grant usage, select on all sequences in schema public to authenticated, anon;
 
 do $schema_assertions$
 declare
@@ -152,34 +150,42 @@ begin
 end
 $same_id_scope$;
 
--- Unauthenticated role: no CRUD access to user rows.
+-- Unauthenticated role has no table privilege at all; this is stricter than
+-- relying on RLS to hide rows from anon.
 reset role;
 set role anon;
 select set_config('request.jwt.claim.sub', '', false);
 
 do $anonymous_isolation$
-declare
-  affected integer;
 begin
-  if (select count(*) from public.paper_accounts) <> 0 then
-    raise exception 'anonymous read was not blocked';
-  end if;
-
   begin
-    insert into public.paper_accounts (user_id, id, payload, version)
-    values ('11111111-1111-1111-1111-111111111111', 'anon-insert', '{}', 1);
-    raise exception 'anonymous insert was not blocked';
+    perform count(*) from public.paper_accounts;
+    raise exception 'anonymous SELECT was not blocked';
   exception
     when insufficient_privilege then null;
   end;
 
-  update public.paper_accounts set payload = '{}' where id = 'shared-id';
-  get diagnostics affected = row_count;
-  if affected <> 0 then raise exception 'anonymous update was not blocked'; end if;
+  begin
+    insert into public.paper_accounts (user_id, id, payload, version)
+    values ('11111111-1111-1111-1111-111111111111', 'anon-insert', '{}', 1);
+    raise exception 'anonymous INSERT was not blocked';
+  exception
+    when insufficient_privilege then null;
+  end;
 
-  delete from public.paper_accounts where id = 'shared-id';
-  get diagnostics affected = row_count;
-  if affected <> 0 then raise exception 'anonymous delete was not blocked'; end if;
+  begin
+    update public.paper_accounts set payload = '{}' where id = 'shared-id';
+    raise exception 'anonymous UPDATE was not blocked';
+  exception
+    when insufficient_privilege then null;
+  end;
+
+  begin
+    delete from public.paper_accounts where id = 'shared-id';
+    raise exception 'anonymous DELETE was not blocked';
+  exception
+    when insufficient_privilege then null;
+  end;
 end
 $anonymous_isolation$;
 
