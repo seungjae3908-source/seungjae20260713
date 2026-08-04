@@ -8,6 +8,7 @@ export const CHART_EXTERNAL_WINDOW_CHANNEL = 'stock-app-ai-chart-window-v1';
 export const CHART_EXTERNAL_WINDOW_NAME = 'stock-app-ai-chart-external';
 export const CHART_EXTERNAL_WINDOW_PARAM = 'chartWindow';
 export const CHART_EXTERNAL_WINDOW_VALUE = 'external';
+export const CHART_EXTERNAL_WINDOW_SYNC_PARAM = 'chartSync';
 
 export type ChartExternalWindowMessage =
   | {
@@ -34,8 +35,9 @@ type ScreenBounds = {
   availTop?: number;
 };
 
-function cleanSourceId(value: unknown): string {
-  return typeof value === 'string' ? value.trim().slice(0, 120) : '';
+function cleanId(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
 }
 
 export function chartSelectionKey(selection: AnalysisSelection): string {
@@ -52,15 +54,29 @@ export function isExternalChartSearch(search: string): boolean {
   return params.get(CHART_EXTERNAL_WINDOW_PARAM) === CHART_EXTERNAL_WINDOW_VALUE;
 }
 
-export function buildExternalChartPath(selection: AnalysisSelection): string {
+export function chartSyncIdFromSearch(search: string): string {
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+  return cleanId(params.get(CHART_EXTERNAL_WINDOW_SYNC_PARAM));
+}
+
+export function chartExternalWindowChannel(syncId: string): string {
+  const normalized = cleanId(syncId);
+  if (!normalized) throw new Error('Invalid chart synchronization session');
+  return `${CHART_EXTERNAL_WINDOW_CHANNEL}:${normalized}`;
+}
+
+export function buildExternalChartPath(selection: AnalysisSelection, syncId: string): string {
+  const normalizedSyncId = cleanId(syncId);
+  if (!normalizedSyncId) throw new Error('Invalid chart synchronization session');
   const params = new URLSearchParams(selectionQuery(selection));
   params.set(CHART_EXTERNAL_WINDOW_PARAM, CHART_EXTERNAL_WINDOW_VALUE);
+  params.set(CHART_EXTERNAL_WINDOW_SYNC_PARAM, normalizedSyncId);
   return `/ai-chart?${params.toString()}`;
 }
 
-export function buildChartPath(selection: AnalysisSelection, external: boolean): string {
-  return external
-    ? buildExternalChartPath(selection)
+export function buildChartPath(selection: AnalysisSelection, externalSyncId?: string): string {
+  return externalSyncId
+    ? buildExternalChartPath(selection, externalSyncId)
     : `/ai-chart?${selectionQuery(selection)}`;
 }
 
@@ -112,12 +128,14 @@ export function createChartWindowMessage(
   sourceId: string,
   selection?: AnalysisSelection,
 ): ChartExternalWindowMessage {
+  const normalizedSourceId = cleanId(sourceId);
+  if (!normalizedSourceId) throw new Error('Invalid chart window source');
   if (type === 'selection') {
     const normalized = normalizeAnalysisSelection(selection);
     if (!normalized) throw new Error('Invalid chart selection message');
-    return { type, sourceId, sentAt: Date.now(), selection: normalized };
+    return { type, sourceId: normalizedSourceId, sentAt: Date.now(), selection: normalized };
   }
-  return { type, sourceId, sentAt: Date.now() };
+  return { type, sourceId: normalizedSourceId, sentAt: Date.now() };
 }
 
 export function parseChartWindowMessage(value: unknown): ChartExternalWindowMessage | null {
@@ -125,7 +143,7 @@ export function parseChartWindowMessage(value: unknown): ChartExternalWindowMess
   const row = value as Record<string, unknown>;
   const type = row.type;
   if (type !== 'ready' && type !== 'closed' && type !== 'selection') return null;
-  const sourceId = cleanSourceId(row.sourceId);
+  const sourceId = cleanId(row.sourceId);
   const sentAt = Number(row.sentAt);
   if (!sourceId || !Number.isFinite(sentAt) || sentAt <= 0) return null;
 
