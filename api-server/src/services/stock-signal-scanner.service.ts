@@ -129,6 +129,7 @@ export const StockSignalScannerService = {
       timeframe: raw.timeframe,
       cards: lifecycle.cards,
       alerts: lifecycle.alerts,
+      failures: [],
       execution: {
         requestedCount: universe.entries.length,
         startedCount: raw.scanned,
