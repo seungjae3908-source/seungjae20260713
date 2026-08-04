@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { cn } from '@/lib/utils';
 
 type ScannerResult = {
   cards?: unknown[];
@@ -29,14 +28,12 @@ export function ScannerReadinessStatus() {
     }
   }), [queryClient]);
 
-  const query = useMemo(() => {
-    const candidates = queryClient.getQueryCache().findAll({ queryKey: ['scan'] });
-    return [...candidates].sort((left, right) => {
-      const leftTime = Math.max(left.state.dataUpdatedAt, left.state.errorUpdatedAt);
-      const rightTime = Math.max(right.state.dataUpdatedAt, right.state.errorUpdatedAt);
-      return rightTime - leftTime;
-    })[0];
-  }, [queryClient, queryClient.getQueryCache().getAll().length]);
+  const candidates = queryClient.getQueryCache().findAll({ queryKey: ['scan'] });
+  const query = [...candidates].sort((left, right) => {
+    const leftTime = Math.max(left.state.dataUpdatedAt, left.state.errorUpdatedAt);
+    const rightTime = Math.max(right.state.dataUpdatedAt, right.state.errorUpdatedAt);
+    return rightTime - leftTime;
+  })[0];
 
   const data = query?.state.data as ScannerResult | undefined;
   const loading = !query || (query.state.status === 'pending' && query.state.fetchStatus === 'fetching');
@@ -83,7 +80,7 @@ export function ScannerReadinessStatus() {
         </div>
       )}
       {success && (
-        <div data-testid="scanner-success" className={cn('rounded-2xl border border-card-border bg-card/95 px-3 py-2 text-xs font-extrabold shadow-lg backdrop-blur')}>
+        <div data-testid="scanner-success" className="rounded-2xl border border-card-border bg-card/95 px-3 py-2 text-xs font-extrabold shadow-lg backdrop-blur">
           검색 완료 · {cards.length}개 종목
         </div>
       )}
