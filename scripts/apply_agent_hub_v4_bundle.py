@@ -13,13 +13,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE_DIR = ROOT / "scripts" / ".agent-hub-v4-bundle"
-BOOTSTRAP_WORKFLOW = ROOT / ".github" / "workflows" / "agent-hub-v4-bootstrap.yml"
 INSTALLER = Path(__file__).resolve()
+WORKFLOW_PATHS = {
+    ".github/workflows/agent-hub-free.yml",
+    ".github/workflows/agent-hub-executor.yml",
+}
 EXPECTED_PATHS = {
     ".github/agent-hub/policy.json",
     ".github/agent-hub/workers.json",
-    ".github/workflows/agent-hub-free.yml",
-    ".github/workflows/agent-hub-executor.yml",
+    *WORKFLOW_PATHS,
     "scripts/agent_hub_policy.py",
     "scripts/agent_hub_free.py",
     "scripts/agent_hub_executor.py",
@@ -54,6 +56,8 @@ if set(payload) != EXPECTED_PATHS:
     raise SystemExit(f"bundle path mismatch; missing={missing}; extra={extra}")
 
 for relative, content in payload.items():
+    if relative in WORKFLOW_PATHS:
+        continue
     target = ROOT / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(normalize_text(content), encoding="utf-8")
@@ -78,11 +82,9 @@ for path in chunks:
     path.unlink()
 if BUNDLE_DIR.exists():
     BUNDLE_DIR.rmdir()
-if BOOTSTRAP_WORKFLOW.exists():
-    BOOTSTRAP_WORKFLOW.unlink()
 INSTALLER.unlink()
 
 for cache in ROOT.rglob("__pycache__"):
     shutil.rmtree(cache, ignore_errors=True)
 
-print("Agent Hub v4 bundle installed and validated.")
+print("Agent Hub v4 non-workflow bundle installed and validated.")
