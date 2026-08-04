@@ -24,6 +24,7 @@ const WatchlistPage = lazy(() => import('@/pages/watchlist'));
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
 const StockInfoPage = lazy(() => import('@/pages/stock-info'));
+const MarketInformationPage = lazy(() => import('@/pages/market-information'));
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
 const ThemesPage = lazy(() => import('@/pages/themes'));
@@ -119,6 +120,9 @@ function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPag
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingAccess() { return gated('canAccessPaperTrading', <PaperTradingPage />); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
+function BasicMarketInformationAccess() { return gated('canAccessBasicInfo', <MarketInformationPage />); }
+function SpotMarketInformationAccess() { return gated('canAccessSpot', <MarketInformationPage />); }
+function FuturesMarketInformationAccess() { return gated('canAccessFutures', <MarketInformationPage />); }
 function StockInfoAccess() {
   const [location] = useLocation();
   const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : window.location.search.slice(1);
@@ -133,6 +137,10 @@ function ApprovedRouter() {
   return <Suspense fallback={<PageFallback />}><Switch>
     <Route path="/" component={HomePage} />
     <Route path="/home" component={HomePage} />
+    <Route path="/stocks/kr" component={BasicMarketInformationAccess} />
+    <Route path="/stocks/us" component={BasicMarketInformationAccess} />
+    <Route path="/coins/spot" component={SpotMarketInformationAccess} />
+    <Route path="/coins/futures" component={FuturesMarketInformationAccess} />
     <Route path="/stocks" component={StocksPage} />
     <Route path="/auto-trading" component={ScannerAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
