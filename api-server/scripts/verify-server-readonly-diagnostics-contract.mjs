@@ -39,6 +39,10 @@ for (const required of [
   'systemctl is-active caddy',
   'caddy validate --config /etc/caddy/Caddyfile',
   'caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile',
+  'pm2_pid_for_name()',
+  'listening_dial_for_pid()',
+  'caddy_route_has_dial()',
+  'INTERNAL_ROUTE',
   "section 'listening_sockets'",
   'ss -H -ltnp',
   "section 'health_verification'",
@@ -91,6 +95,7 @@ assert(curlLines.length === 1, `expected exactly one generic curl command in hea
 assert(curlLines[0].includes('curl --get'), 'curl must explicitly use safe GET mode');
 assert(script.includes('health_probe()'), 'curl must be encapsulated by the health-only probe');
 assert(!script.includes('curl -4'), 'public IP discovery must not add a non-health curl request');
+assert(!script.includes('route_dial_for_host()'), 'internal Health ports must come from the PM2 PID and listening socket, not the first Caddy upstream');
 
 const pm2Lines = script.split('\n').filter((line) => /pm2 jlist/.test(line));
 assert(pm2Lines.length > 0, 'safe PM2 parsing must remain present');
