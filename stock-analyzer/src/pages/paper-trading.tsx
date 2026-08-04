@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
 import { ArrowLeft, Cloud } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { CapabilityGate } from '@/components/capability-gate';
 import { PaperJournalSyncAnalyticsPanel } from '@/components/paper-journal-sync-analytics-panel';
 import { PaperTradingPanel } from '@/components/paper-trading-panel';
 import { useAuth } from '@/lib/auth';
 import { createUserPaperStorage } from '@/lib/paper-journal-sync-storage';
 
-export default function PaperTradingPage() {
+function AdminPaperTradingPage() {
   const { user, profile } = useAuth();
   const userId = user?.id ?? profile?.id ?? '';
   const [showJournalTools, setShowJournalTools] = useState(false);
@@ -46,4 +47,8 @@ export default function PaperTradingPage() {
     </div> : null}
     <BottomNav />
   </div>;
+}
+
+export default function PaperTradingPage() {
+  return <CapabilityGate capability="canPlaceOrders"><AdminPaperTradingPage /></CapabilityGate>;
 }
