@@ -411,6 +411,7 @@ test.describe('mobile scanner legacy ChartBroadcastPanel contract', () => {
         cwd: analyzerDirectory(),
         env: {
           ...process.env,
+          VITE_PHASE4_E2E: 'true',
           VITE_PHASE11_E2E: 'true',
           VITE_SUPABASE_URL: `https://${SUPABASE_HOST}`,
           VITE_SUPABASE_ANON_KEY: ACCESS_TOKEN,
