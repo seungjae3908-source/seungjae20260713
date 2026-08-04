@@ -560,8 +560,8 @@ def evaluate_proposal(
         reason_override = f"승인 우회 표현 감지: {bypass_expression}"
     elif worker is None:
         reason_override = "미등록 worker"
-    elif proposal.action_type not in worker.allowed_action_types:
-        reason_override = "worker가 허용하지 않는 action_type"
+    elif action_rule["decision"] == "ready" and proposal.action_type not in worker.allowed_action_types:
+        reason_override = "worker가 자동 허용하지 않는 action_type"
     elif proposal.branch.lower() in {"main", "master"}:
         reason_override = "main/master 직접 작업 금지"
     elif not branch_allowed(proposal.branch, worker):
@@ -793,7 +793,9 @@ def run_self_test(policy_path: Path = POLICY_PATH, workers_path: Path = WORKERS_
     merge_p = Proposal(**{**proposal.__dict__, "action_type":"merge_pr"})
     d = evaluate_proposal(proposal=merge_p, policy=policy, workers=workers, repository="owner/repo",
         task_id="task-3", report_comment_id=103, report_head_sha=base, base_sha="b"*40, current_branch_sha=base)
-    check(d.fields["status"] == "blocked", "worker not allowed merge must be blocked")
+    check(d.fields["status"] == "waiting_approval", "merge must always wait approval")
+    check(d.fields["requires_user_approval"] == "true", "merge approval flag missing")
+    check(all(field in d.approval_details for field in policy["approval_request_fields"]), "merge approval fields missing")
 
     ops_p = Proposal(
         target_worker="operations-worker", action_type="staging_deploy", branch="ops/release",
@@ -805,6 +807,12 @@ def run_self_test(policy_path: Path = POLICY_PATH, workers_path: Path = WORKERS_
         task_id="task-4", report_comment_id=104, report_head_sha=base, base_sha="b"*40, current_branch_sha=base)
     check(d.fields["status"] == "waiting_approval", "staging deploy must wait approval")
     check(all(field in d.approval_details for field in policy["approval_request_fields"]), "approval fields missing")
+
+    production_p = Proposal(**{**ops_p.__dict__, "action_type":"prepare_production_deploy"})
+    d = evaluate_proposal(proposal=production_p, policy=policy, workers=workers, repository="owner/repo",
+        task_id="task-4-production", report_comment_id=1004, report_head_sha=base, base_sha="b"*40, current_branch_sha=base)
+    check(d.fields["status"] == "waiting_approval", "production deploy preparation must wait approval")
+    check(d.fields["required_approval_phrase"].startswith("승인:prepare_production_deploy:"), "production approval phrase missing")
 
     live_p = Proposal(**{**proposal.__dict__, "instruction":"실제 주문을 실행한다."})
     d = evaluate_proposal(proposal=live_p, policy=policy, workers=workers, repository="owner/repo",
