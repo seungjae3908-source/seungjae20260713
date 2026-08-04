@@ -82,9 +82,15 @@ begin
   end if;
 
   begin
-    insert into public.trade_automation_profiles(user_id, payload)
-    values ('11111111-1111-1111-1111-111111111111', '{}');
-    raise exception 'regular member inserted an auto-trading profile';
+    insert into public.trade_order_plans(user_id, id, idempotency_key, state, payload)
+    values (
+      '11111111-1111-1111-1111-111111111111',
+      '10000000-0000-0000-0000-00000000000b',
+      'regular-insert-must-be-denied',
+      'APPROVAL_PENDING',
+      '{}'
+    );
+    raise exception 'regular member inserted an auto-trading plan';
   exception when insufficient_privilege then null;
   end;
 end
