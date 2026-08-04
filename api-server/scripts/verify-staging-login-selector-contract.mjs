@@ -119,18 +119,38 @@ assert(!routes.includes('res.statusCode >= 500'), 'generic server errors must ne
 
 assert(auth.includes('useMemo, useRef, useState'), 'auth provider must import useRef for logout coordination');
 assert(auth.includes('const signingOutRef = useRef(false);'), 'auth provider must track an active logout barrier');
+assert(auth.includes('const sessionRef = useRef<Session | null>(null);'), 'auth provider must track the synchronously current session identity');
 assert(auth.includes('const profileLoadQueueRef = useRef<Promise<void>>(Promise.resolve());'), 'auth provider must track every profile load in a serial queue');
-assert(auth.includes('if (signingOutRef.current) return Promise.resolve();'), 'new profile loads must stop after logout begins');
+assert(auth.includes('function applySession(next: Session | null)'), 'auth provider must update session identity and React state through one helper');
+assert(
+  auth.includes('sessionRef.current = next;\n    setSession(next);'),
+  'session identity must change synchronously before React session state is scheduled',
+);
+assert(
+  (auth.match(/setSession\(/g) ?? []).length === 1,
+  'all session mutations must pass through the synchronous session identity helper',
+);
+assert(
+  auth.includes('if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return Promise.resolve();'),
+  'new or stale-user profile loads must stop after logout begins or session identity changes',
+);
+assert(
+  auth.includes('if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return;'),
+  'queued profile work must recheck logout and session identity before starting a provider request',
+);
 assert(auth.includes("profileLoadQueueRef.current\n      .catch(() => undefined)"), 'profile loads must remain serial even after an earlier load failure');
 assert(auth.includes('profileLoadQueueRef.current = queued.catch(() => undefined);'), 'profile queue failures must not permanently block later logout');
-assert(auth.includes('if (!signingOutRef.current) setProfile'), 'late profile responses must not restore profile state during logout');
+assert(
+  auth.includes('if (!signingOutRef.current && sessionRef.current?.user.id === user.id)'),
+  'late profile responses must not restore profile state after logout or a user change',
+);
 assert(auth.includes('if (active && !signingOutRef.current) void loadProfile(session.user);'), 'timer, focus, and visibility refreshes must stop during logout');
 
 const authSignOutIndex = auth.indexOf('async signOut() {');
 const logoutBarrierIndex = auth.indexOf('signingOutRef.current = true;', authSignOutIndex);
 const drainIndex = auth.indexOf('await profileLoadQueueRef.current;', authSignOutIndex);
 const globalLogoutIndex = auth.indexOf('await getSupabase().auth.signOut();', authSignOutIndex);
-const clearSessionIndex = auth.indexOf('setSession(null);', globalLogoutIndex);
+const clearSessionIndex = auth.indexOf('applySession(null);', globalLogoutIndex);
 const releaseBarrierIndex = auth.indexOf('signingOutRef.current = false;', globalLogoutIndex);
 assert(authSignOutIndex >= 0, 'auth provider global signOut implementation is missing');
 assert(
@@ -139,7 +159,7 @@ assert(
     && globalLogoutIndex > drainIndex,
   'logout must raise the barrier, drain profile requests, and only then call Supabase global signOut',
 );
-assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must explicitly clear the local session');
-assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session and profile cleanup finish');
+assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must synchronously invalidate session identity');
+assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session identity and profile cleanup finish');
 
-console.log('[staging-login-selector-contract] logout classification, profile-request drain, diagnostic redaction, optional provider degradation, and navigation stability are locked down');
+console.log('[staging-login-selector-contract] logout classification, current-session profile guard, diagnostic redaction, optional provider degradation, and navigation stability are locked down');
