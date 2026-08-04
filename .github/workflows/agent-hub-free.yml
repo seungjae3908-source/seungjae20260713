@@ -7,6 +7,13 @@ on:
     paths:
       - .github/workflows/agent-hub-free.yml
       - scripts/agent_hub_free.py
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/agent-hub-free.yml
+      - scripts/agent_hub_free.py
+      - docs/agent-hub-free.md
   issue_comment:
     types: [created]
   schedule:
@@ -24,7 +31,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -40,6 +47,7 @@ jobs:
   process-report:
     if: >-
       github.event_name != 'push' &&
+      github.event_name != 'pull_request' &&
       (
         github.event_name != 'issue_comment' ||
         (
