@@ -8,6 +8,7 @@ import { enforceMemberTradingPolicy, resumeMemberTradingPolicy } from '../servic
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import type {
   TradingExchange,
+  TradingOrder,
   TradingPlan,
   TradingPlanInput,
   TradingPlanRevalidationInput,
@@ -44,12 +45,60 @@ function exchangeValue(value: unknown): TradingExchange {
   return exchange;
 }
 
-function errorResponse(res: Response, error: unknown) {
+function errorResponse(res: Response, error: unknown, executionClaimed = false) {
   const code = error instanceof Error ? error.message.split(':')[0] : 'TRADE_AUTOMATION_FAILED';
   const status = code === 'LOGIN_REQUIRED' ? 401
     : code.includes('NOT_FOUND') ? 404
       : code.includes('STORAGE') || code.includes('MASTER_KEY') ? 503 : 400;
-  return res.status(status).json({ ok: false, error: code, secretExposed: false, orderSubmitted: false });
+  if (executionClaimed) {
+    return res.status(status).json({
+      ok: false,
+      error: code,
+      secretExposed: false,
+      submissionOutcome: 'unknown',
+      recoveryRequired: true,
+      orderResubmitted: false,
+    });
+  }
+  return res.status(status).json({
+    ok: false,
+    error: code,
+    secretExposed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+    submissionOutcome: 'not_started',
+    recoveryRequired: false,
+    orderResubmitted: false,
+  });
+}
+
+function executionOutcome(order: TradingOrder, executionClaimed: boolean) {
+  if (!executionClaimed) {
+    return {
+      submissionOutcome: 'not_started' as const,
+      recoveryRequired: order.state === 'RECOVERY_REQUIRED',
+      orderResubmitted: false,
+    };
+  }
+  if (order.state === 'RECOVERY_REQUIRED' || order.state === 'SUBMITTED') {
+    return {
+      submissionOutcome: 'unknown' as const,
+      recoveryRequired: true,
+      orderResubmitted: false,
+    };
+  }
+  if (order.state === 'REJECTED') {
+    return {
+      submissionOutcome: 'rejected' as const,
+      recoveryRequired: false,
+      orderResubmitted: false,
+    };
+  }
+  return {
+    submissionOutcome: 'accepted' as const,
+    recoveryRequired: false,
+    orderResubmitted: false,
+  };
 }
 
 function safePlanView(plan: TradingPlan) {
@@ -158,6 +207,7 @@ router.get('/plans', async (req: AuthenticatedRequest, res) => {
 });
 
 router.post('/plans', async (req: AuthenticatedRequest, res) => {
+  let executionClaimed = false;
   try {
     const { userId, repository, automation, execution } = context(req);
     const input = req.body as TradingPlanInput;
@@ -176,7 +226,8 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
     if (!result.plan) return res.status(409).json({ ok: false, error: 'RISK_CHECK_BLOCKED', decision: result.decision, orderSubmitted: false });
     if (policy.mode === 'automatic' && policy.automaticEnabled && result.plan.state === 'PLANNED') {
       const submission = await automation.beginAutomaticPlanAndCreateOrder(userId, result.plan.id);
-      const executed = submission.executionClaimed
+      executionClaimed = submission.executionClaimed;
+      const executed = executionClaimed
         ? await execution.execute(userId, submission.plan, submission.order)
         : submission.order;
       return res.json({
@@ -184,20 +235,23 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
         plan: safePlanView(submission.plan),
         order: executed,
         duplicate: result.duplicate || submission.duplicate,
-        executionClaimed: submission.executionClaimed,
+        executionClaimed,
+        ...executionOutcome(executed, executionClaimed),
       });
     }
     return res.json({ ok: true, plan: safePlanView(result.plan), duplicate: result.duplicate, orderSubmitted: false });
-  } catch (error) { return errorResponse(res, error); }
+  } catch (error) { return errorResponse(res, error, executionClaimed); }
 });
 
 router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
+  let executionClaimed = false;
   try {
     const { userId, automation, execution } = context(req);
     if (req.body?.approved !== true) return res.status(409).json({ ok: false, error: 'EXPLICIT_APPROVAL_REQUIRED' });
     const revalidation = req.body?.revalidation as TradingPlanRevalidationInput | undefined;
     const submission = await automation.approvePlanAndCreateOrder(userId, String(req.params.id), revalidation);
-    const result = submission.executionClaimed
+    executionClaimed = submission.executionClaimed;
+    const result = executionClaimed
       ? await execution.execute(userId, submission.plan, submission.order)
       : submission.order;
     return res.json({
@@ -205,9 +259,10 @@ router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
       plan: safePlanView(submission.plan),
       order: result,
       duplicate: submission.duplicate,
-      executionClaimed: submission.executionClaimed,
+      executionClaimed,
+      ...executionOutcome(result, executionClaimed),
     });
-  } catch (error) { return errorResponse(res, error); }
+  } catch (error) { return errorResponse(res, error, executionClaimed); }
 });
 
 router.post('/plans/:id/invalidate', async (req: AuthenticatedRequest, res) => {
@@ -309,6 +364,8 @@ router.post('/orders/:id/reconcile', async (req: AuthenticatedRequest, res) => {
       order: result.order,
       resolved: result.resolved,
       querySent: result.querySent,
+      authenticationRequests: result.authenticationRequests,
+      statusQueries: result.statusQueries,
       orderResubmitted: false,
       exchangeOrdersSubmitted: false,
       exchangeCancelsSubmitted: false,
@@ -326,6 +383,8 @@ router.post('/recovery/scan', async (req: AuthenticatedRequest, res) => {
       resolved: result.resolved,
       unresolved: result.unresolved,
       queriesSent: result.queriesSent,
+      authenticationRequests: result.authenticationRequests,
+      statusQueries: result.statusQueries,
       orders: result.orders,
       orderResubmitted: false,
       exchangeOrdersSubmitted: false,
