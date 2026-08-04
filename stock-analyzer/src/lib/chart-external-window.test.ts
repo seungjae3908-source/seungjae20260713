@@ -10,6 +10,7 @@ import {
   externalChartWindowFeatures,
   isDesktopChartViewport,
   isExternalChartSearch,
+  mergeChartRouteSelection,
   parseChartWindowMessage,
 } from './chart-external-window';
 import type { AnalysisSelection } from './analysis-selection';
@@ -39,6 +40,46 @@ test('external chart path preserves the validated chart context and isolated syn
   assert.equal(chartSyncIdFromSearch(query), 'sync-a');
   assert.equal(chartExternalWindowChannel('sync-a'), 'stock-app-ai-chart-window-v1:sync-a');
   assert.equal(buildChartPath(selection).includes('chartWindow=external'), false);
+});
+
+test('route timeframe changes preserve scanner evidence for the same instrument', () => {
+  const stored: AnalysisSelection = {
+    ...selection,
+    timeframe: '5m',
+    searchRunId: 'scan-1',
+    signalScore: 88,
+    signalRank: 1,
+    confidence: 82,
+    riskLevel: 'LOW',
+    matchedSignals: ['거래량 증가'],
+    reasons: ['상승 구조'],
+  };
+  const route: AnalysisSelection = {
+    ...selection,
+    timeframe: '30m',
+    searchRunId: undefined,
+    signalScore: undefined,
+    confidence: undefined,
+  };
+  const merged = mergeChartRouteSelection(route, stored);
+
+  assert.equal(merged?.timeframe, '30m');
+  assert.equal(merged?.signalScore, 88);
+  assert.equal(merged?.confidence, 82);
+  assert.equal(merged?.searchRunId, 'scan-1');
+  assert.deepEqual(merged?.matchedSignals, ['거래량 증가']);
+});
+
+test('route selection does not borrow evidence from another instrument', () => {
+  const route: AnalysisSelection = {
+    ...selection,
+    ticker: 'ETHUSDT',
+    symbol: 'ETHUSDT',
+    displayName: '이더리움 무기한 선물',
+  };
+  const merged = mergeChartRouteSelection(route, { ...selection, signalScore: 88 });
+  assert.equal(merged?.ticker, 'ETHUSDT');
+  assert.equal(merged?.signalScore, undefined);
 });
 
 test('chart selection key changes only when the data context changes', () => {
