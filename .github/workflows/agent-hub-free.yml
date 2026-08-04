@@ -49,8 +49,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout branch
+      - name: Checkout pull request head
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Decide whether to run one-time model smoke
         id: gate
