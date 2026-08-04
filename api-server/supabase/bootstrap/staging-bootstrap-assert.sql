@@ -5,6 +5,8 @@ declare
   required_table text;
   required_rls_table text;
   required_index text;
+  paper_table text;
+  paper_operation text;
   missing_columns integer;
   auth_user_count bigint;
   profile_count bigint;
@@ -131,6 +133,26 @@ begin
     ) then
       raise exception 'staging bootstrap has no RLS policy for public.%', required_rls_table;
     end if;
+  end loop;
+
+  foreach paper_table in array array[
+    'paper_accounts',
+    'paper_orders',
+    'paper_positions',
+    'paper_fills',
+    'paper_journal_entries',
+    'paper_sync_state'
+  ]
+  loop
+    foreach paper_operation in array array['SELECT', 'INSERT', 'UPDATE', 'DELETE']
+    loop
+      if not has_table_privilege('authenticated', format('public.%I', paper_table), paper_operation) then
+        raise exception 'authenticated lacks % on public.%', paper_operation, paper_table;
+      end if;
+      if has_table_privilege('anon', format('public.%I', paper_table), paper_operation) then
+        raise exception 'anon unexpectedly has % on public.%', paper_operation, paper_table;
+      end if;
+    end loop;
   end loop;
 
   if not has_table_privilege('authenticated', 'public.profiles', 'SELECT') then
