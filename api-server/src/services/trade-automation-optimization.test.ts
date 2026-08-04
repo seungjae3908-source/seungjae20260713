@@ -17,7 +17,7 @@ function input(overrides: Partial<TradingPlanInput> = {}): TradingPlanInput {
   return {
     exchange: 'upbit', accountMode: 'paper', strategyId: 'breakout-v1', signalId: `signal-${now}`,
     symbol: 'BTC', market: 'KRW', side: 'buy', orderType: 'market', quantity: null,
-    quoteAmount: 100_000, limitPrice: null, estimatedKrw: 100_000, stopPrice: 98_000,
+    quoteAmount: 40_000, limitPrice: null, estimatedKrw: 40_000, stopPrice: 98_000,
     targetPrices: [104_000, 108_000], splitRatios: [50, 50], leverage: null, marginMode: null,
     reduceOnly: false, invalidateAction: 'hold', signalReasons: ['trend', 'volume'],
     signalState: 'confirmed', signalExpiresAt: new Date(now + 5 * 60_000).toISOString(),
@@ -52,9 +52,9 @@ test('risk sizing caps order notional from account risk and stop distance', () =
   const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
   const sizing = calculateRiskSizedOrderLimitKrw(input(), policy);
   assert.equal(sizing.stopDistancePercent, 2);
-  assert.equal(sizing.riskBudgetKrw, 5_000);
-  assert.equal(sizing.maximumOrderKrw, 250_000);
-  const blocked = evaluateTradingOptimization(input({ estimatedKrw: 300_000 }), policy);
+  assert.equal(sizing.riskBudgetKrw, 1_000);
+  assert.equal(sizing.maximumOrderKrw, 50_000);
+  const blocked = evaluateTradingOptimization(input({ estimatedKrw: 60_000 }), policy);
   assert.ok(blocked.blockCodes.includes('RISK_BUDGET_EXCEEDED'));
 });
 
@@ -121,9 +121,12 @@ test('approval requires a fresh live revalidation and invalidated conditions exp
     }), /TRADE_PLAN_RISK_RECHECK_FAILED/);
     assert.equal(created.plan!.state, 'EXPIRED');
   } finally {
-    process.env.ORDER_EXECUTION_ENABLED = previous.global;
-    process.env.LIVE_TRADING_ACTIVATION_APPROVED = previous.approved;
-    process.env.UPBIT_LIVE_ORDER_ENABLED = previous.upbit;
+    if (previous.global === undefined) delete process.env.ORDER_EXECUTION_ENABLED;
+    else process.env.ORDER_EXECUTION_ENABLED = previous.global;
+    if (previous.approved === undefined) delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
+    else process.env.LIVE_TRADING_ACTIVATION_APPROVED = previous.approved;
+    if (previous.upbit === undefined) delete process.env.UPBIT_LIVE_ORDER_ENABLED;
+    else process.env.UPBIT_LIVE_ORDER_ENABLED = previous.upbit;
   }
 });
 
