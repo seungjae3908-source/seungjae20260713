@@ -58,7 +58,7 @@ function finite(value: unknown): value is number {
 }
 
 function approvalBlockReason(plan: TradeApprovalPlan, emergencyStopped: boolean) {
-  if (emergencyStopped) return '긴급정지 중입니다.';
+  if (emergencyStopped) return '긴급정지 또는 상태 확인 중입니다.';
   if (plan.state !== 'APPROVAL_PENDING') return '이미 처리된 주문후보입니다.';
   if (!plan.approvalExpiresAt || Date.parse(plan.approvalExpiresAt) <= Date.now()) return '승인 유효시간이 만료됐습니다.';
   if (plan.signalExpiresAt && Date.parse(plan.signalExpiresAt) <= Date.now()) return '신호 유효시간이 만료됐습니다.';
@@ -85,23 +85,32 @@ export function TradeApprovalQueue({
   emergencyStopped,
 }: {
   fixturePlans?: TradeApprovalPlan[];
-  emergencyStopped: boolean;
+  emergencyStopped?: boolean;
 }) {
   const [plans, setPlans] = useState<TradeApprovalPlan[]>(fixturePlans ?? []);
+  const [serverStopped, setServerStopped] = useState(emergencyStopped ?? true);
   const [loading, setLoading] = useState(!fixturePlans);
   const [message, setMessage] = useState('');
   const visiblePlans = useMemo(() => plans.slice(0, 20), [plans]);
+  const effectiveStopped = emergencyStopped ?? serverStopped;
 
   async function load() {
     if (fixturePlans) return;
     setLoading(true);
     try {
-      const response = await authorizedFetch('/api/trade-automation/plans');
-      const payload = await response.json() as { plans?: TradeApprovalPlan[]; error?: string };
-      if (!response.ok || !payload.plans) throw new Error(payload.error ?? '주문후보를 불러오지 못했습니다.');
-      setPlans(payload.plans);
+      const [plansResponse, statusResponse] = await Promise.all([
+        authorizedFetch('/api/trade-automation/plans'),
+        authorizedFetch('/api/trade-automation/status'),
+      ]);
+      const plansPayload = await plansResponse.json() as { plans?: TradeApprovalPlan[]; error?: string };
+      const statusPayload = await statusResponse.json() as { emergencyStopped?: boolean; error?: string };
+      if (!plansResponse.ok || !plansPayload.plans) throw new Error(plansPayload.error ?? '주문후보를 불러오지 못했습니다.');
+      if (!statusResponse.ok || typeof statusPayload.emergencyStopped !== 'boolean') throw new Error(statusPayload.error ?? '거래 안전상태를 확인하지 못했습니다.');
+      setPlans(plansPayload.plans);
+      setServerStopped(statusPayload.emergencyStopped);
       setMessage('');
     } catch (error) {
+      setServerStopped(true);
       setMessage(error instanceof Error ? error.message : '주문후보를 불러오지 못했습니다.');
     } finally { setLoading(false); }
   }
@@ -109,7 +118,7 @@ export function TradeApprovalQueue({
   useEffect(() => { void load(); }, []);
 
   async function approve(plan: TradeApprovalPlan) {
-    const reason = approvalBlockReason(plan, emergencyStopped);
+    const reason = approvalBlockReason(plan, effectiveStopped);
     if (reason) { setMessage(reason); return; }
     if (fixturePlans) {
       setPlans((current) => current.map((item) => item.id === plan.id ? { ...item, state: 'FILLED' } : item));
@@ -149,18 +158,18 @@ export function TradeApprovalQueue({
     }
   }
 
-  return <div className="mt-3 rounded-2xl border border-card-border bg-background p-3" data-testid="trade-approval-queue">
+  return <section className="mt-3 rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm" data-testid="trade-approval-queue">
     <div className="flex items-start justify-between gap-3">
-      <div><p className="text-xs font-black">주문후보 · 승인 대기</p><p className="mt-1 text-[11px] text-muted-foreground">조건 이탈 즉시 승인 버튼이 비활성화되며 Live는 서버 재검증 전까지 잠깁니다.</p></div>
+      <div><h2 className="text-sm font-black">주문후보 · 승인 대기</h2><p className="mt-1 text-[11px] text-muted-foreground">조건 이탈 즉시 승인 버튼이 비활성화되며 Live는 서버 재검증 전까지 잠깁니다.</p></div>
       <button type="button" onClick={() => void load()} aria-label="주문후보 새로고침" className="rounded-xl border border-card-border p-2"><RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} /></button>
     </div>
 
     <div className="mt-3 space-y-2">
       {visiblePlans.length === 0 && <p className="rounded-xl border border-dashed border-card-border p-4 text-center text-xs text-muted-foreground">현재 승인 대기 주문후보가 없습니다.</p>}
       {visiblePlans.map((plan) => {
-        const reason = approvalBlockReason(plan, emergencyStopped);
+        const reason = approvalBlockReason(plan, effectiveStopped);
         const pending = plan.state === 'APPROVAL_PENDING';
-        return <article key={plan.id} className="rounded-2xl border border-card-border bg-card p-3" data-testid={`approval-plan-${plan.id}`}>
+        return <article key={plan.id} className="rounded-2xl border border-card-border bg-background p-3" data-testid={`approval-plan-${plan.id}`}>
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="flex flex-wrap items-center gap-1.5">
@@ -198,9 +207,9 @@ export function TradeApprovalQueue({
       })}
     </div>
     {message && <p role="status" className="mt-3 rounded-xl bg-secondary p-2 text-[11px] font-bold">{message}</p>}
-  </div>;
+  </section>;
 }
 
 function PlanMetric({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-xl border border-card-border bg-background px-2 py-2"><span className="block text-[9px] font-bold text-muted-foreground">{label}</span><strong className="mt-0.5 block break-words text-[11px]">{value}</strong></div>;
+  return <div className="rounded-xl border border-card-border bg-card px-2 py-2"><span className="block text-[9px] font-bold text-muted-foreground">{label}</span><strong className="mt-0.5 block break-words text-[11px]">{value}</strong></div>;
 }
