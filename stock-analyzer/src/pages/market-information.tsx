@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, BarChart3, ChevronRight, RefreshCw, Search } from 'lucide-react';
+import {
+  AlertTriangle,
+  BarChart3,
+  CheckCircle2,
+  ChevronRight,
+  Clock3,
+  RefreshCw,
+  Search,
+  WifiOff,
+} from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { authorizedFetch } from '@/lib/auth-fetch';
@@ -8,635 +17,477 @@ import { useAssetMode } from '@/lib/asset-mode';
 import {
   marketInformationDetailPath,
   marketInformationRoute,
+  parseMarketInformationText,
+  type MarketInformationAssetRow,
+  type MarketInformationMeta,
+  type MarketInformationNewsRow,
   type MarketInformationRoute,
+  type MarketInformationSection,
 } from '@/lib/market-information';
-import {
-  displayCoinName,
-  displayStockName,
-  formatAppPercent,
-  formatAppPrice,
-} from '@/lib/stock-display';
 import { cn } from '@/lib/utils';
 
-type StockMarket = 'KR' | 'US';
-type RankingKey = 'marketCap' | 'tradingValue' | 'volume' | 'gainers' | 'losers';
+type RankingKey = 'tradingValue' | 'volume' | 'gainers' | 'losers' | 'marketCap';
 
-type StockRow = {
-  ticker: string;
-  name?: string | null;
-  market?: string | null;
-  currency?: string | null;
-  price?: number | null;
-  changePercent?: number | null;
-  volume?: number | null;
-  tradingValue?: number | null;
-  marketCap?: number | null;
-};
-
-type MoversResponse = {
-  market?: string;
-  provider?: string;
-  popular?: StockRow[];
-  volume?: StockRow[];
-  gainers?: StockRow[];
-  losers?: StockRow[];
-  updatedAt?: string;
-};
-
-type SearchResponse = {
-  results?: StockRow[];
-  count?: number;
-  updatedAt?: string;
-};
-
-type MarketIndex = {
-  key?: string;
-  label?: string;
-  price?: number | null;
-  value?: number | null;
-  changePercent?: number | null;
-};
-
-type MarketHomeResponse = {
-  ok?: boolean;
-  indices?: MarketIndex[];
-  updatedAt?: string;
-  message?: string;
-};
-
-type SectorRow = {
-  sector?: string;
-  name?: string;
-  label?: string;
-  tradingValue?: number | null;
-  changePercent?: number | null;
-};
-
-type SectorResponse = {
-  sectors?: SectorRow[];
-  updatedAt?: string;
-};
-
-type FeedItem = {
-  id?: string;
-  kind?: 'news' | 'disclosure' | 'signal';
-  title?: string;
-  summary?: string;
-  source?: string;
-  sourceAt?: string | null;
-};
-
-type FeedResponse = {
-  ok?: boolean;
-  items?: FeedItem[];
-  count?: number;
-  updatedAt?: string;
-  message?: string;
-};
-
-type SpotMarket = {
-  symbol?: string;
-  koreanName?: string;
-  englishName?: string;
-  warning?: boolean;
-};
-
-type SpotTicker = {
-  symbol?: string;
-  price?: number | null;
-  changePercent?: number | null;
-  high24h?: number | null;
-  low24h?: number | null;
-  volume24h?: number | null;
-  tradingValue24h?: number | null;
-};
-
-type SpotMarketsResponse = {
-  exchange?: string;
-  markets?: SpotMarket[];
-  count?: number;
-  updatedAt?: string;
-};
-
-type SpotTickersResponse = {
-  exchange?: string;
-  tickers?: SpotTicker[];
-  count?: number;
-  updatedAt?: string;
-};
-
-type FuturesTicker = {
-  symbol?: string;
-  price?: number | null;
-  changePercent?: number | null;
-  changePercent24h?: number | null;
-  high24h?: number | null;
-  low24h?: number | null;
-  volume24h?: number | null;
-  tradingValue24h?: number | null;
-  fundingRatePercent?: number | null;
-  openInterest?: number | null;
-};
-
-type FuturesTickersResponse = {
-  ok?: boolean;
-  exchange?: string;
-  provider?: string;
-  tickers?: FuturesTicker[];
-  count?: number;
-  updatedAt?: string;
-  message?: string;
-};
-
-type CoinRow = {
-  symbol: string;
-  name: string;
-  price: number | null;
-  changePercent: number | null;
-  high24h: number | null;
-  low24h: number | null;
-  volume24h: number | null;
-  tradingValue24h: number | null;
-  fundingRatePercent: number | null;
-  openInterest: number | null;
-  warning: boolean;
-};
-
-class InformationRequestError extends Error {
+class MarketInformationRequestError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
+    readonly retryable: boolean,
     message: string,
   ) {
     super(message);
+    this.name = 'MarketInformationRequestError';
   }
 }
 
-async function getJson<T>(path: string, signal: AbortSignal): Promise<T> {
-  const response = await authorizedFetch(path, { cache: 'no-store', signal });
-  const payload = await response.json().catch(() => null) as (T & { error?: string; message?: string }) | null;
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+async function requestRoom(route: MarketInformationRoute, signal: AbortSignal) {
+  let response: Response;
+  try {
+    response = await authorizedFetch(`/api/market-information/${route.id}`, { signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    throw new MarketInformationRequestError(0, 'NETWORK_ERROR', true, '네트워크 연결을 확인해 주세요.');
+  }
+  const text = await response.text();
   if (!response.ok) {
-    throw new InformationRequestError(
-      response.status,
-      payload?.error ?? `HTTP_${response.status}`,
-      payload?.message ?? `HTTP ${response.status}`,
-    );
-  }
-  if (!payload) throw new InformationRequestError(502, 'INVALID_JSON', '응답 형식이 올바르지 않습니다.');
-  return payload;
-}
-
-function finite(value: unknown): number | null {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function normalizeSearch(value: unknown): string {
-  return String(value ?? '')
-    .normalize('NFKC')
-    .toLocaleLowerCase()
-    .replace(/[\s._/\-]+/g, '');
-}
-
-function useDebouncedValue(value: string, delayMs: number): string {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(timer);
-  }, [delayMs, value]);
-  return debounced;
-}
-
-function formatNumber(value: unknown): string {
-  const parsed = finite(value);
-  return parsed == null ? '데이터 없음' : parsed.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
-}
-
-function formatMarketPrice(value: unknown, currency: MarketInformationRoute['currency']): string {
-  const parsed = finite(value);
-  if (parsed == null) return '데이터 없음';
-  if (currency === 'USDT') {
-    return `${parsed.toLocaleString('ko-KR', {
-      minimumFractionDigits: parsed < 1 ? 4 : 0,
-      maximumFractionDigits: parsed >= 100 ? 2 : 6,
-    })} USDT`;
-  }
-  return formatAppPrice(parsed, currency);
-}
-
-function freshnessLabel(value: unknown): string {
-  const timestamp = Date.parse(String(value ?? ''));
-  if (!Number.isFinite(timestamp)) return '기준시각 없음';
-  const ageMs = Math.max(0, Date.now() - timestamp);
-  if (ageMs <= 2 * 60_000) return '최신';
-  if (ageMs <= 15 * 60_000) return '데이터 지연';
-  return '오래된 데이터';
-}
-
-function queryErrorLabel(error: unknown): string {
-  if (error instanceof InformationRequestError) {
-    if (error.status === 401) return '인증이 만료되었습니다. 다시 로그인해 주세요.';
-    if (error.status === 403) return '이 시장 정보를 볼 권한이 없습니다.';
-    if (error.status === 404) return '요청한 정보가 없습니다.';
-    if (error.status === 429) return '요청이 많습니다. 잠시 후 다시 시도해 주세요.';
-    if (error.status >= 500) return '데이터 공급자 오류입니다.';
-  }
-  if (/abort/i.test(String((error as Error | undefined)?.message ?? ''))) return '요청이 취소되었습니다.';
-  return '정보를 불러오지 못했습니다.';
-}
-
-function marketTitle(route: MarketInformationRoute): string {
-  if (route.id === 'stocks-kr') return '국내주식 정보';
-  if (route.id === 'stocks-us') return '미국주식 정보';
-  if (route.id === 'coins-spot') return '코인 현물 정보';
-  return '코인 선물 정보';
-}
-
-export default function MarketInformationPage() {
-  const [location, navigate] = useLocation();
-  const mode = useAssetMode();
-  const route = marketInformationRoute(location);
-  const routeId = route?.id;
-  const [searchText, setSearchText] = useState('');
-  const [ranking, setRanking] = useState<RankingKey>('tradingValue');
-  const debouncedSearch = useDebouncedValue(searchText.trim(), 200);
-
-  useEffect(() => {
-    if (!route) return;
-    mode.setAsset(route.asset);
-    if (route.id === 'stocks-kr') mode.setStockMarket('KR');
-    if (route.id === 'stocks-us') mode.setStockMarket('US');
-    if (route.id === 'coins-spot') mode.setCoinMarket('spot');
-    if (route.id === 'coins-futures') mode.setCoinMarket('futures');
-    setSearchText('');
-    setRanking('tradingValue');
-    // route identity is authoritative; legacy mode is synchronized for existing detail consumers.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeId]);
-
-  const stockMarket: StockMarket | null = routeId === 'stocks-kr' ? 'KR' : routeId === 'stocks-us' ? 'US' : null;
-  const isStock = stockMarket !== null;
-  const isSpot = routeId === 'coins-spot';
-  const isFutures = routeId === 'coins-futures';
-
-  const marketHome = useQuery({
-    queryKey: ['market-information', routeId, 'market-home'],
-    queryFn: ({ signal }) => getJson<MarketHomeResponse>('/api/market/home', signal),
-    enabled: isStock,
-    staleTime: 30_000,
-  });
-
-  const movers = useQuery({
-    queryKey: ['market-information', routeId, 'movers'],
-    queryFn: ({ signal }) => getJson<MoversResponse>(`/api/market/movers?market=${stockMarket}`, signal),
-    enabled: isStock,
-    refetchInterval: 30_000,
-  });
-
-  const sectors = useQuery({
-    queryKey: ['market-information', routeId, 'sectors'],
-    queryFn: ({ signal }) => getJson<SectorResponse>(`/api/market/sector-popular?market=${stockMarket}`, signal),
-    enabled: isStock,
-    staleTime: 60_000,
-  });
-
-  const stockSearch = useQuery({
-    queryKey: ['market-information', routeId, 'search', debouncedSearch],
-    queryFn: ({ signal }) => getJson<SearchResponse>(`/api/search?q=${encodeURIComponent(debouncedSearch)}`, signal),
-    enabled: isStock && debouncedSearch.length > 0,
-    staleTime: 30_000,
-  });
-
-  const feed = useQuery({
-    queryKey: ['market-information', routeId, 'feed'],
-    queryFn: ({ signal }) => {
-      if (!route) throw new InformationRequestError(404, 'ROUTE_NOT_FOUND', '정보 화면을 찾을 수 없습니다.');
-      return getJson<FeedResponse>(`/api/stocks/special-feed?asset=${route.asset}&market=${route.market}&limit=100`, signal);
-    },
-    enabled: Boolean(route),
-    refetchInterval: 60_000,
-  });
-
-  const spotMarkets = useQuery({
-    queryKey: ['market-information', routeId, 'spot-markets'],
-    queryFn: ({ signal }) => getJson<SpotMarketsResponse>('/api/crypto/spot/markets', signal),
-    enabled: isSpot,
-    staleTime: 10 * 60_000,
-  });
-
-  const spotTickers = useQuery({
-    queryKey: ['market-information', routeId, 'spot-tickers'],
-    queryFn: ({ signal }) => getJson<SpotTickersResponse>('/api/crypto/spot/tickers', signal),
-    enabled: isSpot,
-    refetchInterval: 15_000,
-  });
-
-  const futuresTickers = useQuery({
-    queryKey: ['market-information', routeId, 'futures-tickers'],
-    queryFn: ({ signal }) => getJson<FuturesTickersResponse>('/api/crypto/futures/tickers', signal),
-    enabled: isFutures,
-    refetchInterval: 10_000,
-  });
-
-  const spotNameMap = useMemo(() => new Map(
-    (spotMarkets.data?.markets ?? []).map((item) => [String(item.symbol ?? '').toUpperCase(), item]),
-  ), [spotMarkets.data?.markets]);
-
-  const coinRows = useMemo<CoinRow[]>(() => {
-    if (isSpot) {
-      const rows: CoinRow[] = [];
-      for (const ticker of spotTickers.data?.tickers ?? []) {
-        const symbol = String(ticker.symbol ?? '').toUpperCase();
-        if (!symbol) continue;
-        const master = spotNameMap.get(symbol);
-        rows.push({
-          symbol,
-          name: displayCoinName(symbol, master?.koreanName, master?.englishName),
-          price: finite(ticker.price),
-          changePercent: finite(ticker.changePercent),
-          high24h: finite(ticker.high24h),
-          low24h: finite(ticker.low24h),
-          volume24h: finite(ticker.volume24h),
-          tradingValue24h: finite(ticker.tradingValue24h),
-          fundingRatePercent: null,
-          openInterest: null,
-          warning: master?.warning === true,
-        });
-      }
-      return rows;
+    let payload: unknown = null;
+    try {
+      payload = text ? JSON.parse(text) as unknown : null;
+    } catch {
+      payload = null;
     }
-    if (isFutures) {
-      const rows: CoinRow[] = [];
-      for (const ticker of futuresTickers.data?.tickers ?? []) {
-        const symbol = String(ticker.symbol ?? '').toUpperCase();
-        if (!symbol) continue;
-        rows.push({
-          symbol,
-          name: symbol,
-          price: finite(ticker.price),
-          changePercent: finite(ticker.changePercent24h ?? ticker.changePercent),
-          high24h: finite(ticker.high24h),
-          low24h: finite(ticker.low24h),
-          volume24h: finite(ticker.volume24h),
-          tradingValue24h: finite(ticker.tradingValue24h),
-          fundingRatePercent: finite(ticker.fundingRatePercent),
-          openInterest: finite(ticker.openInterest),
-          warning: false,
-        });
-      }
-      return rows;
-    }
-    return [];
-  }, [futuresTickers.data?.tickers, isFutures, isSpot, spotNameMap, spotTickers.data?.tickers]);
+    const record = isObject(payload) ? payload : {};
+    const code = typeof record.errorCode === 'string' ? record.errorCode : `HTTP_${response.status}`;
+    const retryable = record.retryable === true || response.status === 429 || response.status >= 500;
+    const message = typeof record.message === 'string' && record.message.trim()
+      ? record.message
+      : `시장정보 요청에 실패했습니다. (${response.status})`;
+    throw new MarketInformationRequestError(response.status, code, retryable, message);
+  }
+  return parseMarketInformationText(text, route);
+}
 
-  const stockSearchRows = useMemo(() => (stockSearch.data?.results ?? [])
-    .filter((item) => item.market === stockMarket)
-    .filter((item, index, rows) => rows.findIndex((candidate) => candidate.market === item.market && candidate.ticker === item.ticker) === index)
-    .slice(0, 50), [stockMarket, stockSearch.data?.results]);
+function formatDate(value: string | null): string {
+  if (!value) return '기준시각 미제공';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '잘못된 기준시각';
+  return new Intl.DateTimeFormat('ko-KR', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date);
+}
 
-  const coinSearchRows = useMemo(() => {
-    if (!debouncedSearch) return [];
-    const needle = normalizeSearch(debouncedSearch);
-    return coinRows
-      .filter((row) => [row.symbol, row.name].some((value) => normalizeSearch(value).includes(needle)))
-      .slice(0, 50);
-  }, [coinRows, debouncedSearch]);
+function formatNumber(value: number | null, currency?: string): string {
+  if (value == null) return '미제공';
+  const maximumFractionDigits = currency === 'KRW' ? 0 : Math.abs(value) < 1 ? 6 : 2;
+  return new Intl.NumberFormat('ko-KR', { maximumFractionDigits }).format(value);
+}
 
-  const stockRankingRows = useMemo(() => {
-    const source = ranking === 'volume'
-      ? movers.data?.volume
-      : ranking === 'gainers'
-        ? movers.data?.gainers
-        : ranking === 'losers'
-          ? movers.data?.losers
-          : movers.data?.popular;
-    const rows = [...(source ?? [])];
-    if (ranking === 'marketCap') {
-      return rows
-        .filter((item) => finite(item.marketCap) != null)
-        .sort((a, b) => Number(b.marketCap) - Number(a.marketCap));
-    }
-    return rows;
-  }, [movers.data, ranking]);
+function formatCompact(value: number | null): string {
+  if (value == null) return '미제공';
+  return new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 2 }).format(value);
+}
 
-  const coinRankingRows = useMemo(() => {
-    const rows = [...coinRows];
-    if (ranking === 'volume') rows.sort((a, b) => Number(b.volume24h ?? -1) - Number(a.volume24h ?? -1));
-    else if (ranking === 'gainers') rows.sort((a, b) => Number(b.changePercent ?? -Infinity) - Number(a.changePercent ?? -Infinity));
-    else if (ranking === 'losers') rows.sort((a, b) => Number(a.changePercent ?? Infinity) - Number(b.changePercent ?? Infinity));
-    else rows.sort((a, b) => Number(b.tradingValue24h ?? -1) - Number(a.tradingValue24h ?? -1));
-    return rows.slice(0, 100);
-  }, [coinRows, ranking]);
+function formatPercent(value: number | null): string {
+  if (value == null) return '미제공';
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${value.toFixed(2)}%`;
+}
 
-  if (!route) return <StateCard tone="error">지원하지 않는 정보 화면입니다.</StateCard>;
+function statusText(error: unknown): { title: string; description: string; icon: ReactNode } {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { title: '오프라인 상태입니다', description: '인터넷 연결 후 새로고침해 주세요.', icon: <WifiOff className="h-5 w-5" /> };
+  }
+  if (error instanceof MarketInformationRequestError) {
+    if (error.status === 401) return { title: '인증이 만료되었습니다', description: '다시 로그인한 뒤 이용해 주세요.', icon: <AlertTriangle className="h-5 w-5" /> };
+    if (error.status === 403) return { title: '권한이 부족합니다', description: '현재 회원 등급에서 이 정보방을 사용할 수 없습니다.', icon: <AlertTriangle className="h-5 w-5" /> };
+    if (error.status === 429) return { title: '제공기관 호출 한도에 도달했습니다', description: 'Retry-After 이후 다시 시도해 주세요.', icon: <Clock3 className="h-5 w-5" /> };
+    if (error.code.includes('TIMEOUT')) return { title: '제공기관 응답이 지연되고 있습니다', description: '잠시 후 다시 시도해 주세요.', icon: <Clock3 className="h-5 w-5" /> };
+    return { title: '시장정보를 불러오지 못했습니다', description: error.message, icon: <AlertTriangle className="h-5 w-5" /> };
+  }
+  return { title: '시장정보 응답을 확인하지 못했습니다', description: error instanceof Error ? error.message : '알 수 없는 오류입니다.', icon: <AlertTriangle className="h-5 w-5" /> };
+}
 
-  const searchLoading = isStock ? stockSearch.isLoading : isSpot ? spotMarkets.isLoading || spotTickers.isLoading : futuresTickers.isLoading;
-  const searchError = isStock ? stockSearch.error : isSpot ? spotMarkets.error ?? spotTickers.error : futuresTickers.error;
-  const rankingLoading = isStock ? movers.isLoading : isSpot ? spotTickers.isLoading : futuresTickers.isLoading;
-  const rankingError = isStock ? movers.error : isSpot ? spotTickers.error : futuresTickers.error;
-  const updatedAt = isStock ? movers.data?.updatedAt : isSpot ? spotTickers.data?.updatedAt : futuresTickers.data?.updatedAt;
-  const openSymbol = (symbol: string) => navigate(marketInformationDetailPath(route, symbol));
-
+function SourceMeta({ meta }: { meta: MarketInformationMeta }) {
   return (
-    <div data-testid="market-information-root" data-market-information={route.id} className="h-full overflow-y-auto overscroll-contain bg-background">
-      <header className="border-b border-card-border px-4 pb-4 pt-4">
-        <h1 className="text-center text-xl font-black">{marketTitle(route)}</h1>
-        <p className="mt-1 text-center text-xs font-bold text-muted-foreground">{route.exchange} · {route.currency} · {freshnessLabel(updatedAt)}</p>
-        <label className="mt-4 flex min-h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
-          <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <input
-            value={searchText}
-            onChange={(event) => setSearchText(event.target.value)}
-            placeholder={isStock ? '종목명·티커·종목코드 검색' : '코인명·심볼 검색'}
-            aria-label={`${marketTitle(route)} 검색`}
-            className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
-          />
-        </label>
-      </header>
-
-      <main className="space-y-4 px-4 pb-28 pt-4">
-        {debouncedSearch ? (
-          <InformationSection title="검색 결과" subtitle={isStock ? '현재 시장 결과만 표시' : `${route.exchange} 지원 상품만 표시`}>
-            {searchLoading && <StateCard>불러오는 중</StateCard>}
-            {searchError && <StateCard tone="error">{queryErrorLabel(searchError)}</StateCard>}
-            {!searchLoading && !searchError && isStock && stockSearchRows.length === 0 && <StateCard>검색 결과가 없습니다.</StateCard>}
-            {!searchLoading && !searchError && !isStock && coinSearchRows.length === 0 && <StateCard>검색 결과가 없습니다.</StateCard>}
-            <div className="space-y-2">
-              {isStock && stockSearchRows.map((row) => (
-                <StockInformationRow key={`${row.market}:${row.ticker}`} row={row} route={route} onOpen={() => openSymbol(row.ticker)} />
-              ))}
-              {!isStock && coinSearchRows.map((row) => (
-                <CoinInformationRow key={row.symbol} row={row} route={route} onOpen={() => openSymbol(row.symbol)} />
-              ))}
-            </div>
-            {isStock ? <p className="mt-3 text-[10px] font-bold text-muted-foreground">초성·별칭·ETF 통합 인덱스는 PR #58 검색 계약을 재사용하며 이 화면에서 중복 구현하지 않습니다.</p> : null}
-          </InformationSection>
-        ) : null}
-
-        {isStock ? (
-          <InformationSection title="시장 상태·지수" subtitle="공개 시장 데이터">
-            {marketHome.isLoading && <StateCard>지수 정보를 불러오는 중입니다.</StateCard>}
-            {marketHome.isError && <RetryState error={marketHome.error} onRetry={() => { void marketHome.refetch(); }} />}
-            {(() => {
-              const indices = (marketHome.data?.indices ?? []).filter((index) => {
-                const key = String(index.key ?? '').toUpperCase();
-                return stockMarket === 'KR' ? key === 'KOSPI' || key === 'KOSDAQ' : key === 'NASDAQ';
-              });
-              if (!marketHome.isLoading && !marketHome.isError && indices.length === 0) {
-                return <StateCard>일부 데이터만 제공되거나 해당 지수 데이터가 없습니다.</StateCard>;
-              }
-              return <div className="grid grid-cols-2 gap-2">{indices.map((index) => (
-                <MetricCard
-                  key={String(index.key)}
-                  label={String(index.label ?? index.key ?? '지수')}
-                  value={formatNumber(index.price ?? index.value)}
-                  subvalue={finite(index.changePercent) == null ? '등락률 없음' : formatAppPercent(index.changePercent)}
-                />
-              ))}</div>;
-            })()}
-          </InformationSection>
-        ) : null}
-
-        <InformationSection title="시장 순위" subtitle={updatedAt ? `기준 ${new Date(updatedAt).toLocaleString('ko-KR')}` : '기준시각 없음'}>
-          <div className="mb-3 grid grid-cols-2 gap-2">
-            {(isStock
-              ? [['marketCap', '시가총액'], ['tradingValue', '거래대금'], ['volume', '거래량'], ['gainers', '급등'], ['losers', '급락']]
-              : [['tradingValue', '거래대금'], ['volume', '거래량'], ['gainers', '상승'], ['losers', '하락']]
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setRanking(key as RankingKey)}
-                className={cn('min-h-11 rounded-xl border px-2 text-xs font-black', ranking === key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-background text-muted-foreground')}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {rankingLoading && <StateCard>순위 데이터를 불러오는 중입니다.</StateCard>}
-          {rankingError && <RetryState error={rankingError} onRetry={() => { if (isStock) void movers.refetch(); else if (isSpot) void spotTickers.refetch(); else void futuresTickers.refetch(); }} />}
-          {!rankingLoading && !rankingError && isStock && stockRankingRows.length === 0 && <StateCard>{ranking === 'marketCap' ? '시가총액은 현재 제공기관에서 지원하지 않거나 일부 데이터만 제공합니다.' : '순위 데이터가 없습니다.'}</StateCard>}
-          {!rankingLoading && !rankingError && !isStock && coinRankingRows.length === 0 && <StateCard>순위 데이터가 없습니다.</StateCard>}
-          <div className="space-y-2">
-            {isStock && stockRankingRows.slice(0, 30).map((row) => (
-              <StockInformationRow key={`${ranking}:${row.market}:${row.ticker}`} row={row} route={route} onOpen={() => openSymbol(row.ticker)} />
-            ))}
-            {!isStock && coinRankingRows.slice(0, 30).map((row) => (
-              <CoinInformationRow key={`${ranking}:${row.symbol}`} row={row} route={route} onOpen={() => openSymbol(row.symbol)} />
-            ))}
-          </div>
-        </InformationSection>
-
-        {isStock ? (
-          <InformationSection title="업종·섹터" subtitle="거래대금 기반 공개 데이터">
-            {sectors.isLoading && <StateCard>업종 데이터를 불러오는 중입니다.</StateCard>}
-            {sectors.isError && <RetryState error={sectors.error} onRetry={() => { void sectors.refetch(); }} />}
-            {!sectors.isLoading && !sectors.isError && (sectors.data?.sectors ?? []).length === 0 && <StateCard>업종 데이터가 없습니다.</StateCard>}
-            <div className="grid grid-cols-2 gap-2">
-              {(sectors.data?.sectors ?? []).slice(0, 12).map((sector, index) => (
-                <MetricCard
-                  key={`${sector.sector ?? sector.name ?? index}`}
-                  label={String(sector.label ?? sector.name ?? sector.sector ?? '업종')}
-                  value={finite(sector.tradingValue) == null ? '일부 데이터만 제공' : formatNumber(sector.tradingValue)}
-                  subvalue={finite(sector.changePercent) == null ? '등락률 없음' : formatAppPercent(sector.changePercent)}
-                />
-              ))}
-            </div>
-          </InformationSection>
-        ) : null}
-
-        {isFutures ? (
-          <InformationSection title="선물 공개 시장정보" subtitle="계좌·주문·포지션 private API 미사용">
-            <div className="grid grid-cols-2 gap-2">
-              <MetricCard label="펀딩비" value="종목별 순위에서 제공" />
-              <MetricCard label="미결제약정(OI)" value="종목별 순위에서 제공" />
-              <MetricCard label="롱·숏 비율" value="제공기관 미지원" />
-              <MetricCard label="청산 공개정보" value="제공기관 미지원" />
-            </div>
-          </InformationSection>
-        ) : null}
-
-        <InformationSection title={isStock ? '뉴스·공시' : '시장 뉴스·정보'} subtitle={feed.data?.updatedAt ? `기준 ${new Date(feed.data.updatedAt).toLocaleString('ko-KR')}` : '기준시각 없음'}>
-          {feed.isLoading && <StateCard>정보를 불러오는 중입니다.</StateCard>}
-          {feed.isError && <RetryState error={feed.error} onRetry={() => { void feed.refetch(); }} />}
-          {!feed.isLoading && !feed.isError && (feed.data?.items ?? []).length === 0 && <StateCard>{feed.data?.message ?? (isStock ? '뉴스·공시 데이터가 없습니다.' : '코인 뉴스·정보 제공기관이 아직 연결되지 않았습니다.')}</StateCard>}
-          <div className="space-y-2">
-            {(feed.data?.items ?? []).filter((item) => item.kind === 'news' || item.kind === 'disclosure').slice(0, 20).map((item, index) => (
-              <article key={item.id ?? `${item.title}:${index}`} className="rounded-2xl border border-card-border bg-background p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-black">{item.kind === 'disclosure' ? '공시' : '뉴스'}</span>
-                  <span className="text-right text-[10px] font-bold text-muted-foreground">{item.source ?? '출처 없음'} · {item.sourceAt ? new Date(item.sourceAt).toLocaleString('ko-KR') : '발행시각 없음'}</span>
-                </div>
-                <p className="mt-2 break-words text-sm font-black">{item.title ?? '제목 없음'}</p>
-                {item.summary ? <p className="mt-1 break-words text-xs font-medium text-muted-foreground">{item.summary}</p> : null}
-              </article>
-            ))}
-          </div>
-        </InformationSection>
-      </main>
-      <BottomNav />
+    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground" aria-label="데이터 출처와 신선도">
+      <span>출처 {meta.source ?? meta.provider ?? '미연결'}</span>
+      <span>기준 {formatDate(meta.providerUpdatedAt ?? meta.observedAt)}</span>
+      <span>{meta.marketStatus === '24H' ? '24시간 시장' : meta.marketStatus === 'OPEN' ? '장중' : meta.marketStatus === 'CLOSED' ? '장 마감' : '시장상태 미확인'}</span>
+      {meta.isDelayed && <span className="font-semibold text-amber-600">지연</span>}
+      {meta.isStale && <span className="font-semibold text-red-600">stale</span>}
+      {meta.partial && <span className="font-semibold text-amber-600">일부 데이터</span>}
     </div>
   );
 }
 
-function InformationSection({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
+function SectionFrame<T>({
+  title,
+  section: current,
+  children,
+}: {
+  title: string;
+  section: MarketInformationSection<T>;
+  children: ReactNode;
+}) {
+  const unavailable = current.status === 'unsupported'
+    || current.status === 'unavailable'
+    || current.status === 'error'
+    || current.status === 'empty';
   return (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div><h2 className="text-sm font-black">{title}</h2>{subtitle ? <p className="mt-1 text-[10px] font-bold text-muted-foreground">{subtitle}</p> : null}</div>
-        <BarChart3 className="h-4 w-4 shrink-0 text-primary" />
+    <section className="min-w-0 rounded-2xl border bg-card p-4 shadow-sm" aria-labelledby={`section-${title}`}>
+      <div className="flex items-start justify-between gap-3">
+        <h2 id={`section-${title}`} className="text-sm font-bold">{title}</h2>
+        <span className={cn(
+          'rounded-full px-2 py-1 text-[10px] font-semibold',
+          current.status === 'ready' && 'bg-emerald-500/10 text-emerald-700',
+          (current.status === 'partial' || current.status === 'stale') && 'bg-amber-500/10 text-amber-700',
+          unavailable && 'bg-muted text-muted-foreground',
+        )}>
+          {current.status}
+        </span>
       </div>
-      {children}
+      {current.message && (
+        <p className="mt-3 rounded-xl bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">{current.message}</p>
+      )}
+      {unavailable ? (
+        <div className="mt-4 flex min-h-20 items-center gap-2 rounded-xl border border-dashed px-3 py-4 text-xs text-muted-foreground">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>{current.message ?? '표시할 데이터가 없습니다.'}</span>
+        </div>
+      ) : children}
+      <SourceMeta meta={current.meta} />
     </section>
   );
 }
 
-function StateCard({ children, tone }: { children: ReactNode; tone?: 'error' }) {
-  return <div className={cn('rounded-2xl bg-secondary p-4 text-center text-xs font-bold text-muted-foreground', tone === 'error' && 'bg-destructive/10 text-destructive')}>{children}</div>;
-}
-
-function RetryState({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+function RankingTabs({ value, onChange }: { value: RankingKey; onChange: (value: RankingKey) => void }) {
+  const items: Array<{ key: RankingKey; label: string }> = [
+    { key: 'tradingValue', label: '거래대금' },
+    { key: 'volume', label: '거래량' },
+    { key: 'gainers', label: '급등' },
+    { key: 'losers', label: '급락' },
+    { key: 'marketCap', label: '시가총액' },
+  ];
   return (
-    <div className="space-y-2">
-      <StateCard tone="error"><AlertTriangle className="mx-auto mb-2 h-4 w-4" />{queryErrorLabel(error)}</StateCard>
-      <button type="button" onClick={onRetry} className="flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-card-border bg-background px-4 text-xs font-black"><RefreshCw className="h-4 w-4" /> 다시 불러오기</button>
+    <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5" role="tablist" aria-label="시장 순위 기준">
+      {items.map((item) => (
+        <button
+          key={item.key}
+          type="button"
+          role="tab"
+          aria-selected={value === item.key}
+          onClick={() => onChange(item.key)}
+          className={cn(
+            'min-h-11 rounded-xl border px-2 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            value === item.key ? 'border-primary bg-primary text-primary-foreground' : 'bg-background hover:bg-muted',
+          )}
+        >
+          {item.label}
+        </button>
+      ))}
     </div>
   );
 }
 
-function MetricCard({ label, value, subvalue }: { label: string; value: string; subvalue?: string }) {
-  return <div className="rounded-2xl bg-secondary p-3 text-center"><p className="text-[10px] font-black text-muted-foreground">{label}</p><p className="mt-1 break-words text-sm font-black">{value}</p>{subvalue ? <p className="mt-1 text-[10px] font-bold text-muted-foreground">{subvalue}</p> : null}</div>;
+function sortRows(rows: MarketInformationAssetRow[], key: RankingKey): MarketInformationAssetRow[] {
+  const filtered = key === 'gainers'
+    ? rows.filter((row) => (row.changePercent ?? 0) > 0)
+    : key === 'losers'
+      ? rows.filter((row) => (row.changePercent ?? 0) < 0)
+      : rows;
+  const metric = (row: MarketInformationAssetRow) => {
+    if (key === 'volume') return row.volume24h;
+    if (key === 'marketCap') return row.marketCap;
+    if (key === 'gainers' || key === 'losers') return row.changePercent;
+    return row.tradingValue24h;
+  };
+  return [...filtered].sort((left, right) => {
+    const leftValue = metric(left);
+    const rightValue = metric(right);
+    if (leftValue == null && rightValue == null) return left.symbol.localeCompare(right.symbol);
+    if (leftValue == null) return 1;
+    if (rightValue == null) return -1;
+    return key === 'losers' ? leftValue - rightValue : rightValue - leftValue;
+  });
 }
 
-function StockInformationRow({ row, route, onOpen }: { row: StockRow; route: MarketInformationRoute; onOpen: () => void }) {
-  const price = finite(row.price);
-  const change = finite(row.changePercent);
-  const metric = finite(row.marketCap) != null
-    ? `시총 ${formatMarketPrice(row.marketCap, route.currency)}`
-    : finite(row.tradingValue) != null
-      ? `거래대금 ${formatMarketPrice(row.tradingValue, route.currency)}`
-      : finite(row.volume) != null
-        ? `거래량 ${formatNumber(row.volume)}`
-        : '일부 데이터만 제공';
+function AssetList({
+  route,
+  rows,
+  onSelect,
+}: {
+  route: MarketInformationRoute;
+  rows: MarketInformationAssetRow[];
+  onSelect: (row: MarketInformationAssetRow) => void;
+}) {
+  if (!rows.length) {
+    return <p className="mt-4 rounded-xl border border-dashed p-4 text-xs text-muted-foreground">현재 조건에 맞는 종목이 없습니다.</p>;
+  }
   return (
-    <button type="button" onClick={onOpen} className="flex min-h-14 w-full items-center gap-3 rounded-2xl border border-card-border bg-background p-3 text-left">
-      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(row.ticker, row.name ?? row.ticker, route.market)}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{route.exchange}</span></div><p className="mt-1 text-[10px] font-bold text-muted-foreground">{row.ticker} · {metric}</p></div>
-      <div className="shrink-0 text-right"><p className="text-sm font-black">{price == null ? '데이터 없음' : formatMarketPrice(price, route.currency)}</p><p className={cn('mt-1 text-[10px] font-black', change == null ? 'text-muted-foreground' : change >= 0 ? 'text-positive' : 'text-destructive')}>{change == null ? '등락률 없음' : formatAppPercent(change)}</p></div>
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-    </button>
+    <div className="mt-3 space-y-2">
+      {rows.slice(0, 30).map((row, index) => (
+        <button
+          key={`${row.exchange}:${row.symbol}`}
+          type="button"
+          onClick={() => onSelect(row)}
+          aria-label={`${row.name} 상세 화면 이동`}
+          className="flex min-h-16 w-full min-w-0 items-center gap-3 rounded-xl border bg-background px-3 py-3 text-left transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span className="w-6 shrink-0 text-center text-xs font-bold text-muted-foreground">{index + 1}</span>
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-sm font-bold">{row.name}</span>
+              <span className="shrink-0 text-[10px] text-muted-foreground">{row.symbol}</span>
+              {row.warning && <span className="shrink-0 rounded bg-red-500/10 px-1.5 py-0.5 text-[9px] font-bold text-red-600">주의</span>}
+            </span>
+            <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+              <span>거래량 {formatCompact(row.volume24h)}</span>
+              <span>거래대금 {formatCompact(row.tradingValue24h)}</span>
+              {route.id === 'coins-futures' && <span>펀딩 {formatPercent(row.fundingRatePercent)}</span>}
+              {route.id === 'coins-futures' && <span>OI {formatCompact(row.openInterest)}</span>}
+            </span>
+          </span>
+          <span className="shrink-0 text-right">
+            <span className="block text-sm font-bold">{formatNumber(row.price, row.currency)} {row.currency}</span>
+            <span className={cn('text-xs font-semibold', (row.changePercent ?? 0) > 0 ? 'text-red-600' : (row.changePercent ?? 0) < 0 ? 'text-blue-600' : 'text-muted-foreground')}>
+              {formatPercent(row.changePercent)}
+            </span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </button>
+      ))}
+    </div>
   );
 }
 
-function CoinInformationRow({ row, route, onOpen }: { row: CoinRow; route: MarketInformationRoute; onOpen: () => void }) {
-  const rangePercent = row.high24h != null && row.low24h != null && row.low24h > 0 ? ((row.high24h - row.low24h) / row.low24h) * 100 : null;
+function FeedList({ rows }: { rows: MarketInformationNewsRow[] }) {
   return (
-    <button type="button" onClick={onOpen} className="w-full rounded-2xl border border-card-border bg-background p-3 text-left">
-      <div className="flex min-h-11 items-center gap-3">
-        <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{row.name}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{route.exchange}</span>{row.warning ? <span className="rounded-full bg-warning/10 px-2 py-0.5 text-[9px] font-black text-warning">주의</span> : null}</div><p className="mt-1 text-[10px] font-bold text-muted-foreground">{row.symbol} · 거래대금 {formatMarketPrice(row.tradingValue24h, route.currency)}</p></div>
-        <div className="shrink-0 text-right"><p className="text-sm font-black">{formatMarketPrice(row.price, route.currency)}</p><p className={cn('mt-1 text-[10px] font-black', row.changePercent == null ? 'text-muted-foreground' : row.changePercent >= 0 ? 'text-positive' : 'text-destructive')}>{row.changePercent == null ? '등락률 없음' : formatAppPercent(row.changePercent)}</p></div>
-        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+    <div className="mt-3 space-y-2">
+      {rows.slice(0, 20).map((item) => (
+        <a
+          key={item.id}
+          href={item.url}
+          target="_blank"
+          rel="noreferrer"
+          className="block min-h-14 rounded-xl border bg-background px-3 py-3 hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={`${item.title} 원문 열기`}
+        >
+          <span className="block text-sm font-semibold leading-5">{item.title}</span>
+          <span className="mt-1 block text-[11px] text-muted-foreground">{item.symbol} · {item.source} · {formatDate(item.publishedAt)}</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function LoadingView({ route }: { route: MarketInformationRoute }) {
+  return (
+    <main className="mx-auto min-h-screen w-full max-w-6xl overflow-x-hidden px-3 pb-28 pt-4 sm:px-5" aria-busy="true">
+      <div className="h-8 w-48 animate-pulse rounded-lg bg-muted" />
+      <p className="mt-3 text-sm text-muted-foreground">{route.label} 공개 데이터를 불러오는 중입니다.</p>
+      <div className="mt-5 grid gap-4 md:grid-cols-2">
+        {Array.from({ length: 6 }, (_, index) => <div key={index} className="h-40 animate-pulse rounded-2xl bg-muted" />)}
       </div>
-      {route.id === 'coins-futures' ? <div className="mt-2 grid grid-cols-3 gap-2 border-t border-card-border pt-2 text-center text-[10px] font-bold text-muted-foreground"><span>펀딩 {row.fundingRatePercent == null ? '미지원' : `${formatNumber(row.fundingRatePercent)}%`}</span><span>OI {formatNumber(row.openInterest)}</span><span>변동성 {rangePercent == null ? '데이터 없음' : `${rangePercent.toFixed(2)}%`}</span></div> : null}
-    </button>
+    </main>
+  );
+}
+
+export default function MarketInformationPage() {
+  const [location, navigate] = useLocation();
+  const route = marketInformationRoute(location);
+  const mode = useAssetMode();
+  const [search, setSearch] = useState('');
+  const [ranking, setRanking] = useState<RankingKey>('tradingValue');
+
+  useEffect(() => {
+    if (!route) return;
+    mode.setAsset(route.asset);
+    if (route.asset === 'stock') mode.setStockMarket(route.market === 'US' ? 'US' : 'KR');
+    else mode.setCoinMarket(route.market === 'futures' ? 'futures' : 'spot');
+    setSearch('');
+    setRanking('tradingValue');
+  }, [route?.id]);
+
+  const query = useQuery({
+    queryKey: ['market-information-room', route?.id ?? 'missing'],
+    enabled: Boolean(route),
+    queryFn: ({ signal }) => {
+      if (!route) throw new MarketInformationRequestError(404, 'ROOM_NOT_FOUND', false, '정보방 경로를 찾을 수 없습니다.');
+      return requestRoom(route, signal);
+    },
+    staleTime: route?.id === 'coins-futures' ? 10_000 : route?.id === 'coins-spot' ? 15_000 : 30_000,
+    refetchInterval: route?.id === 'coins-futures' ? 15_000 : route?.id === 'coins-spot' ? 30_000 : 60_000,
+    retry: (failureCount, error) => error instanceof MarketInformationRequestError && error.retryable && failureCount < 1,
+  });
+
+  const visibleRows = useMemo(() => {
+    const rows = query.data?.sections.rankings.data ?? [];
+    const term = search.trim().toLocaleLowerCase('ko-KR');
+    const filtered = term
+      ? rows.filter((row) => row.symbol.toLocaleLowerCase().includes(term) || row.name.toLocaleLowerCase('ko-KR').includes(term))
+      : rows;
+    return sortRows(filtered, ranking);
+  }, [query.data, ranking, search]);
+
+  if (!route) {
+    return <main className="p-6">지원하지 않는 정보방 경로입니다.</main>;
+  }
+
+  if (query.isPending) {
+    return <><LoadingView route={route} /><BottomNav /></>;
+  }
+
+  if (query.isError || !query.data) {
+    const state = statusText(query.error);
+    return (
+      <>
+        <main className="mx-auto min-h-screen w-full max-w-3xl overflow-x-hidden px-4 pb-28 pt-8">
+          <div className="rounded-2xl border bg-card p-6 text-center shadow-sm">
+            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-muted">{state.icon}</div>
+            <h1 className="mt-4 text-lg font-bold">{state.title}</h1>
+            <p className="mt-2 text-sm text-muted-foreground">{state.description}</p>
+            <button
+              type="button"
+              onClick={() => void query.refetch()}
+              className="mt-5 min-h-11 rounded-xl bg-primary px-5 text-sm font-bold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              다시 시도
+            </button>
+          </div>
+        </main>
+        <BottomNav />
+      </>
+    );
+  }
+
+  const data = query.data;
+  return (
+    <>
+      <main className="mx-auto min-h-screen w-full max-w-6xl overflow-x-hidden px-3 pb-28 pt-4 sm:px-5">
+        <header className="rounded-2xl border bg-card p-4 shadow-sm sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+                <BarChart3 className="h-4 w-4" />
+                <span>{route.exchange} · {route.currency}</span>
+              </div>
+              <h1 className="mt-2 text-xl font-black tracking-tight sm:text-2xl">{route.label}</h1>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">실제 공개 시장데이터만 표시하며 출처·기준시각·부분 실패를 카드별로 구분합니다.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void query.refetch()}
+              disabled={query.isFetching}
+              className="flex min-h-11 items-center gap-2 rounded-xl border bg-background px-3 text-xs font-bold hover:bg-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="시장정보 새로고침"
+            >
+              <RefreshCw className={cn('h-4 w-4', query.isFetching && 'animate-spin')} />
+              새로고침
+            </button>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2 text-[11px]">
+            <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 font-semibold text-emerald-700"><CheckCircle2 className="mr-1 inline h-3 w-3" />공개 API 전용</span>
+            <span className="rounded-full bg-muted px-2.5 py-1">private 요청 0</span>
+            <span className="rounded-full bg-muted px-2.5 py-1">주문·취소 0</span>
+            {data.partial && <span className="rounded-full bg-amber-500/10 px-2.5 py-1 font-semibold text-amber-700">부분 데이터</span>}
+            <span className="rounded-full bg-muted px-2.5 py-1">수집 {formatDate(data.fetchedAt)}</span>
+          </div>
+        </header>
+
+        <div className="mt-4 relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={route.asset === 'stock' ? '현재 정보방 종목명·티커 검색' : '현재 정보방 코인명·심볼 검색'}
+            aria-label="현재 정보방 검색"
+            className="min-h-11 w-full rounded-xl border bg-card pl-10 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
+        </div>
+
+        <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-2">
+          <SectionFrame title="주요 지수" section={data.sections.indices}>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {data.sections.indices.data.map((row) => (
+                <div key={row.key} className="rounded-xl border bg-background p-3">
+                  <p className="text-xs text-muted-foreground">{row.label}</p>
+                  <p className="mt-1 text-base font-bold">{formatNumber(row.value)}</p>
+                  <p className={cn('mt-1 text-xs font-semibold', (row.changePercent ?? 0) > 0 ? 'text-red-600' : (row.changePercent ?? 0) < 0 ? 'text-blue-600' : 'text-muted-foreground')}>
+                    {formatPercent(row.changePercent)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </SectionFrame>
+
+          <SectionFrame title="업종·섹터" section={data.sections.sectors}>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {data.sections.sectors.data.slice(0, 12).map((row) => (
+                <div key={row.key} className="rounded-xl border bg-background p-3">
+                  <p className="truncate text-sm font-bold">{row.label}</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">구성 {row.constituentCount} · 거래대금 {formatCompact(row.tradingValue)}</p>
+                </div>
+              ))}
+            </div>
+          </SectionFrame>
+        </div>
+
+        <section className="mt-4 min-w-0 rounded-2xl border bg-card p-4 shadow-sm sm:p-5" aria-labelledby="market-rankings">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h2 id="market-rankings" className="text-sm font-bold">시장 종목 순위</h2>
+              <p className="mt-1 text-[11px] text-muted-foreground">null은 미제공이며 실제 0과 구분합니다.</p>
+            </div>
+            <span className="rounded-full bg-muted px-2 py-1 text-[10px]">{visibleRows.length}개</span>
+          </div>
+          <RankingTabs value={ranking} onChange={setRanking} />
+          {ranking === 'marketCap' && data.sections.rankings.data.every((row) => row.marketCap == null) ? (
+            <p className="mt-4 rounded-xl border border-dashed p-4 text-xs text-muted-foreground">현재 연결된 provider가 시가총액을 제공하지 않아 임의 계산하지 않습니다.</p>
+          ) : (
+            <AssetList route={route} rows={visibleRows} onSelect={(row) => navigate(marketInformationDetailPath(route, row.symbol))} />
+          )}
+          <SourceMeta meta={data.sections.rankings.meta} />
+        </section>
+
+        {route.id === 'coins-futures' && (
+          <div className="mt-4">
+            <SectionFrame title="선물 공개 파생지표" section={data.sections.derivatives}>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border bg-background p-3"><p className="text-xs text-muted-foreground">롱 비율</p><p className="mt-1 text-lg font-bold">{formatPercent(data.sections.derivatives.data.longRatio == null ? null : data.sections.derivatives.data.longRatio * 100)}</p></div>
+                <div className="rounded-xl border bg-background p-3"><p className="text-xs text-muted-foreground">숏 비율</p><p className="mt-1 text-lg font-bold">{formatPercent(data.sections.derivatives.data.shortRatio == null ? null : data.sections.derivatives.data.shortRatio * 100)}</p></div>
+                <div className="rounded-xl border bg-background p-3"><p className="text-xs text-muted-foreground">롱/숏 비</p><p className="mt-1 text-lg font-bold">{formatNumber(data.sections.derivatives.data.longShortRatio)}</p></div>
+              </div>
+              <div className="mt-3 space-y-2">
+                {data.sections.derivatives.data.liquidations.slice(0, 8).map((item, index) => (
+                  <div key={`${item.symbol}:${item.occurredAt}:${index}`} className="flex items-center justify-between gap-3 rounded-xl border bg-background p-3 text-xs">
+                    <span className="font-bold">{item.symbol} · {item.side === 'long' ? '롱 청산' : item.side === 'short' ? '숏 청산' : '방향 미상'}</span>
+                    <span className="text-right text-muted-foreground">{formatNumber(item.price, 'USDT')} · {formatCompact(item.amount)} · {formatDate(item.occurredAt)}</span>
+                  </div>
+                ))}
+              </div>
+            </SectionFrame>
+          </div>
+        )}
+
+        <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-2">
+          <SectionFrame title="뉴스" section={data.sections.news}>
+            <FeedList rows={data.sections.news.data} />
+          </SectionFrame>
+          <SectionFrame title="공시" section={data.sections.disclosures}>
+            <FeedList rows={data.sections.disclosures.data} />
+          </SectionFrame>
+        </div>
+      </main>
+      <BottomNav />
+    </>
   );
 }

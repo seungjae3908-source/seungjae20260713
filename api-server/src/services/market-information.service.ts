@@ -231,8 +231,9 @@ async function stockNews(
     );
     const rows: MarketInformationNewsRow[] = [];
     for (const outcome of pool.outcomes) {
-      if (outcome.status !== 'fulfilled' || !outcome.value.data) continue;
+      if (outcome.status !== 'fulfilled' || !outcome.value) continue;
       const { target, data } = outcome.value;
+      if (!data) continue;
       for (const item of [...data.positive, ...data.negative]) {
         const title = item.title.trim();
         const publishedAt = safeIso(item.date);
@@ -267,8 +268,9 @@ async function stockDisclosures(
     );
     const rows: MarketInformationNewsRow[] = [];
     for (const outcome of pool.outcomes) {
-      if (outcome.status !== 'fulfilled' || !outcome.value.data) continue;
+      if (outcome.status !== 'fulfilled' || !outcome.value) continue;
       const { target, data } = outcome.value;
+      if (!data) continue;
       for (const item of data.filings) {
         const publishedAt = safeIso(item.date);
         if (!publishedAt || !item.url || !item.form.trim()) continue;
