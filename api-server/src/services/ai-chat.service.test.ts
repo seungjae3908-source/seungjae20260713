@@ -63,12 +63,12 @@ test('GEMINI_API_KEY enables the free Gemini provider without a duplicate AI cha
   process.env.GEMINI_API_KEY = 'test-gemini-key';
   let requestUrl = '';
   let requestBody: any = null;
-  let requestHeaders: Headers | null = null;
+  let apiKeyHeader = '';
   try {
     const result = await answerAiChat({ message: '<b>RSI</b>를 간단히 요약해줘' }, async (url, init) => {
       requestUrl = String(url);
       requestBody = JSON.parse(String(init?.body));
-      requestHeaders = new Headers(init?.headers);
+      apiKeyHeader = new Headers(init?.headers).get('x-goog-api-key') ?? '';
       return new Response(JSON.stringify({
         candidates: [{ content: { parts: [{ text: 'RSI는 최근 가격 변화의 상대적 강도를 요약하는 공개 기술지표입니다.' }] } }],
       }), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -76,7 +76,7 @@ test('GEMINI_API_KEY enables the free Gemini provider without a duplicate AI cha
     assert.equal(result.kind, 'answer');
     assert.equal(result.model, 'gemini-3.1-flash-lite');
     assert.match(requestUrl, /generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.1-flash-lite:generateContent$/);
-    assert.equal(requestHeaders?.get('x-goog-api-key'), 'test-gemini-key');
+    assert.equal(apiKeyHeader, 'test-gemini-key');
     assert.equal(requestBody.contents[0].role, 'user');
     assert.match(requestBody.contents[0].parts[0].text, /RSI 를 간단히 요약해줘/);
     assert.match(requestBody.systemInstruction.parts[0].text, /public-information assistant/);
