@@ -194,6 +194,25 @@ function planHash(parts: string[]) {
   return createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 20);
 }
 
+export function nextScannerSignalId(
+  baseSignalId: string,
+  plans: Array<Pick<TradingPlan, 'signalId'>>,
+) {
+  const reentryPrefix = `${baseSignalId}:reentry:`;
+  let highestCycle = 0;
+  for (const plan of plans) {
+    const signalId = String(plan.signalId ?? '');
+    if (signalId === baseSignalId) {
+      highestCycle = Math.max(highestCycle, 1);
+      continue;
+    }
+    if (!signalId.startsWith(reentryPrefix)) continue;
+    const cycle = Number(signalId.slice(reentryPrefix.length));
+    if (Number.isSafeInteger(cycle) && cycle >= 2) highestCycle = Math.max(highestCycle, cycle);
+  }
+  return highestCycle === 0 ? baseSignalId : `${reentryPrefix}${highestCycle + 1}`;
+}
+
 function activeOrderStates(state: string) {
   return ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'RECOVERY_REQUIRED'].includes(state);
 }
@@ -405,7 +424,8 @@ export class ScannerApprovalPlanService {
     };
     const conditionHash = planHash(selected);
     const bucket = Math.floor(now.getTime() / IDEMPOTENCY_BUCKET_MS);
-    const signalId = `scanner:KR:${symbol}:${timeframe}:${conditionHash}:${bucket}`;
+    const baseSignalId = `scanner:KR:${symbol}:${timeframe}:${conditionHash}:${bucket}`;
+    const signalId = nextScannerSignalId(baseSignalId, plans);
     const strategyId = `scanner-${timeframe.toLowerCase()}-${conditionHash}`;
     const reasons = [
       ...card.matched,
