@@ -103,6 +103,12 @@ export interface ScannerExecutionSummary {
   maxConcurrency: number;
 }
 
+export interface ScannerFailure {
+  symbol: string;
+  reason: 'provider_error' | 'timeout' | 'invalid_data';
+  message: string;
+}
+
 export interface ScannerResponse {
   ok: true;
   requestId: string;
@@ -111,6 +117,7 @@ export interface ScannerResponse {
   timeframe: string;
   cards: ScannerSignalCard[];
   alerts: ScannerAlertCandidate[];
+  failures: ScannerFailure[];
   execution: ScannerExecutionSummary;
   universe: {
     totalCount: number;
