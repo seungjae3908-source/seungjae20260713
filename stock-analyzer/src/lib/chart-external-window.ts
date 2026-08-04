@@ -11,7 +11,12 @@ export const CHART_EXTERNAL_WINDOW_VALUE = 'external';
 
 export type ChartExternalWindowMessage =
   | {
-      type: 'ready' | 'closed';
+      type: 'ready';
+      sourceId: string;
+      sentAt: number;
+    }
+  | {
+      type: 'closed';
       sourceId: string;
       sentAt: number;
     }
