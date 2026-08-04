@@ -11,7 +11,9 @@ function spotTickers() {
 
 function futuresCandles(direction: 'up' | 'down' = 'up') {
   return Array.from({ length: 35 }, (_, index) => {
-    const close = direction === 'up' ? 80 + index * 0.7 : 120 - index * 0.7;
+    const base = direction === 'up' ? 80 + index * 0.7 : 120 - index * 0.7;
+    const counterMove = index < 34 && index % 4 === 3 ? 2.5 : 0;
+    const close = direction === 'up' ? base - counterMove : base + counterMove;
     return { time: now - (35 - index) * 60_000, open: close - 0.2, high: close + 0.8, low: close - 0.8, close, volume: index === 34 ? 2_000 : 1_000, quoteVolume: close * 1_000 };
   });
 }
