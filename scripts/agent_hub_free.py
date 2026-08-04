@@ -2,8 +2,8 @@
 """Free, fail-closed GitHub Issue command hub.
 
 This script reads the latest unprocessed [WORKER_REPORT] comment from a
-configured GitHub Issue, asks GitHub Models for a structured next command, and
-posts the validated result back to the same Issue.
+configured GitHub Issue, asks the Gemini Developer API for a structured next
+command, and posts the validated result back to the same Issue.
 
 It deliberately does not modify repository contents, merge pull requests,
 deploy, delete resources, change permissions, or place orders.
@@ -20,14 +20,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 GITHUB_API_VERSION = "2022-11-28"
-DEFAULT_MODELS = (
-    "openai/gpt-4o-mini",
-    "microsoft/Phi-4-mini-instruct",
-)
+DEFAULT_MODELS = ("gemini-3.5-flash",)
 REPORT_MARKER = "[WORKER_REPORT]"
 COMMAND_MARKER = "[HUB_COMMAND]"
 PROCESSED_MARKER_PREFIX = "<!-- agent-hub-processed:"
@@ -35,6 +32,7 @@ ERROR_MARKER_PREFIX = "<!-- agent-hub-error:"
 MAX_MODEL_OUTPUT_CHARS = 6000
 MAX_REPORT_CHARS = 12000
 ALLOWED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 REQUIRED_COMMAND_FIELDS = (
     "source_task_id",
@@ -60,6 +58,8 @@ DANGEROUS_TERMS = (
     "permission",
     "권한 변경",
     "권한변경",
+    "secret",
+    "비밀키",
     "real order",
     "live order",
     "실주문",
@@ -104,7 +104,7 @@ class GitHubClient:
             "Accept": accept,
             "Authorization": f"Bearer {self.token}",
             "X-GitHub-Api-Version": GITHUB_API_VERSION,
-            "User-Agent": "free-agent-hub/1.0",
+            "User-Agent": "free-agent-hub/2.0",
         }
         if payload is not None:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -115,7 +115,9 @@ class GitHubClient:
             with urlopen(request, timeout=30) as response:
                 raw = response.read().decode("utf-8")
                 parsed = json.loads(raw) if raw else None
-                response_headers = {key.lower(): value for key, value in response.headers.items()}
+                response_headers = {
+                    key.lower(): value for key, value in response.headers.items()
+                }
                 return parsed, response_headers
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -127,10 +129,10 @@ class GitHubClient:
         comments: list[dict[str, Any]] = []
         page = 1
         while page <= 10:
-            query = urlencode({"per_page": 100, "page": page})
+            query_string = urlencode({"per_page": 100, "page": page})
             url = (
                 f"{self.api_url}/repos/{self.repository}/issues/"
-                f"{issue_number}/comments?{query}"
+                f"{issue_number}/comments?{query_string}"
             )
             payload, _ = self._request("GET", url)
             if not isinstance(payload, list):
@@ -146,12 +148,17 @@ class GitHubClient:
         self._request("POST", url, {"body": body})
 
 
-class ModelsClient:
-    def __init__(self, token: str, models: Iterable[str]) -> None:
-        self.token = token
+class GeminiClient:
+    def __init__(self, api_key: str, models: Iterable[str]) -> None:
+        self.api_key = api_key.strip()
+        if not self.api_key:
+            raise HubError("GEMINI_API_KEY is required")
         self.models = tuple(model.strip() for model in models if model.strip())
         if not self.models:
-            raise HubError("no GitHub Models model IDs configured")
+            raise HubError("no Gemini model IDs configured")
+        invalid = [model for model in self.models if not MODEL_ID_PATTERN.fullmatch(model)]
+        if invalid:
+            raise HubError("invalid Gemini model IDs: " + ", ".join(invalid))
 
     def complete(self, report: Report) -> tuple[str, str]:
         errors: list[str] = []
@@ -160,7 +167,7 @@ class ModelsClient:
                 return model, self._call_model(model, report)
             except HubError as exc:
                 errors.append(f"{model}: {exc}")
-        raise HubError("all configured models failed: " + " | ".join(errors))
+        raise HubError("all configured Gemini models failed: " + " | ".join(errors))
 
     def _call_model(self, model: str, report: Report) -> str:
         system_prompt = (
@@ -182,23 +189,29 @@ class ModelsClient:
             f"{report.body[:MAX_REPORT_CHARS]}"
         )
         payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": user_prompt}],
+                }
             ],
-            "temperature": 0.1,
-            "max_tokens": 700,
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 700,
+            },
         }
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{quote(model, safe='')}:generateContent"
+        )
         request = Request(
-            "https://models.github.ai/inference/chat/completions",
-            data=data,
+            endpoint,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
-                "User-Agent": "free-agent-hub/1.0",
+                "x-goog-api-key": self.api_key,
+                "User-Agent": "free-agent-hub/2.0",
             },
             method="POST",
         )
@@ -207,17 +220,27 @@ class ModelsClient:
                 response_data = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise HubError(f"model HTTP {exc.code}: {detail[:800]}") from exc
+            raise HubError(f"Gemini HTTP {exc.code}: {detail[:800]}") from exc
         except (URLError, json.JSONDecodeError) as exc:
-            raise HubError(f"model request failed: {exc}") from exc
+            raise HubError(f"Gemini request failed: {exc}") from exc
 
         try:
-            content = response_data["choices"][0]["message"]["content"]
+            parts = response_data["candidates"][0]["content"]["parts"]
+            content = "".join(
+                str(part.get("text") or "")
+                for part in parts
+                if isinstance(part, dict)
+            ).strip()
         except (KeyError, IndexError, TypeError) as exc:
-            raise HubError("model response did not contain message content") from exc
-        if not isinstance(content, str) or not content.strip():
-            raise HubError("model returned empty content")
-        return content.strip()
+            raise HubError("Gemini response did not contain candidate text") from exc
+        if not content:
+            block_reason = (
+                response_data.get("promptFeedback", {}).get("blockReason", "unknown")
+                if isinstance(response_data, dict)
+                else "unknown"
+            )
+            raise HubError(f"Gemini returned empty content; block reason: {block_reason}")
+        return content
 
 
 def parse_key_values(body: str) -> dict[str, str]:
@@ -286,7 +309,11 @@ def requires_approval(command_fields: dict[str, str], report: Report) -> bool:
         return True
     if command_fields.get("branch", "").strip().lower() in {"main", "master"}:
         return True
-    if report.fields.get("approval_required", "").strip().lower() in {"yes", "true", "required"}:
+    if report.fields.get("approval_required", "").strip().lower() in {
+        "yes",
+        "true",
+        "required",
+    }:
         return True
     return False
 
@@ -308,6 +335,7 @@ def format_command(fields: dict[str, str], report: Report, model: str) -> str:
         lines.append(f"{key}: {value}")
     lines.extend(
         [
+            "provider: gemini-developer-api-free",
             f"model: {model}",
             f"processed_report_comment_id: {report.comment_id}",
             marker_for(PROCESSED_MARKER_PREFIX, report.comment_id),
@@ -324,7 +352,7 @@ def format_error(report: Report, message: str) -> str:
             f"source_task_id: {report.task_id}",
             "status: stopped",
             f"reason: {safe_message}",
-            "next_action: 무료 모델 한도 또는 구성 상태를 확인한 뒤 새 WORKER_REPORT로 재요청",
+            "next_action: Gemini 무료 한도, API 키 또는 모델 상태를 확인한 뒤 새 WORKER_REPORT로 재요청",
             marker_for(ERROR_MARKER_PREFIX, report.comment_id),
         ]
     )
@@ -373,6 +401,13 @@ def run_self_test() -> None:
     dangerous = dict(fields)
     dangerous["instruction"] = "운영 배포를 실행한다"
     assert requires_approval(dangerous, report)
+
+    try:
+        GeminiClient("test-key", ("bad/model",))
+    except HubError:
+        pass
+    else:
+        raise AssertionError("invalid Gemini model ID was accepted")
     print("self-test: pass")
 
 
@@ -388,12 +423,17 @@ def main() -> int:
     repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
     issue_raw = os.environ.get("HUB_ISSUE_NUMBER", "").strip()
     api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com").strip()
-    model_raw = os.environ.get("AGENT_HUB_MODELS", ",".join(DEFAULT_MODELS))
+    gemini_api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    model_raw = os.environ.get(
+        "AGENT_HUB_GEMINI_MODELS", ",".join(DEFAULT_MODELS)
+    )
 
     if not token:
         raise HubError("GITHUB_TOKEN is required")
     if not repository or "/" not in repository:
         raise HubError("GITHUB_REPOSITORY must be owner/name")
+    if not gemini_api_key:
+        raise HubError("GEMINI_API_KEY Actions secret is required")
     try:
         issue_number = int(issue_raw)
     except ValueError as exc:
@@ -406,7 +446,7 @@ def main() -> int:
         print("No unprocessed [WORKER_REPORT] comment found.")
         return 0
 
-    models = ModelsClient(token, model_raw.split(","))
+    models = GeminiClient(gemini_api_key, model_raw.split(","))
     try:
         model, raw_command = models.complete(report)
         fields = parse_command(raw_command)
@@ -424,6 +464,7 @@ def main() -> int:
                 "issue": issue_number,
                 "report_comment_id": report.comment_id,
                 "task_id": report.task_id,
+                "provider": "gemini-developer-api-free",
                 "model": model,
                 "timestamp": int(time.time()),
             },
