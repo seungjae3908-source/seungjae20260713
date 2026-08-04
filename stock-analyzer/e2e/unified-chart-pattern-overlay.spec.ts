@@ -135,8 +135,19 @@ test('pattern overlay replaces candidate, confirmed, and invalidated states with
   await expect(overlay).toHaveCount(1);
   await expect(overlay).toHaveAttribute('data-analysis-id', analysisId!);
 
+  const internalCanvas = page.getByTestId('unified-chart-canvas').locator('canvas').first();
+  await expect(internalCanvas).toBeAttached();
+  const chartSurface = await internalCanvas.elementHandle();
+  expect(chartSurface).not.toBeNull();
+  const expectSameChartSurface = async () => {
+    expect(await chartSurface!.evaluate((element) => (
+      element === document.querySelector('[data-testid="unified-chart-canvas"] canvas')
+    ))).toBe(true);
+  };
+
   await page.getByRole('button', { name: '차트 새로고침', exact: true }).click();
   await expect.poll(mock.chartCalls).toBe(2);
+  await expectSameChartSurface();
   await expect(overlay).toHaveCount(1);
   await expect(overlay).toHaveAttribute('data-analysis-id', analysisId!);
   await expect(overlay).toHaveAttribute('data-pattern-status', 'confirmed');
@@ -147,6 +158,7 @@ test('pattern overlay replaces candidate, confirmed, and invalidated states with
 
   await page.getByRole('button', { name: '차트 새로고침', exact: true }).click();
   await expect.poll(mock.chartCalls).toBe(3);
+  await expectSameChartSurface();
   await expect(overlay).toHaveCount(1);
   await expect(overlay).toHaveAttribute('data-analysis-id', analysisId!);
   await expect(overlay).toHaveAttribute('data-pattern-status', 'invalidated');
@@ -155,6 +167,7 @@ test('pattern overlay replaces candidate, confirmed, and invalidated states with
 
   await page.getByRole('button', { name: '차트 새로고침', exact: true }).click();
   await expect.poll(mock.chartCalls).toBe(4);
+  await expectSameChartSurface();
   await expect(overlay).toHaveCount(0);
   await expect(page.getByTestId('unified-chart-wrapper')).toHaveAttribute('data-pattern-overlay-id', '');
   await expect(page.getByTestId('chart-pattern-confirmation-line')).toHaveCount(0);
