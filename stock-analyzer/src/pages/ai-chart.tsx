@@ -5,7 +5,6 @@ import { BottomNav } from '@/components/bottom-nav';
 import { ChartBroadcastPanel, type ChartBroadcastMarket } from '@/components/chart-broadcast';
 import {
   selectionFromSearch,
-  selectionQuery,
   useAnalysisSelection,
   type AnalysisSelection,
 } from '@/lib/analysis-selection';
@@ -44,6 +43,7 @@ function sameSelection(left: AnalysisSelection, right: AnalysisSelection): boole
 export default function AiChartPage({ embedded = false }: { embedded?: boolean }) {
   const [location, navigate] = useLocation();
   const state = useAnalysisSelection();
+  const selectSelection = state.select;
   const search = location.includes('?') ? location.slice(location.indexOf('?')) : '';
   const externalMode = useMemo(() => isExternalChartSearch(search), [search]);
   const fromUrl = useMemo(() => selectionFromSearch(search), [search]);
@@ -61,7 +61,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   selectionRef.current = selection;
 
   useEffect(() => {
-    if (fromUrl) state.select({ ...state.selection, ...fromUrl, selectedAt: state.selection?.selectedAt ?? fromUrl.selectedAt } as AnalysisSelection);
+    if (fromUrl) selectSelection({ ...state.selection, ...fromUrl, selectedAt: state.selection?.selectedAt ?? fromUrl.selectedAt } as AnalysisSelection);
     // URL selection is authoritative only when the URL changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromUrl?.ticker, fromUrl?.market, fromUrl?.timeframe]);
@@ -111,7 +111,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       }
       if (sameSelection(selectionRef.current, message.selection)) return;
 
-      state.select(message.selection);
+      selectSelection(message.selection);
       setAnalysis(null);
       navigate(buildChartPath(message.selection, externalMode), { replace: true });
       setExternalWindowStatus(externalMode ? '원래 앱의 차트 선택을 동기화했습니다.' : '외부 창의 차트 선택을 동기화했습니다.');
@@ -129,7 +129,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       channel.close();
       if (channelRef.current === channel) channelRef.current = null;
     };
-  }, [externalMode, navigate, state]);
+  }, [externalMode, navigate, selectSelection]);
 
   useEffect(() => () => {
     if (popupPollRef.current != null) window.clearInterval(popupPollRef.current);
@@ -149,12 +149,12 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     };
     const changed = selection.ticker !== merged.ticker || selection.market !== merged.market || selection.timeframe !== merged.timeframe || selection.displayName !== merged.displayName;
     if (changed) {
-      state.select(merged);
+      selectSelection(merged);
       publishSelection(merged);
     }
     const nextLocation = buildChartPath(merged, externalMode);
     if (!embedded && location !== nextLocation) navigate(nextLocation, { replace: true });
-  }, [embedded, externalMode, location, navigate, publishSelection, selection, state]);
+  }, [embedded, externalMode, location, navigate, publishSelection, selectSelection, selection]);
 
   const openExternalWindow = useCallback(() => {
     const currentPopup = popupRef.current;
