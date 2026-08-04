@@ -9,6 +9,12 @@ const FIXTURE: TradeAutomationStatus = {
     enabledStrategies: ['breakout-v1'], totalCapitalKrw: 5_000_000,
     maxOrderKrw: 1_000_000, dailyLossLimitPercent: 5, maxAssetPercent: 30,
     maxOpenPositions: 5, maxDailyOrders: 10, maxConsecutiveLosses: 3, bitgetLeverage: 2,
+    riskOptimizationEnabled: true, pilotStage: 'approval-20',
+    riskPerTradePercent: { bitget: 0.1, upbit: 0.2, kiwoom: 0.25 },
+    totalDailyLossLimitPercent: 1, minExpectedValueR: 0.15,
+    minStrategySampleSize: 50, minProfitFactor: 1.2, maxStrategyDrawdownPercent: 15,
+    maxEstimatedSlippagePercent: 0.25, maxAverageSpreadPercent: 0.15,
+    maxCorrelatedExposurePercent: 40, maxEconomicsAgeHours: 24,
   },
   connections: [
     { exchange: 'bitget', accountMode: 'paper', configured: true, lastVerifiedAt: null, lastErrorCode: null, credentialsExposed: false },
@@ -16,6 +22,7 @@ const FIXTURE: TradeAutomationStatus = {
     { exchange: 'kiwoom', accountMode: 'mock', configured: true, lastVerifiedAt: null, lastErrorCode: null, credentialsExposed: false },
   ],
   emergencyStopped: false,
+  liveExecutionServerEnabled: { bitget: false, upbit: false, kiwoom: false },
   credentialVault: { encryptionConfigured: true, keyValueExposed: false },
   lastOrder: null,
 };
