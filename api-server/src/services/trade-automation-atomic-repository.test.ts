@@ -7,6 +7,7 @@ import { TradeAutomationService } from './trade-automation.service';
 import {
   DEFAULT_TRADING_POLICY,
   type TradingOrder,
+  type TradingOrderEvent,
   type TradingPlan,
   type TradingPlanInput,
 } from './trade-automation.types';
@@ -50,10 +51,24 @@ function order(plan: TradingPlan, id = randomUUID()): TradingOrder {
   };
 }
 
+function orderEvent(candidate: TradingOrder, id = randomUUID()): TradingOrderEvent {
+  return {
+    id,
+    userId: candidate.userId,
+    orderId: candidate.id,
+    fromState: null,
+    toState: 'SUBMITTED',
+    reason: 'ORDER_CREATED',
+    metadata: {},
+    createdAt: new Date().toISOString(),
+  };
+}
+
 class AtomicProbeRepository extends InMemoryTradingRepository {
   insertPlanCalls = 0;
   compareAndSetPlanCalls = 0;
   insertOrderCalls = 0;
+  atomicSubmissionCalls = 0;
 
   override async insertPlan(plan: TradingPlan) {
     this.insertPlanCalls += 1;
@@ -68,6 +83,17 @@ class AtomicProbeRepository extends InMemoryTradingRepository {
   override async insertOrder(candidate: TradingOrder) {
     this.insertOrderCalls += 1;
     return super.insertOrder(candidate);
+  }
+
+  override async submitPlanAndCreateOrder(
+    plan: TradingPlan,
+    expectedState: TradingPlan['state'],
+    candidate: TradingOrder,
+    event: TradingOrderEvent,
+    executionClaimId: string,
+  ) {
+    this.atomicSubmissionCalls += 1;
+    return super.submitPlanAndCreateOrder(plan, expectedState, candidate, event, executionClaimId);
   }
 }
 
@@ -183,4 +209,58 @@ test('trade service uses insert and compare-and-set repository primitives', asyn
   assert.equal(duplicateOrder.duplicate, true);
   assert.equal(duplicateOrder.order.id, createdOrder.order.id);
   assert.equal((await repository.listEvents(USER)).filter((event) => event.reason === 'ORDER_CREATED').length, 1);
+});
+
+test('atomic approval creates one order, event, and execution claim across service instances', async () => {
+  const repository = new AtomicProbeRepository();
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  await repository.savePolicy(USER, policy);
+  const firstService = new TradeAutomationService(repository);
+  const secondService = new TradeAutomationService(repository);
+  const created = await firstService.createPlan(USER, input('atomic-submit'), policy, false);
+  assert.ok(created.plan);
+
+  const submissions = await Promise.all([
+    firstService.approvePlanAndCreateOrder(USER, created.plan.id),
+    secondService.approvePlanAndCreateOrder(USER, created.plan.id),
+  ]);
+
+  assert.equal(repository.atomicSubmissionCalls, 2);
+  assert.equal(submissions.filter((result) => result.executionClaimed).length, 1);
+  assert.equal(submissions.filter((result) => result.duplicate).length, 1);
+  assert.equal(new Set(submissions.map((result) => result.order.id)).size, 1);
+  assert.equal((await repository.getPlan(USER, created.plan.id))?.state, 'SUBMITTED');
+  assert.equal((await repository.listOrders(USER)).length, 1);
+  assert.equal((await repository.listEvents(USER)).filter((event) => event.reason === 'ORDER_CREATED').length, 1);
+});
+
+test('failed atomic submission leaves the plan and order tables unchanged', async () => {
+  const repository = new InMemoryTradingRepository();
+  const service = new TradeAutomationService(repository);
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  const created = await service.createPlan(USER, input('atomic-rollback'), policy, false);
+  assert.ok(created.plan);
+
+  const submitted: TradingPlan = {
+    ...created.plan,
+    state: 'SUBMITTED',
+    approvedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const candidate = order(submitted);
+  const invalidEvent = { ...orderEvent(candidate), orderId: randomUUID() };
+
+  await assert.rejects(
+    repository.submitPlanAndCreateOrder(
+      submitted,
+      'APPROVAL_PENDING',
+      candidate,
+      invalidEvent,
+      randomUUID(),
+    ),
+    /TRADE_ATOMIC_INPUT_INVALID/,
+  );
+  assert.equal((await repository.getPlan(USER, submitted.id))?.state, 'APPROVAL_PENDING');
+  assert.equal((await repository.listOrders(USER)).length, 0);
+  assert.equal((await repository.listEvents(USER)).length, 0);
 });
