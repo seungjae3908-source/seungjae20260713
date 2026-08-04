@@ -22,7 +22,12 @@ export type ChartExternalWindowMessage =
       selection: AnalysisSelection;
     };
 
-type ScreenBounds = Pick<Screen, 'availWidth' | 'availHeight' | 'availLeft' | 'availTop'>;
+type ScreenBounds = {
+  availWidth: number;
+  availHeight: number;
+  availLeft?: number;
+  availTop?: number;
+};
 
 function cleanSourceId(value: unknown): string {
   return typeof value === 'string' ? value.trim().slice(0, 120) : '';
