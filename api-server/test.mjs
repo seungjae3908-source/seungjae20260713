@@ -53,6 +53,7 @@ const groups = {
   phase12: [
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
     path.join(root, 'src/services/trade-automation-optimization.test.ts'),
+    path.join(root, 'src/services/trade-automation-policy-guard.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
   ],
   smoke: [
