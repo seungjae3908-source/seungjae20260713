@@ -30,17 +30,24 @@ function timeframeFrom(url: string): string {
 
 function monitorBrowserErrors(page: Page) {
   const consoleErrors: string[] = [];
+  const expectedHttpDiagnostics: string[] = [];
   const pageErrors: string[] = [];
   const unhandled: string[] = [];
   page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
+    if (message.type() !== 'error') return;
+    const text = message.text();
+    if (/^Failed to load resource: the server responded with a status of (404|429|502)/i.test(text)) {
+      expectedHttpDiagnostics.push(text);
+      return;
+    }
+    consoleErrors.push(text);
   });
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('requestfailed', (request: Request) => {
     const text = request.failure()?.errorText ?? '';
     if (!/ERR_ABORTED|NS_BINDING_ABORTED/i.test(text)) unhandled.push(`${request.url()} ${text}`);
   });
-  return { consoleErrors, pageErrors, unhandled };
+  return { consoleErrors, expectedHttpDiagnostics, pageErrors, unhandled };
 }
 
 async function mockChartApis(page: Page, options: { rateLimitStockCalls?: number } = {}) {
@@ -140,7 +147,7 @@ test('desktop chart changes market and timeframe, ignores a late request, persis
   await page.getByTestId('timeframe-1m').click();
   await page.getByTestId('timeframe-15m').click();
   await expect(page).toHaveURL(/timeframe=15m/);
-  const currentPrice = page.getByText('현재가', { exact: true }).locator('..');
+  const currentPrice = page.getByText('현재가', { exact: true }).locator('xpath=../..');
   await expect(currentPrice).toContainText('40,081원');
   await page.waitForTimeout(800);
   await expect(currentPrice).toContainText('40,081원');
@@ -155,6 +162,7 @@ test('desktop chart changes market and timeframe, ignores a late request, persis
   await page.getByTestId('chart-fit-content').click();
   await page.getByTestId('chart-latest-candle').click();
   await page.getByTestId('chart-fullscreen').click();
+  await page.keyboard.press('Escape');
   await page.getByText('지표 설정 · 브라우저 저장').click();
   await page.getByTestId('overlay-sma20').click();
   await expect(page.getByTestId('overlay-sma20')).toContainText('+ SMA20');
@@ -190,7 +198,9 @@ test('invalid, empty, rate-limited, and recovered chart responses stay explicit'
   await page.getByTestId('apply-chart-symbol').click();
   await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
 
-  expect(errors.consoleErrors, `console errors: ${errors.consoleErrors.join('\n')}`).toEqual([]);
+  expect(errors.expectedHttpDiagnostics.some((item) => item.includes('429'))).toBe(true);
+  expect(errors.expectedHttpDiagnostics.some((item) => item.includes('502'))).toBe(true);
+  expect(errors.consoleErrors, `unexpected console errors: ${errors.consoleErrors.join('\n')}`).toEqual([]);
   expect(errors.pageErrors, `page errors: ${errors.pageErrors.join('\n')}`).toEqual([]);
   expect(errors.unhandled, `unexpected failed requests: ${errors.unhandled.join('\n')}`).toEqual([]);
 });
