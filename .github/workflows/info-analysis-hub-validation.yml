@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - scripts/apply-info-analysis-hub.py
+      - stock-analyzer/e2e/info-analysis-hub.spec.ts
       - .github/workflows/info-analysis-hub-validation.yml
 
 permissions:
