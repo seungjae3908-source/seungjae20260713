@@ -3,6 +3,7 @@ import { ArrowLeft, Database, ShieldAlert } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { ChartBroadcastPanel, type ChartBroadcastMarket } from '@/components/chart-broadcast';
+import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import {
   selectionFromSearch,
   selectionQuery,
@@ -94,6 +95,8 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             </div>
             {selection.matchedSignals?.length ? <div className="mt-3 flex flex-wrap gap-1.5">{selection.matchedSignals.map((item) => <span key={item} className="rounded-full bg-primary/10 px-2 py-1 text-[10px] font-bold text-primary">{item}</span>)}</div> : null}
           </section>
+
+          <ScannerApprovalComposer selection={selection} />
 
           <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
             <div className="flex items-center gap-2"><Database className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">구조화 분석 상태</h2></div>
