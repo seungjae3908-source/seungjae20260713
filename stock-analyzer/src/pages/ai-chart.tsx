@@ -74,6 +74,13 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   selectionRef.current = selection;
 
   useEffect(() => {
+    if (!embedded || !state.selection || selectionRef.current === state.selection) return;
+    selectionRef.current = state.selection;
+    setSelection(state.selection);
+    setAnalysis(null);
+  }, [embedded, state.selection]);
+
+  useEffect(() => {
     if (embedded || externalMode || typeof window === 'undefined') {
       setExternalControlAvailable(false);
       return;
