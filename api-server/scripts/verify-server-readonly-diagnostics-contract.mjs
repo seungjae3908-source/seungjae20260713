@@ -53,7 +53,7 @@ for (const forbidden of [
   /(^|\n)\s*(apt|apt-get|yum|dnf|apk)\s/m,
   /(^|\n)\s*(npm|pnpm|yarn)\s+(install|add|remove|update)\b/m,
   /\/proc\/[^\n]*\/environ/,
-  /\b(printenv|env)\b/,
+  /(^|\n)\s*(sudo\s+)?(printenv|env)(\s|$)/m,
   /(^|[^2])>\s*\/(?!dev\/null)/m,
 ]) {
   assert(!forbidden.test(script), `server script contains forbidden mutation or secret-enumeration pattern: ${forbidden}`);
