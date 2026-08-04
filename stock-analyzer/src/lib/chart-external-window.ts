@@ -40,6 +40,31 @@ function cleanId(value: unknown): string {
   return value.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
 }
 
+export function mergeChartRouteSelection(
+  routeSelection: AnalysisSelection | null,
+  storedSelection: AnalysisSelection | null,
+): AnalysisSelection | null {
+  if (!routeSelection) return storedSelection;
+  const sameInstrument = Boolean(
+    storedSelection
+    && storedSelection.assetType === routeSelection.assetType
+    && storedSelection.market === routeSelection.market
+    && storedSelection.ticker === routeSelection.ticker,
+  );
+  const previous = sameInstrument ? storedSelection : null;
+  return normalizeAnalysisSelection({
+    ...(previous ?? {}),
+    assetType: routeSelection.assetType,
+    market: routeSelection.market,
+    symbol: routeSelection.symbol,
+    ticker: routeSelection.ticker,
+    displayName: routeSelection.displayName || previous?.displayName,
+    timeframe: routeSelection.timeframe,
+    searchRunId: routeSelection.searchRunId || previous?.searchRunId,
+    selectedAt: previous?.selectedAt || routeSelection.selectedAt,
+  });
+}
+
 export function chartSelectionKey(selection: AnalysisSelection): string {
   return [
     selection.assetType,
