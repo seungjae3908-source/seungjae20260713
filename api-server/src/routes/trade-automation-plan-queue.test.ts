@@ -85,3 +85,58 @@ test('plan queue is owner scoped, redacted, filterable, and never submits an ord
     assert.equal((await filtered.json()).plans.length, 0);
   } finally { await close(server); }
 });
+
+test('concurrent plan creation and approval produce one paper order and no exchange request', async () => {
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, normalizeTradingPolicy(DEFAULT_TRADING_POLICY));
+  await repository.saveConnection({
+    userId: USER, exchange: 'upbit', accountMode: 'paper', configured: true,
+    encryptedCredentials: 'paper-test-only', lastVerifiedAt: null, lastErrorCode: null,
+    updatedAt: new Date().toISOString(),
+  });
+  const { server, baseUrl } = await serverFor(repository);
+  const nativeFetch = globalThis.fetch;
+  const externalRequests: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (!url.startsWith(baseUrl)) externalRequests.push(url);
+    return nativeFetch(input, init);
+  };
+  try {
+    const createResults = await Promise.all([0, 1].map(async () => {
+      const response = await fetch(`${baseUrl}/api/trade-automation/plans`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(paperPlan()),
+      });
+      return { status: response.status, body: await response.json() };
+    }));
+    assert.deepEqual(createResults.map((item) => item.status), [200, 200]);
+    assert.equal(new Set(createResults.map((item) => item.body.plan.id)).size, 1);
+    assert.equal(createResults.filter((item) => item.body.duplicate === true).length, 1);
+    assert.equal((await repository.listPlans(USER)).length, 1);
+
+    const planId = createResults[0].body.plan.id;
+    const approveResults = await Promise.all([0, 1].map(async () => {
+      const response = await fetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved: true }),
+      });
+      return { status: response.status, body: await response.json() };
+    }));
+    assert.deepEqual(approveResults.map((item) => item.status).sort((a, b) => a - b), [200, 400]);
+    const approved = approveResults.find((item) => item.status === 200);
+    const rejected = approveResults.find((item) => item.status === 400);
+    assert.equal(approved?.body.order.state, 'FILLED');
+    assert.equal(rejected?.body.error, 'TRADE_PLAN_NOT_APPROVAL_PENDING');
+
+    const orders = await repository.listOrders(USER);
+    assert.equal(orders.length, 1);
+    assert.equal(orders[0].state, 'FILLED');
+    const reasons = (await repository.listEvents(USER)).map((event) => event.reason);
+    for (const reason of ['ORDER_CREATED', 'PAPER_BROKER_ACCEPTED', 'PAPER_BROKER_FILLED']) {
+      assert.equal(reasons.filter((value) => value === reason).length, 1, reason);
+    }
+    assert.equal(externalRequests.length, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    await close(server);
+  }
+});
