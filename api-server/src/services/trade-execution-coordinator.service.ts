@@ -18,7 +18,7 @@ export class TradeExecutionCoordinator {
   private automation: TradeAutomationService;
   private reconciliation: TradeExchangeReconciliationService;
 
-  constructor(private repository: TradingRepository) {
+  constructor(repository: TradingRepository) {
     this.execution = new TradeExecutionService(repository);
     this.automation = new TradeAutomationService(repository);
     this.reconciliation = new TradeExchangeReconciliationService(repository);
