@@ -32,6 +32,14 @@ import {
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 
 type ExchangePayload = Record<string, unknown>;
+type ExchangeExecutionResult = { orderId: string; reconciliationRequired: boolean };
+
+class ExchangeExecutionError extends Error {
+  constructor(code: string, readonly submissionStarted: boolean) {
+    super(code);
+    this.name = 'ExchangeExecutionError';
+  }
+}
 
 const BASE_URLS = {
   bitget: 'https://api.bitget.com',
@@ -42,6 +50,23 @@ const BASE_URLS = {
 
 function isRecord(value: unknown): value is ExchangePayload {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function exchangeErrorCode(error: unknown) {
+  if (error instanceof Error) return error.message.split(':')[0] || 'EXCHANGE_REQUEST_FAILED';
+  return 'EXCHANGE_REQUEST_FAILED';
+}
+
+function ambiguousSubmissionCode(code: string) {
+  return code === 'EXCHANGE_TIMEOUT'
+    || code === 'EXCHANGE_NETWORK_ERROR'
+    || code === 'EXCHANGE_EMPTY_RESPONSE'
+    || code === 'EXCHANGE_INVALID_JSON'
+    || code === 'EXCHANGE_INVALID_RESPONSE'
+    || code === 'BITGET_INVALID_RESPONSE'
+    || code === 'UPBIT_INVALID_RESPONSE'
+    || code === 'KIWOOM_INVALID_RESPONSE'
+    || /^EXCHANGE_HTTP_50[0234]$/.test(code);
 }
 
 async function sendExchangeRequest(baseUrl: string, request: PreparedExchangeRequest) {
@@ -55,11 +80,22 @@ async function sendExchangeRequest(baseUrl: string, request: PreparedExchangeReq
       body: request.body,
       signal: controller.signal,
     });
-    const payload = await response.json().catch(() => ({})) as unknown;
+    const text = await response.text();
     if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
-    return isRecord(payload) ? payload : { data: payload };
+    if (!text.trim()) throw new Error('EXCHANGE_EMPTY_RESPONSE');
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text) as unknown;
+    } catch {
+      throw new Error('EXCHANGE_INVALID_JSON');
+    }
+    if (isRecord(payload)) return payload;
+    if (Array.isArray(payload)) return { data: payload };
+    throw new Error('EXCHANGE_INVALID_RESPONSE');
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw new Error('EXCHANGE_TIMEOUT');
+    if (error instanceof TypeError) throw new Error('EXCHANGE_NETWORK_ERROR');
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -67,7 +103,13 @@ async function sendExchangeRequest(baseUrl: string, request: PreparedExchangeReq
 }
 
 function assertBitgetSuccess(payload: ExchangePayload) {
-  if (String(payload.code ?? '') !== '00000') throw new Error(`BITGET_${String(payload.code ?? 'INVALID_RESPONSE')}`);
+  const rawCode = payload.code;
+  if (rawCode === undefined || rawCode === null || String(rawCode) !== '00000') {
+    throw new Error(rawCode === undefined || rawCode === null
+      ? 'BITGET_INVALID_RESPONSE'
+      : `BITGET_${String(rawCode)}`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(payload, 'data')) throw new Error('BITGET_INVALID_RESPONSE');
   return payload.data;
 }
 
@@ -77,9 +119,34 @@ function assertUpbitSuccess(payload: ExchangePayload) {
 }
 
 function assertKiwoomSuccess(payload: ExchangePayload) {
-  const code = String(payload.return_code ?? payload.returnCode ?? payload.code ?? '0');
+  const rawCode = payload.return_code ?? payload.returnCode ?? payload.code;
+  if (rawCode === undefined || rawCode === null) throw new Error('KIWOOM_INVALID_RESPONSE');
+  const code = String(rawCode);
   if (!['0', '00000'].includes(code)) throw new Error(`KIWOOM_${code}`);
   return payload;
+}
+
+function bitgetOrderResult(data: unknown, clientOrderId: string) {
+  if (!isRecord(data)) throw new Error('BITGET_INVALID_RESPONSE');
+  const returnedClientId = String(data.clientOid ?? '').trim();
+  const returnedOrderId = String(data.orderId ?? '').trim();
+  if (returnedClientId && returnedClientId !== clientOrderId) throw new Error('BITGET_INVALID_RESPONSE');
+  if (!returnedClientId && !returnedOrderId) throw new Error('BITGET_INVALID_RESPONSE');
+  return clientOrderId;
+}
+
+function upbitOrderResult(payload: ExchangePayload, identifier: string) {
+  const uuid = String(payload.uuid ?? '').trim();
+  const returnedIdentifier = String(payload.identifier ?? '').trim();
+  if (returnedIdentifier && returnedIdentifier !== identifier) throw new Error('UPBIT_INVALID_RESPONSE');
+  if (!uuid && returnedIdentifier !== identifier) throw new Error('UPBIT_INVALID_RESPONSE');
+  return uuid || identifier;
+}
+
+function kiwoomOrderResult(payload: ExchangePayload) {
+  const orderNumber = String(payload.ord_no ?? payload.order_no ?? '').trim();
+  if (!orderNumber) throw new Error('KIWOOM_INVALID_RESPONSE');
+  return orderNumber;
 }
 
 function bitgetPreflight(data: unknown[], plan: TradingPlan, clientOrderId: string) {
@@ -193,11 +260,22 @@ export class TradeExecutionService {
         }
         return order;
       } catch (error) {
-        const errorCode = error instanceof Error ? error.message.split(':')[0] : 'EXCHANGE_REQUEST_FAILED';
-        if (errorCode === 'EXCHANGE_TIMEOUT') {
-          return this.automation.transition(order, 'RECOVERY_REQUIRED', 'AMBIGUOUS_EXCHANGE_TIMEOUT', { errorCode });
+        const errorCode = exchangeErrorCode(error);
+        const submissionStarted = error instanceof ExchangeExecutionError && error.submissionStarted;
+        if (submissionStarted && ambiguousSubmissionCode(errorCode)) {
+          return this.automation.transition(order, 'RECOVERY_REQUIRED', 'AMBIGUOUS_EXCHANGE_SUBMISSION_RESPONSE', {
+            errorCode,
+            submissionOutcome: 'unknown',
+            recoveryRequired: true,
+            orderResubmitted: false,
+          });
         }
-        return this.automation.transition(order, 'REJECTED', 'EXCHANGE_REJECTED', { errorCode });
+        return this.automation.transition(order, 'REJECTED', 'EXCHANGE_REJECTED', {
+          errorCode,
+          submissionOutcome: submissionStarted ? 'rejected' : 'not_started',
+          recoveryRequired: false,
+          orderResubmitted: false,
+        });
       }
     });
   }
@@ -241,11 +319,16 @@ export class TradeExecutionService {
           assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
             prepareUpbitCancel(credentials as UpbitCredentials, order.clientOrderId)));
         } else {
+          if (!order.exchangeOrderId) {
+            return this.automation.transition(order, 'RECOVERY_REQUIRED', 'KIWOOM_EXCHANGE_ORDER_ID_UNKNOWN', {
+              errorCode: 'KIWOOM_EXCHANGE_ORDER_ID_UNKNOWN',
+            });
+          }
           const baseUrl = mockKiwoom ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
           const kiwoomCredentials = credentials as KiwoomCredentials;
           const tokenPayload = assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomToken(kiwoomCredentials)));
           const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
-          if (!token || !order.exchangeOrderId) throw new Error('KIWOOM_CANCEL_CONTEXT_MISSING');
+          if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
           assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomCancel(
             { ...kiwoomCredentials, accessToken: token },
             { symbol: plan.symbol, orderNo: order.exchangeOrderId,
@@ -256,7 +339,7 @@ export class TradeExecutionService {
           filledQuantity: order.filledQuantity,
         });
       } catch (error) {
-        const errorCode = error instanceof Error ? error.message.split(':')[0] : 'EXCHANGE_CANCEL_FAILED';
+        const errorCode = exchangeErrorCode(error);
         return this.automation.transition(order, 'RECOVERY_REQUIRED', 'EXCHANGE_CANCEL_REQUIRES_RECONCILIATION', {
           errorCode,
         });
@@ -264,87 +347,127 @@ export class TradeExecutionService {
     });
   }
 
-  private async executeBitget(plan: TradingPlan, order: TradingOrder, credentials: BitgetCredentials) {
-    const [accounts, positions, pending, contracts, ticker] = await Promise.all([
-      sendExchangeRequest(BASE_URLS.bitget, prepareBitgetAccount(credentials)).then(assertBitgetSuccess),
-      sendExchangeRequest(BASE_URLS.bitget, prepareBitgetPositions(credentials)).then(assertBitgetSuccess),
-      sendExchangeRequest(BASE_URLS.bitget, prepareBitgetPendingOrders(credentials, plan.symbol)).then(assertBitgetSuccess),
-      sendExchangeRequest(BASE_URLS.bitget, prepareBitgetContractConfig(plan.symbol)).then(assertBitgetSuccess),
-      sendExchangeRequest(BASE_URLS.bitget, prepareBitgetTicker(plan.symbol)).then(assertBitgetSuccess),
-    ]);
-    const contractRows = Array.isArray(contracts) ? contracts.filter(isRecord) : [];
-    const contract = contractRows.find((row) => String(row.symbol ?? '').toUpperCase() === plan.symbol.toUpperCase());
-    if (!contract) throw new Error('BITGET_CONTRACT_RULES_UNAVAILABLE');
-    const tickerRows = Array.isArray(ticker) ? ticker.filter(isRecord) : [];
-    const tickerRow = tickerRows.find((row) => String(row.symbol ?? '').toUpperCase() === plan.symbol.toUpperCase())
-      ?? tickerRows[0];
-    validateBitgetContractRules(plan, contract, Number(tickerRow?.markPrice ?? tickerRow?.lastPr ?? 0));
-    const canChangeMarginMode = bitgetPreflight([accounts, positions, pending, ticker], plan, order.clientOrderId);
-    if (canChangeMarginMode) {
-      assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
-        prepareBitgetMarginMode(credentials, plan.symbol, plan.marginMode ?? 'isolated')));
-    }
-    assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
-      prepareBitgetLeverage(credentials, plan.symbol, plan.leverage === 3 ? 3 : 2)));
-    const data = assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
-      prepareBitgetOrder(credentials, plan, order.clientOrderId)));
-    const row = isRecord(data) ? data : {};
-    let reconciliationRequired = false;
+  private async executeBitget(
+    plan: TradingPlan,
+    order: TradingOrder,
+    credentials: BitgetCredentials,
+  ): Promise<ExchangeExecutionResult> {
+    let submissionStarted = false;
     try {
+      const [accounts, positions, pending, contracts, ticker] = await Promise.all([
+        sendExchangeRequest(BASE_URLS.bitget, prepareBitgetAccount(credentials)).then(assertBitgetSuccess),
+        sendExchangeRequest(BASE_URLS.bitget, prepareBitgetPositions(credentials)).then(assertBitgetSuccess),
+        sendExchangeRequest(BASE_URLS.bitget, prepareBitgetPendingOrders(credentials, plan.symbol)).then(assertBitgetSuccess),
+        sendExchangeRequest(BASE_URLS.bitget, prepareBitgetContractConfig(plan.symbol)).then(assertBitgetSuccess),
+        sendExchangeRequest(BASE_URLS.bitget, prepareBitgetTicker(plan.symbol)).then(assertBitgetSuccess),
+      ]);
+      const contractRows = Array.isArray(contracts) ? contracts.filter(isRecord) : [];
+      const contract = contractRows.find((row) => String(row.symbol ?? '').toUpperCase() === plan.symbol.toUpperCase());
+      if (!contract) throw new Error('BITGET_CONTRACT_RULES_UNAVAILABLE');
+      const tickerRows = Array.isArray(ticker) ? ticker.filter(isRecord) : [];
+      const tickerRow = tickerRows.find((row) => String(row.symbol ?? '').toUpperCase() === plan.symbol.toUpperCase())
+        ?? tickerRows[0];
+      validateBitgetContractRules(plan, contract, Number(tickerRow?.markPrice ?? tickerRow?.lastPr ?? 0));
+      const canChangeMarginMode = bitgetPreflight([accounts, positions, pending, ticker], plan, order.clientOrderId);
+      if (canChangeMarginMode) {
+        assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
+          prepareBitgetMarginMode(credentials, plan.symbol, plan.marginMode ?? 'isolated')));
+      }
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
-        prepareBitgetOrderQuery(credentials, order.clientOrderId)));
-    } catch { reconciliationRequired = true; }
-    return { orderId: String(row.orderId ?? row.clientOid ?? order.clientOrderId), reconciliationRequired };
+        prepareBitgetLeverage(credentials, plan.symbol, plan.leverage === 3 ? 3 : 2)));
+
+      submissionStarted = true;
+      const data = assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
+        prepareBitgetOrder(credentials, plan, order.clientOrderId)));
+      const orderId = bitgetOrderResult(data, order.clientOrderId);
+      let reconciliationRequired = false;
+      try {
+        assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
+          prepareBitgetOrderQuery(credentials, order.clientOrderId)));
+      } catch {
+        reconciliationRequired = true;
+      }
+      return { orderId, reconciliationRequired };
+    } catch (error) {
+      throw new ExchangeExecutionError(exchangeErrorCode(error), submissionStarted);
+    }
   }
 
-  private async executeUpbit(plan: TradingPlan, order: TradingOrder, credentials: UpbitCredentials) {
-    const [accounts, chance] = await Promise.all([
-      sendExchangeRequest(BASE_URLS.upbit, prepareUpbitAccounts(credentials)).then(assertUpbitSuccess),
-      sendExchangeRequest(BASE_URLS.upbit, prepareUpbitOrderChance(credentials, plan.symbol)).then(assertUpbitSuccess),
-    ]);
-    const rows = Array.isArray(accounts.data) ? accounts.data.filter(isRecord) : Array.isArray(accounts) ? accounts.filter(isRecord) : [];
-    const krw = rows.find((row) => String(row.currency ?? '') === 'KRW');
-    if (plan.side === 'buy' && Number(krw?.balance ?? 0) < Number(plan.quoteAmount ?? plan.estimatedKrw)) {
-      throw new Error('UPBIT_INSUFFICIENT_BALANCE');
-    }
-    const baseCurrency = plan.symbol.toUpperCase().replace(/^KRW-/, '');
-    const asset = rows.find((row) => String(row.currency ?? '').toUpperCase() === baseCurrency);
-    if (plan.side === 'sell' && Number(asset?.balance ?? 0) < Number(plan.quantity ?? 0)) {
-      throw new Error('UPBIT_INSUFFICIENT_ASSET_BALANCE');
-    }
-    if (isRecord(chance.market) && String(chance.market.state ?? 'active') !== 'active') throw new Error('UPBIT_MARKET_HALTED');
-    const chanceSide = isRecord(chance[plan.side === 'buy' ? 'bid' : 'ask'])
-      ? chance[plan.side === 'buy' ? 'bid' : 'ask'] as ExchangePayload : null;
-    const exchangeMinimum = Number(chanceSide?.min_total ?? 0);
-    if (exchangeMinimum > 0 && plan.estimatedKrw < exchangeMinimum) throw new Error('UPBIT_MINIMUM_ORDER');
-    assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
-      prepareUpbitOrderTest(credentials, plan, order.clientOrderId)));
-    const result = assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
-      prepareUpbitOrder(credentials, plan, order.clientOrderId)));
-    let reconciliationRequired = false;
+  private async executeUpbit(
+    plan: TradingPlan,
+    order: TradingOrder,
+    credentials: UpbitCredentials,
+  ): Promise<ExchangeExecutionResult> {
+    let submissionStarted = false;
     try {
+      const [accounts, chance] = await Promise.all([
+        sendExchangeRequest(BASE_URLS.upbit, prepareUpbitAccounts(credentials)).then(assertUpbitSuccess),
+        sendExchangeRequest(BASE_URLS.upbit, prepareUpbitOrderChance(credentials, plan.symbol)).then(assertUpbitSuccess),
+      ]);
+      const rows = Array.isArray(accounts.data) ? accounts.data.filter(isRecord) : [];
+      const krw = rows.find((row) => String(row.currency ?? '') === 'KRW');
+      if (plan.side === 'buy' && Number(krw?.balance ?? 0) < Number(plan.quoteAmount ?? plan.estimatedKrw)) {
+        throw new Error('UPBIT_INSUFFICIENT_BALANCE');
+      }
+      const baseCurrency = plan.symbol.toUpperCase().replace(/^KRW-/, '');
+      const asset = rows.find((row) => String(row.currency ?? '').toUpperCase() === baseCurrency);
+      if (plan.side === 'sell' && Number(asset?.balance ?? 0) < Number(plan.quantity ?? 0)) {
+        throw new Error('UPBIT_INSUFFICIENT_ASSET_BALANCE');
+      }
+      if (isRecord(chance.market) && String(chance.market.state ?? 'active') !== 'active') throw new Error('UPBIT_MARKET_HALTED');
+      const chanceSide = isRecord(chance[plan.side === 'buy' ? 'bid' : 'ask'])
+        ? chance[plan.side === 'buy' ? 'bid' : 'ask'] as ExchangePayload : null;
+      const exchangeMinimum = Number(chanceSide?.min_total ?? 0);
+      if (exchangeMinimum > 0 && plan.estimatedKrw < exchangeMinimum) throw new Error('UPBIT_MINIMUM_ORDER');
       assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
-        prepareUpbitOrderQuery(credentials, order.clientOrderId)));
-    } catch { reconciliationRequired = true; }
-    return { orderId: String(result.uuid ?? result.identifier ?? order.clientOrderId), reconciliationRequired };
+        prepareUpbitOrderTest(credentials, plan, order.clientOrderId)));
+
+      submissionStarted = true;
+      const result = assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
+        prepareUpbitOrder(credentials, plan, order.clientOrderId)));
+      const orderId = upbitOrderResult(result, order.clientOrderId);
+      let reconciliationRequired = false;
+      try {
+        assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
+          prepareUpbitOrderQuery(credentials, order.clientOrderId)));
+      } catch {
+        reconciliationRequired = true;
+      }
+      return { orderId, reconciliationRequired };
+    } catch (error) {
+      throw new ExchangeExecutionError(exchangeErrorCode(error), submissionStarted);
+    }
   }
 
   private async executeKiwoom(
-    plan: TradingPlan, order: TradingOrder, credentials: KiwoomCredentials, mock: boolean,
-  ) {
-    if (!marketOpenInSeoul() && process.env.KIWOOM_ALLOW_OFF_HOURS !== 'true') throw new Error('KIWOOM_MARKET_CLOSED');
-    const baseUrl = mock ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
-    const tokenPayload = assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomToken(credentials)));
-    const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
-    if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
-    const authenticated = { ...credentials, accessToken: token };
-    assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomOrderable(authenticated)));
-    assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated)));
-    const result = assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomOrder(authenticated, plan)));
-    let reconciliationRequired = false;
+    plan: TradingPlan,
+    order: TradingOrder,
+    credentials: KiwoomCredentials,
+    mock: boolean,
+  ): Promise<ExchangeExecutionResult> {
+    let submissionStarted = false;
     try {
+      if (!marketOpenInSeoul() && process.env.KIWOOM_ALLOW_OFF_HOURS !== 'true') throw new Error('KIWOOM_MARKET_CLOSED');
+      const baseUrl = mock ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
+      const tokenPayload = assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomToken(credentials)));
+      const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
+      if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
+      const authenticated = { ...credentials, accessToken: token };
+      assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomOrderable(authenticated)));
       assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated)));
-    } catch { reconciliationRequired = true; }
-    return { orderId: String(result.ord_no ?? result.order_no ?? order.clientOrderId), reconciliationRequired };
+
+      submissionStarted = true;
+      const result = assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomOrder(authenticated, plan)));
+      const orderId = kiwoomOrderResult(result);
+      let reconciliationRequired = false;
+      try {
+        assertKiwoomSuccess(await sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated)));
+      } catch {
+        reconciliationRequired = true;
+      }
+      return { orderId, reconciliationRequired };
+    } catch (error) {
+      throw new ExchangeExecutionError(exchangeErrorCode(error), submissionStarted);
+    }
   }
 }
