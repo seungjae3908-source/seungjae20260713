@@ -27,6 +27,54 @@ test('query-only recovery control never reports an order resubmission', async ({
   await expect(recovery).toContainText('주문 생성·재전송·취소를 수행하지 않습니다.');
 });
 
+test('regular, administrator, logout, and relogin reevaluate all auto-trading surfaces', async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  let tradeApiRequests = 0;
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.startsWith('/api/trade-automation')) tradeApiRequests += 1;
+  });
+
+  await page.goto('/__phase12-trade-automation-access-e2e');
+  await expect(page.getByTestId('phase12-session-state')).toHaveText('regular');
+  await expect(page.getByTestId('phase12-auto-trading-denied')).toBeVisible();
+  await expect(page.getByTestId('phase12-technical-menu')).not.toContainText('자동매매');
+  await expect(page.getByTestId('auto-trading-admin-only')).toHaveCount(0);
+  await expect(page.getByTestId('trade-automation-settings')).toHaveCount(0);
+  await expect(page.getByTestId('trade-approval-queue')).toHaveCount(0);
+  await expect(page.getByTestId('trade-recovery-control')).toHaveCount(0);
+  expect(tradeApiRequests).toBe(0);
+
+  await page.getByRole('button', { name: '관리자 재로그인' }).click();
+  await expect(page.getByTestId('phase12-session-state')).toHaveText('admin');
+  await expect(page.getByTestId('phase12-technical-menu')).toContainText('자동매매');
+  await expect(page.getByTestId('auto-trading-admin-only')).toBeVisible();
+  await expect(page.getByTestId('trade-automation-settings')).toBeVisible();
+  await expect(page.getByTestId('trade-approval-queue')).toBeVisible();
+  await expect(page.getByTestId('trade-recovery-control')).toBeVisible();
+  expect(tradeApiRequests).toBe(0);
+
+  await page.getByRole('button', { name: '로그아웃' }).click();
+  await expect(page.getByTestId('phase12-session-state')).toHaveText('logged-out');
+  await expect(page.getByTestId('phase12-auto-trading-denied')).toBeVisible();
+  await expect(page.getByTestId('trade-automation-settings')).toHaveCount(0);
+  await expect(page.getByTestId('trade-approval-queue')).toHaveCount(0);
+  await expect(page.getByTestId('trade-recovery-control')).toHaveCount(0);
+
+  await page.getByRole('button', { name: '정회원 로그인' }).click();
+  await expect(page.getByTestId('phase12-session-state')).toHaveText('regular');
+  await expect(page.getByTestId('phase12-auto-trading-denied')).toBeVisible();
+  await expect(page.getByTestId('auto-trading-admin-only')).toHaveCount(0);
+  expect(tradeApiRequests).toBe(0);
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
 test('approval queue enables valid paper plan and disables weakened live plan', async ({ page }) => {
   await page.goto('/__phase12-trade-automation-e2e');
   const paper = page.getByTestId('approval-plan-paper-plan');
