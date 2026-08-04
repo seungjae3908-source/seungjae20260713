@@ -9,7 +9,10 @@ const TRANSITIONS: Record<TradingOrderState, readonly TradingOrderState[]> = {
   FILLED: [],
   CANCEL_REQUESTED: ['CANCELED', 'PARTIALLY_FILLED', 'FILLED', 'RECOVERY_REQUIRED'],
   CANCELED: [],
-  REJECTED: [],
+  // A provider response may initially look rejected even though a transport or
+  // 5xx boundary leaves execution uncertain. Only the execution coordinator
+  // promotes those explicitly classified cases into query-only reconciliation.
+  REJECTED: ['RECOVERY_REQUIRED'],
   EXPIRED: [],
   RECOVERY_REQUIRED: ['ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'CANCEL_REQUESTED', 'CANCELED', 'REJECTED'],
 };
