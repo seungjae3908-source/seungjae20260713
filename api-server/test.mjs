@@ -85,6 +85,7 @@ try {
     await build({
       entryPoints: [entryPoint], outfile: outputFile, bundle: true, platform: 'node',
       format: 'cjs', target: 'node20', sourcemap: 'inline', logLevel: 'warning',
+      define: { 'import.meta.env': '{}' },
     });
     outputFiles.push(outputFile);
   }
