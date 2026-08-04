@@ -31,22 +31,21 @@ test('navigation metadata keeps five top-level sections and active routes', () =
     'information',
     'settings',
   ]);
-  expect(new Set(APP_NAVIGATION.flatMap((item) => item.menu?.map((child) => child.href) ?? []))).toEqual(
-    expect.objectContaining(new Set([
-      APP_ROUTES.assets,
-      APP_ROUTES.legacyMarketRankings,
-      APP_ROUTES.themes,
-      APP_ROUTES.watchlist,
-      APP_ROUTES.alerts,
-      APP_ROUTES.scanner,
-      APP_ROUTES.aiChart,
-      APP_ROUTES.autoTrading,
-      APP_ROUTES.marketOverview,
-      APP_ROUTES.learn,
-      APP_ROUTES.aiChat,
-      APP_ROUTES.portfolio,
-    ])),
-  );
+  const menuHrefs = APP_NAVIGATION.flatMap((item) => item.menu?.map((child) => child.href) ?? []);
+  expect(menuHrefs).toEqual(expect.arrayContaining([
+    APP_ROUTES.assets,
+    APP_ROUTES.legacyMarketRankings,
+    APP_ROUTES.themes,
+    APP_ROUTES.watchlist,
+    APP_ROUTES.alerts,
+    APP_ROUTES.scanner,
+    APP_ROUTES.aiChart,
+    APP_ROUTES.autoTrading,
+    APP_ROUTES.marketOverview,
+    APP_ROUTES.learn,
+    APP_ROUTES.aiChat,
+    APP_ROUTES.portfolio,
+  ]));
   expect(UNIFIED_SEARCH_ROUTE_CONTRACT.primaryEntry).toBe('/stocks');
   expect(UNIFIED_SEARCH_ROUTE_CONTRACT.marketRankingsAfterIntegration).toBe('/market-rankings');
   expect(navigationGroupMatches(APP_NAVIGATION[1], '/stock/005930?back=%2Fstocks')).toBe(true);
