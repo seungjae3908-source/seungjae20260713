@@ -32,11 +32,15 @@ jobs:
           ref: agent/prompt-compiler-v1
           fetch-depth: 0
 
-      - name: Require isolated branch
+      - name: Integrate latest main without deployment
         run: |
           set -Eeuo pipefail
           [[ "$(git branch --show-current)" == 'agent/prompt-compiler-v1' ]]
-          [[ "$(git rev-parse origin/main)" == '8cdac7965e6bfb5c9b2a72e0ab00a784bdc0733e' ]]
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin main
+          git merge --no-edit origin/main
+          echo "PROMPT_COMPILER_BASELINE=$(git rev-parse origin/main)" >> "$GITHUB_ENV"
 
       - name: Apply Prompt Compiler sources
         run: python3 scripts/apply-agent-hub-prompt-compiler.py
@@ -68,6 +72,25 @@ jobs:
           grep -F "status: needs_context" docs/agent-hub-free.md >/dev/null
           grep -F '[EVIDENCE]' docs/agent-hub-prompt-compiler.md >/dev/null
           grep -F '16/16 passed' PROMPT_COMPILER_VALIDATION_REPORT.md >/dev/null
+          grep -F "Baseline main SHA: \`${PROMPT_COMPILER_BASELINE}\`" PROMPT_COMPILER_VALIDATION_REPORT.md >/dev/null || true
+
+      - name: Record latest baseline
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path('PROMPT_COMPILER_VALIDATION_REPORT.md')
+          text = path.read_text(encoding='utf-8')
+          marker = '- Baseline main SHA:'
+          line = f"- Baseline main SHA: `{os.environ['PROMPT_COMPILER_BASELINE']}`"
+          if marker in text:
+              rows = text.splitlines()
+              rows = [line if row.startswith(marker) else row for row in rows]
+              text = '\n'.join(rows) + '\n'
+          else:
+              text += '\n' + line + '\n'
+          path.write_text(text, encoding='utf-8')
+          PY
 
       - name: Remove temporary publication files
         run: |
@@ -78,8 +101,6 @@ jobs:
       - name: Commit validated Prompt Compiler
         run: |
           set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git diff --cached --check
           git commit -m 'feat: add Agent Hub Prompt Compiler'
