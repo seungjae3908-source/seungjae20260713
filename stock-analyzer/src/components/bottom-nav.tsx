@@ -2,13 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import {
   BarChart3, BookOpen, Bot, BriefcaseBusiness, CandlestickChart, Home, Layers3, Newspaper,
-  Power, Search, Settings, Star, TrendingUp,
+  Power, Search, Settings, Star, TrendingUp, X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
+import { MARKET_INFORMATION_ROUTES } from '@/lib/market-information';
 import type { MemberCapability } from '../../../packages/member-access/src/index.js';
 
-const INFO_PATHS = ['/stock-info', '/learn', '/market-overview', '/portfolio', '/assets', '/ai-chat'];
+const INFO_PATHS = [
+  ...MARKET_INFORMATION_ROUTES.map((route) => route.href),
+  '/stock-info', '/learn', '/market-overview', '/portfolio', '/assets', '/ai-chat',
+];
 const TECH_PATHS = ['/scanner', '/ai-chart', '/auto-trading'];
 
 const TECH_MENU_ITEMS = [
@@ -16,16 +20,6 @@ const TECH_MENU_ITEMS = [
   { href: '/ai-chart', label: 'AI 차트 분석기', icon: CandlestickChart },
   { href: '/auto-trading', label: '자동매매', icon: Power },
 ] as const;
-
-const INFO_MENU_ITEMS: Array<{
-  href: string; label: string; icon: typeof Newspaper; capability?: MemberCapability;
-}> = [
-  { href: '/stock-info', label: '정보', icon: Newspaper },
-  { href: '/learn', label: '공부', icon: BookOpen },
-  { href: '/market-overview', label: '시황', icon: BarChart3 },
-  { href: '/ai-chat', label: 'AI 채팅', icon: Bot },
-  { href: '/portfolio', label: '포트폴리오', icon: BriefcaseBusiness, capability: 'canAccessPaperTrading' },
-];
 
 const ITEMS: Array<{
   href: string;
@@ -40,7 +34,7 @@ const ITEMS: Array<{
   { href: '/themes', label: '테마', icon: Layers3, match: (path) => path.startsWith('/themes') },
   { href: '/watchlist', label: '관심', icon: Star, match: (path) => path.startsWith('/watchlist') || path.startsWith('/alerts') },
   { href: '/scanner', label: '기술', icon: Search, popup: true, capability: 'canAccessRiskPreview', match: (path) => TECH_PATHS.some((item) => path.startsWith(item)) },
-  { href: '/stock-info', label: '정보', icon: Newspaper, popup: true, match: (path) => INFO_PATHS.some((item) => path.startsWith(item)) },
+  { href: '/stocks/kr', label: '정보', icon: Newspaper, popup: true, capability: 'canAccessBasicInfo', match: (path) => INFO_PATHS.some((item) => path.startsWith(item)) },
   { href: '/more', label: '설정', icon: Settings, match: (path) => path.startsWith('/more') || path.startsWith('/settings') || path.startsWith('/account') || path.startsWith('/login') },
 ];
 
@@ -55,7 +49,7 @@ export function BottomNav() {
   const [openMenu, setOpenMenu] = useState<'tech' | 'info' | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const visibleItems = ITEMS.filter((item) => !item.capability || auth.can(item.capability));
-  const visibleInfoItems = INFO_MENU_ITEMS.filter((item) => !item.capability || auth.can(item.capability));
+  const visibleMarketInformationRoutes = MARKET_INFORMATION_ROUTES.filter((route) => auth.can(route.capability));
 
   useEffect(() => { setOpenMenu(null); }, [location]);
 
@@ -86,18 +80,46 @@ export function BottomNav() {
           if (item.popup) {
             const menuType = item.label === '기술' ? 'tech' : 'info';
             const menuOpen = openMenu === menuType;
-            const menuItems = menuType === 'tech' ? TECH_MENU_ITEMS : visibleInfoItems;
             return (
               <div key={item.href} ref={menuOpen ? menuRef : undefined} className="relative min-w-0">
-                {menuOpen && (
-                  <div role="menu" aria-label={`${item.label} 메뉴`} className="absolute bottom-full right-0 z-50 mb-3 w-48 overflow-hidden rounded-2xl border border-card-border bg-card p-2 shadow-2xl">
-                    {menuItems.map((menuItem) => {
+                {menuOpen && menuType === 'tech' && (
+                  <div role="menu" aria-label="기술 메뉴" className="absolute bottom-full right-0 z-50 mb-3 w-48 overflow-hidden rounded-2xl border border-card-border bg-card p-2 shadow-2xl">
+                    {TECH_MENU_ITEMS.map((menuItem) => {
                       const MenuIcon = menuItem.icon;
                       const menuActive = path.startsWith(menuItem.href);
                       return (
-                        <button key={menuItem.href} type="button" role="menuitem" onClick={() => moveTo(menuItem.href)} className={cn('flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-extrabold transition', menuActive ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted active:bg-muted')}>
+                        <button key={menuItem.href} type="button" role="menuitem" onClick={() => moveTo(menuItem.href)} className={cn('flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-extrabold transition', menuActive ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted active:bg-muted')}>
                           <MenuIcon className="h-4 w-4 shrink-0" /><span>{menuItem.label}</span>
                         </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {menuOpen && menuType === 'info' && (
+                  <div role="menu" aria-label="정보 메뉴" className="absolute bottom-full right-0 z-50 mb-3 w-56 overflow-hidden rounded-2xl border border-card-border bg-card p-2 shadow-2xl">
+                    <div className="mb-1 flex min-h-11 items-center justify-between px-2">
+                      <p className="text-sm font-black">시장 정보</p>
+                      <button type="button" onClick={() => setOpenMenu(null)} aria-label="정보 메뉴 닫기" className="flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground hover:bg-muted active:bg-muted">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    {(['주식', '코인'] as const).map((group) => {
+                      const routes = visibleMarketInformationRoutes.filter((route) => route.group === group);
+                      if (routes.length === 0) return null;
+                      return (
+                        <div key={group} className="mb-2 last:mb-0">
+                          <p className="px-3 pb-1 pt-2 text-[10px] font-black text-muted-foreground">{group}</p>
+                          <div className="grid grid-cols-2 gap-1">
+                            {routes.map((route) => {
+                              const menuActive = path === route.href;
+                              return (
+                                <button key={route.href} type="button" role="menuitem" onClick={() => moveTo(route.href)} className={cn('min-h-11 rounded-xl px-3 py-3 text-center text-sm font-extrabold transition', menuActive ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted active:bg-muted')}>
+                                  {route.shortLabel}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
