@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: unified-search-branch-validation
@@ -25,6 +26,7 @@ jobs:
           fetch-depth: 0
 
       - name: Confirm isolated branch and baseline
+        id: isolation
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -45,35 +47,45 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
+        id: install
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck frontend
+        id: frontend_typecheck
         run: pnpm --dir stock-analyzer run typecheck
 
       - name: Typecheck backend
+        id: backend_typecheck
         run: pnpm --dir api-server run typecheck
 
       - name: Run unified search unit and API tests
+        id: search_tests
         run: pnpm --dir api-server run test:search
 
       - name: Run backend regression tests
+        id: backend_regression
         run: pnpm --dir api-server run test
 
       - name: Build frontend and backend
+        id: production_build
         run: |
           pnpm --dir stock-analyzer run build
           pnpm --dir api-server run build
 
       - name: Install Chromium
+        id: chromium
         run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
 
       - name: Run unified search browser regression
+        id: search_browser
         run: pnpm --dir stock-analyzer exec playwright test e2e/unified-asset-search.spec.ts --reporter=line
 
       - name: Run full browser regression
+        id: full_browser
         run: pnpm --dir stock-analyzer run test:e2e
 
       - name: Confirm no deployment files changed
+        id: safety
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -83,3 +95,46 @@ jobs:
             printf '%s\n' "$changed" >&2
             exit 1
           fi
+
+      - name: Record validation result on Draft PR
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          JOB_STATUS: ${{ job.status }}
+          ISOLATION: ${{ steps.isolation.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
+          FRONTEND_TYPECHECK: ${{ steps.frontend_typecheck.outcome }}
+          BACKEND_TYPECHECK: ${{ steps.backend_typecheck.outcome }}
+          SEARCH_TESTS: ${{ steps.search_tests.outcome }}
+          BACKEND_REGRESSION: ${{ steps.backend_regression.outcome }}
+          PRODUCTION_BUILD: ${{ steps.production_build.outcome }}
+          SEARCH_BROWSER: ${{ steps.search_browser.outcome }}
+          FULL_BROWSER: ${{ steps.full_browser.outcome }}
+          SAFETY: ${{ steps.safety.outcome }}
+        with:
+          script: |
+            const lines = [
+              `Unified Search Branch Validation: **${process.env.JOB_STATUS}**`,
+              '',
+              `- Head SHA: \`${context.sha}\``,
+              `- Run ID: \`${context.runId}\``,
+              `- Isolated branch/baseline: \`${process.env.ISOLATION}\``,
+              `- Dependency install: \`${process.env.INSTALL}\``,
+              `- Frontend typecheck: \`${process.env.FRONTEND_TYPECHECK}\``,
+              `- Backend typecheck: \`${process.env.BACKEND_TYPECHECK}\``,
+              `- Unified search tests: \`${process.env.SEARCH_TESTS}\``,
+              `- Backend regression: \`${process.env.BACKEND_REGRESSION}\``,
+              `- Production build: \`${process.env.PRODUCTION_BUILD}\``,
+              `- Unified search Playwright: \`${process.env.SEARCH_BROWSER}\``,
+              `- Full Playwright: \`${process.env.FULL_BROWSER}\``,
+              `- Deployment/Supabase/migration safety: \`${process.env.SAFETY}\``,
+              '- Deployment executed: `false`',
+              '- Supabase or Secret changed: `false`',
+              '- Actual order executed: `false`',
+            ];
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 58,
+              body: lines.join('\n'),
+            });
