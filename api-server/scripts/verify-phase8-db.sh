@@ -52,6 +52,7 @@ run_sql "apply trade automation storage and RLS idempotently" "api-server/supaba
 # Verify the service-only trading control before legacy Phase 8 fixtures grant
 # broad table privileges for paper-journal RLS checks.
 run_sql "execute trade automation ownership RLS queries" "api-server/supabase/test/trade_automation_rls_integration.sql"
+run_sql "verify trade plan and order atomicity contracts" "api-server/supabase/test/trade_automation_atomicity_integration.sql"
 run_sql "execute real ownership RLS integration queries" "api-server/supabase/test/phase8_rls_integration.sql"
 run_sql "execute real membership-tier RLS integration queries" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
@@ -76,6 +77,7 @@ run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.s
 # Recheck the service-only trading control before the tier fixture re-grants all
 # tables to the API roles for its isolated compatibility assertions.
 run_sql "recheck trade automation RLS after reapply" "api-server/supabase/test/trade_automation_rls_integration.sql"
+run_sql "recheck trade atomicity after reapply" "api-server/supabase/test/trade_automation_atomicity_integration.sql"
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
 echo "[phase8-db] disposable database and atomic staging bootstrap verification completed"
