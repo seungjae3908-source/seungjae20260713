@@ -70,7 +70,6 @@ function featureExplanationHandler(task: AiFeatureTask): RequestHandler {
         ok: true,
         inputAuthority: 'validated-client-snapshot',
         authoritativeStateUsed: false,
-        advisoryOnly: true,
         mutationPerformed: false,
         orderRequestSent: false,
         ...result,
