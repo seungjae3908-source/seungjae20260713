@@ -175,10 +175,17 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
       policy.emergencyStopped || persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true');
     if (!result.plan) return res.status(409).json({ ok: false, error: 'RISK_CHECK_BLOCKED', decision: result.decision, orderSubmitted: false });
     if (policy.mode === 'automatic' && policy.automaticEnabled && result.plan.state === 'PLANNED') {
-      const submitted = await automation.beginAutomaticPlan(userId, result.plan.id);
-      const { order, duplicate } = await automation.createOrder(userId, submitted);
-      const executed = await new TradeExecutionService(repository).execute(userId, submitted, order);
-      return res.json({ ok: true, plan: safePlanView(submitted), order: executed, duplicate: result.duplicate || duplicate });
+      const submission = await automation.beginAutomaticPlanAndCreateOrder(userId, result.plan.id);
+      const executed = submission.executionClaimed
+        ? await new TradeExecutionService(repository).execute(userId, submission.plan, submission.order)
+        : submission.order;
+      return res.json({
+        ok: true,
+        plan: safePlanView(submission.plan),
+        order: executed,
+        duplicate: result.duplicate || submission.duplicate,
+        executionClaimed: submission.executionClaimed,
+      });
     }
     return res.json({ ok: true, plan: safePlanView(result.plan), duplicate: result.duplicate, orderSubmitted: false });
   } catch (error) { return errorResponse(res, error); }
@@ -189,10 +196,17 @@ router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
     const { userId, automation, execution } = context(req);
     if (req.body?.approved !== true) return res.status(409).json({ ok: false, error: 'EXPLICIT_APPROVAL_REQUIRED' });
     const revalidation = req.body?.revalidation as TradingPlanRevalidationInput | undefined;
-    const plan = await automation.approvePlan(userId, String(req.params.id), revalidation);
-    const { order, duplicate } = await automation.createOrder(userId, plan);
-    const result = duplicate ? order : await execution.execute(userId, plan, order);
-    return res.json({ ok: true, plan: safePlanView(plan), order: result, duplicate });
+    const submission = await automation.approvePlanAndCreateOrder(userId, String(req.params.id), revalidation);
+    const result = submission.executionClaimed
+      ? await execution.execute(userId, submission.plan, submission.order)
+      : submission.order;
+    return res.json({
+      ok: true,
+      plan: safePlanView(submission.plan),
+      order: result,
+      duplicate: submission.duplicate,
+      executionClaimed: submission.executionClaimed,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
