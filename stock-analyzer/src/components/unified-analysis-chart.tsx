@@ -33,6 +33,7 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from 'lightweight-charts';
+import { SelectedCandleDetailPanel } from '@/components/selected-candle-detail';
 import { api } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import {
@@ -410,6 +411,7 @@ function UnifiedChartCanvas({
   overlays,
   timeframe,
   resetKey,
+  onCandleSelect,
 }: {
   candles: NormalizedChartCandle[];
   indicators: ChartIndicatorResult;
@@ -418,6 +420,7 @@ function UnifiedChartCanvas({
   overlays: Record<OverlayKey, boolean>;
   timeframe: UnifiedChartTimeframe;
   resetKey: string;
+  onCandleSelect: (time: number) => void;
 }) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -527,6 +530,12 @@ function UnifiedChartCanvas({
         });
       }
     }
+    const handleClick: Parameters<IChartApi['subscribeClick']>[0] = (param) => {
+      if (typeof param.time === 'number' && Number.isFinite(param.time)) {
+        onCandleSelect(param.time);
+      }
+    };
+    chart.subscribeClick(handleClick);
     instanceRef.current = instance;
     const observer = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
@@ -536,10 +545,11 @@ function UnifiedChartCanvas({
     observer.observe(container);
     return () => {
       observer.disconnect();
+      chart.unsubscribeClick(handleClick);
       instanceRef.current = null;
       chart.remove();
     };
-  }, [overlays, timeframe]);
+  }, [onCandleSelect, overlays, timeframe]);
 
   useEffect(() => {
     const instance = instanceRef.current;
@@ -621,6 +631,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   const [overlays, setOverlays] = useState<Record<OverlayKey, boolean>>(loadOverlays);
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [inputError, setInputError] = useState('');
+  const [selectedCandleTime, setSelectedCandleTime] = useState<number | null>(null);
   const previousAnalysisRef = useRef<ChartAnalysis | null>(null);
 
   useEffect(() => {
@@ -628,6 +639,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
     setQuery('');
     setSearchOpen(false);
     setTimeline([]);
+    setSelectedCandleTime(null);
     previousAnalysisRef.current = null;
     onAnalysisChange?.(null);
   }, [selection.market, selection.ticker, selection.timeframe, onAnalysisChange]);
@@ -669,6 +681,12 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   }, [candles.length, chartQuery.data, indicators, levels, selection, timeframe]);
 
   useEffect(() => {
+    if (selectedCandleTime != null && !candles.some((candle) => candle.time === selectedCandleTime)) {
+      setSelectedCandleTime(null);
+    }
+  }, [candles, selectedCandleTime]);
+
+  useEffect(() => {
     if (!analysis) {
       onAnalysisChange?.(null);
       return;
@@ -707,6 +725,9 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
     });
   }, [onSelectionChange, selection, timeframe]);
 
+  const handleCandleSelect = useCallback((time: number) => {
+    setSelectedCandleTime(time);
+  }, []);
   const changeMarket = (nextMarket: AnalysisMarket) => {
     if (nextMarket === market) return;
     const fallback = defaultUnifiedSymbol(nextMarket);
@@ -778,9 +799,18 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           {settingsOpen && <div className="mt-2 flex flex-wrap gap-2 rounded-2xl border border-card-border bg-background p-3">{OVERLAY_OPTIONS.map((item) => <button key={item.key} type="button" data-testid={`overlay-${item.key}`} onClick={() => toggleOverlay(item.key)} className={cn('rounded-full border px-3 py-1.5 text-[11px] font-extrabold', overlays[item.key] ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card text-muted-foreground')}>{overlays[item.key] ? '✓ ' : '+ '}{item.label}</button>)}</div>}
         </div>
         <div className="min-h-[390px] bg-background/30">
-          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <UnifiedChartCanvas candles={candles} indicators={indicators} levels={levels} analysis={analysis} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} />}
+          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <UnifiedChartCanvas candles={candles} indicators={indicators} levels={levels} analysis={analysis} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} onCandleSelect={handleCandleSelect} />}
         </div>
       </section>
+
+      <SelectedCandleDetailPanel
+        candles={candles}
+        indicators={indicators}
+        market={market}
+        timeframe={timeframe}
+        selectedTime={selectedCandleTime}
+        onReset={() => setSelectedCandleTime(null)}
+      />
 
       {warnings.length > 0 && <section className="rounded-3xl border border-warning/30 bg-warning/5 p-4" data-testid="chart-data-warnings"><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-warning" /><h2 className="text-sm font-black">데이터 품질 알림</h2></div><ul className="mt-2 space-y-1 text-xs font-bold text-muted-foreground">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul></section>}
 
