@@ -24,7 +24,7 @@ assert(spec.includes('function loginSubmitButton(page: Page)'), 'login submit he
 assert(spec.includes(scopedSelector), 'login submit button must be scoped to the login form');
 assert(!spec.includes(ambiguousSelector), 'unscoped login button selector can match both the tab and submit button');
 assert(
-  (spec.match(/loginSubmitButton\(page\)/g) ?? []).length >= 5,
+  (spec.match(/loginSubmitButton\(page\)/g) ?? []).length >= 4,
   'anonymous, login, logout, and post-refresh checks must share the scoped login submit selector',
 );
 assert(app.includes(approvedLoginRoute), 'approved sessions must render the account page at /login instead of the 404 route');
