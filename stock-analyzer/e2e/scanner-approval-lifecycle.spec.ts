@@ -83,10 +83,11 @@ test('signal alerts do not present unknown server freshness as current', async (
   });
 
   await page.goto('/__phase12-trade-automation-e2e?fixture=network-alerts');
-  await expect(page.getByText('서버 갱신 시각을 확인할 수 없어 최신 정보로 표시하지 않습니다.')).toBeVisible();
-  await expect(page.getByText('마지막 확인 후 갱신 실패')).toBeVisible();
-  await expect(page.getByText('마지막 갱신 -')).toBeVisible();
-  await expect(page.getByText(/자동 갱신 중/)).toHaveCount(0);
+  const alertsSection = page.getByTestId('trade-signal-alerts');
+  await expect(alertsSection.getByText('서버 갱신 시각을 확인할 수 없어 최신 정보로 표시하지 않습니다.')).toBeVisible();
+  await expect(alertsSection.getByText('마지막 확인 후 갱신 실패')).toBeVisible();
+  await expect(alertsSection.getByText('마지막 갱신 -')).toBeVisible();
+  await expect(alertsSection.getByText('자동 갱신 중', { exact: true })).toHaveCount(0);
   expect(failures.consoleErrors).toEqual([]);
   expect(failures.pageErrors).toEqual([]);
   expect(failures.unexpectedHttpErrors).toEqual([]);
