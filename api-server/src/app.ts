@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { apiRateLimit, securityHeaders } from './middleware/security';
 
 const app: Express = express();
@@ -47,19 +48,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/api', apiRateLimit);
 
-app.use('/api/paper-journal', (req, res, next) => {
-  if ('userId' in req.query || 'user_id' in req.query) {
-    return res.status(400).json({
-      mode: 'journal-sync-only',
-      orderSubmitted: false,
-      exchangeRequestSent: false,
-      ok: false,
-      code: 'CLIENT_USER_ID_FORBIDDEN',
-      message: '사용자 ID는 로그인 세션에서만 결정됩니다.',
-    });
-  }
-  return next();
-});
+app.use('/api/paper-journal', rejectPaperJournalQueryIdentity);
 
 app.get("/api", (_req, res) => {
   res.json({
