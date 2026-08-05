@@ -3,8 +3,15 @@ import { once } from 'node:events';
 import { test } from 'node:test';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import type { KiwoomRankingRow } from '../providers/kiwoom';
-import type { KiwoomFallbackRankingRow } from '../services/kiwoom-ranking-fallback.service';
+import type {
+  KiwoomRankingOptions,
+  KiwoomRankingRow,
+} from '../providers/kiwoom';
+import {
+  rankFallbackRows,
+  type KiwoomFallbackRankingCandidate,
+  type KiwoomFallbackRankingRow,
+} from '../services/kiwoom-ranking-fallback.service';
 import { createKiwoomRankingsSafeRouter } from './kiwoom-rankings-safe';
 
 const primaryRow: KiwoomRankingRow = {
@@ -56,6 +63,11 @@ const fallbackRow: KiwoomFallbackRankingRow = {
     '키움 랭킹 공급자를 사용할 수 없어 실제 대체 시장데이터 공급자의 결과를 표시합니다.',
   reason:
     '키움 랭킹 공급자를 사용할 수 없어 실제 대체 시장데이터 공급자의 결과를 표시합니다.',
+  isEtp: false,
+  isLeveraged: false,
+  isInverse: false,
+  isDerivative: false,
+  recommendationEligible: true,
   dataQualityWarnings: [
     '키움 원본 랭킹이 아니며 공급자별 지연 시간은 다를 수 있습니다.',
   ],
@@ -63,6 +75,7 @@ const fallbackRow: KiwoomFallbackRankingRow = {
 
 async function requestJson(
   router: ReturnType<typeof createKiwoomRankingsSafeRouter>,
+  query = 'market=KR&type=volume&limit=30&assetFilter=stocks&excludeHighRisk=true',
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const app = express();
   app.use('/api/kiwoom', router);
@@ -72,7 +85,7 @@ async function requestJson(
   try {
     const address = server.address() as AddressInfo;
     const response = await fetch(
-      `http://127.0.0.1:${address.port}/api/kiwoom/rankings?market=KR&type=volume&limit=30&assetFilter=stocks&excludeHighRisk=true`,
+      `http://127.0.0.1:${address.port}/api/kiwoom/rankings?${query}`,
     );
     return {
       status: response.status,
@@ -84,8 +97,9 @@ async function requestJson(
   }
 }
 
-test('unconfigured Kiwoom skips the primary request and returns explicit live fallback rows', async () => {
+test('unconfigured Kiwoom forwards filters and returns explicit live fallback rows', async () => {
   let primaryCalls = 0;
+  let fallbackOptions: KiwoomRankingOptions | null = null;
   const response = await requestJson(
     createKiwoomRankingsSafeRouter({
       isConfigured: () => false,
@@ -93,11 +107,19 @@ test('unconfigured Kiwoom skips the primary request and returns explicit live fa
         primaryCalls += 1;
         return [primaryRow];
       },
-      getFallbackRows: async () => [fallbackRow],
+      getFallbackRows: async (_market, _type, _limit, options) => {
+        fallbackOptions = options;
+        return [fallbackRow];
+      },
     }),
   );
 
   assert.equal(primaryCalls, 0);
+  assert.deepEqual(fallbackOptions, {
+    assetFilter: 'stocks',
+    excludeHighRisk: true,
+    recommendationEligibleOnly: false,
+  });
   assert.equal(response.status, 200);
   assert.equal(response.body.ok, false);
   assert.equal(response.body.status, 'partial');
@@ -105,7 +127,74 @@ test('unconfigured Kiwoom skips the primary request and returns explicit live fa
   assert.equal(response.body.fallbackProvider, 'live-market-providers');
   assert.equal(response.body.providerErrorCode, 'KIWOOM_NOT_CONFIGURED');
   assert.deepEqual(response.body.missingData, ['kiwoom_rankings']);
-  assert.equal((response.body.rows as KiwoomFallbackRankingRow[])[0]?.provider, 'live-market-providers');
+  assert.equal(
+    (response.body.rows as KiwoomFallbackRankingRow[])[0]?.provider,
+    'live-market-providers',
+  );
+});
+
+test('fallback ranking applies asset, high-risk, and explicit recommendation filters', () => {
+  const candidates: KiwoomFallbackRankingCandidate[] = [
+    {
+      ...fallbackRow,
+      recommendationEligible: true,
+    },
+    {
+      ...fallbackRow,
+      ticker: '069500',
+      name: 'KODEX 200',
+      assetType: 'ETF',
+      volume: 9_000,
+      recommendationEligible: false,
+      riskLevel: 'LOW',
+    },
+    {
+      ...fallbackRow,
+      ticker: '122630',
+      name: 'KODEX 레버리지',
+      assetType: 'LEVERAGED_ETF',
+      volume: 8_000,
+      recommendationEligible: true,
+      riskLevel: 'HIGH',
+    },
+  ];
+
+  assert.deepEqual(
+    rankFallbackRows(candidates, 'volume', 30, {
+      assetFilter: 'stocks',
+      excludeHighRisk: true,
+    }).map((row) => row.ticker),
+    ['005930'],
+  );
+  assert.deepEqual(
+    rankFallbackRows(candidates, 'volume', 30, {
+      assetFilter: 'etp',
+      excludeHighRisk: true,
+    }).map((row) => row.ticker),
+    ['069500'],
+  );
+  assert.deepEqual(
+    rankFallbackRows(candidates, 'volume', 30, {
+      recommendationEligibleOnly: true,
+    }).map((row) => row.ticker),
+    ['005930'],
+  );
+});
+
+test('valid fallback with zero filter matches remains explicit partial HTTP 200', async () => {
+  const response = await requestJson(
+    createKiwoomRankingsSafeRouter({
+      isConfigured: () => false,
+      getPrimaryRows: async () => [primaryRow],
+      getFallbackRows: async () => [],
+    }),
+    'market=KR&type=volume&recommendationEligibleOnly=true',
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, 'partial');
+  assert.equal(response.body.count, 0);
+  assert.deepEqual(response.body.rows, []);
 });
 
 test('configured Kiwoom preserves the primary ready response without fallback', async () => {
