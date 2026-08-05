@@ -10,6 +10,8 @@ import { createBoundedMarketScanRouter, type StockScannerRunner } from './bounde
 
 interface ScanResponseBody {
   ok?: boolean;
+  partial?: boolean;
+  elapsedMs?: number;
   dataState?: string;
   error?: string;
   cards?: unknown[];
@@ -17,6 +19,7 @@ interface ScanResponseBody {
     partial?: boolean;
     timedOut?: boolean;
     timeoutCount?: number;
+    elapsedMs?: number;
   };
 }
 
@@ -122,7 +125,10 @@ test('normal zero-match scan returns HTTP 200 empty', async () => {
       assert.equal(response.status, 200);
       const body = await response.json() as ScanResponseBody;
       assert.equal(body.ok, true);
+      assert.equal(body.partial, false);
       assert.equal(body.execution?.partial, false);
+      assert.equal(body.elapsedMs, 100);
+      assert.equal(body.elapsedMs, body.execution?.elapsedMs);
       assert.equal(body.dataState, 'complete');
       assert.deepEqual(body.cards, []);
     },
@@ -150,9 +156,12 @@ test('some item timeouts return explicit partial HTTP 200', async () => {
       const response = await fetch(`${baseUrl}/api/market/scan?market=KR`);
       assert.equal(response.status, 200);
       const body = await response.json() as ScanResponseBody;
+      assert.equal(body.partial, true);
       assert.equal(body.execution?.partial, true);
       assert.equal(body.execution?.timedOut, true);
       assert.equal(body.execution?.timeoutCount, 1);
+      assert.equal(body.elapsedMs, 11_900);
+      assert.equal(body.elapsedMs, body.execution?.elapsedMs);
       assert.equal(body.dataState, 'partial');
     },
   );
