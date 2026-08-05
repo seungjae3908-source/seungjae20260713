@@ -1,6 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# The full Staging Readiness workflow already applied the exact-SHA bootstrap
+# atomically and wrote a sanitized verification artifact. Never run disposable
+# rollback fixtures against the live staging database. Validate that evidence
+# and retain rollback execution exclusively in disposable PostgreSQL CI.
+if [[ -n "${DATABASE_URL:-}" ]]; then
+  : "${STAGING_ARTIFACT_DIR:?STAGING_ARTIFACT_DIR is required for live staging evidence verification}"
+  node - "$STAGING_ARTIFACT_DIR/staging-bootstrap-verification.json" <<'NODE'
+const fs = require('node:fs');
+const file = process.argv[2];
+const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+if (value.status !== 'passed') throw new Error('live staging bootstrap artifact did not pass');
+if (value.schema_version !== '20260804.1') throw new Error('live staging bootstrap schema version mismatch');
+if (value.atomic_transaction !== true) throw new Error('live staging bootstrap was not atomic');
+if (value.idempotency_passes !== 2) throw new Error('live staging bootstrap did not run twice');
+if (value.production_export_used !== false) throw new Error('live staging bootstrap used a production export');
+if (value.auth_users_copied !== 0 || value.profile_rows_copied !== 0 || value.storage_objects_copied !== 0) {
+  throw new Error('live staging bootstrap copied forbidden data');
+}
+if (value.credentials_recorded !== false) throw new Error('live staging bootstrap recorded credentials');
+NODE
+  node "$ROOT_DIR/api-server/scripts/verify-paper-journal-privilege-contract.mjs"
+  echo "[phase8-db] live staging bootstrap evidence verified; rollback remains disposable-CI only"
+  exit 0
+fi
+
 : "${PGHOST:=127.0.0.1}"
 : "${PGPORT:=5432}"
 : "${PGUSER:=phase8}"
@@ -8,7 +35,6 @@ set -euo pipefail
 : "${PGPASSWORD:?PGPASSWORD is required for disposable Phase 8 verification}"
 export PGPASSWORD
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PSQL=(psql --host "$PGHOST" --port "$PGPORT" --username "$PGUSER" --dbname "$PGDATABASE" --no-psqlrc --set=ON_ERROR_STOP=1)
 BOOTSTRAP_ARTIFACT_DIR="$(mktemp -d)"
 cleanup() { rm -rf -- "$BOOTSTRAP_ARTIFACT_DIR"; }
