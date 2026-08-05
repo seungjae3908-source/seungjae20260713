@@ -107,10 +107,22 @@ const escapeWorkflowCommand = (value) => value
 try {
   for (const [index, entryPoint] of entries.entries()) {
     const outputFile = path.join(temporaryDirectory, `application-${index}.test.cjs`);
-    await build({
-      entryPoints: [entryPoint], outfile: outputFile, bundle: true, platform: 'node',
-      format: 'cjs', target: 'node20', sourcemap: 'inline', logLevel: 'warning',
-    });
+    try {
+      await build({
+        entryPoints: [entryPoint], outfile: outputFile, bundle: true, platform: 'node',
+        format: 'cjs', target: 'node20', sourcemap: 'inline', logLevel: 'warning',
+      });
+    } catch (error) {
+      if (mode === 'phase12') {
+        const relativeEntry = path.relative(repositoryRoot, entryPoint).replaceAll('\\', '/');
+        await writeFile(path.join(root, 'phase12-failures.txt'), `${relativeEntry}\n`, 'utf8');
+        if (process.env.GITHUB_STEP_SUMMARY) {
+          await appendFile(process.env.GITHUB_STEP_SUMMARY, `## Phase 12 bundle failure\n\n- \`${relativeEntry}\`\n`, 'utf8');
+        }
+        process.stdout.write(`::error file=${escapeWorkflowCommand(relativeEntry)},line=1,title=Phase 12 bundle failure::Failed to bundle Phase 12 test entry\n`);
+      }
+      throw error;
+    }
     outputFiles.push(outputFile);
   }
 
