@@ -68,15 +68,17 @@ function marketRegimeParameters(strategy: CashBacktestStrategy): Record<string, 
     regimeFastPeriod4h: 12,
     regimeSlowPeriod4h: 26,
     minimumTrendSlopePercent: 0,
-    cooldownBars: 16,
+    cooldownBars: 32,
+    strategyExitEnabled: 0,
+    rsiPeriod: 14,
   };
   if (strategy === 'trend_pullback') {
-    return { ...regime, fastPeriod: 20, slowPeriod: 50, pullbackTolerancePercent: 0.3, volumePeriod: 30, volumeMultiplier: 1.2 };
+    return { ...regime, fastPeriod: 20, slowPeriod: 50, pullbackTolerancePercent: 0.3, volumePeriod: 30, volumeMultiplier: 1.1, minimumEntryRsi: 48, maximumEntryRsi: 65 };
   }
   if (strategy === 'breakout') {
-    return { ...regime, lookback: 30, volumePeriod: 30, volumeMultiplier: 1.4, atrPeriod: 14, minimumBreakoutAtr: 0.1 };
+    return { ...regime, lookback: 24, volumePeriod: 30, volumeMultiplier: 1.3, atrPeriod: 14, minimumBreakoutAtr: 0.05, maximumBreakoutAtr: 0.6, minimumEntryRsi: 55, maximumEntryRsi: 72 };
   }
-  return { ...regime, volumePeriod: 30, volumeMultiplier: 1.2 };
+  return { ...regime, volumePeriod: 30, volumeMultiplier: 1.2, minimumEntryRsi: 45, maximumEntryRsi: 62 };
 }
 
 function cashParameters(market: 'kr-stock' | 'us-stock' | 'crypto-spot', strategy: CashBacktestStrategy): Record<string, number> {
@@ -106,8 +108,8 @@ async function runCashInstrument(input: { market: 'kr-stock' | 'us-stock' | 'cry
         exitFeeRate: crypto ? 0.0005 : 0.00015,
         slippageRate: input.market === 'us-stock' ? 0.001 : 0.0005,
         stopLossPercent: crypto ? 1.5 : 1,
-        takeProfitR: crypto ? 2 : 1.5,
-        maximumTradesPerDay: crypto ? 3 : 10,
+        takeProfitR: crypto ? 2.5 : 1.5,
+        maximumTradesPerDay: crypto ? 2 : 10,
         intrabarPriority: 'stop_first',
       }, candles);
       rows.push(cashSummary({
@@ -116,7 +118,7 @@ async function runCashInstrument(input: { market: 'kr-stock' | 'us-stock' | 'cry
         provider: history.provider,
         strategy,
         result,
-        profile: crypto ? 'crypto-spot-market-regime-v2' : 'baseline-v1',
+        profile: crypto ? 'crypto-spot-market-regime-v3' : 'baseline-v1',
       }));
     }
   } catch (error) {
