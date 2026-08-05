@@ -118,14 +118,13 @@ jobs:
               return;
             }
 
-            const checkoutRef = `refs/pull/${pull.number}/merge`;
-            let mergeReady = false;
+            let checkoutSha = null;
             for (let attempt = 1; attempt <= 10; attempt += 1) {
               try {
                 const ref = await github.rest.git.getRef({ owner, repo, ref: `pull/${pull.number}/merge` });
                 const commit = await github.rest.repos.getCommit({ owner, repo, ref: ref.data.object.sha });
                 if (commit.data.parents.some((parent) => parent.sha === targetSha)) {
-                  mergeReady = true;
+                  checkoutSha = ref.data.object.sha;
                   break;
                 }
               } catch (error) {
@@ -133,7 +132,7 @@ jobs:
               }
               await new Promise((resolve) => setTimeout(resolve, 2000));
             }
-            if (!mergeReady) {
+            if (!checkoutSha) {
               core.setFailed(`Pull request #${pull.number} merge ref was not refreshed for ${targetSha}.`);
               return;
             }
@@ -143,6 +142,6 @@ jobs:
               repo,
               workflow_id: 'futures-public-network-smoke.yml',
               ref: context.payload.repository?.default_branch ?? 'main',
-              inputs: { target_sha: targetSha, checkout_ref: checkoutRef },
+              inputs: { target_sha: targetSha, checkout_ref: checkoutSha },
             });
-            core.info(`Dispatched Application CI for PR #${pull.number} at ${targetSha} using ${checkoutRef}.`);
+            core.info(`Dispatched Application CI for PR #${pull.number} at ${targetSha} using merge commit ${checkoutSha}.`);
