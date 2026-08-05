@@ -7,6 +7,11 @@ import {
   type StagingAccountLifecycle,
 } from './support/staging-account-lifecycle';
 import { expectHealthyScannerRoute } from './support/scanner-readiness';
+import { requestWithBrowserSession } from './support/browser-session-api';
+import {
+  collectSafeApiDiagnostic,
+  type SafeApiDiagnostic,
+} from './support/safe-api-diagnostic';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
 const required = (name: string): string => {
@@ -29,7 +34,13 @@ let accountLifecycle: StagingAccountLifecycle | null = null;
 
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
 type LogoutObservation = { candidates: Diagnostic[] };
+type RouteTransitionObservation = {
+  fromPath: string;
+  toPath: string;
+  candidates: Diagnostic[];
+};
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
+const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
 const diagnostics: {
   console_errors: Diagnostic[];
   page_errors: Diagnostic[];
@@ -37,6 +48,8 @@ const diagnostics: {
   unexpected_http_errors: Diagnostic[];
   expected_logout_aborts: Diagnostic[];
   expected_scanner_aborts: Diagnostic[];
+  expected_route_transition_aborts: Diagnostic[];
+  api_diagnostics: SafeApiDiagnostic[];
 } = {
   console_errors: [],
   page_errors: [],
@@ -44,6 +57,8 @@ const diagnostics: {
   unexpected_http_errors: [],
   expected_logout_aborts: [],
   expected_scanner_aborts: [],
+  expected_route_transition_aborts: [],
+  api_diagnostics: [],
 };
 
 function diagnosticUrl(raw: string) {
@@ -97,6 +112,22 @@ function isExpectedScannerAbort(request: Request) {
   }
 }
 
+function isExpectedRouteTransitionAbort(
+  request: Request,
+  observation: RouteTransitionObservation,
+) {
+  try {
+    const parsed = new URL(request.url());
+    return observation.fromPath === '/stock-info'
+      && observation.toPath === '/scanner'
+      && request.method() === 'GET'
+      && parsed.pathname === '/api/stocks/005930/chart'
+      && request.failure()?.errorText === 'net::ERR_ABORTED';
+  } catch {
+    return false;
+  }
+}
+
 function recordUnhandled(testName: string, url: string, detail: string) {
   if (/unhandled|uncaught.*promise|promise rejection/i.test(detail)) {
     diagnostics.unhandled_rejections.push({ test: testName, url, detail });
@@ -135,9 +166,14 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       status: 0,
       detail,
     };
-    const observation = activeLogoutObservations.get(page);
-    if (observation && isExpectedLogoutAbort(request)) {
-      observation.candidates.push(diagnostic);
+    const logoutObservation = activeLogoutObservations.get(page);
+    if (logoutObservation && isExpectedLogoutAbort(request)) {
+      logoutObservation.candidates.push(diagnostic);
+      return;
+    }
+    const routeObservation = activeRouteTransitionObservations.get(page);
+    if (routeObservation && isExpectedRouteTransitionAbort(request, routeObservation)) {
+      routeObservation.candidates.push(diagnostic);
       return;
     }
     if (isExpectedScannerAbort(request)) {
@@ -224,6 +260,30 @@ async function expectDeniedRoute(page: Page, route: string) {
   await page.goto(route, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('capability-denied')).toBeVisible();
   await settle(page);
+}
+
+async function expectScannerAfterFutures(page: Page) {
+  const observation: RouteTransitionObservation = {
+    fromPath: new URL(page.url()).pathname,
+    toPath: '/scanner',
+    candidates: [],
+  };
+  activeRouteTransitionObservations.set(page, observation);
+  let confirmed = false;
+  try {
+    await expectHealthyScannerRoute(page);
+    expect(new URL(page.url()).pathname).toBe(observation.toPath);
+    confirmed = true;
+    diagnostics.expected_route_transition_aborts.push(...observation.candidates);
+  } finally {
+    activeRouteTransitionObservations.delete(page);
+    if (!confirmed && observation.candidates.length > 0) {
+      diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({
+        ...item,
+        detail: `unconfirmed route-transition abort: ${item.detail}`,
+      })));
+    }
+  }
 }
 
 function errorsFor(testInfo: TestInfo) {
@@ -314,8 +374,8 @@ test.describe('real staging release readiness', () => {
     await page.goto('/stock-info', { waitUntil: 'domcontentloaded' });
     await expect(page.getByText(/관리자 승인 대기 중/)).toBeVisible();
     await expect(page.locator('nav')).toHaveCount(0);
-    const response = await page.request.get('/api/paper-journal/snapshot');
-    expect([401, 403]).toContain(response.status());
+    const response = await requestWithBrowserSession(page, '/api/paper-journal/snapshot');
+    expect(response.status()).toBe(403);
   });
 
   test('associate: basic stock and spot access allowed; futures, AI-risk, portfolio, and APIs denied', async ({ page }) => {
@@ -333,24 +393,39 @@ test.describe('real staging release readiness', () => {
       await expectDeniedRoute(page, route);
     }
 
-    const response = await page.request.post('/api/paper-journal/ai-review/preview', { data: {} });
-    expect([401, 403]).toContain(response.status());
+    const response = await requestWithBrowserSession(
+      page,
+      '/api/paper-journal/ai-review/preview',
+      { method: 'POST', data: {} },
+    );
+    expect(response.status()).toBe(403);
   });
 
   test('regular: futures, scanner, paper trading, and safe AI preview are available without real orders', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
     await expectMembership(page, /정회원/);
     await expectHealthyRoute(page, '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
-    await expectHealthyScannerRoute(page);
+    await expectScannerAfterFutures(page);
     await expectHealthyRoute(page, '/paper-trading');
     await expect(page.locator('body')).toContainText(/모의|paper/i);
 
-    const preview = await page.request.post('/api/paper-journal/ai-review/preview', { data: {} });
-    expect(preview.ok()).toBeTruthy();
-    const previewBody = await preview.json();
-    expect(previewBody.externalAiCalled).toBe(false);
-    expect(previewBody.orderSubmitted).toBe(false);
-    expect(previewBody.exchangeRequestSent).toBe(false);
+    const preview = await requestWithBrowserSession(
+      page,
+      '/api/paper-journal/ai-review/preview',
+      { method: 'POST', data: {} },
+    );
+    const previewDiagnostic = await collectSafeApiDiagnostic(preview, {
+      testStep: 'regular-ai-preview',
+      requestPath: '/api/paper-journal/ai-review/preview',
+    });
+    diagnostics.api_diagnostics.push(previewDiagnostic);
+    expect(
+      preview.ok(),
+      `safe AI preview diagnostic: ${JSON.stringify(previewDiagnostic)}`,
+    ).toBeTruthy();
+    expect(previewDiagnostic.externalAiCalled).toBe(false);
+    expect(previewDiagnostic.orderSubmitted).toBe(false);
+    expect(previewDiagnostic.exchangeRequestSent).toBe(false);
   });
 
   test('admin: member management is allowed while another users private journal remains blocked', async ({ page }) => {
@@ -358,7 +433,10 @@ test.describe('real staging release readiness', () => {
     await expectMembership(page, /관리자/);
     await expectHealthyRoute(page, '/admin');
     await expect(page.locator('body')).toContainText(/회원|member/i);
-    const foreignJournal = await page.request.get('/api/paper-journal/snapshot?userId=11111111-1111-1111-1111-111111111111');
+    const foreignJournal = await requestWithBrowserSession(
+      page,
+      '/api/paper-journal/snapshot?userId=11111111-1111-1111-1111-111111111111',
+    );
     expect([400, 403]).toContain(foreignJournal.status());
   });
 

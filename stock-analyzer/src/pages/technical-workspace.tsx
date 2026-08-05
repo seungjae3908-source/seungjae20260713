@@ -8,7 +8,7 @@ import AiChartPage from '@/pages/ai-chart';
 import AutoTradingPage from '@/pages/auto-trading';
 import CryptoFuturesScannerPage from '@/pages/crypto-futures-scanner';
 import CryptoSpotScannerPage from '@/pages/crypto-spot-scanner';
-import ScannerPage from '@/pages/scanner';
+import SignalScannerPage from '@/pages/signal-scanner';
 import type { MemberCapability } from '../../../packages/member-access/src/index.js';
 
 function useDesktopWorkspace() {
@@ -43,13 +43,17 @@ export default function TechnicalWorkspacePage() {
       : gated(bypassCapabilityGate, 'canAccessSpot', <CryptoSpotScannerPage />);
   }
   if (!desktop) {
-    return gated(bypassCapabilityGate, 'canAccessRiskPreview', <><ScannerPage /><ScannerSavedSearchManager /></>);
+    return gated(
+      bypassCapabilityGate,
+      'canAccessRiskPreview',
+      <><SignalScannerPage /><ScannerSavedSearchManager /></>,
+    );
   }
   return gated(
     bypassCapabilityGate,
     'canAccessRiskPreview',
-    <div className="grid h-full min-h-0 grid-cols-[minmax(340px,0.72fr)_minmax(0,2fr)] overflow-hidden bg-background pb-20">
-      <aside className="min-h-0 overflow-hidden border-r border-card-border"><ScannerPage embedded /></aside>
+    <div className="grid h-full min-h-0 grid-cols-[minmax(380px,0.88fr)_minmax(0,2fr)] overflow-hidden bg-background pb-20">
+      <aside className="min-h-0 overflow-hidden border-r border-card-border"><SignalScannerPage embedded /></aside>
       <section className="min-h-0 overflow-hidden"><AiChartPage embedded /></section>
       <ScannerSavedSearchManager />
       <BottomNav />

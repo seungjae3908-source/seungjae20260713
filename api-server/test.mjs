@@ -43,9 +43,14 @@ const groups = {
   ],
   phase9: [
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
+    path.join(root, 'src/routes/paper-journal-ai-preview-privileges.test.ts'),
     path.join(root, 'src/services/ai-chat.service.test.ts'),
     path.join(root, 'src/services/signal-score.test.ts'),
     path.join(root, 'src/services/bounded-scanner.service.test.ts'),
+    path.join(root, 'src/services/scanner-request-guard.service.test.ts'),
+    path.join(root, 'src/services/scanner-signal-policy.service.test.ts'),
+    path.join(root, 'src/services/scanner-signal-lifecycle.service.test.ts'),
+    path.join(root, 'src/services/crypto-signal-scanner.service.test.ts'),
     path.join(root, 'src/lib/bounded-work-pool.test.ts'),
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
@@ -67,6 +72,7 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/crypto-spot-scanner.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/crypto-futures-scanner.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts'),
   ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
@@ -75,7 +81,10 @@ const groups = {
     path.join(root, 'src/routes/backtests.smoke.test.ts'),
     path.join(root, 'src/routes/paper-trading.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
+    path.join(root, 'src/routes/paper-journal-query-identity.smoke.test.ts'),
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
+    path.join(root, 'src/routes/signal-scanner-auth.smoke.test.ts'),
+    path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
   ],
 };
 
@@ -97,7 +106,10 @@ try {
     outputFiles.push(outputFile);
   }
 
-  const result = spawnSync(process.execPath, ['--test', ...outputFiles], {
+  const testArguments = mode === 'phase9'
+    ? ['--test', '--test-concurrency=1', ...outputFiles]
+    : ['--test', ...outputFiles];
+  const result = spawnSync(process.execPath, testArguments, {
     cwd: repositoryRoot, stdio: 'inherit',
   });
   if (result.error) throw result.error;
