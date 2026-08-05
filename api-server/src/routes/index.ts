@@ -7,6 +7,7 @@ import pushRouter from './push';
 import stocksRouter from './stocks';
 import watchlistRouter from './watchlist';
 import kiwoomRouter from './kiwoom.routes';
+import kiwoomRankingsSafeRouter from './kiwoom-rankings-safe';
 import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
@@ -18,6 +19,8 @@ import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
+import boundedMarketScanRouter from './bounded-market-scan';
+import cryptoSignalScanRouter from './crypto-signal-scan';
 import {
   requireAdmin,
   requireAuthenticated,
@@ -38,6 +41,12 @@ router.use('/', healthRouter);
 router.use('/admin', adminRouter);
 
 router.use(requireAuthenticated);
+
+// Canonical AI Scanner routes must be registered before the legacy market
+// router. This makes /api/market/scan authenticated, capability protected,
+// bounded and cancellation aware. The legacy handler is no longer reachable.
+router.use('/market/scan', boundedMarketScanRouter);
+router.use('/scanner/crypto', cryptoSignalScanRouter);
 
 const privateExchangeDisabled = (_req: unknown, res: any) => res.status(403).json({
   ok: false,
@@ -82,6 +91,10 @@ router.use(requireCapability('canAccessBasicInfo'));
 router.use('/', aiChatRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
+// The safe rankings route must run before the legacy Kiwoom router. It keeps
+// the strict primary provider contract, but serves explicitly marked real-data
+// fallback rows when the optional Kiwoom provider is unavailable.
+router.use('/kiwoom', kiwoomRankingsSafeRouter);
 router.use('/kiwoom', kiwoomRouter);
 router.use('/debug', requireAdmin, providerDebugRouter);
 router.use('/', pushRouter);
