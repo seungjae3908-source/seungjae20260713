@@ -9,7 +9,7 @@ const root = path.basename(process.cwd()) === 'api-server'
   : path.resolve(process.cwd());
 const env = process.env;
 const KNOWN_PRODUCTION_PROJECT_REFS = new Set(['bawcbkoyovbeajkrnduq']);
-const SCHEMA_VERSION = '20260804.1';
+const SCHEMA_VERSION = '20260805.1';
 
 const required = (name) => {
   const value = String(env[name] ?? '').trim();
@@ -99,14 +99,18 @@ async function buildAtomicSql(projectRef) {
     'api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql',
     'api-server/supabase/migrations/2026080301_trade_automation_integration.sql',
     'api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql',
+    'api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql',
   ];
-  const assertionPath = 'api-server/supabase/bootstrap/staging-bootstrap-assert.sql';
+  const assertionPaths = [
+    'api-server/supabase/bootstrap/staging-bootstrap-assert.sql',
+    'api-server/supabase/bootstrap/staging-audit-privilege-assert.sql',
+  ];
   const plain = await Promise.all(plainFiles.map(async (file) => `\n-- ${file}\n${await read(file)}`));
   const enveloped = await Promise.all(envelopedFiles.map(async (file) => (
     `\n-- ${file}\n${stripOuterTransaction(await read(file), file)}`
   )));
-  const assertion = `\n-- ${assertionPath}\n${await read(assertionPath)}`;
-  const pass = [...plain, ...enveloped, assertion].join('\n');
+  const assertions = await Promise.all(assertionPaths.map(async (file) => `\n-- ${file}\n${await read(file)}`));
+  const pass = [...plain, ...enveloped, ...assertions].join('\n');
   return [
     '\\set ON_ERROR_STOP on',
     'begin;',
