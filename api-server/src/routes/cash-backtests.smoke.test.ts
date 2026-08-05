@@ -33,7 +33,7 @@ async function withServer() {
       ok: true,
       mode: 'backtest-only',
       orderSubmitted: false,
-      provider: 'fixture',
+      provider: 'upbit',
       result: {
         ok: true,
         mode: 'backtest-only',
