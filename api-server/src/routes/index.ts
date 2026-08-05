@@ -14,6 +14,7 @@ import cryptoRouter from './crypto';
 import futuresMarketDataRouter from './futures-market-data';
 import tradingRiskRouter from './trading-risk';
 import backtestsRouter from './backtests';
+import cashBacktestsRouter from './cash-backtests';
 import paperTradingRouter from './paper-trading';
 import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
@@ -33,18 +34,10 @@ router.get('/', (_req, res) => {
   res.json({ ok: true, service: 'seungjae-stock-api' });
 });
 
-// Health/config probes remain public. Every data or analysis route below this
-// point resolves the current database profile before checking capabilities.
 router.use('/', healthRouter);
-
-// Admin routes perform their own authenticated + admin capability checks.
 router.use('/admin', adminRouter);
-
 router.use(requireAuthenticated);
 
-// Canonical AI Scanner routes must be registered before the legacy market
-// router. This makes /api/market/scan authenticated, capability protected,
-// bounded and cancellation aware. The legacy handler is no longer reachable.
 router.use('/market/scan', boundedMarketScanRouter);
 router.use('/scanner/crypto', cryptoSignalScanRouter);
 
@@ -56,15 +49,10 @@ const privateExchangeDisabled = (_req: unknown, res: any) => res.status(403).jso
   message: 'Release Candidate에서는 거래소 비공개 계좌·포지션·주문 API를 호출하지 않습니다.',
 });
 
-// Explicitly block every existing private/actual-trading path before the
-// legacy crypto router can reach it. crypto-auto.ts itself remains untouched.
 router.use('/crypto/futures/auto', privateExchangeDisabled);
 router.get('/crypto/spot/accounts', privateExchangeDisabled);
 router.get('/crypto/futures/account', privateExchangeDisabled);
 router.get('/crypto/futures/positions', privateExchangeDisabled);
-// Legacy stock auto-order endpoints include US live-order support and a shared
-// execution key. They stay blocked; the member-scoped trade-automation router
-// below is the only supported integration surface.
 router.use('/stocks/auto-trade', privateExchangeDisabled);
 
 router.use('/crypto/spot', requireCapability('canAccessSpot'));
@@ -80,6 +68,7 @@ router.use('/trading-risk', requireCapability('canAccessRiskPreview'));
 router.use('/', tradingRiskRouter);
 router.use('/backtests', requireCapability('canAccessBacktests'));
 router.use('/', backtestsRouter);
+router.use('/', cashBacktestsRouter);
 router.use('/paper-trading', requireCapability('canAccessPaperTrading'));
 router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
@@ -91,18 +80,12 @@ router.use(requireCapability('canAccessBasicInfo'));
 router.use('/', aiChatRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
-// The safe rankings route must run before the legacy Kiwoom router. It keeps
-// the strict primary provider contract, but serves explicitly marked real-data
-// fallback rows when the optional Kiwoom provider is unavailable.
 router.use('/kiwoom', kiwoomRankingsSafeRouter);
 router.use('/kiwoom', kiwoomRouter);
 router.use('/debug', requireAdmin, providerDebugRouter);
 router.use('/', pushRouter);
 router.use('/', watchlistRouter);
 
-// The coin special-feed provider is optional. A disconnected provider is an
-// empty, non-fatal feature state rather than a browser-visible HTTP failure.
-// This handler remains behind authentication and canAccessBasicInfo.
 router.get('/stocks/special-feed', (req, res, next) => {
   const asset = String(req.query.asset ?? 'stock').trim().toLowerCase();
   if (asset !== 'coin') {
@@ -126,10 +109,6 @@ router.get('/stocks/special-feed', (req, res, next) => {
   });
 });
 
-// Financial statements are an optional detail panel backed by public upstream
-// providers. Preserve every successful response, but convert only the exact
-// provider-delay contract from this one endpoint into an explicit unavailable
-// state. Other endpoints and all other 4xx/5xx responses remain untouched.
 router.use('/stocks/:ticker/financials', (req, res, next) => {
   const originalJson = res.json.bind(res);
   res.json = ((body: unknown) => {
