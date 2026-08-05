@@ -45,6 +45,28 @@ test('desktop technical workspace keeps AI search, chart, and analysis together'
   await expect(page.getByTestId('analysis-signal-score')).toContainText('88');
 });
 
+test('legacy stock auto-trade controls remain fail closed with zero order mutations', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  let orderMutations = 0;
+  await mockWorkspace(page);
+  await page.route(/\/api\/stocks\/auto-trade\/(?:plan|execute|monitor|close-plan|close-execute)(?:\?.*)?$/, async (route) => {
+    orderMutations += 1;
+    await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ ok: false, message: 'unexpected order mutation' }) });
+  });
+  page.on('dialog', (dialog) => dialog.accept());
+
+  await page.goto('/__phase11-ai-workspace-e2e');
+  await page.getByRole('button', { name: '자동매매', exact: true }).click();
+  const liveToggle = page.getByRole('button', { name: '실제 주문 꺼짐', exact: true });
+  await expect(liveToggle).toBeVisible();
+  await liveToggle.click();
+  await expect(liveToggle).toHaveText('실제 주문 꺼짐');
+
+  await page.getByRole('button', { name: '조건 주문 실행', exact: true }).click();
+  await expect(page.getByText(/기존 검색기 실전 주문 경로는 안전을 위해 비활성화/)).toBeVisible();
+  expect(orderMutations).toBe(0);
+});
+
 test('AI chat handles send, refusal response, and cancellation-safe UI', async ({ page }) => {
   let calls = 0;
   await page.route('**/api/ai/chat', async (route) => {
