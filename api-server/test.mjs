@@ -68,6 +68,8 @@ const groups = {
     path.join(root, 'src/services/trade-order-recovery.test.ts'),
     path.join(root, 'src/services/trade-cancel-reconciliation.test.ts'),
     path.join(root, 'src/services/trade-recovery-worker.test.ts'),
+    path.join(root, 'src/services/trade-pre-submission-risk.test.ts'),
+    path.join(root, 'src/services/trade-execution-pre-submission.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
