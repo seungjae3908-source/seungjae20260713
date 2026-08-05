@@ -141,7 +141,11 @@ final_snapshot="$("${PSQL[@]}" --command "select state || '|' || version || '|' 
 "${PSQL[@]}" <<SQL
 update public.trade_orders
 set recovery_lease_until = clock_timestamp() - interval '1 second',
-    payload = jsonb_set(payload, '{recoveryLeaseUntil}', to_jsonb((clock_timestamp() - interval '1 second')::text), true)
+    updated_at = '$FIXTURE_TIME',
+    payload = jsonb_set(
+      jsonb_set(payload, '{recoveryLeaseUntil}', to_jsonb((clock_timestamp() - interval '1 second')::text), true),
+      '{updatedAt}', to_jsonb('$FIXTURE_TIME'::text), true
+    )
 where id = '$ORDER_2';
 SQL
 
