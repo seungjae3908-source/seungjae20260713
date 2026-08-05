@@ -1,17 +1,33 @@
-// @ts-nocheck
-import test from 'node:test';
 import assert from 'node:assert/strict';
-import express from 'express';
+import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import router, { setScannerApprovalFactoriesForTests } from './scanner-approval';
+import test from 'node:test';
+import express from 'express';
+import type { AuthenticatedRequest } from '../middleware/auth';
+import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
 import { TradeAutomationService } from '../services/trade-automation.service';
-import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
-import { DEFAULT_TRADING_POLICY } from '../services/trade-automation.types';
+import type { ScannerApprovalPlanRequest } from '../services/scanner-approval-plan.service';
+import {
+  DEFAULT_TRADING_POLICY,
+  type TradingPlan,
+  type TradingPlanInput,
+  type TradingSignalValidationInput,
+} from '../services/trade-automation.types';
+import router, { setScannerApprovalFactoriesForTests } from './scanner-approval';
 
 const USER = '11111111-1111-1111-1111-111111111111';
+type ScannerServiceFactory = NonNullable<Parameters<typeof setScannerApprovalFactoriesForTests>[1]>;
 
-function validRevalidation(plan: Record<string, any>) {
+type ErrorBody = { error: string };
+type ApprovalBody = {
+  order: { state: string; filledQuantity: number };
+  paperOrderCreated: boolean;
+  liveOrderSubmitted: boolean;
+  exchangeRequestSent: boolean;
+};
+
+function validRevalidation(plan: TradingPlan): TradingSignalValidationInput {
   const now = new Date().toISOString();
   return {
     score: 84,
@@ -27,34 +43,36 @@ function validRevalidation(plan: Record<string, any>) {
 
 async function startServer(
   repository: InMemoryTradingRepository,
-  serviceFactory = () => ({
-    createPaperPlan: async (_userId: string, request: Record<string, unknown>) => ({
+  serviceFactory: ScannerServiceFactory = () => ({
+    createPaperPlan: async (_userId, _request) => ({
       plan: { id: 'server-plan', accountMode: 'paper', state: 'APPROVAL_PENDING' },
       approval: { approvalEnabled: true },
       duplicate: false,
       serverVerified: true,
       liveOrderEnabled: false,
-      received: request,
     }),
-    revalidatePaperPlan: async (_userId: string, plan: Record<string, any>) => validRevalidation(plan),
+    revalidatePaperPlan: async (_userId, plan) => validRevalidation(plan),
   }),
   authenticated = true,
 ) {
   const app = express();
   app.use(express.json());
-  if (authenticated) app.use((req, _res, next) => {
-    req.member = {
-      id: USER,
-      login_name: 'test',
-      display_name: 'test',
-      role: 'regular',
-      membership_level: 'regular',
-      status: 'approved',
-      is_active: true,
-    };
-    req.accessToken = 'test';
-    next();
-  });
+  if (authenticated) {
+    app.use((req, _res, next) => {
+      const authenticatedRequest = req as AuthenticatedRequest;
+      authenticatedRequest.member = {
+        id: USER,
+        login_name: 'test',
+        display_name: 'test',
+        role: 'regular',
+        membership_level: 'regular',
+        status: 'approved',
+        is_active: true,
+      };
+      authenticatedRequest.accessToken = 'test';
+      next();
+    });
+  }
   setScannerApprovalFactoriesForTests(() => repository, serviceFactory);
   app.use('/api/trade-automation', router);
   const server = app.listen(0, '127.0.0.1');
@@ -68,11 +86,11 @@ async function startServer(
   };
 }
 
-async function close(server: import('node:http').Server) {
+async function close(server: Server) {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-function paperPlanInput(signalId: string) {
+function paperPlanInput(signalId: string): TradingPlanInput {
   const now = new Date().toISOString();
   return {
     exchange: 'kiwoom',
@@ -139,7 +157,9 @@ test('scanner plan route requires authentication', async () => {
   const { server, baseUrl } = await startServer(repository, undefined, false);
   try {
     const response = await fetch(`${baseUrl}/api/trade-automation/scanner/plans`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
     });
     assert.equal(response.status, 401);
   } finally {
@@ -149,9 +169,9 @@ test('scanner plan route requires authentication', async () => {
 
 test('scanner plan route allowlists inputs and ignores forged price or score fields', async () => {
   const repository = new InMemoryTradingRepository();
-  let received: Record<string, unknown> | null = null;
-  const { server, baseUrl } = await startServer(repository, () => ({
-    createPaperPlan: async (_userId: string, request: Record<string, unknown>) => {
+  let received: ScannerApprovalPlanRequest | null = null;
+  const factory: ScannerServiceFactory = () => ({
+    createPaperPlan: async (_userId, request) => {
       received = request;
       return {
         plan: { id: 'server-plan', accountMode: 'paper', state: 'APPROVAL_PENDING' },
@@ -161,28 +181,41 @@ test('scanner plan route allowlists inputs and ignores forged price or score fie
         liveOrderEnabled: false,
       };
     },
-    revalidatePaperPlan: async (_userId: string, plan: Record<string, any>) => validRevalidation(plan),
-  }));
+    revalidatePaperPlan: async (_userId, plan) => validRevalidation(plan),
+  });
+  const { server, baseUrl } = await startServer(repository, factory);
   try {
     const response = await fetch(`${baseUrl}/api/trade-automation/scanner/plans`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        market: 'KR', symbol: '005930', timeframe: '1D',
+        market: 'KR',
+        symbol: '005930',
+        timeframe: '1D',
         selectedConditions: ['거래량 증가', '5일선 돌파'],
         requestedInvestmentKrw: 200_000,
-        score: 100, confidence: 100, price: 1, stopPrice: 0, targetPrices: [999999999],
+        score: 100,
+        confidence: 100,
+        price: 1,
+        stopPrice: 0,
+        targetPrices: [999999999],
         marketSnapshot: { availableBalance: 999999999999 },
       }),
     });
     assert.equal(response.status, 201);
-    const body = await response.json();
+    const body = await response.json() as {
+      serverVerified: boolean;
+      liveOrderEnabled: boolean;
+      orderSubmitted: boolean;
+      exchangeRequestSent: boolean;
+    };
     assert.equal(body.serverVerified, true);
     assert.equal(body.liveOrderEnabled, false);
     assert.equal(body.orderSubmitted, false);
     assert.equal(body.exchangeRequestSent, false);
-    assert.equal(received?.symbol, '005930');
-    assert.equal(received?.requestedInvestmentKrw, 200_000);
+    assert.ok(received);
+    assert.equal(received.symbol, '005930');
+    assert.equal(received.requestedInvestmentKrw, 200_000);
     assert.equal(Object.prototype.hasOwnProperty.call(received, 'score'), false);
     assert.equal(Object.prototype.hasOwnProperty.call(received, 'price'), false);
     assert.equal(Object.prototype.hasOwnProperty.call(received, 'marketSnapshot'), false);
@@ -203,36 +236,45 @@ test('paper approval requires explicit confirmation, server revalidation, and fi
   const automation = new TradeAutomationService(repository);
   const created = await automation.createPlan(USER, paperPlanInput('paper-route'), policy, false);
   assert.ok(created.plan);
+  const planId = created.plan.id;
   let revalidationCalls = 0;
-
-  const { server, baseUrl } = await startServer(repository, () => ({
+  const factory: ScannerServiceFactory = () => ({
     createPaperPlan: async () => { throw new Error('not used'); },
-    revalidatePaperPlan: async (_userId: string, plan: Record<string, any>) => {
+    revalidatePaperPlan: async (_userId, plan) => {
       revalidationCalls += 1;
       return validRevalidation(plan);
     },
-  }));
+  });
+  const { server, baseUrl } = await startServer(repository, factory);
   try {
-    const denied = await fetch(`${baseUrl}/api/trade-automation/plans/${created.plan.id}/approve-paper`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    const denied = await fetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve-paper`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
     });
     assert.equal(denied.status, 409);
-    assert.equal((await denied.json()).error, 'EXPLICIT_APPROVAL_REQUIRED');
+    assert.equal((await denied.json() as ErrorBody).error, 'EXPLICIT_APPROVAL_REQUIRED');
     assert.equal(revalidationCalls, 0);
 
     const nativeFetch = globalThis.fetch;
     let outbound = 0;
-    globalThis.fetch = (async (input, init) => {
+    const guardedFetch: typeof fetch = async (input, init) => {
       const url = String(input);
-      if (!url.startsWith(baseUrl)) { outbound += 1; throw new Error('external blocked'); }
+      if (!url.startsWith(baseUrl)) {
+        outbound += 1;
+        throw new Error('external blocked');
+      }
       return nativeFetch(input, init);
-    }) as typeof fetch;
+    };
+    globalThis.fetch = guardedFetch;
     try {
-      const approved = await globalThis.fetch(`${baseUrl}/api/trade-automation/plans/${created.plan.id}/approve-paper`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved: true }),
+      const approved = await globalThis.fetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve-paper`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ approved: true }),
       });
       assert.equal(approved.status, 200);
-      const body = await approved.json();
+      const body = await approved.json() as ApprovalBody;
       assert.equal(revalidationCalls, 1);
       assert.equal(body.order.state, 'FILLED');
       assert.equal(body.order.filledQuantity, 4);
@@ -255,24 +297,28 @@ test('condition break at final approval expires the plan and creates zero orders
   const automation = new TradeAutomationService(repository);
   const created = await automation.createPlan(USER, paperPlanInput('final-revalidation-break'), policy, false);
   assert.ok(created.plan);
-  const { server, baseUrl } = await startServer(repository, () => ({
+  const planId = created.plan.id;
+  const factory: ScannerServiceFactory = () => ({
     createPaperPlan: async () => { throw new Error('not used'); },
-    revalidatePaperPlan: async (_userId: string, plan: Record<string, any>) => ({
+    revalidatePaperPlan: async (_userId, plan) => ({
       ...validRevalidation(plan),
       score: 40,
       confidence: 40,
       coreConditionsMaintained: false,
       invalidationReason: 'SCANNER_AND_CONDITIONS_NOT_MAINTAINED',
     }),
-  }));
+  });
+  const { server, baseUrl } = await startServer(repository, factory);
   try {
-    const response = await fetch(`${baseUrl}/api/trade-automation/plans/${created.plan.id}/approve`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved: true }),
+    const response = await fetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approved: true }),
     });
     assert.equal(response.status, 409);
-    const body = await response.json();
-    assert.equal(body.error, 'TRADE_PLAN_SIGNAL_NOT_APPROVABLE');
-    const stored = await repository.getPlan(USER, created.plan.id);
+    assert.equal((await response.json() as ErrorBody).error, 'TRADE_PLAN_SIGNAL_NOT_APPROVABLE');
+    const stored = await repository.getPlan(USER, planId);
+    assert.ok(stored);
     assert.equal(stored.state, 'EXPIRED');
     assert.equal(stored.signalState, 'INVALIDATED');
     assert.equal((await repository.listOrders(USER)).length, 0);
@@ -290,13 +336,16 @@ test('paper approval cannot be used for a non-scanner or live plan', async () =>
     ...paperPlanInput('non-scanner'),
     strategyId: 'manual-plan',
   }, policy, false);
+  assert.ok(created.plan);
   const { server, baseUrl } = await startServer(repository);
   try {
     const response = await fetch(`${baseUrl}/api/trade-automation/plans/${created.plan.id}/approve-paper`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved: true }),
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approved: true }),
     });
     assert.equal(response.status, 400);
-    assert.equal((await response.json()).error, 'SCANNER_PAPER_APPROVAL_ONLY');
+    assert.equal((await response.json() as ErrorBody).error, 'SCANNER_PAPER_APPROVAL_ONLY');
   } finally {
     await close(server);
   }
