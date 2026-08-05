@@ -103,6 +103,36 @@ function atr(candles: readonly CashBacktestCandle[], period: number) {
   return output;
 }
 
+function rsi(values: readonly number[], period: number) {
+  const output: Array<number | null> = Array(values.length).fill(null);
+  if (values.length <= period) return output;
+  let averageGain = 0;
+  let averageLoss = 0;
+  for (let index = 1; index <= period; index += 1) {
+    const change = values[index] - values[index - 1];
+    averageGain += Math.max(change, 0);
+    averageLoss += Math.max(-change, 0);
+  }
+  averageGain /= period;
+  averageLoss /= period;
+  const valueFor = () => {
+    if (averageLoss === 0 && averageGain === 0) return 50;
+    if (averageLoss === 0) return 100;
+    const relativeStrength = averageGain / averageLoss;
+    return 100 - 100 / (1 + relativeStrength);
+  };
+  output[period] = valueFor();
+  for (let index = period + 1; index < values.length; index += 1) {
+    const change = values[index] - values[index - 1];
+    const gain = Math.max(change, 0);
+    const loss = Math.max(-change, 0);
+    averageGain = (averageGain * (period - 1) + gain) / period;
+    averageLoss = (averageLoss * (period - 1) + loss) / period;
+    output[index] = valueFor();
+  }
+  return output;
+}
+
 function averageVolume(candles: readonly CashBacktestCandle[], period: number) {
   return candles.map((_candle, index) => {
     if (index < period) return null;
@@ -204,12 +234,17 @@ export function calculateCashSignals(request: CashBacktestRequest, candles: read
   const volumePeriod = Math.max(2, Math.trunc(numberParam(request, 'volumePeriod', 20)));
   const volumeMultiplier = Math.max(0, numberParam(request, 'volumeMultiplier', 1));
   const volumes = averageVolume(candles, volumePeriod);
+  const rsiPeriod = Math.max(2, Math.trunc(numberParam(request, 'rsiPeriod', 14)));
+  const minimumEntryRsi = Math.max(0, numberParam(request, 'minimumEntryRsi', 0));
+  const maximumEntryRsi = Math.min(100, numberParam(request, 'maximumEntryRsi', 100));
+  const rsiValues = rsi(closes, rsiPeriod);
   const signals: Signal[] = [];
   const entryGate = regimeEntryGate(request, candles);
   const cooldownBars = Math.max(0, Math.trunc(numberParam(request, 'cooldownBars', 0)));
   let lastBuyIndex = Number.NEGATIVE_INFINITY;
   const pushBuy = (index: number) => {
-    if (!entryGate[index] || index - lastBuyIndex <= cooldownBars) return;
+    const rsiValue = rsiValues[index];
+    if (!entryGate[index] || rsiValue == null || rsiValue < minimumEntryRsi || rsiValue > maximumEntryRsi || index - lastBuyIndex <= cooldownBars) return;
     signals.push({ index, action: 'BUY' });
     lastBuyIndex = index;
   };
@@ -236,6 +271,7 @@ export function calculateCashSignals(request: CashBacktestRequest, candles: read
     const lookback = Math.max(2, Math.trunc(numberParam(request, 'lookback', 20)));
     const atrPeriod = Math.max(2, Math.trunc(numberParam(request, 'atrPeriod', 14)));
     const minimumBreakoutAtr = Math.max(0, numberParam(request, 'minimumBreakoutAtr', 0));
+    const maximumBreakoutAtr = Math.max(minimumBreakoutAtr, numberParam(request, 'maximumBreakoutAtr', Number.POSITIVE_INFINITY));
     const atrValues = atr(candles, atrPeriod);
     for (let index = lookback; index < candles.length; index += 1) {
       const previous = candles.slice(index - lookback, index);
@@ -245,7 +281,10 @@ export function calculateCashSignals(request: CashBacktestRequest, candles: read
       if (average == null) continue;
       const breakoutDistance = candles[index].close - high;
       const atrValue = atrValues[index];
-      const breakoutDistanceOk = minimumBreakoutAtr === 0 || (atrValue != null && breakoutDistance >= atrValue * minimumBreakoutAtr);
+      const breakoutRatio = atrValue != null && atrValue > 0 ? breakoutDistance / atrValue : null;
+      const breakoutDistanceOk = minimumBreakoutAtr === 0
+        ? maximumBreakoutAtr === Number.POSITIVE_INFINITY || (breakoutRatio != null && breakoutRatio <= maximumBreakoutAtr)
+        : breakoutRatio != null && breakoutRatio >= minimumBreakoutAtr && breakoutRatio <= maximumBreakoutAtr;
       if (breakoutDistance > 0 && breakoutDistanceOk && candles[index].volume >= average * volumeMultiplier) pushBuy(index);
       if (candles[index].close < low) signals.push({ index, action: 'SELL' });
     }
@@ -282,6 +321,11 @@ export function validateCashBacktestRequest(request: CashBacktestRequest) {
   if (numberParam(request, 'regimeFilterEnabled', 0) >= 1 && !TIMEFRAME_MS[request.timeframe]) {
     throw new BacktestMarketContractError('REGIME_FILTER_TIMEFRAME_UNSUPPORTED', '다중 시간봉 장세 필터는 1~30분봉에서만 지원합니다.');
   }
+  const minimumEntryRsi = numberParam(request, 'minimumEntryRsi', 0);
+  const maximumEntryRsi = numberParam(request, 'maximumEntryRsi', 100);
+  if (minimumEntryRsi < 0 || maximumEntryRsi > 100 || minimumEntryRsi > maximumEntryRsi) {
+    throw new BacktestMarketContractError('INVALID_RSI_RANGE', '진입 RSI 범위가 올바르지 않습니다.');
+  }
 }
 
 export function runCashBacktest(request: CashBacktestRequest, inputCandles: readonly CashBacktestCandle[]): CashBacktestResult {
@@ -291,6 +335,7 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
   const signals = calculateCashSignals(request, candles);
   const signalMap = new Map(signals.map((signal) => [signal.index, signal.action]));
   const priority = request.intrabarPriority ?? 'stop_first';
+  const strategyExitEnabled = numberParam(request, 'strategyExitEnabled', 1) >= 1;
   const trades: CashBacktestTrade[] = [];
   let cash = request.initialCapital;
   let position: null | { entryTime: number; entryPrice: number; quantity: number; entryFee: number; riskAmount: number; stop: number; target: number } = null;
@@ -327,7 +372,7 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
       if (hitStop && hitTarget) closePosition(index, priority === 'stop_first' ? position.stop : position.target, priority === 'stop_first' ? 'stop_loss' : 'take_profit');
       else if (hitStop) closePosition(index, position.stop, 'stop_loss');
       else if (hitTarget) closePosition(index, position.target, 'take_profit');
-      else if (signalMap.get(index) === 'SELL') closePosition(index, candle.close, 'strategy_exit');
+      else if (strategyExitEnabled && signalMap.get(index) === 'SELL') closePosition(index, candle.close, 'strategy_exit');
     }
 
     if (!position && signalMap.get(index) === 'BUY' && tradesToday < request.maximumTradesPerDay) {
@@ -362,7 +407,8 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
   const grossLoss = Math.abs(losing.reduce((sum, trade) => sum + trade.netPnl, 0));
   const averageRMultiple = average(trades.map((trade) => trade.rMultiple));
   const warnings: string[] = [];
-  if (numberParam(request, 'regimeFilterEnabled', 0) >= 1) warnings.push('완료된 1시간·4시간봉만 사용하는 market-regime-v2 진입 필터를 적용했습니다.');
+  if (numberParam(request, 'regimeFilterEnabled', 0) >= 1) warnings.push('완료된 1시간·4시간봉만 사용하는 market-regime 진입 필터를 적용했습니다.');
+  if (!strategyExitEnabled) warnings.push('조기 전략청산을 끄고 손절·목표가·데이터 종료만으로 청산했습니다.');
   if (!trades.length) warnings.push('조건을 충족한 매매가 없어 성과를 계산할 거래가 없습니다.');
   return {
     ok: true,
