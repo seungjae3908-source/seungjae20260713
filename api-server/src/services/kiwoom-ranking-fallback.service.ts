@@ -1,5 +1,11 @@
+import {
+  isEtp,
+  isInverse,
+  isLeveraged,
+} from '../data/asset-type';
 import type {
   KiwoomMarket,
+  KiwoomRankingOptions,
   KiwoomRankingType,
 } from '../providers/kiwoom';
 import type { QuoteRow } from './market-data.service';
@@ -10,17 +16,26 @@ import {
 
 const CACHE_TTL_MS = 10_000;
 
+export interface KiwoomFallbackRankingCandidate extends QuoteRow {
+  recommendationEligible: boolean;
+}
+
 export interface KiwoomFallbackRankingRow extends QuoteRow {
   sourceRank: number;
   provider: 'live-market-providers';
   fallbackUsed: true;
   fallbackReason: string;
+  isEtp: boolean;
+  isLeveraged: boolean;
+  isInverse: boolean;
+  isDerivative: boolean;
+  recommendationEligible: boolean;
   dataQualityWarnings: string[];
 }
 
 interface CachedMarketRows {
   expiresAt: number;
-  rows: QuoteRow[];
+  rows: KiwoomFallbackRankingCandidate[];
 }
 
 const marketCache = new Map<KiwoomMarket, CachedMarketRows>();
@@ -29,13 +44,17 @@ function marketKeys(market: KiwoomMarket): MarketKey[] {
   return market === 'KR' ? ['KRX'] : ['NASDAQ', 'NYSE'];
 }
 
-function validRows(rows: QuoteRow[]): QuoteRow[] {
+function rowKey(row: Pick<QuoteRow, 'market' | 'ticker'>): string {
+  return `${String(row.market ?? '')}:${String(row.ticker ?? '').trim().toUpperCase()}`;
+}
+
+function validRows<T extends QuoteRow>(rows: T[]): T[] {
   const seen = new Set<string>();
 
   return rows.filter((row) => {
     const ticker = String(row.ticker ?? '').trim().toUpperCase();
     const price = Number(row.price);
-    const key = `${String(row.market ?? '')}:${ticker}`;
+    const key = rowKey(row);
 
     if (!ticker || seen.has(key) || !Number.isFinite(price) || price <= 0) {
       return false;
@@ -46,7 +65,9 @@ function validRows(rows: QuoteRow[]): QuoteRow[] {
   });
 }
 
-async function loadMarketRows(market: KiwoomMarket): Promise<QuoteRow[]> {
+async function loadMarketRows(
+  market: KiwoomMarket,
+): Promise<KiwoomFallbackRankingCandidate[]> {
   const cached = marketCache.get(market);
   if (cached && Date.now() < cached.expiresAt) {
     return cached.rows;
@@ -58,15 +79,25 @@ async function loadMarketRows(market: KiwoomMarket): Promise<QuoteRow[]> {
     ),
   );
 
-  const rows: QuoteRow[] = [];
+  const rows: KiwoomFallbackRankingCandidate[] = [];
   for (const result of settled) {
     if (result.status !== 'fulfilled') continue;
 
-    rows.push(
+    const recommendedKeys = new Set(
+      result.value.recommended.map((row) => rowKey(row)),
+    );
+    const candidates = [
       ...result.value.popular,
       ...result.value.gainers,
       ...result.value.losers,
       ...result.value.recommended,
+    ];
+
+    rows.push(
+      ...candidates.map((row) => ({
+        ...row,
+        recommendationEligible: recommendedKeys.has(rowKey(row)),
+      })),
     );
   }
 
@@ -88,12 +119,63 @@ function numeric(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function classifyFallbackRow(row: KiwoomFallbackRankingCandidate) {
+  const leveraged = isLeveraged(row.assetType);
+  const inverse = isInverse(row.assetType);
+  const derivative = leveraged || inverse;
+  const highRisk = row.riskLevel === 'HIGH' || derivative;
+  const recommendationEligible =
+    row.recommendationEligible &&
+    row.assetType === 'STOCK' &&
+    !highRisk;
+
+  return {
+    isEtp: isEtp(row.assetType),
+    isLeveraged: leveraged,
+    isInverse: inverse,
+    isDerivative: derivative,
+    highRisk,
+    recommendationEligible,
+  };
+}
+
+function matchesOptions(
+  row: KiwoomFallbackRankingCandidate,
+  options: KiwoomRankingOptions,
+): boolean {
+  const classification = classifyFallbackRow(row);
+
+  if (options.assetFilter === 'stocks' && row.assetType !== 'STOCK') {
+    return false;
+  }
+
+  if (options.assetFilter === 'etp' && !classification.isEtp) {
+    return false;
+  }
+
+  if (options.excludeHighRisk && classification.highRisk) {
+    return false;
+  }
+
+  if (
+    options.recommendationEligibleOnly &&
+    !classification.recommendationEligible
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 export function rankFallbackRows(
-  rows: QuoteRow[],
+  rows: KiwoomFallbackRankingCandidate[],
   type: KiwoomRankingType,
   limit: number,
+  options: KiwoomRankingOptions = {},
 ): KiwoomFallbackRankingRow[] {
   const filtered = validRows(rows).filter((row) => {
+    if (!matchesOptions(row, options)) return false;
+
     const changePercent = numeric(row.changePercent);
     if (type === 'gainers') return changePercent != null && changePercent > 0;
     if (type === 'losers') return changePercent != null && changePercent < 0;
@@ -119,30 +201,41 @@ export function rankFallbackRows(
   const fallbackReason =
     '키움 랭킹 공급자를 사용할 수 없어 실제 대체 시장데이터 공급자의 결과를 표시합니다.';
 
-  return sorted.slice(0, limit).map((row, index) => ({
-    ...row,
-    rank: index + 1,
-    sourceRank: index + 1,
-    provider: 'live-market-providers',
-    fallbackUsed: true,
-    fallbackReason,
-    reason: fallbackReason,
-    dataQualityWarnings: [
-      '키움 원본 랭킹이 아니며 공급자별 지연 시간은 다를 수 있습니다.',
-    ],
-  }));
+  return sorted.slice(0, limit).map((row, index) => {
+    const classification = classifyFallbackRow(row);
+
+    return {
+      ...row,
+      rank: index + 1,
+      sourceRank: index + 1,
+      provider: 'live-market-providers',
+      fallbackUsed: true,
+      fallbackReason,
+      reason: fallbackReason,
+      isEtp: classification.isEtp,
+      isLeveraged: classification.isLeveraged,
+      isInverse: classification.isInverse,
+      isDerivative: classification.isDerivative,
+      recommendationEligible: classification.recommendationEligible,
+      dataQualityWarnings: [
+        '키움 원본 랭킹이 아니며 공급자별 지연 시간은 다를 수 있습니다.',
+      ],
+    };
+  });
 }
 
 export async function getFallbackKiwoomRankingRows(
   market: KiwoomMarket,
   type: KiwoomRankingType,
   limit: number,
+  options: KiwoomRankingOptions = {},
 ): Promise<KiwoomFallbackRankingRow[]> {
-  const rows = rankFallbackRows(await loadMarketRows(market), type, limit);
-  if (!rows.length) {
-    throw new Error('FALLBACK_RANKING_ROWS_UNAVAILABLE');
-  }
-  return rows;
+  return rankFallbackRows(
+    await loadMarketRows(market),
+    type,
+    limit,
+    options,
+  );
 }
 
 export function clearKiwoomFallbackCache(): void {
