@@ -124,7 +124,9 @@ export class TradeAutomationService {
 
   async recoverOpenOrders(userId: string) {
     const orders = await this.repository.listOrders(userId);
-    const recoverable = orders.filter((order) => ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED'].includes(order.state));
+    const recoverable = orders.filter((order) => [
+      'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED',
+    ].includes(order.state));
     for (const order of recoverable) {
       if (order.state !== 'RECOVERY_REQUIRED') {
         await this.transition(order, 'RECOVERY_REQUIRED', 'SERVER_RESTART_RECONCILIATION_REQUIRED');
