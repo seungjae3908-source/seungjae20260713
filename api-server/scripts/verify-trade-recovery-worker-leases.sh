@@ -23,8 +23,9 @@ WORKER_2="73000000-0000-0000-0000-000000000002"
 WORKER_3="73000000-0000-0000-0000-000000000003"
 WRONG_WORKER="73000000-0000-0000-0000-000000000099"
 
+# Fixture seed and cleanup remain database-owner operations. The service role is
+# exercised only through the exact recovery RPC and its minimum table grants.
 "${PSQL[@]}" <<SQL
-set role service_role;
 delete from public.trade_order_events where user_id = '$USER_ID' and order_id in ('$ORDER_1', '$ORDER_2');
 delete from public.trade_orders where user_id = '$USER_ID' and id in ('$ORDER_1', '$ORDER_2');
 delete from public.trade_order_plans where user_id = '$USER_ID' and id in ('$PLAN_1', '$PLAN_2');
@@ -83,7 +84,7 @@ claimed_unique="$(cat "$TMP_DIR/worker-1.out" "$TMP_DIR/worker-2.out" | awk 'NF'
 [[ "$claimed_total" == "2" ]] || { echo "expected two total recovery claims, got $claimed_total" >&2; exit 1; }
 [[ "$claimed_unique" == "2" ]] || { echo "recovery order was claimed by more than one worker" >&2; exit 1; }
 
-first_snapshot="$("${PSQL[@]}" --command "set role service_role; select id || '|' || recovery_lease_owner || '|' || version || '|' || state from public.trade_orders where id = '$ORDER_1';")"
+first_snapshot="$("${PSQL[@]}" --command "select id || '|' || recovery_lease_owner || '|' || version || '|' || state from public.trade_orders where id = '$ORDER_1';")"
 IFS='|' read -r claimed_order claimed_owner claimed_version claimed_state <<< "$first_snapshot"
 [[ "$claimed_order" == "$ORDER_1" && "$claimed_version" == "0" && "$claimed_state" == "ACCEPTED" ]] || {
   echo "unexpected first claimed order snapshot: $first_snapshot" >&2
@@ -122,7 +123,7 @@ SQL
 )"
 [[ "$correct_prepare" == "1" ]] || { echo "lease owner could not prepare recovery order" >&2; exit 1; }
 
-prepared_snapshot="$("${PSQL[@]}" --command "set role service_role; select state || '|' || version || '|' || recovery_lease_owner from public.trade_orders where id = '$ORDER_1';")"
+prepared_snapshot="$("${PSQL[@]}" --command "select state || '|' || version || '|' || recovery_lease_owner from public.trade_orders where id = '$ORDER_1';")"
 [[ "$prepared_snapshot" == "RECOVERY_REQUIRED|1|$claimed_owner" ]] || {
   echo "prepare did not preserve the recovery lease: $prepared_snapshot" >&2
   exit 1
@@ -160,11 +161,10 @@ SQL
 )"
 [[ "$correct_final" == "1" ]] || { echo "lease owner could not finalize recovery order" >&2; exit 1; }
 
-final_snapshot="$("${PSQL[@]}" --command "set role service_role; select state || '|' || version || '|' || coalesce(recovery_lease_owner::text, 'null') || '|' || (select count(*) from public.trade_order_events where order_id = '$ORDER_1') from public.trade_orders where id = '$ORDER_1';")"
+final_snapshot="$("${PSQL[@]}" --command "select state || '|' || version || '|' || coalesce(recovery_lease_owner::text, 'null') || '|' || (select count(*) from public.trade_order_events where order_id = '$ORDER_1') from public.trade_orders where id = '$ORDER_1';")"
 [[ "$final_snapshot" == "CANCELED|2|null|2" ]] || { echo "recovery transition/event atomicity mismatch: $final_snapshot" >&2; exit 1; }
 
 "${PSQL[@]}" <<SQL
-set role service_role;
 update public.trade_orders
 set recovery_lease_until = clock_timestamp() - interval '1 second',
     payload = jsonb_set(payload, '{recoveryLeaseUntil}', to_jsonb((clock_timestamp() - interval '1 second')::text), true)
@@ -180,13 +180,12 @@ SQL
 )"
 [[ "$reclaimed" == "1" ]] || { echo "expired recovery lease was not reclaimable" >&2; exit 1; }
 
-reclaimed_owner="$("${PSQL[@]}" --command "set role service_role; select recovery_lease_owner from public.trade_orders where id = '$ORDER_2';")"
+reclaimed_owner="$("${PSQL[@]}" --command "select recovery_lease_owner from public.trade_orders where id = '$ORDER_2';")"
 [[ "$reclaimed_owner" == "$WORKER_3" ]] || { echo "expired lease was reclaimed by an unexpected worker" >&2; exit 1; }
 
 echo "[trade-recovery-leases] two parallel workers=2 unique claims; wrong-owner transitions=0; owner prepare/final=2 atomic events; expired lease reclaimed=1; exchange order POST=0"
 
 "${PSQL[@]}" <<SQL
-set role service_role;
 delete from public.trade_order_events where user_id = '$USER_ID' and order_id in ('$ORDER_1', '$ORDER_2');
 delete from public.trade_orders where user_id = '$USER_ID' and id in ('$ORDER_1', '$ORDER_2');
 delete from public.trade_order_plans where user_id = '$USER_ID' and id in ('$PLAN_1', '$PLAN_2');
