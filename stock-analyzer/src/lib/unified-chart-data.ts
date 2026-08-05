@@ -60,6 +60,12 @@ export type UnifiedChartFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+let configuredUnifiedChartFetch: UnifiedChartFetch | null = null;
+
+export function configureUnifiedChartFetch(fetcher: UnifiedChartFetch | null): void {
+  configuredUnifiedChartFetch = fetcher;
+}
+
 const DEFAULT_TIMEOUT_MS = 12_000;
 
 export const UNIFIED_CHART_TIMEFRAMES: Array<{
@@ -258,7 +264,7 @@ export async function fetchUnifiedChartData(input: {
     symbol,
     timeframe: input.timeframe,
   });
-  const fetcher = input.fetcher ?? globalThis.fetch.bind(globalThis);
+  const fetcher = input.fetcher ?? configuredUnifiedChartFetch ?? globalThis.fetch.bind(globalThis);
   const linked = createLinkedSignal(input.signal, input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let lastError: UnifiedChartDataError | null = null;
 
