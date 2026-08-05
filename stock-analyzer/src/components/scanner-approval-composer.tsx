@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react'
 import { useLocation } from 'wouter';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import type { AnalysisSelection } from '@/lib/analysis-selection';
+import { safeTradeErrorMessage } from '@/lib/trade-approval-ui';
 import { cn } from '@/lib/utils';
 
 type CreatedPlan = {
@@ -42,16 +43,32 @@ type CreateResponse = {
 };
 
 const AMOUNT_STORAGE_KEY = 'scanner-approval-paper-amount-v1';
+const MINIMUM_AMOUNT_KRW = 5_000;
+const QUICK_AMOUNTS = [50_000, 100_000, 200_000, 500_000] as const;
 
 function loadAmount() {
   if (typeof window === 'undefined') return 100_000;
   const value = Number(window.localStorage.getItem(AMOUNT_STORAGE_KEY));
-  return Number.isFinite(value) && value >= 5_000 ? Math.round(value) : 100_000;
+  return Number.isFinite(value) && value >= MINIMUM_AMOUNT_KRW ? Math.round(value) : 100_000;
 }
 
 function formatNumber(value: number | null | undefined, digits = 0) {
   if (value == null || !Number.isFinite(Number(value))) return '-';
   return new Intl.NumberFormat('ko-KR', { maximumFractionDigits: digits }).format(Number(value));
+}
+
+function creationErrorMessage(code: string) {
+  const labels: Record<string, string> = {
+    US_ORDER_ADAPTER_NOT_AVAILABLE: '미국주식 주문 어댑터가 검증되기 전까지 승인 계획을 만들 수 없습니다.',
+    SCANNER_SIGNAL_NOT_FOUND: '서버 재검색에서 해당 종목의 신호가 더 이상 확인되지 않았습니다.',
+    SCANNER_AND_CONDITIONS_NOT_MAINTAINED: '선택했던 조건이 모두 유지되지 않아 승인 계획을 만들지 않았습니다.',
+    SCANNER_RISK_BLOCKED: '현재 위험 점수가 허용 범위를 넘어 승인 계획이 차단됐습니다.',
+    SCANNER_DUPLICATE_ACTIVE_SYMBOL: '같은 종목의 활성 계획 또는 주문이 이미 있어 중복 등록을 차단했습니다.',
+    SCANNER_RISK_CAPACITY_EXHAUSTED: '남은 운용한도 또는 종목 노출한도가 부족합니다.',
+    SCANNER_MINUTE_DATA_INSUFFICIENT: '1분 변동성 데이터가 부족해 계획 생성을 중단했습니다.',
+    SCANNER_ORDERBOOK_INVALID: '실시간 최우선 호가를 확인할 수 없어 계획 생성을 중단했습니다.',
+  };
+  return labels[code] ?? safeTradeErrorMessage(code, '서버 검증형 승인 계획을 만들지 못했습니다.');
 }
 
 export function ScannerApprovalComposer({ selection }: { selection: AnalysisSelection }) {
@@ -65,6 +82,7 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
     [selection.matchedSignals],
   );
   const supported = selection.assetType === 'stock' && selection.market === 'KR' && /^\d{6}(?:_(?:NX|AL))?$/.test(selection.ticker);
+  const amountValid = Number.isFinite(amount) && amount >= MINIMUM_AMOUNT_KRW;
 
   useEffect(() => {
     setResult(null);
@@ -83,8 +101,8 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
       setMessage('AI 검색기에서 종목을 선택한 뒤 일치 조건이 전달돼야 합니다.');
       return;
     }
-    if (!Number.isFinite(amount) || amount < 5_000) {
-      setMessage('희망 운용금액을 5,000원 이상 입력해 주세요.');
+    if (!amountValid) {
+      setMessage(`희망 운용금액을 ${formatNumber(MINIMUM_AMOUNT_KRW)}원 이상 입력해 주세요.`);
       return;
     }
 
@@ -109,7 +127,7 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
       });
       const payload = await response.json().catch(() => ({})) as CreateResponse;
       if (!response.ok || !payload.ok || !payload.plan || payload.serverVerified !== true) {
-        throw new Error(payload.error ?? '서버 검증형 승인 계획을 만들지 못했습니다.');
+        throw new Error(payload.error ?? 'SCANNER_APPROVAL_FAILED');
       }
       setResult(payload);
       setMessage(payload.duplicate
@@ -117,18 +135,8 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
         : '서버 검증이 끝났습니다. 승인형 주문 화면에서 최종 승인할 수 있습니다.');
     } catch (error) {
       const code = error instanceof Error ? error.message : 'SCANNER_APPROVAL_FAILED';
-      const labels: Record<string, string> = {
-        US_ORDER_ADAPTER_NOT_AVAILABLE: '미국주식 주문 어댑터가 검증되기 전까지 승인 계획을 만들 수 없습니다.',
-        SCANNER_SIGNAL_NOT_FOUND: '서버 재검색에서 해당 종목의 신호가 더 이상 확인되지 않았습니다.',
-        SCANNER_AND_CONDITIONS_NOT_MAINTAINED: '선택했던 조건이 모두 유지되지 않아 승인 계획을 만들지 않았습니다.',
-        SCANNER_RISK_BLOCKED: '현재 위험 점수가 허용 범위를 넘어 승인 계획이 차단됐습니다.',
-        SCANNER_DUPLICATE_ACTIVE_SYMBOL: '같은 종목의 활성 계획 또는 주문이 이미 있어 중복 등록을 차단했습니다.',
-        SCANNER_RISK_CAPACITY_EXHAUSTED: '남은 운용한도 또는 종목 노출한도가 부족합니다.',
-        SCANNER_MINUTE_DATA_INSUFFICIENT: '1분 변동성 데이터가 부족해 계획 생성을 중단했습니다.',
-        SCANNER_ORDERBOOK_INVALID: '실시간 최우선 호가를 확인할 수 없어 계획 생성을 중단했습니다.',
-      };
       setResult(null);
-      setMessage(labels[code] ?? code);
+      setMessage(creationErrorMessage(code));
     } finally {
       setCreating(false);
     }
@@ -149,38 +157,61 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
       <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="truncate font-extrabold">{selection.displayName} · {selection.ticker}</p>
+            <p className="break-words font-extrabold">{selection.displayName} · {selection.ticker}</p>
             <p className="mt-1 text-[10px] font-bold text-muted-foreground">{selection.market} · {selection.timeframe} · 조건 {conditions.length}개</p>
           </div>
           <span className={cn('shrink-0 rounded-full px-2 py-1 text-[10px] font-extrabold', supported ? 'bg-positive/10 text-positive' : 'bg-warning/10 text-warning')}>
             {supported ? '국내 Paper 지원' : '주문 연결 미지원'}
           </span>
         </div>
-        {conditions.length ? <div className="mt-2 flex flex-wrap gap-1">{conditions.slice(0, 6).map((item) => <span key={item} className="rounded-full bg-secondary px-2 py-1 text-[10px] font-bold">{item}</span>)}</div> : null}
+        {conditions.length ? <div className="mt-2 flex flex-wrap gap-1">{conditions.slice(0, 6).map((item) => <span key={item} className="max-w-full break-words rounded-full bg-secondary px-2 py-1 text-[10px] font-bold">{item}</span>)}</div> : null}
       </div>
 
-      <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3">
-        <span className="text-[10px] font-bold text-muted-foreground">희망 운용금액 · 서버가 사용자 위험한도 이내로 축소</span>
-        <div className="mt-1 flex items-center gap-2">
-          <input
-            aria-label="승인 계획 희망 운용금액"
-            type="number"
-            inputMode="numeric"
-            min={5_000}
-            step={10_000}
-            value={amount}
-            onChange={(event) => setAmount(Math.max(0, Number(event.target.value) || 0))}
-            className="min-w-0 flex-1 bg-transparent text-sm font-extrabold outline-none"
-          />
-          <span className="text-xs font-bold">원</span>
+      <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
+        <label className="block">
+          <span className="text-[10px] font-bold text-muted-foreground">희망 운용금액</span>
+          <div className={cn('mt-1 flex min-h-11 items-center gap-2 rounded-xl border px-3', amountValid ? 'border-card-border' : 'border-destructive/50')}>
+            <input
+              aria-label="승인 계획 희망 운용금액"
+              aria-invalid={!amountValid}
+              type="text"
+              inputMode="numeric"
+              value={formatNumber(amount)}
+              onChange={(event) => {
+                const digits = event.target.value.replace(/\D/g, '').slice(0, 12);
+                setAmount(digits ? Number(digits) : 0);
+              }}
+              className="min-w-0 flex-1 bg-transparent text-sm font-extrabold tabular-nums outline-none"
+            />
+            <span className="text-xs font-bold">원</span>
+          </div>
+        </label>
+        <div className="mt-2 grid grid-cols-4 gap-1.5" aria-label="희망 운용금액 빠른 선택">
+          {QUICK_AMOUNTS.map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setAmount(value)}
+              aria-pressed={amount === value}
+              className={cn(
+                'min-h-11 rounded-xl border px-1 text-[10px] font-extrabold',
+                amount === value ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card',
+              )}
+            >
+              {formatNumber(value / 10_000)}만원
+            </button>
+          ))}
         </div>
-      </label>
+        <p className={cn('mt-2 break-keep text-[10px] font-bold', amountValid ? 'text-muted-foreground' : 'text-destructive')}>
+          최소 {formatNumber(MINIMUM_AMOUNT_KRW)}원 · 실제 계획금액은 서버 위험한도에 따라 축소될 수 있습니다.
+        </p>
+      </div>
 
       <button
         type="button"
         onClick={() => void createPlan()}
-        disabled={creating || !supported || !conditions.length}
-        className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
+        disabled={creating || !supported || !conditions.length || !amountValid}
+        className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
       >
         {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
         {creating ? '서버 재검증 중...' : '승인 대기 등록'}
@@ -199,11 +230,11 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
             <Metric label="서버 AI 점수" value={`${formatNumber(result.plan.signalScore)}점`} />
             <Metric label="서버 신뢰도" value={`${formatNumber(result.plan.signalConfidence)}%`} />
             <Metric label="계획금액" value={`${formatNumber(result.plan.estimatedKrw)}원`} />
-            <Metric label="수량" value={`${formatNumber(result.plan.quantity)}주`} />
+            <Metric label="수량" value={result.plan.quantity == null ? '서버 계산' : `${formatNumber(result.plan.quantity)}주`} />
           </div>
-          <p className="mt-3 font-bold">분할 {result.plan.splitRatios.join('% / ')}% · 손절 {formatNumber(result.plan.stopPrice)} · 목표 {result.plan.targetPrices.map((item) => formatNumber(item)).join(' / ')}</p>
+          <p className="mt-3 break-keep font-bold">분할 {result.plan.splitRatios.join('% / ')}% · 손절 {formatNumber(result.plan.stopPrice)} · 목표 {result.plan.targetPrices.map((item) => formatNumber(item)).join(' / ')}</p>
           <p className="mt-1 text-[10px] font-bold text-muted-foreground">실주문 비활성 · 승인 만료 {new Date(result.plan.signalExpiresAt).toLocaleString('ko-KR')}</p>
-          <button type="button" onClick={() => navigate('/auto-trading')} className="mt-3 w-full rounded-xl border border-positive/30 bg-background px-3 py-2.5 font-extrabold text-positive">승인형 주문 화면에서 확인</button>
+          <button type="button" onClick={() => navigate('/auto-trading')} className="mt-3 min-h-11 w-full rounded-xl border border-positive/30 bg-background px-3 font-extrabold text-positive">승인형 주문 화면에서 확인</button>
         </div>
       ) : null}
     </section>
@@ -211,5 +242,5 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-xl bg-background p-2 text-center"><p className="text-[9px] font-bold text-muted-foreground">{label}</p><p className="mt-1 font-extrabold">{value}</p></div>;
+  return <div className="min-w-0 rounded-xl bg-background p-2 text-center"><p className="text-[9px] font-bold text-muted-foreground">{label}</p><p className="mt-1 break-words font-extrabold">{value}</p></div>;
 }
