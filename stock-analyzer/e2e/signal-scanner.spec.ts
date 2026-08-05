@@ -280,7 +280,7 @@ test('partial data and provider failure are distinguished without fake success',
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/__phase11-technical-workspace-e2e');
-  await expect(page.getByText('공개 공급자 일부 지연 결과입니다.')).toBeVisible();
+  await expect(page.getByTestId('scanner-partial')).toContainText('공개 공급자 일부 지연 결과입니다.');
   await expect(page.getByRole('heading', { name: '분석하지 못한 종목 1개' })).toBeVisible();
   await expect(page.getByText('FAILED · provider_error')).toBeVisible();
 
