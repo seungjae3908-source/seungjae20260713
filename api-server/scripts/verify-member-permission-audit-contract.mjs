@@ -24,7 +24,13 @@ const beforeSql = await read('api-server/supabase/test/member_permission_audit_p
 const integrationSql = await read('api-server/supabase/test/member_permission_audit_privileges_integration.sql');
 
 assert(/^\s*--[\s\S]*?\bbegin;[\s\S]*?\bcommit;\s*$/i.test(migration), 'migration must have one transactional envelope');
-assert((migration.match(/public\.member_permission_audit/g) ?? []).length === 2, 'migration must target only member_permission_audit ACLs');
+const migrationRelations = [...migration.matchAll(/\bpublic\.([a-z_][a-z0-9_]*)\b/gi)]
+  .map((match) => match[1].toLowerCase());
+assert(
+  migrationRelations.length >= 2
+    && migrationRelations.every((relation) => relation === 'member_permission_audit'),
+  'migration must target only member_permission_audit ACLs',
+);
 assert(/revoke all privileges on table public\.member_permission_audit\s+from public, anon, authenticated;/i.test(migration), 'migration must reset PUBLIC, anon, and authenticated ACLs');
 assert(/grant select, insert on table public\.member_permission_audit\s+to authenticated;/i.test(migration), 'migration must grant only SELECT and INSERT to authenticated');
 assert(!/grant[^;]*(?:update|delete|all privileges)/i.test(migration), 'migration must not grant UPDATE, DELETE, or ALL');
