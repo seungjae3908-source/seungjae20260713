@@ -1,56 +1,106 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import express from 'express';
+import express, { type RequestHandler } from 'express';
 import type { AddressInfo } from 'node:net';
-import boundedMarketScanRouter from './bounded-market-scan';
-import {
-  BoundedScannerService,
-  ScanProviderUnavailableError,
-  type BoundedScanResult,
-} from '../services/bounded-scanner.service';
+import type { AuthenticatedRequest, MemberProfile } from '../middleware/auth';
+import { ScanProviderUnavailableError } from '../services/bounded-scanner.service';
+import { ScannerRequestGuard } from '../services/scanner-request-guard.service';
+import type { ScannerResponse } from '../services/scanner-signal.types';
+import { createBoundedMarketScanRouter, type StockScannerRunner } from './bounded-market-scan';
 
 interface ScanResponseBody {
   ok?: boolean;
-  partial?: boolean;
-  timedOut?: boolean;
   dataState?: string;
-  timeoutCount?: number;
   error?: string;
   cards?: unknown[];
+  execution?: {
+    partial?: boolean;
+    timedOut?: boolean;
+    timeoutCount?: number;
+  };
 }
 
-const completeResult = (overrides: Partial<BoundedScanResult> = {}): BoundedScanResult => ({
-  cards: [],
-  selected: ['PER 낮음'],
-  supportedIndicators: ['PER 낮음'],
-  scanned: 2,
-  requestedCount: 2,
-  completedCount: 2,
-  providerErrorCount: 0,
-  timeoutCount: 0,
-  excludedCount: 2,
-  appliedFilters: {
-    volumeThreshold: null,
-    tradingValueThreshold: null,
-    marketCapThreshold: null,
-    minimumScore: null,
-    maximumRiskScore: null,
-  },
-  timeframe: '1D',
-  partial: false,
-  timedOut: false,
-  elapsedMs: 100,
-  dataState: 'complete',
-  message: '스캔은 정상 완료됐지만 조건에 맞는 종목이 없습니다.',
-  maxConcurrency: 2,
-  deadlineMs: 12_000,
-  itemTimeoutMs: 4_000,
-  ...overrides,
-});
+type ScannerResponseOverrides = Omit<Partial<ScannerResponse>, 'execution'> & {
+  execution?: Partial<ScannerResponse['execution']>;
+};
 
-async function withServer(run: (baseUrl: string) => Promise<void>): Promise<void> {
+const completeResult = (overrides: ScannerResponseOverrides = {}): ScannerResponse => {
+  const { execution, ...responseOverrides } = overrides;
+  return {
+    ok: true,
+    requestId: 'request-smoke-stock',
+    assetClass: 'stock',
+    market: 'KR',
+    timeframe: '1D',
+    cards: [],
+    alerts: [],
+    failures: [],
+    execution: {
+      requestedCount: 2,
+      startedCount: 2,
+      completedCount: 2,
+      excludedCount: 2,
+      providerErrorCount: 0,
+      timeoutCount: 0,
+      partial: false,
+      timedOut: false,
+      cancelled: false,
+      duplicate: false,
+      elapsedMs: 100,
+      deadlineMs: 12_000,
+      itemTimeoutMs: 4_000,
+      maxConcurrency: 2,
+      ...execution,
+    },
+    universe: {
+      totalCount: 2,
+      cursor: 0,
+      nextCursor: null,
+      source: 'test-public-provider',
+      partial: execution?.partial ?? false,
+      stale: false,
+      listingStatusCoverage: 'listed-or-unknown',
+    },
+    dataState: 'complete',
+    message: '스캔은 정상 완료됐지만 조건에 맞는 종목이 없습니다.',
+    generatedAt: '2026-08-05T00:00:00.000Z',
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+    ...responseOverrides,
+  };
+};
+
+function member(): MemberProfile {
+  return {
+    id: 'member-regular-smoke',
+    login_name: 'regular-smoke',
+    display_name: 'regular-smoke',
+    role: 'member',
+    status: 'approved',
+    membership_level: 'regular',
+    is_active: true,
+  };
+}
+
+function inject(profile: MemberProfile): RequestHandler {
+  return (req, _res, next) => {
+    const authenticated = req as AuthenticatedRequest;
+    authenticated.member = profile;
+    authenticated.accessToken = 'test-token';
+    next();
+  };
+}
+
+async function withServer(
+  scanner: StockScannerRunner,
+  run: (baseUrl: string) => Promise<void>,
+): Promise<void> {
   const app = express();
-  app.use('/api/market/scan', boundedMarketScanRouter);
+  app.use(inject(member()));
+  app.use('/api/market/scan', createBoundedMarketScanRouter({
+    scanner,
+    guard: new ScannerRequestGuard(),
+  }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => {
     server.once('listening', resolve);
@@ -65,87 +115,79 @@ async function withServer(run: (baseUrl: string) => Promise<void>): Promise<void
 }
 
 test('normal zero-match scan returns HTTP 200 empty', async () => {
-  const original = BoundedScannerService.scan;
-  BoundedScannerService.scan = async () => completeResult();
-  try {
-    await withServer(async (baseUrl) => {
+  await withServer(
+    { scan: async () => completeResult() },
+    async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/market/scan?market=KR&indicators=PER%20낮음`);
       assert.equal(response.status, 200);
       const body = await response.json() as ScanResponseBody;
       assert.equal(body.ok, true);
-      assert.equal(body.partial, false);
+      assert.equal(body.execution?.partial, false);
       assert.equal(body.dataState, 'complete');
       assert.deepEqual(body.cards, []);
-    });
-  } finally {
-    BoundedScannerService.scan = original;
-  }
+    },
+  );
 });
 
 test('some item timeouts return explicit partial HTTP 200', async () => {
-  const original = BoundedScannerService.scan;
-  BoundedScannerService.scan = async () => completeResult({
-    scanned: 5,
-    requestedCount: 10,
-    completedCount: 4,
-    timeoutCount: 1,
-    partial: true,
-    timedOut: true,
-    dataState: 'partial',
-    elapsedMs: 11_900,
-    message: '일부 데이터가 지연됐습니다.',
-  });
-  try {
-    await withServer(async (baseUrl) => {
+  await withServer(
+    {
+      scan: async () => completeResult({
+        execution: {
+          requestedCount: 10,
+          startedCount: 5,
+          completedCount: 4,
+          timeoutCount: 1,
+          partial: true,
+          timedOut: true,
+          elapsedMs: 11_900,
+        },
+        dataState: 'partial',
+        message: '일부 데이터가 지연됐습니다.',
+      }),
+    },
+    async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/market/scan?market=KR`);
       assert.equal(response.status, 200);
       const body = await response.json() as ScanResponseBody;
-      assert.equal(body.partial, true);
-      assert.equal(body.timedOut, true);
-      assert.equal(body.timeoutCount, 1);
+      assert.equal(body.execution?.partial, true);
+      assert.equal(body.execution?.timedOut, true);
+      assert.equal(body.execution?.timeoutCount, 1);
       assert.equal(body.dataState, 'partial');
-    });
-  } finally {
-    BoundedScannerService.scan = original;
-  }
+    },
+  );
 });
 
 test('unreliable provider scan remains strict HTTP 502', async () => {
-  const original = BoundedScannerService.scan;
-  const originalConsoleError = console.error;
-  BoundedScannerService.scan = async () => {
-    throw new ScanProviderUnavailableError('provider unavailable');
-  };
-  console.error = () => undefined;
-  try {
-    await withServer(async (baseUrl) => {
+  await withServer(
+    {
+      scan: async () => {
+        throw new ScanProviderUnavailableError('provider unavailable');
+      },
+    },
+    async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/market/scan?market=KR`);
       assert.equal(response.status, 502);
       const body = await response.json() as ScanResponseBody;
       assert.equal(body.ok, false);
       assert.equal(body.error, 'SCAN_PROVIDER_ERROR');
+      assert.equal(body.dataState, 'unavailable');
       assert.deepEqual(body.cards, []);
-    });
-  } finally {
-    console.error = originalConsoleError;
-    BoundedScannerService.scan = original;
-  }
+    },
+  );
 });
 
 test('scanner smoke path sends zero order-capable requests', async () => {
-  const original = BoundedScannerService.scan;
-  BoundedScannerService.scan = async () => completeResult();
   const requestedPaths: string[] = [];
-  try {
-    await withServer(async (baseUrl) => {
+  await withServer(
+    { scan: async () => completeResult({ market: 'US' }) },
+    async (baseUrl) => {
       const url = `${baseUrl}/api/market/scan?market=US&timeframe=1D`;
       requestedPaths.push(new URL(url).pathname);
       const response = await fetch(url);
       assert.equal(response.status, 200);
-    });
-    assert.deepEqual(requestedPaths, ['/api/market/scan']);
-    assert.ok(requestedPaths.every((path) => !/(?:order|trade|position|execute|approve)/i.test(path)));
-  } finally {
-    BoundedScannerService.scan = original;
-  }
+    },
+  );
+  assert.deepEqual(requestedPaths, ['/api/market/scan']);
+  assert.ok(requestedPaths.every((path) => !/(?:order|trade|position|execute|approve)/i.test(path)));
 });
