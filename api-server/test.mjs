@@ -47,6 +47,10 @@ const groups = {
     path.join(root, 'src/services/ai-chat.service.test.ts'),
     path.join(root, 'src/services/signal-score.test.ts'),
     path.join(root, 'src/services/bounded-scanner.service.test.ts'),
+    path.join(root, 'src/services/scanner-request-guard.service.test.ts'),
+    path.join(root, 'src/services/scanner-signal-policy.service.test.ts'),
+    path.join(root, 'src/services/scanner-signal-lifecycle.service.test.ts'),
+    path.join(root, 'src/services/crypto-signal-scanner.service.test.ts'),
     path.join(root, 'src/lib/bounded-work-pool.test.ts'),
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
@@ -69,6 +73,7 @@ const groups = {
     path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal-query-identity.smoke.test.ts'),
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
+    path.join(root, 'src/routes/signal-scanner-auth.smoke.test.ts'),
     path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
   ],
 };
@@ -91,7 +96,13 @@ try {
     outputFiles.push(outputFile);
   }
 
-  const result = spawnSync(process.execPath, ['--test', ...outputFiles], {
+  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
+  // serially so host-level event-loop contention cannot consume a scanner deadline
+  // before the test body starts. Test coverage and every assertion remain unchanged.
+  const testArguments = mode === 'phase9'
+    ? ['--test', '--test-concurrency=1', ...outputFiles]
+    : ['--test', ...outputFiles];
+  const result = spawnSync(process.execPath, testArguments, {
     cwd: repositoryRoot, stdio: 'inherit',
   });
   if (result.error) throw result.error;
