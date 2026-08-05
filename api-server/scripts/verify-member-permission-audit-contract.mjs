@@ -14,6 +14,7 @@ const downPath = 'api-server/supabase/migrations/2026080502_member_permission_au
 const migration = await read(migrationPath);
 const down = await read(downPath);
 const app = await read('api-server/src/app.ts');
+const identityGuard = await read('api-server/src/middleware/paper-journal-query-identity.ts');
 const smoke = await read('api-server/src/routes/paper-journal-query-identity.smoke.test.ts');
 const tests = await read('api-server/test.mjs');
 const manifest = await read('api-server/supabase/bootstrap/staging-bootstrap.sql');
@@ -44,9 +45,9 @@ assert(!/\b(?:drop table|truncate|delete\s+from)\b/i.test(down), 'down migration
 const guardIndex = app.indexOf("app.use('/api/paper-journal'");
 const routerIndex = app.indexOf('app.use("/api", router)');
 assert(guardIndex >= 0 && routerIndex > guardIndex, 'client identity guard must run before the API router');
-assert(app.includes("'userId' in req.query") && app.includes("'user_id' in req.query"), 'both client identity query spellings must be rejected');
-assert(app.includes("code: 'CLIENT_USER_ID_FORBIDDEN'"), 'identity rejection must use the stable safe code');
-assert(app.includes('orderSubmitted: false') && app.includes('exchangeRequestSent: false'), 'identity rejection must preserve no-order safety fields');
+assert(identityGuard.includes("'userId' in request.query") && identityGuard.includes("'user_id' in request.query"), 'both client identity query spellings must be rejected');
+assert(identityGuard.includes("code: 'CLIENT_USER_ID_FORBIDDEN'"), 'identity rejection must use the stable safe code');
+assert(identityGuard.includes('orderSubmitted: false') && identityGuard.includes('exchangeRequestSent: false'), 'identity rejection must preserve no-order safety fields');
 assert(smoke.includes("for (const queryKey of ['userId', 'user_id'])"), 'smoke test must cover both query spellings');
 assert(smoke.includes('response.status, 400'), 'smoke test must require fail-closed HTTP 400');
 assert(tests.includes('paper-journal-query-identity.smoke.test.ts'), 'smoke test must be registered');
