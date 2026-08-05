@@ -184,7 +184,7 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
       setOffline(isOffline);
       setStale(true);
-      if (!silent || !lastUpdatedAt) {
+      if (!silent) {
         setMessage(isOffline
           ? '오프라인 상태입니다. 마지막 확인 데이터를 표시하며 주문 승인은 잠금 상태입니다.'
           : timedOut
@@ -195,7 +195,7 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       window.clearTimeout(timeout);
       if (requestSequence === requestSequenceRef.current && !silent) setLoading(false);
     }
-  }, [fixture, lastUpdatedAt]);
+  }, [fixture]);
 
   useEffect(() => {
     void load();
