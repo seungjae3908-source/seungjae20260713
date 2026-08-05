@@ -161,3 +161,5 @@ delete from public.trade_order_events where user_id = '$USER_ID' and order_id = 
 delete from public.trade_orders where user_id = '$USER_ID' and id = '$ORDER_ID';
 delete from public.trade_order_plans where user_id = '$USER_ID' and id = '$PLAN_ID';
 SQL
+
+bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify-trade-recovery-worker-leases.sh"
