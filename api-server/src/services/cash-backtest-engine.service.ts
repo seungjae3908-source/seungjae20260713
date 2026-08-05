@@ -1,7 +1,7 @@
 import type { SpotBacktestCandle } from './upbit-backtest-data.service';
 import { BacktestMarketContractError, type BacktestMarket } from './backtest-market-profile.service';
 
-export type CashBacktestStrategy = 'trend_pullback' | 'breakout' | 'vwap_reclaim' | 'regime_pullback';
+export type CashBacktestStrategy = 'trend_pullback' | 'breakout' | 'vwap_reclaim' | 'regime_pullback' | 'regime_rsi_reversal';
 export type CashBacktestCandle = Omit<SpotBacktestCandle, 'market' | 'source'> & {
   market: 'kr-stock' | 'us-stock' | 'crypto-spot';
   source: string;
@@ -234,6 +234,35 @@ export function calculateCashSignals(request: CashBacktestRequest, candles: read
     lastBuyIndex = index;
   };
 
+  if (request.strategy === 'regime_rsi_reversal') {
+    const fastPeriod = Math.max(2, Math.trunc(numberParam(request, 'fastPeriod', 20)));
+    const slowPeriod = Math.max(fastPeriod + 1, Math.trunc(numberParam(request, 'slowPeriod', 50)));
+    const oversoldRsi = Math.max(0, Math.min(100, numberParam(request, 'oversoldRsi', 40)));
+    const recoveryRsi = Math.max(oversoldRsi, Math.min(100, numberParam(request, 'recoveryRsi', 50)));
+    const oversoldLookback = Math.max(2, Math.trunc(numberParam(request, 'oversoldLookback', 6)));
+    const maximumExtension = Math.max(0, numberParam(request, 'maximumExtensionPercent', 1.5)) / 100;
+    const fast = ema(closes, fastPeriod);
+    const slow = ema(closes, slowPeriod);
+    for (let index = Math.max(2, oversoldLookback); index < candles.length; index += 1) {
+      const fastNow = fast[index];
+      const slowNow = slow[index];
+      const previousRsi = rsiValues[index - 1];
+      const currentRsi = rsiValues[index];
+      const average = volumes[index];
+      if (fastNow == null || slowNow == null || previousRsi == null || currentRsi == null || average == null) continue;
+      const recentRsi = rsiValues.slice(index - oversoldLookback, index).filter((value): value is number => value != null);
+      const recentOversold = recentRsi.some((value) => value <= oversoldRsi);
+      const recovered = previousRsi <= recoveryRsi && currentRsi > recoveryRsi;
+      const current = candles[index];
+      const previous = candles[index - 1];
+      const trendHeld = fastNow > slowNow && current.close >= slowNow;
+      const confirmed = current.close > current.open && current.close > previous.high && current.close <= fastNow * (1 + maximumExtension);
+      const volumeOk = current.volume >= average * volumeMultiplier;
+      if (trendHeld && recentOversold && recovered && confirmed && volumeOk) pushBuy(index);
+      if (current.close < slowNow) signals.push({ index, action: 'SELL' });
+    }
+  }
+
   if (request.strategy === 'regime_pullback') {
     const fastPeriod = Math.max(2, Math.trunc(numberParam(request, 'fastPeriod', 20)));
     const slowPeriod = Math.max(fastPeriod + 1, Math.trunc(numberParam(request, 'slowPeriod', 50)));
@@ -332,6 +361,9 @@ export function validateCashBacktestRequest(request: CashBacktestRequest) {
   const minimumEntryRsi = numberParam(request, 'minimumEntryRsi', 0);
   const maximumEntryRsi = numberParam(request, 'maximumEntryRsi', 100);
   if (minimumEntryRsi < 0 || maximumEntryRsi > 100 || minimumEntryRsi > maximumEntryRsi) throw new BacktestMarketContractError('INVALID_RSI_RANGE', '진입 RSI 범위가 올바르지 않습니다.');
+  const oversoldRsi = numberParam(request, 'oversoldRsi', 40);
+  const recoveryRsi = numberParam(request, 'recoveryRsi', 50);
+  if (oversoldRsi < 0 || recoveryRsi > 100 || oversoldRsi > recoveryRsi) throw new BacktestMarketContractError('INVALID_RSI_RECOVERY_RANGE', '과매도·회복 RSI 범위가 올바르지 않습니다.');
   if (numberParam(request, 'stopAtrMultiplier', 0) < 0) throw new BacktestMarketContractError('INVALID_ATR_STOP', 'ATR 손절 배수는 0 이상이어야 합니다.');
   if (numberParam(request, 'minimumStopToCostRatio', 0) < 0) throw new BacktestMarketContractError('INVALID_STOP_COST_RATIO', '손절폭 대비 비용 비율은 0 이상이어야 합니다.');
 }
