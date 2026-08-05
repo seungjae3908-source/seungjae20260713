@@ -5,7 +5,10 @@ on:
   pull_request:
     paths:
       - 'api-server/src/scripts/crypto-spot-strategy-search.ts'
+      - 'api-server/src/scripts/crypto-spot-engine-family-search.ts'
+      - 'api-server/src/scripts/merge-crypto-spot-search-results.mjs'
       - 'api-server/src/services/cash-backtest-engine.service.ts'
+      - 'api-server/src/services/cash-backtest-signals.service.ts'
       - 'api-server/src/services/upbit-backtest-data.service.ts'
       - '.github/workflows/crypto-spot-strategy-search.yml'
 
@@ -18,9 +21,9 @@ concurrency:
 
 jobs:
   search:
-    name: 90-day locked-test strategy search
+    name: 90-day automatic family iteration
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -40,22 +43,36 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Bundle locked-test search
-        run: pnpm --dir api-server exec esbuild ./src/scripts/crypto-spot-strategy-search.ts --bundle --platform=node --format=esm --target=node20 --outfile=/tmp/crypto-spot-strategy-search.mjs
-
-      - name: Run read-only strategy search
-        env:
-          BACKTEST_OUTPUT: ${{ github.workspace }}/artifacts/crypto-spot-strategy-search.json
-        run: node /tmp/crypto-spot-strategy-search.mjs
-
-      - name: Verify no-order contract
+      - name: Bundle strategy family searches
         run: |
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('artifacts/crypto-spot-strategy-search.json','utf8'));if(p.orderSubmitted!==false||p.mode!=='backtest-only'||p.split.lockedTestPercent!==20)process.exit(1);console.log('candidateCount='+p.candidateCount+', eligible='+p.automationEligible)"
+          pnpm --dir api-server exec esbuild ./src/scripts/crypto-spot-strategy-search.ts --bundle --platform=node --format=esm --target=node20 --outfile=/tmp/crypto-spot-channel-search.mjs
+          pnpm --dir api-server exec esbuild ./src/scripts/crypto-spot-engine-family-search.ts --bundle --platform=node --format=esm --target=node20 --outfile=/tmp/crypto-spot-engine-family-search.mjs
 
-      - name: Upload strategy search result
+      - name: Run channel recovery search
+        env:
+          BACKTEST_OUTPUT: ${{ github.workspace }}/artifacts/crypto-spot-channel-search.json
+        run: node /tmp/crypto-spot-channel-search.mjs
+
+      - name: Run engine family search
+        env:
+          BACKTEST_OUTPUT: ${{ github.workspace }}/artifacts/crypto-spot-engine-family-search.json
+        run: node /tmp/crypto-spot-engine-family-search.mjs
+
+      - name: Merge automatic iteration results
+        env:
+          CHANNEL_SEARCH_INPUT: ${{ github.workspace }}/artifacts/crypto-spot-channel-search.json
+          ENGINE_SEARCH_INPUT: ${{ github.workspace }}/artifacts/crypto-spot-engine-family-search.json
+          BACKTEST_OUTPUT: ${{ github.workspace }}/artifacts/crypto-spot-meta-search.json
+        run: node api-server/src/scripts/merge-crypto-spot-search-results.mjs
+
+      - name: Verify no-order and locked-test contracts
+        run: |
+          node -e "const fs=require('fs');for(const file of ['crypto-spot-channel-search.json','crypto-spot-engine-family-search.json','crypto-spot-meta-search.json']){const p=JSON.parse(fs.readFileSync('artifacts/'+file,'utf8'));if(p.orderSubmitted!==false||p.mode!=='backtest-only')process.exit(1)}const p=JSON.parse(fs.readFileSync('artifacts/crypto-spot-meta-search.json','utf8'));if(p.channel.split.lockedTestPercent!==20||p.engine.split.lockedTestPercent!==20||p.automaticFamilyIteration!==true)process.exit(1);console.log('eligible='+p.automationEligible+', families='+p.evaluatedSearches.length)"
+
+      - name: Upload strategy search results
         uses: actions/upload-artifact@v4
         with:
           name: crypto-spot-strategy-search-${{ github.sha }}
-          path: artifacts/crypto-spot-strategy-search.json
+          path: artifacts/*.json
           if-no-files-found: error
           retention-days: 14
