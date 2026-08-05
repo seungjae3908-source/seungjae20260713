@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { appendFile, mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -133,6 +133,7 @@ try {
     }
     if (failedEntries.length > 0) {
       const failedList = failedEntries.join(', ');
+      await writeFile(path.join(root, 'phase12-failures.txt'), `${failedEntries.join('\n')}\n`, 'utf8');
       if (process.env.GITHUB_STEP_SUMMARY) {
         const summary = [
           '## Phase 12 failed test files',
