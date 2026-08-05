@@ -78,6 +78,20 @@ export function clearScannerSignalLifecycleForTests(): void {
   records.clear();
 }
 
+export function getScannerSignalLifecycleSnapshot(memberId: string, signalId: string) {
+  const cycleMarker = ':cycle:';
+  const markerIndex = signalId.lastIndexOf(cycleMarker);
+  const baseSignalId = markerIndex >= 0 ? signalId.slice(0, markerIndex) : signalId;
+  const requestedCycle = markerIndex >= 0 ? Number(signalId.slice(markerIndex + cycleMarker.length)) : 1;
+  const record = records.get(lifecycleKey(memberId, baseSignalId));
+  if (!record || record.cycle !== requestedCycle) return null;
+  return {
+    signalId,
+    state: record.state,
+    observedAt: new Date(record.lastSeenAt).toISOString(),
+  };
+}
+
 export function applyScannerSignalLifecycle(
   memberId: string,
   cards: ScannerSignalCard[],
