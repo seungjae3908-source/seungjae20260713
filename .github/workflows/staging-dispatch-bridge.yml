@@ -27,10 +27,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
       - run: node api-server/scripts/verify-phase10-deployment-safety.mjs
       - run: node api-server/scripts/verify-phase10-staging-dispatch-run-confirmation.mjs
 
@@ -59,7 +59,7 @@ jobs:
       run_full_validation: ${{ steps.command.outputs.full }}
       run_destructive_recovery_drill: ${{ steps.command.outputs.destructive }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
@@ -125,7 +125,7 @@ jobs:
           }
 
       - name: Require successful verified main CI
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
         with:
@@ -173,7 +173,7 @@ jobs:
             if (!verifiedRun) core.setFailed('No successful Application CI push run on main exists for the requested SHA.');
 
       - name: Dispatch and confirm staging readiness run
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           STAGING_ACTION: ${{ steps.command.outputs.action }}
