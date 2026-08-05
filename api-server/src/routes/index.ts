@@ -8,6 +8,7 @@ import stocksRouter from './stocks';
 import stockOrderbookRouter from './stock-orderbook';
 import watchlistRouter from './watchlist';
 import kiwoomRouter from './kiwoom.routes';
+import kiwoomRankingsSafeRouter from './kiwoom-rankings-safe';
 import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
@@ -93,6 +94,10 @@ router.use('/stocks', stockOrderbookRouter);
 router.use('/', aiChatRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
+// The safe rankings route must run before the legacy Kiwoom router. It keeps
+// the strict primary provider contract, but serves explicitly marked real-data
+// fallback rows when the optional Kiwoom provider is unavailable.
+router.use('/kiwoom', kiwoomRankingsSafeRouter);
 router.use('/kiwoom', kiwoomRouter);
 router.use('/debug', requireAdmin, providerDebugRouter);
 router.use('/', pushRouter);
