@@ -14,6 +14,7 @@ const scannerCard = {
   ticker: '000660',
   symbol: '000660',
   name: 'SK하이닉스',
+  assetClass: 'stock',
   market: 'KR',
   exchange: 'KRX',
   currency: 'KRW',
