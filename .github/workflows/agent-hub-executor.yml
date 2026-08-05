@@ -2,23 +2,53 @@ name: Agent Hub Executor
 
 on:
   push:
-    branches: [agent/agent-hub-executor-v1]
+    branches: [agent/agent-hub-coordinator-v2]
     paths:
       - .github/workflows/agent-hub-executor.yml
       - .github/workflows/agent-hub-free.yml
+      - .github/agent-hub/policy.json
+      - .github/agent-hub/workers.json
+      - scripts/agent_hub_policy.py
+      - scripts/agent_hub_contract_v2.py
       - scripts/agent_hub_executor.py
-      - scripts/agent_hub_executor_report.py
-      - docs/agent-hub-executor.md
-      - .gitignore
+      - scripts/agent_hub_executor_gate_v2.py
+      - scripts/agent_hub_executor_report_v2.py
+      - scripts/agent_hub_state_v2.py
+      - scripts/agent_hub_security_v2.py
+      - scripts/agent_hub_github_validation_v2.py
+      - scripts/agent_hub_command_integrity_v2.py
+      - scripts/agent_hub_executor_safety_v2.py
+      - scripts/agent_hub_executor_gate_hardening_v2.py
+      - scripts/agent_hub_executor_report_hardening_v2.py
+      - scripts/agent_hub_legacy_migration_v2.py
+      - scripts/test_agent_hub_v2.py
+      - scripts/test_agent_hub_executor_v2.py
+      - scripts/test_agent_hub_hardening_v2.py
+      - docs/agent-hub*.md
   pull_request:
     branches: [main]
     paths:
       - .github/workflows/agent-hub-executor.yml
       - .github/workflows/agent-hub-free.yml
+      - .github/agent-hub/policy.json
+      - .github/agent-hub/workers.json
+      - scripts/agent_hub_policy.py
+      - scripts/agent_hub_contract_v2.py
       - scripts/agent_hub_executor.py
-      - scripts/agent_hub_executor_report.py
-      - docs/agent-hub-executor.md
-      - .gitignore
+      - scripts/agent_hub_executor_gate_v2.py
+      - scripts/agent_hub_executor_report_v2.py
+      - scripts/agent_hub_state_v2.py
+      - scripts/agent_hub_security_v2.py
+      - scripts/agent_hub_github_validation_v2.py
+      - scripts/agent_hub_command_integrity_v2.py
+      - scripts/agent_hub_executor_safety_v2.py
+      - scripts/agent_hub_executor_gate_hardening_v2.py
+      - scripts/agent_hub_executor_report_hardening_v2.py
+      - scripts/agent_hub_legacy_migration_v2.py
+      - scripts/test_agent_hub_v2.py
+      - scripts/test_agent_hub_executor_v2.py
+      - scripts/test_agent_hub_hardening_v2.py
+      - docs/agent-hub*.md
   repository_dispatch:
     types: [agent-hub-command-ready]
   schedule:
@@ -34,19 +64,49 @@ concurrency:
 
 jobs:
   validate:
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-      - name: Compile and test processors
+      - name: Compile and test executor processors
+        env:
+          PYTHONPATH: scripts
         run: |
-          python3 -m py_compile scripts/agent_hub_executor.py scripts/agent_hub_executor_report.py
-          python3 scripts/agent_hub_executor.py --self-test
-          python3 scripts/agent_hub_executor_report.py --self-test
+          python3 -m py_compile \
+            scripts/agent_hub_policy.py \
+            scripts/agent_hub_contract_v2.py \
+            scripts/agent_hub_executor.py \
+            scripts/agent_hub_executor_gate_v2.py \
+            scripts/agent_hub_executor_report_v2.py \
+            scripts/agent_hub_state_v2.py \
+            scripts/agent_hub_security_v2.py \
+            scripts/agent_hub_github_validation_v2.py \
+            scripts/agent_hub_command_integrity_v2.py \
+            scripts/agent_hub_executor_safety_v2.py \
+            scripts/agent_hub_executor_gate_hardening_v2.py \
+            scripts/agent_hub_executor_report_hardening_v2.py \
+            scripts/agent_hub_legacy_migration_v2.py \
+            scripts/test_agent_hub_v2.py \
+            scripts/test_agent_hub_executor_v2.py \
+            scripts/test_agent_hub_hardening_v2.py
+          python3 scripts/agent_hub_executor_gate_v2.py --self-test
+          python3 scripts/agent_hub_executor_report_v2.py --self-test
+          python3 scripts/agent_hub_executor_safety_v2.py --self-test
+          python3 scripts/agent_hub_executor_gate_hardening_v2.py --self-test
+          python3 scripts/agent_hub_executor_report_hardening_v2.py --self-test
+          python3 scripts/agent_hub_legacy_migration_v2.py
+          python3 scripts/test_agent_hub_executor_v2.py
+          python3 scripts/test_agent_hub_v2.py
+          python3 scripts/test_agent_hub_hardening_v2.py
+      - name: Assert fixture-only manual validation
+        if: github.event_name == 'workflow_dispatch'
+        run: echo 'workflow_dispatch completed fixture and self-test validation only; no Issue command was consumed.'
 
   gemini-executor-smoke:
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -55,7 +115,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Reject tracked Gemini configuration
         run: test -z "$(git ls-files '.gemini/**')"
-      - name: Check Gemini secret
+      - name: Check Gemini secret presence
         id: secret
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -86,8 +146,9 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=all)"
 
   execute:
-    if: github.event_name == 'repository_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'repository_dispatch' || github.event_name == 'schedule'
     permissions:
+      actions: read
       contents: write
       issues: write
       pull-requests: write
@@ -100,28 +161,36 @@ jobs:
           fetch-depth: 0
       - name: Reject tracked Gemini configuration
         run: test -z "$(git ls-files '.gemini/**')"
-      - name: Prepare trusted command
+      - name: Prepare trusted sealed schema-v2 command
         id: prepare
         env:
+          PYTHONPATH: scripts
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HUB_ISSUE_NUMBER: '62'
-        run: python3 scripts/agent_hub_executor.py prepare
+        run: python3 scripts/agent_hub_executor_gate_hardening_v2.py
       - name: Verify Gemini secret
         if: steps.prepare.outputs.should_run == 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: test -n "$GEMINI_API_KEY"
-      - name: Create isolated branch
+      - name: Create isolated branch at exact expected HEAD
         if: steps.prepare.outputs.should_run == 'true'
         env:
           WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
+          TARGET_BRANCH: ${{ steps.prepare.outputs.target_branch }}
+          EXPECTED_HEAD_SHA: ${{ steps.prepare.outputs.expected_head_sha }}
         run: |
-          git fetch origin main
+          set -Eeuo pipefail
+          git fetch --no-tags origin "$TARGET_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_HEAD_SHA"
+          test "$TARGET_BRANCH" != 'main'
+          test "$TARGET_BRANCH" != 'master'
+          case "$WORK_BRANCH" in agent/hub-*) ;; *) exit 1 ;; esac
           if git ls-remote --exit-code --heads origin "$WORK_BRANCH" >/dev/null 2>&1; then
             git fetch origin "$WORK_BRANCH"
             git switch --force-create "$WORK_BRANCH" "origin/$WORK_BRANCH"
           else
-            git switch --create "$WORK_BRANCH" origin/main
+            git switch --create "$WORK_BRANCH" "$EXPECTED_HEAD_SHA"
           fi
       - name: Run read-only Gemini
         if: steps.prepare.outputs.should_run == 'true' && steps.prepare.outputs.execution_mode == 'read_only'
@@ -138,7 +207,7 @@ jobs:
           prompt: ${{ steps.prepare.outputs.prompt }}
           settings: |
             {"model":{"maxSessionTurns":30},"tools":{"core":["read_file","glob","grep_search","list_directory"],"sandboxNetworkAccess":false},"security":{"blockGitExtensions":true,"environmentVariableRedaction":{"enabled":true}},"admin":{"extensions":{"enabled":false},"mcp":{"enabled":false},"skills":{"enabled":false}},"telemetry":{"enabled":false}}
-      - name: Run code-change Gemini
+      - name: Run code-change Gemini with local workspace file tools only
         if: steps.prepare.outputs.should_run == 'true' && steps.prepare.outputs.execution_mode == 'code_change'
         id: write
         uses: google-github-actions/run-gemini-cli@v0.1.22
@@ -157,71 +226,144 @@ jobs:
         if: steps.prepare.outputs.should_run == 'true'
         id: diff
         env:
+          PYTHONPATH: scripts
           EXECUTION_MODE: ${{ steps.prepare.outputs.execution_mode }}
-          BASE_REF: origin/main
+          BASE_REF: ${{ steps.prepare.outputs.expected_head_sha }}
+          ALLOWED_PATHS: ${{ steps.prepare.outputs.allowed_paths }}
+          FORBIDDEN_PATHS: ${{ steps.prepare.outputs.forbidden_paths }}
+          MAX_FILES: ${{ steps.prepare.outputs.max_files }}
         run: |
           rm -rf .gemini gemini-artifacts
-          python3 scripts/agent_hub_executor.py validate-diff
+          python3 scripts/agent_hub_executor_safety_v2.py validate-diff
       - uses: pnpm/action-setup@v4
-        if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
+        if: >-
+          steps.prepare.outputs.should_run == 'true' &&
+          (steps.prepare.outputs.execution_mode == 'code_change' || startsWith(steps.prepare.outputs.action_type, 'run_'))
         with: {version: 9}
       - uses: actions/setup-node@v4
-        if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
+        if: >-
+          steps.prepare.outputs.should_run == 'true' &&
+          (steps.prepare.outputs.execution_mode == 'code_change' || startsWith(steps.prepare.outputs.action_type, 'run_'))
         with: {node-version: 20, cache: pnpm}
-      - name: Deterministic validation
-        if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
+      - name: Install dependencies for deterministic validation
+        if: >-
+          steps.prepare.outputs.should_run == 'true' &&
+          (steps.prepare.outputs.execution_mode == 'code_change' || startsWith(steps.prepare.outputs.action_type, 'run_'))
+        run: pnpm install --frozen-lockfile
+      - name: Run action-specific deterministic validation
+        if: steps.prepare.outputs.should_run == 'true'
+        env:
+          ACTION_TYPE: ${{ steps.prepare.outputs.action_type }}
+          HAS_CHANGES: ${{ steps.diff.outputs.has_changes || 'false' }}
         run: |
-          pnpm install --frozen-lockfile
-          pnpm --dir stock-analyzer run typecheck
-          pnpm --dir api-server run typecheck
-          pnpm --dir api-server run test:smoke
-      - name: Commit and push
+          set -Eeuo pipefail
+          case "$ACTION_TYPE" in
+            run_typecheck)
+              pnpm --dir stock-analyzer run typecheck
+              pnpm --dir api-server run typecheck
+              ;;
+            run_unit_tests)
+              pnpm --dir api-server run test:unit
+              ;;
+            run_build)
+              pnpm --dir stock-analyzer run build
+              pnpm --dir api-server run build
+              ;;
+            run_playwright)
+              pnpm exec playwright install --with-deps chromium
+              pnpm --dir stock-analyzer run test:e2e
+              ;;
+            modify_feature_branch|add_or_update_tests)
+              test "$HAS_CHANGES" = 'true'
+              pnpm --dir stock-analyzer run typecheck
+              pnpm --dir api-server run typecheck
+              pnpm --dir api-server run test:smoke
+              ;;
+            inspect_repository|inspect_branch|inspect_pull_request|analyze_ci_failure|analyze_logs|analyze_playwright_trace|report_results|analyze_conflicts|create_integration_plan|inspect_security_contract|inspect_private_api_calls|inspect_paper_vs_live_order_separation)
+              :
+              ;;
+            *) exit 1 ;;
+          esac
+      - name: Commit and push one isolated commit
         if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
         id: commit
         env:
           WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
           TASK: ${{ steps.prepare.outputs.source_task_id }}
         run: |
+          set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
+          test "$(git rev-list --count "${{ steps.prepare.outputs.expected_head_sha }}..HEAD")" = '0'
           git commit -m "agent: execute ${TASK}"
+          test "$(git rev-list --count "${{ steps.prepare.outputs.expected_head_sha }}..HEAD")" = '1'
           git push --set-upstream origin "$WORK_BRANCH"
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Open Draft PR
+      - name: Open or validate owned Draft PR only
         if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
+          TARGET_BRANCH: ${{ steps.prepare.outputs.target_branch }}
           TASK: ${{ steps.prepare.outputs.source_task_id }}
+          COMMAND_ID: ${{ steps.prepare.outputs.command_id }}
+          TARGET_WORKER: ${{ steps.prepare.outputs.target_worker }}
+          EXPECTED_HEAD_SHA: ${{ steps.prepare.outputs.expected_head_sha }}
         run: |
-          url="$(gh pr list --state open --head "$WORK_BRANCH" --json url --jq '.[0].url // empty')"
-          if [ -z "$url" ]; then
-            url="$(gh pr create --draft --base main --head "$WORK_BRANCH" --title "Agent task: ${TASK}" --body 'Controlled Agent Hub change. Validation completed. User review and explicit merge approval are required.')"
+          set -Eeuo pipefail
+          owner="${GITHUB_REPOSITORY%%/*}"
+          existing="$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&head=${owner}:${WORK_BRANCH}" --jq '.[0] // empty')"
+          if [ -n "$existing" ]; then
+            PR_JSON="$existing" PYTHONPATH=scripts python3 - <<'PY'
+          import json, os
+          from agent_hub_github_validation_v2 import validate_draft_pr_reuse
+          payload=json.loads(os.environ['PR_JSON'])
+          evidence=validate_draft_pr_reuse(
+              payload,
+              repository=os.environ['GITHUB_REPOSITORY'],
+              repository_owner=os.environ['GITHUB_REPOSITORY'].split('/',1)[0],
+              work_branch=os.environ['WORK_BRANCH'],
+              target_branch=os.environ['TARGET_BRANCH'],
+              command_id=os.environ['COMMAND_ID'],
+              worker=os.environ['TARGET_WORKER'],
+              expected_head_sha=os.environ['EXPECTED_HEAD_SHA'],
+          )
+          print(evidence.number)
+          PY
+            url="$(printf '%s' "$existing" | jq -r '.html_url')"
+          else
+            printf -v body '%s\n\n%s\n%s\n%s\n%s' \
+              'Controlled Agent Hub schema-v2 change. Deterministic validation completed. User review and explicit merge approval are required.' \
+              "agent_hub_command_id: ${COMMAND_ID}" \
+              "agent_hub_worker: ${TARGET_WORKER}" \
+              "agent_hub_expected_head_sha: ${EXPECTED_HEAD_SHA}" \
+              "agent_hub_work_branch: ${WORK_BRANCH}"
+            url="$(gh pr create --draft --base "$TARGET_BRANCH" --head "$WORK_BRANCH" --title "Agent task: ${TASK}" --body "$body")"
           fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
-      - name: Post executor report
+      - name: Post schema-v2 executor report without premature completed claim
         id: report
         if: always() && steps.prepare.outputs.should_run == 'true'
         env:
+          PYTHONPATH: scripts
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HUB_ISSUE_NUMBER: '62'
-          COMMAND_COMMENT_ID: ${{ steps.prepare.outputs.command_comment_id }}
+          COMMAND_ID: ${{ steps.prepare.outputs.command_id }}
           SOURCE_TASK_ID: ${{ steps.prepare.outputs.source_task_id }}
+          TARGET_WORKER: ${{ steps.prepare.outputs.target_worker }}
+          TARGET_BRANCH: ${{ steps.prepare.outputs.target_branch }}
           WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
-          EXECUTION_MODE: ${{ steps.prepare.outputs.execution_mode }}
-          AUTO_STEP: ${{ steps.prepare.outputs.auto_step }}
-          AUTO_LIMIT: ${{ steps.prepare.outputs.auto_limit }}
+          BASE_SHA: ${{ steps.prepare.outputs.expected_head_sha }}
           RESULT_STATUS: ${{ job.status == 'success' && 'completed' || 'failed' }}
-          HEAD_SHA: ${{ steps.commit.outputs.head_sha || github.sha }}
-          CHECKS: diff=${{ steps.diff.conclusion }}; deterministic-validation=${{ steps.diff.outputs.has_changes == 'true' && 'completed' || 'not-required' }}
-          SUMMARY: ${{ steps.write.outputs.summary || steps.read.outputs.summary || 'No Gemini summary.' }}
+          HEAD_SHA: ${{ steps.commit.outputs.head_sha || steps.prepare.outputs.expected_head_sha }}
+          CI_RUN_ID: ${{ github.run_id }}
           PR_URL: ${{ steps.pr.outputs.url || 'none' }}
-          HAS_CHANGES: ${{ steps.diff.outputs.has_changes || 'false' }}
-        run: python3 scripts/agent_hub_executor.py post-report
-      - name: Wake Hub
-        if: always() && steps.report.conclusion == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type='agent-executor-report-ready'
+          CHANGED_FILES: ${{ steps.diff.outputs.changed_files || '[]' }}
+          CHECKS: diff=${{ steps.diff.conclusion }}; validation=${{ steps.diff.outputs.has_changes == 'true' && 'completed' || 'not-required' }}
+          SUMMARY: ${{ steps.write.outputs.summary || steps.read.outputs.summary || 'No Gemini summary.' }}
+          EXECUTION_MODE: ${{ steps.prepare.outputs.execution_mode }}
+          AUTO_STEP: '1'
+          FAILURE_SIGNATURE: ${{ job.status == 'success' && '' || format('{0}-{1}', steps.prepare.outputs.command_id, github.run_attempt) }}
+        run: python3 scripts/agent_hub_executor_report_hardening_v2.py
