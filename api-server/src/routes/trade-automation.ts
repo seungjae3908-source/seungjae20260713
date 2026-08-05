@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Response } from 'express';
 import { createSupabaseTradingRepository, safeConnections, type TradingRepository } from '../services/trade-automation.repository';
 import { liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
+import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
 import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
@@ -9,6 +10,9 @@ import type { TradingExchange, TradingPlanInput } from '../services/trade-automa
 
 const router: IRouter = Router();
 const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom']);
+const CANCEL_RECONCILIATION_STATES = new Set([
+  'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED',
+]);
 let repositoryFactoryForTests: ((userId: string) => TradingRepository) | null = null;
 
 export function setTradeAutomationRepositoryFactoryForTests(
@@ -29,6 +33,7 @@ function context(req: AuthenticatedRequest) {
     repository,
     automation: new TradeAutomationService(repository),
     execution: new TradeExecutionService(repository),
+    cancellation: new TradeCancelReconciliationService(repository),
   };
 }
 
@@ -162,10 +167,10 @@ router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
 
 router.post('/plans/:id/invalidate', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, automation, execution } = context(req);
+    const { userId, automation, cancellation } = context(req);
     const result = await automation.invalidatePlan(userId, String(req.params.id));
-    const order = result.order?.state === 'CANCEL_REQUESTED'
-      ? await execution.cancel(userId, result.plan, result.order) : result.order;
+    const order = result.order && CANCEL_RECONCILIATION_STATES.has(result.order.state)
+      ? await cancellation.cancel(userId, result.plan, result.order) : result.order;
     return res.json({ ok: true, ...result, order, immediateMarketLiquidation: false, additionalApprovalRequired: true });
   } catch (error) { return errorResponse(res, error); }
 });
@@ -213,13 +218,19 @@ router.get('/orders', async (req: AuthenticatedRequest, res) => {
 
 router.post('/orders/:id/cancel', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, repository, execution } = context(req);
+    const { userId, repository, cancellation } = context(req);
     const order = await repository.getOrder(userId, String(req.params.id));
     if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');
     const plan = await repository.getPlan(userId, order.planId);
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
-    const canceled = await execution.cancel(userId, plan, order);
-    return res.json({ ok: true, order: canceled, filledQuantityPreserved: canceled.filledQuantity });
+    const canceled = await cancellation.cancel(userId, plan, order);
+    return res.json({
+      ok: true,
+      order: canceled,
+      filledQuantityPreserved: canceled.filledQuantity,
+      cancelRequestClaimId: canceled.cancelRequestClaimId ?? null,
+      exchangeCancelSubmittedAtMostOnce: true,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
