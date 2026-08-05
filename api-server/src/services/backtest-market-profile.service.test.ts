@@ -66,7 +66,7 @@ test('performance keys keep market, strategy, action, timeframe and regime separ
 function cashCandles(count = 100): CashBacktestCandle[] {
   const start = Date.UTC(2026, 0, 1);
   return Array.from({ length: count }, (_value, index) => {
-    const close = index < 60 ? 100 + index * 0.1 : 106 + (index - 60) * 0.8;
+    const close = index < 60 ? 100 + index * 0.1 : 107 + (index - 60) * 0.8;
     return {
       timestamp: start + index * 60_000,
       open: close - 0.2,
