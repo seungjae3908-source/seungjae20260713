@@ -423,7 +423,7 @@ test.describe('scanner readiness and legacy chart integration', () => {
 
     await page.goto(`${isolatedBaseURL}/scanner`);
     await expect(page).toHaveURL(/\/scanner$/);
-    await expect(page.getByRole('heading', { name: 'AI 검색기', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'AI 신호검색기', level: 1 })).toBeVisible();
     await expect(page.getByTestId('scanner-loading')).toBeVisible();
     await expect.poll(() => state.scanRequests.length).toBe(1);
 
