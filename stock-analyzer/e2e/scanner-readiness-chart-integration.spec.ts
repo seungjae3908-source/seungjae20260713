@@ -224,7 +224,6 @@ test.describe('scanner readiness and current AI chart integration', () => {
     await page.goto('/__phase11-technical-workspace-e2e');
 
     await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
     await expect(page.getByTestId('scanner-loading')).toBeVisible();
     await expect.poll(() => state.scanRequests.length).toBe(1);
 
@@ -236,8 +235,26 @@ test.describe('scanner readiness and current AI chart integration', () => {
     await page.waitForTimeout(2_100);
     await expect(page.getByTestId('scanner-empty')).toBeVisible();
 
+    for (const viewport of [
+      { width: 360, height: 800 },
+      { width: 390, height: 844 },
+      { width: 430, height: 932 },
+      { width: 844, height: 390 },
+    ]) {
+      await page.setViewportSize(viewport);
+      const readiness = page.getByTestId('scanner-readiness-status');
+      await expect(readiness).toBeVisible();
+      expect(await readiness.boundingBox()).not.toBeNull();
+      await expectNoHorizontalOverflow(page);
+      await expectVisiblePanelsInsideViewport(page);
+    }
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m');
+    await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
     await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
     await page.getByRole('button', { name: '자동 갱신 중', exact: true }).click();
+
     state.delayOneMinuteChart = true;
     await page.getByTestId('timeframe-1m').click();
     await expect.poll(() => state.chartRequests.filter((url) => url.includes('tf=1m')).length).toBe(1);
@@ -255,15 +272,11 @@ test.describe('scanner readiness and current AI chart integration', () => {
       { width: 844, height: 390 },
     ]) {
       await page.setViewportSize(viewport);
-      const readiness = page.getByTestId('scanner-readiness-status');
       const chartMarket = page.getByTestId('market-US');
       const timeframe = page.getByTestId('timeframe-15m');
-      const readinessBox = await readiness.boundingBox();
       const chartMarketBox = await expectTouchTarget(chartMarket, `${viewport.width}px 차트 시장 버튼`);
       const timeframeBox = await expectTouchTarget(timeframe, `${viewport.width}px 시간봉 버튼`);
-      expect(readinessBox).not.toBeNull();
-      expect(overlaps(readinessBox!, chartMarketBox)).toBe(false);
-      expect(overlaps(readinessBox!, timeframeBox)).toBe(false);
+      expect(overlaps(chartMarketBox, timeframeBox)).toBe(false);
       await timeframe.tap();
       await expectNoHorizontalOverflow(page);
       await expectVisiblePanelsInsideViewport(page);
