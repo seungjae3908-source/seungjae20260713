@@ -11,11 +11,13 @@ import type { MemberCapability } from '../../../packages/member-access/src/index
 const INFO_PATHS = ['/stock-info', '/learn', '/market-overview', '/portfolio', '/assets', '/ai-chat'];
 const TECH_PATHS = ['/scanner', '/ai-chart', '/auto-trading'];
 
-const TECH_MENU_ITEMS = [
-  { href: '/scanner', label: 'AI 검색기', icon: Search },
-  { href: '/ai-chart', label: 'AI 차트 분석기', icon: CandlestickChart },
-  { href: '/auto-trading', label: '자동매매', icon: Power },
-] as const;
+const TECH_MENU_ITEMS: Array<{
+  href: string; label: string; icon: typeof Search; capability?: MemberCapability;
+}> = [
+  { href: '/scanner', label: 'AI 검색기', icon: Search, capability: 'canAccessSignalScanner' },
+  { href: '/ai-chart', label: 'AI 차트 분석기', icon: CandlestickChart, capability: 'canAccessRiskPreview' },
+  { href: '/auto-trading', label: '자동매매', icon: Power, capability: 'canManageMembers' },
+];
 
 const INFO_MENU_ITEMS: Array<{
   href: string; label: string; icon: typeof Newspaper; capability?: MemberCapability;
@@ -39,7 +41,7 @@ const ITEMS: Array<{
   { href: '/search', label: '종목', icon: TrendingUp, match: (path) => path === '/search' || path.startsWith('/stock/') },
   { href: '/themes', label: '테마', icon: Layers3, match: (path) => path.startsWith('/themes') },
   { href: '/watchlist', label: '관심', icon: Star, match: (path) => path.startsWith('/watchlist') || path.startsWith('/alerts') },
-  { href: '/scanner', label: '기술', icon: Search, popup: true, capability: 'canAccessRiskPreview', match: (path) => TECH_PATHS.some((item) => path.startsWith(item)) },
+  { href: '/scanner', label: '기술', icon: Search, popup: true, capability: 'canAccessSignalScanner', match: (path) => TECH_PATHS.some((item) => path.startsWith(item)) },
   { href: '/stock-info', label: '정보', icon: Newspaper, popup: true, match: (path) => INFO_PATHS.some((item) => path.startsWith(item)) },
   { href: '/more', label: '설정', icon: Settings, match: (path) => path.startsWith('/more') || path.startsWith('/settings') || path.startsWith('/account') || path.startsWith('/login') },
 ];
@@ -55,6 +57,7 @@ export function BottomNav() {
   const [openMenu, setOpenMenu] = useState<'tech' | 'info' | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const visibleItems = ITEMS.filter((item) => !item.capability || auth.can(item.capability));
+  const visibleTechItems = TECH_MENU_ITEMS.filter((item) => !item.capability || auth.can(item.capability));
   const visibleInfoItems = INFO_MENU_ITEMS.filter((item) => !item.capability || auth.can(item.capability));
 
   useEffect(() => { setOpenMenu(null); }, [location]);
@@ -86,7 +89,7 @@ export function BottomNav() {
           if (item.popup) {
             const menuType = item.label === '기술' ? 'tech' : 'info';
             const menuOpen = openMenu === menuType;
-            const menuItems = menuType === 'tech' ? TECH_MENU_ITEMS : visibleInfoItems;
+            const menuItems = menuType === 'tech' ? visibleTechItems : visibleInfoItems;
             return (
               <div key={item.href} ref={menuOpen ? menuRef : undefined} className="relative min-w-0">
                 {menuOpen && (
