@@ -65,6 +65,7 @@ const groups = {
   phase12: [
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
+    path.join(root, 'src/routes/stock-orderbook.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts'),
   ],
@@ -82,8 +83,21 @@ const groups = {
   ],
 };
 
-groups.unit = [...groups.phase2, ...groups.risk, ...groups.phase4, ...groups.phase5, ...groups.phase6, ...groups.phase7, ...groups.phase8, ...groups.phase9, ...groups.phase12];
-const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'smoke'];
+groups.unit = [
+  ...groups.phase2,
+  ...groups.risk,
+  ...groups.phase4,
+  ...groups.phase5,
+  ...groups.phase6,
+  ...groups.phase7,
+  ...groups.phase8,
+  ...groups.phase9,
+  ...groups.phase12,
+];
+const allowedModes = [
+  'all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6',
+  'phase7', 'phase8', 'phase9', 'phase12', 'smoke',
+];
 if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 
 const entries = mode === 'all' ? [...groups.unit, ...groups.smoke] : groups[mode];
@@ -94,8 +108,14 @@ try {
   for (const [index, entryPoint] of entries.entries()) {
     const outputFile = path.join(temporaryDirectory, `application-${index}.test.cjs`);
     await build({
-      entryPoints: [entryPoint], outfile: outputFile, bundle: true, platform: 'node',
-      format: 'cjs', target: 'node20', sourcemap: 'inline', logLevel: 'warning',
+      entryPoints: [entryPoint],
+      outfile: outputFile,
+      bundle: true,
+      platform: 'node',
+      format: 'cjs',
+      target: 'node20',
+      sourcemap: 'inline',
+      logLevel: 'warning',
     });
     outputFiles.push(outputFile);
   }
@@ -107,7 +127,8 @@ try {
     ? ['--test', '--test-concurrency=1', ...outputFiles]
     : ['--test', ...outputFiles];
   const result = spawnSync(process.execPath, testArguments, {
-    cwd: repositoryRoot, stdio: 'inherit',
+    cwd: repositoryRoot,
+    stdio: 'inherit',
   });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;

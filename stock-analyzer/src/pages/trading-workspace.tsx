@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, CheckCircle2, Keyboard, ShieldCheck, Trash2, XCircle } from 'lucide-react';
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Keyboard,
+  ShieldCheck,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 import { useLocation } from 'wouter';
-import { ChartBroadcastPanel, type ChartBroadcastMarket } from '@/components/chart-broadcast';
+import { UnifiedAnalysisChart } from '@/components/unified-analysis-chart';
+import { InstrumentOrderbookDock } from '@/components/instrument-orderbook-dock';
+import {
+  InstrumentOrderbookPanel,
+  type InstrumentOrderbookMarket,
+} from '@/components/instrument-orderbook-panel';
 import {
   selectionFromSearch,
   selectionQuery,
@@ -23,7 +35,7 @@ type PreparedMockOrder = {
   price: number | null;
   ticker: string;
   displayName: string;
-  market: 'KR' | 'US';
+  market: InstrumentOrderbookMarket;
 };
 
 type LocalMockOrder = PreparedMockOrder & {
@@ -73,6 +85,30 @@ function formatNumber(value: number | null) {
   return value === null ? '시장가' : value.toLocaleString('ko-KR');
 }
 
+function useDesktopWorkspace(): boolean {
+  const [desktop, setDesktop] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches,
+  );
+  useEffect(() => {
+    const query = window.matchMedia('(min-width: 1280px)');
+    const update = () => setDesktop(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  return desktop;
+}
+
+function normalizeStockSelection(input: AnalysisSelection): AnalysisSelection {
+  const market = input.market === 'US' ? 'US' : 'KR';
+  return {
+    ...input,
+    assetType: 'stock',
+    market,
+    symbol: input.ticker,
+  };
+}
+
 export default function TradingWorkspacePage() {
   const [location, navigate] = useLocation();
   const selectionState = useAnalysisSelection();
@@ -80,13 +116,14 @@ export default function TradingWorkspacePage() {
     () => selectionFromSearch(location.includes('?') ? location.slice(location.indexOf('?')) : ''),
     [location],
   );
-  const selection = useMemo<AnalysisSelection>(
-    () => fromUrl
+  const selection = useMemo<AnalysisSelection>(() => {
+    const resolved = fromUrl
       ? { ...(selectionState.selection?.ticker === fromUrl.ticker ? selectionState.selection : {}), ...fromUrl }
-      : selectionState.selection ?? fallbackSelection(),
-    [fromUrl, selectionState.selection],
-  );
-  const market: ChartBroadcastMarket = selection.market === 'US' ? 'US' : 'KR';
+      : selectionState.selection ?? fallbackSelection();
+    return normalizeStockSelection(resolved as AnalysisSelection);
+  }, [fromUrl, selectionState.selection]);
+  const market: InstrumentOrderbookMarket = selection.market === 'US' ? 'US' : 'KR';
+  const desktop = useDesktopWorkspace();
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
   const [side, setSide] = useState<MockSide>('buy');
   const [orderType, setOrderType] = useState<MockOrderType>('limit');
@@ -98,11 +135,11 @@ export default function TradingWorkspacePage() {
 
   useEffect(() => {
     if (fromUrl) {
-      selectionState.select({
+      selectionState.select(normalizeStockSelection({
         ...selectionState.selection,
         ...fromUrl,
         selectedAt: selectionState.selection?.selectedAt ?? fromUrl.selectedAt,
-      } as AnalysisSelection);
+      } as AnalysisSelection));
     }
     // URL selection is authoritative only when the URL changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -111,24 +148,11 @@ export default function TradingWorkspacePage() {
   useEffect(() => {
     setPrepared(null);
     setError(null);
-  }, [selection.ticker, selection.market]);
+    setAnalysis(null);
+  }, [selection.market, selection.ticker, selection.timeframe]);
 
-  const updateSelection = useCallback((next: {
-    ticker: string;
-    name: string;
-    market: ChartBroadcastMarket;
-    timeframe: string;
-  }) => {
-    const merged: AnalysisSelection = {
-      ...selection,
-      assetType: 'stock',
-      market: next.market,
-      symbol: next.ticker,
-      ticker: next.ticker,
-      displayName: next.name,
-      timeframe: next.timeframe,
-      selectedAt: selection.ticker === next.ticker ? selection.selectedAt : new Date().toISOString(),
-    };
+  const updateSelection = useCallback((next: AnalysisSelection) => {
+    const merged = normalizeStockSelection(next);
     const changed = selection.ticker !== merged.ticker
       || selection.market !== merged.market
       || selection.timeframe !== merged.timeframe
@@ -217,7 +241,7 @@ export default function TradingWorkspacePage() {
             <ArrowLeft className="h-4 w-4" />
           </button>
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-extrabold text-primary">기술탭 · 안전 복구</p>
+            <p className="text-[11px] font-extrabold text-primary">기술탭 · 승인 전용 연구 화면</p>
             <h1 className="truncate text-lg font-black">AI 매매 워크스페이스</h1>
           </div>
           <div className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-right text-[10px] font-black text-emerald-700 dark:text-emerald-300">
@@ -226,18 +250,12 @@ export default function TradingWorkspacePage() {
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-screen-2xl gap-4 p-4 xl:grid-cols-[minmax(0,2fr)_minmax(340px,1fr)]">
+      <main className="mx-auto grid max-w-screen-2xl gap-4 p-4 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]">
         <section className="min-w-0">
-          <ChartBroadcastPanel
-            market={market}
-            initialSelection={{
-              ticker: selection.ticker,
-              name: selection.displayName,
-              market,
-              timeframe: selection.timeframe,
-            }}
-            onAnalysisChange={setAnalysis}
+          <UnifiedAnalysisChart
+            selection={selection}
             onSelectionChange={updateSelection}
+            onAnalysisChange={setAnalysis}
           />
         </section>
 
@@ -247,16 +265,22 @@ export default function TradingWorkspacePage() {
               <div>
                 <p className="text-[11px] font-extrabold text-primary">선택 종목</p>
                 <h2 className="mt-1 text-lg font-black">{selection.displayName}</h2>
-                <p className="mt-1 text-xs font-bold text-muted-foreground">{selection.ticker} · {market} · {selection.timeframe}</p>
+                <p className="mt-1 text-xs font-bold text-muted-foreground">
+                  {selection.ticker} · {market} · {selection.timeframe}
+                </p>
               </div>
               <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-black text-primary">
                 {analysis?.status ?? '분석 대기'}
               </span>
             </div>
             <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">
-              {analysis?.summary ?? '실제 캔들 분석이 준비되면 이 영역에 상태를 표시합니다. 분석 결과는 주문을 자동 실행하지 않습니다.'}
+              {analysis?.summary ?? '실제 캔들 분석이 준비되면 상태를 표시합니다. 분석 결과와 호가 정보는 주문을 자동 실행하지 않습니다.'}
             </p>
           </section>
+
+          {desktop ? (
+            <InstrumentOrderbookPanel ticker={selection.ticker} market={market} />
+          ) : null}
 
           <form
             onSubmit={submitOrder}
@@ -328,25 +352,28 @@ export default function TradingWorkspacePage() {
               />
             </label>
 
-            {error ? <p role="alert" className="mt-3 rounded-2xl bg-destructive/10 p-3 text-xs font-bold text-destructive">{error}</p> : null}
+            {error ? (
+              <p role="alert" className="mt-3 rounded-2xl bg-destructive/10 p-3 text-xs font-bold text-destructive">{error}</p>
+            ) : null}
 
             {prepared ? (
               <div className="mt-4 rounded-2xl border border-warning/40 bg-warning/5 p-3 text-xs">
-                <div className="flex items-center gap-2 font-black"><CheckCircle2 className="h-4 w-4 text-warning" />2차 확인 대기</div>
+                <div className="flex items-center gap-2 font-black">
+                  <CheckCircle2 className="h-4 w-4 text-warning" />2차 확인 대기
+                </div>
                 <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-muted-foreground">
                   <dt>구분</dt><dd className="text-right font-black text-foreground">{prepared.side === 'buy' ? '매수' : '매도'} · {prepared.orderType === 'limit' ? '지정가' : '시장가'}</dd>
                   <dt>수량</dt><dd className="text-right font-black text-foreground">{prepared.quantity.toLocaleString('ko-KR')}</dd>
                   <dt>가격</dt><dd className="text-right font-black text-foreground">{formatNumber(prepared.price)}</dd>
                   <dt>예상금액</dt><dd className="text-right font-black text-foreground">{estimatedAmount === null ? '-' : estimatedAmount.toLocaleString('ko-KR')}</dd>
                 </dl>
-                <p className="mt-2 font-semibold text-muted-foreground">Enter 또는 아래 버튼을 한 번 더 눌러 이 브라우저 세션에만 기록합니다.</p>
+                <p className="mt-2 font-semibold text-muted-foreground">
+                  Enter 또는 아래 버튼을 한 번 더 눌러 이 브라우저 세션에만 기록합니다.
+                </p>
               </div>
             ) : null}
 
-            <button
-              type="submit"
-              className="mt-4 h-12 w-full rounded-2xl bg-primary text-sm font-black text-primary-foreground shadow-sm"
-            >
+            <button type="submit" className="mt-4 h-12 w-full rounded-2xl bg-primary text-sm font-black text-primary-foreground shadow-sm">
               {prepared ? '모의주문 기록 확정' : '모의주문 검토'}
             </button>
             {prepared ? (
@@ -365,7 +392,9 @@ export default function TradingWorkspacePage() {
               <span className="text-[10px] font-bold text-muted-foreground">최대 50건</span>
             </div>
             {orders.length === 0 ? (
-              <p className="mt-3 rounded-2xl bg-background p-3 text-xs leading-5 text-muted-foreground">아직 기록된 모의주문이 없습니다. 브라우저 탭 세션을 닫으면 별도 영속성을 보장하지 않습니다.</p>
+              <p className="mt-3 rounded-2xl bg-background p-3 text-xs leading-5 text-muted-foreground">
+                아직 기록된 모의주문이 없습니다. 브라우저 탭 세션을 닫으면 별도 영속성을 보장하지 않습니다.
+              </p>
             ) : (
               <div className="mt-3 space-y-2">
                 {orders.map((order) => (
@@ -373,11 +402,13 @@ export default function TradingWorkspacePage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="truncate font-black">{order.displayName} · {order.side === 'buy' ? '매수' : '매도'}</p>
-                        <p className="mt-1 text-[10px] font-semibold text-muted-foreground">{order.ticker} · {order.quantity.toLocaleString('ko-KR')}주 · {formatNumber(order.price)}</p>
+                        <p className="mt-1 text-[10px] font-semibold text-muted-foreground">
+                          {order.ticker} · {order.quantity.toLocaleString('ko-KR')}주 · {formatNumber(order.price)}
+                        </p>
                         <p className="mt-1 text-[10px] text-muted-foreground">{new Date(order.createdAt).toLocaleString('ko-KR')}</p>
                       </div>
                       <span className={`rounded-full px-2 py-1 text-[10px] font-black ${order.status === 'pending' ? 'bg-warning/10 text-warning' : 'bg-muted text-muted-foreground'}`}>
-                        {order.status === 'pending' ? 'pending' : 'cancelled'}
+                        {order.status}
                       </span>
                     </div>
                     {order.status === 'pending' ? (
@@ -405,6 +436,8 @@ export default function TradingWorkspacePage() {
           </section>
         </aside>
       </main>
+
+      {!desktop ? <InstrumentOrderbookDock ticker={selection.ticker} market={market} /> : null}
     </div>
   );
 }
