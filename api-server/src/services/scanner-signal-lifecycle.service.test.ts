@@ -65,6 +65,9 @@ test('READY alert is emitted once and a weakened re-entry starts a new cycle', (
   const now = Date.parse('2026-08-05T01:00:00.000Z');
   const first = applyScannerSignalLifecycle('member-1', [card()], now);
   assert.equal(first.cards[0].signalState, 'DETECTED');
+  assert.equal(first.cards[0].marketClass, 'KR_STOCK');
+  assert.equal(first.cards[0].action, 'BUY');
+  assert.equal(first.cards[0].executionIntent, 'OPEN_OR_ADD');
   assert.equal(first.alerts.length, 0);
 
   const second = applyScannerSignalLifecycle('member-1', [card()], now + 1_000);
@@ -74,6 +77,10 @@ test('READY alert is emitted once and a weakened re-entry starts a new cycle', (
   const third = applyScannerSignalLifecycle('member-1', [card()], now + 2_000);
   assert.equal(third.cards[0].signalState, 'READY_FOR_APPROVAL');
   assert.equal(third.alerts.length, 1);
+  assert.equal(third.alerts[0].action, 'BUY');
+  assert.equal(third.alerts[0].executionIntent, 'OPEN_OR_ADD');
+  assert.equal(third.alerts[0].marketClass, 'KR_STOCK');
+  assert.match(third.alerts[0].performanceKey, /^KR_STOCK\|/);
   assert.equal(third.alerts[0].orderSubmitted, false);
   assert.equal(third.alerts[0].exchangeRequestSent, false);
 
@@ -97,6 +104,67 @@ test('READY alert is emitted once and a weakened re-entry starts a new cycle', (
   assert.equal(reentry3.cards[0].signalState, 'READY_FOR_APPROVAL');
   assert.equal(reentry3.alerts.length, 1);
   assert.notEqual(reentry3.alerts[0].idempotencyKey, third.alerts[0].idempotencyKey);
+});
+
+test('market-specific approval gate blocks a raw US signal below the US threshold', () => {
+  clearScannerSignalLifecycleForTests();
+  const now = Date.parse('2026-08-05T01:00:00.000Z');
+  const weakUsCard = card({
+    signalId: 'signal:us',
+    market: 'US',
+    exchange: 'NASDAQ',
+    symbol: 'AAPL',
+    currency: 'USD',
+    score: 76,
+    confidence: 76,
+    strongSignalEligible: true,
+  });
+  const result = applyScannerSignalLifecycle('member-us', [weakUsCard], now);
+  assert.equal(result.cards[0].marketClass, 'US_STOCK');
+  assert.equal(result.cards[0].marketApprovalEligible, false);
+  assert.equal(result.cards[0].signalState, 'DETECTED');
+  assert.match(result.cards[0].warnings.join(' '), /점수 78 미만/);
+  assert.equal(result.alerts.length, 0);
+});
+
+test('spot SELL alert stays reduce-only through the lifecycle', () => {
+  clearScannerSignalLifecycleForTests();
+  const now = Date.parse('2026-08-05T01:00:00.000Z');
+  const spotSell = card({
+    signalId: 'signal:spot-sell',
+    assetClass: 'coin_spot',
+    market: 'UPBIT_KRW',
+    exchange: 'UPBIT',
+    symbol: 'BTC',
+    name: '비트코인',
+    currency: 'KRW',
+    assetType: 'CRYPTO_SPOT',
+    direction: 'NEUTRAL',
+    changePercent: -3,
+    score: 82,
+    confidence: 80,
+    dataCompleteness: 92,
+    riskScore: 20,
+    liquidity: 50_000_000_000,
+    spreadPercent: 0.08,
+    strongSignalEligible: false,
+    evidence: [
+      { key: 'volume', label: '거래량', status: 'matched', source: 'test', observedAt: null, reasons: ['거래량'] },
+      { key: 'liquidity', label: '유동성', status: 'matched', source: 'test', observedAt: null, reasons: ['유동성'] },
+      { key: 'spread', label: '스프레드', status: 'matched', source: 'test', observedAt: null, reasons: ['스프레드'] },
+      { key: 'risk', label: '위험', status: 'matched', source: 'test', observedAt: null, reasons: ['위험'] },
+    ],
+  });
+  applyScannerSignalLifecycle('member-spot', [spotSell], now);
+  applyScannerSignalLifecycle('member-spot', [spotSell], now + 1_000);
+  const ready = applyScannerSignalLifecycle('member-spot', [spotSell], now + 2_000);
+  assert.equal(ready.cards[0].action, 'SELL');
+  assert.equal(ready.cards[0].executionIntent, 'REDUCE_OR_EXIT');
+  assert.equal(ready.cards[0].signalState, 'READY_FOR_APPROVAL');
+  assert.equal(ready.alerts.length, 1);
+  assert.equal(ready.alerts[0].action, 'SELL');
+  assert.equal(ready.alerts[0].executionIntent, 'REDUCE_OR_EXIT');
+  assert.deepEqual(ready.alerts[0].targets, []);
 });
 
 test('expired signal never produces a READY alert', () => {
