@@ -118,4 +118,25 @@ begin
 end
 $phase7_rls$;
 
+-- Table privileges are owned by the base migration so a rollback/reapply that
+-- recreates the tables does not leave authenticated clients unable to reach
+-- the RLS policies. Anonymous access stays fail-closed.
+grant select, insert, update, delete on table
+  public.paper_accounts,
+  public.paper_orders,
+  public.paper_positions,
+  public.paper_fills,
+  public.paper_journal_entries,
+  public.paper_sync_state
+  to authenticated;
+
+revoke all on table
+  public.paper_accounts,
+  public.paper_orders,
+  public.paper_positions,
+  public.paper_fills,
+  public.paper_journal_entries,
+  public.paper_sync_state
+  from anon;
+
 commit;
