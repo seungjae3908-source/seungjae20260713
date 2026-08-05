@@ -22,8 +22,9 @@ const FIXTURE: TradeAutomationStatus = {
   lastOrder: null,
 };
 
-const READY_AT = '2099-08-04T05:00:00.000Z';
-const EXPIRES_AT = '2099-08-04T05:10:00.000Z';
+const READY_AT = new Date().toISOString();
+const EXPIRES_AT = new Date(Date.now() + 10 * 60_000).toISOString();
+const SOON_EXPIRES_AT = new Date(Date.now() + 4_000).toISOString();
 
 const ALERT_FIXTURE: TradeSignalAlertItem[] = [
   {
@@ -44,8 +45,8 @@ const ALERT_FIXTURE: TradeSignalAlertItem[] = [
   },
 ];
 
-const APPROVAL_FIXTURE: TradeApprovalQueueItem[] = [
-  {
+function readyPlan(overrides: Partial<TradeApprovalQueueItem>): TradeApprovalQueueItem {
+  return {
     id: 'ready-plan',
     exchange: 'upbit',
     accountMode: 'paper',
@@ -81,43 +82,68 @@ const APPROVAL_FIXTURE: TradeApprovalQueueItem[] = [
       lastValidatedAt: READY_AT,
     },
     order: null,
-  },
-  {
-    id: 'invalid-plan',
-    exchange: 'kiwoom',
-    accountMode: 'mock',
-    strategyId: 'scanner-pullback-v1',
-    signalId: 'signal-invalid',
-    symbol: '005930',
-    market: 'KR',
-    side: 'buy',
-    orderType: 'market',
-    estimatedKrw: 500_000,
-    quantity: 7,
-    limitPrice: null,
-    stopPrice: 69_000,
-    targetPrices: [75_000],
-    splitRatios: [40, 30, 30],
-    leverage: null,
-    signalReasons: ['지지선 반등'],
-    signalWarnings: ['지지선 이탈'],
-    signalScore: 59,
-    signalConfidence: 54,
-    signalRiskReward: 0.9,
-    signalState: 'INVALIDATED',
-    signalInvalidationReason: 'SIGNAL_CORE_CONDITION_BROKEN',
-    state: 'EXPIRED',
-    approvalExpiresAt: EXPIRES_AT,
-    updatedAt: READY_AT,
+    ...overrides,
+  };
+}
+
+const APPROVAL_FIXTURE: TradeApprovalQueueItem[] = [
+  readyPlan({}),
+  readyPlan({
+    id: 'soon-plan',
+    signalId: 'signal-soon',
+    symbol: 'ETH',
+    estimatedKrw: 200_000,
+    approvalExpiresAt: SOON_EXPIRES_AT,
     approval: {
-      approvalEnabled: false,
-      signalState: 'INVALIDATED',
-      planState: 'EXPIRED',
-      reasonCode: 'SIGNAL_INVALIDATED',
-      expiresAt: EXPIRES_AT,
+      approvalEnabled: true,
+      signalState: 'READY_FOR_APPROVAL',
+      planState: 'APPROVAL_PENDING',
+      reasonCode: null,
+      expiresAt: SOON_EXPIRES_AT,
       lastValidatedAt: READY_AT,
     },
-    order: null,
+  }),
+  readyPlan({
+    id: 'live-plan',
+    signalId: 'signal-live',
+    symbol: 'BTCUSDT',
+    exchange: 'bitget',
+    market: 'USDT-FUTURES',
+    accountMode: 'live',
+    side: 'long',
+    leverage: 2,
+  }),
+  {
+    ...readyPlan({
+      id: 'invalid-plan',
+      signalId: 'signal-invalid',
+      symbol: '005930',
+      exchange: 'kiwoom',
+      market: 'KR',
+      accountMode: 'mock',
+      estimatedKrw: 500_000,
+      quantity: 7,
+      stopPrice: 69_000,
+      targetPrices: [75_000],
+      splitRatios: [40, 30, 30],
+      signalReasons: ['지지선 반등'],
+      signalWarnings: ['지지선 이탈'],
+      signalScore: 59,
+      signalConfidence: 54,
+      signalRiskReward: 0.9,
+      signalState: 'INVALIDATED',
+      signalInvalidationReason: 'SIGNAL_CORE_CONDITION_BROKEN',
+      state: 'EXPIRED',
+      approvalExpiresAt: EXPIRES_AT,
+      approval: {
+        approvalEnabled: false,
+        signalState: 'INVALIDATED',
+        planState: 'EXPIRED',
+        reasonCode: 'SIGNAL_INVALIDATED',
+        expiresAt: EXPIRES_AT,
+        lastValidatedAt: READY_AT,
+      },
+    }),
   },
 ];
 
