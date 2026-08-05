@@ -7,9 +7,6 @@ import { DEFAULT_TRADING_POLICY, type TradingPlan } from './trade-automation.typ
 import type { Candle } from '../sample/types';
 
 const USER = '11111111-1111-1111-1111-111111111111';
-// Keep the market snapshot fresh relative to the real risk engine clock. A
-// fixed historical instant makes this otherwise-valid fixture fail closed as
-// stale when CI runs later.
 const NOW = new Date();
 
 function candles(base = 70_000, count = 30): Candle[] {
@@ -57,7 +54,7 @@ function scanResult(overrides: Record<string, unknown> = {}) {
     liquidity: 10_000_000_000,
     marketCap: 400_000_000_000_000,
     dataState: 'ok',
-    analyzedAt: NOW.toISOString(),
+    analyzedAt: new Date().toISOString(),
     scoreBreakdown: {},
     ...overrides,
   };
@@ -92,7 +89,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
       tot_sel_req: '10000',
       tot_buy_req: '12500',
     }),
-    now: () => NOW,
+    now: () => new Date(),
     ...overrides,
   } as any;
 }
