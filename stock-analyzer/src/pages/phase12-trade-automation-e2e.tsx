@@ -1,7 +1,10 @@
+import { useState } from 'react';
 import AutoTradingPage from '@/pages/auto-trading';
+import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import type { TradeAutomationStatus } from '@/components/trade-automation-settings';
 import type { TradeApprovalQueueItem } from '@/components/trade-approval-queue';
 import type { TradeSignalAlertItem } from '@/components/trade-signal-alerts';
+import type { AnalysisSelection } from '@/lib/analysis-selection';
 
 const FIXTURE: TradeAutomationStatus = {
   policy: {
@@ -42,6 +45,17 @@ const ALERT_FIXTURE: TradeSignalAlertItem[] = [
     eventState: 'INVALIDATED', currentSignalState: 'INVALIDATED', approvalEnabled: false,
     approvalReasonCode: 'SIGNAL_INVALIDATED', approvalExpiresAt: EXPIRES_AT,
     score: 59, confidence: 54, reasonCode: 'SIGNAL_CORE_CONDITION_BROKEN', createdAt: READY_AT,
+  },
+];
+
+const COMPOSER_SELECTIONS: AnalysisSelection[] = [
+  {
+    assetType: 'stock', market: 'KR', symbol: '005930', ticker: '005930', displayName: '삼성전자',
+    timeframe: '1D', matchedSignals: ['거래량 증가', '지지선 반등'], selectedAt: READY_AT,
+  },
+  {
+    assetType: 'stock', market: 'KR', symbol: '000660', ticker: '000660', displayName: 'SK하이닉스',
+    timeframe: '1D', matchedSignals: ['추세 유지', '거래대금 증가'], selectedAt: READY_AT,
   },
 ];
 
@@ -147,6 +161,30 @@ const APPROVAL_FIXTURE: TradeApprovalQueueItem[] = [
   },
 ];
 
+function ComposerRaceFixture() {
+  const [selectionIndex, setSelectionIndex] = useState(0);
+  return (
+    <main className="h-full overflow-y-auto p-4">
+      <button
+        type="button"
+        onClick={() => setSelectionIndex((current) => (current + 1) % COMPOSER_SELECTIONS.length)}
+        className="mb-3 min-h-11 rounded-xl border border-card-border bg-card px-4 text-sm font-extrabold"
+      >
+        다음 종목 선택
+      </button>
+      <ScannerApprovalComposer selection={COMPOSER_SELECTIONS[selectionIndex]} />
+    </main>
+  );
+}
+
 export default function Phase12TradeAutomationE2EPage() {
-  return <AutoTradingPage fixture={FIXTURE} approvalFixture={APPROVAL_FIXTURE} alertFixture={ALERT_FIXTURE} />;
+  const fixtureMode = new URLSearchParams(window.location.search).get('fixture');
+  if (fixtureMode === 'composer-race') return <ComposerRaceFixture />;
+  return (
+    <AutoTradingPage
+      fixture={FIXTURE}
+      approvalFixture={APPROVAL_FIXTURE}
+      alertFixture={fixtureMode === 'network-alerts' ? undefined : ALERT_FIXTURE}
+    />
+  );
 }
