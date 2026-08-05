@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 from agent_hub_command_integrity_v2 import CommandIntegrityError, seal_command_body, verify_command_body
 from agent_hub_coordinator_hardening_v2 import requires_independent_verification
@@ -16,8 +15,10 @@ from agent_hub_github_validation_v2 import (
     validate_draft_pr_reuse,
 )
 from agent_hub_legacy_migration_v2 import build_migration_comment, issue_body_edit_does_not_trigger, schema_v1_accepted_count
+from agent_hub_prompt_compiler_hardening_v2 import compile_prompt as compile_hardened_prompt
 from agent_hub_prompt_compiler_v2 import PROFILE_NAMES
 from agent_hub_security_v2 import SensitiveDataError, safe_blocked_comment, sanitize_report_for_model_strict
+from agent_hub_state_v2 import format_state_snapshot
 
 
 def expect_block(fn) -> None:
@@ -30,14 +31,14 @@ def expect_block(fn) -> None:
 
 class FakeGitHub:
     repository = "owner/repo"
-    def __init__(self, *, pr_state="open", conclusion="success", run_sha="b"*40, statuses: dict[str,str] | None=None, base_sha="a"*40, head_repo="owner/repo"):
-        self.pr_state=pr_state; self.conclusion=conclusion; self.run_sha=run_sha; self.statuses=statuses or {c:"success" for c in REQUIRED_STATUS_CONTEXTS}; self.base_sha=base_sha; self.head_repo=head_repo
+    def __init__(self, *, pr_state="open", conclusion="success", run_sha="b"*40, statuses: dict[str,str] | None=None, base_sha="a"*40, pr_base_sha="a"*40, head_repo="owner/repo"):
+        self.pr_state=pr_state; self.conclusion=conclusion; self.run_sha=run_sha; self.statuses=statuses or {c:"success" for c in REQUIRED_STATUS_CONTEXTS}; self.base_sha=base_sha; self.pr_base_sha=pr_base_sha; self.head_repo=head_repo
     def workflow_run(self, run_id: int):
         return {"status":"completed","conclusion":self.conclusion,"head_sha":self.run_sha,"repository":{"full_name":self.repository}}
     def branch_sha(self, branch: str): return self.base_sha
     def request(self, method: str, path: str, payload=None):
         if "/pulls/" in path:
-            return {"number":9,"state":self.pr_state,"draft":True,"body":"agent_hub_command_id: hub-9\nagent_hub_worker: integration-planner\nagent_hub_expected_head_sha: "+"b"*40+"\nagent_hub_work_branch: agent/hub-9","user":{"login":"github-actions[bot]"},"base":{"ref":"feature/base","sha":"c"*40,"repo":{"full_name":self.repository}},"head":{"ref":"feature/demo","sha":"b"*40,"repo":{"full_name":self.head_repo}}}
+            return {"number":9,"state":self.pr_state,"draft":True,"body":"agent_hub_command_id: hub-9\nagent_hub_worker: integration-planner\nagent_hub_expected_head_sha: "+"b"*40+"\nagent_hub_work_branch: agent/hub-9","user":{"login":"github-actions[bot]"},"base":{"ref":"feature/base","sha":self.pr_base_sha,"repo":{"full_name":self.repository}},"head":{"ref":"feature/demo","sha":"b"*40,"repo":{"full_name":self.head_repo}}}
         return {"statuses":[{"context":context,"state":state} for context,state in self.statuses.items()]}
 
 
@@ -54,11 +55,29 @@ def test_medium_policy() -> int:
     return len(PROFILE_NAMES) + 3
 
 
+def test_prompt_delta_only() -> int:
+    fields = {
+        "task_id":"delta-only", "worker":"integration-planner", "repository":"owner/repo",
+        "base_sha":"a"*40, "branch":"feature/demo", "head_sha":"b"*40,
+        "pr_number":"9", "changed_files":["docs/a.md"], "checks":"success",
+        "ci_run_id":"42", "status":"partial", "summary":"partial", "remaining":"inspect",
+    }
+    first = compile_hardened_prompt(fields=fields, sanitized_report="success", allowed_action_types=("analyze_conflicts",), registered_workers=("integration-planner",), policy_version="v4")
+    comments = [{"body": format_state_snapshot(first.current_state)}]
+    changed = compile_hardened_prompt(fields={**fields,"head_sha":"c"*40,"status":"completed"}, sanitized_report="success", allowed_action_types=("analyze_conflicts",), registered_workers=("integration-planner",), policy_version="v4", comments=comments)
+    assert set(changed.state_delta) == {"head_sha","status"}
+    assert changed.previous_state == first.current_state
+    assert changed.current_state.head_sha == "c"*40
+    assert '"state_delta"' in changed.prompt
+    assert '"previous_state"' not in changed.prompt and '"current_state"' not in changed.prompt
+    return 5
+
+
 def test_github_evidence() -> int:
     validate_completed_report(Report(), FakeGitHub())
     failures = [
         FakeGitHub(pr_state="closed"), FakeGitHub(conclusion="neutral"), FakeGitHub(conclusion="skipped"),
-        FakeGitHub(run_sha="d"*40), FakeGitHub(base_sha="d"*40), FakeGitHub(head_repo="foreign/repo"),
+        FakeGitHub(run_sha="d"*40), FakeGitHub(base_sha="d"*40), FakeGitHub(pr_base_sha="d"*40), FakeGitHub(head_repo="foreign/repo"),
         FakeGitHub(statuses={**{c:"success" for c in REQUIRED_STATUS_CONTEXTS}, REQUIRED_STATUS_CONTEXTS[0]:"pending"}),
     ]
     for client in failures: expect_block(lambda client=client: validate_completed_report(Report(), client))
@@ -70,7 +89,7 @@ def test_github_evidence() -> int:
     validate_draft_pr_reuse(payload,repository="owner/repo",repository_owner="owner",work_branch="agent/hub-9",target_branch="feature/base",command_id="hub-9",worker="integration-planner",expected_head_sha="b"*40)
     payload["body"]="wrong worker"
     expect_block(lambda: validate_draft_pr_reuse(payload,repository="owner/repo",repository_owner="owner",work_branch="agent/hub-9",target_branch="feature/base",command_id="hub-9",worker="integration-planner",expected_head_sha="b"*40))
-    return 11
+    return 12
 
 
 def test_security_and_paths() -> int:
@@ -118,8 +137,8 @@ def test_workflow_contracts() -> int:
 
 
 def run() -> int:
-    count=sum(test() for test in (test_medium_policy,test_github_evidence,test_security_and_paths,test_comment_and_legacy,test_workflow_contracts))
-    print(json.dumps({"agent_hub_hardening_v2":"pass","tests":count,"profiles":len(PROFILE_NAMES),"required_statuses":len(REQUIRED_STATUS_CONTEXTS),"schema_v1_accepted":0,"paid_fallback":0}))
+    count=sum(test() for test in (test_medium_policy,test_prompt_delta_only,test_github_evidence,test_security_and_paths,test_comment_and_legacy,test_workflow_contracts))
+    print(json.dumps({"agent_hub_hardening_v2":"pass","tests":count,"profiles":len(PROFILE_NAMES),"required_statuses":len(REQUIRED_STATUS_CONTEXTS),"delta_only_prompt":True,"schema_v1_accepted":0,"paid_fallback":0}))
     return 0
 
 if __name__ == "__main__": raise SystemExit(run())

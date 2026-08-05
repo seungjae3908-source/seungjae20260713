@@ -168,9 +168,10 @@ def validate_completed_report(report: Any, github: GitHubLike) -> PullRequestEvi
         raise GitHubEvidenceError("pull request base branch mismatch")
     if evidence.head_branch != expected_branch or evidence.head_sha != report_sha:
         raise GitHubEvidenceError("pull request head mismatch")
-    current_base_sha = github.branch_sha(expected_base)
-    if reported_base_sha not in {evidence.base_sha, current_base_sha}:
-        raise GitHubEvidenceError("reported base SHA is stale or unrelated")
+    if reported_base_sha != evidence.base_sha:
+        raise GitHubEvidenceError("reported base SHA does not match pull request base SHA")
+    if github.branch_sha(expected_base) != evidence.base_sha:
+        raise GitHubEvidenceError("pull request base SHA is stale")
     validate_required_statuses(github, report_sha)
     return evidence
 
@@ -207,23 +208,25 @@ def validate_draft_pr_reuse(
 def self_test() -> int:
     class Fake:
         repository = "owner/repo"
-        def __init__(self, *, conclusion: str = "success", run_sha: str = "b" * 40, state: str = "open"):
+        def __init__(self, *, conclusion: str = "success", run_sha: str = "b" * 40, state: str = "open", base_sha: str = "a" * 40, pr_base_sha: str = "a" * 40):
             self.conclusion = conclusion
             self.run_sha = run_sha
             self.state = state
+            self.base_sha = base_sha
+            self.pr_base_sha = pr_base_sha
         def workflow_run(self, run_id: int) -> dict[str, Any]:
             return {"status": "completed", "conclusion": self.conclusion, "head_sha": self.run_sha, "repository": {"full_name": self.repository}}
         def branch_sha(self, branch: str) -> str:
-            return "a" * 40
+            return self.base_sha
         def request(self, method: str, path: str, payload=None):
             if "/pulls/" in path:
-                return {"number": 7, "state": self.state, "draft": True, "body": "agent_hub_command_id: hub-1\nagent_hub_worker: integration-planner\nagent_hub_expected_head_sha: " + "b"*40 + "\nagent_hub_work_branch: agent/hub-1", "user": {"login": "github-actions[bot]"}, "base": {"ref": "main", "sha": "c"*40, "repo": {"full_name": self.repository}}, "head": {"ref": "feature/demo", "sha": "b"*40, "repo": {"full_name": self.repository}}}
+                return {"number": 7, "state": self.state, "draft": True, "body": "agent_hub_command_id: hub-1\nagent_hub_worker: integration-planner\nagent_hub_expected_head_sha: " + "b"*40 + "\nagent_hub_work_branch: agent/hub-1", "user": {"login": "github-actions[bot]"}, "base": {"ref": "main", "sha": self.pr_base_sha, "repo": {"full_name": self.repository}}, "head": {"ref": "feature/demo", "sha": "b"*40, "repo": {"full_name": self.repository}}}
             return {"statuses": [{"context": context, "state": "success"} for context in REQUIRED_STATUS_CONTEXTS]}
     class Report:
         status = "completed"; head_sha = "b" * 40; author = "github-actions[bot]"
         fields = {"ci_run_id":"42","pr_number":"7","changed_files":"[\"docs/x.md\"]","repository":"owner/repo","base_branch":"main","base_sha":"a"*40,"branch":"feature/demo"}
     assert validate_completed_report(Report(), Fake()) is not None
-    for bad in (Fake(conclusion="neutral"), Fake(conclusion="skipped"), Fake(run_sha="d"*40), Fake(state="closed")):
+    for bad in (Fake(conclusion="neutral"), Fake(conclusion="skipped"), Fake(run_sha="d"*40), Fake(state="closed"), Fake(base_sha="d"*40), Fake(pr_base_sha="d"*40)):
         try:
             validate_completed_report(Report(), bad)
         except GitHubEvidenceError:
@@ -233,7 +236,7 @@ def self_test() -> int:
     payload = Fake().request("GET", "/pulls/7")
     payload["head"]["ref"] = "agent/hub-1"
     validate_draft_pr_reuse(payload, repository="owner/repo", repository_owner="owner", work_branch="agent/hub-1", target_branch="main", command_id="hub-1", worker="integration-planner", expected_head_sha="b"*40)
-    print(json.dumps({"github_evidence_v2":"pass","required_statuses":len(REQUIRED_STATUS_CONTEXTS),"neutral_accepted":0,"skipped_accepted":0}))
+    print(json.dumps({"github_evidence_v2":"pass","required_statuses":len(REQUIRED_STATUS_CONTEXTS),"neutral_accepted":0,"skipped_accepted":0,"base_sha_mismatch_accepted":0}))
     return 0
 
 
