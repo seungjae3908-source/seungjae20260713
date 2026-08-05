@@ -18,11 +18,32 @@ const cashStrategies: CashBacktestStrategy[] = ['trend_pullback', 'breakout', 'v
 const futuresStrategies: BacktestStrategyType[] = ['trend_pullback', 'breakout', 'vwap_reclaim'];
 const futuresSides: BacktestSide[] = ['long', 'short', 'both'];
 
+const AUTOMATION_GATE = Object.freeze({
+  minimumTrades: 50,
+  minimumExpectancyR: 0.1,
+  minimumProfitFactor: 1.2,
+  maximumDrawdownPercent: 15,
+});
+
 type Row = Record<string, unknown>;
 const rows: Row[] = [];
 
 function average(values: number[]) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+function automationAssessment(input: {
+  totalTrades: number;
+  expectancyR: number;
+  profitFactor: number | null;
+  maximumDrawdownPercent: number;
+}) {
+  const reasons: string[] = [];
+  if (input.totalTrades < AUTOMATION_GATE.minimumTrades) reasons.push('INSUFFICIENT_TRADES');
+  if (input.expectancyR < AUTOMATION_GATE.minimumExpectancyR) reasons.push('EXPECTANCY_BELOW_MINIMUM');
+  if (input.profitFactor == null || input.profitFactor < AUTOMATION_GATE.minimumProfitFactor) reasons.push('PROFIT_FACTOR_BELOW_MINIMUM');
+  if (input.maximumDrawdownPercent > AUTOMATION_GATE.maximumDrawdownPercent) reasons.push('DRAWDOWN_ABOVE_MAXIMUM');
+  return { automationEligible: reasons.length === 0, automationBlockReasons: reasons };
 }
 
 function cashSummary(input: { market: 'kr-stock' | 'us-stock' | 'crypto-spot'; symbol: string; provider: string; strategy: CashBacktestStrategy; result: ReturnType<typeof runCashBacktest>; profile: string }): Row {
@@ -33,11 +54,13 @@ function cashSummary(input: { market: 'kr-stock' | 'us-stock' | 'crypto-spot'; s
     totalTrades: result.totalTrades, winRate: result.winRate, averageWinR: result.averageWinR,
     averageLossR: result.averageLossR, expectancyR: result.expectancy, profitFactor: result.profitFactor,
     totalReturnPercent: result.totalReturnPercent, maximumDrawdownPercent: result.maximumDrawdownPercent,
-    totalFees: result.totalFees, totalSlippage: result.totalSlippage, warnings: result.warnings,
+    totalFees: result.totalFees, totalSlippage: result.totalSlippage,
+    ...automationAssessment({ totalTrades: result.totalTrades, expectancyR: result.expectancy, profitFactor: result.profitFactor, maximumDrawdownPercent: result.maximumDrawdownPercent }),
+    warnings: result.warnings,
   };
 }
 
-function cashParameters(market: 'kr-stock' | 'us-stock' | 'crypto-spot', strategy: CashBacktestStrategy) {
+function cashParameters(market: 'kr-stock' | 'us-stock' | 'crypto-spot', strategy: CashBacktestStrategy): Record<string, number> {
   if (market === 'crypto-spot') {
     if (strategy === 'trend_pullback') {
       return { fastPeriod: 20, slowPeriod: 100, pullbackTolerancePercent: 0.25, volumePeriod: 30, volumeMultiplier: 1.5 };
@@ -86,8 +109,18 @@ async function runCashInstrument(input: { market: 'kr-stock' | 'us-stock' | 'cry
       }));
     }
   } catch (error) {
-    rows.push({ market: input.market, symbol: input.symbol, action: 'BUY_SELL', timeframe, error: error instanceof Error ? error.message : String(error) });
+    rows.push({ market: input.market, symbol: input.symbol, action: 'BUY_SELL', timeframe, automationEligible: false, automationBlockReasons: ['BACKTEST_ERROR'], error: error instanceof Error ? error.message : String(error) });
   }
+}
+
+function futuresParameters(strategy: BacktestStrategyType): Record<string, number | boolean> {
+  if (strategy === 'trend_pullback') {
+    return { fastPeriod: 20, slowPeriod: 50, pullbackTolerancePercent: 0.5, volumePeriod: 20, volumeMultiplier: 1 };
+  }
+  if (strategy === 'breakout') {
+    return { lookback: 20, volumePeriod: 20, volumeMultiplier: 1.2 };
+  }
+  return { volumePeriod: 20, volumeMultiplier: 1.1 };
 }
 
 async function runFuturesInstrument(symbol: string) {
@@ -100,12 +133,7 @@ async function runFuturesInstrument(symbol: string) {
       for (const side of futuresSides) {
         const result = runBacktest({
           market: 'crypto-futures', symbol, timeframe, startTime, endTime, initialCapital: 10_000,
-          strategy, side,
-          parameters: strategy === 'trend_pullback'
-            ? { fastPeriod: 20, slowPeriod: 50, pullbackTolerancePercent: 0.5, volumePeriod: 20, volumeMultiplier: 1 }
-            : strategy === 'breakout'
-              ? { lookback: 20, volumePeriod: 20, volumeMultiplier: 1.2 }
-              : { volumePeriod: 20, volumeMultiplier: 1.1 },
+          strategy, side, parameters: futuresParameters(strategy),
           riskPercent: 0.1, leverage: 1, entryFeeRate: 0.0006, exitFeeRate: 0.0006, slippageRate: 0.0005,
           fundingRatePerInterval: 0, fundingIntervalHours: 8, stopLossMode: 'percent', stopLossValue: 1,
           takeProfitMode: 'risk_multiple', takeProfitValue: 1.5, trailingStop: { enabled: false },
@@ -123,12 +151,13 @@ async function runFuturesInstrument(symbol: string) {
           averageLossR: average(losingR), expectancyR: result.averageRMultiple, profitFactor: result.profitFactor,
           totalReturnPercent: result.totalReturnPercent, maximumDrawdownPercent: result.maximumDrawdownPercent,
           totalFees: result.totalFees, totalSlippage: result.totalSlippage, totalFunding: result.totalFunding,
+          ...automationAssessment({ totalTrades: result.totalTrades, expectancyR: result.averageRMultiple, profitFactor: result.profitFactor, maximumDrawdownPercent: result.maximumDrawdownPercent }),
           warnings: [...history.warnings, ...rules.warnings, ...result.warnings],
         });
       }
     }
   } catch (error) {
-    rows.push({ market: 'crypto-futures', symbol, action: 'LONG_SHORT', timeframe, error: error instanceof Error ? error.message : String(error) });
+    rows.push({ market: 'crypto-futures', symbol, action: 'LONG_SHORT', timeframe, automationEligible: false, automationBlockReasons: ['BACKTEST_ERROR'], error: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -141,7 +170,7 @@ await runFuturesInstrument('ETHUSDT');
 
 const payload = {
   ok: rows.some((row) => !('error' in row)), mode: 'backtest-only', orderSubmitted: false,
-  generatedAt: new Date().toISOString(), period: { startTime, endTime, days, timeframe }, rows,
+  generatedAt: new Date().toISOString(), period: { startTime, endTime, days, timeframe }, automationGate: AUTOMATION_GATE, rows,
 };
 await mkdir(path.dirname(outputPath), { recursive: true });
 await writeFile(outputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
