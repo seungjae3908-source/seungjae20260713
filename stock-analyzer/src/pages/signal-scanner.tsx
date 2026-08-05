@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useAssetMode } from '@/lib/asset-mode';
 import {
+  selectionQuery,
+  useAnalysisSelection,
+  type AnalysisSelection,
+} from '@/lib/analysis-selection';
+import {
   fetchSignalScanner,
   signalScannerDetailPath,
   SignalScannerRequestError,
@@ -114,6 +119,7 @@ function alertTitle(alert: ScannerAlertCandidate): string {
 export default function SignalScannerPage({ embedded = false }: { embedded?: boolean }) {
   const [, navigate] = useLocation();
   const assetMode = useAssetMode();
+  const analysisSelection = useAnalysisSelection();
   const initialView: ScannerView = assetMode.asset === 'coin'
     ? assetMode.coinMarket === 'futures' ? 'FUTURES' : 'SPOT'
     : assetMode.stockMarket;
@@ -245,6 +251,33 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     if (!('Notification' in window)) return;
     await Notification.requestPermission();
     setRefreshToken((value) => value + 1);
+  };
+
+  const openInAiChart = (card: ScannerSignalCard) => {
+    if (card.assetClass !== 'stock') {
+      navigate(signalScannerDetailPath(card));
+      return;
+    }
+    const selection: AnalysisSelection = {
+      assetType: 'stock',
+      market: card.market === 'US' ? 'US' : 'KR',
+      symbol: card.symbol,
+      ticker: card.symbol,
+      displayName: card.name,
+      timeframe: data?.timeframe ?? timeframe,
+      searchRunId: data?.requestId,
+      signalScore: card.score,
+      confidence: card.confidence,
+      riskLevel: card.riskLevel,
+      matchedSignals: card.matched,
+      reasons: card.evidence
+        .filter((item) => item.status === 'matched')
+        .flatMap((item) => item.reasons)
+        .slice(0, 20),
+      selectedAt: new Date().toISOString(),
+    };
+    analysisSelection.select(selection);
+    if (!embedded) navigate(`/ai-chart?${selectionQuery(selection)}`);
   };
 
   const timeframes = stockView ? STOCK_TIMEFRAMES : COIN_TIMEFRAMES;
@@ -545,6 +578,15 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                     <p className="mt-3 text-[10px] text-muted-foreground">
                       출처 {card.dataSources.join(', ') || '미확인'} · 관측 {new Date(card.observedAt).toLocaleString('ko-KR')}
                     </p>
+                    {card.assetClass === 'stock' && (
+                      <button
+                        type="button"
+                        onClick={() => openInAiChart(card)}
+                        className="mt-3 min-h-11 w-full rounded-xl border border-primary/30 bg-primary/10 px-3 text-sm font-black text-primary"
+                      >
+                        AI 차트 분석기에서 보기
+                      </button>
+                    )}
                   </article>
                 ))}
               </section>
