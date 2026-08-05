@@ -1,4 +1,5 @@
 import {
+  getAutoTradeSignal as getLegacyAutoTradeSignal,
   loadAutoTradeSettings as loadLegacyAutoTradeSettings,
   saveAutoTradeSettings as saveLegacyAutoTradeSettings,
   type AutoTradeCandidate,
@@ -29,7 +30,9 @@ export function saveAutoTradeSettings(settings: AutoTradeSettings): AutoTradeSet
   return saveLegacyAutoTradeSettings(disabledSettings(settings));
 }
 
-export function getAutoTradeSignal(_ticker: string) {
+export function getAutoTradeSignal(
+  _ticker: string,
+): ReturnType<typeof getLegacyAutoTradeSignal> {
   return null;
 }
 
