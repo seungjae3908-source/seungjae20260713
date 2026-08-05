@@ -123,20 +123,28 @@ export class InMemoryTradingRepository implements TradingRepository {
   async insertPlan(plan: TradingPlan) {
     const existing = [...this.plans.values()].find((item) => item.userId === plan.userId
       && item.idempotencyKey === plan.idempotencyKey);
-    if (existing) return { plan: copy(existing), inserted: false };
-    const stored = { ...copy(plan), version: planVersion(plan) };
-    this.plans.set(stored.id, stored);
-    return { plan: copy(stored), inserted: true };
+    if (existing) return { plan: existing, inserted: false };
+    Object.assign(plan, { ...copy(plan), version: planVersion(plan) });
+    this.plans.set(plan.id, plan);
+    return { plan, inserted: true };
   }
   async compareAndSetPlan(plan: TradingPlan, expectedState: TradingOrderState, expectedVersion: number) {
     const current = this.plans.get(plan.id);
     if (!current || current.userId !== plan.userId || current.state !== expectedState
       || planVersion(current) !== expectedVersion) return null;
-    const stored = { ...copy(plan), version: expectedVersion + 1 };
-    this.plans.set(stored.id, stored);
-    return copy(stored);
+    Object.assign(current, { ...copy(plan), version: expectedVersion + 1 });
+    return current;
   }
-  async savePlan(plan: TradingPlan) { this.plans.set(plan.id, { ...copy(plan), version: planVersion(plan) }); }
+  async savePlan(plan: TradingPlan) {
+    const current = this.plans.get(plan.id);
+    const normalized = { ...copy(plan), version: planVersion(plan) };
+    if (current) {
+      Object.assign(current, normalized);
+      return;
+    }
+    Object.assign(plan, normalized);
+    this.plans.set(plan.id, plan);
+  }
   async getOrder(userId: string, id: string) {
     const value = this.orders.get(id);
     return value?.userId === userId ? normalizedOrder(value) : null;
@@ -151,11 +159,11 @@ export class InMemoryTradingRepository implements TradingRepository {
     const existing = [...this.orders.values()].find((item) => item.userId === order.userId
       && (item.planId === order.planId
         || (item.exchange === order.exchange && item.clientOrderId === order.clientOrderId)));
-    if (existing) return { order: normalizedOrder(existing), inserted: false };
-    const stored = normalizedOrder(order);
-    this.orders.set(stored.id, stored);
+    if (existing) return { order: existing, inserted: false };
+    Object.assign(order, normalizedOrder(order));
+    this.orders.set(order.id, order);
     this.events.push(copy(event));
-    return { order: normalizedOrder(stored), inserted: true };
+    return { order, inserted: true };
   }
   async transitionOrderAtomic(
     order: TradingOrder,
@@ -168,11 +176,10 @@ export class InMemoryTradingRepository implements TradingRepository {
       || orderVersion(current) !== expectedVersion) {
       return { order: current ? normalizedOrder(current) : normalizedOrder(order), applied: false };
     }
-    const stored = normalizedOrder({ ...copy(order), version: expectedVersion + 1 });
-    this.orders.set(stored.id, stored);
+    Object.assign(current, normalizedOrder({ ...copy(order), version: expectedVersion + 1 }));
     this.events.push(copy(event));
-    this.executionClaims.delete(stored.id);
-    return { order: normalizedOrder(stored), applied: true };
+    this.executionClaims.delete(current.id);
+    return { order: current, applied: true };
   }
   async claimOrderExecution(order: TradingOrder, expectedVersion: number, claimId: string) {
     const current = this.orders.get(order.id);
@@ -181,12 +188,20 @@ export class InMemoryTradingRepository implements TradingRepository {
     const previous = this.executionClaims.get(order.id);
     if (previous && Date.now() - previous.claimedAt < 30_000) return null;
     this.executionClaims.set(order.id, { id: claimId, claimedAt: Date.now() });
-    const stored = normalizedOrder({ ...current, version: expectedVersion + 1, executionClaimId: claimId,
-      updatedAt: new Date().toISOString() });
-    this.orders.set(stored.id, stored);
-    return normalizedOrder(stored);
+    Object.assign(current, normalizedOrder({ ...current, version: expectedVersion + 1, executionClaimId: claimId,
+      updatedAt: new Date().toISOString() }));
+    return current;
   }
-  async saveOrder(order: TradingOrder) { this.orders.set(order.id, normalizedOrder(order)); }
+  async saveOrder(order: TradingOrder) {
+    const current = this.orders.get(order.id);
+    const normalized = normalizedOrder(order);
+    if (current) {
+      Object.assign(current, normalized);
+      return;
+    }
+    Object.assign(order, normalized);
+    this.orders.set(order.id, order);
+  }
   async listOrders(userId: string) {
     return [...this.orders.values()].filter((item) => item.userId === userId)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).map(normalizedOrder);
