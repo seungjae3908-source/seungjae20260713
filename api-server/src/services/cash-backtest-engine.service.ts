@@ -324,6 +324,7 @@ export function validateCashBacktestRequest(request: CashBacktestRequest) {
   const maximumEntryRsi = numberParam(request, 'maximumEntryRsi', 100);
   if (minimumEntryRsi < 0 || maximumEntryRsi > 100 || minimumEntryRsi > maximumEntryRsi) throw new BacktestMarketContractError('INVALID_RSI_RANGE', '진입 RSI 범위가 올바르지 않습니다.');
   if (numberParam(request, 'stopAtrMultiplier', 0) < 0) throw new BacktestMarketContractError('INVALID_ATR_STOP', 'ATR 손절 배수는 0 이상이어야 합니다.');
+  if (numberParam(request, 'minimumStopToCostRatio', 0) < 0) throw new BacktestMarketContractError('INVALID_STOP_COST_RATIO', '손절폭 대비 비용 비율은 0 이상이어야 합니다.');
 }
 
 export function runCashBacktest(request: CashBacktestRequest, inputCandles: readonly CashBacktestCandle[]): CashBacktestResult {
@@ -337,6 +338,7 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
   const entryOnNextOpen = numberParam(request, 'entryOnNextOpen', 0) >= 1;
   const executionAtrPeriod = Math.max(2, Math.trunc(numberParam(request, 'executionAtrPeriod', 14)));
   const stopAtrMultiplier = Math.max(0, numberParam(request, 'stopAtrMultiplier', 0));
+  const minimumStopToCostRatio = Math.max(0, numberParam(request, 'minimumStopToCostRatio', 0));
   const executionAtr = atr(candles, executionAtrPeriod);
   const trades: CashBacktestTrade[] = [];
   let cash = request.initialCapital;
@@ -369,9 +371,18 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
     const atrValue = executionAtr[index];
     const percentStopDistance = entryPrice * (request.stopLossPercent / 100);
     const stopDistance = stopAtrMultiplier > 0 && atrValue != null && atrValue > 0 ? atrValue * stopAtrMultiplier : percentStopDistance;
-    const riskAmount = cash * (request.riskPercent / 100);
+    const rawStopPrice = entryPrice - stopDistance;
+    if (!(rawStopPrice > 0)) return;
+    const conservativeExitPrice = rawStopPrice * (1 - request.slippageRate);
+    const entryFeePerUnit = entryPrice * request.entryFeeRate;
+    const exitFeePerUnit = conservativeExitPrice * request.exitFeeRate;
+    const executionCostPerUnit = rawStopPrice * request.slippageRate + entryFeePerUnit + exitFeePerUnit;
+    if (minimumStopToCostRatio > 0 && executionCostPerUnit > 0 && stopDistance / executionCostPerUnit < minimumStopToCostRatio) return;
+    const totalLossPerUnit = entryPrice - conservativeExitPrice + entryFeePerUnit + exitFeePerUnit;
+    if (!(totalLossPerUnit > 0) || !finite(totalLossPerUnit)) return;
+    const maximumRiskAmount = cash * (request.riskPercent / 100);
     const affordableQuantity = cash / (entryPrice * (1 + request.entryFeeRate));
-    const riskQuantity = riskAmount / stopDistance;
+    const riskQuantity = maximumRiskAmount / totalLossPerUnit;
     const quantity = Math.min(affordableQuantity, riskQuantity);
     if (!(quantity > 0) || !finite(quantity)) return;
     const entryFee = quantity * entryPrice * request.entryFeeRate;
@@ -379,7 +390,8 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
     cash -= cost;
     totalFees += entryFee;
     totalSlippage += quantity * rawEntryPrice * request.slippageRate;
-    position = { entryTime: candles[index].timestamp, entryPrice, quantity, entryFee, riskAmount, stop: entryPrice - stopDistance, target: entryPrice + stopDistance * request.takeProfitR };
+    const initialRiskAmount = quantity * totalLossPerUnit;
+    position = { entryTime: candles[index].timestamp, entryPrice, quantity, entryFee, riskAmount: initialRiskAmount, stop: rawStopPrice, target: entryPrice + stopDistance * request.takeProfitR };
     tradesToday += 1;
   };
 
@@ -388,8 +400,8 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
     const day = new Date(candle.timestamp).toISOString().slice(0, 10);
     if (day !== currentDay) { currentDay = day; tradesToday = 0; }
 
-    if (!position && pendingEntry && tradesToday < request.maximumTradesPerDay) {
-      openPosition(index, candle.open);
+    if (!position && pendingEntry) {
+      if (tradesToday < request.maximumTradesPerDay) openPosition(index, candle.open);
       pendingEntry = false;
     }
 
@@ -424,6 +436,8 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
   if (!strategyExitEnabled) warnings.push('조기 전략청산을 끄고 손절·목표가·데이터 종료만으로 청산했습니다.');
   if (entryOnNextOpen) warnings.push('신호가 확정된 다음 완료 봉의 시가에 진입했습니다.');
   if (stopAtrMultiplier > 0) warnings.push(`ATR(${executionAtrPeriod}) × ${stopAtrMultiplier} 손절폭을 적용했습니다.`);
+  warnings.push('수수료와 슬리피지를 포함한 총 손절 비용으로 수량과 R을 계산했습니다.');
+  if (minimumStopToCostRatio > 0) warnings.push(`손절폭이 예상 체결 비용의 ${minimumStopToCostRatio}배 미만인 진입은 제외했습니다.`);
   if (!trades.length) warnings.push('조건을 충족한 매매가 없어 성과를 계산할 거래가 없습니다.');
   return {
     ok: true,
