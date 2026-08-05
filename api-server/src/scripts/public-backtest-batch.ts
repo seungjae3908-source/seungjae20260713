@@ -60,16 +60,27 @@ function cashSummary(input: { market: 'kr-stock' | 'us-stock' | 'crypto-spot'; s
   };
 }
 
-function cashParameters(market: 'kr-stock' | 'us-stock' | 'crypto-spot', strategy: CashBacktestStrategy): Record<string, number> {
-  if (market === 'crypto-spot') {
-    if (strategy === 'trend_pullback') {
-      return { fastPeriod: 20, slowPeriod: 100, pullbackTolerancePercent: 0.25, volumePeriod: 30, volumeMultiplier: 1.5 };
-    }
-    if (strategy === 'breakout') {
-      return { lookback: 40, volumePeriod: 30, volumeMultiplier: 1.8 };
-    }
-    return { volumePeriod: 30, volumeMultiplier: 1.5 };
+function marketRegimeParameters(strategy: CashBacktestStrategy): Record<string, number> {
+  const regime = {
+    regimeFilterEnabled: 1,
+    regimeFastPeriod1h: 12,
+    regimeSlowPeriod1h: 26,
+    regimeFastPeriod4h: 12,
+    regimeSlowPeriod4h: 26,
+    minimumTrendSlopePercent: 0,
+    cooldownBars: 16,
+  };
+  if (strategy === 'trend_pullback') {
+    return { ...regime, fastPeriod: 20, slowPeriod: 50, pullbackTolerancePercent: 0.3, volumePeriod: 30, volumeMultiplier: 1.2 };
   }
+  if (strategy === 'breakout') {
+    return { ...regime, lookback: 30, volumePeriod: 30, volumeMultiplier: 1.4, atrPeriod: 14, minimumBreakoutAtr: 0.1 };
+  }
+  return { ...regime, volumePeriod: 30, volumeMultiplier: 1.2 };
+}
+
+function cashParameters(market: 'kr-stock' | 'us-stock' | 'crypto-spot', strategy: CashBacktestStrategy): Record<string, number> {
+  if (market === 'crypto-spot') return marketRegimeParameters(strategy);
   if (strategy === 'trend_pullback') {
     return { fastPeriod: 20, slowPeriod: 50, pullbackTolerancePercent: 0.5, volumePeriod: 20, volumeMultiplier: 1 };
   }
@@ -94,8 +105,8 @@ async function runCashInstrument(input: { market: 'kr-stock' | 'us-stock' | 'cry
         entryFeeRate: crypto ? 0.0005 : 0.00015,
         exitFeeRate: crypto ? 0.0005 : 0.00015,
         slippageRate: input.market === 'us-stock' ? 0.001 : 0.0005,
-        stopLossPercent: crypto ? 1.25 : 1,
-        takeProfitR: crypto ? 1.8 : 1.5,
+        stopLossPercent: crypto ? 1.5 : 1,
+        takeProfitR: crypto ? 2 : 1.5,
         maximumTradesPerDay: crypto ? 3 : 10,
         intrabarPriority: 'stop_first',
       }, candles);
@@ -105,7 +116,7 @@ async function runCashInstrument(input: { market: 'kr-stock' | 'us-stock' | 'cry
         provider: history.provider,
         strategy,
         result,
-        profile: crypto ? 'crypto-spot-strict-v1' : 'baseline-v1',
+        profile: crypto ? 'crypto-spot-market-regime-v2' : 'baseline-v1',
       }));
     }
   } catch (error) {
