@@ -26,10 +26,12 @@ export default function TechnicalWorkspacePage() {
   const auth = useAuth();
   const [location] = useLocation();
   const phase11SignalRoute = location.startsWith('/__phase11-technical-workspace-e2e');
+  const canUseAdminWorkspace = auth.isAdmin || phase11SignalRoute;
+  const canUseAiChart = auth.can('canAccessRiskPreview') || phase11SignalRoute;
   const [mobileWorkspace, setMobileWorkspace] = useState<MobileWorkspace>(() => phase11SignalRoute ? 'signal' : 'legacy');
 
   if (!desktop) {
-    if (!auth.isAdmin) {
+    if (!canUseAdminWorkspace) {
       return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
           <div className="min-h-0 flex-1 overflow-hidden"><SignalScannerPage /></div>
@@ -64,7 +66,7 @@ export default function TechnicalWorkspacePage() {
     );
   }
 
-  if (!auth.can('canAccessRiskPreview')) {
+  if (!canUseAiChart) {
     return (
       <div className="h-full min-h-0 overflow-hidden bg-background pb-20">
         <SignalScannerPage />
