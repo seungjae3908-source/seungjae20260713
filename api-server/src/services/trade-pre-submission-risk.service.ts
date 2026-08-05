@@ -143,7 +143,8 @@ export class TradePreSubmissionRiskService {
 
     const orders = await this.repository.listOrders(input.userId);
     const previousOrders = orders.filter((order) => order.id !== input.order.id);
-    const dailyOrderCount = previousOrders.filter((order) => sameUtcDay(order.createdAt, now)).length;
+    const dailyOrderCount = previousOrders.filter((order) =>
+      order.state !== 'PLANNED' && sameUtcDay(order.createdAt, now)).length;
     const openPositionCount = Math.max(
       input.snapshot.openPositionCount,
       previousOrders.filter((order) => OPEN_POSITION_STATES.has(order.state)).length,
