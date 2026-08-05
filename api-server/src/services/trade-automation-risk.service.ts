@@ -8,6 +8,7 @@ import {
 
 const MAX_DATA_DELAY_MS = 5_000;
 const MAX_SNAPSHOT_AGE_MS = 30_000;
+const MAX_SNAPSHOT_FUTURE_SKEW_MS = 5_000;
 const MAX_ONE_MINUTE_MOVE_PERCENT = 5;
 const MAX_SPREAD_PERCENT = 1;
 const MAX_ORDERBOOK_GAP_PERCENT = 2;
@@ -125,11 +126,29 @@ export function evaluateTradingPlan(
   if (snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
   if (snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) add(blockCodes, 'CONSECUTIVE_LOSS_LIMIT');
   if (snapshot.halted) add(blockCodes, 'MARKET_HALTED');
-  const observedAt = Date.parse(snapshot.observedAt);
-  if (!Number.isFinite(observedAt) || Math.abs(Date.now() - observedAt) > MAX_SNAPSHOT_AGE_MS) {
+
+  const nowMs = Date.now();
+  const observedAtMs = Date.parse(snapshot.observedAt);
+  const declaredDelayMs = Number(snapshot.dataDelayMs);
+  if (!Number.isFinite(observedAtMs)) {
+    add(blockCodes, 'MARKET_SNAPSHOT_TIMESTAMP_INVALID');
     add(blockCodes, 'MARKET_SNAPSHOT_STALE');
+    add(blockCodes, 'MARKET_DATA_DELAYED');
+  } else {
+    const snapshotAgeMs = nowMs - observedAtMs;
+    if (snapshotAgeMs < -MAX_SNAPSHOT_FUTURE_SKEW_MS) {
+      add(blockCodes, 'MARKET_SNAPSHOT_FROM_FUTURE');
+      add(blockCodes, 'MARKET_DATA_DELAYED');
+    } else {
+      if (snapshotAgeMs > MAX_SNAPSHOT_AGE_MS) add(blockCodes, 'MARKET_SNAPSHOT_STALE');
+      const effectiveDelayMs = Math.max(
+        Number.isFinite(declaredDelayMs) && declaredDelayMs >= 0 ? declaredDelayMs : Number.MAX_SAFE_INTEGER,
+        Math.max(0, snapshotAgeMs),
+      );
+      if (effectiveDelayMs > MAX_DATA_DELAY_MS) add(blockCodes, 'MARKET_DATA_DELAYED');
+    }
   }
-  if (snapshot.dataDelayMs > MAX_DATA_DELAY_MS) add(blockCodes, 'MARKET_DATA_DELAYED');
+
   if (Math.abs(snapshot.oneMinuteMovePercent) >= MAX_ONE_MINUTE_MOVE_PERCENT) add(blockCodes, 'ONE_MINUTE_VOLATILITY');
   if (snapshot.spreadPercent > MAX_SPREAD_PERCENT) add(blockCodes, 'SPREAD_TOO_WIDE');
   if (snapshot.orderbookGapPercent > MAX_ORDERBOOK_GAP_PERCENT) add(blockCodes, 'ORDERBOOK_GAP');
