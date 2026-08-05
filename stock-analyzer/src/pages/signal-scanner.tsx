@@ -445,7 +445,10 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
         {data && status !== 'loading' && status !== 'error' && (
           <>
-            <section className={`rounded-3xl border p-4 ${status === 'partial' ? 'border-amber-500/40 bg-amber-500/10' : 'border-card-border bg-card'}`}>
+            <section
+              data-testid={status === 'partial' ? 'scanner-partial' : undefined}
+              className={`rounded-3xl border p-4 ${status === 'partial' ? 'border-amber-500/40 bg-amber-500/10' : 'border-card-border bg-card'}`}
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-sm font-black">{data.message}</p>
