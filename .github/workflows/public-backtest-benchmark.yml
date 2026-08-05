@@ -1,0 +1,74 @@
+name: Public Backtest Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Backtest days (7-90)
+        required: false
+        default: '30'
+      timeframe:
+        description: Shared timeframe
+        required: false
+        default: '15m'
+  pull_request:
+    paths:
+      - 'api-server/src/scripts/public-backtest-batch.ts'
+      - 'api-server/src/services/backtest-*.ts'
+      - 'api-server/src/services/cash-*.ts'
+      - 'api-server/src/services/stock-backtest-data.service.ts'
+      - 'api-server/src/services/upbit-backtest-data.service.ts'
+      - '.github/workflows/public-backtest-benchmark.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-backtest-benchmark-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Public data benchmark (read-only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Bundle benchmark runner
+        run: pnpm --dir api-server exec esbuild ./src/scripts/public-backtest-batch.ts --bundle --platform=node --format=esm --target=node20 --outfile=/tmp/public-backtest-batch.mjs
+
+      - name: Run public read-only benchmark
+        env:
+          BACKTEST_DAYS: ${{ inputs.days || '30' }}
+          BACKTEST_TIMEFRAME: ${{ inputs.timeframe || '15m' }}
+          BACKTEST_OUTPUT: ${{ github.workspace }}/artifacts/public-backtest-results.json
+        run: node /tmp/public-backtest-batch.mjs
+
+      - name: Verify no-order contract
+        run: |
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('artifacts/public-backtest-results.json','utf8')); if(p.orderSubmitted!==false||p.mode!=='backtest-only') process.exit(1); console.log('rows='+p.rows.length+', ok='+p.ok)"
+
+      - name: Upload benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-backtest-results-${{ github.sha }}
+          path: artifacts/public-backtest-results.json
+          if-no-files-found: error
+          retention-days: 14
