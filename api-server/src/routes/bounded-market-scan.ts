@@ -144,7 +144,11 @@ export function createBoundedMarketScanRouter(
       });
       if (controller.signal.aborted || res.writableEnded) return;
       res.setHeader('X-Scanner-Request-Id', result.requestId);
-      return res.json(result);
+      return res.json({
+        ...result,
+        partial: result.execution.partial,
+        elapsedMs: result.execution.elapsedMs,
+      });
     } catch (error) {
       if (controller.signal.aborted || error instanceof ScanRequestAbortedError || res.writableEnded) return;
       return responseError(res, error);
