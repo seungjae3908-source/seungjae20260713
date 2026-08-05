@@ -233,7 +233,7 @@ test.describe('current mobile AI chart broadcast contract', () => {
     state.scenario = 'invalid-only';
     await page.getByRole('button', { name: '차트 새로고침', exact: true }).click();
     await expect(page.getByTestId('chart-empty-state')).toBeVisible();
-    await expect(page.getByText('현재 생중계 판단', { exact: true }).locator('xpath=..')).toContainText('실제 캔들이 준비되면');
+    await expect(page.getByText('실제 캔들이 준비되면 분석을 시작합니다.', { exact: true })).toBeVisible();
 
     state.scenario = 'empty';
     await page.getByRole('button', { name: '차트 새로고침', exact: true }).click();
