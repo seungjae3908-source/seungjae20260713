@@ -80,6 +80,14 @@ run_trade_atomic_suite
 run_sql "execute real ownership RLS integration queries" "api-server/supabase/test/phase8_rls_integration.sql"
 run_sql "execute real membership-tier RLS integration queries" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
+# Reproduce the exact pre-fix privilege state in the disposable database, then
+# prove the narrow authenticated CRUD migration and its idempotency contract.
+run_sql "rollback paper journal authenticated privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.down.sql"
+run_sql "assert pre-fix paper journal privilege failure" "api-server/supabase/test/paper_journal_privileges_before_migration.sql"
+run_sql "apply paper journal authenticated privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
+run_sql "reapply paper journal authenticated privileges idempotently" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
+run_sql "verify paper journal authenticated privileges" "api-server/supabase/test/paper_journal_privileges_integration.sql"
+
 echo "[phase8-db] verify failed migration transaction leaves no partial object"
 if "${PSQL[@]}" --command "begin; create table public.phase8_partial_failure_probe(id integer); select 1 / 0; commit;"; then
   echo "[phase8-db] expected transaction failure did not occur" >&2
@@ -102,7 +110,9 @@ run_sql "reapply Phase 8 paper capability RLS" "api-server/supabase/migrations/2
 run_sql "reapply trade automation migration" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
 run_sql "reapply trade automation admin-only RLS" "api-server/supabase/migrations/2026080401_trade_automation_admin_only.sql"
 run_sql "reapply atomic trade execution RPC" "api-server/supabase/migrations/2026080402_trade_order_atomic_execution.sql"
+run_sql "reapply paper journal authenticated privileges after rollback cycle" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
 run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.sql"
+run_sql "recheck paper journal authenticated privileges after reapply" "api-server/supabase/test/paper_journal_privileges_integration.sql"
 # Recheck the service-only trading control before the tier fixture re-grants all
 # tables to the API roles for its isolated compatibility assertions.
 run_sql "recheck trade automation admin-only RLS after reapply" "api-server/supabase/test/trade_automation_admin_only_rls_integration.sql"
