@@ -74,6 +74,7 @@ const groups = {
     path.join(root, 'src/routes/trading-risk.smoke.test.ts'),
     path.join(root, 'src/routes/futures-contract-rules.smoke.test.ts'),
     path.join(root, 'src/routes/backtests.smoke.test.ts'),
+    path.join(root, 'src/routes/cash-backtests.smoke.test.ts'),
     path.join(root, 'src/routes/paper-trading.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal-query-identity.smoke.test.ts'),
@@ -101,9 +102,6 @@ try {
     outputFiles.push(outputFile);
   }
 
-  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
-  // serially so host-level event-loop contention cannot consume a scanner deadline
-  // before the test body starts. Test coverage and every assertion remain unchanged.
   const testArguments = mode === 'phase9'
     ? ['--test', '--test-concurrency=1', ...outputFiles]
     : ['--test', ...outputFiles];
