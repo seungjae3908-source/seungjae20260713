@@ -1,1 +1,0 @@
-The regression contract is executed by `pnpm --dir api-server run test:phase12` and validates that exact-main Application CI coverage has no path filter, requires all six statuses, rejects stale SHAs, and cannot dispatch staging or production.
