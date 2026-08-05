@@ -110,20 +110,33 @@ try {
     outputFiles.push(outputFile);
   }
 
-  // Phase 9 has deadline-sensitive scanner contracts. Phase 12 has tests that
-  // temporarily replace process.env and globalThis.fetch to assert zero outbound
-  // calls and fail-closed execution. Run those groups serially so one test file
-  // cannot consume or restore another file's global fixture. Assertions and test
-  // coverage remain unchanged.
-  const requiresFileIsolation = mode === 'phase9' || mode === 'phase12';
-  const testArguments = requiresFileIsolation
-    ? ['--test', '--test-concurrency=1', ...outputFiles]
-    : ['--test', ...outputFiles];
-  const result = spawnSync(process.execPath, testArguments, {
-    cwd: repositoryRoot, stdio: 'inherit',
-  });
-  if (result.error) throw result.error;
-  process.exitCode = result.status ?? 1;
+  if (mode === 'phase12') {
+    let failed = false;
+    for (const [index, outputFile] of outputFiles.entries()) {
+      const entryPoint = entries[index];
+      const relativeEntry = path.relative(repositoryRoot, entryPoint).replaceAll('\\', '/');
+      console.log(`[phase12] running ${relativeEntry}`);
+      const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', outputFile], {
+        cwd: repositoryRoot,
+        stdio: 'inherit',
+      });
+      if (result.error) throw result.error;
+      if ((result.status ?? 1) !== 0) {
+        failed = true;
+        console.error(`::error file=${relativeEntry}::Phase 12 test file failed`);
+      }
+    }
+    process.exitCode = failed ? 1 : 0;
+  } else {
+    const testArguments = mode === 'phase9'
+      ? ['--test', '--test-concurrency=1', ...outputFiles]
+      : ['--test', ...outputFiles];
+    const result = spawnSync(process.execPath, testArguments, {
+      cwd: repositoryRoot, stdio: 'inherit',
+    });
+    if (result.error) throw result.error;
+    process.exitCode = result.status ?? 1;
+  }
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
 }
