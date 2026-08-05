@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { authorizedFetch } from '@/lib/auth-fetch';
@@ -45,6 +45,7 @@ type CreateResponse = {
 const AMOUNT_STORAGE_KEY = 'scanner-approval-paper-amount-v1';
 const MINIMUM_AMOUNT_KRW = 5_000;
 const QUICK_AMOUNTS = [50_000, 100_000, 200_000, 500_000] as const;
+const CREATE_PLAN_TIMEOUT_MS = 10_000;
 
 function loadAmount() {
   if (typeof window === 'undefined') return 100_000;
@@ -77,6 +78,8 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState('');
   const [result, setResult] = useState<CreateResponse | null>(null);
+  const requestSequenceRef = useRef(0);
+  const requestAbortRef = useRef<AbortController | null>(null);
   const conditions = useMemo(
     () => [...new Set((selection.matchedSignals ?? []).map(String).map((item) => item.trim()).filter(Boolean))].slice(0, 20),
     [selection.matchedSignals],
@@ -85,9 +88,19 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
   const amountValid = Number.isFinite(amount) && amount >= MINIMUM_AMOUNT_KRW;
 
   useEffect(() => {
+    requestSequenceRef.current += 1;
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
+    setCreating(false);
     setResult(null);
     setMessage('');
   }, [selection.market, selection.ticker, selection.timeframe, conditions.join('|')]);
+
+  useEffect(() => () => {
+    requestSequenceRef.current += 1;
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
+  }, []);
 
   async function createPlan() {
     if (creating) return;
@@ -105,6 +118,13 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
       setMessage(`희망 운용금액을 ${formatNumber(MINIMUM_AMOUNT_KRW)}원 이상 입력해 주세요.`);
       return;
     }
+
+    const sequence = requestSequenceRef.current + 1;
+    requestSequenceRef.current = sequence;
+    requestAbortRef.current?.abort();
+    const controller = new AbortController();
+    requestAbortRef.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), CREATE_PLAN_TIMEOUT_MS);
 
     setCreating(true);
     setMessage('서버가 검색 조건·실시간 호가·캔들·위험 한도를 다시 계산하고 있습니다.');
@@ -124,21 +144,30 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
           minimumConfidence: 60,
           maximumRiskScore: 50,
         }),
+        signal: controller.signal,
       });
       const payload = await response.json().catch(() => ({})) as CreateResponse;
       if (!response.ok || !payload.ok || !payload.plan || payload.serverVerified !== true) {
         throw new Error(payload.error ?? 'SCANNER_APPROVAL_FAILED');
       }
+      if (sequence !== requestSequenceRef.current) return;
       setResult(payload);
       setMessage(payload.duplicate
         ? '같은 서버 검증 신호의 기존 승인 계획을 불러왔습니다.'
         : '서버 검증이 끝났습니다. 승인형 주문 화면에서 최종 승인할 수 있습니다.');
     } catch (error) {
-      const code = error instanceof Error ? error.message : 'SCANNER_APPROVAL_FAILED';
+      if (sequence !== requestSequenceRef.current) return;
       setResult(null);
+      if (error instanceof Error && error.name === 'AbortError') {
+        setMessage('서버 재검증 시간이 초과되어 계획을 생성하지 않았습니다. 최신 조건을 확인한 뒤 다시 시도해 주세요.');
+        return;
+      }
+      const code = error instanceof Error ? error.message : 'SCANNER_APPROVAL_FAILED';
       setMessage(creationErrorMessage(code));
     } finally {
-      setCreating(false);
+      window.clearTimeout(timeout);
+      if (requestAbortRef.current === controller) requestAbortRef.current = null;
+      if (sequence === requestSequenceRef.current) setCreating(false);
     }
   }
 
