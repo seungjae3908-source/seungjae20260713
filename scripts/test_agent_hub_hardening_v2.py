@@ -55,9 +55,9 @@ def test_medium_policy() -> int:
     return len(PROFILE_NAMES) + 3
 
 
-def test_prompt_delta_only() -> int:
+def test_prompt_state_contract() -> int:
     fields = {
-        "task_id":"delta-only", "worker":"integration-planner", "repository":"owner/repo",
+        "task_id":"state-contract", "worker":"integration-planner", "repository":"owner/repo",
         "base_sha":"a"*40, "branch":"feature/demo", "head_sha":"b"*40,
         "pr_number":"9", "changed_files":["docs/a.md"], "checks":"success",
         "ci_run_id":"42", "status":"partial", "summary":"partial", "remaining":"inspect",
@@ -70,8 +70,7 @@ def test_prompt_delta_only() -> int:
     assert set(changed.state_delta) == {"head_sha","status"}
     assert changed.previous_state == first.current_state
     assert changed.current_state.head_sha == "c"*40
-    assert '"state_delta"' in changed.prompt
-    assert '"previous_state"' not in changed.prompt and '"current_state"' not in changed.prompt
+    assert '"previous_state"' in changed.prompt and '"current_state"' in changed.prompt and '"state_delta"' in changed.prompt
     return 7
 
 
@@ -139,8 +138,8 @@ def test_workflow_contracts() -> int:
 
 
 def run() -> int:
-    count=sum(test() for test in (test_medium_policy,test_prompt_delta_only,test_github_evidence,test_security_and_paths,test_comment_and_legacy,test_workflow_contracts))
-    print(json.dumps({"agent_hub_hardening_v2":"pass","tests":count,"profiles":len(PROFILE_NAMES),"required_statuses":len(REQUIRED_STATUS_CONTEXTS),"delta_only_prompt":True,"schema_v1_accepted":0,"paid_fallback":0}))
+    count=sum(test() for test in (test_medium_policy,test_prompt_state_contract,test_github_evidence,test_security_and_paths,test_comment_and_legacy,test_workflow_contracts))
+    print(json.dumps({"agent_hub_hardening_v2":"pass","tests":count,"profiles":len(PROFILE_NAMES),"required_statuses":len(REQUIRED_STATUS_CONTEXTS),"prompt_preserves_previous_current_delta":True,"schema_v1_accepted":0,"paid_fallback":0}))
     return 0
 
 if __name__ == "__main__": raise SystemExit(run())
