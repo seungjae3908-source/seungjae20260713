@@ -192,6 +192,10 @@ export type TradingOrder = {
   lastErrorCode: string | null;
   manualReviewRequired?: boolean;
   executionClaimId?: string | null;
+  cancelRequestedAt?: string | null;
+  cancelRequestClaimId?: string | null;
+  cancelSubmittedAt?: string | null;
+  cancelAcknowledgedAt?: string | null;
   recoveryLeaseOwner?: string | null;
   recoveryLeaseUntil?: string | null;
   protectionStatus?: TradingProtectionStatus;
