@@ -50,6 +50,34 @@ function makeRegimeCandles(mode: 'bull' | 'bear-then-bounce', count = 2_000): Ca
   });
 }
 
+function makeConfirmedPullbackCandles(count = 2_200) {
+  const candles = makeRegimeCandles('bull', count);
+  const pullbackIndex = count - 80;
+  const previous = candles[pullbackIndex - 1];
+  candles[pullbackIndex] = {
+    ...candles[pullbackIndex],
+    open: previous.close + 0.1,
+    high: previous.close + 0.2,
+    low: 1,
+    close: previous.close + 0.05,
+  };
+  candles[pullbackIndex + 1] = {
+    ...candles[pullbackIndex + 1],
+    open: previous.close + 0.05,
+    high: previous.close + 0.7,
+    low: previous.close,
+    close: previous.close + 0.6,
+  };
+  candles[pullbackIndex + 2] = {
+    ...candles[pullbackIndex + 2],
+    open: previous.close + 0.9,
+    high: previous.close + 1.2,
+    low: previous.close + 0.7,
+    close: previous.close + 1,
+  };
+  return candles;
+}
+
 const regimeParameters = {
   lookback: 20,
   volumePeriod: 20,
@@ -179,4 +207,40 @@ test('조기 전략청산 비활성화 시 strategy_exit 거래가 생성되지 
   }, makeRegimeCandles('bull'));
   assert.ok(result.totalTrades > 0);
   assert.ok(result.trades.every((trade) => trade.exitReason !== 'strategy_exit'));
+});
+
+test('regime_pullback은 눌림 확인 뒤 다음 봉 시가에 진입하고 ATR 손절을 사용한다', () => {
+  const candles = makeConfirmedPullbackCandles();
+  const parameters = {
+    regimeFilterEnabled: 1,
+    regimeFastPeriod1h: 12,
+    regimeSlowPeriod1h: 26,
+    regimeFastPeriod4h: 12,
+    regimeSlowPeriod4h: 26,
+    minimumTrendSlopePercent: 0,
+    fastPeriod: 20,
+    slowPeriod: 50,
+    pullbackTolerancePercent: 0,
+    maximumExtensionPercent: 100,
+    volumePeriod: 20,
+    volumeMultiplier: 0,
+    rsiPeriod: 14,
+    minimumEntryRsi: 0,
+    maximumEntryRsi: 100,
+    cooldownBars: 16,
+    strategyExitEnabled: 0,
+    entryOnNextOpen: 1,
+    executionAtrPeriod: 14,
+    stopAtrMultiplier: 1.5,
+  };
+  const signalRequest = { ...request(parameters), strategy: 'regime_pullback' as const };
+  const firstBuy = calculateCashSignals(signalRequest, candles).find((signal) => signal.action === 'BUY');
+  assert.ok(firstBuy);
+  assert.ok(firstBuy.index + 1 < candles.length);
+  const result = runCashBacktest({ ...signalRequest, takeProfitR: 2 }, candles);
+  assert.ok(result.totalTrades > 0);
+  assert.equal(result.trades[0].entryPrice, candles[firstBuy.index + 1].open);
+  assert.ok(result.warnings.some((warning) => warning.includes('다음 완료 봉의 시가')));
+  assert.ok(result.warnings.some((warning) => warning.includes('ATR(14)')));
+  assert.equal(result.orderSubmitted, false);
 });
