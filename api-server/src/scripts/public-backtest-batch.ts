@@ -25,15 +25,35 @@ function average(values: number[]) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
-function cashSummary(input: { market: 'kr-stock' | 'us-stock' | 'crypto-spot'; symbol: string; provider: string; strategy: CashBacktestStrategy; result: ReturnType<typeof runCashBacktest> }): Row {
+function cashSummary(input: { market: 'kr-stock' | 'us-stock' | 'crypto-spot'; symbol: string; provider: string; strategy: CashBacktestStrategy; result: ReturnType<typeof runCashBacktest>; profile: string }): Row {
   const { result } = input;
   return {
     market: input.market, symbol: input.symbol, provider: input.provider, strategy: input.strategy, action: 'BUY_SELL', timeframe,
+    profile: input.profile,
     totalTrades: result.totalTrades, winRate: result.winRate, averageWinR: result.averageWinR,
     averageLossR: result.averageLossR, expectancyR: result.expectancy, profitFactor: result.profitFactor,
     totalReturnPercent: result.totalReturnPercent, maximumDrawdownPercent: result.maximumDrawdownPercent,
     totalFees: result.totalFees, totalSlippage: result.totalSlippage, warnings: result.warnings,
   };
+}
+
+function cashParameters(market: 'kr-stock' | 'us-stock' | 'crypto-spot', strategy: CashBacktestStrategy) {
+  if (market === 'crypto-spot') {
+    if (strategy === 'trend_pullback') {
+      return { fastPeriod: 20, slowPeriod: 100, pullbackTolerancePercent: 0.25, volumePeriod: 30, volumeMultiplier: 1.5 };
+    }
+    if (strategy === 'breakout') {
+      return { lookback: 40, volumePeriod: 30, volumeMultiplier: 1.8 };
+    }
+    return { volumePeriod: 30, volumeMultiplier: 1.5 };
+  }
+  if (strategy === 'trend_pullback') {
+    return { fastPeriod: 20, slowPeriod: 50, pullbackTolerancePercent: 0.5, volumePeriod: 20, volumeMultiplier: 1 };
+  }
+  if (strategy === 'breakout') {
+    return { lookback: 20, volumePeriod: 20, volumeMultiplier: 1.2 };
+  }
+  return { volumePeriod: 20, volumeMultiplier: 1.1 };
 }
 
 async function runCashInstrument(input: { market: 'kr-stock' | 'us-stock' | 'crypto-spot'; symbol: string }) {
@@ -43,20 +63,27 @@ async function runCashInstrument(input: { market: 'kr-stock' | 'us-stock' | 'cry
       : await loadStockBacktestCandles({ market: input.market, symbol: input.symbol, timeframe, startTime, endTime });
     const candles = history.candles as CashBacktestCandle[];
     for (const strategy of cashStrategies) {
+      const crypto = input.market === 'crypto-spot';
       const result = runCashBacktest({
         market: input.market, symbol: input.symbol, timeframe, initialCapital: 1_000_000, strategy,
-        parameters: strategy === 'trend_pullback'
-          ? { fastPeriod: 20, slowPeriod: 50, pullbackTolerancePercent: 0.5, volumePeriod: 20, volumeMultiplier: 1 }
-          : strategy === 'breakout'
-            ? { lookback: 20, volumePeriod: 20, volumeMultiplier: 1.2 }
-            : { volumePeriod: 20, volumeMultiplier: 1.1 },
-        riskPercent: input.market === 'crypto-spot' ? 0.2 : 0.25,
-        entryFeeRate: input.market === 'crypto-spot' ? 0.0005 : 0.00015,
-        exitFeeRate: input.market === 'crypto-spot' ? 0.0005 : 0.00015,
+        parameters: cashParameters(input.market, strategy),
+        riskPercent: crypto ? 0.15 : 0.25,
+        entryFeeRate: crypto ? 0.0005 : 0.00015,
+        exitFeeRate: crypto ? 0.0005 : 0.00015,
         slippageRate: input.market === 'us-stock' ? 0.001 : 0.0005,
-        stopLossPercent: 1, takeProfitR: 1.5, maximumTradesPerDay: 10, intrabarPriority: 'stop_first',
+        stopLossPercent: crypto ? 1.25 : 1,
+        takeProfitR: crypto ? 1.8 : 1.5,
+        maximumTradesPerDay: crypto ? 3 : 10,
+        intrabarPriority: 'stop_first',
       }, candles);
-      rows.push(cashSummary({ market: input.market, symbol: input.symbol, provider: history.provider, strategy, result }));
+      rows.push(cashSummary({
+        market: input.market,
+        symbol: input.symbol,
+        provider: history.provider,
+        strategy,
+        result,
+        profile: crypto ? 'crypto-spot-strict-v1' : 'baseline-v1',
+      }));
     }
   } catch (error) {
     rows.push({ market: input.market, symbol: input.symbol, action: 'BUY_SELL', timeframe, error: error instanceof Error ? error.message : String(error) });
@@ -91,6 +118,7 @@ async function runFuturesInstrument(symbol: string) {
         const losingR = result.trades.filter((trade) => trade.netPnl <= 0).map((trade) => trade.rMultiple);
         rows.push({
           market: 'crypto-futures', symbol, provider: 'bitget', strategy, action: side.toUpperCase(), timeframe,
+          profile: 'baseline-v1',
           totalTrades: result.totalTrades, winRate: result.winRate, averageWinR: average(winningR),
           averageLossR: average(losingR), expectancyR: result.averageRMultiple, profitFactor: result.profitFactor,
           totalReturnPercent: result.totalReturnPercent, maximumDrawdownPercent: result.maximumDrawdownPercent,
