@@ -9,25 +9,106 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(`[ai-preview-diagnostic-contract] ${message}`);
 };
 
-const [spec, helper, helperTest, sanitizer, playwright] = await Promise.all([
+const [spec, sessionHelper, helper, helperTest, sanitizer, playwright, phase8Db] = await Promise.all([
   read('stock-analyzer/e2e/phase10-staging-readiness.spec.ts'),
+  read('stock-analyzer/e2e/support/browser-session-api.ts'),
   read('stock-analyzer/e2e/support/safe-api-diagnostic.ts'),
   read('stock-analyzer/e2e/support/safe-api-diagnostic.test.ts'),
   read('api-server/scripts/sanitize-staging-playwright-artifacts.mjs'),
   read('stock-analyzer/playwright.config.ts'),
+  read('api-server/scripts/verify-phase8-db.sh'),
 ]);
 
-const requestIndex = spec.indexOf("page.request.post('/api/paper-journal/ai-review/preview'");
-const diagnosticIndex = spec.indexOf('collectSafeApiDiagnostic(preview', requestIndex);
+const regularIndex = spec.indexOf("test('regular: futures, scanner, paper trading, and safe AI preview");
+const requestIndex = spec.indexOf('requestWithBrowserSession(', regularIndex);
+const requestPathIndex = spec.indexOf("'/api/paper-journal/ai-review/preview'", requestIndex);
+const diagnosticIndex = spec.indexOf('collectSafeApiDiagnostic(preview', requestPathIndex);
 const artifactIndex = spec.indexOf('diagnostics.api_diagnostics.push(previewDiagnostic)', diagnosticIndex);
 const assertionIndex = spec.indexOf('preview.ok()', diagnosticIndex);
 assert(
-  requestIndex >= 0 && diagnosticIndex > requestIndex && artifactIndex > diagnosticIndex && assertionIndex > artifactIndex,
-  'status and safe body fields must be captured before preview.ok() assertion',
+  regularIndex >= 0
+    && requestIndex > regularIndex
+    && requestPathIndex > requestIndex
+    && diagnosticIndex > requestPathIndex
+    && artifactIndex > diagnosticIndex
+    && assertionIndex > artifactIndex,
+  'authenticated status and safe body fields must be captured before preview.ok() assertion',
 );
 assert(spec.includes('api_diagnostics: SafeApiDiagnostic[]'), 'staging artifact has no typed API diagnostic collection');
 assert(!spec.includes('const previewBody = await preview.json()'), 'staging spec must not record or assert from an unfiltered preview body');
 assert(!spec.includes('preview.text()'), 'staging spec must not read raw preview text');
+
+for (const marker of [
+  'page.evaluate',
+  'window.localStorage',
+  '/^sb-[a-z0-9]+-auth-token$/i',
+  'access_token',
+  'Authorization',
+  'page.request.fetch',
+  "requestPath.startsWith('/api/')",
+]) {
+  assert(sessionHelper.includes(marker), `browser-session API helper is missing ${marker}`);
+}
+for (const forbidden of [
+  'refresh_token',
+  'storageState',
+  'console.',
+  'testInfo.attach',
+  'writeFile',
+  '.text()',
+  '.headers()',
+]) {
+  assert(!sessionHelper.includes(forbidden), `browser-session API helper references forbidden content: ${forbidden}`);
+}
+assert(
+  sessionHelper.includes('The bearer is never logged, attached, serialized into artifacts, or returned.'),
+  'browser-session API helper must document the token non-disclosure contract',
+);
+
+for (const marker of [
+  'expected_route_transition_aborts',
+  'activeRouteTransitionObservations',
+  "observation.fromPath === '/stock-info'",
+  "observation.toPath === '/scanner'",
+  "parsed.pathname === '/api/stocks/005930/chart'",
+  "request.failure()?.errorText === 'net::ERR_ABORTED'",
+  'expectScannerAfterFutures(page)',
+]) {
+  assert(spec.includes(marker), `exact route-transition abort contract is missing ${marker}`);
+}
+assert(
+  !spec.includes("parsed.pathname.includes('/chart')"),
+  'route-transition abort handling must not use a broad chart allowlist',
+);
+
+const liveIndex = phase8Db.indexOf('if [[ -n "${DATABASE_URL:-}" ]]');
+const liveArtifactIndex = phase8Db.indexOf('staging-bootstrap-verification.json', liveIndex);
+const liveStaticVerifierIndex = phase8Db.indexOf('verify-paper-journal-privilege-contract.mjs', liveIndex);
+const liveExitIndex = phase8Db.indexOf('exit 0', liveIndex);
+const passwordIndex = phase8Db.indexOf('PGPASSWORD is required for disposable Phase 8 verification');
+const firstDownMigrationIndex = phase8Db.indexOf('.down.sql');
+assert(
+  liveIndex >= 0
+    && liveArtifactIndex > liveIndex
+    && liveStaticVerifierIndex > liveArtifactIndex
+    && liveExitIndex > liveStaticVerifierIndex
+    && passwordIndex > liveExitIndex
+    && firstDownMigrationIndex > liveExitIndex,
+  'live staging evidence verification must exit before disposable credentials and rollback fixtures',
+);
+for (const marker of [
+  "schema_version !== '20260804.1'",
+  'atomic_transaction !== true',
+  'idempotency_passes !== 2',
+  'production_export_used !== false',
+  'auth_users_copied !== 0',
+  'profile_rows_copied !== 0',
+  'storage_objects_copied !== 0',
+  'credentials_recorded !== false',
+  'rollback remains disposable-CI only',
+]) {
+  assert(phase8Db.includes(marker), `live staging bootstrap evidence contract is missing ${marker}`);
+}
 
 for (const field of [
   'testStep',
@@ -69,4 +150,4 @@ assert(sanitizer.includes('Unsafe staging artifact content'), 'artifact sanitize
 assert(sanitizer.includes('Raw Playwright trace is forbidden'), 'raw trace rejection must remain enabled');
 assert(playwright.includes("trace: stagingMode ? 'off'"), 'raw staging Playwright trace must remain disabled');
 
-console.log('[ai-preview-diagnostic-contract] status-before-assertion, allowlisted code/message, safe booleans, non-JSON fail-closed, sanitizer and raw-trace prohibition verified');
+console.log('[ai-preview-diagnostic-contract] authenticated browser request, exact route-transition abort, live evidence-only DB verification, safe diagnostics, sanitizer and raw-trace prohibition verified');

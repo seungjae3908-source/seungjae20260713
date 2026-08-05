@@ -55,7 +55,8 @@ const visibleIndex = spec.indexOf('await expect(logoutButton).toBeVisible();');
 const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observation);');
 const clickIndex = spec.indexOf('await logoutButton.click();');
 assert(visibleIndex >= 0 && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only around an explicit visible logout-button click');
-assert(spec.includes('observation.candidates.push(diagnostic);'), 'matching aborts must be held as candidates first');
+assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
+assert(spec.includes('routeObservation.candidates.push(diagnostic);'), 'matching route-transition aborts must be held as candidates first');
 assert(
   spec.indexOf('diagnostics.expected_logout_aborts.push(...observation.candidates);')
     > spec.indexOf("expect(\n      [401, 403],"),
@@ -162,4 +163,4 @@ assert(
 assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must synchronously invalidate session identity');
 assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session identity and profile cleanup finish');
 
-console.log('[staging-login-selector-contract] logout classification, current-session profile guard, diagnostic redaction, optional provider degradation, and navigation stability are locked down');
+console.log('[staging-login-selector-contract] logout and route-transition candidate classification, current-session profile guard, diagnostic redaction, optional provider degradation, and navigation stability are locked down');
