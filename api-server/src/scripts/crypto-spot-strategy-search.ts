@@ -13,7 +13,6 @@ const START_TIME = END_TIME - DAYS * DAY;
 const OUTPUT_PATH = process.env.BACKTEST_OUTPUT
   ?? path.resolve(process.cwd(), 'artifacts/crypto-spot-strategy-search.json');
 const SYMBOLS = ['KRW-BTC', 'KRW-ETH'] as const;
-
 const COSTS = Object.freeze({ entryFeeRate: 0.0005, exitFeeRate: 0.0005, slippageRate: 0.0005 });
 const GATE = Object.freeze({
   minimumFullTrades: 50,
@@ -31,14 +30,16 @@ type Candidate = {
   id: string;
   centerPeriod: number;
   trendPeriod: number;
-  deviationAtr: number;
+  bandAtr: number;
   oversoldRsi: number;
   confirmPreviousHigh: boolean;
   requireOneHourTrend: boolean;
   volumeMultiplier: number;
   stopAtrMultiplier: number;
-  takeProfitR: number;
+  minimumRewardR: number;
+  maximumHoldBars: number;
 };
+type Signal = { index: number; targetPrice: number };
 type SegmentResult = {
   symbol: Symbol;
   segment: SegmentName;
@@ -63,6 +64,17 @@ type CandidateAssessment = {
   score: number;
 };
 type Trade = { netPnl: number; rMultiple: number };
+type Position = {
+  quantity: number;
+  entryPrice: number;
+  entryFee: number;
+  riskAmount: number;
+  stop: number;
+  target: number;
+  openedIndex: number;
+};
+
+type TrendState = { bullish: boolean; rising: boolean; slow: number } | null;
 
 function ema(values: readonly number[], period: number) {
   const output: Array<number | null> = Array(values.length).fill(null);
@@ -146,16 +158,16 @@ function completedTrend(candles: readonly CashBacktestCandle[], bucketMs: number
   const closes = buckets.map((bucket) => bucket.close);
   const fast = ema(closes, fastPeriod);
   const slow = ema(closes, slowPeriod);
-  const states = buckets.map((_bucket, index) => {
+  const states: TrendState[] = buckets.map((_bucket, index) => {
     const fastValue = fast[index];
     const slowValue = slow[index];
     const previousFast = index > 0 ? fast[index - 1] : null;
     if (fastValue == null || slowValue == null || previousFast == null) return null;
     return { bullish: fastValue > slowValue, rising: fastValue >= previousFast, slow: slowValue };
   });
-  const output: Array<ReturnType<typeof states.at>> = Array(candles.length).fill(null);
+  const output: TrendState[] = Array(candles.length).fill(null);
   let cursor = 0;
-  let available: ReturnType<typeof states.at> = null;
+  let available: TrendState = null;
   for (let index = 0; index < candles.length; index += 1) {
     while (cursor < buckets.length && buckets[cursor].endIndex <= index) {
       available = states[cursor];
@@ -170,24 +182,29 @@ function buildCandidates(): Candidate[] {
   const candidates: Candidate[] = [];
   for (const centerPeriod of [20, 40]) {
     for (const trendPeriod of [100, 160]) {
-      for (const deviationAtr of [0.75, 1.25]) {
+      for (const bandAtr of [0.75, 1.25]) {
         for (const oversoldRsi of [40, 50]) {
           for (const confirmPreviousHigh of [false, true]) {
             for (const requireOneHourTrend of [false, true]) {
               for (const volumeMultiplier of [0.5, 1]) {
-                for (const [stopAtrMultiplier, takeProfitR] of [[1.25, 0.8], [1.5, 1], [2, 1.2]] as const) {
-                  candidates.push({
-                    id: `c${centerPeriod}-t${trendPeriod}-d${deviationAtr}-rsi${oversoldRsi}-h${Number(confirmPreviousHigh)}-1h${Number(requireOneHourTrend)}-v${volumeMultiplier}-atr${stopAtrMultiplier}-r${takeProfitR}`,
-                    centerPeriod,
-                    trendPeriod,
-                    deviationAtr,
-                    oversoldRsi,
-                    confirmPreviousHigh,
-                    requireOneHourTrend,
-                    volumeMultiplier,
-                    stopAtrMultiplier,
-                    takeProfitR,
-                  });
+                for (const stopAtrMultiplier of [1.25, 1.75]) {
+                  for (const minimumRewardR of [0.5, 0.8]) {
+                    for (const maximumHoldBars of [18, 36]) {
+                      candidates.push({
+                        id: `c${centerPeriod}-t${trendPeriod}-b${bandAtr}-rsi${oversoldRsi}-h${Number(confirmPreviousHigh)}-1h${Number(requireOneHourTrend)}-v${volumeMultiplier}-atr${stopAtrMultiplier}-rr${minimumRewardR}-hold${maximumHoldBars}`,
+                        centerPeriod,
+                        trendPeriod,
+                        bandAtr,
+                        oversoldRsi,
+                        confirmPreviousHigh,
+                        requireOneHourTrend,
+                        volumeMultiplier,
+                        stopAtrMultiplier,
+                        minimumRewardR,
+                        maximumHoldBars,
+                      });
+                    }
+                  }
                 }
               }
             }
@@ -208,7 +225,7 @@ function signals(candles: readonly CashBacktestCandle[], candidate: Candidate) {
   const volumes = averageVolume(candles);
   const oneHour = completedTrend(candles, HOUR, 12, 26);
   const fourHour = completedTrend(candles, 4 * HOUR, 6, 18);
-  const indices: number[] = [];
+  const output: Signal[] = [];
   let lastSignal = Number.NEGATIVE_INFINITY;
   for (let index = 2; index < candles.length; index += 1) {
     const centerPrevious = center[index - 1];
@@ -223,61 +240,67 @@ function signals(candles: readonly CashBacktestCandle[], candidate: Candidate) {
     const fourHourState = fourHour[index];
     if (centerPrevious == null || centerCurrent == null || trendCurrent == null || atrPrevious == null || atrCurrent == null
       || rsiPrevious == null || rsiCurrent == null || average == null || !fourHourState) continue;
-    if (!fourHourState.bullish || !fourHourState.rising || candles[index].close < fourHourState.slow) continue;
+    if (!fourHourState.bullish || candles[index].close < fourHourState.slow) continue;
     if (candidate.requireOneHourTrend && (!oneHourState || !oneHourState.bullish || candles[index].close < oneHourState.slow)) continue;
     if (centerCurrent <= trendCurrent) continue;
     const previous = candles[index - 1];
     const current = candles[index];
-    const deviation = (centerPrevious - previous.low) / atrPrevious;
-    const oversold = deviation >= candidate.deviationAtr && previous.close < centerPrevious && rsiPrevious <= candidate.oversoldRsi;
+    const lowerPrevious = centerPrevious - atrPrevious * candidate.bandAtr;
+    const lowerCurrent = centerCurrent - atrCurrent * candidate.bandAtr;
+    const oversold = previous.low <= lowerPrevious && previous.close < centerPrevious && rsiPrevious <= candidate.oversoldRsi;
     const bullish = current.close > current.open && current.close > previous.close && rsiCurrent > rsiPrevious;
-    const reclaimThreshold = candidate.confirmPreviousHigh ? previous.high : centerCurrent - atrCurrent * 0.25;
-    const reclaimed = current.close > reclaimThreshold && current.close <= centerCurrent + atrCurrent * 0.75;
+    const confirmation = candidate.confirmPreviousHigh ? current.close > previous.high : current.close > lowerCurrent;
+    const targetStillAhead = current.close < centerCurrent;
     const volumeOk = current.volume >= average * candidate.volumeMultiplier;
-    if (oversold && bullish && reclaimed && volumeOk && index - lastSignal > 12) {
-      indices.push(index);
+    if (oversold && bullish && confirmation && targetStillAhead && volumeOk && index - lastSignal > 12) {
+      output.push({ index, targetPrice: centerCurrent });
       lastSignal = index;
     }
   }
-  return indices;
+  return output;
 }
 
 function backtest(candles: CashBacktestCandle[], candidate: Candidate) {
-  const signalSet = new Set(signals(candles, candidate));
+  const signalMap = new Map(signals(candles, candidate).map((signal) => [signal.index, signal]));
   const atrValues = atr(candles);
   const trades: Trade[] = [];
   let cash = 1_000_000;
   let peak = cash;
   let maximumDrawdown = 0;
-  let pending = false;
-  let position: null | { quantity: number; entryPrice: number; entryFee: number; riskAmount: number; stop: number; target: number } = null;
+  let pending: Signal | null = null;
+  let position: Position | null = null;
   let tradesToday = 0;
   let day = '';
 
-  const close = (index: number, rawPrice: number) => {
-    if (!position) return;
+  const closePosition = (index: number, rawPrice: number) => {
+    const active = position as Position | null;
+    if (!active) return;
     const exitPrice = rawPrice * (1 - COSTS.slippageRate);
-    const exitFee = position.quantity * exitPrice * COSTS.exitFeeRate;
-    const netPnl = position.quantity * (exitPrice - position.entryPrice) - position.entryFee - exitFee;
-    cash += position.quantity * exitPrice - exitFee;
-    trades.push({ netPnl, rMultiple: netPnl / position.riskAmount });
+    const exitFee = active.quantity * exitPrice * COSTS.exitFeeRate;
+    const netPnl = active.quantity * (exitPrice - active.entryPrice) - active.entryFee - exitFee;
+    cash += active.quantity * exitPrice - exitFee;
+    trades.push({ netPnl, rMultiple: netPnl / active.riskAmount });
     position = null;
   };
 
-  const open = (index: number) => {
+  const openPosition = (index: number, signal: Signal) => {
     const rawEntry = candles[index].open;
     const entryPrice = rawEntry * (1 + COSTS.slippageRate);
     const atrValue = atrValues[index];
-    if (atrValue == null || atrValue <= 0) return;
+    if (atrValue == null || atrValue <= 0 || signal.targetPrice <= entryPrice) return;
     const stopDistance = atrValue * candidate.stopAtrMultiplier;
     const stop = entryPrice - stopDistance;
     if (stop <= 0) return;
     const conservativeStopExit = stop * (1 - COSTS.slippageRate);
+    const conservativeTargetExit = signal.targetPrice * (1 - COSTS.slippageRate);
     const entryFeePerUnit = entryPrice * COSTS.entryFeeRate;
-    const exitFeePerUnit = conservativeStopExit * COSTS.exitFeeRate;
-    const executionCost = stop * COSTS.slippageRate + entryFeePerUnit + exitFeePerUnit;
-    if (stopDistance / executionCost < 2) return;
-    const lossPerUnit = entryPrice - conservativeStopExit + entryFeePerUnit + exitFeePerUnit;
+    const stopFeePerUnit = conservativeStopExit * COSTS.exitFeeRate;
+    const targetFeePerUnit = conservativeTargetExit * COSTS.exitFeeRate;
+    const executionCost = stop * COSTS.slippageRate + entryFeePerUnit + stopFeePerUnit;
+    if (executionCost <= 0 || stopDistance / executionCost < 2) return;
+    const lossPerUnit = entryPrice - conservativeStopExit + entryFeePerUnit + stopFeePerUnit;
+    const netRewardPerUnit = conservativeTargetExit - entryPrice - entryFeePerUnit - targetFeePerUnit;
+    if (netRewardPerUnit <= 0 || netRewardPerUnit / lossPerUnit < candidate.minimumRewardR) return;
     const maxRisk = cash * 0.0015;
     const quantity = Math.min(maxRisk / lossPerUnit, cash / (entryPrice * (1 + COSTS.entryFeeRate)));
     if (!Number.isFinite(quantity) || quantity <= 0) return;
@@ -289,7 +312,8 @@ function backtest(candles: CashBacktestCandle[], candidate: Candidate) {
       entryFee,
       riskAmount: quantity * lossPerUnit,
       stop,
-      target: entryPrice + stopDistance * candidate.takeProfitR,
+      target: signal.targetPrice,
+      openedIndex: index,
     };
     tradesToday += 1;
   };
@@ -301,21 +325,24 @@ function backtest(candles: CashBacktestCandle[], candidate: Candidate) {
       tradesToday = 0;
     }
     if (!position && pending) {
-      if (tradesToday < 3) open(index);
-      pending = false;
+      if (tradesToday < 3) openPosition(index, pending);
+      pending = null;
     }
-    if (position) {
-      const hitStop = candles[index].low <= position.stop;
-      const hitTarget = candles[index].high >= position.target;
-      if (hitStop) close(index, position.stop);
-      else if (hitTarget) close(index, position.target);
+    const active = position as Position | null;
+    if (active) {
+      const hitStop = candles[index].low <= active.stop;
+      const hitTarget = candles[index].high >= active.target;
+      if (hitStop) closePosition(index, active.stop);
+      else if (hitTarget) closePosition(index, active.target);
+      else if (index - active.openedIndex >= candidate.maximumHoldBars) closePosition(index, candles[index].close);
     }
-    if (!position && !pending && signalSet.has(index) && tradesToday < 3) pending = true;
-    const equity = cash + (position ? position.quantity * candles[index].close : 0);
+    if (!position && !pending && signalMap.has(index) && tradesToday < 3) pending = signalMap.get(index) ?? null;
+    const marked = position as Position | null;
+    const equity = cash + (marked ? marked.quantity * candles[index].close : 0);
     peak = Math.max(peak, equity);
     maximumDrawdown = Math.max(maximumDrawdown, peak - equity);
   }
-  if (position) close(candles.length - 1, candles.at(-1)!.close);
+  if (position) closePosition(candles.length - 1, candles.at(-1)!.close);
   const wins = trades.filter((trade) => trade.netPnl > 0);
   const losses = trades.filter((trade) => trade.netPnl <= 0);
   const average = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
@@ -345,13 +372,7 @@ function split(candles: CashBacktestCandle[]) {
 }
 
 function result(symbol: Symbol, segment: SegmentName, candles: CashBacktestCandle[], candidate: Candidate): SegmentResult {
-  return {
-    symbol,
-    segment,
-    startTime: candles.at(0)?.timestamp ?? 0,
-    endTime: candles.at(-1)?.timestamp ?? 0,
-    ...backtest(candles, candidate),
-  };
+  return { symbol, segment, startTime: candles.at(0)?.timestamp ?? 0, endTime: candles.at(-1)?.timestamp ?? 0, ...backtest(candles, candidate) };
 }
 
 function finiteProfitFactor(value: number | null) {
@@ -364,7 +385,7 @@ function assess(symbol: Symbol, dataset: ReturnType<typeof split>, candidate: Ca
   const minimumSelectionExpectancyR = Math.min(training.expectancyR, validation.expectancyR);
   const minimumSelectionProfitFactor = Math.min(finiteProfitFactor(training.profitFactor), finiteProfitFactor(validation.profitFactor));
   const selectionTrades = training.totalTrades + validation.totalTrades;
-  const sparsePenalty = Math.max(0, 12 - training.totalTrades) * 0.04 + Math.max(0, 5 - validation.totalTrades) * 0.08;
+  const sparsePenalty = Math.max(0, 20 - training.totalTrades) * 0.025 + Math.max(0, 8 - validation.totalTrades) * 0.05;
   const score = minimumSelectionExpectancyR + Math.min(minimumSelectionProfitFactor, 3) * 0.05 + Math.min(selectionTrades, 100) * 0.001 - sparsePenalty;
   return { candidate, training, validation, minimumSelectionExpectancyR, minimumSelectionProfitFactor, selectionTrades, score };
 }
@@ -417,7 +438,7 @@ const payload = {
   ok: true,
   mode: 'backtest-only',
   orderSubmitted: false,
-  strategyFamily: 'bullish_channel_reversal',
+  strategyFamily: 'bullish_channel_center_exit',
   generatedAt: new Date().toISOString(),
   period: { startTime: START_TIME, endTime: END_TIME, days: DAYS, timeframe: TIMEFRAME },
   split: { trainingPercent: 60, validationPercent: 20, lockedTestPercent: 20 },
