@@ -221,6 +221,8 @@ export type TradingOrder = {
   lastErrorCode: string | null;
   manualReviewRequired?: boolean;
   executionClaimId?: string | null;
+  submissionStartedAt?: string | null;
+  submissionAttemptId?: string | null;
   approvedPlanVersion?: number | null;
   preSubmissionCheckedAt?: string | null;
   preSubmissionDecision?: TradingRiskDecision | null;
