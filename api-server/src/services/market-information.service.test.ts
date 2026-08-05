@@ -34,17 +34,17 @@ test('public market URL guard permits only quotation endpoints and blocks privat
 });
 
 test('public JSON client rejects primitive, empty object, empty body, and invalid JSON payloads', async () => {
-  const cases: Array<{ response: Response; code: string }> = [
-    { response: new Response('1', { status: 200 }), code: 'UPSTREAM_PRIMITIVE_PAYLOAD' },
-    { response: jsonResponse({}), code: 'UPSTREAM_EMPTY_OBJECT' },
-    { response: new Response('', { status: 200 }), code: 'UPSTREAM_EMPTY_BODY' },
-    { response: new Response('{', { status: 200 }), code: 'UPSTREAM_INVALID_JSON' },
+  const cases: Array<{ response: () => Response; code: string }> = [
+    { response: () => new Response('1', { status: 200 }), code: 'UPSTREAM_PRIMITIVE_PAYLOAD' },
+    { response: () => jsonResponse({}), code: 'UPSTREAM_EMPTY_OBJECT' },
+    { response: () => new Response('', { status: 200 }), code: 'UPSTREAM_EMPTY_BODY' },
+    { response: () => new Response('{', { status: 200 }), code: 'UPSTREAM_INVALID_JSON' },
   ];
   for (const item of cases) {
     await assert.rejects(
       fetchPublicMarketJson('https://api.upbit.com/v1/ticker?markets=KRW-BTC', {
         provider: 'test',
-        fetchImpl: async () => item.response,
+        fetchImpl: async () => item.response(),
         sleepImpl: noSleep,
       }),
       (error: unknown) => error instanceof MarketInformationError && error.code === item.code,
@@ -199,8 +199,8 @@ test('Bitget normalizer keeps USDT currency, zero funding, OI, next funding time
 
 test('Bitget derivatives normalizer accepts official public long-short and liquidation contracts', () => {
   const result = normalizeBitgetDerivatives(
-    { code: '00000', data: [{ longRatio: '0.55', shortRatio: '0.45', longShortRatio: '1.22', ts: '1786000000000' }] },
-    { code: '00000', data: { list: [{ symbol: 'BTCUSDT', side: 'buy', price: '70000', amount: '0.5', ts: '1786000000000' }] } },
+    { code: '00000', data: [{ longRatio: '0.55', shortRatio: '0.45', longShortRatio: '1.22', ts: '1785800000000' }] },
+    { code: '00000', data: { list: [{ symbol: 'BTCUSDT', side: 'buy', price: '70000', amount: '0.5', ts: '1785800000000' }] } },
   );
   assert.equal(result.referenceSymbol, 'BTCUSDT');
   assert.equal(result.longRatio, 0.55);
