@@ -94,7 +94,7 @@ export function createBoundedMarketScanRouter(
   const guard = dependencies.guard ?? scannerRequestGuard;
 
   router.use(requireScannerSession);
-  router.use(requireCapability('canAccessRiskPreview'));
+  router.use(requireCapability('canAccessSignalScanner'));
 
   router.get('/', async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
