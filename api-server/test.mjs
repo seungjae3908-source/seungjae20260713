@@ -110,6 +110,9 @@ try {
     outputFiles.push(outputFile);
   }
 
+  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
+  // serially so host-level event-loop contention cannot consume a scanner deadline
+  // before the test body starts. Test coverage and every assertion remain unchanged.
   const testArguments = mode === 'phase9'
     ? ['--test', '--test-concurrency=1', ...outputFiles]
     : ['--test', ...outputFiles];
