@@ -61,6 +61,15 @@ export type CashBacktestResult = {
 
 type Signal = { index: number; action: 'BUY' | 'SELL' };
 type TrendSnapshot = { fast: number; slow: number; slopePercent: number; bullish: boolean };
+type OpenCashPosition = {
+  entryTime: number;
+  entryPrice: number;
+  quantity: number;
+  entryFee: number;
+  riskAmount: number;
+  stop: number;
+  target: number;
+};
 const HOUR_MS = 60 * 60_000;
 const TIMEFRAME_MS: Record<string, number> = {
   '1m': 60_000,
@@ -342,7 +351,7 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
   const executionAtr = atr(candles, executionAtrPeriod);
   const trades: CashBacktestTrade[] = [];
   let cash = request.initialCapital;
-  let position: null | { entryTime: number; entryPrice: number; quantity: number; entryFee: number; riskAmount: number; stop: number; target: number } = null;
+  let position: OpenCashPosition | null = null;
   let pendingEntry = false;
   let totalFees = 0;
   let totalSlippage = 0;
@@ -405,12 +414,13 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
       pendingEntry = false;
     }
 
-    if (position) {
-      const hitStop = candle.low <= position.stop;
-      const hitTarget = candle.high >= position.target;
-      if (hitStop && hitTarget) closePosition(index, priority === 'stop_first' ? position.stop : position.target, priority === 'stop_first' ? 'stop_loss' : 'take_profit');
-      else if (hitStop) closePosition(index, position.stop, 'stop_loss');
-      else if (hitTarget) closePosition(index, position.target, 'take_profit');
+    const activePosition = position as OpenCashPosition | null;
+    if (activePosition) {
+      const hitStop = candle.low <= activePosition.stop;
+      const hitTarget = candle.high >= activePosition.target;
+      if (hitStop && hitTarget) closePosition(index, priority === 'stop_first' ? activePosition.stop : activePosition.target, priority === 'stop_first' ? 'stop_loss' : 'take_profit');
+      else if (hitStop) closePosition(index, activePosition.stop, 'stop_loss');
+      else if (hitTarget) closePosition(index, activePosition.target, 'take_profit');
       else if (strategyExitEnabled && signalMap.get(index) === 'SELL') closePosition(index, candle.close, 'strategy_exit');
     }
 
@@ -419,7 +429,8 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
       else openPosition(index, candle.close);
     }
 
-    const equity = cash + (position ? position.quantity * candle.close : 0);
+    const markedPosition = position as OpenCashPosition | null;
+    const equity = cash + (markedPosition ? markedPosition.quantity * candle.close : 0);
     peak = Math.max(peak, equity);
     maximumDrawdown = Math.max(maximumDrawdown, peak - equity);
   }
