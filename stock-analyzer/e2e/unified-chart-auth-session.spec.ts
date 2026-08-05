@@ -399,7 +399,11 @@ test.describe('production auth session and AI chart route', () => {
     await page.route(`https://${SUPABASE_HOST}/auth/v1/logout**`, async (route) => {
       logoutCalls += 1;
       currentUser = null;
-      await route.fulfill({ status: 204, body: '' });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: '{}',
+      });
     });
     await page.route(`https://${SUPABASE_HOST}/rest/v1/profiles**`, async (route) => {
       const requestUrl = decodeURIComponent(route.request().url());
