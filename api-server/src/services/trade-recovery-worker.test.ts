@@ -193,7 +193,7 @@ class FakeRecoverySource implements TradeRecoveryWorkerSource {
           this.activeTransitions -= 1;
         }
       },
-    } as TradingRepository;
+    } as unknown as TradingRepository;
   }
 
   async recordFailure(
