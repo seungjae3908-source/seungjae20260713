@@ -70,8 +70,8 @@ function cashCandles(count = 100): CashBacktestCandle[] {
     return {
       timestamp: start + index * 60_000,
       open: close - 0.2,
-      high: close + (index === 75 ? 5 : 0.5),
-      low: close - (index === 75 ? 5 : 0.5),
+      high: close + (index === 61 ? 5 : 0.5),
+      low: close - (index === 61 ? 5 : 0.5),
       close,
       volume: index >= 60 ? 2_000 : 1_000,
       quoteVolume: close * (index >= 60 ? 2_000 : 1_000),
@@ -115,5 +115,5 @@ test('cash engine uses stop-first when stop and target touch within one candle',
     riskPercent: 0.2, entryFeeRate: 0, exitFeeRate: 0, slippageRate: 0,
     stopLossPercent: 1, takeProfitR: 1, maximumTradesPerDay: 10, intrabarPriority: 'stop_first',
   }, cashCandles());
-  assert.ok(result.trades.some((trade) => trade.exitReason === 'stop_loss'));
+  assert.equal(result.trades[0]?.exitReason, 'stop_loss');
 });
