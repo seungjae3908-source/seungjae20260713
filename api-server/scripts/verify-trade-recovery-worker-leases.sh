@@ -69,7 +69,7 @@ claim_worker() {
   "${PSQL[@]}" <<SQL
 set role service_role;
 select payload->>'id'
-from public.claim_trade_recovery_orders('$worker_id', 2, 60)
+from public.claim_trade_recovery_orders('$worker_id', 2, 60) as claimed(payload)
 order by payload->>'id';
 SQL
 }
@@ -174,7 +174,7 @@ SQL
 reclaimed="$("${PSQL[@]}" <<SQL
 set role service_role;
 select count(*)
-from public.claim_trade_recovery_orders('$WORKER_3', 2, 60)
+from public.claim_trade_recovery_orders('$WORKER_3', 2, 60) as claimed(payload)
 where payload->>'id' = '$ORDER_2';
 SQL
 )"
