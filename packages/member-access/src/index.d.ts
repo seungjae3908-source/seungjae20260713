@@ -4,6 +4,7 @@ export type MemberCapability =
   | 'canAccessBasicInfo'
   | 'canAccessSpot'
   | 'canAccessFutures'
+  | 'canAccessSignalScanner'
   | 'canAccessRiskPreview'
   | 'canAccessBacktests'
   | 'canAccessPaperTrading'
