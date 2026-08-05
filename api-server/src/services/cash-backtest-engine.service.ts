@@ -60,6 +60,16 @@ export type CashBacktestResult = {
 };
 
 type Signal = { index: number; action: 'BUY' | 'SELL' };
+type TrendSnapshot = { fast: number; slow: number; slopePercent: number; bullish: boolean };
+const HOUR_MS = 60 * 60_000;
+const TIMEFRAME_MS: Record<string, number> = {
+  '1m': 60_000,
+  '3m': 3 * 60_000,
+  '5m': 5 * 60_000,
+  '10m': 10 * 60_000,
+  '15m': 15 * 60_000,
+  '30m': 30 * 60_000,
+};
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const numberParam = (request: CashBacktestRequest, key: string, fallback: number) => finite(request.parameters?.[key]) ? request.parameters![key] : fallback;
 
@@ -76,6 +86,23 @@ function ema(values: readonly number[], period: number) {
   return output;
 }
 
+function atr(candles: readonly CashBacktestCandle[], period: number) {
+  const output: Array<number | null> = Array(candles.length).fill(null);
+  if (candles.length < period) return output;
+  const trueRanges = candles.map((candle, index) => {
+    if (index === 0) return candle.high - candle.low;
+    const previousClose = candles[index - 1].close;
+    return Math.max(candle.high - candle.low, Math.abs(candle.high - previousClose), Math.abs(candle.low - previousClose));
+  });
+  let current = trueRanges.slice(0, period).reduce((sum, value) => sum + value, 0) / period;
+  output[period - 1] = current;
+  for (let index = period; index < candles.length; index += 1) {
+    current = (current * (period - 1) + trueRanges[index]) / period;
+    output[index] = current;
+  }
+  return output;
+}
+
 function averageVolume(candles: readonly CashBacktestCandle[], period: number) {
   return candles.map((_candle, index) => {
     if (index < period) return null;
@@ -84,12 +111,108 @@ function averageVolume(candles: readonly CashBacktestCandle[], period: number) {
   });
 }
 
-function signalsFor(request: CashBacktestRequest, candles: readonly CashBacktestCandle[]): Signal[] {
+function completedTrendSeries(
+  candles: readonly CashBacktestCandle[],
+  baseTimeframeMs: number,
+  bucketMs: number,
+  fastPeriod: number,
+  slowPeriod: number,
+) {
+  const buckets: Array<{ endIndex: number; close: number }> = [];
+  let currentKey: number | null = null;
+  let currentEndIndex = -1;
+  let currentClose = 0;
+  let currentTimestamp = 0;
+
+  const finalize = () => {
+    if (currentKey == null || currentEndIndex < 0) return;
+    const bucketEnd = (currentKey + 1) * bucketMs;
+    if (currentTimestamp + baseTimeframeMs >= bucketEnd) {
+      buckets.push({ endIndex: currentEndIndex, close: currentClose });
+    }
+  };
+
+  for (let index = 0; index < candles.length; index += 1) {
+    const key = Math.floor(candles[index].timestamp / bucketMs);
+    if (currentKey != null && key !== currentKey) finalize();
+    if (key !== currentKey) currentKey = key;
+    currentEndIndex = index;
+    currentClose = candles[index].close;
+    currentTimestamp = candles[index].timestamp;
+  }
+  finalize();
+
+  const closes = buckets.map((bucket) => bucket.close);
+  const fast = ema(closes, fastPeriod);
+  const slow = ema(closes, slowPeriod);
+  const snapshots = buckets.map((_bucket, index): TrendSnapshot | null => {
+    const fastNow = fast[index];
+    const slowNow = slow[index];
+    const fastPrevious = index > 0 ? fast[index - 1] : null;
+    if (fastNow == null || slowNow == null || fastPrevious == null || fastPrevious === 0) return null;
+    return {
+      fast: fastNow,
+      slow: slowNow,
+      slopePercent: (fastNow / fastPrevious - 1) * 100,
+      bullish: fastNow > slowNow,
+    };
+  });
+
+  const output: Array<TrendSnapshot | null> = Array(candles.length).fill(null);
+  let cursor = 0;
+  let available: TrendSnapshot | null = null;
+  for (let index = 0; index < candles.length; index += 1) {
+    while (cursor < buckets.length && buckets[cursor].endIndex <= index) {
+      available = snapshots[cursor];
+      cursor += 1;
+    }
+    output[index] = available;
+  }
+  return output;
+}
+
+function regimeEntryGate(request: CashBacktestRequest, candles: readonly CashBacktestCandle[]) {
+  const enabled = numberParam(request, 'regimeFilterEnabled', 0) >= 1;
+  if (!enabled) return Array(candles.length).fill(true) as boolean[];
+  const baseTimeframeMs = TIMEFRAME_MS[request.timeframe];
+  if (!baseTimeframeMs) return Array(candles.length).fill(false) as boolean[];
+  const fast1h = Math.max(2, Math.trunc(numberParam(request, 'regimeFastPeriod1h', 12)));
+  const slow1h = Math.max(fast1h + 1, Math.trunc(numberParam(request, 'regimeSlowPeriod1h', 26)));
+  const fast4h = Math.max(2, Math.trunc(numberParam(request, 'regimeFastPeriod4h', 12)));
+  const slow4h = Math.max(fast4h + 1, Math.trunc(numberParam(request, 'regimeSlowPeriod4h', 26)));
+  const minimumSlopePercent = numberParam(request, 'minimumTrendSlopePercent', 0);
+  const oneHour = completedTrendSeries(candles, baseTimeframeMs, HOUR_MS, fast1h, slow1h);
+  const fourHour = completedTrendSeries(candles, baseTimeframeMs, 4 * HOUR_MS, fast4h, slow4h);
+  return candles.map((candle, index) => {
+    const oneHourState = oneHour[index];
+    const fourHourState = fourHour[index];
+    return Boolean(
+      oneHourState
+      && fourHourState
+      && oneHourState.bullish
+      && fourHourState.bullish
+      && oneHourState.slopePercent >= minimumSlopePercent
+      && fourHourState.slopePercent >= minimumSlopePercent
+      && candle.close >= oneHourState.slow
+      && candle.close >= fourHourState.slow,
+    );
+  });
+}
+
+export function calculateCashSignals(request: CashBacktestRequest, candles: readonly CashBacktestCandle[]): Signal[] {
   const closes = candles.map((candle) => candle.close);
   const volumePeriod = Math.max(2, Math.trunc(numberParam(request, 'volumePeriod', 20)));
   const volumeMultiplier = Math.max(0, numberParam(request, 'volumeMultiplier', 1));
   const volumes = averageVolume(candles, volumePeriod);
   const signals: Signal[] = [];
+  const entryGate = regimeEntryGate(request, candles);
+  const cooldownBars = Math.max(0, Math.trunc(numberParam(request, 'cooldownBars', 0)));
+  let lastBuyIndex = Number.NEGATIVE_INFINITY;
+  const pushBuy = (index: number) => {
+    if (!entryGate[index] || index - lastBuyIndex <= cooldownBars) return;
+    signals.push({ index, action: 'BUY' });
+    lastBuyIndex = index;
+  };
 
   if (request.strategy === 'trend_pullback') {
     const fastPeriod = Math.max(2, Math.trunc(numberParam(request, 'fastPeriod', 20)));
@@ -104,20 +227,26 @@ function signalsFor(request: CashBacktestRequest, candles: readonly CashBacktest
       const average = volumes[index];
       if (fastNow == null || fastPrevious == null || slowNow == null || average == null) continue;
       const volumeOk = candles[index].volume >= average * volumeMultiplier;
-      if (fastNow > slowNow && candles[index - 1].close <= fastPrevious * (1 + tolerance) && candles[index].close > fastNow && volumeOk) signals.push({ index, action: 'BUY' });
+      if (fastNow > slowNow && candles[index - 1].close <= fastPrevious * (1 + tolerance) && candles[index].close > fastNow && volumeOk) pushBuy(index);
       if (fastNow < slowNow || candles[index].close < fastNow) signals.push({ index, action: 'SELL' });
     }
   }
 
   if (request.strategy === 'breakout') {
     const lookback = Math.max(2, Math.trunc(numberParam(request, 'lookback', 20)));
+    const atrPeriod = Math.max(2, Math.trunc(numberParam(request, 'atrPeriod', 14)));
+    const minimumBreakoutAtr = Math.max(0, numberParam(request, 'minimumBreakoutAtr', 0));
+    const atrValues = atr(candles, atrPeriod);
     for (let index = lookback; index < candles.length; index += 1) {
       const previous = candles.slice(index - lookback, index);
       const high = Math.max(...previous.map((candle) => candle.high));
       const low = Math.min(...previous.map((candle) => candle.low));
       const average = volumes[index];
       if (average == null) continue;
-      if (candles[index].close > high && candles[index].volume >= average * volumeMultiplier) signals.push({ index, action: 'BUY' });
+      const breakoutDistance = candles[index].close - high;
+      const atrValue = atrValues[index];
+      const breakoutDistanceOk = minimumBreakoutAtr === 0 || (atrValue != null && breakoutDistance >= atrValue * minimumBreakoutAtr);
+      if (breakoutDistance > 0 && breakoutDistanceOk && candles[index].volume >= average * volumeMultiplier) pushBuy(index);
       if (candles[index].close < low) signals.push({ index, action: 'SELL' });
     }
   }
@@ -133,7 +262,7 @@ function signalsFor(request: CashBacktestRequest, candles: readonly CashBacktest
       const currentVwap = cumulativeVolume > 0 ? cumulativeValue / cumulativeVolume : null;
       const average = volumes[index];
       if (index > 0 && currentVwap != null && previousVwap != null && average != null) {
-        if (candles[index - 1].close <= previousVwap && candle.close > currentVwap && candle.volume >= average * volumeMultiplier) signals.push({ index, action: 'BUY' });
+        if (candles[index - 1].close <= previousVwap && candle.close > currentVwap && candle.volume >= average * volumeMultiplier) pushBuy(index);
         if (candles[index - 1].close >= previousVwap && candle.close < currentVwap) signals.push({ index, action: 'SELL' });
       }
       previousVwap = currentVwap;
@@ -150,13 +279,16 @@ export function validateCashBacktestRequest(request: CashBacktestRequest) {
   if (!finite(request.stopLossPercent) || request.stopLossPercent <= 0 || request.stopLossPercent >= 100) throw new BacktestMarketContractError('INVALID_STOP_LOSS', '손절률이 올바르지 않습니다.');
   if (!finite(request.takeProfitR) || request.takeProfitR <= 0) throw new BacktestMarketContractError('INVALID_TAKE_PROFIT', '목표 R 값이 올바르지 않습니다.');
   if (!Number.isInteger(request.maximumTradesPerDay) || request.maximumTradesPerDay < 1 || request.maximumTradesPerDay > 100) throw new BacktestMarketContractError('INVALID_DAILY_TRADES', '일일 거래 수 제한이 올바르지 않습니다.');
+  if (numberParam(request, 'regimeFilterEnabled', 0) >= 1 && !TIMEFRAME_MS[request.timeframe]) {
+    throw new BacktestMarketContractError('REGIME_FILTER_TIMEFRAME_UNSUPPORTED', '다중 시간봉 장세 필터는 1~30분봉에서만 지원합니다.');
+  }
 }
 
 export function runCashBacktest(request: CashBacktestRequest, inputCandles: readonly CashBacktestCandle[]): CashBacktestResult {
   validateCashBacktestRequest(request);
   const candles = [...inputCandles].filter((candle) => candle.isClosed && finite(candle.timestamp) && candle.open > 0 && candle.high > 0 && candle.low > 0 && candle.close > 0).sort((a, b) => a.timestamp - b.timestamp);
   if (candles.length < 60) throw new BacktestMarketContractError('INSUFFICIENT_CANDLES', '현물 백테스트에는 완료 캔들이 최소 60개 필요합니다.');
-  const signals = signalsFor(request, candles);
+  const signals = calculateCashSignals(request, candles);
   const signalMap = new Map(signals.map((signal) => [signal.index, signal.action]));
   const priority = request.intrabarPriority ?? 'stop_first';
   const trades: CashBacktestTrade[] = [];
@@ -229,6 +361,9 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
   const grossProfit = winning.reduce((sum, trade) => sum + trade.netPnl, 0);
   const grossLoss = Math.abs(losing.reduce((sum, trade) => sum + trade.netPnl, 0));
   const averageRMultiple = average(trades.map((trade) => trade.rMultiple));
+  const warnings: string[] = [];
+  if (numberParam(request, 'regimeFilterEnabled', 0) >= 1) warnings.push('완료된 1시간·4시간봉만 사용하는 market-regime-v2 진입 필터를 적용했습니다.');
+  if (!trades.length) warnings.push('조건을 충족한 매매가 없어 성과를 계산할 거래가 없습니다.');
   return {
     ok: true,
     mode: 'backtest-only',
@@ -253,6 +388,6 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
     totalFees,
     totalSlippage,
     trades,
-    warnings: trades.length ? [] : ['조건을 충족한 매매가 없어 성과를 계산할 거래가 없습니다.'],
+    warnings,
   };
 }
