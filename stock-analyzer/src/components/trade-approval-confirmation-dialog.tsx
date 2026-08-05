@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { AlertTriangle, Loader2, ShieldCheck, ShieldX, X } from 'lucide-react';
 import type { TradeApprovalQueueItem } from '@/components/trade-approval-queue';
 import {
@@ -95,14 +95,18 @@ export function TradeApprovalConfirmationDialog({
     };
   }, [onRevalidate]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    window.requestAnimationFrame(() => cancelButtonRef.current?.focus());
+    const initialFocusFrame = window.requestAnimationFrame(() => cancelButtonRef.current?.focus());
     return () => {
+      window.cancelAnimationFrame(initialFocusFrame);
       document.body.style.overflow = previousOverflow;
-      previousFocusRef.current?.focus();
+      const focusTarget = previousFocusRef.current;
+      window.requestAnimationFrame(() => {
+        if (focusTarget?.isConnected) focusTarget.focus();
+      });
     };
   }, []);
 
