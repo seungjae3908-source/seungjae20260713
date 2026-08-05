@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -133,6 +133,15 @@ try {
     }
     if (failedEntries.length > 0) {
       const failedList = failedEntries.join(', ');
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        const summary = [
+          '## Phase 12 failed test files',
+          '',
+          ...failedEntries.map((entry) => `- \`${entry}\``),
+          '',
+        ].join('\n');
+        await appendFile(process.env.GITHUB_STEP_SUMMARY, summary, 'utf8');
+      }
       process.stdout.write(`::error title=Phase 12 failed files::${escapeWorkflowCommand(failedList)}\n`);
       throw new Error(`Phase 12 failed test files: ${failedList}`);
     }
