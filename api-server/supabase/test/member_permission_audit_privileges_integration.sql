@@ -97,7 +97,9 @@ insert into public.member_permission_audit (
 do $admin_audit_scope$
 begin
   if (select count(*) from public.member_permission_audit
-      where actor_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa') <> 1 then
+      where actor_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        and target_user_id = '11111111-1111-1111-1111-111111111111'
+        and reason = 'disposable admin audit verification') <> 1 then
     raise exception 'admin could not read the audit row allowed by RLS';
   end if;
 end
