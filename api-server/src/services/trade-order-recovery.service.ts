@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { TradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
@@ -16,7 +15,6 @@ import type {
   TradingExchangeOrderSnapshot,
   TradingFill,
   TradingOrder,
-  TradingOrderState,
   TradingPlan,
 } from './trade-automation.types';
 
@@ -301,11 +299,15 @@ export class TradeOrderRecoveryService {
     order.lastReconciledAt = new Date().toISOString();
     order.lastErrorCode = null;
     order.manualReviewRequired = false;
+    const cancellationIntent = Boolean(order.cancelRequestClaimId || order.cancelRequestedAt);
     return this.automation.transition(order, snapshot.state, 'EXCHANGE_ORDER_RECONCILED', {
       exchangeOrderId: order.exchangeOrderId,
       filledQuantity: order.filledQuantity,
       averageFillPrice: order.averageFillPrice,
       providerStatusCode: order.providerStatusCode,
+      cancellationIntent,
+      partialFillPreserved: snapshot.state === 'CANCELED' && snapshot.filledQuantity > 0,
+      filledAfterCancelRequest: cancellationIntent && snapshot.state === 'FILLED',
       orderSubmissionAttempted: false,
     });
   }
@@ -321,23 +323,18 @@ export class TradeOrderRecoveryService {
     order.nextRetryAt = requiresReview ? null : new Date(now.getTime() + delayMs).toISOString();
     order.manualReviewRequired = requiresReview;
     order.updatedAt = now.toISOString();
-    await this.repository.saveOrder(order);
-    await this.repository.appendEvent({
-      id: randomUUID(),
-      userId: order.userId,
-      orderId: order.id,
-      fromState: 'RECOVERY_REQUIRED',
-      toState: 'RECOVERY_REQUIRED',
-      reason: requiresReview ? 'EXCHANGE_RECONCILIATION_MANUAL_REVIEW' : 'EXCHANGE_RECONCILIATION_RETRY_SCHEDULED',
-      metadata: {
+    return this.automation.transition(
+      order,
+      'RECOVERY_REQUIRED',
+      requiresReview ? 'EXCHANGE_RECONCILIATION_MANUAL_REVIEW' : 'EXCHANGE_RECONCILIATION_RETRY_SCHEDULED',
+      {
         errorCode,
         retryCount,
         nextRetryAt: order.nextRetryAt,
         manualReviewRequired: requiresReview,
+        cancellationIntent: Boolean(order.cancelRequestClaimId || order.cancelRequestedAt),
         orderSubmissionAttempted: false,
       },
-      createdAt: now.toISOString(),
-    });
-    return order;
+    );
   }
 }
