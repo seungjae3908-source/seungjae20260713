@@ -108,11 +108,16 @@ export function TradeSignalAlerts({ fixture }: { fixture?: TradeSignalAlertItem[
       const payload = await response.json().catch(() => ({})) as AlertResponse;
       if (!response.ok || !payload.ok) throw new Error(payload.error ?? 'SIGNAL_ALERT_LOAD_FAILED');
       if (sequence !== requestSequenceRef.current) return;
+      const responseUpdatedAt = typeof payload.updatedAt === 'string' && Number.isFinite(Date.parse(payload.updatedAt))
+        ? payload.updatedAt
+        : null;
       setAlerts(Array.isArray(payload.alerts) ? payload.alerts : []);
-      setLastUpdatedAt(payload.updatedAt ?? new Date().toISOString());
-      setStale(false);
+      setLastUpdatedAt(responseUpdatedAt);
+      setStale(responseUpdatedAt === null);
       setOffline(false);
-      if (!silent) setMessage('');
+      setMessage(responseUpdatedAt === null
+        ? '서버 갱신 시각을 확인할 수 없어 최신 정보로 표시하지 않습니다.'
+        : '');
     } catch (error) {
       if (sequence !== requestSequenceRef.current) return;
       const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
