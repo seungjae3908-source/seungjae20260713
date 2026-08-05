@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   phase12-diagnostic:
-    name: Capture exact Phase 12 failures
+    name: Isolate Phase 12 verifier failures
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -38,10 +38,66 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - name: Install workspace dependencies with frozen lockfile
         run: pnpm install --frozen-lockfile
-      - name: Run Phase 12 tests
-        id: phase12
+      - name: Run Phase 12 test files
+        id: tests
         continue-on-error: true
-        run: pnpm --dir api-server run test:phase12
+        working-directory: api-server
+        run: node ./test.mjs phase12
+      - name: Verify staging deploy script contract
+        id: staging_deploy
+        continue-on-error: true
+        working-directory: api-server
+        run: node ./scripts/verify-staging-deploy-script-contract.mjs
+      - name: Verify staging bootstrap contract
+        id: staging_bootstrap
+        continue-on-error: true
+        working-directory: api-server
+        run: node ./scripts/verify-staging-bootstrap-contract.mjs
+      - name: Verify paper journal privilege contract
+        id: paper_journal
+        continue-on-error: true
+        working-directory: api-server
+        run: node ./scripts/verify-paper-journal-privilege-contract.mjs
+      - name: Verify member permission audit contract
+        id: member_audit
+        continue-on-error: true
+        working-directory: api-server
+        run: node ./scripts/verify-member-permission-audit-contract.mjs
+      - name: Verify AI preview diagnostic contract
+        id: ai_preview
+        continue-on-error: true
+        working-directory: api-server
+        run: node ./scripts/verify-ai-preview-diagnostic-contract.mjs
+      - name: Test staging PostgreSQL auth
+        id: postgres_auth_test
+        continue-on-error: true
+        working-directory: api-server
+        run: node ./scripts/test-staging-postgres-auth.mjs
+      - name: Verify staging PostgreSQL auth contract
+        id: postgres_auth_contract
+        continue-on-error: true
+        working-directory: api-server
+        run: node ./scripts/verify-staging-postgres-auth-contract.mjs
+      - name: Verify staging login selector contract
+        id: login_selector
+        continue-on-error: true
+        working-directory: api-server
+        run: node ./scripts/verify-staging-login-selector-contract.mjs
+      - name: Verify profile request coordinator contract
+        id: profile_coordinator
+        continue-on-error: true
+        working-directory: api-server
+        run: node ./scripts/verify-profile-request-coordinator-contract.mjs
+      - name: Verify server readonly diagnostics contract
+        id: server_readonly
+        continue-on-error: true
+        working-directory: api-server
+        run: node ./scripts/verify-server-readonly-diagnostics-contract.mjs
+      - name: Verify staging artifact sanitization contract
+        id: artifact_sanitization
+        continue-on-error: true
+        working-directory: api-server
+        run: node ./scripts/verify-staging-artifact-sanitization-contract.mjs
       - name: Upload Phase 12 failure manifest
         if: always()
         uses: actions/upload-artifact@v4
@@ -50,6 +106,24 @@ jobs:
           path: api-server/phase12-failures.txt
           if-no-files-found: warn
           retention-days: 2
-      - name: Preserve Phase 12 result
-        if: steps.phase12.outcome != 'success'
-        run: exit 1
+      - name: Preserve verifier results
+        if: always()
+        env:
+          RESULTS: >-
+            tests=${{ steps.tests.outcome }}
+            staging_deploy=${{ steps.staging_deploy.outcome }}
+            staging_bootstrap=${{ steps.staging_bootstrap.outcome }}
+            paper_journal=${{ steps.paper_journal.outcome }}
+            member_audit=${{ steps.member_audit.outcome }}
+            ai_preview=${{ steps.ai_preview.outcome }}
+            postgres_auth_test=${{ steps.postgres_auth_test.outcome }}
+            postgres_auth_contract=${{ steps.postgres_auth_contract.outcome }}
+            login_selector=${{ steps.login_selector.outcome }}
+            profile_coordinator=${{ steps.profile_coordinator.outcome }}
+            server_readonly=${{ steps.server_readonly.outcome }}
+            artifact_sanitization=${{ steps.artifact_sanitization.outcome }}
+        run: |
+          printf '%s\n' "$RESULTS"
+          if printf '%s\n' "$RESULTS" | grep -q '=failure'; then
+            exit 1
+          fi
