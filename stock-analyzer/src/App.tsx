@@ -45,6 +45,7 @@ const Phase8ReleaseCandidateE2EPage = lazy(() => import('@/pages/phase8-release-
 const Phase9AiReviewE2EPage = lazy(() => import('@/pages/phase9-ai-review-e2e'));
 const AiChartPage = lazy(() => import('@/pages/ai-chart'));
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
+const TradingWorkspacePage = lazy(() => import('@/pages/trading-workspace'));
 const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
 
@@ -103,7 +104,10 @@ function CryptoDetailRedirect() {
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const scannerRoute = location.startsWith('/scanner');
-  const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
+  const wide = scannerRoute
+    || location.startsWith('/ai-chart')
+    || location.startsWith('/trading-workspace')
+    || location.startsWith('/__phase11-technical-workspace-e2e');
   return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
 }
 
@@ -114,6 +118,7 @@ function gated(capability: MemberCapability, child: React.ReactNode) {
 function ScannerAccess() { return gated('canAccessRiskPreview', <TechnicalWorkspacePage />); }
 function AiChartAccess() { return gated('canAccessRiskPreview', <AiChartPage />); }
 function AiChatAccess() { return gated('canAccessBasicInfo', <AiChatPage />); }
+function TradingWorkspaceAccess() { return gated('canAccessPaperTrading', <TradingWorkspacePage />); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
 function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
@@ -143,6 +148,7 @@ function ApprovedRouter() {
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
+    <Route path="/trading-workspace" component={TradingWorkspaceAccess} />
     <Route path="/themes" component={ThemesPage} />
     <Route path="/learn" component={LearnPage} />
     <Route path="/watchlist" component={WatchlistPage} />
