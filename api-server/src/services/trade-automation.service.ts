@@ -3,13 +3,19 @@ import { assertOrderTransition } from './trade-order-state-machine.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingRepository } from './trade-automation.repository';
 import type {
+  TradingMarketSnapshot,
   TradingOrder, TradingOrderEvent, TradingOrderState, TradingPlan, TradingPlanInput, TradingPolicy,
+  TradingRiskDecision,
 } from './trade-automation.types';
 
 const APPROVAL_TTL_MS = 10 * 60_000;
 
 function orderVersion(order: TradingOrder) {
   return Number.isInteger(order.version) && Number(order.version) >= 0 ? Number(order.version) : 0;
+}
+
+function planVersion(plan: TradingPlan) {
+  return Number.isInteger(plan.version) && Number(plan.version) >= 0 ? Number(plan.version) : 0;
 }
 
 function providerTimestamp(order: TradingOrder) {
@@ -73,20 +79,22 @@ export class TradeAutomationService {
       ...input,
       id: randomUUID(), userId, idempotencyKey,
       state: approvalRequired ? 'APPROVAL_PENDING' : 'PLANNED',
+      version: 0,
       approvalExpiresAt: approvalRequired ? new Date(now.getTime() + APPROVAL_TTL_MS).toISOString() : null,
       approvedAt: null, createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
-    await this.repository.savePlan(plan);
-    return { plan, duplicate: false, decision };
+    const inserted = await this.repository.insertPlan(plan);
+    return { plan: inserted.plan, duplicate: !inserted.inserted, decision };
   }
 
   async approvePlan(userId: string, planId: string) {
     const plan = await this.repository.getPlan(userId, planId);
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
     if (plan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
+    const expectedVersion = planVersion(plan);
     if (!plan.approvalExpiresAt || Date.parse(plan.approvalExpiresAt) <= Date.now()) {
-      plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
-      await this.repository.savePlan(plan);
+      const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
+      await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
       throw new Error('TRADE_PLAN_EXPIRED');
     }
     const policy = await this.repository.getPolicy(userId);
@@ -95,13 +103,16 @@ export class TradeAutomationService {
       serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
     });
     if (!decision.allowed) {
-      plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
-      await this.repository.savePlan(plan);
+      const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
+      await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
       throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
     }
-    plan.state = 'SUBMITTED'; plan.approvedAt = new Date().toISOString(); plan.updatedAt = plan.approvedAt;
-    await this.repository.savePlan(plan);
-    return plan;
+    const approvedAt = new Date().toISOString();
+    const approved = await this.repository.compareAndSetPlan({
+      ...plan, state: 'SUBMITTED', approvedAt, updatedAt: approvedAt,
+    }, 'APPROVAL_PENDING', expectedVersion);
+    if (!approved) throw new Error('TRADE_PLAN_CONCURRENTLY_CHANGED');
+    return approved;
   }
 
   async beginAutomaticPlan(userId: string, planId: string) {
@@ -109,10 +120,16 @@ export class TradeAutomationService {
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
     if (plan.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
     const policy = await this.repository.getPolicy(userId);
-    if (await this.emergencyStopActive(userId, policy)) throw new Error('EMERGENCY_STOP_ACTIVE');
-    plan.state = 'SUBMITTED'; plan.updatedAt = new Date().toISOString();
-    await this.repository.savePlan(plan);
-    return plan;
+    const decision = evaluateTradingPlan(plan, policy, {
+      emergencyStopped: await this.emergencyStopActive(userId, policy),
+      serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
+    });
+    if (!decision.allowed) throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
+    const submitted = await this.repository.compareAndSetPlan({
+      ...plan, state: 'SUBMITTED', updatedAt: new Date().toISOString(),
+    }, 'PLANNED', planVersion(plan));
+    if (!submitted) throw new Error('TRADE_PLAN_CONCURRENTLY_CHANGED');
+    return submitted;
   }
 
   async createOrder(userId: string, plan: TradingPlan) {
@@ -123,13 +140,25 @@ export class TradeAutomationService {
     const order: TradingOrder = {
       id: randomUUID(), userId, planId: plan.id, exchange: plan.exchange,
       clientOrderId: `sj-${plan.exchange}-${plan.idempotencyKey.slice(0, 20)}`,
-      exchangeOrderId: null, state: 'SUBMITTED', requestedQuantity: plan.quantity ?? null,
+      exchangeOrderId: null, state: 'SUBMITTED', version: 0,
+      requestedQuantity: plan.quantity ?? null,
       filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
+      approvedPlanVersion: planVersion(plan),
+      preSubmissionCheckedAt: null,
+      preSubmissionDecision: null,
+      preSubmissionSnapshot: null,
       createdAt: now, updatedAt: now,
     };
-    await this.repository.saveOrder(order);
-    await this.event(order, null, 'SUBMITTED', 'ORDER_CREATED', { accountMode: plan.accountMode });
-    return { order, duplicate: false };
+    const created = await this.repository.createOrderAtomic(
+      order,
+      this.orderEvent(order, null, 'SUBMITTED', 'ORDER_CREATED', {
+        accountMode: plan.accountMode,
+        approvedPlanVersion: order.approvedPlanVersion,
+      }),
+      'SUBMITTED',
+    );
+    if (!created) throw new Error('TRADE_ORDER_ATOMIC_CREATE_FAILED');
+    return { order: created.order, duplicate: !created.inserted };
   }
 
   async transition(order: TradingOrder, toState: TradingOrderState, reason: string, metadata: Record<string, unknown> = {}) {
@@ -140,6 +169,13 @@ export class TradeAutomationService {
     if (typeof metadata.filledQuantity === 'number') next.filledQuantity = metadata.filledQuantity;
     if (typeof metadata.averageFillPrice === 'number') next.averageFillPrice = metadata.averageFillPrice;
     if (typeof metadata.errorCode === 'string') next.lastErrorCode = metadata.errorCode;
+    if (typeof metadata.preSubmissionCheckedAt === 'string') next.preSubmissionCheckedAt = metadata.preSubmissionCheckedAt;
+    if (metadata.preSubmissionDecision && typeof metadata.preSubmissionDecision === 'object') {
+      next.preSubmissionDecision = metadata.preSubmissionDecision as TradingRiskDecision;
+    }
+    if (metadata.preSubmissionSnapshot && typeof metadata.preSubmissionSnapshot === 'object') {
+      next.preSubmissionSnapshot = metadata.preSubmissionSnapshot as TradingMarketSnapshot;
+    }
 
     let result = await this.repository.transitionOrderAtomic(
       next,
@@ -192,8 +228,8 @@ export class TradeAutomationService {
     const order = await this.repository.findOrderByPlan(userId, planId);
     if (!order) {
       if (plan.state === 'APPROVAL_PENDING' || plan.state === 'PLANNED') {
-        plan.state = 'EXPIRED'; plan.updatedAt = new Date().toISOString();
-        await this.repository.savePlan(plan);
+        const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
+        await this.repository.compareAndSetPlan(expired, plan.state, planVersion(plan));
       }
       return { plan, order: null, filledQuantityPreserved: 0 };
     }
@@ -217,12 +253,5 @@ export class TradeAutomationService {
       id: randomUUID(), userId: order.userId, orderId: order.id, fromState, toState,
       reason, metadata, createdAt: new Date().toISOString(),
     };
-  }
-
-  private async event(
-    order: TradingOrder, fromState: TradingOrderState | null, toState: TradingOrderState,
-    reason: string, metadata: Record<string, unknown>,
-  ) {
-    await this.repository.appendEvent(this.orderEvent(order, fromState, toState, reason, metadata));
   }
 }
