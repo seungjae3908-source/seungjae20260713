@@ -103,6 +103,7 @@ export function createCryptoSignalScanRouter(
   const scanner = dependencies.scanner ?? CryptoSignalScannerService;
   const guard = dependencies.guard ?? scannerRequestGuard;
   router.use(requireScannerSession);
+  router.use(requireCapability('canAccessSignalScanner'));
 
   const handler = (market: 'spot' | 'futures') => async (req: AuthenticatedRequest, res: Response) => {
     const selectedTimeframe = timeframe(req.query.timeframe);
@@ -141,8 +142,8 @@ export function createCryptoSignalScanRouter(
     }
   };
 
-  router.get('/spot', requireCapability('canAccessSpot'), handler('spot'));
-  router.get('/futures', requireCapability('canAccessFutures'), handler('futures'));
+  router.get('/spot', handler('spot'));
+  router.get('/futures', handler('futures'));
   return router;
 }
 
