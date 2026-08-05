@@ -21,9 +21,9 @@ const expectedApproval = {
   approved: true,
   approvedBy: 'seungjae3908-source',
   approvalMessage: '운영배포승인',
-  sourceMainSha: 'cd2f92cb084055798a0641876126979445c1e8b9',
+  sourceMainSha: '3722a2f893c159f92ddd88a3baf6bc026e045089',
   oneTime: true,
-  requestedAt: '2026-08-04T04:53:00+09:00',
+  requestedAt: '2026-08-06T07:39:35+09:00',
 };
 if (JSON.stringify(approval) !== JSON.stringify(expectedApproval)) {
   failures.push('approval record: exact owner approval payload changed');
