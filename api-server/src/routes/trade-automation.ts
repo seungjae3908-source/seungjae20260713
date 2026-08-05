@@ -225,9 +225,23 @@ router.post('/orders/:id/cancel', async (req: AuthenticatedRequest, res) => {
 
 router.post('/recovery/scan', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, automation } = context(req);
-    const orders = await automation.recoverOpenOrders(userId);
-    return res.json({ ok: true, recoveryRequired: orders.length, exchangeOrdersSubmitted: false });
+    const { userId, repository, automation, execution } = context(req);
+    const candidates = await automation.recoverOpenOrders(userId);
+    const orders = [];
+    for (const candidate of candidates) {
+      const plan = await repository.getPlan(userId, candidate.planId);
+      if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+      orders.push(await execution.reconcile(userId, plan, candidate));
+    }
+    return res.json({
+      ok: true,
+      recoveryRequired: candidates.length,
+      reconciled: orders.filter((order) => order.state !== 'RECOVERY_REQUIRED').length,
+      pending: orders.filter((order) => order.state === 'RECOVERY_REQUIRED' && !order.manualReviewRequired).length,
+      manualReviewRequired: orders.filter((order) => order.manualReviewRequired).length,
+      orders,
+      exchangeOrdersSubmitted: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
