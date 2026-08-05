@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import apiRouter from './routes';
+import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { startPriceAlertMonitor } from './services/notification.service';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -64,6 +65,7 @@ app.get('/api/health', (_req, res) => {
 
 /* API routes remain before frontend static files. Scanner authentication and
  * capability checks are owned by the API router instead of a public bypass. */
+app.use('/api/paper-journal', rejectPaperJournalQueryIdentity);
 app.use('/api', apiRouter);
 
 const frontendDistCandidates = [
