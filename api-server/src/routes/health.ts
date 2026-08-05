@@ -1,7 +1,6 @@
 import { Router, type IRouter, type Request } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { MarketDataService } from "../services/market-data.service";
-import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
@@ -63,8 +62,11 @@ router.get("/healthz/data-plane", async (req, res) => {
       providerUpdatedAt: quote.updatedAt,
       checkedAt,
     });
-  } catch (error) {
-    logger.warn({ err: error }, "production data-plane readiness probe failed");
+  } catch {
+    // Keep the warning deterministic and secret-free. Request-level logging
+    // still records the resulting 503 without coupling this router to Pino's
+    // development transport in isolated smoke-test bundles.
+    console.warn("production data-plane readiness probe failed");
     return res.status(503).json({
       ok: false,
       dataPlane: "market-quotes",
