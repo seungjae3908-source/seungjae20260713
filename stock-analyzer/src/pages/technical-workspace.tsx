@@ -3,11 +3,8 @@ import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CapabilityGate } from '@/components/capability-gate';
 import { ScannerSavedSearchManager } from '@/components/scanner-saved-search-manager';
-import { useAssetMode } from '@/lib/asset-mode';
 import AiChartPage from '@/pages/ai-chart';
 import AutoTradingPage from '@/pages/auto-trading';
-import CryptoFuturesScannerPage from '@/pages/crypto-futures-scanner';
-import CryptoSpotScannerPage from '@/pages/crypto-spot-scanner';
 import ScannerPage from '@/pages/scanner';
 import SignalScannerPage from '@/pages/signal-scanner';
 import type { MemberCapability } from '../../../packages/member-access/src/index.js';
@@ -34,17 +31,11 @@ function gated(bypass: boolean, capability: MemberCapability, child: ReactNode) 
 export default function TechnicalWorkspacePage() {
   const desktop = useDesktopWorkspace();
   const [location] = useLocation();
-  const assetMode = useAssetMode();
   const phase11SignalRoute = location.startsWith('/__phase11-technical-workspace-e2e');
   const [mobileWorkspace, setMobileWorkspace] = useState<MobileWorkspace>(() => phase11SignalRoute ? 'signal' : 'legacy');
 
   if (location.startsWith('/auto-trading')) {
     return gated(phase11SignalRoute, 'canAccessPaperTrading', <AutoTradingPage />);
-  }
-  if (assetMode.asset === 'coin') {
-    return assetMode.coinMarket === 'futures'
-      ? gated(phase11SignalRoute, 'canAccessFutures', <CryptoFuturesScannerPage />)
-      : gated(phase11SignalRoute, 'canAccessSpot', <CryptoSpotScannerPage />);
   }
   if (!desktop) {
     return gated(
