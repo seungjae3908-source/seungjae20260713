@@ -1,0 +1,132 @@
+name: Application CI Main Dispatch Bridge
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - .github/workflows/futures-public-network-smoke.yml
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - package.json
+      - api-server/**
+      - stock-analyzer/**
+      - packages/**
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/application-ci-main-dispatch-bridge.yml
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: application-ci-main-dispatch-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate main CI dispatch bridge
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify bridge contract
+        run: |
+          set -Eeuo pipefail
+          test "${{ github.event.pull_request.base.ref }}" = "main"
+          test "${{ github.event.pull_request.head.sha }}" != ""
+
+  dispatch:
+    name: Dispatch exact-SHA Application CI
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Dispatch and verify Application CI run
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        with:
+          script: |
+            const workflowId = 'futures-public-network-smoke.yml';
+            const targetSha = process.env.TARGET_SHA;
+            if (!/^[0-9a-f]{40}$/.test(targetSha)) {
+              core.setFailed('Exact 40-character main SHA is required.');
+              return;
+            }
+
+            const branch = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (branch.data.commit.sha !== targetSha) {
+              core.setFailed(`Bridge only dispatches the current main SHA: ${branch.data.commit.sha}`);
+              return;
+            }
+
+            const workflow = await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            });
+            if (workflow.data.state !== 'active') {
+              core.setFailed(`Workflow ${workflowId} is not active.`);
+              return;
+            }
+
+            const existingRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              head_sha: targetSha,
+              per_page: 100,
+            });
+            const existing = existingRuns
+              .filter((run) => run.head_sha === targetSha)
+              .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
+            if (existing) {
+              core.notice(`Application CI already exists for ${targetSha}: run ${existing.id} (${existing.status}).`);
+              return;
+            }
+
+            const response = await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              ref: 'main',
+              inputs: {
+                target_sha: targetSha,
+                checkout_ref: targetSha,
+              },
+              return_run_details: true,
+              headers: {
+                accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2026-03-10',
+              },
+            });
+            const runId = Number(response.data?.workflow_run_id);
+            if (response.status !== 200 || !Number.isSafeInteger(runId) || runId <= 0) {
+              core.setFailed(`Application CI dispatch returned invalid Run ID with HTTP ${response.status}.`);
+              return;
+            }
+
+            const runResponse = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            const run = runResponse.data;
+            const valid = run.event === 'workflow_dispatch'
+              && run.head_branch === 'main'
+              && run.head_sha === targetSha
+              && run.path === '.github/workflows/futures-public-network-smoke.yml';
+            if (!valid) {
+              core.setFailed('Returned Application CI run does not match the official workflow and exact main SHA.');
+              return;
+            }
+            core.notice(`Application CI run ${runId} created for ${targetSha}.`);
