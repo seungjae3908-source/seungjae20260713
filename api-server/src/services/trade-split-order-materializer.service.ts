@@ -17,7 +17,7 @@ function planVersion(plan: TradingPlan) {
   return Number.isInteger(plan.version) && Number(plan.version) >= 0 ? Number(plan.version) : 0;
 }
 
-export function materializeSplitOrders(plan: TradingPlan, now = new Date().toISOString()): SplitTradingOrder[] {
+export function materializeSplitOrders(plan: TradingPlan, now = plan.updatedAt): SplitTradingOrder[] {
   if (plan.state !== 'SUBMITTED') throw new Error('TRADE_PLAN_NOT_SUBMITTED');
   const legs = buildEntrySplitLegs(plan);
   assertSplitLegTotals(plan, legs);
