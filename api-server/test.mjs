@@ -22,6 +22,7 @@ const groups = {
     path.join(root, 'src/services/backtest-indicators-edge.test.ts'),
     path.join(root, 'src/services/backtest-data.service.test.ts'),
     path.join(root, 'src/services/backtest-performance.test.ts'),
+    path.join(root, 'src/services/backtest-market-profile.service.test.ts'),
   ],
   phase6: [
     path.join(root, 'src/services/paper-trading-engine.service.test.ts'),
