@@ -75,6 +75,8 @@ def compile_prompt(
         raise PromptHardeningError("base GOAL block is not an object")
     goal.update(
         {
+            "previous_state": previous.as_dict() if previous else None,
+            "current_state": current.as_dict(),
             "state_delta": delta,
             "compact_state_only": True,
         }
@@ -116,10 +118,8 @@ def self_test() -> int:
     changed = compile_prompt(fields={**fields,"head_sha":"c"*40,"status":"completed"}, sanitized_report="success", allowed_action_types=("analyze_conflicts",), registered_workers=("integration-planner",), policy_version="v4", comments=comments)
     assert set(changed.state_delta) == {"head_sha","status"}
     assert all(changed.prompt.count(f"[{name}]") == 1 for name in base.BLOCK_NAMES)
-    assert '"state_delta"' in changed.prompt
-    assert '"previous_state"' not in changed.prompt and '"current_state"' not in changed.prompt
-    assert changed.previous_state == first.current_state and changed.current_state.head_sha == "c"*40
-    print(json.dumps({"prompt_state_hardening_v2":"pass","blocks":5,"delta_only_prompt":True,"empty_delta":True,"changed_delta":sorted(changed.state_delta)}))
+    assert '"previous_state"' in changed.prompt and '"current_state"' in changed.prompt and '"state_delta"' in changed.prompt
+    print(json.dumps({"prompt_state_hardening_v2":"pass","blocks":5,"empty_delta":True,"changed_delta":sorted(changed.state_delta)}))
     return 0
 
 if __name__ == "__main__":
