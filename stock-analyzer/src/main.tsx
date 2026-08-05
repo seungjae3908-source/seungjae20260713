@@ -1,5 +1,7 @@
 import { createRoot } from 'react-dom/client';
+import { authorizedFetch } from '@/lib/auth-fetch';
 import { ACCENT_COLOR_KEY } from '@/lib/stock-display';
+import { configureUnifiedChartFetch } from '@/lib/unified-chart-data';
 import App from './App';
 import './index.css';
 import './unified-analysis-chart-touch.css';
@@ -34,6 +36,7 @@ function registerServiceWorker() {
 	});
 }
 
+configureUnifiedChartFetch(authorizedFetch);
 applyInitialAccent();
 registerServiceWorker();
 
