@@ -28,7 +28,7 @@ function fulfill(route: Route, body: unknown, status = 200) {
 }
 
 async function installApprovedSession(page: Page): Promise<void> {
-  await page.addInitScript(({ storageKey, userId }) => {
+  await page.addInitScript(({ storageKey, userId, now }) => {
     const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value))
       .replaceAll('+', '-')
       .replaceAll('/', '_')
@@ -49,10 +49,10 @@ async function installApprovedSession(page: Page): Promise<void> {
         app_metadata: { provider: 'email', providers: ['email'] },
         user_metadata: { display_name: '정보방 검증 관리자' },
         identities: [],
-        created_at: NOW,
+        created_at: now,
       },
     }));
-  }, { storageKey: E2E_AUTH_STORAGE_KEY, userId: E2E_USER_ID });
+  }, { storageKey: E2E_AUTH_STORAGE_KEY, userId: E2E_USER_ID, now: NOW });
 }
 
 function roomConfig(room: RoomId) {
