@@ -51,7 +51,6 @@ export function TradeApprovalConfirmationDialog({
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const countdown = approvalCountdown(item.approval.expiresAt, now);
   const liveBlocked = item.accountMode === 'live';
@@ -65,6 +64,7 @@ export function TradeApprovalConfirmationDialog({
     && !liveBlocked
     && !validating
     && !submitting;
+  const returnFocusTestId = `approve-plan-${item.id}`;
 
   const blockedReason = useMemo(() => {
     if (liveBlocked) return '실전 계좌 주문은 현재 활성화되지 않았습니다.';
@@ -96,19 +96,21 @@ export function TradeApprovalConfirmationDialog({
   }, [onRevalidate]);
 
   useLayoutEffect(() => {
-    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const initialFocusFrame = window.requestAnimationFrame(() => cancelButtonRef.current?.focus());
     return () => {
       window.cancelAnimationFrame(initialFocusFrame);
       document.body.style.overflow = previousOverflow;
-      const focusTarget = previousFocusRef.current;
+      const focusTarget = [...document.querySelectorAll<HTMLButtonElement>('[data-testid^="approve-plan-"]')]
+        .find((element) => element.dataset.testid === returnFocusTestId);
       window.requestAnimationFrame(() => {
-        if (focusTarget?.isConnected) focusTarget.focus();
+        if (focusTarget?.isConnected && !focusTarget.disabled) {
+          focusTarget.focus({ preventScroll: true });
+        }
       });
     };
-  }, []);
+  }, [returnFocusTestId]);
 
   function onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key === 'Escape' && !submitting) {
