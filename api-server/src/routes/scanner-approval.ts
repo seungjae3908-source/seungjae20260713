@@ -9,11 +9,32 @@ import {
   type ScannerApprovalPlanRequest,
 } from '../services/scanner-approval-plan.service';
 import type { AuthenticatedRequest } from '../middleware/auth';
-import type { TradingPlan } from '../services/trade-automation.types';
+import type {
+  TradingApprovalStatus,
+  TradingPlan,
+  TradingSignalValidationInput,
+} from '../services/trade-automation.types';
 
 const router: IRouter = Router();
 let repositoryFactoryForTests: ((userId: string) => TradingRepository) | null = null;
-type ScannerApprovalService = Pick<ScannerApprovalPlanService, 'createPaperPlan' | 'revalidatePaperPlan'>;
+
+export type ScannerApprovalService = {
+  createPaperPlan: (
+    userId: string,
+    request: ScannerApprovalPlanRequest,
+  ) => Promise<{
+    plan: Pick<TradingPlan, 'id' | 'accountMode' | 'state'>;
+    approval: Pick<TradingApprovalStatus, 'approvalEnabled'>;
+    duplicate: boolean;
+    serverVerified: boolean;
+    liveOrderEnabled: boolean;
+  }>;
+  revalidatePaperPlan: (
+    userId: string,
+    plan: TradingPlan,
+  ) => Promise<TradingSignalValidationInput>;
+};
+
 let scannerServiceFactoryForTests:
   | ((repository: TradingRepository) => ScannerApprovalService)
   | null = null;
@@ -127,8 +148,6 @@ async function approveScannerPaperPlan(req: AuthenticatedRequest, res: Response)
     });
   }
 
-  // The click itself is not trusted. Re-run the original scanner conditions,
-  // fresh quote, one-minute volatility and top-of-book before state transition.
   const validation = await scanner.revalidatePaperPlan(userId, stored);
   const revalidated = await automation.revalidatePlan(userId, stored.id, validation);
   if (!revalidated.approval.approvalEnabled) {
