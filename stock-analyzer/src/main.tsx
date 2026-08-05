@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { ACCENT_COLOR_KEY } from '@/lib/stock-display';
 import App from './App';
 import './index.css';
+import './unified-analysis-chart-touch.css';
 
 const ACCENTS: Record<string, string> = {
 	blue: '221 83% 53%',
@@ -25,7 +26,7 @@ function applyInitialAccent() {
 }
 
 function registerServiceWorker() {
-	if (import.meta.env.VITE_PHASE4_E2E === 'true') return;
+	if (import.meta.env.VITE_PHASE4_E2E === 'true' || import.meta.env.VITE_PHASE11_E2E === 'false') return;
 	if (!('serviceWorker' in navigator)) return;
 
 	window.addEventListener('load', () => {
