@@ -4,7 +4,7 @@ import {
   requireAuthenticated,
   type AuthenticatedRequest,
 } from '../middleware/auth';
-import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
+import { getUserSupabase } from '../lib/supabase';
 import {
   MemberAdministrationError,
   isActiveAdmin,
@@ -33,7 +33,7 @@ type AdminProfileRow = MemberAdministrationProfile & {
 };
 
 function adminDb(req: AuthenticatedRequest) {
-  return hasSupabaseServerKey() ? getSupabase() : getUserSupabase(req.accessToken!);
+  return getUserSupabase(req.accessToken!);
 }
 
 function routeId(value: string | string[] | undefined) {

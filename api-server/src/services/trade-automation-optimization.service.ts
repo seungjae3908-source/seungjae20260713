@@ -1,79 +1,65 @@
 import type {
-  TradingEconomics,
   TradingOptimizationAssessment,
   TradingPlanInput,
   TradingPolicy,
 } from './trade-automation.types';
 
-const ACTIONABLE_SIGNAL_STATES = new Set(['confirmed']);
-const TERMINAL_SIGNAL_STATES = new Set(['invalid', 'expired']);
-const INITIAL_FUTURES_SYMBOLS = new Set(['BTC', 'BTCUSDT', 'ETH', 'ETHUSDT']);
-
-function add(values: string[], code: string) {
-  if (!values.includes(code)) values.push(code);
-}
+const LIVE_ACTIONABLE_SIGNAL_STATES = new Set(['READY_FOR_APPROVAL']);
+const TERMINAL_SIGNAL_STATES = new Set(['INVALIDATED', 'EXPIRED']);
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function finitePositive(value: unknown): value is number {
+function positive(value: unknown): value is number {
   return finite(value) && value > 0;
 }
 
-function hardGate(plan: TradingPlanInput, policy: TradingPolicy) {
-  return plan.accountMode === 'live' || policy.mode === 'automatic';
+function add(values: string[], code: string) {
+  if (!values.includes(code)) values.push(code);
 }
 
-function normalizedSymbol(plan: TradingPlanInput) {
-  return plan.symbol.toUpperCase().replace(/^KRW-/, '').replace(/[-_/]/g, '');
+function normalizedProbability(value: number) {
+  if (!Number.isFinite(value)) return null;
+  const normalized = value > 1 ? value / 100 : value;
+  if (normalized <= 0 || normalized >= 1) return null;
+  return normalized;
 }
 
-export function calculateExpectedValueR(economics: TradingEconomics) {
-  if (!finite(economics.winProbability)
-    || economics.winProbability < 0
-    || economics.winProbability > 1
-    || !finitePositive(economics.averageWinR)
-    || !finitePositive(economics.averageLossR)
-    || !finite(economics.estimatedCostsR)
-    || economics.estimatedCostsR < 0) {
+function expectedValueR(plan: TradingPlanInput) {
+  const economics = plan.economics;
+  if (!economics) return null;
+  const winProbability = normalizedProbability(economics.winProbability);
+  if (winProbability == null || !positive(economics.averageWinR)
+    || !positive(economics.averageLossR) || !finite(economics.estimatedCostsR)) {
     return null;
   }
-  return economics.winProbability * economics.averageWinR
-    - (1 - economics.winProbability) * economics.averageLossR
-    - economics.estimatedCostsR;
+  return winProbability * economics.averageWinR
+    - (1 - winProbability) * economics.averageLossR
+    - Math.max(0, economics.estimatedCostsR);
 }
 
-export function resolvePlanEntryPrice(plan: TradingPlanInput) {
-  const candidates = [plan.entryPrice, plan.limitPrice, plan.marketSnapshot.currentPrice];
-  return candidates.find(finitePositive) ?? null;
+function stopDistancePercent(plan: TradingPlanInput) {
+  const price = positive(plan.entryPrice)
+    ? plan.entryPrice
+    : positive(plan.marketSnapshot.currentPrice)
+      ? plan.marketSnapshot.currentPrice
+      : positive(plan.limitPrice)
+        ? plan.limitPrice
+        : null;
+  if (!price || !positive(plan.stopPrice)) return null;
+  const distance = Math.abs(price - plan.stopPrice) / price * 100;
+  return Number.isFinite(distance) && distance > 0 ? distance : null;
 }
 
-export function calculateRiskSizedOrderLimitKrw(plan: TradingPlanInput, policy: TradingPolicy) {
-  const entryPrice = resolvePlanEntryPrice(plan);
-  if (!entryPrice || !finitePositive(plan.stopPrice)) {
-    return { entryPrice, stopDistancePercent: null, riskBudgetKrw: null, maximumOrderKrw: null };
-  }
-  const isLong = plan.side === 'buy' || plan.side === 'long';
-  const correctDirection = isLong ? plan.stopPrice < entryPrice : plan.stopPrice > entryPrice;
-  if (!correctDirection) {
-    return { entryPrice, stopDistancePercent: -1, riskBudgetKrw: null, maximumOrderKrw: null };
-  }
-  const stopDistancePercent = Math.abs(entryPrice - plan.stopPrice) / entryPrice * 100;
-  if (!finitePositive(stopDistancePercent)) {
-    return { entryPrice, stopDistancePercent: null, riskBudgetKrw: null, maximumOrderKrw: null };
-  }
-  const baseCapital = Math.max(1, Math.min(
-    policy.totalCapitalKrw,
-    finitePositive(plan.marketSnapshot.accountValueKrw)
-      ? plan.marketSnapshot.accountValueKrw
-      : policy.totalCapitalKrw,
-  ));
-  const pilotMultiplier = policy.pilotStage === 'approval-20' ? 0.5 : 1;
-  const effectiveRiskPercent = policy.riskPerTradePercent[plan.exchange] * pilotMultiplier;
-  const riskBudgetKrw = baseCapital * effectiveRiskPercent / 100;
-  const maximumOrderKrw = riskBudgetKrw / (stopDistancePercent / 100);
-  return { entryPrice, stopDistancePercent, riskBudgetKrw, maximumOrderKrw };
+function riskBudget(policy: TradingPolicy, plan: TradingPlanInput, distancePercent: number | null) {
+  if (distancePercent == null) return { riskBudgetKrw: null, maximumOrderKrw: null };
+  const accountValue = positive(plan.marketSnapshot.accountValueKrw)
+    ? plan.marketSnapshot.accountValueKrw : policy.totalCapitalKrw;
+  const capitalBase = Math.max(1, Math.min(policy.totalCapitalKrw, accountValue));
+  const riskBudgetKrw = capitalBase * policy.riskPerTradePercent[plan.exchange] / 100;
+  const maximumOrderKrw = riskBudgetKrw / (distancePercent / 100);
+  return { riskBudgetKrw, maximumOrderKrw };
 }
 
 export function evaluateTradingOptimization(
@@ -83,119 +69,100 @@ export function evaluateTradingOptimization(
 ): TradingOptimizationAssessment {
   const blockCodes: string[] = [];
   const warnings: string[] = [];
-  const strict = hardGate(plan, policy);
-  const economics = plan.economics ?? null;
-  const expectedValueR = economics ? calculateExpectedValueR(economics) : null;
-  const sizing = calculateRiskSizedOrderLimitKrw(plan, policy);
+  const liveOrAutomatic = plan.accountMode === 'live' || policy.mode === 'automatic';
+  const signalState = plan.signalState ?? null;
+  const expiresAt = plan.signalExpiresAt ? Date.parse(plan.signalExpiresAt) : NaN;
 
-  if (!policy.riskOptimizationEnabled) {
-    if (plan.accountMode === 'live') add(blockCodes, 'LIVE_RISK_OPTIMIZATION_REQUIRED');
-    else warnings.push('수익 최적화 위험검사가 꺼져 있어 Paper 검증만 허용됩니다.');
+  if (liveOrAutomatic) {
+    if (!signalState) add(blockCodes, 'SIGNAL_STATE_REQUIRED');
+    else if (TERMINAL_SIGNAL_STATES.has(signalState)) add(blockCodes, 'SIGNAL_INVALID_OR_EXPIRED');
+    else if (!LIVE_ACTIONABLE_SIGNAL_STATES.has(signalState)) add(blockCodes, 'SIGNAL_NOT_ACTIONABLE');
+    if (!Number.isFinite(expiresAt)) add(blockCodes, 'SIGNAL_EXPIRY_REQUIRED');
+    else if (expiresAt <= now) add(blockCodes, 'SIGNAL_EXPIRED');
+  } else if (signalState && TERMINAL_SIGNAL_STATES.has(signalState)) {
+    add(blockCodes, 'SIGNAL_INVALID_OR_EXPIRED');
   }
 
-  if (plan.marketSnapshot.dailyPnlPercent <= -policy.totalDailyLossLimitPercent) {
-    add(blockCodes, 'TOTAL_DAILY_LOSS_LIMIT');
+  if (positive(plan.entryZoneLow) && positive(plan.entryZoneHigh)
+    && plan.entryZoneLow > plan.entryZoneHigh) {
+    add(blockCodes, 'ENTRY_ZONE_INVALID');
   }
-  if (finite(plan.marketSnapshot.correlatedExposurePercent)
-    && plan.marketSnapshot.correlatedExposurePercent > policy.maxCorrelatedExposurePercent) {
+  if (positive(plan.entryPrice) && positive(plan.entryZoneLow)
+    && positive(plan.entryZoneHigh)
+    && (plan.entryPrice < plan.entryZoneLow || plan.entryPrice > plan.entryZoneHigh)) {
+    add(blockCodes, 'ENTRY_PRICE_OUTSIDE_ZONE');
+  }
+
+  const economics = plan.economics;
+  const computedExpectedValueR = expectedValueR(plan);
+  if (liveOrAutomatic) {
+    if (!economics) {
+      add(blockCodes, 'ECONOMICS_REQUIRED');
+    } else {
+      const calibratedAt = Date.parse(economics.calibratedAt);
+      if (!Number.isFinite(calibratedAt)
+        || now - calibratedAt > policy.maxEconomicsAgeHours * 60 * 60_000) {
+        add(blockCodes, 'ECONOMICS_STALE');
+      }
+      if (economics.sampleSize < policy.minStrategySampleSize) add(blockCodes, 'STRATEGY_SAMPLE_TOO_SMALL');
+      if (computedExpectedValueR == null) add(blockCodes, 'EXPECTED_VALUE_UNAVAILABLE');
+      else if (computedExpectedValueR < policy.minExpectedValueR) add(blockCodes, 'EXPECTED_VALUE_TOO_LOW');
+      if (positive(economics.profitFactor) && economics.profitFactor < policy.minProfitFactor) {
+        add(blockCodes, 'PROFIT_FACTOR_TOO_LOW');
+      }
+      if (positive(economics.maxDrawdownPercent)
+        && economics.maxDrawdownPercent > policy.maxStrategyDrawdownPercent) {
+        add(blockCodes, 'STRATEGY_DRAWDOWN_TOO_HIGH');
+      }
+      if (economics.marketRegime === 'stress') add(blockCodes, 'MARKET_REGIME_STRESS');
+      else if (economics.marketRegime === 'unknown') add(blockCodes, 'MARKET_REGIME_UNKNOWN');
+    }
+    if (!finite(plan.estimatedSlippagePercent)) add(blockCodes, 'SLIPPAGE_ESTIMATE_REQUIRED');
+    else if (plan.estimatedSlippagePercent > policy.maxEstimatedSlippagePercent) add(blockCodes, 'SLIPPAGE_TOO_HIGH');
+    if (!finite(plan.averageSpreadPercent)) add(blockCodes, 'AVERAGE_SPREAD_REQUIRED');
+    else if (plan.averageSpreadPercent > policy.maxAverageSpreadPercent) add(blockCodes, 'AVERAGE_SPREAD_TOO_WIDE');
+  } else if (!economics) {
+    warnings.push('모의 주문에는 기대값 데이터가 없어도 실행할 수 있지만 실계좌 전환은 차단됩니다.');
+  }
+
+  const correlatedExposure = plan.marketSnapshot.correlatedExposurePercent;
+  if (finite(correlatedExposure) && correlatedExposure > policy.maxCorrelatedExposurePercent) {
     add(blockCodes, 'CORRELATED_EXPOSURE_LIMIT');
+  } else if (liveOrAutomatic && !finite(correlatedExposure)) {
+    add(blockCodes, 'CORRELATED_EXPOSURE_REQUIRED');
   }
 
-  if (plan.signalState) {
-    if (TERMINAL_SIGNAL_STATES.has(plan.signalState)) add(blockCodes, 'SIGNAL_INVALID_OR_EXPIRED');
-    else if (!ACTIONABLE_SIGNAL_STATES.has(plan.signalState)) {
-      if (strict) add(blockCodes, 'SIGNAL_NOT_CONFIRMED');
-      else warnings.push('신호가 확정 상태가 아니므로 승인 전 재확인이 필요합니다.');
-    }
-  } else if (strict) {
-    add(blockCodes, 'SIGNAL_STATE_REQUIRED');
-  }
-
-  if (plan.signalExpiresAt) {
-    const expiry = Date.parse(plan.signalExpiresAt);
-    if (!Number.isFinite(expiry) || expiry <= now) add(blockCodes, 'SIGNAL_EXPIRED');
-  } else if (strict) {
-    add(blockCodes, 'SIGNAL_EXPIRY_REQUIRED');
-  }
-
-  const currentPrice = plan.marketSnapshot.currentPrice;
-  if (finitePositive(currentPrice) && finitePositive(plan.entryZoneLow) && finitePositive(plan.entryZoneHigh)) {
-    const low = Math.min(plan.entryZoneLow, plan.entryZoneHigh);
-    const high = Math.max(plan.entryZoneLow, plan.entryZoneHigh);
-    if (currentPrice < low || currentPrice > high) add(blockCodes, 'ENTRY_ZONE_LEFT');
-  } else if (strict) {
-    add(blockCodes, 'ENTRY_ZONE_REQUIRED');
-  }
-
-  const spread = finite(plan.averageSpreadPercent)
-    ? plan.averageSpreadPercent
-    : plan.marketSnapshot.spreadPercent;
-  if (spread > policy.maxAverageSpreadPercent) {
-    if (strict) add(blockCodes, 'AVERAGE_SPREAD_TOO_WIDE');
-    else warnings.push('평균 스프레드가 보수적 기준을 초과합니다.');
-  }
-  if (finite(plan.estimatedSlippagePercent)) {
-    if (plan.estimatedSlippagePercent > policy.maxEstimatedSlippagePercent) {
-      add(blockCodes, 'ESTIMATED_SLIPPAGE_TOO_HIGH');
-    }
-  } else if (strict) {
-    add(blockCodes, 'ESTIMATED_SLIPPAGE_REQUIRED');
-  }
-
-  if (!economics) {
-    if (strict) add(blockCodes, 'ECONOMICS_REQUIRED');
-    else warnings.push('비용 후 기대값 자료가 없어 승인형 Paper 검증만 권장됩니다.');
-  } else {
-    if (!Number.isSafeInteger(economics.sampleSize) || economics.sampleSize < 0) {
-      add(blockCodes, 'ECONOMICS_SAMPLE_INVALID');
-    } else if (economics.sampleSize < policy.minStrategySampleSize) {
-      if (strict) add(blockCodes, 'INSUFFICIENT_STRATEGY_SAMPLE');
-      else warnings.push(`전략 표본이 ${policy.minStrategySampleSize}건 미만입니다.`);
-    }
-    if (expectedValueR === null) add(blockCodes, 'ECONOMICS_INVALID');
-    else if (expectedValueR < policy.minExpectedValueR) add(blockCodes, 'EXPECTED_VALUE_TOO_LOW');
-    if (finite(economics.profitFactor) && economics.profitFactor < policy.minProfitFactor) {
-      if (strict) add(blockCodes, 'PROFIT_FACTOR_TOO_LOW');
-      else warnings.push('Profit Factor가 보수적 기준보다 낮습니다.');
-    }
-    if (finite(economics.maxDrawdownPercent)
-      && economics.maxDrawdownPercent > policy.maxStrategyDrawdownPercent) {
-      add(blockCodes, 'STRATEGY_DRAWDOWN_TOO_HIGH');
-    }
-    const calibratedAt = Date.parse(economics.calibratedAt);
-    if (!Number.isFinite(calibratedAt) || Math.abs(now - calibratedAt) > policy.maxEconomicsAgeHours * 60 * 60_000) {
-      if (strict) add(blockCodes, 'ECONOMICS_STALE');
-      else warnings.push('전략 기대값 보정 자료가 오래되었습니다.');
-    }
-  }
-
-  if (sizing.stopDistancePercent === -1) add(blockCodes, 'STOP_DIRECTION_INVALID');
-  else if (sizing.maximumOrderKrw === null) {
-    if (strict) add(blockCodes, 'ENTRY_PRICE_REQUIRED_FOR_RISK_SIZING');
-  } else if (plan.estimatedKrw > Math.min(policy.maxOrderKrw, sizing.maximumOrderKrw)) {
+  const distancePercent = stopDistancePercent(plan);
+  const budgets = riskBudget(policy, plan, distancePercent);
+  if (liveOrAutomatic && distancePercent == null) add(blockCodes, 'STOP_DISTANCE_UNAVAILABLE');
+  if (budgets.maximumOrderKrw != null && plan.estimatedKrw > budgets.maximumOrderKrw) {
     add(blockCodes, 'RISK_BUDGET_EXCEEDED');
   }
+  const accountValue = positive(plan.marketSnapshot.accountValueKrw)
+    ? plan.marketSnapshot.accountValueKrw : policy.totalCapitalKrw;
+  const dailyLossKrw = Math.max(0, -plan.marketSnapshot.dailyPnlPercent / 100 * accountValue);
+  const totalDailyLossBudgetKrw = accountValue * policy.totalDailyLossLimitPercent / 100;
+  if (dailyLossKrw >= totalDailyLossBudgetKrw) add(blockCodes, 'TOTAL_DAILY_LOSS_BUDGET');
 
-  if (plan.accountMode === 'live' && policy.pilotStage === 'approval-20') {
-    if (policy.mode !== 'approval') add(blockCodes, 'PILOT_APPROVAL_REQUIRED');
-    if (plan.exchange === 'bitget') {
-      if (plan.leverage !== 1) add(blockCodes, 'PILOT_FUTURES_ONE_X_ONLY');
-      if (!INITIAL_FUTURES_SYMBOLS.has(normalizedSymbol(plan))) add(blockCodes, 'PILOT_FUTURES_ASSET_LIMIT');
-    }
+  const stageMaximum = policy.pilotStage === 'approval-20'
+    ? 0 : policy.pilotStage === 'limited-50' ? 50_000 : policy.maxOrderKrw;
+  if (plan.accountMode === 'live') {
+    if (policy.pilotStage === 'approval-20') add(blockCodes, 'PILOT_LIVE_DISABLED');
+    else if (plan.estimatedKrw > stageMaximum) add(blockCodes, 'PILOT_ORDER_LIMIT');
   }
-  if (plan.accountMode === 'live' && policy.mode === 'automatic'
-    && policy.pilotStage !== 'validated') {
-    add(blockCodes, 'AUTOMATIC_LIVE_REQUIRES_VALIDATED_STAGE');
+
+  if (!policy.riskOptimizationEnabled) {
+    add(blockCodes, 'RISK_OPTIMIZATION_DISABLED');
   }
 
   return {
     allowed: blockCodes.length === 0,
     blockCodes,
     warnings,
-    expectedValueR,
-    riskBudgetKrw: sizing.riskBudgetKrw,
-    maximumOrderKrw: sizing.maximumOrderKrw,
-    stopDistancePercent: sizing.stopDistancePercent === -1 ? null : sizing.stopDistancePercent,
+    expectedValueR: computedExpectedValueR,
+    riskBudgetKrw: budgets.riskBudgetKrw,
+    maximumOrderKrw: budgets.maximumOrderKrw,
+    stopDistancePercent: distancePercent,
     pilotStage: policy.pilotStage,
   };
 }

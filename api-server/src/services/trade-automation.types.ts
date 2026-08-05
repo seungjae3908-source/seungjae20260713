@@ -3,7 +3,6 @@ export type TradingMode = 'approval' | 'automatic';
 export type TradingAccountMode = 'paper' | 'mock' | 'live';
 export type TradingSide = 'buy' | 'sell' | 'long' | 'short';
 export type TradingOrderType = 'market' | 'limit';
-export type TradingSignalState = 'forming' | 'candidate' | 'confirmed' | 'weakening' | 'invalid' | 'expired';
 export type TradingMarketRegime = 'bull' | 'bear' | 'sideways' | 'stress' | 'unknown';
 export type TradingPilotStage = 'approval-20' | 'limited-50' | 'validated';
 
@@ -19,6 +18,61 @@ export type TradingOrderState =
   | 'REJECTED'
   | 'EXPIRED'
   | 'RECOVERY_REQUIRED';
+
+export type TradingSignalState =
+  | 'WATCHING'
+  | 'READY_FOR_APPROVAL'
+  | 'WEAKENED'
+  | 'INVALIDATED'
+  | 'EXPIRED';
+
+export type TradingSignalStateEvent = {
+  fromState: TradingSignalState | null;
+  toState: TradingSignalState;
+  reason: string;
+  score: number;
+  confidence: number;
+  coreConditionsMaintained: boolean;
+  riskReward: number | null;
+  dataTimestamp: string;
+  createdAt: string;
+};
+
+export type TradingSignalValidationInput = {
+  score: number;
+  confidence: number;
+  coreConditionsMaintained: boolean;
+  riskReward?: number | null;
+  reasons?: string[];
+  warnings?: string[];
+  dataTimestamp: string;
+  invalidationReason?: string | null;
+  marketSnapshot?: TradingMarketSnapshot;
+};
+
+export type TradingApprovalStatus = {
+  approvalEnabled: boolean;
+  signalState: TradingSignalState;
+  planState: TradingOrderState;
+  reasonCode: string | null;
+  expiresAt: string | null;
+  lastValidatedAt: string;
+};
+
+export type ScannerPlanContext = {
+  market: 'KR';
+  timeframe: string;
+  selectedConditions: string[];
+  volumeThreshold: number | null;
+  tradingValueThreshold: number | null;
+  marketCapThreshold: number | null;
+  volumeLookbackDays: number;
+  tradingValueLookbackDays: number;
+  minimumScore: number;
+  minimumConfidence: number;
+  maximumRiskScore: number;
+  maxEntryDriftPercent: number;
+};
 
 export const DEFAULT_TRADING_POLICY = Object.freeze({
   mode: 'approval' as TradingMode,
@@ -142,9 +196,18 @@ export type TradingPlanInput = {
   reduceOnly?: boolean;
   invalidateAction?: 'hold' | 'reduce' | 'close';
   signalReasons: string[];
+  signalWarnings?: string[];
+  signalScore?: number;
+  signalConfidence?: number;
+  minimumSignalScore?: number;
+  minimumSignalConfidence?: number;
+  minimumRiskReward?: number;
+  signalRiskReward?: number | null;
+  signalCoreConditionsMaintained?: boolean;
+  signalExpiresAt?: string | null;
+  scannerContext?: ScannerPlanContext | null;
   marketSnapshot: TradingMarketSnapshot;
   signalState?: TradingSignalState | null;
-  signalExpiresAt?: string | null;
   entryPrice?: number | null;
   entryZoneLow?: number | null;
   entryZoneHigh?: number | null;
@@ -171,14 +234,26 @@ export type TradingPlan = TradingPlanInput & {
   state: TradingOrderState;
   approvalExpiresAt: string | null;
   approvedAt: string | null;
+  signalState: TradingSignalState;
+  signalScore: number;
+  signalConfidence: number;
+  minimumSignalScore: number;
+  minimumSignalConfidence: number;
+  minimumRiskReward: number;
+  signalRiskReward: number | null;
+  signalCoreConditionsMaintained: boolean;
+  signalExpiresAt: string;
+  lastSignalValidatedAt: string;
+  signalWarnings: string[];
+  signalInvalidationReason: string | null;
+  signalStateHistory: TradingSignalStateEvent[];
   createdAt: string;
   updatedAt: string;
   riskAssessment?: TradingOptimizationAssessment | null;
 };
 
-export type TradingPlanRevalidationInput = Pick<TradingPlanInput,
+export type TradingPlanRevalidationInput = Partial<Pick<TradingPlanInput,
   | 'marketSnapshot'
-  | 'signalState'
   | 'signalExpiresAt'
   | 'entryPrice'
   | 'entryZoneLow'
@@ -186,7 +261,9 @@ export type TradingPlanRevalidationInput = Pick<TradingPlanInput,
   | 'estimatedSlippagePercent'
   | 'averageSpreadPercent'
   | 'economics'
->;
+>> & {
+  signalValidation?: TradingSignalValidationInput;
+};
 
 export type TradingOrder = {
   id: string;
