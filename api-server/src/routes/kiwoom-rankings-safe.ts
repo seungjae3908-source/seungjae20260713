@@ -22,6 +22,7 @@ interface KiwoomRankingsDependencies {
     market: KiwoomMarket,
     type: KiwoomRankingType,
     limit: number,
+    options: KiwoomRankingOptions,
   ) => Promise<KiwoomFallbackRankingRow[]>;
 }
 
@@ -37,7 +38,11 @@ function marketParam(value: unknown): KiwoomMarket {
 
 function rankingTypeParam(value: unknown): KiwoomRankingType {
   const normalized = String(value ?? 'volume').trim();
-  if (normalized === 'tradingValue' || normalized.toLowerCase() === 'tradingvalue' || normalized === 'value') {
+  if (
+    normalized === 'tradingValue' ||
+    normalized.toLowerCase() === 'tradingvalue' ||
+    normalized === 'value'
+  ) {
     return 'tradingValue';
   }
   if (normalized === 'gainers') return 'gainers';
@@ -126,7 +131,12 @@ export function createKiwoomRankingsSafeRouter(
     }
 
     try {
-      const rows = await dependencies.getFallbackRows(market, type, limit);
+      const rows = await dependencies.getFallbackRows(
+        market,
+        type,
+        limit,
+        options,
+      );
 
       return res.status(200).json({
         ok: false,
