@@ -91,6 +91,8 @@ run_sql "reapply authenticated paper privileges idempotently" "api-server/supaba
 run_sql "apply authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
 run_sql "reapply authenticated audit privileges idempotently" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
 run_sql "verify trade automation atomicity, CAS, leases, legs, and protection schema" "api-server/supabase/test/trade_automation_safety_hardening_integration.sql"
+echo "[phase8-db] verify ten-way order idempotency and two-worker execution claim gating"
+bash "${ROOT_DIR}/api-server/scripts/verify-trade-automation-concurrency.sh"
 run_sql "verify explicit paper privileges and anon denial" "api-server/supabase/test/paper_journal_privileges_integration.sql"
 run_sql "verify audit privileges and administrator-only RLS" "api-server/supabase/test/member_permission_audit_privileges_integration.sql"
 run_sql "execute trade automation ownership RLS queries" "api-server/supabase/test/trade_automation_rls_integration.sql"
