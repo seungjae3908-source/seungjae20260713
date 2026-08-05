@@ -160,3 +160,23 @@ test('재진입 대기시간은 연속 돌파 신호 수를 줄인다', () => {
   assert.ok(withCooldown > 0);
   assert.ok(withCooldown < withoutCooldown);
 });
+
+test('RSI 범위는 과열된 돌파 진입을 차단한다', () => {
+  const candles = makeRegimeCandles('bull');
+  const unfiltered = calculateCashSignals(request({ ...regimeParameters, maximumEntryRsi: 100 }), candles)
+    .filter((signal) => signal.action === 'BUY').length;
+  const filtered = calculateCashSignals(request({ ...regimeParameters, maximumEntryRsi: 60 }), candles)
+    .filter((signal) => signal.action === 'BUY').length;
+  assert.ok(unfiltered > 0);
+  assert.equal(filtered, 0);
+});
+
+test('조기 전략청산 비활성화 시 strategy_exit 거래가 생성되지 않는다', () => {
+  const result = runCashBacktest({
+    ...request({ ...regimeParameters, regimeFilterEnabled: 0, strategyExitEnabled: 0, maximumEntryRsi: 100 }),
+    stopLossPercent: 1,
+    takeProfitR: 2,
+  }, makeRegimeCandles('bull'));
+  assert.ok(result.totalTrades > 0);
+  assert.ok(result.trades.every((trade) => trade.exitReason !== 'strategy_exit'));
+});
