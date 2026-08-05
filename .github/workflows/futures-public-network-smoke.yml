@@ -2,6 +2,15 @@ name: Application CI
 
 on:
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Pull request head SHA that receives the verified commit statuses.
+        required: false
+        type: string
+      checkout_ref:
+        description: Git ref to validate, such as refs/pull/4/merge.
+        required: false
+        type: string
   pull_request:
     branches:
       - main
@@ -27,8 +36,12 @@ permissions:
   contents: read
   statuses: write
 
+env:
+  APPLICATION_STATUS_SHA: ${{ github.event.inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
+  APPLICATION_CHECKOUT_REF: ${{ github.event.inputs.checkout_ref || github.ref }}
+
 concurrency:
-  group: application-ci-${{ github.event.pull_request.number || github.ref }}
+  group: application-ci-${{ github.event.pull_request.number || github.event.inputs.target_sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -41,10 +54,12 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const sha = process.env.APPLICATION_STATUS_SHA;
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: running`, context: 'application-ci/verified' });
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
@@ -96,10 +111,12 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const sha = process.env.APPLICATION_STATUS_SHA;
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Browser UI run ${context.runId}: running`, context: 'browser-ui/verified' });
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
@@ -134,7 +151,7 @@ jobs:
         with:
           script: |
             const result = '${{ steps.browser.outcome }}' || 'failure';
-            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const sha = process.env.APPLICATION_STATUS_SHA;
             const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
             const superseded = runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested'].includes(run.status));
@@ -174,10 +191,12 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const sha = process.env.APPLICATION_STATUS_SHA;
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Database RLS run ${context.runId}: running`, context: 'database-rls/verified' });
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
       - name: Install PostgreSQL client
         run: sudo apt-get update -qq && sudo apt-get install -y postgresql-client
       - name: Apply, test, rollback, and reapply migrations
@@ -189,7 +208,7 @@ jobs:
         with:
           script: |
             const result = '${{ steps.database.outcome }}' || 'failure';
-            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const sha = process.env.APPLICATION_STATUS_SHA;
             const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
             const superseded = runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested'].includes(run.status));
@@ -209,10 +228,12 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const sha = process.env.APPLICATION_STATUS_SHA;
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Security integration run ${context.runId}: running`, context: 'security-integration/verified' });
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
@@ -240,7 +261,7 @@ jobs:
         with:
           script: |
             const result = '${{ steps.security.outcome }}' || 'failure';
-            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const sha = process.env.APPLICATION_STATUS_SHA;
             const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
             const superseded = runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested'].includes(run.status));
@@ -260,9 +281,11 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const sha = process.env.APPLICATION_STATUS_SHA;
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `AI privacy run ${context.runId}: running`, context: 'ai-privacy/verified' });
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
       - uses: pnpm/action-setup@v4
         with: { version: 9, run_install: false }
       - uses: actions/setup-node@v4
@@ -282,7 +305,7 @@ jobs:
         with:
           script: |
             const result = '${{ steps.ai.outcome }}' || 'failure';
-            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const sha = process.env.APPLICATION_STATUS_SHA;
             const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
             if (runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued','in_progress','completed','waiting','pending','requested'].includes(run.status))) return;
@@ -306,7 +329,7 @@ jobs:
           script: |
             const results = ['${{ needs.validate.result }}', '${{ needs.browser-ui.result }}', '${{ needs.database-rls.result }}', '${{ needs.security-integration.result }}', '${{ needs.ai-privacy.result }}'];
             const result = results.every((item) => item === 'success') ? 'success' : results.some((item) => item === 'cancelled') ? 'cancelled' : 'failure';
-            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const sha = process.env.APPLICATION_STATUS_SHA;
             const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
             const superseded = runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested'].includes(run.status));
@@ -324,6 +347,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
@@ -347,7 +372,7 @@ jobs:
         with:
           script: |
             const result = '${{ steps.network.outcome }}';
-            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const sha = process.env.APPLICATION_STATUS_SHA;
             const current = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId });
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, { owner: context.repo.owner, repo: context.repo.repo, workflow_id: current.data.workflow_id, head_sha: sha, per_page: 100 });
             const superseded = runs.some((run) => run.id > context.runId && run.head_sha === sha && ['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested'].includes(run.status));

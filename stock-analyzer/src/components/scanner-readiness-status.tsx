@@ -22,11 +22,22 @@ export function ScannerReadinessStatus() {
   const queryClient = useQueryClient();
   const [, setRevision] = useState(0);
 
-  useEffect(() => queryClient.getQueryCache().subscribe((event) => {
-    if (event?.query && isScannerQuery(event.query.queryKey)) {
-      setRevision((value) => value + 1);
-    }
-  }), [queryClient]);
+  useEffect(() => {
+    let active = true;
+    let scheduled = false;
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (!event?.query || !isScannerQuery(event.query.queryKey) || scheduled) return;
+      scheduled = true;
+      queueMicrotask(() => {
+        scheduled = false;
+        if (active) setRevision((value) => value + 1);
+      });
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [queryClient]);
 
   const candidates = queryClient.getQueryCache().findAll({ queryKey: ['scan'] });
   const query = [...candidates].sort((left, right) => {
