@@ -95,7 +95,7 @@ function isStockExitCandidate(card: ScannerSignalCard, marketClass: ScannerMarke
 }
 
 function isSpotExitCandidate(card: ScannerSignalCard, marketClass: ScannerMarketClass): boolean {
-  if (marketClass !== 'CRYPTO_SPOT' || card.direction !== 'NEUTRAL') return false;
+  if (marketClass !== 'CRYPTO_SPOT' || card.direction === 'LONG') return false;
   const profile = SCANNER_MARKET_APPROVAL_PROFILES.CRYPTO_SPOT;
   return (card.changePercent ?? 0) < 0
     && card.score >= profile.minScore
