@@ -1,0 +1,63 @@
+name: Main Application CI Fallback
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  actions: write
+  contents: read
+  statuses: read
+
+concurrency:
+  group: application-ci-main-fallback-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch-if-unverified:
+    name: Dispatch exact-SHA Application CI when needed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check status ownership and dispatch fallback
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sha = context.sha;
+            const requiredContexts = new Set([
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ]);
+
+            await new Promise((resolve) => setTimeout(resolve, 15000));
+
+            const statuses = await github.paginate(
+              github.rest.repos.listCommitStatusesForRef,
+              { owner, repo, ref: sha, per_page: 100 },
+            );
+            const applicationCiAlreadyOwnsSha = statuses.some((status) =>
+              requiredContexts.has(status.context),
+            );
+
+            if (applicationCiAlreadyOwnsSha) {
+              core.notice(`Application CI already owns at least one required status for ${sha}; fallback dispatch skipped.`);
+              return;
+            }
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: 'futures-public-network-smoke.yml',
+              ref: context.payload.repository?.default_branch ?? 'main',
+              inputs: {
+                target_sha: sha,
+                checkout_ref: sha,
+              },
+            });
+            core.notice(`Dispatched exact-SHA Application CI fallback for ${sha}.`);
