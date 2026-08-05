@@ -190,7 +190,7 @@ export class SupabaseTradeRecoveryWorkerSource implements TradeRecoveryWorkerSou
         const current = await this.getOrder(userId, order.id);
         return { order: current ?? normalizeOrder(order), applied: false };
       },
-    } as TradingRepository;
+    } as unknown as TradingRepository;
   }
 
   async recordFailure(
