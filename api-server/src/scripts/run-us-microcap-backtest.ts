@@ -83,8 +83,12 @@ async function filesUnder(inputPath: string): Promise<string[]> {
   const files: string[] = [];
   for (const entry of entries) {
     const target = path.join(inputPath, entry.name);
-    if (entry.isDirectory()) files.push(...await filesUnder(target));
-    else if (/\.(csv|json)$/i.test(entry.name)) files.push(target);
+    if (entry.isDirectory()) {
+      const nested = await filesUnder(target);
+      for (const file of nested) files.push(file);
+    } else if (/\.(csv|json)$/i.test(entry.name)) {
+      files.push(target);
+    }
   }
   return files.sort();
 }
@@ -101,9 +105,10 @@ async function loadCandles(inputPath: string): Promise<UsMicrocapCandle[]> {
         : parsed && typeof parsed === 'object' && Array.isArray((parsed as { candles?: unknown }).candles)
           ? (parsed as { candles: unknown[] }).candles
           : [];
-      rows.push(...candles as UsMicrocapCandle[]);
+      for (const candle of candles) rows.push(candle as UsMicrocapCandle);
     } else {
-      rows.push(...parseCsv(content, path.basename(file, path.extname(file))));
+      const candles = parseCsv(content, path.basename(file, path.extname(file)));
+      for (const candle of candles) rows.push(candle);
     }
   }
   return rows;
