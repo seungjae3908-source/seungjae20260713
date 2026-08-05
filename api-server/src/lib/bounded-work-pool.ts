@@ -96,6 +96,7 @@ export async function runBoundedWorkPool<Item, Result>(
   let nextIndex = 0;
   let activeCount = 0;
   let maxConcurrency = 0;
+  let deadlineExhausted = false;
 
   const abortActive = () => {
     for (const controller of activeControllers) {
@@ -105,7 +106,7 @@ export async function runBoundedWorkPool<Item, Result>(
   options.signal?.addEventListener('abort', abortActive, { once: true });
 
   const takeNext = (): number | null => {
-    if (options.signal?.aborted || nextIndex >= items.length || now() >= deadlineAt) {
+    if (deadlineExhausted || options.signal?.aborted || nextIndex >= items.length || now() >= deadlineAt) {
       return null;
     }
     const index = nextIndex;
@@ -140,6 +141,9 @@ export async function runBoundedWorkPool<Item, Result>(
         });
       } catch (reason) {
         const timedOut = reason instanceof BoundedWorkTimeoutError;
+        if (timedOut && timeoutMs === remainingMs) {
+          deadlineExhausted = true;
+        }
         outcomes.push({
           index,
           status: timedOut ? 'timed_out' : 'rejected',
@@ -172,7 +176,7 @@ export async function runBoundedWorkPool<Item, Result>(
     fulfilledCount,
     rejectedCount,
     timedOutCount,
-    deadlineReached: nextIndex < items.length || elapsedMs >= deadlineMs,
+    deadlineReached: deadlineExhausted || nextIndex < items.length || elapsedMs >= deadlineMs,
     aborted: options.signal?.aborted === true,
     elapsedMs,
     maxConcurrency,
