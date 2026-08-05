@@ -126,9 +126,6 @@ select case when public.claim_trade_order_execution(
 SQL
 )"
   [[ "$result" =~ ^[01]$ ]] || { echo "unexpected claim worker result: $result" >&2; return 1; }
-  if [[ "$result" == "1" ]]; then
-    printf 'POST /mock/exchange/orders claim=%s\n' "$claim_id" >> "$MOCK_POST_LOG"
-  fi
   printf '%s\n' "$result"
 }
 
@@ -141,7 +138,6 @@ claim_winners="$(awk '$0 == "1" { count += 1 } END { print count + 0 }' "$TMP_DI
 claim_losers="$(awk '$0 == "0" { count += 1 } END { print count + 0 }' "$TMP_DIR"/claim-*.out)"
 [[ "$claim_winners" == "1" ]] || { echo "expected one execution claim winner, got $claim_winners" >&2; exit 1; }
 [[ "$claim_losers" == "1" ]] || { echo "expected one execution claim loser, got $claim_losers" >&2; exit 1; }
-[[ "$(wc -l < "$MOCK_POST_LOG" | tr -d ' ')" == "1" ]] || { echo "mock exchange POST count was not exactly one" >&2; exit 1; }
 
 latest_snapshot="$("${PSQL[@]}" --command "select version || '|' || execution_claim_id || '|' || state from public.trade_orders where user_id = '$USER_ID' and id = '$ORDER_ID';")"
 IFS='|' read -r latest_version latest_claim latest_state <<< "$latest_snapshot"
@@ -152,7 +148,61 @@ IFS='|' read -r latest_version latest_claim latest_state <<< "$latest_snapshot"
   exit 1
 }
 
-echo "[trade-concurrency] ten order attempts=1 insert/9 reuse; two claimants=1 winner; mock POST=1; version requery=1"
+SUBMISSION_ATTEMPT_ID="82000000-0000-0000-0000-000000000001"
+INTENT_EVENT_ID="92000000-0000-0000-0000-000000000001"
+intent_result="$("${PSQL[@]}" <<SQL
+set role authenticated;
+set request.jwt.claim.sub = '$USER_ID';
+select case when public.transition_trade_order_atomic(
+  '$USER_ID',
+  '$ORDER_ID',
+  'SUBMITTED',
+  1,
+  'SUBMITTED',
+  (
+    select jsonb_set(
+      jsonb_set(payload, '{submissionStartedAt}', to_jsonb('2026-08-05T03:30:02.000Z'::text), true),
+      '{submissionAttemptId}', to_jsonb('$SUBMISSION_ATTEMPT_ID'::text), true
+    )
+    from public.trade_orders
+    where user_id = '$USER_ID' and id = '$ORDER_ID'
+  ),
+  jsonb_build_object(
+    'id', '$INTENT_EVENT_ID',
+    'userId', '$USER_ID',
+    'orderId', '$ORDER_ID',
+    'fromState', 'SUBMITTED',
+    'toState', 'SUBMITTED',
+    'reason', 'PROVIDER_SUBMISSION_INTENT_RECORDED',
+    'metadata', jsonb_build_object('orderSubmissionAttempted', false),
+    'createdAt', '2026-08-05T03:30:02.000Z'
+  )
+) is null then 0 else 1 end;
+SQL
+)"
+[[ "$intent_result" == "1" ]] || { echo "provider submission intent was not recorded atomically" >&2; exit 1; }
+printf 'POST /mock/exchange/orders submissionAttempt=%s\n' "$SUBMISSION_ATTEMPT_ID" >> "$MOCK_POST_LOG"
+
+"${PSQL[@]}" --command "update public.trade_orders set execution_claimed_at = clock_timestamp() - interval '60 seconds' where user_id = '$USER_ID' and id = '$ORDER_ID';"
+replay_claim="$("${PSQL[@]}" <<SQL
+set role authenticated;
+set request.jwt.claim.sub = '$USER_ID';
+select case when public.claim_trade_order_execution(
+  '$USER_ID',
+  '$ORDER_ID',
+  2,
+  '72000000-0000-0000-0000-000000000003',
+  30
+) is null then 0 else 1 end;
+SQL
+)"
+[[ "$replay_claim" == "0" ]] || { echo "submission intent allowed a replay execution claim" >&2; exit 1; }
+[[ "$(wc -l < "$MOCK_POST_LOG" | tr -d ' ')" == "1" ]] || { echo "mock exchange POST count was not exactly one" >&2; exit 1; }
+
+intent_snapshot="$("${PSQL[@]}" --command "select version || '|' || coalesce(payload->>'submissionAttemptId', '') || '|' || state from public.trade_orders where user_id = '$USER_ID' and id = '$ORDER_ID';")"
+[[ "$intent_snapshot" == "2|$SUBMISSION_ATTEMPT_ID|SUBMITTED" ]] || { echo "unexpected submission intent snapshot: $intent_snapshot" >&2; exit 1; }
+
+echo "[trade-concurrency] ten order attempts=1 insert/9 reuse; two claimants=1 winner; submission intent=1; replay claim=0; mock POST=1; version requery=2"
 
 "${PSQL[@]}" <<SQL
 set role authenticated;
