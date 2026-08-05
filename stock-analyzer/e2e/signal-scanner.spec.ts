@@ -70,7 +70,12 @@ function scannerResponse(options: ResponseOptions = {}) {
     observedAt: '2026-08-05T00:00:00.000Z',
     expiresAt: '2026-08-05T03:00:00.000Z',
     strongSignalEligible: false,
-    warnings: partial ? ['일부 데이터 미확인'] : [],
+    warnings: [
+      ...(partial ? ['일부 데이터 미확인'] : []),
+      ...(assetClass === 'coin_spot'
+        ? ['현물 Scanner에는 숏·레버리지를 적용하지 않습니다.']
+        : []),
+    ],
   };
   return {
     ok: true,
