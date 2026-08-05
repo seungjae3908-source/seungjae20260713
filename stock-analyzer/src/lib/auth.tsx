@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { ProfileRequestCoordinator } from '@/lib/profile-request-coordinator';
 import {
   deriveMemberTier,
   hasCapability,
@@ -41,6 +42,7 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const normalizeName = (value: string) => value.trim().normalize('NFKC').toLowerCase();
+const PROFILE_AUTO_REFRESH_MS = 30_000;
 
 function validate(loginName: string, password: string) {
   const name = loginName.trim();
@@ -82,22 +84,31 @@ async function signInWithSupabase(loginName: string, password: string) {
   return data.session;
 }
 
+function profileRequestKey(value: Session | null): string | null {
+  return value ? `${value.user.id}:${value.access_token}` : null;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [loading, setLoading] = useState(isSupabaseConfigured);
+  const mountedRef = useRef(true);
   const signingOutRef = useRef(false);
+  const signOutTaskRef = useRef<Promise<void> | null>(null);
   const sessionRef = useRef<Session | null>(null);
   const profileLoadQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const profileRequestsRef = useRef(new ProfileRequestCoordinator<MemberProfile | null>());
 
   function applySession(next: Session | null) {
     sessionRef.current = next;
     setSession(next);
+    profileRequestsRef.current.setIdentity(next?.user.id ?? null, profileRequestKey(next));
+    if (!next) setProfile(null);
   }
 
-  function loadProfile(user: User | null): Promise<void> {
+  function loadProfile(user: User | null, options: { force?: boolean; maxAgeMs?: number } = {}): Promise<void> {
     if (!user) {
-      setProfile(null);
+      if (mountedRef.current) setProfile(null);
       return Promise.resolve();
     }
     if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return Promise.resolve();
@@ -106,10 +117,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .catch(() => undefined)
       .then(async () => {
         if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return;
-        const { data } = await getSupabase().from('profiles').select('*').eq('id', user.id).maybeSingle();
-        if (!signingOutRef.current && sessionRef.current?.user.id === user.id) {
-          setProfile((data as MemberProfile | null) ?? null);
-        }
+        const current = sessionRef.current;
+        const requestKey = profileRequestKey(current);
+        if (!current || !requestKey) return;
+        await profileRequestsRef.current.request({
+          identity: user.id,
+          requestKey,
+          force: options.force,
+          maxAgeMs: options.maxAgeMs ?? PROFILE_AUTO_REFRESH_MS,
+          load: async () => {
+            const { data } = await getSupabase().from('profiles').select('*').eq('id', user.id).maybeSingle();
+            return (data as MemberProfile | null) ?? null;
+          },
+          apply: (nextProfile) => {
+            if (!signingOutRef.current && sessionRef.current?.user.id === user.id) {
+              if (mountedRef.current) setProfile(nextProfile);
+            }
+          },
+        });
       });
 
     profileLoadQueueRef.current = queued.catch(() => undefined);
@@ -117,19 +142,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
+    mountedRef.current = true;
     if (!isSupabaseConfigured) { setLoading(false); return; }
-    let mounted = true;
     void getSupabase().auth.getSession().then(async ({ data }) => {
-      if (!mounted) return;
+      if (!mountedRef.current) return;
       applySession(data.session);
       await loadProfile(data.session?.user ?? null);
-      if (mounted) setLoading(false);
+      if (mountedRef.current) setLoading(false);
     });
     const { data: sub } = getSupabase().auth.onAuthStateChange((_event, next) => {
+      if (signingOutRef.current && next) return;
       applySession(next);
-      void loadProfile(next?.user ?? null).finally(() => { if (mounted) setLoading(false); });
+      void loadProfile(next?.user ?? null).finally(() => {
+        if (mountedRef.current) setLoading(false);
+      });
     });
-    return () => { mounted = false; sub.subscription.unsubscribe(); };
+    return () => {
+      mountedRef.current = false;
+      sub.subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -139,13 +170,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (active && !signingOutRef.current) void loadProfile(session.user);
     };
     const visibility = () => { if (document.visibilityState === 'visible') refresh(); };
-    const timer = window.setInterval(refresh, 30_000);
+    const timer = window.setInterval(refresh, PROFILE_AUTO_REFRESH_MS);
     window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
     document.addEventListener('visibilitychange', visibility);
     return () => {
       active = false;
       window.clearInterval(timer);
       window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
       document.removeEventListener('visibilitychange', visibility);
     };
   }, [session?.user?.id]);
@@ -172,8 +205,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         applySession(nextSession);
         await loadProfile(nextSession.user);
       } catch (cause) {
-        applySession(null); setProfile(null); throw new Error(authMessage(cause));
-      } finally { setLoading(false); }
+        applySession(null);
+        throw new Error(authMessage(cause));
+      } finally {
+        setLoading(false);
+      }
     },
     async signUp(loginName, password) {
       const name = validate(loginName, password);
@@ -185,21 +221,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error || data.user?.identities?.length === 0) throw new Error(authMessage(error ?? new Error('already')));
     },
     async signOut() {
-      if (signingOutRef.current) return;
-      signingOutRef.current = true;
-      setLoading(true);
-      try {
-        await profileLoadQueueRef.current;
-        const { error } = await getSupabase().auth.signOut();
-        if (error) throw error;
-        applySession(null);
-        setProfile(null);
-      } finally {
-        signingOutRef.current = false;
-        setLoading(false);
-      }
+      if (signOutTaskRef.current) return signOutTaskRef.current;
+      const previousSession = sessionRef.current;
+      const previousRequestKey = profileRequestKey(previousSession);
+      const task = (async () => {
+        signingOutRef.current = true;
+        setLoading(true);
+        try {
+          const coordinatorDrain = profileRequestsRef.current.beginLogout();
+          await profileLoadQueueRef.current;
+          await coordinatorDrain;
+          const { error } = await getSupabase().auth.signOut();
+          if (error) throw error;
+          applySession(null);
+          profileRequestsRef.current.finishLogout();
+        } catch (cause) {
+          const { data } = await getSupabase().auth.getSession();
+          const restored = data.session ?? previousSession;
+          const restoredRequestKey = profileRequestKey(restored) ?? previousRequestKey;
+          if (restored && restoredRequestKey) {
+            profileRequestsRef.current.restoreAfterFailedLogout(restored.user.id, restoredRequestKey);
+            applySession(restored);
+          } else {
+            profileRequestsRef.current.finishLogout();
+            applySession(null);
+          }
+          throw cause;
+        } finally {
+          signingOutRef.current = false;
+          signOutTaskRef.current = null;
+          setLoading(false);
+        }
+      })();
+      signOutTaskRef.current = task;
+      return task;
     },
-    async refreshProfile() { await loadProfile(session?.user ?? null); },
+    async refreshProfile() {
+      const current = sessionRef.current;
+      await loadProfile(current?.user ?? null, { force: true });
+    },
   }), [loading, membershipLevel, permissions, profile, session]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
