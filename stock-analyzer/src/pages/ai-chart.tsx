@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Database, ShieldAlert } from 'lucide-react';
+import { ArrowLeft, Database, ExternalLink, ShieldAlert } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { ChartBroadcastPanel, type ChartBroadcastMarket } from '@/components/chart-broadcast';
@@ -56,6 +56,25 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     if (!embedded && location !== nextLocation) navigate(nextLocation, { replace: true });
   }, [embedded, location, navigate, selection, state]);
 
+  const openTradingWorkspace = useCallback(() => {
+    const workspacePath = `/trading-workspace?${selectionQuery(selection)}`;
+    if (typeof window === 'undefined' || window.innerWidth < 1024) {
+      navigate(workspacePath);
+      return;
+    }
+    const popup = window.open(
+      workspacePath,
+      'ai-trading-workspace',
+      'popup,width=1440,height=900,resizable=yes,scrollbars=yes',
+    );
+    if (popup) {
+      popup.opener = null;
+      popup.focus();
+      return;
+    }
+    navigate(workspacePath);
+  }, [navigate, selection]);
+
   return (
     <div className={`h-full overflow-y-auto overscroll-contain bg-background ${embedded ? 'pb-4' : 'pb-24'}`}>
       <header className="sticky top-0 z-20 border-b border-card-border bg-background/95 px-4 py-3 backdrop-blur-xl">
@@ -65,7 +84,19 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             <p className="text-[11px] font-extrabold text-primary">기술탭</p>
             <h1 className="truncate text-lg font-black">AI 차트 분석기</h1>
           </div>
-          <div className="text-right text-[10px] font-bold text-muted-foreground">
+          {!embedded ? (
+            <button
+              type="button"
+              data-testid="open-ai-trading-workspace"
+              onClick={openTradingWorkspace}
+              className="flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-2xl border border-primary/30 bg-primary/10 px-3 text-xs font-black text-primary"
+            >
+              <ExternalLink className="h-4 w-4" />
+              <span className="hidden sm:inline">AI 매매창 열기</span>
+              <span className="sm:hidden">매매창</span>
+            </button>
+          ) : null}
+          <div className="hidden text-right text-[10px] font-bold text-muted-foreground md:block">
             <p>{market === 'KR' ? '국내주식' : '미국주식'} · {selection.timeframe}</p>
             <p>REST 갱신형</p>
           </div>
