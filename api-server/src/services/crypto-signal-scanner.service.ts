@@ -716,7 +716,7 @@ function analyze(
     price: ticker.price,
     changePercent: ticker.changePercent,
     direction,
-    signalState: strongSignalEligible ? 'WATCHING' : dataState === 'unavailable' ? 'INVALIDATED' : 'DETECTED',
+    signalState: strongSignalEligible ? 'WATCHING' : 'DETECTED',
     score,
     confidence,
     dataCompleteness,
