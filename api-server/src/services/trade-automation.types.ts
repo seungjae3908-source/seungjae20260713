@@ -115,6 +115,8 @@ export type TradingSignalState =
   | 'condition_broken'
   | 'expired'
   | 'invalidated'
+  | 'DETECTED'
+  | 'WATCHING'
   | 'READY_FOR_APPROVAL'
   | 'WEAKENED'
   | 'INVALIDATED'
@@ -122,6 +124,7 @@ export type TradingSignalState =
 
 export type TradingMarketSnapshot = {
   observedAt: string;
+  riskObservedAt?: string | null;
   dataDelayMs: number;
   oneMinuteMovePercent: number;
   spreadPercent: number;
