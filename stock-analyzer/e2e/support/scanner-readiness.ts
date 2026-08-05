@@ -6,6 +6,7 @@ type ScannerResponse = {
   elapsedMs?: number;
   dataState?: string;
   cards?: unknown[];
+  message?: string;
 };
 
 function isOrderCapablePath(pathname: string): boolean {
@@ -47,13 +48,15 @@ export async function expectHealthyScannerRoute(page: Page): Promise<void> {
     expect(Number(body.elapsedMs)).toBeLessThanOrEqual(15_000);
     expect(['complete', 'partial']).toContain(body.dataState);
 
-    if (body.partial) {
-      await expect(page.getByTestId('scanner-partial')).toBeVisible();
-    } else if (Array.isArray(body.cards) && body.cards.length === 0) {
-      await expect(page.getByTestId('scanner-empty')).toBeVisible();
-    } else {
-      await expect(page.getByTestId('scanner-success')).toBeVisible();
-    }
+    const responseMessage = String(body.message ?? '').trim();
+    expect(
+      responseMessage,
+      'scanner API must provide the exact user-visible state message',
+    ).not.toBe('');
+    await expect(
+      page.getByText(responseMessage, { exact: true }).first(),
+      `scanner UI must display the API state message: ${responseMessage}`,
+    ).toBeVisible();
 
     expect(orderCapableRequests, 'scanner route must not submit order-capable requests').toEqual([]);
   } finally {
