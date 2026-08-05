@@ -99,6 +99,10 @@ if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 const entries = mode === 'all' ? [...groups.unit, ...groups.smoke] : groups[mode];
 const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'application-tests-'));
 const outputFiles = [];
+const escapeWorkflowCommand = (value) => value
+  .replaceAll('%', '%25')
+  .replaceAll('\r', '%0D')
+  .replaceAll('\n', '%0A');
 
 try {
   for (const [index, entryPoint] of entries.entries()) {
@@ -123,11 +127,14 @@ try {
       if (result.error) throw result.error;
       if ((result.status ?? 1) !== 0) {
         failedEntries.push(relativeEntry);
-        console.error(`::error file=${relativeEntry}::Phase 12 test file failed`);
+        const annotationPath = escapeWorkflowCommand(relativeEntry);
+        process.stdout.write(`::error file=${annotationPath},line=1,title=Phase 12 test failure::Phase 12 test file failed%0A${annotationPath}\n`);
       }
     }
     if (failedEntries.length > 0) {
-      throw new Error(`Phase 12 failed test files: ${failedEntries.join(', ')}`);
+      const failedList = failedEntries.join(', ');
+      process.stdout.write(`::error title=Phase 12 failed files::${escapeWorkflowCommand(failedList)}\n`);
+      throw new Error(`Phase 12 failed test files: ${failedList}`);
     }
     process.exitCode = 0;
   } else {
