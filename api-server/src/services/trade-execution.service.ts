@@ -1,5 +1,6 @@
 import type { TradingRepository } from './trade-automation.repository';
 import { TradeAutomationService, liveExecutionEnabled } from './trade-automation.service';
+import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import {
   prepareBitgetAccount,
@@ -131,11 +132,17 @@ function marketOpenInSeoul(now = new Date()) {
 
 export class TradeExecutionService {
   private automation: TradeAutomationService;
+  private recovery: TradeOrderRecoveryService;
+
   constructor(private repository: TradingRepository) {
     this.automation = new TradeAutomationService(repository);
+    this.recovery = new TradeOrderRecoveryService(repository);
   }
 
   async execute(userId: string, plan: TradingPlan, order: TradingOrder) {
+    if (order.state === 'RECOVERY_REQUIRED') return this.recovery.reconcile(userId, plan, order);
+    if (order.state !== 'SUBMITTED') return order;
+
     const connection = await this.repository.getConnection(userId, plan.exchange);
     if (!connection?.configured || !connection.encryptedCredentials) {
       return this.automation.transition(order, 'REJECTED', 'EXCHANGE_CONNECTION_NOT_CONFIGURED', {
@@ -184,6 +191,10 @@ export class TradeExecutionService {
       }
       return this.automation.transition(order, 'REJECTED', 'EXCHANGE_REJECTED', { errorCode });
     }
+  }
+
+  async reconcile(userId: string, plan: TradingPlan, order: TradingOrder) {
+    return this.recovery.reconcile(userId, plan, order);
   }
 
   async cancel(userId: string, plan: TradingPlan, order: TradingOrder) {
