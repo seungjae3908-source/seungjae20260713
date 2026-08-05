@@ -1,0 +1,139 @@
+name: Application CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/application-ci-main-coverage.yml
+      - api-server/scripts/verify-main-ci-staging-gate.mjs
+
+permissions:
+  actions: write
+  contents: read
+  statuses: read
+
+concurrency:
+  group: application-ci-main-coverage-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate main CI coverage contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: node api-server/scripts/verify-main-ci-staging-gate.mjs
+
+  ensure:
+    name: Ensure exact main SHA receives verified Application CI
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Reuse or dispatch the official Application CI and wait for 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const workflowId = 'futures-public-network-smoke.yml';
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+            async function latestStatuses() {
+              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: targetSha,
+                per_page: 100,
+              });
+              statuses.sort((left, right) => right.id - left.id);
+              const latest = new Map();
+              for (const status of statuses) {
+                if (!latest.has(status.context)) latest.set(status.context, status);
+              }
+              return latest;
+            }
+
+            let latest = new Map();
+            for (let attempt = 0; attempt < 6; attempt += 1) {
+              latest = await latestStatuses();
+              if (latest.has('application-ci/verified')) break;
+              await sleep(5000);
+            }
+
+            if (!latest.has('application-ci/verified')) {
+              const main = await github.rest.repos.getBranch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch: 'main',
+              });
+              if (main.data.commit.sha !== targetSha) {
+                core.setFailed(`Refusing to validate stale main SHA ${targetSha}; current main is ${main.data.commit.sha}.`);
+                return;
+              }
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+                ref: 'main',
+                inputs: {
+                  target_sha: targetSha,
+                  checkout_ref: targetSha,
+                },
+              });
+              core.notice(`Dispatched ${workflowId} for uncovered main SHA ${targetSha}.`);
+            } else {
+              core.notice(`Existing Application CI already owns ${targetSha}; no duplicate dispatch created.`);
+            }
+
+            for (let attempt = 0; attempt < 270; attempt += 1) {
+              latest = await latestStatuses();
+              const failed = required.filter((name) => ['failure', 'error'].includes(latest.get(name)?.state));
+              if (failed.length) {
+                core.setFailed(`Required main status failed: ${failed.join(', ')}`);
+                return;
+              }
+              const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+              if (missing.length === 0) {
+                const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  head_sha: targetSha,
+                  branch: 'main',
+                  per_page: 100,
+                });
+                const verifiedRun = runs.find((run) =>
+                  run.path === '.github/workflows/futures-public-network-smoke.yml'
+                  && run.head_sha === targetSha
+                  && run.status === 'completed'
+                  && run.conclusion === 'success'
+                  && ['push', 'workflow_dispatch'].includes(run.event)
+                );
+                if (!verifiedRun) {
+                  core.setFailed('Six statuses succeeded, but no successful official Application CI run exists for the exact SHA.');
+                  return;
+                }
+                core.notice(`Exact main SHA ${targetSha} has 6/6 verified statuses from run ${verifiedRun.id}.`);
+                return;
+              }
+              await sleep(10000);
+            }
+            core.setFailed(`Timed out waiting for six verified statuses on ${targetSha}.`);
