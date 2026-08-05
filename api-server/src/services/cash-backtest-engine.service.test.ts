@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runCashBacktest, type CashBacktestCandle } from './cash-backtest-engine.service';
+import { calculateCashSignals, runCashBacktest, type CashBacktestCandle } from './cash-backtest-engine.service';
 import { loadUpbitBacktestCandles } from './upbit-backtest-data.service';
 
 function makeCandles(count = 100): CashBacktestCandle[] {
@@ -25,6 +25,63 @@ function makeCandles(count = 100): CashBacktestCandle[] {
     });
   }
   return candles;
+}
+
+function makeRegimeCandles(mode: 'bull' | 'bear-then-bounce', count = 2_000): CashBacktestCandle[] {
+  const start = Date.UTC(2026, 0, 1);
+  let close = mode === 'bull' ? 100 : 300;
+  return Array.from({ length: count }, (_value, index) => {
+    if (mode === 'bull') close += 0.5;
+    else close += index < count - 120 ? -0.05 : 0.8;
+    return {
+      timestamp: start + index * 15 * 60_000,
+      open: close - 0.1,
+      high: close + 0.1,
+      low: close - 0.2,
+      close,
+      volume: 2_000,
+      quoteVolume: close * 2_000,
+      timeframe: '15m',
+      symbol: 'KRW-BTC',
+      market: 'crypto-spot',
+      source: 'test',
+      isClosed: true,
+    };
+  });
+}
+
+const regimeParameters = {
+  lookback: 20,
+  volumePeriod: 20,
+  volumeMultiplier: 1,
+  regimeFilterEnabled: 1,
+  regimeFastPeriod1h: 12,
+  regimeSlowPeriod1h: 26,
+  regimeFastPeriod4h: 12,
+  regimeSlowPeriod4h: 26,
+  minimumTrendSlopePercent: 0,
+  cooldownBars: 16,
+  atrPeriod: 14,
+  minimumBreakoutAtr: 0.1,
+};
+
+function request(parameters: Record<string, number>) {
+  return {
+    market: 'crypto-spot' as const,
+    symbol: 'KRW-BTC',
+    timeframe: '15m',
+    initialCapital: 1_000_000,
+    strategy: 'breakout' as const,
+    parameters,
+    riskPercent: 0.2,
+    entryFeeRate: 0,
+    exitFeeRate: 0,
+    slippageRate: 0,
+    stopLossPercent: 1,
+    takeProfitR: 1.5,
+    maximumTradesPerDay: 10,
+    intrabarPriority: 'stop_first' as const,
+  };
 }
 
 test('Upbit 과거 캔들을 오래된 순서로 정규화하고 미완료 봉을 제외한다', async () => {
@@ -81,4 +138,25 @@ test('현물 엔진은 선물 시장을 거부한다', () => {
     strategy: 'breakout', riskPercent: 0.2, entryFeeRate: 0, exitFeeRate: 0, slippageRate: 0,
     stopLossPercent: 1, takeProfitR: 1.5, maximumTradesPerDay: 10,
   }, makeCandles()), /현물 백테스트 시장/);
+});
+
+test('market-regime-v2는 완료된 1시간·4시간 상승 추세에서만 매수 신호를 허용한다', () => {
+  const bullishSignals = calculateCashSignals(request(regimeParameters), makeRegimeCandles('bull'));
+  const bearishCandles = makeRegimeCandles('bear-then-bounce');
+  const unfilteredSignals = calculateCashSignals(request({ ...regimeParameters, regimeFilterEnabled: 0 }), bearishCandles);
+  const filteredSignals = calculateCashSignals(request(regimeParameters), bearishCandles);
+  assert.ok(bullishSignals.some((signal) => signal.action === 'BUY'));
+  assert.ok(unfilteredSignals.some((signal) => signal.action === 'BUY'));
+  assert.equal(filteredSignals.filter((signal) => signal.action === 'BUY').length, 0);
+});
+
+test('재진입 대기시간은 연속 돌파 신호 수를 줄인다', () => {
+  const candles = makeRegimeCandles('bull');
+  const withoutCooldown = calculateCashSignals(request({ ...regimeParameters, cooldownBars: 0 }), candles)
+    .filter((signal) => signal.action === 'BUY').length;
+  const withCooldown = calculateCashSignals(request({ ...regimeParameters, cooldownBars: 32 }), candles)
+    .filter((signal) => signal.action === 'BUY').length;
+  assert.ok(withoutCooldown > 0);
+  assert.ok(withCooldown > 0);
+  assert.ok(withCooldown < withoutCooldown);
 });
