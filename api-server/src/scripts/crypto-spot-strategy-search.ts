@@ -33,8 +33,9 @@ type Candidate = {
   id: string;
   fastPeriod: number;
   slowPeriod: number;
-  pullbackTolerancePercent: number;
-  volumeMultiplier: number;
+  oversoldRsi: number;
+  recoveryRsi: number;
+  oversoldLookback: number;
   stopAtrMultiplier: number;
   takeProfitR: number;
 };
@@ -65,15 +66,16 @@ type CandidateAssessment = {
 function buildCandidates(): Candidate[] {
   const candidates: Candidate[] = [];
   for (const [fastPeriod, slowPeriod] of [[12, 36], [20, 50]] as const) {
-    for (const pullbackTolerancePercent of [0.15, 0.35]) {
-      for (const volumeMultiplier of [0.7, 1]) {
-        for (const [stopAtrMultiplier, takeProfitR] of [[1.5, 1.5], [1.5, 2], [2, 2]] as const) {
+    for (const [oversoldRsi, recoveryRsi] of [[35, 45], [40, 50], [45, 55]] as const) {
+      for (const oversoldLookback of [4, 8]) {
+        for (const [stopAtrMultiplier, takeProfitR] of [[1.5, 1.2], [1.5, 1.5], [2, 1.5]] as const) {
           candidates.push({
-            id: `f${fastPeriod}-s${slowPeriod}-p${pullbackTolerancePercent}-v${volumeMultiplier}-atr${stopAtrMultiplier}-r${takeProfitR}`,
+            id: `f${fastPeriod}-s${slowPeriod}-os${oversoldRsi}-rc${recoveryRsi}-lb${oversoldLookback}-atr${stopAtrMultiplier}-r${takeProfitR}`,
             fastPeriod,
             slowPeriod,
-            pullbackTolerancePercent,
-            volumeMultiplier,
+            oversoldRsi,
+            recoveryRsi,
+            oversoldLookback,
             stopAtrMultiplier,
             takeProfitR,
           });
@@ -105,14 +107,16 @@ function parameters(candidate: Candidate): Record<string, number> {
     minimumTrendSlopePercent: 0,
     fastPeriod: candidate.fastPeriod,
     slowPeriod: candidate.slowPeriod,
-    pullbackTolerancePercent: candidate.pullbackTolerancePercent,
-    maximumExtensionPercent: 1,
+    oversoldRsi: candidate.oversoldRsi,
+    recoveryRsi: candidate.recoveryRsi,
+    oversoldLookback: candidate.oversoldLookback,
+    maximumExtensionPercent: 2,
     volumePeriod: 20,
-    volumeMultiplier: candidate.volumeMultiplier,
+    volumeMultiplier: 0.5,
     rsiPeriod: 14,
-    minimumEntryRsi: 42,
-    maximumEntryRsi: 72,
-    cooldownBars: 16,
+    minimumEntryRsi: 0,
+    maximumEntryRsi: 100,
+    cooldownBars: 8,
     strategyExitEnabled: 0,
     entryOnNextOpen: 1,
     executionAtrPeriod: 14,
@@ -127,7 +131,7 @@ function request(symbol: Symbol, candidate: Candidate): CashBacktestRequest {
     symbol,
     timeframe: TIMEFRAME,
     initialCapital: 1_000_000,
-    strategy: 'regime_pullback',
+    strategy: 'regime_rsi_reversal',
     parameters: parameters(candidate),
     riskPercent: 0.15,
     entryFeeRate: 0.0005,
@@ -166,10 +170,7 @@ function finiteProfitFactor(value: number | null) {
   return value == null ? Number.POSITIVE_INFINITY : value;
 }
 
-function assessCandidate(
-  candidate: Candidate,
-  datasets: Record<Symbol, ReturnType<typeof splitCandles>>,
-): CandidateAssessment {
+function assessCandidate(candidate: Candidate, datasets: Record<Symbol, ReturnType<typeof splitCandles>>): CandidateAssessment {
   const selectionSegments: SegmentResult[] = [];
   for (const symbol of SYMBOLS) {
     selectionSegments.push(runSegment(symbol, 'training', datasets[symbol].training, candidate));
@@ -183,14 +184,7 @@ function assessCandidate(
     + Math.min(minimumSelectionProfitFactor, 3) * 0.05
     + Math.min(selectionTrades, 100) * 0.001
     - sparsePenalty;
-  return {
-    candidate,
-    selectionSegments,
-    minimumSelectionExpectancyR,
-    minimumSelectionProfitFactor,
-    selectionTrades,
-    score,
-  };
+  return { candidate, selectionSegments, minimumSelectionExpectancyR, minimumSelectionProfitFactor, selectionTrades, score };
 }
 
 function automationAssessment(test: SegmentResult[], full: SegmentResult[]) {
@@ -209,20 +203,12 @@ function automationAssessment(test: SegmentResult[], full: SegmentResult[]) {
 const histories = {} as Record<Symbol, CashBacktestCandle[]>;
 const providerWarnings = {} as Record<Symbol, string[]>;
 for (const symbol of SYMBOLS) {
-  const history = await loadUpbitBacktestCandles({
-    symbol,
-    timeframe: TIMEFRAME,
-    startTime: START_TIME,
-    endTime: END_TIME,
-  });
+  const history = await loadUpbitBacktestCandles({ symbol, timeframe: TIMEFRAME, startTime: START_TIME, endTime: END_TIME });
   histories[symbol] = history.candles as CashBacktestCandle[];
   providerWarnings[symbol] = history.warnings;
 }
 
-const datasets = Object.fromEntries(
-  SYMBOLS.map((symbol) => [symbol, splitCandles(histories[symbol])]),
-) as Record<Symbol, ReturnType<typeof splitCandles>>;
-
+const datasets = Object.fromEntries(SYMBOLS.map((symbol) => [symbol, splitCandles(histories[symbol])])) as Record<Symbol, ReturnType<typeof splitCandles>>;
 const assessed = buildCandidates()
   .map((candidate) => assessCandidate(candidate, datasets))
   .sort((left, right) => right.score - left.score || right.selectionTrades - left.selectionTrades);
@@ -237,6 +223,7 @@ const payload = {
   ok: true,
   mode: 'backtest-only',
   orderSubmitted: false,
+  strategyFamily: 'regime_rsi_reversal',
   generatedAt: new Date().toISOString(),
   period: { startTime: START_TIME, endTime: END_TIME, days: DAYS, timeframe: TIMEFRAME },
   split: { trainingPercent: 60, validationPercent: 20, lockedTestPercent: 20 },
