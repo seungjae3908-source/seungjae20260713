@@ -14,6 +14,8 @@ import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
 import { PageFallback } from '@/components/data-state';
 import { AutoBackupSync } from '@/lib/backup-sync';
 import { CapabilityGate } from '@/components/capability-gate';
+import { InstrumentOrderbookDock } from '@/components/instrument-orderbook-dock';
+import { TradingWorkspaceLauncher } from '@/components/trading-workspace-launcher';
 import { withActiveQuerySignal } from '@/lib/query-abort-signal';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
@@ -45,8 +47,10 @@ const Phase8ReleaseCandidateE2EPage = lazy(() => import('@/pages/phase8-release-
 const Phase9AiReviewE2EPage = lazy(() => import('@/pages/phase9-ai-review-e2e'));
 const AiChartPage = lazy(() => import('@/pages/ai-chart'));
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
+const TradingWorkspacePage = lazy(() => import('@/pages/trading-workspace'));
 const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
+const Phase13OrderbookE2EPage = lazy(() => import('@/pages/phase13-orderbook-e2e'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
 const phase5E2EEnabled = import.meta.env.VITE_PHASE5_E2E === 'true';
@@ -58,7 +62,15 @@ const phase11E2EEnabled = import.meta.env.VITE_PHASE11_E2E === 'true';
 const phase12E2EEnabled = import.meta.env.VITE_PHASE12_E2E === 'true';
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      staleTime: 0,
+      gcTime: 30 * 60 * 1000,
+      retry: 2,
+    },
+  },
 });
 
 function installScannerAbortBridge(client: QueryClient) {
@@ -71,9 +83,7 @@ function installScannerAbortBridge(client: QueryClient) {
       resolved.queryKey?.[0] !== 'scan'
       || typeof queryFn !== 'function'
       || wrappedFunctions.has(queryFn)
-    ) {
-      return resolved;
-    }
+    ) return resolved;
     const wrapped = ((context: Parameters<typeof queryFn>[0]) =>
       withActiveQuerySignal(context.signal, () => queryFn(context))) as typeof queryFn;
     wrappedFunctions.add(wrapped);
@@ -87,7 +97,8 @@ function useCryptoRedirect(target: (symbol?: string) => string, symbol?: string)
   const mode = useAssetMode();
   const [, navigate] = useLocation();
   useEffect(() => {
-    mode.setAsset('coin'); navigate(target(symbol), { replace: true });
+    mode.setAsset('coin');
+    navigate(target(symbol), { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }
@@ -96,15 +107,52 @@ function CryptoHomeRedirect() { useCryptoRedirect(() => '/home'); return <PageFa
 function CryptoSearchRedirect() { useCryptoRedirect(() => '/stocks'); return <PageFallback />; }
 function CryptoDetailRedirect() {
   const [, params] = useRoute('/crypto/:symbol') as [boolean, { symbol?: string } | null];
-  useCryptoRedirect((symbol) => `/stock-info?asset=coin&coinMarket=spot&symbol=${encodeURIComponent(String(symbol ?? 'BTC').toUpperCase())}`, params?.symbol);
+  useCryptoRedirect(
+    (symbol) => `/stock-info?asset=coin&coinMarket=spot&symbol=${encodeURIComponent(String(symbol ?? 'BTC').toUpperCase())}`,
+    params?.symbol,
+  );
   return <PageFallback />;
+}
+
+function detailOrderbookTarget(location: string): { ticker: string; market: 'KR' | 'US' } | null {
+  const match = /^\/stock\/([^/?#]+)/.exec(location);
+  if (!match) return null;
+  let ticker = match[1];
+  try { ticker = decodeURIComponent(ticker); } catch { /* Keep the safe path segment. */ }
+  ticker = ticker.trim().toUpperCase().slice(0, 24);
+  if (!ticker) return null;
+  return {
+    ticker,
+    market: /^\d{6}(?:_(?:NX|AL))?$/.test(ticker) ? 'KR' : 'US',
+  };
 }
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const scannerRoute = location.startsWith('/scanner');
-  const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
-  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
+  const wide = scannerRoute
+    || location.startsWith('/ai-chart')
+    || location.startsWith('/trading-workspace')
+    || location.startsWith('/__phase11-technical-workspace-e2e');
+  const orderbookTarget = detailOrderbookTarget(location);
+  const aiChartRoute = location.startsWith('/ai-chart');
+  return (
+    <div className="relative h-[100dvh] w-full overflow-hidden text-foreground">
+      <AppBackground />
+      <div
+        data-testid={scannerRoute ? 'scanner-root' : undefined}
+        className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}
+      >
+        <OfflineBanner />
+        {scannerRoute ? <ScannerReadinessStatus /> : null}
+        <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+      </div>
+      {orderbookTarget ? (
+        <InstrumentOrderbookDock ticker={orderbookTarget.ticker} market={orderbookTarget.market} />
+      ) : null}
+      {aiChartRoute ? <TradingWorkspaceLauncher /> : null}
+    </div>
+  );
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {
@@ -114,6 +162,7 @@ function gated(capability: MemberCapability, child: React.ReactNode) {
 function ScannerAccess() { return gated('canAccessRiskPreview', <TechnicalWorkspacePage />); }
 function AiChartAccess() { return gated('canAccessRiskPreview', <AiChartPage />); }
 function AiChatAccess() { return gated('canAccessBasicInfo', <AiChatPage />); }
+function TradingWorkspaceAccess() { return gated('canAccessPaperTrading', <TradingWorkspacePage />); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
 function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
@@ -121,10 +170,15 @@ function PaperTradingAccess() { return gated('canAccessPaperTrading', <PaperTrad
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
 function StockInfoAccess() {
   const [location] = useLocation();
-  const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : window.location.search.slice(1);
+  const query = location.includes('?')
+    ? location.slice(location.indexOf('?') + 1)
+    : window.location.search.slice(1);
   const params = new URLSearchParams(query);
   if (params.get('asset') === 'coin') {
-    return gated(params.get('coinMarket') === 'futures' ? 'canAccessFutures' : 'canAccessSpot', <StockInfoPage />);
+    return gated(
+      params.get('coinMarket') === 'futures' ? 'canAccessFutures' : 'canAccessSpot',
+      <StockInfoPage />,
+    );
   }
   return gated('canAccessBasicInfo', <StockInfoPage />);
 }
@@ -143,6 +197,7 @@ function ApprovedRouter() {
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
+    <Route path="/trading-workspace" component={TradingWorkspaceAccess} />
     <Route path="/themes" component={ThemesPage} />
     <Route path="/learn" component={LearnPage} />
     <Route path="/watchlist" component={WatchlistPage} />
@@ -174,31 +229,47 @@ function RootRouter() {
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
+    {phase12E2EEnabled ? <Route path="/__phase13-orderbook-e2e" component={Phase13OrderbookE2EPage} /> : null}
     {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
+    {phase11E2EEnabled ? <Route path="/trading-workspace" component={TradingWorkspacePage} /> : null}
     <Route path="/login" component={AccountPage} />
     <Route path="/install" component={InstallPage} />
     <Route component={AuthenticatedApp} />
   </Switch></Suspense>;
 }
 
-function ScannerRoute() {
-  return <ScannerPage />;
-}
-
-function AiChartRoute() {
-  return <AiChartPage />;
-}
+function ScannerRoute() { return <ScannerPage />; }
+function AiChartRoute() { return <AiChartPage />; }
 
 function AuthenticatedApp() {
   const auth = useAuth();
   useEffect(() => { if (auth.isApproved) ensureWatchlistSync(); }, [auth.isApproved]);
   if (auth.loading) return <PageFallback />;
-  if (!auth.configured || !auth.isApproved) return <Suspense fallback={<PageFallback />}><AccountPage /></Suspense>;
+  if (!auth.configured || !auth.isApproved) {
+    return <Suspense fallback={<PageFallback />}><AccountPage /></Suspense>;
+  }
   return <><AutoBackupSync /><ApprovedRouter /></>;
 }
 
 function App() {
-  return <QueryClientProvider client={queryClient}><AuthProvider><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RootRouter /></AppShell></WouterRouter><Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <SettingsProvider>
+          <AssetModeProvider>
+            <AnalysisSelectionProvider>
+              <TooltipProvider>
+                <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+                  <AppShell><RootRouter /></AppShell>
+                </WouterRouter>
+                <Toaster />
+              </TooltipProvider>
+            </AnalysisSelectionProvider>
+          </AssetModeProvider>
+        </SettingsProvider>
+      </AuthProvider>
+    </QueryClientProvider>
+  );
 }
 
 export default App;
