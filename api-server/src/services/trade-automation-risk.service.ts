@@ -140,12 +140,13 @@ export function evaluateTradingPlan(
       add(blockCodes, 'MARKET_SNAPSHOT_FROM_FUTURE');
       add(blockCodes, 'MARKET_DATA_DELAYED');
     } else {
-      if (snapshotAgeMs > MAX_SNAPSHOT_AGE_MS) add(blockCodes, 'MARKET_SNAPSHOT_STALE');
-      const effectiveDelayMs = Math.max(
-        Number.isFinite(declaredDelayMs) && declaredDelayMs >= 0 ? declaredDelayMs : Number.MAX_SAFE_INTEGER,
-        Math.max(0, snapshotAgeMs),
-      );
-      if (effectiveDelayMs > MAX_DATA_DELAY_MS) add(blockCodes, 'MARKET_DATA_DELAYED');
+      if (snapshotAgeMs > MAX_SNAPSHOT_AGE_MS) {
+        add(blockCodes, 'MARKET_SNAPSHOT_STALE');
+        add(blockCodes, 'MARKET_DATA_DELAYED');
+      }
+      if (!Number.isFinite(declaredDelayMs) || declaredDelayMs < 0 || declaredDelayMs > MAX_DATA_DELAY_MS) {
+        add(blockCodes, 'MARKET_DATA_DELAYED');
+      }
     }
   }
 
