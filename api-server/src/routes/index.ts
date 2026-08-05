@@ -18,6 +18,8 @@ import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
+import boundedMarketScanRouter from './bounded-market-scan';
+import cryptoSignalScanRouter from './crypto-signal-scan';
 import {
   requireAdmin,
   requireAuthenticated,
@@ -38,6 +40,12 @@ router.use('/', healthRouter);
 router.use('/admin', adminRouter);
 
 router.use(requireAuthenticated);
+
+// Canonical AI Scanner routes must be registered before the legacy market
+// router. This makes /api/market/scan authenticated, capability protected,
+// bounded and cancellation aware. The legacy handler is no longer reachable.
+router.use('/market/scan', boundedMarketScanRouter);
+router.use('/scanner/crypto', cryptoSignalScanRouter);
 
 const privateExchangeDisabled = (_req: unknown, res: any) => res.status(403).json({
   ok: false,
