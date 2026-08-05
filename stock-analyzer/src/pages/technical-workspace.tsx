@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
+import { useAuth } from '@/lib/auth';
 import AiChartPage from '@/pages/ai-chart';
-import AutoTradingPage from '@/pages/auto-trading';
 import ScannerPage from '@/pages/scanner';
 import SignalScannerPage from '@/pages/signal-scanner';
 
@@ -23,12 +23,19 @@ function useDesktopWorkspace() {
 
 export default function TechnicalWorkspacePage() {
   const desktop = useDesktopWorkspace();
+  const auth = useAuth();
   const [location] = useLocation();
   const phase11SignalRoute = location.startsWith('/__phase11-technical-workspace-e2e');
   const [mobileWorkspace, setMobileWorkspace] = useState<MobileWorkspace>(() => phase11SignalRoute ? 'signal' : 'legacy');
 
-  if (location.startsWith('/auto-trading')) return <AutoTradingPage />;
   if (!desktop) {
+    if (!auth.isAdmin) {
+      return (
+        <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+          <div className="min-h-0 flex-1 overflow-hidden"><SignalScannerPage /></div>
+        </div>
+      );
+    }
     return (
       <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
         <div className="shrink-0 border-b border-card-border bg-background px-3 py-2">
@@ -46,7 +53,7 @@ export default function TechnicalWorkspacePage() {
               onClick={() => setMobileWorkspace('legacy')}
               className="min-h-11 w-full rounded-xl border border-card-border bg-card px-3 text-sm font-extrabold"
             >
-              AI 차트·자동매매 워크스페이스
+              관리자 주문 워크스페이스
             </button>
           )}
         </div>
@@ -56,6 +63,16 @@ export default function TechnicalWorkspacePage() {
       </div>
     );
   }
+
+  if (!auth.can('canAccessRiskPreview')) {
+    return (
+      <div className="h-full min-h-0 overflow-hidden bg-background pb-20">
+        <SignalScannerPage />
+        <BottomNav />
+      </div>
+    );
+  }
+
   return (
     <div className="grid h-full min-h-0 grid-cols-[minmax(380px,0.88fr)_minmax(0,2fr)] overflow-hidden bg-background pb-20">
       <aside className="min-h-0 overflow-hidden border-r border-card-border"><SignalScannerPage embedded /></aside>
