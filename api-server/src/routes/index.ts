@@ -5,6 +5,7 @@ import newsRouter from './news.route';
 import providerDebugRouter from './provider-debug';
 import pushRouter from './push';
 import stocksRouter from './stocks';
+import stockOrderbookRouter from './stock-orderbook';
 import watchlistRouter from './watchlist';
 import kiwoomRouter from './kiwoom.routes';
 import kiwoomRankingsSafeRouter from './kiwoom-rankings-safe';
@@ -88,6 +89,8 @@ router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
 router.use('/trade-automation', tradeAutomationRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
+// Normalized read-only orderbook is registered before legacy stock/provider routes.
+router.use('/stocks', stockOrderbookRouter);
 router.use('/', aiChatRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
