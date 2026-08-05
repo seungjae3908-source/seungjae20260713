@@ -69,6 +69,7 @@ const groups = {
     path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal-query-identity.smoke.test.ts'),
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
+    path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
   ],
 };
 
