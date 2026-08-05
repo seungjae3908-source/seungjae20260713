@@ -13,9 +13,9 @@ import {
 
 const expected: Record<MemberTier, MemberCapability[]> = {
   pending: [],
-  associate: ['canAccessBasicInfo', 'canAccessSpot'],
+  associate: ['canAccessBasicInfo', 'canAccessSpot', 'canAccessSignalScanner'],
   regular: [
-    'canAccessBasicInfo', 'canAccessSpot', 'canAccessFutures',
+    'canAccessBasicInfo', 'canAccessSpot', 'canAccessFutures', 'canAccessSignalScanner',
     'canAccessRiskPreview', 'canAccessBacktests', 'canAccessPaperTrading',
     'canAccessJournalSync', 'canAccessTradingAnalytics', 'canAccessAiTradingReview',
   ],
