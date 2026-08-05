@@ -51,7 +51,7 @@ import type {
   TradingRiskDecision,
 } from './trade-automation.types';
 
- type ExchangePayload = Record<string, unknown>;
+type ExchangePayload = Record<string, unknown>;
 
 const BASE_URLS = {
   bitget: 'https://api.bitget.com',
@@ -250,7 +250,7 @@ export class TradeExecutionService {
         : plan.exchange === 'upbit'
           ? await this.executeUpbit(userId, plan, order, credentials as UpbitCredentials)
           : await this.executeKiwoom(userId, plan, order, credentials as KiwoomCredentials, mockKiwoom);
-      if ('skippedOrder' in result) return result.skippedOrder;
+      if ('skippedOrder' in result) return result.skippedOrder ?? order;
 
       const metadata = this.riskMetadata(result.risk, true);
       await this.automation.transition(order, 'ACCEPTED', 'EXCHANGE_ACCEPTED', {
