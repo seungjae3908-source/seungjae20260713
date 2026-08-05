@@ -172,7 +172,7 @@ test('concurrent split approval executes only the first child and only activates
       return nativeFetch(input, init);
     }) as typeof fetch;
 
-    const approvals = await Promise.all([
+    const responses = await Promise.all([
       globalThis.fetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -184,10 +184,14 @@ test('concurrent split approval executes only the first child and only activates
         body: JSON.stringify({ approved: true }),
       }),
     ]);
+    const approvals = await Promise.all(responses.map(async (response) => ({
+      status: response.status,
+      body: await response.text(),
+    })));
 
     const successful = approvals.filter((response) => response.status === 200);
-    assert.equal(successful.length, 1);
-    const body = await successful[0]!.json();
+    assert.equal(successful.length, 1, JSON.stringify(approvals));
+    const body = JSON.parse(successful[0]!.body);
     assert.equal(body.order.legSequenceNo, 1);
     assert.equal(body.order.state, 'FILLED');
     assert.equal(body.order.requestedQuantity, 0.5);
