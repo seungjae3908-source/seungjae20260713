@@ -305,6 +305,15 @@ async function login(page: Page, loginName: string) {
   await expect(page.getByText('현재 등급에 허용된 기능을 사용할 수 있습니다.')).toBeVisible();
 }
 
+async function navigateSpa(page: Page, pathAndSearch: string) {
+  await page.evaluate((nextLocation) => {
+    window.history.pushState(null, '', nextLocation);
+    window.dispatchEvent(
+      new PopStateEvent('popstate', { state: window.history.state }),
+    );
+  }, pathAndSearch);
+}
+
 test.describe('production auth session and AI chart route', () => {
   test.describe.configure({ mode: 'serial' });
   test.setTimeout(120_000);
@@ -425,8 +434,9 @@ test.describe('production auth session and AI chart route', () => {
     await login(page, USERS[0].loginName);
     expect(profileCalls.get(FIRST_USER_ID)).toBe(1);
 
-    await page.goto(
-      `${isolatedBaseURL}/ai-chart?assetType=stock&market=KR&symbol=005930`
+    await navigateSpa(
+      page,
+      '/ai-chart?assetType=stock&market=KR&symbol=005930'
       + '&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m',
     );
     await expect(page).toHaveURL(/\/ai-chart/);
@@ -435,7 +445,7 @@ test.describe('production auth session and AI chart route', () => {
     await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
     await expect(page.getByText('auth-stock-fixture', { exact: false })).toBeVisible();
 
-    await page.goto(`${isolatedBaseURL}/account`);
+    await navigateSpa(page, '/account');
     await expect(page.getByText(USERS[0].displayName, { exact: true })).toBeVisible();
     await page.evaluate(() => {
       const advance = (
@@ -473,8 +483,9 @@ test.describe('production auth session and AI chart route', () => {
     await expect(page.getByText(USERS[1].displayName, { exact: true })).toBeVisible();
     expect(profileCalls.get(SECOND_USER_ID)).toBe(1);
 
-    await page.goto(
-      `${isolatedBaseURL}/ai-chart?assetType=stock&market=KR&symbol=005930`
+    await navigateSpa(
+      page,
+      '/ai-chart?assetType=stock&market=KR&symbol=005930'
       + '&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m',
     );
     await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
