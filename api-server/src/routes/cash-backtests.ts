@@ -27,7 +27,7 @@ function parseRequest(body: unknown): CashMarketBacktestInput {
     throw new BacktestMarketContractError('INVALID_CASH_MARKET', '현물 백테스트 시장은 kr-stock, us-stock, crypto-spot 중 하나여야 합니다.');
   }
   const strategy = String(body.strategy ?? '');
-  if (!['trend_pullback', 'breakout', 'vwap_reclaim'].includes(strategy)) {
+  if (!['trend_pullback', 'breakout', 'vwap_reclaim', 'regime_pullback'].includes(strategy)) {
     throw new BacktestMarketContractError('UNSUPPORTED_STRATEGY', '지원하지 않는 현물 백테스트 전략입니다.');
   }
   const parameters: Record<string, number> = {};
