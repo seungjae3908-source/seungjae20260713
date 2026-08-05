@@ -142,7 +142,7 @@ async function mockWorkspace(page: Page) {
 }
 
 for (const [width, height] of [[360, 800], [390, 844], [430, 932]] as const) {
-  test(`AI search selection opens the AI chart analyzer without horizontal overflow at ${width}`, async ({ page }) => {
+  test(`AI search selection opens the AI chart broadcast without horizontal overflow at ${width}`, async ({ page }) => {
     await page.setViewportSize({ width, height });
     await mockWorkspace(page);
     await page.goto('/__phase11-ai-workspace-e2e');
@@ -156,24 +156,25 @@ for (const [width, height] of [[360, 800], [390, 844], [430, 932]] as const) {
     await page.getByText('SK하이닉스', { exact: true }).last().click();
     await page.getByRole('button', { name: 'AI 차트 분석기에서 보기', exact: true }).click();
     await expect(page).toHaveURL(/\/ai-chart\?/);
-    await expect(page.getByRole('heading', { name: 'AI 차트 분석기' })).toBeVisible();
-    await expect(page.getByTestId('analysis-signal-score')).toContainText('88');
+    await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '현재 차트 컨텍스트' })).toBeVisible();
+    await expect(page.getByText('000660 · KR · 1D', { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 }
 
-test('desktop technical workspace keeps AI signal scanner, chart, and analysis together', async ({ page }) => {
+test('desktop technical workspace keeps AI signal scanner, chart broadcast, and analysis together', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await mockWorkspace(page);
   await page.goto('/__phase11-technical-workspace-e2e');
   await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'AI 차트 분석기' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
   const scanner = page.locator('aside').first();
   await expect(scanner.getByText('SK하이닉스', { exact: true })).toBeVisible();
   await scanner.getByRole('button', { name: 'AI 차트 분석기에서 보기', exact: true }).click();
   await expect(page).toHaveURL(/\/__phase11-technical-workspace-e2e$/);
-  await expect(page.getByText('SK하이닉스', { exact: true }).last()).toBeVisible();
-  await expect(page.getByTestId('analysis-signal-score')).toContainText('88');
+  await expect(page.getByRole('heading', { name: '현재 차트 컨텍스트' })).toBeVisible();
+  await expect(page.getByText('000660 · KR · 1D', { exact: true })).toBeVisible();
 });
 
 test('AI chat handles send, refusal response, and cancellation-safe UI', async ({ page }) => {
