@@ -324,7 +324,7 @@ async function openScanner(page: Page, state: MockState) {
   await installApplicationMocks(page, state);
   await page.goto(`${isolatedBaseURL}/scanner`);
   await expect(page).toHaveURL(/\/scanner$/);
-  await expect(page.getByRole('heading', { name: 'AI 검색기', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'AI 신호검색기', level: 1 })).toBeVisible();
   await expect(page.getByTestId('capability-denied')).toHaveCount(0);
 }
 
