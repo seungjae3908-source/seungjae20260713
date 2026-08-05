@@ -9,7 +9,7 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(`[ai-preview-diagnostic-contract] ${message}`);
 };
 
-const [spec, sessionHelper, helper, helperTest, sanitizer, playwright, phase8Db] = await Promise.all([
+const [spec, sessionHelper, helper, helperTest, sanitizer, playwright, phase8Db, bootstrap] = await Promise.all([
   read('stock-analyzer/e2e/phase10-staging-readiness.spec.ts'),
   read('stock-analyzer/e2e/support/browser-session-api.ts'),
   read('stock-analyzer/e2e/support/safe-api-diagnostic.ts'),
@@ -17,6 +17,7 @@ const [spec, sessionHelper, helper, helperTest, sanitizer, playwright, phase8Db]
   read('api-server/scripts/sanitize-staging-playwright-artifacts.mjs'),
   read('stock-analyzer/playwright.config.ts'),
   read('api-server/scripts/verify-phase8-db.sh'),
+  read('api-server/scripts/apply-staging-supabase-bootstrap.mjs'),
 ]);
 
 const regularIndex = spec.indexOf("test('regular: futures, scanner, paper trading, and safe AI preview");
@@ -96,8 +97,18 @@ assert(
     && firstDownMigrationIndex > liveExitIndex,
   'live staging evidence verification must exit before disposable credentials and rollback fixtures',
 );
+
+const schemaVersionMatch = bootstrap.match(/\bconst\s+SCHEMA_VERSION\s*=\s*(['"])([^'"]+)\1\s*;/);
+assert(schemaVersionMatch, 'staging bootstrap schema version constant is missing');
+const expectedSchemaVersion = schemaVersionMatch[2];
+const liveEvidenceSection = phase8Db.slice(liveIndex, liveExitIndex);
+assert(
+  liveEvidenceSection.includes(`value.schema_version !== '${expectedSchemaVersion}'`)
+    || liveEvidenceSection.includes(`value.schema_version !== "${expectedSchemaVersion}"`),
+  'live staging bootstrap evidence schema version must match the bootstrap producer',
+);
+
 for (const marker of [
-  "schema_version !== '20260804.1'",
   'atomic_transaction !== true',
   'idempotency_passes !== 2',
   'production_export_used !== false',
