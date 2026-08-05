@@ -148,10 +148,11 @@ async function approveScannerPaperPlan(req: AuthenticatedRequest, res: Response)
   }
 
   const validation = await scanner.revalidatePaperPlan(userId, stored);
-  const created = await automation.approvePlanAndCreateOrder(userId, stored.id, {
-    marketSnapshot: validation.marketSnapshot,
-    signalValidation: validation,
-  });
+  const revalidated = await automation.revalidatePlan(userId, stored.id, validation);
+  if (!revalidated.approval.approvalEnabled) {
+    throw new Error(`TRADE_PLAN_SIGNAL_NOT_APPROVABLE:${revalidated.approval.reasonCode ?? 'UNKNOWN'}`);
+  }
+  const created = await automation.approvePlanAndCreateOrder(userId, stored.id);
   if (created.duplicate) {
     return res.json({
       ok: true,
