@@ -1,7 +1,7 @@
 import type { SpotBacktestCandle } from './upbit-backtest-data.service';
 import { BacktestMarketContractError, type BacktestMarket } from './backtest-market-profile.service';
 
-export type CashBacktestStrategy = 'trend_pullback' | 'breakout' | 'vwap_reclaim';
+export type CashBacktestStrategy = 'trend_pullback' | 'breakout' | 'vwap_reclaim' | 'regime_pullback';
 export type CashBacktestCandle = Omit<SpotBacktestCandle, 'market' | 'source'> & {
   market: 'kr-stock' | 'us-stock' | 'crypto-spot';
   source: string;
@@ -141,27 +141,17 @@ function averageVolume(candles: readonly CashBacktestCandle[], period: number) {
   });
 }
 
-function completedTrendSeries(
-  candles: readonly CashBacktestCandle[],
-  baseTimeframeMs: number,
-  bucketMs: number,
-  fastPeriod: number,
-  slowPeriod: number,
-) {
+function completedTrendSeries(candles: readonly CashBacktestCandle[], baseTimeframeMs: number, bucketMs: number, fastPeriod: number, slowPeriod: number) {
   const buckets: Array<{ endIndex: number; close: number }> = [];
   let currentKey: number | null = null;
   let currentEndIndex = -1;
   let currentClose = 0;
   let currentTimestamp = 0;
-
   const finalize = () => {
     if (currentKey == null || currentEndIndex < 0) return;
     const bucketEnd = (currentKey + 1) * bucketMs;
-    if (currentTimestamp + baseTimeframeMs >= bucketEnd) {
-      buckets.push({ endIndex: currentEndIndex, close: currentClose });
-    }
+    if (currentTimestamp + baseTimeframeMs >= bucketEnd) buckets.push({ endIndex: currentEndIndex, close: currentClose });
   };
-
   for (let index = 0; index < candles.length; index += 1) {
     const key = Math.floor(candles[index].timestamp / bucketMs);
     if (currentKey != null && key !== currentKey) finalize();
@@ -171,7 +161,6 @@ function completedTrendSeries(
     currentTimestamp = candles[index].timestamp;
   }
   finalize();
-
   const closes = buckets.map((bucket) => bucket.close);
   const fast = ema(closes, fastPeriod);
   const slow = ema(closes, slowPeriod);
@@ -180,14 +169,8 @@ function completedTrendSeries(
     const slowNow = slow[index];
     const fastPrevious = index > 0 ? fast[index - 1] : null;
     if (fastNow == null || slowNow == null || fastPrevious == null || fastPrevious === 0) return null;
-    return {
-      fast: fastNow,
-      slow: slowNow,
-      slopePercent: (fastNow / fastPrevious - 1) * 100,
-      bullish: fastNow > slowNow,
-    };
+    return { fast: fastNow, slow: slowNow, slopePercent: (fastNow / fastPrevious - 1) * 100, bullish: fastNow > slowNow };
   });
-
   const output: Array<TrendSnapshot | null> = Array(candles.length).fill(null);
   let cursor = 0;
   let available: TrendSnapshot | null = null;
@@ -216,16 +199,9 @@ function regimeEntryGate(request: CashBacktestRequest, candles: readonly CashBac
   return candles.map((candle, index) => {
     const oneHourState = oneHour[index];
     const fourHourState = fourHour[index];
-    return Boolean(
-      oneHourState
-      && fourHourState
-      && oneHourState.bullish
-      && fourHourState.bullish
-      && oneHourState.slopePercent >= minimumSlopePercent
-      && fourHourState.slopePercent >= minimumSlopePercent
-      && candle.close >= oneHourState.slow
-      && candle.close >= fourHourState.slow,
-    );
+    return Boolean(oneHourState && fourHourState && oneHourState.bullish && fourHourState.bullish
+      && oneHourState.slopePercent >= minimumSlopePercent && fourHourState.slopePercent >= minimumSlopePercent
+      && candle.close >= oneHourState.slow && candle.close >= fourHourState.slow);
   });
 }
 
@@ -248,6 +224,31 @@ export function calculateCashSignals(request: CashBacktestRequest, candles: read
     signals.push({ index, action: 'BUY' });
     lastBuyIndex = index;
   };
+
+  if (request.strategy === 'regime_pullback') {
+    const fastPeriod = Math.max(2, Math.trunc(numberParam(request, 'fastPeriod', 20)));
+    const slowPeriod = Math.max(fastPeriod + 1, Math.trunc(numberParam(request, 'slowPeriod', 50)));
+    const tolerance = Math.max(0, numberParam(request, 'pullbackTolerancePercent', 0.25)) / 100;
+    const maximumExtension = Math.max(0, numberParam(request, 'maximumExtensionPercent', 0.5)) / 100;
+    const fast = ema(closes, fastPeriod);
+    const slow = ema(closes, slowPeriod);
+    for (let index = 2; index < candles.length; index += 1) {
+      const fastNow = fast[index];
+      const slowNow = slow[index];
+      const fastPrevious = fast[index - 1];
+      const slowPrevious = slow[index - 1];
+      const average = volumes[index];
+      if (fastNow == null || slowNow == null || fastPrevious == null || slowPrevious == null || average == null) continue;
+      const previous = candles[index - 1];
+      const current = candles[index];
+      const trendHeld = fastNow > slowNow && fastPrevious > slowPrevious && previous.close >= slowPrevious;
+      const pullbackTouched = previous.low <= fastPrevious * (1 + tolerance);
+      const confirmed = current.close > current.open && current.close > previous.high && current.close > fastNow && current.close <= fastNow * (1 + maximumExtension);
+      const volumeOk = current.volume >= average * volumeMultiplier;
+      if (trendHeld && pullbackTouched && confirmed && volumeOk) pushBuy(index);
+      if (current.close < slowNow) signals.push({ index, action: 'SELL' });
+    }
+  }
 
   if (request.strategy === 'trend_pullback') {
     const fastPeriod = Math.max(2, Math.trunc(numberParam(request, 'fastPeriod', 20)));
@@ -318,14 +319,11 @@ export function validateCashBacktestRequest(request: CashBacktestRequest) {
   if (!finite(request.stopLossPercent) || request.stopLossPercent <= 0 || request.stopLossPercent >= 100) throw new BacktestMarketContractError('INVALID_STOP_LOSS', '손절률이 올바르지 않습니다.');
   if (!finite(request.takeProfitR) || request.takeProfitR <= 0) throw new BacktestMarketContractError('INVALID_TAKE_PROFIT', '목표 R 값이 올바르지 않습니다.');
   if (!Number.isInteger(request.maximumTradesPerDay) || request.maximumTradesPerDay < 1 || request.maximumTradesPerDay > 100) throw new BacktestMarketContractError('INVALID_DAILY_TRADES', '일일 거래 수 제한이 올바르지 않습니다.');
-  if (numberParam(request, 'regimeFilterEnabled', 0) >= 1 && !TIMEFRAME_MS[request.timeframe]) {
-    throw new BacktestMarketContractError('REGIME_FILTER_TIMEFRAME_UNSUPPORTED', '다중 시간봉 장세 필터는 1~30분봉에서만 지원합니다.');
-  }
+  if (numberParam(request, 'regimeFilterEnabled', 0) >= 1 && !TIMEFRAME_MS[request.timeframe]) throw new BacktestMarketContractError('REGIME_FILTER_TIMEFRAME_UNSUPPORTED', '다중 시간봉 장세 필터는 1~30분봉에서만 지원합니다.');
   const minimumEntryRsi = numberParam(request, 'minimumEntryRsi', 0);
   const maximumEntryRsi = numberParam(request, 'maximumEntryRsi', 100);
-  if (minimumEntryRsi < 0 || maximumEntryRsi > 100 || minimumEntryRsi > maximumEntryRsi) {
-    throw new BacktestMarketContractError('INVALID_RSI_RANGE', '진입 RSI 범위가 올바르지 않습니다.');
-  }
+  if (minimumEntryRsi < 0 || maximumEntryRsi > 100 || minimumEntryRsi > maximumEntryRsi) throw new BacktestMarketContractError('INVALID_RSI_RANGE', '진입 RSI 범위가 올바르지 않습니다.');
+  if (numberParam(request, 'stopAtrMultiplier', 0) < 0) throw new BacktestMarketContractError('INVALID_ATR_STOP', 'ATR 손절 배수는 0 이상이어야 합니다.');
 }
 
 export function runCashBacktest(request: CashBacktestRequest, inputCandles: readonly CashBacktestCandle[]): CashBacktestResult {
@@ -336,9 +334,14 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
   const signalMap = new Map(signals.map((signal) => [signal.index, signal.action]));
   const priority = request.intrabarPriority ?? 'stop_first';
   const strategyExitEnabled = numberParam(request, 'strategyExitEnabled', 1) >= 1;
+  const entryOnNextOpen = numberParam(request, 'entryOnNextOpen', 0) >= 1;
+  const executionAtrPeriod = Math.max(2, Math.trunc(numberParam(request, 'executionAtrPeriod', 14)));
+  const stopAtrMultiplier = Math.max(0, numberParam(request, 'stopAtrMultiplier', 0));
+  const executionAtr = atr(candles, executionAtrPeriod);
   const trades: CashBacktestTrade[] = [];
   let cash = request.initialCapital;
   let position: null | { entryTime: number; entryPrice: number; quantity: number; entryFee: number; riskAmount: number; stop: number; target: number } = null;
+  let pendingEntry = false;
   let totalFees = 0;
   let totalSlippage = 0;
   let peak = cash;
@@ -361,10 +364,34 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
     position = null;
   };
 
+  const openPosition = (index: number, rawEntryPrice: number) => {
+    const entryPrice = rawEntryPrice * (1 + request.slippageRate);
+    const atrValue = executionAtr[index];
+    const percentStopDistance = entryPrice * (request.stopLossPercent / 100);
+    const stopDistance = stopAtrMultiplier > 0 && atrValue != null && atrValue > 0 ? atrValue * stopAtrMultiplier : percentStopDistance;
+    const riskAmount = cash * (request.riskPercent / 100);
+    const affordableQuantity = cash / (entryPrice * (1 + request.entryFeeRate));
+    const riskQuantity = riskAmount / stopDistance;
+    const quantity = Math.min(affordableQuantity, riskQuantity);
+    if (!(quantity > 0) || !finite(quantity)) return;
+    const entryFee = quantity * entryPrice * request.entryFeeRate;
+    const cost = quantity * entryPrice + entryFee;
+    cash -= cost;
+    totalFees += entryFee;
+    totalSlippage += quantity * rawEntryPrice * request.slippageRate;
+    position = { entryTime: candles[index].timestamp, entryPrice, quantity, entryFee, riskAmount, stop: entryPrice - stopDistance, target: entryPrice + stopDistance * request.takeProfitR };
+    tradesToday += 1;
+  };
+
   for (let index = 1; index < candles.length; index += 1) {
     const candle = candles[index];
     const day = new Date(candle.timestamp).toISOString().slice(0, 10);
     if (day !== currentDay) { currentDay = day; tradesToday = 0; }
+
+    if (!position && pendingEntry && tradesToday < request.maximumTradesPerDay) {
+      openPosition(index, candle.open);
+      pendingEntry = false;
+    }
 
     if (position) {
       const hitStop = candle.low <= position.stop;
@@ -375,23 +402,9 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
       else if (strategyExitEnabled && signalMap.get(index) === 'SELL') closePosition(index, candle.close, 'strategy_exit');
     }
 
-    if (!position && signalMap.get(index) === 'BUY' && tradesToday < request.maximumTradesPerDay) {
-      const rawEntryPrice = candle.close;
-      const entryPrice = rawEntryPrice * (1 + request.slippageRate);
-      const stopDistance = entryPrice * (request.stopLossPercent / 100);
-      const riskAmount = cash * (request.riskPercent / 100);
-      const affordableQuantity = cash / (entryPrice * (1 + request.entryFeeRate));
-      const riskQuantity = riskAmount / stopDistance;
-      const quantity = Math.min(affordableQuantity, riskQuantity);
-      if (quantity > 0 && finite(quantity)) {
-        const entryFee = quantity * entryPrice * request.entryFeeRate;
-        const cost = quantity * entryPrice + entryFee;
-        cash -= cost;
-        totalFees += entryFee;
-        totalSlippage += quantity * rawEntryPrice * request.slippageRate;
-        position = { entryTime: candle.timestamp, entryPrice, quantity, entryFee, riskAmount, stop: entryPrice - stopDistance, target: entryPrice + stopDistance * request.takeProfitR };
-        tradesToday += 1;
-      }
+    if (!position && !pendingEntry && signalMap.get(index) === 'BUY' && tradesToday < request.maximumTradesPerDay) {
+      if (entryOnNextOpen) pendingEntry = true;
+      else openPosition(index, candle.close);
     }
 
     const equity = cash + (position ? position.quantity * candle.close : 0);
@@ -409,6 +422,8 @@ export function runCashBacktest(request: CashBacktestRequest, inputCandles: read
   const warnings: string[] = [];
   if (numberParam(request, 'regimeFilterEnabled', 0) >= 1) warnings.push('완료된 1시간·4시간봉만 사용하는 market-regime 진입 필터를 적용했습니다.');
   if (!strategyExitEnabled) warnings.push('조기 전략청산을 끄고 손절·목표가·데이터 종료만으로 청산했습니다.');
+  if (entryOnNextOpen) warnings.push('신호가 확정된 다음 완료 봉의 시가에 진입했습니다.');
+  if (stopAtrMultiplier > 0) warnings.push(`ATR(${executionAtrPeriod}) × ${stopAtrMultiplier} 손절폭을 적용했습니다.`);
   if (!trades.length) warnings.push('조건을 충족한 매매가 없어 성과를 계산할 거래가 없습니다.');
   return {
     ok: true,
