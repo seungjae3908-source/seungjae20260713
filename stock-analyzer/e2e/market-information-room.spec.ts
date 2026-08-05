@@ -88,7 +88,10 @@ function roomResponse(room: RoomId, options: MockOptions) {
   const config = roomConfig(room);
   const partial = options.partialRoom === room;
   const stale = options.staleRoom === room;
-  const sectionMeta = meta(room, { partial, stale });
+  const providerErrorStatus = options.errorRoom === room ? options.errorStatus ?? 503 : null;
+  const providerErrorCode = providerErrorStatus === 429 ? 'UPSTREAM_RATE_LIMITED' : providerErrorStatus == null ? null : `UPSTREAM_HTTP_${providerErrorStatus}`;
+  const providerErrorMessage = providerErrorStatus === 429 ? '제공기관 호출 한도에 도달했습니다.' : providerErrorStatus == null ? null : '제공기관 장애입니다.';
+  const sectionMeta = meta(room, { partial: partial || providerErrorStatus != null, stale });
   const rows = room === 'stocks-kr'
     ? [{ symbol: '005930', name: '삼성전자', exchange: 'KRX', currency: 'KRW', price: 78000, changePercent: 0.7, high24h: 79000, low24h: 77000, volume24h: 700000, tradingValue24h: 54000000000, marketCap: null, warning: false, tradingStatus: null, fundingRatePercent: null, nextFundingAt: null, openInterest: null, rangeVolatility24hPercent: null, providerUpdatedAt: NOW }]
     : room === 'stocks-us'
@@ -107,12 +110,25 @@ function roomResponse(room: RoomId, options: MockOptions) {
     assetType: config.assetType,
     currency: config.currency,
     fetchedAt: NOW,
-    partial: partial || stale || !stock,
+    partial: partial || stale || providerErrorStatus != null || !stock,
     sections: {
       indices: stock
         ? { status, data: [{ key: config.market === 'KR' ? 'KOSPI' : 'NASDAQ', label: config.market === 'KR' ? '코스피' : '나스닥', value: 3123.45, changePercent: 0.8 }], meta: sectionMeta, message: partial ? '일부 지수만 제공됩니다.' : null }
         : unsupported('코인에는 주식 시장 지수를 표시하지 않습니다.'),
-      rankings: { status, data: rows, meta: sectionMeta, message: partial ? '일부 ticker 응답만 표시합니다.' : null },
+      rankings: providerErrorStatus != null
+        ? {
+          status: 'error',
+          data: [],
+          meta: {
+            ...sectionMeta,
+            partial: true,
+            unavailableFields: ['rankings'],
+            errorCode: providerErrorCode,
+            retryable: providerErrorStatus === 429 || providerErrorStatus >= 500,
+          },
+          message: providerErrorMessage,
+        }
+        : { status, data: rows, meta: sectionMeta, message: partial ? '일부 ticker 응답만 표시합니다.' : null },
       sectors: stock
         ? { status, data: [{ key: 'technology', label: config.market === 'KR' ? '반도체' : 'Technology', tradingValue: 123000000, constituentCount: 1, changePercent: null }], meta: sectionMeta, message: null }
         : unsupported('공개 응답은 업종·섹터를 제공하지 않습니다.'),
@@ -202,15 +218,6 @@ async function mockInformationApi(page: Page, options: MockOptions = {}): Promis
     if (match) {
       const room = match[1] as RoomId;
       if (options.delayRoom === room) await new Promise((resolve) => setTimeout(resolve, options.delayMs ?? 800));
-      if (options.errorRoom === room) {
-        const status = options.errorStatus ?? 503;
-        return fulfill(route, {
-          ok: false,
-          errorCode: status === 429 ? 'UPSTREAM_RATE_LIMITED' : 'UPSTREAM_HTTP_503',
-          retryable: true,
-          message: status === 429 ? '제공기관 호출 한도에 도달했습니다.' : '제공기관 장애입니다.',
-        }, status);
-      }
       return fulfill(route, roomResponse(room, options));
     }
     if (path === '/api/notifications/price-alerts') return fulfill(route, { alerts: [] });
@@ -316,10 +323,20 @@ test('partial, stale, unsupported, 429, and provider error states remain card-sc
   const limitedPage = await page.context().newPage();
   const limitedDiagnostics = await mockInformationApi(limitedPage, { errorRoom: 'coins-spot', errorStatus: 429 });
   await limitedPage.goto('/coins/spot');
-  await expect(limitedPage.getByRole('heading', { name: '제공기관 호출 한도에 도달했습니다' })).toBeVisible();
-  await expect(limitedPage.getByRole('button', { name: '다시 시도' })).toBeVisible();
+  await expect(limitedPage.getByRole('heading', { name: '코인 현물 정보' })).toBeVisible();
+  await expect(limitedPage.getByText('제공기관 호출 한도에 도달했습니다.').first()).toBeVisible();
+  await expect(limitedPage.getByText('검증된 코인 뉴스 provider가 아직 연결되지 않았습니다.').first()).toBeVisible();
   limitedDiagnostics.assertClean();
   await limitedPage.close();
+
+  const outagePage = await page.context().newPage();
+  const outageDiagnostics = await mockInformationApi(outagePage, { errorRoom: 'coins-futures', errorStatus: 503 });
+  await outagePage.goto('/coins/futures');
+  await expect(outagePage.getByRole('heading', { name: '코인 선물 정보' })).toBeVisible();
+  await expect(outagePage.getByText('제공기관 장애입니다.').first()).toBeVisible();
+  await expect(outagePage.getByText('선물 공개 파생지표')).toBeVisible();
+  outageDiagnostics.assertClean();
+  await outagePage.close();
 });
 
 test('mobile 360, 390, and 430 layouts have no horizontal overflow and keep 44px touch targets', async ({ page }) => {
