@@ -9,7 +9,7 @@ LIVE_DIR="${LIVE_DIR:-/opt/stock-app}"
 PM2_NAME="${PM2_NAME:-stock-app}"
 LIVE_PORT="${LIVE_PORT:-8080}"
 CANARY_PORT="${CANARY_PORT:-18081}"
-DATA_PROBE_PATH="${DATA_PROBE_PATH:-/api/quotes?tickers=005930}"
+DATA_PROBE_PATH="${DATA_PROBE_PATH:-/api/healthz/data-plane}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}"
 RELEASE_ROOT="${RELEASE_ROOT:-/opt/stock-app-releases}"
 BACKUP_ROOT="${BACKUP_ROOT:-/opt/stock-app-backups}"
@@ -144,7 +144,19 @@ probe_data() {
     return 1
   fi
 
+  node -e '
+    const fs = require("fs");
+    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const valid = value?.ok === true
+      && value?.dataPlane === "market-quotes"
+      && Number(value?.available) >= 1
+      && value?.priceValidated === true
+      && Number.isFinite(Date.parse(value?.providerUpdatedAt));
+    if (!valid) process.exit(1);
+  ' "$output_file"
+  local result=$?
   rm -f "$output_file"
+  return "$result"
 }
 
 restore_backup() {
