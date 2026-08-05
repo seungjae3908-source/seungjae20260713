@@ -9,6 +9,8 @@ import type {
 
 const MAX_APPROVAL_PRICE_DRIFT_PERCENT = 2;
 const MAX_PROVIDER_CLOCK_OFFSET_MS = 5_000;
+const MAX_RISK_EVIDENCE_AGE_MS = 30_000;
+const MAX_SIGNAL_AGE_MS = 30_000;
 const MAX_ESTIMATED_SLIPPAGE_PERCENT = 1;
 const MAX_ESTIMATED_FEE_PERCENT = 1;
 const OPEN_POSITION_STATES = new Set(['ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'RECOVERY_REQUIRED']);
@@ -55,6 +57,28 @@ function targetMovePercent(plan: TradingPlan, currentPrice: number) {
     : target - currentPrice;
   const percent = favorable / currentPrice * 100;
   return Number.isFinite(percent) ? percent : null;
+}
+
+function validateTimestamp(input: {
+  value: string | null | undefined;
+  now: Date;
+  missingCode: string;
+  invalidCode: string;
+  staleCode: string;
+  maximumAgeMs: number;
+  blockCodes: string[];
+}) {
+  const parsed = Date.parse(input.value ?? '');
+  if (!Number.isFinite(parsed)) {
+    input.blockCodes.push(input.missingCode);
+    return null;
+  }
+  if (parsed > input.now.getTime() + MAX_PROVIDER_CLOCK_OFFSET_MS) {
+    input.blockCodes.push(input.invalidCode);
+    return parsed;
+  }
+  if (input.now.getTime() - parsed > input.maximumAgeMs) input.blockCodes.push(input.staleCode);
+  return parsed;
 }
 
 export type PreSubmissionRiskResult = {
@@ -120,7 +144,10 @@ export class TradePreSubmissionRiskService {
     const orders = await this.repository.listOrders(input.userId);
     const previousOrders = orders.filter((order) => order.id !== input.order.id);
     const dailyOrderCount = previousOrders.filter((order) => sameUtcDay(order.createdAt, now)).length;
-    const openPositionCount = previousOrders.filter((order) => OPEN_POSITION_STATES.has(order.state)).length;
+    const openPositionCount = Math.max(
+      input.snapshot.openPositionCount,
+      previousOrders.filter((order) => OPEN_POSITION_STATES.has(order.state)).length,
+    );
     const snapshot: TradingMarketSnapshot = {
       ...currentPlan.marketSnapshot,
       ...input.snapshot,
@@ -128,27 +155,46 @@ export class TradePreSubmissionRiskService {
       openPositionCount,
     };
 
-    const observedAt = Date.parse(snapshot.observedAt);
-    if (!Number.isFinite(observedAt)) blockCodes.push('MARKET_DATA_TIMESTAMP_UNAVAILABLE');
-    else {
-      if (observedAt > now.getTime() + MAX_PROVIDER_CLOCK_OFFSET_MS) blockCodes.push('MARKET_DATA_FROM_FUTURE');
+    const observedAt = validateTimestamp({
+      value: snapshot.observedAt,
+      now,
+      missingCode: 'MARKET_DATA_TIMESTAMP_UNAVAILABLE',
+      invalidCode: 'MARKET_DATA_FROM_FUTURE',
+      staleCode: 'MARKET_DATA_STALE',
+      maximumAgeMs: 30_000,
+      blockCodes,
+    });
+    if (observedAt != null) {
       const observedDelay = Math.max(0, now.getTime() - observedAt);
       if (!finite(snapshot.dataDelayMs) || snapshot.dataDelayMs < 0) blockCodes.push('MARKET_DATA_DELAY_UNKNOWN');
       else if (Math.abs(snapshot.dataDelayMs - observedDelay) > MAX_PROVIDER_CLOCK_OFFSET_MS) {
         blockCodes.push('MARKET_DATA_DELAY_INCONSISTENT');
       }
     }
+    validateTimestamp({
+      value: snapshot.riskObservedAt,
+      now,
+      missingCode: 'RISK_EVIDENCE_TIMESTAMP_UNAVAILABLE',
+      invalidCode: 'RISK_EVIDENCE_TIMESTAMP_INVALID',
+      staleCode: 'RISK_EVIDENCE_STALE',
+      maximumAgeMs: MAX_RISK_EVIDENCE_AGE_MS,
+      blockCodes,
+    });
     if (finite(snapshot.providerTimeOffsetMs)
       && Math.abs(snapshot.providerTimeOffsetMs) > MAX_PROVIDER_CLOCK_OFFSET_MS) {
       blockCodes.push('PROVIDER_CLOCK_OFFSET_TOO_LARGE');
     }
+    if (currentPlan.accountMode !== 'paper' && !snapshot.source?.trim()) blockCodes.push('MARKET_DATA_SOURCE_UNAVAILABLE');
     if (snapshot.marketStatus !== 'OPEN') blockCodes.push('MARKET_NOT_OPEN');
     if (snapshot.halted) blockCodes.push('MARKET_HALTED');
 
     const currentPrice = snapshot.currentPrice;
     const approvedPrice = referencePrice(currentPlan);
     let priceDriftPercent: number | null = null;
-    if (!finite(currentPrice) || currentPrice <= 0) blockCodes.push('CURRENT_PRICE_UNAVAILABLE');
+    if (!finite(currentPrice) || currentPrice <= 0) {
+      if (currentPlan.accountMode === 'paper') warnings.push('모의 실행 현재가가 없어 가격 괴리 검사를 생략했습니다.');
+      else blockCodes.push('CURRENT_PRICE_UNAVAILABLE');
+    }
     if (approvedPrice == null) {
       if (currentPlan.accountMode === 'paper') warnings.push('승인 기준가격이 없어 모의 실행에서 가격 괴리 검사를 생략했습니다.');
       else blockCodes.push('APPROVAL_REFERENCE_PRICE_UNAVAILABLE');
@@ -165,10 +211,17 @@ export class TradePreSubmissionRiskService {
       else blockCodes.push('SIGNAL_STATE_UNAVAILABLE');
     }
     if (snapshot.signalObservedAt) {
-      const signalObservedAt = Date.parse(snapshot.signalObservedAt);
-      if (!Number.isFinite(signalObservedAt) || signalObservedAt > now.getTime() + MAX_PROVIDER_CLOCK_OFFSET_MS) {
-        blockCodes.push('SIGNAL_TIMESTAMP_INVALID');
-      }
+      validateTimestamp({
+        value: snapshot.signalObservedAt,
+        now,
+        missingCode: 'SIGNAL_TIMESTAMP_UNAVAILABLE',
+        invalidCode: 'SIGNAL_TIMESTAMP_INVALID',
+        staleCode: 'SIGNAL_STATE_STALE',
+        maximumAgeMs: MAX_SIGNAL_AGE_MS,
+        blockCodes,
+      });
+    } else if (currentPlan.accountMode !== 'paper') {
+      blockCodes.push('SIGNAL_TIMESTAMP_UNAVAILABLE');
     }
 
     const liquidity = snapshot.availableLiquidityKrw;
