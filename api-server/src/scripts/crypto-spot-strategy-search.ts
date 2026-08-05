@@ -31,11 +31,11 @@ type Symbol = typeof SYMBOLS[number];
 type SegmentName = 'training' | 'validation' | 'test' | 'full';
 type Candidate = {
   id: string;
-  fastPeriod: number;
-  slowPeriod: number;
-  oversoldRsi: number;
-  recoveryRsi: number;
-  oversoldLookback: number;
+  lookback: number;
+  minimumBreakoutAtr: number;
+  maximumBreakoutAtr: number;
+  retestBars: number;
+  retestTolerancePercent: number;
   stopAtrMultiplier: number;
   takeProfitR: number;
 };
@@ -53,7 +53,6 @@ type SegmentResult = {
   averageWinR: number;
   averageLossR: number;
 };
-
 type CandidateAssessment = {
   candidate: Candidate;
   selectionSegments: SegmentResult[];
@@ -65,20 +64,22 @@ type CandidateAssessment = {
 
 function buildCandidates(): Candidate[] {
   const candidates: Candidate[] = [];
-  for (const [fastPeriod, slowPeriod] of [[12, 36], [20, 50]] as const) {
-    for (const [oversoldRsi, recoveryRsi] of [[35, 45], [40, 50], [45, 55]] as const) {
-      for (const oversoldLookback of [4, 8]) {
-        for (const [stopAtrMultiplier, takeProfitR] of [[1.5, 1.2], [1.5, 1.5], [2, 1.5]] as const) {
-          candidates.push({
-            id: `f${fastPeriod}-s${slowPeriod}-os${oversoldRsi}-rc${recoveryRsi}-lb${oversoldLookback}-atr${stopAtrMultiplier}-r${takeProfitR}`,
-            fastPeriod,
-            slowPeriod,
-            oversoldRsi,
-            recoveryRsi,
-            oversoldLookback,
-            stopAtrMultiplier,
-            takeProfitR,
-          });
+  for (const lookback of [32, 64]) {
+    for (const [minimumBreakoutAtr, maximumBreakoutAtr] of [[0.05, 0.6], [0.1, 1]] as const) {
+      for (const retestBars of [8, 16]) {
+        for (const retestTolerancePercent of [0.15, 0.35]) {
+          for (const [stopAtrMultiplier, takeProfitR] of [[1.5, 1.2], [1.5, 1.5], [2, 1.5]] as const) {
+            candidates.push({
+              id: `lb${lookback}-bo${minimumBreakoutAtr}-${maximumBreakoutAtr}-rt${retestBars}-tol${retestTolerancePercent}-atr${stopAtrMultiplier}-r${takeProfitR}`,
+              lookback,
+              minimumBreakoutAtr,
+              maximumBreakoutAtr,
+              retestBars,
+              retestTolerancePercent,
+              stopAtrMultiplier,
+              takeProfitR,
+            });
+          }
         }
       }
     }
@@ -105,17 +106,19 @@ function parameters(candidate: Candidate): Record<string, number> {
     regimeFastPeriod4h: 6,
     regimeSlowPeriod4h: 18,
     minimumTrendSlopePercent: 0,
-    fastPeriod: candidate.fastPeriod,
-    slowPeriod: candidate.slowPeriod,
-    oversoldRsi: candidate.oversoldRsi,
-    recoveryRsi: candidate.recoveryRsi,
-    oversoldLookback: candidate.oversoldLookback,
-    maximumExtensionPercent: 2,
+    lookback: candidate.lookback,
+    atrPeriod: 14,
+    minimumBreakoutAtr: candidate.minimumBreakoutAtr,
+    maximumBreakoutAtr: candidate.maximumBreakoutAtr,
+    retestBars: candidate.retestBars,
+    retestTolerancePercent: candidate.retestTolerancePercent,
+    retestInvalidationPercent: 0.6,
+    maximumExtensionPercent: 0.8,
     volumePeriod: 20,
     volumeMultiplier: 0.5,
     rsiPeriod: 14,
-    minimumEntryRsi: 0,
-    maximumEntryRsi: 100,
+    minimumEntryRsi: 40,
+    maximumEntryRsi: 75,
     cooldownBars: 8,
     strategyExitEnabled: 0,
     entryOnNextOpen: 1,
@@ -131,7 +134,7 @@ function request(symbol: Symbol, candidate: Candidate): CashBacktestRequest {
     symbol,
     timeframe: TIMEFRAME,
     initialCapital: 1_000_000,
-    strategy: 'regime_rsi_reversal',
+    strategy: 'regime_breakout_retest',
     parameters: parameters(candidate),
     riskPercent: 0.15,
     entryFeeRate: 0.0005,
@@ -223,7 +226,7 @@ const payload = {
   ok: true,
   mode: 'backtest-only',
   orderSubmitted: false,
-  strategyFamily: 'regime_rsi_reversal',
+  strategyFamily: 'regime_breakout_retest',
   generatedAt: new Date().toISOString(),
   period: { startTime: START_TIME, endTime: END_TIME, days: DAYS, timeframe: TIMEFRAME },
   split: { trainingPercent: 60, validationPercent: 20, lockedTestPercent: 20 },
