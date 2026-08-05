@@ -1,0 +1,541 @@
+{
+  "policy_version": "agent-hub-v4.0",
+  "default_model": "gemini-3.1-flash-lite",
+  "provider": "gemini-developer-api-free",
+  "paid_fallback": false,
+  "command_ttl_minutes": 30,
+  "default_max_attempts": 2,
+  "allowed_statuses": [
+    "ready",
+    "waiting_approval",
+    "blocked",
+    "stale",
+    "expired",
+    "superseded",
+    "waiting",
+    "no_action"
+  ],
+  "action_table": {
+    "inspect_repository": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "inspect_branch": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "inspect_pull_request": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "analyze_ci_failure": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "analyze_logs": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "analyze_playwright_trace": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "modify_feature_branch": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "add_or_update_tests": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "run_typecheck": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "run_unit_tests": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "run_build": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "run_playwright": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "create_draft_pr": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "update_draft_pr_description": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "report_results": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "analyze_conflicts": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "create_integration_plan": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "inspect_security_contract": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "inspect_private_api_calls": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "inspect_paper_vs_live_order_separation": {
+      "risk_level": "low",
+      "decision": "ready",
+      "requires_user_approval": false
+    },
+    "mark_pr_ready": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "merge_pr": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "squash_merge": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "rebase": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "merge_main": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "cherry_pick": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "modify_workflow": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "modify_ops_script": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "modify_auth": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "modify_permissions": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "modify_rls": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "create_db_migration": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "apply_db_migration": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "modify_supabase": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "staging_deploy": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "staging_readiness": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "restart_process": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "restart_server": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "resize_server": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "cleanup_files": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "cleanup_logs": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "delete_old_release": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "delete_backup": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "enable_paid_api": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "change_billing": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "modify_external_data_transfer": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "connect_live_account": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "prepare_production_deploy": {
+      "risk_level": "high",
+      "decision": "waiting_approval",
+      "requires_user_approval": true
+    },
+    "direct_commit_main": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "force_push": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "disable_branch_protection": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "bypass_required_ci": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "ignore_test_failure": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "ignore_exit_code": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "print_secrets": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "print_all_environment": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "escalate_permissions": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "create_admin_account": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "disable_production_protection": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "delete_production_database": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "reset_production_database": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "delete_current_rollback": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "delete_latest_backup": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "place_live_order": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "enable_live_auto_trading": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "withdraw_assets": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "transfer_assets": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "change_exchange_api_key": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "modify_live_order_activation": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "modify_agent_hub_policy": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    },
+    "paid_fallback": {
+      "risk_level": "critical",
+      "decision": "blocked",
+      "requires_user_approval": false
+    }
+  },
+  "approval_request_fields": [
+    "exact_action",
+    "target",
+    "target_sha",
+    "reason",
+    "affected_files",
+    "expected_effect",
+    "risk",
+    "rollback_plan",
+    "estimated_downtime",
+    "estimated_cost",
+    "validation_plan",
+    "required_approval_phrase"
+  ],
+  "global_forbidden_path_patterns": [
+    ".github/workflows/**",
+    ".github/agent-hub/**",
+    "ops/**",
+    "**/migrations/**",
+    "**/migration/**",
+    "**/auth/**",
+    "**/permissions/**",
+    "**/secrets/**",
+    "production/**",
+    "infrastructure/**",
+    "infra/**",
+    "deploy/**",
+    "supabase/**",
+    "**/.env",
+    "**/.env.*",
+    "**/*secret*",
+    "**/*credential*",
+    "**/*private_key*",
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "**/package.json",
+    "scripts/agent_hub*.py",
+    "docs/agent-hub*.md",
+    ".gemini/**",
+    "gemini-artifacts/**",
+    "**/dist/**",
+    "**/coverage/**",
+    "**/playwright-report/**",
+    "**/test-results/**",
+    "**/node_modules/**"
+  ],
+  "blocked_expressions": [
+    "main 직접 커밋",
+    "master 직접 커밋",
+    "commit directly to main",
+    "commit directly to master",
+    "force push",
+    "force-push",
+    "강제 푸시",
+    "フォースプッシュ",
+    "强制推送",
+    "branch protection 해제",
+    "disable branch protection",
+    "ブランチ保護を解除",
+    "关闭分支保护",
+    "필수 ci 우회",
+    "bypass required ci",
+    "skip required ci",
+    "必須ciを回避",
+    "绕过必需ci",
+    "테스트 실패를 성공",
+    "mark failed test as success",
+    "ignore test failure",
+    "テスト失敗を成功",
+    "将测试失败改为成功",
+    "exit code 무시",
+    "ignore exit code",
+    "exit 0으로 덮기",
+    "終了コードを無視",
+    "忽略退出代码",
+    "secret 출력",
+    "api key 출력",
+    "password 출력",
+    "print secret",
+    "print api key",
+    "print password",
+    "환경변수 전체 출력",
+    "print all env",
+    "dump environment",
+    "環境変数を全部表示",
+    "输出全部环境变量",
+    "권한 확대",
+    "escalate permissions",
+    "权限提升",
+    "権限を拡大",
+    "관리자 계정 자동 생성",
+    "create admin account automatically",
+    "自动创建管理员账号",
+    "production environment 보호 해제",
+    "disable production environment protection",
+    "운영 db 삭제",
+    "운영 db 초기화",
+    "delete production database",
+    "reset production database",
+    "현재 rollback 삭제",
+    "직전 rollback 삭제",
+    "delete current rollback",
+    "delete previous rollback",
+    "최신 백업 삭제",
+    "최신 스냅샷 삭제",
+    "delete latest backup",
+    "delete latest snapshot",
+    "실제 주문",
+    "실주문",
+    "live order",
+    "real order",
+    "本番注文",
+    "真实订单",
+    "자동매수",
+    "자동매도",
+    "live auto buy",
+    "live auto sell",
+    "実取引自動売買",
+    "真实自动交易",
+    "출금",
+    "자산이체",
+    "withdraw assets",
+    "transfer assets",
+    "出金",
+    "资产转移",
+    "거래소 api 키 발급",
+    "거래소 api 키 변경",
+    "change exchange api key",
+    "실주문 활성화",
+    "enable live trading",
+    "本番取引を有効化",
+    "启用实盘交易",
+    "안전 정책 파일 수정",
+    "modify safety policy file",
+    "modify agent hub policy",
+    "유료 모델 자동 전환",
+    "paid fallback",
+    "auto switch to paid model",
+    "운영에 반영",
+    "기본 브랜치에 적용",
+    "apply to production",
+    "apply to default branch",
+    "ship to production",
+    "deploy now",
+    "本番環境に反映",
+    "默认分支に適用",
+    "应用到生产环境",
+    "应用到默认分支",
+    "서버 ssh",
+    "vultr",
+    "pm2 변경",
+    "caddy 변경",
+    "snapshot 작업",
+    "스냅샷 작업"
+  ],
+  "approval_bypass_expressions": [
+    "승인 없이",
+    "without approval",
+    "skip approval",
+    "auto approve",
+    "승인 생략",
+    "承認なし",
+    "无需批准",
+    "sin aprobación"
+  ]
+}
