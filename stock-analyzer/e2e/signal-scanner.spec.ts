@@ -182,7 +182,7 @@ for (const [width, height] of [[360, 800], [390, 844], [430, 932]] as const) {
     await page.setViewportSize({ width, height });
     await page.goto('/__phase11-technical-workspace-e2e');
     await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '국내주식' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('region', { name: '검색 시장' }).getByRole('button', { name: /^국내주식/ })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByText('삼성전자', { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     expect(forbidden).toEqual([]);
@@ -238,12 +238,13 @@ test('latest timeframe response wins and all four public markets remain separate
   await page.waitForTimeout(700);
   await expect(page.getByText('이전 일봉 응답', { exact: true })).toHaveCount(0);
 
-  await page.getByRole('button', { name: '미국주식' }).click();
+  const marketSelector = page.getByRole('region', { name: '검색 시장' });
+  await marketSelector.getByRole('button', { name: /^미국주식/ }).click();
   await expect(page.getByText('Apple', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '코인 현물' }).click();
+  await marketSelector.getByRole('button', { name: /^코인 현물/ }).click();
   await expect(page.getByText('비트코인', { exact: true })).toBeVisible();
   await expect(page.getByText(/현물 Scanner에는 숏·레버리지를 적용하지 않습니다/)).toBeVisible();
-  await page.getByRole('button', { name: '코인 선물' }).click();
+  await marketSelector.getByRole('button', { name: /^코인 선물/ }).click();
   await expect(page.getByText('BTCUSDT', { exact: true }).first()).toBeVisible();
 
   expect(requests.some((item) => item.includes('market=KR'))).toBe(true);
@@ -279,7 +280,7 @@ test('partial data and provider failure are distinguished without fake success',
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/__phase11-technical-workspace-e2e');
-  await expect(page.getByText('공개 공급자 일부 지연 결과입니다.')).toBeVisible();
+  await expect(page.getByTestId('scanner-partial')).toContainText('공개 공급자 일부 지연 결과입니다.');
   await expect(page.getByRole('heading', { name: '분석하지 못한 종목 1개' })).toBeVisible();
   await expect(page.getByText('FAILED · provider_error')).toBeVisible();
 
