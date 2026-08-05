@@ -42,12 +42,7 @@ function encodeJwtPart(value: unknown) {
 
 const ACCESS_TOKEN = [
   encodeJwtPart({ alg: 'HS256', typ: 'JWT' }),
-  encodeJwtPart({
-    aud: 'authenticated',
-    exp: 4_102_444_800,
-    role: 'authenticated',
-    sub: TEST_USER_ID,
-  }),
+  encodeJwtPart({ aud: 'authenticated', exp: 4_102_444_800, role: 'authenticated', sub: TEST_USER_ID }),
   Buffer.from('scanner-readiness-chart-signature').toString('base64url'),
 ].join('.');
 
@@ -90,26 +85,19 @@ async function findFreePort(): Promise<number> {
         return;
       }
       const { port } = address;
-      server.close((error) => {
-        if (error) reject(error);
-        else resolve(port);
-      });
+      server.close((error) => error ? reject(error) : resolve(port));
     });
   });
 }
 
 function analyzerDirectory() {
-  return path.basename(process.cwd()) === 'stock-analyzer'
-    ? process.cwd()
-    : path.resolve(process.cwd(), 'stock-analyzer');
+  return path.basename(process.cwd()) === 'stock-analyzer' ? process.cwd() : path.resolve(process.cwd(), 'stock-analyzer');
 }
 
 async function waitForIsolatedVite(url: string, child: ChildProcess) {
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
-    if (child.exitCode != null) {
-      throw new Error(`격리 scanner E2E 서버가 조기 종료됐습니다.\n${isolatedViteOutput}`);
-    }
+    if (child.exitCode != null) throw new Error(`격리 scanner E2E 서버가 조기 종료됐습니다.\n${isolatedViteOutput}`);
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(1_500) });
       if (response.status < 500) return;
@@ -126,10 +114,7 @@ async function stopIsolatedVite() {
   isolatedVite = null;
   if (!child || child.exitCode != null) return;
   child.kill('SIGTERM');
-  await Promise.race([
-    new Promise<void>((resolve) => child.once('exit', () => resolve())),
-    wait(5_000),
-  ]);
+  await Promise.race([new Promise<void>((resolve) => child.once('exit', () => resolve())), wait(5_000)]);
   if (child.exitCode == null) child.kill('SIGKILL');
 }
 
@@ -148,73 +133,45 @@ function candles(base: number, timeframe: string) {
 
 function monitor(page: Page): Evidence {
   const evidence: Evidence = {
-    scanAborts: [],
-    chartAborts: [],
-    unexpectedRequestFailures: [],
-    consoleErrors: [],
-    pageErrors: [],
-    unhandledRejections: [],
-    unexpectedHttpErrors: [],
-    orderRequests: [],
+    scanAborts: [], chartAborts: [], unexpectedRequestFailures: [], consoleErrors: [], pageErrors: [],
+    unhandledRejections: [], unexpectedHttpErrors: [], orderRequests: [],
   };
-
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
     const text = message.text();
-    if (text.startsWith('[e2e-unhandledrejection]')) {
-      evidence.unhandledRejections.push(text);
-      return;
-    }
-    evidence.consoleErrors.push(text);
+    if (text.startsWith('[e2e-unhandledrejection]')) evidence.unhandledRejections.push(text);
+    else evidence.consoleErrors.push(text);
   });
   page.on('pageerror', (error) => evidence.pageErrors.push(error.message));
   page.on('requestfailed', (request: Request) => {
     const errorText = request.failure()?.errorText ?? '';
     if (SCAN_ENDPOINT.test(request.url()) && /ERR_ABORTED|NS_BINDING_ABORTED/i.test(errorText)) {
-      evidence.scanAborts.push({ url: request.url(), errorText });
-      return;
+      evidence.scanAborts.push({ url: request.url(), errorText }); return;
     }
     if (CHART_ENDPOINT.test(request.url()) && /ERR_ABORTED|NS_BINDING_ABORTED/i.test(errorText)) {
-      evidence.chartAborts.push({ url: request.url(), errorText });
-      return;
+      evidence.chartAborts.push({ url: request.url(), errorText }); return;
     }
     evidence.unexpectedRequestFailures.push(`${request.method()} ${request.url()} ${errorText}`);
   });
   page.on('response', (response) => {
-    if (response.url().includes('/api/') && response.status() >= 400) {
-      evidence.unexpectedHttpErrors.push({ status: response.status(), url: response.url() });
-    }
+    if (response.url().includes('/api/') && response.status() >= 400) evidence.unexpectedHttpErrors.push({ status: response.status(), url: response.url() });
   });
   page.on('request', (request) => {
-    if (request.method() !== 'GET' && ORDER_ENDPOINT.test(request.url())) {
-      evidence.orderRequests.push(`${request.method()} ${request.url()}`);
-    }
+    if (request.method() !== 'GET' && ORDER_ENDPOINT.test(request.url())) evidence.orderRequests.push(`${request.method()} ${request.url()}`);
   });
-
   return evidence;
 }
 
 async function installApprovedUser(page: Page) {
-  await page.addInitScript(
-    ({ key, session }) => {
-      try {
-        window.localStorage.setItem(key, session);
-      } catch {
-        // about:blank에서는 저장소 접근이 제한될 수 있습니다.
-      }
-      window.addEventListener('unhandledrejection', (event) => {
-        const reason = event.reason instanceof Error ? event.reason.message : String(event.reason);
-        console.error(`[e2e-unhandledrejection] ${reason}`);
-      });
-    },
-    { key: SUPABASE_STORAGE_KEY, session: JSON.stringify(approvedSession()) },
-  );
+  await page.addInitScript(({ key, session }) => {
+    try { window.localStorage.setItem(key, session); } catch { /* about:blank */ }
+    window.addEventListener('unhandledrejection', (event) => {
+      const reason = event.reason instanceof Error ? event.reason.message : String(event.reason);
+      console.error(`[e2e-unhandledrejection] ${reason}`);
+    });
+  }, { key: SUPABASE_STORAGE_KEY, session: JSON.stringify(approvedSession()) });
 
-  await page.route(`https://${SUPABASE_HOST}/**`, (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: '{}',
-  }));
+  await page.route(`https://${SUPABASE_HOST}/**`, (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
   await page.route(`https://${SUPABASE_HOST}/rest/v1/profiles**`, (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -223,9 +180,9 @@ async function installApprovedUser(page: Page) {
       id: TEST_USER_ID,
       login_name: 'scanner-readiness-chart',
       display_name: 'Scanner Readiness E2E',
-      role: 'regular',
+      role: 'admin',
       status: 'approved',
-      membership_level: 'regular',
+      membership_level: 'admin',
       is_active: true,
       permissions_updated_at: '2026-08-05T00:00:00.000Z',
       updated_at: '2026-08-05T00:00:00.000Z',
@@ -234,11 +191,7 @@ async function installApprovedUser(page: Page) {
 }
 
 async function installApplicationMocks(page: Page, state: MockState) {
-  await page.route('**/api/**', (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: '{}',
-  }));
+  await page.route('**/api/**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
   await page.route('**/api/market/scan**', async (route) => {
     const call = state.scanRequests.length + 1;
     state.scanRequests.push(route.request().url());
@@ -247,43 +200,23 @@ async function installApplicationMocks(page: Page, state: MockState) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        ok: true,
-        searchRunId: `scanner-readiness:e2e:${call}`,
-        timeframe: '1D',
-        supportedIndicators: [],
-        cards: [],
-        partial: false,
-        completedCount: 0,
-        requestedCount: 0,
-        providerErrorCount: 0,
-        timeoutCount: 0,
-        elapsedMs: 10,
+        ok: true, searchRunId: `scanner-readiness:e2e:${call}`, timeframe: '1D', supportedIndicators: [], cards: [],
+        partial: false, completedCount: 0, requestedCount: 0, providerErrorCount: 0, timeoutCount: 0, elapsedMs: 10,
       }),
     }).catch(() => undefined);
   });
   await page.route('**/api/quotes**', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({
-      quotes: [
-        { ticker: '^KS11', changePercent: 0.2 },
-        { ticker: '^KQ11', changePercent: -0.1 },
-        { ticker: '^GSPC', changePercent: 0.3 },
-        { ticker: '^IXIC', changePercent: 0.4 },
-      ],
-    }),
+    body: JSON.stringify({ quotes: [
+      { ticker: '^KS11', changePercent: 0.2 }, { ticker: '^KQ11', changePercent: -0.1 },
+      { ticker: '^GSPC', changePercent: 0.3 }, { ticker: '^IXIC', changePercent: 0.4 },
+    ] }),
   }));
   await page.route('**/api/stocks/auto-trade/status**', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({
-      mode: 'mock',
-      enabled: false,
-      domesticSupported: true,
-      usSupported: false,
-      realKeyConfigured: false,
-      executionKeyConfigured: false,
-    }),
+    body: JSON.stringify({ mode: 'mock', enabled: false, domesticSupported: true, usSupported: false, realKeyConfigured: false, executionKeyConfigured: false }),
   }));
   await page.route(CHART_ENDPOINT, async (route) => {
     const url = new URL(route.request().url());
@@ -291,24 +224,11 @@ async function installApplicationMocks(page: Page, state: MockState) {
     const timeframe = url.searchParams.get('tf') ?? '5m';
     state.chartRequests.push(url.toString());
     if (state.delayOneMinuteChart && timeframe === '1m') await wait(2_000);
-    const base = timeframe === '1m'
-      ? 1_000
-      : timeframe === '15m'
-        ? 2_000
-        : ticker === 'AAPL'
-          ? 3_000
-          : 1_000;
+    const base = timeframe === '1m' ? 1_000 : timeframe === '15m' ? 2_000 : ticker === 'AAPL' ? 3_000 : 1_000;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        ticker,
-        timeframe,
-        provider: 'scanner-readiness-chart-fixture',
-        fetchedAt: '2026-08-05T00:00:00.000Z',
-        updatedAt: '2026-08-05T00:00:00.000Z',
-        candles: candles(base, timeframe),
-      }),
+      body: JSON.stringify({ ticker, timeframe, provider: 'scanner-readiness-chart-fixture', fetchedAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:00:00.000Z', candles: candles(base, timeframe) }),
     }).catch(() => undefined);
   });
 }
@@ -323,45 +243,21 @@ async function expectTouchTarget(locator: Locator, label: string) {
   return box!;
 }
 
-function overlaps(
-  left: { x: number; y: number; width: number; height: number },
-  right: { x: number; y: number; width: number; height: number },
-) {
-  return !(
-    left.x + left.width <= right.x
-    || right.x + right.width <= left.x
-    || left.y + left.height <= right.y
-    || right.y + right.height <= left.y
-  );
+function overlaps(left: { x: number; y: number; width: number; height: number }, right: { x: number; y: number; width: number; height: number }) {
+  return !(left.x + left.width <= right.x || right.x + right.width <= left.x || left.y + left.height <= right.y || right.y + right.height <= left.y);
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
-  expect(await page.evaluate(
-    () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
-  )).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 }
 
 async function expectVisiblePanelsInsideViewport(page: Page) {
-  const escaped = await page.locator(
-    '[role="dialog"]:visible, [data-testid="scanner-readiness-status"]:visible',
-  ).evaluateAll((elements) => elements
+  const escaped = await page.locator('[role="dialog"]:visible, [data-testid="scanner-readiness-status"]:visible').evaluateAll((elements) => elements
     .map((element) => {
       const box = element.getBoundingClientRect();
-      return {
-        left: box.left,
-        top: box.top,
-        right: box.right,
-        bottom: box.bottom,
-        width: window.innerWidth,
-        height: window.innerHeight,
-      };
+      return { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: window.innerWidth, height: window.innerHeight };
     })
-    .filter((box) => (
-      box.left < 0
-      || box.top < 0
-      || box.right > box.width
-      || box.bottom > box.height
-    )));
+    .filter((box) => box.left < 0 || box.top < 0 || box.right > box.width || box.bottom > box.height));
   expect(escaped).toEqual([]);
 }
 
@@ -373,49 +269,19 @@ test.describe('scanner readiness and legacy chart integration', () => {
     const port = await findFreePort();
     isolatedBaseURL = `http://127.0.0.1:${port}`;
     const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-    isolatedVite = spawn(
-      pnpm,
-      [
-        'exec',
-        'vite',
-        '--config',
-        'vite.config.ts',
-        '--host',
-        '127.0.0.1',
-        '--port',
-        String(port),
-        '--strictPort',
-      ],
-      {
-        cwd: analyzerDirectory(),
-        env: {
-          ...process.env,
-          VITE_PHASE11_E2E: 'false',
-          VITE_SUPABASE_URL: `https://${SUPABASE_HOST}`,
-          VITE_SUPABASE_ANON_KEY: ACCESS_TOKEN,
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
-    for (const stream of [isolatedVite.stdout, isolatedVite.stderr]) {
-      stream?.on('data', (chunk) => {
-        isolatedViteOutput = `${isolatedViteOutput}${String(chunk)}`.slice(-12_000);
-      });
-    }
+    isolatedVite = spawn(pnpm, ['exec', 'vite', '--config', 'vite.config.ts', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
+      cwd: analyzerDirectory(),
+      env: { ...process.env, VITE_PHASE11_E2E: 'false', VITE_SUPABASE_URL: `https://${SUPABASE_HOST}`, VITE_SUPABASE_ANON_KEY: ACCESS_TOKEN },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    for (const stream of [isolatedVite.stdout, isolatedVite.stderr]) stream?.on('data', (chunk) => { isolatedViteOutput = `${isolatedViteOutput}${String(chunk)}`.slice(-12_000); });
     await waitForIsolatedVite(isolatedBaseURL, isolatedVite);
   });
 
-  test.afterAll(async () => {
-    await stopIsolatedVite();
-  });
+  test.afterAll(async () => { await stopIsolatedVite(); });
 
   test('separates scan and chart aborts and keeps mobile controls usable', async ({ page }) => {
-    const state: MockState = {
-      delayInitialScan: true,
-      delayOneMinuteChart: false,
-      scanRequests: [],
-      chartRequests: [],
-    };
+    const state: MockState = { delayInitialScan: true, delayOneMinuteChart: false, scanRequests: [], chartRequests: [] };
     const evidence = monitor(page);
     await page.setViewportSize({ width: 390, height: 844 });
     await installApprovedUser(page);
@@ -448,12 +314,7 @@ test.describe('scanner readiness and legacy chart integration', () => {
     await page.waitForTimeout(2_100);
     await expect(currentPrice).toContainText('$2,040.00');
 
-    for (const viewport of [
-      { width: 360, height: 800 },
-      { width: 390, height: 844 },
-      { width: 430, height: 932 },
-      { width: 844, height: 390 },
-    ]) {
+    for (const viewport of [{ width: 360, height: 800 }, { width: 390, height: 844 }, { width: 430, height: 932 }, { width: 844, height: 390 }]) {
       await page.setViewportSize(viewport);
       const readiness = page.getByTestId('scanner-readiness-status');
       const chartTab = page.getByRole('button', { name: 'AI 차트 분석기', exact: true });
@@ -470,13 +331,10 @@ test.describe('scanner readiness and legacy chart integration', () => {
       await timeframe.tap();
       await expectNoHorizontalOverflow(page);
       await expectVisiblePanelsInsideViewport(page);
-      expect(await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('*')).some(
-        (element) => {
-          const style = getComputedStyle(element);
-          return element.scrollHeight > element.clientHeight
-            && (style.overflowY === 'auto' || style.overflowY === 'scroll');
-        },
-      ))).toBe(true);
+      expect(await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('*')).some((element) => {
+        const style = getComputedStyle(element);
+        return element.scrollHeight > element.clientHeight && (style.overflowY === 'auto' || style.overflowY === 'scroll');
+      }))).toBe(true);
     }
 
     expect(evidence.scanAborts).toHaveLength(1);
