@@ -105,34 +105,26 @@ test('stock scanner returns 401 without a session', async () => {
   );
 });
 
-test('associate is denied stock risk scanner while regular member succeeds', async () => {
+test('associate and regular members may use the stock signal scanner without order execution', async () => {
   const scanner = { scan: async () => response('stock') };
-  await withServer(
-    (app) => {
-      app.use(inject(member('associate')));
-      app.use('/api/market/scan', createBoundedMarketScanRouter({ scanner, guard: new ScannerRequestGuard() }));
-    },
-    async (baseUrl) => {
-      const result = await fetch(`${baseUrl}/api/market/scan?market=KR`);
-      assert.equal(result.status, 403);
-    },
-  );
-  await withServer(
-    (app) => {
-      app.use(inject(member('regular')));
-      app.use('/api/market/scan', createBoundedMarketScanRouter({ scanner, guard: new ScannerRequestGuard() }));
-    },
-    async (baseUrl) => {
-      const result = await fetch(`${baseUrl}/api/market/scan?market=KR`);
-      assert.equal(result.status, 200);
-      const body = await result.json() as ScannerResponse;
-      assert.equal(body.orderSubmitted, false);
-      assert.equal(body.exchangeRequestSent, false);
-    },
-  );
+  for (const level of ['associate', 'regular'] as const) {
+    await withServer(
+      (app) => {
+        app.use(inject(member(level)));
+        app.use('/api/market/scan', createBoundedMarketScanRouter({ scanner, guard: new ScannerRequestGuard() }));
+      },
+      async (baseUrl) => {
+        const result = await fetch(`${baseUrl}/api/market/scan?market=KR`);
+        assert.equal(result.status, 200);
+        const body = await result.json() as ScannerResponse;
+        assert.equal(body.orderSubmitted, false);
+        assert.equal(body.exchangeRequestSent, false);
+      },
+    );
+  }
 });
 
-test('associate may scan Upbit spot but not Bitget futures', async () => {
+test('associate may scan both crypto spot and futures without order execution', async () => {
   await withServer(
     (app) => {
       app.use(inject(member('associate')));
@@ -146,8 +138,15 @@ test('associate may scan Upbit spot but not Bitget futures', async () => {
     async (baseUrl) => {
       const spot = await fetch(`${baseUrl}/api/scanner/crypto/spot?timeframe=15m`);
       assert.equal(spot.status, 200);
+      const spotBody = await spot.json() as ScannerResponse;
+      assert.equal(spotBody.orderSubmitted, false);
+      assert.equal(spotBody.exchangeRequestSent, false);
+
       const futures = await fetch(`${baseUrl}/api/scanner/crypto/futures?timeframe=15m`);
-      assert.equal(futures.status, 403);
+      assert.equal(futures.status, 200);
+      const futuresBody = await futures.json() as ScannerResponse;
+      assert.equal(futuresBody.orderSubmitted, false);
+      assert.equal(futuresBody.exchangeRequestSent, false);
     },
   );
 });
