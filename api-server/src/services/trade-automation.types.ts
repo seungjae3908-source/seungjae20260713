@@ -106,6 +106,20 @@ export type ExchangeConnection = {
   updatedAt: string;
 };
 
+export type TradingSignalState =
+  | 'detected'
+  | 'monitoring'
+  | 'condition_maintained'
+  | 'entry_ready'
+  | 'approved'
+  | 'condition_broken'
+  | 'expired'
+  | 'invalidated'
+  | 'READY_FOR_APPROVAL'
+  | 'WEAKENED'
+  | 'INVALIDATED'
+  | 'EXPIRED';
+
 export type TradingMarketSnapshot = {
   observedAt: string;
   dataDelayMs: number;
@@ -127,6 +141,12 @@ export type TradingMarketSnapshot = {
   plannedPrice?: number | null;
   marketStatus?: 'OPEN' | 'CLOSED' | 'HALTED' | 'UNKNOWN';
   providerTimeOffsetMs?: number;
+  source?: string;
+  availableLiquidityKrw?: number | null;
+  estimatedSlippagePercent?: number | null;
+  estimatedFeePercent?: number | null;
+  signalState?: TradingSignalState | null;
+  signalObservedAt?: string | null;
 };
 
 export type TradingPlanInput = {
@@ -166,6 +186,12 @@ export type TradingPlan = TradingPlanInput & {
   updatedAt: string;
 };
 
+export type TradingRiskDecision = {
+  allowed: boolean;
+  blockCodes: string[];
+  warnings: string[];
+};
+
 export type TradingOrder = {
   id: string;
   userId: string;
@@ -192,6 +218,10 @@ export type TradingOrder = {
   lastErrorCode: string | null;
   manualReviewRequired?: boolean;
   executionClaimId?: string | null;
+  approvedPlanVersion?: number | null;
+  preSubmissionCheckedAt?: string | null;
+  preSubmissionDecision?: TradingRiskDecision | null;
+  preSubmissionSnapshot?: TradingMarketSnapshot | null;
   cancelRequestedAt?: string | null;
   cancelRequestClaimId?: string | null;
   cancelSubmittedAt?: string | null;
@@ -229,12 +259,6 @@ export type TradingExchangeOrderSnapshot = {
   exchangeUpdatedAt: string | null;
   cancelable: boolean | null;
   providerStatusCode: string | null;
-};
-
-export type TradingRiskDecision = {
-  allowed: boolean;
-  blockCodes: string[];
-  warnings: string[];
 };
 
 export type StoredTradingState = {
