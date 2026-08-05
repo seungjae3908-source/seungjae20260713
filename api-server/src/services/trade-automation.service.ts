@@ -413,12 +413,15 @@ export class TradeAutomationService {
   async recoverOpenOrders(userId: string) {
     const orders = await this.repository.listOrders(userId);
     const recoverable = orders.filter((order) => ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED'].includes(order.state));
+    const recovered: TradingOrder[] = [];
     for (const order of recoverable) {
-      if (order.state !== 'RECOVERY_REQUIRED') {
-        await this.transition(order, 'RECOVERY_REQUIRED', 'SERVER_RESTART_RECONCILIATION_REQUIRED');
-      }
+      recovered.push(await this.transition(
+        order,
+        'RECOVERY_REQUIRED',
+        'SERVER_RESTART_RECONCILIATION_REQUIRED',
+      ));
     }
-    return recoverable;
+    return recovered;
   }
 
   async invalidatePlan(userId: string, planId: string, reason = 'SIGNAL_INVALIDATED') {
