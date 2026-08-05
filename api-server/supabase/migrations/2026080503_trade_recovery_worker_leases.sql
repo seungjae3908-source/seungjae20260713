@@ -85,6 +85,14 @@ begin
 end
 $transition_trade_recovery_order_atomic$;
 
+-- The persistent worker receives only the data access required for lookup-first
+-- recovery. It cannot create plans or orders, submit/cancel orders, or delete
+-- audit records through these grants.
+grant select on public.trade_order_plans to service_role;
+grant select on public.trade_exchange_connections to service_role;
+grant select, update on public.trade_orders to service_role;
+grant insert on public.trade_order_events to service_role;
+
 revoke all on function public.transition_trade_recovery_order_atomic(
   uuid, uuid, uuid, text, bigint, text, jsonb, jsonb, boolean
 ) from public, anon, authenticated;
