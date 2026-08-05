@@ -9,3 +9,5 @@ The primary Application CI workflow intentionally uses path filters for expensiv
 - it waits for all six required statuses;
 - it rejects stale `main` SHAs;
 - it never dispatches staging or production and reads no secrets.
+
+The regression contract runs from `pnpm --dir api-server run test:phase12`.
