@@ -1,0 +1,8 @@
+[data-testid="unified-analysis-chart"] [data-testid^="market-"],
+[data-testid="unified-analysis-chart"] [data-testid^="timeframe-"],
+[data-testid="unified-analysis-chart"] button[aria-label="차트 새로고침"],
+[data-testid="unified-analysis-chart"] > section:first-child > div:first-child > button,
+[data-testid="chart-error-state"] button {
+  min-width: 44px;
+  min-height: 44px;
+}
