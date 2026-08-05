@@ -18,8 +18,19 @@ on:
       - scripts/agent_hub_executor_gate_v2.py
       - scripts/agent_hub_executor_report.py
       - scripts/agent_hub_executor_report_v2.py
+      - scripts/agent_hub_state_v2.py
+      - scripts/agent_hub_security_v2.py
+      - scripts/agent_hub_github_validation_v2.py
+      - scripts/agent_hub_command_integrity_v2.py
+      - scripts/agent_hub_executor_safety_v2.py
+      - scripts/agent_hub_prompt_compiler_hardening_v2.py
+      - scripts/agent_hub_coordinator_hardening_v2.py
+      - scripts/agent_hub_executor_gate_hardening_v2.py
+      - scripts/agent_hub_executor_report_hardening_v2.py
+      - scripts/agent_hub_legacy_migration_v2.py
       - scripts/test_agent_hub_v2.py
       - scripts/test_agent_hub_executor_v2.py
+      - scripts/test_agent_hub_hardening_v2.py
       - docs/agent-hub*.md
   pull_request:
     branches: [main]
@@ -37,8 +48,19 @@ on:
       - scripts/agent_hub_executor_gate_v2.py
       - scripts/agent_hub_executor_report.py
       - scripts/agent_hub_executor_report_v2.py
+      - scripts/agent_hub_state_v2.py
+      - scripts/agent_hub_security_v2.py
+      - scripts/agent_hub_github_validation_v2.py
+      - scripts/agent_hub_command_integrity_v2.py
+      - scripts/agent_hub_executor_safety_v2.py
+      - scripts/agent_hub_prompt_compiler_hardening_v2.py
+      - scripts/agent_hub_coordinator_hardening_v2.py
+      - scripts/agent_hub_executor_gate_hardening_v2.py
+      - scripts/agent_hub_executor_report_hardening_v2.py
+      - scripts/agent_hub_legacy_migration_v2.py
       - scripts/test_agent_hub_v2.py
       - scripts/test_agent_hub_executor_v2.py
+      - scripts/test_agent_hub_hardening_v2.py
       - docs/agent-hub*.md
   issue_comment:
     types: [created]
@@ -78,8 +100,19 @@ jobs:
             scripts/agent_hub_executor_gate_v2.py \
             scripts/agent_hub_executor_report.py \
             scripts/agent_hub_executor_report_v2.py \
+            scripts/agent_hub_state_v2.py \
+            scripts/agent_hub_security_v2.py \
+            scripts/agent_hub_github_validation_v2.py \
+            scripts/agent_hub_command_integrity_v2.py \
+            scripts/agent_hub_executor_safety_v2.py \
+            scripts/agent_hub_prompt_compiler_hardening_v2.py \
+            scripts/agent_hub_coordinator_hardening_v2.py \
+            scripts/agent_hub_executor_gate_hardening_v2.py \
+            scripts/agent_hub_executor_report_hardening_v2.py \
+            scripts/agent_hub_legacy_migration_v2.py \
             scripts/test_agent_hub_v2.py \
-            scripts/test_agent_hub_executor_v2.py
+            scripts/test_agent_hub_executor_v2.py \
+            scripts/test_agent_hub_hardening_v2.py
       - name: Run deterministic Agent Hub tests
         env:
           PYTHONPATH: scripts
@@ -90,8 +123,19 @@ jobs:
           python3 scripts/agent_hub_coordinator_v2.py --self-test
           python3 scripts/agent_hub_executor_gate_v2.py --self-test
           python3 scripts/agent_hub_executor_report_v2.py --self-test
+          python3 scripts/agent_hub_state_v2.py
+          python3 scripts/agent_hub_security_v2.py
+          python3 scripts/agent_hub_github_validation_v2.py
+          python3 scripts/agent_hub_command_integrity_v2.py
+          python3 scripts/agent_hub_executor_safety_v2.py --self-test
+          python3 scripts/agent_hub_prompt_compiler_hardening_v2.py
+          python3 scripts/agent_hub_coordinator_hardening_v2.py --self-test
+          python3 scripts/agent_hub_executor_gate_hardening_v2.py --self-test
+          python3 scripts/agent_hub_executor_report_hardening_v2.py --self-test
+          python3 scripts/agent_hub_legacy_migration_v2.py
           python3 scripts/test_agent_hub_v2.py
           python3 scripts/test_agent_hub_executor_v2.py
+          python3 scripts/test_agent_hub_hardening_v2.py
       - name: Assert fixture-only manual validation
         if: github.event_name == 'workflow_dispatch'
         run: echo 'workflow_dispatch completed fixture and self-test validation only; no Issue command was consumed.'
@@ -144,10 +188,7 @@ jobs:
                       time.sleep(2)
                       continue
                   raise
-          text = ''.join(
-              part.get('text', '')
-              for part in data['candidates'][0].get('content', {}).get('parts', [])
-          )
+          text = ''.join(part.get('text', '') for part in data['candidates'][0].get('content', {}).get('parts', []))
           assert 'AGENT_HUB_GEMINI_OK' in text, text[:200]
           PY
 
@@ -173,14 +214,14 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: main
-      - name: Coordinate next schema-v2 action
+      - name: Coordinate next schema-v2 action with audit hardening
         id: hub
         env:
           PYTHONPATH: scripts
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           HUB_ISSUE_NUMBER: '62'
-        run: python3 scripts/agent_hub_coordinator_v2.py
+        run: python3 scripts/agent_hub_coordinator_hardening_v2.py
       - name: Wake controlled executor only for validated ready command
         if: steps.hub.outputs.executor_ready == 'true'
         env:
