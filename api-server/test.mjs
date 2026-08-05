@@ -110,10 +110,13 @@ try {
     outputFiles.push(outputFile);
   }
 
-  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
-  // serially so host-level event-loop contention cannot consume a scanner deadline
-  // before the test body starts. Test coverage and every assertion remain unchanged.
-  const testArguments = mode === 'phase9'
+  // Phase 9 has deadline-sensitive scanner contracts. Phase 12 has tests that
+  // temporarily replace process.env and globalThis.fetch to assert zero outbound
+  // calls and fail-closed execution. Run those groups serially so one test file
+  // cannot consume or restore another file's global fixture. Assertions and test
+  // coverage remain unchanged.
+  const requiresFileIsolation = mode === 'phase9' || mode === 'phase12';
+  const testArguments = requiresFileIsolation
     ? ['--test', '--test-concurrency=1', ...outputFiles]
     : ['--test', ...outputFiles];
   const result = spawnSync(process.execPath, testArguments, {
