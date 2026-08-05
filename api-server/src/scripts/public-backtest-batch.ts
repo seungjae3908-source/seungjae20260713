@@ -21,6 +21,10 @@ const futuresSides: BacktestSide[] = ['long', 'short', 'both'];
 type Row = Record<string, unknown>;
 const rows: Row[] = [];
 
+function average(values: number[]) {
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
 function cashSummary(input: { market: 'kr-stock' | 'us-stock' | 'crypto-spot'; symbol: string; provider: string; strategy: CashBacktestStrategy; result: ReturnType<typeof runCashBacktest> }): Row {
   const { result } = input;
   return {
@@ -83,10 +87,12 @@ async function runFuturesInstrument(symbol: string) {
           minimumQuantity: rules.minimumQuantity, minimumNotional: rules.minimumNotional,
           maximumLeverage: rules.maximumLeverage, contractRulesStatus: rules.status,
         }, history.candles);
+        const winningR = result.trades.filter((trade) => trade.netPnl > 0).map((trade) => trade.rMultiple);
+        const losingR = result.trades.filter((trade) => trade.netPnl <= 0).map((trade) => trade.rMultiple);
         rows.push({
           market: 'crypto-futures', symbol, provider: 'bitget', strategy, action: side.toUpperCase(), timeframe,
-          totalTrades: result.totalTrades, winRate: result.winRate, averageWinR: result.averageWin,
-          averageLossR: result.averageLoss, expectancyR: result.expectancy, profitFactor: result.profitFactor,
+          totalTrades: result.totalTrades, winRate: result.winRate, averageWinR: average(winningR),
+          averageLossR: average(losingR), expectancyR: result.averageRMultiple, profitFactor: result.profitFactor,
           totalReturnPercent: result.totalReturnPercent, maximumDrawdownPercent: result.maximumDrawdownPercent,
           totalFees: result.totalFees, totalSlippage: result.totalSlippage, totalFunding: result.totalFunding,
           warnings: [...history.warnings, ...rules.warnings, ...result.warnings],
