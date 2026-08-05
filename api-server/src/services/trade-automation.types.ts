@@ -17,6 +17,50 @@ export type TradingOrderState =
   | 'EXPIRED'
   | 'RECOVERY_REQUIRED';
 
+export type TradingProtectionStatus =
+  | 'NOT_REQUIRED'
+  | 'PENDING'
+  | 'PROTECTED'
+  | 'UNPROTECTED_POSITION';
+
+export type TradingFill = {
+  id: string;
+  price: number;
+  quantity: number;
+  feeAmount: number | null;
+  feeCurrency: string | null;
+  filledAt: string;
+};
+
+export type TradingOrderLeg = {
+  id: string;
+  planId: string;
+  legKey: string;
+  legType: 'ENTRY' | 'TARGET' | 'STOP';
+  sequenceNo: number;
+  idempotencyKey: string;
+  plannedQuantity: number | null;
+  plannedQuoteAmount: number | null;
+  plannedPrice: number | null;
+  filledQuantity: number;
+  state: TradingOrderState;
+  version: number;
+};
+
+export type TradingProtectionOrder = {
+  id: string;
+  parentOrderId: string;
+  protectionType: 'STOP' | 'TARGET';
+  sequenceNo: number;
+  clientOrderId: string;
+  exchangeOrderId: string | null;
+  quantity: number;
+  triggerPrice: number;
+  reduceOnly: boolean;
+  state: TradingOrderState;
+  version: number;
+};
+
 export const DEFAULT_TRADING_POLICY = Object.freeze({
   mode: 'approval' as TradingMode,
   automaticEnabled: false,
@@ -78,6 +122,11 @@ export type TradingMarketSnapshot = {
   consecutiveLosses: number;
   existingPositionSide?: TradingSide | null;
   liquidationDistancePercent?: number | null;
+  openOrderExposureKrw?: number;
+  currentPrice?: number | null;
+  plannedPrice?: number | null;
+  marketStatus?: 'OPEN' | 'CLOSED' | 'HALTED' | 'UNKNOWN';
+  providerTimeOffsetMs?: number;
 };
 
 export type TradingPlanInput = {
@@ -109,8 +158,10 @@ export type TradingPlan = TradingPlanInput & {
   userId: string;
   idempotencyKey: string;
   state: TradingOrderState;
+  version?: number;
   approvalExpiresAt: string | null;
   approvedAt: string | null;
+  legs?: TradingOrderLeg[];
   createdAt: string;
   updatedAt: string;
 };
@@ -123,11 +174,28 @@ export type TradingOrder = {
   clientOrderId: string;
   exchangeOrderId: string | null;
   state: TradingOrderState;
+  version?: number;
   requestedQuantity: number | null;
+  remainingQuantity?: number | null;
   filledQuantity: number;
   averageFillPrice: number | null;
+  fills?: TradingFill[];
+  feeAmount?: number | null;
+  feeCurrency?: string | null;
+  exchangeCreatedAt?: string | null;
+  exchangeUpdatedAt?: string | null;
+  cancelable?: boolean | null;
+  providerStatusCode?: string | null;
   retryCount: number;
+  nextRetryAt?: string | null;
+  lastReconciledAt?: string | null;
   lastErrorCode: string | null;
+  manualReviewRequired?: boolean;
+  executionClaimId?: string | null;
+  recoveryLeaseOwner?: string | null;
+  recoveryLeaseUntil?: string | null;
+  protectionStatus?: TradingProtectionStatus;
+  protectionErrorCode?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -141,6 +209,22 @@ export type TradingOrderEvent = {
   reason: string;
   metadata: Record<string, unknown>;
   createdAt: string;
+};
+
+export type TradingExchangeOrderSnapshot = {
+  exchangeOrderId: string | null;
+  state: Exclude<TradingOrderState, 'PLANNED' | 'APPROVAL_PENDING' | 'SUBMITTED' | 'EXPIRED'>;
+  requestedQuantity: number | null;
+  filledQuantity: number;
+  remainingQuantity: number | null;
+  averageFillPrice: number | null;
+  fills: TradingFill[];
+  feeAmount: number | null;
+  feeCurrency: string | null;
+  exchangeCreatedAt: string | null;
+  exchangeUpdatedAt: string | null;
+  cancelable: boolean | null;
+  providerStatusCode: string | null;
 };
 
 export type TradingRiskDecision = {
