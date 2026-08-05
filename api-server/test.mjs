@@ -111,7 +111,7 @@ try {
   }
 
   if (mode === 'phase12') {
-    let failed = false;
+    const failedEntries = [];
     for (const [index, outputFile] of outputFiles.entries()) {
       const entryPoint = entries[index];
       const relativeEntry = path.relative(repositoryRoot, entryPoint).replaceAll('\\', '/');
@@ -122,11 +122,14 @@ try {
       });
       if (result.error) throw result.error;
       if ((result.status ?? 1) !== 0) {
-        failed = true;
+        failedEntries.push(relativeEntry);
         console.error(`::error file=${relativeEntry}::Phase 12 test file failed`);
       }
     }
-    process.exitCode = failed ? 1 : 0;
+    if (failedEntries.length > 0) {
+      throw new Error(`Phase 12 failed test files: ${failedEntries.join(', ')}`);
+    }
+    process.exitCode = 0;
   } else {
     const testArguments = mode === 'phase9'
       ? ['--test', '--test-concurrency=1', ...outputFiles]
