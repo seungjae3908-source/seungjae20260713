@@ -1,13 +1,13 @@
 -- Trade order atomic execution hardening for PR #51.
 -- Review/CI only: do not apply to staging or production without separate approval.
--- These execution claim columns are owned by this migration. Failing when they
--- already exist keeps the paired rollback from deleting columns owned elsewhere.
+-- The verification harness reapplies this migration, so owned columns must be
+-- created idempotently while the paired rollback remains responsible for them.
 begin;
 
 alter table public.trade_orders
-  add column execution_claim_id uuid;
+  add column if not exists execution_claim_id uuid;
 alter table public.trade_orders
-  add column execution_claimed_at timestamptz;
+  add column if not exists execution_claimed_at timestamptz;
 
 create or replace function public.submit_trade_plan_order(
   p_expected_state text,
