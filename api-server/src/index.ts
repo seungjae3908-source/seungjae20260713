@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import apiRouter from './routes';
 import boundedMarketScanRouter from './routes/bounded-market-scan';
+import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { startPriceAlertMonitor } from './services/notification.service';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -68,6 +69,7 @@ app.get('/api/health', (_req, res) => {
  * 기존 market router의 무제한 scan 구현보다 bounded route를 먼저 고정합니다.
  */
 app.use('/api/market/scan', boundedMarketScanRouter);
+app.use('/api/paper-journal', rejectPaperJournalQueryIdentity);
 app.use('/api', apiRouter);
 
 const frontendDistCandidates = [
