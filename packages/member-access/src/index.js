@@ -11,6 +11,7 @@ export const MEMBER_CAPABILITIES = Object.freeze([
   'canAccessBasicInfo',
   'canAccessSpot',
   'canAccessFutures',
+  'canAccessSignalScanner',
   'canAccessRiskPreview',
   'canAccessBacktests',
   'canAccessPaperTrading',
@@ -25,6 +26,7 @@ const ASSOCIATE = Object.freeze({
   ...NONE,
   canAccessBasicInfo: true,
   canAccessSpot: true,
+  canAccessSignalScanner: true,
 });
 const REGULAR = Object.freeze({
   ...ASSOCIATE,
