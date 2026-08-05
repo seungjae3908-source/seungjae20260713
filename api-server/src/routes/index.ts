@@ -84,7 +84,7 @@ router.use('/paper-trading', requireCapability('canAccessPaperTrading'));
 router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/', paperJournalRouter);
-router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
+router.use('/trade-automation', requireAdmin);
 router.use('/trade-automation', tradeAutomationRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
