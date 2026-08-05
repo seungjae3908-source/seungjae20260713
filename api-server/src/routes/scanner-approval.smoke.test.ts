@@ -169,10 +169,10 @@ test('scanner plan route requires authentication', async () => {
 
 test('scanner plan route allowlists inputs and ignores forged price or score fields', async () => {
   const repository = new InMemoryTradingRepository();
-  let received: ScannerApprovalPlanRequest | null = null;
+  const received: ScannerApprovalPlanRequest[] = [];
   const factory: ScannerServiceFactory = () => ({
     createPaperPlan: async (_userId, request) => {
-      received = request;
+      received.push(request);
       return {
         plan: { id: 'server-plan', accountMode: 'paper', state: 'APPROVAL_PENDING' },
         approval: { approvalEnabled: true },
@@ -213,12 +213,13 @@ test('scanner plan route allowlists inputs and ignores forged price or score fie
     assert.equal(body.liveOrderEnabled, false);
     assert.equal(body.orderSubmitted, false);
     assert.equal(body.exchangeRequestSent, false);
-    assert.ok(received);
-    assert.equal(received.symbol, '005930');
-    assert.equal(received.requestedInvestmentKrw, 200_000);
-    assert.equal(Object.prototype.hasOwnProperty.call(received, 'score'), false);
-    assert.equal(Object.prototype.hasOwnProperty.call(received, 'price'), false);
-    assert.equal(Object.prototype.hasOwnProperty.call(received, 'marketSnapshot'), false);
+    const captured = received[0];
+    assert.ok(captured);
+    assert.equal(captured.symbol, '005930');
+    assert.equal(captured.requestedInvestmentKrw, 200_000);
+    assert.equal(Object.prototype.hasOwnProperty.call(captured, 'score'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(captured, 'price'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(captured, 'marketSnapshot'), false);
   } finally {
     await close(server);
   }
