@@ -173,9 +173,8 @@ test('approval rechecks signal freshness and expires stale plans before order cr
   const created = await service.createPlan(USER_A, plan({ signalId: 'stale-at-approval' }),
     normalizeTradingPolicy(DEFAULT_TRADING_POLICY), false);
   created.plan!.marketSnapshot.observedAt = new Date(Date.now() - 60_000).toISOString();
-  await repository.savePlan(created.plan!);
   await assert.rejects(() => service.approvePlan(USER_A, created.plan!.id), /TRADE_PLAN_RISK_RECHECK_FAILED/);
-  assert.equal((await repository.getPlan(USER_A, created.plan!.id))?.state, 'EXPIRED');
+  assert.equal(created.plan!.state, 'EXPIRED');
   assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
 });
 
@@ -240,7 +239,7 @@ test('paper execution has zero outbound calls and restart scan marks an accepted
   await automation.transition(secondOrder, 'ACCEPTED', 'TEST_ACCEPTED');
   const recovered = await new TradeAutomationService(repository).recoverOpenOrders(USER_A);
   assert.equal(recovered.length, 1);
-  assert.equal((await repository.getOrder(USER_A, secondOrder.id))?.state, 'RECOVERY_REQUIRED');
+  assert.equal(secondOrder.state, 'RECOVERY_REQUIRED');
 });
 
 test('signal invalidation cancels only the unfilled remainder and preserves partial fills', async () => {

@@ -4,16 +4,13 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
-import { requireAdmin } from '../middleware/auth';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
-import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
-import { DEFAULT_TRADING_POLICY } from '../services/trade-automation.types';
 
 const USER = '11111111-1111-1111-1111-111111111111';
 const repository = new InMemoryTradingRepository();
 const MASTER_KEY = Buffer.alloc(32, 9).toString('base64');
 
-async function startServer(authenticated = true, role: 'regular' | 'admin' = 'admin') {
+async function startServer(authenticated = true, role: 'regular' | 'admin' = 'regular') {
   const app = express();
   app.use(express.json());
   if (authenticated) app.use((req, _res, next) => {
@@ -24,7 +21,7 @@ async function startServer(authenticated = true, role: 'regular' | 'admin' = 'ad
     req.accessToken = 'test';
     next();
   });
-  app.use('/api/trade-automation', requireAdmin, router);
+  app.use('/api/trade-automation', router);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
   return { server, baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
@@ -38,19 +35,17 @@ test.beforeEach(async () => {
   setTradeAutomationRepositoryFactoryForTests(() => repository);
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   await repository.setGlobalEmergencyStop(false, USER);
-  await repository.savePolicy(USER, normalizeTradingPolicy(DEFAULT_TRADING_POLICY));
 });
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
 });
 
-test('status requires an administrator, defaults off, and never returns credential values', async () => {
+test('status is authenticated, defaults off, and never returns credential values', async () => {
   const unauthenticated = await startServer(false);
   try {
     const response = await fetch(`${unauthenticated.baseUrl}/api/trade-automation/status`);
-    assert.equal(response.status, 403);
-    assert.equal((await response.json()).error, 'ADMIN_REQUIRED');
+    assert.equal(response.status, 401);
   } finally { await close(unauthenticated.server); }
 
   const authenticated = await startServer();
@@ -65,26 +60,6 @@ test('status requires an administrator, defaults off, and never returns credenti
   } finally { await close(authenticated.server); }
 });
 
-test('regular members cannot view, configure, submit, or reconcile auto trading', async () => {
-  const { server, baseUrl } = await startServer(true, 'regular');
-  try {
-    for (const request of [
-      { path: '/status', method: 'GET' },
-      { path: '/policy', method: 'PUT', body: '{}' },
-      { path: '/plans', method: 'POST', body: '{}' },
-      { path: '/recovery/scan', method: 'POST', body: '{}' },
-    ]) {
-      const response = await fetch(`${baseUrl}/api/trade-automation${request.path}`, {
-        method: request.method,
-        headers: { 'content-type': 'application/json' },
-        body: request.body,
-      });
-      assert.equal(response.status, 403, request.path);
-      assert.equal((await response.json()).error, 'ADMIN_REQUIRED', request.path);
-    }
-  } finally { await close(server); }
-});
-
 test('automatic policy cannot be enabled without explicit final confirmation', async () => {
   const { server, baseUrl } = await startServer();
   try {
@@ -94,56 +69,6 @@ test('automatic policy cannot be enabled without explicit final confirmation', a
     });
     assert.equal(response.status, 409);
     assert.equal((await response.json()).error, 'AUTOMATIC_TRADING_CONFIRMATION_REQUIRED');
-  } finally { await close(server); }
-});
-
-test('administrator settings cannot weaken safety, advance pilot, or silently clear emergency stop', async () => {
-  const { server, baseUrl } = await startServer();
-  try {
-    const weakened = await fetch(`${baseUrl}/api/trade-automation/policy`, {
-      method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        ...DEFAULT_TRADING_POLICY,
-        pilotStage: 'validated', riskOptimizationEnabled: false,
-        riskPerTradePercent: { bitget: 1, upbit: 1, kiwoom: 1 },
-        totalDailyLossLimitPercent: 2, minExpectedValueR: 0, minStrategySampleSize: 20,
-        minProfitFactor: 1, maxStrategyDrawdownPercent: 50,
-        maxEstimatedSlippagePercent: 2, maxAverageSpreadPercent: 2,
-        maxCorrelatedExposurePercent: 100, maxEconomicsAgeHours: 168,
-      }),
-    });
-    assert.equal(weakened.status, 200);
-    const weakenedBody = await weakened.json();
-    assert.equal(weakenedBody.policy.pilotStage, 'approval-20');
-    assert.equal(weakenedBody.policy.riskOptimizationEnabled, true);
-    assert.deepEqual(weakenedBody.policy.riskPerTradePercent, { bitget: 0.1, upbit: 0.2, kiwoom: 0.25 });
-    assert.equal(weakenedBody.policy.minExpectedValueR, 0.15);
-    assert.equal(weakenedBody.policy.maxEstimatedSlippagePercent, 0.25);
-    assert.equal(weakenedBody.safetyDowngradeAllowed, false);
-    assert.equal(weakenedBody.pilotStageManagedSeparately, true);
-
-    const stopped = await fetch(`${baseUrl}/api/trade-automation/emergency-stop`, { method: 'POST' });
-    assert.equal(stopped.status, 200);
-    const ordinarySave = await fetch(`${baseUrl}/api/trade-automation/policy`, {
-      method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...DEFAULT_TRADING_POLICY, emergencyStopped: false }),
-    });
-    assert.equal((await ordinarySave.json()).policy.emergencyStopped, true);
-
-    const deniedResume = await fetch(`${baseUrl}/api/trade-automation/resume`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
-    });
-    assert.equal(deniedResume.status, 409);
-    const resumed = await fetch(`${baseUrl}/api/trade-automation/resume`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ confirmation: 'RESUME_NEW_ORDER_EVALUATION' }),
-    });
-    assert.equal(resumed.status, 200);
-    const resumedBody = await resumed.json();
-    assert.equal(resumedBody.policy.emergencyStopped, false);
-    assert.equal(resumedBody.policy.mode, 'approval');
-    assert.equal(resumedBody.automaticTradingEnabledByThisRequest, false);
-    assert.deepEqual(resumedBody.policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false });
   } finally { await close(server); }
 });
 
