@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import apiRouter from './routes';
-import boundedMarketScanRouter from './routes/bounded-market-scan';
+import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { startPriceAlertMonitor } from './services/notification.service';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -63,11 +63,9 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-/*
- * API 라우트는 반드시 프론트 정적 파일보다 먼저 등록합니다.
- * 기존 market router의 무제한 scan 구현보다 bounded route를 먼저 고정합니다.
- */
-app.use('/api/market/scan', boundedMarketScanRouter);
+/* API routes remain before frontend static files. Scanner authentication and
+ * capability checks are owned by the API router instead of a public bypass. */
+app.use('/api/paper-journal', rejectPaperJournalQueryIdentity);
 app.use('/api', apiRouter);
 
 const frontendDistCandidates = [
@@ -149,6 +147,9 @@ const availableRoutes = [
   '/api/quotes?tickers=005930,NVDA,AAPL',
   '/api/market/movers?market=KR',
   '/api/market/movers?market=US',
+  '/api/market/scan?market=KR&timeframe=1D',
+  '/api/crypto/scan/spot?timeframe=15m',
+  '/api/crypto/scan/futures?timeframe=15m',
   '/api/kiwoom/status',
   '/api/kiwoom/token-test',
   '/api/kiwoom/test',

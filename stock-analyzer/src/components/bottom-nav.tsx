@@ -11,20 +11,15 @@ import type { MemberCapability } from '../../../packages/member-access/src/index
 const INFO_PATHS = ['/stock-info', '/learn', '/market-overview', '/portfolio', '/assets', '/ai-chat'];
 const TECH_PATHS = ['/scanner', '/ai-chart', '/auto-trading'];
 
-type PopupMenuItem = {
-  href: string;
-  label: string;
-  icon: typeof Newspaper;
-  capability?: MemberCapability;
-};
-
-const TECH_MENU_ITEMS: PopupMenuItem[] = [
+const TECH_MENU_ITEMS = [
   { href: '/scanner', label: 'AI 검색기', icon: Search },
   { href: '/ai-chart', label: 'AI 차트 분석기', icon: CandlestickChart },
-  { href: '/auto-trading', label: '자동매매', icon: Power, capability: 'canManageMembers' },
-];
+  { href: '/auto-trading', label: '자동매매', icon: Power },
+] as const;
 
-const INFO_MENU_ITEMS: PopupMenuItem[] = [
+const INFO_MENU_ITEMS: Array<{
+  href: string; label: string; icon: typeof Newspaper; capability?: MemberCapability;
+}> = [
   { href: '/stock-info', label: '정보', icon: Newspaper },
   { href: '/learn', label: '공부', icon: BookOpen },
   { href: '/market-overview', label: '시황', icon: BarChart3 },
@@ -60,7 +55,6 @@ export function BottomNav() {
   const [openMenu, setOpenMenu] = useState<'tech' | 'info' | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const visibleItems = ITEMS.filter((item) => !item.capability || auth.can(item.capability));
-  const visibleTechItems = TECH_MENU_ITEMS.filter((item) => !item.capability || auth.can(item.capability));
   const visibleInfoItems = INFO_MENU_ITEMS.filter((item) => !item.capability || auth.can(item.capability));
 
   useEffect(() => { setOpenMenu(null); }, [location]);
@@ -92,7 +86,7 @@ export function BottomNav() {
           if (item.popup) {
             const menuType = item.label === '기술' ? 'tech' : 'info';
             const menuOpen = openMenu === menuType;
-            const menuItems = menuType === 'tech' ? visibleTechItems : visibleInfoItems;
+            const menuItems = menuType === 'tech' ? TECH_MENU_ITEMS : visibleInfoItems;
             return (
               <div key={item.href} ref={menuOpen ? menuRef : undefined} className="relative min-w-0">
                 {menuOpen && (

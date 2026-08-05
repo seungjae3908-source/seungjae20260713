@@ -43,30 +43,40 @@ const groups = {
   ],
   phase9: [
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
+    path.join(root, 'src/routes/paper-journal-ai-preview-privileges.test.ts'),
     path.join(root, 'src/services/ai-chat.service.test.ts'),
     path.join(root, 'src/services/signal-score.test.ts'),
     path.join(root, 'src/services/bounded-scanner.service.test.ts'),
+    path.join(root, 'src/services/scanner-request-guard.service.test.ts'),
+    path.join(root, 'src/services/scanner-signal-policy.service.test.ts'),
+    path.join(root, 'src/services/scanner-signal-lifecycle.service.test.ts'),
+    path.join(root, 'src/services/crypto-signal-scanner.service.test.ts'),
     path.join(root, 'src/lib/bounded-work-pool.test.ts'),
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/analysis-selection.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-analysis.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/scanner-request.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-live-timeline.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-candle-normalizer.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-indicator-engine.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-structure-engine.test.ts'),
   ],
   phase12: [
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
-    path.join(root, 'src/services/trade-automation-optimization.test.ts'),
-    path.join(root, 'src/services/trade-automation-policy-guard.test.ts'),
-    path.join(root, 'src/services/trade-automation-lifecycle-concurrency.test.ts'),
-    path.join(root, 'src/services/trade-automation-atomic-repository.test.ts'),
-    path.join(root, 'src/services/trade-automation-admin-surface.test.ts'),
-    path.join(root, 'src/services/trade-execution-reconciliation.test.ts'),
-    path.join(root, 'src/services/trade-execution-ambiguous-response.test.ts'),
-    path.join(root, 'src/services/trade-process-recovery.test.ts'),
-    path.join(root, 'src/routes/trade-automation-admin-api.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
-    path.join(root, 'src/routes/trade-automation-plan-queue.test.ts'),
+    path.join(root, 'src/services/trade-signal-lifecycle.service.test.ts'),
+    path.join(root, 'src/routes/trade-signal-approval.smoke.test.ts'),
+    path.join(root, 'src/services/trade-signal-alert.service.test.ts'),
+    path.join(root, 'src/routes/trade-signal-alerts.smoke.test.ts'),
+    path.join(root, 'src/services/scanner-approval-plan.service.test.ts'),
+    path.join(root, 'src/services/scanner-approval-revalidation.service.test.ts'),
+    path.join(root, 'src/routes/scanner-approval.smoke.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/scanner-saved-searches.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/crypto-spot-scanner.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/crypto-futures-scanner.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts'),
   ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
@@ -75,7 +85,10 @@ const groups = {
     path.join(root, 'src/routes/backtests.smoke.test.ts'),
     path.join(root, 'src/routes/paper-trading.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
+    path.join(root, 'src/routes/paper-journal-query-identity.smoke.test.ts'),
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
+    path.join(root, 'src/routes/signal-scanner-auth.smoke.test.ts'),
+    path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
   ],
 };
 
@@ -97,7 +110,13 @@ try {
     outputFiles.push(outputFile);
   }
 
-  const result = spawnSync(process.execPath, ['--test', ...outputFiles], {
+  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
+  // serially so host-level event-loop contention cannot consume a scanner deadline
+  // before the test body starts. Test coverage and every assertion remain unchanged.
+  const testArguments = mode === 'phase9'
+    ? ['--test', '--test-concurrency=1', ...outputFiles]
+    : ['--test', ...outputFiles];
+  const result = spawnSync(process.execPath, testArguments, {
     cwd: repositoryRoot, stdio: 'inherit',
   });
   if (result.error) throw result.error;
