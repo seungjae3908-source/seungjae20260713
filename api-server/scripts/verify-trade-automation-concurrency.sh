@@ -98,8 +98,8 @@ for worker in $(seq 1 10); do
 done
 for pid in "${pids[@]}"; do wait "$pid"; done
 
-order_winners="$(cat "$TMP_DIR"/order-*.out | grep -c '^1$' || true)"
-order_losers="$(cat "$TMP_DIR"/order-*.out | grep -c '^0$' || true)"
+order_winners="$(awk '$0 == "1" { count += 1 } END { print count + 0 }' "$TMP_DIR"/order-*.out)"
+order_losers="$(awk '$0 == "0" { count += 1 } END { print count + 0 }' "$TMP_DIR"/order-*.out)"
 [[ "$order_winners" == "1" ]] || { echo "expected one order winner, got $order_winners" >&2; exit 1; }
 [[ "$order_losers" == "9" ]] || { echo "expected nine idempotent order losers, got $order_losers" >&2; exit 1; }
 
@@ -137,8 +137,8 @@ claim_worker 2 > "$TMP_DIR/claim-2.out" & claim_pid_2="$!"
 wait "$claim_pid_1"
 wait "$claim_pid_2"
 
-claim_winners="$(cat "$TMP_DIR"/claim-*.out | grep -c '^1$' || true)"
-claim_losers="$(cat "$TMP_DIR"/claim-*.out | grep -c '^0$' || true)"
+claim_winners="$(awk '$0 == "1" { count += 1 } END { print count + 0 }' "$TMP_DIR"/claim-*.out)"
+claim_losers="$(awk '$0 == "0" { count += 1 } END { print count + 0 }' "$TMP_DIR"/claim-*.out)"
 [[ "$claim_winners" == "1" ]] || { echo "expected one execution claim winner, got $claim_winners" >&2; exit 1; }
 [[ "$claim_losers" == "1" ]] || { echo "expected one execution claim loser, got $claim_losers" >&2; exit 1; }
 [[ "$(wc -l < "$MOCK_POST_LOG" | tr -d ' ')" == "1" ]] || { echo "mock exchange POST count was not exactly one" >&2; exit 1; }
