@@ -9,9 +9,11 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(`[main-ci-staging-gate] ${message}`);
 };
 
+const pushBlock = /\n\s*push:\s*\n([\s\S]*?)(?=\n\s{2}[a-zA-Z_][\w-]*:\s*\n)/.exec(workflow)?.[1] ?? '';
+
 assert(/^name: Application CI$/m.test(workflow), 'coverage workflow must produce an Application CI push run');
-assert(/\n\s*push:\s*\n\s*branches:\s*\n\s*- main/.test(workflow), 'coverage workflow must run on every main push');
-assert(!/\n\s*push:[\s\S]*?\n\s*paths(?:-ignore)?:/.test(workflow), 'main push coverage must not use path filtering');
+assert(/branches:\s*\n\s*- main/.test(pushBlock), 'coverage workflow must run on every main push');
+assert(!/\n\s*paths(?:-ignore)?:/.test(`\n${pushBlock}`), 'main push coverage must not use path filtering');
 assert(workflow.includes("workflowId = 'futures-public-network-smoke.yml'"), 'coverage workflow must dispatch only the official Application CI workflow');
 assert(workflow.includes('target_sha: targetSha'), 'dispatch must attach statuses to the exact main SHA');
 assert(workflow.includes('checkout_ref: targetSha'), 'dispatch must checkout the exact immutable SHA');
