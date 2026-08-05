@@ -27,7 +27,9 @@ export const SCANNER_MARKET_APPROVAL_PROFILES: Readonly<Record<ScannerMarketClas
     maxRiskScore: 45,
     maxSpreadPercent: null,
     maxVolatilityPercent: 8,
-    requiredEvidenceKeys: Object.freeze(['liquidity', 'risk']),
+    // Stock liquidity and disclosure risk are represented by card fields instead
+    // of the generic crypto evidence keys.
+    requiredEvidenceKeys: Object.freeze([]),
   }),
   US_STOCK: Object.freeze({
     minScore: 78,
@@ -36,7 +38,7 @@ export const SCANNER_MARKET_APPROVAL_PROFILES: Readonly<Record<ScannerMarketClas
     maxRiskScore: 40,
     maxSpreadPercent: null,
     maxVolatilityPercent: 12,
-    requiredEvidenceKeys: Object.freeze(['liquidity', 'risk']),
+    requiredEvidenceKeys: Object.freeze([]),
   }),
   CRYPTO_SPOT: Object.freeze({
     minScore: 76,
@@ -61,10 +63,22 @@ export const SCANNER_MARKET_APPROVAL_PROFILES: Readonly<Record<ScannerMarketClas
 const BREAKOUT_TOKENS = ['breakout', '돌파', '신고가', '저항'];
 const PULLBACK_TOKENS = ['pullback', '눌림', '지지선 반등', '박스권 하단'];
 const MEAN_REVERSION_TOKENS = ['rsi', '과매도', '과열', '신저가 반등', 'box_lower'];
+const STOCK_EXIT_TOKENS = ['rsi_overheat', 'rsi 과열'];
 
 function includesToken(values: string[], tokens: string[]): boolean {
   const normalized = values.map((value) => value.toLowerCase());
   return normalized.some((value) => tokens.some((token) => value.includes(token.toLowerCase())));
+}
+
+function evidenceValues(card: Pick<ScannerSignalCard, 'evidence' | 'matched'>): string[] {
+  return [
+    ...card.matched,
+    ...card.evidence.flatMap((item) => [item.key, item.label]),
+  ];
+}
+
+function evidenceMatched(card: Pick<ScannerSignalCard, 'evidence'>, key: string): boolean {
+  return card.evidence.some((item) => item.key === key && item.status === 'matched');
 }
 
 export function classifyScannerMarket(card: Pick<ScannerSignalCard, 'assetClass' | 'market'>): ScannerMarketClass {
@@ -73,13 +87,42 @@ export function classifyScannerMarket(card: Pick<ScannerSignalCard, 'assetClass'
   return String(card.market).toUpperCase().includes('US') ? 'US_STOCK' : 'KR_STOCK';
 }
 
+function isStockExitCandidate(card: ScannerSignalCard, marketClass: ScannerMarketClass): boolean {
+  if (marketClass !== 'KR_STOCK' && marketClass !== 'US_STOCK') return false;
+  return includesToken(evidenceValues(card), STOCK_EXIT_TOKENS)
+    && card.price > 0
+    && card.dataState === 'complete';
+}
+
+function isSpotExitCandidate(card: ScannerSignalCard, marketClass: ScannerMarketClass): boolean {
+  if (marketClass !== 'CRYPTO_SPOT' || card.direction !== 'NEUTRAL') return false;
+  const profile = SCANNER_MARKET_APPROVAL_PROFILES.CRYPTO_SPOT;
+  return (card.changePercent ?? 0) < 0
+    && card.score >= profile.minScore
+    && card.confidence >= profile.minConfidence
+    && card.dataCompleteness >= profile.minDataCompleteness
+    && card.riskScore != null
+    && card.riskScore <= profile.maxRiskScore
+    && card.spreadPercent != null
+    && card.spreadPercent <= (profile.maxSpreadPercent ?? Number.POSITIVE_INFINITY)
+    && evidenceMatched(card, 'volume')
+    && evidenceMatched(card, 'risk');
+}
+
 export function resolveScannerTradeAction(
   marketClass: ScannerMarketClass,
   direction: ScannerSignalCard['direction'],
+  card?: ScannerSignalCard,
 ): ScannerTradeAction {
-  if (direction === 'NEUTRAL') return 'NONE';
-  if (marketClass === 'CRYPTO_FUTURES') return direction === 'LONG' ? 'LONG' : 'SHORT';
-  return direction === 'LONG' ? 'BUY' : 'SELL';
+  if (marketClass === 'CRYPTO_FUTURES') {
+    if (direction === 'LONG') return 'LONG';
+    if (direction === 'SHORT') return 'SHORT';
+    return 'NONE';
+  }
+  if (direction === 'SHORT') return 'SELL';
+  if (card && (isStockExitCandidate(card, marketClass) || isSpotExitCandidate(card, marketClass))) return 'SELL';
+  if (direction === 'LONG') return 'BUY';
+  return 'NONE';
 }
 
 export function resolveScannerExecutionIntent(action: ScannerTradeAction): ScannerExecutionIntent {
@@ -95,10 +138,7 @@ export function isScannerActionAllowed(marketClass: ScannerMarketClass, action: 
 }
 
 export function inferScannerStrategy(card: Pick<ScannerSignalCard, 'evidence' | 'matched'>): ScannerStrategy {
-  const keysAndLabels = [
-    ...card.matched,
-    ...card.evidence.flatMap((item) => [item.key, item.label]),
-  ];
+  const keysAndLabels = evidenceValues(card);
   if (includesToken(keysAndLabels, BREAKOUT_TOKENS)) return 'BREAKOUT';
   if (includesToken(keysAndLabels, PULLBACK_TOKENS)) return 'PULLBACK';
   if (includesToken(keysAndLabels, MEAN_REVERSION_TOKENS)) return 'MEAN_REVERSION';
@@ -152,6 +192,16 @@ export function buildScannerPerformanceKey(input: {
   ].join('|');
 }
 
+function baseSignalEligible(card: ScannerSignalCard, marketClass: ScannerMarketClass, action: ScannerTradeAction): boolean {
+  if (action !== 'SELL') return card.strongSignalEligible;
+  // SELL on cash markets is a reduce/exit decision. It may be promoted by an
+  // explicit stock overheat condition or a conservative spot deterioration gate
+  // even though the legacy scanner only marks opening directions as strong.
+  return card.strongSignalEligible
+    || isStockExitCandidate(card, marketClass)
+    || isSpotExitCandidate(card, marketClass);
+}
+
 export function evaluateScannerMarketApproval(
   card: ScannerSignalCard,
   marketClass: ScannerMarketClass,
@@ -159,13 +209,14 @@ export function evaluateScannerMarketApproval(
 ): { eligible: boolean; failures: string[] } {
   const profile = SCANNER_MARKET_APPROVAL_PROFILES[marketClass];
   const failures: string[] = [];
-  if (!card.strongSignalEligible) failures.push('기본 강신호 기준 미충족');
+  if (!baseSignalEligible(card, marketClass, action)) failures.push('기본 강신호 또는 보유분 축소 기준 미충족');
   if (!isScannerActionAllowed(marketClass, action)) failures.push('시장과 주문 방향 조합 불일치');
   if (card.score < profile.minScore) failures.push(`점수 ${profile.minScore} 미만`);
   if (card.confidence < profile.minConfidence) failures.push(`신뢰도 ${profile.minConfidence} 미만`);
   if (card.dataCompleteness < profile.minDataCompleteness) failures.push(`데이터 완성도 ${profile.minDataCompleteness} 미만`);
   if (card.riskScore == null) failures.push('위험 점수 미확인');
   else if (card.riskScore > profile.maxRiskScore) failures.push(`위험 점수 ${profile.maxRiskScore} 초과`);
+  if (card.liquidity == null || card.liquidity <= 0) failures.push('유동성 미확인');
   if (
     profile.maxSpreadPercent != null
     && (card.spreadPercent == null || card.spreadPercent > profile.maxSpreadPercent)
@@ -187,11 +238,19 @@ export function evaluateScannerMarketApproval(
 
 export function enrichScannerMarketAction(card: ScannerSignalCard): ScannerSignalCard {
   const marketClass = classifyScannerMarket(card);
-  const action = resolveScannerTradeAction(marketClass, card.direction);
+  const action = resolveScannerTradeAction(marketClass, card.direction, card);
   const executionIntent = resolveScannerExecutionIntent(action);
-  const strategy = inferScannerStrategy(card);
-  const regime = inferScannerRegime(card, marketClass);
-  const timeframe = inferScannerTimeframe(card);
+  const normalizedDirection = action === 'SELL' || action === 'SHORT'
+    ? 'SHORT' as const
+    : action === 'BUY' || action === 'LONG'
+      ? 'LONG' as const
+      : 'NEUTRAL' as const;
+  const normalizedCard = normalizedDirection === card.direction
+    ? card
+    : { ...card, direction: normalizedDirection };
+  const strategy = inferScannerStrategy(normalizedCard);
+  const regime = inferScannerRegime(normalizedCard, marketClass);
+  const timeframe = inferScannerTimeframe(normalizedCard);
   const performanceKey = buildScannerPerformanceKey({
     marketClass,
     strategy,
@@ -199,10 +258,23 @@ export function enrichScannerMarketAction(card: ScannerSignalCard): ScannerSigna
     action,
     regime,
   });
-  const approval = evaluateScannerMarketApproval(card, marketClass, action);
+  const approval = evaluateScannerMarketApproval(normalizedCard, marketClass, action);
   const policyWarnings = approval.failures.map((failure) => `시장별 승인 차단: ${failure}`);
+  const actionWarnings = action === 'SELL'
+    ? ['SELL 신호는 보유 수량 축소·청산 전용이며 신규 숏 주문을 만들지 않습니다.']
+    : [];
+  const exitPricePlan = action === 'SELL' && card.direction !== 'SHORT'
+    ? {
+        entryZone: { from: card.price, to: card.price },
+        invalidation: null,
+        stopLoss: null,
+        targets: [],
+        riskReward: null,
+      }
+    : normalizedCard.pricePlan;
   return {
-    ...card,
+    ...normalizedCard,
+    signalId: normalizedDirection === card.direction ? card.signalId : `${card.signalId}:action:${action}`,
     marketClass,
     action,
     executionIntent,
@@ -211,6 +283,7 @@ export function enrichScannerMarketAction(card: ScannerSignalCard): ScannerSigna
     modelVersion: SCANNER_MARKET_MODEL_VERSION,
     performanceKey,
     marketApprovalEligible: approval.eligible,
-    warnings: [...new Set([...card.warnings, ...policyWarnings])],
+    pricePlan: exitPricePlan,
+    warnings: [...new Set([...card.warnings, ...actionWarnings, ...policyWarnings])],
   };
 }
