@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import './trade-split-order.repository.test';
 import {
   aggregateSplitOrderState,
   assertNextSplitOrderReady,
