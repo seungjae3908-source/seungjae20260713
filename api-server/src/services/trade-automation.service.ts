@@ -8,6 +8,29 @@ import type {
 
 const APPROVAL_TTL_MS = 10 * 60_000;
 
+function orderVersion(order: TradingOrder) {
+  return Number.isInteger(order.version) && Number(order.version) >= 0 ? Number(order.version) : 0;
+}
+
+function providerTimestamp(order: TradingOrder) {
+  const parsed = Date.parse(order.exchangeUpdatedAt ?? '');
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function authoritativeFillCorrection(
+  current: TradingOrder,
+  next: TradingOrder,
+  toState: TradingOrderState,
+  reason: string,
+) {
+  if (reason !== 'EXCHANGE_ORDER_RECONCILED' || toState !== 'FILLED' || current.state !== 'CANCELED') return false;
+  if (next.filledQuantity <= current.filledQuantity) return false;
+  if (current.exchangeOrderId && next.exchangeOrderId && current.exchangeOrderId !== next.exchangeOrderId) return false;
+  const currentTimestamp = providerTimestamp(current);
+  const nextTimestamp = providerTimestamp(next);
+  return currentTimestamp === null || nextTimestamp === null || nextTimestamp >= currentTimestamp;
+}
+
 export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
   return createHash('sha256').update([
     userId, input.exchange, input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
@@ -112,13 +135,41 @@ export class TradeAutomationService {
   async transition(order: TradingOrder, toState: TradingOrderState, reason: string, metadata: Record<string, unknown> = {}) {
     const from = order.state;
     assertOrderTransition(from, toState);
-    order.state = toState; order.updatedAt = new Date().toISOString();
-    if (typeof metadata.exchangeOrderId === 'string') order.exchangeOrderId = metadata.exchangeOrderId;
-    if (typeof metadata.filledQuantity === 'number') order.filledQuantity = metadata.filledQuantity;
-    if (typeof metadata.averageFillPrice === 'number') order.averageFillPrice = metadata.averageFillPrice;
-    if (typeof metadata.errorCode === 'string') order.lastErrorCode = metadata.errorCode;
-    await this.repository.saveOrder(order);
-    await this.event(order, from, toState, reason, metadata);
+    const next: TradingOrder = { ...order, state: toState, updatedAt: new Date().toISOString() };
+    if (typeof metadata.exchangeOrderId === 'string') next.exchangeOrderId = metadata.exchangeOrderId;
+    if (typeof metadata.filledQuantity === 'number') next.filledQuantity = metadata.filledQuantity;
+    if (typeof metadata.averageFillPrice === 'number') next.averageFillPrice = metadata.averageFillPrice;
+    if (typeof metadata.errorCode === 'string') next.lastErrorCode = metadata.errorCode;
+
+    let result = await this.repository.transitionOrderAtomic(
+      next,
+      from,
+      orderVersion(order),
+      this.orderEvent(next, from, toState, reason, metadata),
+    );
+
+    if (!result.applied && authoritativeFillCorrection(result.order, next, toState, reason)) {
+      const corrected: TradingOrder = {
+        ...result.order,
+        ...next,
+        state: 'FILLED',
+        version: orderVersion(result.order),
+        updatedAt: new Date().toISOString(),
+      };
+      result = await this.repository.transitionOrderAtomic(
+        corrected,
+        'CANCELED',
+        orderVersion(result.order),
+        this.orderEvent(corrected, 'CANCELED', 'FILLED', 'EXCHANGE_FILL_CORRECTED_AFTER_CANCEL_RACE', {
+          ...metadata,
+          previousTerminalState: 'CANCELED',
+          correctedFilledQuantity: corrected.filledQuantity,
+          orderSubmissionAttempted: false,
+        }),
+      );
+    }
+
+    Object.assign(order, result.order);
     return order;
   }
 
@@ -155,14 +206,23 @@ export class TradeAutomationService {
     return { plan, order, filledQuantityPreserved: order.filledQuantity };
   }
 
+  private orderEvent(
+    order: TradingOrder,
+    fromState: TradingOrderState | null,
+    toState: TradingOrderState,
+    reason: string,
+    metadata: Record<string, unknown>,
+  ): TradingOrderEvent {
+    return {
+      id: randomUUID(), userId: order.userId, orderId: order.id, fromState, toState,
+      reason, metadata, createdAt: new Date().toISOString(),
+    };
+  }
+
   private async event(
     order: TradingOrder, fromState: TradingOrderState | null, toState: TradingOrderState,
     reason: string, metadata: Record<string, unknown>,
   ) {
-    const event: TradingOrderEvent = {
-      id: randomUUID(), userId: order.userId, orderId: order.id, fromState, toState,
-      reason, metadata, createdAt: new Date().toISOString(),
-    };
-    await this.repository.appendEvent(event);
+    await this.repository.appendEvent(this.orderEvent(order, fromState, toState, reason, metadata));
   }
 }
