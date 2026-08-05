@@ -65,7 +65,18 @@ const groups = {
   ],
   phase12: [
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
+    path.join(root, 'src/services/trade-automation-repository-compatibility.test.ts'),
+    path.join(root, 'src/services/trade-order-recovery.test.ts'),
+    path.join(root, 'src/services/trade-cancel-reconciliation.test.ts'),
+    path.join(root, 'src/services/trade-recovery-worker.test.ts'),
+    path.join(root, 'src/services/trade-pre-submission-risk.test.ts'),
+    path.join(root, 'src/services/trade-execution-pre-submission.test.ts'),
+    path.join(root, 'src/services/trade-split-order-planner.test.ts'),
+    path.join(root, 'src/services/trade-split-order-materializer.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
+    path.join(root, 'src/routes/trade-automation-split.smoke.test.ts'),
+    path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
+    path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts'),
   ],
@@ -102,6 +113,9 @@ try {
     outputFiles.push(outputFile);
   }
 
+  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
+  // serially so host-level event-loop contention cannot consume a scanner deadline
+  // before the test body starts. Test coverage and every assertion remain unchanged.
   const testArguments = mode === 'phase9'
     ? ['--test', '--test-concurrency=1', ...outputFiles]
     : ['--test', ...outputFiles];
