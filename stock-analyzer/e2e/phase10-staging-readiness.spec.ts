@@ -184,11 +184,20 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   });
 }
 
+async function waitForPresentationFrame(page: Page) {
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+}
+
 async function settle(page: Page) {
-  await page.waitForLoadState('domcontentloaded');
+  await page.waitForLoadState('load');
   for (let pass = 0; pass < 2; pass += 1) {
-    await page.waitForLoadState('networkidle', { timeout: 30_000 });
+    const urlBeforeFrame = page.url();
+    await waitForPresentationFrame(page);
     await page.waitForTimeout(300);
+    expect(page.url(), 'route changed while presentation was settling').toBe(urlBeforeFrame);
+    await expect(page.locator('body')).toBeVisible();
   }
 }
 
