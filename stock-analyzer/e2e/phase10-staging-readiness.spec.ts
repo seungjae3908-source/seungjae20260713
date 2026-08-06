@@ -38,10 +38,12 @@ type RouteTransitionObservation = {
   fromPath: string;
   toPath: string;
   candidates: Diagnostic[];
+  pendingGetRequests: Set<Request>;
 };
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
 const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
+const pendingApiGetRequests = new WeakMap<Page, Set<Request>>();
 const diagnostics: {
   console_errors: Diagnostic[];
   page_errors: Diagnostic[];
@@ -120,9 +122,21 @@ function isExpectedRouteTransitionAbort(
   try {
     const parsed = new URL(request.url());
     return observation.fromPath !== observation.toPath
+      && observation.pendingGetRequests.has(request)
       && request.method() === 'GET'
       && parsed.pathname.startsWith('/api/')
       && request.failure()?.errorText === 'net::ERR_ABORTED';
+  } catch {
+    return false;
+  }
+}
+
+function isSameOriginApiGet(request: Request) {
+  try {
+    const parsed = new URL(request.url());
+    return request.method() === 'GET'
+      && parsed.origin === new URL(request.frame().url()).origin
+      && parsed.pathname.startsWith('/api/');
   } catch {
     return false;
   }
@@ -139,8 +153,9 @@ function isMutatingBrowserRequest(request: Request) {
   }
 }
 
-function completeMutatingRequest(page: Page, request: Request) {
+function completeBrowserRequest(page: Page, request: Request) {
   pendingMutatingRequests.get(page)?.delete(request);
+  pendingApiGetRequests.get(page)?.delete(request);
 }
 
 function recordUnhandled(testName: string, url: string, detail: string) {
@@ -152,11 +167,14 @@ function recordUnhandled(testName: string, url: string, detail: string) {
 function attachDiagnostics(page: Page, testInfo: TestInfo) {
   const testName = testInfo.titlePath.join(' > ');
   const mutations = new Set<Request>();
+  const apiGets = new Set<Request>();
   pendingMutatingRequests.set(page, mutations);
+  pendingApiGetRequests.set(page, apiGets);
   page.on('request', (request) => {
     if (isMutatingBrowserRequest(request)) mutations.add(request);
+    if (isSameOriginApiGet(request)) apiGets.add(request);
   });
-  page.on('requestfinished', (request) => completeMutatingRequest(page, request));
+  page.on('requestfinished', (request) => completeBrowserRequest(page, request));
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
     const detail = diagnosticText(message.text());
@@ -180,7 +198,7 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     });
   });
   page.on('requestfailed', (request) => {
-    completeMutatingRequest(page, request);
+    completeBrowserRequest(page, request);
     const detail = diagnosticText(`${request.method()} ${request.failure()?.errorText ?? 'request failed'}`);
     const diagnostic: Diagnostic = {
       test: testName,
@@ -294,6 +312,21 @@ async function finishRouteTransition(
   observation: RouteTransitionObservation,
   confirmed: boolean,
 ) {
+  await expect.poll(
+    () => {
+      const pending = pendingApiGetRequests.get(page);
+      if (!pending) return 0;
+      return [...observation.pendingGetRequests]
+        .filter((request) => pending.has(request))
+        .length;
+    },
+    {
+      message: 'pre-navigation GET requests must settle before route observation closes',
+      timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe(0);
+
   activeRouteTransitionObservations.delete(page);
   if (confirmed) {
     diagnostics.expected_route_transition_aborts.push(...observation.candidates);
@@ -311,6 +344,7 @@ async function expectHealthyRoute(page: Page, route: string) {
     fromPath: new URL(page.url()).pathname,
     toPath: new URL(route, page.url()).pathname,
     candidates: [],
+    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
   };
   activeRouteTransitionObservations.set(page, observation);
   let confirmed = false;
@@ -333,6 +367,7 @@ async function expectDeniedRoute(page: Page, route: string) {
     fromPath: new URL(page.url()).pathname,
     toPath: new URL(route, page.url()).pathname,
     candidates: [],
+    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
   };
   activeRouteTransitionObservations.set(page, observation);
   let confirmed = false;
@@ -352,6 +387,7 @@ async function expectScannerAfterFutures(page: Page) {
     fromPath: new URL(page.url()).pathname,
     toPath: '/scanner',
     candidates: [],
+    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
   };
   activeRouteTransitionObservations.set(page, observation);
   let confirmed = false;
