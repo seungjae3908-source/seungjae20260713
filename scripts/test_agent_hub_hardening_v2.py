@@ -190,11 +190,8 @@ def test_workflow_contracts() -> int:
 
     process_report = free.split("\n  process-report:\n", 1)[1]
     process_report_permissions = process_report.split("\n    permissions:\n", 1)[1].split("\n    runs-on:", 1)[0]
-    assert process_report_permissions.count("\n      ") == 4
-    assert "\n      actions: read\n" in process_report_permissions
-    assert "\n      contents: write\n" in process_report_permissions
-    assert "\n      issues: write\n" in process_report_permissions
-    assert "\n      pull-requests: read\n" in process_report_permissions
+    process_permission_lines = tuple(line.strip() for line in process_report_permissions.splitlines() if line.strip())
+    assert process_permission_lines == ("actions: read", "contents: write", "issues: write", "pull-requests: read")
     assert "github.event_name == 'pull_request'" not in process_report.split("\n    permissions:", 1)[0]
     process_checkout = process_report.split("- uses: actions/checkout@v6", 1)[1].split("- name: Coordinate", 1)[0]
     assert "ref: main" in process_checkout and "persist-credentials: false" in process_checkout
@@ -204,11 +201,8 @@ def test_workflow_contracts() -> int:
 
     execute = executor.split("\n  execute:\n", 1)[1]
     execute_permissions = execute.split("\n    permissions:\n", 1)[1].split("\n    runs-on:", 1)[0]
-    assert execute_permissions.count("\n      ") == 4
-    assert "\n      actions: read\n" in execute_permissions
-    assert "\n      contents: write\n" in execute_permissions
-    assert "\n      issues: write\n" in execute_permissions
-    assert "\n      pull-requests: write\n" in execute_permissions
+    execute_permission_lines = tuple(line.strip() for line in execute_permissions.splitlines() if line.strip())
+    assert execute_permission_lines == ("actions: read", "contents: write", "issues: write", "pull-requests: write")
     assert "github.event_name == 'pull_request'" not in execute.split("\n    permissions:", 1)[0]
     execute_checkout = execute.split("- uses: actions/checkout@v6", 1)[1].split("- name: Reject tracked Gemini configuration", 1)[0]
     assert "ref: main" in execute_checkout and "persist-credentials: false" in execute_checkout
