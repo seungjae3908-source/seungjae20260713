@@ -204,7 +204,7 @@ export function scoreUnifiedAssetDocument(
   preferredMarket?: UnifiedSearchMarket | null,
 ): ScoredSearchDocument | null {
   const query = normalizeSearchText(rawQuery);
-  if (!query.lower) return null;
+  if (!query.lower || !/[\p{L}\p{N}]/u.test(query.nfkc)) return null;
   const values = valuesForDocument(document);
 
   let result: Omit<ScoredSearchDocument, 'document'> | null = null;
@@ -266,7 +266,7 @@ export function searchUnifiedAssetDocuments(
   } = {},
 ): ScoredSearchDocument[] {
   const normalized = normalizeSearchText(query);
-  if (!normalized.lower) return [];
+  if (!normalized.lower || !/[\p{L}\p{N}]/u.test(normalized.nfkc)) return [];
   const limit = Math.max(1, Math.min(50, Math.trunc(options.limit ?? 25)));
   return documents
     .filter((document) => options.asset == null || options.asset === 'all' || document.assetType === options.asset)
