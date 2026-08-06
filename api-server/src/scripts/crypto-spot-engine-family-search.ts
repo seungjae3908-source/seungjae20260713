@@ -33,7 +33,7 @@ type Symbol = typeof SYMBOLS[number];
 type SegmentName = 'training' | 'validation' | 'locked-test' | 'full';
 type Candidate = {
   id: string;
-  family: Extract<CashBacktestStrategy, 'regime_pullback' | 'regime_breakout_retest'>;
+  family: Extract<CashBacktestStrategy, 'regime_pullback' | 'regime_breakout_retest' | 'regime_rsi_reversal'>;
   parameters: Record<string, number>;
   stopAtrMultiplier: number;
   takeProfitR: number;
@@ -135,6 +135,37 @@ function buildCandidates(): Candidate[] {
                 maximumExtensionPercent: 1,
                 volumePeriod: 20,
                 volumeMultiplier: 0.7,
+                stopAtrMultiplier,
+              },
+              stopAtrMultiplier,
+              takeProfitR,
+            });
+          }
+        }
+      }
+    }
+  }
+  for (const [fastPeriod, slowPeriod] of [[12, 36], [20, 50]] as const) {
+    for (const [oversoldRsi, recoveryRsi] of [[40, 46], [45, 50], [48, 54]] as const) {
+      for (const oversoldLookback of [4, 8]) {
+        for (const volumeMultiplier of [0.5, 0.8]) {
+          for (const [stopAtrMultiplier, takeProfitR] of [[1.25, 0.6], [1.5, 0.8], [1.75, 1]] as const) {
+            candidates.push({
+              id: `rsi-f${fastPeriod}-s${slowPeriod}-os${oversoldRsi}-rc${recoveryRsi}-lb${oversoldLookback}-v${volumeMultiplier}-atr${stopAtrMultiplier}-r${takeProfitR}`,
+              family: 'regime_rsi_reversal',
+              parameters: {
+                ...commonParameters(),
+                fastPeriod,
+                slowPeriod,
+                oversoldRsi,
+                recoveryRsi,
+                oversoldLookback,
+                maximumExtensionPercent: 2,
+                volumePeriod: 20,
+                volumeMultiplier,
+                minimumEntryRsi: 0,
+                maximumEntryRsi: 100,
+                cooldownBars: 8,
                 stopAtrMultiplier,
               },
               stopAtrMultiplier,
@@ -294,7 +325,7 @@ const payload = {
   ok: true,
   mode: 'backtest-only',
   orderSubmitted: false,
-  strategyFamilies: ['regime_pullback', 'regime_breakout_retest'],
+  strategyFamilies: ['regime_pullback', 'regime_breakout_retest', 'regime_rsi_reversal'],
   generatedAt: new Date().toISOString(),
   period: { startTime: START_TIME, endTime: END_TIME, days: DAYS, timeframe: TIMEFRAME },
   universe: SYMBOLS,
