@@ -86,6 +86,21 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function validTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function snapshotDataAsOf(current: UnifiedAssetSearchSnapshot): string | null {
+  const providerTimes = current.providers
+    .map((provider) => validTimestamp(provider.dataAsOf))
+    .filter((value): value is number => value != null);
+  if (providerTimes.length > 0) return new Date(Math.min(...providerTimes)).toISOString();
+  const builtAt = validTimestamp(current.builtAt);
+  return builtAt == null ? null : new Date(builtAt).toISOString();
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -369,7 +384,10 @@ async function ensureSnapshot(): Promise<UnifiedAssetSearchSnapshot> {
 }
 
 function isStale(current: UnifiedAssetSearchSnapshot) {
-  return Date.now() - Date.parse(current.builtAt) > STALE_AFTER_MS || current.providers.some((provider) => provider.status === 'stale');
+  const builtAt = validTimestamp(current.builtAt);
+  return builtAt == null
+    || Date.now() - builtAt > STALE_AFTER_MS
+    || current.providers.some((provider) => provider.status === 'stale');
 }
 
 function hiddenMarketMatches(documents: UnifiedAssetDocument[], query: string, asset: 'all' | UnifiedAssetType, market: UnifiedSearchMarket | null) {
@@ -417,7 +435,7 @@ export async function searchUnifiedAssets(input: {
   return {
     results,
     count: results.length,
-    dataAsOf: current.builtAt,
+    dataAsOf: snapshotDataAsOf(current),
     stale: isStale(current),
     partial: current.providers.some((provider) => provider.status !== 'ok'),
     providers: current.providers,
@@ -430,7 +448,7 @@ export async function getUnifiedAssetSearchStatus() {
   return {
     ok: current.documents.length > 0,
     count: current.documents.length,
-    dataAsOf: current.builtAt,
+    dataAsOf: snapshotDataAsOf(current),
     stale: isStale(current),
     partial: current.providers.some((provider) => provider.status !== 'ok'),
     providers: current.providers,
