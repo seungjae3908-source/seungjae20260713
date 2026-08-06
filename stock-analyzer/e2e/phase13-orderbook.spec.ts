@@ -1,9 +1,14 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Page, type Request as PlaywrightRequest, type Route } from '@playwright/test';
 
 const receivedAt = '2026-08-05T03:30:10.000Z';
 
 type Fixture = Record<string, unknown>;
-type FixtureFactory = (requestCount: number) => Fixture;
+type FixtureResponse = { body: Fixture; delayMs?: number; status?: number };
+type FixtureFactory = (
+  requestCount: number,
+  url: URL,
+  request: PlaywrightRequest,
+) => Fixture | FixtureResponse | Promise<Fixture | FixtureResponse>;
 
 function stockReady(overrides: Fixture = {}): Fixture {
   return {
@@ -124,18 +129,41 @@ function futuresReady(overrides: Fixture = {}): Fixture {
   };
 }
 
+function providerError(
+  assetClass: 'crypto_spot' | 'crypto_futures',
+  reason: string,
+): Fixture {
+  const base = assetClass === 'crypto_spot' ? spotReady() : futuresReady();
+  return {
+    ...base,
+    ok: false,
+    available: false,
+    status: 'provider_error',
+    asks: [],
+    bids: [],
+    bestAsk: null,
+    bestBid: null,
+    spread: null,
+    spreadPercent: null,
+    displayedAskQuantity: 0,
+    displayedBidQuantity: 0,
+    totalAskQuantity: null,
+    totalBidQuantity: null,
+    imbalance: null,
+    warnings: [],
+    reason,
+  };
+}
+
 async function fulfillJson(route: Route, body: unknown, status = 200) {
-  await route.fulfill({
-    status,
-    contentType: 'application/json',
-    body: JSON.stringify(body),
-  });
+  await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
 function captureFailures(page: Page) {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   const requestFailures: string[] = [];
+  const expectedOrderbookAborts: string[] = [];
   const unexpectedHttpErrors: string[] = [];
 
   page.on('console', (message) => {
@@ -143,7 +171,13 @@ function captureFailures(page: Page) {
   });
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('requestfailed', (request) => {
-    requestFailures.push(`${request.method()} ${new URL(request.url()).pathname}`);
+    const path = new URL(request.url()).pathname;
+    const failure = request.failure()?.errorText ?? '';
+    if (path === '/api/orderbook' && /ERR_ABORTED|NS_BINDING_ABORTED|cancel/i.test(failure)) {
+      expectedOrderbookAborts.push(`${request.method()} ${path} ${failure}`);
+      return;
+    }
+    requestFailures.push(`${request.method()} ${path} ${failure}`.trim());
   });
   page.on('response', (response) => {
     if (response.status() >= 400) {
@@ -158,8 +192,25 @@ function captureFailures(page: Page) {
     consoleErrors,
     pageErrors,
     requestFailures,
+    expectedOrderbookAborts,
     unexpectedHttpErrors,
   };
+}
+
+function asFixtureResponse(value: Fixture | FixtureResponse): FixtureResponse {
+  return 'body' in value ? value : { body: value };
+}
+
+async function safeDelayedFulfill(route: Route, response: FixtureResponse) {
+  if (response.delayMs) await new Promise((resolve) => setTimeout(resolve, response.delayMs));
+  try {
+    await fulfillJson(route, response.body, response.status ?? 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/closed|already handled|intercepted request|Target page|Target context/i.test(message)) {
+      throw error;
+    }
+  }
 }
 
 async function mockOrderbook(page: Page, fixture: Fixture | FixtureFactory) {
@@ -173,12 +224,10 @@ async function mockOrderbook(page: Page, fixture: Fixture | FixtureFactory) {
     const url = new URL(request.url());
     requests.push(`${request.method()} ${url.pathname}${url.search}`);
 
-    if (request.method() !== 'GET') {
-      mutationRequests.push(`${request.method()} ${url.pathname}`);
-    }
+    if (request.method() !== 'GET') mutationRequests.push(`${request.method()} ${url.pathname}`);
 
     if (
-      /\/(?:account|accounts|positions|orders?|auto)(?:\/|$)/.test(url.pathname)
+      /\/(?:account|accounts|balance|balances|positions|orders?|auto)(?:\/|$)/.test(url.pathname)
       || url.pathname.startsWith('/api/kiwoom/')
       || url.pathname.includes('/private/')
     ) {
@@ -191,16 +240,13 @@ async function mockOrderbook(page: Page, fixture: Fixture | FixtureFactory) {
 
     if (url.pathname === '/api/orderbook') {
       requestCount += 1;
-      const body = typeof fixture === 'function'
-        ? fixture(requestCount)
+      const value = typeof fixture === 'function'
+        ? await fixture(requestCount, url, request)
         : fixture;
-      return fulfillJson(route, body);
+      return safeDelayedFulfill(route, asFixtureResponse(value));
     }
 
-    return fulfillJson(route, {
-      ok: false,
-      error: 'UNEXPECTED_ROUTE',
-    }, 404);
+    return fulfillJson(route, { ok: false, error: 'UNEXPECTED_ROUTE' }, 404);
   });
 
   return {
@@ -223,6 +269,13 @@ function expectNoFailures(
   expect(failures.unexpectedHttpErrors).toEqual([]);
 }
 
+async function expectMinimumTouchTarget(locator: ReturnType<Page['getByRole']>) {
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+}
+
 for (const width of [360, 390, 430]) {
   test(`KR stock orderbook stays usable and read-only on ${width}px mobile`, async ({ page }) => {
     const failures = captureFailures(page);
@@ -232,16 +285,24 @@ for (const width of [360, 390, 430]) {
     await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
 
     const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
+    const refresh = dialog.getByRole('button', { name: '호가 새로고침' });
+    const close = dialog.getByRole('button', { name: '호가창 닫기' });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('읽기 전용')).toBeVisible();
     await expect(dialog.getByText('키움 ka10004')).toBeVisible();
     await expect(dialog.getByText('공급자 최신성 확인 불가')).toBeVisible();
     await expect(dialog.getByText('누적잔량')).toBeVisible();
+    await expect(dialog.getByRole('list', { name: '매도 호가' })).toBeVisible();
+    await expect(dialog.getByRole('list', { name: '매수 호가' })).toBeVisible();
+    await expect(dialog.getByTestId('ask-level-1')).toContainText('매도 1호');
     await expect(dialog.getByTestId('ask-level-1')).toContainText('70,100');
     await expect(dialog.getByTestId('ask-level-2')).toContainText('200');
+    await expect(dialog.getByTestId('bid-level-1')).toContainText('매수 1호');
     await expect(dialog.getByTestId('bid-level-1')).toContainText('70,000');
-    await expect(dialog.getByRole('button', { name: /매수|매도/ })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: /매수|매도|주문|취소|계좌|잔고|포지션/ })).toHaveCount(0);
     await expect(dialog.getByText(/WebSocket 실시간 스트림이 아니며/)).toBeVisible();
+    await expectMinimumTouchTarget(refresh);
+    await expectMinimumTouchTarget(close);
 
     expect(
       await page.evaluate(
@@ -255,7 +316,9 @@ for (const width of [360, 390, 430]) {
 
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '호가창' })).toBeFocused();
+    const opener = page.getByRole('button', { name: '읽기 전용 호가창 열기' });
+    await expect(opener).toBeFocused();
+    await expectMinimumTouchTarget(opener);
 
     const countAfterClose = requests.requestCount;
     await page.waitForTimeout(3_200);
@@ -266,32 +329,28 @@ for (const width of [360, 390, 430]) {
 
 test('desktop renders one-sided depth only as explicit partial data', async ({ page }) => {
   const failures = captureFailures(page);
-  const requests = await mockOrderbook(
-    page,
-    stockReady({
-      status: 'partial',
-      asks: [],
-      bestAsk: null,
-      spread: null,
-      spreadPercent: null,
-      displayedAskQuantity: 0,
-      warnings: [
-        '매도 또는 매수 한쪽 호가가 비어 있어 부분 데이터로 표시합니다.',
-      ],
-    }),
-  );
+  const requests = await mockOrderbook(page, stockReady({
+    status: 'partial',
+    asks: [],
+    bestAsk: null,
+    spread: null,
+    spreadPercent: null,
+    displayedAskQuantity: 0,
+    warnings: ['매도 또는 매수 한쪽 호가가 비어 있어 부분 데이터로 표시합니다.'],
+  }));
 
   await page.setViewportSize({ width: 1366, height: 900 });
   await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
 
   const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
   await expect(dialog.getByText(/부분 데이터로 표시합니다/)).toBeVisible();
-  await expect(dialog.getByLabel('매도 호가')).toBeEmpty();
+  await expect(dialog.getByRole('list', { name: '매도 호가' })).toBeEmpty();
+  await expect(dialog.getByRole('list', { name: '매수 호가' })).not.toBeEmpty();
   await expect(dialog.getByTestId('bid-level-1')).toBeVisible();
   expectNoFailures(failures, requests);
 });
 
-test('US stock explicitly shows disconnected provider without fake levels', async ({ page }) => {
+test('US stock explicitly shows disconnected provider without fake levels or polling', async ({ page }) => {
   const failures = captureFailures(page);
   const requests = await mockOrderbook(page, stockReady({
     ok: false,
@@ -326,35 +385,27 @@ test('US stock explicitly shows disconnected provider without fake levels', asyn
   await expect(dialog.getByText('호가 제공 불가')).toBeVisible();
   await expect(dialog.getByText(/미국 주식 호가 공급자는 아직 연결되지 않았습니다/)).toBeVisible();
   await expect(dialog.getByTestId(/ask-level|bid-level/)).toHaveCount(0);
+  await page.waitForTimeout(3_200);
   expect(requests.requestCount).toBe(1);
   expectNoFailures(failures, requests);
 });
 
-test('crossed orderbook is blocked instead of rendered', async ({ page }) => {
+test('crossed orderbook is blocked instead of rendered or repaired', async ({ page }) => {
   const failures = captureFailures(page);
   const requests = await mockOrderbook(page, stockReady({
-    ok: false,
-    available: false,
-    status: 'invalid',
-    asks: [],
-    bids: [],
-    bestAsk: null,
-    bestBid: null,
-    spread: null,
-    spreadPercent: null,
-    displayedAskQuantity: 0,
-    displayedBidQuantity: 0,
-    warnings: [
-      '최우선 매수호가가 최우선 매도호가 이상인 교차 호가여서 표시를 차단했습니다.',
-    ],
-    reason: 'ORDERBOOK_CROSSED',
+    available: true,
+    status: 'ready',
+    asks: [{ rank: 1, price: 70_000, quantity: 1, cumulativeQuantity: 1 }],
+    bids: [{ rank: 1, price: 70_100, quantity: 1, cumulativeQuantity: 1 }],
+    bestAsk: 70_000,
+    bestBid: 70_100,
+    warnings: [],
   }));
 
   await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
-
   const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
   await expect(dialog.getByText(/교차 호가가 감지되어 안전을 위해 표시를 차단했습니다/)).toBeVisible();
-  await expect(dialog.getByText(/교차 호가여서 표시를 차단했습니다/)).toBeVisible();
+  await expect(dialog.getByText(/클라이언트에서도 표시를 차단했습니다/)).toBeVisible();
   await expect(dialog.getByTestId(/ask-level|bid-level/)).toHaveCount(0);
   expectNoFailures(failures, requests);
 });
@@ -396,35 +447,148 @@ test('Bitget futures uses shared depth without account or position requests', as
   expectNoFailures(failures, requests);
 });
 
-test('provider error keeps the last normal data and clearly marks refresh failure', async ({ page }) => {
+test('provider error keeps only same-target last normal data with its timestamps', async ({ page }) => {
   const failures = captureFailures(page);
   const requests = await mockOrderbook(page, (requestCount) => requestCount === 1
     ? spotReady()
-    : spotReady({
-      ok: false,
-      available: false,
-      status: 'provider_error',
-      asks: [],
-      bids: [],
-      bestAsk: null,
-      bestBid: null,
-      spread: null,
-      spreadPercent: null,
-      displayedAskQuantity: 0,
-      displayedBidQuantity: 0,
-      totalAskQuantity: null,
-      totalBidQuantity: null,
-      imbalance: null,
-      warnings: [],
-      reason: 'UPBIT_ORDERBOOK_PROVIDER_UNAVAILABLE',
-    }));
+    : providerError('crypto_spot', 'UPBIT_ORDERBOOK_PROVIDER_UNAVAILABLE'));
 
   await page.goto('/__phase13-orderbook-e2e?ticker=BTC&market=UPBIT&assetClass=crypto_spot');
   const dialog = page.getByRole('dialog', { name: /BTC 호가창/ });
   await expect(dialog.getByTestId('ask-level-1')).toContainText('150,100,000');
   await dialog.getByRole('button', { name: '호가 새로고침' }).click();
   await expect(dialog.getByText('갱신 실패 · 마지막 정상 데이터')).toBeVisible();
+  await expect(dialog.getByText(/마지막 정상 데이터의 공급자·서버 기준시각을 유지합니다/)).toBeVisible();
+  await expect(dialog.getByText(/공급자 시각 08\. 05\. 12:30:05/)).toBeVisible();
   await expect(dialog.getByTestId('ask-level-1')).toContainText('150,100,000');
   expect(requests.requestCount).toBeGreaterThanOrEqual(2);
+  expectNoFailures(failures, requests);
+});
+
+test('focus trap, outside click and duplicate opening keep a single dialog', async ({ page }) => {
+  const failures = captureFailures(page);
+  const requests = await mockOrderbook(page, stockReady());
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
+
+  let dialog = page.getByRole('dialog', { name: /005930 호가창/ });
+  const refresh = dialog.getByRole('button', { name: '호가 새로고침' });
+  const close = dialog.getByRole('button', { name: '호가창 닫기' });
+  await close.focus();
+  await page.keyboard.press('Tab');
+  await expect(refresh).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(close).toBeFocused();
+
+  await page.getByTestId('orderbook-backdrop').click({ position: { x: 4, y: 4 } });
+  await expect(dialog).toHaveCount(0);
+  const opener = page.getByRole('button', { name: '읽기 전용 호가창 열기' });
+  await expect(opener).toBeFocused();
+
+  const beforeReopen = requests.requestCount;
+  await opener.evaluate((button) => { button.click(); button.click(); });
+  dialog = page.getByRole('dialog');
+  await expect(dialog).toHaveCount(1);
+  await expect.poll(() => requests.requestCount).toBe(beforeReopen + 1);
+  await page.waitForTimeout(250);
+  expect(requests.requestCount).toBe(beforeReopen + 1);
+  expectNoFailures(failures, requests);
+});
+
+test('same-symbol polling is singular and hidden or unmounted views stop requests', async ({ page }) => {
+  const failures = captureFailures(page);
+  const requests = await mockOrderbook(page, stockReady());
+  await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect.poll(() => requests.requestCount).toBe(1);
+
+  await page.waitForTimeout(3_250);
+  expect(requests.requestCount).toBe(2);
+
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  const hiddenCount = requests.requestCount;
+  await page.waitForTimeout(3_250);
+  expect(requests.requestCount).toBe(hiddenCount);
+
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(() => requests.requestCount).toBe(hiddenCount + 1);
+
+  await page.getByTestId('orderbook-unmount').evaluate((button) => button.click());
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const unmountCount = requests.requestCount;
+  await page.waitForTimeout(3_250);
+  expect(requests.requestCount).toBe(unmountCount);
+  expectNoFailures(failures, requests);
+});
+
+test('rapid market changes ignore older responses and keep query caches isolated', async ({ page }) => {
+  const failures = captureFailures(page);
+  const requests = await mockOrderbook(page, (_requestCount, url) => {
+    const assetClass = url.searchParams.get('assetClass');
+    if (assetClass === 'stock') return { body: stockReady(), delayMs: 700 };
+    if (assetClass === 'crypto_spot') return { body: spotReady(), delayMs: 450 };
+    return { body: futuresReady(), delayMs: 20 };
+  });
+
+  await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
+  await page.getByTestId('orderbook-target-spot').evaluate((button) => button.click());
+  await page.getByTestId('orderbook-target-futures').evaluate((button) => button.click());
+
+  const dialog = page.getByRole('dialog', { name: /BTCUSDT 호가창/ });
+  await expect(dialog.getByText('Bitget 공개 REST')).toBeVisible();
+  await expect(dialog.getByTestId('ask-level-1')).toContainText('114,000.5');
+  await page.waitForTimeout(900);
+  await expect(dialog.getByTestId('ask-level-1')).toContainText('114,000.5');
+  await expect(dialog.getByText('150,100,000')).toHaveCount(0);
+  await expect(dialog.getByText('70,100')).toHaveCount(0);
+
+  expect(requests.requests.some((request) => request.includes('assetClass=stock&market=KR&symbol=005930'))).toBe(true);
+  expect(requests.requests.some((request) => request.includes('assetClass=crypto_spot&market=UPBIT&symbol=BTC'))).toBe(true);
+  expect(requests.requests.some((request) => request.includes('assetClass=crypto_futures&market=BITGET&symbol=BTCUSDT'))).toBe(true);
+  expectNoFailures(failures, requests);
+});
+
+test('last normal data never crosses market boundaries after a target change', async ({ page }) => {
+  const failures = captureFailures(page);
+  const requests = await mockOrderbook(page, (_requestCount, url) =>
+    url.searchParams.get('assetClass') === 'stock'
+      ? stockReady()
+      : providerError('crypto_spot', 'UPBIT_ORDERBOOK_PROVIDER_UNAVAILABLE'));
+
+  await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
+  await expect(page.getByTestId('ask-level-1')).toContainText('70,100');
+  await page.getByTestId('orderbook-target-spot').evaluate((button) => button.click());
+
+  const dialog = page.getByRole('dialog', { name: /BTC 호가창/ });
+  await expect(dialog.getByText('호가 조회 실패')).toBeVisible();
+  await expect(dialog.getByText(/Upbit 공개 호가 공급자를 사용할 수 없습니다/)).toBeVisible();
+  await expect(dialog.getByTestId(/ask-level|bid-level/)).toHaveCount(0);
+  await expect(dialog.getByText('70,100')).toHaveCount(0);
+  expectNoFailures(failures, requests);
+});
+
+test('network timeout is explicit and closing during retry stops further polling', async ({ page }) => {
+  const failures = captureFailures(page);
+  const requests = await mockOrderbook(page, {
+    body: stockReady(),
+    delayMs: 8_500,
+  });
+
+  await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
+  const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
+  await expect(dialog.getByText('호가 조회 실패')).toBeVisible({ timeout: 12_000 });
+  await expect(dialog.getByText(/호가 조회 요청 시간이 초과되었습니다/)).toBeVisible();
+  await dialog.getByRole('button', { name: '다시 시도' }).click();
+  await dialog.getByRole('button', { name: '호가창 닫기' }).click();
+  await expect(dialog).toHaveCount(0);
+  const countAfterClose = requests.requestCount;
+  await page.waitForTimeout(3_250);
+  expect(requests.requestCount).toBe(countAfterClose);
   expectNoFailures(failures, requests);
 });
