@@ -186,10 +186,7 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
 
 async function settle(page: Page) {
   await page.waitForLoadState('domcontentloaded');
-  for (let pass = 0; pass < 2; pass += 1) {
-    await page.waitForLoadState('networkidle', { timeout: 30_000 });
-    await page.waitForTimeout(300);
-  }
+  await page.waitForTimeout(600);
 }
 
 function loginSubmitButton(page: Page) {
