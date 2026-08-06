@@ -35,7 +35,7 @@ export default function TechnicalWorkspacePage() {
   const [mobileWorkspace, setMobileWorkspace] = useState<MobileWorkspace>(() => phase11SignalRoute ? 'signal' : 'legacy');
 
   if (location.startsWith('/auto-trading')) {
-    return gated(phase11SignalRoute, 'canAccessPaperTrading', <AutoTradingPage />);
+    return gated(phase11SignalRoute, 'canPlaceOrders', <AutoTradingPage />);
   }
   if (!desktop) {
     return gated(
