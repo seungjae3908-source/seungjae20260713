@@ -43,6 +43,11 @@ type CreateResponse = {
   };
 };
 
+type ScannerApprovalComposerProps = {
+  selection: AnalysisSelection;
+  testOnlyCanPlaceOrders?: boolean;
+};
+
 const AMOUNT_STORAGE_KEY = 'scanner-approval-paper-amount-v1';
 const MINIMUM_AMOUNT_KRW = 5_000;
 const QUICK_AMOUNTS = [50_000, 100_000, 200_000, 500_000] as const;
@@ -79,9 +84,13 @@ function creationErrorMessage(code: string) {
   return labels[code] ?? safeTradeErrorMessage(code, '서버 검증형 승인 계획을 만들지 못했습니다.');
 }
 
-export function ScannerApprovalComposer({ selection }: { selection: AnalysisSelection }) {
+export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = false }: ScannerApprovalComposerProps) {
   const auth = useAuth();
-  const canPlaceOrders = auth.can('canPlaceOrders');
+  const fixtureCanPlaceOrders = import.meta.env.DEV
+    && testOnlyCanPlaceOrders
+    && typeof window !== 'undefined'
+    && window.location.pathname === '/__phase12-trade-automation-e2e';
+  const canPlaceOrders = auth.can('canPlaceOrders') || fixtureCanPlaceOrders;
   const [, navigate] = useLocation();
   const [amount, setAmount] = useState(loadAmount);
   const [creating, setCreating] = useState(false);
