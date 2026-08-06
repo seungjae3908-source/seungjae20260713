@@ -51,6 +51,12 @@ test('normalizes NFKC, case, whitespace and separators without losing leading ze
   assert.equal(normalizeSearchText('Samsung   Electronics').lower, 'samsung electronics');
 });
 
+test('does not turn separator-only one-character input into a match-all query', () => {
+  for (const query of ['.', '/', '-', '_', '  /  ']) {
+    assert.deepEqual(searchUnifiedAssetDocuments(fixtures, query, { limit: 50 }), []);
+  }
+});
+
 test('extracts Hangul choseong search keys', () => {
   assert.equal(extractHangulChoseong('삼성전자'), 'ㅅㅅㅈㅈ');
   assert.equal(extractHangulChoseong('비트코인'), 'ㅂㅌㅋㅇ');
