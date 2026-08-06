@@ -76,6 +76,7 @@ const groups = {
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
     path.join(root, 'src/routes/signal-scanner-auth.smoke.test.ts'),
     path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
+    path.join(root, 'src/routes/stock-orderbook.smoke.test.ts'),
   ],
 };
 
