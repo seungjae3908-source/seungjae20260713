@@ -75,15 +75,14 @@ router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/', paperJournalRouter);
 
-router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
-// User-scoped signal state and explicit paper approval stay available to an
-// approved member. They never submit a private exchange request.
+// Signal scanning remains available through the bounded scanner routes above.
+// Every order-workspace route below, including plan creation, final approval,
+// signal-driven cancellation, recovery and audit views, requires the shared
+// active-administrator order capability resolved from the database profile.
+router.use('/trade-automation', requireCapability('canPlaceOrders'));
 router.use('/trade-automation', scannerApprovalRouter);
 router.use('/trade-automation', tradeSignalApprovalRouter);
 router.use('/trade-automation', tradeSignalAlertsRouter);
-// Connections, live execution, recovery, policy mutation and emergency-stop
-// surfaces remain administrator-only.
-router.use('/trade-automation', requireAdmin);
 router.use('/trade-automation', tradeAutomationRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
