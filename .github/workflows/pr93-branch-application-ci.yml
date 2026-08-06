@@ -1,0 +1,56 @@
+name: PR 93 Branch Application CI Bridge
+
+on:
+  push:
+    branches:
+      - agent/instrument-orderbook-ui
+    paths:
+      - .github/workflows/pr93-branch-application-ci.yml
+      - .github/workflows/futures-public-network-smoke.yml
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - package.json
+      - api-server/**
+      - stock-analyzer/**
+      - packages/**
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: pr93-branch-application-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    name: Dispatch exact branch Application CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify exact PR branch and dispatch official workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = 'agent/instrument-orderbook-ui';
+            const expectedRef = `refs/heads/${branch}`;
+            if (context.ref !== expectedRef) {
+              core.setFailed(`Unexpected ref: ${context.ref}`);
+              return;
+            }
+            const current = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch,
+            });
+            if (current.data.commit.sha !== context.sha) {
+              core.setFailed(`Branch advanced before dispatch: ${current.data.commit.sha}`);
+              return;
+            }
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'futures-public-network-smoke.yml',
+              ref: branch,
+            });
+            core.notice(`Dispatched official Application CI for ${branch}@${context.sha}.`);
