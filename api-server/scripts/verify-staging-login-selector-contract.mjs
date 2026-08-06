@@ -85,9 +85,30 @@ assert(spec.includes("expect(page.url(), 'route changed while presentation was s
 assert(spec.includes("await expect(page.locator('body')).toBeVisible();"), 'each presentation pass must prove the rendered body is visible');
 assert(!spec.includes("waitForLoadState('networkidle'"), 'polling and bounded provider requests must not be treated as a route-readiness failure');
 assert(!spec.includes('.catch(() => undefined)'), 'route settlement failures must not be swallowed');
+
+const healthyRoutesIndex = spec.indexOf('async function expectHealthyRoutes(');
+const routeSettleIndex = spec.indexOf('await settle(page);', healthyRoutesIndex);
+const pendingMutationWaitIndex = spec.indexOf('await waitForPendingMutations();', routeSettleIndex);
+const beginTransitionIndex = spec.indexOf('const transition = beginRouteTransitionObservation(page);', pendingMutationWaitIndex);
+const routeGotoIndex = spec.indexOf('const response = await page.goto(', beginTransitionIndex);
+const routeStatusIndex = spec.indexOf('expect(response?.status()', routeGotoIndex);
+const destinationSettleIndex = spec.indexOf('await settle(page);', routeStatusIndex);
+const transitionConfirmedIndex = spec.indexOf('transitionConfirmed = true;', destinationSettleIndex);
+const finishTransitionIndex = spec.indexOf('finishRouteTransitionObservation(transition, transitionConfirmed);', transitionConfirmedIndex);
+assert(healthyRoutesIndex >= 0, 'healthy route helper is missing');
 assert(
-  spec.indexOf('await settle(page);\n  const response = await page.goto(route') >= 0,
-  'healthy route navigation must settle the previous page before leaving it',
+  routeSettleIndex >= 0
+    && pendingMutationWaitIndex > routeSettleIndex
+    && beginTransitionIndex > pendingMutationWaitIndex
+    && routeGotoIndex > beginTransitionIndex,
+  'healthy route navigation must settle the previous page, drain mutations, and begin scoped transition observation before leaving it',
+);
+assert(
+  routeStatusIndex > routeGotoIndex
+    && destinationSettleIndex > routeStatusIndex
+    && transitionConfirmedIndex > destinationSettleIndex
+    && finishTransitionIndex > transitionConfirmedIndex,
+  'healthy route navigation must validate and settle the destination before confirming route-transition abort candidates',
 );
 assert(spec.includes('async function expectDeniedRoute(page: Page, route: string)'), 'denied route navigation must share a pre-navigation settlement helper');
 assert(spec.includes('/stock-info?asset=stock&market=KR&ticker=005930'), 'stock staging routes must use the application ticker query parameter');
