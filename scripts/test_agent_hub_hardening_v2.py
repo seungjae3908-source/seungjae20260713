@@ -7,6 +7,7 @@ from pathlib import Path
 
 from agent_hub_command_integrity_v2 import CommandIntegrityError, seal_command_body, verify_command_body
 from agent_hub_coordinator_hardening_v2 import requires_independent_verification
+from agent_hub_executor import ExecutorError, bounded_int
 from agent_hub_executor_safety_v2 import normalize_repo_path, ExecutorSafetyError
 from agent_hub_github_validation_v2 import (
     GitHubEvidenceError,
@@ -24,7 +25,7 @@ from agent_hub_state_v2 import format_state_snapshot
 def expect_block(fn) -> None:
     try:
         fn()
-    except (GitHubEvidenceError, ExecutorSafetyError, SensitiveDataError, CommandIntegrityError):
+    except (GitHubEvidenceError, ExecutorSafetyError, ExecutorError, SensitiveDataError, CommandIntegrityError):
         return
     raise AssertionError("unsafe fixture was accepted")
 
@@ -147,6 +148,15 @@ def test_security_and_paths() -> int:
     return len(fixtures) + 6
 
 
+def test_retry_limit() -> int:
+    assert bounded_int("1", 1, 2, "max_attempts") == 1
+    assert bounded_int("2", 1, 2, "max_attempts") == 2
+    expect_block(lambda: bounded_int("0", 1, 2, "max_attempts"))
+    expect_block(lambda: bounded_int("3", 1, 2, "max_attempts"))
+    expect_block(lambda: bounded_int("not-a-number", 1, 2, "max_attempts"))
+    return 5
+
+
 def test_comment_and_legacy() -> int:
     sealed = seal_command_body("[HUB_COMMAND]\nschema_version: 2\nstatus: ready")
     verify_command_body(sealed)
@@ -161,6 +171,7 @@ def test_workflow_contracts() -> int:
     root = Path(__file__).resolve().parents[1]
     free = (root / ".github/workflows/agent-hub-free.yml").read_text(encoding="utf-8")
     executor = (root / ".github/workflows/agent-hub-executor.yml").read_text(encoding="utf-8")
+    pinned_checkout = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
     assert "agent_hub_coordinator_hardening_v2.py" in free
     assert "agent_hub_executor_gate_hardening_v2.py" in executor
     assert "agent_hub_executor_safety_v2.py validate-diff" in executor
@@ -172,11 +183,58 @@ def test_workflow_contracts() -> int:
     assert '"sandboxNetworkAccess":false' in executor and '"mcp":{"enabled":false}' in executor
     assert issue_body_edit_does_not_trigger(free)
     assert "|| true" not in free + executor
-    return 10
+
+    assert "\npermissions:\n  contents: read\n" in free
+    assert "\npermissions:\n  contents: read\n" in executor
+    assert free.count("\n      contents: write\n") == 1
+    assert executor.count("\n      contents: write\n") == 1
+
+    process_report = free.split("\n  process-report:\n", 1)[1]
+    process_report_permissions = process_report.split("\n    permissions:\n", 1)[1].split("\n    runs-on:", 1)[0]
+    process_permission_lines = tuple(line.strip() for line in process_report_permissions.splitlines() if line.strip())
+    assert process_permission_lines == ("actions: read", "contents: write", "issues: write", "pull-requests: read")
+    assert "github.event_name == 'pull_request'" not in process_report.split("\n    permissions:", 1)[0]
+    process_checkout = process_report.split(f"- uses: {pinned_checkout}", 1)[1].split("- name: Coordinate", 1)[0]
+    assert "ref: main" in process_checkout and "persist-credentials: false" in process_checkout
+    wake_step = process_report.split("- name: Wake controlled executor only for validated ready command", 1)[1]
+    assert 'gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type=\'agent-hub-command-ready\'' in wake_step
+    assert "client_payload" not in wake_step
+
+    execute = executor.split("\n  execute:\n", 1)[1]
+    execute_permissions = execute.split("\n    permissions:\n", 1)[1].split("\n    runs-on:", 1)[0]
+    execute_permission_lines = tuple(line.strip() for line in execute_permissions.splitlines() if line.strip())
+    assert execute_permission_lines == ("actions: read", "contents: write", "issues: write", "pull-requests: write")
+    assert "github.event_name == 'pull_request'" not in execute.split("\n    permissions:", 1)[0]
+    execute_checkout = execute.split(f"- uses: {pinned_checkout}", 1)[1].split("- name: Reject tracked Gemini configuration", 1)[0]
+    assert "ref: main" in execute_checkout and "persist-credentials: false" in execute_checkout
+    commit_step = execute.split("- name: Commit and push one isolated commit", 1)[1].split("- name: Open or validate owned Draft PR only", 1)[0]
+    assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in commit_step
+    assert "http.https://github.com/.extraheader" in commit_step
+    assert "git push --set-upstream origin \"$WORK_BRANCH\"" not in commit_step
+
+    forbidden_patterns = (
+        "permissions: write-all",
+        "actions: write",
+        "checks: write",
+        "workflows: write",
+        "run: ${{ github.event.issue.body }}",
+        "run: ${{ github.event.comment.body }}",
+        "eval ",
+        "bash -c",
+        "python -c",
+        "gh api --input",
+        "gh pr merge",
+        "git push origin main",
+        "git push origin master",
+    )
+    for pattern in forbidden_patterns:
+        assert pattern not in free + executor, pattern
+    assert "types: [agent-hub-command-ready]" in executor
+    return 40
 
 
 def run() -> int:
-    count = sum(test() for test in (test_medium_policy, test_prompt_delta_only, test_github_evidence, test_security_and_paths, test_comment_and_legacy, test_workflow_contracts))
+    count = sum(test() for test in (test_medium_policy, test_prompt_delta_only, test_github_evidence, test_security_and_paths, test_retry_limit, test_comment_and_legacy, test_workflow_contracts))
     print(json.dumps({"agent_hub_hardening_v2": "pass", "tests": count, "profiles": len(PROFILE_NAMES), "required_statuses": len(REQUIRED_STATUS_CONTEXTS), "delta_only_prompt": True, "schema_v1_accepted": 0, "paid_fallback": 0}))
     return 0
 

@@ -205,15 +205,16 @@ jobs:
       )
     permissions:
       actions: read
-      contents: read
+      contents: write
       issues: write
       pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: main
+          persist-credentials: false
       - name: Coordinate next schema-v2 action with audit hardening
         id: hub
         env:

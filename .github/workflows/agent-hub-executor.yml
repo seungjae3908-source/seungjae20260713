@@ -155,10 +155,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
       - name: Reject tracked Gemini configuration
         run: test -z "$(git ls-files '.gemini/**')"
       - name: Prepare trusted sealed schema-v2 command
@@ -288,6 +289,7 @@ jobs:
         if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
         id: commit
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
           TASK: ${{ steps.prepare.outputs.source_task_id }}
         run: |
@@ -298,7 +300,9 @@ jobs:
           test "$(git rev-list --count "${{ steps.prepare.outputs.expected_head_sha }}..HEAD")" = '0'
           git commit -m "agent: execute ${TASK}"
           test "$(git rev-list --count "${{ steps.prepare.outputs.expected_head_sha }}..HEAD")" = '1'
-          git push --set-upstream origin "$WORK_BRANCH"
+          auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic ${auth_header}" push --set-upstream origin "$WORK_BRANCH"
+          unset auth_header
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Open or validate owned Draft PR only
         if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
