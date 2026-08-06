@@ -86,33 +86,87 @@ assert(spec.includes("await expect(page.locator('body')).toBeVisible();"), 'each
 assert(!spec.includes("waitForLoadState('networkidle'"), 'polling and bounded provider requests must not be treated as a route-readiness failure');
 assert(!spec.includes('.catch(() => undefined)'), 'route settlement failures must not be swallowed');
 
-const settleHelperIndex = spec.indexOf('async function settle(page: Page)');
-const settleLoadIndex = spec.indexOf("await page.waitForLoadState('load');", settleHelperIndex);
-const settleBodyVisibleIndex = spec.indexOf("await expect(page.locator('body')).toBeVisible();", settleLoadIndex);
-const settleMutationDrainIndex = spec.indexOf('await waitForPendingMutations(page);', settleBodyVisibleIndex);
+const settleHelperStart = spec.indexOf('async function settle(page: Page)');
+const settleHelperEnd = spec.indexOf(
+  '\nfunction loginSubmitButton(',
+  settleHelperStart,
+);
 assert(
-  settleHelperIndex >= 0
-    && settleLoadIndex > settleHelperIndex
+  settleHelperStart >= 0 && settleHelperEnd > settleHelperStart,
+  'route settlement helper boundaries are missing',
+);
+const settleHelperBlock = spec.slice(settleHelperStart, settleHelperEnd);
+const settleLoadIndex = settleHelperBlock.indexOf("await page.waitForLoadState('load');");
+const settleBodyVisibleIndex = settleHelperBlock.indexOf(
+  "await expect(page.locator('body')).toBeVisible();",
+  settleLoadIndex,
+);
+const settleMutationDrainIndex = settleHelperBlock.indexOf(
+  'await waitForPendingMutations(page);',
+  settleBodyVisibleIndex,
+);
+assert(
+  settleLoadIndex >= 0
     && settleBodyVisibleIndex > settleLoadIndex
     && settleMutationDrainIndex > settleBodyVisibleIndex,
   'route settlement must render the page and drain mutating browser requests before navigation can continue',
 );
 
-const healthyRouteIndex = spec.indexOf('async function expectHealthyRoute(');
-const routeSettleIndex = spec.indexOf('await settle(page);', healthyRouteIndex);
-const routeObservationIndex = spec.indexOf('const observation: RouteTransitionObservation = {', routeSettleIndex);
-const activateObservationIndex = spec.indexOf('activeRouteTransitionObservations.set(page, observation);', routeObservationIndex);
-const routeGotoIndex = spec.indexOf('const response = await page.goto(', activateObservationIndex);
-const routeStatusIndex = spec.indexOf('expect(response.status()', routeGotoIndex);
-const destinationSettleIndex = spec.indexOf('await settle(page);', routeStatusIndex);
-const destinationPathIndex = spec.indexOf('expect(new URL(page.url()).pathname).toBe(observation.toPath);', destinationSettleIndex);
-const notFoundIndex = spec.indexOf('not.toContainText(/페이지를 찾을 수 없습니다|page not found/i)', destinationPathIndex);
-const notEmptyIndex = spec.indexOf('not.toBeEmpty();', notFoundIndex);
-const confirmedIndex = spec.indexOf('confirmed = true;', notEmptyIndex);
-const finishTransitionIndex = spec.indexOf('await finishRouteTransition(page, observation, confirmed);', confirmedIndex);
-assert(healthyRouteIndex >= 0, 'healthy route helper is missing');
+const healthyRouteStart = spec.indexOf(
+  'async function expectHealthyRoute(page: Page, route: string)',
+);
+const healthyRouteEnd = spec.indexOf(
+  '\nasync function expectDeniedRoute(',
+  healthyRouteStart,
+);
 assert(
-  routeSettleIndex > healthyRouteIndex
+  healthyRouteStart >= 0 && healthyRouteEnd > healthyRouteStart,
+  'healthy route helper boundaries are missing',
+);
+const healthyRouteBlock = spec.slice(healthyRouteStart, healthyRouteEnd);
+const routeSettleIndex = healthyRouteBlock.indexOf('await settle(page);');
+const routeObservationIndex = healthyRouteBlock.indexOf(
+  'const observation: RouteTransitionObservation = {',
+  routeSettleIndex,
+);
+const activateObservationIndex = healthyRouteBlock.indexOf(
+  'activeRouteTransitionObservations.set(page, observation);',
+  routeObservationIndex,
+);
+const routeGotoIndex = healthyRouteBlock.indexOf(
+  'const response = await page.goto(',
+  activateObservationIndex,
+);
+const routeStatusIndex = healthyRouteBlock.indexOf(
+  'expect(response.status()',
+  routeGotoIndex,
+);
+const destinationSettleIndex = healthyRouteBlock.indexOf(
+  'await settle(page);',
+  routeStatusIndex,
+);
+const destinationPathIndex = healthyRouteBlock.indexOf(
+  'expect(new URL(page.url()).pathname).toBe(observation.toPath);',
+  destinationSettleIndex,
+);
+const notFoundIndex = healthyRouteBlock.indexOf(
+  'not.toContainText(/페이지를 찾을 수 없습니다|page not found/i)',
+  destinationPathIndex,
+);
+const notEmptyIndex = healthyRouteBlock.indexOf(
+  'not.toBeEmpty();',
+  notFoundIndex,
+);
+const confirmedIndex = healthyRouteBlock.indexOf(
+  'confirmed = true;',
+  notEmptyIndex,
+);
+const finishTransitionIndex = healthyRouteBlock.indexOf(
+  'await finishRouteTransition(page, observation, confirmed);',
+  confirmedIndex,
+);
+assert(
+  routeSettleIndex >= 0
     && routeObservationIndex > routeSettleIndex
     && activateObservationIndex > routeObservationIndex
     && routeGotoIndex > activateObservationIndex,
