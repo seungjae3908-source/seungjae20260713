@@ -2,6 +2,15 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import healthRouter from './health';
 import futuresMarketDataRouter from './futures-market-data';
+import orderbookRouter from './stock-orderbook';
+
+type PublicCall = {
+  host: string;
+  path: string;
+  method: string;
+  privateHeaderDetected: boolean;
+  privatePathDetected: boolean;
+};
 
 function containsSensitiveText(value: unknown) {
   const text = JSON.stringify(value);
@@ -30,9 +39,33 @@ async function getJson(baseUrl: string, path: string) {
 }
 
 async function main() {
+  const nativeFetch = globalThis.fetch;
+  const publicCalls: PublicCall[] = [];
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    if (url.hostname === 'api.upbit.com' || url.hostname === 'api.bitget.com') {
+      const headers = request.headers;
+      publicCalls.push({
+        host: url.hostname,
+        path: `${url.pathname}${url.search}`,
+        method: request.method,
+        privateHeaderDetected: [
+          'authorization',
+          'access-key',
+          'access-sign',
+          'access-passphrase',
+        ].some((name) => headers.has(name)),
+        privatePathDetected: /\/(?:account|accounts|balance|balances|position|positions|order|orders|private)(?:\/|$)/i.test(url.pathname),
+      });
+    }
+    return nativeFetch(input, init);
+  };
+
   const app = express();
   app.use('/api', healthRouter);
   app.use('/api', futuresMarketDataRouter);
+  app.use('/api', orderbookRouter);
   const server = app.listen(0, '127.0.0.1');
 
   try {
@@ -47,6 +80,14 @@ async function main() {
     const snapshot = await getJson(baseUrl, '/api/crypto/futures/BTCUSDT/snapshot');
     const contractRules = await getJson(baseUrl, '/api/crypto/futures/BTCUSDT/contract-rules');
     const candles = await getJson(baseUrl, '/api/crypto/futures/BTCUSDT/candles?timeframe=15m&limit=100');
+    const upbitOrderbook = await getJson(
+      baseUrl,
+      '/api/orderbook?assetClass=crypto_spot&market=UPBIT&symbol=BTC',
+    );
+    const bitgetOrderbook = await getJson(
+      baseUrl,
+      '/api/orderbook?assetClass=crypto_futures&market=BITGET&symbol=BTCUSDT',
+    );
 
     const statusBody = status.body as Record<string, unknown> | null;
     const snapshotBody = snapshot.body as Record<string, unknown> | null;
@@ -55,6 +96,12 @@ async function main() {
     const contractData = contractBody?.data as Record<string, unknown> | undefined;
     const candlesBody = candles.body as Record<string, unknown> | null;
     const candleData = Array.isArray(candlesBody?.data) ? candlesBody.data : [];
+    const upbitBody = upbitOrderbook.body as Record<string, unknown> | null;
+    const bitgetBody = bitgetOrderbook.body as Record<string, unknown> | null;
+    const upbitAsks = Array.isArray(upbitBody?.asks) ? upbitBody.asks : [];
+    const upbitBids = Array.isArray(upbitBody?.bids) ? upbitBody.bids : [];
+    const bitgetAsks = Array.isArray(bitgetBody?.asks) ? bitgetBody.asks : [];
+    const bitgetBids = Array.isArray(bitgetBody?.bids) ? bitgetBody.bids : [];
 
     const report = {
       health: {
@@ -102,12 +149,45 @@ async function main() {
         updatedAt: candlesBody?.updatedAt ?? null,
         warnings: candlesBody?.warnings ?? [],
       },
+      upbitOrderbook: {
+        httpStatus: upbitOrderbook.httpStatus,
+        provider: upbitBody?.provider ?? null,
+        status: upbitBody?.status ?? null,
+        symbol: upbitBody?.symbol ?? null,
+        asks: upbitAsks.length,
+        bids: upbitBids.length,
+        freshness: upbitBody?.freshness ?? null,
+        orderSubmitted: upbitBody?.orderSubmitted ?? null,
+        exchangeRequestSent: upbitBody?.exchangeRequestSent ?? null,
+      },
+      bitgetOrderbook: {
+        httpStatus: bitgetOrderbook.httpStatus,
+        provider: bitgetBody?.provider ?? null,
+        status: bitgetBody?.status ?? null,
+        symbol: bitgetBody?.symbol ?? null,
+        asks: bitgetAsks.length,
+        bids: bitgetBids.length,
+        freshness: bitgetBody?.freshness ?? null,
+        orderSubmitted: bitgetBody?.orderSubmitted ?? null,
+        exchangeRequestSent: bitgetBody?.exchangeRequestSent ?? null,
+      },
+      publicTransport: {
+        upbitOrderbookCalled: publicCalls.some((call) =>
+          call.host === 'api.upbit.com' && call.path.startsWith('/v1/orderbook?')),
+        bitgetOrderbookCalled: publicCalls.some((call) =>
+          call.host === 'api.bitget.com' && call.path.startsWith('/api/v2/mix/market/merge-depth?')),
+        nonGetRequests: publicCalls.filter((call) => call.method !== 'GET').length,
+        privateHeaderRequests: publicCalls.filter((call) => call.privateHeaderDetected).length,
+        privatePathRequests: publicCalls.filter((call) => call.privatePathDetected).length,
+      },
       sensitiveTextDetected:
-        health.sensitiveTextDetected ||
-        status.sensitiveTextDetected ||
-        snapshot.sensitiveTextDetected ||
-        contractRules.sensitiveTextDetected ||
-        candles.sensitiveTextDetected,
+        health.sensitiveTextDetected
+        || status.sensitiveTextDetected
+        || snapshot.sensitiveTextDetected
+        || contractRules.sensitiveTextDetected
+        || candles.sensitiveTextDetected
+        || upbitOrderbook.sensitiveTextDetected
+        || bitgetOrderbook.sensitiveTextDetected,
     };
 
     console.log(JSON.stringify(report, null, 2));
@@ -118,6 +198,8 @@ async function main() {
       snapshot.httpStatus,
       contractRules.httpStatus,
       candles.httpStatus,
+      upbitOrderbook.httpStatus,
+      bitgetOrderbook.httpStatus,
     ];
     if (requiredStatuses.some((code) => code !== 200)) process.exitCode = 1;
     if (report.sensitiveTextDetected) process.exitCode = 1;
@@ -126,7 +208,25 @@ async function main() {
     if (report.contractRules.orderCapability !== false) process.exitCode = 1;
     if (report.contractRules.symbol !== 'BTCUSDT') process.exitCode = 1;
     if (report.candles.count < 1) process.exitCode = 1;
+    if (!['ready', 'partial'].includes(String(report.upbitOrderbook.status))) process.exitCode = 1;
+    if (report.upbitOrderbook.provider !== 'upbit') process.exitCode = 1;
+    if (report.upbitOrderbook.symbol !== 'BTC') process.exitCode = 1;
+    if (report.upbitOrderbook.asks < 1 || report.upbitOrderbook.bids < 1) process.exitCode = 1;
+    if (report.upbitOrderbook.orderSubmitted !== false) process.exitCode = 1;
+    if (report.upbitOrderbook.exchangeRequestSent !== false) process.exitCode = 1;
+    if (!['ready', 'partial'].includes(String(report.bitgetOrderbook.status))) process.exitCode = 1;
+    if (report.bitgetOrderbook.provider !== 'bitget') process.exitCode = 1;
+    if (report.bitgetOrderbook.symbol !== 'BTCUSDT') process.exitCode = 1;
+    if (report.bitgetOrderbook.asks < 1 || report.bitgetOrderbook.bids < 1) process.exitCode = 1;
+    if (report.bitgetOrderbook.orderSubmitted !== false) process.exitCode = 1;
+    if (report.bitgetOrderbook.exchangeRequestSent !== false) process.exitCode = 1;
+    if (!report.publicTransport.upbitOrderbookCalled) process.exitCode = 1;
+    if (!report.publicTransport.bitgetOrderbookCalled) process.exitCode = 1;
+    if (report.publicTransport.nonGetRequests !== 0) process.exitCode = 1;
+    if (report.publicTransport.privateHeaderRequests !== 0) process.exitCode = 1;
+    if (report.publicTransport.privatePathRequests !== 0) process.exitCode = 1;
   } finally {
+    globalThis.fetch = nativeFetch;
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
