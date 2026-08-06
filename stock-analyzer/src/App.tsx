@@ -115,7 +115,7 @@ function gated(capability: MemberCapability, child: React.ReactNode) {
 function ScannerAccess() { return gated('canAccessSignalScanner', <TechnicalWorkspacePage />); }
 function AiChartAccess() { return gated('canAccessRiskPreview', <AiChartPage />); }
 function AiChatAccess() { return gated('canAccessBasicInfo', <AiChatPage />); }
-function AutoTradingAccess() { return gated('canManageMembers', <AutoTradingPage />); }
+function AutoTradingAccess() { return gated('canAccessTradeAutomation', <AutoTradingPage />); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
 function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
