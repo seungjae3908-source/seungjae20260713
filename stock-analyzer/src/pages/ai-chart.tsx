@@ -22,6 +22,7 @@ import {
   isExternalChartSearch,
   mergeChartRouteSelection,
   parseChartWindowMessage,
+  shouldAcceptChartWindowMessage,
 } from '@/lib/chart-external-window';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
 
@@ -70,6 +71,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const channelRef = useRef<BroadcastChannel | null>(null);
   const popupRef = useRef<Window | null>(null);
   const popupPollRef = useRef<number | null>(null);
+  const lastAcceptedSelectionAtRef = useRef(0);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
@@ -139,19 +141,28 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         }
         return;
       }
+      if (!shouldAcceptChartWindowMessage(message, lastAcceptedSelectionAtRef.current)) return;
 
+      lastAcceptedSelectionAtRef.current = message.sentAt;
       applySelection(message.selection, false);
     };
 
+    const notifyReady = () => {
+      if (document.visibilityState === 'visible') {
+        channel.postMessage(createChartWindowMessage('ready', sourceIdRef.current));
+      }
+    };
     const notifyClosed = () => {
       if (externalMode) channel.postMessage(createChartWindowMessage('closed', sourceIdRef.current));
     };
     window.addEventListener('beforeunload', notifyClosed);
-    if (externalMode) channel.postMessage(createChartWindowMessage('ready', sourceIdRef.current));
+    document.addEventListener('visibilitychange', notifyReady);
+    if (externalMode) notifyReady();
 
     return () => {
       notifyClosed();
       window.removeEventListener('beforeunload', notifyClosed);
+      document.removeEventListener('visibilitychange', notifyReady);
       channel.close();
       if (channelRef.current === channel) channelRef.current = null;
     };
