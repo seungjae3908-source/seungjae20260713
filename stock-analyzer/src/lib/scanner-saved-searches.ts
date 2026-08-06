@@ -1,113 +1,147 @@
 export type ScannerSavedSearch = {
   id: string;
   name: string;
-  assetType: 'stock';
-  market: 'KR' | 'US';
+  assetClass: 'stock' | 'coin_spot' | 'coin_futures';
+  market: string;
+  symbols: string[];
   timeframe: '5m' | '15m' | '1H' | '4H' | '1D';
   selected: string[];
-  preset: string | null;
-  volumeThreshold: number;
-  tradingValueThreshold: number;
-  volumeLookbackDays: number;
-  tradingValueLookbackDays: number;
-  marketCapThreshold: number;
-  minimumScore: number;
-  maximumRiskScore: number;
+  alertEnabled: boolean;
   createdAt: string;
   updatedAt: string;
 };
 
-export const SCANNER_SAVED_SEARCHES_KEY = 'sa-saved-searches-v1';
-export const SCANNER_THRESHOLD_KEY = 'scanner.threshold.v1';
-export const SCANNER_MARKET_KEY = 'scanner-market';
-const TIMEFRAMES = new Set(['5m', '15m', '1H', '4H', '1D']);
+export type ScannerSavedSearchStore = {
+  revision: number;
+  items: ScannerSavedSearch[];
+};
 
-function numberInRange(value: unknown, minimum: number, maximum: number, fallback: number) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
+export type ScannerSavedSearchMutation =
+  | { ok: true; store: ScannerSavedSearchStore }
+  | { ok: false; error: 'SAVED_SEARCH_CONFLICT' | 'SAVED_SEARCH_DUPLICATE' | 'SAVED_SEARCH_NOT_FOUND' | 'SAVED_SEARCH_INVALID' };
+
+const TIMEFRAMES = new Set(['5m', '15m', '1H', '4H', '1D']);
+const ASSET_CLASSES = new Set(['stock', 'coin_spot', 'coin_futures']);
+
+export function scannerSavedSearchStorageKey(userId: string) {
+  const normalized = userId.trim();
+  if (!normalized) throw new Error('SAVED_SEARCH_USER_REQUIRED');
+  return `sa-saved-searches-v2:${encodeURIComponent(normalized)}`;
 }
 
-function normalize(value: unknown): ScannerSavedSearch | null {
+function uniqueStrings(value: unknown, maximum = 40) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(String).map((item) => item.trim().toUpperCase()).filter(Boolean))].slice(0, maximum);
+}
+
+function normalize(value: unknown, now = new Date()): ScannerSavedSearch | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
   const id = String(item.id ?? '').trim();
-  const selected = Array.isArray(item.selected)
-    ? [...new Set(item.selected.map(String).map((entry) => entry.trim()).filter(Boolean))].slice(0, 40)
-    : [];
-  if (!id || !selected.length) return null;
-  const now = new Date().toISOString();
-  const timeframe = String(item.timeframe ?? '1D');
+  const market = String(item.market ?? '').trim().toUpperCase();
+  const assetClass = String(item.assetClass ?? '');
+  const timeframe = String(item.timeframe ?? '');
+  const selected = uniqueStrings(item.selected);
+  const symbols = uniqueStrings(item.symbols, 100);
+  if (!id || !market || !ASSET_CLASSES.has(assetClass) || !TIMEFRAMES.has(timeframe) || !selected.length) return null;
+  const createdAt = Number.isFinite(Date.parse(String(item.createdAt ?? '')))
+    ? String(item.createdAt)
+    : now.toISOString();
   return {
     id,
-    name: String(item.name ?? selected.slice(0, 2).join('+')).trim().slice(0, 80) || '저장 검색',
-    assetType: 'stock',
-    market: item.market === 'US' ? 'US' : 'KR',
-    timeframe: TIMEFRAMES.has(timeframe) ? timeframe as ScannerSavedSearch['timeframe'] : '1D',
+    name: String(item.name ?? '').trim().slice(0, 80) || `${market} ${timeframe}`,
+    assetClass: assetClass as ScannerSavedSearch['assetClass'],
+    market,
+    symbols,
+    timeframe: timeframe as ScannerSavedSearch['timeframe'],
     selected,
-    preset: typeof item.preset === 'string' && item.preset.trim() ? item.preset.trim() : null,
-    volumeThreshold: numberInRange(item.volumeThreshold, 1, 10_000, 150),
-    tradingValueThreshold: numberInRange(item.tradingValueThreshold, 1, 10_000, 150),
-    volumeLookbackDays: Math.round(numberInRange(item.volumeLookbackDays, 1, 250, 5)),
-    tradingValueLookbackDays: Math.round(numberInRange(item.tradingValueLookbackDays, 1, 250, 5)),
-    marketCapThreshold: numberInRange(item.marketCapThreshold, 0, Number.MAX_SAFE_INTEGER, 1_000_000_000),
-    minimumScore: Math.round(numberInRange(item.minimumScore, 0, 100, 0)),
-    maximumRiskScore: Math.round(numberInRange(item.maximumRiskScore, 0, 100, 100)),
-    createdAt: Number.isFinite(Date.parse(String(item.createdAt ?? ''))) ? String(item.createdAt) : now,
-    updatedAt: Number.isFinite(Date.parse(String(item.updatedAt ?? ''))) ? String(item.updatedAt) : now,
+    alertEnabled: item.alertEnabled === true,
+    createdAt,
+    updatedAt: Number.isFinite(Date.parse(String(item.updatedAt ?? '')))
+      ? String(item.updatedAt)
+      : now.toISOString(),
   };
 }
 
-export function parseScannerSavedSearches(raw: string | null | undefined) {
+function parse(raw: string | null | undefined): ScannerSavedSearchStore {
   try {
-    const parsed = JSON.parse(raw ?? '[]');
-    if (!Array.isArray(parsed)) return [];
+    const decoded = JSON.parse(raw ?? '{}') as { revision?: unknown; items?: unknown };
+    const items = Array.isArray(decoded.items)
+      ? decoded.items.map((item) => normalize(item)).filter((item): item is ScannerSavedSearch => Boolean(item))
+      : [];
     const seen = new Set<string>();
-    return parsed
-      .map(normalize)
-      .filter((item): item is ScannerSavedSearch => Boolean(item))
-      .filter((item) => {
+    return {
+      revision: Math.max(0, Math.trunc(Number(decoded.revision) || 0)),
+      items: items.filter((item) => {
         if (seen.has(item.id)) return false;
         seen.add(item.id);
         return true;
-      })
-      .slice(0, 20);
+      }).slice(0, 50),
+    };
   } catch {
-    return [];
+    return { revision: 0, items: [] };
   }
 }
 
-export function loadScannerSavedSearches(storage: Pick<Storage, 'getItem'> = window.localStorage) {
-  return parseScannerSavedSearches(storage.getItem(SCANNER_SAVED_SEARCHES_KEY));
-}
-
-export function writeScannerSavedSearches(
-  items: ScannerSavedSearch[],
-  storage: Pick<Storage, 'setItem'> = window.localStorage,
+export function loadScannerSavedSearchStore(
+  userId: string,
+  storage: Pick<Storage, 'getItem'> = window.localStorage,
 ) {
-  const normalized = parseScannerSavedSearches(JSON.stringify(items));
-  storage.setItem(SCANNER_SAVED_SEARCHES_KEY, JSON.stringify(normalized));
-  return normalized;
+  return parse(storage.getItem(scannerSavedSearchStorageKey(userId)));
 }
 
-export function updateScannerSavedSearch(
+export function scannerSavedSearchFingerprint(item: ScannerSavedSearch) {
+  return [
+    item.assetClass,
+    item.market,
+    [...item.symbols].sort().join(','),
+    item.timeframe,
+    [...item.selected].sort().join(','),
+  ].join('|');
+}
+
+function commit(
+  userId: string,
+  expectedRevision: number,
   items: ScannerSavedSearch[],
-  id: string,
-  patch: Partial<ScannerSavedSearch>,
+  storage: Pick<Storage, 'getItem' | 'setItem'>,
+): ScannerSavedSearchMutation {
+  const current = loadScannerSavedSearchStore(userId, storage);
+  if (current.revision !== expectedRevision) return { ok: false, error: 'SAVED_SEARCH_CONFLICT' };
+  const store = { revision: current.revision + 1, items };
+  storage.setItem(scannerSavedSearchStorageKey(userId), JSON.stringify(store));
+  return { ok: true, store };
+}
+
+export function saveScannerSavedSearch(
+  userId: string,
+  expectedRevision: number,
+  candidate: ScannerSavedSearch,
+  storage: Pick<Storage, 'getItem' | 'setItem'> = window.localStorage,
   now = new Date(),
-) {
-  const current = items.find((item) => item.id === id);
-  if (!current) return items;
-  const next = normalize({ ...current, ...patch, id: current.id, createdAt: current.createdAt, updatedAt: now.toISOString() });
-  if (!next) return items;
-  return items.map((item) => item.id === id ? next : item);
+): ScannerSavedSearchMutation {
+  const next = normalize(candidate, now);
+  if (!next) return { ok: false, error: 'SAVED_SEARCH_INVALID' };
+  const current = loadScannerSavedSearchStore(userId, storage);
+  const fingerprint = scannerSavedSearchFingerprint(next);
+  if (current.items.some((item) => item.id !== next.id && scannerSavedSearchFingerprint(item) === fingerprint)) {
+    return { ok: false, error: 'SAVED_SEARCH_DUPLICATE' };
+  }
+  const existing = current.items.find((item) => item.id === next.id);
+  const saved = { ...next, createdAt: existing?.createdAt ?? next.createdAt, updatedAt: now.toISOString() };
+  const items = existing
+    ? current.items.map((item) => item.id === saved.id ? saved : item)
+    : [saved, ...current.items].slice(0, 50);
+  return commit(userId, expectedRevision, items, storage);
 }
 
-export function deleteScannerSavedSearch(items: ScannerSavedSearch[], id: string) {
-  return items.filter((item) => item.id !== id);
-}
-
-export function resetScannerSearchStorage(storage: Pick<Storage, 'removeItem'>) {
-  storage.removeItem(SCANNER_SAVED_SEARCHES_KEY);
-  storage.removeItem(SCANNER_THRESHOLD_KEY);
-  storage.removeItem(SCANNER_MARKET_KEY);
+export function deleteScannerSavedSearch(
+  userId: string,
+  expectedRevision: number,
+  id: string,
+  storage: Pick<Storage, 'getItem' | 'setItem'> = window.localStorage,
+): ScannerSavedSearchMutation {
+  const current = loadScannerSavedSearchStore(userId, storage);
+  if (!current.items.some((item) => item.id === id)) return { ok: false, error: 'SAVED_SEARCH_NOT_FOUND' };
+  return commit(userId, expectedRevision, current.items.filter((item) => item.id !== id), storage);
 }

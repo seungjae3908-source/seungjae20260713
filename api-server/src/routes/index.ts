@@ -1,4 +1,4 @@
-import { Router, type IRouter, type Response } from 'express';
+import { Router, type IRouter } from 'express';
 import healthRouter from './health';
 import marketRouter from './market';
 import newsRouter from './news.route';
@@ -19,9 +19,6 @@ import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
-import tradeSignalApprovalRouter from './trade-signal-approval';
-import tradeSignalAlertsRouter from './trade-signal-alerts';
-import scannerApprovalRouter from './scanner-approval';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
 import {
@@ -51,7 +48,7 @@ router.use(requireAuthenticated);
 router.use('/market/scan', boundedMarketScanRouter);
 router.use('/scanner/crypto', cryptoSignalScanRouter);
 
-const privateExchangeDisabled = (_req: unknown, res: Response) => res.status(403).json({
+const privateExchangeDisabled = (_req: unknown, res: any) => res.status(403).json({
   ok: false,
   error: 'PRIVATE_EXCHANGE_API_DISABLED',
   orderSubmitted: false,
@@ -88,12 +85,7 @@ router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
-// Scanner approval must run before the generic plan approval route. It calls
-// next() for every non-scanner plan, preserving the existing execution path.
-router.use('/trade-automation', scannerApprovalRouter);
 router.use('/trade-automation', tradeAutomationRouter);
-router.use('/trade-automation', tradeSignalApprovalRouter);
-router.use('/trade-automation', tradeSignalAlertsRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
 router.use('/', aiChatRouter);

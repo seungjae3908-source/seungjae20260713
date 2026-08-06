@@ -1,115 +1,86 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveTradeSignalAlerts, listTradeSignalAlerts } from './trade-signal-alert.service';
-import type { TradingPlan, TradingSignalStateEvent } from './trade-automation.types';
+import {
+  applyScannerSignalObservation,
+  createDetectedScannerSignal,
+  startNextScannerSignalCycle,
+  type ScannerSignalObservation,
+} from './trade-signal-lifecycle.service';
+import { collectScannerReadyAlerts, deriveScannerReadyAlert } from './trade-signal-alert.service';
 
-const NOW = new Date();
+const NOW = Date.parse('2026-08-06T07:00:00.000Z');
 
-function event(
-  fromState: TradingSignalStateEvent['fromState'],
-  toState: TradingSignalStateEvent['toState'],
-  reason: string,
-  offsetMs: number,
-): TradingSignalStateEvent {
+function observation(overrides: Partial<ScannerSignalObservation> = {}): ScannerSignalObservation {
   return {
-    fromState,
-    toState,
-    reason,
-    score: toState === 'READY_FOR_APPROVAL' ? 82 : 55,
-    confidence: toState === 'READY_FOR_APPROVAL' ? 78 : 50,
-    coreConditionsMaintained: toState === 'READY_FOR_APPROVAL',
-    riskReward: 1.8,
-    dataTimestamp: new Date(NOW.getTime() + offsetMs).toISOString(),
-    createdAt: new Date(NOW.getTime() + offsetMs).toISOString(),
-  };
-}
-
-function plan(history: TradingSignalStateEvent[], overrides: Partial<TradingPlan> = {}): TradingPlan {
-  const latest = history.at(-1) ?? event(null, 'READY_FOR_APPROVAL', 'SIGNAL_READY', 0);
-  return {
-    id: 'plan-1', userId: 'user-1', idempotencyKey: 'key-1', state: 'APPROVAL_PENDING',
-    approvalExpiresAt: new Date(NOW.getTime() + 10 * 60_000).toISOString(), approvedAt: null,
-    exchange: 'kiwoom', accountMode: 'paper', strategyId: 'scanner-1d', signalId: 'signal-1',
-    symbol: '005930', market: 'KR', side: 'buy', orderType: 'market', quantity: 1,
-    quoteAmount: null, limitPrice: null, estimatedKrw: 70_000, stopPrice: 67_000,
-    targetPrices: [74_500], splitRatios: [100], leverage: null, marginMode: null,
-    reduceOnly: false, invalidateAction: 'hold', signalReasons: ['trend'], signalWarnings: [],
-    signalScore: latest.score, signalConfidence: latest.confidence, minimumSignalScore: 70,
-    minimumSignalConfidence: 60, minimumRiskReward: 1.5, signalRiskReward: 1.8,
-    signalCoreConditionsMaintained: latest.toState === 'READY_FOR_APPROVAL',
-    signalExpiresAt: new Date(NOW.getTime() + 10 * 60_000).toISOString(),
-    lastSignalValidatedAt: latest.createdAt, signalState: latest.toState,
-    signalInvalidationReason: latest.toState === 'READY_FOR_APPROVAL' ? null : latest.reason,
-    signalStateHistory: history, scannerContext: null,
-    marketSnapshot: {
-      observedAt: latest.createdAt, dataDelayMs: 0, oneMinuteMovePercent: 0,
-      spreadPercent: 0.01, orderbookGapPercent: 0.01, halted: false,
-      availableBalance: 1_000_000, accountValueKrw: 1_000_000, dailyPnlPercent: 0,
-      assetExposurePercent: 0, openPositionCount: 0, dailyOrderCount: 0, consecutiveLosses: 0,
-    },
-    createdAt: history[0]?.createdAt ?? NOW.toISOString(), updatedAt: latest.createdAt,
+    approvalCandidate: true,
+    coreConditionsMaintained: true,
+    dataState: 'complete',
+    observedAt: new Date(NOW).toISOString(),
+    score: 82,
+    confidence: 78,
+    riskScore: 24,
+    dataCompleteness: 96,
+    chaseRisk: 'LOW',
+    reason: 'SIGNAL_OBSERVED',
     ...overrides,
   };
 }
 
-test('emits one met alert and only one maintained alert per ready cycle', () => {
-  const history = [
-    event(null, 'READY_FOR_APPROVAL', 'SIGNAL_READY', -3_000),
-    event('READY_FOR_APPROVAL', 'READY_FOR_APPROVAL', 'SIGNAL_READY', -2_000),
-    event('READY_FOR_APPROVAL', 'READY_FOR_APPROVAL', 'SIGNAL_READY', -1_000),
-  ];
-  const alerts = deriveTradeSignalAlerts(plan(history), NOW);
-  assert.deepEqual(alerts.map((item) => item.kind).sort(), ['CONDITION_MAINTAINED', 'CONDITION_MET']);
-  assert.equal(new Set(alerts.map((item) => item.id)).size, alerts.length);
-  assert.ok(alerts.every((item) => item.approvalEnabled));
+function signal() {
+  return createDetectedScannerSignal({
+    ownerId: 'member-1',
+    signalId: 'signal-1',
+    market: 'KR',
+    symbol: '005930',
+    timeframe: '15m',
+    signalAt: new Date(NOW - 5_000).toISOString(),
+    expiresAt: new Date(NOW + 60_000).toISOString(),
+    observation: observation(),
+  }, NOW);
+}
+
+test('READY alert is emitted once per owner, market, symbol, timeframe and cycle', () => {
+  const detected = signal();
+  const watching = applyScannerSignalObservation(detected, observation(), NOW);
+  const ready = applyScannerSignalObservation(watching, observation(), NOW + 1_000);
+  const first = collectScannerReadyAlerts([{ previous: watching, current: ready }], new Set(), NOW + 1_000);
+  assert.equal(first.alerts.length, 1);
+  assert.equal(first.alerts[0].orderSubmitted, false);
+  assert.equal(first.alerts[0].exchangeRequestSent, false);
+  const duplicate = collectScannerReadyAlerts([{ previous: ready, current: ready }], first.deliveredKeys, NOW + 2_000);
+  assert.equal(duplicate.alerts.length, 0);
 });
 
-test('condition release disables approval and matches the current signal state', () => {
-  const history = [
-    event(null, 'READY_FOR_APPROVAL', 'SIGNAL_READY', -2_000),
-    event('READY_FOR_APPROVAL', 'INVALIDATED', 'SIGNAL_CORE_CONDITION_BROKEN', -1_000),
-  ];
-  const alerts = deriveTradeSignalAlerts(plan(history), NOW);
-  const released = alerts.find((item) => item.kind === 'CONDITION_RELEASED');
-  assert.ok(released);
-  assert.equal(released.currentSignalState, 'INVALIDATED');
-  assert.equal(released.approvalEnabled, false);
-  assert.match(released.message, /주문 승인 불가/);
+test('stale, partial, expired, weakened and invalidated signals never alert', () => {
+  const base = signal();
+  const states = ['WEAKENED', 'INVALIDATED', 'EXPIRED'] as const;
+  for (const state of states) {
+    assert.equal(deriveScannerReadyAlert(null, { ...base, state }, new Set(), NOW), null);
+  }
+  assert.equal(deriveScannerReadyAlert(null, { ...base, state: 'READY_FOR_APPROVAL', dataState: 'partial' }, new Set(), NOW), null);
+  assert.equal(deriveScannerReadyAlert(null, { ...base, state: 'READY_FOR_APPROVAL', expiresAt: new Date(NOW).toISOString() }, new Set(), NOW), null);
 });
 
-test('re-entry starts a distinct cycle with new deterministic alert ids', () => {
-  const history = [
-    event(null, 'READY_FOR_APPROVAL', 'SIGNAL_READY', -4_000),
-    event('READY_FOR_APPROVAL', 'WEAKENED', 'SIGNAL_SCORE_BELOW_MINIMUM', -3_000),
-    event('WEAKENED', 'READY_FOR_APPROVAL', 'SIGNAL_READY', -2_000),
-    event('READY_FOR_APPROVAL', 'READY_FOR_APPROVAL', 'SIGNAL_READY', -1_000),
-  ];
-  const alerts = deriveTradeSignalAlerts(plan(history), NOW);
-  assert.equal(alerts.filter((item) => item.kind === 'CONDITION_MET').length, 2);
-  assert.deepEqual(
-    alerts.filter((item) => item.kind === 'CONDITION_MET').map((item) => item.cycle).sort(),
-    [1, 2],
-  );
-  assert.equal(new Set(alerts.map((item) => item.id)).size, alerts.length);
+test('new cycle can emit one new alert while the previous cycle remains rejected', () => {
+  const detected = signal();
+  const watching = applyScannerSignalObservation(detected, observation(), NOW);
+  const ready = applyScannerSignalObservation(watching, observation(), NOW + 1_000);
+  const first = collectScannerReadyAlerts([{ previous: watching, current: ready }], new Set(), NOW + 1_000);
+  const weakened = applyScannerSignalObservation(ready, observation({ approvalCandidate: false }), NOW + 2_000);
+  const cycle2 = startNextScannerSignalCycle(weakened, observation(), NOW + 3_000);
+  const watching2 = applyScannerSignalObservation(cycle2, observation(), NOW + 4_000);
+  const ready2 = applyScannerSignalObservation(watching2, observation(), NOW + 5_000);
+  const second = collectScannerReadyAlerts([{ previous: watching2, current: ready2 }], first.deliveredKeys, NOW + 5_000);
+  assert.equal(second.alerts.length, 1);
+  assert.equal(second.alerts[0].cycle, 2);
+  assert.notEqual(second.alerts[0].id, first.alerts[0].id);
 });
 
-test('wall-clock expiry produces one non-approvable expiry alert', () => {
-  const history = [event(null, 'READY_FOR_APPROVAL', 'SIGNAL_READY', -60_000)];
-  const expiredPlan = plan(history, {
-    signalExpiresAt: new Date(NOW.getTime() - 1_000).toISOString(),
-    approvalExpiresAt: new Date(NOW.getTime() - 1_000).toISOString(),
-  });
-  const alerts = deriveTradeSignalAlerts(expiredPlan, NOW);
-  const expiry = alerts.filter((item) => item.kind === 'SIGNAL_EXPIRED');
-  assert.equal(expiry.length, 1);
-  assert.equal(expiry[0].approvalEnabled, false);
-  assert.equal(expiry[0].approvalReasonCode, 'SIGNAL_EXPIRED');
-});
-
-test('list function merges plans, sorts newest first, and respects the limit', () => {
-  const first = plan([event(null, 'READY_FOR_APPROVAL', 'SIGNAL_READY', -10_000)], { id: 'first' });
-  const second = plan([event(null, 'READY_FOR_APPROVAL', 'SIGNAL_READY', -1_000)], { id: 'second', signalId: 'signal-2' });
-  const alerts = listTradeSignalAlerts([first, second], NOW, 1);
-  assert.equal(alerts.length, 1);
-  assert.equal(alerts[0].planId, 'second');
+test('different users and markets have isolated alert keys', () => {
+  const base = { ...signal(), state: 'READY_FOR_APPROVAL' as const };
+  const member2 = deriveScannerReadyAlert(null, { ...base, ownerId: 'member-2' }, new Set(), NOW);
+  const us = deriveScannerReadyAlert(null, { ...base, market: 'US' }, new Set(), NOW);
+  assert.ok(member2);
+  assert.ok(us);
+  assert.notEqual(member2.id, us.id);
 });
