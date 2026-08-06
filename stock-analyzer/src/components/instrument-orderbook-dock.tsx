@@ -62,26 +62,21 @@ type Payload = {
 
 const POLL_MS = 3_000;
 const TIMEOUT_MS = 8_000;
-const statuses: Status[] = [
-  'ready',
-  'partial',
-  'unavailable',
-  'invalid',
-  'provider_error',
-];
-const assetClasses: AssetClass[] = ['stock', 'crypto_spot', 'crypto_futures'];
-const markets: Market[] = ['KR', 'US', 'UPBIT', 'BITGET'];
-const currencies: Currency[] = ['KRW', 'USD', 'USDT'];
+const ASSET_CLASSES: AssetClass[] = ['stock', 'crypto_spot', 'crypto_futures'];
+const MARKETS: Market[] = ['KR', 'US', 'UPBIT', 'BITGET'];
+const STATUSES: Status[] = ['ready', 'partial', 'unavailable', 'invalid', 'provider_error'];
+const CURRENCIES: Currency[] = ['KRW', 'USD', 'USDT'];
 
-const finite = (value: unknown): number | null => {
+function finite(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
-};
+}
 
-const text = (value: unknown): string | null =>
-  typeof value === 'string' && value.trim() ? value.trim() : null;
+function text(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
 
-function level(value: unknown): Level | null {
+function parseLevel(value: unknown): Level | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
   const rank = finite(row.rank);
@@ -114,16 +109,12 @@ function parsePayload(value: unknown): Payload {
     throw new Error('ORDERBOOK_RESPONSE_INVALID');
   }
   const row = value as Record<string, unknown>;
-  const assetClass = assetClasses.includes(row.assetClass as AssetClass)
+  const assetClass = ASSET_CLASSES.includes(row.assetClass as AssetClass)
     ? row.assetClass as AssetClass
     : null;
-  const market = markets.includes(row.market as Market)
-    ? row.market as Market
-    : null;
-  const status = statuses.includes(row.status as Status)
-    ? row.status as Status
-    : null;
-  const currency = currencies.includes(row.currency as Currency)
+  const market = MARKETS.includes(row.market as Market) ? row.market as Market : null;
+  const status = STATUSES.includes(row.status as Status) ? row.status as Status : null;
+  const currency = CURRENCIES.includes(row.currency as Currency)
     ? row.currency as Currency
     : null;
   const symbol = (text(row.symbol) ?? text(row.ticker) ?? '').toUpperCase();
@@ -132,19 +123,33 @@ function parsePayload(value: unknown): Payload {
   }
 
   const levels = (input: unknown) => Array.isArray(input)
-    ? input.map(level).filter((item): item is Level => item != null)
+    ? input.map(parseLevel).filter((item): item is Level => item != null)
     : [];
   const asks = levels(row.asks);
   const bids = levels(row.bids);
-  const bestAsk = finite(row.bestAsk);
-  const bestBid = finite(row.bestBid);
+  const bestAsk = finite(row.bestAsk) ?? asks[0]?.price ?? null;
+  const bestBid = finite(row.bestBid) ?? bids[0]?.price ?? null;
+  const provider: Provider = row.provider === 'kiwoom'
+    || row.provider === 'upbit'
+    || row.provider === 'bitget'
+    ? row.provider
+    : null;
+  const source: Source = row.source === 'ka10004'
+    || row.source === 'upbit_v1_orderbook'
+    || row.source === 'bitget_v2_mix_market_merge_depth'
+    ? row.source
+    : null;
+  const updatedAtRaw = text(row.updatedAt);
+  const receivedAtRaw = text(row.receivedAt);
+  const warnings = Array.isArray(row.warnings)
+    ? row.warnings
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 20)
+    : [];
 
-  if (
-    row.available === true
-    && bestAsk != null
-    && bestBid != null
-    && bestBid >= bestAsk
-  ) {
+  if (row.available === true && bestAsk != null && bestBid != null && bestBid >= bestAsk) {
     return {
       ok: false,
       available: false,
@@ -154,11 +159,11 @@ function parsePayload(value: unknown): Payload {
       symbol,
       ticker: symbol,
       currency,
-      provider: null,
-      source: null,
+      provider,
+      source,
       sourceTimestampRaw: text(row.sourceTimestampRaw),
       updatedAt: null,
-      receivedAt: text(row.receivedAt) ?? '',
+      receivedAt: receivedAtRaw ?? '',
       freshness: 'unknown',
       stale: true,
       asks: [],
@@ -172,23 +177,10 @@ function parsePayload(value: unknown): Payload {
       totalAskQuantity: null,
       totalBidQuantity: null,
       imbalance: null,
-      warnings: ['교차 호가가 감지되어 클라이언트에서도 표시를 차단했습니다.'],
+      warnings: [...warnings, '교차 호가가 감지되어 클라이언트에서도 표시를 차단했습니다.'],
       reason: 'ORDERBOOK_CROSSED',
     };
   }
-
-  const provider: Provider = row.provider === 'kiwoom'
-    || row.provider === 'upbit'
-    || row.provider === 'bitget'
-    ? row.provider
-    : null;
-  const source: Source = row.source === 'ka10004'
-    || row.source === 'upbit_v1_orderbook'
-    || row.source === 'bitget_v2_mix_market_merge_depth'
-    ? row.source
-    : null;
-  const updatedAt = text(row.updatedAt);
-  const receivedAt = text(row.receivedAt);
 
   return {
     ok: row.ok === true,
@@ -202,8 +194,12 @@ function parsePayload(value: unknown): Payload {
     provider,
     source,
     sourceTimestampRaw: text(row.sourceTimestampRaw),
-    updatedAt: updatedAt && Number.isFinite(Date.parse(updatedAt)) ? updatedAt : null,
-    receivedAt: receivedAt && Number.isFinite(Date.parse(receivedAt)) ? receivedAt : '',
+    updatedAt: updatedAtRaw && Number.isFinite(Date.parse(updatedAtRaw))
+      ? updatedAtRaw
+      : null,
+    receivedAt: receivedAtRaw && Number.isFinite(Date.parse(receivedAtRaw))
+      ? receivedAtRaw
+      : '',
     freshness: row.freshness === 'fresh' || row.freshness === 'stale'
       ? row.freshness
       : 'unknown',
@@ -219,31 +215,29 @@ function parsePayload(value: unknown): Payload {
     totalAskQuantity: finite(row.totalAskQuantity),
     totalBidQuantity: finite(row.totalBidQuantity),
     imbalance: finite(row.imbalance),
-    warnings: Array.isArray(row.warnings)
-      ? row.warnings
-        .filter((item): item is string => typeof item === 'string')
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .slice(0, 20)
-      : [],
+    warnings,
     reason: text(row.reason),
   };
 }
 
-const priceText = (value: number, currency: Currency) => new Intl.NumberFormat(
-  currency === 'KRW' ? 'ko-KR' : 'en-US',
-  currency === 'KRW'
-    ? { maximumFractionDigits: 0 }
-    : currency === 'USD'
-      ? { minimumFractionDigits: 2, maximumFractionDigits: 4 }
-      : { minimumFractionDigits: 0, maximumFractionDigits: 8 },
-).format(value);
+function priceText(value: number, currency: Currency): string {
+  return new Intl.NumberFormat(
+    currency === 'KRW' ? 'ko-KR' : 'en-US',
+    currency === 'KRW'
+      ? { maximumFractionDigits: 0 }
+      : currency === 'USD'
+        ? { minimumFractionDigits: 2, maximumFractionDigits: 4 }
+        : { minimumFractionDigits: 0, maximumFractionDigits: 8 },
+  ).format(value);
+}
 
-const quantityText = (value: number | null) => value == null
-  ? '-'
-  : new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 8 }).format(value);
+function quantityText(value: number | null): string {
+  return value == null
+    ? '-'
+    : new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 8 }).format(value);
+}
 
-const timeText = (value: string | null) => {
+function timeText(value: string | null): string {
   if (!value || !Number.isFinite(Date.parse(value))) return '-';
   return new Intl.DateTimeFormat('ko-KR', {
     timeZone: 'Asia/Seoul',
@@ -254,40 +248,43 @@ const timeText = (value: string | null) => {
     second: '2-digit',
     hour12: false,
   }).format(new Date(value));
-};
+}
 
-const reasonText = (reason: string | null) => ({
-  US_ORDERBOOK_PROVIDER_NOT_CONNECTED: '미국 주식 호가 공급자는 아직 연결되지 않았습니다.',
-  ORDERBOOK_CROSSED: '교차 호가가 감지되어 안전을 위해 표시를 차단했습니다.',
-  ORDERBOOK_LEVELS_EMPTY: '공급자가 유효한 호가 잔량을 반환하지 않았습니다.',
-  ORDERBOOK_PROVIDER_NOT_CONFIGURED: '키움 호가 공급자 설정을 확인할 수 없습니다.',
-  ORDERBOOK_PROVIDER_TIMEOUT: '키움 호가 공급자 응답 시간이 초과되었습니다.',
-  ORDERBOOK_PROVIDER_UNAVAILABLE: '키움 호가 공급자를 사용할 수 없습니다.',
-  UPBIT_ORDERBOOK_PROVIDER_TIMEOUT: 'Upbit 공개 호가 응답 시간이 초과되었습니다.',
-  UPBIT_ORDERBOOK_PROVIDER_UNAVAILABLE: 'Upbit 공개 호가 공급자를 사용할 수 없습니다.',
-  UPBIT_ORDERBOOK_RESPONSE_INVALID: 'Upbit 공개 호가 응답 형식이 올바르지 않습니다.',
-  BITGET_ORDERBOOK_PROVIDER_TIMEOUT: 'Bitget 공개 호가 응답 시간이 초과되었습니다.',
-  BITGET_ORDERBOOK_PROVIDER_UNAVAILABLE: 'Bitget 공개 호가 공급자를 사용할 수 없습니다.',
-  BITGET_ORDERBOOK_PROVIDER_ERROR: 'Bitget 공개 호가 공급자가 오류를 반환했습니다.',
-  BITGET_ORDERBOOK_RESPONSE_INVALID: 'Bitget 공개 호가 응답 형식이 올바르지 않습니다.',
-  INVALID_STOCK_TICKER: '주식 종목 코드 형식이 올바르지 않습니다.',
-  INVALID_ORDERBOOK_TARGET: '호가 조회 대상 형식이 올바르지 않습니다.',
-  ORDERBOOK_RESPONSE_INVALID: '서버 호가 응답 형식이 올바르지 않습니다.',
-  ORDERBOOK_REQUEST_FAILED: '호가 조회 요청에 실패했습니다.',
-}[reason ?? ''] ?? '호가 데이터를 불러올 수 없습니다.');
+function reasonText(reason: string | null): string {
+  return ({
+    US_ORDERBOOK_PROVIDER_NOT_CONNECTED: '미국 주식 호가 공급자는 아직 연결되지 않았습니다.',
+    ORDERBOOK_CROSSED: '교차 호가가 감지되어 안전을 위해 표시를 차단했습니다.',
+    ORDERBOOK_LEVELS_EMPTY: '공급자가 유효한 호가 잔량을 반환하지 않았습니다.',
+    ORDERBOOK_PROVIDER_NOT_CONFIGURED: '키움 호가 공급자 설정을 확인할 수 없습니다.',
+    ORDERBOOK_PROVIDER_TIMEOUT: '키움 호가 공급자 응답 시간이 초과되었습니다.',
+    ORDERBOOK_PROVIDER_UNAVAILABLE: '키움 호가 공급자를 사용할 수 없습니다.',
+    UPBIT_ORDERBOOK_PROVIDER_TIMEOUT: 'Upbit 공개 호가 응답 시간이 초과되었습니다.',
+    UPBIT_ORDERBOOK_PROVIDER_UNAVAILABLE: 'Upbit 공개 호가 공급자를 사용할 수 없습니다.',
+    UPBIT_ORDERBOOK_RESPONSE_INVALID: 'Upbit 공개 호가 응답 형식이 올바르지 않습니다.',
+    BITGET_ORDERBOOK_PROVIDER_TIMEOUT: 'Bitget 공개 호가 응답 시간이 초과되었습니다.',
+    BITGET_ORDERBOOK_PROVIDER_UNAVAILABLE: 'Bitget 공개 호가 공급자를 사용할 수 없습니다.',
+    BITGET_ORDERBOOK_PROVIDER_ERROR: 'Bitget 공개 호가 공급자가 오류를 반환했습니다.',
+    BITGET_ORDERBOOK_RESPONSE_INVALID: 'Bitget 공개 호가 응답 형식이 올바르지 않습니다.',
+    INVALID_STOCK_TICKER: '주식 종목 코드 형식이 올바르지 않습니다.',
+    INVALID_ORDERBOOK_TARGET: '호가 조회 대상 형식이 올바르지 않습니다.',
+    ORDERBOOK_RESPONSE_INVALID: '서버 호가 응답 형식이 올바르지 않습니다.',
+    ORDERBOOK_REQUEST_TIMEOUT: '호가 조회 요청 시간이 초과되었습니다.',
+    ORDERBOOK_REQUEST_FAILED: '호가 조회 요청에 실패했습니다.',
+  }[reason ?? ''] ?? '호가 데이터를 불러올 수 없습니다.');
+}
 
-const providerText = (data: Payload | null) => {
+function providerText(data: Payload | null): string {
   if (data?.provider === 'kiwoom') return '키움 ka10004';
   if (data?.provider === 'upbit') return 'Upbit 공개 REST';
   if (data?.provider === 'bitget') return 'Bitget 공개 REST';
   return '미연결';
-};
+}
 
-const marketText = (assetClass: AssetClass, market: Market) => {
+function marketText(assetClass: AssetClass, market: Market): string {
   if (assetClass === 'crypto_spot') return 'Upbit 코인 현물 · KRW';
   if (assetClass === 'crypto_futures') return 'Bitget 코인 선물 · USDT';
   return market === 'KR' ? 'KRX 국내주식 · KRW' : '미국주식 · USD';
-};
+}
 
 function LevelRow({
   item,
@@ -355,6 +352,7 @@ export function InstrumentOrderbookDock({
   const timer = useRef<number | null>(null);
   const lastGood = useRef<Payload | null>(null);
   const wasOpen = useRef(defaultOpen);
+  const loadRef = useRef<() => Promise<void>>(async () => undefined);
   const [open, setOpen] = useState(defaultOpen);
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -368,21 +366,25 @@ export function InstrumentOrderbookDock({
     timer.current = null;
   }, []);
 
-  const schedule = useCallback((callback: () => void) => {
+  const schedule = useCallback(() => {
     if (document.visibilityState !== 'visible') return;
     if (timer.current != null) window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(callback, POLL_MS);
+    timer.current = window.setTimeout(() => void loadRef.current(), POLL_MS);
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<void> => {
     if (timer.current != null) window.clearTimeout(timer.current);
     controller.current?.abort();
     const request = new AbortController();
     controller.current = request;
     const current = ++sequence.current;
+    let timedOut = false;
     setLoading(true);
     setError(null);
-    const timeout = window.setTimeout(() => request.abort(), TIMEOUT_MS);
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      request.abort();
+    }, TIMEOUT_MS);
 
     try {
       const query = new URLSearchParams({ assetClass, market, symbol });
@@ -410,14 +412,18 @@ export function InstrumentOrderbookDock({
         setData(next);
       }
 
-      if (next.status !== 'unavailable') {
-        schedule(() => void load());
-      }
+      if (next.status !== 'unavailable') schedule();
     } catch (caught) {
-      if (!request.signal.aborted && current === sequence.current) {
-        setError(caught instanceof Error ? caught.message : 'ORDERBOOK_REQUEST_FAILED');
-        schedule(() => void load());
-      }
+      if (current !== sequence.current) return;
+      if (request.signal.aborted && !timedOut) return;
+      setError(
+        timedOut
+          ? 'ORDERBOOK_REQUEST_TIMEOUT'
+          : caught instanceof Error
+            ? caught.message
+            : 'ORDERBOOK_REQUEST_FAILED',
+      );
+      schedule();
     } finally {
       window.clearTimeout(timeout);
       if (current === sequence.current) {
@@ -426,6 +432,10 @@ export function InstrumentOrderbookDock({
       }
     }
   }, [assetClass, market, schedule, symbol]);
+
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
 
   useEffect(() => {
     stop();
@@ -439,17 +449,17 @@ export function InstrumentOrderbookDock({
       stop();
       return;
     }
-    void load();
+    void loadRef.current();
     const visibility = () => {
       if (document.visibilityState === 'hidden') stop();
-      else void load();
+      else void loadRef.current();
     };
     document.addEventListener('visibilitychange', visibility);
     return () => {
       document.removeEventListener('visibilitychange', visibility);
       stop();
     };
-  }, [load, open, stop]);
+  }, [open, stop, targetKey]);
 
   useEffect(() => {
     if (!open) {
@@ -524,9 +534,9 @@ export function InstrumentOrderbookDock({
         aria-expanded={open}
         className="fixed bottom-[calc(env(safe-area-inset-bottom)+4.75rem)] right-4 z-40 inline-flex min-h-11 items-center gap-2 rounded-full border border-border bg-background/95 px-4 py-2 text-sm font-semibold shadow-lg backdrop-blur hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <BookOpen className="h-4 w-4" aria-hidden />
-        호가창
+        <BookOpen className="h-4 w-4" aria-hidden />호가창
       </button>
+
       {open ? (
         <div
           onMouseDown={backdrop}
@@ -556,7 +566,7 @@ export function InstrumentOrderbookDock({
               <div className="flex shrink-0 items-center gap-1">
                 <button
                   type="button"
-                  onClick={() => void load()}
+                  onClick={() => void loadRef.current()}
                   disabled={loading}
                   aria-label="호가 새로고침"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-full hover:bg-accent disabled:opacity-50"
@@ -593,15 +603,11 @@ export function InstrumentOrderbookDock({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className={cn(
                     'font-medium',
-                    data?.freshness === 'fresh' && !error
-                      ? 'text-emerald-600'
-                      : 'text-amber-600',
+                    data?.freshness === 'fresh' && !error ? 'text-emerald-600' : 'text-amber-600',
                   )}>
                     {error && hasLevels ? '갱신 실패 · 마지막 정상 데이터' : freshness}
                   </span>
-                  <span className="text-muted-foreground">
-                    공급자 시각 {timeText(data?.updatedAt ?? null)}
-                  </span>
+                  <span className="text-muted-foreground">공급자 시각 {timeText(data?.updatedAt ?? null)}</span>
                 </div>
                 <div className="mt-1 text-[11px] text-muted-foreground">
                   서버 수신 {timeText(data?.receivedAt || null)}
@@ -618,7 +624,7 @@ export function InstrumentOrderbookDock({
                       <p className="mt-1 text-muted-foreground">{reasonText(error)}</p>
                       <button
                         type="button"
-                        onClick={() => void load()}
+                        onClick={() => void loadRef.current()}
                         className="mt-3 min-h-10 rounded-lg border border-border px-3 font-medium hover:bg-accent"
                       >
                         다시 시도
@@ -658,13 +664,7 @@ export function InstrumentOrderbookDock({
                   </div>
                   <div aria-label="매도 호가">
                     {data.asks.slice().reverse().map((item) => (
-                      <LevelRow
-                        key={`a-${item.rank}-${item.price}`}
-                        item={item}
-                        side="ask"
-                        currency={data.currency}
-                        max={max}
-                      />
+                      <LevelRow key={`a-${item.rank}-${item.price}`} item={item} side="ask" currency={data.currency} max={max} />
                     ))}
                   </div>
                   <div className="grid grid-cols-2 gap-px border-y border-border bg-border text-xs">
@@ -683,13 +683,7 @@ export function InstrumentOrderbookDock({
                   </div>
                   <div aria-label="매수 호가">
                     {data.bids.map((item) => (
-                      <LevelRow
-                        key={`b-${item.rank}-${item.price}`}
-                        item={item}
-                        side="bid"
-                        currency={data.currency}
-                        max={max}
-                      />
+                      <LevelRow key={`b-${item.rank}-${item.price}`} item={item} side="bid" currency={data.currency} max={max} />
                     ))}
                   </div>
                 </section>
