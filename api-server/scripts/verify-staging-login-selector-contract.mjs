@@ -77,9 +77,14 @@ assert(spec.includes("'[redacted-token]'"), 'JWT-like tokens must be redacted fr
 assert(spec.includes("'[redacted-key]'"), 'Supabase-style keys must be redacted from diagnostic details');
 assert(spec.includes("'$1[redacted]'"), 'named password, token, secret, and key values must be redacted');
 
-assert(spec.includes('for (let pass = 0; pass < 2; pass += 1)'), 'network settlement must require two quiet passes');
-assert(spec.includes("await page.waitForLoadState('networkidle', { timeout: 30_000 });"), 'network settlement must fail instead of swallowing a timeout');
-assert(!spec.includes("waitForLoadState('networkidle', { timeout: 20_000 }).catch"), 'network-idle timeouts must not be ignored');
+assert(spec.includes('async function waitForPresentationFrame(page: Page)'), 'presentation-frame readiness helper is missing');
+assert(spec.includes("await page.waitForLoadState('load');"), 'route settlement must require the browser load event');
+assert(spec.includes('requestAnimationFrame(() => requestAnimationFrame(() => resolve()));'), 'route settlement must wait for two browser presentation frames');
+assert(spec.includes('for (let pass = 0; pass < 2; pass += 1)'), 'presentation settlement must require two stable passes');
+assert(spec.includes("expect(page.url(), 'route changed while presentation was settling').toBe(urlBeforeFrame);"), 'each presentation pass must prove the route stayed stable');
+assert(spec.includes("await expect(page.locator('body')).toBeVisible();"), 'each presentation pass must prove the rendered body is visible');
+assert(!spec.includes("waitForLoadState('networkidle'"), 'polling and bounded provider requests must not be treated as a route-readiness failure');
+assert(!spec.includes('.catch(() => undefined)'), 'route settlement failures must not be swallowed');
 assert(
   spec.indexOf('await settle(page);\n  const response = await page.goto(route') >= 0,
   'healthy route navigation must settle the previous page before leaving it',
@@ -163,4 +168,4 @@ assert(
 assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must synchronously invalidate session identity');
 assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session identity and profile cleanup finish');
 
-console.log('[staging-login-selector-contract] logout and route-transition candidate classification, current-session profile guard, diagnostic redaction, optional provider degradation, and navigation stability are locked down');
+console.log('[staging-login-selector-contract] logout and route-transition candidate classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');
