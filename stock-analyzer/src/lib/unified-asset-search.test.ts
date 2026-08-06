@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { prioritizeUnifiedAssetSuggestions } from './unified-asset-search-priority';
-import type { UnifiedAssetSuggestion } from './unified-asset-search';
+import { unifiedAssetDetailPath, type UnifiedAssetSuggestion } from './unified-asset-search';
 
 const now = '2026-08-04T07:00:00.000Z';
 
@@ -27,6 +27,12 @@ function suggestion(input: Partial<UnifiedAssetSuggestion> & Pick<UnifiedAssetSu
     provider: input.provider ?? 'fixture',
     dataAsOf: input.dataAsOf ?? now,
   };
+}
+
+function detailParams(item: UnifiedAssetSuggestion, backPath?: string) {
+  const value = unifiedAssetDetailPath(item, backPath);
+  const [pathname, query = ''] = value.split('?');
+  return { pathname, params: new URLSearchParams(query) };
 }
 
 test('never lets preference priority cross strict match categories', () => {
@@ -63,6 +69,36 @@ test('keeps the original server order when preferences are equal', () => {
   const second = suggestion({ id: 'second', market: 'US', productCode: 'AAB', ticker: 'AAB', displayName: 'Alpha Beta', matchType: 'name_prefix' });
   const result = prioritizeUnifiedAssetSuggestions([first, second]);
   assert.deepEqual(result.map((item) => item.id), ['first', 'second']);
+});
+
+test('uses the stock-info detail contract for Korean and US stocks', () => {
+  for (const item of [
+    suggestion({ id: 'kr', market: 'KR', productCode: '005930', ticker: '005930', displayName: '삼성전자', matchType: 'code_exact' }),
+    suggestion({ id: 'us', market: 'US', productCode: 'BRK.B', ticker: 'BRK.B', displayName: 'Berkshire Hathaway', matchType: 'code_exact' }),
+  ]) {
+    const { pathname, params } = detailParams(item, '/stocks');
+    assert.equal(pathname, '/stock-info');
+    assert.equal(params.get('asset'), 'stock');
+    assert.equal(params.get('market'), item.market);
+    assert.equal(params.get('ticker'), item.ticker);
+    assert.equal(params.get('back'), '/stocks');
+  }
+});
+
+test('keeps Upbit spot and Bitget futures detail identities separate', () => {
+  const spot = suggestion({ id: 'spot-detail', market: 'spot', productCode: 'KRW-BTC', symbol: 'BTC', baseSymbol: 'BTC', displayName: '비트코인 현물', matchType: 'code_exact' });
+  const futures = suggestion({ id: 'futures-detail', market: 'futures', productCode: 'BTCUSDT', symbol: 'BTCUSDT', baseSymbol: 'BTC', displayName: '비트코인 선물', matchType: 'code_exact' });
+  const spotPath = detailParams(spot);
+  const futuresPath = detailParams(futures);
+
+  assert.equal(spotPath.pathname, '/stock-info');
+  assert.equal(spotPath.params.get('asset'), 'coin');
+  assert.equal(spotPath.params.get('coinMarket'), 'spot');
+  assert.equal(spotPath.params.get('symbol'), 'BTC');
+  assert.equal(futuresPath.pathname, '/stock-info');
+  assert.equal(futuresPath.params.get('asset'), 'coin');
+  assert.equal(futuresPath.params.get('coinMarket'), 'futures');
+  assert.equal(futuresPath.params.get('symbol'), 'BTCUSDT');
 });
 
 test('application routes keep unified search separate from rankings and the legacy browser', () => {
