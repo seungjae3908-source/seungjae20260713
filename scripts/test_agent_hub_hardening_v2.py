@@ -171,6 +171,7 @@ def test_workflow_contracts() -> int:
     root = Path(__file__).resolve().parents[1]
     free = (root / ".github/workflows/agent-hub-free.yml").read_text(encoding="utf-8")
     executor = (root / ".github/workflows/agent-hub-executor.yml").read_text(encoding="utf-8")
+    pinned_checkout = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
     assert "agent_hub_coordinator_hardening_v2.py" in free
     assert "agent_hub_executor_gate_hardening_v2.py" in executor
     assert "agent_hub_executor_safety_v2.py validate-diff" in executor
@@ -193,7 +194,7 @@ def test_workflow_contracts() -> int:
     process_permission_lines = tuple(line.strip() for line in process_report_permissions.splitlines() if line.strip())
     assert process_permission_lines == ("actions: read", "contents: write", "issues: write", "pull-requests: read")
     assert "github.event_name == 'pull_request'" not in process_report.split("\n    permissions:", 1)[0]
-    process_checkout = process_report.split("- uses: actions/checkout@v6", 1)[1].split("- name: Coordinate", 1)[0]
+    process_checkout = process_report.split(f"- uses: {pinned_checkout}", 1)[1].split("- name: Coordinate", 1)[0]
     assert "ref: main" in process_checkout and "persist-credentials: false" in process_checkout
     wake_step = process_report.split("- name: Wake controlled executor only for validated ready command", 1)[1]
     assert 'gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type=\'agent-hub-command-ready\'' in wake_step
@@ -204,7 +205,7 @@ def test_workflow_contracts() -> int:
     execute_permission_lines = tuple(line.strip() for line in execute_permissions.splitlines() if line.strip())
     assert execute_permission_lines == ("actions: read", "contents: write", "issues: write", "pull-requests: write")
     assert "github.event_name == 'pull_request'" not in execute.split("\n    permissions:", 1)[0]
-    execute_checkout = execute.split("- uses: actions/checkout@v6", 1)[1].split("- name: Reject tracked Gemini configuration", 1)[0]
+    execute_checkout = execute.split(f"- uses: {pinned_checkout}", 1)[1].split("- name: Reject tracked Gemini configuration", 1)[0]
     assert "ref: main" in execute_checkout and "persist-credentials: false" in execute_checkout
     commit_step = execute.split("- name: Commit and push one isolated commit", 1)[1].split("- name: Open or validate owned Draft PR only", 1)[0]
     assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in commit_step
@@ -229,7 +230,7 @@ def test_workflow_contracts() -> int:
     for pattern in forbidden_patterns:
         assert pattern not in free + executor, pattern
     assert "types: [agent-hub-command-ready]" in executor
-    return 38
+    return 40
 
 
 def run() -> int:
