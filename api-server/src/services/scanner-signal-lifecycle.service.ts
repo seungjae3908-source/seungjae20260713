@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { enrichScannerMarketAction } from './scanner-market-action.service';
+import { applyScannerApprovalSafety } from './scanner-market-approval-safety.service';
 import type {
   ScannerAlertCandidate,
   ScannerSignalCard,
@@ -68,6 +69,9 @@ function alertFrom(card: ScannerSignalCard, idempotencyKey: string): ScannerAler
     || !card.regime
     || !card.modelVersion
     || !card.performanceKey
+    || !card.approvalPolicyVersion
+    || !card.approvalPolicyStatus
+    || !card.chaseRisk
   ) return null;
   return {
     idempotencyKey,
@@ -83,6 +87,10 @@ function alertFrom(card: ScannerSignalCard, idempotencyKey: string): ScannerAler
     regime: card.regime,
     modelVersion: card.modelVersion,
     performanceKey: card.performanceKey,
+    approvalPolicyVersion: card.approvalPolicyVersion,
+    approvalPolicyStatus: card.approvalPolicyStatus,
+    chaseRisk: card.chaseRisk,
+    requiresExistingPosition: card.requiresExistingPosition === true,
     state: 'READY_FOR_APPROVAL',
     entryZone: card.pricePlan.entryZone,
     stopLoss: card.pricePlan.stopLoss,
@@ -112,7 +120,7 @@ export function applyScannerSignalLifecycle(
 
   const alerts: ScannerAlertCandidate[] = [];
   const updated = cards.map((rawCard) => {
-    const card = enrichScannerMarketAction(rawCard);
+    const card = applyScannerApprovalSafety(enrichScannerMarketAction(rawCard), now);
     const baseSignalId = card.signalId;
     const key = lifecycleKey(memberId, baseSignalId);
     const existing = records.get(key);
