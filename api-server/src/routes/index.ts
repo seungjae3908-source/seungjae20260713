@@ -89,8 +89,9 @@ router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
 router.use('/trade-automation', tradeAutomationRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
-// Normalized read-only orderbook is registered before legacy stock/provider routes.
-router.use('/stocks', stockOrderbookRouter);
+// Canonical normalized read-only orderbook serves stocks, Upbit spot and
+// Bitget futures from one response contract before legacy provider routes.
+router.use('/', stockOrderbookRouter);
 router.use('/', aiChatRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
