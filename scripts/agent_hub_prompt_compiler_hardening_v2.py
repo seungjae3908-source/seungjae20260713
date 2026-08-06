@@ -39,6 +39,29 @@ def _blocks(prompt: str) -> dict[str, str]:
     return blocks
 
 
+def _compiler_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve an explicit empty changed_files fact as model evidence.
+
+    The schema distinguishes a missing changed_files field from a present empty list.
+    The base compiler only emits evidence for non-empty paths, so without this adapter
+    a valid no-PR/read-only continuation is incorrectly reported as missing evidence.
+    The sentinel is prompt-only; compact state and policy evaluation retain the actual
+    empty list from the original report.
+    """
+    prepared = dict(fields)
+    if "changed_files" not in fields:
+        return prepared
+    value = fields.get("changed_files")
+    if isinstance(value, (list, tuple, set)):
+        empty = not any(str(item).strip() for item in value)
+    else:
+        text = str(value or "").strip().lower()
+        empty = text in {"", "none", "[]"}
+    if empty:
+        prepared["changed_files"] = ["(none reported; explicit empty list)"]
+    return prepared
+
+
 def compile_prompt(
     *,
     fields: Mapping[str, Any],
@@ -51,7 +74,7 @@ def compile_prompt(
     maximum_context_size: int = 16000,
 ) -> HardenedCompiledPrompt:
     compiled = base.compile_prompt(
-        fields=fields,
+        fields=_compiler_fields(fields),
         sanitized_report=sanitized_report,
         allowed_action_types=allowed_action_types,
         registered_workers=registered_workers,
@@ -115,11 +138,29 @@ def self_test() -> int:
     assert same.previous_state == first.current_state and same.state_delta == {}
     changed = compile_prompt(fields={**fields,"head_sha":"c"*40,"status":"completed"}, sanitized_report="success", allowed_action_types=("analyze_conflicts",), registered_workers=("integration-planner",), policy_version="v4", comments=comments)
     assert set(changed.state_delta) == {"head_sha","status"}
+    empty_files = compile_prompt(
+        fields={**fields, "worker":"test-runner", "pr_number":"none", "changed_files":[]},
+        sanitized_report="success",
+        allowed_action_types=("report_results",),
+        registered_workers=("test-runner",),
+        policy_version="v4",
+    )
+    assert "changed_files" not in empty_files.missing_required
+    assert empty_files.current_state.changed_files == ()
+    assert any(item.category == "changed_files" and "explicit empty list" in item.content for item in empty_files.evidence)
+    missing_files = compile_prompt(
+        fields={key:value for key,value in fields.items() if key != "changed_files"} | {"worker":"test-runner"},
+        sanitized_report="success",
+        allowed_action_types=("report_results",),
+        registered_workers=("test-runner",),
+        policy_version="v4",
+    )
+    assert "changed_files" in missing_files.missing_required
     assert all(changed.prompt.count(f"[{name}]") == 1 for name in base.BLOCK_NAMES)
     assert '"state_delta"' in changed.prompt
     assert '"previous_state"' not in changed.prompt and '"current_state"' not in changed.prompt
     assert changed.previous_state == first.current_state and changed.current_state.head_sha == "c"*40
-    print(json.dumps({"prompt_state_hardening_v2":"pass","blocks":5,"delta_only_prompt":True,"empty_delta":True,"changed_delta":sorted(changed.state_delta)}))
+    print(json.dumps({"prompt_state_hardening_v2":"pass","blocks":5,"delta_only_prompt":True,"empty_delta":True,"explicit_empty_changed_files":True,"missing_changed_files_rejected":True,"changed_delta":sorted(changed.state_delta)}))
     return 0
 
 if __name__ == "__main__":
