@@ -10,6 +10,44 @@ const candles = Array.from({ length: 48 }, (_, index) => ({
   isClosed: index < 47,
 }));
 
+type SelectionFixture = {
+  assetType: 'stock';
+  market: 'KR';
+  symbol: string;
+  ticker: string;
+  displayName: string;
+  timeframe: string;
+  selectedAt: string;
+};
+
+const selection: SelectionFixture = {
+  assetType: 'stock',
+  market: 'KR',
+  symbol: '005930',
+  ticker: '005930',
+  displayName: '삼성전자',
+  timeframe: '5m',
+  selectedAt: '2026-08-06T07:00:00.000Z',
+};
+
+const initialUrl = '/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m';
+const syncId = 'e2e-session';
+const pairId = 'e2e-pair';
+const externalUrl = `${initialUrl}&chartWindow=external&chartSync=${syncId}&chartPair=${pairId}`;
+const channelName = `stock-app-ai-chart-window-v2:${syncId}:${pairId}`;
+
+type RuntimeObservation = {
+  consoleErrors: string[];
+  pageErrors: string[];
+  unexpectedHttp: string[];
+  apiMutations: string[];
+  orderRequests: string[];
+  accountPositionRequests: string[];
+  pages: Page[];
+};
+
+type MessagePayload = Record<string, unknown>;
+
 async function mockChartApis(context: BrowserContext) {
   await context.route('**/api/stocks/*/chart**', (route) => route.fulfill({
     status: 200,
@@ -18,10 +56,15 @@ async function mockChartApis(context: BrowserContext) {
       ticker: '005930',
       timeframe: new URL(route.request().url()).searchParams.get('tf') ?? '5m',
       provider: 'external-window-fixture',
-      fetchedAt: '2026-08-04T15:00:00.000Z',
-      updatedAt: '2026-08-04T15:00:00.000Z',
+      fetchedAt: '2026-08-06T07:00:00.000Z',
+      updatedAt: '2026-08-06T07:00:00.000Z',
       candles,
     }),
+  }));
+  await context.route('**/api/stocks/*/candles**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ candles }),
   }));
   await context.route('**/api/quotes**', (route) => route.fulfill({
     status: 200,
@@ -30,56 +73,129 @@ async function mockChartApis(context: BrowserContext) {
   }));
 }
 
-function observeRuntime(context: BrowserContext, pages: Page[]) {
-  const consoleErrors: string[] = [];
-  const pageErrors: string[] = [];
-  const unexpectedHttp: string[] = [];
-  const forbiddenRequests: string[] = [];
-  const orderLike = /\/(orders?|cancel|accounts?|positions?|auto-trad|trade-automation)(?:\/|\?|$)/i;
-
-  context.on('page', (opened) => {
-    pages.push(opened);
-    opened.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text());
+async function installUnhandledCapture(context: BrowserContext) {
+  await context.addInitScript(() => {
+    const store = globalThis as typeof globalThis & { __chartUnhandled?: string[] };
+    store.__chartUnhandled = [];
+    globalThis.addEventListener('unhandledrejection', (event) => {
+      store.__chartUnhandled?.push(String(event.reason));
     });
-    opened.on('pageerror', (error) => pageErrors.push(error.message));
   });
-  context.on('response', (response) => {
-    if (response.status() >= 400) unexpectedHttp.push(`${response.status()} ${response.url()}`);
-  });
-  context.on('request', (request) => {
-    if (request.method() !== 'GET' && orderLike.test(request.url())) {
-      forbiddenRequests.push(`${request.method()} ${request.url()}`);
-    }
-  });
-
-  return { consoleErrors, pageErrors, unexpectedHttp, forbiddenRequests };
 }
 
-const initialUrl = '/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m';
-
-test('desktop AI chart opens one synchronized external window and cleans it up', async ({ page, context }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await mockChartApis(context);
-  const pages = [page];
-  const runtime = observeRuntime(context, pages);
-  page.on('console', (message) => {
-    if (message.type() === 'error') runtime.consoleErrors.push(message.text());
+function observeRuntime(context: BrowserContext, page: Page): RuntimeObservation {
+  const runtime: RuntimeObservation = {
+    consoleErrors: [],
+    pageErrors: [],
+    unexpectedHttp: [],
+    apiMutations: [],
+    orderRequests: [],
+    accountPositionRequests: [],
+    pages: [page],
+  };
+  const attach = (opened: Page) => {
+    if (!runtime.pages.includes(opened)) runtime.pages.push(opened);
+    opened.on('console', (message) => {
+      if (message.type() === 'error') runtime.consoleErrors.push(message.text());
+    });
+    opened.on('pageerror', (error) => runtime.pageErrors.push(error.message));
+  };
+  attach(page);
+  context.on('page', attach);
+  context.on('response', (response) => {
+    if (response.status() >= 400) runtime.unexpectedHttp.push(`${response.status()} ${response.url()}`);
   });
-  page.on('pageerror', (error) => runtime.pageErrors.push(error.message));
+  context.on('request', (request) => {
+    const url = request.url();
+    if (request.method() !== 'GET' && /\/api\//i.test(url)) runtime.apiMutations.push(`${request.method()} ${url}`);
+    if (/\/(orders?|cancel|auto-trad|trade-automation)(?:\/|\?|$)/i.test(url)) {
+      runtime.orderRequests.push(`${request.method()} ${url}`);
+    }
+    if (/\/(accounts?|positions?)(?:\/|\?|$)/i.test(url)) {
+      runtime.accountPositionRequests.push(`${request.method()} ${url}`);
+    }
+  });
+  return runtime;
+}
+
+async function assertCleanRuntime(runtime: RuntimeObservation) {
+  const unhandled: string[] = [];
+  for (const page of runtime.pages) {
+    if (page.isClosed()) continue;
+    const rows = await page.evaluate(() => {
+      const store = globalThis as typeof globalThis & { __chartUnhandled?: string[] };
+      return store.__chartUnhandled ?? [];
+    });
+    unhandled.push(...rows);
+  }
+  expect(runtime.consoleErrors).toEqual([]);
+  expect(runtime.pageErrors).toEqual([]);
+  expect(unhandled).toEqual([]);
+  expect(runtime.unexpectedHttp).toEqual([]);
+  expect(runtime.apiMutations).toEqual([]);
+  expect(runtime.orderRequests).toEqual([]);
+  expect(runtime.accountPositionRequests).toEqual([]);
+}
+
+async function postChannelMessage(page: Page, payload: MessagePayload) {
+  await page.evaluate(async ({ channelName: name, message }) => {
+    const channel = new BroadcastChannel(name);
+    channel.postMessage(message);
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+    channel.close();
+  }, { channelName, message: payload });
+}
+
+function mainMessage(input: {
+  type: 'ready' | 'closed' | 'selection';
+  sourceId: string;
+  sequence: number;
+  sentAt: number;
+  selectionOverride?: Partial<typeof selection>;
+  sessionId?: string;
+  pairId?: string;
+  origin: string;
+}): MessagePayload {
+  const base: MessagePayload = {
+    version: 2,
+    type: input.type,
+    sessionId: input.sessionId ?? syncId,
+    pairId: input.pairId ?? pairId,
+    sourceId: input.sourceId,
+    sourceRole: 'main',
+    origin: input.origin,
+    sequence: input.sequence,
+    sentAt: input.sentAt,
+  };
+  if (input.type === 'selection') {
+    base.selection = { ...selection, ...input.selectionOverride };
+  }
+  return base;
+}
+
+test('desktop opens one external chart, synchronizes both directions, focuses the existing window, and cleans up', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installUnhandledCapture(context);
+  await mockChartApis(context);
+  const runtime = observeRuntime(context, page);
 
   await page.goto(initialUrl);
   await expect(page.getByRole('heading', { name: 'AI 차트 분석기', exact: true })).toBeVisible();
   const externalButton = page.getByRole('button', { name: '외부 창', exact: true });
   await expect(externalButton).toBeVisible();
+  await expect(externalButton).toBeEnabled();
 
   const popupPromise = context.waitForEvent('page');
+  await externalButton.click();
   await externalButton.click();
   const popup = await popupPromise;
   await popup.waitForLoadState('domcontentloaded');
   await expect(popup).toHaveURL(/chartWindow=external/);
+  await expect(popup).toHaveURL(/chartSync=/);
+  await expect(popup).toHaveURL(/chartPair=/);
   await expect(popup.getByRole('heading', { name: 'AI 차트 분석기 · 외부 창', exact: true })).toBeVisible();
   await expect(popup.getByRole('button', { name: '외부 창', exact: true })).toHaveCount(0);
+  await expect.poll(() => context.pages().filter((candidate) => !candidate.isClosed()).length).toBe(2);
 
   await page.getByRole('button', { name: '15분', exact: true }).click();
   await expect(popup).toHaveURL(/timeframe=15m/);
@@ -91,26 +207,123 @@ test('desktop AI chart opens one synchronized external window and cleans it up',
   await expect.poll(() => context.pages().length).toBe(pageCount);
   await expect(page.getByRole('status')).toContainText('이미 열린 외부 차트 창');
 
+  await popup.reload();
+  await expect(popup.getByRole('heading', { name: 'AI 차트 분석기 · 외부 창', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '5분', exact: true }).click();
+  await expect(popup).toHaveURL(/timeframe=5m/);
+
   await popup.close();
   await expect(page.getByRole('status')).toContainText('외부 차트 창이 닫혔습니다.');
-
-  expect(runtime.consoleErrors).toEqual([]);
-  expect(runtime.pageErrors).toEqual([]);
-  expect(runtime.unexpectedHttp).toEqual([]);
-  expect(runtime.forbiddenRequests).toEqual([]);
+  await assertCleanRuntime(runtime);
 });
 
-test('mobile AI chart does not render the external-window control', async ({ page, context }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await mockChartApis(context);
-  await page.goto(initialUrl);
-  await expect(page.getByRole('heading', { name: 'AI 차트 분석기', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '외부 창', exact: true })).toHaveCount(0);
-});
-
-test('popup blocking is reported without creating a second chart context', async ({ page, context }) => {
+test('strict session, origin, order, close, replacement, and simultaneous-update gates preserve the newest atomic selection', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
+  await installUnhandledCapture(context);
   await mockChartApis(context);
+  const runtime = observeRuntime(context, page);
+  await page.goto(externalUrl);
+  await expect(page.getByRole('heading', { name: 'AI 차트 분석기 · 외부 창', exact: true })).toBeVisible();
+  const origin = new URL(page.url()).origin;
+  const base = Date.now();
+
+  await postChannelMessage(page, mainMessage({ type: 'ready', sourceId: 'main-a', sequence: 1, sentAt: base + 10, origin }));
+  await postChannelMessage(page, mainMessage({
+    type: 'selection', sourceId: 'main-a', sequence: 2, sentAt: base + 100, origin,
+    selectionOverride: { timeframe: '15m' },
+  }));
+  await expect(page).toHaveURL(/timeframe=15m/);
+  const acceptedUrl = page.url();
+
+  const blocked: MessagePayload[] = [
+    mainMessage({ type: 'selection', sourceId: 'main-a', sequence: 1, sentAt: base + 90, origin, selectionOverride: { timeframe: '5m' } }),
+    mainMessage({ type: 'selection', sourceId: 'main-a', sequence: 3, sentAt: base - 31_000, origin, selectionOverride: { timeframe: '5m' } }),
+    mainMessage({ type: 'selection', sourceId: 'main-a', sequence: 3, sentAt: base + 6_000, origin, selectionOverride: { timeframe: '5m' } }),
+    mainMessage({ type: 'selection', sourceId: 'main-a', sequence: 3, sentAt: base + 120, origin: 'https://evil.example.test', selectionOverride: { timeframe: '5m' } }),
+    mainMessage({ type: 'selection', sourceId: 'main-a', sequence: 3, sentAt: base + 130, origin, sessionId: 'other-session', selectionOverride: { timeframe: '5m' } }),
+    mainMessage({ type: 'selection', sourceId: 'main-a', sequence: 3, sentAt: base + 140, origin, pairId: 'other-pair', selectionOverride: { timeframe: '5m' } }),
+    { ...mainMessage({ type: 'selection', sourceId: 'main-a', sequence: 3, sentAt: base + 150, origin, selectionOverride: { timeframe: '5m' } }), sentAt: String(base + 150) },
+    { ...mainMessage({ type: 'selection', sourceId: 'main-a', sequence: 3, sentAt: base + 160, origin, selectionOverride: { timeframe: '5m' } }), sentAt: Number.NaN },
+    { ...mainMessage({ type: 'selection', sourceId: 'main-a', sequence: 3, sentAt: base + 170, origin, selectionOverride: { timeframe: '5m' } }), type: 'order' },
+    { version: 2, type: 'selection' },
+    mainMessage({ type: 'selection', sourceId: 'unknown-main', sequence: 1, sentAt: base + 180, origin, selectionOverride: { timeframe: '5m' } }),
+  ];
+  for (const payload of blocked) await postChannelMessage(page, payload);
+  await expect(page).toHaveURL(acceptedUrl);
+
+  await postChannelMessage(page, mainMessage({ type: 'closed', sourceId: 'main-a', sequence: 3, sentAt: base + 200, origin }));
+  await postChannelMessage(page, mainMessage({
+    type: 'selection', sourceId: 'main-a', sequence: 4, sentAt: base + 210, origin,
+    selectionOverride: { timeframe: '5m' },
+  }));
+  await expect(page).toHaveURL(acceptedUrl);
+
+  await postChannelMessage(page, mainMessage({ type: 'ready', sourceId: 'main-b', sequence: 1, sentAt: base + 300, origin }));
+  await postChannelMessage(page, mainMessage({
+    type: 'selection', sourceId: 'main-b', sequence: 2, sentAt: base + 400, origin,
+    selectionOverride: { timeframe: '30m' },
+  }));
+  await expect(page).toHaveURL(/timeframe=30m/);
+  await postChannelMessage(page, mainMessage({ type: 'ready', sourceId: 'main-a', sequence: 99, sentAt: base + 500, origin }));
+  await postChannelMessage(page, mainMessage({
+    type: 'selection', sourceId: 'main-a', sequence: 100, sentAt: base + 510, origin,
+    selectionOverride: { timeframe: '5m' },
+  }));
+  await expect(page).toHaveURL(/timeframe=30m/);
+
+  await Promise.all([
+    page.getByRole('button', { name: '15분', exact: true }).click(),
+    postChannelMessage(page, mainMessage({
+      type: 'selection', sourceId: 'main-b', sequence: 3, sentAt: base + 1_000, origin,
+      selectionOverride: { timeframe: '30m' },
+    })),
+  ]);
+  await expect(page).toHaveURL(/timeframe=30m/);
+  await assertCleanRuntime(runtime);
+});
+
+test('hidden tab accepts only ordered snapshots and requests current state again when visible', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installUnhandledCapture(context);
+  await mockChartApis(context);
+  const runtime = observeRuntime(context, page);
+  await context.route('**/sync-controller', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html',
+    body: '<!doctype html><title>sync controller</title>',
+  }));
+  await page.goto(externalUrl);
+  const origin = new URL(page.url()).origin;
+  const base = Date.now();
+  await postChannelMessage(page, mainMessage({ type: 'ready', sourceId: 'main-hidden', sequence: 1, sentAt: base + 10, origin }));
+
+  const controller = await context.newPage();
+  await controller.goto(`${origin}/sync-controller`);
+  await controller.bringToFront();
+  await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe('hidden');
+  await postChannelMessage(controller, mainMessage({
+    type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 100, origin,
+    selectionOverride: { timeframe: '5m' },
+  }));
+  await postChannelMessage(controller, mainMessage({
+    type: 'selection', sourceId: 'main-hidden', sequence: 3, sentAt: base + 200, origin,
+    selectionOverride: { timeframe: '15m' },
+  }));
+  await postChannelMessage(controller, mainMessage({
+    type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 150, origin,
+    selectionOverride: { timeframe: '30m' },
+  }));
+  await page.bringToFront();
+  await expect(page).toHaveURL(/timeframe=15m/);
+  await controller.close();
+  await assertCleanRuntime(runtime);
+});
+
+test('popup blocking is reported and no second chart context is created', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installUnhandledCapture(context);
+  await mockChartApis(context);
+  const runtime = observeRuntime(context, page);
   await page.addInitScript(() => {
     window.open = () => null;
   });
@@ -118,4 +331,58 @@ test('popup blocking is reported without creating a second chart context', async
   await page.getByRole('button', { name: '외부 창', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('팝업이 차단되었습니다.');
   expect(context.pages()).toHaveLength(1);
+  await assertCleanRuntime(runtime);
+});
+
+test('mobile widths do not render or activate the external-window control', async ({ page, context }) => {
+  await installUnhandledCapture(context);
+  await mockChartApis(context);
+  const runtime = observeRuntime(context, page);
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto(initialUrl);
+  for (const width of [360, 390, 430, 1023]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(page.getByRole('button', { name: '외부 창', exact: true })).toHaveCount(0);
+  }
+  await page.setViewportSize({ width: 1024, height: 844 });
+  await expect(page.getByRole('button', { name: '외부 창', exact: true })).toBeVisible();
+  await assertCleanRuntime(runtime);
+});
+
+
+test('mobile user agents keep the external-window feature disabled even at desktop width', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installUnhandledCapture(context);
+  await mockChartApis(context);
+  const runtime = observeRuntime(context, page);
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      get: () => 'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
+    });
+  });
+  await page.goto(initialUrl);
+  await expect(page.getByRole('button', { name: '외부 창', exact: true })).toHaveCount(0);
+  await assertCleanRuntime(runtime);
+});
+
+test('invalid, duplicated, unsupported, and incomplete route inputs fail closed without guessing a default chart', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installUnhandledCapture(context);
+  await mockChartApis(context);
+  const runtime = observeRuntime(context, page);
+  const invalidRoutes = [
+    `${initialUrl}&market=US`,
+    `${initialUrl.replace('timeframe=5m', 'timeframe=2m')}`,
+    `${initialUrl.replace('ticker=005930', 'ticker=..%2F005930')}`,
+    `${initialUrl.replace('name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90', 'name=%3Cscript%3Ealert(1)%3C%2Fscript%3E')}`,
+    `${initialUrl}&chartWindow=external&chartSync=${syncId}`,
+    `${initialUrl}&chartWindow=external&chartWindow=external&chartSync=${syncId}&chartPair=${pairId}`,
+  ];
+  for (const route of invalidRoutes) {
+    await page.goto(route);
+    await expect(page.getByRole('alert')).toContainText('임의 기본값으로 이동하지 않았습니다.');
+    await expect(page.getByRole('button', { name: '외부 창', exact: true })).toHaveCount(0);
+  }
+  await assertCleanRuntime(runtime);
 });
