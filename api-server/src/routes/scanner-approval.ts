@@ -8,6 +8,11 @@ import {
   ScannerApprovalPlanService,
   type ScannerApprovalPlanRequest,
 } from '../services/scanner-approval-plan.service';
+import {
+  assertPaperApprovalEnvelope,
+  assertPaperApprovalPlan,
+  paperApprovalReason,
+} from '../services/trade-approval-paper-guard.service';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import type {
   TradingApprovalStatus,
@@ -66,6 +71,7 @@ function context(req: AuthenticatedRequest) {
 
 function requestValue(body: unknown): ScannerApprovalPlanRequest {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('SCANNER_PLAN_REQUEST_REQUIRED');
+  assertPaperApprovalEnvelope(body);
   const input = body as Record<string, unknown>;
   return {
     market: String(input.market ?? '').toUpperCase() as ScannerApprovalPlanRequest['market'],
@@ -104,12 +110,16 @@ function errorResponse(res: Response, error: unknown) {
     : code.includes('NOT_FOUND') ? 404
       : code.includes('NOT_AVAILABLE') || code.includes('NOT_MAINTAINED') || code.includes('BLOCKED')
         || code.includes('INVALIDATED') || code.includes('EXPIRED') || code.includes('NOT_APPROVABLE')
-        || code.includes('DRIFTED') || code.includes('RISK_RECHECK') ? 409
+        || code.includes('DRIFTED') || code.includes('RISK_RECHECK')
+        || code === 'APPROVAL_MODE_REQUIRED' || code === 'AUTOMATIC_MODE_FORBIDDEN'
+        || code === 'PAPER_ACCOUNT_MODE_REQUIRED' || code === 'PAPER_ADAPTER_REQUIRED'
+        || code === 'LIVE_MODE_FORBIDDEN' ? 409
         : code.includes('UNAVAILABLE') || code.includes('PROVIDER') ? 503
           : 400;
   return res.status(status).json({
     ok: false,
     error: code,
+    reason: paperApprovalReason(code),
     orderSubmitted: false,
     liveOrderSubmitted: false,
     exchangeRequestSent: false,
@@ -117,10 +127,12 @@ function errorResponse(res: Response, error: unknown) {
 }
 
 async function approveScannerPaperPlan(req: AuthenticatedRequest, res: Response) {
+  assertPaperApprovalEnvelope(req.body);
   if (req.body?.approved !== true) {
     return res.status(409).json({
       ok: false,
       error: 'EXPLICIT_APPROVAL_REQUIRED',
+      reason: '사용자가 현재 계획을 명시적으로 승인해야 합니다.',
       orderSubmitted: false,
       liveOrderSubmitted: false,
       exchangeRequestSent: false,
@@ -129,6 +141,7 @@ async function approveScannerPaperPlan(req: AuthenticatedRequest, res: Response)
   const { userId, repository, automation, scanner } = context(req);
   const stored = await repository.getPlan(userId, String(req.params.id));
   if (!stored) throw new Error('TRADE_PLAN_NOT_FOUND');
+  assertPaperApprovalPlan(stored);
   if (!isScannerPaperPlan(stored)) throw new Error('SCANNER_PAPER_APPROVAL_ONLY');
   if (!Number.isSafeInteger(stored.quantity) || Number(stored.quantity) <= 0) {
     throw new Error('SCANNER_PAPER_QUANTITY_INVALID');
@@ -208,6 +221,8 @@ router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res, next: N
   try {
     const { userId, repository } = context(req);
     const plan = await repository.getPlan(userId, String(req.params.id));
+    if (!plan) return next();
+    assertPaperApprovalPlan(plan);
     if (!isScannerPaperPlan(plan)) return next();
     return await approveScannerPaperPlan(req, res);
   } catch (error) {
