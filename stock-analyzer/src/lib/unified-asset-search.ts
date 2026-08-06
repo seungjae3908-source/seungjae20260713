@@ -81,12 +81,18 @@ export async function fetchUnifiedAssetSuggestions(input: {
 }
 
 export function unifiedAssetDetailPath(item: UnifiedAssetSuggestion, backPath = '/search') {
+  const params = new URLSearchParams({ back: backPath });
   if (item.assetType === 'stock') {
-    const ticker = item.ticker ?? item.productCode;
-    return `/stock/${encodeURIComponent(ticker)}?back=${encodeURIComponent(backPath)}`;
+    params.set('asset', 'stock');
+    params.set('market', item.market);
+    params.set('ticker', item.ticker ?? item.productCode);
+    return `/stock-info?${params.toString()}`;
   }
   const symbol = item.market === 'futures'
     ? item.productCode
     : item.baseSymbol || item.symbol || item.productCode;
-  return `/stock-info?asset=coin&coinMarket=${item.market}&symbol=${encodeURIComponent(symbol)}`;
+  params.set('asset', 'coin');
+  params.set('coinMarket', item.market);
+  params.set('symbol', symbol);
+  return `/stock-info?${params.toString()}`;
 }
