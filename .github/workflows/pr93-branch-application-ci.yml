@@ -41,6 +41,7 @@ jobs:
         with:
           script: |
             const branch = 'agent/instrument-orderbook-ui';
+            const workflowRef = 'main';
             const expectedRef = `refs/heads/${branch}`;
             if (context.ref !== expectedRef) {
               core.setFailed(`Unexpected ref: ${context.ref}`);
@@ -59,10 +60,10 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'futures-public-network-smoke.yml',
-              ref: branch,
+              ref: workflowRef,
               inputs: {
                 target_sha: context.sha,
                 checkout_ref: context.sha,
               },
             });
-            core.notice(`Dispatched official Application CI for ${branch}@${context.sha}.`);
+            core.notice(`Dispatched official Application CI from ${workflowRef} for ${branch}@${context.sha}.`);
