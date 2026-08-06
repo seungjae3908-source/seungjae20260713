@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { useAuth } from '@/lib/auth';
@@ -21,37 +21,12 @@ function useDesktopWorkspace() {
   return desktop;
 }
 
-function LegacyScannerCapabilitySurface({ allowAutoTrading }: { allowAutoTrading: boolean }) {
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    const apply = () => {
-      for (const button of root.querySelectorAll('button')) {
-        if (button.textContent?.trim() !== '자동매매') continue;
-        button.hidden = !allowAutoTrading;
-        button.disabled = !allowAutoTrading;
-        button.setAttribute('aria-hidden', allowAutoTrading ? 'false' : 'true');
-        button.setAttribute('data-capability', 'canAccessTradeAutomation');
-      }
-    };
-    apply();
-    const observer = new MutationObserver(apply);
-    observer.observe(root, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [allowAutoTrading]);
-
-  return <div ref={rootRef} className="h-full min-h-0 overflow-hidden"><ScannerPage /></div>;
-}
-
 export default function TechnicalWorkspacePage() {
   const desktop = useDesktopWorkspace();
   const auth = useAuth();
   const [location] = useLocation();
   const phase11SignalRoute = location.startsWith('/__phase11-technical-workspace-e2e');
   const canUseAiChart = auth.can('canAccessRiskPreview') || phase11SignalRoute;
-  const canUseAutoTrading = auth.can('canAccessTradeAutomation') || phase11SignalRoute;
   const [mobileWorkspace, setMobileWorkspace] = useState<MobileWorkspace>(() => (
     phase11SignalRoute ? 'signal' : 'legacy'
   ));
@@ -84,7 +59,7 @@ export default function TechnicalWorkspacePage() {
           ))}
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
-          {mobileWorkspace === 'legacy' ? <LegacyScannerCapabilitySurface allowAutoTrading={canUseAutoTrading} /> : null}
+          {mobileWorkspace === 'legacy' ? <ScannerPage /> : null}
           {mobileWorkspace === 'signal' ? <SignalScannerPage /> : null}
           {mobileWorkspace === 'chart' && canUseAiChart ? <AiChartPage /> : null}
         </div>
