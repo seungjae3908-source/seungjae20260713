@@ -102,16 +102,45 @@ function CryptoDetailRedirect() {
   return <PageFallback />;
 }
 
-function detailOrderbookTarget(location: string): { ticker: string; market: 'KR' | 'US' } | null {
-  const match = /^\/stock\/([^/?#]+)/.exec(location);
-  if (!match) return null;
-  let ticker = match[1];
-  try { ticker = decodeURIComponent(ticker); } catch { /* Keep the safe path segment. */ }
-  ticker = ticker.trim().toUpperCase().slice(0, 24);
+type OrderbookTarget = {
+  ticker: string;
+  market: 'KR' | 'US' | 'UPBIT' | 'BITGET';
+  assetClass: 'stock' | 'crypto_spot' | 'crypto_futures';
+};
+
+function detailOrderbookTarget(location: string): OrderbookTarget | null {
+  const stockMatch = /^\/stock\/([^/?#]+)/.exec(location);
+  if (stockMatch) {
+    let ticker = stockMatch[1];
+    try { ticker = decodeURIComponent(ticker); } catch { /* Keep the safe path segment. */ }
+    ticker = ticker.trim().toUpperCase().slice(0, 24);
+    if (!ticker) return null;
+    return {
+      ticker,
+      market: /^\d{6}(?:_(?:NX|AL))?$/.test(ticker) ? 'KR' : 'US',
+      assetClass: 'stock',
+    };
+  }
+
+  if (!location.startsWith('/stock-info')) return null;
+  const query = location.includes('?')
+    ? location.slice(location.indexOf('?') + 1)
+    : window.location.search.slice(1);
+  const params = new URLSearchParams(query);
+  if (params.get('asset') !== 'coin') return null;
+  const futures = params.get('coinMarket') === 'futures';
+  let ticker = String(params.get('symbol') ?? 'BTC')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, '')
+    .replace(/^KRW-/, '')
+    .slice(0, 24);
   if (!ticker) return null;
+  if (futures && !ticker.endsWith('USDT')) ticker = `${ticker}USDT`;
   return {
     ticker,
-    market: /^\d{6}(?:_(?:NX|AL))?$/.test(ticker) ? 'KR' : 'US',
+    market: futures ? 'BITGET' : 'UPBIT',
+    assetClass: futures ? 'crypto_futures' : 'crypto_spot',
   };
 }
 
@@ -120,7 +149,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const scannerRoute = location.startsWith('/scanner');
   const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
   const orderbookTarget = detailOrderbookTarget(location);
-  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div>{orderbookTarget ? <InstrumentOrderbookDock ticker={orderbookTarget.ticker} market={orderbookTarget.market} /> : null}</div>;
+  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div>{orderbookTarget ? <InstrumentOrderbookDock ticker={orderbookTarget.ticker} market={orderbookTarget.market} assetClass={orderbookTarget.assetClass} /> : null}</div>;
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {
