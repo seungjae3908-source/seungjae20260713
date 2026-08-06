@@ -11,7 +11,6 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
-import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { UnifiedAnalysisChart } from '@/components/unified-analysis-chart';
 import {
   selectionFromSearch,
@@ -179,8 +178,6 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
               시장·종목·시간봉이 변경되면 이전 분석을 비우고 마지막 요청의 유효한 실제 캔들만 반영합니다.
             </p>
           </section>
-
-          <ScannerApprovalComposer selection={selection} />
 
           <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
             <div className="flex items-center gap-2">
