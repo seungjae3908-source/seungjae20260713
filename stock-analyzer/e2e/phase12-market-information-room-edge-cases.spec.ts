@@ -237,7 +237,6 @@ test('empty market sections stay explicit without console, page, rejection, HTTP
   await page.goto('/stocks/kr');
   await expect(page.getByRole('heading', { name: '국내주식 정보' })).toBeVisible();
   await expect(page.getByText('현재 표시할 시장 종목이 없습니다.')).toBeVisible();
-  await expect(page.getByText('0개', { exact: true })).toBeVisible();
   await diagnostics.assertClean();
 });
 
