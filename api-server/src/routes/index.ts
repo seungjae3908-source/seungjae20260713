@@ -88,6 +88,15 @@ router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
 router.use('/trade-automation', tradeAutomationRouter);
 
+const requireSpotOrderbook = requireCapability('canAccessSpot');
+const requireFuturesOrderbook = requireCapability('canAccessFutures');
+router.use('/orderbook', (req, res, next) => {
+  const assetClass = String(req.query.assetClass ?? '').trim().toLowerCase();
+  if (assetClass === 'crypto_spot') return requireSpotOrderbook(req, res, next);
+  if (assetClass === 'crypto_futures') return requireFuturesOrderbook(req, res, next);
+  next();
+});
+
 router.use(requireCapability('canAccessBasicInfo'));
 // Canonical normalized read-only orderbook serves stocks, Upbit spot and
 // Bitget futures from one response contract before legacy provider routes.
