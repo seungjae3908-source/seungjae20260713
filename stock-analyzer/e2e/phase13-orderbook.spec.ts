@@ -344,8 +344,8 @@ test('desktop renders one-sided depth only as explicit partial data', async ({ p
 
   const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
   await expect(dialog.getByText(/부분 데이터로 표시합니다/)).toBeVisible();
-  await expect(dialog.getByRole('list', { name: '매도 호가' })).toBeEmpty();
-  await expect(dialog.getByRole('list', { name: '매수 호가' })).not.toBeEmpty();
+  await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
+  await expect(dialog.getByTestId('bid-levels')).not.toBeEmpty();
   await expect(dialog.getByTestId('bid-level-1')).toBeVisible();
   expectNoFailures(failures, requests);
 });
