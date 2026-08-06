@@ -29,7 +29,9 @@ function acceptUserRequest(userId: string, now = Date.now()): boolean {
 function featureExplanationHandler(task: AiFeatureTask): RequestHandler {
   return async (request, res) => {
     const req = request as AuthenticatedRequest;
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
     if (!req.member || !acceptUserRequest(req.member.id)) {
+      if (req.member) res.setHeader('Retry-After', '60');
       return res.status(req.member ? 429 : 401).json({
         ok: false,
         error: req.member ? 'AI_FEATURE_RATE_LIMITED' : 'LOGIN_REQUIRED',
@@ -47,7 +49,6 @@ function featureExplanationHandler(task: AiFeatureTask): RequestHandler {
       if (!res.writableEnded) controller.abort();
     };
     res.once('close', onClose);
-    res.setHeader('Cache-Control', 'no-store, max-age=0');
 
     try {
       const authoritativeRequest = await resolveAuthoritativeFeatureRequest(
@@ -91,7 +92,9 @@ function featureExplanationHandler(task: AiFeatureTask): RequestHandler {
 }
 
 router.post('/ai/chat', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
   if (!req.member || !acceptUserRequest(req.member.id)) {
+    if (req.member) res.setHeader('Retry-After', '60');
     return res.status(req.member ? 429 : 401).json({
       ok: false,
       error: req.member ? 'AI_CHAT_RATE_LIMITED' : 'LOGIN_REQUIRED',
