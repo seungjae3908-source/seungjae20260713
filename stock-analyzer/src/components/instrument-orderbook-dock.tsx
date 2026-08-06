@@ -91,16 +91,57 @@ function parseLevel(value: unknown): Level | null {
     || rank < 1
     || rank > 10
     || price <= 0
-    || quantity < 0
+    || quantity <= 0
     || cumulativeQuantity < quantity
   ) {
     return null;
   }
+  return { rank: Math.trunc(rank), price, quantity, cumulativeQuantity };
+}
+
+function invalidCrossedPayload(options: {
+  assetClass: AssetClass;
+  market: Market;
+  symbol: string;
+  currency: Currency;
+  provider: Provider;
+  source: Source;
+  receivedAt: string;
+  sourceTimestampRaw: string | null;
+  warnings: string[];
+}): Payload {
   return {
-    rank: Math.trunc(rank),
-    price,
-    quantity,
-    cumulativeQuantity,
+    ok: false,
+    available: false,
+    status: 'invalid',
+    assetClass: options.assetClass,
+    market: options.market,
+    symbol: options.symbol,
+    ticker: options.symbol,
+    currency: options.currency,
+    provider: options.provider,
+    source: options.source,
+    sourceTimestampRaw: options.sourceTimestampRaw,
+    updatedAt: null,
+    receivedAt: options.receivedAt,
+    freshness: 'unknown',
+    stale: true,
+    asks: [],
+    bids: [],
+    bestAsk: null,
+    bestBid: null,
+    spread: null,
+    spreadPercent: null,
+    displayedAskQuantity: 0,
+    displayedBidQuantity: 0,
+    totalAskQuantity: null,
+    totalBidQuantity: null,
+    imbalance: null,
+    warnings: [
+      ...options.warnings,
+      '교차 호가가 감지되어 클라이언트에서도 표시를 차단했습니다.',
+    ],
+    reason: 'ORDERBOOK_CROSSED',
   };
 }
 
@@ -125,8 +166,8 @@ function parsePayload(value: unknown): Payload {
   const levels = (input: unknown) => Array.isArray(input)
     ? input.map(parseLevel).filter((item): item is Level => item != null)
     : [];
-  const asks = levels(row.asks);
-  const bids = levels(row.bids);
+  const asks = levels(row.asks).sort((left, right) => left.price - right.price);
+  const bids = levels(row.bids).sort((left, right) => right.price - left.price);
   const bestAsk = finite(row.bestAsk) ?? asks[0]?.price ?? null;
   const bestBid = finite(row.bestBid) ?? bids[0]?.price ?? null;
   const provider: Provider = row.provider === 'kiwoom'
@@ -150,36 +191,17 @@ function parsePayload(value: unknown): Payload {
     : [];
 
   if (row.available === true && bestAsk != null && bestBid != null && bestBid >= bestAsk) {
-    return {
-      ok: false,
-      available: false,
-      status: 'invalid',
+    return invalidCrossedPayload({
       assetClass,
       market,
       symbol,
-      ticker: symbol,
       currency,
       provider,
       source,
-      sourceTimestampRaw: text(row.sourceTimestampRaw),
-      updatedAt: null,
       receivedAt: receivedAtRaw ?? '',
-      freshness: 'unknown',
-      stale: true,
-      asks: [],
-      bids: [],
-      bestAsk: null,
-      bestBid: null,
-      spread: null,
-      spreadPercent: null,
-      displayedAskQuantity: 0,
-      displayedBidQuantity: 0,
-      totalAskQuantity: null,
-      totalBidQuantity: null,
-      imbalance: null,
-      warnings: [...warnings, '교차 호가가 감지되어 클라이언트에서도 표시를 차단했습니다.'],
-      reason: 'ORDERBOOK_CROSSED',
-    };
+      sourceTimestampRaw: text(row.sourceTimestampRaw),
+      warnings,
+    });
   }
 
   return {
@@ -258,9 +280,13 @@ function reasonText(reason: string | null): string {
     ORDERBOOK_PROVIDER_NOT_CONFIGURED: '키움 호가 공급자 설정을 확인할 수 없습니다.',
     ORDERBOOK_PROVIDER_TIMEOUT: '키움 호가 공급자 응답 시간이 초과되었습니다.',
     ORDERBOOK_PROVIDER_UNAVAILABLE: '키움 호가 공급자를 사용할 수 없습니다.',
+    UPBIT_ORDERBOOK_RATE_LIMITED: 'Upbit 공개 호가 요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.',
+    UPBIT_ORDERBOOK_REQUEST_ABORTED: 'Upbit 공개 호가 요청이 화면 전환으로 취소되었습니다.',
     UPBIT_ORDERBOOK_PROVIDER_TIMEOUT: 'Upbit 공개 호가 응답 시간이 초과되었습니다.',
     UPBIT_ORDERBOOK_PROVIDER_UNAVAILABLE: 'Upbit 공개 호가 공급자를 사용할 수 없습니다.',
     UPBIT_ORDERBOOK_RESPONSE_INVALID: 'Upbit 공개 호가 응답 형식이 올바르지 않습니다.',
+    BITGET_ORDERBOOK_RATE_LIMITED: 'Bitget 공개 호가 요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.',
+    BITGET_ORDERBOOK_REQUEST_ABORTED: 'Bitget 공개 호가 요청이 화면 전환으로 취소되었습니다.',
     BITGET_ORDERBOOK_PROVIDER_TIMEOUT: 'Bitget 공개 호가 응답 시간이 초과되었습니다.',
     BITGET_ORDERBOOK_PROVIDER_UNAVAILABLE: 'Bitget 공개 호가 공급자를 사용할 수 없습니다.',
     BITGET_ORDERBOOK_PROVIDER_ERROR: 'Bitget 공개 호가 공급자가 오류를 반환했습니다.',
@@ -297,11 +323,14 @@ function LevelRow({
   currency: Currency;
   max: number;
 }) {
+  const sideText = side === 'ask' ? '매도' : '매수';
   const width = max > 0
     ? Math.max(4, Math.min(100, item.cumulativeQuantity / max * 100))
     : 0;
   return (
     <div
+      role="listitem"
+      aria-label={`${sideText} ${item.rank}호 가격 ${priceText(item.price, currency)} 잔량 ${quantityText(item.quantity)} 누적잔량 ${quantityText(item.cumulativeQuantity)}`}
       data-testid={`${side}-level-${item.rank}`}
       className="relative grid min-h-10 grid-cols-[38px_minmax(82px,1fr)_minmax(64px,1fr)_minmax(72px,1fr)] items-center overflow-hidden border-b border-border/50 px-2 text-[11px] last:border-b-0 sm:px-3 sm:text-xs"
     >
@@ -313,7 +342,7 @@ function LevelRow({
         )}
         style={{ width: `${width}%` }}
       />
-      <span className="relative text-muted-foreground">{item.rank}호</span>
+      <span className="relative text-muted-foreground">{sideText} {item.rank}호</span>
       <span className={cn(
         'relative text-right font-semibold tabular-nums',
         side === 'ask' ? 'text-rose-500' : 'text-sky-500',
@@ -350,7 +379,7 @@ export function InstrumentOrderbookDock({
   const controller = useRef<AbortController | null>(null);
   const sequence = useRef(0);
   const timer = useRef<number | null>(null);
-  const lastGood = useRef<Payload | null>(null);
+  const lastGood = useRef<{ targetKey: string; payload: Payload } | null>(null);
   const wasOpen = useRef(defaultOpen);
   const loadRef = useRef<() => Promise<void>>(async () => undefined);
   const [open, setOpen] = useState(defaultOpen);
@@ -403,10 +432,13 @@ export function InstrumentOrderbookDock({
       if (request.signal.aborted || current !== sequence.current) return;
 
       if (next.status === 'ready' || next.status === 'partial') {
-        lastGood.current = next;
+        lastGood.current = { targetKey, payload: next };
         setData(next);
-      } else if (next.status === 'provider_error' && lastGood.current) {
-        setData(lastGood.current);
+      } else if (
+        next.status === 'provider_error'
+        && lastGood.current?.targetKey === targetKey
+      ) {
+        setData(lastGood.current.payload);
         setError(next.reason ?? 'ORDERBOOK_REQUEST_FAILED');
       } else {
         setData(next);
@@ -431,7 +463,7 @@ export function InstrumentOrderbookDock({
         controller.current = null;
       }
     }
-  }, [assetClass, market, schedule, symbol]);
+  }, [assetClass, market, schedule, symbol, targetKey]);
 
   useEffect(() => {
     loadRef.current = load;
@@ -530,6 +562,7 @@ export function InstrumentOrderbookDock({
         ref={opener}
         type="button"
         onClick={() => setOpen(true)}
+        aria-label="읽기 전용 호가창 열기"
         aria-haspopup="dialog"
         aria-expanded={open}
         className="fixed bottom-[calc(env(safe-area-inset-bottom)+4.75rem)] right-4 z-40 inline-flex min-h-11 items-center gap-2 rounded-full border border-border bg-background/95 px-4 py-2 text-sm font-semibold shadow-lg backdrop-blur hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -569,7 +602,7 @@ export function InstrumentOrderbookDock({
                   onClick={() => void loadRef.current()}
                   disabled={loading}
                   aria-label="호가 새로고침"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-full hover:bg-accent disabled:opacity-50"
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-full hover:bg-accent disabled:opacity-50"
                 >
                   <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} aria-hidden />
                 </button>
@@ -577,7 +610,7 @@ export function InstrumentOrderbookDock({
                   type="button"
                   onClick={() => setOpen(false)}
                   aria-label="호가창 닫기"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-full hover:bg-accent"
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-full hover:bg-accent"
                 >
                   <X className="h-5 w-5" aria-hidden />
                 </button>
@@ -625,12 +658,18 @@ export function InstrumentOrderbookDock({
                       <button
                         type="button"
                         onClick={() => void loadRef.current()}
-                        className="mt-3 min-h-10 rounded-lg border border-border px-3 font-medium hover:bg-accent"
+                        className="mt-3 min-h-11 rounded-lg border border-border px-3 font-medium hover:bg-accent"
                       >
                         다시 시도
                       </button>
                     </div>
                   </div>
+                </section>
+              ) : null}
+
+              {error && hasLevels ? (
+                <section role="status" className="mx-4 mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-muted-foreground">
+                  {reasonText(error)} 마지막 정상 데이터의 공급자·서버 기준시각을 유지합니다.
                 </section>
               ) : null}
 
@@ -662,7 +701,7 @@ export function InstrumentOrderbookDock({
                     <span className="text-right">잔량</span>
                     <span className="text-right">누적잔량</span>
                   </div>
-                  <div aria-label="매도 호가">
+                  <div role="list" aria-label="매도 호가">
                     {data.asks.slice().reverse().map((item) => (
                       <LevelRow key={`a-${item.rank}-${item.price}`} item={item} side="ask" currency={data.currency} max={max} />
                     ))}
@@ -681,7 +720,7 @@ export function InstrumentOrderbookDock({
                       </div>
                     </div>
                   </div>
-                  <div aria-label="매수 호가">
+                  <div role="list" aria-label="매수 호가">
                     {data.bids.map((item) => (
                       <LevelRow key={`b-${item.rank}-${item.price}`} item={item} side="bid" currency={data.currency} max={max} />
                     ))}
