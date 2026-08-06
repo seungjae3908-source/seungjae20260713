@@ -189,7 +189,7 @@ def test_workflow_contracts() -> int:
     assert executor.count("\n      contents: write\n") == 1
 
     process_report = free.split("\n  process-report:\n", 1)[1]
-    process_report_permissions = process_report.split("\n    runs-on:", 1)[0]
+    process_report_permissions = process_report.split("\n    permissions:\n", 1)[1].split("\n    runs-on:", 1)[0]
     assert process_report_permissions.count("\n      ") == 4
     assert "\n      actions: read\n" in process_report_permissions
     assert "\n      contents: write\n" in process_report_permissions
@@ -203,7 +203,7 @@ def test_workflow_contracts() -> int:
     assert "client_payload" not in wake_step
 
     execute = executor.split("\n  execute:\n", 1)[1]
-    execute_permissions = execute.split("\n    runs-on:", 1)[0]
+    execute_permissions = execute.split("\n    permissions:\n", 1)[1].split("\n    runs-on:", 1)[0]
     assert execute_permissions.count("\n      ") == 4
     assert "\n      actions: read\n" in execute_permissions
     assert "\n      contents: write\n" in execute_permissions
