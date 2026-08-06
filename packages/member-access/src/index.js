@@ -12,6 +12,9 @@ export const MEMBER_CAPABILITIES = Object.freeze([
   'canAccessSpot',
   'canAccessFutures',
   'canAccessSignalScanner',
+  'canPlaceOrders',
+  'canAccessTradeAutomation',
+  'canApprovePaperOrder',
   'canAccessRiskPreview',
   'canAccessBacktests',
   'canAccessPaperTrading',
@@ -38,7 +41,13 @@ const REGULAR = Object.freeze({
   canAccessTradingAnalytics: true,
   canAccessAiTradingReview: true,
 });
-const ADMIN = Object.freeze({ ...REGULAR, canManageMembers: true });
+const ADMIN = Object.freeze({
+  ...REGULAR,
+  canPlaceOrders: true,
+  canAccessTradeAutomation: true,
+  canApprovePaperOrder: true,
+  canManageMembers: true,
+});
 
 export const MEMBER_PERMISSION_MATRIX = Object.freeze({
   pending: NONE,

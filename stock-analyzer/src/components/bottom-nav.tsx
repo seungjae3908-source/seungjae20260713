@@ -16,7 +16,7 @@ const TECH_MENU_ITEMS: Array<{
 }> = [
   { href: '/scanner', label: 'AI 검색기', icon: Search, capability: 'canAccessSignalScanner' },
   { href: '/ai-chart', label: 'AI 차트 분석기', icon: CandlestickChart, capability: 'canAccessRiskPreview' },
-  { href: '/auto-trading', label: '자동매매', icon: Power, capability: 'canManageMembers' },
+  { href: '/auto-trading', label: '자동매매', icon: Power, capability: 'canAccessTradeAutomation' },
 ];
 
 const INFO_MENU_ITEMS: Array<{

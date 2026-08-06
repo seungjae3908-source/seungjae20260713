@@ -31,6 +31,32 @@ for (const tier of ['pending', 'associate', 'regular', 'admin'] as const) {
   }
 }
 
+test('associate and regular may scan but cannot place or approve orders', () => {
+  for (const tier of ['associate', 'regular'] as const) {
+    assert.equal(hasCapability(tier, 'canAccessSignalScanner'), true);
+    assert.equal(hasCapability(tier, 'canPlaceOrders'), false);
+    assert.equal(hasCapability(tier, 'canAccessTradeAutomation'), false);
+    assert.equal(hasCapability(tier, 'canApprovePaperOrder'), false);
+  }
+});
+
+test('only an active approved admin receives order capabilities', () => {
+  const activeAdmin = { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true };
+  assert.equal(hasCapability(activeAdmin, 'canPlaceOrders'), true);
+  assert.equal(hasCapability(activeAdmin, 'canAccessTradeAutomation'), true);
+  assert.equal(hasCapability(activeAdmin, 'canApprovePaperOrder'), true);
+
+  for (const blocked of [
+    { membership_level: 'admin', role: 'admin', status: 'approved', is_active: false },
+    { membership_level: 'admin', role: 'admin', status: 'suspended', is_active: true },
+  ]) {
+    assert.equal(deriveMemberTier(blocked), 'pending');
+    assert.equal(hasCapability(blocked, 'canPlaceOrders'), false);
+    assert.equal(hasCapability(blocked, 'canAccessTradeAutomation'), false);
+    assert.equal(hasCapability(blocked, 'canApprovePaperOrder'), false);
+  }
+});
+
 test('legacy approved user maps to regular', () => {
   assert.equal(deriveMemberTier({ role: 'user', status: 'approved' }), 'regular');
 });
@@ -58,6 +84,7 @@ test('suspended admin is treated as pending', () => {
 test('unknown client role does not gain capabilities', () => {
   assert.equal(deriveMemberTier({ role: 'superadmin', status: 'pending' }), 'pending');
   assert.equal(hasCapability({ role: 'superadmin', status: 'pending' }, 'canManageMembers'), false);
+  assert.equal(hasCapability({ role: 'superadmin', status: 'pending' }, 'canPlaceOrders'), false);
 });
 
 test('membership labels use the requested Korean names', () => {
