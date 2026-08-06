@@ -6,12 +6,16 @@ import {
   chartExternalWindowChannel,
   chartSelectionKey,
   chartSyncIdFromSearch,
+  CHART_WINDOW_MESSAGE_MAX_AGE_MS,
+  CHART_WINDOW_MESSAGE_MAX_FUTURE_SKEW_MS,
   createChartWindowMessage,
   externalChartWindowFeatures,
+  isChartWindowMessageFresh,
   isDesktopChartViewport,
   isExternalChartSearch,
   mergeChartRouteSelection,
   parseChartWindowMessage,
+  shouldAcceptChartWindowMessage,
 } from './chart-external-window';
 import type { AnalysisSelection } from './analysis-selection';
 
@@ -38,6 +42,7 @@ test('external chart path preserves the validated chart context and isolated syn
   assert.equal(params.get('chartSync'), 'sync-a');
   assert.equal(isExternalChartSearch(query), true);
   assert.equal(chartSyncIdFromSearch(query), 'sync-a');
+  assert.equal(chartSyncIdFromSearch('?chartSync=sync%3Aunsafe'), '');
   assert.equal(chartExternalWindowChannel('sync-a'), 'stock-app-ai-chart-window-v1:sync-a');
   assert.equal(buildChartPath(selection).includes('chartWindow=external'), false);
 });
@@ -87,12 +92,36 @@ test('chart selection key changes only when the data context changes', () => {
   assert.notEqual(chartSelectionKey(selection), chartSelectionKey({ ...selection, timeframe: '1H' }));
 });
 
-test('chart window messages reject malformed or unsupported payloads', () => {
-  const valid = createChartWindowMessage('selection', 'source-a', selection);
-  assert.deepEqual(parseChartWindowMessage(valid), valid);
-  assert.equal(parseChartWindowMessage({ type: 'selection', sourceId: '', sentAt: Date.now(), selection }), null);
-  assert.equal(parseChartWindowMessage({ type: 'order', sourceId: 'source-a', sentAt: Date.now() }), null);
-  assert.equal(parseChartWindowMessage({ type: 'selection', sourceId: 'source-a', sentAt: Date.now(), selection: { market: 'UNKNOWN' } }), null);
+test('chart window messages reject malformed, stale, future, and unsupported payloads', () => {
+  const now = Date.UTC(2026, 7, 6, 7, 0, 0);
+  const valid = {
+    ...createChartWindowMessage('selection', 'source-a', selection),
+    sentAt: now,
+  };
+
+  assert.deepEqual(parseChartWindowMessage(valid, now), valid);
+  assert.equal(parseChartWindowMessage({ type: 'selection', sourceId: '', sentAt: now, selection }, now), null);
+  assert.equal(parseChartWindowMessage({ type: 'selection', sourceId: 'source a', sentAt: now, selection }, now), null);
+  assert.equal(parseChartWindowMessage({ type: 'order', sourceId: 'source-a', sentAt: now }, now), null);
+  assert.equal(parseChartWindowMessage({ type: 'selection', sourceId: 'source-a', sentAt: now, selection: { market: 'UNKNOWN' } }, now), null);
+  assert.equal(parseChartWindowMessage({ ...valid, sentAt: now - CHART_WINDOW_MESSAGE_MAX_AGE_MS - 1 }, now), null);
+  assert.equal(parseChartWindowMessage({ ...valid, sentAt: now + CHART_WINDOW_MESSAGE_MAX_FUTURE_SKEW_MS + 1 }, now), null);
+});
+
+test('chart window messages only apply in fresh monotonic order', () => {
+  const now = Date.UTC(2026, 7, 6, 7, 0, 0);
+  const message = {
+    ...createChartWindowMessage('selection', 'source-a', selection),
+    sentAt: now,
+  };
+
+  assert.equal(isChartWindowMessageFresh(now, now), true);
+  assert.equal(isChartWindowMessageFresh(now - CHART_WINDOW_MESSAGE_MAX_AGE_MS - 1, now), false);
+  assert.equal(isChartWindowMessageFresh(now + CHART_WINDOW_MESSAGE_MAX_FUTURE_SKEW_MS + 1, now), false);
+  assert.equal(shouldAcceptChartWindowMessage(message, 0, now), true);
+  assert.equal(shouldAcceptChartWindowMessage(message, now - 1, now), true);
+  assert.equal(shouldAcceptChartWindowMessage(message, now, now), false);
+  assert.equal(shouldAcceptChartWindowMessage({ ...message, sentAt: now - 1 }, now, now), false);
 });
 
 test('external chart control remains desktop only without excluding touch-capable PCs', () => {

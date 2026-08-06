@@ -9,6 +9,8 @@ export const CHART_EXTERNAL_WINDOW_NAME = 'stock-app-ai-chart-external';
 export const CHART_EXTERNAL_WINDOW_PARAM = 'chartWindow';
 export const CHART_EXTERNAL_WINDOW_VALUE = 'external';
 export const CHART_EXTERNAL_WINDOW_SYNC_PARAM = 'chartSync';
+export const CHART_WINDOW_MESSAGE_MAX_AGE_MS = 30_000;
+export const CHART_WINDOW_MESSAGE_MAX_FUTURE_SKEW_MS = 5_000;
 
 export type ChartExternalWindowMessage =
   | {
@@ -35,9 +37,11 @@ type ScreenBounds = {
   availTop?: number;
 };
 
-function cleanId(value: unknown): string {
+function normalizeId(value: unknown): string {
   if (typeof value !== 'string') return '';
-  return value.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 120 || !/^[a-zA-Z0-9_-]+$/.test(trimmed)) return '';
+  return trimmed;
 }
 
 export function mergeChartRouteSelection(
@@ -81,17 +85,17 @@ export function isExternalChartSearch(search: string): boolean {
 
 export function chartSyncIdFromSearch(search: string): string {
   const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
-  return cleanId(params.get(CHART_EXTERNAL_WINDOW_SYNC_PARAM));
+  return normalizeId(params.get(CHART_EXTERNAL_WINDOW_SYNC_PARAM));
 }
 
 export function chartExternalWindowChannel(syncId: string): string {
-  const normalized = cleanId(syncId);
+  const normalized = normalizeId(syncId);
   if (!normalized) throw new Error('Invalid chart synchronization session');
   return `${CHART_EXTERNAL_WINDOW_CHANNEL}:${normalized}`;
 }
 
 export function buildExternalChartPath(selection: AnalysisSelection, syncId: string): string {
-  const normalizedSyncId = cleanId(syncId);
+  const normalizedSyncId = normalizeId(syncId);
   if (!normalizedSyncId) throw new Error('Invalid chart synchronization session');
   const params = new URLSearchParams(selectionQuery(selection));
   params.set(CHART_EXTERNAL_WINDOW_PARAM, CHART_EXTERNAL_WINDOW_VALUE);
@@ -136,7 +140,28 @@ export function createChartWindowSourceId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const values = crypto.getRandomValues(new Uint32Array(4));
+    return `chart-window-${Array.from(values, (value) => value.toString(36)).join('-')}`;
+  }
   return `chart-window-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function isChartWindowMessageFresh(sentAt: number, now = Date.now()): boolean {
+  return Number.isSafeInteger(sentAt)
+    && sentAt > 0
+    && Number.isFinite(now)
+    && sentAt >= now - CHART_WINDOW_MESSAGE_MAX_AGE_MS
+    && sentAt <= now + CHART_WINDOW_MESSAGE_MAX_FUTURE_SKEW_MS;
+}
+
+export function shouldAcceptChartWindowMessage(
+  message: ChartExternalWindowMessage,
+  lastAcceptedSentAt: number,
+  now = Date.now(),
+): boolean {
+  return isChartWindowMessageFresh(message.sentAt, now)
+    && message.sentAt > Math.max(0, Number(lastAcceptedSentAt) || 0);
 }
 
 export function createChartWindowMessage(
@@ -153,7 +178,7 @@ export function createChartWindowMessage(
   sourceId: string,
   selection?: AnalysisSelection,
 ): ChartExternalWindowMessage {
-  const normalizedSourceId = cleanId(sourceId);
+  const normalizedSourceId = normalizeId(sourceId);
   if (!normalizedSourceId) throw new Error('Invalid chart window source');
   if (type === 'selection') {
     const normalized = normalizeAnalysisSelection(selection);
@@ -163,14 +188,17 @@ export function createChartWindowMessage(
   return { type, sourceId: normalizedSourceId, sentAt: Date.now() };
 }
 
-export function parseChartWindowMessage(value: unknown): ChartExternalWindowMessage | null {
+export function parseChartWindowMessage(
+  value: unknown,
+  now = Date.now(),
+): ChartExternalWindowMessage | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
   const type = row.type;
   if (type !== 'ready' && type !== 'closed' && type !== 'selection') return null;
-  const sourceId = cleanId(row.sourceId);
+  const sourceId = normalizeId(row.sourceId);
   const sentAt = Number(row.sentAt);
-  if (!sourceId || !Number.isFinite(sentAt) || sentAt <= 0) return null;
+  if (!sourceId || !isChartWindowMessageFresh(sentAt, now)) return null;
 
   if (type === 'selection') {
     const selection = normalizeAnalysisSelection(row.selection);
