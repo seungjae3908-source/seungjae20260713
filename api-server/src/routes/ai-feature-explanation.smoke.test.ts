@@ -157,9 +157,18 @@ function readOnlyRepository(
       if (userId !== ownerUserId || !plan || id !== plan.id || plan.userId !== userId) return null;
       return structuredClone(plan);
     },
+    async listPlans(userId) {
+      if (userId !== ownerUserId || !plan || plan.userId !== userId) return [];
+      return [structuredClone(plan)];
+    },
+    async insertPlan() { return mutation('insertPlan'); },
+    async compareAndSetPlan() { return mutation('compareAndSetPlan'); },
     async savePlan() { return mutation('savePlan'); },
     async getOrder() { return null; },
     async findOrderByPlan() { return null; },
+    async createOrderAtomic() { return mutation('createOrderAtomic'); },
+    async transitionOrderAtomic() { return mutation('transitionOrderAtomic'); },
+    async claimOrderExecution() { return mutation('claimOrderExecution'); },
     async saveOrder() { return mutation('saveOrder'); },
     async listOrders() { return []; },
     async appendEvent() { return mutation('appendEvent'); },
