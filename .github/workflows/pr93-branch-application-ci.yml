@@ -29,14 +29,15 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout exact branch history
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: agent/instrument-orderbook-ui
           fetch-depth: 0
+          persist-credentials: false
       - name: Verify patch whitespace
         run: git diff --check 57fd9cca3b350c82b0ad6266ac3ef8da1b34bd0f HEAD
       - name: Verify exact PR branch and dispatch official workflow
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const branch = 'agent/instrument-orderbook-ui';
@@ -59,5 +60,9 @@ jobs:
               repo: context.repo.repo,
               workflow_id: 'futures-public-network-smoke.yml',
               ref: branch,
+              inputs: {
+                target_sha: context.sha,
+                checkout_ref: context.sha,
+              },
             });
             core.notice(`Dispatched official Application CI for ${branch}@${context.sha}.`);
