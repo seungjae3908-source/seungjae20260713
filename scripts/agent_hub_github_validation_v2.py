@@ -7,7 +7,6 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
-from urllib.parse import quote
 
 REQUIRED_STATUS_CONTEXTS = (
     "application-ci/verified",
@@ -52,6 +51,7 @@ class GitHubEvidenceError(RuntimeError):
 
 class GitHubLike(Protocol):
     repository: str
+
     def request(self, method: str, path: str, payload: Mapping[str, Any] | None = None) -> Any: ...
     def workflow_run(self, run_id: int) -> dict[str, Any]: ...
     def branch_sha(self, branch: str) -> str: ...
@@ -79,6 +79,7 @@ class ValidatedGitHubEvidence:
     run_id: int | None
     run_conclusion: str
     branch_sha: str
+    base_branch_sha: str
     reported_changed_files: tuple[str, ...]
     pr_changed_files: tuple[str, ...]
 
@@ -188,22 +189,34 @@ def validate_report_evidence(
     ids: list[str] = []
     comment_id = int(report_comment.get("id") or 0)
     comment_author = str((report_comment.get("user") or {}).get("login") or "")
-    if issue_number <= 0 or comment_id != int(report.comment_id) or comment_author != str(report.author):
+    report_comment_id = int(getattr(report, "comment_id", 0) or 0)
+    report_author = str(getattr(report, "author", "") or "")
+    if issue_number <= 0 or comment_id != report_comment_id or comment_author != report_author:
         raise _mismatch(
-            "report_comment_identity_mismatch", "issue_comment",
-            {"issue": issue_number, "comment": report.comment_id, "author": report.author},
+            "report_comment_identity_mismatch",
+            "issue_comment",
+            {"issue": issue_number, "comment": report_comment_id, "author": report_author},
             {"issue": issue_number, "comment": comment_id, "author": comment_author},
         )
     ids.append(_evidence_id("issue-comment", {"repository": github.repository, "issue": issue_number, "comment": comment_id, "author": comment_author}))
 
-    report_sha = str(report.head_sha or "").lower()
-    branch = str(report.branch or "")
+    report_sha = str(getattr(report, "head_sha", "") or "").lower()
+    branch = str(getattr(report, "branch", "") or fields.get("branch") or "")
     if not SHA_RE.fullmatch(report_sha):
         raise _mismatch("report_head_sha_invalid", "branch_head", "40-char SHA", report_sha, ids)
-    actual_branch_sha = github.branch_sha(branch)
+    actual_branch_sha = str(github.branch_sha(branch) or "").lower()
     if actual_branch_sha != report_sha:
         raise _mismatch("branch_head_mismatch", "branch_head", report_sha, actual_branch_sha, ids)
     ids.append(_evidence_id("branch-head", {"repository": github.repository, "branch": branch, "sha": report_sha}))
+
+    reported_base_sha = str(fields.get("base_sha") or "").lower()
+    base_branch = str(fields.get("base_branch") or "")
+    if not SHA_RE.fullmatch(reported_base_sha):
+        raise _mismatch("report_base_sha_invalid", "base_branch_head", "40-char SHA", reported_base_sha, ids)
+    actual_base_branch_sha = str(github.branch_sha(base_branch) or "").lower()
+    if actual_base_branch_sha != reported_base_sha:
+        raise _mismatch("base_branch_head_mismatch", "base_branch_head", reported_base_sha, actual_base_branch_sha, ids)
+    ids.append(_evidence_id("base-branch-head", {"repository": github.repository, "branch": base_branch, "sha": reported_base_sha}))
 
     run_id_text = str(fields.get("ci_run_id") or "none").strip().lower()
     run_id: int | None = None
@@ -237,8 +250,8 @@ def validate_report_evidence(
         if not pr_text.isdigit():
             raise _mismatch("pr_number_invalid", "pull_request", "positive integer or none", pr_text, ids)
         pr = fetch_pull_request(github, int(pr_text))
-        expected_base = str(fields.get("base_branch") or "")
-        expected_head_branch = str(fields.get("branch") or "")
+        expected_base = base_branch
+        expected_head_branch = branch
         if pr.repository != github.repository:
             raise _mismatch("pr_repository_mismatch", "pull_request", github.repository, pr.repository, ids)
         if pr.state != "open" or pr.merged:
@@ -247,6 +260,8 @@ def validate_report_evidence(
             raise _mismatch("pr_not_draft", "pull_request", True, pr.draft, ids)
         if pr.base_branch != expected_base:
             raise _mismatch("pr_base_branch_mismatch", "pull_request", expected_base, pr.base_branch, ids)
+        if pr.base_sha != reported_base_sha:
+            raise _mismatch("pr_base_sha_mismatch", "pull_request", reported_base_sha, pr.base_sha, ids)
         if pr.head_branch != expected_head_branch or pr.head_sha != report_sha:
             raise _mismatch("pr_head_identity_mismatch", "pull_request", {"branch": expected_head_branch, "sha": report_sha}, {"branch": pr.head_branch, "sha": pr.head_sha}, ids)
         actual_pr_files = _pr_files(github, pr.number)
@@ -255,7 +270,7 @@ def validate_report_evidence(
             raise _mismatch("reported_files_not_in_pr", "pull_request_files", list(reported_changed), list(actual_pr_files), ids)
         if str(report.status) == "completed" and actual_pr_files and not reported_changed:
             raise _mismatch("completed_changed_files_empty", "pull_request_files", list(actual_pr_files), [], ids)
-        ids.append(_evidence_id("pull-request", {"repository": github.repository, "number": pr.number, "base": pr.base_branch, "head": pr.head_branch, "head_sha": pr.head_sha, "draft": pr.draft}))
+        ids.append(_evidence_id("pull-request", {"repository": github.repository, "number": pr.number, "base": pr.base_branch, "base_sha": pr.base_sha, "head": pr.head_branch, "head_sha": pr.head_sha, "draft": pr.draft}))
         ids.append(_evidence_id("pull-request-files", {"repository": github.repository, "number": pr.number, "files": list(actual_pr_files)}))
     elif reported_changed:
         raise _mismatch("changed_report_without_pr", "pull_request", "Draft PR number", list(reported_changed), ids)
@@ -266,14 +281,25 @@ def validate_report_evidence(
     ids = list(dict.fromkeys(ids))
     if not ids:
         raise _mismatch("immutable_evidence_empty", "evidence_conversion", "at least one evidence ID", [], ids)
-    return ValidatedGitHubEvidence(tuple(ids), pr, run_id, run_conclusion, actual_branch_sha, reported_changed, actual_pr_files)
+    return ValidatedGitHubEvidence(
+        tuple(ids), pr, run_id, run_conclusion, actual_branch_sha, actual_base_branch_sha,
+        reported_changed, actual_pr_files,
+    )
 
 
 def validate_completed_report(report: Any, github: GitHubLike) -> PullRequestEvidence | None:
     """Backward-compatible completed-report validation used by older callers/tests."""
     if str(report.status) != "completed":
         return None
-    dummy_comment = {"id": getattr(report, "comment_id", 1), "user": {"login": getattr(report, "author", "github-actions[bot]")}}
+    comment_id = int(getattr(report, "comment_id", 1) or 1)
+    author = str(getattr(report, "author", "github-actions[bot]") or "github-actions[bot]")
+    if not hasattr(report, "comment_id"):
+        setattr(report, "comment_id", comment_id)
+    if not hasattr(report, "author"):
+        setattr(report, "author", author)
+    if not hasattr(report, "branch"):
+        setattr(report, "branch", str(report.fields.get("branch") or ""))
+    dummy_comment = {"id": comment_id, "user": {"login": author}}
     return validate_report_evidence(report, github, issue_number=62, report_comment=dummy_comment).pr
 
 
@@ -288,7 +314,10 @@ def validate_draft_pr_reuse(
         raise _mismatch("draft_pr_branch_mismatch", "draft_pr_reuse", {"head": work_branch, "base": target_branch}, {"head": evidence.head_branch, "base": evidence.base_branch})
     if evidence.author not in {repository_owner, "github-actions[bot]"}:
         raise _mismatch("draft_pr_author_untrusted", "draft_pr_reuse", [repository_owner, "github-actions[bot]"], evidence.author)
-    required = {f"agent_hub_command_id: {command_id}", f"agent_hub_worker: {worker}", f"agent_hub_expected_head_sha: {expected_head_sha}", f"agent_hub_work_branch: {work_branch}"}
+    required = {
+        f"agent_hub_command_id: {command_id}", f"agent_hub_worker: {worker}",
+        f"agent_hub_expected_head_sha: {expected_head_sha}", f"agent_hub_work_branch: {work_branch}",
+    }
     if not all(marker in evidence.body for marker in required):
         raise _mismatch("draft_pr_metadata_mismatch", "draft_pr_reuse", sorted(required), evidence.body)
     return evidence
@@ -297,36 +326,87 @@ def validate_draft_pr_reuse(
 def self_test() -> int:
     class Fake:
         repository = "owner/repo"
-        def __init__(self, *, conclusion="failure", run_sha="b"*40, branch_sha="b"*40, pr_base="main", draft=True, files=None):
-            self.conclusion, self.run_sha, self._branch_sha = conclusion, run_sha, branch_sha
-            self.pr_base, self.draft, self.files = pr_base, draft, files or ["tests/x.spec.ts"]
+
+        def __init__(
+            self, *, conclusion="failure", run_sha="b" * 40, branch_sha="b" * 40,
+            base_sha="a" * 40, pr_base="main", pr_base_sha="a" * 40,
+            draft=True, files=None,
+        ):
+            self.conclusion = conclusion
+            self.run_sha = run_sha
+            self._branch_sha = branch_sha
+            self._base_sha = base_sha
+            self.pr_base = pr_base
+            self.pr_base_sha = pr_base_sha
+            self.draft = draft
+            self.files = files or ["tests/x.spec.ts"]
+
         def workflow_run(self, run_id):
-            return {"status":"completed","conclusion":self.conclusion,"head_sha":self.run_sha,"repository":{"full_name":self.repository}}
-        def branch_sha(self, branch): return self._branch_sha
+            return {"status": "completed", "conclusion": self.conclusion, "head_sha": self.run_sha, "repository": {"full_name": self.repository}}
+
+        def branch_sha(self, branch):
+            return self._base_sha if branch == "main" else self._branch_sha
+
         def request(self, method, path, payload=None):
-            if "/files" in path: return [{"filename": f} for f in self.files]
+            if "/files" in path:
+                return [{"filename": f} for f in self.files]
             if "/pulls/" in path:
-                return {"number":7,"state":"open","draft":self.draft,"merged":False,"body":"","user":{"login":"owner"},"base":{"ref":self.pr_base,"sha":"a"*40,"repo":{"full_name":self.repository}},"head":{"ref":"feature/demo","sha":"b"*40,"repo":{"full_name":self.repository}}}
-            return {"statuses":[{"context":c,"state":"success"} for c in REQUIRED_STATUS_CONTEXTS]}
+                return {
+                    "number": 7, "state": "open", "draft": self.draft, "merged": False, "body": "",
+                    "user": {"login": "owner"},
+                    "base": {"ref": self.pr_base, "sha": self.pr_base_sha, "repo": {"full_name": self.repository}},
+                    "head": {"ref": "feature/demo", "sha": "b" * 40, "repo": {"full_name": self.repository}},
+                }
+            return {"statuses": [{"context": c, "state": "success"} for c in REQUIRED_STATUS_CONTEXTS]}
+
     class Report:
-        comment_id=99; author="owner"; status="partial"; head_sha="b"*40; branch="feature/demo"
-        fields={"ci_run_id":"42","pr_number":"7","changed_files":"[]","repository":"owner/repo","base_branch":"main","base_sha":"a"*40,"branch":"feature/demo"}
-    comment={"id":99,"user":{"login":"owner"}}
-    result=validate_report_evidence(Report(), Fake(), issue_number=62, report_comment=comment)
+        comment_id = 99
+        author = "owner"
+        status = "partial"
+        head_sha = "b" * 40
+        branch = "feature/demo"
+        fields = {
+            "ci_run_id": "42", "pr_number": "7", "changed_files": "[]", "repository": "owner/repo",
+            "base_branch": "main", "base_sha": "a" * 40, "branch": "feature/demo",
+        }
+
+    comment = {"id": 99, "user": {"login": "owner"}}
+    result = validate_report_evidence(Report(), Fake(), issue_number=62, report_comment=comment)
     assert result.evidence_ids and result.pr and result.pr.base_branch == "main"
-    assert result.run_conclusion == "failure"  # partial reports may cite the failed run being analyzed
-    for code, fake in (("branch_head_mismatch", Fake(branch_sha="c"*40)), ("workflow_head_sha_mismatch", Fake(run_sha="c"*40)), ("pr_base_branch_mismatch", Fake(pr_base="develop")), ("pr_not_draft", Fake(draft=False))):
-        try: validate_report_evidence(Report(), fake, issue_number=62, report_comment=comment)
-        except GitHubEvidenceError as exc: assert exc.code == code
-        else: raise AssertionError(code)
+    assert result.run_conclusion == "failure"
+    cases = (
+        ("branch_head_mismatch", Fake(branch_sha="c" * 40)),
+        ("base_branch_head_mismatch", Fake(base_sha="c" * 40)),
+        ("workflow_head_sha_mismatch", Fake(run_sha="c" * 40)),
+        ("pr_base_branch_mismatch", Fake(pr_base="develop")),
+        ("pr_base_sha_mismatch", Fake(pr_base_sha="c" * 40)),
+        ("pr_not_draft", Fake(draft=False)),
+    )
+    for code, fake in cases:
+        try:
+            validate_report_evidence(Report(), fake, issue_number=62, report_comment=comment)
+        except GitHubEvidenceError as exc:
+            assert exc.code == code
+        else:
+            raise AssertionError(code)
+
     class Completed(Report):
-        status="completed"; fields=dict(Report.fields, changed_files='["tests/x.spec.ts"]')
-    completed=validate_report_evidence(Completed(), Fake(conclusion="success"), issue_number=62, report_comment=comment)
-    assert len(completed.evidence_ids) >= 6
-    try: validate_report_evidence(Completed(), Fake(conclusion="failure"), issue_number=62, report_comment=comment)
-    except GitHubEvidenceError as exc: assert exc.code == "completed_report_ci_not_success"
-    else: raise AssertionError("failed completed run accepted")
-    print(json.dumps({"github_evidence_v2":"pass","partial_failed_run_reusable":1,"empty_evidence_accepted":0,"detailed_mismatch_codes":4,"required_statuses":len(REQUIRED_STATUS_CONTEXTS)}))
+        status = "completed"
+        fields = dict(Report.fields, changed_files='["tests/x.spec.ts"]')
+
+    completed = validate_report_evidence(Completed(), Fake(conclusion="success"), issue_number=62, report_comment=comment)
+    assert len(completed.evidence_ids) >= 7
+    try:
+        validate_report_evidence(Completed(), Fake(conclusion="failure"), issue_number=62, report_comment=comment)
+    except GitHubEvidenceError as exc:
+        assert exc.code == "completed_report_ci_not_success"
+    else:
+        raise AssertionError("failed completed run accepted")
+    print(json.dumps({
+        "github_evidence_v2": "pass", "partial_failed_run_reusable": 1,
+        "empty_evidence_accepted": 0, "detailed_mismatch_codes": len(cases),
+        "required_statuses": len(REQUIRED_STATUS_CONTEXTS), "base_sha_verified": 1,
+    }))
     return 0
 
 
