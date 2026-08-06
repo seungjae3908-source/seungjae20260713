@@ -2,21 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express, { type RequestHandler } from 'express';
 import type { AddressInfo } from 'node:net';
-import type { AuthenticatedRequest, MemberProfile } from '../middleware/auth';
+import { requireCapability, type AuthenticatedRequest, type MemberProfile } from '../middleware/auth';
+import type { MemberCapability, MemberTier } from '../../../packages/member-access/src/index.js';
 import { ScannerRequestGuard } from '../services/scanner-request-guard.service';
 import type { ScannerResponse } from '../services/scanner-signal.types';
 import { createBoundedMarketScanRouter } from './bounded-market-scan';
 import { createCryptoSignalScanRouter } from './crypto-signal-scan';
 
-function member(level: 'associate' | 'regular'): MemberProfile {
+function member(level: MemberTier, overrides: Partial<MemberProfile> = {}): MemberProfile {
   return {
     id: `member-${level}`,
     login_name: level,
     display_name: level,
-    role: 'member',
+    role: level === 'admin' ? 'admin' : 'member',
     status: 'approved',
     membership_level: level,
     is_active: true,
+    ...overrides,
   };
 }
 
@@ -91,6 +93,37 @@ async function withServer(
   }
 }
 
+async function capabilityRequest(
+  profile: MemberProfile,
+  capability: MemberCapability,
+  body: Record<string, unknown> = {},
+) {
+  let protectedHandlerCalls = 0;
+  let signalState = 'READY_FOR_APPROVAL';
+  let orderRows = 0;
+  let exchangeRequests = 0;
+  let status = 0;
+  await withServer(
+    (app) => {
+      app.use(express.json());
+      app.use(inject(profile));
+      app.post('/api/protected', requireCapability(capability), (_req, res) => {
+        protectedHandlerCalls += 1;
+        res.status(204).end();
+      });
+    },
+    async (baseUrl) => {
+      const result = await fetch(`${baseUrl}/api/protected`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-client-role': 'admin' },
+        body: JSON.stringify({ role: 'admin', membership_level: 'admin', ...body }),
+      });
+      status = result.status;
+    },
+  );
+  return { status, protectedHandlerCalls, signalState, orderRows, exchangeRequests };
+}
+
 test('stock scanner returns 401 without a session', async () => {
   await withServer(
     (app) => app.use('/api/market/scan', createBoundedMarketScanRouter({
@@ -101,6 +134,22 @@ test('stock scanner returns 401 without a session', async () => {
       const result = await fetch(`${baseUrl}/api/market/scan?market=KR`);
       assert.equal(result.status, 401);
       assert.equal((await result.json() as { error: string }).error, 'LOGIN_REQUIRED');
+    },
+  );
+});
+
+test('pending member is denied the signal scanner', async () => {
+  await withServer(
+    (app) => {
+      app.use(inject(member('pending', { status: 'pending' })));
+      app.use('/api/market/scan', createBoundedMarketScanRouter({
+        scanner: { scan: async () => response('stock') },
+        guard: new ScannerRequestGuard(),
+      }));
+    },
+    async (baseUrl) => {
+      const result = await fetch(`${baseUrl}/api/market/scan?market=KR`);
+      assert.equal(result.status, 403);
     },
   );
 });
@@ -149,6 +198,60 @@ test('associate may scan both crypto spot and futures without order execution', 
       assert.equal(futuresBody.exchangeRequestSent, false);
     },
   );
+});
+
+test('associate and regular direct order calls are denied without side effects', async () => {
+  for (const level of ['associate', 'regular'] as const) {
+    for (const capability of ['canPlaceOrders', 'canAccessTradeAutomation', 'canApprovePaperOrder'] as const) {
+      const result = await capabilityRequest(member(level), capability);
+      assert.equal(result.status, 403);
+      assert.equal(result.protectedHandlerCalls, 0);
+      assert.equal(result.orderRows, 0);
+      assert.equal(result.exchangeRequests, 0);
+      assert.equal(result.signalState, 'READY_FOR_APPROVAL');
+    }
+  }
+});
+
+test('active admin may cross each order capability guard', async () => {
+  for (const capability of ['canPlaceOrders', 'canAccessTradeAutomation', 'canApprovePaperOrder'] as const) {
+    const result = await capabilityRequest(member('admin'), capability);
+    assert.equal(result.status, 204);
+    assert.equal(result.protectedHandlerCalls, 1);
+    assert.equal(result.orderRows, 0);
+    assert.equal(result.exchangeRequests, 0);
+    assert.equal(result.signalState, 'READY_FOR_APPROVAL');
+  }
+});
+
+test('inactive and suspended admins are denied before protected handlers', async () => {
+  const profiles = [
+    member('admin', { is_active: false }),
+    member('admin', { status: 'suspended' }),
+  ];
+  for (const profile of profiles) {
+    for (const capability of ['canPlaceOrders', 'canAccessTradeAutomation', 'canApprovePaperOrder'] as const) {
+      const result = await capabilityRequest(profile, capability);
+      assert.equal(result.status, 403);
+      assert.equal(result.protectedHandlerCalls, 0);
+      assert.equal(result.orderRows, 0);
+      assert.equal(result.exchangeRequests, 0);
+      assert.equal(result.signalState, 'READY_FOR_APPROVAL');
+    }
+  }
+});
+
+test('client role or body tampering cannot elevate an associate', async () => {
+  const result = await capabilityRequest(member('associate'), 'canPlaceOrders', {
+    role: 'admin',
+    membership_level: 'admin',
+    is_active: true,
+  });
+  assert.equal(result.status, 403);
+  assert.equal(result.protectedHandlerCalls, 0);
+  assert.equal(result.orderRows, 0);
+  assert.equal(result.exchangeRequests, 0);
+  assert.equal(result.signalState, 'READY_FOR_APPROVAL');
 });
 
 test('same member and same conditions receive duplicate 409 while first scan is active', async () => {

@@ -6,7 +6,7 @@ import AiChartPage from '@/pages/ai-chart';
 import ScannerPage from '@/pages/scanner';
 import SignalScannerPage from '@/pages/signal-scanner';
 
-type MobileWorkspace = 'signal' | 'legacy';
+type MobileWorkspace = 'signal' | 'chart' | 'admin';
 
 function useDesktopWorkspace() {
   const query = '(min-width: 1024px)';
@@ -26,41 +26,44 @@ export default function TechnicalWorkspacePage() {
   const auth = useAuth();
   const [location] = useLocation();
   const phase11SignalRoute = location.startsWith('/__phase11-technical-workspace-e2e');
-  const canUseAdminWorkspace = auth.isAdmin || phase11SignalRoute;
   const canUseAiChart = auth.can('canAccessRiskPreview') || phase11SignalRoute;
-  const [mobileWorkspace, setMobileWorkspace] = useState<MobileWorkspace>(() => phase11SignalRoute ? 'signal' : 'legacy');
+  const canUseAdminWorkspace = auth.can('canPlaceOrders') || phase11SignalRoute;
+  const [mobileWorkspace, setMobileWorkspace] = useState<MobileWorkspace>(() => (
+    phase11SignalRoute ? 'signal' : canUseAiChart ? 'chart' : 'signal'
+  ));
+
+  useEffect(() => {
+    if (mobileWorkspace === 'admin' && !canUseAdminWorkspace) setMobileWorkspace(canUseAiChart ? 'chart' : 'signal');
+    if (mobileWorkspace === 'chart' && !canUseAiChart) setMobileWorkspace('signal');
+  }, [canUseAdminWorkspace, canUseAiChart, mobileWorkspace]);
 
   if (!desktop) {
-    if (!canUseAdminWorkspace) {
-      return (
-        <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-          <div className="min-h-0 flex-1 overflow-hidden"><SignalScannerPage /></div>
-        </div>
-      );
-    }
+    const workspaces: Array<{ id: MobileWorkspace; label: string }> = [
+      { id: 'signal', label: '다중 시장 AI 신호검색기' },
+      ...(canUseAiChart ? [{ id: 'chart' as const, label: 'AI 차트 분석기' }] : []),
+      ...(canUseAdminWorkspace ? [{ id: 'admin' as const, label: '관리자 주문 워크스페이스' }] : []),
+    ];
     return (
       <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-        <div className="shrink-0 border-b border-card-border bg-background px-3 py-2">
-          {mobileWorkspace === 'legacy' ? (
+        <div className="grid shrink-0 gap-2 border-b border-card-border bg-background px-3 py-2" style={{ gridTemplateColumns: `repeat(${workspaces.length}, minmax(0, 1fr))` }}>
+          {workspaces.map((workspace) => (
             <button
+              key={workspace.id}
               type="button"
-              onClick={() => setMobileWorkspace('signal')}
-              className="min-h-11 w-full rounded-xl border border-primary/30 bg-primary/10 px-3 text-sm font-extrabold text-primary"
+              aria-pressed={mobileWorkspace === workspace.id}
+              onClick={() => setMobileWorkspace(workspace.id)}
+              className={mobileWorkspace === workspace.id
+                ? 'min-h-11 rounded-xl border border-primary/30 bg-primary/10 px-2 text-xs font-extrabold text-primary'
+                : 'min-h-11 rounded-xl border border-card-border bg-card px-2 text-xs font-extrabold'}
             >
-              다중 시장 AI 신호검색기
+              {workspace.label}
             </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setMobileWorkspace('legacy')}
-              className="min-h-11 w-full rounded-xl border border-card-border bg-card px-3 text-sm font-extrabold"
-            >
-              관리자 주문 워크스페이스
-            </button>
-          )}
+          ))}
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
-          {mobileWorkspace === 'legacy' ? <ScannerPage /> : <SignalScannerPage />}
+          {mobileWorkspace === 'signal' ? <SignalScannerPage /> : null}
+          {mobileWorkspace === 'chart' && canUseAiChart ? <AiChartPage /> : null}
+          {mobileWorkspace === 'admin' && canUseAdminWorkspace ? <ScannerPage /> : null}
         </div>
       </div>
     );
