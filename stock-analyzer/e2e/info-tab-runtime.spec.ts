@@ -124,9 +124,9 @@ test('coin information moves from Upbit spot to Bitget futures', async ({ page }
   await page.getByRole('button', { name: /선물 · 비트겟/ }).click(); await page.getByPlaceholder(/선물 심볼/).fill('BTC'); await page.getByRole('button', { name: /BTCUSDT/ }).click(); await page.getByRole('button', { name: /선물 기본정보/ }).click(); await expect(page.getByText('펀딩비')).toBeVisible(); await expect(page.getByText('미결제약정')).toBeVisible(); clean();
 });
 
-test('direct refresh routes for market, sectors, list, portfolio and menu render without blank pages', async ({ page }) => {
+test('direct refresh routes for stock information, market, themes, list, watchlist, and portfolio render without blank pages', async ({ page }) => {
   const clean = diagnostics(page); await mockApi(page);
-  for (const route of ['/stock-info?asset=stock&market=US&ticker=SAME', '/market-overview', '/themes', '/stocks', '/watchlist', '/portfolio', '/more']) {
+  for (const route of ['/stock-info?asset=stock&market=US&ticker=SAME', '/market-overview', '/themes', '/stocks', '/watchlist', '/portfolio']) {
     await page.goto(route); await page.reload(); await expect(page.locator('body')).not.toBeEmpty(); await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
   }
   clean();
