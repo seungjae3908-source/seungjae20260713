@@ -1,4 +1,4 @@
-import { Router, type IRouter } from 'express';
+import { Router, type IRouter, type Request, type Response as ExpressResponse } from 'express';
 
 import {
   getKiwoomDomesticOrderbook,
@@ -12,17 +12,9 @@ const BITGET_PRODUCT_TYPE = 'USDT-FUTURES';
 const PUBLIC_TIMEOUT_MS = 8_000;
 const FRESH_MS = 30_000;
 
-export type InstrumentOrderbookAssetClass =
-  | 'stock'
-  | 'crypto_spot'
-  | 'crypto_futures';
+export type InstrumentOrderbookAssetClass = 'stock' | 'crypto_spot' | 'crypto_futures';
 export type InstrumentOrderbookMarket = 'KR' | 'US' | 'UPBIT' | 'BITGET';
-export type InstrumentOrderbookStatus =
-  | 'ready'
-  | 'partial'
-  | 'unavailable'
-  | 'invalid'
-  | 'provider_error';
+export type InstrumentOrderbookStatus = 'ready' | 'partial' | 'unavailable' | 'invalid' | 'provider_error';
 export type InstrumentOrderbookProvider = 'kiwoom' | 'upbit' | 'bitget' | null;
 export type InstrumentOrderbookSource =
   | 'ka10004'
@@ -84,11 +76,26 @@ interface Descriptor {
 type RawOrderbook = Record<string, unknown>;
 type Side = 'ask' | 'bid';
 type RawLevel = { rank: number; price: unknown; quantity: unknown };
+type Freshness = Pick<InstrumentOrderbookPayload, 'sourceTimestampRaw' | 'updatedAt' | 'freshness' | 'stale'>;
+type PublicFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+type KiwoomLoader = (ticker: string) => Promise<KiwoomApiResponse>;
 
-type Freshness = Pick<
-  InstrumentOrderbookPayload,
-  'sourceTimestampRaw' | 'updatedAt' | 'freshness' | 'stale'
->;
+let publicFetch: PublicFetch = (input, init) => fetch(input, init);
+let publicTimeoutMs = PUBLIC_TIMEOUT_MS;
+let kiwoomLoader: KiwoomLoader = getKiwoomDomesticOrderbook;
+
+export function setOrderbookPublicTransportForTests(
+  value: { fetch?: PublicFetch; timeoutMs?: number } | null,
+): void {
+  publicFetch = value?.fetch ?? ((input, init) => fetch(input, init));
+  publicTimeoutMs = value?.timeoutMs == null
+    ? PUBLIC_TIMEOUT_MS
+    : Math.max(1, Math.min(PUBLIC_TIMEOUT_MS, Math.trunc(value.timeoutMs)));
+}
+
+export function setOrderbookKiwoomLoaderForTests(loader: KiwoomLoader | null): void {
+  kiwoomLoader = loader ?? getKiwoomDomesticOrderbook;
+}
 
 function textValue(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
@@ -102,89 +109,65 @@ function numericValue(
 ): number | null {
   const text = textValue(value);
   if (text == null) return null;
-  const normalized = text
-    .replace(/,/g, '')
-    .replace(/[₩원주]/g, '')
-    .trim();
+  const normalized = text.replace(/,/g, '').replace(/[₩원주]/g, '').trim();
   if (!normalized) return null;
   const parsed = Number(normalized);
   if (!Number.isFinite(parsed)) return null;
   const result = options.absolute ? Math.abs(parsed) : parsed;
-  if (result < 0) return null;
-  if (!options.allowZero && result === 0) return null;
+  if (result < 0 || (!options.allowZero && result === 0)) return null;
   return result;
 }
 
 function cleanStockSymbol(value: unknown): string {
-  return String(value ?? '')
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9._-]/g, '')
-    .slice(0, 24);
+  const raw = String(value ?? '').trim().toUpperCase();
+  return /^[A-Z0-9._-]{1,24}$/.test(raw) ? raw : '';
 }
 
 function cleanSpotSymbol(value: unknown): string {
-  const cleaned = String(value ?? '')
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9-]/g, '')
-    .slice(0, 24);
-  return cleaned.replace(/^KRW-/, '');
+  const raw = String(value ?? '').trim().toUpperCase();
+  const symbol = raw.startsWith('KRW-') ? raw.slice(4) : raw;
+  return /^[A-Z0-9]{2,20}$/.test(symbol) ? symbol : '';
 }
 
 function cleanFuturesSymbol(value: unknown): string {
-  const cleaned = String(value ?? '')
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '')
-    .slice(0, 24);
-  if (!cleaned) return '';
-  return cleaned.endsWith('USDT') ? cleaned : `${cleaned}USDT`;
+  const raw = String(value ?? '').trim().toUpperCase();
+  const normalized = raw.endsWith('-USDT') ? `${raw.slice(0, -5)}USDT` : raw;
+  if (!/^[A-Z0-9]{2,24}$/.test(normalized)) return '';
+  const symbol = normalized.endsWith('USDT') ? normalized : `${normalized}USDT`;
+  return /^[A-Z0-9]{2,20}USDT$/.test(symbol) ? symbol : '';
 }
 
 function normalizeLevels(
   rows: RawLevel[],
   side: Side,
   warnings: string[],
+  absolutePrice = false,
 ): InstrumentOrderbookLevel[] {
-  const accepted: Array<{ sourceRank: number; price: number; quantity: number }> = [];
+  const accepted: Array<{ price: number; quantity: number }> = [];
   const seenPrices = new Set<number>();
 
   for (const row of rows) {
-    const price = numericValue(row.price, { absolute: true });
+    const price = numericValue(row.price, { absolute: absolutePrice });
     const quantity = numericValue(row.quantity, { allowZero: true });
-    if (price == null || quantity == null) {
+    if (price == null || quantity == null || quantity === 0) {
       if (textValue(row.price) != null || textValue(row.quantity) != null) {
-        warnings.push(
-          `${side === 'ask' ? '매도' : '매수'} ${row.rank}호가의 가격 또는 수량이 유효하지 않아 제외했습니다.`,
-        );
+        warnings.push(`${side === 'ask' ? '매도' : '매수'} ${row.rank}호가의 가격 또는 수량이 유효하지 않아 제외했습니다.`);
       }
       continue;
     }
-    if (quantity === 0) continue;
     if (seenPrices.has(price)) {
-      warnings.push(
-        `${side === 'ask' ? '매도' : '매수'} 호가에 중복 가격 ${price}이 있어 뒤 단계를 제외했습니다.`,
-      );
+      warnings.push(`${side === 'ask' ? '매도' : '매수'} 호가에 중복 가격 ${price}이 있어 뒤 단계를 제외했습니다.`);
       continue;
     }
     seenPrices.add(price);
-    accepted.push({ sourceRank: row.rank, price, quantity });
+    accepted.push({ price, quantity });
   }
 
-  accepted.sort((left, right) =>
-    side === 'ask' ? left.price - right.price : right.price - left.price,
-  );
-
+  accepted.sort((left, right) => side === 'ask' ? left.price - right.price : right.price - left.price);
   let cumulativeQuantity = 0;
   return accepted.slice(0, 10).map((row, index) => {
     cumulativeQuantity += row.quantity;
-    return {
-      rank: index + 1,
-      price: row.price,
-      quantity: row.quantity,
-      cumulativeQuantity,
-    };
+    return { rank: index + 1, price: row.price, quantity: row.quantity, cumulativeQuantity };
   });
 }
 
@@ -194,56 +177,31 @@ function freshnessFromDate(
   receivedAt: Date,
 ): Freshness {
   if (updatedAt == null) {
-    return {
-      sourceTimestampRaw,
-      updatedAt: null,
-      freshness: 'unknown',
-      stale: true,
-    };
+    return { sourceTimestampRaw, updatedAt: null, freshness: 'unknown', stale: true };
   }
   const ageMs = receivedAt.getTime() - Date.parse(updatedAt);
   if (!Number.isFinite(ageMs) || ageMs < -60_000) {
-    return {
-      sourceTimestampRaw,
-      updatedAt: null,
-      freshness: 'unknown',
-      stale: true,
-    };
+    return { sourceTimestampRaw, updatedAt: null, freshness: 'unknown', stale: true };
   }
   const stale = ageMs > FRESH_MS;
-  return {
-    sourceTimestampRaw,
-    updatedAt,
-    freshness: stale ? 'stale' : 'fresh',
-    stale,
-  };
+  return { sourceTimestampRaw, updatedAt, freshness: stale ? 'stale' : 'fresh', stale };
 }
 
 function parseKiwoomTimestamp(value: unknown, receivedAt: Date): Freshness {
   const raw = textValue(value);
-  if (!raw || !/^\d{14}$/.test(raw)) {
-    return freshnessFromDate(raw, null, receivedAt);
-  }
-  const year = raw.slice(0, 4);
-  const month = raw.slice(4, 6);
-  const day = raw.slice(6, 8);
-  const hour = raw.slice(8, 10);
-  const minute = raw.slice(10, 12);
-  const second = raw.slice(12, 14);
-  const parsed = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}+09:00`);
-  const updatedAt = Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
-  return freshnessFromDate(raw, updatedAt, receivedAt);
+  if (!raw || !/^\d{14}$/.test(raw)) return freshnessFromDate(raw, null, receivedAt);
+  const parsed = new Date(
+    `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}T${raw.slice(8, 10)}:${raw.slice(10, 12)}:${raw.slice(12, 14)}+09:00`,
+  );
+  return freshnessFromDate(raw, Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null, receivedAt);
 }
 
 function parseMillisecondTimestamp(value: unknown, receivedAt: Date): Freshness {
   const raw = textValue(value);
-  const milliseconds = numericValue(raw, { allowZero: false });
-  if (raw == null || milliseconds == null) {
-    return freshnessFromDate(raw, null, receivedAt);
-  }
+  const milliseconds = numericValue(raw);
+  if (raw == null || milliseconds == null) return freshnessFromDate(raw, null, receivedAt);
   const parsed = new Date(milliseconds);
-  const updatedAt = Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
-  return freshnessFromDate(raw, updatedAt, receivedAt);
+  return freshnessFromDate(raw, Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null, receivedAt);
 }
 
 function emptyPayload(
@@ -293,13 +251,14 @@ function finalizePayload(options: {
   asks: RawLevel[];
   bids: RawLevel[];
   freshness: Freshness;
+  absolutePrice?: boolean;
   totalAskQuantity?: unknown;
   totalBidQuantity?: unknown;
   warnings?: string[];
 }): InstrumentOrderbookPayload {
   const warnings = [...(options.warnings ?? [])];
-  const asks = normalizeLevels(options.asks, 'ask', warnings);
-  const bids = normalizeLevels(options.bids, 'bid', warnings);
+  const asks = normalizeLevels(options.asks, 'ask', warnings, options.absolutePrice);
+  const bids = normalizeLevels(options.bids, 'bid', warnings, options.absolutePrice);
   const bestAsk = asks[0]?.price ?? null;
   const bestBid = bids[0]?.price ?? null;
   const displayedAskQuantity = asks.reduce((sum, row) => sum + row.quantity, 0);
@@ -308,57 +267,31 @@ function finalizePayload(options: {
   const totalBidQuantity = numericValue(options.totalBidQuantity, { allowZero: true });
 
   if (options.freshness.updatedAt == null) {
-    warnings.push(
-      '공급자 응답에서 검증 가능한 갱신 시각을 확인할 수 없어 최신성을 보장하지 않습니다.',
-    );
+    warnings.push('공급자 응답에서 검증 가능한 갱신 시각을 확인할 수 없어 최신성을 보장하지 않습니다.');
   }
-
   if (asks.length === 0 && bids.length === 0) {
     return {
-      ...emptyPayload(
-        options.descriptor,
-        options.receivedAt,
-        'unavailable',
-        'ORDERBOOK_LEVELS_EMPTY',
-      ),
+      ...emptyPayload(options.descriptor, options.receivedAt, 'unavailable', 'ORDERBOOK_LEVELS_EMPTY'),
       ...options.freshness,
       warnings,
     };
   }
-
   if (bestAsk != null && bestBid != null && bestBid >= bestAsk) {
     return {
-      ...emptyPayload(
-        options.descriptor,
-        options.receivedAt,
-        'invalid',
-        'ORDERBOOK_CROSSED',
-      ),
+      ...emptyPayload(options.descriptor, options.receivedAt, 'invalid', 'ORDERBOOK_CROSSED'),
       ...options.freshness,
       stale: true,
-      warnings: [
-        ...warnings,
-        '최우선 매수호가가 최우선 매도호가 이상인 교차 호가여서 표시를 차단했습니다.',
-      ],
+      warnings: [...warnings, '최우선 매수호가가 최우선 매도호가 이상인 교차 호가여서 표시를 차단했습니다.'],
     };
   }
 
   const spread = bestAsk != null && bestBid != null ? bestAsk - bestBid : null;
   const midpoint = bestAsk != null && bestBid != null ? (bestAsk + bestBid) / 2 : null;
-  const spreadPercent =
-    spread != null && midpoint != null && midpoint > 0
-      ? (spread / midpoint) * 100
-      : null;
-  const imbalanceDenominator = displayedBidQuantity + displayedAskQuantity;
-  const imbalance =
-    imbalanceDenominator > 0
-      ? (displayedBidQuantity - displayedAskQuantity) / imbalanceDenominator
-      : null;
+  const spreadPercent = spread != null && midpoint != null && midpoint > 0 ? (spread / midpoint) * 100 : null;
+  const denominator = displayedBidQuantity + displayedAskQuantity;
+  const imbalance = denominator > 0 ? (displayedBidQuantity - displayedAskQuantity) / denominator : null;
   const partial = asks.length === 0 || bids.length === 0;
-
-  if (partial) {
-    warnings.push('매도 또는 매수 한쪽 호가가 비어 있어 부분 데이터로 표시합니다.');
-  }
+  if (partial) warnings.push('매도 또는 매수 한쪽 호가가 비어 있어 부분 데이터로 표시합니다.');
 
   return {
     ok: true,
@@ -420,18 +353,14 @@ export function normalizeKiwoomOrderbook(
   const raw = response as RawOrderbook;
   return finalizePayload({
     descriptor: {
-      assetClass: 'stock',
-      market: 'KR',
-      exchange: 'KRX',
-      symbol,
-      currency: 'KRW',
-      provider: 'kiwoom',
-      source: 'ka10004',
+      assetClass: 'stock', market: 'KR', exchange: 'KRX', symbol, currency: 'KRW',
+      provider: 'kiwoom', source: 'ka10004',
     },
     receivedAt,
     asks: kiwoomRows(raw, 'ask'),
     bids: kiwoomRows(raw, 'bid'),
     freshness: parseKiwoomTimestamp(raw.bid_req_base_tm, receivedAt),
+    absolutePrice: true,
     totalAskQuantity: raw.tot_sel_req,
     totalBidQuantity: raw.tot_buy_req,
   });
@@ -444,13 +373,8 @@ export function normalizeUpbitOrderbook(
 ): InstrumentOrderbookPayload {
   const symbol = cleanSpotSymbol(symbolInput);
   const descriptor: Descriptor = {
-    assetClass: 'crypto_spot',
-    market: 'UPBIT',
-    exchange: 'UPBIT',
-    symbol,
-    currency: 'KRW',
-    provider: 'upbit',
-    source: 'upbit_v1_orderbook',
+    assetClass: 'crypto_spot', market: 'UPBIT', exchange: 'UPBIT', symbol, currency: 'KRW',
+    provider: 'upbit', source: 'upbit_v1_orderbook',
   };
   const rows = Array.isArray(response) ? response : [];
   const first = rows[0];
@@ -482,8 +406,7 @@ function pairRows(value: unknown): RawLevel[] {
   if (!Array.isArray(value)) return [];
   const rows: RawLevel[] = [];
   value.forEach((pair, index) => {
-    if (!Array.isArray(pair)) return;
-    rows.push({ rank: index + 1, price: pair[0], quantity: pair[1] });
+    if (Array.isArray(pair)) rows.push({ rank: index + 1, price: pair[0], quantity: pair[1] });
   });
   return rows;
 }
@@ -495,13 +418,8 @@ export function normalizeBitgetFuturesOrderbook(
 ): InstrumentOrderbookPayload {
   const symbol = cleanFuturesSymbol(symbolInput);
   const descriptor: Descriptor = {
-    assetClass: 'crypto_futures',
-    market: 'BITGET',
-    exchange: 'BITGET',
-    symbol,
-    currency: 'USDT',
-    provider: 'bitget',
-    source: 'bitget_v2_mix_market_merge_depth',
+    assetClass: 'crypto_futures', market: 'BITGET', exchange: 'BITGET', symbol, currency: 'USDT',
+    provider: 'bitget', source: 'bitget_v2_mix_market_merge_depth',
   };
   if (!response || typeof response !== 'object' || Array.isArray(response)) {
     return emptyPayload(descriptor, receivedAt, 'provider_error', 'BITGET_ORDERBOOK_RESPONSE_INVALID');
@@ -510,11 +428,10 @@ export function normalizeBitgetFuturesOrderbook(
   if (String(payload.code ?? '') !== '00000') {
     return emptyPayload(descriptor, receivedAt, 'provider_error', 'BITGET_ORDERBOOK_PROVIDER_ERROR');
   }
-  const data = payload.data;
-  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+  if (!payload.data || typeof payload.data !== 'object' || Array.isArray(payload.data)) {
     return emptyPayload(descriptor, receivedAt, 'provider_error', 'BITGET_ORDERBOOK_RESPONSE_INVALID');
   }
-  const raw = data as RawOrderbook;
+  const raw = payload.data as RawOrderbook;
   return finalizePayload({
     descriptor,
     receivedAt,
@@ -524,22 +441,32 @@ export function normalizeBitgetFuturesOrderbook(
   });
 }
 
-async function fetchPublicJson(url: string): Promise<unknown> {
+async function fetchPublicJson(url: string, externalSignal?: AbortSignal): Promise<unknown> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PUBLIC_TIMEOUT_MS);
+  let timedOut = false;
+  const forwardAbort = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) forwardAbort();
+  else externalSignal?.addEventListener('abort', forwardAbort, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, publicTimeoutMs);
+
   try {
-    const response = await fetch(url, {
+    const response = await publicFetch(url, {
       method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'seungjae-investment-app/1.0',
-      },
+      headers: { Accept: 'application/json', 'User-Agent': 'seungjae-investment-app/1.0' },
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`HTTP_${response.status}`);
     return await response.json() as unknown;
+  } catch (error) {
+    if (externalSignal?.aborted) throw new Error('ORDERBOOK_REQUEST_ABORTED');
+    if (timedOut) throw new Error('ORDERBOOK_PROVIDER_TIMEOUT');
+    throw error;
   } finally {
     clearTimeout(timeout);
+    externalSignal?.removeEventListener('abort', forwardAbort);
   }
 }
 
@@ -549,109 +476,94 @@ function providerFailureCode(
 ): string {
   const message = error instanceof Error ? error.message : '';
   if (provider === 'kiwoom') {
-    if (/환경변수|등록되지 않았습니다/.test(message)) {
-      return 'ORDERBOOK_PROVIDER_NOT_CONFIGURED';
-    }
-    if (/시간이 초과|aborted/i.test(message)) return 'ORDERBOOK_PROVIDER_TIMEOUT';
+    if (/환경변수|등록되지 않았습니다|NOT_CONFIGURED/i.test(message)) return 'ORDERBOOK_PROVIDER_NOT_CONFIGURED';
+    if (/시간이 초과|TIMEOUT|aborted/i.test(message)) return 'ORDERBOOK_PROVIDER_TIMEOUT';
     return 'ORDERBOOK_PROVIDER_UNAVAILABLE';
   }
-  if (/시간이 초과|aborted/i.test(message)) {
-    return provider === 'upbit'
-      ? 'UPBIT_ORDERBOOK_PROVIDER_TIMEOUT'
-      : 'BITGET_ORDERBOOK_PROVIDER_TIMEOUT';
-  }
-  return provider === 'upbit'
-    ? 'UPBIT_ORDERBOOK_PROVIDER_UNAVAILABLE'
-    : 'BITGET_ORDERBOOK_PROVIDER_UNAVAILABLE';
+  const prefix = provider === 'upbit' ? 'UPBIT' : 'BITGET';
+  if (/HTTP_429/.test(message)) return `${prefix}_ORDERBOOK_RATE_LIMITED`;
+  if (/ORDERBOOK_REQUEST_ABORTED/.test(message)) return `${prefix}_ORDERBOOK_REQUEST_ABORTED`;
+  if (/TIMEOUT|시간이 초과|aborted/i.test(message)) return `${prefix}_ORDERBOOK_PROVIDER_TIMEOUT`;
+  return `${prefix}_ORDERBOOK_PROVIDER_UNAVAILABLE`;
 }
 
-async function loadOrderbook(descriptor: Descriptor): Promise<InstrumentOrderbookPayload> {
+async function loadOrderbook(
+  descriptor: Descriptor,
+  signal?: AbortSignal,
+): Promise<InstrumentOrderbookPayload> {
   if (descriptor.assetClass === 'stock' && descriptor.market === 'US') {
-    return emptyPayload(
-      descriptor,
-      new Date(),
-      'unavailable',
-      'US_ORDERBOOK_PROVIDER_NOT_CONNECTED',
-    );
+    return emptyPayload(descriptor, new Date(), 'unavailable', 'US_ORDERBOOK_PROVIDER_NOT_CONNECTED');
   }
-
   try {
     if (descriptor.assetClass === 'stock') {
-      const raw = await getKiwoomDomesticOrderbook(descriptor.symbol);
+      const raw = await kiwoomLoader(descriptor.symbol);
       return normalizeKiwoomOrderbook(descriptor.symbol, raw, new Date());
     }
     if (descriptor.assetClass === 'crypto_spot') {
       const raw = await fetchPublicJson(
         `${UPBIT_BASE}/v1/orderbook?markets=${encodeURIComponent(`KRW-${descriptor.symbol}`)}&count=10`,
+        signal,
       );
       return normalizeUpbitOrderbook(descriptor.symbol, raw, new Date());
     }
     const raw = await fetchPublicJson(
       `${BITGET_BASE}/api/v2/mix/market/merge-depth?symbol=${encodeURIComponent(descriptor.symbol)}&productType=${BITGET_PRODUCT_TYPE}&precision=scale0&limit=15`,
+      signal,
     );
     return normalizeBitgetFuturesOrderbook(descriptor.symbol, raw, new Date());
   } catch (error) {
     const provider = descriptor.provider ?? 'kiwoom';
     const reason = providerFailureCode(error, provider);
-    console.error('[instrument-orderbook]', descriptor.market, reason);
+    if (!reason.endsWith('_REQUEST_ABORTED')) console.error('[instrument-orderbook]', descriptor.market, reason);
     return emptyPayload(descriptor, new Date(), 'provider_error', reason);
   }
 }
 
 function stockDescriptor(tickerInput: unknown, marketInput: unknown): Descriptor | null {
   const symbol = cleanStockSymbol(tickerInput);
-  const market = String(marketInput ?? '').trim().toUpperCase() === 'US'
-    ? 'US'
-    : String(marketInput ?? '').trim().toUpperCase() === 'KR'
-      ? 'KR'
-      : /^\d{6}(?:_(?:NX|AL))?$/.test(symbol)
-        ? 'KR'
-        : 'US';
+  const marketRaw = String(marketInput ?? '').trim().toUpperCase();
+  const market = marketRaw === 'US' ? 'US' : marketRaw === 'KR' ? 'KR' : /^\d{6}(?:_(?:NX|AL))?$/.test(symbol) ? 'KR' : 'US';
   if (market === 'KR' && !/^\d{6}(?:_(?:NX|AL))?$/.test(symbol)) return null;
   if (market === 'US' && !/^[A-Z][A-Z0-9.-]{0,23}$/.test(symbol)) return null;
   return {
-    assetClass: 'stock',
-    market,
-    exchange: market === 'KR' ? 'KRX' : 'US',
-    symbol,
-    currency: market === 'KR' ? 'KRW' : 'USD',
-    provider: market === 'KR' ? 'kiwoom' : null,
+    assetClass: 'stock', market, exchange: market === 'KR' ? 'KRX' : 'US', symbol,
+    currency: market === 'KR' ? 'KRW' : 'USD', provider: market === 'KR' ? 'kiwoom' : null,
     source: market === 'KR' ? 'ka10004' : null,
   };
 }
 
 function genericDescriptor(query: Record<string, unknown>): Descriptor | null {
-  const assetClassRaw = String(query.assetClass ?? '').trim().toLowerCase();
-  if (assetClassRaw === 'stock') {
-    return stockDescriptor(query.symbol ?? query.ticker, query.market);
-  }
-  if (assetClassRaw === 'crypto_spot') {
+  const assetClass = String(query.assetClass ?? '').trim().toLowerCase();
+  if (assetClass === 'stock') return stockDescriptor(query.symbol ?? query.ticker, query.market);
+  if (assetClass === 'crypto_spot') {
     const symbol = cleanSpotSymbol(query.symbol);
-    if (!/^[A-Z0-9]{2,20}$/.test(symbol)) return null;
+    if (!symbol) return null;
     return {
-      assetClass: 'crypto_spot',
-      market: 'UPBIT',
-      exchange: 'UPBIT',
-      symbol,
-      currency: 'KRW',
-      provider: 'upbit',
-      source: 'upbit_v1_orderbook',
+      assetClass: 'crypto_spot', market: 'UPBIT', exchange: 'UPBIT', symbol, currency: 'KRW',
+      provider: 'upbit', source: 'upbit_v1_orderbook',
     };
   }
-  if (assetClassRaw === 'crypto_futures') {
+  if (assetClass === 'crypto_futures') {
     const symbol = cleanFuturesSymbol(query.symbol);
-    if (!/^[A-Z0-9]{2,20}USDT$/.test(symbol)) return null;
+    if (!symbol) return null;
     return {
-      assetClass: 'crypto_futures',
-      market: 'BITGET',
-      exchange: 'BITGET',
-      symbol,
-      currency: 'USDT',
-      provider: 'bitget',
-      source: 'bitget_v2_mix_market_merge_depth',
+      assetClass: 'crypto_futures', market: 'BITGET', exchange: 'BITGET', symbol, currency: 'USDT',
+      provider: 'bitget', source: 'bitget_v2_mix_market_merge_depth',
     };
   }
   return null;
+}
+
+async function sendOrderbook(req: Request, res: ExpressResponse, descriptor: Descriptor): Promise<void> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.once('aborted', abort);
+  try {
+    const payload = await loadOrderbook(descriptor, controller.signal);
+    if (!controller.signal.aborted && !res.writableEnded) res.status(200).json(payload);
+  } finally {
+    req.removeListener('aborted', abort);
+  }
 }
 
 router.get('/orderbook', async (req, res) => {
@@ -659,19 +571,13 @@ router.get('/orderbook', async (req, res) => {
   const descriptor = genericDescriptor(req.query as Record<string, unknown>);
   if (!descriptor) {
     const fallback: Descriptor = {
-      assetClass: 'stock',
-      market: 'US',
-      exchange: 'US',
-      symbol: cleanStockSymbol(req.query.symbol),
-      currency: 'USD',
-      provider: null,
-      source: null,
+      assetClass: 'stock', market: 'US', exchange: 'US', symbol: cleanStockSymbol(req.query.symbol),
+      currency: 'USD', provider: null, source: null,
     };
-    return res.status(400).json(
-      emptyPayload(fallback, new Date(), 'invalid', 'INVALID_ORDERBOOK_TARGET'),
-    );
+    res.status(400).json(emptyPayload(fallback, new Date(), 'invalid', 'INVALID_ORDERBOOK_TARGET'));
+    return;
   }
-  return res.status(200).json(await loadOrderbook(descriptor));
+  await sendOrderbook(req, res, descriptor);
 });
 
 router.get('/stocks/:ticker/orderbook', async (req, res) => {
@@ -679,19 +585,13 @@ router.get('/stocks/:ticker/orderbook', async (req, res) => {
   const descriptor = stockDescriptor(req.params.ticker, req.query.market);
   if (!descriptor) {
     const fallback: Descriptor = {
-      assetClass: 'stock',
-      market: 'KR',
-      exchange: 'KRX',
-      symbol: cleanStockSymbol(req.params.ticker),
-      currency: 'KRW',
-      provider: 'kiwoom',
-      source: 'ka10004',
+      assetClass: 'stock', market: 'KR', exchange: 'KRX', symbol: cleanStockSymbol(req.params.ticker),
+      currency: 'KRW', provider: 'kiwoom', source: 'ka10004',
     };
-    return res.status(400).json(
-      emptyPayload(fallback, new Date(), 'invalid', 'INVALID_STOCK_TICKER'),
-    );
+    res.status(400).json(emptyPayload(fallback, new Date(), 'invalid', 'INVALID_STOCK_TICKER'));
+    return;
   }
-  return res.status(200).json(await loadOrderbook(descriptor));
+  await sendOrderbook(req, res, descriptor);
 });
 
 export default router;
