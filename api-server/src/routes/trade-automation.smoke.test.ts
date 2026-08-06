@@ -1,9 +1,9 @@
-// @ts-nocheck
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
+import type { AuthenticatedRequest } from '../middleware/auth';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
 
 const USER = '11111111-1111-1111-1111-111111111111';
@@ -14,11 +14,12 @@ async function startServer(authenticated = true, role: 'regular' | 'admin' = 're
   const app = express();
   app.use(express.json());
   if (authenticated) app.use((req, _res, next) => {
-    req.member = {
+    const authenticatedRequest = req as AuthenticatedRequest;
+    authenticatedRequest.member = {
       id: USER, login_name: 'test', display_name: 'test', role, membership_level: role,
       status: 'approved', is_active: true,
     };
-    req.accessToken = 'test';
+    authenticatedRequest.accessToken = 'test';
     next();
   });
   app.use('/api/trade-automation', router);
@@ -54,21 +55,35 @@ test('status is authenticated, defaults off, and never returns credential values
     assert.equal(response.status, 200);
     const text = await response.text();
     assert.doesNotMatch(text, /encryptedCredentials|accessKey|secretKey|passphrase/);
-    const body = JSON.parse(text);
+    const body = JSON.parse(text) as {
+      policy: { mode: string; automaticEnabled: boolean };
+      approvalPaperOnly: boolean;
+      actualOrderSubmittedByStatusRequest: boolean;
+    };
+    assert.equal(body.policy.mode, 'approval');
     assert.equal(body.policy.automaticEnabled, false);
+    assert.equal(body.approvalPaperOnly, true);
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
 });
 
-test('automatic policy cannot be enabled without explicit final confirmation', async () => {
+test('automatic policy is rejected even with a forged confirmation', async () => {
   const { server, baseUrl } = await startServer();
   try {
     const response = await fetch(`${baseUrl}/api/trade-automation/policy`, {
       method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mode: 'automatic', automaticEnabled: true, exchangeEnabled: { upbit: true } }),
+      body: JSON.stringify({
+        mode: 'automatic',
+        automaticEnabled: true,
+        exchangeEnabled: { upbit: true },
+        confirmation: { acknowledged: true },
+      }),
     });
     assert.equal(response.status, 409);
-    assert.equal((await response.json()).error, 'AUTOMATIC_TRADING_CONFIRMATION_REQUIRED');
+    const body = await response.json() as { error: string; orderSubmitted: boolean; exchangeRequestSent: boolean };
+    assert.equal(body.error, 'AUTOMATIC_MODE_FORBIDDEN');
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
   } finally { await close(server); }
 });
 
@@ -80,7 +95,7 @@ test('persistent global emergency stop requires admin capability and exact confi
       body: JSON.stringify({ stopped: true, confirmation: 'STOP_ALL_TRADING' }),
     });
     assert.equal(denied.status, 403);
-    assert.equal((await denied.json()).error, 'ADMIN_REQUIRED');
+    assert.equal((await denied.json() as { error: string }).error, 'ADMIN_REQUIRED');
   } finally { await close(regular.server); }
 
   const admin = await startServer(true, 'admin');
@@ -95,40 +110,65 @@ test('persistent global emergency stop requires admin capability and exact confi
       body: JSON.stringify({ stopped: true, confirmation: 'STOP_ALL_TRADING' }),
     });
     assert.equal(stopped.status, 200);
-    const stoppedBody = await stopped.json();
+    const stoppedBody = await stopped.json() as {
+      persistentGlobalEmergencyStopped: boolean;
+      automaticTradingEnabledByThisRequest: boolean;
+    };
     assert.equal(stoppedBody.persistentGlobalEmergencyStopped, true);
     assert.equal(stoppedBody.automaticTradingEnabledByThisRequest, false);
 
     const status = await fetch(`${admin.baseUrl}/api/trade-automation/status`);
-    assert.equal((await status.json()).emergencyStopSources.persistentGlobal, true);
+    const statusBody = await status.json() as { emergencyStopSources: { persistentGlobal: boolean } };
+    assert.equal(statusBody.emergencyStopSources.persistentGlobal, true);
 
     const resumed = await fetch(`${admin.baseUrl}/api/trade-automation/admin/emergency-stop`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ stopped: false, confirmation: 'RESUME_NEW_ORDER_EVALUATION' }),
     });
     assert.equal(resumed.status, 200);
-    assert.equal((await resumed.json()).automaticTradingEnabledByThisRequest, false);
+    assert.equal((await resumed.json() as { automaticTradingEnabledByThisRequest: boolean }).automaticTradingEnabledByThisRequest, false);
   } finally { await close(admin.server); }
 });
 
-test('connection registration rejects withdrawal permission and does not echo secrets', async () => {
+test('connection registration rejects withdrawal and live modes without echoing secrets', async () => {
   const { server, baseUrl } = await startServer();
   try {
     const rejected = await fetch(`${baseUrl}/api/trade-automation/connections/upbit`, {
       method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ credentials: { accessKey: 'access-secret', secretKey: 'signing-secret' }, permissions: ['orders', 'withdrawal'] }),
+      body: JSON.stringify({
+        mode: 'approval', accountMode: 'paper', adapter: 'paper',
+        credentials: { accessKey: 'access-secret', secretKey: 'signing-secret' },
+        permissions: ['orders', 'withdrawal'],
+      }),
     });
     assert.equal(rejected.status, 400);
     assert.doesNotMatch(await rejected.text(), /access-secret|signing-secret/);
 
+    const liveRejected = await fetch(`${baseUrl}/api/trade-automation/connections/upbit`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'approval', accountMode: 'live', adapter: 'upbit-live',
+        credentials: { accessKey: 'access-secret', secretKey: 'signing-secret' },
+        permissions: ['orders'],
+      }),
+    });
+    assert.equal(liveRejected.status, 409);
+    assert.equal((await liveRejected.json() as { error: string }).error, 'LIVE_MODE_FORBIDDEN');
+
     const accepted = await fetch(`${baseUrl}/api/trade-automation/connections/upbit`, {
       method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ credentials: { accessKey: 'access-secret', secretKey: 'signing-secret' }, permissions: ['orders'], accountMode: 'paper' }),
+      body: JSON.stringify({
+        mode: 'approval', accountMode: 'paper', adapter: 'paper',
+        credentials: { accessKey: 'access-secret', secretKey: 'signing-secret' },
+        permissions: ['orders'],
+      }),
     });
     assert.equal(accepted.status, 200);
     const text = await accepted.text();
     assert.doesNotMatch(text, /access-secret|signing-secret/);
-    assert.equal(JSON.parse(text).credentialsReturned, false);
+    const body = JSON.parse(text) as { credentialsReturned: boolean; liveModeAllowed: boolean };
+    assert.equal(body.credentialsReturned, false);
+    assert.equal(body.liveModeAllowed, false);
   } finally { await close(server); }
 });
 
@@ -138,7 +178,8 @@ test('approval route blocks unapproved calls and paper execution makes no extern
   let outbound = 0;
   try {
     const body = {
-      exchange: 'upbit', accountMode: 'paper', strategyId: 'breakout-v1', signalId: 'api-signal',
+      mode: 'approval', accountMode: 'paper', adapter: 'paper',
+      exchange: 'upbit', strategyId: 'breakout-v1', signalId: 'api-signal',
       symbol: 'BTC', market: 'KRW', side: 'buy', orderType: 'market', quoteAmount: 100000,
       quantity: null, limitPrice: null, estimatedKrw: 100000, stopPrice: 90000, targetPrices: [110000],
       splitRatios: [100], signalReasons: ['trend'], marketSnapshot: {
@@ -152,22 +193,25 @@ test('approval route blocks unapproved calls and paper execution makes no extern
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
     assert.equal(planned.status, 200);
-    const planId = (await planned.json()).plan.id;
+    const planId = (await planned.json() as { plan: { id: string } }).plan.id;
     const denied = await nativeFetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
     });
     assert.equal(denied.status, 409);
 
-    globalThis.fetch = (async (input, init) => {
+    globalThis.fetch = async (input, init) => {
       const url = String(input);
       if (!url.startsWith(baseUrl)) { outbound += 1; throw new Error('external blocked'); }
       return nativeFetch(input, init);
-    }) as typeof fetch;
+    };
     const approved = await globalThis.fetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved: true }),
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approved: true, mode: 'approval', accountMode: 'paper', adapter: 'paper' }),
     });
     assert.equal(approved.status, 200);
-    assert.equal((await approved.json()).order.state, 'FILLED');
+    const approvedBody = await approved.json() as { order: { state: string }; liveExecutionAllowed: boolean };
+    assert.equal(approvedBody.order.state, 'FILLED');
+    assert.equal(approvedBody.liveExecutionAllowed, false);
     assert.equal(outbound, 0);
   } finally { globalThis.fetch = nativeFetch; await close(server); }
 });
