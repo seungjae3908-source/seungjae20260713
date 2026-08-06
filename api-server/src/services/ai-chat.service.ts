@@ -230,7 +230,7 @@ async function publicMarketContext(context: AiChatContext): Promise<PublicMarket
 export function actionRefusal(message: string): AiChatResult | null {
   if (!prohibitedAction.test(message)) return null;
   return {
-    answer: 'AI 채팅은 공개 금융정보와 앱 사용법을 설명하는 정보 기능입니다. 주문·자동매매·계좌·서버·GitHub·배포 작업이나 불법·위험한 금융 행동은 실행하거나 안내할 수 없습니다. 거래 기능은 별도의 승인 화면에서 직접 확인해 주세요.',
+    answer: 'AI 채팅은 공개 금융정보와 앱 사용법을 설명하는 정보 기능입니다. 주문·자동매매·계좌·서버·GitHub·배포 작업이나 불법·위험한 금융 행동은 실행할 수 없으며 안내하지 않습니다. 거래 기능은 별도의 승인 화면에서 직접 확인해 주세요.',
     kind: 'refusal',
     model: null,
     generatedAt: new Date().toISOString(),
