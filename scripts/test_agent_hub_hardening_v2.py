@@ -172,7 +172,13 @@ def test_workflow_contracts() -> int:
     assert '"sandboxNetworkAccess":false' in executor and '"mcp":{"enabled":false}' in executor
     assert issue_body_edit_does_not_trigger(free)
     assert "|| true" not in free + executor
-    return 10
+    process_report = free.split("\n  process-report:\n", 1)[1]
+    process_report_permissions = process_report.split("\n    runs-on:", 1)[0]
+    assert "\n      contents: write\n" in process_report_permissions
+    assert "\n      contents: read\n" not in process_report_permissions
+    assert "event_type='agent-hub-command-ready'" in process_report
+    assert "types: [agent-hub-command-ready]" in executor
+    return 14
 
 
 def run() -> int:
