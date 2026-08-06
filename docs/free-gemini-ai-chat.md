@@ -2,79 +2,130 @@
 
 ## Purpose
 
-The app AI chat uses the Gemini Developer API free tier for:
+The app AI chat is a read-only public-information assistant for:
 
-- public stock-market questions
+- public stock and market questions
 - company, quote, news, and financial-context summaries
 - technical-analysis and investing-term explanations
 - app usage guidance
 
-It does not execute orders, automated trading, account changes, server commands, GitHub operations, or deployments.
+It does not execute orders, automated trading, account or position changes, server commands, GitHub operations, deployments, or secret changes.
 
-## Existing repository secret
+## Deployment and secret boundary
 
-The repository already has an Actions secret named `GEMINI_API_KEY`, introduced for the free Agent Hub workflow.
+The repository may contain a GitHub Actions secret named `GEMINI_API_KEY`. GitHub Actions secrets exist only inside the workflows that explicitly receive them. They do not automatically become environment variables on the running application server.
 
-The application server now accepts the same environment variable, so a duplicate AI-chat secret is not required.
+This PR changes only application code, tests, and documentation. It does not:
 
-GitHub Actions secrets are available only inside workflows. They do not automatically appear in the running application server. A later deployment change must explicitly map `GEMINI_API_KEY` into the server runtime environment. This PR does not change deployment, server, staging, production, database, or secrets.
+- change GitHub Actions secrets
+- change application-server environment variables
+- change deployment, staging, production, PM2, Caddy, database, or Supabase configuration
+- expose a secret value in browser responses, prompts, logs, tests, or documentation
 
-## Provider resolution
+Mapping `GEMINI_API_KEY` into the application server is a separate deployment action that requires explicit user approval.
 
-AI chat selects its provider in this order:
+## Provider resolution and cost control
+
+Provider selection is fail-closed:
 
 1. `AI_CHAT_PROVIDER=gemini`, `google`, or `google-gemini`
+   - key: `AI_CHAT_API_KEY`, otherwise `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+   - model: `AI_CHAT_MODEL`, otherwise `GEMINI_MODEL`, otherwise `gemini-3.1-flash-lite`
 2. `AI_CHAT_PROVIDER=openai-compatible`
-3. when no explicit provider is set, an available `GEMINI_API_KEY` or `GOOGLE_API_KEY`
-4. the existing `TRADING_REVIEW_PROVIDER=openai-compatible` compatibility fallback
+   - requires both `AI_CHAT_API_KEY` and `AI_CHAT_MODEL`
+3. when no explicit provider is selected
+   - Gemini is enabled only when `GEMINI_API_KEY` or `GOOGLE_API_KEY` exists
 
-Gemini credentials:
+Unknown provider names and incomplete configurations return `AI_CHAT_NOT_CONFIGURED`.
 
-- primary: `GEMINI_API_KEY`
-- compatible alias: `GOOGLE_API_KEY`
-- optional override: `AI_CHAT_API_KEY`
+The AI chat never reads `TRADING_REVIEW_PROVIDER`, `TRADING_REVIEW_API_KEY`, or `TRADING_REVIEW_MODEL`. It therefore cannot silently reuse another feature's credentials or switch to a paid provider after Gemini quota exhaustion.
 
-Gemini model:
+Gemini quota or HTTP 429 responses return `AI_CHAT_RATE_LIMITED`. No paid fallback is attempted.
 
-- default: `gemini-3.1-flash-lite`
-- optional override: `AI_CHAT_MODEL`
-- compatible override: `GEMINI_MODEL`
+## Public-data contract
 
-The default matches the repository's already validated free-tier Gemini smoke workflow.
+For a selected KR or US stock, the server collects the existing public context through the repository's services:
 
-## Data boundary
+- quote
+- company profile
+- news
+- financial ratios and health
 
-Before any provider call, the server:
+Each successful answer includes a data disclosure:
 
-- normalizes and length-limits the question
-- blocks API keys, tokens, account numbers, birth dates, and other sensitive values
-- refuses actual-order, automated-trading, account, server, GitHub, and deployment actions
-- collects only existing public quote, company, news, and financial context for KR and US selections
-- sends the provider a JSON public-information contract
-- rejects empty or unsafe model output
+- `status`: `not_requested`, `complete`, `partial`, or `unavailable`
+- `asOf`: the server collection time
+- `basis`: `server_collection_time`
+- `sources`: the public service/provider categories included in the prompt
+- `missing`: data categories that were unavailable
 
-The API key is sent only in the `x-goog-api-key` request header and is never included in the model prompt or browser response.
+`asOf` is the time the application server assembled the context. It is not represented as an exchange tick timestamp.
 
-## Free-tier behavior
+The server excludes deterministic sample financials from AI factual context. When live financial data is unavailable, financials are marked missing instead of sending sample values to the model.
 
-- the existing authenticated route rate limit remains 20 requests per user per minute
-- Gemini HTTP 429 responses map to `AI_CHAT_RATE_LIMITED`
-- no paid-provider fallback is attempted after Gemini quota exhaustion
-- provider failure returns a closed error instead of a fabricated answer
-- user cancellation and the existing 20-second server timeout remain active
+Current-price, latest-news, or other real-time questions without a valid selected instrument return an explicit data-unavailable answer without calling the model. The server does not ask the model to invent current market facts.
 
-Free-tier quotas are project-level and can change in Google AI Studio. Inputs sent under the free tier may be used by Google to improve its products, so the existing sensitive-data filter remains mandatory.
+Crypto selections currently do not have an authoritative AI-chat context adapter. They are reported as unavailable rather than being inferred from a similarly named stock or an unsupported symbol.
+
+## Symbol and context validation
+
+The selected market and symbol must match the market contract before any provider call:
+
+- KR: six digits
+- US: supported ticker characters and length
+- UPBIT: quote/base pair such as `KRW-BTC`
+- BITGET: supported perpetual-market symbol form
+
+Invalid or mismatched context returns `AI_CHAT_INVALID_CONTEXT`. The model is never asked to guess the intended instrument.
+
+## Privacy and safety boundary
+
+Before any model request, the server:
+
+- normalizes and length-limits the question and context
+- removes HTML-like input
+- blocks API keys, bearer tokens, private keys, account numbers, birth dates, resident-registration-number patterns, passwords, and similar sensitive values
+- refuses order execution, order cancellation, automated-trading activation, position closing, leverage/account/key changes, GitHub/server/deployment commands, and illegal or abusive financial actions
+- sends only the sanitized public-information contract
+
+The Gemini key is sent only in the `x-goog-api-key` request header. It is not included in the model prompt or returned to the browser.
+
+Model output is rejected when it is empty, structurally malformed, requests a secret, promises returns, gives certain buy/sell instructions, or otherwise violates the advisory-only contract.
+
+## Failure contract
+
+- `AI_CHAT_PRIVATE_DATA_FORBIDDEN`: sensitive input or context blocked before outbound access
+- `AI_CHAT_INVALID_CONTEXT`: market and symbol contract mismatch
+- `AI_CHAT_NOT_CONFIGURED`: no approved provider configuration
+- `AI_CHAT_RATE_LIMITED`: application rate limit or provider quota/HTTP 429
+- `AI_CHAT_TIMEOUT`: the server's bounded request time elapsed
+- `AI_CHAT_CANCELLED`: the user disconnected or explicitly cancelled
+- `AI_CHAT_INVALID_RESPONSE`: provider JSON or response shape was malformed or empty
+- `AI_CHAT_UNSAFE_RESPONSE`: provider output violated the safety contract
+- `AI_CHAT_PROVIDER_ERROR`: provider failed without exposing its response body or credentials
+
+The authenticated route remains limited to 20 requests per user per minute and returns `Retry-After: 60` for that application-level limit. Responses use `Cache-Control: no-store`.
+
+## Cancellation limitation
+
+The AI provider request receives an `AbortSignal` and is actively aborted on timeout or user cancellation. Existing market, news, and financial service APIs do not currently accept an `AbortSignal`; the chat request stops waiting for them, but an already-started internal public-data request may finish in the background. No account, order, or private provider is involved.
 
 ## Validation
 
-Unit coverage verifies:
+The combined existing and hardening tests verify:
 
-- `GEMINI_API_KEY` automatically enables Gemini
-- default model selection
-- `x-goog-api-key` header use
-- no API key in the prompt body
-- Gemini response extraction
-- quota-error mapping
-- explicit OpenAI-compatible configuration remains supported
-- missing configuration fails closed
-- prohibited actions never call a provider
+- Gemini request URL, request body, low thinking level, and `x-goog-api-key` header
+- no secret in the prompt or browser response
+- no automatic paid fallback or cross-feature credential reuse
+- Gemini quota/HTTP 429 handling
+- timeout and user cancellation as separate outcomes
+- malformed and structurally empty provider responses
+- sensitive input and context blocking before outbound access
+- unsafe model-output blocking
+- prohibited actions making zero provider calls
+- market/symbol mismatch making zero provider calls
+- current-data questions without authoritative context making zero provider calls
+- explicit source, server collection time, and missing-data disclosure
+- exclusion of sample financial data from factual AI context
+
+Full repository validation remains the required gate: frontend and backend typecheck, application regression tests, production builds, browser tests, AI privacy and zero-outbound checks, and all required CI statuses.
