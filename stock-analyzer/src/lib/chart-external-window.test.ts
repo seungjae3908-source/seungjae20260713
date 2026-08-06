@@ -43,6 +43,7 @@ test('external chart path preserves the validated chart context and isolated syn
   assert.equal(isExternalChartSearch(query), true);
   assert.equal(chartSyncIdFromSearch(query), 'sync-a');
   assert.equal(chartSyncIdFromSearch('?chartSync=sync%3Aunsafe'), '');
+  assert.equal(chartSyncIdFromSearch('?chartSync=%20sync-a'), '');
   assert.equal(chartExternalWindowChannel('sync-a'), 'stock-app-ai-chart-window-v1:sync-a');
   assert.equal(buildChartPath(selection).includes('chartWindow=external'), false);
 });
@@ -102,6 +103,8 @@ test('chart window messages reject malformed, stale, future, and unsupported pay
   assert.deepEqual(parseChartWindowMessage(valid, now), valid);
   assert.equal(parseChartWindowMessage({ type: 'selection', sourceId: '', sentAt: now, selection }, now), null);
   assert.equal(parseChartWindowMessage({ type: 'selection', sourceId: 'source a', sentAt: now, selection }, now), null);
+  assert.equal(parseChartWindowMessage({ type: 'selection', sourceId: ' source-a', sentAt: now, selection }, now), null);
+  assert.equal(parseChartWindowMessage({ type: 'selection', sourceId: 'source-a', sentAt: String(now), selection }, now), null);
   assert.equal(parseChartWindowMessage({ type: 'order', sourceId: 'source-a', sentAt: now }, now), null);
   assert.equal(parseChartWindowMessage({ type: 'selection', sourceId: 'source-a', sentAt: now, selection: { market: 'UNKNOWN' } }, now), null);
   assert.equal(parseChartWindowMessage({ ...valid, sentAt: now - CHART_WINDOW_MESSAGE_MAX_AGE_MS - 1 }, now), null);
