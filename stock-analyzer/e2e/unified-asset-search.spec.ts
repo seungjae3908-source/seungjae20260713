@@ -10,6 +10,7 @@ const fixtures = [
 ];
 
 function matches(query: string) {
+  if (!/[\p{L}\p{N}]/u.test(query.normalize('NFKC'))) return [];
   const q = query.toLowerCase().replace(/[\s/.-]/g, '');
   return fixtures.filter((item) => [item.displayName, item.englishName, item.productCode, item.ticker, item.symbol, item.baseSymbol]
     .filter(Boolean)
@@ -74,7 +75,7 @@ test('latest request wins, keyboard selection works, and spot/futures stay separ
   await expect(page.getByRole('option', { name: /테슬라/ })).toBeVisible();
   await input.press('ArrowDown');
   await input.press('Enter');
-  await expect(page).toHaveURL(/\/stock\/TSLA/);
+  await expect(page).toHaveURL(/\/stock-info\?back=%2Fsearch&asset=stock&market=US&ticker=TSLA$/);
 
   await page.goto('/__phase11-unified-search-e2e');
   await input.fill('BTC');
@@ -97,10 +98,10 @@ test('all asset groups navigate to their exact existing detail routes', async ({
     await expect(page).toHaveURL(expectedUrl);
   };
 
-  await selectAndExpect('005930', /삼성전자.*005930/, /\/stock\/005930\?back=%2Fsearch$/);
-  await selectAndExpect('TSLA', /테슬라.*TSLA/, /\/stock\/TSLA\?back=%2Fsearch$/);
-  await selectAndExpect('KRW-BTC', /비트코인.*UPBIT.*BTC\/KRW/, /\/stock-info\?asset=coin&coinMarket=spot&symbol=BTC$/);
-  await selectAndExpect('BTCUSDT', /비트코인.*BITGET.*BTCUSDT/, /\/stock-info\?asset=coin&coinMarket=futures&symbol=BTCUSDT$/);
+  await selectAndExpect('005930', /삼성전자.*005930/, /\/stock-info\?back=%2Fsearch&asset=stock&market=KR&ticker=005930$/);
+  await selectAndExpect('TSLA', /테슬라.*TSLA/, /\/stock-info\?back=%2Fsearch&asset=stock&market=US&ticker=TSLA$/);
+  await selectAndExpect('KRW-BTC', /비트코인.*UPBIT.*BTC\/KRW/, /\/stock-info\?back=%2Fsearch&asset=coin&coinMarket=spot&symbol=BTC$/);
+  await selectAndExpect('BTCUSDT', /비트코인.*BITGET.*BTCUSDT/, /\/stock-info\?back=%2Fsearch&asset=coin&coinMarket=futures&symbol=BTCUSDT$/);
 });
 
 test('watchlist and recent searches prioritize equal-tier suggestions', async ({ page }) => {
