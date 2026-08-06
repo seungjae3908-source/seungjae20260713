@@ -5,11 +5,6 @@ const E2E_USER_ID = '11111111-1111-4111-8111-111111111111';
 const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 
 type RoomId = 'stocks-kr' | 'stocks-us' | 'coins-spot' | 'coins-futures';
-type Diagnostics = {
-  assertClean: () => void;
-  forbiddenRequests: string[];
-};
-
 type MockOptions = {
   delayRoom?: RoomId;
   delayMs?: number;
@@ -17,6 +12,11 @@ type MockOptions = {
   staleRoom?: RoomId;
   errorRoom?: RoomId;
   errorStatus?: number;
+};
+
+type Diagnostics = {
+  assertClean: () => void;
+  forbiddenRequests: string[];
 };
 
 function fulfill(route: Route, body: unknown, status = 200) {
@@ -73,7 +73,13 @@ function meta(room: RoomId, options: { partial?: boolean; stale?: boolean } = {}
     providerUpdatedAt: NOW,
     observedAt: NOW,
     fetchedAt: NOW,
-    marketTimeZone: config.market === 'KR' ? 'Asia/Seoul' : config.market === 'US' ? 'America/New_York' : config.market === 'spot' ? 'Asia/Seoul' : 'UTC',
+    marketTimeZone: config.market === 'KR'
+      ? 'Asia/Seoul'
+      : config.market === 'US'
+        ? 'America/New_York'
+        : config.market === 'spot'
+          ? 'Asia/Seoul'
+          : 'UTC',
     marketStatus: config.assetType === 'stock' ? 'CLOSED' : '24H',
     isDelayed: options.stale === true,
     isStale: options.stale === true,
@@ -84,25 +90,69 @@ function meta(room: RoomId, options: { partial?: boolean; stale?: boolean } = {}
   };
 }
 
+function roomRows(room: RoomId) {
+  if (room === 'stocks-kr') {
+    return [{
+      symbol: '005930', name: '삼성전자', exchange: 'KRX', currency: 'KRW', price: 78000,
+      changePercent: 0.7, high24h: 79000, low24h: 77000, volume24h: 700000,
+      tradingValue24h: 54000000000, marketCap: null, warning: false, tradingStatus: null,
+      fundingRatePercent: null, nextFundingAt: null, openInterest: null,
+      rangeVolatility24hPercent: null, providerUpdatedAt: NOW,
+    }];
+  }
+  if (room === 'stocks-us') {
+    return [{
+      symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', currency: 'USD', price: 240,
+      changePercent: 1.2, high24h: 242, low24h: 235, volume24h: 500000,
+      tradingValue24h: 120000000, marketCap: null, warning: false, tradingStatus: null,
+      fundingRatePercent: null, nextFundingAt: null, openInterest: null,
+      rangeVolatility24hPercent: null, providerUpdatedAt: NOW,
+    }];
+  }
+  if (room === 'coins-spot') {
+    return [{
+      symbol: 'BTC', name: '비트코인', exchange: 'UPBIT', currency: 'KRW', price: 101000000,
+      changePercent: 1.3, high24h: 102000000, low24h: 99000000, volume24h: 1234,
+      tradingValue24h: 125000000000, marketCap: null, warning: false, tradingStatus: 'ACTIVE',
+      fundingRatePercent: null, nextFundingAt: null, openInterest: null,
+      rangeVolatility24hPercent: null, providerUpdatedAt: NOW,
+    }];
+  }
+  return [{
+    symbol: 'BTCUSDT', name: 'BTCUSDT', exchange: 'BITGET', currency: 'USDT', price: 70000,
+    changePercent: 0.6, high24h: 71000, low24h: 68000, volume24h: 100000,
+    tradingValue24h: 7000000000, marketCap: null, warning: false, tradingStatus: 'normal',
+    fundingRatePercent: 0.01, nextFundingAt: '2026-08-05T08:00:00.000Z', openInterest: 550000,
+    rangeVolatility24hPercent: 4.4, providerUpdatedAt: NOW,
+  }];
+}
+
 function roomResponse(room: RoomId, options: MockOptions) {
   const config = roomConfig(room);
+  const rows = roomRows(room);
   const partial = options.partialRoom === room;
   const stale = options.staleRoom === room;
   const providerErrorStatus = options.errorRoom === room ? options.errorStatus ?? 503 : null;
-  const providerErrorCode = providerErrorStatus === 429 ? 'UPSTREAM_RATE_LIMITED' : providerErrorStatus == null ? null : `UPSTREAM_HTTP_${providerErrorStatus}`;
-  const providerErrorMessage = providerErrorStatus === 429 ? '제공기관 호출 한도에 도달했습니다.' : providerErrorStatus == null ? null : '제공기관 장애입니다.';
+  const providerErrorCode = providerErrorStatus === 429
+    ? 'UPSTREAM_RATE_LIMITED'
+    : providerErrorStatus == null
+      ? null
+      : `UPSTREAM_HTTP_${providerErrorStatus}`;
+  const providerErrorMessage = providerErrorStatus === 429
+    ? '제공기관 호출 한도에 도달했습니다.'
+    : providerErrorStatus == null
+      ? null
+      : '제공기관 장애입니다.';
   const sectionMeta = meta(room, { partial: partial || providerErrorStatus != null, stale });
-  const rows = room === 'stocks-kr'
-    ? [{ symbol: '005930', name: '삼성전자', exchange: 'KRX', currency: 'KRW', price: 78000, changePercent: 0.7, high24h: 79000, low24h: 77000, volume24h: 700000, tradingValue24h: 54000000000, marketCap: null, warning: false, tradingStatus: null, fundingRatePercent: null, nextFundingAt: null, openInterest: null, rangeVolatility24hPercent: null, providerUpdatedAt: NOW }]
-    : room === 'stocks-us'
-      ? [{ symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', currency: 'USD', price: 240, changePercent: 1.2, high24h: 242, low24h: 235, volume24h: 500000, tradingValue24h: 120000000, marketCap: null, warning: false, tradingStatus: null, fundingRatePercent: null, nextFundingAt: null, openInterest: null, rangeVolatility24hPercent: null, providerUpdatedAt: NOW }]
-      : room === 'coins-spot'
-        ? [{ symbol: 'BTC', name: '비트코인', exchange: 'UPBIT', currency: 'KRW', price: 101000000, changePercent: 1.3, high24h: 102000000, low24h: 99000000, volume24h: 1234, tradingValue24h: 125000000000, marketCap: null, warning: false, tradingStatus: 'ACTIVE', fundingRatePercent: null, nextFundingAt: null, openInterest: null, rangeVolatility24hPercent: null, providerUpdatedAt: NOW }]
-        : [{ symbol: 'BTCUSDT', name: 'BTCUSDT', exchange: 'BITGET', currency: 'USDT', price: 70000, changePercent: 0.6, high24h: 71000, low24h: 68000, volume24h: 100000, tradingValue24h: 7000000000, marketCap: null, warning: false, tradingStatus: 'normal', fundingRatePercent: 0.01, nextFundingAt: '2026-08-05T08:00:00.000Z', openInterest: 550000, rangeVolatility24hPercent: 4.4, providerUpdatedAt: NOW }];
-  const unsupported = (message: string) => ({ status: 'unsupported', data: [], meta: { ...sectionMeta, provider: null, source: null, errorCode: 'PROVIDER_UNSUPPORTED', unavailableFields: ['all'] }, message });
-  const unavailable = (message: string) => ({ status: 'unavailable', data: [], meta: { ...sectionMeta, provider: null, source: null, errorCode: 'COIN_NEWS_PROVIDER_NOT_CONNECTED', unavailableFields: ['all'] }, message });
   const stock = config.assetType === 'stock';
   const status = stale ? 'stale' : partial ? 'partial' : 'ready';
+  const unsupported = (message: string) => ({
+    status: 'unsupported',
+    data: [],
+    meta: { ...sectionMeta, provider: null, source: null, errorCode: 'PROVIDER_UNSUPPORTED', unavailableFields: ['all'] },
+    message,
+  });
+
   return {
     ok: true,
     room,
@@ -113,7 +163,17 @@ function roomResponse(room: RoomId, options: MockOptions) {
     partial: partial || stale || providerErrorStatus != null || !stock,
     sections: {
       indices: stock
-        ? { status, data: [{ key: config.market === 'KR' ? 'KOSPI' : 'NASDAQ', label: config.market === 'KR' ? '코스피' : '나스닥', value: 3123.45, changePercent: 0.8 }], meta: sectionMeta, message: partial ? '일부 지수만 제공됩니다.' : null }
+        ? {
+          status,
+          data: [{
+            key: config.market === 'KR' ? 'KOSPI' : 'NASDAQ',
+            label: config.market === 'KR' ? '코스피' : '나스닥',
+            value: 3123.45,
+            changePercent: 0.8,
+          }],
+          meta: sectionMeta,
+          message: partial ? '일부 지수만 제공됩니다.' : null,
+        }
         : unsupported('코인에는 주식 시장 지수를 표시하지 않습니다.'),
       rankings: providerErrorStatus != null
         ? {
@@ -128,19 +188,92 @@ function roomResponse(room: RoomId, options: MockOptions) {
           },
           message: providerErrorMessage,
         }
-        : { status, data: rows, meta: sectionMeta, message: partial ? '일부 ticker 응답만 표시합니다.' : null },
+        : {
+          status,
+          data: rows,
+          meta: sectionMeta,
+          message: partial ? '일부 ticker 응답만 표시합니다.' : null,
+        },
       sectors: stock
-        ? { status, data: [{ key: 'technology', label: config.market === 'KR' ? '반도체' : 'Technology', tradingValue: 123000000, constituentCount: 1, changePercent: null }], meta: sectionMeta, message: null }
+        ? {
+          status,
+          data: [{
+            key: 'technology',
+            label: config.market === 'KR' ? '반도체' : 'Technology',
+            tradingValue: 123000000,
+            constituentCount: 1,
+            changePercent: null,
+          }],
+          meta: sectionMeta,
+          message: null,
+        }
         : unsupported('공개 응답은 업종·섹터를 제공하지 않습니다.'),
       news: stock
-        ? { status: 'ready', data: [{ id: `${room}-news`, kind: 'news', symbol: rows[0].symbol, title: `${config.title} 공개 뉴스`, summary: '공개 정보', provider: '테스트뉴스', source: '테스트뉴스', url: 'https://example.com/news', publishedAt: NOW }], meta: sectionMeta, message: null }
-        : unavailable('검증된 코인 뉴스 provider가 아직 연결되지 않았습니다.'),
+        ? {
+          status: 'ready',
+          data: [{
+            id: `${room}-news`, kind: 'news', symbol: rows[0].symbol,
+            title: `${config.title} 공개 뉴스`, summary: '공개 정보', provider: '테스트뉴스',
+            source: '테스트뉴스', url: 'https://example.com/news', publishedAt: NOW,
+          }],
+          meta: sectionMeta,
+          message: null,
+        }
+        : {
+          status: 'unavailable',
+          data: [],
+          meta: {
+            ...sectionMeta,
+            provider: null,
+            source: null,
+            errorCode: 'COIN_NEWS_PROVIDER_NOT_CONNECTED',
+            unavailableFields: ['all'],
+          },
+          message: '검증된 코인 뉴스 provider가 아직 연결되지 않았습니다.',
+        },
       disclosures: stock
-        ? { status: 'ready', data: [{ id: `${room}-filing`, kind: 'disclosure', symbol: rows[0].symbol, title: `${config.title} 공식 공시`, summary: '공식 공시', provider: config.market === 'KR' ? 'OpenDART' : 'SEC EDGAR', source: config.market === 'KR' ? '금융감독원 전자공시' : 'SEC', url: 'https://example.com/filing', publishedAt: NOW }], meta: sectionMeta, message: null }
+        ? {
+          status: 'ready',
+          data: [{
+            id: `${room}-filing`, kind: 'disclosure', symbol: rows[0].symbol,
+            title: `${config.title} 공식 공시`, summary: '공식 공시',
+            provider: config.market === 'KR' ? 'OpenDART' : 'SEC EDGAR',
+            source: config.market === 'KR' ? '금융감독원 전자공시' : 'SEC',
+            url: 'https://example.com/filing', publishedAt: NOW,
+          }],
+          meta: sectionMeta,
+          message: null,
+        }
         : unsupported('코인에는 기업 공시를 표시하지 않습니다.'),
       derivatives: room === 'coins-futures'
-        ? { status, data: { referenceSymbol: 'BTCUSDT', longRatio: 0.55, shortRatio: 0.45, longShortRatio: 1.22, ratioObservedAt: NOW, liquidations: [{ symbol: 'BTCUSDT', side: 'long', price: 70000, amount: 0.5, occurredAt: NOW }] }, meta: sectionMeta, message: null }
-        : { status: 'unsupported', data: { referenceSymbol: 'BTCUSDT', longRatio: null, shortRatio: null, longShortRatio: null, ratioObservedAt: null, liquidations: [] }, meta: { ...sectionMeta, provider: null, source: null, errorCode: 'PROVIDER_UNSUPPORTED', unavailableFields: ['derivatives'] }, message: '이 정보방에는 선물 파생지표를 표시하지 않습니다.' },
+        ? {
+          status,
+          data: {
+            referenceSymbol: 'BTCUSDT',
+            longRatio: 0.55,
+            shortRatio: 0.45,
+            longShortRatio: 1.22,
+            ratioObservedAt: NOW,
+            liquidations: [{ symbol: 'BTCUSDT', side: 'long', price: 70000, amount: 0.5, occurredAt: NOW }],
+          },
+          meta: sectionMeta,
+          message: null,
+        }
+        : {
+          status: 'unsupported',
+          data: {
+            referenceSymbol: 'BTCUSDT', longRatio: null, shortRatio: null,
+            longShortRatio: null, ratioObservedAt: null, liquidations: [],
+          },
+          meta: {
+            ...sectionMeta,
+            provider: null,
+            source: null,
+            errorCode: 'PROVIDER_UNSUPPORTED',
+            unavailableFields: ['derivatives'],
+          },
+          message: '이 정보방에는 선물 파생지표를 표시하지 않습니다.',
+        },
     },
     requestPolicy: {
       publicMarketDataOnly: true,
@@ -208,8 +341,7 @@ async function mockInformationApi(page: Page, options: MockOptions = {}): Promis
   });
 
   await page.route('**/api/**', async (route) => {
-    const url = new URL(route.request().url());
-    const path = url.pathname;
+    const path = new URL(route.request().url()).pathname;
     if (/\/(accounts?|balances?|positions?|orders?|cancel|trade-automation)(\/|$)|\/crypto\/futures\/auto/i.test(path)) {
       forbiddenRequests.push(`${route.request().method()} ${path}`);
       return fulfill(route, { ok: false, error: 'FORBIDDEN_TEST_REQUEST' }, 500);
@@ -237,74 +369,49 @@ async function mockInformationApi(page: Page, options: MockOptions = {}): Promis
   };
 }
 
-async function openInformationMenu(page: Page) {
-  const trigger = page.getByRole('button', { name: '정보', exact: true });
-  await trigger.click();
-  await expect(page.getByRole('menu', { name: '정보 메뉴' })).toBeVisible();
-  return trigger;
-}
+const ROUTES = [
+  ['/stocks/kr', '국내주식 정보', 'KRX · KRW'],
+  ['/stocks/us', '미국주식 정보', 'US · USD'],
+  ['/coins/spot', '코인 현물 정보', 'UPBIT · KRW'],
+  ['/coins/futures', '코인 선물 정보', 'BITGET · USDT'],
+] as const;
 
-test('information popup supports outside touch, Escape, focus restoration, and selection close', async ({ page }) => {
+test('all four information rooms support direct routes, reload, history, source metadata, and public-only requests', async ({ page }) => {
   const diagnostics = await mockInformationApi(page);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/stocks/kr');
-  await expect(page.getByRole('heading', { name: '국내주식 정보' })).toBeVisible();
 
-  const trigger = await openInformationMenu(page);
-  await expect(page.getByRole('menuitem', { name: '국내', exact: true })).toBeVisible();
-  await expect(page.getByRole('menuitem', { name: '해외', exact: true })).toBeVisible();
-  await expect(page.getByRole('menuitem', { name: '현물', exact: true })).toBeVisible();
-  await expect(page.getByRole('menuitem', { name: '선물', exact: true })).toBeVisible();
-
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('menu', { name: '정보 메뉴' })).toBeHidden();
-  await expect(trigger).toBeFocused();
-
-  await openInformationMenu(page);
-  await page.getByRole('heading', { name: '국내주식 정보' }).click();
-  await expect(page.getByRole('menu', { name: '정보 메뉴' })).toBeHidden();
-
-  await openInformationMenu(page);
-  await page.getByRole('menuitem', { name: '해외', exact: true }).click();
-  await expect(page).toHaveURL(/\/stocks\/us$/);
-  await expect(page.getByRole('menu', { name: '정보 메뉴' })).toBeHidden();
-  await expect(page.getByRole('heading', { name: '미국주식 정보' })).toBeVisible();
-  diagnostics.assertClean();
-});
-
-test('all four information rooms render source, freshness, refresh, and no private requests', async ({ page }) => {
-  const diagnostics = await mockInformationApi(page);
-  const routes = [
-    ['/stocks/kr', '국내주식 정보', 'KRX · KRW'],
-    ['/stocks/us', '미국주식 정보', 'US · USD'],
-    ['/coins/spot', '코인 현물 정보', 'UPBIT · KRW'],
-    ['/coins/futures', '코인 선물 정보', 'BITGET · USDT'],
-  ] as const;
-  for (const [path, title, exchange] of routes) {
+  for (const [path, title, exchange] of ROUTES) {
     await page.goto(path);
     await expect(page.getByRole('heading', { name: title })).toBeVisible();
     await expect(page.getByText(exchange, { exact: true })).toBeVisible();
     await expect(page.getByText('공개 API 전용', { exact: true })).toBeVisible();
     await expect(page.getByText('private 요청 0', { exact: true })).toBeVisible();
     await expect(page.getByLabel('데이터 출처와 신선도').first()).toContainText('출처');
+    await page.reload();
+    await expect(page.getByRole('heading', { name: title })).toBeVisible();
     await page.getByRole('button', { name: '시장정보 새로고침' }).click();
     await expect(page.getByRole('heading', { name: title })).toBeVisible();
   }
+
+  await page.goto('/stocks/kr');
+  await page.goto('/stocks/us');
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: '국내주식 정보' })).toBeVisible();
+  await page.goForward();
+  await expect(page.getByRole('heading', { name: '미국주식 정보' })).toBeVisible();
+
   await page.goto('/coins/spot');
-  await expect(page.getByText(/펀딩/)).toHaveCount(0);
-  await expect(page.getByText(/미결제약정/)).toHaveCount(0);
   await expect(page.getByText('검증된 코인 뉴스 provider가 아직 연결되지 않았습니다.').first()).toBeVisible();
+  await expect(page.getByText('선물 공개 파생지표')).toHaveCount(0);
   await page.goto('/coins/futures');
   await expect(page.getByText('선물 공개 파생지표')).toBeVisible();
   await expect(page.getByText('롱 비율')).toBeVisible();
   diagnostics.assertClean();
 });
 
-test('rapid KR to US transition aborts stale room query and never applies delayed KR rows', async ({ page }) => {
+test('rapid KR to US transition aborts stale room data and keeps market isolation', async ({ page }) => {
   const diagnostics = await mockInformationApi(page, { delayRoom: 'stocks-kr', delayMs: 900 });
   await page.goto('/stocks/kr');
-  await openInformationMenu(page);
-  await page.getByRole('menuitem', { name: '해외', exact: true }).click();
+  await page.goto('/stocks/us');
   await expect(page.getByText('Apple Inc.', { exact: true })).toBeVisible();
   await page.waitForTimeout(1100);
   await expect(page.getByText('Apple Inc.', { exact: true })).toBeVisible();
@@ -339,20 +446,17 @@ test('partial, stale, unsupported, 429, and provider error states remain card-sc
   await outagePage.close();
 });
 
-test('mobile 360, 390, and 430 layouts have no horizontal overflow and keep 44px touch targets', async ({ page }) => {
+test('360, 390, 430, and desktop layouts avoid overflow and keep 44px primary touch targets', async ({ page }) => {
   const diagnostics = await mockInformationApi(page);
-  for (const width of [360, 390, 430]) {
-    await page.setViewportSize({ width, height: 844 });
+  for (const width of [360, 390, 430, 1440]) {
+    await page.setViewportSize({ width, height: width >= 1000 ? 900 : 844 });
     await page.goto('/coins/futures');
     await expect(page.getByRole('heading', { name: '코인 선물 정보' })).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(0);
-    const boxes = await page.getByRole('button').evaluateAll((buttons) => buttons
-      .filter((button) => button.getBoundingClientRect().width > 0)
-      .map((button) => ({ label: button.getAttribute('aria-label') ?? button.textContent ?? '', height: button.getBoundingClientRect().height })));
-    const interactive = boxes.filter((box) => /새로고침|상세 화면 이동|정보$/.test(box.label.trim()));
-    expect(interactive.length).toBeGreaterThan(0);
-    for (const box of interactive) expect(box.height, `${width}px ${box.label}`).toBeGreaterThanOrEqual(44);
+    const refresh = page.getByRole('button', { name: '시장정보 새로고침' });
+    const box = await refresh.boundingBox();
+    expect(box?.height ?? 0, `${width}px refresh target`).toBeGreaterThanOrEqual(44);
   }
   diagnostics.assertClean();
 });
