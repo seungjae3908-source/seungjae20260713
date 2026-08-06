@@ -172,7 +172,10 @@ function ComposerRaceFixture() {
       >
         다음 종목 선택
       </button>
-      <ScannerApprovalComposer selection={COMPOSER_SELECTIONS[selectionIndex]} />
+      <ScannerApprovalComposer
+        selection={COMPOSER_SELECTIONS[selectionIndex]}
+        testOnlyCanPlaceOrders
+      />
     </main>
   );
 }
