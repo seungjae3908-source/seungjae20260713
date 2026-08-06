@@ -73,6 +73,7 @@ const groups = {
     path.join(root, 'src/services/scanner-approval-plan.service.test.ts'),
     path.join(root, 'src/services/scanner-approval-revalidation.service.test.ts'),
     path.join(root, 'src/routes/scanner-approval.smoke.test.ts'),
+    path.join(root, 'src/routes/trade-order-capability.smoke.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/scanner-saved-searches.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/crypto-spot-scanner.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/crypto-futures-scanner.test.ts'),
