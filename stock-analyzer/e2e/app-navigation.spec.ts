@@ -111,7 +111,7 @@ for (const viewport of [
   });
 }
 
-test('keyboard navigation opens, moves through, and closes the asset menu', async ({ page }) => {
+test('keyboard navigation autofocuses, traps, moves through, and closes the asset menu', async ({ page }) => {
   const assertCleanRuntime = observeNavigationRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await mockNavigationRuntime(page);
@@ -131,7 +131,30 @@ test('keyboard navigation opens, moves through, and closes the asset menu', asyn
   await expect(items.nth(1)).toBeFocused();
   await items.nth(1).press('End');
   await expect(items.nth(4)).toBeFocused();
+  await items.nth(4).press('Tab');
+  await expect(items.nth(0)).toBeFocused();
+  await items.nth(0).press('Shift+Tab');
+  await expect(items.nth(4)).toBeFocused();
   await items.nth(4).press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(assetsTrigger).toBeFocused();
+  assertCleanRuntime();
+});
+
+test('pointer opening autofocuses and outside click restores the trigger focus', async ({ page }) => {
+  const assertCleanRuntime = observeNavigationRuntime(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockNavigationRuntime(page);
+  await page.goto('/__phase11-technical-workspace-e2e');
+
+  const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
+  const assetsTrigger = navigation.getByRole('button', { name: '종목', exact: true });
+  await assetsTrigger.click();
+
+  const menu = page.getByRole('menu', { name: '종목 메뉴' });
+  const firstItem = menu.getByRole('menuitem').first();
+  await expect(firstItem).toBeFocused();
+  await page.locator('main').click({ position: { x: 8, y: 8 } });
   await expect(menu).toBeHidden();
   await expect(assetsTrigger).toBeFocused();
   assertCleanRuntime();
