@@ -1,222 +1,145 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { InMemoryTradingRepository } from './trade-automation.repository';
-import { TradeAutomationService } from './trade-automation.service';
-import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import {
-  applySignalValidation,
-  approvalStatus,
-  evaluateSignalLifecycle,
-  initializeSignalLifecycle,
-  SIGNAL_VALIDATION_MAX_AGE_MS,
+  applyScannerSignalObservation,
+  createDetectedScannerSignal,
+  scannerSignalIdentity,
+  startNextScannerSignalCycle,
+  validateScannerSignalApproval,
+  type ScannerSignalLifecycle,
+  type ScannerSignalObservation,
+  type ScannerSignalState,
 } from './trade-signal-lifecycle.service';
-import { DEFAULT_TRADING_POLICY, type TradingPlan, type TradingPlanInput } from './trade-automation.types';
 
-const USER = '11111111-1111-1111-1111-111111111111';
-const NOW = new Date('2026-08-04T05:00:00.000Z');
+const NOW = Date.parse('2026-08-06T07:00:00.000Z');
 
-function input(overrides: Partial<TradingPlanInput> = {}): TradingPlanInput {
+function observation(overrides: Partial<ScannerSignalObservation> = {}): ScannerSignalObservation {
   return {
-    exchange: 'upbit',
-    accountMode: 'paper',
-    strategyId: 'scanner-v1',
-    signalId: 'signal-ready',
-    symbol: 'BTC',
-    market: 'KRW',
-    side: 'buy',
-    orderType: 'market',
-    quantity: null,
-    quoteAmount: 100_000,
-    limitPrice: null,
-    estimatedKrw: 100_000,
-    stopPrice: 90_000,
-    targetPrices: [110_000],
-    splitRatios: [50, 30, 20],
-    invalidateAction: 'hold',
-    signalReasons: ['trend', 'volume'],
-    signalWarnings: [],
-    signalScore: 82,
-    signalConfidence: 78,
-    minimumSignalScore: 70,
-    minimumSignalConfidence: 65,
-    minimumRiskReward: 1.5,
-    signalRiskReward: 2,
-    signalCoreConditionsMaintained: true,
-    signalExpiresAt: new Date(NOW.getTime() + 10 * 60_000).toISOString(),
-    marketSnapshot: {
-      observedAt: NOW.toISOString(),
-      dataDelayMs: 100,
-      oneMinuteMovePercent: 0.5,
-      spreadPercent: 0.1,
-      orderbookGapPercent: 0.2,
-      halted: false,
-      availableBalance: 1_000_000,
-      accountValueKrw: 5_000_000,
-      dailyPnlPercent: 0,
-      assetExposurePercent: 5,
-      openPositionCount: 0,
-      dailyOrderCount: 0,
-      consecutiveLosses: 0,
-    },
+    approvalCandidate: true,
+    coreConditionsMaintained: true,
+    dataState: 'complete',
+    observedAt: new Date(NOW).toISOString(),
+    score: 82,
+    confidence: 78,
+    riskScore: 24,
+    dataCompleteness: 96,
+    chaseRisk: 'LOW',
+    reason: 'SIGNAL_OBSERVED',
     ...overrides,
   };
 }
 
-function planFromInput(value: TradingPlanInput): TradingPlan {
-  const approvalExpiresAt = new Date(NOW.getTime() + 10 * 60_000).toISOString();
-  return {
-    ...value,
-    ...initializeSignalLifecycle(value, approvalExpiresAt, NOW),
-    id: 'plan-1',
-    userId: USER,
-    idempotencyKey: 'key-1',
-    state: 'APPROVAL_PENDING',
-    approvalExpiresAt,
-    approvedAt: null,
-    createdAt: NOW.toISOString(),
-    updatedAt: NOW.toISOString(),
-  };
+function detected(overrides: Partial<ScannerSignalLifecycle> = {}): ScannerSignalLifecycle {
+  const signal = createDetectedScannerSignal({
+    ownerId: 'member-1',
+    signalId: 'signal-1',
+    market: 'KR',
+    symbol: '005930',
+    timeframe: '15m',
+    signalAt: new Date(NOW - 5_000).toISOString(),
+    expiresAt: new Date(NOW + 60_000).toISOString(),
+    observation: observation(),
+  }, NOW);
+  return { ...signal, ...overrides };
 }
 
-test('valid signal is ready and keeps the approval button enabled', () => {
-  const plan = planFromInput(input());
-  assert.equal(plan.signalState, 'READY_FOR_APPROVAL');
-  assert.equal(plan.signalScore, 82);
-  assert.equal(plan.signalConfidence, 78);
-  assert.equal(approvalStatus(plan, NOW).approvalEnabled, true);
-  assert.equal(plan.signalStateHistory.length, 1);
+function state(signal: ScannerSignalLifecycle, target: ScannerSignalState) {
+  return { ...signal, state: target };
+}
+
+test('DETECTED transitions to WATCHING and WATCHING transitions to READY_FOR_APPROVAL', () => {
+  const watching = applyScannerSignalObservation(detected(), observation(), NOW);
+  assert.equal(watching.state, 'WATCHING');
+  const ready = applyScannerSignalObservation(watching, observation(), NOW + 1_000);
+  assert.equal(ready.state, 'READY_FOR_APPROVAL');
+  assert.equal(ready.orderSubmitted, false);
+  assert.equal(ready.exchangeRequestSent, false);
+  assert.equal(validateScannerSignalApproval(ready, 1, NOW + 1_000).allowed, true);
 });
 
-test('small score or confidence deficit weakens the signal and disables approval', () => {
-  const plan = planFromInput(input());
-  const result = applySignalValidation(plan, {
-    score: 66,
-    confidence: 62,
-    coreConditionsMaintained: true,
-    riskReward: 2,
-    reasons: ['volume weakened'],
-    dataTimestamp: NOW.toISOString(),
-  }, NOW);
-  assert.equal(result.evaluation.state, 'WEAKENED');
-  assert.equal(approvalStatus(plan, NOW).approvalEnabled, false);
-  assert.equal(approvalStatus(plan, NOW).reasonCode, 'SIGNAL_WEAKENED');
-  assert.equal(plan.state, 'APPROVAL_PENDING');
+test('WATCHING and READY can weaken without creating an order side effect', () => {
+  for (const previous of ['WATCHING', 'READY_FOR_APPROVAL'] as const) {
+    const weakened = applyScannerSignalObservation(
+      state(detected(), previous),
+      observation({ approvalCandidate: false, reason: 'SIGNAL_SCORE_WEAKENED' }),
+      NOW,
+    );
+    assert.equal(weakened.state, 'WEAKENED');
+    assert.equal(validateScannerSignalApproval(weakened, weakened.cycle, NOW).allowed, false);
+    assert.equal(weakened.orderSubmitted, false);
+    assert.equal(weakened.exchangeRequestSent, false);
+  }
 });
 
-test('core condition break, collapsed risk reward, and stale data invalidate the signal', () => {
-  const minimums = {
-    minimumSignalScore: 70,
-    minimumSignalConfidence: 65,
-    minimumRiskReward: 1.5,
-    signalExpiresAt: new Date(NOW.getTime() + 60_000).toISOString(),
-  };
-  const coreBreak = evaluateSignalLifecycle(minimums, {
-    score: 90,
-    confidence: 90,
-    coreConditionsMaintained: false,
-    riskReward: 3,
-    dataTimestamp: NOW.toISOString(),
-  }, NOW);
-  assert.equal(coreBreak.state, 'INVALIDATED');
-  assert.equal(coreBreak.reasonCode, 'SIGNAL_CORE_CONDITION_BROKEN');
-
-  const rewardBreak = evaluateSignalLifecycle(minimums, {
-    score: 90,
-    confidence: 90,
-    coreConditionsMaintained: true,
-    riskReward: 1.2,
-    dataTimestamp: NOW.toISOString(),
-  }, NOW);
-  assert.equal(rewardBreak.state, 'INVALIDATED');
-  assert.equal(rewardBreak.reasonCode, 'SIGNAL_RISK_REWARD_BELOW_MINIMUM');
-
-  const stale = evaluateSignalLifecycle(minimums, {
-    score: 90,
-    confidence: 90,
-    coreConditionsMaintained: true,
-    riskReward: 3,
-    dataTimestamp: new Date(NOW.getTime() - SIGNAL_VALIDATION_MAX_AGE_MS - 1).toISOString(),
-  }, NOW);
-  assert.equal(stale.state, 'INVALIDATED');
-  assert.equal(stale.reasonCode, 'SIGNAL_DATA_STALE');
+test('WATCHING and READY invalidate on partial stale unavailable or broken core data', () => {
+  const failures: ScannerSignalObservation[] = [
+    observation({ dataState: 'partial', reason: 'PARTIAL' }),
+    observation({ dataState: 'stale', reason: 'STALE' }),
+    observation({ dataState: 'unavailable', reason: 'UNAVAILABLE' }),
+    observation({ coreConditionsMaintained: false, reason: 'CORE_BROKEN' }),
+  ];
+  for (const previous of ['WATCHING', 'READY_FOR_APPROVAL'] as const) {
+    for (const failure of failures) {
+      const result = applyScannerSignalObservation(state(detected(), previous), failure, NOW);
+      assert.equal(result.state, 'INVALIDATED');
+      assert.equal(result.orderSubmitted, false);
+      assert.equal(result.exchangeRequestSent, false);
+    }
+  }
 });
 
-test('approval expires or requires a recent server validation', () => {
-  const expired = planFromInput(input());
-  expired.approvalExpiresAt = new Date(NOW.getTime() - 1).toISOString();
-  assert.equal(approvalStatus(expired, NOW).reasonCode, 'APPROVAL_EXPIRED');
-
-  const stale = planFromInput(input());
-  stale.lastSignalValidatedAt = new Date(NOW.getTime() - SIGNAL_VALIDATION_MAX_AGE_MS - 1).toISOString();
-  assert.equal(approvalStatus(stale, NOW).reasonCode, 'SIGNAL_REVALIDATION_REQUIRED');
+test('WATCHING and READY expire when the signal deadline passes', () => {
+  for (const previous of ['WATCHING', 'READY_FOR_APPROVAL'] as const) {
+    const result = applyScannerSignalObservation(
+      state(detected({ expiresAt: new Date(NOW).toISOString() }), previous),
+      observation(),
+      NOW,
+    );
+    assert.equal(result.state, 'EXPIRED');
+    assert.equal(validateScannerSignalApproval(result, result.cycle, NOW).reason, 'SCANNER_SIGNAL_EXPIRED');
+  }
 });
 
-test('service rejects approval after weakening and permanently expires an invalidated plan', async () => {
-  const repository = new InMemoryTradingRepository();
-  const service = new TradeAutomationService(repository);
-  await repository.savePolicy(USER, normalizeTradingPolicy(DEFAULT_TRADING_POLICY));
-  const created = await service.createPlan(USER, input({
-    signalId: 'service-weakening',
-    marketSnapshot: { ...input().marketSnapshot, observedAt: new Date().toISOString() },
-    signalExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
-  }), normalizeTradingPolicy(DEFAULT_TRADING_POLICY), false);
-  assert.ok(created.plan);
-  assert.equal(created.approval?.approvalEnabled, true);
+test('INVALIDATED and EXPIRED never return to READY_FOR_APPROVAL', () => {
+  for (const terminal of ['INVALIDATED', 'EXPIRED'] as const) {
+    const original = state(detected(), terminal);
+    const result = applyScannerSignalObservation(original, observation(), NOW);
+    assert.equal(result.state, terminal);
+    assert.equal(result.history, original.history);
+    assert.equal(validateScannerSignalApproval(result, result.cycle, NOW).allowed, false);
+  }
+});
 
-  const weakened = await service.revalidatePlan(USER, created.plan!.id, {
-    score: 68,
-    confidence: 63,
-    coreConditionsMaintained: true,
-    riskReward: 2,
-    reasons: ['volume weakened'],
-    dataTimestamp: new Date().toISOString(),
-    marketSnapshot: { ...created.plan!.marketSnapshot, observedAt: new Date().toISOString() },
-  });
-  assert.equal(weakened.plan.state, 'APPROVAL_PENDING');
-  assert.equal(weakened.plan.signalState, 'WEAKENED');
-  assert.equal(weakened.approval.approvalEnabled, false);
-  await assert.rejects(
-    () => service.approvePlan(USER, created.plan!.id),
-    /TRADE_PLAN_SIGNAL_NOT_APPROVABLE/,
+test('WEAKENED requires an explicit new cycle before it can become ready again', () => {
+  const weakened = state(detected(), 'WEAKENED');
+  assert.equal(applyScannerSignalObservation(weakened, observation(), NOW).state, 'WEAKENED');
+  const next = startNextScannerSignalCycle(weakened, observation(), NOW);
+  assert.equal(next.cycle, 2);
+  assert.equal(next.state, 'DETECTED');
+  const watching = applyScannerSignalObservation(next, observation(), NOW + 1_000);
+  const ready = applyScannerSignalObservation(watching, observation(), NOW + 2_000);
+  assert.equal(ready.state, 'READY_FOR_APPROVAL');
+  assert.equal(validateScannerSignalApproval(ready, 1, NOW + 2_000).reason, 'SCANNER_PREVIOUS_CYCLE_REJECTED');
+  assert.equal(validateScannerSignalApproval(ready, 2, NOW + 2_000).allowed, true);
+});
+
+test('market, symbol, timeframe, owner and signal form a stable isolation key', () => {
+  assert.equal(scannerSignalIdentity(detected()), 'member-1|KR|005930|15m|signal-1');
+  assert.notEqual(scannerSignalIdentity(detected({ ownerId: 'member-2' })), scannerSignalIdentity(detected()));
+  assert.notEqual(scannerSignalIdentity(detected({ market: 'US' })), scannerSignalIdentity(detected()));
+});
+
+test('invalid observation timestamps fail closed', () => {
+  const stale = applyScannerSignalObservation(
+    state(detected(), 'WATCHING'),
+    observation({ observedAt: new Date(NOW - 60_001).toISOString() }),
+    NOW,
   );
-
-  const invalidated = await service.revalidatePlan(USER, created.plan!.id, {
-    score: 80,
-    confidence: 80,
-    coreConditionsMaintained: false,
-    riskReward: 2,
-    reasons: ['support lost'],
-    dataTimestamp: new Date().toISOString(),
-    invalidationReason: 'SUPPORT_LEVEL_BROKEN',
-    marketSnapshot: { ...created.plan!.marketSnapshot, observedAt: new Date().toISOString() },
-  });
-  assert.equal(invalidated.plan.signalState, 'INVALIDATED');
-  assert.equal(invalidated.plan.state, 'EXPIRED');
-  assert.equal(invalidated.approval.approvalEnabled, false);
-  assert.equal(invalidated.plan.signalInvalidationReason, 'SUPPORT_LEVEL_BROKEN');
-});
-
-test('invalidating after partial fill preserves the fill and requests cancellation of the remainder', async () => {
-  const repository = new InMemoryTradingRepository();
-  const service = new TradeAutomationService(repository);
-  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
-  await repository.savePolicy(USER, policy);
-  const created = await service.createPlan(USER, input({
-    signalId: 'partial-fill-invalidation',
-    quantity: 10,
-    quoteAmount: 100_000,
-    marketSnapshot: { ...input().marketSnapshot, observedAt: new Date().toISOString() },
-    signalExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
-  }), policy, false);
-  assert.ok(created.plan);
-  const approved = await service.approvePlan(USER, created.plan!.id);
-  const { order } = await service.createOrder(USER, approved);
-  await service.transition(order, 'ACCEPTED', 'TEST_ACCEPTED');
-  await service.transition(order, 'PARTIALLY_FILLED', 'TEST_PARTIAL', { filledQuantity: 4 });
-
-  const result = await service.invalidatePlan(USER, approved.id, 'SIGNAL_CORE_CONDITION_BROKEN');
-  assert.equal(result.order?.state, 'CANCEL_REQUESTED');
-  assert.equal(result.filledQuantityPreserved, 4);
-  assert.equal(result.plan.signalState, 'INVALIDATED');
-  assert.equal(result.plan.signalInvalidationReason, 'SIGNAL_CORE_CONDITION_BROKEN');
+  assert.equal(stale.state, 'INVALIDATED');
+  const future = applyScannerSignalObservation(
+    state(detected(), 'WATCHING'),
+    observation({ observedAt: new Date(NOW + 60_001).toISOString() }),
+    NOW,
+  );
+  assert.equal(future.state, 'INVALIDATED');
 });

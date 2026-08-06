@@ -1,229 +1,247 @@
-import type {
-  TradingApprovalStatus,
-  TradingPlan,
-  TradingPlanInput,
-  TradingSignalState,
-  TradingSignalStateEvent,
-  TradingSignalValidationInput,
-} from './trade-automation.types';
+export type ScannerSignalState =
+  | 'DETECTED'
+  | 'WATCHING'
+  | 'READY_FOR_APPROVAL'
+  | 'WEAKENED'
+  | 'INVALIDATED'
+  | 'EXPIRED';
 
-export const SIGNAL_VALIDATION_MAX_AGE_MS = 30_000;
-const SIGNAL_CLOCK_SKEW_MS = 5_000;
-const DEFAULT_SIGNAL_TTL_MS = 10 * 60_000;
-const HISTORY_LIMIT = 100;
+export type ScannerDataState = 'complete' | 'partial' | 'stale' | 'unavailable';
+export type ScannerChaseRisk = 'LOW' | 'ELEVATED' | 'UNAVAILABLE';
 
-function clamp(value: unknown, minimum: number, maximum: number, fallback: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(maximum, Math.max(minimum, parsed));
-}
+export type ScannerSignalObservation = {
+  approvalCandidate: boolean;
+  coreConditionsMaintained: boolean;
+  dataState: ScannerDataState;
+  observedAt: string;
+  score: number;
+  confidence: number;
+  riskScore: number;
+  dataCompleteness: number;
+  chaseRisk: ScannerChaseRisk;
+  reason: string;
+};
 
-function finiteOrNull(value: unknown) {
-  const parsed = Number(value);
+export type ScannerSignalLifecycleEvent = {
+  cycle: number;
+  fromState: ScannerSignalState;
+  toState: ScannerSignalState;
+  reason: string;
+  observedAt: string;
+  createdAt: string;
+};
+
+export type ScannerSignalLifecycle = {
+  ownerId: string;
+  signalId: string;
+  market: string;
+  symbol: string;
+  timeframe: string;
+  cycle: number;
+  state: ScannerSignalState;
+  signalAt: string;
+  expiresAt: string;
+  lastObservedAt: string;
+  score: number;
+  confidence: number;
+  riskScore: number;
+  dataCompleteness: number;
+  dataState: ScannerDataState;
+  chaseRisk: ScannerChaseRisk;
+  orderSubmitted: false;
+  exchangeRequestSent: false;
+  history: ScannerSignalLifecycleEvent[];
+};
+
+export type ScannerApprovalValidation = {
+  allowed: boolean;
+  reason: string | null;
+  state: ScannerSignalState;
+  cycle: number;
+  orderSubmitted: false;
+  exchangeRequestSent: false;
+};
+
+export const SCANNER_OBSERVATION_MAX_AGE_MS = 60_000;
+const FUTURE_CLOCK_SKEW_MS = 60_000;
+
+function timestamp(value: string): number | null {
+  const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function stringList(value: unknown, maximum = 30) {
-  return Array.isArray(value)
-    ? [...new Set(value.map(String).map((item) => item.trim()).filter(Boolean))].slice(0, maximum)
-    : [];
-}
-
-function validDateOr(value: unknown, fallback: Date) {
-  const parsed = Date.parse(String(value ?? ''));
-  return Number.isFinite(parsed) ? new Date(parsed) : fallback;
-}
-
-export type SignalLifecycleEvaluation = {
-  state: TradingSignalState;
-  reasonCode: string;
-  score: number;
-  confidence: number;
-  riskReward: number | null;
-  coreConditionsMaintained: boolean;
-  reasons: string[];
-  warnings: string[];
-  dataTimestamp: string;
-};
-
-export function evaluateSignalLifecycle(
-  minimums: Pick<TradingPlan, 'minimumSignalScore' | 'minimumSignalConfidence' | 'minimumRiskReward' | 'signalExpiresAt'>,
-  validation: TradingSignalValidationInput,
-  now = new Date(),
-): SignalLifecycleEvaluation {
-  const score = clamp(validation.score, 0, 100, 0);
-  const confidence = clamp(validation.confidence, 0, 100, 0);
-  const riskReward = finiteOrNull(validation.riskReward);
-  const reasons = stringList(validation.reasons);
-  const warnings = stringList(validation.warnings);
-  const coreConditionsMaintained = validation.coreConditionsMaintained === true;
-  const dataTimestampMs = Date.parse(String(validation.dataTimestamp ?? ''));
-  const signalExpiresAtMs = Date.parse(minimums.signalExpiresAt);
-  const invalidationReason = String(validation.invalidationReason ?? '').trim();
-
-  const base = {
-    score,
-    confidence,
-    riskReward,
-    coreConditionsMaintained,
-    reasons,
-    warnings,
-    dataTimestamp: Number.isFinite(dataTimestampMs)
-      ? new Date(dataTimestampMs).toISOString()
-      : String(validation.dataTimestamp ?? ''),
+function event(
+  signal: ScannerSignalLifecycle,
+  toState: ScannerSignalState,
+  reason: string,
+  observedAt: string,
+  now: number,
+): ScannerSignalLifecycleEvent {
+  return {
+    cycle: signal.cycle,
+    fromState: signal.state,
+    toState,
+    reason,
+    observedAt,
+    createdAt: new Date(now).toISOString(),
   };
-
-  if (Number.isFinite(signalExpiresAtMs) && signalExpiresAtMs <= now.getTime()) {
-    return { ...base, state: 'EXPIRED', reasonCode: 'SIGNAL_EXPIRED' };
-  }
-  if (!Number.isFinite(dataTimestampMs)) {
-    return { ...base, state: 'INVALIDATED', reasonCode: 'SIGNAL_DATA_TIMESTAMP_INVALID' };
-  }
-  if (dataTimestampMs > now.getTime() + SIGNAL_CLOCK_SKEW_MS) {
-    return { ...base, state: 'INVALIDATED', reasonCode: 'SIGNAL_DATA_FROM_FUTURE' };
-  }
-  if (now.getTime() - dataTimestampMs > SIGNAL_VALIDATION_MAX_AGE_MS) {
-    return { ...base, state: 'INVALIDATED', reasonCode: 'SIGNAL_DATA_STALE' };
-  }
-  if (invalidationReason) {
-    return { ...base, state: 'INVALIDATED', reasonCode: invalidationReason };
-  }
-  if (!coreConditionsMaintained) {
-    return { ...base, state: 'INVALIDATED', reasonCode: 'SIGNAL_CORE_CONDITION_BROKEN' };
-  }
-  if (minimums.minimumRiskReward > 0 && (riskReward == null || riskReward < minimums.minimumRiskReward)) {
-    return { ...base, state: 'INVALIDATED', reasonCode: 'SIGNAL_RISK_REWARD_BELOW_MINIMUM' };
-  }
-  if (score < minimums.minimumSignalScore) {
-    const deficit = minimums.minimumSignalScore - score;
-    return {
-      ...base,
-      state: deficit >= 10 ? 'INVALIDATED' : 'WEAKENED',
-      reasonCode: 'SIGNAL_SCORE_BELOW_MINIMUM',
-    };
-  }
-  if (confidence < minimums.minimumSignalConfidence) {
-    const deficit = minimums.minimumSignalConfidence - confidence;
-    return {
-      ...base,
-      state: deficit >= 10 ? 'INVALIDATED' : 'WEAKENED',
-      reasonCode: 'SIGNAL_CONFIDENCE_BELOW_MINIMUM',
-    };
-  }
-
-  return { ...base, state: 'READY_FOR_APPROVAL', reasonCode: 'SIGNAL_READY' };
 }
 
-export function initializeSignalLifecycle(
-  input: TradingPlanInput,
-  approvalExpiresAt: string | null,
-  now = new Date(),
-) {
-  const signalExpiresAt = validDateOr(
-    input.signalExpiresAt,
-    approvalExpiresAt ? new Date(approvalExpiresAt) : new Date(now.getTime() + DEFAULT_SIGNAL_TTL_MS),
-  ).toISOString();
-  const minimumSignalScore = clamp(input.minimumSignalScore, 0, 100, 0);
-  const minimumSignalConfidence = clamp(input.minimumSignalConfidence, 0, 100, 0);
-  const minimumRiskReward = clamp(input.minimumRiskReward, 0, 100, 0);
-  const validation: TradingSignalValidationInput = {
-    score: clamp(input.signalScore, 0, 100, 100),
-    confidence: clamp(input.signalConfidence, 0, 100, 100),
-    coreConditionsMaintained: input.signalCoreConditionsMaintained !== false,
-    riskReward: finiteOrNull(input.signalRiskReward),
-    reasons: input.signalReasons,
-    warnings: input.signalWarnings,
-    dataTimestamp: input.marketSnapshot.observedAt,
+function transition(
+  signal: ScannerSignalLifecycle,
+  toState: ScannerSignalState,
+  observation: ScannerSignalObservation,
+  now: number,
+): ScannerSignalLifecycle {
+  const changed = signal.state !== toState;
+  return {
+    ...signal,
+    state: toState,
+    lastObservedAt: observation.observedAt,
+    score: observation.score,
+    confidence: observation.confidence,
+    riskScore: observation.riskScore,
+    dataCompleteness: observation.dataCompleteness,
+    dataState: observation.dataState,
+    chaseRisk: observation.chaseRisk,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+    history: changed
+      ? [...signal.history, event(signal, toState, observation.reason, observation.observedAt, now)]
+      : signal.history,
   };
-  const evaluation = evaluateSignalLifecycle({
-    minimumSignalScore,
-    minimumSignalConfidence,
-    minimumRiskReward,
-    signalExpiresAt,
-  }, validation, now);
-  const event: TradingSignalStateEvent = {
-    fromState: null,
-    toState: evaluation.state,
-    reason: evaluation.reasonCode,
-    score: evaluation.score,
-    confidence: evaluation.confidence,
-    coreConditionsMaintained: evaluation.coreConditionsMaintained,
-    riskReward: evaluation.riskReward,
-    dataTimestamp: evaluation.dataTimestamp,
-    createdAt: now.toISOString(),
+}
+
+function observationFailure(observation: ScannerSignalObservation, now: number): string | null {
+  const observedAt = timestamp(observation.observedAt);
+  if (observation.dataState !== 'complete') return `SIGNAL_DATA_${observation.dataState.toUpperCase()}`;
+  if (!observation.coreConditionsMaintained) return 'SIGNAL_CORE_CONDITION_BROKEN';
+  if (observedAt == null) return 'SIGNAL_OBSERVED_AT_INVALID';
+  if (observedAt > now + FUTURE_CLOCK_SKEW_MS) return 'SIGNAL_OBSERVED_AT_FUTURE';
+  if (now - observedAt > SCANNER_OBSERVATION_MAX_AGE_MS) return 'SIGNAL_DATA_STALE';
+  return null;
+}
+
+export function createDetectedScannerSignal(input: {
+  ownerId: string;
+  signalId: string;
+  market: string;
+  symbol: string;
+  timeframe: string;
+  signalAt: string;
+  expiresAt: string;
+  observation: ScannerSignalObservation;
+}, now = Date.now()): ScannerSignalLifecycle {
+  if (!input.ownerId.trim()) throw new Error('SCANNER_SIGNAL_OWNER_REQUIRED');
+  if (!input.signalId.trim()) throw new Error('SCANNER_SIGNAL_ID_REQUIRED');
+  if (!input.market.trim() || !input.symbol.trim() || !input.timeframe.trim()) {
+    throw new Error('SCANNER_SIGNAL_IDENTITY_REQUIRED');
+  }
+  const signalAt = timestamp(input.signalAt);
+  const expiresAt = timestamp(input.expiresAt);
+  if (signalAt == null || expiresAt == null || expiresAt <= signalAt || expiresAt <= now) {
+    throw new Error('SCANNER_SIGNAL_EXPIRY_INVALID');
+  }
+  return {
+    ownerId: input.ownerId,
+    signalId: input.signalId,
+    market: input.market,
+    symbol: input.symbol,
+    timeframe: input.timeframe,
+    cycle: 1,
+    state: 'DETECTED',
+    signalAt: input.signalAt,
+    expiresAt: input.expiresAt,
+    lastObservedAt: input.observation.observedAt,
+    score: input.observation.score,
+    confidence: input.observation.confidence,
+    riskScore: input.observation.riskScore,
+    dataCompleteness: input.observation.dataCompleteness,
+    dataState: input.observation.dataState,
+    chaseRisk: input.observation.chaseRisk,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+    history: [],
+  };
+}
+
+export function applyScannerSignalObservation(
+  signal: ScannerSignalLifecycle,
+  observation: ScannerSignalObservation,
+  now = Date.now(),
+): ScannerSignalLifecycle {
+  if (signal.state === 'INVALIDATED' || signal.state === 'EXPIRED') return signal;
+  const expiresAt = timestamp(signal.expiresAt);
+  if (expiresAt == null || expiresAt <= now) {
+    return transition(signal, 'EXPIRED', { ...observation, reason: 'SIGNAL_EXPIRED' }, now);
+  }
+  const failure = observationFailure(observation, now);
+  if (failure) {
+    return transition(signal, 'INVALIDATED', { ...observation, reason: failure }, now);
+  }
+  if (signal.state === 'WEAKENED') return transition(signal, 'WEAKENED', observation, now);
+  if (observation.approvalCandidate) {
+    if (signal.state === 'DETECTED') return transition(signal, 'WATCHING', observation, now);
+    if (signal.state === 'WATCHING') return transition(signal, 'READY_FOR_APPROVAL', observation, now);
+    return transition(signal, 'READY_FOR_APPROVAL', observation, now);
+  }
+  if (signal.state === 'WATCHING' || signal.state === 'READY_FOR_APPROVAL') {
+    return transition(signal, 'WEAKENED', observation, now);
+  }
+  return transition(signal, 'DETECTED', observation, now);
+}
+
+export function startNextScannerSignalCycle(
+  signal: ScannerSignalLifecycle,
+  observation: ScannerSignalObservation,
+  now = Date.now(),
+): ScannerSignalLifecycle {
+  if (signal.state !== 'WEAKENED') throw new Error('SCANNER_NEW_CYCLE_REQUIRES_WEAKENED');
+  const expiresAt = timestamp(signal.expiresAt);
+  if (expiresAt == null || expiresAt <= now) throw new Error('SCANNER_SIGNAL_EXPIRED');
+  const failure = observationFailure(observation, now);
+  if (failure) throw new Error(failure);
+  const next: ScannerSignalLifecycle = {
+    ...signal,
+    cycle: signal.cycle + 1,
+    state: 'DETECTED',
+    lastObservedAt: observation.observedAt,
+    score: observation.score,
+    confidence: observation.confidence,
+    riskScore: observation.riskScore,
+    dataCompleteness: observation.dataCompleteness,
+    dataState: observation.dataState,
+    chaseRisk: observation.chaseRisk,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
   };
   return {
-    signalState: evaluation.state,
-    signalScore: evaluation.score,
-    signalConfidence: evaluation.confidence,
-    minimumSignalScore,
-    minimumSignalConfidence,
-    minimumRiskReward,
-    signalRiskReward: evaluation.riskReward,
-    signalCoreConditionsMaintained: evaluation.coreConditionsMaintained,
-    signalExpiresAt,
-    lastSignalValidatedAt: now.toISOString(),
-    signalWarnings: evaluation.warnings,
-    signalInvalidationReason: evaluation.state === 'INVALIDATED' || evaluation.state === 'EXPIRED'
-      ? evaluation.reasonCode
-      : null,
-    signalStateHistory: [event],
+    ...next,
+    history: [...signal.history, event({ ...next, state: signal.state }, 'DETECTED', 'SIGNAL_NEW_CYCLE', observation.observedAt, now)],
   };
 }
 
-export function applySignalValidation(
-  plan: TradingPlan,
-  validation: TradingSignalValidationInput,
-  now = new Date(),
-) {
-  const evaluation = evaluateSignalLifecycle(plan, validation, now);
-  const event: TradingSignalStateEvent = {
-    fromState: plan.signalState,
-    toState: evaluation.state,
-    reason: evaluation.reasonCode,
-    score: evaluation.score,
-    confidence: evaluation.confidence,
-    coreConditionsMaintained: evaluation.coreConditionsMaintained,
-    riskReward: evaluation.riskReward,
-    dataTimestamp: evaluation.dataTimestamp,
-    createdAt: now.toISOString(),
-  };
-  plan.signalState = evaluation.state;
-  plan.signalScore = evaluation.score;
-  plan.signalConfidence = evaluation.confidence;
-  plan.signalRiskReward = evaluation.riskReward;
-  plan.signalCoreConditionsMaintained = evaluation.coreConditionsMaintained;
-  plan.signalReasons = evaluation.reasons.length ? evaluation.reasons : plan.signalReasons;
-  plan.signalWarnings = evaluation.warnings;
-  plan.signalInvalidationReason = evaluation.state === 'INVALIDATED' || evaluation.state === 'EXPIRED'
-    ? evaluation.reasonCode
-    : null;
-  plan.lastSignalValidatedAt = now.toISOString();
-  plan.signalStateHistory = [...(plan.signalStateHistory ?? []), event].slice(-HISTORY_LIMIT);
-  plan.updatedAt = now.toISOString();
-  return { plan, evaluation };
-}
-
-export function approvalStatus(plan: TradingPlan, now = new Date()): TradingApprovalStatus {
-  const approvalExpiry = plan.approvalExpiresAt ? Date.parse(plan.approvalExpiresAt) : Number.NaN;
-  const signalExpiry = Date.parse(plan.signalExpiresAt);
-  const lastValidation = Date.parse(plan.lastSignalValidatedAt);
-  let reasonCode: string | null = null;
-
-  if (plan.state !== 'APPROVAL_PENDING') reasonCode = 'PLAN_NOT_APPROVAL_PENDING';
-  else if (plan.signalState !== 'READY_FOR_APPROVAL') reasonCode = `SIGNAL_${plan.signalState}`;
-  else if (!Number.isFinite(approvalExpiry) || approvalExpiry <= now.getTime()) reasonCode = 'APPROVAL_EXPIRED';
-  else if (!Number.isFinite(signalExpiry) || signalExpiry <= now.getTime()) reasonCode = 'SIGNAL_EXPIRED';
-  else if (!Number.isFinite(lastValidation) || now.getTime() - lastValidation > SIGNAL_VALIDATION_MAX_AGE_MS) {
-    reasonCode = 'SIGNAL_REVALIDATION_REQUIRED';
-  }
-
+export function validateScannerSignalApproval(
+  signal: ScannerSignalLifecycle,
+  requestedCycle: number,
+  now = Date.now(),
+): ScannerApprovalValidation {
+  let reason: string | null = null;
+  if (requestedCycle !== signal.cycle) reason = 'SCANNER_PREVIOUS_CYCLE_REJECTED';
+  else if (signal.state !== 'READY_FOR_APPROVAL') reason = `SCANNER_SIGNAL_${signal.state}`;
+  else if (signal.dataState !== 'complete') reason = 'SCANNER_SIGNAL_DATA_NOT_COMPLETE';
+  else if ((timestamp(signal.expiresAt) ?? 0) <= now) reason = 'SCANNER_SIGNAL_EXPIRED';
+  else if (signal.orderSubmitted || signal.exchangeRequestSent) reason = 'SCANNER_ORDER_SIDE_EFFECT_DETECTED';
   return {
-    approvalEnabled: reasonCode == null,
-    signalState: plan.signalState,
-    planState: plan.state,
-    reasonCode,
-    expiresAt: plan.approvalExpiresAt,
-    lastValidatedAt: plan.lastSignalValidatedAt,
+    allowed: reason == null,
+    reason,
+    state: signal.state,
+    cycle: signal.cycle,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
   };
+}
+
+export function scannerSignalIdentity(signal: Pick<ScannerSignalLifecycle, 'ownerId' | 'market' | 'symbol' | 'timeframe' | 'signalId'>) {
+  return [signal.ownerId, signal.market, signal.symbol, signal.timeframe, signal.signalId].join('|');
 }
