@@ -41,6 +41,7 @@ type RouteTransitionObservation = {
 };
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
+const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
 const diagnostics: {
   console_errors: Diagnostic[];
   page_errors: Diagnostic[];
@@ -118,14 +119,28 @@ function isExpectedRouteTransitionAbort(
 ) {
   try {
     const parsed = new URL(request.url());
-    return observation.fromPath === '/stock-info'
-      && observation.toPath === '/scanner'
+    return observation.fromPath !== observation.toPath
       && request.method() === 'GET'
-      && parsed.pathname === '/api/stocks/005930/chart'
+      && parsed.pathname.startsWith('/api/')
       && request.failure()?.errorText === 'net::ERR_ABORTED';
   } catch {
     return false;
   }
+}
+
+function isMutatingBrowserRequest(request: Request) {
+  try {
+    const parsed = new URL(request.url());
+    return parsed.origin === new URL(request.frame().url()).origin
+      && parsed.pathname.startsWith('/api/')
+      && !['GET', 'HEAD', 'OPTIONS'].includes(request.method());
+  } catch {
+    return false;
+  }
+}
+
+function completeMutatingRequest(page: Page, request: Request) {
+  pendingMutatingRequests.get(page)?.delete(request);
 }
 
 function recordUnhandled(testName: string, url: string, detail: string) {
@@ -136,6 +151,12 @@ function recordUnhandled(testName: string, url: string, detail: string) {
 
 function attachDiagnostics(page: Page, testInfo: TestInfo) {
   const testName = testInfo.titlePath.join(' > ');
+  const mutations = new Set<Request>();
+  pendingMutatingRequests.set(page, mutations);
+  page.on('request', (request) => {
+    if (isMutatingBrowserRequest(request)) mutations.add(request);
+  });
+  page.on('requestfinished', (request) => completeMutatingRequest(page, request));
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
     const detail = diagnosticText(message.text());
@@ -159,6 +180,7 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     });
   });
   page.on('requestfailed', (request) => {
+    completeMutatingRequest(page, request);
     const detail = diagnosticText(`${request.method()} ${request.failure()?.errorText ?? 'request failed'}`);
     const diagnostic: Diagnostic = {
       test: testName,
@@ -190,6 +212,17 @@ async function waitForPresentationFrame(page: Page) {
   }));
 }
 
+async function waitForPendingMutations(page: Page) {
+  await expect.poll(
+    () => pendingMutatingRequests.get(page)?.size ?? 0,
+    {
+      message: 'mutating browser requests must finish before route navigation',
+      timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe(0);
+}
+
 async function settle(page: Page) {
   await page.waitForLoadState('load');
   for (let pass = 0; pass < 2; pass += 1) {
@@ -199,6 +232,7 @@ async function settle(page: Page) {
     expect(page.url(), 'route changed while presentation was settling').toBe(urlBeforeFrame);
     await expect(page.locator('body')).toBeVisible();
   }
+  await waitForPendingMutations(page);
 }
 
 function loginSubmitButton(page: Page) {
@@ -255,20 +289,62 @@ async function expectMembership(page: Page, label: RegExp) {
   await expect(page.getByTestId('membership-label')).toContainText(label);
 }
 
+async function finishRouteTransition(
+  page: Page,
+  observation: RouteTransitionObservation,
+  confirmed: boolean,
+) {
+  activeRouteTransitionObservations.delete(page);
+  if (confirmed) {
+    diagnostics.expected_route_transition_aborts.push(...observation.candidates);
+    return;
+  }
+  diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({
+    ...item,
+    detail: `unconfirmed route-transition abort: ${item.detail}`,
+  })));
+}
+
 async function expectHealthyRoute(page: Page, route: string) {
   await settle(page);
-  const response = await page.goto(route, { waitUntil: 'domcontentloaded' });
-  if (response) expect(response.status(), `${route} returned HTTP ${response.status()}`).toBeLessThan(400);
-  await settle(page);
-  await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
-  await expect(page.locator('body')).not.toBeEmpty();
+  const observation: RouteTransitionObservation = {
+    fromPath: new URL(page.url()).pathname,
+    toPath: new URL(route, page.url()).pathname,
+    candidates: [],
+  };
+  activeRouteTransitionObservations.set(page, observation);
+  let confirmed = false;
+  try {
+    const response = await page.goto(route, { waitUntil: 'domcontentloaded' });
+    if (response) expect(response.status(), `${route} returned HTTP ${response.status()}`).toBeLessThan(400);
+    await settle(page);
+    expect(new URL(page.url()).pathname).toBe(observation.toPath);
+    await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
+    await expect(page.locator('body')).not.toBeEmpty();
+    confirmed = true;
+  } finally {
+    await finishRouteTransition(page, observation, confirmed);
+  }
 }
 
 async function expectDeniedRoute(page: Page, route: string) {
   await settle(page);
-  await page.goto(route, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('capability-denied')).toBeVisible();
-  await settle(page);
+  const observation: RouteTransitionObservation = {
+    fromPath: new URL(page.url()).pathname,
+    toPath: new URL(route, page.url()).pathname,
+    candidates: [],
+  };
+  activeRouteTransitionObservations.set(page, observation);
+  let confirmed = false;
+  try {
+    await page.goto(route, { waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('capability-denied')).toBeVisible();
+    await settle(page);
+    expect(new URL(page.url()).pathname).toBe(observation.toPath);
+    confirmed = true;
+  } finally {
+    await finishRouteTransition(page, observation, confirmed);
+  }
 }
 
 async function expectScannerAfterFutures(page: Page) {
@@ -283,15 +359,8 @@ async function expectScannerAfterFutures(page: Page) {
     await expectHealthyScannerRoute(page);
     expect(new URL(page.url()).pathname).toBe(observation.toPath);
     confirmed = true;
-    diagnostics.expected_route_transition_aborts.push(...observation.candidates);
   } finally {
-    activeRouteTransitionObservations.delete(page);
-    if (!confirmed && observation.candidates.length > 0) {
-      diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({
-        ...item,
-        detail: `unconfirmed route-transition abort: ${item.detail}`,
-      })));
-    }
+    await finishRouteTransition(page, observation, confirmed);
   }
 }
 
