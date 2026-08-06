@@ -395,6 +395,11 @@ export function InstrumentOrderbookDock({
     timer.current = null;
   }, []);
 
+  const closeDialog = useCallback(() => {
+    setOpen(false);
+    window.requestAnimationFrame(() => opener.current?.focus());
+  }, []);
+
   const schedule = useCallback(() => {
     if (document.visibilityState !== 'visible') return;
     if (timer.current != null) window.clearTimeout(timer.current);
@@ -434,11 +439,12 @@ export function InstrumentOrderbookDock({
       if (next.status === 'ready' || next.status === 'partial') {
         lastGood.current = { targetKey, payload: next };
         setData(next);
-      } else if (
-        next.status === 'provider_error'
-        && lastGood.current?.targetKey === targetKey
-      ) {
-        setData(lastGood.current.payload);
+      } else if (next.status === 'provider_error') {
+        if (lastGood.current?.targetKey === targetKey) {
+          setData(lastGood.current.payload);
+        } else {
+          setData(next);
+        }
         setError(next.reason ?? 'ORDERBOOK_REQUEST_FAILED');
       } else {
         setData(next);
@@ -503,7 +509,7 @@ export function InstrumentOrderbookDock({
     const keydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        setOpen(false);
+        closeDialog();
         return;
       }
       if (event.key !== 'Tab' || !dialog.current) return;
@@ -530,7 +536,7 @@ export function InstrumentOrderbookDock({
     window.addEventListener('keydown', keydown);
     window.requestAnimationFrame(() => dialog.current?.focus());
     return () => window.removeEventListener('keydown', keydown);
-  }, [open]);
+  }, [closeDialog, open]);
 
   const max = useMemo(() => Math.max(
     0,
@@ -553,7 +559,7 @@ export function InstrumentOrderbookDock({
         ? '공급자 시각 기준 지연'
         : '공급자 최신성 확인 불가';
   const backdrop = (event: MouseEvent<HTMLDivElement>) => {
-    if (event.target === event.currentTarget) setOpen(false);
+    if (event.target === event.currentTarget) closeDialog();
   };
 
   return (
@@ -608,7 +614,7 @@ export function InstrumentOrderbookDock({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setOpen(false)}
+                  onClick={closeDialog}
                   aria-label="호가창 닫기"
                   className="inline-flex h-11 w-11 items-center justify-center rounded-full hover:bg-accent"
                 >
@@ -673,7 +679,7 @@ export function InstrumentOrderbookDock({
                 </section>
               ) : null}
 
-              {!loading && data && !data.available ? (
+              {!error && !loading && data && !data.available ? (
                 <section role="status" className="m-4 rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 text-sm">
                   <div className="flex gap-2">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden />
@@ -701,7 +707,7 @@ export function InstrumentOrderbookDock({
                     <span className="text-right">잔량</span>
                     <span className="text-right">누적잔량</span>
                   </div>
-                  <div role="list" aria-label="매도 호가">
+                  <div role="list" aria-label="매도 호가" data-testid="ask-levels">
                     {data.asks.slice().reverse().map((item) => (
                       <LevelRow key={`a-${item.rank}-${item.price}`} item={item} side="ask" currency={data.currency} max={max} />
                     ))}
@@ -720,7 +726,7 @@ export function InstrumentOrderbookDock({
                       </div>
                     </div>
                   </div>
-                  <div role="list" aria-label="매수 호가">
+                  <div role="list" aria-label="매수 호가" data-testid="bid-levels">
                     {data.bids.map((item) => (
                       <LevelRow key={`b-${item.rank}-${item.price}`} item={item} side="bid" currency={data.currency} max={max} />
                     ))}
