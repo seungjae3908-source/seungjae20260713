@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { useAuth } from '@/lib/auth';
@@ -6,7 +6,7 @@ import AiChartPage from '@/pages/ai-chart';
 import ScannerPage from '@/pages/scanner';
 import SignalScannerPage from '@/pages/signal-scanner';
 
-type MobileWorkspace = 'signal' | 'chart' | 'admin';
+type MobileWorkspace = 'legacy' | 'signal' | 'chart';
 
 function useDesktopWorkspace() {
   const query = '(min-width: 1024px)';
@@ -21,27 +21,48 @@ function useDesktopWorkspace() {
   return desktop;
 }
 
+function LegacyScannerCapabilitySurface({ allowAutoTrading }: { allowAutoTrading: boolean }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const apply = () => {
+      for (const button of root.querySelectorAll('button')) {
+        if (button.textContent?.trim() !== '자동매매') continue;
+        button.hidden = !allowAutoTrading;
+        button.disabled = !allowAutoTrading;
+        button.setAttribute('aria-hidden', allowAutoTrading ? 'false' : 'true');
+        button.setAttribute('data-capability', 'canAccessTradeAutomation');
+      }
+    };
+    apply();
+    const observer = new MutationObserver(apply);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [allowAutoTrading]);
+
+  return <div ref={rootRef} className="h-full min-h-0 overflow-hidden"><ScannerPage /></div>;
+}
+
 export default function TechnicalWorkspacePage() {
   const desktop = useDesktopWorkspace();
   const auth = useAuth();
   const [location] = useLocation();
   const phase11SignalRoute = location.startsWith('/__phase11-technical-workspace-e2e');
   const canUseAiChart = auth.can('canAccessRiskPreview') || phase11SignalRoute;
-  const canUseAdminWorkspace = auth.can('canPlaceOrders') || phase11SignalRoute;
-  const [mobileWorkspace, setMobileWorkspace] = useState<MobileWorkspace>(() => (
-    phase11SignalRoute ? 'signal' : canUseAiChart ? 'chart' : 'signal'
-  ));
+  const canUseAutoTrading = auth.can('canAccessTradeAutomation') || phase11SignalRoute;
+  const [mobileWorkspace, setMobileWorkspace] = useState<MobileWorkspace>('legacy');
 
   useEffect(() => {
-    if (mobileWorkspace === 'admin' && !canUseAdminWorkspace) setMobileWorkspace(canUseAiChart ? 'chart' : 'signal');
     if (mobileWorkspace === 'chart' && !canUseAiChart) setMobileWorkspace('signal');
-  }, [canUseAdminWorkspace, canUseAiChart, mobileWorkspace]);
+  }, [canUseAiChart, mobileWorkspace]);
 
   if (!desktop) {
     const workspaces: Array<{ id: MobileWorkspace; label: string }> = [
-      { id: 'signal', label: '다중 시장 AI 신호검색기' },
+      { id: 'legacy', label: 'AI 검색기' },
+      { id: 'signal', label: '다중 시장 신호검색기' },
       ...(canUseAiChart ? [{ id: 'chart' as const, label: 'AI 차트 분석기' }] : []),
-      ...(canUseAdminWorkspace ? [{ id: 'admin' as const, label: '관리자 주문 워크스페이스' }] : []),
     ];
     return (
       <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
@@ -61,9 +82,9 @@ export default function TechnicalWorkspacePage() {
           ))}
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
+          {mobileWorkspace === 'legacy' ? <LegacyScannerCapabilitySurface allowAutoTrading={canUseAutoTrading} /> : null}
           {mobileWorkspace === 'signal' ? <SignalScannerPage /> : null}
           {mobileWorkspace === 'chart' && canUseAiChart ? <AiChartPage /> : null}
-          {mobileWorkspace === 'admin' && canUseAdminWorkspace ? <ScannerPage /> : null}
         </div>
       </div>
     );
