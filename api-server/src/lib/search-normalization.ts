@@ -133,28 +133,40 @@ function valuesForDocument(document: UnifiedAssetDocument) {
   };
 }
 
+function equalWhenPresent(left: string, right: string): boolean {
+  return Boolean(left && right && left === right);
+}
+
+function startsWithWhenPresent(query: string, candidate: string): boolean {
+  return Boolean(query && candidate && candidate.startsWith(query));
+}
+
+function includesWhenPresent(query: string, candidate: string): boolean {
+  return Boolean(query && candidate && candidate.includes(query));
+}
+
 function equivalent(a: NormalizedSearchText, b: NormalizedSearchText): boolean {
-  return Boolean(a.lower && (
-    a.lower === b.lower ||
-    a.compact === b.compact ||
-    a.separatorless === b.separatorless
-  ));
+  return (
+    equalWhenPresent(a.lower, b.lower) ||
+    equalWhenPresent(a.compact, b.compact) ||
+    equalWhenPresent(a.separatorless, b.separatorless)
+  );
 }
 
 function startsWith(a: NormalizedSearchText, b: NormalizedSearchText): boolean {
-  return Boolean(a.lower && (
-    b.lower.startsWith(a.lower) ||
-    b.compact.startsWith(a.compact) ||
-    b.separatorless.startsWith(a.separatorless)
-  ));
+  return (
+    startsWithWhenPresent(a.lower, b.lower) ||
+    startsWithWhenPresent(a.compact, b.compact) ||
+    startsWithWhenPresent(a.separatorless, b.separatorless)
+  );
 }
 
 function includes(a: NormalizedSearchText, b: NormalizedSearchText): boolean {
-  return Boolean(a.lower && (
-    b.lower.includes(a.lower) ||
-    b.compact.includes(a.compact) ||
-    b.separatorless.includes(a.separatorless)
-  ));
+  return (
+    includesWhenPresent(a.lower, b.lower) ||
+    includesWhenPresent(a.compact, b.compact) ||
+    includesWhenPresent(a.separatorless, b.separatorless)
+  );
 }
 
 function isWordPrefix(query: NormalizedSearchText, candidate: NormalizedSearchText): boolean {
