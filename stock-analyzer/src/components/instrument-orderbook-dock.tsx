@@ -68,6 +68,8 @@ const STATUSES: Status[] = ['ready', 'partial', 'unavailable', 'invalid', 'provi
 const CURRENCIES: Currency[] = ['KRW', 'USD', 'USDT'];
 
 function finite(value: unknown): number | null {
+  if (value == null || typeof value === 'boolean') return null;
+  if (typeof value === 'string' && !value.trim()) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -177,8 +179,9 @@ function parsePayload(value: unknown): Payload {
     : null;
   const source: Source = row.source === 'ka10004'
     || row.source === 'upbit_v1_orderbook'
+    || row.source === 'bitget_v1_orderbook'
     || row.source === 'bitget_v2_mix_market_merge_depth'
-    ? row.source
+    ? row.source as Source
     : null;
   const updatedAtRaw = text(row.updatedAt);
   const receivedAtRaw = text(row.receivedAt);
