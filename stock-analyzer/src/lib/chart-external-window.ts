@@ -40,7 +40,7 @@ type ScreenBounds = {
 function normalizeId(value: unknown): string {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 120 || !/^[a-zA-Z0-9_-]+$/.test(trimmed)) return '';
+  if (trimmed !== value || !trimmed || trimmed.length > 120 || !/^[a-zA-Z0-9_-]+$/.test(trimmed)) return '';
   return trimmed;
 }
 
@@ -197,7 +197,8 @@ export function parseChartWindowMessage(
   const type = row.type;
   if (type !== 'ready' && type !== 'closed' && type !== 'selection') return null;
   const sourceId = normalizeId(row.sourceId);
-  const sentAt = Number(row.sentAt);
+  if (typeof row.sentAt !== 'number') return null;
+  const sentAt = row.sentAt;
   if (!sourceId || !isChartWindowMessageFresh(sentAt, now)) return null;
 
   if (type === 'selection') {
