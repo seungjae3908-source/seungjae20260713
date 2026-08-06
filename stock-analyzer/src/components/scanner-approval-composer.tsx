@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { useAuth } from '@/lib/auth';
 import type { AnalysisSelection } from '@/lib/analysis-selection';
 import { safeTradeErrorMessage } from '@/lib/trade-approval-ui';
 import { cn } from '@/lib/utils';
@@ -60,6 +61,7 @@ function formatNumber(value: number | null | undefined, digits = 0) {
 
 function creationErrorMessage(code: string) {
   const labels: Record<string, string> = {
+    CAPABILITY_REQUIRED: '승인형 Paper 주문은 활성 관리자만 사용할 수 있습니다.',
     US_ORDER_ADAPTER_NOT_AVAILABLE: '미국주식 주문 어댑터가 검증되기 전까지 승인 계획을 만들 수 없습니다.',
     SCANNER_SIGNAL_NOT_FOUND: '서버 재검색에서 해당 종목의 신호가 더 이상 확인되지 않았습니다.',
     SCANNER_AND_CONDITIONS_NOT_MAINTAINED: '선택했던 조건이 모두 유지되지 않아 승인 계획을 만들지 않았습니다.',
@@ -68,11 +70,18 @@ function creationErrorMessage(code: string) {
     SCANNER_RISK_CAPACITY_EXHAUSTED: '남은 운용한도 또는 종목 노출한도가 부족합니다.',
     SCANNER_MINUTE_DATA_INSUFFICIENT: '1분 변동성 데이터가 부족해 계획 생성을 중단했습니다.',
     SCANNER_ORDERBOOK_INVALID: '실시간 최우선 호가를 확인할 수 없어 계획 생성을 중단했습니다.',
+    APPROVAL_MODE_REQUIRED: '승인형 주문 모드만 사용할 수 있습니다.',
+    AUTOMATIC_MODE_FORBIDDEN: '자동 승인과 automatic 모드는 사용할 수 없습니다.',
+    PAPER_ACCOUNT_MODE_REQUIRED: 'Paper 또는 허용된 mock 계정만 사용할 수 있습니다.',
+    PAPER_ADAPTER_REQUIRED: '서버가 선택한 Paper/mock 어댑터만 사용할 수 있습니다.',
+    LIVE_MODE_FORBIDDEN: '실전 계좌와 live 어댑터는 사용할 수 없습니다.',
   };
   return labels[code] ?? safeTradeErrorMessage(code, '서버 검증형 승인 계획을 만들지 못했습니다.');
 }
 
 export function ScannerApprovalComposer({ selection }: { selection: AnalysisSelection }) {
+  const auth = useAuth();
+  const canPlaceOrders = auth.can('canPlaceOrders');
   const [, navigate] = useLocation();
   const [amount, setAmount] = useState(loadAmount);
   const [creating, setCreating] = useState(false);
@@ -103,7 +112,7 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
   }, []);
 
   async function createPlan() {
-    if (creating) return;
+    if (!canPlaceOrders || creating) return;
     if (!supported) {
       setMessage(selection.market === 'US'
         ? '미국주식 주문 어댑터가 검증되기 전까지 승인 계획을 만들 수 없습니다.'
@@ -134,6 +143,9 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          mode: 'approval',
+          accountMode: 'paper',
+          adapter: 'paper',
           market: selection.market,
           symbol: selection.ticker,
           timeframe: selection.timeframe,
@@ -169,6 +181,22 @@ export function ScannerApprovalComposer({ selection }: { selection: AnalysisSele
       if (requestAbortRef.current === controller) requestAbortRef.current = null;
       if (sequence === requestSequenceRef.current) setCreating(false);
     }
+  }
+
+  if (!canPlaceOrders) {
+    return (
+      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="scanner-approval-admin-only">
+        <div className="flex items-start gap-2">
+          <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+          <div className="min-w-0">
+            <h2 className="text-sm font-black">검색·분석 전용</h2>
+            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">
+              신호검색과 차트 분석은 사용할 수 있지만 승인형 Paper 주문 등록은 활성 관리자에게만 제공됩니다.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
   }
 
   return (
