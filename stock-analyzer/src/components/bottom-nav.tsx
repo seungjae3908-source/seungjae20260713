@@ -64,19 +64,25 @@ export function BottomNav() {
   }, [location]);
 
   useEffect(() => {
-    function closeAndRestoreFocus() {
-      if (!openMenu) return;
-      const trigger = triggerRefs.current[openMenu];
+    function closeAndRestoreFocus(groupId: NavigationGroupId | null = openMenu) {
+      if (!groupId) return;
+      const trigger = triggerRefs.current[groupId];
       setOpenMenu(null);
+      menuItemRefs.current = [];
       window.requestAnimationFrame(() => trigger?.focus());
     }
 
     function handlePointerDown(event: PointerEvent) {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setOpenMenu(null);
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        closeAndRestoreFocus();
+      }
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') closeAndRestoreFocus();
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeAndRestoreFocus();
+      }
     }
 
     document.addEventListener('pointerdown', handlePointerDown);
@@ -89,6 +95,7 @@ export function BottomNav() {
 
   function moveTo(href: string) {
     setOpenMenu(null);
+    menuItemRefs.current = [];
     navigate(href);
   }
 
@@ -96,10 +103,17 @@ export function BottomNav() {
     window.requestAnimationFrame(() => menuItemRefs.current[index]?.focus());
   }
 
-  function openGroupMenu(groupId: NavigationGroupId, focusIndex?: number) {
+  function openGroupMenu(groupId: NavigationGroupId, focusIndex = 0) {
     menuItemRefs.current = [];
     setOpenMenu(groupId);
-    if (focusIndex != null) focusMenuItem(focusIndex);
+    focusMenuItem(focusIndex);
+  }
+
+  function closeGroupMenu(groupId: NavigationGroupId) {
+    const trigger = triggerRefs.current[groupId];
+    setOpenMenu(null);
+    menuItemRefs.current = [];
+    window.requestAnimationFrame(() => trigger?.focus());
   }
 
   function handleTriggerKeyDown(
@@ -127,10 +141,14 @@ export function BottomNav() {
     if (event.key === 'ArrowUp') targetIndex = (index - 1 + itemCount) % itemCount;
     if (event.key === 'Home') targetIndex = 0;
     if (event.key === 'End') targetIndex = itemCount - 1;
+    if (event.key === 'Tab') {
+      targetIndex = event.shiftKey
+        ? (index - 1 + itemCount) % itemCount
+        : (index + 1) % itemCount;
+    }
     if (event.key === 'Escape') {
       event.preventDefault();
-      setOpenMenu(null);
-      window.requestAnimationFrame(() => triggerRefs.current[groupId]?.focus());
+      closeGroupMenu(groupId);
       return;
     }
     if (targetIndex != null) {
@@ -166,6 +184,7 @@ export function BottomNav() {
                     id={menuId}
                     role="menu"
                     aria-label={`${group.label} 메뉴`}
+                    aria-orientation="vertical"
                     className="absolute bottom-full left-1/2 z-50 mb-3 w-52 -translate-x-1/2 overflow-hidden rounded-2xl border border-card-border bg-card p-2 shadow-2xl"
                   >
                     {visibleMenuItems.map((menuItem: NavigationMenuItem, index) => {
@@ -207,8 +226,11 @@ export function BottomNav() {
                   aria-controls={menuId}
                   aria-current={active ? 'page' : undefined}
                   onClick={() => {
-                    menuItemRefs.current = [];
-                    setOpenMenu((previous) => previous === group.id ? null : group.id);
+                    if (menuOpen) {
+                      closeGroupMenu(group.id);
+                    } else {
+                      openGroupMenu(group.id, 0);
+                    }
                   }}
                   onKeyDown={(event) => handleTriggerKeyDown(event, group.id, visibleMenuItems.length)}
                   className={cn(
