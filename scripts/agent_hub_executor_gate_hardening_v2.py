@@ -26,6 +26,32 @@ from agent_hub_executor import (
 )
 
 
+COMPILER_EVIDENCE_PREFIXES = (
+    "REPOSITORY-",
+    "TASK-",
+    "BASE-",
+    "HEAD-",
+    "CI-",
+    "PR-",
+    "CHANGED_FILES-",
+    "CHECKS-",
+    "SUMMARY-",
+    "REMAINING-",
+    "DEPENDENCIES-",
+    "CONFLICTS-",
+    "ERROR_FIRST-",
+    "ERROR_LAST-",
+    "FILE_LINE-",
+    "PROMPT_INJECTION-",
+    "EVIDENCE-",
+)
+
+
+def supported_evidence_id(value: str) -> bool:
+    """Accept immutable GitHub IDs and the compiler's explicit evidence categories only."""
+    return value.startswith("gh-evidence-v2:") or value.startswith(COMPILER_EVIDENCE_PREFIXES)
+
+
 def pending_schema_v2_command(
     comments: Sequence[dict[str, Any]], *, policy: dict[str, Any], workers: dict[str, Any],
     event_comment_id: int | None,
@@ -54,7 +80,7 @@ def pending_schema_v2_command(
             evidence_ids = parse_json_list(command.fields.get("evidence_ids", "[]"), "evidence_ids")
             if command.fields.get("status") == "ready" and not evidence_ids:
                 raise ExecutorError("ready schema-v2 command has no immutable evidence IDs")
-            if any(not item.startswith("gh-evidence-v2:") and not item.startswith(("HEAD-", "CI-", "PR-", "EVIDENCE-")) for item in evidence_ids):
+            if any(not supported_evidence_id(item) for item in evidence_ids):
                 raise ExecutorError("schema-v2 command contains an unsupported evidence ID")
             return command
         except (ExecutorError, CommandIntegrityError):
@@ -134,7 +160,13 @@ def self_test() -> int:
     else:
         raise AssertionError("edited command was accepted")
     assert parse_json_list('["gh-evidence-v2:workflow-run:abc"]', "evidence_ids")
-    print(json.dumps({"executor_gate_hardening_v2": "pass", "legacy_ready_accepted": 0, "edited_command_accepted": 0, "empty_ready_evidence_accepted": 0, "evidence_output_propagated": 1}))
+    assert supported_evidence_id("gh-evidence-v2:workflow-run:abc")
+    for prefix in COMPILER_EVIDENCE_PREFIXES:
+        assert supported_evidence_id(f"{prefix}fixture-0123456789ab")
+    assert supported_evidence_id("CHANGED_FILES-docs-test-agent-hub-e2e-fixt-05247710f26b")
+    assert supported_evidence_id("REMAINING-Create-one-isolated-Agent-Hu-79fb348d6639")
+    assert not supported_evidence_id("UNSUPPORTED-fixture-0123456789ab")
+    print(json.dumps({"executor_gate_hardening_v2": "pass", "legacy_ready_accepted": 0, "edited_command_accepted": 0, "empty_ready_evidence_accepted": 0, "evidence_output_propagated": 1, "compiler_evidence_prefixes_accepted": len(COMPILER_EVIDENCE_PREFIXES), "unsupported_evidence_accepted": 0}))
     return 0
 
 
