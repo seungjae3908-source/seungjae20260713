@@ -149,10 +149,10 @@ test('spot SELL alert stays reduce-only through the lifecycle', () => {
     spreadPercent: 0.08,
     strongSignalEligible: false,
     evidence: [
-      { key: 'volume', label: '거래량', status: 'matched', source: 'test', observedAt: null, reasons: ['거래량'] },
-      { key: 'liquidity', label: '유동성', status: 'matched', source: 'test', observedAt: null, reasons: ['유동성'] },
-      { key: 'spread', label: '스프레드', status: 'matched', source: 'test', observedAt: null, reasons: ['스프레드'] },
-      { key: 'risk', label: '위험', status: 'matched', source: 'test', observedAt: null, reasons: ['위험'] },
+      { key: 'volume', label: '거래량', status: 'matched', source: 'test', observedAt: '2026-08-05T00:00:00.000Z', reasons: ['거래량'] },
+      { key: 'liquidity', label: '유동성', status: 'matched', source: 'test', observedAt: '2026-08-05T00:00:00.000Z', reasons: ['유동성'] },
+      { key: 'spread', label: '스프레드', status: 'matched', source: 'test', observedAt: '2026-08-05T00:00:00.000Z', reasons: ['스프레드'] },
+      { key: 'risk', label: '위험', status: 'matched', source: 'test', observedAt: '2026-08-05T00:00:00.000Z', reasons: ['위험'] },
     ],
   });
   applyScannerSignalLifecycle('member-spot', [spotSell], now);
