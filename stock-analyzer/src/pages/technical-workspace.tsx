@@ -52,7 +52,9 @@ export default function TechnicalWorkspacePage() {
   const phase11SignalRoute = location.startsWith('/__phase11-technical-workspace-e2e');
   const canUseAiChart = auth.can('canAccessRiskPreview') || phase11SignalRoute;
   const canUseAutoTrading = auth.can('canAccessTradeAutomation') || phase11SignalRoute;
-  const [mobileWorkspace, setMobileWorkspace] = useState<MobileWorkspace>('legacy');
+  const [mobileWorkspace, setMobileWorkspace] = useState<MobileWorkspace>(() => (
+    phase11SignalRoute ? 'signal' : 'legacy'
+  ));
 
   useEffect(() => {
     if (mobileWorkspace === 'chart' && !canUseAiChart) setMobileWorkspace('signal');
@@ -62,7 +64,7 @@ export default function TechnicalWorkspacePage() {
     const workspaces: Array<{ id: MobileWorkspace; label: string }> = [
       { id: 'legacy', label: 'AI 검색기' },
       { id: 'signal', label: '다중 시장 신호검색기' },
-      ...(canUseAiChart ? [{ id: 'chart' as const, label: 'AI 차트 분석기' }] : []),
+      ...(canUseAiChart ? [{ id: 'chart' as const, label: '통합 차트' }] : []),
     ];
     return (
       <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
