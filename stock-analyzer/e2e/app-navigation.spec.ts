@@ -6,6 +6,8 @@ import {
   navigationGroupMatches,
 } from '../src/lib/app-navigation';
 
+const NAVIGATION_FIXTURE_PATH = '/__phase11-ai-chat-e2e';
+
 async function mockNavigationRuntime(page: Page) {
   await page.route('**/api/**', (route) => route.fulfill({
     status: 200,
@@ -93,7 +95,7 @@ for (const viewport of [
     const assertCleanRuntime = observeNavigationRuntime(page);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockNavigationRuntime(page);
-    await page.goto('/__phase11-technical-workspace-e2e');
+    await page.goto(NAVIGATION_FIXTURE_PATH);
 
     const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
     await expect(navigation).toBeVisible();
@@ -115,7 +117,7 @@ test('keyboard navigation autofocuses, traps, moves through, and closes the asse
   const assertCleanRuntime = observeNavigationRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await mockNavigationRuntime(page);
-  await page.goto('/__phase11-technical-workspace-e2e');
+  await page.goto(NAVIGATION_FIXTURE_PATH);
 
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
   const assetsTrigger = navigation.getByRole('button', { name: '종목', exact: true });
@@ -145,7 +147,7 @@ test('pointer opening autofocuses and outside click restores the trigger focus',
   const assertCleanRuntime = observeNavigationRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await mockNavigationRuntime(page);
-  await page.goto('/__phase11-technical-workspace-e2e');
+  await page.goto(NAVIGATION_FIXTURE_PATH);
 
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
   const assetsTrigger = navigation.getByRole('button', { name: '종목', exact: true });
@@ -164,7 +166,7 @@ test('asset menu reaches the existing search entry without redefining search rou
   const assertCleanRuntime = observeNavigationRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await mockNavigationRuntime(page);
-  await page.goto('/__phase11-technical-workspace-e2e');
+  await page.goto(NAVIGATION_FIXTURE_PATH);
 
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
   await navigation.getByRole('button', { name: '종목', exact: true }).click();
