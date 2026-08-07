@@ -205,7 +205,7 @@ jobs:
       )
     permissions:
       actions: read
-      contents: read
+      contents: write
       issues: write
       pull-requests: read
     runs-on: ubuntu-latest

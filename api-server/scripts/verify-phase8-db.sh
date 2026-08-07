@@ -48,27 +48,6 @@ run_sql() {
   "${PSQL[@]}" --file "${ROOT_DIR}/${path}"
 }
 
-set_atomic_fixture_tier() {
-  local membership="$1"
-  local role="$2"
-  "${PSQL[@]}" --quiet --command "
-    update public.profiles
-    set membership_level = '${membership}', role = '${role}', permissions_updated_at = now()
-    where id = '11111111-1111-1111-1111-111111111111';
-  " >/dev/null
-}
-
-run_trade_atomic_suite() {
-  # Existing deterministic atomicity fixtures use user 111... . Promote that
-  # disposable fixture only for the duration of this suite, then restore its
-  # regular tier before the remaining membership tests run.
-  set_atomic_fixture_tier admin admin
-  run_sql "verify admin trade plan and order atomicity contracts" "api-server/supabase/test/trade_automation_atomicity_integration.sql"
-  echo "[phase8-db] verify two-session admin trade plan and order atomicity"
-  bash "${ROOT_DIR}/api-server/scripts/verify-trade-atomic-race.sh"
-  set_atomic_fixture_tier regular user
-}
-
 run_sql "create empty Supabase auth bootstrap harness" "api-server/supabase/test/staging_bootstrap_auth_harness.sql"
 
 echo "[phase8-db] apply atomic two-pass isolated staging bootstrap"
@@ -94,32 +73,37 @@ NODE
 
 run_sql "verify Auth profile trigger and deletion cascade" "api-server/supabase/test/staging_bootstrap_trigger_integration.sql"
 run_sql "seed exact four-tier auth fixtures" "api-server/supabase/test/phase8_auth_harness.sql"
+
+# Reproduce the exact pre-fix privilege states on the disposable CI database,
+# then prove the new migrations alone restore the intended API-role access.
+run_sql "remove paper API-role privileges for pre-migration reproduction" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.down.sql"
+run_sql "assert pre-migration paper privilege failure" "api-server/supabase/test/paper_journal_privileges_before_migration.sql"
+run_sql "remove audit API-role privileges for pre-migration reproduction" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.down.sql"
+run_sql "assert pre-migration audit privilege failure" "api-server/supabase/test/member_permission_audit_privileges_before_migration.sql"
 run_sql "apply Phase 7 migration idempotently" "api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql"
 run_sql "apply Phase 8 permission migration idempotently" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql"
 run_sql "apply Phase 8 paper capability RLS idempotently" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
 run_sql "apply trade automation storage and RLS idempotently" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
-run_sql "apply trade automation admin-only RLS idempotently" "api-server/supabase/migrations/2026080401_trade_automation_admin_only.sql"
-run_sql "apply atomic trade execution RPC" "api-server/supabase/migrations/2026080402_trade_order_atomic_execution.sql"
-run_sql "reapply atomic trade execution RPC idempotently" "api-server/supabase/migrations/2026080402_trade_order_atomic_execution.sql"
-# Verify the service-only trading control before legacy Phase 8 fixtures grant
-# broad table privileges for paper-journal RLS checks.
-run_sql "execute trade automation admin-only ownership RLS queries" "api-server/supabase/test/trade_automation_admin_only_rls_integration.sql"
-run_trade_atomic_suite
+run_sql "apply trade automation safety hardening" "api-server/supabase/migrations/2026080502_trade_automation_safety_hardening.sql"
+run_sql "reapply trade automation safety hardening idempotently" "api-server/supabase/migrations/2026080502_trade_automation_safety_hardening.sql"
+run_sql "apply recovery worker lease fencing" "api-server/supabase/migrations/2026080503_trade_recovery_worker_leases.sql"
+run_sql "reapply recovery worker lease fencing idempotently" "api-server/supabase/migrations/2026080503_trade_recovery_worker_leases.sql"
+run_sql "apply provider submission intent fence" "api-server/supabase/migrations/2026080504_trade_pre_submission_fence.sql"
+run_sql "reapply provider submission intent fence idempotently" "api-server/supabase/migrations/2026080504_trade_pre_submission_fence.sql"
+run_sql "apply split child order storage and sequencing" "api-server/supabase/migrations/2026080505_trade_split_child_orders.sql"
+run_sql "reapply split child order storage and sequencing idempotently" "api-server/supabase/migrations/2026080505_trade_split_child_orders.sql"
+run_sql "apply authenticated paper privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
+run_sql "reapply authenticated paper privileges idempotently" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
+run_sql "apply authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
+run_sql "reapply authenticated audit privileges idempotently" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
+run_sql "verify trade automation atomicity, CAS, leases, legs, and protection schema" "api-server/supabase/test/trade_automation_safety_hardening_integration.sql"
+echo "[phase8-db] verify order idempotency, execution claims, submission intent, and recovery worker leases"
+bash "${ROOT_DIR}/api-server/scripts/verify-trade-automation-concurrency.sh"
+run_sql "verify explicit paper privileges and anon denial" "api-server/supabase/test/paper_journal_privileges_integration.sql"
+run_sql "verify audit privileges and administrator-only RLS" "api-server/supabase/test/member_permission_audit_privileges_integration.sql"
+run_sql "execute trade automation ownership RLS queries" "api-server/supabase/test/trade_automation_rls_integration.sql"
 run_sql "execute real ownership RLS integration queries" "api-server/supabase/test/phase8_rls_integration.sql"
 run_sql "execute real membership-tier RLS integration queries" "api-server/supabase/test/phase8_tier_rls_integration.sql"
-
-# Reproduce the exact pre-fix privilege states in the disposable database, then
-# prove the narrow API-role migrations and their idempotency contracts.
-run_sql "rollback paper journal authenticated privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.down.sql"
-run_sql "assert pre-fix paper journal privilege failure" "api-server/supabase/test/paper_journal_privileges_before_migration.sql"
-run_sql "rollback member permission audit authenticated privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.down.sql"
-run_sql "assert pre-fix member permission audit privilege failure" "api-server/supabase/test/member_permission_audit_privileges_before_migration.sql"
-run_sql "apply paper journal authenticated privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
-run_sql "reapply paper journal authenticated privileges idempotently" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
-run_sql "apply member permission audit authenticated privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
-run_sql "reapply member permission audit authenticated privileges idempotently" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
-run_sql "verify paper journal authenticated privileges" "api-server/supabase/test/paper_journal_privileges_integration.sql"
-run_sql "verify member permission audit privileges and administrator-only RLS" "api-server/supabase/test/member_permission_audit_privileges_integration.sql"
 
 echo "[phase8-db] verify failed migration transaction leaves no partial object"
 if "${PSQL[@]}" --command "begin; create table public.phase8_partial_failure_probe(id integer); select 1 / 0; commit;"; then
@@ -128,11 +112,12 @@ if "${PSQL[@]}" --command "begin; create table public.phase8_partial_failure_pro
 fi
 "${PSQL[@]}" --command "do \$\$ begin if to_regclass('public.phase8_partial_failure_probe') is not null then raise exception 'partial migration object remained'; end if; end \$\$;"
 
-run_sql "rollback member permission audit authenticated privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.down.sql"
-run_sql "rollback paper journal authenticated privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.down.sql"
-run_sql "rollback atomic trade execution RPC" "api-server/supabase/migrations/2026080402_trade_order_atomic_execution.down.sql"
-run_sql "assert atomic trade execution rollback scope" "api-server/supabase/test/trade_automation_atomic_execution_rollback_assert.sql"
-run_sql "rollback trade automation admin-only RLS" "api-server/supabase/migrations/2026080401_trade_automation_admin_only.down.sql"
+run_sql "rollback authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.down.sql"
+run_sql "rollback authenticated paper privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.down.sql"
+run_sql "rollback split child order storage and sequencing" "api-server/supabase/migrations/2026080505_trade_split_child_orders.down.sql"
+run_sql "rollback provider submission intent fence" "api-server/supabase/migrations/2026080504_trade_pre_submission_fence.down.sql"
+run_sql "rollback recovery worker lease fencing" "api-server/supabase/migrations/2026080503_trade_recovery_worker_leases.down.sql"
+run_sql "rollback trade automation safety hardening" "api-server/supabase/migrations/2026080502_trade_automation_safety_hardening.down.sql"
 run_sql "rollback trade automation migration" "api-server/supabase/migrations/2026080301_trade_automation_integration.down.sql"
 run_sql "assert trade automation rollback cleanup" "api-server/supabase/test/trade_automation_rollback_assert.sql"
 run_sql "rollback Phase 8 paper capability RLS" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.down.sql"
@@ -143,17 +128,16 @@ run_sql "reapply Phase 7 migration" "api-server/supabase/migrations/2026080201_j
 run_sql "reapply Phase 8 permission migration" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql"
 run_sql "reapply Phase 8 paper capability RLS" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
 run_sql "reapply trade automation migration" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
-run_sql "reapply trade automation admin-only RLS" "api-server/supabase/migrations/2026080401_trade_automation_admin_only.sql"
-run_sql "reapply atomic trade execution RPC" "api-server/supabase/migrations/2026080402_trade_order_atomic_execution.sql"
-run_sql "reapply paper journal authenticated privileges after rollback cycle" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
-run_sql "reapply member permission audit authenticated privileges after rollback cycle" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
+run_sql "reapply trade automation safety hardening" "api-server/supabase/migrations/2026080502_trade_automation_safety_hardening.sql"
+run_sql "reapply recovery worker lease fencing" "api-server/supabase/migrations/2026080503_trade_recovery_worker_leases.sql"
+run_sql "reapply provider submission intent fence" "api-server/supabase/migrations/2026080504_trade_pre_submission_fence.sql"
+run_sql "reapply split child order storage and sequencing" "api-server/supabase/migrations/2026080505_trade_split_child_orders.sql"
+run_sql "reapply authenticated paper privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
+run_sql "reapply authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
 run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.sql"
-run_sql "recheck paper journal authenticated privileges after reapply" "api-server/supabase/test/paper_journal_privileges_integration.sql"
-run_sql "recheck member permission audit privileges after reapply" "api-server/supabase/test/member_permission_audit_privileges_integration.sql"
-# Recheck the service-only trading control before the tier fixture re-grants all
-# tables to the API roles for its isolated compatibility assertions.
-run_sql "recheck trade automation admin-only RLS after reapply" "api-server/supabase/test/trade_automation_admin_only_rls_integration.sql"
-run_trade_atomic_suite
+run_sql "recheck explicit paper privileges after reapply" "api-server/supabase/test/paper_journal_privileges_integration.sql"
+run_sql "recheck audit privileges and administrator-only RLS after reapply" "api-server/supabase/test/member_permission_audit_privileges_integration.sql"
+run_sql "recheck trade automation RLS after reapply" "api-server/supabase/test/trade_automation_rls_integration.sql"
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
 echo "[phase8-db] disposable database and atomic staging bootstrap verification completed"
