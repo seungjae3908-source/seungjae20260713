@@ -3,6 +3,10 @@ import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { ProfileRequestCoordinator } from '@/lib/profile-request-coordinator';
 import {
+  prepareBackupForSessionEnd,
+  resumeBackupForSession,
+} from '@/lib/backup-sync-lifecycle';
+import {
   deriveMemberTier,
   hasCapability,
   permissionsFor,
@@ -96,19 +100,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signingOutRef = useRef(false);
   const signOutTaskRef = useRef<Promise<void> | null>(null);
   const sessionRef = useRef<Session | null>(null);
+  const profileRef = useRef<MemberProfile | null>(null);
   const profileLoadQueueRef = useRef<Promise<void>>(Promise.resolve());
   const profileRequestsRef = useRef(new ProfileRequestCoordinator<MemberProfile | null>());
+
+  function applyProfile(next: MemberProfile | null) {
+    profileRef.current = next;
+    if (mountedRef.current) setProfile(next);
+  }
 
   function applySession(next: Session | null) {
     sessionRef.current = next;
     setSession(next);
     profileRequestsRef.current.setIdentity(next?.user.id ?? null, profileRequestKey(next));
-    if (!next) setProfile(null);
+    if (!next) applyProfile(null);
   }
 
   function loadProfile(user: User | null, options: { force?: boolean; maxAgeMs?: number } = {}): Promise<void> {
     if (!user) {
-      if (mountedRef.current) setProfile(null);
+      applyProfile(null);
       return Promise.resolve();
     }
     if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return Promise.resolve();
@@ -127,11 +137,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           maxAgeMs: options.maxAgeMs ?? PROFILE_AUTO_REFRESH_MS,
           load: async () => {
             const { data } = await getSupabase().from('profiles').select('*').eq('id', user.id).maybeSingle();
-            return (data as MemberProfile | null) ?? null;
+            const nextProfile = (data as MemberProfile | null) ?? null;
+            if (
+              hasCapability(profileRef.current, 'canAccessBasicInfo')
+              && !hasCapability(nextProfile, 'canAccessBasicInfo')
+            ) {
+              await prepareBackupForSessionEnd();
+            }
+            return nextProfile;
           },
           apply: (nextProfile) => {
             if (!signingOutRef.current && sessionRef.current?.user.id === user.id) {
-              if (mountedRef.current) setProfile(nextProfile);
+              applyProfile(nextProfile);
             }
           },
         });
@@ -152,9 +169,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     const { data: sub } = getSupabase().auth.onAuthStateChange((_event, next) => {
       if (signingOutRef.current && next) return;
-      applySession(next);
-      void loadProfile(next?.user ?? null).finally(() => {
-        if (mountedRef.current) setLoading(false);
+      const previousUserId = sessionRef.current?.user.id ?? null;
+      const nextUserId = next?.user.id ?? null;
+      const prepare = previousUserId && previousUserId !== nextUserId
+        ? prepareBackupForSessionEnd()
+        : Promise.resolve();
+      void prepare.finally(() => {
+        if (!mountedRef.current) return;
+        applySession(next);
+        void loadProfile(next?.user ?? null).finally(() => {
+          if (mountedRef.current) setLoading(false);
+        });
       });
     });
     return () => {
@@ -228,9 +253,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signingOutRef.current = true;
         setLoading(true);
         try {
+          const backupDrain = prepareBackupForSessionEnd();
           const coordinatorDrain = profileRequestsRef.current.beginLogout();
-          await profileLoadQueueRef.current;
-          await coordinatorDrain;
+          await Promise.all([
+            profileLoadQueueRef.current,
+            coordinatorDrain,
+            backupDrain,
+          ]);
           const { error } = await getSupabase().auth.signOut();
           if (error) throw error;
           applySession(null);
@@ -242,6 +271,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (restored && restoredRequestKey) {
             profileRequestsRef.current.restoreAfterFailedLogout(restored.user.id, restoredRequestKey);
             applySession(restored);
+            resumeBackupForSession(restored.user.id);
           } else {
             profileRequestsRef.current.finishLogout();
             applySession(null);
