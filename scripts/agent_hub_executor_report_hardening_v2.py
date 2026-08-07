@@ -11,7 +11,13 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import agent_hub_executor_report_v2 as base
-from agent_hub_contract_v2 import EXECUTOR_PROCESSED_PREFIX, EXECUTOR_REPORT_MARKER, REPORT_MARKER, SCHEMA_VERSION
+from agent_hub_contract_v2 import (
+    EXECUTOR_PROCESSED_PREFIX,
+    EXECUTOR_REPORT_MARKER,
+    REPORT_MARKER,
+    SCHEMA_VERSION,
+    STATE_MARKER,
+)
 
 GITHUB_API_VERSION = "2022-11-28"
 REPORT_READY_EVENT = "agent-executor-report-ready"
@@ -99,6 +105,26 @@ def build_report(env: dict[str, str]) -> str:
         lines.append(f"failure_signature: {failure}")
     lines.extend([EXECUTOR_REPORT_MARKER, f"{EXECUTOR_PROCESSED_PREFIX}{command_id} -->"])
     return "\n".join(lines)
+
+
+def build_terminal_state(env: dict[str, str]) -> str:
+    command_id = base.clean(env.get("COMMAND_ID", ""), 120)
+    source_task_id = base.clean(env.get("SOURCE_TASK_ID", ""), 180)
+    worker = base.clean(env.get("TARGET_WORKER", ""), 64)
+    job_result = base.clean(env.get("RESULT_STATUS", "failed"), 40).lower()
+    if not command_id or not source_task_id or not worker:
+        raise base.ReportError("terminal state context is missing")
+    status = "completed" if job_result == "completed" else "failed"
+    reason = "Executor finished the validated safe command and posted a continuation report." if status == "completed" else "Executor command failed and posted a failure report for safe analysis."
+    return "\n".join([
+        STATE_MARKER,
+        f"schema_version: {SCHEMA_VERSION}",
+        f"command_id: {command_id}",
+        f"source_task_id: {source_task_id}",
+        f"target_worker: {worker}",
+        f"status: {status}",
+        f"reason: {reason}",
+    ])
 
 
 def _github_json(
@@ -225,8 +251,11 @@ def self_test() -> int:
     assert "approval_required: no" in body
     assert "ci_run_id: none" in body
     assert "base_branch: main" in body and "target_branch: feature/test" in body
+    terminal = build_terminal_state(env)
+    assert "status: completed" in terminal and "[HUB_STATE]" in terminal
     failed = build_report({**env, "RESULT_STATUS": "failed", "FAILURE_SIGNATURE": "run_build:bbbb:failed"})
     assert "status: failed" in failed and "approval_required: no" in failed
+    assert "status: failed" in build_terminal_state({**env, "RESULT_STATUS": "failed"})
     print(json.dumps({
         "executor_report_hardening_v2": "pass",
         "premature_completed_reports": 0,
@@ -234,6 +263,7 @@ def self_test() -> int:
         "failed_report_approval_escalations": 0,
         "event_driven_continuation": 1,
         "draft_pr_changed_files_rehydrated": 1,
+        "terminal_command_state_posted": 1,
     }))
     return 0
 
@@ -248,13 +278,16 @@ def main() -> int:
         raise base.ReportError("GitHub report context is incomplete")
     env = _enrich_context(dict(os.environ), token)
     body = build_report(env)
+    terminal_state = build_terminal_state(env)
     base.post_comment(token, repository, int(issue), body)
+    base.post_comment(token, repository, int(issue), terminal_state)
     _dispatch_coordinator(token, repository)
     print(json.dumps({
         "status": "posted",
         "schema_version": 2,
         "completed_claimed": False,
         "approval_required": False,
+        "terminal_state_posted": True,
         "coordinator_dispatched": True,
         "paid_fallback": 0,
     }))
