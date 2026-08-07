@@ -5,6 +5,7 @@ export type TradingSide = 'buy' | 'sell' | 'long' | 'short';
 export type TradingOrderType = 'market' | 'limit';
 export type TradingMarketRegime = 'bull' | 'bear' | 'sideways' | 'stress' | 'unknown';
 export type TradingPilotStage = 'approval-20' | 'limited-50' | 'validated';
+export type TradingAssetClass = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
 
 export type TradingOrderState =
   | 'PLANNED'
@@ -78,12 +79,21 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   mode: 'approval' as TradingMode,
   automaticEnabled: false,
   emergencyStopped: false,
+  newEntriesStopped: false,
   exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
   enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[] },
   enabledStrategies: [] as string[],
   totalCapitalKrw: 1_000_000,
   maxOrderKrw: 1_000_000,
+  maxInstrumentKrw: 1_000_000,
+  maxAssetClassKrw: {
+    domestic_stock: 1_000_000,
+    us_stock: 1_000_000,
+    crypto_spot: 1_000_000,
+    crypto_futures: 1_000_000,
+  } as Record<TradingAssetClass, number>,
   dailyLossLimitPercent: 5,
+  weeklyLossLimitPercent: 10,
   maxAssetPercent: 30,
   maxOpenPositions: 5,
   maxDailyOrders: 10,
@@ -107,12 +117,16 @@ export type TradingPolicy = {
   mode: TradingMode;
   automaticEnabled: boolean;
   emergencyStopped: boolean;
+  newEntriesStopped?: boolean;
   exchangeEnabled: Record<TradingExchange, boolean>;
   enabledAssets: Record<TradingExchange, string[]>;
   enabledStrategies: string[];
   totalCapitalKrw: number;
   maxOrderKrw: number;
+  maxInstrumentKrw?: number;
+  maxAssetClassKrw?: Record<TradingAssetClass, number>;
   dailyLossLimitPercent: number;
+  weeklyLossLimitPercent?: number;
   maxAssetPercent: number;
   maxOpenPositions: number;
   maxDailyOrders: number;
@@ -153,7 +167,10 @@ export type TradingMarketSnapshot = {
   availableBalance: number;
   accountValueKrw: number;
   dailyPnlPercent: number;
+  weeklyPnlPercent?: number;
   assetExposurePercent: number;
+  instrumentExposureKrw?: number;
+  assetClassExposureKrw?: number;
   openPositionCount: number;
   dailyOrderCount: number;
   consecutiveLosses: number;

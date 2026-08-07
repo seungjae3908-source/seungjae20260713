@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeExecutionCoordinator } from './trade-execution-coordinator.service';
+import { evaluateTradingPlan, normalizeTradingPolicy } from './trade-automation-risk.service';
 import {
   APPROVAL_ORDER_LIFECYCLE_STATES,
   assertApprovalOrderLifecycleTransition,
   canTransitionApprovalOrderLifecycle,
   deriveApprovalOrderLifecycleState,
 } from './trade-approval-lifecycle.service';
-import type { TradingOrder, TradingPlan } from './trade-automation.types';
+import { DEFAULT_TRADING_POLICY, type TradingOrder, type TradingPlan } from './trade-automation.types';
 
 const USER_ID = '11111111-1111-1111-1111-111111111111';
 let sequence = 0;
@@ -161,6 +162,52 @@ test('derived lifecycle keeps invalidation and approval states distinct', () => 
   const submittedOrder = tradingOrder(awaiting);
   assert.equal(deriveApprovalOrderLifecycleState(awaiting, submittedOrder), 'submitting');
   assert.equal(deriveApprovalOrderLifecycleState(awaiting, { ...submittedOrder, state: 'PARTIALLY_FILLED' }), 'partially_filled');
+});
+
+test('approval risk limits cover weekly loss, instrument, asset class, and new-entry stop', () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    newEntriesStopped: true,
+    weeklyLossLimitPercent: 4,
+    maxInstrumentKrw: 150_000,
+    maxAssetClassKrw: {
+      domestic_stock: 250_000,
+      us_stock: 250_000,
+      crypto_spot: 250_000,
+      crypto_futures: 250_000,
+    },
+  });
+  const input = tradingPlan({
+    exchange: 'kiwoom',
+    accountMode: 'paper',
+    market: 'KR',
+    symbol: '005930',
+    quantity: 1,
+    quoteAmount: null,
+    estimatedKrw: 100_000,
+    marketSnapshot: {
+      ...tradingPlan().marketSnapshot,
+      weeklyPnlPercent: -4.2,
+      instrumentExposureKrw: 60_000,
+      assetClassExposureKrw: 160_000,
+    },
+  });
+  const decision = evaluateTradingPlan(input, policy, { emergencyStopped: false, serverLiveEnabled: false });
+  for (const code of ['NEW_ENTRIES_STOPPED', 'WEEKLY_LOSS_LIMIT', 'INSTRUMENT_AMOUNT_LIMIT', 'ASSET_CLASS_AMOUNT_LIMIT']) {
+    assert.ok(decision.blockCodes.includes(code), code);
+  }
+
+  const exitDecision = evaluateTradingPlan({
+    ...input,
+    reduceOnly: true,
+    marketSnapshot: {
+      ...input.marketSnapshot,
+      weeklyPnlPercent: 0,
+      instrumentExposureKrw: 0,
+      assetClassExposureKrw: 0,
+    },
+  }, policy, { emergencyStopped: false, serverLiveEnabled: false });
+  assert.equal(exitDecision.blockCodes.includes('NEW_ENTRIES_STOPPED'), false);
 });
 
 test('paper execution is fully local, auditable, and sends zero outbound requests', async () => {
