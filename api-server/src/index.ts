@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import apiRouter from './routes';
 import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { startPriceAlertMonitor } from './services/notification.service';
+import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -212,6 +213,7 @@ app.listen(
     );
 
     startPriceAlertMonitor();
+    startTradeRecoveryWorker();
 
     if (frontendDist) {
       console.log(

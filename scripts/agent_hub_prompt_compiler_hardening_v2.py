@@ -14,6 +14,13 @@ BLOCK_RE = re.compile(
     r"\[(ROLE|GOAL|EVIDENCE|CONSTRAINTS|OUTPUT_SCHEMA)\]\n(.*?)(?=\n\n\[(?:ROLE|GOAL|EVIDENCE|CONSTRAINTS|OUTPUT_SCHEMA)\]\n|\Z)",
     re.DOTALL,
 )
+SAFE_CONTINUATION_ACTIONS = (
+    "inspect_repository", "inspect_branch", "inspect_pull_request", "analyze_ci_failure", "analyze_logs",
+    "analyze_playwright_trace", "run_typecheck", "run_unit_tests", "run_build", "run_playwright",
+    "create_draft_pr", "update_draft_pr_description", "report_results", "analyze_conflicts",
+    "create_integration_plan", "inspect_security_contract", "inspect_private_api_calls",
+    "inspect_paper_vs_live_order_separation",
+)
 
 
 class PromptHardeningError(RuntimeError):
@@ -39,6 +46,37 @@ def _blocks(prompt: str) -> dict[str, str]:
     return blocks
 
 
+def _compile_with_safe_continuations(
+    *,
+    fields: Mapping[str, Any],
+    sanitized_report: str,
+    allowed_action_types: Iterable[str],
+    registered_workers: Iterable[str],
+    policy_version: str,
+    maximum_context_size: int,
+) -> base.CompiledPrompt:
+    """Expose existing low-risk policy actions to the model without granting authority.
+
+    The model still cannot authorize anything. The deterministic policy/worker registry
+    remains the final gate, so actions unsupported by a worker are rejected after proposal.
+    """
+    profile = base.infer_profile(fields)
+    original = base.PROFILE_ALLOWED_ACTIONS[profile]
+    augmented = tuple(dict.fromkeys((*original, *SAFE_CONTINUATION_ACTIONS)))
+    base.PROFILE_ALLOWED_ACTIONS[profile] = augmented
+    try:
+        return base.compile_prompt(
+            fields=fields,
+            sanitized_report=sanitized_report,
+            allowed_action_types=allowed_action_types,
+            registered_workers=registered_workers,
+            policy_version=policy_version,
+            maximum_context_size=maximum_context_size,
+        )
+    finally:
+        base.PROFILE_ALLOWED_ACTIONS[profile] = original
+
+
 def compile_prompt(
     *,
     fields: Mapping[str, Any],
@@ -50,7 +88,7 @@ def compile_prompt(
     updated_at: str = "",
     maximum_context_size: int = 16000,
 ) -> HardenedCompiledPrompt:
-    compiled = base.compile_prompt(
+    compiled = _compile_with_safe_continuations(
         fields=fields,
         sanitized_report=sanitized_report,
         allowed_action_types=allowed_action_types,
@@ -107,8 +145,9 @@ def self_test() -> int:
         "pr_number":"70", "changed_files":["docs/demo.md"], "checks":"success",
         "ci_run_id":"123", "status":"partial", "summary":"partial", "remaining":"inspect",
     }
-    first = compile_prompt(fields=fields, sanitized_report="success", allowed_action_types=("analyze_conflicts",), registered_workers=("integration-planner",), policy_version="v4")
+    first = compile_prompt(fields=fields, sanitized_report="success", allowed_action_types=("analyze_conflicts", "run_build", "create_draft_pr"), registered_workers=("integration-planner",), policy_version="v4")
     assert first.previous_state is None and "initial" in first.state_delta
+    assert "run_build" in first.allowed_action_types and "create_draft_pr" in first.allowed_action_types
     from agent_hub_state_v2 import format_state_snapshot
     comments = [{"body": format_state_snapshot(first.current_state)}]
     same = compile_prompt(fields=fields, sanitized_report="success", allowed_action_types=("analyze_conflicts",), registered_workers=("integration-planner",), policy_version="v4", comments=comments)
@@ -119,7 +158,16 @@ def self_test() -> int:
     assert '"state_delta"' in changed.prompt
     assert '"previous_state"' not in changed.prompt and '"current_state"' not in changed.prompt
     assert changed.previous_state == first.current_state and changed.current_state.head_sha == "c"*40
-    print(json.dumps({"prompt_state_hardening_v2":"pass","blocks":5,"delta_only_prompt":True,"empty_delta":True,"changed_delta":sorted(changed.state_delta)}))
+    assert base.PROFILE_ALLOWED_ACTIONS[base.infer_profile(fields)] == ("inspect_repository", "inspect_branch", "inspect_pull_request", "analyze_conflicts", "create_integration_plan", "report_results")
+    print(json.dumps({
+        "prompt_state_hardening_v2":"pass",
+        "blocks":5,
+        "delta_only_prompt":True,
+        "empty_delta":True,
+        "changed_delta":sorted(changed.state_delta),
+        "safe_continuation_actions":len(SAFE_CONTINUATION_ACTIONS),
+        "base_profile_restored":True,
+    }))
     return 0
 
 if __name__ == "__main__":

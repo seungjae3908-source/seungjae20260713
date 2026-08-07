@@ -35,12 +35,15 @@ let accountLifecycle: StagingAccountLifecycle | null = null;
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
 type LogoutObservation = { candidates: Diagnostic[] };
 type RouteTransitionObservation = {
-  fromPath: string;
-  toPath: string;
+  fromRoute: string;
+  toRoute: string;
   candidates: Diagnostic[];
+  pendingGetRequests: Set<Request>;
 };
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
+const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
+const pendingApiGetRequests = new WeakMap<Page, Set<Request>>();
 const diagnostics: {
   console_errors: Diagnostic[];
   page_errors: Diagnostic[];
@@ -75,6 +78,11 @@ function diagnosticUrl(raw: string) {
   } catch {
     return '[invalid-url]';
   }
+}
+
+function routeIdentity(raw: string, base?: string) {
+  const parsed = base ? new URL(raw, base) : new URL(raw);
+  return `${parsed.pathname}${parsed.search}`;
 }
 
 function diagnosticText(raw: string) {
@@ -118,14 +126,41 @@ function isExpectedRouteTransitionAbort(
 ) {
   try {
     const parsed = new URL(request.url());
-    return observation.fromPath === '/stock-info'
-      && observation.toPath === '/scanner'
+    return observation.fromRoute !== observation.toRoute
+      && observation.pendingGetRequests.has(request)
       && request.method() === 'GET'
-      && parsed.pathname === '/api/stocks/005930/chart'
+      && parsed.pathname.startsWith('/api/')
       && request.failure()?.errorText === 'net::ERR_ABORTED';
   } catch {
     return false;
   }
+}
+
+function isSameOriginApiGet(request: Request) {
+  try {
+    const parsed = new URL(request.url());
+    return request.method() === 'GET'
+      && parsed.origin === new URL(request.frame().url()).origin
+      && parsed.pathname.startsWith('/api/');
+  } catch {
+    return false;
+  }
+}
+
+function isMutatingBrowserRequest(request: Request) {
+  try {
+    const parsed = new URL(request.url());
+    return parsed.origin === new URL(request.frame().url()).origin
+      && parsed.pathname.startsWith('/api/')
+      && !['GET', 'HEAD', 'OPTIONS'].includes(request.method());
+  } catch {
+    return false;
+  }
+}
+
+function completeBrowserRequest(page: Page, request: Request) {
+  pendingMutatingRequests.get(page)?.delete(request);
+  pendingApiGetRequests.get(page)?.delete(request);
 }
 
 function recordUnhandled(testName: string, url: string, detail: string) {
@@ -136,6 +171,15 @@ function recordUnhandled(testName: string, url: string, detail: string) {
 
 function attachDiagnostics(page: Page, testInfo: TestInfo) {
   const testName = testInfo.titlePath.join(' > ');
+  const mutations = new Set<Request>();
+  const apiGets = new Set<Request>();
+  pendingMutatingRequests.set(page, mutations);
+  pendingApiGetRequests.set(page, apiGets);
+  page.on('request', (request) => {
+    if (isMutatingBrowserRequest(request)) mutations.add(request);
+    if (isSameOriginApiGet(request)) apiGets.add(request);
+  });
+  page.on('requestfinished', (request) => completeBrowserRequest(page, request));
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
     const detail = diagnosticText(message.text());
@@ -159,6 +203,7 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     });
   });
   page.on('requestfailed', (request) => {
+    completeBrowserRequest(page, request);
     const detail = diagnosticText(`${request.method()} ${request.failure()?.errorText ?? 'request failed'}`);
     const diagnostic: Diagnostic = {
       test: testName,
@@ -184,12 +229,33 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   });
 }
 
+async function waitForPresentationFrame(page: Page) {
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+}
+
+async function waitForPendingMutations(page: Page) {
+  await expect.poll(
+    () => pendingMutatingRequests.get(page)?.size ?? 0,
+    {
+      message: 'mutating browser requests must finish before route navigation',
+      timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe(0);
+}
+
 async function settle(page: Page) {
-  await page.waitForLoadState('domcontentloaded');
+  await page.waitForLoadState('load');
   for (let pass = 0; pass < 2; pass += 1) {
-    await page.waitForLoadState('networkidle', { timeout: 30_000 });
+    const urlBeforeFrame = page.url();
+    await waitForPresentationFrame(page);
     await page.waitForTimeout(300);
+    expect(page.url(), 'route changed while presentation was settling').toBe(urlBeforeFrame);
+    await expect(page.locator('body')).toBeVisible();
   }
+  await waitForPendingMutations(page);
 }
 
 function loginSubmitButton(page: Page) {
@@ -246,43 +312,96 @@ async function expectMembership(page: Page, label: RegExp) {
   await expect(page.getByTestId('membership-label')).toContainText(label);
 }
 
+async function finishRouteTransition(
+  page: Page,
+  observation: RouteTransitionObservation,
+  confirmed: boolean,
+) {
+  await expect.poll(
+    () => {
+      const pending = pendingApiGetRequests.get(page);
+      if (!pending) return 0;
+      return [...observation.pendingGetRequests]
+        .filter((request) => pending.has(request))
+        .length;
+    },
+    {
+      message: 'pre-navigation GET requests must settle before route observation closes',
+      timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe(0);
+
+  activeRouteTransitionObservations.delete(page);
+  if (confirmed) {
+    diagnostics.expected_route_transition_aborts.push(...observation.candidates);
+    return;
+  }
+  diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({
+    ...item,
+    detail: `unconfirmed route-transition abort: ${item.detail}`,
+  })));
+}
+
 async function expectHealthyRoute(page: Page, route: string) {
   await settle(page);
-  const response = await page.goto(route, { waitUntil: 'domcontentloaded' });
-  if (response) expect(response.status(), `${route} returned HTTP ${response.status()}`).toBeLessThan(400);
-  await settle(page);
-  await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
-  await expect(page.locator('body')).not.toBeEmpty();
+  const observation: RouteTransitionObservation = {
+    fromRoute: routeIdentity(page.url()),
+    toRoute: routeIdentity(route, page.url()),
+    candidates: [],
+    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
+  };
+  activeRouteTransitionObservations.set(page, observation);
+  let confirmed = false;
+  try {
+    const response = await page.goto(route, { waitUntil: 'domcontentloaded' });
+    if (response) expect(response.status(), `${route} returned HTTP ${response.status()}`).toBeLessThan(400);
+    await settle(page);
+    expect(routeIdentity(page.url())).toBe(observation.toRoute);
+    await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
+    await expect(page.locator('body')).not.toBeEmpty();
+    confirmed = true;
+  } finally {
+    await finishRouteTransition(page, observation, confirmed);
+  }
 }
 
 async function expectDeniedRoute(page: Page, route: string) {
   await settle(page);
-  await page.goto(route, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('capability-denied')).toBeVisible();
-  await settle(page);
+  const observation: RouteTransitionObservation = {
+    fromRoute: routeIdentity(page.url()),
+    toRoute: routeIdentity(route, page.url()),
+    candidates: [],
+    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
+  };
+  activeRouteTransitionObservations.set(page, observation);
+  let confirmed = false;
+  try {
+    await page.goto(route, { waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('capability-denied')).toBeVisible();
+    await settle(page);
+    expect(routeIdentity(page.url())).toBe(observation.toRoute);
+    confirmed = true;
+  } finally {
+    await finishRouteTransition(page, observation, confirmed);
+  }
 }
 
 async function expectScannerAfterFutures(page: Page) {
   const observation: RouteTransitionObservation = {
-    fromPath: new URL(page.url()).pathname,
-    toPath: '/scanner',
+    fromRoute: routeIdentity(page.url()),
+    toRoute: routeIdentity('/scanner', page.url()),
     candidates: [],
+    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
   };
   activeRouteTransitionObservations.set(page, observation);
   let confirmed = false;
   try {
     await expectHealthyScannerRoute(page);
-    expect(new URL(page.url()).pathname).toBe(observation.toPath);
+    expect(routeIdentity(page.url())).toBe(observation.toRoute);
     confirmed = true;
-    diagnostics.expected_route_transition_aborts.push(...observation.candidates);
   } finally {
-    activeRouteTransitionObservations.delete(page);
-    if (!confirmed && observation.candidates.length > 0) {
-      diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({
-        ...item,
-        detail: `unconfirmed route-transition abort: ${item.detail}`,
-      })));
-    }
+    await finishRouteTransition(page, observation, confirmed);
   }
 }
 

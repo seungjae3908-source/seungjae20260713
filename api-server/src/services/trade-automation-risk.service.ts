@@ -1,15 +1,13 @@
-import { evaluateTradingOptimization } from './trade-automation-optimization.service';
 import {
   DEFAULT_TRADING_POLICY,
-  type TradingAssetClass,
   type TradingPlanInput,
   type TradingPolicy,
   type TradingRiskDecision,
 } from './trade-automation.types';
+import { normalizeSplitRatios, TradeSplitOrderPlanError } from './trade-split-order-planner.service';
 
 const MAX_DATA_DELAY_MS = 5_000;
 const MAX_SNAPSHOT_AGE_MS = 30_000;
-const MAX_SNAPSHOT_FUTURE_SKEW_MS = 5_000;
 const MAX_ONE_MINUTE_MOVE_PERCENT = 5;
 const MAX_SPREAD_PERCENT = 1;
 const MAX_ORDERBOOK_GAP_PERCENT = 2;
@@ -18,10 +16,6 @@ const UPBIT_MINIMUM_KRW = 5_000;
 
 function finitePositive(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
-}
-
-function finiteNonNegative(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 function add(values: string[], code: string) {
@@ -34,48 +28,13 @@ function normalizedList(value: unknown, maximum: number) {
     : [];
 }
 
-function assetClassForPlan(plan: TradingPlanInput): TradingAssetClass {
-  if (plan.exchange === 'bitget') return 'crypto_futures';
-  if (plan.exchange === 'upbit') return 'crypto_spot';
-  if (plan.market.toUpperCase() === 'US') return 'us_stock';
-  return 'domestic_stock';
-}
-
 export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | undefined): TradingPolicy {
   const input = value ?? {};
   const leverage = Number(input.bitgetLeverage);
-  const pilotStage = input.pilotStage === 'limited-50' || input.pilotStage === 'validated'
-    ? input.pilotStage : 'approval-20';
-  const totalCapitalKrw = clampNumber(
-    input.totalCapitalKrw,
-    10_000,
-    10_000_000_000,
-    DEFAULT_TRADING_POLICY.totalCapitalKrw,
-  );
-  const maxOrderKrw = clampNumber(
-    input.maxOrderKrw,
-    5_000,
-    Math.min(1_000_000, totalCapitalKrw),
-    Math.min(DEFAULT_TRADING_POLICY.maxOrderKrw, totalCapitalKrw),
-  );
-  const maxInstrumentKrw = clampNumber(
-    input.maxInstrumentKrw,
-    5_000,
-    totalCapitalKrw,
-    Math.min(maxOrderKrw, totalCapitalKrw),
-  );
-  const classLimits = input.maxAssetClassKrw;
-  const maxAssetClassKrw: Record<TradingAssetClass, number> = {
-    domestic_stock: clampNumber(classLimits?.domestic_stock, 5_000, totalCapitalKrw, totalCapitalKrw),
-    us_stock: clampNumber(classLimits?.us_stock, 5_000, totalCapitalKrw, totalCapitalKrw),
-    crypto_spot: clampNumber(classLimits?.crypto_spot, 5_000, totalCapitalKrw, totalCapitalKrw),
-    crypto_futures: clampNumber(classLimits?.crypto_futures, 5_000, totalCapitalKrw, totalCapitalKrw),
-  };
   return {
     mode: input.mode === 'automatic' ? 'automatic' : 'approval',
     automaticEnabled: input.automaticEnabled === true,
     emergencyStopped: input.emergencyStopped === true,
-    newEntriesStopped: input.newEntriesStopped === true,
     exchangeEnabled: {
       bitget: input.exchangeEnabled?.bitget === true,
       upbit: input.exchangeEnabled?.upbit === true,
@@ -87,33 +46,14 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
       kiwoom: normalizedList(input.enabledAssets?.kiwoom, 100).map((item) => item.toUpperCase()),
     },
     enabledStrategies: normalizedList(input.enabledStrategies, 30),
-    totalCapitalKrw,
-    maxOrderKrw,
-    maxInstrumentKrw,
-    maxAssetClassKrw,
+    totalCapitalKrw: clampNumber(input.totalCapitalKrw, 10_000, 10_000_000_000, DEFAULT_TRADING_POLICY.totalCapitalKrw),
+    maxOrderKrw: clampNumber(input.maxOrderKrw, 5_000, 1_000_000, DEFAULT_TRADING_POLICY.maxOrderKrw),
     dailyLossLimitPercent: clampNumber(input.dailyLossLimitPercent, 0.1, 5, DEFAULT_TRADING_POLICY.dailyLossLimitPercent),
-    weeklyLossLimitPercent: clampNumber(input.weeklyLossLimitPercent, 0.1, 25, DEFAULT_TRADING_POLICY.weeklyLossLimitPercent),
     maxAssetPercent: clampNumber(input.maxAssetPercent, 1, 30, DEFAULT_TRADING_POLICY.maxAssetPercent),
     maxOpenPositions: Math.round(clampNumber(input.maxOpenPositions, 1, 50, DEFAULT_TRADING_POLICY.maxOpenPositions)),
     maxDailyOrders: Math.round(clampNumber(input.maxDailyOrders, 1, 100, DEFAULT_TRADING_POLICY.maxDailyOrders)),
     maxConsecutiveLosses: Math.round(clampNumber(input.maxConsecutiveLosses, 1, 20, DEFAULT_TRADING_POLICY.maxConsecutiveLosses)),
     bitgetLeverage: leverage === 3 ? 3 : 2,
-    riskOptimizationEnabled: input.riskOptimizationEnabled !== false,
-    pilotStage,
-    riskPerTradePercent: {
-      bitget: clampNumber(input.riskPerTradePercent?.bitget, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.bitget),
-      upbit: clampNumber(input.riskPerTradePercent?.upbit, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.upbit),
-      kiwoom: clampNumber(input.riskPerTradePercent?.kiwoom, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.kiwoom),
-    },
-    totalDailyLossLimitPercent: clampNumber(input.totalDailyLossLimitPercent, 0.1, 2, DEFAULT_TRADING_POLICY.totalDailyLossLimitPercent),
-    minExpectedValueR: clampNumber(input.minExpectedValueR, 0, 2, DEFAULT_TRADING_POLICY.minExpectedValueR),
-    minStrategySampleSize: Math.round(clampNumber(input.minStrategySampleSize, 20, 10_000, DEFAULT_TRADING_POLICY.minStrategySampleSize)),
-    minProfitFactor: clampNumber(input.minProfitFactor, 1, 5, DEFAULT_TRADING_POLICY.minProfitFactor),
-    maxStrategyDrawdownPercent: clampNumber(input.maxStrategyDrawdownPercent, 1, 50, DEFAULT_TRADING_POLICY.maxStrategyDrawdownPercent),
-    maxEstimatedSlippagePercent: clampNumber(input.maxEstimatedSlippagePercent, 0.01, 2, DEFAULT_TRADING_POLICY.maxEstimatedSlippagePercent),
-    maxAverageSpreadPercent: clampNumber(input.maxAverageSpreadPercent, 0.01, 2, DEFAULT_TRADING_POLICY.maxAverageSpreadPercent),
-    maxCorrelatedExposurePercent: clampNumber(input.maxCorrelatedExposurePercent, 1, 100, DEFAULT_TRADING_POLICY.maxCorrelatedExposurePercent),
-    maxEconomicsAgeHours: clampNumber(input.maxEconomicsAgeHours, 1, 168, DEFAULT_TRADING_POLICY.maxEconomicsAgeHours),
   };
 }
 
@@ -157,53 +97,21 @@ export function evaluateTradingPlan(
   const snapshot = plan.marketSnapshot;
 
   if (options.emergencyStopped) add(blockCodes, 'EMERGENCY_STOP_ACTIVE');
-  if (policy.newEntriesStopped === true && plan.reduceOnly !== true) add(blockCodes, 'NEW_ENTRIES_STOPPED');
   if (!finitePositive(plan.estimatedKrw) || plan.estimatedKrw > policy.maxOrderKrw) add(blockCodes, 'MAX_ORDER_AMOUNT');
   if (snapshot.dailyPnlPercent <= -policy.dailyLossLimitPercent) add(blockCodes, 'DAILY_LOSS_LIMIT');
-  const weeklyLossLimitPercent = policy.weeklyLossLimitPercent ?? DEFAULT_TRADING_POLICY.weeklyLossLimitPercent;
-  if (Number.isFinite(snapshot.weeklyPnlPercent)
-    && Number(snapshot.weeklyPnlPercent) <= -weeklyLossLimitPercent) add(blockCodes, 'WEEKLY_LOSS_LIMIT');
   if (snapshot.assetExposurePercent > policy.maxAssetPercent) add(blockCodes, 'ASSET_EXPOSURE_LIMIT');
   const capitalBase = Math.max(1, Math.min(policy.totalCapitalKrw, snapshot.accountValueKrw || policy.totalCapitalKrw));
   const projectedExposurePercent = snapshot.assetExposurePercent + (plan.estimatedKrw / capitalBase) * 100;
   if (projectedExposurePercent > policy.maxAssetPercent) add(blockCodes, 'PROJECTED_ASSET_EXPOSURE_LIMIT');
-  const maxInstrumentKrw = policy.maxInstrumentKrw ?? policy.maxOrderKrw;
-  const instrumentExposureKrw = finiteNonNegative(snapshot.instrumentExposureKrw)
-    ? snapshot.instrumentExposureKrw : 0;
-  if (instrumentExposureKrw + plan.estimatedKrw > maxInstrumentKrw) add(blockCodes, 'INSTRUMENT_AMOUNT_LIMIT');
-  const assetClass = assetClassForPlan(plan);
-  const maxAssetClassKrw = policy.maxAssetClassKrw?.[assetClass] ?? policy.totalCapitalKrw;
-  const assetClassExposureKrw = finiteNonNegative(snapshot.assetClassExposureKrw)
-    ? snapshot.assetClassExposureKrw : 0;
-  if (assetClassExposureKrw + plan.estimatedKrw > maxAssetClassKrw) add(blockCodes, 'ASSET_CLASS_AMOUNT_LIMIT');
   if (snapshot.openPositionCount >= policy.maxOpenPositions) add(blockCodes, 'OPEN_POSITION_LIMIT');
   if (snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
   if (snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) add(blockCodes, 'CONSECUTIVE_LOSS_LIMIT');
   if (snapshot.halted) add(blockCodes, 'MARKET_HALTED');
-
-  const nowMs = Date.now();
-  const observedAtMs = Date.parse(snapshot.observedAt);
-  const declaredDelayMs = Number(snapshot.dataDelayMs);
-  if (!Number.isFinite(observedAtMs)) {
-    add(blockCodes, 'MARKET_SNAPSHOT_TIMESTAMP_INVALID');
+  const observedAt = Date.parse(snapshot.observedAt);
+  if (!Number.isFinite(observedAt) || Math.abs(Date.now() - observedAt) > MAX_SNAPSHOT_AGE_MS) {
     add(blockCodes, 'MARKET_SNAPSHOT_STALE');
-    add(blockCodes, 'MARKET_DATA_DELAYED');
-  } else {
-    const snapshotAgeMs = nowMs - observedAtMs;
-    if (snapshotAgeMs < -MAX_SNAPSHOT_FUTURE_SKEW_MS) {
-      add(blockCodes, 'MARKET_SNAPSHOT_FROM_FUTURE');
-      add(blockCodes, 'MARKET_DATA_DELAYED');
-    } else {
-      if (snapshotAgeMs > MAX_SNAPSHOT_AGE_MS) {
-        add(blockCodes, 'MARKET_SNAPSHOT_STALE');
-        add(blockCodes, 'MARKET_DATA_DELAYED');
-      }
-      if (!Number.isFinite(declaredDelayMs) || declaredDelayMs < 0 || declaredDelayMs > MAX_DATA_DELAY_MS) {
-        add(blockCodes, 'MARKET_DATA_DELAYED');
-      }
-    }
   }
-
+  if (snapshot.dataDelayMs > MAX_DATA_DELAY_MS) add(blockCodes, 'MARKET_DATA_DELAYED');
   if (Math.abs(snapshot.oneMinuteMovePercent) >= MAX_ONE_MINUTE_MOVE_PERCENT) add(blockCodes, 'ONE_MINUTE_VOLATILITY');
   if (snapshot.spreadPercent > MAX_SPREAD_PERCENT) add(blockCodes, 'SPREAD_TOO_WIDE');
   if (snapshot.orderbookGapPercent > MAX_ORDERBOOK_GAP_PERCENT) add(blockCodes, 'ORDERBOOK_GAP');
@@ -222,7 +130,7 @@ export function evaluateTradingPlan(
 
   if (plan.exchange === 'bitget') {
     if (!['long', 'short', 'buy', 'sell'].includes(plan.side)) add(blockCodes, 'BITGET_SIDE_INVALID');
-    if (plan.leverage !== 1 && plan.leverage !== 2 && plan.leverage !== 3) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
+    if (plan.leverage !== 2 && plan.leverage !== 3) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
     if ((plan.leverage ?? 0) > 3) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
     if (plan.marginMode !== 'crossed' && plan.marginMode !== 'isolated') add(blockCodes, 'BITGET_MARGIN_MODE_REQUIRED');
     if (snapshot.existingPositionSide && snapshot.existingPositionSide !== plan.side && !plan.reduceOnly) {
@@ -254,26 +162,14 @@ export function evaluateTradingPlan(
   }
 
   if (snapshot.availableBalance < plan.estimatedKrw && plan.exchange !== 'bitget') add(blockCodes, 'INSUFFICIENT_BALANCE');
-  if (plan.splitRatios.length === 0 || Math.abs(plan.splitRatios.reduce((sum, value) => sum + value, 0) - 100) > 0.01) {
-    add(blockCodes, 'SPLIT_RATIO_INVALID');
+  try {
+    normalizeSplitRatios(plan.splitRatios);
+  } catch (error) {
+    if (error instanceof TradeSplitOrderPlanError) add(blockCodes, error.code);
+    else add(blockCodes, 'TRADE_SPLIT_RATIO_INVALID');
   }
   if (plan.targetPrices.length === 0 || !finitePositive(plan.stopPrice)) add(blockCodes, 'EXIT_PLAN_REQUIRED');
   if (plan.invalidateAction === 'close') warnings.push('조건 무효화 시 청산은 위험관리 재검사 후에만 실행됩니다.');
 
-  const hasOptimizationContext = plan.accountMode === 'live'
-    || plan.economics != null
-    || plan.signalState != null
-    || plan.signalExpiresAt != null
-    || plan.entryPrice != null
-    || plan.entryZoneLow != null
-    || plan.entryZoneHigh != null
-    || plan.estimatedSlippagePercent != null
-    || plan.averageSpreadPercent != null;
-  const optimization = hasOptimizationContext ? evaluateTradingOptimization(plan, policy) : undefined;
-  if (optimization) {
-    for (const code of optimization.blockCodes) add(blockCodes, code);
-    for (const warning of optimization.warnings) if (!warnings.includes(warning)) warnings.push(warning);
-  }
-
-  return { allowed: blockCodes.length === 0, blockCodes, warnings, optimization };
+  return { allowed: blockCodes.length === 0, blockCodes, warnings };
 }

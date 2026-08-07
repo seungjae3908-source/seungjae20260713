@@ -3,18 +3,15 @@ import type { TradingOrderState } from './trade-automation.types';
 const TRANSITIONS: Record<TradingOrderState, readonly TradingOrderState[]> = {
   PLANNED: ['APPROVAL_PENDING', 'SUBMITTED', 'REJECTED', 'EXPIRED'],
   APPROVAL_PENDING: ['SUBMITTED', 'REJECTED', 'EXPIRED'],
-  SUBMITTED: ['ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'CANCEL_REQUESTED', 'REJECTED', 'RECOVERY_REQUIRED'],
+  SUBMITTED: ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'CANCEL_REQUESTED', 'REJECTED', 'RECOVERY_REQUIRED'],
   ACCEPTED: ['PARTIALLY_FILLED', 'FILLED', 'CANCEL_REQUESTED', 'REJECTED', 'RECOVERY_REQUIRED'],
   PARTIALLY_FILLED: ['PARTIALLY_FILLED', 'FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED'],
   FILLED: [],
-  CANCEL_REQUESTED: ['CANCELED', 'PARTIALLY_FILLED', 'FILLED', 'RECOVERY_REQUIRED'],
+  CANCEL_REQUESTED: ['CANCEL_REQUESTED', 'CANCELED', 'PARTIALLY_FILLED', 'FILLED', 'RECOVERY_REQUIRED'],
   CANCELED: [],
-  // A provider response may initially look rejected even though a transport or
-  // 5xx boundary leaves execution uncertain. Only the execution coordinator
-  // promotes those explicitly classified cases into query-only reconciliation.
-  REJECTED: ['RECOVERY_REQUIRED'],
+  REJECTED: [],
   EXPIRED: [],
-  RECOVERY_REQUIRED: ['ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'CANCEL_REQUESTED', 'CANCELED', 'REJECTED'],
+  RECOVERY_REQUIRED: ['RECOVERY_REQUIRED', 'ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'CANCEL_REQUESTED', 'CANCELED', 'REJECTED'],
 };
 
 export function canTransitionOrder(from: TradingOrderState, to: TradingOrderState) {
