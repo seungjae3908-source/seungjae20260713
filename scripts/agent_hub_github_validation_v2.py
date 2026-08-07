@@ -307,13 +307,31 @@ def validate_draft_pr_reuse(
     payload: Mapping[str, Any], *, repository: str, repository_owner: str, work_branch: str,
     target_branch: str, command_id: str, worker: str, expected_head_sha: str,
 ) -> PullRequestEvidence:
+    """Validate either a newly isolated Agent Hub Draft or a validated Draft continuation.
+
+    When work_branch == target_branch the coordinator has already re-queried and sealed
+    the existing Draft PR evidence. Reuse is therefore keyed by exact head identity,
+    Draft state, repository, and trusted author rather than a command-specific PR body.
+    New isolation branches retain the stronger command metadata contract.
+    """
     evidence = _pull_evidence(payload)
     if evidence.repository != repository or evidence.state != "open" or evidence.merged or not evidence.draft:
         raise _mismatch("draft_pr_not_reusable", "draft_pr_reuse", "open same-repository Draft", {"repository": evidence.repository, "state": evidence.state, "draft": evidence.draft, "merged": evidence.merged})
-    if evidence.head_branch != work_branch or evidence.base_branch != target_branch:
-        raise _mismatch("draft_pr_branch_mismatch", "draft_pr_reuse", {"head": work_branch, "base": target_branch}, {"head": evidence.head_branch, "base": evidence.base_branch})
     if evidence.author not in {repository_owner, "github-actions[bot]"}:
         raise _mismatch("draft_pr_author_untrusted", "draft_pr_reuse", [repository_owner, "github-actions[bot]"], evidence.author)
+    if evidence.head_branch != work_branch:
+        raise _mismatch("draft_pr_head_branch_mismatch", "draft_pr_reuse", work_branch, evidence.head_branch)
+
+    continuation = work_branch == target_branch
+    if continuation:
+        if evidence.head_sha != expected_head_sha:
+            raise _mismatch("draft_pr_head_sha_mismatch", "draft_pr_reuse", expected_head_sha, evidence.head_sha)
+        if evidence.base_branch == evidence.head_branch:
+            raise _mismatch("draft_pr_self_base", "draft_pr_reuse", "distinct base and head", evidence.base_branch)
+        return evidence
+
+    if evidence.base_branch != target_branch:
+        raise _mismatch("draft_pr_branch_mismatch", "draft_pr_reuse", {"head": work_branch, "base": target_branch}, {"head": evidence.head_branch, "base": evidence.base_branch})
     required = {
         f"agent_hub_command_id: {command_id}", f"agent_hub_worker: {worker}",
         f"agent_hub_expected_head_sha: {expected_head_sha}", f"agent_hub_work_branch: {work_branch}",
@@ -402,10 +420,35 @@ def self_test() -> int:
         assert exc.code == "completed_report_ci_not_success"
     else:
         raise AssertionError("failed completed run accepted")
+
+    continuation_payload = {
+        "number": 9, "state": "open", "draft": True, "merged": False, "body": "manual draft body",
+        "user": {"login": "owner"},
+        "base": {"ref": "main", "sha": "a" * 40, "repo": {"full_name": "owner/repo"}},
+        "head": {"ref": "feature/demo", "sha": "b" * 40, "repo": {"full_name": "owner/repo"}},
+    }
+    reused = validate_draft_pr_reuse(
+        continuation_payload, repository="owner/repo", repository_owner="owner",
+        work_branch="feature/demo", target_branch="feature/demo", command_id="hub-9",
+        worker="integration-planner", expected_head_sha="b" * 40,
+    )
+    assert reused.number == 9
+    try:
+        validate_draft_pr_reuse(
+            continuation_payload, repository="owner/repo", repository_owner="owner",
+            work_branch="feature/demo", target_branch="feature/demo", command_id="hub-9",
+            worker="integration-planner", expected_head_sha="c" * 40,
+        )
+    except GitHubEvidenceError as exc:
+        assert exc.code == "draft_pr_head_sha_mismatch"
+    else:
+        raise AssertionError("stale Draft continuation was accepted")
+
     print(json.dumps({
         "github_evidence_v2": "pass", "partial_failed_run_reusable": 1,
         "empty_evidence_accepted": 0, "detailed_mismatch_codes": len(cases),
         "required_statuses": len(REQUIRED_STATUS_CONTEXTS), "base_sha_verified": 1,
+        "existing_draft_continuation": 1, "stale_draft_continuation_accepted": 0,
     }))
     return 0
 
