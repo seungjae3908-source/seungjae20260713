@@ -173,7 +173,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: test -n "$GEMINI_API_KEY"
-      - name: Create isolated branch at exact expected HEAD
+      - name: Create or reuse exact safe work branch
         if: steps.prepare.outputs.should_run == 'true'
         env:
           WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
@@ -185,11 +185,15 @@ jobs:
           test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_HEAD_SHA"
           test "$TARGET_BRANCH" != 'main'
           test "$TARGET_BRANCH" != 'master'
-          case "$WORK_BRANCH" in agent/hub-*) ;; *) exit 1 ;; esac
+          if [ "$WORK_BRANCH" != "$TARGET_BRANCH" ]; then
+            case "$WORK_BRANCH" in agent/hub-*) ;; *) exit 1 ;; esac
+          fi
           if git ls-remote --exit-code --heads origin "$WORK_BRANCH" >/dev/null 2>&1; then
             git fetch origin "$WORK_BRANCH"
             git switch --force-create "$WORK_BRANCH" "origin/$WORK_BRANCH"
+            test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
           else
+            test "$WORK_BRANCH" != "$TARGET_BRANCH"
             git switch --create "$WORK_BRANCH" "$EXPECTED_HEAD_SHA"
           fi
       - name: Run read-only Gemini
@@ -279,12 +283,15 @@ jobs:
               pnpm --dir api-server run typecheck
               pnpm --dir api-server run test:smoke
               ;;
+            create_draft_pr|update_draft_pr_description)
+              test "$HAS_CHANGES" = 'false'
+              ;;
             inspect_repository|inspect_branch|inspect_pull_request|analyze_ci_failure|analyze_logs|analyze_playwright_trace|report_results|analyze_conflicts|create_integration_plan|inspect_security_contract|inspect_private_api_calls|inspect_paper_vs_live_order_separation)
               :
               ;;
             *) exit 1 ;;
           esac
-      - name: Commit and push one isolated commit
+      - name: Commit and push one bounded commit
         if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
         id: commit
         env:
@@ -300,17 +307,25 @@ jobs:
           test "$(git rev-list --count "${{ steps.prepare.outputs.expected_head_sha }}..HEAD")" = '1'
           git push --set-upstream origin "$WORK_BRANCH"
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Open or validate owned Draft PR only
-        if: steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true'
+      - name: Create, reuse, or update owned Draft PR
+        if: >-
+          steps.prepare.outputs.should_run == 'true' &&
+          (
+            steps.prepare.outputs.action_type == 'create_draft_pr' ||
+            steps.prepare.outputs.action_type == 'update_draft_pr_description' ||
+            (steps.prepare.outputs.execution_mode == 'code_change' && steps.diff.outputs.has_changes == 'true')
+          )
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTION_TYPE: ${{ steps.prepare.outputs.action_type }}
           WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
           TARGET_BRANCH: ${{ steps.prepare.outputs.target_branch }}
           TASK: ${{ steps.prepare.outputs.source_task_id }}
           COMMAND_ID: ${{ steps.prepare.outputs.command_id }}
           TARGET_WORKER: ${{ steps.prepare.outputs.target_worker }}
           EXPECTED_HEAD_SHA: ${{ steps.prepare.outputs.expected_head_sha }}
+          CURRENT_HEAD_SHA: ${{ steps.commit.outputs.head_sha || steps.prepare.outputs.expected_head_sha }}
         run: |
           set -Eeuo pipefail
           owner="${GITHUB_REPOSITORY%%/*}"
@@ -320,6 +335,8 @@ jobs:
           import json, os
           from agent_hub_github_validation_v2 import validate_draft_pr_reuse
           payload=json.loads(os.environ['PR_JSON'])
+          continuation=os.environ['WORK_BRANCH'] == os.environ['TARGET_BRANCH']
+          expected=os.environ['CURRENT_HEAD_SHA'] if continuation else os.environ['EXPECTED_HEAD_SHA']
           evidence=validate_draft_pr_reuse(
               payload,
               repository=os.environ['GITHUB_REPOSITORY'],
@@ -328,22 +345,52 @@ jobs:
               target_branch=os.environ['TARGET_BRANCH'],
               command_id=os.environ['COMMAND_ID'],
               worker=os.environ['TARGET_WORKER'],
-              expected_head_sha=os.environ['EXPECTED_HEAD_SHA'],
+              expected_head_sha=expected,
           )
           print(evidence.number)
           PY
+            number="$(printf '%s' "$existing" | jq -r '.number')"
             url="$(printf '%s' "$existing" | jq -r '.html_url')"
+            if [ "$ACTION_TYPE" = 'update_draft_pr_description' ]; then
+              PR_JSON="$existing" COMMAND_ID="$COMMAND_ID" TASK="$TASK" TARGET_WORKER="$TARGET_WORKER" CURRENT_HEAD_SHA="$CURRENT_HEAD_SHA" python3 - <<'PY' > "$RUNNER_TEMP/agent-hub-pr-body.txt"
+          import json, os
+          marker='<!-- agent-hub-latest-continuation -->'
+          payload=json.loads(os.environ['PR_JSON'])
+          body=str(payload.get('body') or '').split(marker,1)[0].rstrip()
+          audit='\n'.join([
+              marker,
+              'Agent Hub safe continuation audit:',
+              f"- root task: {os.environ['TASK']}",
+              f"- command: {os.environ['COMMAND_ID']}",
+              f"- worker: {os.environ['TARGET_WORKER']}",
+              f"- head: {os.environ['CURRENT_HEAD_SHA']}",
+              '- merge/deploy/DB/Secret/server/live-order authority: not granted',
+          ])
+          print((body + '\n\n' + audit).strip())
+          PY
+              gh api --method PATCH "repos/${GITHUB_REPOSITORY}/pulls/${number}" -f body="$(cat "$RUNNER_TEMP/agent-hub-pr-body.txt")" >/dev/null
+            fi
           else
+            test "$ACTION_TYPE" != 'update_draft_pr_description'
+            if [ "$ACTION_TYPE" = 'create_draft_pr' ]; then
+              base_branch='main'
+              head_branch="$TARGET_BRANCH"
+              test "$WORK_BRANCH" = "$TARGET_BRANCH"
+            else
+              base_branch="$TARGET_BRANCH"
+              head_branch="$WORK_BRANCH"
+              test "$WORK_BRANCH" != "$TARGET_BRANCH"
+            fi
             printf -v body '%s\n\n%s\n%s\n%s\n%s' \
               'Controlled Agent Hub schema-v2 change. Deterministic validation completed. User review and explicit merge approval are required.' \
               "agent_hub_command_id: ${COMMAND_ID}" \
               "agent_hub_worker: ${TARGET_WORKER}" \
               "agent_hub_expected_head_sha: ${EXPECTED_HEAD_SHA}" \
               "agent_hub_work_branch: ${WORK_BRANCH}"
-            url="$(gh pr create --draft --base "$TARGET_BRANCH" --head "$WORK_BRANCH" --title "Agent task: ${TASK}" --body "$body")"
+            url="$(gh pr create --draft --base "$base_branch" --head "$head_branch" --title "Agent task: ${TASK}" --body "$body")"
           fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
-      - name: Post schema-v2 executor report without premature completed claim
+      - name: Post schema-v2 executor report and wake coordinator
         id: report
         if: always() && steps.prepare.outputs.should_run == 'true'
         env:
@@ -358,12 +405,12 @@ jobs:
           BASE_SHA: ${{ steps.prepare.outputs.expected_head_sha }}
           RESULT_STATUS: ${{ job.status == 'success' && 'completed' || 'failed' }}
           HEAD_SHA: ${{ steps.commit.outputs.head_sha || steps.prepare.outputs.expected_head_sha }}
-          CI_RUN_ID: ${{ github.run_id }}
+          EXECUTOR_RUN_ID: ${{ github.run_id }}
           PR_URL: ${{ steps.pr.outputs.url || 'none' }}
           CHANGED_FILES: ${{ steps.diff.outputs.changed_files || '[]' }}
-          CHECKS: diff=${{ steps.diff.conclusion }}; validation=${{ steps.diff.outputs.has_changes == 'true' && 'completed' || 'not-required' }}
+          CHECKS: action=${{ steps.prepare.outputs.action_type }}; diff=${{ steps.diff.conclusion }}; deterministic_validation=${{ job.status }}
           SUMMARY: ${{ steps.write.outputs.summary || steps.read.outputs.summary || 'No Gemini summary.' }}
           EXECUTION_MODE: ${{ steps.prepare.outputs.execution_mode }}
-          AUTO_STEP: '1'
-          FAILURE_SIGNATURE: ${{ job.status == 'success' && '' || format('{0}-{1}', steps.prepare.outputs.command_id, github.run_attempt) }}
+          AUTO_STEP: ${{ steps.prepare.outputs.auto_step || '0' }}
+          FAILURE_SIGNATURE: ${{ job.status == 'success' && '' || format('{0}:{1}:failed', steps.prepare.outputs.action_type, steps.prepare.outputs.expected_head_sha) }}
         run: python3 scripts/agent_hub_executor_report_hardening_v2.py
