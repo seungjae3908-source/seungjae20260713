@@ -28,7 +28,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 COMMAND_ID_RE = re.compile(r"^hub-[0-9]+-[0-9a-f]{16}$")
 WORKER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 TASK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{1,179}$")
-ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+ISO_RE = re.compile(r"^\d{4}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 WORKER_IDS = (
     "ai-signal-scanner",
@@ -54,6 +54,12 @@ COMMAND_STATUSES = {
 }
 RISK_LEVELS = {"low", "medium", "high", "prohibited"}
 EXECUTION_MODES = {"read_only", "code_change", "none"}
+PATHLESS_READ_ONLY_ACTIONS = frozenset({
+    "inspect_repository", "inspect_branch", "inspect_pull_request", "analyze_ci_failure", "analyze_logs",
+    "analyze_playwright_trace", "run_typecheck", "run_unit_tests", "run_build", "run_playwright",
+    "report_results", "analyze_conflicts", "create_integration_plan", "inspect_security_contract",
+    "inspect_private_api_calls", "inspect_paper_vs_live_order_separation",
+})
 COMMAND_FIELDS = (
     "schema_version", "command_id", "source_task_id", "source_report_comment_id", "target_worker",
     "status", "action_type", "risk_level", "execution_mode", "repository", "base_branch", "base_sha",
@@ -322,8 +328,14 @@ def validate_command(fields: Mapping[str, Any], *, policy_version: str) -> dict[
     if normalized["status"] == "ready":
         if normalized["risk_level"] != "low" or normalized["execution_mode"] == "none":
             raise ContractError("ready command must be low-risk and executable")
-        if not allowed_paths:
-            raise ContractError("ready command requires allowed_paths")
+        pathless_read_only = (
+            normalized["execution_mode"] == "read_only"
+            and normalized["action_type"] in PATHLESS_READ_ONLY_ACTIONS
+        )
+        if not allowed_paths and not pathless_read_only:
+            raise ContractError("ready command requires allowed_paths unless action is pathless read-only")
+        if normalized["execution_mode"] == "code_change" and not allowed_paths:
+            raise ContractError("code-change command requires allowed_paths")
     else:
         if normalized["execution_mode"] != "none" and normalized["status"] not in {"waiting", "stale"}:
             raise ContractError("non-ready command must not be executable")
@@ -465,6 +477,36 @@ prohibited_actions_confirmed: no merge, deploy, DB, Secret, or live order action
     text = format_command(fields, policy_version="agent-hub-v4.0")
     parsed = parse_command(text, comment_id=10, policy_version="agent-hub-v4.0")
     assert parsed.fields["status"] == "ready"
+
+    pathless = {
+        **fields,
+        "command_id": command_id(10, report.task_id, "operations-worker", "inspect_repository", "agent-hub-v4.0"),
+        "source_report_comment_id": "10",
+        "target_worker": "operations-worker",
+        "action_type": "inspect_repository",
+        "target_branch": "ops/read-only-agent-hub",
+        "allowed_paths": "[]",
+        "instruction": "Inspect repository state only.",
+    }
+    normalized_pathless = validate_command(pathless, policy_version="agent-hub-v4.0")
+    assert normalized_pathless["allowed_paths"] == "[]"
+    parse_command(format_command(pathless, policy_version="agent-hub-v4.0"), comment_id=11, policy_version="agent-hub-v4.0")
+
+    empty_change = {
+        **fields,
+        "command_id": command_id(11, report.task_id, "test-runner", "modify_feature_branch", "agent-hub-v4.0"),
+        "source_report_comment_id": "11",
+        "action_type": "modify_feature_branch",
+        "execution_mode": "code_change",
+        "allowed_paths": "[]",
+    }
+    try:
+        validate_command(empty_change, policy_version="agent-hub-v4.0")
+    except ContractError:
+        pass
+    else:
+        raise AssertionError("empty code-change command scope was accepted")
+
     assert any_file_overlap(["stock-analyzer/src/**"], ["stock-analyzer/src/App.tsx"]) == ["stock-analyzer/src/App.tsx"]
     bad = report_body.replace("schema_version: 2\n", "")
     try:
@@ -473,7 +515,14 @@ prohibited_actions_confirmed: no merge, deploy, DB, Secret, or live order action
         pass
     else:
         raise AssertionError("missing schema field was accepted")
-    print(json.dumps({"contract_v2": "pass", "workers": len(WORKER_IDS), "report_fields": len(REPORT_FIELDS), "command_fields": len(COMMAND_FIELDS)}))
+    print(json.dumps({
+        "contract_v2": "pass",
+        "workers": len(WORKER_IDS),
+        "report_fields": len(REPORT_FIELDS),
+        "command_fields": len(COMMAND_FIELDS),
+        "pathless_read_only": 1,
+        "code_change_empty_allowed_paths": 0,
+    }))
     return 0
 
 
