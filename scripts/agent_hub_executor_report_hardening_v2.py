@@ -145,6 +145,18 @@ def _discover_draft_pr(token: str, repository: str, branch: str) -> dict[str, An
     return drafts[0] if drafts else None
 
 
+def _draft_pr_files(token: str, repository: str, number: int) -> list[str]:
+    files: list[str] = []
+    for page in range(1, 4):
+        payload = _github_json(token, repository, "GET", f"/pulls/{number}/files?per_page=100&page={page}")
+        if not isinstance(payload, list):
+            raise base.ReportError("Draft PR files response was not a list")
+        files.extend(base.clean(str(item.get("filename") or ""), 500) for item in payload if isinstance(item, dict))
+        if len(payload) < 100:
+            break
+    return list(dict.fromkeys(item for item in files if item))
+
+
 def _enrich_context(env: dict[str, str], token: str) -> dict[str, str]:
     result = dict(env)
     repository = base.clean(result.get("GITHUB_REPOSITORY", ""), 200)
@@ -157,11 +169,16 @@ def _enrich_context(env: dict[str, str], token: str) -> dict[str, str]:
     if pr is not None:
         base_payload = pr.get("base") if isinstance(pr.get("base"), dict) else {}
         head_payload = pr.get("head") if isinstance(pr.get("head"), dict) else {}
+        number = int(pr.get("number") or 0)
+        if number <= 0:
+            raise base.ReportError("Draft PR number is missing")
         result["PR_URL"] = base.clean(str(pr.get("html_url") or "none"), 500)
         result["REPORT_BASE_BRANCH"] = base.clean(str(base_payload.get("ref") or ""), 180)
         result["REPORT_BASE_SHA"] = _sha(str(base_payload.get("sha") or ""), "PR base SHA")
         result["REPORT_BRANCH"] = base.clean(str(head_payload.get("ref") or ""), 180)
         result["REPORT_HEAD_SHA"] = _sha(str(head_payload.get("sha") or ""), "PR head SHA")
+        if not base.parse_changed_files(result.get("CHANGED_FILES", "")):
+            result["CHANGED_FILES"] = json.dumps(_draft_pr_files(token, repository, number), ensure_ascii=False, separators=(",", ":"))
         return result
 
     head_sha = _sha(result.get("HEAD_SHA", result.get("BASE_SHA", "")), "HEAD_SHA")
@@ -216,6 +233,7 @@ def self_test() -> int:
         "draft_pr_approval_escalations": 0,
         "failed_report_approval_escalations": 0,
         "event_driven_continuation": 1,
+        "draft_pr_changed_files_rehydrated": 1,
     }))
     return 0
 
