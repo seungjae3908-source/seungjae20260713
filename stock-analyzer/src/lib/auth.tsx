@@ -97,6 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const mountedRef = useRef(true);
+  const signingInRef = useRef(false);
   const signingOutRef = useRef(false);
   const signOutTaskRef = useRef<Promise<void> | null>(null);
   const sessionRef = useRef<Session | null>(null);
@@ -168,6 +169,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (mountedRef.current) setLoading(false);
     });
     const { data: sub } = getSupabase().auth.onAuthStateChange((_event, next) => {
+      if (signingInRef.current && next) return;
       if (signingOutRef.current && next) return;
       const previousUserId = sessionRef.current?.user.id ?? null;
       const nextUserId = next?.user.id ?? null;
@@ -224,6 +226,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isApproved: permissions.canAccessBasicInfo,
     async signIn(loginName, password) {
       const name = validate(loginName, password);
+      signingInRef.current = true;
       setLoading(true);
       try {
         const nextSession = await signInWithSupabase(name, password);
@@ -233,6 +236,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         applySession(null);
         throw new Error(authMessage(cause));
       } finally {
+        signingInRef.current = false;
         setLoading(false);
       }
     },
