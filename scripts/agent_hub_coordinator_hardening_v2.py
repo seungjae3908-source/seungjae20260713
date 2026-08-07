@@ -44,6 +44,16 @@ LOW_RISK_AUTO_ACTIONS = frozenset({
     "inspect_private_api_calls", "inspect_paper_vs_live_order_separation",
 })
 NO_PROGRESS_REPEAT_LIMIT = 3
+SAFE_AUDIT_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:-]{1,180}$")
+POLICY_ERROR_PATTERNS = (
+    (re.compile(r"^(?P<field>[a-z_]+) must be a non-empty array$"), "empty_list_not_allowed"),
+    (re.compile(r"^(?P<field>[a-z_]+) must be an array$"), "invalid_list_type"),
+    (re.compile(r"^(?P<field>[a-z_]+) must be a JSON array$"), "malformed_json_array"),
+    (re.compile(r"^(?P<field>[a-z_]+) must be valid JSON$"), "malformed_json_array"),
+    (re.compile(r"^(?P<field>[a-z_]+) contains a non-string path pattern$"), "invalid_path_type"),
+    (re.compile(r"^(?P<field>[a-z_]+) contains an invalid path pattern$"), "invalid_path_pattern"),
+    (re.compile(r"^(?P<field>[a-z_]+) cannot contain parent traversal$"), "parent_traversal"),
+)
 
 
 def requires_independent_verification(risk_level: str) -> bool:
@@ -56,6 +66,63 @@ def _comment_for_report(comments: Sequence[Mapping[str, Any]], report_id: int) -
 
 def _unique_ids(*groups: Sequence[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item for group in groups for item in group if str(item).strip()))
+
+
+def _safe_audit_token(value: Any, fallback: str) -> str:
+    text = str(value or "").strip()
+    return text if SAFE_AUDIT_TOKEN_RE.fullmatch(text) else fallback
+
+
+def _safe_model_action(raw: str) -> str:
+    try:
+        payload = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return "unknown"
+    if not isinstance(payload, dict):
+        return "unknown"
+    return _safe_audit_token(payload.get("action_type"), "unknown")
+
+
+def _sanitized_policy_error(
+    exc: core.PolicyError,
+    *,
+    validation_stage: str,
+    action: str,
+    task_id: str,
+) -> dict[str, Any]:
+    field = "unknown"
+    reason = "policy_validation_failed"
+    message = str(exc)
+    for pattern, mapped_reason in POLICY_ERROR_PATTERNS:
+        match = pattern.fullmatch(message)
+        if match:
+            field = _safe_audit_token(match.group("field"), "unknown")
+            reason = mapped_reason
+            break
+    return {
+        "error_type": "PolicyError",
+        "validation_stage": _safe_audit_token(validation_stage, "unknown"),
+        "field": field,
+        "reason": reason,
+        "action": _safe_audit_token(action, "unknown"),
+        "task_id": _safe_audit_token(task_id, "unknown"),
+        "safe_to_retry": False,
+    }
+
+
+def _audit_instruction(audit: Mapping[str, Any]) -> str:
+    return "; ".join(
+        [
+            "error_code=model_validation_failed",
+            f"error_type={audit['error_type']}",
+            f"validation_stage={audit['validation_stage']}",
+            f"field={audit['field']}",
+            f"reason={audit['reason']}",
+            f"action={audit['action']}",
+            f"task_id={audit['task_id']}",
+            f"safe_to_retry={'true' if audit['safe_to_retry'] else 'false'}",
+        ]
+    )
 
 
 def _post_sealed_command(github: Any, issue_number: int, body: str, compiled: HardenedCompiledPrompt | None = None) -> str:
@@ -75,7 +142,7 @@ def _generic_status(
     *, github: Any, issue_number: int, report: Any, policy: Mapping[str, Any], status: str,
     risk: str, instruction: str, auto_step: int, approval_required: bool = False,
     compiled: HardenedCompiledPrompt | None = None, evidence_ids: Sequence[str] = (),
-    reason: str | None = None, model_calls: int = 0,
+    reason: str | None = None, model_calls: int = 0, audit: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     compiled_ids = tuple(item.evidence_id for item in compiled.evidence if item.mandatory) if compiled else ()
     verified_ids = _unique_ids(evidence_ids, compiled_ids)
@@ -85,7 +152,15 @@ def _generic_status(
     )
     _post_sealed_command(github, issue_number, body, compiled)
     _set_no_run(model_calls)
-    return {"status": status, "reason": reason or status, "model_calls": model_calls, "evidence_ids": list(verified_ids)}
+    result: dict[str, Any] = {
+        "status": status,
+        "reason": reason or status,
+        "model_calls": model_calls,
+        "evidence_ids": list(verified_ids),
+    }
+    if audit is not None:
+        result["validation_error"] = dict(audit)
+    return result
 
 
 def _raw_required_field_errors(report: Any) -> tuple[str, ...]:
@@ -268,15 +343,30 @@ def process_once(*, github: Any, gemini: Any, issue_number: int, repository: str
     if compiled.missing_required:
         return _generic_status(github=github, issue_number=issue_number, report=report, policy=policy, status="needs_context", risk="medium", instruction="error_code=mandatory_prompt_evidence_missing; stage=prompt_compiler; expected=mandatory evidence; actual=" + ",".join(compiled.missing_required) + "; retryable=yes", auto_step=auto_step, compiled=compiled, evidence_ids=verified_ids, reason="mandatory_prompt_evidence_missing")
 
+    model_calls = 0
+    raw_first = ""
     try:
         raw_first = gemini.complete(compiled.prompt, purpose="analysis")
+        model_calls = 1
         first = core.parse_candidate(raw_first, compiled, policy, report)
         first_decision = _evaluate(policy, workers, repository, report, comments, first)
+    except core.PolicyError as exc:
+        audit = _sanitized_policy_error(
+            exc,
+            validation_stage="model_proposal",
+            action=_safe_model_action(raw_first),
+            task_id=report.root_task_id,
+        )
+        return _generic_status(
+            github=github, issue_number=issue_number, report=report, policy=policy, status="blocked",
+            risk="prohibited", instruction=_audit_instruction(audit), auto_step=auto_step,
+            compiled=compiled, evidence_ids=verified_ids, reason="model_validation_failed",
+            model_calls=model_calls, audit=audit,
+        )
     except Exception as exc:
-        return _generic_status(github=github, issue_number=issue_number, report=report, policy=policy, status="blocked", risk="prohibited", instruction=f"error_code=model_validation_failed; stage=model_proposal; expected=valid free-model proposal; actual={type(exc).__name__}; retryable=no", auto_step=auto_step, compiled=compiled, evidence_ids=verified_ids, reason="model_validation_failed")
+        return _generic_status(github=github, issue_number=issue_number, report=report, policy=policy, status="blocked", risk="prohibited", instruction=f"error_code=model_validation_failed; stage=model_proposal; expected=valid free-model proposal; actual={type(exc).__name__}; retryable=no", auto_step=auto_step, compiled=compiled, evidence_ids=verified_ids, reason="model_validation_failed", model_calls=model_calls)
     conflict_files = _conflicting_files(github, report, first, first_decision, validated)
     final_risk = "medium" if conflict_files and first_decision.fields["status"] == "ready" else first_decision.fields["risk_level"]
-    model_calls = 1
 
     if requires_independent_verification(final_risk):
         try:
@@ -360,11 +450,45 @@ def self_test() -> int:
     assert len(LOW_RISK_AUTO_ACTIONS) == 20
     fields = {"checks": "Assertion line 12 failed", "failure_signature": ""}
     assert _normalize_failure_signature(fields) == "assertion line # failed"
+
+    raw = json.dumps({
+        "action_type": "modify_feature_branch",
+        "instruction": "do not log AIzaABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+    })
+    audit = _sanitized_policy_error(
+        core.PolicyError("allowed_paths must be a non-empty array"),
+        validation_stage="model_proposal",
+        action=_safe_model_action(raw),
+        task_id="agent-hub-audit-test",
+    )
+    assert audit == {
+        "error_type": "PolicyError",
+        "validation_stage": "model_proposal",
+        "field": "allowed_paths",
+        "reason": "empty_list_not_allowed",
+        "action": "modify_feature_branch",
+        "task_id": "agent-hub-audit-test",
+        "safe_to_retry": False,
+    }
+    audit_text = _audit_instruction(audit) + json.dumps(audit, separators=(",", ":"))
+    assert "AIzaABCDEFGHIJKLMNOPQRSTUVWXYZ123456" not in audit_text
+    assert "do not log" not in audit_text
+    unknown = _sanitized_policy_error(
+        core.PolicyError("opaque user-derived validation detail"),
+        validation_stage="model_proposal",
+        action="unknown",
+        task_id="agent-hub-audit-test",
+    )
+    assert unknown["field"] == "unknown" and unknown["reason"] == "policy_validation_failed"
+    assert "opaque user-derived validation detail" not in _audit_instruction(unknown)
+
     print(json.dumps({
         "coordinator_hardening_v2": "pass",
         "required_root_task_id": 1,
         "verified_evidence_propagation": 1,
         "generic_error_detail": 1,
+        "sanitized_policy_error": 1,
+        "raw_model_output_logged": 0,
         "low_risk_auto_actions": len(LOW_RISK_AUTO_ACTIONS),
         "count_only_auto_limit_gate": 0,
         "draft_pr_auto_stop": 0,
