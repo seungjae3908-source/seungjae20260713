@@ -19,9 +19,6 @@ import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
-import tradeSignalApprovalRouter from './trade-signal-approval';
-import tradeSignalAlertsRouter from './trade-signal-alerts';
-import scannerApprovalRouter from './scanner-approval';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
 import {
@@ -75,14 +72,10 @@ router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/', paperJournalRouter);
 
-// Signal scanning remains available through the bounded scanner routes above.
-// Every order-workspace route below, including plan creation, final approval,
-// signal-driven cancellation, recovery and audit views, requires an authenticated
-// current database profile followed by the active-administrator guard.
+// Every order-workspace route requires the authenticated current database
+// profile above, followed by the active-admin guard. Scanner signal lifecycle
+// remains outside PR #51 and is intentionally not mounted here.
 router.use('/trade-automation', requireAdmin);
-router.use('/trade-automation', scannerApprovalRouter);
-router.use('/trade-automation', tradeSignalApprovalRouter);
-router.use('/trade-automation', tradeSignalAlertsRouter);
 router.use('/trade-automation', tradeAutomationRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
@@ -102,8 +95,7 @@ router.get('/stocks/special-feed', (req, res, next) => {
     return;
   }
   const market = String(req.query.market ?? 'spot').trim().toLowerCase() === 'futures'
-    ? 'futures'
-    : 'spot';
+    ? 'futures' : 'spot';
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.status(200).json({
     ok: false,
@@ -119,12 +111,8 @@ router.get('/stocks/special-feed', (req, res, next) => {
 router.use('/stocks/:ticker/financials', (req, res, next) => {
   const originalJson = res.json.bind(res);
   res.json = ((body: unknown) => {
-    const payload = body && typeof body === 'object'
-      ? body as Record<string, unknown>
-      : null;
-    if (res.statusCode !== 503 || payload?.code !== 'FINANCIAL_PROVIDER_DELAY') {
-      return originalJson(body);
-    }
+    const payload = body && typeof body === 'object' ? body as Record<string, unknown> : null;
+    if (res.statusCode !== 503 || payload?.code !== 'FINANCIAL_PROVIDER_DELAY') return originalJson(body);
     const ticker = String(payload.ticker ?? req.params.ticker ?? '').trim().toUpperCase();
     const unavailableFinancials = {
       annual: [], yearly: [], quarterly: [], quarters: [], ratios: {},
