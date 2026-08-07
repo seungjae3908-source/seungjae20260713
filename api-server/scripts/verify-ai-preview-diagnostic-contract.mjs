@@ -39,13 +39,40 @@ assert(spec.includes('api_diagnostics: SafeApiDiagnostic[]'), 'staging artifact 
 assert(!spec.includes('const previewBody = await preview.json()'), 'staging spec must not record or assert from an unfiltered preview body');
 assert(!spec.includes('preview.text()'), 'staging spec must not read raw preview text');
 
+const routeIdentityIndex = spec.indexOf('function routeIdentity(');
+const routeIdentityEndIndex = spec.indexOf('\n}\n\nfunction diagnosticText', routeIdentityIndex);
+const routeIdentitySource = spec.slice(routeIdentityIndex, routeIdentityEndIndex);
+assert(
+  routeIdentityIndex >= 0
+    && routeIdentityEndIndex > routeIdentityIndex
+    && routeIdentitySource.includes('`${parsed.pathname}${parsed.search}`'),
+  'route identity must include both pathname and search parameters',
+);
+
+const routeAbortIndex = spec.indexOf('function isExpectedRouteTransitionAbort(');
+const routeAbortEndIndex = spec.indexOf('\n}\n\nfunction isSameOriginApiGet', routeAbortIndex);
+const routeAbortSource = spec.slice(routeAbortIndex, routeAbortEndIndex);
 for (const marker of [
-  'expected_route_transition_aborts',
-  'activeRouteTransitionObservations',
-  'observation.fromPath !== observation.toPath',
+  'observation.fromRoute !== observation.toRoute',
+  'observation.pendingGetRequests.has(request)',
   "request.method() === 'GET'",
   "parsed.pathname.startsWith('/api/')",
   "request.failure()?.errorText === 'net::ERR_ABORTED'",
+]) {
+  assert(routeAbortSource.includes(marker), `scoped route-transition abort classifier is missing ${marker}`);
+}
+assert(
+  !routeAbortSource.includes("includes('net::ERR_ABORTED')")
+    && !routeAbortSource.includes('includes("net::ERR_ABORTED")'),
+  'route-transition abort classifier must require the exact Playwright abort error',
+);
+
+for (const marker of [
+  'expected_route_transition_aborts',
+  'activeRouteTransitionObservations',
+  'pendingApiGetRequests',
+  'pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? [])',
+  'await finishRouteTransition(page, observation, confirmed)',
   'expectScannerAfterFutures(page)',
 ]) {
   assert(spec.includes(marker), `scoped route-transition abort contract is missing ${marker}`);
@@ -53,6 +80,49 @@ for (const marker of [
 assert(
   !spec.includes("parsed.pathname.includes('/chart')"),
   'route-transition abort handling must not use a broad chart allowlist',
+);
+
+const healthyRouteIndex = spec.indexOf('async function expectHealthyRoute(');
+const pendingSnapshotIndex = spec.indexOf(
+  'pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? [])',
+  healthyRouteIndex,
+);
+const routeNavigationIndex = spec.indexOf("await page.goto(route, { waitUntil: 'domcontentloaded' })", healthyRouteIndex);
+assert(
+  healthyRouteIndex >= 0
+    && pendingSnapshotIndex > healthyRouteIndex
+    && routeNavigationIndex > pendingSnapshotIndex,
+  'positive abort contract must snapshot pending GET requests before route navigation starts',
+);
+
+const responseListenerIndex = spec.indexOf("page.on('response', (response) => {");
+const responseFailureIndex = spec.indexOf('diagnostics.unexpected_http_errors.push({', responseListenerIndex);
+const requestFailedListenerIndex = spec.indexOf("page.on('requestfailed', (request) => {", responseListenerIndex);
+assert(
+  responseListenerIndex >= 0
+    && responseFailureIndex > responseListenerIndex
+    && requestFailedListenerIndex > responseFailureIndex,
+  'HTTP 4xx/5xx responses must continue to be recorded as unexpected failures',
+);
+
+const expectedRouteAbortIndex = spec.indexOf(
+  'isExpectedRouteTransitionAbort(request, routeObservation)',
+  requestFailedListenerIndex,
+);
+const unexpectedRequestFailureIndex = spec.indexOf(
+  'diagnostics.unexpected_http_errors.push(diagnostic)',
+  expectedRouteAbortIndex,
+);
+assert(
+  requestFailedListenerIndex >= 0
+    && expectedRouteAbortIndex > requestFailedListenerIndex
+    && unexpectedRequestFailureIndex > expectedRouteAbortIndex,
+  'non-matching request failures must continue to fall through to unexpected HTTP errors',
+);
+assert(
+  spec.includes('if (isMutatingBrowserRequest(request)) mutations.add(request);')
+    && spec.includes('await waitForPendingMutations(page);'),
+  'mutating requests must remain tracked and settled before route navigation',
 );
 
 const liveIndex = phase8Db.indexOf('if [[ -n "${DATABASE_URL:-}" ]]');
@@ -134,4 +204,4 @@ assert(sanitizer.includes('Unsafe staging artifact content'), 'artifact sanitize
 assert(sanitizer.includes('Raw Playwright trace is forbidden'), 'raw trace rejection must remain enabled');
 assert(playwright.includes("trace: stagingMode ? 'off'"), 'raw staging Playwright trace must remain disabled');
 
-console.log('[ai-preview-diagnostic-contract] authenticated browser request, scoped route-transition abort, live evidence-only DB verification, safe diagnostics, sanitizer and raw-trace prohibition verified');
+console.log('[ai-preview-diagnostic-contract] authenticated browser request, query-aware route identity, positive pre-navigation GET abort classification, negative real-failure fallthrough, live evidence-only DB verification, safe diagnostics, sanitizer and raw-trace prohibition verified');
