@@ -145,13 +145,13 @@ const destinationSettleIndex = healthyRouteBlock.indexOf(
   'await settle(page);',
   routeStatusIndex,
 );
-const destinationPathIndex = healthyRouteBlock.indexOf(
-  'expect(new URL(page.url()).pathname).toBe(observation.toPath);',
+const destinationRouteIndex = healthyRouteBlock.indexOf(
+  'expect(routeIdentity(page.url())).toBe(observation.toRoute);',
   destinationSettleIndex,
 );
 const notFoundIndex = healthyRouteBlock.indexOf(
   'not.toContainText(/페이지를 찾을 수 없습니다|page not found/i)',
-  destinationPathIndex,
+  destinationRouteIndex,
 );
 const notEmptyIndex = healthyRouteBlock.indexOf(
   'not.toBeEmpty();',
@@ -175,8 +175,8 @@ assert(
 assert(
   routeStatusIndex > routeGotoIndex
     && destinationSettleIndex > routeStatusIndex
-    && destinationPathIndex > destinationSettleIndex
-    && notFoundIndex > destinationPathIndex
+    && destinationRouteIndex > destinationSettleIndex
+    && notFoundIndex > destinationRouteIndex
     && notEmptyIndex > notFoundIndex
     && confirmedIndex > notEmptyIndex
     && finishTransitionIndex > confirmedIndex,
