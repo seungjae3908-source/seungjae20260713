@@ -193,8 +193,8 @@ assert(capabilityIndex >= 0 && coinFeedIndex > capabilityIndex, 'optional coin f
 assert(stocksRouterIndex > coinFeedIndex, 'optional coin feed fallback must run before the stock feed router');
 assert(routes.includes("if (asset !== 'coin')"), 'stock feed requests must continue to the real stock router');
 assert(routes.includes("res.status(200).json({"), 'unconnected coin feed must degrade through an HTTP 200 response');
-assert(routes.includes('items: []'), 'unconnected coin feed must return an empty item list');
-assert(routes.includes('ok: false'), 'unconnected coin feed must remain visibly marked as unavailable');
+assert(routes.includes("items: []"), 'unconnected coin feed must return an empty item list');
+assert(routes.includes("ok: false"), 'unconnected coin feed must remain visibly marked as unavailable');
 
 assert(
   financialDelayIndex > capabilityIndex && financialDelayIndex < stocksRouterIndex,
