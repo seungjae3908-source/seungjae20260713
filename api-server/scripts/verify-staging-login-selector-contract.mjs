@@ -145,13 +145,13 @@ const destinationSettleIndex = healthyRouteBlock.indexOf(
   'await settle(page);',
   routeStatusIndex,
 );
-const destinationPathIndex = healthyRouteBlock.indexOf(
-  'expect(new URL(page.url()).pathname).toBe(observation.toPath);',
+const destinationRouteIndex = healthyRouteBlock.indexOf(
+  'expect(routeIdentity(page.url())).toBe(observation.toRoute);',
   destinationSettleIndex,
 );
 const notFoundIndex = healthyRouteBlock.indexOf(
   'not.toContainText(/페이지를 찾을 수 없습니다|page not found/i)',
-  destinationPathIndex,
+  destinationRouteIndex,
 );
 const notEmptyIndex = healthyRouteBlock.indexOf(
   'not.toBeEmpty();',
@@ -175,8 +175,8 @@ assert(
 assert(
   routeStatusIndex > routeGotoIndex
     && destinationSettleIndex > routeStatusIndex
-    && destinationPathIndex > destinationSettleIndex
-    && notFoundIndex > destinationPathIndex
+    && destinationRouteIndex > destinationSettleIndex
+    && notFoundIndex > destinationRouteIndex
     && notEmptyIndex > notFoundIndex
     && confirmedIndex > notEmptyIndex
     && finishTransitionIndex > confirmedIndex,
@@ -193,8 +193,8 @@ assert(capabilityIndex >= 0 && coinFeedIndex > capabilityIndex, 'optional coin f
 assert(stocksRouterIndex > coinFeedIndex, 'optional coin feed fallback must run before the stock feed router');
 assert(routes.includes("if (asset !== 'coin')"), 'stock feed requests must continue to the real stock router');
 assert(routes.includes("res.status(200).json({"), 'unconnected coin feed must degrade through an HTTP 200 response');
-assert(routes.includes("items: []"), 'unconnected coin feed must return an empty item list');
-assert(routes.includes("ok: false"), 'unconnected coin feed must remain visibly marked as unavailable');
+assert(routes.includes('items: []'), 'unconnected coin feed must return an empty item list');
+assert(routes.includes('ok: false'), 'unconnected coin feed must remain visibly marked as unavailable');
 
 assert(
   financialDelayIndex > capabilityIndex && financialDelayIndex < stocksRouterIndex,
