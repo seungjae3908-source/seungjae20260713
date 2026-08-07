@@ -14,6 +14,138 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(`[profile-request-coordinator-contract] ${message}`);
 };
 
+function awaitedDrainCompletionIndex(source, variableName, afterIndex, beforeIndex) {
+  if (afterIndex < 0 || beforeIndex <= afterIndex) return -1;
+  const segment = source.slice(afterIndex, beforeIndex);
+  const directMatch = new RegExp(`await\\s+${variableName}\\s*;`).exec(segment);
+  if (directMatch) return afterIndex + directMatch.index + directMatch[0].length;
+
+  const promiseAllPattern = /await\s+Promise\.all\s*\(\s*\[([\s\S]*?)\]\s*\)\s*;/g;
+  for (const match of segment.matchAll(promiseAllPattern)) {
+    if (new RegExp(`\\b${variableName}\\b`).test(match[1])) {
+      return afterIndex + match.index + match[0].length;
+    }
+  }
+  return -1;
+}
+
+function hasSafeLogoutDrainOrdering(source) {
+  const signOutStart = source.indexOf('async signOut() {');
+  const beginIndex = source.indexOf(
+    'const coordinatorDrain = profileRequestsRef.current.beginLogout();',
+    signOutStart,
+  );
+  const queueDrainIndex = source.indexOf('await profileLoadQueueRef.current;', beginIndex);
+  const signOutIndex = source.indexOf('await getSupabase().auth.signOut();', queueDrainIndex);
+  if (
+    signOutStart < 0
+    || beginIndex <= signOutStart
+    || queueDrainIndex <= beginIndex
+    || signOutIndex <= queueDrainIndex
+  ) {
+    return false;
+  }
+
+  const coordinatorDrainCompletionIndex = awaitedDrainCompletionIndex(
+    source,
+    'coordinatorDrain',
+    queueDrainIndex,
+    signOutIndex,
+  );
+  if (coordinatorDrainCompletionIndex <= queueDrainIndex) return false;
+
+  const backupDrainIndex = source.indexOf(
+    'const backupDrain = prepareBackupForSessionEnd();',
+    signOutStart,
+  );
+  if (backupDrainIndex > signOutStart && backupDrainIndex < signOutIndex) {
+    const backupDrainCompletionIndex = awaitedDrainCompletionIndex(
+      source,
+      'backupDrain',
+      queueDrainIndex,
+      signOutIndex,
+    );
+    if (backupDrainCompletionIndex <= queueDrainIndex) return false;
+  }
+
+  return true;
+}
+
+for (const [name, source] of [
+  ['direct coordinator await', `
+    async signOut() {
+      const coordinatorDrain = profileRequestsRef.current.beginLogout();
+      await profileLoadQueueRef.current;
+      await coordinatorDrain;
+      await getSupabase().auth.signOut();
+    }
+  `],
+  ['coordinator and backup Promise.all', `
+    async signOut() {
+      const backupDrain = prepareBackupForSessionEnd();
+      const coordinatorDrain = profileRequestsRef.current.beginLogout();
+      await profileLoadQueueRef.current;
+      await Promise.all([
+        coordinatorDrain,
+        backupDrain,
+      ]);
+      await getSupabase().auth.signOut();
+    }
+  `],
+]) {
+  assert(hasSafeLogoutDrainOrdering(source), `logout ordering fixture must accept ${name}`);
+}
+
+for (const [name, source] of [
+  ['unawaited coordinator drain', `
+    async signOut() {
+      const coordinatorDrain = profileRequestsRef.current.beginLogout();
+      await profileLoadQueueRef.current;
+      await getSupabase().auth.signOut();
+    }
+  `],
+  ['Promise.all without coordinator drain', `
+    async signOut() {
+      const backupDrain = prepareBackupForSessionEnd();
+      const coordinatorDrain = profileRequestsRef.current.beginLogout();
+      await profileLoadQueueRef.current;
+      await Promise.all([backupDrain]);
+      await getSupabase().auth.signOut();
+    }
+  `],
+  ['coordinator drain after signOut', `
+    async signOut() {
+      const coordinatorDrain = profileRequestsRef.current.beginLogout();
+      await profileLoadQueueRef.current;
+      await getSupabase().auth.signOut();
+      await coordinatorDrain;
+    }
+  `],
+  ['missing logout block', `
+    async signOut() {
+      const coordinatorDrain = Promise.resolve();
+      await profileLoadQueueRef.current;
+      await coordinatorDrain;
+      await getSupabase().auth.signOut();
+    }
+  `],
+  ['missing queued profile drain', `
+    async signOut() {
+      const coordinatorDrain = profileRequestsRef.current.beginLogout();
+      await coordinatorDrain;
+      await getSupabase().auth.signOut();
+    }
+  `],
+  ['missing coordinator drain call', `
+    async signOut() {
+      await profileLoadQueueRef.current;
+      await getSupabase().auth.signOut();
+    }
+  `],
+]) {
+  assert(!hasSafeLogoutDrainOrdering(source), `logout ordering fixture must reject ${name}`);
+}
+
 assert(
   auth.includes("import { ProfileRequestCoordinator } from '@/lib/profile-request-coordinator';"),
   'auth provider must use the profile request coordinator',
@@ -30,16 +162,8 @@ assert(auth.includes('maxAgeMs: options.maxAgeMs ?? PROFILE_AUTO_REFRESH_MS'), '
 assert(auth.includes("window.addEventListener('online', refresh);"), 'reconnect refresh must use the same guarded path');
 assert(auth.includes('const signOutTaskRef = useRef<Promise<void> | null>(null);'), 'repeated logout clicks must share one task');
 assert(auth.includes('const coordinatorDrain = profileRequestsRef.current.beginLogout();'), 'logout must block new profile starts before draining');
-
-const beginIndex = auth.indexOf('const coordinatorDrain = profileRequestsRef.current.beginLogout();');
-const queueDrainIndex = auth.indexOf('await profileLoadQueueRef.current;', beginIndex);
-const coordinatorDrainIndex = auth.indexOf('await coordinatorDrain;', queueDrainIndex);
-const signOutIndex = auth.indexOf('await getSupabase().auth.signOut();', coordinatorDrainIndex);
 assert(
-  beginIndex >= 0
-    && queueDrainIndex > beginIndex
-    && coordinatorDrainIndex > queueDrainIndex
-    && signOutIndex > coordinatorDrainIndex,
+  hasSafeLogoutDrainOrdering(auth),
   'logout must block, drain queued and active profile work, then call Supabase signOut',
 );
 assert(auth.includes('profileRequestsRef.current.finishLogout();'), 'successful logout must release the coordinator in a null identity');
