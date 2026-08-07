@@ -51,7 +51,6 @@ def build_report(env: dict[str, str]) -> str:
         checks = base.clean(f"executor_run_id={executor_run_id}; {checks}", 4000)
     summary = base.clean(env.get("SUMMARY", "No executor summary."), 1800)
     failure = base.clean(env.get("FAILURE_SIGNATURE", ""), 500)
-    execution_mode = base.clean(env.get("EXECUTION_MODE", "read_only"), 40)
     auto_step = base.clean(env.get("AUTO_STEP", "1"), 8)
     if not command_id or not source_task_id or not worker or "/" not in repository:
         raise base.ReportError("required executor report context is missing")
@@ -96,9 +95,7 @@ def build_report(env: dict[str, str]) -> str:
         "conflicts: none",
         "approval_required: no",
         "prohibited_actions_confirmed: no main write, merge, rebase, cherry-pick, deploy, server, DB, Supabase, Secret, permission, deletion, paid fallback, live account, live order, live cancellation, or live position action performed",
-        f"command_id: {command_id}",
         f"target_branch: {report_branch}",
-        f"execution_mode: {execution_mode}",
         f"auto_step: {auto_step}",
     ]
     if failure:
@@ -251,6 +248,7 @@ def self_test() -> int:
     assert "approval_required: no" in body
     assert "ci_run_id: none" in body
     assert "base_branch: main" in body and "target_branch: feature/test" in body
+    assert "command_id:" not in body and "execution_mode:" not in body
     terminal = build_terminal_state(env)
     assert "status: completed" in terminal and "[HUB_STATE]" in terminal
     failed = build_report({**env, "RESULT_STATUS": "failed", "FAILURE_SIGNATURE": "run_build:bbbb:failed"})
@@ -264,6 +262,7 @@ def self_test() -> int:
         "event_driven_continuation": 1,
         "draft_pr_changed_files_rehydrated": 1,
         "terminal_command_state_posted": 1,
+        "unsupported_report_fields": 0,
     }))
     return 0
 
