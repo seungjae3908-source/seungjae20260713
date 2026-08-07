@@ -77,9 +77,9 @@ router.use('/', paperJournalRouter);
 
 // Signal scanning remains available through the bounded scanner routes above.
 // Every order-workspace route below, including plan creation, final approval,
-// signal-driven cancellation, recovery and audit views, requires the shared
-// active-administrator order capability resolved from the database profile.
-router.use('/trade-automation', requireCapability('canPlaceOrders'));
+// signal-driven cancellation, recovery and audit views, requires an authenticated
+// current database profile followed by the active-administrator guard.
+router.use('/trade-automation', requireAdmin);
 router.use('/trade-automation', scannerApprovalRouter);
 router.use('/trade-automation', tradeSignalApprovalRouter);
 router.use('/trade-automation', tradeSignalAlertsRouter);
