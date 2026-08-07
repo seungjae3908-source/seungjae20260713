@@ -10,7 +10,10 @@ from typing import Any
 from agent_hub_command_integrity_v2 import CommandIntegrityError, seal_command_body, verify_command_body
 from agent_hub_contract_v2 import EXECUTOR_REPORT_MARKER, REPORT_MARKER, parse_key_values
 from agent_hub_coordinator_hardening_v2 import NO_PROGRESS_REPEAT_LIMIT, process_once, requires_independent_verification
-from agent_hub_executor_report_hardening_v2 import build_report as build_hardened_executor_report
+from agent_hub_executor_report_hardening_v2 import (
+    build_report as build_hardened_executor_report,
+    build_terminal_state as build_hardened_terminal_state,
+)
 from agent_hub_executor_safety_v2 import normalize_repo_path, ExecutorSafetyError
 from agent_hub_github_validation_v2 import (
     GitHubEvidenceError,
@@ -289,8 +292,8 @@ class QueueGemini:
         return json.dumps(proposal, separators=(",", ":"))
 
 
-def _executor_report_for_command(command: dict[str, str], *, result: str, head_sha: str, failure: str = "") -> str:
-    return build_hardened_executor_report({
+def _executor_env_for_command(command: dict[str, str], *, result: str, head_sha: str, failure: str = "") -> dict[str, str]:
+    return {
         "COMMAND_ID": command["command_id"],
         "SOURCE_TASK_ID": command["source_task_id"],
         "TARGET_WORKER": command["target_worker"],
@@ -310,7 +313,22 @@ def _executor_report_for_command(command: dict[str, str], *, result: str, head_s
         "EXECUTION_MODE": command["execution_mode"],
         "AUTO_STEP": command.get("auto_step", "0"),
         "FAILURE_SIGNATURE": failure,
-    })
+    }
+
+
+def _executor_report_for_command(command: dict[str, str], *, result: str, head_sha: str, failure: str = "") -> str:
+    return build_hardened_executor_report(_executor_env_for_command(command, result=result, head_sha=head_sha, failure=failure))
+
+
+def _terminal_state_for_command(command: dict[str, str], *, result: str, head_sha: str) -> str:
+    return build_hardened_terminal_state(_executor_env_for_command(command, result=result, head_sha=head_sha))
+
+
+def _post_executor_result(gh: LoopGitHub, command: dict[str, str], *, result: str, head_sha: str, failure: str = "") -> str:
+    report = _executor_report_for_command(command, result=result, head_sha=head_sha, failure=failure)
+    gh.add_report(report)
+    gh.post_comment(62, _terminal_state_for_command(command, result=result, head_sha=head_sha))
+    return report
 
 
 def test_auto_continuation_e2e() -> int:
@@ -325,9 +343,8 @@ def test_auto_continuation_e2e() -> int:
     assert first["status"] == "ready" and first["auto_step"] == 1
     command1 = gh.latest_command()
     assert command1["approval_required"] == "no" and command1["work_branch"] == "feature/chart-loop"
-    report = _executor_report_for_command(command1, result="completed", head_sha="b" * 40)
+    report = _post_executor_result(gh, command1, result="completed", head_sha="b" * 40)
     assert EXECUTOR_REPORT_MARKER in report and "approval_required: no" in report
-    gh.add_report(report)
     second = process_once(github=gh, gemini=gemini, issue_number=62, repository=gh.repository)
     assert second["status"] == "ready" and second["auto_step"] == 2
     command2 = gh.latest_command()
@@ -343,16 +360,16 @@ def test_auto_continuation_e2e() -> int:
     r1 = process_once(github=gh_b, gemini=gemini_b, issue_number=62, repository=gh_b.repository)
     assert r1["status"] == "ready"
     c1 = gh_b.latest_command()
-    gh_b.add_report(_executor_report_for_command(c1, result="failed", head_sha="b" * 40, failure="analysis-needs-fix"))
+    _post_executor_result(gh_b, c1, result="failed", head_sha="b" * 40, failure="analysis-needs-fix")
     r2 = process_once(github=gh_b, gemini=gemini_b, issue_number=62, repository=gh_b.repository)
     assert r2["status"] == "ready" and gh_b.latest_command()["action_type"] == "modify_feature_branch"
     c2 = gh_b.latest_command()
     gh_b.head_sha = "c" * 40
-    gh_b.add_report(_executor_report_for_command(c2, result="completed", head_sha="c" * 40))
+    _post_executor_result(gh_b, c2, result="completed", head_sha="c" * 40)
     r3 = process_once(github=gh_b, gemini=gemini_b, issue_number=62, repository=gh_b.repository)
     assert r3["status"] == "ready" and gh_b.latest_command()["action_type"] == "run_unit_tests"
     c3 = gh_b.latest_command()
-    gh_b.add_report(_executor_report_for_command(c3, result="completed", head_sha="c" * 40))
+    _post_executor_result(gh_b, c3, result="completed", head_sha="c" * 40)
     r4 = process_once(github=gh_b, gemini=gemini_b, issue_number=62, repository=gh_b.repository)
     assert r4["status"] == "ready" and gh_b.latest_command()["action_type"] == "run_build"
     assert all(parse_key_values(str(item.get("body") or "")).get("approval_required") != "yes" for item in gh_b.comments if "[HUB_COMMAND]" in str(item.get("body") or ""))
@@ -388,7 +405,7 @@ def test_auto_continuation_e2e() -> int:
     assert no_progress["status"] == "blocked" and no_progress["reason"] == "no_progress_repeated_failure"
     assert gemini_d.calls == 0 and NO_PROGRESS_REPEAT_LIMIT == 3
 
-    return 25
+    return 29
 
 
 def test_workflow_contracts() -> int:
@@ -406,6 +423,7 @@ def test_workflow_contracts() -> int:
     process_permissions = free.split("  process-report:", 1)[1].split("    runs-on:", 1)[0]
     assert "contents: write" in process_permissions
     assert 'REPORT_READY_EVENT = "agent-executor-report-ready"' in report_adapter
+    assert "build_terminal_state" in report_adapter and "terminal_state_posted" in report_adapter
     assert "create_draft_pr|update_draft_pr_description" in executor
     assert "max_auto_steps_reached" not in coordinator and "draft_pr_already_created" not in coordinator
     read_settings = '["read_file","glob","grep_search","list_directory"]'
@@ -418,7 +436,7 @@ def test_workflow_contracts() -> int:
     for critical in ("merge_pr)", "staging_deploy)", "production_deploy)", "apply_db_migration)", "restart_server)", "submit_live_order)"):
         assert critical not in executor
     assert "GEMINI_API_KEY" in free + executor and "echo $GEMINI_API_KEY" not in free + executor
-    return 20
+    return 22
 
 
 def run() -> int:
