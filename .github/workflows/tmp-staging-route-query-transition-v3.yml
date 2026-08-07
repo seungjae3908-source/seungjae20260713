@@ -39,55 +39,35 @@ jobs:
               text = text.replace(old, new, 1)
 
           replace_once(
-              "type RouteTransitionObservation = {\n  fromPath: string;\n  toPath: string;\n  candidates: Diagnostic[];\n  pendingGetRequests: Set<Request>;\n};",
-              "type RouteTransitionObservation = {\n  fromRoute: string;\n  toRoute: string;\n  candidates: Diagnostic[];\n  pendingGetRequests: Set<Request>;\n};",
+              'type RouteTransitionObservation = {\n  fromPath: string;\n  toPath: string;\n  candidates: Diagnostic[];\n  pendingGetRequests: Set<Request>;\n};',
+              'type RouteTransitionObservation = {\n  fromRoute: string;\n  toRoute: string;\n  candidates: Diagnostic[];\n  pendingGetRequests: Set<Request>;\n};',
           )
           replace_once(
-              "function diagnosticText(raw: string) {",
-              "function routeIdentity(raw: string, base?: string) {\n  const parsed = base ? new URL(raw, base) : new URL(raw);\n  return `${parsed.pathname}${parsed.search}`;\n}\n\nfunction diagnosticText(raw: string) {",
+              'function diagnosticText(raw: string) {',
+              'function routeIdentity(raw: string, base?: string) {\n  const parsed = base ? new URL(raw, base) : new URL(raw);\n  return `${parsed.pathname}${parsed.search}`;\n}\n\nfunction diagnosticText(raw: string) {',
           )
           replace_once(
-              "return observation.fromPath !== observation.toPath",
-              "return observation.fromRoute !== observation.toRoute",
+              'return observation.fromPath !== observation.toPath',
+              'return observation.fromRoute !== observation.toRoute',
           )
 
-          healthy_old = """  const observation: RouteTransitionObservation = {
-    fromPath: new URL(page.url()).pathname,
-    toPath: new URL(route, page.url()).pathname,
-    candidates: [],
-    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
-  };"""
-          healthy_new = """  const observation: RouteTransitionObservation = {
-    fromRoute: routeIdentity(page.url()),
-    toRoute: routeIdentity(route, page.url()),
-    candidates: [],
-    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
-  };"""
-          count = text.count(healthy_old)
+          observation_old = '  const observation: RouteTransitionObservation = {\n    fromPath: new URL(page.url()).pathname,\n    toPath: new URL(route, page.url()).pathname,\n    candidates: [],\n    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),\n  };'
+          observation_new = '  const observation: RouteTransitionObservation = {\n    fromRoute: routeIdentity(page.url()),\n    toRoute: routeIdentity(route, page.url()),\n    candidates: [],\n    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),\n  };'
+          count = text.count(observation_old)
           if count != 2:
               raise SystemExit(f'expected exactly two healthy/denied observation blocks, found {count}')
-          text = text.replace(healthy_old, healthy_new)
+          text = text.replace(observation_old, observation_new)
 
-          assertion_old = "expect(new URL(page.url()).pathname).toBe(observation.toPath);"
-          assertion_new = "expect(routeIdentity(page.url())).toBe(observation.toRoute);"
+          assertion_old = 'expect(new URL(page.url()).pathname).toBe(observation.toPath);'
+          assertion_new = 'expect(routeIdentity(page.url())).toBe(observation.toRoute);'
           count = text.count(assertion_old)
           if count != 3:
               raise SystemExit(f'expected exactly three route assertions, found {count}')
           text = text.replace(assertion_old, assertion_new)
 
           replace_once(
-              """  const observation: RouteTransitionObservation = {
-    fromPath: new URL(page.url()).pathname,
-    toPath: '/scanner',
-    candidates: [],
-    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
-  };""",
-              """  const observation: RouteTransitionObservation = {
-    fromRoute: routeIdentity(page.url()),
-    toRoute: routeIdentity('/scanner', page.url()),
-    candidates: [],
-    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
-  };""",
+              "  const observation: RouteTransitionObservation = {\n    fromPath: new URL(page.url()).pathname,\n    toPath: '/scanner',\n    candidates: [],\n    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),\n  };",
+              "  const observation: RouteTransitionObservation = {\n    fromRoute: routeIdentity(page.url()),\n    toRoute: routeIdentity('/scanner', page.url()),\n    candidates: [],\n    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),\n  };",
           )
 
           for forbidden in ('fromPath', 'toPath'):
