@@ -1,6 +1,7 @@
 import { evaluateTradingOptimization } from './trade-automation-optimization.service';
 import {
   DEFAULT_TRADING_POLICY,
+  type TradingAssetClass,
   type TradingPlanInput,
   type TradingPolicy,
   type TradingRiskDecision,
@@ -19,6 +20,10 @@ function finitePositive(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+function finiteNonNegative(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
 function add(values: string[], code: string) {
   if (!values.includes(code)) values.push(code);
 }
@@ -29,15 +34,48 @@ function normalizedList(value: unknown, maximum: number) {
     : [];
 }
 
+function assetClassForPlan(plan: TradingPlanInput): TradingAssetClass {
+  if (plan.exchange === 'bitget') return 'crypto_futures';
+  if (plan.exchange === 'upbit') return 'crypto_spot';
+  if (plan.market.toUpperCase() === 'US') return 'us_stock';
+  return 'domestic_stock';
+}
+
 export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | undefined): TradingPolicy {
   const input = value ?? {};
   const leverage = Number(input.bitgetLeverage);
   const pilotStage = input.pilotStage === 'limited-50' || input.pilotStage === 'validated'
     ? input.pilotStage : 'approval-20';
+  const totalCapitalKrw = clampNumber(
+    input.totalCapitalKrw,
+    10_000,
+    10_000_000_000,
+    DEFAULT_TRADING_POLICY.totalCapitalKrw,
+  );
+  const maxOrderKrw = clampNumber(
+    input.maxOrderKrw,
+    5_000,
+    Math.min(1_000_000, totalCapitalKrw),
+    Math.min(DEFAULT_TRADING_POLICY.maxOrderKrw, totalCapitalKrw),
+  );
+  const maxInstrumentKrw = clampNumber(
+    input.maxInstrumentKrw,
+    5_000,
+    totalCapitalKrw,
+    Math.min(maxOrderKrw, totalCapitalKrw),
+  );
+  const classLimits = input.maxAssetClassKrw;
+  const maxAssetClassKrw: Record<TradingAssetClass, number> = {
+    domestic_stock: clampNumber(classLimits?.domestic_stock, 5_000, totalCapitalKrw, totalCapitalKrw),
+    us_stock: clampNumber(classLimits?.us_stock, 5_000, totalCapitalKrw, totalCapitalKrw),
+    crypto_spot: clampNumber(classLimits?.crypto_spot, 5_000, totalCapitalKrw, totalCapitalKrw),
+    crypto_futures: clampNumber(classLimits?.crypto_futures, 5_000, totalCapitalKrw, totalCapitalKrw),
+  };
   return {
     mode: input.mode === 'automatic' ? 'automatic' : 'approval',
     automaticEnabled: input.automaticEnabled === true,
     emergencyStopped: input.emergencyStopped === true,
+    newEntriesStopped: input.newEntriesStopped === true,
     exchangeEnabled: {
       bitget: input.exchangeEnabled?.bitget === true,
       upbit: input.exchangeEnabled?.upbit === true,
@@ -49,9 +87,12 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
       kiwoom: normalizedList(input.enabledAssets?.kiwoom, 100).map((item) => item.toUpperCase()),
     },
     enabledStrategies: normalizedList(input.enabledStrategies, 30),
-    totalCapitalKrw: clampNumber(input.totalCapitalKrw, 10_000, 10_000_000_000, DEFAULT_TRADING_POLICY.totalCapitalKrw),
-    maxOrderKrw: clampNumber(input.maxOrderKrw, 5_000, 1_000_000, DEFAULT_TRADING_POLICY.maxOrderKrw),
+    totalCapitalKrw,
+    maxOrderKrw,
+    maxInstrumentKrw,
+    maxAssetClassKrw,
     dailyLossLimitPercent: clampNumber(input.dailyLossLimitPercent, 0.1, 5, DEFAULT_TRADING_POLICY.dailyLossLimitPercent),
+    weeklyLossLimitPercent: clampNumber(input.weeklyLossLimitPercent, 0.1, 25, DEFAULT_TRADING_POLICY.weeklyLossLimitPercent),
     maxAssetPercent: clampNumber(input.maxAssetPercent, 1, 30, DEFAULT_TRADING_POLICY.maxAssetPercent),
     maxOpenPositions: Math.round(clampNumber(input.maxOpenPositions, 1, 50, DEFAULT_TRADING_POLICY.maxOpenPositions)),
     maxDailyOrders: Math.round(clampNumber(input.maxDailyOrders, 1, 100, DEFAULT_TRADING_POLICY.maxDailyOrders)),
@@ -116,12 +157,25 @@ export function evaluateTradingPlan(
   const snapshot = plan.marketSnapshot;
 
   if (options.emergencyStopped) add(blockCodes, 'EMERGENCY_STOP_ACTIVE');
+  if (policy.newEntriesStopped === true && plan.reduceOnly !== true) add(blockCodes, 'NEW_ENTRIES_STOPPED');
   if (!finitePositive(plan.estimatedKrw) || plan.estimatedKrw > policy.maxOrderKrw) add(blockCodes, 'MAX_ORDER_AMOUNT');
   if (snapshot.dailyPnlPercent <= -policy.dailyLossLimitPercent) add(blockCodes, 'DAILY_LOSS_LIMIT');
+  const weeklyLossLimitPercent = policy.weeklyLossLimitPercent ?? DEFAULT_TRADING_POLICY.weeklyLossLimitPercent;
+  if (Number.isFinite(snapshot.weeklyPnlPercent)
+    && Number(snapshot.weeklyPnlPercent) <= -weeklyLossLimitPercent) add(blockCodes, 'WEEKLY_LOSS_LIMIT');
   if (snapshot.assetExposurePercent > policy.maxAssetPercent) add(blockCodes, 'ASSET_EXPOSURE_LIMIT');
   const capitalBase = Math.max(1, Math.min(policy.totalCapitalKrw, snapshot.accountValueKrw || policy.totalCapitalKrw));
   const projectedExposurePercent = snapshot.assetExposurePercent + (plan.estimatedKrw / capitalBase) * 100;
   if (projectedExposurePercent > policy.maxAssetPercent) add(blockCodes, 'PROJECTED_ASSET_EXPOSURE_LIMIT');
+  const maxInstrumentKrw = policy.maxInstrumentKrw ?? policy.maxOrderKrw;
+  const instrumentExposureKrw = finiteNonNegative(snapshot.instrumentExposureKrw)
+    ? snapshot.instrumentExposureKrw : 0;
+  if (instrumentExposureKrw + plan.estimatedKrw > maxInstrumentKrw) add(blockCodes, 'INSTRUMENT_AMOUNT_LIMIT');
+  const assetClass = assetClassForPlan(plan);
+  const maxAssetClassKrw = policy.maxAssetClassKrw?.[assetClass] ?? policy.totalCapitalKrw;
+  const assetClassExposureKrw = finiteNonNegative(snapshot.assetClassExposureKrw)
+    ? snapshot.assetClassExposureKrw : 0;
+  if (assetClassExposureKrw + plan.estimatedKrw > maxAssetClassKrw) add(blockCodes, 'ASSET_CLASS_AMOUNT_LIMIT');
   if (snapshot.openPositionCount >= policy.maxOpenPositions) add(blockCodes, 'OPEN_POSITION_LIMIT');
   if (snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
   if (snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) add(blockCodes, 'CONSECUTIVE_LOSS_LIMIT');
