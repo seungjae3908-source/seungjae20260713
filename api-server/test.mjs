@@ -65,6 +65,7 @@ const groups = {
   phase12: [
     path.join(root, 'src/services/trade-approval-paper-guard.service.test.ts'),
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
+    path.join(root, 'src/services/trade-approval-runtime-safety.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
     path.join(root, 'src/services/trade-signal-lifecycle.service.test.ts'),
     path.join(root, 'src/routes/trade-signal-approval.smoke.test.ts'),
