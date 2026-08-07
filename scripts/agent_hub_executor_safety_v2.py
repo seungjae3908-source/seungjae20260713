@@ -121,12 +121,16 @@ def _read_utf8_regular(path: str) -> str:
         raise ExecutorSafetyError(f"non-UTF-8 file blocked: {path}") from exc
 
 
-def _parse_json_list(raw: str, field: str) -> tuple[str, ...]:
+def _parse_json_list(raw: str, field: str, *, allow_empty: bool = False) -> tuple[str, ...]:
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ExecutorSafetyError(f"{field} must be valid JSON") from exc
-    if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ExecutorSafetyError(f"{field} must be a string list")
+    if not value:
+        if allow_empty:
+            return ()
         raise ExecutorSafetyError(f"{field} must be a non-empty string list")
     return tuple(dict.fromkeys(normalize_pattern(item, field=field) for item in value))
 
@@ -160,6 +164,8 @@ def validate_diff(
         return {"files": [], "diff_lines": 0, "has_changes": False}
     if mode != "code_change":
         raise ExecutorSafetyError("invalid execution mode")
+    if not allowed:
+        raise ExecutorSafetyError("code-change command requires allowed_paths")
     if not entries:
         return {"files": [], "diff_lines": 0, "has_changes": False}
     if max_files < 0 or len(entries) > max_files:
@@ -199,14 +205,17 @@ def validate_diff(
 
 
 def validate_diff_command() -> int:
-    allowed = _parse_json_list(os.environ.get("ALLOWED_PATHS", ""), "allowed_paths")
+    mode = os.environ.get("EXECUTION_MODE", "").strip()
+    allowed = _parse_json_list(
+        os.environ.get("ALLOWED_PATHS", ""), "allowed_paths", allow_empty=mode == "read_only"
+    )
     forbidden = _parse_json_list(os.environ.get("FORBIDDEN_PATHS", ""), "forbidden_paths")
     try:
         max_files = int(os.environ.get("MAX_FILES", "0"))
     except ValueError as exc:
         raise ExecutorSafetyError("MAX_FILES must be numeric") from exc
     result = validate_diff(
-        mode=os.environ.get("EXECUTION_MODE", "").strip(),
+        mode=mode,
         base_ref=os.environ.get("BASE_REF", "").strip(),
         allowed_paths=allowed,
         forbidden_paths=forbidden,
@@ -232,6 +241,9 @@ def _expect_block(fn) -> None:
 
 
 def self_test() -> int:
+    assert _parse_json_list("[]", "allowed_paths", allow_empty=True) == ()
+    _expect_block(lambda: _parse_json_list("[]", "allowed_paths"))
+    _expect_block(lambda: _parse_json_list("{}", "allowed_paths", allow_empty=True))
     original = Path.cwd()
     with tempfile.TemporaryDirectory(prefix="agent-hub-hardening-") as raw:
         repo = Path(raw)
@@ -241,6 +253,8 @@ def self_test() -> int:
         _git("add", ".", cwd=repo); _git("commit", "-m", "base", cwd=repo)
         os.chdir(repo)
         try:
+            assert not validate_diff(mode="read_only", base_ref="HEAD", allowed_paths=(), forbidden_paths=("ops/**",), max_files=0)["has_changes"]
+            _expect_block(lambda: validate_diff(mode="code_change", base_ref="HEAD", allowed_paths=(), forbidden_paths=("ops/**",), max_files=2))
             (repo / "docs/base.md").write_text("safe\n", encoding="utf-8")
             assert validate_diff(mode="code_change", base_ref="HEAD", allowed_paths=("docs/**",), forbidden_paths=("ops/**",), max_files=2)["has_changes"]
             _git("reset", "--hard", "HEAD", cwd=repo)
@@ -264,7 +278,14 @@ def self_test() -> int:
             _expect_block(lambda: normalize_repo_path("docs//no.md"))
         finally:
             os.chdir(original)
-    print(json.dumps({"executor_safety_v2":"pass","tracked_non_utf8_accepted":0,"secret_diff_accepted":0,"unicode_path_accepted":0}))
+    print(json.dumps({
+        "executor_safety_v2":"pass",
+        "read_only_empty_allowed_paths":1,
+        "code_change_empty_allowed_paths":0,
+        "tracked_non_utf8_accepted":0,
+        "secret_diff_accepted":0,
+        "unicode_path_accepted":0,
+    }))
     return 0
 
 
