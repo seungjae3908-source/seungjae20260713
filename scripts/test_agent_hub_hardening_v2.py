@@ -332,7 +332,6 @@ def _post_executor_result(gh: LoopGitHub, command: dict[str, str], *, result: st
 
 
 def test_auto_continuation_e2e() -> int:
-    # Scenario A: completed report -> ready -> executor report -> coordinator -> second ready, user input 0.
     initial = _report_body(
         task_id="scenario-a-1", root_task_id="scenario-a", status="completed", head_sha="b" * 40,
         remaining="Run the next safe build validation.", ci_run_id="7001",
@@ -340,17 +339,16 @@ def test_auto_continuation_e2e() -> int:
     gh = LoopGitHub(initial)
     gemini = QueueGemini(["run_build", "run_playwright"])
     first = process_once(github=gh, gemini=gemini, issue_number=62, repository=gh.repository)
-    assert first["status"] == "ready" and first["auto_step"] == 1
+    assert first["status"] == "ready" and first["auto_step"] == 1, first
     command1 = gh.latest_command()
     assert command1["approval_required"] == "no" and command1["work_branch"] == "feature/chart-loop"
     report = _post_executor_result(gh, command1, result="completed", head_sha="b" * 40)
     assert EXECUTOR_REPORT_MARKER in report and "approval_required: no" in report
     second = process_once(github=gh, gemini=gemini, issue_number=62, repository=gh.repository)
-    assert second["status"] == "ready" and second["auto_step"] == 2
+    assert second["status"] == "ready" and second["auto_step"] == 2, second
     command2 = gh.latest_command()
     assert command2["action_type"] == "run_playwright" and command2["approval_required"] == "no"
 
-    # Scenario B: Draft PR + failure -> analysis -> minimal fix -> tests -> success -> next safe validation.
     initial_b = _report_body(
         task_id="scenario-b-1", root_task_id="scenario-b", status="failed", head_sha="b" * 40,
         remaining="Analyze CI failure and continue safely.", failure_signature="ci-smoke-failure",
@@ -358,23 +356,22 @@ def test_auto_continuation_e2e() -> int:
     gh_b = LoopGitHub(initial_b)
     gemini_b = QueueGemini(["analyze_ci_failure", "modify_feature_branch", "run_unit_tests", "run_build"])
     r1 = process_once(github=gh_b, gemini=gemini_b, issue_number=62, repository=gh_b.repository)
-    assert r1["status"] == "ready"
+    assert r1["status"] == "ready", r1
     c1 = gh_b.latest_command()
     _post_executor_result(gh_b, c1, result="failed", head_sha="b" * 40, failure="analysis-needs-fix")
     r2 = process_once(github=gh_b, gemini=gemini_b, issue_number=62, repository=gh_b.repository)
-    assert r2["status"] == "ready" and gh_b.latest_command()["action_type"] == "modify_feature_branch"
+    assert r2["status"] == "ready" and gh_b.latest_command()["action_type"] == "modify_feature_branch", r2
     c2 = gh_b.latest_command()
     gh_b.head_sha = "c" * 40
     _post_executor_result(gh_b, c2, result="completed", head_sha="c" * 40)
     r3 = process_once(github=gh_b, gemini=gemini_b, issue_number=62, repository=gh_b.repository)
-    assert r3["status"] == "ready" and gh_b.latest_command()["action_type"] == "run_unit_tests"
+    assert r3["status"] == "ready" and gh_b.latest_command()["action_type"] == "run_unit_tests", r3
     c3 = gh_b.latest_command()
     _post_executor_result(gh_b, c3, result="completed", head_sha="c" * 40)
     r4 = process_once(github=gh_b, gemini=gemini_b, issue_number=62, repository=gh_b.repository)
-    assert r4["status"] == "ready" and gh_b.latest_command()["action_type"] == "run_build"
+    assert r4["status"] == "ready" and gh_b.latest_command()["action_type"] == "run_build", r4
     assert all(parse_key_values(str(item.get("body") or "")).get("approval_required") != "yes" for item in gh_b.comments if "[HUB_COMMAND]" in str(item.get("body") or ""))
 
-    # Scenario C: approval is required only at the high-risk boundary; executor-ready remains false by status.
     high_risk = _report_body(
         task_id="scenario-c-1", root_task_id="scenario-c", status="waiting_approval", head_sha="b" * 40,
         remaining="Merge the Draft PR into main.", approval_required="yes",
@@ -382,10 +379,9 @@ def test_auto_continuation_e2e() -> int:
     gh_c = LoopGitHub(high_risk)
     gemini_c = QueueGemini([])
     blocked_at_boundary = process_once(github=gh_c, gemini=gemini_c, issue_number=62, repository=gh_c.repository)
-    assert blocked_at_boundary["status"] == "waiting_approval" and gemini_c.calls == 0
+    assert blocked_at_boundary["status"] == "waiting_approval" and gemini_c.calls == 0, blocked_at_boundary
     assert gh_c.latest_command()["approval_required"] == "yes"
 
-    # Scenario D: same root task + same HEAD + same failure signature eventually blocks without approval.
     latest = _report_body(
         task_id="scenario-d-3", root_task_id="scenario-d", status="failed", head_sha="b" * 40,
         remaining="Retry safe test.", failure_signature="same-error",
@@ -402,7 +398,7 @@ def test_auto_continuation_e2e() -> int:
     gh_d.comments.append(current)
     gemini_d = QueueGemini([])
     no_progress = process_once(github=gh_d, gemini=gemini_d, issue_number=62, repository=gh_d.repository)
-    assert no_progress["status"] == "blocked" and no_progress["reason"] == "no_progress_repeated_failure"
+    assert no_progress["status"] == "blocked" and no_progress["reason"] == "no_progress_repeated_failure", no_progress
     assert gemini_d.calls == 0 and NO_PROGRESS_REPEAT_LIMIT == 3
 
     return 29
