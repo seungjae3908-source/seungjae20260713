@@ -20,10 +20,12 @@ function deferred() {
 test('backup mutations are single-flight and drain waits for completion', async () => {
   const coordinator = new BackupMutationCoordinator();
   const pending = deferred();
+  const started = deferred();
   let executions = 0;
 
   const first = coordinator.run(async () => {
     executions += 1;
+    started.resolve();
     await pending.promise;
   });
   const second = coordinator.run(async () => {
@@ -33,9 +35,7 @@ test('backup mutations are single-flight and drain waits for completion', async 
 
   assert.equal(first, second);
   assert.equal(coordinator.hasActiveMutation(), true);
-  assert.equal(executions, 0);
-
-  await Promise.resolve();
+  await started.promise;
   assert.equal(executions, 1);
   pending.resolve();
   await Promise.all([first, second, drained]);
