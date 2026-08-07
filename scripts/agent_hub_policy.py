@@ -18,7 +18,7 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 COMMAND_ID_PATTERN = re.compile(r"^hub-[0-9]+-[0-9a-f]{16}$")
 WORKER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 ACTION_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
-ISO_Z_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+ISO_Z_PATTERN = re.compile(r"^\d{4}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 REQUIRED_FINAL_FIELDS = (
     "command_id",
@@ -99,6 +99,9 @@ READ_ONLY_ACTIONS = {
     "create_draft_pr",
 }
 CODE_CHANGE_ACTIONS = {"modify_feature_branch", "add_or_update_tests"}
+PATHLESS_READ_ONLY_ACTIONS = frozenset(
+    READ_ONLY_ACTIONS.difference({"create_draft_pr", "update_draft_pr_description"})
+)
 
 
 class PolicyError(RuntimeError):
@@ -287,7 +290,17 @@ def clean_scalar(value: Any, field: str, *, max_length: int = 2000) -> str:
     return cleaned
 
 
-def parse_json_list(value: Any, field: str) -> tuple[str, ...]:
+def parse_json_list(
+    value: Any,
+    field: str,
+    *,
+    allow_empty: bool | None = None,
+) -> tuple[str, ...]:
+    """Parse a path list without weakening trust-boundary validation.
+
+    Trust-boundary callers pass allow_empty explicitly. The None compatibility mode exists
+    only for post-validation executor reparsing of the semantic allowed_paths field.
+    """
     if isinstance(value, str):
         value = value.strip()
         if not PATH_LIST_PATTERN.fullmatch(value):
@@ -296,11 +309,17 @@ def parse_json_list(value: Any, field: str) -> tuple[str, ...]:
             value = json.loads(value)
         except json.JSONDecodeError as exc:
             raise PolicyError(f"{field} must be valid JSON") from exc
-    if not isinstance(value, list) or not value:
+    if not isinstance(value, list):
+        raise PolicyError(f"{field} must be an array")
+    if allow_empty is None:
+        allow_empty = field == "allowed_paths"
+    if not value and not allow_empty:
         raise PolicyError(f"{field} must be a non-empty array")
     result: list[str] = []
     for item in value:
-        path = str(item).strip().replace("\\", "/")
+        if not isinstance(item, str):
+            raise PolicyError(f"{field} contains a non-string path pattern")
+        path = item.strip().replace("\\", "/")
         if not path or path.startswith("/") or "\x00" in path or "\n" in path:
             raise PolicyError(f"{field} contains an invalid path pattern")
         if ".." in path.split("/"):
@@ -332,8 +351,12 @@ def parse_proposal(raw: str | dict[str, Any], policy: dict[str, Any]) -> Proposa
         raise PolicyError("invalid target_worker")
     if not ACTION_PATTERN.fullmatch(action_type):
         raise PolicyError("invalid action_type")
-    allowed_paths = parse_json_list(raw["allowed_paths"], "allowed_paths")
-    forbidden_paths = parse_json_list(raw["forbidden_paths"], "forbidden_paths")
+    allowed_paths = parse_json_list(
+        raw["allowed_paths"],
+        "allowed_paths",
+        allow_empty=action_type in PATHLESS_READ_ONLY_ACTIONS,
+    )
+    forbidden_paths = parse_json_list(raw["forbidden_paths"], "forbidden_paths", allow_empty=False)
     instruction = clean_scalar(raw["instruction"], "instruction", max_length=2400)
     validation = clean_scalar(raw["validation"], "validation", max_length=1800)
     stop_conditions = clean_scalar(raw["stop_conditions"], "stop_conditions", max_length=1800)
@@ -504,8 +527,12 @@ def validate_final_command(fields: dict[str, str], policy: dict[str, Any]) -> No
         raise PolicyError("risk level does not match deterministic status policy")
     if not SHA_PATTERN.fullmatch(fields["base_sha"]) or not SHA_PATTERN.fullmatch(fields["expected_head_sha"]):
         raise PolicyError("invalid command SHA")
-    parse_json_list(fields["allowed_paths"], "allowed_paths")
-    parse_json_list(fields["forbidden_paths"], "forbidden_paths")
+    parse_json_list(
+        fields["allowed_paths"],
+        "allowed_paths",
+        allow_empty=action in PATHLESS_READ_ONLY_ACTIONS,
+    )
+    parse_json_list(fields["forbidden_paths"], "forbidden_paths", allow_empty=False)
     parse_iso_z(fields["expires_at"])
     require_int(fields["max_attempts"], 1, 2, "max_attempts")
     parse_bool_text(fields["requires_user_approval"])
@@ -743,8 +770,12 @@ def validate_executor_command(fields: dict[str, str], policy: dict[str, Any], wo
         raise PolicyError("worker action scope mismatch")
     if not branch_allowed(fields["branch"], worker):
         raise PolicyError("worker branch scope mismatch")
-    allowed_paths = parse_json_list(fields["allowed_paths"], "allowed_paths")
-    forbidden_paths = parse_json_list(fields["forbidden_paths"], "forbidden_paths")
+    allowed_paths = parse_json_list(
+        fields["allowed_paths"],
+        "allowed_paths",
+        allow_empty=fields["action_type"] in PATHLESS_READ_ONLY_ACTIONS,
+    )
+    forbidden_paths = parse_json_list(fields["forbidden_paths"], "forbidden_paths", allow_empty=False)
     for path in allowed_paths:
         if not path_allowed(path, worker) or path_forbidden(path, forbidden_paths):
             raise PolicyError(f"executor path scope mismatch: {path}")
@@ -784,6 +815,63 @@ def run_self_test(policy_path: Path = POLICY_PATH, workers_path: Path = WORKERS_
         base_sha="b"*40, current_branch_sha=base, now=datetime(2026,8,4,tzinfo=timezone.utc)
     )
     check(d.fields["status"] == "ready", "registered worker feature branch should be ready")
+
+    pathless_repo = parse_proposal({
+        "target_worker":"operations-worker",
+        "action_type":"inspect_repository",
+        "branch":"ops/read-only-agent-hub",
+        "allowed_paths":[],
+        "forbidden_paths":["production/**"],
+        "instruction":"Inspect repository state without modifying files.",
+        "validation":"Confirm HEAD and workflow state.",
+        "stop_conditions":"Stop before any write.",
+    }, policy)
+    check(pathless_repo.allowed_paths == (), "inspect_repository must accept empty allowed_paths")
+    pathless_decision = evaluate_proposal(
+        proposal=pathless_repo, policy=policy, workers=workers, repository="owner/repo",
+        task_id="pathless-1", report_comment_id=201, report_head_sha=base,
+        base_sha="b"*40, current_branch_sha=base,
+    )
+    check(pathless_decision.fields["status"] == "ready", "pathless inspect_repository must be ready")
+    validate_final_command(pathless_decision.fields, policy)
+    check(True, "pathless ready final command rejected")
+
+    pathless_ci = parse_proposal({
+        "target_worker":"agent-hub-validation",
+        "action_type":"analyze_ci_failure",
+        "branch":"agent/hub-ci-review",
+        "allowed_paths":[],
+        "forbidden_paths":["ops/**"],
+        "instruction":"Analyze CI evidence only.",
+        "validation":"Report the first failure.",
+        "stop_conditions":"Stop before any write.",
+    }, policy)
+    check(pathless_ci.allowed_paths == (), "analyze_ci_failure must accept empty allowed_paths")
+
+    empty_change = {
+        "target_worker":"integration-planner",
+        "action_type":"modify_feature_branch",
+        "branch":"feature/integration-plan",
+        "allowed_paths":[],
+        "forbidden_paths":["ops/**"],
+        "instruction":"Modify only the bounded feature path.",
+        "validation":"Run deterministic tests.",
+        "stop_conditions":"Stop on scope violation.",
+    }
+    try:
+        parse_proposal(empty_change, policy)
+    except PolicyError as exc:
+        check(str(exc) == "allowed_paths must be a non-empty array", "empty code-change reason changed")
+    else:
+        raise AssertionError("empty code-change allowed_paths was accepted")
+
+    malformed = {**empty_change, "action_type":"inspect_repository", "allowed_paths": {}}
+    try:
+        parse_proposal(malformed, policy)
+    except PolicyError as exc:
+        check(str(exc) == "allowed_paths must be an array", "malformed allowed_paths reason changed")
+    else:
+        raise AssertionError("malformed allowed_paths was accepted")
 
     main_p = Proposal(**{**proposal.__dict__, "branch":"main"})
     d = evaluate_proposal(proposal=main_p, policy=policy, workers=workers, repository="owner/repo",
@@ -894,7 +982,15 @@ def run_self_test(policy_path: Path = POLICY_PATH, workers_path: Path = WORKERS_
     validate_executor_command(parse_key_values(fresh_command), policy, workers)
     check(True, "valid executor command rejected")
 
-    print(json.dumps({"policy_self_test":"pass","tests":count,"model":policy["default_model"],"paid_fallback":0}))
+    print(json.dumps({
+        "policy_self_test":"pass",
+        "tests":count,
+        "model":policy["default_model"],
+        "pathless_read_only_actions":len(PATHLESS_READ_ONLY_ACTIONS),
+        "code_change_empty_allowed_paths":0,
+        "critical_auto_actions":0,
+        "paid_fallback":0,
+    }))
     return count
 
 
