@@ -255,8 +255,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const backupDrain = prepareBackupForSessionEnd();
           const coordinatorDrain = profileRequestsRef.current.beginLogout();
+          await profileLoadQueueRef.current;
           await Promise.all([
-            profileLoadQueueRef.current,
             coordinatorDrain,
             backupDrain,
           ]);
