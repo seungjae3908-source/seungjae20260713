@@ -63,6 +63,18 @@ def pending_schema_v2_command(
     return None
 
 
+def continuation_work_branch(command: Any) -> str:
+    """Reuse the validated target branch for read-only or existing-Draft continuation.
+
+    New code changes without an existing Draft PR keep the isolated agent/hub-* branch.
+    The coordinator marks an existing Draft PR by sealing work_branch == target_branch.
+    """
+    declared = str(command.fields.get("work_branch") or "none").strip()
+    if command.execution_mode == "read_only" or declared == command.target_branch:
+        return command.target_branch
+    return work_branch_for(command)
+
+
 def prepare_hardened() -> int:
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
@@ -78,7 +90,7 @@ def prepare_hardened() -> int:
         set_output("terminal_status", "none")
         print(json.dumps({"status": "no_pending_schema_v2_command", "legacy_commands_accepted": 0, "edited_commands_accepted": 0}))
         return 0
-    work_branch = work_branch_for(command)
+    work_branch = continuation_work_branch(command)
     outputs = {
         "command_comment_id": str(command.comment_id),
         "command_id": command.command_id,
@@ -91,6 +103,7 @@ def prepare_hardened() -> int:
         "execution_mode": command.execution_mode,
         "attempt": str(command.attempt),
         "max_attempts": str(command.max_attempts),
+        "auto_step": str(command.fields.get("auto_step") or "0"),
         "allowed_paths": command.fields["allowed_paths"],
         "forbidden_paths": command.fields["forbidden_paths"],
         "evidence_ids": command.fields["evidence_ids"],
@@ -134,7 +147,30 @@ def self_test() -> int:
     else:
         raise AssertionError("edited command was accepted")
     assert parse_json_list('["gh-evidence-v2:workflow-run:abc"]', "evidence_ids")
-    print(json.dumps({"executor_gate_hardening_v2": "pass", "legacy_ready_accepted": 0, "edited_command_accepted": 0, "empty_ready_evidence_accepted": 0, "evidence_output_propagated": 1}))
+
+    class FakeCommand:
+        def __init__(self, mode: str, target: str, declared: str):
+            self.execution_mode = mode
+            self.target_branch = target
+            self.fields = {"work_branch": declared}
+            self.command_id = "hub-123-0123456789abcdef"
+            self.attempt = 1
+
+    read_only = FakeCommand("read_only", "feature/demo", "none")
+    assert continuation_work_branch(read_only) == "feature/demo"
+    existing_draft = FakeCommand("code_change", "feature/demo", "feature/demo")
+    assert continuation_work_branch(existing_draft) == "feature/demo"
+    isolated = FakeCommand("code_change", "feature/demo", "none")
+    assert continuation_work_branch(isolated).startswith("agent/hub-")
+    print(json.dumps({
+        "executor_gate_hardening_v2": "pass",
+        "legacy_ready_accepted": 0,
+        "edited_command_accepted": 0,
+        "empty_ready_evidence_accepted": 0,
+        "evidence_output_propagated": 1,
+        "existing_draft_branch_reused": 1,
+        "read_only_target_reused": 1,
+    }))
     return 0
 
 
