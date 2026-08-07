@@ -1,12 +1,12 @@
 {
   "schemaVersion": 2,
   "createdAt": 1785371456399,
-  "updatedAt": 1786136364831,
+  "updatedAt": 1786139771418,
   "groups": {
     "crypto-futures-15m": {
       "schemaVersion": 2,
       "createdAt": 1785371456399,
-      "updatedAt": 1786136364831,
+      "updatedAt": 1786139771418,
       "openInterestSnapshots": [
         {
           "symbol": "BTCUSDT",
@@ -467,6 +467,16 @@
           "symbol": "ETHUSDT",
           "timestamp": 1786136367633,
           "valueRaw": "823871.590000000568"
+        },
+        {
+          "symbol": "BTCUSDT",
+          "timestamp": 1786139772586,
+          "valueRaw": "37680.7179000000868"
+        },
+        {
+          "symbol": "ETHUSDT",
+          "timestamp": 1786139774208,
+          "valueRaw": "823697.790000000564"
         }
       ],
       "records": [
@@ -6703,7 +6713,7 @@
         {
           "schemaVersion": 2,
           "id": "2e9b962fee4a61ffce9c9c39b869c73f4973d7a1f15d697a47d30b6df333ba1c",
-          "status": "pending",
+          "status": "settled",
           "modelGroup": "crypto-futures-15m",
           "modelId": "tiny-softmax-crypto-futures-15m-v1-calibrated",
           "referenceModelId": "tiny-linear-baseline-v0",
@@ -6768,12 +6778,22 @@
             "openInterestKnown": true,
             "openInterestTimestamp": 1786125889563,
             "openInterestAgeMs": 3310437
-          }
+          },
+          "evaluatedAt": 1786139774844,
+          "futureEndTimestamp": 1786136400000,
+          "actualReturn": 0.0005698571697441146,
+          "actualDirection": "neutral",
+          "candidateHit": true,
+          "referenceHit": true,
+          "candidateLogLoss": 0.8428358300673144,
+          "referenceLogLoss": 0.7843681326640524,
+          "candidateBrier": 0.48694243084800004,
+          "referenceBrier": 0.44454430531399997
         },
         {
           "schemaVersion": 2,
           "id": "812e5fa7e9732f4e9d1d14b87bae8eb1d3bb5044ca0dd14a8f67acec11476bef",
-          "status": "pending",
+          "status": "settled",
           "modelGroup": "crypto-futures-15m",
           "modelId": "tiny-softmax-crypto-futures-15m-v1-calibrated",
           "referenceModelId": "tiny-linear-baseline-v0",
@@ -6838,7 +6858,17 @@
             "openInterestKnown": true,
             "openInterestTimestamp": 1786125887827,
             "openInterestAgeMs": 3312173
-          }
+          },
+          "evaluatedAt": 1786139774844,
+          "futureEndTimestamp": 1786136400000,
+          "actualReturn": 0.0024563958870797986,
+          "actualDirection": "bullish",
+          "candidateHit": false,
+          "referenceHit": false,
+          "candidateLogLoss": 1.3589087924270349,
+          "referenceLogLoss": 1.4486933061171192,
+          "candidateBrier": 0.8369192603660001,
+          "referenceBrier": 0.888030297378
         },
         {
           "schemaVersion": 2,
@@ -7119,13 +7149,153 @@
             "openInterestTimestamp": 1786132931801,
             "openInterestAgeMs": 1668199
           }
+        },
+        {
+          "schemaVersion": 2,
+          "id": "8ff83cbed95b6df5db909b56e6629f4d6531ff368d54968c57fd9f4ae5f33bcd",
+          "status": "pending",
+          "modelGroup": "crypto-futures-15m",
+          "modelId": "tiny-softmax-crypto-futures-15m-v1-calibrated",
+          "referenceModelId": "tiny-linear-baseline-v0",
+          "modelPair": "tiny-softmax-crypto-futures-15m-v1-calibrated::tiny-linear-baseline-v0",
+          "market": "CRYPTO_FUTURES",
+          "symbol": "ETHUSDT",
+          "timeframe": "15m",
+          "anchorTimestamp": 1786138200000,
+          "horizon": 8,
+          "lastClose": 1917.21,
+          "atrPct": 0.0019962,
+          "generatedAt": 1786139771418,
+          "candidateProbabilities": {
+            "bullish": 0.334682,
+            "neutral": 0.431362,
+            "bearish": 0.233956
+          },
+          "referenceProbabilities": {
+            "bullish": 0.420314,
+            "neutral": 0.407536,
+            "bearish": 0.17215
+          },
+          "candidateClass": "neutral",
+          "referenceClass": "bullish",
+          "regime": {
+            "trend": "range",
+            "volatility": "low_volatility",
+            "key": "range:low_volatility"
+          },
+          "features": {
+            "return1": 0.00230028,
+            "return5": 0.00052708,
+            "return20": 0.0013266,
+            "emaGap": 0.00062955,
+            "closeToEma20": 0.00134721,
+            "rsiCentered": 0.0838757,
+            "macdHistogramPct": 0.00015,
+            "atrPct": 0.0019962,
+            "volumeRatio": 2.52201248,
+            "trendSlope": 0.00022223,
+            "distanceToSupport": 0.00663986,
+            "distanceToResistance": 0.01349357,
+            "bollingerPosition": 0.80529098,
+            "breadth": 0,
+            "benchmarkReturn": 0,
+            "sentimentScore": 0,
+            "foreignNetRatio": 0,
+            "institutionNetRatio": 0,
+            "openInterestChange": -0.00146691,
+            "fundingRate": -0.000014,
+            "fundingRateChange": 0,
+            "fundingRateZScore": 0,
+            "longShortBias": 0,
+            "basisRate": 0,
+            "markPremium": 0,
+            "marketMarkSpread": 0
+          },
+          "featureAvailability": {
+            "fundingKnown": true,
+            "fundingTimestamp": 1786118400000,
+            "fundingAgeMs": 19800000,
+            "openInterestKnown": true,
+            "openInterestTimestamp": 1786136367633,
+            "openInterestAgeMs": 1832367
+          }
+        },
+        {
+          "schemaVersion": 2,
+          "id": "cfcbcc83b2b41789dd0e30b2f6384a172ee11d100d75905032c54703f1d2bf2f",
+          "status": "pending",
+          "modelGroup": "crypto-futures-15m",
+          "modelId": "tiny-softmax-crypto-futures-15m-v1-calibrated",
+          "referenceModelId": "tiny-linear-baseline-v0",
+          "modelPair": "tiny-softmax-crypto-futures-15m-v1-calibrated::tiny-linear-baseline-v0",
+          "market": "CRYPTO_FUTURES",
+          "symbol": "BTCUSDT",
+          "timeframe": "15m",
+          "anchorTimestamp": 1786138200000,
+          "horizon": 8,
+          "lastClose": 64991.2,
+          "atrPct": 0.00131424,
+          "generatedAt": 1786139771418,
+          "candidateProbabilities": {
+            "bullish": 0.258218,
+            "neutral": 0.467616,
+            "bearish": 0.274166
+          },
+          "referenceProbabilities": {
+            "bullish": 0.322827,
+            "neutral": 0.442708,
+            "bearish": 0.234465
+          },
+          "candidateClass": "neutral",
+          "referenceClass": "neutral",
+          "regime": {
+            "trend": "range",
+            "volatility": "low_volatility",
+            "key": "range:low_volatility"
+          },
+          "features": {
+            "return1": 0.00039559,
+            "return5": 0.00070521,
+            "return20": 0.00115996,
+            "emaGap": 0.00140573,
+            "closeToEma20": 0.0013781,
+            "rsiCentered": 0.14601018,
+            "macdHistogramPct": 0.00027407,
+            "atrPct": 0.00131424,
+            "volumeRatio": 0.60225945,
+            "trendSlope": 0.00028677,
+            "distanceToSupport": 0.00765334,
+            "distanceToResistance": 0.00536534,
+            "bollingerPosition": 0.81395475,
+            "breadth": 0,
+            "benchmarkReturn": 0,
+            "sentimentScore": 0,
+            "foreignNetRatio": 0,
+            "institutionNetRatio": 0,
+            "openInterestChange": 0.00066369,
+            "fundingRate": -0.000116,
+            "fundingRateChange": 0,
+            "fundingRateZScore": 0,
+            "longShortBias": 0,
+            "basisRate": 0,
+            "markPremium": 0,
+            "marketMarkSpread": 0
+          },
+          "featureAvailability": {
+            "fundingKnown": true,
+            "fundingTimestamp": 1786118400000,
+            "fundingAgeMs": 19800000,
+            "openInterestKnown": true,
+            "openInterestTimestamp": 1786136366002,
+            "openInterestAgeMs": 1833998
+          }
         }
       ]
     },
     "crypto-futures-1h": {
       "schemaVersion": 2,
       "createdAt": 1785371456399,
-      "updatedAt": 1786136364831,
+      "updatedAt": 1786139771418,
       "openInterestSnapshots": [
         {
           "symbol": "BTCUSDT",
@@ -7586,6 +7756,16 @@
           "symbol": "ETHUSDT",
           "timestamp": 1786136370165,
           "valueRaw": "823871.590000000568"
+        },
+        {
+          "symbol": "BTCUSDT",
+          "timestamp": 1786139775485,
+          "valueRaw": "37680.7179000000868"
+        },
+        {
+          "symbol": "ETHUSDT",
+          "timestamp": 1786139776761,
+          "valueRaw": "823693.20000000056"
         }
       ],
       "records": [
@@ -13877,6 +14057,146 @@
             "openInterestKnown": true,
             "openInterestTimestamp": 1786125892288,
             "openInterestAgeMs": 3307712
+          }
+        },
+        {
+          "schemaVersion": 2,
+          "id": "352069030707f5fc7294e32d63ad5e41f239cec93da05546192b21692acf44ed",
+          "status": "pending",
+          "modelGroup": "crypto-futures-1h",
+          "modelId": "tiny-softmax-crypto-futures-1h-v1-calibrated",
+          "referenceModelId": "tiny-linear-baseline-v0",
+          "modelPair": "tiny-softmax-crypto-futures-1h-v1-calibrated::tiny-linear-baseline-v0",
+          "market": "CRYPTO_FUTURES",
+          "symbol": "BTCUSDT",
+          "timeframe": "1h",
+          "anchorTimestamp": 1786132800000,
+          "horizon": 12,
+          "lastClose": 64939.9,
+          "atrPct": 0.00444279,
+          "generatedAt": 1786139771418,
+          "candidateProbabilities": {
+            "bullish": 0.273471,
+            "neutral": 0.424595,
+            "bearish": 0.301934
+          },
+          "referenceProbabilities": {
+            "bullish": 0.31524,
+            "neutral": 0.438433,
+            "bearish": 0.246327
+          },
+          "candidateClass": "neutral",
+          "referenceClass": "neutral",
+          "regime": {
+            "trend": "bull_trend",
+            "volatility": "low_volatility",
+            "key": "bull_trend:low_volatility"
+          },
+          "features": {
+            "return1": 0.00019252,
+            "return5": 0.00092787,
+            "return20": 0.01004761,
+            "emaGap": 0.00337421,
+            "closeToEma20": 0.00309207,
+            "rsiCentered": 0.18745829,
+            "macdHistogramPct": 0.00020439,
+            "atrPct": 0.00444279,
+            "volumeRatio": 0.1723862,
+            "trendSlope": 0.00060316,
+            "distanceToSupport": 0.0126363,
+            "distanceToResistance": 0.00615954,
+            "bollingerPosition": 0.72351615,
+            "breadth": 0,
+            "benchmarkReturn": 0,
+            "sentimentScore": 0,
+            "foreignNetRatio": 0,
+            "institutionNetRatio": 0,
+            "openInterestChange": -0.00570789,
+            "fundingRate": -0.000116,
+            "fundingRateChange": 0,
+            "fundingRateZScore": 0,
+            "longShortBias": 0,
+            "basisRate": 0,
+            "markPremium": 0,
+            "marketMarkSpread": 0
+          },
+          "featureAvailability": {
+            "fundingKnown": true,
+            "fundingTimestamp": 1786118400000,
+            "fundingAgeMs": 14400000,
+            "openInterestKnown": true,
+            "openInterestTimestamp": 1786130163269,
+            "openInterestAgeMs": 2636731
+          }
+        },
+        {
+          "schemaVersion": 2,
+          "id": "d694e4dee6912148631ce20ec5ef29f5c538c2cdcdc92b1bfae62dc4c7885f6f",
+          "status": "pending",
+          "modelGroup": "crypto-futures-1h",
+          "modelId": "tiny-softmax-crypto-futures-1h-v1-calibrated",
+          "referenceModelId": "tiny-linear-baseline-v0",
+          "modelPair": "tiny-softmax-crypto-futures-1h-v1-calibrated::tiny-linear-baseline-v0",
+          "market": "CRYPTO_FUTURES",
+          "symbol": "ETHUSDT",
+          "timeframe": "1h",
+          "anchorTimestamp": 1786132800000,
+          "horizon": 12,
+          "lastClose": 1913.78,
+          "atrPct": 0.00576682,
+          "generatedAt": 1786139771418,
+          "candidateProbabilities": {
+            "bullish": 0.347522,
+            "neutral": 0.413778,
+            "bearish": 0.2387
+          },
+          "referenceProbabilities": {
+            "bullish": 0.36675800000000003,
+            "neutral": 0.43605600000000005,
+            "bearish": 0.19718600000000003
+          },
+          "candidateClass": "neutral",
+          "referenceClass": "neutral",
+          "regime": {
+            "trend": "bull_trend",
+            "volatility": "normal_volatility",
+            "key": "bull_trend:normal_volatility"
+          },
+          "features": {
+            "return1": -0.00212737,
+            "return5": -0.00181509,
+            "return20": 0.00566474,
+            "emaGap": 0.00470576,
+            "closeToEma20": 0.00119074,
+            "rsiCentered": 0.05726091,
+            "macdHistogramPct": -0.00007659,
+            "atrPct": 0.00576682,
+            "volumeRatio": 0.41340851,
+            "trendSlope": 0.00050899,
+            "distanceToSupport": 0.01162621,
+            "distanceToResistance": 0.01531001,
+            "bollingerPosition": 0.6151653,
+            "breadth": 0,
+            "benchmarkReturn": 0,
+            "sentimentScore": 0,
+            "foreignNetRatio": 0,
+            "institutionNetRatio": 0,
+            "openInterestChange": -0.00265785,
+            "fundingRate": -0.000014,
+            "fundingRateChange": 0,
+            "fundingRateZScore": 0,
+            "longShortBias": 0,
+            "basisRate": 0,
+            "markPremium": 0,
+            "marketMarkSpread": 0
+          },
+          "featureAvailability": {
+            "fundingKnown": true,
+            "fundingTimestamp": 1786118400000,
+            "fundingAgeMs": 14400000,
+            "openInterestKnown": true,
+            "openInterestTimestamp": 1786130164597,
+            "openInterestAgeMs": 2635403
           }
         }
       ]
