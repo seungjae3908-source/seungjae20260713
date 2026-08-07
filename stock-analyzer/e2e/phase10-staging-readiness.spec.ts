@@ -35,8 +35,8 @@ let accountLifecycle: StagingAccountLifecycle | null = null;
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
 type LogoutObservation = { candidates: Diagnostic[] };
 type RouteTransitionObservation = {
-  fromPath: string;
-  toPath: string;
+  fromRoute: string;
+  toRoute: string;
   candidates: Diagnostic[];
   pendingGetRequests: Set<Request>;
 };
@@ -80,6 +80,11 @@ function diagnosticUrl(raw: string) {
   }
 }
 
+function routeIdentity(raw: string, base?: string) {
+  const parsed = base ? new URL(raw, base) : new URL(raw);
+  return `${parsed.pathname}${parsed.search}`;
+}
+
 function diagnosticText(raw: string) {
   return raw
     .replace(/https?:\/\/[^\s"'`<>]+/gi, '[redacted-url]')
@@ -121,7 +126,7 @@ function isExpectedRouteTransitionAbort(
 ) {
   try {
     const parsed = new URL(request.url());
-    return observation.fromPath !== observation.toPath
+    return observation.fromRoute !== observation.toRoute
       && observation.pendingGetRequests.has(request)
       && request.method() === 'GET'
       && parsed.pathname.startsWith('/api/')
@@ -341,8 +346,8 @@ async function finishRouteTransition(
 async function expectHealthyRoute(page: Page, route: string) {
   await settle(page);
   const observation: RouteTransitionObservation = {
-    fromPath: new URL(page.url()).pathname,
-    toPath: new URL(route, page.url()).pathname,
+    fromRoute: routeIdentity(page.url()),
+    toRoute: routeIdentity(route, page.url()),
     candidates: [],
     pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
   };
@@ -352,7 +357,7 @@ async function expectHealthyRoute(page: Page, route: string) {
     const response = await page.goto(route, { waitUntil: 'domcontentloaded' });
     if (response) expect(response.status(), `${route} returned HTTP ${response.status()}`).toBeLessThan(400);
     await settle(page);
-    expect(new URL(page.url()).pathname).toBe(observation.toPath);
+    expect(routeIdentity(page.url())).toBe(observation.toRoute);
     await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
     await expect(page.locator('body')).not.toBeEmpty();
     confirmed = true;
@@ -364,8 +369,8 @@ async function expectHealthyRoute(page: Page, route: string) {
 async function expectDeniedRoute(page: Page, route: string) {
   await settle(page);
   const observation: RouteTransitionObservation = {
-    fromPath: new URL(page.url()).pathname,
-    toPath: new URL(route, page.url()).pathname,
+    fromRoute: routeIdentity(page.url()),
+    toRoute: routeIdentity(route, page.url()),
     candidates: [],
     pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
   };
@@ -375,7 +380,7 @@ async function expectDeniedRoute(page: Page, route: string) {
     await page.goto(route, { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('capability-denied')).toBeVisible();
     await settle(page);
-    expect(new URL(page.url()).pathname).toBe(observation.toPath);
+    expect(routeIdentity(page.url())).toBe(observation.toRoute);
     confirmed = true;
   } finally {
     await finishRouteTransition(page, observation, confirmed);
@@ -384,8 +389,8 @@ async function expectDeniedRoute(page: Page, route: string) {
 
 async function expectScannerAfterFutures(page: Page) {
   const observation: RouteTransitionObservation = {
-    fromPath: new URL(page.url()).pathname,
-    toPath: '/scanner',
+    fromRoute: routeIdentity(page.url()),
+    toRoute: routeIdentity('/scanner', page.url()),
     candidates: [],
     pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
   };
@@ -393,7 +398,7 @@ async function expectScannerAfterFutures(page: Page) {
   let confirmed = false;
   try {
     await expectHealthyScannerRoute(page);
-    expect(new URL(page.url()).pathname).toBe(observation.toPath);
+    expect(routeIdentity(page.url())).toBe(observation.toRoute);
     confirmed = true;
   } finally {
     await finishRouteTransition(page, observation, confirmed);
