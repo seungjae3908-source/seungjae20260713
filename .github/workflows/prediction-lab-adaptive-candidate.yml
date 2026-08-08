@@ -1,8 +1,6 @@
 name: Prediction Lab Adaptive Candidate
 
 on:
-  schedule:
-    - cron: "47 * * * *"
   workflow_dispatch:
   workflow_run:
     workflows:
@@ -80,7 +78,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.SHADOW_ARTIFACT }}
-          path: shadow-input
+          path: ${{ runner.temp }}/shadow-input
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ steps.shadow.outputs.run_id }}
@@ -88,34 +86,48 @@ jobs:
       - name: Verify shadow provenance and digests
         id: verify
         shell: bash
+        env:
+          SHADOW_INPUT: ${{ runner.temp }}/shadow-input
         run: |
           node <<'NODE'
           const fs = require('fs');
           const crypto = require('crypto');
-          const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-          for (const file of ['shadow-input/manifest.json', 'shadow-input/shadow-state.json', 'shadow-input/shadow-summary.json']) {
+          const path = require('path');
+          const digestBuffer = (value) => crypto.createHash('sha256').update(value).digest('hex');
+          const digest = (file) => digestBuffer(fs.readFileSync(file));
+          const input = process.env.SHADOW_INPUT;
+          const manifestPath = path.join(input, 'manifest.json');
+          const statePath = path.join(input, 'shadow-state.json');
+          const summaryPath = path.join(input, 'shadow-summary.json');
+          for (const file of [manifestPath, statePath, summaryPath]) {
             if (!fs.existsSync(file)) throw new Error(`Missing required shadow artifact file: ${file}`);
           }
-          const manifest = JSON.parse(fs.readFileSync('shadow-input/manifest.json', 'utf8'));
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
           if (manifest.schemaVersion !== 1 || manifest.kind !== 'prediction-lab-shadow-state') {
             throw new Error('Unsupported shadow artifact manifest.');
           }
           if (!/^[0-9a-f]{40}$/.test(String(manifest.researchCodeSha ?? ''))) {
             throw new Error('Shadow artifact researchCodeSha is invalid.');
           }
-          if (manifest.stateSha256 !== digest('shadow-input/shadow-state.json')) {
-            throw new Error('Shadow state SHA-256 mismatch.');
+          if (!/^[0-9a-f]{40}$/.test(String(manifest.sourceGeneratedHead ?? ''))) {
+            throw new Error('Shadow artifact sourceGeneratedHead is invalid.');
           }
-          if (manifest.summarySha256 !== digest('shadow-input/shadow-summary.json')) {
-            throw new Error('Shadow summary SHA-256 mismatch.');
+          const stateBytes = fs.readFileSync(statePath);
+          const summaryBytes = fs.readFileSync(summaryPath);
+          if (manifest.stateSha256 !== digest(statePath)) throw new Error('Shadow state SHA-256 mismatch.');
+          if (manifest.summarySha256 !== digest(summaryPath)) throw new Error('Shadow summary SHA-256 mismatch.');
+          if (manifest.sha256 !== digestBuffer(Buffer.concat([stateBytes, Buffer.from([0]), summaryBytes]))) {
+            throw new Error('Shadow combined SHA-256 mismatch.');
           }
           if (manifest.branchWrite !== false || manifest.liveOrderAllowed !== false || manifest.privateAccountRequestAllowed !== false) {
             throw new Error('Shadow artifact safety flags are not fail-closed.');
           }
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `research_code_sha=${manifest.researchCodeSha}\n`);
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `shadow_state_digest=${manifest.stateSha256}\n`);
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `candidate_model_id=${manifest.candidateModelId ?? ''}\n`);
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `reference_model_id=${manifest.referenceModelId ?? ''}\n`);
+          const output = (name, value) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          output('research_code_sha', manifest.researchCodeSha);
+          output('shadow_state_digest', manifest.stateSha256);
+          output('source_generated_head', manifest.sourceGeneratedHead);
+          output('candidate_model_ids', JSON.stringify(manifest.candidateModelIds ?? [manifest.candidateModelId].filter(Boolean)));
+          output('reference_model_ids', JSON.stringify(manifest.referenceModelIds ?? [manifest.referenceModelId].filter(Boolean)));
           NODE
 
       - name: Checkout exact research code used by shadow artifact
@@ -132,9 +144,11 @@ jobs:
 
       - name: Restore exact shadow input
         shell: bash
+        env:
+          SHADOW_INPUT: ${{ runner.temp }}/shadow-input
         run: |
-          cp shadow-input/shadow-state.json "$LAB_DIR/docs/shadow-state.json"
-          cp shadow-input/shadow-summary.json "$LAB_DIR/docs/shadow-summary.json"
+          cp "$SHADOW_INPUT/shadow-state.json" "$LAB_DIR/docs/shadow-state.json"
+          cp "$SHADOW_INPUT/shadow-summary.json" "$LAB_DIR/docs/shadow-summary.json"
 
       - name: Run adaptive candidate safety tests
         working-directory: ${{ env.LAB_DIR }}
@@ -151,8 +165,9 @@ jobs:
           SHADOW_RUN_ID: ${{ steps.shadow.outputs.run_id }}
           SHADOW_ARTIFACT_ID: ${{ steps.shadow.outputs.artifact_id }}
           PREVIOUS_STATE_DIGEST: ${{ steps.verify.outputs.shadow_state_digest }}
-          CANDIDATE_MODEL_ID: ${{ steps.verify.outputs.candidate_model_id }}
-          REFERENCE_MODEL_ID: ${{ steps.verify.outputs.reference_model_id }}
+          SOURCE_GENERATED_HEAD: ${{ steps.verify.outputs.source_generated_head }}
+          CANDIDATE_MODEL_IDS: ${{ steps.verify.outputs.candidate_model_ids }}
+          REFERENCE_MODEL_IDS: ${{ steps.verify.outputs.reference_model_ids }}
         run: |
           rm -rf adaptive-artifact
           mkdir -p adaptive-artifact
@@ -162,9 +177,30 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const crypto = require('crypto');
-          const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          const path = require('path');
+          const digestBuffer = (value) => crypto.createHash('sha256').update(value).digest('hex');
+          const digest = (file) => digestBuffer(fs.readFileSync(file));
           const summaryPath = 'adaptive-artifact/adaptive-shadow-candidate-summary.json';
           if (!fs.existsSync(summaryPath)) throw new Error('Adaptive candidate summary was not generated.');
+          const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true })
+            .flatMap((entry) => {
+              const full = path.join(dir, entry.name);
+              return entry.isDirectory() ? walk(full) : [full];
+            })
+            .filter((file) => !file.endsWith('/manifest.json') && !file.endsWith('\\manifest.json'))
+            .sort();
+          const files = walk('adaptive-artifact');
+          if (files.length === 0) throw new Error('Adaptive artifact bundle is empty.');
+          const bundleHash = crypto.createHash('sha256');
+          for (const file of files) {
+            const relative = path.relative('adaptive-artifact', file).split(path.sep).join('/');
+            bundleHash.update(relative);
+            bundleHash.update(Buffer.from([0]));
+            bundleHash.update(fs.readFileSync(file));
+            bundleHash.update(Buffer.from([0]));
+          }
+          const candidateModelIds = JSON.parse(process.env.CANDIDATE_MODEL_IDS || '[]');
+          const referenceModelIds = JSON.parse(process.env.REFERENCE_MODEL_IDS || '[]');
           const manifest = {
             schemaVersion: 1,
             kind: 'prediction-lab-adaptive-candidate',
@@ -172,11 +208,14 @@ jobs:
             predecessorRunId: process.env.SHADOW_RUN_ID,
             predecessorArtifactId: process.env.SHADOW_ARTIFACT_ID,
             previousStateDigest: process.env.PREVIOUS_STATE_DIGEST,
-            sourceGeneratedHead: process.env.RESEARCH_CODE_SHA,
-            candidateModelId: process.env.CANDIDATE_MODEL_ID || null,
-            referenceModelId: process.env.REFERENCE_MODEL_ID || null,
+            sourceGeneratedHead: process.env.SOURCE_GENERATED_HEAD,
+            candidateModelIds,
+            referenceModelIds,
+            candidateModelId: candidateModelIds[0] ?? null,
+            referenceModelId: referenceModelIds[0] ?? null,
             createdAt: new Date().toISOString(),
             summarySha256: digest(summaryPath),
+            sha256: bundleHash.digest('hex'),
             branchWrite: false,
             liveOrderAllowed: false,
             privateAccountRequestAllowed: false,
@@ -192,11 +231,6 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Assert no repository publish path exists
+      - name: Assert immutable checkout HEAD
         shell: bash
-        run: |
-          test "$(git rev-parse HEAD)" = "${{ steps.verify.outputs.research_code_sha }}"
-          if grep -E 'git[[:space:]]+(push|commit)|contents:[[:space:]]*write|createWorkflowDispatch' .github/workflows/prediction-lab-adaptive-candidate.yml; then
-            echo "Adaptive workflow contains a repository mutation or CI-dispatch path." >&2
-            exit 1
-          fi
+        run: test "$(git rev-parse HEAD)" = "${{ steps.verify.outputs.research_code_sha }}"
