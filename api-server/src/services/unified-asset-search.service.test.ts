@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   createUnifiedAssetId,
   extractHangulChoseong,
@@ -117,6 +119,15 @@ test('ranks active products above delisted products for otherwise equivalent mat
   const active = document({ assetType: 'coin', market: 'futures', exchange: 'BITGET', productCode: 'NEWUSDT', symbol: 'NEWUSDT', englishName: 'New Coin', displayName: 'New Coin', aliases: ['new'], baseSymbol: 'NEW', active: true });
   const inactive = document({ assetType: 'coin', market: 'futures', exchange: 'BITGET', productCode: 'NEW-OLD', symbol: 'NEW-OLD', englishName: 'New Coin', displayName: 'New Coin', aliases: ['new'], baseSymbol: 'NEW', active: false });
   assert.equal(searchUnifiedAssetDocuments([inactive, active], 'New Coin')[0]?.document.id, active.id);
+});
+
+test('provider fetches retain bounded abort timeout and fail-soft settlement', () => {
+  const serviceSource = readFileSync(path.join(process.cwd(), 'api-server/src/services/unified-asset-search.service.ts'), 'utf8');
+
+  assert.match(serviceSource, /const FETCH_TIMEOUT_MS = 15_000;/);
+  assert.match(serviceSource, /const controller = new AbortController\(\);/);
+  assert.match(serviceSource, /setTimeout\(\(\) => controller\.abort\(\), FETCH_TIMEOUT_MS\)/);
+  assert.match(serviceSource, /Promise\.allSettled\(/);
 });
 
 const krCoverage = [
