@@ -21,6 +21,7 @@ import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
+import unifiedSearchRouter from './unified-search';
 import {
   requireAdmin,
   requireAuthenticated,
@@ -86,6 +87,7 @@ router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
 router.use('/trade-automation', tradeAutomationRouter);
+router.use('/search', requireCapability('canAccessBasicInfo'), unifiedSearchRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
 router.use('/', aiChatRouter);
