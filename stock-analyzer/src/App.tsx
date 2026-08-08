@@ -26,6 +26,7 @@ const ScannerPage = lazy(() => import('@/pages/scanner'));
 const StockInfoPage = lazy(() => import('@/pages/stock-info'));
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
+const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
 const ThemesPage = lazy(() => import('@/pages/themes'));
 const LearnPage = lazy(() => import('@/pages/learn'));
 const MorePage = lazy(() => import('@/pages/more'));
@@ -119,6 +120,7 @@ function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPag
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingAccess() { return gated('canAccessPaperTrading', <PaperTradingPage />); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
+function UnifiedAssetSearchAccess() { return gated('canAccessBasicInfo', <UnifiedAssetSearchPage />); }
 function StockInfoAccess() {
   const [location] = useLocation();
   const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : window.location.search.slice(1);
@@ -133,13 +135,15 @@ function ApprovedRouter() {
   return <Suspense fallback={<PageFallback />}><Switch>
     <Route path="/" component={HomePage} />
     <Route path="/home" component={HomePage} />
-    <Route path="/stocks" component={StocksPage} />
+    <Route path="/stocks" component={UnifiedAssetSearchAccess} />
     <Route path="/auto-trading" component={ScannerAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
     <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
     <Route path="/settings" component={MorePage} />
-    <Route path="/search" component={SearchPage} />
+    <Route path="/search" component={UnifiedAssetSearchAccess} />
+    <Route path="/market-rankings" component={SearchPage} />
+    <Route path="/market-browser" component={StocksPage} />
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
@@ -170,6 +174,7 @@ function RootRouter() {
     {phase7E2EEnabled ? <Route path="/__phase7-journal-sync-e2e" component={Phase7JournalSyncE2EPage} /> : null}
     {phase8E2EEnabled ? <Route path="/__phase8-release-candidate-e2e" component={Phase8ReleaseCandidateE2EPage} /> : null}
     {phase9E2EEnabled ? <Route path="/__phase9-ai-review-e2e" component={Phase9AiReviewE2EPage} /> : null}
+    {phase11E2EEnabled ? <Route path="/__phase11-unified-search-e2e" component={UnifiedAssetSearchPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-ai-workspace-e2e" component={ScannerRoute} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
