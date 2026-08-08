@@ -17,6 +17,7 @@ export interface ScannerQuantHardeningInput {
   now?: number;
   marketClosed?: boolean;
   tradingHalt?: boolean;
+  sessionAware?: boolean;
 }
 
 const EMPTY_PRICE_PLAN: ScannerPricePlan = {
@@ -49,6 +50,7 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     now: input.now,
     marketClosed: input.marketClosed,
     tradingHalt: input.tradingHalt,
+    sessionAware: input.sessionAware,
   });
   const contextCandles = input.contextCandles?.length ? input.contextCandles : input.candles;
   const quant = runScannerQuantStrategy({
