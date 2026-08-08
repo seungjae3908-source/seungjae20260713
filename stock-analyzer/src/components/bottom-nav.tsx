@@ -185,7 +185,7 @@ export function BottomNav() {
                     role="menu"
                     aria-label={`${group.label} 메뉴`}
                     aria-orientation="vertical"
-                    className="absolute bottom-full left-1/2 z-50 mb-3 w-52 -translate-x-1/2 overflow-hidden rounded-2xl border border-card-border bg-card p-2 shadow-2xl"
+                    className="absolute bottom-full left-1/2 z-50 mb-3 max-h-[70vh] w-52 -translate-x-1/2 overflow-y-auto rounded-2xl border border-card-border bg-card p-2 shadow-2xl"
                   >
                     {visibleMenuItems.map((menuItem: NavigationMenuItem, index) => {
                       const MenuIcon = ICONS[menuItem.icon];
