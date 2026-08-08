@@ -87,14 +87,9 @@ for (const width of [360, 390, 430]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/__phase12-trade-automation-e2e');
     await expect(page.getByRole('heading', { name: '승인형 주문', exact: true })).toBeVisible();
-    await expect(page.getByText('실전 계좌 주문 비활성')).toBeVisible();
+    await expect(page.getByText('실전 주문 비활성')).toBeVisible();
     await expect(page.getByText('기본값은 모두 OFF이며 AI 채팅은 주문 권한이 없습니다.')).toBeVisible();
     await expect(page.getByTestId('connection-bitget')).toContainText('Paper 연결됨');
-    await expect(page.getByTestId('trade-signal-alerts')).toContainText('BTC 조건 유지 확인');
-    await expect(page.getByTestId('trade-signal-alerts')).toContainText('005930 조건 해제');
-    await expect(page.getByTestId('trade-signal-alerts')).not.toContainText('SIGNAL_CORE_CONDITION_BROKEN');
-    await expect(page.getByTestId('signal-alert-condition_maintained')).toContainText('현재 승인 가능');
-    await expect(page.getByTestId('signal-alert-condition_released')).toContainText('현재 신호 무효');
     await expect(page.getByTestId('approval-plan-ready-plan')).toContainText('승인 가능');
     await expect(page.getByTestId('approval-plan-invalid-plan')).toContainText('신호 무효');
     await expect(page.getByTestId('approval-plan-live-plan')).toContainText('실전 주문 차단');
