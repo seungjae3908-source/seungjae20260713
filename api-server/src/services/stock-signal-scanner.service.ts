@@ -28,6 +28,18 @@ export interface StockSignalScanRequest {
   signal?: AbortSignal;
 }
 
+type UsTradingSession = {
+  name: 'premarket' | 'regular' | 'after-hours';
+  startMinute: number;
+  endMinute: number;
+};
+
+const US_TRADING_SESSIONS: readonly UsTradingSession[] = [
+  { name: 'premarket', startMinute: 4 * 60, endMinute: 9 * 60 + 30 },
+  { name: 'regular', startMinute: 9 * 60 + 30, endMinute: 16 * 60 },
+  { name: 'after-hours', startMinute: 16 * 60, endMinute: 20 * 60 },
+];
+
 function applyUniverseStaleness(card: ScannerSignalCard, stale: boolean): ScannerSignalCard {
   if (!stale) return card;
   return {
@@ -37,6 +49,13 @@ function applyUniverseStaleness(card: ScannerSignalCard, stale: boolean): Scanne
     dataState: 'stale',
     strongSignalEligible: false,
     signalState: 'INVALIDATED',
+    pricePlan: {
+      entryZone: null,
+      invalidation: null,
+      stopLoss: null,
+      targets: [],
+      riskReward: null,
+    },
     dataQuality: card.dataQuality
       ? {
         ...card.dataQuality,
@@ -53,7 +72,11 @@ function applyUniverseStaleness(card: ScannerSignalCard, stale: boolean): Scanne
         ],
       }
       : undefined,
-    warnings: [...new Set([...card.warnings, '종목 마스터가 마지막 정상 캐시 또는 fallback입니다.'])],
+    warnings: [...new Set([
+      ...card.warnings,
+      '종목 마스터가 마지막 정상 캐시 또는 fallback입니다.',
+      'DATA_UNTRUSTED: 승인·실행 호환 가격정보를 폐기했습니다.',
+    ])],
   };
 }
 
@@ -71,67 +94,117 @@ function candleTimestamp(value: Candle['time']): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function marketSessionDate(value: Candle['time'], market: 'KR' | 'US'): string {
+function usWallClock(value: Candle['time']): { date: string; minuteOfDay: number } | null {
   const at = candleTimestamp(value);
-  if (at == null) return String(value);
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: market === 'US' ? 'America/New_York' : 'Asia/Seoul',
+  if (at == null) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(new Date(at));
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(at));
+  const values = new Map(parts.map((part) => [part.type, part.value]));
+  const year = values.get('year');
+  const month = values.get('month');
+  const day = values.get('day');
+  const hour = Number(values.get('hour'));
+  const minute = Number(values.get('minute'));
+  if (!year || !month || !day || !Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  return { date: `${year}-${month}-${day}`, minuteOfDay: hour * 60 + minute };
 }
 
-function aggregateSessionCandles(
+function usSession(minuteOfDay: number): UsTradingSession | null {
+  return US_TRADING_SESSIONS.find((session) => (
+    minuteOfDay >= session.startMinute && minuteOfDay < session.endMinute
+  )) ?? null;
+}
+
+export function aggregateUsSessionCandles(
   rows: Candle[],
-  size: number,
-  market: 'KR' | 'US',
+  lowerIntervalMinutes: number,
+  targetMinutes: number,
 ): Candle[] {
-  if (size <= 1) return rows;
-  const sessions = new Map<string, Candle[]>();
-  for (const row of rows) {
-    const key = marketSessionDate(row.time, market);
-    const current = sessions.get(key) ?? [];
-    current.push(row);
-    sessions.set(key, current);
+  if (
+    lowerIntervalMinutes <= 0
+    || targetMinutes <= lowerIntervalMinutes
+    || targetMinutes % lowerIntervalMinutes !== 0
+  ) return [];
+  const expectedBars = targetMinutes / lowerIntervalMinutes;
+  const buckets = new Map<string, Array<{ candle: Candle; minuteOfDay: number; at: number }>>();
+
+  for (const candle of rows) {
+    const at = candleTimestamp(candle.time);
+    const wall = usWallClock(candle.time);
+    if (at == null || !wall) continue;
+    const session = usSession(wall.minuteOfDay);
+    if (!session) continue;
+    const offset = wall.minuteOfDay - session.startMinute;
+    const bucketStartMinute = session.startMinute + Math.floor(offset / targetMinutes) * targetMinutes;
+    if (bucketStartMinute + targetMinutes > session.endMinute) continue;
+    const key = `${wall.date}:${session.name}:${bucketStartMinute}`;
+    const bucket = buckets.get(key) ?? [];
+    bucket.push({ candle, minuteOfDay: wall.minuteOfDay, at });
+    buckets.set(key, bucket);
   }
+
   const result: Candle[] = [];
-  for (const sessionRows of sessions.values()) {
-    const ordered = [...sessionRows].sort((left, right) => (
-      (candleTimestamp(left.time) ?? 0) - (candleTimestamp(right.time) ?? 0)
+  for (const [key, bucket] of buckets) {
+    if (bucket.length !== expectedBars) continue;
+    const bucketStartMinute = Number(key.slice(key.lastIndexOf(':') + 1));
+    const ordered = [...bucket].sort((left, right) => left.at - right.at);
+    const complete = ordered.every((row, index) => (
+      row.minuteOfDay === bucketStartMinute + index * lowerIntervalMinutes
+      && (index === 0 || row.at - ordered[index - 1].at === lowerIntervalMinutes * 60_000)
     ));
-    for (let index = 0; index < ordered.length; index += size) {
-      const chunk = ordered.slice(index, index + size);
-      if (!chunk.length) continue;
-      result.push({
-        time: chunk[0].time,
-        open: chunk[0].open,
-        high: Math.max(...chunk.map((row) => row.high)),
-        low: Math.min(...chunk.map((row) => row.low)),
-        close: chunk.at(-1)!.close,
-        volume: chunk.reduce((sum, row) => sum + row.volume, 0),
-      });
-    }
+    if (!complete) continue;
+    result.push({
+      time: ordered[0].candle.time,
+      open: ordered[0].candle.open,
+      high: Math.max(...ordered.map((row) => row.candle.high)),
+      low: Math.min(...ordered.map((row) => row.candle.low)),
+      close: ordered.at(-1)!.candle.close,
+      volume: ordered.reduce((sum, row) => sum + row.candle.volume, 0),
+    });
   }
+
   return result.sort((left, right) => (
     (candleTimestamp(left.time) ?? 0) - (candleTimestamp(right.time) ?? 0)
   ));
+}
+
+function abortError(): Error {
+  const error = new Error('Scanner candle request aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortError();
 }
 
 async function loadStockCandles(
   market: 'KR' | 'US',
   ticker: string,
   timeframe: string,
+  signal?: AbortSignal,
 ): Promise<Candle[]> {
+  throwIfAborted(signal);
   if (market === 'US' && timeframe === '3m') {
     const oneMinute = await MarketDataService.getCandles(ticker, '1m');
-    return aggregateSessionCandles(oneMinute, 3, market);
+    throwIfAborted(signal);
+    return aggregateUsSessionCandles(oneMinute, 1, 3);
   }
   if (market === 'US' && timeframe === '4H') {
     const hourly = await MarketDataService.getCandles(ticker, '60m');
-    return aggregateSessionCandles(hourly, 4, market);
+    throwIfAborted(signal);
+    return aggregateUsSessionCandles(hourly, 60, 240);
   }
-  return MarketDataService.getCandles(ticker, timeframe as Timeframe);
+  const candles = await MarketDataService.getCandles(ticker, timeframe as Timeframe);
+  throwIfAborted(signal);
+  return candles;
 }
 
 function boundedCompatibilityTimeframe(timeframe: string): Timeframe {
@@ -161,12 +234,17 @@ export const StockSignalScannerService = {
     const scanner = createBoundedScannerService({
       catalog: universe.entries,
       getCandles: async (ticker) => {
+        throwIfAborted(request.signal);
         const [candles, context] = await Promise.all([
-          loadStockCandles(request.market, ticker, primaryTimeframe),
+          loadStockCandles(request.market, ticker, primaryTimeframe, request.signal),
           primaryTimeframe === contextTimeframe
             ? Promise.resolve<Candle[] | null>(null)
-            : loadStockCandles(request.market, ticker, contextTimeframe).catch(() => []),
+            : loadStockCandles(request.market, ticker, contextTimeframe, request.signal).catch((error: unknown) => {
+              if (error instanceof Error && error.name === 'AbortError') throw error;
+              return [];
+            }),
         ]);
+        throwIfAborted(request.signal);
         candlesByTicker.set(ticker, candles);
         contextByTicker.set(ticker, context ?? candles);
         return candles;
