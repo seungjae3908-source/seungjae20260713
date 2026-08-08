@@ -5,6 +5,10 @@ import {
   type AnalysisAssetType,
   type AnalysisMarket,
 } from './analysis-selection';
+import {
+  UNIFIED_CHART_TIMEFRAMES,
+  type UnifiedChartTimeframe,
+} from './unified-chart-data';
 
 export const CHART_EXTERNAL_WINDOW_CHANNEL = 'stock-app-ai-chart-window-v2';
 export const CHART_EXTERNAL_WINDOW_NAME = 'stock-app-ai-chart-external';
@@ -15,22 +19,11 @@ export const CHART_EXTERNAL_WINDOW_PAIR_PARAM = 'chartPair';
 export const CHART_WINDOW_MESSAGE_VERSION = 2;
 export const CHART_WINDOW_MESSAGE_MAX_AGE_MS = 30_000;
 export const CHART_WINDOW_MESSAGE_MAX_FUTURE_SKEW_MS = 5_000;
-export const CHART_WINDOW_SUPPORTED_TIMEFRAMES = [
-  '1m',
-  '3m',
-  '5m',
-  '15m',
-  '30m',
-  '1H',
-  '4H',
-  '1D',
-  '5D',
-  '20D',
-] as const;
+export const CHART_WINDOW_SUPPORTED_TIMEFRAMES: readonly UnifiedChartTimeframe[] = UNIFIED_CHART_TIMEFRAMES.map((item) => item.key);
 
 export type ChartWindowRole = 'main' | 'external';
 export type ChartWindowMessageType = 'ready' | 'closed' | 'selection';
-export type ChartWindowSupportedTimeframe = typeof CHART_WINDOW_SUPPORTED_TIMEFRAMES[number];
+export type ChartWindowSupportedTimeframe = UnifiedChartTimeframe;
 
 export type ChartWindowMessageContext = {
   sessionId: string;
