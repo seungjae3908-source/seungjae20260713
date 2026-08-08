@@ -199,7 +199,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
         href: APP_ROUTES.scanner,
         label: 'AI 신호검색기',
         icon: 'search',
-        capability: 'canAccessRiskPreview',
+        capability: 'canAccessBasicInfo',
       },
       {
         id: 'ai-chart',
