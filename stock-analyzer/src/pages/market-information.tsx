@@ -155,8 +155,7 @@ function statusText(error: unknown): { title: string; description: string; icon:
 
 function SourceMeta({ meta }: { meta: MarketInformationMeta }) {
   return (
-    <div
-      role="group"
+    <section
       className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
       aria-label="데이터 출처와 신선도"
     >
@@ -174,7 +173,7 @@ function SourceMeta({ meta }: { meta: MarketInformationMeta }) {
       {meta.isDelayed && <span className="font-semibold text-amber-600">지연</span>}
       {meta.isStale && <span className="font-semibold text-red-600">stale</span>}
       {meta.partial && <span className="font-semibold text-amber-600">일부 데이터</span>}
-    </div>
+    </section>
   );
 }
 
