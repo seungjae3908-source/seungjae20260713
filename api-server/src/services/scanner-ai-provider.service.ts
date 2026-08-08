@@ -88,14 +88,23 @@ function abortError(reason?: unknown): Error {
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(abortError(signal.reason));
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, Math.max(0, ms));
+    let settled = false;
+    const cleanup = () => signal?.removeEventListener('abort', onAbort);
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const timer = setTimeout(finish, Math.max(0, ms));
     const onAbort = () => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      cleanup();
       reject(abortError(signal?.reason));
     };
     signal?.addEventListener('abort', onAbort, { once: true });
-    const cleanup = () => signal?.removeEventListener('abort', onAbort);
-    Promise.resolve().then(() => undefined).finally(cleanup).catch(() => undefined);
   });
 }
 
