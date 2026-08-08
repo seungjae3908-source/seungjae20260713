@@ -2,15 +2,15 @@
   "schemaVersion": 1,
   "status": "pass",
   "stage": "complete",
-  "verifiedAt": 1786160594120,
-  "durationMs": 18945,
+  "verifiedAt": 1786160691832,
+  "durationMs": 19033,
   "source": "github-actions-isolated-multi-market-suite",
-  "suiteEndTime": 1786160575175,
+  "suiteEndTime": 1786160672799,
   "datasets": [
     {
       "id": "btcusdt-futures-15m-52d",
       "status": "pass",
-      "durationMs": 4634,
+      "durationMs": 4798,
       "market": "CRYPTO_FUTURES",
       "symbol": "BTCUSDT",
       "timeframe": "15m",
@@ -20,7 +20,7 @@
       "coverageRatio": 0.9997996794871795,
       "firstTimestamp": 1781667900000,
       "lastTimestamp": 1786158900000,
-      "latestAgeMs": 1679556,
+      "latestAgeMs": 1777431,
       "gaps": 0,
       "zeroVolume": 0,
       "normalizedQuality": {
@@ -133,12 +133,12 @@
           "sha256": "ec26280aa0e31cce72c42b66f8817fed2de109aa43ef9ee16ef5261e08b7f0b2"
         }
       },
-      "candleSha256": "96d59b540c017597e9735d8979edba75f444ebf251b83235219d90344bc6785e"
+      "candleSha256": "5bce1df5308f7da53d1218d28f9b1af15cb3cc8dfdeec5c42504cdb9d9915b35"
     },
     {
       "id": "ethusdt-futures-15m-52d",
       "status": "pass",
-      "durationMs": 4210,
+      "durationMs": 4553,
       "market": "CRYPTO_FUTURES",
       "symbol": "ETHUSDT",
       "timeframe": "15m",
@@ -148,7 +148,7 @@
       "coverageRatio": 0.9997996794871795,
       "firstTimestamp": 1781667900000,
       "lastTimestamp": 1786158900000,
-      "latestAgeMs": 1683785,
+      "latestAgeMs": 1782001,
       "gaps": 0,
       "zeroVolume": 0,
       "normalizedQuality": {
@@ -261,12 +261,12 @@
           "sha256": "8885fec904568c93f2f8545a5b08edf78a06441e5e71f97328e17bbfe24cd94e"
         }
       },
-      "candleSha256": "fd8712af0ab272a7186c10a99665491dc421f95b4a2af9a1f185fc14ff5c0747"
+      "candleSha256": "0cf5be935184a40fbb3179a86e157cfb0b58b27ca256348a7991b3cba32d7924"
     },
     {
       "id": "btcusdt-futures-1h-83d",
       "status": "pass",
-      "durationMs": 1702,
+      "durationMs": 1850,
       "market": "CRYPTO_FUTURES",
       "symbol": "BTCUSDT",
       "timeframe": "1h",
@@ -276,7 +276,7 @@
       "coverageRatio": 0.9994979919678715,
       "firstTimestamp": 1778990400000,
       "lastTimestamp": 1786154400000,
-      "latestAgeMs": 6185598,
+      "latestAgeMs": 6283915,
       "gaps": 0,
       "zeroVolume": 0,
       "normalizedQuality": {
@@ -389,12 +389,12 @@
           "sha256": "276cceaa1c199a9b6b2e174e5ca353e225f195b686badd7425a4d421078641cf"
         }
       },
-      "candleSha256": "0430b195c05756b50f65ad2c93aac9e736641a4f07163ae494d6e0b96db58d89"
+      "candleSha256": "c751d7d4f8d8c2d38926c335a631e5040016f4537036537a971ed97a9ab5d84a"
     },
     {
       "id": "ethusdt-futures-1h-83d",
       "status": "pass",
-      "durationMs": 1696,
+      "durationMs": 2109,
       "market": "CRYPTO_FUTURES",
       "symbol": "ETHUSDT",
       "timeframe": "1h",
@@ -404,7 +404,7 @@
       "coverageRatio": 0.9994979919678715,
       "firstTimestamp": 1778990400000,
       "lastTimestamp": 1786154400000,
-      "latestAgeMs": 6187311,
+      "latestAgeMs": 6286036,
       "gaps": 0,
       "zeroVolume": 0,
       "normalizedQuality": {
@@ -517,12 +517,12 @@
           "sha256": "cd2a616529ff7f5805bddfffe9b48dbd27915c46dcc080bde2a5f4d8f6333457"
         }
       },
-      "candleSha256": "6503afdc43fd35c9047f2eabfac2f5eaf964a0df16a0a073bc658371c534a2d2"
+      "candleSha256": "b90250bbe0df6c6f2f3990638e7c73f0b0edc3f049697302bfd016f158d47d74"
     },
     {
       "id": "btcusdt-spot-4h-240d",
       "status": "pass",
-      "durationMs": 1391,
+      "durationMs": 1658,
       "market": "CRYPTO_SPOT",
       "symbol": "BTCUSDT",
       "timeframe": "4h",
@@ -532,7 +532,7 @@
       "coverageRatio": 0.9993055555555556,
       "firstTimestamp": 1765425600000,
       "lastTimestamp": 1786132800000,
-      "latestAgeMs": 27788679,
+      "latestAgeMs": 27887673,
       "gaps": 0,
       "zeroVolume": 0,
       "normalizedQuality": {
@@ -645,28 +645,28 @@
           "sha256": "61ae65723e21260c2d17267f266b9c7d12116e3dbf16c69fbe92b13cb1836979"
         }
       },
-      "candleSha256": "d87135534fffcafb2acae7d94057f7036810eafb42d458116131d4a86f2f8a2f"
+      "candleSha256": "3c593fd86db8600578d2c434a5a58f82042973b31f972e3e0e6007458042238d"
     }
   ],
   "futuresContexts": {
     "BTCUSDT": {
       "status": "pass",
-      "openInterestRaw": "37665.3307000000883",
+      "openInterestRaw": "37672.056400000089",
       "fundingRateRaw": "-0.000035",
       "fundingIntervalHours": 8,
-      "marketPriceRaw": "64983.4",
-      "markPriceRaw": "64983.4",
-      "indexPriceRaw": "65012.963",
+      "marketPriceRaw": "64980.2",
+      "markPriceRaw": "64981.4",
+      "indexPriceRaw": "65013.2455",
       "fundingHistoryCount": 100
     },
     "ETHUSDT": {
       "status": "pass",
-      "openInterestRaw": "824295.270000000546",
+      "openInterestRaw": "823977.810000000555",
       "fundingRateRaw": "0.000029",
       "fundingIntervalHours": 8,
-      "marketPriceRaw": "1916.89",
-      "markPriceRaw": "1916.89",
-      "indexPriceRaw": "1917.73",
+      "marketPriceRaw": "1916.55",
+      "markPriceRaw": "1916.55",
+      "indexPriceRaw": "1917.5135",
       "fundingHistoryCount": 100
     }
   },
