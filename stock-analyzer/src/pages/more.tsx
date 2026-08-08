@@ -40,6 +40,7 @@ import {
 } from "@/lib/notifications";
 import { ACCENT_COLOR_KEY } from "@/lib/stock-display";
 import { cn } from "@/lib/utils";
+import { TradeAutomationSettings } from "@/components/trade-automation-settings";
 
 const ALERT_ICONS: Record<string, ReactNode> = {
 	news: <Bell className="h-4 w-4" />,
@@ -95,6 +96,8 @@ const BACKUP_PREFIXES = [
 	"seungjae",
 	"stock-analyzer",
 	"sa-settings",
+	"sa-saved-searches",
+	"sa-analysis-selection",
 ];
 
 function readBackupData() {
@@ -335,6 +338,7 @@ export default function MorePage() {
 			</header>
 
 			<main className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 pb-24">
+				<TradeAutomationSettings />
 				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
 					<h2 className="mb-3 text-sm font-extrabold">계정 · 자산</h2>
 
