@@ -4,6 +4,7 @@ import {
   type TradingPolicy,
   type TradingRiskDecision,
 } from './trade-automation.types';
+import { normalizeSplitRatios, TradeSplitOrderPlanError } from './trade-split-order-planner.service';
 
 const MAX_DATA_DELAY_MS = 5_000;
 const MAX_SNAPSHOT_AGE_MS = 30_000;
@@ -161,8 +162,11 @@ export function evaluateTradingPlan(
   }
 
   if (snapshot.availableBalance < plan.estimatedKrw && plan.exchange !== 'bitget') add(blockCodes, 'INSUFFICIENT_BALANCE');
-  if (plan.splitRatios.length === 0 || Math.abs(plan.splitRatios.reduce((sum, value) => sum + value, 0) - 100) > 0.01) {
-    add(blockCodes, 'SPLIT_RATIO_INVALID');
+  try {
+    normalizeSplitRatios(plan.splitRatios);
+  } catch (error) {
+    if (error instanceof TradeSplitOrderPlanError) add(blockCodes, error.code);
+    else add(blockCodes, 'TRADE_SPLIT_RATIO_INVALID');
   }
   if (plan.targetPrices.length === 0 || !finitePositive(plan.stopPrice)) add(blockCodes, 'EXIT_PLAN_REQUIRED');
   if (plan.invalidateAction === 'close') warnings.push('조건 무효화 시 청산은 위험관리 재검사 후에만 실행됩니다.');

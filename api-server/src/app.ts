@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { apiRateLimit, securityHeaders } from './middleware/security';
 
 const app: Express = express();
@@ -46,6 +47,8 @@ app.use(cors({ origin(origin, callback) {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/api', apiRateLimit);
+
+app.use('/api/paper-journal', rejectPaperJournalQueryIdentity);
 
 app.get("/api", (_req, res) => {
   res.json({
