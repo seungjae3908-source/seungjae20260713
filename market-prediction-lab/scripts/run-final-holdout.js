@@ -84,13 +84,20 @@ function assertWarmupAndHoldoutCoverage(candles, label) {
 
 async function collectSpot(candidate, bitget) {
   const spec = specFor(candidate);
+  const collectionCutoff = Date.now();
+  // The generic collector aligns endTime to UTC midnight, while Bitget's spot
+  // 1-day bars are anchored at 16:00 UTC. Request one extra UTC day so the
+  // provider can return the Aug-07 16:00 bar, then explicitly retain only bars
+  // whose open is inside the predeclared holdout and whose full 24h interval
+  // was already closed at collection time. No future/open candle can enter the
+  // backtest through this widening of the fetch envelope.
   const collected = await collectBitgetCandles({
     client: bitget,
     market: spec.market,
     symbol: spec.exchangeSymbol,
     timeframe: "1d",
     startTime: FINAL_HOLDOUT_WARMUP_START,
-    endTime: FINAL_HOLDOUT_END + 1,
+    endTime: FINAL_HOLDOUT_END + DAY_MS + 1,
     maxCandles: 1000,
   });
   const repaired = await repairBitgetCandleGaps({
@@ -103,7 +110,8 @@ async function collectSpot(candidate, bitget) {
   if ((repaired.remainingMissingCandleCount ?? repaired.remainingGapCount ?? 0) > 0) {
     throw new Error(`${candidate.id} has unresolved Bitget candle gaps`);
   }
-  const candles = toResearchCandles(spec, { candles: repaired.candles });
+  const candles = Object.freeze(toResearchCandles(spec, { candles: repaired.candles })
+    .filter((candle) => candle.timestamp <= FINAL_HOLDOUT_END && candle.timestamp + DAY_MS <= collectionCutoff));
   const coverage = assertWarmupAndHoldoutCoverage(candles, candidate.id);
   return Object.freeze({
     provider: "bitget-public-v2",
@@ -111,7 +119,7 @@ async function collectSpot(candidate, bitget) {
     fundingProvider: null,
     candles,
     fundingRates: Object.freeze([]),
-    coverage,
+    coverage: Object.freeze({ ...coverage, collectionCutoff }),
   });
 }
 
