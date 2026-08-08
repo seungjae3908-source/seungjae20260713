@@ -1,6 +1,14 @@
-import { Router, type IRouter } from 'express';
+import { Router, type IRouter, type RequestHandler } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth';
+import { requireCapability } from '../middleware/auth';
 import { AiChatError, answerAiChat } from '../services/ai-chat.service';
+import {
+  resolveAuthoritativeFeatureRequest,
+} from '../services/ai-feature-authority.service';
+import {
+  generateStructuredFeatureExplanation,
+  type AiFeatureTask,
+} from '../services/ai-feature-explanation.service';
 
 const router: IRouter = Router();
 const userBuckets = new Map<string, { count: number; resetAt: number }>();
@@ -18,8 +26,75 @@ function acceptUserRequest(userId: string, now = Date.now()): boolean {
   return bucket.count <= 20;
 }
 
+function featureExplanationHandler(task: AiFeatureTask): RequestHandler {
+  return async (request, res) => {
+    const req = request as AuthenticatedRequest;
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    if (!req.member || !acceptUserRequest(req.member.id)) {
+      if (req.member) res.setHeader('Retry-After', '60');
+      return res.status(req.member ? 429 : 401).json({
+        ok: false,
+        error: req.member ? 'AI_FEATURE_RATE_LIMITED' : 'LOGIN_REQUIRED',
+        message: req.member ? 'AI 기능 설명 요청이 많습니다. 잠시 후 다시 시도해 주세요.' : '로그인이 필요합니다.',
+        advisoryOnly: true,
+        inputAuthority: 'server-authoritative-required',
+        authoritativeStateUsed: false,
+        mutationPerformed: false,
+        orderRequestSent: false,
+      });
+    }
+
+    const controller = new AbortController();
+    const onClose = () => {
+      if (!res.writableEnded) controller.abort();
+    };
+    res.once('close', onClose);
+
+    try {
+      const authoritativeRequest = await resolveAuthoritativeFeatureRequest(
+        task,
+        req.body ?? {},
+        {
+          userId: req.member.id,
+          accessToken: req.accessToken,
+        },
+      );
+      const result = await generateStructuredFeatureExplanation(
+        authoritativeRequest,
+        { externalSignal: controller.signal },
+      );
+      return res.json({
+        ok: true,
+        inputAuthority: 'server-authoritative',
+        authoritativeStateUsed: true,
+        mutationPerformed: false,
+        orderRequestSent: false,
+        ...result,
+      });
+    } catch (cause) {
+      const error = cause instanceof AiChatError
+        ? cause
+        : new AiChatError('AI_FEATURE_FAILED', '구조화 AI 기능 설명 요청을 처리하지 못했습니다.', 500);
+      return res.status(error.statusCode).json({
+        ok: false,
+        error: error.code,
+        message: error.message,
+        advisoryOnly: true,
+        inputAuthority: 'server-authoritative-required',
+        authoritativeStateUsed: false,
+        mutationPerformed: false,
+        orderRequestSent: false,
+      });
+    } finally {
+      res.off('close', onClose);
+    }
+  };
+}
+
 router.post('/ai/chat', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
   if (!req.member || !acceptUserRequest(req.member.id)) {
+    if (req.member) res.setHeader('Retry-After', '60');
     return res.status(req.member ? 429 : 401).json({
       ok: false,
       error: req.member ? 'AI_CHAT_RATE_LIMITED' : 'LOGIN_REQUIRED',
@@ -42,5 +117,21 @@ router.post('/ai/chat', async (req: AuthenticatedRequest, res) => {
     res.off('close', onClose);
   }
 });
+
+router.post(
+  '/ai/features/chart/explanation',
+  requireCapability('canAccessBasicInfo'),
+  featureExplanationHandler('chart_analysis_explanation'),
+);
+router.post(
+  '/ai/features/scanner/explanation',
+  requireCapability('canAccessBasicInfo'),
+  featureExplanationHandler('scanner_signal_explanation'),
+);
+router.post(
+  '/ai/features/trade-plan/explanation',
+  requireCapability('canAccessPaperTrading'),
+  featureExplanationHandler('trade_plan_risk_explanation'),
+);
 
 export default router;
