@@ -17,6 +17,30 @@ function roomResponse(room: string) {
   return { ok: true, room, market, assetType, currency: meta.currency, fetchedAt: NOW, partial: false, sections: { indices: empty, rankings: empty, sectors: empty, news: empty, disclosures: empty, derivatives: { status: 'empty', data: { referenceSymbol: 'BTCUSDT', longRatio: null, shortRatio: null, longShortRatio: null, ratioObservedAt: null, liquidations: [] }, meta, message: 'acceptance fixture' } }, requestPolicy: { publicMarketDataOnly: true, privateExchangeRequests: 0, accountRequests: 0, balanceRequests: 0, positionRequests: 0, orderRequests: 0, cancelRequests: 0, aiRequests: 0 } };
 }
 
+function stockFixture(market: 'KR' | 'US') {
+  return market === 'US'
+    ? { ticker: 'AAPL', name: 'Apple', market: 'US', price: 220, changePercent: 1.1, volume: 12_000_000, tradingValue: 2_640_000_000, marketCap: 3_300_000_000_000, rank: 1, provider: 'acceptance', rating: { score: 91, rating: 'BUY', confidence: 88 }, reason: '최종 수용검증 fixture' }
+    : { ticker: '005930', name: '삼성전자', market: 'KR', price: 75_000, changePercent: 1.2, volume: 10_000_000, tradingValue: 750_000_000_000, marketCap: 450_000_000_000_000, rank: 1, provider: 'acceptance', rating: { score: 92, rating: 'BUY', confidence: 89 }, reason: '최종 수용검증 fixture' };
+}
+
+function moversFixture(market: 'KR' | 'US') {
+  const row = stockFixture(market);
+  return {
+    ok: true,
+    market,
+    recommended: [row],
+    picks: [row],
+    aiRecommended: [row],
+    popular: [row],
+    volume: [row],
+    tradingValue: [row],
+    gainers: [row],
+    losers: [row],
+    risky: [],
+    updatedAt: NOW,
+  };
+}
+
 async function installAdminRuntime(page: Page) {
   await page.addInitScript(({ storageKey, userId, now }) => {
     const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -47,6 +71,25 @@ async function installAdminRuntime(page: Page) {
     const path = url.pathname;
     const room = path.match(/^\/api\/market-information\/(stocks-kr|stocks-us|coins-spot|coins-futures)$/)?.[1];
     if (room) return fulfill(route, roomResponse(room));
+
+    if (path === '/api/admin/members') return fulfill(route, { members: [] });
+    if (path === '/api/admin/audit-logs') return fulfill(route, { logs: [] });
+
+    if (path === '/api/kiwoom/rankings') {
+      const market = url.searchParams.get('market') === 'US' ? 'US' : 'KR';
+      const row = stockFixture(market);
+      return fulfill(route, { ok: true, market, rows: [row], rankings: [row], items: [row], results: [row], updatedAt: NOW });
+    }
+    if (path === '/api/market/movers') {
+      const market = url.searchParams.get('market') === 'US' ? 'US' : 'KR';
+      return fulfill(route, moversFixture(market));
+    }
+    if (path === '/api/quotes') {
+      const tickers = (url.searchParams.get('tickers') ?? '').split(',').filter(Boolean);
+      const quotes = tickers.map((ticker) => ticker === 'AAPL' ? stockFixture('US') : { ...stockFixture('KR'), ticker });
+      return fulfill(route, { ok: true, quotes, rows: quotes, items: quotes, results: quotes });
+    }
+
     if (path === '/api/account-connections/snapshot') return fulfill(route, {
       ok: true, readOnly: true, mutationsAllowed: false, checkedAt: NOW,
       providers: {
