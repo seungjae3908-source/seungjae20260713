@@ -419,7 +419,9 @@ def self_test() -> int:
         globals()["_github_json"] = original_github_json
 
     source = __import__("pathlib").Path(__file__).read_text(encoding="utf-8")
-    assert "_discover_draft_pr" not in source and "pulls?state=open&head" not in source
+    stale_discovery_definition = "def _discover" + "_draft_pr("
+    stale_branch_query = "pulls?" + "state=open&head"
+    assert stale_discovery_definition not in source and stale_branch_query not in source
     assert "SOURCE_CI_RUN_ID" in source and "CONTROL_PLANE_SHA" in source
     print(json.dumps({
         "executor_report_hardening_v2": "pass",
