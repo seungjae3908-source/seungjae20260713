@@ -146,6 +146,17 @@ async function postChannelMessage(page: Page, payload: MessagePayload) {
   }, { channelName, message: payload });
 }
 
+async function setDocumentVisibility(page: Page, visibilityState: 'hidden' | 'visible') {
+  await page.evaluate((state) => {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => state,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, visibilityState);
+  await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe(visibilityState);
+}
+
 function mainMessage(input: {
   type: 'ready' | 'closed' | 'selection';
   sourceId: string;
@@ -273,10 +284,11 @@ test('strict session, origin, order, close, replacement, and simultaneous-update
   }));
   await expect(page).toHaveURL(/timeframe=30m/);
 
+  const deterministicRemoteWinner = Date.now() + 4_000;
   await Promise.all([
     page.getByRole('button', { name: '15분', exact: true }).click(),
     postChannelMessage(page, mainMessage({
-      type: 'selection', sourceId: 'main-b', sequence: 3, sentAt: base + 1_000, origin,
+      type: 'selection', sourceId: 'main-b', sequence: 3, sentAt: deterministicRemoteWinner, origin,
       selectionOverride: { timeframe: '30m' },
     })),
   ]);
@@ -284,40 +296,32 @@ test('strict session, origin, order, close, replacement, and simultaneous-update
   await assertCleanRuntime(runtime);
 });
 
-test('hidden tab accepts only ordered snapshots and requests current state again when visible', async ({ page, context }) => {
+test('hidden state accepts only ordered snapshots and requests current state again when visible', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await installUnhandledCapture(context);
   await mockChartApis(context);
   const runtime = observeRuntime(context, page);
-  await context.route('**/sync-controller', (route) => route.fulfill({
-    status: 200,
-    contentType: 'text/html',
-    body: '<!doctype html><title>sync controller</title>',
-  }));
   await page.goto(externalUrl);
   const origin = new URL(page.url()).origin;
   const base = Date.now();
   await postChannelMessage(page, mainMessage({ type: 'ready', sourceId: 'main-hidden', sequence: 1, sentAt: base + 10, origin }));
 
-  const controller = await context.newPage();
-  await controller.goto(`${origin}/sync-controller`);
-  await controller.bringToFront();
-  await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe('hidden');
-  await postChannelMessage(controller, mainMessage({
+  await setDocumentVisibility(page, 'hidden');
+  await postChannelMessage(page, mainMessage({
     type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 100, origin,
     selectionOverride: { timeframe: '5m' },
   }));
-  await postChannelMessage(controller, mainMessage({
+  await postChannelMessage(page, mainMessage({
     type: 'selection', sourceId: 'main-hidden', sequence: 3, sentAt: base + 200, origin,
     selectionOverride: { timeframe: '15m' },
   }));
-  await postChannelMessage(controller, mainMessage({
+  await postChannelMessage(page, mainMessage({
     type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 150, origin,
     selectionOverride: { timeframe: '30m' },
   }));
-  await page.bringToFront();
+  await setDocumentVisibility(page, 'visible');
   await expect(page).toHaveURL(/timeframe=15m/);
-  await controller.close();
+  await expect(page.getByTestId('external-chart-status')).toContainText('안전하게 동기화');
   await assertCleanRuntime(runtime);
 });
 
