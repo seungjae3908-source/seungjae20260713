@@ -4,6 +4,7 @@ import { evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingRepository } from './trade-automation.repository';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import {
+  assertCancellationAllowed,
   buildRiskEnvelope,
   riskEnvelopeForPlan,
   withRiskEnvelope,
@@ -217,6 +218,16 @@ export class TradeAutomationService {
     }
 
     Object.assign(order, result.order);
+    const escalationCodes: string[] = [];
+    if (typeof metadata.errorCode === 'string') escalationCodes.push(metadata.errorCode);
+    if (order.state === 'RECOVERY_REQUIRED') {
+      escalationCodes.push('ORDER_STATE_UNKNOWN', 'EXECUTION_RECONCILIATION_FAILED');
+    }
+    await tripKillSwitchForRiskFailure({
+      repository: this.repository,
+      userId: order.userId,
+      blockCodes: escalationCodes,
+    });
     return order;
   }
 
@@ -228,6 +239,12 @@ export class TradeAutomationService {
     for (const order of recoverable) {
       if (order.state !== 'RECOVERY_REQUIRED') {
         await this.transition(order, 'RECOVERY_REQUIRED', 'SERVER_RESTART_RECONCILIATION_REQUIRED');
+      } else {
+        await tripKillSwitchForRiskFailure({
+          repository: this.repository,
+          userId,
+          blockCodes: ['ORDER_STATE_UNKNOWN', 'EXECUTION_RECONCILIATION_FAILED'],
+        });
       }
     }
     return recoverable;
@@ -245,6 +262,7 @@ export class TradeAutomationService {
       return { plan, order: null, filledQuantityPreserved: 0 };
     }
     if (order.state === 'ACCEPTED' || order.state === 'PARTIALLY_FILLED') {
+      assertCancellationAllowed(plan);
       await this.transition(order, 'CANCEL_REQUESTED', 'SIGNAL_INVALIDATED_CANCEL_UNFILLED_REMAINDER', {
         filledQuantity: order.filledQuantity,
         invalidateAction: plan.invalidateAction ?? 'hold',
