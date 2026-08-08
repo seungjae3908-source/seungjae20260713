@@ -134,29 +134,36 @@ def test_latest_report_lifecycle_from_sealed_plane() -> int:
         payload = json.loads(self_test.stdout.strip())
         assert payload["terminal_command_state_posted"] == 1
         assert payload["event_driven_continuation"] == 1
-        assert payload["failed_report_approval_escalations"] == 0
+        assert payload["partial_completed_mismatch"] == 0
+        assert payload["critical_auto_actions"] == 0
 
         script = r'''
 import json
+from agent_hub_executor_gate_hardening_v2 import READ_ONLY_COMPLETE_MARKER, READ_ONLY_INCOMPLETE_MARKER
 from agent_hub_executor_report_hardening_v2 import build_report, build_terminal_state
 base={
  "COMMAND_ID":"hub-123-0123456789abcdef","SOURCE_TASK_ID":"root-task","TARGET_WORKER":"operations-worker",
  "GITHUB_REPOSITORY":"owner/repo","TARGET_BRANCH":"feature/old","WORK_BRANCH":"feature/old",
- "BASE_SHA":"b"*40,"HEAD_SHA":"b"*40,"EXECUTOR_RUN_ID":"123","PR_URL":"none","CHANGED_FILES":"[]",
+ "CONTROL_PLANE_SHA":"a"*40,"REPORT_BASE_BRANCH":"main","REPORT_BASE_SHA":"a"*40,
+ "BASE_SHA":"b"*40,"HEAD_SHA":"b"*40,"REPORT_HEAD_SHA":"b"*40,
+ "EXECUTOR_RUN_ID":"123","PR_URL":"none","CHANGED_FILES":"[]","SOURCE_CI_RUN_ID":"42",
  "EXECUTION_MODE":"read_only","AUTO_STEP":"1"
 }
-failed={**base,"RESULT_STATUS":"failed","FAILURE_SIGNATURE":"inspect_repository:bbbb:failed"}
-completed={**base,"RESULT_STATUS":"completed"}
+failed={**base,"RESULT_STATUS":"failed","SUMMARY":"validation failed","FAILURE_SIGNATURE":"inspect_repository:bbbb:failed"}
+partial={**base,"RESULT_STATUS":"completed","SUMMARY":"content analysis incomplete "+READ_ONLY_INCOMPLETE_MARKER}
+completed={**base,"RESULT_STATUS":"completed","SUMMARY":"content analysis complete "+READ_ONLY_COMPLETE_MARKER}
 assert "status: failed" in build_report(failed)
 assert "status: failed" in build_terminal_state(failed)
-assert "status: partial" in build_report(completed)
+assert "status: partial" in build_report(partial)
+assert "status: blocked" in build_terminal_state(partial)
+assert "status: completed" in build_report(completed)
 assert "status: completed" in build_terminal_state(completed)
-print(json.dumps({"failure_terminal":1,"success_terminal":1,"stale_running":0}))
+print(json.dumps({"failure_terminal":1,"partial_terminal_blocked":1,"success_terminal":1,"stale_running":0}))
 '''
         lifecycle = run("python3", "-c", script, cwd=ROOT, env=env)
         state = json.loads(lifecycle.stdout.strip())
-        assert state == {"failure_terminal": 1, "success_terminal": 1, "stale_running": 0}
-    return 7
+        assert state == {"failure_terminal": 1, "partial_terminal_blocked": 1, "success_terminal": 1, "stale_running": 0}
+    return 10
 
 
 def main() -> int:
@@ -173,6 +180,7 @@ def main() -> int:
         "read_only_mutation_accepted": 0,
         "code_change_allowlist_preserved": 1,
         "failure_terminal_closure": 1,
+        "partial_terminal_completed": 0,
         "success_terminal_closure": 1,
         "report_ready_wake_contract": 1,
         "trusted_control_plane_hash_stable": 1,
