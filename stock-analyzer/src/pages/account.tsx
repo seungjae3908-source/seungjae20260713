@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useLocation } from 'wouter';
 import { ArrowLeft, Clock3, LogIn, LogOut, ShieldCheck, UserPlus } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { BrokerageAccountConnections } from '@/components/brokerage-account-connections';
 import { useAuth } from '@/lib/auth';
 import { MEMBER_TIER_LABELS } from '../../../packages/member-access/src/index.js';
 
@@ -41,14 +42,14 @@ export default function AccountPage() {
   return <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-background">
     <header className="border-b border-card-border px-4 py-4"><div className="flex items-center gap-3">
       <button aria-label="뒤로 가기" onClick={() => navigate(auth.isApproved ? '/settings' : '/login')} className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border"><ArrowLeft className="h-5 w-5" /></button>
-      <div><h1 className="text-xl font-extrabold">계정</h1><p className="mt-1 text-xs text-muted-foreground">회원가입, 승인 상태와 로그인 정보를 관리합니다.</p></div>
+      <div className="min-w-0"><h1 className="truncate text-xl font-extrabold">계정</h1><p className="mt-1 break-keep text-xs text-muted-foreground">회원가입, 승인 상태와 로그인 정보를 관리합니다.</p></div>
     </div></header>
-    <main className="flex-1 px-4 pb-28 pt-5">
+    <main className="min-w-0 flex-1 px-4 pb-28 pt-5">
       {!auth.configured && <Card><p className="font-extrabold text-destructive">계정 저장소 설정이 필요합니다.</p><p className="mt-2 text-sm text-muted-foreground">Supabase 연결 정보를 관리자 설정에 등록해 주세요.</p></Card>}
       {auth.loading && <Card>계정 상태를 확인하고 있습니다.</Card>}
       {!auth.loading && auth.user ? <Card>
-        <div className="flex items-center gap-3"><ShieldCheck className="h-8 w-8 text-primary" /><div className="min-w-0 flex-1"><p className="text-xs text-muted-foreground">로그인 중</p><p className="truncate text-xl font-black">{auth.displayName ?? '사용자'}</p></div><span data-testid="membership-label" className="rounded-full bg-secondary px-3 py-1 text-xs font-extrabold">{MEMBER_TIER_LABELS[auth.membershipLevel]}</span></div>
-        {stateMessage && <div className="mt-4 flex gap-2 rounded-2xl bg-warning/10 p-4 text-sm font-bold text-warning"><Clock3 className="h-5 w-5 shrink-0" />{stateMessage}</div>}
+        <div className="flex min-w-0 flex-wrap items-center gap-3"><ShieldCheck className="h-8 w-8 shrink-0 text-primary" /><div className="min-w-0 flex-1"><p className="text-xs text-muted-foreground">로그인 중</p><p className="truncate text-xl font-black">{auth.displayName ?? '사용자'}</p></div><span data-testid="membership-label" className="shrink-0 rounded-full bg-secondary px-3 py-1 text-xs font-extrabold">{MEMBER_TIER_LABELS[auth.membershipLevel]}</span></div>
+        {stateMessage && <div className="mt-4 flex gap-2 rounded-2xl bg-warning/10 p-4 text-sm font-bold text-warning"><Clock3 className="h-5 w-5 shrink-0" /><span className="min-w-0 break-words">{stateMessage}</span></div>}
         {auth.isApproved && <p className="mt-4 rounded-2xl bg-positive/10 p-4 text-sm font-bold text-positive">현재 등급에 허용된 기능을 사용할 수 있습니다.</p>}
         {auth.isAdmin && <button onClick={() => navigate('/admin')} className="mt-4 w-full rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground">관리자 회원 관리</button>}
         <button onClick={() => void auth.signOut()} className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-card-border px-4 py-3 text-sm font-extrabold"><LogOut className="h-4 w-4" />로그아웃</button>
@@ -61,10 +62,11 @@ export default function AccountPage() {
           <button disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3.5 text-sm font-extrabold text-primary-foreground disabled:opacity-50">{register ? <UserPlus className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}{busy ? '처리 중...' : register ? '가입 신청' : '로그인'}</button>
         </form>
       </Card>}
-      {(notice || error) && <p className={`mt-3 rounded-2xl p-4 text-sm font-bold ${error ? 'bg-destructive/10 text-destructive' : 'bg-positive/10 text-positive'}`}>{error || notice}</p>}
+      {!auth.loading && auth.user && auth.isAdmin ? <BrokerageAccountConnections /> : null}
+      {(notice || error) && <p className={`mt-3 break-words rounded-2xl p-4 text-sm font-bold ${error ? 'bg-destructive/10 text-destructive' : 'bg-positive/10 text-positive'}`}>{error || notice}</p>}
     </main>{auth.isApproved && <BottomNav />}
   </div>;
 }
 
-function Card({ children }: { children: React.ReactNode }) { return <section className="rounded-3xl border border-card-border bg-card p-5 shadow-sm">{children}</section>; }
-function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="text-xs font-extrabold text-muted-foreground">{label}</span><div className="mt-2 [&_.input]:h-12 [&_.input]:w-full [&_.input]:rounded-2xl [&_.input]:border [&_.input]:border-card-border [&_.input]:bg-background [&_.input]:px-4 [&_.input]:text-sm [&_.input]:font-bold [&_.input]:outline-none [&_.input]:focus:border-primary">{children}</div></label>; }
+function Card({ children }: { children: React.ReactNode }) { return <section className="min-w-0 rounded-3xl border border-card-border bg-card p-5 shadow-sm">{children}</section>; }
+function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block min-w-0"><span className="text-xs font-extrabold text-muted-foreground">{label}</span><div className="mt-2 min-w-0 [&_.input]:h-12 [&_.input]:w-full [&_.input]:min-w-0 [&_.input]:rounded-2xl [&_.input]:border [&_.input]:border-card-border [&_.input]:bg-background [&_.input]:px-4 [&_.input]:text-sm [&_.input]:font-bold [&_.input]:outline-none [&_.input]:focus:border-primary">{children}</div></label>; }
