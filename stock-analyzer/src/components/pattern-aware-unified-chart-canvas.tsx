@@ -133,12 +133,20 @@ function statusColor(status: ChartAnalysis['status']): string {
 function logicalViewport(chart: IChartApi): LogicalViewport | null {
   const range = chart.timeScale().getVisibleLogicalRange();
   if (!range || !Number.isFinite(range.from) || !Number.isFinite(range.to)) return null;
-  return { from: range.from, to: range.to };
+  return { from: Number(range.from), to: Number(range.to) };
 }
 
 function restoreLogicalViewport(chart: IChartApi, range: LogicalViewport | null): void {
   if (!range) return;
   chart.timeScale().setVisibleLogicalRange({ from: range.from, to: range.to });
+}
+
+function exposeLogicalViewport(wrapper: HTMLDivElement | null, chart: IChartApi): LogicalViewport | null {
+  const range = logicalViewport(chart);
+  if (wrapper) {
+    wrapper.dataset.visibleLogicalRange = range ? `${range.from}:${range.to}` : '';
+  }
+  return range;
 }
 
 export function PatternAwareUnifiedChartCanvas({
@@ -260,7 +268,12 @@ export function PatternAwareUnifiedChartCanvas({
     const handleClick: Parameters<IChartApi['subscribeClick']>[0] = (param) => {
       if (typeof param.time === 'number' && Number.isFinite(param.time)) onCandleSelect(param.time);
     };
+    const publishVisibleRange = () => {
+      const range = exposeLogicalViewport(wrapperRef.current, chart);
+      if (range) storedViewportRef.current = { resetKey, logicalRange: range };
+    };
     chart.subscribeClick(handleClick);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(publishVisibleRange);
     instanceRef.current = instance;
 
     const observer = new ResizeObserver((entries) => {
@@ -269,16 +282,17 @@ export function PatternAwareUnifiedChartCanvas({
       chart.applyOptions({ width: Math.max(rect.width, 1), height: Math.max(rect.height, 390) });
     });
     observer.observe(container);
+    publishVisibleRange();
 
     return () => {
-      const range = logicalViewport(chart);
-      if (range) storedViewportRef.current = { resetKey, logicalRange: range };
+      publishVisibleRange();
       observer.disconnect();
       chart.unsubscribeClick(handleClick);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(publishVisibleRange);
       instanceRef.current = null;
       chart.remove();
     };
-  }, [candles.length, indicators, onCandleSelect, overlays, resetKey, timeframe]);
+  }, [onCandleSelect, overlays, resetKey, timeframe]);
 
   useEffect(() => {
     const instance = instanceRef.current;
@@ -380,7 +394,7 @@ export function PatternAwareUnifiedChartCanvas({
     instance.candle.setMarkers(markers as never[]);
 
     restoreLogicalViewport(instance.chart, beforeUpdate);
-    const afterUpdate = logicalViewport(instance.chart);
+    const afterUpdate = exposeLogicalViewport(wrapperRef.current, instance.chart);
     if (afterUpdate) storedViewportRef.current = { resetKey, logicalRange: afterUpdate };
   }, [analysis, candles, indicators, levels, overlays, patternOverlay, resetKey]);
 
