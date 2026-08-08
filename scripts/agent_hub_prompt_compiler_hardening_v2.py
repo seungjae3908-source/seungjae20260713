@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
 import agent_hub_prompt_compiler_v2 as base
+from agent_hub_contract_v2 import PATHLESS_READ_ONLY_ACTIONS
 from agent_hub_state_v2 import CompactState, build_current_state, latest_matching_state, state_delta
 
 BLOCK_RE = re.compile(
@@ -77,6 +78,13 @@ def _compile_with_safe_continuations(
         base.PROFILE_ALLOWED_ACTIONS[profile] = original
 
 
+def _canonical_model_proposal(value: Mapping[str, Any]) -> dict[str, Any]:
+    canonical = dict(value)
+    if canonical.get("action_type") in PATHLESS_READ_ONLY_ACTIONS:
+        canonical["allowed_paths"] = []
+    return canonical
+
+
 def compile_prompt(
     *,
     fields: Mapping[str, Any],
@@ -107,17 +115,32 @@ def compile_prompt(
     blocks = _blocks(compiled.prompt)
     try:
         goal = json.loads(blocks["GOAL"])
+        constraints = json.loads(blocks["CONSTRAINTS"])
     except json.JSONDecodeError as exc:
-        raise PromptHardeningError("base GOAL block is invalid JSON") from exc
-    if not isinstance(goal, dict):
-        raise PromptHardeningError("base GOAL block is not an object")
+        raise PromptHardeningError("base prompt block is invalid JSON") from exc
+    if not isinstance(goal, dict) or not isinstance(constraints, dict):
+        raise PromptHardeningError("base GOAL/CONSTRAINTS block is not an object")
     goal.update(
         {
             "state_delta": delta,
             "compact_state_only": True,
         }
     )
+    pathless_actions = sorted(set(compiled.allowed_action_types).intersection(PATHLESS_READ_ONLY_ACTIONS))
+    rules = constraints.get("rules")
+    if not isinstance(rules, list) or any(not isinstance(item, str) for item in rules):
+        raise PromptHardeningError("base CONSTRAINTS rules are invalid")
+    rules.extend(
+        [
+            "For action_type in pathless_read_only_actions, allowed_paths MUST be [].",
+            "For pathless read-only actions, do not invent src/, tests/, repository root, glob, or any other file path.",
+            "Code-change actions must keep explicit non-empty allowed_paths; never use the pathless rule for code changes.",
+        ]
+    )
+    constraints["pathless_read_only_actions"] = pathless_actions
+    constraints["rules"] = rules
     blocks["GOAL"] = json.dumps(goal, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    blocks["CONSTRAINTS"] = json.dumps(constraints, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     prompt = "\n\n".join(f"[{name}]\n{blocks[name]}" for name in base.BLOCK_NAMES)
     if len(prompt) > compiled.maximum_context_size:
         raise PromptHardeningError("state-aware prompt exceeds profile context limit")
@@ -135,7 +158,7 @@ def parse_model_proposal(raw: str, compiled: HardenedCompiledPrompt) -> dict[str
 
 
 def decisions_agree(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
-    return base.decisions_agree(first, second)
+    return base.decisions_agree(_canonical_model_proposal(first), _canonical_model_proposal(second))
 
 
 def self_test() -> int:
@@ -159,6 +182,32 @@ def self_test() -> int:
     assert '"previous_state"' not in changed.prompt and '"current_state"' not in changed.prompt
     assert changed.previous_state == first.current_state and changed.current_state.head_sha == "c"*40
     assert base.PROFILE_ALLOWED_ACTIONS[base.infer_profile(fields)] == ("inspect_repository", "inspect_branch", "inspect_pull_request", "analyze_conflicts", "create_integration_plan", "report_results")
+
+    release_fields = {
+        "task_id":"pathless-demo", "worker":"operations-worker", "repository":"owner/repo",
+        "base_sha":"a"*40, "branch":"agent/hub-e2e-fixture-20260806", "head_sha":"b"*40,
+        "pr_number":"none", "changed_files":[], "checks":"fixture CI success",
+        "ci_run_id":"31079503537", "status":"partial", "summary":"read-only seed", "remaining":"inspect repository",
+    }
+    release = compile_prompt(
+        fields=release_fields,
+        sanitized_report="fixture CI success",
+        allowed_action_types=("inspect_repository",),
+        registered_workers=("operations-worker",),
+        policy_version="v4",
+    )
+    release_constraints = json.loads(_blocks(release.prompt)["CONSTRAINTS"])
+    assert release.profile == "release_validator" and not release.missing_required
+    assert release_constraints["pathless_read_only_actions"] == ["inspect_repository"]
+    assert any("allowed_paths MUST be []" in rule for rule in release_constraints["rules"])
+    assert any("do not invent src/" in rule for rule in release_constraints["rules"])
+    pathless_a = {"action_type":"inspect_repository", "allowed_paths":["src/","tests/"]}
+    pathless_b = {"action_type":"inspect_repository", "allowed_paths":[]}
+    assert decisions_agree(pathless_a, pathless_b)
+    change_a = {"action_type":"modify_feature_branch", "allowed_paths":["src/a.ts"]}
+    change_b = {"action_type":"modify_feature_branch", "allowed_paths":[]}
+    assert not decisions_agree(change_a, change_b)
+
     print(json.dumps({
         "prompt_state_hardening_v2":"pass",
         "blocks":5,
@@ -167,6 +216,9 @@ def self_test() -> int:
         "changed_delta":sorted(changed.state_delta),
         "safe_continuation_actions":len(SAFE_CONTINUATION_ACTIONS),
         "base_profile_restored":True,
+        "pathless_prompt_contract":1,
+        "pathless_model_variance_normalized":1,
+        "code_change_path_variance_normalized":0,
     }))
     return 0
 
