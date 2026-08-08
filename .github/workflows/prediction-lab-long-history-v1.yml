@@ -1,0 +1,131 @@
+name: Prediction Lab Long History V1
+
+on:
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact research commit/ref to validate
+        required: false
+        type: string
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/prediction-lab-long-history-v1.yml
+      - market-prediction-lab/package.json
+      - market-prediction-lab/src/historical-backtest-data.js
+      - market-prediction-lab/src/binance-futures-history.js
+      - market-prediction-lab/src/binance-vision-futures-archive.js
+      - market-prediction-lab/src/multi-market-backtest-engine.js
+      - market-prediction-lab/src/independent-strategy-backtest.js
+      - market-prediction-lab/src/v2-market-optimizer.js
+      - market-prediction-lab/src/v3-market-filter-optimizer.js
+      - market-prediction-lab/src/v4-momentum-regime-optimizer.js
+      - market-prediction-lab/src/v5-price-structure-optimizer.js
+      - market-prediction-lab/src/v6-independent-breakout-retest-optimizer.js
+      - market-prediction-lab/scripts/run-long-history-v1.js
+      - market-prediction-lab/scripts/run-v3-history.js
+      - market-prediction-lab/scripts/run-v4-history.js
+      - market-prediction-lab/scripts/run-v5-history.js
+      - market-prediction-lab/scripts/run-v6-history.js
+      - market-prediction-lab/tests/**
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: prediction-lab-long-history-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Resolve immutable research ref
+        id: research
+        shell: bash
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          ref="$PR_SHA"
+          if [ -z "$ref" ]; then ref="$INPUT_REF"; fi
+          if [ -z "$ref" ]; then ref="$GITHUB_SHA"; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout isolated research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.research.outputs.ref }}
+          persist-credentials: false
+
+      - name: Record immutable research SHA
+        id: sha
+        shell: bash
+        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate isolated lab
+        working-directory: market-prediction-lab
+        run: npm run validate
+
+      - name: Collect public history and run V1 plus V2 search
+        working-directory: market-prediction-lab
+        run: npm run backtest:v1:history -- long-history-v1 docs/long-history-v1-result.json docs/long-history-v1-result.md
+
+      - name: Run V3 ETH volume and trend filter validation
+        working-directory: market-prediction-lab
+        run: npm run backtest:v3:history -- long-history-v1 docs/long-history-v3-result.json docs/long-history-v3-result.md
+
+      - name: Run V4 ETH regime and momentum validation
+        working-directory: market-prediction-lab
+        run: npm run backtest:v4:history -- long-history-v1 docs/long-history-v4-result.json docs/long-history-v4-result.md
+
+      - name: Run V5 ETH price structure validation
+        working-directory: market-prediction-lab
+        run: npm run backtest:v5:history -- long-history-v1 docs/long-history-v5-result.json docs/long-history-v5-result.md
+
+      - name: Run V6 independent breakout retest validation
+        working-directory: market-prediction-lab
+        run: npm run backtest:v6:history -- long-history-v1 docs/long-history-v6-result.json docs/long-history-v6-result.md
+
+      - name: Build immutable provenance manifest
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          cat > market-prediction-lab/docs/long-history-provenance.json <<JSON
+          {"schemaVersion":1,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false}
+          JSON
+
+      - name: Upload long-history research artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-history-v1-v6-${{ github.run_id }}
+          path: |
+            market-prediction-lab/long-history-v1
+            market-prediction-lab/docs/long-history-v1-result.json
+            market-prediction-lab/docs/long-history-v1-result.md
+            market-prediction-lab/docs/long-history-v3-result.json
+            market-prediction-lab/docs/long-history-v3-result.md
+            market-prediction-lab/docs/long-history-v4-result.json
+            market-prediction-lab/docs/long-history-v4-result.md
+            market-prediction-lab/docs/long-history-v5-result.json
+            market-prediction-lab/docs/long-history-v5-result.md
+            market-prediction-lab/docs/long-history-v6-result.json
+            market-prediction-lab/docs/long-history-v6-result.md
+            market-prediction-lab/docs/long-history-provenance.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Assert immutable checkout HEAD
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
