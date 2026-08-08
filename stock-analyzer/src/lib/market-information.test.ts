@@ -170,9 +170,11 @@ test('market information parser fails closed when private or order counts are no
 test('market information route and detail adapters preserve existing navigation contracts', () => {
   const kr = marketInformationRoute('/stocks/kr?tab=volume');
   const futures = marketInformationRoute('/coins/futures');
-  assert.equal(kr?.id, 'stocks-kr');
-  assert.equal(futures?.id, 'coins-futures');
+  assert.ok(kr);
+  assert.ok(futures);
+  assert.equal(kr.id, 'stocks-kr');
+  assert.equal(futures.id, 'coins-futures');
   assert.equal(marketInformationRoute('/unknown'), null);
-  assert.equal(marketInformationDetailPath(kr!, '005930'), '/stock-info?asset=stock&market=KR&ticker=005930');
-  assert.equal(marketInformationDetailPath(futures!, 'btcusdt'), '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
+  assert.equal(marketInformationDetailPath(kr, '005930'), '/stock-info?asset=stock&market=KR&ticker=005930');
+  assert.equal(marketInformationDetailPath(futures, 'btcusdt'), '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
 });
