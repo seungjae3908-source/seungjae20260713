@@ -38,11 +38,17 @@ begin
   if v_approved_at is null or v_expires_at is null or v_expires_at <= v_approved_at then
     raise exception 'TRADE_RISK_ENVELOPE_EXPIRATION_INVALID';
   end if;
+  if v_expires_at <= clock_timestamp() then
+    raise exception 'TRADE_RISK_ENVELOPE_EXPIRED';
+  end if;
   if nullif(new.payload->>'approvedAt', '')::timestamptz is distinct from v_approved_at then
     raise exception 'TRADE_RISK_ENVELOPE_APPROVAL_MISMATCH';
   end if;
   if nullif(new.payload->>'approvalExpiresAt', '')::timestamptz is distinct from v_expires_at then
     raise exception 'TRADE_RISK_ENVELOPE_EXPIRATION_MISMATCH';
+  end if;
+  if new.approval_expires_at is distinct from v_expires_at then
+    raise exception 'TRADE_RISK_ENVELOPE_DB_EXPIRATION_MISMATCH';
   end if;
 
   v_estimated := nullif(new.payload->>'estimatedKrw', '')::numeric;
@@ -88,11 +94,15 @@ security invoker
 set search_path = pg_catalog, public, pg_temp
 as $cancel_trade_split_children_atomic$
 declare
-  v_expected integer;
   v_index integer := 0;
   v_order record;
   v_event jsonb;
+  v_event_id uuid;
+  v_order_id uuid;
   v_payload jsonb;
+  v_existing_event jsonb;
+  v_existing_to_state text;
+  v_remaining integer;
   v_result jsonb;
 begin
   if auth.uid() is not null and auth.uid() <> p_user_id then
@@ -111,64 +121,89 @@ begin
   for update;
   if not found then return null; end if;
 
-  select count(*) into v_expected
+  while v_index < jsonb_array_length(p_event_payloads) loop
+    v_event := p_event_payloads->v_index;
+    v_event_id := nullif(v_event->>'id', '')::uuid;
+    v_order_id := nullif(v_event->>'orderId', '')::uuid;
+    if v_event_id is null
+      or v_order_id is null
+      or nullif(v_event->>'userId', '')::uuid is distinct from p_user_id
+      or v_event->>'fromState' <> 'PLANNED'
+      or v_event->>'toState' <> 'CANCELED' then
+      raise exception 'TRADE_SPLIT_CANCEL_EVENT_INVALID';
+    end if;
+
+    select id, version, payload, state, leg_sequence_no
+    into v_order
+    from public.trade_orders
+    where user_id = p_user_id
+      and plan_id = p_plan_id
+      and approved_plan_version = p_approved_plan_version
+      and id = v_order_id
+      and leg_sequence_no >= p_from_sequence
+    for update;
+    if not found then
+      raise exception 'TRADE_SPLIT_CANCEL_EVENT_INVALID';
+    end if;
+
+    if v_order.state = 'PLANNED' then
+      v_payload := jsonb_set(
+        jsonb_set(v_order.payload, '{state}', '"CANCELED"'::jsonb, true),
+        '{version}', to_jsonb(v_order.version + 1), true
+      );
+      v_payload := jsonb_set(v_payload, '{updatedAt}', to_jsonb(clock_timestamp()::text), true);
+
+      update public.trade_orders
+      set state = 'CANCELED',
+          version = version + 1,
+          payload = v_payload,
+          updated_at = clock_timestamp()
+      where user_id = p_user_id
+        and id = v_order.id
+        and state = 'PLANNED'
+        and version = v_order.version;
+      if not found then
+        raise exception 'TRADE_SPLIT_CANCEL_CONCURRENT_CHANGE';
+      end if;
+
+      insert into public.trade_order_events(user_id, id, order_id, to_state, payload, created_at)
+      values (
+        p_user_id,
+        v_event_id,
+        v_order.id,
+        'CANCELED',
+        v_event,
+        coalesce(nullif(v_event->>'createdAt', '')::timestamptz, clock_timestamp())
+      );
+    elsif v_order.state = 'CANCELED' then
+      select payload, to_state
+      into v_existing_event, v_existing_to_state
+      from public.trade_order_events
+      where user_id = p_user_id
+        and id = v_event_id
+        and order_id = v_order.id;
+      if not found
+        or v_existing_to_state <> 'CANCELED'
+        or v_existing_event is distinct from v_event then
+        raise exception 'TRADE_SPLIT_CANCEL_REPLAY_MISMATCH';
+      end if;
+    else
+      raise exception 'TRADE_SPLIT_CANCEL_CONCURRENT_CHANGE';
+    end if;
+
+    v_index := v_index + 1;
+  end loop;
+
+  select count(*) into v_remaining
   from public.trade_orders
   where user_id = p_user_id
     and plan_id = p_plan_id
     and approved_plan_version = p_approved_plan_version
     and leg_sequence_no >= p_from_sequence
     and state = 'PLANNED';
-
-  if jsonb_array_length(p_event_payloads) <> v_expected then
+  if v_remaining <> 0 then
     raise exception 'TRADE_SPLIT_CANCEL_EVENT_COUNT_MISMATCH';
   end if;
-
-  for v_order in
-    select id, version, payload
-    from public.trade_orders
-    where user_id = p_user_id
-      and plan_id = p_plan_id
-      and approved_plan_version = p_approved_plan_version
-      and leg_sequence_no >= p_from_sequence
-      and state = 'PLANNED'
-    order by leg_sequence_no
-    for update
-  loop
-    v_event := p_event_payloads->v_index;
-    if nullif(v_event->>'id', '')::uuid is null
-      or nullif(v_event->>'orderId', '')::uuid <> v_order.id
-      or v_event->>'toState' <> 'CANCELED' then
-      raise exception 'TRADE_SPLIT_CANCEL_EVENT_INVALID';
-    end if;
-
-    v_payload := jsonb_set(
-      jsonb_set(v_order.payload, '{state}', '"CANCELED"'::jsonb, true),
-      '{version}', to_jsonb(v_order.version + 1), true
-    );
-    v_payload := jsonb_set(v_payload, '{updatedAt}', to_jsonb(clock_timestamp()::text), true);
-
-    update public.trade_orders
-    set state = 'CANCELED',
-        version = version + 1,
-        payload = v_payload,
-        updated_at = clock_timestamp()
-    where user_id = p_user_id and id = v_order.id and state = 'PLANNED' and version = v_order.version;
-    if not found then
-      raise exception 'TRADE_SPLIT_CANCEL_CONCURRENT_CHANGE';
-    end if;
-
-    insert into public.trade_order_events(user_id, id, order_id, from_state, to_state, payload, created_at)
-    values (
-      p_user_id,
-      nullif(v_event->>'id', '')::uuid,
-      v_order.id,
-      'PLANNED',
-      'CANCELED',
-      v_event,
-      coalesce(nullif(v_event->>'createdAt', '')::timestamptz, clock_timestamp())
-    );
-    v_index := v_index + 1;
-  end loop;
 
   select jsonb_agg(payload order by leg_sequence_no) into v_result
   from public.trade_orders
