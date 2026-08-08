@@ -20,7 +20,7 @@
     "test:phase7": "node ./test.mjs phase7",
     "test:phase8": "node ./test.mjs phase8",
     "test:phase9": "node ./test.mjs phase9",
-    "test:phase12": "node ./test.mjs phase12 && node ./scripts/verify-staging-deploy-script-contract.mjs && node ./scripts/verify-staging-bootstrap-contract.mjs && node ./scripts/verify-paper-journal-privilege-contract.mjs && node ./scripts/verify-member-permission-audit-contract.mjs && node ./scripts/verify-ai-preview-diagnostic-contract.mjs && node ./scripts/test-staging-postgres-auth.mjs && node ./scripts/verify-staging-postgres-auth-contract.mjs && node ./scripts/verify-staging-login-selector-contract.mjs && node ./scripts/verify-staging-signin-verification-gate-contract.mjs && node ./scripts/verify-staging-detail-canonical-route-contract.mjs && node ./scripts/verify-profile-request-coordinator-contract.mjs && node ./scripts/verify-server-readonly-diagnostics-contract.mjs && node ./scripts/verify-staging-artifact-sanitization-contract.mjs && node ./scripts/verify-production-data-plane-probe-contract.mjs",
+    "test:phase12": "node ./test.mjs phase12 && node ./scripts/verify-staging-deploy-script-contract.mjs && node ./scripts/verify-staging-bootstrap-contract.mjs && node ./scripts/verify-paper-journal-privilege-contract.mjs && node ./scripts/verify-member-permission-audit-contract.mjs && node ./scripts/verify-ai-preview-diagnostic-contract.mjs && node ./scripts/test-staging-postgres-auth.mjs && node ./scripts/verify-staging-postgres-auth-contract.mjs && node ./scripts/verify-staging-login-selector-contract.mjs && node ./scripts/verify-staging-signin-verification-gate-contract.mjs && node ./scripts/verify-staging-detail-canonical-route-contract.mjs && node ./scripts/verify-profile-request-coordinator-contract.mjs && node ./scripts/verify-server-readonly-diagnostics-contract.mjs && node ./scripts/verify-staging-artifact-sanitization-contract.mjs && node ./scripts/verify-production-data-plane-probe-contract.mjs && node ./scripts/verify-production-ci-provenance-contract.mjs",
     "test:phase10:safety": "node ./scripts/verify-phase10-deployment-safety.mjs",
     "test:phase10:staging": "node ./scripts/verify-phase10-staging-readiness.mjs --environment",
     "test:smoke": "node ./test.mjs smoke",
@@ -41,7 +41,7 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "@types/adm-zip": "^0.5.7",
+    "@types/adm-zip": "^2.110.2",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
