@@ -234,4 +234,4 @@ test('AI chat handles send, refusal response, and cancellation-safe UI', async (
   await page.getByRole('button', { name: '요청 취소' }).click();
   await expect(page.getByRole('alert')).toContainText('요청을 취소했습니다.');
   expect(calls).toBe(3);
-}
+});
