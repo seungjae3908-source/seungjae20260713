@@ -2,6 +2,7 @@ import { evaluateTradingOptimization } from './trade-automation-optimization.ser
 import {
   DEFAULT_TRADING_POLICY,
   type TradingAssetClass,
+  type TradingMarketSnapshot,
   type TradingPlanInput,
   type TradingPolicy,
   type TradingRiskDecision,
@@ -16,6 +17,12 @@ const MAX_SPREAD_PERCENT = 1;
 const MAX_ORDERBOOK_GAP_PERCENT = 2;
 const MIN_LIQUIDATION_DISTANCE_PERCENT = 5;
 const UPBIT_MINIMUM_KRW = 5_000;
+
+type ExtendedRiskSnapshot = TradingMarketSnapshot & {
+  accountExposureKrw?: number | null;
+  strategyExposureKrw?: number | null;
+  openRiskKrw?: number | null;
+};
 
 function finitePositive(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
@@ -41,6 +48,23 @@ function clampNumber(value: unknown, minimum: number, maximum: number, fallback:
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(maximum, Math.max(minimum, parsed));
+}
+function planReferencePrice(plan: TradingPlanInput) {
+  const candidates = [
+    plan.marketSnapshot.currentPrice,
+    plan.marketSnapshot.plannedPrice,
+    plan.entryPrice,
+    plan.limitPrice,
+    plan.quoteAmount != null && plan.quantity != null && plan.quantity > 0
+      ? plan.quoteAmount / plan.quantity
+      : null,
+  ];
+  return candidates.find((value): value is number => finitePositive(value)) ?? null;
+}
+function plannedOpenRiskKrw(plan: TradingPlanInput) {
+  const reference = planReferencePrice(plan);
+  if (reference == null || !finitePositive(plan.stopPrice)) return null;
+  return plan.estimatedKrw * Math.abs(reference - plan.stopPrice) / reference;
 }
 
 export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | undefined): TradingPolicy {
@@ -134,7 +158,7 @@ export function evaluateTradingPlan(
 ): TradingRiskDecision {
   const blockCodes: string[] = [];
   const warnings: string[] = [];
-  const snapshot = plan.marketSnapshot;
+  const snapshot = plan.marketSnapshot as ExtendedRiskSnapshot;
 
   if (options.emergencyStopped) add(blockCodes, 'EMERGENCY_STOP_ACTIVE');
   if (policy.newEntriesStopped && plan.reduceOnly !== true) add(blockCodes, 'NEW_ENTRIES_STOPPED');
@@ -144,11 +168,23 @@ export function evaluateTradingPlan(
   if (snapshot.assetExposurePercent > policy.maxAssetPercent) add(blockCodes, 'ASSET_EXPOSURE_LIMIT');
   const capitalBase = Math.max(1, Math.min(policy.totalCapitalKrw, snapshot.accountValueKrw || policy.totalCapitalKrw));
   if (snapshot.assetExposurePercent + (plan.estimatedKrw / capitalBase) * 100 > policy.maxAssetPercent) add(blockCodes, 'PROJECTED_ASSET_EXPOSURE_LIMIT');
+
+  const accountExposureKrw = finiteNonNegative(snapshot.accountExposureKrw) ? snapshot.accountExposureKrw : null;
+  if (accountExposureKrw != null && accountExposureKrw + plan.estimatedKrw > capitalBase) add(blockCodes, 'ACCOUNT_EXPOSURE_LIMIT');
   const instrumentExposureKrw = finiteNonNegative(snapshot.instrumentExposureKrw) ? snapshot.instrumentExposureKrw : 0;
   if (instrumentExposureKrw + plan.estimatedKrw > policy.maxInstrumentKrw) add(blockCodes, 'INSTRUMENT_AMOUNT_LIMIT');
+  const strategyExposureKrw = finiteNonNegative(snapshot.strategyExposureKrw) ? snapshot.strategyExposureKrw : null;
+  const strategyLimitKrw = capitalBase * policy.maxAssetPercent / 100;
+  if (strategyExposureKrw != null && strategyExposureKrw + plan.estimatedKrw > strategyLimitKrw) add(blockCodes, 'STRATEGY_EXPOSURE_LIMIT');
   const assetClass = assetClassForPlan(plan);
   const classExposure = finiteNonNegative(snapshot.assetClassExposureKrw) ? snapshot.assetClassExposureKrw : 0;
   if (classExposure + plan.estimatedKrw > policy.maxAssetClassKrw[assetClass]) add(blockCodes, 'ASSET_CLASS_AMOUNT_LIMIT');
+
+  const openRiskKrw = finiteNonNegative(snapshot.openRiskKrw) ? snapshot.openRiskKrw : null;
+  const thisPlanRiskKrw = plannedOpenRiskKrw(plan);
+  const openRiskLimitKrw = capitalBase * policy.totalDailyLossLimitPercent / 100;
+  if (openRiskKrw != null && thisPlanRiskKrw != null && openRiskKrw + thisPlanRiskKrw > openRiskLimitKrw) add(blockCodes, 'OPEN_RISK_LIMIT');
+
   if (snapshot.openPositionCount >= policy.maxOpenPositions) add(blockCodes, 'OPEN_POSITION_LIMIT');
   if (snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
   if (snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) add(blockCodes, 'CONSECUTIVE_LOSS_LIMIT');
@@ -174,9 +210,20 @@ export function evaluateTradingPlan(
       if (!Number.isFinite(declaredDelayMs) || declaredDelayMs < 0 || declaredDelayMs > MAX_DATA_DELAY_MS) add(blockCodes, 'MARKET_DATA_DELAYED');
     }
   }
-  if (Math.abs(snapshot.oneMinuteMovePercent) >= MAX_ONE_MINUTE_MOVE_PERCENT) add(blockCodes, 'ONE_MINUTE_VOLATILITY');
+  if (Math.abs(snapshot.oneMinuteMovePercent) >= MAX_ONE_MINUTE_MOVE_PERCENT) {
+    add(blockCodes, 'FAST_MOVE_DETECTED');
+    add(blockCodes, 'ONE_MINUTE_VOLATILITY');
+  }
   if (snapshot.spreadPercent > MAX_SPREAD_PERCENT) add(blockCodes, 'SPREAD_TOO_WIDE');
   if (snapshot.orderbookGapPercent > MAX_ORDERBOOK_GAP_PERCENT) add(blockCodes, 'ORDERBOOK_GAP');
+  if (finiteNonNegative(snapshot.estimatedSlippagePercent)
+    && snapshot.estimatedSlippagePercent > policy.maxEstimatedSlippagePercent) add(blockCodes, 'ESTIMATED_SLIPPAGE_LIMIT');
+  if (finiteNonNegative(plan.averageSpreadPercent)
+    && plan.averageSpreadPercent > policy.maxAverageSpreadPercent) add(blockCodes, 'AVERAGE_SPREAD_LIMIT');
+  if (finiteNonNegative(snapshot.correlatedExposurePercent)
+    && snapshot.correlatedExposurePercent > policy.maxCorrelatedExposurePercent) add(blockCodes, 'CORRELATED_EXPOSURE_LIMIT');
+  if (finiteNonNegative(snapshot.availableLiquidityKrw)
+    && snapshot.availableLiquidityKrw < plan.estimatedKrw) add(blockCodes, 'LIQUIDITY_LIMIT');
   if (!plan.strategyId.trim() || !plan.signalId.trim()) add(blockCodes, 'SIGNAL_ID_REQUIRED');
 
   if (policy.mode === 'automatic') {
