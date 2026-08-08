@@ -9,6 +9,7 @@ const production = fs.readFileSync(path.join(root, '.github/workflows/production
 const staging = fs.readFileSync(path.join(root, '.github/workflows/staging-readiness.yml'), 'utf8');
 const postgresGate = fs.readFileSync(path.join(root, '.github/workflows/staging-postgres-auth-gate.yml'), 'utf8');
 const verdictVerifier = fs.readFileSync(path.join(root, 'api-server/scripts/verify-staging-verdict.mjs'), 'utf8');
+const ciProvenance = fs.readFileSync(path.join(root, 'api-server/scripts/production-ci-provenance.cjs'), 'utf8');
 const legacyApprovalFixture = JSON.parse(fs.readFileSync(path.join(root, 'ops/production-approval.json'), 'utf8'));
 const require = createRequire(import.meta.url);
 const {
@@ -25,9 +26,7 @@ const forbidText = (source, text, label) => {
   if (source.includes(text)) failures.push(`${label}: forbidden ${JSON.stringify(text)}`);
 };
 const expectReason = (result, reason, label) => {
-  if (result.ok || result.reason !== reason) {
-    failures.push(`${label}: expected ${reason}, received ${JSON.stringify(result)}`);
-  }
+  if (result.ok || result.reason !== reason) failures.push(`${label}: expected ${reason}, received ${JSON.stringify(result)}`);
 };
 
 const mainSha = '7a70db40447924509059ac1ac546aa2e6b0bf8e8';
@@ -102,12 +101,16 @@ forbidText(workflow, 'ssh -', 'approval gate must not SSH directly');
 forbidText(workflow, '/opt/stock-app', 'approval gate must not touch production path');
 forbidText(workflow, 'issue_comment:', 'comment-triggered production approval remains retired');
 
-requireText(workflow, "'application-ci/verified'", 'application CI requirement');
-requireText(workflow, "'browser-ui/verified'", 'browser UI requirement');
-requireText(workflow, "'database-rls/verified'", 'database RLS requirement');
-requireText(workflow, "'security-integration/verified'", 'security requirement');
-requireText(workflow, "'ai-privacy/verified'", 'AI privacy requirement');
-requireText(workflow, "'futures-public-network-smoke/verified'", 'public network requirement');
+for (const status of [
+  'application-ci/verified',
+  'browser-ui/verified',
+  'database-rls/verified',
+  'security-integration/verified',
+  'ai-privacy/verified',
+  'futures-public-network-smoke/verified',
+]) {
+  requireText(ciProvenance, `'${status}'`, `shared required status ${status}`);
+}
 requireText(workflow, 'production-ci-provenance.cjs', 'shared exact CI provenance contract');
 requireText(workflow, 'inspectRequiredStatusEvidence', 'same-run required status evidence');
 requireText(workflow, 'evaluateProductionCiProvenance', 'official Application CI provenance evaluation');
@@ -208,7 +211,7 @@ if (failures.length) {
 console.log('One-time production approval contract verified.');
 console.log('- workflow_dispatch target_sha is explicit, exact, current-main-equal, and non-mutating');
 console.log('- Missing/39/41/branch/stale/other-branch/PR-synthetic/current-main mismatch targets are blocked');
-console.log('- Required CI 6/6 same-run exact Application CI provenance is preserved');
+console.log('- Required CI 6/6 same-run exact Application CI provenance is preserved in the shared contract');
 console.log('- Exact-SHA PostgreSQL Auth Gate and unexpired artifact are required');
 console.log('- Exact-SHA Staging release_ready, health, Desktop/Mobile, DB, cleanup, zero-error evidence is required');
 console.log('- Production Deploy receives exactly the approved target SHA and revalidates current main');
