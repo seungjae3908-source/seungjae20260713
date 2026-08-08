@@ -18,6 +18,7 @@ const USER_B = '22222222-2222-2222-2222-222222222222';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 
 function plan(overrides: Partial<TradingPlanInput> = {}): TradingPlanInput {
+  const observedAt = new Date().toISOString();
   return {
     exchange: 'upbit', accountMode: 'paper', strategyId: 'breakout-v1', signalId: 'signal-1',
     symbol: 'BTC', market: 'KRW', side: 'buy', orderType: 'market', quantity: null,
@@ -25,10 +26,13 @@ function plan(overrides: Partial<TradingPlanInput> = {}): TradingPlanInput {
     targetPrices: [110_000], splitRatios: [100], leverage: null, marginMode: null,
     reduceOnly: false, invalidateAction: 'hold', signalReasons: ['trend', 'volume'],
     marketSnapshot: {
-      observedAt: new Date().toISOString(), dataDelayMs: 100, oneMinuteMovePercent: 0.5,
+      observedAt, riskObservedAt: observedAt, dataDelayMs: 0, oneMinuteMovePercent: 0.5,
       spreadPercent: 0.1, orderbookGapPercent: 0.2, halted: false, availableBalance: 1_000_000,
       accountValueKrw: 5_000_000, dailyPnlPercent: 0, assetExposurePercent: 5,
       openPositionCount: 0, dailyOrderCount: 0, consecutiveLosses: 0,
+      currentPrice: 100_000, plannedPrice: 100_000, marketStatus: 'OPEN',
+      availableLiquidityKrw: 1_000_000, estimatedSlippagePercent: 0.1, estimatedFeePercent: 0.05,
+      correlatedExposurePercent: 0, signalState: 'entry_ready', signalObservedAt: observedAt,
     },
     ...overrides,
   };
@@ -44,7 +48,7 @@ test('automatic trading and every exchange default to OFF', () => {
   assert.equal(policy.bitgetLeverage, 2);
 });
 
-test('automatic trading requires separate exchange, asset, and strategy allowlists', () => {
+test('automatic policy fields can restrict eligibility but cannot bypass user approval', async () => {
   const automatic = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
     exchangeEnabled: { bitget: false, upbit: true, kiwoom: false },
@@ -52,9 +56,15 @@ test('automatic trading requires separate exchange, asset, and strategy allowlis
   });
   const blocked = evaluateTradingPlan(plan(), automatic, { emergencyStopped: false, serverLiveEnabled: true });
   assert.ok(blocked.blockCodes.includes('ASSET_NOT_ENABLED'));
-  const allowed = evaluateTradingPlan(plan(), { ...automatic, enabledAssets: { ...automatic.enabledAssets, upbit: ['BTC'] } },
-    { emergencyStopped: false, serverLiveEnabled: true });
+  const allowedPolicy = { ...automatic, enabledAssets: { ...automatic.enabledAssets, upbit: ['BTC'] } };
+  const allowed = evaluateTradingPlan(plan(), allowedPolicy, { emergencyStopped: false, serverLiveEnabled: true });
   assert.equal(allowed.allowed, true);
+  const repository = new InMemoryTradingRepository();
+  const service = new TradeAutomationService(repository);
+  const created = await service.createPlan(USER_A, plan({ signalId: 'automatic-still-needs-user' }), allowedPolicy, false);
+  assert.equal(created.plan?.state, 'APPROVAL_PENDING');
+  await assert.rejects(() => service.beginAutomaticPlan(USER_A, created.plan!.id), /USER_APPROVAL_REQUIRED/);
+  assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
 });
 
 test('risk engine blocks emergency, stale/volatile markets, loss limits, and insufficient balance', () => {
@@ -63,7 +73,7 @@ test('risk engine blocks emergency, stale/volatile markets, loss limits, and ins
     marketSnapshot: { ...plan().marketSnapshot, dataDelayMs: 6_000, oneMinuteMovePercent: -7,
       spreadPercent: 2, orderbookGapPercent: 3, availableBalance: 100, dailyPnlPercent: -5 },
   }), policy, { emergencyStopped: true, serverLiveEnabled: false });
-  for (const code of ['EMERGENCY_STOP_ACTIVE', 'MARKET_DATA_DELAYED', 'ONE_MINUTE_VOLATILITY',
+  for (const code of ['EMERGENCY_STOP_ACTIVE', 'MARKET_DATA_DELAYED', 'FAST_MOVE_DETECTED', 'ONE_MINUTE_VOLATILITY',
     'SPREAD_TOO_WIDE', 'ORDERBOOK_GAP', 'DAILY_LOSS_LIMIT', 'INSUFFICIENT_BALANCE']) {
     assert.ok(decision.blockCodes.includes(code), code);
   }
@@ -159,8 +169,10 @@ test('same signal is idempotent, approval is mandatory, and members cannot read 
   assert.equal(first.plan?.id, second.plan?.id);
   assert.equal(second.duplicate, true);
   assert.equal(await repository.getPlan(USER_B, first.plan!.id), null);
-  await assert.rejects(() => service.beginAutomaticPlan(USER_A, first.plan!.id), /TRADE_PLAN_NOT_READY/);
+  assert.equal(first.plan?.state, 'APPROVAL_PENDING');
+  await assert.rejects(() => service.beginAutomaticPlan(USER_A, first.plan!.id), /USER_APPROVAL_REQUIRED/);
   const approved = await service.approvePlan(USER_A, first.plan!.id);
+  assert.equal((approved as TradingPlanInput & { riskEnvelope?: unknown }).riskEnvelope != null, true);
   const created = await service.createOrder(USER_A, approved);
   assert.equal(created.order.state, 'SUBMITTED');
   const duplicateOrder = await service.createOrder(USER_A, approved);
@@ -179,7 +191,7 @@ test('approval rechecks signal freshness and expires stale plans before order cr
   assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
 });
 
-test('persistent global emergency stop blocks plan creation, approval, and automatic submission', async () => {
+test('persistent global emergency stop blocks plan creation and approval; automatic policy still cannot submit', async () => {
   const repository = new InMemoryTradingRepository();
   const service = new TradeAutomationService(repository);
   const approvalPolicy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
@@ -202,9 +214,9 @@ test('persistent global emergency stop blocks plan creation, approval, and autom
   });
   await repository.savePolicy(USER_A, automaticPolicy);
   const automaticPlan = await service.createPlan(USER_A, plan({ signalId: 'global-stop-automatic' }), automaticPolicy, false);
-  assert.equal(automaticPlan.plan?.state, 'PLANNED');
-  await repository.setGlobalEmergencyStop(true, USER_A);
-  await assert.rejects(() => service.beginAutomaticPlan(USER_A, automaticPlan.plan!.id), /EMERGENCY_STOP_ACTIVE/);
+  assert.equal(automaticPlan.plan?.state, 'APPROVAL_PENDING');
+  await assert.rejects(() => service.beginAutomaticPlan(USER_A, automaticPlan.plan!.id), /USER_APPROVAL_REQUIRED/);
+  assert.equal(await repository.findOrderByPlan(USER_A, automaticPlan.plan!.id), null);
 });
 
 test('paper execution has zero outbound calls and restart scan marks an accepted order for reconciliation', async () => {
