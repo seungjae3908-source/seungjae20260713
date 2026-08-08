@@ -38,6 +38,7 @@ const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const BacktestsPage = lazy(() => import('@/pages/backtests'));
 const PaperTradingPage = lazy(() => import('@/pages/paper-trading'));
+const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
 const NotFound = lazy(() => import('@/pages/not-found'));
 const Phase4RiskE2EPage = lazy(() => import('@/pages/phase4-risk-e2e'));
 const Phase5BacktestE2EPage = lazy(() => import('@/pages/phase5-backtest-e2e'));
@@ -120,6 +121,7 @@ function RecommendationsAccess() { return gated('canAccessRiskPreview', <Recomme
 function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingAccess() { return gated('canAccessPaperTrading', <PaperTradingPage />); }
+function AutoTradingAccess() { return gated('canPlaceOrders', <AutoTradingPage />); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
 function BasicMarketInformationAccess() { return gated('canAccessBasicInfo', <MarketInformationPage />); }
 function SpotMarketInformationAccess() { return gated('canAccessSpot', <MarketInformationPage />); }
@@ -144,7 +146,7 @@ function ApprovedRouter() {
     <Route path="/coins/spot" component={SpotMarketInformationAccess} />
     <Route path="/coins/futures" component={FuturesMarketInformationAccess} />
     <Route path="/stocks" component={UnifiedAssetSearchAccess} />
-    <Route path="/auto-trading" component={ScannerAccess} />
+    <Route path="/auto-trading" component={AutoTradingAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
     <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
