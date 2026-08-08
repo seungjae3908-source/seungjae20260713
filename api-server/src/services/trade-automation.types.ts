@@ -175,8 +175,11 @@ export type TradingMarketSnapshot = {
   dailyPnlPercent: number;
   weeklyPnlPercent?: number;
   assetExposurePercent: number;
-  instrumentExposureKrw?: number;
-  assetClassExposureKrw?: number;
+  accountExposureKrw?: number | null;
+  instrumentExposureKrw?: number | null;
+  strategyExposureKrw?: number | null;
+  assetClassExposureKrw?: number | null;
+  openRiskKrw?: number | null;
   openPositionCount: number;
   dailyOrderCount: number;
   consecutiveLosses: number;
@@ -249,6 +252,19 @@ export type TradingOptimizationAssessment = {
   pilotStage: TradingPilotStage;
 };
 
+export type TradingRiskEnvelope = {
+  version: 1;
+  investmentKrw: number;
+  maxLossKrw: number;
+  maxSlippagePercent: number;
+  maxSplitCount: number;
+  allowCancelUnfilled: boolean;
+  stopMethod: 'fixed_stop';
+  emergencyExitScope: 'cancel_unfilled_and_reduce_only';
+  approvedAt: string;
+  expiresAt: string;
+};
+
 export type TradingPlan = TradingPlanInput & {
   id: string;
   userId: string;
@@ -261,6 +277,7 @@ export type TradingPlan = TradingPlanInput & {
   createdAt: string;
   updatedAt: string;
   riskAssessment?: TradingOptimizationAssessment | null;
+  riskEnvelope?: TradingRiskEnvelope | null;
 };
 
 export type TradingRiskDecision = {
