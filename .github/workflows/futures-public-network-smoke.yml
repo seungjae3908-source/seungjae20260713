@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       checkout_ref:
-        description: Git ref to validate, such as refs/pull/4/merge.
+        description: Deprecated compatibility input; workflow_dispatch always validates target_sha or the exact dispatch SHA.
         required: false
         type: string
   pull_request:
@@ -38,7 +38,7 @@ permissions:
 
 env:
   APPLICATION_STATUS_SHA: ${{ github.event.inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
-  APPLICATION_CHECKOUT_REF: ${{ github.event.inputs.checkout_ref || github.ref }}
+  APPLICATION_CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.target_sha || github.sha) || github.ref }}
 
 concurrency:
   group: application-ci-${{ github.event.pull_request.number || github.event.inputs.target_sha || github.ref }}
