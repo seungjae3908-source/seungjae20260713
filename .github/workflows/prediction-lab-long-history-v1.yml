@@ -12,20 +12,24 @@ on:
       - market-prediction-lab/src/binance-futures-history.js
       - market-prediction-lab/src/binance-vision-futures-archive.js
       - market-prediction-lab/src/multi-market-backtest-engine.js
+      - market-prediction-lab/src/independent-strategy-backtest.js
       - market-prediction-lab/src/v2-market-optimizer.js
       - market-prediction-lab/src/v3-market-filter-optimizer.js
       - market-prediction-lab/src/v4-momentum-regime-optimizer.js
       - market-prediction-lab/src/v5-price-structure-optimizer.js
+      - market-prediction-lab/src/v6-independent-breakout-retest-optimizer.js
       - market-prediction-lab/scripts/run-long-history-v1.js
       - market-prediction-lab/scripts/run-v3-history.js
       - market-prediction-lab/scripts/run-v4-history.js
       - market-prediction-lab/scripts/run-v5-history.js
+      - market-prediction-lab/scripts/run-v6-history.js
       - market-prediction-lab/tests/historical-backtest-data.test.js
       - market-prediction-lab/tests/binance-futures-history.test.js
       - market-prediction-lab/tests/v2-market-optimizer.test.js
       - market-prediction-lab/tests/v3-market-filter-optimizer.test.js
       - market-prediction-lab/tests/v4-momentum-regime-optimizer.test.js
       - market-prediction-lab/tests/v5-price-structure-optimizer.test.js
+      - market-prediction-lab/tests/v6-independent-breakout-retest-optimizer.test.js
 
 permissions:
   contents: write
@@ -69,6 +73,10 @@ jobs:
         working-directory: market-prediction-lab
         run: npm run backtest:v5:history -- long-history-v1 docs/long-history-v5-result.json docs/long-history-v5-result.md
 
+      - name: Run V6 independent breakout retest validation
+        working-directory: market-prediction-lab
+        run: npm run backtest:v6:history -- long-history-v1 docs/long-history-v6-result.json docs/long-history-v6-result.md
+
       - name: Display result tables
         if: always()
         working-directory: market-prediction-lab
@@ -81,12 +89,14 @@ jobs:
           cat docs/long-history-v4-result.md
           test -f docs/long-history-v5-result.md
           cat docs/long-history-v5-result.md
+          test -f docs/long-history-v6-result.md
+          cat docs/long-history-v6-result.md
 
       - name: Upload long-history research artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: long-history-v1-v5-${{ github.run_id }}
+          name: long-history-v1-v6-${{ github.run_id }}
           path: |
             market-prediction-lab/long-history-v1
             market-prediction-lab/docs/long-history-v1-result.json
@@ -97,6 +107,8 @@ jobs:
             market-prediction-lab/docs/long-history-v4-result.md
             market-prediction-lab/docs/long-history-v5-result.json
             market-prediction-lab/docs/long-history-v5-result.md
+            market-prediction-lab/docs/long-history-v6-result.json
+            market-prediction-lab/docs/long-history-v6-result.md
           if-no-files-found: warn
           retention-days: 14
 
@@ -113,10 +125,12 @@ jobs:
             market-prediction-lab/docs/long-history-v4-result.json \
             market-prediction-lab/docs/long-history-v4-result.md \
             market-prediction-lab/docs/long-history-v5-result.json \
-            market-prediction-lab/docs/long-history-v5-result.md
+            market-prediction-lab/docs/long-history-v5-result.md \
+            market-prediction-lab/docs/long-history-v6-result.json \
+            market-prediction-lab/docs/long-history-v6-result.md
           if git diff --cached --quiet; then
             echo "No compact result changes"
             exit 0
           fi
-          git commit -m "test(research): record long-history V1 through V5 result"
+          git commit -m "test(research): record long-history V1 through V6 result"
           git push origin HEAD:feature/prediction-lab-standalone
