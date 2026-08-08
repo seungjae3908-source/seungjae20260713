@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1786231027928,
+  "generatedAt": 1786231584130,
   "mode": "backtest-only",
   "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
   "developmentStartTime": 1577836800000,
