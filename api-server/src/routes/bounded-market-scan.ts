@@ -126,14 +126,6 @@ export function createBoundedMarketScanRouter(
         strategy: String(req.query.strategy ?? ''),
       });
     }
-    if (market === 'US' && timeframe === '4H') {
-      return res.status(400).json({
-        ok: false,
-        error: 'SCAN_TIMEFRAME_UNSUPPORTED',
-        market,
-        timeframe,
-      });
-    }
     const indicators = String(req.query.indicators ?? '')
       .split(',')
       .map((value) => value.trim())
