@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { PriceAlertCard } from '@/components/price-alert-card';
+import { StockAnalysisHub } from '@/components/stock-analysis-hub';
 import { api, apiGet, type SearchResult } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice, toggleWatchlistItem, isInWatchlist } from '@/lib/stock-display';
@@ -120,18 +121,47 @@ function groupUnique<T extends AnyObj>(rows: T[], titleOf: (row: T) => unknown):
 	return [...grouped.values()];
 }
 
+type InfoViewState = {
+	searchText?: string;
+	financialPeriod?: FinancialPeriod;
+	flowPeriod?: FlowPeriod;
+	feedFilter?: SpecialFeedFilter;
+	scrollTop?: number;
+};
+const INFO_VIEW_STATE_KEY = 'sa-stock-info-view-state-v1';
+
+function readInfoViewState(): InfoViewState {
+	if (typeof window === 'undefined') return {};
+	try {
+		return JSON.parse(window.sessionStorage.getItem(INFO_VIEW_STATE_KEY) ?? '{}') as InfoViewState;
+	} catch {
+		return {};
+	}
+}
+
+function writeInfoViewState(next: InfoViewState) {
+	if (typeof window === 'undefined') return;
+	try {
+		window.sessionStorage.setItem(INFO_VIEW_STATE_KEY, JSON.stringify(next));
+	} catch {
+		// 저장소 접근 실패가 정보 조회 자체를 막아서는 안 됩니다.
+	}
+}
+
 export default function StockInfoPage() {
 	const [location, navigate] = useLocation();
 	const appMode = useAssetMode();
 	const initial = queryState(location);
+	const savedView = useMemo(() => readInfoViewState(), []);
+	const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 	const [asset, setAsset] = useState<AssetTab>(initial.asset);
 	const [market, setMarket] = useState<MarketTab>(initial.market);
 	const [ticker, setTicker] = useState(initial.ticker);
-	const [searchText, setSearchText] = useState('');
-	const [financialPeriod, setFinancialPeriod] = useState<FinancialPeriod>('quarterly');
-	const [flowPeriod, setFlowPeriod] = useState<FlowPeriod>('daily');
-	const [watchlisted, setWatchlisted] = useState(() => isInWatchlist(initial.ticker));
-	const [feedFilter, setFeedFilter] = useState<SpecialFeedFilter>('all');
+	const [searchText, setSearchText] = useState(savedView.searchText ?? '');
+	const [financialPeriod, setFinancialPeriod] = useState<FinancialPeriod>(savedView.financialPeriod ?? 'quarterly');
+	const [flowPeriod, setFlowPeriod] = useState<FlowPeriod>(savedView.flowPeriod ?? 'daily');
+	const [watchlisted, setWatchlisted] = useState(() => isInWatchlist(initial.ticker, initial.market));
+	const [feedFilter, setFeedFilter] = useState<SpecialFeedFilter>(savedView.feedFilter ?? 'all');
 	const [nowMs, setNowMs] = useState(() => Date.now());
 
 	useEffect(() => {
@@ -139,13 +169,30 @@ export default function StockInfoPage() {
 		setAsset(next.asset);
 		setMarket(next.market);
 		setTicker(next.ticker);
-		setWatchlisted(isInWatchlist(next.ticker));
+		setWatchlisted(isInWatchlist(next.ticker, next.market));
 	}, [location]);
 
 	useEffect(() => {
 		const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
 		return () => window.clearInterval(timer);
 	}, []);
+
+	useEffect(() => {
+		if (!savedView.scrollTop) return;
+		window.requestAnimationFrame(() => scrollContainerRef.current?.scrollTo({ top: savedView.scrollTop }));
+	}, [savedView.scrollTop]);
+
+	const rememberInfoState = () => writeInfoViewState({
+		searchText,
+		financialPeriod,
+		flowPeriod,
+		feedFilter,
+		scrollTop: scrollContainerRef.current?.scrollTop ?? 0,
+	});
+
+	useEffect(() => {
+		rememberInfoState();
+	}, [feedFilter, financialPeriod, flowPeriod, searchText]);
 
 	function updateSelection(next: Partial<{ asset: AssetTab; market: MarketTab; ticker: string }>) {
 		const nextAsset = next.asset ?? asset;
@@ -159,14 +206,14 @@ export default function StockInfoPage() {
 		setMarket(nextMarket);
 		setTicker(nextTicker);
 		setSearchText('');
-		setWatchlisted(isInWatchlist(nextTicker));
+		setWatchlisted(isInWatchlist(nextTicker, nextMarket));
 
 		appMode.setAsset(nextAsset);
 		if (nextAsset === 'stock') {
 			appMode.setStockMarket(nextMarket);
 			const params = new URLSearchParams({ asset: 'stock', market: nextMarket });
 			if (nextTicker) params.set('ticker', nextTicker);
-			navigate(`/stock-info?${params.toString()}`, { replace: true });
+			navigate(`/stock-info?${params.toString()}`);
 			return;
 		}
 
@@ -210,41 +257,41 @@ export default function StockInfoPage() {
 	});
 
 	const quote = useQuery({
-		queryKey: ['stock-info-quote', ticker],
-		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/quote`),
+		queryKey: ['stock-info-quote', market, ticker],
+		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/quote?market=${market}`),
 		enabled: asset === 'stock' && Boolean(ticker),
 		refetchInterval: 30_000,
 	});
 	const profile = useQuery({
-		queryKey: ['stock-info-profile', ticker],
-		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/profile`),
+		queryKey: ['stock-info-profile', market, ticker],
+		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/profile?market=${market}`),
 		enabled: asset === 'stock' && Boolean(ticker),
 		staleTime: 5 * 60_000,
 	});
 	const financials = useQuery({
-		queryKey: ['stock-info-financials', ticker],
-		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/financials`),
+		queryKey: ['stock-info-financials', market, ticker],
+		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/financials?market=${market}`),
 		enabled: asset === 'stock' && Boolean(ticker),
 		staleTime: 5 * 60_000,
 	});
 	const flow = useQuery({
-		queryKey: ['stock-info-flow', ticker, flowPeriod],
-		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/market-flow?period=${flowPeriod}`),
+		queryKey: ['stock-info-flow', market, ticker, flowPeriod],
+		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/market-flow?period=${flowPeriod}&market=${market}`),
 		enabled: asset === 'stock' && Boolean(ticker),
 	});
 	const shortSelling = useQuery({
-		queryKey: ['stock-info-short', ticker, flowPeriod],
-		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/short-selling?period=${flowPeriod}`),
+		queryKey: ['stock-info-short', market, ticker, flowPeriod],
+		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/short-selling?period=${flowPeriod}&market=${market}`),
 		enabled: asset === 'stock' && Boolean(ticker),
 	});
 	const news = useQuery({
-		queryKey: ['stock-info-news-all', ticker],
-		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/news?all=1`),
+		queryKey: ['stock-info-news-all', market, ticker],
+		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/news?all=1&market=${market}`),
 		enabled: asset === 'stock' && Boolean(ticker),
 	});
 	const disclosures = useQuery({
-		queryKey: ['stock-info-disclosures-all', ticker],
-		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/disclosures?all=1`),
+		queryKey: ['stock-info-disclosures-all', market, ticker],
+		queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/disclosures?all=1&market=${market}`),
 		enabled: asset === 'stock' && Boolean(ticker),
 	});
 
@@ -256,14 +303,24 @@ export default function StockInfoPage() {
 		: financeData.quarterly ?? financeData.quarters) as AnyObj[] | undefined;
 	const financeLatest = financeRows?.[0] ?? null;
 	const ratios = financeData.ratios ?? {};
-	const newsRows = groupUnique((news.data?.news ?? news.data?.items ?? []) as AnyObj[], (row) => row.title);
-	const disclosureRows = groupUnique(
-		([...(disclosures.data?.disclosures ?? []), ...(disclosures.data?.filings ?? [])]) as AnyObj[],
-		(row) => row.report ?? `${row.form ?? ''}${row.description ?? ''}`,
+	const newsRows = useMemo(
+		() => groupUnique((news.data?.news ?? news.data?.items ?? []) as AnyObj[], (row) => row.title),
+		[news.data],
+	);
+	const disclosureRows = useMemo(
+		() => groupUnique(
+			([...(disclosures.data?.disclosures ?? []), ...(disclosures.data?.filings ?? [])]) as AnyObj[],
+			(row) => row.report ?? `${row.form ?? ''}${row.description ?? ''}`,
+		),
+		[disclosures.data],
+	);
+	const analysisSpecialEvents = useMemo(
+		() => (specialFeed.data?.items ?? []).filter((item) => item.ticker.toUpperCase() === ticker && item.market === market),
+		[market, specialFeed.data?.items, ticker],
 	);
 
 	return (
-		<div className="h-full overflow-y-auto overscroll-contain bg-background">
+		<div ref={scrollContainerRef} onScroll={rememberInfoState} className="h-full overflow-y-auto overscroll-contain bg-background">
 			{/* 상단 고정 없음 — 제목·탭·상세가 한 페이지로 함께 스크롤. */}
 			<header className="border-b border-card-border px-4 pb-3 pt-4">
 				<h1 className="mb-3 text-center text-xl font-extrabold">정보</h1>
@@ -318,7 +375,7 @@ export default function StockInfoPage() {
 						{searchText.trim().length > 0 && (
 							<div className="mt-3 max-h-44 space-y-1 overflow-y-auto">
 								{search.isLoading && <InlineState>종목 목록을 불러오는 중입니다.</InlineState>}
-								{search.isError && <InlineState tone="error">종목 목록을 불러오지 못했습니다.</InlineState>}
+								{search.isError && <div className="space-y-2"><InlineState tone="error">{queryStateText(search)}</InlineState><RetryButton label="검색 다시 불러오기" onClick={() => { void search.refetch(); }} /></div>}
 								{!search.isLoading && !search.isError && candidates.length === 0 && <InlineState>검색 결과가 없습니다.</InlineState>}
 								{candidates.map((item: SearchResult) => (
 									<button key={`${item.market}:${item.ticker}`} type="button" onClick={() => { setSearchText(''); updateSelection({ ticker: item.ticker }); }} className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2', item.ticker === ticker ? 'bg-primary/10 text-primary' : 'bg-secondary/60')}>
@@ -339,13 +396,13 @@ export default function StockInfoPage() {
 							{/* 항상 표시되는 최상단 종목 헤더 (종목명·현재가·등락률) */}
 							<section id="stock-info-selected" className="scroll-mt-4 rounded-3xl border border-primary/20 bg-primary/5 p-4 text-center shadow-sm">
 								{quote.isLoading && <InlineState>시세를 불러오는 중입니다.</InlineState>}
-								{quote.isError && <InlineState tone="error">시세를 불러오지 못했습니다.</InlineState>}
+								{quote.isError && <div className="space-y-2"><InlineState tone="error">{queryStateText(quote)}</InlineState><RetryButton label="시세 다시 불러오기" onClick={() => { void quote.refetch(); }} /></div>}
 								{quote.data && (
 									<>
 										<div className="flex items-center gap-2">
 											<div className="min-w-0 flex-1">
 												<p className="truncate text-xl font-black">{selectedName}</p>
-												<p className="mt-1 text-xs font-bold text-muted-foreground">{ticker} · {market === 'KR' ? '국내' : '해외'} · 기준 {formatDate(quote.data.updatedAt)}</p>
+												<p className="mt-1 break-keep text-xs font-bold text-muted-foreground">{ticker} · {market === 'KR' ? '국내' : '해외'} · 출처 {text(quote.data.source ?? quote.data.provider) ?? '시세 제공기관'} · 기준 {formatDate(quote.data.updatedAt)} · {freshnessLabel(quote.data.updatedAt, nowMs, Boolean(quote.data.cached))}</p>
 											</div>
 											<button type="button" onClick={() => setWatchlisted(toggleWatchlistItem({ ticker, name: selectedName, market, currency }))} aria-label="관심종목" className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', watchlisted ? 'border-warning bg-warning/10 text-warning' : 'border-card-border')}>
 												<Star className={cn('h-5 w-5', watchlisted && 'fill-current')} />
@@ -355,12 +412,26 @@ export default function StockInfoPage() {
 											<Metric label="현재가" value={money(quote.data.price, currency)} strong />
 											<Metric label="등락률" value={finite(quote.data.changePercent) == null ? '데이터 없음' : formatAppPercent(quote.data.changePercent)} tone={Number(quote.data.changePercent) >= 0 ? 'up' : 'down'} />
 										</div>
-										<button type="button" onClick={() => navigate(`/stock/${encodeURIComponent(ticker)}`)} className="mt-3 flex w-full items-center justify-center gap-1 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground">상세 분석 <ChevronRight className="h-4 w-4" /></button>
+										<button type="button" onClick={() => { rememberInfoState(); const back = `/stock-info?asset=stock&market=${market}&ticker=${encodeURIComponent(ticker)}`; navigate(`/stock/${encodeURIComponent(ticker)}?market=${market}&back=${encodeURIComponent(back)}`); }} className="mt-3 flex w-full items-center justify-center gap-1 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground">상세 분석 <ChevronRight className="h-4 w-4" /></button>
 									</>
 								)}
 							</section>
 
-							<Section title="기본정보" state={queryStateText(quote)}>
+							<StockAnalysisHub
+								ticker={ticker}
+								name={selectedName}
+								market={market}
+								currency={currency}
+								quote={quote.data}
+								profile={profile.data}
+								financials={financials.data}
+								news={newsRows}
+								disclosures={disclosureRows}
+								specialEvents={analysisSpecialEvents}
+								loading={quote.isLoading || profile.isLoading || financials.isLoading || news.isLoading || disclosures.isLoading}
+							/>
+
+							<Section title="기본정보" state={queryStateText(quote)} onRetry={() => { void quote.refetch(); }}>
 								{quote.data && (
 									<div className="grid grid-cols-2 gap-2">
 										<Metric label="전일대비" value={money(quote.data.changeAmount, currency)} />
@@ -375,11 +446,11 @@ export default function StockInfoPage() {
 
 							<PriceAlertCard assetType="stock" market={market} symbol={ticker} currentPrice={finite(quote.data?.price)} currency={currency} />
 
-							<Section title="기업·업종" state={queryStateText(profile)}>
+							<Section title="기업·업종" state={queryStateText(profile)} onRetry={() => { void profile.refetch(); }}>
 								{profile.data && <div className="grid grid-cols-2 gap-2"><Metric label="업종" value={text(profile.data.industry) ?? '데이터 없음'} /><Metric label="산업" value={text(profile.data.sector) ?? '데이터 없음'} /><Metric label="국가" value={text(profile.data.country) ?? '데이터 없음'} /><Metric label="시장상태" value={text(quote.data?.marketStatus) ?? '제공기관 미지원'} /></div>}
 							</Section>
 
-							<Section title="재무요약" state={queryStateText(financials)} action={<Toggle values={[['quarterly', '분기별'], ['annual', '연별']]} value={financialPeriod} onChange={(value) => setFinancialPeriod(value as FinancialPeriod)} />}>
+							<Section title="재무요약" state={queryStateText(financials)} onRetry={() => { void financials.refetch(); }} action={<Toggle values={[['quarterly', '분기별'], ['annual', '연별']]} value={financialPeriod} onChange={(value) => setFinancialPeriod(value as FinancialPeriod)} />}>
 								{financials.data && (
 									<>
 										<p className="mb-2 text-[10px] font-black text-muted-foreground">단위: {market === 'KR' ? '백만원' : 'USD million'}</p>
@@ -401,7 +472,7 @@ export default function StockInfoPage() {
 								)}
 							</Section>
 
-							<Section title="수급·공매도" state={queryStateText(flow)} action={<Toggle values={[['daily', '일별'], ['weekly', '주별'], ['monthly', '월별']]} value={flowPeriod} onChange={(value) => setFlowPeriod(value as FlowPeriod)} />}>
+							<Section title="수급·공매도" state={queryStateText(flow) ?? queryStateText(shortSelling)} onRetry={() => { void flow.refetch(); void shortSelling.refetch(); }} action={<Toggle values={[['daily', '일별'], ['weekly', '주별'], ['monthly', '월별']]} value={flowPeriod} onChange={(value) => setFlowPeriod(value as FlowPeriod)} />}>
 								<div className="grid grid-cols-2 gap-2">
 									<Metric label="개인 순매매" value={flow.data?.available ? metric(flow.data?.totals?.individual) : flow.data?.message ?? '데이터 없음'} />
 									<Metric label="기관 순매매" value={flow.data?.available ? metric(flow.data?.totals?.institution) : flow.data?.message ?? '데이터 없음'} />
@@ -413,8 +484,8 @@ export default function StockInfoPage() {
 								{flow.data?.note && <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">{flow.data.note}</p>}
 							</Section>
 
-							<HistorySection title="최신 뉴스" rows={newsRows} latestCount={5} loading={news.isLoading} error={news.isError} titleOf={(row) => row.title} subtitleOf={(row) => `${row.source ?? '뉴스'} · ${row.date ?? '날짜 없음'}`} />
-							<HistorySection title="최신 공시" rows={disclosureRows} latestCount={5} loading={disclosures.isLoading} error={disclosures.isError} titleOf={(row) => row.report ?? `${row.form ?? '공시'} ${row.description ?? ''}`} subtitleOf={(row) => `${row.date ?? '날짜 없음'} · ${market === 'KR' ? 'DART' : 'SEC EDGAR'}`} />
+							<HistorySection title="최신 뉴스" rows={newsRows} latestCount={5} loading={news.isLoading} error={news.isError} onRetry={() => { void news.refetch(); }} titleOf={(row) => row.title} subtitleOf={(row) => `${row.source ?? '뉴스'} · ${row.date ?? '날짜 없음'}`} />
+							<HistorySection title="최신 공시" rows={disclosureRows} latestCount={5} loading={disclosures.isLoading} error={disclosures.isError} onRetry={() => { void disclosures.refetch(); }} titleOf={(row) => row.report ?? `${row.form ?? '공시'} ${row.description ?? ''}`} subtitleOf={(row) => `${row.date ?? '날짜 없음'} · ${market === 'KR' ? 'DART' : 'SEC EDGAR'}`} />
 						</>
 					)}
 				</main>
@@ -811,23 +882,20 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
 }
 
 // 상세 카드 — 기본 접힘, 제목 영역 전체 탭으로 펼침/접힘.
-function Section({ title, state, action, children }: { title: string; state?: string | null; action?: ReactNode; children: ReactNode }) {
+function RetryButton({ label, onClick }: { label: string; onClick: () => void }) {
+	return <button type="button" onClick={onClick} className="w-full rounded-2xl border border-card-border bg-background px-4 py-3 text-xs font-black">{label}</button>;
+}
+
+function Section({ title, state, action, onRetry, children }: { title: string; state?: string | null; action?: ReactNode; onRetry?: () => void; children: ReactNode }) {
 	const [open, setOpen] = useState(false);
+	const retryable = Boolean(onRetry && state && !state.includes('불러오는 중') && state !== '데이터 없음');
 	return (
 		<section className="rounded-3xl border border-card-border bg-card shadow-sm">
-			<button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full items-center justify-between gap-2 p-4">
-				<span className="flex-1 text-center">
-					<span className="block text-sm font-black">{title}</span>
-					{!open && <span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">{state ?? '눌러서 펼치기'}</span>}
-				</span>
+			<button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="flex w-full items-center justify-between gap-2 p-4">
+				<span className="flex-1 text-center"><span className="block text-sm font-black">{title}</span>{!open && <span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">{state ?? '눌러서 펼치기'}</span>}</span>
 				<ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
 			</button>
-			{open && (
-				<div className="px-4 pb-4">
-					{action && <div className="mb-3 flex justify-center">{action}</div>}
-					{state ? <InlineState tone={state.includes('못') ? 'error' : undefined}>{state}</InlineState> : children}
-				</div>
-			)}
+			{open && <div className="px-4 pb-4">{action && <div className="mb-3 flex justify-center">{action}</div>}{state ? <div className="space-y-2"><InlineState tone={state.includes('못') || state.includes('오류') || state.includes('많습니다') || state.includes('확인해') ? 'error' : undefined}>{state}</InlineState>{retryable && <RetryButton label="다시 불러오기" onClick={onRetry!} />}</div> : children}</div>}
 		</section>
 	);
 }
@@ -840,9 +908,16 @@ function InlineState({ children, tone }: { children: ReactNode; tone?: 'error' }
 	return <p className={cn('rounded-2xl bg-secondary p-4 text-center text-xs font-bold text-muted-foreground', tone === 'error' && 'bg-destructive/10 text-destructive')}>{children}</p>;
 }
 
-function queryStateText(query: { isLoading: boolean; isError: boolean; data?: unknown }): string | null {
+function queryStateText(query: { isLoading: boolean; isError: boolean; data?: unknown; error?: unknown }): string | null {
 	if (query.isLoading) return '데이터를 불러오는 중입니다.';
-	if (query.isError) return '데이터를 불러오지 못했습니다.';
+	if (query.isError) {
+		const error = query.error as { status?: number; message?: string } | null;
+		if (error?.status === 404) return '종목 코드 또는 시장을 확인해 주세요.';
+		if (error?.status === 429) return '요청이 많습니다. 잠시 후 다시 시도해 주세요.';
+		if (error?.status && error.status >= 500) return '데이터 제공기관 오류입니다. 다시 시도해 주세요.';
+		if (/abort|timeout|시간 초과/i.test(String(error?.message ?? ''))) return '응답 시간이 초과되었습니다. 다시 시도해 주세요.';
+		return '데이터를 불러오지 못했습니다. 다시 시도해 주세요.';
+	}
 	if (!query.data) return '데이터 없음';
 	return null;
 }
@@ -851,20 +926,18 @@ function Toggle({ values, value, onChange }: { values: [string, string][]; value
 	return <div className="flex rounded-xl bg-secondary p-1">{values.map(([key, label]) => <button key={key} type="button" onClick={() => onChange(key)} className={cn('rounded-lg px-2 py-1 text-[10px] font-black', value === key && 'bg-card text-primary shadow')}>{label}</button>)}</div>;
 }
 
-function HistorySection({ title, rows, latestCount, loading, error, titleOf, subtitleOf }: { title: string; rows: AnyObj[]; latestCount: number; loading: boolean; error: boolean; titleOf: (row: AnyObj) => unknown; subtitleOf: (row: AnyObj) => string }) {
+function HistorySection({ title, rows, latestCount, loading, error, onRetry, titleOf, subtitleOf }: { title: string; rows: AnyObj[]; latestCount: number; loading: boolean; error: boolean; onRetry?: () => void; titleOf: (row: AnyObj) => unknown; subtitleOf: (row: AnyObj) => string }) {
 	const latest = rows.slice(0, latestCount);
 	const [open, setOpen] = useState(false);
-	if (!open) {
-		return (
-			<section className="rounded-3xl border border-card-border bg-card shadow-sm">
-				<button type="button" onClick={() => setOpen(true)} aria-expanded={false} className="flex w-full items-center justify-between gap-2 p-4">
-					<span className="flex-1 text-center"><span className="block text-sm font-black">{title}</span><span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">{loading ? '불러오는 중' : error ? '불러오기 실패' : `최신 고유 ${latest.length}건 / 전체 ${rows.length}건`}</span></span>
-					<ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-				</button>
-			</section>
-		);
-	}
-	return <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><button type="button" onClick={() => setOpen(false)} aria-expanded className="mb-3 flex w-full items-center justify-between gap-2"><span className="flex-1 text-center text-sm font-black">{title}</span><span className="text-[10px] font-bold text-muted-foreground">최신 고유 {latest.length}건 / 전체 {rows.length}건</span><ChevronDown className="h-4 w-4 rotate-180 text-muted-foreground" /></button>{loading && <InlineState>데이터를 불러오는 중입니다.</InlineState>}{error && <InlineState tone="error">데이터를 불러오지 못했습니다.</InlineState>}{!loading && !error && latest.length === 0 && <InlineState>제공된 데이터가 없습니다.</InlineState>}<div className="space-y-2">{latest.map((row, index) => <HistoryRow key={`${row.url ?? titleOf(row)}:${index}`} row={row} title={String(titleOf(row) || '제목 없음')} subtitle={subtitleOf(row)} />)}</div>{rows.length > latestCount && <details className="mt-3 rounded-2xl border border-card-border bg-background p-3"><summary className="cursor-pointer text-xs font-black">전체 과거 이력 보기 ({rows.length}건)</summary><div className="mt-3 max-h-96 space-y-2 overflow-y-auto">{rows.slice(latestCount).map((row, index) => <HistoryRow key={`history:${row.url ?? titleOf(row)}:${index}`} row={row} title={String(titleOf(row) || '제목 없음')} subtitle={subtitleOf(row)} />)}</div></details>}</section>;
+	if (!open) return <section className="rounded-3xl border border-card-border bg-card shadow-sm"><button type="button" onClick={() => setOpen(true)} aria-expanded={false} className="flex w-full items-center justify-between gap-2 p-4"><span className="flex-1 text-center"><span className="block text-sm font-black">{title}</span><span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">{loading ? '불러오는 중' : error ? '불러오기 실패' : `최신 고유 ${latest.length}건 / 전체 ${rows.length}건`}</span></span><ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /></button></section>;
+	return <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+		<button type="button" onClick={() => setOpen(false)} aria-expanded className="mb-3 flex w-full items-center justify-between gap-2"><span className="flex-1 text-center text-sm font-black">{title}</span><ChevronDown className="h-4 w-4 rotate-180 text-muted-foreground" /></button>
+		{loading && <InlineState>데이터를 불러오는 중입니다.</InlineState>}
+		{error && <div className="space-y-2"><InlineState tone="error">데이터를 불러오지 못했습니다. 다시 시도해 주세요.</InlineState>{onRetry && <RetryButton label="다시 불러오기" onClick={onRetry} />}</div>}
+		{!loading && !error && latest.length === 0 && <InlineState>제공된 데이터가 없습니다.</InlineState>}
+		<div className="space-y-2">{latest.map((row, index) => <HistoryRow key={`${row.url ?? titleOf(row)}:${index}`} row={row} title={String(titleOf(row) || '제목 없음')} subtitle={subtitleOf(row)} />)}</div>
+		{rows.length > latestCount && <details className="mt-3 rounded-2xl border border-card-border bg-background p-3"><summary className="cursor-pointer text-xs font-black">전체 과거 이력 보기 ({rows.length}건)</summary><div className="mt-3 max-h-96 space-y-2 overflow-y-auto">{rows.slice(latestCount).map((row, index) => <HistoryRow key={`history:${row.url ?? titleOf(row)}:${index}`} row={row} title={String(titleOf(row) || '제목 없음')} subtitle={subtitleOf(row)} />)}</div></details>}
+	</section>;
 }
 
 function HistoryRow({ row, title, subtitle }: { row: AnyObj; title: string; subtitle: string }) {
@@ -875,6 +948,15 @@ function HistoryRow({ row, title, subtitle }: { row: AnyObj; title: string; subt
 function formatDate(value: unknown) {
 	const date = new Date(String(value ?? ''));
 	return Number.isFinite(date.getTime()) ? date.toLocaleString('ko-KR') : '기준시각 없음';
+}
+
+function freshnessLabel(value: unknown, nowMs: number, cached = false) {
+	const timestamp = Date.parse(String(value ?? ''));
+	if (!Number.isFinite(timestamp)) return cached ? '캐시 · 기준시각 없음' : '기준시각 없음';
+	const age = Math.max(0, nowMs - timestamp);
+	if (age <= 2 * 60_000) return cached ? '캐시 · 최신 범위' : '최신';
+	if (age <= 15 * 60_000) return cached ? '캐시 · 지연' : '지연';
+	return cached ? '캐시 · 오래된 데이터' : '오래된 데이터';
 }
 
 export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; basePath?: string }) {

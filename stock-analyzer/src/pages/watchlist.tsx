@@ -34,6 +34,7 @@ import {
   readWatchlistItems,
   setWatchlistTargetPrice,
   toggleWatchlistItem,
+  watchlistItemKey,
   WATCHLIST_CHANGE_EVENT,
   type WatchlistItem,
 } from "@/lib/stock-display";
@@ -108,23 +109,25 @@ export default function WatchlistPage() {
     };
   }, []);
 
-  const quoteMap = useMemo(
-    () =>
-      new Map(
-        (data?.quotes ?? []).map((quote) => [
-          String(quote.ticker).toUpperCase(),
-          quote,
-        ]),
-      ),
-    [data?.quotes],
-  );
+  const quoteMap = useMemo(() => {
+    const map = new Map<string, AnyObj>();
+    for (const quote of data?.quotes ?? []) {
+      const ticker = String(quote.ticker ?? '').trim().toUpperCase();
+      if (!ticker) continue;
+      const normalized = { ...quote, ticker } as AnyObj;
+      map.set(watchlistItemKey({ ticker, market: String(normalized.market ?? '') }), normalized);
+      if (!map.has(`UNKNOWN:${ticker}`)) map.set(`UNKNOWN:${ticker}`, normalized);
+      if (!map.has(ticker)) map.set(ticker, normalized);
+    }
+    return map;
+  }, [data?.quotes]);
 
   const rows = useMemo(
-    () =>
-      items.map((item) => ({
-        ...item,
-        ...(quoteMap.get(item.ticker.toUpperCase()) as AnyObj | undefined),
-      })),
+    () => items.map((item) => {
+      const ticker = item.ticker.toUpperCase();
+      const quote = quoteMap.get(watchlistItemKey(item)) ?? quoteMap.get(`UNKNOWN:${ticker}`) ?? quoteMap.get(ticker);
+      return { ...item, ...(quote as AnyObj | undefined), market: item.market ?? quote?.market };
+    }),
     [items, quoteMap],
   );
 
@@ -220,11 +223,11 @@ export default function WatchlistPage() {
             <div className="space-y-2">
               {rows.map((row) => (
                 <WatchCard
-                  key={row.ticker}
+                  key={watchlistItemKey(row)}
                   row={row}
                   onOpen={() =>
                     navigate(
-                      `/stock/${row.ticker}?back=${encodeURIComponent(
+                      `/stock/${row.ticker}?market=${String(row.market ?? "").toUpperCase() === "KR" ? "KR" : "US"}&back=${encodeURIComponent(
                         "/watchlist",
                       )}`,
                     )
