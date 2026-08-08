@@ -1,20 +1,37 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { buildSignalScannerRequestUrl } from './signal-scanner-url';
 
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
+export type ScannerStrategyMode = 'scalping' | 'swing';
+export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
+  | 'CANDIDATE'
+  | 'CONFIRMED'
+  | 'ARMED'
+  | 'ENTRY_ZONE'
+  | 'APPROVAL_PENDING'
+  | 'APPROVED'
+  | 'EXECUTING'
+  | 'PARTIALLY_FILLED'
+  | 'FILLED'
+  | 'MANAGING'
+  | 'CLOSED'
+  | 'INVALIDATED'
+  | 'EXPIRED'
+  | 'REJECTED'
+  | 'CANCELLED'
   | 'DETECTED'
   | 'WATCHING'
   | 'READY_FOR_APPROVAL'
-  | 'WEAKENED'
-  | 'INVALIDATED'
-  | 'EXPIRED';
+  | 'WEAKENED';
 export type ScannerDataState =
   | 'complete'
   | 'partial'
   | 'stale'
   | 'insufficient'
-  | 'unavailable';
+  | 'unavailable'
+  | 'untrusted';
 
 export interface ScannerEvidence {
   key: string;
@@ -66,6 +83,32 @@ export interface ScannerSignalCard {
   expiresAt: string;
   strongSignalEligible: boolean;
   warnings: string[];
+  strategyMode?: ScannerStrategyMode;
+  signalGrade?: ScannerSignalGrade;
+  dataQuality?: {
+    state: 'TRUSTED' | 'DEGRADED' | 'DATA_UNTRUSTED';
+    score: number;
+    strongSignalAllowed: boolean;
+    issues: Array<{ code: string; severity: 'warning' | 'blocking'; message: string }>;
+  };
+  quantScore?: {
+    technical: number;
+    trend: number;
+    momentum: number;
+    volume: number;
+    liquidity: number;
+    volatility: number;
+    marketRegime: number;
+    risk: number;
+  };
+  aiValidation?: {
+    status: 'NOT_RUN' | 'PASS' | 'PARTIAL' | 'VETO';
+    provider: string | null;
+    counterEvidence: string[];
+    missingData: string[];
+    risks: string[];
+    explanation: string | null;
+  };
 }
 
 export interface ScannerAlertCandidate {
@@ -75,7 +118,7 @@ export interface ScannerAlertCandidate {
   market: string;
   symbol: string;
   direction: ScannerDirection;
-  state: 'READY_FOR_APPROVAL';
+  state: 'APPROVAL_PENDING' | 'READY_FOR_APPROVAL';
   entryZone: { from: number; to: number } | null;
   stopLoss: number | null;
   targets: number[];
@@ -135,7 +178,8 @@ export interface ScannerResponse {
 export interface SignalScannerRequest {
   assetClass: ScannerAssetClass;
   market: 'KR' | 'US' | 'UPBIT' | 'BITGET';
-  timeframe: '5m' | '15m' | '60m' | '4H' | '1D';
+  strategy: ScannerStrategyMode;
+  timeframe: '1m' | '3m' | '5m' | '15m' | '60m' | '4H' | '1D';
   conditions: string[];
   condition: 'trend' | 'volume' | 'breakout' | 'pullback';
   cursor: number;
@@ -159,35 +203,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function scannerPath(request: SignalScannerRequest): string {
-  if (request.assetClass === 'stock') return '/api/market/scan';
-  return request.assetClass === 'coin_spot'
-    ? '/api/scanner/crypto/spot'
-    : '/api/scanner/crypto/futures';
-}
-
-function query(request: SignalScannerRequest): string {
-  const params = new URLSearchParams({
-    timeframe: request.timeframe,
-    cursor: String(Math.max(0, request.cursor)),
-    batchSize: String(request.batchSize),
-    minimumScore: String(request.minimumScore),
-    maximumRiskScore: String(request.maximumRiskScore),
-  });
-  if (request.assetClass === 'stock') {
-    params.set('market', request.market === 'US' ? 'US' : 'KR');
-    params.set('indicators', request.conditions.join(','));
-  } else {
-    params.set('condition', request.condition);
-  }
-  return params.toString();
-}
-
 export async function fetchSignalScanner(
   request: SignalScannerRequest,
   signal: AbortSignal,
 ): Promise<ScannerResponse> {
-  const response = await authorizedFetch(`${scannerPath(request)}?${query(request)}`, {
+  const response = await authorizedFetch(buildSignalScannerRequestUrl(request), {
     signal,
     cache: 'no-store',
     headers: {
