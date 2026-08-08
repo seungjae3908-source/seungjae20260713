@@ -1,5 +1,6 @@
 import AutoTradingPage from '@/pages/auto-trading';
 import type { TradeAutomationStatus } from '@/components/trade-automation-settings';
+import type { TradeApprovalQueueItem } from '@/components/trade-approval-queue';
 
 const FIXTURE: TradeAutomationStatus = {
   policy: {
@@ -20,6 +21,110 @@ const FIXTURE: TradeAutomationStatus = {
   lastOrder: null,
 };
 
+const READY_AT = new Date().toISOString();
+const EXPIRES_AT = new Date(Date.now() + 10 * 60_000).toISOString();
+const SOON_EXPIRES_AT = new Date(Date.now() + 4_000).toISOString();
+
+function readyPlan(overrides: Partial<TradeApprovalQueueItem> = {}): TradeApprovalQueueItem {
+  return {
+    id: 'ready-plan',
+    exchange: 'upbit',
+    accountMode: 'paper',
+    strategyId: 'scanner-breakout-v1',
+    signalId: 'signal-ready',
+    symbol: 'BTC',
+    market: 'KRW',
+    side: 'buy',
+    orderType: 'market',
+    estimatedKrw: 100_000,
+    quantity: null,
+    limitPrice: null,
+    stopPrice: 90_000,
+    targetPrices: [108_000, 112_000],
+    splitRatios: [50, 30, 20],
+    leverage: null,
+    signalReasons: ['거래량 증가', 'VWAP 상단 유지', '시장방향 일치'],
+    signalWarnings: [],
+    signalScore: 82,
+    signalConfidence: 78,
+    signalRiskReward: 2.1,
+    signalState: 'READY_FOR_APPROVAL',
+    signalInvalidationReason: null,
+    state: 'APPROVAL_PENDING',
+    approvalExpiresAt: EXPIRES_AT,
+    updatedAt: READY_AT,
+    approval: {
+      approvalEnabled: true,
+      signalState: 'READY_FOR_APPROVAL',
+      planState: 'APPROVAL_PENDING',
+      reasonCode: null,
+      expiresAt: EXPIRES_AT,
+      lastValidatedAt: READY_AT,
+    },
+    order: null,
+    ...overrides,
+  };
+}
+
+const APPROVAL_FIXTURE: TradeApprovalQueueItem[] = [
+  readyPlan(),
+  readyPlan({
+    id: 'soon-plan',
+    signalId: 'signal-soon',
+    symbol: 'ETH',
+    estimatedKrw: 200_000,
+    approvalExpiresAt: SOON_EXPIRES_AT,
+    approval: {
+      approvalEnabled: true,
+      signalState: 'READY_FOR_APPROVAL',
+      planState: 'APPROVAL_PENDING',
+      reasonCode: null,
+      expiresAt: SOON_EXPIRES_AT,
+      lastValidatedAt: READY_AT,
+    },
+  }),
+  readyPlan({
+    id: 'live-plan',
+    signalId: 'signal-live',
+    symbol: 'BTCUSDT',
+    exchange: 'bitget',
+    market: 'USDT-FUTURES',
+    accountMode: 'live',
+    side: 'long',
+    leverage: 2,
+  }),
+  readyPlan({
+    id: 'invalid-plan',
+    signalId: 'signal-invalid',
+    symbol: '005930',
+    exchange: 'kiwoom',
+    market: 'KR',
+    accountMode: 'mock',
+    estimatedKrw: 500_000,
+    quantity: 7,
+    stopPrice: 69_000,
+    targetPrices: [75_000],
+    splitRatios: [40, 30, 30],
+    signalReasons: ['지지선 반등'],
+    signalWarnings: ['지지선 이탈'],
+    signalScore: 59,
+    signalConfidence: 54,
+    signalRiskReward: 0.9,
+    signalState: 'INVALIDATED',
+    signalInvalidationReason: 'SIGNAL_CORE_CONDITION_BROKEN',
+    state: 'EXPIRED',
+    approvalExpiresAt: EXPIRES_AT,
+    approval: {
+      approvalEnabled: false,
+      signalState: 'INVALIDATED',
+      planState: 'EXPIRED',
+      reasonCode: 'SIGNAL_INVALIDATED',
+      expiresAt: EXPIRES_AT,
+      lastValidatedAt: READY_AT,
+    },
+  }),
+];
+
 export default function Phase12TradeAutomationE2EPage() {
-  return <AutoTradingPage fixture={FIXTURE} />;
+  return <AutoTradingPage fixture={FIXTURE} approvalFixture={APPROVAL_FIXTURE} />;
 }

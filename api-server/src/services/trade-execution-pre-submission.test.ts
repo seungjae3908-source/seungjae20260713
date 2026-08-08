@@ -4,7 +4,11 @@ import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
-import type { TradingMarketSnapshot, TradingPlanInput } from './trade-automation.types';
+import {
+  DEFAULT_TRADING_POLICY,
+  type TradingMarketSnapshot,
+  type TradingPlanInput,
+} from './trade-automation.types';
 
 const USER_ID = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
@@ -34,6 +38,7 @@ function marketSnapshot(now: Date): TradingMarketSnapshot {
     availableLiquidityKrw: 1_000_000,
     estimatedSlippagePercent: 0.1,
     estimatedFeePercent: 0.05,
+    correlatedExposurePercent: 0,
     signalState: 'entry_ready',
     signalObservedAt: now.toISOString(),
   };
@@ -50,13 +55,26 @@ function planInput(now: Date): TradingPlanInput {
     side: 'buy',
     orderType: 'market',
     quantity: 1,
-    quoteAmount: 100_000,
+    quoteAmount: 20_000,
     limitPrice: null,
-    estimatedKrw: 100_000,
+    estimatedKrw: 20_000,
     stopPrice: 95_000,
     targetPrices: [110_000],
     splitRatios: [100],
     signalReasons: ['trend'],
+    estimatedSlippagePercent: 0.1,
+    averageSpreadPercent: 0.1,
+    economics: {
+      sampleSize: 100,
+      winProbability: 0.6,
+      averageWinR: 1.5,
+      averageLossR: 1,
+      estimatedCostsR: 0.05,
+      profitFactor: 1.5,
+      maxDrawdownPercent: 10,
+      marketRegime: 'bull',
+      calibratedAt: now.toISOString(),
+    },
     marketSnapshot: marketSnapshot(now),
   };
 }
@@ -67,6 +85,10 @@ async function setup() {
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
   const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER_ID, {
+    ...DEFAULT_TRADING_POLICY,
+    pilotStage: 'limited-50',
+  });
   await repository.saveConnection({
     userId: USER_ID,
     exchange: 'upbit',
@@ -100,10 +122,10 @@ function installUpbitMock(currentPrice: number) {
       headers: { 'content-type': 'application/json' },
     });
     if (url.pathname === '/v1/accounts') {
-      return json([
+      return json({ data: [
         { currency: 'KRW', balance: '1000000', locked: '0' },
         { currency: 'BTC', balance: '0', locked: '0' },
-      ]);
+      ] });
     }
     if (url.pathname === '/v1/orders/chance') {
       return json({
@@ -115,10 +137,10 @@ function installUpbitMock(currentPrice: number) {
       });
     }
     if (url.pathname === '/v1/ticker') {
-      return json([{ market: 'KRW-BTC', trade_price: currentPrice, timestamp: now }]);
+      return json({ data: [{ market: 'KRW-BTC', trade_price: currentPrice, timestamp: now }] });
     }
     if (url.pathname === '/v1/orderbook') {
-      return json([{
+      return json({ data: [{
         market: 'KRW-BTC',
         timestamp: now,
         orderbook_units: [
@@ -126,7 +148,7 @@ function installUpbitMock(currentPrice: number) {
           { ask_price: currentPrice + 10, ask_size: 10, bid_price: currentPrice - 110, bid_size: 10 },
           { ask_price: currentPrice + 20, ask_size: 10, bid_price: currentPrice - 120, bid_size: 10 },
         ],
-      }]);
+      }] });
     }
     if (url.pathname === '/v1/orders/test') {
       orderTestPosts += 1;
@@ -134,10 +156,14 @@ function installUpbitMock(currentPrice: number) {
     }
     if (url.pathname === '/v1/orders' && (init?.method ?? 'GET') === 'POST') {
       actualOrderPosts += 1;
-      return json({ uuid: 'exchange-order-1', identifier: 'client-order-1' });
+      return json({ uuid: 'exchange-order-1' });
     }
     if (url.pathname === '/v1/order') {
-      return json({ uuid: 'exchange-order-1', state: 'wait' });
+      return json({
+        uuid: 'exchange-order-1',
+        identifier: url.searchParams.get('identifier'),
+        state: 'wait',
+      });
     }
     return json({ error: { name: 'unexpected_path', message: url.pathname } }, 500);
   }) as typeof fetch;

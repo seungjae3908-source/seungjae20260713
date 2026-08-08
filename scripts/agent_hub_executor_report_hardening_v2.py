@@ -58,6 +58,38 @@ def _effective_status(env: dict[str, str]) -> str:
     return "failed"
 
 
+def _deterministic_read_only_summary(
+    env: dict[str, str],
+    *,
+    status: str,
+    base_sha: str,
+    head_sha: str,
+    source_ci_run_id: str,
+    command_comment_id: str,
+    control_plane_sha: str,
+    verified_target_sha: str,
+    changed_files: list[str],
+) -> str:
+    action_type = base.clean(env.get("ACTION_TYPE", "unknown"), 80)
+    semantic = "completed" if status == "completed" else "incomplete"
+    return base.clean(
+        "; ".join([
+            f"trusted_read_only_result={semantic}",
+            f"action={action_type}",
+            f"command_comment_id={command_comment_id}",
+            f"control_plane_sha={control_plane_sha}",
+            f"verified_base_sha={base_sha}",
+            f"verified_target_sha={verified_target_sha}",
+            f"runtime_head_sha={head_sha}",
+            f"source_ci_run_id={source_ci_run_id}",
+            f"changed_files={len(changed_files)}",
+            "repository_mutation=0" if not changed_files else "repository_mutation=1",
+            "model_freeform_promoted=0",
+        ]),
+        1800,
+    )
+
+
 def build_report(env: dict[str, str]) -> str:
     command_id = base.clean(env.get("COMMAND_ID", ""), 120)
     source_task_id = base.clean(env.get("SOURCE_TASK_ID", ""), 180)
@@ -74,8 +106,11 @@ def build_report(env: dict[str, str]) -> str:
     checks = base.clean(env.get("CHECKS", "not reported"), 4000)
     executor_run_id = _positive_int_or_none(env.get("EXECUTOR_RUN_ID", env.get("GITHUB_RUN_ID", "none")))
     source_ci_run_id = _positive_int_or_none(env.get("SOURCE_CI_RUN_ID", "none"))
-    summary = base.clean(env.get("SUMMARY", "No executor summary."), 1800)
+    model_summary = base.clean(env.get("SUMMARY", "No executor summary."), 1800)
     failure = base.clean(env.get("FAILURE_SIGNATURE", ""), 500)
+    result_status = base.clean(env.get("RESULT_STATUS", "failed"), 40).lower()
+    if failure.lower() == "none" or result_status == "completed":
+        failure = ""
     auto_step = base.clean(env.get("AUTO_STEP", "1"), 8)
     if not command_id or not source_task_id or not worker or "/" not in repository:
         raise base.ReportError("required executor report context is missing")
@@ -115,6 +150,21 @@ def build_report(env: dict[str, str]) -> str:
     )
     if executor_run_id != "none":
         checks = base.clean(f"executor_run_id={executor_run_id}; {checks}", 4000)
+
+    if execution_mode == "read_only":
+        summary = _deterministic_read_only_summary(
+            env,
+            status=status,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            source_ci_run_id=source_ci_run_id,
+            command_comment_id=command_comment_id,
+            control_plane_sha=control_plane_sha,
+            verified_target_sha=verified_target_sha,
+            changed_files=changed_files,
+        )
+    else:
+        summary = model_summary
 
     task_id = f"{source_task_id}-exec-{command_id.split('-')[-1][:12]}"[:180]
     lines = [
@@ -242,7 +292,7 @@ def _resolve_command_context(env: dict[str, str], token: str, repository: str, c
     except ExecutorError as exc:
         raise base.ReportError("executor event command identity is invalid") from exc
     if command_comment_id is None:
-        return {"command_comment_id": "none", "source_ci_run_id": "none"}
+        return {"command_comment_id": "none", "source_ci_run_id": "none", "action_type": "unknown"}
     command_payload = _github_json(token, repository, "GET", f"/issues/comments/{command_comment_id}")
     if not isinstance(command_payload, dict):
         raise base.ReportError("exact command comment was not found")
@@ -267,6 +317,9 @@ def _resolve_command_context(env: dict[str, str], token: str, repository: str, c
     for key, value in expected.items():
         if fields.get(key, "").strip().lower() != value.strip().lower():
             raise base.ReportError(f"exact command runtime identity mismatch: {key}")
+    action_type = base.clean(fields.get("action_type", ""), 80)
+    if not action_type:
+        raise base.ReportError("exact command action_type is missing")
     source_report_id = fields.get("source_report_comment_id", "").strip()
     if not source_report_id.isdigit():
         raise base.ReportError("source report comment identity is invalid")
@@ -287,6 +340,7 @@ def _resolve_command_context(env: dict[str, str], token: str, repository: str, c
     return {
         "command_comment_id": str(command_comment_id),
         "source_ci_run_id": _source_ci_run_id(token, repository, source_fields, target_sha),
+        "action_type": action_type,
     }
 
 
@@ -329,6 +383,9 @@ def _enrich_context(env: dict[str, str], token: str) -> dict[str, str]:
     context = _resolve_command_context(result, token, repository, control_plane_sha, target_sha)
     result["COMMAND_COMMENT_ID"] = context["command_comment_id"]
     result["SOURCE_CI_RUN_ID"] = context["source_ci_run_id"]
+    result["ACTION_TYPE"] = context["action_type"]
+    if base.clean(result.get("RESULT_STATUS", "failed"), 40).lower() == "completed":
+        result["FAILURE_SIGNATURE"] = ""
 
     pr_url = base.clean(result.get("PR_URL", "none"), 500)
     execution_mode = base.clean(result.get("EXECUTION_MODE", "read_only"), 40).lower()
@@ -367,13 +424,19 @@ def self_test() -> int:
         "SOURCE_CI_RUN_ID": "42",
         "COMMAND_COMMENT_ID": "12345",
         "EXECUTOR_RUN_ID": "123",
-        "SUMMARY": "Repository content inspection completed safely. " + READ_ONLY_COMPLETE_MARKER,
+        "ACTION_TYPE": "inspect_repository",
+        "SUMMARY": "Invented staging-verdict.json release_ready=true failed=0 skipped=0. " + READ_ONLY_COMPLETE_MARKER,
+        "FAILURE_SIGNATURE": "inspect_repository:bbbb:failed",
         "AUTO_STEP": "1",
     }
     body = build_report(read_only)
     assert "status: completed" in body and "base_sha: " + "a" * 40 in body
     assert "head_sha: " + "b" * 40 in body and "changed_files: []" in body and "pr_number: none" in body
     assert "ci_run_id: 42" in body and "command_comment_id=12345" in body
+    assert "trusted_read_only_result=completed" in body and "action=inspect_repository" in body
+    assert "model_freeform_promoted=0" in body and "repository_mutation=0" in body
+    assert "staging-verdict.json" not in body and "release_ready=true" not in body
+    assert "failure_signature:" not in body
     assert "status: completed" in build_terminal_state(read_only)
 
     partial = {**read_only, "SUMMARY": "Repository content inspection incomplete. " + READ_ONLY_INCOMPLETE_MARKER}
@@ -382,7 +445,9 @@ def self_test() -> int:
     assert "status: blocked" in terminal_partial and "status: completed" not in terminal_partial
 
     failed = {**read_only, "RESULT_STATUS": "failed", "SUMMARY": "validation failed", "FAILURE_SIGNATURE": "inspect_repository:bbbb:failed"}
-    assert "status: failed" in build_report(failed) and "status: failed" in build_terminal_state(failed)
+    failed_body = build_report(failed)
+    assert "status: failed" in failed_body and "failure_signature: inspect_repository:bbbb:failed" in failed_body
+    assert "status: failed" in build_terminal_state(failed)
 
     code_change = {
         **read_only,
@@ -392,10 +457,12 @@ def self_test() -> int:
         "REPORT_BRANCH": "agent/hub-work",
         "REPORT_HEAD_SHA": "c" * 40,
         "HEAD_SHA": "c" * 40,
+        "SUMMARY": "bounded code-change summary",
     }
     code_body = build_report(code_change)
     assert "status: partial" in code_body and "pr_number: 9" in code_body and 'changed_files: ["tests/current.py"]' in code_body
     assert "base_sha: " + "a" * 40 in code_body and "status: blocked" in build_terminal_state(code_change)
+    assert "summary: bounded code-change summary" in code_body
 
     no_ci = {**read_only, "SOURCE_CI_RUN_ID": "none"}
     assert "status: partial" in build_report(no_ci)
@@ -432,6 +499,10 @@ def self_test() -> int:
         "current_pr_exact_reference": 1,
         "runtime_base_sha_priority": 1,
         "runtime_changed_files_priority": 1,
+        "read_only_model_freeform_promoted": 0,
+        "read_only_deterministic_summary": 1,
+        "completed_failure_signature_emitted": 0,
+        "failed_failure_signature_preserved": 1,
         "event_driven_continuation": 1,
         "terminal_command_state_posted": 1,
         "critical_auto_actions": 0,

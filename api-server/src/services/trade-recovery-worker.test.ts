@@ -96,6 +96,7 @@ class FakeRecoverySource implements TradeRecoveryWorkerSource {
   readonly plans = new Map<string, TradingPlan>();
   readonly events: TradingOrderEvent[] = [];
   readonly failPrepare = new Set<string>();
+  globalEmergencyStopped = false;
   now = Date.parse('2026-08-05T05:01:00.000Z');
   transitionDelayMs = 0;
   activeTransitions = 0;
@@ -166,6 +167,10 @@ class FakeRecoverySource implements TradeRecoveryWorkerSource {
     return {
       getConnection: async (candidateUserId: string) => candidateUserId === userId
         ? structuredClone(connection) : null,
+      setGlobalEmergencyStop: async (stopped: boolean, changedBy: string) => {
+        if (changedBy !== userId) throw new Error('USER_SCOPE_MISMATCH');
+        this.globalEmergencyStopped = stopped;
+      },
       transitionOrderAtomic: async (
         next: TradingOrder,
         expectedState: TradingOrderState,
@@ -229,7 +234,7 @@ class FakeRecoverySource implements TradeRecoveryWorkerSource {
   }
 }
 
-test('two workers claim each order once and the winner remains bounded by configured concurrency', async () => {
+test('two workers claim each order once, stay bounded, halt new orders, and never resubmit', async () => {
   const source = new FakeRecoverySource();
   source.seed(6);
   source.transitionDelayMs = 10;
@@ -245,6 +250,7 @@ test('two workers claim each order once and the winner remains bounded by config
   assert.ok(Math.max(left.maxConcurrencyObserved, right.maxConcurrencyObserved) <= 2);
   assert.ok(source.maxActiveTransitions <= 2);
   assert.equal([...source.orders.values()].filter((item) => item.recoveryLeaseOwner !== null).length, 0);
+  assert.equal(source.globalEmergencyStopped, true);
   assert.equal(left.exchangeOrdersSubmitted, false);
   assert.equal(right.exchangeOrdersSubmitted, false);
 });
@@ -267,6 +273,7 @@ test('an uncompleted lease is not stolen before expiry and is recoverable after 
 
   assert.equal(result.claimed, 1);
   assert.equal(result.manualReviewRequired, 1);
+  assert.equal(source.globalEmergencyStopped, true);
   assert.equal([...source.orders.values()][0].recoveryLeaseOwner, null);
 });
 
@@ -284,6 +291,7 @@ test('terminal, manual-review, and future-retry orders are excluded from claims'
 
   assert.equal(result.claimed, 1);
   assert.equal(result.manualReviewRequired, 1);
+  assert.equal(source.globalEmergencyStopped, true);
 });
 
 test('one item failure is recorded and does not stop the remaining recovery batch', async () => {
@@ -299,6 +307,7 @@ test('one item failure is recorded and does not stop the remaining recovery batc
   assert.equal(result.failed, 1);
   assert.equal(result.manualReviewRequired, 2);
   assert.equal(result.leaseLost, 0);
+  assert.equal(source.globalEmergencyStopped, true);
   assert.equal([...source.orders.values()].filter((item) => item.recoveryLeaseOwner !== null).length, 0);
   assert.equal(result.exchangeOrdersSubmitted, false);
 });
