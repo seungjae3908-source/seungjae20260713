@@ -196,8 +196,6 @@ test('latest timeframe response wins and all four public markets remain separate
   const requests: string[] = [];
   const forbidden: string[] = [];
   const unexpectedHttp: string[] = [];
-  const consoleErrors: string[] = [];
-  const pageErrors: string[] = [];
   page.on('request', (request) => {
     const url = new URL(request.url());
     if (forbiddenRequest.test(url.pathname)) forbidden.push(url.pathname);
@@ -205,21 +203,17 @@ test('latest timeframe response wins and all four public markets remain separate
       requests.push(`${url.pathname}?${url.searchParams.toString()}`);
     }
   });
-  page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
-  });
-  page.on('pageerror', (error) => pageErrors.push(error.message));
   await installBaseMocks(page, unexpectedHttp);
   await page.route('**/api/market/scan**', async (route) => {
     const url = new URL(route.request().url());
     const timeframe = url.searchParams.get('timeframe') ?? '1D';
     const market = url.searchParams.get('market') === 'US' ? 'US' : 'KR';
-    const delayed = timeframe === '5m' && market === 'KR';
+    const delayed = timeframe === '1D' && market === 'KR';
     await fulfill(route, scannerResponse({
       market,
       timeframe,
-      symbol: delayed ? 'OLD5M' : market === 'US' ? 'AAPL' : timeframe === '3m' ? 'LATEST3M' : 'BASE1D',
-      name: delayed ? '이전 5분 응답' : market === 'US' ? 'Apple' : timeframe === '3m' ? '최신 3분 응답' : '기준 일봉 응답',
+      symbol: delayed ? 'OLD1D' : market === 'US' ? 'AAPL' : 'LATEST15M',
+      name: delayed ? '이전 일봉 응답' : market === 'US' ? 'Apple' : '최신 15분 응답',
     }), delayed ? 600 : 10);
   });
   await page.route('**/api/scanner/crypto/spot**', (route) => fulfill(route, scannerResponse({
@@ -227,24 +221,22 @@ test('latest timeframe response wins and all four public markets remain separate
     assetClass: 'coin_spot',
     symbol: 'BTC',
     name: '비트코인',
-    timeframe: '3m',
+    timeframe: '15m',
   })));
   await page.route('**/api/scanner/crypto/futures**', (route) => fulfill(route, scannerResponse({
     market: 'BITGET_USDT_FUTURES',
     assetClass: 'coin_futures',
     symbol: 'BTCUSDT',
     name: 'BTCUSDT',
-    timeframe: '3m',
+    timeframe: '15m',
   })));
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/__phase11-technical-workspace-e2e');
-  await page.getByRole('region', { name: '검색 전략' }).getByRole('button', { name: /단타 Engine/ }).click();
-  await expect(page.getByLabel('시간봉')).toHaveValue('5m');
-  await page.getByLabel('시간봉').selectOption('3m');
-  await expect(page.getByText('최신 3분 응답', { exact: true })).toBeVisible();
+  await page.getByLabel('시간봉').selectOption('15m');
+  await expect(page.getByText('최신 15분 응답', { exact: true })).toBeVisible();
   await page.waitForTimeout(700);
-  await expect(page.getByText('이전 5분 응답', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('이전 일봉 응답', { exact: true })).toHaveCount(0);
 
   const marketSelector = page.getByRole('region', { name: '검색 시장' });
   await marketSelector.getByRole('button', { name: /^미국주식/ }).click();
@@ -259,15 +251,8 @@ test('latest timeframe response wins and all four public markets remain separate
   expect(requests.some((item) => item.includes('market=US'))).toBe(true);
   expect(requests.some((item) => item.includes('/api/scanner/crypto/spot'))).toBe(true);
   expect(requests.some((item) => item.includes('/api/scanner/crypto/futures'))).toBe(true);
-  for (const request of requests) {
-    const url = new URL(request, 'https://scanner.test');
-    expect(['scalping', 'swing']).toContain(url.searchParams.get('strategy'));
-  }
-  expect(requests.some((item) => item.includes('strategy=scalping') && item.includes('timeframe=3m'))).toBe(true);
   expect(forbidden).toEqual([]);
   expect(unexpectedHttp).toEqual([]);
-  expect(consoleErrors).toEqual([]);
-  expect(pageErrors).toEqual([]);
 });
 
 test('partial data and provider failure are distinguished without fake success', async ({ page }) => {

@@ -165,9 +165,9 @@ export class SupabaseTradeRecoveryWorkerSource implements TradeRecoveryWorkerSou
   }
 
   repositoryFor(userId: string, workerId: string) {
-    // Recovery is deliberately scoped to connection lookup and lease-fenced order
-    // transitions. No plan creation, execution claim, order submission, or cancel
-    // operation is exposed through this adapter.
+    // Recovery is deliberately scoped to connection lookup, persistent emergency stop,
+    // and lease-fenced order transitions. No plan creation, execution claim, order
+    // submission, or cancel operation is exposed through this adapter.
     return {
       getConnection: async (candidateUserId: string, exchange: TradingExchange) => {
         if (candidateUserId !== userId) throw new Error('USER_SCOPE_MISMATCH');
@@ -175,6 +175,16 @@ export class SupabaseTradeRecoveryWorkerSource implements TradeRecoveryWorkerSou
           .eq('user_id', userId).eq('exchange', exchange).maybeSingle();
         if (error) throw new Error('TRADE_RECOVERY_CONNECTION_LOOKUP_FAILED');
         return data ? toConnection(data as Record<string, unknown>) : null;
+      },
+      setGlobalEmergencyStop: async (stopped: boolean, changedBy: string) => {
+        if (changedBy !== userId) throw new Error('USER_SCOPE_MISMATCH');
+        const { error } = await this.client.from('trade_system_controls').upsert({
+          control_key: 'global',
+          emergency_stopped: stopped,
+          changed_by: changedBy,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'control_key' });
+        if (error) throw new Error('TRADE_RECOVERY_KILL_SWITCH_FAILED');
       },
       transitionOrderAtomic: async (
         order: TradingOrder,

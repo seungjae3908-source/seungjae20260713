@@ -62,9 +62,20 @@ const BASE_URLS = {
 
 const PREFLIGHT_TIMEOUT_MS = 4_000;
 const ORDER_TIMEOUT_MS = 12_000;
+const BITGET_RECOGNIZED_STATES = new Set([
+  'live', 'new', 'init', 'pending', 'accepted',
+  'partially_filled', 'partial_fill', 'partial-filled',
+  'filled', 'full_fill', 'completed', 'cancelled', 'canceled', 'rejected', 'failed',
+]);
+const UPBIT_RECOGNIZED_STATES = new Set(['wait', 'watch', 'done', 'cancel']);
 
 function isRecord(value: unknown): value is ExchangePayload {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function text(value: unknown) {
+  const parsed = String(value ?? '').trim();
+  return parsed || null;
 }
 
 function orderVersion(order: TradingOrder) {
@@ -73,6 +84,13 @@ function orderVersion(order: TradingOrder) {
 
 function planVersion(plan: TradingPlan) {
   return Number.isInteger(plan.version) && Number(plan.version) >= 0 ? Number(plan.version) : 0;
+}
+
+function invalidResponseCode(baseUrl: string) {
+  if (baseUrl.includes('bitget.com')) return 'BITGET_INVALID_RESPONSE';
+  if (baseUrl.includes('upbit.com')) return 'UPBIT_INVALID_RESPONSE';
+  if (baseUrl.includes('kiwoom.com')) return 'KIWOOM_INVALID_RESPONSE';
+  return 'EXCHANGE_INVALID_RESPONSE';
 }
 
 async function sendExchangeRequest(
@@ -90,11 +108,20 @@ async function sendExchangeRequest(
       body: request.body,
       signal: controller.signal,
     });
-    const payload = await response.json().catch(() => ({})) as unknown;
     if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
-    return isRecord(payload) ? payload : { data: payload };
+    const raw = await response.text();
+    if (!raw.trim()) throw new Error(invalidResponseCode(baseUrl));
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      throw new Error(invalidResponseCode(baseUrl));
+    }
+    if (!isRecord(payload)) throw new Error(invalidResponseCode(baseUrl));
+    return payload;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw new Error('EXCHANGE_TIMEOUT');
+    if (error instanceof TypeError) throw new Error('EXCHANGE_NETWORK_ERROR');
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -102,8 +129,30 @@ async function sendExchangeRequest(
 }
 
 function assertBitgetSuccess(payload: ExchangePayload) {
-  if (String(payload.code ?? '') !== '00000') throw new Error(`BITGET_${String(payload.code ?? 'INVALID_RESPONSE')}`);
+  const code = text(payload.code);
+  if (!code) throw new Error('BITGET_INVALID_RESPONSE');
+  if (code !== '00000') throw new Error(`BITGET_${code}`);
+  if (!Object.prototype.hasOwnProperty.call(payload, 'data')) throw new Error('BITGET_INVALID_RESPONSE');
   return payload.data;
+}
+
+function bitgetRow(data: unknown) {
+  const row = Array.isArray(data) ? data.find(isRecord) : isRecord(data) ? data : null;
+  if (!row) throw new Error('BITGET_INVALID_RESPONSE');
+  return row;
+}
+
+function assertBitgetOrderAccepted(payload: ExchangePayload, expectedClientOid: string) {
+  const row = bitgetRow(assertBitgetSuccess(payload));
+  if (text(row.clientOid) !== expectedClientOid) throw new Error('BITGET_INVALID_RESPONSE');
+  return row;
+}
+
+function assertBitgetOrderLookup(payload: ExchangePayload, expectedClientOid: string) {
+  const row = assertBitgetOrderAccepted(payload, expectedClientOid);
+  const status = String(row.status ?? row.state ?? '').toLowerCase();
+  if (!BITGET_RECOGNIZED_STATES.has(status)) throw new Error('BITGET_INVALID_RESPONSE');
+  return row;
 }
 
 function assertUpbitSuccess(payload: ExchangePayload) {
@@ -111,10 +160,52 @@ function assertUpbitSuccess(payload: ExchangePayload) {
   return payload;
 }
 
+function assertUpbitOrderAccepted(payload: ExchangePayload, expectedIdentifier: string) {
+  const row = assertUpbitSuccess(payload);
+  const uuid = text(row.uuid);
+  const identifier = text(row.identifier);
+  if (identifier && identifier !== expectedIdentifier) throw new Error('UPBIT_INVALID_RESPONSE');
+  if (!uuid && identifier !== expectedIdentifier) throw new Error('UPBIT_INVALID_RESPONSE');
+  return { row, orderId: uuid ?? expectedIdentifier };
+}
+
+function assertUpbitOrderLookup(payload: ExchangePayload, expectedIdentifier: string) {
+  const row = assertUpbitSuccess(payload);
+  if (text(row.identifier) !== expectedIdentifier) throw new Error('UPBIT_INVALID_RESPONSE');
+  const state = String(row.state ?? '').toLowerCase();
+  if (!UPBIT_RECOGNIZED_STATES.has(state)) throw new Error('UPBIT_INVALID_RESPONSE');
+  return row;
+}
+
 function assertKiwoomSuccess(payload: ExchangePayload) {
-  const code = String(payload.return_code ?? payload.returnCode ?? payload.code ?? '0');
+  const rawCode = payload.return_code ?? payload.returnCode ?? payload.code;
+  if (rawCode === null || rawCode === undefined || String(rawCode).trim() === '') {
+    throw new Error('KIWOOM_INVALID_RESPONSE');
+  }
+  const code = String(rawCode);
   if (!['0', '00000'].includes(code)) throw new Error(`KIWOOM_${code}`);
   return payload;
+}
+
+function assertKiwoomOrderAccepted(payload: ExchangePayload) {
+  const row = assertKiwoomSuccess(payload);
+  const orderId = text(row.ord_no ?? row.order_no);
+  if (!orderId) throw new Error('KIWOOM_EXCHANGE_ORDER_ID_UNKNOWN');
+  return orderId;
+}
+
+function kiwoomLookupContainsOrder(payload: ExchangePayload, orderId: string) {
+  const row = assertKiwoomSuccess(payload);
+  const candidates = [row.data, row.output, row.orders, row.ord_list, row.unfilled];
+  for (const candidate of candidates) {
+    const rows = Array.isArray(candidate)
+      ? candidate.filter(isRecord)
+      : isRecord(candidate)
+        ? Object.values(candidate).flatMap((value) => Array.isArray(value) ? value.filter(isRecord) : [])
+        : [];
+    if (rows.some((item) => text(item.ord_no ?? item.order_no ?? item.orig_ord_no) === orderId)) return true;
+  }
+  return false;
 }
 
 function bitgetPreflight(data: unknown[], plan: TradingPlan, clientOrderId: string) {
@@ -191,6 +282,9 @@ export class TradeExecutionService {
       await this.automation.transition(order, 'RECOVERY_REQUIRED', 'SUBMISSION_INTENT_REQUIRES_RECONCILIATION', {
         submissionAttemptId: order.submissionAttemptId,
         orderSubmissionAttempted: true,
+        submissionOutcome: 'unknown',
+        recoveryRequired: true,
+        orderResubmitted: false,
       });
       return this.recovery.reconcile(userId, plan, order);
     }
@@ -263,6 +357,9 @@ export class TradeExecutionService {
           ...metadata,
           errorCode: 'POST_ORDER_QUERY_FAILED',
           submissionAttemptId: order.submissionAttemptId,
+          submissionOutcome: 'unknown',
+          recoveryRequired: true,
+          orderResubmitted: false,
         });
       }
       return order;
@@ -284,6 +381,9 @@ export class TradeExecutionService {
           errorCode,
           submissionAttemptId: order.submissionAttemptId,
           orderSubmissionAttempted: true,
+          submissionOutcome: 'unknown',
+          recoveryRequired: true,
+          orderResubmitted: false,
         });
       }
       return this.automation.transition(order, 'REJECTED', 'PRE_SUBMISSION_OR_EXCHANGE_PREFLIGHT_FAILED', {
@@ -390,15 +490,15 @@ export class TradeExecutionService {
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
-    const data = assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
-      prepareBitgetOrder(credentials, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS));
-    const row = isRecord(data) ? data : {};
+    const row = assertBitgetOrderAccepted(await sendExchangeRequest(BASE_URLS.bitget,
+      prepareBitgetOrder(credentials, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS), order.clientOrderId);
+    void row;
     let reconciliationRequired = false;
     try {
-      assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
-        prepareBitgetOrderQuery(credentials, order.clientOrderId), PREFLIGHT_TIMEOUT_MS));
+      assertBitgetOrderLookup(await sendExchangeRequest(BASE_URLS.bitget,
+        prepareBitgetOrderQuery(credentials, order.clientOrderId), PREFLIGHT_TIMEOUT_MS), order.clientOrderId);
     } catch { reconciliationRequired = true; }
-    return { orderId: String(row.orderId ?? row.clientOid ?? order.clientOrderId), reconciliationRequired, risk };
+    return { orderId: order.clientOrderId, reconciliationRequired, risk };
   }
 
   private async executeUpbit(
@@ -443,14 +543,14 @@ export class TradeExecutionService {
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
-    const result = assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
-      prepareUpbitOrder(credentials, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS));
+    const accepted = assertUpbitOrderAccepted(await sendExchangeRequest(BASE_URLS.upbit,
+      prepareUpbitOrder(credentials, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS), order.clientOrderId);
     let reconciliationRequired = false;
     try {
-      assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
-        prepareUpbitOrderQuery(credentials, order.clientOrderId), PREFLIGHT_TIMEOUT_MS));
+      assertUpbitOrderLookup(await sendExchangeRequest(BASE_URLS.upbit,
+        prepareUpbitOrderQuery(credentials, order.clientOrderId), PREFLIGHT_TIMEOUT_MS), order.clientOrderId);
     } catch { reconciliationRequired = true; }
-    return { orderId: String(result.uuid ?? result.identifier ?? order.clientOrderId), reconciliationRequired, risk };
+    return { orderId: accepted.orderId, reconciliationRequired, risk };
   }
 
   private async executeKiwoom(
@@ -485,13 +585,13 @@ export class TradeExecutionService {
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
-    const result = assertKiwoomSuccess(await sendExchangeRequest(
+    const orderId = assertKiwoomOrderAccepted(await sendExchangeRequest(
       baseUrl, prepareKiwoomOrder(authenticated, risk.plan), ORDER_TIMEOUT_MS));
     let reconciliationRequired = false;
     try {
-      assertKiwoomSuccess(await sendExchangeRequest(
-        baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS));
+      const lookup = await sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS);
+      reconciliationRequired = !kiwoomLookupContainsOrder(lookup, orderId);
     } catch { reconciliationRequired = true; }
-    return { orderId: String(result.ord_no ?? result.order_no ?? order.clientOrderId), reconciliationRequired, risk };
+    return { orderId, reconciliationRequired, risk };
   }
 }

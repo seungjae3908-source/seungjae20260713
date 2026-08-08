@@ -112,7 +112,7 @@ test('concurrent HTTP cancel requests submit one provider cancel and reconcile t
     assert.equal(method, 'GET');
     assert.match(url, /\/v1\/order\?identifier=route-cancel-race-client/);
     return new Response(JSON.stringify({
-      uuid: 'route-cancel-race-exchange', state: 'done', volume: '1',
+      uuid: 'route-cancel-race-exchange', identifier: 'route-cancel-race-client', state: 'done', volume: '1',
       remaining_volume: '0', executed_volume: '1', paid_fee: '25',
       created_at: '2026-08-05T04:10:00.000Z',
       trades: [{ uuid: 'route-cancel-race-fill', price: '100000000', volume: '1', created_at: '2026-08-05T04:10:02.000Z' }],

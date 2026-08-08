@@ -6,11 +6,6 @@ import {
   getActiveQuerySignal,
   withActiveQuerySignal,
 } from './query-abort-signal';
-import {
-  buildSignalScannerRequestUrl,
-  SIGNAL_SCANNER_READ_PATHS,
-} from './signal-scanner-url';
-import type { SignalScannerRequest } from './signal-scanner';
 
 const repositoryRoot = process.cwd();
 const source = (relativePath: string) => fs.readFileSync(
@@ -62,51 +57,6 @@ test('scanner query keys cover market, indicators, thresholds, and timeframe rac
   ]) {
     assert.match(queryKey, new RegExp(`\\b${field}\\b`));
   }
-});
-
-test('new signal scanner sends explicit strategy and only scanner read endpoints', () => {
-  const scannerPage = source('stock-analyzer/src/pages/signal-scanner.tsx');
-  const forbidden = /\/api\/(?:account|orders?|cancel|positions?|execute|approve|private)\b/i;
-  const base = {
-    conditions: ['거래량 증가'],
-    condition: 'trend' as const,
-    cursor: 0,
-    batchSize: 24,
-    minimumScore: 55,
-    maximumRiskScore: 70,
-  };
-  const requests: SignalScannerRequest[] = [
-    { ...base, assetClass: 'stock', market: 'KR', strategy: 'scalping', timeframe: '5m' },
-    { ...base, assetClass: 'stock', market: 'US', strategy: 'swing', timeframe: '1D' },
-    { ...base, assetClass: 'coin_spot', market: 'UPBIT', strategy: 'scalping', timeframe: '3m' },
-    { ...base, assetClass: 'coin_futures', market: 'BITGET', strategy: 'swing', timeframe: '4H' },
-  ];
-
-  const observedStrategies = new Set<string>();
-  for (const request of requests) {
-    const built = buildSignalScannerRequestUrl(request);
-    const url = new URL(built, 'https://scanner.test');
-    assert.equal(SIGNAL_SCANNER_READ_PATHS.includes(url.pathname as typeof SIGNAL_SCANNER_READ_PATHS[number]), true);
-    assert.equal(url.searchParams.has('strategy'), true);
-    assert.equal(url.searchParams.get('strategy'), request.strategy);
-    assert.equal(url.searchParams.get('timeframe'), request.timeframe);
-    observedStrategies.add(url.searchParams.get('strategy') ?? '');
-    assert.doesNotMatch(url.pathname, forbidden);
-    if (request.assetClass === 'stock') {
-      assert.equal(url.pathname, '/api/market/scan');
-      assert.equal(url.searchParams.get('market'), request.market);
-    } else {
-      assert.equal(url.searchParams.get('condition'), request.condition);
-    }
-  }
-
-  assert.deepEqual([...observedStrategies].sort(), ['scalping', 'swing']);
-  assert.match(scannerPage, /strategy,\s*timeframe/);
-  assert.match(scannerPage, /1m/);
-  assert.match(scannerPage, /3m/);
-  assert.match(scannerPage, /15m context/);
-  assert.match(scannerPage, /1H context/);
-  assert.doesNotMatch(scannerPage, forbidden);
 });
 
 test('QueryClient wraps only scanner queries with the TanStack AbortSignal', () => {
