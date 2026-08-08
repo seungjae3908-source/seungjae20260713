@@ -15,7 +15,7 @@ type LifecycleRecord = {
   lastAlertKey: string | null;
 };
 
-type LegacyTradingLifecycleState =
+export type LegacyTradingLifecycleState =
   | 'DETECTED'
   | 'WATCHING'
   | 'READY_FOR_APPROVAL'
@@ -80,7 +80,7 @@ function normalizedPrevious(previous: ScannerSignalState | null): ScannerSignalS
   return previous;
 }
 
-function legacyTradingState(state: ScannerSignalState): LegacyTradingLifecycleState {
+export function scannerLifecycleStateForRiskBridge(state: ScannerSignalState | string): LegacyTradingLifecycleState {
   if (state === 'CANDIDATE' || state === 'DETECTED') return 'DETECTED';
   if (state === 'CONFIRMED' || state === 'ARMED' || state === 'ENTRY_ZONE' || state === 'WATCHING') {
     return 'WATCHING';
@@ -91,6 +91,8 @@ function legacyTradingState(state: ScannerSignalState): LegacyTradingLifecycleSt
   }
   if (state === 'EXPIRED') return 'EXPIRED';
   if (state === 'WEAKENED') return 'WEAKENED';
+  // CLOSED/INVALIDATED/REJECTED/CANCELLED and every unknown/future state are
+  // deliberately non-executable at the Scanner -> Risk/Order compatibility boundary.
   return 'INVALIDATED';
 }
 
@@ -148,6 +150,12 @@ function splitSignalId(signalId: string): { baseSignalId: string; cycle: number 
   };
 }
 
+function strategyScopedBaseSignalId(card: ScannerSignalCard): string {
+  const baseSignalId = splitSignalId(card.signalId).baseSignalId;
+  if (!card.strategyMode || baseSignalId.includes(':strategy:')) return baseSignalId;
+  return `${baseSignalId}:strategy:${card.strategyMode}`;
+}
+
 export function clearScannerSignalLifecycleForTests(): void {
   records.clear();
 }
@@ -163,9 +171,8 @@ export function getScannerLifecycleSnapshot(memberId: string, signalId: string) 
   };
 }
 
-// Backward-compatible bridge for the existing Risk/Order execution snapshot.
-// The Scanner owns its richer lifecycle, while the execution layer continues
-// to receive only the legacy TradingSignalState-shaped contract it already understands.
+// Backward-compatible, one-way bridge for the existing Risk/Order execution snapshot.
+// The Scanner owns its richer lifecycle; unknown/future states fail closed.
 export function getScannerSignalLifecycleSnapshot(memberId: string, signalId: string): {
   signalId: string;
   state: LegacyTradingLifecycleState;
@@ -175,7 +182,7 @@ export function getScannerSignalLifecycleSnapshot(memberId: string, signalId: st
   if (!snapshot) return null;
   return {
     signalId: snapshot.signalId,
-    state: legacyTradingState(snapshot.state),
+    state: scannerLifecycleStateForRiskBridge(snapshot.state),
     observedAt: snapshot.observedAt,
   };
 }
@@ -194,6 +201,7 @@ export function setScannerExternalLifecycleState(
     | 'CANCELLED'>,
   now = Date.now(),
 ): boolean {
+  if (!ORDER_OWNED_STATES.has(state)) return false;
   const { baseSignalId, cycle } = splitSignalId(signalId);
   const key = lifecycleKey(memberId, baseSignalId);
   const record = records.get(key);
@@ -215,7 +223,7 @@ export function applyScannerSignalLifecycle(
 
   const alerts: ScannerAlertCandidate[] = [];
   const updated = cards.map((card) => {
-    const baseSignalId = splitSignalId(card.signalId).baseSignalId;
+    const baseSignalId = strategyScopedBaseSignalId(card);
     const key = lifecycleKey(memberId, baseSignalId);
     const existing = records.get(key);
     let cycle = existing?.cycle ?? 1;
