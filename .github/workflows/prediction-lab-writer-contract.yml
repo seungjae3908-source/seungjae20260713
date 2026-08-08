@@ -1,0 +1,31 @@
+name: Prediction Lab Writer Contract
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/prediction-lab-shadow-hourly.yml
+      - .github/workflows/prediction-lab-adaptive-candidate.yml
+      - .github/workflows/prediction-lab-writer-contract.yml
+      - .github/scripts/validate-prediction-lab-writers.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  writer-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout writer change
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate artifact-only writer contract
+        run: node .github/scripts/validate-prediction-lab-writers.mjs
