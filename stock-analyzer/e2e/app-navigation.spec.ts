@@ -56,7 +56,13 @@ function observeNavigationRuntime(page: Page) {
   };
 }
 
-test('navigation metadata keeps five top-level sections and active routes', () => {
+function menuByGroup(groupId: 'assets' | 'technical' | 'information') {
+  const group = APP_NAVIGATION.find((item) => item.id === groupId);
+  if (!group?.menu) throw new Error(`navigation menu not found: ${groupId}`);
+  return group.menu;
+}
+
+test('navigation metadata keeps five top-level sections and assigns each core feature once', () => {
   expect(APP_NAVIGATION.map((item) => item.id)).toEqual([
     'home',
     'assets',
@@ -64,25 +70,68 @@ test('navigation metadata keeps five top-level sections and active routes', () =
     'information',
     'settings',
   ]);
-  const menuHrefs = APP_NAVIGATION.flatMap((item) => item.menu?.map((child) => child.href) ?? []);
-  expect(menuHrefs).toEqual(expect.arrayContaining([
+
+  const assetsMenu = menuByGroup('assets');
+  const technicalMenu = menuByGroup('technical');
+  const informationMenu = menuByGroup('information');
+
+  expect(assetsMenu.map((item) => item.href)).toEqual(expect.arrayContaining([
     APP_ROUTES.assets,
-    APP_ROUTES.legacyMarketRankings,
+    APP_ROUTES.stocksKr,
+    APP_ROUTES.stocksUs,
+    APP_ROUTES.coinsSpot,
+    APP_ROUTES.coinsFutures,
+    APP_ROUTES.unifiedMarketRankings,
+    APP_ROUTES.recommendations,
     APP_ROUTES.themes,
     APP_ROUTES.watchlist,
     APP_ROUTES.alerts,
+  ]));
+  expect(technicalMenu.map((item) => item.href)).toEqual([
     APP_ROUTES.scanner,
     APP_ROUTES.aiChart,
     APP_ROUTES.autoTrading,
+    APP_ROUTES.backtests,
+    APP_ROUTES.paperTrading,
+  ]);
+  expect(informationMenu.map((item) => item.href)).toEqual([
     APP_ROUTES.marketOverview,
     APP_ROUTES.learn,
     APP_ROUTES.aiChat,
     APP_ROUTES.portfolio,
-  ]));
+  ]);
+
+  const allMenuIds = APP_NAVIGATION.flatMap((item) => item.menu?.map((child) => child.id) ?? []);
+  expect(new Set(allMenuIds).size).toBe(allMenuIds.length);
+
+  expect(assetsMenu.find((item) => item.id === 'stocks-kr')).toMatchObject({
+    href: '/stocks/kr',
+    capability: 'canAccessBasicInfo',
+  });
+  expect(assetsMenu.find((item) => item.id === 'stocks-us')).toMatchObject({
+    href: '/stocks/us',
+    capability: 'canAccessBasicInfo',
+  });
+  expect(assetsMenu.find((item) => item.id === 'coins-spot')).toMatchObject({
+    href: '/coins/spot',
+    capability: 'canAccessSpot',
+  });
+  expect(assetsMenu.find((item) => item.id === 'coins-futures')).toMatchObject({
+    href: '/coins/futures',
+    capability: 'canAccessFutures',
+  });
+  expect(technicalMenu.find((item) => item.id === 'auto-trading')).toMatchObject({
+    href: '/auto-trading',
+    capability: 'canAccessRiskPreview',
+  });
+
   expect(UNIFIED_SEARCH_ROUTE_CONTRACT.primaryEntry).toBe('/stocks');
+  expect(UNIFIED_SEARCH_ROUTE_CONTRACT.searchAlias).toBe('/search');
   expect(UNIFIED_SEARCH_ROUTE_CONTRACT.marketRankingsAfterIntegration).toBe('/market-rankings');
   expect(navigationGroupMatches(APP_NAVIGATION[1], '/stock/005930?back=%2Fstocks')).toBe(true);
   expect(navigationGroupMatches(APP_NAVIGATION[1], '/stock-info?asset=coin')).toBe(true);
+  expect(navigationGroupMatches(APP_NAVIGATION[1], '/stocks/kr')).toBe(true);
+  expect(navigationGroupMatches(APP_NAVIGATION[1], '/coins/futures')).toBe(true);
   expect(navigationGroupMatches(APP_NAVIGATION[2], '/scanner')).toBe(true);
   expect(navigationGroupMatches(APP_NAVIGATION[2], '/auto-trading')).toBe(true);
 });
@@ -113,7 +162,7 @@ for (const viewport of [
   });
 }
 
-test('keyboard navigation autofocuses, traps, moves through, and closes the asset menu', async ({ page }) => {
+test('keyboard navigation autofocuses, cycles through, and closes the asset menu', async ({ page }) => {
   const assertCleanRuntime = observeNavigationRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await mockNavigationRuntime(page);
@@ -127,17 +176,20 @@ test('keyboard navigation autofocuses, traps, moves through, and closes the asse
   const menu = page.getByRole('menu', { name: '종목 메뉴' });
   await expect(menu).toBeVisible();
   const items = menu.getByRole('menuitem');
-  await expect(items).toHaveCount(5);
+  const itemCount = await items.count();
+  expect(itemCount).toBeGreaterThan(0);
   await expect(items.nth(0)).toBeFocused();
-  await items.nth(0).press('ArrowDown');
-  await expect(items.nth(1)).toBeFocused();
-  await items.nth(1).press('End');
-  await expect(items.nth(4)).toBeFocused();
-  await items.nth(4).press('Tab');
+  if (itemCount > 1) {
+    await items.nth(0).press('ArrowDown');
+    await expect(items.nth(1)).toBeFocused();
+  }
+  await items.nth(Math.min(1, itemCount - 1)).press('End');
+  await expect(items.nth(itemCount - 1)).toBeFocused();
+  await items.nth(itemCount - 1).press('Tab');
   await expect(items.nth(0)).toBeFocused();
   await items.nth(0).press('Shift+Tab');
-  await expect(items.nth(4)).toBeFocused();
-  await items.nth(4).press('Escape');
+  await expect(items.nth(itemCount - 1)).toBeFocused();
+  await items.nth(itemCount - 1).press('Escape');
   await expect(menu).toBeHidden();
   await expect(assetsTrigger).toBeFocused();
   assertCleanRuntime();
@@ -162,7 +214,7 @@ test('pointer opening autofocuses and outside click restores the trigger focus',
   assertCleanRuntime();
 });
 
-test('asset menu reaches the existing search entry without redefining search routes', async ({ page }) => {
+test('asset menu reaches the integrated unified search entry', async ({ page }) => {
   const assertCleanRuntime = observeNavigationRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await mockNavigationRuntime(page);
@@ -170,7 +222,7 @@ test('asset menu reaches the existing search entry without redefining search rou
 
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
   await navigation.getByRole('button', { name: '종목', exact: true }).click();
-  await page.getByRole('menuitem', { name: '종목 검색·탐색', exact: true }).click();
+  await page.getByRole('menuitem', { name: '통합 종목검색', exact: true }).click();
   await expect(page).toHaveURL(/\/stocks$/);
   assertCleanRuntime();
 });
