@@ -1,0 +1,148 @@
+name: Prediction Lab Multi-Market Suite
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/prediction-lab-standalone
+    paths:
+      - .github/workflows/prediction-lab-52d-validation.yml
+      - market-prediction-lab/package.json
+      - market-prediction-lab/src/**
+      - market-prediction-lab/scripts/**
+      - market-prediction-lab/tests/**
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: prediction-lab-market-suite-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout isolated branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/prediction-lab-standalone
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate standalone lab
+        id: validate
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          mkdir -p docs
+          set +e
+          npm run validate 2>&1 | tee docs/validation-run.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Record validation-suite failure
+        if: steps.validate.outcome != 'success'
+        working-directory: market-prediction-lab
+        run: |
+          tail -n 200 docs/validation-run.log > docs/validation-failure.log
+          cat > docs/market-suite-result.json <<'JSON'
+          {
+            "schemaVersion": 1,
+            "status": "fail",
+            "stage": "standalone_validation_suite",
+            "source": "github-actions-isolated-multi-market-suite",
+            "error": {
+              "name": "ValidationSuiteError",
+              "message": "npm run validate failed before live data collection; see docs/validation-failure.log"
+            }
+          }
+          JSON
+
+      - name: Clear previous validation failure log
+        if: steps.validate.outcome == 'success'
+        working-directory: market-prediction-lab
+        run: rm -f docs/validation-failure.log
+
+      - name: Collect, validate, train and compare price-volume candidates
+        id: market_suite
+        if: steps.validate.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json docs/candidate-models
+
+      - name: Collect historical funding and compare temporal candidates
+        id: derivatives_suite
+        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-derivatives-suite.js live-derivatives-suite docs/derivatives-suite-result.json docs/candidate-models-v2
+
+      - name: Collect mark index and funding structure candidates
+        id: structure_suite
+        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success' && steps.derivatives_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-market-structure-suite.js live-market-structure-suite docs/market-structure-suite-result.json docs/candidate-models-v3
+
+      - name: Display suite results
+        if: always()
+        working-directory: market-prediction-lab
+        run: |
+          test -f docs/market-suite-result.json
+          cat docs/market-suite-result.json
+          if [ -f docs/derivatives-suite-result.json ]; then cat docs/derivatives-suite-result.json; fi
+          if [ -f docs/market-structure-suite-result.json ]; then cat docs/market-structure-suite-result.json; fi
+
+      - name: Upload isolated validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-suites-${{ github.run_id }}
+          path: |
+            market-prediction-lab/live-market-suite
+            market-prediction-lab/live-derivatives-suite
+            market-prediction-lab/live-market-structure-suite
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Commit summaries, diagnostics and research candidates
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A market-prediction-lab/docs
+          git diff --cached --quiet && exit 0
+          git commit -m "test: record market structure candidates"
+
+          parent_sha="$(git rev-parse HEAD^)"
+          remote_sha="$(git ls-remote origin refs/heads/feature/prediction-lab-standalone | awk '{print $1}')"
+          if [ "$remote_sha" != "$parent_sha" ]; then
+            echo "::error::Prediction Lab branch advanced during validation: expected $parent_sha, found $remote_sha"
+            exit 1
+          fi
+
+          git push origin HEAD:feature/prediction-lab-standalone
+          pushed_sha="$(git rev-parse HEAD)"
+          remote_pushed_sha="$(git ls-remote origin refs/heads/feature/prediction-lab-standalone | awk '{print $1}')"
+          if [ "$remote_pushed_sha" != "$pushed_sha" ]; then
+            echo "::error::Prediction Lab branch advanced after result push: pushed $pushed_sha, remote is $remote_pushed_sha"
+            exit 1
+          fi
+
+          gh workflow run futures-public-network-smoke.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f target_sha="$pushed_sha" \
+            -f checkout_ref="$pushed_sha"
+
+      - name: Fail workflow when technical validation failed
+        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
+        run: exit 1
