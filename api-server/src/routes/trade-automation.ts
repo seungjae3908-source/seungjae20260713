@@ -3,7 +3,10 @@ import { createSupabaseTradingRepository, safeConnections, type TradingRepositor
 import { liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
-import { TradeSplitOrderExecutionService } from '../services/trade-split-order-execution.service';
+import {
+  buildSplitLegRevalidationEvidence,
+  TradeSplitOrderExecutionService,
+} from '../services/trade-split-order-execution.service';
 import type { SplitTradingOrder } from '../services/trade-split-order-materializer.service';
 import type { SplitOrderRepository } from '../services/trade-split-order.repository';
 import { createSupabaseSplitOrderRepository } from '../services/trade-split-order-supabase.repository';
@@ -32,24 +35,49 @@ export function setTradeSplitOrderRepositoryFactoryForTests(
   splitRepositoryFactoryForTests = factory;
 }
 
+function planVersion(plan: TradingPlan) {
+  return Number.isInteger(plan.version) && Number(plan.version) >= 0 ? Number(plan.version) : 0;
+}
+
 function context(req: AuthenticatedRequest) {
   if (!req.member?.id) throw new Error('LOGIN_REQUIRED');
+  const userId = req.member.id;
   const repository = repositoryFactoryForTests
-    ? repositoryFactoryForTests(req.member.id)
+    ? repositoryFactoryForTests(userId)
     : req.accessToken
-      ? createSupabaseTradingRepository(req.accessToken, req.member.id)
+      ? createSupabaseTradingRepository(req.accessToken, userId)
       : (() => { throw new Error('LOGIN_REQUIRED'); })();
   const splitRepository = splitRepositoryFactoryForTests
-    ? splitRepositoryFactoryForTests(req.member.id)
+    ? splitRepositoryFactoryForTests(userId)
     : req.accessToken
-      ? createSupabaseSplitOrderRepository(req.accessToken, req.member.id)
+      ? createSupabaseSplitOrderRepository(req.accessToken, userId)
       : null;
+  const automation = new TradeAutomationService(repository);
+  const splitExecution = splitRepository ? new TradeSplitOrderExecutionService(splitRepository, {
+    async invalidateSignal(input) {
+      const current = await repository.getPlan(input.userId, input.planId);
+      if (!current) throw new Error('TRADE_PLAN_NOT_FOUND');
+      if (planVersion(current) !== input.approvedPlanVersion) throw new Error('APPROVAL_VERSION_CHANGED');
+      if (current.state !== 'SUBMITTED') return;
+      const halted = { ...current, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
+      const applied = await repository.compareAndSetPlan(
+        halted,
+        'SUBMITTED',
+        input.approvedPlanVersion,
+      );
+      if (!applied) throw new Error('TRADE_PLAN_CONCURRENTLY_CHANGED');
+    },
+    async handleRisk(input) {
+      if (input.reason !== 'FAST_MOVE_DETECTED') throw new Error('TRADE_SPLIT_RISK_REASON_UNSUPPORTED');
+      await repository.setGlobalEmergencyStop(true, input.userId);
+    },
+  }) : null;
   return {
-    userId: req.member.id,
+    userId,
     repository,
-    automation: new TradeAutomationService(repository),
+    automation,
     execution: new TradeExecutionService(repository),
-    splitExecution: splitRepository ? new TradeSplitOrderExecutionService(splitRepository) : null,
+    splitExecution,
     cancellation: new TradeCancelReconciliationService(repository),
   };
 }
@@ -93,10 +121,12 @@ async function executeSubmittedPlan(
   if (!splitExecution) throw new Error('TRADE_SPLIT_ORDER_STORAGE_UNAVAILABLE');
   const prepared = await splitExecution.ensureChildren(plan);
   if (!prepared.executable) throw new Error('TRADE_SPLIT_CHILD_NOT_EXECUTABLE');
-  const executed = await execution.execute(userId, childPlan(plan, prepared.executable), prepared.executable);
+  const executionPlan = childPlan(plan, prepared.executable);
+  const executed = await execution.execute(userId, executionPlan, prepared.executable);
   let snapshot = prepared;
   if (executed.state === 'FILLED') {
-    snapshot = await splitExecution.activateAfterFill(executed as SplitTradingOrder);
+    const evidence = buildSplitLegRevalidationEvidence(executionPlan, executed);
+    snapshot = await splitExecution.activateAfterFill(executed as SplitTradingOrder, evidence);
   }
   return {
     order: executed,
@@ -193,7 +223,7 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
 
 router.post('/plans', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, repository, automation, execution, splitExecution } = context(req);
+    const { userId, repository, automation } = context(req);
     const input = req.body as TradingPlanInput;
     exchangeValue(input.exchange);
     const [policy, existingOrders, persistentGlobalStop] = await Promise.all([
@@ -208,11 +238,6 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
     const result = await automation.createPlan(userId, input, policy,
       policy.emergencyStopped || persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true');
     if (!result.plan) return res.status(409).json({ ok: false, error: 'RISK_CHECK_BLOCKED', decision: result.decision, orderSubmitted: false });
-    if (policy.mode === 'automatic' && policy.automaticEnabled && result.plan.state === 'PLANNED') {
-      const submitted = await automation.beginAutomaticPlan(userId, result.plan.id);
-      const executed = await executeSubmittedPlan(userId, submitted, automation, execution, splitExecution);
-      return res.json({ ok: true, plan: submitted, ...executed, duplicate: result.duplicate || executed.duplicate });
-    }
     return res.json({ ok: true, plan: result.plan, duplicate: result.duplicate, orderSubmitted: false });
   } catch (error) { return errorResponse(res, error); }
 });
