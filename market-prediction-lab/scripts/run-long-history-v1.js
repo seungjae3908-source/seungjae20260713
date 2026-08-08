@@ -4,10 +4,9 @@ import { BitgetPublicClient } from "../src/bitget-public-client.js";
 import { collectBitgetCandles } from "../src/bitget-candle-collector.js";
 import { repairBitgetCandleGaps } from "../src/candle-gap-repair.js";
 import {
-  BinanceFuturesPublicClient,
-  collectBinanceFuturesDailyKlines,
-  collectBinanceFuturesFundingRates,
-} from "../src/binance-futures-history.js";
+  collectVisionFuturesDailyKlines,
+  collectVisionFuturesFunding,
+} from "../src/binance-vision-futures-archive.js";
 import {
   HISTORICAL_V1_CRYPTO_SPECS,
   buildBlockedStockProviderReport,
@@ -143,7 +142,7 @@ function buildMarkdown(report) {
     + `- 전략 최적화용 지표 종료일: ${iso(report.metricsEffectiveEndTime).slice(0, 10)}\n`
     + `- 2026 최종 홀드아웃: 잠금 유지 (V1/V2 튜닝 결과에 사용하지 않음)\n`
     + `- 초기자금: ${formatNumber(report.initialCapital, 0)}원\n`
-    + `- 현물 가격: Bitget 공개 데이터. 선물 장기 가격·펀딩: Binance USD-M 공개 데이터(2020~2025 백필).\n`
+    + `- 현물 가격: Bitget 공개 데이터. 선물 장기 가격·펀딩: Binance Vision USD-M 월별 공개 아카이브(2020~2025, SHA-256 검증).\n`
     + `- 선물 결과는 Bitget 장기 이력이 부족해 Binance 가격·펀딩을 사용한 교차거래소 proxy 연구이며, Bitget의 정확한 과거 체결 재현으로 해석하지 않음.\n`
     + `- 비용 가정: 목표 실행거래소 Bitget의 표준 taker 연구 가정 + 고정 slippage/spread. 계정별·과거 실제 수수료와 완전히 동일하다고 간주하지 않음.\n\n`
     + `## 결과\n\n${markdownTable(["시장", "종목", "방향", "가격 데이터", "시작금", "최종금", "순수익률", "성공률", "PF", "MDD", "거래수", "데이터"], resultRows)}\n\n`
@@ -199,20 +198,20 @@ async function runSpotSpec({ spec, bitgetClient, generatedAt, outputRoot }) {
   return Object.freeze({ candles, coverage, funding: null, datasetReport });
 }
 
-async function runFuturesSpec({ spec, binanceClient, generatedAt, outputRoot }) {
-  const collected = await collectBinanceFuturesDailyKlines({
-    client: binanceClient,
+async function runFuturesSpec({ spec, generatedAt, outputRoot }) {
+  const collected = await collectVisionFuturesDailyKlines({
     symbol: spec.exchangeSymbol,
     startTime: REQUESTED_START,
     endTime: OPTIMIZATION_END,
-    onPage: ({ page, received, oldest, newest }) => console.log(JSON.stringify({ spec: spec.id, stage: "binance-candles", page, received, oldest, newest })),
+    concurrency: 8,
+    onMonth: ({ month, rowCount }) => console.log(JSON.stringify({ spec: spec.id, stage: "vision-candles", month, rowCount })),
   });
-  const funding = await collectBinanceFuturesFundingRates({
-    client: binanceClient,
+  const funding = await collectVisionFuturesFunding({
     symbol: spec.exchangeSymbol,
     startTime: REQUESTED_START,
     endTime: OPTIMIZATION_END,
-    onPage: ({ page, received, oldest, newest }) => console.log(JSON.stringify({ spec: spec.id, stage: "binance-funding", page, received, oldest, newest })),
+    concurrency: 8,
+    onMonth: ({ month, rowCount }) => console.log(JSON.stringify({ spec: spec.id, stage: "vision-funding", month, rowCount })),
   });
   assertDailyContinuity(collected.candles, spec.id);
   assertFundingCoverage(funding.records, REQUESTED_START, OPTIMIZATION_END, spec.id);
@@ -228,6 +227,7 @@ async function runFuturesSpec({ spec, binanceClient, generatedAt, outputRoot }) 
   const datasetReport = Object.freeze({
     ...coverage,
     provider: spec.provider,
+    checksumVerified: collected.checksumVerified === true && funding.checksumVerified === true,
     market: spec.market,
     exchangeSymbol: spec.exchangeSymbol,
     researchSymbol: spec.researchSymbol,
@@ -238,8 +238,8 @@ async function runFuturesSpec({ spec, binanceClient, generatedAt, outputRoot }) 
     fundingStartTime: funding.records[0].timestamp,
     fundingEndTime: funding.records.at(-1).timestamp,
   });
-  await writeJson(resolve(outputRoot, `${spec.id}.candles.json`), { spec, coverage, candles });
-  await writeJson(resolve(outputRoot, `${spec.id}.funding.json`), funding);
+  await writeJson(resolve(outputRoot, `${spec.id}.candles.json`), { spec, coverage, manifests: collected.manifests, candles });
+  await writeJson(resolve(outputRoot, `${spec.id}.funding.json`), { ...funding, rows: undefined, records: funding.records });
   return Object.freeze({ candles, coverage, funding, datasetReport });
 }
 
@@ -248,7 +248,6 @@ const reportJsonPath = resolve(process.argv[3] ?? "docs/long-history-v1-result.j
 const reportMarkdownPath = resolve(process.argv[4] ?? "docs/long-history-v1-result.md");
 const generatedAt = Date.now();
 const bitgetClient = new BitgetPublicClient({ minIntervalMs: 160, maxRetries: 4, timeoutMs: 15_000 });
-const binanceClient = new BinanceFuturesPublicClient({ maxRetries: 4, timeoutMs: 15_000 });
 const datasetReports = [];
 const results = [];
 const errors = [];
@@ -258,7 +257,7 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS) {
   try {
     prepared = spec.market === "CRYPTO_SPOT"
       ? await runSpotSpec({ spec, bitgetClient, generatedAt, outputRoot })
-      : await runFuturesSpec({ spec, binanceClient, generatedAt, outputRoot });
+      : await runFuturesSpec({ spec, generatedAt, outputRoot });
     datasetReports.push(prepared.datasetReport);
   } catch (error) {
     const serialized = serializeError(error);
@@ -300,7 +299,7 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS) {
 }
 
 const report = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   generatedAt,
   mode: "backtest-only",
   requestedStartTime: REQUESTED_START,
@@ -312,7 +311,7 @@ const report = Object.freeze({
   dataTimeframe: "1d",
   providers: Object.freeze({
     spotPrice: "bitget-public-v2",
-    futuresPriceAndFundingBackfill: "binance-usdm-public-rest",
+    futuresPriceAndFundingBackfill: "binance-vision-usdm-monthly",
     futuresExecutionCostModel: "bitget-standard-taker-research-assumption",
   }),
   results: Object.freeze(results),
