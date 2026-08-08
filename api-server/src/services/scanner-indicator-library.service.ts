@@ -20,6 +20,7 @@ export interface ScannerIndicatorSnapshot {
   adx14: number | null;
   vwap: number | null;
   relativeVolume20: number | null;
+  tradeIntensityProxy: number | null;
   macd: ScannerMacdSnapshot;
   support20: number | null;
   resistance20: number | null;
@@ -155,6 +156,18 @@ export function scannerRelativeVolume(candles: ScannerQualityCandle[], lookback 
   return mean != null && mean > 0 ? latest.volume / mean : null;
 }
 
+export function scannerTradeIntensityProxy(candles: ScannerQualityCandle[], lookback = 20): number | null {
+  const latest = candles.at(-1);
+  if (!latest) return null;
+  const range = latest.high - latest.low;
+  const relativeVolume = scannerRelativeVolume(candles, lookback);
+  if (!(range > 0) || relativeVolume == null) return null;
+  // Providers without aggressor-side volume cannot expose a true execution-strength ratio.
+  // This deterministic proxy combines candle pressure (-1..1) with relative volume.
+  const pressure = Math.max(-1, Math.min(1, (latest.close - latest.open) / range));
+  return pressure * relativeVolume;
+}
+
 export function buildScannerIndicatorSnapshot(candles: ScannerQualityCandle[]): ScannerIndicatorSnapshot {
   const closes = candles.map((row) => row.close).filter(Number.isFinite);
   const recent20 = candles.slice(-20);
@@ -184,6 +197,7 @@ export function buildScannerIndicatorSnapshot(candles: ScannerQualityCandle[]): 
     adx14: scannerAdx(candles, 14),
     vwap: scannerVwap(candles),
     relativeVolume20: scannerRelativeVolume(candles, 20),
+    tradeIntensityProxy: scannerTradeIntensityProxy(candles, 20),
     macd: scannerMacd(closes),
     support20: recent20.length ? Math.min(...recent20.map((row) => row.low)) : null,
     resistance20: recent20.length ? Math.max(...recent20.map((row) => row.high)) : null,
