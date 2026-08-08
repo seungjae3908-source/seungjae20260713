@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { TradingOrderEvent, TradingOrderState, TradingPlan } from './trade-automation.types';
+import type { TradingOrder, TradingOrderEvent, TradingOrderState, TradingPlan } from './trade-automation.types';
 import {
   aggregateSplitOrderState,
   assertNextSplitOrderReady,
@@ -11,7 +11,9 @@ import type { SplitOrderRepository } from './trade-split-order.repository';
 
 const MAX_REVALIDATION_AGE_MS = 30_000;
 const MAX_FUTURE_SKEW_MS = 5_000;
+const MAX_DATA_DELAY_MS = 5_000;
 const FAST_MOVE_PERCENT = 5;
+const MAINTAINED_SIGNAL_STATES = new Set(['condition_maintained', 'entry_ready', 'approved', 'READY_FOR_APPROVAL']);
 
 export type SplitChildExecutionPayload = {
   orderId: string;
@@ -54,6 +56,17 @@ export interface SplitOrderSafetyPort {
   }): Promise<void>;
 }
 
+function finite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function freshTimestamp(value: string | null | undefined, now: Date, maximumAgeMs: number) {
+  const parsed = Date.parse(value ?? '');
+  return Number.isFinite(parsed)
+    && parsed <= now.getTime() + MAX_FUTURE_SKEW_MS
+    && now.getTime() - parsed <= maximumAgeMs;
+}
+
 function event(order: SplitTradingOrder, fromState: TradingOrderState | null, toState: TradingOrderState, reason: string): TradingOrderEvent {
   return {
     id: randomUUID(),
@@ -78,6 +91,44 @@ function executableOrder(orders: SplitTradingOrder[]) {
   const order = active[0] ?? null;
   if (order) assertNextSplitOrderReady(order, orders);
   return order;
+}
+
+function stopStillValid(plan: TradingPlan, currentPrice: number | null | undefined) {
+  if (!finite(currentPrice) || currentPrice <= 0 || !finite(plan.stopPrice) || plan.stopPrice <= 0) return false;
+  return plan.side === 'buy' || plan.side === 'long'
+    ? currentPrice > plan.stopPrice
+    : currentPrice < plan.stopPrice;
+}
+
+export function buildSplitLegRevalidationEvidence(
+  plan: TradingPlan,
+  order: TradingOrder,
+  now = new Date(),
+): SplitLegRevalidationEvidence {
+  const snapshot = order.preSubmissionSnapshot;
+  const signalValid = Boolean(snapshot?.signalState && MAINTAINED_SIGNAL_STATES.has(snapshot.signalState));
+  const riskValid = order.preSubmissionDecision?.allowed === true;
+  const currentPrice = snapshot?.currentPrice;
+  const liquidity = snapshot?.availableLiquidityKrw;
+  const oneMinuteMovePercent = finite(snapshot?.oneMinuteMovePercent)
+    ? snapshot.oneMinuteMovePercent
+    : Number.NaN;
+  const dataValid = Boolean(snapshot)
+    && freshTimestamp(snapshot?.observedAt, now, MAX_REVALIDATION_AGE_MS)
+    && freshTimestamp(snapshot?.riskObservedAt, now, MAX_REVALIDATION_AGE_MS)
+    && finite(snapshot?.dataDelayMs)
+    && snapshot.dataDelayMs >= 0
+    && snapshot.dataDelayMs <= MAX_DATA_DELAY_MS;
+  return {
+    checkedAt: order.preSubmissionCheckedAt ?? '',
+    signalValid,
+    riskValid,
+    trendValid: signalValid && stopStillValid(plan, currentPrice),
+    volumeValid: finite(liquidity) && liquidity >= plan.estimatedKrw,
+    volatilityValid: finite(oneMinuteMovePercent) && Math.abs(oneMinuteMovePercent) < FAST_MOVE_PERCENT,
+    dataValid,
+    oneMinuteMovePercent,
+  };
 }
 
 function revalidationBlockCodes(evidence: SplitLegRevalidationEvidence, now = new Date()) {
