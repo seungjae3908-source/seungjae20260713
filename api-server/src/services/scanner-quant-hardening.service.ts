@@ -5,7 +5,7 @@ import {
   scannerStrategyForTimeframe,
   type ScannerStrategyMode,
 } from './scanner-quant-strategy.service';
-import type { ScannerSignalCard } from './scanner-signal.types';
+import type { ScannerPricePlan, ScannerSignalCard } from './scanner-signal.types';
 
 export interface ScannerQuantHardeningInput {
   card: ScannerSignalCard;
@@ -18,6 +18,14 @@ export interface ScannerQuantHardeningInput {
   marketClosed?: boolean;
   tradingHalt?: boolean;
 }
+
+const EMPTY_PRICE_PLAN: ScannerPricePlan = {
+  entryZone: null,
+  invalidation: null,
+  stopLoss: null,
+  targets: [],
+  riskReward: null,
+};
 
 function completenessFromMarketData(
   card: ScannerSignalCard,
@@ -56,7 +64,11 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     allowShort: input.allowShort ?? input.card.assetClass === 'coin_futures',
   });
   const dataCompleteness = completenessFromMarketData(input.card, input.candles.length, quality.score);
-  const planEligible = input.card.pricePlan.riskReward != null && input.card.pricePlan.riskReward >= 1.5;
+  const directionChanged = quant.direction !== input.card.direction;
+  const pricePlan = directionChanged ? EMPTY_PRICE_PLAN : input.card.pricePlan;
+  const planEligible = !directionChanged
+    && pricePlan.riskReward != null
+    && pricePlan.riskReward >= 1.5;
   const strongSignalEligible = quant.strongSignalEligible
     && planEligible
     && input.card.listingStatus === 'LISTED'
@@ -72,10 +84,14 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     quality.score,
     dataCompleteness,
   ));
+  const warnings = directionChanged
+    ? [...input.card.warnings, ...quant.warnings, 'Quant 방향이 기존 후보 방향과 달라 기존 진입·손절·목표 가격을 폐기했습니다.']
+    : [...input.card.warnings, ...quant.warnings];
 
   return {
     ...input.card,
     direction: quant.direction,
+    pricePlan,
     score: quant.score,
     confidence,
     dataCompleteness,
@@ -91,7 +107,7 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     },
     quantScore: quant.factors,
     aiValidation: quant.aiValidation,
-    warnings: [...new Set([...input.card.warnings, ...quant.warnings])],
+    warnings: [...new Set(warnings)],
     evidence: [
       ...input.card.evidence,
       {
