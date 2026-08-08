@@ -10,6 +10,11 @@ import {
   type CryptoSignalScanRequest,
 } from '../services/crypto-signal-scanner.service';
 import {
+  scannerStrategyForTimeframe,
+  scannerStrategyTimeframeAllowed,
+  type ScannerStrategyMode,
+} from '../services/scanner-quant-strategy.service';
+import {
   ScannerRequestGuardError,
   scannerRequestGuard,
   type ScannerRequestGuard,
@@ -47,9 +52,19 @@ function requestKey(req: AuthenticatedRequest, market: 'spot' | 'futures'): stri
 
 function timeframe(value: unknown): CryptoSignalScanRequest['timeframe'] | null {
   const normalized = String(value ?? '15m') === '1H' ? '60m' : String(value ?? '15m');
-  return ['5m', '15m', '60m', '4H', '1D'].includes(normalized)
+  return ['1m', '3m', '5m', '15m', '60m', '4H', '1D'].includes(normalized)
     ? normalized as CryptoSignalScanRequest['timeframe']
     : null;
+}
+
+function strategy(value: unknown, selectedTimeframe: CryptoSignalScanRequest['timeframe']): ScannerStrategyMode | null {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  const selected = normalized === ''
+    ? scannerStrategyForTimeframe(selectedTimeframe)
+    : normalized === 'scalping' || normalized === 'swing'
+      ? normalized
+      : null;
+  return selected && scannerStrategyTimeframeAllowed(selected, selectedTimeframe) ? selected : null;
 }
 
 function condition(value: unknown): CryptoSignalScanRequest['condition'] {
@@ -107,6 +122,15 @@ export function createCryptoSignalScanRouter(
   const handler = (market: 'spot' | 'futures') => async (req: AuthenticatedRequest, res: Response) => {
     const selectedTimeframe = timeframe(req.query.timeframe);
     if (!selectedTimeframe) return res.status(400).json({ error: 'CRYPTO_SCAN_TIMEFRAME_UNSUPPORTED' });
+    const strategyMode = strategy(req.query.strategy, selectedTimeframe);
+    if (!strategyMode) {
+      return res.status(400).json({
+        ok: false,
+        error: 'CRYPTO_SCAN_STRATEGY_TIMEFRAME_MISMATCH',
+        timeframe: selectedTimeframe,
+        strategy: String(req.query.strategy ?? ''),
+      });
+    }
     const controller = new AbortController();
     const abort = () => {
       if (!controller.signal.aborted) controller.abort(new Error('CRYPTO_SCAN_ABORTED'));
@@ -119,6 +143,7 @@ export function createCryptoSignalScanRouter(
       const result = await scanner.scan({
         memberId: req.member!.id,
         market,
+        strategyMode,
         timeframe: selectedTimeframe,
         condition: condition(req.query.condition),
         cursor: number(req.query.cursor, 0, 1_000_000) ?? 0,
@@ -130,7 +155,7 @@ export function createCryptoSignalScanRouter(
       if (controller.signal.aborted || res.writableEnded) return;
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Scanner-Request-Id', result.requestId);
-      return res.json(result);
+      return res.json({ ...result, strategy: strategyMode });
     } catch (error) {
       if (controller.signal.aborted || res.writableEnded) return;
       return routeError(res, error);
