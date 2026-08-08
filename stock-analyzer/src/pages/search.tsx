@@ -1,4 +1,5 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { isSearchRequestAbort } from '@/lib/search-request-abort';
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
@@ -447,9 +448,10 @@ function normalizeRows(rows: AnyObj[], market: Market): StockRow[] {
   }));
 }
 
-async function fetchJson(url: string): Promise<AnyObj> {
+async function fetchJson(url: string, signal?: AbortSignal): Promise<AnyObj> {
   const response = await authorizedFetch(url, {
     cache: "no-store",
+    signal,
   });
 
   if (!response.ok) {
@@ -469,12 +471,16 @@ async function fetchJson(url: string): Promise<AnyObj> {
   return (await response.json()) as AnyObj;
 }
 
-async function enrichRowsWithQuotes(rows: StockRow[]): Promise<StockRow[]> {
+async function enrichRowsWithQuotes(
+  rows: StockRow[],
+  signal?: AbortSignal,
+): Promise<StockRow[]> {
   if (!rows.length) return rows;
   try {
     const tickers = rows.map((row) => row.ticker).join(",");
     const data = await fetchJson(
       `/api/quotes?tickers=${encodeURIComponent(tickers)}`,
+      signal,
     );
     const quoteRows = firstArray(data, [
       "quotes",
@@ -507,6 +513,9 @@ async function enrichRowsWithQuotes(rows: StockRow[]): Promise<StockRow[]> {
       };
     });
   } catch (error) {
+    if (isSearchRequestAbort(error, signal)) {
+      throw error;
+    }
     console.error("공통 시세 보강 실패", error);
     return rows;
   }
@@ -516,6 +525,7 @@ async function fetchKiwoomRankingRows(
   market: Market,
   rank: Exclude<RankType, "recommended" | "marketCap">,
   limit = 30,
+  signal?: AbortSignal,
 ): Promise<StockRow[]> {
   const params = new URLSearchParams({
     market,
@@ -525,7 +535,7 @@ async function fetchKiwoomRankingRows(
     excludeHighRisk: "true",
   });
 
-  const data = await fetchJson(`/api/kiwoom/rankings?${params.toString()}`);
+  const data = await fetchJson(`/api/kiwoom/rankings?${params.toString()}`, signal);
 
   const rows = firstArray(data, [
     "rows",
@@ -584,14 +594,18 @@ function moverRowsForRank(data: AnyObj, rank: RankType): AnyObj[] {
 async function fetchFallbackMoverRows(
   market: Market,
   rank: RankType,
+  signal?: AbortSignal,
 ): Promise<StockRow[]> {
-  const data = await fetchJson(`/api/market/movers?market=${market}`);
+  const data = await fetchJson(`/api/market/movers?market=${market}`, signal);
 
   return normalizeRows(moverRowsForRank(data, rank), market).slice(0, 30);
 }
 
-async function fetchAiScorePool(market: Market): Promise<StockRow[]> {
-  const data = await fetchJson(`/api/market/movers?market=${market}`);
+async function fetchAiScorePool(
+  market: Market,
+  signal?: AbortSignal,
+): Promise<StockRow[]> {
+  const data = await fetchJson(`/api/market/movers?market=${market}`, signal);
 
   const merged = [
     ...firstArray(data, ["recommended"]),
@@ -617,8 +631,9 @@ async function fetchAiScorePool(market: Market): Promise<StockRow[]> {
 async function fetchExistingAiRecommendedRows(
   market: Market,
   limit = 30,
+  signal?: AbortSignal,
 ): Promise<StockRow[]> {
-  const data = await fetchJson(`/api/market/movers?market=${market}`);
+  const data = await fetchJson(`/api/market/movers?market=${market}`, signal);
 
   const rows = normalizeRows(
     firstArray(data, ["recommended", "picks", "aiRecommended"]),
@@ -649,15 +664,29 @@ async function fetchExistingAiRecommendedRows(
 async function fetchKiwoomAiRecommendedRows(
   market: Market,
   limit = 30,
+  signal?: AbortSignal,
 ): Promise<StockRow[]> {
+  const ignoreNonAbortFailure = async (
+    rank: Exclude<RankType, "recommended" | "marketCap">,
+  ): Promise<StockRow[]> => {
+    try {
+      return await fetchKiwoomRankingRows(market, rank, 100, signal);
+    } catch (error) {
+      if (isSearchRequestAbort(error, signal)) {
+        throw error;
+      }
+      return [];
+    }
+  };
+
   const [tradingValueRows, volumeRows, gainerRows, aiPool] = await Promise.all([
-    fetchKiwoomRankingRows(market, "tradingValue", 100).catch(() => []),
+    ignoreNonAbortFailure("tradingValue"),
 
-    fetchKiwoomRankingRows(market, "volume", 100).catch(() => []),
+    ignoreNonAbortFailure("volume"),
 
-    fetchKiwoomRankingRows(market, "gainers", 100).catch(() => []),
+    ignoreNonAbortFailure("gainers"),
 
-    fetchAiScorePool(market),
+    fetchAiScorePool(market, signal),
   ]);
 
   const candidateMap = new Map<string, StockRow>();
@@ -760,18 +789,25 @@ async function fetchKiwoomAiRecommendedRows(
 async function fetchSingleMarketAiRecommendedRows(
   market: Market,
   limit = 30,
+  signal?: AbortSignal,
 ): Promise<StockRow[]> {
   try {
-    return await fetchKiwoomAiRecommendedRows(market, limit);
+    return await fetchKiwoomAiRecommendedRows(market, limit, signal);
   } catch (error) {
+    if (isSearchRequestAbort(error, signal)) {
+      throw error;
+    }
     console.error(`${market} 키움 AI 추천 실패`, error);
 
     try {
-      return await fetchExistingAiRecommendedRows(market, limit);
+      return await fetchExistingAiRecommendedRows(market, limit, signal);
     } catch (fallbackError) {
+      if (isSearchRequestAbort(fallbackError, signal)) {
+        throw fallbackError;
+      }
       console.error(`${market} 기존 AI 추천 실패`, fallbackError);
 
-      return fetchFallbackMoverRows(market, "recommended");
+      return fetchFallbackMoverRows(market, "recommended", signal);
     }
   }
 }
@@ -779,21 +815,25 @@ async function fetchSingleMarketAiRecommendedRows(
 async function fetchMoverRows(
   market: Market,
   rank: RankType,
+  signal?: AbortSignal,
 ): Promise<StockRow[]> {
   let rows: StockRow[] = [];
   if (rank === "recommended") {
-    rows = await fetchSingleMarketAiRecommendedRows(market, 30);
+    rows = await fetchSingleMarketAiRecommendedRows(market, 30, signal);
   } else if (rank === "marketCap") {
-    rows = await fetchAiScorePool(market);
+    rows = await fetchAiScorePool(market, signal);
   } else {
     try {
-      rows = await fetchKiwoomRankingRows(market, rank, 30);
+      rows = await fetchKiwoomRankingRows(market, rank, 30, signal);
     } catch (error) {
+      if (isSearchRequestAbort(error, signal)) {
+        throw error;
+      }
       console.error(`${market} ${rank} 키움 랭킹 실패`, error);
-      rows = await fetchFallbackMoverRows(market, rank);
+      rows = await fetchFallbackMoverRows(market, rank, signal);
     }
   }
-  const enriched = await enrichRowsWithQuotes(rows);
+  const enriched = await enrichRowsWithQuotes(rows, signal);
   const sorted = [...enriched];
   if (rank === "volume")
     sorted.sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0));
@@ -811,8 +851,9 @@ async function fetchMoverRows(
 async function fetchSearchRows(
   query: string,
   market: Market,
+  signal?: AbortSignal,
 ): Promise<StockRow[]> {
-  const data = await fetchJson(`/api/search?q=${encodeURIComponent(query)}`);
+  const data = await fetchJson(`/api/search?q=${encodeURIComponent(query)}`, signal);
 
   const rows = firstArray(data, ["results", "items", "rows", "data"]);
 
@@ -944,18 +985,24 @@ function rankTitle(rank: RankType): string {
   return "급하락 종목";
 }
 
-async function fetchWatchlistRows(items: ReturnType<typeof readWatchlistItems>): Promise<StockRow[]> {
+async function fetchWatchlistRows(
+  items: ReturnType<typeof readWatchlistItems>,
+  signal?: AbortSignal,
+): Promise<StockRow[]> {
   const tickers = items.map((item) => item.ticker).filter(Boolean);
   if (!tickers.length) return [];
   try {
-    const response = await authorizedFetch(`/api/quotes?tickers=${encodeURIComponent(tickers.join(","))}&_ts=${Date.now()}`, { cache: "no-store" });
+    const response = await authorizedFetch(`/api/quotes?tickers=${encodeURIComponent(tickers.join(","))}&_ts=${Date.now()}`, { cache: "no-store", signal });
     if (!response.ok) throw new Error(`HTTP_${response.status}`);
     const raw = await response.json();
     const rows = Array.isArray(raw?.quotes) ? raw.quotes : Array.isArray(raw?.items) ? raw.items : [];
     const normalized = rows.map((row: AnyObj, index: number) => normalizeStockRow(row, /^\d/.test(String(row?.ticker ?? "")) ? "KR" : "US", index + 1)).filter(Boolean) as StockRow[];
     const byTicker = new Map(normalized.map((row) => [row.ticker, row]));
     return items.map((item, index) => byTicker.get(item.ticker.toUpperCase()) ?? normalizeStockRow({ ...item, rank: index + 1 }, /^\d/.test(item.ticker) ? "KR" : "US", index + 1)).filter(Boolean) as StockRow[];
-  } catch {
+  } catch (error) {
+    if (isSearchRequestAbort(error, signal)) {
+      throw error;
+    }
     return items.map((item, index) => normalizeStockRow({ ...item, rank: index + 1 }, /^\d/.test(item.ticker) ? "KR" : "US", index + 1)).filter(Boolean) as StockRow[];
   }
 }
@@ -1001,7 +1048,7 @@ export default function SearchPage() {
 
   const watchlistQuery = useQuery({
     queryKey: ["search-watchlist-live", watchItems.map((item) => item.ticker).join(",")],
-    queryFn: () => fetchWatchlistRows(watchItems),
+    queryFn: ({ signal }) => fetchWatchlistRows(watchItems, signal),
     enabled: watchlistOpen && watchItems.length > 0,
     staleTime: 0,
     refetchInterval: watchlistOpen ? 15_000 : false,
@@ -1013,7 +1060,7 @@ export default function SearchPage() {
   const rankingQuery = useQuery<StockRow[]>({
     queryKey: ["stock-list-page-v5", market, rank],
 
-    queryFn: () => fetchMoverRows(market, rank),
+    queryFn: ({ signal }) => fetchMoverRows(market, rank, signal),
 
     enabled: asset === "stock",
 
@@ -1029,7 +1076,7 @@ export default function SearchPage() {
   const searchQuery = useQuery<StockRow[]>({
     queryKey: ["stock-search-page-v2", market, trimmedQuery],
 
-    queryFn: () => fetchSearchRows(trimmedQuery, market),
+    queryFn: ({ signal }) => fetchSearchRows(trimmedQuery, market, signal),
 
     enabled: asset === "stock" && trimmedQuery.length > 0,
 
