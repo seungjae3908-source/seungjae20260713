@@ -78,6 +78,16 @@ type ChartInstance = {
   analysisPriceLines: IPriceLine[];
 };
 
+type LogicalViewport = {
+  from: number;
+  to: number;
+};
+
+type StoredViewport = {
+  resetKey: string;
+  logicalRange: LogicalViewport;
+};
+
 type Props = {
   candles: NormalizedChartCandle[];
   indicators: ChartIndicatorResult;
@@ -120,6 +130,17 @@ function statusColor(status: ChartAnalysis['status']): string {
   return '#f59e0b';
 }
 
+function logicalViewport(chart: IChartApi): LogicalViewport | null {
+  const range = chart.timeScale().getVisibleLogicalRange();
+  if (!range || !Number.isFinite(range.from) || !Number.isFinite(range.to)) return null;
+  return { from: range.from, to: range.to };
+}
+
+function restoreLogicalViewport(chart: IChartApi, range: LogicalViewport | null): void {
+  if (!range) return;
+  chart.timeScale().setVisibleLogicalRange({ from: range.from, to: range.to });
+}
+
 export function PatternAwareUnifiedChartCanvas({
   candles,
   indicators,
@@ -134,6 +155,7 @@ export function PatternAwareUnifiedChartCanvas({
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const instanceRef = useRef<ChartInstance | null>(null);
+  const storedViewportRef = useRef<StoredViewport | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
 
   const activePattern = useMemo(() => {
@@ -249,16 +271,21 @@ export function PatternAwareUnifiedChartCanvas({
     observer.observe(container);
 
     return () => {
+      const range = logicalViewport(chart);
+      if (range) storedViewportRef.current = { resetKey, logicalRange: range };
       observer.disconnect();
       chart.unsubscribeClick(handleClick);
       instanceRef.current = null;
       chart.remove();
     };
-  }, [onCandleSelect, overlays, timeframe]);
+  }, [candles.length, indicators, onCandleSelect, overlays, resetKey, timeframe]);
 
   useEffect(() => {
     const instance = instanceRef.current;
     if (!instance) return;
+
+    const beforeUpdate = logicalViewport(instance.chart)
+      ?? (storedViewportRef.current?.resetKey === resetKey ? storedViewportRef.current.logicalRange : null);
 
     instance.candle.setData(candles.map((row) => ({
       time: row.time as UTCTimestamp,
@@ -351,9 +378,14 @@ export function PatternAwareUnifiedChartCanvas({
     }
     markers.sort((left, right) => Number(left.time) - Number(right.time));
     instance.candle.setMarkers(markers as never[]);
-  }, [analysis, candles, indicators, levels, overlays.levels, overlays.markers, patternOverlay]);
+
+    restoreLogicalViewport(instance.chart, beforeUpdate);
+    const afterUpdate = logicalViewport(instance.chart);
+    if (afterUpdate) storedViewportRef.current = { resetKey, logicalRange: afterUpdate };
+  }, [analysis, candles, indicators, levels, overlays, patternOverlay, resetKey]);
 
   useEffect(() => {
+    storedViewportRef.current = null;
     instanceRef.current?.chart.timeScale().fitContent();
   }, [resetKey]);
 
