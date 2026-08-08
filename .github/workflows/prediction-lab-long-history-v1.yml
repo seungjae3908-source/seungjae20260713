@@ -10,7 +10,6 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - .github/workflows/prediction-lab-long-history-v1.yml
       - market-prediction-lab/package.json
       - market-prediction-lab/src/historical-backtest-data.js
       - market-prediction-lab/src/binance-futures-history.js
@@ -99,6 +98,7 @@ jobs:
         env:
           RESEARCH_SHA: ${{ steps.sha.outputs.value }}
         run: |
+          mkdir -p market-prediction-lab/docs
           cat > market-prediction-lab/docs/long-history-provenance.json <<JSON
           {"schemaVersion":1,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false}
           JSON
