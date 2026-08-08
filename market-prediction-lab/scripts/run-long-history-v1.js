@@ -19,6 +19,7 @@ import {
   buildBacktestTable,
   runV1Backtest,
 } from "../src/multi-market-backtest-engine.js";
+import { optimizeV2MarketParameters } from "../src/v2-market-optimizer.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REQUESTED_START = RESEARCH_BACKTEST_PERIOD.startTime;
@@ -111,6 +112,11 @@ function markdownTable(headers, rows) {
   ].join("\n");
 }
 
+function parameterText(parameters) {
+  if (!parameters) return "-";
+  return `EMA ${parameters.fastPeriod}/${parameters.slowPeriod}, ATR ${parameters.atrPeriod}, pullback ${parameters.pullbackTolerancePct}%, stop ${parameters.stopAtrMultiple}ATR, target ${parameters.targetRiskMultiple}R`;
+}
+
 function buildMarkdown(report) {
   const resultRows = report.results.map((row) => [
     row.market,
@@ -126,6 +132,22 @@ function buildMarkdown(report) {
     formatNumber(row.trades, 0),
     row.coverageStatus,
   ]);
+  const v2Rows = report.v2Optimizations.map((row) => {
+    const preferred = row.preferred;
+    const baselineValidation = row.baseline.validation;
+    return [
+      row.market,
+      row.symbol,
+      row.side,
+      row.status,
+      preferred?.comparison?.verdict ?? "no_candidate",
+      `${formatNumber(baselineValidation.returnPercent)}% → ${formatNumber(preferred?.validation?.returnPercent)}%`,
+      `${formatNumber(baselineValidation.successRatePercent)}% → ${formatNumber(preferred?.validation?.successRatePercent)}%`,
+      `${formatNumber(baselineValidation.maximumDrawdownPercent)}% → ${formatNumber(preferred?.validation?.maximumDrawdownPercent)}%`,
+      formatNumber(row.candidateCount, 0),
+      parameterText(preferred?.parameters),
+    ];
+  });
   const coverageRows = report.datasets.map((row) => [
     row.id,
     row.market,
@@ -137,15 +159,18 @@ function buildMarkdown(report) {
     row.fundingCount === undefined ? "-" : formatNumber(row.fundingCount, 0),
   ]);
   const blockedRows = report.blockedMarkets.map((row) => [row.market, row.status, row.reason]);
-  return `# 장기 V1 실제데이터 백테스트\n\n`
+  return `# 장기 V1 실제데이터 백테스트 + V2 시장별 수식 탐색\n\n`
     + `- 사용자 요청 범위: ${iso(report.requestedStartTime).slice(0, 10)} ~ ${iso(report.requestedEndTime).slice(0, 10)}\n`
-    + `- 전략 최적화용 지표 종료일: ${iso(report.metricsEffectiveEndTime).slice(0, 10)}\n`
-    + `- 2026 최종 홀드아웃: 잠금 유지 (V1/V2 튜닝 결과에 사용하지 않음)\n`
+    + `- V2 탐색 개발구간: 2020-01-01 ~ 2024-12-31\n`
+    + `- V2 독립 검증구간: 2025-01-01 ~ 2025-12-31\n`
+    + `- 2026 최종 홀드아웃: 잠금 유지 (V1/V2 수식 선택에 사용하지 않음)\n`
     + `- 초기자금: ${formatNumber(report.initialCapital, 0)}원\n`
+    + `- V2는 수익률과 성공률을 하나의 가중점수로 섞지 않음. 개발구간에서 성공률 비퇴행 조건의 수익률 리더와 수익률 비퇴행 조건의 성공률 리더만 2025 검증으로 넘김.\n`
     + `- 현물 가격: Bitget 공개 데이터. 선물 장기 가격·펀딩: Binance Vision USD-M 월별 공개 아카이브(2020~2025, SHA-256 검증).\n`
     + `- 선물 결과는 Bitget 장기 이력이 부족해 Binance 가격·펀딩을 사용한 교차거래소 proxy 연구이며, Bitget의 정확한 과거 체결 재현으로 해석하지 않음.\n`
     + `- 비용 가정: 목표 실행거래소 Bitget의 표준 taker 연구 가정 + 고정 slippage/spread. 계정별·과거 실제 수수료와 완전히 동일하다고 간주하지 않음.\n\n`
-    + `## 결과\n\n${markdownTable(["시장", "종목", "방향", "가격 데이터", "시작금", "최종금", "순수익률", "성공률", "PF", "MDD", "거래수", "데이터"], resultRows)}\n\n`
+    + `## V1 기준선 결과\n\n${markdownTable(["시장", "종목", "방향", "가격 데이터", "시작금", "최종금", "순수익률", "성공률", "PF", "MDD", "거래수", "데이터"], resultRows)}\n\n`
+    + `## V2 시장별 수식 탐색 — 2025 독립 검증\n\n${markdownTable(["시장", "종목", "방향", "상태", "판정", "검증 수익률 V1→V2", "검증 성공률 V1→V2", "검증 MDD V1→V2", "후보수", "선택 수식"], v2Rows)}\n\n`
     + `## 데이터 커버리지\n\n${markdownTable(["데이터셋", "시장", "공급자", "상태", "실제 시작", "실제 종료", "캔들", "펀딩"], coverageRows)}\n\n`
     + `## 아직 차단된 시장\n\n${markdownTable(["시장", "상태", "이유"], blockedRows)}\n`;
 }
@@ -250,6 +275,7 @@ const generatedAt = Date.now();
 const bitgetClient = new BitgetPublicClient({ minIntervalMs: 160, maxRetries: 4, timeoutMs: 15_000 });
 const datasetReports = [];
 const results = [];
+const v2Optimizations = [];
 const errors = [];
 
 for (const spec of HISTORICAL_V1_CRYPTO_SPECS) {
@@ -294,12 +320,20 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS) {
       await writeJson(resolve(outputRoot, `${backtestCase.id}.result.json`), result);
     } catch (error) {
       errors.push(Object.freeze({ spec: spec.id, market: spec.market, stage: "backtest", side: backtestCase.side, error: serializeError(error) }));
+      continue;
+    }
+    try {
+      const optimization = optimizeV2MarketParameters({ backtestInput: backtestCase });
+      v2Optimizations.push(optimization);
+      await writeJson(resolve(outputRoot, `${backtestCase.id}.v2-optimization.json`), optimization);
+    } catch (error) {
+      errors.push(Object.freeze({ spec: spec.id, market: spec.market, stage: "v2_optimization", side: backtestCase.side, error: serializeError(error) }));
     }
   }
 }
 
 const report = Object.freeze({
-  schemaVersion: 3,
+  schemaVersion: 4,
   generatedAt,
   mode: "backtest-only",
   requestedStartTime: REQUESTED_START,
@@ -315,6 +349,7 @@ const report = Object.freeze({
     futuresExecutionCostModel: "bitget-standard-taker-research-assumption",
   }),
   results: Object.freeze(results),
+  v2Optimizations: Object.freeze(v2Optimizations),
   datasets: Object.freeze(datasetReports),
   blockedMarkets: buildBlockedStockProviderReport(),
   errors: Object.freeze(errors),
@@ -327,4 +362,4 @@ const markdown = buildMarkdown(report);
 await mkdir(dirname(reportMarkdownPath), { recursive: true });
 await writeFile(reportMarkdownPath, markdown, "utf8");
 console.log(markdown);
-if (results.length < 6) process.exitCode = 1;
+if (results.length < 6 || v2Optimizations.length < 6) process.exitCode = 1;
