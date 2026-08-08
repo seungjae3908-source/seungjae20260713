@@ -76,6 +76,9 @@ const groups = {
     path.join(root, 'src/routes/trade-automation-split.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
+    path.join(root, 'src/services/market-information.service.test.ts'),
+    path.join(root, 'src/services/public-market-http.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/market-information.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/backup-sync-lifecycle.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts'),
@@ -97,6 +100,7 @@ const groups = {
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
     path.join(root, 'src/routes/signal-scanner-auth.smoke.test.ts'),
     path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
+    path.join(root, 'src/routes/market-information.smoke.test.ts'),
     path.join(root, 'src/routes/unified-search.smoke.test.ts'),
   ],
 };
