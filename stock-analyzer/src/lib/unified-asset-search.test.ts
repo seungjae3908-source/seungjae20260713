@@ -101,12 +101,20 @@ test('keeps Upbit spot and Bitget futures detail identities separate', () => {
   assert.equal(futuresPath.params.get('symbol'), 'BTCUSDT');
 });
 
-test('application routes keep unified search separate from rankings and the legacy browser', () => {
+test('application routes keep unified search capability-gated and separate from legacy lists', () => {
   const appSource = readFileSync(path.join(process.cwd(), 'stock-analyzer/src/App.tsx'), 'utf8');
 
-  assert.match(appSource, /<Route path="\/stocks" component=\{UnifiedAssetSearchPage\} \/>/);
-  assert.match(appSource, /<Route path="\/search" component=\{UnifiedAssetSearchPage\} \/>/);
+  assert.match(appSource, /function UnifiedAssetSearchAccess\(\) \{ return gated\('canAccessBasicInfo', <UnifiedAssetSearchPage \/>\); \}/);
+  assert.match(appSource, /<Route path="\/stocks" component=\{UnifiedAssetSearchAccess\} \/>/);
+  assert.match(appSource, /<Route path="\/search" component=\{UnifiedAssetSearchAccess\} \/>/);
   assert.match(appSource, /<Route path="\/market-rankings" component=\{SearchPage\} \/>/);
   assert.match(appSource, /<Route path="\/market-browser" component=\{StocksPage\} \/>/);
   assert.doesNotMatch(appSource, /<Route path="\/search" component=\{SearchPage\} \/>/);
+});
+
+test('keeps Production main global console contract intact', () => {
+  const mainSource = readFileSync(path.join(process.cwd(), 'stock-analyzer/src/main.tsx'), 'utf8');
+
+  assert.doesNotMatch(mainSource, /configureRecoverableSearchDiagnostics/);
+  assert.doesNotMatch(mainSource, /console\.error\s*=/);
 });
