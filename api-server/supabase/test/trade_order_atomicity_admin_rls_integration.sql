@@ -41,17 +41,50 @@ reset role;
 
 -- An active admin can access only their own trading rows, and the database must
 -- independently reject a second non-split order for the same plan even if a
--- caller bypasses the atomic order-creation RPC.
+-- caller bypasses the atomic order-creation RPC. The SUBMITTED fixture carries
+-- the same approval/risk-envelope invariant required by the current schema so
+-- this test remains valid both before and after the envelope migration.
 set role authenticated;
 select set_config('request.jwt.claim.sub', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', false);
 
-insert into public.trade_order_plans(user_id, id, idempotency_key, state, payload, version)
-values (
+with approval as (
+  select clock_timestamp() as approved_at,
+         clock_timestamp() + interval '10 minutes' as expires_at
+)
+insert into public.trade_order_plans(
+  user_id, id, idempotency_key, state, payload, approval_expires_at, version
+)
+select
   'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
   '46000000-0000-0000-0000-000000000001',
   'admin-single-order-plan',
-  'SUBMITTED', '{}', 0
-);
+  'SUBMITTED',
+  jsonb_build_object(
+    'id', '46000000-0000-0000-0000-000000000001',
+    'userId', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    'idempotencyKey', 'admin-single-order-plan',
+    'state', 'SUBMITTED',
+    'version', 0,
+    'approvedAt', approved_at::text,
+    'approvalExpiresAt', expires_at::text,
+    'estimatedKrw', 100000,
+    'splitRatios', jsonb_build_array(100),
+    'riskEnvelope', jsonb_build_object(
+      'version', 1,
+      'investmentKrw', 100000,
+      'maxLossKrw', 5000,
+      'maxSlippagePercent', 0.25,
+      'maxSplitCount', 1,
+      'allowCancelUnfilled', true,
+      'stopMethod', 'fixed_stop',
+      'emergencyExitScope', 'cancel_unfilled_and_reduce_only',
+      'approvedAt', approved_at::text,
+      'expiresAt', expires_at::text
+    )
+  ),
+  expires_at,
+  0
+from approval;
 
 insert into public.trade_orders(
   user_id, id, plan_id, exchange, client_order_id, state, payload, version
