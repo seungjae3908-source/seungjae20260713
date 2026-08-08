@@ -3,7 +3,7 @@
   "status": "research_hold",
   "reason": "insufficient_live_shadow_samples",
   "group": "crypto-futures-15m",
-  "generatedAt": 1786166718662,
+  "generatedAt": 1786170261454,
   "settled": 92,
   "required": 120,
   "referenceModelId": "tiny-softmax-crypto-futures-15m-v1-calibrated",
