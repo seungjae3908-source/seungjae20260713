@@ -19,13 +19,12 @@ test('cold market cache loads isolate cancellation between concurrent requests',
 
   const first = loadMarketInformationCache('race:cold', 60_000, 60_000, async () => {
     firstCalls += 1;
-    return new Promise<string>((resolve, reject) => {
+    return new Promise<string>((_resolve, reject) => {
       if (controller.signal.aborted) {
         reject(abortError());
         return;
       }
       controller.signal.addEventListener('abort', () => reject(abortError()), { once: true });
-      void resolve;
     });
   });
 
