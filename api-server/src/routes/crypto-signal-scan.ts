@@ -51,7 +51,7 @@ function requestKey(req: AuthenticatedRequest, market: 'spot' | 'futures'): stri
 }
 
 function timeframe(value: unknown): CryptoSignalScanRequest['timeframe'] | null {
-  const normalized = String(value ?? '15m') === '1H' ? '60m' : String(value ?? '15m');
+  const normalized = String(value ?? '5m') === '1H' ? '60m' : String(value ?? '5m');
   return ['1m', '3m', '5m', '15m', '60m', '4H', '1D'].includes(normalized)
     ? normalized as CryptoSignalScanRequest['timeframe']
     : null;
