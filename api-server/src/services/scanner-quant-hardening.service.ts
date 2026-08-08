@@ -71,11 +71,14 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
   });
   const dataCompleteness = completenessFromMarketData(input.card, input.candles.length, quality.score);
   const directionChanged = quant.direction !== input.card.direction;
-  const pricePlan = directionChanged ? EMPTY_PRICE_PLAN : input.card.pricePlan;
-  const planEligible = !directionChanged
+  const dataTrustedForPlan = quality.state !== 'DATA_UNTRUSTED' && quality.strongSignalAllowed;
+  const pricePlan = directionChanged || !dataTrustedForPlan ? EMPTY_PRICE_PLAN : input.card.pricePlan;
+  const planEligible = dataTrustedForPlan
+    && !directionChanged
     && pricePlan.riskReward != null
     && pricePlan.riskReward >= 1.5;
-  const strongSignalEligible = quant.strongSignalEligible
+  const strongSignalEligible = quality.state !== 'DATA_UNTRUSTED'
+    && quant.strongSignalEligible
     && planEligible
     && input.card.listingStatus === 'LISTED'
     && dataCompleteness >= 75;
@@ -90,9 +93,16 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     quality.score,
     dataCompleteness,
   ));
-  const warnings = directionChanged
-    ? [...input.card.warnings, ...quant.warnings, 'Quant 방향이 기존 후보 방향과 달라 기존 진입·손절·목표 가격을 폐기했습니다.']
-    : [...input.card.warnings, ...quant.warnings];
+  const warnings = [
+    ...input.card.warnings,
+    ...quant.warnings,
+    ...(directionChanged
+      ? ['Quant 방향이 기존 후보 방향과 달라 기존 진입·손절·목표 가격을 폐기했습니다.']
+      : []),
+    ...(quality.state === 'DATA_UNTRUSTED'
+      ? ['DATA_UNTRUSTED: 승인·실행 호환 가격정보를 폐기했습니다.']
+      : []),
+  ];
   const evidence: ScannerEvidence[] = [
     ...input.card.evidence,
     {
