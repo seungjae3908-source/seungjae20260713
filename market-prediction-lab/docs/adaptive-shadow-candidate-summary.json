@@ -1,22 +1,29 @@
 {
   "schemaVersion": 1,
   "status": "pass",
-  "generatedAt": 1786216542947,
+  "generatedAt": 1786219304583,
   "source": "isolated-live-shadow-adaptive-candidate-builder",
   "results": {
     "crypto-futures-15m": {
       "status": "research_hold",
-      "reason": "insufficient_live_shadow_samples",
-      "reasons": [],
-      "settled": 118,
-      "modelId": null,
+      "reason": "adaptive_candidate_gates_failed",
+      "reasons": [
+        "holdout:dominant_prediction_share:neutral",
+        "holdout_macro_f1_gain_insufficient",
+        "holdout_accuracy_regressed",
+        "holdout_directional_recall_gain_insufficient",
+        "BTCUSDT:dominant_prediction_share:neutral",
+        "ETHUSDT:dominant_prediction_share:neutral"
+      ],
+      "settled": 120,
+      "modelId": "adaptive-crypto-futures-15m-v2-live-blend",
       "promotedToShadowSlot": false
     },
     "crypto-futures-1h": {
       "status": "research_hold",
       "reason": "insufficient_live_shadow_samples",
       "reasons": [],
-      "settled": 92,
+      "settled": 94,
       "modelId": null,
       "promotedToShadowSlot": false
     }
