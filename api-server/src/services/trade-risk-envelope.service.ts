@@ -85,10 +85,10 @@ export function buildRiskEnvelope(plan: TradingPlan, policy: TradingPolicy, appr
   const stopLossKrw = expectedStopLossKrw(plan, reference);
   if (stopLossKrw == null) throw new Error('RISK_ENVELOPE_STOP_REQUIRED');
 
-  const policyLossBudget = policy.totalCapitalKrw * policy.riskPerTradePercent[plan.exchange] / 100;
   const slippageBudget = plan.estimatedKrw * policy.maxEstimatedSlippagePercent / 100;
   const worstApprovedLoss = stopLossKrw + slippageBudget;
-  if (!(policyLossBudget > 0) || worstApprovedLoss > policyLossBudget + 1e-9) {
+  const accountDailyRiskBudget = policy.totalCapitalKrw * policy.totalDailyLossLimitPercent / 100;
+  if (!(accountDailyRiskBudget > 0) || worstApprovedLoss > accountDailyRiskBudget + 1e-9) {
     throw new Error('RISK_ENVELOPE_MAX_LOSS_EXCEEDED');
   }
   if (!Number.isInteger(plan.splitRatios.length) || plan.splitRatios.length < 1 || plan.splitRatios.length > 20) {
@@ -98,7 +98,7 @@ export function buildRiskEnvelope(plan: TradingPlan, policy: TradingPolicy, appr
   return {
     version: 1,
     investmentKrw: plan.estimatedKrw,
-    maxLossKrw: policyLossBudget,
+    maxLossKrw: worstApprovedLoss,
     maxSlippagePercent: policy.maxEstimatedSlippagePercent,
     maxSplitCount: plan.splitRatios.length,
     allowCancelUnfilled: true,
