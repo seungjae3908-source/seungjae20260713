@@ -1,5 +1,12 @@
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerSignalDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
+export type ScannerMarketClass = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
+export type ScannerTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
+export type ScannerExecutionIntent = 'OPEN_OR_ADD' | 'REDUCE_OR_EXIT' | 'NO_ACTION';
+export type ScannerStrategy = 'TREND' | 'BREAKOUT' | 'PULLBACK' | 'MEAN_REVERSION';
+export type ScannerMarketRegime = 'BULL' | 'BEAR' | 'SIDEWAYS' | 'VOLATILE' | 'UNCLASSIFIED';
+export type ScannerChaseRisk = 'LOW' | 'ELEVATED' | 'UNAVAILABLE';
+export type ScannerApprovalPolicyStatus = 'UNVALIDATED_INITIAL_POLICY' | 'BACKTEST_VALIDATED';
 export type ScannerSignalState =
   | 'DETECTED'
   | 'WATCHING'
@@ -44,7 +51,22 @@ export interface ScannerSignalCard {
   listingStatus: 'LISTED' | 'UNKNOWN';
   price: number;
   changePercent: number | null;
+  /** Legacy directional field retained for compatibility with existing clients. */
   direction: ScannerSignalDirection;
+  /** Explicit user-facing and automation-safe market action. Added by the lifecycle policy. */
+  marketClass?: ScannerMarketClass;
+  action?: ScannerTradeAction;
+  executionIntent?: ScannerExecutionIntent;
+  strategy?: ScannerStrategy;
+  regime?: ScannerMarketRegime;
+  modelVersion?: string;
+  performanceKey?: string;
+  approvalPolicyVersion?: string;
+  approvalPolicyStatus?: ScannerApprovalPolicyStatus;
+  chaseRisk?: ScannerChaseRisk;
+  requiresExistingPosition?: boolean;
+  /** Market-specific approval gate. This is stricter than the raw scanner eligibility flag. */
+  marketApprovalEligible?: boolean;
   signalState: ScannerSignalState;
   score: number;
   confidence: number;
@@ -76,6 +98,17 @@ export interface ScannerAlertCandidate {
   market: string;
   symbol: string;
   direction: ScannerSignalDirection;
+  marketClass: ScannerMarketClass;
+  action: Exclude<ScannerTradeAction, 'NONE'>;
+  executionIntent: Exclude<ScannerExecutionIntent, 'NO_ACTION'>;
+  strategy: ScannerStrategy;
+  regime: ScannerMarketRegime;
+  modelVersion: string;
+  performanceKey: string;
+  approvalPolicyVersion: string;
+  approvalPolicyStatus: ScannerApprovalPolicyStatus;
+  chaseRisk: ScannerChaseRisk;
+  requiresExistingPosition: boolean;
   state: 'READY_FOR_APPROVAL';
   entryZone: ScannerPricePlan['entryZone'];
   stopLoss: number | null;

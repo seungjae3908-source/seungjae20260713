@@ -49,6 +49,8 @@ const groups = {
     path.join(root, 'src/services/bounded-scanner.service.test.ts'),
     path.join(root, 'src/services/scanner-request-guard.service.test.ts'),
     path.join(root, 'src/services/scanner-signal-policy.service.test.ts'),
+    path.join(root, 'src/services/scanner-market-action.service.test.ts'),
+    path.join(root, 'src/services/scanner-market-approval-safety.service.test.ts'),
     path.join(root, 'src/services/scanner-signal-lifecycle.service.test.ts'),
     path.join(root, 'src/services/crypto-signal-scanner.service.test.ts'),
     path.join(root, 'src/lib/bounded-work-pool.test.ts'),

@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { enrichScannerMarketAction } from './scanner-market-action.service';
+import { applyScannerApprovalSafety } from './scanner-market-approval-safety.service';
 import type {
   ScannerAlertCandidate,
   ScannerSignalCard,
@@ -29,6 +31,10 @@ function lifecycleKey(memberId: string, baseSignalId: string): string {
   return `${memberId}:${baseSignalId}`;
 }
 
+function approvalEligible(card: ScannerSignalCard): boolean {
+  return card.marketApprovalEligible ?? card.strongSignalEligible;
+}
+
 function invalid(card: ScannerSignalCard): boolean {
   return card.dataState === 'unavailable'
     || (card.riskScore != null && card.riskScore >= 80)
@@ -43,7 +49,7 @@ function nextState(
 ): ScannerSignalState {
   if (Date.parse(card.expiresAt) <= now) return 'EXPIRED';
   if (invalid(card)) return 'INVALIDATED';
-  if (card.strongSignalEligible) {
+  if (approvalEligible(card)) {
     if (readyStreak <= 1) return 'DETECTED';
     if (readyStreak === 2) return 'WATCHING';
     return 'READY_FOR_APPROVAL';
@@ -52,7 +58,21 @@ function nextState(
   return 'DETECTED';
 }
 
-function alertFrom(card: ScannerSignalCard, idempotencyKey: string): ScannerAlertCandidate {
+function alertFrom(card: ScannerSignalCard, idempotencyKey: string): ScannerAlertCandidate | null {
+  if (
+    !card.marketClass
+    || !card.action
+    || card.action === 'NONE'
+    || !card.executionIntent
+    || card.executionIntent === 'NO_ACTION'
+    || !card.strategy
+    || !card.regime
+    || !card.modelVersion
+    || !card.performanceKey
+    || !card.approvalPolicyVersion
+    || !card.approvalPolicyStatus
+    || !card.chaseRisk
+  ) return null;
   return {
     idempotencyKey,
     signalId: card.signalId,
@@ -60,6 +80,17 @@ function alertFrom(card: ScannerSignalCard, idempotencyKey: string): ScannerAler
     market: card.market,
     symbol: card.symbol,
     direction: card.direction,
+    marketClass: card.marketClass,
+    action: card.action,
+    executionIntent: card.executionIntent,
+    strategy: card.strategy,
+    regime: card.regime,
+    modelVersion: card.modelVersion,
+    performanceKey: card.performanceKey,
+    approvalPolicyVersion: card.approvalPolicyVersion,
+    approvalPolicyStatus: card.approvalPolicyStatus,
+    chaseRisk: card.chaseRisk,
+    requiresExistingPosition: card.requiresExistingPosition === true,
     state: 'READY_FOR_APPROVAL',
     entryZone: card.pricePlan.entryZone,
     stopLoss: card.pricePlan.stopLoss,
@@ -102,7 +133,8 @@ export function applyScannerSignalLifecycle(
   }
 
   const alerts: ScannerAlertCandidate[] = [];
-  const updated = cards.map((card) => {
+  const updated = cards.map((rawCard) => {
+    const card = applyScannerApprovalSafety(enrichScannerMarketAction(rawCard), now);
     const baseSignalId = card.signalId;
     const key = lifecycleKey(memberId, baseSignalId);
     const existing = records.get(key);
@@ -110,12 +142,12 @@ export function applyScannerSignalLifecycle(
     if (
       existing
       && ['WEAKENED', 'INVALIDATED', 'EXPIRED'].includes(existing.state)
-      && card.strongSignalEligible
+      && approvalEligible(card)
     ) {
       cycle += 1;
     }
     const resetCycle = !existing || cycle !== existing.cycle;
-    const readyStreak = card.strongSignalEligible
+    const readyStreak = approvalEligible(card)
       ? resetCycle ? 1 : (existing?.readyStreak ?? 0) + 1
       : 0;
     const state = nextState(resetCycle ? null : existing?.state ?? null, readyStreak, card, now);
@@ -124,8 +156,11 @@ export function applyScannerSignalLifecycle(
     const idempotencyKey = alertKey(signalId, card.expiresAt);
     let lastAlertKey = resetCycle ? null : existing?.lastAlertKey ?? null;
     if (state === 'READY_FOR_APPROVAL' && lastAlertKey !== idempotencyKey) {
-      alerts.push(alertFrom(nextCard, idempotencyKey));
-      lastAlertKey = idempotencyKey;
+      const alert = alertFrom(nextCard, idempotencyKey);
+      if (alert) {
+        alerts.push(alert);
+        lastAlertKey = idempotencyKey;
+      }
     }
     records.set(key, {
       baseSignalId,
