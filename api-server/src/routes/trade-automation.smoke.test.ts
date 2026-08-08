@@ -160,22 +160,29 @@ test('approval route blocks unapproved calls and paper execution makes no extern
   const nativeFetch = globalThis.fetch;
   let outbound = 0;
   try {
+    const observedAt = new Date().toISOString();
     const body = {
       exchange: 'upbit', accountMode: 'paper', strategyId: 'breakout-v1', signalId: 'api-signal',
       symbol: 'BTC', market: 'KRW', side: 'buy', orderType: 'market', quoteAmount: 100000,
       quantity: null, limitPrice: null, estimatedKrw: 100000, stopPrice: 90000, targetPrices: [110000],
       splitRatios: [100], signalReasons: ['trend'], marketSnapshot: {
-        observedAt: new Date().toISOString(), dataDelayMs: 100, oneMinuteMovePercent: 0,
+        observedAt, riskObservedAt: observedAt, dataDelayMs: 0, oneMinuteMovePercent: 0,
         spreadPercent: 0.1, orderbookGapPercent: 0.1, halted: false, availableBalance: 1000000,
         accountValueKrw: 5000000, dailyPnlPercent: 0, assetExposurePercent: 0,
         openPositionCount: 0, dailyOrderCount: 0, consecutiveLosses: 0,
+        currentPrice: 100000, plannedPrice: 100000, marketStatus: 'OPEN',
+        availableLiquidityKrw: 1000000, estimatedSlippagePercent: 0.1, estimatedFeePercent: 0.05,
+        signalState: 'entry_ready', signalObservedAt: observedAt,
       },
     };
     const planned = await nativeFetch(`${baseUrl}/api/trade-automation/plans`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
     assert.equal(planned.status, 200);
-    const planId = (await planned.json() as { plan: { id: string } }).plan.id;
+    const plannedBody = await planned.json() as { plan: { id: string; state: string; riskEnvelope?: unknown } };
+    const planId = plannedBody.plan.id;
+    assert.equal(plannedBody.plan.state, 'APPROVAL_PENDING');
+    assert.equal(plannedBody.plan.riskEnvelope, undefined);
     const denied = await nativeFetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
     });
@@ -190,7 +197,13 @@ test('approval route blocks unapproved calls and paper execution makes no extern
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved: true }),
     });
     assert.equal(approved.status, 200);
-    const approvedBody = await approved.json() as { order: { state: string } };
+    const approvedBody = await approved.json() as {
+      plan: { riskEnvelope: { version: number; investmentKrw: number; maxSplitCount: number } };
+      order: { state: string };
+    };
+    assert.equal(approvedBody.plan.riskEnvelope.version, 1);
+    assert.equal(approvedBody.plan.riskEnvelope.investmentKrw, 100000);
+    assert.equal(approvedBody.plan.riskEnvelope.maxSplitCount, 1);
     assert.equal(approvedBody.order.state, 'FILLED');
     assert.equal(outbound, 0);
   } finally { globalThis.fetch = nativeFetch; await close(server); }
