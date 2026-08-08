@@ -2,20 +2,20 @@
 
 기준일: 2026-08-08
 
-## 현재 사실
+## 상태 스냅샷
 
 - 저장소: `seungjae3908-source/seungjae20260713`
-- 현재 확인 main: `128beab907393af3d06475129df724090de63331`
+- 확인 main: `128beab907393af3d06475129df724090de63331`
 - merge base: `c650fbb6eefe6dd728a9e1baaabe65eef2688caa`
-- 현재 PR #76 HEAD: `8397f816737c4306d7f816314d26f08def053d31`
+- 이 문서 갱신 직전 구현 HEAD: `8397f816737c4306d7f816314d26f08def053d31`
+- 해당 스냅샷의 main 대비: ahead 28 / behind 46 / diverged
 - 브랜치: `audit/market-information-room-improvements`
-- 현재 main 기준: ahead 28 / behind 46 / diverged
 - PR 상태: Open / Draft / 미병합 / mergeable=false
 - 최신 main merge/rebase/cherry-pick/force push: **0회**
 - main 직접 변경: **0회**
 - Staging/Production/운영 DB/Supabase/Secret/서버 변경: **0회**
 
-서버·Production 작업이 끝나 실제 Production main SHA가 확정될 때까지 최신 main을 반복 병합하지 않는다. 이 문서는 현재 main과 PR #76의 책임 경계 및 향후 한 번의 재동기화를 준비하기 위한 기록이다.
+문서 커밋 자체가 브랜치 HEAD를 이동시키므로 현재 exact HEAD는 PR 설명과 GitHub PR 메타데이터를 기준으로 확인한다. 서버·Production 작업이 끝나 실제 Production main SHA가 확정될 때까지 최신 main을 반복 병합하지 않는다.
 
 ## 책임 경계
 
@@ -40,7 +40,7 @@ PR #76의 상세 이동은 기존 `/stock-info` 계약만 소비하며 검색 �
 
 ## 현재 main과 겹치는 공통 조립 파일
 
-현재 merge base 이후 main 변경과 PR #76 변경의 실제 교집합은 다음 두 공통 조립 파일이다.
+merge base 이후 main 변경과 PR #76 변경의 실제 교집합은 다음 두 공통 조립 파일이다.
 
 ### `api-server/src/routes/index.ts`
 
@@ -59,7 +59,7 @@ PR #76에서 추가할 계약:
 - `/market-information/coins-futures` → `canAccessFutures`
 - `/market-information` → `canAccessBasicInfo` + read-only router
 
-현재 브랜치 파일은 main을 병합하지 않고 `db82ee7e3458d14f175f1fb1f001b2af22689911` 시점의 최신 scanner/safe-Kiwoom 조립 계약을 보존한 뒤 위 시장정보 연결만 최소 추가하도록 정리했다. 이후 main `128beab...`의 추가 커밋은 fallback CI provenance workflow만 수정했으므로 이 route 조립 계약에는 새 교집합이 없다.
+현재 브랜치 파일은 main을 병합하지 않고 `db82ee7e3458d14f175f1fb1f001b2af22689911` 시점의 scanner/safe-Kiwoom 조립 계약을 보존한 뒤 위 시장정보 연결만 최소 추가하도록 정리했다. 이후 main `128beab...`의 추가 커밋은 fallback CI provenance workflow만 수정했으므로 이 route 조립 계약에는 새 교집합이 없다.
 
 Production main 확정 후에는 확정 main 파일을 다시 기준으로 삼아 이 시장정보 연결만 최소 재적용한다.
 
@@ -106,7 +106,7 @@ PR #76에서 추가할 테스트:
 - `stock-analyzer/playwright.config.ts`
 - 이 문서
 
-`stock-analyzer/src/App.tsx`와 `stock-analyzer/playwright.config.ts`는 현재 merge base 이후 main 변경과 직접 교집합이 없지만 Production main 확정 시 다시 대조한다.
+`stock-analyzer/src/App.tsx`와 `stock-analyzer/playwright.config.ts`는 해당 merge base 이후 확인한 main 변경과 직접 교집합이 없지만 Production main 확정 시 다시 대조한다.
 
 ## 네 시장 route와 capability 계약
 
@@ -185,13 +185,13 @@ Frontend E2E도 빠른 KR→US 이동에서 늦은 KR 응답이 US 화면을 덮
 - unexpected HTTP error 0
 - private/account/balance/position/order/cancel/trade-automation request 0
 
-## exact-HEAD 실행 검증 상태
+## 실행 검증 상태
 
-현재 HEAD `8397f816737c4306d7f816314d26f08def053d31`은 PR conflict 상태이므로 pull_request merge ref 기반 Application CI run이 생성되지 않았다.
+구현 HEAD `8397f816737c4306d7f816314d26f08def053d31` 확인 시 PR이 conflict 상태여서 pull_request merge ref 기반 Application CI run이 생성되지 않았다.
 
 현재 연결된 GitHub 기능에는 기능 브랜치를 대상으로 새 `workflow_dispatch`를 시작하는 action이 없고, Agent Hub worker registry는 `audit/*` 브랜치를 허용하지 않는다. 정책·workflow·worker registry 변경, 임시 validation PR, no-op commit 같은 우회는 하지 않는다.
 
-따라서 현 시점에는 source/test contract 정적 대조와 브랜치 코드 보강까지 완료했으며, **현재 exact HEAD의 typecheck/build/Playwright/Application CI 성공을 아직 주장하지 않는다.**
+따라서 현 시점에는 source/test contract 정적 대조와 브랜치 코드 보강까지 완료했으며, **현재 PR exact HEAD의 typecheck/build/Playwright/Application CI 성공을 아직 주장하지 않는다.**
 
 ## Production main 확정 후 한 번 수행할 통합 절차
 
