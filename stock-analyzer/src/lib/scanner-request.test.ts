@@ -59,6 +59,19 @@ test('scanner query keys cover market, indicators, thresholds, and timeframe rac
   }
 });
 
+test('new signal scanner sends explicit strategy and only scanner read endpoints', () => {
+  const scannerClient = source('stock-analyzer/src/lib/signal-scanner.ts');
+  const scannerPage = source('stock-analyzer/src/pages/signal-scanner.tsx');
+  assert.match(scannerClient, /params\.set\('strategy', request\.strategy\)/);
+  assert.match(scannerPage, /strategy,\s*timeframe/);
+  assert.match(scannerPage, /1m/);
+  assert.match(scannerPage, /3m/);
+  assert.match(scannerPage, /15m context/);
+  assert.match(scannerPage, /1H context/);
+  assert.doesNotMatch(scannerClient, /\/api\/(?:account|orders?|cancel|positions?|execute|approve|private)\b/i);
+  assert.doesNotMatch(scannerPage, /\/api\/(?:account|orders?|cancel|positions?|execute|approve|private)\b/i);
+});
+
 test('QueryClient wraps only scanner queries with the TanStack AbortSignal', () => {
   const app = source('stock-analyzer/src/App.tsx');
   assert.match(app, /resolved\.queryKey\?\.\[0\] !== 'scan'/);
