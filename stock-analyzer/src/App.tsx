@@ -10,9 +10,11 @@ import { AppBackground } from '@/components/app-background';
 import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
 import { AnalysisSelectionProvider } from '@/lib/analysis-selection';
 import { OfflineBanner } from '@/components/offline-banner';
+import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
 import { PageFallback } from '@/components/data-state';
 import { AutoBackupSync } from '@/lib/backup-sync';
 import { CapabilityGate } from '@/components/capability-gate';
+import { withActiveQuerySignal } from '@/lib/query-abort-signal';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
@@ -60,6 +62,28 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
 
+function installScannerAbortBridge(client: QueryClient) {
+  const originalDefaultQueryOptions = client.defaultQueryOptions.bind(client);
+  const wrappedFunctions = new WeakSet<object>();
+  client.defaultQueryOptions = ((options) => {
+    const resolved = originalDefaultQueryOptions(options);
+    const queryFn = resolved.queryFn;
+    if (
+      resolved.queryKey?.[0] !== 'scan'
+      || typeof queryFn !== 'function'
+      || wrappedFunctions.has(queryFn)
+    ) {
+      return resolved;
+    }
+    const wrapped = ((context: Parameters<typeof queryFn>[0]) =>
+      withActiveQuerySignal(context.signal, () => queryFn(context))) as typeof queryFn;
+    wrappedFunctions.add(wrapped);
+    return { ...resolved, queryFn: wrapped };
+  }) as typeof client.defaultQueryOptions;
+}
+
+installScannerAbortBridge(queryClient);
+
 function useCryptoRedirect(target: (symbol?: string) => string, symbol?: string) {
   const mode = useAssetMode();
   const [, navigate] = useLocation();
@@ -79,8 +103,9 @@ function CryptoDetailRedirect() {
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-  const wide = location.startsWith('/scanner') || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
-  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
+  const scannerRoute = location.startsWith('/scanner');
+  const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
+  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {

@@ -37,6 +37,9 @@ function document(input: Partial<UnifiedAssetDocument> & Pick<UnifiedAssetDocume
 
 const fixtures = [
   document({ assetType: 'stock', market: 'KR', exchange: 'KOSPI', productCode: '005930', ticker: '005930', koreanName: '삼성전자', englishName: 'Samsung Electronics', displayName: '삼성전자', aliases: ['삼성', '삼전', 'samsung'], liquidityRank: 1 }),
+  document({ assetType: 'stock', market: 'KR', exchange: 'KRX', productCode: '069500', ticker: '069500', koreanName: 'KODEX 200', englishName: 'KODEX 200 ETF', displayName: 'KODEX 200', aliases: [], liquidityRank: 2 }),
+  document({ assetType: 'stock', market: 'KR', exchange: 'KRX', productCode: '360750', ticker: '360750', koreanName: 'TIGER 미국S&P500', englishName: 'TIGER US S&P 500 ETF', displayName: 'TIGER 미국S&P500', aliases: [], liquidityRank: 3 }),
+  document({ assetType: 'stock', market: 'KR', exchange: 'KRX', productCode: '530036', ticker: '530036', koreanName: '삼성 인버스 2X WTI원유 선물 ETN', englishName: 'Samsung Inverse 2X WTI Crude Oil Futures ETN', displayName: '삼성 인버스 2X WTI원유 선물 ETN', aliases: [], liquidityRank: 4 }),
   document({ assetType: 'stock', market: 'US', exchange: 'NASDAQ', productCode: 'TSLA', ticker: 'TSLA', koreanName: '테슬라', englishName: 'Tesla', displayName: '테슬라', aliases: ['tesla motors'], liquidityRank: 2 }),
   document({ assetType: 'stock', market: 'US', exchange: 'NYSE', productCode: 'BRK.B', ticker: 'BRK.B', koreanName: '버크셔 해서웨이', englishName: 'Berkshire Hathaway', displayName: '버크셔 해서웨이', aliases: ['BRKB', 'berkshire'], liquidityRank: 3 }),
   document({ assetType: 'coin', market: 'spot', exchange: 'UPBIT', productCode: 'KRW-BTC', symbol: 'BTC', koreanName: '비트코인', englishName: 'Bitcoin', displayName: '비트코인', aliases: ['BTC/KRW', 'BTC-KRW', 'bitcoin'], baseSymbol: 'BTC', quoteCurrency: 'KRW', liquidityRank: 1 }),
@@ -68,6 +71,15 @@ test('supports one-character Korean prefixes and aliases', () => {
   assert.equal(searchUnifiedAssetDocuments(fixtures, 'samsung', { limit: 25 })[0]?.document.productCode, '005930');
 });
 
+test('searches Korean ETF and ETN products by code, product name and normalized separators', () => {
+  assert.equal(searchUnifiedAssetDocuments(fixtures, '069500', { market: 'KR' })[0]?.document.productCode, '069500');
+  assert.equal(searchUnifiedAssetDocuments(fixtures, 'KODEX-200', { market: 'KR' })[0]?.document.productCode, '069500');
+  assert.equal(searchUnifiedAssetDocuments(fixtures, 'TIGER미국S&P500', { market: 'KR' })[0]?.document.productCode, '360750');
+  assert.equal(searchUnifiedAssetDocuments(fixtures, 'TIGER US S&P', { market: 'KR' })[0]?.document.productCode, '360750');
+  assert.equal(searchUnifiedAssetDocuments(fixtures, '530036', { market: 'KR' })[0]?.document.productCode, '530036');
+  assert.equal(searchUnifiedAssetDocuments(fixtures, 'WTI원유 선물 ETN', { market: 'KR' })[0]?.document.productCode, '530036');
+});
+
 test('keeps exact codes above names, aliases and fuzzy matches', () => {
   const code = searchUnifiedAssetDocuments(fixtures, '005930');
   assert.equal(code[0]?.matchType, 'code_exact');
@@ -91,7 +103,7 @@ test('matches slash, hyphen and separatorless coin product forms', () => {
 test('does not merge spot and futures documents with the same base symbol', () => {
   const btc = searchUnifiedAssetDocuments(fixtures, 'BTC', { limit: 10 });
   assert.deepEqual(new Set(btc.map((item) => item.document.market)), new Set(['spot', 'futures']));
-  assert.notEqual(fixtures[3].id, fixtures[4].id);
+  assert.notEqual(fixtures[6].id, fixtures[7].id);
 });
 
 test('supports choseong and constrained typo matching below exact results', () => {

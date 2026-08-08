@@ -43,16 +43,42 @@ const groups = {
   ],
   phase9: [
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
+    path.join(root, 'src/routes/paper-journal-ai-preview-privileges.test.ts'),
     path.join(root, 'src/services/ai-chat.service.test.ts'),
     path.join(root, 'src/services/signal-score.test.ts'),
+    path.join(root, 'src/services/bounded-scanner.service.test.ts'),
+    path.join(root, 'src/services/scanner-request-guard.service.test.ts'),
+    path.join(root, 'src/services/scanner-signal-policy.service.test.ts'),
+    path.join(root, 'src/services/scanner-signal-lifecycle.service.test.ts'),
+    path.join(root, 'src/services/crypto-signal-scanner.service.test.ts'),
+    path.join(root, 'src/lib/bounded-work-pool.test.ts'),
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/analysis-selection.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-analysis.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/scanner-request.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-live-timeline.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-candle-normalizer.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-indicator-engine.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-structure-engine.test.ts'),
   ],
   phase12: [
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
+    path.join(root, 'src/services/trade-automation-repository-compatibility.test.ts'),
+    path.join(root, 'src/services/trade-order-recovery.test.ts'),
+    path.join(root, 'src/services/trade-cancel-reconciliation.test.ts'),
+    path.join(root, 'src/services/trade-recovery-worker.test.ts'),
+    path.join(root, 'src/services/trade-pre-submission-risk.test.ts'),
+    path.join(root, 'src/services/trade-execution-pre-submission.test.ts'),
+    path.join(root, 'src/services/trade-split-order-planner.test.ts'),
+    path.join(root, 'src/services/trade-split-order-materializer.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
+    path.join(root, 'src/routes/trade-automation-split.smoke.test.ts'),
+    path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
+    path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/backup-sync-lifecycle.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts'),
   ],
   search: [
     path.join(root, 'src/services/unified-asset-search.service.test.ts'),
@@ -67,11 +93,28 @@ const groups = {
     path.join(root, 'src/routes/backtests.smoke.test.ts'),
     path.join(root, 'src/routes/paper-trading.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
+    path.join(root, 'src/routes/paper-journal-query-identity.smoke.test.ts'),
+    path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
+    path.join(root, 'src/routes/signal-scanner-auth.smoke.test.ts'),
+    path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
     path.join(root, 'src/routes/unified-search.smoke.test.ts'),
   ],
 };
 
-groups.unit = [...groups.phase2, ...groups.risk, ...groups.phase4, ...groups.phase5, ...groups.phase6, ...groups.phase7, ...groups.phase8, ...groups.phase9, ...groups.phase12, groups.search[0], groups.search[1], groups.search[2]];
+groups.unit = [
+  ...groups.phase2,
+  ...groups.risk,
+  ...groups.phase4,
+  ...groups.phase5,
+  ...groups.phase6,
+  ...groups.phase7,
+  ...groups.phase8,
+  ...groups.phase9,
+  ...groups.phase12,
+  groups.search[0],
+  groups.search[1],
+  groups.search[2],
+];
 const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'search', 'smoke'];
 if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 
@@ -90,7 +133,13 @@ try {
     outputFiles.push(outputFile);
   }
 
-  const result = spawnSync(process.execPath, ['--test', ...outputFiles], {
+  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
+  // serially so host-level event-loop contention cannot consume a scanner deadline
+  // before the test body starts. Test coverage and every assertion remain unchanged.
+  const testArguments = mode === 'phase9'
+    ? ['--test', '--test-concurrency=1', ...outputFiles]
+    : ['--test', ...outputFiles];
+  const result = spawnSync(process.execPath, testArguments, {
     cwd: repositoryRoot, stdio: 'inherit',
   });
   if (result.error) throw result.error;
