@@ -12,6 +12,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
+from agent_hub_contract_v2 import PATHLESS_READ_ONLY_ACTIONS
+
 BLOCK_NAMES = ("ROLE", "GOAL", "EVIDENCE", "CONSTRAINTS", "OUTPUT_SCHEMA")
 PROFILE_NAMES = (
     "ci_analyzer",
@@ -468,6 +470,16 @@ def parse_model_proposal(raw: str, compiled: CompiledPrompt) -> dict[str, Any]:
         raise PromptCompilerError("unknown evidence_ids: " + ", ".join(unknown))
     if not value["evidence_ids"]:
         raise PromptCompilerError("model proposal requires evidence_ids")
+    if value["action_type"] in PATHLESS_READ_ONLY_ACTIONS:
+        original_path_count = len(value["allowed_paths"])
+        if original_path_count:
+            print(json.dumps({
+                "pathless_allowed_paths_canonicalized": True,
+                "action_type": value["action_type"],
+                "original_path_count": original_path_count,
+                "canonical_path_count": 0,
+            }, ensure_ascii=False, separators=(",", ":")))
+        value["allowed_paths"] = []
     return value
 
 
@@ -522,6 +534,7 @@ def self_test() -> int:
     }
     parsed = parse_model_proposal(json.dumps(proposal), compiled)
     assert parsed["target_branch"] == "agent/demo"
+    assert parsed["allowed_paths"] == []
     bad = dict(proposal)
     bad["evidence_ids"] = ["FAKE-EVIDENCE"]
     try:
@@ -541,11 +554,88 @@ def self_test() -> int:
     )
     assert injection.prompt_injection_detected
     assert any(item.category == "prompt_injection" for item in injection.evidence)
+
+    release_fields = {
+        "task_id": "pathless-demo",
+        "worker": "operations-worker",
+        "repository": "owner/repo",
+        "base_sha": "a" * 40,
+        "branch": "agent/hub-e2e-fixture-20260806",
+        "head_sha": "b" * 40,
+        "pr_number": "none",
+        "changed_files": [],
+        "checks": "fixture CI success",
+        "ci_run_id": "31079503537",
+        "summary": "read-only seed",
+        "remaining": "inspect",
+        "dependencies": "none",
+        "conflicts": "none",
+    }
+    release = compile_prompt(
+        fields=release_fields,
+        sanitized_report="fixture CI success",
+        allowed_action_types=("inspect_repository", "modify_feature_branch"),
+        registered_workers=("operations-worker",),
+        policy_version="agent-hub-v4.0",
+    )
+    pathless = {
+        "target_worker": "operations-worker",
+        "action_type": "inspect_repository",
+        "target_branch": release_fields["branch"],
+        "allowed_paths": ["src/", "tests/"],
+        "prohibited_paths": ["production/**"],
+        "instruction": "Inspect repository evidence only.",
+        "evidence_ids": [next(iter(release.known_evidence_ids))],
+        "validation": "Use supplied evidence.",
+        "stop_conditions": "Stop before writes.",
+        "reason": "Read-only inspection.",
+    }
+    canonical = parse_model_proposal(json.dumps(pathless), release)
+    assert canonical["allowed_paths"] == []
+    assert canonical["target_worker"] == pathless["target_worker"]
+    assert canonical["action_type"] == pathless["action_type"]
+    assert canonical["target_branch"] == pathless["target_branch"]
+    assert canonical["evidence_ids"] == pathless["evidence_ids"]
+    assert canonical["validation"] == pathless["validation"]
+    assert canonical["stop_conditions"] == pathless["stop_conditions"]
+
+    code_fields = {**base_fields, "worker": "integration-planner", "branch": "agent/hub-code-demo"}
+    code = compile_prompt(
+        fields=code_fields,
+        sanitized_report=code_fields["checks"],
+        allowed_action_types=("modify_feature_branch",),
+        registered_workers=("integration-planner",),
+        policy_version="agent-hub-v4.0",
+    )
+    code_change = {
+        "target_worker": "integration-planner",
+        "action_type": "modify_feature_branch",
+        "target_branch": code_fields["branch"],
+        "allowed_paths": ["docs/demo.md"],
+        "prohibited_paths": ["production/**"],
+        "instruction": "Modify the bounded file only.",
+        "evidence_ids": [next(iter(code.known_evidence_ids))],
+        "validation": "Run deterministic checks.",
+        "stop_conditions": "Stop on scope violation.",
+        "reason": "Bounded code change.",
+    }
+    preserved = parse_model_proposal(json.dumps(code_change), code)
+    assert preserved["allowed_paths"] == ["docs/demo.md"]
+
     assert set(PROFILE_NAMES) == set(PROFILE_REQUIRED_EVIDENCE) == set(PROFILE_GOALS)
     assert set(PROFILE_NAMES) == set(PROFILE_ALLOWED_ACTIONS) == set(PROFILE_ALLOWED_WORKERS) == set(PROFILE_CONTEXT_LIMITS)
     assert compiled.allowed_workers == frozenset({"agent-hub-validation"})
     assert compiled.maximum_context_size == PROFILE_CONTEXT_LIMITS["agent_hub_reviewer"]
-    print(json.dumps({"prompt_compiler_v2": "pass", "profiles": len(PROFILE_NAMES), "blocks": 5}))
+    print(json.dumps({
+        "prompt_compiler_v2": "pass",
+        "profiles": len(PROFILE_NAMES),
+        "blocks": 5,
+        "pathless_allowed_paths_canonicalized": 1,
+        "pathless_original_path_count": 2,
+        "pathless_canonical_path_count": 0,
+        "code_change_path_preserved": 1,
+        "raw_model_output_logged": 0,
+    }))
     return 0
 
 
