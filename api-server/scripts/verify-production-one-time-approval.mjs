@@ -77,16 +77,16 @@ requireText(workflow, 'group: one-time-production-owner-approval', 'single appro
 requireText(workflow, 'cancel-in-progress: false', 'no cancellation of active approval');
 requireText(workflow, 'RAW_TARGET_SHA: ${{ inputs.target_sha }}', 'target SHA sourced from explicit workflow input');
 requireText(workflow, 'production-approval-target.cjs', 'shared immutable target contract');
-requireText(workflow, "APPROVAL_REPOSITORY: ${{ github.repository }}", 'repository identity evidence');
-requireText(workflow, "APPROVAL_ACTOR: ${{ github.actor }}", 'approval actor evidence');
-requireText(workflow, "APPROVAL_REF: ${{ github.ref }}", 'approval ref evidence');
+requireText(workflow, 'APPROVAL_REPOSITORY: ${{ github.repository }}', 'repository identity evidence');
+requireText(workflow, 'APPROVAL_ACTOR: ${{ github.actor }}', 'approval actor evidence');
+requireText(workflow, 'APPROVAL_REF: ${{ github.ref }}', 'approval ref evidence');
 requireText(workflow, "'seungjae3908-source/seungjae20260713'", 'fixed repository gate');
 requireText(workflow, "'seungjae3908-source'", 'fixed owner actor gate');
 requireText(workflow, "'refs/heads/main'", 'main workflow ref gate');
 requireText(workflow, 'getBranch', 'current main lookup');
 requireText(workflow, 'currentMainSha: mainResponse.data.commit.sha', 'exact current main comparison');
-requireText(workflow, "ref: evaluated.targetSha", 'exact target commit resolution');
-requireText(workflow, 'core.setOutput(\'sha\', evaluated.targetSha)', 'normalized immutable target output');
+requireText(workflow, 'ref: evaluated.targetSha', 'exact target commit resolution');
+requireText(workflow, "core.setOutput('sha', evaluated.targetSha)", 'normalized immutable target output');
 
 forbidText(workflow, '\n  push:', 'main push must not trigger approval');
 forbidText(workflow, 'ops/production-approval.json', 'legacy approval JSON must not participate in runtime approval');
@@ -120,6 +120,8 @@ requireText(workflow, "run.head_sha === targetSha", 'PostgreSQL gate exact targe
 requireText(workflow, "run.conclusion === 'success'", 'PostgreSQL gate success');
 requireText(workflow, 'staging-postgres-auth-${targetSha}', 'PostgreSQL gate exact artifact');
 requireText(workflow, 'candidate.expired !== true', 'PostgreSQL gate artifact freshness');
+requireText(postgresGate, 'Require exact current main SHA', 'PostgreSQL source gate exact current main check');
+requireText(postgresGate, 'staging-postgres-auth-${{ steps.command.outputs.sha }}', 'PostgreSQL source gate exact artifact identity');
 
 requireText(workflow, 'actions.listArtifactsForRepo', 'exact staging artifact lookup');
 requireText(workflow, 'actions.getWorkflowRun', 'direct staging source-run verification');
@@ -141,8 +143,8 @@ requireText(verdictVerifier, 'runtime: external health check', 'external health 
 requireText(verdictVerifier, 'browser: desktop: login, refresh session retention', 'Desktop browser validation required');
 requireText(verdictVerifier, 'browser: mobile: login, refresh session retention', 'Mobile browser validation required');
 requireText(verdictVerifier, 'database migration and rollback assessment', 'database validation required');
-requireText(verdictVerifier, 'ephemeral_accounts_deleted !== verdict.ephemeral_accounts_created', 'temporary account cleanup required');
-requireText(verdictVerifier, 'ephemeral_profiles_remaining !== 0', 'temporary profile cleanup required');
+requireText(verdictVerifier, 'verdict.ephemeral_accounts_deleted !== verdict.ephemeral_accounts_created', 'temporary account cleanup required');
+requireText(verdictVerifier, 'verdict.ephemeral_profiles_remaining !== 0', 'temporary profile cleanup required');
 requireText(verdictVerifier, 'verdict.console_errors !== 0', 'console error zero gate');
 requireText(verdictVerifier, 'verdict.page_errors !== 0', 'page error zero gate');
 requireText(verdictVerifier, 'verdict.unhandled_rejections !== 0', 'unhandled rejection zero gate');
@@ -153,11 +155,11 @@ requireText(workflow, 'evaluateProductionDispatchTarget', 'approval/deploy SHA e
 requireText(workflow, 'approvalTargetSha: targetSha', 'approved SHA forwarded to dispatch contract');
 requireText(workflow, 'productionTargetSha: targetSha', 'production SHA sourced only from approved SHA');
 requireText(workflow, 'mainResponse.data.commit.sha !== dispatchContract.targetSha', 'current main revalidated immediately before dispatch');
-requireText(workflow, "sha: dispatchContract.targetSha", 'Production Deploy receives exact approved SHA');
+requireText(workflow, 'sha: dispatchContract.targetSha', 'Production Deploy receives exact approved SHA');
 requireText(workflow, "force_rebuild: 'false'", 'forced rebuild disabled');
 requireText(workflow, "data_probe_path: '/api/healthz/data-plane'", 'dedicated production data-plane probe');
 requireText(workflow, 'return_run_details: true', 'direct production Run ID');
-requireText(workflow, "run.head_sha === dispatchContract.targetSha", 'returned Production run exact SHA');
+requireText(workflow, 'run.head_sha === dispatchContract.targetSha', 'returned Production run exact SHA');
 requireText(workflow, "run.path === '.github/workflows/production-deploy.yml'", 'returned Production workflow identity');
 requireText(workflow, 'Production deployment not duplicated', 'duplicate deployment prevention');
 requireText(workflow, 'actions: write', 'official workflow dispatch permission');
@@ -193,7 +195,6 @@ requireText(production, 'PM2_NAME=stock-app', 'official Production PM2');
 requireText(production, 'PUBLIC_BASE_URL: https://lsj119.duckdns.org', 'official Production URL');
 forbidText(production, '/api/quotes?tickers=005930', 'official Production workflow must not use protected quote API as readiness probe');
 
-requireText(postgresGate, "run.head_sha", 'PostgreSQL gate records exact workflow SHA evidence');
 requireText(staging, 'STAGING_RUN_FULL_VALIDATION=true is mandatory', 'full validation required for deploy candidate');
 requireText(staging, 'staging-verdict-${{ env.TARGET_SHA }}', 'exact staging artifact identity');
 requireText(staging, 'release_ready', 'staging release-ready field');
