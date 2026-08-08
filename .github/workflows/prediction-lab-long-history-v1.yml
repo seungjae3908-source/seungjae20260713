@@ -12,9 +12,11 @@ on:
       - market-prediction-lab/src/binance-futures-history.js
       - market-prediction-lab/src/binance-vision-futures-archive.js
       - market-prediction-lab/src/multi-market-backtest-engine.js
+      - market-prediction-lab/src/v2-market-optimizer.js
       - market-prediction-lab/scripts/run-long-history-v1.js
       - market-prediction-lab/tests/historical-backtest-data.test.js
       - market-prediction-lab/tests/binance-futures-history.test.js
+      - market-prediction-lab/tests/v2-market-optimizer.test.js
 
 permissions:
   contents: write
@@ -42,7 +44,7 @@ jobs:
         working-directory: market-prediction-lab
         run: npm run validate
 
-      - name: Collect public history and run V1
+      - name: Collect public history and run V1 plus V2 search
         working-directory: market-prediction-lab
         run: npm run backtest:v1:history -- long-history-v1 docs/long-history-v1-result.json docs/long-history-v1-result.md
 
@@ -75,5 +77,5 @@ jobs:
             echo "No compact result changes"
             exit 0
           fi
-          git commit -m "test(research): record long-history V1 result"
+          git commit -m "test(research): record long-history V1 and V2 result"
           git push origin HEAD:feature/prediction-lab-standalone
