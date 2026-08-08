@@ -4,11 +4,11 @@ on:
   schedule:
     - cron: "47 * * * *"
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/prediction-lab-adaptive-candidate.yml
+  workflow_run:
+    workflows:
+      - Prediction Lab Hourly Shadow Validation
+    types:
+      - completed
 
 permissions:
   actions: read
@@ -25,6 +25,7 @@ env:
 
 jobs:
   adaptive-candidate:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -36,15 +37,28 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
-              owner,
-              repo,
-              workflow_id: 'prediction-lab-shadow-hourly.yml',
-              status: 'completed',
-              per_page: 100,
-            });
+            const triggerRunId = context.eventName === 'workflow_run'
+              ? Number(context.payload.workflow_run?.id ?? 0)
+              : 0;
+            let runs;
+            if (triggerRunId > 0) {
+              const run = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: triggerRunId });
+              if (run.data.conclusion !== 'success') {
+                core.setFailed(`Trigger shadow run ${triggerRunId} was not successful.`);
+                return;
+              }
+              runs = [run.data];
+            } else {
+              runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner,
+                repo,
+                workflow_id: 'prediction-lab-shadow-hourly.yml',
+                status: 'completed',
+                per_page: 100,
+              });
+              runs = runs.filter((run) => run.conclusion === 'success');
+            }
             for (const run of runs) {
-              if (run.conclusion !== 'success') continue;
               const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
                 owner,
                 repo,
@@ -58,7 +72,9 @@ jobs:
               core.info(`Pinned adaptive input to shadow run ${run.id}, artifact ${artifact.id}.`);
               return;
             }
-            core.setFailed('No successful, unexpired shadow artifact is available.');
+            core.setFailed(triggerRunId > 0
+              ? `Trigger shadow run ${triggerRunId} has no unexpired ${process.env.SHADOW_ARTIFACT} artifact.`
+              : 'No successful, unexpired shadow artifact is available.');
 
       - name: Download exact shadow artifact
         uses: actions/download-artifact@v4
@@ -72,9 +88,6 @@ jobs:
       - name: Verify shadow provenance and digests
         id: verify
         shell: bash
-        env:
-          EXPECTED_RUN_ID: ${{ steps.shadow.outputs.run_id }}
-          EXPECTED_ARTIFACT_ID: ${{ steps.shadow.outputs.artifact_id }}
         run: |
           node <<'NODE'
           const fs = require('fs');
@@ -183,7 +196,7 @@ jobs:
         shell: bash
         run: |
           test "$(git rev-parse HEAD)" = "${{ steps.verify.outputs.research_code_sha }}"
-          if grep -R -E 'git[[:space:]]+(push|commit)|contents:[[:space:]]*write|createWorkflowDispatch' .github/workflows/prediction-lab-adaptive-candidate.yml; then
+          if grep -E 'git[[:space:]]+(push|commit)|contents:[[:space:]]*write|createWorkflowDispatch' .github/workflows/prediction-lab-adaptive-candidate.yml; then
             echo "Adaptive workflow contains a repository mutation or CI-dispatch path." >&2
             exit 1
           fi
