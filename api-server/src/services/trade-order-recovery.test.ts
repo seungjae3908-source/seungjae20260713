@@ -227,7 +227,8 @@ test('lookup failure schedules bounded retries and never replays the order POST'
     assert.equal(requests.some((request) => request.method === 'POST' || /\/v1\/orders(?:\?|$)/.test(request.url)), false);
     const events = await repository.listEvents(USER_ID);
     assert.equal(events.at(-1)?.reason, 'EXCHANGE_RECONCILIATION_MANUAL_REVIEW');
-    assert.equal(events.every((event) => event.metadata.orderSubmissionAttempted === false), true);
+    assert.equal(events.every((event) => event.metadata.submissionOutcome === 'unknown'), true);
+    assert.equal(events.every((event) => event.metadata.orderResubmitted === false), true);
   } finally {
     globalThis.fetch = nativeFetch;
   }
