@@ -55,7 +55,8 @@ const visibleIndex = spec.indexOf('await expect(logoutButton).toBeVisible();');
 const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observation);');
 const clickIndex = spec.indexOf('await logoutButton.click();');
 assert(visibleIndex >= 0 && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only around an explicit visible logout-button click');
-assert(spec.includes('observation.candidates.push(diagnostic);'), 'matching aborts must be held as candidates first');
+assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
+assert(spec.includes('routeObservation.candidates.push(diagnostic);'), 'matching route-transition aborts must be held as candidates first');
 assert(
   spec.indexOf('diagnostics.expected_logout_aborts.push(...observation.candidates);')
     > spec.indexOf("expect(\n      [401, 403],"),
@@ -76,12 +77,110 @@ assert(spec.includes("'[redacted-token]'"), 'JWT-like tokens must be redacted fr
 assert(spec.includes("'[redacted-key]'"), 'Supabase-style keys must be redacted from diagnostic details');
 assert(spec.includes("'$1[redacted]'"), 'named password, token, secret, and key values must be redacted');
 
-assert(spec.includes('for (let pass = 0; pass < 2; pass += 1)'), 'network settlement must require two quiet passes');
-assert(spec.includes("await page.waitForLoadState('networkidle', { timeout: 30_000 });"), 'network settlement must fail instead of swallowing a timeout');
-assert(!spec.includes("waitForLoadState('networkidle', { timeout: 20_000 }).catch"), 'network-idle timeouts must not be ignored');
+assert(spec.includes('async function waitForPresentationFrame(page: Page)'), 'presentation-frame readiness helper is missing');
+assert(spec.includes("await page.waitForLoadState('load');"), 'route settlement must require the browser load event');
+assert(spec.includes('requestAnimationFrame(() => requestAnimationFrame(() => resolve()));'), 'route settlement must wait for two browser presentation frames');
+assert(spec.includes('for (let pass = 0; pass < 2; pass += 1)'), 'presentation settlement must require two stable passes');
+assert(spec.includes("expect(page.url(), 'route changed while presentation was settling').toBe(urlBeforeFrame);"), 'each presentation pass must prove the route stayed stable');
+assert(spec.includes("await expect(page.locator('body')).toBeVisible();"), 'each presentation pass must prove the rendered body is visible');
+assert(!spec.includes("waitForLoadState('networkidle'"), 'polling and bounded provider requests must not be treated as a route-readiness failure');
+assert(!spec.includes('.catch(() => undefined)'), 'route settlement failures must not be swallowed');
+
+const settleHelperStart = spec.indexOf('async function settle(page: Page)');
+const settleHelperEnd = spec.indexOf(
+  '\nfunction loginSubmitButton(',
+  settleHelperStart,
+);
 assert(
-  spec.indexOf('await settle(page);\n  const response = await page.goto(route') >= 0,
-  'healthy route navigation must settle the previous page before leaving it',
+  settleHelperStart >= 0 && settleHelperEnd > settleHelperStart,
+  'route settlement helper boundaries are missing',
+);
+const settleHelperBlock = spec.slice(settleHelperStart, settleHelperEnd);
+const settleLoadIndex = settleHelperBlock.indexOf("await page.waitForLoadState('load');");
+const settleBodyVisibleIndex = settleHelperBlock.indexOf(
+  "await expect(page.locator('body')).toBeVisible();",
+  settleLoadIndex,
+);
+const settleMutationDrainIndex = settleHelperBlock.indexOf(
+  'await waitForPendingMutations(page);',
+  settleBodyVisibleIndex,
+);
+assert(
+  settleLoadIndex >= 0
+    && settleBodyVisibleIndex > settleLoadIndex
+    && settleMutationDrainIndex > settleBodyVisibleIndex,
+  'route settlement must render the page and drain mutating browser requests before navigation can continue',
+);
+
+const healthyRouteStart = spec.indexOf(
+  'async function expectHealthyRoute(page: Page, route: string)',
+);
+const healthyRouteEnd = spec.indexOf(
+  '\nasync function expectDeniedRoute(',
+  healthyRouteStart,
+);
+assert(
+  healthyRouteStart >= 0 && healthyRouteEnd > healthyRouteStart,
+  'healthy route helper boundaries are missing',
+);
+const healthyRouteBlock = spec.slice(healthyRouteStart, healthyRouteEnd);
+const routeSettleIndex = healthyRouteBlock.indexOf('await settle(page);');
+const routeObservationIndex = healthyRouteBlock.indexOf(
+  'const observation: RouteTransitionObservation = {',
+  routeSettleIndex,
+);
+const activateObservationIndex = healthyRouteBlock.indexOf(
+  'activeRouteTransitionObservations.set(page, observation);',
+  routeObservationIndex,
+);
+const routeGotoIndex = healthyRouteBlock.indexOf(
+  'const response = await page.goto(',
+  activateObservationIndex,
+);
+const routeStatusIndex = healthyRouteBlock.indexOf(
+  'expect(response.status()',
+  routeGotoIndex,
+);
+const destinationSettleIndex = healthyRouteBlock.indexOf(
+  'await settle(page);',
+  routeStatusIndex,
+);
+const destinationRouteIndex = healthyRouteBlock.indexOf(
+  'expect(routeIdentity(page.url())).toBe(observation.toRoute);',
+  destinationSettleIndex,
+);
+const notFoundIndex = healthyRouteBlock.indexOf(
+  'not.toContainText(/페이지를 찾을 수 없습니다|page not found/i)',
+  destinationRouteIndex,
+);
+const notEmptyIndex = healthyRouteBlock.indexOf(
+  'not.toBeEmpty();',
+  notFoundIndex,
+);
+const confirmedIndex = healthyRouteBlock.indexOf(
+  'confirmed = true;',
+  notEmptyIndex,
+);
+const finishTransitionIndex = healthyRouteBlock.indexOf(
+  'await finishRouteTransition(page, observation, confirmed);',
+  confirmedIndex,
+);
+assert(
+  routeSettleIndex >= 0
+    && routeObservationIndex > routeSettleIndex
+    && activateObservationIndex > routeObservationIndex
+    && routeGotoIndex > activateObservationIndex,
+  'healthy route navigation must settle the previous page and begin scoped transition observation before leaving it',
+);
+assert(
+  routeStatusIndex > routeGotoIndex
+    && destinationSettleIndex > routeStatusIndex
+    && destinationRouteIndex > destinationSettleIndex
+    && notFoundIndex > destinationRouteIndex
+    && notEmptyIndex > notFoundIndex
+    && confirmedIndex > notEmptyIndex
+    && finishTransitionIndex > confirmedIndex,
+  'healthy route navigation must validate and settle the destination before confirming route-transition abort candidates',
 );
 assert(spec.includes('async function expectDeniedRoute(page: Page, route: string)'), 'denied route navigation must share a pre-navigation settlement helper');
 assert(spec.includes('/stock-info?asset=stock&market=KR&ticker=005930'), 'stock staging routes must use the application ticker query parameter');
@@ -119,18 +218,38 @@ assert(!routes.includes('res.statusCode >= 500'), 'generic server errors must ne
 
 assert(auth.includes('useMemo, useRef, useState'), 'auth provider must import useRef for logout coordination');
 assert(auth.includes('const signingOutRef = useRef(false);'), 'auth provider must track an active logout barrier');
+assert(auth.includes('const sessionRef = useRef<Session | null>(null);'), 'auth provider must track the synchronously current session identity');
 assert(auth.includes('const profileLoadQueueRef = useRef<Promise<void>>(Promise.resolve());'), 'auth provider must track every profile load in a serial queue');
-assert(auth.includes('if (signingOutRef.current) return Promise.resolve();'), 'new profile loads must stop after logout begins');
+assert(auth.includes('function applySession(next: Session | null)'), 'auth provider must update session identity and React state through one helper');
+assert(
+  auth.includes('sessionRef.current = next;\n    setSession(next);'),
+  'session identity must change synchronously before React session state is scheduled',
+);
+assert(
+  (auth.match(/setSession\(/g) ?? []).length === 1,
+  'all session mutations must pass through the synchronous session identity helper',
+);
+assert(
+  auth.includes('if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return Promise.resolve();'),
+  'new or stale-user profile loads must stop after logout begins or session identity changes',
+);
+assert(
+  auth.includes('if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return;'),
+  'queued profile work must recheck logout and session identity before starting a provider request',
+);
 assert(auth.includes("profileLoadQueueRef.current\n      .catch(() => undefined)"), 'profile loads must remain serial even after an earlier load failure');
 assert(auth.includes('profileLoadQueueRef.current = queued.catch(() => undefined);'), 'profile queue failures must not permanently block later logout');
-assert(auth.includes('if (!signingOutRef.current) setProfile'), 'late profile responses must not restore profile state during logout');
+assert(
+  auth.includes('if (!signingOutRef.current && sessionRef.current?.user.id === user.id)'),
+  'late profile responses must not restore profile state after logout or a user change',
+);
 assert(auth.includes('if (active && !signingOutRef.current) void loadProfile(session.user);'), 'timer, focus, and visibility refreshes must stop during logout');
 
 const authSignOutIndex = auth.indexOf('async signOut() {');
 const logoutBarrierIndex = auth.indexOf('signingOutRef.current = true;', authSignOutIndex);
 const drainIndex = auth.indexOf('await profileLoadQueueRef.current;', authSignOutIndex);
 const globalLogoutIndex = auth.indexOf('await getSupabase().auth.signOut();', authSignOutIndex);
-const clearSessionIndex = auth.indexOf('setSession(null);', globalLogoutIndex);
+const clearSessionIndex = auth.indexOf('applySession(null);', globalLogoutIndex);
 const releaseBarrierIndex = auth.indexOf('signingOutRef.current = false;', globalLogoutIndex);
 assert(authSignOutIndex >= 0, 'auth provider global signOut implementation is missing');
 assert(
@@ -139,7 +258,7 @@ assert(
     && globalLogoutIndex > drainIndex,
   'logout must raise the barrier, drain profile requests, and only then call Supabase global signOut',
 );
-assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must explicitly clear the local session');
-assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session and profile cleanup finish');
+assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must synchronously invalidate session identity');
+assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session identity and profile cleanup finish');
 
-console.log('[staging-login-selector-contract] logout classification, profile-request drain, diagnostic redaction, optional provider degradation, and navigation stability are locked down');
+console.log('[staging-login-selector-contract] logout and route-transition candidate classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');

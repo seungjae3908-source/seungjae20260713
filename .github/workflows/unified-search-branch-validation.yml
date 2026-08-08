@@ -27,13 +27,16 @@ jobs:
           ref: feature/unified-asset-search
           fetch-depth: 0
 
-      - name: Confirm isolated branch and baseline
+      - name: Confirm isolated branch and current main baseline
         shell: bash
         run: |
           set -Eeuo pipefail
           test "$(git branch --show-current)" = "feature/unified-asset-search"
-          git merge-base --is-ancestor aab202273498af5d2db13f4328a9ebe9287f9a1c HEAD
-          git diff --check aab202273498af5d2db13f4328a9ebe9287f9a1c...HEAD
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor origin/main HEAD
+          BASE="$(git merge-base origin/main HEAD)"
+          test -n "$BASE"
+          git diff --check "$BASE"...HEAD
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -103,7 +106,10 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          changed="$(git diff --name-only aab202273498af5d2db13f4328a9ebe9287f9a1c...HEAD)"
+          git fetch origin main --no-tags
+          BASE="$(git merge-base origin/main HEAD)"
+          test -n "$BASE"
+          changed="$(git diff --name-only "$BASE"...HEAD)"
           if grep -Eq '^(ops/|supabase/|.*migration|\.github/workflows/(production|staging)-)' <<<"$changed"; then
             echo 'Unified search branch changed a prohibited deployment, Supabase, or migration path.' >&2
             printf '%s\n' "$changed" >&2

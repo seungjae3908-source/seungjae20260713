@@ -35,7 +35,7 @@ export default defineConfig({
     actionTimeout: 20_000,
     navigationTimeout: 30_000,
     screenshot: 'only-on-failure',
-    trace: 'retain-on-failure',
+    trace: stagingMode ? 'off' : 'retain-on-failure',
     video: 'retain-on-failure',
     ignoreHTTPSErrors: false,
   },

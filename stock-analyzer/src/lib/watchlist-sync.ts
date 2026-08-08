@@ -2,7 +2,7 @@
 //
 // localStorage가 즉각적인 로컬 캐시, Supabase(watchlist_items)가 원본 저장소.
 // - 앱 시작 시: 서버 목록을 내려받아 로컬과 병합(서버의 targetPrice 우선).
-// - 로컬 변경 시(WATCHLIST_CHANGE_EVENT): 디바운스 후 전체 목록을 서버에 반영.
+// - 로컬 변경 시(WATCHLIST_CHANGE_EVENT): 디바운스 후 최신 전체 목록을 직렬 반영.
 // - 서버가 아직 설정 전(503 SUPABASE_NOT_CONFIGURED)이면 로컬 전용으로 동작하고
 //   콘솔에 한 번만 알린다 — 몰래 실패하지 않는다.
 import { authorizedFetch } from './auth-fetch';
@@ -30,6 +30,9 @@ let installed = false;
 let serverDisabled = false;
 let warnedOnce = false;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
+let pushInFlight = false;
+let pushPending = false;
+let applyingServerState = false;
 
 export function getDeviceId(): string {
   if (typeof window === 'undefined') return 'default';
@@ -73,14 +76,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T | null> {
   }
 }
 
-function toServerItem(item: WatchlistItem) {
-  return {
-    ticker: item.ticker,
-    name: item.name,
-    market: item.market ?? null,
-    currency: item.currency ?? null,
-    targetPrice: typeof item.targetPrice === 'number' ? item.targetPrice : null,
-  };
+function canonicalServerItems(
+  items: ReadonlyArray<WatchlistItem | ServerWatchlistItem>,
+): ServerWatchlistItem[] {
+  const unique = new Map<string, ServerWatchlistItem>();
+  for (const item of items) {
+    const ticker = String(item.ticker ?? '').trim().toUpperCase();
+    if (!ticker) continue;
+    const name = String(item.name ?? '').trim() || ticker;
+    const market = String(item.market ?? '').trim() || null;
+    const currency = String(item.currency ?? '').trim() || null;
+    const targetPrice =
+      typeof item.targetPrice === 'number' && Number.isFinite(item.targetPrice)
+        ? item.targetPrice
+        : null;
+    unique.set(ticker, { ticker, name, market, currency, targetPrice });
+  }
+  return Array.from(unique.values()).sort((left, right) =>
+    left.ticker.localeCompare(right.ticker),
+  );
+}
+
+function sameServerState(
+  left: ReadonlyArray<WatchlistItem | ServerWatchlistItem>,
+  right: ReadonlyArray<WatchlistItem | ServerWatchlistItem>,
+): boolean {
+  return JSON.stringify(canonicalServerItems(left)) === JSON.stringify(canonicalServerItems(right));
 }
 
 function mergeServerIntoLocal(serverItems: ServerWatchlistItem[]): void {
@@ -107,7 +128,13 @@ function mergeServerIntoLocal(serverItems: ServerWatchlistItem[]): void {
     }
   }
 
-  if (changed) writeWatchlistItems(Array.from(map.values()));
+  if (!changed) return;
+  applyingServerState = true;
+  try {
+    writeWatchlistItems(Array.from(map.values()));
+  } finally {
+    applyingServerState = false;
+  }
 }
 
 function migrateLegacyDetailKey(): void {
@@ -133,19 +160,41 @@ function migrateLegacyDetailKey(): void {
   }
 }
 
-function schedulePush(): void {
+async function flushPush(): Promise<void> {
   if (serverDisabled) return;
+  if (pushInFlight) {
+    pushPending = true;
+    return;
+  }
+
+  pushInFlight = true;
+  try {
+    do {
+      pushPending = false;
+      const controller = new AbortController();
+      await request('/watchlist/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deviceId: getDeviceId(),
+          items: canonicalServerItems(readWatchlistItems()),
+        }),
+        keepalive: true,
+        // 저장 요청은 화면 조회용 AbortSignal을 상속하지 않는다.
+        signal: controller.signal,
+      });
+    } while (pushPending && !serverDisabled);
+  } finally {
+    pushInFlight = false;
+  }
+}
+
+function schedulePush(): void {
+  if (serverDisabled || applyingServerState) return;
   if (pushTimer !== null) clearTimeout(pushTimer);
   pushTimer = setTimeout(() => {
     pushTimer = null;
-    void request('/watchlist/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        deviceId: getDeviceId(),
-        items: readWatchlistItems().map(toServerItem),
-      }),
-    });
+    void flushPush();
   }, 800);
 }
 
@@ -162,7 +211,8 @@ export function ensureWatchlistSync(): void {
       `/watchlist?deviceId=${encodeURIComponent(getDeviceId())}`,
     );
     if (!res) return;
-    mergeServerIntoLocal(res.items ?? []);
-    schedulePush();
+    const serverItems = canonicalServerItems(res.items ?? []);
+    mergeServerIntoLocal(serverItems);
+    if (!sameServerState(readWatchlistItems(), serverItems)) schedulePush();
   })();
 }
