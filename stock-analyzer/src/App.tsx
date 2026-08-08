@@ -10,9 +10,11 @@ import { AppBackground } from '@/components/app-background';
 import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
 import { AnalysisSelectionProvider } from '@/lib/analysis-selection';
 import { OfflineBanner } from '@/components/offline-banner';
+import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
 import { PageFallback } from '@/components/data-state';
 import { AutoBackupSync } from '@/lib/backup-sync';
 import { CapabilityGate } from '@/components/capability-gate';
+import { withActiveQuerySignal } from '@/lib/query-abort-signal';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
@@ -22,8 +24,10 @@ const WatchlistPage = lazy(() => import('@/pages/watchlist'));
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
 const StockInfoPage = lazy(() => import('@/pages/stock-info'));
+const MarketInformationPage = lazy(() => import('@/pages/market-information'));
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
+const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
 const ThemesPage = lazy(() => import('@/pages/themes'));
 const LearnPage = lazy(() => import('@/pages/learn'));
 const MorePage = lazy(() => import('@/pages/more'));
@@ -59,6 +63,28 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
 
+function installScannerAbortBridge(client: QueryClient) {
+  const originalDefaultQueryOptions = client.defaultQueryOptions.bind(client);
+  const wrappedFunctions = new WeakSet<object>();
+  client.defaultQueryOptions = ((options) => {
+    const resolved = originalDefaultQueryOptions(options);
+    const queryFn = resolved.queryFn;
+    if (
+      resolved.queryKey?.[0] !== 'scan'
+      || typeof queryFn !== 'function'
+      || wrappedFunctions.has(queryFn)
+    ) {
+      return resolved;
+    }
+    const wrapped = ((context: Parameters<typeof queryFn>[0]) =>
+      withActiveQuerySignal(context.signal, () => queryFn(context))) as typeof queryFn;
+    wrappedFunctions.add(wrapped);
+    return { ...resolved, queryFn: wrapped };
+  }) as typeof client.defaultQueryOptions;
+}
+
+installScannerAbortBridge(queryClient);
+
 function useCryptoRedirect(target: (symbol?: string) => string, symbol?: string) {
   const mode = useAssetMode();
   const [, navigate] = useLocation();
@@ -78,8 +104,9 @@ function CryptoDetailRedirect() {
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-  const wide = location.startsWith('/scanner') || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
-  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
+  const scannerRoute = location.startsWith('/scanner');
+  const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
+  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {
@@ -94,6 +121,10 @@ function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPag
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingAccess() { return gated('canAccessPaperTrading', <PaperTradingPage />); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
+function BasicMarketInformationAccess() { return gated('canAccessBasicInfo', <MarketInformationPage />); }
+function SpotMarketInformationAccess() { return gated('canAccessSpot', <MarketInformationPage />); }
+function FuturesMarketInformationAccess() { return gated('canAccessFutures', <MarketInformationPage />); }
+function UnifiedAssetSearchAccess() { return gated('canAccessBasicInfo', <UnifiedAssetSearchPage />); }
 function StockInfoAccess() {
   const [location] = useLocation();
   const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : window.location.search.slice(1);
@@ -108,13 +139,19 @@ function ApprovedRouter() {
   return <Suspense fallback={<PageFallback />}><Switch>
     <Route path="/" component={HomePage} />
     <Route path="/home" component={HomePage} />
-    <Route path="/stocks" component={StocksPage} />
+    <Route path="/stocks/kr" component={BasicMarketInformationAccess} />
+    <Route path="/stocks/us" component={BasicMarketInformationAccess} />
+    <Route path="/coins/spot" component={SpotMarketInformationAccess} />
+    <Route path="/coins/futures" component={FuturesMarketInformationAccess} />
+    <Route path="/stocks" component={UnifiedAssetSearchAccess} />
     <Route path="/auto-trading" component={ScannerAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
     <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
     <Route path="/settings" component={MorePage} />
-    <Route path="/search" component={SearchPage} />
+    <Route path="/search" component={UnifiedAssetSearchAccess} />
+    <Route path="/market-rankings" component={SearchPage} />
+    <Route path="/market-browser" component={StocksPage} />
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
@@ -145,6 +182,7 @@ function RootRouter() {
     {phase7E2EEnabled ? <Route path="/__phase7-journal-sync-e2e" component={Phase7JournalSyncE2EPage} /> : null}
     {phase8E2EEnabled ? <Route path="/__phase8-release-candidate-e2e" component={Phase8ReleaseCandidateE2EPage} /> : null}
     {phase9E2EEnabled ? <Route path="/__phase9-ai-review-e2e" component={Phase9AiReviewE2EPage} /> : null}
+    {phase11E2EEnabled ? <Route path="/__phase11-unified-search-e2e" component={UnifiedAssetSearchPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-ai-workspace-e2e" component={ScannerRoute} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}

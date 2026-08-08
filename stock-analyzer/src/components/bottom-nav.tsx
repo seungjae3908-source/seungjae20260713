@@ -24,6 +24,7 @@ import {
   cleanAppPath,
   navigationGroupMatches,
   navigationMenuItemMatches,
+  resolveAppRoutePresentation,
   type NavigationGroupId,
   type NavigationIconId,
   type NavigationMenuItem,
@@ -52,6 +53,7 @@ export function BottomNav() {
   const [location, navigate] = useLocation();
   const auth = useAuth();
   const path = cleanAppPath(location);
+  const presentation = resolveAppRoutePresentation(location);
   const [openMenu, setOpenMenu] = useState<NavigationGroupId | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRefs = useRef<Partial<Record<NavigationGroupId, HTMLButtonElement | null>>>({});
@@ -62,6 +64,11 @@ export function BottomNav() {
     setOpenMenu(null);
     menuItemRefs.current = [];
   }, [location]);
+
+  useEffect(() => {
+    if (!presentation?.title) return;
+    document.title = `${presentation.title} · Stock AI`;
+  }, [presentation?.title]);
 
   useEffect(() => {
     function closeAndRestoreFocus(groupId: NavigationGroupId | null = openMenu) {
@@ -160,8 +167,19 @@ export function BottomNav() {
   return (
     <nav
       aria-label="주요 메뉴"
+      data-route-title={presentation?.title ?? undefined}
+      data-breadcrumb={presentation?.breadcrumb.join(' / ') ?? undefined}
       className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/90 px-1 pb-[env(safe-area-inset-bottom)] pt-1 backdrop-blur-xl"
     >
+      {presentation?.breadcrumb.length ? (
+        <ol aria-label="현재 위치" className="sr-only">
+          {presentation.breadcrumb.map((item, index) => (
+            <li key={`${item}-${index}`} aria-current={index === presentation.breadcrumb.length - 1 ? 'page' : undefined}>
+              {item}
+            </li>
+          ))}
+        </ol>
+      ) : null}
       <div
         className="mx-auto grid max-w-md gap-0.5"
         style={{ gridTemplateColumns: `repeat(${Math.max(visibleGroups.length, 1)}, minmax(0, 1fr))` }}
@@ -185,7 +203,7 @@ export function BottomNav() {
                     role="menu"
                     aria-label={`${group.label} 메뉴`}
                     aria-orientation="vertical"
-                    className="absolute bottom-full left-1/2 z-50 mb-3 max-h-[70vh] w-52 -translate-x-1/2 overflow-y-auto rounded-2xl border border-card-border bg-card p-2 shadow-2xl"
+                    className="absolute bottom-full left-1/2 z-50 mb-3 max-h-[min(70dvh,32rem)] w-52 -translate-x-1/2 overflow-y-auto rounded-2xl border border-card-border bg-card p-2 shadow-2xl"
                   >
                     {visibleMenuItems.map((menuItem: NavigationMenuItem, index) => {
                       const MenuIcon = ICONS[menuItem.icon];
@@ -211,7 +229,7 @@ export function BottomNav() {
                               : 'text-foreground hover:bg-muted active:bg-muted',
                           )}
                         >
-                          <MenuIcon className="h-4 w-4 shrink-0" />
+                          <MenuIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
                           <span>{menuItem.label}</span>
                         </button>
                       );
@@ -238,7 +256,7 @@ export function BottomNav() {
                     active || menuOpen ? 'text-primary' : 'text-muted-foreground active:text-foreground',
                   )}
                 >
-                  <Icon className={cn('mb-0.5 h-5 w-5', active || menuOpen ? 'text-primary' : 'text-muted-foreground')} />
+                  <Icon className={cn('mb-0.5 h-5 w-5', active || menuOpen ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
                   <span className="truncate">{group.label}</span>
                 </button>
               </div>
@@ -256,7 +274,7 @@ export function BottomNav() {
                 active ? 'text-primary' : 'text-muted-foreground active:text-foreground',
               )}
             >
-              <Icon className={cn('mb-0.5 h-5 w-5', active ? 'text-primary' : 'text-muted-foreground')} />
+              <Icon className={cn('mb-0.5 h-5 w-5', active ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
               <span className="truncate">{group.label}</span>
             </button>
           );
