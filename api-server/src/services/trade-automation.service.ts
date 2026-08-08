@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { assertOrderTransition } from './trade-order-state-machine.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingRepository } from './trade-automation.repository';
+import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import {
   buildRiskEnvelope,
   riskEnvelopeForPlan,
@@ -76,7 +77,10 @@ export class TradeAutomationService {
       emergencyStopped: emergencyStopped || await this.emergencyStopActive(userId, policy),
       serverLiveEnabled: input.accountMode !== 'live' || liveExecutionEnabled(input.exchange),
     });
-    if (!decision.allowed) return { plan: null, duplicate: false, decision };
+    if (!decision.allowed) {
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      return { plan: null, duplicate: false, decision };
+    }
 
     const now = new Date();
     const plan: TradingPlan = {
@@ -107,6 +111,7 @@ export class TradeAutomationService {
       serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
     });
     if (!decision.allowed) {
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
       const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
       await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
       throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
