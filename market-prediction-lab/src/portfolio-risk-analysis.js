@@ -100,11 +100,17 @@ export function evaluatePortfolioAdditionalBuyWithCorrelation(input, { minimumSa
     });
   }
 
-  const analysis = calculatePearsonCorrelation(
-    input.correlationSeries?.assetReturns,
-    input.correlationSeries?.portfolioReturns,
-    { minimumSamples },
-  );
+  const assetReturns = input.correlationSeries?.assetReturns;
+  const portfolioReturns = input.correlationSeries?.portfolioReturns;
+  const analysis = !Array.isArray(assetReturns) || !Array.isArray(portfolioReturns)
+    ? Object.freeze({
+        correlation: null,
+        sampleCount: 0,
+        minimumSamples,
+        insufficientData: true,
+        reason: "missing_correlation_series",
+      })
+    : calculatePearsonCorrelation(assetReturns, portfolioReturns, { minimumSamples });
 
   if (analysis.insufficientData) {
     const decision = evaluatePortfolioAdditionalBuy({
