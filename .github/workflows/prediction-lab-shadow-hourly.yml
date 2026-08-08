@@ -126,13 +126,19 @@ jobs:
             Buffer.from([0]),
             fs.readFileSync(summaryFile),
           ]));
-          const nonEmptyLedger = (value) => {
-            if (!value || typeof value !== 'object') return false;
-            if (Array.isArray(value)) return value.length > 0;
-            const arrays = ['ledger', 'entries', 'predictions', 'records'];
-            if (arrays.some((key) => Array.isArray(value[key]) && value[key].length > 0)) return true;
-            return Object.keys(value).length > 0;
+          const ledgerRecordCount = (value) => {
+            if (!value || typeof value !== 'object') return 0;
+            if (Array.isArray(value)) return value.length;
+            let count = 0;
+            for (const key of ['records', 'ledger', 'entries', 'predictions']) {
+              if (Array.isArray(value[key])) count += value[key].length;
+            }
+            if (value.groups && typeof value.groups === 'object' && !Array.isArray(value.groups)) {
+              count += Object.values(value.groups).reduce((sum, group) => sum + ledgerRecordCount(group), 0);
+            }
+            return count;
           };
+          const nonEmptyLedger = (value) => ledgerRecordCount(value) > 0;
           const output = (name, value) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
 
           const lab = process.env.LAB_DIR;
