@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "status": "pass",
-  "generatedAt": 1786170261456,
+  "generatedAt": 1786174497203,
   "source": "isolated-live-shadow-adaptive-candidate-builder",
   "results": {
     "crypto-futures-15m": {
       "status": "research_hold",
       "reason": "insufficient_live_shadow_samples",
       "reasons": [],
-      "settled": 92,
+      "settled": 94,
       "modelId": null,
       "promotedToShadowSlot": false
     },
@@ -16,7 +16,7 @@
       "status": "research_hold",
       "reason": "insufficient_live_shadow_samples",
       "reasons": [],
-      "settled": 74,
+      "settled": 78,
       "modelId": null,
       "promotedToShadowSlot": false
     }
