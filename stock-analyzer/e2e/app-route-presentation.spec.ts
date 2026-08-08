@@ -13,6 +13,10 @@ const group = (id: 'assets' | 'technical' | 'settings') => {
 };
 
 test('active product routes keep the correct top-level navigation state', () => {
+  expect(navigationGroupMatches(group('assets'), APP_ROUTES.stocksKr)).toBe(true);
+  expect(navigationGroupMatches(group('assets'), APP_ROUTES.stocksUs)).toBe(true);
+  expect(navigationGroupMatches(group('assets'), APP_ROUTES.coinsSpot)).toBe(true);
+  expect(navigationGroupMatches(group('assets'), APP_ROUTES.coinsFutures)).toBe(true);
   expect(navigationGroupMatches(group('assets'), APP_ROUTES.recommendations)).toBe(true);
   expect(navigationGroupMatches(group('technical'), APP_ROUTES.backtests)).toBe(true);
   expect(navigationGroupMatches(group('technical'), APP_ROUTES.paperTrading)).toBe(true);
@@ -20,13 +24,33 @@ test('active product routes keep the correct top-level navigation state', () => 
 });
 
 test('route presentation metadata defines titles and breadcrumbs without changing App.tsx', () => {
+  expect(resolveAppRoutePresentation('/stocks/kr')).toMatchObject({
+    title: '국내주식 정보',
+    breadcrumb: ['종목', '국내주식'],
+    groupId: 'assets',
+  });
+  expect(resolveAppRoutePresentation('/stocks/us')).toMatchObject({
+    title: '미국주식 정보',
+    breadcrumb: ['종목', '미국주식'],
+    groupId: 'assets',
+  });
+  expect(resolveAppRoutePresentation('/coins/spot')).toMatchObject({
+    title: '코인 현물 정보',
+    breadcrumb: ['종목', '코인 현물'],
+    groupId: 'assets',
+  });
+  expect(resolveAppRoutePresentation('/coins/futures')).toMatchObject({
+    title: '코인 선물 정보',
+    breadcrumb: ['종목', '코인 선물'],
+    groupId: 'assets',
+  });
   expect(resolveAppRoutePresentation('/recommendations')).toMatchObject({
     title: 'AI 추천',
     breadcrumb: ['종목', 'AI 추천'],
     groupId: 'assets',
   });
   expect(resolveAppRoutePresentation('/backtests?symbol=BTCUSDT')).toMatchObject({
-    title: '코인 선물 백테스트 연구',
+    title: '백테스트',
     breadcrumb: ['기술', '백테스트'],
     groupId: 'technical',
   });
