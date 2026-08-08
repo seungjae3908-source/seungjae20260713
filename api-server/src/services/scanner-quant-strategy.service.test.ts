@@ -5,6 +5,7 @@ import {
   runScannerQuantStrategy,
   SCALPING_LIMITS,
   SWING_LIMITS,
+  scannerContextTimeframe,
   scannerStrategyTimeframeAllowed,
 } from './scanner-quant-strategy.service';
 
@@ -36,6 +37,22 @@ function trendCandles(count = 140, volumeMultiplier = 1): ScannerQualityCandle[]
   });
 }
 
+function fallingCandles(count = 140): ScannerQualityCandle[] {
+  return Array.from({ length: count }, (_, index) => {
+    const base = 120 - index * 0.15;
+    const open = base;
+    const close = base - 0.1;
+    return {
+      time: NOW - (count - index) * 15 * 60_000,
+      open,
+      high: open + 0.15,
+      low: close - 0.15,
+      close,
+      volume: 1_000 + index * 3,
+    };
+  });
+}
+
 function input(mode: 'scalping' | 'swing', candles = trendCandles()) {
   return {
     mode,
@@ -56,9 +73,36 @@ test('scalping and swing use independent thresholds and risk limits', () => {
   assert.ok(SCALPING_LIMITS.maxRiskScore < SWING_LIMITS.maxRiskScore);
   assert.ok(SCALPING_LIMITS.minLiquidityFactor > SWING_LIMITS.minLiquidityFactor);
   assert.equal(scannerStrategyTimeframeAllowed('scalping', '5m'), true);
+  assert.equal(scannerStrategyTimeframeAllowed('scalping', '15m'), false);
   assert.equal(scannerStrategyTimeframeAllowed('scalping', '1D'), false);
   assert.equal(scannerStrategyTimeframeAllowed('swing', '4H'), true);
+  assert.equal(scannerStrategyTimeframeAllowed('swing', '60m'), false);
   assert.equal(scannerStrategyTimeframeAllowed('swing', '3m'), false);
+  assert.equal(scannerContextTimeframe('scalping'), '15m');
+  assert.equal(scannerContextTimeframe('swing'), '60m');
+});
+
+test('scalping uses 15m context as analysis evidence without exposing it as a primary timeframe', () => {
+  const primary = trendCandles();
+  const bullishContext = trendCandles().map((row, index) => ({
+    ...row,
+    time: NOW - (140 - index) * 15 * 60_000,
+  }));
+  const bearishContext = fallingCandles();
+  const bullish = runScannerQuantStrategy({
+    ...input('scalping', primary),
+    contextCandles: bullishContext,
+  });
+  const bearish = runScannerQuantStrategy({
+    ...input('scalping', primary),
+    contextCandles: bearishContext,
+  });
+
+  assert.equal(scannerContextTimeframe('scalping'), '15m');
+  assert.equal(scannerStrategyTimeframeAllowed('scalping', '15m'), false);
+  assert.ok(bullish.factors.trend > bearish.factors.trend);
+  assert.ok(bullish.factors.marketRegime > bearish.factors.marketRegime);
+  assert.notDeepEqual(bullish.context, bearish.context);
 });
 
 test('relative volume spike alone cannot create an S-grade signal', () => {
