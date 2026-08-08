@@ -69,8 +69,20 @@ test('relative volume spike alone cannot create an S-grade signal', () => {
     low: 99.8,
     close: index === all.length - 1 ? 100.05 : 100,
   }));
-  const result = runScannerQuantStrategy(input('scalping', flat));
+  const result = runScannerQuantStrategy({
+    ...input('scalping', flat),
+    aiValidation: {
+      status: 'PASS',
+      provider: 'test-provider',
+      counterEvidence: [],
+      missingData: [],
+      risks: [],
+      explanation: 'AI 검증은 통과했지만 독립 기술 근거를 대신하지 않습니다.',
+    },
+  });
   assert.equal(result.primary.relativeVolume20! >= 2.5, true);
+  assert.equal(result.factors.volume > 50, true);
+  assert.equal(result.reasons.includes('독립근거 부족'), true);
   assert.notEqual(result.grade, 'S');
   assert.equal(result.strongSignalEligible, false);
 });
