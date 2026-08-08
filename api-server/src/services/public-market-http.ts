@@ -186,31 +186,35 @@ export async function loadMarketInformationCache<T>(
   const existing = cache.get(key) as CacheEntry<T> | undefined;
   if (existing && existing.freshUntil > now) return { value: existing.value, stale: false };
 
-  const refresh = () => {
+  const loadAndStore = async () => {
+    const value = await loader();
+    const savedAt = Date.now();
+    cache.set(key, {
+      value,
+      freshUntil: savedAt + ttlMs,
+      staleUntil: savedAt + ttlMs + staleMs,
+    });
+    return value;
+  };
+
+  const refreshStaleInBackground = () => {
     const running = inFlight.get(key) as Promise<T> | undefined;
     if (running) return running;
-    const promise = loader()
-      .then((value) => {
-        const savedAt = Date.now();
-        cache.set(key, {
-          value,
-          freshUntil: savedAt + ttlMs,
-          staleUntil: savedAt + ttlMs + staleMs,
-        });
-        return value;
-      })
-      .finally(() => inFlight.delete(key));
+    const promise = loadAndStore().finally(() => inFlight.delete(key));
     inFlight.set(key, promise as Promise<unknown>);
     return promise;
   };
 
   if (existing && existing.staleUntil > now) {
-    void refresh().catch(() => undefined);
+    void refreshStaleInBackground().catch(() => undefined);
     return { value: existing.value, stale: true };
   }
 
+  // Cold loads intentionally do not share an abortable Promise. Every request
+  // owns its upstream work, so cancellation of one route transition cannot
+  // reject an unrelated concurrent request for the same market cache key.
   try {
-    return { value: await refresh(), stale: false };
+    return { value: await loadAndStore(), stale: false };
   } catch (error) {
     if (existing) return { value: existing.value, stale: true };
     throw error;
