@@ -80,6 +80,12 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/backup-sync-lifecycle.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts'),
   ],
+  search: [
+    path.join(root, 'src/services/unified-asset-search.service.test.ts'),
+    path.join(root, 'src/services/unified-asset-search-fallback.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/unified-asset-search.test.ts'),
+    path.join(root, 'src/routes/unified-search.smoke.test.ts'),
+  ],
   smoke: [
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
     path.join(root, 'src/routes/trading-risk.smoke.test.ts'),
@@ -91,11 +97,25 @@ const groups = {
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
     path.join(root, 'src/routes/signal-scanner-auth.smoke.test.ts'),
     path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
+    path.join(root, 'src/routes/unified-search.smoke.test.ts'),
   ],
 };
 
-groups.unit = [...groups.phase2, ...groups.risk, ...groups.phase4, ...groups.phase5, ...groups.phase6, ...groups.phase7, ...groups.phase8, ...groups.phase9, ...groups.phase12];
-const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'smoke'];
+groups.unit = [
+  ...groups.phase2,
+  ...groups.risk,
+  ...groups.phase4,
+  ...groups.phase5,
+  ...groups.phase6,
+  ...groups.phase7,
+  ...groups.phase8,
+  ...groups.phase9,
+  ...groups.phase12,
+  groups.search[0],
+  groups.search[1],
+  groups.search[2],
+];
+const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'search', 'smoke'];
 if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 
 const entries = mode === 'all' ? [...groups.unit, ...groups.smoke] : groups[mode];
@@ -108,6 +128,7 @@ try {
     await build({
       entryPoints: [entryPoint], outfile: outputFile, bundle: true, platform: 'node',
       format: 'cjs', target: 'node20', sourcemap: 'inline', logLevel: 'warning',
+      define: { 'import.meta.env': '{}' },
     });
     outputFiles.push(outputFile);
   }
