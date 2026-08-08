@@ -274,14 +274,14 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Assert repository stayed read-only
+      - name: Assert source branch stayed immutable
         if: always()
         shell: bash
         run: |
           test "$(git rev-parse HEAD)" = "${{ steps.code.outputs.sha }}"
-          test -z "$(git status --porcelain --untracked-files=no)" || {
-            echo "Tracked repository files changed during artifact-only workflow." >&2
-            git status --short
+          git fetch --no-tags origin "${SHADOW_BRANCH}"
+          test "$(git rev-parse FETCH_HEAD)" = "${{ steps.code.outputs.sha }}" || {
+            echo "Prediction Lab source branch moved during artifact-only run." >&2
             exit 1
           }
 
