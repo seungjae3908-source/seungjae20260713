@@ -54,30 +54,20 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // generateSW already cleans old precache entries; keep the behaviour
+        // explicit so a future config change cannot silently retain old builds.
+        cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         importScripts: ['/push-sw.js'],
         navigateFallbackDenylist: [/^\/api/],
         runtimeCaching: [
           {
-            // Live market/index/quote/chart data must never be served from an
-            // old service-worker cache entry.
-            urlPattern: ({ url }) =>
-              /\/api\/(market\/(home|summary|movers|alerts|scan|recommendations)|quotes|candles|crypto\/|kiwoom\/(rankings|quote)|stocks\/[^/]+\/(chart|candles|quote))/.test(
-                url.pathname,
-              ),
+            // App APIs can contain live, authenticated, or permission-sensitive
+            // data. Never let a service-worker runtime cache replay an older
+            // response after a deployment or account/role change. React Query
+            // remains responsible for short-lived in-memory request reuse.
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
             handler: 'NetworkOnly',
-          },
-          {
-            // Cache slower-changing API GETs so the last-seen data is
-            // available offline.
-            urlPattern: ({ url }) => url.pathname.includes('/api/'),
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'api-cache',
-              networkTimeoutSeconds: 8,
-              expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
           },
           {
             urlPattern: ({ request }) => request.destination === 'font',
