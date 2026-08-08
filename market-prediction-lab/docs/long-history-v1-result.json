@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 3,
-  "generatedAt": 1786227424393,
+  "schemaVersion": 4,
+  "generatedAt": 1786227719194,
   "mode": "backtest-only",
   "requestedStartTime": 1577836800000,
   "requestedEndTime": 1786319999999,
@@ -178,14 +178,1264 @@
       "metricsEnd": "2025-12-31T23:59:59.999Z"
     }
   ],
+  "v2Optimizations": [
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V2_MARKET_TUNED_EMA_ATR",
+      "market": "CRYPTO_SPOT",
+      "symbol": "USDT-BTC",
+      "side": "long",
+      "objective": {
+        "primaryMetrics": [
+          "returnPercent",
+          "successRatePercent"
+        ],
+        "weightedScoreUsed": false,
+        "developmentSelection": "return leader requires success non-regression; success leader requires return non-regression",
+        "validationRule": "candidate must avoid regression in both return and success rate; excessive MDD triggers risk_review"
+      },
+      "periods": {
+        "development": {
+          "startTime": 1577836800000,
+          "endTime": 1735689599999,
+          "includeFinalHoldout": false
+        },
+        "validation": {
+          "startTime": 1735689600000,
+          "endTime": 1767225599999,
+          "includeFinalHoldout": false
+        },
+        "finalHoldoutStartTime": 1767225600000,
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 242,
+      "baseline": {
+        "parameters": {
+          "fastPeriod": 20,
+          "slowPeriod": 50,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 0.5,
+          "stopAtrMultiple": 1.5,
+          "targetRiskMultiple": 2
+        },
+        "development": {
+          "returnPercent": 4.604597218705187,
+          "successRatePercent": 40.74074074074074,
+          "profitFactor": 1.2660840226873626,
+          "maximumDrawdownPercent": 5.4544708498450865,
+          "expectancy": 1705.4063772982174,
+          "trades": 27,
+          "finalCapital": 1046045.9721870519
+        },
+        "validation": {
+          "returnPercent": -3.526926642257153,
+          "successRatePercent": 22.22222222222222,
+          "profitFactor": 0.5204591404530086,
+          "maximumDrawdownPercent": 4.374801004755355,
+          "expectancy": -3918.8073802857252,
+          "trades": 9,
+          "finalCapital": 964730.7335774285
+        },
+        "fullPreHoldout": {
+          "returnPercent": 0.9152698103728892,
+          "successRatePercent": 36.11111111111111,
+          "profitFactor": 1.0366129781819358,
+          "maximumDrawdownPercent": 5.4544708498450865,
+          "expectancy": 254.24161399246927,
+          "trades": 36,
+          "finalCapital": 1009152.6981037289
+        }
+      },
+      "leaders": [
+        {
+          "leaderType": "returnLeader",
+          "parameters": {
+            "fastPeriod": 10,
+            "slowPeriod": 80,
+            "atrPeriod": 14,
+            "pullbackTolerancePct": 1,
+            "stopAtrMultiple": 1.5,
+            "targetRiskMultiple": 2
+          },
+          "development": {
+            "returnPercent": 14.631791760927712,
+            "successRatePercent": 46.34146341463415,
+            "profitFactor": 1.5936600677363066,
+            "maximumDrawdownPercent": 9.358119962354436,
+            "expectancy": 3568.729697787247,
+            "trades": 41,
+            "finalCapital": 1146317.9176092772
+          },
+          "validation": {
+            "returnPercent": -0.03578031342967443,
+            "successRatePercent": 35.714285714285715,
+            "profitFactor": 0.9962631652941853,
+            "maximumDrawdownPercent": 3.191608910533983,
+            "expectancy": -25.557366735481732,
+            "trades": 14,
+            "finalCapital": 999642.1968657032
+          },
+          "fullPreHoldout": {
+            "returnPercent": 14.590776146545595,
+            "successRatePercent": 43.63636363636363,
+            "profitFactor": 1.4095911468065156,
+            "maximumDrawdownPercent": 9.358119962354436,
+            "expectancy": 2652.8683902810176,
+            "trades": 55,
+            "finalCapital": 1145907.7614654559
+          },
+          "comparison": {
+            "verdict": "adopt_candidate",
+            "returnDeltaPercentagePoints": 3.491146328827478,
+            "successRateDeltaPercentagePoints": 13.492063492063494,
+            "maximumDrawdownDeltaPercentagePoints": -1.183192094221372,
+            "weightedScoreUsed": false
+          }
+        },
+        {
+          "leaderType": "successLeader",
+          "parameters": {
+            "fastPeriod": 20,
+            "slowPeriod": 80,
+            "atrPeriod": 14,
+            "pullbackTolerancePct": 0.25,
+            "stopAtrMultiple": 1.25,
+            "targetRiskMultiple": 1.5
+          },
+          "development": {
+            "returnPercent": 10.566479260240326,
+            "successRatePercent": 54.54545454545454,
+            "profitFactor": 1.6201780508563255,
+            "maximumDrawdownPercent": 4.517463030221499,
+            "expectancy": 3201.9634121940385,
+            "trades": 33,
+            "finalCapital": 1105664.7926024033
+          },
+          "validation": {
+            "returnPercent": -3.9868405377016796,
+            "successRatePercent": 30.76923076923077,
+            "profitFactor": 0.5788501227432211,
+            "maximumDrawdownPercent": 5.659632895287887,
+            "expectancy": -3066.8004136166765,
+            "trades": 13,
+            "finalCapital": 960131.5946229832
+          },
+          "fullPreHoldout": {
+            "returnPercent": 6.1583700439835445,
+            "successRatePercent": 47.82608695652174,
+            "profitFactor": 1.223902807329235,
+            "maximumDrawdownPercent": 5.65963289528786,
+            "expectancy": 1338.776096518162,
+            "trades": 46,
+            "finalCapital": 1061583.7004398354
+          },
+          "comparison": {
+            "verdict": "tradeoff_review",
+            "returnDeltaPercentagePoints": -0.45991389544452677,
+            "successRateDeltaPercentagePoints": 8.547008547008549,
+            "maximumDrawdownDeltaPercentagePoints": 1.2848318905325318,
+            "weightedScoreUsed": false
+          }
+        }
+      ],
+      "preferred": {
+        "leaderType": "returnLeader",
+        "parameters": {
+          "fastPeriod": 10,
+          "slowPeriod": 80,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 1,
+          "stopAtrMultiple": 1.5,
+          "targetRiskMultiple": 2
+        },
+        "development": {
+          "returnPercent": 14.631791760927712,
+          "successRatePercent": 46.34146341463415,
+          "profitFactor": 1.5936600677363066,
+          "maximumDrawdownPercent": 9.358119962354436,
+          "expectancy": 3568.729697787247,
+          "trades": 41,
+          "finalCapital": 1146317.9176092772
+        },
+        "validation": {
+          "returnPercent": -0.03578031342967443,
+          "successRatePercent": 35.714285714285715,
+          "profitFactor": 0.9962631652941853,
+          "maximumDrawdownPercent": 3.191608910533983,
+          "expectancy": -25.557366735481732,
+          "trades": 14,
+          "finalCapital": 999642.1968657032
+        },
+        "fullPreHoldout": {
+          "returnPercent": 14.590776146545595,
+          "successRatePercent": 43.63636363636363,
+          "profitFactor": 1.4095911468065156,
+          "maximumDrawdownPercent": 9.358119962354436,
+          "expectancy": 2652.8683902810176,
+          "trades": 55,
+          "finalCapital": 1145907.7614654559
+        },
+        "comparison": {
+          "verdict": "adopt_candidate",
+          "returnDeltaPercentagePoints": 3.491146328827478,
+          "successRateDeltaPercentagePoints": 13.492063492063494,
+          "maximumDrawdownDeltaPercentagePoints": -1.183192094221372,
+          "weightedScoreUsed": false
+        }
+      },
+      "status": "v2_candidate_frozen_for_holdout",
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    },
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V2_MARKET_TUNED_EMA_ATR",
+      "market": "CRYPTO_SPOT",
+      "symbol": "USDT-ETH",
+      "side": "long",
+      "objective": {
+        "primaryMetrics": [
+          "returnPercent",
+          "successRatePercent"
+        ],
+        "weightedScoreUsed": false,
+        "developmentSelection": "return leader requires success non-regression; success leader requires return non-regression",
+        "validationRule": "candidate must avoid regression in both return and success rate; excessive MDD triggers risk_review"
+      },
+      "periods": {
+        "development": {
+          "startTime": 1577836800000,
+          "endTime": 1735689599999,
+          "includeFinalHoldout": false
+        },
+        "validation": {
+          "startTime": 1735689600000,
+          "endTime": 1767225599999,
+          "includeFinalHoldout": false
+        },
+        "finalHoldoutStartTime": 1767225600000,
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 242,
+      "baseline": {
+        "parameters": {
+          "fastPeriod": 20,
+          "slowPeriod": 50,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 0.5,
+          "stopAtrMultiple": 1.5,
+          "targetRiskMultiple": 2
+        },
+        "development": {
+          "returnPercent": 1.5497734915712877,
+          "successRatePercent": 36.36363636363637,
+          "profitFactor": 1.068164524362688,
+          "maximumDrawdownPercent": 10.90705989626284,
+          "expectancy": 469.6283307791781,
+          "trades": 33,
+          "finalCapital": 1015497.7349157128
+        },
+        "validation": {
+          "returnPercent": 1.6776779409346396,
+          "successRatePercent": 42.857142857142854,
+          "profitFactor": 1.397462889098195,
+          "maximumDrawdownPercent": 2.0601612744089435,
+          "expectancy": 2396.682772763771,
+          "trades": 7,
+          "finalCapital": 1016776.7794093464
+        },
+        "fullPreHoldout": {
+          "returnPercent": 3.253451640508472,
+          "successRatePercent": 37.5,
+          "profitFactor": 1.1203993881312748,
+          "maximumDrawdownPercent": 10.90705989626284,
+          "expectancy": 813.362910127118,
+          "trades": 40,
+          "finalCapital": 1032534.5164050848
+        }
+      },
+      "leaders": [
+        {
+          "leaderType": "returnLeader",
+          "parameters": {
+            "fastPeriod": 10,
+            "slowPeriod": 80,
+            "atrPeriod": 14,
+            "pullbackTolerancePct": 0.25,
+            "stopAtrMultiple": 1.25,
+            "targetRiskMultiple": 2.5
+          },
+          "development": {
+            "returnPercent": 17.136363352317492,
+            "successRatePercent": 39.58333333333333,
+            "profitFactor": 1.481642212788339,
+            "maximumDrawdownPercent": 8.547974084745205,
+            "expectancy": 3570.0756983994775,
+            "trades": 48,
+            "finalCapital": 1171363.633523175
+          },
+          "validation": {
+            "returnPercent": 2.0942227719503506,
+            "successRatePercent": 37.5,
+            "profitFactor": 1.4050898757883399,
+            "maximumDrawdownPercent": 3.072270592527289,
+            "expectancy": 2617.778464937938,
+            "trades": 8,
+            "finalCapital": 1020942.2277195035
+          },
+          "fullPreHoldout": {
+            "returnPercent": 19.589459747876226,
+            "successRatePercent": 39.285714285714285,
+            "profitFactor": 1.4705078318269087,
+            "maximumDrawdownPercent": 10.117782189260364,
+            "expectancy": 3498.117812120755,
+            "trades": 56,
+            "finalCapital": 1195894.5974787623
+          },
+          "comparison": {
+            "verdict": "tradeoff_review",
+            "returnDeltaPercentagePoints": 0.41654483101571094,
+            "successRateDeltaPercentagePoints": -5.357142857142854,
+            "maximumDrawdownDeltaPercentagePoints": 1.0121093181183456,
+            "weightedScoreUsed": false
+          }
+        },
+        {
+          "leaderType": "successLeader",
+          "parameters": {
+            "fastPeriod": 10,
+            "slowPeriod": 80,
+            "atrPeriod": 14,
+            "pullbackTolerancePct": 0.25,
+            "stopAtrMultiple": 2,
+            "targetRiskMultiple": 1.5
+          },
+          "development": {
+            "returnPercent": 8.29438630313554,
+            "successRatePercent": 51.61290322580645,
+            "profitFactor": 1.4918435997724377,
+            "maximumDrawdownPercent": 5.210436862678332,
+            "expectancy": 2675.6084848824316,
+            "trades": 31,
+            "finalCapital": 1082943.8630313554
+          },
+          "validation": {
+            "returnPercent": 0.2770963181517998,
+            "successRatePercent": 42.857142857142854,
+            "profitFactor": 1.0683657383637075,
+            "maximumDrawdownPercent": 3.0325325477882057,
+            "expectancy": 395.8518830739998,
+            "trades": 7,
+            "finalCapital": 1002770.963181518
+          },
+          "fullPreHoldout": {
+            "returnPercent": 8.594466060346614,
+            "successRatePercent": 50,
+            "profitFactor": 1.4043845828771295,
+            "maximumDrawdownPercent": 7.459273176078525,
+            "expectancy": 2261.7015948280564,
+            "trades": 38,
+            "finalCapital": 1085944.6606034662
+          },
+          "comparison": {
+            "verdict": "reject",
+            "returnDeltaPercentagePoints": -1.4005816227828398,
+            "successRateDeltaPercentagePoints": 0,
+            "maximumDrawdownDeltaPercentagePoints": 0.9723712733792622,
+            "weightedScoreUsed": false
+          }
+        }
+      ],
+      "preferred": {
+        "leaderType": "returnLeader",
+        "parameters": {
+          "fastPeriod": 10,
+          "slowPeriod": 80,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 0.25,
+          "stopAtrMultiple": 1.25,
+          "targetRiskMultiple": 2.5
+        },
+        "development": {
+          "returnPercent": 17.136363352317492,
+          "successRatePercent": 39.58333333333333,
+          "profitFactor": 1.481642212788339,
+          "maximumDrawdownPercent": 8.547974084745205,
+          "expectancy": 3570.0756983994775,
+          "trades": 48,
+          "finalCapital": 1171363.633523175
+        },
+        "validation": {
+          "returnPercent": 2.0942227719503506,
+          "successRatePercent": 37.5,
+          "profitFactor": 1.4050898757883399,
+          "maximumDrawdownPercent": 3.072270592527289,
+          "expectancy": 2617.778464937938,
+          "trades": 8,
+          "finalCapital": 1020942.2277195035
+        },
+        "fullPreHoldout": {
+          "returnPercent": 19.589459747876226,
+          "successRatePercent": 39.285714285714285,
+          "profitFactor": 1.4705078318269087,
+          "maximumDrawdownPercent": 10.117782189260364,
+          "expectancy": 3498.117812120755,
+          "trades": 56,
+          "finalCapital": 1195894.5974787623
+        },
+        "comparison": {
+          "verdict": "tradeoff_review",
+          "returnDeltaPercentagePoints": 0.41654483101571094,
+          "successRateDeltaPercentagePoints": -5.357142857142854,
+          "maximumDrawdownDeltaPercentagePoints": 1.0121093181183456,
+          "weightedScoreUsed": false
+        }
+      },
+      "status": "v2_research_hold",
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    },
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V2_MARKET_TUNED_EMA_ATR",
+      "market": "CRYPTO_FUTURES",
+      "symbol": "BTCUSDT",
+      "side": "long",
+      "objective": {
+        "primaryMetrics": [
+          "returnPercent",
+          "successRatePercent"
+        ],
+        "weightedScoreUsed": false,
+        "developmentSelection": "return leader requires success non-regression; success leader requires return non-regression",
+        "validationRule": "candidate must avoid regression in both return and success rate; excessive MDD triggers risk_review"
+      },
+      "periods": {
+        "development": {
+          "startTime": 1577836800000,
+          "endTime": 1735689599999,
+          "includeFinalHoldout": false
+        },
+        "validation": {
+          "startTime": 1735689600000,
+          "endTime": 1767225599999,
+          "includeFinalHoldout": false
+        },
+        "finalHoldoutStartTime": 1767225600000,
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 485,
+      "baseline": {
+        "parameters": {
+          "fastPeriod": 20,
+          "slowPeriod": 50,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 0.5,
+          "stopAtrMultiple": 1.5,
+          "targetRiskMultiple": 2
+        },
+        "development": {
+          "returnPercent": -1.411054855162141,
+          "successRatePercent": 35.483870967741936,
+          "profitFactor": 0.9347762598286896,
+          "maximumDrawdownPercent": 9.666968945256048,
+          "expectancy": -455.1789855361745,
+          "trades": 31,
+          "finalCapital": 985889.4514483786
+        },
+        "validation": {
+          "returnPercent": -2.5548448202697527,
+          "successRatePercent": 25,
+          "profitFactor": 0.5986178890400138,
+          "maximumDrawdownPercent": 3.3895404202406323,
+          "expectancy": -3193.556025337191,
+          "trades": 8,
+          "finalCapital": 974451.5517973024
+        },
+        "fullPreHoldout": {
+          "returnPercent": -3.9298494135536184,
+          "successRatePercent": 33.33333333333333,
+          "profitFactor": 0.8591924808487412,
+          "maximumDrawdownPercent": 9.666968945256048,
+          "expectancy": -1007.653695782979,
+          "trades": 39,
+          "finalCapital": 960701.5058644639
+        }
+      },
+      "leaders": [
+        {
+          "leaderType": "returnLeader",
+          "parameters": {
+            "fastPeriod": 8,
+            "slowPeriod": 30,
+            "atrPeriod": 14,
+            "pullbackTolerancePct": 0.75,
+            "stopAtrMultiple": 2,
+            "targetRiskMultiple": 3
+          },
+          "development": {
+            "returnPercent": 20.865167810926973,
+            "successRatePercent": 48,
+            "profitFactor": 2.3000480697767913,
+            "maximumDrawdownPercent": 5.822194066676523,
+            "expectancy": 8346.06712437079,
+            "trades": 25,
+            "finalCapital": 1208651.6781092698
+          },
+          "validation": {
+            "returnPercent": 1.281697310345482,
+            "successRatePercent": 33.33333333333333,
+            "profitFactor": 1.3028916601238234,
+            "maximumDrawdownPercent": 2.1039455419174096,
+            "expectancy": 2136.1621839091367,
+            "trades": 6,
+            "finalCapital": 1012816.9731034548
+          },
+          "fullPreHoldout": {
+            "returnPercent": 22.661962943400027,
+            "successRatePercent": 46.666666666666664,
+            "profitFactor": 2.0827604837721676,
+            "maximumDrawdownPercent": 5.822194066676523,
+            "expectancy": 7553.987647800009,
+            "trades": 30,
+            "finalCapital": 1226619.6294340002
+          },
+          "comparison": {
+            "verdict": "adopt_candidate",
+            "returnDeltaPercentagePoints": 3.8365421306152347,
+            "successRateDeltaPercentagePoints": 8.333333333333329,
+            "maximumDrawdownDeltaPercentagePoints": -1.2855948783232227,
+            "weightedScoreUsed": false
+          }
+        },
+        {
+          "leaderType": "successLeader",
+          "parameters": {
+            "fastPeriod": 8,
+            "slowPeriod": 30,
+            "atrPeriod": 14,
+            "pullbackTolerancePct": 0.75,
+            "stopAtrMultiple": 2,
+            "targetRiskMultiple": 1.5
+          },
+          "development": {
+            "returnPercent": 7.652794032741027,
+            "successRatePercent": 52.94117647058824,
+            "profitFactor": 1.4211308433853218,
+            "maximumDrawdownPercent": 9.147405866060927,
+            "expectancy": 2250.8217743355963,
+            "trades": 34,
+            "finalCapital": 1076527.9403274104
+          },
+          "validation": {
+            "returnPercent": 0.41466720757545084,
+            "successRatePercent": 44.44444444444444,
+            "profitFactor": 1.0759010127275779,
+            "maximumDrawdownPercent": 2.8714271369098823,
+            "expectancy": 460.7413417505009,
+            "trades": 9,
+            "finalCapital": 1004146.6720757545
+          },
+          "fullPreHoldout": {
+            "returnPercent": 7.599197145692312,
+            "successRatePercent": 51.162790697674424,
+            "profitFactor": 1.3098665634726754,
+            "maximumDrawdownPercent": 9.147405866060927,
+            "expectancy": 1767.2551501610026,
+            "trades": 43,
+            "finalCapital": 1075991.971456923
+          },
+          "comparison": {
+            "verdict": "adopt_candidate",
+            "returnDeltaPercentagePoints": 2.9695120278452034,
+            "successRateDeltaPercentagePoints": 19.444444444444443,
+            "maximumDrawdownDeltaPercentagePoints": -0.51811328333075,
+            "weightedScoreUsed": false
+          }
+        }
+      ],
+      "preferred": {
+        "leaderType": "returnLeader",
+        "parameters": {
+          "fastPeriod": 8,
+          "slowPeriod": 30,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 0.75,
+          "stopAtrMultiple": 2,
+          "targetRiskMultiple": 3
+        },
+        "development": {
+          "returnPercent": 20.865167810926973,
+          "successRatePercent": 48,
+          "profitFactor": 2.3000480697767913,
+          "maximumDrawdownPercent": 5.822194066676523,
+          "expectancy": 8346.06712437079,
+          "trades": 25,
+          "finalCapital": 1208651.6781092698
+        },
+        "validation": {
+          "returnPercent": 1.281697310345482,
+          "successRatePercent": 33.33333333333333,
+          "profitFactor": 1.3028916601238234,
+          "maximumDrawdownPercent": 2.1039455419174096,
+          "expectancy": 2136.1621839091367,
+          "trades": 6,
+          "finalCapital": 1012816.9731034548
+        },
+        "fullPreHoldout": {
+          "returnPercent": 22.661962943400027,
+          "successRatePercent": 46.666666666666664,
+          "profitFactor": 2.0827604837721676,
+          "maximumDrawdownPercent": 5.822194066676523,
+          "expectancy": 7553.987647800009,
+          "trades": 30,
+          "finalCapital": 1226619.6294340002
+        },
+        "comparison": {
+          "verdict": "adopt_candidate",
+          "returnDeltaPercentagePoints": 3.8365421306152347,
+          "successRateDeltaPercentagePoints": 8.333333333333329,
+          "maximumDrawdownDeltaPercentagePoints": -1.2855948783232227,
+          "weightedScoreUsed": false
+        }
+      },
+      "status": "v2_candidate_frozen_for_holdout",
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    },
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V2_MARKET_TUNED_EMA_ATR",
+      "market": "CRYPTO_FUTURES",
+      "symbol": "BTCUSDT",
+      "side": "short",
+      "objective": {
+        "primaryMetrics": [
+          "returnPercent",
+          "successRatePercent"
+        ],
+        "weightedScoreUsed": false,
+        "developmentSelection": "return leader requires success non-regression; success leader requires return non-regression",
+        "validationRule": "candidate must avoid regression in both return and success rate; excessive MDD triggers risk_review"
+      },
+      "periods": {
+        "development": {
+          "startTime": 1577836800000,
+          "endTime": 1735689599999,
+          "includeFinalHoldout": false
+        },
+        "validation": {
+          "startTime": 1735689600000,
+          "endTime": 1767225599999,
+          "includeFinalHoldout": false
+        },
+        "finalHoldoutStartTime": 1767225600000,
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 485,
+      "baseline": {
+        "parameters": {
+          "fastPeriod": 20,
+          "slowPeriod": 50,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 0.5,
+          "stopAtrMultiple": 1.5,
+          "targetRiskMultiple": 2
+        },
+        "development": {
+          "returnPercent": -4.333269122989939,
+          "successRatePercent": 27.27272727272727,
+          "profitFactor": 0.7312763265325205,
+          "maximumDrawdownPercent": 5.006190787873909,
+          "expectancy": -1969.6677831772447,
+          "trades": 22,
+          "finalCapital": 956667.3087701006
+        },
+        "validation": {
+          "returnPercent": 2.781066581392359,
+          "successRatePercent": 60,
+          "profitFactor": 2.3576977478762826,
+          "maximumDrawdownPercent": 2.008875240825041,
+          "expectancy": 5562.133162784719,
+          "trades": 5,
+          "finalCapital": 1027810.6658139236
+        },
+        "fullPreHoldout": {
+          "returnPercent": -1.6727136410588441,
+          "successRatePercent": 33.33333333333333,
+          "profitFactor": 0.9075081277512939,
+          "maximumDrawdownPercent": 5.084450077175746,
+          "expectancy": -619.5235707625349,
+          "trades": 27,
+          "finalCapital": 983272.8635894116
+        }
+      },
+      "leaders": [
+        {
+          "leaderType": "returnLeader",
+          "parameters": {
+            "fastPeriod": 12,
+            "slowPeriod": 30,
+            "atrPeriod": 14,
+            "pullbackTolerancePct": 0.25,
+            "stopAtrMultiple": 1.5,
+            "targetRiskMultiple": 3
+          },
+          "development": {
+            "returnPercent": 5.651957917880643,
+            "successRatePercent": 30,
+            "profitFactor": 1.2564364401818573,
+            "maximumDrawdownPercent": 5.821129754092155,
+            "expectancy": 1883.985972626881,
+            "trades": 30,
+            "finalCapital": 1056519.5791788064
+          },
+          "validation": {
+            "returnPercent": 4.689833346025147,
+            "successRatePercent": 60,
+            "profitFactor": 3.4269972528179755,
+            "maximumDrawdownPercent": 1.8758234877583098,
+            "expectancy": 9379.666692050294,
+            "trades": 5,
+            "finalCapital": 1046898.3334602515
+          },
+          "fullPreHoldout": {
+            "returnPercent": 10.606858671041863,
+            "successRatePercent": 34.285714285714285,
+            "profitFactor": 1.4404482812816937,
+            "maximumDrawdownPercent": 5.821129754092155,
+            "expectancy": 3030.531048869104,
+            "trades": 35,
+            "finalCapital": 1106068.5867104186
+          },
+          "comparison": {
+            "verdict": "adopt_candidate",
+            "returnDeltaPercentagePoints": 1.9087667646327882,
+            "successRateDeltaPercentagePoints": 0,
+            "maximumDrawdownDeltaPercentagePoints": -0.13305175306673123,
+            "weightedScoreUsed": false
+          }
+        },
+        {
+          "leaderType": "successLeader",
+          "parameters": {
+            "fastPeriod": 12,
+            "slowPeriod": 80,
+            "atrPeriod": 10,
+            "pullbackTolerancePct": 0.25,
+            "stopAtrMultiple": 1,
+            "targetRiskMultiple": 1.5
+          },
+          "development": {
+            "returnPercent": 1.1813231677377456,
+            "successRatePercent": 42.857142857142854,
+            "profitFactor": 1.0561255842677457,
+            "maximumDrawdownPercent": 3.2320378311567826,
+            "expectancy": 337.5209050679273,
+            "trades": 35,
+            "finalCapital": 1011813.2316773775
+          },
+          "validation": {
+            "returnPercent": 2.4666299173913977,
+            "successRatePercent": 46.15384615384615,
+            "profitFactor": 1.3933842648079942,
+            "maximumDrawdownPercent": 2.685551948917117,
+            "expectancy": 1897.4076287626135,
+            "trades": 13,
+            "finalCapital": 1024666.299173914
+          },
+          "fullPreHoldout": {
+            "returnPercent": 3.67709195580564,
+            "successRatePercent": 43.75,
+            "profitFactor": 1.1342386085004803,
+            "maximumDrawdownPercent": 4.6563268769118435,
+            "expectancy": 766.0608241261749,
+            "trades": 48,
+            "finalCapital": 1036770.9195580564
+          },
+          "comparison": {
+            "verdict": "reject",
+            "returnDeltaPercentagePoints": -0.3144366640009615,
+            "successRateDeltaPercentagePoints": -13.846153846153847,
+            "maximumDrawdownDeltaPercentagePoints": 0.6766767080920761,
+            "weightedScoreUsed": false
+          }
+        }
+      ],
+      "preferred": {
+        "leaderType": "returnLeader",
+        "parameters": {
+          "fastPeriod": 12,
+          "slowPeriod": 30,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 0.25,
+          "stopAtrMultiple": 1.5,
+          "targetRiskMultiple": 3
+        },
+        "development": {
+          "returnPercent": 5.651957917880643,
+          "successRatePercent": 30,
+          "profitFactor": 1.2564364401818573,
+          "maximumDrawdownPercent": 5.821129754092155,
+          "expectancy": 1883.985972626881,
+          "trades": 30,
+          "finalCapital": 1056519.5791788064
+        },
+        "validation": {
+          "returnPercent": 4.689833346025147,
+          "successRatePercent": 60,
+          "profitFactor": 3.4269972528179755,
+          "maximumDrawdownPercent": 1.8758234877583098,
+          "expectancy": 9379.666692050294,
+          "trades": 5,
+          "finalCapital": 1046898.3334602515
+        },
+        "fullPreHoldout": {
+          "returnPercent": 10.606858671041863,
+          "successRatePercent": 34.285714285714285,
+          "profitFactor": 1.4404482812816937,
+          "maximumDrawdownPercent": 5.821129754092155,
+          "expectancy": 3030.531048869104,
+          "trades": 35,
+          "finalCapital": 1106068.5867104186
+        },
+        "comparison": {
+          "verdict": "adopt_candidate",
+          "returnDeltaPercentagePoints": 1.9087667646327882,
+          "successRateDeltaPercentagePoints": 0,
+          "maximumDrawdownDeltaPercentagePoints": -0.13305175306673123,
+          "weightedScoreUsed": false
+        }
+      },
+      "status": "v2_candidate_frozen_for_holdout",
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    },
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V2_MARKET_TUNED_EMA_ATR",
+      "market": "CRYPTO_FUTURES",
+      "symbol": "ETHUSDT",
+      "side": "long",
+      "objective": {
+        "primaryMetrics": [
+          "returnPercent",
+          "successRatePercent"
+        ],
+        "weightedScoreUsed": false,
+        "developmentSelection": "return leader requires success non-regression; success leader requires return non-regression",
+        "validationRule": "candidate must avoid regression in both return and success rate; excessive MDD triggers risk_review"
+      },
+      "periods": {
+        "development": {
+          "startTime": 1577836800000,
+          "endTime": 1735689599999,
+          "includeFinalHoldout": false
+        },
+        "validation": {
+          "startTime": 1735689600000,
+          "endTime": 1767225599999,
+          "includeFinalHoldout": false
+        },
+        "finalHoldoutStartTime": 1767225600000,
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 485,
+      "baseline": {
+        "parameters": {
+          "fastPeriod": 20,
+          "slowPeriod": 50,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 0.5,
+          "stopAtrMultiple": 1.5,
+          "targetRiskMultiple": 2
+        },
+        "development": {
+          "returnPercent": 5.094219935129331,
+          "successRatePercent": 41.17647058823529,
+          "profitFactor": 1.223535356201856,
+          "maximumDrawdownPercent": 9.263087495359539,
+          "expectancy": 1498.2999809203916,
+          "trades": 34,
+          "finalCapital": 1050942.1993512933
+        },
+        "validation": {
+          "returnPercent": -0.3373853761417797,
+          "successRatePercent": 33.33333333333333,
+          "profitFactor": 0.9200313120762071,
+          "maximumDrawdownPercent": 2.1002082721509003,
+          "expectancy": -562.3089602362994,
+          "trades": 6,
+          "finalCapital": 996626.1462385822
+        },
+        "fullPreHoldout": {
+          "returnPercent": 4.739647405897924,
+          "successRatePercent": 40,
+          "profitFactor": 1.1741031324946047,
+          "maximumDrawdownPercent": 10.923467151617933,
+          "expectancy": 1184.911851474481,
+          "trades": 40,
+          "finalCapital": 1047396.4740589792
+        }
+      },
+      "leaders": [
+        {
+          "leaderType": "returnLeader",
+          "parameters": {
+            "fastPeriod": 8,
+            "slowPeriod": 80,
+            "atrPeriod": 14,
+            "pullbackTolerancePct": 0.75,
+            "stopAtrMultiple": 1,
+            "targetRiskMultiple": 2
+          },
+          "development": {
+            "returnPercent": 17.907455162551024,
+            "successRatePercent": 44.285714285714285,
+            "profitFactor": 1.3656102145895466,
+            "maximumDrawdownPercent": 9.423170805200987,
+            "expectancy": 2558.2078803644317,
+            "trades": 70,
+            "finalCapital": 1179074.5516255102
+          },
+          "validation": {
+            "returnPercent": -0.6993836671771652,
+            "successRatePercent": 33.33333333333333,
+            "profitFactor": 0.916382161300472,
+            "maximumDrawdownPercent": 4.157323050902668,
+            "expectancy": -582.8197226476376,
+            "trades": 12,
+            "finalCapital": 993006.1633282284
+          },
+          "fullPreHoldout": {
+            "returnPercent": 17.0828296787599,
+            "successRatePercent": 42.68292682926829,
+            "profitFactor": 1.290319546757891,
+            "maximumDrawdownPercent": 10.85005224168678,
+            "expectancy": 2083.2719120438906,
+            "trades": 82,
+            "finalCapital": 1170828.296787599
+          },
+          "comparison": {
+            "verdict": "reject",
+            "returnDeltaPercentagePoints": -0.36199829103538544,
+            "successRateDeltaPercentagePoints": 0,
+            "maximumDrawdownDeltaPercentagePoints": 2.0571147787517674,
+            "weightedScoreUsed": false
+          }
+        },
+        {
+          "leaderType": "successLeader",
+          "parameters": {
+            "fastPeriod": 12,
+            "slowPeriod": 80,
+            "atrPeriod": 10,
+            "pullbackTolerancePct": 0.5,
+            "stopAtrMultiple": 2,
+            "targetRiskMultiple": 1.5
+          },
+          "development": {
+            "returnPercent": 7.023767306513203,
+            "successRatePercent": 53.57142857142857,
+            "profitFactor": 1.4755602188997783,
+            "maximumDrawdownPercent": 3.3068006308200144,
+            "expectancy": 2508.488323754715,
+            "trades": 28,
+            "finalCapital": 1070237.673065132
+          },
+          "validation": {
+            "returnPercent": -2.2987119172049386,
+            "successRatePercent": 28.57142857142857,
+            "profitFactor": 0.5556197538038028,
+            "maximumDrawdownPercent": 3.104537817794585,
+            "expectancy": -3283.8741674356265,
+            "trades": 7,
+            "finalCapital": 977012.8808279507
+          },
+          "fullPreHoldout": {
+            "returnPercent": 4.563599213196701,
+            "successRatePercent": 48.57142857142857,
+            "profitFactor": 1.224745432342995,
+            "maximumDrawdownPercent": 4.756244351659914,
+            "expectancy": 1303.8854894847718,
+            "trades": 35,
+            "finalCapital": 1045635.992131967
+          },
+          "comparison": {
+            "verdict": "reject",
+            "returnDeltaPercentagePoints": -1.9613265410631588,
+            "successRateDeltaPercentagePoints": -4.761904761904759,
+            "maximumDrawdownDeltaPercentagePoints": 1.0043295456436847,
+            "weightedScoreUsed": false
+          }
+        }
+      ],
+      "preferred": {
+        "leaderType": "returnLeader",
+        "parameters": {
+          "fastPeriod": 8,
+          "slowPeriod": 80,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 0.75,
+          "stopAtrMultiple": 1,
+          "targetRiskMultiple": 2
+        },
+        "development": {
+          "returnPercent": 17.907455162551024,
+          "successRatePercent": 44.285714285714285,
+          "profitFactor": 1.3656102145895466,
+          "maximumDrawdownPercent": 9.423170805200987,
+          "expectancy": 2558.2078803644317,
+          "trades": 70,
+          "finalCapital": 1179074.5516255102
+        },
+        "validation": {
+          "returnPercent": -0.6993836671771652,
+          "successRatePercent": 33.33333333333333,
+          "profitFactor": 0.916382161300472,
+          "maximumDrawdownPercent": 4.157323050902668,
+          "expectancy": -582.8197226476376,
+          "trades": 12,
+          "finalCapital": 993006.1633282284
+        },
+        "fullPreHoldout": {
+          "returnPercent": 17.0828296787599,
+          "successRatePercent": 42.68292682926829,
+          "profitFactor": 1.290319546757891,
+          "maximumDrawdownPercent": 10.85005224168678,
+          "expectancy": 2083.2719120438906,
+          "trades": 82,
+          "finalCapital": 1170828.296787599
+        },
+        "comparison": {
+          "verdict": "reject",
+          "returnDeltaPercentagePoints": -0.36199829103538544,
+          "successRateDeltaPercentagePoints": 0,
+          "maximumDrawdownDeltaPercentagePoints": 2.0571147787517674,
+          "weightedScoreUsed": false
+        }
+      },
+      "status": "v2_research_hold",
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    },
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V2_MARKET_TUNED_EMA_ATR",
+      "market": "CRYPTO_FUTURES",
+      "symbol": "ETHUSDT",
+      "side": "short",
+      "objective": {
+        "primaryMetrics": [
+          "returnPercent",
+          "successRatePercent"
+        ],
+        "weightedScoreUsed": false,
+        "developmentSelection": "return leader requires success non-regression; success leader requires return non-regression",
+        "validationRule": "candidate must avoid regression in both return and success rate; excessive MDD triggers risk_review"
+      },
+      "periods": {
+        "development": {
+          "startTime": 1577836800000,
+          "endTime": 1735689599999,
+          "includeFinalHoldout": false
+        },
+        "validation": {
+          "startTime": 1735689600000,
+          "endTime": 1767225599999,
+          "includeFinalHoldout": false
+        },
+        "finalHoldoutStartTime": 1767225600000,
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 485,
+      "baseline": {
+        "parameters": {
+          "fastPeriod": 20,
+          "slowPeriod": 50,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 0.5,
+          "stopAtrMultiple": 1.5,
+          "targetRiskMultiple": 2
+        },
+        "development": {
+          "returnPercent": -2.1831925641164776,
+          "successRatePercent": 30,
+          "profitFactor": 0.842732689908457,
+          "maximumDrawdownPercent": 5.927686798451188,
+          "expectancy": -1091.5962820582388,
+          "trades": 20,
+          "finalCapital": 978168.0743588352
+        },
+        "validation": {
+          "returnPercent": 7.548506778108194,
+          "successRatePercent": 83.33333333333334,
+          "profitFactor": 7.8350149340571145,
+          "maximumDrawdownPercent": 1.0204604952255762,
+          "expectancy": 12580.844630180321,
+          "trades": 6,
+          "finalCapital": 1075485.067781082
+        },
+        "fullPreHoldout": {
+          "returnPercent": 5.20051577531023,
+          "successRatePercent": 42.30769230769231,
+          "profitFactor": 1.347574013528608,
+          "maximumDrawdownPercent": 5.927686798451188,
+          "expectancy": 2000.1983751193188,
+          "trades": 26,
+          "finalCapital": 1052005.1577531022
+        }
+      },
+      "leaders": [
+        {
+          "leaderType": "returnLeader",
+          "parameters": {
+            "fastPeriod": 20,
+            "slowPeriod": 30,
+            "atrPeriod": 14,
+            "pullbackTolerancePct": 0.5,
+            "stopAtrMultiple": 1,
+            "targetRiskMultiple": 2
+          },
+          "development": {
+            "returnPercent": 12.71038185413306,
+            "successRatePercent": 46.875,
+            "profitFactor": 1.6761048598913095,
+            "maximumDrawdownPercent": 3.2128096912112305,
+            "expectancy": 3971.9943294165814,
+            "trades": 32,
+            "finalCapital": 1127103.8185413305
+          },
+          "validation": {
+            "returnPercent": 5.495928212754565,
+            "successRatePercent": 62.5,
+            "profitFactor": 2.7108207127933683,
+            "maximumDrawdownPercent": 1.0343971683122308,
+            "expectancy": 6869.9102659432065,
+            "trades": 8,
+            "finalCapital": 1054959.2821275457
+          },
+          "fullPreHoldout": {
+            "returnPercent": 18.904863529157755,
+            "successRatePercent": 50,
+            "profitFactor": 1.8432071058126545,
+            "maximumDrawdownPercent": 3.2128096912112305,
+            "expectancy": 4726.215882289439,
+            "trades": 40,
+            "finalCapital": 1189048.6352915775
+          },
+          "comparison": {
+            "verdict": "reject",
+            "returnDeltaPercentagePoints": -2.0525785653536284,
+            "successRateDeltaPercentagePoints": -20.833333333333343,
+            "maximumDrawdownDeltaPercentagePoints": 0.013936673086654583,
+            "weightedScoreUsed": false
+          }
+        },
+        {
+          "leaderType": "successLeader",
+          "parameters": {
+            "fastPeriod": 20,
+            "slowPeriod": 30,
+            "atrPeriod": 10,
+            "pullbackTolerancePct": 0.25,
+            "stopAtrMultiple": 1,
+            "targetRiskMultiple": 1.5
+          },
+          "development": {
+            "returnPercent": 7.833190939344031,
+            "successRatePercent": 51.724137931034484,
+            "profitFactor": 1.5191329723181488,
+            "maximumDrawdownPercent": 4.682121937131333,
+            "expectancy": 2701.100323911735,
+            "trades": 29,
+            "finalCapital": 1078331.9093934402
+          },
+          "validation": {
+            "returnPercent": 4.32959979623469,
+            "successRatePercent": 62.5,
+            "profitFactor": 2.3660226987455504,
+            "maximumDrawdownPercent": 1.0362579632606723,
+            "expectancy": 5411.999745293362,
+            "trades": 8,
+            "finalCapital": 1043295.9979623469
+          },
+          "fullPreHoldout": {
+            "returnPercent": 12.501936554527232,
+            "successRatePercent": 54.054054054054056,
+            "profitFactor": 1.6755337558646741,
+            "maximumDrawdownPercent": 4.682121937131333,
+            "expectancy": 3378.901771493847,
+            "trades": 37,
+            "finalCapital": 1125019.3655452724
+          },
+          "comparison": {
+            "verdict": "reject",
+            "returnDeltaPercentagePoints": -3.218906981873504,
+            "successRateDeltaPercentagePoints": -20.833333333333343,
+            "maximumDrawdownDeltaPercentagePoints": 0.015797468035096074,
+            "weightedScoreUsed": false
+          }
+        }
+      ],
+      "preferred": {
+        "leaderType": "returnLeader",
+        "parameters": {
+          "fastPeriod": 20,
+          "slowPeriod": 30,
+          "atrPeriod": 14,
+          "pullbackTolerancePct": 0.5,
+          "stopAtrMultiple": 1,
+          "targetRiskMultiple": 2
+        },
+        "development": {
+          "returnPercent": 12.71038185413306,
+          "successRatePercent": 46.875,
+          "profitFactor": 1.6761048598913095,
+          "maximumDrawdownPercent": 3.2128096912112305,
+          "expectancy": 3971.9943294165814,
+          "trades": 32,
+          "finalCapital": 1127103.8185413305
+        },
+        "validation": {
+          "returnPercent": 5.495928212754565,
+          "successRatePercent": 62.5,
+          "profitFactor": 2.7108207127933683,
+          "maximumDrawdownPercent": 1.0343971683122308,
+          "expectancy": 6869.9102659432065,
+          "trades": 8,
+          "finalCapital": 1054959.2821275457
+        },
+        "fullPreHoldout": {
+          "returnPercent": 18.904863529157755,
+          "successRatePercent": 50,
+          "profitFactor": 1.8432071058126545,
+          "maximumDrawdownPercent": 3.2128096912112305,
+          "expectancy": 4726.215882289439,
+          "trades": 40,
+          "finalCapital": 1189048.6352915775
+        },
+        "comparison": {
+          "verdict": "reject",
+          "returnDeltaPercentagePoints": -2.0525785653536284,
+          "successRateDeltaPercentagePoints": -20.833333333333343,
+          "maximumDrawdownDeltaPercentagePoints": 0.013936673086654583,
+          "weightedScoreUsed": false
+        }
+      },
+      "status": "v2_research_hold",
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    }
+  ],
   "datasets": [
     {
       "id": "bitget-btcusdt-spot-1d",
       "status": "coverage_through_asof",
       "requestedStartTime": 1577836800000,
       "requestedEndTime": 1786319999999,
-      "effectiveRequestedEnd": 1786227424393,
-      "asOfTime": 1786227424393,
+      "effectiveRequestedEnd": 1786227719194,
+      "asOfTime": 1786227719194,
       "actualStartTime": 1577894400000,
       "actualEndTime": 1786118400000,
       "candleCount": 2411,
@@ -206,8 +1456,8 @@
       "status": "coverage_through_asof",
       "requestedStartTime": 1577836800000,
       "requestedEndTime": 1786319999999,
-      "effectiveRequestedEnd": 1786227424393,
-      "asOfTime": 1786227424393,
+      "effectiveRequestedEnd": 1786227719194,
+      "asOfTime": 1786227719194,
       "actualStartTime": 1577894400000,
       "actualEndTime": 1786118400000,
       "candleCount": 2411,
@@ -229,7 +1479,7 @@
       "requestedStartTime": 1577836800000,
       "requestedEndTime": 1767225599999,
       "effectiveRequestedEnd": 1767225599999,
-      "asOfTime": 1786227424393,
+      "asOfTime": 1786227719194,
       "actualStartTime": 1577836800000,
       "actualEndTime": 1767139200000,
       "candleCount": 2192,
@@ -255,7 +1505,7 @@
       "requestedStartTime": 1577836800000,
       "requestedEndTime": 1767225599999,
       "effectiveRequestedEnd": 1767225599999,
-      "asOfTime": 1786227424393,
+      "asOfTime": 1786227719194,
       "actualStartTime": 1577836800000,
       "actualEndTime": 1767139200000,
       "candleCount": 2192,
