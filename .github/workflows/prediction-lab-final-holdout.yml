@@ -1,0 +1,70 @@
+name: Prediction Lab Final Holdout 2026
+
+on:
+  push:
+    branches:
+      - feature/prediction-lab-standalone
+    paths:
+      - .github/workflows/prediction-lab-final-holdout.yml
+      - market-prediction-lab/src/final-holdout-evaluator.js
+      - market-prediction-lab/src/independent-strategy-backtest.js
+      - market-prediction-lab/scripts/run-final-holdout.js
+      - market-prediction-lab/tests/final-holdout-evaluator.test.js
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prediction-lab-final-holdout-2026
+  cancel-in-progress: true
+
+jobs:
+  final-holdout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout isolated research branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/prediction-lab-standalone
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate research lab before opening holdout
+        working-directory: market-prediction-lab
+        run: npm run validate
+
+      - name: Verify final holdout guards
+        working-directory: market-prediction-lab
+        run: node --test tests/final-holdout-evaluator.test.js
+
+      - name: Run frozen candidates on 2026 final holdout exactly once
+        working-directory: market-prediction-lab
+        run: node scripts/run-final-holdout.js docs/final-holdout-2026-result.json docs/final-holdout-2026-result.md
+
+      - name: Display final holdout table
+        working-directory: market-prediction-lab
+        run: cat docs/final-holdout-2026-result.md
+
+      - name: Upload final holdout evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-holdout-2026-${{ github.run_id }}
+          path: |
+            market-prediction-lab/docs/final-holdout-2026-result.json
+            market-prediction-lab/docs/final-holdout-2026-result.md
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit immutable compact final holdout result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            market-prediction-lab/docs/final-holdout-2026-result.json \
+            market-prediction-lab/docs/final-holdout-2026-result.md
+          git commit -m "test(research): record one-shot 2026 final holdout"
+          git push origin HEAD:feature/prediction-lab-standalone
