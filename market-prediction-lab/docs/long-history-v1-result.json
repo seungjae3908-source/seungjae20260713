@@ -1,0 +1,231 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": 1786226830894,
+  "mode": "backtest-only",
+  "source": "bitget-public-v2",
+  "requestedStartTime": 1577836800000,
+  "requestedEndTime": 1786319999999,
+  "metricsEffectiveEndTime": 1767225599999,
+  "finalHoldoutStartTime": 1767225600000,
+  "finalHoldoutLocked": true,
+  "initialCapital": 1000000,
+  "dataTimeframe": "1d",
+  "results": [
+    {
+      "market": "CRYPTO_SPOT",
+      "symbol": "USDT-BTC",
+      "side": "long",
+      "version": "V1",
+      "initialCapital": 1000000,
+      "finalCapital": 1009152.7,
+      "netReturnPercent": 0.9153,
+      "successRatePercent": 36.1111,
+      "profitFactor": 1.0366,
+      "maximumDrawdownPercent": 5.4545,
+      "expectancy": 254.24,
+      "trades": 36,
+      "executionCost": 17662.98,
+      "coverageStatus": "partial_coverage",
+      "actualDataStart": "2020-01-01T16:00:00.000Z",
+      "actualDataEnd": "2026-08-07T16:00:00.000Z",
+      "fundingCount": 0,
+      "fundingStart": null,
+      "fundingEnd": null,
+      "finalHoldoutLocked": true,
+      "metricsEnd": "2025-12-31T23:59:59.999Z"
+    },
+    {
+      "market": "CRYPTO_SPOT",
+      "symbol": "USDT-ETH",
+      "side": "long",
+      "version": "V1",
+      "initialCapital": 1000000,
+      "finalCapital": 1032534.52,
+      "netReturnPercent": 3.2535,
+      "successRatePercent": 37.5,
+      "profitFactor": 1.1204,
+      "maximumDrawdownPercent": 10.9071,
+      "expectancy": 813.36,
+      "trades": 40,
+      "executionCost": 14249.49,
+      "coverageStatus": "partial_coverage",
+      "actualDataStart": "2020-01-01T16:00:00.000Z",
+      "actualDataEnd": "2026-08-07T16:00:00.000Z",
+      "fundingCount": 0,
+      "fundingStart": null,
+      "fundingEnd": null,
+      "finalHoldoutLocked": true,
+      "metricsEnd": "2025-12-31T23:59:59.999Z"
+    }
+  ],
+  "datasets": [
+    {
+      "id": "bitget-btcusdt-spot-1d",
+      "status": "partial_coverage",
+      "requestedStartTime": 1577836800000,
+      "requestedEndTime": 1786319999999,
+      "actualStartTime": 1577894400000,
+      "actualEndTime": 1786118400000,
+      "candleCount": 2411,
+      "fullRequestedRange": false,
+      "missingRequestedStart": false,
+      "missingRequestedEnd": true,
+      "market": "CRYPTO_SPOT",
+      "exchangeSymbol": "BTCUSDT",
+      "researchSymbol": "USDT-BTC",
+      "timeframe": "1d",
+      "initialGapCount": 0,
+      "remainingGapCount": 0,
+      "fundingStartTime": null,
+      "fundingEndTime": null
+    },
+    {
+      "id": "bitget-ethusdt-spot-1d",
+      "status": "partial_coverage",
+      "requestedStartTime": 1577836800000,
+      "requestedEndTime": 1786319999999,
+      "actualStartTime": 1577894400000,
+      "actualEndTime": 1786118400000,
+      "candleCount": 2411,
+      "fullRequestedRange": false,
+      "missingRequestedStart": false,
+      "missingRequestedEnd": true,
+      "market": "CRYPTO_SPOT",
+      "exchangeSymbol": "ETHUSDT",
+      "researchSymbol": "USDT-ETH",
+      "timeframe": "1d",
+      "initialGapCount": 0,
+      "remainingGapCount": 0,
+      "fundingStartTime": null,
+      "fundingEndTime": null
+    },
+    {
+      "id": "bitget-btcusdt-futures-1d",
+      "status": "partial_coverage",
+      "requestedStartTime": 1577836800000,
+      "requestedEndTime": 1786319999999,
+      "actualStartTime": 1778428800000,
+      "actualEndTime": 1786118400000,
+      "candleCount": 90,
+      "fullRequestedRange": false,
+      "missingRequestedStart": true,
+      "missingRequestedEnd": true,
+      "market": "CRYPTO_FUTURES",
+      "exchangeSymbol": "BTCUSDT",
+      "researchSymbol": "BTCUSDT",
+      "timeframe": "1d",
+      "initialGapCount": 0,
+      "remainingGapCount": 0,
+      "fundingCount": 270,
+      "fundingStartTime": 1778457600000,
+      "fundingEndTime": 1786204800000
+    },
+    {
+      "id": "bitget-btcusdt-futures-1d",
+      "market": "CRYPTO_FUTURES",
+      "exchangeSymbol": "BTCUSDT",
+      "researchSymbol": "BTCUSDT",
+      "timeframe": "1d",
+      "status": "blocked_collection_error",
+      "requestedStartTime": 1577836800000,
+      "requestedEndTime": 1786319999999,
+      "actualStartTime": null,
+      "actualEndTime": null,
+      "candleCount": 0,
+      "error": {
+        "name": "ResearchContractError",
+        "code": "INSUFFICIENT_CANDLES",
+        "message": "at least 53 candles are required for V1",
+        "details": {
+          "minimumCandles": 53,
+          "actual": 0
+        }
+      }
+    },
+    {
+      "id": "bitget-ethusdt-futures-1d",
+      "status": "partial_coverage",
+      "requestedStartTime": 1577836800000,
+      "requestedEndTime": 1786319999999,
+      "actualStartTime": 1778428800000,
+      "actualEndTime": 1786118400000,
+      "candleCount": 90,
+      "fullRequestedRange": false,
+      "missingRequestedStart": true,
+      "missingRequestedEnd": true,
+      "market": "CRYPTO_FUTURES",
+      "exchangeSymbol": "ETHUSDT",
+      "researchSymbol": "ETHUSDT",
+      "timeframe": "1d",
+      "initialGapCount": 0,
+      "remainingGapCount": 0,
+      "fundingCount": 270,
+      "fundingStartTime": 1778457600000,
+      "fundingEndTime": 1786204800000
+    },
+    {
+      "id": "bitget-ethusdt-futures-1d",
+      "market": "CRYPTO_FUTURES",
+      "exchangeSymbol": "ETHUSDT",
+      "researchSymbol": "ETHUSDT",
+      "timeframe": "1d",
+      "status": "blocked_collection_error",
+      "requestedStartTime": 1577836800000,
+      "requestedEndTime": 1786319999999,
+      "actualStartTime": null,
+      "actualEndTime": null,
+      "candleCount": 0,
+      "error": {
+        "name": "ResearchContractError",
+        "code": "INSUFFICIENT_CANDLES",
+        "message": "at least 53 candles are required for V1",
+        "details": {
+          "minimumCandles": 53,
+          "actual": 0
+        }
+      }
+    }
+  ],
+  "blockedMarkets": [
+    {
+      "market": "KR_STOCK",
+      "status": "blocked_provider_not_integrated",
+      "reason": "A reproducible no-secret historical provider with delisted/universe safeguards is not integrated yet; no synthetic returns are allowed."
+    },
+    {
+      "market": "US_STOCK",
+      "status": "blocked_provider_not_integrated",
+      "reason": "A reproducible no-secret historical provider with corporate-action and delisted/universe safeguards is not integrated yet; no synthetic returns are allowed."
+    }
+  ],
+  "errors": [
+    {
+      "spec": "bitget-btcusdt-futures-1d",
+      "market": "CRYPTO_FUTURES",
+      "error": {
+        "name": "ResearchContractError",
+        "code": "INSUFFICIENT_CANDLES",
+        "message": "at least 53 candles are required for V1",
+        "details": {
+          "minimumCandles": 53,
+          "actual": 0
+        }
+      }
+    },
+    {
+      "spec": "bitget-ethusdt-futures-1d",
+      "market": "CRYPTO_FUTURES",
+      "error": {
+        "name": "ResearchContractError",
+        "code": "INSUFFICIENT_CANDLES",
+        "message": "at least 53 candles are required for V1",
+        "details": {
+          "minimumCandles": 53,
+          "actual": 0
+        }
+      }
+    }
+  ],
+  "orderSubmitted": false,
+  "privateAccountRequestAllowed": false
+}
