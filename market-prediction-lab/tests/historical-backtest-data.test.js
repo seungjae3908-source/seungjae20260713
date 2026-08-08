@@ -41,10 +41,29 @@ test("coverage report does not pretend late-starting exchange history covers 202
     candles: rawCandles(Date.UTC(2021, 0, 1), 100),
     requestedStartTime,
     requestedEndTime,
+    asOfTime: requestedEndTime,
   });
   assert.equal(partial.status, "partial_coverage");
   assert.equal(partial.fullRequestedRange, false);
   assert.equal(partial.missingRequestedStart, true);
+});
+
+test("coverage through the latest closed daily bar is not mislabeled partial when requested end is still in the future", () => {
+  const requestedStartTime = Date.UTC(2026, 7, 1);
+  const requestedEndTime = Date.UTC(2026, 7, 9, 23, 59, 59, 999);
+  const asOfTime = Date.UTC(2026, 7, 8, 22);
+  const spec = HISTORICAL_V1_CRYPTO_SPECS[0];
+  const coverage = summarizeHistoricalCoverage({
+    spec,
+    candles: rawCandles(requestedStartTime, 8),
+    requestedStartTime,
+    requestedEndTime,
+    asOfTime,
+  });
+  assert.equal(coverage.status, "coverage_through_asof");
+  assert.equal(coverage.coverageThroughAsOf, true);
+  assert.equal(coverage.fullRequestedRange, false);
+  assert.equal(coverage.missingRequestedEnd, false);
 });
 
 test("spot gets long-only case while futures gets independent long and short cases", () => {
@@ -57,6 +76,7 @@ test("spot gets long-only case while futures gets independent long and short cas
   assert.deepEqual(futures.map((row) => row.side), ["long", "short"]);
   assert.equal(spot[0].costModel.entryFeeRate, 0.001);
   assert.equal(futures[0].costModel.entryFeeRate, 0.0006);
+  assert.equal(futureSpec.provider, "binance-usdm-public-rest");
   assert.deepEqual(BITGET_STANDARD_TAKER_RESEARCH_COSTS.CRYPTO_FUTURES, futures[0].costModel);
 });
 
