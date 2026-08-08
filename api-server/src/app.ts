@@ -64,9 +64,36 @@ app.get("/api/healthz", (_req, res) => {
 app.use("/api", router);
 
 if (existsSync(clientDist)) {
-  app.use(express.static(clientDist));
+  app.use(express.static(clientDist, {
+    setHeaders(res, filePath) {
+      const relative = path.relative(clientDist, filePath).split(path.sep).join('/');
+      const mustRevalidate = new Set([
+        'index.html',
+        'sw.js',
+        'registerSW.js',
+        'push-sw.js',
+        'manifest.webmanifest',
+      ]);
+
+      if (mustRevalidate.has(relative)) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        return;
+      }
+
+      if (relative.startsWith('assets/') || /^workbox-[A-Za-z0-9_-]+\.js$/.test(relative)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        return;
+      }
+
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+    },
+  }));
 
   app.get(/^(?!\/api).*/, (_req, res) => {
+    // SPA navigations must always revalidate the shell so a newly deployed
+    // hashed asset graph is discovered immediately instead of reviving an old
+    // index document from the browser/proxy cache.
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(clientIndex);
   });
 }
