@@ -13,7 +13,7 @@ function technicalItem(id: string) {
   return item;
 }
 
-test('associate scanner access is isolated from Risk, futures, and order capabilities', () => {
+test('associate scanner access is isolated from Risk, futures, chart workspace, and order capabilities', () => {
   const associate = permissionsFor('associate');
   expect(associate.canAccessBasicInfo).toBe(true);
   expect(associate.canAccessFutures).toBe(false);
@@ -24,7 +24,8 @@ test('associate scanner access is isolated from Risk, futures, and order capabil
   expect(technicalItem('ai-chart').capability).toBe('canAccessRiskPreview');
   expect(technicalItem('auto-trading').capability).toBe('canPlaceOrders');
 
-  expect(appSource).toContain("function ScannerAccess() { return gated('canAccessBasicInfo', <TechnicalWorkspacePage />); }");
+  expect(appSource).toContain("const SignalScannerPage = lazy(() => import('@/pages/signal-scanner')); ".trim());
+  expect(appSource).toContain("auth.can('canAccessRiskPreview') ? <TechnicalWorkspacePage /> : <SignalScannerPage />");
   expect(appSource).toContain("function AiChartAccess() { return gated('canAccessRiskPreview', <AiChartPage />); }");
   expect(appSource).toContain("function AutoTradingAccess() { return gated('canPlaceOrders', <AutoTradingPage />); }");
 });
