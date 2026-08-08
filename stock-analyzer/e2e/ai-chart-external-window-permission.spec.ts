@@ -1,6 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 const initialUrl = '/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m';
+const EXPECTED_401_RESOURCE_CONSOLE = 'Failed to load resource: the server responded with a status of 401 (Unauthorized)';
 
 type RuntimeErrors = {
   console: string[];
@@ -10,6 +11,7 @@ type RuntimeErrors = {
   mutations: string[];
   orderRequests: string[];
   accountPositionRequests: string[];
+  expectedAuthDenials: number;
 };
 
 async function installUnhandledCapture(context: BrowserContext) {
@@ -31,6 +33,7 @@ function observe(context: BrowserContext, firstPage: Page): RuntimeErrors & { pa
     mutations: [],
     orderRequests: [],
     accountPositionRequests: [],
+    expectedAuthDenials: 0,
     pages: [firstPage],
   };
   const attach = (page: Page) => {
@@ -45,9 +48,12 @@ function observe(context: BrowserContext, firstPage: Page): RuntimeErrors & { pa
   context.on('response', (response) => {
     const status = response.status();
     const pathname = new URL(response.url()).pathname;
-    const expected = (status === 401 && pathname.startsWith('/api/stocks/'))
-      || (status === 403 && pathname === '/api/quotes');
-    if (status >= 400 && !expected) runtime.unexpectedHttp.push(`${status} ${response.url()}`);
+    if (status === 401 && pathname.startsWith('/api/stocks/')) {
+      runtime.expectedAuthDenials += 1;
+      return;
+    }
+    if (status === 403 && pathname === '/api/quotes') return;
+    if (status >= 400) runtime.unexpectedHttp.push(`${status} ${response.url()}`);
   });
   context.on('request', (request) => {
     const url = request.url();
@@ -70,7 +76,12 @@ async function assertClean(runtime: RuntimeErrors & { pages: Page[] }) {
       return state.__chartPermissionUnhandled ?? [];
     }));
   }
-  expect(runtime.console).toEqual([]);
+  const expectedAuthConsole = runtime.console.filter((message) => message === EXPECTED_401_RESOURCE_CONSOLE);
+  const unexpectedConsole = runtime.console.filter((message) => message !== EXPECTED_401_RESOURCE_CONSOLE);
+  expect(runtime.expectedAuthDenials).toBeGreaterThan(0);
+  expect(expectedAuthConsole.length).toBeGreaterThan(0);
+  expect(expectedAuthConsole.length).toBeLessThanOrEqual(runtime.expectedAuthDenials);
+  expect(unexpectedConsole).toEqual([]);
   expect(runtime.page).toEqual([]);
   expect(runtime.unhandled).toEqual([]);
   expect(runtime.unexpectedHttp).toEqual([]);
