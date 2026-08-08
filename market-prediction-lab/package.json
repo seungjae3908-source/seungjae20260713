@@ -1,6 +1,6 @@
 {
   "name": "market-prediction-lab",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -17,6 +17,7 @@
     "collect:bitget": "node scripts/collect-bitget.js",
     "research:funding": "node scripts/run-derivatives-suite.js",
     "research:structure": "node scripts/run-market-structure-suite.js",
+    "backtest:v1": "node scripts/run-v1-backtest.js",
     "shadow:cycle": "node scripts/run-shadow-cycle.js"
   }
 }
