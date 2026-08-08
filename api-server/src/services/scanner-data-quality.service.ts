@@ -70,8 +70,27 @@ const TIMEFRAME_MS: Record<string, number> = {
   '1W': 7 * 24 * 60 * 60_000,
 };
 
+function compactKoreaTimestamp(value: string): number | null {
+  const digits = value.replace(/\D/g, '');
+  if (digits.length !== 8 && digits.length !== 14) return null;
+  const year = digits.slice(0, 4);
+  const month = digits.slice(4, 6);
+  const day = digits.slice(6, 8);
+  const hour = digits.length === 14 ? digits.slice(8, 10) : '00';
+  const minute = digits.length === 14 ? digits.slice(10, 12) : '00';
+  const second = digits.length === 14 ? digits.slice(12, 14) : '00';
+  const parsed = Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}+09:00`);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function timestamp(value: string | number): number | null {
-  const parsed = typeof value === 'number' ? value : Date.parse(value);
+  if (typeof value === 'number') {
+    const parsed = value < 10_000_000_000 ? value * 1_000 : value;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+  const compact = compactKoreaTimestamp(value);
+  if (compact != null) return compact;
+  const parsed = Date.parse(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
@@ -107,9 +126,10 @@ function shouldInspectGap(
   if (gap <= expectedIntervalMs * 1.8) return false;
   if (!sessionAware) return true;
   if (timeframe === '1D' || timeframe === '1W') return false;
-  // Session markets legitimately contain overnight/weekend closures. Ignore only
-  // clearly session-sized gaps; missing bars inside a session remain detectable.
-  return gap <= expectedIntervalMs * 6;
+  // Overnight/weekend closures are expected in stock markets. Six hours is
+  // safely above an in-session interruption while below normal overnight gaps.
+  if (gap >= 6 * 60 * 60_000) return false;
+  return true;
 }
 
 function inspectCandles(
@@ -135,7 +155,7 @@ function inspectCandles(
 
     const { open, high, low, close, volume } = candle;
     const prices = [open, high, low, close];
-    const validPrices = prices.every((value) => Number.isFinite(value) && value > 0);
+    const validPrices = prices.every((price) => Number.isFinite(price) && price > 0);
     if (!validPrices || high < Math.max(open, close, low) || low > Math.min(open, close, high)) {
       pushIssue(issues, 'INVALID_OHLC', 'blocking', 'OHLC 가격 관계가 유효하지 않습니다.');
     }
