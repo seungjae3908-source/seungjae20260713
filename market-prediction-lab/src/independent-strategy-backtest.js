@@ -12,6 +12,7 @@ import { RESEARCH_BACKTEST_PERIOD } from "./multi-market-backtest-engine.js";
 const MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
 const CASH_MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT"]);
 const SIDES = new Set(["long", "short"]);
+const FINAL_HOLDOUT_MODE = "final_holdout_evaluation";
 
 function finite(value, label) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -213,26 +214,45 @@ function settle({ position, exit, exitCandle, exitIndex, candles, costModel, fun
   });
 }
 
-function resolvePeriod(period = {}) {
+function resolvePeriod(period = {}, mode = "selection") {
   const startTime = period.startTime ?? RESEARCH_BACKTEST_PERIOD.startTime;
   const endTime = period.endTime ?? RESEARCH_BACKTEST_PERIOD.validationEndTime;
   if (!Number.isInteger(startTime) || !Number.isInteger(endTime) || startTime >= endTime) {
     throw new ResearchContractError("INVALID_PERIOD", "period must be ascending milliseconds", { startTime, endTime });
   }
+  if (mode === FINAL_HOLDOUT_MODE) {
+    if (period.includeFinalHoldout !== true) {
+      throw new ResearchContractError("FINAL_HOLDOUT_EXPLICIT_OPT_IN_REQUIRED", "final holdout evaluation requires includeFinalHoldout=true");
+    }
+    if (startTime !== RESEARCH_BACKTEST_PERIOD.finalHoldoutStartTime) {
+      throw new ResearchContractError("FINAL_HOLDOUT_START_MISMATCH", "final holdout evaluation must start exactly at 2026-01-01", { startTime });
+    }
+    if (endTime > RESEARCH_BACKTEST_PERIOD.defaultEndTime) {
+      throw new ResearchContractError("FINAL_HOLDOUT_END_EXCEEDED", "final holdout evaluation cannot exceed the predeclared research end", { endTime });
+    }
+    return Object.freeze({
+      startTime,
+      endTime,
+      includeFinalHoldout: true,
+      finalHoldoutLocked: false,
+      finalHoldoutEvaluation: true,
+      selectionAllowed: false,
+    });
+  }
   if (period.includeFinalHoldout === true || endTime >= RESEARCH_BACKTEST_PERIOD.finalHoldoutStartTime) {
     throw new ResearchContractError("INDEPENDENT_HOLDOUT_LOCKED", "independent strategy selection cannot use the 2026 final holdout");
   }
-  return Object.freeze({ startTime, endTime, includeFinalHoldout: false, finalHoldoutLocked: true });
+  return Object.freeze({ startTime, endTime, includeFinalHoldout: false, finalHoldoutLocked: true, finalHoldoutEvaluation: false, selectionAllowed: true });
 }
 
-export function runIndependentSignalBacktest({
+function runIndependentSignalBacktestCore({
   backtestInput,
   strategy,
   strategyVersion,
   parameters,
   signalEvaluator,
   period,
-} = {}) {
+} = {}, mode = "selection") {
   if (!backtestInput || typeof backtestInput !== "object") throw new ResearchContractError("INVALID_INDEPENDENT_INPUT", "backtestInput is required");
   if (typeof signalEvaluator !== "function") throw new ResearchContractError("INVALID_SIGNAL_EVALUATOR", "signalEvaluator must be a function");
   const market = String(backtestInput.market ?? "");
@@ -242,7 +262,7 @@ export function runIndependentSignalBacktest({
   const timeframe = String(backtestInput.timeframe ?? "1d");
   const initialCapital = backtestInput.initialCapital ?? RESEARCH_BACKTEST_PERIOD.initialCapital;
   positive(initialCapital, "initialCapital");
-  const normalizedPeriod = resolvePeriod(period);
+  const normalizedPeriod = resolvePeriod(period, mode);
   const atrPeriod = parameters?.atrPeriod ?? 14;
   const stopAtrMultiple = parameters?.stopAtrMultiple ?? 1.5;
   const targetRiskMultiple = parameters?.targetRiskMultiple ?? 2;
@@ -364,8 +384,18 @@ export function runIndependentSignalBacktest({
       executionUsesSharedCalculateExecutionAwareTrade: true,
       fundingIncludedForFutures: market === "CRYPTO_FUTURES",
       finalHoldoutUsedForSelection: false,
+      finalHoldoutEvaluation: normalizedPeriod.finalHoldoutEvaluation,
+      selectionAllowed: normalizedPeriod.selectionAllowed,
       orderSubmitted: false,
       privateAccountRequestAllowed: false,
     }),
   });
+}
+
+export function runIndependentSignalBacktest(input = {}) {
+  return runIndependentSignalBacktestCore(input, "selection");
+}
+
+export function runIndependentSignalFinalHoldout(input = {}) {
+  return runIndependentSignalBacktestCore(input, FINAL_HOLDOUT_MODE);
 }
