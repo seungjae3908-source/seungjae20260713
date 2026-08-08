@@ -1,26 +1,59 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   ArrowLeft,
   Clock3,
   Database,
   Minus,
+  MonitorUp,
   ShieldAlert,
   TrendingDown,
   TrendingUp,
+  X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { UnifiedAnalysisChart } from '@/components/unified-analysis-chart';
 import {
-  selectionFromSearch,
-  selectionQuery,
   useAnalysisSelection,
   type AnalysisSelection,
 } from '@/lib/analysis-selection';
 import type { ChartAnalysis, ChartAnalysisBias, ChartAnalysisStatus } from '@/lib/chart-analysis';
-import { unifiedMarketLabel } from '@/lib/unified-chart-data';
+import {
+  acceptChartWindowMessage,
+  attachChartWindowLifecycleListeners,
+  buildChartPath,
+  buildExternalChartPath,
+  chartExternalWindowChannel,
+  chartPairIdFromSearch,
+  chartSelectionFromSearch,
+  chartSelectionKey,
+  chartSyncIdFromSearch,
+  chartWindowRouteModeFromSearch,
+  CHART_EXTERNAL_WINDOW_NAME,
+  createChartWindowMessage,
+  createChartWindowSourceId,
+  externalChartWindowFeatures,
+  hasChartRouteSelection,
+  initialChartWindowPeerState,
+  isDesktopChartViewport,
+  mergeChartRouteSelection,
+  nextChartWindowMessageClock,
+  normalizeChartWindowSelection,
+  selectionOrderFromMessage,
+  shouldApplyChartSelection,
+  startChartPopupClosedPolling,
+  type ChartExternalWindowMessage,
+  type ChartSelectionOrder,
+  type ChartWindowMessageClock,
+  type ChartWindowMessageContext,
+  type ChartWindowMessageType,
+  type ChartWindowPeerState,
+} from '@/lib/chart-external-window';
+import { UNIFIED_CHART_TIMEFRAMES, unifiedMarketLabel } from '@/lib/unified-chart-data';
 import { cn } from '@/lib/utils';
+
+const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
 
 function fallbackSelection(): AnalysisSelection {
   return {
@@ -69,58 +102,325 @@ function formatAnalysisTime(value: string | undefined): string {
   });
 }
 
+function sameSelection(left: AnalysisSelection, right: AnalysisSelection): boolean {
+  return chartSelectionKey(left) === chartSelectionKey(right)
+    && left.displayName === right.displayName;
+}
+
+function supportedSelection(value: AnalysisSelection | null): AnalysisSelection | null {
+  const normalized = value ? normalizeChartWindowSelection(value) : null;
+  return normalized && CURRENT_TIMEFRAMES.has(normalized.timeframe as never) ? normalized : null;
+}
+
+function isMobileUserAgent(userAgent: string): boolean {
+  return /Android|iPhone|iPad|iPod|Mobile|IEMobile|Opera Mini/i.test(userAgent);
+}
+
+function currentBrowserSearch(): string {
+  return typeof window === 'undefined' ? '' : window.location.search;
+}
+
+function currentOrigin(): string {
+  return typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
+}
+
+function safeFocus(popup: Window): void {
+  try {
+    popup.focus();
+  } catch {
+    // Focus denial does not invalidate an already-open external chart.
+  }
+}
+
 export default function AiChartPage({ embedded = false }: { embedded?: boolean }) {
-  const [location, navigate] = useLocation();
+  const [, navigate] = useLocation();
   const state = useAnalysisSelection();
-  const fromUrl = useMemo(
-    () => selectionFromSearch(location.includes('?') ? location.slice(location.indexOf('?')) : ''),
-    [location],
-  );
-  const selection = useMemo<AnalysisSelection>(
-    () =>
-      fromUrl
-        ? { ...(state.selection?.ticker === fromUrl.ticker ? state.selection : {}), ...fromUrl }
-        : state.selection ?? fallbackSelection(),
-    [fromUrl, state.selection],
-  );
+  const selectSelection = state.select;
+  const initialSearchRef = useRef(currentBrowserSearch());
+  const routeModeRef = useRef(chartWindowRouteModeFromSearch(initialSearchRef.current));
+  const routeSelectionRef = useRef(supportedSelection(chartSelectionFromSearch(initialSearchRef.current)));
+  const externalMode = routeModeRef.current === 'external';
+  const externalSyncId = chartSyncIdFromSearch(initialSearchRef.current);
+  const externalPairId = chartPairIdFromSearch(initialSearchRef.current);
+  const invalidRoute = routeModeRef.current === 'invalid'
+    || (hasChartRouteSelection(initialSearchRef.current) && !routeSelectionRef.current)
+    || (externalMode && (!externalSyncId || !externalPairId));
+  const initialSelectionRef = useRef<AnalysisSelection>((() => {
+    const storedSelection = supportedSelection(state.selection);
+    return mergeChartRouteSelection(routeSelectionRef.current, storedSelection)
+      ?? storedSelection
+      ?? fallbackSelection();
+  })());
+  const initialSelection = initialSelectionRef.current;
+
+  const [selection, setSelection] = useState<AnalysisSelection>(initialSelection);
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
+  const [externalControlAvailable, setExternalControlAvailable] = useState(false);
+  const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(() => {
+    if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
+    if (externalMode && (!externalSyncId || !externalPairId)) return '외부 차트 세션 정보가 없거나 올바르지 않습니다.';
+    if (hasChartRouteSelection(initialSearchRef.current) && !routeSelectionRef.current) {
+      return '시장·종목·시간봉 입력이 올바르지 않아 기존 정상 선택을 유지합니다.';
+    }
+    return null;
+  });
+
+  const sourceIdRef = useRef(createChartWindowSourceId());
+  const syncSessionIdRef = useRef(externalMode ? externalSyncId : createChartWindowSourceId());
+  const pairIdRef = useRef(externalMode ? externalPairId : createChartWindowSourceId());
+  const sourceRole = externalMode ? 'external' : 'main';
+  const messageContextRef = useRef<ChartWindowMessageContext>({
+    sessionId: syncSessionIdRef.current,
+    pairId: pairIdRef.current,
+    sourceId: sourceIdRef.current,
+    sourceRole,
+    origin: currentOrigin(),
+  });
+  const channelRef = useRef<BroadcastChannel | null>(null);
+  const popupRef = useRef<Window | null>(null);
+  const popupPollCleanupRef = useRef<(() => void) | null>(null);
+  const popupPublishTimeoutRef = useRef<number | null>(null);
+  const peerStateRef = useRef<ChartWindowPeerState>(initialChartWindowPeerState());
+  const messageClockRef = useRef<ChartWindowMessageClock>({ sequence: 0, sentAt: 0 });
+  const selectionOrderRef = useRef<ChartSelectionOrder | null>(null);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+
+  const stopPopupTracking = useCallback(() => {
+    popupPollCleanupRef.current?.();
+    popupPollCleanupRef.current = null;
+    if (popupPublishTimeoutRef.current != null) {
+      window.clearTimeout(popupPublishTimeoutRef.current);
+      popupPublishTimeoutRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
-    if (fromUrl) {
-      state.select({
-        ...state.selection,
-        ...fromUrl,
-        selectedAt: state.selection?.selectedAt ?? fromUrl.selectedAt,
-      } as AnalysisSelection);
-    }
-    // URL selection is authoritative only when the URL changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromUrl?.ticker, fromUrl?.market, fromUrl?.timeframe]);
+    if (invalidRoute) return;
+    selectSelection(initialSelection);
+  }, [initialSelection, invalidRoute, selectSelection]);
 
-  const updateSelection = useCallback(
-    (next: AnalysisSelection) => {
-      const changed =
-        selection.ticker !== next.ticker ||
-        selection.market !== next.market ||
-        selection.timeframe !== next.timeframe ||
-        selection.displayName !== next.displayName ||
-        selection.assetType !== next.assetType;
-      if (changed) state.select(next);
-      const nextLocation = `/ai-chart?${selectionQuery(next)}`;
-      if (!embedded && location !== nextLocation) navigate(nextLocation, { replace: true });
-    },
-    [embedded, location, navigate, selection, state],
-  );
+  useEffect(() => {
+    if (!embedded || !state.selection) return;
+    const normalized = supportedSelection(state.selection);
+    if (!normalized || sameSelection(selectionRef.current, normalized)) return;
+    selectionRef.current = normalized;
+    setSelection(normalized);
+    setAnalysis(null);
+  }, [embedded, state.selection]);
+
+  useEffect(() => {
+    if (embedded || externalMode || invalidRoute || typeof window === 'undefined') {
+      setExternalControlAvailable(false);
+      return;
+    }
+    const update = () => setExternalControlAvailable(
+      typeof BroadcastChannel !== 'undefined'
+      && isDesktopChartViewport(window.innerWidth, isMobileUserAgent(window.navigator.userAgent)),
+    );
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [embedded, externalMode, invalidRoute]);
+
+  const postWindowMessage = useCallback((
+    type: ChartWindowMessageType,
+    nextSelection?: AnalysisSelection,
+  ): ChartExternalWindowMessage | null => {
+    const channel = channelRef.current;
+    if (!channel) return null;
+    const clock = nextChartWindowMessageClock(messageClockRef.current);
+    messageClockRef.current = clock;
+    const message = type === 'selection'
+      ? nextSelection
+        ? createChartWindowMessage('selection', messageContextRef.current, clock, nextSelection)
+        : null
+      : createChartWindowMessage(type, messageContextRef.current, clock);
+    if (!message) return null;
+    channel.postMessage(message);
+    return message;
+  }, []);
+
+  const publishSelection = useCallback((next: AnalysisSelection) => {
+    const message = postWindowMessage('selection', next);
+    if (!message) return;
+    selectionOrderRef.current = selectionOrderFromMessage(message);
+  }, [postWindowMessage]);
+
+  const applySelection = useCallback((next: AnalysisSelection, publish: boolean) => {
+    const normalized = supportedSelection(next);
+    if (!normalized || sameSelection(selectionRef.current, normalized)) return;
+    selectionRef.current = normalized;
+    setSelection(normalized);
+    selectSelection(normalized);
+    setAnalysis(null);
+    if (publish) publishSelection(normalized);
+
+    if (!embedded && typeof window !== 'undefined') {
+      const nextLocation = buildChartPath(
+        normalized,
+        externalMode ? { syncId: syncSessionIdRef.current, pairId: pairIdRef.current } : undefined,
+      );
+      if (`${window.location.pathname}${window.location.search}` !== nextLocation) {
+        navigate(nextLocation, { replace: true });
+      }
+    }
+  }, [embedded, externalMode, navigate, publishSelection, selectSelection]);
+
+  useEffect(() => {
+    if (embedded || invalidRoute || typeof window === 'undefined') return;
+    if (typeof BroadcastChannel === 'undefined') {
+      setExternalControlAvailable(false);
+      if (externalMode) setExternalWindowStatus('이 브라우저는 외부 차트 동기화를 지원하지 않습니다.');
+      return;
+    }
+
+    const channel = new BroadcastChannel(chartExternalWindowChannel(syncSessionIdRef.current, pairIdRef.current));
+    channelRef.current = channel;
+    peerStateRef.current = initialChartWindowPeerState();
+    channel.onmessage = (event: MessageEvent<unknown>) => {
+      const accepted = acceptChartWindowMessage(event.data, {
+        sessionId: syncSessionIdRef.current,
+        pairId: pairIdRef.current,
+        localSourceId: sourceIdRef.current,
+        localRole: sourceRole,
+        origin: window.location.origin,
+      }, peerStateRef.current);
+      if (!accepted) return;
+      peerStateRef.current = accepted.state;
+      const { message } = accepted;
+      messageClockRef.current = {
+        sequence: messageClockRef.current.sequence,
+        sentAt: Math.max(messageClockRef.current.sentAt, message.sentAt),
+      };
+
+      if (message.type === 'ready') {
+        publishSelection(selectionRef.current);
+        if (externalMode) setExternalWindowStatus('본창과 안전하게 동기화되었습니다.');
+        return;
+      }
+      if (message.type === 'closed') {
+        if (externalMode) {
+          setExternalWindowStatus('본창 연결이 종료되었습니다. 이 창에서는 새 선택을 동기화하지 않습니다.');
+        } else {
+          stopPopupTracking();
+          popupRef.current = null;
+          setExternalWindowStatus('외부 차트 창이 닫혔습니다.');
+        }
+        return;
+      }
+      if (!shouldApplyChartSelection(message, selectionOrderRef.current)) return;
+      const remoteSelection = supportedSelection(message.selection);
+      if (!remoteSelection) return;
+
+      selectionOrderRef.current = selectionOrderFromMessage(message);
+      applySelection(mergeChartRouteSelection(remoteSelection, selectionRef.current) ?? remoteSelection, false);
+    };
+
+    const notifyReady = () => {
+      if (document.visibilityState === 'visible') postWindowMessage('ready');
+    };
+    const notifyClosed = () => {
+      postWindowMessage('closed');
+      if (!externalMode) {
+        try {
+          popupRef.current?.close();
+        } catch {
+          // Cleanup continues even if the popup handle is no longer accessible.
+        }
+      }
+    };
+    const cleanupLifecycle = attachChartWindowLifecycleListeners({
+      windowTarget: window,
+      documentTarget: document,
+      onBeforeUnload: notifyClosed,
+      onVisible: notifyReady,
+    });
+    postWindowMessage('ready');
+
+    return () => {
+      postWindowMessage('closed');
+      cleanupLifecycle();
+      channel.onmessage = null;
+      channel.close();
+      if (channelRef.current === channel) channelRef.current = null;
+      if (!externalMode) {
+        stopPopupTracking();
+        try {
+          popupRef.current?.close();
+        } catch {
+          // The popup may already be gone.
+        }
+        popupRef.current = null;
+      }
+    };
+  }, [applySelection, embedded, externalMode, invalidRoute, postWindowMessage, publishSelection, sourceRole, stopPopupTracking]);
+
+  const updateSelection = useCallback((next: AnalysisSelection) => {
+    applySelection(next, true);
+  }, [applySelection]);
+
+  const openExternalWindow = useCallback(() => {
+    if (!externalControlAvailable || invalidRoute) return;
+    const currentPopup = popupRef.current;
+    if (currentPopup && !currentPopup.closed) {
+      safeFocus(currentPopup);
+      publishSelection(selectionRef.current);
+      setExternalWindowStatus('이미 열린 외부 차트 창으로 이동했습니다.');
+      return;
+    }
+
+    const popup = window.open(
+      buildExternalChartPath(selectionRef.current, syncSessionIdRef.current, pairIdRef.current),
+      CHART_EXTERNAL_WINDOW_NAME,
+      externalChartWindowFeatures(window.screen),
+    );
+    if (!popup) {
+      setExternalWindowStatus('팝업이 차단되었습니다. 이 사이트의 팝업을 허용한 뒤 다시 시도하세요.');
+      return;
+    }
+
+    try {
+      popup.opener = null;
+    } catch {
+      // BroadcastChannel is the only synchronization path.
+    }
+    popupRef.current = popup;
+    safeFocus(popup);
+    setExternalWindowStatus('외부 차트 창을 열었습니다. 시장·종목·시간봉만 동기화합니다.');
+    stopPopupTracking();
+    popupPublishTimeoutRef.current = window.setTimeout(() => {
+      popupPublishTimeoutRef.current = null;
+      publishSelection(selectionRef.current);
+    }, 250);
+    popupPollCleanupRef.current = startChartPopupClosedPolling({
+      popup,
+      scheduler: {
+        setInterval: (handler, timeout) => window.setInterval(handler, timeout),
+        clearInterval: (handle) => window.clearInterval(handle),
+      },
+      onClosed: () => {
+        popupPollCleanupRef.current = null;
+        popupRef.current = null;
+        setExternalWindowStatus('외부 차트 창이 닫혔습니다.');
+      },
+    });
+  }, [externalControlAvailable, invalidRoute, publishSelection, stopPopupTracking]);
+
+  const closeExternalWindow = useCallback(() => {
+    postWindowMessage('closed');
+    window.close();
+  }, [postWindowMessage]);
 
   useEffect(() => {
     setAnalysis(null);
   }, [selection.market, selection.ticker, selection.timeframe]);
 
   return (
-    <div className={`h-full overflow-y-auto overscroll-contain bg-background ${embedded ? 'pb-4' : 'pb-24'}`}>
+    <div className={`h-full overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
       <header className="sticky top-0 z-20 border-b border-card-border bg-background/95 px-4 py-3 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center gap-3">
-          {!embedded && (
+          {!embedded && !externalMode && (
             <button
               type="button"
               aria-label="기술 화면으로 돌아가기"
@@ -131,14 +431,41 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             </button>
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-extrabold text-primary">실시간 기술 분석</p>
+            <p className="text-[11px] font-extrabold text-primary">{externalMode ? '외부 AI 차트' : '실시간 기술 분석'}</p>
             <h1 className="truncate text-lg font-black">AI 차트 생중계</h1>
           </div>
+          {!embedded && !externalMode && externalControlAvailable && (
+            <button
+              type="button"
+              data-testid="open-external-ai-chart"
+              onClick={openExternalWindow}
+              className="flex h-10 items-center gap-2 rounded-xl border border-card-border bg-card px-3 text-xs font-black"
+            >
+              <MonitorUp className="h-4 w-4" />
+              외부창
+            </button>
+          )}
+          {externalMode && (
+            <button
+              type="button"
+              data-testid="close-external-ai-chart"
+              aria-label="외부 AI 차트 닫기"
+              onClick={closeExternalWindow}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-card-border bg-card"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
           <div className="text-right text-[10px] font-bold text-muted-foreground">
             <p>{unifiedMarketLabel(selection.market)} · {selection.timeframe}</p>
             <p>공개 시세 읽기 전용</p>
           </div>
         </div>
+        {externalWindowStatus && (
+          <p data-testid="external-chart-status" className="mx-auto mt-2 max-w-7xl text-[10px] font-bold text-muted-foreground">
+            {externalWindowStatus}
+          </p>
+        )}
       </header>
 
       <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
@@ -175,7 +502,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
               </div>
             </div>
             <p className="mt-3 text-[10px] font-semibold leading-4 text-muted-foreground">
-              시장·종목·시간봉이 변경되면 이전 분석을 비우고 마지막 요청의 유효한 실제 캔들만 반영합니다.
+              시장·종목·시간봉 같은 명시적 선택만 본창과 외부창에 동기화합니다. 일반 시세 갱신은 상대 창의 차트 위치를 변경하지 않습니다.
             </p>
           </section>
 
@@ -268,7 +595,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
           </p>
         </aside>
       </main>
-      {!embedded && <BottomNav />}
+      {!embedded && !externalMode && <BottomNav />}
     </div>
   );
 }
