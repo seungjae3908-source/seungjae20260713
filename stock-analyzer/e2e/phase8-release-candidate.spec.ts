@@ -31,6 +31,7 @@ test('pending account sees only approval waiting screen', async ({ page }) => {
   await expect(page.getByTestId('phase8-pending-screen')).toBeVisible();
   await expect(page.getByTestId('phase8-regular-flow')).toHaveCount(0);
   await expect(page.getByTestId('phase8-admin-flow')).toHaveCount(0);
+  await expect(page.getByTestId('phase8-admin-order-button')).toBeDisabled();
   await assertNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
 });
@@ -41,13 +42,16 @@ test('associate gets basic information and all advanced routes remain blocked', 
   await expect(page.getByTestId('phase8-associate-screen')).toContainText('기본 정보 접근 성공');
   await expect(page.getByTestId('phase8-associate-denied')).toHaveCount(5);
   await expect(page.getByTestId('phase8-associate-screen')).toContainText('CAPABILITY_REQUIRED');
+  await expect(page.getByTestId('phase8-admin-order-button')).toBeDisabled();
   await assertNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
 });
 
-test('regular member completes futures to privacy-safe review flow', async ({ page }) => {
+test('regular member keeps analysis access but cannot use order controls', async ({ page }) => {
   const errors = await open(page);
   await chooseTier(page, 'regular');
+  await expect(page.getByTestId('phase8-order-access-state')).toContainText('관리자 전용 · 주문 불가');
+  await expect(page.getByTestId('phase8-admin-order-button')).toBeDisabled();
   await runSteps(page, 0, 10);
   await expect(page.getByTestId('phase8-sync-status')).toContainText('completed');
   await expect(page.getByTestId('phase8-safety-contract')).toContainText('orderSubmitted=false');
@@ -87,9 +91,11 @@ test('account switch uses isolated hashed local namespaces', async ({ page }) =>
   expect(errors).toEqual([]);
 });
 
-test('admin changes membership with reason and protects last active admin', async ({ page }) => {
+test('admin alone receives an enabled order button and member management', async ({ page }) => {
   const errors = await open(page);
   await chooseTier(page, 'admin');
+  await expect(page.getByTestId('phase8-order-access-state')).toContainText('관리자 주문 가능');
+  await expect(page.getByTestId('phase8-admin-order-button')).toBeEnabled();
   await expect(page.getByTestId('phase8-admin-flow')).toBeVisible();
   await page.getByLabel('대상 회원 등급').selectOption('regular');
   await page.getByLabel('관리자 변경 사유').fill('정회원 검증 승격');
@@ -112,6 +118,7 @@ for (const viewport of [
     await chooseTier(page, 'admin');
     await expect(page.getByTestId('phase8-regular-flow')).toBeVisible();
     await expect(page.getByTestId('phase8-admin-flow')).toBeVisible();
+    await expect(page.getByTestId('phase8-admin-order-button')).toBeEnabled();
     await assertNoHorizontalOverflow(page);
     expect(errors).toEqual([]);
   });

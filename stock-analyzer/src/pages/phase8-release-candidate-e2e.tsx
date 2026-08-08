@@ -42,6 +42,7 @@ export default function Phase8ReleaseCandidateE2EPage() {
   const [adminError, setAdminError] = useState('');
   const activeUser = USERS[userIndex];
   const namespace = useMemo(() => paperOwnerNamespace(activeUser), [activeUser]);
+  const canPlaceOrders = hasCapability(tier, 'canPlaceOrders');
 
   function resetFlow(nextTier = tier) {
     setCompleted(0); setSyncStatus('local-only'); setFailure(false); setTier(nextTier);
@@ -85,6 +86,14 @@ export default function Phase8ReleaseCandidateE2EPage() {
           <span className="self-center text-xs" data-testid="phase8-active-namespace">{namespace}</span>
         </div>
       </header>
+
+      <section className="rounded-3xl border border-card-border bg-card p-4" data-testid="phase8-order-access">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h2 className="font-black">주문 권한</h2><p className="mt-1 text-xs text-muted-foreground" data-testid="phase8-order-access-state">{canPlaceOrders ? '관리자 주문 가능' : '관리자 전용 · 주문 불가'}</p></div>
+          <button type="button" disabled={!canPlaceOrders} data-testid="phase8-admin-order-button" className="min-h-11 rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40">주문 확인</button>
+        </div>
+        <p className="mt-2 text-[11px] text-muted-foreground">권한 표시 fixture이며 네트워크 또는 주문 API를 호출하지 않습니다.</p>
+      </section>
 
       {tier === 'pending' ? <section className="rounded-3xl border border-amber-500/40 bg-card p-6 text-center" data-testid="phase8-pending-screen">
         <ShieldX className="mx-auto h-10 w-10 text-amber-500" /><h2 className="mt-3 text-lg font-black">일반회원 · 승인대기</h2><p className="mt-2 text-sm text-muted-foreground">승인 대기 화면, 계정 설정과 로그아웃만 사용할 수 있습니다.</p>
