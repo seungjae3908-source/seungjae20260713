@@ -9,6 +9,7 @@ import router, {
 } from './trade-automation';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
 import type {
+  CancelSplitChildrenInput,
   CreateSplitOrdersInput,
   SplitOrderRepository,
 } from '../services/trade-split-order.repository';
@@ -66,6 +67,22 @@ class SharedSplitRepository implements SplitOrderRepository {
     await this.trading.appendEvent(event);
     return activated;
   }
+
+  async cancelPlannedChildrenAtomic(input: CancelSplitChildrenInput) {
+    const current = await this.listOrdersByPlan(input.userId, input.planId, input.approvedPlanVersion);
+    const pending = current.filter((order) => order.state === 'PLANNED' && order.legSequenceNo >= input.fromSequenceNo);
+    if (pending.length !== input.events.length) return null;
+    for (const [index, order] of pending.entries()) {
+      await this.trading.saveOrder({
+        ...order,
+        state: 'CANCELED',
+        version: order.version + 1,
+        updatedAt: new Date().toISOString(),
+      });
+      await this.trading.appendEvent(input.events[index]!);
+    }
+    return this.listOrdersByPlan(input.userId, input.planId, input.approvedPlanVersion);
+  }
 }
 
 async function startServer(repository: InMemoryTradingRepository) {
@@ -100,7 +117,7 @@ async function close(server: import('node:http').Server) {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-test('concurrent split approval executes only the first child and only activates the second', async () => {
+test('concurrent paper split approval stays idempotent, revalidates next leg, and makes zero private requests', async () => {
   const repository = new InMemoryTradingRepository();
   const splitRepository = new SharedSplitRepository(repository);
   setTradeAutomationRepositoryFactoryForTests(() => repository);
@@ -123,6 +140,7 @@ test('concurrent split approval executes only the first child and only activates
     });
     assert.equal(connection.status, 200);
 
+    const observedAt = new Date().toISOString();
     const planned = await nativeFetch(`${baseUrl}/api/trade-automation/plans`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -144,8 +162,9 @@ test('concurrent split approval executes only the first child and only activates
         splitRatios: [50, 30, 20],
         signalReasons: ['route split fence'],
         marketSnapshot: {
-          observedAt: new Date().toISOString(),
-          dataDelayMs: 100,
+          observedAt,
+          riskObservedAt: observedAt,
+          dataDelayMs: 0,
           oneMinuteMovePercent: 0,
           spreadPercent: 0.1,
           orderbookGapPercent: 0.1,
@@ -157,11 +176,22 @@ test('concurrent split approval executes only the first child and only activates
           openPositionCount: 0,
           dailyOrderCount: 0,
           consecutiveLosses: 0,
+          currentPrice: 100000,
+          plannedPrice: 100000,
+          marketStatus: 'OPEN',
+          availableLiquidityKrw: 1000000,
+          estimatedSlippagePercent: 0.1,
+          estimatedFeePercent: 0.05,
+          signalState: 'condition_maintained',
+          signalObservedAt: observedAt,
         },
       }),
     });
     assert.equal(planned.status, 200);
-    const planId = (await planned.json()).plan.id;
+    const plannedBody = await planned.json();
+    const planId = plannedBody.plan.id;
+    assert.equal(plannedBody.plan.state, 'APPROVAL_PENDING');
+    assert.equal('riskEnvelope' in plannedBody.plan, false);
 
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
@@ -190,10 +220,12 @@ test('concurrent split approval executes only the first child and only activates
     })));
 
     const successful = approvals.filter((response) => response.status === 200);
-    assert.ok(successful.length >= 1 && successful.length <= 2, JSON.stringify(approvals));
-    const successfulBodies = successful.map((response) => JSON.parse(response.body));
-    const body = successfulBodies[0]!;
-    assert.equal(new Set(successfulBodies.map((value) => value.order.id)).size, 1);
+    assert.equal(successful.length, 1, JSON.stringify(approvals));
+    const body = JSON.parse(successful[0]!.body);
+    assert.equal(body.plan.riskEnvelope.version, 1);
+    assert.equal(body.plan.riskEnvelope.investmentKrw, 100000);
+    assert.equal(body.plan.riskEnvelope.maxSplitCount, 3);
+    assert.equal(body.plan.riskEnvelope.allowCancelUnfilled, true);
     assert.equal(body.order.legSequenceNo, 1);
     assert.equal(body.order.state, 'FILLED');
     assert.equal(body.order.requestedQuantity, 0.5);
@@ -212,7 +244,7 @@ test('concurrent split approval executes only the first child and only activates
     const events = await repository.listEvents(USER);
     assert.equal(events.filter((event) => event.reason === 'PAPER_BROKER_ACCEPTED').length, 1);
     assert.equal(events.filter((event) => event.reason === 'PAPER_BROKER_FILLED').length, 1);
-    assert.equal(events.filter((event) => event.reason === 'PREVIOUS_SPLIT_CHILD_FILLED').length, 1);
+    assert.equal(events.filter((event) => event.reason === 'SPLIT_REVALIDATION_PASSED').length, 1);
     assert.equal(outbound, 0);
   } finally {
     globalThis.fetch = nativeFetch;
