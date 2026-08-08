@@ -1,4 +1,5 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { buildSignalScannerRequestUrl } from './signal-scanner-url';
 
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
@@ -202,36 +203,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function scannerPath(request: SignalScannerRequest): string {
-  if (request.assetClass === 'stock') return '/api/market/scan';
-  return request.assetClass === 'coin_spot'
-    ? '/api/scanner/crypto/spot'
-    : '/api/scanner/crypto/futures';
-}
-
-function query(request: SignalScannerRequest): string {
-  const params = new URLSearchParams({
-    strategy: request.strategy,
-    timeframe: request.timeframe,
-    cursor: String(Math.max(0, request.cursor)),
-    batchSize: String(request.batchSize),
-    minimumScore: String(request.minimumScore),
-    maximumRiskScore: String(request.maximumRiskScore),
-  });
-  if (request.assetClass === 'stock') {
-    params.set('market', request.market === 'US' ? 'US' : 'KR');
-    params.set('indicators', request.conditions.join(','));
-  } else {
-    params.set('condition', request.condition);
-  }
-  return params.toString();
-}
-
 export async function fetchSignalScanner(
   request: SignalScannerRequest,
   signal: AbortSignal,
 ): Promise<ScannerResponse> {
-  const response = await authorizedFetch(`${scannerPath(request)}?${query(request)}`, {
+  const response = await authorizedFetch(buildSignalScannerRequestUrl(request), {
     signal,
     cache: 'no-store',
     headers: {
