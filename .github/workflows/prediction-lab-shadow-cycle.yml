@@ -9,6 +9,7 @@ on:
       - market-prediction-lab/docs/shadow-trigger.json
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -65,6 +66,8 @@ jobs:
 
       - name: Commit compact shadow state and summary
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -73,6 +76,12 @@ jobs:
           git commit -m "data: advance isolated shadow prediction ledger"
           git pull --rebase origin feature/prediction-lab-standalone
           git push origin HEAD:feature/prediction-lab-standalone
+          pushed_sha="$(git rev-parse HEAD)"
+          gh workflow run futures-public-network-smoke.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref feature/prediction-lab-standalone \
+            -f target_sha="$pushed_sha" \
+            -f checkout_ref="$pushed_sha"
 
       - name: Fail when shadow cycle failed
         if: always() && steps.shadow.outcome != 'success'
