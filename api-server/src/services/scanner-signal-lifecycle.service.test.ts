@@ -5,9 +5,10 @@ import {
   clearScannerSignalLifecycleForTests,
   getScannerLifecycleSnapshot,
   getScannerSignalLifecycleSnapshot,
+  scannerLifecycleStateForRiskBridge,
   setScannerExternalLifecycleState,
 } from './scanner-signal-lifecycle.service';
-import type { ScannerSignalCard } from './scanner-signal.types';
+import type { ScannerSignalCard, ScannerSignalState } from './scanner-signal.types';
 
 function card(overrides: Partial<ScannerSignalCard> = {}): ScannerSignalCard {
   const observedAt = new Date('2026-08-05T00:00:00.000Z').toISOString();
@@ -86,6 +87,32 @@ test('scanner lifecycle reaches approval pending once and never submits an order
   assert.equal(repeated.cards[0].signalState, 'APPROVAL_PENDING');
   assert.equal(repeated.alerts.length, 0);
   assert.ok(approvalAlert);
+  assert.equal(getScannerSignalLifecycleSnapshot('member-1', repeated.cards[0].signalId)?.state, 'READY_FOR_APPROVAL');
+});
+
+test('DATA_UNTRUSTED invalidates before ARMED, ENTRY_ZONE or approval can continue', () => {
+  clearScannerSignalLifecycleForTests();
+  const now = Date.parse('2026-08-05T01:00:00.000Z');
+  let current = card();
+  for (let index = 0; index < 3; index += 1) {
+    current = applyScannerSignalLifecycle('member-untrusted', [current], now + index * 1_000).cards[0];
+  }
+  assert.equal(current.signalState, 'ARMED');
+
+  const invalidated = applyScannerSignalLifecycle('member-untrusted', [card({
+    signalId: current.signalId,
+    dataState: 'untrusted',
+    dataQuality: {
+      state: 'DATA_UNTRUSTED',
+      score: 40,
+      strongSignalAllowed: false,
+      issues: [{ code: 'STALE_TIMESTAMP', severity: 'blocking', message: 'stale' }],
+    },
+    strongSignalEligible: false,
+  })], now + 4_000);
+  assert.equal(invalidated.cards[0].signalState, 'INVALIDATED');
+  assert.equal(invalidated.alerts.length, 0);
+  assert.equal(getScannerSignalLifecycleSnapshot('member-untrusted', invalidated.cards[0].signalId)?.state, 'INVALIDATED');
 });
 
 test('untrusted or weakened signal invalidates and re-entry starts a new cycle', () => {
@@ -102,6 +129,18 @@ test('untrusted or weakened signal invalidates and re-entry starts a new cycle',
   const reentry = applyScannerSignalLifecycle('member-1', [card()], now + 2_000);
   assert.match(reentry.cards[0].signalId, /:cycle:2$/);
   assert.equal(reentry.cards[0].signalState, 'CANDIDATE');
+});
+
+test('scalping and swing keep independent lifecycle identity', () => {
+  clearScannerSignalLifecycleForTests();
+  const now = Date.parse('2026-08-05T01:00:00.000Z');
+  const scalping = applyScannerSignalLifecycle('member-strategy', [card({ strategyMode: 'scalping' })], now).cards[0];
+  const swing = applyScannerSignalLifecycle('member-strategy', [card({ strategyMode: 'swing' })], now + 1_000).cards[0];
+  assert.match(scalping.signalId, /:strategy:scalping$/);
+  assert.match(swing.signalId, /:strategy:swing$/);
+  assert.notEqual(scalping.signalId, swing.signalId);
+  assert.equal(scalping.signalState, 'CANDIDATE');
+  assert.equal(swing.signalState, 'CANDIDATE');
 });
 
 test('order-owned states are synchronized externally and scanner does not advance them', () => {
@@ -123,6 +162,48 @@ test('order-owned states are synchronized externally and scanner does not advanc
   assert.equal(getScannerSignalLifecycleSnapshot('member-3', current.signalId)?.state, 'approved');
 });
 
+test('risk bridge maps every known state explicitly and unknown future states fail closed', () => {
+  const expected = new Map<ScannerSignalState, string>([
+    ['CANDIDATE', 'DETECTED'],
+    ['CONFIRMED', 'WATCHING'],
+    ['ARMED', 'WATCHING'],
+    ['ENTRY_ZONE', 'WATCHING'],
+    ['APPROVAL_PENDING', 'READY_FOR_APPROVAL'],
+    ['APPROVED', 'approved'],
+    ['EXECUTING', 'approved'],
+    ['PARTIALLY_FILLED', 'approved'],
+    ['FILLED', 'approved'],
+    ['MANAGING', 'approved'],
+    ['CLOSED', 'INVALIDATED'],
+    ['INVALIDATED', 'INVALIDATED'],
+    ['EXPIRED', 'EXPIRED'],
+    ['REJECTED', 'INVALIDATED'],
+    ['CANCELLED', 'INVALIDATED'],
+    ['DETECTED', 'DETECTED'],
+    ['WATCHING', 'WATCHING'],
+    ['READY_FOR_APPROVAL', 'READY_FOR_APPROVAL'],
+    ['WEAKENED', 'WEAKENED'],
+  ]);
+  for (const [state, legacy] of expected) {
+    assert.equal(scannerLifecycleStateForRiskBridge(state), legacy, state);
+  }
+  assert.equal(scannerLifecycleStateForRiskBridge('FUTURE_SCANNER_STATE'), 'INVALIDATED');
+  assert.notEqual(scannerLifecycleStateForRiskBridge('APPROVAL_PENDING'), 'approved');
+});
+
+test('external bridge rejects unknown state at runtime', () => {
+  clearScannerSignalLifecycleForTests();
+  const now = Date.parse('2026-08-05T01:00:00.000Z');
+  const current = applyScannerSignalLifecycle('member-external', [card()], now).cards[0];
+  assert.equal(setScannerExternalLifecycleState(
+    'member-external',
+    current.signalId,
+    'FUTURE_SCANNER_STATE' as never,
+    now + 1_000,
+  ), false);
+  assert.equal(getScannerLifecycleSnapshot('member-external', current.signalId)?.state, 'CANDIDATE');
+});
+
 test('expired signal never produces an approval alert', () => {
   clearScannerSignalLifecycleForTests();
   const result = applyScannerSignalLifecycle(
@@ -132,4 +213,5 @@ test('expired signal never produces an approval alert', () => {
   );
   assert.equal(result.cards[0].signalState, 'EXPIRED');
   assert.equal(result.alerts.length, 0);
+  assert.equal(getScannerSignalLifecycleSnapshot('member-2', result.cards[0].signalId)?.state, 'EXPIRED');
 });
