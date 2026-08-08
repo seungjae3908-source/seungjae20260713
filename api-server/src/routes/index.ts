@@ -23,6 +23,7 @@ import tradeAutomationRouter from './trade-automation';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
 import unifiedSearchRouter from './unified-search';
+import accountConnectionsRouter from './account-connections';
 import {
   requireAdmin,
   requireAuthenticated,
@@ -43,6 +44,12 @@ router.use('/', healthRouter);
 router.use('/admin', adminRouter);
 
 router.use(requireAuthenticated);
+
+// Brokerage/exchange account connectivity is intentionally read-only and
+// admin-only because credentials are server-scoped. Existing order/cancel/
+// transfer endpoints remain blocked below and are not reachable through this
+// router.
+router.use('/account-connections', requireAdmin, accountConnectionsRouter);
 
 // Canonical AI Scanner routes must be registered before the legacy market
 // router. This makes /api/market/scan authenticated, capability protected,
