@@ -10,7 +10,7 @@ on:
       data_probe_path:
         description: API path that must return valid JSON before promotion
         required: false
-        default: /api/quotes?tickers=005930
+        default: /api/healthz/data-plane
         type: string
       force_rebuild:
         description: Rebuild even when the selected commit is already active
@@ -20,9 +20,14 @@ on:
   pull_request:
     paths:
       - .github/workflows/production-deploy.yml
+      - .github/workflows/production-one-time-approval.yml
+      - .github/workflows/futures-public-network-smoke.yml
       - .github/workflows/staging-readiness.yml
       - ops/deploy-production.sh
       - ops/deploy-staging.sh
+      - api-server/scripts/production-ci-provenance.cjs
+      - api-server/scripts/verify-production-ci-provenance-contract.mjs
+      - api-server/scripts/verify-production-data-plane-probe-contract.mjs
       - api-server/scripts/verify-phase10-deployment-safety.mjs
       - api-server/scripts/build-staging-verdict.mjs
       - api-server/scripts/verify-staging-verdict.mjs
@@ -54,6 +59,10 @@ jobs:
           bash -n ops/deploy-staging.sh
       - name: Verify Phase 10 deployment safety contract
         run: node api-server/scripts/verify-phase10-deployment-safety.mjs
+      - name: Verify Production CI provenance contract
+        run: node api-server/scripts/verify-production-ci-provenance-contract.mjs
+      - name: Verify Production data-plane probe contract
+        run: node api-server/scripts/verify-production-data-plane-probe-contract.mjs
 
   approval-gate:
     name: Validate immutable main revision, CI provenance, and exact staging verdict
@@ -70,7 +79,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Require an immutable commit from main
+      - name: Require an immutable exact current main commit
         id: target
         env:
           TARGET_SHA: ${{ inputs.sha }}
@@ -81,20 +90,21 @@ jobs:
             exit 1
           }
           TARGET_SHA="${TARGET_SHA,,}"
-          git fetch --no-tags origin main "$TARGET_SHA"
+          git fetch --no-tags origin main
+          MAIN_SHA="$(git rev-parse FETCH_HEAD^{commit})"
+          git fetch --no-tags origin "$TARGET_SHA"
           git cat-file -e "$TARGET_SHA^{commit}"
-          git merge-base --is-ancestor "$TARGET_SHA" origin/main || {
-            echo 'The requested revision is not contained in main.' >&2
+          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || {
+            echo "Production deployment target must equal exact current main: target=$TARGET_SHA main=$MAIN_SHA" >&2
             exit 1
           }
           echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
-      - name: Require verified statuses and a successful main-push CI run
+      - name: Require verified statuses and exact Application CI provenance
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         with:
           script: |
-            const targetSha = process.env.TARGET_SHA;
             const required = [
               'application-ci/verified',
               'browser-ui/verified',
@@ -103,20 +113,25 @@ jobs:
               'ai-privacy/verified',
               'futures-public-network-smoke/verified',
             ];
+            const {
+              REQUIRED_PRODUCTION_STATUSES,
+              evaluateProductionCiProvenance,
+              inspectRequiredStatusEvidence,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-ci-provenance.cjs`);
+            if (JSON.stringify(required) !== JSON.stringify(REQUIRED_PRODUCTION_STATUSES)) {
+              core.setFailed('Production workflow status list differs from the shared provenance contract.');
+              return;
+            }
+            const targetSha = process.env.TARGET_SHA;
             const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: targetSha,
               per_page: 100,
             });
-            statuses.sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
-            const latest = new Map();
-            for (const status of statuses) {
-              if (!latest.has(status.context)) latest.set(status.context, status.state);
-            }
-            const missing = required.filter((name) => latest.get(name) !== 'success');
-            if (missing.length) {
-              core.setFailed(`Required successful statuses missing: ${missing.join(', ')}`);
+            const evidence = inspectRequiredStatusEvidence(statuses);
+            if (!evidence.ok) {
+              core.setFailed(`Required CI status provenance rejected: ${evidence.reason}.`);
               return;
             }
             const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
@@ -124,21 +139,21 @@ jobs:
               repo: context.repo.repo,
               head_sha: targetSha,
               branch: 'main',
-              event: 'push',
               status: 'completed',
               per_page: 100,
             });
-            const verifiedRun = runs.find((run) =>
-              run.name === 'Application CI'
-              && run.head_sha === targetSha
-              && run.head_branch === 'main'
-              && run.event === 'push'
-              && run.status === 'completed'
-              && run.conclusion === 'success'
-            );
-            if (!verifiedRun) {
-              core.setFailed('No successful Application CI push run on main exists for the requested SHA. Status contexts alone are not sufficient.');
+            const run = runs.find((candidate) => Number(candidate.id) === evidence.runId);
+            const verified = evaluateProductionCiProvenance({
+              targetSha,
+              currentMainSha: targetSha,
+              statuses,
+              run,
+            });
+            if (!verified.ok) {
+              core.setFailed(`Application CI provenance rejected: ${verified.reason}.`);
+              return;
             }
+            core.info(`Required CI 6/6 verified by exact Application CI Run ID ${verified.runId} (${verified.event}).`);
       - name: Locate successful exact-SHA staging verdict artifact
         id: verdict-artifact
         uses: actions/github-script@v7
@@ -299,7 +314,7 @@ jobs:
             echo "- Approved SHA: \`$TARGET_SHA\`"
             echo '- Trigger: explicit workflow dispatch only'
             echo '- Environment: `production`'
-            echo '- CI provenance: successful `Application CI` push run on `main` required'
+            echo '- CI provenance: exact current main, required status 6/6, and one successful official `Application CI` run required'
             echo "- Release-ready staging evidence Run ID: \`${{ needs.approval-gate.outputs.staging_run_id }}\`"
             echo '- staging-verdict.json: exact SHA, failed=0, skipped=0, release_ready=true'
             echo '- Rollback: automatic on failed verification'

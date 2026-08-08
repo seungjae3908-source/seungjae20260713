@@ -6,76 +6,62 @@ import {
   resolveAppRoutePresentation,
 } from '../src/lib/app-navigation';
 
-const group = (id: 'assets' | 'technical' | 'settings') => {
+const group = (id: 'assets' | 'technical' | 'information' | 'settings') => {
   const found = APP_NAVIGATION.find((item) => item.id === id);
   if (!found) throw new Error(`navigation group not found: ${id}`);
   return found;
 };
 
-test('active product routes keep the correct top-level navigation state', () => {
-  expect(navigationGroupMatches(group('assets'), APP_ROUTES.stocksKr)).toBe(true);
-  expect(navigationGroupMatches(group('assets'), APP_ROUTES.stocksUs)).toBe(true);
-  expect(navigationGroupMatches(group('assets'), APP_ROUTES.coinsSpot)).toBe(true);
-  expect(navigationGroupMatches(group('assets'), APP_ROUTES.coinsFutures)).toBe(true);
-  expect(navigationGroupMatches(group('assets'), APP_ROUTES.recommendations)).toBe(true);
+test('actual product routes keep the correct top-level navigation state', () => {
+  for (const path of [
+    APP_ROUTES.assets,
+    APP_ROUTES.stocksKr,
+    APP_ROUTES.stocksUs,
+    APP_ROUTES.coinsSpot,
+    APP_ROUTES.coinsFutures,
+    APP_ROUTES.marketOverview,
+    APP_ROUTES.marketRankings,
+    APP_ROUTES.marketBrowser,
+    APP_ROUTES.recommendations,
+  ]) {
+    expect(navigationGroupMatches(group('assets'), path), path).toBe(true);
+  }
+  expect(navigationGroupMatches(group('technical'), APP_ROUTES.scanner)).toBe(true);
+  expect(navigationGroupMatches(group('technical'), APP_ROUTES.aiChart)).toBe(true);
+  expect(navigationGroupMatches(group('technical'), APP_ROUTES.autoTrading)).toBe(true);
   expect(navigationGroupMatches(group('technical'), APP_ROUTES.backtests)).toBe(true);
   expect(navigationGroupMatches(group('technical'), APP_ROUTES.paperTrading)).toBe(true);
+  expect(navigationGroupMatches(group('information'), APP_ROUTES.learn)).toBe(true);
+  expect(navigationGroupMatches(group('information'), APP_ROUTES.aiChat)).toBe(true);
   expect(navigationGroupMatches(group('settings'), APP_ROUTES.admin)).toBe(true);
 });
 
-test('route presentation metadata defines titles and breadcrumbs without changing App.tsx', () => {
-  expect(resolveAppRoutePresentation('/stocks/kr')).toMatchObject({
-    title: '국내주식 정보',
-    breadcrumb: ['종목', '국내주식'],
-    groupId: 'assets',
-  });
-  expect(resolveAppRoutePresentation('/stocks/us')).toMatchObject({
-    title: '미국주식 정보',
-    breadcrumb: ['종목', '미국주식'],
-    groupId: 'assets',
-  });
-  expect(resolveAppRoutePresentation('/coins/spot')).toMatchObject({
-    title: '코인 현물 정보',
-    breadcrumb: ['종목', '코인 현물'],
-    groupId: 'assets',
-  });
-  expect(resolveAppRoutePresentation('/coins/futures')).toMatchObject({
-    title: '코인 선물 정보',
-    breadcrumb: ['종목', '코인 선물'],
-    groupId: 'assets',
-  });
-  expect(resolveAppRoutePresentation('/recommendations')).toMatchObject({
-    title: 'AI 추천',
-    breadcrumb: ['종목', 'AI 추천'],
-    groupId: 'assets',
-  });
-  expect(resolveAppRoutePresentation('/backtests?symbol=BTCUSDT')).toMatchObject({
-    title: '백테스트',
-    breadcrumb: ['기술', '백테스트'],
-    groupId: 'technical',
-  });
-  expect(resolveAppRoutePresentation('/paper-trading')).toMatchObject({
-    title: '모의매매',
-    breadcrumb: ['기술', '모의매매'],
-    groupId: 'technical',
-  });
-  expect(resolveAppRoutePresentation('/stock/005930?back=%2Fstocks')).toMatchObject({
-    title: '종목 상세',
-    breadcrumb: ['종목', '종목 상세'],
-    groupId: 'assets',
-  });
-  expect(resolveAppRoutePresentation('/admin')).toMatchObject({
-    title: '회원 관리',
-    breadcrumb: ['설정', '회원 관리'],
-    groupId: 'settings',
-  });
+test('route presentation metadata follows final-main market ownership', () => {
+  const expectations = [
+    [APP_ROUTES.stocksKr, '국내주식 정보', ['종목', '국내주식 정보']],
+    [APP_ROUTES.stocksUs, '미국주식 정보', ['종목', '미국주식 정보']],
+    [APP_ROUTES.coinsSpot, '코인 현물 정보', ['종목', '코인 현물 정보']],
+    [APP_ROUTES.coinsFutures, '코인 선물 정보', ['종목', '코인 선물 정보']],
+    [APP_ROUTES.scanner, 'AI 신호검색기', ['기술', 'AI 신호검색기']],
+    [APP_ROUTES.aiChart, 'AI 차트', ['기술', 'AI 차트']],
+    [APP_ROUTES.autoTrading, '승인형 주문', ['기술', '승인형 주문']],
+    [APP_ROUTES.marketOverview, '지수·시황', ['종목', '지수·시황']],
+  ] as const;
+
+  for (const [path, title, breadcrumb] of expectations) {
+    expect(resolveAppRoutePresentation(path), path).toMatchObject({ title, breadcrumb });
+  }
 });
 
-test('transient and test-only routes stay out of product menu contracts', () => {
+test('aliases, transient routes, and test routes do not become duplicate product menu entries', () => {
+  expect(resolveAppRoutePresentation('/search')).toMatchObject({ title: '통합검색', groupId: 'assets' });
   expect(resolveAppRoutePresentation('/crypto/search')).toMatchObject({ transient: true });
   expect(resolveAppRoutePresentation('/crypto/BTC')).toMatchObject({ transient: true });
   expect(resolveAppRoutePresentation('/__phase12-trade-automation-e2e')).toMatchObject({ testOnly: true });
 
+  const menuHrefs = APP_NAVIGATION.flatMap((item) => item.menu?.map((child) => child.href) ?? []);
+  expect(menuHrefs).not.toContain(APP_ROUTES.unifiedSearchAlias);
+  expect(new Set(menuHrefs).size).toBe(menuHrefs.length);
   for (const navGroup of APP_NAVIGATION) {
     expect(navigationGroupMatches(navGroup, '/__phase12-trade-automation-e2e')).toBe(false);
   }
