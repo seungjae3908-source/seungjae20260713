@@ -111,6 +111,8 @@ run_sql "verify final trade order atomicity and admin-only RLS" "api-server/supa
 run_sql "apply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
 run_sql "reapply risk envelope and atomic pending-split cancellation idempotently" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
 run_sql "verify risk envelope invariant and fast-move split cancellation" "api-server/supabase/test/trade_risk_envelope_kill_switch_integration.sql"
+echo "[phase8-db] verify concurrent fast-move split cancellation race"
+bash "${ROOT_DIR}/api-server/scripts/verify-trade-split-cancel-concurrency.sh"
 
 echo "[phase8-db] verify failed migration transaction leaves no partial object"
 if "${PSQL[@]}" --command "begin; create table public.phase8_partial_failure_probe(id integer); select 1 / 0; commit;"; then
@@ -151,6 +153,8 @@ run_sql "recheck explicit paper privileges after reapply" "api-server/supabase/t
 run_sql "recheck audit privileges and administrator-only RLS after reapply" "api-server/supabase/test/member_permission_audit_privileges_integration.sql"
 run_sql "recheck final trade order atomicity and admin-only RLS after reapply" "api-server/supabase/test/trade_order_atomicity_admin_rls_integration.sql"
 run_sql "recheck risk envelope invariant and fast-move split cancellation after reapply" "api-server/supabase/test/trade_risk_envelope_kill_switch_integration.sql"
+echo "[phase8-db] recheck concurrent fast-move split cancellation race after reapply"
+bash "${ROOT_DIR}/api-server/scripts/verify-trade-split-cancel-concurrency.sh"
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
 echo "[phase8-db] disposable database and atomic staging bootstrap verification completed"
