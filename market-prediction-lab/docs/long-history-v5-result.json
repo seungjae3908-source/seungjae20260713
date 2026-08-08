@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1786231018441,
+  "generatedAt": 1786231027928,
   "mode": "backtest-only",
-  "strategyCandidate": "V3_VOLUME_TREND_FILTER",
+  "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
   "developmentStartTime": 1577836800000,
   "developmentEndTime": 1735689599999,
   "validationStartTime": 1735689600000,
@@ -13,12 +13,12 @@
   "optimizations": [
     {
       "schemaVersion": 1,
-      "strategyCandidate": "V3_VOLUME_TREND_FILTER",
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
       "market": "CRYPTO_SPOT",
       "symbol": "USDT-BTC",
       "side": "long",
       "status": "v2_frozen_not_retested",
-      "reason": "V2 already passed independent validation; V3 does not retune a frozen candidate before the final holdout.",
+      "reason": "V2 already passed independent validation; V5 does not retune a frozen BTC candidate before the final holdout.",
       "v2Parameters": {
         "fastPeriod": 10,
         "slowPeriod": 80,
@@ -37,7 +37,7 @@
     },
     {
       "schemaVersion": 1,
-      "strategyCandidate": "V3_VOLUME_TREND_FILTER",
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
       "market": "CRYPTO_SPOT",
       "symbol": "USDT-ETH",
       "side": "long",
@@ -77,7 +77,7 @@
         "finalHoldoutStartTime": 1767225600000,
         "finalHoldoutUsedForSelection": false
       },
-      "candidateCount": 27,
+      "candidateCount": 36,
       "developmentMinimumTrades": 24,
       "baseline": {
         "development": {
@@ -99,92 +99,20 @@
           "finalCapital": 1020942.2277195035
         }
       },
-      "leaders": [
-        {
-          "leaderType": "returnLeader",
-          "filter": {
-            "rvolMin": 0.9,
-            "volumeExpansionMin": 0.9,
-            "trendStrengthMin": 0.8
-          },
-          "development": {
-            "returnPercent": 12.030699747117696,
-            "successRatePercent": 41.37931034482759,
-            "profitFactor": 1.6179817502874814,
-            "maximumDrawdownPercent": 6.072337441222371,
-            "expectancy": 4148.517154178516,
-            "trades": 29,
-            "finalCapital": 1120306.997471177
-          },
-          "validation": {
-            "returnPercent": -4.115483967861903,
-            "successRatePercent": 0,
-            "profitFactor": 0,
-            "maximumDrawdownPercent": 4.115483967861894,
-            "expectancy": -10288.709919654757,
-            "trades": 4,
-            "finalCapital": 958845.160321381
-          },
-          "comparison": {
-            "verdict": "reject",
-            "returnDeltaPercentagePoints": -6.209706739812253,
-            "successRateDeltaPercentagePoints": -37.5,
-            "profitFactorDelta": -1.4050898757883399,
-            "maximumDrawdownDeltaPercentagePoints": 1.043213375334605,
-            "tradeCountDelta": -4,
-            "minimumTrades": 4,
-            "weightedScoreUsed": false
-          }
-        }
-      ],
-      "preferred": {
-        "leaderType": "returnLeader",
-        "filter": {
-          "rvolMin": 0.9,
-          "volumeExpansionMin": 0.9,
-          "trendStrengthMin": 0.8
-        },
-        "development": {
-          "returnPercent": 12.030699747117696,
-          "successRatePercent": 41.37931034482759,
-          "profitFactor": 1.6179817502874814,
-          "maximumDrawdownPercent": 6.072337441222371,
-          "expectancy": 4148.517154178516,
-          "trades": 29,
-          "finalCapital": 1120306.997471177
-        },
-        "validation": {
-          "returnPercent": -4.115483967861903,
-          "successRatePercent": 0,
-          "profitFactor": 0,
-          "maximumDrawdownPercent": 4.115483967861894,
-          "expectancy": -10288.709919654757,
-          "trades": 4,
-          "finalCapital": 958845.160321381
-        },
-        "comparison": {
-          "verdict": "reject",
-          "returnDeltaPercentagePoints": -6.209706739812253,
-          "successRateDeltaPercentagePoints": -37.5,
-          "profitFactorDelta": -1.4050898757883399,
-          "maximumDrawdownDeltaPercentagePoints": 1.043213375334605,
-          "tradeCountDelta": -4,
-          "minimumTrades": 4,
-          "weightedScoreUsed": false
-        }
-      },
-      "status": "v3_research_hold",
+      "leaders": [],
+      "preferred": null,
+      "status": "v5_research_hold",
       "liveOrderAllowed": false,
       "privateAccountRequestAllowed": false
     },
     {
       "schemaVersion": 1,
-      "strategyCandidate": "V3_VOLUME_TREND_FILTER",
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
       "market": "CRYPTO_FUTURES",
       "symbol": "BTCUSDT",
       "side": "long",
       "status": "v2_frozen_not_retested",
-      "reason": "V2 already passed independent validation; V3 does not retune a frozen candidate before the final holdout.",
+      "reason": "V2 already passed independent validation; V5 does not retune a frozen BTC candidate before the final holdout.",
       "v2Parameters": {
         "fastPeriod": 8,
         "slowPeriod": 30,
@@ -203,12 +131,12 @@
     },
     {
       "schemaVersion": 1,
-      "strategyCandidate": "V3_VOLUME_TREND_FILTER",
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
       "market": "CRYPTO_FUTURES",
       "symbol": "BTCUSDT",
       "side": "short",
       "status": "v2_frozen_not_retested",
-      "reason": "V2 already passed independent validation; V3 does not retune a frozen candidate before the final holdout.",
+      "reason": "V2 already passed independent validation; V5 does not retune a frozen BTC candidate before the final holdout.",
       "v2Parameters": {
         "fastPeriod": 12,
         "slowPeriod": 30,
@@ -227,7 +155,7 @@
     },
     {
       "schemaVersion": 1,
-      "strategyCandidate": "V3_VOLUME_TREND_FILTER",
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
       "market": "CRYPTO_FUTURES",
       "symbol": "ETHUSDT",
       "side": "long",
@@ -267,7 +195,7 @@
         "finalHoldoutStartTime": 1767225600000,
         "finalHoldoutUsedForSelection": false
       },
-      "candidateCount": 27,
+      "candidateCount": 36,
       "developmentMinimumTrades": 35,
       "baseline": {
         "development": {
@@ -291,13 +219,13 @@
       },
       "leaders": [],
       "preferred": null,
-      "status": "v3_research_hold",
+      "status": "v5_research_hold",
       "liveOrderAllowed": false,
       "privateAccountRequestAllowed": false
     },
     {
       "schemaVersion": 1,
-      "strategyCandidate": "V3_VOLUME_TREND_FILTER",
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
       "market": "CRYPTO_FUTURES",
       "symbol": "ETHUSDT",
       "side": "short",
@@ -337,7 +265,7 @@
         "finalHoldoutStartTime": 1767225600000,
         "finalHoldoutUsedForSelection": false
       },
-      "candidateCount": 27,
+      "candidateCount": 36,
       "developmentMinimumTrades": 16,
       "baseline": {
         "development": {
@@ -361,7 +289,7 @@
       },
       "leaders": [],
       "preferred": null,
-      "status": "v3_research_hold",
+      "status": "v5_research_hold",
       "liveOrderAllowed": false,
       "privateAccountRequestAllowed": false
     }

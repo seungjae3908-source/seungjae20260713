@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1786229689284,
+  "generatedAt": 1786231025965,
   "mode": "backtest-only",
   "strategyCandidate": "V4_REGIME_MOMENTUM_FILTER",
   "developmentStartTime": 1577836800000,
