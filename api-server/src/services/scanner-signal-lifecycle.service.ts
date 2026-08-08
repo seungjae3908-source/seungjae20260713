@@ -15,6 +15,15 @@ type LifecycleRecord = {
   lastAlertKey: string | null;
 };
 
+type LegacyTradingLifecycleState =
+  | 'DETECTED'
+  | 'WATCHING'
+  | 'READY_FOR_APPROVAL'
+  | 'WEAKENED'
+  | 'INVALIDATED'
+  | 'EXPIRED'
+  | 'approved';
+
 const records = new Map<string, LifecycleRecord>();
 const RECORD_TTL_MS = 7 * 24 * 60 * 60_000;
 const SCANNER_TERMINAL_STATES = new Set<ScannerSignalState>([
@@ -69,6 +78,20 @@ function normalizedPrevious(previous: ScannerSignalState | null): ScannerSignalS
   if (previous === 'READY_FOR_APPROVAL') return 'APPROVAL_PENDING';
   if (previous === 'WEAKENED') return 'INVALIDATED';
   return previous;
+}
+
+function legacyTradingState(state: ScannerSignalState): LegacyTradingLifecycleState {
+  if (state === 'CANDIDATE' || state === 'DETECTED') return 'DETECTED';
+  if (state === 'CONFIRMED' || state === 'ARMED' || state === 'ENTRY_ZONE' || state === 'WATCHING') {
+    return 'WATCHING';
+  }
+  if (state === 'APPROVAL_PENDING' || state === 'READY_FOR_APPROVAL') return 'READY_FOR_APPROVAL';
+  if (state === 'APPROVED' || state === 'EXECUTING' || state === 'PARTIALLY_FILLED' || state === 'FILLED' || state === 'MANAGING') {
+    return 'approved';
+  }
+  if (state === 'EXPIRED') return 'EXPIRED';
+  if (state === 'WEAKENED') return 'WEAKENED';
+  return 'INVALIDATED';
 }
 
 function nextState(
@@ -129,7 +152,7 @@ export function clearScannerSignalLifecycleForTests(): void {
   records.clear();
 }
 
-export function getScannerSignalLifecycleSnapshot(memberId: string, signalId: string) {
+export function getScannerLifecycleSnapshot(memberId: string, signalId: string) {
   const { baseSignalId, cycle } = splitSignalId(signalId);
   const record = records.get(lifecycleKey(memberId, baseSignalId));
   if (!record || record.cycle !== cycle) return null;
@@ -137,6 +160,23 @@ export function getScannerSignalLifecycleSnapshot(memberId: string, signalId: st
     signalId,
     state: record.state,
     observedAt: new Date(record.lastSeenAt).toISOString(),
+  };
+}
+
+// Backward-compatible bridge for the existing Risk/Order execution snapshot.
+// The Scanner owns its richer lifecycle, while the execution layer continues
+// to receive only the legacy TradingSignalState-shaped contract it already understands.
+export function getScannerSignalLifecycleSnapshot(memberId: string, signalId: string): {
+  signalId: string;
+  state: LegacyTradingLifecycleState;
+  observedAt: string;
+} | null {
+  const snapshot = getScannerLifecycleSnapshot(memberId, signalId);
+  if (!snapshot) return null;
+  return {
+    signalId: snapshot.signalId,
+    state: legacyTradingState(snapshot.state),
+    observedAt: snapshot.observedAt,
   };
 }
 
