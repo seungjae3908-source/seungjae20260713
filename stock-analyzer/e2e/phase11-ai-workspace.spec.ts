@@ -199,7 +199,7 @@ test('legacy stock auto-trade controls remain fail closed with zero order mutati
   await expect(page.getByRole('button', { name: '주문 승인모드 켜짐', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: '조건 주문 실행', exact: true }).click();
-  await expect(page.getByText('실제 주문 기능이 활성화되어 있지 않습니다.', { exact: true })).toBeVisible();
+  await expect(page.getByText('최소 모델점수를 직접 입력해 주세요.', { exact: true })).toBeVisible();
   expect(orderMutations).toBe(0);
 });
 
