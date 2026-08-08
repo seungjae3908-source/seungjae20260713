@@ -3,8 +3,8 @@ import { ResearchContractError } from "./research-governance.js";
 export const HISTORICAL_V1_CRYPTO_SPECS = Object.freeze([
   Object.freeze({ id: "bitget-btcusdt-spot-1d", provider: "bitget-public-v2", market: "CRYPTO_SPOT", exchangeSymbol: "BTCUSDT", researchSymbol: "USDT-BTC", timeframe: "1d" }),
   Object.freeze({ id: "bitget-ethusdt-spot-1d", provider: "bitget-public-v2", market: "CRYPTO_SPOT", exchangeSymbol: "ETHUSDT", researchSymbol: "USDT-ETH", timeframe: "1d" }),
-  Object.freeze({ id: "binance-btcusdt-futures-1d", provider: "binance-usdm-public-rest", market: "CRYPTO_FUTURES", exchangeSymbol: "BTCUSDT", researchSymbol: "BTCUSDT", timeframe: "1d" }),
-  Object.freeze({ id: "binance-ethusdt-futures-1d", provider: "binance-usdm-public-rest", market: "CRYPTO_FUTURES", exchangeSymbol: "ETHUSDT", researchSymbol: "ETHUSDT", timeframe: "1d" }),
+  Object.freeze({ id: "binance-btcusdt-futures-1d", provider: "binance-vision-usdm-monthly", market: "CRYPTO_FUTURES", exchangeSymbol: "BTCUSDT", researchSymbol: "BTCUSDT", timeframe: "1d" }),
+  Object.freeze({ id: "binance-ethusdt-futures-1d", provider: "binance-vision-usdm-monthly", market: "CRYPTO_FUTURES", exchangeSymbol: "ETHUSDT", researchSymbol: "ETHUSDT", timeframe: "1d" }),
 ]);
 
 // Conservative baseline assumptions for the target Bitget execution venue.
@@ -86,9 +86,6 @@ export function summarizeHistoricalCoverage({
   const actualStartTime = ordered[0].timestamp;
   const actualEndTime = ordered.at(-1).timestamp;
   const missingRequestedStart = actualStartTime > requestedStartTime + expectedIntervalMs;
-  // A daily provider can legitimately be one still-forming bar behind the wall
-  // clock. Two intervals allow venue session offsets without calling complete
-  // closed-bar history "partial" just because the current bar is open.
   const missingRequestedEnd = actualEndTime < effectiveRequestedEnd - (2 * expectedIntervalMs);
   const coverageThroughAsOf = !missingRequestedStart && !missingRequestedEnd;
   const fullRequestedRange = requestedEndTime <= asOfTime && coverageThroughAsOf;
