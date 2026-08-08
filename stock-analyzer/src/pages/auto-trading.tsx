@@ -1,19 +1,19 @@
+import type { ComponentProps } from 'react';
 import { ShieldCheck, ShieldX } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import {
   TradeApprovalQueue,
   type TradeApprovalQueueItem,
 } from '@/components/trade-approval-queue';
-import {
-  TradeAutomationSettings,
-  type TradeAutomationStatus,
-} from '@/components/trade-automation-settings';
+import { TradeAutomationSettings } from '@/components/trade-automation-settings';
+
+type TradeAutomationFixture = ComponentProps<typeof TradeAutomationSettings>['fixture'];
 
 export default function AutoTradingPage({
   fixture,
   approvalFixture,
 }: {
-  fixture?: TradeAutomationStatus;
+  fixture?: TradeAutomationFixture;
   approvalFixture?: TradeApprovalQueueItem[];
 }) {
   return (
