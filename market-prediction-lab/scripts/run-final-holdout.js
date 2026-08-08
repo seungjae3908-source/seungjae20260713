@@ -3,11 +3,7 @@ import { dirname, resolve } from "node:path";
 import { BitgetPublicClient } from "../src/bitget-public-client.js";
 import { collectBitgetCandles } from "../src/bitget-candle-collector.js";
 import { repairBitgetCandleGaps } from "../src/candle-gap-repair.js";
-import {
-  BinanceFuturesPublicClient,
-  collectBinanceFuturesDailyKlines,
-  collectBinanceFuturesFundingRates,
-} from "../src/binance-futures-history.js";
+import { collectFundingRateHistory } from "../src/derivatives-history.js";
 import {
   BITGET_STANDARD_TAKER_RESEARCH_COSTS,
   HISTORICAL_V1_CRYPTO_SPECS,
@@ -64,11 +60,6 @@ function assertWarmupAndHoldoutCoverage(candles, label) {
   const first = candles[0].timestamp;
   const last = candles.at(-1).timestamp;
   const lastRequiredOpen = Date.UTC(2026, 7, 7);
-  // Daily providers need not anchor candles at 00:00 UTC. Bitget spot daily
-  // bars are currently anchored at 16:00 UTC, so accept any provider anchor
-  // within one daily interval of the predeclared warmup date. This changes
-  // only coverage validation; the frozen strategies and 2026 holdout window
-  // are untouched.
   const warmupAnchorOffsetMs = first - FINAL_HOLDOUT_WARMUP_START;
   if (warmupAnchorOffsetMs > DAY_MS) throw new Error(`${label} warmup begins too late: ${iso(first)}`);
   if (last < lastRequiredOpen) throw new Error(`${label} final holdout ends too early: ${iso(last)}`);
@@ -82,15 +73,12 @@ function assertWarmupAndHoldoutCoverage(candles, label) {
   });
 }
 
-async function collectSpot(candidate, bitget) {
+async function collectBitgetDaily(candidate, bitget) {
   const spec = specFor(candidate);
   const collectionCutoff = Date.now();
-  // The generic collector aligns endTime to UTC midnight, while Bitget's spot
-  // 1-day bars are anchored at 16:00 UTC. Request one extra UTC day so the
-  // provider can return the Aug-07 16:00 bar, then explicitly retain only bars
-  // whose open is inside the predeclared holdout and whose full 24h interval
-  // was already closed at collection time. No future/open candle can enter the
-  // backtest through this widening of the fetch envelope.
+  // Bitget daily bars may use a non-midnight UTC anchor. Widen only the fetch
+  // envelope, then retain bars whose open is inside the predeclared window and
+  // whose full 24h interval was already closed at collection time.
   const collected = await collectBitgetCandles({
     client: bitget,
     market: spec.market,
@@ -113,42 +101,52 @@ async function collectSpot(candidate, bitget) {
   const candles = Object.freeze(toResearchCandles(spec, { candles: repaired.candles })
     .filter((candle) => candle.timestamp <= FINAL_HOLDOUT_END && candle.timestamp + DAY_MS <= collectionCutoff));
   const coverage = assertWarmupAndHoldoutCoverage(candles, candidate.id);
+  return Object.freeze({ spec, candles, coverage: Object.freeze({ ...coverage, collectionCutoff }) });
+}
+
+async function collectSpot(candidate, bitget) {
+  const daily = await collectBitgetDaily(candidate, bitget);
   return Object.freeze({
     provider: "bitget-public-v2",
     priceProvider: "bitget-public-v2",
     fundingProvider: null,
-    candles,
+    candles: daily.candles,
     fundingRates: Object.freeze([]),
-    coverage: Object.freeze({ ...coverage, collectionCutoff }),
+    coverage: daily.coverage,
   });
 }
 
-async function collectFutures(candidate, binance) {
-  const spec = specFor(candidate);
-  const prices = await collectBinanceFuturesDailyKlines({
-    client: binance,
-    symbol: spec.exchangeSymbol,
+async function collectFutures(candidate, bitget) {
+  const daily = await collectBitgetDaily(candidate, bitget);
+  const funding = await collectFundingRateHistory({
+    client: bitget,
+    symbol: candidate.exchangeSymbol,
+    productType: "usdt-futures",
     startTime: FINAL_HOLDOUT_WARMUP_START,
     endTime: FINAL_HOLDOUT_END,
+    pageSize: 100,
+    maxPages: 50,
   });
-  const funding = await collectBinanceFuturesFundingRates({
-    client: binance,
-    symbol: spec.exchangeSymbol,
-    startTime: FINAL_HOLDOUT_WARMUP_START,
-    endTime: FINAL_HOLDOUT_END,
-  });
-  const candles = toResearchCandles(spec, prices);
-  const coverage = assertWarmupAndHoldoutCoverage(candles, candidate.id);
-  if (funding.records.length === 0 || funding.records.at(-1).timestamp < Date.UTC(2026, 7, 7)) {
-    throw new Error(`${candidate.id} funding does not cover the final holdout end`);
+  const firstFunding = funding.records[0]?.timestamp ?? null;
+  const lastFunding = funding.records.at(-1)?.timestamp ?? null;
+  if (funding.records.length === 0 || firstFunding > FINAL_HOLDOUT_START + 12 * 60 * 60 * 1000) {
+    throw new Error(`${candidate.id} funding begins too late for the final holdout: ${firstFunding ? iso(firstFunding) : "empty"}`);
+  }
+  if (lastFunding < Date.UTC(2026, 7, 7)) {
+    throw new Error(`${candidate.id} funding does not cover the final holdout end: ${iso(lastFunding)}`);
   }
   return Object.freeze({
-    provider: "binance-usdm-public-rest",
-    priceProvider: prices.provider,
+    provider: "bitget-public-v2",
+    priceProvider: "bitget-public-v2",
     fundingProvider: funding.provider,
-    candles,
+    candles: daily.candles,
     fundingRates: funding.records,
-    coverage: Object.freeze({ ...coverage, fundingRecords: funding.records.length, fundingFirst: funding.records[0].timestamp, fundingLast: funding.records.at(-1).timestamp }),
+    coverage: Object.freeze({
+      ...daily.coverage,
+      fundingRecords: funding.records.length,
+      fundingFirst: firstFunding,
+      fundingLast: lastFunding,
+    }),
   });
 }
 
@@ -182,6 +180,9 @@ function summarize(evaluation, prepared) {
     dataEnd: prepared.coverage.last,
     dailyAnchorUtcHour: prepared.coverage.dailyAnchorUtcHour,
     dailyAnchorUtcMinute: prepared.coverage.dailyAnchorUtcMinute,
+    fundingRecords: prepared.coverage.fundingRecords ?? 0,
+    fundingFirst: prepared.coverage.fundingFirst ?? null,
+    fundingLast: prepared.coverage.fundingLast ?? null,
     holdoutStart: FINAL_HOLDOUT_START,
     holdoutEnd: FINAL_HOLDOUT_END,
     initialCapital: metrics.initialCapital,
@@ -218,13 +219,13 @@ function buildMarkdown(report) {
     row.sample,
   ]);
   return `# 2026 최종 홀드아웃 — 동결 후보 1회 평가\n\n`
-    + `- 평가 구간: ${iso(report.holdoutStart).slice(0, 10)} ~ ${iso(report.holdoutEnd).slice(0, 10)} (UTC 일봉, 완전히 닫힌 공통 데이터까지만)\n`
+    + `- 평가 구간: ${iso(report.holdoutStart).slice(0, 10)} ~ ${iso(report.holdoutEnd).slice(0, 10)} (UTC 일봉, 완전히 닫힌 데이터까지만)\n`
     + `- 초기자금: ${format(report.initialCapital, 0)}원 / 후보별 독립 평가\n`
     + `- 후보 manifest SHA-256: \`${report.candidateManifestSha256}\`\n`
     + `- 2026 데이터로 후보 탐색·파라미터 수정·재튜닝: **0건**\n`
     + `- V2/V6 후보는 2020~2024 개발 + 2025 독립검증에서 이미 동결된 값만 사용함.\n`
-    + `- 일봉 anchor는 공급자 원본을 유지함(Bitget spot과 Binance futures의 UTC anchor가 다를 수 있음).\n`
-    + `- 선물 가격·펀딩은 Binance USD-M public REST, 실행비용은 기존 Bitget 연구 가정을 그대로 사용함.\n`
+    + `- 최종 홀드아웃 가격과 선물 funding은 모두 목표 실행거래소 Bitget public API를 사용함.\n`
+    + `- 일봉 anchor는 공급자 원본을 유지하고 완전히 닫힌 봉만 사용함.\n`
     + `- effect=positive는 순수익>0, expectancy>0, PF>1을 동시에 뜻함. 표본 30회 미만은 promotionEvidence=false로 유지함.\n\n`
     + markdownTable(["시장", "종목", "방향", "동결버전", "데이터종료", "시작금", "최종금", "순수익률", "성공률", "PF", "MDD", "거래수", "효과", "표본"], rows)
     + `\n`;
@@ -236,7 +237,6 @@ async function write(path, content) {
 }
 
 const bitget = new BitgetPublicClient({ minIntervalMs: 160, maxRetries: 4, timeoutMs: 15_000 });
-const binance = new BinanceFuturesPublicClient({ timeoutMs: 15_000, maxRetries: 4 });
 const preparedCache = new Map();
 const results = [];
 
@@ -246,7 +246,7 @@ for (const candidate of FROZEN_FINAL_HOLDOUT_CANDIDATES) {
   if (!prepared) {
     prepared = candidate.market === "CRYPTO_SPOT"
       ? await collectSpot(candidate, bitget)
-      : await collectFutures(candidate, binance);
+      : await collectFutures(candidate, bitget);
     preparedCache.set(cacheKey, prepared);
   }
   const evaluation = runFrozenFinalHoldout({
