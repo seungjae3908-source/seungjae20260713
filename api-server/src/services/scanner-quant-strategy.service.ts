@@ -30,6 +30,36 @@ export interface ScannerQuantFactors {
   risk: number;
 }
 
+export interface ScannerStrategyLimits {
+  strongScore: number;
+  maxRiskScore: number;
+  minLiquidityFactor: number;
+  minVolatilityFactor: number;
+  minDataQualityScore: number;
+  sGradeScore: number;
+  sGradeMaxRiskScore: number;
+}
+
+export const SCALPING_LIMITS: Readonly<ScannerStrategyLimits> = Object.freeze({
+  strongScore: 78,
+  maxRiskScore: 40,
+  minLiquidityFactor: 65,
+  minVolatilityFactor: 55,
+  minDataQualityScore: 85,
+  sGradeScore: 90,
+  sGradeMaxRiskScore: 30,
+});
+
+export const SWING_LIMITS: Readonly<ScannerStrategyLimits> = Object.freeze({
+  strongScore: 74,
+  maxRiskScore: 50,
+  minLiquidityFactor: 50,
+  minVolatilityFactor: 40,
+  minDataQualityScore: 80,
+  sGradeScore: 88,
+  sGradeMaxRiskScore: 35,
+});
+
 export interface ScannerQuantStrategyInput {
   mode: ScannerStrategyMode;
   timeframe: string;
@@ -264,16 +294,21 @@ function inferDirection(
   return 'NEUTRAL';
 }
 
+function limitsFor(mode: ScannerStrategyMode): Readonly<ScannerStrategyLimits> {
+  return mode === 'scalping' ? SCALPING_LIMITS : SWING_LIMITS;
+}
+
 function gradeFor(
   score: number,
   factors: ScannerQuantFactors,
   input: ScannerQuantStrategyInput,
   aiValidation: ScannerAiValidation,
 ): ScannerSignalGrade {
-  const sEligible = score >= 88
+  const limits = limitsFor(input.mode);
+  const sEligible = score >= limits.sGradeScore
     && input.dataQuality.state === 'TRUSTED'
     && input.dataQuality.score >= 90
-    && (input.riskScore ?? 101) <= 35
+    && (input.riskScore ?? 101) <= limits.sGradeMaxRiskScore
     && factors.liquidity >= 70
     && factors.volatility >= 60
     && factors.marketRegime >= 70
@@ -292,6 +327,7 @@ export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): Scann
   const factors = input.mode === 'scalping'
     ? scalpingFactors(primary, context, input)
     : swingFactors(primary, context, input);
+  const limits = limitsFor(input.mode);
   let score = weightedScore(factors, input.mode === 'scalping' ? SCALPING_WEIGHTS : SWING_WEIGHTS);
   if (input.dataQuality.state === 'DEGRADED') score = Math.min(score, 74);
   if (input.dataQuality.state === 'DATA_UNTRUSTED') score = Math.min(score, 49);
@@ -300,11 +336,12 @@ export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): Scann
 
   const direction = inferDirection(factors, primary, context, input.allowShort);
   const strongSignalEligible = direction !== 'NEUTRAL'
-    && score >= 75
+    && score >= limits.strongScore
     && input.dataQuality.strongSignalAllowed
-    && (input.riskScore ?? 101) <= 45
-    && factors.liquidity >= 55
-    && factors.volatility >= 45
+    && input.dataQuality.score >= limits.minDataQualityScore
+    && (input.riskScore ?? 101) <= limits.maxRiskScore
+    && factors.liquidity >= limits.minLiquidityFactor
+    && factors.volatility >= limits.minVolatilityFactor
     && aiValidation.status !== 'VETO';
   const grade = gradeFor(score, factors, input, aiValidation);
 
@@ -315,7 +352,9 @@ export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): Scann
     `모멘텀 ${Math.round(factors.momentum)}`,
     `거래량 ${Math.round(factors.volume)}`,
     `유동성 ${Math.round(factors.liquidity)}`,
+    `변동성 ${Math.round(factors.volatility)}`,
     `시장국면 ${Math.round(factors.marketRegime)}`,
+    `리스크 ${Math.round(factors.risk)}`,
   ];
   const warnings = [
     ...input.dataQuality.issues.map((issue) => `${issue.code}: ${issue.message}`),
