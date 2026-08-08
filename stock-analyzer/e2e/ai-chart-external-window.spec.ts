@@ -229,7 +229,7 @@ test('desktop opens one external chart, synchronizes both directions, focuses th
   await assertCleanRuntime(runtime);
 });
 
-test('strict session, origin, order, close, replacement, and simultaneous-update gates preserve the newest atomic selection', async ({ page, context }) => {
+test('strict session, origin, order, close, replacement, and ordered updates preserve the latest explicit selection', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await installUnhandledCapture(context);
   await mockChartApis(context);
@@ -284,23 +284,28 @@ test('strict session, origin, order, close, replacement, and simultaneous-update
   }));
   await expect(page).toHaveURL(/timeframe=30m/);
 
-  const deterministicRemoteWinner = Date.now() + 4_000;
-  await Promise.all([
-    page.getByRole('button', { name: '15분', exact: true }).click(),
-    postChannelMessage(page, mainMessage({
-      type: 'selection', sourceId: 'main-b', sequence: 3, sentAt: deterministicRemoteWinner, origin,
-      selectionOverride: { timeframe: '30m' },
-    })),
-  ]);
+  await page.getByRole('button', { name: '15분', exact: true }).click();
+  await expect(page).toHaveURL(/timeframe=15m/);
+  await postChannelMessage(page, mainMessage({
+    type: 'selection', sourceId: 'main-b', sequence: 3, sentAt: Date.now() + 100, origin,
+    selectionOverride: { timeframe: '30m' },
+  }));
   await expect(page).toHaveURL(/timeframe=30m/);
+  await page.getByRole('button', { name: '15분', exact: true }).click();
+  await expect(page).toHaveURL(/timeframe=15m/);
   await assertCleanRuntime(runtime);
 });
 
-test('hidden state accepts only ordered snapshots and requests current state again when visible', async ({ page, context }) => {
+test('hidden state accepts only ordered snapshots and sends a fresh ready signal when visible again', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await installUnhandledCapture(context);
   await mockChartApis(context);
   const runtime = observeRuntime(context, page);
+  await context.route('**/sync-controller', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html',
+    body: '<!doctype html><meta charset="utf-8"><title>sync-controller</title>',
+  }));
   await page.goto(externalUrl);
   const origin = new URL(page.url()).origin;
   const base = Date.now();
@@ -319,9 +324,35 @@ test('hidden state accepts only ordered snapshots and requests current state aga
     type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 150, origin,
     selectionOverride: { timeframe: '30m' },
   }));
+
+  const controller = await context.newPage();
+  await controller.goto(`${origin}/sync-controller`);
+  await controller.evaluate((name) => {
+    const state = globalThis as typeof globalThis & {
+      __chartReadySeen?: boolean;
+      __chartReadyChannel?: BroadcastChannel;
+    };
+    state.__chartReadySeen = false;
+    const channel = new BroadcastChannel(name);
+    state.__chartReadyChannel = channel;
+    channel.onmessage = (event: MessageEvent<unknown>) => {
+      if (!event.data || typeof event.data !== 'object') return;
+      const message = event.data as Record<string, unknown>;
+      if (message.type === 'ready' && message.sourceRole === 'external') state.__chartReadySeen = true;
+    };
+  }, channelName);
+
   await setDocumentVisibility(page, 'visible');
   await expect(page).toHaveURL(/timeframe=15m/);
-  await expect(page.getByTestId('external-chart-status')).toContainText('안전하게 동기화');
+  await expect.poll(() => controller.evaluate(() => {
+    const state = globalThis as typeof globalThis & { __chartReadySeen?: boolean };
+    return state.__chartReadySeen === true;
+  })).toBe(true);
+  await controller.evaluate(() => {
+    const state = globalThis as typeof globalThis & { __chartReadyChannel?: BroadcastChannel };
+    state.__chartReadyChannel?.close();
+  });
+  await controller.close();
   await assertCleanRuntime(runtime);
 });
 
