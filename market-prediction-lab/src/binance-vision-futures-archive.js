@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { inflateRawSync } from "node:zlib";
 
 const MONTHLY_BASE = "https://data.binance.vision/data/futures/um/monthly";
+const DAILY_BASE = "https://data.binance.vision/data/futures/um/daily";
+const DAY_MS = 24 * 60 * 60 * 1000;
 const EOCD_SIGNATURE = 0x06054b50;
 const CENTRAL_SIGNATURE = 0x02014b50;
 const LOCAL_SIGNATURE = 0x04034b50;
@@ -135,6 +137,20 @@ export function buildMonthRange(startTime, endTime) {
   return Object.freeze(output);
 }
 
+export function buildDayRange(startTime, endTime) {
+  const start = new Date(startTime);
+  const end = new Date(endTime);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end < start) throw new TypeError("invalid day range");
+  let cursor = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate());
+  const last = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+  const output = [];
+  while (cursor <= last) {
+    output.push(new Date(cursor).toISOString().slice(0, 10));
+    cursor += DAY_MS;
+  }
+  return Object.freeze(output);
+}
+
 async function responseOrThrow(fetchImpl, url) {
   const response = await fetchImpl(url, { headers: { "user-agent": "market-prediction-lab/0.9" } });
   if (!response.ok) {
@@ -203,6 +219,39 @@ async function collectMonths({ symbol, startTime, endTime, kind, fetchImpl, conc
   });
 }
 
+async function collectDailyKlineArchives({ symbol, startTime, endTime, fetchImpl, concurrency, onDay }) {
+  if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function");
+  if (typeof symbol !== "string" || !/^[A-Z0-9]{3,30}$/u.test(symbol)) throw new TypeError("invalid symbol");
+  const days = [...buildDayRange(startTime, endTime)];
+  const output = new Array(days.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= days.length) return;
+      const day = days[index];
+      const file = `${symbol}-1d-${day}.zip`;
+      const url = `${DAILY_BASE}/klines/${symbol}/1d/${file}`;
+      const csv = await fetchVerifiedCsv(fetchImpl, url);
+      const parsed = parseVisionKlines(csv.text, symbol);
+      output[index] = Object.freeze({ day, url, sha256: csv.sha256, rows: parsed });
+      await onDay?.(Object.freeze({ day, rowCount: parsed.length, sha256: csv.sha256 }));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, days.length)) }, () => worker()));
+  const flat = output.flatMap((entry) => entry.rows).filter((row) => row.timestamp >= startTime && row.timestamp <= endTime);
+  return Object.freeze({
+    provider: "binance-vision-usdm-daily",
+    symbol,
+    startTime,
+    endTime,
+    checksumVerified: true,
+    rows: Object.freeze(uniqueRows(flat, ["open", "high", "low", "close", "volume"])),
+    manifests: Object.freeze(output.map(({ rows: ignored, ...manifest }) => Object.freeze(manifest))),
+  });
+}
+
 export async function collectVisionFuturesDailyKlines({ fetchImpl = globalThis.fetch, concurrency = 6, ...input }) {
   const result = await collectMonths({ ...input, kind: "klines", fetchImpl, concurrency });
   return Object.freeze({ ...result, timeframe: "1d", candles: result.rows });
@@ -211,4 +260,9 @@ export async function collectVisionFuturesDailyKlines({ fetchImpl = globalThis.f
 export async function collectVisionFuturesFunding({ fetchImpl = globalThis.fetch, concurrency = 6, ...input }) {
   const result = await collectMonths({ ...input, kind: "fundingRate", fetchImpl, concurrency });
   return Object.freeze({ ...result, records: result.rows });
+}
+
+export async function collectVisionFuturesDailyArchiveKlines({ fetchImpl = globalThis.fetch, concurrency = 6, ...input }) {
+  const result = await collectDailyKlineArchives({ ...input, fetchImpl, concurrency });
+  return Object.freeze({ ...result, timeframe: "1d", candles: result.rows });
 }
