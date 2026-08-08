@@ -35,7 +35,7 @@ function response(assetClass: 'stock' | 'coin_spot' | 'coin_futures'): ScannerRe
     requestId: `request-${assetClass}`,
     assetClass,
     market: assetClass === 'stock' ? 'KR' : assetClass === 'coin_spot' ? 'UPBIT' : 'BITGET',
-    timeframe: '15m',
+    timeframe: '5m',
     cards: [],
     alerts: [],
     failures: [],
@@ -144,9 +144,11 @@ test('associate may scan Upbit spot but not Bitget futures', async () => {
       }));
     },
     async (baseUrl) => {
-      const spot = await fetch(`${baseUrl}/api/scanner/crypto/spot?timeframe=15m`);
+      // Authorization is the subject of this smoke test. Use a selectable
+      // scalping primary timeframe; 15m is deliberately context-only.
+      const spot = await fetch(`${baseUrl}/api/scanner/crypto/spot?strategy=scalping&timeframe=5m`);
       assert.equal(spot.status, 200);
-      const futures = await fetch(`${baseUrl}/api/scanner/crypto/futures?timeframe=15m`);
+      const futures = await fetch(`${baseUrl}/api/scanner/crypto/futures?strategy=scalping&timeframe=5m`);
       assert.equal(futures.status, 403);
     },
   );
