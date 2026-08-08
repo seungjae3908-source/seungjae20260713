@@ -47,8 +47,8 @@ test('cold market cache loads isolate cancellation between concurrent requests',
   );
 
   const secondResult = await secondSettled;
-  assert.equal(secondResult.ok, true);
   if (!secondResult.ok) throw secondResult.error;
+  assert.equal(secondResult.ok, true);
   assert.equal(secondResult.value.value, 'second-request-value');
   assert.equal(secondResult.value.stale, false);
   assert.equal(firstCalls, 1);
