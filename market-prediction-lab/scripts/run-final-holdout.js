@@ -64,9 +64,22 @@ function assertWarmupAndHoldoutCoverage(candles, label) {
   const first = candles[0].timestamp;
   const last = candles.at(-1).timestamp;
   const lastRequiredOpen = Date.UTC(2026, 7, 7);
-  if (first > FINAL_HOLDOUT_WARMUP_START) throw new Error(`${label} warmup begins too late: ${iso(first)}`);
+  // Daily providers need not anchor candles at 00:00 UTC. Bitget spot daily
+  // bars are currently anchored at 16:00 UTC, so accept any provider anchor
+  // within one daily interval of the predeclared warmup date. This changes
+  // only coverage validation; the frozen strategies and 2026 holdout window
+  // are untouched.
+  const warmupAnchorOffsetMs = first - FINAL_HOLDOUT_WARMUP_START;
+  if (warmupAnchorOffsetMs > DAY_MS) throw new Error(`${label} warmup begins too late: ${iso(first)}`);
   if (last < lastRequiredOpen) throw new Error(`${label} final holdout ends too early: ${iso(last)}`);
-  return Object.freeze({ first, last, candles: candles.length });
+  return Object.freeze({
+    first,
+    last,
+    candles: candles.length,
+    warmupAnchorOffsetMs,
+    dailyAnchorUtcHour: new Date(first).getUTCHours(),
+    dailyAnchorUtcMinute: new Date(first).getUTCMinutes(),
+  });
 }
 
 async function collectSpot(candidate, bitget) {
@@ -159,6 +172,8 @@ function summarize(evaluation, prepared) {
     fundingProvider: prepared.fundingProvider,
     dataStart: prepared.coverage.first,
     dataEnd: prepared.coverage.last,
+    dailyAnchorUtcHour: prepared.coverage.dailyAnchorUtcHour,
+    dailyAnchorUtcMinute: prepared.coverage.dailyAnchorUtcMinute,
     holdoutStart: FINAL_HOLDOUT_START,
     holdoutEnd: FINAL_HOLDOUT_END,
     initialCapital: metrics.initialCapital,
@@ -200,6 +215,7 @@ function buildMarkdown(report) {
     + `- 후보 manifest SHA-256: \`${report.candidateManifestSha256}\`\n`
     + `- 2026 데이터로 후보 탐색·파라미터 수정·재튜닝: **0건**\n`
     + `- V2/V6 후보는 2020~2024 개발 + 2025 독립검증에서 이미 동결된 값만 사용함.\n`
+    + `- 일봉 anchor는 공급자 원본을 유지함(Bitget spot과 Binance futures의 UTC anchor가 다를 수 있음).\n`
     + `- 선물 가격·펀딩은 Binance USD-M public REST, 실행비용은 기존 Bitget 연구 가정을 그대로 사용함.\n`
     + `- effect=positive는 순수익>0, expectancy>0, PF>1을 동시에 뜻함. 표본 30회 미만은 promotionEvidence=false로 유지함.\n\n`
     + markdownTable(["시장", "종목", "방향", "동결버전", "데이터종료", "시작금", "최종금", "순수익률", "성공률", "PF", "MDD", "거래수", "효과", "표본"], rows)
