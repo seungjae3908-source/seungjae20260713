@@ -47,6 +47,28 @@ def _blocks(prompt: str) -> dict[str, str]:
     return blocks
 
 
+def _compiler_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve an explicit empty changed_files fact as prompt-only evidence.
+
+    Schema-v2 distinguishes a missing changed_files field from a present empty list.
+    The base compiler emits changed_files evidence only for non-empty paths, so an
+    explicit clean-branch fact would otherwise be misclassified as missing evidence.
+    Compact state and policy evaluation continue to receive the original empty list.
+    """
+    prepared = dict(fields)
+    if "changed_files" not in fields:
+        return prepared
+    value = fields.get("changed_files")
+    if isinstance(value, (list, tuple, set)):
+        empty = not any(str(item).strip() for item in value)
+    else:
+        text = str(value or "").strip().lower()
+        empty = text in {"", "none", "[]"}
+    if empty:
+        prepared["changed_files"] = ["(none reported; explicit empty list)"]
+    return prepared
+
+
 def _compile_with_safe_continuations(
     *,
     fields: Mapping[str, Any],
@@ -67,7 +89,7 @@ def _compile_with_safe_continuations(
     base.PROFILE_ALLOWED_ACTIONS[profile] = augmented
     try:
         return base.compile_prompt(
-            fields=fields,
+            fields=_compiler_fields(fields),
             sanitized_report=sanitized_report,
             allowed_action_types=allowed_action_types,
             registered_workers=registered_workers,
@@ -177,6 +199,38 @@ def self_test() -> int:
     assert same.previous_state == first.current_state and same.state_delta == {}
     changed = compile_prompt(fields={**fields,"head_sha":"c"*40,"status":"completed"}, sanitized_report="success", allowed_action_types=("analyze_conflicts",), registered_workers=("integration-planner",), policy_version="v4", comments=comments)
     assert set(changed.state_delta) == {"head_sha","status"}
+
+    empty_files = compile_prompt(
+        fields={
+            **fields,
+            "worker":"market-information-room",
+            "pr_number":"none",
+            "changed_files":[],
+        },
+        sanitized_report="success",
+        allowed_action_types=("inspect_repository",),
+        registered_workers=("market-information-room",),
+        policy_version="v4",
+    )
+    assert "changed_files" not in empty_files.missing_required
+    assert empty_files.current_state.changed_files == ()
+    assert any(
+        item.category == "changed_files" and "explicit empty list" in item.content
+        for item in empty_files.evidence
+    )
+    missing_files = compile_prompt(
+        fields={
+            **{key: value for key, value in fields.items() if key != "changed_files"},
+            "worker":"market-information-room",
+            "pr_number":"none",
+        },
+        sanitized_report="success",
+        allowed_action_types=("inspect_repository",),
+        registered_workers=("market-information-room",),
+        policy_version="v4",
+    )
+    assert "changed_files" in missing_files.missing_required
+
     assert all(changed.prompt.count(f"[{name}]") == 1 for name in base.BLOCK_NAMES)
     assert '"state_delta"' in changed.prompt
     assert '"previous_state"' not in changed.prompt and '"current_state"' not in changed.prompt
@@ -216,6 +270,8 @@ def self_test() -> int:
         "changed_delta":sorted(changed.state_delta),
         "safe_continuation_actions":len(SAFE_CONTINUATION_ACTIONS),
         "base_profile_restored":True,
+        "explicit_empty_changed_files":True,
+        "missing_changed_files_rejected":True,
         "pathless_prompt_contract":1,
         "pathless_model_variance_normalized":1,
         "code_change_path_variance_normalized":0,
