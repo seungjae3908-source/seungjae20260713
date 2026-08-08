@@ -19,7 +19,8 @@ export default function AutoTradingPage({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <header className="border-b border-card-border bg-background/90 px-4 pb-4 pt-5 text-center glass">
-        <h1 className="text-xl font-extrabold">승인형 주문 · 자동매매 설정</h1>
+        <h1 className="text-xl font-extrabold">승인형 주문</h1>
+        <p className="mt-1 text-xs font-bold text-muted-foreground">자동매매 설정 · 사용자 승인형 주문 안전 화면</p>
         <p className="mt-1 text-xs text-muted-foreground">
           신호가 유지될 때만 승인할 수 있으며, 승인 후에도 서버 Risk Engine 최종검증을 통과해야 주문 계획이 실행됩니다.
         </p>
