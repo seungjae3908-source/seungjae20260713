@@ -13,6 +13,7 @@ const {
 const cwd = process.cwd();
 const root = path.basename(cwd) === 'api-server' ? path.resolve(cwd, '..') : path.resolve(cwd);
 const applicationWorkflow = await readFile(path.join(root, '.github/workflows/futures-public-network-smoke.yml'), 'utf8');
+const fallbackWorkflow = await readFile(path.join(root, '.github/workflows/application-ci-main-fallback.yml'), 'utf8');
 const productionWorkflow = await readFile(path.join(root, '.github/workflows/production-deploy.yml'), 'utf8');
 const approvalWorkflow = await readFile(path.join(root, '.github/workflows/production-one-time-approval.yml'), 'utf8');
 
@@ -175,6 +176,15 @@ assert(
   'workflow_dispatch must bind checkout to target_sha or exact dispatch SHA',
 );
 assert(!applicationWorkflow.includes('APPLICATION_CHECKOUT_REF: ${{ github.event.inputs.checkout_ref || github.ref }}'), 'dispatch checkout must not be independently user-selectable');
+
+assert(fallbackWorkflow.includes('latestRequiredStatuses'), 'fallback must derive exact CI ownership from statuses written on the target SHA');
+assert(fallbackWorkflow.includes('listStatusBoundRuns'), 'fallback must bind candidate runs to exact target-SHA status URLs');
+assert(fallbackWorkflow.includes('getWorkflowRun'), 'fallback must resolve status-owned run IDs before trusting workflow metadata');
+assert(fallbackWorkflow.includes('inspectRequiredStatusEvidence'), 'fallback must require all six latest statuses from one run');
+assert(fallbackWorkflow.includes('evaluateProductionCiProvenance'), 'fallback must reuse exact production CI provenance validation');
+assert(fallbackWorkflow.includes('inputs: { target_sha: sha, checkout_ref: sha }'), 'fallback dispatch must bind target and checkout to the exact main SHA');
+assert(!fallbackWorkflow.includes('listWorkflowRunsForRepo'), 'fallback must not infer workflow_dispatch target ownership from run.head_sha');
+
 for (const workflow of [productionWorkflow, approvalWorkflow]) {
   assert(workflow.includes('production-ci-provenance.cjs'), 'production gates must use the shared provenance evaluator');
   assert(workflow.includes('inspectRequiredStatusEvidence'), 'production gates must bind six statuses to one CI run');
@@ -187,3 +197,4 @@ console.log('Production CI provenance contract verified.');
 console.log('- Exact current main + same-run 6/6 + official push/workflow_dispatch success: accepted');
 console.log('- Other/stale/PR/missing/pending/cancelled/failed/mismatched evidence: rejected');
 console.log('- workflow_dispatch checkout is cryptographically bound to the status target SHA');
+console.log('- main fallback ignores unrelated workflow_dispatch runs that merely share the main ref/head SHA');

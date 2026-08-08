@@ -20,22 +20,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - name: Dispatch official CI when path filters skipped the SHA and wait for verification
         uses: actions/github-script@v7
         with:
           script: |
+            const {
+              evaluateProductionCiProvenance,
+              inspectRequiredStatusEvidence,
+              latestRequiredStatuses,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-ci-provenance.cjs`);
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const sha = context.sha;
             const officialPath = '.github/workflows/futures-public-network-smoke.yml';
-            const required = [
-              'application-ci/verified',
-              'browser-ui/verified',
-              'database-rls/verified',
-              'security-integration/verified',
-              'ai-privacy/verified',
-              'futures-public-network-smoke/verified',
-            ];
+            const runUrlPattern = /\/actions\/runs\/(\d+)(?:[/?#]|$)/;
 
             const main = await github.rest.repos.getBranch({ owner, repo, branch: 'main' });
             if (main.data.commit.sha !== sha) {
@@ -43,22 +44,62 @@ jobs:
               return;
             }
 
-            const listOfficialRuns = async () => {
-              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-                owner, repo, head_sha: sha, branch: 'main', per_page: 100,
+            const listStatuses = () => github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner,
+              repo,
+              ref: sha,
+              per_page: 100,
+            });
+
+            const listStatusBoundRuns = async (statuses) => {
+              const latest = latestRequiredStatuses(statuses);
+              const runIds = new Set();
+              for (const status of latest.values()) {
+                const match = runUrlPattern.exec(String(status?.target_url ?? ''));
+                if (match) runIds.add(Number(match[1]));
+              }
+
+              const runs = [];
+              for (const runId of runIds) {
+                const response = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: runId });
+                const run = response.data;
+                const official = run.name === 'Application CI'
+                  && run.path === officialPath
+                  && run.head_sha === sha
+                  && run.head_branch === 'main'
+                  && ['push', 'workflow_dispatch'].includes(run.event);
+                if (official) runs.push(run);
+              }
+              return runs.sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+            };
+
+            const inspectSnapshot = async () => {
+              const statuses = await listStatuses();
+              const runs = await listStatusBoundRuns(statuses);
+              const evidence = inspectRequiredStatusEvidence(statuses);
+              if (!evidence.ok) return { statuses, runs, evidence, verified: null };
+
+              const run = runs.find((candidate) => Number(candidate.id) === evidence.runId);
+              const verified = evaluateProductionCiProvenance({
+                targetSha: sha,
+                currentMainSha: sha,
+                statuses,
+                run,
               });
-              return runs.filter((run) =>
-                run.name === 'Application CI'
-                && run.path === officialPath
-                && run.head_sha === sha
-                && run.head_branch === 'main'
-                && ['push', 'workflow_dispatch'].includes(run.event)
-              );
+              return { statuses, runs, evidence, verified };
             };
 
             await new Promise((resolve) => setTimeout(resolve, 15000));
-            let officialRuns = await listOfficialRuns();
-            if (!officialRuns.some((run) => run.status !== 'completed' || run.conclusion === 'success')) {
+            let snapshot = await inspectSnapshot();
+            if (snapshot.verified?.ok) {
+              core.notice(`Exact-main Application CI was already verified for ${sha} by Run ID ${snapshot.verified.runId}.`);
+              return;
+            }
+
+            const existingActive = snapshot.runs.find((run) => run.status !== 'completed');
+            if (existingActive) {
+              core.notice(`Waiting for existing exact-SHA Application CI Run ID ${existingActive.id}.`);
+            } else {
               await github.rest.actions.createWorkflowDispatch({
                 owner,
                 repo,
@@ -77,30 +118,30 @@ jobs:
                 return;
               }
 
-              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
-                owner, repo, ref: sha, per_page: 100,
-              });
-              statuses.sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
-              const latest = new Map();
-              for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status.state);
-
-              officialRuns = await listOfficialRuns();
-              const officialSuccess = officialRuns.some((run) =>
-                run.status === 'completed' && run.conclusion === 'success'
-              );
-              const statusesSuccess = required.every((name) => latest.get(name) === 'success');
-              if (officialSuccess && statusesSuccess) {
-                core.notice(`Exact-main Application CI verification completed for ${sha}.`);
+              snapshot = await inspectSnapshot();
+              if (snapshot.verified?.ok) {
+                core.notice(`Exact-main Application CI verification completed for ${sha} by Run ID ${snapshot.verified.runId}.`);
                 return;
               }
 
-              const terminalFailure = officialRuns.some((run) =>
-                run.status === 'completed' && !['success', 'skipped', 'neutral'].includes(run.conclusion)
-              );
-              if (terminalFailure) {
-                core.setFailed(`Official Application CI failed for ${sha}.`);
+              const activeRuns = snapshot.runs.filter((run) => run.status !== 'completed');
+              if (activeRuns.length) {
+                core.info(`Waiting for exact-SHA Application CI Run ID ${activeRuns[0].id}.`);
+                await new Promise((resolve) => setTimeout(resolve, 15000));
+                continue;
+              }
+
+              const newest = snapshot.runs[0];
+              if (newest && newest.status === 'completed' && newest.conclusion !== 'success') {
+                core.setFailed(`Official exact-SHA Application CI Run ID ${newest.id} failed for ${sha}: ${newest.conclusion}.`);
                 return;
               }
+              if (newest && newest.status === 'completed' && newest.conclusion === 'success') {
+                core.setFailed(`Official exact-SHA Application CI Run ID ${newest.id} completed without valid same-run 6/6 status provenance: ${snapshot.verified?.reason ?? snapshot.evidence?.reason ?? 'unknown'}.`);
+                return;
+              }
+
+              core.info(`Waiting for exact-SHA Application CI status ownership for ${sha}.`);
               await new Promise((resolve) => setTimeout(resolve, 15000));
             }
             core.setFailed(`Timed out waiting for exact-main Application CI verification for ${sha}.`);
