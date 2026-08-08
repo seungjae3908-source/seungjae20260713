@@ -180,8 +180,8 @@ test('desktop opens one external chart, synchronizes both directions, focuses th
   const runtime = observeRuntime(context, page);
 
   await page.goto(initialUrl);
-  await expect(page.getByRole('heading', { name: 'AI 차트 분석기', exact: true })).toBeVisible();
-  const externalButton = page.getByRole('button', { name: '외부 창', exact: true });
+  await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
+  const externalButton = page.getByTestId('open-external-ai-chart');
   await expect(externalButton).toBeVisible();
   await expect(externalButton).toBeEnabled();
 
@@ -193,8 +193,9 @@ test('desktop opens one external chart, synchronizes both directions, focuses th
   await expect(popup).toHaveURL(/chartWindow=external/);
   await expect(popup).toHaveURL(/chartSync=/);
   await expect(popup).toHaveURL(/chartPair=/);
-  await expect(popup.getByRole('heading', { name: 'AI 차트 분석기 · 외부 창', exact: true })).toBeVisible();
-  await expect(popup.getByRole('button', { name: '외부 창', exact: true })).toHaveCount(0);
+  await expect(popup.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
+  await expect(popup.getByText('외부 AI 차트', { exact: true })).toBeVisible();
+  await expect(popup.getByTestId('open-external-ai-chart')).toHaveCount(0);
   await expect.poll(() => context.pages().filter((candidate) => !candidate.isClosed()).length).toBe(2);
 
   await page.getByRole('button', { name: '15분', exact: true }).click();
@@ -205,15 +206,15 @@ test('desktop opens one external chart, synchronizes both directions, focuses th
   const pageCount = context.pages().length;
   await externalButton.click();
   await expect.poll(() => context.pages().length).toBe(pageCount);
-  await expect(page.getByRole('status')).toContainText('이미 열린 외부 차트 창');
+  await expect(page.getByTestId('external-chart-status')).toContainText('이미 열린 외부 차트 창');
 
   await popup.reload();
-  await expect(popup.getByRole('heading', { name: 'AI 차트 분석기 · 외부 창', exact: true })).toBeVisible();
+  await expect(popup.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
   await page.getByRole('button', { name: '5분', exact: true }).click();
   await expect(popup).toHaveURL(/timeframe=5m/);
 
   await popup.close();
-  await expect(page.getByRole('status')).toContainText('외부 차트 창이 닫혔습니다.');
+  await expect(page.getByTestId('external-chart-status')).toContainText('외부 차트 창이 닫혔습니다.');
   await assertCleanRuntime(runtime);
 });
 
@@ -223,7 +224,8 @@ test('strict session, origin, order, close, replacement, and simultaneous-update
   await mockChartApis(context);
   const runtime = observeRuntime(context, page);
   await page.goto(externalUrl);
-  await expect(page.getByRole('heading', { name: 'AI 차트 분석기 · 외부 창', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
+  await expect(page.getByText('외부 AI 차트', { exact: true })).toBeVisible();
   const origin = new URL(page.url()).origin;
   const base = Date.now();
 
@@ -328,8 +330,8 @@ test('popup blocking is reported and no second chart context is created', async 
     window.open = () => null;
   });
   await page.goto(initialUrl);
-  await page.getByRole('button', { name: '외부 창', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('팝업이 차단되었습니다.');
+  await page.getByTestId('open-external-ai-chart').click();
+  await expect(page.getByTestId('external-chart-status')).toContainText('팝업이 차단되었습니다.');
   expect(context.pages()).toHaveLength(1);
   await assertCleanRuntime(runtime);
 });
@@ -342,13 +344,12 @@ test('mobile widths do not render or activate the external-window control', asyn
   await page.goto(initialUrl);
   for (const width of [360, 390, 430, 1023]) {
     await page.setViewportSize({ width, height: 844 });
-    await expect(page.getByRole('button', { name: '외부 창', exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('open-external-ai-chart')).toHaveCount(0);
   }
   await page.setViewportSize({ width: 1024, height: 844 });
-  await expect(page.getByRole('button', { name: '외부 창', exact: true })).toBeVisible();
+  await expect(page.getByTestId('open-external-ai-chart')).toBeVisible();
   await assertCleanRuntime(runtime);
 });
-
 
 test('mobile user agents keep the external-window feature disabled even at desktop width', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -362,7 +363,7 @@ test('mobile user agents keep the external-window feature disabled even at deskt
     });
   });
   await page.goto(initialUrl);
-  await expect(page.getByRole('button', { name: '외부 창', exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('open-external-ai-chart')).toHaveCount(0);
   await assertCleanRuntime(runtime);
 });
 
@@ -381,8 +382,8 @@ test('invalid, duplicated, unsupported, and incomplete route inputs fail closed 
   ];
   for (const route of invalidRoutes) {
     await page.goto(route);
-    await expect(page.getByRole('alert')).toContainText('임의 기본값으로 이동하지 않았습니다.');
-    await expect(page.getByRole('button', { name: '외부 창', exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('external-chart-status')).toContainText('올바르지');
+    await expect(page.getByTestId('open-external-ai-chart')).toHaveCount(0);
   }
   await assertCleanRuntime(runtime);
 });
