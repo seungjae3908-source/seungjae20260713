@@ -5,7 +5,13 @@ import {
   evaluatePortfolioAdditionalBuyWithCorrelation,
 } from "../src/portfolio-risk-analysis.js";
 
+const defaultCorrelationSeries = Object.freeze({
+  assetReturns: Object.freeze([0.01, 0.02, -0.01, 0.03, -0.02, 0.04]),
+  portfolioReturns: Object.freeze([0.009, 0.018, -0.012, 0.028, -0.018, 0.037]),
+});
+
 function baseInput(overrides = {}) {
+  const hasCorrelationSeries = Object.prototype.hasOwnProperty.call(overrides, "correlationSeries");
   return {
     portfolio: { equity: 10_000, totalExposure: 2_000, symbolExposure: 800, ...(overrides.portfolio ?? {}) },
     currentPosition: { quantity: 10, averagePrice: 100, currentPrice: 110, ...(overrides.currentPosition ?? {}) },
@@ -22,10 +28,7 @@ function baseInput(overrides = {}) {
       invalidationTriggered: false,
       ...(overrides.risk ?? {}),
     },
-    correlationSeries: overrides.correlationSeries ?? {
-      assetReturns: [0.01, 0.02, -0.01, 0.03, -0.02, 0.04],
-      portfolioReturns: [0.009, 0.018, -0.012, 0.028, -0.018, 0.037],
-    },
+    correlationSeries: hasCorrelationSeries ? overrides.correlationSeries : defaultCorrelationSeries,
   };
 }
 
@@ -58,7 +61,13 @@ test("portfolio decision uses calculated correlation instead of caller-supplied 
   assert.equal(result.correlationAnalysis.insufficientData, false);
 });
 
-test("insufficient or zero-variance correlation data is treated as partial market data", () => {
+test("missing, insufficient or zero-variance correlation data is treated as partial market data", () => {
+  const missing = evaluatePortfolioAdditionalBuyWithCorrelation(baseInput({ correlationSeries: undefined }));
+  assert.equal(missing.classification, "additional_buy_prohibited");
+  assert.ok(missing.reasons.includes("partial_market_data"));
+  assert.equal(missing.correlation, null);
+  assert.equal(missing.correlationAnalysis.reason, "missing_correlation_series");
+
   const tooShort = evaluatePortfolioAdditionalBuyWithCorrelation(baseInput({
     correlationSeries: { assetReturns: [0.01, 0.02], portfolioReturns: [0.01, 0.02] },
   }));
