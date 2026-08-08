@@ -19,21 +19,24 @@ const stagingScript = await read('ops/deploy-staging.sh');
 const stagingVerifier = await read('api-server/scripts/verify-phase10-staging-readiness.mjs');
 const verdictBuilder = await read('api-server/scripts/build-staging-verdict.mjs');
 const verdictVerifier = await read('api-server/scripts/verify-staging-verdict.mjs');
+const ciProvenance = await read('api-server/scripts/production-ci-provenance.cjs');
 const stagingSpec = await read('stock-analyzer/e2e/phase10-staging-readiness.spec.ts');
 const stagingAccountLifecycle = await read('stock-analyzer/e2e/support/staging-account-lifecycle.ts');
 
-for (const workflow of [production, approval]) {
-  for (const status of [
-    'application-ci/verified',
-    'browser-ui/verified',
-    'database-rls/verified',
-    'security-integration/verified',
-    'ai-privacy/verified',
-    'futures-public-network-smoke/verified',
-  ]) {
-    assert(workflow.includes(status), `production gate is missing required status ${status}`);
-  }
+for (const status of [
+  'application-ci/verified',
+  'browser-ui/verified',
+  'database-rls/verified',
+  'security-integration/verified',
+  'ai-privacy/verified',
+  'futures-public-network-smoke/verified',
+]) {
+  assert(production.includes(status), `production workflow is missing required status ${status}`);
+  assert(ciProvenance.includes(`'${status}'`), `shared production CI provenance is missing required status ${status}`);
 }
+assert(approval.includes('production-ci-provenance.cjs'), 'one-time approval must use the shared production CI provenance contract');
+assert(approval.includes('inspectRequiredStatusEvidence'), 'one-time approval must enforce same-run CI status evidence');
+assert(approval.includes('evaluateProductionCiProvenance'), 'one-time approval must verify official Application CI provenance');
 
 assert(/workflow_dispatch:/.test(production), 'production workflow must support explicit workflow dispatch');
 assert(!/\n\s*push:\s*\n\s*branches:/.test(production), 'production workflow must not deploy on main push');
@@ -48,6 +51,17 @@ assert(production.includes("run.path === '.github/workflows/staging-readiness.ym
 assert(production.includes("run.conclusion === 'success'"), 'production gate must require successful staging workflow conclusion');
 assert(/environment:\s*production/.test(production), 'production deploy job must use the protected production environment');
 assert(!/STAGING_(?:SSH|SUPABASE|DATABASE|PENDING|ASSOCIATE|REGULAR|ADMIN)/.test(production), 'production workflow must not consume staging secrets');
+
+assert(/workflow_dispatch:/.test(approval), 'one-time approval must be explicitly workflow-dispatched');
+assert(approval.includes('target_sha:'), 'one-time approval must require an explicit target_sha input');
+assert(approval.includes('RAW_TARGET_SHA: ${{ inputs.target_sha }}'), 'one-time approval target must come from target_sha input');
+assert(!/\n\s*push:\s*/.test(approval), 'main push must not trigger one-time production approval');
+assert(!approval.includes('ops/production-approval.json'), 'legacy approval JSON must not participate in runtime approval');
+assert(!approval.includes('${{ github.sha }}'), 'approval workflow SHA must never become the production target');
+assert(approval.includes("'refs/heads/main'"), 'one-time approval must require the main workflow ref');
+assert(approval.includes('currentMainSha: mainResponse.data.commit.sha'), 'one-time approval must require exact current main equality');
+assert(approval.includes('evaluateProductionDispatchTarget'), 'one-time approval must enforce approval/deploy SHA equality');
+assert(approval.includes('sha: dispatchContract.targetSha'), 'Production Deploy must receive the approved immutable SHA');
 
 assert(!/PROD_/.test(staging), 'staging workflow must not consume production secrets');
 assert(!staging.includes('/opt/stock-app'), 'staging workflow must not use the production path');
@@ -69,10 +83,10 @@ assert(verdictBuilder.includes('정의된 검증 범위 내 미발견 오류 0�
 assert(verdictBuilder.includes('오류 발견 — 운영 배포 불가'), 'verdict builder must use the exact failure verdict');
 assert(verdictBuilder.includes('배포 성공, 전체 검증 미완료 — 운영 배포 불가'), 'verdict builder must use the exact incomplete verdict');
 
-assert(approval.includes('actions.listArtifactsForRepo'), 'one-time approval must wait for an exact verdict artifact');
+assert(approval.includes('actions.listArtifactsForRepo'), 'one-time approval must locate an exact verdict artifact');
 assert(approval.includes('actions/download-artifact@v4'), 'one-time approval must download the verdict');
 assert(approval.includes('verify-staging-verdict.mjs'), 'one-time approval must independently validate the verdict');
-assert(approval.includes('failed=0, skipped=0'), 'one-time approval audit must require zero failed and skipped checks');
+assert(verdictVerifier.includes('verdict.failed !== 0') && verdictVerifier.includes('verdict.skipped !== 0'), 'one-time approval verdict verifier must require zero failed and skipped checks');
 assert(approval.includes('actions.createWorkflowDispatch'), 'one-time approval must dispatch only the official production workflow');
 assert(!approval.includes('secrets.'), 'one-time approval gate must not read deployment secrets');
 assert(!approval.includes('/opt/stock-app'), 'one-time approval gate must not touch the production path');
@@ -216,8 +230,19 @@ try {
     storage_objects_copied: 0,
     credentials_recorded: false,
   }));
+  const browserSpecTitles = [
+    'desktop: login, refresh session retention, responsive layout, and logout',
+    'mobile: login, refresh session retention, responsive layout, and logout',
+    'desktop: major screens, search/detail, domestic/overseas/coin, watchlist, alerts, and settings',
+    'mobile: major screens, search/detail, domestic/overseas/coin, watchlist, alerts, and settings',
+  ];
   await writeFile(path.join(temp, 'playwright-report.json'), JSON.stringify({
-    suites: [{ specs: [{ title: 'sample', tests: [{ projectName: 'chromium', status: 'expected', results: [{ status: 'passed' }] }] }] }],
+    suites: [{
+      specs: browserSpecTitles.map((title) => ({
+        title,
+        tests: [{ projectName: '', status: 'expected', results: [{ status: 'passed' }] }],
+      })),
+    }],
   }));
   await writeFile(path.join(temp, 'staging-browser-results.json'), JSON.stringify({
     console_errors: [], page_errors: [], unhandled_rejections: [], unexpected_http_errors: [],
@@ -233,7 +258,15 @@ try {
     pm2_status: 'online',
     restart_count: 3,
     restart_count_delta: 0,
-    checks: [{ name: 'health', status: 'passed' }],
+    checks: [
+      { name: 'deployed SHA matches target', status: 'passed' },
+      { name: 'internal health check', status: 'passed' },
+      { name: 'internal health SHA matches target', status: 'passed' },
+      { name: 'external health check', status: 'passed' },
+      { name: 'external health SHA matches target', status: 'passed' },
+      { name: 'PM2 process online', status: 'passed' },
+      { name: 'PM2 restart count stable', status: 'passed' },
+    ],
   }));
   await writeFile(path.join(temp, 'staging-database-verification.json'), JSON.stringify({
     status: 'passed', detail: 'not required',
@@ -246,6 +279,8 @@ try {
       TARGET_SHA: sha,
       STAGING_RUN_FULL_VALIDATION: 'true',
       STAGING_ARTIFACT_DIR: temp,
+      GITHUB_RUN_ID: '123456789',
+      GITHUB_RUN_ATTEMPT: '1',
     },
   });
   assert(built.status === 0, `release-ready fixture should pass: ${built.stderr}`);
@@ -258,5 +293,3 @@ try {
 } finally {
   await rm(temp, { recursive: true, force: true });
 }
-
-console.log('[phase10-deployment-safety] ephemeral four-tier staging accounts, cleanup, production-project rejection, atomic bootstrap evidence, full staging validation, zero-skip verdict artifact, exact-SHA production revalidation, manual protected production deployment, and rollback contract verified');

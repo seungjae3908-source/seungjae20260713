@@ -20,10 +20,12 @@ on:
       - scripts/agent_hub_executor_safety_v2.py
       - scripts/agent_hub_executor_gate_hardening_v2.py
       - scripts/agent_hub_executor_report_hardening_v2.py
+      - scripts/agent_hub_control_plane_v2.py
       - scripts/agent_hub_legacy_migration_v2.py
       - scripts/test_agent_hub_v2.py
       - scripts/test_agent_hub_executor_v2.py
       - scripts/test_agent_hub_hardening_v2.py
+      - scripts/test_agent_hub_control_plane_isolation_v2.py
       - docs/agent-hub*.md
   pull_request:
     branches: [main]
@@ -44,10 +46,12 @@ on:
       - scripts/agent_hub_executor_safety_v2.py
       - scripts/agent_hub_executor_gate_hardening_v2.py
       - scripts/agent_hub_executor_report_hardening_v2.py
+      - scripts/agent_hub_control_plane_v2.py
       - scripts/agent_hub_legacy_migration_v2.py
       - scripts/test_agent_hub_v2.py
       - scripts/test_agent_hub_executor_v2.py
       - scripts/test_agent_hub_hardening_v2.py
+      - scripts/test_agent_hub_control_plane_isolation_v2.py
       - docs/agent-hub*.md
   repository_dispatch:
     types: [agent-hub-command-ready]
@@ -86,19 +90,23 @@ jobs:
             scripts/agent_hub_executor_safety_v2.py \
             scripts/agent_hub_executor_gate_hardening_v2.py \
             scripts/agent_hub_executor_report_hardening_v2.py \
+            scripts/agent_hub_control_plane_v2.py \
             scripts/agent_hub_legacy_migration_v2.py \
             scripts/test_agent_hub_v2.py \
             scripts/test_agent_hub_executor_v2.py \
-            scripts/test_agent_hub_hardening_v2.py
+            scripts/test_agent_hub_hardening_v2.py \
+            scripts/test_agent_hub_control_plane_isolation_v2.py
           python3 scripts/agent_hub_executor_gate_v2.py --self-test
           python3 scripts/agent_hub_executor_report_v2.py --self-test
           python3 scripts/agent_hub_executor_safety_v2.py --self-test
           python3 scripts/agent_hub_executor_gate_hardening_v2.py --self-test
           python3 scripts/agent_hub_executor_report_hardening_v2.py --self-test
+          python3 scripts/agent_hub_control_plane_v2.py --self-test
           python3 scripts/agent_hub_legacy_migration_v2.py
           python3 scripts/test_agent_hub_executor_v2.py
           python3 scripts/test_agent_hub_v2.py
           python3 scripts/test_agent_hub_hardening_v2.py
+          python3 scripts/test_agent_hub_control_plane_isolation_v2.py
       - name: Assert fixture-only manual validation
         if: github.event_name == 'workflow_dispatch'
         run: echo 'workflow_dispatch completed fixture and self-test validation only; no Issue command was consumed.'
@@ -157,17 +165,32 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - name: Reject tracked Gemini configuration
         run: test -z "$(git ls-files '.gemini/**')"
+      - name: Seal immutable Agent Hub control plane
+        env:
+          CONTROL_PLANE_DIR: ${{ runner.temp }}/agent-hub-control-plane
+          CONTROL_PLANE_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$CONTROL_PLANE_SHA"
+          python3 scripts/agent_hub_control_plane_v2.py seal \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --destination "$CONTROL_PLANE_DIR" \
+            --source-sha "$CONTROL_PLANE_SHA"
       - name: Prepare trusted sealed schema-v2 command
         id: prepare
         env:
-          PYTHONPATH: scripts
+          CONTROL_PLANE_DIR: ${{ runner.temp }}/agent-hub-control-plane
+          CONTROL_PLANE_SHA: ${{ github.sha }}
+          PYTHONPATH: ${{ runner.temp }}/agent-hub-control-plane
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HUB_ISSUE_NUMBER: '62'
-        run: python3 scripts/agent_hub_executor_gate_hardening_v2.py
+        run: |
+          python3 "$CONTROL_PLANE_DIR/agent_hub_control_plane_v2.py" verify --destination "$CONTROL_PLANE_DIR" --source-sha "$CONTROL_PLANE_SHA"
+          python3 "$CONTROL_PLANE_DIR/agent_hub_executor_gate_hardening_v2.py"
       - name: Verify Gemini secret
         if: steps.prepare.outputs.should_run == 'true'
         env:
@@ -196,6 +219,13 @@ jobs:
             test "$WORK_BRANCH" != "$TARGET_BRANCH"
             git switch --create "$WORK_BRANCH" "$EXPECTED_HEAD_SHA"
           fi
+      - name: Verify immutable Agent Hub control plane after target checkout
+        if: steps.prepare.outputs.should_run == 'true'
+        env:
+          CONTROL_PLANE_DIR: ${{ runner.temp }}/agent-hub-control-plane
+          CONTROL_PLANE_SHA: ${{ github.sha }}
+          PYTHONPATH: ${{ runner.temp }}/agent-hub-control-plane
+        run: python3 "$CONTROL_PLANE_DIR/agent_hub_control_plane_v2.py" verify --destination "$CONTROL_PLANE_DIR" --source-sha "$CONTROL_PLANE_SHA"
       - name: Run read-only Gemini
         if: steps.prepare.outputs.should_run == 'true' && steps.prepare.outputs.execution_mode == 'read_only'
         id: read
@@ -230,7 +260,9 @@ jobs:
         if: steps.prepare.outputs.should_run == 'true'
         id: diff
         env:
-          PYTHONPATH: scripts
+          CONTROL_PLANE_DIR: ${{ runner.temp }}/agent-hub-control-plane
+          CONTROL_PLANE_SHA: ${{ github.sha }}
+          PYTHONPATH: ${{ runner.temp }}/agent-hub-control-plane
           EXECUTION_MODE: ${{ steps.prepare.outputs.execution_mode }}
           BASE_REF: ${{ steps.prepare.outputs.expected_head_sha }}
           ALLOWED_PATHS: ${{ steps.prepare.outputs.allowed_paths }}
@@ -238,7 +270,8 @@ jobs:
           MAX_FILES: ${{ steps.prepare.outputs.max_files }}
         run: |
           rm -rf .gemini gemini-artifacts
-          python3 scripts/agent_hub_executor_safety_v2.py validate-diff
+          python3 "$CONTROL_PLANE_DIR/agent_hub_control_plane_v2.py" verify --destination "$CONTROL_PLANE_DIR" --source-sha "$CONTROL_PLANE_SHA"
+          python3 "$CONTROL_PLANE_DIR/agent_hub_executor_safety_v2.py" validate-diff # agent_hub_executor_safety_v2.py validate-diff
       - uses: pnpm/action-setup@v4
         if: >-
           steps.prepare.outputs.should_run == 'true' &&
@@ -317,6 +350,8 @@ jobs:
           )
         id: pr
         env:
+          CONTROL_PLANE_DIR: ${{ runner.temp }}/agent-hub-control-plane
+          CONTROL_PLANE_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTION_TYPE: ${{ steps.prepare.outputs.action_type }}
           WORK_BRANCH: ${{ steps.prepare.outputs.work_branch }}
@@ -328,10 +363,11 @@ jobs:
           CURRENT_HEAD_SHA: ${{ steps.commit.outputs.head_sha || steps.prepare.outputs.expected_head_sha }}
         run: |
           set -Eeuo pipefail
+          python3 "$CONTROL_PLANE_DIR/agent_hub_control_plane_v2.py" verify --destination "$CONTROL_PLANE_DIR" --source-sha "$CONTROL_PLANE_SHA"
           owner="${GITHUB_REPOSITORY%%/*}"
           existing="$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&head=${owner}:${WORK_BRANCH}" --jq '.[0] // empty')"
           if [ -n "$existing" ]; then
-            PR_JSON="$existing" PYTHONPATH=scripts python3 - <<'PY'
+            PR_JSON="$existing" PYTHONPATH="$CONTROL_PLANE_DIR" python3 - <<'PY'
           import json, os
           from agent_hub_github_validation_v2 import validate_draft_pr_reuse
           payload=json.loads(os.environ['PR_JSON'])
@@ -394,7 +430,9 @@ jobs:
         id: report
         if: always() && steps.prepare.outputs.should_run == 'true'
         env:
-          PYTHONPATH: scripts
+          CONTROL_PLANE_DIR: ${{ runner.temp }}/agent-hub-control-plane
+          CONTROL_PLANE_SHA: ${{ github.sha }}
+          PYTHONPATH: ${{ runner.temp }}/agent-hub-control-plane
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HUB_ISSUE_NUMBER: '62'
           COMMAND_ID: ${{ steps.prepare.outputs.command_id }}
@@ -413,4 +451,6 @@ jobs:
           EXECUTION_MODE: ${{ steps.prepare.outputs.execution_mode }}
           AUTO_STEP: ${{ steps.prepare.outputs.auto_step || '0' }}
           FAILURE_SIGNATURE: ${{ job.status == 'success' && '' || format('{0}:{1}:failed', steps.prepare.outputs.action_type, steps.prepare.outputs.expected_head_sha) }}
-        run: python3 scripts/agent_hub_executor_report_hardening_v2.py
+        run: |
+          python3 "$CONTROL_PLANE_DIR/agent_hub_control_plane_v2.py" verify --destination "$CONTROL_PLANE_DIR" --source-sha "$CONTROL_PLANE_SHA"
+          python3 "$CONTROL_PLANE_DIR/agent_hub_executor_report_hardening_v2.py"
