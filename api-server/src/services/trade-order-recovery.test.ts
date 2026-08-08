@@ -233,36 +233,22 @@ test('lookup failure schedules bounded retries and never replays the order POST'
   }
 });
 
-test('Kiwoom recovery uses token and unfilled inquiry but never sends a stock order', async () => {
+test('Kiwoom recovery without an exchange order id fails closed without external lookup or stock order', async () => {
   const { repository, planValue, orderValue } = await setup('kiwoom', 'mock', {
     appKey: 'kiwoom-app', secretKey: 'kiwoom-secret',
   });
   const nativeFetch = globalThis.fetch;
-  const requests: Array<{ url: string; method: string; apiId: string | null }> = [];
-  globalThis.fetch = (async (input, init) => {
-    const url = input instanceof Request ? input.url : String(input);
-    const method = String(init?.method ?? 'GET').toUpperCase();
-    const headers = new Headers(init?.headers);
-    const apiId = headers.get('api-id');
-    requests.push({ url, method, apiId });
-    if (url.endsWith('/oauth2/token')) {
-      return new Response(JSON.stringify({ return_code: 0, token: 'mock-token' }), {
-        status: 200, headers: { 'content-type': 'application/json' },
-      });
-    }
-    assert.equal(apiId, 'ka10075');
-    return new Response(JSON.stringify({ return_code: 0, data: [] }), {
-      status: 200, headers: { 'content-type': 'application/json' },
-    });
+  let outbound = 0;
+  globalThis.fetch = (async () => {
+    outbound += 1;
+    throw new Error('unexpected outbound');
   }) as typeof fetch;
   try {
     const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
     assert.equal(recovered.state, 'RECOVERY_REQUIRED');
     assert.equal(recovered.manualReviewRequired, true);
-    assert.equal(recovered.lastErrorCode, 'KIWOOM_ORDER_ID_REQUIRED_FOR_RECOVERY');
-    assert.equal(requests.length, 2);
-    assert.equal(requests.some((request) => request.url.includes('/api/dostk/ordr')), false);
-    assert.equal(requests.some((request) => request.apiId === 'kt10000' || request.apiId === 'kt10001'), false);
+    assert.equal(recovered.lastErrorCode, 'KIWOOM_EXCHANGE_ORDER_ID_UNKNOWN');
+    assert.equal(outbound, 0);
   } finally {
     globalThis.fetch = nativeFetch;
   }
