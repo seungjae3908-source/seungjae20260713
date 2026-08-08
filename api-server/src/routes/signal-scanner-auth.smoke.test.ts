@@ -8,12 +8,12 @@ import type { ScannerResponse } from '../services/scanner-signal.types';
 import { createBoundedMarketScanRouter } from './bounded-market-scan';
 import { createCryptoSignalScanRouter } from './crypto-signal-scan';
 
-function member(level: 'associate' | 'regular'): MemberProfile {
+function member(level: 'associate' | 'regular' | 'admin'): MemberProfile {
   return {
     id: `member-${level}`,
     login_name: level,
     display_name: level,
-    role: 'member',
+    role: level === 'admin' ? 'admin' : 'member',
     status: 'approved',
     membership_level: level,
     is_active: true,
@@ -105,34 +105,26 @@ test('stock scanner returns 401 without a session', async () => {
   );
 });
 
-test('associate is denied stock risk scanner while regular member succeeds', async () => {
+test('associate and regular may use the public stock scanner without gaining order or Risk capabilities', async () => {
   const scanner = { scan: async () => response('stock') };
-  await withServer(
-    (app) => {
-      app.use(inject(member('associate')));
-      app.use('/api/market/scan', createBoundedMarketScanRouter({ scanner, guard: new ScannerRequestGuard() }));
-    },
-    async (baseUrl) => {
-      const result = await fetch(`${baseUrl}/api/market/scan?market=KR`);
-      assert.equal(result.status, 403);
-    },
-  );
-  await withServer(
-    (app) => {
-      app.use(inject(member('regular')));
-      app.use('/api/market/scan', createBoundedMarketScanRouter({ scanner, guard: new ScannerRequestGuard() }));
-    },
-    async (baseUrl) => {
-      const result = await fetch(`${baseUrl}/api/market/scan?market=KR`);
-      assert.equal(result.status, 200);
-      const body = await result.json() as ScannerResponse;
-      assert.equal(body.orderSubmitted, false);
-      assert.equal(body.exchangeRequestSent, false);
-    },
-  );
+  for (const level of ['associate', 'regular'] as const) {
+    await withServer(
+      (app) => {
+        app.use(inject(member(level)));
+        app.use('/api/market/scan', createBoundedMarketScanRouter({ scanner, guard: new ScannerRequestGuard() }));
+      },
+      async (baseUrl) => {
+        const result = await fetch(`${baseUrl}/api/market/scan?market=KR`);
+        assert.equal(result.status, 200);
+        const body = await result.json() as ScannerResponse;
+        assert.equal(body.orderSubmitted, false);
+        assert.equal(body.exchangeRequestSent, false);
+      },
+    );
+  }
 });
 
-test('associate may scan Upbit spot but not Bitget futures', async () => {
+test('associate may scan public Upbit spot and Bitget futures data without receiving general futures capability', async () => {
   await withServer(
     (app) => {
       app.use(inject(member('associate')));
@@ -144,12 +136,42 @@ test('associate may scan Upbit spot but not Bitget futures', async () => {
       }));
     },
     async (baseUrl) => {
-      // Authorization is the subject of this smoke test. Use a selectable
-      // scalping primary timeframe; 15m is deliberately context-only.
       const spot = await fetch(`${baseUrl}/api/scanner/crypto/spot?strategy=scalping&timeframe=5m`);
       assert.equal(spot.status, 200);
       const futures = await fetch(`${baseUrl}/api/scanner/crypto/futures?strategy=scalping&timeframe=5m`);
-      assert.equal(futures.status, 403);
+      assert.equal(futures.status, 200);
+    },
+  );
+});
+
+test('non-admin grade=S query tampering fails closed while admin may request S', async () => {
+  const scanner = { scan: async () => response('stock') };
+  for (const level of ['associate', 'regular'] as const) {
+    let scanCalls = 0;
+    await withServer(
+      (app) => {
+        app.use(inject(member(level)));
+        app.use('/api/market/scan', createBoundedMarketScanRouter({
+          scanner: { scan: async () => { scanCalls += 1; return response('stock'); } },
+          guard: new ScannerRequestGuard(),
+        }));
+      },
+      async (baseUrl) => {
+        const result = await fetch(`${baseUrl}/api/market/scan?market=KR&grade=S`);
+        assert.equal(result.status, 403);
+        assert.equal((await result.json() as { error: string }).error, 'SCANNER_GRADE_FORBIDDEN');
+      },
+    );
+    assert.equal(scanCalls, 0);
+  }
+  await withServer(
+    (app) => {
+      app.use(inject(member('admin')));
+      app.use('/api/market/scan', createBoundedMarketScanRouter({ scanner, guard: new ScannerRequestGuard() }));
+    },
+    async (baseUrl) => {
+      const result = await fetch(`${baseUrl}/api/market/scan?market=KR&grade=S`);
+      assert.equal(result.status, 200);
     },
   );
 });
