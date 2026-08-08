@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   applyScannerSignalLifecycle,
   clearScannerSignalLifecycleForTests,
+  getScannerLifecycleSnapshot,
+  getScannerSignalLifecycleSnapshot,
   setScannerExternalLifecycleState,
 } from './scanner-signal-lifecycle.service';
 import type { ScannerSignalCard } from './scanner-signal.types';
@@ -110,11 +112,15 @@ test('order-owned states are synchronized externally and scanner does not advanc
     current = applyScannerSignalLifecycle('member-3', [current], now + index * 1_000).cards[0];
   }
   assert.equal(current.signalState, 'APPROVAL_PENDING');
+  assert.equal(getScannerLifecycleSnapshot('member-3', current.signalId)?.state, 'APPROVAL_PENDING');
+  assert.equal(getScannerSignalLifecycleSnapshot('member-3', current.signalId)?.state, 'READY_FOR_APPROVAL');
   assert.equal(setScannerExternalLifecycleState('member-3', current.signalId, 'APPROVED', now + 6_000), true);
   const afterApproval = applyScannerSignalLifecycle('member-3', [card({ signalId: current.signalId })], now + 7_000);
   assert.equal(afterApproval.cards[0].signalState, 'APPROVED');
   assert.equal(afterApproval.alerts.length, 0);
   assert.equal(afterApproval.cards[0].strongSignalEligible, true);
+  assert.equal(getScannerLifecycleSnapshot('member-3', current.signalId)?.state, 'APPROVED');
+  assert.equal(getScannerSignalLifecycleSnapshot('member-3', current.signalId)?.state, 'approved');
 });
 
 test('expired signal never produces an approval alert', () => {
