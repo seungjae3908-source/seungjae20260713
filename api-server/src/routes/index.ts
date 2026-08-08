@@ -84,7 +84,15 @@ router.use('/paper-trading', requireCapability('canAccessPaperTrading'));
 router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/', paperJournalRouter);
-router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
+
+// Trade automation visibility, order mutation, and Paper approval are separate
+// server capabilities. UI visibility is never the only enforcement layer.
+router.use('/trade-automation', requireCapability('canAccessTradeAutomation'));
+router.post('/trade-automation/plans', requireCapability('canPlaceOrders'));
+router.post('/trade-automation/plans/:id/approve', requireCapability('canApprovePaperOrder'));
+router.post('/trade-automation/plans/:id/invalidate', requireCapability('canPlaceOrders'));
+router.post('/trade-automation/orders/:id/cancel', requireCapability('canPlaceOrders'));
+router.post('/trade-automation/recovery/scan', requireCapability('canPlaceOrders'));
 router.use('/trade-automation', tradeAutomationRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));

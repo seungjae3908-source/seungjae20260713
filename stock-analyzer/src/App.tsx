@@ -45,6 +45,7 @@ const Phase8ReleaseCandidateE2EPage = lazy(() => import('@/pages/phase8-release-
 const Phase9AiReviewE2EPage = lazy(() => import('@/pages/phase9-ai-review-e2e'));
 const AiChartPage = lazy(() => import('@/pages/ai-chart'));
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
+const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
 const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
 
@@ -111,9 +112,10 @@ function gated(capability: MemberCapability, child: React.ReactNode) {
   return <CapabilityGate capability={capability}>{child}</CapabilityGate>;
 }
 
-function ScannerAccess() { return gated('canAccessRiskPreview', <TechnicalWorkspacePage />); }
+function ScannerAccess() { return gated('canAccessSignalScanner', <TechnicalWorkspacePage />); }
 function AiChartAccess() { return gated('canAccessRiskPreview', <AiChartPage />); }
 function AiChatAccess() { return gated('canAccessBasicInfo', <AiChatPage />); }
+function AutoTradingAccess() { return gated('canAccessTradeAutomation', <AutoTradingPage />); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
 function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
@@ -134,7 +136,7 @@ function ApprovedRouter() {
     <Route path="/" component={HomePage} />
     <Route path="/home" component={HomePage} />
     <Route path="/stocks" component={StocksPage} />
-    <Route path="/auto-trading" component={ScannerAccess} />
+    <Route path="/auto-trading" component={AutoTradingAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
     <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
