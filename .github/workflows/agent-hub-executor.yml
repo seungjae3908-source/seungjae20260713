@@ -271,7 +271,7 @@ jobs:
         run: |
           rm -rf .gemini gemini-artifacts
           python3 "$CONTROL_PLANE_DIR/agent_hub_control_plane_v2.py" verify --destination "$CONTROL_PLANE_DIR" --source-sha "$CONTROL_PLANE_SHA"
-          python3 "$CONTROL_PLANE_DIR/agent_hub_executor_safety_v2.py" validate-diff
+          python3 "$CONTROL_PLANE_DIR/agent_hub_executor_safety_v2.py" validate-diff # agent_hub_executor_safety_v2.py validate-diff
       - uses: pnpm/action-setup@v4
         if: >-
           steps.prepare.outputs.should_run == 'true' &&
