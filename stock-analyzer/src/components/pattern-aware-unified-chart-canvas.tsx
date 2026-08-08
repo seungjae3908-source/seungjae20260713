@@ -72,10 +72,20 @@ type OverlayState = {
 type ChartInstance = {
   chart: IChartApi;
   candle: ISeriesApi<'Candlestick'>;
-  volume?: ISeriesApi<'Histogram'>;
-  lines: Partial<Record<LineKey, ISeriesApi<'Line'>>>;
+  volume: ISeriesApi<'Histogram'>;
+  lines: Record<LineKey, ISeriesApi<'Line'>>;
   referencePriceLines: IPriceLine[];
   analysisPriceLines: IPriceLine[];
+};
+
+type LogicalViewport = {
+  from: number;
+  to: number;
+};
+
+type StoredViewport = {
+  resetKey: string;
+  logicalRange: LogicalViewport;
 };
 
 type Props = {
@@ -90,22 +100,18 @@ type Props = {
   onCandleSelect: (time: number) => void;
 };
 
-function addLine(
+function createLine(
   chart: IChartApi,
-  rows: Array<{ time: number; value: number }>,
   options: Record<string, unknown>,
-): ISeriesApi<'Line'> | undefined {
-  if (!rows.length) return undefined;
-  const series = chart.addLineSeries(options);
-  series.setData(rows.map((row) => ({ time: row.time as UTCTimestamp, value: row.value })));
-  return series;
+): ISeriesApi<'Line'> {
+  return chart.addLineSeries(options);
 }
 
 function setLineData(
-  series: ISeriesApi<'Line'> | undefined,
+  series: ISeriesApi<'Line'>,
   rows: Array<{ time: number; value: number }>,
 ): void {
-  series?.setData(rows.map((row) => ({ time: row.time as UTCTimestamp, value: row.value })));
+  series.setData(rows.map((row) => ({ time: row.time as UTCTimestamp, value: row.value })));
 }
 
 function removePriceLines(series: ISeriesApi<'Candlestick'>, lines: IPriceLine[]): void {
@@ -118,6 +124,23 @@ function statusColor(status: ChartAnalysis['status']): string {
   if (status === 'invalidated') return '#dc2626';
   if (status === 'weakened') return '#f97316';
   return '#f59e0b';
+}
+
+function logicalViewport(chart: IChartApi): LogicalViewport | null {
+  const range = chart.timeScale().getVisibleLogicalRange();
+  if (!range || !Number.isFinite(range.from) || !Number.isFinite(range.to)) return null;
+  return { from: Number(range.from), to: Number(range.to) };
+}
+
+function restoreLogicalViewport(chart: IChartApi, range: LogicalViewport | null): void {
+  if (!range) return;
+  chart.timeScale().setVisibleLogicalRange({ from: range.from, to: range.to });
+}
+
+function exposeLogicalViewport(wrapper: HTMLDivElement | null, chart: IChartApi): LogicalViewport | null {
+  const range = logicalViewport(chart);
+  if (wrapper) wrapper.dataset.visibleLogicalRange = range ? `${range.from}:${range.to}` : '';
+  return range;
 }
 
 export function PatternAwareUnifiedChartCanvas({
@@ -134,7 +157,9 @@ export function PatternAwareUnifiedChartCanvas({
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const instanceRef = useRef<ChartInstance | null>(null);
+  const storedViewportRef = useRef<StoredViewport | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const hasChartData = candles.length >= 2;
 
   const activePattern = useMemo(() => {
     return analyzeChartStructure(candles).patterns
@@ -154,7 +179,7 @@ export function PatternAwareUnifiedChartCanvas({
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || candles.length < 2) return;
+    if (!container || !hasChartData) return;
     const dark = document.documentElement.classList.contains('dark');
     const chart = createChart(container, {
       width: Math.max(container.clientWidth, 1),
@@ -172,7 +197,7 @@ export function PatternAwareUnifiedChartCanvas({
       rightPriceScale: {
         visible: true,
         borderVisible: true,
-        scaleMargins: { top: 0.08, bottom: overlays.volume ? 0.24 : 0.08 },
+        scaleMargins: { top: 0.08, bottom: 0.08 },
       },
       timeScale: {
         visible: true,
@@ -204,41 +229,44 @@ export function PatternAwareUnifiedChartCanvas({
       priceLineVisible: true,
       lastValueVisible: true,
     });
+    const lines: Record<LineKey, ISeriesApi<'Line'>> = {
+      sma5: createLine(chart, { color: '#f59e0b', lineWidth: 1, title: 'SMA5', visible: false }),
+      sma20: createLine(chart, { color: '#8b5cf6', lineWidth: 2, title: 'SMA20', visible: false }),
+      sma60: createLine(chart, { color: '#10b981', lineWidth: 1, title: 'SMA60', visible: false }),
+      sma120: createLine(chart, { color: '#ec4899', lineWidth: 1, title: 'SMA120', visible: false }),
+      ema12: createLine(chart, { color: '#f97316', lineWidth: 1, title: 'EMA12', visible: false }),
+      ema26: createLine(chart, { color: '#0ea5e9', lineWidth: 1, title: 'EMA26', visible: false }),
+      vwap: createLine(chart, { color: '#06b6d4', lineWidth: 2, lineStyle: LineStyle.Dashed, title: 'VWAP', visible: false }),
+      bollingerUpper: createLine(chart, { color: 'rgba(14,165,233,0.75)', lineWidth: 1, title: 'BB 상단', visible: false }),
+      bollingerMiddle: createLine(chart, { color: 'rgba(14,165,233,0.38)', lineWidth: 1, lineStyle: LineStyle.Dashed, title: 'BB 중심', visible: false }),
+      bollingerLower: createLine(chart, { color: 'rgba(14,165,233,0.75)', lineWidth: 1, title: 'BB 하단', visible: false }),
+    };
+    const volume = chart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      visible: false,
+    });
+    volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
     const instance: ChartInstance = {
       chart,
       candle,
-      lines: {},
+      volume,
+      lines,
       referencePriceLines: [],
       analysisPriceLines: [],
     };
-    if (overlays.sma5) instance.lines.sma5 = addLine(chart, indicatorSeries(indicators, 'sma5'), { color: '#f59e0b', lineWidth: 1, title: 'SMA5' });
-    if (overlays.sma20) instance.lines.sma20 = addLine(chart, indicatorSeries(indicators, 'sma20'), { color: '#8b5cf6', lineWidth: 2, title: 'SMA20' });
-    if (overlays.sma60) instance.lines.sma60 = addLine(chart, indicatorSeries(indicators, 'sma60'), { color: '#10b981', lineWidth: 1, title: 'SMA60' });
-    if (overlays.sma120) instance.lines.sma120 = addLine(chart, indicatorSeries(indicators, 'sma120'), { color: '#ec4899', lineWidth: 1, title: 'SMA120' });
-    if (overlays.ema12) instance.lines.ema12 = addLine(chart, indicatorSeries(indicators, 'ema12'), { color: '#f97316', lineWidth: 1, title: 'EMA12' });
-    if (overlays.ema26) instance.lines.ema26 = addLine(chart, indicatorSeries(indicators, 'ema26'), { color: '#0ea5e9', lineWidth: 1, title: 'EMA26' });
-    if (overlays.vwap) instance.lines.vwap = addLine(chart, indicatorSeries(indicators, 'vwap'), { color: '#06b6d4', lineWidth: 2, lineStyle: LineStyle.Dashed, title: 'VWAP' });
-    if (overlays.bollinger) {
-      const band = bollingerSeries(indicators);
-      instance.lines.bollingerUpper = addLine(chart, band.upper, { color: 'rgba(14,165,233,0.75)', lineWidth: 1, title: 'BB 상단' });
-      instance.lines.bollingerMiddle = addLine(chart, band.middle, { color: 'rgba(14,165,233,0.38)', lineWidth: 1, lineStyle: LineStyle.Dashed, title: 'BB 중심' });
-      instance.lines.bollingerLower = addLine(chart, band.lower, { color: 'rgba(14,165,233,0.75)', lineWidth: 1, title: 'BB 하단' });
-    }
-    if (overlays.volume) {
-      const volume = chart.addHistogramSeries({
-        priceFormat: { type: 'volume' },
-        priceScaleId: 'volume',
-        lastValueVisible: false,
-        priceLineVisible: false,
-      });
-      volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-      instance.volume = volume;
-    }
 
     const handleClick: Parameters<IChartApi['subscribeClick']>[0] = (param) => {
       if (typeof param.time === 'number' && Number.isFinite(param.time)) onCandleSelect(param.time);
     };
+    const publishVisibleRange = () => {
+      const range = exposeLogicalViewport(wrapperRef.current, chart);
+      if (range) storedViewportRef.current = { resetKey, logicalRange: range };
+    };
     chart.subscribeClick(handleClick);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(publishVisibleRange);
     instanceRef.current = instance;
 
     const observer = new ResizeObserver((entries) => {
@@ -247,18 +275,49 @@ export function PatternAwareUnifiedChartCanvas({
       chart.applyOptions({ width: Math.max(rect.width, 1), height: Math.max(rect.height, 390) });
     });
     observer.observe(container);
+    publishVisibleRange();
 
     return () => {
+      publishVisibleRange();
       observer.disconnect();
       chart.unsubscribeClick(handleClick);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(publishVisibleRange);
       instanceRef.current = null;
       chart.remove();
     };
-  }, [onCandleSelect, overlays, timeframe]);
+  }, [hasChartData, onCandleSelect, resetKey, timeframe]);
 
   useEffect(() => {
     const instance = instanceRef.current;
     if (!instance) return;
+    const beforeUpdate = logicalViewport(instance.chart)
+      ?? (storedViewportRef.current?.resetKey === resetKey ? storedViewportRef.current.logicalRange : null);
+    instance.lines.sma5.applyOptions({ visible: overlays.sma5 });
+    instance.lines.sma20.applyOptions({ visible: overlays.sma20 });
+    instance.lines.sma60.applyOptions({ visible: overlays.sma60 });
+    instance.lines.sma120.applyOptions({ visible: overlays.sma120 });
+    instance.lines.ema12.applyOptions({ visible: overlays.ema12 });
+    instance.lines.ema26.applyOptions({ visible: overlays.ema26 });
+    instance.lines.vwap.applyOptions({ visible: overlays.vwap });
+    instance.lines.bollingerUpper.applyOptions({ visible: overlays.bollinger });
+    instance.lines.bollingerMiddle.applyOptions({ visible: overlays.bollinger });
+    instance.lines.bollingerLower.applyOptions({ visible: overlays.bollinger });
+    instance.volume.applyOptions({ visible: overlays.volume });
+    instance.chart.applyOptions({
+      rightPriceScale: {
+        scaleMargins: { top: 0.08, bottom: overlays.volume ? 0.24 : 0.08 },
+      },
+    });
+    restoreLogicalViewport(instance.chart, beforeUpdate);
+    const afterUpdate = exposeLogicalViewport(wrapperRef.current, instance.chart);
+    if (afterUpdate) storedViewportRef.current = { resetKey, logicalRange: afterUpdate };
+  }, [overlays, resetKey]);
+
+  useEffect(() => {
+    const instance = instanceRef.current;
+    if (!instance) return;
+    const beforeUpdate = logicalViewport(instance.chart)
+      ?? (storedViewportRef.current?.resetKey === resetKey ? storedViewportRef.current.logicalRange : null);
 
     instance.candle.setData(candles.map((row) => ({
       time: row.time as UTCTimestamp,
@@ -278,7 +337,7 @@ export function PatternAwareUnifiedChartCanvas({
     setLineData(instance.lines.bollingerUpper, band.upper);
     setLineData(instance.lines.bollingerMiddle, band.middle);
     setLineData(instance.lines.bollingerLower, band.lower);
-    instance.volume?.setData(candles.map((row) => ({
+    instance.volume.setData(candles.map((row) => ({
       time: row.time as UTCTimestamp,
       value: row.volume,
       color: row.close >= row.open ? 'rgba(239,68,68,0.42)' : 'rgba(59,130,246,0.42)',
@@ -351,9 +410,14 @@ export function PatternAwareUnifiedChartCanvas({
     }
     markers.sort((left, right) => Number(left.time) - Number(right.time));
     instance.candle.setMarkers(markers as never[]);
-  }, [analysis, candles, indicators, levels, overlays.levels, overlays.markers, patternOverlay]);
+
+    restoreLogicalViewport(instance.chart, beforeUpdate);
+    const afterUpdate = exposeLogicalViewport(wrapperRef.current, instance.chart);
+    if (afterUpdate) storedViewportRef.current = { resetKey, logicalRange: afterUpdate };
+  }, [analysis, candles, indicators, levels, overlays.levels, overlays.markers, patternOverlay, resetKey]);
 
   useEffect(() => {
+    storedViewportRef.current = null;
     instanceRef.current?.chart.timeScale().fitContent();
   }, [resetKey]);
 
