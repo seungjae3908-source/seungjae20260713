@@ -1,5 +1,7 @@
 import type { TradingRepository } from './trade-automation.repository';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
+import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
+import { evaluateRiskEnvelope } from './trade-risk-envelope.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder,
@@ -13,6 +15,7 @@ const MAX_RISK_EVIDENCE_AGE_MS = 30_000;
 const MAX_SIGNAL_AGE_MS = 30_000;
 const MAX_ESTIMATED_SLIPPAGE_PERCENT = 1;
 const MAX_ESTIMATED_FEE_PERCENT = 1;
+const FAST_MOVE_PERCENT = 5;
 const OPEN_POSITION_STATES = new Set(['ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'RECOVERY_REQUIRED']);
 const MAINTAINED_SIGNAL_STATES = new Set(['condition_maintained', 'entry_ready', 'approved', 'READY_FOR_APPROVAL']);
 const BROKEN_SIGNAL_STATES = new Set(['condition_broken', 'expired', 'invalidated', 'WEAKENED', 'INVALIDATED', 'EXPIRED']);
@@ -133,13 +136,11 @@ export class TradePreSubmissionRiskService {
     else if (input.order.approvedPlanVersion !== planVersion(currentPlan)) blockCodes.push('APPROVAL_VERSION_CHANGED');
 
     const policy = await this.repository.getPolicy(input.userId);
-    if (policy.mode === 'approval') {
-      if (!currentPlan.approvedAt) blockCodes.push('APPROVAL_MISSING');
-      const approvedAt = Date.parse(currentPlan.approvedAt ?? '');
-      const expiresAt = Date.parse(currentPlan.approvalExpiresAt ?? '');
-      if (!Number.isFinite(approvedAt) || approvedAt > now.getTime()) blockCodes.push('APPROVAL_TIMESTAMP_INVALID');
-      if (!Number.isFinite(expiresAt) || expiresAt <= now.getTime()) blockCodes.push('APPROVAL_EXPIRED');
-    }
+    if (!currentPlan.approvedAt) blockCodes.push('APPROVAL_MISSING');
+    const approvedAt = Date.parse(currentPlan.approvedAt ?? '');
+    const expiresAt = Date.parse(currentPlan.approvalExpiresAt ?? '');
+    if (!Number.isFinite(approvedAt) || approvedAt > now.getTime()) blockCodes.push('APPROVAL_TIMESTAMP_INVALID');
+    if (!Number.isFinite(expiresAt) || expiresAt <= now.getTime()) blockCodes.push('APPROVAL_EXPIRED');
 
     const orders = await this.repository.listOrders(input.userId);
     const previousOrders = orders.filter((order) => order.id !== input.order.id);
@@ -188,6 +189,9 @@ export class TradePreSubmissionRiskService {
     if (currentPlan.accountMode !== 'paper' && !snapshot.source?.trim()) blockCodes.push('MARKET_DATA_SOURCE_UNAVAILABLE');
     if (snapshot.marketStatus !== 'OPEN') blockCodes.push('MARKET_NOT_OPEN');
     if (snapshot.halted) blockCodes.push('MARKET_HALTED');
+    if (finite(snapshot.oneMinuteMovePercent) && Math.abs(snapshot.oneMinuteMovePercent) >= FAST_MOVE_PERCENT) {
+      blockCodes.push('FAST_MOVE_DETECTED');
+    }
 
     const currentPrice = snapshot.currentPrice;
     const approvedPrice = referencePrice(currentPlan);
@@ -246,6 +250,9 @@ export class TradePreSubmissionRiskService {
       if (targetPercent != null && targetPercent <= roundTripCostPercent) blockCodes.push('EXPECTED_COST_EXCEEDS_TARGET_MOVE');
     }
 
+    const envelopeDecision = evaluateRiskEnvelope({ plan: currentPlan, snapshot, now });
+    blockCodes.push(...envelopeDecision.blockCodes);
+
     const refreshedPlan: TradingPlan = { ...currentPlan, marketSnapshot: snapshot };
     const baseDecision: TradingRiskDecision = evaluateTradingPlan(refreshedPlan, policy, {
       emergencyStopped: policy.emergencyStopped
@@ -265,7 +272,14 @@ export class TradePreSubmissionRiskService {
       snapshot,
       priceDriftPercent,
     };
-    if (!result.allowed) throw new TradePreSubmissionRiskError(result);
+    if (!result.allowed) {
+      await tripKillSwitchForRiskFailure({
+        repository: this.repository,
+        userId: input.userId,
+        blockCodes: result.blockCodes,
+      });
+      throw new TradePreSubmissionRiskError(result);
+    }
     return result;
   }
 }

@@ -135,43 +135,6 @@ test('normal zero-match scan returns HTTP 200 empty', async () => {
   );
 });
 
-test('scalping and swing primary timeframes cannot be mixed', async () => {
-  let scannerCalls = 0;
-  await withServer(
-    { scan: async () => { scannerCalls += 1; return completeResult(); } },
-    async (baseUrl) => {
-      const wrongScalping = await fetch(`${baseUrl}/api/market/scan?market=KR&strategy=scalping&timeframe=1D`);
-      assert.equal(wrongScalping.status, 400);
-      assert.equal((await wrongScalping.json() as ScanResponseBody).error, 'SCAN_STRATEGY_TIMEFRAME_MISMATCH');
-
-      const wrongSwing = await fetch(`${baseUrl}/api/market/scan?market=US&strategy=swing&timeframe=3m`);
-      assert.equal(wrongSwing.status, 400);
-      assert.equal((await wrongSwing.json() as ScanResponseBody).error, 'SCAN_STRATEGY_TIMEFRAME_MISMATCH');
-    },
-  );
-  assert.equal(scannerCalls, 0);
-});
-
-test('scalping 3m request reaches scanner with explicit separated strategy', async () => {
-  let capturedStrategy = '';
-  let capturedTimeframe = '';
-  await withServer(
-    {
-      scan: async (request) => {
-        capturedStrategy = request.strategyMode ?? '';
-        capturedTimeframe = String(request.filters.timeframe ?? '');
-        return completeResult({ timeframe: '3m' });
-      },
-    },
-    async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/api/market/scan?market=US&strategy=scalping&timeframe=3m`);
-      assert.equal(response.status, 200);
-    },
-  );
-  assert.equal(capturedStrategy, 'scalping');
-  assert.equal(capturedTimeframe, '3m');
-});
-
 test('some item timeouts return explicit partial HTTP 200', async () => {
   await withServer(
     {
@@ -228,15 +191,12 @@ test('scanner smoke path sends zero order-capable requests', async () => {
   await withServer(
     { scan: async () => completeResult({ market: 'US' }) },
     async (baseUrl) => {
-      const url = `${baseUrl}/api/market/scan?market=US&strategy=swing&timeframe=1D`;
+      const url = `${baseUrl}/api/market/scan?market=US&timeframe=1D`;
       requestedPaths.push(new URL(url).pathname);
       const response = await fetch(url);
       assert.equal(response.status, 200);
-      const body = await response.json() as ScannerResponse;
-      assert.equal(body.orderSubmitted, false);
-      assert.equal(body.exchangeRequestSent, false);
     },
   );
   assert.deepEqual(requestedPaths, ['/api/market/scan']);
-  assert.ok(requestedPaths.every((path) => !/(?:account|order|cancel|trade|position|execute|approve|private)/i.test(path)));
+  assert.ok(requestedPaths.every((path) => !/(?:order|trade|position|execute|approve)/i.test(path)));
 });

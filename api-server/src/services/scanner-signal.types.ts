@@ -1,36 +1,19 @@
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerSignalDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
-export type ScannerStrategyMode = 'scalping' | 'swing';
-export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
-  | 'CANDIDATE'
-  | 'CONFIRMED'
-  | 'ARMED'
-  | 'ENTRY_ZONE'
-  | 'APPROVAL_PENDING'
-  | 'APPROVED'
-  | 'EXECUTING'
-  | 'PARTIALLY_FILLED'
-  | 'FILLED'
-  | 'MANAGING'
-  | 'CLOSED'
-  | 'INVALIDATED'
-  | 'EXPIRED'
-  | 'REJECTED'
-  | 'CANCELLED'
-  // Backward-compatible states accepted while PR #82 callers migrate.
   | 'DETECTED'
   | 'WATCHING'
   | 'READY_FOR_APPROVAL'
-  | 'WEAKENED';
+  | 'WEAKENED'
+  | 'INVALIDATED'
+  | 'EXPIRED';
 export type ScannerEvidenceStatus = 'matched' | 'not_matched' | 'unverified';
 export type ScannerDataState =
   | 'complete'
   | 'partial'
   | 'stale'
   | 'insufficient'
-  | 'unavailable'
-  | 'untrusted';
+  | 'unavailable';
 
 export interface ScannerEvidence {
   key: string;
@@ -47,47 +30,6 @@ export interface ScannerPricePlan {
   stopLoss: number | null;
   targets: number[];
   riskReward: number | null;
-}
-
-export interface ScannerDataQualitySummary {
-  state: 'TRUSTED' | 'DEGRADED' | 'DATA_UNTRUSTED';
-  score: number;
-  strongSignalAllowed: boolean;
-  issues: Array<{
-    code:
-      | 'STALE_TIMESTAMP'
-      | 'MISSING_CANDLE'
-      | 'DUPLICATE_CANDLE'
-      | 'INVALID_OHLC'
-      | 'INVALID_VOLUME'
-      | 'ABNORMAL_SPIKE'
-      | 'SYMBOL_MISMATCH'
-      | 'PROVIDER_DISAGREEMENT'
-      | 'MARKET_CLOSED'
-      | 'TRADING_HALT';
-    severity: 'warning' | 'blocking';
-    message: string;
-  }>;
-}
-
-export interface ScannerQuantScoreBreakdown {
-  technical: number;
-  trend: number;
-  momentum: number;
-  volume: number;
-  liquidity: number;
-  volatility: number;
-  marketRegime: number;
-  risk: number;
-}
-
-export interface ScannerAiValidationSummary {
-  status: 'NOT_RUN' | 'PASS' | 'PARTIAL' | 'VETO';
-  provider: string | null;
-  counterEvidence: string[];
-  missingData: string[];
-  risks: string[];
-  explanation: string | null;
 }
 
 export interface ScannerSignalCard {
@@ -125,11 +67,6 @@ export interface ScannerSignalCard {
   expiresAt: string;
   strongSignalEligible: boolean;
   warnings: string[];
-  strategyMode?: ScannerStrategyMode;
-  signalGrade?: ScannerSignalGrade;
-  dataQuality?: ScannerDataQualitySummary;
-  quantScore?: ScannerQuantScoreBreakdown;
-  aiValidation?: ScannerAiValidationSummary;
 }
 
 export interface ScannerAlertCandidate {
@@ -139,7 +76,7 @@ export interface ScannerAlertCandidate {
   market: string;
   symbol: string;
   direction: ScannerSignalDirection;
-  state: 'APPROVAL_PENDING' | 'READY_FOR_APPROVAL';
+  state: 'READY_FOR_APPROVAL';
   entryZone: ScannerPricePlan['entryZone'];
   stopLoss: number | null;
   targets: number[];

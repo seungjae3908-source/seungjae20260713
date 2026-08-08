@@ -101,9 +101,18 @@ echo "[phase8-db] verify order idempotency, execution claims, submission intent,
 bash "${ROOT_DIR}/api-server/scripts/verify-trade-automation-concurrency.sh"
 run_sql "verify explicit paper privileges and anon denial" "api-server/supabase/test/paper_journal_privileges_integration.sql"
 run_sql "verify audit privileges and administrator-only RLS" "api-server/supabase/test/member_permission_audit_privileges_integration.sql"
-run_sql "execute trade automation ownership RLS queries" "api-server/supabase/test/trade_automation_rls_integration.sql"
+run_sql "execute pre-0506 trade automation ownership RLS queries" "api-server/supabase/test/trade_automation_rls_integration.sql"
 run_sql "execute real ownership RLS integration queries" "api-server/supabase/test/phase8_rls_integration.sql"
 run_sql "execute real membership-tier RLS integration queries" "api-server/supabase/test/phase8_tier_rls_integration.sql"
+
+run_sql "apply final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql"
+run_sql "reapply final trade order atomicity and admin-only RLS idempotently" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql"
+run_sql "verify final trade order atomicity and admin-only RLS" "api-server/supabase/test/trade_order_atomicity_admin_rls_integration.sql"
+run_sql "apply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
+run_sql "reapply risk envelope and atomic pending-split cancellation idempotently" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
+run_sql "verify risk envelope invariant and fast-move split cancellation" "api-server/supabase/test/trade_risk_envelope_kill_switch_integration.sql"
+echo "[phase8-db] verify concurrent fast-move split cancellation race"
+bash "${ROOT_DIR}/api-server/scripts/verify-trade-split-cancel-concurrency.sh"
 
 echo "[phase8-db] verify failed migration transaction leaves no partial object"
 if "${PSQL[@]}" --command "begin; create table public.phase8_partial_failure_probe(id integer); select 1 / 0; commit;"; then
@@ -112,6 +121,9 @@ if "${PSQL[@]}" --command "begin; create table public.phase8_partial_failure_pro
 fi
 "${PSQL[@]}" --command "do \$\$ begin if to_regclass('public.phase8_partial_failure_probe') is not null then raise exception 'partial migration object remained'; end if; end \$\$;"
 
+run_sql "rollback risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.down.sql"
+run_sql "assert risk envelope rollback cleanup" "api-server/supabase/test/trade_risk_envelope_kill_switch_rollback_assert.sql"
+run_sql "rollback final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.down.sql"
 run_sql "rollback authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.down.sql"
 run_sql "rollback authenticated paper privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.down.sql"
 run_sql "rollback split child order storage and sequencing" "api-server/supabase/migrations/2026080505_trade_split_child_orders.down.sql"
@@ -134,10 +146,15 @@ run_sql "reapply provider submission intent fence" "api-server/supabase/migratio
 run_sql "reapply split child order storage and sequencing" "api-server/supabase/migrations/2026080505_trade_split_child_orders.sql"
 run_sql "reapply authenticated paper privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
 run_sql "reapply authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
+run_sql "reapply final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql"
+run_sql "reapply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
 run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.sql"
 run_sql "recheck explicit paper privileges after reapply" "api-server/supabase/test/paper_journal_privileges_integration.sql"
 run_sql "recheck audit privileges and administrator-only RLS after reapply" "api-server/supabase/test/member_permission_audit_privileges_integration.sql"
-run_sql "recheck trade automation RLS after reapply" "api-server/supabase/test/trade_automation_rls_integration.sql"
+run_sql "recheck final trade order atomicity and admin-only RLS after reapply" "api-server/supabase/test/trade_order_atomicity_admin_rls_integration.sql"
+run_sql "recheck risk envelope invariant and fast-move split cancellation after reapply" "api-server/supabase/test/trade_risk_envelope_kill_switch_integration.sql"
+echo "[phase8-db] recheck concurrent fast-move split cancellation race after reapply"
+bash "${ROOT_DIR}/api-server/scripts/verify-trade-split-cancel-concurrency.sh"
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
 echo "[phase8-db] disposable database and atomic staging bootstrap verification completed"
