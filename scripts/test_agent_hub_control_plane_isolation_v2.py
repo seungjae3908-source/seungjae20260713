@@ -69,7 +69,8 @@ def test_workflow_contract() -> int:
     report = text.index("Post schema-v2 executor report and wake coordinator")
     assert checkout < seal < prepare < switch < diff < report
     assert "CONTROL_PLANE_SHA: ${{ github.sha }}" in text
-    assert "python3 \"$CONTROL_PLANE_DIR/agent_hub_control_plane_v2.py\" seal" in text
+    pre_switch = text[seal:switch]
+    assert "python3 scripts/agent_hub_control_plane_v2.py seal" in pre_switch
     assert "python3 \"$CONTROL_PLANE_DIR/agent_hub_control_plane_v2.py\" verify" in text
     assert "python3 \"$CONTROL_PLANE_DIR/agent_hub_executor_gate_hardening_v2.py\"" in text
     assert "python3 \"$CONTROL_PLANE_DIR/agent_hub_executor_safety_v2.py\" validate-diff" in text
