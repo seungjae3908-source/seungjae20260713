@@ -114,7 +114,7 @@ function gated(capability: MemberCapability, child: React.ReactNode) {
   return <CapabilityGate capability={capability}>{child}</CapabilityGate>;
 }
 
-function ScannerAccess() { return gated('canAccessRiskPreview', <TechnicalWorkspacePage />); }
+function ScannerAccess() { return gated('canAccessBasicInfo', <TechnicalWorkspacePage />); }
 function AiChartAccess() { return gated('canAccessRiskPreview', <AiChartPage />); }
 function AiChatAccess() { return gated('canAccessBasicInfo', <AiChatPage />); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
