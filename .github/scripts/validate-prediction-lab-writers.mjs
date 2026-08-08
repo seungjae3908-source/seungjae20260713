@@ -2,8 +2,14 @@ import { readFileSync } from 'node:fs';
 
 const shadowPath = '.github/workflows/prediction-lab-shadow-hourly.yml';
 const adaptivePath = '.github/workflows/prediction-lab-adaptive-candidate.yml';
+const legacyPaths = [
+  '.github/workflows/prediction-lab-52d-validation.yml',
+  '.github/workflows/prediction-lab-long-history-v1.yml',
+  '.github/workflows/prediction-lab-shadow-cycle.yml',
+];
 const shadow = readFileSync(shadowPath, 'utf8');
 const adaptive = readFileSync(adaptivePath, 'utf8');
+const legacy = legacyPaths.map((path) => [path, readFileSync(path, 'utf8')]);
 
 function requireText(source, needle, label) {
   if (!source.includes(needle)) throw new Error(`${label}: missing required contract: ${needle}`);
@@ -31,6 +37,24 @@ for (const [label, source] of [['shadow', shadow], ['adaptive', adaptive]]) {
   forbid(source, /git\s+(?:push|commit)\b/, label);
   forbid(source, /createWorkflowDispatch/, label);
   forbid(source, /\|\|\s*true/, label);
+}
+
+for (const [path, source] of legacy) {
+  requireText(source, 'actions: read', path);
+  requireText(source, 'contents: read', path);
+  requireText(source, 'persist-credentials: false', path);
+  requireText(source, 'actions/upload-artifact@v4', path);
+  requireText(source, 'retention-days: 90', path);
+  requireText(source, 'branchWrite', path);
+  requireText(source, 'liveOrderAllowed', path);
+  requireText(source, 'privateAccountRequestAllowed', path);
+  requireText(source, 'Assert immutable checkout HEAD', path);
+  forbid(source, /contents:\s*write/, path);
+  forbid(source, /actions:\s*write/, path);
+  forbid(source, /git\s+(?:push|commit|pull|rebase)\b/, path);
+  forbid(source, /gh\s+workflow\s+run/, path);
+  forbid(source, /createWorkflowDispatch/, path);
+  forbid(source, /\|\|\s*true/, path);
 }
 
 requireText(shadow, 'SHADOW_BRANCH: feature/prediction-lab-standalone', 'shadow');
