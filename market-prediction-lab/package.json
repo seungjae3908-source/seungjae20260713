@@ -21,6 +21,7 @@
     "backtest:v1:history": "node scripts/run-long-history-v1.js",
     "backtest:v3:history": "node scripts/run-v3-history.js",
     "backtest:v4:history": "node scripts/run-v4-history.js",
+    "backtest:v5:history": "node scripts/run-v5-history.js",
     "shadow:cycle": "node scripts/run-shadow-cycle.js"
   }
 }
