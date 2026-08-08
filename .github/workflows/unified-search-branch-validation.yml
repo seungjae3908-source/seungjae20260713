@@ -1,0 +1,114 @@
+name: Unified Search Branch Validation
+
+on:
+  push:
+    branches:
+      - feature/unified-asset-search
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unified-search-branch-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Checkout unified search branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/unified-asset-search
+          fetch-depth: 0
+
+      - name: Confirm isolated branch and current main baseline
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git branch --show-current)" = "feature/unified-asset-search"
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor origin/main HEAD
+          BASE="$(git merge-base origin/main HEAD)"
+          test -n "$BASE"
+          git diff --check "$BASE"...HEAD
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck frontend
+        run: pnpm --dir stock-analyzer run typecheck
+
+      - name: Typecheck backend
+        run: pnpm --dir api-server run typecheck
+
+      - name: Lint unified search contract tests
+        run: >-
+          pnpm dlx @biomejs/biome@2.4.16 lint --error-on-warnings
+          stock-analyzer/src/lib/unified-asset-search.test.ts
+          stock-analyzer/e2e/unified-asset-search.spec.ts
+
+      - name: Scan unified search contract tests for forbidden patterns
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          files=(
+            stock-analyzer/src/lib/unified-asset-search.test.ts
+            stock-analyzer/e2e/unified-asset-search.spec.ts
+          )
+          for file in "${files[@]}"; do
+            test -f "$file"
+          done
+          pattern='as[[:space:]]+any|@ts-ignore|eval[[:space:]]*\(|new[[:space:]]+Function[[:space:]]*\(|child_process|process\.env|/api/trade-automation|/api/stocks/auto-trade|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|client[_-]?secret|api[_-]?key[[:space:]]*[:=]'
+          if grep -nEi "$pattern" "${files[@]}"; then
+            echo 'Unified search contract tests contain a forbidden type bypass, dynamic execution, secret, or order endpoint pattern.' >&2
+            exit 1
+          fi
+
+      - name: Run unified search unit and API tests
+        run: cd api-server && node ./test.mjs search
+
+      - name: Run backend regression tests
+        run: pnpm --dir api-server run test
+
+      - name: Build frontend and backend
+        run: |
+          pnpm --dir stock-analyzer run build
+          pnpm --dir api-server run build
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Run unified search browser regression
+        run: pnpm --dir stock-analyzer exec playwright test e2e/unified-asset-search.spec.ts --reporter=line
+
+      - name: Run full browser regression
+        run: pnpm --dir stock-analyzer run test:e2e
+
+      - name: Confirm no deployment files changed
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main --no-tags
+          BASE="$(git merge-base origin/main HEAD)"
+          test -n "$BASE"
+          changed="$(git diff --name-only "$BASE"...HEAD)"
+          if grep -Eq '^(ops/|supabase/|.*migration|\.github/workflows/(production|staging)-)' <<<"$changed"; then
+            echo 'Unified search branch changed a prohibited deployment, Supabase, or migration path.' >&2
+            printf '%s\n' "$changed" >&2
+            exit 1
+          fi
