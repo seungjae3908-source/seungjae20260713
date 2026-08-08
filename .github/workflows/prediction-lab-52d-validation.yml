@@ -121,12 +121,25 @@ jobs:
           git add -A market-prediction-lab/docs
           git diff --cached --quiet && exit 0
           git commit -m "test: record market structure candidates"
-          git pull --rebase origin feature/prediction-lab-standalone
+
+          parent_sha="$(git rev-parse HEAD^)"
+          remote_sha="$(git ls-remote origin refs/heads/feature/prediction-lab-standalone | awk '{print $1}')"
+          if [ "$remote_sha" != "$parent_sha" ]; then
+            echo "::error::Prediction Lab branch advanced during validation: expected $parent_sha, found $remote_sha"
+            exit 1
+          fi
+
           git push origin HEAD:feature/prediction-lab-standalone
           pushed_sha="$(git rev-parse HEAD)"
+          remote_pushed_sha="$(git ls-remote origin refs/heads/feature/prediction-lab-standalone | awk '{print $1}')"
+          if [ "$remote_pushed_sha" != "$pushed_sha" ]; then
+            echo "::error::Prediction Lab branch advanced after result push: pushed $pushed_sha, remote is $remote_pushed_sha"
+            exit 1
+          fi
+
           gh workflow run futures-public-network-smoke.yml \
             --repo "$GITHUB_REPOSITORY" \
-            --ref feature/prediction-lab-standalone \
+            --ref main \
             -f target_sha="$pushed_sha" \
             -f checkout_ref="$pushed_sha"
 
