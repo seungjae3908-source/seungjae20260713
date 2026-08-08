@@ -87,9 +87,9 @@ router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canAccessPaperTrading'));
 router.use('/trade-automation', tradeAutomationRouter);
-router.use('/search', requireCapability('canAccessBasicInfo'), unifiedSearchRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
+router.use('/', unifiedSearchRouter);
 router.use('/', aiChatRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
