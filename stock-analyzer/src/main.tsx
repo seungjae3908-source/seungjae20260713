@@ -32,7 +32,19 @@ function registerServiceWorker() {
 	if (!('serviceWorker' in navigator)) return;
 
 	window.addEventListener('load', () => {
-		navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+		navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => {
+			const checkForUpdate = () => registration.update().catch(() => undefined);
+
+			// Check immediately, whenever the app moves between foreground/background,
+			// and periodically while it stays open. The updated worker cleans obsolete
+			// precache entries on activation; we deliberately do not force-reload an
+			// active trading form. Closing/reopening the app naturally picks up the new
+			// controller and assets.
+			void checkForUpdate();
+			document.addEventListener('visibilitychange', checkForUpdate);
+			window.addEventListener('pageshow', checkForUpdate);
+			window.setInterval(checkForUpdate, 5 * 60 * 1000);
+		}).catch(() => undefined);
 	});
 }
 
