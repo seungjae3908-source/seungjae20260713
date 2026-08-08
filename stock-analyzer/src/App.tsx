@@ -23,6 +23,7 @@ const DetailPage = lazy(() => import('@/pages/detail'));
 const WatchlistPage = lazy(() => import('@/pages/watchlist'));
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
+const SignalScannerPage = lazy(() => import('@/pages/signal-scanner'));
 const StockInfoPage = lazy(() => import('@/pages/stock-info'));
 const MarketInformationPage = lazy(() => import('@/pages/market-information'));
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
@@ -114,7 +115,13 @@ function gated(capability: MemberCapability, child: React.ReactNode) {
   return <CapabilityGate capability={capability}>{child}</CapabilityGate>;
 }
 
-function ScannerAccess() { return gated('canAccessBasicInfo', <TechnicalWorkspacePage />); }
+function ScannerAccess() {
+  const auth = useAuth();
+  return gated(
+    'canAccessBasicInfo',
+    auth.can('canAccessRiskPreview') ? <TechnicalWorkspacePage /> : <SignalScannerPage />,
+  );
+}
 function AiChartAccess() { return gated('canAccessRiskPreview', <AiChartPage />); }
 function AiChatAccess() { return gated('canAccessBasicInfo', <AiChatPage />); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
