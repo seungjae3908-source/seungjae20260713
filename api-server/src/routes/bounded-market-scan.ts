@@ -19,6 +19,11 @@ import {
   scannerStrategyTimeframeAllowed,
   type ScannerStrategyMode,
 } from '../services/scanner-quant-strategy.service';
+import {
+  canReadScannerGrade,
+  filterScannerResponseForTier,
+  parseScannerGradeQuery,
+} from '../services/scanner-access-control.service';
 
 export type StockScannerRunner = {
   scan(request: StockSignalScanRequest): ReturnType<typeof StockSignalScannerService.scan>;
@@ -110,7 +115,7 @@ export function createBoundedMarketScanRouter(
   const guard = dependencies.guard ?? scannerRequestGuard;
 
   router.use(requireScannerSession);
-  router.use(requireCapability('canAccessRiskPreview'));
+  router.use(requireCapability('canAccessBasicInfo'));
 
   router.get('/', async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -125,6 +130,14 @@ export function createBoundedMarketScanRouter(
         timeframe,
         strategy: String(req.query.strategy ?? ''),
       });
+    }
+    const requestedGrade = parseScannerGradeQuery(req.query.grade);
+    if (requestedGrade === null) {
+      return res.status(400).json({ ok: false, error: 'SCANNER_GRADE_UNSUPPORTED' });
+    }
+    const membershipLevel = req.membershipLevel ?? 'pending';
+    if (requestedGrade && !canReadScannerGrade(membershipLevel, requestedGrade)) {
+      return res.status(403).json({ ok: false, error: 'SCANNER_GRADE_FORBIDDEN' });
     }
     const indicators = String(req.query.indicators ?? '')
       .split(',')
@@ -161,9 +174,10 @@ export function createBoundedMarketScanRouter(
         signal: controller.signal,
       });
       if (controller.signal.aborted || res.writableEnded) return;
+      const visibleResult = filterScannerResponseForTier(result, membershipLevel, requestedGrade ?? undefined);
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({
-        ...result,
+        ...visibleResult,
         strategy: strategyMode,
         partial: result.execution.partial,
         elapsedMs: result.execution.elapsedMs,
