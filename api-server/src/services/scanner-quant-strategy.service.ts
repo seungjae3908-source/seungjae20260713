@@ -207,6 +207,12 @@ function scalpingFactors(
     else if (primary.rsi14 < 30) momentum -= 10;
   }
   if (primary.momentum5 != null) momentum += clamp(primary.momentum5 * 700, -15, 15);
+  let volume = scoreRelativeVolume(primary.relativeVolume20);
+  if (primary.tradeIntensityProxy != null) {
+    momentum += clamp(primary.tradeIntensityProxy * 10, -12, 12);
+    technical += clamp(primary.tradeIntensityProxy * 5, -8, 8);
+    volume += clamp(primary.tradeIntensityProxy * 8, -12, 12);
+  }
 
   let marketRegime = 50;
   if (contextTrend > 0) marketRegime += 30;
@@ -217,7 +223,7 @@ function scalpingFactors(
     technical: clamp(technical),
     trend: clamp(trend),
     momentum: clamp(momentum),
-    volume: scoreRelativeVolume(primary.relativeVolume20),
+    volume: clamp(volume),
     liquidity: scoreLiquidity(input.spreadPercent, input.tradingValue),
     volatility: scoreScalpingVolatility(primary, input.price),
     marketRegime: clamp(marketRegime),
@@ -355,6 +361,9 @@ export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): Scann
     `변동성 ${Math.round(factors.volatility)}`,
     `시장국면 ${Math.round(factors.marketRegime)}`,
     `리스크 ${Math.round(factors.risk)}`,
+    ...(input.mode === 'scalping' && primary.tradeIntensityProxy != null
+      ? [`체결강도 대용지표 ${primary.tradeIntensityProxy.toFixed(2)}`]
+      : []),
   ];
   const warnings = [
     ...input.dataQuality.issues.map((issue) => `${issue.code}: ${issue.message}`),
@@ -388,6 +397,6 @@ export function scannerStrategyForTimeframe(timeframe: string): ScannerStrategyM
 
 export function scannerStrategyTimeframeAllowed(mode: ScannerStrategyMode, timeframe: string): boolean {
   return mode === 'scalping'
-    ? ['1m', '3m', '5m', '15m'].includes(timeframe)
-    : ['60m', '1H', '4H', '1D'].includes(timeframe);
+    ? ['1m', '3m', '5m'].includes(timeframe)
+    : ['4H', '1D'].includes(timeframe);
 }
