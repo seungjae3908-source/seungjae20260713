@@ -1,0 +1,321 @@
+name: Production Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact 40-character commit SHA from main to deploy
+        required: true
+        type: string
+      data_probe_path:
+        description: API path that must return valid JSON before promotion
+        required: false
+        default: /api/healthz/data-plane
+        type: string
+      force_rebuild:
+        description: Rebuild even when the selected commit is already active
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - .github/workflows/production-deploy.yml
+      - .github/workflows/production-one-time-approval.yml
+      - .github/workflows/futures-public-network-smoke.yml
+      - .github/workflows/staging-readiness.yml
+      - ops/deploy-production.sh
+      - ops/deploy-staging.sh
+      - api-server/scripts/production-ci-provenance.cjs
+      - api-server/scripts/verify-production-ci-provenance-contract.mjs
+      - api-server/scripts/verify-production-data-plane-probe-contract.mjs
+      - api-server/scripts/verify-phase10-deployment-safety.mjs
+      - api-server/scripts/build-staging-verdict.mjs
+      - api-server/scripts/verify-staging-verdict.mjs
+
+permissions:
+  actions: read
+  contents: read
+  statuses: read
+
+concurrency:
+  group: stock-app-production-live
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate production deployment safeguards
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Validate shell syntax
+        run: |
+          set -Eeuo pipefail
+          bash -n ops/deploy-production.sh
+          bash -n ops/deploy-staging.sh
+      - name: Verify Phase 10 deployment safety contract
+        run: node api-server/scripts/verify-phase10-deployment-safety.mjs
+      - name: Verify Production CI provenance contract
+        run: node api-server/scripts/verify-production-ci-provenance-contract.mjs
+      - name: Verify Production data-plane probe contract
+        run: node api-server/scripts/verify-production-data-plane-probe-contract.mjs
+
+  approval-gate:
+    name: Validate immutable main revision, CI provenance, and exact staging verdict
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${{ steps.target.outputs.sha }}
+      staging_run_id: ${{ steps.verdict-artifact.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Require an immutable exact current main commit
+        id: target
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo 'Production deployment requires an exact 40-character commit SHA.' >&2
+            exit 1
+          }
+          TARGET_SHA="${TARGET_SHA,,}"
+          git fetch --no-tags origin main
+          MAIN_SHA="$(git rev-parse FETCH_HEAD^{commit})"
+          git fetch --no-tags origin "$TARGET_SHA"
+          git cat-file -e "$TARGET_SHA^{commit}"
+          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || {
+            echo "Production deployment target must equal exact current main: target=$TARGET_SHA main=$MAIN_SHA" >&2
+            exit 1
+          }
+          echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+      - name: Require verified statuses and exact Application CI provenance
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const {
+              REQUIRED_PRODUCTION_STATUSES,
+              evaluateProductionCiProvenance,
+              inspectRequiredStatusEvidence,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-ci-provenance.cjs`);
+            if (JSON.stringify(required) !== JSON.stringify(REQUIRED_PRODUCTION_STATUSES)) {
+              core.setFailed('Production workflow status list differs from the shared provenance contract.');
+              return;
+            }
+            const targetSha = process.env.TARGET_SHA;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            const evidence = inspectRequiredStatusEvidence(statuses);
+            if (!evidence.ok) {
+              core.setFailed(`Required CI status provenance rejected: ${evidence.reason}.`);
+              return;
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: targetSha,
+              branch: 'main',
+              status: 'completed',
+              per_page: 100,
+            });
+            const run = runs.find((candidate) => Number(candidate.id) === evidence.runId);
+            const verified = evaluateProductionCiProvenance({
+              targetSha,
+              currentMainSha: targetSha,
+              statuses,
+              run,
+            });
+            if (!verified.ok) {
+              core.setFailed(`Application CI provenance rejected: ${verified.reason}.`);
+              return;
+            }
+            core.info(`Required CI 6/6 verified by exact Application CI Run ID ${verified.runId} (${verified.event}).`);
+      - name: Locate successful exact-SHA staging verdict artifact
+        id: verdict-artifact
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const artifactName = `staging-verdict-${targetSha}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: artifactName,
+              per_page: 100,
+            });
+            const candidates = artifacts
+              .filter((artifact) => !artifact.expired && artifact.workflow_run?.head_sha === targetSha)
+              .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+            let accepted = null;
+            for (const artifact of candidates) {
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: artifact.workflow_run.id,
+              });
+              const run = response.data;
+              const valid = run.event === 'workflow_dispatch'
+                && run.head_branch === 'main'
+                && run.head_sha === targetSha
+                && run.path === '.github/workflows/staging-readiness.yml'
+                && run.status === 'completed'
+                && run.conclusion === 'success';
+              if (valid) {
+                accepted = { artifact, run };
+                break;
+              }
+            }
+            if (!accepted) {
+              core.setFailed(`No successful Staging Readiness run with artifact ${artifactName} exists for the exact target SHA.`);
+              return;
+            }
+            core.setOutput('run_id', String(accepted.run.id));
+            core.setOutput('artifact_id', String(accepted.artifact.id));
+            core.info(`Exact staging verdict artifact accepted from Run ID ${accepted.run.id}.`);
+      - name: Download exact staging verdict artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-verdict-${{ steps.target.outputs.sha }}
+          path: staging-verdict
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.verdict-artifact.outputs.run_id }}
+      - name: Require release_ready true, exact SHA, zero failures, and zero skipped checks
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
+      - name: Record accepted staging evidence
+        run: |
+          {
+            echo '## Production approval gate passed'
+            echo
+            echo "- Target SHA: \`${{ steps.target.outputs.sha }}\`"
+            echo "- Staging Run ID: \`${{ steps.verdict-artifact.outputs.run_id }}\`"
+            echo '- staging-verdict.json: `release_ready=true`'
+            echo '- Failed checks: `0`'
+            echo '- Skipped checks: `0`'
+            echo '- Production deployment has not started yet.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Approved canary, production deploy, verify, and rollback
+    if: github.event_name == 'workflow_dispatch'
+    needs: approval-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      TARGET_SHA: ${{ needs.approval-gate.outputs.target_sha }}
+      DATA_PROBE_PATH: ${{ inputs.data_probe_path }}
+      FORCE_REBUILD: ${{ inputs.force_rebuild }}
+      PUBLIC_BASE_URL: https://lsj119.duckdns.org
+      REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
+    steps:
+      - name: Validate production secrets
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" ]] || { echo 'Missing PROD_SSH_HOST' >&2; exit 1; }
+          [[ -n "$SSH_USER" ]] || { echo 'Missing PROD_SSH_USER' >&2; exit 1; }
+          [[ -n "$SSH_PRIVATE_KEY" ]] || { echo 'Missing PROD_SSH_PRIVATE_KEY' >&2; exit 1; }
+      - name: Configure SSH
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+      - name: Deploy exact approved revision
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q DATA_PROBE_PATH=%q FORCE_REBUILD=%q PUBLIC_BASE_URL=%q REPOSITORY_URL=%q' \
+            "$TARGET_SHA" "$DATA_PROBE_PATH" "$FORCE_REBUILD" "$PUBLIC_BASE_URL" "$REPOSITORY_URL")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          LIVE_DIR=/opt/stock-app
+          PM2_NAME=stock-app
+          LIVE_PORT=8080
+          CANARY_PORT=18081
+          SOURCE_DIR="$(mktemp -d /tmp/stock-app-source.XXXXXX)"
+          STATE_FILE="$LIVE_DIR/.deploy/current-sha"
+          SAVED_STATE=""
+          FORCE_MARKED=0
+          cleanup_remote() {
+            local status=$?
+            if (( status != 0 )) && [[ "$FORCE_MARKED" == "1" ]]; then
+              mkdir -p "$(dirname "$STATE_FILE")"
+              if [[ -n "$SAVED_STATE" ]]; then printf '%s\n' "$SAVED_STATE" > "$STATE_FILE"; else rm -f "$STATE_FILE"; fi
+            fi
+            rm -rf -- "$SOURCE_DIR"
+            return "$status"
+          }
+          trap cleanup_remote EXIT
+          git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$SOURCE_DIR"
+          git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
+          RESOLVED_SHA="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD^{commit})"
+          [[ "$RESOLVED_SHA" == "$TARGET_SHA" ]] || { echo 'Resolved SHA differs from approved SHA' >&2; exit 1; }
+          git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
+          if [[ "$FORCE_REBUILD" == "true" ]] && [[ -s "$STATE_FILE" ]]; then
+            ACTIVE_SHA="$(tr -d '[:space:]' < "$STATE_FILE")"
+            if [[ "$ACTIVE_SHA" == "$TARGET_SHA" ]]; then
+              SAVED_STATE="$ACTIVE_SHA"
+              printf 'force-rebuild-%s\n' "$(date -u +%Y%m%dT%H%M%SZ)" > "$STATE_FILE"
+              FORCE_MARKED=1
+            fi
+          fi
+          DEPLOY_SCRIPT="$SOURCE_DIR/ops/deploy-production.sh"
+          [[ -f "$DEPLOY_SCRIPT" ]] || { echo 'Deployment script missing' >&2; exit 1; }
+          chmod 700 "$DEPLOY_SCRIPT"
+          SOURCE_DIR="$SOURCE_DIR" LIVE_DIR="$LIVE_DIR" PM2_NAME="$PM2_NAME" LIVE_PORT="$LIVE_PORT" \
+            CANARY_PORT="$CANARY_PORT" DATA_PROBE_PATH="$DATA_PROBE_PATH" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
+            "$DEPLOY_SCRIPT" "$TARGET_SHA"
+          REMOTE
+      - name: Deployment summary
+        if: success()
+        run: |
+          {
+            echo '## Production deployment succeeded'
+            echo
+            echo "- Approved SHA: \`$TARGET_SHA\`"
+            echo '- Trigger: explicit workflow dispatch only'
+            echo '- Environment: `production`'
+            echo '- CI provenance: exact current main, required status 6/6, and one successful official `Application CI` run required'
+            echo "- Release-ready staging evidence Run ID: \`${{ needs.approval-gate.outputs.staging_run_id }}\`"
+            echo '- staging-verdict.json: exact SHA, failed=0, skipped=0, release_ready=true'
+            echo '- Rollback: automatic on failed verification'
+          } >> "$GITHUB_STEP_SUMMARY"

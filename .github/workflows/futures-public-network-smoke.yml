@@ -1,0 +1,412 @@
+name: Application CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Pull request head SHA that receives the verified commit statuses.
+        required: false
+        type: string
+      checkout_ref:
+        description: Deprecated compatibility input; workflow_dispatch always validates target_sha or the exact dispatch SHA.
+        required: false
+        type: string
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/futures-public-network-smoke.yml
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - package.json
+      - api-server/**
+      - stock-analyzer/**
+      - packages/**
+
+permissions:
+  actions: read
+  contents: read
+  statuses: write
+
+env:
+  APPLICATION_STATUS_SHA: ${{ github.event.inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
+  APPLICATION_CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.target_sha || github.sha) || github.ref }}
+
+concurrency:
+  group: application-ci-${{ github.event.pull_request.number || github.event.inputs.target_sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Typecheck, unit, smoke, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Publish pending Application CI status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: running`, context: 'application-ci/verified' });
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install workspace dependencies with frozen lockfile
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck frontend
+        run: pnpm --dir stock-analyzer run typecheck
+      - name: Typecheck backend
+        run: pnpm --dir stock-analyzer exec tsc -p ../api-server/tsconfig.json --noEmit
+      - name: Run Phase 2 futures tests
+        run: pnpm --dir api-server run test:phase2
+      - name: Run Phase 3 trading risk tests
+        run: pnpm --dir api-server run test:risk
+      - name: Run Phase 4 contract rules and risk regression tests
+        run: pnpm --dir api-server run test:phase4
+      - name: Run Phase 5 backtest tests
+        run: pnpm --dir api-server run test:phase5
+      - name: Run Phase 6 paper trading tests
+        run: pnpm --dir api-server run test:phase6
+      - name: Run Phase 7 journal sync and analytics tests
+        run: pnpm --dir api-server run test:phase7
+      - name: Run Phase 8 release candidate tests
+        run: pnpm --dir api-server run test:phase8
+      - name: Run Phase 9 privacy-safe AI review tests
+        run: pnpm --dir api-server run test:phase9
+      - name: Run trade automation safety and adapter tests
+        run: pnpm --dir api-server run test:phase12
+      - name: Run API smoke tests
+        run: pnpm --dir api-server run test:smoke
+      - name: Build frontend production bundle
+        run: pnpm --dir stock-analyzer run build
+      - name: Build backend production bundle
+        run: pnpm --dir api-server run build:server
+
+  browser-ui:
+    name: Playwright desktop and mobile application UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Publish pending browser UI status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Browser UI run ${context.runId}: running`, context: 'browser-ui/verified' });
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install workspace dependencies with frozen lockfile
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+      - name: Run Playwright desktop and mobile tests
+        id: browser
+        run: pnpm --dir stock-analyzer run test:e2e
+      - name: Upload Playwright report and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase9-playwright-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Publish browser UI result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ steps.browser.outcome }}' || 'failure';
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            const statusContext = 'browser-ui/verified';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
+            const latestStatus = statuses
+              .filter((status) => status.context === statusContext)
+              .sort((left, right) => right.id - left.id)[0];
+            if (latestStatus?.target_url !== runUrl) {
+              core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale browser status update.`);
+              return;
+            }
+            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Browser UI run ${context.runId}: ${result}`, context: statusContext });
+
+  database-rls:
+    name: Disposable PostgreSQL migration and RLS integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: phase8
+          POSTGRES_PASSWORD: phase8-ci-only
+          POSTGRES_DB: phase8
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U phase8 -d phase8"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: phase8
+      PGPASSWORD: phase8-ci-only
+      PGDATABASE: phase8
+    steps:
+      - name: Publish pending database RLS status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Database RLS run ${context.runId}: running`, context: 'database-rls/verified' });
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install -y postgresql-client
+      - name: Apply, test, rollback, and reapply migrations
+        id: database
+        run: bash api-server/scripts/verify-phase8-db.sh
+      - name: Publish database RLS result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ steps.database.outcome }}' || 'failure';
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            const statusContext = 'database-rls/verified';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
+            const latestStatus = statuses
+              .filter((status) => status.context === statusContext)
+              .sort((left, right) => right.id - left.id)[0];
+            if (latestStatus?.target_url !== runUrl) {
+              core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale database status update.`);
+              return;
+            }
+            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Database RLS run ${context.runId}: ${result}`, context: statusContext });
+
+  security-integration:
+    name: Security input, bundle, and outbound safety verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Publish pending security status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Security integration run ${context.runId}: running`, context: 'security-integration/verified' });
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install workspace dependencies with frozen lockfile
+        run: pnpm install --frozen-lockfile
+      - name: Run Phase 8 security and load tests
+        run: pnpm --dir api-server run test:phase8
+      - name: Build frontend for bundle inspection
+        run: pnpm --dir stock-analyzer run build
+      - name: Scan source and production bundle
+        id: security
+        working-directory: api-server
+        run: node ./scripts/verify-phase8-security.mjs
+      - name: Publish security result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ steps.security.outcome }}' || 'failure';
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            const statusContext = 'security-integration/verified';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
+            const latestStatus = statuses
+              .filter((status) => status.context === statusContext)
+              .sort((left, right) => right.id - left.id)[0];
+            if (latestStatus?.target_url !== runUrl) {
+              core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale security status update.`);
+              return;
+            }
+            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Security integration run ${context.runId}: ${result}`, context: statusContext });
+
+  ai-privacy:
+    name: AI privacy, prompt, output, and outbound verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Publish pending AI privacy status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `AI privacy run ${context.runId}: running`, context: 'ai-privacy/verified' });
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+      - uses: pnpm/action-setup@v4
+        with: { version: 9, run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20", cache: pnpm, cache-dependency-path: pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+      - name: Run guarded mock provider and zero-outbound privacy tests
+        run: pnpm --dir api-server run test:phase9
+      - name: Build frontend for secret inspection
+        run: pnpm --dir stock-analyzer run build
+      - name: Verify AI privacy and zero outbound contract
+        id: ai
+        working-directory: api-server
+        run: node ./scripts/verify-phase9-ai-privacy.mjs
+      - name: Publish AI privacy result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ steps.ai.outcome }}' || 'failure';
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            const statusContext = 'ai-privacy/verified';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
+            const latestStatus = statuses
+              .filter((status) => status.context === statusContext)
+              .sort((left, right) => right.id - left.id)[0];
+            if (latestStatus?.target_url !== runUrl) {
+              core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale AI privacy status update.`);
+              return;
+            }
+            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `AI privacy run ${context.runId}: ${result}`, context: statusContext });
+
+  publish-validation:
+    name: Publish Application CI conclusion
+    needs:
+      - validate
+      - browser-ui
+      - database-rls
+      - security-integration
+      - ai-privacy
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish verified Application CI result
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const results = ['${{ needs.validate.result }}', '${{ needs.browser-ui.result }}', '${{ needs.database-rls.result }}', '${{ needs.security-integration.result }}', '${{ needs.ai-privacy.result }}'];
+            const result = results.every((item) => item === 'success') ? 'success' : results.some((item) => item === 'cancelled') ? 'cancelled' : 'failure';
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            const statusContext = 'application-ci/verified';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
+            const latestStatus = statuses
+              .filter((status) => status.context === statusContext)
+              .sort((left, right) => right.id - left.id)[0];
+            if (latestStatus?.target_url !== runUrl) {
+              core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale application status update.`);
+              return;
+            }
+            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Application CI run ${context.runId}: ${result}`, context: statusContext });
+
+  network-smoke:
+    name: Bitget public API smoke (non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Publish pending network smoke status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Bitget network smoke run ${context.runId}: running`, context: 'futures-public-network-smoke/verified' });
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install workspace dependencies with frozen lockfile
+        run: pnpm install --frozen-lockfile
+      - name: Run real Bitget public network smoke
+        id: network
+        continue-on-error: true
+        run: pnpm --dir api-server run smoke:futures:network
+      - name: Publish network smoke result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ steps.network.outcome }}';
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            const statusContext = 'futures-public-network-smoke/verified';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
+            const latestStatus = statuses
+              .filter((status) => status.context === statusContext)
+              .sort((left, right) => right.id - left.id)[0];
+            if (latestStatus?.target_url !== runUrl) {
+              core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale network status update.`);
+              return;
+            }
+            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Bitget network smoke run ${context.runId}: ${result}`, context: statusContext });

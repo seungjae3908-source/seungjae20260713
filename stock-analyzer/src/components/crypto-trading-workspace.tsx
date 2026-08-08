@@ -37,6 +37,7 @@ import { apiGet } from "@/lib/api";
 import { BottomNav } from "@/components/bottom-nav";
 import { useAssetMode } from "@/lib/asset-mode";
 import { cn } from "@/lib/utils";
+import { FuturesMarketStatusPanel } from "@/components/futures-market-status-panel";
 
 export type CryptoWorkspaceViewMode = "condition" | "chart" | "auto";
 
@@ -1604,7 +1605,7 @@ export function CryptoTradingWorkspace({
       <header className="border-b border-card-border px-4 pb-3 pt-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-black">차트 · 신호검색 · 자동매매</h1>
+            <h1 className="text-xl font-black">AI 검색기 · AI 차트 분석기 · 자동매매</h1>
             <p className="mt-1 text-[10px] font-bold text-muted-foreground">비트겟 USDT 선물 · 롱/숏 통합 도구</p>
           </div>
           <button
@@ -1617,8 +1618,8 @@ export function CryptoTradingWorkspace({
         </div>
 
         <div className="mt-3 grid grid-cols-3 gap-2">
-          <TopTab active={viewMode === "condition"} onClick={() => changeView("condition")}>신호검색</TopTab>
-          <TopTab active={viewMode === "chart"} onClick={() => changeView("chart")}>차트중계</TopTab>
+          <TopTab active={viewMode === "condition"} onClick={() => changeView("condition")}>AI 검색기</TopTab>
+          <TopTab active={viewMode === "chart"} onClick={() => changeView("chart")}>AI 차트 분석기</TopTab>
           <TopTab active={viewMode === "auto"} onClick={() => changeView("auto")}>자동매매</TopTab>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2">
@@ -1632,10 +1633,11 @@ export function CryptoTradingWorkspace({
       </header>
 
       <main className="space-y-4 px-4 pb-28 pt-4">
+        <FuturesMarketStatusPanel symbol={symbol} />
       <div ref={scannerSectionRef} className="scroll-mt-4 rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-[10px] font-black text-primary">신호검색기</p>
+              <p className="text-[10px] font-black text-primary">AI 검색기</p>
               <h2 className="mt-1 text-sm font-black">롱·숏 상위 후보 10개</h2>
               <p className="mt-1 text-[10px] font-bold text-muted-foreground">
                 같은 {TIMEFRAMES.find((item) => item.key === timeframe)?.label} 기준 봉·거래량·보조지표·패턴 종합

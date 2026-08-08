@@ -1,4 +1,5 @@
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { getActiveQuerySignal } from '@/lib/query-abort-signal';
 
 /**
  * Calls an app API with the current Supabase access token.
@@ -9,6 +10,7 @@ export async function authorizedFetch(
   init: RequestInit = {},
 ): Promise<Response> {
   const headers = new Headers(init.headers);
+  const signal = init.signal ?? getActiveQuerySignal();
 
   if (isSupabaseConfigured && !headers.has('Authorization')) {
     const { data } = await getSupabase().auth.getSession();
@@ -16,5 +18,5 @@ export async function authorizedFetch(
     if (token) headers.set('Authorization', `Bearer ${token}`);
   }
 
-  return fetch(input, { ...init, headers });
+  return fetch(input, { ...init, headers, signal });
 }
