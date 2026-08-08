@@ -100,15 +100,19 @@ function drawdownStats(trades, initialCapital) {
   let equity = initialCapital;
   let peak = initialCapital;
   let maximumDrawdown = 0;
+  let maximumDrawdownPercent = 0;
   for (const trade of trades) {
     equity += trade.netPnl;
     peak = Math.max(peak, equity);
-    maximumDrawdown = Math.max(maximumDrawdown, peak - equity);
+    const drawdown = peak - equity;
+    const drawdownPercent = peak > 0 ? drawdown / peak : 0;
+    maximumDrawdown = Math.max(maximumDrawdown, drawdown);
+    maximumDrawdownPercent = Math.max(maximumDrawdownPercent, drawdownPercent);
   }
   return Object.freeze({
     finalCapital: equity,
     maximumDrawdown,
-    maximumDrawdownPercent: peak > 0 ? maximumDrawdown / peak : 0,
+    maximumDrawdownPercent,
   });
 }
 
