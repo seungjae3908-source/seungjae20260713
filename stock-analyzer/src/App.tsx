@@ -26,7 +26,6 @@ const ScannerPage = lazy(() => import('@/pages/scanner'));
 const StockInfoPage = lazy(() => import('@/pages/stock-info'));
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
-const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
 const ThemesPage = lazy(() => import('@/pages/themes'));
 const LearnPage = lazy(() => import('@/pages/learn'));
 const MorePage = lazy(() => import('@/pages/more'));
@@ -134,15 +133,13 @@ function ApprovedRouter() {
   return <Suspense fallback={<PageFallback />}><Switch>
     <Route path="/" component={HomePage} />
     <Route path="/home" component={HomePage} />
-    <Route path="/stocks" component={UnifiedAssetSearchPage} />
-    <Route path="/search" component={UnifiedAssetSearchPage} />
-    <Route path="/market-rankings" component={SearchPage} />
-    <Route path="/market-browser" component={StocksPage} />
+    <Route path="/stocks" component={StocksPage} />
     <Route path="/auto-trading" component={ScannerAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
     <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
     <Route path="/settings" component={MorePage} />
+    <Route path="/search" component={SearchPage} />
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
@@ -176,7 +173,6 @@ function RootRouter() {
     {phase11E2EEnabled ? <Route path="/__phase11-ai-workspace-e2e" component={ScannerRoute} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
-    {phase11E2EEnabled ? <Route path="/__phase11-unified-search-e2e" component={UnifiedAssetSearchPage} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
     {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
     <Route path="/login" component={AccountPage} />
