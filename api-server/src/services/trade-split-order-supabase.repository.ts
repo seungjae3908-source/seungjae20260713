@@ -34,5 +34,6 @@ export function createSupabaseSplitOrderRepository(
     listOrdersByPlan: (...args) => current().listOrdersByPlan(...args),
     createSplitOrdersAtomic: (input) => current().createSplitOrdersAtomic(input),
     activateNextChildAtomic: (order, event) => current().activateNextChildAtomic(order, event),
+    cancelPlannedChildrenAtomic: (input) => current().cancelPlannedChildrenAtomic(input),
   };
 }

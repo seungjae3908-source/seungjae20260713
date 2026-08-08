@@ -107,10 +107,16 @@ async function setup(id: string, state: TradingOrderState = 'ACCEPTED') {
   return { repository, plan, order };
 }
 
-function upbitResponse(state: 'wait' | 'done' | 'cancel', filled: number, time: string) {
+function upbitResponse(
+  state: 'wait' | 'done' | 'cancel',
+  filled: number,
+  time: string,
+  identifier: string,
+) {
   const remaining = Math.max(0, 1 - filled);
   return {
     uuid: 'upbit-order-race',
+    identifier,
     state,
     volume: '1',
     remaining_volume: String(remaining),
@@ -160,13 +166,17 @@ test('two concurrent cancel requests submit one exchange cancel and a concurrent
       cancelCalls += 1;
       cancelStartedResolve();
       await cancelRelease;
-      return new Response(JSON.stringify(upbitResponse('cancel', 0, '2026-08-05T04:00:01.000Z')), {
+      return new Response(JSON.stringify(upbitResponse(
+        'cancel', 0, '2026-08-05T04:00:01.000Z', 'cancel-client-duplicate-fill',
+      )), {
         status: 200, headers: { 'content-type': 'application/json' },
       });
     }
     lookupCalls += 1;
     assert.match(url, /\/v1\/order\?identifier=cancel-client-duplicate-fill/);
-    return new Response(JSON.stringify(upbitResponse('done', 1, '2026-08-05T04:00:03.000Z')), {
+    return new Response(JSON.stringify(upbitResponse(
+      'done', 1, '2026-08-05T04:00:03.000Z', 'cancel-client-duplicate-fill',
+    )), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
   }) as typeof fetch;
@@ -202,12 +212,16 @@ test('partial fill remains recorded when the remaining quantity is canceled', as
     const method = String(init?.method ?? 'GET').toUpperCase();
     if (method === 'DELETE') {
       cancelCalls += 1;
-      return new Response(JSON.stringify(upbitResponse('cancel', 0.4, '2026-08-05T04:01:01.000Z')), {
+      return new Response(JSON.stringify(upbitResponse(
+        'cancel', 0.4, '2026-08-05T04:01:01.000Z', 'cancel-client-partial-cancel',
+      )), {
         status: 200, headers: { 'content-type': 'application/json' },
       });
     }
     lookupCalls += 1;
-    return new Response(JSON.stringify(upbitResponse('cancel', 0.4, '2026-08-05T04:01:02.000Z')), {
+    return new Response(JSON.stringify(upbitResponse(
+      'cancel', 0.4, '2026-08-05T04:01:02.000Z', 'cancel-client-partial-cancel',
+    )), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
   }) as typeof fetch;
@@ -240,7 +254,9 @@ test('uncertain cancel never resends DELETE and later recovery performs lookup o
       return new Response('{}', { status: 504, headers: { 'content-type': 'application/json' } });
     }
     lookupCalls += 1;
-    return new Response(JSON.stringify(upbitResponse('wait', 0, '2026-08-05T04:02:00.000Z')), {
+    return new Response(JSON.stringify(upbitResponse(
+      'wait', 0, '2026-08-05T04:02:00.000Z', 'cancel-client-uncertain',
+    )), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
   }) as typeof fetch;
@@ -286,11 +302,15 @@ test('newer full fill corrects a stale canceled winner from a concurrent recover
     if (requestIndex === 1) {
       firstLookupStartedResolve();
       await releaseFirstLookup;
-      return new Response(JSON.stringify(upbitResponse('done', 1, '2026-08-05T04:03:05.000Z')), {
+      return new Response(JSON.stringify(upbitResponse(
+        'done', 1, '2026-08-05T04:03:05.000Z', 'cancel-client-terminal-correction',
+      )), {
         status: 200, headers: { 'content-type': 'application/json' },
       });
     }
-    return new Response(JSON.stringify(upbitResponse('cancel', 0.4, '2026-08-05T04:03:03.000Z')), {
+    return new Response(JSON.stringify(upbitResponse(
+      'cancel', 0.4, '2026-08-05T04:03:03.000Z', 'cancel-client-terminal-correction',
+    )), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
   }) as typeof fetch;
