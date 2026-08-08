@@ -1,184 +1,220 @@
-# PR #76 운영배포 후 충돌 준비 자료
+# PR #76 Production main 확정 전 통합 준비 자료
 
-기준일: 2026-08-06
+기준일: 2026-08-08
 
-## 고정 기준
+## 현재 사실
 
 - 저장소: `seungjae3908-source/seungjae20260713`
-- 최신 확인 main: `6e7ccd281e0255d99bbcd2f8574866a7fe8cc588`
+- 현재 확인 main: `128beab907393af3d06475129df724090de63331`
 - merge base: `c650fbb6eefe6dd728a9e1baaabe65eef2688caa`
-- 분석 시작 PR #76 HEAD: `a43511327554a67393831559e5753bf66cd6f935`
+- 현재 PR #76 HEAD: `8397f816737c4306d7f816314d26f08def053d31`
 - 브랜치: `audit/market-information-room-improvements`
-- 실제 merge/rebase/cherry-pick: **0회**
-- main 반영: **0회**
-- Staging/Production/DB/Secret/서버 변경: **0회**
+- 현재 main 기준: ahead 28 / behind 46 / diverged
+- PR 상태: Open / Draft / 미병합 / mergeable=false
+- 최신 main merge/rebase/cherry-pick/force push: **0회**
+- main 직접 변경: **0회**
+- Staging/Production/운영 DB/Supabase/Secret/서버 변경: **0회**
 
-이 문서는 실제 병합 없이 merge base 이후 main 변경 파일과 PR #76 변경 파일의 교집합을 읽기 전용으로 분석한 결과다.
+서버·Production 작업이 끝나 실제 Production main SHA가 확정될 때까지 최신 main을 반복 병합하지 않는다. 이 문서는 현재 main과 PR #76의 책임 경계 및 향후 한 번의 재동기화를 준비하기 위한 기록이다.
 
-## 충돌 예상 파일
+## 책임 경계
+
+PR #76이 소유하는 범위:
+
+- `/stocks/kr` 국내주식 정보방
+- `/stocks/us` 미국주식 정보방
+- `/coins/spot` Upbit 현물 정보방
+- `/coins/futures` Bitget 선물 공개 시장정보방
+- 읽기 전용 공개 시장데이터 계약
+- 정보방 전용 source/dataAsOf/stale/partial/error/empty UI
+- 정보방 전용 Abort/race 처리와 테스트
+
+PR #76이 소유하지 않는 범위:
+
+- PR #58 통합검색·autocomplete·검색 alias·검색 normalization
+- PR #61 전역 메뉴·breadcrumb·활성 상태·포커스
+- AI scanner·차트 엔진·자동매매·실주문
+- 운영 배포·DB·Secret·서버
+
+PR #76의 상세 이동은 기존 `/stock-info` 계약만 소비하며 검색 인덱스나 autocomplete를 재구현하지 않는다.
+
+## 현재 main과 겹치는 공통 조립 파일
+
+현재 merge base 이후 main 변경과 PR #76 변경의 실제 교집합은 다음 두 공통 조립 파일이다.
 
 ### `api-server/src/routes/index.ts`
 
-main에서 유지할 책임:
+현재 main에서 반드시 보존할 계약:
 
 - `/market/scan` bounded scanner 우선 등록
 - `/scanner/crypto` 인증·capability 보호 등록
 - private 계좌·포지션·주문 경로 선행 차단
-- `kiwoom-rankings-safe`를 legacy Kiwoom router보다 먼저 등록하는 fallback 계약
-- 최신 main의 인증·capability 순서 전체
+- `kiwoom-rankings-safe`를 legacy Kiwoom router보다 먼저 등록
+- 최신 인증·capability 순서
 
-PR #76에서 유지할 책임:
+PR #76에서 추가할 계약:
 
 - `market-information` router import
-- `/market-information/coins-spot`의 `canAccessSpot` 검사
-- `/market-information/coins-futures`의 `canAccessFutures` 검사
-- `/market-information`의 `canAccessBasicInfo` 검사와 읽기 전용 router 연결
+- `/market-information/coins-spot` → `canAccessSpot`
+- `/market-information/coins-futures` → `canAccessFutures`
+- `/market-information` → `canAccessBasicInfo` + read-only router
 
-운영배포 후 해결 원칙:
+현재 브랜치 파일은 main을 병합하지 않고 `db82ee7e3458d14f175f1fb1f001b2af22689911` 시점의 최신 scanner/safe-Kiwoom 조립 계약을 보존한 뒤 위 시장정보 연결만 최소 추가하도록 정리했다. 이후 main `128beab...`의 추가 커밋은 fallback CI provenance workflow만 수정했으므로 이 route 조립 계약에는 새 교집합이 없다.
 
-1. 최신 main 파일을 기준으로 유지한다.
-2. private 경로 차단 직후, 기존 crypto capability 등록 전에 PR #76의 정보방 capability와 router만 추가한다.
-3. main의 scanner·safe Kiwoom route를 삭제하거나 순서를 낮추지 않는다.
-4. 정보방 router를 legacy crypto router 내부에 중복 등록하지 않는다.
-5. private/account/order router를 정보방 코드에서 import하지 않는다.
-
-삭제할 중복:
-
-- 동일 `/market-information` router 중복 등록
-- PR #76 책임 밖의 scanner·Kiwoom 변경
-- private exchange 경로와 겹치는 정보방 우회 경로
-
-예상 테스트 영향:
-
-- API route smoke 전체
-- capability별 401/403
-- safe Kiwoom·scanner route 우선순위
-- private/order 요청 0 검증
+Production main 확정 후에는 확정 main 파일을 다시 기준으로 삼아 이 시장정보 연결만 최소 재적용한다.
 
 ### `api-server/test.mjs`
 
-main에서 유지할 책임:
+현재 main에서 반드시 보존할 계약:
 
-- 최신 trade automation, recovery, split order, scanner, safe Kiwoom 테스트 목록
+- 최신 scanner 테스트
+- paper journal privilege/query identity 테스트
+- trade automation recovery/cancel/split/pre-submission 테스트
+- safe Kiwoom 테스트
+- phase9 직렬 실행 계약
 - 기존 `phase12`, `smoke`, `unit`, `all` 조합
-- 최신 테스트 실행 순서와 허용 mode
 
-PR #76에서 유지할 책임:
+PR #76에서 추가할 테스트:
 
 - `src/services/market-information.service.test.ts`
+- `src/services/public-market-http.test.ts`
 - `stock-analyzer/src/lib/market-information.test.ts`
 - `src/routes/market-information.smoke.test.ts`
 
-운영배포 후 해결 원칙:
+현재 브랜치는 main의 확장된 테스트 matrix를 보존하고 정보방 테스트만 추가하도록 정리했다. Production main 확정 후 동일 원칙으로 재대조한다.
 
-1. 최신 main의 `test.mjs`를 기준으로 유지한다.
-2. 정보방 service와 frontend contract 테스트를 `phase12` 배열에 추가한다.
-3. 정보방 route smoke 테스트를 `smoke` 배열에 추가한다.
-4. main의 기존 항목을 PR #76의 오래된 배열로 덮어쓰지 않는다.
-5. 중복 경로가 없는지 확인한 뒤 `all`, `phase12`, `smoke`를 각각 실행한다.
+## 정보방 전용 파일
 
-삭제할 중복:
+현재 PR #76의 변경 파일은 17개이며, 공통 조립 파일 2개를 제외한 시장정보 핵심 파일은 다음과 같다.
 
-- 같은 정보방 테스트 경로의 중복 항목
-- main에서 이동·대체된 이전 테스트 경로
+- `api-server/src/routes/market-information.smoke.test.ts`
+- `api-server/src/routes/market-information.ts`
+- `api-server/src/services/market-information.contract.ts`
+- `api-server/src/services/market-information.service.test.ts`
+- `api-server/src/services/market-information.service.ts`
+- `api-server/src/services/public-market-http.test.ts`
+- `api-server/src/services/public-market-http.ts`
+- `stock-analyzer/e2e/market-information-room.spec.ts`
+- `stock-analyzer/e2e/phase12-market-information-room-edge-cases.spec.ts`
+- `stock-analyzer/src/lib/market-information.test.ts`
+- `stock-analyzer/src/lib/market-information.ts`
+- `stock-analyzer/src/pages/market-information.tsx`
 
-예상 테스트 영향:
+추가 조립/설정 파일:
 
-- backend 전체 회귀 수행 시간 증가
-- 누락 파일 또는 중복 실행 시 CI 실패 가능
+- `stock-analyzer/src/App.tsx`
+- `stock-analyzer/playwright.config.ts`
+- 이 문서
 
-## 통합 때 재확인할 파일
+`stock-analyzer/src/App.tsx`와 `stock-analyzer/playwright.config.ts`는 현재 merge base 이후 main 변경과 직접 교집합이 없지만 Production main 확정 시 다시 대조한다.
 
-### `stock-analyzer/src/App.tsx`
+## 네 시장 route와 capability 계약
 
-현재 main과의 직접 교집합에는 없지만 PR #58·#61 통합 후 route 영역이 변경될 수 있다.
+- `/stocks/kr` → `stocks-kr` → `canAccessBasicInfo`
+- `/stocks/us` → `stocks-us` → `canAccessBasicInfo`
+- `/coins/spot` → `coins-spot` → `canAccessSpot`
+- `/coins/futures` → `coins-futures` → `canAccessFutures`
 
-유지할 PR #76 코드:
+백엔드 `/api/market-information/:room`은 알려진 네 room만 허용하고, 요청 취소를 AbortSignal로 service/provider 계층까지 전달한다.
 
-- `/stocks/kr`
-- `/stocks/us`
-- `/coins/spot`
-- `/coins/futures`
-- `canAccessBasicInfo`, `canAccessSpot`, `canAccessFutures`별 접근 wrapper
+## 공개 시장데이터 전용 정책
 
-유지할 최신 main 코드:
+외부 직접 HTTP allowlist:
 
-- 최신 router 순서와 기존 직접 route
-- 인증·승인·capability gate
-- lazy loading과 fallback
+- Upbit: `/v1/market/all`, `/v1/ticker`
+- Bitget: `/api/v2/mix/market/*`, `/api/v3/market/*`
 
-삭제할 중복:
+계좌·잔고·포지션·주문·취소 endpoint는 allowlist에 포함하지 않는다. 응답의 `requestPolicy`도 private/account/balance/position/order/cancel/AI request count가 모두 0이어야 하며 frontend parser가 non-zero 값을 fail-closed 처리한다.
 
-- PR #61이 소유하는 전역 메뉴·breadcrumb·활성 상태 구현
-- PR #58이 소유하는 통합검색 route 생성 로직
+## 오류·신선도 계약
 
-### `stock-analyzer/playwright.config.ts`
+현재 구현 및 테스트가 고정하는 상태:
 
-PR #76의 E2E Supabase 공개 fixture 환경변수는 유지하되, 운영배포 후 최신 main의 webServer 명령과 환경변수를 기준으로 합친다. 기존 Phase E2E 플래그는 제거하지 않는다.
+- empty body / invalid JSON / primitive / empty object 거부
+- 429와 500/502/503/504는 제한된 1회 retry
+- 403은 retry하지 않음
+- caller Abort와 provider timeout을 구분
+- fresh / stale / last-good fallback
+- section 단위 ready / empty / partial / stale / unsupported / unavailable / error
+- 401 인증 만료, 403 capability 부족, 504 timeout 별도 UI
+- providerUpdatedAt/observedAt/fetchedAt와 stale/partial 표시
 
-## PR #58 읽기 전용 interface
+## Abort/race 보강
 
-UI/UX 작업방에서는 PR #58 코드를 수정하지 않는다. PR #61·#76이 소비할 최소 계약은 다음과 같다.
+기존 cold cache load가 동일 key의 `inFlight` Promise를 공유할 때 첫 요청의 AbortSignal이 loader에 캡처되어 있으면, 첫 route 전환 취소가 두 번째 정상 요청까지 함께 실패시킬 수 있었다.
 
-주식 상세 이동:
+현재 수정:
 
-```text
-/stock-info?asset=stock&market=<KR|US>&ticker=<ticker>
-```
+- fresh cache hit는 그대로 재사용
+- stale 데이터는 즉시 반환하고 background refresh만 `inFlight`로 중복 억제
+- **cold load는 요청별 loader를 독립 실행**하여 한 요청의 취소가 다른 요청으로 전파되지 않게 함
+- refresh 실패 시 기존 last-good 값을 stale로 반환하는 계약 유지
 
-코인 상세 이동:
+`public-market-http.test.ts`에 다음 회귀를 추가했다.
 
-```text
-/stock-info?asset=coin&coinMarket=<spot|futures>&symbol=<symbol>
-```
+- 동일 key concurrent cold load에서 첫 요청 abort 후 두 번째 요청 독립 성공
+- 두 번째 성공값이 fresh cache에 저장됨
+- cold refresh 실패 시 last-good stale fallback
 
-식별자 규칙:
+Frontend E2E도 빠른 KR→US 이동에서 늦은 KR 응답이 US 화면을 덮어쓰지 않는 계약을 검증한다.
 
-- 국내주식: `market=KR`, 종목코드 `ticker`
-- 미국주식: `market=US`, 대문자 ticker
-- Upbit 현물: `coinMarket=spot`, 현물 symbol
-- Bitget 선물: `coinMarket=futures`, 선물 symbol
-- 현물과 선물은 기초자산 이름이 같아도 시장·거래소·상품 식별자를 분리한다.
+## 브라우저 검증 계약
 
-PR #76의 `marketInformationDetailPath`는 위 계약만 소비하며 검색 인덱스·별칭·autocomplete를 구현하지 않는다.
+`market-information-room.spec.ts`:
 
-## Application CI 실행 조건 조사
+- 네 직접 route
+- reload / history
+- source metadata
+- 공개 데이터 전용 요청
+- 빠른 KR→US 전환과 이전 응답 격리
+- partial / stale / unsupported / 429 / provider error
+- 360 / 390 / 430 / 1440 폭
+- 가로 overflow 방지
+- 최소 44px 주요 터치 target
+- console/page/request/unexpected HTTP/private-order 요청 계측
 
-PR #76 브랜치의 `.github/workflows/futures-public-network-smoke.yml` 확인 결과:
+`phase12-market-information-room-edge-cases.spec.ts`:
 
-- `workflow_dispatch`: 지원
-- `pull_request`: main 대상
-- `push`: main 브랜치만 대상이며 기능 브랜치 push는 실행하지 않음
-- path filter: pull_request에는 없음
-- Draft PR 제외 조건: 없음
-- concurrency: 동일 PR/ref의 이전 실행을 취소할 수 있음
-- workflow syntax 오류: 정적 확인에서 없음
-- 충돌로 PR merge ref가 생성되지 않으면 pull_request 실행이 생성되지 않을 수 있음
+- explicit empty state
+- 401 인증 만료
+- 403 권한 부족
+- 504 provider timeout
+- console error 0
+- page error 0
+- unhandled rejection 0
+- unexpected HTTP error 0
+- private/account/balance/position/order/cancel/trade-automation request 0
 
-Application CI의 browser job은 `pnpm --dir stock-analyzer run test:e2e`를 실행하고, 해당 script는 Playwright 설정의 `e2e` 디렉터리 전체를 검사한다. 따라서 기존 `e2e/market-information-room.spec.ts`는 원래부터 CI 대상이며 파일명 변경은 필요하지 않다. 이번 작업에서는 기존 파일명을 유지하고 별도 `e2e/phase12-market-information-room-edge-cases.spec.ts`만 추가했다.
+## exact-HEAD 실행 검증 상태
 
-현재 연결된 GitHub 도구에는 workflow_dispatch 실행 함수가 노출되지 않았고, 저장소에는 기능 브랜치용 dispatch bridge가 없다. main 전용 fallback은 기능 브랜치 실행을 명시적으로 거부한다. workflow·Agent Hub 정책·worker registry를 수정하거나 임시 브랜치/PR을 만드는 우회는 하지 않는다.
+현재 HEAD `8397f816737c4306d7f816314d26f08def053d31`은 PR conflict 상태이므로 pull_request merge ref 기반 Application CI run이 생성되지 않았다.
 
-## 운영배포 후 통합 절차
+현재 연결된 GitHub 기능에는 기능 브랜치를 대상으로 새 `workflow_dispatch`를 시작하는 action이 없고, Agent Hub worker registry는 `audit/*` 브랜치를 허용하지 않는다. 정책·workflow·worker registry 변경, 임시 validation PR, no-op commit 같은 우회는 하지 않는다.
 
-1. 실제 운영배포 main SHA 확인
-2. PR #56 통합 완료 확인
-3. PR #58 통합 완료 확인
-4. PR #76에 최신 main 일반 2-parent merge
-5. 위 충돌 파일을 main 우선 원칙으로 해결하고 정보방 변경만 추가
+따라서 현 시점에는 source/test contract 정적 대조와 브랜치 코드 보강까지 완료했으며, **현재 exact HEAD의 typecheck/build/Playwright/Application CI 성공을 아직 주장하지 않는다.**
+
+## Production main 확정 후 한 번 수행할 통합 절차
+
+1. 실제 Production main SHA 확인
+2. 그 확정 SHA를 PR #76에 비강제 방식으로 한 번 재동기화
+3. 공통 조립 파일은 최신 main 우선, 시장정보 연결·테스트 항목만 최소 적용
+4. PR #58 통합검색 구현을 가져오거나 재구현하지 않았는지 diff 확인
+5. `git diff --check`
 6. frontend/backend typecheck
-7. 단위·전체 회귀·frontend/backend production build
-8. Desktop·Mobile Playwright와 360/390/430px 검증
-9. console/page/unhandled 오류 0, 예상 밖 HTTP 오류 0, 주문성 mutation 0 확인
-10. 정확한 PR #76 HEAD에서 Application CI 필수 상태 6/6 확인
-11. PR #76 하나의 병합 승인 요청
+7. lint 및 시장정보 단위/API/backend regression
+8. frontend/backend build
+9. desktop/mobile/전체 관련 Playwright
+10. console/page/unhandled 0, unexpected HTTP 0, private/order API 0 확인
+11. exact-HEAD Application CI 필수 상태 6/6 확인
+12. Draft 상태에서 통합 준비 결과만 보고
 
-## 현재 안전 확인
+## 안전 확인
 
-- 실제 merge 수행: 0
 - main 변경: 0
-- 배포 workflow 변경: 0
-- 운영 설정 변경: 0
-- DB/Secret/서버 변경: 0
-- private API 호출: 0
+- main 병합: 0
+- Ready for review: 0
+- Staging/Production 실행: 0
+- 운영 DB/Supabase/Secret 변경: 0
+- 서버/PM2/Caddy 변경: 0
+- private account/order API 호출: 0
 - 실제 주문·취소: 0
