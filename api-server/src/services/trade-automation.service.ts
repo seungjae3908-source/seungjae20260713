@@ -2,6 +2,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import { assertOrderTransition } from './trade-order-state-machine.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingRepository } from './trade-automation.repository';
+import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
+import {
+  assertCancellationAllowed,
+  buildRiskEnvelope,
+  riskEnvelopeForPlan,
+  withRiskEnvelope,
+} from './trade-risk-envelope.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder, TradingOrderEvent, TradingOrderState, TradingPlan, TradingPlanInput, TradingPolicy,
@@ -71,16 +78,18 @@ export class TradeAutomationService {
       emergencyStopped: emergencyStopped || await this.emergencyStopActive(userId, policy),
       serverLiveEnabled: input.accountMode !== 'live' || liveExecutionEnabled(input.exchange),
     });
-    if (!decision.allowed) return { plan: null, duplicate: false, decision };
+    if (!decision.allowed) {
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      return { plan: null, duplicate: false, decision };
+    }
 
     const now = new Date();
-    const approvalRequired = policy.mode === 'approval';
     const plan: TradingPlan = {
       ...input,
       id: randomUUID(), userId, idempotencyKey,
-      state: approvalRequired ? 'APPROVAL_PENDING' : 'PLANNED',
+      state: 'APPROVAL_PENDING',
       version: 0,
-      approvalExpiresAt: approvalRequired ? new Date(now.getTime() + APPROVAL_TTL_MS).toISOString() : null,
+      approvalExpiresAt: new Date(now.getTime() + APPROVAL_TTL_MS).toISOString(),
       approvedAt: null, createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
     const inserted = await this.repository.insertPlan(plan);
@@ -103,39 +112,41 @@ export class TradeAutomationService {
       serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
     });
     if (!decision.allowed) {
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
       const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
       await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
       throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
     }
     const approvedAt = new Date().toISOString();
-    const approved = await this.repository.compareAndSetPlan({
+    let envelope;
+    try {
+      envelope = buildRiskEnvelope(plan, policy, approvedAt);
+    } catch (error) {
+      const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: approvedAt };
+      await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
+      throw error;
+    }
+    const approvedCandidate = withRiskEnvelope({
       ...plan, state: 'SUBMITTED', approvedAt, updatedAt: approvedAt,
-    }, 'APPROVAL_PENDING', expectedVersion);
+    }, envelope);
+    const approved = await this.repository.compareAndSetPlan(
+      approvedCandidate,
+      'APPROVAL_PENDING',
+      expectedVersion,
+    );
     if (!approved) throw new Error('TRADE_PLAN_CONCURRENTLY_CHANGED');
     return approved;
   }
 
-  async beginAutomaticPlan(userId: string, planId: string) {
-    const plan = await this.repository.getPlan(userId, planId);
-    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
-    if (plan.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
-    const policy = await this.repository.getPolicy(userId);
-    const decision = evaluateTradingPlan(plan, policy, {
-      emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
-    });
-    if (!decision.allowed) throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
-    const submitted = await this.repository.compareAndSetPlan({
-      ...plan, state: 'SUBMITTED', updatedAt: new Date().toISOString(),
-    }, 'PLANNED', planVersion(plan));
-    if (!submitted) throw new Error('TRADE_PLAN_CONCURRENTLY_CHANGED');
-    return submitted;
+  async beginAutomaticPlan(_userId: string, _planId: string) {
+    throw new Error('USER_APPROVAL_REQUIRED');
   }
 
   async createOrder(userId: string, plan: TradingPlan) {
     const existing = await this.repository.findOrderByPlan(userId, plan.id);
     if (existing) return { order: existing, duplicate: true };
     if (plan.state !== 'SUBMITTED') throw new Error('TRADE_PLAN_NOT_SUBMITTED');
+    if (!plan.approvedAt || !riskEnvelopeForPlan(plan)) throw new Error('TRADE_PLAN_APPROVAL_ENVELOPE_REQUIRED');
     const now = new Date().toISOString();
     const order: TradingOrder = {
       id: randomUUID(), userId, planId: plan.id, exchange: plan.exchange,
@@ -154,6 +165,7 @@ export class TradeAutomationService {
       this.orderEvent(order, null, 'SUBMITTED', 'ORDER_CREATED', {
         accountMode: plan.accountMode,
         approvedPlanVersion: order.approvedPlanVersion,
+        riskEnvelopeVersion: riskEnvelopeForPlan(plan)?.version ?? null,
       }),
       'SUBMITTED',
     );
@@ -206,6 +218,16 @@ export class TradeAutomationService {
     }
 
     Object.assign(order, result.order);
+    const escalationCodes: string[] = [];
+    if (typeof metadata.errorCode === 'string') escalationCodes.push(metadata.errorCode);
+    if (order.state === 'RECOVERY_REQUIRED') {
+      escalationCodes.push('ORDER_STATE_UNKNOWN', 'EXECUTION_RECONCILIATION_FAILED');
+    }
+    await tripKillSwitchForRiskFailure({
+      repository: this.repository,
+      userId: order.userId,
+      blockCodes: escalationCodes,
+    });
     return order;
   }
 
@@ -217,6 +239,12 @@ export class TradeAutomationService {
     for (const order of recoverable) {
       if (order.state !== 'RECOVERY_REQUIRED') {
         await this.transition(order, 'RECOVERY_REQUIRED', 'SERVER_RESTART_RECONCILIATION_REQUIRED');
+      } else {
+        await tripKillSwitchForRiskFailure({
+          repository: this.repository,
+          userId,
+          blockCodes: ['ORDER_STATE_UNKNOWN', 'EXECUTION_RECONCILIATION_FAILED'],
+        });
       }
     }
     return recoverable;
@@ -234,6 +262,7 @@ export class TradeAutomationService {
       return { plan, order: null, filledQuantityPreserved: 0 };
     }
     if (order.state === 'ACCEPTED' || order.state === 'PARTIALLY_FILLED') {
+      assertCancellationAllowed(plan);
       await this.transition(order, 'CANCEL_REQUESTED', 'SIGNAL_INVALIDATED_CANCEL_UNFILLED_REMAINDER', {
         filledQuantity: order.filledQuantity,
         invalidateAction: plan.invalidateAction ?? 'hold',

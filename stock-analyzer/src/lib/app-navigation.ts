@@ -213,7 +213,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
         href: APP_ROUTES.autoTrading,
         label: '승인형 주문',
         icon: 'power',
-        capability: 'canAccessRiskPreview',
+        capability: 'canPlaceOrders',
       },
       {
         id: 'backtests',
