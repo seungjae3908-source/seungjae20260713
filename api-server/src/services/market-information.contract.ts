@@ -254,7 +254,7 @@ export function emptyDerivatives(): MarketInformationDerivativesData {
 }
 
 export function isMarketInformationRoomId(value: unknown): value is MarketInformationRoomId {
-  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(ROOM_CONFIG, value);
+  return typeof value === 'string' && Object.hasOwn(ROOM_CONFIG, value);
 }
 
 export function requireObjectArray(payload: unknown, provider: string): JsonObject[] {
