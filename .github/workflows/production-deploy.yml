@@ -105,10 +105,23 @@ jobs:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         with:
           script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
             const {
+              REQUIRED_PRODUCTION_STATUSES,
               evaluateProductionCiProvenance,
               inspectRequiredStatusEvidence,
             } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-ci-provenance.cjs`);
+            if (JSON.stringify(required) !== JSON.stringify(REQUIRED_PRODUCTION_STATUSES)) {
+              core.setFailed('Production workflow status list differs from the shared provenance contract.');
+              return;
+            }
             const targetSha = process.env.TARGET_SHA;
             const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
               owner: context.repo.owner,
