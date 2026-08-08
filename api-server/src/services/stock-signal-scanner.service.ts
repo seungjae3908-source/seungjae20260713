@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Candle } from '../sample/types';
+import type { Candle, Timeframe } from '../sample/types';
 import { MarketDataService } from './market-data.service';
 import {
   createBoundedScannerService,
@@ -62,10 +62,91 @@ function selectedConditions(requested: string[], normalized: string[]): string[]
   return [...new Set(source.map((item) => item.trim()).filter(Boolean))];
 }
 
+function candleTimestamp(value: Candle['time']): number | null {
+  if (typeof value === 'number') {
+    const normalized = value < 10_000_000_000 ? value * 1_000 : value;
+    return Number.isFinite(normalized) ? normalized : null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function marketSessionDate(value: Candle['time'], market: 'KR' | 'US'): string {
+  const at = candleTimestamp(value);
+  if (at == null) return String(value);
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: market === 'US' ? 'America/New_York' : 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(at));
+}
+
+function aggregateSessionCandles(
+  rows: Candle[],
+  size: number,
+  market: 'KR' | 'US',
+): Candle[] {
+  if (size <= 1) return rows;
+  const sessions = new Map<string, Candle[]>();
+  for (const row of rows) {
+    const key = marketSessionDate(row.time, market);
+    const current = sessions.get(key) ?? [];
+    current.push(row);
+    sessions.set(key, current);
+  }
+  const result: Candle[] = [];
+  for (const sessionRows of sessions.values()) {
+    const ordered = [...sessionRows].sort((left, right) => (
+      (candleTimestamp(left.time) ?? 0) - (candleTimestamp(right.time) ?? 0)
+    ));
+    for (let index = 0; index < ordered.length; index += size) {
+      const chunk = ordered.slice(index, index + size);
+      if (!chunk.length) continue;
+      result.push({
+        time: chunk[0].time,
+        open: chunk[0].open,
+        high: Math.max(...chunk.map((row) => row.high)),
+        low: Math.min(...chunk.map((row) => row.low)),
+        close: chunk.at(-1)!.close,
+        volume: chunk.reduce((sum, row) => sum + row.volume, 0),
+      });
+    }
+  }
+  return result.sort((left, right) => (
+    (candleTimestamp(left.time) ?? 0) - (candleTimestamp(right.time) ?? 0)
+  ));
+}
+
+async function loadStockCandles(
+  market: 'KR' | 'US',
+  ticker: string,
+  timeframe: string,
+): Promise<Candle[]> {
+  if (market === 'US' && timeframe === '3m') {
+    const oneMinute = await MarketDataService.getCandles(ticker, '1m');
+    return aggregateSessionCandles(oneMinute, 3, market);
+  }
+  if (market === 'US' && timeframe === '4H') {
+    const hourly = await MarketDataService.getCandles(ticker, '60m');
+    return aggregateSessionCandles(hourly, 4, market);
+  }
+  return MarketDataService.getCandles(ticker, timeframe as Timeframe);
+}
+
+function boundedCompatibilityTimeframe(timeframe: string): Timeframe {
+  // PR #82 bounded scanner validates its historical timeframe list. For 1m/3m
+  // we preserve that engine but feed it the requested real candles, then the
+  // final policy/quant layers use the requested timeframe contract.
+  return (timeframe === '1m' || timeframe === '3m' ? '5m' : timeframe) as Timeframe;
+}
+
 export const StockSignalScannerService = {
   async scan(request: StockSignalScanRequest): Promise<ScannerResponse> {
     const startedAt = Date.now();
-    const primaryTimeframe = String(request.filters.timeframe ?? '1D');
+    const primaryTimeframe = String(request.filters.timeframe ?? '1D') === '1H'
+      ? '60m'
+      : String(request.filters.timeframe ?? '1D');
     const strategyMode = request.strategyMode ?? scannerStrategyForTimeframe(primaryTimeframe);
     const contextTimeframe = scannerContextTimeframe(strategyMode);
     const universe = await ScannerUniverseService.batch(
@@ -79,12 +160,12 @@ export const StockSignalScannerService = {
     const entryByTicker = new Map(universe.entries.map((entry) => [entry.ticker, entry]));
     const scanner = createBoundedScannerService({
       catalog: universe.entries,
-      getCandles: async (ticker, timeframe) => {
+      getCandles: async (ticker) => {
         const [candles, context] = await Promise.all([
-          MarketDataService.getCandles(ticker, timeframe),
-          timeframe === contextTimeframe
+          loadStockCandles(request.market, ticker, primaryTimeframe),
+          primaryTimeframe === contextTimeframe
             ? Promise.resolve<Candle[] | null>(null)
-            : MarketDataService.getCandles(ticker, contextTimeframe).catch(() => []),
+            : loadStockCandles(request.market, ticker, contextTimeframe).catch(() => []),
         ]);
         candlesByTicker.set(ticker, candles);
         contextByTicker.set(ticker, context ?? candles);
@@ -106,6 +187,7 @@ export const StockSignalScannerService = {
       request.indicators,
       {
         ...request.filters,
+        timeframe: boundedCompatibilityTimeframe(primaryTimeframe),
         minimumScore: undefined,
         maximumRiskScore: undefined,
       },
@@ -123,15 +205,16 @@ export const StockSignalScannerService = {
           universeEntry: entry,
           candles,
           selected,
-          timeframe: raw.timeframe,
+          timeframe: primaryTimeframe,
         });
         const quantCandidate = applyScannerQuantHardening({
           card: legacyCandidate,
-          timeframe: raw.timeframe,
+          timeframe: primaryTimeframe,
           candles,
           contextCandles: contextByTicker.get(card.ticker) ?? [],
           strategyMode,
           allowShort: false,
+          sessionAware: true,
         });
         return applyUniverseStaleness(quantCandidate, universe.stale);
       })
@@ -162,7 +245,7 @@ export const StockSignalScannerService = {
     const message = universe.stale
       ? `종목 마스터 제공기관이 지연되어 ${universe.source} 목록으로 ${completedCount}/${universe.entries.length}종목을 분석했습니다.`
       : hasUntrusted
-        ? `Data Quality Gate가 신뢰할 수 없는 종목을 강한 신호에서 제외했습니다.`
+        ? 'Data Quality Gate가 신뢰할 수 없는 종목을 강한 신호에서 제외했습니다.'
         : partial
           ? `일부 공급자 지연으로 ${completedCount}/${universe.entries.length}종목의 확인된 결과만 표시합니다.`
           : lifecycle.cards.length === 0
@@ -174,7 +257,7 @@ export const StockSignalScannerService = {
       requestId: randomUUID(),
       assetClass: 'stock',
       market: request.market,
-      timeframe: raw.timeframe,
+      timeframe: primaryTimeframe,
       cards: lifecycle.cards,
       alerts: lifecycle.alerts,
       failures: [],
