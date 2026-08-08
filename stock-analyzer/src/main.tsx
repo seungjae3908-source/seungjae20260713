@@ -36,7 +36,24 @@ function registerServiceWorker() {
 	});
 }
 
+function configureRecoverableSearchDiagnostics() {
+	const reportError = console.error.bind(console);
+	console.error = (...args: unknown[]) => {
+		const [label, error] = args;
+		if (
+			label === '공통 시세 보강 실패' &&
+			error instanceof TypeError &&
+			error.message === 'Failed to fetch'
+		) {
+			console.warn('공통 시세 보강 건너뜀', error);
+			return;
+		}
+		reportError(...args);
+	};
+}
+
 configureUnifiedChartFetch(authorizedFetch);
+configureRecoverableSearchDiagnostics();
 applyInitialAccent();
 registerServiceWorker();
 
