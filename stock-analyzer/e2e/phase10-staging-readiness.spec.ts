@@ -345,9 +345,13 @@ async function finishRouteTransition(
 
 async function expectHealthyRoute(page: Page, route: string) {
   await settle(page);
+  const requestedRoute = routeIdentity(route, page.url());
+  const expectedRoute = requestedRoute === '/stock/005930'
+    ? '/stock/005930?tab=overview'
+    : requestedRoute;
   const observation: RouteTransitionObservation = {
     fromRoute: routeIdentity(page.url()),
-    toRoute: routeIdentity(route, page.url()),
+    toRoute: expectedRoute,
     candidates: [],
     pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
   };
@@ -356,6 +360,16 @@ async function expectHealthyRoute(page: Page, route: string) {
   try {
     const response = await page.goto(route, { waitUntil: 'domcontentloaded' });
     if (response) expect(response.status(), `${route} returned HTTP ${response.status()}`).toBeLessThan(400);
+    if (expectedRoute !== requestedRoute) {
+      await expect.poll(
+        () => routeIdentity(page.url()),
+        {
+          message: 'stock detail fixture must reach its exact canonical overview route',
+          timeout: 15_000,
+          intervals: [100, 200, 300, 500],
+        },
+      ).toBe(expectedRoute);
+    }
     await settle(page);
     expect(routeIdentity(page.url())).toBe(observation.toRoute);
     await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
