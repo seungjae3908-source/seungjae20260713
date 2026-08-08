@@ -12,6 +12,7 @@ import {
   collectSafeApiDiagnostic,
   type SafeApiDiagnostic,
 } from './support/safe-api-diagnostic';
+import { APP_NAVIGATION } from '../src/lib/app-navigation';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
 const required = (name: string): string => {
@@ -605,7 +606,7 @@ test.describe('real staging release readiness', () => {
     const nav = page.locator('nav');
     await expect(nav).toBeVisible();
 
-    for (const label of ['홈', '종목', '테마', '관심', '설정']) {
+    for (const label of ['홈', '종목', '기술', '정보', '설정']) {
       await settle(page);
       await nav.getByRole('button', { name: label, exact: true }).click();
       await settle(page);
@@ -613,7 +614,7 @@ test.describe('real staging release readiness', () => {
 
     await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
-    for (const label of ['AI 검색기', 'AI 차트 분석기', '자동매매']) {
+    for (const label of ['AI 신호검색기', 'AI 차트', '승인형 주문', '백테스트', '모의매매']) {
       await settle(page);
       await page.getByRole('menuitem', { name: label, exact: true }).click();
       await settle(page);
@@ -623,7 +624,7 @@ test.describe('real staging release readiness', () => {
 
     await settle(page);
     await nav.getByRole('button', { name: '정보', exact: true }).click();
-    for (const label of ['정보', '공부', '시황', 'AI 채팅', '포트폴리오']) {
+    for (const label of ['투자 공부', 'AI 정보', '포트폴리오']) {
       await settle(page);
       await page.getByRole('menuitem', { name: label, exact: true }).click();
       await settle(page);
