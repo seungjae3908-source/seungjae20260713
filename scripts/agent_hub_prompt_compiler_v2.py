@@ -574,7 +574,7 @@ def self_test() -> int:
     release = compile_prompt(
         fields=release_fields,
         sanitized_report="fixture CI success",
-        allowed_action_types=("inspect_repository", "modify_feature_branch"),
+        allowed_action_types=("inspect_repository", "inspect_branch"),
         registered_workers=("operations-worker",),
         policy_version="agent-hub-v4.0",
     )
@@ -598,20 +598,64 @@ def self_test() -> int:
     assert canonical["evidence_ids"] == pathless["evidence_ids"]
     assert canonical["validation"] == pathless["validation"]
     assert canonical["stop_conditions"] == pathless["stop_conditions"]
+    branch_pathless = {**pathless, "action_type": "inspect_branch", "allowed_paths": ["anything/**"]}
+    assert parse_model_proposal(json.dumps(branch_pathless), release)["allowed_paths"] == []
 
-    code_fields = {**base_fields, "worker": "integration-planner", "branch": "agent/hub-code-demo"}
+    from agent_hub_policy import (
+        PATHLESS_READ_ONLY_ACTIONS as POLICY_PATHLESS_READ_ONLY_ACTIONS,
+        PolicyError,
+        evaluate_proposal,
+        load_policy,
+        load_workers,
+        parse_proposal,
+    )
+    assert POLICY_PATHLESS_READ_ONLY_ACTIONS == PATHLESS_READ_ONLY_ACTIONS
+    policy = load_policy()
+    workers = load_workers()
+    policy_pathless = parse_proposal({
+        "target_worker": canonical["target_worker"],
+        "action_type": canonical["action_type"],
+        "branch": canonical["target_branch"],
+        "allowed_paths": canonical["allowed_paths"],
+        "forbidden_paths": canonical["prohibited_paths"],
+        "instruction": canonical["instruction"],
+        "validation": canonical["validation"],
+        "stop_conditions": canonical["stop_conditions"],
+    }, policy)
+    pathless_decision = evaluate_proposal(
+        proposal=policy_pathless,
+        policy=policy,
+        workers=workers,
+        repository="owner/repo",
+        task_id="pathless-demo",
+        report_comment_id=123,
+        report_head_sha="b" * 40,
+        base_sha="a" * 40,
+        current_branch_sha="b" * 40,
+    )
+    assert pathless_decision.fields["status"] == "ready"
+    assert pathless_decision.fields["risk_level"] == "low"
+    assert pathless_decision.fields["allowed_paths"] == "[]"
+    assert pathless_decision.fields["requires_user_approval"] == "false"
+
+    code_fields = {
+        **base_fields,
+        "worker": "ai-signal-scanner",
+        "branch": "agent/hub-scanner-demo",
+        "changed_files": ["api-server/src/routes/demo-scanner.test.ts"],
+    }
     code = compile_prompt(
         fields=code_fields,
         sanitized_report=code_fields["checks"],
         allowed_action_types=("modify_feature_branch",),
-        registered_workers=("integration-planner",),
+        registered_workers=("ai-signal-scanner",),
         policy_version="agent-hub-v4.0",
     )
     code_change = {
-        "target_worker": "integration-planner",
+        "target_worker": "ai-signal-scanner",
         "action_type": "modify_feature_branch",
         "target_branch": code_fields["branch"],
-        "allowed_paths": ["docs/demo.md"],
+        "allowed_paths": ["api-server/src/routes/demo-scanner.test.ts"],
         "prohibited_paths": ["production/**"],
         "instruction": "Modify the bounded file only.",
         "evidence_ids": [next(iter(code.known_evidence_ids))],
@@ -620,7 +664,44 @@ def self_test() -> int:
         "reason": "Bounded code change.",
     }
     preserved = parse_model_proposal(json.dumps(code_change), code)
-    assert preserved["allowed_paths"] == ["docs/demo.md"]
+    assert preserved["allowed_paths"] == ["api-server/src/routes/demo-scanner.test.ts"]
+    try:
+        parse_proposal({
+            "target_worker": "ai-signal-scanner",
+            "action_type": "modify_feature_branch",
+            "branch": code_fields["branch"],
+            "allowed_paths": [],
+            "forbidden_paths": ["production/**"],
+            "instruction": "Modify a feature file.",
+            "validation": "Run checks.",
+            "stop_conditions": "Stop on violation.",
+        }, policy)
+    except PolicyError as exc:
+        assert str(exc) == "allowed_paths must be a non-empty array"
+    else:
+        raise AssertionError("empty code-change allowlist was accepted")
+    outside = parse_proposal({
+        "target_worker": "ai-signal-scanner",
+        "action_type": "modify_feature_branch",
+        "branch": code_fields["branch"],
+        "allowed_paths": ["src/"],
+        "forbidden_paths": ["production/**"],
+        "instruction": "Modify a feature file.",
+        "validation": "Run checks.",
+        "stop_conditions": "Stop on violation.",
+    }, policy)
+    outside_decision = evaluate_proposal(
+        proposal=outside,
+        policy=policy,
+        workers=workers,
+        repository="owner/repo",
+        task_id="outside-demo",
+        report_comment_id=124,
+        report_head_sha="b" * 40,
+        base_sha="a" * 40,
+        current_branch_sha="b" * 40,
+    )
+    assert outside_decision.fields["status"] == "blocked"
 
     assert set(PROFILE_NAMES) == set(PROFILE_REQUIRED_EVIDENCE) == set(PROFILE_GOALS)
     assert set(PROFILE_NAMES) == set(PROFILE_ALLOWED_ACTIONS) == set(PROFILE_ALLOWED_WORKERS) == set(PROFILE_CONTEXT_LIMITS)
@@ -633,7 +714,11 @@ def self_test() -> int:
         "pathless_allowed_paths_canonicalized": 1,
         "pathless_original_path_count": 2,
         "pathless_canonical_path_count": 0,
+        "pathless_policy_ready": 1,
+        "pathless_contract_drift": 0,
         "code_change_path_preserved": 1,
+        "code_change_empty_allowed_paths": 0,
+        "outside_scope_auto_ready": 0,
         "raw_model_output_logged": 0,
     }))
     return 0
