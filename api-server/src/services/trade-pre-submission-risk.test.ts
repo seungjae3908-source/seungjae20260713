@@ -5,6 +5,7 @@ import {
   TradePreSubmissionRiskError,
   TradePreSubmissionRiskService,
 } from './trade-pre-submission-risk.service';
+import { buildRiskEnvelope } from './trade-risk-envelope.service';
 import {
   DEFAULT_TRADING_POLICY,
   type TradingMarketSnapshot,
@@ -45,7 +46,7 @@ function snapshot(now: Date): TradingMarketSnapshot {
 }
 
 function plan(now: Date, version = 1): TradingPlan {
-  return {
+  const candidate: TradingPlan = {
     id: '22222222-2222-2222-2222-222222222222',
     userId: USER_ID,
     idempotencyKey: 'risk-test',
@@ -86,6 +87,8 @@ function plan(now: Date, version = 1): TradingPlan {
     },
     marketSnapshot: snapshot(now),
   };
+  candidate.riskEnvelope = buildRiskEnvelope(candidate, DEFAULT_TRADING_POLICY, candidate.approvedAt!);
+  return candidate;
 }
 
 function order(now: Date): TradingOrder {
@@ -122,7 +125,7 @@ async function setup(now: Date, planVersion = 1) {
   return { repository, currentPlan, currentOrder, service: new TradePreSubmissionRiskService(repository) };
 }
 
-test('fresh approval, risk evidence, signal, liquidity, cost, and limits pass together', async () => {
+test('fresh approval, risk evidence, signal, liquidity, cost, limits, and risk envelope pass together', async () => {
   const now = new Date();
   const { currentPlan, currentOrder, service } = await setup(now);
   const result = await service.evaluate({
