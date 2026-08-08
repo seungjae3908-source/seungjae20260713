@@ -52,6 +52,7 @@ export interface ScannerDataQualityInput {
   providerObservations?: ScannerProviderObservation[];
   marketClosed?: boolean;
   tradingHalt?: boolean;
+  sessionAware?: boolean;
   staleMultiplier?: number;
   providerDisagreementPercent?: number;
 }
@@ -97,6 +98,20 @@ function median(values: number[]): number | null {
     : sorted[middle];
 }
 
+function shouldInspectGap(
+  gap: number,
+  expectedIntervalMs: number,
+  timeframe: string,
+  sessionAware: boolean,
+): boolean {
+  if (gap <= expectedIntervalMs * 1.8) return false;
+  if (!sessionAware) return true;
+  if (timeframe === '1D' || timeframe === '1W') return false;
+  // Session markets legitimately contain overnight/weekend closures. Ignore only
+  // clearly session-sized gaps; missing bars inside a session remain detectable.
+  return gap <= expectedIntervalMs * 6;
+}
+
 function inspectCandles(
   input: ScannerDataQualityInput,
   issues: ScannerDataQualityIssue[],
@@ -136,8 +151,11 @@ function inspectCandles(
   }
 
   if (expectedIntervalMs != null && ordered.length >= 2) {
-    const largeGaps = ordered.slice(1).filter((row, index) => (
-      row.at - ordered[index].at > expectedIntervalMs * 1.8
+    const largeGaps = ordered.slice(1).filter((row, index) => shouldInspectGap(
+      row.at - ordered[index].at,
+      expectedIntervalMs,
+      input.timeframe,
+      input.sessionAware === true,
     ));
     if (largeGaps.length) {
       const ratio = largeGaps.length / Math.max(1, ordered.length - 1);
@@ -145,7 +163,7 @@ function inspectCandles(
         issues,
         'MISSING_CANDLE',
         ratio >= 0.08 ? 'blocking' : 'warning',
-        `예상 간격보다 큰 캔들 공백 ${largeGaps.length}개가 발견되었습니다.`,
+        `예상 간격보다 큰 거래 구간 내 캔들 공백 ${largeGaps.length}개가 발견되었습니다.`,
       );
     }
   }
