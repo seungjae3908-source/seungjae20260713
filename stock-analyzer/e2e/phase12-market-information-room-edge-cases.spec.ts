@@ -130,13 +130,24 @@ async function mockEnvironment(page: Page, options: { error?: ErrorCase } = {}):
   });
 
   const consoleErrors: string[] = [];
+  const expectedNetworkConsole: string[] = [];
   const pageErrors: string[] = [];
   const requestFailures: string[] = [];
+  const expectedHttp: string[] = [];
   const unexpectedHttp: string[] = [];
   const forbiddenRequests: string[] = [];
 
   page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
+    if (message.type() !== 'error') return;
+    const text = message.text();
+    const expectedStatus = options.error?.status;
+    const locationUrl = message.location().url;
+    const expectedNetworkDiagnostic = expectedStatus != null
+      && text.startsWith('Failed to load resource: the server responded with a status of ')
+      && text.includes(`status of ${expectedStatus} (`)
+      && (!locationUrl || new URL(locationUrl).pathname === '/api/market-information/stocks-kr');
+    if (expectedNetworkDiagnostic) expectedNetworkConsole.push(text);
+    else consoleErrors.push(text);
   });
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('requestfailed', (request) => {
@@ -145,9 +156,13 @@ async function mockEnvironment(page: Page, options: { error?: ErrorCase } = {}):
   });
   page.on('response', (response) => {
     if (!response.url().includes('/api/')) return;
-    if (response.status() >= 400 && response.status() !== options.error?.status) {
-      unexpectedHttp.push(`${response.status()} ${response.url()}`);
+    if (response.status() < 400) return;
+    const path = new URL(response.url()).pathname;
+    if (options.error && path === '/api/market-information/stocks-kr' && response.status() === options.error.status) {
+      expectedHttp.push(`${response.status()} ${path}`);
+      return;
     }
+    unexpectedHttp.push(`${response.status()} ${response.url()}`);
   });
 
   await page.route('**/__e2e-supabase/**', async (route) => {
@@ -222,6 +237,15 @@ async function mockEnvironment(page: Page, options: { error?: ErrorCase } = {}):
         const target = window as Window & { __informationUnhandledRejections?: string[] };
         return target.__informationUnhandledRejections ?? [];
       });
+      if (options.error) {
+        const expectedResponse = `${options.error.status} /api/market-information/stocks-kr`;
+        expect(expectedHttp.length).toBeGreaterThan(0);
+        expect(expectedHttp.every((item) => item === expectedResponse)).toBe(true);
+        expect(expectedNetworkConsole.length).toBe(expectedHttp.length);
+      } else {
+        expect(expectedHttp).toEqual([]);
+        expect(expectedNetworkConsole).toEqual([]);
+      }
       expect(consoleErrors, consoleErrors.join('\n')).toEqual([]);
       expect(pageErrors, pageErrors.join('\n')).toEqual([]);
       expect(unhandledRejections, unhandledRejections.join('\n')).toEqual([]);
