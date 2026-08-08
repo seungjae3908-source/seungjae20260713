@@ -5,7 +5,7 @@ import {
   scannerStrategyForTimeframe,
   type ScannerStrategyMode,
 } from './scanner-quant-strategy.service';
-import type { ScannerPricePlan, ScannerSignalCard } from './scanner-signal.types';
+import type { ScannerEvidence, ScannerPricePlan, ScannerSignalCard } from './scanner-signal.types';
 
 export interface ScannerQuantHardeningInput {
   card: ScannerSignalCard;
@@ -39,6 +39,10 @@ function completenessFromMarketData(
   value += card.tradingValue != null && card.tradingValue > 0 ? 7 : 0;
   value += card.listingStatus === 'LISTED' ? 5 : 0;
   return Math.round(Math.min(100, Math.max(0, value)));
+}
+
+function evidenceLabels(evidence: ScannerEvidence[], status: ScannerEvidence['status']): string[] {
+  return [...new Set(evidence.filter((item) => item.status === status).map((item) => item.label))];
 }
 
 export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): ScannerSignalCard {
@@ -89,6 +93,27 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
   const warnings = directionChanged
     ? [...input.card.warnings, ...quant.warnings, 'Quant 방향이 기존 후보 방향과 달라 기존 진입·손절·목표 가격을 폐기했습니다.']
     : [...input.card.warnings, ...quant.warnings];
+  const evidence: ScannerEvidence[] = [
+    ...input.card.evidence,
+    {
+      key: `quant-${strategyMode}`,
+      label: strategyMode === 'scalping' ? '단타 Quant 종합' : '스윙 Quant 종합',
+      status: strongSignalEligible ? 'matched' : quality.state === 'DATA_UNTRUSTED' ? 'unverified' : 'not_matched',
+      source: `scanner-${strategyMode}-engine`,
+      observedAt: input.card.observedAt,
+      reasons: quant.reasons,
+    },
+    {
+      key: 'data-quality',
+      label: 'Data Quality Gate',
+      status: quality.state === 'TRUSTED' ? 'matched' : quality.state === 'DEGRADED' ? 'not_matched' : 'unverified',
+      source: 'scanner-data-quality-gate',
+      observedAt: quality.lastTimestamp,
+      reasons: quality.issues.length
+        ? quality.issues.map((issue) => `${issue.code}: ${issue.message}`)
+        : ['timestamp·OHLC·volume·gap·duplicate 검증을 통과했습니다.'],
+    },
+  ];
 
   return {
     ...input.card,
@@ -110,26 +135,9 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     quantScore: quant.factors,
     aiValidation: quant.aiValidation,
     warnings: [...new Set(warnings)],
-    evidence: [
-      ...input.card.evidence,
-      {
-        key: `quant-${strategyMode}`,
-        label: strategyMode === 'scalping' ? '단타 Quant 종합' : '스윙 Quant 종합',
-        status: strongSignalEligible ? 'matched' : quality.state === 'DATA_UNTRUSTED' ? 'unverified' : 'not_matched',
-        source: `scanner-${strategyMode}-engine`,
-        observedAt: input.card.observedAt,
-        reasons: quant.reasons,
-      },
-      {
-        key: 'data-quality',
-        label: 'Data Quality Gate',
-        status: quality.state === 'TRUSTED' ? 'matched' : quality.state === 'DEGRADED' ? 'not_matched' : 'unverified',
-        source: 'scanner-data-quality-gate',
-        observedAt: quality.lastTimestamp,
-        reasons: quality.issues.length
-          ? quality.issues.map((issue) => `${issue.code}: ${issue.message}`)
-          : ['timestamp·OHLC·volume·gap·duplicate 검증을 통과했습니다.'],
-      },
-    ],
+    evidence,
+    matched: evidenceLabels(evidence, 'matched'),
+    notMatched: evidenceLabels(evidence, 'not_matched'),
+    unverified: evidenceLabels(evidence, 'unverified'),
   };
 }
