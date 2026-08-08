@@ -24,6 +24,48 @@ function assert(condition, message) {
   if (!condition) failures.push(message);
 }
 
+const pr51DispatchWorkflow = (await text('.github/workflows/pr51-application-ci-dispatch.yml')).replace(/\r\n/g, '\n');
+const githubScriptRefs = [...pr51DispatchWorkflow.matchAll(/uses:\s*actions\/github-script@([^\s#]+)/g)]
+  .map((match) => match[1]);
+assert(githubScriptRefs.length === 1, 'PR51 dispatch workflow must use actions/github-script exactly once');
+assert(githubScriptRefs.every((reference) => /^[0-9a-f]{40}$/.test(reference)),
+  'PR51 dispatch workflow actions/github-script ref is not pinned to a 40-character commit SHA');
+assert(!/uses:\s*actions\/github-script@(?:v\d+|main|master)(?:\s|$)/m.test(pr51DispatchWorkflow),
+  'PR51 dispatch workflow uses a mutable actions/github-script ref');
+
+const permissionsBlock = pr51DispatchWorkflow.match(/^permissions:\n((?: {2}[^\n]+\n)+)/m)?.[1] ?? '';
+const permissionLines = permissionsBlock
+  .trim()
+  .split('\n')
+  .map((line) => line.trim())
+  .filter(Boolean)
+  .sort();
+assert(JSON.stringify(permissionLines) === JSON.stringify(['actions: write', 'contents: read']),
+  'PR51 dispatch workflow permissions must be exactly actions: write and contents: read');
+assert(!pr51DispatchWorkflow.includes('contents: write'), 'PR51 dispatch workflow grants contents: write');
+
+assert(pr51DispatchWorkflow.includes('      - agent/auto-trading-optimization-guardrails'),
+  'PR51 dispatch workflow push branch is not fixed');
+assert(pr51DispatchWorkflow.includes('const targetSha = context.sha;'),
+  'PR51 dispatch workflow target SHA is not context.sha');
+assert(pr51DispatchWorkflow.includes("if (branch !== 'agent/auto-trading-optimization-guardrails')"),
+  'PR51 dispatch workflow runtime branch guard is missing');
+assert(pr51DispatchWorkflow.includes('branchState.data.commit.sha !== targetSha'),
+  'PR51 dispatch workflow does not compare actual branch HEAD with target SHA');
+assert(pr51DispatchWorkflow.includes("workflow_id: 'futures-public-network-smoke.yml'"),
+  'PR51 dispatch workflow ID is not fixed to the official Application CI workflow');
+assert(/target_sha:\s*targetSha/.test(pr51DispatchWorkflow)
+  && /checkout_ref:\s*targetSha/.test(pr51DispatchWorkflow),
+  'PR51 dispatch workflow inputs do not use the exact target SHA');
+assert(!/^\s*run:/m.test(pr51DispatchWorkflow),
+  'PR51 dispatch workflow introduces a shell command execution path');
+assert(!/\$\{\{\s*secrets\./.test(pr51DispatchWorkflow),
+  'PR51 dispatch workflow references a GitHub Secret expression');
+assert(!/(?:context\.payload\.(?:issue|pull_request)|github\.event\.(?:issue|pull_request))/.test(pr51DispatchWorkflow),
+  'PR51 dispatch workflow reads issue or pull request body-controlled input');
+assert(!/(?:createDeployment|createDeploymentStatus|pulls\.merge|repos\.merge|mergePullRequest|git\.updateRef|git\.createRef|git\.createCommit|git\.createTree|git\.createBlob)/.test(pr51DispatchWorkflow),
+  'PR51 dispatch workflow contains deployment, merge, push, or Git data write API access');
+
 const cryptoAuto = await text('api-server/src/routes/crypto-auto.ts');
 const normalizedCryptoAuto = cryptoAuto.replace(/\r\n/g, '\n');
 const cryptoAutoBlob = createHash('sha1')
@@ -105,5 +147,6 @@ if (failures.length) {
   process.exitCode = 1;
 } else {
   console.log(`[phase8-security] verified ${phase8SensitiveFiles.length} sensitive source files and ${distFiles.length} production bundle files`);
+  console.log('[phase8-security] PR51 exact-head dispatch is SHA-pinned, least-privilege, and write-surface restricted');
   console.log('[phase8-security] actual order/private exchange paths blocked; external AI endpoints absent; service role absent from frontend bundle');
 }

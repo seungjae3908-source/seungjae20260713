@@ -1,0 +1,49 @@
+name: PR51 Application CI Dispatch
+
+on:
+  push:
+    branches:
+      - agent/auto-trading-optimization-guardrails
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: pr51-application-ci-dispatch
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    name: Dispatch official exact-head Application CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch official Application CI for the pushed PR head
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const targetSha = context.sha;
+            const branch = context.ref.replace('refs/heads/', '');
+            if (branch !== 'agent/auto-trading-optimization-guardrails') {
+              core.setFailed(`Unexpected branch: ${branch}`);
+              return;
+            }
+            const branchState = await github.rest.repos.getBranch({ owner, repo, branch });
+            if (branchState.data.commit.sha !== targetSha) {
+              core.setFailed(`Branch advanced before dispatch: ${branchState.data.commit.sha}`);
+              return;
+            }
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: 'futures-public-network-smoke.yml',
+              ref: 'main',
+              inputs: {
+                target_sha: targetSha,
+                checkout_ref: targetSha,
+              },
+            });
+            core.notice(`Dispatched official Application CI for PR #51 head ${targetSha}.`);

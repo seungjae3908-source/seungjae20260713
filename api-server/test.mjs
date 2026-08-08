@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -63,6 +63,7 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-structure-engine.test.ts'),
   ],
   phase12: [
+    path.join(root, 'src/services/trade-approval-paper-guard.service.test.ts'),
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
     path.join(root, 'src/services/trade-automation-repository-compatibility.test.ts'),
     path.join(root, 'src/services/trade-order-recovery.test.ts'),
@@ -70,12 +71,17 @@ const groups = {
     path.join(root, 'src/services/trade-recovery-worker.test.ts'),
     path.join(root, 'src/services/trade-pre-submission-risk.test.ts'),
     path.join(root, 'src/services/trade-execution-pre-submission.test.ts'),
+    path.join(root, 'src/services/trade-risk-envelope.test.ts'),
+    path.join(root, 'src/services/trade-kill-switch.test.ts'),
     path.join(root, 'src/services/trade-split-order-planner.test.ts'),
     path.join(root, 'src/services/trade-split-order-materializer.test.ts'),
+    path.join(root, 'src/services/trade-split-order-execution.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-split.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/crypto-spot-scanner.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/crypto-futures-scanner.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/backup-sync-lifecycle.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts'),
@@ -101,28 +107,51 @@ if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 const entries = mode === 'all' ? [...groups.unit, ...groups.smoke] : groups[mode];
 const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'application-tests-'));
 const outputFiles = [];
+const escapeWorkflowCommand = (value) => value.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
 
 try {
   for (const [index, entryPoint] of entries.entries()) {
     const outputFile = path.join(temporaryDirectory, `application-${index}.test.cjs`);
-    await build({
-      entryPoints: [entryPoint], outfile: outputFile, bundle: true, platform: 'node',
-      format: 'cjs', target: 'node20', sourcemap: 'inline', logLevel: 'warning',
-    });
+    try {
+      await build({ entryPoints: [entryPoint], outfile: outputFile, bundle: true, platform: 'node', format: 'cjs', target: 'node20', sourcemap: 'inline', logLevel: 'warning' });
+    } catch (error) {
+      if (mode === 'phase12') {
+        const relativeEntry = path.relative(repositoryRoot, entryPoint).replaceAll('\\', '/');
+        await writeFile(path.join(root, 'phase12-failures.txt'), `${relativeEntry}\n`, 'utf8');
+        if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `## Phase 12 bundle failure\n\n- \`${relativeEntry}\`\n`, 'utf8');
+        process.stdout.write(`::error file=${escapeWorkflowCommand(relativeEntry)},line=1,title=Phase 12 bundle failure::Failed to bundle Phase 12 test entry\n`);
+      }
+      throw error;
+    }
     outputFiles.push(outputFile);
   }
 
-  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
-  // serially so host-level event-loop contention cannot consume a scanner deadline
-  // before the test body starts. Test coverage and every assertion remain unchanged.
-  const testArguments = mode === 'phase9'
-    ? ['--test', '--test-concurrency=1', ...outputFiles]
-    : ['--test', ...outputFiles];
-  const result = spawnSync(process.execPath, testArguments, {
-    cwd: repositoryRoot, stdio: 'inherit',
-  });
-  if (result.error) throw result.error;
-  process.exitCode = result.status ?? 1;
+  if (mode === 'phase12') {
+    const failedEntries = [];
+    for (const [index, outputFile] of outputFiles.entries()) {
+      const entryPoint = entries[index];
+      const relativeEntry = path.relative(repositoryRoot, entryPoint).replaceAll('\\', '/');
+      console.log(`[phase12] running ${relativeEntry}`);
+      const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', outputFile], { cwd: repositoryRoot, stdio: 'inherit' });
+      if (result.error) throw result.error;
+      if ((result.status ?? 1) !== 0) {
+        failedEntries.push(relativeEntry);
+        process.stdout.write(`::error file=${escapeWorkflowCommand(relativeEntry)},line=1,title=Phase 12 test failure::Phase 12 test file failed%0A${escapeWorkflowCommand(relativeEntry)}\n`);
+      }
+    }
+    if (failedEntries.length > 0) {
+      await writeFile(path.join(root, 'phase12-failures.txt'), `${failedEntries.join('\n')}\n`, 'utf8');
+      if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, ['## Phase 12 failed test files', '', ...failedEntries.map((entry) => `- \`${entry}\``), ''].join('\n'), 'utf8');
+      process.stdout.write(`::error title=Phase 12 failed files::${escapeWorkflowCommand(failedEntries.join(', '))}\n`);
+      throw new Error(`Phase 12 failed test files: ${failedEntries.join(', ')}`);
+    }
+    process.exitCode = 0;
+  } else {
+    const testArguments = mode === 'phase9' ? ['--test', '--test-concurrency=1', ...outputFiles] : ['--test', ...outputFiles];
+    const result = spawnSync(process.execPath, testArguments, { cwd: repositoryRoot, stdio: 'inherit' });
+    if (result.error) throw result.error;
+    process.exitCode = result.status ?? 1;
+  }
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
 }

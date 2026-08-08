@@ -36,6 +36,7 @@ const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const BacktestsPage = lazy(() => import('@/pages/backtests'));
 const PaperTradingPage = lazy(() => import('@/pages/paper-trading'));
+const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
 const NotFound = lazy(() => import('@/pages/not-found'));
 const Phase4RiskE2EPage = lazy(() => import('@/pages/phase4-risk-e2e'));
 const Phase5BacktestE2EPage = lazy(() => import('@/pages/phase5-backtest-e2e'));
@@ -47,6 +48,7 @@ const AiChartPage = lazy(() => import('@/pages/ai-chart'));
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
 const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
+const Phase12ScannerMarketsE2EPage = lazy(() => import('@/pages/phase12-scanner-markets-e2e'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
 const phase5E2EEnabled = import.meta.env.VITE_PHASE5_E2E === 'true';
@@ -103,7 +105,12 @@ function CryptoDetailRedirect() {
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const scannerRoute = location.startsWith('/scanner');
-  const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
+  const wide = scannerRoute
+    || location.startsWith('/auto-trading')
+    || location.startsWith('/ai-chart')
+    || location.startsWith('/__phase11-technical-workspace-e2e')
+    || location.startsWith('/__phase12-scanner-markets-e2e')
+    || location.startsWith('/__phase12-trade-automation-e2e');
   return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
 }
 
@@ -118,6 +125,7 @@ function RecommendationsAccess() { return gated('canAccessRiskPreview', <Recomme
 function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingAccess() { return gated('canAccessPaperTrading', <PaperTradingPage />); }
+function AutoTradingAccess() { return gated('canManageMembers', <AutoTradingPage />); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
 function StockInfoAccess() {
   const [location] = useLocation();
@@ -134,7 +142,7 @@ function ApprovedRouter() {
     <Route path="/" component={HomePage} />
     <Route path="/home" component={HomePage} />
     <Route path="/stocks" component={StocksPage} />
-    <Route path="/auto-trading" component={ScannerAccess} />
+    <Route path="/auto-trading" component={AutoTradingAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
     <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
@@ -174,6 +182,7 @@ function RootRouter() {
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
+    {phase12E2EEnabled ? <Route path="/__phase12-scanner-markets-e2e" component={Phase12ScannerMarketsE2EPage} /> : null}
     {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
     <Route path="/login" component={AccountPage} />
     <Route path="/install" component={InstallPage} />
