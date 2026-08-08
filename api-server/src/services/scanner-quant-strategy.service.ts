@@ -119,6 +119,10 @@ const DEFAULT_AI_VALIDATION: ScannerAiValidation = {
   explanation: null,
 };
 
+// All quant factors use the existing normalized 0..100 scoring contract.
+// Fifty is its neutral midpoint, not a new strategy threshold.
+const NORMALIZED_FACTOR_MIDPOINT = 50;
+
 function clamp(value: number, min = 0, max = 100): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -304,15 +308,36 @@ function limitsFor(mode: ScannerStrategyMode): Readonly<ScannerStrategyLimits> {
   return mode === 'scalping' ? SCALPING_LIMITS : SWING_LIMITS;
 }
 
+function directionAlignedFactor(value: number, direction: ScannerSignalDirection): boolean {
+  if (direction === 'LONG') return value > NORMALIZED_FACTOR_MIDPOINT;
+  if (direction === 'SHORT') return value < NORMALIZED_FACTOR_MIDPOINT;
+  return false;
+}
+
+function hasIndependentSignalEvidence(
+  factors: ScannerQuantFactors,
+  direction: ScannerSignalDirection,
+): boolean {
+  if (direction === 'NEUTRAL') return false;
+  return directionAlignedFactor(factors.technical, direction)
+    && directionAlignedFactor(factors.trend, direction)
+    && directionAlignedFactor(factors.momentum, direction)
+    && directionAlignedFactor(factors.marketRegime, direction)
+    && factors.volume > NORMALIZED_FACTOR_MIDPOINT;
+}
+
 function gradeFor(
   score: number,
   factors: ScannerQuantFactors,
   input: ScannerQuantStrategyInput,
   aiValidation: ScannerAiValidation,
+  direction: ScannerSignalDirection,
 ): ScannerSignalGrade {
   const limits = limitsFor(input.mode);
   const sEligible = score >= limits.sGradeScore
+    && hasIndependentSignalEvidence(factors, direction)
     && input.dataQuality.state === 'TRUSTED'
+    && input.dataQuality.strongSignalAllowed
     && input.dataQuality.score >= 90
     && (input.riskScore ?? 101) <= limits.sGradeMaxRiskScore
     && factors.liquidity >= 70
@@ -341,15 +366,18 @@ export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): Scann
   if (aiValidation.status === 'PARTIAL') score = Math.min(score, 79);
 
   const direction = inferDirection(factors, primary, context, input.allowShort);
+  const independentSignalEvidence = hasIndependentSignalEvidence(factors, direction);
   const strongSignalEligible = direction !== 'NEUTRAL'
+    && independentSignalEvidence
     && score >= limits.strongScore
+    && input.dataQuality.state !== 'DATA_UNTRUSTED'
     && input.dataQuality.strongSignalAllowed
     && input.dataQuality.score >= limits.minDataQualityScore
     && (input.riskScore ?? 101) <= limits.maxRiskScore
     && factors.liquidity >= limits.minLiquidityFactor
     && factors.volatility >= limits.minVolatilityFactor
     && aiValidation.status !== 'VETO';
-  const grade = gradeFor(score, factors, input, aiValidation);
+  const grade = gradeFor(score, factors, input, aiValidation, direction);
 
   const reasons = [
     `전략 ${input.mode}`,
@@ -361,6 +389,7 @@ export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): Scann
     `변동성 ${Math.round(factors.volatility)}`,
     `시장국면 ${Math.round(factors.marketRegime)}`,
     `리스크 ${Math.round(factors.risk)}`,
+    `독립근거 ${independentSignalEvidence ? '충족' : '부족'}`,
     ...(input.mode === 'scalping' && primary.tradeIntensityProxy != null
       ? [`체결강도 대용지표 ${primary.tradeIntensityProxy.toFixed(2)}`]
       : []),
