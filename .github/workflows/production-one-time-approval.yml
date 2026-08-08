@@ -5,8 +5,12 @@ on:
     paths:
       - .github/workflows/production-one-time-approval.yml
       - .github/workflows/production-deploy.yml
+      - .github/workflows/futures-public-network-smoke.yml
       - .github/workflows/staging-readiness.yml
       - ops/production-approval.json
+      - api-server/scripts/production-ci-provenance.cjs
+      - api-server/scripts/verify-production-ci-provenance-contract.mjs
+      - api-server/scripts/verify-production-data-plane-probe-contract.mjs
       - api-server/scripts/verify-production-one-time-approval.mjs
       - api-server/scripts/build-staging-verdict.mjs
       - api-server/scripts/verify-staging-verdict.mjs
@@ -37,6 +41,10 @@ jobs:
           node-version: "20"
       - name: Verify one-time production approval contract
         run: node api-server/scripts/verify-production-one-time-approval.mjs
+      - name: Verify Production CI provenance contract
+        run: node api-server/scripts/verify-production-ci-provenance-contract.mjs
+      - name: Verify Production data-plane probe contract
+        run: node api-server/scripts/verify-production-data-plane-probe-contract.mjs
 
   dispatch:
     name: Wait for release-ready staging verdict and dispatch official production deployment
@@ -174,6 +182,10 @@ jobs:
           TARGET_SHA: ${{ github.sha }}
         with:
           script: |
+            const {
+              evaluateProductionCiProvenance,
+              inspectRequiredStatusEvidence,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-ci-provenance.cjs`);
             const targetSha = process.env.TARGET_SHA;
             const required = [
               'application-ci/verified',
@@ -185,42 +197,62 @@ jobs:
             ];
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
             for (let attempt = 1; attempt <= 75; attempt += 1) {
+              const main = await github.rest.repos.getBranch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch: 'main',
+              });
+              const currentMainSha = main.data.commit.sha;
+              if (currentMainSha !== targetSha) {
+                core.setFailed(`Approval target became stale: target=${targetSha} current-main=${currentMainSha}.`);
+                return;
+              }
               const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 ref: targetSha,
                 per_page: 100,
               });
-              statuses.sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
-              const latest = new Map();
-              for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status.state);
-              const missing = required.filter((name) => latest.get(name) !== 'success');
-              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                head_sha: targetSha,
-                branch: 'main',
-                event: 'push',
-                per_page: 100,
-              });
-              const applicationRuns = runs
-                .filter((run) => run.name === 'Application CI' && run.head_sha === targetSha && run.head_branch === 'main' && run.event === 'push')
-                .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
-              const successfulRun = applicationRuns.find((run) => run.status === 'completed' && run.conclusion === 'success');
-              if (!missing.length && successfulRun) {
-                core.info(`Required CI verified by Application CI Run ID ${successfulRun.id}.`);
+              const evidence = inspectRequiredStatusEvidence(statuses);
+              if (evidence.ok) {
+                const response = await github.rest.actions.getWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: evidence.runId,
+                });
+                const verified = evaluateProductionCiProvenance({
+                  targetSha,
+                  currentMainSha,
+                  statuses,
+                  run: response.data,
+                });
+                if (verified.ok) {
+                  core.info(`Required CI verified by exact Application CI Run ID ${verified.runId} (${verified.event}).`);
+                  return;
+                }
+                if (verified.reason === 'application_ci_not_completed') {
+                  core.info(`CI wait ${attempt}/75; Application CI Run ID ${evidence.runId} is not completed.`);
+                  await sleep(20000);
+                  continue;
+                }
+                core.setFailed(`Application CI provenance rejected: ${verified.reason}.`);
                 return;
               }
-              const activeRun = applicationRuns.find((run) => run.status !== 'completed');
-              const failedRun = applicationRuns.find((run) => run.status === 'completed' && run.conclusion !== 'success');
-              if (failedRun && !activeRun) {
-                core.setFailed(`Application CI failed for exact target SHA in Run ID ${failedRun.id}.`);
+              const latest = evidence.latest ?? new Map();
+              const failed = required.filter((name) => ['failure', 'error'].includes(latest.get(name)?.state));
+              if (failed.length) {
+                core.setFailed(`Required CI status failed: ${failed.join(', ')}.`);
                 return;
               }
-              core.info(`CI wait ${attempt}/75; missing: ${missing.join(', ') || 'successful main push run'}`);
+              if (evidence.waitable !== true) {
+                core.setFailed(`Required CI status provenance rejected: ${evidence.reason}.`);
+                return;
+              }
+              const waiting = required.filter((name) => latest.get(name)?.state !== 'success');
+              core.info(`CI wait ${attempt}/75; waiting: ${waiting.join(', ') || evidence.reason}`);
               await sleep(20000);
             }
-            core.setFailed('Timed out waiting for all six required statuses and successful Application CI main push run.');
+            core.setFailed('Timed out waiting for all six required statuses and one successful exact Application CI run.');
 
       - name: Wait for successful exact-SHA staging verdict artifact
         id: verdict-artifact
@@ -291,6 +323,15 @@ jobs:
             const workflowId = 'production-deploy.yml';
             const apiVersion = '2026-03-10';
             const gateRunUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (main.data.commit.sha !== process.env.TARGET_SHA) {
+              core.setFailed(`Refusing to dispatch stale production target ${process.env.TARGET_SHA}; current main is ${main.data.commit.sha}.`);
+              return;
+            }
             const workflow = await github.rest.actions.getWorkflow({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -340,7 +381,11 @@ jobs:
               repo: context.repo.repo,
               workflow_id: workflowId,
               ref: 'main',
-              inputs: { sha: process.env.TARGET_SHA, force_rebuild: 'false' },
+              inputs: {
+                sha: process.env.TARGET_SHA,
+                data_probe_path: '/api/healthz/data-plane',
+                force_rebuild: 'false',
+              },
               return_run_details: true,
               headers: {
                 accept: 'application/vnd.github+json',
@@ -380,6 +425,7 @@ jobs:
                 '- Workflow: `Production Deploy`',
                 '- Ref: `main`',
                 '- Force rebuild: `false`',
+                '- Data probe: `/api/healthz/data-plane`',
                 '- GitHub environment: `production`',
                 `- Release-ready staging Run ID: \`${process.env.STAGING_RUN_ID}\``,
                 `- Approval workflow Run ID: \`${context.runId}\``,
