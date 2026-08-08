@@ -70,7 +70,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.SHADOW_ARTIFACT }}
-          path: previous-shadow
+          path: ${{ runner.temp }}/previous-shadow
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ steps.previous.outputs.run_id }}
@@ -78,21 +78,12 @@ jobs:
       - name: Resolve immutable Prediction Lab code SHA
         id: code
         uses: actions/github-script@v7
+        env:
+          PREVIOUS_FOUND: ${{ steps.previous.outputs.found }}
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            if (process.env.PREVIOUS_FOUND === 'true') {
-              const fs = require('fs');
-              const manifest = JSON.parse(fs.readFileSync('previous-shadow/manifest.json', 'utf8'));
-              if (!/^[0-9a-f]{40}$/.test(String(manifest.researchCodeSha ?? ''))) {
-                core.setFailed('Previous shadow manifest has no valid immutable researchCodeSha.');
-                return;
-              }
-              core.setOutput('sha', manifest.researchCodeSha);
-              core.setOutput('seed_mode', 'artifact');
-              return;
-            }
             const ref = await github.rest.git.getRef({ owner, repo, ref: `heads/${process.env.SHADOW_BRANCH}` });
             const sha = ref.data.object.sha;
             if (!/^[0-9a-f]{40}$/.test(sha)) {
@@ -100,9 +91,7 @@ jobs:
               return;
             }
             core.setOutput('sha', sha);
-            core.setOutput('seed_mode', 'branch-cutover');
-        env:
-          PREVIOUS_FOUND: ${{ steps.previous.outputs.found }}
+            core.setOutput('seed_mode', process.env.PREVIOUS_FOUND === 'true' ? 'artifact' : 'branch-cutover');
 
       - name: Checkout immutable Prediction Lab code
         uses: actions/checkout@v4
@@ -123,13 +112,20 @@ jobs:
           PREVIOUS_FOUND: ${{ steps.previous.outputs.found }}
           PREVIOUS_RUN_ID: ${{ steps.previous.outputs.run_id }}
           PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact_id }}
+          PREVIOUS_DIR: ${{ runner.temp }}/previous-shadow
           RESEARCH_CODE_SHA: ${{ steps.code.outputs.sha }}
         run: |
           node <<'NODE'
           const fs = require('fs');
           const crypto = require('crypto');
           const path = require('path');
-          const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          const digestBuffer = (value) => crypto.createHash('sha256').update(value).digest('hex');
+          const digest = (file) => digestBuffer(fs.readFileSync(file));
+          const combinedDigest = (stateFile, summaryFile) => digestBuffer(Buffer.concat([
+            fs.readFileSync(stateFile),
+            Buffer.from([0]),
+            fs.readFileSync(summaryFile),
+          ]));
           const nonEmptyLedger = (value) => {
             if (!value || typeof value !== 'object') return false;
             if (Array.isArray(value)) return value.length > 0;
@@ -137,14 +133,15 @@ jobs:
             if (arrays.some((key) => Array.isArray(value[key]) && value[key].length > 0)) return true;
             return Object.keys(value).length > 0;
           };
+          const output = (name, value) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
 
           const lab = process.env.LAB_DIR;
           const statePath = path.join(lab, 'docs/shadow-state.json');
           const summaryPath = path.join(lab, 'docs/shadow-summary.json');
           if (process.env.PREVIOUS_FOUND === 'true') {
-            const manifestPath = 'previous-shadow/manifest.json';
-            const previousState = 'previous-shadow/shadow-state.json';
-            const previousSummary = 'previous-shadow/shadow-summary.json';
+            const manifestPath = path.join(process.env.PREVIOUS_DIR, 'manifest.json');
+            const previousState = path.join(process.env.PREVIOUS_DIR, 'shadow-state.json');
+            const previousSummary = path.join(process.env.PREVIOUS_DIR, 'shadow-summary.json');
             for (const file of [manifestPath, previousState, previousSummary]) {
               if (!fs.existsSync(file)) throw new Error(`Missing predecessor artifact file: ${file}`);
             }
@@ -152,18 +149,26 @@ jobs:
             if (manifest.schemaVersion !== 1 || manifest.kind !== 'prediction-lab-shadow-state') {
               throw new Error('Unsupported predecessor shadow manifest.');
             }
-            if (manifest.researchCodeSha !== process.env.RESEARCH_CODE_SHA) {
-              throw new Error('Predecessor researchCodeSha does not match immutable checkout.');
+            if (!/^[0-9a-f]{40}$/.test(String(manifest.researchCodeSha ?? ''))) {
+              throw new Error('Predecessor researchCodeSha is invalid.');
             }
             if (manifest.stateSha256 !== digest(previousState) || manifest.summarySha256 !== digest(previousSummary)) {
               throw new Error('Predecessor shadow artifact digest mismatch.');
+            }
+            if (manifest.sha256 !== combinedDigest(previousState, previousSummary)) {
+              throw new Error('Predecessor shadow combined SHA-256 mismatch.');
+            }
+            if (manifest.branchWrite !== false || manifest.liveOrderAllowed !== false || manifest.privateAccountRequestAllowed !== false) {
+              throw new Error('Predecessor safety flags are not fail-closed.');
             }
             if (!nonEmptyLedger(JSON.parse(fs.readFileSync(previousState, 'utf8')))) {
               throw new Error('Refusing to restart from an empty predecessor shadow state.');
             }
             fs.copyFileSync(previousState, statePath);
             fs.copyFileSync(previousSummary, summaryPath);
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, `previous_state_digest=${manifest.stateSha256}\n`);
+            output('previous_state_digest', manifest.stateSha256);
+            output('source_generated_head', manifest.sourceGeneratedHead || manifest.researchCodeSha);
+            output('predecessor_research_code_sha', manifest.researchCodeSha);
           } else {
             for (const file of [statePath, summaryPath]) {
               if (!fs.existsSync(file)) throw new Error(`Cutover seed is missing required file: ${file}`);
@@ -171,7 +176,9 @@ jobs:
             if (!nonEmptyLedger(JSON.parse(fs.readFileSync(statePath, 'utf8')))) {
               throw new Error('Refusing artifact cutover from an empty branch shadow state.');
             }
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, `previous_state_digest=${digest(statePath)}\n`);
+            output('previous_state_digest', digest(statePath));
+            output('source_generated_head', process.env.RESEARCH_CODE_SHA);
+            output('predecessor_research_code_sha', '');
           }
           NODE
 
@@ -195,7 +202,6 @@ jobs:
           NODE
 
       - name: Validate isolated shadow modules
-        id: preflight
         if: steps.inspect.outputs.decision == 'shadow_continue'
         working-directory: ${{ env.LAB_DIR }}
         run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js
@@ -222,7 +228,6 @@ jobs:
         run: node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json
 
       - name: Build provenance manifest
-        id: manifest
         if: steps.inspect.outputs.decision != 'technical_failure'
         shell: bash
         env:
@@ -230,6 +235,8 @@ jobs:
           PREVIOUS_RUN_ID: ${{ steps.previous.outputs.run_id }}
           PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact_id }}
           PREVIOUS_STATE_DIGEST: ${{ steps.restore.outputs.previous_state_digest }}
+          PREDECESSOR_RESEARCH_CODE_SHA: ${{ steps.restore.outputs.predecessor_research_code_sha }}
+          SOURCE_GENERATED_HEAD: ${{ steps.restore.outputs.source_generated_head }}
           SEED_MODE: ${{ steps.code.outputs.seed_mode }}
         run: |
           rm -rf shadow-artifact
@@ -240,28 +247,40 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const crypto = require('crypto');
-          const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-          const summary = JSON.parse(fs.readFileSync('shadow-artifact/shadow-summary.json', 'utf8'));
+          const digestBuffer = (value) => crypto.createHash('sha256').update(value).digest('hex');
+          const digest = (file) => digestBuffer(fs.readFileSync(file));
+          const stateBytes = fs.readFileSync('shadow-artifact/shadow-state.json');
+          const summaryBytes = fs.readFileSync('shadow-artifact/shadow-summary.json');
+          const summary = JSON.parse(summaryBytes.toString('utf8'));
           const groups = Object.values(summary.groups ?? {});
-          const first = groups[0] ?? {};
+          const unique = (values) => [...new Set(values.filter(Boolean))];
+          const candidateModelIds = unique(groups.map((group) => group?.filter?.modelId ?? group?.modelSelection?.candidateModelId ?? null));
+          const referenceModelIds = unique(groups.map((group) => group?.filter?.referenceModelId ?? group?.modelSelection?.referenceModelId ?? null));
           const manifest = {
             schemaVersion: 1,
             kind: 'prediction-lab-shadow-state',
             researchCodeSha: process.env.RESEARCH_CODE_SHA,
             predecessorRunId: process.env.PREVIOUS_RUN_ID || null,
             predecessorArtifactId: process.env.PREVIOUS_ARTIFACT_ID || null,
+            predecessorResearchCodeSha: process.env.PREDECESSOR_RESEARCH_CODE_SHA || null,
             previousStateDigest: process.env.PREVIOUS_STATE_DIGEST,
-            sourceGeneratedHead: process.env.RESEARCH_CODE_SHA,
-            candidateModelId: first?.filter?.modelId ?? first?.modelSelection?.candidateModelId ?? null,
-            referenceModelId: first?.filter?.referenceModelId ?? first?.modelSelection?.referenceModelId ?? null,
+            sourceGeneratedHead: process.env.SOURCE_GENERATED_HEAD,
+            candidateModelIds,
+            referenceModelIds,
+            candidateModelId: candidateModelIds[0] ?? null,
+            referenceModelId: referenceModelIds[0] ?? null,
             seedMode: process.env.SEED_MODE,
             createdAt: new Date().toISOString(),
             stateSha256: digest('shadow-artifact/shadow-state.json'),
             summarySha256: digest('shadow-artifact/shadow-summary.json'),
+            sha256: digestBuffer(Buffer.concat([stateBytes, Buffer.from([0]), summaryBytes])),
             branchWrite: false,
             liveOrderAllowed: false,
             privateAccountRequestAllowed: false,
           };
+          if (!/^[0-9a-f]{40}$/.test(String(manifest.sourceGeneratedHead ?? ''))) {
+            throw new Error('sourceGeneratedHead is invalid.');
+          }
           fs.writeFileSync('shadow-artifact/manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
           NODE
 
@@ -275,7 +294,7 @@ jobs:
           retention-days: 90
 
       - name: Assert source branch stayed immutable
-        if: always()
+        if: always() && steps.code.outputs.sha != ''
         shell: bash
         run: |
           test "$(git rev-parse HEAD)" = "${{ steps.code.outputs.sha }}"
