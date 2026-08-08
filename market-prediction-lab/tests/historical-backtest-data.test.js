@@ -76,7 +76,7 @@ test("spot gets long-only case while futures gets independent long and short cas
   assert.deepEqual(futures.map((row) => row.side), ["long", "short"]);
   assert.equal(spot[0].costModel.entryFeeRate, 0.001);
   assert.equal(futures[0].costModel.entryFeeRate, 0.0006);
-  assert.equal(futureSpec.provider, "binance-usdm-public-rest");
+  assert.equal(futureSpec.provider, "binance-vision-usdm-monthly");
   assert.deepEqual(BITGET_STANDARD_TAKER_RESEARCH_COSTS.CRYPTO_FUTURES, futures[0].costModel);
 });
 
