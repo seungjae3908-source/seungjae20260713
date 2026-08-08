@@ -5,6 +5,11 @@ import { collectBitgetCandles } from "../src/bitget-candle-collector.js";
 import { repairBitgetCandleGaps } from "../src/candle-gap-repair.js";
 import { collectFundingRateHistory } from "../src/derivatives-history.js";
 import {
+  collectVisionFuturesDailyArchiveKlines,
+  collectVisionFuturesDailyKlines,
+  collectVisionFuturesFunding,
+} from "../src/binance-vision-futures-archive.js";
+import {
   BITGET_STANDARD_TAKER_RESEARCH_COSTS,
   HISTORICAL_V1_CRYPTO_SPECS,
   toResearchCandles,
@@ -20,6 +25,8 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INITIAL_CAPITAL = 1_000_000;
+const MONTHLY_ARCHIVE_END = Date.UTC(2026, 7, 1) - 1;
+const DAILY_ARCHIVE_START = Date.UTC(2026, 7, 1);
 const outputJson = resolve(process.argv[2] ?? "docs/final-holdout-2026-result.json");
 const outputMarkdown = resolve(process.argv[3] ?? "docs/final-holdout-2026-result.md");
 
@@ -73,12 +80,23 @@ function assertWarmupAndHoldoutCoverage(candles, label) {
   });
 }
 
-async function collectBitgetDaily(candidate, bitget) {
+function mergeByTimestamp(groups, fields, label) {
+  const map = new Map();
+  for (const rows of groups) {
+    for (const row of rows) {
+      const previous = map.get(row.timestamp);
+      if (previous && fields.some((field) => previous[field] !== row[field])) {
+        throw new Error(`${label} conflicting source rows at ${row.timestamp}`);
+      }
+      map.set(row.timestamp, row);
+    }
+  }
+  return Object.freeze([...map.values()].sort((a, b) => a.timestamp - b.timestamp));
+}
+
+async function collectSpot(candidate, bitget) {
   const spec = specFor(candidate);
   const collectionCutoff = Date.now();
-  // Bitget daily bars may use a non-midnight UTC anchor. Widen only the fetch
-  // envelope, then retain bars whose open is inside the predeclared window and
-  // whose full 24h interval was already closed at collection time.
   const collected = await collectBitgetCandles({
     client: bitget,
     market: spec.market,
@@ -101,51 +119,74 @@ async function collectBitgetDaily(candidate, bitget) {
   const candles = Object.freeze(toResearchCandles(spec, { candles: repaired.candles })
     .filter((candle) => candle.timestamp <= FINAL_HOLDOUT_END && candle.timestamp + DAY_MS <= collectionCutoff));
   const coverage = assertWarmupAndHoldoutCoverage(candles, candidate.id);
-  return Object.freeze({ spec, candles, coverage: Object.freeze({ ...coverage, collectionCutoff }) });
-}
-
-async function collectSpot(candidate, bitget) {
-  const daily = await collectBitgetDaily(candidate, bitget);
   return Object.freeze({
     provider: "bitget-public-v2",
     priceProvider: "bitget-public-v2",
     fundingProvider: null,
-    candles: daily.candles,
+    candles,
     fundingRates: Object.freeze([]),
-    coverage: daily.coverage,
+    coverage: Object.freeze({ ...coverage, collectionCutoff }),
   });
 }
 
 async function collectFutures(candidate, bitget) {
-  const daily = await collectBitgetDaily(candidate, bitget);
-  const funding = await collectFundingRateHistory({
+  const spec = specFor(candidate);
+  const monthlyPrices = await collectVisionFuturesDailyKlines({
+    symbol: candidate.exchangeSymbol,
+    startTime: FINAL_HOLDOUT_WARMUP_START,
+    endTime: MONTHLY_ARCHIVE_END,
+    concurrency: 6,
+  });
+  const dailyPrices = await collectVisionFuturesDailyArchiveKlines({
+    symbol: candidate.exchangeSymbol,
+    startTime: DAILY_ARCHIVE_START,
+    endTime: FINAL_HOLDOUT_END,
+    concurrency: 4,
+  });
+  const candles = toResearchCandles(spec, {
+    candles: mergeByTimestamp([monthlyPrices.candles, dailyPrices.candles], ["open", "high", "low", "close", "volume"], `${candidate.id} prices`),
+  });
+  const coverage = assertWarmupAndHoldoutCoverage(candles, candidate.id);
+
+  const monthlyFunding = await collectVisionFuturesFunding({
+    symbol: candidate.exchangeSymbol,
+    startTime: FINAL_HOLDOUT_WARMUP_START,
+    endTime: MONTHLY_ARCHIVE_END,
+    concurrency: 6,
+  });
+  const augustFunding = await collectFundingRateHistory({
     client: bitget,
     symbol: candidate.exchangeSymbol,
     productType: "usdt-futures",
-    startTime: FINAL_HOLDOUT_WARMUP_START,
+    startTime: DAILY_ARCHIVE_START,
     endTime: FINAL_HOLDOUT_END,
     pageSize: 100,
-    maxPages: 50,
+    maxPages: 10,
   });
-  const firstFunding = funding.records[0]?.timestamp ?? null;
-  const lastFunding = funding.records.at(-1)?.timestamp ?? null;
-  if (funding.records.length === 0 || firstFunding > FINAL_HOLDOUT_START + 12 * 60 * 60 * 1000) {
-    throw new Error(`${candidate.id} funding begins too late for the final holdout: ${firstFunding ? iso(firstFunding) : "empty"}`);
+  const fundingRates = mergeByTimestamp([monthlyFunding.records, augustFunding.records], ["rate"], `${candidate.id} funding`);
+  const firstFunding = fundingRates[0]?.timestamp ?? null;
+  const lastFunding = fundingRates.at(-1)?.timestamp ?? null;
+  if (fundingRates.length === 0 || firstFunding > FINAL_HOLDOUT_WARMUP_START + DAY_MS) {
+    throw new Error(`${candidate.id} funding begins too late: ${firstFunding ? iso(firstFunding) : "empty"}`);
   }
   if (lastFunding < Date.UTC(2026, 7, 7)) {
-    throw new Error(`${candidate.id} funding does not cover the final holdout end: ${iso(lastFunding)}`);
+    throw new Error(`${candidate.id} funding does not cover the final holdout end: ${lastFunding ? iso(lastFunding) : "empty"}`);
   }
   return Object.freeze({
-    provider: "bitget-public-v2",
-    priceProvider: "bitget-public-v2",
-    fundingProvider: funding.provider,
-    candles: daily.candles,
-    fundingRates: funding.records,
+    provider: "binance-vision-plus-bitget-public",
+    priceProvider: "binance-vision-usdm-monthly+daily",
+    fundingProvider: "binance-vision-usdm-monthly->bitget-public-v2-august",
+    candles,
+    fundingRates,
     coverage: Object.freeze({
-      ...daily.coverage,
-      fundingRecords: funding.records.length,
+      ...coverage,
+      monthlyPriceChecksumVerified: monthlyPrices.checksumVerified,
+      dailyPriceChecksumVerified: dailyPrices.checksumVerified,
+      monthlyFundingChecksumVerified: monthlyFunding.checksumVerified,
+      fundingRecords: fundingRates.length,
       fundingFirst: firstFunding,
       fundingLast: lastFunding,
+      augustFundingRecords: augustFunding.records.length,
     }),
   });
 }
@@ -224,8 +265,9 @@ function buildMarkdown(report) {
     + `- 후보 manifest SHA-256: \`${report.candidateManifestSha256}\`\n`
     + `- 2026 데이터로 후보 탐색·파라미터 수정·재튜닝: **0건**\n`
     + `- V2/V6 후보는 2020~2024 개발 + 2025 독립검증에서 이미 동결된 값만 사용함.\n`
-    + `- 최종 홀드아웃 가격과 선물 funding은 모두 목표 실행거래소 Bitget public API를 사용함.\n`
-    + `- 일봉 anchor는 공급자 원본을 유지하고 완전히 닫힌 봉만 사용함.\n`
+    + `- 현물 가격은 Bitget public. 선물 가격은 기존 개발/검증과 같은 Binance Vision USD-M 정적 아카이브(월별 + 2026-08 일별, SHA-256 검증).\n`
+    + `- 선물 funding은 Binance Vision 월별을 2026-07까지 유지하고 아직 월별 아카이브가 확정되지 않은 2026-08만 Bitget public funding을 사용함.\n`
+    + `- Binance 거래 REST API는 GitHub Actions 지역에서 451이므로 사용하지 않으며, 정적 공개 아카이브만 사용함.\n`
     + `- effect=positive는 순수익>0, expectancy>0, PF>1을 동시에 뜻함. 표본 30회 미만은 promotionEvidence=false로 유지함.\n\n`
     + markdownTable(["시장", "종목", "방향", "동결버전", "데이터종료", "시작금", "최종금", "순수익률", "성공률", "PF", "MDD", "거래수", "효과", "표본"], rows)
     + `\n`;
