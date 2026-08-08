@@ -99,9 +99,10 @@ test('main and external chart windows fail closed on expired authentication or i
   await expect(page.getByText('로그인이 만료되었습니다.', { exact: true })).toBeVisible();
 
   const popupPromise = context.waitForEvent('page');
-  await page.getByRole('button', { name: '외부 창', exact: true }).click();
+  await page.getByTestId('open-external-ai-chart').click();
   const popup = await popupPromise;
   await popup.waitForLoadState('domcontentloaded');
+  await expect(popup.getByText('외부 AI 차트', { exact: true })).toBeVisible();
   await expect(popup.getByText('차트 데이터를 불러오지 못했습니다.', { exact: true })).toBeVisible();
   await expect(popup.getByText('로그인이 만료되었습니다.', { exact: true })).toBeVisible();
   await popup.close();
