@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   applyScannerSignalLifecycle,
   clearScannerSignalLifecycleForTests,
+  setScannerExternalLifecycleState,
 } from './scanner-signal-lifecycle.service';
 import type { ScannerSignalCard } from './scanner-signal.types';
 
@@ -21,7 +22,7 @@ function card(overrides: Partial<ScannerSignalCard> = {}): ScannerSignalCard {
     price: 100,
     changePercent: 1,
     direction: 'LONG',
-    signalState: 'DETECTED',
+    signalState: 'CANDIDATE',
     score: 85,
     confidence: 82,
     dataCompleteness: 90,
@@ -60,46 +61,63 @@ function card(overrides: Partial<ScannerSignalCard> = {}): ScannerSignalCard {
   };
 }
 
-test('READY alert is emitted once and a weakened re-entry starts a new cycle', () => {
+test('scanner lifecycle reaches approval pending once and never submits an order', () => {
   clearScannerSignalLifecycleForTests();
   const now = Date.parse('2026-08-05T01:00:00.000Z');
-  const first = applyScannerSignalLifecycle('member-1', [card()], now);
-  assert.equal(first.cards[0].signalState, 'DETECTED');
-  assert.equal(first.alerts.length, 0);
+  const expected = ['CANDIDATE', 'CONFIRMED', 'ARMED', 'ENTRY_ZONE', 'APPROVAL_PENDING'] as const;
+  let approvalAlert = '';
+  for (let index = 0; index < expected.length; index += 1) {
+    const result = applyScannerSignalLifecycle('member-1', [card()], now + index * 1_000);
+    assert.equal(result.cards[0].signalState, expected[index]);
+    if (expected[index] === 'APPROVAL_PENDING') {
+      assert.equal(result.alerts.length, 1);
+      assert.equal(result.alerts[0].state, 'APPROVAL_PENDING');
+      assert.equal(result.alerts[0].orderSubmitted, false);
+      assert.equal(result.alerts[0].exchangeRequestSent, false);
+      approvalAlert = result.alerts[0].idempotencyKey;
+    } else {
+      assert.equal(result.alerts.length, 0);
+    }
+  }
 
-  const second = applyScannerSignalLifecycle('member-1', [card()], now + 1_000);
-  assert.equal(second.cards[0].signalState, 'WATCHING');
-  assert.equal(second.alerts.length, 0);
-
-  const third = applyScannerSignalLifecycle('member-1', [card()], now + 2_000);
-  assert.equal(third.cards[0].signalState, 'READY_FOR_APPROVAL');
-  assert.equal(third.alerts.length, 1);
-  assert.equal(third.alerts[0].orderSubmitted, false);
-  assert.equal(third.alerts[0].exchangeRequestSent, false);
-
-  const fourth = applyScannerSignalLifecycle('member-1', [card()], now + 3_000);
-  assert.equal(fourth.cards[0].signalState, 'READY_FOR_APPROVAL');
-  assert.equal(fourth.alerts.length, 0);
-
-  const weakened = applyScannerSignalLifecycle(
-    'member-1',
-    [card({ strongSignalEligible: false })],
-    now + 4_000,
-  );
-  assert.equal(weakened.cards[0].signalState, 'WEAKENED');
-
-  const reentry1 = applyScannerSignalLifecycle('member-1', [card()], now + 5_000);
-  const reentry2 = applyScannerSignalLifecycle('member-1', [card()], now + 6_000);
-  const reentry3 = applyScannerSignalLifecycle('member-1', [card()], now + 7_000);
-  assert.match(reentry1.cards[0].signalId, /:cycle:2$/);
-  assert.equal(reentry1.cards[0].signalState, 'DETECTED');
-  assert.equal(reentry2.cards[0].signalState, 'WATCHING');
-  assert.equal(reentry3.cards[0].signalState, 'READY_FOR_APPROVAL');
-  assert.equal(reentry3.alerts.length, 1);
-  assert.notEqual(reentry3.alerts[0].idempotencyKey, third.alerts[0].idempotencyKey);
+  const repeated = applyScannerSignalLifecycle('member-1', [card()], now + 6_000);
+  assert.equal(repeated.cards[0].signalState, 'APPROVAL_PENDING');
+  assert.equal(repeated.alerts.length, 0);
+  assert.ok(approvalAlert);
 });
 
-test('expired signal never produces a READY alert', () => {
+test('untrusted or weakened signal invalidates and re-entry starts a new cycle', () => {
+  clearScannerSignalLifecycleForTests();
+  const now = Date.parse('2026-08-05T01:00:00.000Z');
+  applyScannerSignalLifecycle('member-1', [card()], now);
+  const invalidated = applyScannerSignalLifecycle(
+    'member-1',
+    [card({ strongSignalEligible: false, dataState: 'untrusted' })],
+    now + 1_000,
+  );
+  assert.equal(invalidated.cards[0].signalState, 'INVALIDATED');
+
+  const reentry = applyScannerSignalLifecycle('member-1', [card()], now + 2_000);
+  assert.match(reentry.cards[0].signalId, /:cycle:2$/);
+  assert.equal(reentry.cards[0].signalState, 'CANDIDATE');
+});
+
+test('order-owned states are synchronized externally and scanner does not advance them', () => {
+  clearScannerSignalLifecycleForTests();
+  const now = Date.parse('2026-08-05T01:00:00.000Z');
+  let current = card();
+  for (let index = 0; index < 5; index += 1) {
+    current = applyScannerSignalLifecycle('member-3', [current], now + index * 1_000).cards[0];
+  }
+  assert.equal(current.signalState, 'APPROVAL_PENDING');
+  assert.equal(setScannerExternalLifecycleState('member-3', current.signalId, 'APPROVED', now + 6_000), true);
+  const afterApproval = applyScannerSignalLifecycle('member-3', [card({ signalId: current.signalId })], now + 7_000);
+  assert.equal(afterApproval.cards[0].signalState, 'APPROVED');
+  assert.equal(afterApproval.alerts.length, 0);
+  assert.equal(afterApproval.cards[0].strongSignalEligible, true);
+});
+
+test('expired signal never produces an approval alert', () => {
   clearScannerSignalLifecycleForTests();
   const result = applyScannerSignalLifecycle(
     'member-2',
