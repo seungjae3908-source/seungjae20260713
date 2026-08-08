@@ -156,6 +156,7 @@ function statusText(error: unknown): { title: string; description: string; icon:
 function SourceMeta({ meta }: { meta: MarketInformationMeta }) {
   return (
     <div
+      role="group"
       className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
       aria-label="데이터 출처와 신선도"
     >
