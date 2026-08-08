@@ -150,3 +150,52 @@ test('IME composition defers search, touch selection navigates, and errors can r
   await expect(page.getByText('검색 인덱스를 준비하지 못했습니다.')).toBeVisible();
   await expect(page.getByRole('button', { name: '재시도' })).toBeVisible();
 });
+
+test('search browser diagnostics remain zero on a healthy unified-search flow', async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  const unhandledRejections: string[] = [];
+  const unexpectedHttpErrors: string[] = [];
+  const privateRequests: string[] = [];
+  const unhandledMarker = '__UNIFIED_SEARCH_UNHANDLED_REJECTION__';
+
+  await page.addInitScript((marker) => {
+    window.addEventListener('unhandledrejection', (event) => {
+      console.error(marker, event.reason);
+    });
+  }, unhandledMarker);
+
+  page.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    if (message.text().includes(unhandledMarker)) {
+      unhandledRejections.push(message.text());
+      return;
+    }
+    consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('response', (response) => {
+    if (response.status() >= 400) unexpectedHttpErrors.push(`${response.status()} ${response.url()}`);
+  });
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith('/api/') && /(?:private|account|balance|position|order|cancel)/i.test(url.pathname)) {
+      privateRequests.push(url.pathname);
+    }
+  });
+
+  await mockSearch(page);
+  await page.goto('/__phase11-unified-search-e2e');
+  const input = page.getByRole('combobox', { name: '통합 자산 검색' });
+  await input.fill('BTC');
+  await expect(page.getByText('코인 현물', { exact: true })).toBeVisible();
+  await expect(page.getByText('코인 선물', { exact: true })).toBeVisible();
+  await page.waitForTimeout(250);
+
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
+  expect(unhandledRejections).toEqual([]);
+  expect(unexpectedHttpErrors).toEqual([]);
+  expect(privateRequests).toEqual([]);
+  console.log('[unified-search-diagnostics] consoleErrors=0 pageErrors=0 unhandledRejections=0 unexpectedHttpErrors=0 privateRequests=0');
+});
