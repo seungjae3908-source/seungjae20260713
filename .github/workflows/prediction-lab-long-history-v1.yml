@@ -9,9 +9,11 @@ on:
       - .github/workflows/prediction-lab-long-history-v1.yml
       - market-prediction-lab/package.json
       - market-prediction-lab/src/historical-backtest-data.js
+      - market-prediction-lab/src/binance-futures-history.js
       - market-prediction-lab/src/multi-market-backtest-engine.js
       - market-prediction-lab/scripts/run-long-history-v1.js
       - market-prediction-lab/tests/historical-backtest-data.test.js
+      - market-prediction-lab/tests/binance-futures-history.test.js
 
 permissions:
   contents: write
