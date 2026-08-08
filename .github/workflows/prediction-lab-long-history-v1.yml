@@ -1,0 +1,76 @@
+name: Prediction Lab Long History V1
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/prediction-lab-standalone
+    paths:
+      - .github/workflows/prediction-lab-long-history-v1.yml
+      - market-prediction-lab/package.json
+      - market-prediction-lab/src/historical-backtest-data.js
+      - market-prediction-lab/src/multi-market-backtest-engine.js
+      - market-prediction-lab/scripts/run-long-history-v1.js
+      - market-prediction-lab/tests/historical-backtest-data.test.js
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prediction-lab-long-history-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout isolated research branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/prediction-lab-standalone
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate isolated lab
+        working-directory: market-prediction-lab
+        run: npm run validate
+
+      - name: Collect public history and run V1
+        working-directory: market-prediction-lab
+        run: npm run backtest:v1:history -- long-history-v1 docs/long-history-v1-result.json docs/long-history-v1-result.md
+
+      - name: Display result table
+        if: always()
+        working-directory: market-prediction-lab
+        run: |
+          test -f docs/long-history-v1-result.md
+          cat docs/long-history-v1-result.md
+
+      - name: Upload long-history research artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-history-v1-${{ github.run_id }}
+          path: |
+            market-prediction-lab/long-history-v1
+            market-prediction-lab/docs/long-history-v1-result.json
+            market-prediction-lab/docs/long-history-v1-result.md
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Commit compact research result
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add market-prediction-lab/docs/long-history-v1-result.json market-prediction-lab/docs/long-history-v1-result.md
+          if git diff --cached --quiet; then
+            echo "No compact result changes"
+            exit 0
+          fi
+          git commit -m "test(research): record long-history V1 result"
+          git push origin HEAD:feature/prediction-lab-standalone
