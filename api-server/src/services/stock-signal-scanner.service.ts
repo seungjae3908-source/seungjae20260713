@@ -8,6 +8,12 @@ import {
 import { buildContext, type ScanFilters } from './signal.service';
 import { applyStockSignalPolicy } from './scanner-signal-policy.service';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
+import { applyScannerQuantHardening } from './scanner-quant-hardening.service';
+import {
+  scannerContextTimeframe,
+  scannerStrategyForTimeframe,
+  type ScannerStrategyMode,
+} from './scanner-quant-strategy.service';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
 import { ScannerUniverseService } from './scanner-universe.service';
 
@@ -18,6 +24,7 @@ export interface StockSignalScanRequest {
   filters: ScanFilters;
   cursor: number;
   batchSize: number;
+  strategyMode?: ScannerStrategyMode;
   signal?: AbortSignal;
 }
 
@@ -25,11 +32,27 @@ function applyUniverseStaleness(card: ScannerSignalCard, stale: boolean): Scanne
   if (!stale) return card;
   return {
     ...card,
-    score: Math.min(card.score, 59),
-    confidence: Math.min(card.confidence, 59),
+    score: Math.min(card.score, 49),
+    confidence: Math.min(card.confidence, 49),
     dataState: 'stale',
     strongSignalEligible: false,
-    signalState: card.signalState === 'INVALIDATED' ? 'INVALIDATED' : 'WEAKENED',
+    signalState: 'INVALIDATED',
+    dataQuality: card.dataQuality
+      ? {
+        ...card.dataQuality,
+        state: 'DATA_UNTRUSTED',
+        score: Math.min(card.dataQuality.score, 49),
+        strongSignalAllowed: false,
+        issues: [
+          ...card.dataQuality.issues,
+          {
+            code: 'PROVIDER_DISAGREEMENT',
+            severity: 'blocking',
+            message: '종목 마스터가 마지막 정상 캐시 또는 fallback입니다.',
+          },
+        ],
+      }
+      : undefined,
     warnings: [...new Set([...card.warnings, '종목 마스터가 마지막 정상 캐시 또는 fallback입니다.'])],
   };
 }
@@ -42,6 +65,9 @@ function selectedConditions(requested: string[], normalized: string[]): string[]
 export const StockSignalScannerService = {
   async scan(request: StockSignalScanRequest): Promise<ScannerResponse> {
     const startedAt = Date.now();
+    const primaryTimeframe = String(request.filters.timeframe ?? '1D');
+    const strategyMode = request.strategyMode ?? scannerStrategyForTimeframe(primaryTimeframe);
+    const contextTimeframe = scannerContextTimeframe(strategyMode);
     const universe = await ScannerUniverseService.batch(
       request.market,
       request.cursor,
@@ -49,12 +75,19 @@ export const StockSignalScannerService = {
       request.signal,
     );
     const candlesByTicker = new Map<string, Candle[]>();
+    const contextByTicker = new Map<string, Candle[]>();
     const entryByTicker = new Map(universe.entries.map((entry) => [entry.ticker, entry]));
     const scanner = createBoundedScannerService({
       catalog: universe.entries,
       getCandles: async (ticker, timeframe) => {
-        const candles = await MarketDataService.getCandles(ticker, timeframe);
+        const [candles, context] = await Promise.all([
+          MarketDataService.getCandles(ticker, timeframe),
+          timeframe === contextTimeframe
+            ? Promise.resolve<Candle[] | null>(null)
+            : MarketDataService.getCandles(ticker, contextTimeframe).catch(() => []),
+        ]);
         candlesByTicker.set(ticker, candles);
+        contextByTicker.set(ticker, context ?? candles);
         return candles;
       },
       getQuote: (ticker) => MarketDataService.getQuote(ticker),
@@ -83,14 +116,24 @@ export const StockSignalScannerService = {
       .map((card) => {
         const entry = entryByTicker.get(card.ticker);
         if (!entry) return null;
-        return applyUniverseStaleness(applyStockSignalPolicy({
+        const candles = candlesByTicker.get(card.ticker) ?? [];
+        const legacyCandidate = applyStockSignalPolicy({
           memberId: request.memberId,
           card,
           universeEntry: entry,
-          candles: candlesByTicker.get(card.ticker) ?? [],
+          candles,
           selected,
           timeframe: raw.timeframe,
-        }), universe.stale);
+        });
+        const quantCandidate = applyScannerQuantHardening({
+          card: legacyCandidate,
+          timeframe: raw.timeframe,
+          candles,
+          contextCandles: contextByTicker.get(card.ticker) ?? [],
+          strategyMode,
+          allowShort: false,
+        });
+        return applyUniverseStaleness(quantCandidate, universe.stale);
       })
       .filter((card): card is ScannerSignalCard => card != null)
       .filter((card) => selected.length === 0 || selected.every((label) => card.matched.includes(label)))
@@ -107,19 +150,24 @@ export const StockSignalScannerService = {
     const lifecycle = applyScannerSignalLifecycle(request.memberId, enriched);
     const partial = raw.partial || universe.partial;
     const timedOut = raw.timedOut;
+    const hasUntrusted = lifecycle.cards.some((card) => card.dataQuality?.state === 'DATA_UNTRUSTED');
     const dataState = universe.stale
       ? 'stale' as const
-      : partial
-        ? 'partial' as const
-        : 'complete' as const;
+      : hasUntrusted
+        ? 'untrusted' as const
+        : partial
+          ? 'partial' as const
+          : 'complete' as const;
     const completedCount = raw.completedCount;
     const message = universe.stale
       ? `종목 마스터 제공기관이 지연되어 ${universe.source} 목록으로 ${completedCount}/${universe.entries.length}종목을 분석했습니다.`
-      : partial
-        ? `일부 공급자 지연으로 ${completedCount}/${universe.entries.length}종목의 확인된 결과만 표시합니다.`
-        : lifecycle.cards.length === 0
-          ? `현재 묶음 ${completedCount}종목에서 선택 조건을 모두 확인한 결과가 없습니다.`
-          : `현재 묶음 ${completedCount}종목 분석을 완료했습니다.`;
+      : hasUntrusted
+        ? `Data Quality Gate가 신뢰할 수 없는 종목을 강한 신호에서 제외했습니다.`
+        : partial
+          ? `일부 공급자 지연으로 ${completedCount}/${universe.entries.length}종목의 확인된 결과만 표시합니다.`
+          : lifecycle.cards.length === 0
+            ? `현재 묶음 ${completedCount}종목에서 선택 조건을 모두 확인한 결과가 없습니다.`
+            : `현재 묶음 ${completedCount}종목 ${strategyMode === 'scalping' ? '단타' : '스윙'} 분석을 완료했습니다.`;
 
     return {
       ok: true,
