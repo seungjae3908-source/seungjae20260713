@@ -1,0 +1,219 @@
+name: Staging PostgreSQL Auth Gate
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: staging-postgres-auth-gate
+  cancel-in-progress: false
+
+jobs:
+  authenticate-before-deploy:
+    name: Read-only PostgreSQL authentication before staging deployment
+    if: >-
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/run-staging-auth ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    env:
+      STAGING_ARTIFACT_DIR: ${{ github.workspace }}/staging-auth-artifacts
+      STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Parse exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == "seungjae3908-source" ]] || { echo 'Only the repository owner may run the staging database authentication gate.' >&2; exit 1; }
+          [[ "$AUTHOR_ASSOCIATION" == "OWNER" ]] || { echo 'Command author is not the repository owner.' >&2; exit 1; }
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-staging-auth ([0-9a-fA-F]{40})$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /run-staging-auth <40-character-current-main-sha>');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1].toLowerCase()}\n`);
+          NODE
+
+      - name: Require exact current main SHA
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_SHA"
+          git cat-file -e "$TARGET_SHA^{commit}"
+          MAIN_SHA="$(git rev-parse origin/main^{commit})"
+          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || {
+            echo "Authentication gate requires the exact current main SHA: $MAIN_SHA" >&2
+            exit 1
+          }
+
+      - name: Require successful verified main CI
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: process.env.TARGET_SHA,
+              per_page: 100,
+            });
+            statuses.sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status.state);
+            const missing = required.filter((name) => latest.get(name) !== 'success');
+            if (missing.length) core.setFailed(`Required successful statuses missing: ${missing.join(', ')}`);
+
+      - name: Prepare authentication diagnostics
+        run: mkdir -p "$STAGING_ARTIFACT_DIR"
+
+      - name: Require PostgreSQL client
+        run: command -v psql >/dev/null 2>&1 || { echo 'PostgreSQL client is unavailable on the runner.' >&2; exit 1; }
+
+      - name: Run one read-only PostgreSQL authentication probe
+        id: auth
+        continue-on-error: true
+        run: node api-server/scripts/verify-staging-postgres-auth.mjs
+
+      - name: Upload redacted authentication result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-postgres-auth-${{ steps.command.outputs.sha }}
+          path: staging-auth-artifacts/staging-postgres-auth-verification.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report result and continue only after authentication success
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          AUTH_OUTCOME: ${{ steps.auth.outcome }}
+          AUTH_ARTIFACT: ${{ env.STAGING_ARTIFACT_DIR }}/staging-postgres-auth-verification.json
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const artifact = fs.existsSync(process.env.AUTH_ARTIFACT)
+              ? JSON.parse(fs.readFileSync(process.env.AUTH_ARTIFACT, 'utf8'))
+              : {
+                  status: 'failed',
+                  classification: 'postgres_auth_unknown',
+                  detail: 'Redacted authentication result artifact is missing.',
+                  project_match: false,
+                  endpoint_type: 'unresolved',
+                  port: 'unresolved',
+                  read_only_probe: true,
+                  database_changed: false,
+                  credentials_recorded: false,
+                };
+
+            if (process.env.AUTH_OUTCOME !== 'success' || artifact.status !== 'passed') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: 23,
+                body: [
+                  'Staging PostgreSQL authentication gate failed safely before deployment.',
+                  '',
+                  `- Target SHA: \`${process.env.TARGET_SHA}\``,
+                  `- Classification: \`${String(artifact.classification)}\``,
+                  `- Diagnostic: ${String(artifact.detail)}`,
+                  `- Supabase project match: \`${Boolean(artifact.project_match)}\``,
+                  `- Endpoint type: \`${String(artifact.endpoint_type)}\``,
+                  `- Port: \`${String(artifact.port)}\``,
+                  '- Read-only transaction probe: `true`',
+                  '- Database changed: `false`',
+                  '- Staging deployment dispatched: `false`',
+                  '- Production Supabase changed: `false`',
+                  '- Production deployment executed: `false`',
+                  '- Secret values recorded: `false`',
+                  `- Auth Gate Run ID: \`${context.runId}\``,
+                  `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+                ].join('\n'),
+              });
+              core.setFailed(`Staging PostgreSQL authentication failed: ${String(artifact.classification)}`);
+              return;
+            }
+
+            const response = await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'staging-readiness.yml',
+              ref: 'main',
+              inputs: {
+                sha: process.env.TARGET_SHA,
+                action: 'deploy',
+                run_full_validation: 'true',
+                run_destructive_recovery_drill: 'false',
+              },
+              return_run_details: true,
+              headers: {
+                accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2026-03-10',
+              },
+            });
+            const stagingRunId = Number(response.data?.workflow_run_id);
+            if (response.status !== 200 || !Number.isSafeInteger(stagingRunId) || stagingRunId <= 0) {
+              core.setFailed(`Authenticated successfully, but staging dispatch returned invalid Run ID with HTTP ${response.status}.`);
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                'Staging PostgreSQL authentication succeeded before deployment.',
+                '',
+                `- Target SHA: \`${process.env.TARGET_SHA}\``,
+                '- Classification: `authenticated`',
+                `- Supabase project match: \`${Boolean(artifact.project_match)}\``,
+                `- Endpoint type: \`${String(artifact.endpoint_type)}\``,
+                `- Port: \`${String(artifact.port)}\``,
+                '- Read-only transaction rolled back: `true`',
+                '- Database changed by authentication probe: `false`',
+                `- Auth Gate Run ID: \`${context.runId}\``,
+                `- Staging Readiness Run ID: \`${stagingRunId}\``,
+                '- Bootstrap and full validation dispatched: `true`',
+                '- Production Supabase changed: `false`',
+                '- Production deployment executed: `false`',
+                '- Secret values recorded: `false`',
+                `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+              ].join('\n'),
+            });

@@ -1,0 +1,521 @@
+name: One-Time Production Approval
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact immutable 40-character current main SHA approved for Production
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/production-one-time-approval.yml
+      - .github/workflows/production-deploy.yml
+      - .github/workflows/futures-public-network-smoke.yml
+      - .github/workflows/staging-readiness.yml
+      - .github/workflows/staging-postgres-auth-gate.yml
+      - api-server/scripts/production-approval-target.cjs
+      - api-server/scripts/production-ci-provenance.cjs
+      - api-server/scripts/verify-production-ci-provenance-contract.mjs
+      - api-server/scripts/verify-production-data-plane-probe-contract.mjs
+      - api-server/scripts/verify-production-one-time-approval.mjs
+      - api-server/scripts/build-staging-verdict.mjs
+      - api-server/scripts/verify-staging-verdict.mjs
+
+permissions:
+  actions: read
+  contents: read
+  statuses: read
+
+concurrency:
+  group: one-time-production-owner-approval
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate one-time production approval safeguards
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify one-time production approval contract
+        run: node api-server/scripts/verify-production-one-time-approval.mjs
+      - name: Verify Production CI provenance contract
+        run: node api-server/scripts/verify-production-ci-provenance-contract.mjs
+      - name: Verify Production data-plane probe contract
+        run: node api-server/scripts/verify-production-data-plane-probe-contract.mjs
+
+  dispatch:
+    name: Validate exact approved SHA and dispatch official production deployment
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+      statuses: read
+    steps:
+      - name: Require trusted repository, owner actor, and main workflow ref
+        env:
+          APPROVAL_REPOSITORY: ${{ github.repository }}
+          APPROVAL_ACTOR: ${{ github.actor }}
+          APPROVAL_REF: ${{ github.ref }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$APPROVAL_REPOSITORY" == 'seungjae3908-source/seungjae20260713' ]] || {
+            echo "Unexpected repository: $APPROVAL_REPOSITORY" >&2
+            exit 1
+          }
+          [[ "$APPROVAL_ACTOR" == 'seungjae3908-source' ]] || {
+            echo "One-Time Production Approval must be explicitly dispatched by seungjae3908-source." >&2
+            exit 1
+          }
+          [[ "$APPROVAL_REF" == 'refs/heads/main' ]] || {
+            echo "One-Time Production Approval workflow must be dispatched from refs/heads/main." >&2
+            exit 1
+          }
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate immutable non-mutating approval target
+        id: target
+        uses: actions/github-script@v7
+        env:
+          RAW_TARGET_SHA: ${{ inputs.target_sha }}
+          APPROVAL_REPOSITORY: ${{ github.repository }}
+          APPROVAL_ACTOR: ${{ github.actor }}
+          APPROVAL_REF: ${{ github.ref }}
+        with:
+          script: |
+            const {
+              evaluateProductionApprovalTarget,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-approval-target.cjs`);
+            const mainResponse = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            const evaluated = evaluateProductionApprovalTarget({
+              targetSha: process.env.RAW_TARGET_SHA,
+              currentMainSha: mainResponse.data.commit.sha,
+              repository: process.env.APPROVAL_REPOSITORY,
+              actor: process.env.APPROVAL_ACTOR,
+              ref: process.env.APPROVAL_REF,
+            });
+            if (!evaluated.ok) {
+              core.setFailed(`Production approval target rejected: ${evaluated.reason}.`);
+              return;
+            }
+            const commitResponse = await github.rest.repos.getCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: evaluated.targetSha,
+            });
+            if (commitResponse.data.sha !== evaluated.targetSha) {
+              core.setFailed('Exact target SHA could not be resolved to the approved commit.');
+              return;
+            }
+            core.setOutput('sha', evaluated.targetSha);
+            core.setOutput('main_sha', evaluated.currentMainSha);
+            core.info(`Immutable approval target accepted: ${evaluated.targetSha}.`);
+
+      - name: Record non-mutating approval start
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          CURRENT_MAIN_SHA: ${{ steps.target.outputs.main_sha }}
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                'Non-mutating one-time owner-approved production gate started.',
+                '',
+                `- Approval workflow Run ID: \`${context.runId}\``,
+                `- Actor: \`${context.actor}\``,
+                `- Exact approved target SHA: \`${process.env.TARGET_SHA}\``,
+                `- Current main SHA: \`${process.env.CURRENT_MAIN_SHA}\``,
+                `- Approval workflow: [Open GitHub Actions run](${runUrl})`,
+                '- Repository mutation used for approval: `false`',
+                '- Production deployment executed at this point: `false`',
+              ].join('\n'),
+            });
+
+      - name: Require exact Application CI 6/6 provenance
+        id: ci-provenance
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const {
+              evaluateProductionCiProvenance,
+              inspectRequiredStatusEvidence,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-ci-provenance.cjs`);
+            const targetSha = process.env.TARGET_SHA;
+            const mainResponse = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            const currentMainSha = mainResponse.data.commit.sha;
+            if (currentMainSha !== targetSha) {
+              core.setFailed(`Approval target became stale before CI verification: target=${targetSha} current-main=${currentMainSha}.`);
+              return;
+            }
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            const evidence = inspectRequiredStatusEvidence(statuses);
+            if (!evidence.ok) {
+              core.setFailed(`Required CI status provenance rejected: ${evidence.reason}.`);
+              return;
+            }
+            const runResponse = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: evidence.runId,
+            });
+            const verified = evaluateProductionCiProvenance({
+              targetSha,
+              currentMainSha,
+              statuses,
+              run: runResponse.data,
+            });
+            if (!verified.ok) {
+              core.setFailed(`Application CI provenance rejected: ${verified.reason}.`);
+              return;
+            }
+            core.setOutput('run_id', String(verified.runId));
+            core.info(`Required CI 6/6 verified by exact Application CI Run ID ${verified.runId} (${verified.event}).`);
+
+      - name: Require successful exact-SHA PostgreSQL Auth Gate
+        id: postgres-gate
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: targetSha,
+              branch: 'main',
+              event: 'issue_comment',
+              status: 'completed',
+              per_page: 100,
+            });
+            const candidates = runs
+              .filter((run) => run.name === 'Staging PostgreSQL Auth Gate'
+                && run.path === '.github/workflows/staging-postgres-auth-gate.yml'
+                && run.head_sha === targetSha
+                && run.head_branch === 'main'
+                && run.event === 'issue_comment'
+                && run.status === 'completed'
+                && run.conclusion === 'success')
+              .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+            let accepted = null;
+            for (const run of candidates) {
+              const artifactResponse = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = (artifactResponse.data.artifacts ?? []).find((candidate) =>
+                candidate.name === `staging-postgres-auth-${targetSha}`
+                && candidate.expired !== true
+                && candidate.workflow_run?.head_sha === targetSha);
+              if (artifact) {
+                accepted = { run, artifact };
+                break;
+              }
+            }
+            if (!accepted) {
+              core.setFailed(`No successful unexpired exact-SHA PostgreSQL Auth Gate evidence exists for ${targetSha}.`);
+              return;
+            }
+            core.setOutput('run_id', String(accepted.run.id));
+            core.setOutput('artifact_id', String(accepted.artifact.id));
+            core.info(`PostgreSQL Auth Gate accepted from Run ID ${accepted.run.id}, artifact ${accepted.artifact.id}.`);
+
+      - name: Locate successful exact-SHA Staging Readiness verdict
+        id: verdict-artifact
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const artifactName = `staging-verdict-${targetSha}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: artifactName,
+              per_page: 100,
+            });
+            const candidates = artifacts
+              .filter((artifact) => !artifact.expired && artifact.workflow_run?.head_sha === targetSha)
+              .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+            let accepted = null;
+            for (const artifact of candidates) {
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: artifact.workflow_run.id,
+              });
+              const run = response.data;
+              const valid = run.event === 'workflow_dispatch'
+                && run.head_branch === 'main'
+                && run.head_sha === targetSha
+                && run.path === '.github/workflows/staging-readiness.yml'
+                && run.status === 'completed'
+                && run.conclusion === 'success';
+              if (valid) {
+                accepted = { artifact, run };
+                break;
+              }
+            }
+            if (!accepted) {
+              core.setFailed(`No successful unexpired exact-SHA Staging Readiness verdict exists for ${targetSha}.`);
+              return;
+            }
+            core.setOutput('run_id', String(accepted.run.id));
+            core.setOutput('artifact_id', String(accepted.artifact.id));
+            core.info(`Exact staging verdict artifact accepted from Run ID ${accepted.run.id}, artifact ${accepted.artifact.id}.`);
+
+      - name: Download exact staging verdict artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-verdict-${{ steps.target.outputs.sha }}
+          path: staging-verdict
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.verdict-artifact.outputs.run_id }}
+
+      - name: Verify exact release-ready staging verdict
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
+
+      - name: Dispatch and confirm official production workflow
+        id: production-dispatch
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          STAGING_RUN_ID: ${{ steps.verdict-artifact.outputs.run_id }}
+        with:
+          script: |
+            const {
+              evaluateProductionDispatchTarget,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-approval-target.cjs`);
+            const workflowId = 'production-deploy.yml';
+            const apiVersion = '2026-03-10';
+            const targetSha = process.env.TARGET_SHA;
+            const dispatchContract = evaluateProductionDispatchTarget({
+              approvalTargetSha: targetSha,
+              productionTargetSha: targetSha,
+            });
+            if (!dispatchContract.ok) {
+              core.setFailed(`Production dispatch target rejected: ${dispatchContract.reason}.`);
+              return;
+            }
+            const mainResponse = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (mainResponse.data.commit.sha !== dispatchContract.targetSha) {
+              core.setFailed(`Refusing to dispatch stale production target ${dispatchContract.targetSha}; current main is ${mainResponse.data.commit.sha}.`);
+              return;
+            }
+            const workflow = await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            });
+            if (workflow.data.state !== 'active') {
+              core.setFailed(`Official workflow ${workflowId} is not active.`);
+              return;
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: dispatchContract.targetSha,
+              branch: 'main',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const exactRuns = runs
+              .filter((run) => run.name === 'Production Deploy'
+                && run.path === '.github/workflows/production-deploy.yml'
+                && run.head_sha === dispatchContract.targetSha)
+              .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+            const existing = exactRuns.find((run) => run.status !== 'completed')
+              ?? exactRuns.find((run) => run.status === 'completed' && run.conclusion === 'success');
+            if (existing) {
+              core.setOutput('run_id', String(existing.id));
+              core.setOutput('dispatch_mode', 'existing');
+              core.info(`Production deployment not duplicated; using existing exact-SHA Run ID ${existing.id}.`);
+              return;
+            }
+            const dispatchResponse = await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              ref: 'main',
+              inputs: {
+                sha: dispatchContract.targetSha,
+                data_probe_path: '/api/healthz/data-plane',
+                force_rebuild: 'false',
+              },
+              return_run_details: true,
+              headers: {
+                accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': apiVersion,
+              },
+            });
+            const runId = Number(dispatchResponse.data?.workflow_run_id);
+            if (dispatchResponse.status !== 200 || !Number.isSafeInteger(runId) || runId <= 0) {
+              core.setFailed(`Official production dispatch returned invalid Run ID with HTTP ${dispatchResponse.status}.`);
+              return;
+            }
+            const runResponse = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            const run = runResponse.data;
+            const valid = run.event === 'workflow_dispatch'
+              && run.head_branch === 'main'
+              && run.head_sha === dispatchContract.targetSha
+              && run.path === '.github/workflows/production-deploy.yml';
+            if (!valid) {
+              core.setFailed('Returned production run does not match the official workflow, main branch, and exact approved target SHA.');
+              return;
+            }
+            core.setOutput('run_id', String(runId));
+            core.setOutput('dispatch_mode', 'created');
+
+      - name: Write sanitized approval audit evidence
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          CURRENT_MAIN_SHA: ${{ steps.target.outputs.main_sha }}
+          CI_RUN_ID: ${{ steps.ci-provenance.outputs.run_id }}
+          POSTGRES_GATE_RUN_ID: ${{ steps.postgres-gate.outputs.run_id }}
+          POSTGRES_GATE_ARTIFACT_ID: ${{ steps.postgres-gate.outputs.artifact_id }}
+          STAGING_RUN_ID: ${{ steps.verdict-artifact.outputs.run_id }}
+          STAGING_ARTIFACT_ID: ${{ steps.verdict-artifact.outputs.artifact_id }}
+          PRODUCTION_RUN_ID: ${{ steps.production-dispatch.outputs.run_id }}
+          APPROVAL_RUN_ID: ${{ github.run_id }}
+          APPROVAL_ACTOR: ${{ github.actor }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p production-approval-audit
+          node <<'NODE'
+          const fs = require('node:fs');
+          const evidence = {
+            approvalRunId: process.env.APPROVAL_RUN_ID,
+            actor: process.env.APPROVAL_ACTOR,
+            targetSha: process.env.TARGET_SHA,
+            currentMainSha: process.env.CURRENT_MAIN_SHA,
+            applicationCiRunId: process.env.CI_RUN_ID,
+            postgresGateRunId: process.env.POSTGRES_GATE_RUN_ID,
+            postgresGateArtifactId: process.env.POSTGRES_GATE_ARTIFACT_ID,
+            stagingRunId: process.env.STAGING_RUN_ID,
+            stagingArtifactId: process.env.STAGING_ARTIFACT_ID,
+            productionDeployRunId: process.env.PRODUCTION_RUN_ID,
+            validationTimestamp: new Date().toISOString(),
+            repositoryMutationUsedForApproval: false,
+          };
+          fs.writeFileSync('production-approval-audit/approval-evidence.json', `${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+
+      - name: Upload sanitized approval audit evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-approval-audit-${{ steps.target.outputs.sha }}-${{ github.run_id }}
+          path: production-approval-audit/approval-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record confirmed Production dispatch
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          CURRENT_MAIN_SHA: ${{ steps.target.outputs.main_sha }}
+          CI_RUN_ID: ${{ steps.ci-provenance.outputs.run_id }}
+          POSTGRES_GATE_RUN_ID: ${{ steps.postgres-gate.outputs.run_id }}
+          STAGING_RUN_ID: ${{ steps.verdict-artifact.outputs.run_id }}
+          STAGING_ARTIFACT_ID: ${{ steps.verdict-artifact.outputs.artifact_id }}
+          PRODUCTION_RUN_ID: ${{ steps.production-dispatch.outputs.run_id }}
+          DISPATCH_MODE: ${{ steps.production-dispatch.outputs.dispatch_mode }}
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                'Non-mutating owner-approved Production dispatch confirmed.',
+                '',
+                `- Approval workflow Run ID: \`${context.runId}\``,
+                `- Actor: \`${context.actor}\``,
+                `- Target SHA: \`${process.env.TARGET_SHA}\``,
+                `- Current main SHA: \`${process.env.CURRENT_MAIN_SHA}\``,
+                `- Application CI Run ID: \`${process.env.CI_RUN_ID}\``,
+                `- PostgreSQL Auth Gate Run ID: \`${process.env.POSTGRES_GATE_RUN_ID}\``,
+                `- Staging Readiness Run ID: \`${process.env.STAGING_RUN_ID}\``,
+                `- Staging artifact ID: \`${process.env.STAGING_ARTIFACT_ID}\``,
+                `- Production Deploy Run ID: \`${process.env.PRODUCTION_RUN_ID}\``,
+                `- Dispatch mode: \`${process.env.DISPATCH_MODE}\``,
+                '- Production input SHA equals approved target SHA: `true`',
+                '- Repository mutation used for approval: `false`',
+                '- Data probe: `/api/healthz/data-plane`',
+                '- GitHub environment required by deploy job: `production`',
+                `- Approval workflow: [Open approval run](${runUrl})`,
+              ].join('\n'),
+            });
+
+      - name: Record approval gate failure
+        if: failure()
+        uses: actions/github-script@v7
+        env:
+          RAW_TARGET_SHA: ${{ inputs.target_sha }}
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                'Non-mutating one-time production approval gate failed before Production dispatch was confirmed.',
+                '',
+                `- Requested target SHA: \`${process.env.RAW_TARGET_SHA}\``,
+                `- Approval workflow Run ID: \`${context.runId}\``,
+                `- Approval workflow: [Open failed run](${runUrl})`,
+                '- Production success must not be assumed.',
+                '- Repository mutation is not a recovery path.',
+                '- Next action: inspect the exact failed job and original logs before any retry.',
+              ].join('\n'),
+            });

@@ -310,7 +310,16 @@ router.get('/market/scan', async (req, res) => {
   const filters = {
     volumeThreshold: num(req.query.volumeThreshold),
     tradingValueThreshold: num(req.query.tradingValueThreshold),
+    marketCapThreshold: num(req.query.marketCapThreshold),
+    minimumScore: num(req.query.minimumScore),
+    maximumRiskScore: num(req.query.maximumRiskScore),
+    volumeLookbackDays: num(req.query.volumeLookbackDays),
+    tradingValueLookbackDays: num(req.query.tradingValueLookbackDays),
+    timeframe: String(req.query.timeframe ?? '1D'),
   };
+  if (scope === 'US' && filters.timeframe === '4H') {
+    return res.status(400).json({ ok: false, error: 'SCAN_TIMEFRAME_UNSUPPORTED', market: scope, timeframe: filters.timeframe });
+  }
   try {
     const result = await SignalService.scan(scope, indicators, filters);
     // 결과 0건은 "조건에 맞는 종목 없음"(200)이며 오류(5xx)와 구분한다.
@@ -318,6 +327,8 @@ router.get('/market/scan', async (req, res) => {
       ok: true,
       provider: 'rule-scan',
       fetchedAt: new Date().toISOString(),
+      searchRunId: `scan:${scope}:${result.timeframe}:${Date.now()}`,
+      timeframe: result.timeframe,
       market: scope,
       rows: result.cards,
       cards: result.cards,
@@ -331,6 +342,11 @@ router.get('/market/scan', async (req, res) => {
         defaultApplied: indicators.length === 0,
         volumeThreshold: result.appliedFilters.volumeThreshold,
         tradingValueThreshold: result.appliedFilters.tradingValueThreshold,
+        marketCapThreshold: result.appliedFilters.marketCapThreshold,
+        minimumScore: result.appliedFilters.minimumScore,
+        maximumRiskScore: result.appliedFilters.maximumRiskScore,
+        volumeLookbackDays: filters.volumeLookbackDays ?? 20,
+        tradingValueLookbackDays: filters.tradingValueLookbackDays ?? 20,
       },
       scanned: result.scanned,
       excludedCount: result.excludedCount,

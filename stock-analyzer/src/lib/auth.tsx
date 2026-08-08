@@ -1,32 +1,52 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { ProfileRequestCoordinator } from '@/lib/profile-request-coordinator';
+import {
+  prepareBackupForSessionEnd,
+  resumeBackupForSession,
+} from '@/lib/backup-sync-lifecycle';
+import {
+  deriveMemberTier,
+  hasCapability,
+  permissionsFor,
+  type MemberCapability,
+  type MemberTier,
+} from '../../../packages/member-access/src/index.js';
 
 export type MemberProfile = {
   id: string;
   login_name: string;
   display_name: string;
-  role: 'user' | 'admin';
+  role: string;
   status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'withdrawn';
+  membership_level?: MemberTier | null;
+  is_active?: boolean | null;
+  permissions_updated_at?: string | null;
+  updated_at?: string | null;
 };
 
 type AuthContextValue = {
-  configured: boolean; loading: boolean; session: Session | null; user: User | null;
-  profile: MemberProfile | null; displayName: string | null; isAdmin: boolean; isApproved: boolean;
+  configured: boolean;
+  loading: boolean;
+  session: Session | null;
+  user: User | null;
+  profile: MemberProfile | null;
+  displayName: string | null;
+  membershipLevel: MemberTier;
+  permissions: Readonly<Record<MemberCapability, boolean>>;
+  can(capability: MemberCapability): boolean;
+  isAdmin: boolean;
+  isApproved: boolean;
   signIn(loginName: string, password: string): Promise<void>;
   signUp(loginName: string, password: string): Promise<void>;
-  signOut(): Promise<void>; refreshProfile(): Promise<void>;
-};
-
-type UnknownRecord = Record<string, unknown>;
-
-type ApiSessionTokens = {
-  accessToken: string;
-  refreshToken: string;
+  signOut(): Promise<void>;
+  refreshProfile(): Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const normalizeName = (value: string) => value.trim().normalize('NFKC').toLowerCase();
+const PROFILE_AUTO_REFRESH_MS = 30_000;
 
 function validate(loginName: string, password: string) {
   const name = loginName.trim();
@@ -52,154 +72,229 @@ function authMessage(cause: unknown) {
   return '계정 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.';
 }
 
-function asRecord(value: unknown): UnknownRecord | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as UnknownRecord
-    : null;
-}
-
-function readString(record: UnknownRecord | null, ...keys: string[]) {
-  for (const key of keys) {
-    const value = record?.[key];
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return null;
-}
-
-function extractApiSessionTokens(payload: unknown): ApiSessionTokens | null {
-  const root = asRecord(payload);
-  const data = asRecord(root?.data);
-  const auth = asRecord(root?.auth);
-  const supabase = asRecord(root?.supabase);
-
-  const candidates = [
-    asRecord(root?.session),
-    asRecord(data?.session),
-    asRecord(auth?.session),
-    asRecord(supabase?.session),
-    data,
-    auth,
-    supabase,
-    root,
-  ];
-
-  for (const candidate of candidates) {
-    const accessToken = readString(candidate, 'access_token', 'accessToken');
-    const refreshToken = readString(candidate, 'refresh_token', 'refreshToken');
-    if (accessToken && refreshToken) return { accessToken, refreshToken };
-  }
-
-  return null;
-}
-
-function apiErrorMessage(payload: unknown, status: number) {
-  const record = asRecord(payload);
-  const message = readString(record, 'message', 'error_description', 'error');
-
-  if (status === 400 || status === 401) return '아이디 또는 비밀번호가 맞지 않습니다.';
-  if (status === 429) return '요청이 많습니다. 잠시 후 다시 시도해 주세요.';
-  if (message && message.length <= 160) return message;
-  return '로그인 서버 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.';
-}
-
-async function signInThroughApi(identifier: string, password: string) {
-  const response = await fetch('/api/auth/login', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ identifier, password }),
+async function signInWithSupabase(loginName: string, password: string) {
+  const client = getSupabase();
+  const { data, error } = await client.auth.signInWithPassword({
+    email: await internalEmail(loginName),
+    password,
   });
+  if (error || !data.session) throw error ?? new Error('Invalid login credentials');
 
-  let payload: unknown = null;
-  try {
-    payload = await response.json();
-  } catch {
-    // JSON이 아닌 오류 응답은 아래 공통 메시지로 처리합니다.
-  }
-
-  if (!response.ok) throw new Error(apiErrorMessage(payload, response.status));
-
-  const tokens = extractApiSessionTokens(payload);
-  if (!tokens) {
-    throw new Error('로그인 응답에 Supabase session token이 없습니다. API 응답의 access_token과 refresh_token을 확인해 주세요.');
-  }
-
-  const supabaseClient = getSupabase();
-  const { data, error } = await supabaseClient.auth.setSession({
-    access_token: tokens.accessToken,
-    refresh_token: tokens.refreshToken,
-  });
-
-  if (error || !data.session) {
-    throw new Error(`로그인 session token 적용에 실패했습니다${error?.message ? `: ${error.message}` : '.'}`);
-  }
-
-  const { data: verified, error: verifyError } = await supabaseClient.auth.getUser();
+  const { data: verified, error: verifyError } = await client.auth.getUser();
   if (verifyError || !verified.user) {
-    await supabaseClient.auth.signOut({ scope: 'local' });
-    throw new Error(`로그인 session token 검증에 실패했습니다${verifyError?.message ? `: ${verifyError.message}` : '.'}`);
+    await client.auth.signOut({ scope: 'local' });
+    throw new Error('로그인 session token 검증에 실패했습니다.');
   }
-
   return data.session;
+}
+
+function profileRequestKey(value: Session | null): string | null {
+  return value ? `${value.user.id}:${value.access_token}` : null;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [loading, setLoading] = useState(isSupabaseConfigured);
+  const mountedRef = useRef(true);
+  const signingInRef = useRef(false);
+  const signingOutRef = useRef(false);
+  const signOutTaskRef = useRef<Promise<void> | null>(null);
+  const sessionRef = useRef<Session | null>(null);
+  const profileRef = useRef<MemberProfile | null>(null);
+  const profileLoadQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const profileRequestsRef = useRef(new ProfileRequestCoordinator<MemberProfile | null>());
 
-  async function loadProfile(user: User | null) {
-    if (!user) { setProfile(null); return; }
-    const { data } = await getSupabase().from('profiles').select('id,login_name,display_name,role,status').eq('id', user.id).maybeSingle();
-    setProfile((data as MemberProfile | null) ?? null);
+  function applyProfile(next: MemberProfile | null) {
+    profileRef.current = next;
+    if (mountedRef.current) setProfile(next);
+  }
+
+  function applySession(next: Session | null) {
+    sessionRef.current = next;
+    setSession(next);
+    profileRequestsRef.current.setIdentity(next?.user.id ?? null, profileRequestKey(next));
+    if (!next) applyProfile(null);
+  }
+
+  function loadProfile(user: User | null, options: { force?: boolean; maxAgeMs?: number } = {}): Promise<void> {
+    if (!user) {
+      applyProfile(null);
+      return Promise.resolve();
+    }
+    if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return Promise.resolve();
+
+    const queued = profileLoadQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return;
+        const current = sessionRef.current;
+        const requestKey = profileRequestKey(current);
+        if (!current || !requestKey) return;
+        await profileRequestsRef.current.request({
+          identity: user.id,
+          requestKey,
+          force: options.force,
+          maxAgeMs: options.maxAgeMs ?? PROFILE_AUTO_REFRESH_MS,
+          load: async () => {
+            const { data } = await getSupabase().from('profiles').select('*').eq('id', user.id).maybeSingle();
+            const nextProfile = (data as MemberProfile | null) ?? null;
+            if (
+              hasCapability(profileRef.current, 'canAccessBasicInfo')
+              && !hasCapability(nextProfile, 'canAccessBasicInfo')
+            ) {
+              await prepareBackupForSessionEnd();
+            }
+            return nextProfile;
+          },
+          apply: (nextProfile) => {
+            if (!signingOutRef.current && sessionRef.current?.user.id === user.id) {
+              applyProfile(nextProfile);
+            }
+          },
+        });
+      });
+
+    profileLoadQueueRef.current = queued.catch(() => undefined);
+    return queued;
   }
 
   useEffect(() => {
+    mountedRef.current = true;
     if (!isSupabaseConfigured) { setLoading(false); return; }
-    let mounted = true;
     void getSupabase().auth.getSession().then(async ({ data }) => {
-      if (!mounted) return;
-      setSession(data.session); await loadProfile(data.session?.user ?? null); setLoading(false);
+      if (!mountedRef.current) return;
+      applySession(data.session);
+      await loadProfile(data.session?.user ?? null);
+      if (mountedRef.current) setLoading(false);
     });
     const { data: sub } = getSupabase().auth.onAuthStateChange((_event, next) => {
-      setSession(next); void loadProfile(next?.user ?? null).finally(() => setLoading(false));
+      if (signingInRef.current && next) return;
+      if (signingOutRef.current && next) return;
+      const previousUserId = sessionRef.current?.user.id ?? null;
+      const nextUserId = next?.user.id ?? null;
+      const prepare = previousUserId && previousUserId !== nextUserId
+        ? prepareBackupForSessionEnd()
+        : Promise.resolve();
+      void prepare.finally(() => {
+        if (!mountedRef.current) return;
+        applySession(next);
+        void loadProfile(next?.user ?? null).finally(() => {
+          if (mountedRef.current) setLoading(false);
+        });
+      });
     });
-    return () => { mounted = false; sub.subscription.unsubscribe(); };
+    return () => {
+      mountedRef.current = false;
+      sub.subscription.unsubscribe();
+    };
   }, []);
 
+  useEffect(() => {
+    if (!session?.user) return;
+    let active = true;
+    const refresh = () => {
+      if (active && !signingOutRef.current) void loadProfile(session.user);
+    };
+    const visibility = () => { if (document.visibilityState === 'visible') refresh(); };
+    const timer = window.setInterval(refresh, PROFILE_AUTO_REFRESH_MS);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
+    document.addEventListener('visibilitychange', visibility);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
+      document.removeEventListener('visibilitychange', visibility);
+    };
+  }, [session?.user?.id]);
+
+  const membershipLevel = deriveMemberTier(profile);
+  const permissions = permissionsFor(profile);
   const value = useMemo<AuthContextValue>(() => ({
-    configured: isSupabaseConfigured, loading, session, user: session?.user ?? null, profile,
+    configured: isSupabaseConfigured,
+    loading,
+    session,
+    user: session?.user ?? null,
+    profile,
     displayName: profile?.display_name ?? (session?.user?.user_metadata?.display_name as string | undefined) ?? null,
-    isAdmin:
-        (profile?.status === 'approved' && profile.role === 'admin') ||
-        (session?.user?.app_metadata?.status === 'approved' &&
-          session?.user?.app_metadata?.role === 'admin'),
-      isApproved:
-        profile?.status === 'approved' ||
-        session?.user?.app_metadata?.status === 'approved',
+    membershipLevel,
+    permissions,
+    can: (capability) => hasCapability(profile, capability),
+    isAdmin: permissions.canManageMembers,
+    isApproved: permissions.canAccessBasicInfo,
     async signIn(loginName, password) {
       const name = validate(loginName, password);
+      signingInRef.current = true;
       setLoading(true);
       try {
-        const nextSession = await signInThroughApi(name, password);
-        setSession(nextSession);
+        const nextSession = await signInWithSupabase(name, password);
+        applySession(nextSession);
         await loadProfile(nextSession.user);
       } catch (cause) {
-        setSession(null);
-        setProfile(null);
+        applySession(null);
         throw new Error(authMessage(cause));
       } finally {
+        signingInRef.current = false;
         setLoading(false);
       }
     },
     async signUp(loginName, password) {
-      const name = validate(loginName, password); const normalized = normalizeName(name);
-      const { data, error } = await getSupabase().auth.signUp({ email: await internalEmail(normalized), password, options: { data: { display_name: name, login_name: normalized } } });
+      const name = validate(loginName, password);
+      const normalized = normalizeName(name);
+      const { data, error } = await getSupabase().auth.signUp({
+        email: await internalEmail(normalized), password,
+        options: { data: { display_name: name, login_name: normalized } },
+      });
       if (error || data.user?.identities?.length === 0) throw new Error(authMessage(error ?? new Error('already')));
     },
-    async signOut() { const { error } = await getSupabase().auth.signOut(); if (error) throw error; },
-    async refreshProfile() { await loadProfile(session?.user ?? null); },
-  }), [loading, profile, session]);
+    async signOut() {
+      if (signOutTaskRef.current) return signOutTaskRef.current;
+      const previousSession = sessionRef.current;
+      const previousRequestKey = profileRequestKey(previousSession);
+      const task = (async () => {
+        signingOutRef.current = true;
+        setLoading(true);
+        try {
+          const backupDrain = prepareBackupForSessionEnd();
+          const coordinatorDrain = profileRequestsRef.current.beginLogout();
+          await profileLoadQueueRef.current;
+          await Promise.all([
+            coordinatorDrain,
+            backupDrain,
+          ]);
+          const { error } = await getSupabase().auth.signOut();
+          if (error) throw error;
+          applySession(null);
+          profileRequestsRef.current.finishLogout();
+        } catch (cause) {
+          const { data } = await getSupabase().auth.getSession();
+          const restored = data.session ?? previousSession;
+          const restoredRequestKey = profileRequestKey(restored) ?? previousRequestKey;
+          if (restored && restoredRequestKey) {
+            profileRequestsRef.current.restoreAfterFailedLogout(restored.user.id, restoredRequestKey);
+            applySession(restored);
+            resumeBackupForSession(restored.user.id);
+          } else {
+            profileRequestsRef.current.finishLogout();
+            applySession(null);
+          }
+          throw cause;
+        } finally {
+          signingOutRef.current = false;
+          signOutTaskRef.current = null;
+          setLoading(false);
+        }
+      })();
+      signOutTaskRef.current = task;
+      return task;
+    },
+    async refreshProfile() {
+      const current = sessionRef.current;
+      await loadProfile(current?.user ?? null, { force: true });
+    },
+  }), [loading, membershipLevel, permissions, profile, session]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

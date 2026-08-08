@@ -1,6 +1,10 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { api, type LatestBackupResponse } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import {
+  backupMutationCoordinator,
+  registerBackupSessionLifecycle,
+} from '@/lib/backup-sync-lifecycle';
 
 export const BACKUP_SCHEMA_VERSION = 1;
 export const BACKUP_ALLOWED_KEYS = [
@@ -12,6 +16,8 @@ export const BACKUP_ALLOWED_KEYS = [
   'seungjae_watchlist_v1',
   'scanner.threshold.v1',
   'scanner-market',
+  'sa-saved-searches-v1',
+  'sa-analysis-selection-v1',
   'sa-auto-trade-settings-v1',
   'sa-portfolio-chart-overlays-v1',
   'sa-portfolio-purchase-dates-v1',
@@ -22,6 +28,7 @@ export const BACKUP_ALLOWED_KEYS = [
 
 const allowedKeySet = new Set<string>(BACKUP_ALLOWED_KEYS);
 const SYNC_INTERVAL_MS = 15_000;
+const INITIAL_SYNC_STABLE_DELAY_MS = 30_000;
 
 type BackupMode = 'idle' | 'checking' | 'syncing' | 'synced' | 'paused' | 'error';
 
@@ -43,10 +50,11 @@ let status: BackupSyncStatus = {
   remoteUpdatedAt: null,
 };
 let activeMemberId: string | null = null;
+let lifecycleGeneration = 0;
+let initialSyncId: number | null = null;
 let intervalId: number | null = null;
 let retryId: number | null = null;
 let lastFingerprint = '';
-let syncing = false;
 const listeners = new Set<() => void>();
 
 function readyKey(memberId: string) {
@@ -60,6 +68,28 @@ function updateStatus(patch: Partial<BackupSyncStatus>) {
 
 function fingerprint(data: Record<string, string>) {
   return JSON.stringify(Object.entries(data).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+function clearScheduledWork() {
+  if (typeof window === 'undefined') return;
+  if (initialSyncId !== null) window.clearTimeout(initialSyncId);
+  if (intervalId !== null) window.clearInterval(intervalId);
+  if (retryId !== null) window.clearTimeout(retryId);
+  initialSyncId = null;
+  intervalId = null;
+  retryId = null;
+}
+
+function isActive(memberId: string, generation: number) {
+  return activeMemberId === memberId && lifecycleGeneration === generation;
+}
+
+function activateMember(memberId: string) {
+  clearScheduledWork();
+  lifecycleGeneration += 1;
+  activeMemberId = memberId;
+  lastFingerprint = '';
+  return lifecycleGeneration;
 }
 
 export function collectBackupData(): Record<string, string> {
@@ -101,58 +131,81 @@ export function applyBackupData(value: unknown): number {
   return entries.length;
 }
 
-async function uploadCurrent(memberId: string, force = false) {
-  if (syncing || activeMemberId !== memberId) return;
+async function uploadCurrent(
+  memberId: string,
+  force = false,
+  generation = lifecycleGeneration,
+) {
+  if (!isActive(memberId, generation)) return;
   const localStorage = collectBackupData();
   const currentFingerprint = fingerprint(localStorage);
   if (!force && currentFingerprint === lastFingerprint) return;
 
-  syncing = true;
-  updateStatus({
-    mode: 'syncing',
-    message: '최신 설정을 자동백업하고 있습니다.',
-    itemCount: Object.keys(localStorage).length,
-  });
   try {
-    const saved = await api.saveLatestBackup({
-      schemaVersion: BACKUP_SCHEMA_VERSION,
-      localStorage,
-      clientUpdatedAt: new Date().toISOString(),
-    });
-    if (activeMemberId !== memberId) return;
-    lastFingerprint = currentFingerprint;
-    updateStatus({
-      mode: 'synced',
-      message: '최신 1개 백업으로 자동 저장되었습니다.',
-      itemCount: saved.itemCount ?? Object.keys(localStorage).length,
-      updatedAt: saved.updatedAt ?? new Date().toISOString(),
-      remoteUpdatedAt: saved.updatedAt ?? null,
+    await backupMutationCoordinator.run(async () => {
+      if (!isActive(memberId, generation)) return;
+      updateStatus({
+        mode: 'syncing',
+        message: '최신 설정을 자동백업하고 있습니다.',
+        itemCount: Object.keys(localStorage).length,
+      });
+      const saved = await api.saveLatestBackup({
+        schemaVersion: BACKUP_SCHEMA_VERSION,
+        localStorage,
+        clientUpdatedAt: new Date().toISOString(),
+      });
+      if (!isActive(memberId, generation)) return;
+      lastFingerprint = currentFingerprint;
+      updateStatus({
+        mode: 'synced',
+        message: '최신 1개 백업으로 자동 저장되었습니다.',
+        itemCount: saved.itemCount ?? Object.keys(localStorage).length,
+        updatedAt: saved.updatedAt ?? new Date().toISOString(),
+        remoteUpdatedAt: saved.updatedAt ?? null,
+      });
     });
   } catch (cause) {
-    if (activeMemberId !== memberId) return;
+    if (!isActive(memberId, generation)) return;
     updateStatus({
       mode: 'error',
       message: cause instanceof Error ? `자동백업 실패: ${cause.message}` : '자동백업에 실패했습니다.',
     });
-  } finally {
-    syncing = false;
   }
 }
 
-function beginInterval(memberId: string) {
+function beginInterval(memberId: string, generation: number) {
+  if (!isActive(memberId, generation)) return;
   if (intervalId !== null) window.clearInterval(intervalId);
-  intervalId = window.setInterval(() => void uploadCurrent(memberId), SYNC_INTERVAL_MS);
+  intervalId = window.setInterval(
+    () => void uploadCurrent(memberId, false, generation),
+    SYNC_INTERVAL_MS,
+  );
 }
 
-function scheduleRetry(memberId: string) {
+function scheduleInitialSync(memberId: string, generation: number) {
+  if (!isActive(memberId, generation)) return;
+  if (initialSyncId !== null) window.clearTimeout(initialSyncId);
+  initialSyncId = window.setTimeout(() => {
+    initialSyncId = null;
+    if (!isActive(memberId, generation)) return;
+    void uploadCurrent(memberId, true, generation).finally(() => {
+      beginInterval(memberId, generation);
+    });
+  }, INITIAL_SYNC_STABLE_DELAY_MS);
+}
+
+function scheduleRetry(memberId: string, generation: number) {
+  if (!isActive(memberId, generation)) return;
   if (retryId !== null) window.clearTimeout(retryId);
-  retryId = window.setTimeout(() => void startAutoBackup(memberId), 60_000);
+  retryId = window.setTimeout(() => {
+    retryId = null;
+    if (isActive(memberId, generation)) void startAutoBackup(memberId);
+  }, 60_000);
 }
 
 export async function startAutoBackup(memberId: string) {
   if (!memberId) return;
-  stopAutoBackup();
-  activeMemberId = memberId;
+  const generation = activateMember(memberId);
   updateStatus({
     mode: 'checking',
     message: '서버의 최신 백업을 확인하고 있습니다.',
@@ -162,9 +215,12 @@ export async function startAutoBackup(memberId: string) {
     remoteUpdatedAt: null,
   });
 
+  await backupMutationCoordinator.drain();
+  if (!isActive(memberId, generation)) return;
+
   try {
     const remote = await api.backupLatest();
-    if (activeMemberId !== memberId) return;
+    if (!isActive(memberId, generation)) return;
     const deviceReady = window.localStorage.getItem(readyKey(memberId)) === '1';
 
     if (remote.exists && !deviceReady) {
@@ -179,44 +235,56 @@ export async function startAutoBackup(memberId: string) {
 
     window.localStorage.setItem(readyKey(memberId), '1');
     lastFingerprint = '';
-    await uploadCurrent(memberId, true);
-    beginInterval(memberId);
+    scheduleInitialSync(memberId, generation);
   } catch (cause) {
-    if (activeMemberId !== memberId) return;
+    if (!isActive(memberId, generation)) return;
     updateStatus({
       mode: 'error',
       message: cause instanceof Error ? `자동백업 확인 실패: ${cause.message}` : '자동백업 저장소를 확인하지 못했습니다.',
     });
-    scheduleRetry(memberId);
+    scheduleRetry(memberId, generation);
   }
 }
 
 export function stopAutoBackup() {
-  if (intervalId !== null && typeof window !== 'undefined') window.clearInterval(intervalId);
-  if (retryId !== null && typeof window !== 'undefined') window.clearTimeout(retryId);
-  intervalId = null;
-  retryId = null;
+  clearScheduledWork();
+  lifecycleGeneration += 1;
   activeMemberId = null;
   lastFingerprint = '';
-  syncing = false;
+}
+
+export async function prepareAutoBackupForSessionEnd() {
+  stopAutoBackup();
+  await backupMutationCoordinator.drain();
+}
+
+async function prepareManualBackup(memberId: string) {
+  const generation = activeMemberId === memberId
+    ? lifecycleGeneration
+    : activateMember(memberId);
+  clearScheduledWork();
+  await backupMutationCoordinator.drain();
+  if (!isActive(memberId, generation)) throw new Error('백업 세션이 변경되었습니다.');
+  return generation;
 }
 
 export async function overwriteRemoteBackup(memberId: string) {
   if (!memberId) throw new Error('로그인 회원을 확인할 수 없습니다.');
-  if (activeMemberId !== memberId) activeMemberId = memberId;
+  const generation = await prepareManualBackup(memberId);
   window.localStorage.setItem(readyKey(memberId), '1');
   lastFingerprint = '';
-  await uploadCurrent(memberId, true);
-  beginInterval(memberId);
+  await uploadCurrent(memberId, true, generation);
+  beginInterval(memberId, generation);
 }
 
 export async function restoreRemoteBackup(memberId: string): Promise<number> {
   if (!memberId) throw new Error('로그인 회원을 확인할 수 없습니다.');
+  const generation = await prepareManualBackup(memberId);
   const remote: LatestBackupResponse = await api.backupLatest();
+  if (!isActive(memberId, generation)) throw new Error('백업 세션이 변경되었습니다.');
   if (!remote.exists || !remote.localStorage) throw new Error('복원할 서버 백업이 없습니다.');
   const count = applyBackupData(remote.localStorage);
   window.localStorage.setItem(readyKey(memberId), '1');
-  activeMemberId = memberId;
   lastFingerprint = fingerprint(collectBackupData());
   updateStatus({
     mode: 'synced',
@@ -226,16 +294,16 @@ export async function restoreRemoteBackup(memberId: string): Promise<number> {
     updatedAt: remote.updatedAt ?? null,
     remoteUpdatedAt: remote.updatedAt ?? null,
   });
-  beginInterval(memberId);
+  beginInterval(memberId, generation);
   return count;
 }
 
 export async function saveBackupNow(memberId: string) {
   if (!memberId) throw new Error('로그인 회원을 확인할 수 없습니다.');
-  if (activeMemberId !== memberId) activeMemberId = memberId;
+  const generation = await prepareManualBackup(memberId);
   window.localStorage.setItem(readyKey(memberId), '1');
-  await uploadCurrent(memberId, true);
-  beginInterval(memberId);
+  await uploadCurrent(memberId, true, generation);
+  beginInterval(memberId, generation);
 }
 
 export function subscribeBackupStatus(listener: () => void) {
@@ -250,6 +318,13 @@ export function getBackupStatus() {
 export function useBackupStatus() {
   return useSyncExternalStore(subscribeBackupStatus, getBackupStatus, getBackupStatus);
 }
+
+registerBackupSessionLifecycle({
+  prepareForSessionEnd: prepareAutoBackupForSessionEnd,
+  resume(memberId) {
+    void startAutoBackup(memberId);
+  },
+});
 
 export function AutoBackupSync() {
   const auth = useAuth();

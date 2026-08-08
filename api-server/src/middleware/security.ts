@@ -13,7 +13,7 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
 }
 
 export function apiRateLimit(req: Request, res: Response, next: NextFunction) {
-  const now = Date.now(); const limit = req.path.includes('auto-trade') || req.path.includes('/admin') ? 30 : 240;
+  const now = Date.now(); const limit = req.path.includes('/ai/chat') ? 20 : req.path.includes('auto-trade') || req.path.includes('/admin') ? 30 : 240;
   const key = `${req.ip}:${req.path.split('/').slice(0, 4).join('/')}`; const bucket = buckets.get(key);
   if (!bucket || bucket.resetAt <= now) buckets.set(key, { count: 1, resetAt: now + 60_000 });
   else if (++bucket.count > limit) {
