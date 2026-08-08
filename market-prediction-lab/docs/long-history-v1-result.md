@@ -19,10 +19,10 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | bitget-btcusdt-spot-1d | CRYPTO_SPOT | partial_coverage | 2020-01-01 | 2026-08-07 | 2,411 | - |
 | bitget-ethusdt-spot-1d | CRYPTO_SPOT | partial_coverage | 2020-01-01 | 2026-08-07 | 2,411 | - |
-| bitget-btcusdt-futures-1d | CRYPTO_FUTURES | partial_coverage | 2026-05-10 | 2026-08-07 | 90 | 270 |
-| bitget-btcusdt-futures-1d | CRYPTO_FUTURES | blocked_collection_error | - | - | 0 | - |
-| bitget-ethusdt-futures-1d | CRYPTO_FUTURES | partial_coverage | 2026-05-10 | 2026-08-07 | 90 | 270 |
-| bitget-ethusdt-futures-1d | CRYPTO_FUTURES | blocked_collection_error | - | - | 0 | - |
+| binance-btcusdt-futures-1d | CRYPTO_FUTURES | partial_coverage | 2026-05-10 | 2026-08-07 | 90 | 270 |
+| binance-btcusdt-futures-1d | CRYPTO_FUTURES | blocked_collection_error | - | - | 0 | - |
+| binance-ethusdt-futures-1d | CRYPTO_FUTURES | partial_coverage | 2026-05-10 | 2026-08-07 | 90 | 270 |
+| binance-ethusdt-futures-1d | CRYPTO_FUTURES | blocked_collection_error | - | - | 0 | - |
 
 ## 아직 차단된 시장
 

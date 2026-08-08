@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1786226830894,
+  "generatedAt": 1786227169778,
   "mode": "backtest-only",
   "source": "bitget-public-v2",
   "requestedStartTime": 1577836800000,
@@ -64,10 +64,13 @@
       "status": "partial_coverage",
       "requestedStartTime": 1577836800000,
       "requestedEndTime": 1786319999999,
+      "effectiveRequestedEnd": 1786319999999,
+      "asOfTime": 1786319999999,
       "actualStartTime": 1577894400000,
       "actualEndTime": 1786118400000,
       "candleCount": 2411,
       "fullRequestedRange": false,
+      "coverageThroughAsOf": false,
       "missingRequestedStart": false,
       "missingRequestedEnd": true,
       "market": "CRYPTO_SPOT",
@@ -84,10 +87,13 @@
       "status": "partial_coverage",
       "requestedStartTime": 1577836800000,
       "requestedEndTime": 1786319999999,
+      "effectiveRequestedEnd": 1786319999999,
+      "asOfTime": 1786319999999,
       "actualStartTime": 1577894400000,
       "actualEndTime": 1786118400000,
       "candleCount": 2411,
       "fullRequestedRange": false,
+      "coverageThroughAsOf": false,
       "missingRequestedStart": false,
       "missingRequestedEnd": true,
       "market": "CRYPTO_SPOT",
@@ -100,14 +106,17 @@
       "fundingEndTime": null
     },
     {
-      "id": "bitget-btcusdt-futures-1d",
+      "id": "binance-btcusdt-futures-1d",
       "status": "partial_coverage",
       "requestedStartTime": 1577836800000,
       "requestedEndTime": 1786319999999,
+      "effectiveRequestedEnd": 1786319999999,
+      "asOfTime": 1786319999999,
       "actualStartTime": 1778428800000,
       "actualEndTime": 1786118400000,
       "candleCount": 90,
       "fullRequestedRange": false,
+      "coverageThroughAsOf": false,
       "missingRequestedStart": true,
       "missingRequestedEnd": true,
       "market": "CRYPTO_FUTURES",
@@ -121,7 +130,7 @@
       "fundingEndTime": 1786204800000
     },
     {
-      "id": "bitget-btcusdt-futures-1d",
+      "id": "binance-btcusdt-futures-1d",
       "market": "CRYPTO_FUTURES",
       "exchangeSymbol": "BTCUSDT",
       "researchSymbol": "BTCUSDT",
@@ -143,14 +152,17 @@
       }
     },
     {
-      "id": "bitget-ethusdt-futures-1d",
+      "id": "binance-ethusdt-futures-1d",
       "status": "partial_coverage",
       "requestedStartTime": 1577836800000,
       "requestedEndTime": 1786319999999,
+      "effectiveRequestedEnd": 1786319999999,
+      "asOfTime": 1786319999999,
       "actualStartTime": 1778428800000,
       "actualEndTime": 1786118400000,
       "candleCount": 90,
       "fullRequestedRange": false,
+      "coverageThroughAsOf": false,
       "missingRequestedStart": true,
       "missingRequestedEnd": true,
       "market": "CRYPTO_FUTURES",
@@ -164,7 +176,7 @@
       "fundingEndTime": 1786204800000
     },
     {
-      "id": "bitget-ethusdt-futures-1d",
+      "id": "binance-ethusdt-futures-1d",
       "market": "CRYPTO_FUTURES",
       "exchangeSymbol": "ETHUSDT",
       "researchSymbol": "ETHUSDT",
@@ -200,7 +212,7 @@
   ],
   "errors": [
     {
-      "spec": "bitget-btcusdt-futures-1d",
+      "spec": "binance-btcusdt-futures-1d",
       "market": "CRYPTO_FUTURES",
       "error": {
         "name": "ResearchContractError",
@@ -213,7 +225,7 @@
       }
     },
     {
-      "spec": "bitget-ethusdt-futures-1d",
+      "spec": "binance-ethusdt-futures-1d",
       "market": "CRYPTO_FUTURES",
       "error": {
         "name": "ResearchContractError",
