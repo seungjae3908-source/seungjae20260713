@@ -2,6 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { assertOrderTransition } from './trade-order-state-machine.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingRepository } from './trade-automation.repository';
+import {
+  buildRiskEnvelope,
+  riskEnvelopeForPlan,
+  withRiskEnvelope,
+} from './trade-risk-envelope.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder, TradingOrderEvent, TradingOrderState, TradingPlan, TradingPlanInput, TradingPolicy,
@@ -74,13 +79,12 @@ export class TradeAutomationService {
     if (!decision.allowed) return { plan: null, duplicate: false, decision };
 
     const now = new Date();
-    const approvalRequired = policy.mode === 'approval';
     const plan: TradingPlan = {
       ...input,
       id: randomUUID(), userId, idempotencyKey,
-      state: approvalRequired ? 'APPROVAL_PENDING' : 'PLANNED',
+      state: 'APPROVAL_PENDING',
       version: 0,
-      approvalExpiresAt: approvalRequired ? new Date(now.getTime() + APPROVAL_TTL_MS).toISOString() : null,
+      approvalExpiresAt: new Date(now.getTime() + APPROVAL_TTL_MS).toISOString(),
       approvedAt: null, createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
     const inserted = await this.repository.insertPlan(plan);
@@ -108,34 +112,35 @@ export class TradeAutomationService {
       throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
     }
     const approvedAt = new Date().toISOString();
-    const approved = await this.repository.compareAndSetPlan({
+    let envelope;
+    try {
+      envelope = buildRiskEnvelope(plan, policy, approvedAt);
+    } catch (error) {
+      const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: approvedAt };
+      await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
+      throw error;
+    }
+    const approvedCandidate = withRiskEnvelope({
       ...plan, state: 'SUBMITTED', approvedAt, updatedAt: approvedAt,
-    }, 'APPROVAL_PENDING', expectedVersion);
+    }, envelope);
+    const approved = await this.repository.compareAndSetPlan(
+      approvedCandidate,
+      'APPROVAL_PENDING',
+      expectedVersion,
+    );
     if (!approved) throw new Error('TRADE_PLAN_CONCURRENTLY_CHANGED');
     return approved;
   }
 
-  async beginAutomaticPlan(userId: string, planId: string) {
-    const plan = await this.repository.getPlan(userId, planId);
-    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
-    if (plan.state !== 'PLANNED') throw new Error('TRADE_PLAN_NOT_READY');
-    const policy = await this.repository.getPolicy(userId);
-    const decision = evaluateTradingPlan(plan, policy, {
-      emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
-    });
-    if (!decision.allowed) throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
-    const submitted = await this.repository.compareAndSetPlan({
-      ...plan, state: 'SUBMITTED', updatedAt: new Date().toISOString(),
-    }, 'PLANNED', planVersion(plan));
-    if (!submitted) throw new Error('TRADE_PLAN_CONCURRENTLY_CHANGED');
-    return submitted;
+  async beginAutomaticPlan(_userId: string, _planId: string) {
+    throw new Error('USER_APPROVAL_REQUIRED');
   }
 
   async createOrder(userId: string, plan: TradingPlan) {
     const existing = await this.repository.findOrderByPlan(userId, plan.id);
     if (existing) return { order: existing, duplicate: true };
     if (plan.state !== 'SUBMITTED') throw new Error('TRADE_PLAN_NOT_SUBMITTED');
+    if (!plan.approvedAt || !riskEnvelopeForPlan(plan)) throw new Error('TRADE_PLAN_APPROVAL_ENVELOPE_REQUIRED');
     const now = new Date().toISOString();
     const order: TradingOrder = {
       id: randomUUID(), userId, planId: plan.id, exchange: plan.exchange,
@@ -154,6 +159,7 @@ export class TradeAutomationService {
       this.orderEvent(order, null, 'SUBMITTED', 'ORDER_CREATED', {
         accountMode: plan.accountMode,
         approvedPlanVersion: order.approvedPlanVersion,
+        riskEnvelopeVersion: riskEnvelopeForPlan(plan)?.version ?? null,
       }),
       'SUBMITTED',
     );
