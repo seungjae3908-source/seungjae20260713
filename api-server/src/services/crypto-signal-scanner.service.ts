@@ -1,6 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { runBoundedWorkPool } from '../lib/bounded-work-pool';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
+import { applyScannerQuantHardening } from './scanner-quant-hardening.service';
+import {
+  scannerContextTimeframe,
+  scannerStrategyForTimeframe,
+  type ScannerStrategyMode,
+} from './scanner-quant-strategy.service';
 import type {
   ScannerEvidence,
   ScannerFailure,
@@ -20,7 +26,7 @@ const CACHE_TTL_MS = 5 * 60_000;
 
 type CryptoMarket = 'spot' | 'futures';
 type CryptoCondition = 'trend' | 'volume' | 'breakout' | 'pullback';
-type CryptoTimeframe = '5m' | '15m' | '60m' | '4H' | '1D';
+export type CryptoTimeframe = '1m' | '3m' | '5m' | '15m' | '60m' | '4H' | '1D';
 
 export interface CryptoTicker {
   symbol: string;
@@ -62,6 +68,7 @@ export interface CryptoSignalScanRequest {
   batchSize: number;
   minimumScore?: number;
   maximumRiskScore?: number;
+  strategyMode?: ScannerStrategyMode;
   signal?: AbortSignal;
 }
 
@@ -218,7 +225,17 @@ function normalizeCandles(rows: CryptoCandle[], now: number): CryptoCandle[] {
 function spotCandlePath(symbol: string, timeframe: CryptoTimeframe): string {
   const market = encodeURIComponent(`KRW-${symbol}`);
   if (timeframe === '1D') return `/v1/candles/days?market=${market}&count=200`;
-  const unit = timeframe === '4H' ? 240 : timeframe === '60m' ? 60 : timeframe === '15m' ? 15 : 5;
+  const unit = timeframe === '4H'
+    ? 240
+    : timeframe === '60m'
+      ? 60
+      : timeframe === '15m'
+        ? 15
+        : timeframe === '5m'
+          ? 5
+          : timeframe === '3m'
+            ? 3
+            : 1;
   return `/v1/candles/minutes/${unit}?market=${market}&count=200`;
 }
 
@@ -405,6 +422,8 @@ function atr(candles: CryptoCandle[], period = 14): number | null {
 }
 
 function staleAfter(timeframe: CryptoTimeframe): number {
+  if (timeframe === '1m') return 5 * 60_000;
+  if (timeframe === '3m') return 12 * 60_000;
   if (timeframe === '5m') return 20 * 60_000;
   if (timeframe === '15m') return 45 * 60_000;
   if (timeframe === '60m') return 3 * 60 * 60_000;
@@ -413,15 +432,19 @@ function staleAfter(timeframe: CryptoTimeframe): number {
 }
 
 function expiry(timeframe: CryptoTimeframe, now: number): string {
-  const ttl = timeframe === '5m'
-    ? 15 * 60_000
-    : timeframe === '15m'
-      ? 45 * 60_000
-      : timeframe === '60m'
-        ? 3 * 60 * 60_000
-        : timeframe === '4H'
-          ? 12 * 60 * 60_000
-          : 3 * 24 * 60 * 60_000;
+  const ttl = timeframe === '1m'
+    ? 3 * 60_000
+    : timeframe === '3m'
+      ? 9 * 60_000
+      : timeframe === '5m'
+        ? 15 * 60_000
+        : timeframe === '15m'
+          ? 45 * 60_000
+          : timeframe === '60m'
+            ? 3 * 60 * 60_000
+            : timeframe === '4H'
+              ? 12 * 60 * 60_000
+              : 3 * 24 * 60 * 60_000;
   return new Date(now + ttl).toISOString();
 }
 
@@ -478,7 +501,15 @@ function pricePlan(
 
 function signalId(request: CryptoSignalScanRequest, ticker: CryptoTicker, direction: ScannerSignalDirection): string {
   const digest = createHash('sha256')
-    .update([request.memberId, request.market, ticker.symbol, direction, request.timeframe, request.condition].join(':'))
+    .update([
+      request.memberId,
+      request.market,
+      ticker.symbol,
+      direction,
+      request.strategyMode ?? scannerStrategyForTimeframe(request.timeframe),
+      request.timeframe,
+      request.condition,
+    ].join(':'))
     .digest('hex')
     .slice(0, 24);
   return `signal:${digest}`;
@@ -746,7 +777,15 @@ function analyze(
 }
 
 function cacheKey(request: CryptoSignalScanRequest): string {
-  return [request.memberId, request.market, request.timeframe, request.condition, request.cursor, request.batchSize].join(':');
+  return [
+    request.memberId,
+    request.market,
+    request.strategyMode ?? scannerStrategyForTimeframe(request.timeframe),
+    request.timeframe,
+    request.condition,
+    request.cursor,
+    request.batchSize,
+  ].join(':');
 }
 
 function staleFallback(response: ScannerResponse, message: string, now: number): ScannerResponse {
@@ -758,8 +797,24 @@ function staleFallback(response: ScannerResponse, message: string, now: number):
       score: Math.min(card.score, 49),
       confidence: Math.min(card.confidence, 49),
       dataState: 'stale',
-      signalState: 'WEAKENED',
+      signalState: 'INVALIDATED',
       strongSignalEligible: false,
+      dataQuality: card.dataQuality
+        ? {
+          ...card.dataQuality,
+          state: 'DATA_UNTRUSTED',
+          score: Math.min(card.dataQuality.score, 49),
+          strongSignalAllowed: false,
+          issues: [
+            ...card.dataQuality.issues,
+            {
+              code: 'STALE_TIMESTAMP',
+              severity: 'blocking',
+              message: '공급자 장애로 마지막 정상 결과를 stale fallback으로 사용합니다.',
+            },
+          ],
+        }
+        : card.dataQuality,
       warnings: [...new Set([...card.warnings, '마지막 정상 결과 fallback'])],
     })),
     alerts: [],
@@ -795,7 +850,9 @@ export function createCryptoSignalScannerService(
     },
     async scan(request) {
       const startedAt = providers.now();
-      const key = cacheKey(request);
+      const strategyMode = request.strategyMode ?? scannerStrategyForTimeframe(request.timeframe);
+      const contextTimeframe = scannerContextTimeframe(strategyMode) as CryptoTimeframe;
+      const key = cacheKey({ ...request, strategyMode });
       let universe: CryptoUniverse;
       try {
         universe = await providers.getUniverse(request.market, request.signal);
@@ -817,11 +874,30 @@ export function createCryptoSignalScannerService(
       const work = await runBoundedWorkPool(
         batch,
         async (ticker, _index, signal) => {
-          const [candles, spread] = await Promise.all([
+          const [candles, contextCandles, spread] = await Promise.all([
             providers.getCandles(request.market, ticker.symbol, request.timeframe, signal),
+            request.timeframe === contextTimeframe
+              ? Promise.resolve<CryptoCandle[] | null>(null)
+              : providers.getCandles(request.market, ticker.symbol, contextTimeframe, signal).catch(() => []),
             providers.getSpread(request.market, ticker, signal),
           ]);
-          return analyze(request, { ...ticker, ...spread }, candles, spread, providers.now());
+          const candidate = analyze(
+            { ...request, strategyMode },
+            { ...ticker, ...spread },
+            candles,
+            spread,
+            providers.now(),
+          );
+          if (!candidate) return null;
+          return applyScannerQuantHardening({
+            card: candidate,
+            timeframe: request.timeframe,
+            candles,
+            contextCandles: contextCandles ?? candles,
+            strategyMode,
+            allowShort: request.market === 'futures',
+            now: providers.now(),
+          });
         },
         {
           concurrency: CONCURRENCY,
@@ -875,6 +951,7 @@ export function createCryptoSignalScannerService(
         }
         throw new CryptoScannerProviderError('CRYPTO_BATCH_UNAVAILABLE');
       }
+      const hasUntrusted = lifecycle.cards.some((card) => card.dataQuality?.state === 'DATA_UNTRUSTED');
       const response: ScannerResponse = {
         ok: true,
         requestId: randomUUID(),
@@ -909,12 +986,14 @@ export function createCryptoSignalScannerService(
           stale: false,
           listingStatusCoverage: 'listed-or-unknown',
         },
-        dataState: partial ? 'partial' : 'complete',
-        message: partial
-          ? `공개 공급자 일부 지연으로 ${work.fulfilledCount}/${batch.length}종목의 확인된 결과를 표시합니다.`
-          : lifecycle.cards.length
-            ? `${work.fulfilledCount}종목 공개 데이터 분석을 완료했습니다.`
-            : '현재 묶음에서 선택 조건을 충족한 결과가 없습니다.',
+        dataState: hasUntrusted ? 'untrusted' : partial ? 'partial' : 'complete',
+        message: hasUntrusted
+          ? 'Data Quality Gate가 신뢰할 수 없는 코인 데이터를 강한 신호에서 제외했습니다.'
+          : partial
+            ? `공개 공급자 일부 지연으로 ${work.fulfilledCount}/${batch.length}종목의 확인된 결과를 표시합니다.`
+            : lifecycle.cards.length
+              ? `${work.fulfilledCount}종목 ${strategyMode === 'scalping' ? '단타' : '스윙'} 공개 데이터 분석을 완료했습니다.`
+              : '현재 묶음에서 선택 조건을 충족한 결과가 없습니다.',
         generatedAt: new Date(providers.now()).toISOString(),
         orderSubmitted: false,
         exchangeRequestSent: false,

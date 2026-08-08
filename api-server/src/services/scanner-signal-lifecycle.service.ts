@@ -9,18 +9,44 @@ type LifecycleRecord = {
   baseSignalId: string;
   cycle: number;
   state: ScannerSignalState;
-  readyStreak: number;
+  confirmationStreak: number;
   firstSeenAt: number;
   lastSeenAt: number;
   lastAlertKey: string | null;
 };
 
+export type LegacyTradingLifecycleState =
+  | 'DETECTED'
+  | 'WATCHING'
+  | 'READY_FOR_APPROVAL'
+  | 'WEAKENED'
+  | 'INVALIDATED'
+  | 'EXPIRED'
+  | 'approved';
+
 const records = new Map<string, LifecycleRecord>();
 const RECORD_TTL_MS = 7 * 24 * 60 * 60_000;
+const SCANNER_TERMINAL_STATES = new Set<ScannerSignalState>([
+  'INVALIDATED',
+  'EXPIRED',
+  'REJECTED',
+  'CANCELLED',
+  'CLOSED',
+]);
+const ORDER_OWNED_STATES = new Set<ScannerSignalState>([
+  'APPROVED',
+  'EXECUTING',
+  'PARTIALLY_FILLED',
+  'FILLED',
+  'MANAGING',
+  'CLOSED',
+  'REJECTED',
+  'CANCELLED',
+]);
 
 function alertKey(signalId: string, expiresAt: string): string {
   return `scanner-alert:${createHash('sha256')
-    .update(`${signalId}:READY_FOR_APPROVAL:${expiresAt}`)
+    .update(`${signalId}:APPROVAL_PENDING:${expiresAt}`)
     .digest('hex')
     .slice(0, 32)}`;
 }
@@ -31,25 +57,66 @@ function lifecycleKey(memberId: string, baseSignalId: string): string {
 
 function invalid(card: ScannerSignalCard): boolean {
   return card.dataState === 'unavailable'
+    || card.dataState === 'untrusted'
+    || card.dataQuality?.state === 'DATA_UNTRUSTED'
+    || card.dataQuality?.strongSignalAllowed === false
     || (card.riskScore != null && card.riskScore >= 80)
     || card.listingStatus === 'UNKNOWN' && card.dataState !== 'complete';
 }
 
+function insideEntryZone(card: ScannerSignalCard): boolean {
+  const zone = card.pricePlan.entryZone;
+  if (!zone || !Number.isFinite(card.price)) return false;
+  const low = Math.min(zone.from, zone.to);
+  const high = Math.max(zone.from, zone.to);
+  return card.price >= low && card.price <= high;
+}
+
+function normalizedPrevious(previous: ScannerSignalState | null): ScannerSignalState | null {
+  if (previous === 'DETECTED') return 'CANDIDATE';
+  if (previous === 'WATCHING') return 'CONFIRMED';
+  if (previous === 'READY_FOR_APPROVAL') return 'APPROVAL_PENDING';
+  if (previous === 'WEAKENED') return 'INVALIDATED';
+  return previous;
+}
+
+export function scannerLifecycleStateForRiskBridge(state: ScannerSignalState | string): LegacyTradingLifecycleState {
+  if (state === 'CANDIDATE' || state === 'DETECTED') return 'DETECTED';
+  if (state === 'CONFIRMED' || state === 'ARMED' || state === 'ENTRY_ZONE' || state === 'WATCHING') {
+    return 'WATCHING';
+  }
+  if (state === 'APPROVAL_PENDING' || state === 'READY_FOR_APPROVAL') return 'READY_FOR_APPROVAL';
+  if (state === 'APPROVED' || state === 'EXECUTING' || state === 'PARTIALLY_FILLED' || state === 'FILLED' || state === 'MANAGING') {
+    return 'approved';
+  }
+  if (state === 'EXPIRED') return 'EXPIRED';
+  if (state === 'WEAKENED') return 'WEAKENED';
+  // CLOSED/INVALIDATED/REJECTED/CANCELLED and every unknown/future state are
+  // deliberately non-executable at the Scanner -> Risk/Order compatibility boundary.
+  return 'INVALIDATED';
+}
+
 function nextState(
-  previous: ScannerSignalState | null,
-  readyStreak: number,
+  previousState: ScannerSignalState | null,
   card: ScannerSignalCard,
   now: number,
 ): ScannerSignalState {
+  const previous = normalizedPrevious(previousState);
   if (Date.parse(card.expiresAt) <= now) return 'EXPIRED';
+  if (previous && ORDER_OWNED_STATES.has(previous)) return previous;
   if (invalid(card)) return 'INVALIDATED';
-  if (card.strongSignalEligible) {
-    if (readyStreak <= 1) return 'DETECTED';
-    if (readyStreak === 2) return 'WATCHING';
-    return 'READY_FOR_APPROVAL';
+  if (!card.strongSignalEligible) {
+    return previous && ['CONFIRMED', 'ARMED', 'ENTRY_ZONE', 'APPROVAL_PENDING'].includes(previous)
+      ? 'INVALIDATED'
+      : 'CANDIDATE';
   }
-  if (previous === 'READY_FOR_APPROVAL' || previous === 'WATCHING') return 'WEAKENED';
-  return 'DETECTED';
+  if (previous == null || previous === 'INVALIDATED' || previous === 'EXPIRED') return 'CANDIDATE';
+  if (previous === 'CANDIDATE') return 'CONFIRMED';
+  if (previous === 'CONFIRMED') return 'ARMED';
+  if (previous === 'ARMED') return insideEntryZone(card) ? 'ENTRY_ZONE' : 'ARMED';
+  if (previous === 'ENTRY_ZONE') return insideEntryZone(card) ? 'APPROVAL_PENDING' : 'ARMED';
+  if (previous === 'APPROVAL_PENDING') return insideEntryZone(card) ? 'APPROVAL_PENDING' : 'ARMED';
+  return 'CANDIDATE';
 }
 
 function alertFrom(card: ScannerSignalCard, idempotencyKey: string): ScannerAlertCandidate {
@@ -60,7 +127,7 @@ function alertFrom(card: ScannerSignalCard, idempotencyKey: string): ScannerAler
     market: card.market,
     symbol: card.symbol,
     direction: card.direction,
-    state: 'READY_FOR_APPROVAL',
+    state: 'APPROVAL_PENDING',
     entryZone: card.pricePlan.entryZone,
     stopLoss: card.pricePlan.stopLoss,
     targets: card.pricePlan.targets,
@@ -74,22 +141,75 @@ function alertFrom(card: ScannerSignalCard, idempotencyKey: string): ScannerAler
   };
 }
 
+function splitSignalId(signalId: string): { baseSignalId: string; cycle: number } {
+  const cycleMarker = ':cycle:';
+  const markerIndex = signalId.lastIndexOf(cycleMarker);
+  return {
+    baseSignalId: markerIndex >= 0 ? signalId.slice(0, markerIndex) : signalId,
+    cycle: markerIndex >= 0 ? Number(signalId.slice(markerIndex + cycleMarker.length)) : 1,
+  };
+}
+
+function strategyScopedBaseSignalId(card: ScannerSignalCard): string {
+  const baseSignalId = splitSignalId(card.signalId).baseSignalId;
+  if (!card.strategyMode || baseSignalId.includes(':strategy:')) return baseSignalId;
+  return `${baseSignalId}:strategy:${card.strategyMode}`;
+}
+
 export function clearScannerSignalLifecycleForTests(): void {
   records.clear();
 }
 
-export function getScannerSignalLifecycleSnapshot(memberId: string, signalId: string) {
-  const cycleMarker = ':cycle:';
-  const markerIndex = signalId.lastIndexOf(cycleMarker);
-  const baseSignalId = markerIndex >= 0 ? signalId.slice(0, markerIndex) : signalId;
-  const requestedCycle = markerIndex >= 0 ? Number(signalId.slice(markerIndex + cycleMarker.length)) : 1;
+export function getScannerLifecycleSnapshot(memberId: string, signalId: string) {
+  const { baseSignalId, cycle } = splitSignalId(signalId);
   const record = records.get(lifecycleKey(memberId, baseSignalId));
-  if (!record || record.cycle !== requestedCycle) return null;
+  if (!record || record.cycle !== cycle) return null;
   return {
     signalId,
     state: record.state,
     observedAt: new Date(record.lastSeenAt).toISOString(),
   };
+}
+
+// Backward-compatible, one-way bridge for the existing Risk/Order execution snapshot.
+// The Scanner owns its richer lifecycle; unknown/future states fail closed.
+export function getScannerSignalLifecycleSnapshot(memberId: string, signalId: string): {
+  signalId: string;
+  state: LegacyTradingLifecycleState;
+  observedAt: string;
+} | null {
+  const snapshot = getScannerLifecycleSnapshot(memberId, signalId);
+  if (!snapshot) return null;
+  return {
+    signalId: snapshot.signalId,
+    state: scannerLifecycleStateForRiskBridge(snapshot.state),
+    observedAt: snapshot.observedAt,
+  };
+}
+
+export function setScannerExternalLifecycleState(
+  memberId: string,
+  signalId: string,
+  state: Extract<ScannerSignalState,
+    | 'APPROVED'
+    | 'EXECUTING'
+    | 'PARTIALLY_FILLED'
+    | 'FILLED'
+    | 'MANAGING'
+    | 'CLOSED'
+    | 'REJECTED'
+    | 'CANCELLED'>,
+  now = Date.now(),
+): boolean {
+  if (!ORDER_OWNED_STATES.has(state)) return false;
+  const { baseSignalId, cycle } = splitSignalId(signalId);
+  const key = lifecycleKey(memberId, baseSignalId);
+  const record = records.get(key);
+  if (!record || record.cycle !== cycle) return false;
+  record.state = state;
+  record.lastSeenAt = now;
+  records.set(key, record);
+  return true;
 }
 
 export function applyScannerSignalLifecycle(
@@ -103,27 +223,31 @@ export function applyScannerSignalLifecycle(
 
   const alerts: ScannerAlertCandidate[] = [];
   const updated = cards.map((card) => {
-    const baseSignalId = card.signalId;
+    const baseSignalId = strategyScopedBaseSignalId(card);
     const key = lifecycleKey(memberId, baseSignalId);
     const existing = records.get(key);
     let cycle = existing?.cycle ?? 1;
+    const existingState = normalizedPrevious(existing?.state ?? null);
     if (
       existing
-      && ['WEAKENED', 'INVALIDATED', 'EXPIRED'].includes(existing.state)
+      && existingState != null
+      && SCANNER_TERMINAL_STATES.has(existingState)
       && card.strongSignalEligible
+      && !['APPROVED', 'EXECUTING', 'PARTIALLY_FILLED', 'FILLED', 'MANAGING'].includes(existingState)
     ) {
       cycle += 1;
     }
     const resetCycle = !existing || cycle !== existing.cycle;
-    const readyStreak = card.strongSignalEligible
-      ? resetCycle ? 1 : (existing?.readyStreak ?? 0) + 1
+    const previous = resetCycle ? null : existingState;
+    const state = nextState(previous, card, now);
+    const confirmationStreak = card.strongSignalEligible
+      ? resetCycle ? 1 : (existing?.confirmationStreak ?? 0) + 1
       : 0;
-    const state = nextState(resetCycle ? null : existing?.state ?? null, readyStreak, card, now);
     const signalId = cycle === 1 ? baseSignalId : `${baseSignalId}:cycle:${cycle}`;
     const nextCard: ScannerSignalCard = { ...card, signalId, signalState: state };
     const idempotencyKey = alertKey(signalId, card.expiresAt);
     let lastAlertKey = resetCycle ? null : existing?.lastAlertKey ?? null;
-    if (state === 'READY_FOR_APPROVAL' && lastAlertKey !== idempotencyKey) {
+    if (state === 'APPROVAL_PENDING' && lastAlertKey !== idempotencyKey) {
       alerts.push(alertFrom(nextCard, idempotencyKey));
       lastAlertKey = idempotencyKey;
     }
@@ -131,7 +255,7 @@ export function applyScannerSignalLifecycle(
       baseSignalId,
       cycle,
       state,
-      readyStreak,
+      confirmationStreak,
       firstSeenAt: resetCycle ? now : existing?.firstSeenAt ?? now,
       lastSeenAt: now,
       lastAlertKey,
