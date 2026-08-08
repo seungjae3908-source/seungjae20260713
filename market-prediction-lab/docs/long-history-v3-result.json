@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": 1786231018441,
+  "generatedAt": 1786231576863,
   "mode": "backtest-only",
   "strategyCandidate": "V3_VOLUME_TREND_FILTER",
   "developmentStartTime": 1577836800000,
