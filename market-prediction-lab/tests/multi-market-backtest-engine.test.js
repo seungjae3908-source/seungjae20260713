@@ -143,8 +143,8 @@ test("historical fee and tax schedules can change by timestamp without overlappi
     ...input,
     costModel: {
       schedule: [
-        { startTime: Date.UTC(2024, 0, 1), endTime: Date.UTC(2024, 8, 1), taxRate: 0.001 },
-        { startTime: Date.UTC(2024, 7, 1), endTime: Date.UTC(2024, 11, 31), taxRate: 0.002 },
+        { startTime: Date.UTC(2024, 0, 1), endTime: Date.UTC(2024, 0, 20, 23, 59, 59, 999), taxRate: 0.001 },
+        { startTime: Date.UTC(2024, 0, 3), endTime: Date.UTC(2024, 0, 25, 23, 59, 59, 999), taxRate: 0.002 },
       ],
     },
   }), (error) => error?.code === "OVERLAPPING_COST_SCHEDULE");
