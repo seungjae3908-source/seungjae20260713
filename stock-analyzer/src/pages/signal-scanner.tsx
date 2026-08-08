@@ -13,6 +13,7 @@ import {
   type ScannerAlertCandidate,
   type ScannerResponse,
   type ScannerSignalCard,
+  type ScannerStrategyMode,
   type SignalScannerRequest,
 } from '@/lib/signal-scanner';
 
@@ -52,8 +53,10 @@ const VIEWS: Array<{ value: ScannerView; label: string; description: string }> =
   { value: 'FUTURES', label: '코인 선물', description: 'Bitget USDT 선물' },
 ];
 
-const STOCK_TIMEFRAMES = ['5m', '15m', '60m', '1D'] as const;
-const COIN_TIMEFRAMES = ['5m', '15m', '60m', '4H', '1D'] as const;
+const STRATEGY_TIMEFRAMES: Record<ScannerStrategyMode, readonly SignalScannerRequest['timeframe'][]> = {
+  scalping: ['1m', '3m', '5m'],
+  swing: ['4H', '1D'],
+};
 const ALERT_STORAGE_KEY = 'signal-scanner-browser-alerts-v1';
 
 function requestErrorMessage(error: unknown): string {
@@ -66,6 +69,7 @@ function requestErrorMessage(error: unknown): string {
       return `검색 요청 한도를 보호하고 있습니다.${retry} 다시 시도해 주세요.`;
     }
     if (error.status === 502) return '시장데이터 공급자 응답이 불안정합니다. 결과를 성공으로 처리하지 않았습니다.';
+    if (error.code.includes('STRATEGY_TIMEFRAME_MISMATCH')) return '단타/스윙 전략과 시간봉 조합이 맞지 않습니다.';
     return `검색 요청 실패: ${error.code}`;
   }
   if (error instanceof Error && error.name === 'AbortError') return '이전 검색 요청을 취소했습니다.';
@@ -94,12 +98,25 @@ function formatNumber(value: number | null, maximumFractionDigits = 2): string {
 
 function stateLabel(state: ScannerSignalCard['signalState']): string {
   const labels: Record<ScannerSignalCard['signalState'], string> = {
+    CANDIDATE: '후보',
+    CONFIRMED: '확인',
+    ARMED: '진입 감시',
+    ENTRY_ZONE: '진입 구간',
+    APPROVAL_PENDING: '승인 대기',
+    APPROVED: '승인됨',
+    EXECUTING: '실행 중',
+    PARTIALLY_FILLED: '부분 체결',
+    FILLED: '체결 완료',
+    MANAGING: '포지션 관리',
+    CLOSED: '종료',
+    INVALIDATED: '무효',
+    EXPIRED: '만료',
+    REJECTED: '거절',
+    CANCELLED: '취소',
     DETECTED: '감지',
     WATCHING: '감시 중',
     READY_FOR_APPROVAL: '진입 검토 준비',
     WEAKENED: '약화',
-    INVALIDATED: '무효',
-    EXPIRED: '만료',
   };
   return labels[state];
 }
@@ -111,9 +128,9 @@ function directionLabel(card: ScannerSignalCard): string {
 }
 
 function alertTitle(alert: ScannerAlertCandidate): string {
-  if (alert.direction === 'LONG') return `진입 검토 준비 · ${alert.symbol}`;
-  if (alert.direction === 'SHORT') return `하락 신호 검토 준비 · ${alert.symbol}`;
-  return `신호 검토 준비 · ${alert.symbol}`;
+  if (alert.direction === 'LONG') return `승인 대기 · ${alert.symbol}`;
+  if (alert.direction === 'SHORT') return `하락 신호 승인 대기 · ${alert.symbol}`;
+  return `신호 승인 대기 · ${alert.symbol}`;
 }
 
 export default function SignalScannerPage({ embedded = false }: { embedded?: boolean }) {
@@ -123,9 +140,11 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const initialView: ScannerView = assetMode.asset === 'coin'
     ? assetMode.coinMarket === 'futures' ? 'FUTURES' : 'SPOT'
     : assetMode.stockMarket;
+  const initialStrategy: ScannerStrategyMode = initialView === 'KR' || initialView === 'US' ? 'swing' : 'scalping';
   const [view, setView] = useState<ScannerView>(initialView);
+  const [strategy, setStrategy] = useState<ScannerStrategyMode>(initialStrategy);
   const [timeframe, setTimeframe] = useState<SignalScannerRequest['timeframe']>(
-    initialView === 'KR' || initialView === 'US' ? '1D' : '15m',
+    initialStrategy === 'scalping' ? '5m' : '1D',
   );
   const [conditions, setConditions] = useState<string[]>(['거래량 증가']);
   const [coinCondition, setCoinCondition] = useState<SignalScannerRequest['condition']>('trend');
@@ -143,6 +162,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const request = useMemo<SignalScannerRequest>(() => ({
     assetClass: stockView ? 'stock' : view === 'SPOT' ? 'coin_spot' : 'coin_futures',
     market: view === 'KR' ? 'KR' : view === 'US' ? 'US' : view === 'SPOT' ? 'UPBIT' : 'BITGET',
+    strategy,
     timeframe,
     conditions,
     condition: coinCondition,
@@ -150,7 +170,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     batchSize,
     minimumScore,
     maximumRiskScore,
-  }), [batchSize, coinCondition, conditions, cursor, maximumRiskScore, minimumScore, stockView, timeframe, view]);
+  }), [batchSize, coinCondition, conditions, cursor, maximumRiskScore, minimumScore, stockView, strategy, timeframe, view]);
   const requestKey = useMemo(() => JSON.stringify(request), [request]);
 
   useEffect(() => {
@@ -158,11 +178,9 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     if (view === 'KR' || view === 'US') {
       assetMode.setAsset('stock');
       assetMode.setStockMarket(view);
-      if (timeframe === '4H') setTimeframe('1D');
     } else {
       assetMode.setAsset('coin');
       assetMode.setCoinMarket(view === 'FUTURES' ? 'futures' : 'spot');
-      if (timeframe === '1D') setTimeframe('15m');
     }
   }, [view]);
 
@@ -177,11 +195,16 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       .then((result) => {
         if (controller.signal.aborted || latestSequence.current !== sequence) return;
         setData(result);
-        setStatus(result.execution.partial || result.dataState === 'partial' || result.dataState === 'stale'
-          ? 'partial'
-          : result.cards.length === 0
-            ? 'empty'
-            : 'success');
+        setStatus(
+          result.execution.partial
+            || result.dataState === 'partial'
+            || result.dataState === 'stale'
+            || result.dataState === 'untrusted'
+            ? 'partial'
+            : result.cards.length === 0
+              ? 'empty'
+              : 'success',
+        );
       })
       .catch((error: unknown) => {
         if (latestSequence.current !== sequence) return;
@@ -234,7 +257,16 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const selectView = (next: ScannerView) => {
     if (next === view) return;
     setData(null);
+    setCursor(0);
     setView(next);
+  };
+
+  const selectStrategy = (next: ScannerStrategyMode) => {
+    if (next === strategy) return;
+    setData(null);
+    setCursor(0);
+    setStrategy(next);
+    setTimeframe(next === 'scalping' ? '5m' : '1D');
   };
 
   const toggleCondition = (condition: string) => {
@@ -280,7 +312,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     if (!embedded) navigate(`/ai-chart?${selectionQuery(selection)}`);
   };
 
-  const timeframes = stockView ? STOCK_TIMEFRAMES : COIN_TIMEFRAMES;
+  const timeframes = STRATEGY_TIMEFRAMES[strategy];
   const cards = data?.cards ?? [];
 
   return (
@@ -292,7 +324,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
               <p className="text-xs font-semibold text-primary">공개 시장데이터 전용</p>
               <h1 className="mt-1 text-xl font-black">AI 신호검색기</h1>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                확인된 조건만 신호로 표시합니다. 이 화면은 계좌·주문·취소·포지션 API를 호출하지 않습니다.
+                단타와 스윙은 별도 점수·위험 기준으로 계산합니다. 이 화면은 계좌·주문·취소·포지션 API를 호출하지 않습니다.
               </p>
             </div>
             <div className="flex gap-2">
@@ -331,6 +363,31 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
               <span className="block text-[11px] text-muted-foreground">{item.description}</span>
             </button>
           ))}
+        </section>
+
+        <section aria-label="검색 전략" className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            aria-pressed={strategy === 'scalping'}
+            onClick={() => selectStrategy('scalping')}
+            className={`min-h-16 rounded-2xl border px-4 py-3 text-left ${
+              strategy === 'scalping' ? 'border-primary bg-primary/10' : 'border-card-border bg-card'
+            }`}
+          >
+            <span className="block text-sm font-black">단타 Engine</span>
+            <span className="block text-[11px] text-muted-foreground">1m · 3m · 5m / 15m context</span>
+          </button>
+          <button
+            type="button"
+            aria-pressed={strategy === 'swing'}
+            onClick={() => selectStrategy('swing')}
+            className={`min-h-16 rounded-2xl border px-4 py-3 text-left ${
+              strategy === 'swing' ? 'border-primary bg-primary/10' : 'border-card-border bg-card'
+            }`}
+          >
+            <span className="block text-sm font-black">스윙 Engine</span>
+            <span className="block text-[11px] text-muted-foreground">4H · 1D / 1H context</span>
+          </button>
         </section>
 
         <section className="rounded-3xl border border-card-border bg-card p-4">
@@ -453,7 +510,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                 <div>
                   <p className="text-sm font-black">{data.message}</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    기준 {new Date(data.generatedAt).toLocaleString('ko-KR')} · {data.universe.source}
+                    {strategy === 'scalping' ? '단타' : '스윙'} · {data.timeframe} · 기준 {new Date(data.generatedAt).toLocaleString('ko-KR')} · {data.universe.source}
                   </p>
                 </div>
                 <span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">
@@ -478,8 +535,8 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             </section>
 
             {data.alerts.length > 0 && (
-              <section aria-label="진입 검토 준비 알림" className="rounded-3xl border border-primary/40 bg-primary/10 p-4">
-                <h2 className="font-black">READY_FOR_APPROVAL 알림</h2>
+              <section aria-label="승인 대기 알림" className="rounded-3xl border border-primary/40 bg-primary/10 p-4">
+                <h2 className="font-black">APPROVAL_PENDING 알림</h2>
                 <p className="mt-1 text-xs text-muted-foreground">알림 선택은 상세 정보만 열며 주문을 실행하지 않습니다.</p>
                 <div className="mt-3 space-y-2">
                   {data.alerts.map((alert) => (
@@ -516,7 +573,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             {cards.length === 0 ? (
               <section className="rounded-3xl border border-card-border bg-card p-8 text-center">
                 <p className="font-black">조건에 맞는 결과가 없습니다.</p>
-                <p className="mt-2 text-xs text-muted-foreground">데이터 부족 결과를 강한 신호로 올리지 않았습니다.</p>
+                <p className="mt-2 text-xs text-muted-foreground">데이터 부족·품질 미달 결과를 강한 신호로 올리지 않았습니다.</p>
               </section>
             ) : (
               <section className="grid gap-3 xl:grid-cols-2">
@@ -539,7 +596,9 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                     <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
                       <span className="rounded-full bg-primary/10 px-2 py-1 text-primary">{stateLabel(card.signalState)}</span>
                       <span className="rounded-full bg-secondary px-2 py-1">{directionLabel(card)}</span>
-                      <span className="rounded-full bg-secondary px-2 py-1">데이터 {card.dataState}</span>
+                      <span className="rounded-full bg-secondary px-2 py-1">{card.strategyMode === 'scalping' ? '단타' : '스윙'}</span>
+                      {card.signalGrade && <span className="rounded-full bg-secondary px-2 py-1">등급 {card.signalGrade}</span>}
+                      <span className="rounded-full bg-secondary px-2 py-1">데이터 {card.dataQuality?.state ?? card.dataState}</span>
                     </div>
                     <div className="mt-3 grid grid-cols-4 gap-2 text-center">
                       {[
@@ -554,11 +613,23 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                         </div>
                       ))}
                     </div>
+                    {card.quantScore && (
+                      <div className="mt-3 grid grid-cols-4 gap-1 text-center text-[10px] sm:grid-cols-8">
+                        {Object.entries(card.quantScore).map(([label, value]) => (
+                          <div key={label} className="rounded-lg bg-background px-1 py-2">
+                            <p className="text-muted-foreground">{label}</p>
+                            <p className="font-black">{Math.round(value)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div className="mt-3">
                       <p className="text-[11px] font-bold text-muted-foreground">확인된 근거</p>
                       <div className="mt-1 flex flex-wrap gap-1">
-                        {card.matched.map((item) => <span key={item} className="rounded-lg bg-positive/10 px-2 py-1 text-[11px] text-positive">{item}</span>)}
-                        {card.matched.length === 0 && <span className="text-xs text-muted-foreground">없음</span>}
+                        {card.evidence.filter((item) => item.status === 'matched').map((item) => (
+                          <span key={item.key} className="rounded-lg bg-positive/10 px-2 py-1 text-[11px] text-positive">{item.label}</span>
+                        ))}
+                        {card.evidence.every((item) => item.status !== 'matched') && <span className="text-xs text-muted-foreground">없음</span>}
                       </div>
                     </div>
                     {card.unverified.length > 0 && (
