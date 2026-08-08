@@ -196,7 +196,7 @@ test('legacy stock auto-trade controls remain fail closed with zero order mutati
   const liveToggle = page.getByRole('button', { name: '실제 주문 꺼짐', exact: true });
   await expect(liveToggle).toBeVisible();
   await liveToggle.click();
-  await expect(liveToggle).toHaveText('실제 주문 꺼짐');
+  await expect(page.getByRole('button', { name: '주문 승인모드 켜짐', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: '조건 주문 실행', exact: true }).click();
   await expect(page.getByText(/기존 검색기 실전 주문 경로는 안전을 위해 비활성화/)).toBeVisible();
@@ -234,4 +234,4 @@ test('AI chat handles send, refusal response, and cancellation-safe UI', async (
   await page.getByRole('button', { name: '요청 취소' }).click();
   await expect(page.getByRole('alert')).toContainText('요청을 취소했습니다.');
   expect(calls).toBe(3);
-});
+}
