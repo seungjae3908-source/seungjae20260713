@@ -1,0 +1,302 @@
+name: Read-only Shared Server Diagnostics
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: shared-server-readonly-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    name: Read-only shared server resource and service diagnostics
+    if: >-
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/run-server-diagnostics ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: staging
+    env:
+      DIAGNOSTIC_DIR: ${{ github.workspace }}/server-diagnostics-artifacts
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Parse exact owner diagnostics command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == "seungjae3908-source" ]] || { echo 'Only the repository owner may run shared server diagnostics.' >&2; exit 1; }
+          [[ "$AUTHOR_ASSOCIATION" == "OWNER" ]] || { echo 'Command author is not the repository owner.' >&2; exit 1; }
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-server-diagnostics ([0-9a-fA-F]{40}) ([0-9]{8,20}) (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40}) ((?:[0-9]{1,3}\.){3}[0-9]{1,3}) (pre-production-upgrade|post-production-deploy)$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /run-server-diagnostics <40-character-main-sha> <staging-run-id> <incident-utc-time> <production-sha> <staging-sha> <expected-public-ip> <pre-production-upgrade|post-production-deploy>');
+            process.exit(1);
+          }
+          const incident = new Date(match[3]);
+          if (!Number.isFinite(incident.getTime())) {
+            console.error('Incident UTC time is invalid.');
+            process.exit(1);
+          }
+          const octets = match[6].split('.').map(Number);
+          if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+            console.error('Expected public IPv4 address is invalid.');
+            process.exit(1);
+          }
+          const start = new Date(incident.getTime() - 10 * 60_000).toISOString();
+          const end = new Date(incident.getTime() + 10 * 60_000).toISOString();
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1].toLowerCase()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `run_id=${match[2]}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `incident_at=${incident.toISOString()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `incident_start=${start}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `incident_end=${end}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `production_sha=${match[4].toLowerCase()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `staging_sha=${match[5].toLowerCase()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `public_ip=${match[6]}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `verification_phase=${match[7]}\n`);
+          NODE
+
+      - name: Require diagnostics SHA contained in current main
+        env:
+          DIAGNOSTIC_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$DIAGNOSTIC_SHA"
+          git cat-file -e "$DIAGNOSTIC_SHA^{commit}"
+          git merge-base --is-ancestor "$DIAGNOSTIC_SHA" origin/main || {
+            echo 'Diagnostics SHA is not contained in current main.' >&2
+            exit 1
+          }
+
+      - name: Configure SSH without exposing credentials
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh "$DIAGNOSTIC_DIR"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$STAGING_SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$STAGING_SSH_PORT" -H "$STAGING_SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Run read-only diagnostics over SSH
+        id: diagnostics
+        env:
+          INCIDENT_START: ${{ steps.command.outputs.incident_start }}
+          INCIDENT_END: ${{ steps.command.outputs.incident_end }}
+          INCIDENT_RUN_ID: ${{ steps.command.outputs.run_id }}
+          EXPECTED_PRODUCTION_SHA: ${{ steps.command.outputs.production_sha }}
+          EXPECTED_STAGING_SHA: ${{ steps.command.outputs.staging_sha }}
+          EXPECTED_PUBLIC_IP: ${{ steps.command.outputs.public_ip }}
+          VERIFICATION_PHASE: ${{ steps.command.outputs.verification_phase }}
+        run: |
+          set -Eeuo pipefail
+          artifact="$DIAGNOSTIC_DIR/server-resource-diagnostics.txt"
+          remote_command="$(printf 'INCIDENT_START=%q INCIDENT_END=%q INCIDENT_RUN_ID=%q EXPECTED_PRODUCTION_SHA=%q EXPECTED_STAGING_SHA=%q EXPECTED_PUBLIC_IP=%q VERIFICATION_PHASE=%q bash -s' \
+            "$INCIDENT_START" "$INCIDENT_END" "$INCIDENT_RUN_ID" \
+            "$EXPECTED_PRODUCTION_SHA" "$EXPECTED_STAGING_SHA" "$EXPECTED_PUBLIC_IP" "$VERIFICATION_PHASE")"
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$remote_command" \
+            < ops/server-readonly-diagnostics.sh > "$artifact"
+          grep -Fx 'READ_ONLY_DIAGNOSTICS_COMPLETE' "$artifact" >/dev/null
+
+      - name: Enforce diagnostic redaction contract
+        if: steps.diagnostics.outcome == 'success'
+        run: |
+          set -Eeuo pipefail
+          artifact="$DIAGNOSTIC_DIR/server-resource-diagnostics.txt"
+          if grep -Eiq -- \
+            '-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----|https?://|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|(authorization|apikey|api_key|password|token|secret)[=:][[:space:]]*(Bearer[[:space:]]+)?[^<[:space:]]|([?&](token|apikey|api_key|key|secret|password)=)[^&<[:space:]]+' \
+            "$artifact"; then
+            echo 'Diagnostic artifact contains a prohibited sensitive pattern.' >&2
+            exit 1
+          fi
+          if grep -Eq -- \
+            '(^|[^A-Za-z0-9_])(STAGING|PRODUCTION)_[A-Z0-9_]+=' \
+            "$artifact"; then
+            echo 'Diagnostic artifact contains a prohibited environment assignment.' >&2
+            exit 1
+          fi
+
+      - name: Check service verification verdict
+        id: verification
+        if: steps.diagnostics.outcome == 'success'
+        continue-on-error: true
+        env:
+          EXPECTED_PRODUCTION_SHA: ${{ steps.command.outputs.production_sha }}
+          VERIFICATION_PHASE: ${{ steps.command.outputs.verification_phase }}
+        run: |
+          set -Eeuo pipefail
+          artifact="$DIAGNOSTIC_DIR/server-resource-diagnostics.txt"
+          legacy_sha='85be5c7cae0c5da7b8d9c4147b0198da9eba8452'
+
+          grep -Fx 'service_verification_status=passed' "$artifact" >/dev/null
+          grep -Fx "verification_phase=$VERIFICATION_PHASE" "$artifact" >/dev/null
+          grep -Fx 'server_files_written=0' "$artifact" >/dev/null
+          grep -Fx 'server_files_deleted=0' "$artifact" >/dev/null
+          grep -Fx 'server_processes_restarted=0' "$artifact" >/dev/null
+          grep -Fx 'server_processes_stopped=0' "$artifact" >/dev/null
+          grep -Fx 'deployment_executed=0' "$artifact" >/dev/null
+          grep -Fx 'database_changes=0' "$artifact" >/dev/null
+          grep -Fx 'secret_values_collected=0' "$artifact" >/dev/null
+          [[ "$(grep -c '^HEALTH' "$artifact")" -eq 4 ]]
+          [[ "$(grep -c '^HEALTH.*status=200' "$artifact")" -eq 4 ]]
+          [[ "$(grep -c '^HEALTH.*timeout=0' "$artifact")" -eq 4 ]]
+          [[ "$(grep -c '^HEALTH.*server_error=0' "$artifact")" -eq 4 ]]
+          [[ "$(grep -c '^HEALTH.*target=staging-.*sha_present=1.*sha_match=1' "$artifact")" -eq 2 ]]
+          grep -Fx 'production_health_status=healthy' "$artifact" >/dev/null
+          grep -Fx 'production_identity_verified=true' "$artifact" >/dev/null
+
+          identity_source="$(sed -n 's/^production_identity_source=//p' "$artifact" | head -n 1)"
+          legacy_contract="$(sed -n 's/^production_legacy_health_contract=//p' "$artifact" | head -n 1)"
+          case "$identity_source" in
+            deploy-marker)
+              [[ "$VERIFICATION_PHASE" == 'pre-production-upgrade' ]]
+              [[ "$EXPECTED_PRODUCTION_SHA" == "$legacy_sha" ]]
+              [[ "$legacy_contract" == true ]]
+              [[ "$(grep -c '^HEALTH.*target=production-.*sha_present=0.*sha_match=not_applicable' "$artifact")" -eq 2 ]]
+              grep -Fx 'production_health_sha_present=false' "$artifact" >/dev/null
+              grep -Fx 'production_health_sha_match=not_applicable' "$artifact" >/dev/null
+              ;;
+            health-response)
+              [[ "$legacy_contract" == false ]]
+              [[ "$(grep -c '^HEALTH.*target=production-.*sha_present=1.*sha_match=1' "$artifact")" -eq 2 ]]
+              grep -Fx 'production_health_sha_present=true' "$artifact" >/dev/null
+              grep -Fx 'production_health_sha_match=true' "$artifact" >/dev/null
+              ;;
+            *)
+              echo 'Production identity source is not an allowed verified source.' >&2
+              exit 1
+              ;;
+          esac
+
+          printf 'production_identity_source=%s\n' "$identity_source" >> "$GITHUB_OUTPUT"
+          printf 'production_legacy_health_contract=%s\n' "$legacy_contract" >> "$GITHUB_OUTPUT"
+
+      - name: Write non-sensitive diagnostic metadata
+        if: always() && steps.command.outcome == 'success'
+        env:
+          DIAGNOSTIC_SHA: ${{ steps.command.outputs.sha }}
+          INCIDENT_RUN_ID: ${{ steps.command.outputs.run_id }}
+          INCIDENT_AT: ${{ steps.command.outputs.incident_at }}
+          EXPECTED_PRODUCTION_SHA: ${{ steps.command.outputs.production_sha }}
+          EXPECTED_STAGING_SHA: ${{ steps.command.outputs.staging_sha }}
+          EXPECTED_PUBLIC_IP: ${{ steps.command.outputs.public_ip }}
+          VERIFICATION_PHASE: ${{ steps.command.outputs.verification_phase }}
+          PRODUCTION_IDENTITY_SOURCE: ${{ steps.verification.outputs.production_identity_source }}
+          PRODUCTION_LEGACY_HEALTH_CONTRACT: ${{ steps.verification.outputs.production_legacy_health_contract }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostics.outcome }}
+          VERIFICATION_OUTCOME: ${{ steps.verification.outcome }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const result = {
+            status: process.env.DIAGNOSTIC_OUTCOME === 'success' && process.env.VERIFICATION_OUTCOME === 'success'
+              ? 'passed'
+              : 'failed',
+            mode: 'read_only',
+            diagnostic_sha: process.env.DIAGNOSTIC_SHA,
+            incident_run_id: process.env.INCIDENT_RUN_ID,
+            incident_at: process.env.INCIDENT_AT,
+            expected_production_sha: process.env.EXPECTED_PRODUCTION_SHA,
+            expected_staging_sha: process.env.EXPECTED_STAGING_SHA,
+            expected_public_ip: process.env.EXPECTED_PUBLIC_IP,
+            verification_phase: process.env.VERIFICATION_PHASE,
+            production_identity_source: process.env.PRODUCTION_IDENTITY_SOURCE || 'unverified',
+            production_legacy_health_contract: process.env.PRODUCTION_LEGACY_HEALTH_CONTRACT === 'true',
+            service_verification_status: process.env.VERIFICATION_OUTCOME === 'success' ? 'passed' : 'failed',
+            server_files_written: 0,
+            server_files_deleted: 0,
+            server_processes_restarted: 0,
+            deployment_executed: false,
+            production_deployment_executed: false,
+            database_changed: false,
+            secret_values_recorded: false,
+            source_run_id: process.env.GITHUB_RUN_ID,
+            source_run_attempt: process.env.GITHUB_RUN_ATTEMPT,
+          };
+          fs.writeFileSync(
+            path.join(process.env.DIAGNOSTIC_DIR, 'server-resource-diagnostics-metadata.json'),
+            `${JSON.stringify(result, null, 2)}\n`,
+          );
+          NODE
+
+      - name: Upload read-only server diagnostics
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-readonly-diagnostics-${{ steps.command.outputs.run_id }}
+          path: server-diagnostics-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record read-only diagnostics result
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          DIAGNOSTIC_SHA: ${{ steps.command.outputs.sha }}
+          INCIDENT_RUN_ID: ${{ steps.command.outputs.run_id }}
+          INCIDENT_AT: ${{ steps.command.outputs.incident_at }}
+          EXPECTED_PRODUCTION_SHA: ${{ steps.command.outputs.production_sha }}
+          EXPECTED_STAGING_SHA: ${{ steps.command.outputs.staging_sha }}
+          VERIFICATION_PHASE: ${{ steps.command.outputs.verification_phase }}
+          PRODUCTION_IDENTITY_SOURCE: ${{ steps.verification.outputs.production_identity_source }}
+          PRODUCTION_LEGACY_HEALTH_CONTRACT: ${{ steps.verification.outputs.production_legacy_health_contract }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostics.outcome }}
+          VERIFICATION_OUTCOME: ${{ steps.verification.outcome }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            const passed = process.env.DIAGNOSTIC_OUTCOME === 'success' && process.env.VERIFICATION_OUTCOME === 'success';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                passed ? 'Read-only shared server service verification completed.' : 'Read-only shared server service verification failed without changing the server.',
+                '',
+                `- Diagnostics SHA: \`${process.env.DIAGNOSTIC_SHA}\``,
+                `- Incident Staging Run ID: \`${process.env.INCIDENT_RUN_ID}\``,
+                `- Incident UTC time: \`${process.env.INCIDENT_AT}\``,
+                `- Verification phase: \`${process.env.VERIFICATION_PHASE}\``,
+                `- Expected production SHA: \`${process.env.EXPECTED_PRODUCTION_SHA}\``,
+                `- Expected staging SHA: \`${process.env.EXPECTED_STAGING_SHA}\``,
+                `- Production identity source: \`${process.env.PRODUCTION_IDENTITY_SOURCE || 'unverified'}\``,
+                `- Production legacy Health contract: \`${process.env.PRODUCTION_LEGACY_HEALTH_CONTRACT === 'true'}\``,
+                `- Diagnostics Run ID: \`${context.runId}\``,
+                `- Diagnostics status: \`${process.env.DIAGNOSTIC_OUTCOME}\``,
+                `- Service verification status: \`${process.env.VERIFICATION_OUTCOME === 'success' ? 'passed' : 'failed'}\``,
+                '- Server files written or deleted: `0`',
+                '- Server processes restarted or stopped: `0`',
+                '- Staging deployment executed: `false`',
+                '- Production deployment executed: `false`',
+                '- Production database changed: `false`',
+                '- Secret values recorded: `false`',
+                `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+              ].join('\n'),
+            });
+            if (!passed) core.setFailed('Read-only server service verification did not pass.');
