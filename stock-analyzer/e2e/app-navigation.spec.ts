@@ -104,6 +104,10 @@ test('navigation metadata keeps five top-level sections and assigns each core fe
   const allMenuIds = APP_NAVIGATION.flatMap((item) => item.menu?.map((child) => child.id) ?? []);
   expect(new Set(allMenuIds).size).toBe(allMenuIds.length);
 
+  expect(assetsMenu.find((item) => item.id === 'asset-search')).toMatchObject({
+    href: '/stocks',
+    capability: 'canAccessBasicInfo',
+  });
   expect(assetsMenu.find((item) => item.id === 'stocks-kr')).toMatchObject({
     href: '/stocks/kr',
     capability: 'canAccessBasicInfo',
@@ -214,7 +218,7 @@ test('pointer opening autofocuses and outside click restores the trigger focus',
   assertCleanRuntime();
 });
 
-test('asset menu reaches the integrated unified search entry', async ({ page }) => {
+test('anonymous fixture hides capability-gated asset entries and still reaches a public asset destination', async ({ page }) => {
   const assertCleanRuntime = observeNavigationRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await mockNavigationRuntime(page);
@@ -222,7 +226,15 @@ test('asset menu reaches the integrated unified search entry', async ({ page }) 
 
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
   await navigation.getByRole('button', { name: '종목', exact: true }).click();
-  await page.getByRole('menuitem', { name: '통합 종목검색', exact: true }).click();
-  await expect(page).toHaveURL(/\/stocks$/);
+  const menu = page.getByRole('menu', { name: '종목 메뉴' });
+
+  await expect(menu.getByRole('menuitem', { name: '통합 종목검색', exact: true })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: '국내주식', exact: true })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: '미국주식', exact: true })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: '코인 현물', exact: true })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: '코인 선물', exact: true })).toHaveCount(0);
+
+  await menu.getByRole('menuitem', { name: '시장 순위', exact: true }).click();
+  await expect(page).toHaveURL(/\/market-rankings$/);
   assertCleanRuntime();
 });
