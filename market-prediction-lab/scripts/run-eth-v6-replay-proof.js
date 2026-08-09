@@ -43,14 +43,15 @@ function mergeRows(groups, fields, label) {
 }
 
 function compact(result) {
+  const metrics = result?.metrics ?? result;
   return Object.freeze({
-    finalCapital: result.finalCapital,
-    returnPercent: result.totalReturnPercent,
-    successRatePercent: result.successRatePercent,
-    profitFactor: result.profitFactor,
-    maximumDrawdownPercent: result.maximumDrawdownPercent,
-    expectancy: result.expectancy,
-    trades: result.totalTrades,
+    finalCapital: metrics.finalCapital,
+    returnPercent: metrics.returnPercent,
+    successRatePercent: metrics.successRatePercent,
+    profitFactor: metrics.profitFactor,
+    maximumDrawdownPercent: metrics.maximumDrawdownPercent,
+    expectancy: metrics.expectancy,
+    trades: metrics.trades,
   });
 }
 
