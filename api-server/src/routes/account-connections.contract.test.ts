@@ -72,19 +72,27 @@ test('account snapshot source never serializes the vault credential object into 
 test('account connection router correctly uses adapter service and prohibits direct write access', () => {
   const routeSource = source('api-server/src/routes/account-connections.ts');
 
-  // Check imports
   const importMatch = routeSource.match(/import {([\s\S]*?)} from '..\/services\/trade-exchange-adapters.service'/);
   assert.ok(importMatch, 'Missing import from ../services/trade-exchange-adapters.service');
-  const importedNames = importMatch[1].split(',').map(s => s.trim().replace(/^type\s+/, ''));
-  assert.ok(importedNames.includes('prepareUpbitAccounts'), 'Missing prepareUpbitAccounts');
-  assert.ok(importedNames.includes('prepareBitgetAccount'), 'Missing prepareBitgetAccount');
-  assert.ok(importedNames.includes('prepareBitgetPositions'), 'Missing prepareBitgetPositions');
+  const importedNames = importMatch[1].split(',').map((value) => value.trim().replace(/^type\s+/, ''));
+  for (const required of [
+    'prepareUpbitAccounts',
+    'prepareBitgetAccount',
+    'prepareBitgetPositions',
+    'prepareKiwoomToken',
+    'prepareKiwoomAccountNumber',
+    'prepareKiwoomDomesticAccount',
+    'prepareKiwoomUsAccount',
+  ]) {
+    assert.ok(importedNames.includes(required), `Missing ${required}`);
+  }
 
-  // Check forbidden local implementations
   assert.doesNotMatch(routeSource, /function upbitAuthorization/);
   assert.doesNotMatch(routeSource, /function bitgetHeaders/);
+  assert.doesNotMatch(routeSource, /kiwoom-readonly-account/);
+  assert.match(routeSource, /KIWOOM_READ_API_IDS/);
+  assert.match(routeSource, /ACCOUNT_READONLY_REQUEST_REQUIRED/);
 
-  // Check forbidden direct calls
   const forbiddenCalls = [
     'prepareBitgetMarginMode',
     'prepareBitgetLeverage',
@@ -92,8 +100,24 @@ test('account connection router correctly uses adapter service and prohibits dir
     'prepareBitgetCancel',
     'prepareUpbitOrder',
     'prepareUpbitCancel',
+    'prepareKiwoomOrder',
+    'prepareKiwoomCancel',
   ];
   for (const call of forbiddenCalls) {
     assert.doesNotMatch(routeSource, new RegExp('\\b' + call + '\\b'), `Forbidden direct call detected: ${call}`);
   }
+});
+
+test('Kiwoom account adapters are exact read-only requests and stay separate from order adapters', () => {
+  const adapterSource = source('api-server/src/services/trade-exchange-adapters.service.ts');
+  assert.match(adapterSource, /prepareKiwoomAccountNumber/);
+  assert.match(adapterSource, /prepareKiwoomDomesticAccount/);
+  assert.match(adapterSource, /prepareKiwoomUsAccount/);
+  assert.match(adapterSource, /'ka00001'/);
+  assert.match(adapterSource, /'kt00018'/);
+  assert.match(adapterSource, /'ust21070'/);
+  assert.doesNotMatch(
+    adapterSource.match(/function kiwoomReadRequest[\s\S]*?\n}\n/)?.[0] ?? '',
+    /\/api\/dostk\/ordr|kt1000[0-9]/,
+  );
 });
