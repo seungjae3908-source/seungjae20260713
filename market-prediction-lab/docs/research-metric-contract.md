@@ -29,10 +29,11 @@ Every new research result should expose at least:
 - 1.5x and 2x execution-cost stress
 - regime breakdown when regime labels are available
 
-## Forward Paper/Shadow promotion policy v1
+## ETH futures Long V6 Forward Paper/Shadow promotion policy v1
 
-The policy is preregistered before additional ETH V6 forward outcomes are observed:
+This policy is preregistered before additional ETH V6 forward outcomes are observed and is **scoped only to `eth-futures-long-v6`**. It must not be silently reused for stock, spot, short, scalping, swing, or a future strategy version; those require their own preregistered policy.
 
+- candidate: `eth-futures-long-v6`
 - minimum settled trades: 30
 - minimum elapsed forward period: 28 days
 - TP-before-SL success rate: at least 40%
