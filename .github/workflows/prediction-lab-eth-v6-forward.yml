@@ -55,10 +55,13 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_REF: ${{ inputs.research_ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           ref="$INPUT_REF"
-          if [ -z "$ref" ] && { [ "$EVENT_NAME" = "push" ] || [ "$EVENT_NAME" = "pull_request" ]; }; then ref="$GITHUB_SHA"; fi
+          if [ -z "$ref" ] && [ "$EVENT_NAME" = "pull_request" ]; then ref="$PR_HEAD_SHA"; fi
+          if [ -z "$ref" ] && [ "$EVENT_NAME" = "push" ]; then ref="$GITHUB_SHA"; fi
           if [ -z "$ref" ]; then ref="$RESEARCH_BRANCH"; fi
+          test -n "$ref"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - name: Checkout isolated research revision
@@ -88,7 +91,7 @@ jobs:
           CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/prediction-lab-eth-v6-forward.yml/runs?status=success&per_page=50" --jq ".workflow_runs[] | select(.id != ($CURRENT_RUN_ID|tonumber)) | .id" | head -n 1)"
+          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/prediction-lab-eth-v6-forward.yml/runs?status=success&per_page=50" --jq ".workflow_runs[] | select(.id != ($CURRENT_RUN_ID|tonumber)) | select(.event != \"pull_request\") | .id" | head -n 1)"
           if [ -z "$run_id" ]; then
             echo "run_id=" >> "$GITHUB_OUTPUT"
             exit 0
