@@ -11,7 +11,10 @@ on:
       - market-prediction-lab/scripts/run-eth-v6-forward-cycle.js
       - market-prediction-lab/tests/eth-v6-forward-validation.test.js
   schedule:
-    - cron: "20 0 * * *"
+    # Bitget's observed 1d futures bars are anchored at 16:00 UTC.
+    # Run shortly after that close so the just-closed bar can be evaluated and
+    # any next-bar-open paper entry is recorded inside the no-backfill window.
+    - cron: "20 16 * * *"
   workflow_dispatch:
 
 permissions:
