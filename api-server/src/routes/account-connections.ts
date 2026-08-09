@@ -1,4 +1,3 @@
-import { createHmac, randomUUID } from 'node:crypto';
 import { Router, type IRouter } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import {
@@ -8,6 +7,14 @@ import {
   kiwoomReadonlyMode,
   type KiwoomReadonlyCredentials,
 } from '../providers/kiwoom-readonly-account';
+import {
+  prepareBitgetAccount,
+  prepareBitgetPositions,
+  prepareUpbitAccounts,
+  type BitgetCredentials,
+  type PreparedExchangeRequest,
+  type UpbitCredentials,
+} from '../services/trade-exchange-adapters.service';
 import { createSupabaseTradingRepository } from '../services/trade-automation.repository';
 import { decryptTradingCredentials } from '../services/trade-credential-vault.service';
 import type { TradingExchange } from '../services/trade-automation.types';
@@ -27,10 +34,6 @@ type CredentialState = {
 };
 
 type CredentialStates = Record<TradingExchange, CredentialState>;
-
-function base64Url(value: string | Buffer) {
-  return Buffer.from(value).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-}
 
 function finite(value: unknown): number | null {
   const normalized = typeof value === 'string' ? value.replace(/[,+%₩$]/g, '').trim() : value;
@@ -76,6 +79,14 @@ async function fetchJson<T>(url: string, headers: Record<string, string>): Promi
   }
 }
 
+async function fetchPreparedReadOnly<T>(baseUrl: string, request: PreparedExchangeRequest): Promise<T> {
+  if (request.method !== 'GET' || request.body !== null) {
+    throw new Error('ACCOUNT_READONLY_REQUEST_REQUIRED');
+  }
+  const query = request.query ? `?${request.query}` : '';
+  return fetchJson<T>(`${baseUrl}${request.path}${query}`, request.headers);
+}
+
 function environmentCredentials(exchange: TradingExchange): JsonRecord | null {
   if (exchange === 'kiwoom') return kiwoomReadonlyEnvironmentCredentials();
   if (exchange === 'upbit') {
@@ -119,34 +130,6 @@ async function credentialStates(req: AuthenticatedRequest): Promise<CredentialSt
     const vaultError = errorCode(error);
     return Object.fromEntries(exchanges.map((exchange) => [exchange, { ...fallback[exchange], vaultError }])) as CredentialStates;
   }
-}
-
-function upbitAuthorization(credentials: JsonRecord): string {
-  const accessKey = stringValue(credentials.accessKey);
-  const secretKey = stringValue(credentials.secretKey);
-  if (!accessKey || !secretKey) throw new Error('UPBIT_PRIVATE_KEYS_NOT_CONFIGURED');
-  const header = base64Url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = base64Url(JSON.stringify({ access_key: accessKey, nonce: randomUUID() }));
-  const signature = base64Url(createHmac('sha256', secretKey).update(`${header}.${payload}`).digest());
-  return `Bearer ${header}.${payload}.${signature}`;
-}
-
-function bitgetHeaders(credentials: JsonRecord, requestPath: string, query = ''): Record<string, string> {
-  const apiKey = stringValue(credentials.apiKey);
-  const secret = stringValue(credentials.secretKey);
-  const passphrase = stringValue(credentials.passphrase);
-  if (!apiKey || !secret || !passphrase) throw new Error('BITGET_PRIVATE_KEYS_NOT_CONFIGURED');
-  const timestamp = Date.now().toString();
-  const queryPart = query ? `?${query}` : '';
-  const signature = createHmac('sha256', secret).update(`${timestamp}GET${requestPath}${queryPart}`).digest('base64');
-  return {
-    'ACCESS-KEY': apiKey,
-    'ACCESS-SIGN': signature,
-    'ACCESS-TIMESTAMP': timestamp,
-    'ACCESS-PASSPHRASE': passphrase,
-    'Content-Type': 'application/json',
-    locale: 'en-US',
-  };
 }
 
 function firstArray(record: JsonRecord): JsonRecord[] {
@@ -232,7 +215,9 @@ async function readKiwoom(state: CredentialState) {
 }
 
 async function readUpbit(state: CredentialState) {
-  const configured = Boolean(state.credentials && stringValue(state.credentials.accessKey) && stringValue(state.credentials.secretKey));
+  const accessKey = stringValue(state.credentials?.accessKey);
+  const secretKey = stringValue(state.credentials?.secretKey);
+  const configured = Boolean(accessKey && secretKey);
   if (!configured) {
     return {
       provider: 'upbit', configured: false, connected: false, readOnly: true,
@@ -240,9 +225,8 @@ async function readUpbit(state: CredentialState) {
     };
   }
   try {
-    const rows = await fetchJson<JsonRecord[]>(`${UPBIT_BASE}/v1/accounts`, {
-      Authorization: upbitAuthorization(state.credentials!),
-    });
+    const request = prepareUpbitAccounts({ accessKey, secretKey } satisfies UpbitCredentials);
+    const rows = await fetchPreparedReadOnly<JsonRecord[]>(UPBIT_BASE, request);
     const assets = Array.isArray(rows) ? rows.map((row) => ({
       currency: stringValue(row.currency),
       balance: finite(row.balance),
@@ -263,12 +247,10 @@ async function readUpbit(state: CredentialState) {
 }
 
 async function readBitget(state: CredentialState) {
-  const configured = Boolean(
-    state.credentials
-      && stringValue(state.credentials.apiKey)
-      && stringValue(state.credentials.secretKey)
-      && stringValue(state.credentials.passphrase),
-  );
+  const apiKey = stringValue(state.credentials?.apiKey);
+  const secretKey = stringValue(state.credentials?.secretKey);
+  const passphrase = stringValue(state.credentials?.passphrase);
+  const configured = Boolean(apiKey && secretKey && passphrase);
   if (!configured) {
     return {
       provider: 'bitget', configured: false, connected: false, readOnly: true,
@@ -276,12 +258,13 @@ async function readBitget(state: CredentialState) {
     };
   }
 
-  const accountPath = '/api/v2/mix/account/accounts';
-  const positionPath = '/api/v2/mix/position/all-position';
-  const query = new URLSearchParams({ productType: BITGET_PRODUCT_TYPE }).toString();
+  const credentials = { apiKey, secretKey, passphrase } satisfies BitgetCredentials;
+  const timestamp = Date.now().toString();
+  const accountRequest = prepareBitgetAccount(credentials, timestamp);
+  const positionRequest = prepareBitgetPositions(credentials, timestamp);
   const [accounts, positions] = await Promise.allSettled([
-    fetchJson<JsonRecord>(`${BITGET_BASE}${accountPath}?${query}`, bitgetHeaders(state.credentials!, accountPath, query)),
-    fetchJson<JsonRecord>(`${BITGET_BASE}${positionPath}?${query}`, bitgetHeaders(state.credentials!, positionPath, query)),
+    fetchPreparedReadOnly<JsonRecord>(BITGET_BASE, accountRequest),
+    fetchPreparedReadOnly<JsonRecord>(BITGET_BASE, positionRequest),
   ]);
   const accountPayload = accounts.status === 'fulfilled' ? accounts.value : {};
   const positionPayload = positions.status === 'fulfilled' ? positions.value : {};
