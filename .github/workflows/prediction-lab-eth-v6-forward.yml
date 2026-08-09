@@ -9,20 +9,15 @@ on:
       - market-prediction-lab/src/eth-v6-forward-validation.js
       - market-prediction-lab/scripts/run-eth-v6-replay-proof.js
       - market-prediction-lab/scripts/run-eth-v6-forward-cycle.js
+      - market-prediction-lab/scripts/run-shadow-cycle.js
       - market-prediction-lab/tests/eth-v6-forward-validation.test.js
-  schedule:
-    # Bitget's observed 1d futures bars are anchored at 16:00 UTC.
-    # Run shortly after that close so the just-closed bar can be evaluated and
-    # any next-bar-open paper entry is recorded inside the no-backfill window.
-    - cron: "20 16 * * *"
-  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: prediction-lab-eth-v6-forward
-  cancel-in-progress: false
+  group: prediction-lab-eth-v6-forward-validation
+  cancel-in-progress: true
 
 jobs:
   forward-validation:
@@ -33,6 +28,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: feature/prediction-lab-standalone
+          persist-credentials: false
 
       - name: Set up Node 20
         uses: actions/setup-node@v4
@@ -47,7 +43,7 @@ jobs:
         working-directory: market-prediction-lab
         run: node --test tests/eth-v6-forward-validation.test.js
 
-      - name: Create deterministic replay proof once
+      - name: Verify deterministic replay proof
         working-directory: market-prediction-lab
         run: |
           if [ -f docs/eth-v6-replay-proof.json ] && node -e '
@@ -60,7 +56,7 @@ jobs:
             node scripts/run-eth-v6-replay-proof.js
           fi
 
-      - name: Advance forward-only Paper and Shadow state
+      - name: Dry-run forward-only Paper and Shadow cycle
         working-directory: market-prediction-lab
         run: node scripts/run-eth-v6-forward-cycle.js
 
@@ -68,10 +64,10 @@ jobs:
         working-directory: market-prediction-lab
         run: cat docs/eth-v6-forward-summary.md
 
-      - name: Upload replay and forward evidence
+      - name: Upload validation evidence only
         uses: actions/upload-artifact@v4
         with:
-          name: eth-v6-forward-${{ github.run_id }}
+          name: eth-v6-forward-validation-${{ github.run_id }}
           path: |
             market-prediction-lab/docs/eth-v6-replay-proof.json
             market-prediction-lab/docs/eth-v6-replay-proof.md
@@ -81,19 +77,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Persist forward research ledger only
+      - name: Assert validation made no source-branch write
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            market-prediction-lab/docs/eth-v6-replay-proof.json \
-            market-prediction-lab/docs/eth-v6-replay-proof.md \
-            market-prediction-lab/docs/eth-v6-forward-state.json \
-            market-prediction-lab/docs/eth-v6-forward-summary.json \
-            market-prediction-lab/docs/eth-v6-forward-summary.md
-          if git diff --cached --quiet; then
-            echo "forward research ledger unchanged"
-          else
-            git commit -m "chore(research): advance frozen ETH V6 forward ledger [skip ci]"
-            git push origin HEAD:feature/prediction-lab-standalone
-          fi
+          git diff --exit-code -- . ':!market-prediction-lab/docs/eth-v6-forward-state.json' ':!market-prediction-lab/docs/eth-v6-forward-summary.json' ':!market-prediction-lab/docs/eth-v6-forward-summary.md'
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
