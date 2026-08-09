@@ -263,6 +263,36 @@ export function prepareKiwoomToken(credentials: KiwoomCredentials): PreparedExch
   };
 }
 
+function kiwoomReadRequest(
+  credentials: KiwoomCredentials,
+  apiId: 'ka00001' | 'kt00018' | 'ust21070',
+  path: '/api/dostk/acnt' | '/api/us/acnt',
+  body: Record<string, unknown>,
+): PreparedExchangeRequest {
+  if (!credentials.accessToken) throw new Error('KIWOOM_ACCESS_TOKEN_REQUIRED');
+  return {
+    method: 'POST', path, query: '',
+    headers: {
+      Authorization: `Bearer ${credentials.accessToken}`,
+      'Content-Type': 'application/json;charset=UTF-8',
+      'api-id': apiId,
+    },
+    body: jsonBody(body),
+  };
+}
+
+export function prepareKiwoomAccountNumber(credentials: KiwoomCredentials): PreparedExchangeRequest {
+  return kiwoomReadRequest(credentials, 'ka00001', '/api/dostk/acnt', {});
+}
+
+export function prepareKiwoomDomesticAccount(credentials: KiwoomCredentials): PreparedExchangeRequest {
+  return kiwoomReadRequest(credentials, 'kt00018', '/api/dostk/acnt', { qry_tp: '1', dmst_stex_tp: 'KRX' });
+}
+
+export function prepareKiwoomUsAccount(credentials: KiwoomCredentials): PreparedExchangeRequest {
+  return kiwoomReadRequest(credentials, 'ust21070', '/api/us/acnt', {});
+}
+
 function kiwoomOrderBody(plan: TradingPlanInput) {
   return {
     dmst_stex_tp: 'KRX',
