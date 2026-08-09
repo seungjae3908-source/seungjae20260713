@@ -5,10 +5,12 @@ import {
   TradePreSubmissionRiskError,
   TradePreSubmissionRiskService,
 } from './trade-pre-submission-risk.service';
-import type {
-  TradingMarketSnapshot,
-  TradingOrder,
-  TradingPlan,
+import { buildRiskEnvelope } from './trade-risk-envelope.service';
+import {
+  DEFAULT_TRADING_POLICY,
+  type TradingMarketSnapshot,
+  type TradingOrder,
+  type TradingPlan,
 } from './trade-automation.types';
 
 const USER_ID = '11111111-1111-1111-1111-111111111111';
@@ -37,13 +39,14 @@ function snapshot(now: Date): TradingMarketSnapshot {
     availableLiquidityKrw: 1_000_000,
     estimatedSlippagePercent: 0.1,
     estimatedFeePercent: 0.05,
+    correlatedExposurePercent: 0,
     signalState: 'entry_ready',
     signalObservedAt: now.toISOString(),
   };
 }
 
 function plan(now: Date, version = 1): TradingPlan {
-  return {
+  const candidate: TradingPlan = {
     id: '22222222-2222-2222-2222-222222222222',
     userId: USER_ID,
     idempotencyKey: 'risk-test',
@@ -62,15 +65,30 @@ function plan(now: Date, version = 1): TradingPlan {
     side: 'buy',
     orderType: 'market',
     quantity: 1,
-    quoteAmount: 100_000,
+    quoteAmount: 20_000,
     limitPrice: null,
-    estimatedKrw: 100_000,
+    estimatedKrw: 20_000,
     stopPrice: 95_000,
     targetPrices: [110_000],
     splitRatios: [100],
     signalReasons: ['trend'],
+    estimatedSlippagePercent: 0.1,
+    averageSpreadPercent: 0.1,
+    economics: {
+      sampleSize: 100,
+      winProbability: 0.6,
+      averageWinR: 1.5,
+      averageLossR: 1,
+      estimatedCostsR: 0.05,
+      profitFactor: 1.5,
+      maxDrawdownPercent: 10,
+      marketRegime: 'bull',
+      calibratedAt: now.toISOString(),
+    },
     marketSnapshot: snapshot(now),
   };
+  candidate.riskEnvelope = buildRiskEnvelope(candidate, DEFAULT_TRADING_POLICY, candidate.approvedAt!);
+  return candidate;
 }
 
 function order(now: Date): TradingOrder {
@@ -98,12 +116,16 @@ async function setup(now: Date, planVersion = 1) {
   const repository = new InMemoryTradingRepository();
   const currentPlan = plan(now, planVersion);
   const currentOrder = order(now);
+  await repository.savePolicy(USER_ID, {
+    ...DEFAULT_TRADING_POLICY,
+    pilotStage: 'limited-50',
+  });
   await repository.savePlan(currentPlan);
   await repository.saveOrder(currentOrder);
   return { repository, currentPlan, currentOrder, service: new TradePreSubmissionRiskService(repository) };
 }
 
-test('fresh approval, risk evidence, signal, liquidity, cost, and limits pass together', async () => {
+test('fresh approval, risk evidence, signal, liquidity, cost, limits, and risk envelope pass together', async () => {
   const now = new Date();
   const { currentPlan, currentOrder, service } = await setup(now);
   const result = await service.evaluate({

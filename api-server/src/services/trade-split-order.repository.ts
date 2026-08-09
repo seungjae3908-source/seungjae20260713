@@ -25,10 +25,19 @@ export type CreateSplitOrdersInput = {
   events: TradingOrderEvent[];
 };
 
+export type CancelSplitChildrenInput = {
+  userId: string;
+  planId: string;
+  approvedPlanVersion: number;
+  fromSequenceNo: number;
+  events: TradingOrderEvent[];
+};
+
 export interface SplitOrderRepository {
   listOrdersByPlan(userId: string, planId: string, approvedPlanVersion?: number): Promise<SplitTradingOrder[]>;
   createSplitOrdersAtomic(input: CreateSplitOrdersInput): Promise<SplitTradingOrder[] | null>;
   activateNextChildAtomic(order: SplitTradingOrder, event: TradingOrderEvent): Promise<SplitTradingOrder | null>;
+  cancelPlannedChildrenAtomic(input: CancelSplitChildrenInput): Promise<SplitTradingOrder[] | null>;
 }
 
 function storageError() {
@@ -102,6 +111,18 @@ function validateInput(input: CreateSplitOrdersInput) {
   }
 }
 
+function validateCancelInput(input: CancelSplitChildrenInput) {
+  if (!Number.isInteger(input.approvedPlanVersion) || input.approvedPlanVersion < 0
+    || !Number.isInteger(input.fromSequenceNo) || input.fromSequenceNo < 1) {
+    throw new Error('TRADE_SPLIT_CANCEL_INPUT_INVALID');
+  }
+  for (const event of input.events) {
+    if (event.userId !== input.userId || event.toState !== 'CANCELED' || event.fromState !== 'PLANNED') {
+      throw new Error('TRADE_SPLIT_CANCEL_EVENT_INVALID');
+    }
+  }
+}
+
 export function createSplitOrderRepository(
   database: SplitOrderDatabasePort,
   authenticatedUserId: string,
@@ -166,6 +187,26 @@ export function createSplitOrderRepository(
       if (activated.id !== order.id || activated.userId !== order.userId
         || activated.planId !== order.planId || activated.state !== 'SUBMITTED') throw storageError();
       return activated;
+    },
+
+    async cancelPlannedChildrenAtomic(input) {
+      assertOwner(input.userId, authenticatedUserId);
+      validateCancelInput(input);
+      const { data, error } = await database.rpc('cancel_trade_split_children_atomic', {
+        p_user_id: input.userId,
+        p_plan_id: input.planId,
+        p_approved_plan_version: input.approvedPlanVersion,
+        p_from_sequence: input.fromSequenceNo,
+        p_event_payloads: input.events,
+      });
+      if (error) throw storageError();
+      if (data === null) return null;
+      const orders = parseOrderArray(data);
+      for (const order of orders) {
+        if (order.userId !== input.userId || order.planId !== input.planId
+          || order.parentPlanVersion !== input.approvedPlanVersion) throw storageError();
+      }
+      return orders;
     },
   };
 }

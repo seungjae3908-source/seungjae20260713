@@ -9,26 +9,117 @@ on:
       - market-prediction-lab/src/eth-v6-forward-validation.js
       - market-prediction-lab/scripts/run-eth-v6-replay-proof.js
       - market-prediction-lab/scripts/run-eth-v6-forward-cycle.js
-      - market-prediction-lab/scripts/run-shadow-cycle.js
       - market-prediction-lab/tests/eth-v6-forward-validation.test.js
+  schedule:
+    - cron: "20 16 * * *"
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact research commit/ref to validate
+        required: false
+        type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
-  group: prediction-lab-eth-v6-forward-validation
-  cancel-in-progress: true
+  group: prediction-lab-eth-v6-forward
+  cancel-in-progress: false
+
+env:
+  RESEARCH_BRANCH: feature/prediction-lab-standalone
+  ARTIFACT_NAME: prediction-lab-eth-v6-forward-state
 
 jobs:
   forward-validation:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - name: Checkout isolated research branch
+      - name: Resolve immutable research ref
+        id: research
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          ref="$INPUT_REF"
+          if [ -z "$ref" ] && [ "$EVENT_NAME" = "push" ]; then ref="$GITHUB_SHA"; fi
+          if [ -z "$ref" ]; then ref="$RESEARCH_BRANCH"; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout isolated research revision
         uses: actions/checkout@v4
         with:
-          ref: feature/prediction-lab-standalone
+          ref: ${{ steps.research.outputs.ref }}
           persist-credentials: false
+
+      - name: Record immutable research SHA
+        id: sha
+        shell: bash
+        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve branch seed state outside checkout
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/v6-seed"
+          for file in eth-v6-replay-proof.json eth-v6-replay-proof.md eth-v6-forward-state.json eth-v6-forward-summary.json eth-v6-forward-summary.md; do
+            if [ -f "market-prediction-lab/docs/$file" ]; then cp "market-prediction-lab/docs/$file" "$RUNNER_TEMP/v6-seed/$file"; fi
+          done
+
+      - name: Locate previous successful V6 artifact
+        id: predecessor
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/prediction-lab-eth-v6-forward.yml/runs?status=success&per_page=50" --jq ".workflow_runs[] | select(.id != ($CURRENT_RUN_ID|tonumber)) | .id" | head -n 1)"
+          if [ -z "$run_id" ]; then
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\" and .expired == false) | .id" | head -n 1)"
+          if [ -z "$artifact_id" ]; then
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download exact previous V6 artifact
+        if: steps.predecessor.outputs.run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: prediction-lab-eth-v6-forward-state
+          path: ${{ runner.temp }}/v6-previous
+          run-id: ${{ steps.predecessor.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Restore verified predecessor or branch seed
+        shell: bash
+        env:
+          PREDECESSOR_RUN_ID: ${{ steps.predecessor.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p market-prediction-lab/docs
+          if [ -n "$PREDECESSOR_RUN_ID" ]; then
+            node <<'NODE'
+          const fs=require('fs'); const crypto=require('crypto');
+          const root=process.env.RUNNER_TEMP+'/v6-previous';
+          const manifest=JSON.parse(fs.readFileSync(root+'/v6-forward-provenance.json','utf8'));
+          const digest=(p)=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+          if(manifest.branchWrite!==false || manifest.liveOrderAllowed!==false || manifest.privateAccountRequestAllowed!==false) throw new Error('Unsafe V6 predecessor provenance.');
+          if(digest(root+'/eth-v6-forward-state.json')!==manifest.stateSha256) throw new Error('V6 predecessor state SHA-256 mismatch.');
+          if(digest(root+'/eth-v6-forward-summary.json')!==manifest.summarySha256) throw new Error('V6 predecessor summary SHA-256 mismatch.');
+          NODE
+            cp "$RUNNER_TEMP/v6-previous"/eth-v6-* market-prediction-lab/docs/
+          else
+            test -s "$RUNNER_TEMP/v6-seed/eth-v6-forward-state.json" || { echo 'Refusing empty V6 forward cutover seed.'; exit 1; }
+            test -s "$RUNNER_TEMP/v6-seed/eth-v6-forward-summary.json" || { echo 'Refusing empty V6 forward summary seed.'; exit 1; }
+            cp "$RUNNER_TEMP/v6-seed"/eth-v6-* market-prediction-lab/docs/
+          fi
 
       - name: Set up Node 20
         uses: actions/setup-node@v4
@@ -43,12 +134,11 @@ jobs:
         working-directory: market-prediction-lab
         run: node --test tests/eth-v6-forward-validation.test.js
 
-      - name: Verify deterministic replay proof
+      - name: Create deterministic replay proof once
         working-directory: market-prediction-lab
         run: |
           if [ -f docs/eth-v6-replay-proof.json ] && node -e '
-            const fs=require("fs");
-            const p=JSON.parse(fs.readFileSync("docs/eth-v6-replay-proof.json","utf8"));
+            const fs=require("fs"); const p=JSON.parse(fs.readFileSync("docs/eth-v6-replay-proof.json","utf8"));
             if(p.status!=="passed" || p.strategyId!=="eth-futures-long-v6" || p.safeguards?.usedForSelection!==false || p.safeguards?.parametersChanged!==false) process.exit(1);
           '; then
             echo "existing immutable replay proof is valid; replay not rerun"
@@ -56,28 +146,41 @@ jobs:
             node scripts/run-eth-v6-replay-proof.js
           fi
 
-      - name: Dry-run forward-only Paper and Shadow cycle
+      - name: Advance forward-only Paper and Shadow state
         working-directory: market-prediction-lab
         run: node scripts/run-eth-v6-forward-cycle.js
 
-      - name: Display forward validation summary
-        working-directory: market-prediction-lab
-        run: cat docs/eth-v6-forward-summary.md
+      - name: Build immutable V6 provenance
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+          PREDECESSOR_RUN_ID: ${{ steps.predecessor.outputs.run_id }}
+          PREDECESSOR_ARTIFACT_ID: ${{ steps.predecessor.outputs.artifact_id }}
+        run: |
+          node <<'NODE'
+          const fs=require('fs'); const crypto=require('crypto');
+          const root='market-prediction-lab/docs';
+          const digest=(p)=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+          const manifest={schemaVersion:1,researchCodeSha:process.env.RESEARCH_SHA,predecessorRunId:process.env.PREDECESSOR_RUN_ID||null,predecessorArtifactId:process.env.PREDECESSOR_ARTIFACT_ID||null,stateSha256:digest(root+'/eth-v6-forward-state.json'),summarySha256:digest(root+'/eth-v6-forward-summary.json'),branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,createdAt:new Date().toISOString()};
+          fs.writeFileSync(root+'/v6-forward-provenance.json',JSON.stringify(manifest,null,2)+'\n');
+          NODE
 
-      - name: Upload validation evidence only
+      - name: Upload immutable replay and forward evidence
         uses: actions/upload-artifact@v4
         with:
-          name: eth-v6-forward-validation-${{ github.run_id }}
+          name: prediction-lab-eth-v6-forward-state
           path: |
             market-prediction-lab/docs/eth-v6-replay-proof.json
             market-prediction-lab/docs/eth-v6-replay-proof.md
             market-prediction-lab/docs/eth-v6-forward-state.json
             market-prediction-lab/docs/eth-v6-forward-summary.json
             market-prediction-lab/docs/eth-v6-forward-summary.md
+            market-prediction-lab/docs/v6-forward-provenance.json
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
 
-      - name: Assert validation made no source-branch write
-        run: |
-          git diff --exit-code -- . ':!market-prediction-lab/docs/eth-v6-forward-state.json' ':!market-prediction-lab/docs/eth-v6-forward-summary.json' ':!market-prediction-lab/docs/eth-v6-forward-summary.md'
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - name: Assert immutable checkout HEAD
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
