@@ -144,8 +144,9 @@ export function buildStandardizedResearchMetrics({ trades = [], initialCapital, 
 export function evaluateForwardPromotionGate({ candidateId, metrics, elapsedDays, safeguards = {}, policy = FORWARD_PROMOTION_POLICY_V1 } = {}) {
   if (!metrics || typeof metrics !== "object") throw new TypeError("metrics are required");
   if (!(Number.isFinite(elapsedDays) && elapsedDays >= 0)) throw new TypeError("elapsedDays must be non-negative");
-  if (typeof candidateId !== "string" || candidateId.length === 0) throw new TypeError("candidateId is required");
-  const candidateScopeMatches = candidateId === policy.candidateId;
+  const evaluatedCandidateId = candidateId ?? policy.candidateId;
+  if (typeof evaluatedCandidateId !== "string" || evaluatedCandidateId.length === 0) throw new TypeError("candidateId is required");
+  const candidateScopeMatches = evaluatedCandidateId === policy.candidateId;
   const checks = Object.freeze({
     candidateScope: candidateScopeMatches,
     settledTrades: metrics.totalTrades >= policy.minimumSettledTrades,
@@ -166,7 +167,7 @@ export function evaluateForwardPromotionGate({ candidateId, metrics, elapsedDays
   return Object.freeze({
     policyId: policy.policyId,
     policyCandidateId: policy.candidateId,
-    evaluatedCandidateId: candidateId,
+    evaluatedCandidateId,
     passed,
     status: passed ? "promotion_candidate" : "shadow_continue",
     nextStage: passed ? "manual_review" : "paper_shadow",
