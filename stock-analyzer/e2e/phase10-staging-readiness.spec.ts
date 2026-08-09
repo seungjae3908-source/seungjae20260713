@@ -610,7 +610,8 @@ test.describe('real staging release readiness', () => {
 
     await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
-    for (const label of ['AI 신호검색기', 'AI 차트', '승인형 주문', '백테스트', '모의매매']) {
+    await expect(page.getByRole('menuitem', { name: '승인형 주문', exact: true })).toHaveCount(0);
+    for (const label of ['AI 신호검색기', 'AI 차트', '백테스트', '모의매매']) {
       await settle(page);
       await page.getByRole('menuitem', { name: label, exact: true }).click();
       await settle(page);
