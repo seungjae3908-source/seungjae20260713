@@ -135,10 +135,43 @@ function regimeAudit(regime) {
   });
 }
 
+function priorAuditMap(rows, label) {
+  if (!Array.isArray(rows)) throw new ResearchContractError("INVALID_PRIOR_FORWARD_AUDIT", `${label} must be an array`);
+  const result = new Map();
+  for (const [index, row] of rows.entries()) {
+    if (typeof row?.signalId !== "string" || row.signalId.length === 0) {
+      throw new ResearchContractError("INVALID_PRIOR_FORWARD_AUDIT_ID", `${label}[${index}] signalId is required`);
+    }
+    assertResearchCodeSha(row.researchCodeSha);
+    if (result.has(row.signalId)) {
+      throw new ResearchContractError("DUPLICATE_PRIOR_FORWARD_AUDIT", `${label} contains duplicate signalId ${row.signalId}`);
+    }
+    result.set(row.signalId, row);
+  }
+  return result;
+}
+
 function recordAudit(record, context) {
   const decisionTimestamp = record.timestamp + DAY_MS;
   const modeled = modeledEntryPrice(record);
   const executed = finiteOrNull(record?.execution?.executedEntry);
+  const outcomeState = classifyForwardOutcome(record);
+  const prior = context.priorSignalAuditById.get(record.signalId) ?? null;
+  if (prior) {
+    return Object.freeze({
+      ...prior,
+      actualSimulatedEntry: executed ?? prior.actualSimulatedEntry,
+      actualSimulatedEntrySource: executed !== null ? "settled_execution" : prior.actualSimulatedEntrySource,
+      ...costAudit(record),
+      outcomeState,
+      exitReason: record?.subsequentMarketResult?.exitReason ?? null,
+      exitTimestamp: record?.subsequentMarketResult?.exitTimestamp ?? null,
+      exitTimestampIso: isoOrNull(record?.subsequentMarketResult?.exitTimestamp),
+      netPnl: finiteOrNull(record?.hypotheticalPnl),
+      orderSubmitted: record?.orderSubmitted === true,
+      privateAccountRequested: record?.privateAccountRequested === true,
+    });
+  }
   const regime = regimeAudit(record?.entryPlan?.marketRegime ?? null);
   return Object.freeze({
     signalId: record.signalId,
@@ -162,7 +195,7 @@ function recordAudit(record, context) {
     ...costAudit(record),
     ...regime,
     fundingSnapshot: latestFundingSnapshot(context.fundingRecords, decisionTimestamp),
-    outcomeState: classifyForwardOutcome(record),
+    outcomeState,
     exitReason: record?.subsequentMarketResult?.exitReason ?? null,
     exitTimestamp: record?.subsequentMarketResult?.exitTimestamp ?? null,
     exitTimestampIso: isoOrNull(record?.subsequentMarketResult?.exitTimestamp),
@@ -174,6 +207,9 @@ function recordAudit(record, context) {
 
 function missedAudit(event, context) {
   const signalTimestamp = event.signalTime;
+  const signalId = `ETH-V6-${signalTimestamp}`;
+  const prior = context.priorMissedAuditById.get(signalId) ?? null;
+  if (prior) return Object.freeze({ ...prior });
   const decisionTimestamp = signalTimestamp + DAY_MS;
   const signalIndex = context.candles.findIndex((candle) => candle.timestamp === signalTimestamp);
   const entryCandle = Number.isInteger(event.entryTime)
@@ -181,7 +217,7 @@ function missedAudit(event, context) {
     : null;
   const regime = signalIndex >= 0 ? context.classifyRegime(context.candles, signalIndex) : null;
   return Object.freeze({
-    signalId: `ETH-V6-${signalTimestamp}`,
+    signalId,
     strategyId: context.strategyId,
     strategyVersion: context.strategyVersion,
     researchCodeSha: context.researchCodeSha,
@@ -252,6 +288,8 @@ export function buildEthV6ForwardCycleAudit({
   fundingRecords = [],
   candles = [],
   classifyRegime,
+  priorSignalAudit = [],
+  priorMissedSignalAudit = [],
 } = {}) {
   if (!state || typeof state !== "object") throw new ResearchContractError("INVALID_FORWARD_AUDIT_STATE", "forward state is required");
   if (!summary || typeof summary !== "object") throw new ResearchContractError("INVALID_FORWARD_AUDIT_SUMMARY", "forward summary is required");
@@ -260,9 +298,25 @@ export function buildEthV6ForwardCycleAudit({
   if (typeof classifyRegime !== "function") throw new ResearchContractError("INVALID_FORWARD_REGIME_CLASSIFIER", "classifyRegime is required");
   const exactSha = assertResearchCodeSha(researchCodeSha);
   validateFundingRecords(fundingRecords, cycleTime);
+  const priorSignalAuditById = priorAuditMap(priorSignalAudit, "priorSignalAudit");
+  const priorMissedAuditById = priorAuditMap(priorMissedSignalAudit, "priorMissedSignalAudit");
 
-  const previousIds = new Set((previousState?.ledger?.records ?? []).map((record) => record.id));
-  const previousMissedCount = previousState?.missedSignals?.length ?? 0;
+  const previousRecords = previousState?.ledger?.records ?? [];
+  const previousMissedEvents = previousState?.missedSignals ?? [];
+  for (const record of previousRecords) {
+    if (!priorSignalAuditById.has(record.signalId)) {
+      throw new ResearchContractError("MISSING_PRIOR_SIGNAL_AUDIT", `verified predecessor audit is missing signal ${record.signalId}`);
+    }
+  }
+  for (const event of previousMissedEvents) {
+    const signalId = `ETH-V6-${event.signalTime}`;
+    if (!priorMissedAuditById.has(signalId)) {
+      throw new ResearchContractError("MISSING_PRIOR_MISSED_AUDIT", `verified predecessor audit is missing missed signal ${signalId}`);
+    }
+  }
+
+  const previousIds = new Set(previousRecords.map((record) => record.id));
+  const previousMissedCount = previousMissedEvents.length;
   const newRecords = (state.ledger?.records ?? []).filter((record) => !previousIds.has(record.id));
   const newMissed = (state.missedSignals ?? []).slice(previousMissedCount);
   const context = Object.freeze({
@@ -273,6 +327,8 @@ export function buildEthV6ForwardCycleAudit({
     candles,
     classifyRegime,
     cycleTime,
+    priorSignalAuditById,
+    priorMissedAuditById,
   });
   const recordedSignals = Object.freeze(newRecords.map((record) => recordAudit(record, context)));
   const missedSignals = Object.freeze(newMissed.map((event) => missedAudit(event, context)));
@@ -303,6 +359,7 @@ export function buildEthV6ForwardCycleAudit({
         "current_open_completed_overlap_blocked",
         "current_open_staleness_or_gap_blocked",
         "funding_timestamp_order_and_future_timestamp_blocked",
+        "predecessor_signal_origin_provenance_required",
       ]),
     }),
     outcomeStateContract: FORWARD_OUTCOME_STATES,
