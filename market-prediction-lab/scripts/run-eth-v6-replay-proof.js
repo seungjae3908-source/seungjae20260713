@@ -47,7 +47,10 @@ function compact(result) {
   return Object.freeze({
     finalCapital: metrics.finalCapital,
     returnPercent: metrics.returnPercent,
+    successRateDefinition: metrics.successRateDefinition,
     successRatePercent: metrics.successRatePercent,
+    tpBeforeSlRatePercent: metrics.tpBeforeSlRatePercent,
+    netProfitableTradeRatePercent: metrics.netProfitableTradeRatePercent,
     profitFactor: metrics.profitFactor,
     maximumDrawdownPercent: metrics.maximumDrawdownPercent,
     expectancy: metrics.expectancy,
@@ -116,7 +119,11 @@ const result = runFrozenFinalHoldout({
 });
 
 const actual = compact(result);
-const comparison = compareReplayMetrics(expected, actual, 1e-8);
+const expectedUsesLegacySuccessSemantics = !expected.successRateDefinition;
+const comparisonActual = expectedUsesLegacySuccessSemantics
+  ? Object.freeze({ ...actual, successRatePercent: actual.netProfitableTradeRatePercent })
+  : actual;
+const comparison = compareReplayMetrics(expected, comparisonActual, 1e-8);
 const proof = Object.freeze({
   schemaVersion: 1,
   generatedAt: Date.now(),
@@ -124,6 +131,11 @@ const proof = Object.freeze({
   candidateManifestSha256: FROZEN_CANDIDATE_MANIFEST_SHA256,
   replayOf: "2026-one-shot-final-holdout",
   status: comparison.passed ? "passed" : "failed",
+  metricSemantics: Object.freeze({
+    currentSuccessRateDefinition: actual.successRateDefinition,
+    storedExpectedUsedLegacyNetPositiveRate: expectedUsesLegacySuccessSemantics,
+    historicalArtifactMutated: false,
+  }),
   expected: Object.freeze({
     finalCapital: expected.finalCapital,
     returnPercent: expected.returnPercent,

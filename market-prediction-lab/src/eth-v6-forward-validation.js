@@ -14,6 +14,10 @@ import {
 } from "./final-holdout-evaluator.js";
 import { BITGET_STANDARD_TAKER_RESEARCH_COSTS } from "./historical-backtest-data.js";
 import { ResearchContractError } from "./research-governance.js";
+import {
+  buildStandardizedResearchMetrics,
+  evaluateForwardPromotionGate,
+} from "./research-metric-semantics.js";
 
 export const ETH_V6_FORWARD_START = FINAL_HOLDOUT_END + 1;
 export const ETH_V6_FORWARD_CANDIDATE = FROZEN_FINAL_HOLDOUT_CANDIDATES.find((row) => row.id === "eth-futures-long-v6");
@@ -156,6 +160,7 @@ function strategyTrade(record) {
     strategy: record.strategy,
     timeframe: record.timeframe ?? "1d",
     regime: "forward_shadow",
+    exitReason: record.subsequentMarketResult?.exitReason ?? null,
     netPnl: record.hypotheticalPnl,
     netReturnOnMargin: record.execution?.netReturnOnMargin,
     entryNotional: record.execution?.entryNotional,
@@ -299,6 +304,20 @@ export function summarizeEthV6ForwardState(state) {
   const trades = settled.map(strategyTrade).filter(Boolean);
   const performance = summarizeResearchPerformance(trades, { initialCapital: state.paper.initialCapital }).overall;
   const elapsedMs = Math.max(0, state.updatedAt - state.startedAt);
+  const elapsedDays = elapsedMs / DAY_MS;
+  const standardizedMetrics = buildStandardizedResearchMetrics({
+    trades,
+    initialCapital: state.paper.initialCapital,
+    totalReturnPercent: performance.totalReturn * 100,
+    profitFactor: performance.profitFactor,
+    maximumDrawdownPercent: performance.maximumDrawdownPercent * 100,
+    expectancy: performance.expectancy,
+  });
+  const promotionGate = evaluateForwardPromotionGate({
+    metrics: standardizedMetrics,
+    elapsedDays,
+    safeguards: state.safeguards,
+  });
   const researchSample = performance.sampleCount >= 30;
   return Object.freeze({
     schemaVersion: 1,
@@ -313,15 +332,25 @@ export function summarizeEthV6ForwardState(state) {
     missedSignals: (state.missedSignals ?? []).length,
     initialCapital: state.paper.initialCapital,
     paperEquity: state.paper.equity,
-    totalReturnPercent: performance.totalReturn * 100,
-    successRatePercent: performance.winRate * 100,
-    profitFactor: performance.profitFactor,
-    maximumDrawdownPercent: performance.maximumDrawdownPercent * 100,
-    expectancy: performance.expectancy,
-    elapsedDays: elapsedMs / DAY_MS,
+    totalReturnPercent: standardizedMetrics.totalReturnPercent,
+    successRateDefinition: standardizedMetrics.successRateDefinition,
+    successRatePercent: standardizedMetrics.successRatePercent,
+    tpBeforeSlRatePercent: standardizedMetrics.tpBeforeSlRatePercent,
+    tpBeforeSlRateAvailable: standardizedMetrics.tpBeforeSlRateAvailable,
+    netProfitableTradeRatePercent: standardizedMetrics.netProfitableTradeRatePercent,
+    barrierResolvedTradeCount: standardizedMetrics.barrierResolvedTradeCount,
+    tpHitCount: standardizedMetrics.tpHitCount,
+    slHitCount: standardizedMetrics.slHitCount,
+    censoredTradeCount: standardizedMetrics.censoredCount,
+    profitFactor: standardizedMetrics.profitFactor,
+    maximumDrawdownPercent: standardizedMetrics.maximumDrawdownPercent,
+    expectancy: standardizedMetrics.expectancy,
+    costStress: standardizedMetrics.costStress,
+    elapsedDays,
     researchSampleSufficient: researchSample,
-    status: researchSample ? "shadow_evidence_available" : "shadow_continue",
-    nextStage: researchSample ? "manual_review" : "paper_shadow",
+    status: promotionGate.status,
+    nextStage: promotionGate.nextStage,
+    promotionGate,
     safeguards: state.safeguards,
   });
 }
