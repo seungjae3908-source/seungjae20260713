@@ -243,7 +243,7 @@ assert(
   auth.includes('if (!signingOutRef.current && sessionRef.current?.user.id === user.id)'),
   'late profile responses must not restore profile state after logout or a user change',
 );
-assert(auth.includes('if (active && !signingOutRef.current) void loadProfile(session.user);'), 'timer, focus, and visibility refreshes must stop during logout');
+assert(auth.includes('if (active && !signingOutRef.current) void loadProfile(session.user).catch(() => undefined);'), 'timer, focus, and visibility refreshes must stop during logout');
 
 const authSignOutIndex = auth.indexOf('async signOut() {');
 const logoutBarrierIndex = auth.indexOf('signingOutRef.current = true;', authSignOutIndex);
