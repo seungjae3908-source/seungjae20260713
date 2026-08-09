@@ -6,6 +6,7 @@ import {
   ETH_V6_FORWARD_INITIAL_CAPITAL,
   ETH_V6_FORWARD_START,
   advanceEthV6ForwardState,
+  classifyEthV6ForwardRegime,
   compareReplayMetrics,
   createEthV6ForwardState,
   summarizeEthV6ForwardState,
@@ -23,6 +24,22 @@ function breakoutSequence() {
   rows.push({ symbol: "ETHUSDT", timestamp: start + 16 * DAY_MS, open: 103, high: 106, low: 101.5, close: 105, volume: 1800 });
   rows.push({ symbol: "ETHUSDT", timestamp: start + 17 * DAY_MS, open: 105, high: 105.2, low: 104.8, close: 105, volume: 10 });
   return rows;
+}
+
+function trendingSequence(count = 90) {
+  const start = Date.UTC(2026, 4, 1);
+  return Array.from({ length: count }, (_, index) => {
+    const close = 100 + index * 0.8;
+    return {
+      symbol: "ETHUSDT",
+      timestamp: start + index * DAY_MS,
+      open: close - 0.2,
+      high: close + 1,
+      low: close - 1,
+      close,
+      volume: 1000 + index * 5,
+    };
+  });
 }
 
 test("frozen forward candidate is the one surviving ETH futures V6 long candidate", () => {
@@ -66,6 +83,8 @@ test("a fresh closed V6 signal creates only a hypothetical tracking record at th
   assert.equal(record.entryPlan.action, "LONG");
   assert.equal(record.entryPlan.entryTime, entryTime);
   assert.equal(record.entryPlan.entryPrice, candles.at(-1).open);
+  assert.equal(record.entryPlan.marketRegime.pointInTime, true);
+  assert.equal(record.entryPlan.marketRegime.usedFutureCandles, false);
   assert.equal(record.orderSubmitted, false);
   assert.equal(record.privateAccountRequested, false);
   assert.equal(state.paper.equity, ETH_V6_FORWARD_INITIAL_CAPITAL);
@@ -98,6 +117,9 @@ test("the same paper position settles conservatively without creating a real ord
   const summary = summarizeEthV6ForwardState(settled);
   assert.equal(summary.settledTrades, 1);
   assert.equal(summary.status, "shadow_continue");
+  assert.equal(summary.regimeResults.diagnosticOnly, true);
+  assert.equal(summary.regimeResults.affectsPromotionGate, false);
+  assert.equal(summary.regimeResults.liquidity.status, "not_available");
   assert.equal(summary.safeguards.liveOrderAllowed, false);
 });
 
@@ -114,6 +136,38 @@ test("late cycles never backfill a signal after the hypothetical entry window is
   assert.equal(state.ledger.records.length, 0);
   assert.equal(state.missedSignals.length, 1);
   assert.equal(state.missedSignals[0].reason, "late_cycle_no_backfill");
+});
+
+test("regime classification is point-in-time and ignores candles after the signal index", () => {
+  const candles = trendingSequence();
+  const signalIndex = 79;
+  const baseline = classifyEthV6ForwardRegime(candles, signalIndex);
+  const futureShock = {
+    symbol: "ETHUSDT",
+    timestamp: candles.at(-1).timestamp + DAY_MS,
+    open: 10,
+    high: 11,
+    low: 9,
+    close: 10,
+    volume: 999999,
+  };
+  const withFuture = classifyEthV6ForwardRegime([...candles, futureShock], signalIndex);
+  assert.deepEqual(withFuture, baseline);
+  assert.equal(baseline.trend, "bull");
+  assert.equal(baseline.pointInTime, true);
+  assert.equal(baseline.usedFutureCandles, false);
+  assert.equal(baseline.liquidity, "not_available_without_orderbook_history");
+});
+
+test("forward candle validation rejects negative volume", () => {
+  const candles = breakoutSequence().map((candle, index) => index === 0 ? { ...candle, volume: -1 } : candle);
+  const cycleTime = candles.at(-1).timestamp + 60 * 60 * 1000;
+  assert.throws(() => advanceEthV6ForwardState({
+    state: createEthV6ForwardState(ETH_V6_FORWARD_START),
+    candles,
+    fundingRates: [],
+    cycleTime,
+  }), /volume must be non-negative/u);
 });
 
 test("forward artifact wording keeps TP-before-SL separate from net profitability", async () => {
