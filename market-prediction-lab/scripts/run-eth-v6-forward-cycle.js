@@ -15,6 +15,14 @@ import { NET_PROFITABLE_RATE_DEFINITION } from "../src/research-metric-semantics
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LOOKBACK_DAYS = 180;
+const UTC_FORWARD_DATA_CONTRACT = Object.freeze({
+  version: 1,
+  timeframe: "1d",
+  timezone: "UTC",
+  granularity: "1Dutc",
+  closedHistorySource: "bitget-public-history-candles",
+  currentOpenSource: "bitget-public-candles",
+});
 const replayPath = resolve(process.argv[2] ?? "docs/eth-v6-replay-proof.json");
 const statePath = resolve(process.argv[3] ?? "docs/eth-v6-forward-state.json");
 const summaryPath = resolve(process.argv[4] ?? "docs/eth-v6-forward-summary.json");
@@ -47,6 +55,39 @@ function format(value, digits = 2) {
   return Number(value).toLocaleString("ko-KR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
+function hasUtcDataContract(state) {
+  return state?.dataContract?.version === UTC_FORWARD_DATA_CONTRACT.version
+    && state?.dataContract?.timeframe === UTC_FORWARD_DATA_CONTRACT.timeframe
+    && state?.dataContract?.timezone === UTC_FORWARD_DATA_CONTRACT.timezone
+    && state?.dataContract?.granularity === UTC_FORWARD_DATA_CONTRACT.granularity;
+}
+
+function prepareUtcForwardState(previous, candlesResult) {
+  if (hasUtcDataContract(previous)) return previous;
+  const existingRecords = previous?.ledger?.records?.length ?? 0;
+  const existingMissedSignals = previous?.missedSignals?.length ?? 0;
+  if (previous && (existingRecords > 0 || existingMissedSignals > 0)) {
+    throw new Error(`refusing UTC forward cutover with existing legacy evidence: records=${existingRecords}, missed=${existingMissedSignals}`);
+  }
+  const base = createEthV6ForwardState(cycleTime);
+  const priorUtcSignalBoundary = Math.max(ETH_V6_FORWARD_START - 1, candlesResult.currentOpenTimestamp - 2 * DAY_MS);
+  return Object.freeze({
+    ...base,
+    lastSignalEvaluated: priorUtcSignalBoundary,
+    dataContract: UTC_FORWARD_DATA_CONTRACT,
+    cutover: Object.freeze({
+      resetAt: cycleTime,
+      previousLegacyStateDiscarded: Boolean(previous),
+      previousLegacyRecordCount: existingRecords,
+      previousLegacyMissedSignalCount: existingMissedSignals,
+      reason: "align_forward_validation_with_frozen_utc_daily_contract",
+      historicalMetricsReused: false,
+      parametersChanged: false,
+      holdoutReusedForSelection: false,
+    }),
+  });
+}
+
 const replay = await readJsonOptional(replayPath);
 if (!replay || replay.status !== "passed") throw new Error("ETH V6 deterministic replay proof must pass before Paper/Shadow starts");
 if (replay.strategyId !== ETH_V6_FORWARD_CANDIDATE.id || replay.candidateManifestSha256 !== FROZEN_CANDIDATE_MANIFEST_SHA256) {
@@ -76,7 +117,7 @@ const funding = await collectFundingRateHistory({
 });
 
 const state = advanceEthV6ForwardState({
-  state: previous ?? createEthV6ForwardState(cycleTime),
+  state: prepareUtcForwardState(previous, candlesResult),
   candles: candlesResult.candles,
   fundingRates: funding.records,
   cycleTime,
@@ -85,6 +126,8 @@ const summary = summarizeEthV6ForwardState(state);
 
 const report = Object.freeze({
   ...summary,
+  dataContract: state.dataContract,
+  cutover: state.cutover ?? null,
   netProfitableRateDefinition: NET_PROFITABLE_RATE_DEFINITION,
   replay: Object.freeze({ status: replay.status, generatedAt: replay.generatedAt, usedForSelection: false }),
   data: Object.freeze({
@@ -114,8 +157,9 @@ const markdown = `# ETHUSDT V6 Forward Paper / Shadow\n\n`
   + `- candidate: **${report.candidateId}**\n`
   + `- frozen manifest: \`${report.candidateManifestSha256}\`\n`
   + `- replay: **passed** / selection 사용: false\n`
-  + `- forward validation start: ${iso(ETH_V6_FORWARD_START)}\n`
-  + `- data: ${report.data.provider} / ${report.data.granularity} / timezone ${report.data.timezone} / current open ${iso(report.data.currentOpenTimestamp)}\n`
+  + `- forward validation start: ${iso(report.startedAt)}\n`
+  + `- data contract: ${report.data.granularity} / timezone ${report.data.timezone} / current open ${iso(report.data.currentOpenTimestamp)}\n`
+  + `- UTC cutover reset: ${report.cutover?.previousLegacyStateDiscarded === true ? "yes (legacy evidence was empty)" : "no"} / historical metrics reused: false\n`
   + `- last signal evaluated: ${iso(report.lastSignalEvaluated)}\n`
   + `- signals: ${report.signalsRecorded} / settled: ${report.settledTrades} / tracking: ${report.trackingTrades} / missed: ${report.missedSignals}\n`
   + `- paper equity: ${format(report.paperEquity, 0)}원 / return: ${format(report.totalReturnPercent)}%\n`
