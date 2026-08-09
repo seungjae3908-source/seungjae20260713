@@ -1,0 +1,117 @@
+name: Prediction Lab Final Holdout 2026
+
+on:
+  push:
+    branches:
+      - feature/prediction-lab-standalone
+    paths:
+      - .github/workflows/prediction-lab-final-holdout.yml
+      - market-prediction-lab/src/final-holdout-evaluator.js
+      - market-prediction-lab/src/independent-strategy-backtest.js
+      - market-prediction-lab/scripts/run-final-holdout.js
+      - market-prediction-lab/tests/final-holdout-evaluator.test.js
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact research commit/ref to validate
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: prediction-lab-final-holdout-2026
+  cancel-in-progress: true
+
+env:
+  RESEARCH_BRANCH: feature/prediction-lab-standalone
+
+jobs:
+  final-holdout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve immutable research ref
+        id: research
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          ref="$INPUT_REF"
+          if [ -z "$ref" ] && [ "$EVENT_NAME" = "push" ]; then ref="$GITHUB_SHA"; fi
+          if [ -z "$ref" ]; then ref="$RESEARCH_BRANCH"; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout isolated research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.research.outputs.ref }}
+          persist-credentials: false
+
+      - name: Record immutable research SHA
+        id: sha
+        shell: bash
+        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate research lab before opening holdout
+        working-directory: market-prediction-lab
+        run: npm run validate
+
+      - name: Verify final holdout guards
+        working-directory: market-prediction-lab
+        run: node --test tests/final-holdout-evaluator.test.js
+
+      - name: Preserve existing immutable result or run holdout once
+        working-directory: market-prediction-lab
+        run: |
+          if [ -s docs/final-holdout-2026-result.json ] && [ -s docs/final-holdout-2026-result.md ]; then
+            node -e '
+              const fs=require("fs"); const result=JSON.parse(fs.readFileSync("docs/final-holdout-2026-result.json","utf8"));
+              if(!result || typeof result!=="object") process.exit(1);
+            '
+            echo "existing immutable final holdout result retained"
+          else
+            node scripts/run-final-holdout.js docs/final-holdout-2026-result.json docs/final-holdout-2026-result.md
+          fi
+
+      - name: Display final holdout table
+        working-directory: market-prediction-lab
+        run: cat docs/final-holdout-2026-result.md
+
+      - name: Build immutable holdout provenance
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          node <<'NODE'
+          const fs=require('fs'); const crypto=require('crypto');
+          const root='market-prediction-lab/docs';
+          const digest=(p)=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+          const manifest={schemaVersion:1,researchCodeSha:process.env.RESEARCH_SHA,resultJsonSha256:digest(root+'/final-holdout-2026-result.json'),resultMarkdownSha256:digest(root+'/final-holdout-2026-result.md'),branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,createdAt:new Date().toISOString()};
+          fs.writeFileSync(root+'/final-holdout-2026-provenance.json',JSON.stringify(manifest,null,2)+'\n');
+          NODE
+
+      - name: Upload immutable final holdout evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-holdout-2026-${{ github.run_id }}
+          path: |
+            market-prediction-lab/docs/final-holdout-2026-result.json
+            market-prediction-lab/docs/final-holdout-2026-result.md
+            market-prediction-lab/docs/final-holdout-2026-provenance.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert immutable checkout HEAD
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
