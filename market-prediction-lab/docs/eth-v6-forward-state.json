@@ -3,7 +3,7 @@
   "candidateId": "eth-futures-long-v6",
   "candidateManifestSha256": "475acbec2df66cea18f3d5b2b2212e739d18a3148b58db5dc6ca2dd9511d8b20",
   "startedAt": 1786233795739,
-  "updatedAt": 1786233795739,
+  "updatedAt": 1786233894982,
   "lastSignalEvaluated": null,
   "ledger": {
     "version": 0,

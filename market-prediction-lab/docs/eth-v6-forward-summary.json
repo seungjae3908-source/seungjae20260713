@@ -3,7 +3,7 @@
   "candidateId": "eth-futures-long-v6",
   "candidateManifestSha256": "475acbec2df66cea18f3d5b2b2212e739d18a3148b58db5dc6ca2dd9511d8b20",
   "startedAt": 1786233795739,
-  "updatedAt": 1786233795739,
+  "updatedAt": 1786233894982,
   "lastSignalEvaluated": null,
   "signalsRecorded": 0,
   "settledTrades": 0,
@@ -16,7 +16,7 @@
   "profitFactor": 0,
   "maximumDrawdownPercent": 0,
   "expectancy": 0,
-  "elapsedDays": 0,
+  "elapsedDays": 0.0011486458333333333,
   "researchSampleSufficient": false,
   "status": "shadow_continue",
   "nextStage": "paper_shadow",
@@ -46,7 +46,7 @@
     "fundingRecords": 25,
     "fundingFirst": 1785542400000,
     "fundingLast": 1786233600000,
-    "collectedAt": 1786233795739
+    "collectedAt": 1786233894982
   },
   "stages": {
     "replay": {
