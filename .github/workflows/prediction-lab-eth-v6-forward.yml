@@ -7,10 +7,12 @@ on:
     paths:
       - .github/workflows/prediction-lab-eth-v6-forward.yml
       - market-prediction-lab/src/bitget-forward-daily-candles.js
+      - market-prediction-lab/src/eth-v6-forward-audit.js
       - market-prediction-lab/src/eth-v6-forward-validation.js
       - market-prediction-lab/scripts/run-eth-v6-replay-proof.js
       - market-prediction-lab/scripts/run-eth-v6-forward-cycle.js
       - market-prediction-lab/tests/bitget-forward-daily-candles.test.js
+      - market-prediction-lab/tests/eth-v6-forward-audit.test.js
       - market-prediction-lab/tests/eth-v6-forward-validation.test.js
   push:
     branches:
@@ -18,10 +20,12 @@ on:
     paths:
       - .github/workflows/prediction-lab-eth-v6-forward.yml
       - market-prediction-lab/src/bitget-forward-daily-candles.js
+      - market-prediction-lab/src/eth-v6-forward-audit.js
       - market-prediction-lab/src/eth-v6-forward-validation.js
       - market-prediction-lab/scripts/run-eth-v6-replay-proof.js
       - market-prediction-lab/scripts/run-eth-v6-forward-cycle.js
       - market-prediction-lab/tests/bitget-forward-daily-candles.test.js
+      - market-prediction-lab/tests/eth-v6-forward-audit.test.js
       - market-prediction-lab/tests/eth-v6-forward-validation.test.js
   schedule:
     - cron: "20 0 * * *"
@@ -148,7 +152,7 @@ jobs:
 
       - name: Verify ETH V6 forward guards
         working-directory: market-prediction-lab
-        run: node --test tests/bitget-forward-daily-candles.test.js tests/eth-v6-forward-validation.test.js
+        run: node --test tests/bitget-forward-daily-candles.test.js tests/eth-v6-forward-audit.test.js tests/eth-v6-forward-validation.test.js
 
       - name: Create deterministic replay proof once
         working-directory: market-prediction-lab
