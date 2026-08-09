@@ -1,17 +1,15 @@
 import { Router, type IRouter } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import {
-  createKiwoomReadonlyAccountClient,
-  kiwoomReadonlyEnvironmentCredentials,
-  kiwoomReadonlyInfrastructureConfigured,
-  kiwoomReadonlyMode,
-  type KiwoomReadonlyCredentials,
-} from '../providers/kiwoom-readonly-account';
-import {
   prepareBitgetAccount,
   prepareBitgetPositions,
+  prepareKiwoomAccountNumber,
+  prepareKiwoomDomesticAccount,
+  prepareKiwoomToken,
+  prepareKiwoomUsAccount,
   prepareUpbitAccounts,
   type BitgetCredentials,
+  type KiwoomCredentials,
   type PreparedExchangeRequest,
   type UpbitCredentials,
 } from '../services/trade-exchange-adapters.service';
@@ -23,7 +21,10 @@ const router: IRouter = Router();
 const UPBIT_BASE = 'https://api.upbit.com';
 const BITGET_BASE = 'https://api.bitget.com';
 const BITGET_PRODUCT_TYPE = 'USDT-FUTURES';
+const KIWOOM_REAL_BASE = process.env.KIWOOM_BASE_URL?.trim() || 'http://158.247.235.32:3000/kiwoom';
+const KIWOOM_MOCK_BASE = 'https://mockapi.kiwoom.com';
 const REQUEST_TIMEOUT_MS = 12_000;
+const KIWOOM_READ_API_IDS = new Set(['ka00001', 'kt00018', 'ust21070']);
 
 type JsonRecord = Record<string, unknown>;
 type CredentialSourceName = 'vault' | 'environment' | 'none';
@@ -63,13 +64,20 @@ function errorCode(error: unknown): string {
   return 'ACCOUNT_CONNECTION_FAILED';
 }
 
-async function fetchJson<T>(url: string, headers: Record<string, string>): Promise<T> {
+async function fetchPrepared<T>(baseUrl: string, request: PreparedExchangeRequest, extraHeaders: Record<string, string> = {}): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const query = request.query ? `?${request.query}` : '';
   try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { Accept: 'application/json', 'User-Agent': 'seungjae-investment-app/1.0', ...headers },
+    const response = await fetch(`${baseUrl}${request.path}${query}`, {
+      method: request.method,
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'seungjae-investment-app/1.0',
+        ...request.headers,
+        ...extraHeaders,
+      },
+      body: request.body,
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`PROVIDER_HTTP_${response.status}`);
@@ -83,12 +91,47 @@ async function fetchPreparedReadOnly<T>(baseUrl: string, request: PreparedExchan
   if (request.method !== 'GET' || request.body !== null) {
     throw new Error('ACCOUNT_READONLY_REQUEST_REQUIRED');
   }
-  const query = request.query ? `?${request.query}` : '';
-  return fetchJson<T>(`${baseUrl}${request.path}${query}`, request.headers);
+  return fetchPrepared<T>(baseUrl, request);
+}
+
+function kiwoomMode(): 'mock' | 'real' {
+  return process.env.KIWOOM_MODE?.trim().toLowerCase() === 'mock' ? 'mock' : 'real';
+}
+
+function kiwoomBaseUrl(): string {
+  return kiwoomMode() === 'mock' ? KIWOOM_MOCK_BASE : KIWOOM_REAL_BASE;
+}
+
+function kiwoomInfrastructureConfigured(): boolean {
+  return kiwoomMode() === 'mock' || Boolean(process.env.KIWOOM_PROXY_KEY?.trim());
+}
+
+function kiwoomProxyHeaders(): Record<string, string> {
+  if (kiwoomMode() === 'mock') return {};
+  const proxyKey = process.env.KIWOOM_PROXY_KEY?.trim();
+  if (!proxyKey) throw new Error('KIWOOM_PROXY_KEY_NOT_CONFIGURED');
+  return { 'x-proxy-key': proxyKey };
+}
+
+async function fetchPreparedKiwoom<T>(request: PreparedExchangeRequest): Promise<T> {
+  const apiId = request.headers['api-id'];
+  const tokenRequest = request.method === 'POST' && request.path === '/oauth2/token';
+  const accountRequest = request.method === 'POST'
+    && (request.path === '/api/dostk/acnt' || request.path === '/api/us/acnt')
+    && typeof apiId === 'string'
+    && KIWOOM_READ_API_IDS.has(apiId);
+  if (!tokenRequest && !accountRequest) {
+    throw new Error('ACCOUNT_READONLY_REQUEST_REQUIRED');
+  }
+  return fetchPrepared<T>(kiwoomBaseUrl(), request, kiwoomProxyHeaders());
 }
 
 function environmentCredentials(exchange: TradingExchange): JsonRecord | null {
-  if (exchange === 'kiwoom') return kiwoomReadonlyEnvironmentCredentials();
+  if (exchange === 'kiwoom') {
+    const appKey = process.env.KIWOOM_APP_KEY?.trim() ?? '';
+    const secretKey = process.env.KIWOOM_APP_SECRET?.trim() ?? '';
+    return appKey && secretKey ? { appKey, secretKey } : null;
+  }
   if (exchange === 'upbit') {
     const accessKey = process.env.UPBIT_ACCESS_KEY?.trim() ?? '';
     const secretKey = process.env.UPBIT_SECRET_KEY?.trim() ?? '';
@@ -158,7 +201,7 @@ function normalizeKiwoomHolding(row: JsonRecord) {
 async function readKiwoom(state: CredentialState) {
   const appKey = stringValue(state.credentials?.appKey);
   const secretKey = stringValue(state.credentials?.secretKey);
-  const configured = Boolean(appKey && secretKey && kiwoomReadonlyInfrastructureConfigured());
+  const configured = Boolean(appKey && secretKey && kiwoomInfrastructureConfigured());
   if (!configured) {
     return {
       provider: 'kiwoom', configured: false, connected: false, readOnly: true,
@@ -168,11 +211,20 @@ async function readKiwoom(state: CredentialState) {
   }
 
   try {
-    const client = createKiwoomReadonlyAccountClient({ appKey, secretKey } satisfies KiwoomReadonlyCredentials);
+    const baseCredentials = { appKey, secretKey } satisfies KiwoomCredentials;
+    const tokenPayload = await fetchPreparedKiwoom<JsonRecord>(prepareKiwoomToken(baseCredentials));
+    const accessToken = stringValue(tokenPayload.token);
+    const tokenCode = tokenPayload.return_code == null || tokenPayload.return_code === ''
+      ? 0
+      : Number(tokenPayload.return_code);
+    if (!accessToken || !Number.isFinite(tokenCode) || tokenCode !== 0) {
+      throw new Error('KIWOOM_TOKEN_FAILED');
+    }
+    const credentials = { appKey, secretKey, accessToken } satisfies KiwoomCredentials;
     const [accountNumber, domestic, us] = await Promise.allSettled([
-      client.request({ apiId: 'ka00001', path: '/api/dostk/acnt', body: {} }),
-      client.request({ apiId: 'kt00018', path: '/api/dostk/acnt', body: { qry_tp: '1', dmst_stex_tp: 'KRX' } }),
-      client.request({ apiId: 'ust21070', path: '/api/us/acnt', body: {} }),
+      fetchPreparedKiwoom<JsonRecord>(prepareKiwoomAccountNumber(credentials)),
+      fetchPreparedKiwoom<JsonRecord>(prepareKiwoomDomesticAccount(credentials)),
+      fetchPreparedKiwoom<JsonRecord>(prepareKiwoomUsAccount(credentials)),
     ]);
 
     const accountData = accountNumber.status === 'fulfilled' ? accountNumber.value : {};
@@ -186,7 +238,7 @@ async function readKiwoom(state: CredentialState) {
     return {
       provider: 'kiwoom', configured: true,
       connected: accountNumber.status === 'fulfilled' && (domestic.status === 'fulfilled' || us.status === 'fulfilled'),
-      readOnly: true, mode: kiwoomReadonlyMode(), credentialSource: state.source, vaultError: state.vaultError,
+      readOnly: true, mode: kiwoomMode(), credentialSource: state.source, vaultError: state.vaultError,
       accountMasked: maskAccount(accountData.acctNo ?? accountData.acctno ?? accountData.accountNo),
       kr: {
         ok: domestic.status === 'fulfilled',
@@ -311,10 +363,10 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     credentialsReturned: false,
     providers: {
       kiwoom: {
-        configured: Boolean(states.kiwoom.credentials && kiwoomReadonlyInfrastructureConfigured()),
+        configured: Boolean(states.kiwoom.credentials && kiwoomInfrastructureConfigured()),
         credentialSource: states.kiwoom.source,
         vaultError: states.kiwoom.vaultError,
-        mode: kiwoomReadonlyMode(),
+        mode: kiwoomMode(),
       },
       upbit: {
         configured: Boolean(states.upbit.credentials),
