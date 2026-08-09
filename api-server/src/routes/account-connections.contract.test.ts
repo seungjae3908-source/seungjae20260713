@@ -6,6 +6,7 @@ import {
   decryptTradingCredentials,
   encryptTradingCredentials,
 } from '../services/trade-credential-vault.service';
+import { validateKiwoomReadResponse } from '../services/kiwoom-readonly-response.service';
 
 const repositoryRoot = process.cwd();
 
@@ -119,5 +120,33 @@ test('Kiwoom account adapters are exact read-only requests and stay separate fro
   assert.doesNotMatch(
     adapterSource.match(/function kiwoomReadRequest[\s\S]*?\n}\n/)?.[0] ?? '',
     /\/api\/dostk\/ordr|kt1000[0-9]/,
+  );
+});
+
+test('Kiwoom read-only responses fail closed on provider errors and malformed account payloads', () => {
+  assert.throws(
+    () => validateKiwoomReadResponse('ka00001', { return_code: 1, return_msg: 'provider error', acctNo: '1234567890' }),
+    /KIWOOM_PROVIDER_ERROR/,
+  );
+  assert.throws(() => validateKiwoomReadResponse('ka00001', null), /KIWOOM_RESPONSE_MALFORMED/);
+  assert.throws(() => validateKiwoomReadResponse('ka00001', { return_code: 'not-a-number', acctNo: '1234567890' }), /KIWOOM_RESPONSE_MALFORMED/);
+  assert.throws(() => validateKiwoomReadResponse('ka00001', { return_code: 0 }), /KIWOOM_RESPONSE_MALFORMED/);
+  assert.throws(
+    () => validateKiwoomReadResponse('kt00018', { return_code: 0, acnt_evlt_remn_indv_tot: {} }),
+    /KIWOOM_RESPONSE_MALFORMED/,
+  );
+  assert.throws(
+    () => validateKiwoomReadResponse('ust21070', { return_code: 0, result_list: {} }),
+    /KIWOOM_RESPONSE_MALFORMED/,
+  );
+
+  assert.equal(validateKiwoomReadResponse('ka00001', { return_code: 0, acctNo: '1234567890' }).acctNo, '1234567890');
+  assert.deepEqual(
+    validateKiwoomReadResponse('kt00018', { return_code: 0, tot_evlt_amt: '0', acnt_evlt_remn_indv_tot: [] }).acnt_evlt_remn_indv_tot,
+    [],
+  );
+  assert.deepEqual(
+    validateKiwoomReadResponse('ust21070', { return_code: 0, crnc_code: 'USD', result_list: [] }).result_list,
+    [],
   );
 });
