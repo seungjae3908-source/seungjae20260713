@@ -19,12 +19,12 @@ export async function authorizedFetch(
   init: RequestInit = {},
 ): Promise<Response> {
   const headers = new Headers(init.headers);
-  const parentSignal = init.signal ?? getActiveQuerySignal();
-  if (parentSignal?.aborted) throw abortReason(parentSignal);
+  const signal = init.signal ?? getActiveQuerySignal();
+  if (signal?.aborted) throw abortReason(signal);
 
   const controller = new AbortController();
-  const handleParentAbort = () => controller.abort(parentSignal ? abortReason(parentSignal) : undefined);
-  parentSignal?.addEventListener('abort', handleParentAbort, { once: true });
+  const handleParentAbort = () => controller.abort(signal ? abortReason(signal) : undefined);
+  signal?.addEventListener('abort', handleParentAbort, { once: true });
   const timeout = window.setTimeout(
     () => controller.abort(new DOMException('App API request timed out.', 'TimeoutError')),
     APP_API_REQUEST_TIMEOUT_MS,
@@ -46,6 +46,6 @@ export async function authorizedFetch(
     return await fetch(input, { ...init, headers, signal: controller.signal });
   } finally {
     window.clearTimeout(timeout);
-    parentSignal?.removeEventListener('abort', handleParentAbort);
+    signal?.removeEventListener('abort', handleParentAbort);
   }
 }
