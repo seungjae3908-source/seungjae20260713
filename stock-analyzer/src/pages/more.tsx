@@ -338,7 +338,7 @@ export default function MorePage() {
 			</header>
 
 			<main className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 pb-24">
-				<TradeAutomationSettings />
+				{auth.can("canPlaceOrders") && <TradeAutomationSettings />}
 				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
 					<h2 className="mb-3 text-sm font-extrabold">계정 · 자산</h2>
 
