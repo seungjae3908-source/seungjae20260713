@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils';
 
 export function LoadingState({ label = '불러오는 중...' }: { label?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
+    <div data-testid="loading-state" className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
       <Loader2 className="h-6 w-6 animate-spin" />
       <span className="text-sm">{label}</span>
     </div>
@@ -39,7 +39,7 @@ export function CardListSkeleton({ count = 5 }: { count?: number }) {
 // Full-page fallback for lazily-loaded routes (Suspense boundary).
 export function PageFallback() {
   return (
-    <div className="flex flex-1 items-center justify-center py-24 text-muted-foreground">
+    <div data-testid="page-fallback" className="flex flex-1 items-center justify-center py-24 text-muted-foreground">
       <Loader2 className="h-6 w-6 animate-spin" />
     </div>
   );
@@ -59,7 +59,7 @@ export function ErrorState({ code, message, onRetry }: { code?: string; message?
     ?? (code && ERROR_MESSAGES[code])
     ?? '데이터를 불러오지 못했습니다';
   return (
-    <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+    <div data-testid="error-state" className="flex flex-col items-center justify-center gap-3 py-16 text-center">
       {notFound ? (
         <SearchX className="h-7 w-7 text-muted-foreground" />
       ) : (
