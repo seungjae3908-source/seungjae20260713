@@ -120,6 +120,7 @@ probe_json() {
 
 probe_health() {
   local base_url="$1"
+  local expected_sha="${2:-}"
   local output_file
   output_file="$(mktemp /tmp/stock-app-health.XXXXXX)"
 
@@ -128,7 +129,22 @@ probe_health() {
     return 1
   fi
 
-  node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(value.ok!==true) process.exit(1);' "$output_file"
+  node - "$output_file" "$expected_sha" <<'NODE'
+const fs = require('fs');
+const [file, expectedSha] = process.argv.slice(2);
+const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+if (value?.ok !== true) process.exit(1);
+if (expectedSha) {
+  const exact = /^[0-9a-f]{40}$/.test(expectedSha);
+  const identityValid = exact
+    && value?.deploySha === expectedSha
+    && value?.processDeploySha === expectedSha
+    && value?.deployMarkerSha === expectedSha
+    && value?.identityMatch === true
+    && value?.identityStatus === 'match';
+  if (!identityValid) process.exit(1);
+}
+NODE
   local result=$?
   rm -f "$output_file"
   return "$result"
@@ -174,10 +190,14 @@ restore_backup() {
     printf '%s\n' "$CURRENT_SHA" > "$DEPLOY_STATE_DIR/current-sha"
   fi
 
-  pm2 restart "$PM2_NAME"
+  if [[ "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+    DEPLOY_SHA="$CURRENT_SHA" pm2 restart "$PM2_NAME" --update-env
+  else
+    DEPLOY_SHA="" pm2 restart "$PM2_NAME" --update-env
+  fi
   pm2 save
 
-  if ! probe_health "http://127.0.0.1:$LIVE_PORT"; then
+  if ! probe_health "http://127.0.0.1:$LIVE_PORT" "$([[ "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]] && printf '%s' "$CURRENT_SHA")"; then
     echo "[rollback] CRITICAL: rollback completed but health check still fails" >&2
     return 1
   fi
@@ -197,8 +217,14 @@ if ! pm2 describe "$PM2_NAME" >/dev/null 2>&1; then
 fi
 
 if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]; then
-  echo "[deploy] target is already active: $TARGET_SHA"
-  probe_health "http://127.0.0.1:$LIVE_PORT"
+  echo "[deploy] target marker is already active: $TARGET_SHA"
+  if probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA" && probe_data "http://127.0.0.1:$LIVE_PORT"; then
+    exit 0
+  fi
+  echo "[deploy] runtime identity is stale; refreshing PM2 environment for the already-active target"
+  DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
+  pm2 save
+  probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA"
   probe_data "http://127.0.0.1:$LIVE_PORT"
   exit 0
 fi
@@ -209,6 +235,8 @@ RELEASE_CREATED=1
 echo "[deploy] current=$CURRENT_SHA target=$TARGET_SHA"
 echo "[deploy] exporting isolated release: $RELEASE_DIR"
 git -C "$SOURCE_DIR" archive "$TARGET_SHA" | tar -x -C "$RELEASE_DIR"
+mkdir -p "$RELEASE_DIR/.deploy"
+printf '%s\n' "$TARGET_SHA" > "$RELEASE_DIR/.deploy/current-sha"
 
 for relative_env in \
   .env \
@@ -255,7 +283,7 @@ if (!selected?.pm2_env) {
 const excluded = new Set([
   'name', 'namespace', 'cwd', 'args', 'exec_interpreter', 'exec_mode',
   'pm_exec_path', 'pm_cwd', 'pm_out_log_path', 'pm_err_log_path',
-  'pm_pid_path', 'status', 'NODE_APP_INSTANCE', 'PORT', 'API_PORT',
+  'pm_pid_path', 'status', 'NODE_APP_INSTANCE', 'PORT', 'API_PORT', 'DEPLOY_SHA',
 ]);
 const lines = [];
 for (const [key, rawValue] of Object.entries(selected.pm2_env)) {
@@ -270,7 +298,7 @@ rm -f "$PM2_JSON"
 
 (
   cd "$RELEASE_DIR/api-server"
-  nohup env PORT="$CANARY_PORT" API_PORT="$CANARY_PORT" NODE_ENV=production \
+  nohup env PORT="$CANARY_PORT" API_PORT="$CANARY_PORT" NODE_ENV=production DEPLOY_SHA="$TARGET_SHA" \
     node --env-file="$CANARY_ENV" --enable-source-maps ./dist/index.mjs \
     >"$CANARY_LOG" 2>&1 &
   echo $! >"$RELEASE_DIR/.canary.pid"
@@ -278,7 +306,7 @@ rm -f "$PM2_JSON"
 CANARY_PID="$(cat "$RELEASE_DIR/.canary.pid")"
 
 echo "[deploy] validating canary on port $CANARY_PORT"
-if ! probe_health "http://127.0.0.1:$CANARY_PORT"; then
+if ! probe_health "http://127.0.0.1:$CANARY_PORT" "$TARGET_SHA"; then
   echo "[deploy] canary health check failed" >&2
   tail -n 120 "$CANARY_LOG" >&2 || true
   exit 11
@@ -317,14 +345,14 @@ set +e
   cp -a "$RELEASE_DIR/stock-analyzer/dist" "$LIVE_DIR/stock-analyzer/dist"
   printf '%s\n' "$TARGET_SHA" > "$DEPLOY_STATE_DIR/current-sha"
 
-  pm2 restart "$PM2_NAME"
+  DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
   pm2 save
 
-  probe_health "http://127.0.0.1:$LIVE_PORT"
+  probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA"
   probe_data "http://127.0.0.1:$LIVE_PORT"
 
   if [[ -n "$PUBLIC_BASE_URL" ]]; then
-    probe_health "${PUBLIC_BASE_URL%/}"
+    probe_health "${PUBLIC_BASE_URL%/}" "$TARGET_SHA"
   fi
 )
 DEPLOY_RESULT=$?
