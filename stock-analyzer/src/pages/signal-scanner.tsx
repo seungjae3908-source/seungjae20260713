@@ -157,6 +157,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const [errorMessage, setErrorMessage] = useState('');
   const latestSequence = useRef(0);
   const lastGeneratedAt = useRef<string | null>(null);
+  const displayedRequestKey = useRef<string | null>(null);
 
   const normalizedCards = useMemo(() => {
     if (!data?.cards) return [];
@@ -204,7 +205,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     const controller = new AbortController();
     const sequence = latestSequence.current + 1;
     latestSequence.current = sequence;
-    setStatus('loading');
+    if (displayedRequestKey.current !== requestKey) setStatus('loading');
     setErrorMessage('');
 
     void fetchSignalScanner(request, controller.signal)
@@ -212,6 +213,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
         if (controller.signal.aborted || latestSequence.current !== sequence) return;
         if (lastGeneratedAt.current && new Date(result.generatedAt) <= new Date(lastGeneratedAt.current)) return;
         lastGeneratedAt.current = result.generatedAt;
+        displayedRequestKey.current = requestKey;
 
         setData(result);
         setStatus(
