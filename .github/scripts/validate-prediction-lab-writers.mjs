@@ -6,6 +6,8 @@ const legacyPaths = [
   '.github/workflows/prediction-lab-52d-validation.yml',
   '.github/workflows/prediction-lab-long-history-v1.yml',
   '.github/workflows/prediction-lab-shadow-cycle.yml',
+  '.github/workflows/prediction-lab-eth-v6-forward.yml',
+  '.github/workflows/prediction-lab-final-holdout.yml',
 ];
 const shadow = readFileSync(shadowPath, 'utf8');
 const adaptive = readFileSync(adaptivePath, 'utf8');
@@ -56,6 +58,22 @@ for (const [path, source] of legacy) {
   forbid(source, /createWorkflowDispatch/, path);
   forbid(source, /\|\|\s*true/, path);
 }
+
+const v6 = readFileSync('.github/workflows/prediction-lab-eth-v6-forward.yml', 'utf8');
+requireText(v6, 'prediction-lab-eth-v6-forward-state', 'v6-forward');
+requireText(v6, 'Locate previous successful V6 artifact', 'v6-forward');
+requireText(v6, 'V6 predecessor state SHA-256 mismatch.', 'v6-forward');
+requireText(v6, 'predecessorRunId:', 'v6-forward');
+requireText(v6, 'predecessorArtifactId:', 'v6-forward');
+requireText(v6, 'stateSha256:', 'v6-forward');
+requireText(v6, 'summarySha256:', 'v6-forward');
+requireText(v6, 'Refusing empty V6 forward cutover seed.', 'v6-forward');
+
+const holdout = readFileSync('.github/workflows/prediction-lab-final-holdout.yml', 'utf8');
+requireText(holdout, 'existing immutable final holdout result retained', 'final-holdout');
+requireText(holdout, 'final-holdout-2026-provenance.json', 'final-holdout');
+requireText(holdout, 'resultJsonSha256:', 'final-holdout');
+requireText(holdout, 'resultMarkdownSha256:', 'final-holdout');
 
 requireText(shadow, 'SHADOW_BRANCH: feature/prediction-lab-standalone', 'shadow');
 requireText(shadow, 'path: ${{ runner.temp }}/previous-shadow', 'shadow');
