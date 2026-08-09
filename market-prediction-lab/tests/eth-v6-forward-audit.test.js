@@ -8,6 +8,7 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SHA = "a".repeat(40);
+const LATER_SHA = "b".repeat(40);
 const SIGNAL_TIME = Date.UTC(2026, 7, 8);
 const ENTRY_TIME = SIGNAL_TIME + DAY_MS;
 const CYCLE_TIME = ENTRY_TIME + 60 * 60 * 1000;
@@ -134,6 +135,41 @@ test("forward audit stores exact provenance, point-in-time regime and modeled en
   assert.equal(event.outcomeState, "tracking");
   assert.equal(event.orderSubmitted, false);
   assert.equal(event.privateAccountRequested, false);
+});
+
+test("a later research HEAD updates outcome only and preserves the signal-origin SHA regime and funding snapshot", () => {
+  const origin = build().recordedSignals[0];
+  const settled = {
+    ...trackingRecord(),
+    status: "settled",
+    subsequentMarketResult: { exitReason: "take_profit", exitTimestamp: ENTRY_TIME + DAY_MS },
+    hypotheticalPnl: -1,
+    execution: { executedEntry: 100.03, costs: { entryFee: 0.06, exitFee: 0.06, tax: 0, spread: 0.02, slippage: 0.04, latency: 0, funding: 0.01, total: 0.19 } },
+  };
+  const later = build({
+    state: state([settled]),
+    previousState: null,
+    researchCodeSha: LATER_SHA,
+    priorSignalAudit: [origin],
+    summary: summary({ settledTrades: 1, barrierResolvedTradeCount: 1, tpBeforeSlRatePercent: 100 }),
+  });
+  const event = later.recordedSignals[0];
+  assert.equal(later.researchCodeSha, LATER_SHA);
+  assert.equal(event.researchCodeSha, SHA);
+  assert.deepEqual(event.regimeAtSignalTime, origin.regimeAtSignalTime);
+  assert.deepEqual(event.fundingSnapshot, origin.fundingSnapshot);
+  assert.equal(event.outcomeState, "TP before SL");
+  assert.equal(event.actualSimulatedEntry, 100.03);
+  assert.equal(event.actualSimulatedEntrySource, "settled_execution");
+  assert.equal(event.netPnl, -1);
+});
+
+test("verified predecessor records fail closed when their signal-origin audit is missing", () => {
+  assert.throws(() => build({
+    state: state([trackingRecord()]),
+    previousState: state([trackingRecord()]),
+    priorSignalAudit: [],
+  }), /verified predecessor audit is missing signal/u);
 });
 
 test("zero settled sample is rendered as unavailable instead of fake zero performance", () => {
