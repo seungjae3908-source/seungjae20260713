@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { atr } from "./indicators.js";
+import { atr, ema } from "./indicators.js";
 import { calculateV6Signal } from "./v6-independent-breakout-retest-optimizer.js";
 import {
   createShadowTradeRecord,
@@ -38,6 +38,19 @@ function positive(value, label) {
   return value;
 }
 
+function nonNegative(value, label) {
+  finite(value, label);
+  if (value < 0) throw new ResearchContractError("NEGATIVE_NUMBER", `${label} must be non-negative`, { label, value });
+  return value;
+}
+
+function median(values) {
+  if (!Array.isArray(values) || values.length === 0) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
+}
+
 function canonicalCandles(candles, cycleTime) {
   if (!Array.isArray(candles) || candles.length === 0) throw new ResearchContractError("EMPTY_FORWARD_CANDLES", "forward candles are required");
   const rows = [...candles].sort((a, b) => a.timestamp - b.timestamp);
@@ -47,6 +60,7 @@ function canonicalCandles(candles, cycleTime) {
     if (seen.has(candle.timestamp)) throw new ResearchContractError("DUPLICATE_FORWARD_CANDLE", `duplicate forward candle: ${candle.timestamp}`);
     seen.add(candle.timestamp);
     for (const field of ["open", "high", "low", "close"]) positive(candle[field], `candles[${index}].${field}`);
+    nonNegative(candle.volume, `candles[${index}].volume`);
     if (candle.high < Math.max(candle.open, candle.close) || candle.low > Math.min(candle.open, candle.close) || candle.high < candle.low) {
       throw new ResearchContractError("INVALID_FORWARD_OHLC", `candles[${index}] OHLC is invalid`);
     }
@@ -84,6 +98,66 @@ function signalAt(rows, index) {
     filter: candidate.filter,
   });
   return signal ? Object.freeze({ signal, atrNow }) : null;
+}
+
+export function classifyEthV6ForwardRegime(candles, index) {
+  if (!Array.isArray(candles) || !Number.isInteger(index) || index < 0 || index >= candles.length) {
+    throw new ResearchContractError("INVALID_REGIME_WINDOW", "regime classification requires a valid candle index");
+  }
+  const history = candles.slice(0, index + 1);
+  const asOf = history.at(-1)?.timestamp ?? null;
+  if (history.length < 61) {
+    return Object.freeze({
+      trend: "insufficient_history",
+      volatility: "insufficient_history",
+      liquidity: "not_available_without_orderbook_history",
+      pointInTime: true,
+      asOf,
+      usedFutureCandles: false,
+    });
+  }
+
+  const closes = history.map((candle) => positive(candle.close, "regime.close"));
+  const latestClose = closes.at(-1);
+  const ema20 = ema(closes, 20);
+  const ema60 = ema(closes, 60);
+  const previousEma20 = ema(closes.slice(0, -1), 20);
+  const trend = latestClose > ema20 && ema20 > ema60 && ema20 > previousEma20
+    ? "bull"
+    : latestClose < ema20 && ema20 < ema60 && ema20 < previousEma20
+      ? "bear"
+      : "sideways";
+
+  const currentAtrPercent = atr(history, 14) / latestClose;
+  const atrPercentHistory = [];
+  const firstIndex = Math.max(14, history.length - 60);
+  for (let end = firstIndex; end < history.length; end += 1) {
+    const prefix = history.slice(0, end + 1);
+    const close = prefix.at(-1).close;
+    atrPercentHistory.push(atr(prefix, 14) / close);
+  }
+  const trailingMedianAtrPercent = median(atrPercentHistory);
+  const volatility = Number.isFinite(trailingMedianAtrPercent) && currentAtrPercent >= trailingMedianAtrPercent
+    ? "high_volatility"
+    : "low_volatility";
+
+  return Object.freeze({
+    trend,
+    volatility,
+    liquidity: "not_available_without_orderbook_history",
+    pointInTime: true,
+    asOf,
+    usedFutureCandles: false,
+    diagnostics: Object.freeze({
+      latestClose,
+      ema20,
+      ema60,
+      previousEma20,
+      currentAtrPercent,
+      trailingMedianAtrPercent,
+      volatilityLookbackBars: atrPercentHistory.length,
+    }),
+  });
 }
 
 function quantityForRisk(equity, entryPrice, stopPrice) {
@@ -155,11 +229,14 @@ function settleTrackingRecord(record, rows, openOnly, fundingRates) {
 
 function strategyTrade(record) {
   if (record.status !== "settled") return null;
+  const marketRegime = record.entryPlan?.marketRegime ?? null;
   return Object.freeze({
     market: record.market,
     strategy: record.strategy,
     timeframe: record.timeframe ?? "1d",
-    regime: "forward_shadow",
+    regime: marketRegime?.trend ?? "unknown",
+    volatilityRegime: marketRegime?.volatility ?? "unknown",
+    liquidityRegime: marketRegime?.liquidity ?? "unknown",
     exitReason: record.subsequentMarketResult?.exitReason ?? null,
     netPnl: record.hypotheticalPnl,
     netReturnOnMargin: record.execution?.netReturnOnMargin,
@@ -168,11 +245,39 @@ function strategyTrade(record) {
   });
 }
 
+function standardizedGroupMetrics(trades, initialCapital) {
+  const performance = summarizeResearchPerformance(trades, { initialCapital }).overall;
+  return buildStandardizedResearchMetrics({
+    trades,
+    initialCapital,
+    totalReturnPercent: performance.totalReturn * 100,
+    profitFactor: performance.profitFactor,
+    maximumDrawdownPercent: performance.maximumDrawdownPercent * 100,
+    expectancy: performance.expectancy,
+  });
+}
+
+function summarizeRegimeDimension(trades, selector, initialCapital) {
+  const grouped = new Map();
+  for (const trade of trades) {
+    const key = String(selector(trade) ?? "unknown");
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(trade);
+  }
+  return Object.freeze(Object.fromEntries([...grouped.entries()].map(([key, rows]) => [key, standardizedGroupMetrics(rows, initialCapital)])));
+}
+
 function stateDigest(state) {
   return createHash("sha256").update(JSON.stringify({
     manifest: state.candidateManifestSha256,
     candidate: state.candidateId,
-    records: state.ledger.records.map((record) => ({ id: record.id, status: record.status, hypotheticalPnl: record.hypotheticalPnl, exit: record.subsequentMarketResult })),
+    records: state.ledger.records.map((record) => ({
+      id: record.id,
+      status: record.status,
+      hypotheticalPnl: record.hypotheticalPnl,
+      exit: record.subsequentMarketResult,
+      marketRegime: record.entryPlan?.marketRegime ?? null,
+    })),
     missedSignals: state.missedSignals,
     lastSignalEvaluated: state.lastSignalEvaluated,
   })).digest("hex");
@@ -273,6 +378,7 @@ export function advanceEthV6ForwardState({ state, candles, fundingRates = [], cy
         quantity,
         leverage: 1,
         source: "bitget-public-forward-paper",
+        marketRegime: classifyEthV6ForwardRegime(rows, index),
       },
       stop,
       targets: [target],
@@ -346,6 +452,16 @@ export function summarizeEthV6ForwardState(state) {
     maximumDrawdownPercent: standardizedMetrics.maximumDrawdownPercent,
     expectancy: standardizedMetrics.expectancy,
     costStress: standardizedMetrics.costStress,
+    regimeResults: Object.freeze({
+      diagnosticOnly: true,
+      affectsPromotionGate: false,
+      trend: summarizeRegimeDimension(trades, (trade) => trade.regime, state.paper.initialCapital),
+      volatility: summarizeRegimeDimension(trades, (trade) => trade.volatilityRegime, state.paper.initialCapital),
+      liquidity: Object.freeze({
+        status: "not_available",
+        reason: "historical_orderbook_or_spread_regime_not_available",
+      }),
+    }),
     elapsedDays,
     researchSampleSufficient: researchSample,
     status: promotionGate.status,
