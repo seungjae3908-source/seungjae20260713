@@ -11,7 +11,7 @@ import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
 import { AnalysisSelectionProvider } from '@/lib/analysis-selection';
 import { OfflineBanner } from '@/components/offline-banner';
 import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
-import { PageFallback } from '@/components/data-state';
+import { ErrorState, PageFallback } from '@/components/data-state';
 import { AutoBackupSync } from '@/lib/backup-sync';
 import { CapabilityGate } from '@/components/capability-gate';
 import { withActiveQuerySignal } from '@/lib/query-abort-signal';
@@ -215,6 +215,7 @@ function AuthenticatedApp() {
   const auth = useAuth();
   useEffect(() => { if (auth.isApproved) ensureWatchlistSync(); }, [auth.isApproved]);
   if (auth.loading) return <PageFallback />;
+  if (auth.bootstrapError) return <ErrorState code="UPSTREAM_ERROR" onRetry={auth.retryBootstrap} />;
   if (!auth.configured || !auth.isApproved) return <Suspense fallback={<PageFallback />}><AccountPage /></Suspense>;
   return <><AutoBackupSync /><ApprovedRouter /></>;
 }
