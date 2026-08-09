@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { BitgetPublicClient } from "../src/bitget-public-client.js";
-import { collectBitgetCandles } from "../src/bitget-candle-collector.js";
+import { collectBitgetUtcDailyForwardCandles } from "../src/bitget-forward-daily-candles.js";
 import { collectFundingRateHistory } from "../src/derivatives-history.js";
 import {
   ETH_V6_FORWARD_CANDIDATE,
@@ -55,17 +55,15 @@ if (replay.strategyId !== ETH_V6_FORWARD_CANDIDATE.id || replay.candidateManifes
 
 const previous = await readJsonOptional(statePath, null);
 const client = new BitgetPublicClient({ minIntervalMs: 180, maxRetries: 4, timeoutMs: 15_000 });
-const startTime = Math.max(ETH_V6_FORWARD_START - LOOKBACK_DAYS * DAY_MS, cycleTime - LOOKBACK_DAYS * DAY_MS);
-const candlesResult = await collectBitgetCandles({
+const candlesResult = await collectBitgetUtcDailyForwardCandles({
   client,
-  market: "CRYPTO_FUTURES",
   symbol: "ETHUSDT",
-  timeframe: "1d",
-  startTime,
-  endTime: cycleTime,
-  maxCandles: 500,
+  productType: "usdt-futures",
+  asOf: cycleTime,
+  lookbackDays: LOOKBACK_DAYS,
+  minimumClosedCandles: 60,
 });
-if (!Array.isArray(candlesResult.candles) || candlesResult.candles.length < 40) throw new Error("ETH V6 forward cycle has insufficient daily candle history");
+if (!Array.isArray(candlesResult.candles) || candlesResult.closedCandleCount < 60) throw new Error("ETH V6 forward cycle has insufficient UTC daily candle history");
 
 const funding = await collectFundingRateHistory({
   client,
@@ -90,8 +88,12 @@ const report = Object.freeze({
   netProfitableRateDefinition: NET_PROFITABLE_RATE_DEFINITION,
   replay: Object.freeze({ status: replay.status, generatedAt: replay.generatedAt, usedForSelection: false }),
   data: Object.freeze({
-    provider: "bitget-public-v2",
+    provider: candlesResult.provider,
+    timezone: candlesResult.timezone,
+    granularity: candlesResult.granularity,
     candleCount: candlesResult.candles.length,
+    closedCandleCount: candlesResult.closedCandleCount,
+    currentOpenTimestamp: candlesResult.currentOpenTimestamp,
     firstCandle: candlesResult.candles[0]?.timestamp ?? null,
     lastCandle: candlesResult.candles.at(-1)?.timestamp ?? null,
     fundingRecords: funding.records.length,
@@ -113,6 +115,7 @@ const markdown = `# ETHUSDT V6 Forward Paper / Shadow\n\n`
   + `- frozen manifest: \`${report.candidateManifestSha256}\`\n`
   + `- replay: **passed** / selection 사용: false\n`
   + `- forward validation start: ${iso(ETH_V6_FORWARD_START)}\n`
+  + `- data: ${report.data.provider} / ${report.data.granularity} / timezone ${report.data.timezone} / current open ${iso(report.data.currentOpenTimestamp)}\n`
   + `- last signal evaluated: ${iso(report.lastSignalEvaluated)}\n`
   + `- signals: ${report.signalsRecorded} / settled: ${report.settledTrades} / tracking: ${report.trackingTrades} / missed: ${report.missedSignals}\n`
   + `- paper equity: ${format(report.paperEquity, 0)}원 / return: ${format(report.totalReturnPercent)}%\n`
@@ -120,6 +123,7 @@ const markdown = `# ETHUSDT V6 Forward Paper / Shadow\n\n`
   + `- net-profitable trade rate after all modeled costs: ${format(report.netProfitableTradeRatePercent)}% / settled trades: ${report.settledTrades}\n`
   + `- PF: ${format(report.profitFactor)} / MDD: ${format(report.maximumDrawdownPercent)}% / expectancy: ${format(report.expectancy, 0)}원\n`
   + `- cost stress return: 1.5x ${format(report.costStress?.x1_5?.totalReturnPercent)}% / 2x ${format(report.costStress?.x2?.totalReturnPercent)}% (diagnostic)\n`
+  + `- regime diagnostics: trend/volatility are point-in-time and do not affect promotion; liquidity=${report.regimeResults?.liquidity?.status ?? "not_available"}\n`
   + `- status: **${report.status}** / next: ${report.nextStage}\n`
   + `- actual order: 0 / private account API: 0 / live promotion: false\n`
   + `- late workflow cycles never backfill a signal after its entry window has passed.\n`;
