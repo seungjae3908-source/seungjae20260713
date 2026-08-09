@@ -13,8 +13,18 @@ import {
   summarizeShadowState,
   upsertShadowPrediction,
 } from "../src/shadow-ledger.js";
+import {
+  ETH_V6_FORWARD_CANDIDATE,
+  ETH_V6_FORWARD_START,
+  advanceEthV6ForwardState,
+  createEthV6ForwardState,
+  summarizeEthV6ForwardState,
+} from "../src/eth-v6-forward-validation.js";
+import { FROZEN_CANDIDATE_MANIFEST_SHA256 } from "../src/final-holdout-evaluator.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ETH_V6_LOOKBACK_DAYS = 120;
+const ETH_V6_FORWARD_KEY = "eth-futures-long-v6";
 const GROUPS = Object.freeze([
   Object.freeze({ group: "crypto-futures-15m", timeframe: "15m", horizon: 8, lookback: 200, days: 7, symbols: Object.freeze(["BTCUSDT", "ETHUSDT"]) }),
   Object.freeze({ group: "crypto-futures-1h", timeframe: "1h", horizon: 12, lookback: 200, days: 15, symbols: Object.freeze(["BTCUSDT", "ETHUSDT"]) }),
@@ -218,20 +228,105 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
   };
 }
 
+async function assertEthV6ReplayProof() {
+  const proof = await readJsonOptional(resolve("docs/eth-v6-replay-proof.json"), null);
+  if (!proof || proof.status !== "passed") throw new Error("ETH V6 deterministic replay proof is missing or failed");
+  if (proof.strategyId !== ETH_V6_FORWARD_CANDIDATE.id) throw new Error("ETH V6 replay proof strategy does not match frozen candidate");
+  if (proof.candidateManifestSha256 !== FROZEN_CANDIDATE_MANIFEST_SHA256) throw new Error("ETH V6 replay proof manifest mismatch");
+  if (proof.safeguards?.usedForSelection !== false || proof.safeguards?.parametersChanged !== false) {
+    throw new Error("ETH V6 replay proof safety flags are invalid");
+  }
+  return proof;
+}
+
+async function processEthV6Forward({ client, previousForwardState, cycleTime }) {
+  const replay = await assertEthV6ReplayProof();
+  const startTime = Math.max(ETH_V6_FORWARD_START - ETH_V6_LOOKBACK_DAYS * DAY_MS, cycleTime - ETH_V6_LOOKBACK_DAYS * DAY_MS);
+  const candlesResult = await collectBitgetCandles({
+    client,
+    market: "CRYPTO_FUTURES",
+    symbol: "ETHUSDT",
+    timeframe: "1d",
+    startTime,
+    endTime: cycleTime,
+    maxCandles: 500,
+  });
+  if (!Array.isArray(candlesResult.candles) || candlesResult.candles.length < 40) {
+    throw new Error("ETH V6 forward cycle has insufficient daily candle history");
+  }
+  const funding = await collectFundingRateHistory({
+    client,
+    symbol: "ETHUSDT",
+    productType: "usdt-futures",
+    startTime: Math.max(ETH_V6_FORWARD_START - 7 * DAY_MS, cycleTime - ETH_V6_LOOKBACK_DAYS * DAY_MS),
+    endTime: cycleTime,
+    pageSize: 100,
+    maxPages: 20,
+  });
+  const state = advanceEthV6ForwardState({
+    state: previousForwardState ?? createEthV6ForwardState(cycleTime),
+    candles: candlesResult.candles,
+    fundingRates: funding.records,
+    cycleTime,
+  });
+  const summary = summarizeEthV6ForwardState(state);
+  return Object.freeze({
+    state,
+    summary: Object.freeze({
+      status: "pass",
+      ...summary,
+      replay: Object.freeze({ status: replay.status, usedForSelection: false, generatedAt: replay.generatedAt }),
+      data: Object.freeze({
+        provider: "bitget-public-v2",
+        candleCount: candlesResult.candles.length,
+        firstCandle: candlesResult.candles[0]?.timestamp ?? null,
+        lastCandle: candlesResult.candles.at(-1)?.timestamp ?? null,
+        fundingRecords: funding.records.length,
+        fundingFirst: funding.records[0]?.timestamp ?? null,
+        fundingLast: funding.records.at(-1)?.timestamp ?? null,
+        collectedAt: cycleTime,
+      }),
+      safety: Object.freeze({
+        frozenCandidateOnly: true,
+        parametersRetunedAfterHoldout: false,
+        forwardSignalsOnly: true,
+        publicMarketDataOnly: true,
+        actualOrders: 0,
+        privateAccountRequests: 0,
+        livePromotion: false,
+      }),
+    }),
+  });
+}
+
 const statePath = resolve(process.argv[2] ?? "docs/shadow-state.json");
 const summaryPath = resolve(process.argv[3] ?? "docs/shadow-summary.json");
 const cycleTime = Date.now();
-const previous = await readJsonOptional(statePath, { schemaVersion: 2, createdAt: cycleTime, groups: {} });
+const previous = await readJsonOptional(statePath, { schemaVersion: 3, createdAt: cycleTime, groups: {}, forwardStrategies: {} });
 const client = new BitgetPublicClient({ minIntervalMs: 180, maxRetries: 4, timeoutMs: 12_000 });
-const nextState = { schemaVersion: 2, createdAt: previous.createdAt ?? cycleTime, updatedAt: cycleTime, groups: {} };
-const nextSummary = { schemaVersion: 2, status: "pass", generatedAt: cycleTime, groups: {}, safety: {
-  usesPublicMarketDataOnly: true,
-  usesAccountOrOrderApi: false,
-  modifiesExistingAppApi: false,
-  backfillsHistoricalOpenInterest: false,
-  mixesModelPairsInPromotionMetrics: false,
-  deploysModel: false,
-} };
+const nextState = {
+  schemaVersion: 3,
+  createdAt: previous.createdAt ?? cycleTime,
+  updatedAt: cycleTime,
+  groups: {},
+  forwardStrategies: {},
+};
+const nextSummary = {
+  schemaVersion: 3,
+  status: "pass",
+  generatedAt: cycleTime,
+  groups: {},
+  forwardStrategies: {},
+  safety: {
+    usesPublicMarketDataOnly: true,
+    usesAccountOrOrderApi: false,
+    modifiesExistingAppApi: false,
+    backfillsHistoricalOpenInterest: false,
+    mixesModelPairsInPromotionMetrics: false,
+    deploysModel: false,
+    frozenEthV6LiveOrderAllowed: false,
+  },
+};
 
 for (const config of GROUPS) {
   try {
@@ -248,6 +343,30 @@ for (const config of GROUPS) {
     nextSummary.groups[config.group] = { status: "fail", error: serializeError(error) };
     nextSummary.status = "fail";
   }
+}
+
+try {
+  const forward = await processEthV6Forward({
+    client,
+    previousForwardState: previous.forwardStrategies?.[ETH_V6_FORWARD_KEY] ?? null,
+    cycleTime,
+  });
+  nextState.forwardStrategies[ETH_V6_FORWARD_KEY] = forward.state;
+  nextSummary.forwardStrategies[ETH_V6_FORWARD_KEY] = forward.summary;
+} catch (error) {
+  nextState.forwardStrategies[ETH_V6_FORWARD_KEY] = previous.forwardStrategies?.[ETH_V6_FORWARD_KEY] ?? null;
+  nextSummary.forwardStrategies[ETH_V6_FORWARD_KEY] = {
+    status: "technical_failure",
+    candidateId: ETH_V6_FORWARD_CANDIDATE.id,
+    candidateManifestSha256: FROZEN_CANDIDATE_MANIFEST_SHA256,
+    error: serializeError(error),
+    safety: {
+      stateCarriedForwardWithoutMutation: true,
+      actualOrders: 0,
+      privateAccountRequests: 0,
+      livePromotion: false,
+    },
+  };
 }
 
 await writeJsonAtomically(statePath, nextState);
