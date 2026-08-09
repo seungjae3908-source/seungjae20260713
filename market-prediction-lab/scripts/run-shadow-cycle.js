@@ -4,6 +4,7 @@ import { analyzeMarket } from "../src/engine.js";
 import { BASELINE_MODEL } from "../src/tiny-model.js";
 import { BitgetPublicClient } from "../src/bitget-public-client.js";
 import { collectBitgetCandles, collectBitgetFuturesContext } from "../src/bitget-candle-collector.js";
+import { collectBitgetUtcDailyForwardCandles } from "../src/bitget-forward-daily-candles.js";
 import { collectFundingRateHistory, createTemporalDerivativesProvider } from "../src/derivatives-history.js";
 import { collectBitgetDerivedCandles, createTemporalMarketStructureProvider } from "../src/market-structure-history.js";
 import {
@@ -25,6 +26,14 @@ import { FROZEN_CANDIDATE_MANIFEST_SHA256 } from "../src/final-holdout-evaluator
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ETH_V6_LOOKBACK_DAYS = 120;
 const ETH_V6_FORWARD_KEY = "eth-futures-long-v6";
+const UTC_FORWARD_DATA_CONTRACT = Object.freeze({
+  version: 1,
+  timeframe: "1d",
+  timezone: "UTC",
+  granularity: "1Dutc",
+  closedHistorySource: "bitget-public-history-candles",
+  currentOpenSource: "bitget-public-candles",
+});
 const GROUPS = Object.freeze([
   Object.freeze({ group: "crypto-futures-15m", timeframe: "15m", horizon: 8, lookback: 200, days: 7, symbols: Object.freeze(["BTCUSDT", "ETHUSDT"]) }),
   Object.freeze({ group: "crypto-futures-1h", timeframe: "1h", horizon: 12, lookback: 200, days: 15, symbols: Object.freeze(["BTCUSDT", "ETHUSDT"]) }),
@@ -52,6 +61,39 @@ function serializeError(error) {
     details: error?.details ?? null,
     stack: typeof error?.stack === "string" ? error.stack.split("\n").slice(0, 10) : [],
   };
+}
+
+function hasUtcDataContract(state) {
+  return state?.dataContract?.version === UTC_FORWARD_DATA_CONTRACT.version
+    && state?.dataContract?.timeframe === UTC_FORWARD_DATA_CONTRACT.timeframe
+    && state?.dataContract?.timezone === UTC_FORWARD_DATA_CONTRACT.timezone
+    && state?.dataContract?.granularity === UTC_FORWARD_DATA_CONTRACT.granularity;
+}
+
+function prepareUtcForwardState(previous, candlesResult, cycleTime) {
+  if (hasUtcDataContract(previous)) return previous;
+  const existingRecords = previous?.ledger?.records?.length ?? 0;
+  const existingMissedSignals = previous?.missedSignals?.length ?? 0;
+  if (previous && (existingRecords > 0 || existingMissedSignals > 0)) {
+    throw new Error(`refusing UTC forward cutover with existing legacy evidence: records=${existingRecords}, missed=${existingMissedSignals}`);
+  }
+  const base = createEthV6ForwardState(cycleTime);
+  const priorUtcSignalBoundary = Math.max(ETH_V6_FORWARD_START - 1, candlesResult.currentOpenTimestamp - 2 * DAY_MS);
+  return Object.freeze({
+    ...base,
+    lastSignalEvaluated: priorUtcSignalBoundary,
+    dataContract: UTC_FORWARD_DATA_CONTRACT,
+    cutover: Object.freeze({
+      resetAt: cycleTime,
+      previousLegacyStateDiscarded: Boolean(previous),
+      previousLegacyRecordCount: existingRecords,
+      previousLegacyMissedSignalCount: existingMissedSignals,
+      reason: "align_forward_validation_with_frozen_utc_daily_contract",
+      historicalMetricsReused: false,
+      parametersChanged: false,
+      holdoutReusedForSelection: false,
+    }),
+  });
 }
 
 async function loadModelSelection(group) {
@@ -241,18 +283,16 @@ async function assertEthV6ReplayProof() {
 
 async function processEthV6Forward({ client, previousForwardState, cycleTime }) {
   const replay = await assertEthV6ReplayProof();
-  const startTime = Math.max(ETH_V6_FORWARD_START - ETH_V6_LOOKBACK_DAYS * DAY_MS, cycleTime - ETH_V6_LOOKBACK_DAYS * DAY_MS);
-  const candlesResult = await collectBitgetCandles({
+  const candlesResult = await collectBitgetUtcDailyForwardCandles({
     client,
-    market: "CRYPTO_FUTURES",
     symbol: "ETHUSDT",
-    timeframe: "1d",
-    startTime,
-    endTime: cycleTime,
-    maxCandles: 500,
+    productType: "usdt-futures",
+    asOf: cycleTime,
+    lookbackDays: ETH_V6_LOOKBACK_DAYS,
+    minimumClosedCandles: 60,
   });
-  if (!Array.isArray(candlesResult.candles) || candlesResult.candles.length < 40) {
-    throw new Error("ETH V6 forward cycle has insufficient daily candle history");
+  if (!Array.isArray(candlesResult.candles) || candlesResult.closedCandleCount < 60) {
+    throw new Error("ETH V6 forward cycle has insufficient UTC daily candle history");
   }
   const funding = await collectFundingRateHistory({
     client,
@@ -264,7 +304,7 @@ async function processEthV6Forward({ client, previousForwardState, cycleTime }) 
     maxPages: 20,
   });
   const state = advanceEthV6ForwardState({
-    state: previousForwardState ?? createEthV6ForwardState(cycleTime),
+    state: prepareUtcForwardState(previousForwardState, candlesResult, cycleTime),
     candles: candlesResult.candles,
     fundingRates: funding.records,
     cycleTime,
@@ -275,10 +315,16 @@ async function processEthV6Forward({ client, previousForwardState, cycleTime }) 
     summary: Object.freeze({
       status: "pass",
       ...summary,
+      dataContract: state.dataContract,
+      cutover: state.cutover ?? null,
       replay: Object.freeze({ status: replay.status, usedForSelection: false, generatedAt: replay.generatedAt }),
       data: Object.freeze({
-        provider: "bitget-public-v2",
+        provider: candlesResult.provider,
+        timezone: candlesResult.timezone,
+        granularity: candlesResult.granularity,
         candleCount: candlesResult.candles.length,
+        closedCandleCount: candlesResult.closedCandleCount,
+        currentOpenTimestamp: candlesResult.currentOpenTimestamp,
         firstCandle: candlesResult.candles[0]?.timestamp ?? null,
         lastCandle: candlesResult.candles.at(-1)?.timestamp ?? null,
         fundingRecords: funding.records.length,
@@ -367,6 +413,7 @@ try {
       livePromotion: false,
     },
   };
+  nextSummary.status = "fail";
 }
 
 await writeJsonAtomically(statePath, nextState);
