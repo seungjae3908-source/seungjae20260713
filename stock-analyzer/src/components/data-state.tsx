@@ -53,10 +53,11 @@ const ERROR_MESSAGES: Record<string, string> = {
   UPSTREAM_ERROR: '데이터 제공처 응답 오류로 불러오지 못했습니다',
 };
 
-export function ErrorState({ code, onRetry }: { code?: string; onRetry?: () => void }) {
+export function ErrorState({ code, message, onRetry }: { code?: string; message?: string; onRetry?: () => void }) {
   const notFound = code === 'UNKNOWN_TICKER';
-  const message =
-    (code && ERROR_MESSAGES[code]) ?? '데이터를 불러오지 못했습니다';
+  const resolvedMessage = message
+    ?? (code && ERROR_MESSAGES[code])
+    ?? '데이터를 불러오지 못했습니다';
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
       {notFound ? (
@@ -64,7 +65,7 @@ export function ErrorState({ code, onRetry }: { code?: string; onRetry?: () => v
       ) : (
         <AlertCircle className="h-7 w-7 text-warning" />
       )}
-      <div className="text-sm font-medium">{message}</div>
+      <div className="text-sm font-medium">{resolvedMessage}</div>
       {onRetry && (
         <button
           onClick={onRetry}
