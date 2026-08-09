@@ -3,6 +3,12 @@ import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { ProfileRequestCoordinator } from '@/lib/profile-request-coordinator';
 import {
+  AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
+  authBootstrapErrorMessage,
+  runFiniteAuthBootstrap,
+  withFiniteDeadline,
+} from '@/lib/auth-bootstrap';
+import {
   prepareBackupForSessionEnd,
   resumeBackupForSession,
 } from '@/lib/backup-sync-lifecycle';
@@ -29,6 +35,7 @@ export type MemberProfile = {
 type AuthContextValue = {
   configured: boolean;
   loading: boolean;
+  bootstrapError: string | null;
   session: Session | null;
   user: User | null;
   profile: MemberProfile | null;
@@ -38,6 +45,7 @@ type AuthContextValue = {
   can(capability: MemberCapability): boolean;
   isAdmin: boolean;
   isApproved: boolean;
+  retryBootstrap(): void;
   signIn(loginName: string, password: string): Promise<void>;
   signUp(loginName: string, password: string): Promise<void>;
   signOut(): Promise<void>;
@@ -96,6 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [loading, setLoading] = useState(isSupabaseConfigured);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const mountedRef = useRef(true);
   const signingInRef = useRef(false);
   const signingOutRef = useRef(false);
@@ -104,6 +113,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const profileRef = useRef<MemberProfile | null>(null);
   const profileLoadQueueRef = useRef<Promise<void>>(Promise.resolve());
   const profileRequestsRef = useRef(new ProfileRequestCoordinator<MemberProfile | null>());
+  const bootstrapAttemptRef = useRef(0);
 
   function applyProfile(next: MemberProfile | null) {
     profileRef.current = next;
@@ -137,7 +147,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           force: options.force,
           maxAgeMs: options.maxAgeMs ?? PROFILE_AUTO_REFRESH_MS,
           load: async () => {
-            const { data } = await getSupabase().from('profiles').select('*').eq('id', user.id).maybeSingle();
+            const { data, error } = await getSupabase().from('profiles').select('*').eq('id', user.id).maybeSingle();
+            if (error) throw error;
             const nextProfile = (data as MemberProfile | null) ?? null;
             if (
               hasCapability(profileRef.current, 'canAccessBasicInfo')
@@ -159,18 +170,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return queued;
   }
 
+  function runInitialBootstrap() {
+    if (!isSupabaseConfigured) {
+      setBootstrapError(null);
+      setLoading(false);
+      return;
+    }
+
+    const attempt = ++bootstrapAttemptRef.current;
+    setBootstrapError(null);
+    setLoading(true);
+
+    void runFiniteAuthBootstrap<Session | null>({
+      getSession: async () => {
+        const { data, error } = await getSupabase().auth.getSession();
+        if (error) throw error;
+        return data.session;
+      },
+      applySession: (next) => {
+        if (mountedRef.current && bootstrapAttemptRef.current === attempt) applySession(next);
+      },
+      loadProfile: async (next) => {
+        if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+        await loadProfile(next?.user ?? null);
+      },
+    }).catch((cause) => {
+      if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+      setBootstrapError(authBootstrapErrorMessage(cause));
+    }).finally(() => {
+      if (mountedRef.current && bootstrapAttemptRef.current === attempt) setLoading(false);
+    });
+  }
+
   useEffect(() => {
     mountedRef.current = true;
     if (!isSupabaseConfigured) { setLoading(false); return; }
-    void getSupabase().auth.getSession().then(async ({ data }) => {
-      if (!mountedRef.current) return;
-      applySession(data.session);
-      await loadProfile(data.session?.user ?? null);
-      if (mountedRef.current) setLoading(false);
-    });
+    runInitialBootstrap();
     const { data: sub } = getSupabase().auth.onAuthStateChange((_event, next) => {
       if (signingInRef.current && next) return;
       if (signingOutRef.current && next) return;
+      bootstrapAttemptRef.current += 1;
       const previousUserId = sessionRef.current?.user.id ?? null;
       const nextUserId = next?.user.id ?? null;
       const prepare = previousUserId && previousUserId !== nextUserId
@@ -178,14 +217,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         : Promise.resolve();
       void prepare.finally(() => {
         if (!mountedRef.current) return;
+        setBootstrapError(null);
         applySession(next);
-        void loadProfile(next?.user ?? null).finally(() => {
+        void withFiniteDeadline(
+          loadProfile(next?.user ?? null),
+          AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
+          'AUTH_PROFILE_TIMEOUT',
+        ).catch((cause) => {
+          if (mountedRef.current) setBootstrapError(authBootstrapErrorMessage(cause));
+        }).finally(() => {
           if (mountedRef.current) setLoading(false);
         });
       });
     });
     return () => {
       mountedRef.current = false;
+      bootstrapAttemptRef.current += 1;
       sub.subscription.unsubscribe();
     };
   }, []);
@@ -194,7 +241,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!session?.user) return;
     let active = true;
     const refresh = () => {
-      if (active && !signingOutRef.current) void loadProfile(session.user);
+      if (active && !signingOutRef.current) void loadProfile(session.user).catch(() => undefined);
     };
     const visibility = () => { if (document.visibilityState === 'visible') refresh(); };
     const timer = window.setInterval(refresh, PROFILE_AUTO_REFRESH_MS);
@@ -215,6 +262,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthContextValue>(() => ({
     configured: isSupabaseConfigured,
     loading,
+    bootstrapError,
     session,
     user: session?.user ?? null,
     profile,
@@ -224,9 +272,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     can: (capability) => hasCapability(profile, capability),
     isAdmin: permissions.canManageMembers,
     isApproved: permissions.canAccessBasicInfo,
+    retryBootstrap() {
+      runInitialBootstrap();
+    },
     async signIn(loginName, password) {
       const name = validate(loginName, password);
       signingInRef.current = true;
+      setBootstrapError(null);
       setLoading(true);
       try {
         const nextSession = await signInWithSupabase(name, password);
@@ -255,6 +307,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const previousRequestKey = profileRequestKey(previousSession);
       const task = (async () => {
         signingOutRef.current = true;
+        setBootstrapError(null);
         setLoading(true);
         try {
           const backupDrain = prepareBackupForSessionEnd();
@@ -294,7 +347,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const current = sessionRef.current;
       await loadProfile(current?.user ?? null, { force: true });
     },
-  }), [loading, membershipLevel, permissions, profile, session]);
+  }), [bootstrapError, loading, membershipLevel, permissions, profile, session]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
