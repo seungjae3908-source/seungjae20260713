@@ -105,6 +105,7 @@ if (replay.strategyId !== ETH_V6_FORWARD_CANDIDATE.id || replay.candidateManifes
 }
 
 const previous = await readJsonOptional(statePath, null);
+const previousSummary = await readJsonOptional(summaryPath, null);
 const client = new BitgetPublicClient({ minIntervalMs: 180, maxRetries: 4, timeoutMs: 15_000 });
 const candlesResult = await collectBitgetUtcDailyForwardCandles({
   client,
@@ -144,6 +145,8 @@ const auditInput = {
   fundingRecords: funding.records,
   candles: candlesResult.candles,
   classifyRegime: classifyEthV6ForwardRegime,
+  priorSignalAudit: previousSummary?.signalAudit ?? [],
+  priorMissedSignalAudit: previousSummary?.missedSignalAudit ?? [],
 };
 const cycleAudit = buildEthV6ForwardCycleAudit({ ...auditInput, previousState: preparedState });
 const cumulativeAudit = buildEthV6ForwardCycleAudit({ ...auditInput, previousState: null });
@@ -208,6 +211,7 @@ const markdown = `# ETHUSDT V6 Forward Paper / Shadow\n\n`
   + `- PF/MDD/expectancy: ${performanceAvailable ? `${format(report.profitFactor)} / ${format(report.maximumDrawdownPercent)}% / ${format(report.expectancy, 0)}원` : "N/A — insufficient settled sample"}\n`
   + `- cost stress return: ${costStressDisplay}\n`
   + `- regime diagnostics: trend/volatility are point-in-time and do not affect promotion; liquidity=${report.regimeResults?.liquidity?.status ?? "not_available"}\n`
+  + `- signal-origin audit: predecessor provenance is required; prior signal SHA/regime/funding snapshots are never rewritten by a later research HEAD.\n`
   + `- status: **${report.status}** / next: ${report.nextStage}\n`
   + `- actual order: 0 / private account API: 0 / live promotion: false\n`
   + `- V6 parameters, holdout, regime definitions and position sizing remain frozen.\n`
