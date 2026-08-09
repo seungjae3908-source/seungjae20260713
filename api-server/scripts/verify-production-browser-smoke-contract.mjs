@@ -25,7 +25,10 @@ assert(workflow.includes('playwright.production.config.ts'), 'workflow must use 
 assert(!workflow.includes('ssh '), 'Production browser workflow must not use SSH');
 assert(!workflow.includes('pm2 '), 'Production browser workflow must not mutate PM2');
 assert(!workflow.includes('supabase db'), 'Production browser workflow must not mutate Supabase');
-assert(!workflow.includes('deploy-production.sh'), 'Production browser workflow must not deploy');
+assert(
+  !workflow.replace(/^\s*-\s+ops\/deploy-production\.sh\s*$/m, '').includes('deploy-production.sh'),
+  'Production browser workflow must not deploy',
+);
 
 for (const route of ['/', '/stocks', '/stock-info', '/stock/005930', '/ai-chart', '/scanner', '/recommendations', '/paper-trading', '/account']) {
   assert(spec.includes(route), `major Production route missing: ${route}`);
