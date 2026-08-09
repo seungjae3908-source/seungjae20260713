@@ -37,7 +37,7 @@ test('active scanner query signal is available synchronously and restored afterw
 test('authorized fetch captures the active query signal before async session lookup', () => {
   const authFetch = source('stock-analyzer/src/lib/auth-fetch.ts');
   assert.match(authFetch, /const signal = init\.signal \?\? getActiveQuerySignal\(\)/);
-  assert.match(authFetch, /return fetch\(input, \{ \.\.\.init, headers, signal \}\)/);
+  assert.match(authFetch, /return await fetch\(input, \{ \.\.\.init, headers, signal: controller\.signal \}\)/);
   assert.ok(
     authFetch.indexOf('const signal =') < authFetch.indexOf('await getSupabase().auth.getSession()'),
     'AbortSignal must be captured before the asynchronous auth session lookup',
