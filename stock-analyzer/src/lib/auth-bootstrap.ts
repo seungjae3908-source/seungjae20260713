@@ -22,6 +22,7 @@ export async function withFiniteDeadline<T>(
   operation: Promise<T>,
   timeoutMs: number,
   code: AuthBootstrapTimeoutCode,
+  onTimeout?: (error: FiniteDeadlineError) => void,
 ): Promise<T> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error(`invalid finite deadline: ${timeoutMs}`);
@@ -29,7 +30,11 @@ export async function withFiniteDeadline<T>(
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new FiniteDeadlineError(code)), timeoutMs);
+    timer = setTimeout(() => {
+      const error = new FiniteDeadlineError(code);
+      onTimeout?.(error);
+      reject(error);
+    }, timeoutMs);
   });
 
   try {
@@ -42,7 +47,7 @@ export async function withFiniteDeadline<T>(
 export async function runFiniteAuthBootstrap<TSession>(input: {
   getSession: () => Promise<TSession>;
   applySession: (session: TSession) => void;
-  loadProfile: (session: TSession) => Promise<void>;
+  loadProfile: (session: TSession, signal: AbortSignal) => Promise<void>;
   sessionTimeoutMs?: number;
   profileTimeoutMs?: number;
 }): Promise<void> {
@@ -52,10 +57,13 @@ export async function runFiniteAuthBootstrap<TSession>(input: {
     'AUTH_SESSION_TIMEOUT',
   );
   input.applySession(session);
+
+  const profileController = new AbortController();
   await withFiniteDeadline(
-    input.loadProfile(session),
+    input.loadProfile(session, profileController.signal),
     input.profileTimeoutMs ?? AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
     'AUTH_PROFILE_TIMEOUT',
+    (error) => profileController.abort(error),
   );
 }
 
