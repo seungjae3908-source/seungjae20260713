@@ -1,147 +1,236 @@
 name: Prediction Lab Adaptive Candidate
 
 on:
-  schedule:
-    - cron: "47 * * * *"
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/prediction-lab-adaptive-candidate.yml
+  workflow_run:
+    workflows:
+      - Prediction Lab Hourly Shadow Validation
+    types:
+      - completed
 
 permissions:
-  actions: write
-  contents: write
-  pull-requests: read
+  actions: read
+  contents: read
 
 concurrency:
-  group: prediction-lab-branch-writer
+  group: prediction-lab-artifact-writer
   cancel-in-progress: false
 
 env:
-  SHADOW_BRANCH: feature/prediction-lab-standalone
   LAB_DIR: market-prediction-lab
+  SHADOW_ARTIFACT: prediction-lab-shadow-state
+  ADAPTIVE_ARTIFACT: prediction-lab-adaptive-candidate
 
 jobs:
   adaptive-candidate:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
-      - name: Checkout isolated Prediction Lab branch
+      - name: Locate exact successful shadow artifact
+        id: shadow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const triggerRunId = context.eventName === 'workflow_run'
+              ? Number(context.payload.workflow_run?.id ?? 0)
+              : 0;
+            let runs;
+            if (triggerRunId > 0) {
+              const run = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: triggerRunId });
+              if (run.data.conclusion !== 'success') {
+                core.setFailed(`Trigger shadow run ${triggerRunId} was not successful.`);
+                return;
+              }
+              runs = [run.data];
+            } else {
+              runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner,
+                repo,
+                workflow_id: 'prediction-lab-shadow-hourly.yml',
+                status: 'completed',
+                per_page: 100,
+              });
+              runs = runs.filter((run) => run.conclusion === 'success');
+            }
+            for (const run of runs) {
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner,
+                repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = artifacts.find((item) => item.name === process.env.SHADOW_ARTIFACT && !item.expired);
+              if (!artifact) continue;
+              core.setOutput('run_id', String(run.id));
+              core.setOutput('artifact_id', String(artifact.id));
+              core.info(`Pinned adaptive input to shadow run ${run.id}, artifact ${artifact.id}.`);
+              return;
+            }
+            core.setFailed(triggerRunId > 0
+              ? `Trigger shadow run ${triggerRunId} has no unexpired ${process.env.SHADOW_ARTIFACT} artifact.`
+              : 'No successful, unexpired shadow artifact is available.');
+
+      - name: Download exact shadow artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SHADOW_ARTIFACT }}
+          path: ${{ runner.temp }}/shadow-input
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.shadow.outputs.run_id }}
+
+      - name: Verify shadow provenance and digests
+        id: verify
+        shell: bash
+        env:
+          SHADOW_INPUT: ${{ runner.temp }}/shadow-input
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const path = require('path');
+          const digestBuffer = (value) => crypto.createHash('sha256').update(value).digest('hex');
+          const digest = (file) => digestBuffer(fs.readFileSync(file));
+          const input = process.env.SHADOW_INPUT;
+          const manifestPath = path.join(input, 'manifest.json');
+          const statePath = path.join(input, 'shadow-state.json');
+          const summaryPath = path.join(input, 'shadow-summary.json');
+          for (const file of [manifestPath, statePath, summaryPath]) {
+            if (!fs.existsSync(file)) throw new Error(`Missing required shadow artifact file: ${file}`);
+          }
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          if (manifest.schemaVersion !== 1 || manifest.kind !== 'prediction-lab-shadow-state') {
+            throw new Error('Unsupported shadow artifact manifest.');
+          }
+          if (!/^[0-9a-f]{40}$/.test(String(manifest.researchCodeSha ?? ''))) {
+            throw new Error('Shadow artifact researchCodeSha is invalid.');
+          }
+          if (!/^[0-9a-f]{40}$/.test(String(manifest.sourceGeneratedHead ?? ''))) {
+            throw new Error('Shadow artifact sourceGeneratedHead is invalid.');
+          }
+          const stateBytes = fs.readFileSync(statePath);
+          const summaryBytes = fs.readFileSync(summaryPath);
+          if (manifest.stateSha256 !== digest(statePath)) throw new Error('Shadow state SHA-256 mismatch.');
+          if (manifest.summarySha256 !== digest(summaryPath)) throw new Error('Shadow summary SHA-256 mismatch.');
+          if (manifest.sha256 !== digestBuffer(Buffer.concat([stateBytes, Buffer.from([0]), summaryBytes]))) {
+            throw new Error('Shadow combined SHA-256 mismatch.');
+          }
+          if (manifest.branchWrite !== false || manifest.liveOrderAllowed !== false || manifest.privateAccountRequestAllowed !== false) {
+            throw new Error('Shadow artifact safety flags are not fail-closed.');
+          }
+          const output = (name, value) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          output('research_code_sha', manifest.researchCodeSha);
+          output('shadow_state_digest', manifest.stateSha256);
+          output('source_generated_head', manifest.sourceGeneratedHead);
+          output('candidate_model_ids', JSON.stringify(manifest.candidateModelIds ?? [manifest.candidateModelId].filter(Boolean)));
+          output('reference_model_ids', JSON.stringify(manifest.referenceModelIds ?? [manifest.referenceModelId].filter(Boolean)));
+          NODE
+
+      - name: Checkout exact research code used by shadow artifact
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.SHADOW_BRANCH }}
-          fetch-depth: 0
+          ref: ${{ steps.verify.outputs.research_code_sha }}
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
+      - name: Restore exact shadow input
+        shell: bash
+        env:
+          SHADOW_INPUT: ${{ runner.temp }}/shadow-input
+        run: |
+          cp "$SHADOW_INPUT/shadow-state.json" "$LAB_DIR/docs/shadow-state.json"
+          cp "$SHADOW_INPUT/shadow-summary.json" "$LAB_DIR/docs/shadow-summary.json"
+
       - name: Run adaptive candidate safety tests
         working-directory: ${{ env.LAB_DIR }}
         run: node --test tests/adaptive-shadow-candidate.test.js tests/model-ensemble.test.js tests/shadow-ledger.test.js
 
-      - name: Build adaptive candidates from chronological live shadow data
+      - name: Build adaptive candidates from pinned shadow artifact
         working-directory: ${{ env.LAB_DIR }}
         run: node scripts/build-adaptive-shadow-candidate.js
 
-      - name: Display adaptive candidate report
-        working-directory: ${{ env.LAB_DIR }}
-        run: cat docs/adaptive-shadow-candidate-summary.json
-
-      - name: Commit isolated adaptive candidate artifacts
-        id: publish
+      - name: Build adaptive provenance manifest
         shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            market-prediction-lab/docs/adaptive-candidates \
-            market-prediction-lab/docs/adaptive-shadow-candidate-summary.json \
-            market-prediction-lab/docs/candidate-models-v2
-          if git diff --cached --quiet; then
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          base_head="$(git rev-parse HEAD)"
-          git fetch origin "${SHADOW_BRANCH}"
-          remote_head="$(git rev-parse "origin/${SHADOW_BRANCH}")"
-          if [ "${base_head}" != "${remote_head}" ]; then
-            echo "Prediction Lab branch advanced during this run; refusing a non-fast-forward publish." >&2
-            exit 1
-          fi
-          git commit -m "data: evaluate adaptive live-shadow candidates"
-          git push origin "HEAD:${SHADOW_BRANCH}"
-          echo "pushed=true" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Dispatch Application CI for updated Prediction Lab HEAD
-        if: steps.publish.outputs.pushed == 'true'
-        uses: actions/github-script@v7
         env:
-          TARGET_SHA: ${{ steps.publish.outputs.head_sha }}
+          RESEARCH_CODE_SHA: ${{ steps.verify.outputs.research_code_sha }}
+          SHADOW_RUN_ID: ${{ steps.shadow.outputs.run_id }}
+          SHADOW_ARTIFACT_ID: ${{ steps.shadow.outputs.artifact_id }}
+          PREVIOUS_STATE_DIGEST: ${{ steps.verify.outputs.shadow_state_digest }}
+          SOURCE_GENERATED_HEAD: ${{ steps.verify.outputs.source_generated_head }}
+          CANDIDATE_MODEL_IDS: ${{ steps.verify.outputs.candidate_model_ids }}
+          REFERENCE_MODEL_IDS: ${{ steps.verify.outputs.reference_model_ids }}
+        run: |
+          rm -rf adaptive-artifact
+          mkdir -p adaptive-artifact
+          cp "$LAB_DIR/docs/adaptive-shadow-candidate-summary.json" adaptive-artifact/adaptive-shadow-candidate-summary.json
+          if [ -d "$LAB_DIR/docs/adaptive-candidates" ]; then cp -R "$LAB_DIR/docs/adaptive-candidates" adaptive-artifact/adaptive-candidates; fi
+          if [ -d "$LAB_DIR/docs/candidate-models-v2" ]; then cp -R "$LAB_DIR/docs/candidate-models-v2" adaptive-artifact/candidate-models-v2; fi
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const path = require('path');
+          const digestBuffer = (value) => crypto.createHash('sha256').update(value).digest('hex');
+          const digest = (file) => digestBuffer(fs.readFileSync(file));
+          const summaryPath = 'adaptive-artifact/adaptive-shadow-candidate-summary.json';
+          if (!fs.existsSync(summaryPath)) throw new Error('Adaptive candidate summary was not generated.');
+          const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true })
+            .flatMap((entry) => {
+              const full = path.join(dir, entry.name);
+              return entry.isDirectory() ? walk(full) : [full];
+            })
+            .filter((file) => !file.endsWith('/manifest.json') && !file.endsWith('\\manifest.json'))
+            .sort();
+          const files = walk('adaptive-artifact');
+          if (files.length === 0) throw new Error('Adaptive artifact bundle is empty.');
+          const bundleHash = crypto.createHash('sha256');
+          for (const file of files) {
+            const relative = path.relative('adaptive-artifact', file).split(path.sep).join('/');
+            bundleHash.update(relative);
+            bundleHash.update(Buffer.from([0]));
+            bundleHash.update(fs.readFileSync(file));
+            bundleHash.update(Buffer.from([0]));
+          }
+          const candidateModelIds = JSON.parse(process.env.CANDIDATE_MODEL_IDS || '[]');
+          const referenceModelIds = JSON.parse(process.env.REFERENCE_MODEL_IDS || '[]');
+          const manifest = {
+            schemaVersion: 1,
+            kind: 'prediction-lab-adaptive-candidate',
+            researchCodeSha: process.env.RESEARCH_CODE_SHA,
+            predecessorRunId: process.env.SHADOW_RUN_ID,
+            predecessorArtifactId: process.env.SHADOW_ARTIFACT_ID,
+            previousStateDigest: process.env.PREVIOUS_STATE_DIGEST,
+            sourceGeneratedHead: process.env.SOURCE_GENERATED_HEAD,
+            candidateModelIds,
+            referenceModelIds,
+            candidateModelId: candidateModelIds[0] ?? null,
+            referenceModelId: referenceModelIds[0] ?? null,
+            createdAt: new Date().toISOString(),
+            summarySha256: digest(summaryPath),
+            sha256: bundleHash.digest('hex'),
+            branchWrite: false,
+            liveOrderAllowed: false,
+            privateAccountRequestAllowed: false,
+          };
+          fs.writeFileSync('adaptive-artifact/manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+      - name: Upload adaptive candidate artifact
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            const targetSha = process.env.TARGET_SHA;
-            if (!/^[0-9a-f]{40}$/.test(targetSha)) {
-              core.setFailed(`Invalid Prediction Lab HEAD SHA: ${targetSha}`);
-              return;
-            }
+          name: ${{ env.ADAPTIVE_ARTIFACT }}
+          path: adaptive-artifact
+          if-no-files-found: error
+          retention-days: 90
 
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const shadowBranch = process.env.SHADOW_BRANCH;
-            let pull = null;
-            let lastMatchCount = 0;
-            for (let attempt = 1; attempt <= 10; attempt += 1) {
-              const pulls = await github.rest.pulls.list({
-                owner,
-                repo,
-                state: 'open',
-                base: context.payload.repository?.default_branch ?? 'main',
-                head: `${owner}:${shadowBranch}`,
-                per_page: 10,
-              });
-              const matching = pulls.data.filter((candidate) => candidate.head.sha === targetSha);
-              lastMatchCount = matching.length;
-              if (matching.length === 1) {
-                pull = matching[0];
-                break;
-              }
-              await new Promise((resolve) => setTimeout(resolve, 2000));
-            }
-            if (!pull) {
-              core.setFailed(`Expected one open PR for ${shadowBranch} at ${targetSha}; found ${lastMatchCount}.`);
-              return;
-            }
-
-            let checkoutSha = null;
-            for (let attempt = 1; attempt <= 10; attempt += 1) {
-              try {
-                const ref = await github.rest.git.getRef({ owner, repo, ref: `pull/${pull.number}/merge` });
-                const commit = await github.rest.repos.getCommit({ owner, repo, ref: ref.data.object.sha });
-                if (commit.data.parents.some((parent) => parent.sha === targetSha)) {
-                  checkoutSha = ref.data.object.sha;
-                  break;
-                }
-              } catch (error) {
-                if (error.status !== 404) throw error;
-              }
-              await new Promise((resolve) => setTimeout(resolve, 2000));
-            }
-            if (!checkoutSha) {
-              core.setFailed(`Pull request #${pull.number} merge ref was not refreshed for ${targetSha}.`);
-              return;
-            }
-
-            await github.rest.actions.createWorkflowDispatch({
-              owner,
-              repo,
-              workflow_id: 'futures-public-network-smoke.yml',
-              ref: context.payload.repository?.default_branch ?? 'main',
-              inputs: { target_sha: targetSha, checkout_ref: checkoutSha },
-            });
-            core.info(`Dispatched Application CI for PR #${pull.number} at ${targetSha} using merge commit ${checkoutSha}.`);
+      - name: Assert immutable checkout HEAD
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ steps.verify.outputs.research_code_sha }}"

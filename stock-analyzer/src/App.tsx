@@ -23,6 +23,7 @@ const DetailPage = lazy(() => import('@/pages/detail'));
 const WatchlistPage = lazy(() => import('@/pages/watchlist'));
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
+const SignalScannerPage = lazy(() => import('@/pages/signal-scanner'));
 const StockInfoPage = lazy(() => import('@/pages/stock-info'));
 const MarketInformationPage = lazy(() => import('@/pages/market-information'));
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
@@ -38,6 +39,7 @@ const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const BacktestsPage = lazy(() => import('@/pages/backtests'));
 const PaperTradingPage = lazy(() => import('@/pages/paper-trading'));
+const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
 const NotFound = lazy(() => import('@/pages/not-found'));
 const Phase4RiskE2EPage = lazy(() => import('@/pages/phase4-risk-e2e'));
 const Phase5BacktestE2EPage = lazy(() => import('@/pages/phase5-backtest-e2e'));
@@ -113,13 +115,20 @@ function gated(capability: MemberCapability, child: React.ReactNode) {
   return <CapabilityGate capability={capability}>{child}</CapabilityGate>;
 }
 
-function ScannerAccess() { return gated('canAccessRiskPreview', <TechnicalWorkspacePage />); }
+function ScannerAccess() {
+  const auth = useAuth();
+  return gated(
+    'canAccessBasicInfo',
+    auth.can('canAccessRiskPreview') ? <TechnicalWorkspacePage /> : <SignalScannerPage />,
+  );
+}
 function AiChartAccess() { return gated('canAccessRiskPreview', <AiChartPage />); }
 function AiChatAccess() { return gated('canAccessBasicInfo', <AiChatPage />); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
 function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingAccess() { return gated('canAccessPaperTrading', <PaperTradingPage />); }
+function AutoTradingAccess() { return gated('canPlaceOrders', <AutoTradingPage />); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
 function BasicMarketInformationAccess() { return gated('canAccessBasicInfo', <MarketInformationPage />); }
 function SpotMarketInformationAccess() { return gated('canAccessSpot', <MarketInformationPage />); }
@@ -144,7 +153,7 @@ function ApprovedRouter() {
     <Route path="/coins/spot" component={SpotMarketInformationAccess} />
     <Route path="/coins/futures" component={FuturesMarketInformationAccess} />
     <Route path="/stocks" component={UnifiedAssetSearchAccess} />
-    <Route path="/auto-trading" component={ScannerAccess} />
+    <Route path="/auto-trading" component={AutoTradingAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
     <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />

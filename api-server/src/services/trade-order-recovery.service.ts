@@ -51,6 +51,13 @@ function timestamp(value: unknown): string | null {
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
+function invalidResponseCode(baseUrl: string) {
+  if (baseUrl.includes('bitget.com')) return 'BITGET_INVALID_RESPONSE';
+  if (baseUrl.includes('upbit.com')) return 'UPBIT_INVALID_RESPONSE';
+  if (baseUrl.includes('kiwoom.com')) return 'KIWOOM_INVALID_RESPONSE';
+  return 'EXCHANGE_INVALID_RESPONSE';
+}
+
 async function sendRecoveryRequest(baseUrl: string, request: PreparedExchangeRequest) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12_000);
@@ -62,33 +69,48 @@ async function sendRecoveryRequest(baseUrl: string, request: PreparedExchangeReq
       body: request.body,
       signal: controller.signal,
     });
-    const payload = await response.json().catch(() => ({})) as unknown;
     if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
-    return isRecord(payload) ? payload : { data: payload };
+    const raw = await response.text();
+    if (!raw.trim()) throw new Error(invalidResponseCode(baseUrl));
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      throw new Error(invalidResponseCode(baseUrl));
+    }
+    if (!isRecord(payload)) throw new Error(invalidResponseCode(baseUrl));
+    return payload;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw new Error('EXCHANGE_TIMEOUT');
+    if (error instanceof TypeError) throw new Error('EXCHANGE_NETWORK_ERROR');
     throw error;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function bitgetData(payload: ExchangePayload) {
-  if (String(payload.code ?? '') !== '00000') {
-    throw new Error(`BITGET_${String(payload.code ?? 'INVALID_RESPONSE')}`);
-  }
+function bitgetData(payload: ExchangePayload, expectedClientOid: string) {
+  const code = text(payload.code);
+  if (!code) throw new Error('BITGET_INVALID_RESPONSE');
+  if (code !== '00000') throw new Error(`BITGET_${code}`);
   const candidate = Array.isArray(payload.data) ? payload.data[0] : payload.data;
-  if (!isRecord(candidate)) throw new Error('BITGET_ORDER_LOOKUP_EMPTY');
+  if (!isRecord(candidate)) throw new Error('BITGET_INVALID_RESPONSE');
+  if (text(candidate.clientOid) !== expectedClientOid) throw new Error('BITGET_INVALID_RESPONSE');
   return candidate;
 }
 
-function upbitData(payload: ExchangePayload) {
+function upbitData(payload: ExchangePayload, expectedIdentifier: string) {
   if (payload.error) throw new Error('UPBIT_ORDER_LOOKUP_FAILED');
+  if (text(payload.identifier) !== expectedIdentifier) throw new Error('UPBIT_INVALID_RESPONSE');
   return payload;
 }
 
 function kiwoomData(payload: ExchangePayload) {
-  const code = String(payload.return_code ?? payload.returnCode ?? payload.code ?? '0');
+  const rawCode = payload.return_code ?? payload.returnCode ?? payload.code;
+  if (rawCode === null || rawCode === undefined || String(rawCode).trim() === '') {
+    throw new Error('KIWOOM_INVALID_RESPONSE');
+  }
+  const code = String(rawCode);
   if (!['0', '00000'].includes(code)) throw new Error(`KIWOOM_${code}`);
   return payload;
 }
@@ -126,7 +148,7 @@ function fillFromRow(row: ExchangePayload, fallbackId: string, fallbackTime: str
 }
 
 function bitgetSnapshot(payload: ExchangePayload, order: TradingOrder): TradingExchangeOrderSnapshot {
-  const row = bitgetData(payload);
+  const row = bitgetData(payload, order.clientOrderId);
   const providerStatusCode = String(row.status ?? row.state ?? '').toLowerCase();
   const requestedQuantity = finiteNumber(row.size ?? row.quantity ?? row.qty) ?? order.requestedQuantity;
   const filledQuantity = finiteNumber(row.baseVolume ?? row.filledQty ?? row.filledQuantity ?? row.accBaseVolume) ?? 0;
@@ -154,7 +176,7 @@ function bitgetSnapshot(payload: ExchangePayload, order: TradingOrder): TradingE
 }
 
 function upbitSnapshot(payload: ExchangePayload, order: TradingOrder): TradingExchangeOrderSnapshot {
-  const row = upbitData(payload);
+  const row = upbitData(payload, order.clientOrderId);
   const providerStatusCode = String(row.state ?? '').toLowerCase();
   const requestedQuantity = finiteNumber(row.volume) ?? order.requestedQuantity;
   const filledQuantity = finiteNumber(row.executed_volume) ?? 0;
@@ -198,8 +220,8 @@ function rowsFromKiwoom(payload: ExchangePayload) {
 }
 
 function kiwoomSnapshot(payload: ExchangePayload, order: TradingOrder): TradingExchangeOrderSnapshot {
+  if (!order.exchangeOrderId) throw new Error('KIWOOM_EXCHANGE_ORDER_ID_UNKNOWN');
   const rows = rowsFromKiwoom(kiwoomData(payload));
-  if (!order.exchangeOrderId) throw new Error('KIWOOM_ORDER_ID_REQUIRED_FOR_RECOVERY');
   const row = rows.find((candidate) => text(candidate.ord_no ?? candidate.order_no ?? candidate.orig_ord_no) === order.exchangeOrderId);
   if (!row) throw new Error('KIWOOM_ORDER_LOOKUP_INCONCLUSIVE');
   const requestedQuantity = finiteNumber(row.ord_qty ?? row.order_qty) ?? order.requestedQuantity;
@@ -228,8 +250,9 @@ function kiwoomSnapshot(payload: ExchangePayload, order: TradingOrder): TradingE
 }
 
 function transientRecoveryError(code: string) {
-  return code === 'EXCHANGE_TIMEOUT' || code.startsWith('EXCHANGE_HTTP_')
-    || code.endsWith('_ORDER_LOOKUP_EMPTY') || code.endsWith('_ORDER_LOOKUP_FAILED');
+  return code === 'EXCHANGE_TIMEOUT' || code === 'EXCHANGE_NETWORK_ERROR' || code.startsWith('EXCHANGE_HTTP_')
+    || code.endsWith('_ORDER_LOOKUP_EMPTY') || code.endsWith('_ORDER_LOOKUP_FAILED')
+    || code.endsWith('_INVALID_RESPONSE');
 }
 
 export class TradeOrderRecoveryService {
@@ -254,6 +277,9 @@ export class TradeOrderRecoveryService {
     }
     if (plan.accountMode === 'paper' || (plan.accountMode === 'mock' && plan.exchange !== 'kiwoom')) {
       return this.pending(order, 'PAPER_ORDER_RECOVERY_REQUIRES_REVIEW', true);
+    }
+    if (plan.exchange === 'kiwoom' && !order.exchangeOrderId) {
+      return this.pending(order, 'KIWOOM_EXCHANGE_ORDER_ID_UNKNOWN', true);
     }
 
     try {
@@ -308,7 +334,8 @@ export class TradeOrderRecoveryService {
       cancellationIntent,
       partialFillPreserved: snapshot.state === 'CANCELED' && snapshot.filledQuantity > 0,
       filledAfterCancelRequest: cancellationIntent && snapshot.state === 'FILLED',
-      orderSubmissionAttempted: false,
+      orderResubmitted: false,
+      recoveryRequired: false,
     });
   }
 
@@ -333,7 +360,9 @@ export class TradeOrderRecoveryService {
         nextRetryAt: order.nextRetryAt,
         manualReviewRequired: requiresReview,
         cancellationIntent: Boolean(order.cancelRequestClaimId || order.cancelRequestedAt),
-        orderSubmissionAttempted: false,
+        submissionOutcome: 'unknown',
+        recoveryRequired: true,
+        orderResubmitted: false,
       },
     );
   }

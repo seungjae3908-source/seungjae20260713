@@ -2,11 +2,14 @@ name: Prediction Lab Long History V1
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - feature/prediction-lab-standalone
+    inputs:
+      research_ref:
+        description: Exact research commit/ref to validate
+        required: false
+        type: string
+  pull_request:
+    branches: [main]
     paths:
-      - .github/workflows/prediction-lab-long-history-v1.yml
       - market-prediction-lab/package.json
       - market-prediction-lab/src/historical-backtest-data.js
       - market-prediction-lab/src/binance-futures-history.js
@@ -23,35 +26,48 @@ on:
       - market-prediction-lab/scripts/run-v4-history.js
       - market-prediction-lab/scripts/run-v5-history.js
       - market-prediction-lab/scripts/run-v6-history.js
-      - market-prediction-lab/tests/historical-backtest-data.test.js
-      - market-prediction-lab/tests/binance-futures-history.test.js
-      - market-prediction-lab/tests/v2-market-optimizer.test.js
-      - market-prediction-lab/tests/v3-market-filter-optimizer.test.js
-      - market-prediction-lab/tests/v4-momentum-regime-optimizer.test.js
-      - market-prediction-lab/tests/v5-price-structure-optimizer.test.js
-      - market-prediction-lab/tests/v6-independent-breakout-retest-optimizer.test.js
+      - market-prediction-lab/tests/**
 
 permissions:
-  contents: write
+  actions: read
+  contents: read
 
 concurrency:
-  group: prediction-lab-long-history-v1-${{ github.ref }}
+  group: prediction-lab-long-history-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
-      - name: Checkout isolated research branch
+      - name: Resolve immutable research ref
+        id: research
+        shell: bash
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          ref="$PR_SHA"
+          if [ -z "$ref" ]; then ref="$INPUT_REF"; fi
+          if [ -z "$ref" ]; then ref="$GITHUB_SHA"; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout isolated research revision
         uses: actions/checkout@v4
         with:
-          ref: feature/prediction-lab-standalone
+          ref: ${{ steps.research.outputs.ref }}
+          persist-credentials: false
+
+      - name: Record immutable research SHA
+        id: sha
+        shell: bash
+        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
       - name: Validate isolated lab
         working-directory: market-prediction-lab
@@ -77,20 +93,15 @@ jobs:
         working-directory: market-prediction-lab
         run: npm run backtest:v6:history -- long-history-v1 docs/long-history-v6-result.json docs/long-history-v6-result.md
 
-      - name: Display result tables
-        if: always()
-        working-directory: market-prediction-lab
+      - name: Build immutable provenance manifest
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
         run: |
-          test -f docs/long-history-v1-result.md
-          cat docs/long-history-v1-result.md
-          test -f docs/long-history-v3-result.md
-          cat docs/long-history-v3-result.md
-          test -f docs/long-history-v4-result.md
-          cat docs/long-history-v4-result.md
-          test -f docs/long-history-v5-result.md
-          cat docs/long-history-v5-result.md
-          test -f docs/long-history-v6-result.md
-          cat docs/long-history-v6-result.md
+          mkdir -p market-prediction-lab/docs
+          cat > market-prediction-lab/docs/long-history-provenance.json <<JSON
+          {"schemaVersion":1,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false}
+          JSON
 
       - name: Upload long-history research artifacts
         if: always()
@@ -109,28 +120,12 @@ jobs:
             market-prediction-lab/docs/long-history-v5-result.md
             market-prediction-lab/docs/long-history-v6-result.json
             market-prediction-lab/docs/long-history-v6-result.md
+            market-prediction-lab/docs/long-history-provenance.json
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 90
 
-      - name: Commit compact research result
-        if: success()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            market-prediction-lab/docs/long-history-v1-result.json \
-            market-prediction-lab/docs/long-history-v1-result.md \
-            market-prediction-lab/docs/long-history-v3-result.json \
-            market-prediction-lab/docs/long-history-v3-result.md \
-            market-prediction-lab/docs/long-history-v4-result.json \
-            market-prediction-lab/docs/long-history-v4-result.md \
-            market-prediction-lab/docs/long-history-v5-result.json \
-            market-prediction-lab/docs/long-history-v5-result.md \
-            market-prediction-lab/docs/long-history-v6-result.json \
-            market-prediction-lab/docs/long-history-v6-result.md
-          if git diff --cached --quiet; then
-            echo "No compact result changes"
-            exit 0
-          fi
-          git commit -m "test(research): record long-history V1 through V6 result"
-          git push origin HEAD:feature/prediction-lab-standalone
+      - name: Assert immutable checkout HEAD
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"

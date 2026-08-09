@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import './chart-external-window.test';
 import {
   buildChartAnalysis,
   chartAnalysisTimelineKey,
