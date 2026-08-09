@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "candidateId": "eth-futures-long-v6",
+  "candidateManifestSha256": "475acbec2df66cea18f3d5b2b2212e739d18a3148b58db5dc6ca2dd9511d8b20",
+  "startedAt": 1786233795739,
+  "updatedAt": 1786233795739,
+  "lastSignalEvaluated": null,
+  "ledger": {
+    "version": 0,
+    "records": []
+  },
+  "missedSignals": [],
+  "paper": {
+    "initialCapital": 1000000,
+    "equity": 1000000
+  },
+  "safeguards": {
+    "frozenCandidateOnly": true,
+    "parametersRetunedAfterHoldout": false,
+    "forwardSignalsOnly": true,
+    "lateSignalsNeverBackfilled": true,
+    "oneOpenPositionMaximum": true,
+    "riskPerTrade": 0.01,
+    "leverage": 1,
+    "publicMarketDataOnly": true,
+    "orderSubmitted": false,
+    "privateAccountRequestAllowed": false,
+    "liveOrderAllowed": false
+  },
+  "stateSha256": "49c226e5189e6bca8802fafdb8c0a54f29e96d09a0a51583abcf7c6de1e25023"
+}
