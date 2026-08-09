@@ -3,15 +3,17 @@ name: Prediction Lab ETH V6 Forward Validation
 on:
   push:
     branches:
-      - feature/prediction-lab-standalone
+      - main
     paths:
       - .github/workflows/prediction-lab-eth-v6-forward.yml
+      - market-prediction-lab/src/bitget-forward-daily-candles.js
       - market-prediction-lab/src/eth-v6-forward-validation.js
       - market-prediction-lab/scripts/run-eth-v6-replay-proof.js
       - market-prediction-lab/scripts/run-eth-v6-forward-cycle.js
+      - market-prediction-lab/tests/bitget-forward-daily-candles.test.js
       - market-prediction-lab/tests/eth-v6-forward-validation.test.js
   schedule:
-    - cron: "20 16 * * *"
+    - cron: "20 0 * * *"
   workflow_dispatch:
     inputs:
       research_ref:
@@ -28,7 +30,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RESEARCH_BRANCH: feature/prediction-lab-standalone
+  RESEARCH_BRANCH: main
   ARTIFACT_NAME: prediction-lab-eth-v6-forward-state
 
 jobs:
@@ -132,7 +134,7 @@ jobs:
 
       - name: Verify ETH V6 forward guards
         working-directory: market-prediction-lab
-        run: node --test tests/eth-v6-forward-validation.test.js
+        run: node --test tests/bitget-forward-daily-candles.test.js tests/eth-v6-forward-validation.test.js
 
       - name: Create deterministic replay proof once
         working-directory: market-prediction-lab
