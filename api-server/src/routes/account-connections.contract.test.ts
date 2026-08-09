@@ -68,3 +68,32 @@ test('account snapshot source never serializes the vault credential object into 
     assert.doesNotMatch(block, /\bapiKey\b/);
   }
 });
+
+test('account connection router correctly uses adapter service and prohibits direct write access', () => {
+  const routeSource = source('api-server/src/routes/account-connections.ts');
+
+  // Check imports
+  const importMatch = routeSource.match(/import {([\s\S]*?)} from '..\/services\/trade-exchange-adapters.service'/);
+  assert.ok(importMatch, 'Missing import from ../services/trade-exchange-adapters.service');
+  const importedNames = importMatch[1].split(',').map(s => s.trim().replace(/^type\s+/, ''));
+  assert.ok(importedNames.includes('prepareUpbitAccounts'), 'Missing prepareUpbitAccounts');
+  assert.ok(importedNames.includes('prepareBitgetAccount'), 'Missing prepareBitgetAccount');
+  assert.ok(importedNames.includes('prepareBitgetPositions'), 'Missing prepareBitgetPositions');
+
+  // Check forbidden local implementations
+  assert.doesNotMatch(routeSource, /function upbitAuthorization/);
+  assert.doesNotMatch(routeSource, /function bitgetHeaders/);
+
+  // Check forbidden direct calls
+  const forbiddenCalls = [
+    'prepareBitgetMarginMode',
+    'prepareBitgetLeverage',
+    'prepareBitgetOrder',
+    'prepareBitgetCancel',
+    'prepareUpbitOrder',
+    'prepareUpbitCancel',
+  ];
+  for (const call of forbiddenCalls) {
+    assert.doesNotMatch(routeSource, new RegExp('\\b' + call + '\\b'), `Forbidden direct call detected: ${call}`);
+  }
+});
