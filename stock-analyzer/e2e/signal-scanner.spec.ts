@@ -301,14 +301,14 @@ test('partial data and provider failure are distinguished without fake success',
   await expect(page.getByText('FAILED · provider_error')).toBeVisible();
 
   mode = 'error';
-  await page.getByRole('button', { name: '새로고침' }).click();
+  await page.getByRole('button', { name: '새로고침', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('시장데이터 공급자 응답이 불안정합니다');
   expect(unexpectedHttp).toEqual([]);
 });
 
 test('scanner lifecycle: refresh, normalization, monotonic guard, and isolation', async ({ page }) => {
   await installBaseMocks(page, []);
-  
+
   let handler: (route: Route) => Promise<void> = async (route) => {
     await fulfill(route, scannerResponse({ generatedAt: '2026-08-05T00:00:00.000Z' }));
   };
@@ -317,25 +317,25 @@ test('scanner lifecycle: refresh, normalization, monotonic guard, and isolation'
   await page.goto('/__phase11-technical-workspace-e2e');
   await expect(page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ })).toBeVisible();
 
-  // Duplicate suppression
   handler = async (route) => {
     const res = scannerResponse({ generatedAt: '2026-08-05T01:00:00.000Z' });
     const card = res.cards[0];
     res.cards = [card, { ...card, signalId: 'dup' }];
     await fulfill(route, res);
   };
-  await page.getByRole('button', { name: '새로고침' }).click();
+  await page.getByRole('button', { name: '새로고침', exact: true }).click();
   await expect(page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ })).toHaveCount(1);
 
-  // Monotonic guard (Older response)
   handler = async (route) => {
     await fulfill(route, scannerResponse({ generatedAt: '2026-08-05T00:30:00.000Z', symbol: 'NEW', name: '새종목' }));
   };
-  await page.getByRole('button', { name: '새로고침' }).click();
+  await page.getByRole('button', { name: '새로고침', exact: true }).click();
   await expect(page.getByText('새종목', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ })).toHaveCount(1);
 });
 
-test('scanner automatic polling refreshes ranking, membership, dedupe, and freshness without user action', async ({ page }) => {
+test('scanner automatic 30-second polling refreshes ranking, membership, dedupe, and freshness without user action', async ({ page }) => {
+  test.setTimeout(125_000);
   const forbidden: string[] = [];
   const unexpectedHttp: string[] = [];
   const consoleErrors: string[] = [];
@@ -349,7 +349,6 @@ test('scanner automatic polling refreshes ranking, membership, dedupe, and fresh
   });
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
-  await page.clock.install({ time: new Date('2026-08-05T00:00:00.000Z') });
   await installBaseMocks(page, unexpectedHttp);
 
   const card = (symbol: string, name: string, score: number) => ({
@@ -409,22 +408,85 @@ test('scanner automatic polling refreshes ranking, membership, dedupe, and fresh
   );
   await expect.poll(activeNames).toEqual(['알파', '베타']);
 
-  await page.clock.fastForward(30_000);
+  await expect.poll(() => scanCalls, { timeout: 35_000 }).toBeGreaterThanOrEqual(2);
   await expect(scanner.getByText('감마', { exact: true })).toHaveCount(1);
   await expect.poll(activeNames).toEqual(['베타', '감마', '알파']);
 
-  await page.clock.fastForward(30_000);
+  await expect.poll(() => scanCalls, { timeout: 35_000 }).toBeGreaterThanOrEqual(3);
   await expect(scanner.getByText('베타', { exact: true })).toBeVisible();
   await expect(scanner.getByText('알파', { exact: true })).toHaveCount(0);
   await expect(scanner.getByText('감마', { exact: true })).toHaveCount(0);
   await expect.poll(activeNames).toEqual(['베타']);
 
-  await page.clock.fastForward(30_000);
+  await expect.poll(() => scanCalls, { timeout: 35_000 }).toBeGreaterThanOrEqual(4);
   await expect(scanner.getByText('오래된스냅샷', { exact: true })).toHaveCount(0);
   await expect.poll(activeNames).toEqual(['베타']);
-  expect(scanCalls).toBeGreaterThanOrEqual(4);
   expect(forbidden).toEqual([]);
   expect(unexpectedHttp).toEqual([]);
   expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);
+});
+
+test('scanner requestKey resets generatedAt freshness across real market and timeframe contexts', async ({ page }) => {
+  const unexpectedHttp: string[] = [];
+  await installBaseMocks(page, unexpectedHttp);
+  await page.route('**/api/market/scan**', async (route) => {
+    const url = new URL(route.request().url());
+    const market = url.searchParams.get('market') === 'US' ? 'US' : 'KR';
+    const timeframe = url.searchParams.get('timeframe') ?? '1D';
+    if (market === 'KR') {
+      await fulfill(route, scannerResponse({ market: 'KR', timeframe, symbol: 'KRNEW', name: 'KR 최신 기준', generatedAt: '2026-08-05T10:00:00.000Z' }));
+      return;
+    }
+    if (timeframe === '4H') {
+      await fulfill(route, scannerResponse({ market: 'US', timeframe, symbol: 'US4H', name: 'US 4시간 컨텍스트', generatedAt: '2026-08-05T08:00:00.000Z' }));
+      return;
+    }
+    await fulfill(route, scannerResponse({ market: 'US', timeframe, symbol: 'US1D', name: 'US 일봉 컨텍스트', generatedAt: '2026-08-05T09:00:00.000Z' }));
+  });
+
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await expect(page.getByText('KR 최신 기준', { exact: true })).toBeVisible();
+  const marketSelector = page.getByRole('region', { name: '검색 시장' });
+  await marketSelector.getByRole('button', { name: /^미국주식/ }).click();
+  await expect(page.getByText('US 일봉 컨텍스트', { exact: true })).toBeVisible();
+  await page.getByLabel('시간봉').selectOption('4H');
+  await expect(page.getByText('US 4시간 컨텍스트', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('시간봉')).toHaveValue('4H');
+  expect(unexpectedHttp).toEqual([]);
+});
+
+test('scanner market and timeframe race keeps the newest context when an older request responds late', async ({ page }) => {
+  const unexpectedHttp: string[] = [];
+  const requests: string[] = [];
+  await installBaseMocks(page, unexpectedHttp);
+  await page.route('**/api/market/scan**', async (route) => {
+    const url = new URL(route.request().url());
+    const market = url.searchParams.get('market') === 'US' ? 'US' : 'KR';
+    const timeframe = url.searchParams.get('timeframe') ?? '1D';
+    requests.push(`${market}:${timeframe}`);
+    if (market === 'US' && timeframe === '1D') {
+      await fulfill(route, scannerResponse({ market, timeframe, symbol: 'LATEUS1D', name: '늦은 US 일봉', generatedAt: '2026-08-05T12:00:00.000Z' }), 700);
+      return;
+    }
+    if (market === 'US' && timeframe === '4H') {
+      await fulfill(route, scannerResponse({ market, timeframe, symbol: 'CURRENTUS4H', name: '현재 US 4시간', generatedAt: '2026-08-05T11:00:00.000Z' }), 10);
+      return;
+    }
+    await fulfill(route, scannerResponse({ market: 'KR', timeframe, symbol: 'BASEKR', name: '기준 KR', generatedAt: '2026-08-05T10:00:00.000Z' }), 10);
+  });
+
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await expect(page.getByText('기준 KR', { exact: true })).toBeVisible();
+  const marketSelector = page.getByRole('region', { name: '검색 시장' });
+  await marketSelector.getByRole('button', { name: /^미국주식/ }).click();
+  await page.getByLabel('시간봉').selectOption('4H');
+  await expect(page.getByText('현재 US 4시간', { exact: true })).toBeVisible();
+  await page.waitForTimeout(800);
+  await expect(page.getByText('늦은 US 일봉', { exact: true })).toHaveCount(0);
+  await expect(marketSelector.getByRole('button', { name: /^미국주식/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByLabel('시간봉')).toHaveValue('4H');
+  expect(requests).toContain('US:1D');
+  expect(requests).toContain('US:4H');
+  expect(unexpectedHttp).toEqual([]);
 });
