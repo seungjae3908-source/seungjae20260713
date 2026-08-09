@@ -1,6 +1,17 @@
 name: Prediction Lab ETH V6 Forward Validation
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/prediction-lab-eth-v6-forward.yml
+      - market-prediction-lab/src/bitget-forward-daily-candles.js
+      - market-prediction-lab/src/eth-v6-forward-validation.js
+      - market-prediction-lab/scripts/run-eth-v6-replay-proof.js
+      - market-prediction-lab/scripts/run-eth-v6-forward-cycle.js
+      - market-prediction-lab/tests/bitget-forward-daily-candles.test.js
+      - market-prediction-lab/tests/eth-v6-forward-validation.test.js
   push:
     branches:
       - main
@@ -46,7 +57,7 @@ jobs:
           INPUT_REF: ${{ inputs.research_ref }}
         run: |
           ref="$INPUT_REF"
-          if [ -z "$ref" ] && [ "$EVENT_NAME" = "push" ]; then ref="$GITHUB_SHA"; fi
+          if [ -z "$ref" ] && { [ "$EVENT_NAME" = "push" ] || [ "$EVENT_NAME" = "pull_request" ]; }; then ref="$GITHUB_SHA"; fi
           if [ -z "$ref" ]; then ref="$RESEARCH_BRANCH"; fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
