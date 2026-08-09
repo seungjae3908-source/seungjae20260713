@@ -156,6 +156,18 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const [data, setData] = useState<ScannerResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const latestSequence = useRef(0);
+  const lastGeneratedAt = useRef<string | null>(null);
+
+  const normalizedCards = useMemo(() => {
+    if (!data?.cards) return [];
+    const map = new Map<string, ScannerSignalCard>();
+    for (const card of data.cards) {
+      if (!map.has(card.symbol)) {
+        map.set(card.symbol, card);
+      }
+    }
+    return Array.from(map.values());
+  }, [data?.cards]);
 
   const stockView = view === 'KR' || view === 'US';
   const batchSize = stockView ? 100 : 24;
@@ -174,6 +186,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const requestKey = useMemo(() => JSON.stringify(request), [request]);
 
   useEffect(() => {
+    lastGeneratedAt.current = null;
     setCursor(0);
     if (view === 'KR' || view === 'US') {
       assetMode.setAsset('stock');
@@ -194,6 +207,9 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     void fetchSignalScanner(request, controller.signal)
       .then((result) => {
         if (controller.signal.aborted || latestSequence.current !== sequence) return;
+        if (lastGeneratedAt.current && new Date(result.generatedAt) <= new Date(lastGeneratedAt.current)) return;
+        lastGeneratedAt.current = result.generatedAt;
+        
         setData(result);
         setStatus(
           result.execution.partial
@@ -313,7 +329,6 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   };
 
   const timeframes = STRATEGY_TIMEFRAMES[strategy];
-  const cards = data?.cards ?? [];
 
   return (
     <main className={`min-h-0 bg-background ${embedded ? 'h-full overflow-y-auto' : 'min-h-screen pb-24'}`}>
@@ -544,7 +559,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                       key={alert.idempotencyKey}
                       type="button"
                       onClick={() => {
-                        const card = cards.find((item) => item.signalId === alert.signalId);
+                        const card = normalizedCards.find((item) => item.signalId === alert.signalId);
                         if (card) navigate(signalScannerDetailPath(card));
                       }}
                       className="min-h-11 w-full rounded-xl border border-primary/30 bg-card px-3 py-2 text-left text-sm"
@@ -570,14 +585,14 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
               </section>
             )}
 
-            {cards.length === 0 ? (
+            {normalizedCards.length === 0 ? (
               <section className="rounded-3xl border border-card-border bg-card p-8 text-center">
                 <p className="font-black">조건에 맞는 결과가 없습니다.</p>
                 <p className="mt-2 text-xs text-muted-foreground">데이터 부족·품질 미달 결과를 강한 신호로 올리지 않았습니다.</p>
               </section>
             ) : (
               <section className="grid gap-3 xl:grid-cols-2">
-                {cards.map((card) => (
+                {normalizedCards.map((card) => (
                   <article key={card.signalId} className="rounded-3xl border border-card-border bg-card p-4">
                     <div className="flex items-start justify-between gap-3">
                       <button
