@@ -10,6 +10,7 @@ type ResponseOptions = {
   timeframe?: string;
   partial?: boolean;
   failure?: boolean;
+  generatedAt?: string;
 };
 
 function scannerResponse(options: ResponseOptions = {}) {
@@ -121,7 +122,7 @@ function scannerResponse(options: ResponseOptions = {}) {
     },
     dataState: partial ? 'partial' : 'complete',
     message: partial ? '공개 공급자 일부 지연 결과입니다.' : '공개 데이터 분석을 완료했습니다.',
-    generatedAt: '2026-08-05T00:00:00.000Z',
+    generatedAt: options.generatedAt ?? '2026-08-05T00:00:00.000Z',
     orderSubmitted: false,
     exchangeRequestSent: false,
   };
@@ -303,4 +304,33 @@ test('partial data and provider failure are distinguished without fake success',
   await page.getByRole('button', { name: '새로고침' }).click();
   await expect(page.getByRole('alert')).toContainText('시장데이터 공급자 응답이 불안정합니다');
   expect(unexpectedHttp).toEqual([]);
+});
+
+test('scanner lifecycle: refresh, normalization, monotonic guard, and isolation', async ({ page }) => {
+  await installBaseMocks(page, []);
+  
+  let handler: (route: Route) => Promise<void> = async (route) => {
+    await fulfill(route, scannerResponse({ generatedAt: '2026-08-05T00:00:00.000Z' }));
+  };
+  await page.route('**/api/market/scan**', (route) => handler(route));
+
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await expect(page.getByText('삼성전자', { exact: true })).toBeVisible();
+
+  // Duplicate suppression
+  handler = async (route) => {
+    const res = scannerResponse({ generatedAt: '2026-08-05T01:00:00.000Z' });
+    const card = res.cards[0];
+    res.cards = [card, { ...card, signalId: 'dup' }];
+    await fulfill(route, res);
+  };
+  await page.getByRole('button', { name: '새로고침' }).click();
+  await expect(page.getByText('삼성전자', { exact: true })).toHaveCount(1);
+
+  // Monotonic guard (Older response)
+  handler = async (route) => {
+    await fulfill(route, scannerResponse({ generatedAt: '2026-08-05T00:30:00.000Z', symbol: 'NEW', name: '새종목' }));
+  };
+  await page.getByRole('button', { name: '새로고침' }).click();
+  await expect(page.getByText('새종목', { exact: true })).toHaveCount(0);
 });
