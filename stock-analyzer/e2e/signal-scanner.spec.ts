@@ -184,7 +184,7 @@ for (const [width, height] of [[360, 800], [390, 844], [430, 932]] as const) {
     await page.goto('/__phase11-technical-workspace-e2e');
     await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
     await expect(page.getByRole('region', { name: '검색 시장' }).getByRole('button', { name: /^국내주식/ })).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByText('삼성전자', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     expect(forbidden).toEqual([]);
     expect(unexpectedHttp).toEqual([]);
@@ -315,7 +315,7 @@ test('scanner lifecycle: refresh, normalization, monotonic guard, and isolation'
   await page.route('**/api/market/scan**', (route) => handler(route));
 
   await page.goto('/__phase11-technical-workspace-e2e');
-  await expect(page.getByText('삼성전자', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ })).toBeVisible();
 
   // Duplicate suppression
   handler = async (route) => {
@@ -325,7 +325,7 @@ test('scanner lifecycle: refresh, normalization, monotonic guard, and isolation'
     await fulfill(route, res);
   };
   await page.getByRole('button', { name: '새로고침' }).click();
-  await expect(page.getByText('삼성전자', { exact: true })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ })).toHaveCount(1);
 
   // Monotonic guard (Older response)
   handler = async (route) => {
@@ -333,4 +333,98 @@ test('scanner lifecycle: refresh, normalization, monotonic guard, and isolation'
   };
   await page.getByRole('button', { name: '새로고침' }).click();
   await expect(page.getByText('새종목', { exact: true })).toHaveCount(0);
+});
+
+test('scanner automatic polling refreshes ranking, membership, dedupe, and freshness without user action', async ({ page }) => {
+  const forbidden: string[] = [];
+  const unexpectedHttp: string[] = [];
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (forbiddenRequest.test(path)) forbidden.push(path);
+  });
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  await page.clock.install({ time: new Date('2026-08-05T00:00:00.000Z') });
+  await installBaseMocks(page, unexpectedHttp);
+
+  const card = (symbol: string, name: string, score: number) => ({
+    ...scannerResponse({ symbol, name }).cards[0],
+    signalId: `signal:KR:${symbol}:1D`,
+    symbol,
+    name,
+    score,
+  });
+  const response = (generatedAt: string, cards: ReturnType<typeof card>[]) => {
+    const payload = scannerResponse({
+      generatedAt,
+      symbol: cards[0]?.symbol ?? 'NONE',
+      name: cards[0]?.name ?? '없음',
+    });
+    payload.cards = cards;
+    payload.execution.requestedCount = cards.length;
+    payload.execution.startedCount = cards.length;
+    payload.execution.completedCount = cards.length;
+    payload.execution.maxConcurrency = Math.max(1, cards.length);
+    payload.universe.totalCount = cards.length;
+    return payload;
+  };
+
+  const snapshots = [
+    response('2026-08-05T00:00:00.000Z', [
+      card('AAA', '알파', 90),
+      card('BBB', '베타', 80),
+    ]),
+    response('2026-08-05T00:00:30.000Z', [
+      card('BBB', '베타', 95),
+      card('CCC', '감마', 85),
+      { ...card('CCC', '감마', 85), signalId: 'signal:KR:CCC:1D:duplicate' },
+      card('AAA', '알파', 70),
+    ]),
+    response('2026-08-05T00:01:00.000Z', [
+      card('BBB', '베타', 96),
+    ]),
+    response('2026-08-05T00:00:45.000Z', [
+      card('STALE', '오래된스냅샷', 99),
+    ]),
+  ];
+  let scanCalls = 0;
+  await page.route('**/api/market/scan**', async (route) => {
+    const index = Math.min(scanCalls, snapshots.length - 1);
+    scanCalls += 1;
+    await fulfill(route, snapshots[index]);
+  });
+
+  await page.goto('/__phase11-technical-workspace-e2e');
+  const scanner = page.getByRole('heading', { name: 'AI 신호검색기' }).locator('xpath=ancestor::main[1]');
+  await expect(scanner.getByText('알파', { exact: true })).toBeVisible();
+  await expect(scanner.getByText('베타', { exact: true })).toBeVisible();
+
+  const activeNames = async () => scanner.locator('article button[type="button"] > p:first-child').evaluateAll((nodes) =>
+    nodes.map((node) => node.textContent?.trim() ?? '').filter(Boolean),
+  );
+  await expect.poll(activeNames).toEqual(['알파', '베타']);
+
+  await page.clock.fastForward(30_000);
+  await expect(scanner.getByText('감마', { exact: true })).toHaveCount(1);
+  await expect.poll(activeNames).toEqual(['베타', '감마', '알파']);
+
+  await page.clock.fastForward(30_000);
+  await expect(scanner.getByText('베타', { exact: true })).toBeVisible();
+  await expect(scanner.getByText('알파', { exact: true })).toHaveCount(0);
+  await expect(scanner.getByText('감마', { exact: true })).toHaveCount(0);
+  await expect.poll(activeNames).toEqual(['베타']);
+
+  await page.clock.fastForward(30_000);
+  await expect(scanner.getByText('오래된스냅샷', { exact: true })).toHaveCount(0);
+  await expect.poll(activeNames).toEqual(['베타']);
+  expect(scanCalls).toBeGreaterThanOrEqual(4);
+  expect(forbidden).toEqual([]);
+  expect(unexpectedHttp).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
 });
