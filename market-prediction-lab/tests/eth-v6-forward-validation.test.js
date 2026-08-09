@@ -175,7 +175,24 @@ test("forward artifact wording keeps TP-before-SL separate from net profitabilit
   assert.match(source, /TP-before-SL success rate:/u);
   assert.match(source, /net-profitable trade rate after all modeled costs:/u);
   assert.match(source, /cost stress return: 1\.5x/u);
+  assert.match(source, /1Dutc/u);
+  assert.match(source, /refusing UTC forward cutover with existing legacy evidence/u);
   assert.doesNotMatch(source, /win rate:/u);
+});
+
+test("dedicated forward workflow is aligned to UTC daily open and main after merge", async () => {
+  const workflow = await readFile(new URL("../../.github/workflows/prediction-lab-eth-v6-forward.yml", import.meta.url), "utf8");
+  assert.match(workflow, /cron: "20 0 \* \* \*"/u);
+  assert.match(workflow, /RESEARCH_BRANCH: main/u);
+  assert.match(workflow, /bitget-forward-daily-candles\.test\.js/u);
+  assert.doesNotMatch(workflow, /cron: "20 16 \* \* \*"/u);
+});
+
+test("shared shadow path uses UTC forward candles and fails the whole cycle on technical failure", async () => {
+  const source = await readFile(new URL("../scripts/run-shadow-cycle.js", import.meta.url), "utf8");
+  assert.match(source, /collectBitgetUtcDailyForwardCandles/u);
+  assert.match(source, /granularity: "1Dutc"/u);
+  assert.match(source, /nextSummary\.status = "fail"/u);
 });
 
 test("shadow workflow fails closed when the forward strategy has a technical failure", async () => {
