@@ -5,7 +5,8 @@ const TP_EXIT_REASONS = new Set(["take_profit", "take_profit_gap"]);
 const SL_EXIT_REASONS = new Set(["stop_loss", "stop_loss_gap", "stop_loss_same_bar"]);
 
 export const FORWARD_PROMOTION_POLICY_V1 = Object.freeze({
-  policyId: "forward-shadow-v1",
+  policyId: "eth-futures-long-v6-forward-shadow-v1",
+  candidateId: "eth-futures-long-v6",
   frozenAt: "2026-08-09T00:40:00.000Z",
   minimumSettledTrades: 30,
   minimumElapsedDays: 28,
@@ -140,10 +141,13 @@ export function buildStandardizedResearchMetrics({ trades = [], initialCapital, 
   });
 }
 
-export function evaluateForwardPromotionGate({ metrics, elapsedDays, safeguards = {}, policy = FORWARD_PROMOTION_POLICY_V1 } = {}) {
+export function evaluateForwardPromotionGate({ candidateId, metrics, elapsedDays, safeguards = {}, policy = FORWARD_PROMOTION_POLICY_V1 } = {}) {
   if (!metrics || typeof metrics !== "object") throw new TypeError("metrics are required");
   if (!(Number.isFinite(elapsedDays) && elapsedDays >= 0)) throw new TypeError("elapsedDays must be non-negative");
+  if (typeof candidateId !== "string" || candidateId.length === 0) throw new TypeError("candidateId is required");
+  const candidateScopeMatches = candidateId === policy.candidateId;
   const checks = Object.freeze({
+    candidateScope: candidateScopeMatches,
     settledTrades: metrics.totalTrades >= policy.minimumSettledTrades,
     elapsedDays: elapsedDays >= policy.minimumElapsedDays,
     tpBeforeSlRate: metrics.tpBeforeSlRateAvailable === true && metrics.tpBeforeSlRatePercent / 100 >= policy.minimumTpBeforeSlRate,
@@ -161,6 +165,8 @@ export function evaluateForwardPromotionGate({ metrics, elapsedDays, safeguards 
   const passed = Object.values(checks).every(Boolean);
   return Object.freeze({
     policyId: policy.policyId,
+    policyCandidateId: policy.candidateId,
+    evaluatedCandidateId: candidateId,
     passed,
     status: passed ? "promotion_candidate" : "shadow_continue",
     nextStage: passed ? "manual_review" : "paper_shadow",
