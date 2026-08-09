@@ -31,7 +31,9 @@ jobs:
 
       - name: Apply one-shot metric semantics migration
         working-directory: market-prediction-lab
-        run: node scripts/apply-metric-semantics-hardening.mjs
+        run: |
+          node scripts/apply-metric-semantics-hardening.mjs
+          node scripts/apply-metric-semantics-test-migration.mjs
 
       - name: Run metric semantics tests
         working-directory: market-prediction-lab
@@ -50,7 +52,8 @@ jobs:
             market-prediction-lab/src/independent-strategy-backtest.js \
             market-prediction-lab/src/final-holdout-evaluator.js \
             market-prediction-lab/src/eth-v6-forward-validation.js \
-            market-prediction-lab/scripts/run-eth-v6-replay-proof.js
+            market-prediction-lab/scripts/run-eth-v6-replay-proof.js \
+            market-prediction-lab/tests/multi-market-backtest-engine.test.js
           git diff --cached --quiet && { echo "No source changes produced"; exit 1; }
           git commit -m "feat(research): separate TP success from net profitable rate"
           git push origin HEAD:research/metric-semantics-hardening
