@@ -7,6 +7,7 @@ import apiRouter from './routes';
 import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { startPriceAlertMonitor } from './services/notification.service';
 import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
+import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,9 +20,23 @@ const port = Number(
     8080,
 );
 
-const deploySha = /^[0-9a-f]{40}$/.test(String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase())
-  ? String(process.env.DEPLOY_SHA).trim().toLowerCase()
-  : null;
+const deployMarkerPath = process.env.DEPLOY_MARKER_PATH?.trim()
+  || path.resolve(__dirname, '../../.deploy/current-sha');
+
+function healthPayload(route: '/health' | '/api/health') {
+  const identity = readRuntimeDeploymentIdentity(process.env.DEPLOY_SHA, deployMarkerPath);
+  return {
+    ok: true,
+    service: 'api-server',
+    route,
+    deploySha: identity.processDeploySha,
+    processDeploySha: identity.processDeploySha,
+    deployMarkerSha: identity.deployMarkerSha,
+    identityMatch: identity.identityMatch,
+    identityStatus: identity.identityStatus,
+    time: new Date().toISOString(),
+  };
+}
 
 app.disable('x-powered-by');
 
@@ -45,23 +60,11 @@ app.use(
 );
 
 app.get('/health', (_req, res) => {
-  res.json({
-    ok: true,
-    service: 'api-server',
-    route: '/health',
-    deploySha,
-    time: new Date().toISOString(),
-  });
+  res.json(healthPayload('/health'));
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({
-    ok: true,
-    service: 'api-server',
-    route: '/api/health',
-    deploySha,
-    time: new Date().toISOString(),
-  });
+  res.json(healthPayload('/api/health'));
 });
 
 /* API routes remain before frontend static files. Scanner authentication and
