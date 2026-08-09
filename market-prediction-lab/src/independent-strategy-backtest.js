@@ -7,6 +7,7 @@ import {
   calculateExecutionAwareTrade,
   summarizeResearchPerformance,
 } from "./research-validation-layer.js";
+import { summarizeTradeOutcomeMetrics } from "./research-metric-semantics.js";
 import { RESEARCH_BACKTEST_PERIOD } from "./multi-market-backtest-engine.js";
 
 const MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
@@ -354,6 +355,7 @@ function runIndependentSignalBacktestCore({
   const orderedTrades = Object.freeze([...trades].sort((a, b) => a.exitTime - b.exitTime || a.id.localeCompare(b.id)));
   const performance = summarizeResearchPerformance(orderedTrades, { initialCapital });
   const overall = performance.overall;
+  const outcomeMetrics = summarizeTradeOutcomeMetrics(orderedTrades);
   return Object.freeze({
     ok: true,
     mode: "backtest-only",
@@ -366,7 +368,16 @@ function runIndependentSignalBacktestCore({
     initialCapital,
     finalCapital: initialCapital + overall.netPnl,
     totalReturnPercent: overall.totalReturn * 100,
-    successRatePercent: overall.winRate * 100,
+    successRateDefinition: outcomeMetrics.successRateDefinition,
+    successRatePercent: outcomeMetrics.tpBeforeSlRate * 100,
+    tpBeforeSlRatePercent: outcomeMetrics.tpBeforeSlRate * 100,
+    tpBeforeSlRateAvailable: outcomeMetrics.tpBeforeSlRateAvailable,
+    netProfitableRateDefinition: outcomeMetrics.netProfitableRateDefinition,
+    netProfitableTradeRatePercent: outcomeMetrics.netProfitableTradeRate * 100,
+    barrierResolvedTradeCount: outcomeMetrics.barrierResolvedTradeCount,
+    tpHitCount: outcomeMetrics.tpHitCount,
+    slHitCount: outcomeMetrics.slHitCount,
+    censoredTradeCount: outcomeMetrics.censoredCount,
     profitFactor: overall.profitFactor,
     maximumDrawdownPercent: overall.maximumDrawdownPercent * 100,
     expectancy: overall.expectancy,

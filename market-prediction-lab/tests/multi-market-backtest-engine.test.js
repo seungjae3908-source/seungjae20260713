@@ -102,7 +102,7 @@ test("cash markets are long-only while futures long and short are independently 
   assert.ok(shortResult.trades.every((trade) => trade.action === "SHORT"));
 });
 
-test("fees, spread and slippage lower realized performance and success is based on net PnL", () => {
+test("fees, spread and slippage lower realized performance while TP success stays separate from net-profitable rate", () => {
   const input = baseInput({});
   const free = runV1Backtest(input);
   const costly = runV1Backtest({
@@ -119,7 +119,11 @@ test("fees, spread and slippage lower realized performance and success is based 
   });
   assert.ok(costly.netPnl < free.netPnl);
   assert.ok(costly.totalExecutionCost > free.totalExecutionCost);
-  assert.equal(costly.successRatePercent, costly.trades.filter((trade) => trade.netPnl > 0).length / costly.totalTrades * 100);
+  const resolved = costly.trades.filter((trade) => ["take_profit", "take_profit_gap", "stop_loss", "stop_loss_gap", "stop_loss_same_bar"].includes(trade.exitReason));
+  const tpHits = resolved.filter((trade) => ["take_profit", "take_profit_gap"].includes(trade.exitReason));
+  assert.equal(costly.successRateDefinition, "tp_before_sl_resolved_barriers");
+  assert.equal(costly.successRatePercent, resolved.length ? tpHits.length / resolved.length * 100 : 0);
+  assert.equal(costly.netProfitableTradeRatePercent, costly.trades.filter((trade) => trade.netPnl > 0).length / costly.totalTrades * 100);
 });
 
 test("historical fee and tax schedules can change by timestamp without overlapping rows", () => {
@@ -234,7 +238,10 @@ test("table and year helpers produce the requested easy-to-read research dimensi
     "initialCapital",
     "finalCapital",
     "netReturnPercent",
+    "successRateDefinition",
     "successRatePercent",
+    "tpBeforeSlRatePercent",
+    "netProfitableTradeRatePercent",
     "profitFactor",
     "maximumDrawdownPercent",
     "trades",

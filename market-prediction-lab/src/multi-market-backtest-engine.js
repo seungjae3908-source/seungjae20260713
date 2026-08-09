@@ -8,6 +8,7 @@ import {
   calculateExecutionAwareTrade,
   summarizeResearchPerformance,
 } from "./research-validation-layer.js";
+import { summarizeTradeOutcomeMetrics } from "./research-metric-semantics.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -471,7 +472,9 @@ function summarizeByYear(trades, initialCapital, startTime, endTime) {
       trades: summary.sampleCount,
       wins: yearTrades.filter((trade) => trade.netPnl > 0).length,
       losses: yearTrades.filter((trade) => trade.netPnl < 0).length,
-      successRate: summary.winRate,
+      successRateDefinition: "tp_before_sl_resolved_barriers",
+      successRate: summarizeTradeOutcomeMetrics(yearTrades).tpBeforeSlRate,
+      netProfitableTradeRate: summary.winRate,
       netPnl: summary.netPnl,
       returnPercent: startingEquity > 0 ? summary.netPnl / startingEquity * 100 : 0,
       profitFactor: summary.profitFactor,
@@ -578,6 +581,7 @@ export function runV1Backtest(input) {
   const orderedTrades = Object.freeze([...trades].sort((left, right) => left.exitTime - right.exitTime || left.id.localeCompare(right.id)));
   const performance = summarizeResearchPerformance(orderedTrades, { initialCapital });
   const overall = performance.overall;
+  const outcomeMetrics = summarizeTradeOutcomeMetrics(orderedTrades);
   return Object.freeze({
     ok: true,
     mode: "backtest-only",
@@ -593,7 +597,16 @@ export function runV1Backtest(input) {
     finalCapital: initialCapital + overall.netPnl,
     netPnl: overall.netPnl,
     totalReturnPercent: overall.totalReturn * 100,
-    successRatePercent: overall.winRate * 100,
+    successRateDefinition: outcomeMetrics.successRateDefinition,
+    successRatePercent: outcomeMetrics.tpBeforeSlRate * 100,
+    tpBeforeSlRatePercent: outcomeMetrics.tpBeforeSlRate * 100,
+    tpBeforeSlRateAvailable: outcomeMetrics.tpBeforeSlRateAvailable,
+    netProfitableRateDefinition: outcomeMetrics.netProfitableRateDefinition,
+    netProfitableTradeRatePercent: outcomeMetrics.netProfitableTradeRate * 100,
+    barrierResolvedTradeCount: outcomeMetrics.barrierResolvedTradeCount,
+    tpHitCount: outcomeMetrics.tpHitCount,
+    slHitCount: outcomeMetrics.slHitCount,
+    censoredTradeCount: outcomeMetrics.censoredCount,
     totalTrades: overall.sampleCount,
     profitFactor: overall.profitFactor,
     maximumDrawdown: overall.maximumDrawdown,
@@ -649,11 +662,15 @@ export function runV1UniverseBacktest(input) {
   });
   const trades = Object.freeze(symbolResults.flatMap((result) => result.trades).sort((left, right) => left.exitTime - right.exitTime || left.id.localeCompare(right.id)));
   const performance = summarizeResearchPerformance(trades, { initialCapital });
+  const outcomeMetrics = summarizeTradeOutcomeMetrics(trades);
   const bySymbol = Object.freeze(Object.fromEntries(symbolResults.map((result) => [result.symbol, Object.freeze({
     initialCapital: result.initialCapital,
     finalCapital: result.finalCapital,
     totalReturnPercent: result.totalReturnPercent,
+    successRateDefinition: result.successRateDefinition,
     successRatePercent: result.successRatePercent,
+    tpBeforeSlRatePercent: result.tpBeforeSlRatePercent,
+    netProfitableTradeRatePercent: result.netProfitableTradeRatePercent,
     totalTrades: result.totalTrades,
     profitFactor: result.profitFactor,
     maximumDrawdownPercent: result.maximumDrawdownPercent,
@@ -674,7 +691,15 @@ export function runV1UniverseBacktest(input) {
     finalCapital: symbolResults.reduce((sum, result) => sum + result.finalCapital, 0),
     netPnl: performance.overall.netPnl,
     totalReturnPercent: performance.overall.totalReturn * 100,
-    successRatePercent: performance.overall.winRate * 100,
+    successRateDefinition: outcomeMetrics.successRateDefinition,
+    successRatePercent: outcomeMetrics.tpBeforeSlRate * 100,
+    tpBeforeSlRatePercent: outcomeMetrics.tpBeforeSlRate * 100,
+    tpBeforeSlRateAvailable: outcomeMetrics.tpBeforeSlRateAvailable,
+    netProfitableTradeRatePercent: outcomeMetrics.netProfitableTradeRate * 100,
+    barrierResolvedTradeCount: outcomeMetrics.barrierResolvedTradeCount,
+    tpHitCount: outcomeMetrics.tpHitCount,
+    slHitCount: outcomeMetrics.slHitCount,
+    censoredTradeCount: outcomeMetrics.censoredCount,
     totalTrades: performance.overall.sampleCount,
     profitFactor: performance.overall.profitFactor,
     maximumDrawdown: performance.overall.maximumDrawdown,
@@ -717,8 +742,9 @@ export function compareBacktestVersions({ baseline, candidate }) {
     tradeCountDelta: candidate.totalTrades - baseline.totalTrades,
     verdict,
     weightedScoreUsed: false,
-    objective: "joint_return_and_success_rate",
-    note: "No scalar score is used; return and success rate must be reviewed together with drawdown and sample size.",
+    objective: "joint_return_and_tp_before_sl_success_rate",
+    successRateDefinition: "tp_before_sl_resolved_barriers",
+    note: "No scalar score is used; return and TP-before-SL success rate must be reviewed together with drawdown and sample size.",
   });
 }
 
@@ -731,7 +757,10 @@ export function buildBacktestTable(results) {
     initialCapital: result.initialCapital,
     finalCapital: result.finalCapital,
     netReturnPercent: result.totalReturnPercent,
+    successRateDefinition: result.successRateDefinition,
     successRatePercent: result.successRatePercent,
+    tpBeforeSlRatePercent: result.tpBeforeSlRatePercent,
+    netProfitableTradeRatePercent: result.netProfitableTradeRatePercent,
     profitFactor: result.profitFactor,
     maximumDrawdownPercent: result.maximumDrawdownPercent,
     trades: result.totalTrades,
