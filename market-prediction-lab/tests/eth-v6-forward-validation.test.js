@@ -170,11 +170,16 @@ test("forward candle validation rejects negative volume", () => {
   }), /volume must be non-negative/u);
 });
 
-test("forward artifact wording keeps TP-before-SL separate from net profitability", async () => {
+test("forward artifact wording keeps TP-before-SL separate from net profitability and marks zero samples unavailable", async () => {
   const source = await readFile(new URL("../scripts/run-eth-v6-forward-cycle.js", import.meta.url), "utf8");
-  assert.match(source, /TP-before-SL success rate:/u);
-  assert.match(source, /net-profitable trade rate after all modeled costs:/u);
-  assert.match(source, /cost stress return: 1\.5x/u);
+  assert.match(source, /TP-before-SL:/u);
+  assert.match(source, /metricInterpretation\.tpBeforeSl\.display/u);
+  assert.match(source, /net-profitable rate after all modeled costs:/u);
+  assert.match(source, /metricInterpretation\.netProfitableRate\.display/u);
+  assert.match(source, /cost stress return:/u);
+  assert.match(source, /N\/A — insufficient settled sample/u);
+  assert.match(source, /researchCodeSha/u);
+  assert.match(source, /dataQuality/u);
   assert.match(source, /1Dutc/u);
   assert.match(source, /refusing UTC forward cutover with existing legacy evidence/u);
   assert.doesNotMatch(source, /win rate:/u);
@@ -185,6 +190,7 @@ test("dedicated forward workflow is aligned to UTC daily open and main after mer
   assert.match(workflow, /cron: "20 0 \* \* \*"/u);
   assert.match(workflow, /RESEARCH_BRANCH: main/u);
   assert.match(workflow, /bitget-forward-daily-candles\.test\.js/u);
+  assert.match(workflow, /eth-v6-forward-audit\.test\.js/u);
   assert.doesNotMatch(workflow, /cron: "20 16 \* \* \*"/u);
 });
 
