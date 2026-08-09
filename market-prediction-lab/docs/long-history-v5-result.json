@@ -1,0 +1,300 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": 1786231584130,
+  "mode": "backtest-only",
+  "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
+  "developmentStartTime": 1577836800000,
+  "developmentEndTime": 1735689599999,
+  "validationStartTime": 1735689600000,
+  "validationEndTime": 1767225599999,
+  "finalHoldoutStartTime": 1767225600000,
+  "finalHoldoutUsedForSelection": false,
+  "initialCapital": 1000000,
+  "optimizations": [
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
+      "market": "CRYPTO_SPOT",
+      "symbol": "USDT-BTC",
+      "side": "long",
+      "status": "v2_frozen_not_retested",
+      "reason": "V2 already passed independent validation; V5 does not retune a frozen BTC candidate before the final holdout.",
+      "v2Parameters": {
+        "fastPeriod": 10,
+        "slowPeriod": 80,
+        "atrPeriod": 14,
+        "pullbackTolerancePct": 1,
+        "stopAtrMultiple": 1.5,
+        "targetRiskMultiple": 2
+      },
+      "periods": {
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 0,
+      "preferred": null,
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    },
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
+      "market": "CRYPTO_SPOT",
+      "symbol": "USDT-ETH",
+      "side": "long",
+      "frozenV2Parameters": {
+        "fastPeriod": 10,
+        "slowPeriod": 80,
+        "atrPeriod": 14,
+        "pullbackTolerancePct": 0.25,
+        "stopAtrMultiple": 1.25,
+        "targetRiskMultiple": 2.5
+      },
+      "objective": {
+        "primaryMetrics": [
+          "returnPercent",
+          "successRatePercent"
+        ],
+        "riskMetrics": [
+          "profitFactor",
+          "maximumDrawdownPercent",
+          "trades"
+        ],
+        "weightedScoreUsed": false,
+        "developmentSelection": "return leader requires success non-regression; success leader requires return non-regression; both require a sample floor",
+        "validationRule": "2025 candidate must avoid return and success-rate regression, preserve PF within 5%, respect MDD limit and sample floor"
+      },
+      "periods": {
+        "development": {
+          "startTime": 1577836800000,
+          "endTime": 1735689599999,
+          "includeFinalHoldout": false
+        },
+        "validation": {
+          "startTime": 1735689600000,
+          "endTime": 1767225599999,
+          "includeFinalHoldout": false
+        },
+        "finalHoldoutStartTime": 1767225600000,
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 36,
+      "developmentMinimumTrades": 24,
+      "baseline": {
+        "development": {
+          "returnPercent": 17.136363352317492,
+          "successRatePercent": 39.58333333333333,
+          "profitFactor": 1.481642212788339,
+          "maximumDrawdownPercent": 8.547974084745205,
+          "expectancy": 3570.0756983994775,
+          "trades": 48,
+          "finalCapital": 1171363.633523175
+        },
+        "validation": {
+          "returnPercent": 2.0942227719503506,
+          "successRatePercent": 37.5,
+          "profitFactor": 1.4050898757883399,
+          "maximumDrawdownPercent": 3.072270592527289,
+          "expectancy": 2617.778464937938,
+          "trades": 8,
+          "finalCapital": 1020942.2277195035
+        }
+      },
+      "leaders": [],
+      "preferred": null,
+      "status": "v5_research_hold",
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    },
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
+      "market": "CRYPTO_FUTURES",
+      "symbol": "BTCUSDT",
+      "side": "long",
+      "status": "v2_frozen_not_retested",
+      "reason": "V2 already passed independent validation; V5 does not retune a frozen BTC candidate before the final holdout.",
+      "v2Parameters": {
+        "fastPeriod": 8,
+        "slowPeriod": 30,
+        "atrPeriod": 14,
+        "pullbackTolerancePct": 0.75,
+        "stopAtrMultiple": 2,
+        "targetRiskMultiple": 3
+      },
+      "periods": {
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 0,
+      "preferred": null,
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    },
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
+      "market": "CRYPTO_FUTURES",
+      "symbol": "BTCUSDT",
+      "side": "short",
+      "status": "v2_frozen_not_retested",
+      "reason": "V2 already passed independent validation; V5 does not retune a frozen BTC candidate before the final holdout.",
+      "v2Parameters": {
+        "fastPeriod": 12,
+        "slowPeriod": 30,
+        "atrPeriod": 14,
+        "pullbackTolerancePct": 0.25,
+        "stopAtrMultiple": 1.5,
+        "targetRiskMultiple": 3
+      },
+      "periods": {
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 0,
+      "preferred": null,
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    },
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
+      "market": "CRYPTO_FUTURES",
+      "symbol": "ETHUSDT",
+      "side": "long",
+      "frozenV2Parameters": {
+        "fastPeriod": 8,
+        "slowPeriod": 80,
+        "atrPeriod": 14,
+        "pullbackTolerancePct": 0.75,
+        "stopAtrMultiple": 1,
+        "targetRiskMultiple": 2
+      },
+      "objective": {
+        "primaryMetrics": [
+          "returnPercent",
+          "successRatePercent"
+        ],
+        "riskMetrics": [
+          "profitFactor",
+          "maximumDrawdownPercent",
+          "trades"
+        ],
+        "weightedScoreUsed": false,
+        "developmentSelection": "return leader requires success non-regression; success leader requires return non-regression; both require a sample floor",
+        "validationRule": "2025 candidate must avoid return and success-rate regression, preserve PF within 5%, respect MDD limit and sample floor"
+      },
+      "periods": {
+        "development": {
+          "startTime": 1577836800000,
+          "endTime": 1735689599999,
+          "includeFinalHoldout": false
+        },
+        "validation": {
+          "startTime": 1735689600000,
+          "endTime": 1767225599999,
+          "includeFinalHoldout": false
+        },
+        "finalHoldoutStartTime": 1767225600000,
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 36,
+      "developmentMinimumTrades": 35,
+      "baseline": {
+        "development": {
+          "returnPercent": 17.907455162551024,
+          "successRatePercent": 44.285714285714285,
+          "profitFactor": 1.3656102145895466,
+          "maximumDrawdownPercent": 9.423170805200987,
+          "expectancy": 2558.2078803644317,
+          "trades": 70,
+          "finalCapital": 1179074.5516255102
+        },
+        "validation": {
+          "returnPercent": -0.6993836671771652,
+          "successRatePercent": 33.33333333333333,
+          "profitFactor": 0.916382161300472,
+          "maximumDrawdownPercent": 4.157323050902668,
+          "expectancy": -582.8197226476376,
+          "trades": 12,
+          "finalCapital": 993006.1633282284
+        }
+      },
+      "leaders": [],
+      "preferred": null,
+      "status": "v5_research_hold",
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    },
+    {
+      "schemaVersion": 1,
+      "strategyCandidate": "V5_PRICE_STRUCTURE_RETEST",
+      "market": "CRYPTO_FUTURES",
+      "symbol": "ETHUSDT",
+      "side": "short",
+      "frozenV2Parameters": {
+        "fastPeriod": 20,
+        "slowPeriod": 30,
+        "atrPeriod": 14,
+        "pullbackTolerancePct": 0.5,
+        "stopAtrMultiple": 1,
+        "targetRiskMultiple": 2
+      },
+      "objective": {
+        "primaryMetrics": [
+          "returnPercent",
+          "successRatePercent"
+        ],
+        "riskMetrics": [
+          "profitFactor",
+          "maximumDrawdownPercent",
+          "trades"
+        ],
+        "weightedScoreUsed": false,
+        "developmentSelection": "return leader requires success non-regression; success leader requires return non-regression; both require a sample floor",
+        "validationRule": "2025 candidate must avoid return and success-rate regression, preserve PF within 5%, respect MDD limit and sample floor"
+      },
+      "periods": {
+        "development": {
+          "startTime": 1577836800000,
+          "endTime": 1735689599999,
+          "includeFinalHoldout": false
+        },
+        "validation": {
+          "startTime": 1735689600000,
+          "endTime": 1767225599999,
+          "includeFinalHoldout": false
+        },
+        "finalHoldoutStartTime": 1767225600000,
+        "finalHoldoutUsedForSelection": false
+      },
+      "candidateCount": 36,
+      "developmentMinimumTrades": 16,
+      "baseline": {
+        "development": {
+          "returnPercent": 12.71038185413306,
+          "successRatePercent": 46.875,
+          "profitFactor": 1.6761048598913095,
+          "maximumDrawdownPercent": 3.2128096912112305,
+          "expectancy": 3971.9943294165814,
+          "trades": 32,
+          "finalCapital": 1127103.8185413305
+        },
+        "validation": {
+          "returnPercent": 5.495928212754565,
+          "successRatePercent": 62.5,
+          "profitFactor": 2.7108207127933683,
+          "maximumDrawdownPercent": 1.0343971683122308,
+          "expectancy": 6869.9102659432065,
+          "trades": 8,
+          "finalCapital": 1054959.2821275457
+        }
+      },
+      "leaders": [],
+      "preferred": null,
+      "status": "v5_research_hold",
+      "liveOrderAllowed": false,
+      "privateAccountRequestAllowed": false
+    }
+  ],
+  "errors": [],
+  "orderSubmitted": false,
+  "privateAccountRequestAllowed": false
+}

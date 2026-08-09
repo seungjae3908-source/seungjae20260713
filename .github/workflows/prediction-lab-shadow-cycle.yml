@@ -1,0 +1,100 @@
+name: Prediction Lab Shadow Cycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact research commit/ref to validate
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: prediction-lab-shadow-cycle-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  shadow-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve immutable research ref
+        id: research
+        shell: bash
+        env:
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          ref="$INPUT_REF"
+          if [ -z "$ref" ]; then ref="feature/prediction-lab-standalone"; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout isolated research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.research.outputs.ref }}
+          persist-credentials: false
+
+      - name: Record immutable research SHA
+        id: sha
+        shell: bash
+        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate shadow and temporal modules
+        working-directory: market-prediction-lab
+        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js
+
+      - name: Run one research-only shadow cycle
+        id: shadow
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json
+
+      - name: Record shadow failure
+        if: steps.shadow.outcome != 'success'
+        working-directory: market-prediction-lab
+        run: |
+          if [ ! -f docs/shadow-summary.json ]; then
+            cat > docs/shadow-summary.json <<'JSON'
+          {"schemaVersion":1,"status":"fail","stage":"shadow_cycle","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false}
+          JSON
+          fi
+
+      - name: Build immutable provenance manifest
+        if: always()
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          cat > market-prediction-lab/docs/shadow-cycle-provenance.json <<JSON
+          {"schemaVersion":1,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false}
+          JSON
+
+      - name: Upload shadow-cycle artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-shadow-cycle-${{ github.run_id }}
+          path: |
+            market-prediction-lab/docs/shadow-state.json
+            market-prediction-lab/docs/shadow-summary.json
+            market-prediction-lab/docs/shadow-cycle-provenance.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert immutable checkout HEAD
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
+
+      - name: Fail when shadow cycle failed
+        if: always() && steps.shadow.outcome != 'success'
+        run: exit 1
