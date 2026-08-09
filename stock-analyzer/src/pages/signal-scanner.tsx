@@ -186,7 +186,6 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const requestKey = useMemo(() => JSON.stringify(request), [request]);
 
   useEffect(() => {
-    lastGeneratedAt.current = null;
     setCursor(0);
     if (view === 'KR' || view === 'US') {
       assetMode.setAsset('stock');
@@ -196,6 +195,10 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       assetMode.setCoinMarket(view === 'FUTURES' ? 'futures' : 'spot');
     }
   }, [view]);
+
+  useEffect(() => {
+    lastGeneratedAt.current = null;
+  }, [requestKey]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -209,7 +212,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
         if (controller.signal.aborted || latestSequence.current !== sequence) return;
         if (lastGeneratedAt.current && new Date(result.generatedAt) <= new Date(lastGeneratedAt.current)) return;
         lastGeneratedAt.current = result.generatedAt;
-        
+
         setData(result);
         setStatus(
           result.execution.partial
