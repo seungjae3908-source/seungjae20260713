@@ -45,12 +45,13 @@ jobs:
       - name: Verify Production browser workflow is read-only and fail-closed
         run: node api-server/scripts/verify-production-browser-smoke-contract.mjs
       - name: Run mutation-block policy tests
+        working-directory: api-server
         run: |
           set -Eeuo pipefail
           node --input-type=module <<'NODE'
           import { build } from 'esbuild';
           await build({
-            entryPoints: ['stock-analyzer/e2e/support/production-readonly-policy.test.ts'],
+            entryPoints: ['../stock-analyzer/e2e/support/production-readonly-policy.test.ts'],
             outfile: '/tmp/production-readonly-policy.test.cjs',
             bundle: true,
             platform: 'node',
