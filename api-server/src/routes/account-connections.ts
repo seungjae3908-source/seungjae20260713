@@ -13,6 +13,10 @@ import {
   type PreparedExchangeRequest,
   type UpbitCredentials,
 } from '../services/trade-exchange-adapters.service';
+import {
+  validateKiwoomReadResponse,
+  type KiwoomReadApiId,
+} from '../services/kiwoom-readonly-response.service';
 import { createSupabaseTradingRepository } from '../services/trade-automation.repository';
 import { decryptTradingCredentials } from '../services/trade-credential-vault.service';
 import type { TradingExchange } from '../services/trade-automation.types';
@@ -24,7 +28,7 @@ const BITGET_PRODUCT_TYPE = 'USDT-FUTURES';
 const KIWOOM_REAL_BASE = process.env.KIWOOM_BASE_URL?.trim() || 'http://158.247.235.32:3000/kiwoom';
 const KIWOOM_MOCK_BASE = 'https://mockapi.kiwoom.com';
 const REQUEST_TIMEOUT_MS = 12_000;
-const KIWOOM_READ_API_IDS = new Set(['ka00001', 'kt00018', 'ust21070']);
+const KIWOOM_READ_API_IDS = new Set<KiwoomReadApiId>(['ka00001', 'kt00018', 'ust21070']);
 
 type JsonRecord = Record<string, unknown>;
 type CredentialSourceName = 'vault' | 'environment' | 'none';
@@ -113,17 +117,24 @@ function kiwoomProxyHeaders(): Record<string, string> {
   return { 'x-proxy-key': proxyKey };
 }
 
+function kiwoomReadApiId(value: unknown): KiwoomReadApiId | null {
+  if (value === 'ka00001' || value === 'kt00018' || value === 'ust21070') return value;
+  return null;
+}
+
 async function fetchPreparedKiwoom<T>(request: PreparedExchangeRequest): Promise<T> {
-  const apiId = request.headers['api-id'];
+  const apiId = kiwoomReadApiId(request.headers['api-id']);
   const tokenRequest = request.method === 'POST' && request.path === '/oauth2/token';
   const accountRequest = request.method === 'POST'
     && (request.path === '/api/dostk/acnt' || request.path === '/api/us/acnt')
-    && typeof apiId === 'string'
+    && apiId !== null
     && KIWOOM_READ_API_IDS.has(apiId);
   if (!tokenRequest && !accountRequest) {
     throw new Error('ACCOUNT_READONLY_REQUEST_REQUIRED');
   }
-  return fetchPrepared<T>(kiwoomBaseUrl(), request, kiwoomProxyHeaders());
+  const payload = await fetchPrepared<unknown>(kiwoomBaseUrl(), request, kiwoomProxyHeaders());
+  if (accountRequest && apiId) return validateKiwoomReadResponse(apiId, payload) as T;
+  return payload as T;
 }
 
 function environmentCredentials(exchange: TradingExchange): JsonRecord | null {
