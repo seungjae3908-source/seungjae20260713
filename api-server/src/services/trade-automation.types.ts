@@ -3,6 +3,9 @@ export type TradingMode = 'approval' | 'automatic';
 export type TradingAccountMode = 'paper' | 'mock' | 'live';
 export type TradingSide = 'buy' | 'sell' | 'long' | 'short';
 export type TradingOrderType = 'market' | 'limit';
+export type TradingMarketRegime = 'bull' | 'bear' | 'sideways' | 'stress' | 'unknown';
+export type TradingPilotStage = 'approval-20' | 'limited-50' | 'validated';
+export type TradingAssetClass = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
 
 export type TradingOrderState =
   | 'PLANNED'
@@ -65,34 +68,71 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   mode: 'approval' as TradingMode,
   automaticEnabled: false,
   emergencyStopped: false,
+  newEntriesStopped: false,
   exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
   enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[] },
   enabledStrategies: [] as string[],
   totalCapitalKrw: 1_000_000,
   maxOrderKrw: 1_000_000,
+  maxInstrumentKrw: 1_000_000,
+  maxAssetClassKrw: {
+    domestic_stock: 1_000_000,
+    us_stock: 1_000_000,
+    crypto_spot: 1_000_000,
+    crypto_futures: 1_000_000,
+  } as Record<TradingAssetClass, number>,
   dailyLossLimitPercent: 5,
+  weeklyLossLimitPercent: 10,
   maxAssetPercent: 30,
   maxOpenPositions: 5,
   maxDailyOrders: 10,
   maxConsecutiveLosses: 3,
   bitgetLeverage: 2 as 2 | 3,
+  riskOptimizationEnabled: true,
+  pilotStage: 'approval-20' as TradingPilotStage,
+  riskPerTradePercent: { bitget: 0.1, upbit: 0.2, kiwoom: 0.25 },
+  totalDailyLossLimitPercent: 1,
+  minExpectedValueR: 0.15,
+  minStrategySampleSize: 50,
+  minProfitFactor: 1.2,
+  maxStrategyDrawdownPercent: 15,
+  maxEstimatedSlippagePercent: 0.25,
+  maxAverageSpreadPercent: 0.15,
+  maxCorrelatedExposurePercent: 40,
+  maxEconomicsAgeHours: 24,
 });
 
 export type TradingPolicy = {
   mode: TradingMode;
   automaticEnabled: boolean;
   emergencyStopped: boolean;
+  newEntriesStopped: boolean;
   exchangeEnabled: Record<TradingExchange, boolean>;
   enabledAssets: Record<TradingExchange, string[]>;
   enabledStrategies: string[];
   totalCapitalKrw: number;
   maxOrderKrw: number;
+  maxInstrumentKrw: number;
+  maxAssetClassKrw: Record<TradingAssetClass, number>;
   dailyLossLimitPercent: number;
+  weeklyLossLimitPercent: number;
   maxAssetPercent: number;
   maxOpenPositions: number;
   maxDailyOrders: number;
   maxConsecutiveLosses: number;
   bitgetLeverage: 2 | 3;
+  riskOptimizationEnabled: boolean;
+  pilotStage: TradingPilotStage;
+  riskPerTradePercent: Record<TradingExchange, number>;
+  totalDailyLossLimitPercent: number;
+  minExpectedValueR: number;
+  minStrategySampleSize: number;
+  minProfitFactor: number;
+  maxStrategyDrawdownPercent: number;
+  maxEstimatedSlippagePercent: number;
+  maxAverageSpreadPercent: number;
+  maxCorrelatedExposurePercent: number;
+  maxEconomicsAgeHours: number;
 };
 
 export type ExchangeConnection = {
@@ -133,7 +173,13 @@ export type TradingMarketSnapshot = {
   availableBalance: number;
   accountValueKrw: number;
   dailyPnlPercent: number;
+  weeklyPnlPercent?: number;
   assetExposurePercent: number;
+  accountExposureKrw?: number | null;
+  instrumentExposureKrw?: number | null;
+  strategyExposureKrw?: number | null;
+  assetClassExposureKrw?: number | null;
+  openRiskKrw?: number | null;
   openPositionCount: number;
   dailyOrderCount: number;
   consecutiveLosses: number;
@@ -148,8 +194,21 @@ export type TradingMarketSnapshot = {
   availableLiquidityKrw?: number | null;
   estimatedSlippagePercent?: number | null;
   estimatedFeePercent?: number | null;
+  correlatedExposurePercent?: number | null;
   signalState?: TradingSignalState | null;
   signalObservedAt?: string | null;
+};
+
+export type TradingEconomics = {
+  sampleSize: number;
+  winProbability: number;
+  averageWinR: number;
+  averageLossR: number;
+  estimatedCostsR: number;
+  profitFactor?: number | null;
+  maxDrawdownPercent?: number | null;
+  marketRegime: TradingMarketRegime;
+  calibratedAt: string;
 };
 
 export type TradingPlanInput = {
@@ -174,6 +233,36 @@ export type TradingPlanInput = {
   invalidateAction?: 'hold' | 'reduce' | 'close';
   signalReasons: string[];
   marketSnapshot: TradingMarketSnapshot;
+  entryPrice?: number | null;
+  entryZoneLow?: number | null;
+  entryZoneHigh?: number | null;
+  estimatedSlippagePercent?: number | null;
+  averageSpreadPercent?: number | null;
+  economics?: TradingEconomics | null;
+};
+
+export type TradingOptimizationAssessment = {
+  allowed: boolean;
+  blockCodes: string[];
+  warnings: string[];
+  expectedValueR: number | null;
+  riskBudgetKrw: number | null;
+  maximumOrderKrw: number | null;
+  stopDistancePercent: number | null;
+  pilotStage: TradingPilotStage;
+};
+
+export type TradingRiskEnvelope = {
+  version: 1;
+  investmentKrw: number;
+  maxLossKrw: number;
+  maxSlippagePercent: number;
+  maxSplitCount: number;
+  allowCancelUnfilled: boolean;
+  stopMethod: 'fixed_stop';
+  emergencyExitScope: 'cancel_unfilled_and_reduce_only';
+  approvedAt: string;
+  expiresAt: string;
 };
 
 export type TradingPlan = TradingPlanInput & {
@@ -187,12 +276,15 @@ export type TradingPlan = TradingPlanInput & {
   legs?: TradingOrderLeg[];
   createdAt: string;
   updatedAt: string;
+  riskAssessment?: TradingOptimizationAssessment | null;
+  riskEnvelope?: TradingRiskEnvelope | null;
 };
 
 export type TradingRiskDecision = {
   allowed: boolean;
   blockCodes: string[];
   warnings: string[];
+  optimization?: TradingOptimizationAssessment;
 };
 
 export type TradingOrder = {

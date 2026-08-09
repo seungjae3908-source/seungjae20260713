@@ -14,6 +14,16 @@ import {
   type StockSignalScanRequest,
 } from '../services/stock-signal-scanner.service';
 import { ScanProviderUnavailableError, ScanRequestAbortedError } from '../services/bounded-scanner.service';
+import {
+  scannerStrategyForTimeframe,
+  scannerStrategyTimeframeAllowed,
+  type ScannerStrategyMode,
+} from '../services/scanner-quant-strategy.service';
+import {
+  canReadScannerGrade,
+  filterScannerResponseForTier,
+  parseScannerGradeQuery,
+} from '../services/scanner-access-control.service';
 
 export type StockScannerRunner = {
   scan(request: StockSignalScanRequest): ReturnType<typeof StockSignalScannerService.scan>;
@@ -39,6 +49,17 @@ function finite(value: unknown, minimum: number, maximum: number): number | unde
 function marketValue(value: unknown): 'KR' | 'US' | null {
   const normalized = String(value ?? 'KR').toUpperCase();
   return normalized === 'KR' || normalized === 'US' ? normalized : null;
+}
+
+function strategyValue(value: unknown, timeframe: string): ScannerStrategyMode | null {
+  const raw = String(value ?? '').trim().toLowerCase();
+  const strategy = raw === ''
+    ? scannerStrategyForTimeframe(timeframe)
+    : raw === 'scalping' || raw === 'swing'
+      ? raw
+      : null;
+  if (!strategy || !scannerStrategyTimeframeAllowed(strategy, timeframe)) return null;
+  return strategy;
 }
 
 function requestKey(req: AuthenticatedRequest): string {
@@ -94,20 +115,29 @@ export function createBoundedMarketScanRouter(
   const guard = dependencies.guard ?? scannerRequestGuard;
 
   router.use(requireScannerSession);
-  router.use(requireCapability('canAccessRiskPreview'));
+  router.use(requireCapability('canAccessBasicInfo'));
 
   router.get('/', async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const market = marketValue(req.query.market);
     if (!market) return res.status(400).json({ error: 'SCAN_MARKET_UNSUPPORTED' });
-    const timeframe = String(req.query.timeframe ?? '1D');
-    if (market === 'US' && timeframe === '4H') {
+    const timeframe = String(req.query.timeframe ?? '1D') === '1H' ? '60m' : String(req.query.timeframe ?? '1D');
+    const strategyMode = strategyValue(req.query.strategy, timeframe);
+    if (!strategyMode) {
       return res.status(400).json({
         ok: false,
-        error: 'SCAN_TIMEFRAME_UNSUPPORTED',
-        market,
+        error: 'SCAN_STRATEGY_TIMEFRAME_MISMATCH',
         timeframe,
+        strategy: String(req.query.strategy ?? ''),
       });
+    }
+    const requestedGrade = parseScannerGradeQuery(req.query.grade);
+    if (requestedGrade === null) {
+      return res.status(400).json({ ok: false, error: 'SCANNER_GRADE_UNSUPPORTED' });
+    }
+    const membershipLevel = req.membershipLevel ?? 'pending';
+    if (requestedGrade && !canReadScannerGrade(membershipLevel, requestedGrade)) {
+      return res.status(403).json({ ok: false, error: 'SCANNER_GRADE_FORBIDDEN' });
     }
     const indicators = String(req.query.indicators ?? '')
       .split(',')
@@ -128,6 +158,7 @@ export function createBoundedMarketScanRouter(
         memberId: req.member!.id,
         market,
         indicators,
+        strategyMode,
         filters: {
           volumeThreshold: finite(req.query.volumeThreshold, 1, 1_000),
           tradingValueThreshold: finite(req.query.tradingValueThreshold, 1, 1_000),
@@ -143,9 +174,11 @@ export function createBoundedMarketScanRouter(
         signal: controller.signal,
       });
       if (controller.signal.aborted || res.writableEnded) return;
+      const visibleResult = filterScannerResponseForTier(result, membershipLevel, requestedGrade ?? undefined);
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({
-        ...result,
+        ...visibleResult,
+        strategy: strategyMode,
         partial: result.execution.partial,
         elapsedMs: result.execution.elapsedMs,
       });

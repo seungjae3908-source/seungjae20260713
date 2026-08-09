@@ -11,17 +11,17 @@ on:
       - .github/workflows/prediction-lab-shadow-hourly.yml
 
 permissions:
-  actions: write
-  contents: write
-  pull-requests: read
+  actions: read
+  contents: read
 
 concurrency:
-  group: prediction-lab-branch-writer
+  group: prediction-lab-artifact-writer
   cancel-in-progress: false
 
 env:
   SHADOW_BRANCH: feature/prediction-lab-standalone
   LAB_DIR: market-prediction-lab
+  SHADOW_ARTIFACT: prediction-lab-shadow-state
 
 jobs:
   shadow-validation:
@@ -29,16 +29,164 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      - name: Checkout isolated Prediction Lab branch
+      - name: Locate previous successful shadow artifact
+        id: previous
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const currentRunId = Number(context.runId);
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner,
+              repo,
+              workflow_id: 'prediction-lab-shadow-hourly.yml',
+              status: 'completed',
+              per_page: 100,
+            });
+            for (const run of runs) {
+              if (run.id === currentRunId || run.conclusion !== 'success') continue;
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner,
+                repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = artifacts.find((item) => item.name === process.env.SHADOW_ARTIFACT && !item.expired);
+              if (!artifact) continue;
+              core.setOutput('found', 'true');
+              core.setOutput('run_id', String(run.id));
+              core.setOutput('artifact_id', String(artifact.id));
+              core.info(`Using predecessor shadow artifact ${artifact.id} from run ${run.id}.`);
+              return;
+            }
+            core.setOutput('found', 'false');
+            core.setOutput('run_id', '');
+            core.setOutput('artifact_id', '');
+            core.info('No previous successful shadow artifact exists; cutover seed validation will be required.');
+
+      - name: Download previous shadow artifact
+        if: steps.previous.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SHADOW_ARTIFACT }}
+          path: ${{ runner.temp }}/previous-shadow
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+
+      - name: Resolve immutable Prediction Lab code SHA
+        id: code
+        uses: actions/github-script@v7
+        env:
+          PREVIOUS_FOUND: ${{ steps.previous.outputs.found }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const ref = await github.rest.git.getRef({ owner, repo, ref: `heads/${process.env.SHADOW_BRANCH}` });
+            const sha = ref.data.object.sha;
+            if (!/^[0-9a-f]{40}$/.test(sha)) {
+              core.setFailed('Prediction Lab branch did not resolve to an immutable SHA.');
+              return;
+            }
+            core.setOutput('sha', sha);
+            core.setOutput('seed_mode', process.env.PREVIOUS_FOUND === 'true' ? 'artifact' : 'branch-cutover');
+
+      - name: Checkout immutable Prediction Lab code
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.SHADOW_BRANCH }}
-          fetch-depth: 0
+          ref: ${{ steps.code.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: Restore and verify previous state
+        id: restore
+        shell: bash
+        env:
+          PREVIOUS_FOUND: ${{ steps.previous.outputs.found }}
+          PREVIOUS_RUN_ID: ${{ steps.previous.outputs.run_id }}
+          PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact_id }}
+          PREVIOUS_DIR: ${{ runner.temp }}/previous-shadow
+          RESEARCH_CODE_SHA: ${{ steps.code.outputs.sha }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const path = require('path');
+          const digestBuffer = (value) => crypto.createHash('sha256').update(value).digest('hex');
+          const digest = (file) => digestBuffer(fs.readFileSync(file));
+          const combinedDigest = (stateFile, summaryFile) => digestBuffer(Buffer.concat([
+            fs.readFileSync(stateFile),
+            Buffer.from([0]),
+            fs.readFileSync(summaryFile),
+          ]));
+          const ledgerRecordCount = (value) => {
+            if (!value || typeof value !== 'object') return 0;
+            if (Array.isArray(value)) return value.length;
+            let count = 0;
+            for (const key of ['records', 'ledger', 'entries', 'predictions']) {
+              if (Array.isArray(value[key])) count += value[key].length;
+            }
+            if (value.groups && typeof value.groups === 'object' && !Array.isArray(value.groups)) {
+              count += Object.values(value.groups).reduce((sum, group) => sum + ledgerRecordCount(group), 0);
+            }
+            return count;
+          };
+          const nonEmptyLedger = (value) => ledgerRecordCount(value) > 0;
+          const output = (name, value) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+
+          const lab = process.env.LAB_DIR;
+          const statePath = path.join(lab, 'docs/shadow-state.json');
+          const summaryPath = path.join(lab, 'docs/shadow-summary.json');
+          if (process.env.PREVIOUS_FOUND === 'true') {
+            const manifestPath = path.join(process.env.PREVIOUS_DIR, 'manifest.json');
+            const previousState = path.join(process.env.PREVIOUS_DIR, 'shadow-state.json');
+            const previousSummary = path.join(process.env.PREVIOUS_DIR, 'shadow-summary.json');
+            for (const file of [manifestPath, previousState, previousSummary]) {
+              if (!fs.existsSync(file)) throw new Error(`Missing predecessor artifact file: ${file}`);
+            }
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            if (manifest.schemaVersion !== 1 || manifest.kind !== 'prediction-lab-shadow-state') {
+              throw new Error('Unsupported predecessor shadow manifest.');
+            }
+            if (!/^[0-9a-f]{40}$/.test(String(manifest.researchCodeSha ?? ''))) {
+              throw new Error('Predecessor researchCodeSha is invalid.');
+            }
+            if (manifest.stateSha256 !== digest(previousState) || manifest.summarySha256 !== digest(previousSummary)) {
+              throw new Error('Predecessor shadow artifact digest mismatch.');
+            }
+            if (manifest.sha256 !== combinedDigest(previousState, previousSummary)) {
+              throw new Error('Predecessor shadow combined SHA-256 mismatch.');
+            }
+            if (manifest.branchWrite !== false || manifest.liveOrderAllowed !== false || manifest.privateAccountRequestAllowed !== false) {
+              throw new Error('Predecessor safety flags are not fail-closed.');
+            }
+            if (!nonEmptyLedger(JSON.parse(fs.readFileSync(previousState, 'utf8')))) {
+              throw new Error('Refusing to restart from an empty predecessor shadow state.');
+            }
+            fs.copyFileSync(previousState, statePath);
+            fs.copyFileSync(previousSummary, summaryPath);
+            output('previous_state_digest', manifest.stateSha256);
+            output('source_generated_head', manifest.sourceGeneratedHead || manifest.researchCodeSha);
+            output('predecessor_research_code_sha', manifest.researchCodeSha);
+          } else {
+            for (const file of [statePath, summaryPath]) {
+              if (!fs.existsSync(file)) throw new Error(`Cutover seed is missing required file: ${file}`);
+            }
+            if (!nonEmptyLedger(JSON.parse(fs.readFileSync(statePath, 'utf8')))) {
+              throw new Error('Refusing artifact cutover from an empty branch shadow state.');
+            }
+            output('previous_state_digest', digest(statePath));
+            output('source_generated_head', process.env.RESEARCH_CODE_SHA);
+            output('predecessor_research_code_sha', '');
+          }
+          NODE
 
       - name: Inspect current shadow decision
         id: inspect
@@ -46,259 +194,122 @@ jobs:
         shell: bash
         run: |
           node <<'NODE'
-          import { appendFileSync, readFileSync } from "node:fs";
-
-          const output = (name, value) => {
-            appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
-          };
-
-          const summary = JSON.parse(readFileSync("docs/shadow-summary.json", "utf8"));
+          const fs = require('fs');
+          const summary = JSON.parse(fs.readFileSync('docs/shadow-summary.json', 'utf8'));
           const groups = Object.entries(summary.groups ?? {});
-          const failures = groups.filter(([, group]) => group?.status === "fail");
-
-          if (summary.status === "fail" || failures.length > 0) {
-            console.error("Existing technical shadow failure detected. No files will be changed.");
-            for (const [name, group] of failures) {
-              console.error(JSON.stringify({
-                group: name,
-                stage: group?.stage ?? group?.error?.stage ?? "shadow_cycle",
-                error: group?.error ?? null,
-              }, null, 2));
-            }
-            if (failures.length === 0) {
-              console.error(JSON.stringify({
-                stage: summary.stage ?? summary.error?.stage ?? "shadow_summary",
-                error: summary.error ?? null,
-              }, null, 2));
-            }
-            output("decision", "technical_failure");
+          const failures = groups.filter(([, group]) => group?.status === 'fail');
+          const output = (name, value) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          if (summary.status === 'fail' || failures.length > 0) {
+            output('decision', 'technical_failure');
             process.exit(0);
           }
-
-          const ready = groups.filter(([, group]) =>
-            group?.promotion?.status === "integration_review_ready"
-          );
-
-          if (ready.length > 0) {
-            console.log("Integration review is ready. Shadow trigger will not be changed.");
-            for (const [name, group] of ready) {
-              console.log(JSON.stringify({
-                group: name,
-                modelId: group?.filter?.modelId ?? group?.modelSelection?.candidateModelId ?? null,
-                referenceModelId: group?.filter?.referenceModelId ?? group?.modelSelection?.referenceModelId ?? null,
-                total: group?.total ?? 0,
-                settled: group?.settled ?? 0,
-                pending: group?.pending ?? 0,
-                firstAnchorTimestamp: group?.firstAnchorTimestamp ?? null,
-                lastAnchorTimestamp: group?.lastAnchorTimestamp ?? null,
-                candidate: group?.candidate ?? null,
-                reference: group?.reference ?? null,
-                comparison: group?.comparison ?? null,
-                bySymbol: group?.bySymbol ?? {},
-                byRegime: group?.byRegime ?? {},
-              }, null, 2));
-            }
-            output("decision", "integration_review_ready");
-            process.exit(0);
-          }
-
-          console.log("Shadow validation is still in progress.");
-          for (const [name, group] of groups) {
-            console.log(`${name}: ${group?.promotion?.status ?? "unknown"}, settled=${group?.settled ?? 0}, pending=${group?.pending ?? 0}`);
-          }
-          output("decision", "shadow_continue");
+          const ready = groups.some(([, group]) => group?.promotion?.status === 'integration_review_ready');
+          output('decision', ready ? 'integration_review_ready' : 'shadow_continue');
           NODE
 
       - name: Validate isolated shadow modules
-        id: preflight
         if: steps.inspect.outputs.decision == 'shadow_continue'
-        continue-on-error: true
         working-directory: ${{ env.LAB_DIR }}
         run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js
 
-      - name: Record preflight failure
-        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome != 'success'
+      - name: Update local artifact trigger
+        if: steps.inspect.outputs.decision == 'shadow_continue'
         working-directory: ${{ env.LAB_DIR }}
-        shell: bash
         run: |
           node <<'NODE'
-          import { writeFileSync } from "node:fs";
-          const report = {
+          const fs = require('fs');
+          fs.writeFileSync('docs/shadow-trigger.json', `${JSON.stringify({
             schemaVersion: 2,
-            status: "fail",
-            generatedAt: Date.now(),
-            stage: "preflight_tests",
-            error: {
-              name: "ShadowPreflightError",
-              message: "isolated shadow module tests failed before trigger update",
-            },
-            safety: {
-              usesPublicMarketDataOnly: true,
-              usesAccountOrOrderApi: false,
-              modifiesExistingAppApi: false,
-              deploysModel: false,
-            },
-          };
-          writeFileSync("docs/shadow-summary.json", `${JSON.stringify(report, null, 2)}\n`);
-          NODE
-
-      - name: Update independent shadow trigger
-        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome == 'success'
-        working-directory: ${{ env.LAB_DIR }}
-        run: |
-          node <<'NODE'
-          import { writeFileSync } from "node:fs";
-          const trigger = {
-            schemaVersion: 1,
             requestedAt: Date.now(),
-            reason: "hourly-shadow-validation",
-            branchOnly: true,
+            reason: 'hourly-shadow-validation',
+            artifactOnly: true,
+            branchWrite: false,
             deploy: false,
-          };
-          writeFileSync("docs/shadow-trigger.json", `${JSON.stringify(trigger, null, 2)}\n`);
-          console.log(JSON.stringify(trigger, null, 2));
+          }, null, 2)}\n`);
           NODE
 
       - name: Run one independent live shadow cycle
-        id: shadow
-        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome == 'success'
-        continue-on-error: true
+        if: steps.inspect.outputs.decision == 'shadow_continue'
         working-directory: ${{ env.LAB_DIR }}
         run: node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json
 
-      - name: Record cycle failure
-        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome == 'success' && steps.shadow.outcome != 'success'
-        working-directory: ${{ env.LAB_DIR }}
+      - name: Build provenance manifest
+        if: steps.inspect.outputs.decision != 'technical_failure'
         shell: bash
-        run: |
-          if [ ! -f docs/shadow-summary.json ]; then
-            cat > docs/shadow-summary.json <<'JSON'
-          {
-            "schemaVersion": 2,
-            "status": "fail",
-            "stage": "shadow_cycle",
-            "error": {
-              "name": "ShadowCycleError",
-              "message": "shadow cycle failed before writing its own report"
-            },
-            "safety": {
-              "usesPublicMarketDataOnly": true,
-              "usesAccountOrOrderApi": false,
-              "modifiesExistingAppApi": false,
-              "deploysModel": false
-            }
-          }
-          JSON
-          fi
-
-      - name: Display resulting shadow summary
-        if: steps.inspect.outputs.decision == 'shadow_continue' && always()
-        working-directory: ${{ env.LAB_DIR }}
-        run: cat docs/shadow-summary.json
-
-      - name: Commit isolated shadow files
-        id: publish
-        if: steps.inspect.outputs.decision == 'shadow_continue' && always()
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            market-prediction-lab/docs/shadow-trigger.json \
-            market-prediction-lab/docs/shadow-state.json \
-            market-prediction-lab/docs/shadow-summary.json
-          if git diff --cached --quiet; then
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          base_head="$(git rev-parse HEAD)"
-          git fetch origin "${SHADOW_BRANCH}"
-          remote_head="$(git rev-parse "origin/${SHADOW_BRANCH}")"
-          if [ "${base_head}" != "${remote_head}" ]; then
-            echo "Prediction Lab branch advanced during this run; refusing a non-fast-forward publish." >&2
-            exit 1
-          fi
-          git commit -m "data: run hourly isolated shadow validation"
-          git push origin "HEAD:${SHADOW_BRANCH}"
-          echo "pushed=true" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Dispatch Application CI for updated Prediction Lab HEAD
-        if: steps.publish.outputs.pushed == 'true'
-        uses: actions/github-script@v7
         env:
-          TARGET_SHA: ${{ steps.publish.outputs.head_sha }}
+          RESEARCH_CODE_SHA: ${{ steps.code.outputs.sha }}
+          PREVIOUS_RUN_ID: ${{ steps.previous.outputs.run_id }}
+          PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact_id }}
+          PREVIOUS_STATE_DIGEST: ${{ steps.restore.outputs.previous_state_digest }}
+          PREDECESSOR_RESEARCH_CODE_SHA: ${{ steps.restore.outputs.predecessor_research_code_sha }}
+          SOURCE_GENERATED_HEAD: ${{ steps.restore.outputs.source_generated_head }}
+          SEED_MODE: ${{ steps.code.outputs.seed_mode }}
+        run: |
+          rm -rf shadow-artifact
+          mkdir -p shadow-artifact
+          cp "$LAB_DIR/docs/shadow-state.json" shadow-artifact/shadow-state.json
+          cp "$LAB_DIR/docs/shadow-summary.json" shadow-artifact/shadow-summary.json
+          if [ -f "$LAB_DIR/docs/shadow-trigger.json" ]; then cp "$LAB_DIR/docs/shadow-trigger.json" shadow-artifact/shadow-trigger.json; fi
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const digestBuffer = (value) => crypto.createHash('sha256').update(value).digest('hex');
+          const digest = (file) => digestBuffer(fs.readFileSync(file));
+          const stateBytes = fs.readFileSync('shadow-artifact/shadow-state.json');
+          const summaryBytes = fs.readFileSync('shadow-artifact/shadow-summary.json');
+          const summary = JSON.parse(summaryBytes.toString('utf8'));
+          const groups = Object.values(summary.groups ?? {});
+          const unique = (values) => [...new Set(values.filter(Boolean))];
+          const candidateModelIds = unique(groups.map((group) => group?.filter?.modelId ?? group?.modelSelection?.candidateModelId ?? null));
+          const referenceModelIds = unique(groups.map((group) => group?.filter?.referenceModelId ?? group?.modelSelection?.referenceModelId ?? null));
+          const manifest = {
+            schemaVersion: 1,
+            kind: 'prediction-lab-shadow-state',
+            researchCodeSha: process.env.RESEARCH_CODE_SHA,
+            predecessorRunId: process.env.PREVIOUS_RUN_ID || null,
+            predecessorArtifactId: process.env.PREVIOUS_ARTIFACT_ID || null,
+            predecessorResearchCodeSha: process.env.PREDECESSOR_RESEARCH_CODE_SHA || null,
+            previousStateDigest: process.env.PREVIOUS_STATE_DIGEST,
+            sourceGeneratedHead: process.env.SOURCE_GENERATED_HEAD,
+            candidateModelIds,
+            referenceModelIds,
+            candidateModelId: candidateModelIds[0] ?? null,
+            referenceModelId: referenceModelIds[0] ?? null,
+            seedMode: process.env.SEED_MODE,
+            createdAt: new Date().toISOString(),
+            stateSha256: digest('shadow-artifact/shadow-state.json'),
+            summarySha256: digest('shadow-artifact/shadow-summary.json'),
+            sha256: digestBuffer(Buffer.concat([stateBytes, Buffer.from([0]), summaryBytes])),
+            branchWrite: false,
+            liveOrderAllowed: false,
+            privateAccountRequestAllowed: false,
+          };
+          if (!/^[0-9a-f]{40}$/.test(String(manifest.sourceGeneratedHead ?? ''))) {
+            throw new Error('sourceGeneratedHead is invalid.');
+          }
+          fs.writeFileSync('shadow-artifact/manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+      - name: Upload immutable shadow state artifact
+        if: steps.inspect.outputs.decision != 'technical_failure'
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            const targetSha = process.env.TARGET_SHA;
-            if (!/^[0-9a-f]{40}$/.test(targetSha)) {
-              core.setFailed(`Invalid Prediction Lab HEAD SHA: ${targetSha}`);
-              return;
-            }
+          name: ${{ env.SHADOW_ARTIFACT }}
+          path: shadow-artifact
+          if-no-files-found: error
+          retention-days: 90
 
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const shadowBranch = process.env.SHADOW_BRANCH;
-            let pull = null;
-            let lastMatchCount = 0;
-            for (let attempt = 1; attempt <= 10; attempt += 1) {
-              const pulls = await github.rest.pulls.list({
-                owner,
-                repo,
-                state: 'open',
-                base: context.payload.repository?.default_branch ?? 'main',
-                head: `${owner}:${shadowBranch}`,
-                per_page: 10,
-              });
-              const matching = pulls.data.filter((candidate) => candidate.head.sha === targetSha);
-              lastMatchCount = matching.length;
-              if (matching.length === 1) {
-                pull = matching[0];
-                break;
-              }
-              await new Promise((resolve) => setTimeout(resolve, 2000));
-            }
-            if (!pull) {
-              core.setFailed(`Expected one open PR for ${shadowBranch} at ${targetSha}; found ${lastMatchCount}.`);
-              return;
-            }
-
-            let checkoutSha = null;
-            for (let attempt = 1; attempt <= 10; attempt += 1) {
-              try {
-                const ref = await github.rest.git.getRef({ owner, repo, ref: `pull/${pull.number}/merge` });
-                const commit = await github.rest.repos.getCommit({ owner, repo, ref: ref.data.object.sha });
-                if (commit.data.parents.some((parent) => parent.sha === targetSha)) {
-                  checkoutSha = ref.data.object.sha;
-                  break;
-                }
-              } catch (error) {
-                if (error.status !== 404) throw error;
-              }
-              await new Promise((resolve) => setTimeout(resolve, 2000));
-            }
-            if (!checkoutSha) {
-              core.setFailed(`Pull request #${pull.number} merge ref was not refreshed for ${targetSha}.`);
-              return;
-            }
-
-            await github.rest.actions.createWorkflowDispatch({
-              owner,
-              repo,
-              workflow_id: 'futures-public-network-smoke.yml',
-              ref: context.payload.repository?.default_branch ?? 'main',
-              inputs: { target_sha: targetSha, checkout_ref: checkoutSha },
-            });
-            core.info(`Dispatched Application CI for PR #${pull.number} at ${targetSha} using merge commit ${checkoutSha}.`);
+      - name: Assert source branch stayed immutable
+        if: always() && steps.code.outputs.sha != ''
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ steps.code.outputs.sha }}"
+          git fetch --no-tags origin "${SHADOW_BRANCH}"
+          test "$(git rev-parse FETCH_HEAD)" = "${{ steps.code.outputs.sha }}" || {
+            echo "Prediction Lab source branch moved during artifact-only run." >&2
+            exit 1
+          }
 
       - name: Stop on existing technical failure
         if: steps.inspect.outputs.decision == 'technical_failure'
-        run: exit 1
-
-      - name: Stop when preflight failed
-        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome != 'success'
-        run: exit 1
-
-      - name: Stop when shadow cycle failed
-        if: steps.inspect.outputs.decision == 'shadow_continue' && steps.preflight.outcome == 'success' && steps.shadow.outcome != 'success'
         run: exit 1

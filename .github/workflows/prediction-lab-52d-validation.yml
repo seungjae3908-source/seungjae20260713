@@ -2,22 +2,25 @@ name: Prediction Lab Multi-Market Suite
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - feature/prediction-lab-standalone
+    inputs:
+      research_ref:
+        description: Exact research commit/ref to validate
+        required: false
+        type: string
+  pull_request:
+    branches: [main]
     paths:
-      - .github/workflows/prediction-lab-52d-validation.yml
       - market-prediction-lab/package.json
       - market-prediction-lab/src/**
       - market-prediction-lab/scripts/**
       - market-prediction-lab/tests/**
 
 permissions:
-  actions: write
-  contents: write
+  actions: read
+  contents: read
 
 concurrency:
-  group: prediction-lab-market-suite-${{ github.ref }}
+  group: prediction-lab-market-suite-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -25,15 +28,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: Checkout isolated branch
+      - name: Resolve immutable research ref
+        id: research
+        shell: bash
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          ref="$PR_SHA"
+          if [ -z "$ref" ]; then ref="$INPUT_REF"; fi
+          if [ -z "$ref" ]; then ref="$GITHUB_SHA"; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout isolated research revision
         uses: actions/checkout@v4
         with:
-          ref: feature/prediction-lab-standalone
+          ref: ${{ steps.research.outputs.ref }}
+          persist-credentials: false
+
+      - name: Record immutable research SHA
+        id: sha
+        shell: bash
+        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
       - name: Validate standalone lab
         id: validate
@@ -52,24 +73,10 @@ jobs:
         run: |
           tail -n 200 docs/validation-run.log > docs/validation-failure.log
           cat > docs/market-suite-result.json <<'JSON'
-          {
-            "schemaVersion": 1,
-            "status": "fail",
-            "stage": "standalone_validation_suite",
-            "source": "github-actions-isolated-multi-market-suite",
-            "error": {
-              "name": "ValidationSuiteError",
-              "message": "npm run validate failed before live data collection; see docs/validation-failure.log"
-            }
-          }
+          {"schemaVersion":1,"status":"fail","stage":"standalone_validation_suite","source":"github-actions-isolated-multi-market-suite","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false}
           JSON
 
-      - name: Clear previous validation failure log
-        if: steps.validate.outcome == 'success'
-        working-directory: market-prediction-lab
-        run: rm -f docs/validation-failure.log
-
-      - name: Collect, validate, train and compare price-volume candidates
+      - name: Collect validate train and compare price-volume candidates
         id: market_suite
         if: steps.validate.outcome == 'success'
         continue-on-error: true
@@ -90,16 +97,18 @@ jobs:
         working-directory: market-prediction-lab
         run: node scripts/run-market-structure-suite.js live-market-structure-suite docs/market-structure-suite-result.json docs/candidate-models-v3
 
-      - name: Display suite results
+      - name: Build immutable provenance manifest
         if: always()
-        working-directory: market-prediction-lab
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
         run: |
-          test -f docs/market-suite-result.json
-          cat docs/market-suite-result.json
-          if [ -f docs/derivatives-suite-result.json ]; then cat docs/derivatives-suite-result.json; fi
-          if [ -f docs/market-structure-suite-result.json ]; then cat docs/market-structure-suite-result.json; fi
+          mkdir -p market-prediction-lab/docs
+          cat > market-prediction-lab/docs/market-suite-provenance.json <<JSON
+          {"schemaVersion":1,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false}
+          JSON
 
-      - name: Upload isolated validation artifacts
+      - name: Upload immutable validation artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -108,40 +117,20 @@ jobs:
             market-prediction-lab/live-market-suite
             market-prediction-lab/live-derivatives-suite
             market-prediction-lab/live-market-structure-suite
+            market-prediction-lab/docs/market-suite-result.json
+            market-prediction-lab/docs/derivatives-suite-result.json
+            market-prediction-lab/docs/market-structure-suite-result.json
+            market-prediction-lab/docs/market-suite-provenance.json
+            market-prediction-lab/docs/validation-run.log
+            market-prediction-lab/docs/validation-failure.log
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 90
 
-      - name: Commit summaries, diagnostics and research candidates
-        if: always()
+      - name: Assert immutable checkout HEAD
+        shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A market-prediction-lab/docs
-          git diff --cached --quiet && exit 0
-          git commit -m "test: record market structure candidates"
-
-          parent_sha="$(git rev-parse HEAD^)"
-          remote_sha="$(git ls-remote origin refs/heads/feature/prediction-lab-standalone | awk '{print $1}')"
-          if [ "$remote_sha" != "$parent_sha" ]; then
-            echo "::error::Prediction Lab branch advanced during validation: expected $parent_sha, found $remote_sha"
-            exit 1
-          fi
-
-          git push origin HEAD:feature/prediction-lab-standalone
-          pushed_sha="$(git rev-parse HEAD)"
-          remote_pushed_sha="$(git ls-remote origin refs/heads/feature/prediction-lab-standalone | awk '{print $1}')"
-          if [ "$remote_pushed_sha" != "$pushed_sha" ]; then
-            echo "::error::Prediction Lab branch advanced after result push: pushed $pushed_sha, remote is $remote_pushed_sha"
-            exit 1
-          fi
-
-          gh workflow run futures-public-network-smoke.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref main \
-            -f target_sha="$pushed_sha" \
-            -f checkout_ref="$pushed_sha"
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
 
       - name: Fail workflow when technical validation failed
         if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')

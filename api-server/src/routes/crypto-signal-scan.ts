@@ -10,6 +10,16 @@ import {
   type CryptoSignalScanRequest,
 } from '../services/crypto-signal-scanner.service';
 import {
+  scannerStrategyForTimeframe,
+  scannerStrategyTimeframeAllowed,
+  type ScannerStrategyMode,
+} from '../services/scanner-quant-strategy.service';
+import {
+  canReadScannerGrade,
+  filterScannerResponseForTier,
+  parseScannerGradeQuery,
+} from '../services/scanner-access-control.service';
+import {
   ScannerRequestGuardError,
   scannerRequestGuard,
   type ScannerRequestGuard,
@@ -46,10 +56,20 @@ function requestKey(req: AuthenticatedRequest, market: 'spot' | 'futures'): stri
 }
 
 function timeframe(value: unknown): CryptoSignalScanRequest['timeframe'] | null {
-  const normalized = String(value ?? '15m') === '1H' ? '60m' : String(value ?? '15m');
-  return ['5m', '15m', '60m', '4H', '1D'].includes(normalized)
+  const normalized = String(value ?? '5m') === '1H' ? '60m' : String(value ?? '5m');
+  return ['1m', '3m', '5m', '15m', '60m', '4H', '1D'].includes(normalized)
     ? normalized as CryptoSignalScanRequest['timeframe']
     : null;
+}
+
+function strategy(value: unknown, selectedTimeframe: CryptoSignalScanRequest['timeframe']): ScannerStrategyMode | null {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  const selected = normalized === ''
+    ? scannerStrategyForTimeframe(selectedTimeframe)
+    : normalized === 'scalping' || normalized === 'swing'
+      ? normalized
+      : null;
+  return selected && scannerStrategyTimeframeAllowed(selected, selectedTimeframe) ? selected : null;
 }
 
 function condition(value: unknown): CryptoSignalScanRequest['condition'] {
@@ -107,6 +127,23 @@ export function createCryptoSignalScanRouter(
   const handler = (market: 'spot' | 'futures') => async (req: AuthenticatedRequest, res: Response) => {
     const selectedTimeframe = timeframe(req.query.timeframe);
     if (!selectedTimeframe) return res.status(400).json({ error: 'CRYPTO_SCAN_TIMEFRAME_UNSUPPORTED' });
+    const strategyMode = strategy(req.query.strategy, selectedTimeframe);
+    if (!strategyMode) {
+      return res.status(400).json({
+        ok: false,
+        error: 'CRYPTO_SCAN_STRATEGY_TIMEFRAME_MISMATCH',
+        timeframe: selectedTimeframe,
+        strategy: String(req.query.strategy ?? ''),
+      });
+    }
+    const requestedGrade = parseScannerGradeQuery(req.query.grade);
+    if (requestedGrade === null) {
+      return res.status(400).json({ ok: false, error: 'SCANNER_GRADE_UNSUPPORTED' });
+    }
+    const membershipLevel = req.membershipLevel ?? 'pending';
+    if (requestedGrade && !canReadScannerGrade(membershipLevel, requestedGrade)) {
+      return res.status(403).json({ ok: false, error: 'SCANNER_GRADE_FORBIDDEN' });
+    }
     const controller = new AbortController();
     const abort = () => {
       if (!controller.signal.aborted) controller.abort(new Error('CRYPTO_SCAN_ABORTED'));
@@ -119,6 +156,7 @@ export function createCryptoSignalScanRouter(
       const result = await scanner.scan({
         memberId: req.member!.id,
         market,
+        strategyMode,
         timeframe: selectedTimeframe,
         condition: condition(req.query.condition),
         cursor: number(req.query.cursor, 0, 1_000_000) ?? 0,
@@ -128,9 +166,10 @@ export function createCryptoSignalScanRouter(
         signal: controller.signal,
       });
       if (controller.signal.aborted || res.writableEnded) return;
+      const visibleResult = filterScannerResponseForTier(result, membershipLevel, requestedGrade ?? undefined);
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Scanner-Request-Id', result.requestId);
-      return res.json(result);
+      return res.json({ ...visibleResult, strategy: strategyMode });
     } catch (error) {
       if (controller.signal.aborted || res.writableEnded) return;
       return routeError(res, error);
@@ -141,8 +180,10 @@ export function createCryptoSignalScanRouter(
     }
   };
 
-  router.get('/spot', requireCapability('canAccessSpot'), handler('spot'));
-  router.get('/futures', requireCapability('canAccessFutures'), handler('futures'));
+  // Scanner data is public-market information. Associate access is intentionally
+  // scoped to this read-only scanner route and does not grant futures/order/Risk capabilities.
+  router.get('/spot', requireCapability('canAccessBasicInfo'), handler('spot'));
+  router.get('/futures', requireCapability('canAccessBasicInfo'), handler('futures'));
   return router;
 }
 
