@@ -76,6 +76,7 @@ function authMessage(cause: unknown) {
   if (message.includes('invalid login') || message.includes('invalid credentials')) return '아이디 또는 비밀번호가 맞지 않습니다.';
   if (message.includes('already')) return '이미 사용 중인 아이디입니다.';
   if (message.includes('rate limit')) return '요청이 많습니다. 잠시 후 다시 시도해 주세요.';
+  if (message.includes('timeout') || message.includes('timed out')) return '계정 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.';
   if (message.includes('session token')) return cause instanceof Error ? cause.message : '로그인 세션을 적용하지 못했습니다.';
   return '계정 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.';
 }
@@ -171,6 +172,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return queued;
   }
 
+  function loadProfileWithDeadline(user: User | null, options: { force?: boolean } = {}) {
+    const controller = new AbortController();
+    return withFiniteDeadline(
+      loadProfile(user, { ...options, signal: controller.signal }),
+      AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
+      'AUTH_PROFILE_TIMEOUT',
+      (error) => controller.abort(error),
+    );
+  }
+
   function runInitialBootstrap() {
     if (!isSupabaseConfigured) {
       setBootstrapError(null);
@@ -221,13 +232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!mountedRef.current) return;
         setBootstrapError(null);
         applySession(next);
-        const profileController = new AbortController();
-        void withFiniteDeadline(
-          loadProfile(next?.user ?? null, { signal: profileController.signal }),
-          AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
-          'AUTH_PROFILE_TIMEOUT',
-          (error) => profileController.abort(error),
-        ).catch((cause) => {
+        void loadProfileWithDeadline(next?.user ?? null).catch((cause) => {
           if (mountedRef.current) setBootstrapError(authBootstrapErrorMessage(cause));
         }).finally(() => {
           if (mountedRef.current) setLoading(false);
@@ -287,7 +292,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const nextSession = await signInWithSupabase(name, password);
         applySession(nextSession);
-        await loadProfile(nextSession.user);
+        await loadProfileWithDeadline(nextSession.user);
       } catch (cause) {
         applySession(null);
         throw new Error(authMessage(cause));
@@ -349,7 +354,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     async refreshProfile() {
       const current = sessionRef.current;
-      await loadProfile(current?.user ?? null, { force: true });
+      await loadProfileWithDeadline(current?.user ?? null, { force: true });
     },
   }), [bootstrapError, loading, membershipLevel, permissions, profile, session]);
 
