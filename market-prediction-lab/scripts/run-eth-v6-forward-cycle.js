@@ -1,12 +1,15 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { BitgetPublicClient } from "../src/bitget-public-client.js";
 import { collectBitgetUtcDailyForwardCandles } from "../src/bitget-forward-daily-candles.js";
 import { collectFundingRateHistory } from "../src/derivatives-history.js";
+import { buildEthV6ForwardCycleAudit } from "../src/eth-v6-forward-audit.js";
 import {
   ETH_V6_FORWARD_CANDIDATE,
   ETH_V6_FORWARD_START,
   advanceEthV6ForwardState,
+  classifyEthV6ForwardRegime,
   createEthV6ForwardState,
   summarizeEthV6ForwardState,
 } from "../src/eth-v6-forward-validation.js";
@@ -55,6 +58,12 @@ function format(value, digits = 2) {
   return Number(value).toLocaleString("ko-KR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
+function resolveResearchCodeSha() {
+  const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  if (!/^[0-9a-f]{40}$/u.test(sha)) throw new Error("forward research checkout did not resolve to an exact 40-character SHA");
+  return sha;
+}
+
 function hasUtcDataContract(state) {
   return state?.dataContract?.version === UTC_FORWARD_DATA_CONTRACT.version
     && state?.dataContract?.timeframe === UTC_FORWARD_DATA_CONTRACT.timeframe
@@ -88,6 +97,7 @@ function prepareUtcForwardState(previous, candlesResult) {
   });
 }
 
+const researchCodeSha = resolveResearchCodeSha();
 const replay = await readJsonOptional(replayPath);
 if (!replay || replay.status !== "passed") throw new Error("ETH V6 deterministic replay proof must pass before Paper/Shadow starts");
 if (replay.strategyId !== ETH_V6_FORWARD_CANDIDATE.id || replay.candidateManifestSha256 !== FROZEN_CANDIDATE_MANIFEST_SHA256) {
@@ -116,16 +126,31 @@ const funding = await collectFundingRateHistory({
   maxPages: 20,
 });
 
+const preparedState = prepareUtcForwardState(previous, candlesResult);
 const state = advanceEthV6ForwardState({
-  state: prepareUtcForwardState(previous, candlesResult),
+  state: preparedState,
   candles: candlesResult.candles,
   fundingRates: funding.records,
   cycleTime,
 });
 const summary = summarizeEthV6ForwardState(state);
+const auditInput = {
+  state,
+  summary,
+  researchCodeSha,
+  strategyId: ETH_V6_FORWARD_CANDIDATE.id,
+  strategyVersion: ETH_V6_FORWARD_CANDIDATE.version,
+  cycleTime,
+  fundingRecords: funding.records,
+  candles: candlesResult.candles,
+  classifyRegime: classifyEthV6ForwardRegime,
+};
+const cycleAudit = buildEthV6ForwardCycleAudit({ ...auditInput, previousState: preparedState });
+const cumulativeAudit = buildEthV6ForwardCycleAudit({ ...auditInput, previousState: null });
 
 const report = Object.freeze({
   ...summary,
+  researchCodeSha,
   dataContract: state.dataContract,
   cutover: state.cutover ?? null,
   netProfitableRateDefinition: NET_PROFITABLE_RATE_DEFINITION,
@@ -144,6 +169,11 @@ const report = Object.freeze({
     fundingLast: funding.records.at(-1)?.timestamp ?? null,
     collectedAt: cycleTime,
   }),
+  cycleAudit,
+  signalAudit: cumulativeAudit.recordedSignals,
+  missedSignalAudit: cumulativeAudit.missedSignals,
+  metricInterpretation: cycleAudit.metricInterpretation,
+  dataQuality: cycleAudit.dataQuality,
   stages: Object.freeze({
     replay: Object.freeze({ passed: true, evidence: "docs/eth-v6-replay-proof.json" }),
     paper: Object.freeze({ passed: false, status: summary.status, forwardOnly: true, simulatedCapital: true }),
@@ -153,23 +183,34 @@ const report = Object.freeze({
   privateAccountRequestAllowed: false,
 });
 
+const resolvedDisplay = report.metricInterpretation.tpBeforeSl.display;
+const netProfitableDisplay = report.metricInterpretation.netProfitableRate.display;
+const performanceAvailable = report.metricInterpretation.performance.available;
+const performanceDisplay = report.metricInterpretation.performance.display;
+const costStressDisplay = performanceAvailable
+  ? `baseline ${format(report.totalReturnPercent)}% / 1.5x ${format(report.costStress?.x1_5?.totalReturnPercent)}% / 2x ${format(report.costStress?.x2?.totalReturnPercent)}%`
+  : "N/A — insufficient settled sample";
+
 const markdown = `# ETHUSDT V6 Forward Paper / Shadow\n\n`
   + `- candidate: **${report.candidateId}**\n`
+  + `- research code SHA: \`${report.researchCodeSha}\`\n`
   + `- frozen manifest: \`${report.candidateManifestSha256}\`\n`
   + `- replay: **passed** / selection 사용: false\n`
   + `- forward validation start: ${iso(report.startedAt)}\n`
   + `- data contract: ${report.data.granularity} / timezone ${report.data.timezone} / current open ${iso(report.data.currentOpenTimestamp)}\n`
   + `- UTC cutover reset: ${report.cutover?.previousLegacyStateDiscarded === true ? "yes (legacy evidence was empty)" : "no"} / historical metrics reused: false\n`
   + `- last signal evaluated: ${iso(report.lastSignalEvaluated)}\n`
+  + `- cycle disposition: **${report.cycleAudit.disposition}** / data quality: **${report.dataQuality.status}** (failure => fail-closed, no Shadow result)\n`
   + `- signals: ${report.signalsRecorded} / settled: ${report.settledTrades} / tracking: ${report.trackingTrades} / missed: ${report.missedSignals}\n`
-  + `- paper equity: ${format(report.paperEquity, 0)}원 / return: ${format(report.totalReturnPercent)}%\n`
-  + `- TP-before-SL success rate: ${format(report.successRatePercent)}% / resolved barriers: ${report.barrierResolvedTradeCount} / TP: ${report.tpHitCount} / SL: ${report.slHitCount} / censored: ${report.censoredTradeCount}\n`
-  + `- net-profitable trade rate after all modeled costs: ${format(report.netProfitableTradeRatePercent)}% / settled trades: ${report.settledTrades}\n`
-  + `- PF: ${format(report.profitFactor)} / MDD: ${format(report.maximumDrawdownPercent)}% / expectancy: ${format(report.expectancy, 0)}원\n`
-  + `- cost stress return: 1.5x ${format(report.costStress?.x1_5?.totalReturnPercent)}% / 2x ${format(report.costStress?.x2?.totalReturnPercent)}% (diagnostic)\n`
+  + `- paper equity: ${format(report.paperEquity, 0)}원 / performance metrics: ${performanceDisplay}${performanceAvailable ? ` / return ${format(report.totalReturnPercent)}%` : ""}\n`
+  + `- TP-before-SL: ${resolvedDisplay} / resolved barriers: ${report.barrierResolvedTradeCount} / TP: ${report.tpHitCount} / SL: ${report.slHitCount} / censored: ${report.censoredTradeCount}\n`
+  + `- net-profitable rate after all modeled costs: ${netProfitableDisplay} / settled trades: ${report.settledTrades}\n`
+  + `- PF/MDD/expectancy: ${performanceAvailable ? `${format(report.profitFactor)} / ${format(report.maximumDrawdownPercent)}% / ${format(report.expectancy, 0)}원` : "N/A — insufficient settled sample"}\n`
+  + `- cost stress return: ${costStressDisplay}\n`
   + `- regime diagnostics: trend/volatility are point-in-time and do not affect promotion; liquidity=${report.regimeResults?.liquidity?.status ?? "not_available"}\n`
   + `- status: **${report.status}** / next: ${report.nextStage}\n`
   + `- actual order: 0 / private account API: 0 / live promotion: false\n`
+  + `- V6 parameters, holdout, regime definitions and position sizing remain frozen.\n`
   + `- late workflow cycles never backfill a signal after its entry window has passed.\n`;
 
 await writeAtomic(statePath, `${JSON.stringify(state, null, 2)}\n`);
