@@ -34,19 +34,26 @@ test('hung session bootstrap terminates with AUTH_SESSION_TIMEOUT', async () => 
   );
 });
 
-test('hung profile bootstrap terminates with AUTH_PROFILE_TIMEOUT after applying session', async () => {
+test('hung profile bootstrap terminates, aborts the request, and frees retry work', async () => {
   let applied = '';
+  let aborted = false;
   await assert.rejects(
     () => runFiniteAuthBootstrap({
       getSession: async () => 'session-1',
       applySession: (session) => { applied = session; },
-      loadProfile: () => never<void>(),
+      loadProfile: (_session, signal) => new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          aborted = true;
+          reject(signal.reason);
+        }, { once: true });
+      }),
       sessionTimeoutMs: 20,
       profileTimeoutMs: 20,
     }),
     (error: unknown) => error instanceof FiniteDeadlineError && error.code === 'AUTH_PROFILE_TIMEOUT',
   );
   assert.equal(applied, 'session-1');
+  assert.equal(aborted, true);
 });
 
 test('successful bootstrap applies session before profile and completes', async () => {
