@@ -73,7 +73,9 @@ test('account snapshot source never serializes the vault credential object into 
 test('account connection router correctly uses adapter service and prohibits direct write access', () => {
   const routeSource = source('api-server/src/routes/account-connections.ts');
 
-  const importMatch = routeSource.match(/import {([\s\S]*?)} from '..\/services\/trade-exchange-adapters.service'/);
+  const importMatch = routeSource.match(
+    /import\s*{\s*([^}]*)\s*}\s*from\s*'\.\.\/services\/trade-exchange-adapters\.service';/,
+  );
   assert.ok(importMatch, 'Missing import from ../services/trade-exchange-adapters.service');
   const importedNames = importMatch[1].split(',').map((value) => value.trim().replace(/^type\s+/, ''));
   for (const required of [
