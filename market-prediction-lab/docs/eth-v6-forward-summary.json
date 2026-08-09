@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "candidateId": "eth-futures-long-v6",
+  "candidateManifestSha256": "475acbec2df66cea18f3d5b2b2212e739d18a3148b58db5dc6ca2dd9511d8b20",
+  "startedAt": 1786233795739,
+  "updatedAt": 1786233795739,
+  "lastSignalEvaluated": null,
+  "signalsRecorded": 0,
+  "settledTrades": 0,
+  "trackingTrades": 0,
+  "missedSignals": 0,
+  "initialCapital": 1000000,
+  "paperEquity": 1000000,
+  "totalReturnPercent": 0,
+  "successRatePercent": 0,
+  "profitFactor": 0,
+  "maximumDrawdownPercent": 0,
+  "expectancy": 0,
+  "elapsedDays": 0,
+  "researchSampleSufficient": false,
+  "status": "shadow_continue",
+  "nextStage": "paper_shadow",
+  "safeguards": {
+    "frozenCandidateOnly": true,
+    "parametersRetunedAfterHoldout": false,
+    "forwardSignalsOnly": true,
+    "lateSignalsNeverBackfilled": true,
+    "oneOpenPositionMaximum": true,
+    "riskPerTrade": 0.01,
+    "leverage": 1,
+    "publicMarketDataOnly": true,
+    "orderSubmitted": false,
+    "privateAccountRequestAllowed": false,
+    "liveOrderAllowed": false
+  },
+  "replay": {
+    "status": "passed",
+    "generatedAt": 1786233795670,
+    "usedForSelection": false
+  },
+  "data": {
+    "provider": "bitget-public-v2",
+    "candleCount": 90,
+    "firstCandle": 1778428800000,
+    "lastCandle": 1786118400000,
+    "fundingRecords": 25,
+    "fundingFirst": 1785542400000,
+    "fundingLast": 1786233600000,
+    "collectedAt": 1786233795739
+  },
+  "stages": {
+    "replay": {
+      "passed": true,
+      "evidence": "docs/eth-v6-replay-proof.json"
+    },
+    "paper": {
+      "passed": false,
+      "status": "shadow_continue",
+      "forwardOnly": true,
+      "simulatedCapital": true
+    },
+    "shadow": {
+      "passed": false,
+      "status": "shadow_continue",
+      "forwardOnly": true,
+      "orderSubmitted": false
+    }
+  },
+  "liveOrderAllowed": false,
+  "privateAccountRequestAllowed": false
+}
