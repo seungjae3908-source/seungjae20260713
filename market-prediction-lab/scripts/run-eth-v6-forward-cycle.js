@@ -11,6 +11,7 @@ import {
   summarizeEthV6ForwardState,
 } from "../src/eth-v6-forward-validation.js";
 import { FROZEN_CANDIDATE_MANIFEST_SHA256 } from "../src/final-holdout-evaluator.js";
+import { NET_PROFITABLE_RATE_DEFINITION } from "../src/research-metric-semantics.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LOOKBACK_DAYS = 180;
@@ -86,6 +87,7 @@ const summary = summarizeEthV6ForwardState(state);
 
 const report = Object.freeze({
   ...summary,
+  netProfitableRateDefinition: NET_PROFITABLE_RATE_DEFINITION,
   replay: Object.freeze({ status: replay.status, generatedAt: replay.generatedAt, usedForSelection: false }),
   data: Object.freeze({
     provider: "bitget-public-v2",
@@ -113,8 +115,11 @@ const markdown = `# ETHUSDT V6 Forward Paper / Shadow\n\n`
   + `- forward validation start: ${iso(ETH_V6_FORWARD_START)}\n`
   + `- last signal evaluated: ${iso(report.lastSignalEvaluated)}\n`
   + `- signals: ${report.signalsRecorded} / settled: ${report.settledTrades} / tracking: ${report.trackingTrades} / missed: ${report.missedSignals}\n`
-  + `- paper equity: ${format(report.paperEquity, 0)}원 / return: ${format(report.totalReturnPercent)}% / win rate: ${format(report.successRatePercent)}%\n`
+  + `- paper equity: ${format(report.paperEquity, 0)}원 / return: ${format(report.totalReturnPercent)}%\n`
+  + `- TP-before-SL success rate: ${format(report.successRatePercent)}% / resolved barriers: ${report.barrierResolvedTradeCount} / TP: ${report.tpHitCount} / SL: ${report.slHitCount} / censored: ${report.censoredTradeCount}\n`
+  + `- net-profitable trade rate after all modeled costs: ${format(report.netProfitableTradeRatePercent)}% / settled trades: ${report.settledTrades}\n`
   + `- PF: ${format(report.profitFactor)} / MDD: ${format(report.maximumDrawdownPercent)}% / expectancy: ${format(report.expectancy, 0)}원\n`
+  + `- cost stress return: 1.5x ${format(report.costStress?.x1_5?.totalReturnPercent)}% / 2x ${format(report.costStress?.x2?.totalReturnPercent)}% (diagnostic)\n`
   + `- status: **${report.status}** / next: ${report.nextStage}\n`
   + `- actual order: 0 / private account API: 0 / live promotion: false\n`
   + `- late workflow cycles never backfill a signal after its entry window has passed.\n`;
