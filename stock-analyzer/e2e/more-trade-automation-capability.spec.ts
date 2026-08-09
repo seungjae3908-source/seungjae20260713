@@ -114,7 +114,7 @@ test('regular settings never mounts or calls admin-only trade automation control
   const diagnostics = await installRegularRuntime(page);
 
   await page.goto('/more');
-  await expect(page.getByRole('heading', { name: '설정' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '설정', exact: true })).toBeVisible();
   await expect(page.getByTestId('trade-automation-settings')).toHaveCount(0);
   await page.waitForLoadState('networkidle');
 
