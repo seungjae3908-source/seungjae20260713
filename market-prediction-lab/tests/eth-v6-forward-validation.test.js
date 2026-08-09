@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -113,4 +114,19 @@ test("late cycles never backfill a signal after the hypothetical entry window is
   assert.equal(state.ledger.records.length, 0);
   assert.equal(state.missedSignals.length, 1);
   assert.equal(state.missedSignals[0].reason, "late_cycle_no_backfill");
+});
+
+test("forward artifact wording keeps TP-before-SL separate from net profitability", async () => {
+  const source = await readFile(new URL("../scripts/run-eth-v6-forward-cycle.js", import.meta.url), "utf8");
+  assert.match(source, /TP-before-SL success rate:/u);
+  assert.match(source, /net-profitable trade rate after all modeled costs:/u);
+  assert.match(source, /cost stress return: 1\.5x/u);
+  assert.doesNotMatch(source, /win rate:/u);
+});
+
+test("shadow workflow fails closed when the forward strategy has a technical failure", async () => {
+  const workflow = await readFile(new URL("../../.github/workflows/prediction-lab-shadow-cycle.yml", import.meta.url), "utf8");
+  assert.match(workflow, /technical_failure/u);
+  assert.match(workflow, /shadow cycle failed closed/u);
+  assert.match(workflow, /process\.exit\(1\)/u);
 });
