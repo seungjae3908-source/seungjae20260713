@@ -127,7 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!next) applyProfile(null);
   }
 
-  function loadProfile(user: User | null, options: { force?: boolean; maxAgeMs?: number } = {}): Promise<void> {
+  function loadProfile(user: User | null, options: { force?: boolean; maxAgeMs?: number; signal?: AbortSignal } = {}): Promise<void> {
     if (!user) {
       applyProfile(null);
       return Promise.resolve();
@@ -147,7 +147,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           force: options.force,
           maxAgeMs: options.maxAgeMs ?? PROFILE_AUTO_REFRESH_MS,
           load: async () => {
-            const { data, error } = await getSupabase().from('profiles').select('*').eq('id', user.id).maybeSingle();
+            const query = getSupabase().from('profiles').select('*').eq('id', user.id);
+            const { data, error } = await (options.signal ? query.abortSignal(options.signal) : query).maybeSingle();
             if (error) throw error;
             const nextProfile = (data as MemberProfile | null) ?? null;
             if (
@@ -190,9 +191,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       applySession: (next) => {
         if (mountedRef.current && bootstrapAttemptRef.current === attempt) applySession(next);
       },
-      loadProfile: async (next) => {
+      loadProfile: async (next, signal) => {
         if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
-        await loadProfile(next?.user ?? null);
+        await loadProfile(next?.user ?? null, { signal });
       },
     }).catch((cause) => {
       if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
@@ -206,7 +207,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     mountedRef.current = true;
     if (!isSupabaseConfigured) { setLoading(false); return; }
     runInitialBootstrap();
-    const { data: sub } = getSupabase().auth.onAuthStateChange((_event, next) => {
+    const { data: sub } = getSupabase().auth.onAuthStateChange((event, next) => {
+      if (event === 'INITIAL_SESSION') return;
       if (signingInRef.current && next) return;
       if (signingOutRef.current && next) return;
       bootstrapAttemptRef.current += 1;
@@ -219,10 +221,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!mountedRef.current) return;
         setBootstrapError(null);
         applySession(next);
+        const profileController = new AbortController();
         void withFiniteDeadline(
-          loadProfile(next?.user ?? null),
+          loadProfile(next?.user ?? null, { signal: profileController.signal }),
           AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
           'AUTH_PROFILE_TIMEOUT',
+          (error) => profileController.abort(error),
         ).catch((cause) => {
           if (mountedRef.current) setBootstrapError(authBootstrapErrorMessage(cause));
         }).finally(() => {
