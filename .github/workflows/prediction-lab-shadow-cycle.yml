@@ -55,7 +55,23 @@ jobs:
         id: shadow
         continue-on-error: true
         working-directory: market-prediction-lab
-        run: node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json
+        run: |
+          node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json
+          node <<'NODE'
+          const fs = require('fs');
+          const summary = JSON.parse(fs.readFileSync('docs/shadow-summary.json', 'utf8'));
+          const technicalFailures = Object.entries(summary.forwardStrategies ?? {})
+            .filter(([, value]) => value?.status === 'technical_failure')
+            .map(([strategyId]) => strategyId);
+          if (summary.status !== 'pass' || technicalFailures.length > 0) {
+            console.error(JSON.stringify({
+              message: 'shadow cycle failed closed',
+              status: summary.status,
+              technicalFailures,
+            }));
+            process.exit(1);
+          }
+          NODE
 
       - name: Record shadow failure
         if: steps.shadow.outcome != 'success'
