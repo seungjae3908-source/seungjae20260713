@@ -40,11 +40,11 @@ test('actual control UI performs file import draft preview activate rollback res
   await expect(page.getByTestId('ui-builder-validation-state')).toHaveText('VALID');
   await expect(page.getByLabel('Layout JSON')).toContainText('파일 UI Import 성공');
 
-  await page.getByRole('button', { name: 'Draft 저장' }).click();
+  await page.getByRole('button', { name: 'Draft 저장', exact: true }).click();
   await expect(page.getByText('Draft 저장 완료')).toBeVisible();
-  await page.getByRole('button', { name: 'Preview' }).click();
+  await page.getByRole('button', { name: 'Preview', exact: true }).click();
   await expect(page.getByText('Preview 저장 완료')).toBeVisible();
-  await page.getByRole('button', { name: 'Activate' }).click();
+  await page.getByRole('button', { name: 'Activate', exact: true }).click();
   await expect(page.getByText('Active Layout 적용 및 version 저장 완료')).toBeVisible();
   await expect(page.getByTestId('ui-builder-version-history')).toContainText('v1');
 
@@ -52,17 +52,17 @@ test('actual control UI performs file import draft preview activate rollback res
   second.layoutId = 'control-ui-import-v2';
   second.blocks[1].props.title = '두 번째 UI Layout';
   await page.getByLabel('Layout JSON').fill(JSON.stringify(second, null, 2));
-  await page.getByRole('button', { name: 'Activate' }).click();
+  await page.getByRole('button', { name: 'Activate', exact: true }).click();
   await expect(page.getByTestId('ui-builder-version-history')).toContainText('v2');
 
-  await page.getByTestId('ui-builder-version-history').getByRole('button', { name: 'Rollback' }).last().click();
+  await page.getByTestId('ui-builder-version-history').getByRole('button', { name: 'Rollback', exact: true }).last().click();
   await expect(page.getByText(/새 published version으로 Rollback 완료/)).toBeVisible();
   await expect(page.getByTestId('ui-builder-version-history')).toContainText('v3');
   await expect(page.getByLabel('Layout JSON')).toContainText('파일 UI Import 성공');
 
-  await page.getByRole('button', { name: '기본값 복원' }).click();
+  await page.getByRole('button', { name: '기본값 복원', exact: true }).click();
   await expect(page.getByText('Frozen Builder 기본 Layout 복원 완료')).toBeVisible();
-  await page.getByRole('button', { name: 'Deactivate' }).click();
+  await page.getByRole('button', { name: 'Deactivate', exact: true }).click();
   await expect(page.getByText(/safe fallback 사용/)).toBeVisible();
 
   const fallback = await page.evaluate(async () => {
