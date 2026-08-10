@@ -131,6 +131,33 @@ assert(
   spec.includes("expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);"),
   'scanner net::ERR_ABORTED must remain a zero-tolerance staging contract',
 );
+assert(!spec.includes("behavior: 'ignoreErrors'"), 'route callback teardown must not suppress in-flight failures');
+
+const profileTimeoutTestStart = spec.indexOf("test('profile timeout abort:");
+const profileTimeoutTestEnd = spec.indexOf("\n  test('retry recovery:", profileTimeoutTestStart);
+assert(
+  profileTimeoutTestStart >= 0 && profileTimeoutTestEnd > profileTimeoutTestStart,
+  'profile timeout fixture boundaries are missing',
+);
+const profileTimeoutTestBlock = spec.slice(profileTimeoutTestStart, profileTimeoutTestEnd);
+assert(
+  profileTimeoutTestBlock.includes('let timeoutRouteSettled = Promise.resolve();'),
+  'profile timeout fixture must track the in-flight route callback',
+);
+assert(
+  profileTimeoutTestBlock.includes('timeoutRouteSettled = (async () => {'),
+  'profile timeout route callback must expose its completion promise',
+);
+const timeoutRouteDrainIndex = profileTimeoutTestBlock.lastIndexOf('await timeoutRouteSettled;');
+const timeoutUnrouteIndex = profileTimeoutTestBlock.indexOf(
+  "await page.unroute('**/rest/v1/profiles*');",
+  timeoutRouteDrainIndex,
+);
+assert(
+  timeoutRouteDrainIndex >= 0 && timeoutUnrouteIndex > timeoutRouteDrainIndex,
+  'profile timeout fixture must await the in-flight route callback before removing the route',
+);
+
 
 assert(spec.includes("return parsed.pathname || '/';"), 'diagnostic URLs must omit hosts and arbitrary query strings');
 assert(spec.includes("'[redacted-url]'"), 'absolute URLs must be redacted from diagnostic details');
