@@ -12,6 +12,7 @@ import {
   collectSafeApiDiagnostic,
   type SafeApiDiagnostic,
 } from './support/safe-api-diagnostic';
+import { expectUiBuilderStagingReadiness } from './support/ui-builder-staging-readiness';
 import { APP_NAVIGATION } from '../src/lib/app-navigation';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
@@ -809,6 +810,7 @@ test.describe('real staging release readiness', () => {
     await expectScannerAfterFutures(page);
     await expectHealthyRoute(page, '/paper-trading');
     await expect(page.locator('body')).toContainText(/모의|paper/i);
+    await expectDeniedRoute(page, '/admin/ui-layouts');
 
     const preview = await requestWithBrowserSession(
       page,
@@ -839,6 +841,12 @@ test.describe('real staging release readiness', () => {
       '/api/paper-journal/snapshot?userId=11111111-1111-1111-1111-111111111111',
     );
     expect([400, 403]).toContain(foreignJournal.status());
+  });
+
+  test('admin UI Builder actual staging release acceptance', async ({ page }) => {
+    await login(page, accounts.admin.loginName, accounts.admin.password);
+    await expectMembership(page, /관리자/);
+    await expectUiBuilderStagingReadiness(page, (route) => expectHealthyRoute(page, route));
   });
 
   for (const [name, width, height] of [
