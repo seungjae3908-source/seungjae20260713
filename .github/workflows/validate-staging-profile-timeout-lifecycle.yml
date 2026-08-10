@@ -1,0 +1,147 @@
+name: Validate staging profile timeout lifecycle
+
+on:
+  push:
+    branches:
+      - validation/staging-profile-timeout-lifecycle-2a62f0c7
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation ref
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply candidate fixture lifecycle patch in working tree
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          spec_path = Path('stock-analyzer/e2e/phase10-staging-readiness.spec.ts')
+          verifier_path = Path('api-server/scripts/verify-staging-login-selector-contract.mjs')
+
+          spec = spec_path.read_text()
+          start = spec.index("  test('profile timeout abort:")
+          end = spec.index("\n  test('retry recovery:", start)
+          block = spec[start:end]
+          original = block
+
+          block = block.replace(
+              "    let requestCount = 0;\n    let confirmed = false;\n    await page.route('**/rest/v1/profiles*', async (route) => {",
+              "    let requestCount = 0;\n    let confirmed = false;\n    let timeoutRouteSettled = Promise.resolve();\n    await page.route('**/rest/v1/profiles*', async (route) => {",
+              1,
+          )
+          block = block.replace(
+              "      observation.startedAt = Date.now();\n      await page.waitForTimeout(9_000);\n      if (request.failure() === null) await route.abort('timedout');",
+              "      observation.startedAt = Date.now();\n      timeoutRouteSettled = (async () => {\n        await page.waitForTimeout(9_000);\n        if (request.failure() === null) await route.abort('timedout');\n      })();\n      await timeoutRouteSettled;",
+              1,
+          )
+          block = block.replace(
+              "    } finally {\n      await page.unroute('**/rest/v1/profiles*');\n      await finishAuthFault(page, observation, confirmed);\n    }",
+              "    } finally {\n      await timeoutRouteSettled;\n      await page.unroute('**/rest/v1/profiles*');\n      await finishAuthFault(page, observation, confirmed);\n    }",
+              1,
+          )
+          if block == original:
+              raise SystemExit('profile timeout fixture patch did not apply')
+          if "behavior: 'ignoreErrors'" in block:
+              raise SystemExit('failure suppression is forbidden')
+          spec = spec[:start] + block + spec[end:]
+          spec_path.write_text(spec)
+
+          verifier = verifier_path.read_text()
+          marker = '''assert(
+            spec.includes("expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);"),
+            'scanner net::ERR_ABORTED must remain a zero-tolerance staging contract',
+          );'''
+          addition = '''
+          assert(!spec.includes("behavior: 'ignoreErrors'"), 'route callback teardown must not suppress in-flight failures');
+
+          const profileTimeoutTestStart = spec.indexOf("test('profile timeout abort:");
+          const profileTimeoutTestEnd = spec.indexOf("\\n  test('retry recovery:", profileTimeoutTestStart);
+          assert(
+            profileTimeoutTestStart >= 0 && profileTimeoutTestEnd > profileTimeoutTestStart,
+            'profile timeout fixture boundaries are missing',
+          );
+          const profileTimeoutTestBlock = spec.slice(profileTimeoutTestStart, profileTimeoutTestEnd);
+          assert(
+            profileTimeoutTestBlock.includes('let timeoutRouteSettled = Promise.resolve();'),
+            'profile timeout fixture must track the in-flight route callback',
+          );
+          assert(
+            profileTimeoutTestBlock.includes('timeoutRouteSettled = (async () => {'),
+            'profile timeout route callback must expose its completion promise',
+          );
+          const timeoutRouteDrainIndex = profileTimeoutTestBlock.lastIndexOf('await timeoutRouteSettled;');
+          const timeoutUnrouteIndex = profileTimeoutTestBlock.indexOf(
+            "await page.unroute('**/rest/v1/profiles*');",
+            timeoutRouteDrainIndex,
+          );
+          assert(
+            timeoutRouteDrainIndex >= 0 && timeoutUnrouteIndex > timeoutRouteDrainIndex,
+            'profile timeout fixture must await the in-flight route callback before removing the route',
+          );
+          '''
+          if addition.strip() in verifier:
+              raise SystemExit('verifier lifecycle contract already present')
+          if marker not in verifier:
+              raise SystemExit('verifier insertion marker not found')
+          verifier = verifier.replace(marker, marker + addition, 1)
+          verifier_path.write_text(verifier)
+          PY
+
+      - name: Run targeted staging login selector verifier
+        run: node ./api-server/scripts/verify-staging-login-selector-contract.mjs
+
+      - name: Run Phase12 safety and static contracts
+        run: pnpm --dir api-server run test:phase12
+
+      - name: Typecheck frontend
+        run: pnpm --dir stock-analyzer run typecheck
+
+      - name: Typecheck backend
+        run: pnpm --dir api-server run typecheck
+
+      - name: Review candidate diff safety
+        run: |
+          git diff --check
+          python - <<'PY'
+          import subprocess
+          diff = subprocess.check_output(['git', 'diff', '--', 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts', 'api-server/scripts/verify-staging-login-selector-contract.mjs'], text=True)
+          added = '\n'.join(line[1:] for line in diff.splitlines() if line.startswith('+') and not line.startswith('+++'))
+          forbidden = ["behavior: 'ignoreErrors'", 'test.skip(', '|| true', '@ts-ignore', '@ts-expect-error']
+          hits = [item for item in forbidden if item in added]
+          if hits:
+              raise SystemExit(f'forbidden candidate patterns: {hits}')
+          if 'timeoutRouteSettled' not in added:
+              raise SystemExit('route lifecycle drain was not added')
+          print(diff)
+          PY
+
+      - name: Commit validated source candidate to validation ref
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add stock-analyzer/e2e/phase10-staging-readiness.spec.ts api-server/scripts/verify-staging-login-selector-contract.mjs
+          git commit -m 'test(staging): drain profile timeout route callback'
+          git push origin HEAD:validation/staging-profile-timeout-lifecycle-2a62f0c7
