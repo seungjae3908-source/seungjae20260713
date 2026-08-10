@@ -204,6 +204,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
         if (lastGeneratedAt.current && new Date(result.generatedAt) < new Date(lastGeneratedAt.current)) return;
         lastGeneratedAt.current = result.generatedAt;
         displayedRequestKey.current = requestKey;
+        setErrorMessage(result.refreshIssue?.message ?? '');
         setData(result);
         setStatus(
           result.execution.partial
