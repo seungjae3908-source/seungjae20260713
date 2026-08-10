@@ -144,6 +144,8 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const [refreshToken, setRefreshToken] = useState(0);
   const [status, setStatus] = useState<RequestStatus>('loading');
   const [data, setData] = useState<ScannerResponse | null>(null);
+  const dataRef = useRef<ScannerResponse | null>(null);
+  dataRef.current = data;
   const [errorMessage, setErrorMessage] = useState('');
   const latestSequence = useRef(0);
   const lastGeneratedAt = useRef<string | null>(null);
@@ -183,7 +185,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       assetMode.setAsset('coin');
       assetMode.setCoinMarket(view === 'FUTURES' ? 'futures' : 'spot');
     }
-  }, [assetMode, view]);
+  }, [view]);
 
   useEffect(() => {
     lastGeneratedAt.current = null;
@@ -222,7 +224,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
         }
         const message = requestErrorMessage(error);
         setErrorMessage(message);
-        if (error instanceof SignalScannerRequestError && (error.status === 409 || error.status === 429 || error.status === 502) && data) {
+        if (error instanceof SignalScannerRequestError && (error.status === 409 || error.status === 429 || error.status === 502) && dataRef.current) {
           setStatus('partial');
           return;
         }
@@ -230,7 +232,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       });
 
     return () => controller.abort();
-  }, [data, request, requestKey, refreshToken]);
+  }, [request, requestKey, refreshToken]);
 
   useEffect(() => {
     const refreshWhenVisible = () => {
