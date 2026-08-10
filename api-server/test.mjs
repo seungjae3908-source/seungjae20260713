@@ -45,6 +45,7 @@ const groups = {
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
     path.join(root, 'src/routes/paper-journal-ai-preview-privileges.test.ts'),
     path.join(root, 'src/services/ai-chat.service.test.ts'),
+    path.join(root, 'src/services/ai-chat-public-crypto-context.service.test.ts'),
     path.join(root, 'src/services/ai-chat-hardening.service.test.ts'),
     path.join(root, 'src/services/signal-score.test.ts'),
     path.join(root, 'src/services/bounded-scanner.service.test.ts'),
