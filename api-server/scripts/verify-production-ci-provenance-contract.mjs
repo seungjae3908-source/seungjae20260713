@@ -188,6 +188,9 @@ assert(fallbackWorkflow.includes('github.rest.actions.listWorkflowRuns'), 'fallb
 assert(fallbackWorkflow.includes("event: 'push'"), 'direct workflow discovery must be restricted to push events');
 assert(fallbackWorkflow.includes("run.event === 'push'"), 'direct run filtering must reject workflow_dispatch head-SHA matches');
 assert(fallbackWorkflow.includes('run.head_sha === sha'), 'direct push discovery must bind to the exact current main SHA');
+assert(fallbackWorkflow.includes('dispatchRequestedAtMs = Date.now()'), 'fallback must record when it creates an exact-SHA dispatch');
+assert(fallbackWorkflow.includes('newestPredatesDispatch'), 'fallback must distinguish stale completed status owners from its newly dispatched run');
+assert(fallbackWorkflow.includes('Waiting for dispatched exact-SHA Application CI to claim required status ownership'), 'fallback must wait through the dispatch-to-status handoff window instead of failing on stale evidence');
 assert(!fallbackWorkflow.includes('listWorkflowRunsForRepo'), 'fallback must not infer workflow_dispatch target ownership from repository-wide head_sha matching');
 
 for (const workflow of [productionWorkflow, approvalWorkflow]) {
@@ -203,4 +206,5 @@ console.log('- Exact current main + same-run 6/6 + official push/workflow_dispat
 console.log('- Other/stale/PR/missing/pending/cancelled/failed/mismatched evidence: rejected');
 console.log('- workflow_dispatch checkout is cryptographically bound to the status target SHA');
 console.log('- main fallback waits for an active exact-SHA push run before dispatching a fallback CI');
+console.log('- fallback waits through its own dispatch-to-status handoff without accepting stale completed provenance');
 console.log('- direct active-run discovery remains push-only; workflow_dispatch provenance still requires status ownership');
