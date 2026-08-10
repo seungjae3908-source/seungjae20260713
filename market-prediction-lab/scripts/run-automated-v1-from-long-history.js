@@ -4,6 +4,7 @@ import {
   BITGET_STANDARD_TAKER_RESEARCH_COSTS,
   HISTORICAL_V1_CRYPTO_SPECS,
 } from "../src/historical-backtest-data.js";
+import { aggregateMarketGroupCandidates } from "../src/automated-market-ranking.js";
 import { DEFAULT_MINIMUM_GATE } from "../src/automated-research-orchestrator.js";
 import { runAutomatedV1Research } from "../src/automated-v1-research.js";
 
@@ -26,6 +27,12 @@ const GATE_CALIBRATION = Object.freeze({
   maxMaximumDrawdown: Object.freeze({ value: null, status: "not_calibrated_do_not_invent" }),
   minWalkForwardStability: Object.freeze({ value: null, status: "not_calibrated_do_not_invent" }),
   minCoverageRatio: Object.freeze({ value: null, status: "coverage_status_used_until_ratio_is_empirically_calibrated" }),
+});
+
+const REQUIRED_SYMBOLS_BY_GROUP = Object.freeze({
+  CRYPTO_SPOT_SWING: Object.freeze(["USDT-BTC", "USDT-ETH"]),
+  CRYPTO_FUTURES_SWING_LONG: Object.freeze(["BTCUSDT", "ETHUSDT"]),
+  CRYPTO_FUTURES_SWING_SHORT: Object.freeze(["BTCUSDT", "ETHUSDT"]),
 });
 
 async function readJson(path) {
@@ -98,8 +105,23 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS) {
   }
 }
 
+const marketGroups = aggregateMarketGroupCandidates(results, {
+  requiredSymbolsByGroup: REQUIRED_SYMBOLS_BY_GROUP,
+});
+const finalHoldoutQueue = Object.freeze(Object.fromEntries(Object.entries(marketGroups).map(([group, value]) => [group, Object.freeze(
+  (value.candidates ?? [])
+    .filter((candidate) => candidate.researchStatus === "eligible_for_final_holdout")
+    .slice(0, 10)
+    .map((candidate) => Object.freeze({
+      candidateId: candidate.id,
+      parameters: candidate.parameters,
+      qualityScore: candidate.qualityScore,
+      status: "frozen_candidate_pending_one_shot_final_holdout",
+    })),
+)])));
+
 const artifact = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   mode: "automated-v1-long-history",
   researchCodeSha,
   generatedAt: new Date().toISOString(),
@@ -119,7 +141,13 @@ const artifact = Object.freeze({
     "US_STOCK_SCALPING",
     "US_STOCK_SWING",
   ]),
-  results: Object.freeze(results),
+  perSymbolResults: Object.freeze(results),
+  marketGroups,
+  finalHoldoutQueue,
+  topStrategies: Object.freeze({
+    status: "empty_until_frozen_candidate_passes_one_shot_final_holdout",
+    groups: Object.freeze(Object.fromEntries(Object.keys(REQUIRED_SYMBOLS_BY_GROUP).map((group) => [group, Object.freeze([])]))),
+  }),
   blocked: Object.freeze(blocked),
   safety: Object.freeze({
     branchWrite: false,
@@ -128,6 +156,7 @@ const artifact = Object.freeze({
     orderSubmitted: false,
     finalHoldoutUsedForSelection: false,
     finalHoldoutRetuningAllowed: false,
+    automaticLivePromotion: false,
   }),
 });
 
@@ -137,7 +166,9 @@ console.log(JSON.stringify({
   status: blocked.length === 0 ? "ok" : "partial",
   researchCodeSha,
   automatedGroups: artifact.automatedGroups,
-  results: results.length,
+  perSymbolResults: results.length,
+  groupCandidateCounts: Object.fromEntries(Object.entries(marketGroups).map(([group, value]) => [group, value.candidateCount ?? 0])),
+  finalHoldoutQueueCounts: Object.fromEntries(Object.entries(finalHoldoutQueue).map(([group, value]) => [group, value.length])),
   blocked: blocked.length,
   minimumTradeCount: MINIMUM_GATE.minTradeCount,
   liveOrderAllowed: false,
