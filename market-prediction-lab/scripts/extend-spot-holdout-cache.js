@@ -46,12 +46,20 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS.filter((row) => row.market === "CR
     continue;
   }
 
+  // The shared Bitget collector intentionally requires a meaningful sample
+  // (>=60 candles). Incremental refreshes near the current edge may have zero
+  // or only a handful of new closed candles, which is a normal no-op rather
+  // than a data failure. Re-fetch a deterministic overlap window, verify any
+  // overlap is identical in mergeUnique(), then append only timestamps newer
+  // than the cached edge. This preserves fail-closed conflict detection while
+  // making an already-current cache idempotent.
+  const collectionStart = Math.max(RESEARCH_BACKTEST_PERIOD.startTime, fetchStart - 60 * DAY);
   const collected = await collectBitgetCandles({
     client,
     market: spec.market,
     symbol: spec.exchangeSymbol,
     timeframe: spec.timeframe,
-    startTime: fetchStart,
+    startTime: collectionStart,
     endTime: requestedEnd + DAY,
     maxCandles: 5_000,
     onPage: ({ page, received, oldest, newest }) => console.log(JSON.stringify({ spec: spec.id, stage: "incremental-spot", page, received, oldest, newest })),
@@ -65,8 +73,9 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS.filter((row) => row.market === "CR
     onAttempt: (attempt) => console.log(JSON.stringify({ spec: spec.id, stage: "incremental-repair", ...attempt })),
   });
   if (repaired.remainingMissingCandleCount > 0) throw new Error(`${spec.id} unresolved incremental candle gaps: ${repaired.remainingMissingCandleCount}`);
-  const appended = toResearchCandles(spec, { candles: repaired.candles }).filter((row) => row.timestamp >= fetchStart && row.timestamp <= requestedEnd);
-  const merged = mergeUnique(existing, appended);
+  const verifiedWindow = toResearchCandles(spec, { candles: repaired.candles });
+  const appended = verifiedWindow.filter((row) => row.timestamp >= fetchStart && row.timestamp <= requestedEnd);
+  const merged = mergeUnique(existing, verifiedWindow.filter((row) => row.timestamp <= requestedEnd));
   assertContinuous(merged, spec.id);
   const coverage = summarizeHistoricalCoverage({
     spec,
@@ -80,9 +89,9 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS.filter((row) => row.market === "CR
     ...cached,
     coverage,
     candles: merged,
-    incremental: { appendedFrom: fetchStart, appendedThrough: merged.at(-1)?.timestamp ?? actualEnd, generatedAt },
+    incremental: { collectionStart, appendedFrom: fetchStart, appendedThrough: merged.at(-1)?.timestamp ?? actualEnd, generatedAt },
   });
-  report.push({ spec: spec.id, status: appended.length ? "extended" : "already_current", fetchedFrom: fetchStart, appended: appended.length, actualEnd: merged.at(-1)?.timestamp ?? actualEnd });
+  report.push({ spec: spec.id, status: appended.length ? "extended" : "already_current", collectionStart, fetchedFrom: fetchStart, appended: appended.length, actualEnd: merged.at(-1)?.timestamp ?? actualEnd });
 }
 
 console.log(JSON.stringify({ status: "ok", requestedEnd, report }));
