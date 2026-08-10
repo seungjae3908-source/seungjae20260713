@@ -91,9 +91,22 @@ function linkedUniverseSignal(
 async function awaitWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) throw signal.reason ?? new Error('SCAN_UNIVERSE_ABORTED');
   return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason ?? new Error('SCAN_UNIVERSE_ABORTED'));
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason ?? new Error('SCAN_UNIVERSE_ABORTED'));
+    };
     signal.addEventListener('abort', onAbort, { once: true });
-    operation.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    operation.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
   });
 }
 
