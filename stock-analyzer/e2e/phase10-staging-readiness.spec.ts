@@ -649,6 +649,7 @@ test.describe('real staging release readiness', () => {
     activeAuthFaultObservations.set(page, observation);
     let requestCount = 0;
     let confirmed = false;
+    let timeoutRouteSettled = Promise.resolve();
     await page.route('**/rest/v1/profiles*', async (route) => {
       const request = route.request();
       if (!isProfileRequest(request)) {
@@ -658,8 +659,11 @@ test.describe('real staging release readiness', () => {
       requestCount += 1;
       observation.requests.add(request);
       observation.startedAt = Date.now();
-      await page.waitForTimeout(9_000);
-      if (request.failure() === null) await route.abort('timedout');
+      timeoutRouteSettled = (async () => {
+        await page.waitForTimeout(9_000);
+        if (request.failure() === null) await route.abort('timedout');
+      })();
+      await timeoutRouteSettled;
     });
     try {
       await expectHealthyRoute(page, '/');
@@ -678,6 +682,7 @@ test.describe('real staging release readiness', () => {
       expect(Number(observation.failedAt) - Number(observation.startedAt)).toBeLessThan(9_000);
       confirmed = true;
     } finally {
+      await timeoutRouteSettled;
       await page.unroute('**/rest/v1/profiles*');
       await finishAuthFault(page, observation, confirmed);
     }
