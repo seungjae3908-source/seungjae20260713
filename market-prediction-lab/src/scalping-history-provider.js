@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { BITGET_TIMEFRAME_MS, collectBitgetCandles } from "./bitget-candle-collector.js";
 
-export const SCALPING_HISTORY_SCHEMA_VERSION = 2;
+export const SCALPING_HISTORY_SCHEMA_VERSION = 3;
 export const SCALPING_NORMALIZATION_VERSION = 1;
 export const SCALPING_PROVIDER = "bitget-public-v2";
 export const SCALPING_TIMEFRAME = "15m";
@@ -20,6 +20,8 @@ export const BITGET_SCALPING_SEMANTICS = Object.freeze({
   missingCandlePolicy: "fail_closed_no_interpolation",
   duplicatePolicy: "fail_closed",
   outOfOrderPolicy: "fail_closed",
+  expectedCandleCountPolicy: "count_only_intervals_with_close_time_lte_requested_end",
+  openBoundaryCandleExcluded: true,
 });
 
 function stableJson(value) {
@@ -40,6 +42,13 @@ function assertMarket(market) {
 function assertSymbol(symbol) {
   if (typeof symbol !== "string" || !/^[A-Z0-9]{3,30}$/.test(symbol)) throw new TypeError("invalid scalping symbol");
   return symbol;
+}
+
+function expectedClosedCandleCount(requestedStart, requestedEnd, intervalMs) {
+  // Candle timestamps are open-times. A candle is eligible only when its close-time
+  // (timestamp + interval) is <= requestedEnd. This intentionally excludes a candle
+  // that has opened but has not closed at the research cutoff.
+  return Math.max(0, Math.floor((requestedEnd - requestedStart) / intervalMs));
 }
 
 function cacheContractDefaults(input = {}) {
@@ -150,13 +159,15 @@ export function inspectScalpingCandles({ market, symbol, timeframe = SCALPING_TI
   }
   const actualStart = candles[0]?.timestamp ?? null;
   const actualEnd = candles.at(-1)?.timestamp ?? null;
-  const expectedCandleCount = Math.max(0, Math.ceil((requestedEnd - requestedStart) / intervalMs));
+  const expectedCandleCount = expectedClosedCandleCount(requestedStart, requestedEnd, intervalMs);
   const reachesStart = actualStart != null && actualStart <= requestedStart + intervalMs;
-  const reachesEnd = actualEnd != null && actualEnd >= requestedEnd - (2 * intervalMs);
+  const reachesEnd = actualEnd != null && actualEnd + intervalMs <= requestedEnd + intervalMs && actualEnd >= requestedEnd - (2 * intervalMs);
   return Object.freeze({
     actualStart,
     actualEnd,
     expectedCandleCount,
+    expectedCandleCountPolicy: BITGET_SCALPING_SEMANTICS.expectedCandleCountPolicy,
+    openBoundaryCandleExcluded: true,
     actualCandleCount: candles.length,
     candleCount: candles.length,
     duplicateCount,
@@ -274,7 +285,7 @@ export function buildScalpingHistoryManifest({ market, symbol, timeframe = SCALP
   const actualStarts = ready.map((chunk) => chunk.actualStart).filter(Number.isSafeInteger);
   const actualEnds = ready.map((chunk) => chunk.actualEnd).filter(Number.isSafeInteger);
   const actualCandleCount = ready.reduce((sum, chunk) => sum + (chunk.diagnostics?.actualCandleCount ?? chunk.diagnostics?.candleCount ?? 0), 0);
-  const expectedCandleCount = Math.max(0, Math.ceil((requestedEnd - requestedStart) / intervalMs));
+  const expectedCandleCount = expectedClosedCandleCount(requestedStart, requestedEnd, intervalMs);
   const totalMissingCandles = ready.reduce((sum, chunk) => sum + (chunk.diagnostics?.missingCandleCount ?? 0), 0);
   const gapCount = ready.reduce((sum, chunk) => sum + (chunk.diagnostics?.gapCount ?? chunk.diagnostics?.gaps?.length ?? 0), 0);
   const maximumGapCandles = ready.reduce((max, chunk) => Math.max(max, chunk.diagnostics?.maximumGapCandles ?? 0), 0);
@@ -286,7 +297,12 @@ export function buildScalpingHistoryManifest({ market, symbol, timeframe = SCALP
   const actualFirstCandle = actualStarts.length ? Math.min(...actualStarts) : null;
   const actualLastCandle = actualEnds.length ? Math.max(...actualEnds) : null;
   const semanticsVerified = BITGET_SCALPING_SEMANTICS.status === "verified_from_official_api_contract";
-  const status = allChunksReady && semanticsVerified ? "DATA_READY" : allChunksReady ? "BLOCKED_PROVIDER_BOUNDARY" : "BLOCKED_DATA";
+  const countMatchesClosedBoundary = actualCandleCount === expectedCandleCount;
+  const status = allChunksReady && semanticsVerified && countMatchesClosedBoundary
+    ? "DATA_READY"
+    : allChunksReady && semanticsVerified
+      ? "BLOCKED_DATA"
+      : allChunksReady ? "BLOCKED_PROVIDER_BOUNDARY" : "BLOCKED_DATA";
   const manifest = {
     schemaVersion: SCALPING_HISTORY_SCHEMA_VERSION,
     cacheSchemaVersion: SCALPING_HISTORY_SCHEMA_VERSION,
@@ -305,6 +321,9 @@ export function buildScalpingHistoryManifest({ market, symbol, timeframe = SCALP
     actualLastCandle,
     actualAvailablePeriod: Object.freeze({ start: actualFirstCandle, end: actualLastCandle }),
     expectedCandleCount,
+    expectedCandleCountPolicy: BITGET_SCALPING_SEMANTICS.expectedCandleCountPolicy,
+    openBoundaryCandleExcluded: true,
+    countMatchesClosedBoundary,
     actualCandleCount,
     missingCandleCount: totalMissingCandles,
     gapCount,
