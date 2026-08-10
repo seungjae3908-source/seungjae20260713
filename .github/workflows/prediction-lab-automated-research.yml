@@ -1,0 +1,128 @@
+name: Prediction Lab Automated Research
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/prediction-lab-automated-research.yml
+      - market-prediction-lab/src/automated-research-orchestrator.js
+      - market-prediction-lab/scripts/run-automated-research-contract.js
+      - market-prediction-lab/tests/automated-research-orchestrator.test.js
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Research mode
+        required: true
+        default: contract_validation
+        type: choice
+        options:
+          - contract_validation
+          - long_history
+          - recent_oos_regime
+      research_ref:
+        description: Immutable 40-character research commit SHA; defaults to the triggering SHA
+        required: false
+        type: string
+  schedule:
+    - cron: "17 2 * * *"
+    - cron: "43 3 * * 0"
+
+permissions:
+  contents: read
+
+env:
+  ARTIFACT_NAME: prediction-lab-automated-research
+
+concurrency:
+  group: prediction-lab-automated-research-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  automated-research-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve immutable research revision and mode
+        id: resolve
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_REF: ${{ inputs.research_ref }}
+          INPUT_MODE: ${{ inputs.mode }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TRIGGER_SHA: ${{ github.sha }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          ref="$INPUT_REF"
+          if [ -z "$ref" ] && [ "$EVENT_NAME" = "pull_request" ]; then ref="$PR_HEAD_SHA"; fi
+          if [ -z "$ref" ]; then ref="$TRIGGER_SHA"; fi
+          if ! [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "research_ref must resolve to an immutable 40-character SHA" >&2
+            exit 1
+          fi
+
+          mode="$INPUT_MODE"
+          if [ -z "$mode" ] && [ "$EVENT_NAME" = "schedule" ]; then
+            if [ "$EVENT_SCHEDULE" = "43 3 * * 0" ]; then mode="long_history"; else mode="recent_oos_regime"; fi
+          fi
+          if [ -z "$mode" ]; then mode="contract_validation"; fi
+          case "$mode" in
+            contract_validation|long_history|recent_oos_regime) ;;
+            *) echo "unsupported mode: $mode" >&2; exit 1 ;;
+          esac
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.ref }}
+          persist-credentials: false
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify exact checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.resolve.outputs.ref }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Run automated research orchestration tests
+        working-directory: market-prediction-lab
+        run: node --test tests/automated-research-orchestrator.test.js
+
+      - name: Build artifact-only research contract
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.resolve.outputs.ref }}
+        run: node scripts/run-automated-research-contract.js "${{ steps.resolve.outputs.mode }}"
+
+      - name: Verify safety flags and provider fail-closed contract
+        working-directory: market-prediction-lab
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const artifact = JSON.parse(fs.readFileSync('artifacts/automated-research/contract.json', 'utf8'));
+          if (artifact.artifactSafety.branchWrite !== false) throw new Error('branchWrite must remain false');
+          if (artifact.artifactSafety.liveOrderAllowed !== false) throw new Error('liveOrderAllowed must remain false');
+          if (artifact.artifactSafety.privateAccountRequestAllowed !== false) throw new Error('privateAccountRequestAllowed must remain false');
+          if (artifact.artifactSafety.orderSubmitted !== false) throw new Error('orderSubmitted must remain false');
+          if (artifact.providerCapabilities.US_STOCK.status === 'ready' && !artifact.providerCapabilities.US_STOCK.source) throw new Error('US provider cannot be synthetic');
+          if (artifact.providerCapabilities.KR_STOCK.status === 'ready' && !artifact.providerCapabilities.KR_STOCK.source) throw new Error('KR provider cannot be synthetic');
+          if (!Object.values(artifact.providerCapabilities).every((value) => value.fakeHistoricalDataAllowed === false)) throw new Error('fake historical data must remain forbidden');
+          NODE
+
+      - name: Upload immutable automated research artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-${{ steps.resolve.outputs.ref }}-${{ steps.resolve.outputs.mode }}
+          path: market-prediction-lab/artifacts/automated-research/contract.json
+          if-no-files-found: error
+          retention-days: 90
