@@ -64,9 +64,8 @@ function applyUniverseStaleness(card: ScannerSignalCard, stale: boolean): Scanne
   };
 }
 
-function selectedConditions(requested: string[], normalized: string[]): string[] {
-  const source = requested.length ? requested : normalized;
-  return [...new Set(source.map((item) => item.trim()).filter(Boolean))];
+function selectedConditions(requested: string[]): string[] {
+  return [...new Set(requested.map((item) => item.trim()).filter(Boolean))];
 }
 
 function candleTimestamp(value: Candle['time']): number | null {
@@ -210,7 +209,7 @@ export const StockSignalScannerService = {
       minimumScore: undefined,
       maximumRiskScore: undefined,
     }, execution);
-    const selected = selectedConditions(request.indicators, raw.selected);
+    const selected = selectedConditions(request.indicators);
     const broadCandidates = raw.cards.map((card) => {
       const entry = entryByTicker.get(card.ticker);
       if (!entry) return null;
@@ -229,7 +228,13 @@ export const StockSignalScannerService = {
     }).filter((card): card is ScannerSignalCard => card != null)
       .filter((card) => request.filters.maximumRiskScore == null || (card.riskScore != null && card.riskScore <= request.filters.maximumRiskScore));
 
-    const ranking = rankScannerCandidates({ cards: broadCandidates, market: request.market, strategy: strategyMode, limit: 10 });
+    const ranking = rankScannerCandidates({
+      cards: broadCandidates,
+      market: request.market,
+      strategy: strategyMode,
+      softMinimumScore: request.filters.minimumScore,
+      limit: 10,
+    });
     const rankedCards = ranking.cards.map((card) => card.signalGrade === 'B'
       ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
       : card);
