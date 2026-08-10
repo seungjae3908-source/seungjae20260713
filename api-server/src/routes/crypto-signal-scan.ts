@@ -20,6 +20,7 @@ import {
   filterScannerResponseForTier,
   parseScannerGradeQuery,
 } from '../services/scanner-access-control.service';
+import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
 import {
   ScannerRequestGuardError,
   scannerRequestGuard,
@@ -182,7 +183,8 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
             ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
             : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${ranking.diagnostics.bGradeCount}개`,
       };
-      const visibleResult = filterScannerResponseForTier(rankedResult, membershipLevel, requestedGrade ?? undefined);
+      const canonicalResult = withScannerCanonicalActions(rankedResult);
+      const visibleResult = filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined);
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({ ...visibleResult, strategy: strategyMode });
