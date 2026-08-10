@@ -1,5 +1,6 @@
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerSignalDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
+export type ScannerTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
 export type ScannerStrategyMode = 'scalping' | 'swing';
 export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
@@ -18,7 +19,6 @@ export type ScannerSignalState =
   | 'EXPIRED'
   | 'REJECTED'
   | 'CANCELLED'
-  // Backward-compatible states accepted while PR #82 callers migrate.
   | 'DETECTED'
   | 'WATCHING'
   | 'READY_FOR_APPROVAL'
@@ -90,6 +90,48 @@ export interface ScannerAiValidationSummary {
   explanation: string | null;
 }
 
+export interface ScannerBacktestQualitySummary {
+  status: 'verified' | 'missing' | 'insufficient';
+  researchFrom?: string;
+  researchTo?: string;
+  oosWinRate?: number | null;
+  walkForwardWinRate?: number | null;
+  expectancyPercent?: number | null;
+  profitFactor?: number | null;
+  maxDrawdownPercent?: number | null;
+  tradeCount?: number | null;
+  minimumTradeCount?: number | null;
+  sharpe?: number | null;
+  netReturnPercent?: number | null;
+  regime?: 'Strong Bull' | 'Bull' | 'Sideways' | 'Bear' | 'High Volatility' | 'Low Volatility' | null;
+  regimeScore?: number | null;
+  oosStabilityScore?: number | null;
+  costsIncluded?: boolean;
+  slippageIncluded?: boolean;
+  lookaheadGuarded?: boolean;
+  survivorshipGuarded?: boolean;
+  oos?: boolean;
+  walkForward?: boolean;
+  source?: string | null;
+}
+
+export interface ScannerCandidateRankingSummary {
+  rank: number;
+  score: number;
+  relativeScore: number;
+  relative: {
+    tradingValuePercentile: number;
+    momentumPercentile: number;
+    trendPercentile: number;
+    volumePercentile: number;
+    volatilityPercentile: number;
+  };
+  watchCompletionPercent: number;
+  watchReasons: string[];
+  hardFilterPassed: boolean;
+  hardFilterReasons: string[];
+}
+
 export interface ScannerSignalCard {
   signalId: string;
   assetClass: ScannerAssetClass;
@@ -103,6 +145,7 @@ export interface ScannerSignalCard {
   price: number;
   changePercent: number | null;
   direction: ScannerSignalDirection;
+  action?: ScannerTradeAction;
   signalState: ScannerSignalState;
   score: number;
   confidence: number;
@@ -130,6 +173,8 @@ export interface ScannerSignalCard {
   dataQuality?: ScannerDataQualitySummary;
   quantScore?: ScannerQuantScoreBreakdown;
   aiValidation?: ScannerAiValidationSummary;
+  backtestQuality?: ScannerBacktestQualitySummary;
+  candidateRanking?: ScannerCandidateRankingSummary;
 }
 
 export interface ScannerAlertCandidate {
@@ -139,6 +184,7 @@ export interface ScannerAlertCandidate {
   market: string;
   symbol: string;
   direction: ScannerSignalDirection;
+  action?: ScannerTradeAction;
   state: 'APPROVAL_PENDING' | 'READY_FOR_APPROVAL';
   entryZone: ScannerPricePlan['entryZone'];
   stopLoss: number | null;
@@ -164,6 +210,20 @@ export interface ScannerExecutionSummary {
   deadlineMs: number;
   itemTimeoutMs: number;
   maxConcurrency: number;
+  providerAcceptedCount?: number;
+  dataSuccessCount?: number;
+  insufficientDataCount?: number;
+  filteredByStrategyCount?: number;
+  unsupportedCount?: number;
+  staleCount?: number;
+  hardFilterPassCount?: number;
+  hardFilterRejectedCount?: number;
+  softCandidateCount?: number;
+  finalDisplayedCount?: number;
+  sGradeCount?: number;
+  aGradeCount?: number;
+  bGradeCount?: number;
+  backtestMissingCount?: number;
 }
 
 export interface ScannerFailure {
