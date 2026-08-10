@@ -2,11 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express, { type RequestHandler } from 'express';
 import type { AddressInfo } from 'node:net';
+import { APP_API_REQUEST_TIMEOUT_MS } from '../../../stock-analyzer/src/lib/auth-bootstrap';
 import type { AuthenticatedRequest, MemberProfile } from '../middleware/auth';
 import { ScanProviderUnavailableError } from '../services/bounded-scanner.service';
 import { ScannerRequestGuard } from '../services/scanner-request-guard.service';
 import type { ScannerResponse } from '../services/scanner-signal.types';
-import { createBoundedMarketScanRouter, type StockScannerRunner } from './bounded-market-scan';
+import {
+  STOCK_SCANNER_ROUTE_DEADLINE_MS,
+  createBoundedMarketScanRouter,
+  type StockScannerRunner,
+} from './bounded-market-scan';
 
 interface ScanResponseBody {
   ok?: boolean;
@@ -15,11 +20,14 @@ interface ScanResponseBody {
   dataState?: string;
   error?: string;
   cards?: unknown[];
+  orderSubmitted?: boolean;
+  exchangeRequestSent?: boolean;
   execution?: {
     partial?: boolean;
     timedOut?: boolean;
     timeoutCount?: number;
     elapsedMs?: number;
+    deadlineMs?: number;
   };
 }
 
@@ -97,12 +105,14 @@ function inject(profile: MemberProfile): RequestHandler {
 async function withServer(
   scanner: StockScannerRunner,
   run: (baseUrl: string) => Promise<void>,
+  deadlineMs?: number,
 ): Promise<void> {
   const app = express();
   app.use(inject(member()));
   app.use('/api/market/scan', createBoundedMarketScanRouter({
     scanner,
     guard: new ScannerRequestGuard(),
+    deadlineMs,
   }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => {
@@ -116,6 +126,12 @@ async function withServer(
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
+
+test('stock scanner server response budget remains below the browser app API deadline', () => {
+  assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS > 0);
+  assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS < APP_API_REQUEST_TIMEOUT_MS);
+  assert.ok(APP_API_REQUEST_TIMEOUT_MS - STOCK_SCANNER_ROUTE_DEADLINE_MS >= 1_000);
+});
 
 test('normal zero-match scan returns HTTP 200 empty', async () => {
   await withServer(
@@ -202,6 +218,41 @@ test('some item timeouts return explicit partial HTTP 200', async () => {
       assert.equal(body.dataState, 'partial');
     },
   );
+});
+
+test('route deadline returns explicit unavailable partial HTTP 200 and aborts scanner work', async () => {
+  let scannerAborted = false;
+  const scanner: StockScannerRunner = {
+    scan: async (request) => await new Promise<ScannerResponse>((_resolve, reject) => {
+      const onAbort = () => {
+        scannerAborted = true;
+        reject(request.signal?.reason ?? new Error('aborted'));
+      };
+      if (request.signal?.aborted) onAbort();
+      else request.signal?.addEventListener('abort', onAbort, { once: true });
+    }),
+  };
+
+  await withServer(
+    scanner,
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/market/scan?market=KR`);
+      assert.equal(response.status, 200);
+      const body = await response.json() as ScanResponseBody;
+      assert.equal(body.ok, true);
+      assert.equal(body.partial, true);
+      assert.equal(body.execution?.partial, true);
+      assert.equal(body.execution?.timedOut, true);
+      assert.equal(body.execution?.timeoutCount, 1);
+      assert.equal(body.execution?.deadlineMs, 25);
+      assert.equal(body.dataState, 'unavailable');
+      assert.deepEqual(body.cards, []);
+      assert.equal(body.orderSubmitted, false);
+      assert.equal(body.exchangeRequestSent, false);
+    },
+    25,
+  );
+  assert.equal(scannerAborted, true);
 });
 
 test('unreliable provider scan remains strict HTTP 502', async () => {
