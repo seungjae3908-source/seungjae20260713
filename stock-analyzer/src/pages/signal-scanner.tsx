@@ -463,7 +463,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
         )}
 
         {errorMessage && status === 'partial' && (
-          <section role="status" className="rounded-3xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+          <section role="alert" className="rounded-3xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
             <p className="font-black">최신 결과 갱신 대기</p>
             <p className="mt-1 break-keep text-xs text-muted-foreground">{errorMessage}</p>
           </section>
@@ -625,6 +625,12 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                         <span className="break-keep rounded-full bg-secondary px-2 py-1">데이터 {card.dataQuality?.state ?? card.dataState}</span>
                       </div>
 
+                      {card.warnings.length > 0 && (
+                        <ul className="mt-3 space-y-1 break-keep rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
+                          {card.warnings.map((warning) => <li key={warning}>• {warning}</li>)}
+                        </ul>
+                      )}
+
                       {backtest?.status === 'verified' ? (
                         <details className="mt-3 rounded-2xl border border-card-border bg-background p-3">
                           <summary className="cursor-pointer text-[11px] font-black">검증 백테스트 품질</summary>
@@ -658,7 +664,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                       )}
 
                       <details className="mt-3 rounded-2xl border border-card-border bg-background p-3">
-                        <summary className="cursor-pointer text-[11px] font-black">근거·지표·위험 상세</summary>
+                        <summary className="cursor-pointer text-[11px] font-black">근거·지표 상세</summary>
                         {card.quantScore && (
                           <div className="mt-2 grid grid-cols-4 gap-1 text-center text-[10px] sm:grid-cols-8">
                             {Object.entries(card.quantScore).map(([label, value]) => (
@@ -671,7 +677,6 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                           {card.evidence.every((item) => item.status !== 'matched') && <span className="text-xs text-muted-foreground">확인된 강한 근거 없음</span>}
                         </div>
                         {card.unverified.length > 0 && <p className="mt-3 break-keep text-xs text-muted-foreground">미확인: {card.unverified.join(' · ')}</p>}
-                        {card.warnings.length > 0 && <ul className="mt-3 space-y-1 break-keep text-xs text-amber-700 dark:text-amber-300">{card.warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul>}
                       </details>
 
                       <p className="mt-3 break-keep text-[10px] text-muted-foreground">출처 {card.dataSources.join(', ') || '미확인'} · 관측 {new Date(card.observedAt).toLocaleString('ko-KR')}</p>
