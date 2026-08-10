@@ -3,13 +3,13 @@ import type {
   ScannerPricePlan,
   ScannerResponse,
   ScannerSignalCard,
-  ScannerSignalDirection,
 } from './scanner-signal.types';
 
 const UPBIT_BASE = 'https://api.upbit.com';
 const BITGET_BASE = 'https://api.bitget.com';
 const BITGET_PRODUCT_TYPE = 'USDT-FUTURES';
 const PRECISION_TIMEOUT_MS = 2_500;
+const PRECISION_CACHE_TTL_MS = 5 * 60_000;
 
 interface UpbitInstrumentRow {
   market?: unknown;
@@ -25,6 +25,16 @@ interface BitgetContractRow {
 interface BitgetEnvelope<T> {
   code?: unknown;
   data?: T;
+}
+
+interface CachedTick {
+  tick: number;
+  expiresAt: number;
+}
+
+interface AlignedCard {
+  card: ScannerSignalCard;
+  precisionMissing: boolean;
 }
 
 export type CryptoPrecisionMarket = 'spot' | 'futures';
@@ -82,6 +92,14 @@ async function fetchJson<T>(fetcher: typeof fetch, url: string, signal?: AbortSi
   }
 }
 
+function hasPricePlan(card: ScannerSignalCard): boolean {
+  return card.pricePlan.entryZone != null
+    && card.pricePlan.stopLoss != null
+    && card.pricePlan.invalidation != null
+    && card.pricePlan.targets.length > 0
+    && card.pricePlan.riskReward != null;
+}
+
 function recomputeRiskReward(card: ScannerSignalCard, plan: ScannerPricePlan): number | null {
   const stop = plan.stopLoss;
   const target = plan.targets[0] ?? null;
@@ -121,77 +139,154 @@ function snapPricePlan(card: ScannerSignalCard, tick: number): ScannerPricePlan 
   return snapped.riskReward != null ? snapped : null;
 }
 
-function cardWithPrecision(card: ScannerSignalCard, tick: number | null, source: string): ScannerSignalCard {
+function cardWithPrecision(card: ScannerSignalCard, tick: number | null, source: string): AlignedCard {
+  if (!hasPricePlan(card)) return { card, precisionMissing: false };
   const snapped = tick == null ? null : snapPricePlan(card, tick);
   if (!snapped) {
     return {
-      ...card,
-      pricePlan: emptyPricePlan(),
-      strongSignalEligible: false,
-      signalState: card.signalState === 'WATCHING' ? 'DETECTED' : card.signalState,
-      warnings: [...new Set([...card.warnings, '시장 가격 단위 데이터 부족'])],
+      precisionMissing: true,
+      card: {
+        ...card,
+        pricePlan: emptyPricePlan(),
+        strongSignalEligible: false,
+        signalState: card.signalState === 'WATCHING' ? 'DETECTED' : card.signalState,
+        warnings: [...new Set([...card.warnings, '시장 가격 단위 데이터 부족'])],
+      },
     };
   }
   return {
-    ...card,
-    pricePlan: snapped,
-    dataSources: [...new Set([...card.dataSources, source])],
+    precisionMissing: false,
+    card: {
+      ...card,
+      pricePlan: snapped,
+      dataSources: [...new Set([...card.dataSources, source])],
+    },
   };
 }
 
-async function upbitTicks(fetcher: typeof fetch, cards: ScannerSignalCard[], signal?: AbortSignal): Promise<Map<string, number>> {
-  const markets = [...new Set(cards.map((card) => `KRW-${card.symbol.trim().toUpperCase()}`))];
-  if (!markets.length) return new Map();
-  const rows = await fetchJson<UpbitInstrumentRow[]>(
-    fetcher,
-    `${UPBIT_BASE}/v1/orderbook/instruments?markets=${encodeURIComponent(markets.join(','))}`,
-    signal,
-  );
-  const ticks = new Map<string, number>();
-  for (const row of rows) {
-    const market = text(row.market).toUpperCase();
-    const tick = finite(row.tick_size);
-    if (market.startsWith('KRW-') && tick != null) ticks.set(market.replace(/^KRW-/, ''), tick);
-  }
-  return ticks;
+function symbolKey(market: CryptoPrecisionMarket, symbol: string): string {
+  return `${market}:${symbol.trim().toUpperCase()}`;
 }
 
-async function bitgetTicks(fetcher: typeof fetch, cards: ScannerSignalCard[], signal?: AbortSignal): Promise<Map<string, number>> {
-  const symbols = new Set(cards.map((card) => card.symbol.trim().toUpperCase()));
-  if (!symbols.size) return new Map();
-  const payload = await fetchJson<BitgetEnvelope<BitgetContractRow[]>>(
-    fetcher,
-    `${BITGET_BASE}/api/v2/mix/market/contracts?productType=${BITGET_PRODUCT_TYPE}`,
-    signal,
-  );
-  if (text(payload.code) !== '00000' || !Array.isArray(payload.data)) throw new Error(`BITGET_${text(payload.code) || 'INVALID'}`);
-  const ticks = new Map<string, number>();
-  for (const row of payload.data) {
-    const symbol = text(row.symbol).toUpperCase();
-    if (!symbols.has(symbol)) continue;
-    const tick = bitgetContractPriceTick(row.pricePlace, row.priceEndStep);
-    if (tick != null) ticks.set(symbol, tick);
-  }
-  return ticks;
+function uniqueSymbols(cards: ScannerSignalCard[]): string[] {
+  return [...new Set(cards.map((card) => card.symbol.trim().toUpperCase()).filter(Boolean))];
 }
 
 export function createCryptoPricePrecisionService(fetcher: typeof fetch = fetch): CryptoPricePrecisionService {
+  const cache = new Map<string, CachedTick>();
+  let upbitRefreshPromise: Promise<void> | null = null;
+  let bitgetRefreshPromise: Promise<void> | null = null;
+
+  const cachedTick = (market: CryptoPrecisionMarket, symbol: string): number | null => {
+    const key = symbolKey(market, symbol);
+    const row = cache.get(key);
+    if (!row) return null;
+    if (row.expiresAt <= Date.now()) {
+      cache.delete(key);
+      return null;
+    }
+    return row.tick;
+  };
+
+  const cacheTick = (market: CryptoPrecisionMarket, symbol: string, tick: number) => {
+    cache.set(symbolKey(market, symbol), { tick, expiresAt: Date.now() + PRECISION_CACHE_TTL_MS });
+  };
+
+  const upbitTicks = async (cards: ScannerSignalCard[], signal?: AbortSignal): Promise<Map<string, number>> => {
+    const symbols = uniqueSymbols(cards);
+    let missing = symbols.filter((symbol) => cachedTick('spot', symbol) == null);
+    if (missing.length && upbitRefreshPromise) {
+      await upbitRefreshPromise;
+      missing = symbols.filter((symbol) => cachedTick('spot', symbol) == null);
+    }
+    if (missing.length) {
+      const markets = missing.map((symbol) => `KRW-${symbol}`);
+      upbitRefreshPromise = (async () => {
+        const rows = await fetchJson<UpbitInstrumentRow[]>(
+          fetcher,
+          `${UPBIT_BASE}/v1/orderbook/instruments?markets=${encodeURIComponent(markets.join(','))}`,
+          signal,
+        );
+        for (const row of rows) {
+          const market = text(row.market).toUpperCase();
+          const tick = finite(row.tick_size);
+          if (market.startsWith('KRW-') && tick != null) cacheTick('spot', market.replace(/^KRW-/, ''), tick);
+        }
+      })();
+      try {
+        await upbitRefreshPromise;
+      } finally {
+        upbitRefreshPromise = null;
+      }
+    }
+    const ticks = new Map<string, number>();
+    for (const symbol of symbols) {
+      const tick = cachedTick('spot', symbol);
+      if (tick != null) ticks.set(symbol, tick);
+    }
+    return ticks;
+  };
+
+  const bitgetTicks = async (cards: ScannerSignalCard[], signal?: AbortSignal): Promise<Map<string, number>> => {
+    const symbols = uniqueSymbols(cards);
+    let missing = symbols.filter((symbol) => cachedTick('futures', symbol) == null);
+    if (missing.length && bitgetRefreshPromise) {
+      await bitgetRefreshPromise;
+      missing = symbols.filter((symbol) => cachedTick('futures', symbol) == null);
+    }
+    if (missing.length) {
+      bitgetRefreshPromise = (async () => {
+        const payload = await fetchJson<BitgetEnvelope<BitgetContractRow[]>>(
+          fetcher,
+          `${BITGET_BASE}/api/v2/mix/market/contracts?productType=${BITGET_PRODUCT_TYPE}`,
+          signal,
+        );
+        if (text(payload.code) !== '00000' || !Array.isArray(payload.data)) {
+          throw new Error(`BITGET_${text(payload.code) || 'INVALID'}`);
+        }
+        for (const row of payload.data) {
+          const symbol = text(row.symbol).toUpperCase();
+          if (!symbol) continue;
+          const tick = bitgetContractPriceTick(row.pricePlace, row.priceEndStep);
+          if (tick != null) cacheTick('futures', symbol, tick);
+        }
+      })();
+      try {
+        await bitgetRefreshPromise;
+      } finally {
+        bitgetRefreshPromise = null;
+      }
+    }
+    const ticks = new Map<string, number>();
+    for (const symbol of symbols) {
+      const tick = cachedTick('futures', symbol);
+      if (tick != null) ticks.set(symbol, tick);
+    }
+    return ticks;
+  };
+
   return {
     async align(market, response, signal) {
-      if (!response.cards.length) return response;
+      const cardsRequiringPrecision = response.cards.filter(hasPricePlan);
+      if (!cardsRequiringPrecision.length) return response;
       let ticks = new Map<string, number>();
       let precisionProviderError = false;
       try {
         ticks = market === 'spot'
-          ? await upbitTicks(fetcher, response.cards, signal)
-          : await bitgetTicks(fetcher, response.cards, signal);
+          ? await upbitTicks(cardsRequiringPrecision, signal)
+          : await bitgetTicks(cardsRequiringPrecision, signal);
       } catch (error) {
         if (signal?.aborted) throw error;
         precisionProviderError = true;
       }
       const source = market === 'spot' ? 'upbit-public-orderbook-instruments' : 'bitget-public-contracts';
-      const cards = response.cards.map((card) => cardWithPrecision(card, ticks.get(card.symbol.trim().toUpperCase()) ?? null, source));
-      const missingPrecisionCount = cards.filter((card) => card.pricePlan.riskReward == null).length;
+      const alignedCards = response.cards.map((card) => cardWithPrecision(
+        card,
+        ticks.get(card.symbol.trim().toUpperCase()) ?? null,
+        source,
+      ));
+      const cards = alignedCards.map((item) => item.card);
+      const missingPrecisionCount = alignedCards.filter((item) => item.precisionMissing).length;
       const precisionIncomplete = precisionProviderError || missingPrecisionCount > 0;
       return {
         ...response,
