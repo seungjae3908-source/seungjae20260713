@@ -44,22 +44,23 @@ function features(direction, index) {
   });
 }
 
+function stateFromDirections(directions, modelId = "neutral-v1") {
+  return {
+    records: directions.map((actualDirection, index) => Object.freeze({
+      status: "settled",
+      modelId,
+      referenceModelId: BASELINE_MODEL.id,
+      symbol: index % 2 === 0 ? "BTCUSDT" : "ETHUSDT",
+      anchorTimestamp: 1_700_000_000_000 + index * 60_000,
+      actualDirection,
+      features: features(actualDirection, index),
+    })),
+  };
+}
+
 function state(count, modelId = "neutral-v1") {
   const directions = ["bullish", "neutral", "bearish"];
-  return {
-    records: Array.from({ length: count }, (_, index) => {
-      const actualDirection = directions[index % directions.length];
-      return Object.freeze({
-        status: "settled",
-        modelId,
-        referenceModelId: BASELINE_MODEL.id,
-        symbol: index % 2 === 0 ? "BTCUSDT" : "ETHUSDT",
-        anchorTimestamp: 1_700_000_000_000 + index * 60_000,
-        actualDirection,
-        features: features(actualDirection, index),
-      });
-    }),
-  };
+  return stateFromDirections(Array.from({ length: count }, (_, index) => directions[index % directions.length]), modelId);
 }
 
 test("health flags dominant neutral collapse and zero directional recall", () => {
@@ -94,7 +95,33 @@ test("adaptive blend uses chronological holdout and escapes neutral collapse", (
   });
   assert.equal(result.status, "shadow_candidate_v2", JSON.stringify(result.reasons));
   assert.equal(result.safety.chronologicalSplit, true);
+  assert.equal(result.safety.selectionUsesHoldout, false);
   assert.equal(result.diagnostics.holdout.candidateHealth.collapsed, false);
   assert.ok(result.diagnostics.holdout.comparison.macroF1Delta > 0.02);
   assert.ok(result.diagnostics.selection.baselineWeight > 0);
+  assert.ok(result.diagnostics.selection.stabilityMetrics.sampleCount >= 24);
+});
+
+test("adaptive selection rejects recent calibration collapse before touching holdout", () => {
+  const cycle = ["bullish", "neutral", "bearish"];
+  const directions = [
+    ...Array.from({ length: 72 }, (_, index) => cycle[index % cycle.length]),
+    ...Array.from({ length: 24 }, () => "neutral"),
+    ...Array.from({ length: 24 }, (_, index) => cycle[index % cycle.length]),
+  ];
+  const result = buildAdaptiveShadowCandidate({
+    group: "crypto-futures-15m",
+    state: stateFromDirections(directions),
+    referenceArtifact: { model: neutralModel() },
+    minSettled: 120,
+    minCalibration: 60,
+    minHoldout: 24,
+    holdoutRatio: 0.2,
+    selectionStabilityRatio: 0.25,
+    minSelectionStability: 24,
+  });
+  assert.equal(result.status, "research_hold");
+  assert.equal(result.reason, "no_non_collapsed_blend_found");
+  assert.equal(result.diagnostics.split.selectionStability, 24);
+  assert.equal(result.diagnostics.split.holdout, 24);
 });
