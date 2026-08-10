@@ -161,6 +161,13 @@ export interface ScannerFailure {
   message: string;
 }
 
+export interface ScannerRefreshIssue {
+  status: 409 | 429 | 502;
+  code: string;
+  retryAfterSeconds: number | null;
+  message: string;
+}
+
 export interface ScannerResponse {
   ok: true;
   requestId: string;
@@ -212,6 +219,7 @@ export interface ScannerResponse {
   dataState: ScannerDataState;
   message: string;
   generatedAt: string;
+  refreshIssue?: ScannerRefreshIssue;
   orderSubmitted: false;
   exchangeRequestSent: false;
 }
@@ -256,9 +264,12 @@ function abortError(): DOMException {
 }
 
 function fallbackReason(error: SignalScannerRequestError): string {
-  if (error.status === 409) return '동일 조건 분석이 진행 중이라 마지막 정상 결과를 유지합니다.';
-  if (error.status === 429) return '요청 제한으로 마지막 정상 결과를 유지하며 다음 갱신을 기다립니다.';
-  return '시장데이터 공급자 오류로 마지막 정상 결과를 유지합니다.';
+  if (error.status === 409) return '동일 조건 분석이 이미 진행 중입니다. 기존 결과를 유지하며 완료를 기다립니다.';
+  if (error.status === 429) {
+    const retry = error.retryAfterSeconds == null ? '' : ` ${error.retryAfterSeconds}초 후`;
+    return `검색 요청 한도를 보호하고 있습니다.${retry} 다음 갱신을 기다립니다.`;
+  }
+  return '시장데이터 공급자 응답이 불안정합니다. 마지막 정상 결과를 유지합니다.';
 }
 
 function asLastGoodFallback(response: ScannerResponse, error: SignalScannerRequestError): ScannerResponse {
@@ -284,6 +295,12 @@ function asLastGoodFallback(response: ScannerResponse, error: SignalScannerReque
     },
     dataState: 'stale',
     message: `${response.message} · ${reason}`,
+    refreshIssue: {
+      status: error.status as 409 | 429 | 502,
+      code: error.code,
+      retryAfterSeconds: error.retryAfterSeconds,
+      message: reason,
+    },
   };
 }
 
