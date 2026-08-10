@@ -15,6 +15,7 @@ import {
   type UiBuilderFullLayoutDocument,
   type UiBuilderPageId,
 } from '@/lib/ui-builder-full-layout';
+import { importUiBuilderLayoutFile } from '@/lib/ui-builder-layout-import';
 import {
   activateUiBuilderLayoutVersion,
   readUiBuilderLayoutVersions,
@@ -42,9 +43,7 @@ export default function UiBuilderLayoutControlPage() {
     setPageId(nextPage);
     setDevice(nextDevice);
     setText(readUiBuilderStoredLayout('draft', nextPage, nextDevice) ?? pretty(makeFrozenUiBuilderTemplate(nextPage, nextDevice)));
-    setNotice('');
-    setError('');
-    setHistoryRevision((value) => value + 1);
+    setNotice(''); setError(''); setHistoryRevision((value) => value + 1);
   };
 
   const run = (label: string, action: (layout: UiBuilderFullLayoutDocument) => UiBuilderFullLayoutDocument | void) => {
@@ -58,9 +57,7 @@ export default function UiBuilderLayoutControlPage() {
       if (result) setText(pretty(result));
       setHistoryRevision((value) => value + 1);
       setNotice(label);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
   const importFile = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -68,43 +65,30 @@ export default function UiBuilderLayoutControlPage() {
     if (!file) return;
     setNotice(''); setError('');
     try {
-      if (file.size > 1_000_000) throw new Error('Layout JSON 파일은 1MB 이하여야 합니다.');
-      const raw = await file.text();
-      const result = parseAndValidateUiBuilderLayout(raw, pageId, device);
+      const result = await importUiBuilderLayoutFile(file, pageId, device);
       if (!result.valid || !result.layout) throw new Error(result.issues.map((issue) => `${issue.code}: ${issue.message}`).join('\n'));
       setText(pretty(result.layout));
       setNotice(`파일 Import 완료: ${file.name}`);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      event.target.value = '';
-    }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { event.target.value = ''; }
   };
 
   const restoreDefault = () => {
     setNotice(''); setError('');
     try {
       const restored = restoreDefaultUiBuilderLayout(pageId, device);
-      setText(pretty(restored));
-      writeUiBuilderStoredLayout('draft', restored);
-      setHistoryRevision((value) => value + 1);
-      setNotice('Frozen Builder 기본 Layout 복원 완료');
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
+      setText(pretty(restored)); writeUiBuilderStoredLayout('draft', restored);
+      setHistoryRevision((value) => value + 1); setNotice('Frozen Builder 기본 Layout 복원 완료');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
   const rollback = (version: number) => {
     setNotice(''); setError('');
     try {
       const rolled = rollbackUiBuilderLayoutVersion(pageId, device, version);
-      setText(pretty(rolled));
-      writeUiBuilderStoredLayout('draft', rolled);
-      setHistoryRevision((value) => value + 1);
-      setNotice(`v${version} 기준 새 published version으로 Rollback 완료`);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
+      setText(pretty(rolled)); writeUiBuilderStoredLayout('draft', rolled);
+      setHistoryRevision((value) => value + 1); setNotice(`v${version} 기준 새 published version으로 Rollback 완료`);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
   return (
