@@ -14,6 +14,8 @@ on:
       - market-prediction-lab/src/historical-backtest-data.js
       - market-prediction-lab/src/binance-futures-history.js
       - market-prediction-lab/src/binance-vision-futures-archive.js
+      - market-prediction-lab/src/bitget-candle-collector.js
+      - market-prediction-lab/src/scalping-history-provider.js
       - market-prediction-lab/src/multi-market-backtest-engine.js
       - market-prediction-lab/src/independent-strategy-backtest.js
       - market-prediction-lab/src/v2-market-optimizer.js
@@ -23,6 +25,7 @@ on:
       - market-prediction-lab/src/v6-independent-breakout-retest-optimizer.js
       - market-prediction-lab/src/automated-research-orchestrator.js
       - market-prediction-lab/src/automated-v1-research.js
+      - market-prediction-lab/src/unified-candidate-evaluator.js
       - market-prediction-lab/src/long-history-data-layer.js
       - market-prediction-lab/src/research-cache-provenance.js
       - market-prediction-lab/scripts/run-long-history-v1.js
@@ -31,6 +34,8 @@ on:
       - market-prediction-lab/scripts/run-v5-history.js
       - market-prediction-lab/scripts/run-v6-history.js
       - market-prediction-lab/scripts/run-automated-v1-from-long-history.js
+      - market-prediction-lab/scripts/build-unified-v2-v6-research.js
+      - market-prediction-lab/scripts/collect-scalping-history.js
       - market-prediction-lab/scripts/extend-spot-holdout-cache.js
       - market-prediction-lab/scripts/extend-futures-holdout-cache.js
       - market-prediction-lab/scripts/build-scanner-backtest-quality.js
@@ -47,7 +52,7 @@ concurrency:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - name: Resolve immutable research ref
         id: research
@@ -167,6 +172,74 @@ jobs:
         working-directory: market-prediction-lab
         run: npm run backtest:v6:history -- long-history-v1 docs/long-history-v6-result.json docs/long-history-v6-result.md
 
+      - name: Build unified V2 through V6 OOS and purged walk-forward calibration artifacts
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
+        run: node scripts/build-unified-v2-v6-research.js long-history-v1 artifacts/automated-research/v1-long-history.json artifacts/automated-research/unified-v2-v6.json artifacts/automated-research/gate-calibration-candidates.json
+
+      - name: Restore exact-code scalping historical cache
+        id: scalping-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: market-prediction-lab/scalping-history-cache
+          key: prediction-lab-scalping-15m-${{ steps.sha.outputs.value }}
+
+      - name: Collect and audit real public 15m scalping history
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
+        run: node scripts/collect-scalping-history.js scalping-history-cache
+
+      - name: Assert scalping provider fail-closed and no synthetic substitution
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const audit = JSON.parse(fs.readFileSync('scalping-history-cache/scalping-history-provider-audit.json', 'utf8'));
+          if (audit.researchCodeSha !== process.env.RESEARCH_SHA) throw new Error('scalping audit SHA mismatch');
+          if (audit.syntheticHistoricalDataAllowed !== false || audit.interpolationAllowed !== false) throw new Error('synthetic/interpolated scalping history forbidden');
+          if (audit.privateApiAllowed !== false || audit.orderSubmitted !== false) throw new Error('scalping safety flags violated');
+          if (!Array.isArray(audit.datasets) || audit.datasets.length !== 4) throw new Error('expected four scalping datasets');
+          const allowed = new Set(['DATA_READY', 'BLOCKED_DATA', 'BLOCKED_PROVIDER_BOUNDARY']);
+          for (const row of audit.datasets) {
+            if (!allowed.has(row.status)) throw new Error(`invalid scalping dataset status: ${row.status}`);
+            if (row.collectionCodeSHA !== process.env.RESEARCH_SHA) throw new Error('scalping collectionCodeSHA mismatch');
+            if (row.status === 'DATA_READY') {
+              if (!row.rawDigest || !row.normalizedDigest || !row.manifestDigest) throw new Error('DATA_READY scalping dataset missing digests');
+              if (row.missingCandleCount !== 0 || row.duplicateCount !== 0 || row.outOfOrderCount !== 0) throw new Error('DATA_READY scalping dataset contains data-quality defects');
+              if (!(row.actualCandleCount > 0 && row.actualFirstCandle && row.actualLastCandle)) throw new Error('DATA_READY scalping dataset lacks measured coverage');
+            }
+          }
+          NODE
+
+      - name: Save exact-code scalping historical cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: market-prediction-lab/scalping-history-cache
+          key: ${{ steps.scalping-cache.outputs.cache-primary-key }}
+
+      - name: Assert unified V2-V6 and calibration safety
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const unified = JSON.parse(fs.readFileSync('artifacts/automated-research/unified-v2-v6.json', 'utf8'));
+          const calibration = JSON.parse(fs.readFileSync('artifacts/automated-research/gate-calibration-candidates.json', 'utf8'));
+          if (unified.researchCodeSha !== process.env.RESEARCH_SHA || calibration.researchCodeSha !== process.env.RESEARCH_SHA) throw new Error('unified artifact SHA mismatch');
+          if (unified.finalHoldoutExecuted !== false || unified.finalHoldoutStatus !== 'LOCKED' || unified.finalHoldoutQueue.length !== 0) throw new Error('final holdout must remain locked and unqueued');
+          if (unified.topStrategy !== 'NONE') throw new Error('TOP strategy must remain NONE before final holdout');
+          if (unified.safety.liveOrderAllowed !== false || unified.safety.privateAccountRequestAllowed !== false || unified.safety.orderSubmitted !== false || unified.safety.productionMutationAllowed !== false) throw new Error('unified safety flags violated');
+          if (calibration.finalHoldoutValuesIncluded !== false || calibration.syntheticDataIncluded !== false) throw new Error('calibration must exclude holdout/synthetic data');
+          if (calibration.thresholdPolicy.profitFactorGate !== null || calibration.thresholdPolicy.maximumDrawdownGate !== null || calibration.thresholdPolicy.walkForwardStabilityGate !== null) throw new Error('arbitrary numeric gate introduced');
+          if (calibration.rows.some((row) => row.oosTradeCount === 10 && row.sampleQuality !== 'uncalibrated_not_a_pass')) throw new Error('10 OOS trades cannot be an implicit pass');
+          NODE
+
       - name: Save incrementally refreshed long-history cache
         uses: actions/cache/save@v4
         with:
@@ -185,7 +258,7 @@ jobs:
         run: |
           mkdir -p market-prediction-lab/docs
           cat > market-prediction-lab/docs/long-history-provenance.json <<JSON
-          {"schemaVersion":1,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","cacheRestoredFrom":"$CACHE_RESTORED_FROM","cacheSavedAs":"$CACHE_SAVED_AS","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false,"orderSubmitted":false}
+          {"schemaVersion":2,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","cacheRestoredFrom":"$CACHE_RESTORED_FROM","cacheSavedAs":"$CACHE_SAVED_AS","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false,"orderSubmitted":false,"productionMutationAllowed":false,"finalHoldoutExecuted":false}
           JSON
 
       - name: Upload long-history research artifacts
@@ -195,8 +268,11 @@ jobs:
           name: long-history-v1-v6-${{ github.run_id }}
           path: |
             market-prediction-lab/long-history-v1
+            market-prediction-lab/scalping-history-cache
             market-prediction-lab/artifacts/automated-research/v1-long-history.json
             market-prediction-lab/artifacts/automated-research/scanner-backtest-quality-v1.json
+            market-prediction-lab/artifacts/automated-research/unified-v2-v6.json
+            market-prediction-lab/artifacts/automated-research/gate-calibration-candidates.json
             market-prediction-lab/docs/long-history-v1-result.json
             market-prediction-lab/docs/long-history-v1-result.md
             market-prediction-lab/docs/long-history-v3-result.json
@@ -208,7 +284,7 @@ jobs:
             market-prediction-lab/docs/long-history-v6-result.json
             market-prediction-lab/docs/long-history-v6-result.md
             market-prediction-lab/docs/long-history-provenance.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 90
 
       - name: Assert immutable checkout HEAD
