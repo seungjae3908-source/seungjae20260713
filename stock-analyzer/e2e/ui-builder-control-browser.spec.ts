@@ -74,6 +74,32 @@ test('actual control UI performs file import draft preview activate rollback res
   expect(pageErrors).toEqual([]);
 });
 
+test('pasted layouts use strict runtime validation before draft preview or activation', async ({ page }) => {
+  await mountControl(page);
+  const textarea = page.getByLabel('Layout JSON');
+  const base = JSON.parse(await textarea.inputValue());
+  const cases = [
+    ['UNSUPPORTED_SCHEMA_VERSION', (value: any) => { value.schemaVersion = 999; }],
+    ['UNKNOWN_COMPONENT', (value: any) => { value.blocks[1].type = 'UnknownBlock'; }],
+    ['URL_API_BINDING_REJECTED', (value: any) => { value.blocks[1].props.subtitle = '/api/private/orders'; }],
+    ['SECRET_TOKEN_REJECTED', (value: any) => { value.blocks[1].props.subtitle = 'Bearer super-secret-token-value'; }],
+    ['ARBITRARY_HTML_REJECTED', (value: any) => { value.blocks[1].props.subtitle = '<div>unsafe</div>'; }],
+    ['ARBITRARY_JS_REJECTED', (value: any) => { value.blocks[1].props.subtitle = 'fetch("/unsafe")'; }],
+    ['CSS_SOURCE_REJECTED', (value: any) => { value.blocks[1].props.subtitle = '<style>body{display:none}</style>'; }],
+    ['ARBITRARY_ACTION_REJECTED', (value: any) => { value.blocks[1].actionId = 'MUTATE_ANYTHING'; }],
+  ] as const;
+
+  for (const [code, mutate] of cases) {
+    const candidate = structuredClone(base);
+    mutate(candidate);
+    await textarea.fill(JSON.stringify(candidate, null, 2));
+    await expect(page.getByTestId('ui-builder-validation-state'), code).toHaveText('INVALID');
+    await page.getByRole('button', { name: 'Draft 저장', exact: true }).click();
+    await expect(page.getByRole('alert'), code).toContainText(code);
+    await expect(page.getByText('Draft 저장 완료')).toHaveCount(0);
+  }
+});
+
 test('control UI has no horizontal overflow at all required integration widths', async ({ page }) => {
   await mountControl(page);
   for (const width of widths) {
