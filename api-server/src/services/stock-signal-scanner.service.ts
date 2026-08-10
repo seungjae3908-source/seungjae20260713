@@ -249,11 +249,13 @@ export const StockSignalScannerService = {
       ? `종목 마스터 제공기관이 지연되어 ${universe.source} 목록으로 ${completedCount}/${universe.entries.length}종목을 분석했습니다.`
       : partial
         ? `일부 공급자 지연으로 ${completedCount}/${universe.entries.length}종목 중 확인 가능한 후보만 표시합니다.`
-        : lifecycle.cards.length === 0
-          ? `현재 묶음 ${completedCount}종목에서 Hard Risk Filter를 통과한 후보가 없습니다.`
-          : actionableCount === 0
-            ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
-            : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${ranking.diagnostics.bGradeCount}개`;
+        : raw.dataSuccessCount === 0 && raw.insufficientDataCount > 0
+          ? `현재 묶음에서 공급자 응답은 받았지만 ${raw.insufficientDataCount}종목의 분석 데이터가 부족합니다.`
+          : lifecycle.cards.length === 0
+            ? `현재 묶음 ${completedCount}종목에서 Hard Risk Filter를 통과한 후보가 없습니다.`
+            : actionableCount === 0
+              ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
+              : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${ranking.diagnostics.bGradeCount}개`;
 
     return {
       ok: true,
@@ -268,6 +270,11 @@ export const StockSignalScannerService = {
         requestedCount: universe.entries.length,
         startedCount: raw.scanned,
         completedCount,
+        providerAcceptedCount: raw.providerAcceptedCount,
+        dataSuccessCount: raw.dataSuccessCount,
+        insufficientDataCount: raw.insufficientDataCount,
+        filteredByStrategyCount: raw.filteredByStrategyCount,
+        staleCount: raw.staleCount,
         excludedCount: Math.max(0, completedCount - lifecycle.cards.length),
         providerErrorCount: raw.providerErrorCount + universe.providerErrorCount,
         timeoutCount: raw.timeoutCount,
