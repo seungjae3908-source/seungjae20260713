@@ -255,7 +255,8 @@ export function runAutomatedV1Research({
     });
   });
 
-  const scored = applyQualityScores(evaluated).sort((left, right) => right.qualityScore - left.qualityScore || left.id.localeCompare(right.id));
+  const scored = [...applyQualityScores(evaluated)]
+    .sort((left, right) => right.qualityScore - left.qualityScore || left.id.localeCompare(right.id));
   return Object.freeze({
     schemaVersion: 1,
     mode: "automated-v1-research",
