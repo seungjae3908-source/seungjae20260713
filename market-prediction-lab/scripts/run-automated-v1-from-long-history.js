@@ -7,6 +7,12 @@ import {
 import { aggregateMarketGroupCandidates } from "../src/automated-market-ranking.js";
 import { DEFAULT_MINIMUM_GATE } from "../src/automated-research-orchestrator.js";
 import { runAutomatedV1Research } from "../src/automated-v1-research.js";
+import {
+  STATISTICAL_QUALITY_POLICY,
+  buildProtectedFinalHoldoutQueue,
+  enrichPerSymbolResearchResult,
+  markCrossSymbolPreliminary,
+} from "../src/statistical-quality-contract.js";
 
 const inputRoot = resolve(process.argv[2] ?? "long-history-v1");
 const outputPath = resolve(process.argv[3] ?? "artifacts/automated-research/v1-long-history.json");
@@ -22,6 +28,7 @@ const GATE_CALIBRATION = Object.freeze({
     value: 10,
     basis: "reuse_existing_final_holdout_sample_classification",
     evidence: "current real 2025 V1 OOS candidates contain only 2-7 trades; fewer than 10 is already classified as low sample in final-holdout-evaluator",
+    meaning: "research_hold_reference_only_not_strategy_pass_threshold",
   }),
   minProfitFactor: Object.freeze({ value: null, status: "not_calibrated_do_not_invent" }),
   maxMaximumDrawdown: Object.freeze({ value: null, status: "not_calibrated_do_not_invent" }),
@@ -80,7 +87,7 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS) {
 
   const sides = spec.market === "CRYPTO_FUTURES" ? ["long", "short"] : ["long"];
   for (const side of sides) {
-    const result = runAutomatedV1Research({
+    const result = enrichPerSymbolResearchResult(runAutomatedV1Research({
       backtestInput: {
         market: spec.market,
         symbol: spec.researchSymbol,
@@ -94,7 +101,7 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS) {
         dataCoverage: coverageFor(candleBundle),
       },
       minimumGateConfig: MINIMUM_GATE,
-    });
+    }));
     results.push(Object.freeze({
       rankingGroup: rankingGroup(spec, side),
       datasetId: spec.id,
@@ -105,23 +112,13 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS) {
   }
 }
 
-const marketGroups = aggregateMarketGroupCandidates(results, {
+const marketGroups = markCrossSymbolPreliminary(aggregateMarketGroupCandidates(results, {
   requiredSymbolsByGroup: REQUIRED_SYMBOLS_BY_GROUP,
-});
-const finalHoldoutQueue = Object.freeze(Object.fromEntries(Object.entries(marketGroups).map(([group, value]) => [group, Object.freeze(
-  (value.candidates ?? [])
-    .filter((candidate) => candidate.researchStatus === "eligible_for_final_holdout")
-    .slice(0, 10)
-    .map((candidate) => Object.freeze({
-      candidateId: candidate.id,
-      parameters: candidate.parameters,
-      qualityScore: candidate.qualityScore,
-      status: "frozen_candidate_pending_one_shot_final_holdout",
-    })),
-)])));
+}));
+const finalHoldoutQueue = buildProtectedFinalHoldoutQueue(marketGroups);
 
 const artifact = Object.freeze({
-  schemaVersion: 3,
+  schemaVersion: 4,
   mode: "automated-v1-long-history",
   researchCodeSha,
   generatedAt: new Date().toISOString(),
@@ -131,6 +128,7 @@ const artifact = Object.freeze({
   syntheticResearchDataAllowed: false,
   minimumGate: MINIMUM_GATE,
   gateCalibration: GATE_CALIBRATION,
+  statisticalQualityPolicy: STATISTICAL_QUALITY_POLICY,
   automatedGroups: Object.freeze([...new Set(results.map((row) => row.rankingGroup))]),
   pendingGroups: Object.freeze([
     "CRYPTO_SPOT_SCALPING",
@@ -143,7 +141,23 @@ const artifact = Object.freeze({
   ]),
   perSymbolResults: Object.freeze(results),
   marketGroups,
+  finalHoldoutPipeline: Object.freeze([
+    "development",
+    "oos",
+    "purged_walk_forward",
+    "overfit_diagnostics",
+    "cross_symbol_diagnostics",
+    "minimum_statistical_quality",
+    "candidate_freeze",
+    "final_holdout_one_shot",
+  ]),
   finalHoldoutQueue,
+  finalHoldoutQueuePolicy: Object.freeze({
+    currentCrossSymbolStage: "preliminary",
+    queueAdmissionAllowed: false,
+    candidateParameterRetuningAfterHoldoutAllowed: false,
+    candidateFamilyReentryAfterHoldoutAllowed: false,
+  }),
   topStrategies: Object.freeze({
     status: "empty_until_frozen_candidate_passes_one_shot_final_holdout",
     groups: Object.freeze(Object.fromEntries(Object.keys(REQUIRED_SYMBOLS_BY_GROUP).map((group) => [group, Object.freeze([])]))),
@@ -156,6 +170,7 @@ const artifact = Object.freeze({
     orderSubmitted: false,
     finalHoldoutUsedForSelection: false,
     finalHoldoutRetuningAllowed: false,
+    finalHoldoutFamilyReentryAllowed: false,
     automaticLivePromotion: false,
   }),
 });
@@ -168,9 +183,11 @@ console.log(JSON.stringify({
   automatedGroups: artifact.automatedGroups,
   perSymbolResults: results.length,
   groupCandidateCounts: Object.fromEntries(Object.entries(marketGroups).map(([group, value]) => [group, value.candidateCount ?? 0])),
+  crossSymbolValidation: Object.fromEntries(Object.entries(marketGroups).map(([group, value]) => [group, value.crossSymbolValidation])),
   finalHoldoutQueueCounts: Object.fromEntries(Object.entries(finalHoldoutQueue).map(([group, value]) => [group, value.length])),
   blocked: blocked.length,
-  minimumTradeCount: MINIMUM_GATE.minTradeCount,
+  minimumTradeCountReference: MINIMUM_GATE.minTradeCount,
+  minimumTradeCountIsPassThreshold: false,
   liveOrderAllowed: false,
   privateAccountRequestAllowed: false,
   orderSubmitted: false,
