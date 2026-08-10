@@ -39,8 +39,9 @@ const snapshot: UnifiedAssetSearchSnapshot = {
 test('unified search state separates full, partial, degraded and empty success states', () => {
   assert.equal(deriveUnifiedSearchState({ resultCount: 3, partial: false, stale: false }), 'FULL');
   assert.equal(deriveUnifiedSearchState({ resultCount: 3, partial: true, stale: false }), 'PARTIAL');
+  assert.equal(deriveUnifiedSearchState({ resultCount: 1, partial: true, stale: true }), 'PARTIAL');
   assert.equal(deriveUnifiedSearchState({ resultCount: 0, partial: true, stale: false }), 'DEGRADED');
-  assert.equal(deriveUnifiedSearchState({ resultCount: 1, partial: true, stale: true }), 'DEGRADED');
+  assert.equal(deriveUnifiedSearchState({ resultCount: 1, partial: false, stale: true }), 'DEGRADED');
   assert.equal(deriveUnifiedSearchState({ resultCount: 0, partial: false, stale: false }), 'EMPTY');
 });
 
