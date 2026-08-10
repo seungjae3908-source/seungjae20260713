@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-const VIEWPORTS = [320, 768, 1280, 1920] as const;
+const VIEWPORTS = [320, 360, 390, 430, 768, 1024, 1280, 1440, 1920] as const;
 
 for (const width of VIEWPORTS) {
   test(`large patch shell remains readable and unobstructed at ${width}px`, async ({ page }) => {
