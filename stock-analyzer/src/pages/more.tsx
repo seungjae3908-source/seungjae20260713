@@ -1,658 +1,318 @@
+import { useLocation } from 'wouter';
 import {
-	useEffect,
-	useRef,
-	useState,
-	type ChangeEvent,
-	type ReactNode,
-} from "react";
-import { useLocation } from "wouter";
-import {
-	Bell,
-	Download,
-	Moon,
-	Palette,
-	ShieldCheck,
-	Smartphone,
-	Sun,
-	TrendingDown,
-	TrendingUp,
-	Upload,
-	UserRound,
-	WalletCards,
-} from "lucide-react";
-import { BottomNav } from "@/components/bottom-nav";
-import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
-import {
-	restoreRemoteBackup,
-	saveBackupNow,
-	useBackupStatus,
-} from "@/lib/backup-sync";
-import { useSettings } from "@/lib/settings";
-import { WATCHLIST_ALERT_TYPES } from "@/lib/settings";
-import {
-	getPermissionLabel,
-	getVapidPublicKey,
-	isPushSupported,
-	requestNotificationPermission,
-	showLocalNotification,
-	subscribeToPush,
-} from "@/lib/notifications";
-import { ACCENT_COLOR_KEY } from "@/lib/stock-display";
-import { cn } from "@/lib/utils";
-import { TradeAutomationSettings } from "@/components/trade-automation-settings";
+  ArrowLeft,
+  BarChart3,
+  Bot,
+  BrainCircuit,
+  ChevronRight,
+  Database,
+  Gauge,
+  MessageCircle,
+  RotateCcw,
+  Search,
+  Settings2,
+  ShieldCheck,
+  SlidersHorizontal,
+  UserRound,
+  type LucideIcon,
+} from 'lucide-react';
+import { BottomNav } from '@/components/bottom-nav';
+import { useSettings, type AiVerbosity, type ScannerMode, type ThemeMode } from '@/lib/settings';
+import { cn } from '@/lib/utils';
 
-const ALERT_ICONS: Record<string, ReactNode> = {
-	news: <Bell className="h-4 w-4" />,
-	disclosure: <ShieldCheck className="h-4 w-4" />,
-	move: <TrendingUp className="h-4 w-4" />,
-	target: <TrendingUp className="h-4 w-4" />,
-	stop: <TrendingDown className="h-4 w-4" />,
+type SettingsSectionId =
+  | 'account'
+  | 'market'
+  | 'risk'
+  | 'scanner'
+  | 'telegram'
+  | 'ai'
+  | 'display'
+  | 'provider'
+  | 'advanced';
+
+type SettingsSection = {
+  id: SettingsSectionId;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+  status?: string;
 };
 
-const ACCENT_COLORS = [
-	{
-		key: "blue",
-		label: "블루",
-		hsl: "221 83% 53%",
-		className: "bg-blue-500",
-	},
-	{
-		key: "green",
-		label: "그린",
-		hsl: "142 71% 45%",
-		className: "bg-green-500",
-	},
-	{
-		key: "purple",
-		label: "퍼플",
-		hsl: "262 83% 58%",
-		className: "bg-purple-500",
-	},
-	{
-		key: "red",
-		label: "레드",
-		hsl: "0 84% 60%",
-		className: "bg-red-500",
-	},
-	{
-		key: "orange",
-		label: "오렌지",
-		hsl: "24 95% 53%",
-		className: "bg-orange-500",
-	},
-	{
-		key: "pink",
-		label: "핑크",
-		hsl: "330 81% 60%",
-		className: "bg-pink-500",
-	},
+const SECTIONS: SettingsSection[] = [
+  { id: 'account', title: '계정 및 권한', description: '로그인 상태와 허용된 기능 범위를 확인합니다.', icon: UserRound },
+  { id: 'market', title: '시장 · 거래', description: '국내·미국·코인 시장 탐색 경로를 관리합니다.', icon: BarChart3 },
+  { id: 'risk', title: 'Risk', description: '위험·승인 계약을 확인합니다. 이 화면에서 한도를 임의 변경하지 않습니다.', icon: ShieldCheck },
+  { id: 'scanner', title: 'Scanner', description: '기본 스캐너 전략과 신호 검색 화면으로 이동합니다.', icon: Search },
+  { id: 'telegram', title: 'Telegram', description: '외부 알림 채널 상태를 확인합니다.', icon: MessageCircle, status: '미구성' },
+  { id: 'ai', title: 'AI', description: 'AI 답변 길이와 공개 시장분석 화면을 설정합니다.', icon: BrainCircuit },
+  { id: 'display', title: '차트 · 화면', description: '테마와 글자 크기를 조정합니다.', icon: Gauge },
+  { id: 'provider', title: 'Provider', description: '데이터·AI 공급자 경계를 확인합니다. Secret은 브라우저에 표시하지 않습니다.', icon: Database },
+  { id: 'advanced', title: '고급설정', description: '일반 사용 경로에 필요하지 않은 안전 안내와 초기화를 제공합니다.', icon: Settings2 },
 ];
 
-const BACKUP_PREFIXES = [
-	"watchlist",
-	"alerts",
-	"settings",
-	"seungjae",
-	"stock-analyzer",
-	"sa-settings",
-	"sa-saved-searches",
-	"sa-analysis-selection",
-];
-
-function readBackupData() {
-	const data: Record<string, string> = {};
-
-	for (let i = 0; i < window.localStorage.length; i += 1) {
-		const key = window.localStorage.key(i);
-
-		if (!key) continue;
-
-		const keep = BACKUP_PREFIXES.some((prefix) =>
-			key.toLowerCase().includes(prefix.toLowerCase()),
-		);
-
-		if (keep) {
-			data[key] = window.localStorage.getItem(key) ?? "";
-		}
-	}
-
-	return data;
+function parseSection(location: string): SettingsSectionId | null {
+  const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
+  const value = new URLSearchParams(query).get('section');
+  return SECTIONS.some((section) => section.id === value) ? value as SettingsSectionId : null;
 }
 
-export function applyAccentColor(key: string) {
-	const found =
-		ACCENT_COLORS.find((color) => color.key === key) ?? ACCENT_COLORS[0];
+function SettingsCard({ section, onOpen }: { section: SettingsSection; onOpen: () => void }) {
+  const Icon = section.icon;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex min-h-24 w-full min-w-0 items-center gap-3 rounded-2xl border border-card-border bg-card/80 p-4 text-left shadow-sm transition hover:bg-muted/60 active:scale-[0.99]"
+    >
+      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <Icon className="h-5 w-5" aria-hidden="true" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 break-keep text-sm font-black text-foreground">{section.title}</span>
+          {section.status ? (
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-500">
+              {section.status}
+            </span>
+          ) : null}
+        </span>
+        <span className="mt-1 block break-keep text-xs leading-5 text-muted-foreground">{section.description}</span>
+      </span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+    </button>
+  );
+}
 
-	document.documentElement.style.setProperty("--primary", found.hsl);
-	document.documentElement.style.setProperty("--ring", found.hsl);
+function LinkButton({ label, href, navigate }: { label: string; href: string; navigate: (href: string) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => navigate(href)}
+      className="flex min-h-11 w-full items-center justify-center rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground"
+    >
+      {label}
+    </button>
+  );
+}
+
+function Choice<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-pressed={value === option.value}
+          onClick={() => onChange(option.value)}
+          className={cn(
+            'min-h-11 rounded-xl border px-3 text-xs font-black transition',
+            value === option.value
+              ? 'border-primary bg-primary/10 text-primary'
+              : 'border-card-border bg-background/70 text-foreground hover:bg-muted',
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function DetailPanel({ section, navigate }: { section: SettingsSection; navigate: (href: string) => void }) {
+  const { settings, update, reset } = useSettings();
+  const Icon = section.icon;
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-card-border bg-card/80 p-4">
+        <div className="flex items-start gap-3">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <Icon className="h-5 w-5" aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="break-keep text-lg font-black">{section.title}</h2>
+              {section.status ? (
+                <span className="whitespace-nowrap rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-500">
+                  {section.status}
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-1 break-keep text-sm leading-6 text-muted-foreground">{section.description}</p>
+          </div>
+        </div>
+      </div>
+
+      {section.id === 'account' ? (
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
+          <p className="break-keep text-sm leading-6 text-muted-foreground">계정 연결·권한 확인은 기존 계정 화면을 사용합니다. 이 설정 화면은 계좌번호나 인증정보를 복제하거나 표시하지 않습니다.</p>
+          <LinkButton label="계정 및 권한 열기" href="/account" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'market' ? (
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
+          <p className="break-keep text-sm leading-6 text-muted-foreground">통합검색에서 국내·미국·Upbit 현물·Bitget 선물을 같은 canonical 자산 경로로 탐색합니다.</p>
+          <LinkButton label="통합 자산 검색 열기" href="/stocks" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'risk' ? (
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
+          <p className="break-keep text-sm leading-6 text-muted-foreground">Risk·Approval·Order 계약은 기존 정책 엔진이 source of truth입니다. 설정 화면에서 손절·주문금액·레버리지 한도를 임의로 완화하지 않습니다.</p>
+          <LinkButton label="신호와 Risk 근거 확인" href="/scanner" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'scanner' ? (
+        <div className="space-y-4 rounded-2xl border border-card-border bg-card/70 p-4">
+          <div>
+            <div className="mb-2 text-xs font-black text-muted-foreground">기본 Scanner 모드</div>
+            <Choice<ScannerMode>
+              value={settings.defaultScanner}
+              options={[{ value: 'daytrade', label: '단타' }, { value: 'swing', label: '스윙' }]}
+              onChange={(defaultScanner) => update({ defaultScanner })}
+            />
+          </div>
+          <LinkButton label="Signal Scanner 열기" href="/scanner" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'telegram' ? (
+        <div role="status" className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
+          <p className="font-black">Telegram 알림 연동은 현재 저장소에 구성된 연결 계약이 없습니다.</p>
+          <p className="mt-2 break-keep text-amber-100/80">브라우저 Push·Notification·Sound를 대체 기능처럼 노출하지 않습니다. LIVE/DELAYED/STALE/DISCONNECTED/Risk Reject/Provider Failure 같은 안전 상태는 앱 내부 inline 표시로 계속 제공합니다.</p>
+        </div>
+      ) : null}
+
+      {section.id === 'ai' ? (
+        <div className="space-y-4 rounded-2xl border border-card-border bg-card/70 p-4">
+          <div>
+            <div className="mb-2 text-xs font-black text-muted-foreground">AI 답변 길이</div>
+            <Choice<AiVerbosity>
+              value={settings.aiVerbosity}
+              options={[
+                { value: 'short', label: '간단히' },
+                { value: 'medium', label: '기본' },
+                { value: 'long', label: '자세히' },
+              ]}
+              onChange={(aiVerbosity) => update({ aiVerbosity })}
+            />
+          </div>
+          <p className="break-keep text-xs leading-5 text-muted-foreground">AI 시장분석은 공개 시장 context만 사용하며 private 계좌·주문 데이터를 전달하지 않습니다.</p>
+          <LinkButton label="AI 시장분석 열기" href="/ai-chat" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'display' ? (
+        <div className="space-y-5 rounded-2xl border border-card-border bg-card/70 p-4">
+          <div>
+            <div className="mb-2 text-xs font-black text-muted-foreground">테마</div>
+            <Choice<ThemeMode>
+              value={settings.theme}
+              options={[{ value: 'dark', label: '다크' }, { value: 'light', label: '라이트' }]}
+              onChange={(theme) => update({ theme })}
+            />
+          </div>
+          <label className="block">
+            <span className="mb-2 block text-xs font-black text-muted-foreground">글자 크기 {Math.round(settings.fontScale * 100)}%</span>
+            <input
+              aria-label="글자 크기"
+              type="range"
+              min="0.9"
+              max="1.25"
+              step="0.05"
+              value={settings.fontScale}
+              onChange={(event) => update({ fontScale: Number(event.target.value) })}
+              className="w-full accent-primary"
+            />
+          </label>
+          <LinkButton label="AI Chart 열기" href="/ai-chart" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'provider' ? (
+        <div role="status" className="space-y-2 rounded-2xl border border-card-border bg-card/70 p-4 text-sm leading-6 text-muted-foreground">
+          <p className="font-black text-foreground">Provider 설정은 서버 경계에서 관리됩니다.</p>
+          <p className="break-keep">API Key·Secret·credential 전체값은 브라우저 설정, localStorage, response, console에 표시하거나 저장하지 않습니다.</p>
+          <p className="break-keep">일부 공급자 장애는 가능한 결과를 유지하면서 PARTIAL/DEGRADED/STALE로 표시하고, 실제 데이터가 없으면 성공으로 위장하지 않습니다.</p>
+        </div>
+      ) : null}
+
+      {section.id === 'advanced' ? (
+        <div className="space-y-4 rounded-2xl border border-card-border bg-card/70 p-4">
+          <p className="break-keep text-sm leading-6 text-muted-foreground">Debug·admin·서버 운영 설정은 일반 사용자 화면에 노출하지 않습니다. 아래 초기화는 이 브라우저의 화면/AI/Scanner 로컬 기본값만 복원하며 계정·주문·서버 데이터에는 접근하지 않습니다.</p>
+          <button
+            type="button"
+            onClick={reset}
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-card-border bg-background/70 px-4 text-sm font-black text-foreground hover:bg-muted"
+          >
+            <RotateCcw className="h-4 w-4" aria-hidden="true" />
+            로컬 화면 설정 초기화
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export default function MorePage() {
-	const [, navigate] = useLocation();
-	const inputRef = useRef<HTMLInputElement | null>(null);
-	const { settings, update } = useSettings();
-	const auth = useAuth();
-	const remoteBackupStatus = useBackupStatus();
-	const memberId = auth.isApproved ? (auth.user?.id ?? null) : null;
-
-	const [enabledAlerts, setEnabledAlerts] = useState<string[]>(() =>
-		WATCHLIST_ALERT_TYPES.map((type) => type.key),
-	);
-
-	const [accentColor, setAccentColor] = useState(() => {
-		if (typeof window === "undefined") return "blue";
-
-		return window.localStorage.getItem(ACCENT_COLOR_KEY) || "blue";
-	});
-
-	const [noticeStatus, setNoticeStatus] = useState<string>(() =>
-		getPermissionLabel(),
-	);
-
-	const [backupStatus, setBackupStatus] = useState("파일 백업 대기 중");
-	const [remoteBackupBusy, setRemoteBackupBusy] = useState(false);
-
-	const isDark = settings.theme === "dark";
-	const pushSupported = isPushSupported();
-	const hasVapidKey = Boolean(getVapidPublicKey());
-
-	useEffect(() => {
-		applyAccentColor(accentColor);
-	}, [accentColor]);
-
-	const toggleAlert = (key: string) => {
-		setEnabledAlerts((current) =>
-			current.includes(key)
-				? current.filter((item) => item !== key)
-				: [...current, key],
-		);
-	};
-
-	const toggleTheme = () => {
-		update({ theme: isDark ? "light" : "dark" });
-	};
-
-	const changeAccentColor = (key: string) => {
-		setAccentColor(key);
-		window.localStorage.setItem(ACCENT_COLOR_KEY, key);
-		applyAccentColor(key);
-	};
-
-	const requestPermission = async () => {
-		const result = await requestNotificationPermission();
-		setNoticeStatus(result.message);
-
-		if (result.ok) {
-			showLocalNotification(
-				"승재주식 알림 설정 완료",
-				"관심종목 알림을 받을 준비가 되었습니다.",
-			);
-		}
-	};
-
-	const enablePush = async () => {
-		if (!hasVapidKey) {
-			setNoticeStatus(
-				"서버 푸시 키 설정 필요 — 브라우저 알림 권한만 사용할 수 있습니다.",
-			);
-			return;
-		}
-
-		const result = await subscribeToPush((subscription) =>
-			api.pushSubscribe(subscription),
-		);
-
-		setNoticeStatus(result.message);
-
-		if (result.ok) {
-			showLocalNotification(
-				"푸시 알림 연결 완료",
-				"관심종목 뉴스·공시·등락률 알림을 받을 수 있습니다.",
-			);
-
-			try {
-				await api.pushTest();
-			} catch {
-				// 테스트 발송 실패는 UI에 영향을 주지 않습니다.
-			}
-		}
-	};
-
-	const saveServerBackup = async () => {
-		if (!memberId) {
-			setBackupStatus(
-				"승인된 계정으로 로그인해야 서버 백업을 사용할 수 있습니다.",
-			);
-			return;
-		}
-
-		setRemoteBackupBusy(true);
-
-		try {
-			await saveBackupNow(memberId);
-			setBackupStatus("현재 기기 설정을 서버 최신 백업으로 저장했습니다.");
-		} catch (cause) {
-			setBackupStatus(
-				cause instanceof Error
-					? `서버 백업 저장 실패: ${cause.message}`
-					: "서버 백업 저장에 실패했습니다.",
-			);
-		} finally {
-			setRemoteBackupBusy(false);
-		}
-	};
-
-	const restoreServerBackup = async () => {
-		if (!memberId) {
-			setBackupStatus(
-				"승인된 계정으로 로그인해야 서버 백업을 사용할 수 있습니다.",
-			);
-			return;
-		}
-
-		const confirmed = window.confirm(
-			"서버에 저장된 최신 설정으로 현재 기기 설정을 바꿉니다. 계속할까요?",
-		);
-
-		if (!confirmed) return;
-
-		setRemoteBackupBusy(true);
-
-		try {
-			const count = await restoreRemoteBackup(memberId);
-			setBackupStatus(
-				`서버 백업 ${count}개 항목을 복원했습니다. 화면을 새로고침합니다.`,
-			);
-
-			window.setTimeout(() => {
-				window.location.reload();
-			}, 300);
-		} catch (cause) {
-			setBackupStatus(
-				cause instanceof Error
-					? `서버 백업 복원 실패: ${cause.message}`
-					: "서버 백업 복원에 실패했습니다.",
-			);
-			setRemoteBackupBusy(false);
-		}
-	};
-
-	const exportBackup = () => {
-		const backup = {
-			app: "seungjae-stock",
-			version: 1,
-			exportedAt: new Date().toISOString(),
-			localStorage: readBackupData(),
-		};
-
-		const blob = new Blob([JSON.stringify(backup, null, 2)], {
-			type: "application/json",
-		});
-
-		const url = window.URL.createObjectURL(blob);
-		const anchor = document.createElement("a");
-
-		anchor.href = url;
-		anchor.download = `seungjae-stock-backup-${new Date()
-			.toISOString()
-			.slice(0, 10)}.json`;
-		anchor.click();
-
-		window.URL.revokeObjectURL(url);
-		setBackupStatus("백업 파일을 저장했습니다.");
-	};
-
-	const importBackup = async (event: ChangeEvent<HTMLInputElement>) => {
-		const file = event.target.files?.[0];
-
-		if (!file) return;
-
-		try {
-			const text = await file.text();
-			const parsed = JSON.parse(text) as {
-				localStorage?: Record<string, string>;
-			};
-
-			if (!parsed.localStorage || typeof parsed.localStorage !== "object") {
-				setBackupStatus("백업 파일 형식이 맞지 않습니다.");
-				return;
-			}
-
-			Object.entries(parsed.localStorage).forEach(([key, value]) => {
-				window.localStorage.setItem(key, value);
-			});
-
-			setBackupStatus("백업을 복원했습니다. 새로고침하면 반영됩니다.");
-		} catch {
-			setBackupStatus("백업 복원에 실패했습니다.");
-		} finally {
-			event.target.value = "";
-		}
-	};
-
-	return (
-		<div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-center">
-			<header className="border-b border-card-border bg-background/90 px-4 pb-4 pt-5 glass">
-				<h1 className="text-xl font-extrabold">설정</h1>
-			</header>
-
-			<main className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 pb-24">
-				{auth.can("canPlaceOrders") && <TradeAutomationSettings />}
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<h2 className="mb-3 text-sm font-extrabold">계정 · 자산</h2>
-
-					<button
-						type="button"
-						onClick={() => navigate("/account")}
-						className="flex w-full items-center gap-3 border-b border-card-border py-3 text-left"
-					>
-						<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary">
-							<UserRound className="h-4 w-4" />
-						</span>
-						<div className="min-w-0 flex-1">
-							<p className="text-sm font-extrabold">로그인 · 회원가입</p>
-							<p className="mt-0.5 text-xs text-muted-foreground">
-								관심종목, 알림, 포트폴리오를 계정에 저장합니다.
-							</p>
-						</div>
-					</button>
-
-					<button
-						type="button"
-						onClick={() => navigate("/portfolio")}
-						className="flex w-full items-center gap-3 py-3 text-left"
-					>
-						<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary">
-							<WalletCards className="h-4 w-4" />
-						</span>
-						<div className="min-w-0 flex-1">
-							<p className="text-sm font-extrabold">내 포트폴리오</p>
-							<p className="mt-0.5 text-xs text-muted-foreground">
-								매수가, 수량, 평가손익과 수익률을 확인합니다.
-							</p>
-						</div>
-					</button>
-				</section>
-
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<h2 className="mb-3 text-sm font-extrabold">화면 설정</h2>
-
-					<button
-						type="button"
-						onClick={toggleTheme}
-						className="flex w-full items-center gap-3 border-b border-card-border py-3 text-left last:border-b-0"
-					>
-						<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary">
-							{isDark ? (
-								<Moon className="h-4 w-4" />
-							) : (
-								<Sun className="h-4 w-4" />
-							)}
-						</span>
-
-						<div className="min-w-0 flex-1">
-							<p className="break-keep text-sm font-extrabold leading-relaxed">
-								다크모드
-							</p>
-
-							<p className="mt-0.5 break-keep text-xs leading-relaxed text-muted-foreground">
-								{isDark ? "어두운 화면 사용 중" : "밝은 화면 사용 중"}
-							</p>
-						</div>
-
-						<span
-							className={cn(
-								"h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
-								isDark ? "bg-primary" : "bg-muted",
-							)}
-						>
-							<span
-								className={cn(
-									"block h-4 w-4 rounded-full bg-background transition-transform",
-									isDark && "translate-x-4",
-								)}
-							/>
-						</span>
-					</button>
-
-					<div className="py-3 last:border-b-0">
-						<div className="mb-3 flex items-center gap-3 text-left">
-							<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary">
-								<Palette className="h-4 w-4" />
-							</span>
-
-							<div className="min-w-0 flex-1">
-								<p className="text-sm font-extrabold">강조 색상</p>
-
-								<p className="mt-0.5 break-keep text-xs leading-relaxed text-muted-foreground">
-									앱의 포인트 색상을 즉시 바꿉니다.
-								</p>
-							</div>
-						</div>
-
-						<div className="grid grid-cols-3 gap-2">
-							{ACCENT_COLORS.map((color) => (
-								<button
-									key={color.key}
-									type="button"
-									onClick={() => changeAccentColor(color.key)}
-									className={cn(
-										"flex items-center justify-center gap-1.5 rounded-2xl border px-2 py-2 text-xs font-extrabold",
-										accentColor === color.key
-											? "border-primary bg-primary/10 text-primary"
-											: "border-card-border bg-background text-muted-foreground",
-									)}
-								>
-									<span
-										className={cn("h-3 w-3 rounded-full", color.className)}
-									/>
-									{color.label}
-								</button>
-							))}
-						</div>
-					</div>
-				</section>
-
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">휴대폰 알림</h2>
-
-						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-							관심종목 뉴스, 공시, 등락률, 목표가/손절가 접근 알림을 받을 수
-							있게 연결합니다.
-						</p>
-					</div>
-
-					<div className="grid grid-cols-1 gap-2">
-						<button
-							type="button"
-							onClick={() => void requestPermission()}
-							className="flex w-full items-center justify-center gap-2 rounded-2xl border border-primary/40 bg-primary/10 p-3 text-sm font-extrabold text-primary"
-						>
-							<Smartphone className="h-4 w-4" />
-							브라우저 알림 권한 켜기
-						</button>
-
-						<button
-							type="button"
-							onClick={() => void enablePush()}
-							disabled={!pushSupported}
-							className={cn(
-								"flex w-full items-center justify-center gap-2 rounded-2xl border p-3 text-sm font-extrabold",
-								pushSupported
-									? "border-positive/40 bg-positive/10 text-positive"
-									: "border-card-border bg-background text-muted-foreground opacity-60",
-							)}
-						>
-							<Bell className="h-4 w-4" />
-							푸시 알림 구독하기
-						</button>
-					</div>
-
-					{!hasVapidKey && (
-						<p className="mt-2 break-keep text-xs font-bold leading-relaxed text-warning">
-							서버 푸시 키 설정 필요 — 브라우저 알림 권한은 지금도 사용할 수
-							있습니다.
-						</p>
-					)}
-
-					<p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
-						현재 상태: {noticeStatus}
-					</p>
-				</section>
-
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">관심종목 알림 종류</h2>
-
-						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-							필요한 알림만 켜서 관리합니다.
-						</p>
-					</div>
-
-					<div className="space-y-2">
-						{WATCHLIST_ALERT_TYPES.map((item) => {
-							const active = enabledAlerts.includes(item.key);
-
-							return (
-								<button
-									key={item.key}
-									type="button"
-									onClick={() => toggleAlert(item.key)}
-									className={cn(
-										"flex w-full items-center gap-3 rounded-2xl border p-3 text-left transition-colors",
-										active
-											? "border-primary/40 bg-primary/10"
-											: "border-card-border bg-background",
-									)}
-								>
-									<span
-										className={cn(
-											"flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
-											active
-												? "bg-primary text-primary-foreground"
-												: "bg-secondary text-muted-foreground",
-										)}
-									>
-										{ALERT_ICONS[item.key]}
-									</span>
-
-									<span className="min-w-0 flex-1">
-										<span className="block break-keep text-sm font-extrabold leading-relaxed">
-											{item.title}
-										</span>
-
-										<span className="mt-0.5 block break-keep text-xs leading-relaxed text-muted-foreground">
-											{item.desc}
-										</span>
-									</span>
-
-									<span
-										className={cn(
-											"h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
-											active ? "bg-primary" : "bg-muted",
-										)}
-									>
-										<span
-											className={cn(
-												"block h-4 w-4 rounded-full bg-background transition-transform",
-												active && "translate-x-4",
-											)}
-										/>
-									</span>
-								</button>
-							);
-						})}
-					</div>
-				</section>
-
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">서버 자동백업 / 복원</h2>
-
-						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-							승인된 회원 계정에 화면, 검색기, 자동매매, 차트 설정을 최신 1개로
-							저장합니다.
-						</p>
-					</div>
-
-					<div className="grid grid-cols-2 gap-2">
-						<button
-							type="button"
-							onClick={() => void saveServerBackup()}
-							disabled={!memberId || remoteBackupBusy}
-							className="flex items-center justify-center gap-1.5 rounded-2xl border border-primary/40 bg-primary/10 px-3 py-3 text-sm font-extrabold text-primary disabled:cursor-not-allowed disabled:opacity-50"
-						>
-							<Download className="h-4 w-4" />
-							서버에 저장
-						</button>
-
-						<button
-							type="button"
-							onClick={() => void restoreServerBackup()}
-							disabled={!memberId || remoteBackupBusy}
-							className="flex items-center justify-center gap-1.5 rounded-2xl border border-positive/40 bg-positive/10 px-3 py-3 text-sm font-extrabold text-positive disabled:cursor-not-allowed disabled:opacity-50"
-						>
-							<Upload className="h-4 w-4" />
-							서버 백업 복원
-						</button>
-					</div>
-
-					<p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
-						자동백업 상태: {remoteBackupStatus.message}
-					</p>
-				</section>
-
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">파일 백업 / 복원</h2>
-
-						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-							설정 데이터를 JSON 파일로 내려받거나 저장된 파일을 다시
-							불러옵니다.
-						</p>
-					</div>
-
-					<div className="grid grid-cols-2 gap-2">
-						<button
-							type="button"
-							onClick={exportBackup}
-							className="flex items-center justify-center gap-1.5 rounded-2xl border border-primary/40 bg-primary/10 px-3 py-3 text-sm font-extrabold text-primary"
-						>
-							<Download className="h-4 w-4" />
-							파일 저장
-						</button>
-
-						<button
-							type="button"
-							onClick={() => inputRef.current?.click()}
-							className="flex items-center justify-center gap-1.5 rounded-2xl border border-card-border bg-background px-3 py-3 text-sm font-extrabold"
-						>
-							<Upload className="h-4 w-4" />
-							파일 불러오기
-						</button>
-					</div>
-
-					<input
-						ref={inputRef}
-						type="file"
-						accept="application/json"
-						onChange={(event) => void importBackup(event)}
-						className="hidden"
-					/>
-
-					<p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
-						{backupStatus}
-					</p>
-				</section>
-
-				<p className="pb-4 pt-2 text-center text-xs font-bold text-muted-foreground">
-					By. Seung Jae Lee
-				</p>
-			</main>
-
-			<BottomNav />
-		</div>
-	);
+  const [location, navigate] = useLocation();
+  const selectedId = parseSection(location);
+  const selected = selectedId ? SECTIONS.find((section) => section.id === selectedId) ?? null : null;
+
+  return (
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-28 pt-5 sm:px-6 lg:px-8">
+        <div className="mx-auto w-full max-w-4xl">
+          <header className="mb-5 flex min-w-0 items-center gap-3">
+            {selected ? (
+              <button
+                type="button"
+                aria-label="설정 홈으로 돌아가기"
+                onClick={() => navigate('/more')}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-card-border bg-card text-foreground hover:bg-muted"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              </button>
+            ) : (
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <SlidersHorizontal className="h-5 w-5" aria-hidden="true" />
+              </span>
+            )}
+            <div className="min-w-0">
+              <h1 className="break-keep text-2xl font-black tracking-tight">설정</h1>
+              <p className="mt-0.5 break-keep text-xs text-muted-foreground">
+                {selected ? selected.title : '필요한 항목만 선택해 관리합니다.'}
+              </p>
+            </div>
+          </header>
+
+          {selected ? (
+            <DetailPanel section={selected} navigate={navigate} />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {SECTIONS.map((section) => (
+                <SettingsCard
+                  key={section.id}
+                  section={section}
+                  onOpen={() => navigate(`/more?section=${section.id}`)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+      <BottomNav />
+    </div>
+  );
 }
