@@ -133,6 +133,38 @@ assert(
 );
 assert(!spec.includes("behavior: 'ignoreErrors'"), 'route callback teardown must not suppress in-flight failures');
 
+const retryRecoveryTestStart = spec.indexOf("test('retry recovery:");
+const retryRecoveryTestEnd = spec.indexOf("\n  test('scanner readiness:", retryRecoveryTestStart);
+assert(
+  retryRecoveryTestStart >= 0 && retryRecoveryTestEnd > retryRecoveryTestStart,
+  'retry recovery fixture boundaries are missing',
+);
+const retryRecoveryTestBlock = spec.slice(retryRecoveryTestStart, retryRecoveryTestEnd);
+assert(
+  (retryRecoveryTestBlock.match(/await expectHealthyRoute\(page, '\/account'\);/g) ?? []).length === 1,
+  'retry recovery must bootstrap and recover on the quiet authenticated account route exactly once',
+);
+assert(
+  !retryRecoveryTestBlock.includes("await expectHealthyRoute(page, '/');"),
+  'retry recovery must not use the polling-heavy home route as its bootstrap fixture',
+);
+assert(
+  retryRecoveryTestBlock.includes("await page.getByRole('button', { name: '다시 시도', exact: true }).click();"),
+  'retry recovery must exercise the explicit retry action',
+);
+assert(
+  retryRecoveryTestBlock.includes("expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);"),
+  'retry recovery must prove exactly one fresh profile request',
+);
+assert(
+  retryRecoveryTestBlock.includes("expect(observation.candidates, 'semantic first-attempt rejection must not create a network-error exemption').toHaveLength(0);"),
+  'semantic retry failure must not create a network-error exemption',
+);
+assert(
+  retryRecoveryTestBlock.includes("await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();"),
+  'retry recovery must finish on authenticated account UI',
+);
+
 const profileTimeoutTestStart = spec.indexOf("test('profile timeout abort:");
 const profileTimeoutTestEnd = spec.indexOf("\n  test('retry recovery:", profileTimeoutTestStart);
 assert(
