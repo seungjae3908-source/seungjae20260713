@@ -168,6 +168,11 @@ function formatPrice(value: number | null | undefined, market: AnalysisMarket): 
   return `${value.toLocaleString('ko-KR', { maximumFractionDigits: value >= 1000 ? 0 : 8 })}원`;
 }
 
+function formatPlanPrice(value: number | null | undefined, market: AnalysisMarket): string {
+  if (value == null || !Number.isFinite(value) || value <= 0) return '미확인';
+  return formatPrice(value, market);
+}
+
 function formatPercent(value: number | null): string {
   if (value == null || !Number.isFinite(value)) return '-';
   return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
@@ -442,6 +447,10 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       setInputError('유효한 종목 심볼을 입력하세요.');
       return;
     }
+    const nextTimeframe = candidate.timeframe ?? timeframe;
+    const sameScannerContext = selection.market === candidate.market
+      && selection.ticker === symbol
+      && selection.timeframe === nextTimeframe;
     setInputError('');
     onSelectionChange({
       ...selection,
@@ -450,10 +459,17 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       symbol,
       ticker: symbol,
       displayName: candidate.name.trim() || symbol,
-      timeframe: candidate.timeframe ?? timeframe,
-      selectedAt: selection.market === candidate.market && selection.ticker === symbol
-        ? selection.selectedAt
-        : new Date().toISOString(),
+      timeframe: nextTimeframe,
+      searchRunId: sameScannerContext ? selection.searchRunId : undefined,
+      signalScore: sameScannerContext ? selection.signalScore : undefined,
+      signalRank: sameScannerContext ? selection.signalRank : undefined,
+      confidence: sameScannerContext ? selection.confidence : undefined,
+      riskLevel: sameScannerContext ? selection.riskLevel : undefined,
+      action: sameScannerContext ? selection.action : undefined,
+      pricePlan: sameScannerContext ? selection.pricePlan : undefined,
+      matchedSignals: sameScannerContext ? selection.matchedSignals : undefined,
+      reasons: sameScannerContext ? selection.reasons : undefined,
+      selectedAt: sameScannerContext ? selection.selectedAt : new Date().toISOString(),
     });
   }, [onSelectionChange, selection, timeframe]);
 
@@ -480,6 +496,10 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   const searchRows = searchQuery.data ?? [];
   const warnings = chartQuery.data?.normalization.warnings ?? [];
   const errorMessage = chartQuery.error instanceof Error ? chartQuery.error.message : '차트 데이터를 불러오지 못했습니다.';
+  const pricePlan = selection.pricePlan;
+  const entryText = pricePlan?.entryZone
+    ? `${formatPlanPrice(pricePlan.entryZone.from, market)} ~ ${formatPlanPrice(pricePlan.entryZone.to, market)}`
+    : '미확인';
 
   return (
     <div className="space-y-4" data-testid="unified-analysis-chart">
@@ -531,8 +551,30 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           {settingsOpen && <div className="mt-2 flex flex-wrap gap-2 rounded-2xl border border-card-border bg-background p-3">{OVERLAY_OPTIONS.map((item) => <button key={item.key} type="button" data-testid={`overlay-${item.key}`} onClick={() => toggleOverlay(item.key)} className={cn('rounded-full border px-3 py-1.5 text-[11px] font-extrabold', overlays[item.key] ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card text-muted-foreground')}>{overlays[item.key] ? '✓ ' : '+ '}{item.label}</button>)}</div>}
         </div>
         <div className="min-h-[390px] bg-background/30">
-          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas candles={candles} indicators={indicators} levels={levels} analysis={analysis} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
+          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas candles={candles} indicators={indicators} levels={levels} analysis={analysis} pricePlan={pricePlan} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
         </div>
+      </section>
+
+      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="scanner-price-plan-chart">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <p className="text-[11px] font-extrabold text-primary">Scanner Price Plan</p>
+            <h2 className="mt-1 break-keep text-sm font-black">Scanner와 동일한 진입·손절·목표 계획</h2>
+          </div>
+          <span className="shrink-0 rounded-full border border-card-border bg-background px-3 py-1 text-xs font-black">{selection.action && selection.action !== 'NONE' ? selection.action : '미확인'}</span>
+        </div>
+        {pricePlan ? (
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            <Metric label="진입" value={entryText} />
+            <Metric label="손절" value={formatPlanPrice(pricePlan.stopLoss, market)} />
+            <Metric label="무효화" value={formatPlanPrice(pricePlan.invalidation, market)} />
+            <Metric label="목표1" value={formatPlanPrice(pricePlan.targets[0], market)} />
+            <Metric label="목표2" value={formatPlanPrice(pricePlan.targets[1], market)} />
+            <Metric label="R:R" value={pricePlan.riskReward != null && Number.isFinite(pricePlan.riskReward) && pricePlan.riskReward > 0 ? pricePlan.riskReward.toFixed(2) : '미확인'} />
+          </div>
+        ) : (
+          <p className="mt-3 rounded-2xl bg-background p-3 break-keep text-xs font-bold text-muted-foreground">Scanner에서 전달된 Price Plan이 없습니다. 차트가 임의의 진입가·손절가·목표가를 만들지 않습니다.</p>
+        )}
       </section>
 
       <SelectedCandleDetailPanel
