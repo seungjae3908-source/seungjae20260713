@@ -219,7 +219,7 @@ function alphaRows(payload, adjusted) {
     const high = finiteNumber(row?.["2. high"], "US_ALPHA_HIGH", { positive: true });
     const low = finiteNumber(row?.["3. low"], "US_ALPHA_LOW", { positive: true });
     const close = finiteNumber(row?.["4. close"], "US_ALPHA_CLOSE", { positive: true });
-    const volume = finiteNumber(row?.["5. volume"], "US_ALPHA_VOLUME", { nonNegative: true });
+    const volume = finiteNumber(row?.[adjusted ? "6. volume" : "5. volume"], "US_ALPHA_VOLUME", { nonNegative: true });
     const adjustedClose = adjusted ? finiteNumber(row?.["5. adjusted close"], "US_ALPHA_ADJUSTED_CLOSE", { positive: true }) : null;
     const dividendAmount = adjusted ? finiteNumber(row?.["7. dividend amount"] ?? 0, "US_ALPHA_DIVIDEND", { nonNegative: true }) : 0;
     const splitCoefficient = adjusted ? finiteNumber(row?.["8. split coefficient"] ?? 1, "US_ALPHA_SPLIT", { positive: true }) : 1;
