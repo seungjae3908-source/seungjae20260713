@@ -130,7 +130,7 @@ jobs:
         working-directory: market-prediction-lab
         env:
           RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
-        run: node scripts/build-scanner-backtest-quality.js long-history-v1 artifacts/automated-research/v1-long-history.json artifacts/automated-research/scanner-backtest-quality-v1.json
+        run: node scripts/build-scanner-backtest-quality.js long-history-v1 artifacts/automated-research/v1-long-history.json artifacts/automated-research/scanner-backtest-quality-v2.json
 
       - name: Assert automated research safety and holdout isolation
         working-directory: market-prediction-lab
@@ -148,8 +148,8 @@ jobs:
           if (!Array.isArray(result.perSymbolResults)) throw new Error('perSymbolResults missing');
           if (result.perSymbolResults.some((row) => row.result.period.oosEnd >= row.result.period.finalHoldoutStart)) throw new Error('OOS overlaps final holdout');
 
-          const scanner = JSON.parse(fs.readFileSync('artifacts/automated-research/scanner-backtest-quality-v1.json', 'utf8'));
-          if (scanner.schema !== 'scanner-backtest-quality-v1' || scanner.schemaVersion !== 1) throw new Error('scanner artifact schema mismatch');
+          const scanner = JSON.parse(fs.readFileSync('artifacts/automated-research/scanner-backtest-quality-v2.json', 'utf8'));
+          if (scanner.schema !== 'scanner-backtest-quality-v2' || scanner.schemaVersion !== 2) throw new Error('scanner artifact schema mismatch');
           if (scanner.syntheticMetricsAllowed !== false || scanner.liveOrderAllowed !== false || scanner.privateApiAllowed !== false || scanner.orderSubmitted !== false) throw new Error('scanner safety contract violated');
           if (!scanner.rows.some((row) => row.market === 'CRYPTO_SPOT' && row.symbol === 'USDT-BTC')) throw new Error('BTC spot scanner row missing');
           if (!scanner.rows.some((row) => row.market === 'CRYPTO_FUTURES' && row.symbol === 'BTCUSDT' && row.direction === 'LONG')) throw new Error('BTC futures LONG row missing');
@@ -270,7 +270,7 @@ jobs:
             market-prediction-lab/long-history-v1
             market-prediction-lab/scalping-history-cache
             market-prediction-lab/artifacts/automated-research/v1-long-history.json
-            market-prediction-lab/artifacts/automated-research/scanner-backtest-quality-v1.json
+            market-prediction-lab/artifacts/automated-research/scanner-backtest-quality-v2.json
             market-prediction-lab/artifacts/automated-research/unified-v2-v6.json
             market-prediction-lab/artifacts/automated-research/gate-calibration-candidates.json
             market-prediction-lab/docs/long-history-v1-result.json
