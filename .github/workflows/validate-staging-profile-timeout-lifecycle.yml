@@ -127,15 +127,37 @@ jobs:
           git diff --check
           python - <<'PY'
           import subprocess
-          diff = subprocess.check_output(['git', 'diff', '--', 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts', 'api-server/scripts/verify-staging-login-selector-contract.mjs'], text=True)
-          added = '\n'.join(line[1:] for line in diff.splitlines() if line.startswith('+') and not line.startswith('+++'))
-          forbidden = ["behavior: 'ignoreErrors'", 'test.skip(', '|| true', '@ts-ignore', '@ts-expect-error']
-          hits = [item for item in forbidden if item in added]
-          if hits:
-              raise SystemExit(f'forbidden candidate patterns: {hits}')
-          if 'timeoutRouteSettled' not in added:
+
+          spec_diff = subprocess.check_output(
+              ['git', 'diff', '--', 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts'],
+              text=True,
+          )
+          verifier_diff = subprocess.check_output(
+              ['git', 'diff', '--', 'api-server/scripts/verify-staging-login-selector-contract.mjs'],
+              text=True,
+          )
+
+          def added_lines(diff):
+              return '\n'.join(
+                  line[1:]
+                  for line in diff.splitlines()
+                  if line.startswith('+') and not line.startswith('+++')
+              )
+
+          spec_added = added_lines(spec_diff)
+          verifier_added = added_lines(verifier_diff)
+
+          spec_forbidden = ["behavior: 'ignoreErrors'", 'test.skip(', '|| true', '@ts-ignore', '@ts-expect-error']
+          verifier_forbidden = ['test.skip(', '|| true', '@ts-ignore', '@ts-expect-error']
+          spec_hits = [item for item in spec_forbidden if item in spec_added]
+          verifier_hits = [item for item in verifier_forbidden if item in verifier_added]
+          if spec_hits or verifier_hits:
+              raise SystemExit(f'forbidden candidate patterns: spec={spec_hits} verifier={verifier_hits}')
+          if 'timeoutRouteSettled' not in spec_added:
               raise SystemExit('route lifecycle drain was not added')
-          print(diff)
+          if 'assert(!spec.includes("behavior: \'ignoreErrors\'")' not in verifier_added:
+              raise SystemExit('verifier must explicitly forbid ignoreErrors suppression')
+          print(spec_diff + verifier_diff)
           PY
 
       - name: Commit validated source candidate to validation ref
