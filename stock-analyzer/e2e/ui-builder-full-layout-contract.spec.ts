@@ -9,6 +9,7 @@ import {
   uiBuilderTemplateCoverage,
   validateUiBuilderFullLayout,
 } from '../src/lib/ui-builder-full-layout';
+import { validateUiBuilderRuntimeLayout } from '../src/lib/ui-builder-runtime-safety';
 
 test('full integration pins frozen Builder baseline and all 14 PageIds', () => {
   expect(UI_BUILDER_STABLE_SHA).toBe('c98915da80c57a02c7e037522f6ae7dabd07664d');
@@ -21,7 +22,7 @@ test('every frozen mobile and desktop template validates fail-closed', () => {
   for (const pageId of UI_BUILDER_PAGE_IDS) {
     for (const device of ['mobile', 'desktop'] as const) {
       const layout = makeFrozenUiBuilderTemplate(pageId, device);
-      const result = validateUiBuilderFullLayout(layout, pageId, device);
+      const result = validateUiBuilderRuntimeLayout(layout, pageId, device);
       expect(result.valid, `${pageId}/${device}: ${JSON.stringify(result.issues)}`).toBe(true);
       expect(layout.pageId).toBe(pageId);
       expect(layout.deviceClass).toBe(device);
@@ -75,14 +76,31 @@ test('forbidden runtime binding URL API script secret and arbitrary actions are 
   for (const value of ['https://broker.example/private', '/api/private/orders', 'javascript:alert(1)', 'Bearer super-secret-token-value']) {
     const layout = structuredClone(makeFrozenUiBuilderTemplate('HOME', 'mobile')) as any;
     layout.blocks[1].props.subtitle = value;
-    const result = validateUiBuilderFullLayout(layout, 'HOME', 'mobile');
+    const result = validateUiBuilderRuntimeLayout(layout, 'HOME', 'mobile');
     expect(result.valid).toBe(false);
-    expect(result.issues.some((issue) => ['URL_API_BINDING_REJECTED', 'SECRET_TOKEN_REJECTED'].includes(issue.code))).toBe(true);
+    expect(result.issues.some((issue) => ['URL_API_BINDING_REJECTED', 'SECRET_TOKEN_REJECTED', 'ARBITRARY_JS_REJECTED'].includes(issue.code))).toBe(true);
   }
 
   const arbitrary = structuredClone(makeFrozenUiBuilderTemplate('HOME', 'mobile')) as any;
   arbitrary.blocks[1].actionId = 'POST_ORDER_NOW';
   expect(validateUiBuilderFullLayout(arbitrary, 'HOME', 'mobile').issues.some((issue) => issue.code === 'ARBITRARY_ACTION_REJECTED')).toBe(true);
+});
+
+test('runtime rejects arbitrary HTML JavaScript event handlers and CSS source', () => {
+  const cases = [
+    { value: '<script>alert(1)</script>', code: 'ARBITRARY_JS_REJECTED' },
+    { value: '<div onclick="alert(1)">매수</div>', code: 'ARBITRARY_JS_REJECTED' },
+    { value: '<iframe src="about:blank"></iframe>', code: 'ARBITRARY_HTML_REJECTED' },
+    { value: '<style>body{display:none}</style>', code: 'ARBITRARY_HTML_REJECTED' },
+    { value: 'fetch("/private")', code: 'ARBITRARY_JS_REJECTED' },
+  ];
+  for (const item of cases) {
+    const layout = structuredClone(makeFrozenUiBuilderTemplate('HOME', 'mobile'));
+    layout.blocks[1].props.subtitle = item.value;
+    const result = validateUiBuilderRuntimeLayout(layout, 'HOME', 'mobile');
+    expect(result.valid).toBe(false);
+    expect(result.issues.some((issue) => issue.code === item.code || issue.code === 'CSS_SOURCE_REJECTED')).toBe(true);
+  }
 });
 
 test('required headers and AUTO_TRADING EmergencyStop cannot be removed or hidden', () => {
