@@ -6,32 +6,10 @@ export type ScannerDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
 export type ScannerStrategyMode = 'scalping' | 'swing';
 export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
-  | 'CANDIDATE'
-  | 'CONFIRMED'
-  | 'ARMED'
-  | 'ENTRY_ZONE'
-  | 'APPROVAL_PENDING'
-  | 'APPROVED'
-  | 'EXECUTING'
-  | 'PARTIALLY_FILLED'
-  | 'FILLED'
-  | 'MANAGING'
-  | 'CLOSED'
-  | 'INVALIDATED'
-  | 'EXPIRED'
-  | 'REJECTED'
-  | 'CANCELLED'
-  | 'DETECTED'
-  | 'WATCHING'
-  | 'READY_FOR_APPROVAL'
-  | 'WEAKENED';
-export type ScannerDataState =
-  | 'complete'
-  | 'partial'
-  | 'stale'
-  | 'insufficient'
-  | 'unavailable'
-  | 'untrusted';
+  | 'CANDIDATE' | 'CONFIRMED' | 'ARMED' | 'ENTRY_ZONE' | 'APPROVAL_PENDING' | 'APPROVED'
+  | 'EXECUTING' | 'PARTIALLY_FILLED' | 'FILLED' | 'MANAGING' | 'CLOSED' | 'INVALIDATED'
+  | 'EXPIRED' | 'REJECTED' | 'CANCELLED' | 'DETECTED' | 'WATCHING' | 'READY_FOR_APPROVAL' | 'WEAKENED';
+export type ScannerDataState = 'complete' | 'partial' | 'stale' | 'insufficient' | 'unavailable' | 'untrusted';
 
 export interface ScannerEvidence {
   key: string;
@@ -40,6 +18,48 @@ export interface ScannerEvidence {
   source: string;
   observedAt: string | null;
   reasons: string[];
+}
+
+export interface ScannerBacktestQualitySummary {
+  status: 'verified' | 'missing' | 'insufficient';
+  researchFrom?: string;
+  researchTo?: string;
+  oosWinRate?: number | null;
+  walkForwardWinRate?: number | null;
+  expectancyPercent?: number | null;
+  profitFactor?: number | null;
+  maxDrawdownPercent?: number | null;
+  tradeCount?: number | null;
+  minimumTradeCount?: number | null;
+  sharpe?: number | null;
+  netReturnPercent?: number | null;
+  regime?: 'Strong Bull' | 'Bull' | 'Sideways' | 'Bear' | 'High Volatility' | 'Low Volatility' | null;
+  regimeScore?: number | null;
+  oosStabilityScore?: number | null;
+  costsIncluded?: boolean;
+  slippageIncluded?: boolean;
+  lookaheadGuarded?: boolean;
+  survivorshipGuarded?: boolean;
+  oos?: boolean;
+  walkForward?: boolean;
+  source?: string | null;
+}
+
+export interface ScannerCandidateRankingSummary {
+  rank: number;
+  score: number;
+  relativeScore: number;
+  relative: {
+    tradingValuePercentile: number;
+    momentumPercentile: number;
+    trendPercentile: number;
+    volumePercentile: number;
+    volatilityPercentile: number;
+  };
+  watchCompletionPercent: number;
+  watchReasons: string[];
+  hardFilterPassed: boolean;
+  hardFilterReasons: string[];
 }
 
 export interface ScannerSignalCard {
@@ -109,6 +129,8 @@ export interface ScannerSignalCard {
     risks: string[];
     explanation: string | null;
   };
+  backtestQuality?: ScannerBacktestQualitySummary;
+  candidateRanking?: ScannerCandidateRankingSummary;
 }
 
 export interface ScannerAlertCandidate {
@@ -158,6 +180,14 @@ export interface ScannerResponse {
     deadlineMs: number;
     itemTimeoutMs: number;
     maxConcurrency: number;
+    hardFilterPassCount?: number;
+    hardFilterRejectedCount?: number;
+    softCandidateCount?: number;
+    finalDisplayedCount?: number;
+    sGradeCount?: number;
+    aGradeCount?: number;
+    bGradeCount?: number;
+    backtestMissingCount?: number;
   };
   universe: {
     totalCount: number;
@@ -189,44 +219,75 @@ export interface SignalScannerRequest {
 }
 
 export class SignalScannerRequestError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    readonly retryAfterSeconds: number | null,
-  ) {
+  constructor(readonly status: number, readonly code: string, readonly retryAfterSeconds: number | null) {
     super(code);
     this.name = 'SignalScannerRequestError';
   }
 }
 
+interface ScannerInFlight {
+  controller: AbortController;
+  consumers: Set<symbol>;
+  abortTimer: ReturnType<typeof setTimeout> | null;
+  promise: Promise<ScannerResponse>;
+}
+
+const scannerInFlight = new Map<string, ScannerInFlight>();
+const scannerLastGood = new Map<string, ScannerResponse>();
+const scannerRetryUntil = new Map<string, number>();
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-export async function fetchSignalScanner(
-  request: SignalScannerRequest,
-  signal: AbortSignal,
-): Promise<ScannerResponse> {
+function abortError(): DOMException {
+  return new DOMException('Scanner request aborted', 'AbortError');
+}
+
+function fallbackReason(error: SignalScannerRequestError): string {
+  if (error.status === 409) return '동일 조건 분석이 진행 중이라 마지막 정상 결과를 유지합니다.';
+  if (error.status === 429) return '요청 제한으로 마지막 정상 결과를 유지하며 다음 갱신을 기다립니다.';
+  return '시장데이터 공급자 오류로 마지막 정상 결과를 유지합니다.';
+}
+
+function asLastGoodFallback(response: ScannerResponse, error: SignalScannerRequestError): ScannerResponse {
+  const reason = fallbackReason(error);
+  return {
+    ...response,
+    cards: response.cards.map((card) => ({
+      ...card,
+      dataState: 'stale',
+      strongSignalEligible: false,
+      warnings: card.warnings.includes(reason) ? card.warnings : [...card.warnings, reason],
+    })),
+    alerts: [],
+    execution: {
+      ...response.execution,
+      partial: true,
+      duplicate: response.execution.duplicate || error.status === 409,
+    },
+    universe: {
+      ...response.universe,
+      partial: true,
+      stale: true,
+    },
+    dataState: 'stale',
+    message: `${response.message} · ${reason}`,
+  };
+}
+
+async function requestScannerUpstream(request: SignalScannerRequest, signal: AbortSignal): Promise<ScannerResponse> {
   const response = await authorizedFetch(buildSignalScannerRequestUrl(request), {
     signal,
     cache: 'no-store',
-    headers: {
-      'Cache-Control': 'no-cache, no-store, max-age=0',
-      Pragma: 'no-cache',
-    },
+    headers: { 'Cache-Control': 'no-cache, no-store, max-age=0', Pragma: 'no-cache' },
   });
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const code = isRecord(payload) && typeof payload.error === 'string'
-      ? payload.error
-      : `HTTP_${response.status}`;
+    const code = isRecord(payload) && typeof payload.error === 'string' ? payload.error : `HTTP_${response.status}`;
     const retryAfterHeader = Number(response.headers.get('Retry-After'));
     const retryAfterBody = isRecord(payload) ? Number(payload.retryAfterSeconds) : Number.NaN;
-    const retryAfterSeconds = Number.isFinite(retryAfterHeader)
-      ? retryAfterHeader
-      : Number.isFinite(retryAfterBody)
-        ? retryAfterBody
-        : null;
+    const retryAfterSeconds = Number.isFinite(retryAfterHeader) ? retryAfterHeader : Number.isFinite(retryAfterBody) ? retryAfterBody : null;
     throw new SignalScannerRequestError(response.status, code, retryAfterSeconds);
   }
   if (!isRecord(payload) || payload.ok !== true || !Array.isArray(payload.cards)) {
@@ -237,10 +298,105 @@ export async function fetchSignalScanner(
   }
   return {
     ...(payload as Omit<ScannerResponse, 'failures'>),
-    failures: Array.isArray(payload.failures)
-      ? payload.failures as ScannerFailure[]
-      : [],
+    failures: Array.isArray(payload.failures) ? payload.failures as ScannerFailure[] : [],
   };
+}
+
+function consumeInFlight(key: string, entry: ScannerInFlight, signal: AbortSignal): Promise<ScannerResponse> {
+  if (signal.aborted) return Promise.reject(abortError());
+
+  if (entry.abortTimer !== null) {
+    clearTimeout(entry.abortTimer);
+    entry.abortTimer = null;
+  }
+
+  const consumer = Symbol(key);
+  entry.consumers.add(consumer);
+
+  return new Promise<ScannerResponse>((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      signal.removeEventListener('abort', onAbort);
+      entry.consumers.delete(consumer);
+      if (entry.consumers.size === 0 && scannerInFlight.get(key) === entry) {
+        entry.abortTimer = setTimeout(() => {
+          if (entry.consumers.size === 0 && scannerInFlight.get(key) === entry) entry.controller.abort();
+        }, 25);
+      }
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(abortError());
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+    entry.promise.then(
+      (result) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(result);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+export async function fetchSignalScanner(request: SignalScannerRequest, signal: AbortSignal): Promise<ScannerResponse> {
+  const key = buildSignalScannerRequestUrl(request);
+  const existing = scannerInFlight.get(key);
+  if (existing) return consumeInFlight(key, existing, signal);
+
+  const retryUntil = scannerRetryUntil.get(key) ?? 0;
+  if (retryUntil > Date.now()) {
+    const remaining = Math.max(1, Math.ceil((retryUntil - Date.now()) / 1000));
+    const cached = scannerLastGood.get(key);
+    const rateError = new SignalScannerRequestError(429, 'SCAN_RATE_LIMIT_BACKOFF', remaining);
+    if (cached) return asLastGoodFallback(cached, rateError);
+    throw rateError;
+  }
+
+  const entry = {
+    controller: new AbortController(),
+    consumers: new Set<symbol>(),
+    abortTimer: null,
+    promise: Promise.resolve(null as unknown as ScannerResponse),
+  } satisfies ScannerInFlight;
+
+  entry.promise = requestScannerUpstream(request, entry.controller.signal)
+    .then((result) => {
+      scannerRetryUntil.delete(key);
+      if (result.dataState === 'complete' || result.dataState === 'partial') scannerLastGood.set(key, result);
+      return result;
+    })
+    .catch((error: unknown) => {
+      if (error instanceof SignalScannerRequestError) {
+        if (error.status === 429 && error.retryAfterSeconds !== null) {
+          scannerRetryUntil.set(key, Date.now() + Math.max(1, error.retryAfterSeconds) * 1000);
+        }
+        if (error.status === 409 || error.status === 429 || error.status === 502) {
+          const cached = scannerLastGood.get(key);
+          if (cached) return asLastGoodFallback(cached, error);
+        }
+      }
+      throw error;
+    })
+    .finally(() => {
+      if (entry.abortTimer !== null) clearTimeout(entry.abortTimer);
+      if (scannerInFlight.get(key) === entry) scannerInFlight.delete(key);
+    });
+
+  scannerInFlight.set(key, entry);
+  return consumeInFlight(key, entry, signal);
 }
 
 export function signalScannerDetailPath(card: ScannerSignalCard): string {
