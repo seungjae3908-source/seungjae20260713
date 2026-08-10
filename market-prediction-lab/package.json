@@ -15,6 +15,7 @@
     "fuzz": "node scripts/fuzz-pipeline.js",
     "validate": "npm run check && npm test && npm run smoke && npm run stress && npm run fuzz",
     "collect:bitget": "node scripts/collect-bitget.js",
+    "collect:stock-history": "node scripts/collect-stock-history.js",
     "research:funding": "node scripts/run-derivatives-suite.js",
     "research:structure": "node scripts/run-market-structure-suite.js",
     "backtest:v1": "node scripts/run-v1-backtest.js",
