@@ -3,6 +3,7 @@ import { buildSignalScannerRequestUrl } from './signal-scanner-url';
 
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
+export type ScannerTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
 export type ScannerStrategyMode = 'scalping' | 'swing';
 export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
@@ -62,6 +63,14 @@ export interface ScannerCandidateRankingSummary {
   hardFilterReasons: string[];
 }
 
+export interface ScannerPricePlan {
+  entryZone: { from: number; to: number } | null;
+  invalidation: number | null;
+  stopLoss: number | null;
+  targets: number[];
+  riskReward: number | null;
+}
+
 export interface ScannerSignalCard {
   signalId: string;
   assetClass: ScannerAssetClass;
@@ -75,6 +84,7 @@ export interface ScannerSignalCard {
   price: number;
   changePercent: number | null;
   direction: ScannerDirection;
+  action?: ScannerTradeAction;
   signalState: ScannerSignalState;
   score: number;
   confidence: number;
@@ -90,13 +100,7 @@ export interface ScannerSignalCard {
   notMatched: string[];
   unverified: string[];
   evidence: ScannerEvidence[];
-  pricePlan: {
-    entryZone: { from: number; to: number } | null;
-    invalidation: number | null;
-    stopLoss: number | null;
-    targets: number[];
-    riskReward: number | null;
-  };
+  pricePlan: ScannerPricePlan;
   dataState: ScannerDataState;
   dataSources: string[];
   observedAt: string;
@@ -140,6 +144,7 @@ export interface ScannerAlertCandidate {
   market: string;
   symbol: string;
   direction: ScannerDirection;
+  action?: ScannerTradeAction;
   state: 'APPROVAL_PENDING' | 'READY_FOR_APPROVAL';
   entryZone: { from: number; to: number } | null;
   stopLoss: number | null;
@@ -180,6 +185,12 @@ export interface ScannerResponse {
     deadlineMs: number;
     itemTimeoutMs: number;
     maxConcurrency: number;
+    providerAcceptedCount?: number;
+    dataSuccessCount?: number;
+    insufficientDataCount?: number;
+    filteredByStrategyCount?: number;
+    unsupportedCount?: number;
+    staleCount?: number;
     hardFilterPassCount?: number;
     hardFilterRejectedCount?: number;
     softCandidateCount?: number;
