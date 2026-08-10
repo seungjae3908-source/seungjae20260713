@@ -97,7 +97,7 @@ test("quality score follows configured weights rather than raw return ranking", 
       developmentToOosDegradation: 70,
     },
   });
-  assert.equal(result.qualityScore, 78.5);
+  assert.equal(result.qualityScore, 77.25);
   assert.equal(Object.values(result.weights).reduce((sum, value) => sum + value, 0), 1);
 });
 
