@@ -134,14 +134,21 @@ function compareRank(left, right) {
     || String(left.candidateId).localeCompare(String(right.candidateId));
 }
 
-const datasets = [
-  await loadSpot("BTCUSDT", "USDT-BTC"),
-  await loadSpot("ETHUSDT", "USDT-ETH"),
-  await loadBinance("BTCUSDT", "long"),
-  await loadBinance("ETHUSDT", "long"),
-  await loadBinance("BTCUSDT", "short"),
-  await loadBinance("ETHUSDT", "short"),
-];
+const requestedDatasetKey = process.env.SCALPING_DATASET_KEY ?? null;
+const requestedFamilyVersion = process.env.SCALPING_FAMILY_VERSION ?? null;
+if (requestedFamilyVersion != null && !Object.hasOwn(SCALPING_ADAPTER_CONTRACTS, requestedFamilyVersion)) throw new Error(`UNKNOWN_SCALPING_FAMILY_VERSION:${requestedFamilyVersion}`);
+const datasetLoaders = Object.freeze([
+  Object.freeze({ key: "spot-btc-long", load: () => loadSpot("BTCUSDT", "USDT-BTC") }),
+  Object.freeze({ key: "spot-eth-long", load: () => loadSpot("ETHUSDT", "USDT-ETH") }),
+  Object.freeze({ key: "futures-btc-long", load: () => loadBinance("BTCUSDT", "long") }),
+  Object.freeze({ key: "futures-eth-long", load: () => loadBinance("ETHUSDT", "long") }),
+  Object.freeze({ key: "futures-btc-short", load: () => loadBinance("BTCUSDT", "short") }),
+  Object.freeze({ key: "futures-eth-short", load: () => loadBinance("ETHUSDT", "short") }),
+]);
+const selectedLoaders = requestedDatasetKey == null ? datasetLoaders : datasetLoaders.filter((row) => row.key === requestedDatasetKey);
+if (selectedLoaders.length === 0) throw new Error(`UNKNOWN_SCALPING_DATASET_KEY:${requestedDatasetKey}`);
+const datasets = [];
+for (const descriptor of selectedLoaders) datasets.push(Object.freeze({ ...(await descriptor.load()), datasetKey: descriptor.key }));
 
 const results = [];
 for (const dataset of datasets) {
@@ -159,10 +166,11 @@ for (const dataset of datasets) {
       riskModel: Object.freeze({ riskPerTrade: 0.01, maximumCapitalFraction: 1, leverage: 1 }),
       dataCoverage: Object.freeze({ sufficient: true, ratio: 1 }),
     }),
+    ...(requestedFamilyVersion == null ? {} : { versions: [requestedFamilyVersion] }),
   });
   results.push(Object.freeze({
     group,
-    source: Object.freeze({ market: dataset.market, symbol: dataset.sourceSymbol, provider: dataset.provider, providerVersion: dataset.providerVersion, sourceDigest: dataset.sourceDigest, fundingDigest: dataset.fundingDigest ?? null, providerBoundary: dataset.providerBoundary, priceVenue: dataset.priceVenue, fundingVenue: dataset.fundingVenue, crossVenueMix: dataset.crossVenueMix, selectionDataStatus: dataset.selectionDataStatus, costAssumption: dataset.costAssumption }),
+    source: Object.freeze({ datasetKey: dataset.datasetKey, market: dataset.market, symbol: dataset.sourceSymbol, provider: dataset.provider, providerVersion: dataset.providerVersion, sourceDigest: dataset.sourceDigest, fundingDigest: dataset.fundingDigest ?? null, providerBoundary: dataset.providerBoundary, priceVenue: dataset.priceVenue, fundingVenue: dataset.fundingVenue, crossVenueMix: dataset.crossVenueMix, selectionDataStatus: dataset.selectionDataStatus, costAssumption: dataset.costAssumption }),
     research,
   }));
 }
@@ -205,6 +213,7 @@ const rawArtifact = Object.freeze({
   schemaVersion: 1,
   mode: "scalping-v2-v6-bounded-family-raw-results",
   researchCodeSha,
+  shard: Object.freeze({ datasetKey: requestedDatasetKey, familyVersion: requestedFamilyVersion, completeMatrix: requestedDatasetKey == null && requestedFamilyVersion == null }),
   selectionPeriod: Object.freeze({ start: RESEARCH_BACKTEST_PERIOD.startTime, end: RESEARCH_BACKTEST_PERIOD.validationEndTime }),
   finalHoldoutPeriod: Object.freeze({ start: FINAL_HOLDOUT_START, status: "LOCKED_NOT_EVALUATED" }),
   adapterContracts: SCALPING_ADAPTER_CONTRACTS,
@@ -232,6 +241,7 @@ const rankingArtifact = Object.freeze({
   schemaVersion: 1,
   mode: "scalping-v2-v6-research-ranking",
   researchCodeSha,
+  shard: Object.freeze({ datasetKey: requestedDatasetKey, familyVersion: requestedFamilyVersion, completeMatrix: requestedDatasetKey == null && requestedFamilyVersion == null }),
   rawResultsPath: rawOutput,
   groups: rankedGroups,
   gateCalibrationStatus: "RESEARCH_ONLY_NOT_FINAL_PROMOTION_GATE",
@@ -247,4 +257,4 @@ const rankingArtifact = Object.freeze({
 
 await writeJson(rawOutput, rawArtifact);
 await writeJson(rankingOutput, rankingArtifact);
-console.log(JSON.stringify({ researchCodeSha, groups: rankedGroups.map((row) => ({ group: row.group, candidates: row.rows.length })), multipleTesting: globalTesting, topStrategy: "NONE", finalHoldoutUsed: false, privateApiUsed: false, orderSubmitted: false }));
+console.log(JSON.stringify({ researchCodeSha, shard: { datasetKey: requestedDatasetKey, familyVersion: requestedFamilyVersion }, groups: rankedGroups.map((row) => ({ group: row.group, candidates: row.rows.length })), multipleTesting: globalTesting, topStrategy: "NONE", finalHoldoutUsed: false, privateApiUsed: false, orderSubmitted: false }));
