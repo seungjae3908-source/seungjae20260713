@@ -16,8 +16,10 @@ on:
       - market-prediction-lab/src/scalping-funding-provider.js
       - market-prediction-lab/src/scalping-v1-research.js
       - market-prediction-lab/src/binance-scalping-archive-provider.js
+      - market-prediction-lab/src/binance-scalping-selection-provider.js
       - market-prediction-lab/src/binance-vision-futures-archive.js
       - market-prediction-lab/src/binance-futures-history.js
+      - market-prediction-lab/src/strategy-registry.js
       - market-prediction-lab/src/bitget-public-client.js
       - market-prediction-lab/src/bitget-candle-collector.js
       - market-prediction-lab/scripts/collect-scalping-history.js
@@ -25,10 +27,13 @@ on:
       - market-prediction-lab/scripts/run-scalping-v1-from-cache.js
       - market-prediction-lab/scripts/collect-binance-scalping-history.js
       - market-prediction-lab/scripts/run-binance-scalping-v1-from-cache.js
+      - market-prediction-lab/scripts/build-strategy-registry-contract.js
       - market-prediction-lab/tests/scalping-history-provider.test.js
       - market-prediction-lab/tests/scalping-funding-provider.test.js
       - market-prediction-lab/tests/scalping-v1-research.test.js
       - market-prediction-lab/tests/binance-scalping-archive-provider.test.js
+      - market-prediction-lab/tests/binance-scalping-selection-provider.test.js
+      - market-prediction-lab/tests/strategy-registry.test.js
 
 permissions:
   contents: read
@@ -76,7 +81,7 @@ jobs:
 
       - name: Run scalping research contract tests
         working-directory: market-prediction-lab
-        run: node --test tests/scalping-history-provider.test.js tests/scalping-funding-provider.test.js tests/scalping-v1-research.test.js tests/binance-scalping-archive-provider.test.js tests/binance-futures-history.test.js tests/automated-v1-research.test.js tests/automated-v1-overfit.test.js
+        run: node --test tests/scalping-history-provider.test.js tests/scalping-funding-provider.test.js tests/scalping-v1-research.test.js tests/binance-scalping-archive-provider.test.js tests/binance-scalping-selection-provider.test.js tests/binance-futures-history.test.js tests/strategy-registry.test.js tests/automated-v1-research.test.js tests/automated-v1-overfit.test.js
 
       - name: Restore exact-code scalping data cache
         id: cache
@@ -86,7 +91,7 @@ jobs:
             market-prediction-lab/scalping-history-cache
             market-prediction-lab/scalping-funding-cache
             market-prediction-lab/binance-scalping-cache
-          key: prediction-lab-scalping-v2-${{ steps.sha.outputs.value }}
+          key: prediction-lab-scalping-v3-${{ steps.sha.outputs.value }}
 
       - name: Collect and audit real public Bitget 15m candles
         working-directory: market-prediction-lab
@@ -106,7 +111,7 @@ jobs:
           RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
         run: node scripts/run-scalping-v1-from-cache.js scalping-history-cache scalping-funding-cache artifacts/automated-research/scalping-v1-research.json artifacts/automated-research/scalping-gate-calibration-candidates.json
 
-      - name: Collect and audit Binance USD-M same-venue 15m candles and funding
+      - name: Collect and audit Binance USD-M same-venue Selection archives
         working-directory: market-prediction-lab
         env:
           RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
@@ -117,6 +122,12 @@ jobs:
         env:
           RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
         run: node scripts/run-binance-scalping-v1-from-cache.js binance-scalping-cache artifacts/automated-research/binance-scalping-v1-research.json artifacts/automated-research/binance-scalping-gate-calibration-candidates.json
+
+      - name: Build strategy registry research-only contract
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
+        run: node scripts/build-strategy-registry-contract.js artifacts/automated-research/strategy-registry-contract.json
 
       - name: Assert fail-closed data and research safety
         working-directory: market-prediction-lab
@@ -130,6 +141,7 @@ jobs:
           const binance = JSON.parse(fs.readFileSync('binance-scalping-cache/binance-scalping-provider-audit.json', 'utf8'));
           const binanceResearch = JSON.parse(fs.readFileSync('artifacts/automated-research/binance-scalping-v1-research.json', 'utf8'));
           const binanceCalibration = JSON.parse(fs.readFileSync('artifacts/automated-research/binance-scalping-gate-calibration-candidates.json', 'utf8'));
+          const registry = JSON.parse(fs.readFileSync('artifacts/automated-research/strategy-registry-contract.json', 'utf8'));
           const allowed = new Set(['DATA_READY', 'BLOCKED_DATA', 'BLOCKED_PROVIDER_BOUNDARY']);
           if (!candle.datasets.every((row) => allowed.has(row.status))) throw new Error('invalid candle data status');
           if (candle.syntheticHistoricalDataAllowed !== false || candle.interpolationAllowed !== false || candle.privateApiAllowed !== false || candle.orderSubmitted !== false) throw new Error('candle safety contract violated');
@@ -140,13 +152,20 @@ jobs:
           if (research.results.some((row) => row.candidateFreezeAllowed !== false || row.finalHoldoutQueueAllowed !== false)) throw new Error('scalping candidate must not freeze before approved holdout gate');
           if (research.crossSymbolDiagnostics.some((row) => row.crossSymbolValidation !== 'preliminary' || row.fullMarketStabilityValidated !== false)) throw new Error('cross-symbol validation overstated');
           if (calibration.thresholdCalibrationOnly !== true || calibration.numericPfMddWfGatesConfigured !== false || calibration.finalHoldoutUsed !== false) throw new Error('calibration contract violated');
-          if (binance.providerBoundary !== 'SAME_VENUE_BINANCE_USDM' || binance.priceVenue !== 'BINANCE_USDM' || binance.fundingVenue !== 'BINANCE_USDM') throw new Error('Binance provider boundary violated');
-          if (binance.syntheticDataUsedAsReal !== false || binance.privateApiUsed !== false || binance.orderSubmitted !== false) throw new Error('Binance data safety contract violated');
-          if (!binance.datasets.every((row) => row.status === 'DATA_READY')) throw new Error('Binance same-venue dataset is not DATA_READY');
+          if (binance.providerBoundary !== 'SAME_VENUE_BINANCE_USDM' || binance.priceVenue !== 'BINANCE_USDM' || binance.fundingVenue !== 'BINANCE_USDM' || binance.crossVenueMix !== false) throw new Error('Binance provider boundary violated');
+          if (binance.syntheticDataUsedAsReal !== false || binance.privateApiUsed !== false || binance.orderSubmitted !== false || binance.finalHoldoutRead !== false) throw new Error('Binance data safety contract violated');
+          if (binance.selectionDataStatus !== 'DATA_READY' || !binance.datasets.every((row) => row.selectionDataStatus === 'DATA_READY')) throw new Error('Binance Selection dataset is not DATA_READY');
+          if (binance.finalHoldoutDataStatus !== 'LOCKED_NOT_EVALUATED') throw new Error('Binance Final Holdout must remain locked');
+          if (binance.liveTailStatus !== 'BLOCKED_EXTERNAL_BINANCE_REST_GITHUB_RUNNER_LOCATION') throw new Error('Binance live-tail blocker must be recorded separately');
+          if (!binance.datasets.every((row) => row.checksumFailureCount === 0 && row.checksumVerifiedCount === row.monthlyArchiveCount)) throw new Error('Binance checksum contract violated');
           if (binanceResearch.providerBoundary !== 'SAME_VENUE_BINANCE_USDM' || binanceResearch.priceVenue !== 'BINANCE_USDM' || binanceResearch.fundingVenue !== 'BINANCE_USDM') throw new Error('Binance research venue mislabeled');
-          if (binanceResearch.syntheticDataUsedAsReal !== false || binanceResearch.privateApiUsed !== false || binanceResearch.orderSubmitted !== false) throw new Error('Binance research safety contract violated');
+          if (binanceResearch.selectionDataStatus !== 'DATA_READY' || binanceResearch.finalHoldoutDataStatus !== 'LOCKED_NOT_EVALUATED' || binanceResearch.liveTailStatus !== 'BLOCKED_EXTERNAL_BINANCE_REST_GITHUB_RUNNER_LOCATION') throw new Error('Binance period status separation violated');
+          if (binanceResearch.syntheticDataUsedAsReal !== false || binanceResearch.privateApiUsed !== false || binanceResearch.orderSubmitted !== false || binanceResearch.finalHoldoutRead !== false) throw new Error('Binance research safety contract violated');
           if (binanceResearch.finalHoldoutExecuted !== false || binanceResearch.finalHoldoutStatus !== 'LOCKED' || binanceResearch.topStrategy !== null || binanceResearch.candidateFreezeAllowed !== false || binanceResearch.finalHoldoutQueueAllowed !== false) throw new Error('Binance holdout contract violated');
-          if (binanceCalibration.thresholdCalibrationOnly !== true || binanceCalibration.numericPfMddWfGatesConfigured !== false || binanceCalibration.finalHoldoutUsed !== false) throw new Error('Binance calibration contract violated');
+          if (binanceCalibration.thresholdCalibrationOnly !== true || binanceCalibration.numericPfMddWfGatesConfigured !== false || binanceCalibration.finalHoldoutUsed !== false || binanceCalibration.finalHoldoutRead !== false) throw new Error('Binance calibration contract violated');
+          if (registry.automaticLivePromotion !== false || registry.finalHoldoutExecutionAllowed !== false || registry.productionMutationAllowed !== false || registry.privateApiAllowed !== false || registry.orderSubmissionAllowed !== false) throw new Error('strategy registry safety contract violated');
+          if (registry.krProviderStatus !== 'BLOCKED_REQUIRES_PROVIDER_CREDENTIAL' || registry.usProviderStatus !== 'BLOCKED_REQUIRES_PROVIDER_CREDENTIAL') throw new Error('stock provider blocker contract violated');
+          for (const version of ['V2','V3','V4','V5','V6']) if (registry.scalpingCompatibility[version].verdict !== 'NEEDS_SCALPING_ADAPTER') throw new Error(`${version} was silently relabelled scalping compatible`);
           for (const blocked of research.blocked) {
             if (!['CANDLE_DATA_NOT_READY', 'FUNDING_DATA_NOT_READY'].includes(blocked.reason)) throw new Error('unexpected blocked reason');
           }
@@ -160,7 +179,7 @@ jobs:
             market-prediction-lab/scalping-history-cache
             market-prediction-lab/scalping-funding-cache
             market-prediction-lab/binance-scalping-cache
-          key: prediction-lab-scalping-v2-${{ steps.sha.outputs.value }}
+          key: prediction-lab-scalping-v3-${{ steps.sha.outputs.value }}
 
       - name: Upload scalping research artifacts
         if: always()
@@ -176,6 +195,7 @@ jobs:
             market-prediction-lab/artifacts/automated-research/scalping-gate-calibration-candidates.json
             market-prediction-lab/artifacts/automated-research/binance-scalping-v1-research.json
             market-prediction-lab/artifacts/automated-research/binance-scalping-gate-calibration-candidates.json
+            market-prediction-lab/artifacts/automated-research/strategy-registry-contract.json
           if-no-files-found: error
           retention-days: 90
 
