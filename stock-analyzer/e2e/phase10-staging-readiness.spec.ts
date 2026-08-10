@@ -373,7 +373,7 @@ async function expectHealthyRoute(page: Page, route: string) {
   await settle(page);
   const requestedRoute = routeIdentity(route, page.url());
   const expectedRoute = requestedRoute === '/stock/005930'
-    ? '/stock/005930?tab=overview'
+    ? '/stock-info?back=%2Fstocks&asset=stock&market=KR&ticker=005930'
     : requestedRoute;
   const observation: RouteTransitionObservation = {
     fromRoute: routeIdentity(page.url()),
@@ -390,7 +390,7 @@ async function expectHealthyRoute(page: Page, route: string) {
       await expect.poll(
         () => routeIdentity(page.url()),
         {
-          message: 'stock detail fixture must reach its exact canonical overview route',
+          message: 'stock detail fixture must reach its exact canonical stock-info route',
           timeout: 15_000,
           intervals: [100, 200, 300, 500],
         },
