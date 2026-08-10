@@ -9,6 +9,10 @@ import {
   CryptoSignalScannerService,
   type CryptoSignalScanRequest,
 } from '../services/crypto-signal-scanner.service';
+import {
+  CryptoPricePrecisionService,
+  type CryptoPricePrecisionService as CryptoPricePrecisionServiceContract,
+} from '../services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../services/scanner-candidate-ranking.service';
 import {
   scannerStrategyForTimeframe,
@@ -34,6 +38,7 @@ export type CryptoScannerRunner = {
 export interface CryptoSignalScanRouteDependencies {
   scanner?: CryptoScannerRunner;
   guard?: ScannerRequestGuard;
+  precision?: CryptoPricePrecisionServiceContract;
 }
 
 function requireScannerSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -105,6 +110,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
   const router: IRouter = Router();
   const scanner = dependencies.scanner ?? CryptoSignalScannerService;
   const guard = dependencies.guard ?? scannerRequestGuard;
+  const precision = dependencies.precision ?? CryptoPricePrecisionService;
   router.use(requireScannerSession);
 
   const handler = (market: 'spot' | 'futures') => async (req: AuthenticatedRequest, res: Response) => {
@@ -133,7 +139,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
     try {
       lease = guard.acquire(req.member!.id, requestKey(req, market));
       const softMinimumScore = number(req.query.minimumScore, 0, 100);
-      const result = await scanner.scan({
+      const scanned = await scanner.scan({
         memberId: req.member!.id,
         market,
         strategyMode,
@@ -145,6 +151,8 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         maximumRiskScore: number(req.query.maximumRiskScore, 0, 100),
         signal: controller.signal,
       });
+      if (controller.signal.aborted || res.writableEnded) return;
+      const result = await precision.align(market, scanned, controller.signal);
       if (controller.signal.aborted || res.writableEnded) return;
 
       const ranking = rankScannerCandidates({
