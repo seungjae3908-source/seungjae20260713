@@ -31,6 +31,10 @@ export type ScannerReadinessEvidence = {
   orderCapableRequests: string[];
 };
 
+type ScannerOpenOptions = {
+  open?: () => Promise<void>;
+};
+
 function isOrderCapablePath(pathname: string): boolean {
   return /\/(?:orders?|positions?|execute|approve|real-trade)(?:\/|$)/i.test(pathname);
 }
@@ -44,7 +48,10 @@ function isScannerRequest(request: Request): boolean {
   }
 }
 
-export async function expectHealthyScannerRoute(page: Page): Promise<ScannerReadinessEvidence> {
+export async function expectHealthyScannerRoute(
+  page: Page,
+  options: ScannerOpenOptions = {},
+): Promise<ScannerReadinessEvidence> {
   const orderCapableRequests: string[] = [];
   let scannerRequestStartedAt: number | null = null;
   const observeRequest = (request: Request) => {
@@ -59,12 +66,16 @@ export async function expectHealthyScannerRoute(page: Page): Promise<ScannerRead
       timeout: 20_000,
     });
 
-    const documentResponse = await page.goto('/scanner', { waitUntil: 'domcontentloaded' });
-    if (documentResponse) {
-      expect(
-        documentResponse.status(),
-        `/scanner returned HTTP ${documentResponse.status()}`,
-      ).toBeLessThan(400);
+    if (options.open) {
+      await options.open();
+    } else {
+      const documentResponse = await page.goto('/scanner', { waitUntil: 'domcontentloaded' });
+      if (documentResponse) {
+        expect(
+          documentResponse.status(),
+          `/scanner returned HTTP ${documentResponse.status()}`,
+        ).toBeLessThan(400);
+      }
     }
     await expect(page.getByTestId('scanner-root')).toBeVisible();
 
