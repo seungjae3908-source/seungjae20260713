@@ -648,6 +648,7 @@ test.describe('real staging release readiness', () => {
     };
     activeAuthFaultObservations.set(page, observation);
     let requestCount = 0;
+    let routeHandlerSettled = false;
     let confirmed = false;
     await page.route('**/rest/v1/profiles*', async (route) => {
       const request = route.request();
@@ -658,8 +659,12 @@ test.describe('real staging release readiness', () => {
       requestCount += 1;
       observation.requests.add(request);
       observation.startedAt = Date.now();
-      await page.waitForTimeout(9_000);
-      if (request.failure() === null) await route.abort('timedout');
+      try {
+        await page.waitForTimeout(9_000);
+        if (request.failure() === null) await route.abort('timedout');
+      } finally {
+        routeHandlerSettled = true;
+      }
     });
     try {
       await expectHealthyRoute(page, '/');
@@ -676,6 +681,14 @@ test.describe('real staging release readiness', () => {
       expect(observation.candidates, 'the cancelled profile request must be observed once').toHaveLength(1);
       expect(observation.candidates[0]?.detail).toContain('net::ERR_ABORTED');
       expect(Number(observation.failedAt) - Number(observation.startedAt)).toBeLessThan(9_000);
+      await expect.poll(
+        () => routeHandlerSettled,
+        {
+          message: 'the intercepted timeout route callback must settle before test teardown',
+          timeout: 2_000,
+          intervals: [50, 100, 200],
+        },
+      ).toBe(true);
       confirmed = true;
     } finally {
       await page.unroute('**/rest/v1/profiles*');
