@@ -110,10 +110,17 @@ test("scanner artifact schema exposes explicit scanner-compatible units and hard
     market: "CRYPTO_SPOT", symbol: "USDT-BTC", strategyType: "SWING", direction: "LONG", strategyVersion: "v1_ema_atr",
     timeframe: "1d", backtestQuality: "verified", reasons: [], development: oos, oos, walkForward, holdout,
     researchStatus: "research_hold", dataset: ds, lookaheadSafe: true, initialCapital: 1_000, costModel,
+    executionCostStress: {
+      status: "survived", scenarioId: "double_configured_execution_costs_v1", multiplier: 2,
+      baseline: oos, stressed: { ...oos, totalReturn: 0.05, expectancy: 0.5 }, positiveAfterStress: true,
+      includes: { fee: true, spread: true, slippage: true, funding: false, latency: true }, reasons: [],
+    },
+    promotionEligible: false, promotionBlockReasons: ["empirical_promotion_thresholds_uncalibrated"],
     researchCodeSha: SHA, generatedAt: new Date(GENERATED).toISOString(),
   });
   const artifact = buildScannerBacktestQualityArtifact({ researchCodeSha: SHA, generatedAt: new Date(GENERATED).toISOString(), rows: [row], blocked: [] });
-  assert.equal(artifact.schema, "scanner-backtest-quality-v1");
+  assert.equal(artifact.schema, "scanner-backtest-quality-v2");
+  assert.equal(artifact.schemaVersion, 2);
   assert.equal(artifact.rows[0].datasetDigest, ds.datasetDigest);
   assert.equal(artifact.rows[0].oosWinRate, 55.00000000000001);
   assert.equal(artifact.rows[0].walkForwardWinRate, 55.00000000000001);
@@ -122,6 +129,12 @@ test("scanner artifact schema exposes explicit scanner-compatible units and hard
   assert.equal(artifact.rows[0].netReturnPercent, 12);
   assert.equal(artifact.rows[0].costsIncluded, true);
   assert.equal(artifact.rows[0].slippageIncluded, true);
+  assert.equal(artifact.rows[0].executionCostStress.status, "survived");
+  assert.equal(artifact.rows[0].executionCostStress.selectionAffected, false);
+  assert.equal(artifact.rows[0].promotionEligible, false);
+  assert.ok(artifact.rows[0].promotionBlockReasons.includes("empirical_promotion_thresholds_uncalibrated"));
+  assert.equal(artifact.rankings[0].rankingMethod, "pareto_non_dominated_multi_metric_no_empirical_threshold");
+  assert.equal(artifact.rankings[0].top10[0].artifactKey, artifact.rows[0].artifactKey);
   assert.equal(artifact.rows[0].lookaheadGuarded, true);
   assert.equal(artifact.rows[0].survivorshipGuarded, true);
   assert.equal(artifact.rows[0].metricUnits.oosWinRate, "percent_0_100");
@@ -131,4 +144,16 @@ test("scanner artifact schema exposes explicit scanner-compatible units and hard
   assert.equal(artifact.privateApiAllowed, false);
   assert.equal(artifact.orderSubmitted, false);
   assert.match(artifact.artifactDigest, /^[a-f0-9]{64}$/);
+});
+
+test("consumer promotion remains fail-closed without survived cost stress and explicit calibrated eligibility", () => {
+  const row = buildScannerBacktestQualityRow({
+    market: "CRYPTO_SPOT", symbol: "USDT-BTC", strategyType: "SWING", direction: "LONG", strategyVersion: "v1_ema_atr",
+    timeframe: "1d", backtestQuality: "verified", reasons: [], development: oos, oos, walkForward, holdout,
+    researchStatus: "eligible_for_live_ranking", dataset: dataset(), lookaheadSafe: true, initialCapital: 1_000, costModel,
+    executionCostStress: { status: "not_evaluated", reasons: ["stress_missing"] }, promotionEligible: true,
+    researchCodeSha: SHA, generatedAt: new Date(GENERATED).toISOString(),
+  });
+  assert.equal(row.promotionEligible, false);
+  assert.ok(row.promotionBlockReasons.includes("execution_cost_stress_not_evaluated"));
 });
