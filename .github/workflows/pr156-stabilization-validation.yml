@@ -177,7 +177,7 @@ jobs:
           found = [token for token in forbidden if token in additions]
           if found:
               raise SystemExit(f'forbidden workaround additions: {found}')
-          if "assert(!spec.includes(\"'/rest/v1/profiles'\")" in diff and '+assert(!spec.includes' in diff:
+          if "assert(!spec.includes(\"'/rest/v1/profiles'\")" in additions:
               raise SystemExit('stale broad profile-path assertion was re-added')
           print(diff)
           PY
