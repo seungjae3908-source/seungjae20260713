@@ -29,6 +29,13 @@ export const V1_AUTOMATION_PARAMETER_BOUNDS = Object.freeze({
   targetRiskMultiple: Object.freeze({ min: 1, max: 5, coarse: Object.freeze([1.5, 2, 2.5, 3, 4, 5]), fineStep: 0.25 }),
 });
 
+export const DEFAULT_OVERFIT_POLICY = Object.freeze({
+  topTwoWinnerShareSoftLimit: 0.75,
+  maximumTradeConcentrationPenaltyPoints: 10,
+  profitableWalkForwardWindowReference: 0.5,
+  lowSampleReferenceTrades: 10,
+});
+
 const SAFETY = Object.freeze({
   branchWrite: false,
   liveOrderAllowed: false,
@@ -38,6 +45,10 @@ const SAFETY = Object.freeze({
   finalHoldoutRetuningAllowed: false,
 });
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function validParameters(parameters) {
   return Number.isInteger(parameters.fastPeriod)
     && Number.isInteger(parameters.slowPeriod)
@@ -45,13 +56,43 @@ function validParameters(parameters) {
     && parameters.slowPeriod > parameters.fastPeriod;
 }
 
+function tradeConcentration(trades = []) {
+  const positive = trades.map((trade) => trade.netPnl).filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => b - a);
+  const grossProfit = positive.reduce((sum, value) => sum + value, 0);
+  if (!(grossProfit > 0)) return Object.freeze({ winningTrades: 0, grossProfit: 0, largestWinnerShare: null, topTwoWinnerShare: null });
+  return Object.freeze({
+    winningTrades: positive.length,
+    grossProfit,
+    largestWinnerShare: positive[0] / grossProfit,
+    topTwoWinnerShare: (positive[0] + (positive[1] ?? 0)) / grossProfit,
+  });
+}
+
+function regimeDiagnostics(trades = []) {
+  const grouped = new Map();
+  for (const trade of trades) {
+    const regime = typeof trade.regime === "string" ? trade.regime : JSON.stringify(trade.regime ?? "unknown");
+    const previous = grouped.get(regime) ?? { trades: 0, netPnl: 0 };
+    grouped.set(regime, { trades: previous.trades + 1, netPnl: previous.netPnl + (Number.isFinite(trade.netPnl) ? trade.netPnl : 0) });
+  }
+  const rows = [...grouped.entries()].map(([regime, value]) => Object.freeze({ regime, ...value })).sort((a, b) => a.regime.localeCompare(b.regime));
+  return Object.freeze({
+    regimeCount: rows.length,
+    profitableRegimeRatio: rows.length ? rows.filter((row) => row.netPnl > 0).length / rows.length : null,
+    rows: Object.freeze(rows),
+  });
+}
+
 function compact(result) {
+  const concentration = tradeConcentration(result.trades);
+  const regimes = regimeDiagnostics(result.trades);
   return Object.freeze({
     totalReturn: result.totalReturnPercent / 100,
     winRate: result.successRatePercent / 100,
     expectancy: result.expectancy,
     costAdjustedExpectancy: result.expectancy,
     profitFactor: result.profitFactor,
+    profitFactorUnbounded: result.profitFactor == null && result.totalTrades > 0 && result.trades.every((trade) => trade.netPnl >= 0),
     maximumDrawdown: result.maximumDrawdownPercent / 100,
     tradeCount: result.totalTrades,
     averageWin: result.averageWin,
@@ -60,6 +101,8 @@ function compact(result) {
     sharpe: result.tradeSharpe,
     turnover: result.turnover,
     costImpact: result.totalExecutionCost,
+    tradeConcentration: concentration,
+    regimePerformance: regimes,
   });
 }
 
@@ -139,6 +182,7 @@ function walkForwardDefaults(timeframe, candleCount) {
 
 function buildWalkForwardWindows(input, options) {
   const intervalMs = TIMEFRAME_MS[input.timeframe];
+  if (!intervalMs) throw new TypeError(`unsupported automated V1 timeframe: ${input.timeframe}`);
   const preHoldout = input.candles
     .filter((candle) => candle.timestamp < RESEARCH_BACKTEST_PERIOD.finalHoldoutStartTime)
     .map((candle, index) => Object.freeze({
@@ -177,7 +221,35 @@ function degradationComponent(development, oos) {
   return Math.max(0, Math.min(100, (1 - Math.min(1, degradation)) * 100));
 }
 
-function applyQualityScores(rows) {
+function concentrationPenalty(oosMetrics, policy) {
+  const share = oosMetrics.tradeConcentration?.topTwoWinnerShare;
+  if (!Number.isFinite(share) || share <= policy.topTwoWinnerShareSoftLimit) return 0;
+  const range = Math.max(1e-12, 1 - policy.topTwoWinnerShareSoftLimit);
+  const severity = clamp((share - policy.topTwoWinnerShareSoftLimit) / range, 0, 1);
+  return severity * policy.maximumTradeConcentrationPenaltyPoints;
+}
+
+function buildOverfitDiagnostics({ developmentMetrics, oosMetrics, walkForward, developmentCandidateCount, policy }) {
+  const profitableWindowsRatio = walkForward.stability.profitableWindowsRatio;
+  const flags = [];
+  if (oosMetrics.tradeCount < policy.lowSampleReferenceTrades) flags.push("low_oos_trade_sample");
+  if (developmentMetrics.totalReturn > 0 && oosMetrics.totalReturn <= 0) flags.push("development_to_oos_return_collapse");
+  if (Number.isFinite(profitableWindowsRatio) && profitableWindowsRatio < policy.profitableWalkForwardWindowReference) flags.push("walk_forward_window_dependency");
+  if (Number.isFinite(oosMetrics.tradeConcentration?.topTwoWinnerShare) && oosMetrics.tradeConcentration.topTwoWinnerShare > policy.topTwoWinnerShareSoftLimit) flags.push("top_two_winner_dependency");
+  if (Number.isFinite(oosMetrics.regimePerformance?.profitableRegimeRatio) && oosMetrics.regimePerformance.regimeCount > 1 && oosMetrics.regimePerformance.profitableRegimeRatio < 0.5) flags.push("regime_dependency");
+  return Object.freeze({
+    flags: Object.freeze(flags),
+    developmentCandidateCount,
+    tuningToOosTradeRatio: oosMetrics.tradeCount > 0 ? developmentCandidateCount / oosMetrics.tradeCount : null,
+    developmentToOosReturnRetention: developmentMetrics.totalReturn > 0 ? oosMetrics.totalReturn / developmentMetrics.totalReturn : null,
+    profitableWalkForwardWindowsRatio: profitableWindowsRatio,
+    topTwoWinnerShare: oosMetrics.tradeConcentration?.topTwoWinnerShare ?? null,
+    profitableRegimeRatio: oosMetrics.regimePerformance?.profitableRegimeRatio ?? null,
+    tradeConcentrationPenaltyPoints: concentrationPenalty(oosMetrics, policy),
+  });
+}
+
+function applyQualityScores(rows, overfitPolicy) {
   if (rows.length === 0) return Object.freeze([]);
   const expectancyPercentiles = percentileScores(rows.map((row) => row.oosMetrics.expectancy));
   const pfPercentiles = percentileScores(rows.map((row) => row.oosMetrics.profitFactor));
@@ -197,7 +269,14 @@ function applyQualityScores(rows) {
       developmentToOosDegradation: degradationComponent(row.developmentMetrics, row.oosMetrics),
     };
     const quality = scoreStrategyQuality({ components });
-    return Object.freeze({ ...row, qualityScore: quality.qualityScore, qualityComponents: quality.components });
+    const penalty = row.overfitDiagnostics?.tradeConcentrationPenaltyPoints ?? concentrationPenalty(row.oosMetrics, overfitPolicy);
+    return Object.freeze({
+      ...row,
+      qualityScoreBeforeOverfitPenalty: quality.qualityScore,
+      overfitPenaltyPoints: Number(penalty.toFixed(6)),
+      qualityScore: Number(Math.max(0, quality.qualityScore - penalty).toFixed(6)),
+      qualityComponents: quality.components,
+    });
   }));
 }
 
@@ -211,6 +290,7 @@ export function runAutomatedV1Research({
   maxWalkForwardWindows = 8,
   walkForwardOptions,
   minimumGateConfig,
+  overfitPolicy = DEFAULT_OVERFIT_POLICY,
 } = {}) {
   if (!backtestInput || typeof backtestInput !== "object") throw new TypeError("backtestInput is required");
   if (!Array.isArray(backtestInput.candles) || backtestInput.candles.length === 0) throw new TypeError("real historical candles are required");
@@ -218,6 +298,8 @@ export function runAutomatedV1Research({
   if (!Number.isInteger(developmentSeeds) || developmentSeeds <= 0) throw new RangeError("developmentSeeds must be positive");
   if (!Number.isInteger(oosCandidates) || oosCandidates <= 0) throw new RangeError("oosCandidates must be positive");
   if (!Number.isInteger(maxWalkForwardWindows) || maxWalkForwardWindows <= 0) throw new RangeError("maxWalkForwardWindows must be positive");
+  if (!(overfitPolicy.topTwoWinnerShareSoftLimit >= 0 && overfitPolicy.topTwoWinnerShareSoftLimit < 1)) throw new RangeError("invalid topTwoWinnerShareSoftLimit");
+  if (!(overfitPolicy.maximumTradeConcentrationPenaltyPoints >= 0)) throw new RangeError("invalid maximumTradeConcentrationPenaltyPoints");
 
   const coarse = generateParameterCandidates({
     baseParameters: V1_DEFAULT_PARAMETERS,
@@ -244,21 +326,29 @@ export function runAutomatedV1Research({
       holdoutLeakDetected: false,
       ...(minimumGateConfig ? { config: minimumGateConfig } : {}),
     });
+    const overfitDiagnostics = buildOverfitDiagnostics({
+      developmentMetrics: candidate.metrics,
+      oosMetrics,
+      walkForward,
+      developmentCandidateCount: development.length,
+      policy: overfitPolicy,
+    });
     return Object.freeze({
       id: candidate.id,
       parameters: candidate.parameters,
       developmentMetrics: candidate.metrics,
       oosMetrics,
       walkForward,
+      overfitDiagnostics,
       gate,
       researchStatus: gate.status,
     });
   });
 
-  const scored = [...applyQualityScores(evaluated)]
+  const scored = [...applyQualityScores(evaluated, overfitPolicy)]
     .sort((left, right) => right.qualityScore - left.qualityScore || left.id.localeCompare(right.id));
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     mode: "automated-v1-research",
     market: backtestInput.market,
     symbol: backtestInput.symbol,
@@ -272,6 +362,7 @@ export function runAutomatedV1Research({
       finalHoldoutStart: RESEARCH_BACKTEST_PERIOD.finalHoldoutStartTime,
     }),
     candidateCounts: Object.freeze({ coarse: coarse.length, fine: fine.length, development: development.length, oos: scored.length }),
+    overfitPolicy: Object.freeze({ ...overfitPolicy }),
     candidates: Object.freeze(scored),
     finalHoldoutStatus: "locked_pending_frozen_candidate_one_shot",
     ...SAFETY,
