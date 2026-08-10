@@ -7,16 +7,8 @@ async function mountControl(page: import('@playwright/test').Page) {
   await page.goto('/__phase11-unified-search-e2e');
   await page.evaluate(async () => {
     window.localStorage.clear();
-    const React = await import(/* @vite-ignore */ '/node_modules/.vite/deps/react.js');
-    const ReactDom = await import(/* @vite-ignore */ '/node_modules/.vite/deps/react-dom_client.js');
-    const pageModule = await import(/* @vite-ignore */ '/src/pages/ui-builder-layout-control.tsx');
-    const existing = document.getElementById('root');
-    if (existing) existing.style.display = 'none';
-    const host = document.createElement('div');
-    host.id = 'ui-builder-control-e2e-root';
-    host.style.height = '100dvh';
-    document.body.appendChild(host);
-    ReactDom.createRoot(host).render(React.createElement(pageModule.default));
+    const mount = await import(/* @vite-ignore */ '/src/e2e/ui-builder-control-mount.tsx');
+    mount.mountUiBuilderControlForE2E();
   });
   await expect(page.getByTestId('ui-builder-layout-control')).toBeVisible();
 }
