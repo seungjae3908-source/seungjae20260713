@@ -1,0 +1,151 @@
+name: Prediction Lab Scalping Research
+
+on:
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact immutable research commit SHA
+        required: false
+        type: string
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/prediction-lab-scalping-research.yml
+      - market-prediction-lab/src/automated-v1-research.js
+      - market-prediction-lab/src/scalping-history-provider.js
+      - market-prediction-lab/src/scalping-funding-provider.js
+      - market-prediction-lab/src/scalping-v1-research.js
+      - market-prediction-lab/src/bitget-public-client.js
+      - market-prediction-lab/src/bitget-candle-collector.js
+      - market-prediction-lab/scripts/collect-scalping-history.js
+      - market-prediction-lab/scripts/collect-scalping-funding.js
+      - market-prediction-lab/scripts/run-scalping-v1-from-cache.js
+      - market-prediction-lab/tests/scalping-history-provider.test.js
+      - market-prediction-lab/tests/scalping-funding-provider.test.js
+      - market-prediction-lab/tests/scalping-v1-research.test.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-scalping-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  scalping-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Resolve immutable research SHA
+        id: sha
+        shell: bash
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          set -euo pipefail
+          ref="$PR_SHA"
+          if [ -z "$ref" ]; then ref="$INPUT_REF"; fi
+          if [ -z "$ref" ]; then ref="$GITHUB_SHA"; fi
+          if ! [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "research_ref must resolve to immutable 40-character SHA" >&2
+            exit 1
+          fi
+          echo "value=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact research SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.sha.outputs.value }}
+          persist-credentials: false
+
+      - name: Verify exact checkout
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ steps.sha.outputs.value }}"
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run scalping research contract tests
+        working-directory: market-prediction-lab
+        run: node --test tests/scalping-history-provider.test.js tests/scalping-funding-provider.test.js tests/scalping-v1-research.test.js tests/automated-v1-research.test.js tests/automated-v1-overfit.test.js
+
+      - name: Restore exact-code scalping data cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            market-prediction-lab/scalping-history-cache
+            market-prediction-lab/scalping-funding-cache
+          key: prediction-lab-scalping-v1-${{ steps.sha.outputs.value }}
+
+      - name: Collect and audit real public 15m candles
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
+        run: node scripts/collect-scalping-history.js scalping-history-cache
+
+      - name: Collect and audit real public futures funding
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
+        run: node scripts/collect-scalping-funding.js scalping-funding-cache
+
+      - name: Run bounded V1 scalping Development OOS purged-WF research
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
+        run: node scripts/run-scalping-v1-from-cache.js scalping-history-cache scalping-funding-cache artifacts/automated-research/scalping-v1-research.json artifacts/automated-research/scalping-gate-calibration-candidates.json
+
+      - name: Assert fail-closed data and research safety
+        working-directory: market-prediction-lab
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const candle = JSON.parse(fs.readFileSync('scalping-history-cache/scalping-history-provider-audit.json', 'utf8'));
+          const funding = JSON.parse(fs.readFileSync('scalping-funding-cache/scalping-funding-provider-audit.json', 'utf8'));
+          const research = JSON.parse(fs.readFileSync('artifacts/automated-research/scalping-v1-research.json', 'utf8'));
+          const calibration = JSON.parse(fs.readFileSync('artifacts/automated-research/scalping-gate-calibration-candidates.json', 'utf8'));
+          const allowed = new Set(['DATA_READY', 'BLOCKED_DATA', 'BLOCKED_PROVIDER_BOUNDARY']);
+          if (!candle.datasets.every((row) => allowed.has(row.status))) throw new Error('invalid candle data status');
+          if (candle.syntheticHistoricalDataAllowed !== false || candle.interpolationAllowed !== false || candle.privateApiAllowed !== false || candle.orderSubmitted !== false) throw new Error('candle safety contract violated');
+          if (funding.syntheticDataAllowed !== false || funding.privateApiAllowed !== false || funding.orderSubmitted !== false) throw new Error('funding safety contract violated');
+          if (research.syntheticDataUsedAsReal !== false || research.interpolationUsed !== false || research.privateApiUsed !== false || research.orderSubmitted !== false) throw new Error('research safety contract violated');
+          if (research.finalHoldoutExecuted !== false || research.finalHoldoutStatus !== 'LOCKED' || research.topStrategy !== null) throw new Error('final holdout/top strategy contract violated');
+          if (research.results.some((row) => row.candidates.some((candidate) => candidate.oosTradeCount < 10 && candidate.researchStatus !== 'research_hold'))) throw new Error('low-sample candidate escaped research_hold');
+          if (research.results.some((row) => row.candidateFreezeAllowed !== false || row.finalHoldoutQueueAllowed !== false)) throw new Error('scalping candidate must not freeze before approved holdout gate');
+          if (research.crossSymbolDiagnostics.some((row) => row.crossSymbolValidation !== 'preliminary' || row.fullMarketStabilityValidated !== false)) throw new Error('cross-symbol validation overstated');
+          if (calibration.thresholdCalibrationOnly !== true || calibration.numericPfMddWfGatesConfigured !== false || calibration.finalHoldoutUsed !== false) throw new Error('calibration contract violated');
+          for (const blocked of research.blocked) {
+            if (!['CANDLE_DATA_NOT_READY', 'FUNDING_DATA_NOT_READY'].includes(blocked.reason)) throw new Error('unexpected blocked reason');
+          }
+          NODE
+
+      - name: Save exact-code scalping cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            market-prediction-lab/scalping-history-cache
+            market-prediction-lab/scalping-funding-cache
+          key: prediction-lab-scalping-v1-${{ steps.sha.outputs.value }}
+
+      - name: Upload scalping research artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-scalping-${{ steps.sha.outputs.value }}-${{ github.run_id }}
+          path: |
+            market-prediction-lab/scalping-history-cache/scalping-history-provider-audit.json
+            market-prediction-lab/scalping-history-cache/**/manifest.json
+            market-prediction-lab/scalping-funding-cache/*.json
+            market-prediction-lab/artifacts/automated-research/scalping-v1-research.json
+            market-prediction-lab/artifacts/automated-research/scalping-gate-calibration-candidates.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert immutable checkout HEAD
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ steps.sha.outputs.value }}"
