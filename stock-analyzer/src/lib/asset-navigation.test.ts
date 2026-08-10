@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { AssetRouteNotResolved, resolveAssetDetailPath } from './asset-navigation';
+import {
+  AssetRouteNotResolved,
+  resolveAssetDetailPath,
+  resolveLegacyCryptoDetailPath,
+} from './asset-navigation';
 
 test('canonical asset resolver routes KR and US assets to stock detail', () => {
   const samsung = resolveAssetDetailPath({ assetClass: 'KR_STOCK', market: 'KR', symbol: '005930', canonicalSymbol: '005930' });
@@ -36,11 +40,30 @@ test('canonical asset resolver fails closed instead of guessing a detail route',
   );
 });
 
-test('legacy stock route converges on the canonical stock-info resolver', () => {
+test('legacy crypto route resolves only explicit Upbit spot or Bitget USDT futures identities', () => {
+  const spot = resolveLegacyCryptoDetailPath('krw-btc');
+  const futures = resolveLegacyCryptoDetailPath('BTCUSDT');
+  const ethFutures = resolveLegacyCryptoDetailPath('ethusdt');
+
+  assert.match(spot, /coinMarket=spot/);
+  assert.match(spot, /symbol=BTC/);
+  assert.match(futures, /coinMarket=futures/);
+  assert.match(futures, /symbol=BTCUSDT/);
+  assert.match(ethFutures, /coinMarket=futures/);
+  assert.match(ethFutures, /symbol=ETHUSDT/);
+  assert.throws(() => resolveLegacyCryptoDetailPath('BTC'), AssetRouteNotResolved);
+  assert.throws(() => resolveLegacyCryptoDetailPath('BTCUSD'), AssetRouteNotResolved);
+  assert.throws(() => resolveLegacyCryptoDetailPath(''), AssetRouteNotResolved);
+});
+
+test('legacy stock and crypto routes converge on canonical stock-info resolvers', () => {
   const app = readFileSync(path.join(process.cwd(), 'stock-analyzer/src/App.tsx'), 'utf8');
   assert.match(app, /function LegacyStockDetailRedirect\(\)/);
   assert.match(app, /resolveAssetDetailPath\(\{ assetClass: 'KR_STOCK'/);
   assert.match(app, /resolveAssetDetailPath\(\{ assetClass: 'US_STOCK'/);
   assert.match(app, /<Route path="\/stock\/:ticker" component=\{LegacyStockDetailRedirect\} \/>/);
+  assert.match(app, /resolveLegacyCryptoDetailPath/);
+  assert.match(app, /<Route path="\/crypto\/:symbol" component=\{CryptoDetailRedirect\} \/>/);
+  assert.doesNotMatch(app, /coinMarket=spot&symbol=/);
   assert.doesNotMatch(app, /<Route path="\/stock\/:ticker" component=\{DetailPage\} \/>/);
 });
