@@ -8,7 +8,6 @@ import {
   UI_BUILDER_STABLE_TREE,
   clearUiBuilderStoredLayout,
   makeFrozenUiBuilderTemplate,
-  parseAndValidateUiBuilderLayout,
   readUiBuilderStoredLayout,
   writeUiBuilderStoredLayout,
   type UiBuilderDeviceClass,
@@ -16,6 +15,7 @@ import {
   type UiBuilderPageId,
 } from '@/lib/ui-builder-full-layout';
 import { importUiBuilderLayoutFile } from '@/lib/ui-builder-layout-import';
+import { parseAndValidateUiBuilderRuntimeLayout } from '@/lib/ui-builder-runtime-safety';
 import {
   activateUiBuilderLayoutVersion,
   readUiBuilderLayoutVersions,
@@ -35,7 +35,7 @@ export default function UiBuilderLayoutControlPage() {
   const [error, setError] = useState('');
   const [historyRevision, setHistoryRevision] = useState(0);
 
-  const parsed = useMemo(() => parseAndValidateUiBuilderLayout(text, pageId, device), [text, pageId, device]);
+  const parsed = useMemo(() => parseAndValidateUiBuilderRuntimeLayout(text, pageId, device), [text, pageId, device]);
   const preview = parsed.valid ? parsed.layout : null;
   const versions = useMemo(() => readUiBuilderLayoutVersions(pageId, device), [pageId, device, historyRevision]);
 

@@ -12,6 +12,7 @@ import {
   collectSafeApiDiagnostic,
   type SafeApiDiagnostic,
 } from './support/safe-api-diagnostic';
+import { expectUiBuilderStagingReadiness } from './support/ui-builder-staging-readiness';
 import { APP_NAVIGATION } from '../src/lib/app-navigation';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
@@ -725,11 +726,13 @@ test.describe('real staging release readiness', () => {
       await expectHealthyRoute(page, '/');
       await expectBootstrapTerminalError(page);
       await page.getByRole('button', { name: '다시 시도', exact: true }).click();
-      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 15_000 });
+      await expect(page.locator('nav')).toBeVisible({ timeout: 15_000 });
       await expect(page.getByTestId('error-state')).toHaveCount(0);
       await expect(page.getByTestId('page-fallback')).toHaveCount(0);
       expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);
       expect(observation.candidates, 'semantic first-attempt rejection must not create a network-error exemption').toHaveLength(0);
+      await expectHealthyRoute(page, '/account');
+      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
       confirmed = true;
     } finally {
       await page.unroute('**/rest/v1/profiles*');
@@ -807,6 +810,7 @@ test.describe('real staging release readiness', () => {
     await expectScannerAfterFutures(page);
     await expectHealthyRoute(page, '/paper-trading');
     await expect(page.locator('body')).toContainText(/모의|paper/i);
+    await expectDeniedRoute(page, '/admin/ui-layouts');
 
     const preview = await requestWithBrowserSession(
       page,
@@ -837,6 +841,12 @@ test.describe('real staging release readiness', () => {
       '/api/paper-journal/snapshot?userId=11111111-1111-1111-1111-111111111111',
     );
     expect([400, 403]).toContain(foreignJournal.status());
+  });
+
+  test('admin UI Builder actual staging release acceptance', async ({ page }) => {
+    await login(page, accounts.admin.loginName, accounts.admin.password);
+    await expectMembership(page, /관리자/);
+    await expectUiBuilderStagingReadiness(page, (route) => expectHealthyRoute(page, route));
   });
 
   for (const [name, width, height] of [
