@@ -133,6 +133,54 @@ assert(
 );
 assert(!spec.includes("behavior: 'ignoreErrors'"), 'route callback teardown must not suppress in-flight failures');
 
+const scannerReadinessTestStart = spec.indexOf("test('scanner readiness:");
+const scannerReadinessTestEnd = spec.indexOf("\n  test('pending:", scannerReadinessTestStart);
+assert(
+  scannerReadinessTestStart >= 0 && scannerReadinessTestEnd > scannerReadinessTestStart,
+  'scanner readiness fixture boundaries are missing',
+);
+const scannerReadinessTestBlock = spec.slice(scannerReadinessTestStart, scannerReadinessTestEnd);
+assert(
+  scannerReadinessTestBlock.includes("let fixtureState: 'complete' | 'partial' | 'unavailable' = 'complete';"),
+  'scanner readiness must keep one mutable three-state fixture on a single page entry',
+);
+assert(
+  scannerReadinessTestBlock.split("await page.route('**/api/market/scan**'").length - 1 === 1,
+  'scanner readiness must install exactly one scan fixture route',
+);
+assert(
+  scannerReadinessTestBlock.split('const complete = await expectHealthyScannerRoute(page);').length - 1 === 1,
+  'scanner readiness must perform exactly one initial scanner page navigation',
+);
+assert(
+  scannerReadinessTestBlock.split('expectHealthyScannerRoute(page, { open: refreshScanner })').length - 1 === 2,
+  'partial and unavailable states must refresh the mounted scanner instead of navigating again',
+);
+assert(
+  scannerReadinessTestBlock.includes("fixtureState = 'partial';") && scannerReadinessTestBlock.includes("fixtureState = 'unavailable';"),
+  'scanner readiness must exercise partial then unavailable state on the mounted scanner',
+);
+assert(
+  scannerReadinessTestBlock.includes("page.getByRole('heading', { name: 'AI 신호검색기', exact: true })"),
+  'scanner refresh must be scoped to the exact scanner heading',
+);
+assert(
+  scannerReadinessTestBlock.includes("getByRole('button', { name: '새로고침', exact: true }).click();"),
+  'scanner refresh must use the exact scanner refresh button',
+);
+assert(
+  !scannerReadinessTestBlock.includes("for (const state of ['complete', 'partial', 'unavailable'] as const)"),
+  'scanner readiness must not repeat full scanner navigation in a three-state loop',
+);
+assert(
+  scannerReadinessTestBlock.split('.orderCapableRequests).toEqual([]);').length - 1 === 3,
+  'every scanner state must prove zero order-capable requests',
+);
+assert(
+  scannerReadinessTestBlock.includes("expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);"),
+  'scanner single-entry fixture must preserve the zero-abort contract',
+);
+
 const retryRecoveryTestStart = spec.indexOf("test('retry recovery:");
 const retryRecoveryTestEnd = spec.indexOf("\n  test('scanner readiness:", retryRecoveryTestStart);
 assert(
