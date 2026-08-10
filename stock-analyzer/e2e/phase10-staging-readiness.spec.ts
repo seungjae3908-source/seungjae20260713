@@ -40,6 +40,7 @@ type RouteTransitionObservation = {
   toRoute: string;
   candidates: Diagnostic[];
   pendingGetRequests: Set<Request>;
+  allowSameRouteAbort?: boolean;
 };
 type AuthFaultObservation = {
   kind: 'reject' | 'timeout' | 'retry';
@@ -139,7 +140,7 @@ function isExpectedRouteTransitionAbort(
 ) {
   try {
     const parsed = new URL(request.url());
-    return observation.fromRoute !== observation.toRoute
+    return (observation.fromRoute !== observation.toRoute || observation.allowSameRouteAbort === true)
       && observation.pendingGetRequests.has(request)
       && request.method() === 'GET'
       && parsed.pathname.startsWith('/api/')
@@ -366,6 +367,27 @@ async function finishRouteTransition(
     ...item,
     detail: `unconfirmed route-transition abort: ${item.detail}`,
   })));
+}
+
+async function reloadForBootstrapFault(page: Page) {
+  const route = routeIdentity(page.url());
+  const observation: RouteTransitionObservation = {
+    fromRoute: route,
+    toRoute: route,
+    candidates: [],
+    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
+    allowSameRouteAbort: true,
+  };
+  activeRouteTransitionObservations.set(page, observation);
+  let confirmed = false;
+  try {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expectBootstrapTerminalError(page);
+    expect(routeIdentity(page.url())).toBe(route);
+    confirmed = true;
+  } finally {
+    await finishRouteTransition(page, observation, confirmed);
+  }
 }
 
 async function expectHealthyRoute(page: Page, route: string) {
@@ -627,8 +649,7 @@ test.describe('real staging release readiness', () => {
       });
     });
     try {
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      await expectBootstrapTerminalError(page);
+      await reloadForBootstrapFault(page);
       expect(requestCount, 'initial bootstrap must issue one profile request').toBe(1);
       expect(observation.candidates, 'semantic bootstrap rejection must not create a network-error exemption').toHaveLength(0);
       confirmed = true;
@@ -664,8 +685,7 @@ test.describe('real staging release readiness', () => {
       if (request.failure() === null) await route.abort('timedout');
     });
     try {
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      await expectBootstrapTerminalError(page);
+      await reloadForBootstrapFault(page);
       await expect.poll(
         () => observation.failedAt,
         {
@@ -720,8 +740,7 @@ test.describe('real staging release readiness', () => {
       await route.continue();
     });
     try {
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      await expectBootstrapTerminalError(page);
+      await reloadForBootstrapFault(page);
       await page.getByRole('button', { name: '다시 시도', exact: true }).click();
       await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 15_000 });
       await expect(page.getByTestId('error-state')).toHaveCount(0);
