@@ -104,16 +104,27 @@ test("stock survivorship metadata is fail-closed when unverified", () => {
   assert.ok(result.reasons.includes("survivorship_not_verified"));
 });
 
-test("scanner artifact schema keeps unavailable values null and safety flags false", () => {
+test("scanner artifact schema exposes explicit scanner-compatible units and hard safety flags", () => {
   const ds = dataset();
   const row = buildScannerBacktestQualityRow({
     market: "CRYPTO_SPOT", symbol: "USDT-BTC", strategyType: "SWING", direction: "LONG", strategyVersion: "v1_ema_atr",
     timeframe: "1d", backtestQuality: "verified", reasons: [], development: oos, oos, walkForward, holdout,
-    researchStatus: "research_hold", dataset: ds, lookaheadSafe: true, researchCodeSha: SHA, generatedAt: new Date(GENERATED).toISOString(),
+    researchStatus: "research_hold", dataset: ds, lookaheadSafe: true, initialCapital: 1_000, costModel,
+    researchCodeSha: SHA, generatedAt: new Date(GENERATED).toISOString(),
   });
   const artifact = buildScannerBacktestQualityArtifact({ researchCodeSha: SHA, generatedAt: new Date(GENERATED).toISOString(), rows: [row], blocked: [] });
   assert.equal(artifact.schema, "scanner-backtest-quality-v1");
   assert.equal(artifact.rows[0].datasetDigest, ds.datasetDigest);
+  assert.equal(artifact.rows[0].oosWinRate, 55.00000000000001);
+  assert.equal(artifact.rows[0].walkForwardWinRate, 55.00000000000001);
+  assert.equal(artifact.rows[0].expectancyPercent, 0.12);
+  assert.equal(artifact.rows[0].maxDrawdownPercent, -8);
+  assert.equal(artifact.rows[0].netReturnPercent, 12);
+  assert.equal(artifact.rows[0].costsIncluded, true);
+  assert.equal(artifact.rows[0].slippageIncluded, true);
+  assert.equal(artifact.rows[0].lookaheadGuarded, true);
+  assert.equal(artifact.rows[0].survivorshipGuarded, true);
+  assert.equal(artifact.rows[0].metricUnits.oosWinRate, "percent_0_100");
   assert.equal(artifact.realHistoricalDataOnly, true);
   assert.equal(artifact.syntheticMetricsAllowed, false);
   assert.equal(artifact.liveOrderAllowed, false);
