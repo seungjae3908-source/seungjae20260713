@@ -36,9 +36,7 @@ export interface CryptoSignalScanRouteDependencies {
 }
 
 function requireScannerSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-  if (!req.member && !req.header('authorization')) {
-    return res.status(401).json({ error: 'LOGIN_REQUIRED' });
-  }
+  if (!req.member && !req.header('authorization')) return res.status(401).json({ error: 'LOGIN_REQUIRED' });
   return requireAuthenticated(req, res, next);
 }
 
@@ -84,42 +82,25 @@ function routeError(res: Response, error: unknown) {
   if (error instanceof ScannerRequestGuardError) {
     res.setHeader('Retry-After', String(error.retryAfterSeconds));
     return res.status(error.status).json({
-      ok: false,
-      error: error.code,
-      retryAfterSeconds: error.retryAfterSeconds,
-      cards: [],
-      alerts: [],
-      failures: [],
-      orderSubmitted: false,
-      exchangeRequestSent: false,
+      ok: false, error: error.code, retryAfterSeconds: error.retryAfterSeconds,
+      cards: [], alerts: [], failures: [], orderSubmitted: false, exchangeRequestSent: false,
     });
   }
   if (error instanceof CryptoScannerProviderError) {
     return res.status(502).json({
-      ok: false,
-      error: error.code,
-      cards: [],
-      alerts: [],
+      ok: false, error: error.code, cards: [], alerts: [],
       failures: [{ symbol: '*', reason: 'provider_error', message: error.message }],
-      dataState: 'unavailable',
-      orderSubmitted: false,
-      exchangeRequestSent: false,
+      dataState: 'unavailable', orderSubmitted: false, exchangeRequestSent: false,
     });
   }
   return res.status(500).json({
     ok: false,
     error: error instanceof Error ? error.message.split(':')[0] : 'CRYPTO_SCAN_FAILED',
-    cards: [],
-    alerts: [],
-    failures: [],
-    orderSubmitted: false,
-    exchangeRequestSent: false,
+    cards: [], alerts: [], failures: [], orderSubmitted: false, exchangeRequestSent: false,
   });
 }
 
-export function createCryptoSignalScanRouter(
-  dependencies: CryptoSignalScanRouteDependencies = {},
-): IRouter {
+export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRouteDependencies = {}): IRouter {
   const router: IRouter = Router();
   const scanner = dependencies.scanner ?? CryptoSignalScannerService;
   const guard = dependencies.guard ?? scannerRequestGuard;
@@ -131,16 +112,12 @@ export function createCryptoSignalScanRouter(
     const strategyMode = strategy(req.query.strategy, selectedTimeframe);
     if (!strategyMode) {
       return res.status(400).json({
-        ok: false,
-        error: 'CRYPTO_SCAN_STRATEGY_TIMEFRAME_MISMATCH',
-        timeframe: selectedTimeframe,
-        strategy: String(req.query.strategy ?? ''),
+        ok: false, error: 'CRYPTO_SCAN_STRATEGY_TIMEFRAME_MISMATCH',
+        timeframe: selectedTimeframe, strategy: String(req.query.strategy ?? ''),
       });
     }
     const requestedGrade = parseScannerGradeQuery(req.query.grade);
-    if (requestedGrade === null) {
-      return res.status(400).json({ ok: false, error: 'SCANNER_GRADE_UNSUPPORTED' });
-    }
+    if (requestedGrade === null) return res.status(400).json({ ok: false, error: 'SCANNER_GRADE_UNSUPPORTED' });
     const membershipLevel = req.membershipLevel ?? 'pending';
     if (requestedGrade && !canReadScannerGrade(membershipLevel, requestedGrade)) {
       return res.status(403).json({ ok: false, error: 'SCANNER_GRADE_FORBIDDEN' });
@@ -154,6 +131,7 @@ export function createCryptoSignalScanRouter(
     let lease: ReturnType<ScannerRequestGuard['acquire']> | null = null;
     try {
       lease = guard.acquire(req.member!.id, requestKey(req, market));
+      const softMinimumScore = number(req.query.minimumScore, 0, 100);
       const result = await scanner.scan({
         memberId: req.member!.id,
         market,
@@ -162,8 +140,6 @@ export function createCryptoSignalScanRouter(
         condition: condition(req.query.condition),
         cursor: number(req.query.cursor, 0, 1_000_000) ?? 0,
         batchSize: number(req.query.batchSize, 5, 40) ?? 24,
-        // minimumScore is intentionally a soft discovery preference now. The
-        // scanner must not drop Watch candidates before adaptive ranking.
         minimumScore: undefined,
         maximumRiskScore: number(req.query.maximumRiskScore, 0, 100),
         signal: controller.signal,
@@ -174,6 +150,7 @@ export function createCryptoSignalScanRouter(
         cards: result.cards,
         market: result.market,
         strategy: strategyMode,
+        softMinimumScore,
         limit: 10,
       });
       const rankedCards = ranking.cards.map((card) => card.signalGrade === 'B'
