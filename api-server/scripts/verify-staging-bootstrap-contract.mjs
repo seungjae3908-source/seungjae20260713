@@ -102,6 +102,9 @@ for (const marker of [
   assert(verdict.includes(marker), `release verdict is missing ${marker}`);
 }
 assert(serverEntry.includes('process.env.DEPLOY_SHA'), 'health response must read the immutable deploy SHA');
-assert(serverEntry.includes('deploySha,'), 'health response must expose deploySha');
+assert(
+  serverEntry.includes('deploySha: identity.processDeploySha,'),
+  'health response must expose deploySha from the process-start identity',
+);
 
 console.log('[staging-bootstrap-contract] allowlist, atomicity, isolation, health SHA, exact account cleanup, no-user-copy, and no-manual-account-secret contracts verified');
