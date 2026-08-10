@@ -598,7 +598,6 @@ test.describe('real staging release readiness', () => {
 
   test('bootstrap finite-state: rejected profile bootstrap exits loading with terminal retry UI', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
-    await expectHealthyRoute(page, '/');
     const observation: AuthFaultObservation = {
       kind: 'reject',
       candidates: [],
@@ -627,7 +626,7 @@ test.describe('real staging release readiness', () => {
       });
     });
     try {
-      await page.reload({ waitUntil: 'domcontentloaded' });
+      await expectHealthyRoute(page, '/');
       await expectBootstrapTerminalError(page);
       expect(requestCount, 'initial bootstrap must issue one profile request').toBe(1);
       expect(observation.candidates, 'semantic bootstrap rejection must not create a network-error exemption').toHaveLength(0);
@@ -640,7 +639,6 @@ test.describe('real staging release readiness', () => {
 
   test('profile timeout abort: frontend deadline cancels the stalled profile request and exits loading', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
-    await expectHealthyRoute(page, '/');
     const observation: AuthFaultObservation = {
       kind: 'timeout',
       candidates: [],
@@ -651,6 +649,7 @@ test.describe('real staging release readiness', () => {
     activeAuthFaultObservations.set(page, observation);
     let requestCount = 0;
     let confirmed = false;
+    let timeoutRouteSettled = Promise.resolve();
     await page.route('**/rest/v1/profiles*', async (route) => {
       const request = route.request();
       if (!isProfileRequest(request)) {
@@ -660,11 +659,14 @@ test.describe('real staging release readiness', () => {
       requestCount += 1;
       observation.requests.add(request);
       observation.startedAt = Date.now();
-      await page.waitForTimeout(9_000);
-      if (request.failure() === null) await route.abort('timedout');
+      timeoutRouteSettled = (async () => {
+        await page.waitForTimeout(9_000);
+        if (request.failure() === null) await route.abort('timedout');
+      })();
+      await timeoutRouteSettled;
     });
     try {
-      await page.reload({ waitUntil: 'domcontentloaded' });
+      await expectHealthyRoute(page, '/');
       await expectBootstrapTerminalError(page);
       await expect.poll(
         () => observation.failedAt,
@@ -680,6 +682,7 @@ test.describe('real staging release readiness', () => {
       expect(Number(observation.failedAt) - Number(observation.startedAt)).toBeLessThan(9_000);
       confirmed = true;
     } finally {
+      await timeoutRouteSettled;
       await page.unroute('**/rest/v1/profiles*');
       await finishAuthFault(page, observation, confirmed);
     }
@@ -687,7 +690,6 @@ test.describe('real staging release readiness', () => {
 
   test('retry recovery: first profile bootstrap fails, retry performs one fresh request and restores authenticated UI', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
-    await expectHealthyRoute(page, '/');
     const observation: AuthFaultObservation = {
       kind: 'retry',
       candidates: [],
@@ -720,7 +722,7 @@ test.describe('real staging release readiness', () => {
       await route.continue();
     });
     try {
-      await page.reload({ waitUntil: 'domcontentloaded' });
+      await expectHealthyRoute(page, '/');
       await expectBootstrapTerminalError(page);
       await page.getByRole('button', { name: '다시 시도', exact: true }).click();
       await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 15_000 });
