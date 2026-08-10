@@ -115,6 +115,28 @@ function normalizeMetrics(result, period) {
   });
 }
 
+const EXECUTION_COST_STRESS_MULTIPLIER = 2;
+function stressCostModel(model = {}) {
+  const stressRates = (row) => Object.freeze({
+    ...row,
+    entryFeeRate: (row.entryFeeRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+    exitFeeRate: (row.exitFeeRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+    taxRate: (row.taxRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+    slippageRate: (row.slippageRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+    spreadRate: (row.spreadRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+    latencyBars: Math.min(100, Math.max(1, Math.round((row.latencyBars ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER))),
+    latencyDriftRate: (row.latencyDriftRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+  });
+  return Object.freeze({
+    ...stressRates(model),
+    ...(Array.isArray(model.schedule) ? { schedule: Object.freeze(model.schedule.map(stressRates)) } : {}),
+  });
+}
+
+function stressFundingRates(rows = []) {
+  return Object.freeze(rows.map((row) => Object.freeze({ ...row, rate: row.rate * EXECUTION_COST_STRESS_MULTIPLIER })));
+}
+
 function preferredCandidate(version, optimization) {
   if (!optimization || typeof optimization !== "object") return null;
   if (!optimization.preferred) return null;
@@ -239,6 +261,8 @@ export function evaluateUnifiedCandidate({ version, optimization, backtestInput,
       walkForward: null,
       statisticalQuality: Object.freeze({ sampleQuality: "not_evaluable_no_preferred_candidate", statisticalPass: false }),
       overfitDiagnostics: Object.freeze({ flags: Object.freeze(["no_preferred_candidate"]), topTradeDependency: false, regimeDependency: false, developmentToOosDegradation: null, wfWindowDispersion: null }),
+      executionCostStress: Object.freeze({ status: "not_evaluated", scenarioId: "double_configured_execution_costs_v1", multiplier: EXECUTION_COST_STRESS_MULTIPLIER, baseline: null, stressed: null, positiveAfterStress: null, selectionAffected: false, finalHoldoutUsed: false, reasons: Object.freeze(["no_preferred_candidate"]) }),
+      promotionEligible: false,
       researchStatus: "research_hold",
     });
   }
@@ -249,6 +273,25 @@ export function evaluateUnifiedCandidate({ version, optimization, backtestInput,
   const oosResult = runCandidate({ version, backtestInput, candidate, period: oosPeriod });
   const development = normalizeMetrics(developmentResult, developmentPeriod);
   const oos = normalizeMetrics(oosResult, oosPeriod);
+  const stressedBacktestInput = Object.freeze({
+    ...backtestInput,
+    costModel: stressCostModel(backtestInput.costModel),
+    fundingRates: backtestInput.market === "CRYPTO_FUTURES" ? stressFundingRates(backtestInput.fundingRates ?? []) : (backtestInput.fundingRates ?? []),
+  });
+  const stressedOos = normalizeMetrics(runCandidate({ version, backtestInput: stressedBacktestInput, candidate, period: oosPeriod }), oosPeriod);
+  const positiveAfterStress = stressedOos.totalReturn > 0 && stressedOos.expectancy > 0;
+  const executionCostStress = Object.freeze({
+    status: positiveAfterStress ? "survived" : "failed",
+    scenarioId: "double_configured_execution_costs_v1",
+    multiplier: EXECUTION_COST_STRESS_MULTIPLIER,
+    baseline: oos,
+    stressed: stressedOos,
+    positiveAfterStress,
+    includes: Object.freeze({ fee: true, spread: true, slippage: true, funding: backtestInput.market === "CRYPTO_FUTURES", latency: true }),
+    selectionAffected: false,
+    finalHoldoutUsed: false,
+    reasons: Object.freeze(positiveAfterStress ? [] : ["non_positive_oos_return_or_expectancy_after_execution_cost_stress"]),
+  });
   const windows = walkForwardWindows(backtestInput, walkForwardOptions).slice(-maxWalkForwardWindows);
   const wfRows = windows.map((window) => {
     const period = Object.freeze({ startTime: window.startTime, endTime: window.endTime, includeFinalHoldout: false });
@@ -280,6 +323,9 @@ export function evaluateUnifiedCandidate({ version, optimization, backtestInput,
     walkForward,
     statisticalQuality: quality,
     overfitDiagnostics: diagnostics,
+    executionCostStress,
+    promotionEligible: false,
+    promotionBlockReasons: Object.freeze(["empirical_promotion_thresholds_uncalibrated", ...(positiveAfterStress ? [] : ["execution_cost_stress_failed"])]),
     crossSymbolValidation: "preliminary",
     crossSymbolScope: "per-symbol unified adapter; market-family aggregation required before freeze",
     researchStatus: "research_hold",
@@ -320,6 +366,12 @@ export function buildUnifiedCalibrationRow(candidate) {
     developmentToOosDegradation: candidate.overfitDiagnostics?.developmentToOosDegradation ?? null,
     wfWindowDispersion: candidate.overfitDiagnostics?.wfWindowDispersion ?? null,
     sampleQuality: candidate.statisticalQuality?.sampleQuality ?? null,
+    executionCostStressStatus: candidate.executionCostStress?.status ?? "not_evaluated",
+    stressedExpectancy: candidate.executionCostStress?.stressed?.expectancy ?? null,
+    stressedProfitFactor: candidate.executionCostStress?.stressed?.profitFactor ?? null,
+    stressedTotalReturn: candidate.executionCostStress?.stressed?.totalReturn ?? null,
+    stressedMaximumDrawdown: candidate.executionCostStress?.stressed?.maximumDrawdown ?? null,
+    promotionEligible: candidate.promotionEligible === true,
     researchStatus: candidate.researchStatus,
   });
 }
