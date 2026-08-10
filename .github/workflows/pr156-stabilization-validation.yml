@@ -1,0 +1,28 @@
+name: PR156 Stabilization Validation
+
+on:
+  push:
+    branches:
+      - test/pr156-stabilization-validation
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr156-stabilization-validation
+  cancel-in-progress: false
+
+jobs:
+  baseline-targeted-verifier:
+    name: Baseline staging login selector verifier
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout validation candidate
+        uses: actions/checkout@v4
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run baseline targeted verifier
+        run: node ./api-server/scripts/verify-staging-login-selector-contract.mjs
