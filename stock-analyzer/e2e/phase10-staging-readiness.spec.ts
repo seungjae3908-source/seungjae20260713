@@ -725,11 +725,13 @@ test.describe('real staging release readiness', () => {
       await expectHealthyRoute(page, '/');
       await expectBootstrapTerminalError(page);
       await page.getByRole('button', { name: '다시 시도', exact: true }).click();
-      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 15_000 });
+      await expect(page.locator('nav')).toBeVisible({ timeout: 15_000 });
       await expect(page.getByTestId('error-state')).toHaveCount(0);
       await expect(page.getByTestId('page-fallback')).toHaveCount(0);
       expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);
       expect(observation.candidates, 'semantic first-attempt rejection must not create a network-error exemption').toHaveLength(0);
+      await expectHealthyRoute(page, '/account');
+      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
       confirmed = true;
     } finally {
       await page.unroute('**/rest/v1/profiles*');
