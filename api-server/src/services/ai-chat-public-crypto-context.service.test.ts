@@ -7,6 +7,7 @@ import {
 } from './ai-chat-public-crypto-context.service';
 import type {
   MarketInformationAssetRow,
+  MarketInformationMeta,
   MarketInformationResponse,
   MarketInformationRoomId,
 } from './market-information.contract';
@@ -38,10 +39,10 @@ function asset(symbol: string, overrides: Partial<MarketInformationAssetRow> = {
 }
 
 function response(room: MarketInformationRoomId, rows: MarketInformationAssetRow[]): MarketInformationResponse {
-  const market = room === 'coins-spot' ? 'spot' : 'futures';
-  const assetType = room === 'coins-spot' ? 'coin-spot' : 'coin-futures';
-  const currency = room === 'coins-spot' ? 'KRW' : 'USDT';
-  const meta = {
+  const market: MarketInformationResponse['market'] = room === 'coins-spot' ? 'spot' : 'futures';
+  const assetType: MarketInformationResponse['assetType'] = room === 'coins-spot' ? 'coin-spot' : 'coin-futures';
+  const currency: MarketInformationResponse['currency'] = room === 'coins-spot' ? 'KRW' : 'USDT';
+  const meta: MarketInformationMeta = {
     provider: room === 'coins-spot' ? 'Upbit' : 'Bitget',
     source: room === 'coins-spot' ? 'Upbit 공식 공개 Quotation API' : 'Bitget 공식 공개 USDT-FUTURES market API',
     market,
@@ -51,7 +52,7 @@ function response(room: MarketInformationRoomId, rows: MarketInformationAssetRow
     observedAt: now,
     fetchedAt: now,
     marketTimeZone: room === 'coins-spot' ? 'Asia/Seoul' : 'UTC',
-    marketStatus: '24H' as const,
+    marketStatus: '24H',
     isDelayed: false,
     isStale: false,
     partial: false,
@@ -137,8 +138,11 @@ test('Bitget BTC long-short ratio is never mixed into another futures symbol', (
 });
 
 test('AI crypto context fails closed if a room reports any private/account/order request', () => {
-  const unsafe = response('coins-spot', [asset('BTC')]);
-  unsafe.requestPolicy.privateExchangeRequests = 1;
+  const safe = response('coins-spot', [asset('BTC')]);
+  const unsafe = {
+    ...safe,
+    requestPolicy: { ...safe.requestPolicy, privateExchangeRequests: 1 },
+  } as unknown as MarketInformationResponse;
   assert.throws(
     () => buildPublicCryptoAiContextFromRoom('UPBIT', 'BTC', unsafe),
     (cause: unknown) => cause instanceof PublicCryptoAiContextError && cause.code === 'AI_CRYPTO_PRIVATE_BOUNDARY_VIOLATION',
