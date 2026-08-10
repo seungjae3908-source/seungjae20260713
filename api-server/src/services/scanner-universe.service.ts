@@ -62,9 +62,57 @@ function dedupe(entries: ScannerUniverseEntry[]): ScannerUniverseEntry[] {
   return [...rows.values()].sort((left, right) => left.ticker.localeCompare(right.ticker));
 }
 
+function linkedUniverseSignal(
+  parent?: AbortSignal,
+  deadlineMs?: number,
+): { signal: AbortSignal; clear(): void } {
+  if (deadlineMs != null && (!Number.isFinite(deadlineMs) || deadlineMs <= 0)) {
+    throw new Error(`invalid scanner universe deadline: ${deadlineMs}`);
+  }
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parent?.reason ?? new Error('SCAN_UNIVERSE_ABORTED'));
+  if (parent?.aborted) abortFromParent();
+  else parent?.addEventListener('abort', abortFromParent, { once: true });
+  const timeout = deadlineMs == null
+    ? undefined
+    : setTimeout(
+      () => controller.abort(new Error('SCAN_UNIVERSE_DEADLINE_EXCEEDED')),
+      deadlineMs,
+    );
+  return {
+    signal: controller.signal,
+    clear() {
+      if (timeout !== undefined) clearTimeout(timeout);
+      parent?.removeEventListener('abort', abortFromParent);
+    },
+  };
+}
+
+async function awaitWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw signal.reason ?? new Error('SCAN_UNIVERSE_ABORTED');
+  return await new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason ?? new Error('SCAN_UNIVERSE_ABORTED'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
 async function liveUniverse(market: MarketScope, signal?: AbortSignal): Promise<ScannerUniverseEntry[]> {
   if (market === 'KR') {
-    const rows = await getKrUniverse();
+    const rows = await getKrUniverse(signal);
     if (signal?.aborted) throw signal.reason ?? new Error('SCAN_UNIVERSE_ABORTED');
     return rows.map((row) => ({
       ticker: row.ticker,
@@ -96,7 +144,11 @@ export function clearScannerUniverseCacheForTests(): void {
 }
 
 export const ScannerUniverseService = {
-  async get(market: MarketScope, signal?: AbortSignal): Promise<ScannerUniverseResult> {
+  async get(
+    market: MarketScope,
+    signal?: AbortSignal,
+    deadlineMs?: number,
+  ): Promise<ScannerUniverseResult> {
     const now = Date.now();
     const cached = lastGood.get(market);
     if (cached && now - cached.at < CACHE_MS) {
@@ -111,8 +163,9 @@ export const ScannerUniverseService = {
       };
     }
 
+    const linked = linkedUniverseSignal(signal, deadlineMs);
     try {
-      const live = dedupe(await liveUniverse(market, signal));
+      const live = dedupe(await awaitWithAbort(liveUniverse(market, linked.signal), linked.signal));
       if (live.length > 0) {
         const source: ScannerUniverseSource = market === 'KR'
           ? 'krx-symbol-master'
@@ -130,6 +183,8 @@ export const ScannerUniverseService = {
       }
     } catch (error) {
       if (signal?.aborted) throw error;
+    } finally {
+      linked.clear();
     }
 
     if (cached?.entries.length) {
@@ -161,8 +216,9 @@ export const ScannerUniverseService = {
     cursorValue: number,
     batchSizeValue: number,
     signal?: AbortSignal,
+    deadlineMs?: number,
   ): Promise<ScannerUniverseBatch> {
-    const universe = await this.get(market, signal);
+    const universe = await this.get(market, signal, deadlineMs);
     const batchSize = Math.max(10, Math.min(200, Math.floor(batchSizeValue) || 120));
     const cursor = Math.max(0, Math.min(universe.totalCount, Math.floor(cursorValue) || 0));
     const entries = universe.entries.slice(cursor, cursor + batchSize);
