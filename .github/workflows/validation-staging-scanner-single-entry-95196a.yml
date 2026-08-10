@@ -6,7 +6,7 @@ on:
       - validation/staging-scanner-single-entry-95196a
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   STAGING_ARTIFACT_DIR: ${{ github.workspace }}/staging-validation-artifacts
@@ -14,7 +14,7 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     environment: staging
     steps:
       - uses: actions/checkout@v4
@@ -28,21 +28,31 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - name: Patch scanner fixture in validation worktree only
+      - name: Apply scanner single-entry source and static contract
         run: |
           node <<'NODE'
           const fs = require('node:fs');
-          const file = 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts';
-          let source = fs.readFileSync(file, 'utf8');
-          const start = source.indexOf("test('scanner readiness:");
-          const end = source.indexOf("\n  test('pending:", start);
+          const specFile = 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts';
+          let spec = fs.readFileSync(specFile, 'utf8');
+          const start = spec.indexOf("test('scanner readiness:");
+          const end = spec.indexOf("\n  test('pending:", start);
           if (start < 0 || end <= start) throw new Error('scanner readiness test boundaries not found');
           const block = `test('scanner readiness: complete, partial, and strict unavailable states satisfy the frontend contract', async ({ page }) => {\n    await login(page, accounts.regular.loginName, accounts.regular.password);\n    let fixtureState: 'complete' | 'partial' | 'unavailable' = 'complete';\n    await page.route('**/api/market/scan**', async (route) => {\n      await route.fulfill({\n        status: 200,\n        contentType: 'application/json',\n        body: JSON.stringify(scannerFixture(fixtureState)),\n      });\n    });\n    const refreshScanner = async () => {\n      const heading = page.getByRole('heading', { name: 'AI 신호검색기', exact: true });\n      const header = heading.locator('..').locator('..');\n      await header.getByRole('button', { name: '새로고침', exact: true }).click();\n    };\n    try {\n      const complete = await expectHealthyScannerRoute(page);\n      expect(complete.httpStatus).toBe(200);\n      expect(complete.dataState).toBe('complete');\n      expect(complete.elapsedMs).toBeLessThanOrEqual(12_000);\n      expect(complete.requestElapsedMs).toBeLessThanOrEqual(12_000);\n      expect(complete.orderCapableRequests).toEqual([]);\n\n      fixtureState = 'partial';\n      const partial = await expectHealthyScannerRoute(page, { open: refreshScanner });\n      expect(partial.httpStatus).toBe(200);\n      expect(partial.dataState).toBe('partial');\n      expect(partial.elapsedMs).toBeLessThanOrEqual(12_000);\n      expect(partial.requestElapsedMs).toBeLessThanOrEqual(12_000);\n      expect(partial.orderCapableRequests).toEqual([]);\n\n      fixtureState = 'unavailable';\n      const unavailable = await expectHealthyScannerRoute(page, { open: refreshScanner });\n      expect(unavailable.httpStatus).toBe(200);\n      expect(unavailable.dataState).toBe('unavailable');\n      expect(unavailable.elapsedMs).toBeLessThanOrEqual(12_000);\n      expect(unavailable.requestElapsedMs).toBeLessThanOrEqual(12_000);\n      expect(unavailable.orderCapableRequests).toEqual([]);\n      expect(unavailable.partial).toBe(true);\n      expect(unavailable.executionPartial).toBe(true);\n      expect(unavailable.executionTimedOut).toBe(true);\n      expect(unavailable.timeoutCount).toBeGreaterThanOrEqual(1);\n      expect(unavailable.deadlineMs).toBeGreaterThan(0);\n      expect(unavailable.deadlineMs).toBeLessThan(12_000);\n      expect(unavailable.cards).toEqual([]);\n    } finally {\n      await page.unroute('**/api/market/scan**');\n    }\n    expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);\n  });`;
-          source = `${source.slice(0, start)}${block}${source.slice(end)}`;
-          fs.writeFileSync(file, source);
+          spec = `${spec.slice(0, start)}${block}${spec.slice(end)}`;
+          fs.writeFileSync(specFile, spec);
+
+          const verifierFile = 'api-server/scripts/verify-staging-login-selector-contract.mjs';
+          let verifier = fs.readFileSync(verifierFile, 'utf8');
+          if (!verifier.includes('const scannerReadinessTestStart =')) {
+            const marker = `const retryRecoveryTestStart = spec.indexOf("test('retry recovery:");`;
+            if (!verifier.includes(marker)) throw new Error('retry verifier marker not found');
+            const insertion = `const scannerReadinessTestStart = spec.indexOf("test('scanner readiness:");\nconst scannerReadinessTestEnd = spec.indexOf("\\n  test('pending:", scannerReadinessTestStart);\nassert(\n  scannerReadinessTestStart >= 0 && scannerReadinessTestEnd > scannerReadinessTestStart,\n  'scanner readiness fixture boundaries are missing',\n);\nconst scannerReadinessTestBlock = spec.slice(scannerReadinessTestStart, scannerReadinessTestEnd);\nassert(\n  scannerReadinessTestBlock.includes("let fixtureState: 'complete' | 'partial' | 'unavailable' = 'complete';"),\n  'scanner readiness must keep one mutable three-state fixture on a single page entry',\n);\nassert(\n  scannerReadinessTestBlock.split("await page.route('**/api/market/scan**'").length - 1 === 1,\n  'scanner readiness must install exactly one scan fixture route',\n);\nassert(\n  scannerReadinessTestBlock.split('const complete = await expectHealthyScannerRoute(page);').length - 1 === 1,\n  'scanner readiness must perform exactly one initial scanner page navigation',\n);\nassert(\n  scannerReadinessTestBlock.split('expectHealthyScannerRoute(page, { open: refreshScanner })').length - 1 === 2,\n  'partial and unavailable states must refresh the mounted scanner instead of navigating again',\n);\nassert(\n  scannerReadinessTestBlock.includes("fixtureState = 'partial';") && scannerReadinessTestBlock.includes("fixtureState = 'unavailable';"),\n  'scanner readiness must exercise partial then unavailable state on the mounted scanner',\n);\nassert(\n  scannerReadinessTestBlock.includes("page.getByRole('heading', { name: 'AI 신호검색기', exact: true })"),\n  'scanner refresh must be scoped to the exact scanner heading',\n);\nassert(\n  scannerReadinessTestBlock.includes("getByRole('button', { name: '새로고침', exact: true }).click();"),\n  'scanner refresh must use the exact scanner refresh button',\n);\nassert(\n  !scannerReadinessTestBlock.includes("for (const state of ['complete', 'partial', 'unavailable'] as const)"),\n  'scanner readiness must not repeat full scanner navigation in a three-state loop',\n);\nassert(\n  scannerReadinessTestBlock.split('.orderCapableRequests).toEqual([]);').length - 1 === 3,\n  'every scanner state must prove zero order-capable requests',\n);\nassert(\n  scannerReadinessTestBlock.includes("expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);"),\n  'scanner single-entry fixture must preserve the zero-abort contract',\n);\n\n`;
+            verifier = verifier.replace(marker, `${insertion}${marker}`);
+            fs.writeFileSync(verifierFile, verifier);
+          }
           NODE
           git diff --check
-          test "$(git diff --name-only)" = "stock-analyzer/e2e/phase10-staging-readiness.spec.ts"
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' api-server/scripts/verify-staging-login-selector-contract.mjs stock-analyzer/e2e/phase10-staging-readiness.spec.ts | sort)"
       - name: Targeted static verifier
         run: node ./api-server/scripts/verify-staging-login-selector-contract.mjs
       - name: Phase12
@@ -51,6 +61,10 @@ jobs:
         run: pnpm --dir stock-analyzer run typecheck
       - name: Backend typecheck
         run: pnpm --dir api-server run typecheck
+      - name: Frontend production build
+        run: pnpm --dir stock-analyzer run build
+      - name: Backend production build
+        run: pnpm --dir api-server run build
       - name: Install Chromium
         run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
       - name: Targeted real staging scanner readiness
@@ -63,3 +77,14 @@ jobs:
           STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
           STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
         run: pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts e2e/phase10-staging-readiness.spec.ts --grep "scanner readiness:"
+      - name: Commit validated stabilization source
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add api-server/scripts/verify-staging-login-selector-contract.mjs stock-analyzer/e2e/phase10-staging-readiness.spec.ts
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          test "$(git diff --cached --name-only | sort)" = "$(printf '%s\n' api-server/scripts/verify-staging-login-selector-contract.mjs stock-analyzer/e2e/phase10-staging-readiness.spec.ts | sort)"
+          git commit -m "validation(source): keep scanner readiness on one page entry"
+          git push origin HEAD:validation/staging-scanner-single-entry-95196a
