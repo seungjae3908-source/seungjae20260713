@@ -3,11 +3,16 @@ import { test, expect, type Page } from '@playwright/test';
 const now = '2026-08-04T06:00:00.000Z';
 const fixtures = [
   { id: 'stock:KR:KOSPI:005930', assetType: 'stock', market: 'KR', instrumentType: 'stock', exchange: 'KOSPI', ticker: '005930', productCode: '005930', koreanName: '삼성전자', englishName: 'Samsung Electronics', displayName: '삼성전자', baseSymbol: '005930', quoteCurrency: 'KRW', matchType: 'name_prefix', active: true, provider: 'KRX', dataAsOf: now },
+  { id: 'stock:US:NASDAQ:AAPL', assetType: 'stock', market: 'US', instrumentType: 'stock', exchange: 'NASDAQ', ticker: 'AAPL', productCode: 'AAPL', koreanName: '애플', englishName: 'Apple', displayName: '애플', baseSymbol: 'AAPL', quoteCurrency: 'USD', matchType: 'code_exact', active: true, provider: 'FINNHUB', dataAsOf: now },
   { id: 'stock:US:NASDAQ:TSLA', assetType: 'stock', market: 'US', instrumentType: 'stock', exchange: 'NASDAQ', ticker: 'TSLA', productCode: 'TSLA', koreanName: '테슬라', englishName: 'Tesla', displayName: '테슬라', baseSymbol: 'TSLA', quoteCurrency: 'USD', matchType: 'name_prefix', active: true, provider: 'FINNHUB', dataAsOf: now },
   { id: 'stock:US:NASDAQ:TSLB', assetType: 'stock', market: 'US', instrumentType: 'stock', exchange: 'NASDAQ', ticker: 'TSLB', productCode: 'TSLB', koreanName: '테슬라 에너지', englishName: 'Tesla Energy', displayName: '테슬라 에너지', baseSymbol: 'TSLB', quoteCurrency: 'USD', matchType: 'name_prefix', active: true, provider: 'FINNHUB', dataAsOf: now },
   { id: 'coin:spot:UPBIT:KRW-BTC', assetType: 'coin', market: 'spot', instrumentType: 'spot', exchange: 'UPBIT', symbol: 'BTC', productCode: 'KRW-BTC', koreanName: '비트코인', englishName: 'Bitcoin', displayName: '비트코인', baseSymbol: 'BTC', quoteCurrency: 'KRW', matchType: 'alias', active: true, provider: 'UPBIT', dataAsOf: now },
   { id: 'coin:futures:BITGET:BTCUSDT', assetType: 'coin', market: 'futures', instrumentType: 'futures', exchange: 'BITGET', symbol: 'BTCUSDT', productCode: 'BTCUSDT', koreanName: '비트코인', englishName: 'Bitcoin', displayName: '비트코인', baseSymbol: 'BTC', quoteCurrency: 'USDT', matchType: 'code_exact', active: true, provider: 'BITGET', dataAsOf: now },
 ];
+
+type CanonicalSearchDestination =
+  | { asset: 'stock'; market: 'KR' | 'US'; ticker: string }
+  | { asset: 'coin'; coinMarket: 'spot' | 'futures'; symbol: string };
 
 function matches(query: string) {
   if (!/[\p{L}\p{N}]/u.test(query.normalize('NFKC'))) return [];
@@ -15,6 +20,25 @@ function matches(query: string) {
   return fixtures.filter((item) => [item.displayName, item.englishName, item.productCode, item.ticker, item.symbol, item.baseSymbol]
     .filter(Boolean)
     .some((value) => String(value).toLowerCase().replace(/[\s/.-]/g, '').includes(q)));
+}
+
+async function expectCanonicalSearchDestination(page: Page, expected: CanonicalSearchDestination) {
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/stock-info');
+  const actual = new URL(page.url());
+  expect(actual.pathname).toBe('/stock-info');
+  expect(actual.searchParams.get('back')).toBe('/search');
+  expect(actual.searchParams.get('asset')).toBe(expected.asset);
+  if (expected.asset === 'stock') {
+    expect(actual.searchParams.get('market')).toBe(expected.market);
+    expect(actual.searchParams.get('ticker')).toBe(expected.ticker);
+    expect(actual.searchParams.get('coinMarket')).toBeNull();
+    expect(actual.searchParams.get('symbol')).toBeNull();
+    return;
+  }
+  expect(actual.searchParams.get('coinMarket')).toBe(expected.coinMarket);
+  expect(actual.searchParams.get('symbol')).toBe(expected.symbol);
+  expect(actual.searchParams.get('market')).toBeNull();
+  expect(actual.searchParams.get('ticker')).toBeNull();
 }
 
 async function mockSearch(page: Page) {
@@ -75,7 +99,7 @@ test('latest request wins, keyboard selection works, and spot/futures stay separ
   await expect(page.getByRole('option', { name: /테슬라/ })).toBeVisible();
   await input.press('ArrowDown');
   await input.press('Enter');
-  await expect(page).toHaveURL(/\/stock-info\?back=%2Fsearch&asset=stock&market=US&ticker=TSLA$/);
+  await expectCanonicalSearchDestination(page, { asset: 'stock', market: 'US', ticker: 'TSLA' });
 
   await page.goto('/__phase11-unified-search-e2e');
   await input.fill('BTC');
@@ -87,21 +111,21 @@ test('latest request wins, keyboard selection works, and spot/futures stay separ
   await expect(page.getByRole('listbox', { name: '통합 자산 자동완성 결과' })).toBeHidden();
 });
 
-test('all asset groups navigate to their exact existing detail routes', async ({ page }) => {
+test('all asset groups navigate to canonical detail identity independent of query ordering', async ({ page }) => {
   await mockSearch(page);
 
-  const selectAndExpect = async (query: string, optionName: RegExp, expectedUrl: RegExp) => {
+  const selectAndExpect = async (query: string, optionName: RegExp, expected: CanonicalSearchDestination) => {
     await page.goto('/__phase11-unified-search-e2e');
     const input = page.getByRole('combobox', { name: '통합 자산 검색' });
     await input.fill(query);
     await page.getByRole('option', { name: optionName }).click();
-    await expect(page).toHaveURL(expectedUrl);
+    await expectCanonicalSearchDestination(page, expected);
   };
 
-  await selectAndExpect('005930', /삼성전자.*005930/, /\/stock-info\?back=%2Fsearch&asset=stock&market=KR&ticker=005930$/);
-  await selectAndExpect('TSLA', /테슬라.*TSLA/, /\/stock-info\?back=%2Fsearch&asset=stock&market=US&ticker=TSLA$/);
-  await selectAndExpect('KRW-BTC', /비트코인.*UPBIT.*BTC\/KRW/, /\/stock-info\?back=%2Fsearch&asset=coin&coinMarket=spot&symbol=BTC$/);
-  await selectAndExpect('BTCUSDT', /비트코인.*BITGET.*BTCUSDT/, /\/stock-info\?back=%2Fsearch&asset=coin&coinMarket=futures&symbol=BTCUSDT$/);
+  await selectAndExpect('005930', /삼성전자.*005930/, { asset: 'stock', market: 'KR', ticker: '005930' });
+  await selectAndExpect('AAPL', /애플.*AAPL/, { asset: 'stock', market: 'US', ticker: 'AAPL' });
+  await selectAndExpect('KRW-BTC', /비트코인.*UPBIT.*BTC\/KRW/, { asset: 'coin', coinMarket: 'spot', symbol: 'BTC' });
+  await selectAndExpect('BTCUSDT', /비트코인.*BITGET.*BTCUSDT/, { asset: 'coin', coinMarket: 'futures', symbol: 'BTCUSDT' });
 });
 
 test('watchlist and recent searches prioritize equal-tier suggestions', async ({ page }) => {
@@ -143,7 +167,7 @@ test('IME composition defers search, touch selection navigates, and errors can r
   await input.dispatchEvent('compositionend');
   await expect(page.getByRole('option', { name: /비트코인/ }).first()).toBeVisible();
   await page.getByRole('option', { name: /비트코인.*UPBIT/ }).click();
-  await expect(page).toHaveURL(/coinMarket=spot/);
+  await expect.poll(() => new URL(page.url()).searchParams.get('coinMarket')).toBe('spot');
 
   await page.goto('/__phase11-unified-search-e2e');
   await input.fill('오류');
