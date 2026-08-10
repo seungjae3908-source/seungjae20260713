@@ -35,6 +35,7 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const sha = context.sha;
+            const officialWorkflowId = 'futures-public-network-smoke.yml';
             const officialPath = '.github/workflows/futures-public-network-smoke.yml';
             const runUrlPattern = /\/actions\/runs\/(\d+)(?:[/?#]|$)/;
 
@@ -73,6 +74,23 @@ jobs:
               return runs.sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
             };
 
+            const listActiveExactShaPushRuns = async () => {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner,
+                repo,
+                workflow_id: officialWorkflowId,
+                branch: 'main',
+                event: 'push',
+                per_page: 100,
+              });
+              return runs
+                .filter((run) => run.head_sha === sha
+                  && run.head_branch === 'main'
+                  && run.event === 'push'
+                  && run.status !== 'completed')
+                .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+            };
+
             const inspectSnapshot = async () => {
               const statuses = await listStatuses();
               const runs = await listStatusBoundRuns(statuses);
@@ -96,14 +114,15 @@ jobs:
               return;
             }
 
-            const existingActive = snapshot.runs.find((run) => run.status !== 'completed');
+            const activePushRuns = await listActiveExactShaPushRuns();
+            const existingActive = snapshot.runs.find((run) => run.status !== 'completed') ?? activePushRuns[0];
             if (existingActive) {
               core.notice(`Waiting for existing exact-SHA Application CI Run ID ${existingActive.id}.`);
             } else {
               await github.rest.actions.createWorkflowDispatch({
                 owner,
                 repo,
-                workflow_id: 'futures-public-network-smoke.yml',
+                workflow_id: officialWorkflowId,
                 ref: 'main',
                 inputs: { target_sha: sha, checkout_ref: sha },
               });
@@ -125,8 +144,10 @@ jobs:
               }
 
               const activeRuns = snapshot.runs.filter((run) => run.status !== 'completed');
-              if (activeRuns.length) {
-                core.info(`Waiting for exact-SHA Application CI Run ID ${activeRuns[0].id}.`);
+              const directlyActivePushRuns = await listActiveExactShaPushRuns();
+              const activeRun = activeRuns[0] ?? directlyActivePushRuns[0];
+              if (activeRun) {
+                core.info(`Waiting for exact-SHA Application CI Run ID ${activeRun.id}.`);
                 await new Promise((resolve) => setTimeout(resolve, 15000));
                 continue;
               }
