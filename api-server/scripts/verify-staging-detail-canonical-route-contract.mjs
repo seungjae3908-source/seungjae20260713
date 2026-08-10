@@ -68,6 +68,10 @@ assert(
   'canonical destination must be confirmed before strict presentation settlement',
 );
 assert(
+  spec.includes("expect(page.url(), 'route changed while presentation was settling').toBe(urlBeforeFrame);"),
+  'strict post-canonical URL stability must not be weakened',
+);
+assert(
   spec.includes('expect(routeIdentity(page.url())).toBe(observation.toRoute);'),
   'healthy route must still finish on the exact expected destination',
 );
