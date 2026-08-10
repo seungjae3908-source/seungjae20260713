@@ -151,6 +151,7 @@ export const BITGET_ENDPOINTS = Object.freeze({
   spotHistoryCandles: "/api/v2/spot/market/history-candles",
   openInterest: "/api/v2/mix/market/open-interest",
   fundingHistory: "/api/v2/mix/market/history-fund-rate",
+  fundingHistoryV3: "/api/v3/market/history-fund-rate",
   currentFunding: "/api/v2/mix/market/current-fund-rate",
   symbolPrice: "/api/v2/mix/market/symbol-price",
 });
