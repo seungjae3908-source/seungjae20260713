@@ -100,12 +100,29 @@ test('lower win rate can pass with positive expectancy and strong profit factor'
   })), true);
 });
 
+test('lookahead and survivorship guards are mandatory', () => {
+  assert.equal(passesMinimumBacktestQuality(verified({ lookaheadGuarded: false })), false);
+  assert.equal(passesMinimumBacktestQuality(verified({ survivorshipGuarded: false })), false);
+});
+
 test('missing OOS/WF metrics fail closed to B watch candidate', () => {
   const result = rankScannerCandidates({ cards: [card('005930')], market: 'KR', strategy: 'swing' });
   assert.equal(result.cards.length, 1);
   assert.equal(result.cards[0].signalGrade, 'B');
   assert.ok(result.cards[0].candidateRanking?.watchReasons.includes('OOS/Walk-forward 검증 데이터 필요'));
   assert.equal(result.diagnostics.backtestMissingCount, 1);
+});
+
+test('soft minimum score never removes an otherwise safe watch candidate', () => {
+  const result = rankScannerCandidates({
+    cards: [card('LOW', 42)],
+    market: 'KR',
+    strategy: 'swing',
+    softMinimumScore: 80,
+  });
+  assert.equal(result.cards.length, 1);
+  assert.equal(result.cards[0].symbol, 'LOW');
+  assert.equal(result.cards[0].signalGrade, 'B');
 });
 
 test('hard data-quality failure is never relaxed to fill top ten', () => {
