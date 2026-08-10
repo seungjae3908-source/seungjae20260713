@@ -6,7 +6,11 @@ export function deriveUnifiedSearchState(input: {
   stale: boolean;
 }): Exclude<UnifiedSearchState, 'ERROR'> {
   const resultCount = Number.isFinite(input.resultCount) ? Math.max(0, Math.trunc(input.resultCount)) : 0;
-  if (input.stale) return 'DEGRADED';
-  if (input.partial) return resultCount > 0 ? 'PARTIAL' : 'DEGRADED';
-  return resultCount > 0 ? 'FULL' : 'EMPTY';
+  if (resultCount > 0) {
+    if (input.partial) return 'PARTIAL';
+    if (input.stale) return 'DEGRADED';
+    return 'FULL';
+  }
+  if (input.partial || input.stale) return 'DEGRADED';
+  return 'EMPTY';
 }
