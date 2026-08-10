@@ -8,10 +8,14 @@ on:
       - .github/workflows/prediction-lab-automated-research.yml
       - market-prediction-lab/src/automated-research-orchestrator.js
       - market-prediction-lab/src/automated-v1-research.js
+      - market-prediction-lab/src/long-history-data-layer.js
       - market-prediction-lab/scripts/run-automated-research-contract.js
       - market-prediction-lab/scripts/run-automated-v1-from-long-history.js
+      - market-prediction-lab/scripts/extend-futures-holdout-cache.js
+      - market-prediction-lab/scripts/build-scanner-backtest-quality.js
       - market-prediction-lab/tests/automated-research-orchestrator.test.js
       - market-prediction-lab/tests/automated-v1-research.test.js
+      - market-prediction-lab/tests/long-history-data-layer.test.js
   workflow_dispatch:
     inputs:
       mode:
@@ -99,7 +103,7 @@ jobs:
 
       - name: Run automated research orchestration tests
         working-directory: market-prediction-lab
-        run: node --test tests/automated-research-orchestrator.test.js tests/automated-v1-research.test.js
+        run: node --test tests/automated-research-orchestrator.test.js tests/automated-v1-research.test.js tests/long-history-data-layer.test.js
 
       - name: Build artifact-only research contract
         working-directory: market-prediction-lab
@@ -112,12 +116,24 @@ jobs:
         working-directory: market-prediction-lab
         run: npm run backtest:v1:history -- long-history-v1 docs/long-history-v1-result.json docs/long-history-v1-result.md
 
+      - name: Incrementally extend futures final-holdout cache
+        if: steps.resolve.outputs.mode == 'long_history'
+        working-directory: market-prediction-lab
+        run: node scripts/extend-futures-holdout-cache.js long-history-v1
+
       - name: Run automated V1 Development OOS Walk Forward
         if: steps.resolve.outputs.mode == 'long_history'
         working-directory: market-prediction-lab
         env:
           RESEARCH_CODE_SHA: ${{ steps.resolve.outputs.ref }}
         run: node scripts/run-automated-v1-from-long-history.js long-history-v1 artifacts/automated-research/v1-long-history.json
+
+      - name: Build scanner backtest quality v1 artifact
+        if: steps.resolve.outputs.mode == 'long_history'
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.resolve.outputs.ref }}
+        run: node scripts/build-scanner-backtest-quality.js long-history-v1 artifacts/automated-research/v1-long-history.json artifacts/automated-research/scanner-backtest-quality-v1.json
 
       - name: Verify safety flags and provider fail-closed contract
         working-directory: market-prediction-lab
@@ -143,6 +159,14 @@ jobs:
             if (research.safety.finalHoldoutUsedForSelection !== false) throw new Error('final holdout cannot be used for selection');
             if (research.safety.finalHoldoutRetuningAllowed !== false) throw new Error('final holdout retuning must remain forbidden');
           }
+
+          if (fs.existsSync('artifacts/automated-research/scanner-backtest-quality-v1.json')) {
+            const scanner = JSON.parse(fs.readFileSync('artifacts/automated-research/scanner-backtest-quality-v1.json', 'utf8'));
+            if (scanner.schema !== 'scanner-backtest-quality-v1' || scanner.schemaVersion !== 1) throw new Error('scanner artifact schema mismatch');
+            if (scanner.realHistoricalDataOnly !== true || scanner.syntheticMetricsAllowed !== false) throw new Error('scanner artifact must remain real-data-only');
+            if (scanner.liveOrderAllowed !== false || scanner.privateApiAllowed !== false || scanner.orderSubmitted !== false) throw new Error('scanner artifact safety flags violated');
+            if (scanner.rows.some((row) => row.backtestQuality === 'verified' && (!row.datasetDigest || !row.oos || !row.walkForward || row.holdout?.status !== 'evaluated'))) throw new Error('verified scanner row is incomplete');
+          }
           NODE
 
       - name: Upload immutable automated research artifact
@@ -152,6 +176,7 @@ jobs:
           path: |
             market-prediction-lab/artifacts/automated-research/contract.json
             market-prediction-lab/artifacts/automated-research/v1-long-history.json
+            market-prediction-lab/artifacts/automated-research/scanner-backtest-quality-v1.json
             market-prediction-lab/docs/long-history-v1-result.json
             market-prediction-lab/docs/long-history-v1-result.md
           if-no-files-found: error
