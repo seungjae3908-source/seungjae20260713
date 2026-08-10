@@ -82,6 +82,12 @@ test("unified V2 evaluator is deterministic, leak-free, and never unlocks final 
   assert.equal(first.orderSubmitted, false);
   assert.equal(first.researchStatus, "research_hold");
   assert.equal(first.statisticalQuality.statisticalPass, false);
+  assert.equal(first.executionCostStress.scenarioId, "double_configured_execution_costs_v1");
+  assert.equal(first.executionCostStress.multiplier, 2);
+  assert.equal(first.executionCostStress.selectionAffected, false);
+  assert.equal(first.executionCostStress.finalHoldoutUsed, false);
+  assert.ok(["survived", "failed"].includes(first.executionCostStress.status));
+  assert.equal(first.promotionEligible, false);
   assert.ok(first.walkForward.windows.length > 0);
   assert.ok(first.walkForward.windows.every((window) => window.leakFree === true));
   assert.ok(first.walkForward.windows.every((window) => window.endTime < RESEARCH_BACKTEST_PERIOD.finalHoldoutStartTime));
@@ -126,4 +132,6 @@ test("calibration row keeps sample and performance fields separate", () => {
   assert.ok(Object.hasOwn(row, "profitFactor"));
   assert.ok(Object.hasOwn(row, "MDD"));
   assert.ok(Object.hasOwn(row, "wfWindowDispersion"));
+  assert.equal(row.executionCostStressStatus, candidate.executionCostStress.status);
+  assert.equal(row.promotionEligible, false);
 });
