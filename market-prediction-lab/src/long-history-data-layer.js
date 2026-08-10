@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 export const LONG_HISTORY_DATASET_SCHEMA_VERSION = 1;
-export const SCANNER_BACKTEST_QUALITY_SCHEMA_VERSION = 1;
+export const SCANNER_BACKTEST_QUALITY_SCHEMA_VERSION = 2;
 export const BACKTEST_QUALITY_STATUSES = Object.freeze([
   "verified",
   "partial",
@@ -206,6 +206,117 @@ export function classifyBacktestQuality({ dataset, oosMetrics, walkForward, hold
   return Object.freeze({ status, reasons: Object.freeze(reasons) });
 }
 
+const EXECUTION_COST_STRESS_STATUSES = new Set(["survived", "failed", "not_evaluated", "blocked_provider"]);
+
+function normalizeExecutionCostStress(value) {
+  const status = value?.status ?? "not_evaluated";
+  if (!EXECUTION_COST_STRESS_STATUSES.has(status)) throw new TypeError(`unsupported execution cost stress status: ${status}`);
+  return Object.freeze({
+    status,
+    scenarioId: value?.scenarioId ?? null,
+    multiplier: Number.isFinite(value?.multiplier) ? value.multiplier : null,
+    baseline: metricsOrNull(value?.baseline),
+    stressed: metricsOrNull(value?.stressed),
+    positiveAfterStress: typeof value?.positiveAfterStress === "boolean" ? value.positiveAfterStress : null,
+    includes: Object.freeze({
+      fee: value?.includes?.fee === true,
+      spread: value?.includes?.spread === true,
+      slippage: value?.includes?.slippage === true,
+      funding: value?.includes?.funding === true,
+      latency: value?.includes?.latency === true,
+    }),
+    selectionAffected: false,
+    finalHoldoutUsed: false,
+    reasons: Object.freeze([...(value?.reasons ?? [])]),
+  });
+}
+
+function artifactKey(row) {
+  return [row.market, row.strategyType, row.direction, row.timeframe, row.symbol, row.strategyVersion].join("|");
+}
+
+function rankingMetrics(row) {
+  return Object.freeze({
+    expectancyPercent: row.expectancyPercent,
+    profitFactor: row.profitFactor,
+    maxDrawdownPercent: row.maxDrawdownPercent,
+    netReturnPercent: row.netReturnPercent,
+    tradeCount: row.tradeCount,
+    oosStabilityScore: row.oosStabilityScore,
+  });
+}
+
+function comparableMetrics(row) {
+  const metrics = rankingMetrics(row);
+  return [metrics.expectancyPercent, metrics.profitFactor, metrics.maxDrawdownPercent, metrics.netReturnPercent, metrics.tradeCount, metrics.oosStabilityScore].every(Number.isFinite)
+    ? metrics
+    : null;
+}
+
+function dominates(left, right) {
+  const a = comparableMetrics(left);
+  const b = comparableMetrics(right);
+  if (!a || !b) return false;
+  const leftValues = [a.expectancyPercent, a.profitFactor, a.maxDrawdownPercent, a.netReturnPercent, a.tradeCount, a.oosStabilityScore];
+  const rightValues = [b.expectancyPercent, b.profitFactor, b.maxDrawdownPercent, b.netReturnPercent, b.tradeCount, b.oosStabilityScore];
+  return leftValues.every((value, index) => value >= rightValues[index])
+    && leftValues.some((value, index) => value > rightValues[index]);
+}
+
+function buildResearchRankings(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = [row.market, row.strategyType, row.direction].join("|");
+    const bucket = groups.get(key) ?? [];
+    bucket.push(row);
+    groups.set(key, bucket);
+  }
+  return Object.freeze([...groups.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([group, groupRows]) => {
+    const eligible = groupRows.filter((row) => row.backtestQuality === "verified"
+      && comparableMetrics(row)
+      && ["survived", "failed"].includes(row.executionCostStress?.status));
+    const remaining = [...eligible];
+    const ordered = [];
+    let paretoFront = 1;
+    while (remaining.length > 0) {
+      const front = remaining.filter((candidate) => !remaining.some((other) => other !== candidate && dominates(other, candidate)))
+        .sort((left, right) => artifactKey(left).localeCompare(artifactKey(right)));
+      if (front.length === 0) break;
+      for (const row of front) ordered.push(Object.freeze({
+        rank: ordered.length + 1,
+        paretoFront,
+        artifactKey: artifactKey(row),
+        market: row.market,
+        strategyType: row.strategyType,
+        direction: row.direction,
+        timeframe: row.timeframe,
+        symbol: row.symbol,
+        strategyVersion: row.strategyVersion,
+        metrics: rankingMetrics(row),
+        executionCostStress: row.executionCostStress,
+        promotionEligible: row.promotionEligible,
+        promotionBlockReasons: row.promotionBlockReasons,
+      }));
+      const frontKeys = new Set(front.map(artifactKey));
+      for (let index = remaining.length - 1; index >= 0; index -= 1) if (frontKeys.has(artifactKey(remaining[index]))) remaining.splice(index, 1);
+      paretoFront += 1;
+    }
+    const blocked = groupRows.filter((row) => !eligible.includes(row));
+    return Object.freeze({
+      group,
+      market: groupRows[0]?.market ?? null,
+      strategyType: groupRows[0]?.strategyType ?? null,
+      direction: groupRows[0]?.direction ?? null,
+      status: ordered.length > 0 ? "research_ranked" : blocked.some((row) => row.backtestQuality === "blocked_provider") ? "blocked_provider" : "fail_closed",
+      rankingMethod: "pareto_non_dominated_multi_metric_no_empirical_threshold",
+      top10: Object.freeze(ordered.slice(0, 10)),
+      availableCandidateCount: ordered.length,
+      excludedCandidateCount: blocked.length,
+      promotionAllowed: ordered.some((row) => row.promotionEligible === true),
+    });
+  }));
+}
+
 export function buildScannerBacktestQualityRow(input) {
   if (!MARKET_SET.has(input?.market)) throw new TypeError(`unsupported market: ${input?.market}`);
   if (!QUALITY_SET.has(input.backtestQuality)) throw new TypeError(`unsupported backtestQuality: ${input.backtestQuality}`);
@@ -215,6 +326,14 @@ export function buildScannerBacktestQualityRow(input) {
   const expectancyPercentValue = expectancyPercent(input.oos?.expectancy, input.initialCapital);
   const maxDrawdownPercent = negativeDrawdownPercent(input.oos?.maximumDrawdown);
   const netReturnPercent = ratioToPercent(input.oos?.totalReturn);
+  const executionCostStress = normalizeExecutionCostStress(input.executionCostStress);
+  const promotionBlockReasons = [...new Set([
+    ...(input.promotionBlockReasons ?? []),
+    ...(input.backtestQuality === "verified" ? [] : [`backtest_quality_${input.backtestQuality}`]),
+    ...(executionCostStress.status === "survived" ? [] : [`execution_cost_stress_${executionCostStress.status}`]),
+    ...(input.researchStatus === "eligible_for_live_ranking" ? [] : ["research_status_not_live_eligible"]),
+  ])];
+  const promotionEligible = input.promotionEligible === true && promotionBlockReasons.length === 0;
   return Object.freeze({
     market: input.market,
     symbol: input.symbol,
@@ -222,6 +341,8 @@ export function buildScannerBacktestQualityRow(input) {
     direction: input.direction,
     strategyVersion: input.strategyVersion,
     timeframe: input.timeframe,
+    artifactKey: [input.market, input.strategyType, input.direction, input.timeframe, input.symbol, input.strategyVersion].join("|"),
+    historicalBacktest: true,
     backtestQuality: input.backtestQuality,
     reasons: Object.freeze([...(input.reasons ?? [])]),
     development: metricsOrNull(input.development),
@@ -248,6 +369,9 @@ export function buildScannerBacktestQualityRow(input) {
     minimumTradeCount: Number.isFinite(input.minimumTradeCount) ? input.minimumTradeCount : null,
     costsIncluded: input.costModel?.fee === true && input.costModel?.spread === true,
     slippageIncluded: input.costModel?.slippage === true,
+    executionCostStress,
+    promotionEligible,
+    promotionBlockReasons: Object.freeze(promotionBlockReasons),
     lookaheadGuarded: input.lookaheadSafe === true,
     survivorshipGuarded: input.dataset?.market?.endsWith("STOCK")
       ? input.dataset?.survivorshipSafeguard === "verified"
@@ -277,6 +401,14 @@ export function buildScannerBacktestQualityRow(input) {
     dataStart: input.dataset?.actualStart ?? null,
     dataEnd: input.dataset?.actualEnd ?? null,
     datasetDigest: input.dataset?.datasetDigest ?? null,
+    provider: input.dataset?.provider ?? null,
+    providerVersion: input.dataset?.providerVersion ?? null,
+    adjustmentMode: input.dataset?.adjustmentMode ?? null,
+    corporateActions: input.dataset?.corporateActions ?? null,
+    survivorshipSafeguard: input.dataset?.survivorshipSafeguard ?? null,
+    holdoutFrozenBeforeEvaluation: input.holdout?.frozenBeforeHoldout === true,
+    holdoutSelectionUsesHoldout: input.holdout?.selectionUsesHoldout === true,
+    holdoutRetunedAfterEvaluation: input.holdout?.retuningAfterHoldout === true,
     researchCodeSha: input.researchCodeSha,
     generatedAt: input.generatedAt,
   });
@@ -284,13 +416,17 @@ export function buildScannerBacktestQualityRow(input) {
 
 export function buildScannerBacktestQualityArtifact({ researchCodeSha, generatedAt, rows, blocked = [] }) {
   if (!/^[0-9a-f]{40}$/i.test(researchCodeSha ?? "")) throw new TypeError("researchCodeSha must be an immutable 40-character SHA");
+  const normalizedRows = Object.freeze([...(rows ?? [])]);
   const artifact = {
-    schema: "scanner-backtest-quality-v1",
+    schema: "scanner-backtest-quality-v2",
     schemaVersion: SCANNER_BACKTEST_QUALITY_SCHEMA_VERSION,
     researchCodeSha,
     generatedAt,
-    rows: Object.freeze([...(rows ?? [])]),
+    rows: normalizedRows,
+    rankings: buildResearchRankings(normalizedRows),
     blocked: Object.freeze([...(blocked ?? [])]),
+    historicalBacktest: true,
+    rankingSemantics: "historical_research_only_not_live_signal_score",
     realHistoricalDataOnly: true,
     syntheticMetricsAllowed: false,
     liveOrderAllowed: false,
