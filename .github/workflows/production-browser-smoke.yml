@@ -1,0 +1,155 @@
+name: Production Browser Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact deployed Production SHA to verify
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/production-browser-smoke.yml
+      - stock-analyzer/playwright.production.config.ts
+      - stock-analyzer/e2e/production-readonly-smoke.spec.ts
+      - stock-analyzer/e2e/support/production-readonly-policy.ts
+      - stock-analyzer/e2e/support/production-readonly-policy.test.ts
+      - api-server/scripts/verify-production-browser-smoke-contract.mjs
+      - api-server/src/lib/deployment-identity.ts
+      - api-server/src/index.ts
+      - ops/deploy-production.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-browser-smoke-${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  static-contract:
+    name: Validate Production browser safety contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify Production browser workflow is read-only and fail-closed
+        run: node api-server/scripts/verify-production-browser-smoke-contract.mjs
+      - name: Run mutation-block policy tests
+        working-directory: api-server
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import { build } from 'esbuild';
+          await build({
+            entryPoints: ['../stock-analyzer/e2e/support/production-readonly-policy.test.ts'],
+            outfile: '/tmp/production-readonly-policy.test.cjs',
+            bundle: true,
+            platform: 'node',
+            format: 'cjs',
+            target: 'node20',
+            logLevel: 'warning',
+          });
+          NODE
+          node --test /tmp/production-readonly-policy.test.cjs
+
+  browser-readonly:
+    name: Production desktop and mobile read-only evidence
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      PRODUCTION_BASE_URL: https://lsj119.duckdns.org
+      PRODUCTION_EXPECTED_SHA: ${{ inputs.sha }}
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+      PRODUCTION_READONLY_E2E: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      - name: Require exact immutable SHA and QA credential
+        run: |
+          set -Eeuo pipefail
+          [[ "$PRODUCTION_EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo 'Production browser smoke requires an exact 40-character SHA.' >&2
+            exit 1
+          }
+          [[ -n "$PRODUCTION_QA_LOGIN" && -n "$PRODUCTION_QA_PASSWORD" ]] || {
+            echo 'BLOCKED_BY_PRODUCTION_QA_CREDENTIAL' >&2
+            echo 'PRIVATE_ACCOUNT_LIVE_QA=NOT_RUN' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          RESOLVED_SHA="$(git rev-parse HEAD^{commit})"
+          [[ "${PRODUCTION_EXPECTED_SHA,,}" == "$RESOLVED_SHA" ]] || {
+            echo "Checked-out SHA mismatch: expected=${PRODUCTION_EXPECTED_SHA,,} actual=$RESOLVED_SHA" >&2
+            exit 1
+          }
+      - run: pnpm install --frozen-lockfile
+      - name: Require Production health code identity before browser access
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --max-time 15 "$PRODUCTION_BASE_URL/api/health" -o /tmp/production-health.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/production-health.json', 'utf8'));
+          const expected = process.env.PRODUCTION_EXPECTED_SHA.toLowerCase();
+          const ok = health?.ok === true
+            && health?.deploySha === expected
+            && health?.processDeploySha === expected
+            && health?.deployMarkerSha === expected
+            && health?.identityMatch === true
+            && health?.identityStatus === 'match';
+          if (!ok) {
+            console.error('Production deployment identity is not exact-match; browser smoke blocked.');
+            process.exit(1);
+          }
+          NODE
+      - name: Install Chromium runtime
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run Production read-only desktop and mobile browser evidence
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production.config.ts
+      - name: Summarize safety boundary
+        if: always()
+        run: |
+          {
+            echo '## Production Browser Smoke'
+            echo
+            echo "- Expected deployed SHA: \`${PRODUCTION_EXPECTED_SHA,,}\`"
+            echo '- PRIVATE_ACCOUNT_LIVE_QA=`NOT_RUN`'
+            echo '- actual orders=`0`'
+            echo '- actual cancels=`0`'
+            echo '- private account live requests=`0`'
+            echo '- private trading requests=`0`'
+            echo '- transfers=`0`'
+            echo '- withdrawals=`0`'
+            echo '- Production DB mutations are blocked by browser policy.'
+            echo '- Production app API mutations are blocked by browser policy.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload sanitized browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-browser-readonly-${{ inputs.sha }}
+          path: stock-analyzer/production-browser-artifacts
+          if-no-files-found: error
+          retention-days: 14
