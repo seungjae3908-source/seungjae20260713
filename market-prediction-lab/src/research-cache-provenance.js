@@ -18,15 +18,23 @@ function assertDigest(value, label) {
   if (!/^[0-9a-f]{64}$/i.test(value ?? "")) throw new TypeError(`${label} must be a SHA-256 digest`);
 }
 
+function assertNonEmptyString(value, label) {
+  if (typeof value !== "string" || value.length === 0) throw new TypeError(`${label} is required`);
+}
+
 export function buildHistoricalCacheProvenance({
   market,
   symbol,
   timeframe,
   provider,
+  providerVersion,
   requestedStartTime,
   requestedEndTime,
+  adjustmentMode = "none",
+  datasetDigest,
   dataDigest,
   providerManifestDigest,
+  researchCodeSha,
   candleCount,
   actualStartTime,
   actualEndTime,
@@ -34,25 +42,49 @@ export function buildHistoricalCacheProvenance({
   duplicatesHandled = true,
   missingIntervalsDetected = true,
 } = {}) {
-  if (![market, symbol, timeframe, provider].every((value) => typeof value === "string" && value.length > 0)) throw new TypeError("market/symbol/timeframe/provider are required");
+  for (const [label, value] of Object.entries({ market, symbol, timeframe, provider, providerVersion, adjustmentMode })) {
+    assertNonEmptyString(value, label);
+  }
   for (const [label, value] of Object.entries({ requestedStartTime, requestedEndTime, actualStartTime, actualEndTime })) {
     if (!Number.isInteger(value)) throw new TypeError(`${label} must be an integer timestamp`);
   }
   if (requestedEndTime <= requestedStartTime || actualEndTime < actualStartTime) throw new RangeError("invalid historical time range");
   if (!Number.isInteger(candleCount) || candleCount <= 0) throw new RangeError("candleCount must be positive");
-  assertDigest(dataDigest, "dataDigest");
+  const resolvedDatasetDigest = datasetDigest ?? dataDigest;
+  assertDigest(resolvedDatasetDigest, "datasetDigest");
   if (providerManifestDigest != null) assertDigest(providerManifestDigest, "providerManifestDigest");
-  const identity = Object.freeze({ market, symbol, timeframe, provider, requestedStartTime, requestedEndTime, dataDigest, providerManifestDigest: providerManifestDigest ?? null });
+  assertSha(researchCodeSha, "researchCodeSha");
+
+  const namespaceIdentity = Object.freeze({ market, provider, providerVersion, adjustmentMode });
+  const cacheNamespace = `historical:${sha256Canonical(namespaceIdentity)}`;
+  const identity = Object.freeze({
+    market,
+    symbol,
+    timeframe,
+    provider,
+    providerVersion,
+    requestedStartTime,
+    requestedEndTime,
+    adjustmentMode,
+    datasetDigest: resolvedDatasetDigest,
+    providerManifestDigest: providerManifestDigest ?? null,
+    researchCodeSha: researchCodeSha.toLowerCase(),
+  });
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     cacheType: "historical_raw",
-    cacheKey: `historical:${sha256Canonical(identity)}`,
+    cacheNamespace,
+    cacheKey: `${cacheNamespace}:${sha256Canonical(identity)}`,
     identity,
     coverage: Object.freeze({ candleCount, actualStartTime, actualEndTime }),
     guards: Object.freeze({
       closedCandlesOnly: closedCandlesOnly === true,
       duplicatesHandled: duplicatesHandled === true,
       missingIntervalsDetected: missingIntervalsDetected === true,
+      exactProviderVersionRequired: true,
+      exactAdjustmentModeRequired: true,
+      exactDatasetDigestRequired: true,
+      exactResearchCodeShaRequired: true,
       syntheticDataAllowed: false,
     }),
   });
@@ -94,8 +126,12 @@ export function validateCacheReuse(expected, actual) {
   if (expected.cacheKey !== actual.cacheKey) return Object.freeze({ reusable: false, reason: "cache_key_mismatch" });
   if (sha256Canonical(expected.identity) !== sha256Canonical(actual.identity)) return Object.freeze({ reusable: false, reason: "cache_identity_mismatch" });
   if (expected.cacheType === "historical_raw") {
+    if (expected.cacheNamespace !== actual.cacheNamespace) return Object.freeze({ reusable: false, reason: "cache_namespace_mismatch" });
     if (actual.guards?.syntheticDataAllowed !== false) return Object.freeze({ reusable: false, reason: "synthetic_data_guard_failed" });
     if (actual.guards?.closedCandlesOnly !== true || actual.guards?.duplicatesHandled !== true || actual.guards?.missingIntervalsDetected !== true) return Object.freeze({ reusable: false, reason: "historical_quality_guard_failed" });
+    if (actual.guards?.exactProviderVersionRequired !== true || actual.guards?.exactAdjustmentModeRequired !== true || actual.guards?.exactDatasetDigestRequired !== true || actual.guards?.exactResearchCodeShaRequired !== true) {
+      return Object.freeze({ reusable: false, reason: "historical_identity_guard_failed" });
+    }
   }
   if (expected.cacheType === "strategy_result" && actual.guards?.staleReuseAllowed !== false) return Object.freeze({ reusable: false, reason: "stale_reuse_guard_failed" });
   return Object.freeze({ reusable: true, reason: null });

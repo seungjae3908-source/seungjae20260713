@@ -1,4 +1,5 @@
 import { buildHistoricalDataset } from "./long-history-data-layer.js";
+import { buildHistoricalCacheProvenance } from "./research-cache-provenance.js";
 
 export const STOCK_HISTORY_PROVIDER_SCHEMA_VERSION = 1;
 export const KR_FSC_STOCK_PROVIDER = "kr-fsc-data-go-kr-stock-price-v1";
@@ -8,6 +9,11 @@ export const US_ALPHA_VANTAGE_ADJUSTED_PROVIDER = "us-alpha-vantage-daily-adjust
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FSC_BASE_URL = "https://apis.data.go.kr/1160100/service/GetStockSecuritiesInfoService/getStockPriceInfo";
 const ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query";
+const STOCK_RESEARCH_SAFETY = Object.freeze({
+  liveOrderAllowed: false,
+  privateAccountRequestAllowed: false,
+  orderSubmitted: false,
+});
 
 function assertFetch(fetchImpl) {
   if (typeof fetchImpl !== "function") throw new TypeError("fetch implementation is required");
@@ -17,6 +23,11 @@ function assertFetch(fetchImpl) {
 function assertKey(value, label) {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${label}_MISSING`);
   return value.trim();
+}
+
+function assertResearchCodeSha(value) {
+  if (!/^[0-9a-f]{40}$/iu.test(value ?? "")) throw new TypeError("researchCodeSha must be an immutable 40-character SHA");
+  return value.toLowerCase();
 }
 
 function assertStockSymbol(symbol, market) {
@@ -60,6 +71,69 @@ function finiteNumber(value, label, { positive = false, nonNegative = false } = 
   return number;
 }
 
+function isClosedDailyTimestamp(timestamp, generatedAt) {
+  return Number.isSafeInteger(timestamp) && Number.isSafeInteger(generatedAt) && timestamp + DAY_MS <= generatedAt;
+}
+
+function assertProviderRowOrder(timestamps, { duplicateCode, outOfOrderCode }) {
+  const seen = new Set();
+  let previous = null;
+  let direction = 0;
+  for (const timestamp of timestamps) {
+    if (seen.has(timestamp)) throw new Error(`${duplicateCode}:${timestamp}`);
+    seen.add(timestamp);
+    if (previous != null) {
+      const nextDirection = timestamp > previous ? 1 : -1;
+      if (direction === 0) direction = nextDirection;
+      else if (direction !== nextDirection) throw new Error(`${outOfOrderCode}:${timestamp}`);
+    }
+    previous = timestamp;
+  }
+}
+
+function buildCollectionProvenance({
+  provider,
+  providerVersion,
+  source,
+  market,
+  symbol,
+  requestedStart,
+  requestedEnd,
+  generatedAt,
+  adjustmentMode,
+  corporateActions,
+  survivorshipSafeguard,
+  outOfRangeCandleCountDropped,
+  openCandleCountDropped,
+}) {
+  return Object.freeze({
+    schemaVersion: 1,
+    provider,
+    providerVersion,
+    source,
+    market,
+    symbol,
+    timeframe: "1d",
+    requestedStart,
+    requestedEnd,
+    generatedAt,
+    adjustmentMode,
+    corporateActions,
+    survivorshipSafeguard,
+    closedCandlesOnly: true,
+    duplicatePolicy: "fail_closed",
+    outOfOrderPolicy: "fail_closed",
+    invalidOhlcPolicy: "fail_closed",
+    outOfRangePolicy: "drop",
+    openCandlePolicy: "drop",
+    outOfRangeCandleCountDropped,
+    openCandleCountDropped,
+    credentialValueExposed: false,
+    privateApiUsed: false,
+    syntheticDataUsed: false,
+  });
+}
+
 function normalizeFscBody(payload) {
   const response = payload?.response ?? payload;
   const header = response?.header ?? {};
@@ -96,6 +170,8 @@ export function buildStockHistoryProviderCapability({ market, env = process.env 
       schemaVersion: STOCK_HISTORY_PROVIDER_SCHEMA_VERSION,
       market,
       provider: KR_FSC_STOCK_PROVIDER,
+      providerVersion: "GetStockSecuritiesInfoService/getStockPriceInfo",
+      adjustmentMode: "none",
       status: configured ? "configured" : "blocked_provider",
       credentialEnvironmentVariable: "KR_FSC_OPEN_DATA_SERVICE_KEY",
       credentialPresent: configured,
@@ -103,12 +179,14 @@ export function buildStockHistoryProviderCapability({ market, env = process.env 
       sourceAuthority: "Financial Services Commission / Korea Exchange linked public data",
       dailyHistoryAvailable: true,
       corporateActionAdjustmentAvailable: false,
+      corporateActions: "unverified",
+      survivorshipSafeguard: "unverified",
       survivorshipSafeguardAvailable: false,
       selectionReady: configured,
       finalHoldoutReady: false,
       reason: configured ? "daily_ohlcv_ready_corporate_action_provenance_still_required" : "missing_public_data_service_key",
       privateApiRequired: false,
-      liveOrderAllowed: false,
+      ...STOCK_RESEARCH_SAFETY,
     });
   }
   if (market === "US_STOCK") {
@@ -118,6 +196,8 @@ export function buildStockHistoryProviderCapability({ market, env = process.env 
       schemaVersion: STOCK_HISTORY_PROVIDER_SCHEMA_VERSION,
       market,
       provider: adjusted ? US_ALPHA_VANTAGE_ADJUSTED_PROVIDER : US_ALPHA_VANTAGE_RAW_PROVIDER,
+      providerVersion: adjusted ? "TIME_SERIES_DAILY_ADJUSTED" : "TIME_SERIES_DAILY",
+      adjustmentMode: adjusted ? "adjusted_close_ratio_with_split_volume" : "none",
       status: configured ? "configured" : "blocked_provider",
       credentialEnvironmentVariable: "ALPHA_VANTAGE_API_KEY",
       credentialPresent: configured,
@@ -125,19 +205,45 @@ export function buildStockHistoryProviderCapability({ market, env = process.env 
       sourceAuthority: "Alpha Vantage",
       dailyHistoryAvailable: true,
       corporateActionAdjustmentAvailable: adjusted,
+      corporateActions: adjusted ? "verified_provider_events" : "unverified",
+      survivorshipSafeguard: "unverified",
       survivorshipSafeguardAvailable: false,
       selectionReady: configured,
       finalHoldoutReady: false,
       reason: configured
         ? adjusted
           ? "adjusted_daily_available_survivorship_provenance_still_required"
-          : "raw_daily_only_enable_adjusted_for_split_dividend_aware_research"
+          : "raw_daily_corporate_actions_unverified_final_holdout_forbidden"
         : "missing_alpha_vantage_api_key",
       privateApiRequired: false,
-      liveOrderAllowed: false,
+      ...STOCK_RESEARCH_SAFETY,
     });
   }
   throw new TypeError(`unsupported stock history market: ${market}`);
+}
+
+export function buildStockAutomatedResearchProviderCapability({ market, env = process.env } = {}) {
+  const capability = buildStockHistoryProviderCapability({ market, env });
+  return Object.freeze({
+    source: capability.provider,
+    provider: capability.provider,
+    providerVersion: capability.providerVersion,
+    publicHistoricalOhlcv: capability.status === "configured" && capability.dailyHistoryAvailable === true,
+    closedCandlesOnly: true,
+    coverageRecorded: true,
+    duplicatesHandled: true,
+    missingIntervalsDetected: true,
+    adjustmentMode: capability.adjustmentMode,
+    corporateActions: capability.corporateActions,
+    survivorshipSafeguard: capability.survivorshipSafeguard,
+    providerStatus: capability.status,
+    selectionReady: capability.selectionReady,
+    finalHoldoutReady: false,
+    reason: capability.reason,
+    credentialValueExposed: false,
+    fakeHistoricalDataAllowed: false,
+    ...STOCK_RESEARCH_SAFETY,
+  });
 }
 
 export async function collectKrFscStockHistory({
@@ -165,7 +271,6 @@ export async function collectKrFscStockHistory({
     url.searchParams.set("numOfRows", String(pageSize));
     url.searchParams.set("pageNo", String(pageNo));
     url.searchParams.set("beginBasDt", yyyymmdd(requestedStart));
-    // Official endBasDt is exclusive; request the next UTC date to include requestedEnd.
     url.searchParams.set("endBasDt", yyyymmdd(requestedEnd + DAY_MS));
     url.searchParams.set("likeSrtnCd", normalizedSymbol);
 
@@ -179,24 +284,59 @@ export async function collectKrFscStockHistory({
     if (pageNo > 10000) throw new Error("KR_FSC_PAGINATION_GUARD");
   }
 
-  const unique = new Map();
-  for (const item of allItems) {
-    const candle = normalizeKrFscStockItem(item, { symbol: normalizedSymbol, observedAt: generatedAt });
-    if (candle.timestamp < requestedStart || candle.timestamp > requestedEnd) continue;
-    if (unique.has(candle.timestamp)) throw new Error(`KR_FSC_DUPLICATE_CANDLE:${candle.timestamp}`);
-    unique.set(candle.timestamp, candle);
+  const normalized = allItems.map((item) => normalizeKrFscStockItem(item, { symbol: normalizedSymbol, observedAt: generatedAt }));
+  assertProviderRowOrder(normalized.map((candle) => candle.timestamp), {
+    duplicateCode: "KR_FSC_DUPLICATE_CANDLE",
+    outOfOrderCode: "KR_FSC_OUT_OF_ORDER_CANDLE",
+  });
+
+  let outOfRangeCandleCountDropped = 0;
+  let openCandleCountDropped = 0;
+  const candles = [];
+  for (const candle of normalized) {
+    if (candle.timestamp < requestedStart || candle.timestamp > requestedEnd) {
+      outOfRangeCandleCountDropped += 1;
+      continue;
+    }
+    if (!isClosedDailyTimestamp(candle.timestamp, generatedAt)) {
+      openCandleCountDropped += 1;
+      continue;
+    }
+    candles.push(candle);
   }
-  const candles = [...unique.values()].sort((a, b) => a.timestamp - b.timestamp);
+  candles.sort((a, b) => a.timestamp - b.timestamp);
+
+  const providerVersion = "GetStockSecuritiesInfoService/getStockPriceInfo";
+  const source = "FSC/KRX getStockPriceInfo";
+  const corporateActions = "unverified";
+  const survivorshipSafeguard = "unverified";
+  const adjustmentMode = "none";
   return Object.freeze({
     provider: KR_FSC_STOCK_PROVIDER,
-    providerVersion: "GetStockSecuritiesInfoService/getStockPriceInfo",
+    providerVersion,
+    source,
     market: "KR_STOCK",
     symbol: normalizedSymbol,
     timeframe: "1d",
     candles: Object.freeze(candles),
-    corporateActions: "unverified",
-    survivorshipSafeguard: "unverified",
-    adjustmentMode: "none",
+    corporateActions,
+    survivorshipSafeguard,
+    adjustmentMode,
+    provenance: buildCollectionProvenance({
+      provider: KR_FSC_STOCK_PROVIDER,
+      providerVersion,
+      source,
+      market: "KR_STOCK",
+      symbol: normalizedSymbol,
+      requestedStart,
+      requestedEnd,
+      generatedAt,
+      adjustmentMode,
+      corporateActions,
+      survivorshipSafeguard,
+      outOfRangeCandleCountDropped,
+      openCandleCountDropped,
+    }),
     credentialExposed: false,
     privateApiUsed: false,
     syntheticDataUsed: false,
@@ -213,7 +353,7 @@ function alphaRows(payload, adjusted) {
   if (rejection) throw new Error(rejection);
   const series = payload?.["Time Series (Daily)"];
   if (!series || typeof series !== "object" || Array.isArray(series)) throw new Error("US_ALPHA_VANTAGE_MISSING_DAILY_SERIES");
-  return Object.entries(series).map(([date, row]) => {
+  const rows = Object.entries(series).map(([date, row]) => {
     const timestamp = isoDateToUtc(date);
     const open = finiteNumber(row?.["1. open"], "US_ALPHA_OPEN", { positive: true });
     const high = finiteNumber(row?.["2. high"], "US_ALPHA_HIGH", { positive: true });
@@ -225,7 +365,12 @@ function alphaRows(payload, adjusted) {
     const splitCoefficient = adjusted ? finiteNumber(row?.["8. split coefficient"] ?? 1, "US_ALPHA_SPLIT", { positive: true }) : 1;
     if (high < Math.max(open, close) || low > Math.min(open, close) || high < low) throw new Error(`US_ALPHA_INVALID_OHLC:${date}`);
     return { timestamp, open, high, low, close, volume, adjustedClose, dividendAmount, splitCoefficient };
-  }).sort((a, b) => a.timestamp - b.timestamp);
+  });
+  assertProviderRowOrder(rows.map((row) => row.timestamp), {
+    duplicateCode: "US_ALPHA_DUPLICATE_CANDLE",
+    outOfOrderCode: "US_ALPHA_OUT_OF_ORDER_CANDLE",
+  });
+  return rows.sort((a, b) => a.timestamp - b.timestamp);
 }
 
 function adjustAlphaRows(rows, generatedAt) {
@@ -270,8 +415,21 @@ export async function collectUsAlphaVantageHistory({
   url.searchParams.set("apikey", key);
   const response = await fetcher(url, { method: "GET", headers: { accept: "application/json" } });
   if (!response?.ok) throw new Error(`US_ALPHA_VANTAGE_HTTP_${response?.status ?? "UNKNOWN"}`);
-  const rows = alphaRows(await response.json(), adjusted)
-    .filter((row) => row.timestamp >= requestedStart && row.timestamp <= requestedEnd);
+
+  const parsedRows = alphaRows(await response.json(), adjusted);
+  let outOfRangeCandleCountDropped = 0;
+  let openCandleCountDropped = 0;
+  const rows = parsedRows.filter((row) => {
+    if (row.timestamp < requestedStart || row.timestamp > requestedEnd) {
+      outOfRangeCandleCountDropped += 1;
+      return false;
+    }
+    if (!isClosedDailyTimestamp(row.timestamp, generatedAt)) {
+      openCandleCountDropped += 1;
+      return false;
+    }
+    return true;
+  });
   const candles = adjusted
     ? adjustAlphaRows(rows, generatedAt)
     : rows.map((row) => Object.freeze({
@@ -284,16 +442,39 @@ export async function collectUsAlphaVantageHistory({
       isClosed: true,
       observedAt: generatedAt,
     }));
+
+  const provider = adjusted ? US_ALPHA_VANTAGE_ADJUSTED_PROVIDER : US_ALPHA_VANTAGE_RAW_PROVIDER;
+  const providerVersion = adjusted ? "TIME_SERIES_DAILY_ADJUSTED" : "TIME_SERIES_DAILY";
+  const source = `Alpha Vantage ${providerVersion}`;
+  const corporateActions = adjusted ? "verified_provider_events" : "unverified";
+  const survivorshipSafeguard = "unverified";
+  const adjustmentMode = adjusted ? "adjusted_close_ratio_with_split_volume" : "none";
   return Object.freeze({
-    provider: adjusted ? US_ALPHA_VANTAGE_ADJUSTED_PROVIDER : US_ALPHA_VANTAGE_RAW_PROVIDER,
-    providerVersion: adjusted ? "TIME_SERIES_DAILY_ADJUSTED" : "TIME_SERIES_DAILY",
+    provider,
+    providerVersion,
+    source,
     market: "US_STOCK",
     symbol: normalizedSymbol,
     timeframe: "1d",
     candles: Object.freeze(candles),
-    corporateActions: adjusted ? "verified_provider_events" : "unverified",
-    survivorshipSafeguard: "unverified",
-    adjustmentMode: adjusted ? "adjusted_close_ratio_with_split_volume" : "none",
+    corporateActions,
+    survivorshipSafeguard,
+    adjustmentMode,
+    provenance: buildCollectionProvenance({
+      provider,
+      providerVersion,
+      source,
+      market: "US_STOCK",
+      symbol: normalizedSymbol,
+      requestedStart,
+      requestedEnd,
+      generatedAt,
+      adjustmentMode,
+      corporateActions,
+      survivorshipSafeguard,
+      outOfRangeCandleCountDropped,
+      openCandleCountDropped,
+    }),
     credentialExposed: false,
     privateApiUsed: false,
     syntheticDataUsed: false,
@@ -337,7 +518,7 @@ export async function buildStockHistoricalDataset({
     timeframe: collection.timeframe,
     provider: collection.provider,
     providerVersion: collection.providerVersion,
-    source: collection.provider,
+    source: collection.source,
     requestedStart,
     requestedEnd,
     generatedAt,
@@ -348,4 +529,80 @@ export async function buildStockHistoricalDataset({
     survivorshipSafeguard: collection.survivorshipSafeguard,
   });
   return Object.freeze({ capability, collection, dataset });
+}
+
+export async function prepareStockAutomatedResearchHistory({
+  market,
+  symbol,
+  requestedStart,
+  requestedEnd,
+  researchCodeSha,
+  generatedAt = Date.now(),
+  env = process.env,
+  fetchImpl = globalThis.fetch,
+  providerManifestDigest = null,
+} = {}) {
+  assertRange(requestedStart, requestedEnd);
+  const immutableResearchCodeSha = assertResearchCodeSha(researchCodeSha);
+  const capability = buildStockHistoryProviderCapability({ market, env });
+  const automatedProviderCapability = buildStockAutomatedResearchProviderCapability({ market, env });
+  if (capability.status !== "configured") {
+    return Object.freeze({
+      status: "blocked_provider",
+      reason: capability.reason,
+      capability,
+      automatedProviderCapability,
+      collection: null,
+      dataset: null,
+      cacheProvenance: null,
+      finalHoldoutReady: false,
+      ...STOCK_RESEARCH_SAFETY,
+    });
+  }
+
+  const result = await buildStockHistoricalDataset({
+    market,
+    symbol,
+    requestedStart,
+    requestedEnd,
+    generatedAt,
+    env,
+    fetchImpl,
+  });
+  if (result.dataset.candles.length === 0 || result.dataset.actualStart == null || result.dataset.actualEnd == null) {
+    throw new Error("STOCK_HISTORY_DATASET_MISSING");
+  }
+
+  const cacheProvenance = buildHistoricalCacheProvenance({
+    market: result.dataset.market,
+    symbol: result.dataset.symbol,
+    timeframe: result.dataset.timeframe,
+    provider: result.dataset.provider,
+    providerVersion: result.dataset.providerVersion,
+    requestedStartTime: result.dataset.requestedStart,
+    requestedEndTime: result.dataset.requestedEnd,
+    adjustmentMode: result.dataset.adjustmentMode,
+    datasetDigest: result.dataset.datasetDigest,
+    providerManifestDigest,
+    researchCodeSha: immutableResearchCodeSha,
+    candleCount: result.dataset.candles.length,
+    actualStartTime: result.dataset.actualStart,
+    actualEndTime: result.dataset.actualEnd,
+    closedCandlesOnly: true,
+    duplicatesHandled: true,
+    missingIntervalsDetected: true,
+  });
+
+  return Object.freeze({
+    status: "ready_for_research",
+    reason: null,
+    capability: result.capability,
+    automatedProviderCapability,
+    collection: result.collection,
+    dataset: result.dataset,
+    cacheProvenance,
+    finalHoldoutReady: false,
+    finalHoldoutReason: result.capability.reason,
+    ...STOCK_RESEARCH_SAFETY,
+  });
 }

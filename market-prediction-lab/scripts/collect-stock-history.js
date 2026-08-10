@@ -1,6 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { buildStockHistoricalDataset, buildStockHistoryProviderCapability } from "../src/stock-history-provider.js";
+import {
+  buildStockHistoryProviderCapability,
+  prepareStockAutomatedResearchHistory,
+} from "../src/stock-history-provider.js";
 
 function args(argv) {
   const result = {};
@@ -28,8 +31,10 @@ const market = input.market;
 const symbol = input.symbol;
 const requestedStart = parseDate(input.start, "start");
 const requestedEnd = parseDate(input.end, "end");
+const researchCodeSha = input["research-code-sha"] ?? process.env.RESEARCH_CODE_SHA;
 if (!market || !symbol) throw new Error("--market and --symbol are required");
 if (!input.output) throw new Error("--output is required");
+if (!/^[0-9a-f]{40}$/iu.test(researchCodeSha ?? "")) throw new Error("--research-code-sha or RESEARCH_CODE_SHA must be an immutable 40-character SHA");
 
 const capability = buildStockHistoryProviderCapability({ market, env: process.env });
 if (capability.status !== "configured") {
@@ -44,49 +49,73 @@ if (capability.status !== "configured") {
     credentialPresent: capability.credentialPresent,
     credentialValueExposed: false,
     privateApiUsed: false,
+    liveOrderAllowed: false,
+    privateAccountRequestAllowed: false,
     orderSubmitted: false,
   })}\n`);
   process.exitCode = 2;
 } else {
   const generatedAt = Date.now();
-  const result = await buildStockHistoricalDataset({
+  const result = await prepareStockAutomatedResearchHistory({
     market,
     symbol,
     requestedStart,
     requestedEnd,
+    researchCodeSha,
     generatedAt,
     env: process.env,
   });
+  if (result.status !== "ready_for_research") throw new Error(`unexpected stock research status: ${result.status}`);
+
   const outputPath = resolve(input.output);
   await mkdir(dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, `${JSON.stringify({
-    schema: "stock-history-collection-v1",
+  const artifact = {
+    schema: "stock-history-collection-v2",
     generatedAt,
+    researchCodeSha,
     capability: result.capability,
+    automatedProviderCapability: result.automatedProviderCapability,
     collection: result.collection,
     dataset: result.dataset,
+    cacheProvenance: result.cacheProvenance,
+    finalHoldout: {
+      ready: false,
+      reason: result.finalHoldoutReason,
+      selectionUsesHoldout: false,
+      retuningAllowed: false,
+    },
     safety: {
       syntheticDataUsed: false,
       privateApiUsed: false,
       liveOrderAllowed: false,
+      privateAccountRequestAllowed: false,
       orderSubmitted: false,
       credentialValuePersisted: false,
     },
-  }, null, 2)}\n`, "utf8");
+  };
+  const serialized = JSON.stringify(artifact, null, 2);
+  const credentialValue = process.env[result.capability.credentialEnvironmentVariable];
+  if (credentialValue && serialized.includes(credentialValue)) throw new Error("provider credential value leaked into stock history artifact");
+  await writeFile(outputPath, `${serialized}\n`, "utf8");
   process.stdout.write(`${JSON.stringify({
     ok: true,
     market,
     symbol,
     provider: result.dataset.provider,
+    providerVersion: result.dataset.providerVersion,
     candleCount: result.dataset.candles.length,
     dataQuality: result.dataset.dataQuality,
     corporateActions: result.dataset.corporateActions,
     survivorshipSafeguard: result.dataset.survivorshipSafeguard,
+    finalHoldoutReady: false,
     actualStart: result.dataset.actualStart,
     actualEnd: result.dataset.actualEnd,
+    cacheNamespace: result.cacheProvenance.cacheNamespace,
     output: outputPath,
     credentialValueExposed: false,
     privateApiUsed: false,
+    liveOrderAllowed: false,
+    privateAccountRequestAllowed: false,
     orderSubmitted: false,
   })}\n`);
 }
