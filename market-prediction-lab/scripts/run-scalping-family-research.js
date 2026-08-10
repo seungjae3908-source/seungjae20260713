@@ -119,6 +119,9 @@ function normalizeCandidate(group, familyRow, candidate) {
     regimePerformance: oos?.regimePerformance ?? null,
     overfitDiagnostics: overfit,
     wfStability: walkForward?.stability ?? null,
+    executionCostStress: candidate.executionCostStress ?? null,
+    promotionEligible: candidate.promotionEligible === true,
+    promotionBlockReasons: candidate.promotionBlockReasons ?? Object.freeze(["promotion_not_authorized"]),
     researchStatus: status,
     finalHoldoutUsed: false,
   });
