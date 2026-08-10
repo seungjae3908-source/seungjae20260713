@@ -9,6 +9,7 @@ on:
       - market-prediction-lab/src/automated-research-orchestrator.js
       - market-prediction-lab/src/automated-v1-research.js
       - market-prediction-lab/scripts/run-automated-research-contract.js
+      - market-prediction-lab/scripts/run-automated-v1-from-long-history.js
       - market-prediction-lab/tests/automated-research-orchestrator.test.js
       - market-prediction-lab/tests/automated-v1-research.test.js
   workflow_dispatch:
@@ -43,7 +44,7 @@ concurrency:
 jobs:
   automated-research-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Resolve immutable research revision and mode
         id: resolve
@@ -106,25 +107,58 @@ jobs:
           RESEARCH_CODE_SHA: ${{ steps.resolve.outputs.ref }}
         run: node scripts/run-automated-research-contract.js "${{ steps.resolve.outputs.mode }}"
 
+      - name: Collect existing public long-history cache
+        if: steps.resolve.outputs.mode == 'long_history'
+        working-directory: market-prediction-lab
+        run: npm run backtest:v1:history -- long-history-v1 docs/long-history-v1-result.json docs/long-history-v1-result.md
+
+      - name: Run automated V1 Development OOS Walk Forward
+        if: steps.resolve.outputs.mode == 'long_history'
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.resolve.outputs.ref }}
+        run: node scripts/run-automated-v1-from-long-history.js long-history-v1 artifacts/automated-research/v1-long-history.json
+
       - name: Verify safety flags and provider fail-closed contract
         working-directory: market-prediction-lab
         run: |
           node <<'NODE'
           const fs = require('fs');
-          const artifact = JSON.parse(fs.readFileSync('artifacts/automated-research/contract.json', 'utf8'));
-          if (artifact.artifactSafety.branchWrite !== false) throw new Error('branchWrite must remain false');
-          if (artifact.artifactSafety.liveOrderAllowed !== false) throw new Error('liveOrderAllowed must remain false');
-          if (artifact.artifactSafety.privateAccountRequestAllowed !== false) throw new Error('privateAccountRequestAllowed must remain false');
-          if (artifact.artifactSafety.orderSubmitted !== false) throw new Error('orderSubmitted must remain false');
-          if (artifact.providerCapabilities.US_STOCK.status === 'ready' && !artifact.providerCapabilities.US_STOCK.source) throw new Error('US provider cannot be synthetic');
-          if (artifact.providerCapabilities.KR_STOCK.status === 'ready' && !artifact.providerCapabilities.KR_STOCK.source) throw new Error('KR provider cannot be synthetic');
-          if (!Object.values(artifact.providerCapabilities).every((value) => value.fakeHistoricalDataAllowed === false)) throw new Error('fake historical data must remain forbidden');
+          const contract = JSON.parse(fs.readFileSync('artifacts/automated-research/contract.json', 'utf8'));
+          if (contract.artifactSafety.branchWrite !== false) throw new Error('branchWrite must remain false');
+          if (contract.artifactSafety.liveOrderAllowed !== false) throw new Error('liveOrderAllowed must remain false');
+          if (contract.artifactSafety.privateAccountRequestAllowed !== false) throw new Error('privateAccountRequestAllowed must remain false');
+          if (contract.artifactSafety.orderSubmitted !== false) throw new Error('orderSubmitted must remain false');
+          if (contract.providerCapabilities.US_STOCK.status === 'ready' && !contract.providerCapabilities.US_STOCK.source) throw new Error('US provider cannot be synthetic');
+          if (contract.providerCapabilities.KR_STOCK.status === 'ready' && !contract.providerCapabilities.KR_STOCK.source) throw new Error('KR provider cannot be synthetic');
+          if (!Object.values(contract.providerCapabilities).every((value) => value.fakeHistoricalDataAllowed === false)) throw new Error('fake historical data must remain forbidden');
+
+          if (fs.existsSync('artifacts/automated-research/v1-long-history.json')) {
+            const research = JSON.parse(fs.readFileSync('artifacts/automated-research/v1-long-history.json', 'utf8'));
+            if (research.syntheticResearchDataAllowed !== false) throw new Error('synthetic research data must remain forbidden');
+            if (research.safety.branchWrite !== false) throw new Error('automated V1 branchWrite must remain false');
+            if (research.safety.liveOrderAllowed !== false) throw new Error('automated V1 liveOrderAllowed must remain false');
+            if (research.safety.privateAccountRequestAllowed !== false) throw new Error('automated V1 privateAccountRequestAllowed must remain false');
+            if (research.safety.orderSubmitted !== false) throw new Error('automated V1 orderSubmitted must remain false');
+            if (research.safety.finalHoldoutUsedForSelection !== false) throw new Error('final holdout cannot be used for selection');
+            if (research.safety.finalHoldoutRetuningAllowed !== false) throw new Error('final holdout retuning must remain forbidden');
+          }
           NODE
 
       - name: Upload immutable automated research artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ steps.resolve.outputs.ref }}-${{ steps.resolve.outputs.mode }}
-          path: market-prediction-lab/artifacts/automated-research/contract.json
+          path: |
+            market-prediction-lab/artifacts/automated-research/contract.json
+            market-prediction-lab/artifacts/automated-research/v1-long-history.json
+            market-prediction-lab/docs/long-history-v1-result.json
+            market-prediction-lab/docs/long-history-v1-result.md
           if-no-files-found: error
           retention-days: 90
+
+      - name: Assert immutable checkout HEAD
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.resolve.outputs.ref }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
