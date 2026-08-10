@@ -66,6 +66,8 @@ test("diagnostics measure expected/actual count, gaps, duplicates and out-of-ord
   });
   assert.equal(cleanReport.expectedCandleCount, 100);
   assert.equal(cleanReport.actualCandleCount, 100);
+  assert.equal(cleanReport.expectedCandleCountPolicy, "count_only_intervals_with_close_time_lte_requested_end");
+  assert.equal(cleanReport.openBoundaryCandleExcluded, true);
   assert.equal(cleanReport.duplicateCount, 0);
   assert.equal(cleanReport.outOfOrderCount, 0);
   assert.equal(cleanReport.missingCandleCount, 0);
@@ -90,6 +92,22 @@ test("diagnostics measure expected/actual count, gaps, duplicates and out-of-ord
   });
   assert.ok(reversedReport.outOfOrderCount > 0);
   assert.equal(reversedReport.completeChunk, false);
+});
+
+test("expected count excludes an opened but not yet closed boundary candle", () => {
+  const start = Date.UTC(2026, 0, 1);
+  const report = inspectScalpingCandles({
+    market: "CRYPTO_SPOT",
+    symbol: "BTCUSDT",
+    timeframe: "15m",
+    candles: candles(start, 99),
+    requestedStart: start,
+    requestedEnd: start + 100 * M15 - 1,
+  });
+  assert.equal(report.expectedCandleCount, 99);
+  assert.equal(report.actualCandleCount, 99);
+  assert.equal(report.openBoundaryCandleExcluded, true);
+  assert.equal(report.expectedCandleCountPolicy, "count_only_intervals_with_close_time_lte_requested_end");
 });
 
 test("manifest is BLOCKED_DATA when any historical chunk is unavailable", () => {
@@ -141,9 +159,35 @@ test("complete one-provider manifest is DATA_READY and records provider boundary
   assert.equal(manifest.status, "DATA_READY");
   assert.equal(manifest.expectedCandleCount, 200);
   assert.equal(manifest.actualCandleCount, 200);
+  assert.equal(manifest.countMatchesClosedBoundary, true);
+  assert.equal(manifest.expectedCandleCountPolicy, "count_only_intervals_with_close_time_lte_requested_end");
+  assert.equal(manifest.openBoundaryCandleExcluded, true);
   assert.equal(manifest.providerBoundary.status, "verified_single_provider_contract");
   assert.equal(manifest.providerBoundary.crossProviderConcatenationUsed, false);
   assert.equal(manifest.semantics.missingCandlePolicy, "fail_closed_no_interpolation");
+});
+
+test("manifest fails closed when closed-candle expected and actual counts disagree", () => {
+  const start = Date.UTC(2025, 0, 1);
+  const manifest = buildScalpingHistoryManifest({
+    market: "CRYPTO_SPOT",
+    symbol: "BTCUSDT",
+    timeframe: "15m",
+    requestedStart: start,
+    requestedEnd: start + 200 * M15,
+    cacheContract: CACHE_CONTRACT,
+    chunkSummaries: [{
+      status: "ready", cacheKey: "k", cacheContract: CACHE_CONTRACT,
+      requestedStart: start, requestedEnd: start + 200 * M15,
+      actualStart: start, actualEnd: start + 198 * M15,
+      rawDataDigest: "r", normalizedDataDigest: "n",
+      diagnostics: { actualCandleCount: 199, missingCandleCount: 0, gapCount: 0, maximumGapCandles: 0, maximumGapMs: 0, duplicateCount: 0, outOfOrderCount: 0 },
+    }],
+  });
+  assert.equal(manifest.expectedCandleCount, 200);
+  assert.equal(manifest.actualCandleCount, 199);
+  assert.equal(manifest.countMatchesClosedBoundary, false);
+  assert.equal(manifest.status, "BLOCKED_DATA");
 });
 
 test("cache integrity detects raw/normalized corruption and forbids synthetic/interpolated substitution", () => {
