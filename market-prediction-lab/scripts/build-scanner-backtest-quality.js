@@ -19,7 +19,7 @@ import {
 const DAY = 24 * 60 * 60 * 1000;
 const cacheRoot = resolve(process.argv[2] ?? "long-history-v1");
 const researchPath = resolve(process.argv[3] ?? "artifacts/automated-research/v1-long-history.json");
-const outputPath = resolve(process.argv[4] ?? "artifacts/automated-research/scanner-backtest-quality-v1.json");
+const outputPath = resolve(process.argv[4] ?? "artifacts/automated-research/scanner-backtest-quality-v2.json");
 const researchCodeSha = process.env.RESEARCH_CODE_SHA;
 if (!/^[0-9a-f]{40}$/i.test(researchCodeSha ?? "")) throw new TypeError("RESEARCH_CODE_SHA must be an immutable 40-character SHA");
 const generatedAtMs = Date.now();
