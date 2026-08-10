@@ -69,7 +69,68 @@ assert(spec.includes('[401, 403]'), 'protected API must be denied with 401 or 40
 assert(spec.includes('unconfirmed logout abort:'), 'unconfirmed candidates must return to unexpected HTTP errors');
 assert(spec.includes('diagnostics.unexpected_http_errors.push(diagnostic);'), 'all non-matching failed requests must remain unexpected');
 assert(spec.includes('if (response.status() < 400) return;'), 'all browser 4xx and 5xx responses must remain unexpected');
-assert(!spec.includes("'/rest/v1/profiles'"), 'profile request aborts must be eliminated in the app, never allowlisted in staging diagnostics');
+
+const profileMatcherStart = spec.indexOf('function isProfileRequest(request: Request)');
+const profileMatcherEnd = spec.indexOf('\nfunction isExpectedAuthFault(', profileMatcherStart);
+assert(
+  profileMatcherStart >= 0 && profileMatcherEnd > profileMatcherStart,
+  'profile request matcher boundaries are missing',
+);
+const profileMatcherBlock = spec.slice(profileMatcherStart, profileMatcherEnd);
+assert(profileMatcherBlock.includes("request.method() === 'GET'"), 'profile fault injection must match only GET requests');
+assert(profileMatcherBlock.includes("parsed.pathname === '/rest/v1/profiles'"), 'profile fault injection must match the exact Supabase profile pathname');
+assert(!profileMatcherBlock.includes('.includes('), 'profile request identification must not use a broad substring matcher');
+assert(!profileMatcherBlock.includes('.startsWith('), 'profile request identification must not broaden to a pathname prefix');
+
+const authFaultMatcherStart = spec.indexOf('function isExpectedAuthFault(request: Request, observation: AuthFaultObservation)');
+const authFaultMatcherEnd = spec.indexOf('\nfunction isExpectedRouteTransitionAbort(', authFaultMatcherStart);
+assert(
+  authFaultMatcherStart >= 0 && authFaultMatcherEnd > authFaultMatcherStart,
+  'auth fault matcher boundaries are missing',
+);
+const authFaultMatcherBlock = spec.slice(authFaultMatcherStart, authFaultMatcherEnd);
+assert(authFaultMatcherBlock.includes('observation.requests.has(request)'), 'auth fault candidates must belong to the active observation request set');
+assert(authFaultMatcherBlock.includes('isProfileRequest(request)'), 'auth fault candidates must also satisfy the exact profile request matcher');
+assert(
+  authFaultMatcherBlock.includes('observation.requests.has(request) && isProfileRequest(request)'),
+  'auth fault classification must require both observation identity and exact profile matching',
+);
+assert(
+  (spec.match(/observation\.requests\.add\(request\);/g) ?? []).length >= 3,
+  'each deterministic profile fault fixture must register the exact intercepted request before classification',
+);
+
+const finishAuthFaultStart = spec.indexOf('async function finishAuthFault(');
+const finishAuthFaultEnd = spec.indexOf('\nasync function expectBootstrapTerminalError(', finishAuthFaultStart);
+assert(
+  finishAuthFaultStart >= 0 && finishAuthFaultEnd > finishAuthFaultStart,
+  'auth fault finalization boundaries are missing',
+);
+const finishAuthFaultBlock = spec.slice(finishAuthFaultStart, finishAuthFaultEnd);
+assert(finishAuthFaultBlock.includes('activeAuthFaultObservations.delete(page);'), 'auth fault observation must close before candidate finalization');
+assert(finishAuthFaultBlock.includes('diagnostics.expected_auth_faults.push(...observation.candidates);'), 'only confirmed auth fault candidates may be recorded as expected');
+assert(finishAuthFaultBlock.includes('diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({'), 'unconfirmed auth fault candidates must return to unexpected HTTP errors');
+assert(finishAuthFaultBlock.includes('unconfirmed auth fault:'), 'unconfirmed auth fault fallback must remain explicit in diagnostics');
+
+const requestFailedStart = spec.indexOf("page.on('requestfailed', (request) => {");
+const requestFailedFallback = spec.indexOf('diagnostics.unexpected_http_errors.push(diagnostic);', requestFailedStart);
+const authFaultRequestCheck = spec.indexOf("authFault && authFault.kind === 'timeout' && isExpectedAuthFault(request, authFault)", requestFailedStart);
+const routeTransitionRequestCheck = spec.indexOf('routeObservation && isExpectedRouteTransitionAbort(request, routeObservation)', requestFailedStart);
+assert(requestFailedStart >= 0, 'requestfailed diagnostics handler is missing');
+assert(
+  authFaultRequestCheck > requestFailedStart
+    && routeTransitionRequestCheck > authFaultRequestCheck
+    && requestFailedFallback > routeTransitionRequestCheck,
+  'unmatched request failures must fall through every scoped exemption into unexpected HTTP errors',
+);
+assert(!spec.includes('function isExpectedProfileAbort('), 'blanket profile abort classification is forbidden');
+assert(!spec.includes('function isExpectedScannerAbort('), 'blanket scanner abort classification is forbidden');
+assert(!spec.includes('expected_profile_aborts'), 'profile aborts must not have a blanket expected diagnostics bucket');
+assert(!spec.includes('diagnostics.expected_scanner_aborts.push('), 'scanner request failures must never be promoted into a blanket expected-abort bucket');
+assert(
+  spec.includes("expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);"),
+  'scanner net::ERR_ABORTED must remain a zero-tolerance staging contract',
+);
 
 assert(spec.includes("return parsed.pathname || '/';"), 'diagnostic URLs must omit hosts and arbitrary query strings');
 assert(spec.includes("'[redacted-url]'"), 'absolute URLs must be redacted from diagnostic details');
@@ -261,4 +322,4 @@ assert(
 assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must synchronously invalidate session identity');
 assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session identity and profile cleanup finish');
 
-console.log('[staging-login-selector-contract] logout and route-transition candidate classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');
+console.log('[staging-login-selector-contract] logout and route-transition candidate classification, scoped profile fault classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');
