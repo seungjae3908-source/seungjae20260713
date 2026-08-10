@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import express, { type RequestHandler } from 'express';
 import type { AddressInfo } from 'node:net';
-import { APP_API_REQUEST_TIMEOUT_MS } from '../../../stock-analyzer/src/lib/auth-bootstrap';
 import type { AuthenticatedRequest, MemberProfile } from '../middleware/auth';
 import { ScanProviderUnavailableError } from '../services/bounded-scanner.service';
 import { ScannerRequestGuard } from '../services/scanner-request-guard.service';
@@ -102,6 +103,18 @@ function inject(profile: MemberProfile): RequestHandler {
   };
 }
 
+function appApiRequestTimeoutMs(): number {
+  const source = readFileSync(
+    path.resolve(process.cwd(), 'stock-analyzer/src/lib/auth-bootstrap.ts'),
+    'utf8',
+  );
+  const match = source.match(/APP_API_REQUEST_TIMEOUT_MS\s*=\s*([\d_]+)/);
+  assert.ok(match, 'frontend App API request deadline must remain explicit');
+  const parsed = Number(match[1].replaceAll('_', ''));
+  assert.ok(Number.isFinite(parsed) && parsed > 0, 'frontend App API request deadline must be finite');
+  return parsed;
+}
+
 async function withServer(
   scanner: StockScannerRunner,
   run: (baseUrl: string) => Promise<void>,
@@ -128,9 +141,10 @@ async function withServer(
 }
 
 test('stock scanner server response budget remains below the browser app API deadline', () => {
+  const browserDeadlineMs = appApiRequestTimeoutMs();
   assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS > 0);
-  assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS < APP_API_REQUEST_TIMEOUT_MS);
-  assert.ok(APP_API_REQUEST_TIMEOUT_MS - STOCK_SCANNER_ROUTE_DEADLINE_MS >= 1_000);
+  assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS < browserDeadlineMs);
+  assert.ok(browserDeadlineMs - STOCK_SCANNER_ROUTE_DEADLINE_MS >= 1_000);
 });
 
 test('normal zero-match scan returns HTTP 200 empty', async () => {
