@@ -1,10 +1,10 @@
-import {
-  parseAndValidateUiBuilderLayout,
-  type UiBuilderDeviceClass,
-  type UiBuilderFullLayoutDocument,
-  type UiBuilderFullValidationIssue,
-  type UiBuilderPageId,
+import type {
+  UiBuilderDeviceClass,
+  UiBuilderFullLayoutDocument,
+  UiBuilderFullValidationIssue,
+  UiBuilderPageId,
 } from './ui-builder-full-layout';
+import { parseAndValidateUiBuilderRuntimeLayout } from './ui-builder-runtime-safety';
 
 export const UI_BUILDER_LAYOUT_FILE_MAX_BYTES = 1_000_000;
 
@@ -27,5 +27,5 @@ export async function importUiBuilderLayoutFile(
     };
   }
   const raw = await file.text();
-  return parseAndValidateUiBuilderLayout(raw, pageId, device);
+  return parseAndValidateUiBuilderRuntimeLayout(raw, pageId, device);
 }
