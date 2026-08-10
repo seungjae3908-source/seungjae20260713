@@ -4,6 +4,7 @@ import {
   type UiBuilderDeviceClass,
   type UiBuilderPageId,
 } from '@/lib/ui-builder-full-layout';
+import { safeRuntimeLayoutOrFallback } from '@/lib/ui-builder-runtime-safety';
 
 type Props = {
   pageId: UiBuilderPageId;
@@ -39,10 +40,12 @@ export function UiBuilderRuntimeBoundary({ pageId, children, className }: Props)
     };
   }, []);
 
-  const loaded = useMemo(
-    () => loadActiveUiBuilderLayout(pageId, deviceClass),
-    [pageId, deviceClass, revision],
-  );
+  const loaded = useMemo(() => {
+    const base = loadActiveUiBuilderLayout(pageId, deviceClass);
+    if (base.source === 'fallback') return base;
+    return safeRuntimeLayoutOrFallback(base.layout, pageId, deviceClass);
+  }, [pageId, deviceClass, revision]);
+
   const visibleBlocks = loaded.layout.blocks
     .filter((block) => !block.visibility.hidden && block.visibility.mode !== 'hidden')
     .filter((block) => block.visibility.mode === 'both' || block.visibility.mode === deviceClass)
