@@ -63,6 +63,7 @@ const LAYOUT_KEYS = new Set(['order', 'colSpan', 'minHeight', 'sticky', 'bottomF
 const VISIBILITY_KEYS = new Set(['mode', 'hidden']);
 const SECRET_VALUE = /(?:\bBearer\s+[A-Za-z0-9._~+/=-]{8,}|(?:sk|ghp|github_pat)_[A-Za-z0-9_-]{12,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})/i;
 const URL_OR_API_VALUE = /(?:https?:\/\/|\/api\/|wss?:\/\/|javascript:)/i;
+const PHASE1_SCANNER_KEY = (device: UiBuilderDeviceClass) => `stock-ui-builder:published-layout:SIGNAL_SCANNER:${device}`;
 
 const SAFE_ACTION_IDS: Partial<Record<UiBuilderBlockType, string>> = {
   TradeReviewButton: 'TRADE_REVIEW', BuyReviewButton: 'TRADE_REVIEW_BUY', SellReviewButton: 'TRADE_REVIEW_SELL',
@@ -94,8 +95,8 @@ const TEMPLATE_BLOCKS: Record<UiBuilderPageId, { mobile: UiBuilderBlockType[]; d
 };
 
 export const UI_BUILDER_PAGE_RUNTIME_OWNER: Record<UiBuilderPageId, string> = {
-  HOME: 'HomePage', ASSET_SEARCH: 'UnifiedAssetSearchPage + UnifiedAssetSearch', STOCK_MARKET: 'MarketInformationPage / UsStocksPage',
-  CRYPTO_MARKET: 'MarketInformationPage / CoinHomePage', ASSET_DETAIL: 'StockInfoPage + AiChartPage',
+  HOME: 'HomePage', ASSET_SEARCH: 'UnifiedAssetSearchPage + UnifiedAssetSearch', STOCK_MARKET: 'MarketInformationPage',
+  CRYPTO_MARKET: 'MarketInformationPage', ASSET_DETAIL: 'StockInfoPage + AiChartPage',
   SIGNAL_SCANNER: 'TechnicalWorkspacePage + SignalScannerPage + AiChartPage', AI_CHART: 'AiChartPage + UnifiedAnalysisChart',
   POSITION: 'PortfolioPage + AiChartPage', PORTFOLIO: 'PortfolioPage',
   AUTO_TRADING: 'AutoTradingPage + TradeAutomationSettings + TradingRiskPreviewPanel', AI_CHAT: 'AiChatPage',
@@ -135,7 +136,7 @@ export function validateUiBuilderFullLayout(candidate: unknown, expectedPage: Ui
       rejectUnknownKeys(raw.props, PROP_KEYS, issues, 'FORBIDDEN_RUNTIME_PROP', id); validateText(raw.props.title, 'title', issues, id);
       if (raw.props.subtitle !== undefined) validateText(raw.props.subtitle, 'subtitle', issues, id);
       if (!DENSITY_SET.has(String(raw.props.density))) issues.push({ code: 'INVALID_DENSITY', message: 'density가 올바르지 않습니다.', blockId: id });
-      if (!CARD_STYLE_SET.has(String(raw.props.cardStyle))) issues.push({ code: 'INVALID_CARD_STYLE', message: 'cardStyle이 올바르지 않습니다.', blockId: id });
+      if (!CARD_STYLE_SET.has(String(raw.props.cardStyle))) issues.push({ code: 'INVALID_CARD_STYLE', message: 'cardStyle가 올바르지 않습니다.', blockId: id });
       if (typeof raw.props.collapsedByDefault !== 'boolean' || typeof raw.props.expandable !== 'boolean') issues.push({ code: 'INVALID_PROP_FLAGS', message: 'collapse/expand 속성은 boolean이어야 합니다.', blockId: id });
     }
     if (!isRecord(raw.layout)) issues.push({ code: 'INVALID_BLOCK_LAYOUT', message: 'layout object가 필요합니다.', blockId: id });
@@ -179,10 +180,19 @@ export function writeUiBuilderStoredLayout(status: UiBuilderFullLayoutStatus, la
   window.dispatchEvent(new CustomEvent('stock-ui-builder-layout-updated', { detail: { status, pageId: layout.pageId, deviceClass: layout.deviceClass } }));
 }
 export function clearUiBuilderStoredLayout(status: UiBuilderFullLayoutStatus, pageId: UiBuilderPageId, device: UiBuilderDeviceClass): void {
-  if (typeof window === 'undefined') return; window.localStorage.removeItem(uiBuilderLayoutStorageKey(status, pageId, device));
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(uiBuilderLayoutStorageKey(status, pageId, device));
+  if (status === 'active' && pageId === 'SIGNAL_SCANNER') window.localStorage.removeItem(PHASE1_SCANNER_KEY(device));
   window.dispatchEvent(new CustomEvent('stock-ui-builder-layout-updated', { detail: { status, pageId, deviceClass: device } }));
 }
-export function activateUiBuilderLayout(layout: UiBuilderFullLayoutDocument): void { const validation = validateUiBuilderFullLayout(layout, layout.pageId, layout.deviceClass); if (!validation.valid) throw new Error(validation.issues.map((issue) => issue.message).join('\n')); writeUiBuilderStoredLayout('active', layout); }
+export function activateUiBuilderLayout(layout: UiBuilderFullLayoutDocument): void {
+  const validation = validateUiBuilderFullLayout(layout, layout.pageId, layout.deviceClass);
+  if (!validation.valid) throw new Error(validation.issues.map((issue) => issue.message).join('\n'));
+  writeUiBuilderStoredLayout('active', layout);
+  if (typeof window !== 'undefined' && layout.pageId === 'SIGNAL_SCANNER') {
+    window.localStorage.setItem(PHASE1_SCANNER_KEY(layout.deviceClass), JSON.stringify(layout));
+  }
+}
 export function loadActiveUiBuilderLayout(pageId: UiBuilderPageId, device: UiBuilderDeviceClass): { source: 'active' | 'fallback'; layout: UiBuilderFullLayoutDocument; issues: UiBuilderFullValidationIssue[] } {
   const fallback = makeFrozenUiBuilderTemplate(pageId, device); const raw = readUiBuilderStoredLayout('active', pageId, device);
   if (!raw) return { source: 'fallback', layout: fallback, issues: [] };
