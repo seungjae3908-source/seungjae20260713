@@ -9,7 +9,7 @@ import { AuthProvider, useAuth } from '@/lib/auth';
 import { AppBackground } from '@/components/app-background';
 import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
 import { AnalysisSelectionProvider } from '@/lib/analysis-selection';
-import { resolveAssetDetailPath } from '@/lib/asset-navigation';
+import { AssetRouteNotResolved, resolveAssetDetailPath, resolveLegacyCryptoDetailPath } from '@/lib/asset-navigation';
 import { OfflineBanner } from '@/components/offline-banner';
 import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
 import { ErrorState, PageFallback } from '@/components/data-state';
@@ -102,9 +102,24 @@ function useCryptoRedirect(target: (symbol?: string) => string, symbol?: string)
 function CryptoHomeRedirect() { useCryptoRedirect(() => '/home'); return <PageFallback />; }
 function CryptoSearchRedirect() { useCryptoRedirect(() => '/stocks'); return <PageFallback />; }
 function CryptoDetailRedirect() {
+  const mode = useAssetMode();
+  const [location, navigate] = useLocation();
   const [, params] = useRoute('/crypto/:symbol') as [boolean, { symbol?: string } | null];
-  useCryptoRedirect((symbol) => `/stock-info?asset=coin&coinMarket=spot&symbol=${encodeURIComponent(String(symbol ?? 'BTC').toUpperCase())}`, params?.symbol);
-  return <PageFallback />;
+  const symbol = String(params?.symbol ?? '').trim().toUpperCase();
+  const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : window.location.search.slice(1);
+  const backPath = new URLSearchParams(query).get('back')?.trim() || '/stocks';
+  let target: string | null = null;
+  try {
+    target = resolveLegacyCryptoDetailPath(symbol, backPath);
+  } catch (error) {
+    if (!(error instanceof AssetRouteNotResolved)) throw error;
+  }
+  useEffect(() => {
+    if (!target) return;
+    mode.setAsset('coin');
+    navigate(target, { replace: true });
+  }, [mode, navigate, target]);
+  return target ? <PageFallback /> : <NotFound />;
 }
 
 function LegacyStockDetailRedirect() {
