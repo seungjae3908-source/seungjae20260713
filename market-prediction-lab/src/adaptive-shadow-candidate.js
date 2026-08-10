@@ -132,6 +132,10 @@ function compactMetrics(metrics) {
   });
 }
 
+function selectionObjective(metrics) {
+  return metrics.logLoss - (0.2 * metrics.macroF1) - (0.1 * metrics.balancedAccuracy);
+}
+
 function perSymbol(records, candidateModel, referenceModel) {
   const symbols = [...new Set(records.map((record) => record.symbol).filter(Boolean))].sort();
   return Object.fromEntries(symbols.map((symbol) => {
@@ -175,11 +179,15 @@ export function buildAdaptiveShadowCandidate({
   holdoutRatio = 0.25,
   minHoldout = 24,
   minCalibration = 60,
+  selectionStabilityRatio = 0.25,
+  minSelectionStability = 24,
 } = {}) {
   if (typeof group !== "string" || group.length === 0) throw new TypeError("group is required");
   const referenceModel = referenceArtifact?.model;
   if (!referenceModel?.trained || typeof referenceModel.id !== "string") throw new TypeError("trained reference artifact is required");
   if (!(holdoutRatio > 0 && holdoutRatio < 0.5)) throw new RangeError("holdoutRatio must be in (0, 0.5)");
+  if (!(selectionStabilityRatio > 0 && selectionStabilityRatio < 0.5)) throw new RangeError("selectionStabilityRatio must be in (0, 0.5)");
+  if (!Number.isInteger(minSelectionStability) || minSelectionStability <= 0) throw new RangeError("minSelectionStability must be a positive integer");
 
   const settled = (state?.records ?? [])
     .filter((record) => record?.status === "settled"
@@ -211,6 +219,9 @@ export function buildAdaptiveShadowCandidate({
 
   const calibration = settled.slice(0, settled.length - holdoutCount);
   const holdout = settled.slice(settled.length - holdoutCount);
+  const requestedSelectionStability = Math.max(minSelectionStability, Math.ceil(calibration.length * selectionStabilityRatio));
+  const selectionStabilityCount = Math.min(requestedSelectionStability, calibration.length);
+  const selectionStability = calibration.slice(calibration.length - selectionStabilityCount);
   const candidateId = `adaptive-${group}-v2-live-blend`;
   let best = null;
 
@@ -221,10 +232,28 @@ export function buildAdaptiveShadowCandidate({
       const metrics = evaluateModelRecords(calibration, model);
       const health = evaluatePredictionHealth(metrics);
       if (health.collapsed) continue;
-      const objective = metrics.logLoss - (0.2 * metrics.macroF1) - (0.1 * metrics.balancedAccuracy);
+
+      const stabilityMetrics = evaluateModelRecords(selectionStability, model);
+      const stabilityHealth = evaluatePredictionHealth(stabilityMetrics, { minDirectionalSupport: 3 });
+      if (stabilityHealth.collapsed) continue;
+
+      const calibrationObjective = selectionObjective(metrics);
+      const stabilityObjective = selectionObjective(stabilityMetrics);
+      const objective = Math.max(calibrationObjective, stabilityObjective);
       if (!best || objective < best.objective - 1e-12
           || (Math.abs(objective - best.objective) <= 1e-12 && normalizedWeight < best.baselineWeight)) {
-        best = { objective, model, metrics, health, baselineWeight: normalizedWeight, temperature: model.temperature };
+        best = {
+          objective,
+          calibrationObjective,
+          stabilityObjective,
+          model,
+          metrics,
+          health,
+          stabilityMetrics,
+          stabilityHealth,
+          baselineWeight: normalizedWeight,
+          temperature: model.temperature,
+        };
       }
     }
   }
@@ -236,6 +265,14 @@ export function buildAdaptiveShadowCandidate({
       settled: settled.length,
       required: minSettled,
       referenceModelId: referenceModel.id,
+      diagnostics: Object.freeze({
+        split: Object.freeze({
+          total: settled.length,
+          calibration: calibration.length,
+          selectionStability: selectionStability.length,
+          holdout: holdout.length,
+        }),
+      }),
     });
   }
 
@@ -267,14 +304,23 @@ export function buildAdaptiveShadowCandidate({
   }
 
   const diagnostics = Object.freeze({
-    split: Object.freeze({ total: settled.length, calibration: calibration.length, holdout: holdout.length }),
+    split: Object.freeze({
+      total: settled.length,
+      calibration: calibration.length,
+      selectionStability: selectionStability.length,
+      holdout: holdout.length,
+    }),
     selection: Object.freeze({
       baselineWeight: best.baselineWeight,
       referenceWeight: 1 - best.baselineWeight,
       temperature: best.temperature,
       objective: best.objective,
+      calibrationObjective: best.calibrationObjective,
+      stabilityObjective: best.stabilityObjective,
       calibrationMetrics: compactMetrics(best.metrics),
       calibrationHealth: best.health,
+      stabilityMetrics: compactMetrics(best.stabilityMetrics),
+      stabilityHealth: best.stabilityHealth,
     }),
     holdout: Object.freeze({
       candidate: compactMetrics(candidateMetrics),
@@ -300,6 +346,7 @@ export function buildAdaptiveShadowCandidate({
     diagnostics,
     safety: Object.freeze({
       chronologicalSplit: true,
+      selectionUsesHoldout: false,
       overwritesExistingShadowHistory: false,
       usesPublicMarketDataOnly: true,
       usesAccountOrOrderApi: false,
