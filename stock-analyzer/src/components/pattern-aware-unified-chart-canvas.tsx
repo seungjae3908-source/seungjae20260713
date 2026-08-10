@@ -18,7 +18,7 @@ import {
 } from 'lightweight-charts';
 import { Expand, LocateFixed, Maximize2, Minimize2 } from 'lucide-react';
 import { ChartPatternOverlayPanel } from '@/components/chart-pattern-overlay-panel';
-import type { AnalysisMarket } from '@/lib/analysis-selection';
+import type { AnalysisMarket, AnalysisPricePlan } from '@/lib/analysis-selection';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
 import type { NormalizedChartCandle } from '@/lib/chart-candle-normalizer';
 import {
@@ -76,6 +76,7 @@ type ChartInstance = {
   lines: Record<LineKey, ISeriesApi<'Line'>>;
   referencePriceLines: IPriceLine[];
   analysisPriceLines: IPriceLine[];
+  pricePlanLines: IPriceLine[];
 };
 
 type LogicalViewport = {
@@ -93,6 +94,7 @@ type Props = {
   indicators: ChartIndicatorResult;
   levels: PriceLevels;
   analysis: ChartAnalysis | null;
+  pricePlan?: AnalysisPricePlan;
   overlays: OverlayState;
   timeframe: UnifiedChartTimeframe;
   resetKey: string;
@@ -143,11 +145,16 @@ function exposeLogicalViewport(wrapper: HTMLDivElement | null, chart: IChartApi)
   return range;
 }
 
+function validPlanPrice(value: number | null | undefined): value is number {
+  return value != null && Number.isFinite(value) && value > 0;
+}
+
 export function PatternAwareUnifiedChartCanvas({
   candles,
   indicators,
   levels,
   analysis,
+  pricePlan,
   overlays,
   timeframe,
   resetKey,
@@ -256,6 +263,7 @@ export function PatternAwareUnifiedChartCanvas({
       lines,
       referencePriceLines: [],
       analysisPriceLines: [],
+      pricePlanLines: [],
     };
 
     const handleClick: Parameters<IChartApi['subscribeClick']>[0] = (param) => {
@@ -366,6 +374,34 @@ export function PatternAwareUnifiedChartCanvas({
       }
     }
 
+    removePriceLines(instance.candle, instance.pricePlanLines);
+    if (pricePlan) {
+      const planRows: Array<{ price: number | null | undefined; title: string; color: string; style: LineStyle; width: 1 | 2 }> = [
+        { price: pricePlan.entryZone?.from, title: 'Scanner 진입 하단', color: '#22c55e', style: LineStyle.Dashed, width: 2 },
+        { price: pricePlan.entryZone?.to, title: 'Scanner 진입 상단', color: '#22c55e', style: LineStyle.Dashed, width: 2 },
+        { price: pricePlan.stopLoss, title: 'Scanner 손절', color: '#dc2626', style: LineStyle.Solid, width: 2 },
+        { price: pricePlan.invalidation, title: 'Scanner 무효화', color: '#f97316', style: LineStyle.Dotted, width: 1 },
+        ...pricePlan.targets.slice(0, 4).map((price, index) => ({
+          price,
+          title: `Scanner 목표 ${index + 1}`,
+          color: '#8b5cf6',
+          style: LineStyle.Dotted,
+          width: 1 as const,
+        })),
+      ];
+      for (const row of planRows) {
+        if (!validPlanPrice(row.price)) continue;
+        instance.pricePlanLines.push(instance.candle.createPriceLine({
+          price: row.price,
+          color: row.color,
+          lineWidth: row.width,
+          lineStyle: row.style,
+          axisLabelVisible: true,
+          title: row.title,
+        }));
+      }
+    }
+
     removePriceLines(instance.candle, instance.analysisPriceLines);
     const markers: Array<Record<string, unknown> & { time: UTCTimestamp }> = [];
     if (analysis && overlays.markers) {
@@ -414,7 +450,7 @@ export function PatternAwareUnifiedChartCanvas({
     restoreLogicalViewport(instance.chart, beforeUpdate);
     const afterUpdate = exposeLogicalViewport(wrapperRef.current, instance.chart);
     if (afterUpdate) storedViewportRef.current = { resetKey, logicalRange: afterUpdate };
-  }, [analysis, candles, indicators, levels, overlays.levels, overlays.markers, patternOverlay, resetKey]);
+  }, [analysis, candles, indicators, levels, overlays.levels, overlays.markers, patternOverlay, pricePlan, resetKey]);
 
   useEffect(() => {
     storedViewportRef.current = null;
