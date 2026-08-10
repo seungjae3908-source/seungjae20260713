@@ -121,7 +121,8 @@ jobs:
           if (result.safety.orderSubmitted !== false) throw new Error('orderSubmitted must remain false');
           if (result.safety.finalHoldoutUsedForSelection !== false) throw new Error('final holdout cannot be used for selection');
           if (result.safety.finalHoldoutRetuningAllowed !== false) throw new Error('final holdout retuning must remain forbidden');
-          if (result.results.some((row) => row.result.period.oosEnd >= row.result.period.finalHoldoutStart)) throw new Error('OOS overlaps final holdout');
+          if (!Array.isArray(result.perSymbolResults)) throw new Error('perSymbolResults missing');
+          if (result.perSymbolResults.some((row) => row.result.period.oosEnd >= row.result.period.finalHoldoutStart)) throw new Error('OOS overlaps final holdout');
 
           const scanner = JSON.parse(fs.readFileSync('artifacts/automated-research/scanner-backtest-quality-v1.json', 'utf8'));
           if (scanner.schema !== 'scanner-backtest-quality-v1' || scanner.schemaVersion !== 1) throw new Error('scanner artifact schema mismatch');
