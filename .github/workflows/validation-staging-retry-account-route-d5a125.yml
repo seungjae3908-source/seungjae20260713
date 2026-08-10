@@ -1,0 +1,95 @@
+name: Validate Latest Main Staging Retry Account Route
+
+on:
+  push:
+    branches:
+      - validation/staging-retry-account-route-d5a125
+
+permissions:
+  contents: write
+
+env:
+  STAGING_ARTIFACT_DIR: ${{ github.workspace }}/staging-validation-artifacts
+
+jobs:
+  validate:
+    if: ${{ github.event.head_commit.message == 'ci validation materialize latest-main retry' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Apply retry fixture and static-contract patch
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const specFile = 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts';
+          let spec = fs.readFileSync(specFile, 'utf8');
+          const retryStart = spec.indexOf("test('retry recovery:");
+          const retryEnd = spec.indexOf("\n  test('scanner readiness:", retryStart);
+          if (retryStart < 0 || retryEnd <= retryStart) throw new Error('retry recovery fixture boundaries not found');
+          let retryBlock = spec.slice(retryStart, retryEnd);
+          const initialHome = "      await expectHealthyRoute(page, '/');";
+          const postRetryAccount = `      await expectHealthyRoute(page, '/account');\n      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();`;
+          if (!retryBlock.includes(initialHome)) throw new Error('retry recovery initial home route not found');
+          if (!retryBlock.includes(postRetryAccount)) throw new Error('retry recovery post-retry account block not found');
+          retryBlock = retryBlock.replace(initialHome, "      await expectHealthyRoute(page, '/account');");
+          retryBlock = retryBlock.replace(postRetryAccount, "      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();");
+          spec = `${spec.slice(0, retryStart)}${retryBlock}${spec.slice(retryEnd)}`;
+          fs.writeFileSync(specFile, spec);
+
+          const verifierFile = 'api-server/scripts/verify-staging-login-selector-contract.mjs';
+          let verifier = fs.readFileSync(verifierFile, 'utf8');
+          if (!verifier.includes('const retryRecoveryTestStart =')) {
+            const marker = `const profileTimeoutTestStart = spec.indexOf("test('profile timeout abort:");`;
+            if (!verifier.includes(marker)) throw new Error('profile timeout verifier marker not found');
+            const insertion = `const retryRecoveryTestStart = spec.indexOf("test('retry recovery:");\nconst retryRecoveryTestEnd = spec.indexOf("\\n  test('scanner readiness:", retryRecoveryTestStart);\nassert(\n  retryRecoveryTestStart >= 0 && retryRecoveryTestEnd > retryRecoveryTestStart,\n  'retry recovery fixture boundaries are missing',\n);\nconst retryRecoveryTestBlock = spec.slice(retryRecoveryTestStart, retryRecoveryTestEnd);\nassert(\n  (retryRecoveryTestBlock.match(/await expectHealthyRoute\\(page, '\\/account'\\);/g) ?? []).length === 1,\n  'retry recovery must bootstrap and recover on the quiet authenticated account route exactly once',\n);\nassert(\n  !retryRecoveryTestBlock.includes("await expectHealthyRoute(page, '/');"),\n  'retry recovery must not use the polling-heavy home route as its bootstrap fixture',\n);\nassert(\n  retryRecoveryTestBlock.includes("await page.getByRole('button', { name: '다시 시도', exact: true }).click();"),\n  'retry recovery must exercise the explicit retry action',\n);\nassert(\n  retryRecoveryTestBlock.includes("expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);"),\n  'retry recovery must prove exactly one fresh profile request',\n);\nassert(\n  retryRecoveryTestBlock.includes("expect(observation.candidates, 'semantic first-attempt rejection must not create a network-error exemption').toHaveLength(0);"),\n  'semantic retry failure must not create a network-error exemption',\n);\nassert(\n  retryRecoveryTestBlock.includes("await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();"),\n  'retry recovery must finish on authenticated account UI',\n);\n\n`;
+            verifier = verifier.replace(marker, `${insertion}${marker}`);
+            fs.writeFileSync(verifierFile, verifier);
+          }
+          NODE
+          git diff --check
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' api-server/scripts/verify-staging-login-selector-contract.mjs stock-analyzer/e2e/phase10-staging-readiness.spec.ts | sort)"
+      - name: Targeted static verifier
+        run: node ./api-server/scripts/verify-staging-login-selector-contract.mjs
+      - name: Phase12
+        run: pnpm --dir api-server run test:phase12
+      - name: Frontend typecheck
+        run: pnpm --dir stock-analyzer run typecheck
+      - name: Backend typecheck
+        run: pnpm --dir api-server run typecheck
+      - name: Frontend production build
+        run: pnpm --dir stock-analyzer run build
+      - name: Backend production build
+        run: pnpm --dir api-server run build
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+      - name: Targeted real staging retry recovery
+        env:
+          PHASE10_STAGING_E2E: "true"
+          STAGING_TARGET_SHA: da1fa0e7769f214b8f42f769d63abacf8ef48a45
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+          STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts e2e/phase10-staging-readiness.spec.ts --grep "retry recovery:"
+      - name: Commit only validated stabilization source
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add api-server/scripts/verify-staging-login-selector-contract.mjs stock-analyzer/e2e/phase10-staging-readiness.spec.ts
+          test "$(git diff --cached --name-only | sort)" = "$(printf '%s\n' api-server/scripts/verify-staging-login-selector-contract.mjs stock-analyzer/e2e/phase10-staging-readiness.spec.ts | sort)"
+          git commit -m "validation source latest-main retry account route"
+          git push origin HEAD:validation/staging-retry-account-route-d5a125
