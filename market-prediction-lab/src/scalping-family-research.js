@@ -143,17 +143,21 @@ function evaluateFamily(version, backtestInput, seed, budget) {
   });
 }
 
-export function runScalpingFamilyResearch({ backtestInput, budget = SCALPING_FAMILY_RESEARCH_BUDGET } = {}) {
+export function runScalpingFamilyResearch({ backtestInput, budget = SCALPING_FAMILY_RESEARCH_BUDGET, versions = Object.keys(SCALPING_ADAPTER_CONTRACTS) } = {}) {
   if (!backtestInput || backtestInput.timeframe !== "15m") throw new TypeError("15m backtestInput required");
   if (!Array.isArray(backtestInput.candles) || backtestInput.candles.length === 0) throw new TypeError("real selection candles required");
   if (backtestInput.candles.some((row) => row.timestamp >= RESEARCH_BACKTEST_PERIOD.finalHoldoutStartTime)) throw new Error("SCALPING_FAMILY_FINAL_HOLDOUT_INPUT_FORBIDDEN");
   if (backtestInput.market === "CRYPTO_FUTURES" && !Array.isArray(backtestInput.fundingRates)) throw new TypeError("actual futures funding required");
+  if (!Array.isArray(versions) || versions.length === 0) throw new TypeError("at least one scalping family version is required");
+  const requestedVersions = Object.freeze([...new Set(versions)]);
+  if (requestedVersions.some((version) => !Object.hasOwn(SCALPING_ADAPTER_CONTRACTS, version))) throw new TypeError("unsupported scalping family version");
   const v2 = runScalpingV1Research({ backtestInput, budget: Object.freeze({ maxCoarseCandidates: budget.maxCoarseCandidates, maxFineCandidates: budget.maxFineCandidates, developmentSeeds: Math.min(6, budget.promisingRegions + 2), oosCandidates: budget.oosAdmissions, maxWalkForwardWindows: budget.maxWalkForwardWindows }) });
   const seed = bestDevelopmentSeed(v2);
   if (!seed) throw new Error("V2_SCALPING_NO_DEVELOPMENT_SEED");
   const v2Candidates = Object.freeze((v2.candidates ?? []).slice(0, budget.oosAdmissions).map((row) => Object.freeze({ ...row, family: "V2_SCALPING", structuralFamily: "EMA_ATR_SHARED", finalHoldoutUsed: false })));
-  const families = [Object.freeze({ version: "V2", contract: SCALPING_ADAPTER_CONTRACTS.V2, parameterCount: Object.keys(seed.parameters).length, developmentAttempts: v2.candidateCounts?.development ?? 0, oosAdmissions: v2Candidates.length, wfAdmissions: v2Candidates.filter((row) => (row.walkForward?.windows?.length ?? 0) > 0).length, totalCandidatesTested: (v2.candidateCounts?.coarse ?? 0) + (v2.candidateCounts?.fine ?? 0), candidates: v2Candidates })];
-  for (const version of ["V3", "V4", "V5", "V6"]) families.push(evaluateFamily(version, backtestInput, seed, budget));
+  const families = [];
+  if (requestedVersions.includes("V2")) families.push(Object.freeze({ version: "V2", contract: SCALPING_ADAPTER_CONTRACTS.V2, parameterCount: Object.keys(seed.parameters).length, developmentAttempts: v2.candidateCounts?.development ?? 0, oosAdmissions: v2Candidates.length, wfAdmissions: v2Candidates.filter((row) => (row.walkForward?.windows?.length ?? 0) > 0).length, totalCandidatesTested: (v2.candidateCounts?.coarse ?? 0) + (v2.candidateCounts?.fine ?? 0), candidates: v2Candidates }));
+  for (const version of requestedVersions.filter((version) => version !== "V2")) families.push(evaluateFamily(version, backtestInput, seed, budget));
   return Object.freeze({
     mode: "bounded-15m-scalping-family-research",
     market: backtestInput.market,
@@ -161,6 +165,7 @@ export function runScalpingFamilyResearch({ backtestInput, budget = SCALPING_FAM
     direction: String(backtestInput.side ?? "long").toUpperCase(),
     timeframe: "15m",
     budget: Object.freeze({ ...budget }),
+    requestedVersions,
     developmentSeedId: seed.id,
     families: Object.freeze(families),
     totalCandidatesTested: families.reduce((sum, row) => sum + row.totalCandidatesTested, 0),
