@@ -1,323 +1,164 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useLocation } from 'wouter';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, ChevronRight, RefreshCw, Search } from 'lucide-react';
+import { AlertTriangle, ArrowRight, BarChart3, BriefcaseBusiness, Radar, Star } from 'lucide-react';
+import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
-import { AssetSwitch } from '@/components/asset-switch';
-import { useAssetMode } from '@/lib/asset-mode';
-import { api, apiGet, type QuoteRow, type SectorPopularData, type SectorPopularRow } from '@/lib/api';
-import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
-import { cn } from '@/lib/utils';
+import { UnifiedAssetSearch } from '@/components/unified-asset-search';
+import { useAnalysisSelection } from '@/lib/analysis-selection';
+import { api, apiGet, type SummaryItem } from '@/lib/api';
+import { unifiedAssetDetailPath } from '@/lib/unified-asset-search';
+import {
+  formatAppPercent,
+  formatAppPrice,
+  readWatchlistItems,
+  WATCHLIST_CHANGE_EVENT,
+  type WatchlistItem,
+} from '@/lib/stock-display';
 
-type AnyObj = Record<string, any>;
+interface CryptoTickerRow {
+  symbol?: unknown;
+  price?: unknown;
+  changePercent?: unknown;
+  changePercent24h?: unknown;
+  tradePrice?: unknown;
+}
 
-function formatDateTime(now: Date) {
-  return new Intl.DateTimeFormat('ko-KR', {
-    timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric',
-    weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit',
-  }).format(now);
+interface CryptoTickerResponse {
+  tickers?: CryptoTickerRow[];
 }
 
 function finite(value: unknown): number | null {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function marketSummaryRows(items: SummaryItem[]): SummaryItem[] {
+  const preferred = ['kospi', 'kosdaq', 'nasdaq', 'sp500', 'dow'];
+  const map = new Map(items.map((item) => [String(item.key ?? '').trim().toLowerCase(), item]));
+  return preferred.map((key) => map.get(key)).filter((item): item is SummaryItem => Boolean(item)).slice(0, 4);
+}
+
+function baseCoinSymbol(value: unknown): string {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (raw.startsWith('KRW-')) return raw.slice(4);
+  return raw.replace(/(?:USDT|USDC)$/u, '');
+}
+
+function isTodaySeoul(value: string | undefined): boolean {
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  return formatter.format(new Date(parsed)) === formatter.format(new Date());
 }
 
 export default function HomePage() {
   const [, navigate] = useLocation();
-  const mode = useAssetMode();
-  const [now, setNow] = useState(() => new Date());
-
-  // 딥링크(?asset=coin|stock&marketMode=KR|US) 지원 — 검증·공유용, 기본 동작 불변.
-  useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    const asset = p.get('asset');
-    const mk = p.get('marketMode');
-    if (asset === 'coin' || asset === 'stock') mode.setAsset(asset);
-    if (mk === 'US' || mk === 'KR') mode.setStockMarket(mk);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { selection } = useAnalysisSelection();
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>(() => readWatchlistItems().slice(0, 8));
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(timer);
+    const refresh = () => setWatchlist(readWatchlistItems().slice(0, 8));
+    window.addEventListener(WATCHLIST_CHANGE_EVENT, refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener(WATCHLIST_CHANGE_EVENT, refresh);
+      window.removeEventListener('storage', refresh);
+    };
   }, []);
 
-  const summary = useQuery({
-    queryKey: ['home-market-summary'],
+  const market = useQuery({
+    queryKey: ['home-dashboard-market'],
     queryFn: () => api.summary(),
-    enabled: mode.asset === 'stock',
-    refetchInterval: 10_000,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
   });
-  const sectorPopular = useQuery({
-    queryKey: ['home-sector-popular', mode.stockMarket],
-    queryFn: () => api.sectorPopular(mode.stockMarket),
-    enabled: mode.asset === 'stock',
+  const bitcoin = useQuery({
+    queryKey: ['home-dashboard-btc'],
+    queryFn: () => apiGet<CryptoTickerResponse>('/crypto/spot/tickers'),
+    staleTime: 15_000,
     refetchInterval: 30_000,
-  });
-  const cryptoStatus = useQuery({
-    queryKey: ['home-crypto-status'],
-    queryFn: () => apiGet<AnyObj>('/crypto/status'),
-    enabled: mode.asset === 'coin',
-    refetchInterval: 30_000,
-  });
-  const spotTickers = useQuery({
-    queryKey: ['home-crypto-spot-tickers'],
-    queryFn: () => apiGet<AnyObj>('/crypto/spot/tickers'),
-    enabled: mode.asset === 'coin' && mode.coinMarket === 'spot',
-    refetchInterval: 10_000,
-  });
-  const futuresTickers = useQuery({
-    queryKey: ['home-crypto-futures-tickers'],
-    queryFn: () => apiGet<AnyObj>('/crypto/futures/tickers'),
-    enabled: mode.asset === 'coin' && mode.coinMarket === 'futures',
-    refetchInterval: 8_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
   });
 
-  const cryptoRows = useMemo(() => {
-    const source = mode.coinMarket === 'spot'
-      ? ((spotTickers.data?.tickers ?? []) as AnyObj[])
-      : ((futuresTickers.data?.tickers ?? []) as AnyObj[]);
-    return [...source]
-      .sort((a, b) => Number(b.tradingValue24h ?? 0) - Number(a.tradingValue24h ?? 0))
-      .slice(0, 10);
-  }, [futuresTickers.data, mode.coinMarket, spotTickers.data]);
-
-  const refresh = () => {
-    if (mode.asset === 'stock') {
-      void Promise.all([summary.refetch(), sectorPopular.refetch()]);
-    } else {
-      void Promise.all([cryptoStatus.refetch(), mode.coinMarket === 'spot' ? spotTickers.refetch() : futuresTickers.refetch()]);
-    }
-  };
+  const indices = useMemo(() => marketSummaryRows(market.data?.items ?? []), [market.data?.items]);
+  const btc = useMemo(() => (bitcoin.data?.tickers ?? []).find((row) => baseCoinSymbol(row.symbol) === 'BTC') ?? null, [bitcoin.data?.tickers]);
+  const signalIsCurrent = isTodaySeoul(selection?.selectedAt);
+  const warnings = [
+    market.isError ? '주식 시장 요약 공급자 응답을 확인하지 못했습니다.' : '',
+    bitcoin.isError ? '코인 공개 시세 공급자 응답을 확인하지 못했습니다.' : '',
+  ].filter(Boolean);
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-background">
-      {/* 상단 고정 없음 — 제목부터 마지막 카드까지 페이지 전체가 하나의 세로 스크롤로 움직인다. */}
-      <header className="border-b border-card-border px-4 pb-3 pt-4">
-        <h1 className="text-2xl font-black">지식정보</h1>
-        {/* 갱신 시각 — 제목 아래 줄, 오른쪽 끝 정렬(크기·색·굵기 기존 유지) */}
-        <p className="mt-1 text-right text-[11px] font-bold text-muted-foreground">{formatDateTime(now)}</p>
-        {/* 종목 검색창 — 주식/코인 선택 버튼보다 위 */}
-        <button type="button" onClick={() => navigate('/stocks')} className="mt-3 flex w-full items-center gap-2 rounded-2xl border border-card-border bg-card px-4 py-3 text-left">
-          <Search className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-black text-muted-foreground">{mode.asset === 'stock' ? '종목 검색' : '코인 검색'}</span>
-        </button>
-        <AssetSwitch className="mt-3" />
-        {/* 지정가 알림·새로고침 — 주식 탭 영역 우측 정렬(종은 주식 탭에서만, 새로고침은 기존 동작 유지) */}
-        <div className="mt-2 flex justify-end gap-2">
-          {mode.asset === 'stock' && (
-            <button type="button" onClick={() => navigate('/alerts')} aria-label="알림" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><Bell className="h-4 w-4" /></button>
-          )}
-          <button type="button" onClick={refresh} aria-label="새로고침" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card"><RefreshCw className={cn('h-4 w-4', (summary.isFetching || sectorPopular.isFetching || spotTickers.isFetching || futuresTickers.isFetching) && 'animate-spin')} /></button>
-        </div>
-      </header>
+    <div className="h-full overflow-y-auto overscroll-contain bg-background pb-[calc(5.5rem+env(safe-area-inset-bottom))]">
+      <main className="mx-auto w-full max-w-6xl space-y-4 px-3 py-4 sm:px-5 lg:py-6">
+        <header className="space-y-3">
+          <div>
+            <p className="text-[11px] font-extrabold text-primary">투자 의사결정 대시보드</p>
+            <h1 className="mt-1 break-keep text-2xl font-black">오늘 시장과 관심사항</h1>
+            <p className="mt-1 break-keep text-xs font-semibold text-muted-foreground">상세 탐색보다 현재 시장·신호·관심종목을 먼저 확인합니다.</p>
+          </div>
+          <UnifiedAssetSearch placeholder="삼성전자 · AAPL · KRW-BTC · BTCUSDT 검색" onSelect={(item) => navigate(unifiedAssetDetailPath(item, '/home'))} />
+        </header>
 
-      <main className="space-y-4 px-4 pb-28 pt-4">
-        {mode.asset === 'stock' ? (
-          <StockHome mode={mode.stockMarket} summary={summary.data?.items ?? []} sectorData={sectorPopular.data} summaryLoading={summary.isLoading} summaryError={summary.isError} sectorLoading={sectorPopular.isLoading} sectorError={sectorPopular.isError} onNavigate={navigate} />
-        ) : (
-          <CryptoHome mode={mode.coinMarket} status={cryptoStatus.data} rows={cryptoRows} loading={mode.coinMarket === 'spot' ? spotTickers.isLoading : futuresTickers.isLoading} error={mode.coinMarket === 'spot' ? spotTickers.isError : futuresTickers.isError} onNavigate={navigate} />
+        {warnings.length > 0 && (
+          <section role="alert" className="rounded-3xl border border-amber-500/40 bg-amber-500/10 p-4">
+            <div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" /><h2 className="text-sm font-black">System Warning</h2></div>
+            <ul className="mt-2 space-y-1 break-keep text-xs font-bold text-muted-foreground">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul>
+          </section>
         )}
+
+        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-market-summary">
+          <div className="flex items-center justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">오늘의 시장</p><h2 className="mt-1 text-base font-black">핵심 시장 요약</h2></div><button type="button" onClick={() => navigate('/market-overview')} className="shrink-0 text-xs font-black text-primary">시황 보기</button></div>
+          <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
+            {market.isLoading && indices.length === 0 ? <DashboardPlaceholder label="시장 핵심 데이터를 불러오는 중입니다." /> : indices.map((item) => <MetricCard key={item.key} label={item.label} value={item.ok ? item.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '데이터 부족'} sub={item.ok ? formatAppPercent(item.changePercent) : '공급자 확인 필요'} />)}
+            <MetricCard label="BTC · Upbit" value={btc ? formatAppPrice(finite(btc.price ?? btc.tradePrice), 'KRW') : bitcoin.isLoading ? '불러오는 중' : '데이터 부족'} sub={btc ? formatAppPercent(finite(btc.changePercent ?? btc.changePercent24h)) : bitcoin.isError ? '공급자 확인 필요' : '공개 현물 시세'} />
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-signal-summary">
+          <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Radar className="h-4 w-4 text-primary" /><div><p className="text-[11px] font-extrabold text-primary">오늘의 신호</p><h2 className="text-base font-black">최근 검증 선택</h2></div></div><button type="button" onClick={() => navigate('/scanner')} className="shrink-0 text-xs font-black text-primary">Scanner 열기</button></div>
+          {selection && signalIsCurrent && selection.signalScore != null ? (
+            <button type="button" onClick={() => navigate('/scanner')} className="mt-3 flex min-h-16 w-full min-w-0 items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3 text-left"><div className="min-w-0"><p className="truncate text-sm font-black">{selection.displayName}</p><p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">{selection.ticker} · {selection.market} · {selection.timeframe}</p></div><div className="shrink-0 text-right"><p className="text-sm font-black">{selection.action && selection.action !== 'NONE' ? selection.action : '관찰'}</p><p className="text-[10px] font-bold text-muted-foreground">Score {selection.signalScore}</p></div></button>
+          ) : <p className="mt-3 rounded-2xl bg-background p-4 break-keep text-xs font-bold text-muted-foreground">오늘 선택한 Scanner 신호가 없습니다. Home이 별도 Scanner 요청을 만들지 않으므로 중복 분석이 발생하지 않습니다.</p>}
+        </section>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-watchlist-summary">
+            <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Star className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">관심종목</h2></div><button type="button" onClick={() => navigate('/watchlist')} className="text-xs font-black text-primary">전체보기</button></div>
+            <div className="mt-3 space-y-2">{watchlist.length ? watchlist.slice(0, 5).map((item) => <div key={item.ticker} className="flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-background px-3 py-2"><div className="min-w-0"><p className="truncate text-sm font-black">{item.name || item.ticker}</p><p className="truncate text-[10px] font-bold text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</p></div><div className="shrink-0 text-right text-xs font-black"><p>{item.price == null ? '가격 미확인' : formatAppPrice(item.price, item.currency ?? 'KRW')}</p><p className="text-[10px] text-muted-foreground">{item.changePercent == null ? '등락 미확인' : formatAppPercent(item.changePercent)}</p></div></div>) : <p className="rounded-2xl bg-background p-4 text-xs font-bold text-muted-foreground">관심종목이 없습니다. 검색 결과에서 관심종목에 추가하면 여기에 표시됩니다.</p>}</div>
+          </section>
+
+          <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-portfolio-summary">
+            <div className="flex items-center gap-2"><BriefcaseBusiness className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">Portfolio</h2></div>
+            <p className="mt-3 break-keep text-xs font-bold leading-5 text-muted-foreground">Home에서는 private 계좌·잔고·포지션 API를 새로 호출하지 않습니다. 포트폴리오 권한이 있는 경우 기존 전용 화면에서 자산·손익·Risk를 확인하세요.</p>
+            <button type="button" onClick={() => navigate('/portfolio')} className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-card-border bg-background text-sm font-black">포트폴리오 열기 <ArrowRight className="h-4 w-4" /></button>
+          </section>
+        </div>
+
+        <section className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="빠른 이동">
+          <QuickLink label="국내" onClick={() => navigate('/stocks/kr')} />
+          <QuickLink label="미국" onClick={() => navigate('/stocks/us')} />
+          <QuickLink label="코인 현물" onClick={() => navigate('/coins/spot')} />
+          <QuickLink label="코인 선물" onClick={() => navigate('/coins/futures')} />
+        </section>
       </main>
       <BottomNav />
     </div>
   );
 }
 
-function StockHome({ mode, summary, sectorData, summaryLoading, summaryError, sectorLoading, sectorError, onNavigate }: { mode: 'KR' | 'US'; summary: AnyObj[]; sectorData?: SectorPopularData; summaryLoading: boolean; summaryError: boolean; sectorLoading: boolean; sectorError: boolean; onNavigate: (to: string) => void }) {
-  const wanted = mode === 'KR' ? ['kospi', 'kosdaq'] : ['nasdaq'];
-  const indices = summary.filter((item) => wanted.includes(String(item.key).toLowerCase()));
-  const sectors = sectorData?.sectors ?? [];
-  // 실제 인기(섹터 내 종목의 거래대금 합, 없으면 거래량 합) 기준 상위 5개만 세로 목록으로.
-  const topSectors = useMemo(() => {
-    const scored = sectors.map((sector) => ({
-      sector,
-      score: sector.rows.reduce((sum, row) => sum + (finite(row.tradingValue) ?? finite(row.volume) ?? 0), 0),
-      count: sector.rows.length,
-    }));
-    scored.sort((a, b) => (b.count > 0 ? 1 : 0) - (a.count > 0 ? 1 : 0) || b.score - a.score || b.count - a.count);
-    return scored.slice(0, 5).map((item) => item.sector);
-  }, [sectors]);
-  // 딥링크(?sector=키) 지원 — 해당 섹터 팝업을 바로 연다. 기본은 팝업 닫힘.
-  const [openSector, setOpenSector] = useState<string | null>(() => new URLSearchParams(window.location.search).get('sector'));
-  const selected = sectors.find((sector) => sector.key === openSector) ?? null;
-  return (
-    <>
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <div className="flex items-center justify-between"><h2 className="text-sm font-black">시장현황</h2><span className="text-[10px] font-bold text-muted-foreground">실제 제공기관 기준</span></div>
-        {summaryLoading && <State>시장 데이터를 불러오는 중입니다.</State>}
-        {summaryError && <State error>시장 데이터 제공기관이 지연되고 있습니다.</State>}
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          {indices.map((item) => {
-            const change = finite(item.changePercent);
-            return <InfoCard key={String(item.key)} label={String(item.label ?? item.key)} value={finite(item.price) == null ? '데이터 없음' : Number(item.price).toLocaleString(undefined, { maximumFractionDigits: 2 })} sub={change == null ? '등락 데이터 없음' : formatAppPercent(change)} tone={change == null ? undefined : change >= 0 ? 'up' : 'down'} />;
-          })}
-          {!summaryLoading && indices.length === 0 && <div className="col-span-2"><State>현재 제공된 지수 데이터가 없습니다.</State></div>}
-        </div>
-      </section>
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-black">섹터별 인기종목</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">{sectorData?.sortBasis ?? '거래대금 기준'}</p></div><button type="button" onClick={() => onNavigate('/stocks')} className="text-xs font-black text-primary">전체보기</button></div>
-        {sectorLoading && <State>섹터 데이터를 불러오는 중입니다.</State>}
-        {sectorError && <State error>섹터 데이터 제공기관이 지연되고 있습니다.</State>}
-        {/* 인기 섹터 상위 5개 — 세로 목록(가로 스크롤 없음). 종목은 팝업에서만 표시. */}
-        <div className="mt-3 space-y-2">
-          {topSectors.map((sector) => <SectorListButton key={sector.key} label={sector.label} onClick={() => setOpenSector(sector.key)} />)}
-        </div>
-        {!sectorLoading && !sectorError && topSectors.length === 0 && <State>현재 표시할 실제 섹터 데이터가 없습니다.</State>}
-      </section>
-      {selected && (
-        <SectorPopup title={`${selected.label} 인기종목`} sortBasis={sectorData?.sortBasis ?? '거래대금 기준'} onViewAll={() => onNavigate('/stocks')} onClose={() => setOpenSector(null)}>
-          {selected.rows.slice(0, 5).map((row, index) => <StockRow key={`${row.market}:${row.ticker}`} row={row} rank={row.rank ?? index + 1} onClick={() => onNavigate(`/stock/${encodeURIComponent(row.ticker)}`)} />)}
-          {selected.rows.length === 0 && <State>현재 표시할 실제 종목 데이터가 없습니다.</State>}
-        </SectorPopup>
-      )}
-    </>
-  );
+function MetricCard({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return <div className="min-w-0 rounded-2xl bg-background p-3"><p className="truncate text-[10px] font-bold text-muted-foreground">{label}</p><p className="mt-1 truncate text-sm font-black">{value}</p><p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">{sub}</p></div>;
 }
-
-// 검증 가능한 코인 분야 분류(정적). 근거가 명확한 널리 알려진 코인만 포함하며,
-// 근거 불명 코인은 어떤 분야에도 넣지 않는다. 가격·등락률은 실데이터에서 채운다.
-const COIN_SECTORS: { key: string; label: string; symbols: string[] }[] = [
-  { key: 'major', label: '주요 코인', symbols: ['BTC', 'ETH', 'XRP'] },
-  { key: 'smart-contract', label: '스마트계약', symbols: ['ETH', 'SOL', 'ADA'] },
-  { key: 'payment', label: '결제', symbols: ['XRP', 'BTC'] },
-  { key: 'defi', label: '디파이', symbols: ['UNI', 'AAVE', 'LINK'] },
-  { key: 'meme', label: '밈', symbols: ['DOGE', 'SHIB', 'PEPE'] },
-  { key: 'ai-data', label: 'AI·데이터', symbols: ['FET', 'GRT'] },
-  { key: 'gaming', label: '게임·메타버스', symbols: ['SAND', 'MANA', 'AXS'] },
-  { key: 'layer2', label: '레이어2', symbols: ['ARB', 'OP', 'POL'] },
-];
-
-// 심볼(KRW-BTC, BTCUSDT 등)에서 기초 심볼(BTC)만 추출.
-function baseCoinSymbol(symbol: string): string {
-  const raw = String(symbol ?? '').toUpperCase().trim();
-  const dashed = raw.includes('-') ? raw.split('-').pop() ?? raw : raw;
-  return dashed.replace(/(USDT|USDC|KRW|BTC)$/u, (m) => (dashed === m ? m : '')) || dashed;
+function DashboardPlaceholder({ label }: { label: string }) {
+  return <div className="col-span-2 flex min-h-20 items-center justify-center rounded-2xl bg-background px-3 text-center text-xs font-bold text-muted-foreground md:col-span-4">{label}</div>;
 }
-
-function CryptoHome({ mode, status, rows, loading, error, onNavigate }: { mode: 'spot' | 'futures'; status?: AnyObj; rows: AnyObj[]; loading: boolean; error: boolean; onNavigate: (to: string) => void }) {
-  const exchange = mode === 'spot' ? 'UPBIT' : 'BITGET';
-  const ok = mode === 'spot' ? status?.upbit?.ok : status?.bitget?.ok;
-  const btc = rows.find((row) => String(row.symbol).startsWith('BTC'));
-  const eth = rows.find((row) => String(row.symbol).startsWith('ETH'));
-  const xrp = rows.find((row) => String(row.symbol).startsWith('XRP'));
-
-  const bySymbol = useMemo(() => {
-    const map = new Map<string, AnyObj>();
-    for (const row of rows) {
-      const base = baseCoinSymbol(String(row.symbol));
-      if (!map.has(base)) map.set(base, row);
-    }
-    return map;
-  }, [rows]);
-
-  // 실제 거래대금 합 기준 상위 5개 분야만 세로 목록으로.
-  const rankedSectors = useMemo(() => {
-    const scored = COIN_SECTORS.map((sector) => {
-      const sectorRows = sector.symbols.map((symbol) => bySymbol.get(symbol)).filter((row): row is AnyObj => Boolean(row));
-      return { sector, sectorRows, score: sectorRows.reduce((sum, row) => sum + (finite(row.tradingValue24h) ?? 0), 0) };
-    });
-    // 실데이터가 있는 분야만 후보로 삼는다 — 시세가 전혀 없으면 목록 대신 정직한 안내 문구를 보여준다.
-    const withData = scored.filter((item) => item.sectorRows.length > 0);
-    withData.sort((a, b) => b.score - a.score);
-    return withData.slice(0, 5);
-  }, [bySymbol]);
-  // 딥링크(?coinCat=키) 지원 — 해당 분야 팝업을 바로 연다. 기본은 팝업 닫힘.
-  const [openSector, setOpenSector] = useState<string | null>(() => new URLSearchParams(window.location.search).get('coinCat'));
-  const selected = COIN_SECTORS.find((sector) => sector.key === openSector) ?? null;
-  const selectedRows = useMemo(
-    () => (selected ? selected.symbols.map((symbol) => bySymbol.get(symbol)).filter((row): row is AnyObj => Boolean(row)) : []),
-    [bySymbol, selected],
-  );
-
-  return (
-    <>
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <div className="flex items-center justify-between"><h2 className="text-sm font-black">{mode === 'spot' ? '코인 현물 시장' : '코인 선물 시장'}</h2><span className={cn('rounded-full px-2 py-1 text-[10px] font-black', ok ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive')}>{exchange} · {ok ? '정상' : '오류'}</span></div>
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          <CryptoSummary row={btc} label={`비트코인 (${mode === 'spot' ? 'BTC/KRW' : 'BTCUSDT'})`} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
-          <CryptoSummary row={eth} label={`이더리움 (${mode === 'spot' ? 'ETH/KRW' : 'ETHUSDT'})`} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
-          <CryptoSummary row={xrp} label={`리플 (${mode === 'spot' ? 'XRP/KRW' : 'XRPUSDT'})`} currency={mode === 'spot' ? 'KRW' : 'USDT'} />
-        </div>
-        <p className="mt-2 text-[10px] font-bold text-muted-foreground">
-          {mode === 'spot' ? '업비트 공개 API' : '비트겟 공개 API'} 실시간 시세 기준
-        </p>
-        {mode === 'futures' && btc && <div className="mt-2 grid grid-cols-2 gap-2"><InfoCard label="BTC 펀딩비" value={finite(btc.fundingRate) == null ? '데이터 없음' : `${(Number(btc.fundingRate) * 100).toFixed(4)}%`} /><InfoCard label="BTC 미결제약정" value={finite(btc.openInterest) == null ? '데이터 없음' : Number(btc.openInterest).toLocaleString()} /></div>}
-      </section>
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-        <div className="flex items-center justify-between"><div><h2 className="text-sm font-black">분야별 인기코인</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">거래대금 기준</p></div><button type="button" onClick={() => onNavigate('/stocks')} className="text-xs font-black text-primary">전체보기</button></div>
-        {loading && <State>코인 시세를 불러오는 중입니다.</State>}
-        {error && <State error>거래소 시세를 불러오지 못했습니다.</State>}
-        {/* 인기 분야 상위 5개 — 세로 목록(가로 스크롤 없음). 코인은 팝업에서만 표시. */}
-        <div className="mt-3 space-y-2">
-          {rankedSectors.map(({ sector }) => <SectorListButton key={sector.key} label={sector.label} onClick={() => setOpenSector(sector.key)} />)}
-        </div>
-        {!loading && !error && rankedSectors.length === 0 && <State>현재 표시할 실제 분야 데이터가 없습니다.</State>}
-      </section>
-      {selected && (
-        <SectorPopup title={`${selected.label} 인기코인`} sortBasis="거래대금 기준" onViewAll={() => onNavigate('/stocks')} onClose={() => setOpenSector(null)}>
-          {selectedRows.slice(0, 5).map((row, index) => <CryptoRow key={String(row.symbol)} row={row} rank={index + 1} currency={mode === 'spot' ? 'KRW' : 'USDT'} onClick={() => onNavigate(`/stock-info?asset=coin&coinMarket=${mode}&symbol=${encodeURIComponent(String(row.symbol))}`)} />)}
-          {selectedRows.length === 0 && <State>현재 표시할 실제 종목 데이터가 없습니다.</State>}
-        </SectorPopup>
-      )}
-    </>
-  );
-}
-
-// 섹터 세로 목록의 한 줄 버튼 — 이름과 화살표 그룹을 카드 정중앙에 배치.
-function SectorListButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} className="flex w-full items-center justify-center gap-1.5 rounded-2xl border border-card-border bg-secondary/60 px-4 py-3 text-center">
-      <span className="min-w-0 break-keep text-sm font-black leading-tight">{label}</span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-    </button>
-  );
-}
-
-// 섹터를 눌렀을 때 뜨는 작은 하단 팝업 — 페이지 이동 없음, 하단 메뉴보다 위(z-[70]).
-function SectorPopup({ title, sortBasis, children, onViewAll, onClose }: { title: string; sortBasis: string; children: React.ReactNode; onViewAll: () => void; onClose: () => void }) {
-  // 키보드(Esc) 닫기 지원.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-  return (
-    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/60 p-4 pb-24" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-md overflow-hidden rounded-3xl border border-card-border bg-card shadow-lg" onClick={(event) => event.stopPropagation()}>
-        <div className="border-b border-card-border px-4 py-3 text-center">
-          <h3 className="break-keep text-sm font-black leading-tight">{title}</h3>
-          <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{sortBasis}</p>
-        </div>
-        <div className="max-h-[45vh] space-y-2 overflow-y-auto p-3">{children}</div>
-        <div className="grid grid-cols-2 gap-2 border-t border-card-border p-3">
-          <button type="button" onClick={onViewAll} className="inline-flex items-center justify-center rounded-xl border border-primary bg-primary px-3 py-2 text-center text-xs font-black text-primary-foreground">전체보기</button>
-          <button type="button" onClick={onClose} className="inline-flex items-center justify-center rounded-xl border border-card-border bg-secondary/60 px-3 py-2 text-center text-xs font-black">닫기</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StockRow({ row, rank, onClick }: { row: QuoteRow | SectorPopularRow; rank: number; onClick: () => void }) {
-  return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl bg-secondary/60 p-3 text-left"><span className="w-6 text-center text-sm font-black text-primary">{rank}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayStockName(row.ticker, row.name, row.market)}</p><p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{row.ticker}</p></div><div className="text-right"><p className="text-xs font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('text-[10px] font-black', row.changePercent >= 0 ? 'text-positive' : 'text-destructive')}>{formatAppPercent(row.changePercent)}</p></div></button>;
-}
-
-function CryptoRow({ row, rank, currency, onClick }: { row: AnyObj; rank: number; currency: string; onClick: () => void }) {
-  const change = finite(row.changePercent ?? row.changePercent24h);
-  return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl bg-secondary/60 p-3 text-left"><span className="w-6 text-center text-sm font-black text-primary">{rank}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayCoinName(String(row.symbol), row.koreanName, row.englishName)}</p><p className="mt-0.5 text-[10px] font-bold text-muted-foreground">{row.symbol}</p></div><div className="text-right"><p className="text-xs font-black">{formatAppPrice(Number(row?.price), currency)}</p><p className={cn('text-[10px] font-black', change == null ? 'text-muted-foreground' : change >= 0 ? 'text-positive' : 'text-destructive')}>{change == null ? '데이터 없음' : formatAppPercent(change)}</p></div></button>;
-}
-
-function CryptoSummary({ row, label, currency }: { row?: AnyObj; label: string; currency: string }) {
-  const change = finite(row?.changePercent ?? row?.changePercent24h);
-  return <InfoCard label={label} value={finite(row?.price) == null ? '데이터 없음' : formatAppPrice(Number(row?.price), currency)} sub={change == null ? '등락 데이터 없음' : formatAppPercent(change)} tone={change == null ? undefined : change >= 0 ? 'up' : 'down'} />;
-}
-
-function InfoCard({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'up' | 'down' }) {
-  return <div className="rounded-2xl bg-secondary/60 p-3"><p className="text-[10px] font-bold text-muted-foreground">{label}</p><p className="mt-1 text-sm font-black">{value}</p>{sub && <p className={cn('mt-1 text-[10px] font-black', tone === 'up' ? 'text-positive' : tone === 'down' ? 'text-destructive' : 'text-muted-foreground')}>{sub}</p>}</div>;
-}
-
-function State({ children, error }: { children: React.ReactNode; error?: boolean }) {
-  return <p className={cn('mt-3 rounded-2xl bg-secondary p-4 text-center text-xs font-bold text-muted-foreground', error && 'bg-destructive/10 text-destructive')}>{children}</p>;
+function QuickLink({ label, onClick }: { label: string; onClick: () => void }) {
+  return <button type="button" onClick={onClick} className="flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-2xl border border-card-border bg-card px-2 text-sm font-black"><BarChart3 className="h-4 w-4 shrink-0 text-primary" /><span className="break-keep">{label}</span></button>;
 }
