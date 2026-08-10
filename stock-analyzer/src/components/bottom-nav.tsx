@@ -49,6 +49,20 @@ const ICONS: Record<NavigationIconId, LucideIcon> = {
   portfolio: BriefcaseBusiness,
 };
 
+const HIDDEN_ASSET_MENU_IDS = new Set(['market-overview', 'market-browser', 'alerts']);
+
+function displayGroupLabel(groupId: NavigationGroupId, fallback: string): string {
+  return groupId === 'assets' ? '검색' : fallback;
+}
+
+function displayMenuLabel(menuItem: NavigationMenuItem): string {
+  if (menuItem.id === 'stocks-kr') return '국내';
+  if (menuItem.id === 'stocks-us') return '미국';
+  if (menuItem.id === 'market-rankings') return '랭킹';
+  if (menuItem.id === 'watchlist') return '관심종목';
+  return menuItem.label;
+}
+
 export function BottomNav() {
   const [location, navigate] = useLocation();
   const auth = useAuth();
@@ -68,6 +82,10 @@ export function BottomNav() {
   useEffect(() => {
     if (!presentation?.title) return;
     document.title = `${presentation.title} · Stock AI`;
+  }, [presentation?.title]);
+
+  useEffect(() => {
+    if (!presentation?.title) return;
   }, [presentation?.title]);
 
   useEffect(() => {
@@ -187,8 +205,10 @@ export function BottomNav() {
         {visibleGroups.map((group) => {
           const active = navigationGroupMatches(group, path);
           const Icon = ICONS[group.icon];
+          const groupLabel = displayGroupLabel(group.id, group.label);
           const visibleMenuItems = (group.menu ?? []).filter(
-            (item) => !item.capability || auth.can(item.capability),
+            (item) => (!item.capability || auth.can(item.capability))
+              && !(group.id === 'assets' && HIDDEN_ASSET_MENU_IDS.has(item.id)),
           );
           const hasMenu = visibleMenuItems.length > 0;
 
@@ -201,7 +221,7 @@ export function BottomNav() {
                   <div
                     id={menuId}
                     role="menu"
-                    aria-label={`${group.label} 메뉴`}
+                    aria-label={`${groupLabel} 메뉴`}
                     aria-orientation="vertical"
                     className="absolute bottom-full left-1/2 z-50 mb-3 max-h-[min(70dvh,32rem)] w-52 -translate-x-1/2 overflow-y-auto rounded-2xl border border-card-border bg-card p-2 shadow-2xl"
                   >
@@ -230,7 +250,7 @@ export function BottomNav() {
                           )}
                         >
                           <MenuIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                          <span>{menuItem.label}</span>
+                          <span className="break-keep whitespace-nowrap">{displayMenuLabel(menuItem)}</span>
                         </button>
                       );
                     })}
@@ -257,7 +277,7 @@ export function BottomNav() {
                   )}
                 >
                   <Icon className={cn('mb-0.5 h-5 w-5', active || menuOpen ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
-                  <span className="truncate">{group.label}</span>
+                  <span className="max-w-full truncate whitespace-nowrap">{groupLabel}</span>
                 </button>
               </div>
             );
@@ -275,7 +295,7 @@ export function BottomNav() {
               )}
             >
               <Icon className={cn('mb-0.5 h-5 w-5', active ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
-              <span className="truncate">{group.label}</span>
+              <span className="max-w-full truncate whitespace-nowrap">{groupLabel}</span>
             </button>
           );
         })}
