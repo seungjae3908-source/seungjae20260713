@@ -598,6 +598,7 @@ test.describe('real staging release readiness', () => {
 
   test('bootstrap finite-state: rejected profile bootstrap exits loading with terminal retry UI', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
+    await expectHealthyRoute(page, '/');
     const observation: AuthFaultObservation = {
       kind: 'reject',
       candidates: [],
@@ -617,16 +618,19 @@ test.describe('real staging release readiness', () => {
       requestCount += 1;
       observation.requests.add(request);
       await route.fulfill({
-        status: 503,
+        status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ message: 'phase10 injected profile bootstrap rejection' }),
+        body: JSON.stringify([
+          { id: 'phase10-profile-a' },
+          { id: 'phase10-profile-b' },
+        ]),
       });
     });
     try {
       await page.reload({ waitUntil: 'domcontentloaded' });
       await expectBootstrapTerminalError(page);
       expect(requestCount, 'initial bootstrap must issue one profile request').toBe(1);
-      expect(observation.candidates, 'the injected rejection must be observed exactly once').toHaveLength(1);
+      expect(observation.candidates, 'semantic bootstrap rejection must not create a network-error exemption').toHaveLength(0);
       confirmed = true;
     } finally {
       await page.unroute('**/rest/v1/profiles*');
@@ -636,6 +640,7 @@ test.describe('real staging release readiness', () => {
 
   test('profile timeout abort: frontend deadline cancels the stalled profile request and exits loading', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
+    await expectHealthyRoute(page, '/');
     const observation: AuthFaultObservation = {
       kind: 'timeout',
       candidates: [],
@@ -682,6 +687,7 @@ test.describe('real staging release readiness', () => {
 
   test('retry recovery: first profile bootstrap fails, retry performs one fresh request and restores authenticated UI', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
+    await expectHealthyRoute(page, '/');
     const observation: AuthFaultObservation = {
       kind: 'retry',
       candidates: [],
@@ -702,9 +708,12 @@ test.describe('real staging release readiness', () => {
       observation.requests.add(request);
       if (requestCount === 1) {
         await route.fulfill({
-          status: 503,
+          status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ message: 'phase10 injected first-attempt profile rejection' }),
+          body: JSON.stringify([
+            { id: 'phase10-profile-a' },
+            { id: 'phase10-profile-b' },
+          ]),
         });
         return;
       }
@@ -718,7 +727,7 @@ test.describe('real staging release readiness', () => {
       await expect(page.getByTestId('error-state')).toHaveCount(0);
       await expect(page.getByTestId('page-fallback')).toHaveCount(0);
       expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);
-      expect(observation.candidates, 'only the injected first attempt may fail').toHaveLength(1);
+      expect(observation.candidates, 'semantic first-attempt rejection must not create a network-error exemption').toHaveLength(0);
       confirmed = true;
     } finally {
       await page.unroute('**/rest/v1/profiles*');
