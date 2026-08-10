@@ -26,7 +26,7 @@ function hasVerifiedSignInGate(source) {
     signInStart,
   );
   const verifiedApply = source.indexOf('applySession(nextSession);', verifiedSession);
-  const profileLoad = source.indexOf('await loadProfile(nextSession.user);', verifiedApply);
+  const profileLoad = source.indexOf('await loadProfileWithDeadline(nextSession.user);', verifiedApply);
   const barrierRelease = source.indexOf('signingInRef.current = false;', profileLoad);
 
   return callbackStart >= 0
@@ -54,7 +54,7 @@ for (const [name, source] of [
       try {
         const nextSession = await signInWithSupabase(name, password);
         applySession(nextSession);
-        await loadProfile(nextSession.user);
+        await loadProfileWithDeadline(nextSession.user);
       } finally {
         signingInRef.current = false;
       }
@@ -76,7 +76,7 @@ for (const [name, source] of [
       try {
         const nextSession = await signInWithSupabase(name, password);
         applySession(nextSession);
-        await loadProfile(nextSession.user);
+        await loadProfileWithDeadline(nextSession.user);
       } finally {
         signingInRef.current = false;
       }
@@ -93,7 +93,7 @@ for (const [name, source] of [
       const nextSession = await signInWithSupabase(name, password);
       signingInRef.current = true;
       applySession(nextSession);
-      await loadProfile(nextSession.user);
+      await loadProfileWithDeadline(nextSession.user);
       signingInRef.current = false;
     },
     async signUp(loginName, password) {}
@@ -109,7 +109,7 @@ for (const [name, source] of [
       const nextSession = await signInWithSupabase(name, password);
       applySession(nextSession);
       signingInRef.current = false;
-      await loadProfile(nextSession.user);
+      await loadProfileWithDeadline(nextSession.user);
     },
     async signUp(loginName, password) {}
   `],
