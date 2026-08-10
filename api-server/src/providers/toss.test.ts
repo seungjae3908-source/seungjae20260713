@@ -10,9 +10,14 @@ import {
   getTossAccessToken,
 } from './toss';
 import type { CatalogEntry } from '../data/catalog';
+import BaseMarketDataService from '../services/market-data.base.service';
+import { MarketDataService } from '../services/market-data.service';
 
 const originalFetch = globalThis.fetch;
 const originalNow = Date.now;
+const originalBaseGetQuote = BaseMarketDataService.getQuote;
+const originalBaseGetCatalogEntry = BaseMarketDataService.getCatalogEntry;
+const originalBaseGetCandlesMeta = BaseMarketDataService.getCandlesMeta;
 const originalEnv = {
   clientId: process.env.TOSS_CLIENT_ID,
   clientSecret: process.env.TOSS_CLIENT_SECRET,
@@ -40,9 +45,20 @@ const samsung = {
   aliases: [],
 } as CatalogEntry;
 
+const apple = {
+  ticker: 'AAPL',
+  name: 'Apple',
+  market: 'US',
+  currency: 'USD',
+  aliases: [],
+} as CatalogEntry;
+
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
   Date.now = originalNow;
+  BaseMarketDataService.getQuote = originalBaseGetQuote;
+  BaseMarketDataService.getCatalogEntry = originalBaseGetCatalogEntry;
+  BaseMarketDataService.getCandlesMeta = originalBaseGetCandlesMeta;
   clearTossTokenCache();
   if (originalEnv.clientId == null) delete process.env.TOSS_CLIENT_ID;
   else process.env.TOSS_CLIENT_ID = originalEnv.clientId;
@@ -225,4 +241,106 @@ test('never exposes client credentials in provider errors', async () => {
       return true;
     },
   );
+});
+
+test('market-data primary quote success performs zero Toss requests', async () => {
+  setFakeConfig();
+  let outbound = 0;
+  globalThis.fetch = async () => {
+    outbound += 1;
+    throw new Error('unexpected outbound');
+  };
+  BaseMarketDataService.getQuote = async () => ({
+    price: 225,
+    changeAmount: 1,
+    changePercent: 0.45,
+    volume: 1000,
+    marketCap: 0,
+    week52High: 0,
+    week52Low: 0,
+  });
+
+  const quote = await MarketDataService.getQuote('AAPL');
+  assert.equal(quote.price, 225);
+  assert.equal(outbound, 0);
+});
+
+test('market-data uses Toss only after existing quote providers fail', async () => {
+  setFakeConfig();
+  const primaryError = new Error('QUOTE_UNAVAILABLE:AAPL');
+  BaseMarketDataService.getQuote = async () => { throw primaryError; };
+  BaseMarketDataService.getCatalogEntry = async () => apple;
+  const requested: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    requested.push(url.pathname);
+    if (url.pathname === '/oauth2/token') {
+      return response({ access_token: 'token-safe', expires_in: 3600 });
+    }
+    if (url.pathname === '/api/v1/prices') {
+      return response({ result: [{
+        symbol: 'AAPL', timestamp: '2026-08-10T13:00:00Z', lastPrice: '225.50', currency: 'USD',
+      }] });
+    }
+    if (url.pathname === '/api/v1/candles') {
+      return response({ result: { candles: [
+        { timestamp: '2026-08-08T13:00:00Z', openPrice: '220', highPrice: '222', lowPrice: '219', closePrice: '221', volume: '1000' },
+        { timestamp: '2026-08-09T13:00:00Z', openPrice: '221', highPrice: '224', lowPrice: '220', closePrice: '223', volume: '1200' },
+      ] } });
+    }
+    throw new Error(`unexpected path ${url.pathname}`);
+  };
+
+  const quote = await MarketDataService.getQuote('AAPL');
+  assert.equal(quote.price, 225.5);
+  assert.deepEqual(requested, ['/oauth2/token', '/api/v1/prices', '/api/v1/candles']);
+});
+
+test('market-data keeps the existing failure contract when Toss is disabled or fails', async () => {
+  const primaryError = new Error('QUOTE_UNAVAILABLE:AAPL');
+  BaseMarketDataService.getQuote = async () => { throw primaryError; };
+  BaseMarketDataService.getCatalogEntry = async () => apple;
+  delete process.env.TOSS_CLIENT_ID;
+  delete process.env.TOSS_CLIENT_SECRET;
+  let outbound = 0;
+  globalThis.fetch = async () => {
+    outbound += 1;
+    throw new Error('unexpected outbound');
+  };
+  await assert.rejects(MarketDataService.getQuote('AAPL'), /QUOTE_UNAVAILABLE:AAPL/);
+  assert.equal(outbound, 0);
+
+  setFakeConfig();
+  globalThis.fetch = async () => response({}, { status: 500 });
+  await assert.rejects(MarketDataService.getQuote('AAPL'), /QUOTE_UNAVAILABLE:AAPL/);
+});
+
+test('market-data candle fallback preserves Toss provider metadata', async () => {
+  setFakeConfig();
+  BaseMarketDataService.getCandlesMeta = async () => ({
+    candles: [], provider: 'none', fetchedAt: '2026-08-10T00:00:00Z',
+  });
+  BaseMarketDataService.getCatalogEntry = async () => apple;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/oauth2/token') {
+      return response({ access_token: 'token-safe', expires_in: 3600 });
+    }
+    if (url.pathname === '/api/v1/candles') {
+      const candles = Array.from({ length: 30 }, (_, index) => ({
+        timestamp: new Date(Date.UTC(2026, 6, index + 1)).toISOString(),
+        openPrice: String(200 + index),
+        highPrice: String(202 + index),
+        lowPrice: String(199 + index),
+        closePrice: String(201 + index),
+        volume: String(1000 + index),
+      }));
+      return response({ result: { candles } });
+    }
+    throw new Error(`unexpected path ${url.pathname}`);
+  };
+
+  const result = await MarketDataService.getCandlesMeta('AAPL', '1D');
+  assert.equal(result.provider, 'toss');
+  assert.equal(result.candles.length, 30);
 });
