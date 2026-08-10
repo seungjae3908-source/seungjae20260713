@@ -1,4 +1,4 @@
-import { useLocation } from 'wouter';
+import { useLocation, useSearch } from 'wouter';
 import {
   ArrowLeft,
   BarChart3,
@@ -51,9 +51,8 @@ const SECTIONS: SettingsSection[] = [
   { id: 'advanced', title: '고급설정', description: '일반 사용 경로에 필요하지 않은 안전 안내와 초기화를 제공합니다.', icon: Settings2 },
 ];
 
-function parseSection(location: string): SettingsSectionId | null {
-  const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
-  const value = new URLSearchParams(query).get('section');
+function parseSection(search: string): SettingsSectionId | null {
+  const value = new URLSearchParams(search.replace(/^\?/, '')).get('section');
   return SECTIONS.some((section) => section.id === value) ? value as SettingsSectionId : null;
 }
 
@@ -266,8 +265,9 @@ function DetailPanel({ section, navigate }: { section: SettingsSection; navigate
 }
 
 export default function MorePage() {
-  const [location, navigate] = useLocation();
-  const selectedId = parseSection(location);
+  const [, navigate] = useLocation();
+  const search = useSearch();
+  const selectedId = parseSection(search);
   const selected = selectedId ? SECTIONS.find((section) => section.id === selectedId) ?? null : null;
 
   return (
