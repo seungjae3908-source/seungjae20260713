@@ -49,6 +49,8 @@ const ICONS: Record<NavigationIconId, LucideIcon> = {
   portfolio: BriefcaseBusiness,
 };
 
+const HIDDEN_ASSET_MENU_IDS = new Set(['market-overview', 'market-browser', 'alerts']);
+
 export function BottomNav() {
   const [location, navigate] = useLocation();
   const auth = useAuth();
@@ -188,7 +190,8 @@ export function BottomNav() {
           const active = navigationGroupMatches(group, path);
           const Icon = ICONS[group.icon];
           const visibleMenuItems = (group.menu ?? []).filter(
-            (item) => !item.capability || auth.can(item.capability),
+            (item) => (!item.capability || auth.can(item.capability))
+              && !(group.id === 'assets' && HIDDEN_ASSET_MENU_IDS.has(item.id)),
           );
           const hasMenu = visibleMenuItems.length > 0;
 
@@ -230,7 +233,7 @@ export function BottomNav() {
                           )}
                         >
                           <MenuIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                          <span>{menuItem.label}</span>
+                          <span className="break-keep whitespace-nowrap">{menuItem.label}</span>
                         </button>
                       );
                     })}
@@ -257,7 +260,7 @@ export function BottomNav() {
                   )}
                 >
                   <Icon className={cn('mb-0.5 h-5 w-5', active || menuOpen ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
-                  <span className="truncate">{group.label}</span>
+                  <span className="max-w-full truncate whitespace-nowrap">{group.label}</span>
                 </button>
               </div>
             );
@@ -275,7 +278,7 @@ export function BottomNav() {
               )}
             >
               <Icon className={cn('mb-0.5 h-5 w-5', active ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
-              <span className="truncate">{group.label}</span>
+              <span className="max-w-full truncate whitespace-nowrap">{group.label}</span>
             </button>
           );
         })}

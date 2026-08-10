@@ -29,6 +29,7 @@ import {
   filterScannerResponseForTier,
   parseScannerGradeQuery,
 } from '../services/scanner-access-control.service';
+import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
 
 export const STOCK_SCANNER_ROUTE_DEADLINE_MS = 10_000;
 
@@ -256,7 +257,8 @@ export function createBoundedMarketScanRouter(
       });
       const result = await Promise.race([scanPromise, routeDeadline]);
       if (controller.signal.aborted || res.writableEnded) return;
-      const visibleResult = filterScannerResponseForTier(result, membershipLevel, requestedGrade ?? undefined);
+      const canonicalResult = withScannerCanonicalActions(result);
+      const visibleResult = filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined);
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({
         ...visibleResult,
