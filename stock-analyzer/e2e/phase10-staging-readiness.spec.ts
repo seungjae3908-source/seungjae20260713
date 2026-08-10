@@ -40,7 +40,6 @@ type RouteTransitionObservation = {
   toRoute: string;
   candidates: Diagnostic[];
   pendingGetRequests: Set<Request>;
-  allowSameRouteAbort?: boolean;
 };
 type AuthFaultObservation = {
   kind: 'reject' | 'timeout' | 'retry';
@@ -140,7 +139,7 @@ function isExpectedRouteTransitionAbort(
 ) {
   try {
     const parsed = new URL(request.url());
-    return (observation.fromRoute !== observation.toRoute || observation.allowSameRouteAbort === true)
+    return observation.fromRoute !== observation.toRoute
       && observation.pendingGetRequests.has(request)
       && request.method() === 'GET'
       && parsed.pathname.startsWith('/api/')
@@ -367,27 +366,6 @@ async function finishRouteTransition(
     ...item,
     detail: `unconfirmed route-transition abort: ${item.detail}`,
   })));
-}
-
-async function reloadForBootstrapFault(page: Page) {
-  const route = routeIdentity(page.url());
-  const observation: RouteTransitionObservation = {
-    fromRoute: route,
-    toRoute: route,
-    candidates: [],
-    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
-    allowSameRouteAbort: true,
-  };
-  activeRouteTransitionObservations.set(page, observation);
-  let confirmed = false;
-  try {
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await expectBootstrapTerminalError(page);
-    expect(routeIdentity(page.url())).toBe(route);
-    confirmed = true;
-  } finally {
-    await finishRouteTransition(page, observation, confirmed);
-  }
 }
 
 async function expectHealthyRoute(page: Page, route: string) {
@@ -620,7 +598,6 @@ test.describe('real staging release readiness', () => {
 
   test('bootstrap finite-state: rejected profile bootstrap exits loading with terminal retry UI', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
-    await expectHealthyRoute(page, '/');
     const observation: AuthFaultObservation = {
       kind: 'reject',
       candidates: [],
@@ -649,7 +626,8 @@ test.describe('real staging release readiness', () => {
       });
     });
     try {
-      await reloadForBootstrapFault(page);
+      await expectHealthyRoute(page, '/');
+      await expectBootstrapTerminalError(page);
       expect(requestCount, 'initial bootstrap must issue one profile request').toBe(1);
       expect(observation.candidates, 'semantic bootstrap rejection must not create a network-error exemption').toHaveLength(0);
       confirmed = true;
@@ -661,7 +639,6 @@ test.describe('real staging release readiness', () => {
 
   test('profile timeout abort: frontend deadline cancels the stalled profile request and exits loading', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
-    await expectHealthyRoute(page, '/');
     const observation: AuthFaultObservation = {
       kind: 'timeout',
       candidates: [],
@@ -685,7 +662,8 @@ test.describe('real staging release readiness', () => {
       if (request.failure() === null) await route.abort('timedout');
     });
     try {
-      await reloadForBootstrapFault(page);
+      await expectHealthyRoute(page, '/');
+      await expectBootstrapTerminalError(page);
       await expect.poll(
         () => observation.failedAt,
         {
@@ -707,7 +685,6 @@ test.describe('real staging release readiness', () => {
 
   test('retry recovery: first profile bootstrap fails, retry performs one fresh request and restores authenticated UI', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
-    await expectHealthyRoute(page, '/');
     const observation: AuthFaultObservation = {
       kind: 'retry',
       candidates: [],
@@ -740,7 +717,8 @@ test.describe('real staging release readiness', () => {
       await route.continue();
     });
     try {
-      await reloadForBootstrapFault(page);
+      await expectHealthyRoute(page, '/');
+      await expectBootstrapTerminalError(page);
       await page.getByRole('button', { name: '다시 시도', exact: true }).click();
       await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 15_000 });
       await expect(page.getByTestId('error-state')).toHaveCount(0);
