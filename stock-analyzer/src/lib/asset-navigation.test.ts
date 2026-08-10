@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { AssetRouteNotResolved, resolveAssetDetailPath } from './asset-navigation';
 
 test('canonical asset resolver routes KR and US assets to stock detail', () => {
@@ -32,4 +34,13 @@ test('canonical asset resolver fails closed instead of guessing a detail route',
     () => resolveAssetDetailPath({ assetClass: 'INDEX', market: 'INDEX', symbol: 'KOSPI', canonicalSymbol: 'KOSPI' }),
     AssetRouteNotResolved,
   );
+});
+
+test('legacy stock route converges on the canonical stock-info resolver', () => {
+  const app = readFileSync(path.join(process.cwd(), 'stock-analyzer/src/App.tsx'), 'utf8');
+  assert.match(app, /function LegacyStockDetailRedirect\(\)/);
+  assert.match(app, /resolveAssetDetailPath\(\{ assetClass: 'KR_STOCK'/);
+  assert.match(app, /resolveAssetDetailPath\(\{ assetClass: 'US_STOCK'/);
+  assert.match(app, /<Route path="\/stock\/:ticker" component=\{LegacyStockDetailRedirect\} \/>/);
+  assert.doesNotMatch(app, /<Route path="\/stock\/:ticker" component=\{DetailPage\} \/>/);
 });
