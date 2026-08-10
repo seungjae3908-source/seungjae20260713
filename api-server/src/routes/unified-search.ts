@@ -7,6 +7,7 @@ import {
   searchUnifiedAssets,
   startUnifiedAssetSearchRefreshTimer,
 } from '../services/unified-asset-search.service';
+import { deriveUnifiedSearchState } from '../services/unified-search-state';
 import type { UnifiedAssetType, UnifiedSearchMarket } from '../lib/search-normalization';
 
 const router: IRouter = Router();
@@ -29,28 +30,34 @@ function parseMarket(value: unknown): UnifiedSearchMarket | null | 'invalid' {
 router.get('/search/suggest', async (req, res) => {
   const q = String(req.query.q ?? '').normalize('NFKC').trim();
   if (!q) {
-    res.status(400).json({ ok: false, error: 'SEARCH_QUERY_REQUIRED', results: [], count: 0 });
+    res.status(400).json({ ok: false, state: 'ERROR', error: 'SEARCH_QUERY_REQUIRED', results: [], count: 0 });
     return;
   }
   if (q.length > 100) {
-    res.status(400).json({ ok: false, error: 'SEARCH_QUERY_TOO_LONG', results: [], count: 0 });
+    res.status(400).json({ ok: false, state: 'ERROR', error: 'SEARCH_QUERY_TOO_LONG', results: [], count: 0 });
     return;
   }
   const asset = parseAsset(req.query.asset);
   const market = parseMarket(req.query.market);
   if (!asset || market === 'invalid') {
-    res.status(400).json({ ok: false, error: 'SEARCH_FILTER_INVALID', results: [], count: 0 });
+    res.status(400).json({ ok: false, state: 'ERROR', error: 'SEARCH_FILTER_INVALID', results: [], count: 0 });
     return;
   }
   const limit = Math.max(1, Math.min(50, Math.trunc(Number(req.query.limit ?? 25)) || 25));
   try {
     const response = await searchUnifiedAssets({ q, asset, market, limit });
+    const state = deriveUnifiedSearchState({
+      resultCount: response.count,
+      partial: response.partial,
+      stale: response.stale,
+    });
     res.setHeader('Cache-Control', 'private, max-age=15, stale-while-revalidate=60');
-    res.json({ ok: true, q, asset, market, ...response });
+    res.json({ ok: true, state, q, asset, market, ...response });
   } catch (error) {
     console.error('[unified-search] suggest failed:', error instanceof Error ? error.message : 'unknown');
     res.status(503).json({
       ok: false,
+      state: 'ERROR',
       error: 'SEARCH_INDEX_UNAVAILABLE',
       results: [],
       count: 0,

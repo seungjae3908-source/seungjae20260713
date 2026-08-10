@@ -9,6 +9,7 @@ import { AuthProvider, useAuth } from '@/lib/auth';
 import { AppBackground } from '@/components/app-background';
 import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
 import { AnalysisSelectionProvider } from '@/lib/analysis-selection';
+import { AssetRouteNotResolved, resolveAssetDetailPath, resolveLegacyCryptoDetailPath } from '@/lib/asset-navigation';
 import { OfflineBanner } from '@/components/offline-banner';
 import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
 import { ErrorState, PageFallback } from '@/components/data-state';
@@ -21,7 +22,6 @@ import type { MemberCapability } from '../../packages/member-access/src/index.js
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
 
-const DetailPage = lazy(() => import('@/pages/detail'));
 const WatchlistPage = lazy(() => import('@/pages/watchlist'));
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
@@ -102,16 +102,49 @@ function useCryptoRedirect(target: (symbol?: string) => string, symbol?: string)
 function CryptoHomeRedirect() { useCryptoRedirect(() => '/home'); return <PageFallback />; }
 function CryptoSearchRedirect() { useCryptoRedirect(() => '/stocks'); return <PageFallback />; }
 function CryptoDetailRedirect() {
+  const mode = useAssetMode();
+  const [location, navigate] = useLocation();
   const [, params] = useRoute('/crypto/:symbol') as [boolean, { symbol?: string } | null];
-  useCryptoRedirect((symbol) => `/stock-info?asset=coin&coinMarket=spot&symbol=${encodeURIComponent(String(symbol ?? 'BTC').toUpperCase())}`, params?.symbol);
-  return <PageFallback />;
+  const symbol = String(params?.symbol ?? '').trim().toUpperCase();
+  const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : window.location.search.slice(1);
+  const backPath = new URLSearchParams(query).get('back')?.trim() || '/stocks';
+  let target: string | null = null;
+  try {
+    target = resolveLegacyCryptoDetailPath(symbol, backPath);
+  } catch (error) {
+    if (!(error instanceof AssetRouteNotResolved)) throw error;
+  }
+  useEffect(() => {
+    if (!target) return;
+    mode.setAsset('coin');
+    navigate(target, { replace: true });
+  }, [mode, navigate, target]);
+  return target ? <PageFallback /> : <NotFound />;
+}
+
+function LegacyStockDetailRedirect() {
+  const [location, navigate] = useLocation();
+  const [, params] = useRoute('/stock/:ticker') as [boolean, { ticker?: string } | null];
+  const ticker = String(params?.ticker ?? '').trim().toUpperCase();
+  const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
+  const backPath = new URLSearchParams(query).get('back')?.trim() || '/stocks';
+  let target: string | null = null;
+  if (/^\d{6}$/.test(ticker)) {
+    target = resolveAssetDetailPath({ assetClass: 'KR_STOCK', market: 'KR', symbol: ticker, canonicalSymbol: ticker, backPath });
+  } else if (/^[A-Z][A-Z0-9.-]{0,14}$/.test(ticker)) {
+    target = resolveAssetDetailPath({ assetClass: 'US_STOCK', market: 'US', symbol: ticker, canonicalSymbol: ticker, backPath });
+  }
+  useEffect(() => {
+    if (target) navigate(target, { replace: true });
+  }, [navigate, target]);
+  return target ? <PageFallback /> : <NotFound />;
 }
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const scannerRoute = location.startsWith('/scanner');
   const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
-  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
+  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {
@@ -189,7 +222,7 @@ function ApprovedRouter() {
     <Route path="/admin/ui-layouts" component={UiBuilderAdminAccess} />
     <Route path="/admin" component={AdminAccess} />
     <Route path="/more" component={SettingsAccess} />
-    <Route path="/stock/:ticker" component={DetailPage} />
+    <Route path="/stock/:ticker" component={LegacyStockDetailRedirect} />
     <Route path="/recommendations" component={RecommendationsAccess} />
     <Route path="/backtests" component={BacktestsAccess} />
     <Route path="/paper-trading" component={PaperTradingAccess} />

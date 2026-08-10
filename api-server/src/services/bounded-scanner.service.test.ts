@@ -67,7 +67,7 @@ function deps(
   };
 }
 
-test('normal scan completes with bounded concurrency', async () => {
+test('normal scan completes with bounded concurrency and separated diagnostics', async () => {
   const service = createBoundedScannerService(deps([item(1), item(2), item(3)]));
   const result = await service.scan('KR', ['PER 낮음'], {}, {
     deadlineMs: 500,
@@ -76,11 +76,16 @@ test('normal scan completes with bounded concurrency', async () => {
   });
   assert.equal(result.partial, false);
   assert.equal(result.completedCount, 3);
+  assert.equal(result.providerAcceptedCount, 3);
+  assert.equal(result.dataSuccessCount, 3);
+  assert.equal(result.insufficientDataCount, 0);
+  assert.equal(result.filteredByStrategyCount, 0);
+  assert.equal(result.staleCount, 0);
   assert.equal(result.cards.length, 3);
   assert.ok(result.maxConcurrency <= 2);
 });
 
-test('zero matches is a complete empty result', async () => {
+test('zero matches is complete filtered data instead of a provider or insufficient-data failure', async () => {
   const service = createBoundedScannerService(deps(
     [item(1), item(2)],
     { getContext: async () => signalContext(30) },
@@ -92,7 +97,49 @@ test('zero matches is a complete empty result', async () => {
   });
   assert.equal(result.partial, false);
   assert.equal(result.dataState, 'complete');
+  assert.equal(result.providerAcceptedCount, 2);
+  assert.equal(result.dataSuccessCount, 2);
+  assert.equal(result.insufficientDataCount, 0);
+  assert.equal(result.filteredByStrategyCount, 2);
+  assert.equal(result.providerErrorCount, 0);
   assert.deepEqual(result.cards, []);
+});
+
+test('insufficient candles remain distinct from a normal empty strategy result', async () => {
+  const service = createBoundedScannerService(deps([item(1), item(2)], {
+    getCandles: async () => candleRows().slice(-10),
+  }));
+  const result = await service.scan('KR', ['PER 낮음'], {}, {
+    deadlineMs: 500,
+    itemTimeoutMs: 200,
+    concurrency: 2,
+  });
+  assert.equal(result.partial, false);
+  assert.equal(result.completedCount, 2);
+  assert.equal(result.providerAcceptedCount, 2);
+  assert.equal(result.dataSuccessCount, 0);
+  assert.equal(result.insufficientDataCount, 2);
+  assert.equal(result.filteredByStrategyCount, 0);
+  assert.equal(result.providerErrorCount, 0);
+  assert.deepEqual(result.cards, []);
+  assert.match(result.message, /분석 데이터가 부족/);
+});
+
+test('stale but usable data is counted separately without becoming provider failure', async () => {
+  const service = createBoundedScannerService(deps([item(1), item(2)], {
+    getCandles: async () => candleRows().map((candle) => ({ ...candle, time: Number(candle.time) - 10 * 86_400_000 })),
+  }));
+  const result = await service.scan('KR', ['PER 낮음'], {}, {
+    deadlineMs: 500,
+    itemTimeoutMs: 200,
+    concurrency: 2,
+  });
+  assert.equal(result.providerAcceptedCount, 2);
+  assert.equal(result.dataSuccessCount, 2);
+  assert.equal(result.staleCount, 2);
+  assert.equal(result.providerErrorCount, 0);
+  assert.equal(result.cards.length, 2);
+  assert.ok(result.cards.every((card) => card.dataState === 'stale'));
 });
 
 test('some item timeouts return explicit partial data', async () => {
@@ -111,6 +158,8 @@ test('some item timeouts return explicit partial data', async () => {
   assert.equal(result.partial, true);
   assert.equal(result.timedOut, true);
   assert.equal(result.completedCount, 1);
+  assert.equal(result.providerAcceptedCount, 1);
+  assert.equal(result.dataSuccessCount, 1);
   assert.equal(result.timeoutCount, 2);
   assert.equal(result.cards.length, 1);
 });
