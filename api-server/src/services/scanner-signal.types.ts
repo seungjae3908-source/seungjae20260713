@@ -1,5 +1,6 @@
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerSignalDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
+export type ScannerTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
 export type ScannerStrategyMode = 'scalping' | 'swing';
 export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
@@ -144,6 +145,7 @@ export interface ScannerSignalCard {
   price: number;
   changePercent: number | null;
   direction: ScannerSignalDirection;
+  action?: ScannerTradeAction;
   signalState: ScannerSignalState;
   score: number;
   confidence: number;
@@ -182,6 +184,7 @@ export interface ScannerAlertCandidate {
   market: string;
   symbol: string;
   direction: ScannerSignalDirection;
+  action?: ScannerTradeAction;
   state: 'APPROVAL_PENDING' | 'READY_FOR_APPROVAL';
   entryZone: ScannerPricePlan['entryZone'];
   stopLoss: number | null;
@@ -207,6 +210,12 @@ export interface ScannerExecutionSummary {
   deadlineMs: number;
   itemTimeoutMs: number;
   maxConcurrency: number;
+  providerAcceptedCount?: number;
+  dataSuccessCount?: number;
+  insufficientDataCount?: number;
+  filteredByStrategyCount?: number;
+  unsupportedCount?: number;
+  staleCount?: number;
   hardFilterPassCount?: number;
   hardFilterRejectedCount?: number;
   softCandidateCount?: number;
