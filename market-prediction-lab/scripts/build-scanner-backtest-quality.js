@@ -78,6 +78,60 @@ function costFlags(market) {
 }
 function rankingDirection(side) { return side === "short" ? "SHORT" : "LONG"; }
 
+const EXECUTION_COST_STRESS_MULTIPLIER = 2;
+function stressCostModel(model) {
+  const stressRates = (row) => Object.freeze({
+    ...row,
+    entryFeeRate: (row.entryFeeRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+    exitFeeRate: (row.exitFeeRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+    taxRate: (row.taxRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+    slippageRate: (row.slippageRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+    spreadRate: (row.spreadRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+    latencyBars: Math.min(100, Math.max(1, Math.round((row.latencyBars ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER))),
+    latencyDriftRate: (row.latencyDriftRate ?? 0) * EXECUTION_COST_STRESS_MULTIPLIER,
+  });
+  return Object.freeze({
+    ...stressRates(model),
+    ...(Array.isArray(model?.schedule) ? { schedule: Object.freeze(model.schedule.map(stressRates)) } : {}),
+  });
+}
+function stressFundingRates(rows) {
+  return Object.freeze(rows.map((row) => Object.freeze({ ...row, rate: row.rate * EXECUTION_COST_STRESS_MULTIPLIER })));
+}
+function buildExecutionCostStress({ spec, candles, fundingRates, candidate, side }) {
+  const baseline = candidate.oosMetrics ?? null;
+  const stressedResult = runV1Backtest({
+    market: spec.market,
+    symbol: spec.researchSymbol,
+    side,
+    timeframe: spec.timeframe,
+    initialCapital: RESEARCH_BACKTEST_PERIOD.initialCapital,
+    candles,
+    fundingRates: spec.market === "CRYPTO_FUTURES" ? stressFundingRates(fundingRates) : fundingRates,
+    costModel: stressCostModel(BITGET_STANDARD_TAKER_RESEARCH_COSTS[spec.market]),
+    riskModel: { riskPerTrade: 0.01, maximumCapitalFraction: 1, leverage: 1 },
+    parameters: candidate.parameters,
+    period: {
+      startTime: RESEARCH_BACKTEST_PERIOD.validationStartTime,
+      endTime: RESEARCH_BACKTEST_PERIOD.validationEndTime,
+      includeFinalHoldout: false,
+    },
+  });
+  if (stressedResult.orderSubmitted !== false || stressedResult.privateAccountRequestAllowed !== false || stressedResult.safeguards?.liveOrderAllowed !== false) throw new Error("execution cost stress violated research-only safety contract");
+  const stressed = compact(stressedResult);
+  const positiveAfterStress = stressed.totalReturn > 0 && stressed.expectancy > 0;
+  return Object.freeze({
+    status: positiveAfterStress ? "survived" : "failed",
+    scenarioId: "double_configured_execution_costs_v1",
+    multiplier: EXECUTION_COST_STRESS_MULTIPLIER,
+    baseline,
+    stressed,
+    positiveAfterStress,
+    includes: Object.freeze({ fee: true, spread: true, slippage: true, funding: spec.market === "CRYPTO_FUTURES", latency: true }),
+    reasons: Object.freeze(positiveAfterStress ? [] : ["non_positive_oos_return_or_expectancy_after_execution_cost_stress"]),
+  });
+}
+
 const automated = await readJson(researchPath);
 if (!Array.isArray(automated.perSymbolResults)) throw new TypeError("automated research artifact must expose perSymbolResults");
 const rows = [];
@@ -117,6 +171,8 @@ for (const resultRow of automated.perSymbolResults) {
       strategyVersion: V1_STRATEGY_ID, timeframe: spec.timeframe, backtestQuality: "missing", reasons: ["no_frozen_candidate"],
       researchStatus: "missing", dataset, lookaheadSafe: true, researchCodeSha, generatedAt,
       initialCapital: RESEARCH_BACKTEST_PERIOD.initialCapital, costModel: costFlags(spec.market),
+      executionCostStress: { status: "not_evaluated", reasons: ["no_frozen_candidate"] },
+      promotionEligible: false, promotionBlockReasons: ["no_frozen_candidate"],
     }));
     continue;
   }
@@ -155,6 +211,7 @@ for (const resultRow of automated.perSymbolResults) {
 
   const walkForward = summarizeWalkForward(candidate.walkForward);
   const normalizedCostModel = costFlags(spec.market);
+  const executionCostStress = buildExecutionCostStress({ spec, candles, fundingRates, candidate, side: resultRow.result.side });
   const quality = classifyBacktestQuality({
     dataset,
     oosMetrics: candidate.oosMetrics,
@@ -184,6 +241,9 @@ for (const resultRow of automated.perSymbolResults) {
     lookaheadSafe: true,
     initialCapital: RESEARCH_BACKTEST_PERIOD.initialCapital,
     costModel: normalizedCostModel,
+    executionCostStress,
+    promotionEligible: false,
+    promotionBlockReasons: ["empirical_promotion_thresholds_uncalibrated"],
     researchCodeSha,
     generatedAt,
   }));
@@ -199,7 +259,9 @@ for (const stock of [
     market: stock.market, symbol: stock.symbol, strategyType: "SWING", direction: "LONG", strategyVersion: V1_STRATEGY_ID,
     timeframe: "1d", backtestQuality: "blocked_provider", reasons: [reason], researchStatus: "blocked_provider",
     dataset: null, lookaheadSafe: false, initialCapital: RESEARCH_BACKTEST_PERIOD.initialCapital,
-    costModel: costFlags(stock.market), researchCodeSha, generatedAt,
+    costModel: costFlags(stock.market),
+    executionCostStress: { status: "blocked_provider", reasons: [reason] },
+    promotionEligible: false, promotionBlockReasons: [reason], researchCodeSha, generatedAt,
   }));
 }
 
