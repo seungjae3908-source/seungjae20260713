@@ -1,11 +1,11 @@
 import {
   activateUiBuilderLayout,
   makeFrozenUiBuilderTemplate,
-  validateUiBuilderFullLayout,
   type UiBuilderDeviceClass,
   type UiBuilderFullLayoutDocument,
   type UiBuilderPageId,
 } from './ui-builder-full-layout';
+import { validateUiBuilderRuntimeLayout } from './ui-builder-runtime-safety';
 
 export type UiBuilderLayoutVersionRecord = {
   version: number;
@@ -38,7 +38,7 @@ export function readUiBuilderLayoutVersions(pageId: UiBuilderPageId, device: UiB
         return Number.isInteger(candidate.version)
           && typeof candidate.activatedAt === 'string'
           && ['activate', 'rollback', 'default-restore'].includes(candidate.source)
-          && validateUiBuilderFullLayout(candidate.layout, pageId, device).valid;
+          && validateUiBuilderRuntimeLayout(candidate.layout, pageId, device).valid;
       })
       .sort((a, b) => b.version - a.version);
   } catch {
@@ -60,7 +60,7 @@ function publishVersion(
   layout: UiBuilderFullLayoutDocument,
   source: UiBuilderLayoutVersionRecord['source'],
 ): UiBuilderFullLayoutDocument {
-  const validation = validateUiBuilderFullLayout(layout, layout.pageId, layout.deviceClass);
+  const validation = validateUiBuilderRuntimeLayout(layout, layout.pageId, layout.deviceClass);
   if (!validation.valid) throw new Error(validation.issues.map((issue) => issue.message).join('\n'));
 
   const now = new Date().toISOString();
