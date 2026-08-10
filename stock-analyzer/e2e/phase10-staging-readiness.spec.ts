@@ -723,7 +723,7 @@ test.describe('real staging release readiness', () => {
       await route.continue();
     });
     try {
-      await expectHealthyRoute(page, '/');
+      await expectHealthyRoute(page, '/account');
       await expectBootstrapTerminalError(page);
       await page.getByRole('button', { name: '다시 시도', exact: true }).click();
       await expect(page.locator('nav')).toBeVisible({ timeout: 15_000 });
@@ -731,7 +731,6 @@ test.describe('real staging release readiness', () => {
       await expect(page.getByTestId('page-fallback')).toHaveCount(0);
       expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);
       expect(observation.candidates, 'semantic first-attempt rejection must not create a network-error exemption').toHaveLength(0);
-      await expectHealthyRoute(page, '/account');
       await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
       confirmed = true;
     } finally {
@@ -742,36 +741,54 @@ test.describe('real staging release readiness', () => {
 
   test('scanner readiness: complete, partial, and strict unavailable states satisfy the frontend contract', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
-    for (const state of ['complete', 'partial', 'unavailable'] as const) {
-      await page.route('**/api/market/scan*', async (route) => {
-        await route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify(scannerFixture(state)),
-        });
+    let fixtureState: 'complete' | 'partial' | 'unavailable' = 'complete';
+    await page.route('**/api/market/scan**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(scannerFixture(fixtureState)),
       });
-      try {
-        const evidence = await expectHealthyScannerRoute(page);
-        expect(evidence.httpStatus).toBe(200);
-        expect(evidence.dataState).toBe(state);
-        expect(evidence.elapsedMs).toBeLessThanOrEqual(12_000);
-        expect(evidence.requestElapsedMs).toBeLessThanOrEqual(12_000);
-        expect(evidence.orderCapableRequests).toEqual([]);
-        if (state === 'unavailable') {
-          expect(evidence.partial).toBe(true);
-          expect(evidence.executionPartial).toBe(true);
-          expect(evidence.executionTimedOut).toBe(true);
-          expect(evidence.timeoutCount).toBeGreaterThanOrEqual(1);
-          expect(evidence.deadlineMs).toBeGreaterThan(0);
-          expect(evidence.deadlineMs).toBeLessThan(12_000);
-          expect(evidence.cards).toEqual([]);
-        }
-      } finally {
-        await page.unroute('**/api/market/scan*');
-      }
-    }
-  });
+    });
+    const refreshScanner = async () => {
+      const heading = page.getByRole('heading', { name: 'AI 신호검색기', exact: true });
+      const header = heading.locator('..').locator('..');
+      await header.getByRole('button', { name: '새로고침', exact: true }).click();
+    };
+    try {
+      const complete = await expectHealthyScannerRoute(page);
+      expect(complete.httpStatus).toBe(200);
+      expect(complete.dataState).toBe('complete');
+      expect(complete.elapsedMs).toBeLessThanOrEqual(12_000);
+      expect(complete.requestElapsedMs).toBeLessThanOrEqual(12_000);
+      expect(complete.orderCapableRequests).toEqual([]);
 
+      fixtureState = 'partial';
+      const partial = await expectHealthyScannerRoute(page, { open: refreshScanner });
+      expect(partial.httpStatus).toBe(200);
+      expect(partial.dataState).toBe('partial');
+      expect(partial.elapsedMs).toBeLessThanOrEqual(12_000);
+      expect(partial.requestElapsedMs).toBeLessThanOrEqual(12_000);
+      expect(partial.orderCapableRequests).toEqual([]);
+
+      fixtureState = 'unavailable';
+      const unavailable = await expectHealthyScannerRoute(page, { open: refreshScanner });
+      expect(unavailable.httpStatus).toBe(200);
+      expect(unavailable.dataState).toBe('unavailable');
+      expect(unavailable.elapsedMs).toBeLessThanOrEqual(12_000);
+      expect(unavailable.requestElapsedMs).toBeLessThanOrEqual(12_000);
+      expect(unavailable.orderCapableRequests).toEqual([]);
+      expect(unavailable.partial).toBe(true);
+      expect(unavailable.executionPartial).toBe(true);
+      expect(unavailable.executionTimedOut).toBe(true);
+      expect(unavailable.timeoutCount).toBeGreaterThanOrEqual(1);
+      expect(unavailable.deadlineMs).toBeGreaterThan(0);
+      expect(unavailable.deadlineMs).toBeLessThan(12_000);
+      expect(unavailable.cards).toEqual([]);
+    } finally {
+      await page.unroute('**/api/market/scan**');
+    }
+    expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);
+  });
   test('pending: approval-waiting account cannot enter approved UI, URL, or API', async ({ page }) => {
     await login(page, accounts.pending.loginName, accounts.pending.password);
     await expectMembership(page, /승인대기/);
