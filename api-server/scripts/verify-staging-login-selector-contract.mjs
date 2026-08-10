@@ -69,7 +69,116 @@ assert(spec.includes('[401, 403]'), 'protected API must be denied with 401 or 40
 assert(spec.includes('unconfirmed logout abort:'), 'unconfirmed candidates must return to unexpected HTTP errors');
 assert(spec.includes('diagnostics.unexpected_http_errors.push(diagnostic);'), 'all non-matching failed requests must remain unexpected');
 assert(spec.includes('if (response.status() < 400) return;'), 'all browser 4xx and 5xx responses must remain unexpected');
-assert(!spec.includes("'/rest/v1/profiles'"), 'profile request aborts must be eliminated in the app, never allowlisted in staging diagnostics');
+const profileMatcherStart = spec.indexOf('function isProfileRequest(request: Request)');
+const profileMatcherEnd = spec.indexOf(
+  '\nfunction isExpectedAuthFault(',
+  profileMatcherStart,
+);
+assert(
+  profileMatcherStart >= 0 && profileMatcherEnd > profileMatcherStart,
+  'profile request matcher boundaries are missing',
+);
+const profileMatcherBlock = spec.slice(profileMatcherStart, profileMatcherEnd);
+const hasExactProfileRequestIdentification = (source) =>
+  source.includes("request.method() === 'GET'")
+  && source.includes("parsed.pathname === '/rest/v1/profiles'")
+  && !source.includes('request.failure()');
+assert(
+  hasExactProfileRequestIdentification(profileMatcherBlock),
+  'profile fault injection must identify only exact GET /rest/v1/profiles requests without classifying a failure reason',
+);
+assert(
+  hasExactProfileRequestIdentification(
+    "return request.method() === 'GET' && parsed.pathname === '/rest/v1/profiles';",
+  ),
+  'exact profile request identification fixture must be accepted',
+);
+assert(
+  !hasExactProfileRequestIdentification("if (url.includes('/rest/v1/profiles')) return true;"),
+  'broad profile-path fixture must not satisfy exact request identification',
+);
+
+const authFaultMatcherStart = spec.indexOf(
+  'function isExpectedAuthFault(request: Request, observation: AuthFaultObservation)',
+);
+const authFaultMatcherEnd = spec.indexOf(
+  '\nfunction isExpectedRouteTransitionAbort(',
+  authFaultMatcherStart,
+);
+assert(
+  authFaultMatcherStart >= 0 && authFaultMatcherEnd > authFaultMatcherStart,
+  'auth fault matcher boundaries are missing',
+);
+const authFaultMatcherBlock = spec.slice(authFaultMatcherStart, authFaultMatcherEnd);
+assert(
+  authFaultMatcherBlock.includes(
+    'return observation.requests.has(request) && isProfileRequest(request);',
+  ),
+  'expected auth faults must require both the observed request identity and the exact profile matcher',
+);
+assert(
+  (spec.match(/observation\.requests\.add\(request\);/g) ?? []).length >= 3,
+  'bootstrap reject, timeout, and retry fault injection must register the exact intercepted profile request',
+);
+
+const requestFailedStart = spec.indexOf("page.on('requestfailed', (request) => {");
+const requestFailedEnd = spec.indexOf(
+  '\nasync function waitForPresentationFrame(page: Page)',
+  requestFailedStart,
+);
+assert(
+  requestFailedStart >= 0 && requestFailedEnd > requestFailedStart,
+  'requestfailed diagnostic handler boundaries are missing',
+);
+const requestFailedBlock = spec.slice(requestFailedStart, requestFailedEnd);
+const authFaultCandidateIndex = requestFailedBlock.indexOf('authFault.candidates.push(diagnostic);');
+const routeCandidateIndex = requestFailedBlock.indexOf('routeObservation.candidates.push(diagnostic);');
+const unmatchedFailureIndex = requestFailedBlock.lastIndexOf(
+  'diagnostics.unexpected_http_errors.push(diagnostic);',
+);
+assert(
+  authFaultCandidateIndex >= 0
+    && routeCandidateIndex > authFaultCandidateIndex
+    && unmatchedFailureIndex > routeCandidateIndex,
+  'unmatched request failures must remain unexpected after all narrowly scoped candidate checks',
+);
+
+const finishAuthFaultStart = spec.indexOf('async function finishAuthFault(');
+const finishAuthFaultEnd = spec.indexOf(
+  '\nasync function expectBootstrapTerminalError(',
+  finishAuthFaultStart,
+);
+assert(
+  finishAuthFaultStart >= 0 && finishAuthFaultEnd > finishAuthFaultStart,
+  'auth fault finalization helper boundaries are missing',
+);
+const finishAuthFaultBlock = spec.slice(finishAuthFaultStart, finishAuthFaultEnd);
+const confirmedAuthFaultIndex = finishAuthFaultBlock.indexOf(
+  'diagnostics.expected_auth_faults.push(...observation.candidates);',
+);
+const unconfirmedAuthFaultIndex = finishAuthFaultBlock.indexOf(
+  'diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({',
+);
+assert(
+  confirmedAuthFaultIndex >= 0 && unconfirmedAuthFaultIndex > confirmedAuthFaultIndex,
+  'unconfirmed auth fault candidates must return to unexpected HTTP errors',
+);
+assert(
+  finishAuthFaultBlock.includes('unconfirmed auth fault:'),
+  'unconfirmed auth fault evidence must remain explicitly labeled',
+);
+
+assert(!spec.includes('function isExpectedProfileAbort('), 'blanket profile abort exemption is forbidden');
+assert(!spec.includes('expected_profile_aborts'), 'profile aborts must not have a blanket expected diagnostics bucket');
+assert(!spec.includes('function isExpectedScannerAbort('), 'blanket scanner abort exemption is forbidden');
+assert(
+  !spec.includes('diagnostics.expected_scanner_aborts.push('),
+  'scanner request failures must never be promoted into the expected scanner abort bucket',
+);
+assert(
+  spec.includes("expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);"),
+  'scanner net::ERR_ABORTED must remain a zero-tolerance staging contract',
+);
 
 assert(spec.includes("return parsed.pathname || '/';"), 'diagnostic URLs must omit hosts and arbitrary query strings');
 assert(spec.includes("'[redacted-url]'"), 'absolute URLs must be redacted from diagnostic details');
