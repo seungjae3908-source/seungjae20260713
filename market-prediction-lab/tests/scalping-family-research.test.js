@@ -32,3 +32,15 @@ test("final holdout candles are rejected before any scalping family research", (
     },
   }), /SCALPING_FAMILY_FINAL_HOLDOUT_INPUT_FORBIDDEN/u);
 });
+
+
+test("workflow shards accept only explicit existing family versions", () => {
+  assert.throws(() => runScalpingFamilyResearch({
+    versions: ["V7"],
+    backtestInput: {
+      market: "CRYPTO_SPOT", symbol: "USDT-BTC", side: "long", timeframe: "15m", initialCapital: 1_000_000,
+      candles: [{ timestamp: RESEARCH_BACKTEST_PERIOD.startTime, open: 1, high: 1, low: 1, close: 1, volume: 1 }],
+      fundingRates: [], costModel: {}, riskModel: {}, dataCoverage: { sufficient: true, ratio: 1 },
+    },
+  }), /unsupported scalping family version/u);
+});
