@@ -1,0 +1,49 @@
+name: Validation Staging Retry Recovery
+
+on:
+  push:
+    branches:
+      - validation/staging-retry-recovery-da1fa0e7
+
+permissions:
+  contents: read
+
+env:
+  STAGING_ARTIFACT_DIR: ${{ github.workspace }}/staging-validation-artifacts
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Targeted static verifier
+        run: node ./api-server/scripts/verify-staging-login-selector-contract.mjs
+      - name: Phase12
+        run: pnpm --dir api-server run test:phase12
+      - name: Frontend typecheck
+        run: pnpm --dir stock-analyzer run typecheck
+      - name: Backend typecheck
+        run: pnpm --dir api-server run typecheck
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+      - name: Targeted real staging retry recovery
+        env:
+          PHASE10_STAGING_E2E: "true"
+          STAGING_TARGET_SHA: da1fa0e7769f214b8f42f769d63abacf8ef48a45
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+        run: pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts e2e/phase10-staging-readiness.spec.ts --grep "retry recovery:"
