@@ -28,6 +28,19 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - name: Patch retry recovery candidate in validation worktree only
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts';
+          let source = fs.readFileSync(file, 'utf8');
+          const before = `      await expectHealthyRoute(page, '/account');\n      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();`;
+          const after = `      expect(routeIdentity(page.url()), 'retry recovery must remain on the authenticated home route').toBe('/');\n      const protectedResponse = await requestWithBrowserSession(page, '/api/paper-journal/snapshot');\n      expect(protectedResponse.status(), 'retry recovery must restore protected API access').toBe(200);`;
+          if (!source.includes(before)) throw new Error('expected retry-recovery candidate block not found');
+          source = source.replace(before, after);
+          fs.writeFileSync(file, source);
+          NODE
+          git diff --check
       - name: Targeted static verifier
         run: node ./api-server/scripts/verify-staging-login-selector-contract.mjs
       - name: Phase12
