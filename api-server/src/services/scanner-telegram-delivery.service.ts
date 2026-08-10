@@ -1,3 +1,4 @@
+import { logger } from '../lib/logger';
 import type { ScannerAlertCandidate } from './scanner-signal.types';
 import {
   sendTelegramAlert,
@@ -52,17 +53,19 @@ export async function deliverScannerTelegramAlerts(
   alerts: ScannerAlertCandidate[],
   sender: ScannerTelegramSender = sendTelegramAlert,
 ): Promise<void> {
-  try {
-    await Promise.all(alerts.map(async (alert) => {
-      const input = scannerTelegramInput(alert);
-      if (!input) return;
-      try {
-        await sender(input);
-      } catch {
-        // Telegram is a fail-open delivery channel; scanner calculation/state remains authoritative.
-      }
-    }));
-  } catch {
-    // Never allow a delivery adapter failure to affect scanner results or persistence.
-  }
+  await Promise.all(alerts.map(async (alert) => {
+    const input = scannerTelegramInput(alert);
+    if (!input) return;
+    try {
+      await sender(input);
+    } catch (error) {
+      logger.warn(
+        {
+          alertType: input.type,
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        },
+        'scanner Telegram delivery failed open',
+      );
+    }
+  }));
 }
