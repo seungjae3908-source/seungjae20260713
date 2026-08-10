@@ -161,12 +161,21 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         .filter((card) => card.signalGrade === 'S' || card.signalGrade === 'A')
         .map((card) => card.signalId));
       const actionableCount = ranking.diagnostics.sGradeCount + ranking.diagnostics.aGradeCount;
+      const insufficientDataCount = result.failures.filter((failure) => failure.reason === 'invalid_data').length;
+      const providerAcceptedCount = result.execution.completedCount;
+      const dataSuccessCount = Math.max(0, providerAcceptedCount - insufficientDataCount);
+      const preRankingFilteredCount = Math.max(0, dataSuccessCount - result.cards.length);
+      const filteredByStrategyCount = preRankingFilteredCount + ranking.diagnostics.hardFilterRejectedCount;
       const rankedResult = {
         ...result,
         cards: rankedCards,
         alerts: result.alerts.filter((alert) => actionableIds.has(alert.signalId)),
         execution: {
           ...result.execution,
+          providerAcceptedCount,
+          dataSuccessCount,
+          insufficientDataCount,
+          filteredByStrategyCount,
           excludedCount: Math.max(0, result.execution.completedCount - rankedCards.length),
           hardFilterPassCount: ranking.diagnostics.hardFilterPassCount,
           hardFilterRejectedCount: ranking.diagnostics.hardFilterRejectedCount,
@@ -177,11 +186,13 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
           bGradeCount: ranking.diagnostics.bGradeCount,
           backtestMissingCount: ranking.diagnostics.backtestMissingCount,
         },
-        message: rankedCards.length === 0
-          ? '현재 묶음에서 Hard Risk Filter를 통과한 후보가 없습니다.'
-          : actionableCount === 0
-            ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
-            : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${ranking.diagnostics.bGradeCount}개`,
+        message: dataSuccessCount === 0 && insufficientDataCount > 0
+          ? `현재 묶음에서 공급자 응답은 받았지만 ${insufficientDataCount}종목의 분석 데이터가 부족합니다.`
+          : rankedCards.length === 0
+            ? '현재 묶음에서 Hard Risk Filter를 통과한 후보가 없습니다.'
+            : actionableCount === 0
+              ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
+              : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${ranking.diagnostics.bGradeCount}개`,
       };
       const canonicalResult = withScannerCanonicalActions(rankedResult);
       const visibleResult = filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined);
