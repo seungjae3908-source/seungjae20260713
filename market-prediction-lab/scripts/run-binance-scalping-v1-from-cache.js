@@ -72,12 +72,15 @@ let wfAdmissions = 0;
 for (const symbol of ["BTCUSDT", "ETHUSDT"]) {
   const bundle = await readJson(resolve(inputRoot, `${symbol}.json`));
   if (bundle.collectionCodeSHA !== researchCodeSha) throw new Error(`BINANCE_SCALPING_SHA_MISMATCH:${symbol}`);
-  if (bundle.audit?.providerBoundary !== "SAME_VENUE_BINANCE_USDM" || bundle.audit?.priceVenue !== "BINANCE_USDM" || bundle.audit?.fundingVenue !== "BINANCE_USDM") {
+  if (bundle.audit?.providerBoundary !== "SAME_VENUE_BINANCE_USDM" || bundle.audit?.priceVenue !== "BINANCE_USDM" || bundle.audit?.fundingVenue !== "BINANCE_USDM" || bundle.audit?.crossVenueMix !== false) {
     throw new Error(`BINANCE_SCALPING_PROVIDER_BOUNDARY_MISMATCH:${symbol}`);
   }
+  if (bundle.audit?.finalHoldoutDataStatus !== "LOCKED_NOT_EVALUATED" || bundle.audit?.finalHoldoutRead !== false) {
+    throw new Error(`BINANCE_SCALPING_FINAL_HOLDOUT_CONTRACT_VIOLATION:${symbol}`);
+  }
   dataAudit.push(bundle.audit);
-  if (bundle.audit?.status !== "DATA_READY") {
-    blocked.push(Object.freeze({ market: "CRYPTO_FUTURES", researchVenue: "BINANCE_USDM", symbol, status: bundle.audit?.status ?? "BLOCKED_DATA", reason: "DATA_NOT_READY" }));
+  if (bundle.audit?.selectionDataStatus !== "DATA_READY") {
+    blocked.push(Object.freeze({ market: "CRYPTO_FUTURES", researchVenue: "BINANCE_USDM", symbol, status: bundle.audit?.selectionDataStatus ?? "BLOCKED_PROVIDER_COVERAGE", reason: "SELECTION_DATA_NOT_READY" }));
     continue;
   }
   for (const side of ["long", "short"]) {
@@ -106,11 +109,16 @@ for (const symbol of ["BTCUSDT", "ETHUSDT"]) {
       providerBoundary: "SAME_VENUE_BINANCE_USDM",
       compatibilityVerdict: "same_venue_price_and_funding_no_cross_venue_mix",
       executionCostAssumption: COST_ASSUMPTION,
+      selectionDataStatus: bundle.audit.selectionDataStatus,
+      finalHoldoutDataStatus: bundle.audit.finalHoldoutDataStatus,
+      liveTailStatus: bundle.audit.liveTailStatus,
       sourceDataset: Object.freeze({
         provider: bundle.audit.provider,
         providerVersion: bundle.audit.providerVersion,
-        rawDigest: bundle.audit.rawDigest,
-        normalizedDigest: bundle.audit.normalizedDigest,
+        rawCandleDigest: bundle.audit.rawCandleDigest,
+        normalizedCandleDigest: bundle.audit.normalizedCandleDigest,
+        rawFundingDigest: bundle.audit.rawFundingDigest,
+        normalizedFundingDigest: bundle.audit.normalizedFundingDigest,
         collectionCodeSHA: bundle.audit.collectionCodeSHA,
       }),
     }));
@@ -130,8 +138,8 @@ const multipleTesting = Object.freeze({
   finalHoldoutUsed: false,
 });
 const artifact = Object.freeze({
-  schemaVersion: 1,
-  mode: "binance-usdm-same-venue-scalping-v1-research",
+  schemaVersion: 2,
+  mode: "binance-usdm-same-venue-scalping-v1-selection-research",
   researchCodeSha,
   timeframe: "15m",
   researchVenue: "BINANCE_USDM",
@@ -139,6 +147,9 @@ const artifact = Object.freeze({
   priceVenue: "BINANCE_USDM",
   fundingVenue: "BINANCE_USDM",
   executionCostAssumption: COST_ASSUMPTION,
+  selectionDataStatus: dataAudit.length > 0 && dataAudit.every((row) => row.selectionDataStatus === "DATA_READY") ? "DATA_READY" : "BLOCKED_PROVIDER_COVERAGE",
+  finalHoldoutDataStatus: "LOCKED_NOT_EVALUATED",
+  liveTailStatus: dataAudit[0]?.liveTailStatus ?? "BLOCKED_EXTERNAL_BINANCE_REST_GITHUB_RUNNER_LOCATION",
   dataAudit: Object.freeze(dataAudit),
   blocked: Object.freeze(blocked),
   results: Object.freeze(results),
@@ -149,6 +160,7 @@ const artifact = Object.freeze({
   finalHoldoutQueueAllowed: false,
   finalHoldoutStatus: "LOCKED",
   finalHoldoutExecuted: false,
+  finalHoldoutRead: false,
   topStrategy: null,
   syntheticDataUsedAsReal: false,
   interpolationUsed: false,
@@ -156,17 +168,21 @@ const artifact = Object.freeze({
   orderSubmitted: false,
 });
 const calibration = Object.freeze({
-  schemaVersion: 1,
-  mode: "binance-scalping-gate-calibration-candidates",
+  schemaVersion: 2,
+  mode: "binance-scalping-selection-gate-calibration-candidates",
   researchCodeSha,
   researchVenue: "BINANCE_USDM",
   providerBoundary: "SAME_VENUE_BINANCE_USDM",
+  selectionDataStatus: artifact.selectionDataStatus,
+  finalHoldoutDataStatus: "LOCKED_NOT_EVALUATED",
+  liveTailStatus: artifact.liveTailStatus,
   thresholdCalibrationOnly: true,
   numericPfMddWfGatesConfigured: false,
   multipleTesting,
   candidates: Object.freeze(candidates),
   candidateCount: candidates.length,
   finalHoldoutUsed: false,
+  finalHoldoutRead: false,
   syntheticDataUsedAsReal: false,
   privateApiUsed: false,
   orderSubmitted: false,
@@ -174,13 +190,16 @@ const calibration = Object.freeze({
 await writeJson(outputPath, artifact);
 await writeJson(calibrationPath, calibration);
 console.log(JSON.stringify({
-  dataReady: dataAudit.map((row) => ({ symbol: row.symbol, status: row.status })),
+  selectionData: dataAudit.map((row) => ({ symbol: row.symbol, selectionDataStatus: row.selectionDataStatus, liveTailStatus: row.liveTailStatus })),
   results: results.map((row) => ({ symbol: row.symbol, side: row.side, candidateCounts: row.candidateCounts, oosTrades: row.candidates.map((candidate) => candidate.oosTradeCount), statuses: [...new Set(row.candidates.map((candidate) => candidate.researchStatus))] })),
   blocked,
   candidateCount: candidates.length,
   multipleTesting,
   topStrategy: null,
   finalHoldoutExecuted: false,
+  finalHoldoutRead: false,
   privateApiUsed: false,
   orderSubmitted: false,
 }));
+
+if (blocked.length > 0) process.exitCode = 1;
