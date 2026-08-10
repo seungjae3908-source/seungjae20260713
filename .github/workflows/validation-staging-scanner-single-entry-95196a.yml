@@ -1,0 +1,65 @@
+name: Validate Staging Scanner Single Entry
+
+on:
+  push:
+    branches:
+      - validation/staging-scanner-single-entry-95196a
+
+permissions:
+  contents: read
+
+env:
+  STAGING_ARTIFACT_DIR: ${{ github.workspace }}/staging-validation-artifacts
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Patch scanner fixture in validation worktree only
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts';
+          let source = fs.readFileSync(file, 'utf8');
+          const start = source.indexOf("test('scanner readiness:");
+          const end = source.indexOf("\n  test('pending:", start);
+          if (start < 0 || end <= start) throw new Error('scanner readiness test boundaries not found');
+          const block = `test('scanner readiness: complete, partial, and strict unavailable states satisfy the frontend contract', async ({ page }) => {\n    await login(page, accounts.regular.email, accounts.regular.password);\n    let fixtureState: 'complete' | 'partial' | 'unavailable' = 'complete';\n    await page.route('**/api/market/scan**', async (route) => {\n      await route.fulfill({\n        status: 200,\n        contentType: 'application/json',\n        body: JSON.stringify(scannerFixture(fixtureState)),\n      });\n    });\n    const refreshScanner = async () => {\n      const heading = page.getByRole('heading', { name: 'AI 신호검색기', exact: true });\n      const header = heading.locator('..').locator('..');\n      await header.getByRole('button', { name: '새로고침', exact: true }).click();\n    };\n    try {\n      const complete = await expectHealthyScannerRoute(page);\n      expect(complete.dataState).toBe('complete');\n\n      fixtureState = 'partial';\n      const partial = await expectHealthyScannerRoute(page, { open: refreshScanner });\n      expect(partial.dataState).toBe('partial');\n\n      fixtureState = 'unavailable';\n      const unavailable = await expectHealthyScannerRoute(page, { open: refreshScanner });\n      expect(unavailable.dataState).toBe('unavailable');\n    } finally {\n      await page.unroute('**/api/market/scan**');\n    }\n    expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);\n    expect(diagnostics.order_capable_requests, 'scanner verifier must remain non-order-capable').toEqual([]);\n  });`;
+          source = `${source.slice(0, start)}${block}${source.slice(end)}`;
+          fs.writeFileSync(file, source);
+          NODE
+          git diff --check
+          test "$(git diff --name-only)" = "stock-analyzer/e2e/phase10-staging-readiness.spec.ts"
+      - name: Targeted static verifier
+        run: node ./api-server/scripts/verify-staging-login-selector-contract.mjs
+      - name: Phase12
+        run: pnpm --dir api-server run test:phase12
+      - name: Frontend typecheck
+        run: pnpm --dir stock-analyzer run typecheck
+      - name: Backend typecheck
+        run: pnpm --dir api-server run typecheck
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+      - name: Targeted real staging scanner readiness
+        env:
+          PHASE10_STAGING_E2E: "true"
+          STAGING_TARGET_SHA: 95196a645555b227aa19962a1a2bc06327df91c4
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+          STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts e2e/phase10-staging-readiness.spec.ts --grep "scanner readiness:"
