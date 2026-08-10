@@ -79,10 +79,11 @@ function costFlags(market) {
 function rankingDirection(side) { return side === "short" ? "SHORT" : "LONG"; }
 
 const automated = await readJson(researchPath);
+if (!Array.isArray(automated.perSymbolResults)) throw new TypeError("automated research artifact must expose perSymbolResults");
 const rows = [];
 const blocked = [];
 
-for (const resultRow of automated.results ?? []) {
+for (const resultRow of automated.perSymbolResults) {
   const spec = specFor(resultRow.datasetId);
   const candleBundle = await readJson(resolve(cacheRoot, `${spec.id}.candles.json`));
   const candles = candleBundle.candles ?? [];
