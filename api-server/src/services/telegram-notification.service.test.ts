@@ -6,7 +6,13 @@ import {
   escapeTelegramHtml,
   renderTelegramAlert,
   sendTelegramAlert,
+  type TelegramAlertInput,
 } from './telegram-notification.service';
+import {
+  deliverScannerTelegramAlerts,
+  scannerTelegramInput,
+} from './scanner-telegram-delivery.service';
+import type { ScannerAlertCandidate } from './scanner-signal.types';
 
 const originalFetch = globalThis.fetch;
 const originalEnv = {
@@ -24,6 +30,28 @@ function okResponse(): Response {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function scannerAlert(
+  overrides: Partial<ScannerAlertCandidate> = {},
+): ScannerAlertCandidate {
+  return {
+    idempotencyKey: 'scanner-alert:test',
+    signalId: 'signal:test',
+    assetClass: 'stock',
+    market: 'KR',
+    symbol: '005930',
+    direction: 'LONG',
+    state: 'APPROVAL_PENDING',
+    entryZone: { from: 80000, to: 81000 },
+    stopLoss: 78000,
+    targets: [83000, 85000],
+    expiresAt: '2026-08-10T14:00:00Z',
+    evidence: ['trend'],
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+    ...overrides,
+  };
 }
 
 test.afterEach(() => {
@@ -147,4 +175,42 @@ test('supports all requested alert templates', () => {
     const rendered = renderTelegramAlert({ type, symbol: 'TEST' });
     assert.ok(rendered.length > 0);
   }
+});
+
+test('maps only existing actionable scanner producers to Telegram delivery types', () => {
+  assert.equal(scannerTelegramInput(scannerAlert())?.type, 'strong_buy');
+  assert.equal(
+    scannerTelegramInput(scannerAlert({
+      assetClass: 'coin_futures',
+      market: 'futures',
+      symbol: 'BTCUSDT',
+      direction: 'LONG',
+    }))?.type,
+    'crypto_futures_long',
+  );
+  assert.equal(
+    scannerTelegramInput(scannerAlert({
+      assetClass: 'coin_futures',
+      market: 'futures',
+      symbol: 'BTCUSDT',
+      direction: 'SHORT',
+    }))?.type,
+    'crypto_futures_short',
+  );
+  assert.equal(scannerTelegramInput(scannerAlert({ direction: 'SHORT' })), null);
+  assert.equal(scannerTelegramInput(scannerAlert({ assetClass: 'coin_spot' })), null);
+});
+
+test('scanner Telegram delivery is fail-open and uses the lifecycle idempotency key', async () => {
+  const delivered: TelegramAlertInput[] = [];
+  await deliverScannerTelegramAlerts(
+    [scannerAlert()],
+    async (input) => {
+      delivered.push(input);
+      throw new Error('telegram unavailable');
+    },
+  );
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].dedupeKey, 'scanner-alert:test');
+  assert.equal(delivered[0].type, 'strong_buy');
 });
