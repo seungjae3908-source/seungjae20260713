@@ -46,4 +46,5 @@ jobs:
           STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
           STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
           STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+          STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
         run: pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts e2e/phase10-staging-readiness.spec.ts --grep "retry recovery:"
