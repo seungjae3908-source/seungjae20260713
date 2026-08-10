@@ -148,7 +148,11 @@ test('GEMINI_API_KEY enables the free Gemini provider without a duplicate AI cha
     assert.equal(apiKeyHeader, 'test-gemini-key');
     assert.equal(requestBody.contents[0].role, 'user');
     assert.match(requestBody.contents[0].parts[0].text, /RSI 를 간단히 요약해줘/);
-    assert.match(requestBody.systemInstruction.parts[0].text, /public-information assistant/);
+    const systemInstruction = String(requestBody.systemInstruction.parts[0].text);
+    assert.match(systemInstruction, /public-market analysis assistant/);
+    assert.match(systemInstruction, /Use only the supplied publicContext/);
+    assert.match(systemInstruction, /Never execute or instruct actual orders/);
+    assert.match(systemInstruction, /Do not promise returns/);
     assert.equal(requestBody.generationConfig.thinkingConfig.thinkingLevel, 'low');
     assert.doesNotMatch(JSON.stringify(requestBody), /test-gemini-key/);
   } finally {
