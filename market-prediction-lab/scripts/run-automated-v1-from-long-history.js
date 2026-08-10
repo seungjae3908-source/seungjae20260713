@@ -4,12 +4,29 @@ import {
   BITGET_STANDARD_TAKER_RESEARCH_COSTS,
   HISTORICAL_V1_CRYPTO_SPECS,
 } from "../src/historical-backtest-data.js";
+import { DEFAULT_MINIMUM_GATE } from "../src/automated-research-orchestrator.js";
 import { runAutomatedV1Research } from "../src/automated-v1-research.js";
 
 const inputRoot = resolve(process.argv[2] ?? "long-history-v1");
 const outputPath = resolve(process.argv[3] ?? "artifacts/automated-research/v1-long-history.json");
 const researchCodeSha = process.env.RESEARCH_CODE_SHA;
 if (!/^[0-9a-f]{40}$/i.test(researchCodeSha ?? "")) throw new TypeError("RESEARCH_CODE_SHA must be an immutable 40-character SHA");
+
+const MINIMUM_GATE = Object.freeze({
+  ...DEFAULT_MINIMUM_GATE,
+  minTradeCount: 10,
+});
+const GATE_CALIBRATION = Object.freeze({
+  minTradeCount: Object.freeze({
+    value: 10,
+    basis: "reuse_existing_final_holdout_sample_classification",
+    evidence: "current real 2025 V1 OOS candidates contain only 2-7 trades; fewer than 10 is already classified as low sample in final-holdout-evaluator",
+  }),
+  minProfitFactor: Object.freeze({ value: null, status: "not_calibrated_do_not_invent" }),
+  maxMaximumDrawdown: Object.freeze({ value: null, status: "not_calibrated_do_not_invent" }),
+  minWalkForwardStability: Object.freeze({ value: null, status: "not_calibrated_do_not_invent" }),
+  minCoverageRatio: Object.freeze({ value: null, status: "coverage_status_used_until_ratio_is_empirically_calibrated" }),
+});
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
@@ -69,6 +86,7 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS) {
         riskModel: { riskPerTrade: 0.01, maximumCapitalFraction: 1, leverage: 1 },
         dataCoverage: coverageFor(candleBundle),
       },
+      minimumGateConfig: MINIMUM_GATE,
     });
     results.push(Object.freeze({
       rankingGroup: rankingGroup(spec, side),
@@ -81,7 +99,7 @@ for (const spec of HISTORICAL_V1_CRYPTO_SPECS) {
 }
 
 const artifact = Object.freeze({
-  schemaVersion: 1,
+  schemaVersion: 2,
   mode: "automated-v1-long-history",
   researchCodeSha,
   generatedAt: new Date().toISOString(),
@@ -89,6 +107,8 @@ const artifact = Object.freeze({
   cacheProvenanceRequired: true,
   realHistoricalDataOnly: true,
   syntheticResearchDataAllowed: false,
+  minimumGate: MINIMUM_GATE,
+  gateCalibration: GATE_CALIBRATION,
   automatedGroups: Object.freeze([...new Set(results.map((row) => row.rankingGroup))]),
   pendingGroups: Object.freeze([
     "CRYPTO_SPOT_SCALPING",
@@ -119,6 +139,7 @@ console.log(JSON.stringify({
   automatedGroups: artifact.automatedGroups,
   results: results.length,
   blocked: blocked.length,
+  minimumTradeCount: MINIMUM_GATE.minTradeCount,
   liveOrderAllowed: false,
   privateAccountRequestAllowed: false,
   orderSubmitted: false,
