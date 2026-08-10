@@ -6,32 +6,10 @@ export type ScannerDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
 export type ScannerStrategyMode = 'scalping' | 'swing';
 export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
-  | 'CANDIDATE'
-  | 'CONFIRMED'
-  | 'ARMED'
-  | 'ENTRY_ZONE'
-  | 'APPROVAL_PENDING'
-  | 'APPROVED'
-  | 'EXECUTING'
-  | 'PARTIALLY_FILLED'
-  | 'FILLED'
-  | 'MANAGING'
-  | 'CLOSED'
-  | 'INVALIDATED'
-  | 'EXPIRED'
-  | 'REJECTED'
-  | 'CANCELLED'
-  | 'DETECTED'
-  | 'WATCHING'
-  | 'READY_FOR_APPROVAL'
-  | 'WEAKENED';
-export type ScannerDataState =
-  | 'complete'
-  | 'partial'
-  | 'stale'
-  | 'insufficient'
-  | 'unavailable'
-  | 'untrusted';
+  | 'CANDIDATE' | 'CONFIRMED' | 'ARMED' | 'ENTRY_ZONE' | 'APPROVAL_PENDING' | 'APPROVED'
+  | 'EXECUTING' | 'PARTIALLY_FILLED' | 'FILLED' | 'MANAGING' | 'CLOSED' | 'INVALIDATED'
+  | 'EXPIRED' | 'REJECTED' | 'CANCELLED' | 'DETECTED' | 'WATCHING' | 'READY_FOR_APPROVAL' | 'WEAKENED';
+export type ScannerDataState = 'complete' | 'partial' | 'stale' | 'insufficient' | 'unavailable' | 'untrusted';
 
 export interface ScannerEvidence {
   key: string;
@@ -40,6 +18,48 @@ export interface ScannerEvidence {
   source: string;
   observedAt: string | null;
   reasons: string[];
+}
+
+export interface ScannerBacktestQualitySummary {
+  status: 'verified' | 'missing' | 'insufficient';
+  researchFrom?: string;
+  researchTo?: string;
+  oosWinRate?: number | null;
+  walkForwardWinRate?: number | null;
+  expectancyPercent?: number | null;
+  profitFactor?: number | null;
+  maxDrawdownPercent?: number | null;
+  tradeCount?: number | null;
+  minimumTradeCount?: number | null;
+  sharpe?: number | null;
+  netReturnPercent?: number | null;
+  regime?: 'Strong Bull' | 'Bull' | 'Sideways' | 'Bear' | 'High Volatility' | 'Low Volatility' | null;
+  regimeScore?: number | null;
+  oosStabilityScore?: number | null;
+  costsIncluded?: boolean;
+  slippageIncluded?: boolean;
+  lookaheadGuarded?: boolean;
+  survivorshipGuarded?: boolean;
+  oos?: boolean;
+  walkForward?: boolean;
+  source?: string | null;
+}
+
+export interface ScannerCandidateRankingSummary {
+  rank: number;
+  score: number;
+  relativeScore: number;
+  relative: {
+    tradingValuePercentile: number;
+    momentumPercentile: number;
+    trendPercentile: number;
+    volumePercentile: number;
+    volatilityPercentile: number;
+  };
+  watchCompletionPercent: number;
+  watchReasons: string[];
+  hardFilterPassed: boolean;
+  hardFilterReasons: string[];
 }
 
 export interface ScannerSignalCard {
@@ -109,6 +129,8 @@ export interface ScannerSignalCard {
     risks: string[];
     explanation: string | null;
   };
+  backtestQuality?: ScannerBacktestQualitySummary;
+  candidateRanking?: ScannerCandidateRankingSummary;
 }
 
 export interface ScannerAlertCandidate {
@@ -158,6 +180,14 @@ export interface ScannerResponse {
     deadlineMs: number;
     itemTimeoutMs: number;
     maxConcurrency: number;
+    hardFilterPassCount?: number;
+    hardFilterRejectedCount?: number;
+    softCandidateCount?: number;
+    finalDisplayedCount?: number;
+    sGradeCount?: number;
+    aGradeCount?: number;
+    bGradeCount?: number;
+    backtestMissingCount?: number;
   };
   universe: {
     totalCount: number;
@@ -189,11 +219,7 @@ export interface SignalScannerRequest {
 }
 
 export class SignalScannerRequestError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    readonly retryAfterSeconds: number | null,
-  ) {
+  constructor(readonly status: number, readonly code: string, readonly retryAfterSeconds: number | null) {
     super(code);
     this.name = 'SignalScannerRequestError';
   }
@@ -203,30 +229,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-export async function fetchSignalScanner(
-  request: SignalScannerRequest,
-  signal: AbortSignal,
-): Promise<ScannerResponse> {
+export async function fetchSignalScanner(request: SignalScannerRequest, signal: AbortSignal): Promise<ScannerResponse> {
   const response = await authorizedFetch(buildSignalScannerRequestUrl(request), {
     signal,
     cache: 'no-store',
-    headers: {
-      'Cache-Control': 'no-cache, no-store, max-age=0',
-      Pragma: 'no-cache',
-    },
+    headers: { 'Cache-Control': 'no-cache, no-store, max-age=0', Pragma: 'no-cache' },
   });
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const code = isRecord(payload) && typeof payload.error === 'string'
-      ? payload.error
-      : `HTTP_${response.status}`;
+    const code = isRecord(payload) && typeof payload.error === 'string' ? payload.error : `HTTP_${response.status}`;
     const retryAfterHeader = Number(response.headers.get('Retry-After'));
     const retryAfterBody = isRecord(payload) ? Number(payload.retryAfterSeconds) : Number.NaN;
-    const retryAfterSeconds = Number.isFinite(retryAfterHeader)
-      ? retryAfterHeader
-      : Number.isFinite(retryAfterBody)
-        ? retryAfterBody
-        : null;
+    const retryAfterSeconds = Number.isFinite(retryAfterHeader) ? retryAfterHeader : Number.isFinite(retryAfterBody) ? retryAfterBody : null;
     throw new SignalScannerRequestError(response.status, code, retryAfterSeconds);
   }
   if (!isRecord(payload) || payload.ok !== true || !Array.isArray(payload.cards)) {
@@ -237,9 +251,7 @@ export async function fetchSignalScanner(
   }
   return {
     ...(payload as Omit<ScannerResponse, 'failures'>),
-    failures: Array.isArray(payload.failures)
-      ? payload.failures as ScannerFailure[]
-      : [],
+    failures: Array.isArray(payload.failures) ? payload.failures as ScannerFailure[] : [],
   };
 }
 
