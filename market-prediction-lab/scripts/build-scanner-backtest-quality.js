@@ -116,6 +116,7 @@ for (const resultRow of automated.perSymbolResults) {
       market: spec.market, symbol: spec.researchSymbol, strategyType: "SWING", direction: rankingDirection(resultRow.result?.side),
       strategyVersion: V1_STRATEGY_ID, timeframe: spec.timeframe, backtestQuality: "missing", reasons: ["no_frozen_candidate"],
       researchStatus: "missing", dataset, lookaheadSafe: true, researchCodeSha, generatedAt,
+      initialCapital: RESEARCH_BACKTEST_PERIOD.initialCapital, costModel: costFlags(spec.market),
     }));
     continue;
   }
@@ -153,12 +154,13 @@ for (const resultRow of automated.perSymbolResults) {
   }
 
   const walkForward = summarizeWalkForward(candidate.walkForward);
+  const normalizedCostModel = costFlags(spec.market);
   const quality = classifyBacktestQuality({
     dataset,
     oosMetrics: candidate.oosMetrics,
     walkForward,
     holdout,
-    costModel: costFlags(spec.market),
+    costModel: normalizedCostModel,
     lookaheadSafe: candidate.walkForward?.windows?.every((window) => window.leakFree === true) === true,
     survivorshipSafeguard: dataset.survivorshipSafeguard,
   });
@@ -180,6 +182,8 @@ for (const resultRow of automated.perSymbolResults) {
     researchStatus: candidate.researchStatus,
     dataset,
     lookaheadSafe: true,
+    initialCapital: RESEARCH_BACKTEST_PERIOD.initialCapital,
+    costModel: normalizedCostModel,
     researchCodeSha,
     generatedAt,
   }));
@@ -194,7 +198,8 @@ for (const stock of [
   rows.push(buildScannerBacktestQualityRow({
     market: stock.market, symbol: stock.symbol, strategyType: "SWING", direction: "LONG", strategyVersion: V1_STRATEGY_ID,
     timeframe: "1d", backtestQuality: "blocked_provider", reasons: [reason], researchStatus: "blocked_provider",
-    dataset: null, lookaheadSafe: false, researchCodeSha, generatedAt,
+    dataset: null, lookaheadSafe: false, initialCapital: RESEARCH_BACKTEST_PERIOD.initialCapital,
+    costModel: costFlags(stock.market), researchCodeSha, generatedAt,
   }));
 }
 
