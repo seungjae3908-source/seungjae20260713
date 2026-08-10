@@ -183,7 +183,12 @@ assert(fallbackWorkflow.includes('getWorkflowRun'), 'fallback must resolve statu
 assert(fallbackWorkflow.includes('inspectRequiredStatusEvidence'), 'fallback must require all six latest statuses from one run');
 assert(fallbackWorkflow.includes('evaluateProductionCiProvenance'), 'fallback must reuse exact production CI provenance validation');
 assert(fallbackWorkflow.includes('inputs: { target_sha: sha, checkout_ref: sha }'), 'fallback dispatch must bind target and checkout to the exact main SHA');
-assert(!fallbackWorkflow.includes('listWorkflowRunsForRepo'), 'fallback must not infer workflow_dispatch target ownership from run.head_sha');
+assert(fallbackWorkflow.includes('listActiveExactShaPushRuns'), 'fallback must discover an exact-SHA push run before creating a duplicate dispatch');
+assert(fallbackWorkflow.includes('github.rest.actions.listWorkflowRuns'), 'fallback must query the official workflow directly for an active push run');
+assert(fallbackWorkflow.includes("event: 'push'"), 'direct workflow discovery must be restricted to push events');
+assert(fallbackWorkflow.includes("run.event === 'push'"), 'direct run filtering must reject workflow_dispatch head-SHA matches');
+assert(fallbackWorkflow.includes('run.head_sha === sha'), 'direct push discovery must bind to the exact current main SHA');
+assert(!fallbackWorkflow.includes('listWorkflowRunsForRepo'), 'fallback must not infer workflow_dispatch target ownership from repository-wide head_sha matching');
 
 for (const workflow of [productionWorkflow, approvalWorkflow]) {
   assert(workflow.includes('production-ci-provenance.cjs'), 'production gates must use the shared provenance evaluator');
@@ -197,4 +202,5 @@ console.log('Production CI provenance contract verified.');
 console.log('- Exact current main + same-run 6/6 + official push/workflow_dispatch success: accepted');
 console.log('- Other/stale/PR/missing/pending/cancelled/failed/mismatched evidence: rejected');
 console.log('- workflow_dispatch checkout is cryptographically bound to the status target SHA');
-console.log('- main fallback ignores unrelated workflow_dispatch runs that merely share the main ref/head SHA');
+console.log('- main fallback waits for an active exact-SHA push run before dispatching a fallback CI');
+console.log('- direct active-run discovery remains push-only; workflow_dispatch provenance still requires status ownership');
