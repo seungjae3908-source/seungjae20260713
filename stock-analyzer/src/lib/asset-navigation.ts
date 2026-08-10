@@ -95,3 +95,33 @@ export function resolveAssetDetailPath(asset: CanonicalAssetIdentity): string {
 
   throw new AssetRouteNotResolved(asset, 'No verified detail route exists for this asset class');
 }
+
+export function resolveLegacyCryptoDetailPath(symbol: string, backPath = '/stocks'): string {
+  const normalized = clean(symbol);
+  const spot = normalized.match(/^KRW-([A-Z0-9]{2,15})$/);
+  if (spot) {
+    return resolveAssetDetailPath({
+      assetClass: 'CRYPTO_SPOT',
+      market: 'UPBIT',
+      symbol: normalized,
+      canonicalSymbol: spot[1],
+      backPath,
+    });
+  }
+  if (/^[A-Z0-9]{2,15}USDT$/.test(normalized)) {
+    return resolveAssetDetailPath({
+      assetClass: 'CRYPTO_FUTURES',
+      market: 'BITGET',
+      symbol: normalized,
+      canonicalSymbol: normalized,
+      backPath,
+    });
+  }
+  throw new AssetRouteNotResolved({
+    assetClass: 'INDEX',
+    market: 'INDEX',
+    symbol: normalized,
+    canonicalSymbol: normalized,
+    backPath,
+  }, 'Legacy crypto route is ambiguous or unsupported');
+}
