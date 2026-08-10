@@ -137,6 +137,11 @@ export interface BoundedScanResult {
   scanned: number;
   requestedCount: number;
   completedCount: number;
+  providerAcceptedCount: number;
+  dataSuccessCount: number;
+  insufficientDataCount: number;
+  filteredByStrategyCount: number;
+  staleCount: number;
   providerErrorCount: number;
   timeoutCount: number;
   excludedCount: number;
@@ -542,6 +547,8 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
       );
       throwIfAborted(execution.signal);
 
+      let insufficientDataCount = 0;
+      let staleCount = 0;
       const remainingMs = Math.max(1, deadlineMs - (dependencies.now() - startedAt));
       const work = await runBoundedWorkPool(
         pool,
@@ -553,9 +560,18 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
             dependencies.getContext(entry),
           ]);
           throwIfAborted(signal);
+          const inputDataState = candleDataState(candles, timeframe);
+          if (inputDataState === 'unavailable' || inputDataState === 'insufficient') {
+            insufficientDataCount += 1;
+            return null;
+          }
           const indicators = computeIndicators(candles);
           const conditions = computeScanConditions(candles, indicators);
-          if (!conditions || !quote) return null;
+          if (!conditions || !quote) {
+            insufficientDataCount += 1;
+            return null;
+          }
+          if (inputDataState === 'stale') staleCount += 1;
 
           const latestVolume = candles.at(-1)?.volume ?? null;
           if (volumeThreshold != null) {
@@ -615,6 +631,8 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
         .filter((outcome) => outcome.status === 'fulfilled')
         .map((outcome) => outcome.value ?? null);
       const completedCount = work.fulfilledCount;
+      const providerAcceptedCount = completedCount;
+      const dataSuccessCount = Math.max(0, completedCount - insufficientDataCount);
       const providerErrorCount = work.rejectedCount;
       const timeoutCount = work.timedOutCount;
       const failureCount = providerErrorCount + timeoutCount;
@@ -633,6 +651,7 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
       }
 
       const matchedCards = completedCards.filter((card): card is ScanCard => card !== null);
+      const filteredByStrategyCount = Math.max(0, dataSuccessCount - matchedCards.length);
       const cards = matchedCards
         .sort((left, right) => right.score - left.score
           || right.confidence - left.confidence
@@ -649,9 +668,11 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
       const dataState: BoundedScanResult['dataState'] = partial ? 'partial' : 'complete';
       const message = partial
         ? `일부 데이터가 지연되어 ${completedCount}/${pool.length}종목 처리 결과를 반환했습니다.`
-        : cards.length === 0
-          ? '스캔은 정상 완료됐지만 조건에 맞는 종목이 없습니다.'
-          : `${completedCount}종목 스캔을 정상 완료했습니다.`;
+        : dataSuccessCount === 0 && insufficientDataCount > 0
+          ? `스캔은 완료됐지만 ${insufficientDataCount}종목의 분석 데이터가 부족해 조건 판정을 수행하지 않았습니다.`
+          : cards.length === 0
+            ? '스캔은 정상 완료됐지만 조건에 맞는 종목이 없습니다.'
+            : `${completedCount}종목 스캔을 정상 완료했습니다.`;
 
       return {
         cards,
@@ -660,6 +681,11 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
         scanned: work.startedCount,
         requestedCount: pool.length,
         completedCount,
+        providerAcceptedCount,
+        dataSuccessCount,
+        insufficientDataCount,
+        filteredByStrategyCount,
+        staleCount,
         providerErrorCount,
         timeoutCount,
         excludedCount: Math.max(0, completedCount - matchedCards.length),

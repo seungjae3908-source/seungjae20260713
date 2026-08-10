@@ -9,6 +9,15 @@ import {
 
 export type AnalysisAssetType = 'stock' | 'coin_spot' | 'coin_futures';
 export type AnalysisMarket = 'KR' | 'US' | 'UPBIT' | 'BITGET';
+export type AnalysisTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
+
+export type AnalysisPricePlan = {
+  entryZone: { from: number; to: number } | null;
+  invalidation: number | null;
+  stopLoss: number | null;
+  targets: number[];
+  riskReward: number | null;
+};
 
 export type AnalysisSelection = {
   assetType: AnalysisAssetType;
@@ -22,6 +31,8 @@ export type AnalysisSelection = {
   signalRank?: number;
   confidence?: number;
   riskLevel?: string;
+  action?: AnalysisTradeAction;
+  pricePlan?: AnalysisPricePlan;
   matchedSignals?: string[];
   reasons?: string[];
   selectedAt: string;
@@ -34,8 +45,38 @@ function finite(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function finiteOrNull(value: unknown): number | null {
+  if (value == null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function cleanString(value: unknown, max = 120): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+function normalizePricePlan(value: unknown): AnalysisPricePlan | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  let entryZone: AnalysisPricePlan['entryZone'] = null;
+  if (row.entryZone && typeof row.entryZone === 'object' && !Array.isArray(row.entryZone)) {
+    const zone = row.entryZone as Record<string, unknown>;
+    const from = finite(zone.from);
+    const to = finite(zone.to);
+    if (from != null && to != null && from > 0 && to > 0) {
+      entryZone = { from: Math.min(from, to), to: Math.max(from, to) };
+    }
+  }
+  const targets = Array.isArray(row.targets)
+    ? row.targets.map((target) => finite(target)).filter((target): target is number => target != null && target > 0).slice(0, 6)
+    : [];
+  return {
+    entryZone,
+    invalidation: finiteOrNull(row.invalidation),
+    stopLoss: finiteOrNull(row.stopLoss),
+    targets,
+    riskReward: finiteOrNull(row.riskReward),
+  };
 }
 
 export function normalizeAnalysisSelection(value: unknown): AnalysisSelection | null {
@@ -52,6 +93,9 @@ export function normalizeAnalysisSelection(value: unknown): AnalysisSelection | 
   const textList = (item: unknown) => Array.isArray(item)
     ? item.map((part) => cleanString(part, 160)).filter(Boolean).slice(0, 20)
     : undefined;
+  const action = ['BUY', 'SELL', 'LONG', 'SHORT', 'NONE'].includes(String(row.action))
+    ? row.action as AnalysisTradeAction
+    : undefined;
   return {
     assetType,
     market,
@@ -64,6 +108,8 @@ export function normalizeAnalysisSelection(value: unknown): AnalysisSelection | 
     signalRank: finite(row.signalRank),
     confidence: finite(row.confidence),
     riskLevel: cleanString(row.riskLevel, 40) || undefined,
+    action,
+    pricePlan: normalizePricePlan(row.pricePlan),
     matchedSignals: textList(row.matchedSignals),
     reasons: textList(row.reasons),
     selectedAt: cleanString(row.selectedAt, 40) || new Date().toISOString(),
