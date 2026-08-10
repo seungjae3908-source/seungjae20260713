@@ -123,3 +123,31 @@ test('regular settings never mounts or calls admin-only trade automation control
   expect(diagnostics.pageErrors).toEqual([]);
   expect(diagnostics.unexpectedHttpErrors).toEqual([]);
 });
+
+test('settings home opens mobile-friendly categories, returns home, and does not expose browser push controls', async ({ page }) => {
+  const diagnostics = await installRegularRuntime(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/more');
+
+  await expect(page.getByRole('button', { name: /계정 및 권한/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Scanner/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Telegram/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /차트 · 화면/ })).toBeVisible();
+
+  await page.getByRole('button', { name: /Telegram/ }).click();
+  await expect(page.getByText('Telegram 알림 연동은 현재 저장소에 구성된 연결 계약이 없습니다.')).toBeVisible();
+  await expect(page.getByText(/브라우저 Push·Notification·Sound를 대체 기능처럼 노출하지 않습니다/)).toBeVisible();
+  await expect(page.getByRole('button', { name: /테스트 알림|Push 알림|브라우저 알림/ })).toHaveCount(0);
+
+  await page.getByRole('button', { name: '설정 홈으로 돌아가기' }).click();
+  await expect(page.getByRole('button', { name: /차트 · 화면/ })).toBeVisible();
+  await page.getByRole('button', { name: /차트 · 화면/ }).click();
+  await expect(page.getByRole('slider', { name: '글자 크기' })).toBeVisible();
+  await page.getByRole('button', { name: '설정 홈으로 돌아가기' }).click();
+  await expect(page.getByRole('button', { name: /고급설정/ })).toBeVisible();
+
+  expect(diagnostics.tradeAutomationRequests).toEqual([]);
+  expect(diagnostics.consoleErrors).toEqual([]);
+  expect(diagnostics.pageErrors).toEqual([]);
+  expect(diagnostics.unexpectedHttpErrors).toEqual([]);
+});
