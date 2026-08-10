@@ -9,16 +9,22 @@ on:
       - market-prediction-lab/src/automated-research-orchestrator.js
       - market-prediction-lab/src/automated-v1-research.js
       - market-prediction-lab/src/automated-market-ranking.js
+      - market-prediction-lab/src/unified-candidate-evaluator.js
+      - market-prediction-lab/src/scalping-history-provider.js
       - market-prediction-lab/src/research-cache-provenance.js
       - market-prediction-lab/src/long-history-data-layer.js
       - market-prediction-lab/scripts/run-automated-research-contract.js
       - market-prediction-lab/scripts/run-automated-v1-from-long-history.js
+      - market-prediction-lab/scripts/build-unified-v2-v6-research.js
+      - market-prediction-lab/scripts/collect-scalping-history.js
       - market-prediction-lab/scripts/extend-futures-holdout-cache.js
       - market-prediction-lab/scripts/build-scanner-backtest-quality.js
       - market-prediction-lab/tests/automated-research-orchestrator.test.js
       - market-prediction-lab/tests/automated-v1-research.test.js
       - market-prediction-lab/tests/automated-v1-overfit.test.js
       - market-prediction-lab/tests/automated-market-ranking.test.js
+      - market-prediction-lab/tests/unified-candidate-evaluator.test.js
+      - market-prediction-lab/tests/scalping-history-provider.test.js
       - market-prediction-lab/tests/research-cache-provenance.test.js
       - market-prediction-lab/tests/long-history-data-layer.test.js
   workflow_dispatch:
@@ -108,7 +114,7 @@ jobs:
 
       - name: Run automated research orchestration tests
         working-directory: market-prediction-lab
-        run: node --test tests/automated-research-orchestrator.test.js tests/automated-v1-research.test.js tests/automated-v1-overfit.test.js tests/automated-market-ranking.test.js tests/research-cache-provenance.test.js tests/long-history-data-layer.test.js
+        run: node --test tests/automated-research-orchestrator.test.js tests/automated-v1-research.test.js tests/automated-v1-overfit.test.js tests/automated-market-ranking.test.js tests/unified-candidate-evaluator.test.js tests/scalping-history-provider.test.js tests/research-cache-provenance.test.js tests/long-history-data-layer.test.js
 
       - name: Build artifact-only research contract
         working-directory: market-prediction-lab
