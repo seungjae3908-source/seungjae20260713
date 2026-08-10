@@ -9,6 +9,7 @@ import { AuthProvider, useAuth } from '@/lib/auth';
 import { AppBackground } from '@/components/app-background';
 import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
 import { AnalysisSelectionProvider } from '@/lib/analysis-selection';
+import { resolveAssetDetailPath } from '@/lib/asset-navigation';
 import { OfflineBanner } from '@/components/offline-banner';
 import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
 import { ErrorState, PageFallback } from '@/components/data-state';
@@ -19,7 +20,6 @@ import type { MemberCapability } from '../../packages/member-access/src/index.js
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
 
-const DetailPage = lazy(() => import('@/pages/detail'));
 const WatchlistPage = lazy(() => import('@/pages/watchlist'));
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
@@ -104,6 +104,24 @@ function CryptoDetailRedirect() {
   return <PageFallback />;
 }
 
+function LegacyStockDetailRedirect() {
+  const [location, navigate] = useLocation();
+  const [, params] = useRoute('/stock/:ticker') as [boolean, { ticker?: string } | null];
+  const ticker = String(params?.ticker ?? '').trim().toUpperCase();
+  const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
+  const backPath = new URLSearchParams(query).get('back')?.trim() || '/stocks';
+  let target: string | null = null;
+  if (/^\d{6}$/.test(ticker)) {
+    target = resolveAssetDetailPath({ assetClass: 'KR_STOCK', market: 'KR', symbol: ticker, canonicalSymbol: ticker, backPath });
+  } else if (/^[A-Z][A-Z0-9.-]{0,14}$/.test(ticker)) {
+    target = resolveAssetDetailPath({ assetClass: 'US_STOCK', market: 'US', symbol: ticker, canonicalSymbol: ticker, backPath });
+  }
+  useEffect(() => {
+    if (target) navigate(target, { replace: true });
+  }, [navigate, target]);
+  return target ? <PageFallback /> : <NotFound />;
+}
+
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const scannerRoute = location.startsWith('/scanner');
@@ -172,7 +190,7 @@ function ApprovedRouter() {
     <Route path="/account" component={AccountPage} />
     <Route path="/admin" component={AdminAccess} />
     <Route path="/more" component={MorePage} />
-    <Route path="/stock/:ticker" component={DetailPage} />
+    <Route path="/stock/:ticker" component={LegacyStockDetailRedirect} />
     <Route path="/recommendations" component={RecommendationsAccess} />
     <Route path="/backtests" component={BacktestsAccess} />
     <Route path="/paper-trading" component={PaperTradingAccess} />
