@@ -76,6 +76,10 @@ function isTickAligned(value: number, tick: number) {
   return Math.abs(units - Math.round(units)) < 1e-7;
 }
 
+function emptyPlan() {
+  return { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null };
+}
+
 test('Upbit precision aligns every emitted crypto price plan to public tick_size metadata', async () => {
   const raw = await scan('spot');
   assert.ok(raw.cards.length >= 2);
@@ -140,6 +144,66 @@ test('Bitget precision derives price tick from public contract pricePlace and pr
     assert.ok(values.length > 0);
     assert.ok(values.every((value) => isTickAligned(value, 0.05)));
   }
+});
+
+test('cards that already lack a price plan are not mislabeled as precision failures', async () => {
+  const raw = await scan('spot');
+  assert.ok(raw.cards.length > 0);
+  let fetchCalls = 0;
+  const service = createCryptoPricePrecisionService(async () => {
+    fetchCalls += 1;
+    throw new Error('precision provider should not be called');
+  });
+  const original = {
+    ...raw,
+    cards: [{
+      ...raw.cards[0],
+      pricePlan: emptyPlan(),
+      strongSignalEligible: false,
+    }],
+    alerts: [],
+  };
+
+  const aligned = await service.align('spot', original);
+  assert.equal(fetchCalls, 0);
+  assert.equal(aligned.execution.partial, original.execution.partial);
+  assert.equal(aligned.execution.providerErrorCount, original.execution.providerErrorCount);
+  assert.equal(aligned.dataState, original.dataState);
+  assert.equal(aligned.message, original.message);
+  assert.deepEqual(aligned.cards[0].pricePlan, emptyPlan());
+  assert.equal(aligned.cards[0].warnings.includes('시장 가격 단위 데이터 부족'), false);
+  assert.equal(aligned.orderSubmitted, false);
+  assert.equal(aligned.exchangeRequestSent, false);
+});
+
+test('precision metadata refresh is single-flight and reused from the five-minute cache', async () => {
+  const raw = await scan('spot');
+  assert.ok(raw.cards.length >= 2);
+  let fetchCalls = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const service = createCryptoPricePrecisionService(async () => {
+    fetchCalls += 1;
+    await gate;
+    return new Response(JSON.stringify([
+      { market: 'KRW-BTC', tick_size: 0.1 },
+      { market: 'KRW-ETH', tick_size: 0.1 },
+    ]), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+
+  const first = service.align('spot', raw);
+  const second = service.align('spot', raw);
+  release();
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  assert.equal(fetchCalls, 1);
+  assert.ok(firstResult.cards.every((card) => card.pricePlan.riskReward != null));
+  assert.ok(secondResult.cards.every((card) => card.pricePlan.riskReward != null));
+
+  const cached = await service.align('spot', raw);
+  assert.equal(fetchCalls, 1);
+  assert.ok(cached.cards.every((card) => card.pricePlan.riskReward != null));
+  assert.equal(cached.orderSubmitted, false);
+  assert.equal(cached.exchangeRequestSent, false);
 });
 
 test('precision provider failure fails closed by clearing price plans and strong-signal eligibility', async () => {
