@@ -49,6 +49,9 @@ type AuthFaultObservation = {
   startedAt: number | null;
   failedAt: number | null;
 };
+type CanonicalDetailExpectation =
+  | { asset: 'stock'; market: 'KR' | 'US'; ticker: string; back: string }
+  | { asset: 'coin'; coinMarket: 'spot' | 'futures'; symbol: string; back: string };
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
@@ -95,6 +98,49 @@ function diagnosticUrl(raw: string) {
 function routeIdentity(raw: string, base?: string) {
   const parsed = base ? new URL(raw, base) : new URL(raw);
   return `${parsed.pathname}${parsed.search}`;
+}
+
+function canonicalDetailExpectation(requestedRoute: string): CanonicalDetailExpectation | null {
+  if (requestedRoute === '/stock/005930') {
+    return { asset: 'stock', market: 'KR', ticker: '005930', back: '/stocks' };
+  }
+  if (requestedRoute === '/stock/AAPL') {
+    return { asset: 'stock', market: 'US', ticker: 'AAPL', back: '/stocks' };
+  }
+  if (requestedRoute === '/crypto/KRW-BTC') {
+    return { asset: 'coin', coinMarket: 'spot', symbol: 'BTC', back: '/stocks' };
+  }
+  if (requestedRoute === '/crypto/BTCUSDT') {
+    return { asset: 'coin', coinMarket: 'futures', symbol: 'BTCUSDT', back: '/stocks' };
+  }
+  return null;
+}
+
+async function expectCanonicalDetailDestination(page: Page, expected: CanonicalDetailExpectation) {
+  await expect.poll(
+    () => new URL(page.url()).pathname,
+    {
+      message: 'legacy asset detail entry must reach the canonical stock-info pathname',
+      timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe('/stock-info');
+
+  const actual = new URL(page.url());
+  expect(actual.pathname).toBe('/stock-info');
+  expect(actual.searchParams.get('asset')).toBe(expected.asset);
+  expect(actual.searchParams.get('back')).toBe(expected.back);
+  if (expected.asset === 'stock') {
+    expect(actual.searchParams.get('market')).toBe(expected.market);
+    expect(actual.searchParams.get('ticker')).toBe(expected.ticker);
+    expect(actual.searchParams.get('coinMarket')).toBeNull();
+    expect(actual.searchParams.get('symbol')).toBeNull();
+    return;
+  }
+  expect(actual.searchParams.get('coinMarket')).toBe(expected.coinMarket);
+  expect(actual.searchParams.get('symbol')).toBe(expected.symbol);
+  expect(actual.searchParams.get('market')).toBeNull();
+  expect(actual.searchParams.get('ticker')).toBeNull();
 }
 
 function diagnosticText(raw: string) {
@@ -372,12 +418,10 @@ async function finishRouteTransition(
 async function expectHealthyRoute(page: Page, route: string) {
   await settle(page);
   const requestedRoute = routeIdentity(route, page.url());
-  const expectedRoute = requestedRoute === '/stock/005930'
-    ? '/stock-info?back=%2Fstocks&asset=stock&market=KR&ticker=005930'
-    : requestedRoute;
+  const canonicalDetail = canonicalDetailExpectation(requestedRoute);
   const observation: RouteTransitionObservation = {
     fromRoute: routeIdentity(page.url()),
-    toRoute: expectedRoute,
+    toRoute: canonicalDetail ? '/stock-info' : requestedRoute,
     candidates: [],
     pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
   };
@@ -386,18 +430,15 @@ async function expectHealthyRoute(page: Page, route: string) {
   try {
     const response = await page.goto(route, { waitUntil: 'domcontentloaded' });
     if (response) expect(response.status(), `${route} returned HTTP ${response.status()}`).toBeLessThan(400);
-    if (expectedRoute !== requestedRoute) {
-      await expect.poll(
-        () => routeIdentity(page.url()),
-        {
-          message: 'stock detail fixture must reach its exact canonical stock-info route',
-          timeout: 15_000,
-          intervals: [100, 200, 300, 500],
-        },
-      ).toBe(expectedRoute);
+    if (canonicalDetail) {
+      await expectCanonicalDetailDestination(page, canonicalDetail);
     }
     await settle(page);
-    expect(routeIdentity(page.url())).toBe(observation.toRoute);
+    if (canonicalDetail) {
+      await expectCanonicalDetailDestination(page, canonicalDetail);
+    } else {
+      expect(routeIdentity(page.url())).toBe(observation.toRoute);
+    }
     await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
     await expect(page.locator('body')).not.toBeEmpty();
     confirmed = true;
@@ -528,7 +569,6 @@ function errorsFor(testInfo: TestInfo) {
 }
 
 test.describe('real staging release readiness', () => {
-  test.describe.configure({ mode: 'serial' });
   test.skip(!stagingMode, 'Requires isolated staging, exact SHA, and ephemeral staging-only accounts');
 
   test.beforeAll(async () => {
@@ -877,9 +917,13 @@ test.describe('real staging release readiness', () => {
         '/',
         '/search',
         '/stock/005930',
+        '/stock/AAPL',
+        '/crypto/KRW-BTC',
+        '/crypto/BTCUSDT',
         '/stock-info?asset=stock&market=KR&ticker=005930',
         '/stock-info?asset=stock&market=US&ticker=AAPL',
         '/stock-info?asset=coin&coinMarket=spot&symbol=BTC',
+        '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT',
         '/watchlist',
         '/alerts',
         '/themes',
@@ -893,10 +937,12 @@ test.describe('real staging release readiness', () => {
   }
 
   test('bottom navigation and popup menus traverse every visible destination', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
     await login(page, accounts.regular.loginName, accounts.regular.password);
     await expectHealthyRoute(page, '/');
     const nav = page.locator('nav');
     await expect(nav).toBeVisible();
+    expect(APP_NAVIGATION.map((item) => item.label)).toEqual(['홈', '종목', '기술', '정보', '설정']);
 
     for (const label of ['홈', '종목', '기술', '정보', '설정']) {
       await settle(page);
