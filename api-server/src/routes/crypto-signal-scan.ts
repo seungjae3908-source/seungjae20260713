@@ -9,6 +9,7 @@ import {
   CryptoSignalScannerService,
   type CryptoSignalScanRequest,
 } from '../services/crypto-signal-scanner.service';
+import { rankScannerCandidates } from '../services/scanner-candidate-ranking.service';
 import {
   scannerStrategyForTimeframe,
   scannerStrategyTimeframeAllowed,
@@ -161,12 +162,50 @@ export function createCryptoSignalScanRouter(
         condition: condition(req.query.condition),
         cursor: number(req.query.cursor, 0, 1_000_000) ?? 0,
         batchSize: number(req.query.batchSize, 5, 40) ?? 24,
-        minimumScore: number(req.query.minimumScore, 0, 100),
+        // minimumScore is intentionally a soft discovery preference now. The
+        // scanner must not drop Watch candidates before adaptive ranking.
+        minimumScore: undefined,
         maximumRiskScore: number(req.query.maximumRiskScore, 0, 100),
         signal: controller.signal,
       });
       if (controller.signal.aborted || res.writableEnded) return;
-      const visibleResult = filterScannerResponseForTier(result, membershipLevel, requestedGrade ?? undefined);
+
+      const ranking = rankScannerCandidates({
+        cards: result.cards,
+        market: result.market,
+        strategy: strategyMode,
+        limit: 10,
+      });
+      const rankedCards = ranking.cards.map((card) => card.signalGrade === 'B'
+        ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
+        : card);
+      const actionableIds = new Set(rankedCards
+        .filter((card) => card.signalGrade === 'S' || card.signalGrade === 'A')
+        .map((card) => card.signalId));
+      const actionableCount = ranking.diagnostics.sGradeCount + ranking.diagnostics.aGradeCount;
+      const rankedResult = {
+        ...result,
+        cards: rankedCards,
+        alerts: result.alerts.filter((alert) => actionableIds.has(alert.signalId)),
+        execution: {
+          ...result.execution,
+          excludedCount: Math.max(0, result.execution.completedCount - rankedCards.length),
+          hardFilterPassCount: ranking.diagnostics.hardFilterPassCount,
+          hardFilterRejectedCount: ranking.diagnostics.hardFilterRejectedCount,
+          softCandidateCount: ranking.diagnostics.softCandidateCount,
+          finalDisplayedCount: ranking.diagnostics.finalDisplayedCount,
+          sGradeCount: ranking.diagnostics.sGradeCount,
+          aGradeCount: ranking.diagnostics.aGradeCount,
+          bGradeCount: ranking.diagnostics.bGradeCount,
+          backtestMissingCount: ranking.diagnostics.backtestMissingCount,
+        },
+        message: rankedCards.length === 0
+          ? '현재 묶음에서 Hard Risk Filter를 통과한 후보가 없습니다.'
+          : actionableCount === 0
+            ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
+            : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${ranking.diagnostics.bGradeCount}개`,
+      };
+      const visibleResult = filterScannerResponseForTier(rankedResult, membershipLevel, requestedGrade ?? undefined);
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({ ...visibleResult, strategy: strategyMode });
@@ -180,8 +219,6 @@ export function createCryptoSignalScanRouter(
     }
   };
 
-  // Scanner data is public-market information. Associate access is intentionally
-  // scoped to this read-only scanner route and does not grant futures/order/Risk capabilities.
   router.get('/spot', requireCapability('canAccessBasicInfo'), handler('spot'));
   router.get('/futures', requireCapability('canAccessBasicInfo'), handler('futures'));
   return router;
