@@ -169,6 +169,19 @@ function metricsOrNull(value) {
   });
 }
 
+function ratioToPercent(value) {
+  return Number.isFinite(value) ? value * 100 : null;
+}
+
+function negativeDrawdownPercent(value) {
+  return Number.isFinite(value) ? -Math.abs(value * 100) : null;
+}
+
+function expectancyPercent(value, initialCapital) {
+  if (!Number.isFinite(value) || !Number.isFinite(initialCapital) || initialCapital <= 0) return null;
+  return value / initialCapital * 100;
+}
+
 export function classifyBacktestQuality({ dataset, oosMetrics, walkForward, holdout, costModel, lookaheadSafe, survivorshipSafeguard }) {
   const reasons = [];
   if (!dataset) reasons.push("missing_dataset");
@@ -197,6 +210,11 @@ export function buildScannerBacktestQualityRow(input) {
   if (!MARKET_SET.has(input?.market)) throw new TypeError(`unsupported market: ${input?.market}`);
   if (!QUALITY_SET.has(input.backtestQuality)) throw new TypeError(`unsupported backtestQuality: ${input.backtestQuality}`);
   if (!/^[0-9a-f]{40}$/i.test(input.researchCodeSha ?? "")) throw new TypeError("researchCodeSha must be an immutable 40-character SHA");
+  const oosWinRate = ratioToPercent(input.oos?.winRate);
+  const walkForwardWinRate = ratioToPercent(input.walkForward?.winRate);
+  const expectancyPercentValue = expectancyPercent(input.oos?.expectancy, input.initialCapital);
+  const maxDrawdownPercent = negativeDrawdownPercent(input.oos?.maximumDrawdown);
+  const netReturnPercent = ratioToPercent(input.oos?.totalReturn);
   return Object.freeze({
     market: input.market,
     symbol: input.symbol,
@@ -210,15 +228,42 @@ export function buildScannerBacktestQualityRow(input) {
     oos: metricsOrNull(input.oos),
     walkForward: input.walkForward ?? null,
     holdout: input.holdout ?? null,
-    oosWinRate: Number.isFinite(input.oos?.winRate) ? input.oos.winRate : null,
+    // Scanner-compatible normalized fields. Rates are percentage points (0..100),
+    // drawdown is negative percentage, and expectancyPercent is per-trade net PnL
+    // divided by the fixed research initial capital. Raw research metrics remain above.
+    oosWinRate,
+    walkForwardWinRate,
     expectancy: Number.isFinite(input.oos?.expectancy) ? input.oos.expectancy : null,
+    expectancyPercent: expectancyPercentValue,
     profitFactor: Number.isFinite(input.oos?.profitFactor) ? input.oos.profitFactor : null,
     maximumDrawdown: Number.isFinite(input.oos?.maximumDrawdown) ? input.oos.maximumDrawdown : null,
+    maxDrawdownPercent,
+    netReturnPercent,
     tradeCount: Number.isFinite(input.oos?.tradeCount) ? input.oos.tradeCount : null,
     walkForwardStability: Number.isFinite(input.walkForward?.stabilityScore) ? input.walkForward.stabilityScore : null,
+    oosStabilityScore: Number.isFinite(input.walkForward?.stabilityScore) ? input.walkForward.stabilityScore : null,
     regimePerformance: input.regimePerformance ?? null,
+    regimeScore: Number.isFinite(input.regimeScore) ? input.regimeScore : null,
     confidence: input.confidence ?? null,
+    minimumTradeCount: Number.isFinite(input.minimumTradeCount) ? input.minimumTradeCount : null,
+    costsIncluded: input.costModel?.fee === true && input.costModel?.spread === true,
+    slippageIncluded: input.costModel?.slippage === true,
+    lookaheadGuarded: input.lookaheadSafe === true,
+    survivorshipGuarded: input.dataset?.market?.endsWith("STOCK")
+      ? input.dataset?.survivorshipSafeguard === "verified"
+      : true,
+    oosAvailable: input.oos != null,
+    walkForwardAvailable: Array.isArray(input.walkForward?.windows) && input.walkForward.windows.length > 0,
     researchStatus: input.researchStatus,
+    metricUnits: Object.freeze({
+      oosWinRate: "percent_0_100",
+      walkForwardWinRate: "percent_0_100",
+      expectancy: "research_currency_per_trade",
+      expectancyPercent: "percent_of_initial_capital_per_trade",
+      maximumDrawdown: "ratio_0_1",
+      maxDrawdownPercent: "negative_percent",
+      netReturnPercent: "percent",
+    }),
     dataQuality: Object.freeze({
       requestedStart: input.dataset?.requestedStart ?? null,
       requestedEnd: input.dataset?.requestedEnd ?? null,
