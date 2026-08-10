@@ -7,8 +7,10 @@ on:
     paths:
       - .github/workflows/prediction-lab-automated-research.yml
       - market-prediction-lab/src/automated-research-orchestrator.js
+      - market-prediction-lab/src/automated-v1-research.js
       - market-prediction-lab/scripts/run-automated-research-contract.js
       - market-prediction-lab/tests/automated-research-orchestrator.test.js
+      - market-prediction-lab/tests/automated-v1-research.test.js
   workflow_dispatch:
     inputs:
       mode:
@@ -96,7 +98,7 @@ jobs:
 
       - name: Run automated research orchestration tests
         working-directory: market-prediction-lab
-        run: node --test tests/automated-research-orchestrator.test.js
+        run: node --test tests/automated-research-orchestrator.test.js tests/automated-v1-research.test.js
 
       - name: Build artifact-only research contract
         working-directory: market-prediction-lab
