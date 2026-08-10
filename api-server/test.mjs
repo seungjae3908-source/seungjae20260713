@@ -60,6 +60,8 @@ const groups = {
     path.join(root, 'src/services/crypto-signal-scanner.service.test.ts'),
     path.join(root, 'src/lib/bounded-work-pool.test.ts'),
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
+    path.join(root, 'src/providers/toss.test.ts'),
+    path.join(root, 'src/services/telegram-notification.service.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/analysis-selection.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-analysis.test.ts'),
