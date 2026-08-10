@@ -119,6 +119,7 @@ export function passesMinimumBacktestQuality(summary: ScannerBacktestQualitySumm
     && summary.costsIncluded === true
     && summary.slippageIncluded === true
     && summary.lookaheadGuarded === true
+    && summary.survivorshipGuarded === true
     && summary.oos === true
     && summary.walkForward === true;
 }
