@@ -32,40 +32,59 @@ assert(
   'KR stock canonical detail navigation must preserve exact stock, market, and ticker identity',
 );
 assert(
-  app.includes("function LegacyStockDetailRedirect()"),
+  app.includes('function LegacyStockDetailRedirect()'),
   'legacy /stock/:ticker compatibility redirect must remain explicit',
 );
 assert(
-  app.includes("target = resolveAssetDetailPath({ assetClass: 'KR_STOCK', market: 'KR', symbol: ticker, canonicalSymbol: ticker, backPath });"),
-  'legacy KR stock detail entry must resolve through the shared canonical asset router',
+  app.includes("target = resolveAssetDetailPath({ assetClass: 'KR_STOCK', market: 'KR', symbol: ticker, canonicalSymbol: ticker, backPath });")
+    && app.includes("target = resolveAssetDetailPath({ assetClass: 'US_STOCK', market: 'US', symbol: ticker, canonicalSymbol: ticker, backPath });"),
+  'legacy stock detail entry must preserve KR and US identity through the shared canonical asset router',
 );
 assert(
-  app.includes("if (target) navigate(target, { replace: true });"),
-  'legacy stock detail entry must replace to the canonical destination',
+  app.includes('resolveLegacyCryptoDetailPath(symbol, backPath)'),
+  'legacy crypto detail entry must continue through the shared canonical asset router',
 );
 assert(
-  spec.includes("'/stock/005930',"),
-  'staging must continue to enter the legacy bare stock detail fixture route',
+  app.includes('navigate(target, { replace: true });'),
+  'legacy detail entries must replace to the canonical destination',
+);
+
+for (const route of ['/stock/005930', '/stock/AAPL', '/crypto/KRW-BTC', '/crypto/BTCUSDT']) {
+  assert(
+    spec.includes(`'${route}',`),
+    `staging traversal must include legacy asset route ${route}`,
+  );
+}
+
+assert(
+  spec.includes('function canonicalDetailExpectation(requestedRoute: string): CanonicalDetailExpectation | null'),
+  'staging must define an independent browser expectation for canonical detail identity',
 );
 assert(
-  spec.includes("const requestedRoute = routeIdentity(route, page.url());"),
-  'healthy-route validation must retain the requested route identity',
+  spec.includes("return { asset: 'stock', market: 'KR', ticker: '005930', back: '/stocks' };")
+    && spec.includes("return { asset: 'stock', market: 'US', ticker: 'AAPL', back: '/stocks' };")
+    && spec.includes("return { asset: 'coin', coinMarket: 'spot', symbol: 'BTC', back: '/stocks' };")
+    && spec.includes("return { asset: 'coin', coinMarket: 'futures', symbol: 'BTCUSDT', back: '/stocks' };"),
+  'staging must independently encode KR, US, Upbit spot, and Bitget futures fixture identities',
 );
 assert(
-  spec.includes("const expectedRoute = requestedRoute === '/stock/005930'\n    ? '/stock-info?back=%2Fstocks&asset=stock&market=KR&ticker=005930'\n    : requestedRoute;"),
-  'only the exact 005930 legacy fixture may expect the exact canonical /stock-info destination',
+  spec.includes('async function expectCanonicalDetailDestination(page: Page, expected: CanonicalDetailExpectation)'),
+  'staging must validate the browser canonical destination through a dedicated semantic assertion',
 );
 assert(
-  spec.includes("message: 'stock detail fixture must reach its exact canonical stock-info route'"),
-  'canonical route wait must remain explicit and exact',
+  spec.includes("() => new URL(page.url()).pathname")
+    && spec.includes(").toBe('/stock-info');"),
+  'legacy detail navigation must wait for the canonical /stock-info pathname',
 );
+for (const parameter of ['asset', 'back', 'market', 'ticker', 'coinMarket', 'symbol']) {
+  assert(
+    spec.includes(`actual.searchParams.get('${parameter}')`),
+    `canonical browser assertion must validate ${parameter} semantically`,
+  );
+}
 assert(
-  spec.includes('if (expectedRoute !== requestedRoute) {\n      await expect.poll('),
-  'canonical waiting must run only when the exact expected route differs from the request',
-);
-assert(
-  spec.includes(').toBe(expectedRoute);\n    }\n    await settle(page);'),
-  'canonical destination must be confirmed before strict presentation settlement',
+  (spec.match(/await expectCanonicalDetailDestination\(page, canonicalDetail\);/g) ?? []).length >= 2,
+  'canonical identity must be checked before and after strict presentation settlement',
 );
 assert(
   spec.includes("expect(page.url(), 'route changed while presentation was settling').toBe(urlBeforeFrame);"),
@@ -73,17 +92,21 @@ assert(
 );
 assert(
   spec.includes('expect(routeIdentity(page.url())).toBe(observation.toRoute);'),
-  'healthy route must still finish on the exact expected destination',
+  'non-redirect healthy routes must retain exact route identity checks',
 );
 assert(
-  (spec.match(/requestedRoute === '\/stock\/005930'/g) ?? []).length === 1,
-  'the canonical exception must remain singular and fixture-scoped',
+  !spec.includes('/stock-info?back=%2Fstocks&asset=stock&market=KR&ticker=005930')
+    && !spec.includes('?tab=overview'),
+  'staging must not depend on brittle query ordering or the obsolete legacy overview route',
 );
 assert(
-  !spec.includes("?tab=overview")
-    && !spec.includes("startsWith('/stock/')")
+  !spec.includes("test.describe.configure({ mode: 'serial' });"),
+  'staging validations must remain independently executable after a sibling test fails',
+);
+assert(
+  !spec.includes("startsWith('/stock/')")
     && !spec.includes("pathname === '/stock'"),
-  'legacy detail must not be accepted as canonical through tab or generic route allowances',
+  'legacy detail must not be accepted as canonical through generic route allowances',
 );
 
-console.log('[staging-detail-canonical-route-contract] legacy bare-detail entry is required to reach the exact shared /stock-info canonical destination');
+console.log('[staging-detail-canonical-route-contract] legacy KR/US/spot/futures entries require stable semantic /stock-info canonical identity');
