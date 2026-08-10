@@ -7,6 +7,13 @@ type ScannerResponse = {
   dataState?: string;
   cards?: unknown[];
   message?: string;
+  execution?: {
+    partial?: boolean;
+    timedOut?: boolean;
+    timeoutCount?: number;
+    elapsedMs?: number;
+    deadlineMs?: number;
+  };
 };
 
 function isOrderCapablePath(pathname: string): boolean {
@@ -45,8 +52,19 @@ export async function expectHealthyScannerRoute(page: Page): Promise<void> {
 
     const body = await scanResponse.json() as ScannerResponse;
     expect(body.ok).toBe(true);
-    expect(Number(body.elapsedMs)).toBeLessThanOrEqual(15_000);
-    expect(['complete', 'partial']).toContain(body.dataState);
+    expect(Number(body.elapsedMs)).toBeLessThanOrEqual(12_000);
+    expect(['complete', 'partial', 'unavailable']).toContain(body.dataState);
+
+    if (body.dataState === 'unavailable') {
+      expect(body.partial, 'unavailable scanner state must be an explicit partial result').toBe(true);
+      expect(body.execution?.partial, 'unavailable scanner state must expose partial execution').toBe(true);
+      expect(body.execution?.timedOut, 'unavailable scanner state must be caused by the bounded deadline').toBe(true);
+      expect(Number(body.execution?.timeoutCount)).toBeGreaterThanOrEqual(1);
+      expect(Number(body.execution?.deadlineMs)).toBeGreaterThan(0);
+      expect(Number(body.execution?.deadlineMs)).toBeLessThan(12_000);
+      expect(Number(body.execution?.elapsedMs)).toBe(Number(body.elapsedMs));
+      expect(body.cards, 'deadline fallback must not fabricate scanner candidates').toEqual([]);
+    }
 
     const responseMessage = String(body.message ?? '').trim();
     expect(
