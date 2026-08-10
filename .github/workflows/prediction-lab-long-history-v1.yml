@@ -24,12 +24,14 @@ on:
       - market-prediction-lab/src/automated-research-orchestrator.js
       - market-prediction-lab/src/automated-v1-research.js
       - market-prediction-lab/src/long-history-data-layer.js
+      - market-prediction-lab/src/research-cache-provenance.js
       - market-prediction-lab/scripts/run-long-history-v1.js
       - market-prediction-lab/scripts/run-v3-history.js
       - market-prediction-lab/scripts/run-v4-history.js
       - market-prediction-lab/scripts/run-v5-history.js
       - market-prediction-lab/scripts/run-v6-history.js
       - market-prediction-lab/scripts/run-automated-v1-from-long-history.js
+      - market-prediction-lab/scripts/extend-spot-holdout-cache.js
       - market-prediction-lab/scripts/extend-futures-holdout-cache.js
       - market-prediction-lab/scripts/build-scanner-backtest-quality.js
       - market-prediction-lab/tests/**
@@ -88,9 +90,26 @@ jobs:
         working-directory: market-prediction-lab
         run: npm run validate
 
-      - name: Collect public history and run V1 plus V2 search
+      - name: Restore validated long-history research cache
+        id: history-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            market-prediction-lab/long-history-v1
+            market-prediction-lab/docs/long-history-v1-result.json
+            market-prediction-lab/docs/long-history-v1-result.md
+          key: prediction-lab-long-history-v1-${{ hashFiles('market-prediction-lab/src/historical-backtest-data.js', 'market-prediction-lab/src/bitget-candle-collector.js', 'market-prediction-lab/src/candle-gap-repair.js', 'market-prediction-lab/src/binance-vision-futures-archive.js') }}-${{ github.run_id }}
+          restore-keys: |
+            prediction-lab-long-history-v1-${{ hashFiles('market-prediction-lab/src/historical-backtest-data.js', 'market-prediction-lab/src/bitget-candle-collector.js', 'market-prediction-lab/src/candle-gap-repair.js', 'market-prediction-lab/src/binance-vision-futures-archive.js') }}-
+
+      - name: Collect initial public history and run V1 plus V2 search
+        if: steps.history-cache.outputs.cache-matched-key == ''
         working-directory: market-prediction-lab
         run: npm run backtest:v1:history -- long-history-v1 docs/long-history-v1-result.json docs/long-history-v1-result.md
+
+      - name: Incrementally append spot closed history
+        working-directory: market-prediction-lab
+        run: node scripts/extend-spot-holdout-cache.js long-history-v1
 
       - name: Incrementally extend futures final-holdout cache
         working-directory: market-prediction-lab
@@ -148,14 +167,25 @@ jobs:
         working-directory: market-prediction-lab
         run: npm run backtest:v6:history -- long-history-v1 docs/long-history-v6-result.json docs/long-history-v6-result.md
 
+      - name: Save incrementally refreshed long-history cache
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            market-prediction-lab/long-history-v1
+            market-prediction-lab/docs/long-history-v1-result.json
+            market-prediction-lab/docs/long-history-v1-result.md
+          key: ${{ steps.history-cache.outputs.cache-primary-key }}
+
       - name: Build immutable provenance manifest
         shell: bash
         env:
           RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+          CACHE_RESTORED_FROM: ${{ steps.history-cache.outputs.cache-matched-key }}
+          CACHE_SAVED_AS: ${{ steps.history-cache.outputs.cache-primary-key }}
         run: |
           mkdir -p market-prediction-lab/docs
           cat > market-prediction-lab/docs/long-history-provenance.json <<JSON
-          {"schemaVersion":1,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false,"orderSubmitted":false}
+          {"schemaVersion":1,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","cacheRestoredFrom":"$CACHE_RESTORED_FROM","cacheSavedAs":"$CACHE_SAVED_AS","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false,"orderSubmitted":false}
           JSON
 
       - name: Upload long-history research artifacts
