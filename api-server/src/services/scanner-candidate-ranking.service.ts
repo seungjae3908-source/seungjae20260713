@@ -34,6 +34,7 @@ export interface ScannerCandidateRankingInput {
   strategy: ScannerStrategyMode;
   backtests?: Readonly<Record<string, ScannerBacktestQualitySummary | undefined>>;
   weights?: ScannerRankingWeights;
+  softMinimumScore?: number;
   limit?: number;
 }
 
@@ -148,6 +149,7 @@ function watchReasons(card: ScannerSignalCard, backtest: ScannerBacktestQualityS
 export function rankScannerCandidates(input: ScannerCandidateRankingInput): ScannerCandidateRankingResult {
   const limit = Math.max(1, Math.min(10, input.limit ?? 10));
   const weights = input.weights ?? DEFAULT_SCANNER_RANKING_WEIGHTS;
+  const softMinimumScore = finite(input.softMinimumScore) ? clamp(input.softMinimumScore) : null;
   const tradingValues = input.cards.map((card) => card.tradingValue).filter(finite);
   const momentumValues = input.cards.map((card) => card.quantScore?.momentum).filter(finite);
   const trendValues = input.cards.map((card) => card.quantScore?.trend).filter(finite);
@@ -173,7 +175,10 @@ export function rankScannerCandidates(input: ScannerCandidateRankingInput): Scan
     };
     const relativeScore = round(Object.values(relative).reduce((sum, value) => sum + value, 0) / 5);
     const backtestScore = backtest?.status === 'verified' ? metricScore(backtest, weights) : null;
-    const liveSignalScore = clamp(card.score);
+    const belowPreferencePenalty = softMinimumScore != null && card.score < softMinimumScore
+      ? Math.min(25, (softMinimumScore - card.score) * 0.5)
+      : 0;
+    const liveSignalScore = clamp(card.score - belowPreferencePenalty);
     const rankingScore = round(
       (backtestScore ?? 0) * (100 - weights.liveSignal) / 100
       + liveSignalScore * weights.liveSignal / 100
