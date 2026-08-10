@@ -114,11 +114,13 @@ jobs:
               return;
             }
 
+            let dispatchRequestedAtMs = null;
             const activePushRuns = await listActiveExactShaPushRuns();
             const existingActive = snapshot.runs.find((run) => run.status !== 'completed') ?? activePushRuns[0];
             if (existingActive) {
               core.notice(`Waiting for existing exact-SHA Application CI Run ID ${existingActive.id}.`);
             } else {
+              dispatchRequestedAtMs = Date.now();
               await github.rest.actions.createWorkflowDispatch({
                 owner,
                 repo,
@@ -153,6 +155,15 @@ jobs:
               }
 
               const newest = snapshot.runs[0];
+              const newestCreatedAtMs = newest ? Date.parse(String(newest.created_at ?? '')) : Number.NaN;
+              const newestPredatesDispatch = dispatchRequestedAtMs != null
+                && (!newest || !Number.isFinite(newestCreatedAtMs) || newestCreatedAtMs < dispatchRequestedAtMs - 5000);
+              if (newestPredatesDispatch) {
+                core.info(`Waiting for dispatched exact-SHA Application CI to claim required status ownership for ${sha}.`);
+                await new Promise((resolve) => setTimeout(resolve, 15000));
+                continue;
+              }
+
               if (newest && newest.status === 'completed' && newest.conclusion !== 'success') {
                 core.setFailed(`Official exact-SHA Application CI Run ID ${newest.id} failed for ${sha}: ${newest.conclusion}.`);
                 return;
