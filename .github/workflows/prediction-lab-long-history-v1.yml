@@ -23,12 +23,15 @@ on:
       - market-prediction-lab/src/v6-independent-breakout-retest-optimizer.js
       - market-prediction-lab/src/automated-research-orchestrator.js
       - market-prediction-lab/src/automated-v1-research.js
+      - market-prediction-lab/src/long-history-data-layer.js
       - market-prediction-lab/scripts/run-long-history-v1.js
       - market-prediction-lab/scripts/run-v3-history.js
       - market-prediction-lab/scripts/run-v4-history.js
       - market-prediction-lab/scripts/run-v5-history.js
       - market-prediction-lab/scripts/run-v6-history.js
       - market-prediction-lab/scripts/run-automated-v1-from-long-history.js
+      - market-prediction-lab/scripts/extend-futures-holdout-cache.js
+      - market-prediction-lab/scripts/build-scanner-backtest-quality.js
       - market-prediction-lab/tests/**
 
 permissions:
@@ -89,13 +92,23 @@ jobs:
         working-directory: market-prediction-lab
         run: npm run backtest:v1:history -- long-history-v1 docs/long-history-v1-result.json docs/long-history-v1-result.md
 
+      - name: Incrementally extend futures final-holdout cache
+        working-directory: market-prediction-lab
+        run: node scripts/extend-futures-holdout-cache.js long-history-v1
+
       - name: Run automated V1 Development OOS Walk Forward on same real cache
         working-directory: market-prediction-lab
         env:
           RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
         run: node scripts/run-automated-v1-from-long-history.js long-history-v1 artifacts/automated-research/v1-long-history.json
 
-      - name: Assert automated V1 safety and holdout isolation
+      - name: Build scanner backtest quality artifact with frozen holdout
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
+        run: node scripts/build-scanner-backtest-quality.js long-history-v1 artifacts/automated-research/v1-long-history.json artifacts/automated-research/scanner-backtest-quality-v1.json
+
+      - name: Assert automated research safety and holdout isolation
         working-directory: market-prediction-lab
         run: |
           node <<'NODE'
@@ -109,6 +122,13 @@ jobs:
           if (result.safety.finalHoldoutUsedForSelection !== false) throw new Error('final holdout cannot be used for selection');
           if (result.safety.finalHoldoutRetuningAllowed !== false) throw new Error('final holdout retuning must remain forbidden');
           if (result.results.some((row) => row.result.period.oosEnd >= row.result.period.finalHoldoutStart)) throw new Error('OOS overlaps final holdout');
+
+          const scanner = JSON.parse(fs.readFileSync('artifacts/automated-research/scanner-backtest-quality-v1.json', 'utf8'));
+          if (scanner.schema !== 'scanner-backtest-quality-v1' || scanner.schemaVersion !== 1) throw new Error('scanner artifact schema mismatch');
+          if (scanner.syntheticMetricsAllowed !== false || scanner.liveOrderAllowed !== false || scanner.privateApiAllowed !== false || scanner.orderSubmitted !== false) throw new Error('scanner safety contract violated');
+          if (!scanner.rows.some((row) => row.market === 'CRYPTO_SPOT' && row.symbol === 'USDT-BTC')) throw new Error('BTC spot scanner row missing');
+          if (!scanner.rows.some((row) => row.market === 'CRYPTO_FUTURES' && row.symbol === 'BTCUSDT' && row.direction === 'LONG')) throw new Error('BTC futures LONG row missing');
+          if (scanner.rows.some((row) => row.backtestQuality === 'verified' && row.holdout?.status !== 'evaluated')) throw new Error('verified row must contain evaluated frozen holdout');
           NODE
 
       - name: Run V3 ETH volume and trend filter validation
@@ -145,6 +165,7 @@ jobs:
           path: |
             market-prediction-lab/long-history-v1
             market-prediction-lab/artifacts/automated-research/v1-long-history.json
+            market-prediction-lab/artifacts/automated-research/scanner-backtest-quality-v1.json
             market-prediction-lab/docs/long-history-v1-result.json
             market-prediction-lab/docs/long-history-v1-result.md
             market-prediction-lab/docs/long-history-v3-result.json
