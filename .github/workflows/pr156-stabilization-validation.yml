@@ -6,23 +6,20 @@ on:
       - test/pr156-stabilization-validation
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: pr156-stabilization-validation
   cancel-in-progress: false
 
 jobs:
-  validate-scoped-verifier-fix:
-    if: ${{ !contains(github.event.head_commit.message, '[pr156-verifier-validated]') }}
-    name: Targeted verifier and Phase12 before PR push
+  regression:
+    name: PR156 pre-push regression gate
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
-      - name: Checkout validation candidate
+      - name: Checkout validated source
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
@@ -36,156 +33,23 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - name: Install workspace dependencies with frozen lockfile
         run: pnpm install --frozen-lockfile
-      - name: Apply exact scoped verifier replacement in runner workspace
+      - name: Typecheck frontend
+        run: pnpm --dir stock-analyzer run typecheck
+      - name: Typecheck backend
+        run: pnpm --dir stock-analyzer exec tsc -p ../api-server/tsconfig.json --noEmit
+      - name: Build frontend production bundle
+        run: pnpm --dir stock-analyzer run build
+      - name: Build backend production bundle
+        run: pnpm --dir api-server run build:server
+      - name: Install Playwright Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+      - name: Run Playwright desktop and mobile regression
+        run: pnpm --dir stock-analyzer run test:e2e
+      - name: Verify validation harness is the only extra file versus clean candidate
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('api-server/scripts/verify-staging-login-selector-contract.mjs')
-          source = path.read_text()
-          old = '''assert(!spec.includes("'/rest/v1/profiles'"), 'profile request aborts must be eliminated in the app, never allowlisted in staging diagnostics');'''
-          new = '''const profileMatcherStart = spec.indexOf('function isProfileRequest(request: Request)');
-          const profileMatcherEnd = spec.indexOf(
-            '\\nfunction isExpectedAuthFault(',
-            profileMatcherStart,
-          );
-          assert(
-            profileMatcherStart >= 0 && profileMatcherEnd > profileMatcherStart,
-            'profile request matcher boundaries are missing',
-          );
-          const profileMatcherBlock = spec.slice(profileMatcherStart, profileMatcherEnd);
-          const hasExactProfileRequestIdentification = (source) =>
-            source.includes("request.method() === 'GET'")
-            && source.includes("parsed.pathname === '/rest/v1/profiles'")
-            && !source.includes('request.failure()');
-          assert(
-            hasExactProfileRequestIdentification(profileMatcherBlock),
-            'profile fault injection must identify only exact GET /rest/v1/profiles requests without classifying a failure reason',
-          );
-          assert(
-            hasExactProfileRequestIdentification(
-              "return request.method() === 'GET' && parsed.pathname === '/rest/v1/profiles';",
-            ),
-            'exact profile request identification fixture must be accepted',
-          );
-          assert(
-            !hasExactProfileRequestIdentification("if (url.includes('/rest/v1/profiles')) return true;"),
-            'broad profile-path fixture must not satisfy exact request identification',
-          );
-
-          const authFaultMatcherStart = spec.indexOf(
-            'function isExpectedAuthFault(request: Request, observation: AuthFaultObservation)',
-          );
-          const authFaultMatcherEnd = spec.indexOf(
-            '\\nfunction isExpectedRouteTransitionAbort(',
-            authFaultMatcherStart,
-          );
-          assert(
-            authFaultMatcherStart >= 0 && authFaultMatcherEnd > authFaultMatcherStart,
-            'auth fault matcher boundaries are missing',
-          );
-          const authFaultMatcherBlock = spec.slice(authFaultMatcherStart, authFaultMatcherEnd);
-          assert(
-            authFaultMatcherBlock.includes(
-              'return observation.requests.has(request) && isProfileRequest(request);',
-            ),
-            'expected auth faults must require both the observed request identity and the exact profile matcher',
-          );
-          assert(
-            (spec.match(/observation\\.requests\\.add\\(request\\);/g) ?? []).length >= 3,
-            'bootstrap reject, timeout, and retry fault injection must register the exact intercepted profile request',
-          );
-
-          const requestFailedStart = spec.indexOf("page.on('requestfailed', (request) => {");
-          const requestFailedEnd = spec.indexOf(
-            '\\nasync function waitForPresentationFrame(page: Page)',
-            requestFailedStart,
-          );
-          assert(
-            requestFailedStart >= 0 && requestFailedEnd > requestFailedStart,
-            'requestfailed diagnostic handler boundaries are missing',
-          );
-          const requestFailedBlock = spec.slice(requestFailedStart, requestFailedEnd);
-          const authFaultCandidateIndex = requestFailedBlock.indexOf('authFault.candidates.push(diagnostic);');
-          const routeCandidateIndex = requestFailedBlock.indexOf('routeObservation.candidates.push(diagnostic);');
-          const unmatchedFailureIndex = requestFailedBlock.lastIndexOf(
-            'diagnostics.unexpected_http_errors.push(diagnostic);',
-          );
-          assert(
-            authFaultCandidateIndex >= 0
-              && routeCandidateIndex > authFaultCandidateIndex
-              && unmatchedFailureIndex > routeCandidateIndex,
-            'unmatched request failures must remain unexpected after all narrowly scoped candidate checks',
-          );
-
-          const finishAuthFaultStart = spec.indexOf('async function finishAuthFault(');
-          const finishAuthFaultEnd = spec.indexOf(
-            '\\nasync function expectBootstrapTerminalError(',
-            finishAuthFaultStart,
-          );
-          assert(
-            finishAuthFaultStart >= 0 && finishAuthFaultEnd > finishAuthFaultStart,
-            'auth fault finalization helper boundaries are missing',
-          );
-          const finishAuthFaultBlock = spec.slice(finishAuthFaultStart, finishAuthFaultEnd);
-          const confirmedAuthFaultIndex = finishAuthFaultBlock.indexOf(
-            'diagnostics.expected_auth_faults.push(...observation.candidates);',
-          );
-          const unconfirmedAuthFaultIndex = finishAuthFaultBlock.indexOf(
-            'diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({',
-          );
-          assert(
-            confirmedAuthFaultIndex >= 0 && unconfirmedAuthFaultIndex > confirmedAuthFaultIndex,
-            'unconfirmed auth fault candidates must return to unexpected HTTP errors',
-          );
-          assert(
-            finishAuthFaultBlock.includes('unconfirmed auth fault:'),
-            'unconfirmed auth fault evidence must remain explicitly labeled',
-          );
-
-          assert(!spec.includes('function isExpectedProfileAbort('), 'blanket profile abort exemption is forbidden');
-          assert(!spec.includes('expected_profile_aborts'), 'profile aborts must not have a blanket expected diagnostics bucket');
-          assert(!spec.includes('function isExpectedScannerAbort('), 'blanket scanner abort exemption is forbidden');
-          assert(
-            !spec.includes('diagnostics.expected_scanner_aborts.push('),
-            'scanner request failures must never be promoted into the expected scanner abort bucket',
-          );
-          assert(
-            spec.includes("expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);"),
-            'scanner net::ERR_ABORTED must remain a zero-tolerance staging contract',
-          );'''
-          if source.count(old) != 1:
-              raise SystemExit(f'expected exactly one stale assertion, found {source.count(old)}')
-          path.write_text(source.replace(old, new))
-          PY
-      - name: Run targeted verifier
-        run: node ./api-server/scripts/verify-staging-login-selector-contract.mjs
-      - name: Run Phase12
-        run: pnpm --dir api-server run test:phase12
-      - name: Verify minimal diff and forbidden workaround absence
-        run: |
-          python3 - <<'PY'
-          import subprocess
-
-          expected = 'api-server/scripts/verify-staging-login-selector-contract.mjs'
-          changed = subprocess.check_output(['git', 'diff', '--name-only'], text=True).strip().splitlines()
-          if changed != [expected]:
-              raise SystemExit(f'unexpected changed files: {changed}')
-          diff = subprocess.check_output(['git', 'diff', '--unified=0', '--', expected], text=True)
-          additions = '\n'.join(line[1:] for line in diff.splitlines() if line.startswith('+') and not line.startswith('+++'))
-          forbidden = ['@ts-ignore', '@ts-expect-error', '|| true', '.skip(', '.skip()', 'test.skip', 'describe.skip']
-          found = [token for token in forbidden if token in additions]
-          if found:
-              raise SystemExit(f'forbidden workaround additions: {found}')
-          if "assert(!spec.includes(\"'/rest/v1/profiles'\")" in additions:
-              raise SystemExit('stale broad profile-path assertion was re-added')
-          print(diff)
-          PY
-          git diff --check
-      - name: Commit validated verifier change to isolated validation branch
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add api-server/scripts/verify-staging-login-selector-contract.mjs
-          git commit -m "test(staging): scope profile fault verifier [pr156-verifier-validated]"
-          git push origin HEAD:test/pr156-stabilization-validation
+          git fetch --no-tags origin 5040e53d5920e01be5b26468a2f82d122daa7c29
+          mapfile -t changed < <(git diff --name-only 5040e53d5920e01be5b26468a2f82d122daa7c29 HEAD)
+          if [ "${#changed[@]}" -ne 1 ] || [ "${changed[0]}" != ".github/workflows/pr156-stabilization-validation.yml" ]; then
+            printf 'unexpected validation-branch drift:\n%s\n' "${changed[@]}"
+            exit 1
+          fi
