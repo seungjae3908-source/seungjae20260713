@@ -14,6 +14,7 @@ export interface KrEntry {
 }
 
 const KRX_URL = 'http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd';
+const KRX_REQUEST_TIMEOUT_MS = 15_000;
 
 interface FinderRow {
   short_code?: string;
@@ -21,9 +22,26 @@ interface FinderRow {
   marketName?: string;
 }
 
-async function krxFinder(bld: string): Promise<FinderRow[]> {
+function linkedAbortSignal(parent?: AbortSignal): { signal: AbortSignal; clear(): void } {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const abortFromParent = () => controller.abort(parent?.reason ?? new Error('KRX_UNIVERSE_ABORTED'));
+  if (parent?.aborted) abortFromParent();
+  else parent?.addEventListener('abort', abortFromParent, { once: true });
+  const timeout = setTimeout(
+    () => controller.abort(new Error('KRX_UNIVERSE_TIMEOUT')),
+    KRX_REQUEST_TIMEOUT_MS,
+  );
+  return {
+    signal: controller.signal,
+    clear() {
+      clearTimeout(timeout);
+      parent?.removeEventListener('abort', abortFromParent);
+    },
+  };
+}
+
+async function krxFinder(bld: string, parent?: AbortSignal): Promise<FinderRow[]> {
+  const linked = linkedAbortSignal(parent);
   try {
     const res = await fetch(KRX_URL, {
       method: 'POST',
@@ -33,23 +51,24 @@ async function krxFinder(bld: string): Promise<FinderRow[]> {
         'User-Agent': 'Mozilla/5.0',
       },
       body: `bld=${encodeURIComponent(bld)}&mktsel=ALL&searchText=`,
-      signal: controller.signal,
+      signal: linked.signal,
     });
     if (!res.ok) return [];
     const data = (await res.json()) as { block1?: FinderRow[] };
     return Array.isArray(data.block1) ? data.block1 : [];
-  } catch {
+  } catch (error) {
+    if (parent?.aborted) throw error;
     return [];
   } finally {
-    clearTimeout(timeout);
+    linked.clear();
   }
 }
 
-export async function getKrUniverse(): Promise<KrEntry[]> {
+export async function getKrUniverse(signal?: AbortSignal): Promise<KrEntry[]> {
   return cached('krx:universe', TTL.mapping, async () => {
     const [stocks, products] = await Promise.all([
-      krxFinder('dbms/comm/finder/finder_stkisu'), // all listed stocks
-      krxFinder('dbms/comm/finder/finder_secuprodisu'), // ETF + ETN products
+      krxFinder('dbms/comm/finder/finder_stkisu', signal), // all listed stocks
+      krxFinder('dbms/comm/finder/finder_secuprodisu', signal), // ETF + ETN products
     ]);
     const out: KrEntry[] = [];
     for (const s of stocks) {
