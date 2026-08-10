@@ -1,6 +1,7 @@
 import webPush, { type PushSubscription } from 'web-push';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { MarketDataService } from './market-data.service';
+import { sendTelegramAlert } from './telegram-notification.service';
 
 export const DEFAULT_NOTIFICATION_TYPES = [
   'news_positive',
@@ -305,6 +306,16 @@ async function evaluatePriceAlert(alert: PriceAlertRow): Promise<void> {
           targetPrice: target,
           direction: alert.direction,
         },
+      });
+      void sendTelegramAlert({
+        type: 'price_alert',
+        symbol: cleanSymbol(alert.symbol),
+        market: alert.market,
+        currentPrice,
+        targetPrice: target,
+        details: alert.direction === 'above' ? '설정가 이상 도달' : '설정가 이하 도달',
+        timestamp: now.toISOString(),
+        dedupeKey: `price-alert:${alert.id}:${alert.direction}:${target}`,
       });
       update.last_triggered_at = now.toISOString();
       if (!alert.repeat_enabled) update.enabled = false;
