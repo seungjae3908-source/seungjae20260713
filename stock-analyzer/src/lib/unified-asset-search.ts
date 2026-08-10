@@ -1,4 +1,5 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { resolveAssetDetailPath, type CanonicalAssetIdentity } from '@/lib/asset-navigation';
 
 export type UnifiedAssetFilter = 'all' | 'stock' | 'coin';
 export type UnifiedMarketFilter = 'KR' | 'US' | 'spot' | 'futures';
@@ -80,19 +81,41 @@ export async function fetchUnifiedAssetSuggestions(input: {
   return payload as UnifiedAssetSuggestResponse;
 }
 
-export function unifiedAssetDetailPath(item: UnifiedAssetSuggestion, backPath = '/search') {
-  const params = new URLSearchParams({ back: backPath });
+export function unifiedSuggestionIdentity(item: UnifiedAssetSuggestion, backPath = '/search'): CanonicalAssetIdentity {
   if (item.assetType === 'stock') {
-    params.set('asset', 'stock');
-    params.set('market', item.market);
-    params.set('ticker', item.ticker ?? item.productCode);
-    return `/stock-info?${params.toString()}`;
+    const market = item.market === 'US' ? 'US' : 'KR';
+    const symbol = (item.ticker ?? item.productCode).trim().toUpperCase();
+    return {
+      assetClass: market === 'US' ? 'US_STOCK' : 'KR_STOCK',
+      market,
+      symbol,
+      canonicalSymbol: symbol,
+      backPath,
+    };
   }
-  const symbol = item.market === 'futures'
-    ? item.productCode
-    : item.baseSymbol || item.symbol || item.productCode;
-  params.set('asset', 'coin');
-  params.set('coinMarket', item.market);
-  params.set('symbol', symbol);
-  return `/stock-info?${params.toString()}`;
+
+  if (item.market === 'futures') {
+    const symbol = (item.productCode || item.symbol || item.baseSymbol).trim().toUpperCase();
+    return {
+      assetClass: 'CRYPTO_FUTURES',
+      market: 'BITGET',
+      symbol,
+      canonicalSymbol: symbol,
+      backPath,
+    };
+  }
+
+  const rawSymbol = (item.symbol || item.productCode || item.baseSymbol).trim().toUpperCase();
+  const baseSymbol = (item.baseSymbol || rawSymbol.replace(/^(?:KRW|BTC|USDT)-/, '')).trim().toUpperCase();
+  return {
+    assetClass: 'CRYPTO_SPOT',
+    market: 'UPBIT',
+    symbol: rawSymbol,
+    canonicalSymbol: baseSymbol,
+    backPath,
+  };
+}
+
+export function unifiedAssetDetailPath(item: UnifiedAssetSuggestion, backPath = '/search') {
+  return resolveAssetDetailPath(unifiedSuggestionIdentity(item, backPath));
 }
