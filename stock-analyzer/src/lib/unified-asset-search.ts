@@ -3,6 +3,7 @@ import { resolveAssetDetailPath, type CanonicalAssetIdentity } from '@/lib/asset
 
 export type UnifiedAssetFilter = 'all' | 'stock' | 'coin';
 export type UnifiedMarketFilter = 'KR' | 'US' | 'spot' | 'futures';
+export type UnifiedSearchState = 'FULL' | 'PARTIAL' | 'DEGRADED' | 'EMPTY' | 'ERROR';
 
 export interface UnifiedAssetSuggestion {
   id: string;
@@ -34,6 +35,7 @@ export interface UnifiedSearchProviderStatus {
 
 export interface UnifiedAssetSuggestResponse {
   ok: boolean;
+  state: UnifiedSearchState;
   q: string;
   asset: UnifiedAssetFilter;
   market: UnifiedMarketFilter | null;
