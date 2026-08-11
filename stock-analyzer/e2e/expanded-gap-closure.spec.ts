@@ -30,7 +30,7 @@ function fulfill(route: Route, body: unknown, status = 200, headers: Record<stri
 test('scanner manual polling visibility and unchanged-condition consumers share one same-key upstream owner', async ({ page }) => {
   const source = await readFile(path.resolve(analyzerRoot(), 'src/pages/signal-scanner.tsx'), 'utf8');
   expect(source).toContain("setInterval(() => setRefreshToken((value) => value + 1), 30_000)");
-  expect(source).toContain("document.addEventListener('visibilitychange', onVisibility)");
+  expect(source).toContain("document.addEventListener('visibilitychange', refreshWhenVisible)");
   expect(source).toContain('onClick={() => setRefreshToken((value) => value + 1)}');
   expect(source).toContain('fetchSignalScanner(request, controller.signal)');
 
@@ -285,7 +285,37 @@ test('005930 AAPL KRW-BTC and BTCUSDT resolve to exact canonical semantic identi
   expect(upbit.symbol).toBe('BTC');
 });
 
+async function installApprovedLegacyRuntime(page: Page) {
+  const userId = '78787878-7878-4787-8787-787878787878';
+  const storageKey = 'sb-127-auth-token';
+  await page.addInitScript(({ key, id, now }) => {
+    const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+    const expiresAt = 4_102_444_800;
+    const accessToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: id, role: 'authenticated', exp: expiresAt })}.e2e`;
+    window.localStorage.setItem(key, JSON.stringify({
+      access_token: accessToken,
+      refresh_token: 'expanded-legacy-route-refresh',
+      expires_in: 3600,
+      expires_at: expiresAt,
+      token_type: 'bearer',
+      user: { id, aud: 'authenticated', role: 'authenticated', email: 'expanded-route@accounts.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: { display_name: 'Expanded Route Admin' }, identities: [], created_at: now },
+    }));
+  }, { key: storageKey, id: userId, now: NOW });
+
+  await page.route('**/__e2e-supabase/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith('/rest/v1/profiles')) {
+      return fulfill(route, { id: userId, login_name: 'expanded-route-admin', display_name: 'Expanded Route Admin', role: 'admin', status: 'approved', membership_level: 'admin', is_active: true, permissions_updated_at: NOW, updated_at: NOW });
+    }
+    if (pathname.endsWith('/auth/v1/user')) {
+      return fulfill(route, { id: userId, aud: 'authenticated', role: 'authenticated', email: 'expanded-route@accounts.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: { display_name: 'Expanded Route Admin' }, identities: [], created_at: NOW });
+    }
+    return fulfill(route, { ok: true });
+  });
+}
+
 test('legacy /stock/005930 finishes at the KR stock-info canonical identity', async ({ page }) => {
+  await installApprovedLegacyRuntime(page);
   await page.goto('/stock/005930');
   await expect.poll(() => new URL(page.url()).pathname).toBe('/stock-info');
   const url = new URL(page.url());
