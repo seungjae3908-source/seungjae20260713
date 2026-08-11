@@ -30,6 +30,7 @@ import {
   parseScannerGradeQuery,
 } from '../services/scanner-access-control.service';
 import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
+import { deliverScannerTelegramAlerts } from '../services/scanner-telegram-delivery.service';
 
 export const STOCK_SCANNER_ROUTE_DEADLINE_MS = 10_000;
 
@@ -259,6 +260,7 @@ export function createBoundedMarketScanRouter(
       if (controller.signal.aborted || res.writableEnded) return;
       const canonicalResult = withScannerCanonicalActions(result);
       const visibleResult = filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined);
+      void deliverScannerTelegramAlerts(visibleResult.alerts);
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({
         ...visibleResult,
