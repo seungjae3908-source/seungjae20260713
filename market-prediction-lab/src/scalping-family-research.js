@@ -1,11 +1,12 @@
 import { RESEARCH_BACKTEST_PERIOD, runV1Backtest } from "./multi-market-backtest-engine.js";
 import { runScalpingV1Research } from "./scalping-v1-research.js";
-import { buildV3FilterCandidates, runV3FilteredBacktest } from "./v3-market-filter-optimizer.js";
-import { buildV4FilterCandidates, runV4FilteredBacktest } from "./v4-momentum-regime-optimizer.js";
-import { buildV5FilterCandidates, runV5FilteredBacktest } from "./v5-price-structure-optimizer.js";
+import { buildV3FilterCandidates } from "./v3-market-filter-optimizer.js";
+import { buildV4FilterCandidates } from "./v4-momentum-regime-optimizer.js";
+import { buildV5FilterCandidates } from "./v5-price-structure-optimizer.js";
 import { buildV6Candidates, calculateV6Signal } from "./v6-independent-breakout-retest-optimizer.js";
 import { runIndependentSignalBacktest } from "./independent-strategy-backtest.js";
 import { evaluateUnifiedCandidate } from "./unified-candidate-evaluator.js";
+import { runFastFilteredDevelopment } from "./scalping-filtered-development-fast.js";
 
 export const SCALPING_FAMILY_RESEARCH_BUDGET = Object.freeze({
   maxCoarseCandidates: 16,
@@ -71,9 +72,7 @@ function optimization(version, parameters, filter) {
 
 function runDevelopmentOnly(version, backtestInput, parameters, filter) {
   const period = developmentPeriod();
-  if (version === "V3") return runV3FilteredBacktest({ backtestInput, parameters, filter, period });
-  if (version === "V4") return runV4FilteredBacktest({ backtestInput, parameters, filter, period });
-  if (version === "V5") return runV5FilteredBacktest({ backtestInput, parameters, filter, period });
+  if (["V3", "V4", "V5"].includes(version)) return runFastFilteredDevelopment({ version, backtestInput, parameters, filter, period });
   if (version === "V6") return runIndependentSignalBacktest({
     backtestInput,
     strategy: "v6_independent_breakout_retest_scalping",
