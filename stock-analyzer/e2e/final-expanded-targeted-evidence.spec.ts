@@ -451,10 +451,12 @@ test('slow Financial stays secondary while stock-info primary quote and navigati
   await page.goto('/stock-info?asset=stock&market=US&ticker=AAPL');
   await expect.poll(runtime.financialCalls).toBeGreaterThanOrEqual(1);
   await expectPrimaryStockInfoUsable(page);
-  await expect(page.getByText('재무요약', { exact: true })).toBeVisible();
-  await expect(page.getByText('데이터를 불러오는 중입니다.', { exact: true })).toBeVisible();
+  const financialToggle = page.getByRole('button', { name: /재무요약.*눌러서 펼치기/ });
+  await financialToggle.click();
+  const financialPanel = financialToggle.locator('xpath=..');
+  await expect(financialPanel.getByText('데이터를 불러오는 중입니다.', { exact: true })).toBeVisible();
   runtime.releaseFinancial();
-  await expect(page.getByText('18.2배', { exact: true })).toBeVisible();
+  await expect(financialPanel.getByText('18.2배', { exact: true })).toBeVisible();
 });
 
 test('optional News provider failure degrades locally without blocking stock-info primary data', async ({ page }) => {
