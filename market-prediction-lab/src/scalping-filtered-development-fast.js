@@ -309,6 +309,7 @@ function prepareInvariantContext({ version, backtestInput, parameters, period })
   const side = backtestInput.side ?? "long";
   const baseSignals = new Array(candles.length).fill(false);
   const filterFeatures = version === "V3" || version === "V4" ? new Array(candles.length).fill(null) : null;
+  const exitPlanCache = new Array(candles.length).fill(null);
 
   for (let index = 1; index < candles.length - 1; index += 1) {
     const candle = candles[index];
@@ -326,9 +327,36 @@ function prepareInvariantContext({ version, backtestInput, parameters, period })
     indicators,
     baseSignals: Object.freeze(baseSignals),
     filterFeatures: filterFeatures === null ? null : Object.freeze(filterFeatures),
+    exitPlanCache,
   });
   bucket.set(key, context);
   return context;
+}
+
+function resolveExitPlan({ candles, indicators, exitPlanCache, index, parameters, side }) {
+  const cached = exitPlanCache[index];
+  if (cached) return cached;
+  const entryIndex = index + 1;
+  const entryPrice = candles[entryIndex].open;
+  const stopDistance = indicators.atr[index] * parameters.stopAtrMultiple;
+  const stopPrice = side === "long" ? entryPrice - stopDistance : entryPrice + stopDistance;
+  const targetPrice = side === "long"
+    ? entryPrice + stopDistance * parameters.targetRiskMultiple
+    : entryPrice - stopDistance * parameters.targetRiskMultiple;
+  const exitPosition = Object.freeze({ side, stopPrice, targetPrice });
+  let exit = null;
+  let exitIndex = entryIndex;
+  for (; exitIndex < candles.length; exitIndex += 1) {
+    exit = exitForCandle(exitPosition, candles[exitIndex]);
+    if (exit) break;
+  }
+  if (!exit) {
+    exitIndex = candles.length - 1;
+    exit = { price: candles[exitIndex].close, reason: "end_of_data" };
+  }
+  const resolved = Object.freeze({ exit: Object.freeze(exit), exitIndex });
+  exitPlanCache[index] = resolved;
+  return resolved;
 }
 
 export function runFastFilteredDevelopment({ version, backtestInput, parameters, filter, period } = {}) {
@@ -337,7 +365,7 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
   if (!parameters || typeof parameters !== "object") throw new TypeError("parameters are required");
   if (!filter || typeof filter !== "object") throw new TypeError("filter is required");
   const normalizedPeriod = normalizedDevelopmentPeriod(period);
-  const { candles, indicators, baseSignals, filterFeatures } = prepareInvariantContext({
+  const { candles, indicators, baseSignals, filterFeatures, exitPlanCache } = prepareInvariantContext({
     version,
     backtestInput,
     parameters,
@@ -413,16 +441,7 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
       riskBudget: equity * riskModel.riskPerTrade,
       regime: regimeAt(indicators, index),
     });
-    let exit = null;
-    let exitIndex = entryIndex;
-    for (; exitIndex < candles.length; exitIndex += 1) {
-      exit = exitForCandle(position, candles[exitIndex]);
-      if (exit) break;
-    }
-    if (!exit) {
-      exitIndex = candles.length - 1;
-      exit = { price: candles[exitIndex].close, reason: "end_of_data" };
-    }
+    const { exit, exitIndex } = resolveExitPlan({ candles, indicators, exitPlanCache, index, parameters, side });
     const trade = settle({ position, exit, exitCandle: candles[exitIndex], costModel, fundingRates, equity });
     trades.push(trade);
     equity = trade.equityAfter;
@@ -457,6 +476,7 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
       executionRulesMirrorV1DevelopmentKernel: true,
       singlePassDevelopmentSearch: true,
       invariantSignalContextReusedAcrossCandidates: true,
+      invariantExitPlanReusedAcrossCandidates: true,
       finalHoldoutUsedForSelection: false,
       orderSubmitted: false,
       privateAccountRequestAllowed: false,
