@@ -15,6 +15,7 @@ const V4_RSI_PERIOD = 14;
 const V4_MACD_FAST = 12;
 const V4_MACD_SLOW = 26;
 const V4_MACD_SIGNAL = 9;
+const PREPARED_CONTEXT_CACHE = new WeakMap();
 
 function mean(values) {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -116,16 +117,16 @@ function buildIndicators(candles, parameters, version) {
   });
 }
 
-function passesFilter({ version, side, candles, indicators, index, filter }) {
+function passesFilter({ version, side, candles, indicators, index, filter, preparedFeature }) {
   if (version === "V3") {
-    const features = calculateV3SignalFeatures({ candles, indicators, index });
+    const features = preparedFeature ?? calculateV3SignalFeatures({ candles, indicators, index });
     return features !== null
       && features.rvol + EPSILON >= filter.rvolMin
       && features.volumeExpansion + EPSILON >= filter.volumeExpansionMin
       && features.trendStrength + EPSILON >= filter.trendStrengthMin;
   }
   if (version === "V4") {
-    const features = calculateV4SignalFeatures({ side, candles, indicators, index });
+    const features = preparedFeature ?? calculateV4SignalFeatures({ side, candles, indicators, index });
     if (!features) return false;
     if (filter.requireRegimeAlignment && !features.regimeAligned) return false;
     if (features.emaSlopeAtr + EPSILON < filter.emaSlopeAtrMin) return false;
@@ -261,11 +262,7 @@ function settle({ position, exit, exitCandle, costModel, fundingRates, equity })
   });
 }
 
-export function runFastFilteredDevelopment({ version, backtestInput, parameters, filter, period } = {}) {
-  if (!["V3", "V4", "V5"].includes(version)) throw new TypeError("V3, V4 or V5 required");
-  if (!backtestInput || typeof backtestInput !== "object") throw new TypeError("backtestInput is required");
-  if (!parameters || typeof parameters !== "object") throw new TypeError("parameters are required");
-  if (!filter || typeof filter !== "object") throw new TypeError("filter is required");
+function normalizedDevelopmentPeriod(period) {
   const normalizedPeriod = period ?? Object.freeze({
     startTime: RESEARCH_BACKTEST_PERIOD.startTime,
     endTime: RESEARCH_BACKTEST_PERIOD.developmentEndTime,
@@ -274,11 +271,78 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
   if (normalizedPeriod.includeFinalHoldout === true || normalizedPeriod.endTime >= RESEARCH_BACKTEST_PERIOD.finalHoldoutStartTime) {
     throw new Error("FAST_FILTERED_DEVELOPMENT_HOLDOUT_LOCKED");
   }
-  const candles = [...(backtestInput.candles ?? [])]
-    .filter((candle) => candle.timestamp <= normalizedPeriod.endTime)
+  return normalizedPeriod;
+}
+
+function contextCacheKey({ version, market, side, parameters, period, sourceCandles }) {
+  return JSON.stringify({
+    version,
+    market,
+    side,
+    parameters,
+    startTime: period.startTime,
+    endTime: period.endTime,
+    candleCount: sourceCandles.length,
+    firstTimestamp: sourceCandles[0]?.timestamp ?? null,
+    lastTimestamp: sourceCandles[sourceCandles.length - 1]?.timestamp ?? null,
+  });
+}
+
+function prepareInvariantContext({ version, backtestInput, parameters, period }) {
+  const sourceCandles = backtestInput.candles ?? [];
+  if (!Array.isArray(sourceCandles) || sourceCandles.length === 0) throw new TypeError("historical candles required");
+  const key = contextCacheKey({ version, market: backtestInput.market, side: backtestInput.side ?? "long", parameters, period, sourceCandles });
+  let bucket = PREPARED_CONTEXT_CACHE.get(sourceCandles);
+  if (!bucket) {
+    bucket = new Map();
+    PREPARED_CONTEXT_CACHE.set(sourceCandles, bucket);
+  }
+  const cached = bucket.get(key);
+  if (cached) return cached;
+
+  const candles = [...sourceCandles]
+    .filter((candle) => candle.timestamp <= period.endTime)
     .sort((left, right) => left.timestamp - right.timestamp);
   if (candles.length === 0) throw new TypeError("historical candles required");
   const indicators = buildIndicators(candles, parameters, version);
+  const market = backtestInput.market;
+  const side = backtestInput.side ?? "long";
+  const baseSignals = new Array(candles.length).fill(false);
+  const filterFeatures = version === "V3" || version === "V4" ? new Array(candles.length).fill(null) : null;
+
+  for (let index = 1; index < candles.length - 1; index += 1) {
+    const candle = candles[index];
+    if (candle.timestamp < period.startTime) continue;
+    const baseSignal = calculateV1Signal({ market, side, candles, indicators, index, parameters });
+    baseSignals[index] = baseSignal;
+    if (!baseSignal || filterFeatures === null) continue;
+    filterFeatures[index] = version === "V3"
+      ? calculateV3SignalFeatures({ candles, indicators, index })
+      : calculateV4SignalFeatures({ side, candles, indicators, index });
+  }
+
+  const context = Object.freeze({
+    candles: Object.freeze(candles),
+    indicators,
+    baseSignals: Object.freeze(baseSignals),
+    filterFeatures: filterFeatures === null ? null : Object.freeze(filterFeatures),
+  });
+  bucket.set(key, context);
+  return context;
+}
+
+export function runFastFilteredDevelopment({ version, backtestInput, parameters, filter, period } = {}) {
+  if (!["V3", "V4", "V5"].includes(version)) throw new TypeError("V3, V4 or V5 required");
+  if (!backtestInput || typeof backtestInput !== "object") throw new TypeError("backtestInput is required");
+  if (!parameters || typeof parameters !== "object") throw new TypeError("parameters are required");
+  if (!filter || typeof filter !== "object") throw new TypeError("filter is required");
+  const normalizedPeriod = normalizedDevelopmentPeriod(period);
+  const { candles, indicators, baseSignals, filterFeatures } = prepareInvariantContext({
+    version,
+    backtestInput,
+    parameters,
+    period: normalizedPeriod,
+  });
   const market = backtestInput.market;
   const symbol = backtestInput.symbol;
   const side = backtestInput.side ?? "long";
@@ -298,11 +362,19 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
       index += 1;
       continue;
     }
-    if (!calculateV1Signal({ market, side, candles, indicators, index, parameters })) {
+    if (!baseSignals[index]) {
       index += 1;
       continue;
     }
-    if (!passesFilter({ version, side, candles, indicators, index, filter })) {
+    if (!passesFilter({
+      version,
+      side,
+      candles,
+      indicators,
+      index,
+      filter,
+      preparedFeature: filterFeatures?.[index] ?? null,
+    })) {
       index += 1;
       continue;
     }
@@ -384,6 +456,7 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
       baseSignalReusesV1Logic: true,
       executionRulesMirrorV1DevelopmentKernel: true,
       singlePassDevelopmentSearch: true,
+      invariantSignalContextReusedAcrossCandidates: true,
       finalHoldoutUsedForSelection: false,
       orderSubmitted: false,
       privateAccountRequestAllowed: false,
