@@ -13,6 +13,7 @@ on:
       - .github/workflows/prediction-lab-scalping-families.yml
       - market-prediction-lab/src/scalping-family-research.js
       - market-prediction-lab/scripts/run-scalping-family-research.js
+      - market-prediction-lab/scripts/aggregate-scalping-family-shards.js
       - market-prediction-lab/scripts/audit-binance-funding-timestamp.js
       - market-prediction-lab/tests/scalping-family-research.test.js
       - market-prediction-lab/src/scalping-v1-research.js
@@ -32,9 +33,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  scalping-families:
+  prepare-scalping-data:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 45
+    outputs:
+      research_sha: ${{ steps.sha.outputs.value }}
     steps:
       - name: Resolve immutable research SHA
         id: sha
@@ -89,11 +92,124 @@ jobs:
           RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
         run: node scripts/audit-binance-funding-timestamp.js artifacts/automated-research/binance-funding-timestamp-audit.json
 
-      - name: Run bounded V2-V6 scalping family research
+      - name: Upload immutable prepared research data
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-scalping-prepared-${{ steps.sha.outputs.value }}-${{ github.run_id }}
+          path: |
+            market-prediction-lab/scalping-history-cache
+            market-prediction-lab/binance-scalping-cache
+            market-prediction-lab/artifacts/automated-research/binance-funding-timestamp-audit.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Assert immutable checkout HEAD
+        if: always()
+        run: test "$(git rev-parse HEAD)" = "${{ steps.sha.outputs.value }}"
+
+  scalping-family-shards:
+    needs: prepare-scalping-data
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        dataset:
+          - spot-btc-long
+          - spot-eth-long
+          - futures-btc-long
+          - futures-eth-long
+          - futures-btc-short
+          - futures-eth-short
+    steps:
+      - name: Checkout exact research SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-scalping-data.outputs.research_sha }}
+          persist-credentials: false
+
+      - name: Verify exact checkout
+        run: test "$(git rev-parse HEAD)" = "${{ needs.prepare-scalping-data.outputs.research_sha }}"
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Download immutable prepared research data
+        uses: actions/download-artifact@v4
+        with:
+          name: prediction-lab-scalping-prepared-${{ needs.prepare-scalping-data.outputs.research_sha }}-${{ github.run_id }}
+          path: market-prediction-lab
+
+      - name: Run bounded V2-V6 shard for one dataset
         working-directory: market-prediction-lab
         env:
-          RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
-        run: node scripts/run-scalping-family-research.js scalping-history-cache binance-scalping-cache artifacts/automated-research/scalping-family-raw-results.json artifacts/automated-research/scalping-family-ranking.json
+          RESEARCH_CODE_SHA: ${{ needs.prepare-scalping-data.outputs.research_sha }}
+          SCALPING_DATASET_KEY: ${{ matrix.dataset }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/scalping-family-shards
+          for family in V2 V3 V4 V5 V6; do
+            SCALPING_FAMILY_VERSION="$family" node scripts/run-scalping-family-research.js \
+              scalping-history-cache \
+              binance-scalping-cache \
+              "artifacts/scalping-family-shards/${SCALPING_DATASET_KEY}.${family}.raw.json" \
+              "artifacts/scalping-family-shards/${SCALPING_DATASET_KEY}.${family}.ranking.json"
+          done
+
+      - name: Upload dataset shard artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-scalping-shard-${{ needs.prepare-scalping-data.outputs.research_sha }}-${{ github.run_id }}-${{ matrix.dataset }}
+          path: market-prediction-lab/artifacts/scalping-family-shards
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert immutable checkout HEAD
+        if: always()
+        run: test "$(git rev-parse HEAD)" = "${{ needs.prepare-scalping-data.outputs.research_sha }}"
+
+  aggregate-scalping-families:
+    needs:
+      - prepare-scalping-data
+      - scalping-family-shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact research SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-scalping-data.outputs.research_sha }}
+          persist-credentials: false
+
+      - name: Verify exact checkout
+        run: test "$(git rev-parse HEAD)" = "${{ needs.prepare-scalping-data.outputs.research_sha }}"
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Download immutable prepared research data
+        uses: actions/download-artifact@v4
+        with:
+          name: prediction-lab-scalping-prepared-${{ needs.prepare-scalping-data.outputs.research_sha }}-${{ github.run_id }}
+          path: market-prediction-lab
+
+      - name: Download all completed shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: prediction-lab-scalping-shard-${{ needs.prepare-scalping-data.outputs.research_sha }}-${{ github.run_id }}-*
+          path: market-prediction-lab/artifacts/scalping-family-shards
+          merge-multiple: true
+
+      - name: Aggregate exact 30-shard matrix
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ needs.prepare-scalping-data.outputs.research_sha }}
+        run: node scripts/aggregate-scalping-family-shards.js artifacts/scalping-family-shards artifacts/automated-research/scalping-family-raw-results.json artifacts/automated-research/scalping-family-ranking.json
 
       - name: Assert research isolation and multiple-testing evidence
         working-directory: market-prediction-lab
@@ -105,6 +221,7 @@ jobs:
           const ranking = JSON.parse(fs.readFileSync('artifacts/automated-research/scalping-family-ranking.json', 'utf8'));
           if (timestamp.verdict !== 'SOURCE_TIMESTAMP_PRESERVED') throw new Error('funding timestamp provenance not preserved');
           if (!timestamp.datasets.every((row) => row.sourceAndParserSameInstant === true && row.paginationCursorAppliedToArchiveData === false)) throw new Error('funding timestamp mutation/cursor contamination');
+          if (raw.shardMatrix?.expected !== 30 || raw.shardMatrix?.observed !== 30 || raw.shardMatrix?.complete !== true) throw new Error('scalping shard matrix incomplete');
           if (raw.finalHoldoutUsed !== false || raw.finalHoldoutRead !== false || ranking.finalHoldoutUsed !== false || ranking.finalHoldoutRead !== false) throw new Error('final holdout isolation violated');
           if (raw.topStrategy !== 'NONE' || ranking.topStrategy !== 'NONE') throw new Error('TOP strategy must remain NONE before holdout');
           if (raw.privateApiUsed !== false || raw.orderSubmitted !== false || ranking.privateApiUsed !== false || ranking.orderSubmitted !== false) throw new Error('private/order safety violated');
@@ -123,7 +240,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: prediction-lab-scalping-families-${{ steps.sha.outputs.value }}-${{ github.run_id }}
+          name: prediction-lab-scalping-families-${{ needs.prepare-scalping-data.outputs.research_sha }}-${{ github.run_id }}
           path: |
             market-prediction-lab/artifacts/automated-research/binance-funding-timestamp-audit.json
             market-prediction-lab/artifacts/automated-research/scalping-family-raw-results.json
@@ -135,4 +252,4 @@ jobs:
 
       - name: Assert immutable checkout HEAD
         if: always()
-        run: test "$(git rev-parse HEAD)" = "${{ steps.sha.outputs.value }}"
+        run: test "$(git rev-parse HEAD)" = "${{ needs.prepare-scalping-data.outputs.research_sha }}"
