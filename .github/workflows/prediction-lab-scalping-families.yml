@@ -110,7 +110,7 @@ jobs:
   scalping-family-shards:
     needs: prepare-scalping-data
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -121,6 +121,12 @@ jobs:
           - futures-eth-long
           - futures-btc-short
           - futures-eth-short
+        family:
+          - V2
+          - V3
+          - V4
+          - V5
+          - V6
     steps:
       - name: Checkout exact research SHA
         uses: actions/checkout@v4
@@ -142,27 +148,26 @@ jobs:
           name: prediction-lab-scalping-prepared-${{ needs.prepare-scalping-data.outputs.research_sha }}-${{ github.run_id }}
           path: market-prediction-lab
 
-      - name: Run bounded V2-V6 shard for one dataset
+      - name: Run one bounded scalping family shard
         working-directory: market-prediction-lab
         env:
           RESEARCH_CODE_SHA: ${{ needs.prepare-scalping-data.outputs.research_sha }}
           SCALPING_DATASET_KEY: ${{ matrix.dataset }}
+          SCALPING_FAMILY_VERSION: ${{ matrix.family }}
         run: |
           set -euo pipefail
           mkdir -p artifacts/scalping-family-shards
-          for family in V2 V3 V4 V5 V6; do
-            SCALPING_FAMILY_VERSION="$family" node scripts/run-scalping-family-research.js \
-              scalping-history-cache \
-              binance-scalping-cache \
-              "artifacts/scalping-family-shards/${SCALPING_DATASET_KEY}.${family}.raw.json" \
-              "artifacts/scalping-family-shards/${SCALPING_DATASET_KEY}.${family}.ranking.json"
-          done
+          node scripts/run-scalping-family-research.js \
+            scalping-history-cache \
+            binance-scalping-cache \
+            "artifacts/scalping-family-shards/${SCALPING_DATASET_KEY}.${SCALPING_FAMILY_VERSION}.raw.json" \
+            "artifacts/scalping-family-shards/${SCALPING_DATASET_KEY}.${SCALPING_FAMILY_VERSION}.ranking.json"
 
-      - name: Upload dataset shard artifacts
+      - name: Upload family shard artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: prediction-lab-scalping-shard-${{ needs.prepare-scalping-data.outputs.research_sha }}-${{ github.run_id }}-${{ matrix.dataset }}
+          name: prediction-lab-scalping-shard-${{ needs.prepare-scalping-data.outputs.research_sha }}-${{ github.run_id }}-${{ matrix.dataset }}-${{ matrix.family }}
           path: market-prediction-lab/artifacts/scalping-family-shards
           if-no-files-found: error
           retention-days: 90
