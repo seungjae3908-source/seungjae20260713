@@ -83,6 +83,13 @@ jobs:
         working-directory: market-prediction-lab
         run: node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json docs/candidate-models
 
+      - name: Collect KR and US stock history and compare candidates
+        id: stock_suite
+        if: steps.validate.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-stock-market-suite.js live-stock-market-suite docs/stock-market-suite-result.json docs/stock-candidate-models
+
       - name: Collect historical funding and compare temporal candidates
         id: derivatives_suite
         if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success'
@@ -115,9 +122,12 @@ jobs:
           name: prediction-lab-suites-${{ github.run_id }}
           path: |
             market-prediction-lab/live-market-suite
+            market-prediction-lab/live-stock-market-suite
             market-prediction-lab/live-derivatives-suite
             market-prediction-lab/live-market-structure-suite
             market-prediction-lab/docs/market-suite-result.json
+            market-prediction-lab/docs/stock-market-suite-result.json
+            market-prediction-lab/docs/stock-candidate-models
             market-prediction-lab/docs/derivatives-suite-result.json
             market-prediction-lab/docs/market-structure-suite-result.json
             market-prediction-lab/docs/market-suite-provenance.json
@@ -133,5 +143,5 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
 
       - name: Fail workflow when technical validation failed
-        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
+        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
         run: exit 1
