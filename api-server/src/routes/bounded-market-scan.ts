@@ -72,7 +72,7 @@ function strategyValue(value: unknown, timeframe: string): ScannerStrategyMode |
   const raw = String(value ?? '').trim().toLowerCase();
   const strategy = raw === ''
     ? scannerStrategyForTimeframe(timeframe)
-    : raw === 'scalping' || raw === 'swing'
+    : raw === 'scalping' || raw === 'swing' || raw === 'position'
       ? raw
       : null;
   if (!strategy || !scannerStrategyTimeframeAllowed(strategy, timeframe)) return null;
