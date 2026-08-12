@@ -1,0 +1,45 @@
+name: Prediction Lab V1 Equivalence
+
+on:
+  pull_request:
+    branches:
+      - research/automated-backtester-orchestration
+    paths:
+      - .github/workflows/prediction-lab-v1-equivalence.yml
+      - market-prediction-lab/tests/v1-independent-engine-equivalence.test.js
+      - market-prediction-lab/src/multi-market-backtest-engine.js
+      - market-prediction-lab/src/independent-strategy-backtest.js
+      - market-prediction-lab/src/research-validation-layer.js
+      - market-prediction-lab/src/research-governance.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-v1-equivalence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  equivalence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify exact checkout
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run V1 versus one-pass economic equivalence tests
+        run: node --test market-prediction-lab/tests/v1-independent-engine-equivalence.test.js
+
+      - name: Assert repository remained clean
+        run: test -z "$(git status --porcelain)"
