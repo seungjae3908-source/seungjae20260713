@@ -1,0 +1,98 @@
+name: Prediction Lab KR Cross-Sectional Momentum
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/prediction-lab-kr-momentum.yml
+      - market-prediction-lab/package.json
+      - market-prediction-lab/src/kr-cross-sectional-momentum.js
+      - market-prediction-lab/src/yahoo-stock-history.js
+      - market-prediction-lab/src/stock-swing-optimizer.js
+      - market-prediction-lab/scripts/run-kr-cross-sectional-momentum-suite.js
+      - market-prediction-lab/tests/kr-cross-sectional-momentum.test.js
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact research commit/ref to validate
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: prediction-lab-kr-momentum-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Resolve immutable research ref
+        id: research
+        shell: bash
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          ref="$PR_SHA"
+          if [ -z "$ref" ]; then ref="$INPUT_REF"; fi
+          if [ -z "$ref" ]; then ref="$GITHUB_SHA"; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout isolated research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.research.outputs.ref }}
+          persist-credentials: false
+
+      - name: Record immutable research SHA
+        id: sha
+        shell: bash
+        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate standalone prediction lab
+        working-directory: market-prediction-lab
+        run: npm run validate
+
+      - name: Run fresh-universe KR cross-sectional momentum research
+        working-directory: market-prediction-lab
+        run: npm run research:stocks:kr-momentum -- docs/kr-cross-sectional-momentum-suite-result.json
+
+      - name: Build immutable provenance
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          node <<'NODE'
+          const fs=require('fs'); const crypto=require('crypto');
+          const root='market-prediction-lab/docs';
+          const result=root+'/kr-cross-sectional-momentum-suite-result.json';
+          const digest=crypto.createHash('sha256').update(fs.readFileSync(result)).digest('hex');
+          const manifest={schemaVersion:1,researchCodeSha:process.env.RESEARCH_SHA,resultSha256:digest,branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,actualOrders:0,createdAt:new Date().toISOString()};
+          fs.writeFileSync(root+'/kr-cross-sectional-momentum-provenance.json',JSON.stringify(manifest,null,2)+'\n');
+          NODE
+
+      - name: Upload immutable KR momentum evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-kr-momentum-${{ github.run_id }}
+          path: |
+            market-prediction-lab/docs/kr-cross-sectional-momentum-suite-result.json
+            market-prediction-lab/docs/kr-cross-sectional-momentum-provenance.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert immutable checkout HEAD
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
