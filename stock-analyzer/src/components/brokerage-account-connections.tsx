@@ -3,8 +3,8 @@ import { KeyRound, RefreshCw, ShieldCheck, WalletCards, X } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
 
-type Exchange = 'kiwoom' | 'upbit' | 'bitget';
-type CredentialSource = 'vault' | 'environment' | 'none';
+type Exchange = 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+type CredentialSource = 'vault' | 'none';
 
 type Holding = {
   symbol?: string;
@@ -33,6 +33,12 @@ type Snapshot = {
   credentialsReturned?: boolean;
   checkedAt: string;
   providers: {
+    toss: ProviderBase & {
+      connectionState?: string;
+      holdingCount?: number;
+      accounts?: Array<{ accountId: string; accountMasked: string | null; accountType: string }>;
+      holdings?: Holding[];
+    };
     kiwoom: ProviderBase & {
       accountMasked?: string | null;
       kr?: {
@@ -115,7 +121,7 @@ function ErrorLine({ value }: { value?: string | null }) {
 }
 
 function SourceLine({ source, vaultError }: { source?: CredentialSource; vaultError?: string | null }) {
-  const label = source === 'vault' ? '암호화 저장소 사용' : source === 'environment' ? '서버 Secret 사용' : '연결 키 없음';
+  const label = source === 'vault' ? '회원별 암호화 저장소 사용' : '연결 키 없음';
   return <p className="mt-1 break-words text-[10px] text-muted-foreground">{label}{vaultError ? ` · Vault ${vaultError}` : ''}</p>;
 }
 
@@ -132,7 +138,7 @@ export function BrokerageAccountConnections() {
     setLoading(true);
     setError('');
     try {
-      setSnapshot(await apiGet<Snapshot>('/account-connections/snapshot'));
+      setSnapshot(await apiGet<Snapshot>('/trade-automation/account-connections/snapshot'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '계좌 연결 상태를 불러오지 못했습니다.');
     } finally {
@@ -165,11 +171,13 @@ export function BrokerageAccountConnections() {
       setSaveMessage('필수 연결 키를 모두 입력해 주세요.');
       return;
     }
-    const payload = editing === 'kiwoom'
-      ? { appKey: credentials.first.trim(), secretKey: credentials.second.trim() }
-      : editing === 'upbit'
-        ? { accessKey: credentials.first.trim(), secretKey: credentials.second.trim() }
-        : { apiKey: credentials.first.trim(), secretKey: credentials.second.trim(), passphrase: credentials.third.trim() };
+    const payload = editing === 'toss'
+      ? { clientId: credentials.first.trim(), clientSecret: credentials.second.trim() }
+      : editing === 'kiwoom'
+        ? { appKey: credentials.first.trim(), secretKey: credentials.second.trim() }
+        : editing === 'upbit'
+          ? { accessKey: credentials.first.trim(), secretKey: credentials.second.trim() }
+          : { apiKey: credentials.first.trim(), secretKey: credentials.second.trim(), passphrase: credentials.third.trim() };
 
     setSaving(true);
     setSaveMessage('');
@@ -183,8 +191,8 @@ export function BrokerageAccountConnections() {
           permissions: ['read'],
         }),
       });
-      const result = await response.json() as { configured?: boolean; credentialsExposed?: boolean; error?: string };
-      if (!response.ok || result.configured !== true || result.credentialsExposed !== false) {
+      const result = await response.json() as { configured?: boolean; credentialsReturned?: boolean; error?: string };
+      if (!response.ok || result.configured !== true || result.credentialsReturned !== false) {
         throw new Error(result.error ?? '연결 정보를 안전하게 저장하지 못했습니다.');
       }
       setCredentials(EMPTY_CREDENTIALS);
@@ -198,6 +206,7 @@ export function BrokerageAccountConnections() {
     }
   }
 
+  const toss = snapshot?.providers.toss;
   const kiwoom = snapshot?.providers.kiwoom;
   const upbit = snapshot?.providers.upbit;
   const bitget = snapshot?.providers.bitget;
@@ -233,7 +242,23 @@ export function BrokerageAccountConnections() {
       {error ? <p className="mt-3 break-words rounded-2xl bg-destructive/10 p-3 text-xs font-bold text-destructive">{error}</p> : null}
       {saveMessage ? <p role="status" className="mt-3 break-words rounded-2xl bg-secondary p-3 text-xs font-bold">{saveMessage}</p> : null}
 
-      <div className="mt-4 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-3">
+      <div className="mt-4 grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-toss">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <div className="min-w-0"><p className="truncate text-sm font-extrabold">Toss Securities · 국내/미국주식</p><p className="mt-0.5 text-[11px] text-muted-foreground">주식 우선 연결 · 승인 전 안전 대기</p></div>
+            <Status configured={Boolean(toss?.configured)} connected={Boolean(toss?.connected)} />
+          </div>
+          <SourceLine source={toss?.credentialSource} vaultError={toss?.vaultError} />
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+            <Metric label="연결 계좌" value={`${toss?.accounts?.length ?? 0}개`} />
+            <Metric label="보유 종목" value={`${toss?.holdingCount ?? 0}종목`} />
+          </div>
+          <HoldingList rows={(toss?.holdings ?? []).slice(0, 6)} />
+          <SetupButton label="Toss Securities 연결 설정" onClick={() => openSetup('toss')} />
+          {toss?.connectionState === 'WAITING_FOR_TOSS_API_ACCESS' ? <p className="mt-2 break-keep text-xs font-bold text-warning">Toss Open API 이용 승인이 필요합니다. 승인 전에는 연결됨으로 표시하지 않습니다.</p> : null}
+          <ErrorLine value={toss?.error} />
+        </article>
+
         <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-kiwoom">
           <div className="flex min-w-0 items-center justify-between gap-2">
             <div className="min-w-0"><p className="truncate text-sm font-extrabold">Kiwoom · 국내/미국주식</p><p className="mt-0.5 text-[11px] text-muted-foreground">{kiwoom?.accountMasked ? `계좌 ${kiwoom.accountMasked}` : '국내·미국 계좌 조회'}</p></div>
@@ -299,12 +324,12 @@ export function BrokerageAccountConnections() {
         <div className="fixed inset-0 z-50 flex items-end bg-black/55 p-3 sm:items-center sm:justify-center" role="dialog" aria-modal="true" aria-label={`${editing} 계좌 연결 설정`}>
           <div className="max-h-[88dvh] w-full max-w-md min-w-0 overflow-y-auto rounded-3xl bg-card p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0"><div className="flex items-center gap-2"><KeyRound className="h-5 w-5 text-primary" /><h3 className="text-base font-black">{editing === 'kiwoom' ? 'Kiwoom' : editing === 'upbit' ? 'Upbit' : 'Bitget'} 연결 설정</h3></div><p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">키는 AES-256-GCM 암호화 저장 후 서버 조회에만 사용하며 다시 화면에 표시하지 않습니다.</p></div>
+              <div className="min-w-0"><div className="flex items-center gap-2"><KeyRound className="h-5 w-5 text-primary" /><h3 className="text-base font-black">{editing === 'toss' ? 'Toss Securities' : editing === 'kiwoom' ? 'Kiwoom' : editing === 'upbit' ? 'Upbit' : 'Bitget'} 연결 설정</h3></div><p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">키는 AES-256-GCM 암호화 저장 후 서버 조회에만 사용하며 다시 화면에 표시하지 않습니다.</p></div>
               <button type="button" aria-label="연결 설정 닫기" onClick={() => { setEditing(null); setCredentials(EMPTY_CREDENTIALS); setSaveMessage(''); }} className="shrink-0 rounded-xl border border-card-border p-2"><X className="h-4 w-4" /></button>
             </div>
             <div className="mt-4 space-y-3">
-              <SecretField label={editing === 'kiwoom' ? 'App Key' : editing === 'upbit' ? 'Access Key' : 'API Key'} value={credentials.first} onChange={(first) => setCredentials((value) => ({ ...value, first }))} testId={`${editing}-credential-primary`} />
-              <SecretField label="Secret Key" value={credentials.second} onChange={(second) => setCredentials((value) => ({ ...value, second }))} testId={`${editing}-credential-secret`} />
+              <SecretField label={editing === 'toss' ? 'Client ID' : editing === 'kiwoom' ? 'App Key' : editing === 'upbit' ? 'Access Key' : 'API Key'} value={credentials.first} onChange={(first) => setCredentials((value) => ({ ...value, first }))} testId={`${editing}-credential-primary`} />
+              <SecretField label={editing === 'toss' ? 'Client Secret' : 'Secret Key'} value={credentials.second} onChange={(second) => setCredentials((value) => ({ ...value, second }))} testId={`${editing}-credential-secret`} />
               {editing === 'bitget' ? <SecretField label="Passphrase" value={credentials.third} onChange={(third) => setCredentials((value) => ({ ...value, third }))} testId="bitget-credential-passphrase" /> : null}
             </div>
             <div className="mt-4 rounded-2xl bg-warning/10 p-3 text-xs font-bold text-warning">API 키 권한은 조회(Read)만 허용하세요. 출금 권한이 포함된 키는 서버가 저장을 거부합니다.</div>
