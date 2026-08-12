@@ -101,6 +101,7 @@ const groups = {
     path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
     path.join(root, 'src/routes/account-connections.contract.test.ts'),
+    path.join(root, 'src/routes/stock-orderbook.test.ts'),
     path.join(root, 'src/services/market-information.service.test.ts'),
     path.join(root, 'src/services/public-market-http.test.ts'),
     path.join(root, 'src/lib/deployment-identity.test.ts'),
@@ -134,6 +135,7 @@ const groups = {
     path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
     path.join(root, 'src/routes/market-information.smoke.test.ts'),
     path.join(root, 'src/routes/unified-search.smoke.test.ts'),
+    path.join(root, 'src/routes/stock-orderbook.smoke.test.ts'),
   ],
 };
 
