@@ -7,10 +7,14 @@ on:
       - .github/workflows/prediction-lab-kr-momentum.yml
       - market-prediction-lab/package.json
       - market-prediction-lab/src/kr-cross-sectional-momentum.js
+      - market-prediction-lab/src/kr-momentum-risk-overlay-candidate.js
+      - market-prediction-lab/src/kr-momentum-exposure-overlay.js
       - market-prediction-lab/src/yahoo-stock-history.js
       - market-prediction-lab/src/stock-swing-optimizer.js
       - market-prediction-lab/scripts/run-kr-cross-sectional-momentum-suite.js
+      - market-prediction-lab/scripts/run-kr-momentum-exposure-overlay-suite.js
       - market-prediction-lab/tests/kr-cross-sectional-momentum.test.js
+      - market-prediction-lab/tests/kr-momentum-exposure-overlay.test.js
   workflow_dispatch:
     inputs:
       research_ref:
@@ -67,6 +71,10 @@ jobs:
         working-directory: market-prediction-lab
         run: npm run research:stocks:kr-momentum -- docs/kr-cross-sectional-momentum-suite-result.json
 
+      - name: Run preregistered KR momentum exposure overlay research
+        working-directory: market-prediction-lab
+        run: npm run research:stocks:kr-momentum-overlay -- docs/kr-momentum-exposure-overlay-suite-result.json
+
       - name: Build immutable provenance
         shell: bash
         env:
@@ -75,9 +83,10 @@ jobs:
           node <<'NODE'
           const fs=require('fs'); const crypto=require('crypto');
           const root='market-prediction-lab/docs';
-          const result=root+'/kr-cross-sectional-momentum-suite-result.json';
-          const digest=crypto.createHash('sha256').update(fs.readFileSync(result)).digest('hex');
-          const manifest={schemaVersion:1,researchCodeSha:process.env.RESEARCH_SHA,resultSha256:digest,branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,actualOrders:0,createdAt:new Date().toISOString()};
+          const digest=(file)=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          const momentum=root+'/kr-cross-sectional-momentum-suite-result.json';
+          const overlay=root+'/kr-momentum-exposure-overlay-suite-result.json';
+          const manifest={schemaVersion:2,researchCodeSha:process.env.RESEARCH_SHA,momentumResultSha256:digest(momentum),exposureOverlayResultSha256:digest(overlay),branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,actualOrders:0,createdAt:new Date().toISOString()};
           fs.writeFileSync(root+'/kr-cross-sectional-momentum-provenance.json',JSON.stringify(manifest,null,2)+'\n');
           NODE
 
@@ -87,6 +96,7 @@ jobs:
           name: prediction-lab-kr-momentum-${{ github.run_id }}
           path: |
             market-prediction-lab/docs/kr-cross-sectional-momentum-suite-result.json
+            market-prediction-lab/docs/kr-momentum-exposure-overlay-suite-result.json
             market-prediction-lab/docs/kr-cross-sectional-momentum-provenance.json
           if-no-files-found: error
           retention-days: 90
