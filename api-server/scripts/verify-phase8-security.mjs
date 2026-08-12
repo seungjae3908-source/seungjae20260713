@@ -50,6 +50,7 @@ const automationMigration = await text('api-server/supabase/migrations/202608030
 const aiChatRoute = await text('api-server/src/routes/ai-chat.ts');
 const aiChatService = await text('api-server/src/services/ai-chat.service.ts');
 const automationUi = await text('stock-analyzer/src/components/trade-automation-settings.tsx');
+const unifiedJournalService = await text('api-server/src/services/unified-trade-journal.service.ts');
 assert(automationService.includes("process.env.ORDER_EXECUTION_ENABLED === 'true'")
   && automationService.includes("process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true'"), 'live execution does not require both server and explicit activation gates');
 assert(recoveryWorker.includes("process.env.TRADE_RECOVERY_WORKER_ENABLED === 'true'")
@@ -74,15 +75,30 @@ assert(automationRoute.includes("router.post('/admin/emergency-stop', requireAdm
   'persistent global emergency stop is not restricted to an admin route and service-only storage');
 assert(!automationUi.includes('credentials:'), 'frontend contains an exchange credential payload');
 assert(!/(?:trade-automation|trade-execution|place-order|\/v1\/orders)/i.test(`${aiChatRoute}\n${aiChatService}`), 'AI chat imports or calls the trading execution surface');
+assert(unifiedJournalService.includes("TOSS_LIVE_READ_INTEGRATION = 'BLOCKED_BY_FREE_STATUS_UNVERIFIED'"),
+  'Toss live read integration is not fail-closed while free status is unverified');
+assert(unifiedJournalService.includes("AI_EXTERNAL_REVIEW_STATUS = 'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY'"),
+  'unified journal does not explicitly disable paid external AI review');
+assert(unifiedJournalService.includes("finalCostDelta: '0_KRW'")
+  && unifiedJournalService.includes('actualOrderRequests: 0')
+  && unifiedJournalService.includes('cancelRequests: 0')
+  && unifiedJournalService.includes('amendRequests: 0')
+  && unifiedJournalService.includes('transferRequests: 0')
+  && unifiedJournalService.includes('withdrawalRequests: 0'),
+  'unified journal does not expose the required zero-cost and zero-mutation counters');
+assert(!/(?:fetch\(|axios\.|placeOrder\(|cancelOrder\(|amendOrder\(|transfer\(|withdraw\()/i.test(unifiedJournalService),
+  'unified journal contains an outbound request or trading mutation call');
 
 const phase8SensitiveFiles = [
   'api-server/src/services/paper-journal-analytics.service.ts',
   'api-server/src/services/paper-journal-sync.service.ts',
+  'api-server/src/services/unified-trade-journal.service.ts',
   'api-server/src/services/member-administration.service.ts',
   'api-server/src/routes/paper-journal.ts',
   'api-server/src/routes/admin.ts',
   'stock-analyzer/src/lib/paper-journal-sync.ts',
   'stock-analyzer/src/lib/paper-journal-sync-storage.ts',
+  'stock-analyzer/src/components/unified-trade-journal-panel.tsx',
   'stock-analyzer/src/pages/phase8-release-candidate-e2e.tsx',
   'api-server/src/services/trade-automation.service.ts',
   'api-server/src/services/trade-execution.service.ts',
