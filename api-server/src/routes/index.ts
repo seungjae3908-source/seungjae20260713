@@ -24,7 +24,11 @@ import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
 import unifiedSearchRouter from './unified-search';
 import accountConnectionsRouter from './account-connections';
-import { telegramWebhookRouter, userBrokerTelegramRouter } from './user-broker-telegram';
+import {
+  manualPortfolioNotificationBridge,
+  telegramWebhookRouter,
+  userBrokerTelegramRouter,
+} from './user-broker-telegram';
 import {
   requireAdmin,
   requireAuthenticated,
@@ -105,6 +109,7 @@ router.use('/', backtestsRouter);
 router.use('/paper-trading', requireCapability('canAccessPaperTrading'));
 router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
+router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canPlaceOrders'));
 router.use('/trade-automation', tradeAutomationRouter);
