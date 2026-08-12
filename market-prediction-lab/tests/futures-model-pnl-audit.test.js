@@ -48,6 +48,16 @@ function records(rows) {
   }));
 }
 
+function nonFundingExecutionCost(result) {
+  return result.trades.reduce((sum, trade) => sum
+    + (trade.costs?.entryFee ?? 0)
+    + (trade.costs?.exitFee ?? 0)
+    + (trade.costs?.tax ?? 0)
+    + (trade.costs?.slippage ?? 0)
+    + (trade.costs?.spread ?? 0)
+    + (trade.costs?.latency ?? 0), 0);
+}
+
 test("direction decision requires both probability threshold and directional edge", () => {
   assert.equal(futuresDecisionFromProbabilities({ bullish: 0.4, neutral: 0.3, bearish: 0.3 }, {
     minDirectionalProbability: 0.45,
@@ -95,22 +105,24 @@ test("futures simulation stays two-sided and includes execution/funding costs", 
   assert.equal(result.modelId, "test-frozen-model");
 });
 
-test("cost stress never reduces configured fees, spread, slippage or funding magnitude", () => {
+test("execution cost stress increases non-funding costs and cannot improve aggregate PnL", () => {
   const rows = candles();
   const fundingRates = Array.from({ length: 12 }, (_, index) => ({
     timestamp: rows[40 + index * 10].timestamp,
     rate: 0.00015,
   }));
-  const base = simulateFrozenFuturesModel({
-    symbol: "BTCUSDT", timeframe: "1h", candles: rows, fundingRates, records: records(rows), model,
+  const common = {
+    symbol: "BTCUSDT",
+    timeframe: "1h",
+    candles: rows,
+    fundingRates,
+    records: records(rows),
+    model,
     params: { minDirectionalProbability: 0.45, minProbabilityEdge: 0.05, stopAtrMultiple: 1.5, rewardRisk: 1.5, maxHoldBars: 6 },
-    costMultiplier: 1,
-  });
-  const stress = simulateFrozenFuturesModel({
-    symbol: "BTCUSDT", timeframe: "1h", candles: rows, fundingRates, records: records(rows), model,
-    params: { minDirectionalProbability: 0.45, minProbabilityEdge: 0.05, stopAtrMultiple: 1.5, rewardRisk: 1.5, maxHoldBars: 6 },
-    costMultiplier: 1.5,
-  });
+  };
+  const base = simulateFrozenFuturesModel({ ...common, costMultiplier: 1 });
+  const stress = simulateFrozenFuturesModel({ ...common, costMultiplier: 1.5 });
   assert.equal(base.trades.length, stress.trades.length);
-  assert.ok(stress.metrics.totalExecutionCost >= base.metrics.totalExecutionCost);
+  assert.ok(nonFundingExecutionCost(stress) >= nonFundingExecutionCost(base));
+  assert.ok(stress.metrics.netPnl <= base.metrics.netPnl + 1e-9);
 });
