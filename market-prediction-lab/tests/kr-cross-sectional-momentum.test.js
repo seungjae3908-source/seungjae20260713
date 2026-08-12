@@ -29,7 +29,8 @@ function dataset(symbol, drift, count = 900) {
 }
 
 function universe(prefix, drifts) {
-  return drifts.map((drift, index) => dataset(`${prefix}${String(index + 1).padStart(2, "0")}`, drift));
+  const normalizedPrefix = String(prefix).padStart(4, "0");
+  return drifts.map((drift, index) => dataset(`${normalizedPrefix}${String(index + 1).padStart(2, "0")}`, drift));
 }
 
 test("KR momentum grid is bounded and does not hide metrics behind a weighted score", () => {
