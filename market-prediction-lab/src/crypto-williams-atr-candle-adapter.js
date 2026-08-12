@@ -13,6 +13,14 @@ function finitePositive(value, name) {
   return value;
 }
 
+function validatePeriod(value, fallback, name) {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 2 || resolved > 200) {
+    throw new PredictionInputError(`${name} must be an integer between 2 and 200`, { name, value: resolved });
+  }
+  return resolved;
+}
+
 function validateCandle(raw, index, previousTimestamp) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new PredictionInputError(`candles[${index}] must be an object`);
@@ -54,7 +62,6 @@ export function aggregateKst09Sessions(rawCandles) {
 
   const sessions = [];
   let current = null;
-
   for (const candle of validated) {
     const sessionKey = getKst09SessionKey(candle.timestamp);
     if (!current || current.sessionKey !== sessionKey) {
@@ -71,7 +78,6 @@ export function aggregateKst09Sessions(rawCandles) {
       };
       continue;
     }
-
     current.high = Math.max(current.high, candle.high);
     current.low = Math.min(current.low, candle.low);
     current.close = candle.close;
@@ -95,34 +101,38 @@ function trueRange(session, previousClose) {
   );
 }
 
-export function buildCryptoWilliamsAtrInputFromCandles(raw) {
+export function buildCryptoWilliamsAtrInputFromCandles(raw, configOverrides = {}) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new PredictionInputError("candle adapter input must be an object");
   }
+  if (!configOverrides || typeof configOverrides !== "object" || Array.isArray(configOverrides)) {
+    throw new PredictionInputError("config must be an object");
+  }
 
+  const maPeriod = validatePeriod(configOverrides.maPeriod, 5, "config.maPeriod");
+  const atrPeriod = validatePeriod(configOverrides.atrPeriod, 14, "config.atrPeriod");
+  const requiredCompletedSessions = Math.max(maPeriod, atrPeriod + 1);
   const sessions = aggregateKst09Sessions(raw.candles);
-  if (sessions.length < 16) {
+
+  if (sessions.length < requiredCompletedSessions + 1) {
     throw new PredictionInputError(
-      "at least 16 KST09 sessions are required: 15 completed sessions plus the current session",
-      { sessionCount: sessions.length },
+      `at least ${requiredCompletedSessions + 1} KST09 sessions are required for MA${maPeriod}/ATR${atrPeriod} without lookahead`,
+      { sessionCount: sessions.length, requiredCompletedSessions, maPeriod, atrPeriod },
     );
   }
 
   const currentSession = sessions.at(-1);
   const completedSessions = sessions.slice(0, -1);
   const previousSession = completedSessions.at(-1);
-  const maWindow = completedSessions.slice(-5);
-  if (maWindow.length !== 5) {
-    throw new PredictionInputError("five completed sessions are required for MA5");
-  }
+  const maWindow = completedSessions.slice(-maPeriod);
 
   const trValues = [];
   for (let index = 1; index < completedSessions.length; index += 1) {
     trValues.push(trueRange(completedSessions[index], completedSessions[index - 1].close));
   }
-  const atrWindow = trValues.slice(-14);
-  if (atrWindow.length !== 14) {
-    throw new PredictionInputError("fifteen completed sessions are required to calculate ATR14 without lookahead");
+  const atrWindow = trValues.slice(-atrPeriod);
+  if (maWindow.length !== maPeriod || atrWindow.length !== atrPeriod) {
+    throw new PredictionInputError("insufficient completed-session history for configured indicators");
   }
 
   const movingAverage = simpleMean(maWindow.map((session) => session.close));
@@ -157,9 +167,11 @@ export function buildCryptoWilliamsAtrInputFromCandles(raw) {
       previousLow: round(previousSession.low),
       sessionOpen: round(currentSession.open),
       currentPrice: round(currentSession.close),
-      movingAverage5: round(movingAverage),
-      atr14: round(atr),
-      atrDefinition: "SMA_OF_LAST_14_COMPLETED_SESSION_TRUE_RANGES",
+      movingAverage: round(movingAverage),
+      movingAveragePeriod: maPeriod,
+      atr: round(atr),
+      atrPeriod,
+      atrDefinition: `SMA_OF_LAST_${atrPeriod}_COMPLETED_SESSION_TRUE_RANGES`,
       completedSessionCount: completedSessions.length,
       currentSessionCandleCount: currentSession.candleCount,
       latestTimestamp: currentSession.lastTimestamp,
@@ -168,7 +180,7 @@ export function buildCryptoWilliamsAtrInputFromCandles(raw) {
 }
 
 export function evaluateCryptoWilliamsAtrFromCandles(raw, configOverrides = {}) {
-  const built = buildCryptoWilliamsAtrInputFromCandles(raw);
+  const built = buildCryptoWilliamsAtrInputFromCandles(raw, configOverrides);
   const strategyResult = evaluateCryptoWilliamsAtrSignal(built.strategyInput, configOverrides);
   const scannerSignal = buildCryptoWilliamsScannerSignal(strategyResult, { symbol: raw.symbol });
   const shadowOrderPlan = strategyResult.eligibleForShadow && typeof raw.symbol === "string" && raw.symbol.length > 0
