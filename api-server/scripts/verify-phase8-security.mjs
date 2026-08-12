@@ -44,12 +44,25 @@ assert(legacyStockBlockIndex >= 0 && stocksMountIndex > legacyStockBlockIndex, '
 const automationRoute = await text('api-server/src/routes/trade-automation.ts');
 const automationService = await text('api-server/src/services/trade-automation.service.ts');
 const automationRepository = await text('api-server/src/services/trade-automation.repository.ts');
+const orderRecovery = await text('api-server/src/services/trade-order-recovery.service.ts');
+const recoveryWorker = await text('api-server/src/services/trade-recovery-worker.service.ts');
 const automationMigration = await text('api-server/supabase/migrations/2026080301_trade_automation_integration.sql');
 const aiChatRoute = await text('api-server/src/routes/ai-chat.ts');
 const aiChatService = await text('api-server/src/services/ai-chat.service.ts');
 const automationUi = await text('stock-analyzer/src/components/trade-automation-settings.tsx');
 assert(automationService.includes("process.env.ORDER_EXECUTION_ENABLED === 'true'")
   && automationService.includes("process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true'"), 'live execution does not require both server and explicit activation gates');
+assert(recoveryWorker.includes("process.env.TRADE_RECOVERY_WORKER_ENABLED === 'true'")
+  && recoveryWorker.includes("process.env.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED === 'true'"),
+  'trade recovery worker is not guarded by both explicit read-only lookup gates');
+assert(!/(?:\.execute\(|\.cancel\(|placeOrder\(|cancelOrder\(|amendOrder\(|changeLeverage\(|transfer\(|withdraw\()/i.test(recoveryWorker),
+  'trade recovery worker imports or calls a trading mutation surface');
+assert(recoveryWorker.includes('ordersSubmitted: 0')
+  && recoveryWorker.includes('ordersCancelled: 0')
+  && recoveryWorker.includes('privateMutationRequests: 0'),
+  'trade recovery worker does not expose zero mutation counters');
+assert(orderRecovery.includes('KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT'),
+  'Kiwoom recovery is not fail-closed while the official status contract is unverified');
 assert(automationRoute.includes('encryptTradingCredentials'), 'member exchange credentials are not encrypted before storage');
 assert(automationRepository.includes('hasSupabaseServerKey') && automationRepository.includes('secureClient()'),
   'encrypted exchange credentials are not restricted to the server Supabase client');
@@ -73,6 +86,8 @@ const phase8SensitiveFiles = [
   'stock-analyzer/src/pages/phase8-release-candidate-e2e.tsx',
   'api-server/src/services/trade-automation.service.ts',
   'api-server/src/services/trade-execution.service.ts',
+  'api-server/src/services/trade-order-recovery.service.ts',
+  'api-server/src/services/trade-recovery-worker.service.ts',
   'api-server/src/services/trade-automation.repository.ts',
   'api-server/src/routes/trade-automation.ts',
 ];
