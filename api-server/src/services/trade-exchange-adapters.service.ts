@@ -83,6 +83,14 @@ export function prepareTossHoldings(credentials: TossCredentials, accountSeq: st
   return tossAuthorizedRequest(credentials, 'GET', '/api/v1/holdings', accountSeq, query);
 }
 
+export function prepareTossBuyingPower(
+  credentials: TossCredentials,
+  accountSeq: string,
+  currency: 'KRW' | 'USD',
+) {
+  return tossAuthorizedRequest(credentials, 'GET', '/api/v1/buying-power', accountSeq, `currency=${currency}`);
+}
+
 export function prepareTossOrderHistory(
   credentials: TossCredentials,
   accountSeq: string,

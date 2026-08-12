@@ -8,6 +8,7 @@ import {
   prepareTossAccounts,
   prepareTossAmend,
   prepareTossCancel,
+  prepareTossBuyingPower,
   prepareTossHoldings,
   prepareTossOrder,
   prepareTossOrderHistory,
@@ -55,6 +56,11 @@ test('Toss official OAuth and private read requests use the documented contracts
   assert.equal(holdings.path, '/api/v1/holdings');
   assert.equal(holdings.query, 'symbol=AAPL');
   assert.equal(holdings.headers['X-Tossinvest-Account'], '7');
+
+  const buyingPower = prepareTossBuyingPower(credentials, '7', 'KRW');
+  assert.equal(buyingPower.path, '/api/v1/buying-power');
+  assert.equal(buyingPower.query, 'currency=KRW');
+  assert.equal(buyingPower.headers['X-Tossinvest-Account'], '7');
 
   const history = prepareTossOrderHistory(credentials, '7', 'OPEN', 'cursor-fixture');
   assert.equal(history.path, '/api/v1/orders');

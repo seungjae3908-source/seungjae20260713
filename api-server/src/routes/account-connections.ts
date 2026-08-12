@@ -8,6 +8,7 @@ import {
   prepareKiwoomToken,
   prepareKiwoomUsAccount,
   prepareTossAccounts,
+  prepareTossBuyingPower,
   prepareTossHoldings,
   prepareTossToken,
   prepareUpbitAccounts,
@@ -23,6 +24,7 @@ import {
 } from '../services/kiwoom-readonly-response.service';
 import { createSupabaseTradingRepository } from '../services/trade-automation.repository';
 import { decryptTradingCredentials } from '../services/trade-credential-vault.service';
+import { normalizeBrokerPortfolioSnapshot } from '../services/broker-portfolio-normalizer.service';
 import type { BrokerConnectionProvider } from '../services/trade-automation.types';
 
 const router: IRouter = Router();
@@ -187,9 +189,14 @@ function tossHolding(accountId: string, row: JsonRecord) {
     currentPrice: finite(row.lastPrice),
     evaluationAmount: finite(marketValue.amount),
     profitLoss: finite(profitLoss.amount),
-    profitRate: finite(profitLoss.rate),
+    profitRate: finite(profitLoss.rate) == null ? null : Number(finite(profitLoss.rate)) * 100,
     currency: stringValue(row.currency),
   };
+}
+
+function tossCurrencyAmounts(value: unknown) {
+  const amounts = nestedRecord(value);
+  return { KRW: finite(amounts.krw), USD: finite(amounts.usd) };
 }
 
 async function readToss(state: CredentialState) {
@@ -215,14 +222,47 @@ async function readToss(state: CredentialState) {
     const snapshots = await Promise.allSettled(accountRows.map(async (account) => {
       const accountId = String(account.accountSeq ?? '').trim();
       if (!accountId) throw new Error('TOSS_ACCOUNT_ID_MISSING');
-      const payload = await fetchPreparedReadOnly<JsonRecord>(TOSS_BASE, prepareTossHoldings(credentials, accountId));
-      const result = nestedRecord(payload.result);
+      const [holdingsResult, krwBuyingPower, usdBuyingPower] = await Promise.allSettled([
+        fetchPreparedReadOnly<JsonRecord>(TOSS_BASE, prepareTossHoldings(credentials, accountId)),
+        fetchPreparedReadOnly<JsonRecord>(TOSS_BASE, prepareTossBuyingPower(credentials, accountId, 'KRW')),
+        fetchPreparedReadOnly<JsonRecord>(TOSS_BASE, prepareTossBuyingPower(credentials, accountId, 'USD')),
+      ]);
+      const result = holdingsResult.status === 'fulfilled' ? nestedRecord(holdingsResult.value.result) : {};
       const items = Array.isArray(result.items)
         ? result.items.filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
         : [];
-      return items.map((row) => tossHolding(accountId, row));
+      const marketValue = nestedRecord(result.marketValue);
+      const profitLoss = nestedRecord(result.profitLoss);
+      const buyingPower = [krwBuyingPower, usdBuyingPower].flatMap((entry) => {
+        if (entry.status !== 'fulfilled') return [];
+        const power = nestedRecord(entry.value.result);
+        const currency = stringValue(power.currency);
+        if (currency !== 'KRW' && currency !== 'USD') return [];
+        return [{
+          provider: 'toss', accountId, currency,
+          available: finite(power.cashBuyingPower), locked: null, equity: null,
+        }];
+      });
+      return {
+        accountId,
+        holdings: items.map((row) => tossHolding(accountId, row)),
+        balances: buyingPower,
+        summary: {
+          totalPurchaseAmount: tossCurrencyAmounts(result.totalPurchaseAmount),
+          marketValue: tossCurrencyAmounts(marketValue.amount),
+          profitLoss: tossCurrencyAmounts(profitLoss.amount),
+          profitRate: finite(profitLoss.rate) == null ? null : Number(finite(profitLoss.rate)) * 100,
+        },
+        errors: [
+          holdingsResult.status === 'rejected' ? errorCode(holdingsResult.reason) : null,
+          krwBuyingPower.status === 'rejected' ? `KRW_${errorCode(krwBuyingPower.reason)}` : null,
+          usdBuyingPower.status === 'rejected' ? `USD_${errorCode(usdBuyingPower.reason)}` : null,
+        ].filter(Boolean),
+      };
     }));
-    const holdings = snapshots.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+    const accountSnapshots = snapshots.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+    const holdings = accountSnapshots.flatMap((result) => result.holdings);
+    const balances = accountSnapshots.flatMap((result) => result.balances);
     return {
       provider: 'toss', configured: true, connected: true, readOnly: true,
       credentialSource: state.source, vaultError: state.vaultError, connectionState: 'CONNECTED_READ_ONLY',
@@ -230,8 +270,10 @@ async function readToss(state: CredentialState) {
         accountId: String(row.accountSeq ?? '').trim(), accountMasked: maskAccount(row.accountNo),
         accountType: stringValue(row.accountType),
       })),
-      holdingCount: holdings.length, holdings,
-      error: snapshots.some((result) => result.status === 'rejected') ? 'TOSS_HOLDINGS_PARTIAL' : null,
+      holdingCount: holdings.length, holdings, balances,
+      accountSummaries: accountSnapshots.map(({ accountId, summary, errors }) => ({ accountId, summary, errors })),
+      error: snapshots.some((result) => result.status === 'rejected')
+        || accountSnapshots.some((result) => result.errors.length > 0) ? 'TOSS_ACCOUNT_SNAPSHOT_PARTIAL' : null,
     };
   } catch (error) {
     return {
@@ -467,13 +509,16 @@ export async function memberAccountConnectionSnapshot(req: AuthenticatedRequest)
     readUpbit(states.upbit),
     readBitget(states.bitget),
   ]);
+  const checkedAt = new Date().toISOString();
+  const providers = { toss, kiwoom, upbit, bitget };
   return {
     ok: true,
     readOnly: true,
     mutationsAllowed: false,
     credentialsReturned: false,
-    providers: { toss, kiwoom, upbit, bitget },
-    checkedAt: new Date().toISOString(),
+    providers,
+    portfolio: normalizeBrokerPortfolioSnapshot({ providers, checkedAt }),
+    checkedAt,
   };
 }
 
