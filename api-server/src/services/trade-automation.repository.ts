@@ -68,13 +68,11 @@ function assertOwner(actual: string, expected: string) {
   if (actual !== expected) throw new Error('USER_SCOPE_MISMATCH');
 }
 
-export function createSupabaseTradingRepository(accessToken: string, authenticatedUserId: string): TradingRepository {
-  if (!accessToken || !authenticatedUserId) throw new Error('LOGIN_REQUIRED');
-  const client = getUserSupabase(accessToken);
-  const secureClient = () => {
-    if (!hasSupabaseServerKey()) throw new Error('TRADE_CREDENTIAL_STORAGE_UNAVAILABLE');
-    return getSupabase();
-  };
+function createBoundSupabaseTradingRepository(
+  client: SupabaseClient,
+  secureClient: () => SupabaseClient,
+  authenticatedUserId: string,
+): TradingRepository {
   const owned = (userId: string) => assertOwner(userId, authenticatedUserId);
   return {
     async getGlobalEmergencyStop() {
@@ -204,6 +202,31 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
       return (data ?? []).map((row) => row.payload as TradingOrderEvent);
     },
   };
+}
+
+export function createSupabaseTradingRepository(accessToken: string, authenticatedUserId: string): TradingRepository {
+  if (!accessToken || !authenticatedUserId) throw new Error('LOGIN_REQUIRED');
+  const secureClient = () => {
+    if (!hasSupabaseServerKey()) throw new Error('TRADE_CREDENTIAL_STORAGE_UNAVAILABLE');
+    return getSupabase();
+  };
+  return createBoundSupabaseTradingRepository(getUserSupabase(accessToken), secureClient, authenticatedUserId);
+}
+
+export function createSupabaseTradingWorkerRepository(userId: string): TradingRepository {
+  if (!userId || !hasSupabaseServerKey()) throw new Error('TRADE_RECONCILIATION_STORAGE_UNAVAILABLE');
+  const client = getSupabase();
+  return createBoundSupabaseTradingRepository(client, () => client, userId);
+}
+
+export async function listSupabaseReconciliationCandidates(limit = 50): Promise<TradingOrder[]> {
+  if (!hasSupabaseServerKey()) throw new Error('TRADE_RECONCILIATION_STORAGE_UNAVAILABLE');
+  const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+  const { data, error } = await getSupabase().from('trade_orders').select('payload')
+    .in('state', ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED'])
+    .order('updated_at', { ascending: true }).limit(safeLimit);
+  if (error) throw databaseError();
+  return (data ?? []).map((row) => row.payload as TradingOrder);
 }
 
 function toConnection(row: Record<string, unknown>): ExchangeConnection {
