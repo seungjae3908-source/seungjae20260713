@@ -15,6 +15,8 @@ export const CRYPTO_WILLIAMS_ATR_DEFAULTS = Object.freeze({
 });
 
 const SUPPORTED_MARKETS = Object.freeze(["CRYPTO_SPOT", "CRYPTO_FUTURES"]);
+const SUPPORTED_DIRECTIONS = Object.freeze(["LONG", "SHORT"]);
+const SESSION_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function finite(value, name) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -42,6 +44,34 @@ function nonNegative(value, name) {
 function optionalFinite(value, name) {
   if (value === undefined || value === null) return undefined;
   return finite(value, name);
+}
+
+function validateMarket(market) {
+  if (!SUPPORTED_MARKETS.includes(market)) {
+    throw new PredictionInputError(`market must be one of: ${SUPPORTED_MARKETS.join(", ")}`);
+  }
+  return market;
+}
+
+function validateDirection(direction, market) {
+  if (!SUPPORTED_DIRECTIONS.includes(direction)) {
+    throw new PredictionInputError(`direction must be one of: ${SUPPORTED_DIRECTIONS.join(", ")}`);
+  }
+  if (market === "CRYPTO_SPOT" && direction !== "LONG") {
+    throw new PredictionInputError("CRYPTO_SPOT supports LONG only in V1");
+  }
+  return direction;
+}
+
+function validateSessionKey(value, name = "entrySessionKey") {
+  if (typeof value !== "string" || !SESSION_KEY_PATTERN.test(value)) {
+    throw new PredictionInputError(`${name} must use YYYY-MM-DD format`, { name, value });
+  }
+  const parsed = Date.parse(`${value}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== value) {
+    throw new PredictionInputError(`${name} must be a valid calendar date`, { name, value });
+  }
+  return value;
 }
 
 function normalizeConfig(overrides = {}) {
@@ -90,9 +120,7 @@ function validateInput(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new PredictionInputError("input must be an object");
   }
-  if (!SUPPORTED_MARKETS.includes(raw.market)) {
-    throw new PredictionInputError(`market must be one of: ${SUPPORTED_MARKETS.join(", ")}`);
-  }
+  const market = validateMarket(raw.market);
 
   const previousHigh = positive(raw.previousHigh, "previousHigh");
   const previousLow = positive(raw.previousLow, "previousLow");
@@ -124,7 +152,7 @@ function validateInput(raw) {
     throw new PredictionInputError("liquidationPrice must be greater than zero");
   }
 
-  if (raw.market === "CRYPTO_SPOT") {
+  if (market === "CRYPTO_SPOT") {
     if (raw.leverage !== undefined && leverage !== 1) {
       throw new PredictionInputError("CRYPTO_SPOT leverage must be 1");
     }
@@ -134,7 +162,7 @@ function validateInput(raw) {
   }
 
   return Object.freeze({
-    market: raw.market,
+    market,
     previousHigh,
     previousLow,
     sessionOpen,
@@ -230,7 +258,7 @@ export function evaluateCryptoWilliamsAtrSignal(rawInput, configOverrides = {}) 
     liquidationPrice: input.liquidationPrice,
     market: input.market,
   });
-  const liquidationBlocked = direction && liquidation.verified && liquidation.safe === false;
+  const liquidationBlocked = Boolean(direction && liquidation.verified && liquidation.safe === false);
   const status = liquidationBlocked ? "REJECTED" : direction ? "ENTRY" : "NO_ENTRY";
   if (liquidationBlocked) reasons.push("liquidation_guard_rejected");
 
@@ -282,7 +310,64 @@ export function evaluateCryptoWilliamsAtrSignal(rawInput, configOverrides = {}) 
       sessionTimezone: config.sessionTimezone,
       sessionOpenHour: config.sessionOpenHour,
     }),
+    exitPolicy: Object.freeze({
+      atrStop: true,
+      nextSessionOpen: true,
+      sessionTimezone: config.sessionTimezone,
+      sessionOpenHour: config.sessionOpenHour,
+    }),
     reasons: Object.freeze(reasons),
+  });
+}
+
+export function evaluateCryptoWilliamsAtrExit(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PredictionInputError("exit input must be an object");
+  }
+
+  const market = validateMarket(raw.market);
+  const direction = validateDirection(raw.direction, market);
+  const stopPrice = positive(raw.stopPrice, "stopPrice");
+  const riskPrice = positive(raw.riskPrice, "riskPrice");
+  const entrySessionKey = validateSessionKey(raw.entrySessionKey);
+  const currentSessionKey = getKst09SessionKey(raw.timestamp);
+
+  if (currentSessionKey < entrySessionKey) {
+    throw new PredictionInputError("timestamp cannot precede the entry session", {
+      entrySessionKey,
+      currentSessionKey,
+    });
+  }
+
+  let shouldExit = false;
+  let reason = "HOLD";
+
+  if (currentSessionKey > entrySessionKey) {
+    shouldExit = true;
+    reason = "NEXT_SESSION_OPEN";
+  } else if (direction === "LONG" && riskPrice <= stopPrice) {
+    shouldExit = true;
+    reason = "ATR_STOP";
+  } else if (direction === "SHORT" && riskPrice >= stopPrice) {
+    shouldExit = true;
+    reason = "ATR_STOP";
+  }
+
+  return Object.freeze({
+    strategyId: CRYPTO_WILLIAMS_ATR_STRATEGY_ID,
+    market,
+    direction,
+    shouldExit,
+    reason,
+    riskPrice: round(riskPrice),
+    stopPrice: round(stopPrice),
+    entrySessionKey,
+    currentSessionKey,
+    side: shouldExit ? (direction === "LONG" ? "SELL" : "BUY") : null,
+    orderType: shouldExit ? "MARKET_SIMULATED" : null,
+    reduceOnly: shouldExit && market === "CRYPTO_FUTURES",
+    liveExecutionAllowed: false,
+    privateExchangeApiAllowed: false,
   });
 }
 
@@ -300,6 +385,7 @@ export function buildCryptoWilliamsScannerSignal(result, metadata = {}) {
     stopPrice: result.levels?.stopPrice ?? null,
     riskFraction: result.sizing?.riskFraction ?? null,
     quantity: result.sizing?.quantity ?? 0,
+    exitPolicy: result.exitPolicy ?? null,
     executionMode: result.executionMode,
     liveExecutionAllowed: false,
     reasons: result.reasons ?? Object.freeze([]),
@@ -317,6 +403,7 @@ export function buildCryptoWilliamsShadowOrderPlan(result, metadata = {}) {
   if (typeof metadata.symbol !== "string" || metadata.symbol.length === 0) {
     throw new PredictionInputError("metadata.symbol is required for a shadow order plan");
   }
+  const entrySessionKey = getKst09SessionKey(metadata.timestamp);
 
   return Object.freeze({
     mode: "SHADOW",
@@ -329,6 +416,8 @@ export function buildCryptoWilliamsShadowOrderPlan(result, metadata = {}) {
     quantity: result.sizing.quantity,
     referenceEntryPrice: result.levels.entryPrice,
     protectiveStopPrice: result.levels.stopPrice,
+    entrySessionKey,
+    exitPolicy: result.exitPolicy,
     reduceOnlyOnExit: result.market === "CRYPTO_FUTURES",
     liveExecutionAllowed: false,
     privateExchangeApiAllowed: false,
