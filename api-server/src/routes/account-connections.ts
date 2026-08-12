@@ -25,6 +25,11 @@ import {
 import { createSupabaseTradingRepository } from '../services/trade-automation.repository';
 import { decryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeBrokerPortfolioSnapshot } from '../services/broker-portfolio-normalizer.service';
+import {
+  assertBrokerJournalReadRequest,
+  importBrokerJournal,
+  type BrokerJournalImportCredentials,
+} from '../services/broker-journal-import.service';
 import type { BrokerConnectionProvider } from '../services/trade-automation.types';
 
 const router: IRouter = Router();
@@ -169,6 +174,37 @@ async function credentialStates(req: AuthenticatedRequest): Promise<CredentialSt
     const vaultError = errorCode(error);
     return Object.fromEntries(exchanges.map((exchange) => [exchange, { ...fallback[exchange], vaultError }])) as CredentialStates;
   }
+}
+
+function journalCredentialInput(states: CredentialStates): BrokerJournalImportCredentials {
+  const tossClientId = stringValue(states.toss.credentials?.clientId);
+  const tossClientSecret = stringValue(states.toss.credentials?.clientSecret);
+  const upbitAccessKey = stringValue(states.upbit.credentials?.accessKey);
+  const upbitSecretKey = stringValue(states.upbit.credentials?.secretKey);
+  const bitgetApiKey = stringValue(states.bitget.credentials?.apiKey);
+  const bitgetSecretKey = stringValue(states.bitget.credentials?.secretKey);
+  const bitgetPassphrase = stringValue(states.bitget.credentials?.passphrase);
+  return {
+    toss: tossClientId && tossClientSecret ? { clientId: tossClientId, clientSecret: tossClientSecret } : null,
+    upbit: upbitAccessKey && upbitSecretKey ? { accessKey: upbitAccessKey, secretKey: upbitSecretKey } : null,
+    bitget: bitgetApiKey && bitgetSecretKey && bitgetPassphrase
+      ? { apiKey: bitgetApiKey, secretKey: bitgetSecretKey, passphrase: bitgetPassphrase }
+      : null,
+    kiwoomConfigured: Boolean(states.kiwoom.credentials && kiwoomInfrastructureConfigured()),
+  };
+}
+
+async function executeBrokerJournalRead(
+  provider: 'TOSS' | 'UPBIT' | 'BITGET',
+  baseUrl: string,
+  request: PreparedExchangeRequest,
+) {
+  const expectedBase = { TOSS: TOSS_BASE, UPBIT: UPBIT_BASE, BITGET: BITGET_BASE }[provider];
+  if (baseUrl !== expectedBase) throw new Error('BROKER_JOURNAL_BASE_URL_FORBIDDEN');
+  assertBrokerJournalReadRequest(provider, request);
+  if (request.method === 'GET') return fetchPreparedReadOnly<unknown>(baseUrl, request);
+  if (provider === 'TOSS' && request.path === '/oauth2/token') return fetchPrepared<unknown>(baseUrl, request);
+  throw new Error('BROKER_JOURNAL_MUTATION_FORBIDDEN');
 }
 
 function nestedRecord(value: unknown): JsonRecord {
@@ -525,6 +561,23 @@ export async function memberAccountConnectionSnapshot(req: AuthenticatedRequest)
 router.get('/snapshot', async (req: AuthenticatedRequest, res) => {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   return res.json(await memberAccountConnectionSnapshot(req));
+});
+
+export async function memberBrokerJournalSnapshot(req: AuthenticatedRequest) {
+  const states = await credentialStates(req);
+  const imported = await importBrokerJournal(journalCredentialInput(states), executeBrokerJournalRead);
+  return {
+    ok: true,
+    readOnly: true,
+    mutationsAllowed: false,
+    credentialsReturned: false,
+    ...imported,
+  };
+}
+
+router.get('/journal', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  return res.json(await memberBrokerJournalSnapshot(req));
 });
 
 export default router;

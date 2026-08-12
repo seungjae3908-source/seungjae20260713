@@ -14,6 +14,7 @@ import { credentialConfigurationStatus, encryptTradingCredentials } from '../ser
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import {
+  memberBrokerJournalSnapshot,
   memberAccountConnectionSnapshot,
   memberAccountConnectionStatus,
 } from './account-connections';
@@ -202,6 +203,13 @@ router.get('/account-connections/snapshot', async (req: AuthenticatedRequest, re
   try {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.json(await memberAccountConnectionSnapshot(req));
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.get('/account-connections/journal', async (req: AuthenticatedRequest, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    return res.json(await memberBrokerJournalSnapshot(req));
   } catch (error) { return errorResponse(res, error); }
 });
 
