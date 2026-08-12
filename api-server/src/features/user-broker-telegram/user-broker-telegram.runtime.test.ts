@@ -60,8 +60,8 @@ function input(): TradingPlanInput {
   const observedAt = new Date().toISOString();
   return {
     exchange: 'upbit', accountMode: 'paper', strategyId: 'runtime-e2e', signalId: 'signal-runtime-e2e',
-    symbol: 'BTC', market: 'KRW', side: 'buy', orderType: 'limit', quantity: 0.01,
-    quoteAmount: null, limitPrice: 100_000_000, estimatedKrw: 1_000_000, stopPrice: 98_000_000,
+    symbol: 'BTC', market: 'KRW', side: 'buy', orderType: 'limit', quantity: 0.001,
+    quoteAmount: null, limitPrice: 100_000_000, estimatedKrw: 100_000, stopPrice: 98_000_000,
     targetPrices: [103_000_000], splitRatios: [1], signalReasons: ['runtime-e2e'],
     marketSnapshot: {
       observedAt, riskObservedAt: observedAt, dataDelayMs: 0, oneMinuteMovePercent: 0,
