@@ -32,7 +32,14 @@ function registerServiceWorker() {
 	if (!('serviceWorker' in navigator)) return;
 
 	window.addEventListener('load', () => {
-		navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+		navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => {
+			const checkForUpdate = () => registration.update().catch(() => undefined);
+
+			void checkForUpdate();
+			document.addEventListener('visibilitychange', checkForUpdate);
+			window.addEventListener('pageshow', checkForUpdate);
+			window.setInterval(checkForUpdate, 5 * 60 * 1000);
+		}).catch(() => undefined);
 	});
 }
 
