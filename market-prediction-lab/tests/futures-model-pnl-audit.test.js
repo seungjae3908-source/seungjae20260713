@@ -44,7 +44,7 @@ function records(rows) {
     symbol: "BTCUSDT",
     timeframe: "1h",
     anchorTimestamp: row.timestamp,
-    features: { return5: index % 2 === 0 ? 0.2 : -0.2 },
+    features: { return5: Math.floor(index / 12) % 2 === 0 ? 0.2 : -0.2 },
   }));
 }
 
