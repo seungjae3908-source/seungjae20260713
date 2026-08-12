@@ -66,6 +66,7 @@ const groups = {
     path.join(root, 'src/services/crypto-signal-scanner.service.test.ts'),
     path.join(root, 'src/services/scanner-crypto-price-precision.service.test.ts'),
     path.join(root, 'src/lib/bounded-work-pool.test.ts'),
+    path.join(root, 'src/lib/cache.test.ts'),
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(root, 'src/providers/toss.test.ts'),
     path.join(root, 'src/services/telegram-notification.service.test.ts'),
@@ -165,10 +166,15 @@ try {
     outputFiles.push(outputFile);
   }
 
+  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
+  // serially so host-level event-loop contention cannot consume a scanner deadline
+  // before the test body starts. Test coverage and every assertion remain unchanged.
   const testArguments = mode === 'phase9'
     ? ['--test', '--test-concurrency=1', ...outputFiles]
     : ['--test', ...outputFiles];
-  const result = spawnSync(process.execPath, testArguments, { cwd: repositoryRoot, stdio: 'inherit' });
+  const result = spawnSync(process.execPath, testArguments, {
+    cwd: repositoryRoot, stdio: 'inherit',
+  });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 } finally {
