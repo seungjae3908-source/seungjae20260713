@@ -39,6 +39,7 @@ const COIN_CONDITIONS = [
   { value: 'volume', label: '거래량' },
   { value: 'breakout', label: '돌파' },
   { value: 'pullback', label: '눌림' },
+  { value: 'williams', label: 'Williams+ATR' },
 ] as const;
 
 const VIEWS: Array<{ value: ScannerView; label: string; description: string }> = [
@@ -445,6 +446,11 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             {stockView && (
               <p className="mt-2 break-keep text-[10px] text-muted-foreground">
                 {conditions.length === 0 ? '종합 탐색 · 특정 조건 강제 없음' : `선택 ${conditions.length}개 · Soft evidence로 사용`}
+              </p>
+            )}
+            {!stockView && coinCondition === 'williams' && (
+              <p className="mt-2 break-keep text-[10px] text-muted-foreground">
+                KST 09:00 기준 전일 범위 + MA5 + ATR14 확인 · 현물 LONG only · 선물 LONG/SHORT · 공개 데이터/Paper·Shadow 연구 전용
               </p>
             )}
           </details>
