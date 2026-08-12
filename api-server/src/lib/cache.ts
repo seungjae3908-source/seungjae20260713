@@ -6,6 +6,10 @@
 // only for entries with TTL >= 5 min (disclosures, listings, signals, ...) so
 // short-lived quote keys don't churn the table. Survives server restarts.
 //
+// Concurrent misses for the same key share one in-flight promise. This avoids
+// request bursts stampeding the same upstream provider while preserving the
+// existing TTL and error semantics: loader failures are never cached.
+//
 // The persistent tier is best-effort: if Supabase is unconfigured, the table
 // is missing, or a call fails, we log once and behave exactly like the old
 // memory-only cache. Loader errors are never cached in either tier.
@@ -17,6 +21,7 @@ interface Entry<T> {
 }
 
 const store = new Map<string, Entry<unknown>>();
+const inFlight = new Map<string, Promise<unknown>>();
 
 const PERSIST_TABLE = 'market_cache';
 const PERSIST_MIN_TTL_MS = 5 * 60 * 1000;
@@ -83,21 +88,37 @@ export async function cached<T>(
     return hit.value;
   }
 
-  if (persistable(ttlMs)) {
-    const persisted = await readPersistent<T>(key);
-    if (persisted) {
-      store.set(key, persisted);
-      return persisted.value;
-    }
+  const pending = inFlight.get(key) as Promise<T> | undefined;
+  if (pending) {
+    return pending;
   }
 
-  const value = await loader();
-  const expires = now + ttlMs;
-  store.set(key, { value, expires });
-  if (persistable(ttlMs)) {
-    writePersistent(key, value, ttlMs, expires);
+  const request = (async () => {
+    if (persistable(ttlMs)) {
+      const persisted = await readPersistent<T>(key);
+      if (persisted) {
+        store.set(key, persisted);
+        return persisted.value;
+      }
+    }
+
+    const value = await loader();
+    const expires = Date.now() + ttlMs;
+    store.set(key, { value, expires });
+    if (persistable(ttlMs)) {
+      writePersistent(key, value, ttlMs, expires);
+    }
+    return value;
+  })();
+
+  inFlight.set(key, request);
+  try {
+    return await request;
+  } finally {
+    if (inFlight.get(key) === request) {
+      inFlight.delete(key);
+    }
   }
-  return value;
 }
 
 export const TTL = {
