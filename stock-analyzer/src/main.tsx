@@ -28,6 +28,7 @@ function applyInitialAccent() {
 }
 
 function registerServiceWorker() {
+	if (!import.meta.env.PROD) return;
 	if (import.meta.env.VITE_PHASE4_E2E === 'true' || import.meta.env.VITE_PHASE11_E2E === 'false') return;
 	if (!('serviceWorker' in navigator)) return;
 
