@@ -53,7 +53,7 @@ test('automatic trading and every exchange default to OFF', () => {
 
 test('automatic shadow policy remains user-configured and can submit only non-live plans', async () => {
   const automatic = normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+    mode: 'automatic', automaticEnabled: true,
     exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
     enabledAssets: { bitget: [], upbit: ['ETH'], kiwoom: [], toss: [] }, enabledStrategies: ['breakout-v1'],
   });
@@ -76,7 +76,6 @@ test('automatic shadow policy remains user-configured and can submit only non-li
 
 test('automatic shadow policy cannot elevate a plan to live account execution', async () => {
   const policy = normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY,
     mode: 'automatic', automaticEnabled: true,
     exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
     enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
@@ -243,7 +242,6 @@ test('persistent global emergency stop blocks plan creation and approval, then a
 
   await repository.setGlobalEmergencyStop(false, USER_A);
   const automaticPolicy = normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY,
     mode: 'automatic', automaticEnabled: true,
     exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
     enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
