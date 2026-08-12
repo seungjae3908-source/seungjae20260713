@@ -39,6 +39,11 @@ export function prepareTossPrices(credentials: TossCredentials, rawSymbol: strin
   return get(credentials, '/api/v1/prices', `symbols=${encodeURIComponent(symbol(rawSymbol))}`);
 }
 
+export function prepareTossMarketCalendar(credentials: TossCredentials, market: 'KR' | 'US') {
+  if (market !== 'KR' && market !== 'US') throw new Error('TOSS_MARKET_INVALID');
+  return get(credentials, `/api/v1/market-calendar/${market}`, '');
+}
+
 export function prepareTossSellableQuantity(
   credentials: TossCredentials,
   accountSeq: string,
@@ -63,6 +68,8 @@ export function assertTossPreSubmissionRead(request: PreparedExchangeRequest) {
   const allowed = new Set([
     '/api/v1/orderbook',
     '/api/v1/prices',
+    '/api/v1/market-calendar/KR',
+    '/api/v1/market-calendar/US',
     '/api/v1/buying-power',
     '/api/v1/sellable-quantity',
     '/api/v1/commissions',
