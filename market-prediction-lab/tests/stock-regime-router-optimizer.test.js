@@ -97,6 +97,6 @@ test("registered market grid remains bounded and preserves both regime dimension
     maxHoldBars: [10, 20],
     maxGapPercent: [4],
   });
-  assert.equal(grid.length, 512);
+  assert.equal(grid.length, 256);
   assert.ok(grid.every((row) => row.trendEfficiencyMin > row.rangeEfficiencyMax));
 });
