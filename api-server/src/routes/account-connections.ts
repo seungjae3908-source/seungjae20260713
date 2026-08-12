@@ -7,10 +7,14 @@ import {
   prepareKiwoomDomesticAccount,
   prepareKiwoomToken,
   prepareKiwoomUsAccount,
+  prepareTossAccounts,
+  prepareTossHoldings,
+  prepareTossToken,
   prepareUpbitAccounts,
   type BitgetCredentials,
   type KiwoomCredentials,
   type PreparedExchangeRequest,
+  type TossCredentials,
   type UpbitCredentials,
 } from '../services/trade-exchange-adapters.service';
 import {
@@ -19,11 +23,12 @@ import {
 } from '../services/kiwoom-readonly-response.service';
 import { createSupabaseTradingRepository } from '../services/trade-automation.repository';
 import { decryptTradingCredentials } from '../services/trade-credential-vault.service';
-import type { TradingExchange } from '../services/trade-automation.types';
+import type { BrokerConnectionProvider } from '../services/trade-automation.types';
 
 const router: IRouter = Router();
 const UPBIT_BASE = 'https://api.upbit.com';
 const BITGET_BASE = 'https://api.bitget.com';
+const TOSS_BASE = 'https://openapi.tossinvest.com';
 const BITGET_PRODUCT_TYPE = 'USDT-FUTURES';
 const KIWOOM_REAL_BASE = process.env.KIWOOM_BASE_URL?.trim() || 'http://158.247.235.32:3000/kiwoom';
 const KIWOOM_MOCK_BASE = 'https://mockapi.kiwoom.com';
@@ -38,7 +43,7 @@ type CredentialState = {
   vaultError: string | null;
 };
 
-type CredentialStates = Record<TradingExchange, CredentialState>;
+type CredentialStates = Record<BrokerConnectionProvider, CredentialState>;
 
 function finite(value: unknown): number | null {
   const normalized = typeof value === 'string' ? value.replace(/[,+%₩$]/g, '').trim() : value;
@@ -137,33 +142,11 @@ async function fetchPreparedKiwoom<T>(request: PreparedExchangeRequest): Promise
   return payload as T;
 }
 
-function environmentCredentials(exchange: TradingExchange): JsonRecord | null {
-  if (exchange === 'kiwoom') {
-    const appKey = process.env.KIWOOM_APP_KEY?.trim() ?? '';
-    const secretKey = process.env.KIWOOM_APP_SECRET?.trim() ?? '';
-    return appKey && secretKey ? { appKey, secretKey } : null;
-  }
-  if (exchange === 'upbit') {
-    const accessKey = process.env.UPBIT_ACCESS_KEY?.trim() ?? '';
-    const secretKey = process.env.UPBIT_SECRET_KEY?.trim() ?? '';
-    return accessKey && secretKey ? { accessKey, secretKey } : null;
-  }
-  const apiKey = process.env.BITGET_API_KEY?.trim() ?? '';
-  const secretKey = process.env.BITGET_SECRET_KEY?.trim() ?? '';
-  const passphrase = process.env.BITGET_PASSPHRASE?.trim() ?? '';
-  return apiKey && secretKey && passphrase ? { apiKey, secretKey, passphrase } : null;
-}
-
 async function credentialStates(req: AuthenticatedRequest): Promise<CredentialStates> {
-  const exchanges: TradingExchange[] = ['kiwoom', 'upbit', 'bitget'];
-  const fallback = Object.fromEntries(exchanges.map((exchange) => {
-    const credentials = environmentCredentials(exchange);
-    return [exchange, {
-      source: credentials ? 'environment' : 'none',
-      credentials,
-      vaultError: null,
-    } satisfies CredentialState];
-  })) as CredentialStates;
+  const exchanges: BrokerConnectionProvider[] = ['toss', 'kiwoom', 'upbit', 'bitget'];
+  const fallback = Object.fromEntries(exchanges.map((exchange) => [exchange, {
+    source: 'none', credentials: null, vaultError: null,
+  } satisfies CredentialState])) as CredentialStates;
 
   if (!req.member?.id || !req.accessToken) return fallback;
 
@@ -183,6 +166,79 @@ async function credentialStates(req: AuthenticatedRequest): Promise<CredentialSt
   } catch (error) {
     const vaultError = errorCode(error);
     return Object.fromEntries(exchanges.map((exchange) => [exchange, { ...fallback[exchange], vaultError }])) as CredentialStates;
+  }
+}
+
+function nestedRecord(value: unknown): JsonRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function tossHolding(accountId: string, row: JsonRecord) {
+  const marketValue = nestedRecord(row.marketValue);
+  const profitLoss = nestedRecord(row.profitLoss);
+  return {
+    provider: 'toss',
+    accountId,
+    market: stringValue(row.marketCountry) === 'US' ? 'US_STOCK' : 'KR_STOCK',
+    symbol: stringValue(row.symbol),
+    name: stringValue(row.name),
+    quantity: finite(row.quantity),
+    averagePrice: finite(row.averagePurchasePrice),
+    currentPrice: finite(row.lastPrice),
+    evaluationAmount: finite(marketValue.amount),
+    profitLoss: finite(profitLoss.amount),
+    profitRate: finite(profitLoss.rate),
+    currency: stringValue(row.currency),
+  };
+}
+
+async function readToss(state: CredentialState) {
+  const clientId = stringValue(state.credentials?.clientId);
+  const clientSecret = stringValue(state.credentials?.clientSecret);
+  if (!clientId || !clientSecret) {
+    return {
+      provider: 'toss', configured: false, connected: false, readOnly: true,
+      credentialSource: state.source, vaultError: state.vaultError,
+      connectionState: 'WAITING_FOR_TOSS_API_ACCESS', accounts: [], holdings: [],
+      error: 'TOSS_API_ACCESS_REQUIRED',
+    };
+  }
+  try {
+    const tokenPayload = await fetchPrepared<JsonRecord>(TOSS_BASE, prepareTossToken({ clientId, clientSecret }));
+    const accessToken = stringValue(tokenPayload.access_token);
+    if (!accessToken) throw new Error('TOSS_TOKEN_FAILED');
+    const credentials = { clientId, clientSecret, accessToken } satisfies TossCredentials;
+    const accountPayload = await fetchPreparedReadOnly<JsonRecord>(TOSS_BASE, prepareTossAccounts(credentials));
+    const accountRows = Array.isArray(accountPayload.result)
+      ? accountPayload.result.filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+      : [];
+    const snapshots = await Promise.allSettled(accountRows.map(async (account) => {
+      const accountId = String(account.accountSeq ?? '').trim();
+      if (!accountId) throw new Error('TOSS_ACCOUNT_ID_MISSING');
+      const payload = await fetchPreparedReadOnly<JsonRecord>(TOSS_BASE, prepareTossHoldings(credentials, accountId));
+      const result = nestedRecord(payload.result);
+      const items = Array.isArray(result.items)
+        ? result.items.filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+        : [];
+      return items.map((row) => tossHolding(accountId, row));
+    }));
+    const holdings = snapshots.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+    return {
+      provider: 'toss', configured: true, connected: true, readOnly: true,
+      credentialSource: state.source, vaultError: state.vaultError, connectionState: 'CONNECTED_READ_ONLY',
+      accounts: accountRows.map((row) => ({
+        accountId: String(row.accountSeq ?? '').trim(), accountMasked: maskAccount(row.accountNo),
+        accountType: stringValue(row.accountType),
+      })),
+      holdingCount: holdings.length, holdings,
+      error: snapshots.some((result) => result.status === 'rejected') ? 'TOSS_HOLDINGS_PARTIAL' : null,
+    };
+  } catch (error) {
+    return {
+      provider: 'toss', configured: true, connected: false, readOnly: true,
+      credentialSource: state.source, vaultError: state.vaultError, connectionState: 'PROVIDER_DOWN',
+      accounts: [], holdings: [], error: errorCode(error),
+    };
   }
 }
 
@@ -364,15 +420,19 @@ async function readBitget(state: CredentialState) {
   };
 }
 
-router.get('/status', async (req: AuthenticatedRequest, res) => {
-  res.setHeader('Cache-Control', 'no-store, max-age=0');
+export async function memberAccountConnectionStatus(req: AuthenticatedRequest) {
   const states = await credentialStates(req);
-  return res.json({
+  return {
     ok: true,
     readOnly: true,
     mutationsAllowed: false,
     credentialsReturned: false,
     providers: {
+      toss: {
+        configured: Boolean(states.toss.credentials), credentialSource: states.toss.source,
+        vaultError: states.toss.vaultError,
+        connectionState: states.toss.credentials ? 'CONFIGURED' : 'WAITING_FOR_TOSS_API_ACCESS',
+      },
       kiwoom: {
         configured: Boolean(states.kiwoom.credentials && kiwoomInfrastructureConfigured()),
         credentialSource: states.kiwoom.source,
@@ -391,25 +451,35 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       },
     },
     checkedAt: new Date().toISOString(),
-  });
+  };
+}
+
+router.get('/status', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  return res.json(await memberAccountConnectionStatus(req));
 });
 
-router.get('/snapshot', async (req: AuthenticatedRequest, res) => {
-  res.setHeader('Cache-Control', 'no-store, max-age=0');
+export async function memberAccountConnectionSnapshot(req: AuthenticatedRequest) {
   const states = await credentialStates(req);
-  const [kiwoom, upbit, bitget] = await Promise.all([
+  const [toss, kiwoom, upbit, bitget] = await Promise.all([
+    readToss(states.toss),
     readKiwoom(states.kiwoom),
     readUpbit(states.upbit),
     readBitget(states.bitget),
   ]);
-  return res.json({
+  return {
     ok: true,
     readOnly: true,
     mutationsAllowed: false,
     credentialsReturned: false,
-    providers: { kiwoom, upbit, bitget },
+    providers: { toss, kiwoom, upbit, bitget },
     checkedAt: new Date().toISOString(),
-  });
+  };
+}
+
+router.get('/snapshot', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  return res.json(await memberAccountConnectionSnapshot(req));
 });
 
 export default router;

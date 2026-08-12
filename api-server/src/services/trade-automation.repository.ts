@@ -3,7 +3,7 @@ import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supab
 import {
   DEFAULT_TRADING_POLICY,
   type ExchangeConnection,
-  type TradingExchange,
+  type BrokerConnectionProvider,
   type TradingOrder,
   type TradingOrderEvent,
   type TradingOrderState,
@@ -28,7 +28,7 @@ export interface TradingRepository {
   getPolicy(userId: string): Promise<TradingPolicy>;
   savePolicy(userId: string, policy: TradingPolicy): Promise<TradingPolicy>;
   getConnections(userId: string): Promise<ExchangeConnection[]>;
-  getConnection(userId: string, exchange: TradingExchange): Promise<ExchangeConnection | null>;
+  getConnection(userId: string, exchange: BrokerConnectionProvider): Promise<ExchangeConnection | null>;
   saveConnection(connection: ExchangeConnection): Promise<void>;
   findPlanByIdempotency(userId: string, key: string): Promise<TradingPlan | null>;
   getPlan(userId: string, id: string): Promise<TradingPlan | null>;
@@ -103,7 +103,7 @@ export class InMemoryTradingRepository implements TradingRepository {
   async getPolicy(userId: string) { return copy(this.policies.get(userId) ?? normalizeTradingPolicy(DEFAULT_TRADING_POLICY)); }
   async savePolicy(userId: string, policy: TradingPolicy) { this.policies.set(userId, copy(policy)); return copy(policy); }
   async getConnections(userId: string) { return [...this.connections.values()].filter((item) => item.userId === userId).map(copy); }
-  async getConnection(userId: string, exchange: TradingExchange) {
+  async getConnection(userId: string, exchange: BrokerConnectionProvider) {
     const value = this.connections.get(`${userId}:${exchange}`);
     return value ? copy(value) : null;
   }
@@ -484,7 +484,7 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
 
 function toConnection(row: Record<string, unknown>): ExchangeConnection {
   return {
-    userId: String(row.user_id), exchange: String(row.exchange) as TradingExchange,
+    userId: String(row.user_id), exchange: String(row.exchange) as BrokerConnectionProvider,
     accountMode: String(row.account_mode) as ExchangeConnection['accountMode'],
     configured: row.configured === true,
     encryptedCredentials: row.encrypted_credentials ? String(row.encrypted_credentials) : null,

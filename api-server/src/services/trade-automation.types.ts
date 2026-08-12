@@ -1,4 +1,5 @@
 export type TradingExchange = 'bitget' | 'upbit' | 'kiwoom';
+export type BrokerConnectionProvider = TradingExchange | 'toss';
 export type TradingMode = 'approval' | 'automatic';
 export type TradingAccountMode = 'paper' | 'mock' | 'live';
 export type TradingSide = 'buy' | 'sell' | 'long' | 'short';
@@ -137,7 +138,7 @@ export type TradingPolicy = {
 
 export type ExchangeConnection = {
   userId: string;
-  exchange: TradingExchange;
+  exchange: BrokerConnectionProvider;
   accountMode: TradingAccountMode;
   configured: boolean;
   encryptedCredentials: string | null;
