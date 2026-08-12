@@ -17,6 +17,7 @@
     "collect:bitget": "node scripts/collect-bitget.js",
     "research:stocks": "node scripts/run-stock-market-suite.js",
     "research:stocks:pnl": "node scripts/run-stock-pnl-suite.js",
+    "research:spot:upbit": "node scripts/run-upbit-spot-suite.js",
     "research:funding": "node scripts/run-derivatives-suite.js",
     "research:structure": "node scripts/run-market-structure-suite.js",
     "backtest:v1": "node scripts/run-v1-backtest.js",
