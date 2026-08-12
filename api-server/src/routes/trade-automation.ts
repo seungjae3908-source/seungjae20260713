@@ -13,10 +13,20 @@ import { createSupabaseSplitOrderRepository } from '../services/trade-split-orde
 import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
-import type { TradingExchange, TradingPlan, TradingPlanInput } from '../services/trade-automation.types';
+import {
+  memberAccountConnectionSnapshot,
+  memberAccountConnectionStatus,
+} from './account-connections';
+import type {
+  BrokerConnectionProvider,
+  TradingExchange,
+  TradingPlan,
+  TradingPlanInput,
+} from '../services/trade-automation.types';
 
 const router: IRouter = Router();
 const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom']);
+const CONNECTION_PROVIDERS = new Set<BrokerConnectionProvider>(['toss', 'kiwoom', 'upbit', 'bitget']);
 const CANCEL_RECONCILIATION_STATES = new Set([
   'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED',
 ]);
@@ -86,6 +96,12 @@ function exchangeValue(value: unknown): TradingExchange {
   const exchange = String(value ?? '').toLowerCase() as TradingExchange;
   if (!EXCHANGES.has(exchange)) throw new Error('UNSUPPORTED_EXCHANGE');
   return exchange;
+}
+
+function connectionProviderValue(value: unknown): BrokerConnectionProvider {
+  const provider = String(value ?? '').toLowerCase() as BrokerConnectionProvider;
+  if (!CONNECTION_PROVIDERS.has(provider)) throw new Error('UNSUPPORTED_CONNECTION_PROVIDER');
+  return provider;
 }
 
 function isSplitPlan(plan: TradingPlan) {
@@ -175,6 +191,20 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
   } catch (error) { return errorResponse(res, error); }
 });
 
+router.get('/account-connections/status', async (req: AuthenticatedRequest, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    return res.json(await memberAccountConnectionStatus(req));
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.get('/account-connections/snapshot', async (req: AuthenticatedRequest, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    return res.json(await memberAccountConnectionSnapshot(req));
+  } catch (error) { return errorResponse(res, error); }
+});
+
 router.put('/policy', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
@@ -197,14 +227,16 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
 router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
-    const exchange = exchangeValue(req.params.exchange);
+    const exchange = connectionProviderValue(req.params.exchange);
     const credentials = req.body?.credentials;
     if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) throw new Error('CREDENTIALS_REQUIRED');
     const permissions = Array.isArray(req.body?.permissions) ? req.body.permissions.map(String).map((item: string) => item.toLowerCase()) : [];
-    if (permissions.some((item: string) => item.includes('withdraw') || item.includes('출금'))) {
-      throw new Error('WITHDRAWAL_PERMISSION_NOT_ALLOWED');
+    if (permissions.some((item: string) => item.includes('withdraw') || item.includes('출금')
+      || item.includes('transfer') || item.includes('이체'))) {
+      throw new Error('WITHDRAWAL_OR_TRANSFER_PERMISSION_NOT_ALLOWED');
     }
-    const allowedKeys: Record<TradingExchange, string[]> = {
+    const allowedKeys: Record<BrokerConnectionProvider, string[]> = {
+      toss: ['clientId', 'clientSecret'],
       bitget: ['apiKey', 'secretKey', 'passphrase'],
       upbit: ['accessKey', 'secretKey'],
       kiwoom: ['appKey', 'secretKey'],

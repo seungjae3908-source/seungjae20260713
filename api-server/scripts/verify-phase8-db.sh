@@ -111,6 +111,9 @@ run_sql "verify final trade order atomicity and admin-only RLS" "api-server/supa
 run_sql "apply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
 run_sql "reapply risk envelope and atomic pending-split cancellation idempotently" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
 run_sql "verify risk envelope invariant and fast-move split cancellation" "api-server/supabase/test/trade_risk_envelope_kill_switch_integration.sql"
+run_sql "allow Toss in the encrypted member broker connection vault" "api-server/supabase/migrations/2026081202_toss_broker_connection.sql"
+run_sql "reapply Toss broker connection constraint idempotently" "api-server/supabase/migrations/2026081202_toss_broker_connection.sql"
+run_sql "verify Toss broker connection ownership RLS and provider constraint" "api-server/supabase/test/toss_broker_connection_rls_integration.sql"
 echo "[phase8-db] verify concurrent fast-move split cancellation race"
 bash "${ROOT_DIR}/api-server/scripts/verify-trade-split-cancel-concurrency.sh"
 
@@ -121,6 +124,8 @@ if "${PSQL[@]}" --command "begin; create table public.phase8_partial_failure_pro
 fi
 "${PSQL[@]}" --command "do \$\$ begin if to_regclass('public.phase8_partial_failure_probe') is not null then raise exception 'partial migration object remained'; end if; end \$\$;"
 
+run_sql "rollback Toss broker connection constraint" "api-server/supabase/migrations/2026081202_toss_broker_connection.down.sql"
+run_sql "assert Toss broker connection rollback cleanup" "api-server/supabase/test/toss_broker_connection_rollback_assert.sql"
 run_sql "rollback risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.down.sql"
 run_sql "assert risk envelope rollback cleanup" "api-server/supabase/test/trade_risk_envelope_kill_switch_rollback_assert.sql"
 run_sql "rollback final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.down.sql"
@@ -148,11 +153,13 @@ run_sql "reapply authenticated paper privileges" "api-server/supabase/migrations
 run_sql "reapply authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
 run_sql "reapply final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql"
 run_sql "reapply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
+run_sql "reapply Toss broker connection constraint" "api-server/supabase/migrations/2026081202_toss_broker_connection.sql"
 run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.sql"
 run_sql "recheck explicit paper privileges after reapply" "api-server/supabase/test/paper_journal_privileges_integration.sql"
 run_sql "recheck audit privileges and administrator-only RLS after reapply" "api-server/supabase/test/member_permission_audit_privileges_integration.sql"
 run_sql "recheck final trade order atomicity and admin-only RLS after reapply" "api-server/supabase/test/trade_order_atomicity_admin_rls_integration.sql"
 run_sql "recheck risk envelope invariant and fast-move split cancellation after reapply" "api-server/supabase/test/trade_risk_envelope_kill_switch_integration.sql"
+run_sql "recheck Toss broker connection ownership RLS after reapply" "api-server/supabase/test/toss_broker_connection_rls_integration.sql"
 echo "[phase8-db] recheck concurrent fast-move split cancellation race after reapply"
 bash "${ROOT_DIR}/api-server/scripts/verify-trade-split-cancel-concurrency.sh"
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"

@@ -32,11 +32,14 @@ test('credential vault encrypts secrets with AES-GCM and rejects the wrong key',
   assert.throws(() => decryptTradingCredentials(encrypted, wrongKey));
 });
 
-test('account connection router is admin-mounted, GET-only, read-only, and never advertises credentials', () => {
+test('account snapshots stay GET-only while authenticated members receive self-scoped routes', () => {
   const routeSource = source('api-server/src/routes/account-connections.ts');
   const indexSource = source('api-server/src/routes/index.ts');
+  const tradeRouteSource = source('api-server/src/routes/trade-automation.ts');
 
   assert.match(indexSource, /router\.use\('\/account-connections',\s*requireAdmin,\s*accountConnectionsRouter\)/);
+  assert.match(tradeRouteSource, /router\.get\('\/account-connections\/status'/);
+  assert.match(tradeRouteSource, /router\.get\('\/account-connections\/snapshot'/);
   assert.match(routeSource, /router\.get\('\/status'/);
   assert.match(routeSource, /router\.get\('\/snapshot'/);
   assert.doesNotMatch(routeSource, /router\.(?:post|put|patch|delete)\(/);
@@ -44,6 +47,8 @@ test('account connection router is admin-mounted, GET-only, read-only, and never
   assert.match(routeSource, /credentialsReturned:\s*false/);
   assert.match(routeSource, /mutationsAllowed:\s*false/);
   assert.match(routeSource, /credentialSource/);
+  assert.doesNotMatch(routeSource, /function environmentCredentials/);
+  assert.match(routeSource, /WAITING_FOR_TOSS_API_ACCESS/);
 
   for (const privatePath of [
     '/crypto/futures/auto',
@@ -58,8 +63,11 @@ test('account connection router is admin-mounted, GET-only, read-only, and never
 
 test('account snapshot source never serializes the vault credential object into an API response', () => {
   const routeSource = source('api-server/src/routes/account-connections.ts');
-  const responseBlocks = [...routeSource.matchAll(/res\.json\(\{([\s\S]*?)\}\);/g)].map((match) => match[1]);
-  assert.ok(responseBlocks.length >= 2);
+  const responseBlocks = [
+    routeSource.match(/export async function memberAccountConnectionStatus[\s\S]*?\n}\n\nrouter\.get\('\/status'/)?.[0] ?? '',
+    routeSource.match(/export async function memberAccountConnectionSnapshot[\s\S]*?\n}\n\nrouter\.get\('\/snapshot'/)?.[0] ?? '',
+  ];
+  assert.ok(responseBlocks.every(Boolean));
   for (const block of responseBlocks) {
     assert.doesNotMatch(block, /\bcredentials\s*[:,]/);
     assert.doesNotMatch(block, /\bencryptedCredentials\b/);
@@ -86,6 +94,9 @@ test('account connection router correctly uses adapter service and prohibits dir
     'prepareKiwoomAccountNumber',
     'prepareKiwoomDomesticAccount',
     'prepareKiwoomUsAccount',
+    'prepareTossToken',
+    'prepareTossAccounts',
+    'prepareTossHoldings',
   ]) {
     assert.ok(importedNames.includes(required), `Missing ${required}`);
   }
@@ -105,6 +116,9 @@ test('account connection router correctly uses adapter service and prohibits dir
     'prepareUpbitCancel',
     'prepareKiwoomOrder',
     'prepareKiwoomCancel',
+    'prepareTossOrder',
+    'prepareTossCancel',
+    'prepareTossAmend',
   ];
   for (const call of forbiddenCalls) {
     assert.doesNotMatch(routeSource, new RegExp('\\b' + call + '\\b'), `Forbidden direct call detected: ${call}`);

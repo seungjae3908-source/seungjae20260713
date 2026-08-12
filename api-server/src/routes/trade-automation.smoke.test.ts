@@ -125,7 +125,7 @@ test('persistent global emergency stop requires admin capability and exact confi
   } finally { await close(admin.server); }
 });
 
-test('connection registration rejects withdrawal permission and does not echo secrets', async () => {
+test('member connection registration rejects withdrawal and transfer permissions without echoing secrets', async () => {
   const { server, baseUrl } = await startServer();
   try {
     const rejected = await fetch(`${baseUrl}/api/trade-automation/connections/upbit`, {
@@ -152,6 +152,34 @@ test('connection registration rejects withdrawal permission and does not echo se
     const body = JSON.parse(text) as { credentialsReturned: boolean; accountMode: string };
     assert.equal(body.credentialsReturned, false);
     assert.equal(body.accountMode, 'paper');
+
+    const transferRejected = await fetch(`${baseUrl}/api/trade-automation/connections/toss`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        credentials: { clientId: 'toss-client', clientSecret: 'toss-secret' },
+        permissions: ['orders', 'transfer'],
+      }),
+    });
+    assert.equal(transferRejected.status, 400);
+    assert.doesNotMatch(await transferRejected.text(), /toss-client|toss-secret/);
+
+    const tossAccepted = await fetch(`${baseUrl}/api/trade-automation/connections/toss`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        credentials: { clientId: 'toss-client', clientSecret: 'toss-secret' },
+        permissions: ['orders'], accountMode: 'live',
+      }),
+    });
+    assert.equal(tossAccepted.status, 200);
+    const tossText = await tossAccepted.text();
+    assert.doesNotMatch(tossText, /toss-client|toss-secret/);
+    assert.deepEqual(JSON.parse(tossText), {
+      ok: true, exchange: 'toss', accountMode: 'live', configured: true, credentialsReturned: false,
+    });
+    const stored = await repository.getConnection(USER, 'toss');
+    assert.equal(stored?.configured, true);
+    assert.notEqual(stored?.encryptedCredentials, null);
+    assert.doesNotMatch(stored?.encryptedCredentials ?? '', /toss-client|toss-secret/);
   } finally { await close(server); }
 });
 
