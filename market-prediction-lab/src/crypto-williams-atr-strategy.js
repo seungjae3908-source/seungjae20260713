@@ -161,6 +161,20 @@ function validateInput(raw) {
     }
   }
 
+  const derivativesContext = market === "CRYPTO_FUTURES"
+    ? Object.freeze({
+      markPriceSupplied: raw.markPrice !== undefined && raw.markPrice !== null,
+      fundingRateSupplied: raw.fundingRate !== undefined && raw.fundingRate !== null,
+      leverageSupplied: raw.leverage !== undefined && raw.leverage !== null,
+      liquidationPriceSupplied: raw.liquidationPrice !== undefined && raw.liquidationPrice !== null,
+      complete:
+        raw.markPrice !== undefined && raw.markPrice !== null
+        && raw.fundingRate !== undefined && raw.fundingRate !== null
+        && raw.leverage !== undefined && raw.leverage !== null
+        && raw.liquidationPrice !== undefined && raw.liquidationPrice !== null,
+    })
+    : null;
+
   return Object.freeze({
     market,
     previousHigh,
@@ -177,6 +191,7 @@ function validateInput(raw) {
     fundingRate,
     leverage,
     liquidationPrice,
+    derivativesContext,
   });
 }
 
@@ -263,7 +278,12 @@ export function evaluateCryptoWilliamsAtrSignal(rawInput, configOverrides = {}) 
   if (liquidationBlocked) reasons.push("liquidation_guard_rejected");
 
   const estimatedRoundTripExecutionCostRate = input.feeRate * 2 + input.spreadRate + input.slippageRate * 2;
-  const shadowSafetyReady = input.market === "CRYPTO_SPOT" || liquidation.verified;
+  const futuresShadowContextReady = input.market !== "CRYPTO_FUTURES" || input.derivativesContext?.complete === true;
+  const shadowSafetyReady = input.market === "CRYPTO_SPOT"
+    || (liquidation.verified && futuresShadowContextReady);
+  if (status === "ENTRY" && input.market === "CRYPTO_FUTURES" && !futuresShadowContextReady) {
+    reasons.push("shadow_derivatives_context_incomplete");
+  }
 
   return Object.freeze({
     strategyId: CRYPTO_WILLIAMS_ATR_STRATEGY_ID,
@@ -306,6 +326,7 @@ export function evaluateCryptoWilliamsAtrSignal(rawInput, configOverrides = {}) 
       estimatedRoundTripExecutionCostRate: round(estimatedRoundTripExecutionCostRate, 10),
       markPrice: input.market === "CRYPTO_FUTURES" ? input.markPrice ?? null : null,
       fundingRate: input.market === "CRYPTO_FUTURES" ? input.fundingRate : null,
+      derivativesContext: input.derivativesContext,
       liquidation,
       sessionTimezone: config.sessionTimezone,
       sessionOpenHour: config.sessionOpenHour,
