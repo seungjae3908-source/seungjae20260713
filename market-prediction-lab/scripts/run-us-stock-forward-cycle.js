@@ -7,6 +7,11 @@ import {
   summarizeUsStockForwardState,
 } from "../src/us-stock-forward-validation.js";
 import {
+  advanceUsStockForwardPnlState,
+  createUsStockForwardPnlState,
+  summarizeUsStockForwardPnlState,
+} from "../src/us-stock-forward-pnl-shadow.js";
+import {
   US_STOCK_FORWARD_CANDIDATE,
   US_STOCK_FORWARD_CANDIDATE_SHA256,
   US_STOCK_FORWARD_START,
@@ -40,6 +45,8 @@ function markClosedCandles(candles, cycleTime) {
 
 const statePath = resolve(process.argv[2] ?? "docs/us-stock-forward-state.json");
 const summaryPath = resolve(process.argv[3] ?? "docs/us-stock-forward-summary.json");
+const pnlStatePath = resolve(process.argv[4] ?? "docs/us-stock-forward-pnl-state.json");
+const pnlSummaryPath = resolve(process.argv[5] ?? "docs/us-stock-forward-pnl-summary.json");
 const cycleTime = Date.now();
 if (cycleTime < US_STOCK_FORWARD_START) throw new Error("US_STOCK_FORWARD_NOT_STARTED");
 
@@ -47,6 +54,11 @@ const previous = await readJsonOptional(statePath, null);
 const state = previous ?? createUsStockForwardState(cycleTime);
 if (state.candidateId !== US_STOCK_FORWARD_CANDIDATE.id || state.candidateManifestSha256 !== US_STOCK_FORWARD_CANDIDATE_SHA256) {
   throw new Error("US_STOCK_FORWARD_STATE_CANDIDATE_MISMATCH");
+}
+const previousPnl = await readJsonOptional(pnlStatePath, null);
+const pnlState = previousPnl ?? createUsStockForwardPnlState(cycleTime);
+if (pnlState.candidateId !== US_STOCK_FORWARD_CANDIDATE.id || pnlState.candidateManifestSha256 !== US_STOCK_FORWARD_CANDIDATE_SHA256) {
+  throw new Error("US_STOCK_FORWARD_PNL_STATE_CANDIDATE_MISMATCH");
 }
 
 const startTime = cycleTime - 420 * DAY_MS;
@@ -73,8 +85,15 @@ for (const symbol of US_STOCK_FORWARD_CANDIDATE.prospectiveOnlySymbols) {
 
 const nextState = advanceUsStockForwardState({ state, candlesBySymbol, cycleTime });
 const forward = summarizeUsStockForwardState(nextState);
+const nextPnlState = advanceUsStockForwardPnlState({
+  state: pnlState,
+  signalState: nextState,
+  candlesBySymbol,
+  cycleTime,
+});
+const pnl = summarizeUsStockForwardPnlState(nextPnlState);
 const summary = Object.freeze({
-  schemaVersion: 1,
+  schemaVersion: 2,
   status: "pass",
   generatedAt: cycleTime,
   candidate: Object.freeze({
@@ -86,6 +105,7 @@ const summary = Object.freeze({
     prospectiveOnlySymbols: US_STOCK_FORWARD_CANDIDATE.prospectiveOnlySymbols,
   }),
   forward,
+  pnl,
   datasets: Object.freeze(datasets),
   safeguards: Object.freeze({
     forwardStart: US_STOCK_FORWARD_START,
@@ -93,9 +113,13 @@ const summary = Object.freeze({
     parametersRetunedAfterFreeze: false,
     historicalProspectiveSymbolsUsedForSelection: false,
     lateSignalsBackfilled: false,
+    nextSessionOpenEntryOnly: true,
+    sameBarStopFirstConservative: true,
+    baseCostRatePerSide: US_STOCK_FORWARD_CANDIDATE.costRatePerSide,
+    stressMultiplier: US_STOCK_FORWARD_CANDIDATE.stressMultiplier,
     currentConstituentSurvivorshipGateSatisfied: false,
     pointInTimeMembershipStillRequired: true,
-    costAwareProspectivePnlStillRequired: true,
+    costAwareProspectivePnlShadowActive: true,
     publicMarketDataOnly: true,
     actualOrders: 0,
     privateAccountRequests: 0,
@@ -105,4 +129,6 @@ const summary = Object.freeze({
 
 await writeJsonAtomically(statePath, nextState);
 await writeJsonAtomically(summaryPath, summary);
+await writeJsonAtomically(pnlStatePath, nextPnlState);
+await writeJsonAtomically(pnlSummaryPath, pnl);
 console.log(JSON.stringify(summary, null, 2));
