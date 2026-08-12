@@ -202,6 +202,22 @@ test('scenario engine passes through validated numbers only after evidence gate'
   assert.equal(result.scenarios.base.returnPercent, 7);
 });
 
+test('scenario engine fails closed when validated bear/base/bull ordering is inverted', () => {
+  const result = buildPortfolioScenario({
+    strategyVersion: 'v2', sampleSize: 1000, oosPassed: true, walkForwardPassed: true,
+    maxDrawdownPercent: 12, expectancy: 0.2, profitFactor: 1.4, confidence: 0.8, costStressPassed: true,
+    validatedScenarioReturnsPercent: { bear: 20, base: 0, bull: -20 },
+  }, {
+    minSampleSize: 500, requireOos: true, requireWalkForward: true, requireCostStress: true,
+    minProfitFactor: 1.1, minConfidence: 0.7,
+  });
+  assert.equal(result.returnScenarioStatus, 'EVIDENCE_SUFFICIENT_NO_RETURN_ESTIMATE');
+  assert.deepEqual(result.missingOrFailed, ['VALIDATED_SCENARIO_ORDER_INVALID']);
+  assert.equal(result.scenarios.bear.returnPercent, null);
+  assert.equal(result.scenarios.base.returnPercent, null);
+  assert.equal(result.scenarios.bull.returnPercent, null);
+});
+
 test('advisor context rejects private fields recursively', () => {
   assert.throws(
     () => sanitizeAdvisorContext({ portfolio: { apiKey: 'abcdefghijk12345' } }),
