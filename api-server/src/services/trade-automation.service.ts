@@ -12,6 +12,7 @@ import {
 import type {
   TradingMarketSnapshot,
   TradingOrder, TradingOrderEvent, TradingOrderState, TradingPlan, TradingPlanInput, TradingPolicy,
+  TradingProviderMode,
   TradingRiskDecision,
 } from './trade-automation.types';
 
@@ -56,8 +57,17 @@ export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
     bitget: process.env.BITGET_LIVE_ORDER_ENABLED === 'true',
     upbit: process.env.UPBIT_LIVE_ORDER_ENABLED === 'true',
     kiwoom: process.env.KIWOOM_LIVE_ORDER_ENABLED === 'true',
+    toss: process.env.TOSS_LIVE_ORDER_ENABLED === 'true',
   };
   return global && perExchange[exchange];
+}
+
+export function providerModeForPolicy(policy: TradingPolicy, exchange: TradingPlanInput['exchange']): TradingProviderMode {
+  const explicit = policy.providerModes?.[exchange];
+  if (explicit === 'OFF' || explicit === 'SHADOW' || explicit === 'LIVE') return explicit;
+  // Backward compatibility is deliberately fail-closed: a legacy boolean can
+  // permit shadow/paper automation but can never silently become real trading.
+  return policy.exchangeEnabled[exchange] ? 'SHADOW' : 'OFF';
 }
 
 export class TradeAutomationService {
@@ -138,8 +148,54 @@ export class TradeAutomationService {
     return approved;
   }
 
-  async beginAutomaticPlan(_userId: string, _planId: string) {
-    throw new Error('USER_APPROVAL_REQUIRED');
+  async beginAutomaticPlan(userId: string, planId: string) {
+    const plan = await this.repository.getPlan(userId, planId);
+    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+    if (plan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
+    const expectedVersion = planVersion(plan);
+    if (!plan.approvalExpiresAt || Date.parse(plan.approvalExpiresAt) <= Date.now()) {
+      const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
+      await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
+      throw new Error('TRADE_PLAN_EXPIRED');
+    }
+
+    const policy = await this.repository.getPolicy(userId);
+    if (policy.mode !== 'automatic' || !policy.automaticEnabled) throw new Error('AUTOMATIC_TRADING_NOT_ENABLED');
+    const providerMode = providerModeForPolicy(policy, plan.exchange);
+    if (providerMode === 'OFF') throw new Error('AUTOMATIC_PROVIDER_OFF');
+    if (providerMode === 'SHADOW' && plan.accountMode === 'live') throw new Error('AUTOMATIC_PROVIDER_LIVE_OPT_IN_REQUIRED');
+    if (providerMode === 'LIVE' && plan.accountMode !== 'live') throw new Error('AUTOMATIC_PROVIDER_ACCOUNT_MODE_MISMATCH');
+    if (providerMode === 'LIVE' && !liveExecutionEnabled(plan.exchange)) throw new Error('LIVE_EXECUTION_DISABLED');
+
+    const decision = evaluateTradingPlan(plan, policy, {
+      emergencyStopped: await this.emergencyStopActive(userId, policy),
+      serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
+    });
+    if (!decision.allowed) {
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
+      await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
+      throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
+    }
+
+    const authorizedAt = new Date().toISOString();
+    let envelope;
+    try {
+      envelope = buildRiskEnvelope(plan, policy, authorizedAt);
+    } catch (error) {
+      const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: authorizedAt };
+      await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
+      throw error;
+    }
+    const candidate = withRiskEnvelope({
+      ...plan,
+      state: 'SUBMITTED',
+      approvedAt: authorizedAt,
+      updatedAt: authorizedAt,
+    }, envelope);
+    const submitted = await this.repository.compareAndSetPlan(candidate, 'APPROVAL_PENDING', expectedVersion);
+    if (!submitted) throw new Error('TRADE_PLAN_CONCURRENTLY_CHANGED');
+    return submitted;
   }
 
   async createOrder(userId: string, plan: TradingPlan) {
