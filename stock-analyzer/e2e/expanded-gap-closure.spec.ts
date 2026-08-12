@@ -29,7 +29,7 @@ function fulfill(route: Route, body: unknown, status = 200, headers: Record<stri
 
 test('scanner manual polling visibility and unchanged-condition consumers share one same-key upstream owner', async ({ page }) => {
   const source = await readFile(path.resolve(analyzerRoot(), 'src/pages/signal-scanner.tsx'), 'utf8');
-  expect(source).toContain("setInterval(() => setRefreshToken((value) => value + 1), 30_000)");
+  expect(source).toMatch(/window\.setInterval\(\(\) => \{\s*if \(document\.visibilityState === 'visible'\) setRefreshToken\(\(value\) => value \+ 1\);\s*\}, 30_000\);/);
   expect(source).toContain("document.addEventListener('visibilitychange', refreshWhenVisible)");
   expect(source).toContain('onClick={() => setRefreshToken((value) => value + 1)}');
   expect(source).toContain('fetchSignalScanner(request, controller.signal)');
