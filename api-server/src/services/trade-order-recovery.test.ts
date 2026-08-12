@@ -137,7 +137,7 @@ test('Upbit uncertain execution performs identifier lookup only and reconciles a
     assert.match(url, /\/v1\/order\?identifier=client-upbit/);
     assert.equal(method, 'GET');
     return new Response(JSON.stringify({
-      uuid: 'upbit-order-1', identifier: 'client-upbit', state: 'done',
+      uuid: 'upbit-order-1', identifier: 'client-upbit', market: 'KRW-BTC', state: 'done',
       volume: '0.001', remaining_volume: '0', executed_volume: '0.001', paid_fee: '50',
       created_at: '2026-08-05T03:30:00.000Z',
       trades: [{ uuid: 'fill-1', price: '100000000', volume: '0.001', created_at: '2026-08-05T03:30:01.000Z' }],
@@ -167,12 +167,12 @@ test('Bitget uncertain execution performs clientOid detail lookup only and prese
     const url = input instanceof Request ? input.url : String(input);
     const method = String(init?.method ?? 'GET').toUpperCase();
     requests.push({ url, method });
-    assert.match(url, /\/api\/v2\/mix\/order\/detail\?clientOid=client-bitget/);
+    assert.match(url, /\/api\/v2\/mix\/order\/detail\?symbol=BTCUSDT&clientOid=client-bitget/);
     assert.equal(method, 'GET');
     return new Response(JSON.stringify({
       code: '00000',
       data: {
-        orderId: 'bitget-order-1', clientOid: 'client-bitget', status: 'partially_filled',
+        symbol: 'BTCUSDT', orderId: 'bitget-order-1', clientOid: 'client-bitget', status: 'partially_filled',
         size: '1', baseVolume: '0.4', priceAvg: '50000', cTime: '1785891000000', uTime: '1785891001000',
       },
     }), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -248,7 +248,134 @@ test('Kiwoom recovery without an exchange order id fails closed without external
     const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
     assert.equal(recovered.state, 'RECOVERY_REQUIRED');
     assert.equal(recovered.manualReviewRequired, true);
-    assert.equal(recovered.lastErrorCode, 'KIWOOM_EXCHANGE_ORDER_ID_UNKNOWN');
+    assert.equal(recovered.lastErrorCode, 'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT');
+    assert.equal(outbound, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+  }
+});
+
+test('Bitget reconciliation rejects a symbol mismatch without overwriting the stored order', async () => {
+  const { repository, planValue, orderValue } = await setup('bitget', 'live', {
+    apiKey: 'bitget-key', secretKey: 'bitget-secret', passphrase: 'bitget-pass',
+  });
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    code: '00000',
+    data: {
+      symbol: 'ETHUSDT', orderId: 'wrong-order', clientOid: 'client-bitget', state: 'live',
+      size: '1', baseVolume: '0', priceAvg: '0', uTime: '1785891001000',
+    },
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+  try {
+    const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+    assert.equal(recovered.state, 'RECOVERY_REQUIRED');
+    assert.equal(recovered.lastErrorCode, 'BITGET_ORDER_IDENTITY_MISMATCH');
+    assert.equal(recovered.manualReviewRequired, true);
+    assert.equal(recovered.exchangeOrderId, null);
+    assert.equal(recovered.filledQuantity, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+  }
+});
+
+test('Upbit reconciliation rejects filled-quantity regression and preserves the latest stored fill', async () => {
+  const { repository, planValue, orderValue } = await setup('upbit', 'live', {
+    accessKey: 'upbit-access', secretKey: 'upbit-secret',
+  });
+  orderValue.exchangeOrderId = 'upbit-order-1';
+  orderValue.filledQuantity = 0.0008;
+  orderValue.remainingQuantity = 0.0002;
+  orderValue.exchangeUpdatedAt = '2026-08-05T03:40:00.000Z';
+  await repository.saveOrder(orderValue);
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    uuid: 'upbit-order-1', identifier: 'client-upbit', market: 'KRW-BTC', state: 'wait',
+    volume: '0.001', remaining_volume: '0.0006', executed_volume: '0.0004', paid_fee: '20',
+    created_at: '2026-08-05T03:30:00.000Z', trades: [],
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+  try {
+    const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+    assert.equal(recovered.state, 'RECOVERY_REQUIRED');
+    assert.equal(recovered.lastErrorCode, 'RECONCILIATION_FILLED_QUANTITY_REGRESSION');
+    assert.equal(recovered.manualReviewRequired, true);
+    assert.equal(recovered.filledQuantity, 0.0008);
+    assert.equal(recovered.remainingQuantity, 0.0002);
+  } finally {
+    globalThis.fetch = nativeFetch;
+  }
+});
+
+test('Upbit reconciliation rejects an older provider snapshot even when quantity is unchanged', async () => {
+  const { repository, planValue, orderValue } = await setup('upbit', 'live', {
+    accessKey: 'upbit-access', secretKey: 'upbit-secret',
+  });
+  orderValue.exchangeOrderId = 'upbit-order-1';
+  orderValue.filledQuantity = 0.0004;
+  orderValue.remainingQuantity = 0.0006;
+  orderValue.exchangeUpdatedAt = '2026-08-05T03:40:00.000Z';
+  await repository.saveOrder(orderValue);
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    uuid: 'upbit-order-1', identifier: 'client-upbit', market: 'KRW-BTC', state: 'wait',
+    volume: '0.001', remaining_volume: '0.0006', executed_volume: '0.0004', paid_fee: '20',
+    created_at: '2026-08-05T03:30:00.000Z',
+    trades: [{ uuid: 'fill-old', price: '100000000', volume: '0.0004', created_at: '2026-08-05T03:30:01.000Z' }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+  try {
+    const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+    assert.equal(recovered.state, 'RECOVERY_REQUIRED');
+    assert.equal(recovered.lastErrorCode, 'RECONCILIATION_STALE_RESPONSE');
+    assert.equal(recovered.manualReviewRequired, true);
+    assert.equal(recovered.exchangeUpdatedAt, '2026-08-05T03:40:00.000Z');
+  } finally {
+    globalThis.fetch = nativeFetch;
+  }
+});
+
+test('Upbit provider-side cancel preserves the partial fill and never issues a cancel request', async () => {
+  const { repository, planValue, orderValue } = await setup('upbit', 'live', {
+    accessKey: 'upbit-access', secretKey: 'upbit-secret',
+  });
+  const nativeFetch = globalThis.fetch;
+  const methods: string[] = [];
+  globalThis.fetch = (async (_input, init) => {
+    methods.push(String(init?.method ?? 'GET').toUpperCase());
+    return new Response(JSON.stringify({
+      uuid: 'upbit-order-1', identifier: 'client-upbit', market: 'KRW-BTC', state: 'cancel',
+      volume: '0.001', remaining_volume: '0.0006', executed_volume: '0.0004', paid_fee: '20',
+      created_at: '2026-08-05T03:30:00.000Z',
+      trades: [{ uuid: 'fill-1', price: '100000000', volume: '0.0004', created_at: '2026-08-05T03:30:01.000Z' }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+    assert.equal(recovered.state, 'CANCELED');
+    assert.equal(recovered.filledQuantity, 0.0004);
+    assert.equal(recovered.remainingQuantity, 0.0006);
+    assert.deepEqual(methods, ['GET']);
+  } finally {
+    globalThis.fetch = nativeFetch;
+  }
+});
+
+test('Kiwoom recovery with an exchange order id still blocks before any private request while the official contract is unverified', async () => {
+  const { repository, planValue, orderValue } = await setup('kiwoom', 'mock', {
+    appKey: 'kiwoom-app', secretKey: 'kiwoom-secret',
+  });
+  orderValue.exchangeOrderId = 'kiwoom-order-1';
+  await repository.saveOrder(orderValue);
+  const nativeFetch = globalThis.fetch;
+  let outbound = 0;
+  globalThis.fetch = (async () => {
+    outbound += 1;
+    throw new Error('unexpected outbound');
+  }) as typeof fetch;
+  try {
+    const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+    assert.equal(recovered.state, 'RECOVERY_REQUIRED');
+    assert.equal(recovered.manualReviewRequired, true);
+    assert.equal(recovered.lastErrorCode, 'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT');
     assert.equal(outbound, 0);
   } finally {
     globalThis.fetch = nativeFetch;
