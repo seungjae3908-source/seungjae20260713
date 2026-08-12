@@ -81,7 +81,7 @@ test("late-discovered signals are never backfilled into forward evidence", () =>
   assert.ok(state.missedSignals.every((row) => row.reason === "late_cycle_no_backfill"));
 });
 
-test("fresh forward signals remain research-only and settle only after the full 20d horizon exists", () => {
+test("fresh forward signals remain research-only and settle only on a later cycle after the full 20d horizon exists", () => {
   const symbols = US_STOCK_FORWARD_CANDIDATE.prospectiveOnlySymbols.slice(0, 2);
   const first = trendCandles({ count: 166 });
   const firstCycle = first.at(-1).observedAt;
@@ -94,16 +94,25 @@ test("fresh forward signals remain research-only and settle only after the full 
   assert.ok(initial.signals.every((row) => row.usedForSelection === false));
 
   const later = trendCandles({ count: 280 });
+  const laterBySymbol = cloneForSymbols(later, symbols);
   const laterCycle = later.at(-1).observedAt;
-  const advanced = advanceUsStockForwardState({
+  const discovered = advanceUsStockForwardState({
     state: initial,
-    candlesBySymbol: cloneForSymbols(later, symbols),
+    candlesBySymbol: laterBySymbol,
     cycleTime: laterCycle,
   });
-  assert.ok(advanced.signals.length >= initial.signals.length);
-  assert.ok(advanced.signals.some((row) => row.status === "settled"));
-  assert.ok(advanced.signals.filter((row) => row.status === "settled").every((row) => Number.isFinite(row.forwardReturns?.["20d"])));
-  const summary = summarizeUsStockForwardState(advanced, { minSettled: 1, minSymbols: 1, minElapsedMs: 0 });
+  assert.ok(discovered.signals.length >= initial.signals.length);
+  assert.ok(discovered.signals.length > 0);
+  assert.ok(discovered.signals.every((row) => row.orderSubmitted === false));
+
+  const settled = advanceUsStockForwardState({
+    state: discovered,
+    candlesBySymbol: laterBySymbol,
+    cycleTime: laterCycle + DAY,
+  });
+  assert.ok(settled.signals.some((row) => row.status === "settled"));
+  assert.ok(settled.signals.filter((row) => row.status === "settled").every((row) => Number.isFinite(row.forwardReturns?.["20d"])));
+  const summary = summarizeUsStockForwardState(settled, { minSettled: 1, minSymbols: 1, minElapsedMs: 0 });
   assert.equal(summary.executionPromotionAllowed, false);
   assert.ok(summary.blockersBeyondSignalShadow.includes("cost-aware prospective trade PnL shadow must pass separately"));
 });
