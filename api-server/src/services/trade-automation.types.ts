@@ -1,6 +1,7 @@
-export type TradingExchange = 'bitget' | 'upbit' | 'kiwoom';
-export type BrokerConnectionProvider = TradingExchange | 'toss';
+export type TradingExchange = 'bitget' | 'upbit' | 'kiwoom' | 'toss';
+export type BrokerConnectionProvider = TradingExchange;
 export type TradingMode = 'approval' | 'automatic';
+export type TradingProviderMode = 'OFF' | 'SHADOW' | 'LIVE';
 export type TradingAccountMode = 'paper' | 'mock' | 'live';
 export type TradingSide = 'buy' | 'sell' | 'long' | 'short';
 export type TradingOrderType = 'market' | 'limit';
@@ -70,8 +71,9 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   automaticEnabled: false,
   emergencyStopped: false,
   newEntriesStopped: false,
-  exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
-  enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[] },
+  exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
+  providerModes: { bitget: 'OFF', upbit: 'OFF', kiwoom: 'OFF', toss: 'OFF' } as Record<TradingExchange, TradingProviderMode>,
+  enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[], toss: [] as string[] },
   enabledStrategies: [] as string[],
   totalCapitalKrw: 1_000_000,
   maxOrderKrw: 1_000_000,
@@ -91,7 +93,7 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   bitgetLeverage: 2 as 2 | 3,
   riskOptimizationEnabled: true,
   pilotStage: 'approval-20' as TradingPilotStage,
-  riskPerTradePercent: { bitget: 0.1, upbit: 0.2, kiwoom: 0.25 },
+  riskPerTradePercent: { bitget: 0.1, upbit: 0.2, kiwoom: 0.25, toss: 0.25 },
   totalDailyLossLimitPercent: 1,
   minExpectedValueR: 0.15,
   minStrategySampleSize: 50,
@@ -109,6 +111,7 @@ export type TradingPolicy = {
   emergencyStopped: boolean;
   newEntriesStopped: boolean;
   exchangeEnabled: Record<TradingExchange, boolean>;
+  providerModes?: Record<TradingExchange, TradingProviderMode>;
   enabledAssets: Record<TradingExchange, string[]>;
   enabledStrategies: string[];
   totalCapitalKrw: number;
