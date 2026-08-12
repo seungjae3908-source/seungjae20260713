@@ -23,13 +23,24 @@ export const JOURNAL_COST_SAFETY = Object.freeze({
   privateBrokerRequests: 0,
 });
 
-export const TRADE_SOURCES = ['TOSS_MANUAL', 'TOSS_API', 'APP_PAPER', 'APP_SHADOW', 'APP_AUTO'] as const;
+export const TRADE_SOURCES = [
+  'TOSS_MANUAL',
+  'TOSS_API',
+  'KIWOOM_API',
+  'UPBIT_API',
+  'BITGET_API',
+  'APP_PAPER',
+  'APP_SHADOW',
+  'APP_AUTO',
+] as const;
 export const TRADE_MARKETS = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'] as const;
 export const TRADE_RANGES = ['TODAY', '7D', '30D', '90D', '1Y', 'ALL'] as const;
+export const TRADE_BROKERS = ['TOSS', 'KIWOOM', 'UPBIT', 'BITGET', 'APP', 'MANUAL'] as const;
 
 export type TradeSource = typeof TRADE_SOURCES[number];
 export type TradeMarket = typeof TRADE_MARKETS[number];
 export type TradeRange = typeof TRADE_RANGES[number];
+export type TradeBroker = typeof TRADE_BROKERS[number];
 export type TradeCurrency = 'KRW' | 'USD' | 'USDT';
 export type CanonicalOrderStatus = 'OPEN' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELED' | 'REJECTED' | 'UNKNOWN';
 export type SnapshotContextSource = 'PRE_TRADE_SNAPSHOT' | 'POST_HOC_RECONSTRUCTION' | 'NO_PRE_TRADE_CONTEXT';
@@ -59,7 +70,7 @@ export type UnifiedTradeOrder = {
   schemaVersion: 1;
   recordType: 'unified_trade_order';
   source: TradeSource;
-  broker: 'TOSS' | 'APP' | 'UPBIT' | 'BITGET' | 'KIWOOM' | 'MANUAL';
+  broker: TradeBroker;
   accountIdMasked: string;
   market: TradeMarket;
   symbol: string;
@@ -183,6 +194,8 @@ export type UnifiedJournalFilters = {
   range?: TradeRange;
   market?: TradeMarket | 'ALL';
   source?: TradeSource | 'ALL';
+  broker?: TradeBroker | 'ALL';
+  account?: string | null;
   strategy?: string | null;
   timeframe?: string | null;
   grade?: TradeReview['grade'] | 'ALL';
@@ -697,6 +710,19 @@ function directCycle(payload: Record<string, unknown>): UnifiedTradeCycle | null
   const side = payload.side === 'short' || payload.positionSide === 'SHORT' ? 'SHORT' : 'LONG';
   if (!['closed', 'open', 'partially_closed'].includes(status) || entryPrice == null || !openedAt) return null;
   const source = TRADE_SOURCES.includes(payload.source as TradeSource) ? payload.source as TradeSource : 'APP_PAPER';
+  const sourceBroker: Record<TradeSource, TradeBroker> = {
+    TOSS_MANUAL: 'TOSS',
+    TOSS_API: 'TOSS',
+    KIWOOM_API: 'KIWOOM',
+    UPBIT_API: 'UPBIT',
+    BITGET_API: 'BITGET',
+    APP_PAPER: 'APP',
+    APP_SHADOW: 'APP',
+    APP_AUTO: 'APP',
+  };
+  const broker = TRADE_BROKERS.includes(payload.broker as TradeBroker)
+    ? payload.broker as TradeBroker
+    : sourceBroker[source];
   const currency = ['KRW', 'USD', 'USDT'].includes(String(payload.currency)) ? payload.currency as TradeCurrency : 'USDT';
   const totalQuantity = finite(payload.initialQuantity ?? payload.quantity) ?? 0;
   if (totalQuantity <= 0) return null;
@@ -714,7 +740,7 @@ function directCycle(payload: Record<string, unknown>): UnifiedTradeCycle | null
   const unsigned: Omit<UnifiedTradeCycle, 'review'> = {
     id,
     source,
-    broker: source === 'TOSS_MANUAL' ? 'MANUAL' : 'APP',
+    broker,
     accountIdMasked: typeof payload.accountIdMasked === 'string' && payload.accountIdMasked.includes('****') ? payload.accountIdMasked : 'APP-****-LOCAL',
     market: inferMarket(payload),
     symbol: nullableText(payload.symbol, 40)?.toUpperCase() ?? 'UNKNOWN',
@@ -768,6 +794,8 @@ function filterCycles(cycles: UnifiedTradeCycle[], filters: UnifiedJournalFilter
     return time >= start
       && (!filters.market || filters.market === 'ALL' || cycle.market === filters.market)
       && (!filters.source || filters.source === 'ALL' || cycle.source === filters.source)
+      && (!filters.broker || filters.broker === 'ALL' || cycle.broker === filters.broker)
+      && (!filters.account || cycle.accountIdMasked === filters.account)
       && (!filters.strategy || cycle.strategy === filters.strategy)
       && (!filters.timeframe || cycle.timeframe === filters.timeframe)
       && (!filters.grade || filters.grade === 'ALL' || cycle.review.grade === filters.grade);

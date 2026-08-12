@@ -106,7 +106,7 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
 }
 
 export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: Props) {
-  const [filters, setFilters] = useState<UnifiedJournalFilters>({ range: '30D', market: 'ALL', source: 'ALL', grade: 'ALL' });
+  const [filters, setFilters] = useState<UnifiedJournalFilters>({ range: '30D', market: 'ALL', source: 'ALL', broker: 'ALL', grade: 'ALL' });
   const [data, setData] = useState<UnifiedTradeJournal | null>(null);
   const [selectedId, setSelectedId] = useState('');
   const [busy, setBusy] = useState(true);
@@ -129,9 +129,10 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
   }, [loadApi, requestKey, refreshVersion]);
 
   const selected = useMemo(() => data?.trades.find((trade) => trade.id === selectedId) ?? data?.trades[0] ?? null, [data, selectedId]);
+  const accountOptions = useMemo(() => [...new Set(data?.trades.map((trade) => trade.accountIdMasked) ?? [])].sort(), [data]);
 
   function change(name: keyof UnifiedJournalFilters, value: string) {
-    setFilters((current) => ({ ...current, [name]: value }));
+    setFilters((current) => ({ ...current, [name]: value, ...(name === 'broker' ? { account: '' } : {}) }));
   }
 
   return <section className="min-w-0 space-y-4" data-testid="unified-trade-journal">
@@ -158,8 +159,10 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
         <label className="grid min-w-0 gap-1 text-xs">기간<select className={controlClass} value={filters.range} onChange={(event) => change('range', event.target.value)}><option value="TODAY">오늘</option><option value="7D">7일</option><option value="30D">30일</option><option value="90D">90일</option><option value="1Y">1년</option><option value="ALL">전체</option></select></label>
         <label className="grid min-w-0 gap-1 text-xs">시장<select className={controlClass} value={filters.market} onChange={(event) => change('market', event.target.value)}><option value="ALL">전체 시장</option><option value="KR_STOCK">국내주식</option><option value="US_STOCK">미국주식</option><option value="CRYPTO_SPOT">코인 현물</option><option value="CRYPTO_FUTURES">코인 선물</option></select></label>
-        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">Toss 수동</option><option value="TOSS_API">Toss API</option><option value="APP_PAPER">Paper</option><option value="APP_SHADOW">Shadow</option><option value="APP_AUTO">자동매매</option></select></label>
+        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">Toss 수동</option><option value="TOSS_API">Toss API</option><option value="KIWOOM_API">Kiwoom API</option><option value="UPBIT_API">Upbit API</option><option value="BITGET_API">Bitget API</option><option value="APP_PAPER">Paper</option><option value="APP_SHADOW">Shadow</option><option value="APP_AUTO">자동매매</option></select></label>
         <label className="grid min-w-0 gap-1 text-xs">품질 등급<select className={controlClass} value={filters.grade} onChange={(event) => change('grade', event.target.value)}><option value="ALL">전체 등급</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></label>
+        <label className="grid min-w-0 gap-1 text-xs">공급자<select className={controlClass} value={filters.broker} onChange={(event) => change('broker', event.target.value)}><option value="ALL">전체 공급자</option><option value="TOSS">Toss</option><option value="KIWOOM">Kiwoom</option><option value="UPBIT">Upbit</option><option value="BITGET">Bitget</option><option value="APP">앱 Paper/Shadow/Auto</option><option value="MANUAL">기타 수동</option></select></label>
+        <label className="grid min-w-0 gap-1 text-xs">계좌 별칭<select className={controlClass} value={filters.account ?? ''} onChange={(event) => change('account', event.target.value)}><option value="">전체 계좌</option>{accountOptions.map((account) => <option key={account} value={account}>{account}</option>)}</select></label>
       </div>
     </div>
 
