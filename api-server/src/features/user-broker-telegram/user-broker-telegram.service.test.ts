@@ -92,7 +92,7 @@ test('a Telegram chat cannot be rebound to another app user', async () => {
   }), /TELEGRAM_CHAT_ALREADY_LINKED/);
 });
 
-test('user A event queues and sends only to Telegram A, never Telegram B', async () => {
+test('user A manual event queues only Telegram A and does not re-sync canonical portfolio', async () => {
   const { service, repository, transport, portfolio } = fixture();
   await link(service, 'user-a', 'chat-a');
   await link(service, 'user-b', 'chat-b', 'tg-b', new Date('2026-08-12T00:01:00.000Z'));
@@ -101,8 +101,7 @@ test('user A event queues and sends only to Telegram A, never Telegram B', async
   });
   const queued = await service.recordEvent(event, new Date('2026-08-12T00:02:00.000Z'));
   assert.equal(queued.deliveryQueued, true);
-  assert.equal(portfolio.events.length, 1);
-  assert.equal(portfolio.events[0].source, 'MANUAL_PORTFOLIO_ENTRY');
+  assert.equal(portfolio.events.length, 0);
   const deliveriesA = await repository.listDeliveries('user-a');
   const deliveriesB = await repository.listDeliveries('user-b');
   assert.equal(deliveriesA.length, 1);
@@ -121,7 +120,7 @@ test('duplicate execution event is ignored by source-event id and does not dupli
   assert.equal((await service.recordEvent(event)).inserted, true);
   assert.equal((await service.recordEvent({ ...event, id: 'another-id' })).inserted, false);
   assert.equal((await repository.listDeliveries('user-a')).length, 1);
-  assert.equal(portfolio.events.length, 1);
+  assert.equal(portfolio.events.length, 0);
 });
 
 test('Telegram delivery retries are bounded and end in dead letter without changing the execution event', async () => {
