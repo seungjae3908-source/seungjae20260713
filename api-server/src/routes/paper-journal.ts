@@ -20,6 +20,7 @@ import { configuredTradingReviewProvider, type TradingReviewProvider } from '../
 import {
   JOURNAL_COST_SAFETY,
   TOSS_LIVE_READ_INTEGRATION,
+  TRADE_BROKERS,
   TRADE_MARKETS,
   TRADE_RANGES,
   TRADE_SOURCES,
@@ -28,6 +29,7 @@ import {
   tossJournalIntegrationStatus,
   type TossOrderContract,
   type TradeMarket,
+  type TradeBroker,
   type TradeRange,
   type TradeSource,
   type UnifiedJournalFilters,
@@ -97,15 +99,21 @@ function unifiedFilters(query: Request['query']): UnifiedJournalFilters {
   const range = queryText(query.range, 10) ?? '30D';
   const market = queryText(query.market, 30) ?? 'ALL';
   const source = queryText(query.source, 30) ?? 'ALL';
+  const broker = queryText(query.broker, 30) ?? 'ALL';
+  const account = queryText(query.account, 80);
   const grade = queryText(query.grade, 5) ?? 'ALL';
   if (!TRADE_RANGES.includes(range as TradeRange)) throw new PaperJournalError('INVALID_JOURNAL_RANGE', '매매일지 조회 기간을 확인하세요.');
   if (market !== 'ALL' && !TRADE_MARKETS.includes(market as TradeMarket)) throw new PaperJournalError('INVALID_JOURNAL_MARKET', '매매일지 시장 필터를 확인하세요.');
   if (source !== 'ALL' && !TRADE_SOURCES.includes(source as TradeSource)) throw new PaperJournalError('INVALID_JOURNAL_SOURCE', '매매일지 출처 필터를 확인하세요.');
+  if (broker !== 'ALL' && !TRADE_BROKERS.includes(broker as TradeBroker)) throw new PaperJournalError('INVALID_JOURNAL_BROKER', '매매일지 공급자 필터를 확인하세요.');
+  if (account && !/^[A-Z]+-\*\*\*\*-[A-Z0-9-]+$/.test(account)) throw new PaperJournalError('INVALID_JOURNAL_ACCOUNT', '매매일지 계좌 별칭 필터를 확인하세요.');
   if (!['ALL', 'A', 'B', 'C', 'D'].includes(grade)) throw new PaperJournalError('INVALID_JOURNAL_GRADE', '매매 품질 등급 필터를 확인하세요.');
   return {
     range: range as TradeRange,
     market: market as TradeMarket | 'ALL',
     source: source as TradeSource | 'ALL',
+    broker: broker as TradeBroker | 'ALL',
+    account,
     strategy: queryText(query.strategy),
     timeframe: queryText(query.timeframe, 20),
     grade: grade as UnifiedJournalFilters['grade'],

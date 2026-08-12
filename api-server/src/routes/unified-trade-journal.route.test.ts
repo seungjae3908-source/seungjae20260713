@@ -97,13 +97,13 @@ test('unified ledger uses only authenticated user journal payloads and applies f
   const rows = Array.from({ length: 6 }, (_, index) => paperTrade(index));
   const { server, baseUrl } = await start({ repository: repository(rows) });
   try {
-    const response = await fetch(`${baseUrl}/api/paper-journal/unified-ledger?range=ALL&market=US_STOCK&source=APP_SHADOW&strategy=swing&timeframe=1d`);
+    const response = await fetch(`${baseUrl}/api/paper-journal/unified-ledger?range=ALL&market=US_STOCK&source=APP_SHADOW&broker=APP&account=APP-****-LOCAL&strategy=swing&timeframe=1d`);
     const body = await json(response);
     assert.equal(response.status, 200);
     assert.equal(body.mode, 'analysis-only');
     assert.equal(body.externalAiCalled, false);
     assert.equal(body.result.trades.length, 3);
-    assert.ok(body.result.trades.every((trade) => trade.market === 'US_STOCK' && trade.source === 'APP_SHADOW'));
+    assert.ok(body.result.trades.every((trade) => trade.market === 'US_STOCK' && trade.source === 'APP_SHADOW' && trade.broker === 'APP' && trade.accountIdMasked === 'APP-****-LOCAL'));
     assert.equal(body.result.aiReviewStatus, 'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY');
     assert.equal(body.result.integrationBaseSha, '868734a1ef2120cdafebb4a518ba8dd0a7d40e0f');
   } finally { await close(server); }
@@ -112,7 +112,7 @@ test('unified ledger uses only authenticated user journal payloads and applies f
 test('unified ledger rejects invalid filter values without leaking internals', async () => {
   const { server, baseUrl } = await start();
   try {
-    for (const query of ['range=FOREVER', 'market=OPTIONS', 'source=UNKNOWN', 'grade=Z']) {
+    for (const query of ['range=FOREVER', 'market=OPTIONS', 'source=UNKNOWN', 'broker=UNKNOWN', 'account=1234567890', 'grade=Z']) {
       const response = await fetch(`${baseUrl}/api/paper-journal/unified-ledger?${query}`);
       assert.equal(response.status, 400);
       const body = await json(response);
