@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+
+import { buildBrokerCommonState } from './account-connections';
 import {
   decryptTradingCredentials,
   encryptTradingCredentials,
 } from '../services/trade-credential-vault.service';
-import { validateKiwoomReadResponse } from '../services/kiwoom-readonly-response.service';
+import type { ExchangeConnection } from '../services/trade-automation.types';
 
 const repositoryRoot = process.cwd();
 
@@ -14,7 +16,21 @@ function source(relativePath: string) {
   return readFileSync(path.join(repositoryRoot, relativePath), 'utf8');
 }
 
-test('credential vault encrypts secrets with AES-GCM and rejects the wrong key', () => {
+function connection(overrides: Partial<ExchangeConnection> = {}): ExchangeConnection {
+  return {
+    userId: 'user-a',
+    exchange: 'kiwoom',
+    accountMode: 'live',
+    configured: true,
+    encryptedCredentials: 'MUST_NEVER_LEAVE_THE_VAULT',
+    lastVerifiedAt: '2026-08-13T00:00:00.000Z',
+    lastErrorCode: null,
+    updatedAt: '2026-08-13T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+test('credential vault still encrypts secrets with AES-GCM and rejects the wrong key', () => {
   const key = Buffer.alloc(32, 7).toString('base64');
   const wrongKey = Buffer.alloc(32, 8).toString('base64');
   const credentials = {
@@ -32,18 +48,87 @@ test('credential vault encrypts secrets with AES-GCM and rejects the wrong key',
   assert.throws(() => decryptTradingCredentials(encrypted, wrongKey));
 });
 
-test('account connection router is admin-mounted, GET-only, read-only, and never advertises credentials', () => {
+test('broker common state is self-scoped and rejects any cross-user repository row', () => {
+  assert.throws(
+    () => buildBrokerCommonState('user-a', [connection({ userId: 'user-b' })]),
+    /ACCOUNT_CONNECTION_USER_SCOPE_MISMATCH/,
+  );
+});
+
+test('configured providers expose vault metadata only and never serialize encrypted credentials', () => {
+  const state = buildBrokerCommonState('user-a', [
+    connection(),
+    connection({ exchange: 'upbit' }),
+    connection({ exchange: 'bitget' }),
+  ]);
+
+  for (const provider of ['kiwoom', 'upbit', 'bitget'] as const) {
+    assert.equal(state.providers[provider].configured, true);
+    assert.equal(state.providers[provider].connected, false);
+    assert.equal(state.providers[provider].credentialSource, 'vault');
+    assert.equal(state.providers[provider].connectivityStatus, 'configured_unverified');
+    assert.equal(state.providers[provider].capabilities.privateAccountRead, false);
+    assert.equal(state.providers[provider].capabilities.privatePositionRead, false);
+    assert.equal(state.providers[provider].capabilities.placeOrder, false);
+    assert.equal(state.providers[provider].capabilities.cancelOrder, false);
+    assert.equal(state.providers[provider].capabilities.amendOrder, false);
+  }
+
+  assert.deepEqual(state.accounts, []);
+  assert.deepEqual(state.assets, []);
+  assert.equal(JSON.stringify(state).includes('MUST_NEVER_LEAVE_THE_VAULT'), false);
+});
+
+test('Toss stays an explicit waiting boundary without schema or private API changes', () => {
+  const state = buildBrokerCommonState('user-a', []);
+  assert.equal(state.providers.toss.configured, false);
+  assert.equal(state.providers.toss.connected, false);
+  assert.equal(state.providers.toss.credentialSource, 'none');
+  assert.equal(state.providers.toss.connectivityStatus, 'waiting_for_api_access');
+  assert.equal(state.providers.toss.provenance, 'release_static_boundary');
+  assert.equal(state.providers.toss.capabilities.privateAccountRead, false);
+  assert.equal(state.providers.toss.capabilities.placeOrder, false);
+});
+
+test('server environment credentials can no longer become a user credential fallback', () => {
+  const previousKey = process.env.KIWOOM_APP_KEY;
+  const previousSecret = process.env.KIWOOM_APP_SECRET;
+  process.env.KIWOOM_APP_KEY = 'SERVER_KEY_MUST_NOT_FALLBACK';
+  process.env.KIWOOM_APP_SECRET = 'SERVER_SECRET_MUST_NOT_FALLBACK';
+  try {
+    const state = buildBrokerCommonState('user-a', []);
+    assert.equal(state.providers.kiwoom.configured, false);
+    assert.equal(state.providers.kiwoom.credentialSource, 'none');
+    assert.equal(JSON.stringify(state).includes('SERVER_KEY_MUST_NOT_FALLBACK'), false);
+  } finally {
+    if (previousKey == null) delete process.env.KIWOOM_APP_KEY;
+    else process.env.KIWOOM_APP_KEY = previousKey;
+    if (previousSecret == null) delete process.env.KIWOOM_APP_SECRET;
+    else process.env.KIWOOM_APP_SECRET = previousSecret;
+  }
+});
+
+test('account connection route is GET-only metadata-only and has no provider network or credential decryption path', () => {
   const routeSource = source('api-server/src/routes/account-connections.ts');
   const indexSource = source('api-server/src/routes/index.ts');
 
-  assert.match(indexSource, /router\.use\('\/account-connections',\s*requireAdmin,\s*accountConnectionsRouter\)/);
+  assert.match(indexSource, /router\.use\('\/account-connections',\s*accountConnectionsRouter\)/);
+  assert.doesNotMatch(indexSource, /router\.use\('\/account-connections',\s*requireAdmin/);
+  assert.match(routeSource, /router\.get\('\/contract'/);
   assert.match(routeSource, /router\.get\('\/status'/);
   assert.match(routeSource, /router\.get\('\/snapshot'/);
   assert.doesNotMatch(routeSource, /router\.(?:post|put|patch|delete)\(/);
-  assert.match(routeSource, /decryptTradingCredentials/);
+  assert.doesNotMatch(routeSource, /\bfetch\s*\(/);
+  assert.doesNotMatch(routeSource, /decryptTradingCredentials/);
+  assert.doesNotMatch(routeSource, /environmentCredentials/);
+  assert.doesNotMatch(routeSource, /KIWOOM_APP_KEY|UPBIT_ACCESS_KEY|BITGET_API_KEY/);
+  assert.doesNotMatch(routeSource, /prepare(?:Kiwoom|Upbit|Bitget).*(?:Account|Position|Order|Cancel|Amend)/);
+  assert.match(routeSource, /serverCredentialFallback:\s*false/);
+  assert.match(routeSource, /privateProviderRequests:\s*0/);
   assert.match(routeSource, /credentialsReturned:\s*false/);
   assert.match(routeSource, /mutationsAllowed:\s*false/);
-  assert.match(routeSource, /credentialSource/);
+  assert.match(routeSource, /orderSubmitted:\s*false/);
+  assert.match(routeSource, /exchangeRequestSent:\s*false/);
 
   for (const privatePath of [
     '/crypto/futures/auto',
@@ -54,101 +139,4 @@ test('account connection router is admin-mounted, GET-only, read-only, and never
   ]) {
     assert.equal(indexSource.includes(privatePath), true, `missing private-path fail-closed guard: ${privatePath}`);
   }
-});
-
-test('account snapshot source never serializes the vault credential object into an API response', () => {
-  const routeSource = source('api-server/src/routes/account-connections.ts');
-  const responseBlocks = [...routeSource.matchAll(/res\.json\(\{([\s\S]*?)\}\);/g)].map((match) => match[1]);
-  assert.ok(responseBlocks.length >= 2);
-  for (const block of responseBlocks) {
-    assert.doesNotMatch(block, /\bcredentials\s*[:,]/);
-    assert.doesNotMatch(block, /\bencryptedCredentials\b/);
-    assert.doesNotMatch(block, /\bsecretKey\b/);
-    assert.doesNotMatch(block, /\bpassphrase\b/);
-    assert.doesNotMatch(block, /\baccessKey\b/);
-    assert.doesNotMatch(block, /\bapiKey\b/);
-  }
-});
-
-test('account connection router correctly uses adapter service and prohibits direct write access', () => {
-  const routeSource = source('api-server/src/routes/account-connections.ts');
-
-  const importMatch = routeSource.match(
-    /import\s*{\s*([^}]*)\s*}\s*from\s*'\.\.\/services\/trade-exchange-adapters\.service';/,
-  );
-  assert.ok(importMatch, 'Missing import from ../services/trade-exchange-adapters.service');
-  const importedNames = importMatch[1].split(',').map((value) => value.trim().replace(/^type\s+/, ''));
-  for (const required of [
-    'prepareUpbitAccounts',
-    'prepareBitgetAccount',
-    'prepareBitgetPositions',
-    'prepareKiwoomToken',
-    'prepareKiwoomAccountNumber',
-    'prepareKiwoomDomesticAccount',
-    'prepareKiwoomUsAccount',
-  ]) {
-    assert.ok(importedNames.includes(required), `Missing ${required}`);
-  }
-
-  assert.doesNotMatch(routeSource, /function upbitAuthorization/);
-  assert.doesNotMatch(routeSource, /function bitgetHeaders/);
-  assert.doesNotMatch(routeSource, /kiwoom-readonly-account/);
-  assert.match(routeSource, /KIWOOM_READ_API_IDS/);
-  assert.match(routeSource, /ACCOUNT_READONLY_REQUEST_REQUIRED/);
-
-  const forbiddenCalls = [
-    'prepareBitgetMarginMode',
-    'prepareBitgetLeverage',
-    'prepareBitgetOrder',
-    'prepareBitgetCancel',
-    'prepareUpbitOrder',
-    'prepareUpbitCancel',
-    'prepareKiwoomOrder',
-    'prepareKiwoomCancel',
-  ];
-  for (const call of forbiddenCalls) {
-    assert.doesNotMatch(routeSource, new RegExp('\\b' + call + '\\b'), `Forbidden direct call detected: ${call}`);
-  }
-});
-
-test('Kiwoom account adapters are exact read-only requests and stay separate from order adapters', () => {
-  const adapterSource = source('api-server/src/services/trade-exchange-adapters.service.ts');
-  assert.match(adapterSource, /prepareKiwoomAccountNumber/);
-  assert.match(adapterSource, /prepareKiwoomDomesticAccount/);
-  assert.match(adapterSource, /prepareKiwoomUsAccount/);
-  assert.match(adapterSource, /'ka00001'/);
-  assert.match(adapterSource, /'kt00018'/);
-  assert.match(adapterSource, /'ust21070'/);
-  assert.doesNotMatch(
-    adapterSource.match(/function kiwoomReadRequest[\s\S]*?\n}\n/)?.[0] ?? '',
-    /\/api\/dostk\/ordr|kt1000[0-9]/,
-  );
-});
-
-test('Kiwoom read-only responses fail closed on provider errors and malformed account payloads', () => {
-  assert.throws(
-    () => validateKiwoomReadResponse('ka00001', { return_code: 1, return_msg: 'provider error', acctNo: '1234567890' }),
-    /KIWOOM_PROVIDER_ERROR/,
-  );
-  assert.throws(() => validateKiwoomReadResponse('ka00001', null), /KIWOOM_RESPONSE_MALFORMED/);
-  assert.throws(() => validateKiwoomReadResponse('ka00001', { return_code: 'not-a-number', acctNo: '1234567890' }), /KIWOOM_RESPONSE_MALFORMED/);
-  assert.throws(() => validateKiwoomReadResponse('ka00001', { return_code: 0 }), /KIWOOM_RESPONSE_MALFORMED/);
-  assert.throws(
-    () => validateKiwoomReadResponse('kt00018', { return_code: 0, acnt_evlt_remn_indv_tot: {} }),
-    /KIWOOM_RESPONSE_MALFORMED/,
-  );
-  assert.throws(
-    () => validateKiwoomReadResponse('ust21070', { return_code: 0, result_list: {} }),
-    /KIWOOM_RESPONSE_MALFORMED/,
-  );
-
-  assert.equal(validateKiwoomReadResponse('ka00001', { return_code: 0, acctNo: '1234567890' }).acctNo, '1234567890');
-  assert.deepEqual(
-    validateKiwoomReadResponse('kt00018', { return_code: 0, tot_evlt_amt: '0', acnt_evlt_remn_indv_tot: [] }).acnt_evlt_remn_indv_tot,
-    [],
-  );
-  assert.deepEqual(
-    validateKiwoomReadResponse('ust21070', { return_code: 0, crnc_code: 'USD', result_list: [] }).result_list,
-    [],
-  );
 });
