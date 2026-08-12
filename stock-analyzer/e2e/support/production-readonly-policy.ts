@@ -9,10 +9,12 @@ const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const PRIVATE_PROVIDER_HOSTS = new Set([
   'api.upbit.com',
   'api.bitget.com',
+  'openapi.tossinvest.com',
   'mockapi.kiwoom.com',
 ]);
 const PRIVATE_APP_PATHS = [
   '/api/account-connections/snapshot',
+  '/api/trade-automation/account-connections/snapshot',
   '/api/kiwoom/token-test',
   '/api/kiwoom/test',
 ];
@@ -36,11 +38,13 @@ export function classifyProductionRequest(
   }
 
   if (url.origin === productionOrigin) {
-    if (url.pathname === '/api/account-connections/status' && READ_METHODS.has(normalizedMethod)) {
+    if ((url.pathname === '/api/account-connections/status'
+      || url.pathname === '/api/trade-automation/account-connections/status')
+      && READ_METHODS.has(normalizedMethod)) {
       return { action: 'allow' };
     }
     if (PRIVATE_APP_PATHS.includes(url.pathname)) {
-      return url.pathname === '/api/account-connections/snapshot' && READ_METHODS.has(normalizedMethod)
+      return url.pathname.endsWith('/account-connections/snapshot') && READ_METHODS.has(normalizedMethod)
         ? { action: 'mock-private-account', reason: 'PRIVATE_ACCOUNT_LIVE_QA_NOT_RUN' }
         : { action: 'block', reason: 'PRIVATE_ACCOUNT_REQUEST_BLOCKED' };
     }
@@ -82,6 +86,7 @@ export function privateAccountDisconnectedFixture() {
     mutationsAllowed: false,
     credentialsReturned: false,
     providers: {
+      toss: { ...provider('toss', 'TOSS_API_ACCESS_REQUIRED'), connectionState: 'WAITING_FOR_TOSS_API_ACCESS' },
       kiwoom: provider('kiwoom', 'KIWOOM_NOT_CONFIGURED'),
       upbit: provider('upbit', 'UPBIT_NOT_CONFIGURED'),
       bitget: provider('bitget', 'BITGET_NOT_CONFIGURED'),

@@ -44,12 +44,13 @@ test('Supabase table and storage mutations are blocked while auth token POST rem
 
 test('private account snapshot is intercepted instead of reaching the provider backend', () => {
   assert.deepEqual(
-    classifyProductionRequest(`${ORIGIN}/api/account-connections/snapshot`, 'GET', ORIGIN),
+    classifyProductionRequest(`${ORIGIN}/api/trade-automation/account-connections/snapshot`, 'GET', ORIGIN),
     { action: 'mock-private-account', reason: 'PRIVATE_ACCOUNT_LIVE_QA_NOT_RUN' },
   );
   const fixture = privateAccountDisconnectedFixture();
   assert.equal(fixture.privateAccountLiveQa, 'NOT_RUN');
   assert.equal(fixture.mutationsAllowed, false);
+  assert.equal(fixture.providers.toss.connectionState, 'WAITING_FOR_TOSS_API_ACCESS');
   assert.equal(fixture.providers.kiwoom.configured, false);
   assert.equal(fixture.providers.upbit.connected, false);
   assert.equal(fixture.providers.bitget.connected, false);
@@ -59,6 +60,7 @@ test('direct private broker provider traffic is blocked before transmission', ()
   for (const url of [
     'https://api.upbit.com/v1/accounts',
     'https://api.bitget.com/api/v2/mix/account/account',
+    'https://openapi.tossinvest.com/api/v1/accounts',
     'https://mockapi.kiwoom.com/api/dostk/acnt',
   ]) {
     assert.deepEqual(

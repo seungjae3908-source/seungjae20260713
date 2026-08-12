@@ -8,7 +8,7 @@ function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
 }
 
-async function installAdmin(page: Page) {
+async function installMember(page: Page) {
   await page.addInitScript(({ storageKey, userId, now }) => {
     const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     const expiresAt = 4_102_444_800;
@@ -25,7 +25,7 @@ async function installAdmin(page: Page) {
         role: 'authenticated',
         email: 'account-link@accounts.invalid',
         app_metadata: { provider: 'email', providers: ['email'] },
-        user_metadata: { display_name: '계좌연동 관리자' },
+        user_metadata: { display_name: '계좌연동 회원' },
         identities: [],
         created_at: now,
       },
@@ -47,11 +47,11 @@ async function installAdmin(page: Page) {
     if (pathname.endsWith('/rest/v1/profiles')) {
       return fulfill(route, {
         id: USER_ID,
-        login_name: 'account-link-admin',
-        display_name: '계좌연동 관리자',
-        role: 'admin',
+        login_name: 'account-link-member',
+        display_name: '계좌연동 회원',
+        role: 'user',
         status: 'approved',
-        membership_level: 'admin',
+        membership_level: 'regular',
         is_active: true,
         permissions_updated_at: NOW,
         updated_at: NOW,
@@ -64,7 +64,7 @@ async function installAdmin(page: Page) {
         role: 'authenticated',
         email: 'account-link@accounts.invalid',
         app_metadata: { provider: 'email', providers: ['email'] },
-        user_metadata: { display_name: '계좌연동 관리자' },
+        user_metadata: { display_name: '계좌연동 회원' },
         identities: [],
         created_at: NOW,
       });
@@ -82,14 +82,14 @@ async function installAdmin(page: Page) {
   };
 }
 
-test('admin can save Upbit read-only credentials without exposing secret values', async ({ page }) => {
-  const { assertClean } = await installAdmin(page);
+test('approved member can save self-scoped Upbit credentials without exposing secret values', async ({ page }) => {
+  const { assertClean } = await installMember(page);
   let savedBody: Record<string, unknown> | null = null;
   let snapshotReads = 0;
 
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === '/api/account-connections/snapshot') {
+    if (url.pathname === '/api/trade-automation/account-connections/snapshot') {
       snapshotReads += 1;
       return fulfill(route, {
         ok: true,
@@ -98,6 +98,7 @@ test('admin can save Upbit read-only credentials without exposing secret values'
         credentialsReturned: false,
         checkedAt: NOW,
         providers: {
+          toss: { configured: false, connected: false, credentialSource: 'none', connectionState: 'WAITING_FOR_TOSS_API_ACCESS', accounts: [], holdingCount: 0, holdings: [], error: 'TOSS_API_ACCESS_REQUIRED' },
           kiwoom: { configured: false, connected: false, credentialSource: 'none', error: 'KIWOOM_NOT_CONFIGURED' },
           upbit: { configured: snapshotReads > 1, connected: snapshotReads > 1, credentialSource: snapshotReads > 1 ? 'vault' : 'none', assetCount: 0, assets: [], error: snapshotReads > 1 ? null : 'UPBIT_NOT_CONFIGURED' },
           bitget: { configured: false, connected: false, credentialSource: 'none', accounts: [], positions: [], error: 'BITGET_NOT_CONFIGURED' },
@@ -110,7 +111,7 @@ test('admin can save Upbit read-only credentials without exposing secret values'
         exchange: 'upbit',
         accountMode: 'live',
         configured: true,
-        credentialsExposed: false,
+        credentialsReturned: false,
         lastVerifiedAt: NOW,
         lastErrorCode: null,
       });
@@ -143,14 +144,15 @@ test('admin can save Upbit read-only credentials without exposing secret values'
   assertClean();
 });
 
-test('Bitget and Kiwoom setup forms remain inside mobile viewport', async ({ page }) => {
-  const { assertClean } = await installAdmin(page);
+test('Toss, Bitget and Kiwoom setup forms remain inside mobile viewport', async ({ page }) => {
+  const { assertClean } = await installMember(page);
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === '/api/account-connections/snapshot') {
+    if (url.pathname === '/api/trade-automation/account-connections/snapshot') {
       return fulfill(route, {
         ok: true, readOnly: true, mutationsAllowed: false, credentialsReturned: false, checkedAt: NOW,
         providers: {
+          toss: { configured: false, connected: false, credentialSource: 'none', connectionState: 'WAITING_FOR_TOSS_API_ACCESS', accounts: [], holdingCount: 0, holdings: [] },
           kiwoom: { configured: false, connected: false, credentialSource: 'none' },
           upbit: { configured: false, connected: false, credentialSource: 'none', assets: [] },
           bitget: { configured: false, connected: false, credentialSource: 'none', accounts: [], positions: [] },
@@ -162,7 +164,7 @@ test('Bitget and Kiwoom setup forms remain inside mobile viewport', async ({ pag
 
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto('/account');
-  for (const name of ['Kiwoom 연결 설정', 'Bitget 연결 설정']) {
+  for (const name of ['Toss Securities 연결 설정', 'Kiwoom 연결 설정', 'Bitget 연결 설정']) {
     await page.getByRole('button', { name }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
