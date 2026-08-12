@@ -1,5 +1,6 @@
 import test from 'node:test';
 import './broker-provider-adapter.test';
+import './broker-portfolio-normalizer.service.test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { InMemoryTradingRepository } from './trade-automation.repository';
