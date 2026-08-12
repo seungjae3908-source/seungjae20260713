@@ -69,9 +69,7 @@ export function buildPortfolioAdvisorContext(
     holdings,
     averageCost: holdings.map((holding) => ({ assetId: holding.assetId, averageCost: holding.averageCost })),
     weights: analytics.positions.map((position) => ({ assetId: position.assetId, weight: position.weight })),
-    cash: analytics.cashWeight.status === 'available' && analytics.totalValue.status === 'available'
-      ? analytics.totalValue.value * (analytics.cashWeight.value / 100)
-      : 0,
+    cash: analytics.cashValue,
     risk: {
       concentration: analytics.concentration,
       volatilityPercent: analytics.volatilityPercent,
