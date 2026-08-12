@@ -53,6 +53,19 @@ export function buildPortfolioScenario(
     };
   }
 
+  if (!(supplied.bear <= supplied.base && supplied.base <= supplied.bull)) {
+    return {
+      returnScenarioStatus: 'EVIDENCE_SUFFICIENT_NO_RETURN_ESTIMATE',
+      evidence,
+      missingOrFailed: ['VALIDATED_SCENARIO_ORDER_INVALID'],
+      scenarios: {
+        bear: { returnPercent: null, basis: 'Validated scenario returns are not emitted when bear/base/bull ordering is inconsistent.' },
+        base: { returnPercent: null, basis: 'Validated scenario returns are not emitted when bear/base/bull ordering is inconsistent.' },
+        bull: { returnPercent: null, basis: 'Validated scenario returns are not emitted when bear/base/bull ordering is inconsistent.' },
+      },
+    };
+  }
+
   return {
     returnScenarioStatus: 'VALIDATED_SCENARIOS_AVAILABLE',
     evidence,
