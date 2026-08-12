@@ -1,5 +1,6 @@
 import type { Candle } from '../sample/types';
 import { evaluateScannerDataQuality } from './scanner-data-quality.service';
+import { applyScannerMarketProfile, type ScannerMarketProfile } from './scanner-market-profile-overlay.service';
 import {
   runScannerQuantStrategy,
   scannerStrategyForTimeframe,
@@ -43,6 +44,31 @@ function completenessFromMarketData(
 
 function evidenceLabels(evidence: ScannerEvidence[], status: ScannerEvidence['status']): string[] {
   return [...new Set(evidence.filter((item) => item.status === status).map((item) => item.label))];
+}
+
+function marketProfileFor(card: ScannerSignalCard): ScannerMarketProfile {
+  if (card.assetClass === 'coin_spot') return 'CRYPTO_SPOT';
+  if (card.assetClass === 'coin_futures') return 'CRYPTO_FUTURES';
+  return card.market === 'US' ? 'US_STOCK' : 'KR_STOCK';
+}
+
+function numberFromReason(reason: string | undefined): number | null {
+  if (!reason) return null;
+  const match = reason.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const value = Number(match[0]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function futuresPublicContext(card: ScannerSignalCard): { fundingRate: number | null; openInterest: number | null } {
+  if (card.assetClass !== 'coin_futures') return { fundingRate: null, openInterest: null };
+  const evidence = card.evidence.find((item) => item.key === 'funding-open-interest');
+  const fundingPercent = numberFromReason(evidence?.reasons.find((reason) => reason.startsWith('펀딩비 ')));
+  const openInterest = numberFromReason(evidence?.reasons.find((reason) => reason.startsWith('미결제약정 ')));
+  return {
+    fundingRate: fundingPercent == null ? null : fundingPercent / 100,
+    openInterest,
+  };
 }
 
 export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): ScannerSignalCard {
@@ -125,7 +151,7 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     },
   ];
 
-  return {
+  const hardened: ScannerSignalCard = {
     ...input.card,
     direction: quant.direction,
     pricePlan,
@@ -150,4 +176,13 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     notMatched: evidenceLabels(evidence, 'not_matched'),
     unverified: evidenceLabels(evidence, 'unverified'),
   };
+  const futuresContext = futuresPublicContext(hardened);
+  return applyScannerMarketProfile({
+    card: hardened,
+    profile: marketProfileFor(hardened),
+    candles: input.candles,
+    strategyMode,
+    fundingRate: futuresContext.fundingRate,
+    openInterest: futuresContext.openInterest,
+  });
 }
