@@ -39,8 +39,8 @@ export function prepareKiwoomDomesticFillHistory(
 ): PreparedExchangeRequest {
   const side = input.side === 'sell' ? '1' : input.side === 'buy' ? '2' : '0';
   const exchange = input.exchange === 'krx' ? '1' : input.exchange === 'nxt' ? '2' : '0';
-  const symbol = input.symbol?.trim().toUpperCase() ?? '';
-  if (symbol && !/^[A-Z0-9]{1,12}$/.test(symbol)) throw new Error('KIWOOM_SYMBOL_INVALID');
+  const symbol = input.symbol?.trim() ?? '';
+  if (symbol && !/^\d{6}$/.test(symbol)) throw new Error('KIWOOM_SYMBOL_INVALID');
   return authenticatedRequest(credentials, 'ka10076', '/api/dostk/acnt', {
     stk_cd: symbol,
     qry_tp: symbol ? '1' : '0',
