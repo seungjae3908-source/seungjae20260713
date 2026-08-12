@@ -149,7 +149,7 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
 
       <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
         <p className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 font-semibold" data-testid="toss-free-status">
-          <AlertTriangle className="mr-2 inline h-4 w-4" />Toss 실조회: {data?.toss.liveReadIntegration ?? '확인 중'} · 비용 상태 미확인으로 실 API 호출 0건
+          <AlertTriangle className="mr-2 inline h-4 w-4" />브로커 일지: {data?.toss.liveReadIntegration ?? '확인 중'} · 읽기 {data?.brokerImport?.privateReadRequests ?? 0}건 · 가져온 체결 {data?.brokerImport?.importedRecords ?? 0}건
         </p>
         <p className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 font-semibold" data-testid="journal-zero-cost-status">
           <ShieldCheck className="mr-2 inline h-4 w-4" />외부 AI 비활성 · 신규 비용 {data?.safety.finalCostDelta ?? '0_KRW'} · 주문/취소/정정 0건
