@@ -75,8 +75,10 @@ assert(automationRoute.includes("router.post('/admin/emergency-stop', requireAdm
   'persistent global emergency stop is not restricted to an admin route and service-only storage');
 assert(!automationUi.includes('credentials:'), 'frontend contains an exchange credential payload');
 assert(!/(?:trade-automation|trade-execution|place-order|\/v1\/orders)/i.test(`${aiChatRoute}\n${aiChatService}`), 'AI chat imports or calls the trading execution surface');
-assert(unifiedJournalService.includes("TOSS_LIVE_READ_INTEGRATION = 'BLOCKED_BY_FREE_STATUS_UNVERIFIED'"),
-  'Toss live read integration is not fail-closed while free status is unverified');
+assert(unifiedJournalService.includes("TOSS_LIVE_READ_INTEGRATION = 'MEMBER_CONFIGURED_READ_ONLY'"),
+  'Toss live read must stay scoped to the configured member read-only path');
+assert(unifiedJournalService.includes("TOSS_CONTRACT_PREVIEW_DISABLED = 'TOSS_CONTRACT_PREVIEW_DISABLED'"),
+  'public Toss contract preview must stay disabled');
 assert(unifiedJournalService.includes("AI_EXTERNAL_REVIEW_STATUS = 'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY'"),
   'unified journal does not explicitly disable paid external AI review');
 assert(unifiedJournalService.includes("finalCostDelta: '0_KRW'")

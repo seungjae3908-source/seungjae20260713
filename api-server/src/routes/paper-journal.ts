@@ -19,6 +19,7 @@ import { buildAiReviewDataset, generateTradingAiReview, previewAiReview } from '
 import { configuredTradingReviewProvider, type TradingReviewProvider } from '../services/trading-review-provider';
 import {
   JOURNAL_COST_SAFETY,
+  TOSS_CONTRACT_PREVIEW_DISABLED,
   TOSS_LIVE_READ_INTEGRATION,
   TRADE_BROKERS,
   TRADE_MARKETS,
@@ -34,6 +35,7 @@ import {
   type TradeSource,
   type UnifiedJournalFilters,
 } from '../services/unified-trade-journal.service';
+import { memberBrokerJournalSnapshot } from './account-connections';
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 
@@ -42,6 +44,7 @@ type PaperJournalDependencies = {
   now: () => Date;
   reviewProvider: TradingReviewProvider | null;
   allowTossContractPreview: boolean;
+  brokerJournalFactory: typeof memberBrokerJournalSnapshot;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -120,6 +123,12 @@ function unifiedFilters(query: Request['query']): UnifiedJournalFilters {
   };
 }
 
+function includeBrokerJournal(query: Request['query']) {
+  if (query.includeBroker == null || query.includeBroker === 'false') return false;
+  if (query.includeBroker === 'true') return true;
+  throw new PaperJournalError('INVALID_JOURNAL_BROKER_IMPORT', '브로커 일지 포함 설정을 확인하세요.');
+}
+
 function containsForbiddenContractField(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(containsForbiddenContractField);
   if (!isObject(value)) return false;
@@ -137,6 +146,7 @@ export function createPaperJournalRouter(
   const now = dependencies.now ?? (() => new Date());
   const reviewProvider = dependencies.reviewProvider === undefined ? configuredTradingReviewProvider() : dependencies.reviewProvider;
   const allowTossContractPreview = dependencies.allowTossContractPreview === true;
+  const brokerJournalFactory = dependencies.brokerJournalFactory ?? memberBrokerJournalSnapshot;
 
   const requireAiReview = (request: AuthenticatedRequest) => {
     if (!request.member || !hasCapability(request.member, 'canAccessAiTradingReview')) throw new PaperJournalError('CAPABILITY_REQUIRED', 'AI 거래 복기는 정회원과 관리자만 사용할 수 있습니다.', request.member ? 403 : 401);
@@ -226,9 +236,21 @@ export function createPaperJournalRouter(
   router.get('/paper-journal/unified-ledger', async (request: AuthenticatedRequest, response) => {
     try {
       const payloads = await repositoryFactory(request).listJournalPayloads(request.member?.id ?? '');
+      const brokerRequested = includeBrokerJournal(request.query);
+      const brokerJournal = brokerRequested ? await brokerJournalFactory(request) : null;
+      const privateReadRequests = brokerJournal
+        ? Object.values(brokerJournal.providers).reduce((sum, provider) => sum + provider.privateReadRequests, 0)
+        : 0;
       return response.json(analysisEnvelope({
         ok: true,
-        result: buildUnifiedTradeJournal(payloads, unifiedFilters(request.query), now()),
+        result: buildUnifiedTradeJournal([...payloads, ...(brokerJournal?.records ?? [])], unifiedFilters(request.query), now()),
+        brokerImport: {
+          requested: brokerRequested,
+          importedRecords: brokerJournal?.records.length ?? 0,
+          privateReadRequests,
+          privateMutationRequests: brokerJournal?.safety.privateMutationRequests ?? 0,
+          providers: brokerJournal?.providers ?? null,
+        },
       }));
     } catch (cause) {
       return handleError(response, cause, 'UNIFIED_JOURNAL_FAILED', '통합 매매일지를 처리하지 못했습니다.', analysisEnvelope);
@@ -242,7 +264,7 @@ export function createPaperJournalRouter(
       ...payload,
     });
     if (!allowTossContractPreview) {
-      return response.status(503).json(envelope({ ok: false, code: TOSS_LIVE_READ_INTEGRATION, message: 'Toss API 유료 여부 확인 전에는 실계좌 주문 조회를 실행하지 않습니다.' }));
+      return response.status(503).json(envelope({ ok: false, code: TOSS_CONTRACT_PREVIEW_DISABLED, message: '공개 Toss 계약 미리보기는 비활성화되어 있습니다. 회원별 read-only 연결 경로를 사용하세요.' }));
     }
     if (requestSize(request) > MAX_REQUEST_BYTES) return response.status(413).json(envelope({ ok: false, code: 'REQUEST_TOO_LARGE', message: 'Toss 계약 검증 요청이 너무 큽니다.' }));
     try {
