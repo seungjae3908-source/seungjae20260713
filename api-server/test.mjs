@@ -30,6 +30,7 @@ const groups = {
   phase7: [
     path.join(root, 'src/services/paper-journal-sync.service.test.ts'),
     path.join(root, 'src/services/paper-journal-analytics.service.test.ts'),
+    path.join(root, 'src/services/unified-trade-journal.service.test.ts'),
     path.join(root, 'src/services/paper-journal-migration.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-sync-storage.test.ts'),
   ],
@@ -97,11 +98,11 @@ const groups = {
     path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
     path.join(root, 'src/routes/account-connections.contract.test.ts'),
-    path.join(root, 'src/features/user-broker-telegram/user-broker-telegram.service.test.ts'),
-    path.join(root, 'src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts'),
     path.join(root, 'src/services/market-information.service.test.ts'),
     path.join(root, 'src/services/public-market-http.test.ts'),
     path.join(root, 'src/lib/deployment-identity.test.ts'),
+    path.join(root, 'src/features/user-broker-telegram/user-broker-telegram.service.test.ts'),
+    path.join(root, 'src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/market-information.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/auth-bootstrap.test.ts'),
@@ -122,6 +123,7 @@ const groups = {
     path.join(root, 'src/routes/paper-trading.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal-query-identity.smoke.test.ts'),
+    path.join(root, 'src/routes/unified-trade-journal.route.test.ts'),
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
     path.join(root, 'src/routes/signal-scanner-auth.smoke.test.ts'),
     path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
@@ -162,15 +164,10 @@ try {
     outputFiles.push(outputFile);
   }
 
-  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
-  // serially so host-level event-loop contention cannot consume a scanner deadline
-  // before the test body starts. Test coverage and every assertion remain unchanged.
   const testArguments = mode === 'phase9'
     ? ['--test', '--test-concurrency=1', ...outputFiles]
     : ['--test', ...outputFiles];
-  const result = spawnSync(process.execPath, testArguments, {
-    cwd: repositoryRoot, stdio: 'inherit',
-  });
+  const result = spawnSync(process.execPath, testArguments, { cwd: repositoryRoot, stdio: 'inherit' });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 } finally {
