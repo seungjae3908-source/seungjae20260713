@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const US_STOCK_FORWARD_START = Date.parse("2026-08-13T00:00:00.000Z");
+export const US_STOCK_FORWARD_START = Date.parse("2026-08-12T12:17:03.000Z");
 
 export const US_STOCK_FORWARD_CANDIDATE = Object.freeze({
   id: "us-stock-regime-router-v1",
