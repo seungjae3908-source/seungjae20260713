@@ -31,15 +31,22 @@ import {
   scannerRequestGuard,
   type ScannerRequestGuard,
 } from '../services/scanner-request-guard.service';
+import {
+  CryptoWilliamsAtrScannerOverlayService,
+  type CryptoWilliamsOverlayRunner,
+} from '../services/crypto-williams-atr-scanner-overlay.service';
 
 export type CryptoScannerRunner = {
   scan(request: CryptoSignalScanRequest): ReturnType<typeof CryptoSignalScannerService.scan>;
 };
 
+type CryptoRouteCondition = CryptoSignalScanRequest['condition'] | 'williams';
+
 export interface CryptoSignalScanRouteDependencies {
   scanner?: CryptoScannerRunner;
   guard?: ScannerRequestGuard;
   precision?: CryptoPricePrecisionServiceContract;
+  williamsOverlay?: CryptoWilliamsOverlayRunner;
 }
 
 function requireScannerSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -78,10 +85,10 @@ function strategy(value: unknown, selectedTimeframe: CryptoSignalScanRequest['ti
   return selected && scannerStrategyTimeframeAllowed(selected, selectedTimeframe) ? selected : null;
 }
 
-function condition(value: unknown): CryptoSignalScanRequest['condition'] {
+function condition(value: unknown): CryptoRouteCondition {
   const normalized = String(value ?? 'trend');
-  return ['trend', 'volume', 'breakout', 'pullback'].includes(normalized)
-    ? normalized as CryptoSignalScanRequest['condition']
+  return ['trend', 'volume', 'breakout', 'pullback', 'williams'].includes(normalized)
+    ? normalized as CryptoRouteCondition
     : 'trend';
 }
 
@@ -112,6 +119,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
   const scanner = dependencies.scanner ?? CryptoSignalScannerService;
   const guard = dependencies.guard ?? scannerRequestGuard;
   const precision = dependencies.precision ?? CryptoPricePrecisionService;
+  const williamsOverlay = dependencies.williamsOverlay ?? CryptoWilliamsAtrScannerOverlayService;
   router.use(requireScannerSession);
 
   const handler = (market: 'spot' | 'futures') => async (req: AuthenticatedRequest, res: Response) => {
@@ -124,6 +132,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         timeframe: selectedTimeframe, strategy: String(req.query.strategy ?? ''),
       });
     }
+    const selectedCondition = condition(req.query.condition);
     const requestedGrade = parseScannerGradeQuery(req.query.grade);
     if (requestedGrade === null) return res.status(400).json({ ok: false, error: 'SCANNER_GRADE_UNSUPPORTED' });
     const membershipLevel = req.membershipLevel ?? 'pending';
@@ -145,7 +154,9 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         market,
         strategyMode,
         timeframe: selectedTimeframe,
-        condition: condition(req.query.condition),
+        // Williams is an independent confirmation layer. The canonical scanner still
+        // gathers its normal breakout candidates before the KST09/MA5/ATR14 overlay.
+        condition: selectedCondition === 'williams' ? 'breakout' : selectedCondition,
         cursor: number(req.query.cursor, 0, 1_000_000) ?? 0,
         batchSize: number(req.query.batchSize, 5, 40) ?? 24,
         minimumScore: undefined,
@@ -163,13 +174,22 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         softMinimumScore,
         limit: 10,
       });
-      const rankedCards = ranking.cards.map((card) => card.signalGrade === 'B'
+      const baseRankedCards = ranking.cards.map((card) => card.signalGrade === 'B'
         ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
         : card);
+      const overlay = selectedCondition === 'williams'
+        ? await williamsOverlay.apply({ market, cards: baseRankedCards, signal: controller.signal })
+        : { cards: baseRankedCards, matchedCount: 0, unavailableCount: 0 };
+      if (controller.signal.aborted || res.writableEnded) return;
+      const rankedCards = overlay.cards;
       const actionableIds = new Set(rankedCards
         .filter((card) => card.signalGrade === 'S' || card.signalGrade === 'A')
         .map((card) => card.signalId));
-      const actionableCount = ranking.diagnostics.sGradeCount + ranking.diagnostics.aGradeCount;
+      const cardBySignalId = new Map(rankedCards.map((card) => [card.signalId, card]));
+      const sGradeCount = rankedCards.filter((card) => card.signalGrade === 'S').length;
+      const aGradeCount = rankedCards.filter((card) => card.signalGrade === 'A').length;
+      const bGradeCount = rankedCards.filter((card) => card.signalGrade === 'B').length;
+      const actionableCount = sGradeCount + aGradeCount;
       const insufficientDataCount = result.failures.filter((failure) => failure.reason === 'invalid_data').length;
       const providerAcceptedCount = result.execution.completedCount;
       const dataSuccessCount = Math.max(0, providerAcceptedCount - insufficientDataCount);
@@ -178,7 +198,20 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       const rankedResult = {
         ...result,
         cards: rankedCards,
-        alerts: result.alerts.filter((alert) => actionableIds.has(alert.signalId)),
+        alerts: result.alerts
+          .filter((alert) => actionableIds.has(alert.signalId))
+          .map((alert) => {
+            const card = cardBySignalId.get(alert.signalId);
+            return card
+              ? {
+                ...alert,
+                entryZone: card.pricePlan.entryZone,
+                stopLoss: card.pricePlan.stopLoss,
+                targets: card.pricePlan.targets,
+                evidence: card.matched,
+              }
+              : alert;
+          }),
         execution: {
           ...result.execution,
           providerAcceptedCount,
@@ -189,26 +222,32 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
           hardFilterPassCount: ranking.diagnostics.hardFilterPassCount,
           hardFilterRejectedCount: ranking.diagnostics.hardFilterRejectedCount,
           softCandidateCount: ranking.diagnostics.softCandidateCount,
-          finalDisplayedCount: ranking.diagnostics.finalDisplayedCount,
-          sGradeCount: ranking.diagnostics.sGradeCount,
-          aGradeCount: ranking.diagnostics.aGradeCount,
-          bGradeCount: ranking.diagnostics.bGradeCount,
+          finalDisplayedCount: rankedCards.length,
+          sGradeCount,
+          aGradeCount,
+          bGradeCount,
           backtestMissingCount: ranking.diagnostics.backtestMissingCount,
         },
-        message: dataSuccessCount === 0 && insufficientDataCount > 0
-          ? `현재 묶음에서 공급자 응답은 받았지만 ${insufficientDataCount}종목의 분석 데이터가 부족합니다.`
-          : rankedCards.length === 0
-            ? '현재 묶음에서 Hard Risk Filter를 통과한 후보가 없습니다.'
+        message: selectedCondition === 'williams'
+          ? overlay.unavailableCount > 0 && overlay.matchedCount === 0
+            ? `Williams+ATR 일봉 확인 실패/부족 ${overlay.unavailableCount}개 · 강한 신호 승격 없음`
             : actionableCount === 0
-              ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
-              : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${ranking.diagnostics.bGradeCount}개`,
+              ? `Williams+ATR 확인 신호 없음 · 일치 ${overlay.matchedCount}개 · B 관찰 ${bGradeCount}개`
+              : `Williams+ATR + Quant S/A 일치 ${actionableCount}개 · B 관찰 ${bGradeCount}개`
+          : dataSuccessCount === 0 && insufficientDataCount > 0
+            ? `현재 묶음에서 공급자 응답은 받았지만 ${insufficientDataCount}종목의 분석 데이터가 부족합니다.`
+            : rankedCards.length === 0
+              ? '현재 묶음에서 Hard Risk Filter를 통과한 후보가 없습니다.'
+              : actionableCount === 0
+                ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${bGradeCount}개`
+                : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${bGradeCount}개`,
       };
       const canonicalResult = withScannerCanonicalActions(rankedResult);
       const visibleResult = filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined);
       void deliverScannerTelegramAlerts(visibleResult.alerts);
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Scanner-Request-Id', result.requestId);
-      return res.json({ ...visibleResult, strategy: strategyMode });
+      return res.json({ ...visibleResult, strategy: strategyMode, condition: selectedCondition });
     } catch (error) {
       if (controller.signal.aborted || res.writableEnded) return;
       return routeError(res, error);
