@@ -67,6 +67,7 @@ export type PositionAnalytics = {
 export type PortfolioAnalyticsResult = {
   totalValue: Metric<number>;
   knownValue: number;
+  cashValue: number;
   cashWeight: Metric<number>;
   marketExposure: Metric<Record<string, number>>;
   sectorExposure: Metric<Record<string, number>>;
