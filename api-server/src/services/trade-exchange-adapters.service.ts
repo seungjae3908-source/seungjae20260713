@@ -91,13 +91,36 @@ export function prepareTossBuyingPower(
   return tossAuthorizedRequest(credentials, 'GET', '/api/v1/buying-power', accountSeq, `currency=${currency}`);
 }
 
+export type TossOrderHistoryInput = {
+  status: 'OPEN' | 'CLOSED';
+  symbol?: string;
+  from?: string;
+  to?: string;
+  cursor?: string;
+  limit?: number;
+};
+
 export function prepareTossOrderHistory(
   credentials: TossCredentials,
   accountSeq: string,
-  status: 'OPEN' | 'CLOSED',
-  cursor?: string,
+  input: TossOrderHistoryInput,
 ) {
-  const query = new URLSearchParams({ status, ...(cursor ? { cursor } : {}) }).toString();
+  if (input.limit != null && (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100)) {
+    throw new Error('TOSS_ORDER_HISTORY_LIMIT_INVALID');
+  }
+  for (const [name, value] of [['from', input.from], ['to', input.to]] as const) {
+    if (value != null && !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error(`TOSS_ORDER_HISTORY_${name.toUpperCase()}_INVALID`);
+  }
+  if (input.from && input.to && input.from > input.to) throw new Error('TOSS_ORDER_HISTORY_RANGE_INVALID');
+  if (input.status === 'OPEN' && (input.cursor || input.limit != null)) throw new Error('TOSS_OPEN_HISTORY_PAGINATION_NOT_SUPPORTED');
+  const query = new URLSearchParams({
+    status: input.status,
+    ...(input.symbol?.trim() ? { symbol: input.symbol.trim().toUpperCase() } : {}),
+    ...(input.from ? { from: input.from } : {}),
+    ...(input.to ? { to: input.to } : {}),
+    ...(input.cursor?.trim() ? { cursor: input.cursor.trim() } : {}),
+    ...(input.limit != null ? { limit: String(input.limit) } : {}),
+  }).toString();
   return tossAuthorizedRequest(credentials, 'GET', '/api/v1/orders', accountSeq, query);
 }
 
@@ -438,6 +461,10 @@ export function prepareUpbitCancel(credentials: UpbitCredentials, identifier: st
 
 export function prepareUpbitOrderQuery(credentials: UpbitCredentials, identifier: string, nonce?: string) {
   return upbitRequest(credentials, 'GET', '/v1/order', { identifier }, nonce);
+}
+
+export function prepareUpbitOrderQueryByUuid(credentials: UpbitCredentials, uuid: string, nonce?: string) {
+  return upbitRequest(credentials, 'GET', '/v1/order', { uuid }, nonce);
 }
 
 export function prepareUpbitAccounts(credentials: UpbitCredentials, nonce?: string) {
