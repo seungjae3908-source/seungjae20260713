@@ -58,6 +58,8 @@ const groups = {
     path.join(root, 'src/services/scanner-access-control.service.test.ts'),
     path.join(root, 'src/services/scanner-data-quality.service.test.ts'),
     path.join(root, 'src/services/scanner-quant-strategy.service.test.ts'),
+    path.join(root, 'src/services/scanner-strategy-profile.service.test.ts'),
+    path.join(root, 'src/services/signal-performance-learning.service.test.ts'),
     path.join(root, 'src/services/scanner-quant-hardening.service.test.ts'),
     path.join(root, 'src/services/scanner-market-profile-overlay.service.test.ts'),
     path.join(root, 'src/services/scanner-ai-provider.service.test.ts'),
@@ -76,6 +78,7 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/asset-navigation.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-analysis.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/scanner-request.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/signal-scanner-profile.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-live-timeline.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-candle-normalizer.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-indicator-engine.test.ts'),
@@ -167,9 +170,6 @@ try {
     outputFiles.push(outputFile);
   }
 
-  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
-  // serially so host-level event-loop contention cannot consume a scanner deadline
-  // before the test body starts. Test coverage and every assertion remain unchanged.
   const testArguments = mode === 'phase9'
     ? ['--test', '--test-concurrency=1', ...outputFiles]
     : ['--test', ...outputFiles];
