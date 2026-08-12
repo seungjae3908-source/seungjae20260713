@@ -500,7 +500,7 @@ function reconcileOrders(orders: UnifiedTradeOrder[], issues: JournalIntegrityIs
   const byOrder = new Map<string, UnifiedTradeOrder>();
   const executionKeys = new Map<string, UnifiedTradeOrder>();
   for (const order of [...orders].sort((left, right) => Date.parse(left.observedAt) - Date.parse(right.observedAt))) {
-    const key = `${order.broker}:${order.accountIdMasked}:${order.brokerOrderId}`;
+    const key = `${order.broker}:${order.accountIdMasked}:${order.brokerOrderId}:${order.fillId ?? 'AGGREGATE'}`;
     const previousOrder = byOrder.get(key);
     const existingExecution = executionKeys.get(order.executionKey);
     if (existingExecution) {

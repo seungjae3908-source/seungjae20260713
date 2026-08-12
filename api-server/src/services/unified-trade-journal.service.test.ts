@@ -12,6 +12,10 @@ import {
   type TossOrderContract,
   type UnifiedTradeOrder,
 } from './unified-trade-journal.service';
+import {
+  normalizeBitgetJournalFills,
+  normalizeUpbitJournalOrders,
+} from './broker-journal-normalizer.service';
 
 const NOW = new Date('2026-08-12T03:00:00.000Z');
 
@@ -267,6 +271,64 @@ test('direct journal records preserve every supported provider provenance', () =
   assert.equal(result.trades.length, expected.size);
   for (const trade of result.trades) assert.equal(trade.broker, expected.get(trade.source));
   assert.equal(buildUnifiedTradeJournal(rows, { range: 'ALL', broker: 'UPBIT' }, NOW).trades[0]?.source, 'UPBIT_API');
+});
+
+test('Upbit fill details become idempotent spot legs without exposing the account reference', () => {
+  const buyOrder = {
+    uuid: 'upbit-buy', identifier: 'client-buy', side: 'bid', market: 'KRW-BTC', state: 'done',
+    created_at: '2026-08-10T01:00:00.000Z', executed_volume: '1.5', paid_fee: '150',
+    trades: [
+      { uuid: 'fill-buy-1', price: '100000', volume: '1', funds: '100000', created_at: '2026-08-10T01:01:00.000Z' },
+      { uuid: 'fill-buy-2', price: '100000', volume: '0.5', funds: '50000', created_at: '2026-08-10T01:02:00.000Z' },
+    ],
+  };
+  const sellOrder = {
+    uuid: 'upbit-sell', side: 'ask', market: 'KRW-BTC', state: 'done', created_at: '2026-08-10T02:00:00.000Z',
+    executed_volume: '1.5', paid_fee: '180',
+    trades: [{ uuid: 'fill-sell-1', price: '120000', volume: '1.5', funds: '180000', created_at: '2026-08-10T02:01:00.000Z' }],
+  };
+  const normalized = normalizeUpbitJournalOrders([buyOrder, sellOrder], 'raw-upbit-account', NOW.toISOString());
+  assert.equal(normalized.records.length, 3);
+  assert.equal(normalized.issues.length, 0);
+  assert.equal(normalized.records[0].fees, 100);
+  assert.ok(normalized.records.every((record) => record.accountIdMasked.startsWith('UPBIT-****-')));
+  assert.doesNotMatch(JSON.stringify(normalized), /raw-upbit-account/);
+  const journal = buildUnifiedTradeJournal(normalized.records, { range: 'ALL', broker: 'UPBIT' }, NOW);
+  assert.equal(journal.trades.length, 1);
+  assert.equal(journal.trades[0].status, 'CLOSED');
+  assert.equal(journal.trades[0].additions.length, 1);
+});
+
+test('Upbit refuses to invent fills when list rows omit execution details', () => {
+  const result = normalizeUpbitJournalOrders([{
+    uuid: 'upbit-detail-required', side: 'bid', market: 'KRW-BTC', created_at: '2026-08-10T01:00:00.000Z',
+    executed_volume: '1', trades: [],
+  }], 'account');
+  assert.equal(result.records.length, 0);
+  assert.equal(result.issues[0]?.code, 'UPBIT_FILL_DETAILS_REQUIRED');
+});
+
+test('Bitget hedge fills preserve open/close direction while ambiguous one-way exits stay excluded', () => {
+  const ordersPayload = { data: { entrustedList: [
+    { orderId: 'bitget-open', clientOid: 'client-open', symbol: 'BTCUSDT', side: 'buy', posSide: 'long', tradeSide: 'open', cTime: '1786323600000' },
+    { orderId: 'bitget-close', clientOid: 'client-close', symbol: 'BTCUSDT', side: 'sell', posSide: 'long', tradeSide: 'close', cTime: '1786327200000' },
+    { orderId: 'bitget-ambiguous', symbol: 'BTCUSDT', side: 'sell', posSide: 'net', tradeSide: 'sell_single', cTime: '1786327200000' },
+  ] } };
+  const fillsPayload = { data: { fillList: [
+    { orderId: 'bitget-open', tradeId: 'bitget-fill-open', symbol: 'BTCUSDT', marginCoin: 'USDT', side: 'buy', price: '100000', baseVolume: '0.1', feeDetail: [{ totalFee: '-1' }], tradeSide: 'open', cTime: '1786323660000' },
+    { orderId: 'bitget-close', tradeId: 'bitget-fill-close', symbol: 'BTCUSDT', marginCoin: 'USDT', side: 'sell', price: '110000', baseVolume: '0.1', feeDetail: [{ totalFee: '-1.1' }], tradeSide: 'close', cTime: '1786327260000' },
+    { orderId: 'bitget-ambiguous', tradeId: 'bitget-fill-ambiguous', symbol: 'BTCUSDT', marginCoin: 'USDT', side: 'sell', price: '111000', baseVolume: '0.1', feeDetail: [], tradeSide: 'sell_single', cTime: '1786327260000' },
+  ] } };
+  const normalized = normalizeBitgetJournalFills(ordersPayload, fillsPayload, 'raw-bitget-account', NOW.toISOString());
+  assert.equal(normalized.records.length, 2);
+  assert.equal(normalized.issues[0]?.code, 'BITGET_POSITION_DIRECTION_UNRESOLVED');
+  assert.equal(normalized.records[0].positionEffect, 'OPEN');
+  assert.equal(normalized.records[1].positionEffect, 'CLOSE');
+  assert.equal(normalized.records[0].fees, 1);
+  assert.doesNotMatch(JSON.stringify(normalized), /raw-bitget-account/);
+  const journal = buildUnifiedTradeJournal(normalized.records, { range: 'ALL', broker: 'BITGET' }, NOW);
+  assert.equal(journal.trades[0]?.status, 'CLOSED');
+  assert.equal(journal.trades[0]?.positionSide, 'LONG');
 });
 
 test('small samples return N/A analytics while five trades produce confirmed aggregates and monthly report', () => {
