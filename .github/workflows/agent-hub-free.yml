@@ -31,6 +31,7 @@ on:
       - scripts/test_agent_hub_v2.py
       - scripts/test_agent_hub_executor_v2.py
       - scripts/test_agent_hub_hardening_v2.py
+      - scripts/test_agent_hub_prediction_lab_scope.py
       - docs/agent-hub*.md
   pull_request:
     branches: [main]
@@ -61,6 +62,7 @@ on:
       - scripts/test_agent_hub_v2.py
       - scripts/test_agent_hub_executor_v2.py
       - scripts/test_agent_hub_hardening_v2.py
+      - scripts/test_agent_hub_prediction_lab_scope.py
       - docs/agent-hub*.md
   issue_comment:
     types: [created]
@@ -112,7 +114,8 @@ jobs:
             scripts/agent_hub_legacy_migration_v2.py \
             scripts/test_agent_hub_v2.py \
             scripts/test_agent_hub_executor_v2.py \
-            scripts/test_agent_hub_hardening_v2.py
+            scripts/test_agent_hub_hardening_v2.py \
+            scripts/test_agent_hub_prediction_lab_scope.py
       - name: Run deterministic Agent Hub tests
         env:
           PYTHONPATH: scripts
@@ -136,6 +139,7 @@ jobs:
           python3 scripts/test_agent_hub_v2.py
           python3 scripts/test_agent_hub_executor_v2.py
           python3 scripts/test_agent_hub_hardening_v2.py
+          python3 scripts/test_agent_hub_prediction_lab_scope.py
       - name: Assert fixture-only manual validation
         if: github.event_name == 'workflow_dispatch'
         run: echo 'workflow_dispatch completed fixture and self-test validation only; no Issue command was consumed.'
