@@ -169,6 +169,7 @@ function assertEconomicEquivalence({ baseline, onePass }) {
   assert.equal(onePass.maximumDrawdownPercent, baseline.maximumDrawdownPercent);
   assert.equal(onePass.expectancy, baseline.expectancy);
   assert.deepEqual(onePass.trades.map(economicTrade), baseline.trades.map(economicTrade));
+  assert.deepEqual(onePass.equityCurve, baseline.equityCurve);
   assert.equal(onePass.safeguards.executionUsesSharedCalculateExecutionAwareTrade, true);
   assert.equal(onePass.safeguards.orderSubmitted, false);
   assert.equal(onePass.safeguards.privateAccountRequestAllowed, false);
