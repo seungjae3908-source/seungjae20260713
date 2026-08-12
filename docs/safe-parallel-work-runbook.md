@@ -13,6 +13,8 @@ Before every change:
 
 If either `main` or the target PR moves during inspection, re-evaluate before writing.
 
+For recurring reviews, persist or record the previous observed `main` SHA, target PR HEADs, and relevant run IDs in the report context. The next review should compare against those exact identifiers instead of inferring change from timestamps alone.
+
 ## 2. Ownership and overlap rules
 
 Treat an active Draft PR as the owner of the files it currently changes. Do not edit those files from another lane unless the work is explicitly a coordinated integration step.
@@ -25,6 +27,8 @@ Prefer, in order:
 - observation only when any write would create conflict risk.
 
 Do not create a duplicate implementation to bypass ownership.
+
+An old PR description is not proof of current ownership state. Re-list changed filenames from GitHub before writing, because rebases, merges, cleanup commits, or branch updates can change overlap even when the PR title and body stay the same.
 
 ## 3. CI-first correction rule
 
@@ -39,6 +43,8 @@ For a failing PR:
 Do not weaken assertions, add arbitrary sleeps, inflate timeouts, skip tests, or re-run repeatedly to hide a deterministic failure.
 
 Infrastructure-only failures must not trigger unrelated product-code changes.
+
+A successful run is reusable evidence only when its tested SHA matches the current PR HEAD or current `main` SHA exactly. Historical success from an older HEAD must be labeled historical rather than current.
 
 ## 4. Safe automatic-improvement scope
 
@@ -69,6 +75,8 @@ After any merge to `main`, treat the new SHA as a new release baseline and verif
 
 Staging and Production readiness remain separate gates and are never inferred from a successful feature-branch CI run.
 
+If `main` advances after a PR's latest green CI, report the PR as tested on its own exact HEAD but not yet proven against the new integration baseline unless its base relationship and conflict state are rechecked.
+
 ## 6. Research and trading safety
 
 Research, backtest, Paper, Shadow, and live execution are separate stages.
@@ -90,3 +98,24 @@ Each status review should report:
 - the next three highest-value safe candidates.
 
 When no conflict-free code change exists, report that fact and prefer observation over unnecessary churn.
+
+The change summary should distinguish:
+
+- `NEW`: SHA, PR HEAD, CI conclusion, or changed-file ownership changed since the previous review;
+- `UNCHANGED`: exact identifiers are the same;
+- `STALE_EVIDENCE`: a result is still historically useful but no longer matches the current SHA;
+- `BLOCKED_BY_OVERLAP`: a candidate touches files owned by another active PR;
+- `OBSERVATION_ONLY`: no safe write was justified.
+
+## 8. Pre-write and post-write race check
+
+Immediately before a write, re-read both the latest `main` SHA and the target PR HEAD. After the write, re-read them again.
+
+Stop further writes in that review if:
+
+- `main` moved unexpectedly;
+- another actor moved the target PR HEAD after the pre-write check;
+- changed-file ownership now overlaps another active PR;
+- a new failing exact-HEAD CI signal appears that could be caused by the just-written change.
+
+Do not "catch up" automatically with merge, rebase, force push, or cherry-pick. Re-evaluate first and keep the PR Draft.
