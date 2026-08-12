@@ -91,7 +91,7 @@ export function summarizePredictionPerformance(
 export function predictionGapPercentagePoints(historicalAccuracy: number | null, realtimeAccuracy: number | null): number | null {
   if (historicalAccuracy === null || realtimeAccuracy === null) return null;
   if (![historicalAccuracy, realtimeAccuracy].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)) return null;
-  return (realtimeAccuracy - historicalAccuracy) * 100;
+  return Number(((realtimeAccuracy - historicalAccuracy) * 100).toFixed(10));
 }
 
 export interface DriftAssessment {
