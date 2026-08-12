@@ -235,7 +235,7 @@ export function simulateFrozenFuturesModel(raw = {}) {
       spreadRate: baseCosts.spreadRate * costMultiplier,
       latencyBars: baseCosts.latencyBars,
       latencyDriftRate: baseCosts.latencyDriftRate,
-      fundingRates: applicableFunding.map((rate) => rate * costMultiplier),
+      fundingRates: applicableFunding,
     });
     trades.push(Object.freeze({
       ...execution,
@@ -432,7 +432,8 @@ export function optimizeFrozenFuturesPnl(raw = {}) {
       base: BITGET_STANDARD_TAKER_RESEARCH_COSTS.CRYPTO_FUTURES,
       stressMultiplier,
       fundingUsesObservedHistoricalRates: true,
-      note: "Fees/spread/slippage are conservative research assumptions; historical funding uses observed public records.",
+      fundingStressMultiplierApplied: false,
+      note: "Fee/spread/slippage stress is multiplied conservatively; observed historical funding is kept unchanged because funding can be either a cost or a credit depending on side.",
     }),
     params: selected.params,
     train: selected.train,
