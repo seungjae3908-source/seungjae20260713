@@ -270,6 +270,7 @@ export function analyzePortfolio(input: PortfolioAnalyticsInput): PortfolioAnaly
   return {
     totalValue,
     knownValue,
+    cashValue: input.cash,
     cashWeight,
     marketExposure: totalForWeights == null
       ? insufficient('TOTAL_VALUE_UNAVAILABLE', missingPrice)
