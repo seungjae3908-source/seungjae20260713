@@ -56,11 +56,10 @@ router.use('/admin', adminRouter);
 
 router.use(requireAuthenticated);
 
-// Brokerage/exchange account connectivity is intentionally read-only and
-// admin-only because credentials are server-scoped. Existing order/cancel/
-// transfer endpoints remain blocked below and are not reachable through this
-// router.
-router.use('/account-connections', requireAdmin, accountConnectionsRouter);
+// Broker connectivity is metadata-only in Release V4.2. It reads only the
+// authenticated user's vault connection metadata and never falls back to a
+// server credential or sends a private provider request.
+router.use('/account-connections', accountConnectionsRouter);
 
 // Canonical AI Scanner routes must be registered before the legacy market
 // router. This makes /api/market/scan authenticated, capability protected,
