@@ -105,7 +105,7 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await open(page);
   const journal = page.getByTestId('unified-trade-journal');
   await expect(journal).toContainText('통합 매매일지·매매 품질 복기');
-  await expect(page.getByTestId('toss-free-status')).toContainText('BLOCKED_BY_FREE_STATUS_UNVERIFIED');
+  await expect(page.getByTestId('toss-free-status')).toContainText('MEMBER_CONFIGURED_READ_ONLY');
   await expect(page.getByTestId('journal-zero-cost-status')).toContainText('0_KRW');
   await expect(page.getByTestId('unified-journal-list')).toContainText('BTCUSDT');
   await expect(page.getByTestId('unified-journal-detail')).toContainText('성과 점수');

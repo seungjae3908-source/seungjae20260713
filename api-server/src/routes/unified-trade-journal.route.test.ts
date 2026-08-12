@@ -36,6 +36,7 @@ async function start(options = {}) {
     now: () => NOW,
     reviewProvider: null,
     allowTossContractPreview: options.allowTossContractPreview === true,
+    ...(options.brokerJournalFactory ? { brokerJournalFactory: options.brokerJournalFactory } : {}),
   }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
@@ -79,7 +80,7 @@ test('unified journal status is free-only, analysis-only, and mutation-free', as
     assert.equal(response.status, 200);
     assert.equal(body.mode, 'analysis-only');
     assert.equal(body.externalAiCalled, false);
-    assert.equal(body.result.toss.liveReadIntegration, 'BLOCKED_BY_FREE_STATUS_UNVERIFIED');
+    assert.equal(body.result.toss.liveReadIntegration, 'MEMBER_CONFIGURED_READ_ONLY');
     assert.equal(body.result.toss.livePrivateRequests, 0);
     assert.equal(body.result.safety.finalCostDelta, '0_KRW');
     assert.deepEqual([
@@ -109,10 +110,40 @@ test('unified ledger uses only authenticated user journal payloads and applies f
   } finally { await close(server); }
 });
 
+test('unified ledger imports self-scoped broker records only when explicitly requested', async () => {
+  let brokerCalls = 0;
+  const brokerTrade = {
+    ...paperTrade(9), id: 'broker-trade', source: 'TOSS_API', broker: 'TOSS', accountIdMasked: 'TOSS-****-BROKER',
+  };
+  const brokerJournalFactory = async () => {
+    brokerCalls += 1;
+    const status = { configured: true, importedRecords: 1, authenticationRequests: 1, privateReadRequests: 2, issues: [], error: null };
+    return {
+      ok: true, readOnly: true, mutationsAllowed: false, credentialsReturned: false,
+      records: [brokerTrade], providers: { toss: status, upbit: { ...status, configured: false, importedRecords: 0, authenticationRequests: 0, privateReadRequests: 0 }, bitget: { ...status, configured: false, importedRecords: 0, authenticationRequests: 0, privateReadRequests: 0 }, kiwoom: { ...status, configured: false, importedRecords: 0, authenticationRequests: 0, privateReadRequests: 0 } },
+      safety: { actualOrderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, privateMutationRequests: 0 },
+      importedAt: NOW.toISOString(),
+    };
+  };
+  const { server, baseUrl } = await start({ repository: repository([paperTrade(1)]), brokerJournalFactory });
+  try {
+    const withoutImport = await json(await fetch(`${baseUrl}/api/paper-journal/unified-ledger?range=ALL`));
+    assert.equal(withoutImport.brokerImport.requested, false);
+    assert.equal(brokerCalls, 0);
+    const withImport = await json(await fetch(`${baseUrl}/api/paper-journal/unified-ledger?range=ALL&includeBroker=true`));
+    assert.equal(brokerCalls, 1);
+    assert.equal(withImport.result.trades.length, 2);
+    assert.equal(withImport.brokerImport.importedRecords, 1);
+    assert.equal(withImport.brokerImport.privateReadRequests, 2);
+    assert.equal(withImport.brokerImport.privateMutationRequests, 0);
+    assert.ok(withImport.result.trades.some((trade) => trade.broker === 'TOSS'));
+  } finally { await close(server); }
+});
+
 test('unified ledger rejects invalid filter values without leaking internals', async () => {
   const { server, baseUrl } = await start();
   try {
-    for (const query of ['range=FOREVER', 'market=OPTIONS', 'source=UNKNOWN', 'broker=UNKNOWN', 'account=1234567890', 'grade=Z']) {
+    for (const query of ['range=FOREVER', 'market=OPTIONS', 'source=UNKNOWN', 'broker=UNKNOWN', 'account=1234567890', 'includeBroker=maybe', 'grade=Z']) {
       const response = await fetch(`${baseUrl}/api/paper-journal/unified-ledger?${query}`);
       assert.equal(response.status, 400);
       const body = await json(response);
@@ -121,7 +152,7 @@ test('unified ledger rejects invalid filter values without leaking internals', a
   } finally { await close(server); }
 });
 
-test('Toss contract preview is disabled by default before fee status is verified', async () => {
+test('public Toss contract preview stays disabled in favor of the member-scoped read-only path', async () => {
   const { server, baseUrl } = await start();
   try {
     const response = await fetch(`${baseUrl}/api/paper-journal/unified-ledger/toss-contract-preview`, {
@@ -129,7 +160,7 @@ test('Toss contract preview is disabled by default before fee status is verified
     });
     const body = await json(response);
     assert.equal(response.status, 503);
-    assert.equal(body.code, 'BLOCKED_BY_FREE_STATUS_UNVERIFIED');
+    assert.equal(body.code, 'TOSS_CONTRACT_PREVIEW_DISABLED');
     assert.equal(body.safety.privateBrokerRequests, 0);
   } finally { await close(server); }
 });

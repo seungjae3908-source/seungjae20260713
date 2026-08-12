@@ -94,7 +94,8 @@ export type UnifiedJournalAnalytics = {
 export type UnifiedTradeJournal = {
   integrationBaseSha:string; generatedAt:string; trades:UnifiedTradeCycle[]; analytics:UnifiedJournalAnalytics;
   integrityIssues:Array<{code:string;orderId:string|null;message:string}>;
-  toss:{provider:'TOSS';officialSpecVersion:string;paidStatus:'PAID_STATUS_UNVERIFIED';liveReadIntegration:'BLOCKED_BY_FREE_STATUS_UNVERIFIED';contractNormalizerAvailable:true;executionGranularity:string;livePrivateRequests:0;actualOrders:0};
+  toss:{provider:'TOSS';officialSpecVersion:string;paidStatus:'PAID_STATUS_UNVERIFIED';liveReadIntegration:'MEMBER_CONFIGURED_READ_ONLY';contractNormalizerAvailable:true;executionGranularity:string;livePrivateRequests:0;actualOrders:0};
+  brokerImport?:{requested:boolean;importedRecords:number;privateReadRequests:number;privateMutationRequests:0;providers:Record<string,{configured:boolean;importedRecords:number;authenticationRequests:number;privateReadRequests:number;issues:Array<{provider:string;code:string;reference:string|null}>;error:string|null}>|null};
   aiReviewStatus:'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY';
   safety:{finalCostDelta:'0_KRW';actualOrderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;privateBrokerRequests:0};
 };
@@ -225,6 +226,7 @@ export async function getJournalAnalytics(periodStart?: string, periodEnd?: stri
 export async function getUnifiedTradeJournal(filters: UnifiedJournalFilters = {}, signal?: AbortSignal) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value);
+  params.set('includeBroker', 'true');
   const suffix = params.size ? `?${params}` : '';
   const response = await authorizedFetch(`/api/paper-journal/unified-ledger${suffix}`, { signal });
   const body = await parseJson(response);
@@ -233,7 +235,7 @@ export async function getUnifiedTradeJournal(filters: UnifiedJournalFilters = {}
   const result = body.result as UnifiedTradeJournal | undefined;
   if (!result
     || result.aiReviewStatus !== 'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY'
-    || result.toss.liveReadIntegration !== 'BLOCKED_BY_FREE_STATUS_UNVERIFIED'
+    || result.toss.liveReadIntegration !== 'MEMBER_CONFIGURED_READ_ONLY'
     || result.safety.finalCostDelta !== '0_KRW'
     || result.safety.actualOrderRequests !== 0
     || result.safety.cancelRequests !== 0
@@ -243,7 +245,7 @@ export async function getUnifiedTradeJournal(filters: UnifiedJournalFilters = {}
     || result.safety.privateBrokerRequests !== 0) {
     throw new Error('통합 매매일지의 무료·무주문 안전 계약을 확인하지 못했습니다.');
   }
-  return result;
+  return { ...result, brokerImport: body.brokerImport as UnifiedTradeJournal['brokerImport'] };
 }
 
 export async function buildTradingReviewDataset(periodStart?: string, periodEnd?: string, signal?: AbortSignal) {
