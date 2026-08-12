@@ -1,10 +1,10 @@
 import type { KiwoomCredentials, PreparedExchangeRequest } from './trade-exchange-adapters.service';
 
-export type KiwoomJournalApiId = 'ka10076' | 'ust21150';
+export type KiwoomJournalApiId = 'ka00001' | 'ka10076' | 'ust21150';
 
 function authenticatedRequest(
   credentials: KiwoomCredentials,
-  apiId: KiwoomJournalApiId,
+  apiId: Exclude<KiwoomJournalApiId, 'ka00001'>,
   path: '/api/dostk/acnt' | '/api/us/acnt',
   body: Record<string, string>,
 ): PreparedExchangeRequest {
@@ -77,9 +77,10 @@ export function prepareKiwoomUsDailyFillHistory(
 export function assertKiwoomJournalReadRequest(request: PreparedExchangeRequest) {
   if (request.method !== 'POST' || request.query !== '') throw new Error('KIWOOM_JOURNAL_MUTATION_FORBIDDEN');
   const apiId = request.headers['api-id'];
+  const accountAlias = request.path === '/api/dostk/acnt' && apiId === 'ka00001';
   const domestic = request.path === '/api/dostk/acnt' && apiId === 'ka10076';
   const us = request.path === '/api/us/acnt' && apiId === 'ust21150';
-  if (!domestic && !us) throw new Error('KIWOOM_JOURNAL_MUTATION_FORBIDDEN');
+  if (!accountAlias && !domestic && !us) throw new Error('KIWOOM_JOURNAL_MUTATION_FORBIDDEN');
   if (!request.body) throw new Error('KIWOOM_JOURNAL_READ_BODY_REQUIRED');
   if (/(?:\/ordr|withdraw|transfer|deposit)/i.test(request.path)) throw new Error('KIWOOM_JOURNAL_MUTATION_FORBIDDEN');
 }
