@@ -106,7 +106,7 @@ test("cost and 1.5x stress reduce the same prospective trade PnL", () => {
   assert.ok(trade.grossReturn > trade.baseNetReturn);
   assert.ok(trade.baseNetReturn > trade.stressedNetReturn);
   assert.equal(trade.baseCostRatePerSide, 0.0015);
-  assert.equal(trade.stressedCostRatePerSide, 0.00225);
+  assert.ok(Math.abs(trade.stressedCostRatePerSide - 0.00225) < 1e-12);
   const summary = summarizeUsStockForwardPnlState(advanced, { minSettled: 1, minSymbols: 1, minElapsedMs: 0 });
   assert.equal(summary.executionPromotionAllowed, false);
   assert.equal(summary.base.tradeCount, 1);
