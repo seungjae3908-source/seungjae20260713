@@ -74,6 +74,28 @@ async function mockApprovalApi(page: Page, options: ApprovalApiOptions = {}) {
   return counts;
 }
 
+async function mockUserIntegrationsApi(page: Page) {
+  await page.route(/\/api\/user-integrations(?:\?.*)?$/, async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        brokerConnections: [],
+        telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null },
+        preferences: {},
+      }),
+    });
+  });
+}
+
+test.beforeEach(async ({ page }) => {
+  await mockUserIntegrationsApi(page);
+});
+
 function expectNoBrowserFailures(failures: ReturnType<typeof captureBrowserFailures>) {
   expect(failures.consoleErrors).toEqual([]);
   expect(failures.pageErrors).toEqual([]);
