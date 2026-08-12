@@ -201,7 +201,22 @@ jobs:
         with:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
       - name: Install PostgreSQL client
-        run: sudo apt-get update -qq && sudo apt-get install -y postgresql-client
+        run: |
+          if command -v psql >/dev/null 2>&1; then
+            psql --version
+            exit 0
+          fi
+
+          # ubuntu-latest also contains optional third-party apt sources. A
+          # transient outage there must not block the disposable RLS check.
+          if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
+            sudo apt-get update -qq \
+              -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources \
+              -o Dir::Etc::sourceparts=-
+          else
+            sudo apt-get update -qq -o Dir::Etc::sourceparts=-
+          fi
+          sudo apt-get install -y postgresql-client
       - name: Apply, test, rollback, and reapply migrations
         id: database
         run: bash api-server/scripts/verify-phase8-db.sh
