@@ -29,6 +29,7 @@
     "research:futures:generalization": "node scripts/run-futures-generalization-suite.js",
     "research:futures:pnl": "node scripts/run-futures-pnl-suite.js",
     "research:futures:regime": "node scripts/run-futures-regime-execution-suite.js",
+    "research:futures:donchian": "node scripts/run-futures-donchian-trend-suite.js",
     "research:funding": "node scripts/run-derivatives-suite.js",
     "research:structure": "node scripts/run-market-structure-suite.js",
     "backtest:v1": "node scripts/run-v1-backtest.js",
