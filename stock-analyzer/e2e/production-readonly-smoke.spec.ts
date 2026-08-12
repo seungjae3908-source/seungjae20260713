@@ -20,8 +20,14 @@ const artifactDir = path.resolve('production-browser-artifacts');
 fs.mkdirSync(artifactDir, { recursive: true });
 
 type Diagnostic = { test: string; path: string; detail: string; status?: number };
+type RouteTransition = {
+  path: string;
+  phase: 'enter' | 'complete' | 'fallback-timeout';
+  durationMs?: number;
+};
 type Evidence = {
   project: string;
+  routeTransitions: RouteTransition[];
   loadingDurationsMs: Array<{ path: string; durationMs: number }>;
   failedRequests: Diagnostic[];
   consoleErrors: Diagnostic[];
@@ -47,6 +53,14 @@ function requestPath(raw: string): string {
   }
 }
 
+function routeEvidencePath(route: string): string {
+  try {
+    return new URL(route, 'https://production-route.invalid').pathname;
+  } catch {
+    return '[invalid-route]';
+  }
+}
+
 function sanitizedDetail(value: string): string {
   return value
     .replace(/https?:\/\/[^\s"'`<>]+/gi, '[redacted-url]')
@@ -57,6 +71,7 @@ function sanitizedDetail(value: string): string {
 function makeEvidence(testInfo: TestInfo): Evidence {
   return {
     project: testInfo.project.name,
+    routeTransitions: [],
     loadingDurationsMs: [],
     failedRequests: [],
     consoleErrors: [],
@@ -72,6 +87,32 @@ function makeEvidence(testInfo: TestInfo): Evidence {
     transfers: 0,
     withdrawals: 0,
   };
+}
+
+function writeEvidence(testInfo: TestInfo, evidence: Evidence) {
+  fs.writeFileSync(
+    path.join(artifactDir, `${testInfo.project.name}.json`),
+    JSON.stringify(evidence, null, 2),
+    'utf8',
+  );
+}
+
+function recordRouteTransition(
+  testInfo: TestInfo,
+  evidence: Evidence,
+  route: string,
+  phase: RouteTransition['phase'],
+  durationMs?: number,
+) {
+  const safePath = routeEvidencePath(route);
+  evidence.routeTransitions.push({
+    path: safePath,
+    phase,
+    ...(durationMs === undefined ? {} : { durationMs }),
+  });
+  testInfo.annotations.push({ type: 'production-route', description: `${phase}:${safePath}` });
+  console.info(`[production-route] ${phase} ${safePath}${durationMs === undefined ? '' : ` ${durationMs}ms`}`);
+  writeEvidence(testInfo, evidence);
 }
 
 function attachDiagnostics(page: Page, testInfo: TestInfo, evidence: Evidence) {
@@ -108,20 +149,33 @@ function attachDiagnostics(page: Page, testInfo: TestInfo, evidence: Evidence) {
   });
 }
 
-async function waitForFinitePageState(page: Page, evidence: Evidence, route: string) {
+async function waitForFinitePageState(
+  page: Page,
+  evidence: Evidence,
+  route: string,
+  testInfo: TestInfo,
+) {
   const startedAt = Date.now();
-  await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 15_000 });
-  evidence.loadingDurationsMs.push({ path: route, durationMs: Date.now() - startedAt });
+  try {
+    await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 15_000 });
+  } catch (error) {
+    recordRouteTransition(testInfo, evidence, route, 'fallback-timeout', Date.now() - startedAt);
+    throw error;
+  }
+  const durationMs = Date.now() - startedAt;
+  evidence.loadingDurationsMs.push({ path: routeEvidencePath(route), durationMs });
   await expect(page.locator('body')).toBeVisible();
+  recordRouteTransition(testInfo, evidence, route, 'complete', durationMs);
 }
 
-async function openRoute(page: Page, evidence: Evidence, route: string) {
+async function openRoute(page: Page, evidence: Evidence, route: string, testInfo: TestInfo) {
+  recordRouteTransition(testInfo, evidence, route, 'enter');
   await page.goto(route, { waitUntil: 'domcontentloaded' });
-  await waitForFinitePageState(page, evidence, route);
+  await waitForFinitePageState(page, evidence, route, testInfo);
 }
 
-async function login(page: Page, evidence: Evidence) {
-  await openRoute(page, evidence, '/login');
+async function login(page: Page, evidence: Evidence, testInfo: TestInfo) {
+  await openRoute(page, evidence, '/login', testInfo);
   await page.getByLabel('아이디').fill(qaLogin);
   await page.getByLabel('비밀번호').fill(qaPassword);
   await page.getByRole('button', { name: '로그인', exact: true }).click();
@@ -164,14 +218,14 @@ test('Production read-only major paths terminate loading without browser errors'
   });
 
   await verifyHealth(page);
-  await login(page, evidence);
-  for (const route of majorRoutes) await openRoute(page, evidence, route);
+  await login(page, evidence, testInfo);
+  for (const route of majorRoutes) await openRoute(page, evidence, route, testInfo);
 
-  await openRoute(page, evidence, '/account');
-  await expect(page.getByText('계정')).toBeVisible();
+  await openRoute(page, evidence, '/account', testInfo);
+  await expect(page.getByRole('heading', { name: '계정', exact: true })).toBeVisible();
   await expect(page.getByText('PRIVATE_ACCOUNT_LIVE_QA')).toHaveCount(0);
 
-  await openRoute(page, evidence, '/');
+  await openRoute(page, evidence, '/', testInfo);
   await expect(page.getByText('홈', { exact: true }).first()).toBeVisible();
 
   expect(evidence.blockedMutations, `blocked mutation requests: ${JSON.stringify(evidence.blockedMutations)}`).toEqual([]);
@@ -181,9 +235,5 @@ test('Production read-only major paths terminate loading without browser errors'
   expect(evidence.unexpectedHttpErrors, `unexpected HTTP errors: ${JSON.stringify(evidence.unexpectedHttpErrors)}`).toEqual([]);
   expect(evidence.failedRequests, `failed requests: ${JSON.stringify(evidence.failedRequests)}`).toEqual([]);
 
-  fs.writeFileSync(
-    path.join(artifactDir, `${testInfo.project.name}.json`),
-    JSON.stringify(evidence, null, 2),
-    'utf8',
-  );
+  writeEvidence(testInfo, evidence);
 });
