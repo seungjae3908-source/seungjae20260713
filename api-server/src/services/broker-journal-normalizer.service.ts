@@ -1,7 +1,7 @@
 import { maskBrokerAccountReference, type UnifiedTradeOrder } from './unified-trade-journal.service';
 
 export type BrokerJournalNormalizationIssue = {
-  provider: 'UPBIT' | 'BITGET';
+  provider: 'TOSS' | 'KIWOOM' | 'UPBIT' | 'BITGET';
   code: string;
   reference: string | null;
 };
