@@ -91,6 +91,13 @@ jobs:
         working-directory: market-prediction-lab
         run: node scripts/run-upbit-spot-suite.js docs/upbit-spot-suite-result.json
 
+      - name: Run cost-aware Upbit BTC and ETH spot PnL OOS research
+        id: upbit_spot_pnl_suite
+        if: steps.validate.outcome == 'success' && steps.upbit_spot_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-upbit-spot-pnl-suite.js docs/upbit-spot-pnl-suite-result.json
+
       - name: Collect KR and US stock history and compare candidates
         id: stock_suite
         if: steps.validate.outcome == 'success'
@@ -104,6 +111,13 @@ jobs:
         continue-on-error: true
         working-directory: market-prediction-lab
         run: node scripts/run-stock-pnl-suite.js docs/stock-pnl-suite-result.json
+
+      - name: Audit frozen KR and US strategies on unseen symbols and rolling windows
+        id: stock_generalization_suite
+        if: steps.validate.outcome == 'success' && steps.stock_pnl_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-stock-generalization-suite.js docs/stock-generalization-suite-result.json
 
       - name: Collect historical funding and compare temporal candidates
         id: derivatives_suite
@@ -142,8 +156,10 @@ jobs:
             market-prediction-lab/live-market-structure-suite
             market-prediction-lab/docs/market-suite-result.json
             market-prediction-lab/docs/upbit-spot-suite-result.json
+            market-prediction-lab/docs/upbit-spot-pnl-suite-result.json
             market-prediction-lab/docs/stock-market-suite-result.json
             market-prediction-lab/docs/stock-pnl-suite-result.json
+            market-prediction-lab/docs/stock-generalization-suite-result.json
             market-prediction-lab/docs/stock-candidate-models
             market-prediction-lab/docs/derivatives-suite-result.json
             market-prediction-lab/docs/market-structure-suite-result.json
@@ -160,5 +176,5 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
 
       - name: Fail workflow when technical validation failed
-        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.upbit_spot_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.stock_pnl_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
+        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.upbit_spot_suite.outcome != 'success' || steps.upbit_spot_pnl_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.stock_pnl_suite.outcome != 'success' || steps.stock_generalization_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
         run: exit 1
