@@ -99,6 +99,7 @@ const groups = {
     path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
     path.join(root, 'src/routes/account-connections.contract.test.ts'),
+    path.join(root, 'src/services/kiwoom-journal-read.service.test.ts'),
     path.join(root, 'src/services/market-information.service.test.ts'),
     path.join(root, 'src/services/public-market-http.test.ts'),
     path.join(root, 'src/lib/deployment-identity.test.ts'),
