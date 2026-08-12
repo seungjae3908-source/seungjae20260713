@@ -79,7 +79,7 @@ function strategy(value: unknown, selectedTimeframe: CryptoSignalScanRequest['ti
   const normalized = String(value ?? '').trim().toLowerCase();
   const selected = normalized === ''
     ? scannerStrategyForTimeframe(selectedTimeframe)
-    : normalized === 'scalping' || normalized === 'swing'
+    : normalized === 'scalping' || normalized === 'swing' || normalized === 'position'
       ? normalized
       : null;
   return selected && scannerStrategyTimeframeAllowed(selected, selectedTimeframe) ? selected : null;
@@ -154,8 +154,6 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         market,
         strategyMode,
         timeframe: selectedTimeframe,
-        // Williams is an independent confirmation layer. The canonical scanner still
-        // gathers its normal breakout candidates before the KST09/MA5/ATR14 overlay.
         condition: selectedCondition === 'williams' ? 'breakout' : selectedCondition,
         cursor: number(req.query.cursor, 0, 1_000_000) ?? 0,
         batchSize: number(req.query.batchSize, 5, 40) ?? 24,
