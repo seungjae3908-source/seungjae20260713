@@ -1251,9 +1251,22 @@ export default function DetailPage() {
     } | null,
   ];
 
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
+  const query = location.includes("?")
+    ? location.slice(location.indexOf("?") + 1)
+    : window.location.search.slice(1);
+  const queryParams = new URLSearchParams(query);
 
-  const ticker = String(params?.ticker ?? "").toUpperCase();
+  const ticker = String(
+    params?.ticker ?? queryParams.get("ticker") ?? queryParams.get("symbol") ?? "",
+  ).toUpperCase();
+  const analysisParentPath = location.split("?")[0] === "/stock-info/analysis"
+    ? (() => {
+        const parentParams = new URLSearchParams(queryParams);
+        parentParams.delete("tab");
+        return `/stock-info?${parentParams.toString()}`;
+      })()
+    : null;
   const studyId = new URLSearchParams(window.location.search).get("study");
 
   const [tab, setTab] = useState<DetailTab>(() => detailTabFromUrl(ticker));
@@ -1390,6 +1403,8 @@ export default function DetailPage() {
 
   return (
     <div
+      id="stock-info-selected"
+      data-testid="canonical-stock-analysis"
       ref={scrollContainerRef}
       onScroll={saveScrollPosition}
       className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain bg-background"
@@ -1399,7 +1414,7 @@ export default function DetailPage() {
           <button
             type="button"
             aria-label="뒤로가기"
-            onClick={() => navigate(currentBackPath())}
+            onClick={() => navigate(analysisParentPath ?? currentBackPath())}
             className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card text-xl font-bold"
           >
             ‹

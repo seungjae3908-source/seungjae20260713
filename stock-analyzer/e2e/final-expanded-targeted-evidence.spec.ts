@@ -373,6 +373,7 @@ async function installApprovedSession(page: Page) {
   await page.route('**/__e2e-supabase/**', (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/rest/v1/profiles')) return fulfill(route, { id: E2E_USER_ID, login_name: 'expanded-admin', display_name: 'Expanded Evidence Admin', role: 'admin', status: 'approved', membership_level: 'admin', is_active: true, permissions_updated_at: NOW, updated_at: NOW });
+    if (path.endsWith('/rest/v1/portfolio_holdings')) return fulfill(route, []);
     if (path.endsWith('/auth/v1/user')) return fulfill(route, { id: E2E_USER_ID, aud: 'authenticated', role: 'authenticated', email: 'expanded@accounts.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: { display_name: 'Expanded Evidence Admin' }, identities: [], created_at: NOW });
     return fulfill(route, { ok: true });
   });
@@ -391,9 +392,13 @@ async function installStockInfoMocks(page: Page, mode: StockInfoMode) {
   await page.route('**/api/**', async (route) => {
     const requestUrl = new URL(route.request().url());
     const path = requestUrl.pathname;
+    const quoteFixture = { ticker: 'AAPL', name: 'Apple', market: 'US', currency: 'USD', price: 231.45, changeAmount: 1.25, changePercent: 0.54, volume: 1_000_000, open: 229.5, high: 232.1, low: 228.9, tradingValue: 231_450_000, marketCap: 3_000_000_000_000, updatedAt: NOW, marketStatus: 'OPEN' };
+    const profileFixture = { ticker: 'AAPL', name: 'Apple', market: 'US', currency: 'USD', industry: 'Technology', sector: 'Information Technology', country: 'US' };
     if (path === '/api/stocks/special-feed') return fulfill(route, { ok: true, asset: 'stock', market: 'US', items: [], count: 0, catalogSize: 1, updatedAt: NOW });
-    if (path === '/api/stocks/AAPL/quote') return fulfill(route, { ticker: 'AAPL', name: 'Apple', market: 'US', currency: 'USD', price: 231.45, changeAmount: 1.25, changePercent: 0.54, volume: 1_000_000, open: 229.5, high: 232.1, low: 228.9, tradingValue: 231_450_000, marketCap: 3_000_000_000_000, updatedAt: NOW, marketStatus: 'OPEN' });
-    if (path === '/api/stocks/AAPL/profile') return fulfill(route, { ticker: 'AAPL', name: 'Apple', market: 'US', currency: 'USD', industry: 'Technology', sector: 'Information Technology', country: 'US' });
+    if (path === '/api/quotes') return fulfill(route, { quotes: [quoteFixture] });
+    if (path === '/api/stocks/AAPL/quote') return fulfill(route, quoteFixture);
+    if (path === '/api/stocks/AAPL/company') return fulfill(route, { company: profileFixture });
+    if (path === '/api/stocks/AAPL/profile') return fulfill(route, profileFixture);
     if (path === '/api/stocks/AAPL/financials') {
       financialCalls += 1;
       if (mode === 'slow-financial') await financialGate;
@@ -421,18 +426,62 @@ async function installStockInfoMocks(page: Page, mode: StockInfoMode) {
 }
 
 async function expectPrimaryStockInfoUsable(page: Page) {
-  await expect(page.getByRole('heading', { name: '정보', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '종목 상세', level: 1 })).toBeVisible();
   const selected = page.locator('#stock-info-selected');
   await expect(selected).toBeVisible();
   await expect(selected).toContainText('AAPL');
   await expect(selected).toContainText('$231.45');
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
   await expect(navigation).toBeVisible();
+  await navigation.getByRole('button', { name: '종목', exact: true }).click();
+  const assetMenu = page.getByRole('menu', { name: '종목 메뉴' });
+  await expect(assetMenu.getByRole('menuitem', { name: '지수·시황', exact: true })).toBeVisible();
+  await expect(assetMenu.getByRole('menuitem', { name: 'AI 추천', exact: true })).toBeVisible();
+  await expect(assetMenu.getByRole('menuitem', { name: '가격 알림', exact: true })).toBeVisible();
+  await expect(assetMenu.getByRole('menuitem', { name: '시장 탐색', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
   await navigation.getByRole('button', { name: '기술', exact: true }).click();
   await expect(page.getByRole('menu', { name: '기술 메뉴' })).toBeVisible();
   await expect(page.getByRole('menuitem', { name: 'AI 차트', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
 }
+
+test('stock summary opens the canonical rich analysis view without a legacy redirect loop', async ({ page }) => {
+  await installApprovedSession(page);
+  await installStockInfoMocks(page, 'normal');
+  await page.goto('/stock-info?asset=stock&market=US&ticker=AAPL');
+  await expectPrimaryStockInfoUsable(page);
+
+  await page.getByRole('button', { name: '상세 분석' }).click();
+  await expect(page).toHaveURL(/\/stock-info\/analysis\?.*ticker=AAPL/);
+  await expect(page.getByTestId('canonical-stock-analysis')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '애플', level: 1 })).toBeVisible();
+  await expect(page.getByTestId('canonical-stock-analysis')).toContainText('$231.45');
+
+  await page.getByRole('button', { name: '뒤로가기' }).click();
+  await expect(page).toHaveURL(/\/stock-info\?asset=stock&market=US&ticker=AAPL$/);
+  await expect(page.getByRole('heading', { name: '종목 상세', level: 1 })).toBeVisible();
+});
+
+test('portfolio exposes the existing unified journal as a primary tab', async ({ page }) => {
+  await installApprovedSession(page);
+  await page.route('**/api/paper-journal/unified-ledger**', (route) => fulfill(route, {
+    ok: false,
+    error: { code: 'FIXTURE_UNAVAILABLE', message: 'fixture intentionally unavailable' },
+  }, 503));
+  await page.goto('/portfolio');
+  await expect(page.getByRole('heading', { name: '내 포트폴리오', level: 1 })).toBeVisible();
+
+  await page.getByRole('button', { name: '매매일지' }).click();
+  await expect(page).toHaveURL(/\/portfolio\?tab=journal$/);
+  await expect(page.getByTestId('portfolio-journal')).toBeVisible();
+  await expect(page.getByTestId('unified-trade-journal')).toBeVisible();
+  await expect(page.getByText('통합 매매일지·매매 품질 복기')).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByTestId('portfolio-journal')).toBeVisible();
+  await expect(page.getByRole('button', { name: '매매일지' })).toHaveAttribute('aria-pressed', 'true');
+});
 
 test('slow News stays secondary while stock-info primary quote and navigation remain usable', async ({ page }) => {
   await installApprovedSession(page);
