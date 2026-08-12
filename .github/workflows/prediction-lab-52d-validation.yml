@@ -91,6 +91,13 @@ jobs:
         working-directory: market-prediction-lab
         run: node scripts/run-stock-market-suite.js live-stock-market-suite docs/stock-market-suite-result.json docs/stock-candidate-models
 
+      - name: Run cost-aware KR and US stock OOS strategy research
+        id: stock_pnl_suite
+        if: steps.validate.outcome == 'success' && steps.stock_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-stock-pnl-suite.js docs/stock-pnl-suite-result.json
+
       - name: Collect historical funding and compare temporal candidates
         id: derivatives_suite
         if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success'
@@ -128,6 +135,7 @@ jobs:
             market-prediction-lab/live-market-structure-suite
             market-prediction-lab/docs/market-suite-result.json
             market-prediction-lab/docs/stock-market-suite-result.json
+            market-prediction-lab/docs/stock-pnl-suite-result.json
             market-prediction-lab/docs/stock-candidate-models
             market-prediction-lab/docs/derivatives-suite-result.json
             market-prediction-lab/docs/market-structure-suite-result.json
@@ -144,5 +152,5 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
 
       - name: Fail workflow when technical validation failed
-        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
+        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.stock_pnl_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
         run: exit 1
