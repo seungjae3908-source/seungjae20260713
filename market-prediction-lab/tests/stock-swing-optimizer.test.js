@@ -58,7 +58,7 @@ test("same-bar stop and target resolves conservatively to stop", () => {
   const modified = candles.map((row) => ({ ...row }));
   modified[trade.entryIndex].high = trade.targetPrice + 1;
   modified[trade.entryIndex].low = trade.stopPrice - 1;
-  const rerun = simulateStockSwingStrategy({ modified, params, costRatePerSide: 0 });
+  const rerun = simulateStockSwingStrategy({ candles: modified, params, costRatePerSide: 0 });
   assert.equal(rerun.trades[0].exitReason, "stop_same_bar_conservative");
   assert.ok(rerun.trades[0].netReturn < 0);
 });
