@@ -496,7 +496,7 @@ export class TradeExecutionService {
     let reconciliationRequired = false;
     try {
       assertBitgetOrderLookup(await sendExchangeRequest(BASE_URLS.bitget,
-        prepareBitgetOrderQuery(credentials, order.clientOrderId), PREFLIGHT_TIMEOUT_MS), order.clientOrderId);
+        prepareBitgetOrderQuery(credentials, plan.symbol, order.clientOrderId), PREFLIGHT_TIMEOUT_MS), order.clientOrderId);
     } catch { reconciliationRequired = true; }
     return { orderId: order.clientOrderId, reconciliationRequired, risk };
   }
