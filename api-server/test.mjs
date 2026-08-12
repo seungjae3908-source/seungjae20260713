@@ -30,6 +30,7 @@ const groups = {
   phase7: [
     path.join(root, 'src/services/paper-journal-sync.service.test.ts'),
     path.join(root, 'src/services/paper-journal-analytics.service.test.ts'),
+    path.join(root, 'src/services/unified-trade-journal.service.test.ts'),
     path.join(root, 'src/services/paper-journal-migration.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-sync-storage.test.ts'),
   ],
@@ -120,6 +121,7 @@ const groups = {
     path.join(root, 'src/routes/paper-trading.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal-query-identity.smoke.test.ts'),
+    path.join(root, 'src/routes/unified-trade-journal.route.test.ts'),
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
     path.join(root, 'src/routes/signal-scanner-auth.smoke.test.ts'),
     path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
