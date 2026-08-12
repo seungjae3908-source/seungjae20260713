@@ -105,6 +105,7 @@ const groups = {
     path.join(root, 'src/features/user-broker-telegram/user-broker-telegram.service.test.ts'),
     path.join(root, 'src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts'),
     path.join(root, 'src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts'),
+    path.join(root, 'src/features/public-prediction/public-prediction.service.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/market-information.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/profile-request-coordinator.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/auth-bootstrap.test.ts'),
