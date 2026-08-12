@@ -61,7 +61,7 @@ for (const width of [360, 390, 430]) {
     const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('읽기 전용')).toBeVisible();
-    await expect(dialog.getByText('Fresh')).toBeVisible();
+    await expect(dialog.getByText('Fresh', { exact: true })).toBeVisible();
     await expect(dialog.getByText('Best Ask')).toBeVisible();
     await expect(dialog.getByText('Best Bid')).toBeVisible();
     await expect(dialog.getByText('Spread %')).toBeVisible();
@@ -101,7 +101,7 @@ test('desktop displays stale status without promoting depth imbalance to a signa
 
   const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText('Stale')).toBeVisible();
+  await expect(dialog.getByText('Stale', { exact: true })).toBeVisible();
   await expect(dialog.getByText(/Depth imbalance는 참고용 호가 통계이며 거래 신호가 아닙니다/)).toBeVisible();
   expect(calls.every((call) => call.method === 'GET')).toBe(true);
 });
