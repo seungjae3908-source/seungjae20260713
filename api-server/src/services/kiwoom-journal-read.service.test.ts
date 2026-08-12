@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import './toss-pre-submission-snapshot.service.test';
 import {
   assertKiwoomJournalReadRequest,
   prepareKiwoomDomesticFillHistory,
