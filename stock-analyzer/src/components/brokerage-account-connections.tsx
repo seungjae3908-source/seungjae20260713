@@ -32,7 +32,7 @@ type Snapshot = {
   mutationsAllowed: boolean;
   credentialsReturned?: boolean;
   checkedAt: string;
-  providers: {
+  providers?: {
     toss: ProviderBase & {
       connectionState?: string;
       holdingCount?: number;
@@ -206,10 +206,10 @@ export function BrokerageAccountConnections() {
     }
   }
 
-  const toss = snapshot?.providers.toss;
-  const kiwoom = snapshot?.providers.kiwoom;
-  const upbit = snapshot?.providers.upbit;
-  const bitget = snapshot?.providers.bitget;
+  const toss = snapshot?.providers?.toss;
+  const kiwoom = snapshot?.providers?.kiwoom;
+  const upbit = snapshot?.providers?.upbit;
+  const bitget = snapshot?.providers?.bitget;
 
   return (
     <section data-testid="brokerage-account-connections" className="mt-4 min-w-0 rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm">
