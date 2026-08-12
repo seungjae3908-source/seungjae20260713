@@ -90,15 +90,16 @@ async function installAdminRuntime(page: Page) {
       return fulfill(route, { ok: true, quotes, rows: quotes, items: quotes, results: quotes });
     }
 
-    if (path === '/api/account-connections/snapshot') return fulfill(route, {
+    if (path === '/api/trade-automation/account-connections/snapshot') return fulfill(route, {
       ok: true, readOnly: true, mutationsAllowed: false, checkedAt: NOW,
       providers: {
+        toss: { configured: false, connected: false, credentialSource: 'none', connectionState: 'WAITING_FOR_TOSS_API_ACCESS', accounts: [], holdingCount: 0, holdings: [], error: 'TOSS_API_ACCESS_REQUIRED' },
         kiwoom: { configured: true, connected: true, accountMasked: '12******34', kr: { ok: true, estimatedAssets: 1234567, totalEvaluationAmount: 1100000, totalProfitLoss: 54321, totalProfitRate: 5.2, holdingCount: 1, holdings: [{ symbol: '005930', name: '삼성전자', quantity: 10, averagePrice: 70000, currentPrice: 75000, evaluationAmount: 750000, profitLoss: 50000, profitRate: 7.14, currency: 'KRW' }] }, us: { ok: true, holdingCount: 1, holdings: [{ symbol: 'AAPL', name: 'Apple', quantity: 2, currentPrice: 220, currency: 'USD' }] } },
         upbit: { configured: true, connected: true, assetCount: 2, assets: [{ currency: 'KRW', balance: 1000000, locked: 0, averageBuyPrice: 0, unitCurrency: 'KRW' }, { currency: 'BTC', balance: 0.01, locked: 0, averageBuyPrice: 120000000, unitCurrency: 'KRW' }] },
         bitget: { configured: true, connected: true, accounts: [{ marginCoin: 'USDT', available: 1000, locked: 0, accountEquity: 1005, unrealizedPL: 5 }], positions: [{ symbol: 'BTCUSDT', side: 'long', total: 0.01, leverage: 2, averageOpenPrice: 115000, markPrice: 116000, unrealizedPL: 10, liquidationPrice: 60000 }] },
       },
     });
-    if (path === '/api/account-connections/status') return fulfill(route, { ok: true, readOnly: true, mutationsAllowed: false, providers: { kiwoom: { configured: true }, upbit: { configured: true }, bitget: { configured: true } }, checkedAt: NOW });
+    if (path === '/api/trade-automation/account-connections/status') return fulfill(route, { ok: true, readOnly: true, mutationsAllowed: false, providers: { toss: { configured: false }, kiwoom: { configured: true }, upbit: { configured: true }, bitget: { configured: true } }, checkedAt: NOW });
     if (path === '/api/trade-automation/status') return fulfill(route, { policy: { mode: 'approval', automaticEnabled: false, emergencyStopped: false, exchangeEnabled: { bitget: false, upbit: false, kiwoom: false }, enabledAssets: { bitget: [], upbit: [], kiwoom: [] }, enabledStrategies: [], totalCapitalKrw: 1000000, maxOrderKrw: 100000, dailyLossLimitPercent: 5, maxAssetPercent: 30, maxOpenPositions: 5, maxDailyOrders: 10, maxConsecutiveLosses: 3, bitgetLeverage: 2 }, connections: [], emergencyStopped: false, credentialVault: { encryptionConfigured: false, keyValueExposed: false }, lastOrder: null });
     if (path === '/api/config') return fulfill(route, { providers: { finnhub: false, alphavantage: false, dart: false, secEdgar: false }, mode: 'sample' });
     if (path === '/api/market/summary') return fulfill(route, { items: [] });
@@ -159,6 +160,7 @@ test('admin account panel shows all four market account surfaces and remains rea
   await page.goto('/account');
   const panel = page.getByTestId('brokerage-account-connections');
   await expect(panel).toBeVisible();
+  await expect(page.getByTestId('connection-toss')).toContainText('Toss Securities');
   await expect(page.getByTestId('connection-kiwoom')).toContainText('Kiwoom');
   await expect(page.getByTestId('connection-upbit')).toContainText('Upbit');
   await expect(page.getByTestId('connection-bitget')).toContainText('Bitget');
