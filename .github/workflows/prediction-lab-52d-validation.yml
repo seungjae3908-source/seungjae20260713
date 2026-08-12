@@ -84,6 +84,13 @@ jobs:
         working-directory: market-prediction-lab
         run: node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json docs/candidate-models
 
+      - name: Collect Upbit BTC and ETH spot cross-symbol candidates
+        id: upbit_spot_suite
+        if: steps.validate.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-upbit-spot-suite.js docs/upbit-spot-suite-result.json
+
       - name: Collect KR and US stock history and compare candidates
         id: stock_suite
         if: steps.validate.outcome == 'success'
@@ -134,6 +141,7 @@ jobs:
             market-prediction-lab/live-derivatives-suite
             market-prediction-lab/live-market-structure-suite
             market-prediction-lab/docs/market-suite-result.json
+            market-prediction-lab/docs/upbit-spot-suite-result.json
             market-prediction-lab/docs/stock-market-suite-result.json
             market-prediction-lab/docs/stock-pnl-suite-result.json
             market-prediction-lab/docs/stock-candidate-models
@@ -152,5 +160,5 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
 
       - name: Fail workflow when technical validation failed
-        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.stock_pnl_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
+        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.upbit_spot_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.stock_pnl_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
         run: exit 1
