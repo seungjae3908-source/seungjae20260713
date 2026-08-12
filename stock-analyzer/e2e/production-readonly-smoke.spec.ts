@@ -172,6 +172,10 @@ async function openRoute(page: Page, evidence: Evidence, route: string, testInfo
   recordRouteTransition(testInfo, evidence, route, 'enter');
   await page.goto(route, { waitUntil: 'domcontentloaded' });
   await waitForFinitePageState(page, evidence, route, testInfo);
+  if (route === '/paper-trading') {
+    await expect(page.getByTestId('paper-trading-page')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('paper-trading-route-skeleton')).toHaveCount(0);
+  }
 }
 
 async function login(page: Page, evidence: Evidence, testInfo: TestInfo) {
