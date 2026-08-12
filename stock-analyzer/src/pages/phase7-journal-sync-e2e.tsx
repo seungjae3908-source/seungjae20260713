@@ -48,6 +48,28 @@ function reviewDataset(): TradingReviewDataset {
   };
 }
 
+function unifiedJournal() {
+  const trade = {
+    id: 'phase7-unified-trade', source: 'APP_PAPER', broker: 'APP', accountIdMasked: 'APP-****-LOCAL',
+    market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', positionSide: 'LONG', currency: 'USDT', status: 'CLOSED',
+    openedAt: '2026-08-02T05:00:00.000Z', closedAt: NOW, entryPrice: 100, exitPrice: 110,
+    initialEntry: { orderId: 'entry-1', at: '2026-08-02T05:00:00.000Z', price: 100, quantity: 1, fees: 0.1, tax: 0 },
+    additions: [], partialExits: [], finalExit: { orderId: 'exit-1', at: NOW, price: 110, quantity: 1, fees: 0.1, tax: 0 },
+    totalQuantity: 1, closedQuantity: 1, remainingQuantity: 0, holdingTimeMs: 7_200_000,
+    grossPnl: 10, fees: 0.2, tax: 0, netPnl: 9.8, netReturnPercent: 9.8,
+    strategy: 'breakout', timeframe: '15m', stopLossPrice: 95, targetPrice: 110, ruleViolation: false, warnings: [],
+    technicalSnapshot: { snapshotId: 'phase7-snapshot', contextSource: 'PRE_TRADE_SNAPSHOT', capturedAt: '2026-08-02T04:59:00.000Z', timeframe: '15m', price: 100, rsi: 56, macd: 1, macdSignal: 0.5, movingAverageFast: 99, movingAverageSlow: 97, support: 95, resistance: 110, volumeRatio: 1.4, volatilityPercent: 2, signalScore: 84, marketRegime: 'TREND', marketStructure: 'HIGHER_HIGH', signalReasons: ['trend'] },
+    review: { performanceScore: 99, qualityScore: 90, grade: 'A', good: ['진입 전 기술 분석 스냅샷을 보존했습니다.'], bad: [], improvements: [], mistakes: [], deterministic: true, externalAiCalled: false },
+  } as const;
+  return {
+    integrationBaseSha: '868734a1ef2120cdafebb4a518ba8dd0a7d40e0f', generatedAt: NOW, trades: [trade], integrityIssues: [],
+    toss: { provider: 'TOSS', officialSpecVersion: '1.2.13', paidStatus: 'PAID_STATUS_UNVERIFIED', liveReadIntegration: 'BLOCKED_BY_FREE_STATUS_UNVERIFIED', contractNormalizerAvailable: true, executionGranularity: 'ORDER_CUMULATIVE_AGGREGATE_NO_FILL_ID', livePrivateRequests: 0, actualOrders: 0 },
+    aiReviewStatus: 'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY',
+    safety: { finalCostDelta: '0_KRW', actualOrderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, privateBrokerRequests: 0 },
+    analytics: { sampleSize: 1, openTrades: 0, closedTrades: 1, winRate: null, profitFactor: null, averageReturnPercent: null, maximumConsecutiveLosses: 0, netPnlByCurrency: [{ currency: 'USDT', value: 9.8 }], totalCostsByCurrency: [{ currency: 'USDT', value: 0.2 }], byMarket: [], bySource: [], byStrategy: [], byTimeframe: [], byGrade: [], mistakes: [], monthlyReport: [{ month: '2026-08', sampleSize: 1, winRate: null, averageReturnPercent: null, netPnlByCurrency: [{ currency: 'USDT', value: 9.8 }] }], warnings: ['확정 통계에는 종료 거래가 최소 5건 필요하며 부족한 지표는 N/A로 표시됩니다.'] },
+  };
+}
+
 export default function Phase7JournalSyncE2EPage() {
   const [userIndex, setUserIndex] = useState(0);
   const [mode, setMode] = useState<Mode>('success');
@@ -92,6 +114,7 @@ export default function Phase7JournalSyncE2EPage() {
         resolveApi={fakeResolve as never}
         analyticsApi={async () => analytics(mode === 'insufficient')}
         reviewApi={async () => reviewDataset()}
+        unifiedLedgerApi={async () => unifiedJournal() as never}
       />
     </div>
   </main>;

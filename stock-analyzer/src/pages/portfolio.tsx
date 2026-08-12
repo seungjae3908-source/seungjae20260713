@@ -11,6 +11,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
 	AlertTriangle,
 	Bell,
+	BookOpenCheck,
 	LogIn,
 	Plus,
 	RefreshCw,
@@ -24,6 +25,7 @@ import { apiGet } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
+import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
 import {
 	getRememberedPurchaseDate,
 	rememberPurchaseDate,
@@ -727,9 +729,32 @@ function isManualTicker(
 	);
 }
 
+function portfolioSectionFromLocation(location: string): 'holdings' | 'journal' {
+	const locationQuery = location.includes('?') ? location.split('?')[1] ?? '' : '';
+	const browserQuery = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
+	return new URLSearchParams(locationQuery || browserQuery).get('tab') === 'journal' ? 'journal' : 'holdings';
+}
+
 export default function PortfolioPage() {
-	const [, navigate] =
+	const [location, navigate] =
 		useLocation();
+	const [portfolioSection, setPortfolioSection] = useState<'holdings' | 'journal'>(() => portfolioSectionFromLocation(location));
+
+	useEffect(() => {
+		setPortfolioSection(portfolioSectionFromLocation(location));
+	}, [location]);
+
+	useEffect(() => {
+		const syncFromHistory = () => setPortfolioSection(portfolioSectionFromLocation(window.location.href));
+		window.addEventListener('popstate', syncFromHistory);
+		return () => window.removeEventListener('popstate', syncFromHistory);
+	}, []);
+
+	function selectPortfolioSection(section: 'holdings' | 'journal') {
+		setPortfolioSection(section);
+		const basePath = location.split('?')[0] || '/portfolio';
+		navigate(section === 'journal' ? `${basePath}?tab=journal` : basePath, { replace: true });
+	}
 
 	const auth =
 		useAuth();
@@ -1334,10 +1359,32 @@ export default function PortfolioPage() {
 
 					</div>
 				</div>
-				<AssetSwitch className="mt-3" />
+				<div className="mt-3 grid grid-cols-2 gap-2 rounded-2xl bg-muted p-1" aria-label="포트폴리오 보기">
+					<button
+						type="button"
+						onClick={() => selectPortfolioSection('holdings')}
+						className={cn('rounded-xl px-3 py-2.5 text-sm font-extrabold', portfolioSection === 'holdings' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}
+						aria-pressed={portfolioSection === 'holdings'}
+					>
+						보유자산
+					</button>
+					<button
+						type="button"
+						onClick={() => selectPortfolioSection('journal')}
+						className={cn('flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-extrabold', portfolioSection === 'journal' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}
+						aria-pressed={portfolioSection === 'journal'}
+					>
+						<BookOpenCheck className="h-4 w-4" />매매일지
+					</button>
+				</div>
+				{portfolioSection === 'holdings' ? <AssetSwitch className="mt-3" /> : null}
 			</header>
 
-			{assetMode.asset === 'coin' ? (
+			{portfolioSection === 'journal' ? (
+				<main className="flex-none px-4 pb-28 pt-4" data-testid="portfolio-journal">
+					<UnifiedTradeJournalPanel />
+				</main>
+			) : assetMode.asset === 'coin' ? (
 				<CoinAssetsView
 					mode={assetMode.coinMarket}
 					spot={coinSpotAccounts}
