@@ -22,6 +22,7 @@ import {
   validateKiwoomReadResponse,
   type KiwoomReadApiId,
 } from '../services/kiwoom-readonly-response.service';
+import { assertKiwoomJournalReadRequest } from '../services/kiwoom-journal-read.service';
 import { createSupabaseTradingRepository } from '../services/trade-automation.repository';
 import { decryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeBrokerPortfolioSnapshot } from '../services/broker-portfolio-normalizer.service';
@@ -179,18 +180,25 @@ async function credentialStates(req: AuthenticatedRequest): Promise<CredentialSt
 function journalCredentialInput(states: CredentialStates): BrokerJournalImportCredentials {
   const tossClientId = stringValue(states.toss.credentials?.clientId);
   const tossClientSecret = stringValue(states.toss.credentials?.clientSecret);
+  const kiwoomAppKey = stringValue(states.kiwoom.credentials?.appKey);
+  const kiwoomSecretKey = stringValue(states.kiwoom.credentials?.secretKey);
   const upbitAccessKey = stringValue(states.upbit.credentials?.accessKey);
   const upbitSecretKey = stringValue(states.upbit.credentials?.secretKey);
   const bitgetApiKey = stringValue(states.bitget.credentials?.apiKey);
   const bitgetSecretKey = stringValue(states.bitget.credentials?.secretKey);
   const bitgetPassphrase = stringValue(states.bitget.credentials?.passphrase);
+  const kiwoomReady = Boolean(kiwoomAppKey && kiwoomSecretKey && kiwoomInfrastructureConfigured());
   return {
     toss: tossClientId && tossClientSecret ? { clientId: tossClientId, clientSecret: tossClientSecret } : null,
+    kiwoom: kiwoomReady ? {
+      credentials: { appKey: kiwoomAppKey, secretKey: kiwoomSecretKey },
+      baseUrl: kiwoomBaseUrl(),
+    } : null,
     upbit: upbitAccessKey && upbitSecretKey ? { accessKey: upbitAccessKey, secretKey: upbitSecretKey } : null,
     bitget: bitgetApiKey && bitgetSecretKey && bitgetPassphrase
       ? { apiKey: bitgetApiKey, secretKey: bitgetSecretKey, passphrase: bitgetPassphrase }
       : null,
-    kiwoomConfigured: Boolean(states.kiwoom.credentials && kiwoomInfrastructureConfigured()),
+    kiwoomConfigured: kiwoomReady,
   };
 }
 
@@ -205,6 +213,13 @@ async function executeBrokerJournalRead(
   if (request.method === 'GET') return fetchPreparedReadOnly<unknown>(baseUrl, request);
   if (provider === 'TOSS' && request.path === '/oauth2/token') return fetchPrepared<unknown>(baseUrl, request);
   throw new Error('BROKER_JOURNAL_MUTATION_FORBIDDEN');
+}
+
+async function executeKiwoomJournalRead(baseUrl: string, request: PreparedExchangeRequest) {
+  if (baseUrl !== kiwoomBaseUrl()) throw new Error('BROKER_JOURNAL_BASE_URL_FORBIDDEN');
+  const tokenRequest = request.method === 'POST' && request.path === '/oauth2/token';
+  if (!tokenRequest) assertKiwoomJournalReadRequest(request);
+  return fetchPrepared<unknown>(baseUrl, request, kiwoomProxyHeaders());
 }
 
 function nestedRecord(value: unknown): JsonRecord {
@@ -565,7 +580,12 @@ router.get('/snapshot', async (req: AuthenticatedRequest, res) => {
 
 export async function memberBrokerJournalSnapshot(req: AuthenticatedRequest) {
   const states = await credentialStates(req);
-  const imported = await importBrokerJournal(journalCredentialInput(states), executeBrokerJournalRead);
+  const imported = await importBrokerJournal(
+    journalCredentialInput(states),
+    executeBrokerJournalRead,
+    new Date(),
+    executeKiwoomJournalRead,
+  );
   return {
     ok: true,
     readOnly: true,
