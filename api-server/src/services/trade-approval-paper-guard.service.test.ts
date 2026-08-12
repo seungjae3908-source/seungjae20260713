@@ -48,13 +48,15 @@ test('approval policy always disables automatic execution and every exchange swi
     ...DEFAULT_TRADING_POLICY,
     mode: 'automatic',
     automaticEnabled: true,
-    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true },
-    enabledAssets: { bitget: ['BTCUSDT'], upbit: ['BTC'], kiwoom: ['005930'] },
+    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
+    providerModes: { bitget: 'LIVE', upbit: 'LIVE', kiwoom: 'LIVE', toss: 'LIVE' },
+    enabledAssets: { bitget: ['BTCUSDT'], upbit: ['BTC'], kiwoom: ['005930'], toss: ['005930'] },
     enabledStrategies: ['unsafe-auto'],
   });
   assert.equal(policy.mode, 'approval');
   assert.equal(policy.automaticEnabled, false);
-  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false });
-  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [] });
+  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+  assert.deepEqual(policy.providerModes, { bitget: 'OFF', upbit: 'OFF', kiwoom: 'OFF', toss: 'OFF' });
+  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.deepEqual(policy.enabledStrategies, []);
 });
