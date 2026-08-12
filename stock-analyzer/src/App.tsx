@@ -40,7 +40,8 @@ const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const BacktestsPage = lazy(() => import('@/pages/backtests'));
-const PaperTradingPage = lazy(() => import('@/pages/paper-trading'));
+const loadPaperTradingPage = () => import('@/pages/paper-trading');
+const PaperTradingPage = lazy(loadPaperTradingPage);
 const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
 const UiBuilderLayoutControlPage = lazy(() => import('@/pages/ui-builder-layout-control'));
 const NotFound = lazy(() => import('@/pages/not-found'));
@@ -169,7 +170,40 @@ function RecommendationsAccess() { return gated('canAccessRiskPreview', <Recomme
 function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioPage />)); }
 function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PortfolioPage />)); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
-function PaperTradingAccess() { return gated('canAccessPaperTrading', <PaperTradingPage />); }
+function PaperTradingRouteFallback() {
+  return (
+    <main
+      aria-busy="true"
+      aria-label="모의매매 화면 준비 중"
+      className="h-full overflow-y-auto overscroll-contain pb-28"
+      data-testid="paper-trading-route-skeleton"
+    >
+      <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-5 sm:px-5">
+        <header className="rounded-2xl border border-border bg-card p-4">
+          <h1 className="text-lg font-bold">모의매매</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            계좌와 거래일지를 안전하게 준비하고 있습니다.
+          </p>
+        </header>
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-hidden="true">
+          {Array.from({ length: 4 }, (_, index) => (
+            <div className="h-20 animate-pulse rounded-2xl bg-muted/40" key={index} />
+          ))}
+        </section>
+        <section className="h-48 animate-pulse rounded-2xl bg-muted/40" aria-hidden="true" />
+      </div>
+    </main>
+  );
+}
+
+function PaperTradingAccess() {
+  return gated(
+    'canAccessPaperTrading',
+    <Suspense fallback={<PaperTradingRouteFallback />}>
+      <PaperTradingPage />
+    </Suspense>,
+  );
+}
 function AutoTradingAccess() { return gated('canPlaceOrders', builder('AUTO_TRADING', <AutoTradingPage />)); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
 function UiBuilderAdminAccess() { return gated('canManageMembers', <UiBuilderLayoutControlPage />); }
@@ -264,6 +298,11 @@ function AiChartRoute() {
 function AuthenticatedApp() {
   const auth = useAuth();
   useEffect(() => { if (auth.isApproved) ensureWatchlistSync(); }, [auth.isApproved]);
+  useEffect(() => {
+    if (auth.isApproved && auth.can('canAccessPaperTrading')) {
+      void loadPaperTradingPage();
+    }
+  }, [auth.isApproved, auth.membershipLevel]);
   if (auth.loading) return <PageFallback />;
   if (auth.bootstrapError) return <ErrorState code="UPSTREAM_ERROR" onRetry={auth.retryBootstrap} />;
   if (!auth.configured || !auth.isApproved) return <Suspense fallback={<PageFallback />}><AccountPage /></Suspense>;
