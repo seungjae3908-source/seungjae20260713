@@ -71,7 +71,7 @@ function queryState(location: string) {
 	const params = new URLSearchParams(locationQuery || browserQuery);
 	const asset: AssetTab = params.get('asset') === 'coin' ? 'coin' : 'stock';
 	const market: MarketTab = params.get('market') === 'US' ? 'US' : 'KR';
-	const ticker = String(params.get('ticker') ?? '').toUpperCase();
+	const ticker = String(params.get('ticker') ?? params.get('symbol') ?? '').toUpperCase();
 	return { asset, market, ticker };
 }
 
@@ -174,6 +174,20 @@ export default function StockInfoPage() {
 		navigate(`/stock-info?${params.toString()}`, { replace: true });
 	}
 
+	function openDetailedAnalysis() {
+		const params = new URLSearchParams(location.includes('?') ? location.split('?')[1] ?? '' : '');
+		params.set('asset', 'stock');
+		params.set('market', market);
+		params.set('ticker', ticker);
+		params.delete('view');
+		navigate(`/stock-info/analysis?${params.toString()}`);
+	}
+
+	function leaveDetail() {
+		const params = new URLSearchParams(location.includes('?') ? location.split('?')[1] ?? '' : '');
+		navigate(params.get('back')?.trim() || '/stocks');
+	}
+
 	const search = useQuery({
 		queryKey: ['stock-info-search', market, searchText.trim()],
 		queryFn: () => api.search(searchText.trim()),
@@ -202,7 +216,7 @@ export default function StockInfoPage() {
 			}
 			return payload;
 		},
-		enabled: asset === 'stock',
+		enabled: asset === 'stock' && !ticker,
 		refetchInterval: 30_000,
 		refetchIntervalInBackground: true,
 		refetchOnWindowFocus: true,
@@ -266,30 +280,27 @@ export default function StockInfoPage() {
 		<div className="h-full overflow-y-auto overscroll-contain bg-background">
 			{/* 상단 고정 없음 — 제목·탭·상세가 한 페이지로 함께 스크롤. */}
 			<header className="border-b border-card-border px-4 pb-3 pt-4">
-				<h1 className="mb-3 text-center text-xl font-extrabold">정보</h1>
-
-				<div className="grid grid-cols-2 gap-2">
-					<Tab active onClick={() => undefined}>정보</Tab>
-					<Tab active={false} onClick={() => navigate('/learn')}>공부</Tab>
+				<div className="grid grid-cols-[40px_minmax(0,1fr)_40px] items-center gap-2">
+					{ticker ? (
+						<button type="button" aria-label="종목 목록으로 돌아가기" onClick={leaveDetail} className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border bg-card">
+							<ChevronLeft className="h-5 w-5" />
+						</button>
+					) : <span />}
+					<h1 className="text-center text-xl font-extrabold">{ticker ? '종목 상세' : '통합검색'}</h1>
+					<span />
 				</div>
-
-				<div className="mt-2 grid grid-cols-2 gap-2">
-					<Tab active={asset === 'stock'} onClick={() => updateSelection({ asset: 'stock' })}>주식</Tab>
-					<Tab active={asset === 'coin'} onClick={() => updateSelection({ asset: 'coin' })}>코인</Tab>
-				</div>
-				{asset === 'stock' && (
-					<div className="mt-2 grid grid-cols-2 gap-2">
-						<Tab active={market === 'KR'} onClick={() => updateSelection({ market: 'KR' })}>국내</Tab>
-						<Tab active={market === 'US'} onClick={() => updateSelection({ market: 'US' })}>해외</Tab>
-					</div>
-				)}
+				{ticker ? (
+					<p className="mt-1 text-center text-xs font-semibold text-muted-foreground">
+						{asset === 'stock' ? (market === 'KR' ? '국내주식' : '미국주식') : '코인'} 공개 데이터
+					</p>
+				) : null}
 			</header>
 
 			{asset === 'coin' ? (
 				<CoinInfo nowMs={nowMs} />
 			) : (
 				<main className="space-y-4 px-4 pb-28 pt-4">
-					<SpecialFeedPanel
+					{!ticker ? <SpecialFeedPanel
 						asset="stock"
 						market={market}
 						filter={feedFilter}
@@ -308,9 +319,9 @@ export default function StockInfoPage() {
 								window.document.getElementById('stock-info-selected')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 							}, 50);
 						}}
-					/>
+					/> : null}
 
-					<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+					{!ticker ? <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
 						<label className="flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
 							<Search className="h-4 w-4 text-muted-foreground" />
 							<input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={market === 'KR' ? '국내 종목명·코드 검색' : '해외 종목명·티커·한글명 검색'} className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
@@ -328,7 +339,7 @@ export default function StockInfoPage() {
 								))}
 							</div>
 						)}
-					</section>
+					</section> : null}
 
 					{!ticker && (
 						<InlineState>종목을 검색해 선택하면 실제 시세·재무·수급·공매도·뉴스·공시가 아래에 표시됩니다.</InlineState>
@@ -355,7 +366,7 @@ export default function StockInfoPage() {
 											<Metric label="현재가" value={money(quote.data.price, currency)} strong />
 											<Metric label="등락률" value={finite(quote.data.changePercent) == null ? '데이터 없음' : formatAppPercent(quote.data.changePercent)} tone={Number(quote.data.changePercent) >= 0 ? 'up' : 'down'} />
 										</div>
-										<button type="button" onClick={() => navigate(`/stock/${encodeURIComponent(ticker)}`)} className="mt-3 flex w-full items-center justify-center gap-1 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground">상세 분석 <ChevronRight className="h-4 w-4" /></button>
+										<button type="button" onClick={openDetailedAnalysis} className="mt-3 flex w-full items-center justify-center gap-1 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground">상세 분석 <ChevronRight className="h-4 w-4" /></button>
 									</>
 								)}
 							</section>

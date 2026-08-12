@@ -27,6 +27,7 @@ const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
 const SignalScannerPage = lazy(() => import('@/pages/signal-scanner'));
 const StockInfoPage = lazy(() => import('@/pages/stock-info'));
+const DetailPage = lazy(() => import('@/pages/detail'));
 const MarketInformationPage = lazy(() => import('@/pages/market-information'));
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
@@ -218,7 +219,15 @@ function StockInfoAccess() {
   const [location] = useLocation();
   const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : window.location.search.slice(1);
   const params = new URLSearchParams(query);
-  const content = builder('ASSET_DETAIL', <StockInfoPage />);
+  const ticker = String(params.get('ticker') ?? params.get('symbol') ?? '').trim().toUpperCase();
+  const content = ticker
+    ? builder(
+        'ASSET_DETAIL',
+        location.split('?')[0] === '/stock-info/analysis' && params.get('asset') === 'stock'
+          ? <DetailPage />
+          : <StockInfoPage />,
+      )
+    : builder('ASSET_SEARCH', <UnifiedAssetSearchPage />);
   if (params.get('asset') === 'coin') {
     return gated(params.get('coinMarket') === 'futures' ? 'canAccessFutures' : 'canAccessSpot', content);
   }
@@ -235,6 +244,7 @@ function ApprovedRouter() {
     <Route path="/coins/futures" component={FuturesMarketInformationAccess} />
     <Route path="/stocks" component={UnifiedAssetSearchAccess} />
     <Route path="/auto-trading" component={AutoTradingAccess} />
+    <Route path="/stock-info/analysis" component={StockInfoAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
     <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
