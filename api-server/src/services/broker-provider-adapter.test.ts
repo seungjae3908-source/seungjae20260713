@@ -5,6 +5,8 @@ import {
   selectStockProvider,
 } from './broker-provider-adapter';
 import {
+  prepareBitgetFillHistory,
+  prepareBitgetOrderHistory,
   prepareTossAccounts,
   prepareTossAmend,
   prepareTossCancel,
@@ -13,6 +15,8 @@ import {
   prepareTossOrder,
   prepareTossOrderHistory,
   prepareTossToken,
+  prepareUpbitClosedOrders,
+  prepareUpbitOpenOrders,
   redactPreparedRequest,
   type TossCredentials,
 } from './trade-exchange-adapters.service';
@@ -107,4 +111,49 @@ test('Toss prepared request redaction never returns bearer or OAuth credentials'
   const redacted = redactPreparedRequest(prepareTossAccounts(credentials));
   assert.equal(redacted.headers.Authorization, '[REDACTED]');
   assert.doesNotMatch(JSON.stringify(redacted), /access-token-fixture|client-secret-fixture/);
+});
+
+test('Upbit journal reads use the non-deprecated open and closed order endpoints', () => {
+  const upbit = { accessKey: 'access-fixture', secretKey: 'secret-fixture' };
+  const open = prepareUpbitOpenOrders(upbit, {
+    market: 'krw-btc', state: 'wait', page: 2, limit: 100, orderBy: 'asc',
+  }, 'open-nonce');
+  assert.equal(open.method, 'GET');
+  assert.equal(open.path, '/v1/orders/open');
+  assert.equal(open.query, 'market=KRW-BTC&state=wait&page=2&limit=100&order_by=asc');
+
+  const startTimeMs = Date.UTC(2026, 7, 1);
+  const closed = prepareUpbitClosedOrders(upbit, {
+    market: 'krw-btc', state: 'done', startTimeMs, endTimeMs: startTimeMs + 7 * 86_400_000,
+    limit: 1_000, orderBy: 'desc',
+  }, 'closed-nonce');
+  assert.equal(closed.path, '/v1/orders/closed');
+  assert.match(closed.query, /start_time=1785542400000/);
+  assert.throws(() => prepareUpbitClosedOrders(upbit, {
+    startTimeMs, endTimeMs: startTimeMs + 7 * 86_400_000 + 1,
+  }), /UPBIT_CLOSED_ORDER_WINDOW_INVALID/);
+  assert.throws(() => prepareUpbitOpenOrders(upbit, { limit: 101 }), /UPBIT_ORDER_LIST_LIMIT_INVALID/);
+});
+
+test('Bitget journal reads use official order and fill history windows', () => {
+  const bitget = { apiKey: 'key-fixture', secretKey: 'secret-fixture', passphrase: 'pass-fixture' };
+  const startTimeMs = Date.UTC(2026, 7, 1);
+  const orders = prepareBitgetOrderHistory(bitget, {
+    symbol: 'btcusdt', clientOrderId: 'client-1', cursor: 'previous-end', startTimeMs,
+    endTimeMs: startTimeMs + 30 * 86_400_000, limit: 100,
+  }, '1000');
+  assert.equal(orders.method, 'GET');
+  assert.equal(orders.path, '/api/v2/mix/order/orders-history');
+  assert.match(orders.query, /^productType=USDT-FUTURES&clientOid=client-1&symbol=BTCUSDT/);
+
+  const fills = prepareBitgetFillHistory(bitget, {
+    orderId: 'order-1', clientOrderId: 'ignored', startTimeMs, endTimeMs: startTimeMs + 7 * 86_400_000,
+  }, '1001');
+  assert.equal(fills.path, '/api/v2/mix/order/fill-history');
+  assert.match(fills.query, /orderId=order-1/);
+  assert.doesNotMatch(fills.query, /clientOid/);
+  assert.throws(() => prepareBitgetFillHistory(bitget, {}), /BITGET_FILL_ORDER_REFERENCE_REQUIRED/);
+  assert.throws(() => prepareBitgetFillHistory(bitget, {
+    orderId: 'order-1', startTimeMs, endTimeMs: startTimeMs + 7 * 86_400_000 + 1,
+  }), /BITGET_HISTORY_WINDOW_INVALID/);
 });
