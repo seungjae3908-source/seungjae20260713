@@ -99,6 +99,22 @@ test('review dataset shows anonymization and excluded fields', async ({ page }) 
   await expect(page.getByRole('status')).toContainText('외부 전송은 없습니다');
 });
 
+test('unified trade journal separates performance, quality, snapshots, and free-only status', async ({ page }) => {
+  const errors = captureErrors(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await open(page);
+  const journal = page.getByTestId('unified-trade-journal');
+  await expect(journal).toContainText('통합 매매일지·매매 품질 복기');
+  await expect(page.getByTestId('toss-free-status')).toContainText('BLOCKED_BY_FREE_STATUS_UNVERIFIED');
+  await expect(page.getByTestId('journal-zero-cost-status')).toContainText('0_KRW');
+  await expect(page.getByTestId('unified-journal-list')).toContainText('BTCUSDT');
+  await expect(page.getByTestId('unified-journal-detail')).toContainText('성과 점수');
+  await expect(page.getByTestId('unified-journal-detail')).toContainText('매매 품질');
+  await expect(page.getByTestId('unified-journal-snapshot')).toContainText('PRE_TRADE_SNAPSHOT');
+  await expect(page.getByTestId('unified-journal-monthly')).toContainText('2026-08');
+  expect(errors).toEqual([]);
+});
+
 test('account switch creates isolated namespaces without exposing UUID', async ({ page }) => {
   await open(page);
   const first = await page.getByTestId('active-account').textContent();
@@ -114,6 +130,7 @@ test('account switch creates isolated namespaces without exposing UUID', async (
 for (const viewport of [
   { name: 'mobile 390x844', width: 390, height: 844 },
   { name: 'small mobile 360x740', width: 360, height: 740 },
+  { name: 'wide mobile 430x932', width: 430, height: 932 },
 ]) {
   test(`${viewport.name} keeps sync, conflict and analysis controls usable`, async ({ page }) => {
     const errors = captureErrors(page);
@@ -125,6 +142,8 @@ for (const viewport of [
     await page.getByLabel('시나리오').selectOption('success');
     await page.getByRole('button', { name: '분석 불러오기' }).click();
     await expect(page.getByTestId('journal-analytics-result')).toBeVisible();
+    await expect(page.getByTestId('unified-trade-journal')).toBeVisible();
+    await expect(page.getByTestId('unified-journal-detail')).toContainText('BTCUSDT');
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
     expect(overflow).toBe(false);
     expect(errors).toEqual([]);
