@@ -135,8 +135,10 @@ export function prepareBitgetCancel(credentials: BitgetCredentials, symbol: stri
   }, '', timestamp);
 }
 
-export function prepareBitgetOrderQuery(credentials: BitgetCredentials, clientOrderId: string, timestamp?: string) {
-  const query = `clientOid=${encodeURIComponent(clientOrderId)}&productType=USDT-FUTURES`;
+export function prepareBitgetOrderQuery(
+  credentials: BitgetCredentials, symbol: string, clientOrderId: string, timestamp?: string,
+) {
+  const query = `symbol=${encodeURIComponent(symbol.toUpperCase())}&clientOid=${encodeURIComponent(clientOrderId)}&productType=USDT-FUTURES`;
   return bitgetRequest(credentials, 'GET', '/api/v2/mix/order/detail', null, query, timestamp);
 }
 

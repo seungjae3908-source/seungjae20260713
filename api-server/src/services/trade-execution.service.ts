@@ -30,6 +30,11 @@ import {
   type UpbitCredentials,
 } from './trade-exchange-adapters.service';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
+import {
+  parseBitgetOrderSnapshot,
+  parseUpbitOrderSnapshot,
+  TradeReconciliationService,
+} from './trade-reconciliation.service';
 
 type ExchangePayload = Record<string, unknown>;
 
@@ -244,6 +249,29 @@ export class TradeExecutionService {
     }
   }
 
+  async reconcile(userId: string, plan: TradingPlan, order: TradingOrder) {
+    if (plan.accountMode === 'paper' || (plan.accountMode === 'mock' && plan.exchange !== 'kiwoom')) {
+      throw new Error('PAPER_ORDER_RECONCILIATION_UNEXPECTED');
+    }
+    const connection = await this.repository.getConnection(userId, plan.exchange);
+    if (!connection?.configured || !connection.encryptedCredentials || connection.accountMode !== plan.accountMode) {
+      throw new Error('RECONCILIATION_CONNECTION_UNAVAILABLE');
+    }
+    const credentials = decryptTradingCredentials(connection.encryptedCredentials);
+    const snapshot = plan.exchange === 'bitget'
+      ? parseBitgetOrderSnapshot(assertBitgetSuccess(await sendExchangeRequest(
+        BASE_URLS.bitget,
+        prepareBitgetOrderQuery(credentials as BitgetCredentials, plan.symbol, order.clientOrderId),
+      )))
+      : plan.exchange === 'upbit'
+        ? parseUpbitOrderSnapshot(assertUpbitSuccess(await sendExchangeRequest(
+          BASE_URLS.upbit,
+          prepareUpbitOrderQuery(credentials as UpbitCredentials, order.clientOrderId),
+        )))
+        : (() => { throw new Error('KIWOOM_RECONCILIATION_CONTRACT_UNAVAILABLE'); })();
+    return new TradeReconciliationService(this.repository).applySnapshot(order, snapshot);
+  }
+
   private async executeBitget(plan: TradingPlan, order: TradingOrder, credentials: BitgetCredentials) {
     const [accounts, positions, pending, contracts, ticker] = await Promise.all([
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetAccount(credentials)).then(assertBitgetSuccess),
@@ -272,7 +300,7 @@ export class TradeExecutionService {
     let reconciliationRequired = false;
     try {
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
-        prepareBitgetOrderQuery(credentials, order.clientOrderId)));
+        prepareBitgetOrderQuery(credentials, plan.symbol, order.clientOrderId)));
     } catch { reconciliationRequired = true; }
     return { orderId: String(row.orderId ?? row.clientOid ?? order.clientOrderId), reconciliationRequired };
   }

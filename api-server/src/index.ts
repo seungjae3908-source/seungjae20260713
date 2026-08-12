@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import apiRouter from './routes';
 import { startPriceAlertMonitor } from './services/notification.service';
+import { startTradeReconciliationWorker } from './services/trade-reconciliation.worker';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -202,6 +203,7 @@ app.listen(
     );
 
     startPriceAlertMonitor();
+    startTradeReconciliationWorker();
 
     if (frontendDist) {
       console.log(

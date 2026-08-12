@@ -44,6 +44,7 @@ assert(legacyStockBlockIndex >= 0 && stocksMountIndex > legacyStockBlockIndex, '
 const automationRoute = await text('api-server/src/routes/trade-automation.ts');
 const automationService = await text('api-server/src/services/trade-automation.service.ts');
 const automationRepository = await text('api-server/src/services/trade-automation.repository.ts');
+const reconciliationWorker = await text('api-server/src/services/trade-reconciliation.worker.ts');
 const automationMigration = await text('api-server/supabase/migrations/2026080301_trade_automation_integration.sql');
 const aiChatRoute = await text('api-server/src/routes/ai-chat.ts');
 const aiChatService = await text('api-server/src/services/ai-chat.service.ts');
@@ -59,6 +60,10 @@ assert(automationMigration.includes('revoke all on public.trade_exchange_connect
 assert(automationRoute.includes("router.post('/admin/emergency-stop', requireAdmin")
   && automationMigration.includes('revoke all on public.trade_system_controls from anon, authenticated'),
   'persistent global emergency stop is not restricted to an admin route and service-only storage');
+assert(reconciliationWorker.includes("process.env.TRADE_RECONCILIATION_ENABLED !== 'true'")
+  && reconciliationWorker.includes('.reconcile(') && !reconciliationWorker.includes('.execute(')
+  && reconciliationWorker.includes('ordersSubmitted: 0'),
+  'periodic reconciliation is not default-off or can submit a new order');
 assert(!automationUi.includes('credentials:'), 'frontend contains an exchange credential payload');
 assert(!/(?:trade-automation|trade-execution|place-order|\/v1\/orders)/i.test(`${aiChatRoute}\n${aiChatService}`), 'AI chat imports or calls the trading execution surface');
 
@@ -74,6 +79,8 @@ const phase8SensitiveFiles = [
   'api-server/src/services/trade-automation.service.ts',
   'api-server/src/services/trade-execution.service.ts',
   'api-server/src/services/trade-automation.repository.ts',
+  'api-server/src/services/trade-reconciliation.service.ts',
+  'api-server/src/services/trade-reconciliation.worker.ts',
   'api-server/src/routes/trade-automation.ts',
 ];
 const phase8Text = (await Promise.all(phase8SensitiveFiles.map(text))).join('\n');
