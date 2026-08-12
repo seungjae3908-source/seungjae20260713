@@ -42,6 +42,7 @@ export function enforceMemberTradingPolicy(
       bitget: noMoreThan(candidate.riskPerTradePercent.bitget, DEFAULT_TRADING_POLICY.riskPerTradePercent.bitget),
       upbit: noMoreThan(candidate.riskPerTradePercent.upbit, DEFAULT_TRADING_POLICY.riskPerTradePercent.upbit),
       kiwoom: noMoreThan(candidate.riskPerTradePercent.kiwoom, DEFAULT_TRADING_POLICY.riskPerTradePercent.kiwoom),
+      toss: noMoreThan(candidate.riskPerTradePercent.toss, DEFAULT_TRADING_POLICY.riskPerTradePercent.toss),
     },
     totalDailyLossLimitPercent: noMoreThan(
       candidate.totalDailyLossLimitPercent,
@@ -83,6 +84,7 @@ export function resumeMemberTradingPolicy(current: TradingPolicy): TradingPolicy
     automaticEnabled: false,
     emergencyStopped: false,
     newEntriesStopped: false,
-    exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
+    exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
+    providerModes: { bitget: 'OFF', upbit: 'OFF', kiwoom: 'OFF', toss: 'OFF' },
   };
 }
