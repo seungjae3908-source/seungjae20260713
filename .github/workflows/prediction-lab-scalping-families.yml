@@ -110,7 +110,7 @@ jobs:
   scalping-family-shards:
     needs: prepare-scalping-data
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
