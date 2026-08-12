@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "integrated-research-v1",
+  "note": "Schema-only example. This file contains no claimed market performance and must not be used as research evidence.",
+  "identity": {
+    "strategyFamily": "EXAMPLE_ONLY",
+    "strategyVersion": "example-v1",
+    "parameterHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "market": "CRYPTO_FUTURES",
+    "symbol": "EXAMPLEUSDT",
+    "timeframe": "15m",
+    "side": "long",
+    "researchCodeSha": "0000000000000000000000000000000000000000"
+  },
+  "status": "RESEARCHING",
+  "stages": {
+    "backtest": null,
+    "oos": null,
+    "walkForward": null,
+    "holdout": null,
+    "paper": null,
+    "shadow": null
+  },
+  "safety": {
+    "simulatedOnly": true,
+    "liveOrderAllowed": false,
+    "privateAccountRequestAllowed": false,
+    "orderSubmitted": false,
+    "livePromotionAllowed": false,
+    "actualOrderCount": 0,
+    "privateTradingApiCalls": 0
+  }
+}
