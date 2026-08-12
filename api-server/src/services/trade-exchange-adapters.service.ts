@@ -295,6 +295,59 @@ export function prepareBitgetPendingOrders(credentials: BitgetCredentials, symbo
     `symbol=${encodeURIComponent(symbol.toUpperCase())}&productType=USDT-FUTURES`, timestamp);
 }
 
+export type BitgetHistoryInput = {
+  orderId?: string;
+  clientOrderId?: string;
+  symbol?: string;
+  cursor?: string;
+  startTimeMs?: number;
+  endTimeMs?: number;
+  limit?: number;
+};
+
+function bitgetHistoryQuery(input: BitgetHistoryInput, maximumWindowDays: number) {
+  if (input.limit != null && (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100)) {
+    throw new Error('BITGET_HISTORY_LIMIT_INVALID');
+  }
+  if (input.startTimeMs != null && (!Number.isInteger(input.startTimeMs) || input.startTimeMs <= 0)) {
+    throw new Error('BITGET_HISTORY_START_TIME_INVALID');
+  }
+  if (input.endTimeMs != null && (!Number.isInteger(input.endTimeMs) || input.endTimeMs <= 0)) {
+    throw new Error('BITGET_HISTORY_END_TIME_INVALID');
+  }
+  if (input.startTimeMs != null && input.endTimeMs != null) {
+    const windowMs = input.endTimeMs - input.startTimeMs;
+    if (windowMs < 0 || windowMs > maximumWindowDays * 86_400_000) throw new Error('BITGET_HISTORY_WINDOW_INVALID');
+  }
+  return new URLSearchParams({
+    productType: 'USDT-FUTURES',
+    ...(input.orderId?.trim() ? { orderId: input.orderId.trim() } : {}),
+    ...(!input.orderId?.trim() && input.clientOrderId?.trim() ? { clientOid: input.clientOrderId.trim() } : {}),
+    ...(input.symbol?.trim() ? { symbol: input.symbol.trim().toUpperCase() } : {}),
+    ...(input.cursor?.trim() ? { idLessThan: input.cursor.trim() } : {}),
+    ...(input.startTimeMs != null ? { startTime: String(input.startTimeMs) } : {}),
+    ...(input.endTimeMs != null ? { endTime: String(input.endTimeMs) } : {}),
+    ...(input.limit != null ? { limit: String(input.limit) } : {}),
+  }).toString();
+}
+
+export function prepareBitgetOrderHistory(
+  credentials: BitgetCredentials,
+  input: BitgetHistoryInput = {},
+  timestamp?: string,
+) {
+  return bitgetRequest(credentials, 'GET', '/api/v2/mix/order/orders-history', null, bitgetHistoryQuery(input, 90), timestamp);
+}
+
+export function prepareBitgetFillHistory(
+  credentials: BitgetCredentials,
+  input: BitgetHistoryInput,
+  timestamp?: string,
+) {
+  if (!input.orderId?.trim() && !input.clientOrderId?.trim()) throw new Error('BITGET_FILL_ORDER_REFERENCE_REQUIRED');
+  return bitgetRequest(credentials, 'GET', '/api/v2/mix/order/fill-history', null, bitgetHistoryQuery(input, 7), timestamp);
+}
+
 export function prepareBitgetMarginMode(
   credentials: BitgetCredentials, symbol: string, marginMode: 'crossed' | 'isolated', timestamp?: string,
 ) {
@@ -421,6 +474,56 @@ function kiwoomReadRequest(
     },
     body: jsonBody(body),
   };
+}
+
+export type UpbitOrderListInput = {
+  market?: string;
+  state?: 'wait' | 'watch' | 'done' | 'cancel';
+  startTimeMs?: number;
+  endTimeMs?: number;
+  page?: number;
+  limit?: number;
+  orderBy?: 'asc' | 'desc';
+};
+
+function upbitOrderListParameters(input: UpbitOrderListInput, closed: boolean) {
+  const maximumLimit = closed ? 1_000 : 100;
+  if (input.limit != null && (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > maximumLimit)) {
+    throw new Error('UPBIT_ORDER_LIST_LIMIT_INVALID');
+  }
+  if (input.page != null && (closed || !Number.isInteger(input.page) || input.page < 1)) {
+    throw new Error('UPBIT_ORDER_LIST_PAGE_INVALID');
+  }
+  if (input.state && !(closed ? ['done', 'cancel'] : ['wait', 'watch']).includes(input.state)) {
+    throw new Error('UPBIT_ORDER_LIST_STATE_INVALID');
+  }
+  if (!closed && (input.startTimeMs != null || input.endTimeMs != null)) throw new Error('UPBIT_OPEN_ORDER_TIME_NOT_SUPPORTED');
+  if (closed) {
+    for (const value of [input.startTimeMs, input.endTimeMs]) {
+      if (value != null && (!Number.isInteger(value) || value <= 0)) throw new Error('UPBIT_CLOSED_ORDER_TIME_INVALID');
+    }
+    if (input.startTimeMs != null && input.endTimeMs != null) {
+      const windowMs = input.endTimeMs - input.startTimeMs;
+      if (windowMs < 0 || windowMs > 7 * 86_400_000) throw new Error('UPBIT_CLOSED_ORDER_WINDOW_INVALID');
+    }
+  }
+  return {
+    ...(input.market?.trim() ? { market: input.market.trim().toUpperCase() } : {}),
+    ...(input.state ? { state: input.state } : {}),
+    ...(input.startTimeMs != null ? { start_time: String(input.startTimeMs) } : {}),
+    ...(input.endTimeMs != null ? { end_time: String(input.endTimeMs) } : {}),
+    ...(input.page != null ? { page: String(input.page) } : {}),
+    ...(input.limit != null ? { limit: String(input.limit) } : {}),
+    ...(input.orderBy ? { order_by: input.orderBy } : {}),
+  };
+}
+
+export function prepareUpbitOpenOrders(credentials: UpbitCredentials, input: UpbitOrderListInput = {}, nonce?: string) {
+  return upbitRequest(credentials, 'GET', '/v1/orders/open', upbitOrderListParameters(input, false), nonce);
+}
+
+export function prepareUpbitClosedOrders(credentials: UpbitCredentials, input: UpbitOrderListInput = {}, nonce?: string) {
+  return upbitRequest(credentials, 'GET', '/v1/orders/closed', upbitOrderListParameters(input, true), nonce);
 }
 
 export function prepareKiwoomAccountNumber(credentials: KiwoomCredentials): PreparedExchangeRequest {
