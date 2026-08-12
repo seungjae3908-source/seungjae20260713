@@ -11,6 +11,7 @@ import {
   createUsStockForwardPnlState,
   summarizeUsStockForwardPnlState,
 } from "../src/us-stock-forward-pnl-shadow.js";
+import { evaluateUsStockResearchPromotion } from "../src/us-stock-research-promotion-gate.js";
 import {
   US_STOCK_FORWARD_CANDIDATE,
   US_STOCK_FORWARD_CANDIDATE_SHA256,
@@ -43,10 +44,39 @@ function markClosedCandles(candles, cycleTime) {
   })));
 }
 
+function unresolvedBiasAudit() {
+  return Object.freeze({
+    schemaVersion: 1,
+    market: "US_STOCK",
+    status: "research_hold",
+    executionPromotionAllowed: false,
+    researchOnly: true,
+    gates: Object.freeze({
+      pointInTimeMembershipsPresent: false,
+      removedNamesPresent: false,
+      membershipHistoryCoveragePassed: false,
+      removedNameHistoryCoveragePassed: false,
+    }),
+    reasons: Object.freeze([
+      "authoritative_point_in_time_membership_evidence_missing",
+      "authoritative_removed_name_history_evidence_missing",
+    ]),
+    safeguards: Object.freeze({
+      currentConstituentListAloneCannotPass: true,
+      missingHistoriesFailClosed: true,
+      liveExecutionAllowed: false,
+      privateAccountRequestAllowed: false,
+      actualOrders: 0,
+    }),
+  });
+}
+
 const statePath = resolve(process.argv[2] ?? "docs/us-stock-forward-state.json");
 const summaryPath = resolve(process.argv[3] ?? "docs/us-stock-forward-summary.json");
 const pnlStatePath = resolve(process.argv[4] ?? "docs/us-stock-forward-pnl-state.json");
 const pnlSummaryPath = resolve(process.argv[5] ?? "docs/us-stock-forward-pnl-summary.json");
+const biasPath = resolve(process.argv[6] ?? "docs/us-stock-universe-bias-audit.json");
+const promotionPath = resolve(process.argv[7] ?? "docs/us-stock-research-promotion.json");
 const cycleTime = Date.now();
 if (cycleTime < US_STOCK_FORWARD_START) throw new Error("US_STOCK_FORWARD_NOT_STARTED");
 
@@ -92,8 +122,14 @@ const nextPnlState = advanceUsStockForwardPnlState({
   cycleTime,
 });
 const pnl = summarizeUsStockForwardPnlState(nextPnlState);
+const biasAudit = await readJsonOptional(biasPath, unresolvedBiasAudit());
+const promotion = evaluateUsStockResearchPromotion({
+  biasAudit,
+  signalShadow: forward,
+  pnlShadow: pnl,
+});
 const summary = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   status: "pass",
   generatedAt: cycleTime,
   candidate: Object.freeze({
@@ -106,6 +142,8 @@ const summary = Object.freeze({
   }),
   forward,
   pnl,
+  biasAudit,
+  promotion,
   datasets: Object.freeze(datasets),
   safeguards: Object.freeze({
     forwardStart: US_STOCK_FORWARD_START,
@@ -117,8 +155,8 @@ const summary = Object.freeze({
     sameBarStopFirstConservative: true,
     baseCostRatePerSide: US_STOCK_FORWARD_CANDIDATE.costRatePerSide,
     stressMultiplier: US_STOCK_FORWARD_CANDIDATE.stressMultiplier,
-    currentConstituentSurvivorshipGateSatisfied: false,
-    pointInTimeMembershipStillRequired: true,
+    currentConstituentSurvivorshipGateSatisfied: promotion.gates.pointInTimeBiasPassed,
+    pointInTimeMembershipStillRequired: !promotion.gates.pointInTimeBiasPassed,
     costAwareProspectivePnlShadowActive: true,
     publicMarketDataOnly: true,
     actualOrders: 0,
@@ -131,4 +169,5 @@ await writeJsonAtomically(statePath, nextState);
 await writeJsonAtomically(summaryPath, summary);
 await writeJsonAtomically(pnlStatePath, nextPnlState);
 await writeJsonAtomically(pnlSummaryPath, pnl);
+await writeJsonAtomically(promotionPath, promotion);
 console.log(JSON.stringify(summary, null, 2));
