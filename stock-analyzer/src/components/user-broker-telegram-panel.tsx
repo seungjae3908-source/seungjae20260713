@@ -45,6 +45,46 @@ const preferenceLabels: Record<PreferenceKey, string> = {
   MANUAL_PORTFOLIO_ENTRY: '수동 포트폴리오 등록',
 };
 
+const preferenceKeys = Object.keys(preferenceLabels) as PreferenceKey[];
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function normalizeIntegrationState(value: unknown): IntegrationState {
+  const root = record(value) ?? {};
+  const telegram = record(root.telegram) ?? {};
+  const preferences = record(root.preferences) ?? {};
+  const brokerConnections = Array.isArray(root.brokerConnections)
+    ? root.brokerConnections.flatMap((item): BrokerConnection[] => {
+      const connection = record(item);
+      if (!connection || typeof connection.exchange !== 'string') return [];
+      return [{
+        exchange: connection.exchange,
+        accountMode: typeof connection.accountMode === 'string' ? connection.accountMode : 'disabled',
+        configured: connection.configured === true,
+        lastVerifiedAt: typeof connection.lastVerifiedAt === 'string' ? connection.lastVerifiedAt : null,
+        lastErrorCode: typeof connection.lastErrorCode === 'string' ? connection.lastErrorCode : null,
+        credentialsExposed: false,
+      }];
+    })
+    : [];
+
+  return {
+    brokerConnections,
+    telegram: {
+      connected: telegram.connected === true,
+      status: typeof telegram.status === 'string' ? telegram.status : 'DISCONNECTED',
+      connectedAt: typeof telegram.connectedAt === 'string' ? telegram.connectedAt : null,
+    },
+    preferences: Object.fromEntries(
+      preferenceKeys.map((key) => [key, preferences[key] === true]),
+    ) as Record<PreferenceKey, boolean>,
+  };
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await authorizedFetch(path, {
     ...init,
@@ -59,6 +99,7 @@ export function UserBrokerTelegramPanel() {
   const [state, setState] = useState<IntegrationState | null>(null);
   const [link, setLink] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
@@ -66,14 +107,8 @@ export function UserBrokerTelegramPanel() {
     setLoading(true);
     setError(null);
     try {
-      try {
-        const sync = await api<{ inserted: number; portfolioSynced: number; deliveryQueued: number }>('/api/user-integrations/execution/sync', { method: 'POST' });
-        setSyncNotice(sync.inserted > 0 ? `실행 이벤트 ${sync.inserted}건 동기화` : null);
-      } catch {
-        setSyncNotice('주문 결과 동기화 재시도 필요');
-      }
-      const value = await api<IntegrationState>('/api/user-integrations');
-      setState(value);
+      const value = await api<unknown>('/api/user-integrations');
+      setState(normalizeIntegrationState(value));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '연결 상태를 불러오지 못했습니다.');
     } finally {
@@ -82,6 +117,20 @@ export function UserBrokerTelegramPanel() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  async function syncExecutionState() {
+    setSyncing(true);
+    setError(null);
+    setSyncNotice(null);
+    try {
+      const sync = await api<{ inserted: number; portfolioSynced?: number; deliveryQueued: number }>('/api/user-integrations/execution/sync', { method: 'POST' });
+      setSyncNotice(sync.inserted > 0 ? `실행 이벤트 ${sync.inserted}건 동기화` : '새로 동기화할 실행 이벤트가 없습니다.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '주문 결과 동기화에 실패했습니다.');
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   async function createTelegramLink() {
     setError(null);
@@ -114,7 +163,7 @@ export function UserBrokerTelegramPanel() {
         method: 'PATCH',
         body: JSON.stringify({ [key]: value }),
       });
-      setState((current) => current ? { ...current, preferences: result.preferences } : current);
+      setState((current) => current ? { ...current, preferences: normalizeIntegrationState({ preferences: result.preferences }).preferences } : current);
     } catch (caught) {
       setState(previous);
       setError(caught instanceof Error ? caught.message : '알림 설정 저장에 실패했습니다.');
@@ -156,7 +205,7 @@ export function UserBrokerTelegramPanel() {
 
       <h3 className="mt-4 text-xs font-extrabold">알림 설정</h3>
       <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {state ? (Object.keys(preferenceLabels) as PreferenceKey[]).map((key) => (
+        {state ? preferenceKeys.map((key) => (
           <label key={key} className="flex min-h-11 items-center gap-2 rounded-xl border border-card-border bg-background px-3 text-xs">
             <input type="checkbox" checked={state.preferences[key]} onChange={(event) => void togglePreference(key, event.currentTarget.checked)} />
             {preferenceLabels[key]}
@@ -164,9 +213,14 @@ export function UserBrokerTelegramPanel() {
         )) : null}
       </div>
 
-      <button type="button" onClick={() => void refresh()} disabled={loading} className="mt-4 min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50">
-        {loading ? '새로고침 중…' : '연결 · 실행상태 새로고침'}
-      </button>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button type="button" onClick={() => void refresh()} disabled={loading} className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50">
+          {loading ? '새로고침 중…' : '연결 상태 새로고침'}
+        </button>
+        <button type="button" onClick={() => void syncExecutionState()} disabled={syncing} className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50">
+          {syncing ? '동기화 중…' : '주문 결과 동기화'}
+        </button>
+      </div>
     </section>
   );
 }
