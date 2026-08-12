@@ -45,28 +45,50 @@ test('automatic trading and every exchange default to OFF', () => {
   assert.equal(policy.mode, 'approval');
   assert.equal(policy.automaticEnabled, false);
   assert.equal(policy.emergencyStopped, false);
-  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false });
-  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [] });
+  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+  assert.deepEqual(policy.providerModes, { bitget: 'OFF', upbit: 'OFF', kiwoom: 'OFF', toss: 'OFF' });
+  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.equal(policy.bitgetLeverage, 2);
 });
 
-test('automatic policy fields can restrict eligibility but cannot bypass user approval', async () => {
+test('automatic shadow policy remains user-configured and can submit only non-live plans', async () => {
   const automatic = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
-    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false },
-    enabledAssets: { bitget: [], upbit: ['ETH'], kiwoom: [] }, enabledStrategies: ['breakout-v1'],
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    enabledAssets: { bitget: [], upbit: ['ETH'], kiwoom: [], toss: [] }, enabledStrategies: ['breakout-v1'],
   });
+  assert.equal(automatic.providerModes?.upbit, 'SHADOW');
   const blocked = evaluateTradingPlan(plan(), automatic, { emergencyStopped: false, serverLiveEnabled: true });
   assert.ok(blocked.blockCodes.includes('ASSET_NOT_ENABLED'));
   const allowedPolicy = { ...automatic, enabledAssets: { ...automatic.enabledAssets, upbit: ['BTC'] } };
   const allowed = evaluateTradingPlan(plan(), allowedPolicy, { emergencyStopped: false, serverLiveEnabled: true });
   assert.equal(allowed.allowed, true);
   const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER_A, allowedPolicy);
   const service = new TradeAutomationService(repository);
-  const created = await service.createPlan(USER_A, plan({ signalId: 'automatic-still-needs-user' }), allowedPolicy, false);
+  const created = await service.createPlan(USER_A, plan({ signalId: 'automatic-shadow' }), allowedPolicy, false);
   assert.equal(created.plan?.state, 'APPROVAL_PENDING');
-  await assert.rejects(() => service.beginAutomaticPlan(USER_A, created.plan!.id), /USER_APPROVAL_REQUIRED/);
+  const submitted = await service.beginAutomaticPlan(USER_A, created.plan!.id);
+  assert.equal(submitted.state, 'SUBMITTED');
+  assert.equal(submitted.riskEnvelope != null, true);
   assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
+});
+
+test('automatic shadow policy cannot elevate a plan to live account execution', async () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'automatic', automaticEnabled: true,
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
+    enabledStrategies: ['breakout-v1'],
+  });
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER_A, policy);
+  const service = new TradeAutomationService(repository);
+  const input = plan({ accountMode: 'live', signalId: 'shadow-live-blocked' });
+  const created = await service.createPlan(USER_A, input, policy, false);
+  assert.equal(created.plan, null);
+  assert.ok(created.decision.blockCodes.includes('AUTOMATIC_PROVIDER_LIVE_OPT_IN_REQUIRED'));
 });
 
 test('risk engine blocks emergency, stale/volatile markets, loss limits, and insufficient balance', () => {
@@ -137,6 +159,19 @@ test('Kiwoom adapter is domestic-only and keeps mock/live account mode in the pl
   assert.match(request.body ?? '', /"stk_cd":"005930"/);
 });
 
+test('Toss risk contract is stock-only and quote-amount orders are US market buys only', () => {
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  const valid = evaluateTradingPlan(plan({
+    exchange: 'toss', market: 'KR', symbol: '005930', side: 'buy', quantity: 1, quoteAmount: null,
+  }), policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(valid.blockCodes.includes('TOSS_STOCK_ONLY'), false);
+  assert.equal(valid.blockCodes.includes('TOSS_QUANTITY_OR_AMOUNT_REQUIRED'), false);
+  const invalidAmount = evaluateTradingPlan(plan({
+    exchange: 'toss', market: 'KR', symbol: '005930', side: 'buy', quantity: null, quoteAmount: 100_000,
+  }), policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.ok(invalidAmount.blockCodes.includes('TOSS_AMOUNT_ORDER_US_MARKET_BUY_ONLY'));
+});
+
 test('official signature formats are deterministic and secret headers redact completely', () => {
   const message = '1000POST/api/v2/mix/order/place-order{"a":1}';
   assert.equal(buildBitgetSignature('secret', '1000', 'POST', '/api/v2/mix/order/place-order', '', '{"a":1}'),
@@ -162,7 +197,7 @@ test('state machine supports partial fill/cancel/recovery and rejects unsafe tra
   assert.throws(() => assertOrderTransition('FILLED', 'SUBMITTED'), /INVALID_ORDER_STATE_TRANSITION/);
 });
 
-test('same signal is idempotent, approval is mandatory, and members cannot read each other', async () => {
+test('same signal is idempotent, manual approval is mandatory outside automatic mode, and members cannot read each other', async () => {
   const repository = new InMemoryTradingRepository();
   const service = new TradeAutomationService(repository);
   const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
@@ -172,7 +207,7 @@ test('same signal is idempotent, approval is mandatory, and members cannot read 
   assert.equal(second.duplicate, true);
   assert.equal(await repository.getPlan(USER_B, first.plan!.id), null);
   assert.equal(first.plan?.state, 'APPROVAL_PENDING');
-  await assert.rejects(() => service.beginAutomaticPlan(USER_A, first.plan!.id), /USER_APPROVAL_REQUIRED/);
+  await assert.rejects(() => service.beginAutomaticPlan(USER_A, first.plan!.id), /AUTOMATIC_TRADING_NOT_ENABLED/);
   const approved = await service.approvePlan(USER_A, first.plan!.id);
   assert.equal((approved as TradingPlanInput & { riskEnvelope?: unknown }).riskEnvelope != null, true);
   const created = await service.createOrder(USER_A, approved);
@@ -193,7 +228,7 @@ test('approval rechecks signal freshness and expires stale plans before order cr
   assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
 });
 
-test('persistent global emergency stop blocks plan creation and approval; automatic policy still cannot submit', async () => {
+test('persistent global emergency stop blocks plan creation and approval, then automatic shadow can resume only after stop clears', async () => {
   const repository = new InMemoryTradingRepository();
   const service = new TradeAutomationService(repository);
   const approvalPolicy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
@@ -210,14 +245,15 @@ test('persistent global emergency stop blocks plan creation and approval; automa
   const automaticPolicy = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
     mode: 'automatic', automaticEnabled: true,
-    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false },
-    enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [] },
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
     enabledStrategies: ['breakout-v1'],
   });
   await repository.savePolicy(USER_A, automaticPolicy);
   const automaticPlan = await service.createPlan(USER_A, plan({ signalId: 'global-stop-automatic' }), automaticPolicy, false);
   assert.equal(automaticPlan.plan?.state, 'APPROVAL_PENDING');
-  await assert.rejects(() => service.beginAutomaticPlan(USER_A, automaticPlan.plan!.id), /USER_APPROVAL_REQUIRED/);
+  const submitted = await service.beginAutomaticPlan(USER_A, automaticPlan.plan!.id);
+  assert.equal(submitted.state, 'SUBMITTED');
   assert.equal(await repository.findOrderByPlan(USER_A, automaticPlan.plan!.id), null);
 });
 
@@ -233,6 +269,7 @@ test('paper execution has zero outbound calls and restart scan marks an accepted
     encryptedCredentials: encryptTradingCredentials({ accessKey: 'paper', secretKey: 'paper' }, MASTER_KEY),
     lastVerifiedAt: null, lastErrorCode: null, updatedAt: new Date().toISOString(),
   });
+
   const nativeFetch = globalThis.fetch;
   let outbound = 0;
   globalThis.fetch = (async () => { outbound += 1; throw new Error('outbound blocked'); }) as typeof fetch;
