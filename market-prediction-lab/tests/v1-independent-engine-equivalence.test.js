@@ -179,7 +179,7 @@ test("one-pass independent engine is economically equivalent to V1 for spot long
   const result = runPair({
     market: "CRYPTO_SPOT",
     side: "long",
-    symbol: "BTCUSDT",
+    symbol: "USDT-BTC",
     candles,
     riskModel: { riskPerTrade: 0.01, maximumCapitalFraction: 0.8, leverage: 1, quantityStep: 0.0001 },
     costModel: {
