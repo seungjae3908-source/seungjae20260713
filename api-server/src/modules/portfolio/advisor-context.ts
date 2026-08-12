@@ -16,7 +16,7 @@ export class AdvisorContextError extends Error {
   }
 }
 
-const forbiddenKey = /(?:api.?key|secret|credential|authorization|refresh.?token|access.?token|private.?key|execution.?key|broker.?password|account.?number|full.?account|exchange.?auth)/i;
+const forbiddenKey = /(?:user.?id|api.?key|secret|credential|authorization|refresh.?token|access.?token|private.?key|execution.?key|broker.?password|account.?number|full.?account|exchange.?auth|telegram.?chat.?id)/i;
 const forbiddenString = /(?:bearer\s+[a-z0-9._-]{8,}|sk-[a-z0-9_-]{12,}|authorization\s*:|(?:refresh[_ -]?token|access[_ -]?token|api[_ -]?key|private[_ -]?key|execution[_ -]?key)\s*[:=]\s*\S{8,})/i;
 
 function sanitize(value: unknown, path: string, depth: number): unknown {

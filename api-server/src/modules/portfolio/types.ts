@@ -10,6 +10,7 @@ export type Position = {
   assetId: string;
   market: PortfolioMarket;
   symbol: string;
+  positionSide?: 'LONG' | 'SHORT';
   quantity: number;
   averageCost: number | null;
   currentPrice: number | null;
@@ -19,7 +20,7 @@ export type Position = {
 
 export type PortfolioInput = {
   positions: Position[];
-  cash: number;
+  cash: number | null;
   baseCurrency: string;
   investmentBudget?: number;
   investmentHorizon?: InvestmentHorizon;
@@ -67,7 +68,7 @@ export type PositionAnalytics = {
 export type PortfolioAnalyticsResult = {
   totalValue: Metric<number>;
   knownValue: number;
-  cashValue: number;
+  cashValue: Metric<number>;
   cashWeight: Metric<number>;
   marketExposure: Metric<Record<string, number>>;
   sectorExposure: Metric<Record<string, number>>;
@@ -200,7 +201,7 @@ export type PortfolioAdvisorContext = {
   holdings: Position[];
   averageCost: Array<{ assetId: string; averageCost: number | null }>;
   weights: Array<{ assetId: string; weight: Metric<number> }>;
-  cash: number;
+  cash: Metric<number>;
   risk: {
     concentration: Metric<number>;
     volatilityPercent: Metric<number>;
