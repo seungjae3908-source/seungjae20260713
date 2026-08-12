@@ -26,7 +26,7 @@ import type {
 } from '../services/trade-automation.types';
 
 const router: IRouter = Router();
-const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom']);
+const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom', 'toss']);
 const CONNECTION_PROVIDERS = new Set<BrokerConnectionProvider>(['toss', 'kiwoom', 'upbit', 'bitget']);
 const CANCEL_RECONCILIATION_STATES = new Set([
   'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED',
@@ -162,6 +162,18 @@ function errorResponse(res: Response, error: unknown) {
   return res.status(status).json({ ok: false, error: code, secretExposed: false, orderSubmitted: false });
 }
 
+function requestedLiveProviders(policy: ReturnType<typeof normalizeTradingPolicy>) {
+  return (['toss', 'kiwoom', 'upbit', 'bitget'] as const)
+    .filter((provider) => policy.providerModes?.[provider] === 'LIVE');
+}
+
+function exactProviderConfirmation(value: unknown, providers: readonly string[]) {
+  if (!Array.isArray(value)) return false;
+  const actual = [...new Set(value.map(String).map((item) => item.toLowerCase()))].sort();
+  const expected = [...providers].sort();
+  return actual.length === expected.length && actual.every((item, index) => item === expected[index]);
+}
+
 router.get('/status', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
@@ -181,9 +193,10 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         environmentGlobal: environmentGlobalStop,
       },
       liveExecutionServerEnabled: {
-        bitget: liveExecutionEnabled('bitget'),
-        upbit: liveExecutionEnabled('upbit'),
+        toss: liveExecutionEnabled('toss'),
         kiwoom: liveExecutionEnabled('kiwoom'),
+        upbit: liveExecutionEnabled('upbit'),
+        bitget: liveExecutionEnabled('bitget'),
       },
       credentialVault: credentialConfigurationStatus(),
       lastOrder: orders[0] ?? null,
@@ -222,13 +235,31 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
     if (enablingAutomatic && req.body?.confirmation?.acknowledged !== true) {
       return res.status(409).json({ ok: false, error: 'AUTOMATIC_TRADING_CONFIRMATION_REQUIRED' });
     }
+    const liveProviders = requestedLiveProviders(policy);
+    if (liveProviders.length > 0 && (
+      req.body?.confirmation?.liveAcknowledged !== true
+      || !exactProviderConfirmation(req.body?.confirmation?.liveProviders, liveProviders)
+    )) {
+      return res.status(409).json({
+        ok: false,
+        error: 'LIVE_PROVIDER_CONFIRMATION_REQUIRED',
+        requestedProviders: liveProviders,
+      });
+    }
     if (policy.mode !== 'automatic') {
       policy.automaticEnabled = false;
-      policy.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false };
-      policy.enabledAssets = { bitget: [], upbit: [], kiwoom: [] };
+      policy.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false, toss: false };
+      policy.providerModes = { bitget: 'OFF', upbit: 'OFF', kiwoom: 'OFF', toss: 'OFF' };
+      policy.enabledAssets = { bitget: [], upbit: [], kiwoom: [], toss: [] };
     }
     await repository.savePolicy(userId, policy);
-    return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
+    return res.json({
+      ok: true,
+      policy,
+      defaultOff: !policy.automaticEnabled,
+      liveProviderCount: liveProviders.length,
+      serverLiveActivationChanged: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
@@ -292,6 +323,21 @@ router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
   } catch (error) { return errorResponse(res, error); }
 });
 
+router.post('/plans/:id/automatic', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, automation, execution, splitExecution } = context(req);
+    const plan = await automation.beginAutomaticPlan(userId, String(req.params.id));
+    const result = await executeSubmittedPlan(userId, plan, automation, execution, splitExecution);
+    return res.json({
+      ok: true,
+      plan,
+      ...result,
+      authorizationSource: 'USER_PRECONFIGURED_AUTOMATIC_POLICY',
+      liveDefaultChanged: false,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
 router.post('/plans/:id/invalidate', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, automation, cancellation } = context(req);
@@ -308,7 +354,8 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
     const current = await repository.getPolicy(userId);
     const policy = normalizeTradingPolicy({
       ...current, automaticEnabled: false, emergencyStopped: true, mode: 'approval',
-      exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
+      exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
+      providerModes: { bitget: 'OFF', upbit: 'OFF', kiwoom: 'OFF', toss: 'OFF' },
     });
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, emergencyStopped: true, newOrdersBlocked: true, existingOrdersCanceled: false });
