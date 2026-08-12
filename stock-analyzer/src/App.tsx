@@ -12,6 +12,7 @@ import { AnalysisSelectionProvider } from '@/lib/analysis-selection';
 import { AssetRouteNotResolved, resolveAssetDetailPath, resolveLegacyCryptoDetailPath } from '@/lib/asset-navigation';
 import { OfflineBanner } from '@/components/offline-banner';
 import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
+import { OrderbookRouteDock } from '@/components/orderbook-route-dock';
 import { ErrorState, PageFallback } from '@/components/data-state';
 import { AutoBackupSync } from '@/lib/backup-sync';
 import { CapabilityGate } from '@/components/capability-gate';
@@ -146,7 +147,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const scannerRoute = location.startsWith('/scanner');
   const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
-  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
+  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div><OrderbookRouteDock /></div>;
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {
@@ -234,6 +235,10 @@ function StockInfoAccess() {
   return gated('canAccessBasicInfo', content);
 }
 
+function Phase13OrderbookE2EPage() {
+  return <main data-testid="phase13-orderbook-e2e" className="h-full bg-background" aria-label="Orderbook E2E surface" />;
+}
+
 function ApprovedRouter() {
   return <Suspense fallback={<PageFallback />}><Switch>
     <Route path="/" component={HomeAccess} />
@@ -290,6 +295,7 @@ function RootRouter() {
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
+    {phase12E2EEnabled ? <Route path="/__phase13-orderbook-e2e" component={Phase13OrderbookE2EPage} /> : null}
     {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
     <Route path="/login" component={AccountPage} />
     <Route path="/install" component={InstallPage} />
