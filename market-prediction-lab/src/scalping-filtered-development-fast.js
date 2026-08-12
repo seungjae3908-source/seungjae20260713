@@ -308,6 +308,7 @@ function prepareInvariantContext({ version, backtestInput, parameters, period })
   const market = backtestInput.market;
   const side = backtestInput.side ?? "long";
   const baseSignals = new Array(candles.length).fill(false);
+  const baseSignalIndexes = [];
   const filterFeatures = version === "V3" || version === "V4" ? new Array(candles.length).fill(null) : null;
   const exitPlanCache = new Array(candles.length).fill(null);
 
@@ -316,7 +317,9 @@ function prepareInvariantContext({ version, backtestInput, parameters, period })
     if (candle.timestamp < period.startTime) continue;
     const baseSignal = calculateV1Signal({ market, side, candles, indicators, index, parameters });
     baseSignals[index] = baseSignal;
-    if (!baseSignal || filterFeatures === null) continue;
+    if (!baseSignal) continue;
+    baseSignalIndexes.push(index);
+    if (filterFeatures === null) continue;
     filterFeatures[index] = version === "V3"
       ? calculateV3SignalFeatures({ candles, indicators, index })
       : calculateV4SignalFeatures({ side, candles, indicators, index });
@@ -326,6 +329,7 @@ function prepareInvariantContext({ version, backtestInput, parameters, period })
     candles: Object.freeze(candles),
     indicators,
     baseSignals: Object.freeze(baseSignals),
+    baseSignalIndexes: Object.freeze(baseSignalIndexes),
     filterFeatures: filterFeatures === null ? null : Object.freeze(filterFeatures),
     exitPlanCache,
   });
@@ -365,7 +369,7 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
   if (!parameters || typeof parameters !== "object") throw new TypeError("parameters are required");
   if (!filter || typeof filter !== "object") throw new TypeError("filter is required");
   const normalizedPeriod = normalizedDevelopmentPeriod(period);
-  const { candles, indicators, baseSignals, filterFeatures, exitPlanCache } = prepareInvariantContext({
+  const { candles, indicators, baseSignals, baseSignalIndexes, filterFeatures, exitPlanCache } = prepareInvariantContext({
     version,
     backtestInput,
     parameters,
@@ -382,18 +386,13 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
   const fundingRates = Array.isArray(backtestInput.fundingRates) ? backtestInput.fundingRates : [];
   const trades = [];
   let equity = initialCapital;
-  let index = 1;
+  let minimumIndex = 1;
 
-  while (index < candles.length - 1 && equity > 0) {
+  for (const index of baseSignalIndexes) {
+    if (!(equity > 0)) break;
+    if (index < minimumIndex) continue;
     const candle = candles[index];
-    if (candle.timestamp < normalizedPeriod.startTime) {
-      index += 1;
-      continue;
-    }
-    if (!baseSignals[index]) {
-      index += 1;
-      continue;
-    }
+    if (!baseSignals[index]) continue;
     if (!passesFilter({
       version,
       side,
@@ -403,7 +402,6 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
       filter,
       preparedFeature: filterFeatures?.[index] ?? null,
     })) {
-      index += 1;
       continue;
     }
     const entryIndex = index + 1;
@@ -416,12 +414,10 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
       ? entryPrice + stopDistance * parameters.targetRiskMultiple
       : entryPrice - stopDistance * parameters.targetRiskMultiple;
     if (!(stopPrice > 0 && targetPrice > 0)) {
-      index += 1;
       continue;
     }
     const quantity = positionSize({ equity, entryPrice, stopPrice, riskModel });
     if (!(quantity > 0)) {
-      index += 1;
       continue;
     }
     const position = Object.freeze({
@@ -445,7 +441,7 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
     const trade = settle({ position, exit, exitCandle: candles[exitIndex], costModel, fundingRates, equity });
     trades.push(trade);
     equity = trade.equityAfter;
-    index = exitIndex + 1;
+    minimumIndex = exitIndex + 1;
   }
 
   const performance = summarizeResearchPerformance(trades, { initialCapital });
@@ -477,6 +473,7 @@ export function runFastFilteredDevelopment({ version, backtestInput, parameters,
       singlePassDevelopmentSearch: true,
       invariantSignalContextReusedAcrossCandidates: true,
       invariantExitPlanReusedAcrossCandidates: true,
+      baseSignalIndexesReusedAcrossCandidates: true,
       finalHoldoutUsedForSelection: false,
       orderSubmitted: false,
       privateAccountRequestAllowed: false,
