@@ -6,6 +6,7 @@ import {
   type TradeApprovalQueueItem,
 } from '@/components/trade-approval-queue';
 import { TradeAutomationSettings } from '@/components/trade-automation-settings';
+import { UserBrokerTelegramPanel } from '@/components/user-broker-telegram-panel';
 
 type TradeAutomationFixture = ComponentProps<typeof TradeAutomationSettings>['fixture'];
 
@@ -43,6 +44,7 @@ export default function AutoTradingPage({
           </section>
           <TradeApprovalQueue fixture={approvalFixture} />
           <TradeAutomationSettings fixture={fixture} />
+          <UserBrokerTelegramPanel />
         </div>
       </main>
       <BottomNav />
