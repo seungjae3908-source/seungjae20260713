@@ -23,6 +23,7 @@ import {
   APP_NAVIGATION,
   cleanAppPath,
   navigationGroupMatches,
+  navigationMenuItemIsUserVisible,
   navigationMenuItemMatches,
   resolveAppRoutePresentation,
   type NavigationGroupId,
@@ -48,8 +49,6 @@ const ICONS: Record<NavigationIconId, LucideIcon> = {
   chat: Bot,
   portfolio: BriefcaseBusiness,
 };
-
-const HIDDEN_ASSET_MENU_IDS = new Set(['market-overview', 'market-browser', 'alerts']);
 
 export function BottomNav() {
   const [location, navigate] = useLocation();
@@ -191,7 +190,7 @@ export function BottomNav() {
           const Icon = ICONS[group.icon];
           const visibleMenuItems = (group.menu ?? []).filter(
             (item) => (!item.capability || auth.can(item.capability))
-              && !(group.id === 'assets' && HIDDEN_ASSET_MENU_IDS.has(item.id)),
+              && navigationMenuItemIsUserVisible(item),
           );
           const hasMenu = visibleMenuItems.length > 0;
 
