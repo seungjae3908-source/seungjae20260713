@@ -25,6 +25,11 @@ import cryptoSignalScanRouter from './crypto-signal-scan';
 import unifiedSearchRouter from './unified-search';
 import accountConnectionsRouter from './account-connections';
 import {
+  manualPortfolioNotificationBridge,
+  telegramWebhookRouter,
+  userBrokerTelegramRouter,
+} from './user-broker-telegram';
+import {
   requireAdmin,
   requireAuthenticated,
   requireCapability,
@@ -39,6 +44,11 @@ router.get('/', (_req, res) => {
 // Health/config probes remain public. Every data or analysis route below this
 // point resolves the current database profile before checking capabilities.
 router.use('/', healthRouter);
+
+// Telegram webhook is the only unauthenticated integration endpoint. It accepts
+// only Telegram-secret-authenticated /start updates containing a short-lived,
+// one-time, user-bound token; it never trusts a browser-supplied chat id.
+router.use('/telegram/webhook', telegramWebhookRouter);
 
 // Admin routes perform their own authenticated + admin capability checks.
 router.use('/admin', adminRouter);
@@ -99,9 +109,12 @@ router.use('/', backtestsRouter);
 router.use('/paper-trading', requireCapability('canAccessPaperTrading'));
 router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
+router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canPlaceOrders'));
 router.use('/trade-automation', tradeAutomationRouter);
+router.use('/user-integrations', requireCapability('canPlaceOrders'));
+router.use('/user-integrations', userBrokerTelegramRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
 router.use('/', unifiedSearchRouter);
