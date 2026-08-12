@@ -31,6 +31,7 @@ function metricValue(metric: { status: string; value?: number }): number {
 test('empty portfolio keeps deterministic values and marks market risk evidence insufficient', () => {
   const result = analyzePortfolio({ positions: [], cash: 1_000_000, baseCurrency: 'KRW' });
   assert.equal(metricValue(result.totalValue), 1_000_000);
+  assert.equal(result.cashValue, 1_000_000);
   assert.equal(metricValue(result.cashWeight), 100);
   assert.equal(result.volatilityPercent.status, 'insufficient');
   assert.equal(result.correlation.status, 'insufficient');
@@ -92,6 +93,7 @@ test('zero cash and high cash are represented explicitly', () => {
 test('missing price propagates insufficiency instead of a fabricated total or weight', () => {
   const result = analyzePortfolio({ positions: [{ ...basePosition, currentPrice: null }], cash: 100, baseCurrency: 'USD' });
   assert.equal(result.totalValue.status, 'insufficient');
+  assert.equal(result.cashValue, 100);
   assert.equal(result.positions[0].weight.status, 'insufficient');
   assert.ok(result.missing.includes('US:AAPL:price'));
 });
@@ -214,6 +216,7 @@ test('advisor works with partial or stale facts without gaining execution author
     missing: ['scannerEvidence'],
   });
   const envelope = buildPortfolioAdvisorEnvelope(context, false);
+  assert.equal(envelope.context.cash, 1000);
   assert.equal(envelope.deterministicAnalysisAvailable, true);
   assert.equal(envelope.aiExplanationAvailable, false);
   assert.equal(envelope.orderAuthority, 'none');
