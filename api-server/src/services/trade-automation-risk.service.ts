@@ -5,6 +5,7 @@ import {
   type TradingMarketSnapshot,
   type TradingPlanInput,
   type TradingPolicy,
+  type TradingProviderMode,
   type TradingRiskDecision,
 } from './trade-automation.types';
 import { normalizeSplitRatios, TradeSplitOrderPlanError } from './trade-split-order-planner.service';
@@ -66,6 +67,16 @@ function plannedOpenRiskKrw(plan: TradingPlanInput) {
   if (reference == null || !finitePositive(plan.stopPrice)) return null;
   return plan.estimatedKrw * Math.abs(reference - plan.stopPrice) / reference;
 }
+function normalizedProviderMode(value: unknown, legacyEnabled: unknown): TradingProviderMode {
+  if (value === 'LIVE' || value === 'SHADOW' || value === 'OFF') return value;
+  return legacyEnabled === true ? 'SHADOW' : 'OFF';
+}
+function providerMode(policy: TradingPolicy, exchange: TradingPlanInput['exchange']): TradingProviderMode {
+  const explicit = policy.providerModes?.[exchange];
+  return explicit === 'LIVE' || explicit === 'SHADOW' || explicit === 'OFF'
+    ? explicit
+    : policy.exchangeEnabled[exchange] ? 'SHADOW' : 'OFF';
+}
 
 export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | undefined): TradingPolicy {
   const input = value ?? {};
@@ -82,20 +93,29 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     crypto_spot: clampNumber(classLimits?.crypto_spot, 5_000, totalCapitalKrw, totalCapitalKrw),
     crypto_futures: clampNumber(classLimits?.crypto_futures, 5_000, totalCapitalKrw, totalCapitalKrw),
   };
+  const providerModes = {
+    bitget: normalizedProviderMode(input.providerModes?.bitget, input.exchangeEnabled?.bitget),
+    upbit: normalizedProviderMode(input.providerModes?.upbit, input.exchangeEnabled?.upbit),
+    kiwoom: normalizedProviderMode(input.providerModes?.kiwoom, input.exchangeEnabled?.kiwoom),
+    toss: normalizedProviderMode(input.providerModes?.toss, input.exchangeEnabled?.toss),
+  } as const;
   return {
     mode: input.mode === 'automatic' ? 'automatic' : 'approval',
     automaticEnabled: input.automaticEnabled === true,
     emergencyStopped: input.emergencyStopped === true,
     newEntriesStopped: input.newEntriesStopped === true,
     exchangeEnabled: {
-      bitget: input.exchangeEnabled?.bitget === true,
-      upbit: input.exchangeEnabled?.upbit === true,
-      kiwoom: input.exchangeEnabled?.kiwoom === true,
+      bitget: providerModes.bitget !== 'OFF',
+      upbit: providerModes.upbit !== 'OFF',
+      kiwoom: providerModes.kiwoom !== 'OFF',
+      toss: providerModes.toss !== 'OFF',
     },
+    providerModes,
     enabledAssets: {
       bitget: normalizedList(input.enabledAssets?.bitget, 100).map((item) => item.toUpperCase()),
       upbit: normalizedList(input.enabledAssets?.upbit, 100).map((item) => item.toUpperCase().replace(/^KRW-/, '')),
       kiwoom: normalizedList(input.enabledAssets?.kiwoom, 100).map((item) => item.toUpperCase()),
+      toss: normalizedList(input.enabledAssets?.toss, 100).map((item) => item.toUpperCase()),
     },
     enabledStrategies: normalizedList(input.enabledStrategies, 30),
     totalCapitalKrw,
@@ -115,6 +135,7 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
       bitget: clampNumber(input.riskPerTradePercent?.bitget, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.bitget),
       upbit: clampNumber(input.riskPerTradePercent?.upbit, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.upbit),
       kiwoom: clampNumber(input.riskPerTradePercent?.kiwoom, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.kiwoom),
+      toss: clampNumber(input.riskPerTradePercent?.toss, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.toss),
     },
     totalDailyLossLimitPercent: clampNumber(input.totalDailyLossLimitPercent, 0.1, 2, DEFAULT_TRADING_POLICY.totalDailyLossLimitPercent),
     minExpectedValueR: clampNumber(input.minExpectedValueR, 0, 2, DEFAULT_TRADING_POLICY.minExpectedValueR),
@@ -228,7 +249,10 @@ export function evaluateTradingPlan(
 
   if (policy.mode === 'automatic') {
     if (!policy.automaticEnabled) add(blockCodes, 'AUTOMATIC_MODE_NOT_CONFIRMED');
-    if (!policy.exchangeEnabled[plan.exchange]) add(blockCodes, 'EXCHANGE_NOT_ENABLED');
+    const mode = providerMode(policy, plan.exchange);
+    if (mode === 'OFF') add(blockCodes, 'EXCHANGE_NOT_ENABLED');
+    if (mode === 'SHADOW' && plan.accountMode === 'live') add(blockCodes, 'AUTOMATIC_PROVIDER_LIVE_OPT_IN_REQUIRED');
+    if (mode === 'LIVE' && plan.accountMode !== 'live') add(blockCodes, 'AUTOMATIC_PROVIDER_ACCOUNT_MODE_MISMATCH');
     const normalizedSymbol = plan.exchange === 'upbit' ? plan.symbol.toUpperCase().replace(/^KRW-/, '') : plan.symbol.toUpperCase();
     if (!policy.enabledAssets[plan.exchange].includes(normalizedSymbol)) add(blockCodes, 'ASSET_NOT_ENABLED');
     if (!policy.enabledStrategies.includes(plan.strategyId)) add(blockCodes, 'STRATEGY_NOT_ENABLED');
@@ -255,6 +279,22 @@ export function evaluateTradingPlan(
   if (plan.exchange === 'kiwoom') {
     if (plan.market !== 'KR' || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'KIWOOM_DOMESTIC_ONLY');
     if (!Number.isSafeInteger(plan.quantity) || Number(plan.quantity) <= 0) add(blockCodes, 'KIWOOM_QUANTITY_INVALID');
+  }
+  if (plan.exchange === 'toss') {
+    if ((plan.market !== 'KR' && plan.market !== 'US') || (plan.side !== 'buy' && plan.side !== 'sell')) {
+      add(blockCodes, 'TOSS_STOCK_ONLY');
+    }
+    if (plan.market === 'KR' && !/^\d{6}$/.test(plan.symbol.trim())) add(blockCodes, 'TOSS_KR_SYMBOL_INVALID');
+    if (plan.market === 'US' && !/^[A-Z0-9.-]{1,20}$/.test(plan.symbol.trim().toUpperCase())) add(blockCodes, 'TOSS_US_SYMBOL_INVALID');
+    const hasQuantity = finitePositive(plan.quantity);
+    const hasAmount = finitePositive(plan.quoteAmount);
+    if (hasQuantity === hasAmount) add(blockCodes, 'TOSS_QUANTITY_OR_AMOUNT_REQUIRED');
+    if (hasAmount && !(plan.market === 'US' && plan.side === 'buy' && plan.orderType === 'market')) {
+      add(blockCodes, 'TOSS_AMOUNT_ORDER_US_MARKET_BUY_ONLY');
+    }
+    if (plan.market === 'KR' && hasQuantity && !Number.isSafeInteger(plan.quantity)) add(blockCodes, 'TOSS_KR_QUANTITY_INVALID');
+    if (plan.orderType === 'limit' && !finitePositive(plan.limitPrice)) add(blockCodes, 'TOSS_LIMIT_PRICE_REQUIRED');
+    if (plan.leverage != null || plan.marginMode != null || plan.reduceOnly === true) add(blockCodes, 'TOSS_MARGIN_FEATURE_NOT_SUPPORTED');
   }
   if (snapshot.availableBalance < plan.estimatedKrw && plan.exchange !== 'bitget') add(blockCodes, 'INSUFFICIENT_BALANCE');
   try {
