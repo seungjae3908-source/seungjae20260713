@@ -154,20 +154,21 @@ test('Telegram failure schedules retry without changing FILLED execution or port
 test('manual canonical entry notifies Telegram with MANUAL source and never mutates broker or portfolio again', async () => {
   const repo = new InMemoryUserBrokerTelegramRepository();
   const transport = new FakeTransport();
-  const journal = new JournalRepository();
-  const service = new UserBrokerTelegramService(repo, transport, { async accept() { throw new Error('manual entry must not resync portfolio'); } }, 'runtime_test_bot');
+  let portfolioSyncCalls = 0;
+  const service = new UserBrokerTelegramService(repo, transport, { async accept() { portfolioSyncCalls += 1; } }, 'runtime_test_bot');
   await linked(service);
   const record: StoredPaperJournalRecord = {
     kind: 'journal', id: 'manual-1', version: 1, updatedAt: new Date().toISOString(), deletedAt: null,
     createdAt: new Date().toISOString(), serverUpdatedAt: new Date().toISOString(),
     payload: { source: 'TOSS_MANUAL', market: 'KR_STOCK', symbol: '005930', quantity: 10, entryPrice: 72_000 },
   };
-  await assert.rejects(() => queueManualPortfolioNotifications(USER_A, [record], service), /manual entry must not resync portfolio/);
-  const safeService = new UserBrokerTelegramService(repo, transport, { async accept() {} }, 'runtime_test_bot');
-  const queued = await queueManualPortfolioNotifications(USER_A, [record], safeService);
+  const queued = await queueManualPortfolioNotifications(USER_A, [record], service);
+  assert.equal(queued.queued, 1);
   assert.equal(queued.brokerSubmitCount, 0);
+  assert.equal(queued.privateApiRequests, 0);
+  assert.equal(portfolioSyncCalls, 0);
   const delivery = (await repo.listDeliveries(USER_A))[0];
-  await safeService.processDelivery(USER_A, delivery.id);
+  await service.processDelivery(USER_A, delivery.id);
   assert.equal(transport.sent.length, 1);
   assert.match(transport.sent[0].text, /등록방식: 수동등록/);
 });
