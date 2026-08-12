@@ -1,12 +1,15 @@
 import {
   prepareBitgetFillHistory,
   prepareBitgetOrderHistory,
+  prepareKiwoomAccountNumber,
+  prepareKiwoomToken,
   prepareTossAccounts,
   prepareTossOrderHistory,
   prepareTossToken,
   prepareUpbitClosedOrders,
   prepareUpbitOrderQueryByUuid,
   type BitgetCredentials,
+  type KiwoomCredentials,
   type PreparedExchangeRequest,
   type TossCredentials,
   type UpbitCredentials,
@@ -17,6 +20,15 @@ import {
   type BrokerJournalNormalizationIssue,
 } from './broker-journal-normalizer.service';
 import {
+  assertKiwoomJournalReadRequest,
+  prepareKiwoomDomesticFillHistory,
+  prepareKiwoomUsDailyFillHistory,
+} from './kiwoom-journal-read.service';
+import {
+  normalizeKiwoomDomesticFills,
+  normalizeKiwoomUsDailyFills,
+} from './kiwoom-journal-normalizer.service';
+import {
   normalizeTossOrderContract,
   type TossOrderContract,
   type UnifiedTradeOrder,
@@ -25,6 +37,7 @@ import {
 const TOSS_BASE = 'https://openapi.tossinvest.com';
 const UPBIT_BASE = 'https://api.upbit.com';
 const BITGET_BASE = 'https://api.bitget.com';
+const DAY_MS = 86_400_000;
 
 type RecordValue = Record<string, unknown>;
 
@@ -32,11 +45,18 @@ export type BrokerJournalImportCredentials = {
   toss?: { clientId: string; clientSecret: string } | null;
   upbit?: UpbitCredentials | null;
   bitget?: BitgetCredentials | null;
+  kiwoom?: { credentials: KiwoomCredentials; baseUrl: string } | null;
+  /** @deprecated compatibility flag until every caller supplies the user-owned vault credentials. */
   kiwoomConfigured?: boolean;
 };
 
 export type BrokerJournalReadExecutor = (
   provider: 'TOSS' | 'UPBIT' | 'BITGET',
+  baseUrl: string,
+  request: PreparedExchangeRequest,
+) => Promise<unknown>;
+
+export type KiwoomJournalReadExecutor = (
   baseUrl: string,
   request: PreparedExchangeRequest,
 ) => Promise<unknown>;
@@ -122,7 +142,7 @@ async function importToss(
     status.privateReadRequests += 1;
     const accountsPayload = record(await execute('TOSS', TOSS_BASE, accountsRequest));
     const accounts = rows(accountsPayload.result).slice(0, 10);
-    const from = new Date(now.getTime() - 30 * 86_400_000);
+    const from = new Date(now.getTime() - 30 * DAY_MS);
     const records: UnifiedTradeOrder[] = [];
     for (const account of accounts) {
       const accountSeq = String(account.accountSeq ?? '').trim();
@@ -157,7 +177,7 @@ async function importUpbit(credentials: UpbitCredentials | null | undefined, exe
   const status = emptyStatus(Boolean(credentials?.accessKey && credentials?.secretKey));
   if (!status.configured || !credentials) return { records: [] as UnifiedTradeOrder[], status };
   try {
-    const startTimeMs = now.getTime() - 7 * 86_400_000;
+    const startTimeMs = now.getTime() - 7 * DAY_MS;
     const request = prepareUpbitClosedOrders(credentials, { startTimeMs, endTimeMs: now.getTime(), limit: 20, orderBy: 'asc' });
     assertBrokerJournalReadRequest('UPBIT', request);
     status.privateReadRequests += 1;
@@ -190,7 +210,7 @@ async function importBitget(credentials: BitgetCredentials | null | undefined, e
   const status = emptyStatus(Boolean(credentials?.apiKey && credentials?.secretKey && credentials?.passphrase));
   if (!status.configured || !credentials) return { records: [] as UnifiedTradeOrder[], status };
   try {
-    const startTimeMs = now.getTime() - 7 * 86_400_000;
+    const startTimeMs = now.getTime() - 7 * DAY_MS;
     const request = prepareBitgetOrderHistory(credentials, { startTimeMs, endTimeMs: now.getTime(), limit: 20 });
     assertBrokerJournalReadRequest('BITGET', request);
     status.privateReadRequests += 1;
@@ -216,23 +236,89 @@ async function importBitget(credentials: BitgetCredentials | null | undefined, e
   }
 }
 
+async function importKiwoom(
+  connection: BrokerJournalImportCredentials['kiwoom'],
+  execute: KiwoomJournalReadExecutor | undefined,
+  now: Date,
+) {
+  const credentials = connection?.credentials;
+  const configured = Boolean(connection?.baseUrl?.trim() && credentials?.appKey && credentials?.secretKey);
+  const status = emptyStatus(configured);
+  if (!configured || !connection || !credentials) return { records: [] as UnifiedTradeOrder[], status };
+  if (!execute) {
+    status.error = 'KIWOOM_JOURNAL_READ_EXECUTOR_REQUIRED';
+    return { records: [] as UnifiedTradeOrder[], status };
+  }
+
+  try {
+    const tokenRequest = prepareKiwoomToken(credentials);
+    if (tokenRequest.method !== 'POST' || tokenRequest.path !== '/oauth2/token') throw new Error('KIWOOM_JOURNAL_AUTH_CONTRACT_INVALID');
+    status.authenticationRequests += 1;
+    const tokenPayload = record(await execute(connection.baseUrl, tokenRequest));
+    const accessToken = typeof tokenPayload.token === 'string' ? tokenPayload.token.trim() : '';
+    const tokenCode = tokenPayload.return_code == null || tokenPayload.return_code === '' ? 0 : Number(tokenPayload.return_code);
+    if (!accessToken || !Number.isFinite(tokenCode) || tokenCode !== 0) throw new Error('KIWOOM_TOKEN_FAILED');
+    const authorized = { ...credentials, accessToken } satisfies KiwoomCredentials;
+
+    const accountRequest = prepareKiwoomAccountNumber(authorized);
+    assertKiwoomJournalReadRequest(accountRequest);
+    status.privateReadRequests += 1;
+    const accountPayload = record(await execute(connection.baseUrl, accountRequest));
+    const accountReference = typeof accountPayload.acctNo === 'string' && accountPayload.acctNo.trim()
+      ? accountPayload.acctNo.trim()
+      : 'ACCOUNT_UNAVAILABLE';
+
+    const domesticRequest = prepareKiwoomDomesticFillHistory(authorized);
+    assertKiwoomJournalReadRequest(domesticRequest);
+    status.privateReadRequests += 1;
+    const domesticPayload = await execute(connection.baseUrl, domesticRequest);
+    const domestic = normalizeKiwoomDomesticFills(domesticPayload, accountReference, now, now.toISOString());
+
+    const usPayloads = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
+      const queryDate = new Date(now.getTime() - index * DAY_MS);
+      const request = prepareKiwoomUsDailyFillHistory(authorized, queryDate);
+      assertKiwoomJournalReadRequest(request);
+      status.privateReadRequests += 1;
+      return { queryDate, payload: await execute(connection.baseUrl, request) };
+    }));
+    const usRecords: UnifiedTradeOrder[] = [];
+    const usIssues: BrokerJournalNormalizationIssue[] = [];
+    for (const item of usPayloads) {
+      const normalized = normalizeKiwoomUsDailyFills(item.payload, accountReference, item.queryDate, now.toISOString());
+      usRecords.push(...normalized.records);
+      usIssues.push(...normalized.issues);
+    }
+
+    const records = [...domestic.records, ...usRecords];
+    status.importedRecords = records.length;
+    status.issues.push(...domestic.issues, ...usIssues);
+    return { records, status };
+  } catch (error) {
+    status.error = safeError(error);
+    return { records: [] as UnifiedTradeOrder[], status };
+  }
+}
+
 export async function importBrokerJournal(
   credentials: BrokerJournalImportCredentials,
   execute: BrokerJournalReadExecutor,
   now = new Date(),
+  executeKiwoom?: KiwoomJournalReadExecutor,
 ): Promise<BrokerJournalImportResult> {
-  const [toss, upbit, bitget] = await Promise.all([
+  const [toss, upbit, bitget, kiwoomRead] = await Promise.all([
     importToss(credentials.toss, execute, now),
     importUpbit(credentials.upbit, execute, now),
     importBitget(credentials.bitget, execute, now),
+    importKiwoom(credentials.kiwoom, executeKiwoom, now),
   ]);
-  const kiwoom = emptyStatus(credentials.kiwoomConfigured === true);
-  if (kiwoom.configured) {
+  const kiwoom = kiwoomRead.status;
+  if (!credentials.kiwoom && credentials.kiwoomConfigured === true) {
+    kiwoom.configured = true;
     kiwoom.error = 'KIWOOM_JOURNAL_HISTORY_OFFICIAL_CONTRACT_REQUIRED';
     kiwoom.issues.push({ provider: 'KIWOOM', code: kiwoom.error, reference: null });
   }
   return {
-    records: [...toss.records, ...upbit.records, ...bitget.records],
+    records: [...toss.records, ...kiwoomRead.records, ...upbit.records, ...bitget.records],
     providers: { toss: toss.status, upbit: upbit.status, bitget: bitget.status, kiwoom },
     safety: {
       actualOrderRequests: 0,
