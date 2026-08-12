@@ -17,9 +17,14 @@ import {
   prepareTossToken,
   prepareUpbitClosedOrders,
   prepareUpbitOpenOrders,
+  prepareUpbitOrderQueryByUuid,
   redactPreparedRequest,
   type TossCredentials,
 } from './trade-exchange-adapters.service';
+import {
+  assertBrokerJournalReadRequest,
+  importBrokerJournal,
+} from './broker-journal-import.service';
 
 const credentials: TossCredentials = {
   clientId: 'client-id-fixture',
@@ -66,9 +71,12 @@ test('Toss official OAuth and private read requests use the documented contracts
   assert.equal(buyingPower.query, 'currency=KRW');
   assert.equal(buyingPower.headers['X-Tossinvest-Account'], '7');
 
-  const history = prepareTossOrderHistory(credentials, '7', 'OPEN', 'cursor-fixture');
+  const history = prepareTossOrderHistory(credentials, '7', {
+    status: 'CLOSED', symbol: 'aapl', from: '2026-08-01', to: '2026-08-12', cursor: 'cursor-fixture', limit: 100,
+  });
   assert.equal(history.path, '/api/v1/orders');
-  assert.equal(history.query, 'status=OPEN&cursor=cursor-fixture');
+  assert.equal(history.query, 'status=CLOSED&symbol=AAPL&from=2026-08-01&to=2026-08-12&cursor=cursor-fixture&limit=100');
+  assert.throws(() => prepareTossOrderHistory(credentials, '7', { status: 'OPEN', limit: 20 }), /TOSS_OPEN_HISTORY_PAGINATION_NOT_SUPPORTED/);
 });
 
 test('Toss order builders enforce quantity/amount and KR/US amend rules', () => {
@@ -133,6 +141,8 @@ test('Upbit journal reads use the non-deprecated open and closed order endpoints
     startTimeMs, endTimeMs: startTimeMs + 7 * 86_400_000 + 1,
   }), /UPBIT_CLOSED_ORDER_WINDOW_INVALID/);
   assert.throws(() => prepareUpbitOpenOrders(upbit, { limit: 101 }), /UPBIT_ORDER_LIST_LIMIT_INVALID/);
+  const detail = prepareUpbitOrderQueryByUuid(upbit, 'order-uuid', 'detail-nonce');
+  assert.equal(detail.query, 'uuid=order-uuid');
 });
 
 test('Bitget journal reads use official order and fill history windows', () => {
@@ -156,4 +166,56 @@ test('Bitget journal reads use official order and fill history windows', () => {
   assert.throws(() => prepareBitgetFillHistory(bitget, {
     orderId: 'order-1', startTimeMs, endTimeMs: startTimeMs + 7 * 86_400_000 + 1,
   }), /BITGET_HISTORY_WINDOW_INVALID/);
+});
+
+test('broker journal import uses mocked private reads only and returns no credential material', async () => {
+  const requests: Array<{ provider: string; method: string; path: string }> = [];
+  const result = await importBrokerJournal({
+    toss: { clientId: 'toss-client-fixture', clientSecret: 'toss-secret-fixture' },
+    upbit: { accessKey: 'upbit-access-fixture', secretKey: 'upbit-secret-fixture' },
+    bitget: { apiKey: 'bitget-key-fixture', secretKey: 'bitget-secret-fixture', passphrase: 'bitget-pass-fixture' },
+    kiwoomConfigured: true,
+  }, async (provider, _baseUrl, request) => {
+    requests.push({ provider, method: request.method, path: request.path });
+    if (provider === 'TOSS' && request.path === '/oauth2/token') return { access_token: 'toss-token-fixture' };
+    if (provider === 'TOSS' && request.path === '/api/v1/accounts') return { result: [{ accountSeq: 7 }] };
+    if (provider === 'TOSS' && request.path === '/api/v1/orders') return { result: { orders: [{
+      orderId: 'toss-order', symbol: '005930', side: 'BUY', orderType: 'LIMIT', timeInForce: 'DAY', status: 'FILLED',
+      price: '70000', quantity: '1', orderAmount: null, currency: 'KRW', orderedAt: '2026-08-10T09:30:00+09:00', canceledAt: null,
+      execution: { filledQuantity: '1', averageFilledPrice: '70000', filledAmount: '70000', commission: '100', tax: '0', filledAt: '2026-08-10T09:31:00+09:00', settlementDate: '2026-08-12' },
+    }] } };
+    if (provider === 'UPBIT' && request.path === '/v1/orders/closed') return [{
+      uuid: 'upbit-order', side: 'bid', market: 'KRW-BTC', created_at: '2026-08-10T01:00:00.000Z', executed_volume: '0.1', paid_fee: '10', trades: [],
+    }];
+    if (provider === 'UPBIT' && request.path === '/v1/order') return {
+      uuid: 'upbit-order', side: 'bid', market: 'KRW-BTC', created_at: '2026-08-10T01:00:00.000Z', executed_volume: '0.1', paid_fee: '10',
+      trades: [{ uuid: 'upbit-fill', price: '100000', volume: '0.1', funds: '10000', created_at: '2026-08-10T01:01:00.000Z' }],
+    };
+    if (provider === 'BITGET' && request.path.endsWith('/orders-history')) return { code: '00000', data: { entrustedList: [{
+      orderId: 'bitget-order', clientOid: 'bitget-client', symbol: 'BTCUSDT', side: 'buy', posSide: 'long', tradeSide: 'open', baseVolume: '0.1', cTime: '1786323600000',
+    }] } };
+    if (provider === 'BITGET' && request.path.endsWith('/fill-history')) return { code: '00000', data: { fillList: [{
+      orderId: 'bitget-order', tradeId: 'bitget-fill', symbol: 'BTCUSDT', marginCoin: 'USDT', side: 'buy', price: '100000', baseVolume: '0.1',
+      feeDetail: [{ totalFee: '-1' }], tradeSide: 'open', cTime: '1786323660000',
+    }] } };
+    throw new Error('UNEXPECTED_MOCK_REQUEST');
+  }, new Date('2026-08-12T03:00:00.000Z'));
+
+  assert.equal(result.records.length, 3);
+  assert.deepEqual(requests.map(({ provider, method, path }) => [provider, method, path]), [
+    ['TOSS', 'POST', '/oauth2/token'],
+    ['UPBIT', 'GET', '/v1/orders/closed'],
+    ['BITGET', 'GET', '/api/v2/mix/order/orders-history'],
+    ['TOSS', 'GET', '/api/v1/accounts'],
+    ['UPBIT', 'GET', '/v1/order'],
+    ['BITGET', 'GET', '/api/v2/mix/order/fill-history'],
+    ['TOSS', 'GET', '/api/v1/orders'],
+  ]);
+  assert.equal(result.safety.privateMutationRequests, 0);
+  assert.equal(result.providers.kiwoom.error, 'KIWOOM_JOURNAL_HISTORY_OFFICIAL_CONTRACT_REQUIRED');
+  assert.doesNotMatch(JSON.stringify(result), /(?:toss-secret-fixture|toss-token-fixture|upbit-access-fixture|upbit-secret-fixture|bitget-key-fixture|bitget-secret-fixture|bitget-pass-fixture)/);
+
+  assert.throws(() => assertBrokerJournalReadRequest('UPBIT', {
+    method: 'POST', path: '/v1/orders', query: '', headers: {}, body: '{}',
+  }), /BROKER_JOURNAL_MUTATION_FORBIDDEN/);
 });

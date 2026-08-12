@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { PaperJournalError } from './paper-journal.types';
 
 export const JOURNAL_INTEGRATION_BASE_SHA = '868734a1ef2120cdafebb4a518ba8dd0a7d40e0f' as const;
-export const TOSS_OPENAPI_SPEC_VERSION = '1.2.13' as const;
+export const TOSS_OPENAPI_SPEC_VERSION = '1.2.14' as const;
 export const TOSS_LIVE_READ_INTEGRATION = 'BLOCKED_BY_FREE_STATUS_UNVERIFIED' as const;
 export const AI_EXTERNAL_REVIEW_STATUS = 'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY' as const;
 export const PAID_STATUS = 'PAID_STATUS_UNVERIFIED' as const;
