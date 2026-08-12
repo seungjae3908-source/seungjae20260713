@@ -12,9 +12,138 @@ export type PreparedExchangeRequest = {
 export type BitgetCredentials = { apiKey: string; secretKey: string; passphrase: string };
 export type UpbitCredentials = { accessKey: string; secretKey: string };
 export type KiwoomCredentials = { appKey: string; secretKey: string; accessToken?: string };
+export type TossCredentials = { clientId: string; clientSecret: string; accessToken?: string };
+
+export type TossOrderInput = {
+  accountSeq: string;
+  market: 'KR' | 'US';
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  orderType: 'MARKET' | 'LIMIT';
+  clientOrderId: string;
+  quantity?: number | null;
+  orderAmount?: number | null;
+  price?: number | null;
+};
+
+export type TossAmendInput = {
+  accountSeq: string;
+  orderId: string;
+  market: 'KR' | 'US';
+  quantity?: number | null;
+  price: number;
+};
 
 function jsonBody(value: Record<string, unknown>) {
   return JSON.stringify(value);
+}
+
+function tossAuthorizedRequest(
+  credentials: TossCredentials,
+  method: 'GET' | 'POST',
+  path: string,
+  accountSeq?: string,
+  query = '',
+  body: Record<string, unknown> | null = null,
+): PreparedExchangeRequest {
+  if (!credentials.accessToken?.trim()) throw new Error('TOSS_ACCESS_TOKEN_REQUIRED');
+  return {
+    method,
+    path,
+    query,
+    headers: {
+      Authorization: `Bearer ${credentials.accessToken.trim()}`,
+      Accept: 'application/json',
+      ...(accountSeq ? { 'X-Tossinvest-Account': accountSeq } : {}),
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? jsonBody(body) : null,
+  };
+}
+
+export function prepareTossToken(credentials: TossCredentials): PreparedExchangeRequest {
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: credentials.clientId,
+    client_secret: credentials.clientSecret,
+  }).toString();
+  return {
+    method: 'POST', path: '/oauth2/token', query: '',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  };
+}
+
+export function prepareTossAccounts(credentials: TossCredentials) {
+  return tossAuthorizedRequest(credentials, 'GET', '/api/v1/accounts');
+}
+
+export function prepareTossHoldings(credentials: TossCredentials, accountSeq: string, symbol?: string) {
+  const query = symbol ? `symbol=${encodeURIComponent(symbol.trim().toUpperCase())}` : '';
+  return tossAuthorizedRequest(credentials, 'GET', '/api/v1/holdings', accountSeq, query);
+}
+
+export function prepareTossOrderHistory(
+  credentials: TossCredentials,
+  accountSeq: string,
+  status: 'OPEN' | 'CLOSED',
+  cursor?: string,
+) {
+  const query = new URLSearchParams({ status, ...(cursor ? { cursor } : {}) }).toString();
+  return tossAuthorizedRequest(credentials, 'GET', '/api/v1/orders', accountSeq, query);
+}
+
+export function prepareTossOrderQuery(credentials: TossCredentials, accountSeq: string, orderId: string) {
+  return tossAuthorizedRequest(credentials, 'GET', `/api/v1/orders/${encodeURIComponent(orderId)}`, accountSeq);
+}
+
+export function prepareTossOrder(credentials: TossCredentials, input: TossOrderInput) {
+  const quantity = input.quantity == null ? null : Number(input.quantity);
+  const orderAmount = input.orderAmount == null ? null : Number(input.orderAmount);
+  if ((quantity == null) === (orderAmount == null)) throw new Error('TOSS_QUANTITY_OR_AMOUNT_REQUIRED');
+  if (quantity != null && (!Number.isFinite(quantity) || quantity <= 0)) throw new Error('TOSS_QUANTITY_INVALID');
+  if (orderAmount != null && (!Number.isFinite(orderAmount) || orderAmount <= 0)) throw new Error('TOSS_ORDER_AMOUNT_INVALID');
+  if (orderAmount != null && (input.market !== 'US' || input.orderType !== 'MARKET' || input.side !== 'BUY')) {
+    throw new Error('TOSS_AMOUNT_ORDER_US_MARKET_BUY_ONLY');
+  }
+  if (input.orderType === 'LIMIT' && (!Number.isFinite(Number(input.price)) || Number(input.price) <= 0)) {
+    throw new Error('TOSS_LIMIT_PRICE_REQUIRED');
+  }
+  const body: Record<string, unknown> = {
+    clientOrderId: input.clientOrderId,
+    symbol: input.symbol.trim().toUpperCase(),
+    side: input.side,
+    orderType: input.orderType,
+    ...(quantity != null ? { quantity: String(quantity) } : { orderAmount: String(orderAmount) }),
+    ...(input.orderType === 'LIMIT' ? { price: String(input.price) } : {}),
+  };
+  return tossAuthorizedRequest(credentials, 'POST', '/api/v1/orders', input.accountSeq, '', body);
+}
+
+export function prepareTossCancel(credentials: TossCredentials, accountSeq: string, orderId: string) {
+  return tossAuthorizedRequest(
+    credentials, 'POST', `/api/v1/orders/${encodeURIComponent(orderId)}/cancel`, accountSeq, '', {},
+  );
+}
+
+export function prepareTossAmend(credentials: TossCredentials, input: TossAmendInput) {
+  if (!Number.isFinite(input.price) || input.price <= 0) throw new Error('TOSS_LIMIT_PRICE_REQUIRED');
+  if (input.market === 'KR' && (!Number.isInteger(input.quantity) || Number(input.quantity) <= 0)) {
+    throw new Error('TOSS_KR_AMEND_QUANTITY_REQUIRED');
+  }
+  if (input.market === 'US' && input.quantity != null) throw new Error('TOSS_US_AMEND_QUANTITY_NOT_SUPPORTED');
+  return tossAuthorizedRequest(
+    credentials,
+    'POST',
+    `/api/v1/orders/${encodeURIComponent(input.orderId)}/modify`,
+    input.accountSeq,
+    '',
+    {
+      orderType: 'LIMIT',
+      ...(input.market === 'KR' ? { quantity: String(input.quantity) } : {}),
+      price: String(input.price),
+    },
+  );
 }
 
 export function buildBitgetSignature(
