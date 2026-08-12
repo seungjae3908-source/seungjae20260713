@@ -34,6 +34,10 @@ function positionValue(position: Position): number | null {
   return position.quantity * position.currentPrice;
 }
 
+function pnlDirection(position: Position): 1 | -1 {
+  return position.positionSide === 'SHORT' ? -1 : 1;
+}
+
 function normalizeKey(value: string): string {
   return value.trim().toUpperCase();
 }
@@ -188,23 +192,39 @@ function calculateRisk(
 }
 
 export function analyzePortfolio(input: PortfolioAnalyticsInput): PortfolioAnalyticsResult {
-  if (!finiteNonNegative(input.cash)) throw new PortfolioValidationError('INVALID_CASH', 'cash must be a finite non-negative number');
+  if (input.cash != null && !finiteNonNegative(input.cash)) {
+    throw new PortfolioValidationError('INVALID_CASH', 'cash must be null or a finite non-negative number');
+  }
   for (const position of input.positions) {
     if (!position.assetId.trim() || !position.symbol.trim()) throw new PortfolioValidationError('INVALID_POSITION_IDENTITY', 'position identity is required');
     if (!finiteNonNegative(position.quantity)) throw new PortfolioValidationError('INVALID_QUANTITY', `invalid quantity for ${position.assetId}`);
   }
 
   const missingPrice = input.positions.filter((position) => positionValue(position) == null).map((position) => `${position.assetId}:price`);
+  const missingCash = input.cash == null ? ['cash'] : [];
+  const totalMissing = [...new Set([...missingPrice, ...missingCash])];
   const knownPositionValue = input.positions.reduce((sum, position) => sum + (positionValue(position) ?? 0), 0);
-  const knownValue = input.cash + knownPositionValue;
-  const totalValue = missingPrice.length
-    ? insufficient<number>('MISSING_CURRENT_PRICE', missingPrice)
+  const knownValue = (input.cash ?? 0) + knownPositionValue;
+  const totalValue = totalMissing.length
+    ? insufficient<number>(
+        missingPrice.length && missingCash.length
+          ? 'PORTFOLIO_VALUE_INPUT_INCOMPLETE'
+          : missingPrice.length
+            ? 'MISSING_CURRENT_PRICE'
+            : 'MISSING_CASH_BALANCE',
+        totalMissing,
+      )
     : available(knownValue);
 
   const totalForWeights = totalValue.status === 'available' && totalValue.value > 0 ? totalValue.value : null;
-  const cashWeight = totalForWeights == null
-    ? insufficient<number>(totalValue.status === 'insufficient' ? totalValue.reason : 'ZERO_TOTAL_VALUE', missingPrice)
-    : available((input.cash / totalForWeights) * 100);
+  const cashValue = input.cash == null
+    ? insufficient<number>('MISSING_CASH_BALANCE', ['cash'])
+    : available(input.cash);
+  const cashWeight = input.cash == null
+    ? insufficient<number>('MISSING_CASH_BALANCE', ['cash'])
+    : totalForWeights == null
+      ? insufficient<number>(totalValue.status === 'insufficient' ? totalValue.reason : 'ZERO_TOTAL_VALUE', totalMissing)
+      : available((input.cash / totalForWeights) * 100);
 
   const missingAverageCost = input.positions
     .filter((position) => position.averageCost == null || !Number.isFinite(position.averageCost) || position.averageCost < 0)
@@ -214,7 +234,7 @@ export function analyzePortfolio(input: PortfolioAnalyticsInput): PortfolioAnaly
   for (const position of input.positions) {
     if (position.currentPrice == null || position.averageCost == null) continue;
     if (!Number.isFinite(position.currentPrice) || !Number.isFinite(position.averageCost)) continue;
-    aggregatePnl += position.quantity * (position.currentPrice - position.averageCost);
+    aggregatePnl += pnlDirection(position) * position.quantity * (position.currentPrice - position.averageCost);
     aggregateCost += position.quantity * position.averageCost;
   }
   const pnlMissing = [...new Set([...missingPrice, ...missingAverageCost])];
@@ -229,10 +249,10 @@ export function analyzePortfolio(input: PortfolioAnalyticsInput): PortfolioAnaly
 
   const risk = totalForWeights == null
     ? {
-        volatilityPercent: insufficient<number>('TOTAL_VALUE_UNAVAILABLE', missingPrice),
-        correlation: insufficient<number>('TOTAL_VALUE_UNAVAILABLE', missingPrice),
+        volatilityPercent: insufficient<number>('TOTAL_VALUE_UNAVAILABLE', totalMissing),
+        correlation: insufficient<number>('TOTAL_VALUE_UNAVAILABLE', totalMissing),
         contributions: new Map<string, Metric<number>>(),
-        portfolioRiskScore: insufficient<number>('TOTAL_VALUE_UNAVAILABLE', missingPrice),
+        portfolioRiskScore: insufficient<number>('TOTAL_VALUE_UNAVAILABLE', totalMissing),
       }
     : calculateRisk(input.positions, totalForWeights, input);
 
@@ -240,14 +260,16 @@ export function analyzePortfolio(input: PortfolioAnalyticsInput): PortfolioAnaly
     const value = positionValue(position);
     const costReady = position.averageCost != null && Number.isFinite(position.averageCost) && position.averageCost >= 0;
     const pnlReady = value != null && costReady;
-    const pnl = pnlReady ? position.quantity * ((position.currentPrice as number) - (position.averageCost as number)) : null;
+    const pnl = pnlReady
+      ? pnlDirection(position) * position.quantity * ((position.currentPrice as number) - (position.averageCost as number))
+      : null;
     const cost = costReady ? position.quantity * (position.averageCost as number) : null;
     return {
       assetId: position.assetId,
       symbol: position.symbol,
       marketValue: value == null ? insufficient('MISSING_CURRENT_PRICE', [`${position.assetId}:price`]) : available(value),
       weight: value == null || totalForWeights == null
-        ? insufficient('WEIGHT_INPUT_INCOMPLETE', [`${position.assetId}:price`])
+        ? insufficient('WEIGHT_INPUT_INCOMPLETE', [...new Set([`${position.assetId}:price`, ...missingCash])])
         : available((value / totalForWeights) * 100),
       unrealizedPnl: pnl == null ? insufficient('PNL_INPUT_INCOMPLETE') : available(pnl),
       returnPercent: pnl == null || cost == null || cost <= 0
@@ -257,8 +279,8 @@ export function analyzePortfolio(input: PortfolioAnalyticsInput): PortfolioAnaly
     };
   });
 
-  const concentration = totalForWeights == null
-    ? insufficient<number>('TOTAL_VALUE_UNAVAILABLE', missingPrice)
+  const concentration = missingPrice.length
+    ? insufficient<number>('CONCENTRATION_INPUT_INCOMPLETE', missingPrice)
     : knownPositionValue <= 0
       ? insufficient<number>('NO_INVESTED_POSITIONS')
       : available(input.positions.reduce((sum, position) => {
@@ -270,16 +292,16 @@ export function analyzePortfolio(input: PortfolioAnalyticsInput): PortfolioAnaly
   return {
     totalValue,
     knownValue,
-    cashValue: input.cash,
+    cashValue,
     cashWeight,
     marketExposure: totalForWeights == null
-      ? insufficient('TOTAL_VALUE_UNAVAILABLE', missingPrice)
+      ? insufficient('TOTAL_VALUE_UNAVAILABLE', totalMissing)
       : exposure(input.positions, totalForWeights, (position) => position.market),
     sectorExposure: totalForWeights == null
-      ? insufficient('TOTAL_VALUE_UNAVAILABLE', missingPrice)
+      ? insufficient('TOTAL_VALUE_UNAVAILABLE', totalMissing)
       : exposure(input.positions, totalForWeights, (position) => position.sector?.trim() || null),
     currencyExposure: totalForWeights == null
-      ? insufficient('TOTAL_VALUE_UNAVAILABLE', missingPrice)
+      ? insufficient('TOTAL_VALUE_UNAVAILABLE', totalMissing)
       : exposure(input.positions, totalForWeights, (position) => position.currency.trim().toUpperCase() || null),
     concentration,
     unrealizedPnl,
@@ -288,6 +310,6 @@ export function analyzePortfolio(input: PortfolioAnalyticsInput): PortfolioAnaly
     correlation: risk.correlation,
     portfolioRiskScore: risk.portfolioRiskScore,
     positions: positionResults,
-    missing: [...new Set([...missingPrice, ...missingAverageCost])],
+    missing: [...new Set([...totalMissing, ...missingAverageCost])],
   };
 }

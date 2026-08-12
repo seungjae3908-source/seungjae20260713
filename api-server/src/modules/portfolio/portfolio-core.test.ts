@@ -15,6 +15,7 @@ const basePosition = {
   assetId: 'US:AAPL',
   market: 'US' as const,
   symbol: 'AAPL',
+  positionSide: 'LONG' as const,
   quantity: 10,
   averageCost: 100,
   currentPrice: 120,
@@ -31,7 +32,7 @@ function metricValue(metric: { status: string; value?: number }): number {
 test('empty portfolio keeps deterministic values and marks market risk evidence insufficient', () => {
   const result = analyzePortfolio({ positions: [], cash: 1_000_000, baseCurrency: 'KRW' });
   assert.equal(metricValue(result.totalValue), 1_000_000);
-  assert.equal(result.cashValue, 1_000_000);
+  assert.equal(metricValue(result.cashValue), 1_000_000);
   assert.equal(metricValue(result.cashWeight), 100);
   assert.equal(result.volatilityPercent.status, 'insufficient');
   assert.equal(result.correlation.status, 'insufficient');
@@ -44,6 +45,26 @@ test('single position computes value, pnl and concentration without inventing vo
   assert.ok(Math.abs(metricValue(result.returnPercent) - 20) < 1e-9);
   assert.equal(metricValue(result.concentration), 1);
   assert.equal(result.volatilityPercent.status, 'insufficient');
+});
+
+test('missing cash is explicit and never fabricated as zero', () => {
+  const result = analyzePortfolio({ positions: [basePosition], cash: null, baseCurrency: 'USD' });
+  assert.equal(result.cashValue.status, 'insufficient');
+  assert.equal(result.totalValue.status, 'insufficient');
+  assert.equal(result.cashWeight.status, 'insufficient');
+  assert.ok(result.missing.includes('cash'));
+  assert.equal(result.knownValue, 1200);
+  assert.equal(metricValue(result.concentration), 1);
+});
+
+test('short positions use inverse price direction for unrealized pnl and return', () => {
+  const result = analyzePortfolio({
+    positions: [{ ...basePosition, positionSide: 'SHORT', averageCost: 120, currentPrice: 100 }],
+    cash: 0,
+    baseCurrency: 'USD',
+  });
+  assert.equal(metricValue(result.unrealizedPnl), 200);
+  assert.ok(Math.abs(metricValue(result.returnPercent) - (200 / 1200) * 100) < 1e-9);
 });
 
 test('multiple positions compute risk only from supplied volatility and correlation evidence', () => {
@@ -93,7 +114,7 @@ test('zero cash and high cash are represented explicitly', () => {
 test('missing price propagates insufficiency instead of a fabricated total or weight', () => {
   const result = analyzePortfolio({ positions: [{ ...basePosition, currentPrice: null }], cash: 100, baseCurrency: 'USD' });
   assert.equal(result.totalValue.status, 'insufficient');
-  assert.equal(result.cashValue, 100);
+  assert.equal(metricValue(result.cashValue), 100);
   assert.equal(result.positions[0].weight.status, 'insufficient');
   assert.ok(result.missing.includes('US:AAPL:price'));
 });
@@ -218,21 +239,27 @@ test('scenario engine fails closed when validated bear/base/bull ordering is inv
   assert.equal(result.scenarios.bull.returnPercent, null);
 });
 
-test('advisor context rejects private fields recursively', () => {
-  assert.throws(
-    () => sanitizeAdvisorContext({ portfolio: { apiKey: 'abcdefghijk12345' } }),
-    (error: unknown) => error instanceof AdvisorContextError && error.code === 'ADVISOR_PRIVATE_DATA_FORBIDDEN',
-  );
+test('advisor context rejects private fields and client identity recursively', () => {
+  for (const value of [
+    { portfolio: { apiKey: 'abcdefghijk12345' } },
+    { nested: { userId: '11111111-1111-1111-1111-111111111111' } },
+    { telegram: { telegramChatId: '123456789' } },
+  ]) {
+    assert.throws(
+      () => sanitizeAdvisorContext(value),
+      (error: unknown) => error instanceof AdvisorContextError && error.code === 'ADVISOR_PRIVATE_DATA_FORBIDDEN',
+    );
+  }
 });
 
 test('advisor works with partial or stale facts without gaining execution authority', () => {
-  const analytics = analyzePortfolio({ positions: [{ ...basePosition, currentPrice: null }], cash: 1000, baseCurrency: 'USD' });
+  const analytics = analyzePortfolio({ positions: [{ ...basePosition, currentPrice: null }], cash: null, baseCurrency: 'USD' });
   const context = buildPortfolioAdvisorContext(analytics, [{ ...basePosition, currentPrice: null }], {
     marketContext: { freshness: 'stale' },
     missing: ['scannerEvidence'],
   });
   const envelope = buildPortfolioAdvisorEnvelope(context, false);
-  assert.equal(envelope.context.cash, 1000);
+  assert.equal(envelope.context.cash.status, 'insufficient');
   assert.equal(envelope.deterministicAnalysisAvailable, true);
   assert.equal(envelope.aiExplanationAvailable, false);
   assert.equal(envelope.orderAuthority, 'none');
