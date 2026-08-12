@@ -10,6 +10,7 @@ import type {
 } from '../../services/paper-journal.types';
 import { InMemoryTradingRepository } from '../../services/trade-automation.repository';
 import { TradeAutomationService } from '../../services/trade-automation.service';
+import { encryptTradingCredentials } from '../../services/trade-credential-vault.service';
 import { TradeExecutionService } from '../../services/trade-execution.service';
 import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from '../../services/trade-automation.types';
 import { normalizeTradingPolicy } from '../../services/trade-automation-risk.service';
@@ -22,6 +23,7 @@ import type { TelegramTransport } from './user-broker-telegram.types';
 
 const USER_A = '11111111-1111-1111-1111-111111111111';
 const USER_B = '22222222-2222-2222-2222-222222222222';
+const MASTER_KEY = Buffer.alloc(32, 23).toString('base64');
 
 class JournalRepository implements PaperJournalRepository {
   records = new Map<string, StoredPaperJournalRecord>();
@@ -88,6 +90,16 @@ test('paper approval -> execution bridge -> canonical journal -> Telegram A is i
   assert.ok(created.plan);
   const approved = await automation.approvePlan(USER_A, created.plan.id);
   const pending = await automation.createOrder(USER_A, approved);
+  await trading.saveConnection({
+    userId: USER_A,
+    exchange: 'upbit',
+    accountMode: 'paper',
+    configured: true,
+    encryptedCredentials: encryptTradingCredentials({ accessKey: 'paper', secretKey: 'paper' }, MASTER_KEY),
+    lastVerifiedAt: null,
+    lastErrorCode: null,
+    updatedAt: new Date().toISOString(),
+  });
   const executed = await new TradeExecutionService(trading).execute(USER_A, approved, pending.order);
   assert.equal(executed.state, 'FILLED');
 
