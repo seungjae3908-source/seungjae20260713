@@ -4,6 +4,7 @@ import {
   CRYPTO_WILLIAMS_ATR_DEFAULTS,
   buildCryptoWilliamsScannerSignal,
   buildCryptoWilliamsShadowOrderPlan,
+  evaluateCryptoWilliamsAtrExit,
   evaluateCryptoWilliamsAtrSignal,
   getKst09SessionKey,
 } from "../src/crypto-williams-atr-strategy.js";
@@ -40,6 +41,8 @@ const baseFutures = Object.freeze({
   slippageRate: 0.0005,
 });
 
+const entryTimestamp = Date.parse("2026-08-12T12:00:00.000Z");
+
 test("V1 defaults are conservative and cannot enable Kelly or live execution", () => {
   assert.equal(CRYPTO_WILLIAMS_ATR_DEFAULTS.k, 0.5);
   assert.equal(CRYPTO_WILLIAMS_ATR_DEFAULTS.atrPeriod, 14);
@@ -72,6 +75,8 @@ test("spot long breakout uses Williams target, ATR stop, and account-risk sizing
   assert.equal(result.liveExecutionAllowed, false);
   assert.equal(result.kellyEnabled, false);
   assert.equal(result.diagnostics.estimatedRoundTripExecutionCostRate, 0.006);
+  assert.equal(result.exitPolicy.atrStop, true);
+  assert.equal(result.exitPolicy.nextSessionOpen, true);
 });
 
 test("trend filter rejects a spot breakout when session open is not above the moving average", () => {
@@ -157,18 +162,19 @@ test("futures can be observed in paper mode without liquidation data but cannot 
   assert.equal(result.eligibleForPaper, true);
   assert.equal(result.eligibleForShadow, false);
   assert.equal(result.diagnostics.liquidation.verified, false);
-  assert.equal(buildCryptoWilliamsShadowOrderPlan(result, { symbol: "BTCUSDT" }), null);
+  assert.equal(buildCryptoWilliamsShadowOrderPlan(result, { symbol: "BTCUSDT", timestamp: entryTimestamp }), null);
 });
 
 test("scanner and shadow plan are derived from the same strategy result and shadow is simulated only", () => {
   const result = evaluateCryptoWilliamsAtrSignal(baseFutures);
   const scanner = buildCryptoWilliamsScannerSignal(result, { symbol: "btcusdt" });
-  const shadow = buildCryptoWilliamsShadowOrderPlan(result, { symbol: "btcusdt" });
+  const shadow = buildCryptoWilliamsShadowOrderPlan(result, { symbol: "btcusdt", timestamp: entryTimestamp });
 
   assert.equal(scanner.strategyId, result.strategyId);
   assert.equal(scanner.symbol, "BTCUSDT");
   assert.equal(scanner.direction, "LONG");
   assert.equal(scanner.stopPrice, 106);
+  assert.equal(scanner.exitPolicy.nextSessionOpen, true);
   assert.equal(scanner.liveExecutionAllowed, false);
 
   assert.equal(shadow.strategyId, result.strategyId);
@@ -177,9 +183,107 @@ test("scanner and shadow plan are derived from the same strategy result and shad
   assert.equal(shadow.side, "BUY");
   assert.equal(shadow.positionDirection, "LONG");
   assert.equal(shadow.orderType, "MARKET_SIMULATED");
+  assert.equal(shadow.entrySessionKey, "2026-08-12");
+  assert.equal(shadow.exitPolicy.nextSessionOpen, true);
   assert.equal(shadow.reduceOnlyOnExit, true);
   assert.equal(shadow.liveExecutionAllowed, false);
   assert.equal(shadow.privateExchangeApiAllowed, false);
+});
+
+test("shadow plan requires a timestamp so next-session exit cannot be ambiguous", () => {
+  const result = evaluateCryptoWilliamsAtrSignal(baseFutures);
+  assert.throws(
+    () => buildCryptoWilliamsShadowOrderPlan(result, { symbol: "BTCUSDT" }),
+    /timestamp must be a positive integer/,
+  );
+});
+
+test("long ATR stop exits immediately inside the entry session", () => {
+  const exit = evaluateCryptoWilliamsAtrExit({
+    market: "CRYPTO_SPOT",
+    direction: "LONG",
+    stopPrice: 106,
+    riskPrice: 105.9,
+    entrySessionKey: "2026-08-12",
+    timestamp: Date.parse("2026-08-12T23:59:59.999Z"),
+  });
+
+  assert.equal(exit.shouldExit, true);
+  assert.equal(exit.reason, "ATR_STOP");
+  assert.equal(exit.side, "SELL");
+  assert.equal(exit.reduceOnly, false);
+  assert.equal(exit.liveExecutionAllowed, false);
+  assert.equal(exit.privateExchangeApiAllowed, false);
+});
+
+test("short ATR stop exits immediately and remains reduce-only for futures", () => {
+  const exit = evaluateCryptoWilliamsAtrExit({
+    market: "CRYPTO_FUTURES",
+    direction: "SHORT",
+    stopPrice: 104,
+    riskPrice: 104.1,
+    entrySessionKey: "2026-08-12",
+    timestamp: Date.parse("2026-08-12T18:00:00.000Z"),
+  });
+
+  assert.equal(exit.shouldExit, true);
+  assert.equal(exit.reason, "ATR_STOP");
+  assert.equal(exit.side, "BUY");
+  assert.equal(exit.reduceOnly, true);
+  assert.equal(exit.orderType, "MARKET_SIMULATED");
+});
+
+test("position holds before the boundary when the ATR stop is not reached", () => {
+  const exit = evaluateCryptoWilliamsAtrExit({
+    market: "CRYPTO_FUTURES",
+    direction: "LONG",
+    stopPrice: 106,
+    riskPrice: 108,
+    entrySessionKey: "2026-08-12",
+    timestamp: Date.parse("2026-08-12T23:59:59.999Z"),
+  });
+
+  assert.equal(exit.shouldExit, false);
+  assert.equal(exit.reason, "HOLD");
+  assert.equal(exit.side, null);
+  assert.equal(exit.orderType, null);
+});
+
+test("next KST 09:00 boundary closes the position at UTC 00:00", () => {
+  const exit = evaluateCryptoWilliamsAtrExit({
+    market: "CRYPTO_FUTURES",
+    direction: "LONG",
+    stopPrice: 106,
+    riskPrice: 108,
+    entrySessionKey: "2026-08-12",
+    timestamp: Date.parse("2026-08-13T00:00:00.000Z"),
+  });
+
+  assert.equal(exit.shouldExit, true);
+  assert.equal(exit.reason, "NEXT_SESSION_OPEN");
+  assert.equal(exit.currentSessionKey, "2026-08-13");
+  assert.equal(exit.side, "SELL");
+  assert.equal(exit.reduceOnly, true);
+});
+
+test("exit lifecycle rejects malformed or time-travel session state", () => {
+  assert.throws(() => evaluateCryptoWilliamsAtrExit({
+    market: "CRYPTO_SPOT",
+    direction: "LONG",
+    stopPrice: 106,
+    riskPrice: 108,
+    entrySessionKey: "2026/08/12",
+    timestamp: Date.parse("2026-08-12T12:00:00.000Z"),
+  }), /YYYY-MM-DD/);
+
+  assert.throws(() => evaluateCryptoWilliamsAtrExit({
+    market: "CRYPTO_SPOT",
+    direction: "LONG",
+    stopPrice: 106,
+    riskPrice: 108,
+    entrySessionKey: "2026-08-13",
+    timestamp: Date.parse("2026-08-12T12:00:00.000Z"),
+  }), /cannot precede the entry session/);
 });
 
 test("KST 09:00 session boundary is exactly UTC 00:00", () => {
