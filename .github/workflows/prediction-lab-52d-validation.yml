@@ -10,6 +10,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - .github/workflows/prediction-lab-52d-validation.yml
       - market-prediction-lab/package.json
       - market-prediction-lab/src/**
       - market-prediction-lab/scripts/**
