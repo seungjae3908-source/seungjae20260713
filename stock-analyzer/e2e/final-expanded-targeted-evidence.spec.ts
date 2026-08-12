@@ -452,6 +452,8 @@ test('slow Financial stays secondary while stock-info primary quote and navigati
   await expect.poll(runtime.financialCalls).toBeGreaterThanOrEqual(1);
   await expectPrimaryStockInfoUsable(page);
   const financialPanel = page.getByText('재무요약', { exact: true }).locator('xpath=ancestor::section[1]');
+  const financialToggle = financialPanel.getByRole('button', { name: /재무요약.*눌러서 펼치기/ });
+  await financialToggle.click();
   await expect(financialPanel.getByText('데이터를 불러오는 중입니다.', { exact: true })).toBeVisible();
   runtime.releaseFinancial();
   await expect(financialPanel.getByText('18.2배', { exact: true })).toBeVisible();
