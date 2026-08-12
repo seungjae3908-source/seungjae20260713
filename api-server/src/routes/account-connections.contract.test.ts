@@ -7,6 +7,7 @@ import {
   encryptTradingCredentials,
 } from '../services/trade-credential-vault.service';
 import { validateKiwoomReadResponse } from '../services/kiwoom-readonly-response.service';
+import { memberBrokerJournalSnapshot } from './account-connections';
 
 const repositoryRoot = process.cwd();
 
@@ -40,8 +41,10 @@ test('account snapshots stay GET-only while authenticated members receive self-s
   assert.match(indexSource, /router\.use\('\/account-connections',\s*requireAdmin,\s*accountConnectionsRouter\)/);
   assert.match(tradeRouteSource, /router\.get\('\/account-connections\/status'/);
   assert.match(tradeRouteSource, /router\.get\('\/account-connections\/snapshot'/);
+  assert.match(tradeRouteSource, /router\.get\('\/account-connections\/journal'/);
   assert.match(routeSource, /router\.get\('\/status'/);
   assert.match(routeSource, /router\.get\('\/snapshot'/);
+  assert.match(routeSource, /router\.get\('\/journal'/);
   assert.doesNotMatch(routeSource, /router\.(?:post|put|patch|delete)\(/);
   assert.match(routeSource, /decryptTradingCredentials/);
   assert.match(routeSource, /credentialsReturned:\s*false/);
@@ -66,6 +69,7 @@ test('account snapshot source never serializes the vault credential object into 
   const responseBlocks = [
     routeSource.match(/export async function memberAccountConnectionStatus[\s\S]*?\n}\n\nrouter\.get\('\/status'/)?.[0] ?? '',
     routeSource.match(/export async function memberAccountConnectionSnapshot[\s\S]*?\n}\n\nrouter\.get\('\/snapshot'/)?.[0] ?? '',
+    routeSource.match(/export async function memberBrokerJournalSnapshot[\s\S]*?\n}\n\nrouter\.get\('\/journal'/)?.[0] ?? '',
   ];
   assert.ok(responseBlocks.every(Boolean));
   for (const block of responseBlocks) {
@@ -76,6 +80,20 @@ test('account snapshot source never serializes the vault credential object into 
     assert.doesNotMatch(block, /\baccessKey\b/);
     assert.doesNotMatch(block, /\bapiKey\b/);
   }
+});
+
+test('member broker journal without a session stays disconnected and sends no private read or mutation', async () => {
+  const result = await memberBrokerJournalSnapshot({} as never);
+  assert.equal(result.records.length, 0);
+  assert.equal(result.providers.toss.configured, false);
+  assert.equal(result.providers.upbit.configured, false);
+  assert.equal(result.providers.bitget.configured, false);
+  assert.equal(result.providers.toss.privateReadRequests, 0);
+  assert.equal(result.providers.upbit.privateReadRequests, 0);
+  assert.equal(result.providers.bitget.privateReadRequests, 0);
+  assert.equal(result.safety.privateMutationRequests, 0);
+  assert.equal(result.credentialsReturned, false);
+  assert.equal(result.mutationsAllowed, false);
 });
 
 test('account connection router correctly uses adapter service and prohibits direct write access', () => {
