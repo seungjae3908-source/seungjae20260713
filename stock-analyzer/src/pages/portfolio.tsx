@@ -26,6 +26,7 @@ import { useAuth } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
+import { BrokerPortfolioOverview } from '@/components/broker-portfolio-overview';
 import {
 	getRememberedPurchaseDate,
 	rememberPurchaseDate,
@@ -1379,6 +1380,10 @@ export default function PortfolioPage() {
 				</div>
 				{portfolioSection === 'holdings' ? <AssetSwitch className="mt-3" /> : null}
 			</header>
+
+			{portfolioSection === 'holdings' && auth.user && auth.isApproved ? (
+				<div className="px-4 pt-4"><BrokerPortfolioOverview /></div>
+			) : null}
 
 			{portfolioSection === 'journal' ? (
 				<main className="flex-none px-4 pb-28 pt-4" data-testid="portfolio-journal">
