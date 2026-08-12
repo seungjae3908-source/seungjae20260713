@@ -11,9 +11,9 @@ function makeDailyCandles(count = 16) {
   return Array.from({ length: count }, (_, index) => ({
     timestamp: start + index * 86_400_000,
     open: 100 + index,
-    high: index === count - 1 ? 118 : 102 + index,
+    high: index === count - 1 ? 103 + index : 102 + index,
     low: 99 + index,
-    close: index === count - 1 ? 117 : 101 + index,
+    close: index === count - 1 ? 102 + index : 101 + index,
   }));
 }
 
