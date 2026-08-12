@@ -230,20 +230,43 @@ test('performance and deterministic quality scores stay separate', () => {
   assert.ok(review.bad.some((item) => item.includes('규칙 위반')));
 });
 
-test('filters cover range, market, source, strategy, timeframe, and grade', () => {
+test('filters cover range, market, source, broker, account, strategy, timeframe, and grade', () => {
   const rows = Array.from({ length: 6 }, (_, index) => ({
     id: `trade-${index}`, tradeId: `trade-${index}`, status: 'closed', source: index % 2 ? 'APP_SHADOW' : 'APP_PAPER',
+    broker: 'APP', accountIdMasked: index % 2 ? 'APP-****-ODD' : 'APP-****-EVEN',
     market: index % 2 ? 'US_STOCK' : 'CRYPTO_FUTURES', symbol: index % 2 ? 'AAPL' : 'BTCUSDT', side: 'long',
     currency: index % 2 ? 'USD' : 'USDT', filledAt: `2026-08-${String(index + 5).padStart(2, '0')}T01:00:00.000Z`,
     closedAt: `2026-08-${String(index + 5).padStart(2, '0')}T02:00:00.000Z`, entryPrice: 100, exitPrice: 110,
     initialQuantity: 1, closedQuantity: 1, remainingQuantity: 0, grossPnl: 10, netPnl: 9,
     strategyName: index % 2 ? 'swing' : 'breakout', timeframe: index % 2 ? '1d' : '15m', stopLossPrice: 90,
   }));
-  const result = buildUnifiedTradeJournal(rows, { range: '30D', market: 'US_STOCK', source: 'APP_SHADOW', strategy: 'swing', timeframe: '1d' }, NOW);
+  const result = buildUnifiedTradeJournal(rows, { range: '30D', market: 'US_STOCK', source: 'APP_SHADOW', broker: 'APP', account: 'APP-****-ODD', strategy: 'swing', timeframe: '1d' }, NOW);
   assert.equal(result.trades.length, 3);
-  assert.ok(result.trades.every((trade) => trade.market === 'US_STOCK' && trade.source === 'APP_SHADOW'));
+  assert.ok(result.trades.every((trade) => trade.market === 'US_STOCK' && trade.source === 'APP_SHADOW' && trade.broker === 'APP' && trade.accountIdMasked === 'APP-****-ODD'));
   const gradeFiltered = buildUnifiedTradeJournal(rows, { range: 'ALL', grade: result.trades[0].review.grade }, NOW);
   assert.ok(gradeFiltered.trades.length >= result.trades.length);
+});
+
+test('direct journal records preserve every supported provider provenance', () => {
+  const expected = new Map([
+    ['TOSS_MANUAL', 'TOSS'],
+    ['TOSS_API', 'TOSS'],
+    ['KIWOOM_API', 'KIWOOM'],
+    ['UPBIT_API', 'UPBIT'],
+    ['BITGET_API', 'BITGET'],
+    ['APP_PAPER', 'APP'],
+    ['APP_SHADOW', 'APP'],
+    ['APP_AUTO', 'APP'],
+  ]);
+  const rows = [...expected.keys()].map((source, index) => ({
+    id: `provider-${index}`, status: 'closed', source, market: 'KR_STOCK', symbol: `P${index}`, side: 'long', currency: 'KRW',
+    filledAt: '2026-08-10T01:00:00.000Z', closedAt: '2026-08-10T02:00:00.000Z', entryPrice: 100, exitPrice: 101,
+    initialQuantity: 1, closedQuantity: 1, remainingQuantity: 0, grossPnl: 1, netPnl: 1,
+  }));
+  const result = buildUnifiedTradeJournal(rows, { range: 'ALL' }, NOW);
+  assert.equal(result.trades.length, expected.size);
+  for (const trade of result.trades) assert.equal(trade.broker, expected.get(trade.source));
+  assert.equal(buildUnifiedTradeJournal(rows, { range: 'ALL', broker: 'UPBIT' }, NOW).trades[0]?.source, 'UPBIT_API');
 });
 
 test('small samples return N/A analytics while five trades produce confirmed aggregates and monthly report', () => {
