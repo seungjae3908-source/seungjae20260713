@@ -18,15 +18,16 @@ export function maskBrokerAccount(value: string | null | undefined): string | nu
 }
 function safeNumber(value: number | null | undefined): number | null { return value != null && Number.isFinite(value) ? value : null; }
 
-function executionType(transition: TradingOrderEvent, order: TradingOrder): UserExecutionEventType | null {
+function executionType(transition: TradingOrderEvent): UserExecutionEventType | null {
   const reason = transition.reason.toUpperCase();
-  if (order.state === 'FILLED' && /(?:TAKE_PROFIT|TARGET)/.test(reason)) return 'TAKE_PROFIT_FILLED';
-  if (order.state === 'FILLED' && /(?:STOP_FILLED|STOP_LOSS|PROTECTIVE_STOP)/.test(reason)) return 'STOP_FILLED';
-  if (order.state === 'SUBMITTED' || order.state === 'ACCEPTED') return 'ORDER_SUBMITTED';
-  if (order.state === 'PARTIALLY_FILLED') return 'ORDER_PARTIALLY_FILLED';
-  if (order.state === 'FILLED') return 'ORDER_FILLED';
-  if (order.state === 'CANCELED') return 'ORDER_CANCELLED';
-  if (order.state === 'REJECTED') return 'ORDER_REJECTED';
+  const state = transition.toState;
+  if (state === 'FILLED' && /(?:TAKE_PROFIT|TARGET)/.test(reason)) return 'TAKE_PROFIT_FILLED';
+  if (state === 'FILLED' && /(?:STOP_FILLED|STOP_LOSS|PROTECTIVE_STOP)/.test(reason)) return 'STOP_FILLED';
+  if (state === 'SUBMITTED' || state === 'ACCEPTED') return 'ORDER_SUBMITTED';
+  if (state === 'PARTIALLY_FILLED') return 'ORDER_PARTIALLY_FILLED';
+  if (state === 'FILLED') return 'ORDER_FILLED';
+  if (state === 'CANCELED') return 'ORDER_CANCELLED';
+  if (state === 'REJECTED') return 'ORDER_REJECTED';
   return null;
 }
 
@@ -37,7 +38,7 @@ export function executionEventFromTradingOrder(
   options: { accountNumber?: string | null; executionMethod?: UserExecutionMethod } = {},
 ): UserExecutionEvent | null {
   if (transition.userId !== order.userId || order.userId !== plan.userId || order.planId !== plan.id) throw new Error('EXECUTION_OWNER_MISMATCH');
-  const type = executionType(transition, order);
+  const type = executionType(transition);
   if (!type) return null;
   const executionMethod = options.executionMethod ?? 'USER_APPROVED';
   return {
@@ -51,7 +52,7 @@ export function executionEventFromTradingOrder(
     remainingQuantity: safeNumber(order.remainingQuantity), realizedPnl: null, averageEntryPrice: null, averageExitPrice: null,
     occurredAt: transition.createdAt,
     metadata: {
-      orderState: order.state, reason: transition.reason, providerStatusCode: order.providerStatusCode ?? null,
+      orderState: transition.toState, reason: transition.reason, providerStatusCode: order.providerStatusCode ?? null,
       orderPlanVersion: order.approvedPlanVersion ?? plan.version ?? null,
       approvedBy: order.userId, approvedAt: plan.approvedAt,
       approvalSource: executionMethod === 'AUTO_POLICY' ? 'AUTO_POLICY' : 'USER_UI',
