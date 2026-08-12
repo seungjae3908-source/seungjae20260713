@@ -8,11 +8,13 @@ on:
       - market-prediction-lab/package.json
       - market-prediction-lab/src/us-stock-forward-candidate.js
       - market-prediction-lab/src/us-stock-forward-validation.js
+      - market-prediction-lab/src/us-stock-forward-pnl-shadow.js
       - market-prediction-lab/src/stock-universe-bias-audit.js
       - market-prediction-lab/src/yahoo-stock-history.js
       - market-prediction-lab/src/stock-regime-router-optimizer.js
       - market-prediction-lab/scripts/run-us-stock-forward-cycle.js
       - market-prediction-lab/tests/us-stock-forward-validation.test.js
+      - market-prediction-lab/tests/us-stock-forward-pnl-shadow.test.js
       - market-prediction-lab/tests/stock-universe-bias-audit.test.js
   schedule:
     - cron: "30 2 * * 2-6"
@@ -108,10 +110,16 @@ jobs:
           if(manifest.branchWrite!==false || manifest.liveOrderAllowed!==false || manifest.privateAccountRequestAllowed!==false) throw new Error('Unsafe US stock forward predecessor provenance.');
           if(digest(root+'/us-stock-forward-state.json')!==manifest.stateSha256) throw new Error('US stock forward predecessor state SHA-256 mismatch.');
           if(digest(root+'/us-stock-forward-summary.json')!==manifest.summarySha256) throw new Error('US stock forward predecessor summary SHA-256 mismatch.');
+          if(manifest.pnlStateSha256){
+            if(!fs.existsSync(root+'/us-stock-forward-pnl-state.json') || digest(root+'/us-stock-forward-pnl-state.json')!==manifest.pnlStateSha256) throw new Error('US stock forward predecessor PnL state SHA-256 mismatch.');
+            if(!fs.existsSync(root+'/us-stock-forward-pnl-summary.json') || digest(root+'/us-stock-forward-pnl-summary.json')!==manifest.pnlSummarySha256) throw new Error('US stock forward predecessor PnL summary SHA-256 mismatch.');
+          }
           NODE
           mkdir -p market-prediction-lab/docs
           cp "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-state.json" market-prediction-lab/docs/
           cp "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-summary.json" market-prediction-lab/docs/
+          if [ -f "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-pnl-state.json" ]; then cp "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-pnl-state.json" market-prediction-lab/docs/; fi
+          if [ -f "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-pnl-summary.json" ]; then cp "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-pnl-summary.json" market-prediction-lab/docs/; fi
 
       - name: Set up Node 20
         uses: actions/setup-node@v4
@@ -122,9 +130,9 @@ jobs:
         working-directory: market-prediction-lab
         run: npm run validate
 
-      - name: Verify US stock forward and universe-bias guards
+      - name: Verify US stock forward bias and PnL guards
         working-directory: market-prediction-lab
-        run: node --test tests/us-stock-forward-validation.test.js tests/stock-universe-bias-audit.test.js
+        run: node --test tests/us-stock-forward-validation.test.js tests/us-stock-forward-pnl-shadow.test.js tests/stock-universe-bias-audit.test.js
 
       - name: Advance forward-only public-data state
         working-directory: market-prediction-lab
@@ -141,7 +149,7 @@ jobs:
           const fs=require('fs'); const crypto=require('crypto');
           const root='market-prediction-lab/docs';
           const digest=(p)=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
-          const manifest={schemaVersion:1,researchCodeSha:process.env.RESEARCH_SHA,predecessorRunId:process.env.PREDECESSOR_RUN_ID||null,predecessorArtifactId:process.env.PREDECESSOR_ARTIFACT_ID||null,stateSha256:digest(root+'/us-stock-forward-state.json'),summarySha256:digest(root+'/us-stock-forward-summary.json'),branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,createdAt:new Date().toISOString()};
+          const manifest={schemaVersion:2,researchCodeSha:process.env.RESEARCH_SHA,predecessorRunId:process.env.PREDECESSOR_RUN_ID||null,predecessorArtifactId:process.env.PREDECESSOR_ARTIFACT_ID||null,stateSha256:digest(root+'/us-stock-forward-state.json'),summarySha256:digest(root+'/us-stock-forward-summary.json'),pnlStateSha256:digest(root+'/us-stock-forward-pnl-state.json'),pnlSummarySha256:digest(root+'/us-stock-forward-pnl-summary.json'),branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,createdAt:new Date().toISOString()};
           fs.writeFileSync(root+'/us-stock-forward-provenance.json',JSON.stringify(manifest,null,2)+'\n');
           NODE
 
@@ -152,6 +160,8 @@ jobs:
           path: |
             market-prediction-lab/docs/us-stock-forward-state.json
             market-prediction-lab/docs/us-stock-forward-summary.json
+            market-prediction-lab/docs/us-stock-forward-pnl-state.json
+            market-prediction-lab/docs/us-stock-forward-pnl-summary.json
             market-prediction-lab/docs/us-stock-forward-provenance.json
           if-no-files-found: error
           retention-days: 90
