@@ -1,15 +1,20 @@
 import { timingSafeEqual } from 'node:crypto';
-import { Router, type IRouter } from 'express';
+import { Router, type IRouter, type RequestHandler } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth';
+import { TradeExecutionEventBridgeService } from '../features/user-broker-telegram/trade-execution-event-bridge.service';
+import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
 import {
-  createSupabaseUserBrokerTelegramRepository,
-} from '../features/user-broker-telegram/user-broker-telegram.repository';
+  CanonicalPortfolioSyncSink,
+  queueManualPortfolioNotifications,
+} from '../features/user-broker-telegram/user-broker-telegram.runtime';
 import { UserBrokerTelegramService } from '../features/user-broker-telegram/user-broker-telegram.service';
 import type {
   NotificationPreferences,
   PortfolioSyncSink,
   TelegramTransport,
 } from '../features/user-broker-telegram/user-broker-telegram.types';
+import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
+import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import {
   createSupabaseTradingRepository,
   safeConnections,
@@ -21,17 +26,13 @@ const disabledTransport: TelegramTransport = {
   },
 };
 
-const bridgeOnlyPortfolioSink: PortfolioSyncSink = {
-  async accept() {
-    // Portfolio core is owned elsewhere. This route never mutates portfolio state.
-  },
-};
+const bridgeOnlyPortfolioSink: PortfolioSyncSink = { async accept() {} };
 
-function service(): UserBrokerTelegramService {
+function service(portfolioSink: PortfolioSyncSink = bridgeOnlyPortfolioSink): UserBrokerTelegramService {
   return new UserBrokerTelegramService(
     createSupabaseUserBrokerTelegramRepository(),
     disabledTransport,
-    bridgeOnlyPortfolioSink,
+    portfolioSink,
   );
 }
 
@@ -105,6 +106,24 @@ telegramWebhookRouter.post('/', async (req, res) => {
   res.status(204).end();
 });
 
+export const manualPortfolioNotificationBridge: RequestHandler = (request, response, next) => {
+  const authenticated = request as AuthenticatedRequest;
+  const originalJson = response.json.bind(response);
+  response.json = ((body: unknown) => {
+    const value = record(body);
+    if (response.statusCode < 400 && value?.ok === true && authenticated.member?.id && Array.isArray(value.uploaded)) {
+      const uploaded = value.uploaded as StoredPaperJournalRecord[];
+      void queueManualPortfolioNotifications(authenticated.member.id, uploaded, service()).catch((error) => {
+        console.warn('[user-integrations] manual portfolio notification bridge failed', {
+          code: errorCode(error),
+        });
+      });
+    }
+    return originalJson(body);
+  }) as typeof response.json;
+  next();
+};
+
 export const userBrokerTelegramRouter: IRouter = Router();
 
 userBrokerTelegramRouter.get('/', async (req, res) => {
@@ -124,6 +143,19 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
     });
   } catch (error) {
     res.status(503).json({ ok: false, error: errorCode(error) });
+  }
+});
+
+userBrokerTelegramRouter.post('/execution/sync', async (req, res) => {
+  try {
+    const { userId, accessToken } = member(req as AuthenticatedRequest);
+    const tradingRepository = createSupabaseTradingRepository(accessToken, userId);
+    const journalRepository = createSupabasePaperJournalRepository(accessToken, userId);
+    const integrationService = service(new CanonicalPortfolioSyncSink(journalRepository, userId));
+    const result = await new TradeExecutionEventBridgeService(tradingRepository, integrationService).syncUser(userId);
+    res.json({ ok: true, ...result, runtimeSync: true });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: errorCode(error), privateApiRequests: 0, ordersSubmitted: 0, ordersCancelled: 0 });
   }
 });
 
