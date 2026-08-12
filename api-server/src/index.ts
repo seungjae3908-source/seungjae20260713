@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import apiRouter from './routes';
 import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
+import { startUserTelegramDeliveryWorker } from './features/user-broker-telegram/user-broker-telegram.worker';
 import { startPriceAlertMonitor } from './services/notification.service';
 import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
 import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
@@ -217,6 +218,7 @@ app.listen(
 
     startPriceAlertMonitor();
     startTradeRecoveryWorker();
+    startUserTelegramDeliveryWorker();
 
     if (frontendDist) {
       console.log(
