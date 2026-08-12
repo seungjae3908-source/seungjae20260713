@@ -12,6 +12,10 @@ const spec = await read('stock-analyzer/e2e/production-readonly-smoke.spec.ts');
 const policy = await read('stock-analyzer/e2e/support/production-readonly-policy.ts');
 const policyTest = await read('stock-analyzer/e2e/support/production-readonly-policy.test.ts');
 const config = await read('stock-analyzer/playwright.production.config.ts');
+const app = await read('stock-analyzer/src/App.tsx');
+const entrypoint = await read('stock-analyzer/src/main.tsx');
+const stylesheet = await read('stock-analyzer/src/index.css');
+const indexHtml = await read('stock-analyzer/index.html');
 const deployScript = await read('ops/deploy-production.sh');
 const server = await read('api-server/src/index.ts');
 
@@ -41,7 +45,16 @@ for (const marker of [
   assert(spec.includes(marker), `browser evidence marker missing: ${marker}`);
 }
 assert(spec.includes("getByTestId('page-fallback')"), 'browser smoke must prove global loading terminates');
+assert(spec.includes("getByTestId('paper-trading-page')"), 'browser smoke must prove the paper workspace becomes ready');
+assert(spec.includes("getByTestId('paper-trading-route-skeleton')"), 'browser smoke must prove the paper skeleton terminates');
 assert(spec.includes('installProductionReadOnlyPolicy'), 'browser smoke must install fail-closed request policy');
+assert(app.includes('loadPaperTradingPage'), 'approved sessions must preload the paper trading route');
+assert(app.includes('PaperTradingRouteFallback'), 'paper trading must use a route-specific progressive fallback');
+assert(app.includes('paper-trading-route-skeleton'), 'paper trading fallback must have a deterministic readiness marker');
+assert(entrypoint.includes('if (!import.meta.env.PROD) return;'), 'service worker registration must stay production-only');
+for (const source of [stylesheet, indexHtml]) {
+  assert(!/fonts\.(?:googleapis|gstatic)\.com/i.test(source), 'Production source must not depend on remote Google fonts');
+}
 
 for (const marker of [
   'FINANCIAL_MUTATION_REQUEST_BLOCKED',
