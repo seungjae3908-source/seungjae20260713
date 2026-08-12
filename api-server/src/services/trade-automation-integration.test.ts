@@ -6,12 +6,16 @@ import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
 import { encryptTradingCredentials, decryptTradingCredentials } from './trade-credential-vault.service';
 import {
-  buildBitgetSignature, buildUpbitJwt, prepareBitgetOrder, prepareBitgetTicker, prepareKiwoomOrder,
+  buildBitgetSignature, buildUpbitJwt, prepareBitgetOrder, prepareBitgetOrderQuery, prepareBitgetTicker, prepareKiwoomOrder,
   prepareUpbitOrder, redactPreparedRequest, validateBitgetContractRules,
 } from './trade-exchange-adapters.service';
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
 import { assertOrderTransition, canTransitionOrder } from './trade-order-state-machine.service';
 import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from './trade-automation.types';
+import {
+  parseBitgetOrderSnapshot, parseUpbitOrderSnapshot, TradeReconciliationService,
+} from './trade-reconciliation.service';
+import { runTradeReconciliationSweep, startTradeReconciliationWorker } from './trade-reconciliation.worker';
 
 const USER_A = '11111111-1111-1111-1111-111111111111';
 const USER_B = '22222222-2222-2222-2222-222222222222';
@@ -95,6 +99,9 @@ test('Bitget allows only 2x/3x, blocks opposite duplicate positions, and keeps r
   const ticker = prepareBitgetTicker('BTCUSDT');
   assert.equal(ticker.path, '/api/v2/mix/market/ticker');
   assert.equal(Object.keys(ticker.headers).some((key) => key.startsWith('ACCESS-')), false);
+  const detail = prepareBitgetOrderQuery({ apiKey: 'key', secretKey: 'secret', passphrase: 'pass' }, 'BTCUSDT', 'client-1', '1000');
+  assert.equal(detail.path, '/api/v2/mix/order/detail');
+  assert.match(detail.query, /^symbol=BTCUSDT&clientOid=client-1&productType=USDT-FUTURES$/);
 });
 
 test('Upbit enforces KRW spot, no short, 5,000 KRW minimum, and market buy/sell units', () => {
@@ -148,6 +155,68 @@ test('state machine supports partial fill/cancel/recovery and rejects unsafe tra
   assert.equal(canTransitionOrder('PARTIALLY_FILLED', 'CANCEL_REQUESTED'), true);
   assert.equal(canTransitionOrder('CANCEL_REQUESTED', 'RECOVERY_REQUIRED'), true);
   assert.throws(() => assertOrderTransition('FILLED', 'SUBMITTED'), /INVALID_ORDER_STATE_TRANSITION/);
+});
+
+test('official Bitget and Upbit order responses normalize without losing partial fills', () => {
+  assert.deepEqual(parseBitgetOrderSnapshot({
+    orderId: 'bg-1', state: 'partially_filled', baseVolume: '0.25', priceAvg: '65000',
+  }), {
+    state: 'PARTIALLY_FILLED', exchangeOrderId: 'bg-1', filledQuantity: 0.25, averageFillPrice: 65000,
+  });
+  assert.deepEqual(parseUpbitOrderSnapshot({
+    uuid: 'up-1', state: 'cancel', executed_volume: '0.4', executed_funds: '28000', remaining_volume: '0.6',
+  }), {
+    state: 'CANCELED', exchangeOrderId: 'up-1', filledQuantity: 0.4, averageFillPrice: 70000,
+  });
+  assert.throws(() => parseBitgetOrderSnapshot({ state: 'unknown', baseVolume: '0' }), /BITGET_ORDER_STATE_UNSUPPORTED/);
+});
+
+test('reconciliation applies monotonic fills and external cancellation through the state machine', async () => {
+  const repository = new InMemoryTradingRepository();
+  const automation = new TradeAutomationService(repository);
+  const created = await automation.createPlan(USER_A,
+    plan({ signalId: 'reconcile-partial', side: 'sell', quantity: 10, quoteAmount: null }),
+    normalizeTradingPolicy(DEFAULT_TRADING_POLICY), false);
+  const approved = await automation.approvePlan(USER_A, created.plan!.id);
+  const order = (await automation.createOrder(USER_A, approved)).order;
+  const reconciliation = new TradeReconciliationService(repository);
+  await reconciliation.applySnapshot(order, {
+    state: 'PARTIALLY_FILLED', exchangeOrderId: 'exchange-1', filledQuantity: 4, averageFillPrice: 100_000,
+  });
+  assert.equal(order.state, 'PARTIALLY_FILLED');
+  await assert.rejects(() => reconciliation.applySnapshot(order, {
+    state: 'PARTIALLY_FILLED', exchangeOrderId: 'exchange-1', filledQuantity: 3, averageFillPrice: 100_000,
+  }), /RECONCILIATION_FILLED_QUANTITY_REGRESSION/);
+  await reconciliation.applySnapshot(order, {
+    state: 'CANCELED', exchangeOrderId: 'exchange-1', filledQuantity: 4, averageFillPrice: 100_000,
+  });
+  assert.equal(order.state, 'CANCELED');
+  assert.equal(order.filledQuantity, 4);
+});
+
+test('bounded reconciliation sweep never submits orders and fails safe into recovery', async () => {
+  const repository = new InMemoryTradingRepository();
+  const automation = new TradeAutomationService(repository);
+  const created = await automation.createPlan(USER_A, plan({ signalId: 'reconcile-worker' }),
+    normalizeTradingPolicy(DEFAULT_TRADING_POLICY), false);
+  const approved = await automation.approvePlan(USER_A, created.plan!.id);
+  const order = (await automation.createOrder(USER_A, approved)).order;
+  const result = await runTradeReconciliationSweep({
+    limit: 1,
+    listCandidates: async () => [order],
+    repositoryFactory: () => repository,
+    reconcileOrder: async () => { throw new Error('EXCHANGE_TIMEOUT'); },
+  });
+  assert.deepEqual(result, { scanned: 1, reconciled: 0, recoveryRequired: 1, failed: 1, ordersSubmitted: 0 });
+  assert.equal(order.state, 'RECOVERY_REQUIRED');
+  assert.equal(order.lastErrorCode, 'EXCHANGE_TIMEOUT');
+  const previous = process.env.TRADE_RECONCILIATION_ENABLED;
+  delete process.env.TRADE_RECONCILIATION_ENABLED;
+  try { assert.equal(startTradeReconciliationWorker(), null); }
+  finally {
+    if (previous == null) delete process.env.TRADE_RECONCILIATION_ENABLED;
+    else process.env.TRADE_RECONCILIATION_ENABLED = previous;
+  }
 });
 
 test('same signal is idempotent, approval is mandatory, and members cannot read each other', async () => {
