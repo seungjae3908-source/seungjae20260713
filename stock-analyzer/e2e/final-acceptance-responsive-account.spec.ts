@@ -98,6 +98,16 @@ async function installAdminRuntime(page: Page) {
         upbit: { configured: true, connected: true, assetCount: 2, assets: [{ currency: 'KRW', balance: 1000000, locked: 0, averageBuyPrice: 0, unitCurrency: 'KRW' }, { currency: 'BTC', balance: 0.01, locked: 0, averageBuyPrice: 120000000, unitCurrency: 'KRW' }] },
         bitget: { configured: true, connected: true, accounts: [{ marginCoin: 'USDT', available: 1000, locked: 0, accountEquity: 1005, unrealizedPL: 5 }], positions: [{ symbol: 'BTCUSDT', side: 'long', total: 0.01, leverage: 2, averageOpenPrice: 115000, markPrice: 116000, unrealizedPL: 10, liquidationPrice: 60000 }] },
       },
+      portfolio: {
+        asOf: NOW, baseCurrency: null, conversionApplied: false,
+        totalsByCurrency: [
+          { currency: 'KRW', totalAssets: 2500000, cashAvailable: 1250000, holdingsMarketValue: 1250000, profitLoss: 100000, derivativesNotional: 0, holdingAllocationPercent: 50, providers: ['toss', 'kiwoom'], pricingComplete: true },
+          { currency: 'USDT', totalAssets: 1005, cashAvailable: 1000, holdingsMarketValue: 0, profitLoss: 5, derivativesNotional: 1160, holdingAllocationPercent: 0, providers: ['bitget'], pricingComplete: true },
+        ],
+        providers: [], balances: [], incompleteProviders: ['upbit'],
+        holdings: [{ provider: 'toss', sourceProvider: 'toss', accountId: '1', market: 'KR_STOCK', assetClass: 'STOCK', symbol: '005930', name: '삼성전자', currency: 'KRW', quantity: 10, averagePrice: 70000, currentPrice: 75000, marketValue: 750000, profitLoss: 50000, profitRate: 7.14, valuationState: 'VALUED' }],
+        positions: [{ provider: 'bitget', sourceProvider: 'bitget', accountId: 'USDT-FUTURES', market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', side: 'long', quantity: 0.01, leverage: 2, averageOpenPrice: 115000, markPrice: 116000, notionalValue: 1160, unrealizedPnl: 10, liquidationPrice: 60000, currency: 'USDT' }],
+      },
     });
     if (path === '/api/trade-automation/account-connections/status') return fulfill(route, { ok: true, readOnly: true, mutationsAllowed: false, providers: { toss: { configured: false }, kiwoom: { configured: true }, upbit: { configured: true }, bitget: { configured: true } }, checkedAt: NOW });
     if (path === '/api/trade-automation/status') return fulfill(route, { policy: { mode: 'approval', automaticEnabled: false, emergencyStopped: false, exchangeEnabled: { bitget: false, upbit: false, kiwoom: false }, enabledAssets: { bitget: [], upbit: [], kiwoom: [] }, enabledStrategies: [], totalCapitalKrw: 1000000, maxOrderKrw: 100000, dailyLossLimitPercent: 5, maxAssetPercent: 30, maxOpenPositions: 5, maxDailyOrders: 10, maxConsecutiveLosses: 3, bitgetLeverage: 2 }, connections: [], emergencyStopped: false, credentialVault: { encryptionConfigured: false, keyValueExposed: false }, lastOrder: null });
@@ -169,5 +179,21 @@ test('admin account panel shows all four market account surfaces and remains rea
   await assertNoHorizontalOverflow(page, 'account panel mobile');
   await page.setViewportSize({ width: 1440, height: 900 });
   await assertNoHorizontalOverflow(page, 'account panel desktop');
+  assertClean();
+});
+
+test('connected provider portfolio keeps currency totals and provider provenance explicit', async ({ page }) => {
+  const assertClean = await installAdminRuntime(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/portfolio');
+  const overview = page.getByTestId('broker-portfolio-overview');
+  await expect(overview).toBeVisible();
+  await expect(page.getByTestId('broker-total-krw')).toContainText('2,500,000');
+  await expect(page.getByTestId('broker-total-krw')).toContainText('Toss Securities · Kiwoom');
+  await expect(page.getByTestId('broker-total-usdt')).toContainText('선물 명목 노출');
+  await expect(overview).toContainText('삼성전자');
+  await expect(overview).toContainText('Bitget');
+  await expect(overview).toContainText('값을 0원으로 간주하지 않습니다.');
+  await assertNoHorizontalOverflow(page, 'broker portfolio overview mobile');
   assertClean();
 });
