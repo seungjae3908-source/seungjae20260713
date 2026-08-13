@@ -1,5 +1,7 @@
 import type { SignalScannerRequest } from './signal-scanner';
 
+export type FrontendScannerMarket = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
+
 const STOCK_SCANNER_PATH = '/api/market/scan';
 const SPOT_SCANNER_PATH = '/api/scanner/crypto/spot';
 const FUTURES_SCANNER_PATH = '/api/scanner/crypto/futures';
