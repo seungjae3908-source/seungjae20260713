@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildUnifiedTradeJournal, type UnifiedTradeOrder } from '../../services/unified-trade-journal.service.ts';
+import { buildAutonomousCapitalLab } from './autonomous-capital-lab.ts';
 import { buildCanonicalJournalPortfolioAdvisor } from './canonical-journal-adapter.ts';
 
 const NOW = new Date('2026-08-12T03:00:00.000Z');
@@ -157,4 +158,64 @@ test('canonical integrity issues remain visible instead of being silently repair
   assert.ok(result.stateEvidence.journalIntegrityIssues.some((issue) => issue.code === 'IDEMPOTENCY_KEY_CONFLICT'));
   assert.equal(result.positions.length, 1);
   assert.equal(result.positions[0].averageCost, 100);
+});
+
+test('autonomous capital lab keeps exactly 1,000,000 KRW and four research lanes with zero execution authority', () => {
+  const journal = buildUnifiedTradeJournal([], { range: 'ALL' }, NOW);
+  const result = buildAutonomousCapitalLab(journal, NOW);
+
+  assert.equal(result.capital.initialCapitalKrw, 1_000_000);
+  assert.equal(result.capital.invariantKrw, 1_000_000);
+  assert.equal(result.capital.reserveKrw + result.lanes.reduce((sum, lane) => sum + lane.allocationKrw, 0), 1_000_000);
+  assert.deepEqual(result.lanes.map((lane) => lane.market), ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']);
+  assert.ok(result.lanes.every((lane) => lane.evidenceStatus === 'INSUFFICIENT'));
+  assert.equal(result.autonomousPolicy.livePromotionAllowed, false);
+  assert.equal(result.autonomousPolicy.strategyMutationAllowed, false);
+  assert.equal(result.safety.actualOrderRequests, 0);
+  assert.equal(result.safety.privateTradingApiRequests, 0);
+  assert.equal(result.safety.orderAuthority, 'none');
+});
+
+test('autonomous capital lab learns only from closed APP_PAPER and APP_SHADOW cycles', () => {
+  const paperOpen = order({ brokerOrderId: 'paper-open', symbol: 'AAPL', source: 'APP_PAPER', averageFillPrice: 100 });
+  const paperClose = order({
+    brokerOrderId: 'paper-close', symbol: 'AAPL', source: 'APP_PAPER', side: 'SELL', positionEffect: 'CLOSE',
+    orderedAt: '2026-08-12T02:58:35.000Z', filledAt: '2026-08-12T02:58:40.000Z', observedAt: '2026-08-12T02:58:41.000Z',
+    averageFillPrice: 110,
+  });
+  const shadowOpen = order({
+    brokerOrderId: 'shadow-open', symbol: 'MSFT', source: 'APP_SHADOW', averageFillPrice: 100,
+    orderedAt: '2026-08-12T02:58:45.000Z', filledAt: '2026-08-12T02:58:50.000Z', observedAt: '2026-08-12T02:58:51.000Z',
+  });
+  const shadowClose = order({
+    brokerOrderId: 'shadow-close', symbol: 'MSFT', source: 'APP_SHADOW', side: 'SELL', positionEffect: 'CLOSE',
+    orderedAt: '2026-08-12T02:58:55.000Z', filledAt: '2026-08-12T02:59:00.000Z', observedAt: '2026-08-12T02:59:01.000Z',
+    averageFillPrice: 105,
+  });
+  const autoOpen = order({
+    brokerOrderId: 'auto-open', symbol: 'NVDA', source: 'APP_AUTO', averageFillPrice: 100,
+    orderedAt: '2026-08-12T02:59:05.000Z', filledAt: '2026-08-12T02:59:10.000Z', observedAt: '2026-08-12T02:59:11.000Z',
+  });
+  const autoClose = order({
+    brokerOrderId: 'auto-close', symbol: 'NVDA', source: 'APP_AUTO', side: 'SELL', positionEffect: 'CLOSE',
+    orderedAt: '2026-08-12T02:59:15.000Z', filledAt: '2026-08-12T02:59:20.000Z', observedAt: '2026-08-12T02:59:21.000Z',
+    averageFillPrice: 200,
+  });
+
+  const journal = buildUnifiedTradeJournal(
+    [paperOpen, paperClose, shadowOpen, shadowClose, autoOpen, autoClose],
+    { range: 'ALL' },
+    NOW,
+  );
+  const result = buildAutonomousCapitalLab(journal, NOW);
+  const usLane = result.lanes.find((lane) => lane.market === 'US_STOCK');
+
+  assert.equal(result.journalCoverage.closedResearchTrades, 2);
+  assert.equal(result.journalCoverage.ignoredNonResearchTrades, 1);
+  assert.equal(usLane?.sampleSize, 2);
+  assert.equal(usLane?.paperTrades, 1);
+  assert.equal(usLane?.shadowTrades, 1);
+  assert.ok((usLane?.averageReturnPercent ?? 0) > 0);
+  assert.equal(result.strategyLeaderboard[0].promotionAuthority, 'none');
+  assert.equal(result.championCandidates.length, 0);
 });
