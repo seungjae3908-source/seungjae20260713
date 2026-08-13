@@ -11,10 +11,13 @@ async function source(relative) {
   return readFile(path.join(repositoryRoot, relative), 'utf8');
 }
 
-const [service, route, routerIndex, panel] = await Promise.all([
+const [service, simulation, worker, route, routerIndex, serverIndex, panel] = await Promise.all([
   source('api-server/src/services/auto-trading-v2.service.ts'),
+  source('api-server/src/services/auto-trading-v2-simulation.service.ts'),
+  source('api-server/src/services/auto-trading-v2-worker.service.ts'),
   source('api-server/src/routes/auto-trading-v2.ts'),
   source('api-server/src/routes/index.ts'),
+  source('api-server/src/index.ts'),
   source('stock-analyzer/src/components/auto-trading-v2-panel.tsx'),
 ]);
 
@@ -40,9 +43,22 @@ const forbiddenPrivateTradingTokens = [
   'secretKey',
 ];
 for (const token of forbiddenPrivateTradingTokens) {
-  assert.equal(service.includes(token), false, `V2 service must not contain private Binance trading token: ${token}`);
-  assert.equal(route.includes(token), false, `V2 route must not contain private Binance trading token: ${token}`);
+  for (const [name, text] of [['service', service], ['simulation', simulation], ['worker', worker], ['route', route]]) {
+    assert.equal(text.includes(token), false, `V2 ${name} must not contain private Binance trading token: ${token}`);
+  }
 }
+
+assert.match(simulation, /SIMULATION_ONLY_NOT_EXCHANGE_EXACT/);
+assert.match(simulation, /closedCandleOnly:\s*true/);
+assert.match(worker, /AUTO_TRADING_V2_WORKER_ENABLED/);
+assert.match(worker, /hasSupabaseServerKey\(\)/);
+assert.match(worker, /fetchAutoTradingV2PublicSnapshot/);
+assert.match(worker, /realOrderCount:\s*0/);
+assert.match(worker, /realCancelCount:\s*0/);
+assert.match(worker, /privateTradingApiCount:\s*0/);
+assert.match(worker, /wouldLiquidate/);
+assert.match(worker, /wouldPnL/);
+assert.match(serverIndex, /startAutoTradingV2Worker\(\)/);
 
 assert.match(route, /safeMode\(req\.body\?\.mode\)/);
 assert.match(route, /if \(mode === 'LIVE'\) throw new Error\('AUTO_TRADING_V2_LIVE_LOCKED'\)/);
@@ -57,6 +73,9 @@ assert.match(panel, /실거래는 현재 비활성화되어 있습니다\./);
 assert.match(panel, /Real Order 0 · Real Cancel 0 · Private Trading API 0/);
 
 console.log('AUTO_TRADING_V2_SAFETY_CONTRACT=PASS');
+console.log('AUTO_TRADING_V2_BACKGROUND_WORKER=PUBLIC_DATA_DB_ONLY');
+console.log('HISTORICAL_REPLAY=CLOSED_CANDLE_ONLY');
+console.log('LIQUIDATION_MODEL=SIMULATION_ONLY_NOT_EXCHANGE_EXACT');
 console.log('LIVE_TRADING=false');
 console.log('REAL_ORDER_COUNT=0');
 console.log('REAL_CANCEL_COUNT=0');
