@@ -13,18 +13,19 @@ function fulfill(route: Route, body: unknown, status = 200) {
 function strategy(market: string, direction: string, id: string) {
   return {
     identity: {
-      strategyFamily: 'CANONICAL_SCANNER_PROFILE', strategyId: id, version: 'signal-profile-v1', parameterHash: 'a'.repeat(64),
+      strategyFamily: 'CANONICAL_SCANNER_PROFILE', strategyId: id, strategyVersion: 'signal-profile-v1', version: 'signal-profile-v1', parameterHash: 'a'.repeat(64),
       market, assetClass: market.includes('CRYPTO') ? market : 'STOCK', symbol: null, universe: `${market}_CANONICAL_UNIVERSE`,
-      timeframe: '5m', horizon: 'SCALP', direction, researchCodeSha: SHA,
+      timeframe: '5m', strategyHorizon: 'SCALP', horizon: 'SCALP', direction, researchCodeSha: SHA,
       costPolicyVersion: 'BACKTEST_FEES_SLIPPAGE_FUNDING_V1', riskPolicyVersion: 'CANONICAL_RISK_ENGINE_V1',
     },
     promotionState: 'RESEARCH',
     stages: STAGES.map((stage, index) => ({
-      stage, status: index === 0 ? 'PASS' : 'NOT_STARTED', observedAt: NOW,
-      source: index === 0 ? 'scanner-strategy-profile.service.ts' : 'UNLINKED', sourceSha: index === 0 ? SHA : null,
-      sampleSize: null, tradeCount: null, metrics: index === 0 ? { executionAuthority: 'NONE' } : null,
-      gate: `${stage}_EVIDENCE_REQUIRED`, failureReason: null, provenance: index === 0 ? ['canonical scanner strategy profile registry'] : [],
-      costAssumptions: stage === 'COST_STRESS' ? { requiredMultipliers: '1,1.25,1.5,2' } : null, dataQuality: index === 0 ? 'VERIFIED' : 'UNLINKED',
+      stage, status: index === 0 ? 'PASS' : 'NOT_STARTED', startedAt: index === 0 ? NOW : null, completedAt: index === 0 ? NOW : null, observedAt: NOW,
+      source: index === 0 ? 'scanner-strategy-profile.service.ts' : 'UNLINKED', provider: index === 0 ? 'INTERNAL_CANONICAL_REGISTRY' : null, sourceSha: index === 0 ? SHA : null,
+      sampleSize: null, sampleCount: null, tradeCount: null, metrics: index === 0 ? { executionAuthority: 'NONE' } : null,
+      gate: `${stage}_EVIDENCE_REQUIRED`, gateResult: index === 0 ? 'PASS' : 'EVIDENCE_REQUIRED', failureReason: null, failureReasons: [], provenance: index === 0 ? ['canonical scanner strategy profile registry'] : [],
+      costAssumptions: stage === 'COST_STRESS' ? { requiredMultipliers: '1,1.25,1.5,2' } : null, costPolicy: null, dataQuality: index === 0 ? 'VERIFIED' : 'UNLINKED',
+      fetchedAt: null, validatedAt: index === 0 ? NOW : null, corporateActionAdjusted: null, survivorshipSafe: null, pointInTimeSafe: null, requiredEvidence: [],
     })),
     drift: { classification: null, status: 'INSUFFICIENT_SAMPLE', reason: 'LINKED_BASELINE_AND_AT_LEAST_30_OBSERVED_OUTCOMES_REQUIRED', observedSampleSize: null },
     killState: 'NONE', blockers: STAGES.slice(1).map((stage) => `${stage}_NOT_STARTED`), promotionEligible: false,
@@ -33,7 +34,7 @@ function strategy(market: string, direction: string, id: string) {
 }
 
 const promotionResponse = {
-  ok: true, generatedAt: NOW, sourceSha: SHA,
+  ok: true, generatedAt: NOW, sourceSha: SHA, policyVersion: 'STRATEGY_PROMOTION_POLICY_V1',
   items: [
     strategy('KR_STOCK', 'BUY', 'KR_STOCK_SCALP_V1_BUY'),
     strategy('US_STOCK', 'SELL', 'US_STOCK_SCALP_V1_SELL'),
@@ -48,7 +49,7 @@ const promotionResponse = {
   promotionCandidates: 0, executionAuthority: 'NONE', liveTradingAuthority: false, privateTradingApiCount: 0,
 };
 
-async function installApprovedRuntime(page: Page) {
+async function installApprovedRuntime(page: Page, response: typeof promotionResponse = promotionResponse, delayMs = 0) {
   await page.addInitScript(({ storageKey, userId, now }) => {
     const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     const expiresAt = 4_102_444_800;
@@ -61,10 +62,36 @@ async function installApprovedRuntime(page: Page) {
     if (path.endsWith('/auth/v1/user')) return fulfill(route, { id: USER_ID, aud: 'authenticated', role: 'authenticated', email: 'promotion@example.invalid', app_metadata: {}, user_metadata: {}, identities: [], created_at: NOW });
     return fulfill(route, { ok: true });
   });
-  await page.route('**/api/**', (route) => new URL(route.request().url()).pathname === '/api/strategy-promotion'
-    ? fulfill(route, promotionResponse)
-    : fulfill(route, { ok: true, items: [] }));
+  await page.route('**/api/**', async (route) => {
+    if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return new URL(route.request().url()).pathname === '/api/strategy-promotion'
+      ? fulfill(route, response)
+      : fulfill(route, { ok: true, items: [] });
+  });
 }
+
+test('promotion center exposes loading and empty states without inventing evidence', async ({ page }) => {
+  const emptyResponse = { ...promotionResponse, items: [], counts: { ...promotionResponse.counts, RESEARCH: 0 } };
+  await installApprovedRuntime(page, emptyResponse, 350);
+  await page.goto('/strategy-promotion');
+  await expect(page.getByText('Loading linked evidence…')).toBeVisible();
+  await expect(page.getByTestId('strategy-promotion-empty')).toBeVisible();
+  await expect(page.getByTestId('promotion-candidate-count')).toHaveText('0');
+});
+
+test('failed evidence is explicit and the timeline is keyboard accessible', async ({ page }) => {
+  const failed = strategy('KR_STOCK', 'BUY', 'KR_STOCK_SCALP_V1_BUY');
+  failed.promotionState = 'RESEARCH_HOLD';
+  failed.stages[1] = { ...failed.stages[1], status: 'FAIL', gateResult: 'FAIL', failureReason: 'OOS_NET_EXPECTANCY_NOT_POSITIVE', failureReasons: ['OOS_NET_EXPECTANCY_NOT_POSITIVE'] };
+  const response = { ...promotionResponse, items: [failed], counts: { ...promotionResponse.counts, RESEARCH: 0, RESEARCH_HOLD: 1 } };
+  await installApprovedRuntime(page, response);
+  await page.goto('/strategy-promotion');
+  const disclosure = page.getByRole('button', { name: 'Evidence and timeline' });
+  await disclosure.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('OOS_NET_EXPECTANCY_NOT_POSITIVE')).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Promotion evidence timeline' })).toBeVisible();
+});
 
 for (const width of [320, 360, 390, 412, 430, 1440]) {
   test(`promotion center is fail-closed and overflow-free at ${width}px`, async ({ page }) => {

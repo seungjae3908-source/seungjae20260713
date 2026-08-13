@@ -13,7 +13,19 @@ const NOW = new Date('2026-08-13T00:00:00.000Z');
 const STRATEGY = 'CRYPTO_FUTURES_SCALP_V1_LONG';
 
 function pass(stage: PromotionStageKey) {
-  return { stage, status: 'PASS' as const, source: 'verified-fixture', sourceSha: SHA, dataQuality: 'VERIFIED' as const };
+  return {
+    stage,
+    status: 'PASS' as const,
+    source: 'verified-fixture',
+    provider: 'CANONICAL_TEST_PROVIDER',
+    sourceSha: SHA,
+    datasetId: 'dataset-v1',
+    dataRange: { start: '2025-01-01T00:00:00.000Z', end: '2026-01-01T00:00:00.000Z' },
+    sampleCount: 50,
+    metrics: { evidenceLinked: true },
+    provenance: ['immutable-test-artifact'],
+    dataQuality: 'VERIFIED' as const,
+  };
 }
 
 test('canonical profile hash is deterministic and direction identity is immutable', () => {
@@ -23,8 +35,22 @@ test('canonical profile hash is deterministic and direction identity is immutabl
   const result = new StrategyPromotionService({ sourceSha: SHA, now: () => NOW }).list({ market: 'CRYPTO_FUTURES' });
   assert.equal(result.items.length, 6);
   assert.equal(result.items[0]?.identity.researchCodeSha, SHA);
+  assert.equal(result.items[0]?.identity.strategyVersion, profile.version);
+  assert.equal(result.items[0]?.identity.strategyHorizon, 'SCALP');
   assert.equal(result.items[0]?.executionAuthority, 'NONE');
   assert.equal(result.privateTradingApiCount, 0);
+});
+
+test('PASS evidence without exact provenance is blocked instead of promoted', () => {
+  const result = new StrategyPromotionService({
+    sourceSha: SHA,
+    now: () => NOW,
+    evidence: { [STRATEGY]: [{ stage: 'HISTORICAL_BACKTEST', status: 'PASS', source: 'unlinked-fixture' }] },
+  }).get(STRATEGY);
+  const historical = result?.stages.find((stage) => stage.stage === 'HISTORICAL_BACKTEST');
+  assert.equal(historical?.status, 'BLOCKED');
+  assert.ok(historical?.failureReasons.includes('EXACT_SOURCE_SHA_REQUIRED'));
+  assert.equal(result?.promotionEligible, false);
 });
 
 test('missing exact-linked evidence fails closed with no promotion candidate', () => {
@@ -62,4 +88,13 @@ test('critical drift suspends recommendation without granting live authority', (
   assert.equal(result?.drift.classification, 'CRITICAL');
   assert.equal(result?.promotionState, 'SUSPENDED');
   assert.equal(result?.liveTradingAuthority, false);
+});
+
+test('versioned filters and kill state remain fail closed', () => {
+  const service = new StrategyPromotionService({ sourceSha: SHA, now: () => NOW, killStates: { [STRATEGY]: 'KILLED' } });
+  const killed = service.list({ market: 'CRYPTO_FUTURES', strategyHorizon: 'SCALP', direction: 'LONG', status: 'KILLED' });
+  assert.equal(killed.policyVersion, 'STRATEGY_PROMOTION_POLICY_V1');
+  assert.equal(killed.items.length, 1);
+  assert.equal(killed.items[0]?.promotionState, 'KILLED');
+  assert.equal(killed.items[0]?.executionAuthority, 'NONE');
 });
