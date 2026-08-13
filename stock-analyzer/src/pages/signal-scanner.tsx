@@ -117,7 +117,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const request = useMemo<SignalScannerRequest>(() => ({
     assetClass: stockView ? 'stock' : view === 'SPOT' ? 'coin_spot' : 'coin_futures',
     market: view === 'KR' ? 'KR' : view === 'US' ? 'US' : view === 'SPOT' ? 'UPBIT' : 'BITGET',
-    strategy: strategy as SignalScannerRequest['strategy'],
+    strategy,
     timeframe: profile.timeframe,
     conditions: [],
     condition: !stockView && strategy === 'scalping' ? 'williams' : 'trend',

@@ -4,7 +4,7 @@ import { buildSignalScannerRequestUrl } from './signal-scanner-url';
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
 export type ScannerTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
-export type ScannerStrategyMode = 'scalping' | 'swing';
+export type ScannerStrategyMode = 'scalping' | 'swing' | 'position';
 export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
   | 'CANDIDATE' | 'CONFIRMED' | 'ARMED' | 'ENTRY_ZONE' | 'APPROVAL_PENDING' | 'APPROVED'

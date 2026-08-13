@@ -158,6 +158,7 @@ test('scanner query keys cover market, indicators, thresholds, and timeframe rac
 
 test('new signal scanner sends explicit strategy and only scanner read endpoints', () => {
   const scannerPage = source('stock-analyzer/src/pages/signal-scanner.tsx');
+  const scannerProfiles = source('stock-analyzer/src/lib/signal-scanner-profile.ts');
   const forbidden = /\/api\/(?:account|orders?|cancel|positions?|execute|approve|private)\b/i;
   const base = {
     conditions: ['거래량 증가'],
@@ -169,8 +170,8 @@ test('new signal scanner sends explicit strategy and only scanner read endpoints
   };
   const requests: SignalScannerRequest[] = [
     { ...base, assetClass: 'stock', market: 'KR', strategy: 'scalping', timeframe: '5m' },
-    { ...base, assetClass: 'stock', market: 'US', strategy: 'swing', timeframe: '1D' },
-    { ...base, assetClass: 'coin_spot', market: 'UPBIT', strategy: 'scalping', timeframe: '3m' },
+    { ...base, assetClass: 'stock', market: 'US', strategy: 'position', timeframe: '1D' },
+    { ...base, assetClass: 'coin_spot', market: 'UPBIT', strategy: 'scalping', timeframe: '5m' },
     { ...base, assetClass: 'coin_futures', market: 'BITGET', strategy: 'swing', timeframe: '4H' },
   ];
 
@@ -192,12 +193,11 @@ test('new signal scanner sends explicit strategy and only scanner read endpoints
     }
   }
 
-  assert.deepEqual([...observedStrategies].sort(), ['scalping', 'swing']);
-  assert.match(scannerPage, /strategy:\s*strategy\s+as\s+SignalScannerRequest\['strategy'\],\s*timeframe:\s*profile\.timeframe,/);
-  assert.match(scannerPage, /1m/);
-  assert.match(scannerPage, /3m/);
-  assert.match(scannerPage, /15m context/);
-  assert.match(scannerPage, /1H context/);
+  assert.deepEqual([...observedStrategies].sort(), ['position', 'scalping', 'swing']);
+  assert.match(scannerPage, /strategy,\s*timeframe:\s*profile\.timeframe,/);
+  assert.match(scannerProfiles, /scalping:\s*\{\s*timeframe:\s*'5m'/);
+  assert.match(scannerProfiles, /swing:\s*\{\s*timeframe:\s*'4H'/);
+  assert.match(scannerProfiles, /position:\s*\{\s*timeframe:\s*'1D'/);
   assert.doesNotMatch(scannerPage, forbidden);
 });
 
