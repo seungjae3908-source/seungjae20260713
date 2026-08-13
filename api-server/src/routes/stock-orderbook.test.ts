@@ -84,3 +84,29 @@ test('Bitget provider error is unavailable and never fabricates provider timesta
   assert.equal(result.providerTimestamp, null);
   assert.equal(result.freshness, 'unknown');
 });
+
+test('normalization sorts both sides, removes duplicate and invalid levels, and recomputes cumulative quantity', () => {
+  const result = normalizeUpbitOrderbook('BTC', [{
+    timestamp: receivedAt.getTime() - 1_000,
+    total_ask_size: 12,
+    total_bid_size: 12,
+    orderbook_units: [
+      { ask_price: 102, ask_size: 2, bid_price: 99, bid_size: 1 },
+      { ask_price: 101, ask_size: 1, bid_price: 100, bid_size: 2 },
+      { ask_price: 101, ask_size: 9, bid_price: 100, bid_size: 9 },
+      { ask_price: 103, ask_size: -1, bid_price: 98, bid_size: 0 },
+    ],
+  }], receivedAt);
+
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.asks.map((row) => [row.price, row.quantity, row.cumulativeQuantity]), [
+    [101, 1, 1],
+    [102, 2, 3],
+  ]);
+  assert.deepEqual(result.bids.map((row) => [row.price, row.quantity, row.cumulativeQuantity]), [
+    [100, 2, 2],
+    [99, 1, 3],
+  ]);
+  assert.ok(result.warnings.some((warning) => warning.includes('중복 가격')));
+  assert.ok(result.warnings.some((warning) => warning.includes('유효하지 않아 제외')));
+});
