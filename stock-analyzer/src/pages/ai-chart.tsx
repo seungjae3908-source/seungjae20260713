@@ -12,8 +12,16 @@ import {
   X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
+import { AiChartV2IntelligencePanel } from '@/components/ai-chart-v2-intelligence-panel';
 import { BottomNav } from '@/components/bottom-nav';
+import { FuturesPublicContextPanel } from '@/components/futures-public-context-panel';
 import { UnifiedAnalysisChart } from '@/components/unified-analysis-chart';
+import {
+  defaultStrategyMode,
+  normalizeStrategyMode,
+  strategyModeTimeframes,
+  type AiChartStrategyMode,
+} from '@/lib/ai-chart-v2-intelligence';
 import {
   useAnalysisSelection,
   type AnalysisSelection,
@@ -50,10 +58,15 @@ import {
   type ChartWindowMessageType,
   type ChartWindowPeerState,
 } from '@/lib/chart-external-window';
-import { UNIFIED_CHART_TIMEFRAMES, unifiedMarketLabel } from '@/lib/unified-chart-data';
+import {
+  UNIFIED_CHART_TIMEFRAMES,
+  unifiedMarketLabel,
+  type UnifiedChartTimeframe,
+} from '@/lib/unified-chart-data';
 import { cn } from '@/lib/utils';
 
 const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
+const AI_CHART_MODE_STORAGE_KEY = 'ai-chart-v2-strategy-mode.v1';
 
 function fallbackSelection(): AnalysisSelection {
   return {
@@ -132,6 +145,14 @@ function safeFocus(popup: Window): void {
   }
 }
 
+function initialStrategyMode(selection: AnalysisSelection): AiChartStrategyMode {
+  const fallback = defaultStrategyMode(selection.timeframe as UnifiedChartTimeframe);
+  if (typeof window === 'undefined') return fallback;
+  const routeValue = new URLSearchParams(window.location.search).get('strategyMode');
+  if (routeValue) return normalizeStrategyMode(routeValue, fallback);
+  return normalizeStrategyMode(window.localStorage.getItem(AI_CHART_MODE_STORAGE_KEY), fallback);
+}
+
 export default function AiChartPage({ embedded = false }: { embedded?: boolean }) {
   const [, navigate] = useLocation();
   const state = useAnalysisSelection();
@@ -155,6 +176,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   const [selection, setSelection] = useState<AnalysisSelection>(initialSelection);
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
+  const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(() => {
     if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
@@ -193,6 +215,11 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       window.clearTimeout(popupPublishTimeoutRef.current);
       popupPublishTimeoutRef.current = null;
     }
+  }, []);
+
+  const updateStrategyMode = useCallback((nextMode: AiChartStrategyMode) => {
+    setStrategyMode(nextMode);
+    if (typeof window !== 'undefined') window.localStorage.setItem(AI_CHART_MODE_STORAGE_KEY, nextMode);
   }, []);
 
   useEffect(() => {
@@ -360,6 +387,18 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     applySelection(next, true);
   }, [applySelection]);
 
+  const updateStrategyModeAndTimeframe = useCallback((nextMode: AiChartStrategyMode) => {
+    updateStrategyMode(nextMode);
+    const allowedTimeframes = strategyModeTimeframes(nextMode);
+    const current = selectionRef.current;
+    if (allowedTimeframes.includes(current.timeframe as UnifiedChartTimeframe)) return;
+    updateSelection({
+      ...current,
+      timeframe: allowedTimeframes[0],
+      selectedAt: new Date().toISOString(),
+    });
+  }, [updateSelection, updateStrategyMode]);
+
   const openExternalWindow = useCallback(() => {
     if (!externalControlAvailable || invalidRoute) return;
     const currentPopup = popupRef.current;
@@ -432,7 +471,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
           )}
           <div className="min-w-0 flex-1">
             <p className="text-[11px] font-extrabold text-primary">{externalMode ? '외부 AI 차트' : '실시간 기술 분석'}</p>
-            <h1 className="truncate text-lg font-black">AI 차트 생중계</h1>
+            <h1 aria-label="AI 차트 생중계 · AI 차트 2.0" className="truncate text-lg font-black">AI 차트 2.0</h1>
           </div>
           {!embedded && !externalMode && externalControlAvailable && (
             <button
@@ -458,7 +497,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
           )}
           <div className="text-right text-[10px] font-bold text-muted-foreground">
             <p>{unifiedMarketLabel(selection.market)} · {selection.timeframe}</p>
-            <p>공개 시세 읽기 전용</p>
+            <p>{strategyMode} · 공개 시세 읽기 전용</p>
           </div>
         </div>
         {externalWindowStatus && (
@@ -468,7 +507,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         )}
       </header>
 
-      <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
+      <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
         <section className="min-w-0">
           <UnifiedAnalysisChart
             selection={selection}
@@ -478,6 +517,14 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         </section>
 
         <aside className="space-y-4 lg:sticky lg:top-20 lg:self-start">
+          <AiChartV2IntelligencePanel
+            selection={selection}
+            analysis={analysis}
+            mode={strategyMode}
+            onModeChange={updateStrategyModeAndTimeframe}
+          />
+          <FuturesPublicContextPanel selection={selection} />
+
           <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
             <div className="flex items-center gap-2">
               <Activity className="h-4 w-4 text-primary" />
