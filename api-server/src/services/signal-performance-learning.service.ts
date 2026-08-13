@@ -299,12 +299,11 @@ export function evaluateSignalOutcome(input: {
   const finalClose = bars.length ? bars[bars.length - 1]!.close : null;
   const returnPercent = finalClose == null ? null : directionalReturn(entry, finalClose, input.snapshot.direction);
   const neutralThreshold = Math.max(0, input.neutralThresholdPercent ?? 0.1);
-  let outcome = decisiveOutcome;
-  if (outcome == null) {
-    if (input.expiredWhenNoDecisiveHit) outcome = 'EXPIRED';
-    else if (returnPercent == null || Math.abs(returnPercent) <= neutralThreshold) outcome = 'NEUTRAL';
-    else outcome = returnPercent > 0 ? 'WIN' : 'LOSS';
-  }
+  let outcome: SignalOutcomeStatus;
+  if (decisiveOutcome != null) outcome = decisiveOutcome;
+  else if (input.expiredWhenNoDecisiveHit) outcome = 'EXPIRED';
+  else if (returnPercent == null || Math.abs(returnPercent) <= neutralThreshold) outcome = 'NEUTRAL';
+  else outcome = returnPercent > 0 ? 'WIN' : 'LOSS';
 
   return {
     signalId: input.snapshot.signalId,
