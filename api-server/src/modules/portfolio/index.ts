@@ -5,3 +5,5 @@ export * from './scenario.ts';
 export * from './advisor-context.ts';
 export * from './canonical-journal-adapter.ts';
 export * from './intelligence-v2.ts';
+export * from './provider-snapshot-v2.ts';
+export * from './mentor-v2.ts';
