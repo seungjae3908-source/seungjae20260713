@@ -13,6 +13,7 @@ import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import futuresMarketDataRouter from './futures-market-data';
+import stockOrderbookRouter from './stock-orderbook';
 import tradingRiskRouter from './trading-risk';
 import backtestsRouter from './backtests';
 import paperTradingRouter from './paper-trading';
@@ -55,11 +56,10 @@ router.use('/admin', adminRouter);
 
 router.use(requireAuthenticated);
 
-// Brokerage/exchange account connectivity is intentionally read-only and
-// admin-only because credentials are server-scoped. Existing order/cancel/
-// transfer endpoints remain blocked below and are not reachable through this
-// router.
-router.use('/account-connections', requireAdmin, accountConnectionsRouter);
+// Broker connectivity is metadata-only in Release V4.2. It reads only the
+// authenticated user's vault connection metadata and never falls back to a
+// server credential or sends a private provider request.
+router.use('/account-connections', accountConnectionsRouter);
 
 // Canonical AI Scanner routes must be registered before the legacy market
 // router. This makes /api/market/scan authenticated, capability protected,
@@ -92,6 +92,20 @@ router.use('/stocks/auto-trade', privateExchangeDisabled);
 router.use('/market-information/coins-spot', requireCapability('canAccessSpot'));
 router.use('/market-information/coins-futures', requireCapability('canAccessFutures'));
 router.use('/market-information', requireCapability('canAccessBasicInfo'), marketInformationRouter);
+
+// Canonical orderbook is public-provider/read-only, but still respects the
+// same member capability boundary as the underlying market surface.
+router.use('/orderbook', (req, res, next) => {
+  const assetClass = String(req.query.assetClass ?? '').trim().toLowerCase();
+  const capability = assetClass === 'crypto_futures'
+    ? 'canAccessFutures'
+    : assetClass === 'crypto_spot'
+      ? 'canAccessSpot'
+      : 'canAccessBasicInfo';
+  requireCapability(capability)(req, res, next);
+});
+router.use('/stocks/:ticker/orderbook', requireCapability('canAccessBasicInfo'));
+router.use('/', stockOrderbookRouter);
 
 router.use('/crypto/spot', requireCapability('canAccessSpot'));
 router.use('/crypto/futures', requireCapability('canAccessFutures'));

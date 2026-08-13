@@ -2,6 +2,7 @@ import type { ScannerTimeframe } from '@/lib/signal-scanner';
 import type { FrontendScannerMarket } from '@/lib/signal-scanner-url';
 
 export type UnifiedScannerStrategyMode = 'scalping' | 'swing' | 'position';
+export type AiChartStrategyMode = 'SCALPING' | 'SWING' | 'MID_LONG';
 
 export interface ScannerUiProfile {
   market: FrontendScannerMarket;
@@ -37,6 +38,12 @@ const PROFILE_MAP: Record<FrontendScannerMarket, Record<UnifiedScannerStrategyMo
   },
 };
 
+const AI_CHART_STRATEGY_MODE: Readonly<Record<UnifiedScannerStrategyMode, AiChartStrategyMode>> = Object.freeze({
+  scalping: 'SCALPING',
+  swing: 'SWING',
+  position: 'MID_LONG',
+});
+
 export function getScannerUiProfile(market: FrontendScannerMarket, strategyMode: UnifiedScannerStrategyMode): ScannerUiProfile {
   const profile = PROFILE_MAP[market][strategyMode];
   return {
@@ -47,6 +54,10 @@ export function getScannerUiProfile(market: FrontendScannerMarket, strategyMode:
     indicators: [...profile.indicators],
     profileVersion: profile.profileVersion,
   };
+}
+
+export function toAiChartStrategyMode(strategyMode: UnifiedScannerStrategyMode): AiChartStrategyMode {
+  return AI_CHART_STRATEGY_MODE[strategyMode];
 }
 
 export const SCANNER_STRATEGY_OPTIONS: readonly { value: UnifiedScannerStrategyMode; label: string; description: string }[] = Object.freeze([
