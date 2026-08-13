@@ -31,6 +31,7 @@ import {
 } from '../services/scanner-access-control.service';
 import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
 import { deliverScannerTelegramAlerts } from '../services/scanner-telegram-delivery.service';
+import { withScannerOutcome } from '../services/scanner-signal.types';
 
 export const STOCK_SCANNER_ROUTE_DEADLINE_MS = 10_000;
 
@@ -108,6 +109,7 @@ function responseError(res: Response, error: unknown) {
       cards: [],
       alerts: [],
       message: '조건검색 데이터 공급자 오류이며 정상적인 결과 0건이 아닙니다.',
+      outcome: 'PROVIDER_FAILURE',
       orderSubmitted: false,
       exchangeRequestSent: false,
     });
@@ -259,7 +261,7 @@ export function createBoundedMarketScanRouter(
       const result = await Promise.race([scanPromise, routeDeadline]);
       if (controller.signal.aborted || res.writableEnded) return;
       const canonicalResult = withScannerCanonicalActions(result);
-      const visibleResult = filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined);
+      const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
       void deliverScannerTelegramAlerts(visibleResult.alerts);
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({
@@ -270,7 +272,7 @@ export function createBoundedMarketScanRouter(
       });
     } catch (error) {
       if (routeDeadlineExceeded && error instanceof ScanRouteDeadlineError && !res.writableEnded) {
-        const fallback = routeDeadlineResponse({ market, timeframe, cursor, deadlineMs: routeDeadlineMs });
+        const fallback = withScannerOutcome(routeDeadlineResponse({ market, timeframe, cursor, deadlineMs: routeDeadlineMs }));
         res.setHeader('X-Scanner-Request-Id', fallback.requestId);
         return res.json({ ...fallback, strategy: strategyMode, partial: true, elapsedMs: routeDeadlineMs });
       }
@@ -288,3 +290,4 @@ export function createBoundedMarketScanRouter(
 }
 
 export default createBoundedMarketScanRouter();
+

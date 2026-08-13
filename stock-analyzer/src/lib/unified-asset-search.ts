@@ -4,6 +4,7 @@ import { resolveAssetDetailPath, type CanonicalAssetIdentity } from '@/lib/asset
 export type UnifiedAssetFilter = 'all' | 'stock' | 'coin';
 export type UnifiedMarketFilter = 'KR' | 'US' | 'spot' | 'futures';
 export type UnifiedSearchState = 'FULL' | 'PARTIAL' | 'DEGRADED' | 'EMPTY' | 'ERROR';
+export type UnifiedSearchOutcomeCode = 'RESULTS_AVAILABLE' | 'NO_MATCH' | 'PROVIDER_UNAVAILABLE' | 'DATA_UNAVAILABLE';
 
 export interface UnifiedAssetSuggestion {
   id: string;
@@ -56,6 +57,16 @@ export interface UnifiedSearchWatchlistPreference {
 }
 
 export { prioritizeUnifiedAssetSuggestions } from './unified-asset-search-priority';
+
+export function deriveUnifiedSearchOutcome(response: UnifiedAssetSuggestResponse): UnifiedSearchOutcomeCode {
+  if (!response.ok || response.state === 'ERROR') return 'DATA_UNAVAILABLE';
+  if (response.results.length > 0) return 'RESULTS_AVAILABLE';
+  if (response.partial || response.stale || response.state === 'PARTIAL' || response.state === 'DEGRADED'
+    || response.providers.some((provider) => provider.status === 'error')) {
+    return 'PROVIDER_UNAVAILABLE';
+  }
+  return 'NO_MATCH';
+}
 
 export async function fetchUnifiedAssetSuggestions(input: {
   q: string;
@@ -121,3 +132,4 @@ export function unifiedSuggestionIdentity(item: UnifiedAssetSuggestion, backPath
 export function unifiedAssetDetailPath(item: UnifiedAssetSuggestion, backPath = '/search') {
   return resolveAssetDetailPath(unifiedSuggestionIdentity(item, backPath));
 }
+

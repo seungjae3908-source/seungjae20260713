@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useAssetMode } from '@/lib/asset-mode';
+import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import {
   selectionQuery,
   useAnalysisSelection,
@@ -9,11 +10,13 @@ import {
 } from '@/lib/analysis-selection';
 import {
   fetchSignalScanner,
+  deriveScannerDisplayOutcome,
   signalScannerDetailPath,
   SignalScannerRequestError,
   type ScannerAlertCandidate,
   type ScannerResponse,
   type ScannerSignalCard,
+  type ScannerOutcomeCode,
   type SignalScannerRequest,
 } from '@/lib/signal-scanner';
 import {
@@ -66,11 +69,6 @@ function formatNumber(value: number | null | undefined, maximumFractionDigits = 
   return value.toLocaleString('ko-KR', { maximumFractionDigits });
 }
 
-function formatPercent(value: number | null | undefined, digits = 1): string {
-  if (value == null || !Number.isFinite(value)) return '미확인';
-  return `${value.toFixed(digits)}%`;
-}
-
 function actionLabel(card: ScannerSignalCard): string {
   if (card.signalGrade === 'B') return 'WATCH · 관찰';
   if (card.action === 'BUY') return 'BUY · 매수 검토';
@@ -99,6 +97,115 @@ function defaultEmbeddedTimeframe(strategy: UnifiedScannerStrategyMode): SignalS
   return strategy === 'scalping' ? '5m' : '1D';
 }
 
+const OUTCOME_COPY: Record<ScannerOutcomeCode, { title: string; description: string }> = {
+  CANDIDATES_AVAILABLE: { title: 'CANDIDATES_AVAILABLE', description: '검증 후보를 표시했습니다.' },
+  VALID_ZERO_SIGNAL: { title: 'VALID_ZERO_SIGNAL', description: '공급자 데이터와 분석은 정상이며 현재 조건에 맞는 신호만 없습니다.' },
+  UNIVERSE_EMPTY: { title: 'UNIVERSE_EMPTY', description: '선택 시장의 스캔 대상 유니버스가 비어 있습니다.' },
+  PROVIDER_FAILURE: { title: 'PROVIDER_FAILURE', description: '시장데이터 공급 실패이며 정상적인 신호 0건이 아닙니다.' },
+  SYMBOL_MAPPING_FAILURE: { title: 'SYMBOL_MAPPING_FAILURE', description: '공급자 심볼을 표준 자산 코드로 연결하지 못했습니다.' },
+  REQUEST_TIMEOUT: { title: 'REQUEST_TIMEOUT', description: '요청 제한시간 안에 검증을 완료하지 못했습니다.' },
+  DATA_QUALITY_REJECT: { title: 'DATA_QUALITY_REJECT', description: '응답은 받았지만 데이터 품질 기준을 통과하지 못했습니다.' },
+  FILTER_TOO_STRICT: { title: 'FILTER_TOO_STRICT', description: '데이터는 정상이지만 현재 Risk·전략 필터가 모든 후보를 제외했습니다.' },
+  FRONTEND_RENDER_FAILURE: { title: 'FRONTEND_RENDER_FAILURE', description: 'API 후보가 있으나 화면에서 안전하게 표시할 수 없습니다.' },
+};
+
+function formatObservedAt(value: string | null | undefined): string {
+  if (!value || !Number.isFinite(Date.parse(value))) return '미확인';
+  return new Date(value).toLocaleString('ko-KR');
+}
+
+function SignalDetailPanel({
+  card,
+  selection,
+  showOrderPreparation,
+  onClose,
+  onOpenAsset,
+  onAiChart,
+  onOrderPreparation,
+}: {
+  card: ScannerSignalCard;
+  selection: AnalysisSelection;
+  showOrderPreparation: boolean;
+  onClose?: () => void;
+  onOpenAsset: () => void;
+  onAiChart: () => void;
+  onOrderPreparation: () => void;
+}) {
+  const matchedEvidence = card.evidence.filter((item) => item.status === 'matched');
+  const why = matchedEvidence.flatMap((item) => item.reasons).filter(Boolean).slice(0, 8);
+  const missing = [...new Set([...card.unverified, ...(card.aiValidation?.missingData ?? [])])];
+  const risks = [...new Set([...card.warnings, ...(card.aiValidation?.risks ?? [])])];
+
+  return (
+    <section data-testid="signal-detail" aria-label="Signal Detail" className="min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-xl">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-black text-primary">Signal Detail</p>
+          <h2 className="mt-1 break-words text-lg font-black">{card.name} · {card.symbol}</h2>
+          <p className="mt-1 text-xs font-bold text-muted-foreground">{card.market} · {card.exchange ?? '거래소 미확인'} · {card.assetType}</p>
+        </div>
+        {onClose ? <button type="button" onClick={onClose} aria-label="Signal Detail 닫기" className="min-h-11 shrink-0 rounded-xl border border-card-border px-3 text-xs font-black">닫기</button> : null}
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">현재가</p><p className="mt-1 break-words text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)} {card.currency}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Signal Score</p><p className="mt-1 text-sm font-black">{card.score}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Confidence</p><p className="mt-1 text-sm font-black">{card.confidence}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Risk</p><p className="mt-1 text-sm font-black">{card.riskScore ?? '미확인'} · {card.riskLevel}</p></div>
+      </div>
+
+      <section aria-label="이 신호인 이유" className="mt-3 rounded-2xl border border-primary/25 bg-primary/5 p-3">
+        <h3 className="text-xs font-black">왜 이 신호인가</h3>
+        {why.length > 0
+          ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
+          : <p className="mt-2 text-xs text-muted-foreground">검증된 이유 설명이 없습니다. 근거가 없는 설명은 만들지 않습니다.</p>}
+      </section>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">일치 근거</h3><div className="mt-2 flex flex-wrap gap-1">{card.matched.length ? card.matched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-positive/10 px-2 py-1 text-[10px] text-positive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
+        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">불일치 조건</h3><div className="mt-2 flex flex-wrap gap-1">{card.notMatched.length ? card.notMatched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-destructive/10 px-2 py-1 text-[10px] text-destructive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
+        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">누락·미검증</h3><div className="mt-2 flex flex-wrap gap-1">{missing.length ? missing.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
+      </div>
+
+      <section className="mt-3 rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
+        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">PricePlan · 서버 계산값만 표시</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">NO SYNTHETIC PRICE</span></div>
+        <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">목표1</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[0])}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">목표2</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[1])}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">R:R</p><p className="text-xs font-black">{card.pricePlan.riskReward == null ? '미확인' : card.pricePlan.riskReward.toFixed(2)}</p></div>
+        </div>
+      </section>
+
+      <section className="mt-3 rounded-2xl border border-card-border p-3">
+        <h3 className="text-xs font-black">데이터 근거·Freshness</h3>
+        <p className="mt-2 break-words text-[11px] leading-5 text-muted-foreground">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
+        <p className="mt-1 break-words text-[11px] leading-5 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
+        <p className="mt-1 text-[11px] text-muted-foreground">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)} · {card.dataState}</p>
+        {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
+      </section>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI Chart</button>
+        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">Order Preparation</button>
+        <button type="button" onClick={onOpenAsset} className="col-span-2 min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">기존 자산 상세 열기</button>
+      </div>
+      <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
+
+      {showOrderPreparation ? (
+        <div data-testid="order-preparation" className="mt-4 border-t border-card-border pt-4">
+          <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
+            <h3 className="text-xs font-black">Order Preparation · 실행 아님</h3>
+            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
+          </div>
+          <ScannerApprovalComposer selection={selection} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export default function SignalScannerPage({ embedded = false }: { embedded?: boolean }) {
   const [, navigate] = useLocation();
   const assetMode = useAssetMode();
@@ -114,6 +221,9 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const [refreshToken, setRefreshToken] = useState(0);
   const [status, setStatus] = useState<RequestStatus>('loading');
   const [data, setData] = useState<ScannerResponse | null>(null);
+  const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [showOrderPreparation, setShowOrderPreparation] = useState(false);
   const dataRef = useRef<ScannerResponse | null>(null);
   dataRef.current = data;
   const [errorMessage, setErrorMessage] = useState('');
@@ -147,9 +257,17 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const normalizedCards = useMemo(() => {
     if (!data?.cards) return [];
     const map = new Map<string, ScannerSignalCard>();
-    for (const card of data.cards) if (!map.has(card.symbol)) map.set(card.symbol, card);
+    for (const card of data.cards) {
+      if (!card?.signalId || !card.symbol || !card.name) continue;
+      if (!map.has(card.symbol)) map.set(card.symbol, card);
+    }
     return Array.from(map.values());
   }, [data?.cards]);
+  const selectedCard = useMemo(
+    () => normalizedCards.find((card) => card.signalId === selectedSignalId) ?? null,
+    [normalizedCards, selectedSignalId],
+  );
+  const outcome = data ? deriveScannerDisplayOutcome(data, normalizedCards.length) : null;
 
   useEffect(() => {
     setCursor(0);
@@ -162,7 +280,20 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     }
   }, [view]);
 
-  useEffect(() => { lastGeneratedAt.current = null; }, [requestKey]);
+  useEffect(() => {
+    lastGeneratedAt.current = null;
+    setSelectedSignalId(null);
+    setDetailOpen(false);
+    setShowOrderPreparation(false);
+  }, [requestKey]);
+
+  useEffect(() => {
+    if (selectedSignalId && !normalizedCards.some((card) => card.signalId === selectedSignalId)) {
+      setSelectedSignalId(null);
+      setDetailOpen(false);
+      setShowOrderPreparation(false);
+    }
+  }, [normalizedCards, selectedSignalId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -221,8 +352,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     if (embedded) setEmbeddedTimeframe(defaultEmbeddedTimeframe(next));
   };
 
-  const openInAiChart = (card: ScannerSignalCard) => {
-    const selection: AnalysisSelection = {
+  const selectionFor = (card: ScannerSignalCard): AnalysisSelection => ({
       assetType: card.assetClass,
       market: analysisMarket(card),
       symbol: card.symbol,
@@ -239,7 +369,17 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       matchedSignals: card.matched,
       reasons: card.evidence.filter((item) => item.status === 'matched').flatMap((item) => item.reasons).slice(0, 20),
       selectedAt: new Date().toISOString(),
-    };
+  });
+
+  const selectSignal = (card: ScannerSignalCard) => {
+    setSelectedSignalId(card.signalId);
+    setShowOrderPreparation(false);
+    setDetailOpen(true);
+    analysisSelection.select(selectionFor(card));
+  };
+
+  const openInAiChart = (card: ScannerSignalCard) => {
+    const selection = selectionFor(card);
     analysisSelection.select(selection);
     if (!embedded) {
       const params = new URLSearchParams(selectionQuery(selection));
@@ -250,15 +390,23 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     }
   };
 
+  const openOrderPreparation = (card: ScannerSignalCard) => {
+    const selection = selectionFor(card);
+    analysisSelection.select(selection);
+    setSelectedSignalId(card.signalId);
+    setShowOrderPreparation(true);
+    setDetailOpen(true);
+  };
+
   return (
-    <main className={`min-h-0 bg-background ${embedded ? 'h-full overflow-y-auto' : 'min-h-screen pb-24'}`}>
+    <main className={`h-full min-h-0 overflow-y-auto overscroll-contain bg-background ${embedded ? '' : 'pb-24'}`}>
       <div className="mx-auto w-full max-w-6xl space-y-4 p-3 sm:p-5">
         <header className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-xs font-semibold text-primary">공개 시장데이터 전용 · 자동 전략 Profile</p>
               <h1 className="mt-1 text-xl font-black">AI 신호검색기</h1>
-              <p className="mt-1 max-w-3xl break-keep text-xs leading-relaxed text-muted-foreground">
+              <p className="mt-1 hidden max-w-3xl break-keep text-xs leading-relaxed text-muted-foreground sm:block">
                 시장과 투자 스타일만 선택하면 시간봉·기술지표·패턴·변동성·거래량·추세·시장국면·리스크 조건을 내부 엔진이 자동 조합합니다. 계좌·주문·취소 API는 호출하지 않습니다.
               </p>
             </div>
@@ -273,7 +421,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             <button key={item.value} type="button" aria-pressed={view === item.value} onClick={() => { setCursor(0); setView(item.value); }}
               className={`min-h-14 rounded-2xl border px-3 py-2 text-left ${view === item.value ? 'border-primary bg-primary/10' : 'border-card-border bg-card'}`}>
               <span className="block break-keep text-sm font-black">{item.label}</span>
-              <span className="block break-keep text-[11px] text-muted-foreground">{item.description}</span>
+              <span className="hidden break-keep text-[11px] text-muted-foreground sm:block">{item.description}</span>
             </button>
           ))}
         </section>
@@ -296,7 +444,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             </div>
             <span className="rounded-full border border-card-border px-3 py-1 text-[11px] font-bold">{profile.profileVersion}</span>
           </div>
-          <p className="mt-2 break-keep text-[11px] text-muted-foreground">기술지표 직접 선택은 기본 화면에 노출하지 않습니다. 상세 근거는 결과 카드에서 확인할 수 있습니다.</p>
+          <p className="mt-2 hidden break-keep text-[11px] text-muted-foreground sm:block">기술지표 직접 선택은 기본 화면에 노출하지 않습니다. 상세 근거는 결과 카드에서 확인할 수 있습니다.</p>
           {embedded && (
             <label className="mt-3 block space-y-1 text-xs font-bold">
               시간봉
@@ -323,7 +471,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             <section data-testid={status === 'partial' ? 'scanner-partial' : undefined} className={`rounded-3xl border p-4 ${status === 'partial' ? 'border-amber-500/40 bg-amber-500/10' : 'border-card-border bg-card'}`}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div><p className="text-sm font-black">{data.message}</p><p className="mt-1 text-xs text-muted-foreground">{strategyLabel(strategy)} · {data.timeframe} · {new Date(data.generatedAt).toLocaleString('ko-KR')}</p></div>
-                <span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{data.dataState}</span>
+                <div className="flex flex-wrap justify-end gap-1"><span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{data.dataState}</span>{outcome ? <span data-testid="scanner-outcome" className="rounded-full border border-card-border px-3 py-1 text-[10px] font-black">{outcome}</span> : null}</div>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                 <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">스캔</p><p className="text-sm font-black">{data.execution.requestedCount}</p></div>
@@ -349,7 +497,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                 <h2 className="font-black">승인 대기 알림</h2>
                 <p className="mt-1 text-xs text-muted-foreground">상세 정보만 열며 주문을 실행하지 않습니다.</p>
                 <div className="mt-3 space-y-2">{data.alerts.map((alert) => (
-                  <button key={alert.idempotencyKey} type="button" onClick={() => { const card = normalizedCards.find((item) => item.signalId === alert.signalId); if (card) navigate(signalScannerDetailPath(card)); }} className="min-h-11 w-full rounded-xl border border-primary/30 bg-card px-3 py-2 text-left text-sm">
+                  <button key={alert.idempotencyKey} type="button" onClick={() => { const card = normalizedCards.find((item) => item.signalId === alert.signalId); if (card) selectSignal(card); }} className="min-h-11 w-full rounded-xl border border-primary/30 bg-card px-3 py-2 text-left text-sm">
                     <span className="font-black">{alertTitle(alert)}</span>
                   </button>
                 ))}</div>
@@ -357,63 +505,48 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             )}
 
             {normalizedCards.length === 0 ? (
-              <section className="rounded-3xl border border-card-border bg-card p-8 text-center"><p className="font-black">현재 조건에서 표시할 검증 후보가 없습니다.</p></section>
+              <section data-testid="scanner-zero-outcome" className="rounded-3xl border border-card-border bg-card p-6 text-center">
+                <p className="text-sm font-black">{outcome ? OUTCOME_COPY[outcome].title : 'VALID_ZERO_SIGNAL'}</p>
+                <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">{outcome ? OUTCOME_COPY[outcome].description : '현재 조건에서 표시할 검증 후보가 없습니다.'}</p>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] sm:grid-cols-4">
+                  <span className="rounded-xl bg-background p-2">유니버스 {data.universe.totalCount}</span>
+                  <span className="rounded-xl bg-background p-2">완료 {data.execution.completedCount}</span>
+                  <span className="rounded-xl bg-background p-2">품질제외 {data.execution.insufficientDataCount ?? 0}</span>
+                  <span className="rounded-xl bg-background p-2">필터제외 {data.execution.filteredByStrategyCount ?? 0}</span>
+                </div>
+              </section>
             ) : (
-              <section className="grid gap-3 xl:grid-cols-2">
-                {normalizedCards.map((card) => (
-                  <article key={card.signalId} className="min-w-0 rounded-3xl border border-card-border bg-card p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <button type="button" aria-label={`${card.name} ${card.symbol} · ${card.market} · ${card.assetType}`} onClick={() => navigate(signalScannerDetailPath(card))} className="min-h-11 min-w-0 text-left">
-                        <p className="truncate font-black">{card.candidateRanking?.rank ? `${card.candidateRanking.rank}위 · ` : ''}{card.name}</p>
-                        <p className="truncate text-xs text-muted-foreground">{card.symbol} · {card.market}</p>
-                      </button>
-                      <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">{card.changePercent == null ? '변동 미확인' : `${card.changePercent >= 0 ? '+' : ''}${card.changePercent.toFixed(2)}%`}</p></div>
+              <section className={embedded ? 'space-y-3' : 'grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(420px,1.1fr)]'}>
+                <div data-testid="scanner-master-list" className="min-w-0 space-y-2">
+                  {normalizedCards.map((card) => (
+                    <article key={card.signalId} className={`min-w-0 rounded-2xl border bg-card p-3 ${selectedSignalId === card.signalId ? 'border-primary ring-1 ring-primary/20' : 'border-card-border'}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <button type="button" aria-label={`${card.name} ${card.symbol} · ${card.market} · ${card.assetType}`} onClick={() => selectSignal(card)} className="min-h-11 min-w-0 flex-1 text-left">
+                          <p className="truncate font-black">{card.candidateRanking?.rank ? `${card.candidateRanking.rank}위 · ` : ''}{card.name}</p>
+                          <p className="truncate text-xs text-muted-foreground">{card.symbol} · {card.market} · {actionLabel(card)}</p>
+                        </button>
+                        <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">Score {card.score} · Risk {card.riskScore ?? '미확인'}</p></div>
+                      </div>
+                      <div className="mt-2 flex min-w-0 flex-wrap gap-1">{card.matched.slice(0, 3).map((item) => <span key={item} className="max-w-full truncate rounded-lg bg-background px-2 py-1 text-[10px]">{item}</span>)}{card.unverified.length ? <span className="rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">미검증 {card.unverified.length}</span> : null}</div>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <button type="button" aria-label={`${card.name} AI 차트`} onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary px-2 text-xs font-black text-primary-foreground">AI Chart</button>
+                        <button type="button" aria-label={`${card.name} 주문 준비`} onClick={() => openOrderPreparation(card)} className="min-h-11 rounded-xl border border-primary/40 px-2 text-xs font-black">Order Preparation</button>
+                      </div>
+                    </article>
+                  ))}
+                  {embedded && selectedCard ? (
+                    <div className="hidden pt-2 lg:block">
+                      <SignalDetailPanel card={selectedCard} selection={selectionFor(selectedCard)} showOrderPreparation={showOrderPreparation} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} onOrderPreparation={() => openOrderPreparation(selectedCard)} />
                     </div>
-
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-                      <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">방향</p><p className="text-sm font-black">{actionLabel(card)}</p></div>
-                      <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">신호점수</p><p className="text-sm font-black">{card.score}</p></div>
-                      <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">표시 Confidence</p><p className="text-sm font-black">{card.confidence}</p></div>
-                      <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Risk</p><p className="text-sm font-black">{card.riskScore ?? '미확인'}</p></div>
+                  ) : null}
+                </div>
+                {!embedded ? (
+                  <aside data-testid="scanner-desktop-detail" className="hidden min-w-0 lg:block">
+                    <div className="sticky top-3">
+                      {selectedCard ? <SignalDetailPanel card={selectedCard} selection={selectionFor(selectedCard)} showOrderPreparation={showOrderPreparation} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} onOrderPreparation={() => openOrderPreparation(selectedCard)} /> : <section className="rounded-3xl border border-dashed border-card-border bg-card p-8 text-center"><p className="font-black">Signal Detail</p><p className="mt-2 text-xs text-muted-foreground">왼쪽 후보를 선택하면 근거·누락·PricePlan·Risk와 안전 액션을 표시합니다.</p></section>}
                     </div>
-
-                    <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5" data-testid="scanner-price-plan">
-                      <div className="rounded-xl border border-card-border p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
-                      <div className="rounded-xl border border-card-border p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
-                      <div className="rounded-xl border border-card-border p-2"><p className="text-[10px] text-muted-foreground">목표1</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[0])}</p></div>
-                      <div className="rounded-xl border border-card-border p-2"><p className="text-[10px] text-muted-foreground">목표2</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[1])}</p></div>
-                      <div className="rounded-xl border border-card-border p-2"><p className="text-[10px] text-muted-foreground">손익비</p><p className="text-xs font-black">{card.pricePlan.riskReward == null ? '미확인' : card.pricePlan.riskReward.toFixed(2)}</p></div>
-                    </div>
-
-                    <section aria-label="신호 성과" className="mt-3 rounded-2xl border border-card-border bg-background p-3">
-                      <div className="flex items-center justify-between gap-2"><p className="text-xs font-black">과거 유사조건 성과</p><span className="rounded-full border border-card-border px-2 py-1 text-[10px]">NOT_ENOUGH_DATA</span></div>
-                      <p className="mt-2 break-keep text-xs text-muted-foreground">통계 산출을 위한 데이터가 부족합니다. 신호점수와 과거 적중률은 같은 의미로 표시하지 않습니다.</p>
-                    </section>
-
-                    {card.backtestQuality?.status === 'verified' && (
-                      <section className="mt-3 rounded-2xl border border-card-border p-3">
-                        <p className="text-xs font-black">Historical Backtest 연구 근거</p>
-                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-                          <span>표본 {card.backtestQuality.tradeCount ?? '미확인'}</span>
-                          <span>OOS {formatPercent(card.backtestQuality.oosWinRate)}</span>
-                          <span>기대값 {formatPercent(card.backtestQuality.expectancyPercent)}</span>
-                          <span>PF {formatNumber(card.backtestQuality.profitFactor)}</span>
-                        </div>
-                      </section>
-                    )}
-
-                    <details className="mt-3 rounded-2xl border border-card-border p-3">
-                      <summary className="cursor-pointer text-xs font-black">엔진 근거 상세</summary>
-                      <div className="mt-2 flex flex-wrap gap-1">{card.matched.slice(0, 12).map((item) => <span key={item} className="rounded-lg bg-background px-2 py-1 text-[10px]">{item}</span>)}</div>
-                      {card.aiValidation && <p className="mt-2 text-[11px] text-muted-foreground">AI Validator: {card.aiValidation.status} · Risk Engine을 우회하지 않습니다.</p>}
-                    </details>
-
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <button type="button" onClick={() => navigate(signalScannerDetailPath(card))} className="min-h-11 rounded-xl border border-card-border text-sm font-bold">상세 보기</button>
-                      <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary text-sm font-bold text-primary-foreground">AI 차트</button>
-                    </div>
-                  </article>
-                ))}
+                  </aside>
+                ) : null}
               </section>
             )}
 
@@ -425,6 +558,15 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
           </>
         )}
       </div>
+      {selectedCard && detailOpen ? (
+        <div className="lg:hidden">
+          <button type="button" aria-label="Signal Detail 닫기" onClick={() => { setDetailOpen(false); setShowOrderPreparation(false); }} className="fixed inset-0 z-[60] bg-black/45" />
+          <div role="dialog" aria-modal="true" aria-label="Signal Detail" data-testid="scanner-mobile-sheet" className="fixed inset-x-0 bottom-0 z-[70] max-h-[calc(100dvh-0.75rem)] overflow-y-auto overscroll-contain rounded-t-3xl bg-background p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] shadow-2xl">
+            <SignalDetailPanel card={selectedCard} selection={selectionFor(selectedCard)} showOrderPreparation={showOrderPreparation} onClose={() => { setDetailOpen(false); setShowOrderPreparation(false); }} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} onOrderPreparation={() => openOrderPreparation(selectedCard)} />
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
+

@@ -35,6 +35,7 @@ import {
   CryptoWilliamsAtrScannerOverlayService,
   type CryptoWilliamsOverlayRunner,
 } from '../services/crypto-williams-atr-scanner-overlay.service';
+import { withScannerOutcome } from '../services/scanner-signal.types';
 
 export type CryptoScannerRunner = {
   scan(request: CryptoSignalScanRequest): ReturnType<typeof CryptoSignalScannerService.scan>;
@@ -104,7 +105,7 @@ function routeError(res: Response, error: unknown) {
     return res.status(502).json({
       ok: false, error: error.code, cards: [], alerts: [],
       failures: [{ symbol: '*', reason: 'provider_error', message: error.message }],
-      dataState: 'unavailable', orderSubmitted: false, exchangeRequestSent: false,
+      dataState: 'unavailable', outcome: 'PROVIDER_FAILURE', orderSubmitted: false, exchangeRequestSent: false,
     });
   }
   return res.status(500).json({
@@ -241,7 +242,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
                 : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${bGradeCount}개`,
       };
       const canonicalResult = withScannerCanonicalActions(rankedResult);
-      const visibleResult = filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined);
+      const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
       void deliverScannerTelegramAlerts(visibleResult.alerts);
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Scanner-Request-Id', result.requestId);
@@ -262,3 +263,4 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
 }
 
 export default createCryptoSignalScanRouter();
+
