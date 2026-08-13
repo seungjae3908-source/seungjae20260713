@@ -33,6 +33,10 @@ function averageChange(group: SectorPopularGroup): number | null {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+function activeInterval(milliseconds: number): number | false {
+  return typeof document !== 'undefined' && document.hidden ? false : milliseconds;
+}
+
 function StateMessage({ children, error = false }: { children: React.ReactNode; error?: boolean }) {
   return (
     <div
@@ -79,19 +83,31 @@ export default function MarketOverviewPage() {
   const summary = useQuery({
     queryKey: ['market-overview-summary'],
     queryFn: () => api.summary(),
-    refetchInterval: 30_000,
+    staleTime: 15_000,
+    refetchInterval: () => activeInterval(30_000),
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: 1,
   });
 
   const sectors = useQuery({
     queryKey: ['market-overview-sectors', market],
     queryFn: () => api.sectorPopular(market),
-    refetchInterval: 30_000,
+    staleTime: 15_000,
+    refetchInterval: () => activeInterval(30_000),
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: 1,
   });
 
   const briefing = useQuery({
     queryKey: ['market-overview-briefing'],
     queryFn: () => api.briefing(),
-    refetchInterval: 60_000,
+    staleTime: 30_000,
+    refetchInterval: () => activeInterval(60_000),
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: 1,
   });
 
   const indices = useMemo(() => {
