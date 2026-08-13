@@ -1,7 +1,7 @@
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerSignalDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
 export type ScannerTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
-export type ScannerStrategyMode = 'scalping' | 'swing';
+export type ScannerStrategyMode = 'scalping' | 'swing' | 'position';
 export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
   | 'CANDIDATE'
@@ -31,6 +31,17 @@ export type ScannerDataState =
   | 'insufficient'
   | 'unavailable'
   | 'untrusted';
+
+export type ScannerOutcomeCode =
+  | 'CANDIDATES_AVAILABLE'
+  | 'VALID_ZERO_SIGNAL'
+  | 'UNIVERSE_EMPTY'
+  | 'PROVIDER_FAILURE'
+  | 'SYMBOL_MAPPING_FAILURE'
+  | 'REQUEST_TIMEOUT'
+  | 'DATA_QUALITY_REJECT'
+  | 'FILTER_TOO_STRICT'
+  | 'FRONTEND_RENDER_FAILURE';
 
 export interface ScannerEvidence {
   key: string;
@@ -228,7 +239,7 @@ export interface ScannerExecutionSummary {
 
 export interface ScannerFailure {
   symbol: string;
-  reason: 'provider_error' | 'timeout' | 'invalid_data';
+  reason: 'provider_error' | 'timeout' | 'invalid_data' | 'symbol_mapping';
   message: string;
 }
 
@@ -252,8 +263,49 @@ export interface ScannerResponse {
     listingStatusCoverage: 'listed-or-unknown';
   };
   dataState: ScannerDataState;
+  outcome?: ScannerOutcomeCode;
   message: string;
   generatedAt: string;
   orderSubmitted: false;
   exchangeRequestSent: false;
 }
+
+type ScannerOutcomeInput = Pick<ScannerResponse, 'cards' | 'failures' | 'execution' | 'universe' | 'dataState'>;
+
+export function deriveScannerOutcome(input: ScannerOutcomeInput): ScannerOutcomeCode {
+  if (input.cards.length > 0) return 'CANDIDATES_AVAILABLE';
+
+  const mappingFailure = input.failures.some((failure) =>
+    failure.reason === 'symbol_mapping'
+    || /(?:symbol|ticker).*(?:map|normaliz|mismatch|invalid)|(?:map|normaliz).*(?:symbol|ticker)/i.test(failure.message));
+  if (mappingFailure) return 'SYMBOL_MAPPING_FAILURE';
+
+  if (input.execution.timedOut || input.execution.timeoutCount > 0) return 'REQUEST_TIMEOUT';
+
+  const providerFailure = input.execution.providerErrorCount > 0
+    || input.failures.some((failure) => failure.reason === 'provider_error')
+    || input.dataState === 'unavailable';
+  if (input.universe.totalCount === 0) {
+    if (providerFailure || input.universe.source === 'unavailable') return 'PROVIDER_FAILURE';
+    return 'UNIVERSE_EMPTY';
+  }
+
+  const dataSuccessCount = input.execution.dataSuccessCount
+    ?? Math.max(0, input.execution.completedCount - (input.execution.insufficientDataCount ?? 0));
+  if (providerFailure && dataSuccessCount === 0) return 'PROVIDER_FAILURE';
+
+  const dataRejectCount = input.execution.insufficientDataCount
+    ?? input.failures.filter((failure) => failure.reason === 'invalid_data').length;
+  if (dataRejectCount > 0 && dataSuccessCount === 0) return 'DATA_QUALITY_REJECT';
+
+  const filterRejectCount = (input.execution.hardFilterRejectedCount ?? 0)
+    + (input.execution.filteredByStrategyCount ?? 0);
+  if (filterRejectCount > 0) return 'FILTER_TOO_STRICT';
+
+  return 'VALID_ZERO_SIGNAL';
+}
+
+export function withScannerOutcome<T extends ScannerOutcomeInput>(response: T): T & { outcome: ScannerOutcomeCode } {
+  return { ...response, outcome: deriveScannerOutcome(response) };
+}
+

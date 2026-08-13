@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 const directSignalUrl = '/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m&strategyMode=SCALPING&signalId=scanner-signal-42';
+const positionSignalUrl = '/ai-chart?assetType=stock&market=US&symbol=AAPL&ticker=AAPL&name=Apple&timeframe=1D&strategyMode=MID_LONG&signalId=position-signal-9';
 const futuresUrl = '/ai-chart?assetType=coin_futures&market=BITGET&symbol=BTCUSDT&ticker=BTCUSDT&name=BTCUSDT&timeframe=15m&strategyMode=SWING&signalId=futures-signal-7';
 
 function candleRows(timeframe: string) {
@@ -35,7 +36,7 @@ async function installReadOnlyChartMocks(context: BrowserContext) {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          ticker: '005930',
+          ticker: url.pathname.includes('AAPL') ? 'AAPL' : '005930',
           timeframe,
           provider: `ai-chart-v2-continuation-${timeframe}`,
           fetchedAt: new Date().toISOString(),
@@ -123,8 +124,10 @@ test('Signal Scanner emits the canonical AI Chart signalId and strategyMode deep
   const source = readFileSync(new URL('../src/pages/signal-scanner.tsx', import.meta.url), 'utf8');
   expect(source).toContain("params.set('signalId', card.signalId)");
   expect(source).toContain('const chartStrategyMode = card.strategyMode ?? strategy');
-  expect(source).toContain("params.set('strategyMode', chartStrategyMode === 'scalping' ? 'SCALPING' : 'SWING')");
+  expect(source).toContain("params.set('strategyMode', toAiChartStrategyMode(chartStrategyMode))");
   expect(source).toContain('navigate(`/ai-chart?${params.toString()}`)');
+  expect(source).toContain("if (card.assetClass === 'coin_spot') return 'UPBIT'");
+  expect(source).toContain("if (card.assetClass === 'coin_futures') return 'BITGET'");
 });
 
 test('AI Chart consumes selected scanner signalId and strategyMode without inventing execution authority', async ({ page, context }) => {
@@ -141,6 +144,19 @@ test('AI Chart consumes selected scanner signalId and strategyMode without inven
   await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('ENTRY 3');
   await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('UNAVAILABLE');
   await expect(page.getByTestId('futures-public-context')).toHaveCount(0);
+  expect(privateTradingRequests).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+});
+
+test('AI Chart restores the canonical MID_LONG mode used by Scanner position strategy', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const privateTradingRequests = await installReadOnlyChartMocks(context);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+
+  await page.goto(positionSignalUrl);
+  await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toContainText('position-signal-9');
+  await expect(page.getByTestId('strategy-mode-MID_LONG')).toHaveAttribute('aria-pressed', 'true');
   expect(privateTradingRequests).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });
