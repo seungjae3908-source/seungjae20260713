@@ -86,7 +86,7 @@ test('promotion candidate requires every research, paper, shadow, outcome and co
   const result = new StrategyPromotionService({ sourceSha: SHA, now: () => NOW, evidence }).get(STRATEGY);
   assert.equal(result?.promotionState, 'PROMOTION_CANDIDATE');
   assert.equal(result?.promotionEligible, true);
-  assert.equal(result?.drift.status, 'INSUFFICIENT_SAMPLE');
+  assert.equal(result?.drift.status, 'MEASURED');
 });
 
 test('critical drift suspends recommendation without granting live authority', () => {
