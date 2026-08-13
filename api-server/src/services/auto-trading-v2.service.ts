@@ -532,7 +532,7 @@ export function evaluateAutoTradingV2Signal(
   const pullbackEligible = snapshot.expansionRvolPercent >= threshold
     && snapshot.volumeContraction
     && snapshot.pullbackDistancePercent <= AUTO_TRADING_V2_CONFIG.pullbackToMa20MaxPercent
-    && (direction === 'LONG' ? snapshot.continuationLong : direction === 'SHORT_ONLY' ? snapshot.continuationShort : false);
+    && (direction === 'LONG' ? snapshot.continuationLong : direction === 'SHORT' ? snapshot.continuationShort : false);
   const flashCrash = {
     spreadAbnormal: snapshot.spreadPercent > AUTO_TRADING_V2_CONFIG.maxSpreadPercent,
     volatilityAbnormal: snapshot.atrPercent > AUTO_TRADING_V2_CONFIG.maxAtrPercent
