@@ -14,6 +14,7 @@ import {
 import { useLocation } from 'wouter';
 import { AiChartV2IntelligencePanel } from '@/components/ai-chart-v2-intelligence-panel';
 import { BottomNav } from '@/components/bottom-nav';
+import { FuturesPublicContextPanel } from '@/components/futures-public-context-panel';
 import { UnifiedAnalysisChart } from '@/components/unified-analysis-chart';
 import {
   defaultStrategyMode,
@@ -522,6 +523,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             mode={strategyMode}
             onModeChange={updateStrategyModeAndTimeframe}
           />
+          <FuturesPublicContextPanel selection={selection} />
 
           <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
             <div className="flex items-center gap-2">
