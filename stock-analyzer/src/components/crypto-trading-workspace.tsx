@@ -1099,7 +1099,7 @@ export function CryptoTradingWorkspace({
     queryKey: ["crypto-futures-tickers-live"],
     queryFn: () => apiGet<AnyObj>("/crypto/futures/tickers"),
     refetchInterval: 8_000,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
   });
   const tickers = useMemo(() => normalizeTickers(tickersQuery.data), [tickersQuery.data]);
   const tickerMap = useMemo(() => new Map(tickers.map((row) => [row.symbol, row])), [tickers]);
@@ -1119,7 +1119,7 @@ export function CryptoTradingWorkspace({
     queryFn: () => fetchCandles(symbol, timeframe, 300),
     enabled: Boolean(symbol),
     refetchInterval: 10_000,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
   });
   const candles = candlesQuery.data ?? [];
   const currentAnalysis = useMemo(
@@ -1166,7 +1166,7 @@ export function CryptoTradingWorkspace({
     },
     enabled: scannerSymbols.length > 0,
     refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
   });
   const scannerRows = scannerQuery.data ?? [];
   const visibleScannerRows = useMemo(
@@ -1191,7 +1191,7 @@ export function CryptoTradingWorkspace({
     queryKey: ["crypto-futures-account"],
     queryFn: () => getProtected<AnyObj>("/api/crypto/futures/account"),
     refetchInterval: 10_000,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     retry: 1,
