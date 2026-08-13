@@ -3,19 +3,16 @@ import path from 'node:path';
 import { expect, test, type Page, type Request } from '@playwright/test';
 import { installProductionReadOnlyPolicy } from './support/production-readonly-policy';
 
-const required = (name: string): string => {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`${name} is required`);
-  return value;
-};
-
-const baseUrl = required('PRODUCTION_BASE_URL').replace(/\/$/, '');
-const productionOrigin = new URL(baseUrl).origin;
-const expectedSha = required('PRODUCTION_EXPECTED_SHA').toLowerCase();
-const qaLogin = required('PRODUCTION_QA_LOGIN');
-const qaPassword = required('PRODUCTION_QA_PASSWORD');
+const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').trim().replace(/\/$/, '');
+const expectedSha = String(process.env.PRODUCTION_EXPECTED_SHA ?? '').trim().toLowerCase();
+const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '').trim();
+const qaPassword = String(process.env.PRODUCTION_QA_PASSWORD ?? '').trim();
+const diagnosticEnabled = process.env.PRODUCTION_READONLY_E2E === 'true'
+  && /^https?:\/\//.test(baseUrl)
+  && /^[0-9a-f]{40}$/.test(expectedSha)
+  && Boolean(qaLogin && qaPassword);
+const productionOrigin = diagnosticEnabled ? new URL(baseUrl).origin : 'https://production-diagnostics.disabled.invalid';
 const artifactDir = path.resolve('production-trade-storage-artifacts');
-fs.mkdirSync(artifactDir, { recursive: true });
 
 type AppApiEvidence = {
   endpoint: string;
@@ -126,6 +123,9 @@ async function probeSupabase(
 }
 
 test('Production trade storage diagnostics remain authenticated and read-only', async ({ page }) => {
+  test.skip(!diagnosticEnabled, 'Dedicated Production read-only diagnostics only.');
+  fs.mkdirSync(artifactDir, { recursive: true });
+
   const blocked: Array<{ method: string; url: string }> = [];
   const auth: CapturedSupabaseAuth = { origin: null, apiKey: null, accessToken: null };
   const appApi: AppApiEvidence[] = [];
