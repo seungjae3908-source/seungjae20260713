@@ -100,3 +100,34 @@ export function buildPortfolioMentorV2Context(input: {
     },
   });
 }
+
+export function buildPortfolioMentorSummaryContext(input: {
+  portfolio: unknown;
+  conversation?: readonly PortfolioMentorMessage[];
+  userPrompt?: string | null;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const conversation = boundPortfolioMentorConversation(input.conversation ?? [], {
+    maxMessages: 16,
+    maxMessageChars: 1_500,
+    maxTotalChars: 12_000,
+  });
+  const prompt = input.userPrompt == null ? null : trimMessage(input.userPrompt, 2_000) || null;
+  return sanitizeAdvisorContext({
+    mode: 'portfolio-mentor-v2',
+    generatedAt: now.toISOString(),
+    portfolio: input.portfolio,
+    conversation,
+    userPrompt: prompt,
+    limitations: ['NO_FABRICATED_FUTURE_RETURN', 'NO_ORDER_AUTHORITY', 'PORTFOLIO_CONTEXT_MINIMIZED'],
+    safety: {
+      simulatedOnly: true,
+      liveTrading: false,
+      liveOrderAllowed: false,
+      privateTradingRequestAllowed: false,
+      orderAuthority: 'none',
+      externalAiCalled: false,
+    },
+  });
+}
