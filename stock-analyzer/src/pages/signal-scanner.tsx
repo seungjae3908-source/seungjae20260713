@@ -663,7 +663,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                       ) : (
                         <div className="mt-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs">
                           <p className="break-keep font-black">OOS / Walk-forward 검증 데이터 없음</p>
-                          <p className="mt-1 break-keep text-xs text-muted-foreground">실제 검증 수치를 생성하지 않습니다. 검증 데이터가 연결되기 전에는 S/A로 승격하지 않습니다.</p>
+                          <p className="mt-1 break-keep text-muted-foreground">실제 검증 수치를 생성하지 않습니다. 검증 데이터가 연결되기 전에는 S/A로 승격하지 않습니다.</p>
                         </div>
                       )}
 
