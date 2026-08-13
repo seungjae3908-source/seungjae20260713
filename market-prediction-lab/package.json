@@ -33,7 +33,7 @@
     "research:funding": "node scripts/run-derivatives-suite.js",
     "research:structure": "node scripts/run-market-structure-suite.js",
     "backtest:v1": "node scripts/run-v1-backtest.js",
-    "backtest:v1:history": "node scripts/run-long-history-v1.js",
+    "backtest:v1:history": "node scripts/run-long-history-v1-with-retry.js",
     "backtest:v3:history": "node scripts/run-v3-history.js",
     "backtest:v4:history": "node scripts/run-v4-history.js",
     "backtest:v5:history": "node scripts/run-v5-history.js",
