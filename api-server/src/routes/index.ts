@@ -21,6 +21,7 @@ import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
+import autoTradingV2Router from './auto-trading-v2';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
 import unifiedSearchRouter from './unified-search';
@@ -126,6 +127,9 @@ router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canPlaceOrders'));
+// V2 is mounted before the legacy automation router so the safe PAPER/SHADOW
+// surface owns its namespace. LIVE remains server-locked inside this router.
+router.use('/trade-automation/v2', autoTradingV2Router);
 router.use('/trade-automation', tradeAutomationRouter);
 router.use('/user-integrations', requireCapability('canPlaceOrders'));
 router.use('/user-integrations', userBrokerTelegramRouter);
