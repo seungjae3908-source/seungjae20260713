@@ -6,6 +6,7 @@ import {
   CHAMPION_EVIDENCE_REQUIREMENTS,
   buildAutonomousQuantLabContract,
 } from "../src/autonomous-quant-lab-contract.js";
+import { STRATEGY_REGISTRY_GROUPS } from "../src/strategy-registry.js";
 
 test("canonical Quant Lab includes every market and SCALPING SWING MID_LONG", () => {
   const contract = buildAutonomousQuantLabContract();
@@ -15,6 +16,19 @@ test("canonical Quant Lab includes every market and SCALPING SWING MID_LONG", ()
     for (const strategyType of contract.strategyTypes) {
       assert.ok(AUTONOMOUS_QUANT_LAB_GROUPS.some((group) => group.market === market && group.strategyType === strategyType));
     }
+  }
+});
+
+test("legacy strategy registry preserves venue naming while covering all 15 lanes", () => {
+  assert.equal(STRATEGY_REGISTRY_GROUPS.length, 15);
+  for (const market of ["KR_STOCK", "US_STOCK", "CRYPTO_SPOT"]) {
+    for (const strategyType of ["SCALPING", "SWING", "MID_LONG"]) {
+      assert.ok(STRATEGY_REGISTRY_GROUPS.includes(`${market}_${strategyType}`));
+    }
+  }
+  for (const strategyType of ["SCALPING", "SWING", "MID_LONG"]) {
+    assert.ok(STRATEGY_REGISTRY_GROUPS.includes(`BINANCE_FUTURES_${strategyType}_LONG`));
+    assert.ok(STRATEGY_REGISTRY_GROUPS.includes(`BINANCE_FUTURES_${strategyType}_SHORT`));
   }
 });
 
