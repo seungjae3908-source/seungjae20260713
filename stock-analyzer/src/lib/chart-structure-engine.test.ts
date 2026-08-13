@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import './chart-candle-patterns.test';
+import './chart-risk-zones.test';
 import type { NormalizedChartCandle } from './chart-candle-normalizer';
 import {
   analyzeChartStructure,
