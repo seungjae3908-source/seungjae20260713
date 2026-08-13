@@ -98,6 +98,13 @@ jobs:
         working-directory: market-prediction-lab
         run: node scripts/run-futures-pnl-suite.js docs/futures-pnl-suite-result.json
 
+      - name: Research fresh-asset futures trend volatility and funding regime gate
+        id: futures_regime_suite
+        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success' && steps.futures_pnl_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-futures-regime-execution-suite.js docs/futures-regime-execution-suite-result.json
+
       - name: Collect Upbit BTC and ETH spot cross-symbol candidates
         id: upbit_spot_suite
         if: steps.validate.outcome == 'success'
@@ -192,6 +199,7 @@ jobs:
             market-prediction-lab/docs/market-suite-result.json
             market-prediction-lab/docs/futures-generalization-suite-result.json
             market-prediction-lab/docs/futures-pnl-suite-result.json
+            market-prediction-lab/docs/futures-regime-execution-suite-result.json
             market-prediction-lab/docs/upbit-spot-suite-result.json
             market-prediction-lab/docs/upbit-spot-pnl-suite-result.json
             market-prediction-lab/docs/upbit-spot-alternative-suite-result.json
@@ -216,5 +224,5 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
 
       - name: Fail workflow when technical validation failed
-        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.futures_generalization_suite.outcome != 'success' || steps.futures_pnl_suite.outcome != 'success' || steps.upbit_spot_suite.outcome != 'success' || steps.upbit_spot_pnl_suite.outcome != 'success' || steps.upbit_spot_alternative_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.stock_pnl_suite.outcome != 'success' || steps.stock_generalization_suite.outcome != 'success' || steps.us_pullback_suite.outcome != 'success' || steps.stock_regime_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
+        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.futures_generalization_suite.outcome != 'success' || steps.futures_pnl_suite.outcome != 'success' || steps.futures_regime_suite.outcome != 'success' || steps.upbit_spot_suite.outcome != 'success' || steps.upbit_spot_pnl_suite.outcome != 'success' || steps.upbit_spot_alternative_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.stock_pnl_suite.outcome != 'success' || steps.stock_generalization_suite.outcome != 'success' || steps.us_pullback_suite.outcome != 'success' || steps.stock_regime_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
         run: exit 1

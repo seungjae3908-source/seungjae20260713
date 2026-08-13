@@ -9,12 +9,14 @@ on:
       - market-prediction-lab/src/us-stock-forward-candidate.js
       - market-prediction-lab/src/us-stock-forward-validation.js
       - market-prediction-lab/src/us-stock-forward-pnl-shadow.js
+      - market-prediction-lab/src/us-stock-research-promotion-gate.js
       - market-prediction-lab/src/stock-universe-bias-audit.js
       - market-prediction-lab/src/yahoo-stock-history.js
       - market-prediction-lab/src/stock-regime-router-optimizer.js
       - market-prediction-lab/scripts/run-us-stock-forward-cycle.js
       - market-prediction-lab/tests/us-stock-forward-validation.test.js
       - market-prediction-lab/tests/us-stock-forward-pnl-shadow.test.js
+      - market-prediction-lab/tests/us-stock-research-promotion-gate.test.js
       - market-prediction-lab/tests/stock-universe-bias-audit.test.js
   schedule:
     - cron: "30 2 * * 2-6"
@@ -75,12 +77,12 @@ jobs:
           CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/prediction-lab-us-stock-forward.yml/runs?status=success&per_page=50" --jq ".workflow_runs[] | select(.id != ($CURRENT_RUN_ID|tonumber)) | .id" | head -n 1)"
+          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/prediction-lab-us-stock-forward.yml/runs?status=success&per_page=50" --jq "[.workflow_runs[] | select(.id != ($CURRENT_RUN_ID|tonumber)) | .id][0] // empty")"
           if [ -z "$run_id" ]; then
             echo "run_id=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\" and .expired == false) | .id" | head -n 1)"
+          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" --jq "[.artifacts[] | select(.name == \"$ARTIFACT_NAME\" and .expired == false) | .id][0] // empty")"
           if [ -z "$artifact_id" ]; then
             echo "run_id=" >> "$GITHUB_OUTPUT"
             exit 0
@@ -130,9 +132,9 @@ jobs:
         working-directory: market-prediction-lab
         run: npm run validate
 
-      - name: Verify US stock forward bias and PnL guards
+      - name: Verify US stock forward bias PnL and promotion guards
         working-directory: market-prediction-lab
-        run: node --test tests/us-stock-forward-validation.test.js tests/us-stock-forward-pnl-shadow.test.js tests/stock-universe-bias-audit.test.js
+        run: node --test tests/us-stock-forward-validation.test.js tests/us-stock-forward-pnl-shadow.test.js tests/us-stock-research-promotion-gate.test.js tests/stock-universe-bias-audit.test.js
 
       - name: Advance forward-only public-data state
         working-directory: market-prediction-lab
@@ -149,7 +151,7 @@ jobs:
           const fs=require('fs'); const crypto=require('crypto');
           const root='market-prediction-lab/docs';
           const digest=(p)=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
-          const manifest={schemaVersion:2,researchCodeSha:process.env.RESEARCH_SHA,predecessorRunId:process.env.PREDECESSOR_RUN_ID||null,predecessorArtifactId:process.env.PREDECESSOR_ARTIFACT_ID||null,stateSha256:digest(root+'/us-stock-forward-state.json'),summarySha256:digest(root+'/us-stock-forward-summary.json'),pnlStateSha256:digest(root+'/us-stock-forward-pnl-state.json'),pnlSummarySha256:digest(root+'/us-stock-forward-pnl-summary.json'),branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,createdAt:new Date().toISOString()};
+          const manifest={schemaVersion:3,researchCodeSha:process.env.RESEARCH_SHA,predecessorRunId:process.env.PREDECESSOR_RUN_ID||null,predecessorArtifactId:process.env.PREDECESSOR_ARTIFACT_ID||null,stateSha256:digest(root+'/us-stock-forward-state.json'),summarySha256:digest(root+'/us-stock-forward-summary.json'),pnlStateSha256:digest(root+'/us-stock-forward-pnl-state.json'),pnlSummarySha256:digest(root+'/us-stock-forward-pnl-summary.json'),promotionSha256:digest(root+'/us-stock-research-promotion.json'),branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,createdAt:new Date().toISOString()};
           fs.writeFileSync(root+'/us-stock-forward-provenance.json',JSON.stringify(manifest,null,2)+'\n');
           NODE
 
@@ -162,6 +164,7 @@ jobs:
             market-prediction-lab/docs/us-stock-forward-summary.json
             market-prediction-lab/docs/us-stock-forward-pnl-state.json
             market-prediction-lab/docs/us-stock-forward-pnl-summary.json
+            market-prediction-lab/docs/us-stock-research-promotion.json
             market-prediction-lab/docs/us-stock-forward-provenance.json
           if-no-files-found: error
           retention-days: 90

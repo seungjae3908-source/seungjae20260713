@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { getScannerUiProfile, SCANNER_STRATEGY_OPTIONS } from './signal-scanner-profile';
+import {
+  getScannerUiProfile,
+  SCANNER_STRATEGY_OPTIONS,
+  toAiChartStrategyMode,
+} from './signal-scanner-profile';
 
 describe('unified scanner UI profile', () => {
   it('exposes only the three investment styles', () => {
@@ -16,5 +20,11 @@ describe('unified scanner UI profile', () => {
       assert.ok(profile.conditions.length > 0);
       assert.ok(profile.indicators.length > 0);
     }
+  });
+
+  it('maps scanner horizons to the canonical AI Chart strategy modes', () => {
+    assert.equal(toAiChartStrategyMode('scalping'), 'SCALPING');
+    assert.equal(toAiChartStrategyMode('swing'), 'SWING');
+    assert.equal(toAiChartStrategyMode('position'), 'MID_LONG');
   });
 });

@@ -19,6 +19,7 @@ import {
 import {
   getScannerUiProfile,
   SCANNER_STRATEGY_OPTIONS,
+  toAiChartStrategyMode,
   type UnifiedScannerStrategyMode,
 } from '@/lib/signal-scanner-profile';
 import type { FrontendScannerMarket } from '@/lib/signal-scanner-url';
@@ -216,7 +217,13 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       selectedAt: new Date().toISOString(),
     };
     analysisSelection.select(selection);
-    if (!embedded) navigate(`/ai-chart?${selectionQuery(selection)}`);
+    if (!embedded) {
+      const params = new URLSearchParams(selectionQuery(selection));
+      params.set('signalId', card.signalId);
+      const chartStrategyMode = card.strategyMode ?? strategy;
+      params.set('strategyMode', toAiChartStrategyMode(chartStrategyMode));
+      navigate(`/ai-chart?${params.toString()}`);
+    }
   };
 
   return (
