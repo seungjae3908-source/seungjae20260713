@@ -8,7 +8,7 @@ import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-quer
 import { startUserTelegramDeliveryWorker } from './features/user-broker-telegram/user-broker-telegram.worker';
 import { startPriceAlertMonitor } from './services/notification.service';
 import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
-import { startAutoTradingV2Worker } from './services/auto-trading-v2-worker.service';
+import { autoTradingV2WorkerHealth, startAutoTradingV2Worker } from './services/auto-trading-v2-worker.service';
 import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,11 +22,16 @@ const port = Number(
     8080,
 );
 
+// Official deploy scripts use these isolated canary ports. Canary validation
+// must never advance Paper/Shadow state before the validated SHA is promoted.
+const autoTradingV2CanaryRuntime = process.env.NODE_ENV === 'production' && (port === 18081 || port === 18082);
+
 const deployMarkerPath = process.env.DEPLOY_MARKER_PATH?.trim()
   || path.resolve(__dirname, '../../.deploy/current-sha');
 
 function healthPayload(route: '/health' | '/api/health') {
   const identity = readRuntimeDeploymentIdentity(process.env.DEPLOY_SHA, deployMarkerPath);
+  const worker = autoTradingV2WorkerHealth();
   return {
     ok: true,
     service: 'api-server',
@@ -36,6 +41,25 @@ function healthPayload(route: '/health' | '/api/health') {
     deployMarkerSha: identity.deployMarkerSha,
     identityMatch: identity.identityMatch,
     identityStatus: identity.identityStatus,
+    autoTradingV2: {
+      workerRunning: worker.workerRunning,
+      leaseHeld: worker.leaseHeld,
+      bootState: worker.bootState,
+      lastTickAt: worker.lastTickAt,
+      nextTickAt: worker.nextTickAt,
+      lastSuccessfulCycleAt: worker.lastSuccessfulCycleAt,
+      lastErrorAt: worker.lastErrorAt,
+      mode: worker.mode,
+      paperEnabled: worker.paperEnabled,
+      shadowEnabled: worker.shadowEnabled,
+      liveEnabled: false,
+      reconciliationState: worker.reconciliationState,
+      killSwitchState: worker.killSwitchState,
+      marketDataFreshness: worker.marketDataFreshness,
+      realOrderCount: 0,
+      realCancelCount: 0,
+      privateTradingApiCount: 0,
+    },
     time: new Date().toISOString(),
   };
 }
@@ -220,7 +244,11 @@ app.listen(
     startPriceAlertMonitor();
     startTradeRecoveryWorker();
     startUserTelegramDeliveryWorker();
-    startAutoTradingV2Worker();
+    if (autoTradingV2CanaryRuntime) {
+      console.log(`[auto-trading-v2-worker] canary-disabled port=${port} LIVE_TRADING=false`);
+    } else {
+      startAutoTradingV2Worker();
+    }
 
     if (frontendDist) {
       console.log(
