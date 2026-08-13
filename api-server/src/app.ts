@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import router from "./routes";
+import tossReadonlyRouter from './routes/toss-readonly';
 import { logger } from "./lib/logger";
 import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { apiRateLimit, securityHeaders } from './middleware/security';
@@ -43,12 +44,16 @@ app.use(securityHeaders);
 app.use(cors({ origin(origin, callback) {
   if (!origin || process.env.NODE_ENV !== 'production' || allowedOrigins.includes(origin)) return callback(null, true);
   return callback(new Error('CORS origin rejected'));
-}, methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auto-Trade-Key'] }));
+}, methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auto-Trade-Key', 'X-Toss-Readonly-Intent'] }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/api', apiRateLimit);
 
 app.use('/api/paper-journal', rejectPaperJournalQueryIdentity);
+// Deliberately isolated from the canonical account-connections router, which
+// remains Release V4.2 metadata-only. This route owns only Toss credential
+// storage and explicit read-only account snapshots; it has its own auth guard.
+app.use('/api/account-connections/toss-readonly', tossReadonlyRouter);
 
 app.get("/api", (_req, res) => {
   res.json({
