@@ -435,10 +435,17 @@ async function expectPrimaryStockInfoUsable(page: Page) {
   await expect(navigation).toBeVisible();
   await navigation.getByRole('button', { name: '종목', exact: true }).click();
   const assetMenu = page.getByRole('menu', { name: '종목 메뉴' });
-  await expect(assetMenu.getByRole('menuitem', { name: '지수·시황', exact: true })).toBeVisible();
+  await expect(assetMenu.getByRole('menuitem', { name: '지수·시황', exact: true })).toHaveCount(0);
   await expect(assetMenu.getByRole('menuitem', { name: 'AI 추천', exact: true })).toBeVisible();
   await expect(assetMenu.getByRole('menuitem', { name: '가격 알림', exact: true })).toBeVisible();
   await expect(assetMenu.getByRole('menuitem', { name: '시장 탐색', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await navigation.getByRole('button', { name: '정보', exact: true }).click();
+  const informationMenu = page.getByRole('menu', { name: '정보 메뉴' });
+  await expect(informationMenu.getByRole('menuitem', { name: 'AI 상담', exact: true })).toBeVisible();
+  await expect(informationMenu.getByRole('menuitem', { name: '포트폴리오', exact: true })).toBeVisible();
+  await expect(informationMenu.getByRole('menuitem', { name: '투자 공부', exact: true })).toBeVisible();
+  await expect(informationMenu.getByRole('menuitem', { name: '시장 브리핑', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await navigation.getByRole('button', { name: '기술', exact: true }).click();
   await expect(page.getByRole('menu', { name: '기술 메뉴' })).toBeVisible();
@@ -480,7 +487,7 @@ test('portfolio exposes the existing unified journal as a primary tab', async ({
 
   await page.reload();
   await expect(page.getByTestId('portfolio-journal')).toBeVisible();
-  await expect(page.getByRole('button', { name: '매매일지' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: '매매일지' }).first()).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('slow News stays secondary while stock-info primary quote and navigation remain usable', async ({ page }) => {
