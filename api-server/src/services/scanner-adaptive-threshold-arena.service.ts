@@ -1,5 +1,14 @@
 export type AdaptiveThresholdGrade = 'S' | 'A' | 'B' | 'WATCH';
 
+export type AdaptiveThresholdResearchStage =
+  | 'DEVELOPMENT'
+  | 'CALIBRATION'
+  | 'OOS'
+  | 'PURGED_WALK_FORWARD'
+  | 'FINAL_HOLDOUT'
+  | 'PAPER'
+  | 'SHADOW';
+
 export interface MinimalHardGate {
   dataQualityPassed: boolean;
   liquidityPassed: boolean;
@@ -28,6 +37,12 @@ export interface AdaptiveThresholdObservation {
   market: string;
   strategy: string;
   regime: string;
+  /**
+   * Threshold selection may only consume DEVELOPMENT/CALIBRATION observations.
+   * OOS, walk-forward, final holdout, Paper, and Shadow are evaluation-only and
+   * must never feed back into threshold selection.
+   */
+  stage: AdaptiveThresholdResearchStage;
   softScore: number;
   hardGate: MinimalHardGate;
   outcome?: CounterfactualOutcome;
@@ -55,7 +70,12 @@ export interface ThresholdComparisonRow {
 
 export interface RegimeThresholdSelection {
   regime: string;
-  status: 'SELECTED' | 'INSUFFICIENT_SAMPLE' | 'NO_VALID_THRESHOLD' | 'NO_HARD_GATE_CANDIDATES';
+  status:
+    | 'SELECTED'
+    | 'INSUFFICIENT_SAMPLE'
+    | 'NO_VALID_THRESHOLD'
+    | 'NO_HARD_GATE_CANDIDATES'
+    | 'INVALID_SELECTION_STAGE';
   selectedThreshold: number | null;
   selected: ThresholdComparisonRow | null;
   comparisons: ThresholdComparisonRow[];
@@ -82,6 +102,10 @@ export interface AdaptiveThresholdDisplayCandidate extends AdaptiveThresholdObse
 }
 
 const DEFAULT_INITIAL_CAPITAL_KRW = 1_000_000;
+const THRESHOLD_SELECTION_STAGES = new Set<AdaptiveThresholdResearchStage>([
+  'DEVELOPMENT',
+  'CALIBRATION',
+]);
 
 function finite(value: number): boolean {
   return Number.isFinite(value);
@@ -94,6 +118,10 @@ function round(value: number, digits = 4): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+export function isThresholdSelectionStage(stage: AdaptiveThresholdResearchStage): boolean {
+  return THRESHOLD_SELECTION_STAGES.has(stage);
 }
 
 export function passesMinimalHardGate(observation: AdaptiveThresholdObservation): boolean {
@@ -220,6 +248,17 @@ export function researchRegimeAdaptiveThresholds(args: {
 
   const byRegime = regimes.map((regime): RegimeThresholdSelection => {
     const observations = args.observations.filter((item) => item.regime === regime);
+    if (observations.some((item) => !isThresholdSelectionStage(item.stage))) {
+      return {
+        regime,
+        status: 'INVALID_SELECTION_STAGE',
+        selectedThreshold: null,
+        selected: null,
+        comparisons: [],
+        paretoThresholds: [],
+      };
+    }
+
     const hardGatePassCount = observations.filter(passesMinimalHardGate).length;
     const comparisons = compareAdaptiveThresholds({
       observations,
