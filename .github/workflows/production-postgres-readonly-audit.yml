@@ -84,8 +84,6 @@ jobs:
       SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
-      AUDIT_ARTIFACT: ${{ runner.temp }}/production-postgres-watchlist-audit.json
-      AUDIT_STDERR: ${{ runner.temp }}/production-postgres-watchlist-audit.stderr
     steps:
       - name: Checkout diagnostic tooling
         uses: actions/checkout@v4
@@ -94,6 +92,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: Initialize runner-local audit paths
+        run: |
+          set -Eeuo pipefail
+          printf 'AUDIT_ARTIFACT=%s\n' "$RUNNER_TEMP/production-postgres-watchlist-audit.json" >> "$GITHUB_ENV"
+          printf 'AUDIT_STDERR=%s\n' "$RUNNER_TEMP/production-postgres-watchlist-audit.stderr" >> "$GITHUB_ENV"
 
       - name: Verify static read-only safety contract
         run: node ops/verify-production-postgres-readonly-audit.mjs --static

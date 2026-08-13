@@ -149,6 +149,14 @@ function verifyStaticContract() {
   assert(secretRefs.includes('PROD_SSH_USER'), 'PROD_SSH_USER reference missing.');
   assert(secretRefs.includes('PROD_SSH_PRIVATE_KEY'), 'PROD_SSH_PRIVATE_KEY reference missing.');
 
+  const auditJobEnv = workflow.match(/\n  audit:\n[\s\S]*?\n    env:\n([\s\S]*?)\n    steps:/);
+  assert(auditJobEnv, 'audit job env block missing.');
+  assert(!auditJobEnv[1].includes('${{ runner.'), 'runner context is forbidden in jobs.audit.env.');
+  assert(workflow.includes('Initialize runner-local audit paths'), 'runner-local audit path initialization missing.');
+  assert(workflow.includes('$RUNNER_TEMP/production-postgres-watchlist-audit.json'), 'RUNNER_TEMP artifact path missing.');
+  assert(workflow.includes('$RUNNER_TEMP/production-postgres-watchlist-audit.stderr'), 'RUNNER_TEMP stderr path missing.');
+  assert(workflow.includes('>> "$GITHUB_ENV"'), 'runner-local paths must be exported through GITHUB_ENV.');
+
   assert(!/\b(?:DATABASE_URL|SUPABASE_DB_URL|SUPABASE_DATABASE_URL|POSTGRES_URL|POSTGRESQL_URL)\b/.test(workflow), 'workflow must not consume a DB secret.');
   assert(!workflow.includes('set -x'), 'workflow must not enable shell tracing.');
   assert(workflow.includes('remote stderr is intentionally not printed'), 'SSH stderr suppression contract missing.');
