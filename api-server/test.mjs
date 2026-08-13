@@ -73,6 +73,8 @@ const groups = {
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(root, 'src/providers/toss.test.ts'),
     path.join(root, 'src/services/telegram-notification.service.test.ts'),
+    path.join(root, 'src/modules/portfolio/portfolio-core.test.ts'),
+    path.join(root, 'src/modules/portfolio/canonical-journal-adapter.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/analysis-selection.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/asset-navigation.test.ts'),
@@ -103,6 +105,7 @@ const groups = {
     path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
     path.join(root, 'src/routes/account-connections.contract.test.ts'),
+    path.join(root, 'src/routes/stock-orderbook.test.ts'),
     path.join(root, 'src/services/market-information.service.test.ts'),
     path.join(root, 'src/services/public-market-http.test.ts'),
     path.join(root, 'src/lib/deployment-identity.test.ts'),
@@ -130,11 +133,13 @@ const groups = {
     path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
     path.join(root, 'src/routes/paper-journal-query-identity.smoke.test.ts'),
     path.join(root, 'src/routes/unified-trade-journal.route.test.ts'),
+    path.join(root, 'src/routes/portfolio-advisor-canonical.route.test.ts'),
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
     path.join(root, 'src/routes/signal-scanner-auth.smoke.test.ts'),
     path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
     path.join(root, 'src/routes/market-information.smoke.test.ts'),
     path.join(root, 'src/routes/unified-search.smoke.test.ts'),
+    path.join(root, 'src/routes/stock-orderbook.smoke.test.ts'),
   ],
 };
 
@@ -170,6 +175,9 @@ try {
     outputFiles.push(outputFile);
   }
 
+  // Phase 9 includes real deadline/concurrency contracts. Run its bundled test files
+  // serially so host-level event-loop contention cannot consume a scanner deadline
+  // before the test body starts. Test coverage and every assertion remain unchanged.
   const testArguments = mode === 'phase9'
     ? ['--test', '--test-concurrency=1', ...outputFiles]
     : ['--test', ...outputFiles];
