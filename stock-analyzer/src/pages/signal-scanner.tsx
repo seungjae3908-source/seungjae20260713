@@ -529,7 +529,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                       </div>
                       <div className="mt-2 flex min-w-0 flex-wrap gap-1">{card.matched.slice(0, 3).map((item) => <span key={item} className="max-w-full truncate rounded-lg bg-background px-2 py-1 text-[10px]">{item}</span>)}{card.unverified.length ? <span className="rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">미검증 {card.unverified.length}</span> : null}</div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
-                        <button type="button" aria-label={`${card.name} AI 차트`} onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary px-2 text-xs font-black text-primary-foreground">AI Chart</button>
+                        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary px-2 text-xs font-black text-primary-foreground">AI Chart</button>
                         <button type="button" aria-label={`${card.name} 주문 준비`} onClick={() => openOrderPreparation(card)} className="min-h-11 rounded-xl border border-primary/40 px-2 text-xs font-black">Order Preparation</button>
                       </div>
                     </article>
