@@ -63,7 +63,10 @@ router.post('/ai/chat', async (req: AuthenticatedRequest, res) => {
       });
       return res.json({ ok: true, ...result, mentorMode: 'portfolio', contextLatencyMs });
     }
-    return res.json({ ok: true, ...(await answerAiChat(body, fetch, controller.signal)) });
+    return res.json({
+      ok: true,
+      ...(await answerAiChat({ message: body.message, context: body.context }, fetch, controller.signal)),
+    });
   } catch (cause) {
     const error = cause instanceof AiChatError
       ? cause
