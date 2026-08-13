@@ -14,6 +14,7 @@ export const CAPITAL_LAB_MARKETS = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYP
 export type CapitalLabMarket = typeof CAPITAL_LAB_MARKETS[number];
 export type CapitalLabEvidenceStatus = 'INSUFFICIENT' | 'EARLY' | 'VALIDATING' | 'EVIDENCE_READY';
 export type CapitalLabStrategyStatus = 'INSUFFICIENT' | 'RESEARCH' | 'CANDIDATE' | 'CHAMPION_ELIGIBLE';
+export type CapitalLabPaperExecutionReadiness = 'COMPATIBLE' | 'BLOCKED_ENGINE_MARKET_CONTRACT';
 
 type LaneMetrics = {
   sampleSize: number;
@@ -37,6 +38,10 @@ export type CapitalLabLane = LaneMetrics & {
   allocationWeight: number;
   allocationKrw: number;
   activeStrategies: string[];
+  paperExecutionReadiness: CapitalLabPaperExecutionReadiness;
+  paperRiskMarket: 'stock' | 'crypto-spot' | 'crypto-futures';
+  paperExecutionAuthority: 'simulation-only' | 'none';
+  paperExecutionReason: string | null;
   warnings: string[];
 };
 
@@ -106,7 +111,7 @@ function laneMetrics(cycles: UnifiedTradeCycle[]): LaneMetrics {
     losses: negative.length,
     winRate: returns.length ? positive.length / returns.length : null,
     averageReturnPercent: returns.length ? returns.reduce((sum, value) => sum + value, 0) / returns.length : null,
-    profitFactor: losses > EPSILON ? gains / losses : gains > EPSILON ? null : null,
+    profitFactor: losses > EPSILON ? gains / losses : null,
     maximumDrawdownPercent: maximumDrawdownPercent(cycles),
     ruleViolationRate: returns.length ? ruleViolations / returns.length : null,
     preTradeContextRate: returns.length ? preTradeContext / returns.length : null,
@@ -122,6 +127,12 @@ function evidenceStatus(sampleSize: number): CapitalLabEvidenceStatus {
 
 function confidence(sampleSize: number): number {
   return clamp(sampleSize / 30, 0, 1);
+}
+
+function effectiveProfitFactor(metrics: LaneMetrics): number {
+  if (metrics.profitFactor != null) return metrics.profitFactor;
+  if (metrics.losses === 0 && metrics.wins > 0) return Number.POSITIVE_INFINITY;
+  return 0;
 }
 
 function researchScore(metrics: LaneMetrics): number {
@@ -215,12 +226,12 @@ function allocateWon(deployableKrw: number, weights: Record<CapitalLabMarket, nu
 
 function strategyStatus(metrics: LaneMetrics): CapitalLabStrategyStatus {
   if (metrics.sampleSize < 5) return 'INSUFFICIENT';
-  const positive = (metrics.averageReturnPercent ?? 0) > 0 && (metrics.profitFactor ?? 0) >= 1;
+  const positive = (metrics.averageReturnPercent ?? 0) > 0 && effectiveProfitFactor(metrics) >= 1;
   if (metrics.sampleSize < 15 || !positive) return 'RESEARCH';
   const championEvidence = metrics.sampleSize >= 30
     && metrics.paperTrades >= 10
     && metrics.shadowTrades >= 10
-    && (metrics.profitFactor ?? 0) >= 1.2
+    && effectiveProfitFactor(metrics) >= 1.2
     && (metrics.maximumDrawdownPercent ?? Number.POSITIVE_INFINITY) <= 15
     && (metrics.ruleViolationRate ?? 1) <= 0.05;
   return championEvidence ? 'CHAMPION_ELIGIBLE' : 'CANDIDATE';
@@ -253,7 +264,24 @@ function strategyLeaderboard(cycles: UnifiedTradeCycle[]): CapitalLabStrategyRow
     .sort((left, right) => right.researchScore - left.researchScore || right.sampleSize - left.sampleSize || left.strategy.localeCompare(right.strategy));
 }
 
-function laneWarnings(metrics: LaneMetrics): string[] {
+function paperExecutionContract(market: CapitalLabMarket) {
+  if (market === 'CRYPTO_FUTURES') {
+    return {
+      readiness: 'COMPATIBLE' as const,
+      riskMarket: 'crypto-futures' as const,
+      authority: 'simulation-only' as const,
+      reason: null,
+    };
+  }
+  return {
+    readiness: 'BLOCKED_ENGINE_MARKET_CONTRACT' as const,
+    riskMarket: market === 'CRYPTO_SPOT' ? 'crypto-spot' as const : 'stock' as const,
+    authority: 'none' as const,
+    reason: 'CURRENT_PAPER_ENGINE_BUILDS_RISK_INPUT_AS_CRYPTO_FUTURES',
+  };
+}
+
+function laneWarnings(metrics: LaneMetrics, market: CapitalLabMarket): string[] {
   const warnings: string[] = [];
   if (metrics.sampleSize < 5) warnings.push('INSUFFICIENT_RESEARCH_SAMPLE');
   if (metrics.paperTrades === 0) warnings.push('NO_PAPER_EVIDENCE');
@@ -261,6 +289,7 @@ function laneWarnings(metrics: LaneMetrics): string[] {
   if ((metrics.preTradeContextRate ?? 0) < 0.8 && metrics.sampleSize > 0) warnings.push('PRE_TRADE_CONTEXT_COVERAGE_LOW');
   if ((metrics.ruleViolationRate ?? 0) > 0.05) warnings.push('RULE_VIOLATION_RATE_HIGH');
   if ((metrics.maximumDrawdownPercent ?? 0) > 20) warnings.push('RESEARCH_DRAWDOWN_HIGH');
+  if (paperExecutionContract(market).readiness !== 'COMPATIBLE') warnings.push('PAPER_EXECUTION_MARKET_CONTRACT_BLOCKED');
   return warnings;
 }
 
@@ -283,6 +312,7 @@ export function buildAutonomousCapitalLab(journal: UnifiedTradeJournalResult, no
 
   const lanes: CapitalLabLane[] = CAPITAL_LAB_MARKETS.map((market) => {
     const metrics = metricsByMarket[market];
+    const execution = paperExecutionContract(market);
     return {
       market,
       ...metrics,
@@ -292,12 +322,18 @@ export function buildAutonomousCapitalLab(journal: UnifiedTradeJournalResult, no
       allocationWeight: weights[market],
       allocationKrw: allocations[market],
       activeStrategies: leaderboard.filter((row) => row.market === market).slice(0, 5).map((row) => row.strategy),
-      warnings: laneWarnings(metrics),
+      paperExecutionReadiness: execution.readiness,
+      paperRiskMarket: execution.riskMarket,
+      paperExecutionAuthority: execution.authority,
+      paperExecutionReason: execution.reason,
+      warnings: laneWarnings(metrics, market),
     };
   });
 
   const allocatedKrw = lanes.reduce((sum, lane) => sum + lane.allocationKrw, 0);
   const eligibleChampions = leaderboard.filter((row) => row.status === 'CHAMPION_ELIGIBLE');
+  const compatibleExecutionLanes = lanes.filter((lane) => lane.paperExecutionReadiness === 'COMPATIBLE').map((lane) => lane.market);
+  const blockedExecutionLanes = lanes.filter((lane) => lane.paperExecutionReadiness !== 'COMPATIBLE').map((lane) => lane.market);
 
   return {
     mode: AUTONOMOUS_CAPITAL_LAB_MODE,
@@ -320,6 +356,13 @@ export function buildAutonomousCapitalLab(journal: UnifiedTradeJournalResult, no
       openResearchTrades,
       ignoredNonResearchTrades,
       integrityIssues: journal.integrityIssues.length,
+    },
+    executionReadiness: {
+      inspectedEngineContract: 'CURRENT_PAPER_ENGINE_FUTURES_RISK_CONTRACT' as const,
+      allMarketsReady: blockedExecutionLanes.length === 0,
+      compatibleExecutionLanes,
+      blockedExecutionLanes,
+      automaticPaperExecutionAcrossAllMarkets: false as const,
     },
     lanes,
     strategyLeaderboard: leaderboard,
