@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Bot, Loader2, Send, Square, UserRound } from 'lucide-react';
+import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
@@ -28,6 +29,8 @@ type AiChatPayload = {
   message?: string;
   error?: string;
   data?: AiChatDataDisclosure;
+  mentorMode?: 'portfolio';
+  contextLatencyMs?: number;
 };
 
 function dataStatusLabel(status: AiChatDataDisclosure['status']): string {
@@ -41,12 +44,7 @@ function formatBasisTime(value: string | null): string {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString('ko-KR', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return date.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 function errorMessage(payload: AiChatPayload | null): string {
@@ -63,11 +61,14 @@ function errorMessage(payload: AiChatPayload | null): string {
 
 export default function AiChatPage() {
   const { selection } = useAnalysisSelection();
-  const [messages, setMessages] = useState<ChatMessage[]>([{ id: 'welcome', role: 'assistant', content: '공개 금융정보, 투자 용어, 앱 사용법을 질문해 주세요. AI 채팅은 주문·자동매매·계좌·서버 작업을 실행하지 않습니다.', at: new Date().toISOString() }]);
+  const [location] = useLocation();
+  const portfolioMentorMode = new URLSearchParams(location.includes('?') ? location.split('?')[1] ?? '' : window.location.search.slice(1)).get('mentor') === 'portfolio';
+  const [messages, setMessages] = useState<ChatMessage[]>([{ id: 'welcome', role: 'assistant', content: portfolioMentorMode ? 'Portfolio Mentor V2입니다. 포트폴리오의 배분·현금·집중도·상관관계·데이터 누락을 근거로 설명합니다. 주문 권한은 없으며 실제 주문을 실행하지 않습니다.' : '공개 금융정보, 투자 용어, 앱 사용법을 질문해 주세요. AI 채팅은 주문·자동매매·계좌·서버 작업을 실행하지 않습니다.', at: new Date().toISOString() }]);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [composing, setComposing] = useState(false);
+  const [contextLatencyMs, setContextLatencyMs] = useState<number | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -78,6 +79,10 @@ export default function AiChatPage() {
     const message = draft.trim();
     if (!message || busy || controllerRef.current) return;
     const userMessage: ChatMessage = { id: `user:${Date.now()}`, role: 'user', content: message, at: new Date().toISOString() };
+    const history = messages
+      .filter((item) => item.id !== 'welcome')
+      .slice(-16)
+      .map((item) => ({ role: item.role, content: item.content, createdAt: item.at }));
     setMessages((current) => [...current, userMessage]);
     setDraft('');
     setError('');
@@ -89,11 +94,17 @@ export default function AiChatPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
-        body: JSON.stringify({ message, context: selection ? { market: selection.market, symbol: selection.symbol, displayName: selection.displayName } : undefined }),
+        body: JSON.stringify({
+          message,
+          context: selection ? { market: selection.market, symbol: selection.symbol, displayName: selection.displayName } : undefined,
+          mentorMode: portfolioMentorMode ? 'portfolio' : undefined,
+          conversation: portfolioMentorMode ? history : undefined,
+        }),
       });
       const payload = await response.json().catch(() => null) as AiChatPayload | null;
       const answer = payload?.answer;
       if (!response.ok || !answer) throw new Error(errorMessage(payload));
+      setContextLatencyMs(typeof payload.contextLatencyMs === 'number' ? payload.contextLatencyMs : null);
       setMessages((current) => [...current, {
         id: `assistant:${Date.now()}`,
         role: 'assistant',
@@ -121,22 +132,23 @@ export default function AiChatPage() {
     <div className="flex h-full min-h-0 flex-col bg-background pb-[calc(5rem+env(safe-area-inset-bottom))]">
       <header className="shrink-0 border-b border-card-border px-4 py-4">
         <p className="text-[11px] font-extrabold text-primary">정보탭</p>
-        <h1 className="mt-1 text-xl font-black">AI 채팅</h1>
-        <p className="mt-1 text-xs text-muted-foreground">공개 금융정보와 학습·앱 안내 전용</p>
+        <h1 className="mt-1 text-xl font-black">{portfolioMentorMode ? 'AI 상담 · Portfolio Mentor V2' : 'AI 상담'}</h1>
+        <p className="mt-1 text-xs text-muted-foreground">{portfolioMentorMode ? '포트폴리오 최소 컨텍스트 · bounded history · orderAuthority:none' : '공개 금융정보와 학습·앱 안내 전용'}</p>
         {selection && <p className="mt-2 text-[10px] font-bold text-muted-foreground">선택 종목: {selection.displayName || selection.symbol} · {selection.market} · {selection.symbol}</p>}
+        {portfolioMentorMode && contextLatencyMs != null ? <p className="mt-1 text-[10px] font-bold text-muted-foreground">최근 Portfolio context collection: {contextLatencyMs.toFixed(1)}ms</p> : null}
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4" aria-live="polite">
         <div className="space-y-3">
-          {messages.map((message) => <article key={message.id} className={cn('flex gap-2', message.role === 'user' && 'flex-row-reverse')}>
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">{message.role === 'user' ? <UserRound className="h-4 w-4" /> : <Bot className="h-4 w-4" />}</span>
-            <div className={cn('max-w-[85%] rounded-2xl px-3 py-2.5 text-sm leading-6', message.role === 'user' ? 'bg-primary text-primary-foreground' : message.kind === 'refusal' ? 'border border-warning/30 bg-warning/5' : 'bg-card')}>
-              <p className="whitespace-pre-wrap break-words">{message.content}</p>
-              {message.role === 'assistant' && message.data && message.data.status !== 'not_requested' && <div className="mt-2 rounded-xl border border-card-border/70 bg-background/60 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground">
-                <p className="font-extrabold text-foreground/80">{dataStatusLabel(message.data.status)}{message.data.asOf ? ` · 서버 수집 기준 ${formatBasisTime(message.data.asOf)}` : ''}</p>
-                {message.data.sources.length > 0 && <p className="mt-1 break-words">출처: {message.data.sources.join(' · ')}</p>}
-                {message.data.missing.length > 0 && <p className="mt-1 break-words">부족: {message.data.missing.join(' · ')}</p>}
+          {messages.map((chatMessage) => <article key={chatMessage.id} className={cn('flex gap-2', chatMessage.role === 'user' && 'flex-row-reverse')}>
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">{chatMessage.role === 'user' ? <UserRound className="h-4 w-4" /> : <Bot className="h-4 w-4" />}</span>
+            <div className={cn('max-w-[85%] rounded-2xl px-3 py-2.5 text-sm leading-6', chatMessage.role === 'user' ? 'bg-primary text-primary-foreground' : chatMessage.kind === 'refusal' ? 'border border-warning/30 bg-warning/5' : 'bg-card')}>
+              <p className="whitespace-pre-wrap break-words">{chatMessage.content}</p>
+              {chatMessage.role === 'assistant' && chatMessage.data && chatMessage.data.status !== 'not_requested' && <div className="mt-2 rounded-xl border border-card-border/70 bg-background/60 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground">
+                <p className="font-extrabold text-foreground/80">{dataStatusLabel(chatMessage.data.status)}{chatMessage.data.asOf ? ` · 서버 수집 기준 ${formatBasisTime(chatMessage.data.asOf)}` : ''}</p>
+                {chatMessage.data.sources.length > 0 && <p className="mt-1 break-words">출처: {chatMessage.data.sources.join(' · ')}</p>}
+                {chatMessage.data.missing.length > 0 && <p className="mt-1 break-words">부족: {chatMessage.data.missing.join(' · ')}</p>}
               </div>}
-              <time className={cn('mt-1 block text-[9px]', message.role === 'user' ? 'text-primary-foreground/70' : 'text-muted-foreground')}>{new Date(message.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time>
+              <time className={cn('mt-1 block text-[9px]', chatMessage.role === 'user' ? 'text-primary-foreground/70' : 'text-muted-foreground')}>{new Date(chatMessage.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time>
             </div>
           </article>)}
           {busy && <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />답변을 준비하고 있습니다.</div>}
@@ -149,7 +161,7 @@ export default function AiChatPage() {
           <textarea value={draft} disabled={busy} rows={1} maxLength={2_000} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} placeholder="질문 입력 · Shift+Enter 줄바꿈" className="max-h-32 min-h-11 flex-1 resize-none rounded-2xl border border-card-border bg-card px-3 py-2.5 text-sm leading-5 outline-none focus:border-primary" />
           {busy ? <button type="button" aria-label="요청 취소" onClick={() => controllerRef.current?.abort()} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-destructive text-destructive"><Square className="h-4 w-4" /></button> : <button type="button" aria-label="메시지 전송" disabled={!draft.trim()} onClick={() => void send()} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-40"><Send className="h-4 w-4" /></button>}
         </div>
-        <p className="mt-2 text-[9px] leading-4 text-muted-foreground">API 키·토큰·계좌번호 등 민감정보를 입력하지 마세요. 답변은 투자 조언이 아니며, 기준시각은 거래소 체결시각이 아니라 서버가 공개 데이터를 수집한 시각입니다.</p>
+        <p className="mt-2 text-[9px] leading-4 text-muted-foreground">API 키·토큰·계좌번호 등 민감정보를 입력하지 마세요. 답변은 투자 조언이 아니며 주문 권한이 없습니다. 기준시각은 거래소 체결시각이 아니라 서버가 공개 데이터를 수집한 시각입니다.</p>
       </footer>
       <BottomNav />
     </div>
