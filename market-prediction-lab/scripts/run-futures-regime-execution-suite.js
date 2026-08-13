@@ -33,8 +33,16 @@ function serializeError(error) {
 async function loadFrozenModel() {
   const path = resolve("docs/candidate-models", `${FUTURES_REGIME_EXECUTION_CANDIDATE.modelGroup}.json`);
   const artifact = JSON.parse(await readFile(path, "utf8"));
-  if (artifact?.status !== "shadow_candidate" || !artifact?.model?.trained) throw new Error("FROZEN_15M_SHADOW_MODEL_MISSING");
-  return artifact.model;
+  if (artifact?.status !== "shadow_candidate") {
+    return Object.freeze({
+      status: "research_hold",
+      reason: "NO_FROZEN_SHADOW_CANDIDATE",
+      sourceCandidateStatus: typeof artifact?.status === "string" ? artifact.status : "unknown",
+      model: null,
+    });
+  }
+  if (artifact?.model?.trained !== true) throw new Error("INVALID_FROZEN_15M_SHADOW_MODEL");
+  return Object.freeze({ status: "ready", reason: null, sourceCandidateStatus: artifact.status, model: artifact.model });
 }
 
 async function collectDataset(client, symbol, suiteEndTime) {
@@ -107,43 +115,66 @@ const client = new BitgetPublicClient({ minIntervalMs: 170, maxRetries: 4, timeo
 let report;
 
 try {
-  const model = await loadFrozenModel();
-  const designDatasets = [];
-  const holdoutDatasets = [];
-  for (const symbol of FUTURES_REGIME_EXECUTION_CANDIDATE.designSymbols) designDatasets.push(await collectDataset(client, symbol, suiteEndTime));
-  for (const symbol of FUTURES_REGIME_EXECUTION_CANDIDATE.holdoutSymbols) holdoutDatasets.push(await collectDataset(client, symbol, suiteEndTime));
-  const result = optimizeFrozenFuturesRegimeExecution({
-    model,
-    designDatasets,
-    holdoutDatasets,
-    stressMultiplier: 1.5,
-  });
-  report = Object.freeze({
-    schemaVersion: 1,
-    status: "pass",
-    researchOnly: true,
-    market: "CRYPTO_FUTURES",
-    exchange: "BITGET",
-    candidateId: FUTURES_REGIME_EXECUTION_CANDIDATE.id,
-    candidateManifestSha256: FUTURES_REGIME_EXECUTION_CANDIDATE_SHA256,
-    result,
-    datasets: Object.freeze({
-      design: designDatasets.map((row) => row.report),
-      holdout: holdoutDatasets.map((row) => row.report),
-    }),
-    provenance: Object.freeze({
-      sourceResearchSha: FUTURES_REGIME_EXECUTION_CANDIDATE.sourceResearchSha,
-      sourceArtifactDigest: FUTURES_REGIME_EXECUTION_CANDIDATE.sourceArtifactDigest,
-      frozenModel: true,
-      frozenExecutionParameters: true,
-      priorBTCETHSOLUsedForSelection: false,
-      holdoutADADOGEUsedForSelection: false,
-      historicalFundingRequiredAtSignal: true,
-      historicalOpenInterestBackfilled: false,
-      publicDataOnly: true,
-    }),
-    safeguards: Object.freeze({ actualOrders: 0, privateAccountRequests: 0, liveExecutionAllowed: false, mainMergePerformed: false }),
-  });
+  const frozen = await loadFrozenModel();
+  if (frozen.status === "research_hold") {
+    report = Object.freeze({
+      schemaVersion: 1,
+      status: "research_hold",
+      reason: frozen.reason,
+      sourceCandidateStatus: frozen.sourceCandidateStatus,
+      researchOnly: true,
+      market: "CRYPTO_FUTURES",
+      exchange: "BITGET",
+      candidateId: FUTURES_REGIME_EXECUTION_CANDIDATE.id,
+      candidateManifestSha256: FUTURES_REGIME_EXECUTION_CANDIDATE_SHA256,
+      result: null,
+      provenance: Object.freeze({
+        sourceResearchSha: FUTURES_REGIME_EXECUTION_CANDIDATE.sourceResearchSha,
+        sourceArtifactDigest: FUTURES_REGIME_EXECUTION_CANDIDATE.sourceArtifactDigest,
+        frozenModel: false,
+        candidateFabricated: false,
+        publicDataOnly: true,
+      }),
+      safeguards: Object.freeze({ actualOrders: 0, privateAccountRequests: 0, liveExecutionAllowed: false, mainMergePerformed: false }),
+    });
+  } else {
+    const designDatasets = [];
+    const holdoutDatasets = [];
+    for (const symbol of FUTURES_REGIME_EXECUTION_CANDIDATE.designSymbols) designDatasets.push(await collectDataset(client, symbol, suiteEndTime));
+    for (const symbol of FUTURES_REGIME_EXECUTION_CANDIDATE.holdoutSymbols) holdoutDatasets.push(await collectDataset(client, symbol, suiteEndTime));
+    const result = optimizeFrozenFuturesRegimeExecution({
+      model: frozen.model,
+      designDatasets,
+      holdoutDatasets,
+      stressMultiplier: 1.5,
+    });
+    report = Object.freeze({
+      schemaVersion: 1,
+      status: "pass",
+      researchOnly: true,
+      market: "CRYPTO_FUTURES",
+      exchange: "BITGET",
+      candidateId: FUTURES_REGIME_EXECUTION_CANDIDATE.id,
+      candidateManifestSha256: FUTURES_REGIME_EXECUTION_CANDIDATE_SHA256,
+      result,
+      datasets: Object.freeze({
+        design: designDatasets.map((row) => row.report),
+        holdout: holdoutDatasets.map((row) => row.report),
+      }),
+      provenance: Object.freeze({
+        sourceResearchSha: FUTURES_REGIME_EXECUTION_CANDIDATE.sourceResearchSha,
+        sourceArtifactDigest: FUTURES_REGIME_EXECUTION_CANDIDATE.sourceArtifactDigest,
+        frozenModel: true,
+        frozenExecutionParameters: true,
+        priorBTCETHSOLUsedForSelection: false,
+        holdoutADADOGEUsedForSelection: false,
+        historicalFundingRequiredAtSignal: true,
+        historicalOpenInterestBackfilled: false,
+        publicDataOnly: true,
+      }),
+      safeguards: Object.freeze({ actualOrders: 0, privateAccountRequests: 0, liveExecutionAllowed: false, mainMergePerformed: false }),
+    });
+  }
 } catch (error) {
   report = Object.freeze({
     schemaVersion: 1,
