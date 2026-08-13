@@ -393,7 +393,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
     queryFn: ({ signal }) => fetchUnifiedChartData({ market, symbol: selection.ticker, timeframe, signal }),
     enabled: Boolean(selection.ticker),
     refetchInterval: live ? (timeframe === '1D' ? 30_000 : 8_000) : false,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     retry: (failureCount, error) => {
