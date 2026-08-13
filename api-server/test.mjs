@@ -60,6 +60,8 @@ const groups = {
     path.join(root, 'src/services/scanner-quant-strategy.service.test.ts'),
     path.join(root, 'src/services/scanner-strategy-profile.service.test.ts'),
     path.join(root, 'src/services/signal-performance-learning.service.test.ts'),
+    path.join(root, 'src/services/profit-first-signal.service.test.ts'),
+    path.join(root, 'src/services/profit-first-runtime.service.test.ts'),
     path.join(root, 'src/services/scanner-quant-hardening.service.test.ts'),
     path.join(root, 'src/services/scanner-market-profile-overlay.service.test.ts'),
     path.join(root, 'src/services/scanner-ai-provider.service.test.ts'),
