@@ -1,4 +1,6 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
@@ -24,22 +26,81 @@ import type {
 const CONFIG_ID = 'auto-trading-v2-config';
 const PREFIX = 'atv2-';
 const WORKER_INTERVAL_MS = 30_000;
+const WORKER_LEASE_MS = 90_000;
+const DEFAULT_LOCK_DIR = '/tmp/stock-app-auto-trading-v2-worker-owner';
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT'] as const;
+const LIQUIDATION_SOURCE = 'SIMULATION_ONLY_NOT_EXCHANGE_EXACT' as const;
+const LIQUIDATION_MODEL_VERSION = 'atv2-isolated-simulation-v1';
 
 const disabledTransport: TelegramTransport = {
   async send() { return { ok: false, errorCode: 'DELIVERY_WORKER_OWNS_SEND' }; },
 };
 const noOpPortfolioSink: PortfolioSyncSink = { async accept() {} };
 
-let timer: NodeJS.Timeout | null = null;
-let cycleRunning = false;
-const activeUsers = new Set<string>();
+type RuntimeMode = 'OFF' | 'PAPER' | 'SHADOW' | 'MIXED';
+type BootState = 'WORKER_DISABLED' | 'RECOVERING' | 'SAFE' | 'SAFE_HALT';
+
+type WorkerRuntime = {
+  timer: NodeJS.Timeout | null;
+  cycleRunning: boolean;
+  activeUsers: Set<string>;
+  ownerId: string;
+  leaseHeld: boolean;
+  workerRunning: boolean;
+  bootState: BootState;
+  lastTickAt: string | null;
+  nextTickAt: string | null;
+  lastSuccessfulCycleAt: string | null;
+  lastErrorAt: string | null;
+  mode: RuntimeMode;
+  paperEnabled: boolean;
+  shadowEnabled: boolean;
+  reconciliationState: 'UNKNOWN' | 'SAFE' | 'SAFE_HALT';
+  killSwitchState: 'UNKNOWN' | 'READY' | 'NEW_ENTRY_DISABLED' | 'SAFE_HALT';
+  marketDataFreshness: 'UNKNOWN' | 'FRESH' | 'STALE';
+};
+
+const runtimeGlobal = globalThis as typeof globalThis & { __autoTradingV2WorkerRuntime?: WorkerRuntime };
+const runtime = runtimeGlobal.__autoTradingV2WorkerRuntime ??= {
+  timer: null,
+  cycleRunning: false,
+  activeUsers: new Set<string>(),
+  ownerId: `atv2-${os.hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`,
+  leaseHeld: false,
+  workerRunning: false,
+  bootState: 'WORKER_DISABLED',
+  lastTickAt: null,
+  nextTickAt: null,
+  lastSuccessfulCycleAt: null,
+  lastErrorAt: null,
+  mode: 'OFF',
+  paperEnabled: false,
+  shadowEnabled: false,
+  reconciliationState: 'UNKNOWN',
+  killSwitchState: 'UNKNOWN',
+  marketDataFreshness: 'UNKNOWN',
+};
 
 export type AutoTradingV2WorkerHealth = {
   enabled: boolean;
   ready: boolean;
   reason: string | null;
   intervalMs: number;
+  workerRunning: boolean;
+  workerOwner: string | null;
+  leaseHeld: boolean;
+  bootState: BootState;
+  lastTickAt: string | null;
+  nextTickAt: string | null;
+  lastSuccessfulCycleAt: string | null;
+  lastErrorAt: string | null;
+  mode: RuntimeMode;
+  paperEnabled: boolean;
+  shadowEnabled: boolean;
+  liveEnabled: false;
+  reconciliationState: 'UNKNOWN' | 'SAFE' | 'SAFE_HALT';
+  killSwitchState: 'UNKNOWN' | 'READY' | 'NEW_ENTRY_DISABLED' | 'SAFE_HALT';
+  marketDataFreshness: 'UNKNOWN' | 'FRESH' | 'STALE';
   realOrderCount: 0;
   realCancelCount: 0;
   privateTradingApiCount: 0;
@@ -62,7 +123,15 @@ type WorkerConfig = {
   updatedAt: string;
 };
 
-type PositionPayload = {
+export type LiquidationSimulation = {
+  status: 'AVAILABLE' | 'UNAVAILABLE';
+  estimatedPrice: number | null;
+  distancePercent: number | null;
+  source: typeof LIQUIDATION_SOURCE;
+  modelVersion: typeof LIQUIDATION_MODEL_VERSION;
+};
+
+export type PositionPayload = {
   recordType: 'auto_trading_v2_position';
   mode: 'PAPER' | 'SHADOW';
   symbol: string;
@@ -94,9 +163,10 @@ type PositionPayload = {
   maxAdverseExcursionPercent: number;
   nextFundingTime: number | null;
   lastFundingAppliedAt: number | null;
-  estimatedLiquidationPrice: number;
-  liquidationDistancePercent: number;
-  liquidationModel: 'SIMULATION_ONLY_NOT_EXCHANGE_EXACT';
+  estimatedLiquidationPrice: number | null;
+  liquidationDistancePercent: number | null;
+  liquidationModel: typeof LIQUIDATION_SOURCE;
+  liquidationSimulation: LiquidationSimulation;
   openedAt: string;
   updatedAt: string;
   closedAt: string | null;
@@ -117,12 +187,155 @@ type StorageRow = {
   updated_at: string;
 };
 
+type LeaseRecord = {
+  ownerId: string;
+  heartbeatAt: string;
+  leaseExpiresAt: string;
+};
+
+export type WorkerLeaseResult = {
+  acquired: boolean;
+  ownerId: string | null;
+  leaseExpiresAt: string | null;
+};
+
+export type PositionNormalizationResult = {
+  position: PositionPayload | null;
+  payload: Record<string, unknown> | null;
+  changed: boolean;
+  reasons: string[];
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function stableId(value: string) {
   return createHash('sha256').update(value).digest('hex').slice(0, 32);
+}
+
+function finite(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function positive(value: unknown): number | null {
+  const parsed = finite(value);
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
+function workerLockDir() {
+  return process.env.AUTO_TRADING_V2_WORKER_LOCK_DIR?.trim() || DEFAULT_LOCK_DIR;
+}
+
+function leaseFile(lockDir: string) {
+  return `${lockDir}/owner.json`;
+}
+
+function readLease(lockDir: string): LeaseRecord | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(leaseFile(lockDir), 'utf8')) as unknown;
+    if (!isRecord(value) || typeof value.ownerId !== 'string' || typeof value.heartbeatAt !== 'string' || typeof value.leaseExpiresAt !== 'string') return null;
+    return { ownerId: value.ownerId, heartbeatAt: value.heartbeatAt, leaseExpiresAt: value.leaseExpiresAt };
+  } catch {
+    return null;
+  }
+}
+
+function writeLease(lockDir: string, record: LeaseRecord) {
+  const temporary = `${leaseFile(lockDir)}.${process.pid}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  fs.renameSync(temporary, leaseFile(lockDir));
+  const now = new Date();
+  try { fs.utimesSync(lockDir, now, now); } catch { /* lease file remains canonical */ }
+}
+
+function leaseExpired(lockDir: string, record: LeaseRecord | null, nowMs: number, leaseMs: number) {
+  if (record) {
+    const expiry = Date.parse(record.leaseExpiresAt);
+    return !Number.isFinite(expiry) || expiry <= nowMs;
+  }
+  try { return fs.statSync(lockDir).mtimeMs + leaseMs <= nowMs; } catch { return true; }
+}
+
+export function acquireAutoTradingV2WorkerLease(input: {
+  ownerId: string;
+  lockDir?: string;
+  now?: Date;
+  leaseMs?: number;
+}): WorkerLeaseResult {
+  const lockDir = input.lockDir ?? workerLockDir();
+  const now = input.now ?? new Date();
+  const nowMs = now.getTime();
+  const leaseMs = Math.max(WORKER_INTERVAL_MS * 2, input.leaseMs ?? WORKER_LEASE_MS);
+  const next: LeaseRecord = {
+    ownerId: input.ownerId,
+    heartbeatAt: now.toISOString(),
+    leaseExpiresAt: new Date(nowMs + leaseMs).toISOString(),
+  };
+
+  try {
+    fs.mkdirSync(lockDir, { mode: 0o700 });
+    writeLease(lockDir, next);
+    return { acquired: true, ownerId: input.ownerId, leaseExpiresAt: next.leaseExpiresAt };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      return { acquired: false, ownerId: null, leaseExpiresAt: null };
+    }
+  }
+
+  const current = readLease(lockDir);
+  if (current?.ownerId === input.ownerId) {
+    try {
+      writeLease(lockDir, next);
+      return { acquired: true, ownerId: input.ownerId, leaseExpiresAt: next.leaseExpiresAt };
+    } catch {
+      return { acquired: false, ownerId: current.ownerId, leaseExpiresAt: current.leaseExpiresAt };
+    }
+  }
+
+  if (!leaseExpired(lockDir, current, nowMs, leaseMs)) {
+    return { acquired: false, ownerId: current?.ownerId ?? null, leaseExpiresAt: current?.leaseExpiresAt ?? null };
+  }
+
+  const staleDir = `${lockDir}.stale-${process.pid}-${randomUUID()}`;
+  try {
+    fs.renameSync(lockDir, staleDir);
+  } catch {
+    const winner = readLease(lockDir);
+    return { acquired: false, ownerId: winner?.ownerId ?? null, leaseExpiresAt: winner?.leaseExpiresAt ?? null };
+  }
+
+  try {
+    try {
+      fs.mkdirSync(lockDir, { mode: 0o700 });
+      writeLease(lockDir, next);
+      return { acquired: true, ownerId: input.ownerId, leaseExpiresAt: next.leaseExpiresAt };
+    } catch {
+      const winner = readLease(lockDir);
+      return { acquired: false, ownerId: winner?.ownerId ?? null, leaseExpiresAt: winner?.leaseExpiresAt ?? null };
+    }
+  } finally {
+    try { fs.rmSync(staleDir, { recursive: true, force: true }); } catch { /* stale cleanup is best effort */ }
+  }
+}
+
+export function releaseAutoTradingV2WorkerLease(input: { ownerId: string; lockDir?: string }) {
+  const lockDir = input.lockDir ?? workerLockDir();
+  const current = readLease(lockDir);
+  if (current?.ownerId !== input.ownerId) return false;
+  try {
+    fs.rmSync(lockDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ensureRuntimeLease(now = new Date()) {
+  const lease = acquireAutoTradingV2WorkerLease({ ownerId: runtime.ownerId, now });
+  runtime.leaseHeld = lease.acquired;
+  return lease.acquired;
 }
 
 function configFrom(value: unknown): WorkerConfig | null {
@@ -146,9 +359,153 @@ function configFrom(value: unknown): WorkerConfig | null {
   };
 }
 
+function liquidationSimulationFor(value: Record<string, unknown>): LiquidationSimulation {
+  const existing = isRecord(value.liquidationSimulation) ? value.liquidationSimulation : null;
+  if (existing?.source === LIQUIDATION_SOURCE) {
+    const estimated = positive(existing.estimatedPrice);
+    const distance = finite(existing.distancePercent);
+    if (existing.status === 'AVAILABLE' && estimated != null && distance != null && distance >= 0) {
+      return { status: 'AVAILABLE', estimatedPrice: estimated, distancePercent: distance, source: LIQUIDATION_SOURCE, modelVersion: LIQUIDATION_MODEL_VERSION };
+    }
+    if (existing.status === 'UNAVAILABLE') {
+      return { status: 'UNAVAILABLE', estimatedPrice: null, distancePercent: null, source: LIQUIDATION_SOURCE, modelVersion: LIQUIDATION_MODEL_VERSION };
+    }
+  }
+
+  const legacyPrice = positive(value.estimatedLiquidationPrice);
+  const legacyDistance = finite(value.liquidationDistancePercent);
+  if (value.liquidationModel === LIQUIDATION_SOURCE && legacyPrice != null && legacyDistance != null && legacyDistance >= 0) {
+    return { status: 'AVAILABLE', estimatedPrice: legacyPrice, distancePercent: legacyDistance, source: LIQUIDATION_SOURCE, modelVersion: LIQUIDATION_MODEL_VERSION };
+  }
+
+  const direction = value.direction === 'LONG' || value.direction === 'SHORT' ? value.direction : null;
+  const entryPrice = positive(value.entryPrice);
+  const stopPrice = positive(value.stopPrice);
+  const leverage = positive(value.leverage);
+  if (direction && entryPrice != null && stopPrice != null && leverage != null) {
+    try {
+      const estimate = estimateAutoTradingV2Liquidation({ direction, entryPrice, stopPrice, leverage });
+      return {
+        status: 'AVAILABLE',
+        estimatedPrice: estimate.estimatedLiquidationPrice,
+        distancePercent: estimate.liquidationDistancePercent,
+        source: LIQUIDATION_SOURCE,
+        modelVersion: LIQUIDATION_MODEL_VERSION,
+      };
+    } catch { /* unsafe legacy values remain unavailable */ }
+  }
+
+  return { status: 'UNAVAILABLE', estimatedPrice: null, distancePercent: null, source: LIQUIDATION_SOURCE, modelVersion: LIQUIDATION_MODEL_VERSION };
+}
+
+export function normalizeAutoTradingV2PositionPayload(value: unknown): PositionNormalizationResult {
+  if (!isRecord(value) || value.recordType !== 'auto_trading_v2_position' || value.status !== 'ACTIVE') {
+    return { position: null, payload: isRecord(value) ? value : null, changed: false, reasons: [] };
+  }
+
+  const liquidationSimulation = liquidationSimulationFor(value);
+  const payload: Record<string, unknown> = {
+    ...value,
+    estimatedLiquidationPrice: liquidationSimulation.estimatedPrice,
+    liquidationDistancePercent: liquidationSimulation.distancePercent,
+    liquidationModel: LIQUIDATION_SOURCE,
+    liquidationSimulation,
+  };
+  const reasons: string[] = [];
+  const mode = value.mode === 'PAPER' || value.mode === 'SHADOW' ? value.mode : null;
+  const direction = value.direction === 'LONG' || value.direction === 'SHORT' ? value.direction : null;
+  const symbol = typeof value.symbol === 'string' && value.symbol.trim() ? value.symbol.trim().toUpperCase() : null;
+  const entryPrice = positive(value.entryPrice);
+  const stopPrice = positive(value.stopPrice);
+  const targetPrice = positive(value.targetPrice);
+  const trailingDistance = positive(value.trailingDistance);
+  const notionalKrw = positive(value.notionalKrw);
+  const leverage = positive(value.leverage);
+  const signalId = typeof value.signalId === 'string' && value.signalId ? value.signalId : null;
+  const executionId = typeof value.executionId === 'string' && value.executionId ? value.executionId : null;
+
+  if (!mode) reasons.push('POSITION_MODE_UNAVAILABLE');
+  if (!direction) reasons.push('POSITION_DIRECTION_UNAVAILABLE');
+  if (!symbol) reasons.push('POSITION_SYMBOL_UNAVAILABLE');
+  if (entryPrice == null) reasons.push('POSITION_ENTRY_UNAVAILABLE');
+  if (stopPrice == null) reasons.push('POSITION_STOP_UNAVAILABLE');
+  if (targetPrice == null) reasons.push('POSITION_TARGET_UNAVAILABLE');
+  if (trailingDistance == null) reasons.push('POSITION_TRAILING_DISTANCE_UNAVAILABLE');
+  if (notionalKrw == null) reasons.push('POSITION_NOTIONAL_UNAVAILABLE');
+  if (leverage == null) reasons.push('POSITION_LEVERAGE_UNAVAILABLE');
+  if (!signalId) reasons.push('POSITION_SIGNAL_ID_UNAVAILABLE');
+  if (!executionId) reasons.push('POSITION_EXECUTION_ID_UNAVAILABLE');
+  if (value.positionProtected !== true) reasons.push('PROTECTIVE_STOP_MISSING');
+  if (liquidationSimulation.status === 'UNAVAILABLE') reasons.push('LIQUIDATION_SIMULATION_UNAVAILABLE');
+
+  const changed = JSON.stringify({
+    estimatedLiquidationPrice: value.estimatedLiquidationPrice ?? null,
+    liquidationDistancePercent: value.liquidationDistancePercent ?? null,
+    liquidationModel: value.liquidationModel ?? null,
+    liquidationSimulation: value.liquidationSimulation ?? null,
+  }) !== JSON.stringify({
+    estimatedLiquidationPrice: payload.estimatedLiquidationPrice,
+    liquidationDistancePercent: payload.liquidationDistancePercent,
+    liquidationModel: payload.liquidationModel,
+    liquidationSimulation: payload.liquidationSimulation,
+  });
+
+  if (reasons.some((reason) => reason !== 'LIQUIDATION_SIMULATION_UNAVAILABLE')) {
+    return { position: null, payload, changed, reasons };
+  }
+
+  const position: PositionPayload = {
+    ...(payload as unknown as PositionPayload),
+    mode: mode!,
+    direction: direction!,
+    symbol: symbol!,
+    entryPrice: entryPrice!,
+    stopPrice: stopPrice!,
+    targetPrice: targetPrice!,
+    trailingDistance: trailingDistance!,
+    notionalKrw: notionalKrw!,
+    leverage: leverage!,
+    signalId: signalId!,
+    executionId: executionId!,
+    requiredMarginKrw: finite(value.requiredMarginKrw) ?? notionalKrw! / leverage!,
+    riskPerTradePercent: finite(value.riskPerTradePercent) ?? AUTO_TRADING_V2_CONFIG.riskPerTradeDefaultPercent,
+    remainingFraction: finite(value.remainingFraction) ?? 1,
+    partialTpDone: value.partialTpDone === true,
+    trailingStop: positive(value.trailingStop),
+    positionProtected: value.positionProtected === true,
+    realizedPnlKrw: finite(value.realizedPnlKrw) ?? 0,
+    unrealizedPnlKrw: finite(value.unrealizedPnlKrw) ?? 0,
+    entryFeeKrw: finite(value.entryFeeKrw) ?? 0,
+    exitFeesKrw: finite(value.exitFeesKrw) ?? 0,
+    fundingCostKrw: finite(value.fundingCostKrw) ?? 0,
+    maxFavorableExcursionPercent: finite(value.maxFavorableExcursionPercent) ?? 0,
+    maxAdverseExcursionPercent: finite(value.maxAdverseExcursionPercent) ?? 0,
+    nextFundingTime: finite(value.nextFundingTime),
+    lastFundingAppliedAt: finite(value.lastFundingAppliedAt),
+    estimatedLiquidationPrice: liquidationSimulation.estimatedPrice,
+    liquidationDistancePercent: liquidationSimulation.distancePercent,
+    liquidationModel: LIQUIDATION_SOURCE,
+    liquidationSimulation,
+    openedAt: typeof value.openedAt === 'string' ? value.openedAt : new Date(0).toISOString(),
+    updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : new Date(0).toISOString(),
+    closedAt: null,
+    exitPrice: null,
+    exitReason: null,
+    executionStates: Array.isArray(value.executionStates) ? value.executionStates.map(String) : [],
+    realOrderCount: 0,
+    realCancelCount: 0,
+    privateTradingApiCount: 0,
+    clientOrderId: typeof value.clientOrderId === 'string' ? value.clientOrderId : `legacy-${stableId(`${symbol}:${signalId}:${executionId}`)}`,
+    strategyId: typeof value.strategyId === 'string' ? value.strategyId : AUTO_TRADING_V2_STRATEGY_ID,
+    strategyVersion: typeof value.strategyVersion === 'string' ? value.strategyVersion : 'legacy',
+    status: 'ACTIVE',
+    recordType: 'auto_trading_v2_position',
+  };
+  return { position, payload: { ...payload, ...position }, changed, reasons };
+}
+
 function positionFrom(value: unknown): PositionPayload | null {
-  if (!isRecord(value) || value.recordType !== 'auto_trading_v2_position' || value.status !== 'ACTIVE') return null;
-  return value as unknown as PositionPayload;
+  return normalizeAutoTradingV2PositionPayload(value).position;
 }
 
 async function getRow(client: SupabaseClient, table: string, userId: string, id: string): Promise<StorageRow | null> {
@@ -301,13 +658,14 @@ async function closePosition(
     estimatedLiquidationPrice: position.estimatedLiquidationPrice,
     liquidationDistancePercent: position.liquidationDistancePercent,
     liquidationModel: position.liquidationModel,
+    liquidationSimulation: position.liquidationSimulation,
     wouldEnter: true,
     wouldFill: true,
     wouldStop: reason === 'STOP',
     wouldTP: position.partialTpDone,
     wouldLiquidate: reason === 'LIQUIDATION_SIMULATION',
     wouldPnL: net,
-    killSwitchState: false,
+    killSwitchState: position.positionProtected ? false : true,
     openedAt: position.openedAt,
     closedAt: now.toISOString(),
     realOrderCount: 0,
@@ -320,7 +678,7 @@ async function closePosition(
     symbol: position.symbol, direction: position.direction,
     sourceEventId: `${position.executionId}:worker-close:${reason}`,
     executionId: position.executionId, price: exitPrice, realizedPnl: net,
-    metadata: { exitReason: reason, wouldLiquidate: reason === 'LIQUIDATION_SIMULATION' },
+    metadata: { exitReason: reason, wouldLiquidate: reason === 'LIQUIDATION_SIMULATION', liquidationSource: LIQUIDATION_SOURCE },
   });
   return closed;
 }
@@ -343,9 +701,10 @@ async function advancePosition(
   }
   if (snapshot.nextFundingTime) next.nextFundingTime = snapshot.nextFundingTime;
 
-  const liquidationTriggered = position.direction === 'LONG'
-    ? snapshot.markPrice <= position.estimatedLiquidationPrice
-    : snapshot.markPrice >= position.estimatedLiquidationPrice;
+  const liquidationPrice = position.estimatedLiquidationPrice;
+  const liquidationTriggered = liquidationPrice != null && Number.isFinite(liquidationPrice) && (position.direction === 'LONG'
+    ? snapshot.markPrice <= liquidationPrice
+    : snapshot.markPrice >= liquidationPrice);
   if (liquidationTriggered) return closePosition(client, userId, next, marketExitPrice(position.direction, snapshot.markPrice), 'LIQUIDATION_SIMULATION', now);
 
   const effectiveStop = position.trailingStop ?? position.stopPrice;
@@ -414,25 +773,35 @@ async function computeRiskState(client: SupabaseClient, userId: string, equityKr
   };
 }
 
-async function reconcileUser(client: SupabaseClient, userId: string) {
+async function reconcileUser(client: SupabaseClient, userId: string, now: Date) {
   const { data, error } = await client.from('paper_positions')
     .select('id,payload')
     .eq('user_id', userId)
     .like('id', `${PREFIX}position-%`)
     .is('deleted_at', null);
   if (error) throw new Error('AUTO_TRADING_V2_WORKER_RECONCILE_READ');
-  const active = (data ?? []).map((row) => ({ id: String(row.id), position: positionFrom(row.payload) })).filter((row) => row.position);
+  const active: Array<{ id: string; position: PositionPayload }> = [];
   const reasons: string[] = [];
+  for (const row of data ?? []) {
+    const id = String(row.id);
+    const normalized = normalizeAutoTradingV2PositionPayload(row.payload);
+    if (normalized.changed && normalized.payload) {
+      await upsertPayload(client, 'paper_positions', userId, id, normalized.payload, now);
+    }
+    for (const reason of normalized.reasons) reasons.push(`${reason}:${id.replace(`${PREFIX}position-`, '')}`);
+    if (normalized.position) active.push({ id, position: normalized.position });
+  }
+
   const symbols = new Set<string>();
   for (const row of active) {
-    const position = row.position!;
+    const position = row.position;
     if (!position.positionProtected) reasons.push(`PROTECTIVE_STOP_MISSING:${position.symbol}`);
     if (symbols.has(position.symbol)) reasons.push(`DUPLICATE_ACTIVE_POSITION:${position.symbol}`);
     symbols.add(position.symbol);
     const order = await getRow(client, 'paper_orders', userId, `${PREFIX}order-${position.signalId}`);
     if (!order || String(order.payload.executionId ?? '') !== position.executionId) reasons.push(`POSITION_STATE_MISMATCH:${position.symbol}`);
   }
-  return { safe: reasons.length === 0, reasons, active: active.map((row) => row.position!) };
+  return { safe: reasons.length === 0, reasons: [...new Set(reasons)], active: active.map((row) => row.position) };
 }
 
 async function persistConfig(client: SupabaseClient, userId: string, config: WorkerConfig, now: Date) {
@@ -467,6 +836,13 @@ async function openPosition(client: SupabaseClient, userId: string, config: Work
     direction: decision.direction, entryPrice: execution.entryPrice, stopPrice: execution.stopPrice, leverage: execution.leverage,
   });
   if (!liquidation.stopBeforeLiquidation || !execution.positionProtected) return false;
+  const liquidationSimulation: LiquidationSimulation = {
+    status: 'AVAILABLE',
+    estimatedPrice: liquidation.estimatedLiquidationPrice,
+    distancePercent: liquidation.liquidationDistancePercent,
+    source: LIQUIDATION_SOURCE,
+    modelVersion: LIQUIDATION_MODEL_VERSION,
+  };
 
   await upsertPayload(client, 'paper_orders', userId, orderId, {
     recordType: 'auto_trading_v2_order_plan', mode: config.mode, strategyId: decision.strategyId,
@@ -480,7 +856,8 @@ async function openPosition(client: SupabaseClient, userId: string, config: Work
     leverage: execution.leverage, riskPerTradePercent: decision.orderPlan.position.riskPerTradePercent,
     estimatedLiquidationPrice: liquidation.estimatedLiquidationPrice,
     liquidationDistancePercent: liquidation.liquidationDistancePercent,
-    liquidationModel: liquidation.model, executionStates: execution.states, positionProtected: true,
+    liquidationModel: LIQUIDATION_SOURCE, liquidationSimulation,
+    executionStates: execution.states, positionProtected: true,
     wouldEnter: true, wouldFill: true, wouldStop: false, wouldTP: false, wouldLiquidate: false, wouldPnL: 0,
     worker: true, realOrderCount: 0, realCancelCount: 0, privateTradingApiCount: 0,
   }, now);
@@ -498,29 +875,31 @@ async function openPosition(client: SupabaseClient, userId: string, config: Work
     entryFeeKrw, exitFeesKrw: 0, fundingCostKrw: 0, maxFavorableExcursionPercent: 0,
     maxAdverseExcursionPercent: 0, nextFundingTime: decision.snapshot.nextFundingTime, lastFundingAppliedAt: null,
     estimatedLiquidationPrice: liquidation.estimatedLiquidationPrice,
-    liquidationDistancePercent: liquidation.liquidationDistancePercent, liquidationModel: liquidation.model,
+    liquidationDistancePercent: liquidation.liquidationDistancePercent, liquidationModel: LIQUIDATION_SOURCE,
+    liquidationSimulation,
     openedAt: now.toISOString(), updatedAt: now.toISOString(), closedAt: null, exitPrice: null, exitReason: null,
     executionStates: execution.states, realOrderCount: 0, realCancelCount: 0, privateTradingApiCount: 0,
   };
   await upsertPayload(client, 'paper_positions', userId, `${PREFIX}position-${decision.symbol}`, position as unknown as Record<string, unknown>, now);
   await upsertPayload(client, 'paper_journal_entries', userId, `${PREFIX}execution-${execution.executionId}`, {
     recordType: 'auto_trading_v2_execution_event', ...execution, symbol: decision.symbol, direction: decision.direction,
-    regime: decision.regime, reasons: decision.reasons, liquidation, worker: true,
+    regime: decision.regime, reasons: decision.reasons, liquidation: liquidationSimulation, worker: true,
   }, now);
   await notify({
     userId, mode: config.mode, type: 'POSITION_OPENED', symbol: decision.symbol, direction: decision.direction,
     sourceEventId: `${execution.executionId}:worker-opened`, executionId: execution.executionId,
     price: execution.entryPrice, metadata: { stopPrice: execution.stopPrice, targetPrice: execution.targetPrice,
-      riskPercent: position.riskPerTradePercent, leverage: position.leverage, liquidationDistancePercent: liquidation.liquidationDistancePercent },
+      riskPercent: position.riskPerTradePercent, leverage: position.leverage,
+      liquidationDistancePercent: liquidation.liquidationDistancePercent, liquidationSource: LIQUIDATION_SOURCE },
   });
   return true;
 }
 
 async function processUser(client: SupabaseClient, userId: string, initialConfig: WorkerConfig, now: Date) {
-  if (activeUsers.has(userId)) return { userId, skipped: 'BUSY' as const };
-  activeUsers.add(userId);
+  if (runtime.activeUsers.has(userId)) return { userId, skipped: 'BUSY' as const };
+  runtime.activeUsers.add(userId);
   try {
-    const reconciliation = await reconcileUser(client, userId);
+    const reconciliation = await reconcileUser(client, userId, now);
     const riskState = await computeRiskState(client, userId, initialConfig.equityKrw, now);
     const risk = evaluateAutoTradingV2KillSwitch({
       ...riskState,
@@ -528,24 +907,28 @@ async function processUser(client: SupabaseClient, userId: string, initialConfig
       positionStateMismatch: reconciliation.reasons.some((reason) => reason.startsWith('DUPLICATE_ACTIVE_POSITION')),
       protectiveStopMissing: reconciliation.reasons.some((reason) => reason.startsWith('PROTECTIVE_STOP_MISSING')),
     });
+    const stickyReasons = initialConfig.safeHalt || initialConfig.newEntryDisabled ? initialConfig.haltReasons : [];
     const config: WorkerConfig = {
       ...initialConfig,
       ...riskState,
-      newEntryDisabled: risk.newEntryDisabled || !reconciliation.safe,
-      safeHalt: risk.safeHalt || !reconciliation.safe,
-      haltReasons: [...new Set([...risk.reasons, ...reconciliation.reasons])],
+      newEntryDisabled: initialConfig.newEntryDisabled || risk.newEntryDisabled || !reconciliation.safe,
+      safeHalt: initialConfig.safeHalt || risk.safeHalt || !reconciliation.safe,
+      haltReasons: [...new Set([...stickyReasons, ...risk.reasons, ...reconciliation.reasons])],
       updatedAt: now.toISOString(),
     };
     await persistConfig(client, userId, config, now);
 
-    const results: Array<{ symbol: string; action: string }> = [];
+    const results: Array<{ symbol: string; action: string; dataQuality: 'FRESH' | 'STALE' }> = [];
     for (const symbol of SYMBOLS) {
+      if (!ensureRuntimeLease(new Date())) return { userId, skipped: 'LEASE_LOST' as const, reconciliation, risk, results };
       const row = await getRow(client, 'paper_positions', userId, `${PREFIX}position-${symbol}`);
       const active = positionFrom(row?.payload);
       const snapshot = await fetchAutoTradingV2PublicSnapshot(symbol);
+      if (!ensureRuntimeLease(new Date())) return { userId, skipped: 'LEASE_LOST' as const, reconciliation, risk, results };
+      const dataQuality = snapshot.dataStale ? 'STALE' as const : 'FRESH' as const;
       if (active) {
         const updated = await advancePosition(client, userId, active, snapshot, now);
-        results.push({ symbol, action: updated.status === 'CLOSED' ? 'CLOSED' : 'POSITION_UPDATED' });
+        results.push({ symbol, action: updated.status === 'CLOSED' ? 'CLOSED' : 'POSITION_UPDATED', dataQuality });
         continue;
       }
       const decision = evaluateAutoTradingV2Signal(snapshot, {
@@ -566,25 +949,54 @@ async function processUser(client: SupabaseClient, userId: string, initialConfig
         metadata: { observedAt: snapshot.observedAt },
       });
       const opened = !config.safeHalt && !config.newEntryDisabled && await openPosition(client, userId, config, decision, now);
-      results.push({ symbol, action: opened ? 'OPENED' : 'NO_TRADE' });
+      results.push({ symbol, action: opened ? 'OPENED' : 'NO_TRADE', dataQuality });
     }
     return { userId, skipped: null, reconciliation, risk, results };
   } finally {
-    activeUsers.delete(userId);
+    runtime.activeUsers.delete(userId);
   }
+}
+
+function healthBase(): Omit<AutoTradingV2WorkerHealth, 'enabled' | 'ready' | 'reason'> {
+  return {
+    intervalMs: WORKER_INTERVAL_MS,
+    workerRunning: runtime.workerRunning,
+    workerOwner: runtime.leaseHeld ? runtime.ownerId : null,
+    leaseHeld: runtime.leaseHeld,
+    bootState: runtime.bootState,
+    lastTickAt: runtime.lastTickAt,
+    nextTickAt: runtime.nextTickAt,
+    lastSuccessfulCycleAt: runtime.lastSuccessfulCycleAt,
+    lastErrorAt: runtime.lastErrorAt,
+    mode: runtime.mode,
+    paperEnabled: runtime.paperEnabled,
+    shadowEnabled: runtime.shadowEnabled,
+    liveEnabled: false,
+    reconciliationState: runtime.reconciliationState,
+    killSwitchState: runtime.killSwitchState,
+    marketDataFreshness: runtime.marketDataFreshness,
+    realOrderCount: 0,
+    realCancelCount: 0,
+    privateTradingApiCount: 0,
+  };
 }
 
 export function autoTradingV2WorkerHealth(): AutoTradingV2WorkerHealth {
   const enabled = process.env.AUTO_TRADING_V2_WORKER_ENABLED !== 'false';
-  if (!enabled) return { enabled: false, ready: false, reason: 'AUTO_TRADING_V2_WORKER_DISABLED', intervalMs: WORKER_INTERVAL_MS, realOrderCount: 0, realCancelCount: 0, privateTradingApiCount: 0 };
-  if (!hasSupabaseServerKey()) return { enabled: true, ready: false, reason: 'SUPABASE_SERVER_KEY_REQUIRED', intervalMs: WORKER_INTERVAL_MS, realOrderCount: 0, realCancelCount: 0, privateTradingApiCount: 0 };
-  return { enabled: true, ready: true, reason: null, intervalMs: WORKER_INTERVAL_MS, realOrderCount: 0, realCancelCount: 0, privateTradingApiCount: 0 };
+  if (!enabled) return { enabled: false, ready: false, reason: 'AUTO_TRADING_V2_WORKER_DISABLED', ...healthBase() };
+  if (!hasSupabaseServerKey()) return { enabled: true, ready: false, reason: 'SUPABASE_SERVER_KEY_REQUIRED', ...healthBase() };
+  return { enabled: true, ready: true, reason: null, ...healthBase() };
 }
 
 export async function runAutoTradingV2WorkerCycle(now = new Date()) {
   const health = autoTradingV2WorkerHealth();
-  if (!health.ready || cycleRunning) return { ok: false, health, skipped: cycleRunning ? 'CYCLE_BUSY' : health.reason, users: [] };
-  cycleRunning = true;
+  if (!health.ready || runtime.cycleRunning) return { ok: false, health, skipped: runtime.cycleRunning ? 'CYCLE_BUSY' : health.reason, users: [] };
+  if (!ensureRuntimeLease(now)) {
+    return { ok: false, health: autoTradingV2WorkerHealth(), skipped: 'NOT_WORKER_OWNER', users: [] };
+  }
+  runtime.cycleRunning = true;
+  runtime.lastTickAt = now.toISOString();
+  runtime.bootState = runtime.lastSuccessfulCycleAt ? runtime.bootState : 'RECOVERING';
   try {
     const client = getSupabase();
     const { data, error } = await client.from('paper_accounts')
@@ -595,29 +1007,80 @@ export async function runAutoTradingV2WorkerCycle(now = new Date()) {
     const rows = (data ?? []) as StorageRow[];
     const active = rows.map((row) => ({ userId: row.user_id, config: configFrom(row.payload) }))
       .filter((row): row is { userId: string; config: WorkerConfig } => Boolean(row.config && (row.config.mode === 'PAPER' || row.config.mode === 'SHADOW')));
+    runtime.paperEnabled = active.some((row) => row.config.mode === 'PAPER');
+    runtime.shadowEnabled = active.some((row) => row.config.mode === 'SHADOW');
+    runtime.mode = runtime.paperEnabled && runtime.shadowEnabled ? 'MIXED' : runtime.paperEnabled ? 'PAPER' : runtime.shadowEnabled ? 'SHADOW' : 'OFF';
+
     const users = [];
     for (const row of active) {
       try { users.push(await processUser(client, row.userId, row.config, now)); }
       catch (error) { users.push({ userId: row.userId, skipped: 'ERROR' as const, error: error instanceof Error ? error.message.slice(0, 120) : 'AUTO_TRADING_V2_WORKER_USER_FAILED' }); }
     }
-    return { ok: true, health, skipped: null, users, realOrderCount: 0 as const, realCancelCount: 0 as const, privateTradingApiCount: 0 as const };
+
+    const anyError = users.some((user) => user.skipped === 'ERROR' || user.skipped === 'LEASE_LOST');
+    const anyUnsafe = users.some((user) => 'reconciliation' in user && user.reconciliation && !user.reconciliation.safe);
+    const anySafeHalt = users.some((user) => 'risk' in user && user.risk?.safeHalt === true);
+    const anyEntryDisabled = users.some((user) => 'risk' in user && user.risk?.newEntryDisabled === true);
+    const anyStale = users.some((user) => 'results' in user && Array.isArray(user.results) && user.results.some((result) => result.dataQuality === 'STALE'));
+    runtime.reconciliationState = anyUnsafe ? 'SAFE_HALT' : 'SAFE';
+    runtime.killSwitchState = anySafeHalt ? 'SAFE_HALT' : anyEntryDisabled ? 'NEW_ENTRY_DISABLED' : 'READY';
+    runtime.marketDataFreshness = anyStale ? 'STALE' : active.length ? 'FRESH' : 'UNKNOWN';
+    runtime.bootState = anyError || anyUnsafe || anySafeHalt ? 'SAFE_HALT' : 'SAFE';
+    if (!anyError) runtime.lastSuccessfulCycleAt = new Date().toISOString();
+    if (anyError) runtime.lastErrorAt = new Date().toISOString();
+    return { ok: !anyError, health: autoTradingV2WorkerHealth(), skipped: anyError ? 'PARTIAL_ERROR' : null, users, realOrderCount: 0 as const, realCancelCount: 0 as const, privateTradingApiCount: 0 as const };
+  } catch (error) {
+    runtime.lastErrorAt = new Date().toISOString();
+    runtime.bootState = 'SAFE_HALT';
+    throw error;
   } finally {
-    cycleRunning = false;
+    runtime.cycleRunning = false;
   }
+}
+
+function scheduleNextTick() {
+  runtime.nextTickAt = new Date(Date.now() + WORKER_INTERVAL_MS).toISOString();
 }
 
 export function startAutoTradingV2Worker() {
   const health = autoTradingV2WorkerHealth();
-  if (!health.ready || timer) {
-    console.log(`[auto-trading-v2-worker] ${health.ready ? 'already-started' : health.reason}`);
-    return health;
+  if (!health.ready || runtime.timer) {
+    console.log(`[auto-trading-v2-worker] ${runtime.timer ? 'already-started' : health.reason}`);
+    return autoTradingV2WorkerHealth();
   }
-  const run = () => void runAutoTradingV2WorkerCycle().catch((error) => {
-    console.error('[auto-trading-v2-worker] cycle failed', error instanceof Error ? error.message : 'unknown');
-  });
-  run();
-  timer = setInterval(run, WORKER_INTERVAL_MS);
-  timer.unref?.();
-  console.log(`[auto-trading-v2-worker] started interval=${WORKER_INTERVAL_MS}ms LIVE_TRADING=false privateTradingApiCount=0`);
-  return health;
+  runtime.workerRunning = true;
+  runtime.bootState = 'RECOVERING';
+  scheduleNextTick();
+  const run = () => {
+    runtime.lastTickAt = new Date().toISOString();
+    scheduleNextTick();
+    void runAutoTradingV2WorkerCycle().catch((error) => {
+      runtime.lastErrorAt = new Date().toISOString();
+      runtime.bootState = 'SAFE_HALT';
+      console.error('[auto-trading-v2-worker] cycle failed', error instanceof Error ? error.message : 'unknown');
+    });
+  };
+  // Deliberately do not mutate execution immediately on process bootstrap. The
+  // first 30-second cycle performs persisted-state normalization/reconciliation
+  // under the owner lease before any new Paper/Shadow entry can be created.
+  runtime.timer = setInterval(run, WORKER_INTERVAL_MS);
+  runtime.timer.unref?.();
+  console.log(`[auto-trading-v2-worker] started interval=${WORKER_INTERVAL_MS}ms owner=${runtime.ownerId} LIVE_TRADING=false privateTradingApiCount=0`);
+  return autoTradingV2WorkerHealth();
+}
+
+export function stopAutoTradingV2Worker() {
+  if (runtime.timer) clearInterval(runtime.timer);
+  runtime.timer = null;
+  runtime.workerRunning = false;
+  runtime.nextTickAt = null;
+  runtime.bootState = 'WORKER_DISABLED';
+  if (runtime.leaseHeld) releaseAutoTradingV2WorkerLease({ ownerId: runtime.ownerId });
+  runtime.leaseHeld = false;
+  return autoTradingV2WorkerHealth();
+}
+
+export function restartAutoTradingV2Worker() {
+  stopAutoTradingV2Worker();
+  return startAutoTradingV2Worker();
 }
