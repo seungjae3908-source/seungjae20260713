@@ -15,6 +15,7 @@ import { useLocation } from 'wouter';
 import { AiChartV2IntelligencePanel } from '@/components/ai-chart-v2-intelligence-panel';
 import { BottomNav } from '@/components/bottom-nav';
 import { FuturesPublicContextPanel } from '@/components/futures-public-context-panel';
+import { StrategyPromotionBadge } from '@/components/strategy-promotion-badge';
 import { UnifiedAnalysisChart } from '@/components/unified-analysis-chart';
 import {
   defaultStrategyMode,
@@ -505,6 +506,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             {externalWindowStatus}
           </p>
         )}
+        {!externalMode ? <div className="mx-auto mt-2 flex max-w-7xl justify-end"><StrategyPromotionBadge compact /></div> : null}
       </header>
 
       <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
