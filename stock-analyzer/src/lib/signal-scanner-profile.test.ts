@@ -22,6 +22,11 @@ describe('unified scanner UI profile', () => {
     }
   });
 
+  it('keeps the position horizon on the daily profile for every market', () => {
+    const markets = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'] as const;
+    for (const market of markets) assert.equal(getScannerUiProfile(market, 'position').timeframe, '1D');
+  });
+
   it('maps scanner horizons to the canonical AI Chart strategy modes', () => {
     assert.equal(toAiChartStrategyMode('scalping'), 'SCALPING');
     assert.equal(toAiChartStrategyMode('swing'), 'SWING');
