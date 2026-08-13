@@ -31,12 +31,14 @@ export type AiChatResult = {
   data: AiChatDataDisclosure;
 };
 
-type AiChatProvider = 'google-gemini' | 'openai-compatible';
+type AiChatProvider = 'google-gemini' | 'openai-compatible' | 'local-private-ai';
 
 type AiChatProviderConfig = {
   provider: AiChatProvider;
   apiKey: string;
   model: string;
+  endpoint?: string;
+  sendAuthorization?: boolean;
 };
 
 type PublicMarketContext = {
@@ -81,7 +83,11 @@ const prohibitedAction = /(?:실제\s*주문|주문\s*(?:실행|전송|취소)|�
 const unsafeAnswer = /(?:수익\s*보장|무조건\s*(?:상승|하락)|확정\s*매수|반드시\s*(?:매수|매도)|api\s*키를\s*(?:보내|입력)|시스템\s*프롬프트|(?:지금|즉시|전액|몰빵).{0,20}(?:매수|매도|롱|숏|진입)|(?:매수|매도|롱|숏|진입).{0,20}(?:하세요|하십시오|해야\s*합니다)|레버리지.{0,16}(?:올리세요|설정하세요|사용하세요))/i;
 const currentDataQuestionPattern = /(?:현재가|실시간|오늘|지금|최근\s*(?:뉴스|실적|공시)|시세|주가|등락|거래량|재무\s*(?:요약|상태|수치)|기술적\s*분석|차트\s*분석|목표가|손절가|시장\s*상황)/i;
 const geminiProviders = new Set(['gemini', 'google', 'google-gemini']);
+const localProviders = new Set(['local', 'local-private-ai', 'private-ai', 'ollama']);
+const loopbackHosts = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 const defaultGeminiModel = 'gemini-3.1-flash-lite';
+const defaultLocalModel = 'qwen3:4b';
+const defaultLocalChatEndpoint = 'http://127.0.0.1:18190/v1/chat/completions';
 const aiChatSystemInstruction = `You are the public-market analysis assistant inside a Korean stock and crypto decision-support app.
 Use only the supplied publicContext for current or symbol-specific claims. The data.asOf value is server collection time, not guaranteed exchange tick time. Explicitly state missing, delayed, stale, or partial data and never fill gaps with invented values.
 When market evidence is available, organize the answer in Korean with these sections where applicable: [현재 데이터], [핵심 판단], [기술적 분석], [기본적 분석], [뉴스·이벤트], [상승 시나리오], [중립 시나리오], [하락 시나리오], [중요 가격대], [핵심 위험], [데이터 한계]. Omit fundamental analysis for crypto unless actual fundamental data exists. Distinguish facts, deterministic calculations, inference, and outlook. Use Bull/Base/Bear only as conditional scenarios, never as certainty.
@@ -285,6 +291,31 @@ function notConfigured(): never {
   throw new AiChatError('AI_CHAT_NOT_CONFIGURED', 'AI 채팅 공급자가 아직 설정되지 않았습니다.', 503);
 }
 
+function localChatEndpoint(rawValue: string): string {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(rawValue);
+  } catch {
+    throw new AiChatError('AI_CHAT_LOCAL_ENDPOINT_FORBIDDEN', '로컬 AI 주소 형식이 올바르지 않습니다.', 503);
+  }
+  if (!['http:', 'https:'].includes(endpoint.protocol) || !loopbackHosts.has(endpoint.hostname)) {
+    throw new AiChatError('AI_CHAT_LOCAL_ENDPOINT_FORBIDDEN', '로컬 AI는 서버 내부 loopback 주소만 사용할 수 있습니다.', 503);
+  }
+  endpoint.username = '';
+  endpoint.password = '';
+  return endpoint.toString();
+}
+
+function resolveLocalProviderConfig(): AiChatProviderConfig {
+  return {
+    provider: 'local-private-ai',
+    apiKey: '',
+    model: process.env.AI_CHAT_LOCAL_MODEL?.trim() || process.env.PRIVATE_AI_MODEL?.trim() || defaultLocalModel,
+    endpoint: localChatEndpoint(process.env.AI_CHAT_LOCAL_URL?.trim() || defaultLocalChatEndpoint),
+    sendAuthorization: false,
+  };
+}
+
 function resolveProviderConfig(): AiChatProviderConfig {
   const explicitProvider = process.env.AI_CHAT_PROVIDER?.trim().toLowerCase();
   const geminiApiKey = process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
@@ -296,11 +327,21 @@ function resolveProviderConfig(): AiChatProviderConfig {
     return { provider: 'google-gemini', apiKey, model };
   }
 
+  if (explicitProvider && localProviders.has(explicitProvider)) {
+    return resolveLocalProviderConfig();
+  }
+
   if (explicitProvider === 'openai-compatible') {
     const apiKey = process.env.AI_CHAT_API_KEY?.trim();
     const model = process.env.AI_CHAT_MODEL?.trim();
     if (!apiKey || !model) return notConfigured();
-    return { provider: 'openai-compatible', apiKey, model };
+    return {
+      provider: 'openai-compatible',
+      apiKey,
+      model,
+      endpoint: 'https://api.openai.com/v1/chat/completions',
+      sendAuthorization: true,
+    };
   }
 
   if (explicitProvider) return notConfigured();
@@ -313,7 +354,25 @@ function resolveProviderConfig(): AiChatProviderConfig {
     };
   }
 
+  if (process.env.AI_CHAT_LOCAL_FALLBACK_ENABLED?.trim().toLowerCase() === 'true') {
+    return resolveLocalProviderConfig();
+  }
+
   return notConfigured();
+}
+
+function resolveLocalFallbackConfig(primary: AiChatProviderConfig): AiChatProviderConfig | null {
+  if (primary.provider !== 'google-gemini') return null;
+  if (process.env.AI_CHAT_LOCAL_FALLBACK_ENABLED?.trim().toLowerCase() !== 'true') return null;
+  return resolveLocalProviderConfig();
+}
+
+function shouldTryLocalFallback(cause: unknown): boolean {
+  return cause instanceof AiChatError && [
+    'AI_CHAT_RATE_LIMITED',
+    'AI_CHAT_PROVIDER_ERROR',
+    'AI_CHAT_INVALID_RESPONSE',
+  ].includes(cause.code);
 }
 
 function publicQuestionPayload(message: string, publicContext: PublicMarketContext): string {
@@ -405,10 +464,12 @@ async function requestOpenAiCompatibleAnswer(
   fetchImpl: typeof fetch,
   signal: AbortSignal,
 ): Promise<string> {
-  const response = await fetchImpl('https://api.openai.com/v1/chat/completions', {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (config.sendAuthorization !== false && config.apiKey) headers.authorization = `Bearer ${config.apiKey}`;
+  const response = await fetchImpl(config.endpoint || 'https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     signal,
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${config.apiKey}` },
+    headers,
     body: JSON.stringify({
       model: config.model,
       temperature: 0.2,
@@ -424,6 +485,17 @@ async function requestOpenAiCompatibleAnswer(
   const answer = readOpenAiText(await parseProviderJson(response));
   if (!answer) throw new AiChatError('AI_CHAT_INVALID_RESPONSE', 'AI 모델 응답 형식이 올바르지 않습니다.', 502);
   return answer;
+}
+
+async function requestProviderAnswer(
+  config: AiChatProviderConfig,
+  prompt: string,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+): Promise<string> {
+  return config.provider === 'google-gemini'
+    ? requestGeminiAnswer(config, prompt, fetchImpl, signal)
+    : requestOpenAiCompatibleAnswer(config, prompt, fetchImpl, signal);
 }
 
 function abortedError(): Error {
@@ -476,16 +548,23 @@ export async function answerAiChat(
   try {
     const publicContext = await withAbort(publicMarketContext(context, controller.signal), controller.signal);
     const prompt = publicQuestionPayload(message, publicContext);
-    const answer = config.provider === 'google-gemini'
-      ? await requestGeminiAnswer(config, prompt, fetchImpl, controller.signal)
-      : await requestOpenAiCompatibleAnswer(config, prompt, fetchImpl, controller.signal);
+    let usedConfig = config;
+    let answer: string;
+    try {
+      answer = await requestProviderAnswer(config, prompt, fetchImpl, controller.signal);
+    } catch (cause) {
+      const fallback = resolveLocalFallbackConfig(config);
+      if (!fallback || !shouldTryLocalFallback(cause) || controller.signal.aborted) throw cause;
+      usedConfig = fallback;
+      answer = await requestProviderAnswer(fallback, prompt, fetchImpl, controller.signal);
+    }
     if (secretPattern.test(answer) || privateDataPattern.test(answer) || unsafeAnswer.test(answer)) {
       throw new AiChatError('AI_CHAT_UNSAFE_RESPONSE', '안전하지 않은 AI 응답이 차단되었습니다.', 502);
     }
     return {
       answer,
       kind: 'answer',
-      model: config.model,
+      model: usedConfig.model,
       generatedAt: new Date().toISOString(),
       data: publicContext.data,
     };
