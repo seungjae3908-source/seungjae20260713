@@ -169,6 +169,16 @@ test('autonomous capital lab keeps exactly 1,000,000 KRW and four research lanes
   assert.equal(result.capital.reserveKrw + result.lanes.reduce((sum, lane) => sum + lane.allocationKrw, 0), 1_000_000);
   assert.deepEqual(result.lanes.map((lane) => lane.market), ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']);
   assert.ok(result.lanes.every((lane) => lane.evidenceStatus === 'INSUFFICIENT'));
+  assert.deepEqual(result.executionReadiness.compatibleExecutionLanes, ['CRYPTO_FUTURES']);
+  assert.deepEqual(result.executionReadiness.blockedExecutionLanes, ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT']);
+  assert.equal(result.executionReadiness.allMarketsReady, false);
+  assert.equal(result.executionReadiness.automaticPaperExecutionAcrossAllMarkets, false);
+  assert.equal(result.lanes.find((lane) => lane.market === 'CRYPTO_FUTURES')?.paperExecutionAuthority, 'simulation-only');
+  assert.ok(result.lanes.filter((lane) => lane.market !== 'CRYPTO_FUTURES').every((lane) => (
+    lane.paperExecutionReadiness === 'BLOCKED_ENGINE_MARKET_CONTRACT'
+    && lane.paperExecutionAuthority === 'none'
+    && lane.warnings.includes('PAPER_EXECUTION_MARKET_CONTRACT_BLOCKED')
+  )));
   assert.equal(result.autonomousPolicy.livePromotionAllowed, false);
   assert.equal(result.autonomousPolicy.strategyMutationAllowed, false);
   assert.equal(result.safety.actualOrderRequests, 0);
@@ -218,4 +228,68 @@ test('autonomous capital lab learns only from closed APP_PAPER and APP_SHADOW cy
   assert.ok((usLane?.averageReturnPercent ?? 0) > 0);
   assert.equal(result.strategyLeaderboard[0].promotionAuthority, 'none');
   assert.equal(result.championCandidates.length, 0);
+});
+
+test('no-loss strategy can become champion-eligible without fabricating a numeric profit factor', () => {
+  const payloads: UnifiedTradeOrder[] = [];
+  const start = Date.parse('2026-08-12T01:00:00.000Z');
+
+  for (let index = 0; index < 30; index += 1) {
+    const source = index < 15 ? 'APP_PAPER' as const : 'APP_SHADOW' as const;
+    const symbol = `T${String(index).padStart(2, '0')}`;
+    const openAt = new Date(start + index * 60_000).toISOString();
+    const closeAt = new Date(start + index * 60_000 + 30_000).toISOString();
+    payloads.push(order({
+      brokerOrderId: `perfect-open-${index}`,
+      source,
+      market: 'CRYPTO_FUTURES',
+      currency: 'USDT',
+      symbol,
+      strategy: 'perfect-strategy',
+      orderedAt: openAt,
+      filledAt: openAt,
+      observedAt: openAt,
+      averageFillPrice: 100,
+      technicalSnapshot: {
+        ...order().technicalSnapshot,
+        snapshotId: `perfect-open-snapshot-${index}`,
+        capturedAt: openAt,
+        price: 100,
+      },
+    }));
+    payloads.push(order({
+      brokerOrderId: `perfect-close-${index}`,
+      source,
+      market: 'CRYPTO_FUTURES',
+      currency: 'USDT',
+      symbol,
+      strategy: 'perfect-strategy',
+      side: 'SELL',
+      positionEffect: 'CLOSE',
+      orderedAt: closeAt,
+      filledAt: closeAt,
+      observedAt: closeAt,
+      averageFillPrice: 101,
+      technicalSnapshot: {
+        ...order().technicalSnapshot,
+        snapshotId: `perfect-close-snapshot-${index}`,
+        capturedAt: closeAt,
+        price: 101,
+      },
+    }));
+  }
+
+  const result = buildAutonomousCapitalLab(buildUnifiedTradeJournal(payloads, { range: 'ALL' }, NOW), NOW);
+  const row = result.strategyLeaderboard.find((item) => item.strategy === 'perfect-strategy');
+
+  assert.ok(row);
+  assert.equal(row.sampleSize, 30);
+  assert.equal(row.paperTrades, 15);
+  assert.equal(row.shadowTrades, 15);
+  assert.equal(row.losses, 0);
+  assert.equal(row.profitFactor, null);
+  assert.equal(row.status, 'CHAMPION_ELIGIBLE');
+  assert.equal(row.promotionAuthority, 'none');
+  assert.equal(result.championCandidates.length, 1);
+  assert.equal(result.autonomousPolicy.livePromotionAllowed, false);
 });
