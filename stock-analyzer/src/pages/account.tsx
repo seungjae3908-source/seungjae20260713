@@ -3,6 +3,7 @@ import { useLocation } from 'wouter';
 import { ArrowLeft, Clock3, LogIn, LogOut, ShieldCheck, UserPlus } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { BrokerageAccountConnections } from '@/components/brokerage-account-connections';
+import { TossReadonlyAccount } from '@/components/toss-readonly-account';
 import { useAuth } from '@/lib/auth';
 import { MEMBER_TIER_LABELS } from '../../../packages/member-access/src/index.js';
 
@@ -38,6 +39,7 @@ export default function AccountPage() {
     : auth.profile?.status === 'suspended' || auth.profile?.is_active === false ? '이용이 정지된 계정입니다.'
     : auth.profile?.status === 'withdrawn' ? '탈퇴 처리된 계정입니다.'
     : auth.membershipLevel === 'pending' ? '관리자 승인 대기 중입니다.' : '';
+  const canConnectToss = auth.membershipLevel === 'regular' || auth.membershipLevel === 'admin';
 
   return <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-background">
     <header className="border-b border-card-border px-4 py-4"><div className="flex items-center gap-3">
@@ -62,6 +64,7 @@ export default function AccountPage() {
           <button disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3.5 text-sm font-extrabold text-primary-foreground disabled:opacity-50">{register ? <UserPlus className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}{busy ? '처리 중...' : register ? '가입 신청' : '로그인'}</button>
         </form>
       </Card>}
+      {!auth.loading && auth.user && canConnectToss ? <TossReadonlyAccount /> : null}
       {!auth.loading && auth.user && auth.isAdmin ? <BrokerageAccountConnections /> : null}
       {(notice || error) && <p className={`mt-3 break-words rounded-2xl p-4 text-sm font-bold ${error ? 'bg-destructive/10 text-destructive' : 'bg-positive/10 text-positive'}`}>{error || notice}</p>}
     </main>{auth.isApproved && <BottomNav />}
