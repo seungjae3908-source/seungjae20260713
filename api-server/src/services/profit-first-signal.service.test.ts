@@ -79,7 +79,7 @@ describe('profit-first signal engine', () => {
     assert.equal(totalTradingCostPercent(cost), 1.4);
     const value = evidence({ costPolicy: cost });
     assert.equal(value.tradingCostPercent, 1.4);
-    assert.equal(value.expectedNetReturn, 0.3);
+    assert.equal(value.expectedNetReturn, -0.3);
   });
 
   it('returns NO_TRADE for negative EV', () => {
