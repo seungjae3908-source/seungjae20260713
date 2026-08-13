@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   AUTONOMOUS_QUANT_LAB_GROUPS,
   AUTONOMOUS_QUANT_LAB_STAGES,
+  CHAMPION_EVIDENCE_REQUIREMENTS,
   buildAutonomousQuantLabContract,
 } from "../src/autonomous-quant-lab-contract.js";
 
@@ -26,7 +27,7 @@ test("futures separates LONG and SHORT for every strategy type", () => {
   }
 });
 
-test("promotion stages require Paper and Shadow before Champion comparison", () => {
+test("promotion stages require final holdout Paper and Shadow before Champion comparison", () => {
   assert.deepEqual(AUTONOMOUS_QUANT_LAB_STAGES, [
     "CHALLENGER",
     "HISTORICAL_BACKTEST",
@@ -39,7 +40,9 @@ test("promotion stages require Paper and Shadow before Champion comparison", () 
     "SHADOW",
     "CHAMPION_COMPARISON",
   ]);
+  assert.deepEqual(CHAMPION_EVIDENCE_REQUIREMENTS, ["FINAL_HOLDOUT", "PAPER", "SHADOW"]);
   const contract = buildAutonomousQuantLabContract();
+  assert.deepEqual(contract.championEvidenceRequirements, ["FINAL_HOLDOUT", "PAPER", "SHADOW"]);
   assert.equal(contract.currentValidatedChampion, "NONE");
   assert.equal(contract.championRule, "BACKTEST_ONLY_NEVER_PROMOTES");
   assert.equal(contract.liveExecution, false);
