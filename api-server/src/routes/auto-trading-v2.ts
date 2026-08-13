@@ -267,7 +267,7 @@ function notificationEvent(input: {
     id: `atv2-tg-${stableId(`${input.userId}:${input.sourceEventId}:${input.type}`)}`,
     sourceEventId: input.sourceEventId,
     userId: input.userId,
-    brokerConnectionRef: 'bitget',
+    brokerConnectionRef: null,
     orderPlanId: null,
     executionId: input.executionId ?? null,
     type: input.type,
@@ -821,8 +821,11 @@ router.post('/tick', async (req: AuthenticatedRequest, res) => {
     if (config.safeHalt || reconciled.state !== 'SAFE') {
       return res.status(409).json({ ok: false, error: 'AUTO_TRADING_V2_SAFE_HALT', config, reconciliation: reconciled, ...autoTradingV2SafetyEnvelope() });
     }
-    const requested = Array.isArray(req.body?.symbols) ? req.body.symbols.map((value: unknown) => String(value).toUpperCase()) : [...AUTO_TRADING_V2_SUPPORTED_SYMBOLS];
-    const symbols = [...new Set(requested)].filter((symbol) => (AUTO_TRADING_V2_SUPPORTED_SYMBOLS as readonly string[]).includes(symbol));
+    const requested: string[] = Array.isArray(req.body?.symbols)
+      ? (req.body.symbols as unknown[]).map((value) => String(value).toUpperCase())
+      : [...AUTO_TRADING_V2_SUPPORTED_SYMBOLS];
+    const symbols: string[] = [...new Set<string>(requested)]
+      .filter((symbol) => (AUTO_TRADING_V2_SUPPORTED_SYMBOLS as readonly string[]).includes(symbol));
     if (!symbols.length) throw new Error('AUTO_TRADING_V2_NO_SUPPORTED_SYMBOL');
     const allowFaultInjection = process.env.AUTO_TRADING_V2_FAULT_INJECTION === 'true' && process.env.NODE_ENV !== 'production';
     const faultOptions = allowFaultInjection ? {
