@@ -21,9 +21,17 @@ function pass(stage: PromotionStageKey) {
     sourceSha: SHA,
     datasetId: 'dataset-v1',
     dataRange: { start: '2025-01-01T00:00:00.000Z', end: '2026-01-01T00:00:00.000Z' },
+    startedAt: '2026-01-02T00:00:00.000Z',
+    completedAt: '2026-01-03T00:00:00.000Z',
+    fetchedAt: '2026-01-02T00:00:00.000Z',
+    validatedAt: '2026-01-03T00:00:00.000Z',
     sampleCount: 50,
     metrics: { evidenceLinked: true },
     provenance: ['immutable-test-artifact'],
+    corporateActionAdjusted: true,
+    survivorshipSafe: true,
+    pointInTimeSafe: true,
+    costPolicy: { version: 'BACKTEST_FEES_SLIPPAGE_FUNDING_V1' },
     dataQuality: 'VERIFIED' as const,
   };
 }
@@ -68,7 +76,11 @@ test('promotion candidate requires every research, paper, shadow, outcome and co
       pass('HISTORICAL_BACKTEST'), pass('OUT_OF_SAMPLE'), pass('PURGED_WALK_FORWARD'),
       { ...pass('COST_STRESS'), metrics: Object.fromEntries(COST_STRESS_MULTIPLIERS.map((value) => [`cost_${value}x`, true])) },
       pass('REGIME'), pass('FINAL_HOLDOUT'), pass('PAPER'), pass('SHADOW'),
-      { ...pass('RECOMMENDATION_OUTCOMES'), sampleSize: 50, metrics: { hitRate: 0.55, expectedValue: 0.3 } },
+      { ...pass('RECOMMENDATION_OUTCOMES'), sampleSize: 50, metrics: {
+        hitRate: 0.55, expectedValue: 0.3, driftClassification: 'HEALTHY',
+        driftPolicyVersion: 'SIGNAL_PERFORMANCE_CALIBRATION_V1', riskGatePassed: true,
+        dataQualityGatePassed: true, costStressMaintained: true,
+      } },
     ],
   } as const;
   const result = new StrategyPromotionService({ sourceSha: SHA, now: () => NOW, evidence }).get(STRATEGY);
@@ -81,13 +93,32 @@ test('critical drift suspends recommendation without granting live authority', (
   const evidence = {
     [STRATEGY]: [
       { ...pass('HISTORICAL_BACKTEST'), sampleSize: 100, metrics: { hitRate: 0.7, expectedValue: 1.5 } },
-      { ...pass('RECOMMENDATION_OUTCOMES'), sampleSize: 40, metrics: { hitRate: 0.4, expectedValue: 0.1 } },
+      { ...pass('RECOMMENDATION_OUTCOMES'), sampleSize: 40, metrics: {
+        hitRate: 0.4, expectedValue: 0.1, driftClassification: 'CRITICAL',
+        driftPolicyVersion: 'SIGNAL_PERFORMANCE_CALIBRATION_V1',
+      } },
     ],
   } as const;
   const result = new StrategyPromotionService({ sourceSha: SHA, now: () => NOW, evidence }).get(STRATEGY);
   assert.equal(result?.drift.classification, 'CRITICAL');
   assert.equal(result?.promotionState, 'SUSPENDED');
   assert.equal(result?.liveTradingAuthority, false);
+});
+
+test('numeric performance gaps without a versioned upstream drift policy do not invent a classification', () => {
+  const evidence = {
+    [STRATEGY]: [
+      { ...pass('HISTORICAL_BACKTEST'), sampleSize: 100, metrics: { hitRate: 0.7, expectedValue: 1.5 } },
+      { ...pass('RECOMMENDATION_OUTCOMES'), sampleSize: 40, metrics: {
+        hitRate: 0.4, expectedValue: 0.1, riskGatePassed: true,
+        dataQualityGatePassed: true, costStressMaintained: true,
+      } },
+    ],
+  } as const;
+  const result = new StrategyPromotionService({ sourceSha: SHA, now: () => NOW, evidence }).get(STRATEGY);
+  assert.equal(result?.drift.classification, null);
+  assert.equal(result?.drift.status, 'INSUFFICIENT_SAMPLE');
+  assert.equal(result?.promotionEligible, false);
 });
 
 test('versioned filters and kill state remain fail closed', () => {
