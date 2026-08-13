@@ -7,6 +7,10 @@ import {
   riskEnvelopeForPlan,
   withRiskEnvelope,
 } from './trade-risk-envelope.service';
+import {
+  evaluateFourMarketPaperReadiness,
+  type FourMarketPaperReadinessEvidence,
+} from './four-market-paper-readiness.service';
 
 function plan(): TradingPlan {
   const now = new Date();
@@ -58,6 +62,35 @@ function plan(): TradingPlan {
   };
 }
 
+function paperEvidence(now: number): FourMarketPaperReadinessEvidence {
+  return {
+    market: 'KR_STOCK',
+    provider: 'TOSS',
+    direction: 'BUY',
+    reducing: false,
+    observedAt: new Date(now).toISOString(),
+    dataStatus: 'ready',
+    costPolicy: {
+      version: 'kr-paper-v1',
+      commissionRate: 0,
+      taxRate: 0,
+      spreadRate: 0.001,
+      slippageRate: 0.001,
+      fundingRate: null,
+      latencyMs: 100,
+    },
+    session: { id: 'KRX-REGULAR', isOpen: true, halted: false },
+    marketRules: {
+      tickSize: 1,
+      quantityStep: 1,
+      minimumQuantity: null,
+      minimumNotional: 1,
+      maximumLeverage: null,
+      maintenanceMarginRate: null,
+    },
+  };
+}
+
 test('approval envelope fixes investment, loss, slippage, split count and expiration', () => {
   const candidate = plan();
   const envelope = buildRiskEnvelope(candidate, DEFAULT_TRADING_POLICY, candidate.approvedAt!);
@@ -105,4 +138,91 @@ test('approval refuses a stop-loss envelope above the hard daily loss budget', (
     () => buildRiskEnvelope(candidate, DEFAULT_TRADING_POLICY, candidate.approvedAt!),
     /RISK_ENVELOPE_MAX_LOSS_EXCEEDED/,
   );
+});
+
+test('four-market Paper readiness accepts explicit zero stock fees but requires Toss and a tradable session', () => {
+  const now = Date.now();
+  const ready = paperEvidence(now);
+  assert.deepEqual(evaluateFourMarketPaperReadiness(ready, now), {
+    ready: true,
+    blockCodes: [],
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  });
+  const wrongProvider = evaluateFourMarketPaperReadiness({ ...ready, provider: 'UPBIT' }, now);
+  assert.ok(wrongProvider.blockCodes.includes('PAPER_PROVIDER_MISMATCH'));
+  const closed = evaluateFourMarketPaperReadiness({ ...ready, session: { ...ready.session, isOpen: false } }, now);
+  assert.ok(closed.blockCodes.includes('PAPER_STOCK_SESSION_NOT_TRADABLE'));
+});
+
+test('cash Paper readiness forbids synthetic long/short and non-reducing exits', () => {
+  const now = Date.now();
+  const ready = paperEvidence(now);
+  const short = evaluateFourMarketPaperReadiness({ ...ready, direction: 'SHORT' }, now);
+  assert.ok(short.blockCodes.includes('PAPER_CASH_DIRECTION_INVALID'));
+  const exit = evaluateFourMarketPaperReadiness({ ...ready, direction: 'SELL_EXIT', reducing: false }, now);
+  assert.ok(exit.blockCodes.includes('PAPER_CASH_EXIT_MUST_REDUCE'));
+});
+
+test('Upbit spot Paper readiness remains cash-like and forbids futures-only rules', () => {
+  const now = Date.now();
+  const spot: FourMarketPaperReadinessEvidence = {
+    ...paperEvidence(now),
+    market: 'CRYPTO_SPOT',
+    provider: 'UPBIT',
+    costPolicy: { ...paperEvidence(now).costPolicy, version: 'upbit-paper-v1', taxRate: null },
+    session: { id: null, isOpen: true, halted: false },
+    marketRules: { ...paperEvidence(now).marketRules, tickSize: 0.00000001, minimumNotional: 5_000 },
+  };
+  assert.equal(evaluateFourMarketPaperReadiness(spot, now).ready, true);
+  const invalid = evaluateFourMarketPaperReadiness({
+    ...spot,
+    marketRules: { ...spot.marketRules, maximumLeverage: 2 },
+  }, now);
+  assert.ok(invalid.blockCodes.includes('PAPER_SPOT_FUTURES_RULES_FORBIDDEN'));
+});
+
+test('Bitget futures Paper readiness requires LONG/SHORT plus funding, mark/OI and contract risk rules', () => {
+  const now = Date.now();
+  const futures: FourMarketPaperReadinessEvidence = {
+    ...paperEvidence(now),
+    market: 'CRYPTO_FUTURES',
+    provider: 'BITGET',
+    direction: 'LONG',
+    costPolicy: {
+      ...paperEvidence(now).costPolicy,
+      version: 'bitget-paper-v1',
+      taxRate: null,
+      fundingRate: 0,
+    },
+    session: { id: null, isOpen: true, halted: false },
+    marketRules: {
+      tickSize: 0.1,
+      quantityStep: 0.001,
+      minimumQuantity: 0.001,
+      minimumNotional: 5,
+      maximumLeverage: 5,
+      maintenanceMarginRate: 0.005,
+    },
+    futures: { markPrice: 100_000, openInterest: 0, marginMode: 'isolated' },
+  };
+  assert.equal(evaluateFourMarketPaperReadiness(futures, now).ready, true);
+  const syntheticBuy = evaluateFourMarketPaperReadiness({ ...futures, direction: 'BUY' }, now);
+  assert.ok(syntheticBuy.blockCodes.includes('PAPER_FUTURES_DIRECTION_INVALID'));
+  const missingInputs = evaluateFourMarketPaperReadiness({
+    ...futures,
+    costPolicy: { ...futures.costPolicy, fundingRate: null },
+    futures: { markPrice: null, openInterest: null, marginMode: null },
+  }, now);
+  assert.ok(missingInputs.blockCodes.includes('PAPER_FUTURES_FUNDING_MISSING'));
+  assert.ok(missingInputs.blockCodes.includes('PAPER_FUTURES_MARK_OI_MISSING'));
+  assert.ok(missingInputs.blockCodes.includes('PAPER_FUTURES_MARGIN_MODE_MISSING'));
+});
+
+test('Paper readiness rejects stale or future-dated market evidence', () => {
+  const now = Date.now();
+  const stale = evaluateFourMarketPaperReadiness({ ...paperEvidence(now), observedAt: new Date(now - 5_001).toISOString() }, now);
+  assert.ok(stale.blockCodes.includes('PAPER_EVIDENCE_STALE_OR_INVALID'));
+  const future = evaluateFourMarketPaperReadiness({ ...paperEvidence(now), observedAt: new Date(now + 1).toISOString() }, now);
+  assert.ok(future.blockCodes.includes('PAPER_EVIDENCE_STALE_OR_INVALID'));
 });
