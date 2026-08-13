@@ -292,7 +292,13 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       selectedAt: new Date().toISOString(),
     };
     analysisSelection.select(selection);
-    if (!embedded) navigate(`/ai-chart?${selectionQuery(selection)}`);
+    if (!embedded) {
+      const params = new URLSearchParams(selectionQuery(selection));
+      params.set('signalId', card.signalId);
+      const chartStrategyMode = card.strategyMode ?? strategy;
+      params.set('strategyMode', chartStrategyMode === 'scalping' ? 'SCALPING' : 'SWING');
+      navigate(`/ai-chart?${params.toString()}`);
+    }
   };
 
   const timeframes = STRATEGY_TIMEFRAMES[strategy];
