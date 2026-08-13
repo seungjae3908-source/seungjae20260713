@@ -48,6 +48,35 @@ const intelligence = {
   safety: { liveTrading: false, orderAuthority: 'none', realOrderCount: 0, realCancelCount: 0, realAmendCount: 0, privateTradingApiCount: 0 },
 };
 
+const additionalBuyResponse = {
+  ok: true,
+  status: 'READY',
+  priceBasis: 'NORMALIZED_KRW',
+  holding: {
+    ticker: '005930', name: '삼성전자', market: 'KR', nativeCurrency: 'KRW',
+    currentAveragePriceNative: 70000, currentPriceNative: 75000, currentPositionValueKRW: 750000,
+  },
+  result: {
+    status: 'READY', additionalQuantity: 1.3333333333, additionalInvestmentKRW: 100000,
+    newAveragePrice: 70588.235294, currentWeightPercent: 100, projectedWeightPercent: 100,
+    stopLoss: null, targets: [], estimatedMaxLossKRW: null, targetProfitsKRW: [],
+    missing: ['STOP_UNAVAILABLE', 'TARGETS_UNAVAILABLE'],
+  },
+  evidence: { stopLoss: 'UNAVAILABLE', targets: 'UNAVAILABLE', source: null },
+};
+
+const monthlyResponse = {
+  ok: true,
+  status: 'PARTIAL',
+  assumption: 'NO_VALIDATED_RETURN_ASSUMPTION',
+  plan: {
+    monthlyAmountKRW: 300000,
+    months: 12,
+    cumulativeInvestmentKRW: 3600000,
+    allocations: [{ key: 'KR_STOCKS', weight: 1, cumulativeContributionKRW: 3600000 }],
+  },
+};
+
 async function installRuntime(page: Page) {
   await page.addInitScript(({ storageKey, userId, now }) => {
     const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -83,6 +112,8 @@ async function installRuntime(page: Page) {
 
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === '/api/portfolio/intelligence/additional-buy') return fulfill(route, additionalBuyResponse);
+    if (path === '/api/portfolio/intelligence/monthly-contribution') return fulfill(route, monthlyResponse);
     if (path === '/api/portfolio/intelligence') return fulfill(route, { ok: true, portfolio: intelligence });
     if (path === '/api/quotes') return fulfill(route, { ok: true, quotes: [{ ticker: '005930', price: 75000, changePercent: 1.2 }] });
     return fulfill(route, { ok: true, items: [], rows: [], results: [], quotes: [], alerts: [] });
@@ -128,6 +159,25 @@ test('Portfolio V2 reduces initial browser data requests and manual refresh is s
   expect(v2InitialCount).toBe(1);
   expect(duplicateInitialCount).toBe(0);
   expect(manualRefreshCount).toBe(1);
+  expect(diagnostics.consoleErrors, diagnostics.consoleErrors.join('\n')).toEqual([]);
+  expect(diagnostics.pageErrors, diagnostics.pageErrors.join('\n')).toEqual([]);
+});
+
+test('Portfolio simulators call backend deterministic routes and preserve unavailable evidence', async ({ page }) => {
+  const diagnostics = await installRuntime(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/portfolio');
+  await expect(page.getByRole('heading', { name: 'Portfolio Intelligence' })).toBeVisible();
+
+  await page.getByLabel('추가 투자 금액').fill('100000');
+  await page.getByRole('button', { name: '추가매수 계산' }).click();
+  await expect(page.getByText(/Stop\/Target evidence:/)).toContainText('UNAVAILABLE / UNAVAILABLE');
+  await expect.poll(() => diagnostics.requests.filter((entry) => entry === 'POST /api/portfolio/intelligence/additional-buy').length).toBe(1);
+
+  await page.getByRole('button', { name: '적립 시뮬레이션 계산' }).click();
+  await expect(page.getByText('누적 납입금 3,600,000원')).toBeVisible();
+  await expect(page.getByText(/NO_VALIDATED_RETURN_ASSUMPTION/)).toBeVisible();
+  await expect.poll(() => diagnostics.requests.filter((entry) => entry === 'POST /api/portfolio/intelligence/monthly-contribution').length).toBe(1);
   expect(diagnostics.consoleErrors, diagnostics.consoleErrors.join('\n')).toEqual([]);
   expect(diagnostics.pageErrors, diagnostics.pageErrors.join('\n')).toEqual([]);
 });
