@@ -127,6 +127,22 @@ router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canPlaceOrders'));
+
+// Auto Trading 2.0 execution mutation is server-worker-owned. Browser/API
+// callers may change mode/config and read status/journal, but cannot advance a
+// Paper/Shadow execution cycle directly. The legacy /tick implementation stays
+// unreachable behind this fail-closed guard for compatibility while the worker
+// owns all 30-second state mutation.
+router.use('/trade-automation/v2/tick', (_req, res) => res.status(405).json({
+  ok: false,
+  error: 'AUTO_TRADING_V2_WORKER_OWNS_EXECUTION',
+  workerOwned: true,
+  liveTrading: false,
+  realOrderCount: 0,
+  realCancelCount: 0,
+  privateTradingApiCount: 0,
+}));
+
 // V2 is mounted before the legacy automation router so the safe PAPER/SHADOW
 // surface owns its namespace. LIVE remains server-locked inside this router.
 router.use('/trade-automation/v2', autoTradingV2Router);
