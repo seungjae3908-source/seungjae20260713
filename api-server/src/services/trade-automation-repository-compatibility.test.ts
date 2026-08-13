@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
+import {
+  buildPrivateExecutionLeaseKey,
+  buildPrivateProviderScopeKey,
+} from './private-provider-scope.service';
 import type { ExchangeConnection, TradingOrder, TradingOrderEvent, TradingPlan } from './trade-automation.types';
 
 const USER_ID = '11111111-1111-1111-1111-111111111111';
@@ -256,4 +260,64 @@ test('plans, orders, events, and idempotency identities cannot cross user bounda
   assert.deepEqual((await repository.listOrders(OTHER_USER_ID)).map((order) => order.id), [userBOrder.id]);
   assert.deepEqual((await repository.listEvents(USER_ID)).map((event) => event.id), ['event-user-a']);
   assert.deepEqual((await repository.listEvents(OTHER_USER_ID)).map((event) => event.id), ['event-user-b']);
+});
+
+test('private provider scope keys isolate user, provider, account, and resource without exposing raw identifiers', () => {
+  const base = {
+    userId: USER_ID,
+    provider: 'upbit' as const,
+    accountRef: 'account-user-a',
+    resource: 'order' as const,
+    resourceId: 'order-123',
+  };
+  const key = buildPrivateProviderScopeKey(base);
+  const sameKey = buildPrivateProviderScopeKey({ ...base });
+  const otherUserKey = buildPrivateProviderScopeKey({ ...base, userId: OTHER_USER_ID });
+  const otherAccountKey = buildPrivateProviderScopeKey({ ...base, accountRef: 'account-user-a-2' });
+  const otherProviderKey = buildPrivateProviderScopeKey({ ...base, provider: 'bitget' });
+
+  assert.equal(key, sameKey);
+  assert.notEqual(key, otherUserKey);
+  assert.notEqual(key, otherAccountKey);
+  assert.notEqual(key, otherProviderKey);
+  assert.equal(key.includes(USER_ID), false);
+  assert.equal(key.includes('account-user-a'), false);
+  assert.equal(key.includes('order-123'), false);
+});
+
+test('account-bound private resources fail closed without an account reference', () => {
+  for (const resource of ['holdings', 'positions', 'order', 'reconciliation', 'private-stream'] as const) {
+    assert.throws(
+      () => buildPrivateProviderScopeKey({ userId: USER_ID, provider: 'toss', resource }),
+      /PRIVATE_ACCOUNT_REF_REQUIRED/,
+    );
+  }
+
+  assert.doesNotThrow(() => buildPrivateProviderScopeKey({
+    userId: USER_ID,
+    provider: 'toss',
+    resource: 'credential',
+  }));
+  assert.throws(
+    () => buildPrivateProviderScopeKey({ userId: ' ', provider: 'upbit', resource: 'credential' }),
+    /PRIVATE_USER_ID_REQUIRED/,
+  );
+});
+
+test('execution lease identities cannot collide across users or provider accounts', () => {
+  const base = {
+    userId: USER_ID,
+    provider: 'bitget' as const,
+    accountRef: 'futures-account-a',
+    clientOrderId: 'client-order-shared',
+  };
+  const lease = buildPrivateExecutionLeaseKey(base);
+
+  assert.equal(lease, buildPrivateExecutionLeaseKey({ ...base }));
+  assert.notEqual(lease, buildPrivateExecutionLeaseKey({ ...base, userId: OTHER_USER_ID }));
+  assert.notEqual(lease, buildPrivateExecutionLeaseKey({ ...base, accountRef: 'futures-account-b' }));
+  assert.notEqual(lease, buildPrivateExecutionLeaseKey({ ...base, provider: 'upbit' }));
+  assert.equal(lease.includes(USER_ID), false);
+  assert.equal(lease.includes('futures-account-a'), false);
+  assert.equal(lease.includes('client-order-shared'), false);
 });
