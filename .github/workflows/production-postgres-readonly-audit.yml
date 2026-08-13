@@ -1,0 +1,169 @@
+name: Production PostgreSQL Read-only Watchlist Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      production_sha:
+        description: Exact 40-character SHA currently deployed to Production
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-postgres-readonly-watchlist-audit
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Validate owner, repository, and deployed SHA provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      production_sha: ${{ steps.input.outputs.production_sha }}
+    steps:
+      - name: Require repository owner dispatch and exact SHA
+        id: input
+        env:
+          REQUESTED_SHA: ${{ inputs.production_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REPOSITORY" == "seungjae3908-source/seungjae20260713" ]] || {
+            echo "Repository gate rejected." >&2
+            exit 1
+          }
+          [[ "$GITHUB_ACTOR" == "seungjae3908-source" ]] || {
+            echo "Actor gate rejected." >&2
+            exit 1
+          }
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo "production_sha must be an exact 40-character SHA." >&2
+            exit 1
+          }
+          printf 'production_sha=%s\n' "${REQUESTED_SHA,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Require latest successful Production Deploy to match requested SHA
+        uses: actions/github-script@v7
+        env:
+          PRODUCTION_SHA: ${{ steps.input.outputs.production_sha }}
+        with:
+          script: |
+            const target = process.env.PRODUCTION_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latestSuccessful = runs
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latestSuccessful) {
+              core.setFailed('No successful Production Deploy run exists.');
+              return;
+            }
+            if (String(latestSuccessful.head_sha).toLowerCase() !== target) {
+              core.setFailed('Requested SHA does not match the latest successful Production Deploy.');
+              return;
+            }
+            core.info(`Production deploy provenance accepted from Run ID ${latestSuccessful.id}.`);
+
+  audit:
+    name: SELECT-only watchlist PostgreSQL catalog evidence
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: production
+    env:
+      PRODUCTION_SHA: ${{ needs.gate.outputs.production_sha }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      AUDIT_ARTIFACT: ${{ runner.temp }}/production-postgres-watchlist-audit.json
+      AUDIT_STDERR: ${{ runner.temp }}/production-postgres-watchlist-audit.stderr
+    steps:
+      - name: Checkout diagnostic tooling
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify static read-only safety contract
+        run: node ops/verify-production-postgres-readonly-audit.mjs --static
+
+      - name: Validate existing Production SSH credentials
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" ]] || { echo "Missing existing PROD_SSH_HOST." >&2; exit 1; }
+          [[ -n "$SSH_USER" ]] || { echo "Missing existing PROD_SSH_USER." >&2; exit 1; }
+          [[ -n "$SSH_PRIVATE_KEY" ]] || { echo "Missing existing PROD_SSH_PRIVATE_KEY." >&2; exit 1; }
+
+      - name: Configure canonical Production SSH
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > "$HOME/.ssh/known_hosts" 2>/dev/null
+          fi
+
+      - name: Run Production PostgreSQL catalog audit over SSH
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          quoted_sha="$(printf '%q' "$PRODUCTION_SHA")"
+          if ! ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -p "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "EXPECTED_PRODUCTION_SHA=$quoted_sha bash -s" \
+            < ops/production-postgres-readonly-audit.sh \
+            > "$AUDIT_ARTIFACT" \
+            2> "$AUDIT_STDERR"; then
+            echo "Read-only PostgreSQL audit transport failed; remote stderr is intentionally not printed." >&2
+            exit 1
+          fi
+
+      - name: Verify artifact redaction and schema
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          [[ -s "$AUDIT_ARTIFACT" ]] || {
+            echo "Sanitized audit artifact was not produced." >&2
+            exit 1
+          }
+          node ops/verify-production-postgres-readonly-audit.mjs --artifact "$AUDIT_ARTIFACT"
+
+      - name: Upload sanitized catalog evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-postgres-watchlist-audit-${{ needs.gate.outputs.production_sha }}
+          path: ${{ runner.temp }}/production-postgres-watchlist-audit.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Require successful catalog evidence
+        run: |
+          set -Eeuo pipefail
+          node - "$AUDIT_ARTIFACT" <<'NODE'
+          const fs = require('node:fs');
+          const file = process.argv[2];
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (value.STATUS !== 'passed' || value.DB_CATALOG_AUDIT !== 'PASSED') {
+            console.error(`Catalog audit did not pass: ${String(value.DB_CATALOG_AUDIT ?? 'UNKNOWN')}`);
+            process.exit(1);
+          }
+          NODE
