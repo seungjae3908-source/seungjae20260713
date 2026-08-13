@@ -33,6 +33,7 @@ function scannerResponse(options: ResponseOptions = {}) {
     price: assetClass === 'coin_spot' ? 100_000_000 : assetClass === 'coin_futures' ? 70_000 : 75_000,
     changePercent: 1.25,
     direction: assetClass === 'coin_futures' ? 'SHORT' : 'LONG',
+    action: assetClass === 'coin_futures' ? 'SHORT' : 'BUY',
     signalState: 'WATCHING',
     score: 82,
     confidence: 78,
@@ -77,6 +78,8 @@ function scannerResponse(options: ResponseOptions = {}) {
         ? ['현물 Scanner에는 숏·레버리지를 적용하지 않습니다.']
         : []),
     ],
+    dataQuality: { state: partial ? 'DEGRADED' : 'TRUSTED', score: partial ? 70 : 96, strongSignalAllowed: !partial, issues: [] },
+    aiValidation: { status: 'PASS', provider: 'fixture-validator', counterEvidence: [], missingData: partial ? ['뉴스·공시'] : [], risks: partial ? ['일부 데이터 미확인'] : [], explanation: '공개 데이터 근거만 검증했습니다.' },
   };
   return {
     ok: true,
@@ -104,6 +107,12 @@ function scannerResponse(options: ResponseOptions = {}) {
       deadlineMs: 12_000,
       itemTimeoutMs: 3_500,
       maxConcurrency: 1,
+      providerAcceptedCount: 1,
+      dataSuccessCount: 1,
+      insufficientDataCount: 0,
+      filteredByStrategyCount: 0,
+      hardFilterRejectedCount: 0,
+      finalDisplayedCount: 1,
     },
     universe: {
       totalCount: options.failure ? 2 : 1,
@@ -121,11 +130,31 @@ function scannerResponse(options: ResponseOptions = {}) {
       listingStatusCoverage: 'listed-or-unknown',
     },
     dataState: partial ? 'partial' : 'complete',
+    outcome: 'CANDIDATES_AVAILABLE',
     message: partial ? '공개 공급자 일부 지연 결과입니다.' : '공개 데이터 분석을 완료했습니다.',
     generatedAt: options.generatedAt ?? '2026-08-05T00:00:00.000Z',
     orderSubmitted: false,
     exchangeRequestSent: false,
   };
+}
+
+function validZeroScannerResponse() {
+  const response = scannerResponse();
+  response.cards = [];
+  response.execution.requestedCount = 80;
+  response.execution.startedCount = 80;
+  response.execution.completedCount = 80;
+  response.execution.excludedCount = 80;
+  response.execution.providerAcceptedCount = 80;
+  response.execution.dataSuccessCount = 80;
+  response.execution.insufficientDataCount = 0;
+  response.execution.filteredByStrategyCount = 0;
+  response.execution.finalDisplayedCount = 0;
+  response.universe.totalCount = 80;
+  response.universe.source = 'krx-symbol-master+public-market-provider';
+  response.outcome = 'VALID_ZERO_SIGNAL';
+  response.message = '공개 공급자 80종목 분석 완료 · 현재 신호 없음';
+  return response;
 }
 
 async function fulfill(route: Route, payload: unknown, delayMs = 0) {
@@ -163,7 +192,7 @@ async function installBaseMocks(page: Page, unexpectedHttp: string[]) {
   });
 }
 
-for (const [width, height] of [[360, 800], [390, 844], [430, 932]] as const) {
+for (const [width, height] of [[320, 760], [360, 800], [390, 844], [412, 915], [430, 932]] as const) {
   test(`signal scanner is usable without overflow or order requests at ${width}x${height}`, async ({ page }) => {
     const forbidden: string[] = [];
     const unexpectedHttp: string[] = [];
@@ -186,12 +215,109 @@ for (const [width, height] of [[360, 800], [390, 844], [430, 932]] as const) {
     await expect(page.getByRole('region', { name: '검색 시장' }).getByRole('button', { name: /^국내주식/ })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    const scrollBoundary = await page.locator('main').evaluate((main) => {
+      const parentScrollers: string[] = [];
+      let parent = main.parentElement;
+      while (parent) {
+        const style = getComputedStyle(parent);
+        if (/(auto|scroll)/.test(style.overflowY) && parent.scrollHeight > parent.clientHeight + 1) parentScrollers.push(parent.tagName);
+        parent = parent.parentElement;
+      }
+      return { mainScrollable: main.scrollHeight > main.clientHeight, parentScrollers };
+    });
+    expect(scrollBoundary.mainScrollable).toBe(true);
+    expect(scrollBoundary.parentScrollers).toEqual([]);
+    const touchTargets = await page.getByTestId('scanner-master-list').locator('button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
+    expect(touchTargets.every((height) => height >= 44)).toBe(true);
+    await page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ }).click();
+    const mobileSheet = page.getByTestId('scanner-mobile-sheet');
+    await expect(mobileSheet).toBeVisible();
+    expect(await mobileSheet.evaluate((sheet) => sheet.scrollWidth <= sheet.clientWidth + 1)).toBe(true);
+    const sheetTargets = await mobileSheet.locator('button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
+    expect(sheetTargets.every((height) => height >= 44)).toBe(true);
+    const nav = page.getByRole('navigation', { name: '주요 메뉴' });
+    await expect(nav).toBeVisible();
+    const layers = await Promise.all([
+      mobileSheet.evaluate((node) => Number(getComputedStyle(node).zIndex)),
+      nav.evaluate((node) => Number(getComputedStyle(node).zIndex)),
+    ]);
+    expect(layers[0]).toBeGreaterThan(layers[1]);
+    await mobileSheet.getByRole('button', { name: 'Signal Detail 닫기' }).click();
+    await expect(mobileSheet).toBeHidden();
     expect(forbidden).toEqual([]);
     expect(unexpectedHttp).toEqual([]);
     expect(consoleErrors).toEqual([]);
     expect(pageErrors).toEqual([]);
   });
 }
+
+test('signal click explains why, preserves PricePlan, and exposes only safe continuation actions', async ({ page }) => {
+  const forbidden: string[] = [];
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (request.method() !== 'GET' && forbiddenRequest.test(url.pathname)) forbidden.push(`${request.method()} ${url.pathname}`);
+  });
+  await installBaseMocks(page, []);
+  await page.route('**/api/market/scan**', (route) => fulfill(route, scannerResponse()));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ }).click();
+  const detail = page.getByTestId('scanner-mobile-sheet').getByTestId('signal-detail');
+  await expect(detail).toBeVisible();
+  await expect(detail).toContainText('왜 이 신호인가');
+  await expect(detail).toContainText('실제 공개 캔들로 추세를 확인했습니다.');
+  await expect(detail).toContainText('74,000~75,000');
+  await expect(detail).toContainText('NO SYNTHETIC PRICE');
+  await expect(detail).toContainText('public-candles');
+  await detail.getByRole('button', { name: '주문 준비 열기' }).click();
+  await expect(detail.getByTestId('order-preparation')).toContainText('실행 아님');
+  await expect(detail.getByTestId('order-preparation')).toContainText(/검색·분석 전용|승인 대기 등록/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  expect(forbidden).toEqual([]);
+});
+
+test('all four markets continue from canonical signal identity to AI Chart with zero order mutations', async ({ page }) => {
+  const mutations: string[] = [];
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() !== 'GET' && forbiddenRequest.test(path)) mutations.push(`${request.method()} ${path}`);
+  });
+  await installBaseMocks(page, []);
+  await page.route('**/api/market/scan**', (route) => {
+    const market = new URL(route.request().url()).searchParams.get('market') === 'US' ? 'US' : 'KR';
+    return fulfill(route, scannerResponse({ market, symbol: market === 'US' ? 'AAPL' : '005930', name: market === 'US' ? 'Apple' : '삼성전자' }));
+  });
+  await page.route('**/api/scanner/crypto/spot**', (route) => fulfill(route, scannerResponse({ market: 'UPBIT_KRW', assetClass: 'coin_spot', symbol: 'BTC', name: '비트코인', timeframe: '5m' })));
+  await page.route('**/api/scanner/crypto/futures**', (route) => fulfill(route, scannerResponse({ market: 'BITGET_USDT_FUTURES', assetClass: 'coin_futures', symbol: 'BTCUSDT', name: 'BTCUSDT', timeframe: '5m' })));
+
+  const cases = [
+    { market: /^국내주식/, card: /^삼성전자 005930/, url: /market=KR.*symbol=005930/ },
+    { market: /^미국주식/, card: /^Apple AAPL/, url: /market=US.*symbol=AAPL/ },
+    { market: /^코인 현물/, card: /^비트코인 BTC/, url: /market=UPBIT.*symbol=BTC/ },
+    { market: /^코인 선물/, card: /^BTCUSDT BTCUSDT/, url: /market=BITGET.*symbol=BTCUSDT/ },
+  ];
+  for (const item of cases) {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/__phase11-technical-workspace-e2e');
+    await page.getByRole('region', { name: '검색 시장' }).getByRole('button', { name: item.market }).click();
+    await page.getByRole('button', { name: item.card }).click();
+    const detail = page.getByTestId('scanner-mobile-sheet').getByTestId('signal-detail');
+    await expect(detail).toBeVisible();
+    await detail.getByRole('button', { name: 'AI 차트 분석기에서 보기' }).click();
+    await expect(page).toHaveURL(item.url);
+  }
+  expect(mutations).toEqual([]);
+});
+
+test('actual-provider semantics with zero signals remains a valid flow fixture', async ({ page }) => {
+  await installBaseMocks(page, []);
+  await page.route('**/api/market/scan**', (route) => fulfill(route, validZeroScannerResponse()));
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await expect(page.getByTestId('scanner-zero-outcome')).toContainText('VALID_ZERO_SIGNAL');
+  await expect(page.getByTestId('scanner-zero-outcome')).toContainText('공급자 데이터와 분석은 정상');
+  await expect(page.getByTestId('scanner-zero-outcome')).toContainText('유니버스 80');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
 
 test('latest timeframe response wins and all four public markets remain separated', async ({ page }) => {
   const requests: string[] = [];
@@ -490,3 +616,4 @@ test('scanner market and timeframe race keeps the newest context when an older r
   expect(requests).toContain('US:4H');
   expect(unexpectedHttp).toEqual([]);
 });
+

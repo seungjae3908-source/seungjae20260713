@@ -153,6 +153,7 @@ function MobileDefaultWorkspace({
       <div className="min-h-0 flex-1 overflow-hidden">
         {mobileWorkspace === 'legacy' ? <ScannerPage /> : <SignalScannerPage />}
       </div>
+      {mobileWorkspace === 'signal' ? <BottomNav /> : null}
     </div>
   );
 }
@@ -205,3 +206,4 @@ export default function TechnicalWorkspacePage() {
     </div>
   );
 }
+
