@@ -99,6 +99,7 @@ const groups = {
     path.join(root, 'src/services/auto-trading-v2.service.test.ts'),
     path.join(root, 'src/services/auto-trading-v2-simulation.service.test.ts'),
     path.join(root, 'src/services/auto-trading-v2-worker.service.test.ts'),
+    path.join(root, 'src/services/auto-trading-live-safety.service.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-split.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
