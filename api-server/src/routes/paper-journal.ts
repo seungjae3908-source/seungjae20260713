@@ -17,6 +17,7 @@ import {
 import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { buildAiReviewDataset, generateTradingAiReview, previewAiReview } from '../services/trading-ai-review.service';
 import { configuredTradingReviewProvider, type TradingReviewProvider } from '../services/trading-review-provider';
+import { registerCanonicalPortfolioAdvisorRoute } from './paper-journal-portfolio-advisor';
 import {
   JOURNAL_COST_SAFETY,
   TOSS_LIVE_READ_INTEGRATION,
@@ -134,6 +135,12 @@ export function createPaperJournalRouter(
     if (!request.member || !hasCapability(request.member, 'canAccessAiTradingReview')) throw new PaperJournalError('CAPABILITY_REQUIRED', 'AI 거래 복기는 정회원과 관리자만 사용할 수 있습니다.', request.member ? 403 : 401);
     return request.member.id;
   };
+
+  registerCanonicalPortfolioAdvisorRoute(router, {
+    repositoryFactory,
+    now,
+    requirePortfolioAdvisor: requireAiReview,
+  });
 
   router.post('/paper-journal/sync', async (request: AuthenticatedRequest, response) => {
     if (requestSize(request) > MAX_REQUEST_BYTES) {
