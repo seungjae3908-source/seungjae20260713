@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Bot, CheckCircle2, LockKeyhole, Play, RefreshCw, ShieldCheck, Square } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { cn } from '@/lib/utils';
@@ -21,6 +21,14 @@ type RuntimeConfig = {
   updatedAt: string;
 };
 
+type LiquidationSimulation = {
+  status: 'AVAILABLE' | 'UNAVAILABLE';
+  estimatedPrice: number | null;
+  distancePercent: number | null;
+  source: 'SIMULATION_ONLY_NOT_EXCHANGE_EXACT';
+  modelVersion: string;
+};
+
 type Position = {
   mode: 'PAPER' | 'SHADOW';
   symbol: string;
@@ -40,6 +48,10 @@ type Position = {
   unrealizedPnlKrw: number;
   fundingCostKrw: number;
   positionProtected: boolean;
+  liquidationSimulation?: LiquidationSimulation;
+  estimatedLiquidationPrice?: number;
+  liquidationDistancePercent?: number;
+  liquidationModel?: 'SIMULATION_ONLY_NOT_EXCHANGE_EXACT';
   updatedAt: string;
 };
 
@@ -71,6 +83,22 @@ type LatestRecord = {
   id: string;
   updatedAt: string;
   payload: Record<string, unknown>;
+};
+
+type WorkerHealth = {
+  workerRunning?: boolean;
+  workerOwner?: string | null;
+  lastTickAt?: string | null;
+  nextTickAt?: string | null;
+  lastSuccessfulCycleAt?: string | null;
+  lastErrorAt?: string | null;
+  mode?: string;
+  paperEnabled?: boolean;
+  shadowEnabled?: boolean;
+  liveEnabled?: false;
+  reconciliationState?: string;
+  killSwitchState?: string;
+  marketDataFreshness?: string;
 };
 
 export type AutoTradingV2Status = {
@@ -106,6 +134,7 @@ export type AutoTradingV2Status = {
     privateTradingApiCount: 0;
   };
   latest: LatestRecord[];
+  worker?: WorkerHealth;
   health: {
     app: string;
     marketData: string;
@@ -125,6 +154,22 @@ export type AutoTradingV2Fixture = {
 };
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT'] as const;
+const READ_ONLY_REFRESH_MS = 30_000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isAutoTradingV2Status(value: unknown): value is AutoTradingV2Status {
+  if (!isRecord(value) || value.ok !== true) return false;
+  return isRecord(value.config)
+    && isRecord(value.strategy)
+    && isRecord(value.reconciliation)
+    && isRecord(value.health)
+    && Array.isArray(value.positions)
+    && Array.isArray(value.latest)
+    && Array.isArray(value.supportedSymbols);
+}
 
 function number(value: number | null | undefined, maximumFractionDigits = 2) {
   if (value == null || !Number.isFinite(value)) return '-';
@@ -152,6 +197,18 @@ function signalFor(status: AutoTradingV2Status | null, symbol: string) {
     blockReasons: Array.isArray(record.payload.blockReasons) ? record.payload.blockReasons.map(String) : [],
     observedAt: typeof record.payload.observedAt === 'string' ? record.payload.observedAt : record.updatedAt,
   };
+}
+
+function liquidationFor(position: Position | null) {
+  if (!position) return 'UNAVAILABLE · simulation only';
+  const simulation = position.liquidationSimulation;
+  if (simulation?.status === 'AVAILABLE' && simulation.estimatedPrice != null) {
+    return `${number(simulation.estimatedPrice, 6)} · ${percent(simulation.distancePercent, 2)} away`;
+  }
+  if (position.liquidationModel === 'SIMULATION_ONLY_NOT_EXCHANGE_EXACT' && Number.isFinite(position.estimatedLiquidationPrice)) {
+    return `${number(position.estimatedLiquidationPrice, 6)} · ${percent(position.liquidationDistancePercent, 2)} away`;
+  }
+  return 'UNAVAILABLE · simulation only';
 }
 
 function ModeButton({
@@ -195,7 +252,6 @@ export function AutoTradingV2Panel({ fixture }: { fixture?: AutoTradingV2Fixture
   const [loading, setLoading] = useState(!fixture);
   const [actionBusy, setActionBusy] = useState(false);
   const [message, setMessage] = useState('');
-  const pollBusy = useRef(false);
 
   const load = useCallback(async () => {
     if (fixture) return;
@@ -205,11 +261,15 @@ export function AutoTradingV2Panel({ fixture }: { fixture?: AutoTradingV2Fixture
         authorizedFetch('/api/trade-automation/v2/status'),
         authorizedFetch('/api/trade-automation/v2/market'),
       ]);
-      const statusPayload = await statusResponse.json() as AutoTradingV2Status & { error?: string };
-      const marketPayload = await marketResponse.json() as { ok: boolean; snapshots?: Snapshot[]; error?: string };
-      if (!statusResponse.ok || !statusPayload.ok) throw new Error(statusPayload.error ?? 'Auto Trading 상태를 불러오지 못했습니다.');
+      const statusPayload: unknown = await statusResponse.json();
+      const marketPayload = await marketResponse.json() as { ok?: boolean; snapshots?: Snapshot[]; error?: string };
+      if (!statusResponse.ok || !isAutoTradingV2Status(statusPayload)) {
+        throw new Error(isRecord(statusPayload) && typeof statusPayload.error === 'string'
+          ? statusPayload.error
+          : 'AUTO_TRADING_V2_STATUS_INVALID');
+      }
       setStatus(statusPayload);
-      if (marketResponse.ok && marketPayload.ok && Array.isArray(marketPayload.snapshots)) setSnapshots(marketPayload.snapshots);
+      if (marketResponse.ok && marketPayload.ok === true && Array.isArray(marketPayload.snapshots)) setSnapshots(marketPayload.snapshots);
       setMessage(marketResponse.ok ? '' : marketPayload.error ?? '공개 시장 데이터가 일시적으로 지연되고 있습니다.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Auto Trading 상태를 불러오지 못했습니다.');
@@ -218,32 +278,13 @@ export function AutoTradingV2Panel({ fixture }: { fixture?: AutoTradingV2Fixture
     }
   }, [fixture]);
 
-  const tick = useCallback(async () => {
-    if (fixture || pollBusy.current) return;
-    pollBusy.current = true;
-    try {
-      const response = await authorizedFetch('/api/trade-automation/v2/tick', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbols: SYMBOLS }),
-      });
-      const payload = await response.json() as { ok?: boolean; error?: string };
-      if (!response.ok || payload.ok !== true) throw new Error(payload.error ?? 'Paper/Shadow 평가에 실패했습니다.');
-      await load();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Paper/Shadow 평가에 실패했습니다.');
-    } finally {
-      pollBusy.current = false;
-    }
-  }, [fixture, load]);
-
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
-    if (fixture || !status || !['PAPER', 'SHADOW'].includes(status.effectiveMode)) return undefined;
-    const timer = window.setInterval(() => void tick(), 30_000);
+    if (fixture) return undefined;
+    const timer = window.setInterval(() => void load(), READ_ONLY_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [fixture, status?.effectiveMode, tick]);
+  }, [fixture, load]);
 
   async function setMode(mode: AutoTradingV2Mode) {
     if (fixture || mode === 'LIVE' || !status) return;
@@ -263,9 +304,8 @@ export function AutoTradingV2Panel({ fixture }: { fixture?: AutoTradingV2Fixture
       });
       const payload = await response.json() as { ok?: boolean; error?: string };
       if (!response.ok || payload.ok !== true) throw new Error(payload.error ?? '모드 변경에 실패했습니다.');
-      setMessage(mode === 'OFF' ? 'Auto Trading 2.0을 중지했습니다.' : `${mode} 모드를 시작했습니다. 실주문은 발생하지 않습니다.`);
+      setMessage(mode === 'OFF' ? 'Auto Trading 2.0을 중지했습니다.' : `${mode} 모드를 요청했습니다. 실행 cycle은 서버 worker만 수행하며 실주문은 발생하지 않습니다.`);
       await load();
-      if (mode === 'PAPER' || mode === 'SHADOW') await tick();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '모드 변경에 실패했습니다.');
     } finally {
@@ -276,7 +316,7 @@ export function AutoTradingV2Panel({ fixture }: { fixture?: AutoTradingV2Fixture
   const positionBySymbol = useMemo(() => new Map((status?.positions ?? []).map((position) => [position.symbol, position])), [status?.positions]);
   const snapshotBySymbol = useMemo(() => new Map(snapshots.map((snapshot) => [snapshot.symbol, snapshot])), [snapshots]);
   const effectiveMode = status?.effectiveMode ?? 'OFF';
-  const safe = status?.reconciliation.state === 'SAFE' && !status?.config.safeHalt;
+  const safe = status?.reconciliation?.state === 'SAFE' && status?.config?.safeHalt !== true;
 
   return (
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="auto-trading-v2-panel">
@@ -317,24 +357,25 @@ export function AutoTradingV2Panel({ fixture }: { fixture?: AutoTradingV2Fixture
 
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Metric label="Mode" value={effectiveMode} />
-        <Metric label="Risk / Trade" value={`${status?.config.riskPerTradePercent ?? 0.25}%`} />
-        <Metric label="Leverage" value={`${status?.config.leverage ?? 3}x / cap ${status?.leverageCap ?? 5}x`} />
-        <Metric label="Reconciliation" value={status?.reconciliation.state ?? 'CHECKING'} good={safe} />
+        <Metric label="Risk / Trade" value={`${status?.config?.riskPerTradePercent ?? 0.25}%`} />
+        <Metric label="Leverage" value={`${status?.config?.leverage ?? 3}x / cap ${status?.leverageCap ?? 5}x`} />
+        <Metric label="Reconciliation" value={status?.reconciliation?.state ?? 'CHECKING'} good={safe} />
       </div>
 
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         <div className="rounded-2xl border border-card-border bg-background p-3 text-xs">
           <p className="font-black">Strategy</p>
-          <p className="mt-1 break-all text-muted-foreground">{status?.strategy.id ?? 'crypto-futures-pullback-v1'} · v{status?.strategy.version ?? '1.0.0'}</p>
-          <p className="mt-1 text-[11px] text-muted-foreground">Eligibility {status?.strategy.eligibility ?? 'PAPER_READY'} · RVOL {status?.strategy.selectedRvolPercent ?? 400}% · {status?.strategy.parameterSelection ?? 'PARAMETER_STABILITY'}</p>
+          <p className="mt-1 break-all text-muted-foreground">{status?.strategy?.id ?? 'crypto-futures-pullback-v1'} · v{status?.strategy?.version ?? '1.0.0'}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">Eligibility {status?.strategy?.eligibility ?? 'PAPER_READY'} · RVOL {status?.strategy?.selectedRvolPercent ?? 400}% · {status?.strategy?.parameterSelection ?? 'PARAMETER_STABILITY'}</p>
         </div>
         <div className="rounded-2xl border border-card-border bg-background p-3 text-xs">
           <p className="font-black">Health / Kill Switch</p>
           <div className="mt-1 flex items-center gap-1.5">
-            {status?.health.overall === 'UP' && safe ? <CheckCircle2 className="h-4 w-4 text-positive" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
-            <span className="text-muted-foreground">{status?.health.overall ?? 'CHECKING'} · Execution {status?.health.executionEngine ?? '-'}</span>
+            {status?.health?.overall === 'UP' && safe ? <CheckCircle2 className="h-4 w-4 text-positive" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
+            <span className="text-muted-foreground">{status?.health?.overall ?? 'CHECKING'} · Execution {status?.health?.executionEngine ?? '-'}</span>
           </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">{status?.config.haltReasons.length ? status.config.haltReasons.join(', ') : 'Kill Switch 정상 · 신규 진입 허용 상태'}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">{status?.config?.haltReasons?.length ? status.config.haltReasons.join(', ') : 'Kill Switch 정상 · 신규 진입 허용 상태'}</p>
+          <p className="mt-1 text-[10px] text-muted-foreground">Worker {status?.worker?.workerRunning ? 'RUNNING' : status?.worker ? 'HALTED' : 'CHECKING'} · owner {status?.worker?.workerOwner ?? '-'}</p>
         </div>
       </div>
 
@@ -365,16 +406,18 @@ export function AutoTradingV2Panel({ fixture }: { fixture?: AutoTradingV2Fixture
                 <Row label="Entry" value={position ? number(position.entryPrice, 6) : '-'} />
                 <Row label="Stop" value={position ? number(position.trailingStop ?? position.stopPrice, 6) : '-'} />
                 <Row label="TP1" value={position ? number(position.targetPrice, 6) : '-'} />
-                <Row label="Risk" value={position ? `${position.riskPerTradePercent}%` : `${status?.config.riskPerTradePercent ?? 0.25}%`} />
-                <Row label="Leverage" value={`${position?.leverage ?? status?.config.leverage ?? 3}x`} />
+                <Row label="Risk" value={position ? `${position.riskPerTradePercent}%` : `${status?.config?.riskPerTradePercent ?? 0.25}%`} />
+                <Row label="Leverage" value={`${position?.leverage ?? status?.config?.leverage ?? 3}x`} />
                 <Row label="Margin" value={position ? `${number(position.requiredMarginKrw)} KRW` : '-'} />
                 <Row label="PnL" value={position ? `${number(pnl)} KRW` : '-'} />
                 <Row label="Funding" value={position ? `${number(position.fundingCostKrw)} KRW` : snapshot ? percent(snapshot.fundingRate * 100, 4) : '-'} />
                 <Row label="RVOL" value={snapshot ? percent(snapshot.expansionRvolPercent, 1) : '-'} />
                 <Row label="ATR" value={snapshot ? percent(snapshot.atrPercent, 2) : '-'} />
                 <Row label="Protection" value={position ? (position.positionProtected ? 'PROTECTED' : 'SAFE_HALT') : '-'} />
+                <Row label="청산가 시뮬레이션" value={liquidationFor(position)} />
                 <Row label="Last Update" value={snapshot ? new Date(snapshot.observedAt).toLocaleTimeString('ko-KR') : '-'} />
               </dl>
+              <p className="mt-2 text-[9px] text-muted-foreground">Liquidation source: SIMULATION_ONLY_NOT_EXCHANGE_EXACT</p>
               {signal?.blockReasons.length ? <p className="mt-2 break-words rounded-xl bg-secondary p-2 text-[9px] text-muted-foreground">Block: {signal.blockReasons.join(', ')}</p> : null}
             </article>
           );
@@ -390,7 +433,7 @@ export function AutoTradingV2Panel({ fixture }: { fixture?: AutoTradingV2Fixture
       <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2"><Bot className="h-4 w-4 text-primary" /><p className="text-xs font-black">Paper / Shadow Journal</p></div>
-          <span className="text-[9px] font-bold text-muted-foreground">Telegram {status?.health.telegram ?? 'CHECKING'}</span>
+          <span className="text-[9px] font-bold text-muted-foreground">Telegram {status?.health?.telegram ?? 'CHECKING'}</span>
         </div>
         <div className="mt-2 space-y-1.5">
           {(status?.latest ?? []).slice(0, 4).map((record) => (
@@ -399,7 +442,7 @@ export function AutoTradingV2Panel({ fixture }: { fixture?: AutoTradingV2Fixture
               <time className="shrink-0 text-muted-foreground">{new Date(record.updatedAt).toLocaleTimeString('ko-KR')}</time>
             </div>
           ))}
-          {!status?.latest.length ? <p className="py-2 text-center text-[10px] text-muted-foreground">아직 Paper/Shadow 기록이 없습니다.</p> : null}
+          {!status?.latest?.length ? <p className="py-2 text-center text-[10px] text-muted-foreground">아직 Paper/Shadow 기록이 없습니다.</p> : null}
         </div>
       </div>
 
