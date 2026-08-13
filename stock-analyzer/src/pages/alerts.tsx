@@ -99,7 +99,7 @@ export default function AlertsPage() {
   const [market, setMarket] = useState<MarketTab>('KR');
   const [tone, setTone] = useState<ToneTab>('all');
 
-  const feed = useAlertFeed('ALL');
+  const feed = useAlertFeed('ALL', source === 'market');
   const history = useQuery({
     queryKey: ['notification-history'],
     queryFn: () => apiGet<{ notifications: NotificationHistoryRow[] }>('/notifications/history?limit=200'),
