@@ -3,6 +3,7 @@ import { test, expect, type Page } from '@playwright/test';
 const now = '2026-08-04T06:00:00.000Z';
 const fixtures = [
   { id: 'stock:KR:KOSPI:005930', assetType: 'stock', market: 'KR', instrumentType: 'stock', exchange: 'KOSPI', ticker: '005930', productCode: '005930', koreanName: '삼성전자', englishName: 'Samsung Electronics', displayName: '삼성전자', baseSymbol: '005930', quoteCurrency: 'KRW', matchType: 'name_prefix', active: true, provider: 'KRX', dataAsOf: now },
+  { id: 'stock:US:NASDAQ:AAPL', assetType: 'stock', market: 'US', instrumentType: 'stock', exchange: 'NASDAQ', ticker: 'AAPL', productCode: 'AAPL', koreanName: '애플', englishName: 'Apple', displayName: '애플', baseSymbol: 'AAPL', quoteCurrency: 'USD', matchType: 'code_exact', active: true, provider: 'FINNHUB', dataAsOf: now },
   { id: 'stock:US:NASDAQ:TSLA', assetType: 'stock', market: 'US', instrumentType: 'stock', exchange: 'NASDAQ', ticker: 'TSLA', productCode: 'TSLA', koreanName: '테슬라', englishName: 'Tesla', displayName: '테슬라', baseSymbol: 'TSLA', quoteCurrency: 'USD', matchType: 'name_prefix', active: true, provider: 'FINNHUB', dataAsOf: now },
   { id: 'stock:US:NASDAQ:TSLB', assetType: 'stock', market: 'US', instrumentType: 'stock', exchange: 'NASDAQ', ticker: 'TSLB', productCode: 'TSLB', koreanName: '테슬라 에너지', englishName: 'Tesla Energy', displayName: '테슬라 에너지', baseSymbol: 'TSLB', quoteCurrency: 'USD', matchType: 'name_prefix', active: true, provider: 'FINNHUB', dataAsOf: now },
   { id: 'coin:spot:UPBIT:KRW-BTC', assetType: 'coin', market: 'spot', instrumentType: 'spot', exchange: 'UPBIT', symbol: 'BTC', productCode: 'KRW-BTC', koreanName: '비트코인', englishName: 'Bitcoin', displayName: '비트코인', baseSymbol: 'BTC', quoteCurrency: 'KRW', matchType: 'alias', active: true, provider: 'UPBIT', dataAsOf: now },
@@ -50,7 +51,7 @@ async function mockSearch(page: Page) {
   });
 }
 
-for (const [width, height] of [[360, 800], [390, 844], [430, 932], [1440, 900]] as const) {
+for (const [width, height] of [[320, 760], [360, 800], [390, 844], [412, 915], [430, 932], [1440, 900]] as const) {
   test(`unified search supports one-character results and no overflow at ${width}`, async ({ page }) => {
     const errors: string[] = [];
     page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
@@ -99,9 +100,53 @@ test('all asset groups navigate to their exact existing detail routes', async ({
   };
 
   await selectAndExpect('005930', /삼성전자.*005930/, /\/stock-info\?back=%2Fsearch&asset=stock&market=KR&ticker=005930$/);
-  await selectAndExpect('TSLA', /테슬라.*TSLA/, /\/stock-info\?back=%2Fsearch&asset=stock&market=US&ticker=TSLA$/);
+  await selectAndExpect('AAPL', /애플.*AAPL/, /\/stock-info\?back=%2Fsearch&asset=stock&market=US&ticker=AAPL$/);
   await selectAndExpect('KRW-BTC', /비트코인.*UPBIT.*BTC\/KRW/, /\/stock-info\?back=%2Fsearch&asset=coin&coinMarket=spot&symbol=BTC$/);
   await selectAndExpect('BTCUSDT', /비트코인.*BITGET.*BTCUSDT/, /\/stock-info\?back=%2Fsearch&asset=coin&coinMarket=futures&symbol=BTCUSDT$/);
+});
+
+test('real user symbol and name queries resolve the same canonical assets', async ({ page }) => {
+  await mockSearch(page);
+  const cases: Array<{ query: string; option: RegExp; code: string }> = [
+    { query: '005930', option: /삼성전자.*005930/, code: '005930' },
+    { query: 'Samsung', option: /삼성전자.*005930/, code: '005930' },
+    { query: 'AAPL', option: /애플.*AAPL/, code: 'AAPL' },
+    { query: 'Apple', option: /애플.*AAPL/, code: 'AAPL' },
+    { query: 'BTC', option: /비트코인.*UPBIT.*BTC\/KRW/, code: 'BTC/KRW' },
+    { query: 'KRW-BTC', option: /비트코인.*UPBIT.*BTC\/KRW/, code: 'BTC/KRW' },
+    { query: 'BTCUSDT', option: /비트코인.*BITGET.*BTCUSDT/, code: 'BTCUSDT' },
+  ];
+  await page.goto('/__phase11-unified-search-e2e');
+  const input = page.getByRole('combobox', { name: '통합 자산 검색' });
+  for (const item of cases) {
+    await input.fill(item.query);
+    await expect(page.getByRole('option', { name: item.option })).toBeVisible();
+    await expect(page.getByText(item.code, { exact: true }).first()).toBeVisible();
+  }
+});
+
+test('search distinguishes NO_MATCH, PROVIDER_UNAVAILABLE, and DATA_UNAVAILABLE', async ({ page }) => {
+  await page.route('**/api/search/suggest**', async (route) => {
+    const q = new URL(route.request().url()).searchParams.get('q') ?? '';
+    if (q === 'data-down') {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ ok: false, state: 'ERROR', error: 'SEARCH_INDEX_UNAVAILABLE', message: '검색 데이터가 없습니다.' }) });
+      return;
+    }
+    const providerDown = q === 'provider-down';
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      ok: true, state: providerDown ? 'DEGRADED' : 'EMPTY', q, asset: 'all', market: null,
+      results: [], count: 0, dataAsOf: now, stale: providerDown, partial: providerDown,
+      providers: providerDown ? [{ provider: 'upbit', status: 'error', count: 0, dataAsOf: null }] : [], hiddenMatches: [],
+    }) });
+  });
+  await page.goto('/__phase11-unified-search-e2e');
+  const input = page.getByRole('combobox', { name: '통합 자산 검색' });
+  await input.fill('no-match');
+  await expect(page.getByTestId('unified-search-outcome')).toContainText('NO_MATCH');
+  await input.fill('provider-down');
+  await expect(page.getByTestId('unified-search-outcome')).toContainText('PROVIDER_UNAVAILABLE');
+  await input.fill('data-down');
+  await expect(page.getByTestId('unified-search-outcome')).toContainText('DATA_UNAVAILABLE');
 });
 
 test('watchlist and recent searches prioritize equal-tier suggestions', async ({ page }) => {
@@ -199,3 +244,4 @@ test('search browser diagnostics remain zero on a healthy unified-search flow', 
   expect(privateRequests).toEqual([]);
   console.log('[unified-search-diagnostics] consoleErrors=0 pageErrors=0 unhandledRejections=0 unexpectedHttpErrors=0 privateRequests=0');
 });
+

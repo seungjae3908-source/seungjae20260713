@@ -7,7 +7,9 @@ import {
   withActiveQuerySignal,
 } from './query-abort-signal';
 import {
+  deriveScannerDisplayOutcome,
   fetchSignalScanner,
+  type ScannerResponse,
   type SignalScannerRequest,
 } from './signal-scanner';
 import {
@@ -96,6 +98,60 @@ function scannerSuccess(label: string): Response {
   });
 }
 
+function scannerZero(overrides: Partial<ScannerResponse> = {}): ScannerResponse {
+  return {
+    ok: true,
+    requestId: 'outcome-fixture',
+    assetClass: 'stock',
+    market: 'KR',
+    timeframe: '1D',
+    cards: [],
+    alerts: [],
+    failures: [],
+    execution: {
+      requestedCount: 2, startedCount: 2, completedCount: 2, excludedCount: 2,
+      providerErrorCount: 0, timeoutCount: 0, partial: false, timedOut: false,
+      cancelled: false, duplicate: false, elapsedMs: 10, deadlineMs: 1_000,
+      itemTimeoutMs: 500, maxConcurrency: 1,
+    },
+    universe: {
+      totalCount: 2, cursor: 0, nextCursor: null, source: 'fixture', partial: false,
+      stale: false, listingStatusCoverage: 'listed-or-unknown',
+    },
+    dataState: 'complete',
+    message: 'fixture',
+    generatedAt: '2026-08-13T00:00:00.000Z',
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+    ...overrides,
+  };
+}
+
+test('scanner display outcome distinguishes every zero-result failure boundary', () => {
+  const base = scannerZero();
+  assert.equal(deriveScannerDisplayOutcome(base), 'VALID_ZERO_SIGNAL');
+  assert.equal(deriveScannerDisplayOutcome({ ...base, universe: { ...base.universe, totalCount: 0 } }), 'UNIVERSE_EMPTY');
+  assert.equal(deriveScannerDisplayOutcome(scannerZero({
+    failures: [{ symbol: '*', reason: 'provider_error', message: 'provider unavailable' }],
+    execution: { ...base.execution, completedCount: 0, providerErrorCount: 2 },
+    dataState: 'unavailable',
+  })), 'PROVIDER_FAILURE');
+  assert.equal(deriveScannerDisplayOutcome(scannerZero({
+    failures: [{ symbol: 'KRW-BTC', reason: 'symbol_mapping', message: 'symbol mapping failed' }],
+  })), 'SYMBOL_MAPPING_FAILURE');
+  assert.equal(deriveScannerDisplayOutcome(scannerZero({
+    execution: { ...base.execution, timeoutCount: 1, timedOut: true },
+  })), 'REQUEST_TIMEOUT');
+  assert.equal(deriveScannerDisplayOutcome(scannerZero({
+    failures: [{ symbol: '005930', reason: 'invalid_data', message: 'invalid candle' }],
+    execution: { ...base.execution, dataSuccessCount: 0, insufficientDataCount: 2 },
+  })), 'DATA_QUALITY_REJECT');
+  assert.equal(deriveScannerDisplayOutcome(scannerZero({
+    execution: { ...base.execution, dataSuccessCount: 2, hardFilterRejectedCount: 2, filteredByStrategyCount: 2 },
+  })), 'FILTER_TOO_STRICT');
+  assert.equal(deriveScannerDisplayOutcome({ ...base, cards: [{} as ScannerResponse['cards'][number]] }, 0), 'FRONTEND_RENDER_FAILURE');
+});
+
 async function withMockFetch<T>(mock: typeof fetch, work: () => Promise<T>): Promise<T> {
   installWindowTimerBridge();
   const previousFetch = globalThis.fetch;
@@ -158,6 +214,7 @@ test('scanner query keys cover market, indicators, thresholds, and timeframe rac
 
 test('new signal scanner sends explicit strategy and only scanner read endpoints', () => {
   const scannerPage = source('stock-analyzer/src/pages/signal-scanner.tsx');
+  const scannerProfiles = source('stock-analyzer/src/lib/signal-scanner-profile.ts');
   const forbidden = /\/api\/(?:account|orders?|cancel|positions?|execute|approve|private)\b/i;
   const base = {
     conditions: ['거래량 증가'],
@@ -169,8 +226,8 @@ test('new signal scanner sends explicit strategy and only scanner read endpoints
   };
   const requests: SignalScannerRequest[] = [
     { ...base, assetClass: 'stock', market: 'KR', strategy: 'scalping', timeframe: '5m' },
-    { ...base, assetClass: 'stock', market: 'US', strategy: 'swing', timeframe: '1D' },
-    { ...base, assetClass: 'coin_spot', market: 'UPBIT', strategy: 'scalping', timeframe: '3m' },
+    { ...base, assetClass: 'stock', market: 'US', strategy: 'position', timeframe: '1D' },
+    { ...base, assetClass: 'coin_spot', market: 'UPBIT', strategy: 'scalping', timeframe: '5m' },
     { ...base, assetClass: 'coin_futures', market: 'BITGET', strategy: 'swing', timeframe: '4H' },
   ];
 
@@ -192,12 +249,11 @@ test('new signal scanner sends explicit strategy and only scanner read endpoints
     }
   }
 
-  assert.deepEqual([...observedStrategies].sort(), ['scalping', 'swing']);
-  assert.match(scannerPage, /strategy,\s*timeframe/);
-  assert.match(scannerPage, /1m/);
-  assert.match(scannerPage, /3m/);
-  assert.match(scannerPage, /15m context/);
-  assert.match(scannerPage, /1H context/);
+  assert.deepEqual([...observedStrategies].sort(), ['position', 'scalping', 'swing']);
+  assert.match(scannerPage, /strategy,\s*timeframe:\s*profile\.timeframe,/);
+  assert.match(scannerProfiles, /scalping:\s*\{\s*timeframe:\s*'5m'/);
+  assert.match(scannerProfiles, /swing:\s*\{\s*timeframe:\s*'4H'/);
+  assert.match(scannerProfiles, /position:\s*\{\s*timeframe:\s*'1D'/);
   assert.doesNotMatch(scannerPage, forbidden);
 });
 
@@ -327,3 +383,4 @@ test('scanner readiness UI distinguishes loading, complete, empty, partial, erro
     assert.match(status, new RegExp(marker));
   }
 });
+

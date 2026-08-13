@@ -4,13 +4,23 @@ import { buildSignalScannerRequestUrl } from './signal-scanner-url';
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
 export type ScannerTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
-export type ScannerStrategyMode = 'scalping' | 'swing';
+export type ScannerStrategyMode = 'scalping' | 'swing' | 'position';
 export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
   | 'CANDIDATE' | 'CONFIRMED' | 'ARMED' | 'ENTRY_ZONE' | 'APPROVAL_PENDING' | 'APPROVED'
   | 'EXECUTING' | 'PARTIALLY_FILLED' | 'FILLED' | 'MANAGING' | 'CLOSED' | 'INVALIDATED'
   | 'EXPIRED' | 'REJECTED' | 'CANCELLED' | 'DETECTED' | 'WATCHING' | 'READY_FOR_APPROVAL' | 'WEAKENED';
 export type ScannerDataState = 'complete' | 'partial' | 'stale' | 'insufficient' | 'unavailable' | 'untrusted';
+export type ScannerOutcomeCode =
+  | 'CANDIDATES_AVAILABLE'
+  | 'VALID_ZERO_SIGNAL'
+  | 'UNIVERSE_EMPTY'
+  | 'PROVIDER_FAILURE'
+  | 'SYMBOL_MAPPING_FAILURE'
+  | 'REQUEST_TIMEOUT'
+  | 'DATA_QUALITY_REJECT'
+  | 'FILTER_TOO_STRICT'
+  | 'FRONTEND_RENDER_FAILURE';
 
 export interface ScannerEvidence {
   key: string;
@@ -157,7 +167,7 @@ export interface ScannerAlertCandidate {
 
 export interface ScannerFailure {
   symbol: string;
-  reason: 'provider_error' | 'timeout' | 'invalid_data';
+  reason: 'provider_error' | 'timeout' | 'invalid_data' | 'symbol_mapping';
   message: string;
 }
 
@@ -217,11 +227,41 @@ export interface ScannerResponse {
     listingStatusCoverage: 'listed-or-unknown';
   };
   dataState: ScannerDataState;
+  outcome?: ScannerOutcomeCode;
   message: string;
   generatedAt: string;
   refreshIssue?: ScannerRefreshIssue;
   orderSubmitted: false;
   exchangeRequestSent: false;
+}
+
+export function deriveScannerDisplayOutcome(response: ScannerResponse, renderedCount = response.cards.length): ScannerOutcomeCode {
+  if (response.cards.length > 0 && renderedCount === 0) return 'FRONTEND_RENDER_FAILURE';
+  if (renderedCount > 0) return 'CANDIDATES_AVAILABLE';
+  if (response.outcome && response.outcome !== 'CANDIDATES_AVAILABLE') return response.outcome;
+
+  const mappingFailure = response.failures.some((failure) =>
+    failure.reason === 'symbol_mapping'
+    || /(?:symbol|ticker).*(?:map|normaliz|mismatch|invalid)|(?:map|normaliz).*(?:symbol|ticker)/i.test(failure.message));
+  if (mappingFailure) return 'SYMBOL_MAPPING_FAILURE';
+  if (response.execution.timedOut || response.execution.timeoutCount > 0) return 'REQUEST_TIMEOUT';
+
+  const providerFailure = response.execution.providerErrorCount > 0
+    || response.failures.some((failure) => failure.reason === 'provider_error')
+    || response.dataState === 'unavailable';
+  if (response.universe.totalCount === 0) {
+    if (providerFailure || response.universe.source === 'unavailable') return 'PROVIDER_FAILURE';
+    return 'UNIVERSE_EMPTY';
+  }
+
+  const dataSuccessCount = response.execution.dataSuccessCount
+    ?? Math.max(0, response.execution.completedCount - (response.execution.insufficientDataCount ?? 0));
+  if (providerFailure && dataSuccessCount === 0) return 'PROVIDER_FAILURE';
+  const dataRejectCount = response.execution.insufficientDataCount
+    ?? response.failures.filter((failure) => failure.reason === 'invalid_data').length;
+  if (dataRejectCount > 0 && dataSuccessCount === 0) return 'DATA_QUALITY_REJECT';
+  if ((response.execution.hardFilterRejectedCount ?? 0) + (response.execution.filteredByStrategyCount ?? 0) > 0) return 'FILTER_TOO_STRICT';
+  return 'VALID_ZERO_SIGNAL';
 }
 
 export interface SignalScannerRequest {
@@ -436,3 +476,4 @@ export function signalScannerDetailPath(card: ScannerSignalCard): string {
   const coinMarket = card.assetClass === 'coin_futures' ? 'futures' : 'spot';
   return `/stock-info?asset=coin&coinMarket=${coinMarket}&symbol=${symbol}`;
 }
+
