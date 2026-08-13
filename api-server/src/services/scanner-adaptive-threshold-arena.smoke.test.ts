@@ -21,6 +21,7 @@ function sample(
     market: 'KR',
     strategy: 'SCALPING',
     regime,
+    stage: 'DEVELOPMENT',
     softScore,
     hardGate: {
       dataQualityPassed: hardPass,
@@ -86,6 +87,24 @@ test('regime threshold selection is independent and fails closed on insufficient
   }).byRegime[0];
   assert.equal(insufficient.status, 'INSUFFICIENT_SAMPLE');
   assert.equal(insufficient.selectedThreshold, null);
+});
+
+test('final holdout evidence cannot influence threshold selection', () => {
+  const development = sample('DEV', 'TREND_UP', 80, 1, -0.02);
+  const holdout = {
+    ...sample('HOLDOUT', 'TREND_UP', 99, 2, 0.90),
+    stage: 'FINAL_HOLDOUT' as const,
+  };
+  const selection = researchRegimeAdaptiveThresholds({
+    observations: [development, holdout],
+    thresholds: [70, 80, 90],
+    constraints: { maxDrawdownPercent: 20, minimumResolvedTrades: 1 },
+  }).byRegime[0];
+
+  assert.equal(selection.status, 'INVALID_SELECTION_STAGE');
+  assert.equal(selection.selectedThreshold, null);
+  assert.equal(selection.selected, null);
+  assert.deepEqual(selection.comparisons, []);
 });
 
 test('S A B WATCH and near-miss classification never fills missing candidates', () => {
