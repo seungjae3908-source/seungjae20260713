@@ -10,6 +10,7 @@ import { rankScannerCandidates } from './scanner-candidate-ranking.service';
 import { applyStockSignalPolicy } from './scanner-signal-policy.service';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
 import { applyScannerQuantHardening } from './scanner-quant-hardening.service';
+import { applyScannerMarketProfile } from './scanner-market-profile-overlay.service';
 import {
   scannerContextTimeframe,
   scannerStrategyForTimeframe,
@@ -224,7 +225,13 @@ export const StockSignalScannerService = {
         allowShort: false,
         sessionAware: true,
       });
-      return applyUniverseStaleness(quantCandidate, universe.stale);
+      const marketCandidate = applyScannerMarketProfile({
+        card: quantCandidate,
+        profile: request.market === 'KR' ? 'KR_STOCK' : 'US_STOCK',
+        candles,
+        strategyMode,
+      });
+      return applyUniverseStaleness(marketCandidate, universe.stale);
     }).filter((card): card is ScannerSignalCard => card != null)
       .filter((card) => request.filters.maximumRiskScore == null || (card.riskScore != null && card.riskScore <= request.filters.maximumRiskScore));
 
