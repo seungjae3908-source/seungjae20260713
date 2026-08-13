@@ -20,6 +20,7 @@ import paperTradingRouter from './paper-trading';
 import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
+import tradeApprovalReadRouter from './trade-approval-read';
 import tradeAutomationRouter from './trade-automation';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
@@ -126,6 +127,10 @@ router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canPlaceOrders'));
+// Read-only approval queue/status endpoints are separated from the execution
+// router so restoring the UI contract cannot submit/cancel an order or touch a
+// private provider path.
+router.use('/trade-automation', tradeApprovalReadRouter);
 router.use('/trade-automation', tradeAutomationRouter);
 router.use('/user-integrations', requireCapability('canPlaceOrders'));
 router.use('/user-integrations', userBrokerTelegramRouter);
