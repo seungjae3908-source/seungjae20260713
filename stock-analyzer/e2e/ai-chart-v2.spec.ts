@@ -27,7 +27,10 @@ function candleRows(timeframe: string) {
   });
 }
 
-async function installMocks(context: BrowserContext) {
+async function installMocks(
+  context: BrowserContext,
+  options: { ageMs?: number; unavailable?: boolean } = {},
+) {
   const calls = new Map<string, number>();
   const privateTradingRequests: string[] = [];
   await context.route('**/*', async (route) => {
@@ -39,6 +42,15 @@ async function installMocks(context: BrowserContext) {
     if (/\/api\/stocks\/[^/]+\/(?:chart|candles)$/.test(url.pathname)) {
       const timeframe = url.searchParams.get('tf') ?? '5m';
       calls.set(timeframe, (calls.get(timeframe) ?? 0) + 1);
+      if (options.unavailable) {
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'provider unavailable' }),
+        });
+        return;
+      }
+      const updatedAt = new Date(Date.now() - (options.ageMs ?? 0)).toISOString();
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -46,8 +58,8 @@ async function installMocks(context: BrowserContext) {
           ticker: '005930',
           timeframe,
           provider: `ai-chart-v2-${timeframe}`,
-          fetchedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+          fetchedAt: updatedAt,
+          updatedAt,
           candles: candleRows(timeframe),
         }),
       });
@@ -101,6 +113,27 @@ test('AI Chart 2.0 domain helpers preserve lifecycle, price-plan gaps, and highe
   });
   expect(evidence.side).toBe('LONG');
 
+  const staleEvidence = buildTechnicalTimeframeEvidence({
+    market: 'KR',
+    mode: 'SCALPING',
+    timeframe: '5m',
+    dataStatus: 'stale',
+    candleCount: 90,
+    trend: 'bullish',
+    close: 100,
+    ema12: 101,
+    ema26: 99,
+    vwap: 98,
+    rsi14: 58,
+    macdHistogram: 1,
+    volumeRatio20: 1.6,
+    atr14: 1,
+  });
+  expect(staleEvidence.state).toBe('INSUFFICIENT_DATA');
+  expect(staleEvidence.side).toBe('WAIT');
+  expect(staleEvidence.score).toBeNull();
+  expect(staleEvidence.quality).toBe('STALE');
+
   const context = (timeframe: AiChartTimeframeEvidence['timeframe'], side: AiChartTimeframeEvidence['side']): AiChartTimeframeEvidence => ({
     timeframe,
     state: 'READY',
@@ -139,6 +172,7 @@ test('desktop AI Chart 2.0 preserves one initial chart request, loads MTF on dem
   const overlayToggle = page.getByTestId('toggle-ai-signal-overlay');
   await expect(overlay).toBeVisible();
   await expect(overlay).toHaveAttribute('data-signal-status', /ACTIVE|WEAKENED|INVALIDATED|EXPIRED/);
+  await expect(overlay).toHaveAttribute('data-signal-id', 'UNAVAILABLE');
   await overlayToggle.click();
   await expect(overlay).toHaveCount(0);
   await expect(overlayToggle).toHaveAttribute('aria-pressed', 'false');
@@ -155,6 +189,8 @@ test('desktop AI Chart 2.0 preserves one initial chart request, loads MTF on dem
   await expect(page.getByTestId('ai-evidence-panel')).toBeVisible();
   await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('ENTRY 3');
   await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('UNAVAILABLE');
+  await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('Historical Performance');
+  await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('UNAVAILABLE');
 
   await page.getByRole('button', { name: '30분', exact: true }).click();
   await expect(page).toHaveURL(/timeframe=30m/);
@@ -174,6 +210,32 @@ test('desktop AI Chart 2.0 preserves one initial chart request, loads MTF on dem
 
   expect(mock.privateTradingRequests).toEqual([]);
   expect(consoleErrors).toEqual([]);
+});
+
+test('current AI evidence fails closed on stale shared chart data without duplicate requests', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const mock = await installMocks(context, { ageMs: 60 * 60_000 });
+  await page.goto(chartUrl);
+
+  const evidence = page.getByTestId('ai-evidence-panel');
+  await expect(evidence).toContainText('WAIT');
+  await expect(evidence).toContainText('STALE');
+  await expect(page.getByTestId('insufficient-data-evidence')).toBeVisible();
+  await expect.poll(() => totalChartCalls(mock.calls)).toBe(1);
+  expect(mock.privateTradingRequests).toEqual([]);
+});
+
+test('current AI evidence fails closed when the shared chart provider is unavailable', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const mock = await installMocks(context, { unavailable: true });
+  await page.goto(chartUrl);
+
+  const evidence = page.getByTestId('ai-evidence-panel');
+  await expect(evidence).toContainText('WAIT');
+  await expect(evidence).toContainText('UNAVAILABLE');
+  await expect(page.getByTestId('insufficient-data-evidence')).toBeVisible();
+  await expect.poll(() => totalChartCalls(mock.calls)).toBe(2);
+  expect(mock.privateTradingRequests).toEqual([]);
 });
 
 test('mobile AI Chart 2.0 keeps chart usable and on-demand MTF inside viewport', async ({ page, context }) => {
