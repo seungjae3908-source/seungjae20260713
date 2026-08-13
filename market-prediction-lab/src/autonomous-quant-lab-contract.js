@@ -26,6 +26,12 @@ export const AUTONOMOUS_QUANT_LAB_STAGES = Object.freeze([
   "CHAMPION_COMPARISON",
 ]);
 
+export const CHAMPION_EVIDENCE_REQUIREMENTS = Object.freeze([
+  "FINAL_HOLDOUT",
+  "PAPER",
+  "SHADOW",
+]);
+
 export function buildAutonomousQuantLabContract() {
   const ids = new Set(AUTONOMOUS_QUANT_LAB_GROUPS.map((group) => group.id));
   if (ids.size !== AUTONOMOUS_QUANT_LAB_GROUPS.length) throw new Error("DUPLICATE_QUANT_LAB_GROUP");
@@ -42,6 +48,7 @@ export function buildAutonomousQuantLabContract() {
     stages: AUTONOMOUS_QUANT_LAB_STAGES,
     markets: Object.freeze(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]),
     strategyTypes: Object.freeze(["SCALPING", "SWING", "MID_LONG"]),
+    championEvidenceRequirements: CHAMPION_EVIDENCE_REQUIREMENTS,
     currentValidatedChampion: "NONE",
     championRule: "BACKTEST_ONLY_NEVER_PROMOTES",
     liveExecution: false,
