@@ -1,4 +1,4 @@
-import { getSupabase } from '../../lib/supabase';
+import { getSupabase, hasSupabaseServerKey } from '../../lib/supabase';
 import {
   decryptTradingCredentials,
   encryptTradingCredentials,
@@ -17,6 +17,11 @@ function validateUserId(userId: string) {
   return value;
 }
 
+function repository() {
+  if (!hasSupabaseServerKey()) throw new Error('TOSS_SERVER_CREDENTIAL_STORAGE_NOT_CONFIGURED');
+  return getSupabase();
+}
+
 function normalizeCredentials(credentials: TossReadonlyCredentials): TossReadonlyCredentials {
   const clientId = credentials.clientId.trim();
   const clientSecret = credentials.clientSecret.trim();
@@ -27,7 +32,7 @@ function normalizeCredentials(credentials: TossReadonlyCredentials): TossReadonl
 
 export async function getTossReadonlyCredentials(userId: string): Promise<TossReadonlyCredentials | null> {
   const owner = validateUserId(userId);
-  const { data, error } = await getSupabase()
+  const { data, error } = await repository()
     .from('toss_readonly_connections')
     .select('user_id,encrypted_credentials,updated_at')
     .eq('user_id', owner)
@@ -46,7 +51,7 @@ export async function getTossReadonlyCredentials(userId: string): Promise<TossRe
 
 export async function getTossReadonlyConnectionStatus(userId: string) {
   const owner = validateUserId(userId);
-  const { data, error } = await getSupabase()
+  const { data, error } = await repository()
     .from('toss_readonly_connections')
     .select('user_id,updated_at')
     .eq('user_id', owner)
@@ -66,7 +71,7 @@ export async function saveTossReadonlyCredentials(userId: string, credentials: T
     clientSecret: normalized.clientSecret,
   });
   const updatedAt = new Date().toISOString();
-  const { error } = await getSupabase()
+  const { error } = await repository()
     .from('toss_readonly_connections')
     .upsert({
       user_id: owner,
@@ -79,7 +84,7 @@ export async function saveTossReadonlyCredentials(userId: string, credentials: T
 
 export async function deleteTossReadonlyCredentials(userId: string) {
   const owner = validateUserId(userId);
-  const { error } = await getSupabase()
+  const { error } = await repository()
     .from('toss_readonly_connections')
     .delete()
     .eq('user_id', owner);
