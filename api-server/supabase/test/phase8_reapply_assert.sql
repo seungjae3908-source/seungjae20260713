@@ -1,5 +1,18 @@
 \set ON_ERROR_STOP on
 
+-- Feature-extension proof for Toss read-only credentials. The canonical Phase 8
+-- shell invokes this file only on disposable PostgreSQL after its normal rollback
+-- and reapply cycle, so we can prove the feature migration itself applies twice,
+-- preserves the service-only privilege contract, rolls back cleanly, and reapplies
+-- without changing the production/staging migration path.
+\ir ../migrations/2026081301_toss_readonly_connections.sql
+\ir ../migrations/2026081301_toss_readonly_connections.sql
+\ir toss_readonly_connections_integration.sql
+\ir ../migrations/2026081301_toss_readonly_connections.down.sql
+\ir toss_readonly_connections_rollback_assert.sql
+\ir ../migrations/2026081301_toss_readonly_connections.sql
+\ir toss_readonly_connections_integration.sql
+
 do $reapply_assertions$
 declare
   candidate_table text;
