@@ -1,0 +1,130 @@
+name: Production Trade Storage Read-only Diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/trade-storage-production-readonly-diagnostics.yml
+      - stock-analyzer/e2e/production-trade-storage-readonly-diagnostics.spec.ts
+      - stock-analyzer/e2e/support/production-readonly-policy.ts
+  workflow_dispatch:
+    inputs:
+      production_sha:
+        description: Exact deployed Production SHA to diagnose
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-trade-storage-readonly-${{ github.event.pull_request.number || inputs.production_sha }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Validate trade storage diagnostics safety contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject mutation and secret-output patterns
+        run: |
+          set -Eeuo pipefail
+          spec='stock-analyzer/e2e/production-trade-storage-readonly-diagnostics.spec.ts'
+          workflow='.github/workflows/trade-storage-production-readonly-diagnostics.yml'
+          grep -F "operation: 'SELECT_LIMIT_0'" "$spec" >/dev/null
+          grep -F 'productionDbMutated: false' "$spec" >/dev/null
+          grep -F 'actualOrders: 0' "$spec" >/dev/null
+          grep -F 'actualCancels: 0' "$spec" >/dev/null
+          grep -F 'privateTradingRequests: 0' "$spec" >/dev/null
+          ! grep -Eiq -- 'service[_-]?role|insert\(|update\(|delete\(|upsert\(|/fapi/.*/order|signature=' "$spec"
+          ! grep -Eiq -- 'echo .*PRODUCTION_QA_(LOGIN|PASSWORD)|print.*accessToken|console\.(log|info|error).*accessToken|console\.(log|info|error).*apiKey' "$spec"
+          grep -F 'environment: production' "$workflow" >/dev/null
+
+  production-readonly:
+    name: Diagnose current Production trade storage without mutations
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/trade-storage-production-recovery')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      PRODUCTION_BASE_URL: https://lsj119.duckdns.org
+      PRODUCTION_EXPECTED_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.production_sha || '36f5cebbb185305ce4d574f6b4adf8acdebd5feb' }}
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+      PRODUCTION_READONLY_E2E: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      - name: Require exact Production identity and QA login
+        run: |
+          set -Eeuo pipefail
+          [[ "$PRODUCTION_EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [[ -n "$PRODUCTION_QA_LOGIN" && -n "$PRODUCTION_QA_PASSWORD" ]] || {
+            echo 'BLOCKED_BY_PRODUCTION_QA_CREDENTIAL' >&2
+            exit 1
+          }
+          curl --fail --silent --show-error --max-time 15 "$PRODUCTION_BASE_URL/api/health" -o /tmp/health.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/health.json', 'utf8'));
+          const expected = process.env.PRODUCTION_EXPECTED_SHA;
+          if (health?.ok !== true || health?.deploySha !== expected || health?.processDeploySha !== expected || health?.deployMarkerSha !== expected || health?.identityMatch !== true) {
+            console.error('Production SHA mismatch; diagnostics blocked.');
+            process.exit(1);
+          }
+          NODE
+      - run: pnpm install --frozen-lockfile
+      - name: Install Chromium runtime
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run authenticated SELECT-only trade storage diagnostics
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test e2e/production-trade-storage-readonly-diagnostics.spec.ts --config=playwright.production.config.ts --project=desktop-chromium
+      - name: Enforce sanitized evidence contract
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          artifact='stock-analyzer/production-trade-storage-artifacts/trade-storage-diagnostics.json'
+          test -f "$artifact"
+          if grep -Eiq -- 'eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|(apikey|api_key|authorization|password|token|secret)["=: ]+[A-Za-z0-9_./+-]{12,}|https?://[^" ]*supabase[^" ]*' "$artifact"; then
+            echo 'Diagnostic artifact contains prohibited credential/token material.' >&2
+            exit 1
+          fi
+          grep -F '"productionDbMutated": false' "$artifact" >/dev/null
+          grep -F '"actualOrders": 0' "$artifact" >/dev/null
+          grep -F '"actualCancels": 0' "$artifact" >/dev/null
+          grep -F '"privateTradingRequests": 0' "$artifact" >/dev/null
+      - name: Upload sanitized diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-trade-storage-readonly-${{ env.PRODUCTION_EXPECTED_SHA }}
+          path: stock-analyzer/production-trade-storage-artifacts
+          if-no-files-found: error
+          retention-days: 14
+      - name: Summarize safety boundary
+        if: always()
+        run: |
+          {
+            echo '## Production Trade Storage Read-only Diagnostics'
+            echo
+            echo "- Expected deployed SHA: \`$PRODUCTION_EXPECTED_SHA\`"
+            echo '- Production DB mutations: `0`'
+            echo '- Actual orders: `0`'
+            echo '- Actual cancels: `0`'
+            echo '- Private trading requests: `0`'
+            echo '- Service-role bypass: `NOT_USED`'
+            echo '- Only authenticated GET/SELECT evidence is collected.'
+          } >> "$GITHUB_STEP_SUMMARY"
