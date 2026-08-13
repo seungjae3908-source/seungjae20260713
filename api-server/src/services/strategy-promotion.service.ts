@@ -4,6 +4,7 @@ import {
   type ScannerProfileMarket,
   type ScannerStrategyProfile,
 } from './scanner-strategy-profile.service';
+import { DEFAULT_MINIMUM_SAMPLE_SIZE } from './signal-performance-learning.service';
 
 export const STRATEGY_PROMOTION_EXECUTION_AUTHORITY = 'NONE' as const;
 export const COST_STRESS_MULTIPLIERS = [1, 1.25, 1.5, 2] as const;
@@ -171,7 +172,7 @@ export const STRATEGY_PROMOTION_POLICY = Object.freeze({
   stageOrder: STAGE_ORDER,
   researchGates: RESEARCH_GATES,
   costStressMultipliers: COST_STRESS_MULTIPLIERS,
-  minimumObservedOutcomeSamples: 30,
+  minimumObservedOutcomeSamples: DEFAULT_MINIMUM_SAMPLE_SIZE,
   thresholdAuthority: 'CANONICAL_UPSTREAM_GATE_RESULTS',
 });
 
@@ -337,6 +338,15 @@ function validateLinkedEvidence(stage: PromotionStageEvidence, expectedSourceSha
     !stage.provenance.length ? 'PROVENANCE_REQUIRED' : null,
     stage.dataQuality !== 'VERIFIED' ? 'VERIFIED_DATA_QUALITY_REQUIRED' : null,
     !stage.metrics ? 'METRICS_REQUIRED' : null,
+    !stage.provider ? 'PROVIDER_REQUIRED' : null,
+    !stage.startedAt ? 'STARTED_AT_REQUIRED' : null,
+    !stage.completedAt ? 'COMPLETED_AT_REQUIRED' : null,
+    !stage.fetchedAt ? 'FETCHED_AT_REQUIRED' : null,
+    !stage.validatedAt ? 'VALIDATED_AT_REQUIRED' : null,
+    stage.stage === 'HISTORICAL_BACKTEST' && stage.corporateActionAdjusted !== true ? 'CORPORATE_ACTION_ADJUSTMENT_REQUIRED' : null,
+    stage.stage === 'HISTORICAL_BACKTEST' && stage.survivorshipSafe !== true ? 'SURVIVORSHIP_SAFETY_REQUIRED' : null,
+    ['HISTORICAL_BACKTEST', 'OUT_OF_SAMPLE', 'PURGED_WALK_FORWARD', 'FINAL_HOLDOUT'].includes(stage.stage) && stage.pointInTimeSafe !== true ? 'POINT_IN_TIME_SAFETY_REQUIRED' : null,
+    stage.stage === 'COST_STRESS' && !stage.costPolicy ? 'COST_POLICY_REQUIRED' : null,
   ].filter((value): value is string => Boolean(value));
   if (!missing.length) return stage;
   return {
@@ -379,7 +389,16 @@ function promotionState(stages: readonly PromotionStageEvidence[], drift: DriftS
   if (shadow.status === 'BLOCKED' || shadow.status === 'FAIL' || shadow.status === 'INSUFFICIENT_SAMPLE' || shadow.status === 'STALE' || shadow.status === 'INVALIDATED') return 'PAPER_VALIDATED';
   if (shadow.status !== 'PASS') return 'SHADOW_CANDIDATE';
   if (outcomes.status !== 'PASS') return 'SHADOW_VALIDATED';
+  if (!promotionCandidateEvidenceComplete(outcomes, drift)) return 'SHADOW_VALIDATED';
   return 'PROMOTION_CANDIDATE';
+}
+
+function promotionCandidateEvidenceComplete(outcomes: PromotionStageEvidence, drift: DriftState): boolean {
+  return drift.status === 'MEASURED'
+    && (drift.classification === 'HEALTHY' || drift.classification === 'WATCH')
+    && outcomes.metrics?.riskGatePassed === true
+    && outcomes.metrics?.dataQualityGatePassed === true
+    && outcomes.metrics?.costStressMaintained === true;
 }
 
 export function classifyPromotionDrift(stages: readonly PromotionStageEvidence[]): DriftState {
@@ -388,11 +407,15 @@ export function classifyPromotionDrift(stages: readonly PromotionStageEvidence[]
   const observed = byStage.get('RECOMMENDATION_OUTCOMES');
   const baselineSamples = baseline?.sampleCount ?? baseline?.sampleSize ?? baseline?.tradeCount ?? null;
   const observedSamples = observed?.sampleCount ?? observed?.sampleSize ?? observed?.tradeCount ?? null;
-  const baselineHitRate = typeof baseline?.metrics?.hitRate === 'number' ? baseline.metrics.hitRate : null;
-  const observedHitRate = typeof observed?.metrics?.hitRate === 'number' ? observed.metrics.hitRate : null;
-  const baselineEv = typeof baseline?.metrics?.expectedValue === 'number' ? baseline.metrics.expectedValue : null;
-  const observedEv = typeof observed?.metrics?.expectedValue === 'number' ? observed.metrics.expectedValue : null;
-  if (baselineSamples == null || observedSamples == null || observedSamples < STRATEGY_PROMOTION_POLICY.minimumObservedOutcomeSamples || baselineHitRate == null || observedHitRate == null || baselineEv == null || observedEv == null) {
+  const upstreamClassification = observed?.metrics?.driftClassification;
+  const driftPolicyVersion = observed?.metrics?.driftPolicyVersion;
+  const classification = typeof upstreamClassification === 'string'
+    && ['HEALTHY', 'WATCH', 'DEGRADED', 'CRITICAL'].includes(upstreamClassification)
+    ? upstreamClassification as DriftClassification
+    : null;
+  if (baselineSamples == null || observedSamples == null
+    || observedSamples < STRATEGY_PROMOTION_POLICY.minimumObservedOutcomeSamples
+    || !classification || typeof driftPolicyVersion !== 'string' || !driftPolicyVersion.trim()) {
     return {
       classification: null,
       status: 'INSUFFICIENT_SAMPLE',
@@ -404,19 +427,16 @@ export function classifyPromotionDrift(stages: readonly PromotionStageEvidence[]
       autoPromotionAllowed: false,
     };
   }
-  const hitRateGap = observedHitRate - baselineHitRate;
-  const expectedValueGap = observedEv - baselineEv;
-  const classification: DriftClassification = hitRateGap <= -0.2 || expectedValueGap < -1
-    ? 'CRITICAL'
-    : hitRateGap <= -0.12 || expectedValueGap < -0.5
-      ? 'DEGRADED'
-      : hitRateGap <= -0.05 || expectedValueGap < 0
-        ? 'WATCH'
-        : 'HEALTHY';
+  const baselineHitRate = typeof baseline?.metrics?.hitRate === 'number' ? baseline.metrics.hitRate : null;
+  const observedHitRate = typeof observed?.metrics?.hitRate === 'number' ? observed.metrics.hitRate : null;
+  const baselineEv = typeof baseline?.metrics?.expectedValue === 'number' ? baseline.metrics.expectedValue : null;
+  const observedEv = typeof observed?.metrics?.expectedValue === 'number' ? observed.metrics.expectedValue : null;
+  const hitRateGap = baselineHitRate == null || observedHitRate == null ? null : observedHitRate - baselineHitRate;
+  const expectedValueGap = baselineEv == null || observedEv == null ? null : observedEv - baselineEv;
   return {
     classification,
     status: 'MEASURED',
-    reason: 'BACKTEST_TO_RECOMMENDATION_OUTCOME_COMPARISON',
+    reason: `UPSTREAM_VERSIONED_DRIFT_POLICY:${driftPolicyVersion}`,
     baselineSampleSize: baselineSamples,
     observedSampleSize: observedSamples,
     hitRateGap,
