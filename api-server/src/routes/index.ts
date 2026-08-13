@@ -26,6 +26,7 @@ import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
 import unifiedSearchRouter from './unified-search';
 import accountConnectionsRouter from './account-connections';
+import { autoTradingV2WorkerHealth } from '../services/auto-trading-v2-worker.service';
 import {
   manualPortfolioNotificationBridge,
   telegramWebhookRouter,
@@ -142,6 +143,18 @@ router.use('/trade-automation/v2/tick', (_req, res) => res.status(405).json({
   realCancelCount: 0,
   privateTradingApiCount: 0,
 }));
+
+// Enrich only the read-only status response with process/lease health. This
+// keeps the V2 route storage contract unchanged while exposing more than HTTP
+// 200: owner, heartbeat/tick timestamps, reconciliation and kill-switch state.
+router.use('/trade-automation/v2/status', (_req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = ((body: unknown) => {
+    if (!body || typeof body !== 'object') return originalJson(body);
+    return originalJson({ ...(body as Record<string, unknown>), worker: autoTradingV2WorkerHealth() });
+  }) as typeof res.json;
+  next();
+});
 
 // V2 is mounted before the legacy automation router so the safe PAPER/SHADOW
 // surface owns its namespace. LIVE remains server-locked inside this router.
