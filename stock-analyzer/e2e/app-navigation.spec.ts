@@ -206,6 +206,17 @@ test('navigation metadata has five owners, actual final-main routes, and no dupl
   expect(UNIFIED_SEARCH_ROUTE_CONTRACT.marketRankings).toBe('/market-rankings');
   expect(navigationGroupMatches(group('assets'), '/coins/spot')).toBe(true);
   expect(navigationGroupMatches(group('technical'), '/auto-trading')).toBe(true);
+
+  const informationMenu = group('information').menu ?? [];
+  expect(informationMenu.map((item) => item.label)).toEqual(['AI 상담', '포트폴리오', '투자 공부', '시장 브리핑']);
+  expect(informationMenu.map((item) => item.href)).toEqual([
+    APP_ROUTES.aiChat,
+    APP_ROUTES.portfolio,
+    APP_ROUTES.learn,
+    APP_ROUTES.marketOverview,
+  ]);
+  expect(navigationGroupMatches(group('information'), APP_ROUTES.marketOverview)).toBe(true);
+  expect(navigationGroupMatches(group('assets'), APP_ROUTES.marketOverview)).toBe(false);
 });
 
 for (const width of [360, 390, 430, 1023, 1024, 1440]) {

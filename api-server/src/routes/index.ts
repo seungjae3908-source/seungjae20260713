@@ -20,6 +20,7 @@ import paperTradingRouter from './paper-trading';
 import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
+import portfolioIntelligenceRouter from './portfolio-intelligence';
 import tradeAutomationRouter from './trade-automation';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
@@ -131,6 +132,7 @@ router.use('/user-integrations', requireCapability('canPlaceOrders'));
 router.use('/user-integrations', userBrokerTelegramRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
+router.use('/', portfolioIntelligenceRouter);
 router.use('/', unifiedSearchRouter);
 router.use('/', aiChatRouter);
 router.use('/', marketRouter);
