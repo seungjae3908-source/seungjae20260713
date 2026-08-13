@@ -7,6 +7,7 @@ import {
   riskEnvelopeForPlan,
   withRiskEnvelope,
 } from './trade-risk-envelope.service';
+import { validatePaperReadiness, type ReadinessEvidence } from './trade-paper-market-contract.service';
 
 function plan(): TradingPlan {
   const now = new Date();
@@ -105,4 +106,53 @@ test('approval refuses a stop-loss envelope above the hard daily loss budget', (
     () => buildRiskEnvelope(candidate, DEFAULT_TRADING_POLICY, candidate.approvedAt!),
     /RISK_ENVELOPE_MAX_LOSS_EXCEEDED/,
   );
+});
+
+test('readiness contract: all scenarios', () => {
+  const now = Date.now();
+  
+  // READY fixture
+  const readyEvidence: ReadinessEvidence = {
+    market: 'KR_STOCK',
+    provider: 'Toss',
+    side: 'BUY',
+    cost: { commission: 0.1 },
+    session: { id: 's1', tick: 1 },
+    precision: 0.01,
+    liquidity: 1000,
+    taxPolicy: { enabled: true },
+    timestamp: now,
+  };
+  assert.equal(validatePaperReadiness(readyEvidence, now).allowed, true);
+
+  // Provider mismatch
+  assert.equal(validatePaperReadiness({ ...readyEvidence, provider: 'Wrong' }, now).allowed, false);
+
+  // Cash market short rejection
+  assert.equal(validatePaperReadiness({ ...readyEvidence, side: 'SHORT' }, now).allowed, false);
+
+  // Non-reducing SELL rejection
+  assert.equal(validatePaperReadiness({ ...readyEvidence, side: 'SELL', isReducing: false }, now).allowed, false);
+  assert.equal(validatePaperReadiness({ ...readyEvidence, side: 'SELL', isReducing: true }, now).allowed, true);
+
+  // Missing cost policy (KR_STOCK)
+  const missingPolicy = { ...readyEvidence };
+  delete missingPolicy.taxPolicy;
+  assert.equal(validatePaperReadiness(missingPolicy, now).allowed, false);
+
+  // Stale evidence
+  assert.equal(validatePaperReadiness({ ...readyEvidence, timestamp: now - 6000 }, now).allowed, false);
+
+  // Futures missing inputs
+  const futuresEvidence: ReadinessEvidence = {
+    market: 'CRYPTO_FUTURES',
+    provider: 'Bitget',
+    side: 'BUY',
+    cost: { commission: 0.1 },
+    session: { id: 's1', tick: 1 },
+    precision: 0, // missing
+    liquidity: 0, // missing
+    timestamp: now,
+  };
+  assert.equal(validatePaperReadiness(futuresEvidence, now).allowed, false);
 });
