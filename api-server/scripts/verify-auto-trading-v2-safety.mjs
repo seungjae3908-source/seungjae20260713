@@ -11,7 +11,7 @@ async function source(relative) {
   return readFile(path.join(repositoryRoot, relative), 'utf8');
 }
 
-const [service, simulation, worker, route, routerIndex, serverIndex, panel] = await Promise.all([
+const [service, simulation, worker, route, routerIndex, serverIndex, panel, liveSafety] = await Promise.all([
   source('api-server/src/services/auto-trading-v2.service.ts'),
   source('api-server/src/services/auto-trading-v2-simulation.service.ts'),
   source('api-server/src/services/auto-trading-v2-worker.service.ts'),
@@ -19,6 +19,7 @@ const [service, simulation, worker, route, routerIndex, serverIndex, panel] = aw
   source('api-server/src/routes/index.ts'),
   source('api-server/src/index.ts'),
   source('stock-analyzer/src/components/auto-trading-v2-panel.tsx'),
+  source('api-server/src/services/auto-trading-live-safety.service.ts'),
 ]);
 
 assert.match(service, /liveTrading:\s*false/);
@@ -43,7 +44,13 @@ const forbiddenPrivateTradingTokens = [
   'secretKey',
 ];
 for (const token of forbiddenPrivateTradingTokens) {
-  for (const [name, text] of [['service', service], ['simulation', simulation], ['worker', worker], ['route', route]]) {
+  for (const [name, text] of [
+    ['service', service],
+    ['simulation', simulation],
+    ['worker', worker],
+    ['route', route],
+    ['liveSafety', liveSafety],
+  ]) {
     assert.equal(text.includes(token), false, `V2 ${name} must not contain private Binance trading token: ${token}`);
   }
 }
@@ -90,6 +97,19 @@ assert.equal(panel.includes("authorizedFetch('/api/trade-automation/v2/tick'"), 
 assert.equal(panel.includes('setInterval(() => void tick()'), false, 'browser must not own execution timer');
 assert.match(panel, /setInterval\(\(\) => void load\(\), READ_ONLY_REFRESH_MS\)/);
 
+assert.match(liveSafety, /releaseMode:\s*'PREPARATION_ONLY'/);
+assert.match(liveSafety, /liveActivationIncluded:\s*false/);
+assert.match(liveSafety, /liveTrading:\s*false/);
+assert.match(liveSafety, /realOrderCount:\s*0/);
+assert.match(liveSafety, /realCancelCount:\s*0/);
+assert.match(liveSafety, /privateTradingApiCount:\s*0/);
+assert.match(liveSafety, /credentialsAcceptedByRuntime:\s*false/);
+assert.match(liveSafety, /signedPrivateRequestsAllowed:\s*false/);
+assert.match(liveSafety, /liveActivationAllowed:\s*false/);
+assert.match(liveSafety, /AUTO_TRADING_LIVE_ACTIVATION_NOT_INCLUDED/);
+assert.equal(liveSafety.includes('fetch('), false, 'live-safety preparation layer must not perform network requests');
+assert.equal(liveSafety.includes('process.env'), false, 'live-safety preparation layer must not accept runtime credentials or activation flags');
+
 console.log('AUTO_TRADING_V2_SAFETY_CONTRACT=PASS');
 console.log('AUTO_TRADING_V2_EXECUTION_OWNER=SERVER_WORKER_ONLY');
 console.log('AUTO_TRADING_V2_WORKER_SINGLE_OWNER=LEASE_GUARDED');
@@ -97,6 +117,8 @@ console.log('AUTO_TRADING_V2_BACKGROUND_WORKER=PUBLIC_DATA_DB_ONLY');
 console.log('AUTO_TRADING_V2_DEPLOYMENT_CANARIES=WORKER_DISABLED');
 console.log('HISTORICAL_REPLAY=CLOSED_CANDLE_ONLY');
 console.log('LIQUIDATION_MODEL=SIMULATION_ONLY_NOT_EXCHANGE_EXACT');
+console.log('LIVE_SAFETY_RELEASE=PREPARATION_ONLY');
+console.log('LIVE_ACTIVATION_INCLUDED=false');
 console.log('LIVE_TRADING=false');
 console.log('REAL_ORDER_COUNT=0');
 console.log('REAL_CANCEL_COUNT=0');
