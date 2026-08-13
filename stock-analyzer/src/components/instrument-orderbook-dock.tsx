@@ -50,6 +50,11 @@ type Payload = {
 const POLL_MS = 3_000;
 const TIMEOUT_MS = 6_500;
 const STATUSES: OrderbookStatus[] = ['ready', 'partial', 'stale', 'unavailable', 'invalid'];
+const FAIL_CLOSED_CLIENT_ERRORS = new Set([
+  'ORDERBOOK_RESPONSE_INVALID',
+  'ORDERBOOK_LEVELS_CORRUPT',
+  'ORDERBOOK_IDENTITY_MISMATCH',
+]);
 
 function finite(value: unknown): number | null {
   if (typeof value === 'boolean' || value == null || value === '') return null;
@@ -98,21 +103,38 @@ function parsePayload(value: unknown): Payload {
   }
 
   const levels = (input: unknown, side: 'ask' | 'bid') => {
+    if (!Array.isArray(input)) throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+    const parsed = input.map(parseLevel);
+    if (parsed.some((item) => item == null)) throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+    const rows = parsed as Level[];
     const seen = new Set<number>();
-    const parsed = Array.isArray(input)
-      ? input.map(parseLevel).filter((item): item is Level => item != null)
-      : [];
-    const unique = parsed.filter((item) => {
-      if (seen.has(item.price)) return false;
+    for (const item of rows) {
+      if (seen.has(item.price)) throw new Error('ORDERBOOK_LEVELS_CORRUPT');
       seen.add(item.price);
-      return true;
-    });
-    unique.sort((left, right) => side === 'ask' ? left.price - right.price : right.price - left.price);
-    return unique;
+    }
+    rows.sort((left, right) => side === 'ask' ? left.price - right.price : right.price - left.price);
+    let cumulative = 0;
+    for (const item of rows) {
+      cumulative += item.quantity;
+      if (Math.abs(item.cumulativeQuantity - cumulative) > 1e-8) {
+        throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+      }
+    }
+    return rows;
   };
 
   const asks = levels(row.asks, 'ask');
   const bids = levels(row.bids, 'bid');
+  if ((status === 'ready' || status === 'stale') && (asks.length === 0 || bids.length === 0)) {
+    throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+  }
+  if (status === 'partial' && ((asks.length === 0) === (bids.length === 0))) {
+    throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+  }
+  if ((status === 'unavailable' || status === 'invalid') && (asks.length > 0 || bids.length > 0)) {
+    throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+  }
+
   const bestAsk = finite(row.bestAsk) ?? asks[0]?.price ?? null;
   const bestBid = finite(row.bestBid) ?? bids[0]?.price ?? null;
   const warnings = Array.isArray(row.warnings)
@@ -149,6 +171,47 @@ function parsePayload(value: unknown): Payload {
     imbalance: finite(row.imbalance),
     warnings,
     reason: cleanText(row.reason),
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  };
+}
+
+function canonicalRequestedSymbol(assetClass: OrderbookAssetClass, symbol: string): string {
+  const normalized = symbol.trim().toUpperCase();
+  if (assetClass === 'crypto_spot') return normalized.replace(/^KRW-/, '');
+  if (assetClass === 'crypto_futures') {
+    const base = normalized.replace(/-USDT$/, '').replace(/USDT$/, '');
+    return `${base}USDT`;
+  }
+  return normalized;
+}
+
+function invalidPayloadForTarget(
+  assetClass: OrderbookAssetClass,
+  market: OrderbookMarket,
+  symbol: string,
+  reason: string,
+): Payload {
+  const currency: Currency = market === 'US' ? 'USD' : market === 'BITGET' ? 'USDT' : 'KRW';
+  return {
+    status: 'invalid',
+    assetClass,
+    market,
+    symbol: canonicalRequestedSymbol(assetClass, symbol),
+    currency,
+    provider: null,
+    providerTimestamp: null,
+    receivedAt: new Date().toISOString(),
+    freshness: 'unknown',
+    asks: [],
+    bids: [],
+    bestAsk: null,
+    bestBid: null,
+    spread: null,
+    spreadPct: null,
+    imbalance: null,
+    warnings: ['응답 identity 또는 호가 레벨 무결성이 요청 target과 일치하지 않아 표시를 차단했습니다.'],
+    reason,
     orderSubmitted: false,
     exchangeRequestSent: false,
   };
@@ -224,6 +287,8 @@ export function InstrumentOrderbookDock({
   const targetKey = `${assetClass}:${market}:${symbol}`;
   const titleId = useId();
   const opener = useRef<HTMLButtonElement>(null);
+  const dialog = useRef<HTMLElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
   const controller = useRef<AbortController | null>(null);
   const timer = useRef<number | null>(null);
   const sequence = useRef(0);
@@ -274,8 +339,12 @@ export function InstrumentOrderbookDock({
       );
       const next = parsePayload(body);
       if (request.signal.aborted || current !== sequence.current) return;
+      const expectedSymbol = canonicalRequestedSymbol(assetClass, symbol);
+      if (next.assetClass !== assetClass || next.market !== market || next.symbol !== expectedSymbol) {
+        throw new Error('ORDERBOOK_IDENTITY_MISMATCH');
+      }
 
-      if (next.status === 'ready' || next.status === 'partial') {
+      if ((next.status === 'ready' || next.status === 'partial') && next.freshness === 'fresh') {
         lastGood.current = { key: targetKey, payload: next };
         setData(next);
       } else if (next.status === 'unavailable' && lastGood.current?.key === targetKey) {
@@ -287,6 +356,7 @@ export function InstrumentOrderbookDock({
         });
         setError(next.reason ?? 'ORDERBOOK_PROVIDER_UNAVAILABLE');
       } else {
+        if (next.status === 'invalid') lastGood.current = null;
         setData(next);
       }
 
@@ -294,10 +364,16 @@ export function InstrumentOrderbookDock({
     } catch (caught) {
       if (current !== sequence.current) return;
       if (request.signal.aborted && !timedOut) return;
-      if (lastGood.current?.key === targetKey) {
+      const message = timedOut
+        ? 'ORDERBOOK_REQUEST_TIMEOUT'
+        : caught instanceof Error ? caught.message : 'ORDERBOOK_REQUEST_FAILED';
+      if (FAIL_CLOSED_CLIENT_ERRORS.has(message)) {
+        lastGood.current = null;
+        setData(invalidPayloadForTarget(assetClass, market, symbol, message));
+      } else if (lastGood.current?.key === targetKey) {
         setData({ ...lastGood.current.payload, status: 'stale', freshness: 'stale' });
       }
-      setError(timedOut ? 'ORDERBOOK_REQUEST_TIMEOUT' : caught instanceof Error ? caught.message : 'ORDERBOOK_REQUEST_FAILED');
+      setError(message);
       schedule();
     } finally {
       window.clearTimeout(timeout);
@@ -318,12 +394,14 @@ export function InstrumentOrderbookDock({
   useEffect(() => {
     if (!open) { stop(); return; }
     void loadRef.current();
+    const focusFrame = window.requestAnimationFrame(() => closeButton.current?.focus());
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') stop();
       else void loadRef.current();
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
+      window.cancelAnimationFrame(focusFrame);
       document.removeEventListener('visibilitychange', onVisibility);
       stop();
     };
@@ -341,7 +419,28 @@ export function InstrumentOrderbookDock({
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); close(); }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog.current) return;
+      const focusable = Array.from(dialog.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => element.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!dialog.current.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -363,8 +462,9 @@ export function InstrumentOrderbookDock({
       </button>
 
       {open ? (
-        <div onMouseDown={backdrop} className="fixed inset-0 z-[90] flex items-end justify-center bg-black/50 sm:items-center sm:p-4">
+        <div data-testid="instrument-orderbook-backdrop" onMouseDown={backdrop} className="fixed inset-0 z-[90] flex items-end justify-center bg-black/50 sm:items-center sm:p-4">
           <section
+            ref={dialog}
             role="dialog"
             aria-modal="true"
             aria-labelledby={titleId}
@@ -384,7 +484,7 @@ export function InstrumentOrderbookDock({
                 <button type="button" aria-label="호가 새로고침" disabled={loading} onClick={() => void loadRef.current()} className="inline-flex h-11 w-11 items-center justify-center rounded-full hover:bg-accent disabled:opacity-50">
                   <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} aria-hidden />
                 </button>
-                <button type="button" aria-label="호가창 닫기" onClick={close} className="inline-flex h-11 w-11 items-center justify-center rounded-full hover:bg-accent">
+                <button ref={closeButton} type="button" aria-label="호가창 닫기" onClick={close} className="inline-flex h-11 w-11 items-center justify-center rounded-full hover:bg-accent">
                   <X className="h-4 w-4" aria-hidden />
                 </button>
               </div>

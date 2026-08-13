@@ -170,12 +170,74 @@ test('client cancellation aborts the in-flight public provider request', async (
   const { server, baseUrl } = await startServer();
   try {
     const controller = new AbortController();
-    const pending = fetch(`${baseUrl}/api/orderbook?assetClass=crypto_spot&symbol=BTC`, { signal: controller.signal });
+    const pending = fetch(`${baseUrl}/api/orderbook?assetClass=crypto_spot&market=UPBIT&symbol=BTC`, { signal: controller.signal });
     await new Promise((resolve) => setTimeout(resolve, 20));
     controller.abort();
     await assert.rejects(pending, /abort/i);
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(providerAborted, true);
+  } finally {
+    await close(server);
+  }
+});
+
+test('asset class and market mismatches fail closed before any provider or public network request', async () => {
+  let publicOutbound = 0;
+  let kiwoomOutbound = 0;
+  setOrderbookPublicTransportForTests({ fetch: async () => {
+    publicOutbound += 1;
+    return Response.json({});
+  } });
+  setOrderbookKiwoomLoaderForTests(async () => {
+    kiwoomOutbound += 1;
+    return {};
+  });
+  const { server, baseUrl } = await startServer();
+  try {
+    for (const query of [
+      'assetClass=crypto_spot&market=BITGET&symbol=BTC',
+      'assetClass=crypto_futures&market=UPBIT&symbol=BTC',
+      'assetClass=stock&market=UPBIT&symbol=005930',
+      'assetClass=stock&market=BITGET&symbol=AAPL',
+    ]) {
+      const response = await fetch(`${baseUrl}/api/orderbook?${query}`);
+      assert.equal(response.status, 400);
+      const body = record(await response.json());
+      assert.equal(body.status, 'invalid');
+      assert.equal(body.reason, 'INVALID_ORDERBOOK_TARGET');
+      assert.deepEqual(body.asks, []);
+      assert.deepEqual(body.bids, []);
+      assert.equal(body.orderSubmitted, false);
+      assert.equal(body.exchangeRequestSent, false);
+    }
+    assert.equal(publicOutbound, 0);
+    assert.equal(kiwoomOutbound, 0);
+  } finally {
+    await close(server);
+  }
+});
+
+test('public provider timeout is unavailable without private fallback or fabricated levels', async () => {
+  let calls = 0;
+  setOrderbookPublicTransportForTests({
+    timeoutMs: 10,
+    fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      calls += 1;
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+    }),
+  });
+  const { server, baseUrl } = await startServer();
+  try {
+    const response = await fetch(`${baseUrl}/api/orderbook?assetClass=crypto_spot&market=UPBIT&symbol=BTC`);
+    assert.equal(response.status, 200);
+    const body = record(await response.json());
+    assert.equal(body.status, 'unavailable');
+    assert.equal(body.reason, 'UPBIT_ORDERBOOK_PROVIDER_TIMEOUT');
+    assert.deepEqual(body.asks, []);
+    assert.deepEqual(body.bids, []);
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+    assert.equal(calls, 1);
   } finally {
     await close(server);
   }
