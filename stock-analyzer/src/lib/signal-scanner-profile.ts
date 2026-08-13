@@ -1,5 +1,7 @@
-import type { ScannerTimeframe } from '@/lib/signal-scanner';
+import type { SignalScannerRequest } from '@/lib/signal-scanner';
 import type { FrontendScannerMarket } from '@/lib/signal-scanner-url';
+
+type ScannerTimeframe = SignalScannerRequest['timeframe'];
 
 export type UnifiedScannerStrategyMode = 'scalping' | 'swing' | 'position';
 export type AiChartStrategyMode = 'SCALPING' | 'SWING' | 'MID_LONG';
