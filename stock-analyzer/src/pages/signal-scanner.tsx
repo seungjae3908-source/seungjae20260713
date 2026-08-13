@@ -126,18 +126,22 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const effectiveTimeframe = embedded ? embeddedTimeframe : profile.timeframe;
   const stockView = view === 'KR' || view === 'US';
   const batchSize = stockView ? 100 : 24;
-  const request = useMemo<SignalScannerRequest>(() => ({
+  const profileRequest = useMemo<SignalScannerRequest>(() => ({
     assetClass: stockView ? 'stock' : view === 'SPOT' ? 'coin_spot' : 'coin_futures',
     market: view === 'KR' ? 'KR' : view === 'US' ? 'US' : view === 'SPOT' ? 'UPBIT' : 'BITGET',
     strategy,
-    timeframe: effectiveTimeframe,
+    timeframe: profile.timeframe,
     conditions: [],
     condition: !stockView && strategy === 'scalping' ? 'williams' : 'trend',
     cursor,
     batchSize,
     minimumScore: 55,
     maximumRiskScore: 70,
-  }), [batchSize, cursor, effectiveTimeframe, stockView, strategy, view]);
+  }), [batchSize, cursor, profile.timeframe, stockView, strategy, view]);
+  const request = useMemo<SignalScannerRequest>(
+    () => embedded ? { ...profileRequest, timeframe: embeddedTimeframe } : profileRequest,
+    [embedded, embeddedTimeframe, profileRequest],
+  );
   const requestKey = useMemo(() => JSON.stringify(request), [request]);
 
   const normalizedCards = useMemo(() => {
