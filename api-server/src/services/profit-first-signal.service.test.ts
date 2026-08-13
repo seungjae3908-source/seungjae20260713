@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { SignalOutcomeEvaluation, SignalPerformanceMarket } from './signal-performance-learning.service';
+import { evaluateProfitFirstRecommendationSet } from './profit-first-recommendation.service';
 import {
   calculateProfitEvidence,
   evaluateNoTradeGate,
@@ -89,6 +90,42 @@ describe('profit-first signal engine', () => {
     const gate = evaluateNoTradeGate({ evidence: value, dataQualityPass: true, riskEnginePass: true, minimumRiskRewardRatio: 1 });
     assert.equal(gate.decision, 'NO_TRADE');
     assert.ok(gate.reasons.includes('EV_NON_POSITIVE'));
+  });
+
+  it('returns aggregate NO_TRADE with zero recommendations when every candidate fails', () => {
+    const insufficient = evidence({ outcomes: [outcome(1, 2)] });
+    const negative = evidence({
+      strategyVersion: 'NEGATIVE',
+      outcomes: Array.from({ length: 30 }, (_, index) => outcome(index, index < 8 ? 1 : -2)),
+    });
+    const result = evaluateProfitFirstRecommendationSet({
+      candidates: [
+        { signalId: 'insufficient', evidence: insufficient, evidenceQuality: 'INSUFFICIENT', dataQualityPass: true, riskEnginePass: true },
+        { signalId: 'negative', evidence: negative, evidenceQuality: 'RUNTIME_VALIDATED', dataQualityPass: true, riskEnginePass: true },
+      ],
+      minimumExpectedNetReturnPercent: 0,
+      minimumRiskRewardRatio: 1,
+      maximumRecommendations: 5,
+    });
+    assert.equal(result.outcome, 'NO_TRADE');
+    assert.deepEqual(result.recommendations, []);
+    assert.equal(result.rejected.length, 2);
+    assert.equal(result.executionAuthority, 'NONE');
+  });
+
+  it('ranks only eligible recommendations and never fills the requested maximum with rejected candidates', () => {
+    const strong = evidence({ strategyVersion: 'STRONG' });
+    const rejected = evidence({ evidenceStatus: 'NOT_EVIDENCED', strategyVersion: 'MISSING' });
+    const result = evaluateProfitFirstRecommendationSet({
+      candidates: [
+        { signalId: 'strong', evidence: strong, evidenceQuality: 'RUNTIME_VALIDATED', dataQualityPass: true, riskEnginePass: true },
+        { signalId: 'missing', evidence: rejected, evidenceQuality: 'MISSING', dataQualityPass: true, riskEnginePass: true },
+      ],
+      maximumRecommendations: 5,
+    });
+    assert.equal(result.outcome, 'RECOMMENDATIONS_AVAILABLE');
+    assert.deepEqual(result.recommendations.map((item) => item.signalId), ['strong']);
+    assert.deepEqual(result.rejected.map((item) => item.signalId), ['missing']);
   });
 
   it('fails closed for insufficient samples and missing evidence without fake probability', () => {
