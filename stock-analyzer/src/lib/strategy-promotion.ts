@@ -6,23 +6,37 @@ export type PromotionState = 'RESEARCH' | 'BLOCKED_DATA' | 'RESEARCH_HOLD' | 'PA
 export interface PromotionStage {
   stage: string;
   status: PromotionStageStatus;
+  startedAt: string | null;
+  completedAt: string | null;
   observedAt: string;
   source: string;
+  provider: string | null;
   sourceSha: string | null;
   sampleSize: number | null;
+  sampleCount: number | null;
   tradeCount: number | null;
   metrics: Record<string, number | string | boolean | null> | null;
   gate: string;
+  gateResult: PromotionStageStatus | 'EVIDENCE_REQUIRED';
   failureReason: string | null;
+  failureReasons: string[];
   provenance: string[];
   costAssumptions: Record<string, number | string | boolean | null> | null;
+  costPolicy: Record<string, number | string | boolean | null> | null;
   dataQuality: string;
+  fetchedAt: string | null;
+  validatedAt: string | null;
+  corporateActionAdjusted: boolean | null;
+  survivorshipSafe: boolean | null;
+  pointInTimeSafe: boolean | null;
+  requiredEvidence: string[];
 }
 
 export interface StrategyPromotionItem {
   identity: {
     strategyFamily: string;
     strategyId: string;
+    strategyVersion: string;
     version: string;
     parameterHash: string;
     market: 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
@@ -30,6 +44,7 @@ export interface StrategyPromotionItem {
     symbol: string | null;
     universe: string;
     timeframe: string;
+    strategyHorizon: 'SCALP' | 'SWING' | 'POSITION';
     horizon: 'SCALP' | 'SWING' | 'POSITION';
     direction: 'BUY' | 'SELL' | 'LONG' | 'SHORT';
     researchCodeSha: string;
@@ -56,6 +71,7 @@ export interface StrategyPromotionResponse {
   ok: true;
   generatedAt: string;
   sourceSha: string;
+  policyVersion: string;
   items: StrategyPromotionItem[];
   counts: Record<PromotionState, number>;
   evidenceSources: Array<{ id: string; owner: string; status: string; use: string; executionAuthority: 'NONE' }>;

@@ -10,7 +10,9 @@ export function createStrategyPromotionRouter(service: StrategyPromotionService 
   router.get('/strategy-promotion', (req, res) => {
     const result = service.list({
       market: typeof req.query.market === 'string' ? req.query.market : undefined,
+      strategyHorizon: typeof req.query.strategyHorizon === 'string' ? req.query.strategyHorizon : undefined,
       direction: typeof req.query.direction === 'string' ? req.query.direction : undefined,
+      status: typeof req.query.status === 'string' ? req.query.status : undefined,
     });
     return res.json({ ok: true, ...result });
   });

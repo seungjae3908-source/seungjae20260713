@@ -28,6 +28,12 @@ test('strategy promotion APIs are GET-only, evidence-backed and fail closed', as
   assert.equal(body.privateTradingApiCount, 0);
   const strategyId = body.items[0]!.identity.strategyId;
 
+  const filtered = await fetch(`${baseUrl}/api/strategy-promotion?market=CRYPTO_FUTURES&strategyHorizon=SCALP&direction=LONG&status=RESEARCH`);
+  assert.equal(filtered.status, 200);
+  const filteredBody = await filtered.json() as { items: Array<{ identity: { market: string; strategyHorizon: string; direction: string }; promotionState: string }> };
+  assert.equal(filteredBody.items.length, 1);
+  assert.deepEqual(filteredBody.items.map((item) => [item.identity.market, item.identity.strategyHorizon, item.identity.direction, item.promotionState]), [['CRYPTO_FUTURES', 'SCALP', 'LONG', 'RESEARCH']]);
+
   for (const suffix of ['', '/history', '/evidence']) {
     const response = await fetch(`${baseUrl}/api/strategy-promotion/${encodeURIComponent(strategyId)}${suffix}`);
     assert.equal(response.status, 200);
