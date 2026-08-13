@@ -136,7 +136,6 @@ export function useQuotes(tickers: string[]) {
 		refetchIntervalInBackground: true,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
