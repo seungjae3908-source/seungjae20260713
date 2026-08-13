@@ -46,8 +46,14 @@ export default function AutoTradingPage({
             </div>
           </section>
           <AutoTradingV2Panel fixture={v2Fixture} />
-          <TradeApprovalQueue fixture={approvalFixture} />
-          <TradeAutomationSettings fixture={fixture} />
+          <section className="space-y-4" aria-labelledby="approval-trading-heading">
+            <div className="px-1">
+              <h2 id="approval-trading-heading" className="text-sm font-black">승인형 주문</h2>
+              <p className="mt-1 text-xs text-muted-foreground">기존 사용자 승인 + Risk Envelope 주문 계층</p>
+            </div>
+            <TradeApprovalQueue fixture={approvalFixture} />
+            <TradeAutomationSettings fixture={fixture} />
+          </section>
           <UserBrokerTelegramPanel />
         </div>
       </main>
