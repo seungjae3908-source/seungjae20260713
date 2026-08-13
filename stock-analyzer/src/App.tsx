@@ -42,6 +42,7 @@ const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const BacktestsPage = lazy(() => import('@/pages/backtests'));
+const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
 const loadPaperTradingPage = () => import('@/pages/paper-trading');
 const PaperTradingPage = lazy(loadPaperTradingPage);
 const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
@@ -172,6 +173,7 @@ function RecommendationsAccess() { return gated('canAccessRiskPreview', <Recomme
 function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioPage />)); }
 function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PortfolioPage />)); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
+function StrategyPromotionAccess() { return gated('canAccessBacktests', <StrategyPromotionPage />); }
 function PaperTradingRouteFallback() {
   return (
     <main
@@ -274,6 +276,7 @@ function ApprovedRouter() {
     <Route path="/stock/:ticker" component={LegacyStockDetailRedirect} />
     <Route path="/recommendations" component={RecommendationsAccess} />
     <Route path="/backtests" component={BacktestsAccess} />
+    <Route path="/strategy-promotion" component={StrategyPromotionAccess} />
     <Route path="/paper-trading" component={PaperTradingAccess} />
     <Route path="/crypto" component={CryptoHomeRedirect} />
     <Route path="/crypto/search" component={CryptoSearchRedirect} />
