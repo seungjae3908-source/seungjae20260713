@@ -47,6 +47,7 @@ export type KillState = 'NONE' | 'SUSPEND_RECOMMENDED' | 'KILLED';
 export interface StrategyIdentity {
   strategyFamily: string;
   strategyId: string;
+  strategyVersion: string;
   version: string;
   parameterHash: string;
   market: ScannerProfileMarket;
@@ -54,6 +55,7 @@ export interface StrategyIdentity {
   symbol: null;
   universe: string;
   timeframe: string;
+  strategyHorizon: ScannerStrategyProfile['horizon'];
   horizon: ScannerStrategyProfile['horizon'];
   direction: StrategyDirection;
   researchCodeSha: string;
@@ -64,19 +66,32 @@ export interface StrategyIdentity {
 export interface PromotionStageEvidence {
   stage: PromotionStageKey;
   status: PromotionStageStatus;
+  startedAt: string | null;
+  completedAt: string | null;
   observedAt: string;
   source: string;
+  provider: string | null;
   sourceSha: string | null;
   datasetId: string | null;
   dataRange: { start: string; end: string } | null;
   sampleSize: number | null;
+  sampleCount: number | null;
   tradeCount: number | null;
   metrics: Readonly<Record<string, number | string | boolean | null>> | null;
   gate: string;
+  gateResult: PromotionStageStatus | 'EVIDENCE_REQUIRED';
   failureReason: string | null;
+  failureReasons: readonly string[];
   provenance: readonly string[];
   costAssumptions: Readonly<Record<string, number | string | boolean | null>> | null;
+  costPolicy: Readonly<Record<string, number | string | boolean | null>> | null;
   dataQuality: 'VERIFIED' | 'PARTIAL' | 'INSUFFICIENT' | 'UNLINKED';
+  fetchedAt: string | null;
+  validatedAt: string | null;
+  corporateActionAdjusted: boolean | null;
+  survivorshipSafe: boolean | null;
+  pointInTimeSafe: boolean | null;
+  requiredEvidence: readonly string[];
 }
 
 export interface DriftState {
@@ -114,6 +129,7 @@ export interface PromotionEvidenceSource {
 export interface StrategyPromotionList {
   generatedAt: string;
   sourceSha: string;
+  policyVersion: string;
   items: readonly StrategyPromotionRecord[];
   counts: Readonly<Record<PromotionState, number>>;
   evidenceSources: readonly PromotionEvidenceSource[];
@@ -150,6 +166,27 @@ const STAGE_ORDER: readonly PromotionStageKey[] = [
 
 const RESEARCH_GATES = STAGE_ORDER.slice(0, 7);
 const VALID_SHA = /^[0-9a-f]{40}$/i;
+export const STRATEGY_PROMOTION_POLICY = Object.freeze({
+  version: 'STRATEGY_PROMOTION_POLICY_V1',
+  stageOrder: STAGE_ORDER,
+  researchGates: RESEARCH_GATES,
+  costStressMultipliers: COST_STRESS_MULTIPLIERS,
+  minimumObservedOutcomeSamples: 30,
+  thresholdAuthority: 'CANONICAL_UPSTREAM_GATE_RESULTS',
+});
+
+const REQUIRED_EVIDENCE: Readonly<Record<PromotionStageKey, readonly string[]>> = Object.freeze({
+  RESEARCH_DESIGN: ['immutable identity', 'parameter hash', 'exact research code SHA'],
+  HISTORICAL_BACKTEST: ['lookahead control', 'survivorship and delisted-asset handling', 'corporate actions', 'missing and stale candles', 'spread', 'commission', 'tax', 'slippage', 'latency', 'funding where applicable', 'liquidity'],
+  OUT_OF_SAMPLE: ['isolated dataset', 'trades', 'net return after costs', 'win rate', 'profit factor', 'expectancy', 'MDD', 'Sharpe where valid', 'average win/loss', 'MFE/MAE'],
+  PURGED_WALK_FORWARD: ['purge', 'embargo where applicable', 'no future leakage', 'rolling stability', 'positive-window ratio', 'worst and median windows', 'parameter stability'],
+  COST_STRESS: ['baseline', '1.25x', '1.5x', '2x', 'commission', 'spread', 'slippage', 'funding where applicable', 'latency impact'],
+  REGIME: ['bull', 'bear', 'sideways', 'high/low volatility', 'high/low liquidity'],
+  FINAL_HOLDOUT: ['selection isolation', 'no parameter retuning', 'no threshold retuning', 'no strategy-family retuning'],
+  PAPER: ['canonical Paper engine', 'trade count', 'net return', 'expectancy', 'profit factor', 'MDD', 'win rate', 'holding time', 'MFE/MAE', 'cost difference'],
+  SHADOW: ['SIMULATED_ONLY', 'LIVE_ORDER_ALLOWED=false', 'ORDER_SUBMITTED=false', 'PRIVATE_TRADING_REQUEST_ALLOWED=false', 'paper-shadow fill/price/latency/spread/outcome gaps'],
+  RECOMMENDATION_OUTCOMES: ['immutable signal and evidence snapshot', 'TP-before-SL or SL-before-TP outcome', 'expiry/invalidation', 'MFE/MAE', 'net hypothetical return'],
+});
 
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -179,6 +216,7 @@ function identity(profile: ScannerStrategyProfile, direction: StrategyDirection,
   return Object.freeze({
     strategyFamily: 'CANONICAL_SCANNER_PROFILE',
     strategyId: `${profile.id}_${direction}`,
+    strategyVersion: profile.version,
     version: profile.version,
     parameterHash: strategyParameterHash(profile),
     market: profile.market,
@@ -186,6 +224,7 @@ function identity(profile: ScannerStrategyProfile, direction: StrategyDirection,
     symbol: null,
     universe: `${profile.market}_CANONICAL_UNIVERSE`,
     timeframe: profile.primaryTimeframe,
+    strategyHorizon: profile.horizon,
     horizon: profile.horizon,
     direction,
     researchCodeSha: sourceSha,
@@ -198,21 +237,36 @@ function emptyStage(stage: PromotionStageKey, observedAt: string): PromotionStag
   return {
     stage,
     status: 'NOT_STARTED',
+    startedAt: null,
+    completedAt: null,
     observedAt,
     source: 'UNLINKED',
+    provider: null,
     sourceSha: null,
     datasetId: null,
     dataRange: null,
     sampleSize: null,
+    sampleCount: null,
     tradeCount: null,
     metrics: null,
     gate: `${stage}_EVIDENCE_REQUIRED`,
+    gateResult: 'EVIDENCE_REQUIRED',
     failureReason: null,
+    failureReasons: [],
     provenance: [],
     costAssumptions: stage === 'COST_STRESS'
       ? { requiredMultipliers: COST_STRESS_MULTIPLIERS.join(',') }
       : null,
+    costPolicy: stage === 'COST_STRESS'
+      ? { version: 'BACKTEST_FEES_SLIPPAGE_FUNDING_V1', requiredMultipliers: COST_STRESS_MULTIPLIERS.join(',') }
+      : null,
     dataQuality: 'UNLINKED',
+    fetchedAt: null,
+    validatedAt: null,
+    corporateActionAdjusted: null,
+    survivorshipSafe: null,
+    pointInTimeSafe: null,
+    requiredEvidence: REQUIRED_EVIDENCE[stage],
   };
 }
 
@@ -221,30 +275,76 @@ function researchStage(profile: ScannerStrategyProfile, sourceSha: string, obser
   return {
     stage: 'RESEARCH_DESIGN',
     status: sourceAvailable ? 'PASS' : 'BLOCKED',
+    startedAt: observedAt,
+    completedAt: observedAt,
     observedAt,
     source: 'scanner-strategy-profile.service.ts',
+    provider: 'INTERNAL_CANONICAL_REGISTRY',
     sourceSha: sourceAvailable ? sourceSha : null,
     datasetId: null,
     dataRange: null,
     sampleSize: null,
+    sampleCount: null,
     tradeCount: null,
     metrics: { profileId: profile.id, profileVersion: profile.version, executionAuthority: 'NONE' },
     gate: 'IMMUTABLE_PROFILE_AND_EXACT_CODE_SHA',
+    gateResult: sourceAvailable ? 'PASS' : 'BLOCKED',
     failureReason: sourceAvailable ? null : 'EXACT_RESEARCH_CODE_SHA_UNAVAILABLE',
+    failureReasons: sourceAvailable ? [] : ['EXACT_RESEARCH_CODE_SHA_UNAVAILABLE'],
     provenance: ['canonical scanner strategy profile registry'],
     costAssumptions: null,
+    costPolicy: null,
     dataQuality: sourceAvailable ? 'VERIFIED' : 'INSUFFICIENT',
+    fetchedAt: null,
+    validatedAt: observedAt,
+    corporateActionAdjusted: null,
+    survivorshipSafe: null,
+    pointInTimeSafe: null,
+    requiredEvidence: REQUIRED_EVIDENCE.RESEARCH_DESIGN,
   };
 }
 
-function mergeEvidence(base: PromotionStageEvidence, override: StrategyEvidenceOverride | undefined, observedAt: string): PromotionStageEvidence {
+function mergeEvidence(base: PromotionStageEvidence, override: StrategyEvidenceOverride | undefined, observedAt: string, expectedSourceSha: string): PromotionStageEvidence {
   if (!override) return base;
-  return {
+  const merged = {
     ...base,
     ...override,
     stage: base.stage,
     observedAt: override.observedAt ?? observedAt,
+    sampleCount: override.sampleCount ?? override.sampleSize ?? base.sampleCount,
+    sampleSize: override.sampleSize ?? override.sampleCount ?? base.sampleSize,
+    gateResult: override.gateResult ?? override.status ?? base.gateResult,
+    failureReasons: override.failureReasons
+      ? [...override.failureReasons]
+      : override.failureReason
+        ? [override.failureReason]
+        : base.failureReasons,
     provenance: override.provenance ? [...override.provenance] : base.provenance,
+  };
+  return validateLinkedEvidence({
+    ...merged,
+    completedAt: override.completedAt ?? (merged.status === 'RUNNING' || merged.status === 'NOT_STARTED' ? null : merged.observedAt),
+    validatedAt: override.validatedAt ?? merged.observedAt,
+  }, expectedSourceSha);
+}
+
+function validateLinkedEvidence(stage: PromotionStageEvidence, expectedSourceSha: string): PromotionStageEvidence {
+  if (stage.stage === 'RESEARCH_DESIGN' || stage.status !== 'PASS') return stage;
+  const missing = [
+    !VALID_SHA.test(stage.sourceSha ?? '') || stage.sourceSha !== expectedSourceSha ? 'EXACT_SOURCE_SHA_REQUIRED' : null,
+    !stage.datasetId ? 'DATASET_ID_REQUIRED' : null,
+    !stage.dataRange ? 'DATA_RANGE_REQUIRED' : null,
+    !stage.provenance.length ? 'PROVENANCE_REQUIRED' : null,
+    stage.dataQuality !== 'VERIFIED' ? 'VERIFIED_DATA_QUALITY_REQUIRED' : null,
+    !stage.metrics ? 'METRICS_REQUIRED' : null,
+  ].filter((value): value is string => Boolean(value));
+  if (!missing.length) return stage;
+  return {
+    ...stage,
+    status: 'BLOCKED',
+    gateResult: 'BLOCKED',
+    failureReason: missing.join(','),
+    failureReasons: missing,
   };
 }
 
@@ -286,13 +386,13 @@ export function classifyPromotionDrift(stages: readonly PromotionStageEvidence[]
   const byStage = stageMap(stages);
   const baseline = byStage.get('HISTORICAL_BACKTEST');
   const observed = byStage.get('RECOMMENDATION_OUTCOMES');
-  const baselineSamples = baseline?.sampleSize ?? baseline?.tradeCount ?? null;
-  const observedSamples = observed?.sampleSize ?? observed?.tradeCount ?? null;
+  const baselineSamples = baseline?.sampleCount ?? baseline?.sampleSize ?? baseline?.tradeCount ?? null;
+  const observedSamples = observed?.sampleCount ?? observed?.sampleSize ?? observed?.tradeCount ?? null;
   const baselineHitRate = typeof baseline?.metrics?.hitRate === 'number' ? baseline.metrics.hitRate : null;
   const observedHitRate = typeof observed?.metrics?.hitRate === 'number' ? observed.metrics.hitRate : null;
   const baselineEv = typeof baseline?.metrics?.expectedValue === 'number' ? baseline.metrics.expectedValue : null;
   const observedEv = typeof observed?.metrics?.expectedValue === 'number' ? observed.metrics.expectedValue : null;
-  if (baselineSamples == null || observedSamples == null || observedSamples < 30 || baselineHitRate == null || observedHitRate == null || baselineEv == null || observedEv == null) {
+  if (baselineSamples == null || observedSamples == null || observedSamples < STRATEGY_PROMOTION_POLICY.minimumObservedOutcomeSamples || baselineHitRate == null || observedHitRate == null || baselineEv == null || observedEv == null) {
     return {
       classification: null,
       status: 'INSUFFICIENT_SAMPLE',
@@ -358,7 +458,7 @@ export class StrategyPromotionService {
     this.killStates = options.killStates ?? {};
   }
 
-  list(filters: { market?: string; direction?: string } = {}): StrategyPromotionList {
+  list(filters: { market?: string; strategyHorizon?: string; direction?: string; status?: string } = {}): StrategyPromotionList {
     const generatedAt = this.now().toISOString();
     const items = listScannerStrategyProfiles().flatMap((profile) => directions(profile.market).map((direction) => {
       const itemIdentity = identity(profile, direction, this.sourceSha || 'UNAVAILABLE');
@@ -367,6 +467,7 @@ export class StrategyPromotionService {
         stage === 'RESEARCH_DESIGN' ? researchStage(profile, this.sourceSha, generatedAt) : emptyStage(stage, generatedAt),
         overrides.get(stage),
         generatedAt,
+        this.sourceSha,
       ));
       const drift = classifyPromotionDrift(stages);
       const killState = this.killStates?.[itemIdentity.strategyId] ?? 'NONE';
@@ -386,11 +487,14 @@ export class StrategyPromotionService {
         privateTradingApiCount: 0 as const,
       });
     })).filter((item) => (!filters.market || item.identity.market === filters.market)
-      && (!filters.direction || item.identity.direction === filters.direction));
+      && (!filters.strategyHorizon || item.identity.strategyHorizon === filters.strategyHorizon)
+      && (!filters.direction || item.identity.direction === filters.direction)
+      && (!filters.status || item.promotionState === filters.status));
     const counts = stateCounts(items);
     return {
       generatedAt,
       sourceSha: this.sourceSha || 'UNAVAILABLE',
+      policyVersion: STRATEGY_PROMOTION_POLICY.version,
       items,
       counts,
       evidenceSources: sourceRegistry(),
@@ -417,7 +521,7 @@ export class StrategyPromotionService {
       sourceSha: string | null;
     }> = record.stages
       .filter((stage) => stage.status !== 'NOT_STARTED')
-      .map((stage) => ({ at: stage.observedAt, type: 'STAGE_EVALUATED', stage: stage.stage, status: stage.status, source: stage.source, sourceSha: stage.sourceSha }));
+      .map((stage) => ({ at: stage.validatedAt ?? stage.observedAt, type: 'STAGE_EVALUATED', stage: stage.stage, status: stage.status, source: stage.source, sourceSha: stage.sourceSha }));
     events.push({ at: this.now().toISOString(), type: 'PROMOTION_STATE_EVALUATED', stage: 'PROMOTION', status: record.promotionState, source: 'strategy-promotion.service.ts', sourceSha: VALID_SHA.test(this.sourceSha) ? this.sourceSha : null });
     return { strategyId, events, executionAuthority: STRATEGY_PROMOTION_EXECUTION_AUTHORITY };
   }
