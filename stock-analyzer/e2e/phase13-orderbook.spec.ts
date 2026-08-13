@@ -32,6 +32,25 @@ const readyFixture = {
   exchangeRequestSent: false,
 };
 
+function unavailableFixture(reason = 'ORDERBOOK_PROVIDER_UNAVAILABLE') {
+  return {
+    ...readyFixture,
+    ok: false,
+    available: false,
+    status: 'unavailable',
+    providerTimestamp: null,
+    freshness: 'unknown',
+    asks: [],
+    bids: [],
+    bestAsk: null,
+    bestBid: null,
+    spread: null,
+    spreadPct: null,
+    imbalance: null,
+    reason,
+  };
+}
+
 async function mockOrderbook(page: Page, fixture: Record<string, unknown> = readyFixture) {
   const calls: Array<{ method: string; url: string }> = [];
   await page.route('**/api/orderbook**', async (route) => {
@@ -122,4 +141,144 @@ test('crossed book is fail-closed in the browser even if an upstream response re
   await expect(dialog.getByText(/교차 호가가 감지되어 클라이언트에서도 표시를 차단했습니다/)).toBeVisible();
   await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
+});
+
+test('dialog owns focus, traps Tab, closes with Escape or outside click, and restores opener focus', async ({ page }) => {
+  await mockOrderbook(page);
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
+
+  const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
+  const closeButton = dialog.getByRole('button', { name: '호가창 닫기' });
+  const refreshButton = dialog.getByRole('button', { name: '호가 새로고침' });
+  const opener = page.getByRole('button', { name: '읽기 전용 호가창 열기' });
+  await expect(closeButton).toBeFocused();
+
+  await page.keyboard.press('Tab');
+  await expect(refreshButton).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(closeButton).toBeFocused();
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(opener).toBeFocused();
+
+  await opener.click();
+  await expect(dialog).toBeVisible();
+  await page.getByTestId('instrument-orderbook-backdrop').click({ position: { x: 5, y: 5 } });
+  await expect(dialog).toBeHidden();
+  await expect(opener).toBeFocused();
+});
+
+test('unsupported or unavailable orderbook displays no fabricated price levels', async ({ page }) => {
+  await mockOrderbook(page, unavailableFixture('US_ORDERBOOK_PROVIDER_NOT_CONNECTED'));
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/__phase13-orderbook-e2e?ticker=AAPL&market=US&assetClass=stock');
+
+  const dialog = page.getByRole('dialog', { name: /AAPL 호가창/ });
+  await expect(dialog.getByText('Unavailable', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('Provider unavailable')).toBeVisible();
+  await expect(dialog.getByText('표시 가능한 실제 호가가 없습니다.')).toBeVisible();
+  await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
+  await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
+  await expect(dialog.getByText('US_ORDERBOOK_PROVIDER_NOT_CONNECTED')).toHaveCount(0);
+});
+
+test('same-target provider failure uses only the last fresh book and marks it stale', async ({ page }) => {
+  let calls = 0;
+  await page.route('**/api/orderbook**', async (route) => {
+    calls += 1;
+    const body = calls === 1 ? readyFixture : unavailableFixture();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  });
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
+
+  const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
+  await expect(dialog.getByText('Fresh', { exact: true })).toBeVisible();
+  await expect.poll(() => calls, { timeout: 4_500 }).toBeGreaterThanOrEqual(2);
+  await expect(dialog.getByText('Stale', { exact: true })).toBeVisible();
+  await expect(dialog.getByTestId('ask-level-1')).toContainText('70,100');
+  await expect(dialog.getByText(/마지막 정상 호가를 stale 상태로 표시합니다/)).toBeVisible();
+});
+
+test('wrong response identity is fail-closed and never replaced with prior last-good data', async ({ page }) => {
+  let calls = 0;
+  await page.route('**/api/orderbook**', async (route) => {
+    calls += 1;
+    const body = calls === 1 ? readyFixture : {
+      ...readyFixture,
+      market: 'US',
+      symbol: 'AAPL',
+      currency: 'USD',
+    };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  });
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
+  const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
+  await expect(dialog.getByText('Fresh', { exact: true })).toBeVisible();
+  await expect.poll(() => calls, { timeout: 4_500 }).toBeGreaterThanOrEqual(2);
+  await expect(dialog.getByText('Invalid', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('ORDERBOOK_IDENTITY_MISMATCH')).toBeVisible();
+  await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
+  await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
+});
+
+test('late response from the previous symbol is rejected after an in-place target switch', async ({ page }) => {
+  const seen: string[] = [];
+  await page.route('**/api/orderbook**', async (route) => {
+    const url = new URL(route.request().url());
+    const symbol = url.searchParams.get('symbol') ?? '';
+    seen.push(symbol);
+    if (symbol === '005930') {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      try {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(readyFixture) });
+      } catch {
+        // The old request is expected to be aborted by the target switch.
+      }
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...readyFixture,
+        symbol: '000660',
+        ticker: '000660',
+        asks: [{ rank: 1, price: 120100, quantity: 2, cumulativeQuantity: 2 }],
+        bids: [{ rank: 1, price: 120000, quantity: 3, cumulativeQuantity: 3 }],
+        bestAsk: 120100,
+        bestBid: 120000,
+      }),
+    });
+  });
+
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
+  await page.waitForTimeout(30);
+  await page.evaluate(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('ticker', '000660');
+    window.history.pushState({}, '', `${url.pathname}${url.search}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+
+  const dialog = page.getByRole('dialog', { name: /000660 호가창/ });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId('ask-level-1')).toContainText('120,100');
+  await page.waitForTimeout(300);
+  await expect(dialog.getByTestId('ask-level-1')).toContainText('120,100');
+  expect(seen).toContain('005930');
+  expect(seen).toContain('000660');
+});
+
+test('single polling owner issues one request per interval for the same key', async ({ page }) => {
+  const calls = await mockOrderbook(page);
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
+  await expect.poll(() => calls.length, { timeout: 4_500 }).toBe(2);
+  await page.waitForTimeout(400);
+  expect(calls.length).toBe(2);
 });
