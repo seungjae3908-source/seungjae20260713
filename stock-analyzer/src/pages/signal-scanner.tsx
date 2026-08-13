@@ -26,6 +26,7 @@ import {
   type UnifiedScannerStrategyMode,
 } from '@/lib/signal-scanner-profile';
 import type { FrontendScannerMarket } from '@/lib/signal-scanner-url';
+import { StrategyPromotionBadge } from '@/components/strategy-promotion-badge';
 
 export type ScannerView = 'KR' | 'US' | 'SPOT' | 'FUTURES';
 type RequestStatus = 'loading' | 'success' | 'empty' | 'partial' | 'cancelled' | 'error';
@@ -415,6 +416,10 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             </button>
           </div>
         </header>
+
+        <section aria-label="Strategy promotion status" className="flex justify-end">
+          <StrategyPromotionBadge compact={embedded} />
+        </section>
 
         <section aria-label="검색 시장" className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           {VIEWS.map((item) => (

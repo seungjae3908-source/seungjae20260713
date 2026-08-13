@@ -60,6 +60,7 @@ const groups = {
     path.join(root, 'src/services/scanner-quant-strategy.service.test.ts'),
     path.join(root, 'src/services/scanner-strategy-profile.service.test.ts'),
     path.join(root, 'src/services/signal-performance-learning.service.test.ts'),
+    path.join(root, 'src/services/strategy-promotion.service.test.ts'),
     path.join(root, 'src/services/scanner-quant-hardening.service.test.ts'),
     path.join(root, 'src/services/scanner-market-profile-overlay.service.test.ts'),
     path.join(root, 'src/services/scanner-ai-provider.service.test.ts'),
@@ -140,6 +141,7 @@ const groups = {
     path.join(root, 'src/routes/market-information.smoke.test.ts'),
     path.join(root, 'src/routes/unified-search.smoke.test.ts'),
     path.join(root, 'src/routes/stock-orderbook.smoke.test.ts'),
+    path.join(root, 'src/routes/strategy-promotion.smoke.test.ts'),
   ],
 };
 
