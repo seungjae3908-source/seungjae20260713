@@ -6,7 +6,8 @@ export type CanonicalProviderAction =
   | 'ORDER_CREATE'
   | 'ORDER_QUERY'
   | 'ORDER_CANCEL'
-  | 'ORDER_MODIFY';
+  | 'ORDER_MODIFY'
+  | 'ORDER_CANCEL_REPLACE';
 
 export type CanonicalProviderActionContract = {
   provider: CanonicalTradingProvider;
@@ -29,7 +30,7 @@ export const CANONICAL_PROVIDER_ACTIONS: Readonly<Record<CanonicalTradingProvide
   upbit: Object.freeze({
     provider: 'upbit',
     markets: ['CRYPTO_SPOT'],
-    actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL'],
+    actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL', 'ORDER_CANCEL_REPLACE'],
     directions: ['BUY', 'SELL'],
     sellRequiresExistingPosition: true,
     futuresOnly: false,
@@ -37,7 +38,7 @@ export const CANONICAL_PROVIDER_ACTIONS: Readonly<Record<CanonicalTradingProvide
   bitget: Object.freeze({
     provider: 'bitget',
     markets: ['CRYPTO_FUTURES'],
-    actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL'],
+    actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL', 'ORDER_MODIFY'],
     directions: ['LONG', 'SHORT'],
     sellRequiresExistingPosition: false,
     futuresOnly: true,
