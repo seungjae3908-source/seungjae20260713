@@ -1,7 +1,10 @@
+import type { ComponentProps } from 'react';
 import AutoTradingPage from '@/pages/auto-trading';
-import type { TradeAutomationStatus } from '@/components/trade-automation-settings';
+import { TradeAutomationSettings } from '@/components/trade-automation-settings';
 import type { TradeApprovalQueueItem } from '@/components/trade-approval-queue';
 import type { AutoTradingV2Fixture } from '@/components/auto-trading-v2-panel';
+
+type TradeAutomationStatus = NonNullable<ComponentProps<typeof TradeAutomationSettings>['fixture']>;
 
 const FIXTURE: TradeAutomationStatus = {
   policy: {
