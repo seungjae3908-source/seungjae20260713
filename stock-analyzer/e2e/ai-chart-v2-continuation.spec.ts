@@ -166,12 +166,12 @@ test('BITGET AI Chart shows one public futures snapshot without promoting it to 
   expect(consoleErrors).toEqual([]);
 });
 
-test('AI Chart 2.0 remains usable with no horizontal overflow at 320/360/390/412 widths', async ({ page, context }) => {
+test('AI Chart 2.0 remains usable with no horizontal overflow at 320/360/390/412/430 widths', async ({ page, context }) => {
   const privateTradingRequests = await installReadOnlyChartMocks(context);
   const consoleErrors: string[] = [];
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
 
-  for (const width of [320, 360, 390, 412]) {
+  for (const width of [320, 360, 390, 412, 430]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(directSignalUrl);
     await expect(page.getByTestId('unified-analysis-chart')).toBeVisible();
