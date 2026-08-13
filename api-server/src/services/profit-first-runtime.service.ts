@@ -13,8 +13,25 @@ import {
 import {
   totalTradingCostPercent,
   type ProfitEvidence,
+  type ProfitEvidenceStatus,
   type TradingCostPolicy,
 } from './profit-first-signal.service';
+
+export interface ProfitFirstSnapshotFields {
+  profitEvidenceStatus: ProfitEvidenceStatus;
+  profitProbability: number | null;
+  targetBeforeStopProbability: number | null;
+  lossProbability: number | null;
+  expectedGrossReturn: number | null;
+  expectedNetReturn: number | null;
+  expectedLoss: number | null;
+  expectedValue: number | null;
+  profitSampleSize: number;
+  profitConfidenceInterval: readonly [number, number] | null;
+  tradingCostPolicyId: string | null;
+}
+
+export type ProfitFirstSignalSnapshot = SignalSnapshot & Readonly<ProfitFirstSnapshotFields>;
 
 export interface ProfitFirstOutcomeEvaluation extends SignalOutcomeEvaluation {
   targetBeforeStop: boolean | null;
@@ -25,7 +42,7 @@ export interface ProfitFirstOutcomeEvaluation extends SignalOutcomeEvaluation {
 }
 
 export interface ProfitFirstPerformanceRecord {
-  snapshot: SignalSnapshot;
+  snapshot: ProfitFirstSignalSnapshot;
   outcome: ProfitFirstOutcomeEvaluation;
 }
 
@@ -48,12 +65,12 @@ function directionalReturn(entry: number, price: number, direction: SignalSnapsh
   return ((price - entry) / entry) * 100 * directionSign(direction);
 }
 
-export function createProfitFirstRuntimeSnapshot(input: SignalSnapshotInput, evidence: ProfitEvidence): SignalSnapshot {
+export function createProfitFirstRuntimeSnapshot(input: SignalSnapshotInput, evidence: ProfitEvidence): ProfitFirstSignalSnapshot {
   if (input.market !== evidence.market) throw new Error('Profit evidence market mismatch');
   if (input.strategyHorizon !== evidence.strategyHorizon) throw new Error('Profit evidence strategy mismatch');
   if (input.direction !== evidence.direction) throw new Error('Profit evidence direction mismatch');
   if (input.strategyProfileVersion !== evidence.strategyVersion) throw new Error('Profit evidence strategy version mismatch');
-  return createImmutableSignalSnapshot({
+  const enriched = {
     ...input,
     profitEvidenceStatus: evidence.status,
     profitProbability: evidence.profitProbability,
@@ -66,9 +83,10 @@ export function createProfitFirstRuntimeSnapshot(input: SignalSnapshotInput, evi
     profitSampleSize: evidence.sampleSize,
     profitConfidenceInterval: evidence.confidenceInterval == null
       ? null
-      : [evidence.confidenceInterval.lowerPercent, evidence.confidenceInterval.upperPercent],
+      : [evidence.confidenceInterval.lowerPercent, evidence.confidenceInterval.upperPercent] as const,
     tradingCostPolicyId: evidence.costPolicyId,
-  });
+  };
+  return createImmutableSignalSnapshot(enriched as SignalSnapshotInput) as ProfitFirstSignalSnapshot;
 }
 
 export function trackProfitFirstOutcome(input: {
@@ -138,10 +156,10 @@ export function aggregateProfitFirstPerformance(
 }
 
 export class ProfitFirstRuntimeLedger {
-  readonly #snapshots = new Map<string, SignalSnapshot>();
+  readonly #snapshots = new Map<string, ProfitFirstSignalSnapshot>();
   readonly #records: ProfitFirstPerformanceRecord[] = [];
 
-  recordExposure(input: SignalSnapshotInput, evidence: ProfitEvidence): SignalSnapshot {
+  recordExposure(input: SignalSnapshotInput, evidence: ProfitEvidence): ProfitFirstSignalSnapshot {
     const snapshot = createProfitFirstRuntimeSnapshot(input, evidence);
     if (this.#snapshots.has(snapshot.signalId)) throw new Error(`Duplicate signal exposure: ${snapshot.signalId}`);
     this.#snapshots.set(snapshot.signalId, snapshot);
@@ -168,7 +186,7 @@ export class ProfitFirstRuntimeLedger {
     return aggregateProfitFirstPerformance(this.#records, minimumSampleSize);
   }
 
-  snapshot(signalId: string): SignalSnapshot | null {
+  snapshot(signalId: string): ProfitFirstSignalSnapshot | null {
     return this.#snapshots.get(signalId) ?? null;
   }
 
