@@ -1,4 +1,4 @@
-import { useLocation } from 'wouter';
+import { useLocation, useSearch } from 'wouter';
 
 import {
   InstrumentOrderbookDock,
@@ -13,9 +13,10 @@ type Target = {
   defaultOpen?: boolean;
 };
 
-function resolveTarget(location: string): Target | null {
+function resolveTarget(location: string, search: string): Target | null {
   const [path, rawQuery = ''] = location.split('?', 2);
-  const params = new URLSearchParams(rawQuery || window.location.search.slice(1));
+  const query = rawQuery || search.replace(/^\?/, '');
+  const params = new URLSearchParams(query);
 
   if (path === '/__phase13-orderbook-e2e') {
     const ticker = String(params.get('ticker') ?? '005930').trim().toUpperCase();
@@ -50,7 +51,8 @@ function resolveTarget(location: string): Target | null {
 
 export function OrderbookRouteDock() {
   const [location] = useLocation();
-  const target = resolveTarget(location);
+  const search = useSearch();
+  const target = resolveTarget(location, search);
   if (!target) return null;
   return <InstrumentOrderbookDock {...target} />;
 }
