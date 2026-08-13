@@ -61,7 +61,10 @@ export async function getTossReadonlyConnectionStatus(userId: string) {
 export async function saveTossReadonlyCredentials(userId: string, credentials: TossReadonlyCredentials) {
   const owner = validateUserId(userId);
   const normalized = normalizeCredentials(credentials);
-  const encrypted = encryptTradingCredentials(normalized);
+  const encrypted = encryptTradingCredentials({
+    clientId: normalized.clientId,
+    clientSecret: normalized.clientSecret,
+  });
   const updatedAt = new Date().toISOString();
   const { error } = await getSupabase()
     .from('toss_readonly_connections')
