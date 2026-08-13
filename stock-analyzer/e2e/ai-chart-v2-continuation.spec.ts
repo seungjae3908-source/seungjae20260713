@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 const directSignalUrl = '/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m&strategyMode=SCALPING&signalId=scanner-signal-42';
+const futuresUrl = '/ai-chart?assetType=coin_futures&market=BITGET&symbol=BTCUSDT&ticker=BTCUSDT&name=BTCUSDT&timeframe=15m&strategyMode=SWING&signalId=futures-signal-7';
 
 function candleRows(timeframe: string) {
   const stepMinutes = timeframe === '1m' ? 1 : timeframe === '3m' ? 3 : timeframe === '5m' ? 5 : timeframe === '15m' ? 15 : 60;
@@ -53,6 +54,66 @@ async function installReadOnlyChartMocks(context: BrowserContext) {
   return privateTradingRequests;
 }
 
+async function installFuturesChartMocks(context: BrowserContext) {
+  const privateTradingRequests: string[] = [];
+  let snapshotCalls = 0;
+  await context.route('**/*', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (/\/(orders?|cancel|balances?|positions?)(?:\/|\?|$)/i.test(url.pathname) && request.method() !== 'GET') {
+      privateTradingRequests.push(`${request.method()} ${url.pathname}`);
+    }
+    if (url.pathname === '/api/crypto/futures/candles') {
+      const timeframe = url.searchParams.get('granularity') ?? '15m';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          symbol: 'BTCUSDT',
+          timeframe,
+          provider: 'bitget-e2e-public',
+          fetchedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          candles: candleRows(timeframe),
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/crypto/futures/BTCUSDT/snapshot') {
+      snapshotCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            symbol: 'BTCUSDT',
+            markPrice: 61_234.5,
+            fundingRate: 0.0001,
+            nextFundingAt: '2026-08-13T08:00:00.000Z',
+            openInterest: 123_456,
+            previousOpenInterest: 120_000,
+            openInterestChangePercent: 2.88,
+            status: 'live',
+            updatedAt: new Date().toISOString(),
+            warnings: [],
+          },
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/quotes') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
+      return;
+    }
+    await route.continue();
+  });
+  return {
+    privateTradingRequests,
+    snapshotCalls: () => snapshotCalls,
+  };
+}
+
 async function expectNoHorizontalOverflow(page: Page) {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);
@@ -79,7 +140,29 @@ test('AI Chart consumes selected scanner signalId and strategyMode without inven
   await expect(page.getByTestId('strategy-mode-SCALPING')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('ENTRY 3');
   await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('UNAVAILABLE');
+  await expect(page.getByTestId('futures-public-context')).toHaveCount(0);
   expect(privateTradingRequests).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+});
+
+test('BITGET AI Chart shows one public futures snapshot without promoting it to a trade signal', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const mock = await installFuturesChartMocks(context);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+
+  await page.goto(futuresUrl);
+  const panel = page.getByTestId('futures-public-context');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText('61,234.5 USDT');
+  await expect(panel).toContainText('0.0100%');
+  await expect(panel).toContainText('123,456');
+  await expect(panel).toContainText('+2.88%');
+  await expect(panel).toContainText('NOT A TRADE SIGNAL');
+  await expect(page.getByTestId('strategy-mode-SWING')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toContainText('futures-signal-7');
+  expect(mock.snapshotCalls()).toBe(1);
+  expect(mock.privateTradingRequests).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });
 
