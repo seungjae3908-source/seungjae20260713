@@ -1,14 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  aggregatePortfolioProviderSnapshots,
+  boundPortfolioMentorConversation,
   buildMonthlyInvestmentPlan,
   buildPortfolioAssetSummary,
+  buildPortfolioMentorV2Context,
   calculateAlignedCorrelation,
   calculateAllocation,
   calculateCashPlan,
   normalizeMoneyToKRW,
   simulateAdditionalInvestment,
-} from './intelligence-v2.ts';
+} from './index.ts';
 
 const now = new Date('2026-08-13T06:00:00.000Z');
 const freshFx = [
@@ -49,6 +52,40 @@ test('portfolio futures component uses supplied account equity without notional 
   ], freshFx, { now });
   assert.equal(result.totalNormalizedKRWAmount, 1_395_000);
   assert.equal(result.components[0].source, 'bitget-account-equity');
+});
+
+test('provider snapshots aggregate KRW USD and USDT with explicit provenance', () => {
+  const result = aggregatePortfolioProviderSnapshots([
+    { provider: 'cash-ledger', source: 'canonical-cash', asOf: now.toISOString(), quality: 'LIVE', status: 'READY', assets: [{ bucket: 'CASH', amount: 1_000_000, currency: 'KRW' }] },
+    { provider: 'us-broker', source: 'readonly-broker-snapshot', asOf: now.toISOString(), quality: 'LIVE', status: 'READY', assets: [{ bucket: 'US_STOCKS', amount: 100, currency: 'USD' }] },
+    { provider: 'bitget', source: 'readonly-account-equity', asOf: now.toISOString(), quality: 'DELAYED', status: 'READY', assets: [{ bucket: 'CRYPTO_FUTURES_EQUITY', amount: 1000, currency: 'USDT' }] },
+  ], freshFx, { now });
+  assert.equal(result.status, 'READY');
+  assert.equal(result.assets.totalNormalizedKRWAmount, 2_535_000);
+  assert.equal(result.provenance.providerCount, 3);
+  assert.equal(result.provenance.includedProviderCount, 3);
+  assert.equal(result.provenance.fxQuotes[0].source, 'validated-fx');
+});
+
+test('provider failure preserves known subtotal but never presents it as complete total', () => {
+  const result = aggregatePortfolioProviderSnapshots([
+    { provider: 'cash-ledger', source: 'canonical-cash', asOf: now.toISOString(), quality: 'LIVE', status: 'READY', assets: [{ bucket: 'CASH', amount: 1_000_000, currency: 'KRW' }] },
+    { provider: 'us-broker', source: 'readonly-broker-snapshot', asOf: now.toISOString(), quality: 'UNAVAILABLE', status: 'UNAVAILABLE', errorCode: 'PROVIDER_TIMEOUT', assets: [] },
+  ], freshFx, { now });
+  assert.equal(result.status, 'PARTIAL');
+  assert.equal(result.assets.knownNormalizedKRWAmount, 1_000_000);
+  assert.equal(result.assets.totalNormalizedKRWAmount, null);
+  assert.ok(result.missing.includes('PROVIDER:us-broker:PROVIDER_TIMEOUT'));
+});
+
+test('future-dated provider provenance is excluded fail-closed', () => {
+  const result = aggregatePortfolioProviderSnapshots([
+    { provider: 'future-provider', source: 'readonly-snapshot', asOf: '2026-08-14T00:00:00.000Z', quality: 'LIVE', status: 'READY', assets: [{ bucket: 'CASH', amount: 9_999_999, currency: 'KRW' }] },
+  ], freshFx, { now });
+  assert.equal(result.status, 'UNAVAILABLE');
+  assert.equal(result.assets.knownNormalizedKRWAmount, 0);
+  assert.equal(result.assets.totalNormalizedKRWAmount, null);
+  assert.ok(result.missing.some((item) => item.includes('INVALID_PROVENANCE')));
 });
 
 test('cash buffer clamps investable cash to zero', () => {
@@ -104,4 +141,33 @@ test('monthly plan contains contributions only and does not fabricate future ret
     { key: 'STOCKS', weight: 0.7, cumulativeContributionKRW: 8_400_000 },
     { key: 'CASH', weight: 0.3, cumulativeContributionKRW: 3_600_000 },
   ]);
+});
+
+test('AI Mentor V2 keeps only bounded recent conversation and never grants order authority', () => {
+  const portfolio = aggregatePortfolioProviderSnapshots([
+    { provider: 'cash-ledger', source: 'canonical-cash', asOf: now.toISOString(), quality: 'LIVE', status: 'READY', assets: [{ bucket: 'CASH', amount: 1_000_000, currency: 'KRW' }] },
+  ], freshFx, { now });
+  const conversation = Array.from({ length: 12 }, (_, index) => ({ role: index % 2 === 0 ? 'user' as const : 'assistant' as const, content: `message-${index}-${'x'.repeat(50)}` }));
+  const bounded = boundPortfolioMentorConversation(conversation, { maxMessages: 4, maxMessageChars: 32, maxTotalChars: 100 });
+  assert.ok(bounded.length <= 4);
+  assert.ok(bounded.reduce((sum, item) => sum + item.content.length, 0) <= 100);
+  assert.ok(bounded.every((item) => item.content.length <= 32));
+  const context = buildPortfolioMentorV2Context({ portfolio, conversation, userPrompt: '내 포트폴리오의 데이터 품질을 설명해줘', now });
+  assert.equal(context.safety.liveTrading, false);
+  assert.equal(context.safety.liveOrderAllowed, false);
+  assert.equal(context.safety.privateTradingRequestAllowed, false);
+  assert.equal(context.safety.orderAuthority, 'none');
+  assert.equal(context.safety.externalAiCalled, false);
+  assert.ok(context.limitations.includes('NO_FABRICATED_FUTURE_RETURN'));
+});
+
+ test('AI Mentor V2 rejects nested private credential material', () => {
+  const portfolio = aggregatePortfolioProviderSnapshots([
+    { provider: 'cash-ledger', source: 'canonical-cash', asOf: now.toISOString(), quality: 'LIVE', status: 'READY', assets: [{ bucket: 'CASH', amount: 1_000_000, currency: 'KRW' }] },
+  ], freshFx, { now });
+  assert.throws(() => buildPortfolioMentorV2Context({
+    portfolio,
+    conversation: [{ role: 'user', content: 'authorization: Bearer abcdefghijklmnop' }],
+    now,
+  }), /private data/i);
 });
