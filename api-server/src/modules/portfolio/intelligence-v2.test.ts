@@ -9,9 +9,11 @@ import {
   calculateAlignedCorrelation,
   calculateAllocation,
   calculateCashPlan,
+  comparePortfolioAllocation,
   normalizeMoneyToKRW,
   simulateAdditionalInvestment,
 } from './index.ts';
+import { loadFreePublicFxQuotes } from '../../services/public-fx.service.ts';
 
 const now = new Date('2026-08-13T06:00:00.000Z');
 const freshFx = [
@@ -33,6 +35,22 @@ test('stale or missing FX fails closed instead of inventing KRW value', () => {
   ], { now });
   assert.equal(result.normalizedKRWAmount, null);
   assert.equal(result.status, 'FX_UNAVAILABLE');
+});
+
+test('free public FX collector preserves source and partial failure', async () => {
+  const mockFetch = (async (url: string | URL | Request) => {
+    const text = String(url);
+    if (text.includes('finance.yahoo.com')) {
+      return new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 1402.5, regularMarketTime: 1786596900 } }] } }), { status: 200 });
+    }
+    return new Response('upstream unavailable', { status: 503 });
+  }) as typeof fetch;
+  const result = await loadFreePublicFxQuotes(mockFetch);
+  assert.equal(result.quotes.length, 1);
+  assert.equal(result.quotes[0].currency, 'USD');
+  assert.equal(result.quotes[0].krwRate, 1402.5);
+  assert.equal(result.quotes[0].source, 'yahoo-public:KRW=X');
+  assert.deepEqual(result.missing, ['FX:USDT_KRW:UNAVAILABLE']);
 });
 
 test('portfolio total is partial when one currency cannot be normalized', () => {
@@ -107,6 +125,15 @@ test('allocation reports top five concentration and preserves partial status', (
   assert.equal(result.weights.find((row) => row.key === 'UNKNOWN')?.weightPercent, null);
 });
 
+test('deterministic allocation policy classifies known weights without AI-generated targets', () => {
+  const result = comparePortfolioAllocation('BALANCED', { CASH: 8, KR_STOCKS: 30, US_STOCKS: 52, CRYPTO: null });
+  assert.equal(result.status, 'PARTIAL');
+  assert.equal(result.comparison.find((row) => row.assetClass === 'CASH')?.state, 'UNDERWEIGHT');
+  assert.equal(result.comparison.find((row) => row.assetClass === 'KR_STOCKS')?.state, 'BALANCED');
+  assert.equal(result.comparison.find((row) => row.assetClass === 'US_STOCKS')?.state, 'OVERWEIGHT');
+  assert.equal(result.comparison.find((row) => row.assetClass === 'CRYPTO')?.state, 'UNAVAILABLE');
+});
+
 test('correlation requires aligned return samples and fails closed when history does not align', () => {
   const left = Array.from({ length: 30 }, (_, index) => ({ timestamp: `L-${index}`, value: index / 100 }));
   const right = Array.from({ length: 30 }, (_, index) => ({ timestamp: `R-${index}`, value: index / 100 }));
@@ -141,6 +168,8 @@ test('monthly plan contains contributions only and does not fabricate future ret
     { key: 'STOCKS', weight: 0.7, cumulativeContributionKRW: 8_400_000 },
     { key: 'CASH', weight: 0.3, cumulativeContributionKRW: 3_600_000 },
   ]);
+  assert.equal('futureValue' in result, false);
+  assert.equal('cagr' in result, false);
 });
 
 test('AI Mentor V2 keeps only bounded recent conversation and never grants order authority', () => {
@@ -161,7 +190,7 @@ test('AI Mentor V2 keeps only bounded recent conversation and never grants order
   assert.ok(context.limitations.includes('NO_FABRICATED_FUTURE_RETURN'));
 });
 
- test('AI Mentor V2 rejects nested private credential material', () => {
+test('AI Mentor V2 rejects nested private credential material', () => {
   const portfolio = aggregatePortfolioProviderSnapshots([
     { provider: 'cash-ledger', source: 'canonical-cash', asOf: now.toISOString(), quality: 'LIVE', status: 'READY', assets: [{ bucket: 'CASH', amount: 1_000_000, currency: 'KRW' }] },
   ], freshFx, { now });
