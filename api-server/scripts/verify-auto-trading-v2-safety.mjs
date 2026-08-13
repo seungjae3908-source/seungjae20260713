@@ -66,6 +66,9 @@ assert.match(worker, /privateTradingApiCount:\s*0/);
 assert.match(worker, /wouldLiquidate/);
 assert.match(worker, /wouldPnL/);
 assert.match(serverIndex, /startAutoTradingV2Worker\(\)/);
+assert.match(serverIndex, /AUTO_TRADING_V2_CANARY_PORTS = new Set\(\[18081, 18082, 18084\]\)/);
+assert.match(serverIndex, /AUTO_TRADING_V2_CANARY_PORTS\.has\(port\)/);
+assert.match(serverIndex, /canary-disabled port=\$\{port\} LIVE_TRADING=false/);
 
 assert.match(route, /safeMode\(req\.body\?\.mode\)/);
 assert.match(route, /if \(mode === 'LIVE'\) throw new Error\('AUTO_TRADING_V2_LIVE_LOCKED'\)/);
@@ -91,6 +94,7 @@ console.log('AUTO_TRADING_V2_SAFETY_CONTRACT=PASS');
 console.log('AUTO_TRADING_V2_EXECUTION_OWNER=SERVER_WORKER_ONLY');
 console.log('AUTO_TRADING_V2_WORKER_SINGLE_OWNER=LEASE_GUARDED');
 console.log('AUTO_TRADING_V2_BACKGROUND_WORKER=PUBLIC_DATA_DB_ONLY');
+console.log('AUTO_TRADING_V2_DEPLOYMENT_CANARIES=WORKER_DISABLED');
 console.log('HISTORICAL_REPLAY=CLOSED_CANDLE_ONLY');
 console.log('LIQUIDATION_MODEL=SIMULATION_ONLY_NOT_EXCHANGE_EXACT');
 console.log('LIVE_TRADING=false');
