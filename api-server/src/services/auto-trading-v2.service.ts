@@ -308,7 +308,7 @@ export function autoTradingV2StopPrice(
   entryPrice: number,
   atr14: number,
   mode: AutoTradingV2StopMode = 'ATR_STOP',
-  atrMultiplier = AUTO_TRADING_V2_CONFIG.defaultAtrStopMultiplier,
+  atrMultiplier: number = AUTO_TRADING_V2_CONFIG.defaultAtrStopMultiplier,
 ) {
   const distance = mode === 'FIXED_STOP'
     ? entryPrice * AUTO_TRADING_V2_CONFIG.fixedStopPercent / 100
@@ -532,7 +532,7 @@ export function evaluateAutoTradingV2Signal(
   const pullbackEligible = snapshot.expansionRvolPercent >= threshold
     && snapshot.volumeContraction
     && snapshot.pullbackDistancePercent <= AUTO_TRADING_V2_CONFIG.pullbackToMa20MaxPercent
-    && (direction === 'LONG' ? snapshot.continuationLong : direction === 'SHORT' ? snapshot.continuationShort : false);
+    && (direction === 'LONG' ? snapshot.continuationLong : direction === 'SHORT_ONLY' ? snapshot.continuationShort : false);
   const flashCrash = {
     spreadAbnormal: snapshot.spreadPercent > AUTO_TRADING_V2_CONFIG.maxSpreadPercent,
     volatilityAbnormal: snapshot.atrPercent > AUTO_TRADING_V2_CONFIG.maxAtrPercent
