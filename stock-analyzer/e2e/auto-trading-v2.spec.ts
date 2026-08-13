@@ -5,10 +5,16 @@ function captureBrowserFailures(page: Page) {
   const pageErrors: string[] = [];
   const httpErrors: string[] = [];
   const requestFailures: string[] = [];
+  const executionMutationRequests: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('request', (request) => {
+    if (/\/api\/trade-automation\/v2\/tick(?:\?|$)/.test(request.url())) {
+      executionMutationRequests.push(`${request.method()} ${request.url()}`);
+    }
+  });
   page.on('response', (response) => {
     if (response.url().includes('/api/') && response.status() >= 400) {
       httpErrors.push(`${response.status()} ${response.url()}`);
@@ -17,7 +23,7 @@ function captureBrowserFailures(page: Page) {
   page.on('requestfailed', (request) => {
     if (request.url().includes('/api/')) requestFailures.push(`${request.failure()?.errorText ?? 'failed'} ${request.url()}`);
   });
-  return { consoleErrors, pageErrors, httpErrors, requestFailures };
+  return { consoleErrors, pageErrors, httpErrors, requestFailures, executionMutationRequests };
 }
 
 function expectNoBrowserFailures(failures: ReturnType<typeof captureBrowserFailures>) {
@@ -25,6 +31,7 @@ function expectNoBrowserFailures(failures: ReturnType<typeof captureBrowserFailu
   expect(failures.pageErrors).toEqual([]);
   expect(failures.httpErrors).toEqual([]);
   expect(failures.requestFailures).toEqual([]);
+  expect(failures.executionMutationRequests).toEqual([]);
 }
 
 async function mockUserIntegrationsApi(page: Page) {
@@ -63,12 +70,14 @@ async function verifyCoreSurface(page: Page) {
 
   await expect(page.getByTestId('auto-trading-v2-symbol-BTCUSDT')).toContainText('LONG');
   await expect(page.getByTestId('auto-trading-v2-symbol-BTCUSDT')).toContainText('PROTECTED');
+  await expect(page.getByTestId('auto-trading-v2-symbol-BTCUSDT')).toContainText('청산가 시뮬레이션');
+  await expect(page.getByTestId('auto-trading-v2-symbol-BTCUSDT')).toContainText('SIMULATION_ONLY_NOT_EXCHANGE_EXACT');
   await expect(page.getByTestId('auto-trading-v2-symbol-SOLUSDT')).toContainText('BLOCK');
   await expect(page.getByText('PARAMETER_STABILITY')).toBeVisible();
   await expect(page.getByText('Closed candle only')).toBeVisible();
-  await expect(page.getByText('REAL ORDER')).toBeVisible();
-  await expect(page.getByText('REAL CANCEL')).toBeVisible();
-  await expect(page.getByText('PRIVATE TRADING API')).toBeVisible();
+  await expect(page.getByText('REAL ORDER', { exact: true })).toBeVisible();
+  await expect(page.getByText('REAL CANCEL', { exact: true })).toBeVisible();
+  await expect(page.getByText('PRIVATE TRADING API', { exact: true })).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
