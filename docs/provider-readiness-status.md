@@ -1,0 +1,1 @@
+Current implementation status: canonical provider mapping and predeploy evidence gate are implemented. Actual credential registration, private connectivity verification, and order submission are intentionally not performed in this Draft.
