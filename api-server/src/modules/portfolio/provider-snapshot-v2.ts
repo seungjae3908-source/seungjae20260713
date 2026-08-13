@@ -99,7 +99,8 @@ export function aggregatePortfolioProviderSnapshots(
   const providers = snapshots.map((snapshot): PortfolioProviderSummary => {
     const provider = safeProviderId(snapshot.provider);
     const source = safeSource(snapshot.source);
-    const timestampValid = Number.isFinite(Date.parse(snapshot.asOf));
+    const timestamp = Date.parse(snapshot.asOf);
+    const timestampValid = Number.isFinite(timestamp) && timestamp <= now.getTime();
     const identityValid = provider != null && source != null && timestampValid;
     const unavailable = snapshot.status === 'UNAVAILABLE' || snapshot.quality === 'UNAVAILABLE' || !identityValid;
 
@@ -139,26 +140,28 @@ export function aggregatePortfolioProviderSnapshots(
     };
   });
 
-  const assetSummary = buildPortfolioAssetSummary(assets, fxQuotes, options);
-  const missing = [...new Set([...providerMissing, ...assetSummary.missing])];
+  const rawAssetSummary = buildPortfolioAssetSummary(assets, fxQuotes, options);
+  const missing = [...new Set([...providerMissing, ...rawAssetSummary.missing])];
   const noUsableAssets = assets.length === 0;
+  const partial = degradedProvider || rawAssetSummary.status === 'PARTIAL';
   const status: PortfolioProviderAggregationV2['status'] = noUsableAssets
     ? 'UNAVAILABLE'
-    : degradedProvider || assetSummary.status === 'PARTIAL'
+    : partial
       ? 'PARTIAL'
       : 'READY';
+  const assetSummary: PortfolioAssetSummary = noUsableAssets || partial
+    ? {
+        ...rawAssetSummary,
+        status: 'PARTIAL',
+        totalNormalizedKRWAmount: null,
+      }
+    : rawAssetSummary;
 
   return {
     status,
     generatedAt: now.toISOString(),
     providers,
-    assets: noUsableAssets
-      ? {
-          ...assetSummary,
-          status: 'PARTIAL',
-          totalNormalizedKRWAmount: null,
-        }
-      : assetSummary,
+    assets: assetSummary,
     missing: noUsableAssets && missing.length === 0 ? ['NO_PROVIDER_ASSETS'] : missing,
     provenance: {
       providerCount: snapshots.length,
