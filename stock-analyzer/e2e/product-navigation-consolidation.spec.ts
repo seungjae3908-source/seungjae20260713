@@ -56,6 +56,8 @@ test('portfolio reuses the unified journal component as a primary tab', async ()
   expect(portfolio).toContain("portfolioSection === 'journal'");
   expect(portfolio).toContain('<UnifiedTradeJournalPanel />');
   expect(portfolio).toContain('data-testid="portfolio-journal"');
-  expect(portfolioV2).toContain("navigate('/portfolio?tab=journal')");
+  expect(portfolioV2).toContain("function selectTab(next: PortfolioV2Tab)");
+  expect(portfolioV2).toContain("navigate(next === 'intelligence' ? '/portfolio' : `/portfolio?tab=${next}`)");
+  expect(portfolioV2).toContain("onClick={() => selectTab('journal')}");
   expect(portfolioV2).toContain('>매매일지</button>');
 });
