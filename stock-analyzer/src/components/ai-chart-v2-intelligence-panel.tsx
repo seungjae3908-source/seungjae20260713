@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   BarChart3,
@@ -15,6 +15,7 @@ import {
 import {
   aggregateMultiTimeframe,
   buildTechnicalTimeframeEvidence,
+  dataQualityFromStatus,
   mapPricePlan,
   signalLifecycleFromAnalysis,
   strategyModeTimeframes,
@@ -31,6 +32,7 @@ import {
   UnifiedChartDataError,
   fetchUnifiedChartData,
   unifiedChartDataStatus,
+  type UnifiedChartDataStatus,
   type UnifiedChartTimeframe,
 } from '@/lib/unified-chart-data';
 import { cn } from '@/lib/utils';
@@ -93,11 +95,35 @@ function finiteScore(value: number | null | undefined): number | null {
 function currentEvidenceFromExistingChart(
   selection: AnalysisSelection,
   analysis: ChartAnalysis | null,
+  dataStatus: UnifiedChartDataStatus,
 ): AiChartTimeframeEvidence {
+  const quality = dataQualityFromStatus(dataStatus);
   const scannerSide = normalizeContextSide(selection.action, selection.market);
   const scannerScore = finiteScore(selection.confidence ?? selection.signalScore);
   const reasons = (selection.reasons ?? []).filter(Boolean).slice(0, 8);
+  const failClosed = quality === 'STALE' || quality === 'UNAVAILABLE' || quality === 'PARTIAL';
 
+  if (failClosed) {
+    const risk = quality === 'STALE'
+      ? '현재 시간봉 데이터가 오래되어 방향 판단을 보류'
+      : quality === 'UNAVAILABLE'
+        ? '현재 시간봉 데이터를 사용할 수 없어 방향 판단을 보류'
+        : '현재 시간봉 데이터가 충분하지 않아 방향 판단을 보류';
+    return {
+      timeframe: selection.timeframe as UnifiedChartTimeframe,
+      state: 'INSUFFICIENT_DATA',
+      side: 'WAIT',
+      score: null,
+      quality,
+      positiveFactors: [],
+      negativeFactors: [],
+      riskFactors: [risk],
+      reasonCodes: ['CURRENT_CHART_DATA_QUALITY_BLOCKED', dataStatus.toUpperCase()],
+      source: 'NONE',
+    };
+  }
+
+  const qualityRisks = quality === 'DELAYED' ? ['현재 시간봉 시세가 지연 상태'] : [];
   if (scannerSide && scannerScore != null) {
     const positive = scannerSide === 'BUY' || scannerSide === 'LONG';
     return {
@@ -105,10 +131,10 @@ function currentEvidenceFromExistingChart(
       state: 'READY',
       side: scannerSide,
       score: scannerScore,
-      quality: 'PARTIAL',
+      quality,
       positiveFactors: positive ? reasons : [],
       negativeFactors: positive ? [] : reasons,
-      riskFactors: ['현재 시간봉 freshness는 기존 차트 Data Quality 상태를 우선 확인'],
+      riskFactors: qualityRisks,
       reasonCodes: ['SCANNER_CONTEXT', 'EXISTING_CHART_OWNER'],
       source: 'SCANNER',
     };
@@ -126,10 +152,10 @@ function currentEvidenceFromExistingChart(
       state: 'READY',
       side,
       score: finiteScore(analysis.confidence),
-      quality: 'PARTIAL',
+      quality,
       positiveFactors: positive ? analysis.reasons.slice(0, 8) : [],
       negativeFactors: side === 'SELL' || side === 'SHORT' ? analysis.reasons.slice(0, 8) : [],
-      riskFactors: ['현재 시간봉 freshness는 기존 차트 Data Quality 상태를 우선 확인'],
+      riskFactors: qualityRisks,
       reasonCodes: ['CHART_ANALYSIS_CONTEXT', 'EXISTING_CHART_OWNER'],
       source: 'TECHNICAL_EVIDENCE',
     };
@@ -140,10 +166,10 @@ function currentEvidenceFromExistingChart(
     state: 'INSUFFICIENT_DATA',
     side: 'WAIT',
     score: null,
-    quality: 'PARTIAL',
+    quality,
     positiveFactors: [],
     negativeFactors: [],
-    riskFactors: ['현재 차트 분석이 준비될 때까지 방향 판단을 보류'],
+    riskFactors: [...qualityRisks, '현재 차트 분석이 준비될 때까지 방향 판단을 보류'],
     reasonCodes: ['EXISTING_CHART_CONTEXT_PENDING'],
     source: 'NONE',
   };
@@ -161,14 +187,9 @@ function initialSignalOverlayVisible(): boolean {
   return window.localStorage.getItem(SIGNAL_OVERLAY_STORAGE_KEY) !== 'false';
 }
 
-function signalIdFromContext(selection: AnalysisSelection, analysis: ChartAnalysis | null): string {
-  if (typeof window !== 'undefined') {
-    const routeSignalId = new URLSearchParams(window.location.search).get('signalId')?.trim();
-    if (routeSignalId) return routeSignalId;
-  }
-  return analysis?.id
-    ?? selection.searchRunId
-    ?? `${selection.market}:${selection.ticker}:${selection.timeframe}`;
+function signalIdFromContext(): string | null {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get('signalId')?.trim() || null;
 }
 
 function SignalDirectionIcon({ side }: { side: AiChartSignalSide }) {
@@ -192,7 +213,7 @@ function AiChartSignalOverlayPortal({
   score: number | null;
   lifecycle: AiChartSignalLifecycle;
   mode: AiChartStrategyMode;
-  signalId: string;
+  signalId: string | null;
 }) {
   const [target, setTarget] = useState<HTMLElement | null>(null);
 
@@ -217,7 +238,7 @@ function AiChartSignalOverlayPortal({
   return createPortal(
     <div
       data-testid="ai-chart-v2-signal-overlay"
-      data-signal-id={signalId}
+      data-signal-id={signalId ?? 'UNAVAILABLE'}
       data-signal-status={lifecycle}
       className={cn(
         'pointer-events-none absolute left-3 top-3 z-20 max-w-[calc(100%-1.5rem)] rounded-xl border bg-background/90 px-3 py-2 shadow-sm backdrop-blur-sm',
@@ -234,7 +255,7 @@ function AiChartSignalOverlayPortal({
         {lifecycle} · {mode} · {selection.timeframe}
       </p>
       <p className="mt-0.5 truncate text-[8px] font-semibold text-muted-foreground">
-        Signal {signalId}
+        Signal {signalId ?? 'UNAVAILABLE'}
       </p>
     </div>,
     target,
@@ -257,6 +278,24 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
   useEffect(() => {
     setMultiTimeframeRequested(false);
   }, [mode, selection.market, selection.ticker, selection.timeframe]);
+
+  const currentChartQuery = useQuery({
+    queryKey: ['unified-chart-data', selection.market, selection.ticker, selectedTimeframe],
+    queryFn: ({ signal }) => fetchUnifiedChartData({
+      market: selection.market,
+      symbol: selection.ticker,
+      timeframe: selectedTimeframe,
+      signal,
+    }),
+    enabled: false,
+    staleTime: 15_000,
+    gcTime: 10 * 60 * 1000,
+  });
+  const currentDataStatus: UnifiedChartDataStatus = currentChartQuery.data
+    ? unifiedChartDataStatus(currentChartQuery.data, currentChartQuery.isError)
+    : currentChartQuery.isError
+      ? 'unavailable'
+      : 'insufficient';
 
   const queries = useQueries({
     queries: supplementalTimeframes.map((timeframe) => ({
@@ -281,8 +320,8 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
   });
 
   const currentChartEvidence = useMemo(
-    () => currentEvidenceFromExistingChart(selection, analysis),
-    [analysis, selection],
+    () => currentEvidenceFromExistingChart(selection, analysis, currentDataStatus),
+    [analysis, currentDataStatus, selection],
   );
 
   const supplementalContexts = useMemo(() => supplementalTimeframes.map((timeframe, index) => {
@@ -331,7 +370,7 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
   const invalidationText = analysis?.invalidationConditions?.[0]
     ?? (plan.invalidation != null ? `가격 ${formatPrice(plan.invalidation, selection.market)} 무효화` : 'UNAVAILABLE');
   const scannerLinked = Boolean(selection.searchRunId || selection.action || selection.signalScore != null || selection.confidence != null);
-  const signalId = signalIdFromContext(selection, analysis);
+  const signalId = signalIdFromContext();
   const supplementalLoading = multiTimeframeRequested && queries.some((query) => query.isFetching);
 
   const toggleSignalOverlay = () => {
@@ -550,9 +589,20 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
             <span className="text-muted-foreground">실행 계층</span>
             <strong className="mt-1 block">READ_ONLY_PREVIEW</strong>
           </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">Historical Performance</span>
+            <strong className="mt-1 block">UNAVAILABLE</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">현재 Data Quality</span>
+            <strong className="mt-1 block">{current.quality}</strong>
+          </div>
         </div>
         <p className="mt-3 text-[10px] font-semibold leading-4 text-muted-foreground">
           현재 차트 데이터는 기존 단일 owner를 재사용합니다. 보조 시간봉은 명시적 MTF 분석 요청에서만 기존 provider/cache 계약으로 읽고 별도 polling을 만들지 않습니다.
+        </p>
+        <p className="mt-2 text-[10px] font-semibold leading-4 text-muted-foreground">
+          Confidence는 현재 근거의 합성 강도이며 검증된 historical win probability가 아닙니다. 검증된 이력 소스가 없으므로 win rate, PF, expectancy, probability를 생성하지 않습니다.
         </p>
       </section>
     </section>
