@@ -12,6 +12,7 @@ import { AlertTriangle, Clock3, Loader2, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   fetchUnifiedAssetSuggestions,
+  deriveUnifiedSearchOutcome,
   prioritizeUnifiedAssetSuggestions,
   type UnifiedAssetFilter,
   type UnifiedAssetSuggestion,
@@ -124,6 +125,11 @@ export function UnifiedAssetSearch({
   const open = focused && (trimmed.length > 0 || filteredRecent.length > 0);
   const staleProviders = response?.providers.filter((provider) => provider.status === 'stale') ?? [];
   const errorProviders = response?.providers.filter((provider) => provider.status === 'error') ?? [];
+  const outcome = error
+    ? 'DATA_UNAVAILABLE'
+    : response
+      ? deriveUnifiedSearchOutcome(response)
+      : null;
 
   useEffect(() => {
     const updateWatchlist = () => setWatchlist(readSearchWatchlist());
@@ -271,7 +277,7 @@ export function UnifiedAssetSearch({
         <div ref={popupRef} id="unified-asset-search-listbox" role="listbox" aria-label="통합 자산 자동완성 결과" style={popupStyle} className="z-[120] overflow-y-auto overscroll-contain rounded-2xl border border-card-border bg-card shadow-2xl">
           {!trimmed && filteredRecent.length > 0 && <div className="flex items-center gap-2 border-b border-card-border px-4 py-3 text-xs font-extrabold text-muted-foreground"><Clock3 className="h-4 w-4" /> 최근 검색</div>}
           {loading && <div className="flex min-h-28 items-center justify-center gap-2 px-4 py-6 text-sm font-bold text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> 검색 인덱스에서 찾는 중입니다.</div>}
-          {!loading && error && <div className="space-y-3 px-4 py-5 text-center"><AlertTriangle className="mx-auto h-6 w-6 text-warning" /><p className="break-keep text-sm font-bold">{error}</p><button type="button" onClick={() => { if (trimmed) void runSearch(trimmed); }} className="h-11 rounded-xl border border-card-border px-4 text-sm font-extrabold">재시도</button></div>}
+          {!loading && error && <div className="space-y-3 px-4 py-5 text-center" data-testid="unified-search-outcome"><AlertTriangle className="mx-auto h-6 w-6 text-warning" /><p className="text-xs font-black text-warning">DATA_UNAVAILABLE · 검색 데이터 사용 불가</p><p className="break-keep text-sm font-bold">{error}</p><button type="button" onClick={() => { if (trimmed) void runSearch(trimmed); }} className="h-11 rounded-xl border border-card-border px-4 text-sm font-extrabold">재시도</button></div>}
           {!loading && !error && trimmed && errorProviders.length > 0 && <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs font-bold text-destructive">공급자 연결 실패: {providerNames(errorProviders)}. 해당 시장 결과가 누락될 수 있습니다.</div>}
           {!loading && !error && trimmed && staleProviders.length > 0 && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">마지막 정상 인덱스 사용: {providerNames(staleProviders)}.</div>}
           {!loading && !error && trimmed && response?.stale && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">가장 오래된 데이터 기준시각: {response.dataAsOf ? new Date(response.dataAsOf).toLocaleString('ko-KR') : '확인 필요'}</div>}
@@ -291,9 +297,13 @@ export function UnifiedAssetSearch({
             </Fragment>
           ))}
           {!loading && !error && trimmed && response && response.results.length === 0 && (
-            <div className="space-y-2 px-4 py-6 text-center">
-              <p className="text-sm font-black">일치하는 자산이 없습니다.</p>
-              {response.hiddenMatches.length > 0 ? <p className="text-xs font-bold text-muted-foreground">다른 시장에서 찾음: {response.hiddenMatches.map((item) => `${GROUP_LABEL[item.market]} ${item.count}개`).join(', ')}</p> : response.partial ? <p className="text-xs font-bold text-warning">일부 공급자 결과가 누락되었거나 마지막 정상 인덱스를 사용 중이므로 신규 상장 자산이 아직 반영되지 않았을 수 있습니다.</p> : <p className="text-xs font-bold text-muted-foreground">이름·티커·종목코드·심볼을 다시 확인해 주세요.</p>}
+            <div className="space-y-2 px-4 py-6 text-center" data-testid="unified-search-outcome">
+              <p className={`text-sm font-black ${outcome === 'PROVIDER_UNAVAILABLE' ? 'text-warning' : ''}`}>
+                {outcome === 'PROVIDER_UNAVAILABLE'
+                  ? 'PROVIDER_UNAVAILABLE · 공급자 결과 확인 불가'
+                  : 'NO_MATCH · 일치하는 자산 없음'}
+              </p>
+              {response.hiddenMatches.length > 0 ? <p className="text-xs font-bold text-muted-foreground">다른 시장에서 찾음: {response.hiddenMatches.map((item) => `${GROUP_LABEL[item.market]} ${item.count}개`).join(', ')}</p> : outcome === 'PROVIDER_UNAVAILABLE' ? <p className="text-xs font-bold text-warning">일부 공급자 결과가 누락되었거나 마지막 정상 인덱스를 사용 중입니다. 이것은 정상적인 검색 결과 0건이 아닙니다.</p> : <p className="text-xs font-bold text-muted-foreground">이름·티커·종목코드·심볼을 다시 확인해 주세요.</p>}
             </div>
           )}
         </div>
@@ -301,3 +311,4 @@ export function UnifiedAssetSearch({
     </div>
   );
 }
+
