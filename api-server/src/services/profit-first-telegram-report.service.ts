@@ -8,7 +8,7 @@ const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 
 export type ProfitTelegramDeliveryState = Extract<NotificationDeliveryState, 'PENDING' | 'SENT' | 'FAILED' | 'RETRY_SCHEDULED'>;
 export interface ProfitTelegramDelivery {
-  id: string; userId: string; signalId: string; dedupeKey: string; state: ProfitTelegramDeliveryState;
+  id: string; userId: string; signalId: string; dedupeKey: string; cooldownKey: string; state: ProfitTelegramDeliveryState;
   attempts: number; nextRetryAt: string | null; lastErrorCode: string | null; createdAt: string; updatedAt: string;
   message: string; chartImage: { mimeType: string; base64: string } | null;
 }
@@ -25,9 +25,13 @@ export interface ProfitTelegramRecipient { userId: string; telegramChatId: strin
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const number = (value: number | null | undefined, suffix = '') => finite(value) ? `${value.toLocaleString('ko-KR', { maximumFractionDigits: 4 })}${suffix}` : '데이터 부족';
 const sanitize = (value: unknown) => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
-function dedupeKey(input: { userId: string; snapshot: AiEvidenceSnapshot }): string {
+function buildTelegramDedupeKey(input: { userId: string; snapshot: AiEvidenceSnapshot }): string {
   const s = input.snapshot.signal;
-  return createHash('sha256').update([input.userId, s.market, s.symbol, s.direction, s.strategyHorizon, s.signalId, s.strategyProfileVersion].join('|')).digest('hex');
+  return createHash('sha256').update([input.userId, s.market, s.symbol, s.direction, s.strategyHorizon, s.signalId, s.strategyProfileVersion, 'FINAL_RECOMMENDATION'].join('|')).digest('hex');
+}
+export function buildTelegramCooldownKey(input: { userId: string; snapshot: AiEvidenceSnapshot }): string {
+  const s = input.snapshot.signal;
+  return createHash('sha256').update([input.userId, s.market, s.symbol, s.direction, s.strategyHorizon, 'FINAL_RECOMMENDATION'].join('|')).digest('hex');
 }
 export function renderProfitFirstTelegramReport(snapshot: AiEvidenceSnapshot): string {
   const s = snapshot.signal; const ai = snapshot.ai.validation; const news = snapshot.evidence.news.items; const disclosures = snapshot.evidence.disclosure.items;
@@ -60,9 +64,11 @@ export class ProfitFirstTelegramReportService {
   async queue(input: { recipient: ProfitTelegramRecipient; decision: FinalEvidenceDecision; snapshot: AiEvidenceSnapshot; now?: Date }): Promise<{ queued: boolean; reason?: string; deliveryId?: string }> {
     if (input.decision !== 'FINAL_RECOMMENDATION') return { queued: false, reason: 'NOT_FINAL_RECOMMENDATION' };
     if (!input.recipient.enabled || !input.recipient.telegramChatId) return { queued: false, reason: 'NOT_CONFIGURED' };
-    const now = input.now ?? new Date(); const key = dedupeKey({ userId: input.recipient.userId, snapshot: input.snapshot }); const cooldownKey = `${input.recipient.userId}:${input.snapshot.signal.market}:${input.snapshot.signal.symbol}:${input.snapshot.signal.direction}:${input.snapshot.signal.strategyHorizon}`;
+    const now = input.now ?? new Date();
+    const dedupeKey = buildTelegramDedupeKey({ userId: input.recipient.userId, snapshot: input.snapshot });
+    const cooldownKey = buildTelegramCooldownKey({ userId: input.recipient.userId, snapshot: input.snapshot });
     const last = this.lastSentAt.get(cooldownKey); if (last != null && now.getTime() - last < this.cooldownMs) return { queued: false, reason: 'COOLDOWN' };
-    const delivery: ProfitTelegramDelivery = { id: randomUUID(), userId: input.recipient.userId, signalId: input.snapshot.signal.signalId, dedupeKey: key, state: 'PENDING', attempts: 0, nextRetryAt: null, lastErrorCode: null, createdAt: now.toISOString(), updatedAt: now.toISOString(), message: renderProfitFirstTelegramReport(input.snapshot), chartImage: input.snapshot.evidence.chart.image };
+    const delivery: ProfitTelegramDelivery = { id: randomUUID(), userId: input.recipient.userId, signalId: input.snapshot.signal.signalId, dedupeKey, cooldownKey, state: 'PENDING', attempts: 0, nextRetryAt: null, lastErrorCode: null, createdAt: now.toISOString(), updatedAt: now.toISOString(), message: renderProfitFirstTelegramReport(input.snapshot), chartImage: input.snapshot.evidence.chart.image };
     const queued = await this.outbox.enqueue(delivery); return queued ? { queued: true, deliveryId: delivery.id } : { queued: false, reason: 'DUPLICATE' };
   }
   async process(input: { recipient: ProfitTelegramRecipient; deliveryId: string; now?: Date }): Promise<{ processed: boolean; state: ProfitTelegramDeliveryState | null }> {
@@ -74,7 +80,7 @@ export class ProfitFirstTelegramReportService {
       if (result.ok) { const chunks = splitTelegramText(photoSent ? row.message.slice(MAX_CAPTION) : row.message); for (const chunk of chunks) { if (!chunk) continue; result = await this.transport.send(input.recipient.telegramChatId, chunk); if (!result.ok) break; } }
     } catch { result = { ok: false, errorCode: 'TELEGRAM_TRANSPORT_ERROR' }; }
     const attempts = row.attempts + 1;
-    if (result.ok) { await this.outbox.finish(row.userId, row.id, { state: 'SENT', attempts, nextRetryAt: null, lastErrorCode: null, updatedAt: now.toISOString() }); const s = row.signalId; this.lastSentAt.set(`${row.userId}:${s}`, now.getTime()); return { processed: true, state: 'SENT' }; }
+    if (result.ok) { await this.outbox.finish(row.userId, row.id, { state: 'SENT', attempts, nextRetryAt: null, lastErrorCode: null, updatedAt: now.toISOString() }); this.lastSentAt.set(row.cooldownKey, now.getTime()); return { processed: true, state: 'SENT' }; }
     const retryable = /429|5\d\d|TIMEOUT|TRANSPORT/.test(result.errorCode ?? ''); const state: ProfitTelegramDeliveryState = retryable && attempts < 3 ? 'RETRY_SCHEDULED' : 'FAILED'; const nextRetryAt = state === 'RETRY_SCHEDULED' ? new Date(now.getTime() + 30_000 * (2 ** (attempts - 1))).toISOString() : null;
     await this.outbox.finish(row.userId, row.id, { state, attempts, nextRetryAt, lastErrorCode: sanitize(result.errorCode || 'TELEGRAM_DELIVERY_FAILED').slice(0, 120), updatedAt: now.toISOString() }); return { processed: true, state };
   }
