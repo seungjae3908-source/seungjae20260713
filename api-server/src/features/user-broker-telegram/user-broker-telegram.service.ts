@@ -80,7 +80,6 @@ export function manualPortfolioEvent(input: {
 function formatNumber(value: number | null): string { return value == null ? '-' : value.toLocaleString('ko-KR', { maximumFractionDigits: 8 }); }
 function title(event: UserExecutionEvent): string {
   switch (event.type) {
-    case 'SIGNAL_DETECTED': return '📡 신호 포착';
     case 'ORDER_SUBMITTED': return '🟦 주문 제출';
     case 'ORDER_PARTIALLY_FILLED': return '🔵 부분 체결';
     case 'ORDER_FILLED': return event.side === 'sell' || event.side === 'short' ? '✅ 매도 체결' : '✅ 매수 체결';
@@ -92,27 +91,16 @@ function title(event: UserExecutionEvent): string {
     case 'POSITION_CLOSED': return '🏁 포지션 종료';
     case 'TAKE_PROFIT_FILLED': return '💰 익절 체결';
     case 'STOP_FILLED': return '🛑 손절 체결';
-    case 'TRAILING_EXIT': return '📉 트레일링 종료';
-    case 'KILL_SWITCH': return '🚨 킬 스위치';
-    case 'STALE_DATA': return '⚠️ 시세 지연';
-    case 'RECONCILIATION_ERROR': return '🧯 상태 대조 오류';
     case 'MANUAL_PORTFOLIO_ENTRY': return '📌 포트폴리오 등록';
   }
 }
-function executionModePrefix(event: UserExecutionEvent) {
-  const mode = String(event.metadata.executionMode ?? event.metadata.accountMode ?? '').toUpperCase();
-  if (mode === 'SHADOW' || mode === 'MOCK') return '[SHADOW]';
-  if (mode === 'PAPER' || event.source === 'PAPER_EXECUTION') return '[PAPER]';
-  return '';
-}
 export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): string {
-  const prefix = executionModePrefix(event);
-  const lines = [`${prefix ? `${prefix} ` : ''}${title(event)}`, '', event.symbol];
+  const lines = [title(event), '', event.symbol];
   if (event.quantity != null || event.price != null) lines.push(`${formatNumber(event.quantity)} × ${formatNumber(event.price)}`);
   if (event.maskedAccount) lines.push('', `계좌 ${event.maskedAccount}`);
   if (event.strategy) lines.push(`전략 ${event.strategy}`);
   if (event.remainingQuantity != null) lines.push(`잔여수량 ${formatNumber(event.remainingQuantity)}`);
-  if (event.type === 'POSITION_CLOSED' || event.type === 'TRAILING_EXIT') {
+  if (event.type === 'POSITION_CLOSED') {
     if (event.averageEntryPrice != null) lines.push(`평균매수가 ${formatNumber(event.averageEntryPrice)}`);
     if (event.averageExitPrice != null) lines.push(`평균매도가 ${formatNumber(event.averageExitPrice)}`);
     if (event.realizedPnl != null) lines.push(`실현손익 ${formatNumber(event.realizedPnl)}`);
