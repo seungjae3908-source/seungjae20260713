@@ -1,0 +1,7 @@
+Private AI V1 draft status
+
+Branch: agent/private-ai-v1-local-ollama
+Scope: isolated loopback-only local AI gateway
+Deployment: not performed
+Production changes: none
+Local gateway tests: 4 passed, 0 failed
