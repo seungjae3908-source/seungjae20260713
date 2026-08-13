@@ -22,9 +22,12 @@ const port = Number(
     8080,
 );
 
-// Official deploy scripts use these isolated canary ports. Canary validation
-// must never advance Paper/Shadow state before the validated SHA is promoted.
-const autoTradingV2CanaryRuntime = process.env.NODE_ENV === 'production' && (port === 18081 || port === 18082);
+// Official deploy paths use isolated canary ports before promotion. Production
+// uses 18081; the staging scripts have used 18082 historically and the current
+// Staging Readiness workflow overrides the canary to 18084. None of these
+// validation processes may advance Paper/Shadow state before promotion.
+const AUTO_TRADING_V2_CANARY_PORTS = new Set([18081, 18082, 18084]);
+const autoTradingV2CanaryRuntime = process.env.NODE_ENV === 'production' && AUTO_TRADING_V2_CANARY_PORTS.has(port);
 
 const deployMarkerPath = process.env.DEPLOY_MARKER_PATH?.trim()
   || path.resolve(__dirname, '../../.deploy/current-sha');
