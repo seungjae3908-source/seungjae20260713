@@ -30,7 +30,7 @@ type RequestStatus = 'loading' | 'success' | 'empty' | 'partial' | 'cancelled' |
 const VIEWS: Array<{ value: ScannerView; market: FrontendScannerMarket; label: string; description: string }> = [
   { value: 'KR', market: 'KR_STOCK', label: '국내주식', description: 'KRX 주식·ETF·ETN' },
   { value: 'US', market: 'US_STOCK', label: '미국주식', description: '미국 주식·ETF' },
-  { value: 'SPOT', market: 'CRYPTO_SPOT', label: '코인 현물', description: 'Upbit KRW 현물' },
+  { value: 'SPOT', market: 'CRYPTO_SPOT', label: '코인 현물', description: '현물 Scanner에는 숏·레버리지를 적용하지 않습니다' },
   { value: 'FUTURES', market: 'CRYPTO_FUTURES', label: '코인 선물', description: 'Bitget USDT 선물' },
 ];
 
