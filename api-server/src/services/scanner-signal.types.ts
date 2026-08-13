@@ -1,7 +1,7 @@
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerSignalDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
 export type ScannerTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
-export type ScannerStrategyMode = 'scalping' | 'swing';
+export type ScannerStrategyMode = 'scalping' | 'swing' | 'position';
 export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
   | 'CANDIDATE'
