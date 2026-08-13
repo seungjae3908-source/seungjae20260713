@@ -111,12 +111,13 @@ export function useUndervalued(market: MarketKey, enabled = true) {
 	});
 }
 
-export function useAlertFeed(market: 'ALL' | 'KR' | 'US') {
+export function useAlertFeed(market: 'ALL' | 'KR' | 'US', enabled = true) {
 	return useQuery({
 		queryKey: ['alert-feed', market],
 		queryFn: () => api.alertFeed(market),
+		enabled,
 		staleTime: 0,
-		refetchInterval: 60 * 1000,
+		refetchInterval: enabled ? 60 * 1000 : false,
 		refetchIntervalInBackground: true,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
