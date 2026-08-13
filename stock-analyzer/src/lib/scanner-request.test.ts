@@ -193,7 +193,7 @@ test('new signal scanner sends explicit strategy and only scanner read endpoints
   }
 
   assert.deepEqual([...observedStrategies].sort(), ['scalping', 'swing']);
-  assert.match(scannerPage, /strategy,\s*timeframe/);
+  assert.match(scannerPage, /strategy:\s*strategy\s+as\s+SignalScannerRequest\['strategy'\],\s*timeframe:\s*profile\.timeframe,/);
   assert.match(scannerPage, /1m/);
   assert.match(scannerPage, /3m/);
   assert.match(scannerPage, /15m context/);
