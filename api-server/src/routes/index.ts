@@ -43,11 +43,28 @@ router.get('/', (_req, res) => {
   res.json({ ok: true, service: 'seungjae-stock-api' });
 });
 
+// Health/config probes remain public. Every data or analysis route below this
+// point resolves the current database profile before checking capabilities.
 router.use('/', healthRouter);
+
+// Telegram webhook is the only unauthenticated integration endpoint. It accepts
+// only Telegram-secret-authenticated /start updates containing a short-lived,
+// one-time, user-bound token; it never trusts a browser-supplied chat id.
 router.use('/telegram/webhook', telegramWebhookRouter);
+
+// Admin routes perform their own authenticated + admin capability checks.
 router.use('/admin', adminRouter);
+
 router.use(requireAuthenticated);
+
+// Broker connectivity is metadata-only in Release V4.2. It reads only the
+// authenticated user's vault connection metadata and never falls back to a
+// server credential or sends a private provider request.
 router.use('/account-connections', accountConnectionsRouter);
+
+// Canonical AI Scanner routes must be registered before the legacy market
+// router. This makes /api/market/scan authenticated, capability protected,
+// bounded and cancellation aware. The legacy handler is no longer reachable.
 router.use('/market/scan', boundedMarketScanRouter);
 router.use('/scanner/crypto', cryptoSignalScanRouter);
 
@@ -59,15 +76,26 @@ const privateExchangeDisabled = (_req: unknown, res: any) => res.status(403).jso
   message: 'Release Candidate에서는 거래소 비공개 계좌·포지션·주문 API를 호출하지 않습니다.',
 });
 
+// Explicitly block every existing private/actual-trading path before the
+// legacy crypto router can reach it. crypto-auto.ts itself remains untouched.
 router.use('/crypto/futures/auto', privateExchangeDisabled);
 router.get('/crypto/spot/accounts', privateExchangeDisabled);
 router.get('/crypto/futures/account', privateExchangeDisabled);
 router.get('/crypto/futures/positions', privateExchangeDisabled);
+// Legacy stock auto-order endpoints include US live-order support and a shared
+// execution key. They stay blocked; the member-scoped trade-automation router
+// below is the only supported integration surface.
 router.use('/stocks/auto-trade', privateExchangeDisabled);
 
+// Market information rooms are read-only and capability-scoped. The service
+// itself only permits whitelisted public GET endpoints; private exchange paths
+// are neither imported nor reachable from this router.
 router.use('/market-information/coins-spot', requireCapability('canAccessSpot'));
 router.use('/market-information/coins-futures', requireCapability('canAccessFutures'));
 router.use('/market-information', requireCapability('canAccessBasicInfo'), marketInformationRouter);
+
+// Canonical orderbook is public-provider/read-only, but still respects the
+// same member capability boundary as the underlying market surface.
 router.use('/orderbook', (req, res, next) => {
   const assetClass = String(req.query.assetClass ?? '').trim().toLowerCase();
   const capability = assetClass === 'crypto_futures'
@@ -79,13 +107,16 @@ router.use('/orderbook', (req, res, next) => {
 });
 router.use('/stocks/:ticker/orderbook', requireCapability('canAccessBasicInfo'));
 router.use('/', stockOrderbookRouter);
+
 router.use('/crypto/spot', requireCapability('canAccessSpot'));
 router.use('/crypto/futures', requireCapability('canAccessFutures'));
 router.use('/crypto', requireCapability('canAccessBasicInfo'));
 router.use('/', cryptoRouter);
+
 router.use('/futures', requireCapability('canAccessFutures'));
 router.use('/crypto/futures', requireCapability('canAccessFutures'));
 router.use('/', futuresMarketDataRouter);
+
 router.use('/trading-risk', requireCapability('canAccessRiskPreview'));
 router.use('/', tradingRiskRouter);
 router.use('/backtests', requireCapability('canAccessBacktests'));
@@ -106,21 +137,29 @@ router.use('/', unifiedSearchRouter);
 router.use('/', aiChatRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
+// The safe rankings route must run before the legacy Kiwoom router. It keeps
+// the strict primary provider contract, but serves explicitly marked real-data
+// fallback rows when the optional Kiwoom provider is unavailable.
 router.use('/kiwoom', kiwoomRankingsSafeRouter);
 router.use('/kiwoom', kiwoomRouter);
 router.use('/debug', requireAdmin, providerDebugRouter);
 router.use('/', pushRouter);
 router.use('/', watchlistRouter);
 
+// The coin special-feed provider is optional. A disconnected provider is an
+// empty, non-fatal feature state rather than a browser-visible HTTP failure.
+// This handler remains behind authentication and canAccessBasicInfo.
 router.get('/stocks/special-feed', (req, res, next) => {
   const asset = String(req.query.asset ?? 'stock').trim().toLowerCase();
   if (asset !== 'coin') {
     next();
     return;
   }
+
   const market = String(req.query.market ?? 'spot').trim().toLowerCase() === 'futures'
     ? 'futures'
     : 'spot';
+
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.status(200).json({
     ok: false,
@@ -133,20 +172,32 @@ router.get('/stocks/special-feed', (req, res, next) => {
   });
 });
 
+// Financial statements are an optional detail panel backed by public upstream
+// providers. Preserve every successful response, but convert only the exact
+// provider-delay contract from this one endpoint into an explicit unavailable
+// state. Other endpoints and all other 4xx/5xx responses remain untouched.
 router.use('/stocks/:ticker/financials', (req, res, next) => {
   const originalJson = res.json.bind(res);
   res.json = ((body: unknown) => {
     const payload = body && typeof body === 'object'
       ? body as Record<string, unknown>
       : null;
+
     if (res.statusCode !== 503 || payload?.code !== 'FINANCIAL_PROVIDER_DELAY') {
       return originalJson(body);
     }
+
     const ticker = String(payload.ticker ?? req.params.ticker ?? '').trim().toUpperCase();
     const unavailableFinancials = {
-      annual: [], yearly: [], quarterly: [], quarters: [], ratios: {}, source: null,
+      annual: [],
+      yearly: [],
+      quarterly: [],
+      quarters: [],
+      ratios: {},
+      source: null,
       updatedAt: new Date().toISOString(),
     };
+
     res.statusCode = 200;
     return originalJson({
       ...payload,
@@ -159,6 +210,7 @@ router.use('/stocks/:ticker/financials', (req, res, next) => {
       summary: '재무 데이터 제공기관의 응답이 지연되고 있습니다.',
     });
   }) as typeof res.json;
+
   next();
 });
 
