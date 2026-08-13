@@ -32,9 +32,13 @@ const readyFixture = {
   exchangeRequestSent: false,
 };
 
-function unavailableFixture(reason = 'ORDERBOOK_PROVIDER_UNAVAILABLE') {
+function unavailableFixture(
+  reason = 'ORDERBOOK_PROVIDER_UNAVAILABLE',
+  identity: Partial<typeof readyFixture> = {},
+) {
   return {
     ...readyFixture,
+    ...identity,
     ok: false,
     available: false,
     status: 'unavailable',
@@ -171,7 +175,13 @@ test('dialog owns focus, traps Tab, closes with Escape or outside click, and res
 });
 
 test('unsupported or unavailable orderbook displays no fabricated price levels', async ({ page }) => {
-  await mockOrderbook(page, unavailableFixture('US_ORDERBOOK_PROVIDER_NOT_CONNECTED'));
+  await mockOrderbook(page, unavailableFixture('US_ORDERBOOK_PROVIDER_NOT_CONNECTED', {
+    market: 'US',
+    symbol: 'AAPL',
+    ticker: 'AAPL',
+    currency: 'USD',
+    provider: null,
+  }));
   await page.setViewportSize({ width: 1366, height: 900 });
   await page.goto('/__phase13-orderbook-e2e?ticker=AAPL&market=US&assetClass=stock');
 
@@ -225,7 +235,7 @@ test('wrong response identity is fail-closed and never replaced with prior last-
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
 });
 
-test('late response from the previous symbol is rejected after an in-place target switch', async ({ page }) => {
+test('late response from the previous symbol is rejected after an in-place symbol switch', async ({ page }) => {
   const seen: string[] = [];
   await page.route('**/api/orderbook**', async (route) => {
     const url = new URL(route.request().url());
@@ -262,7 +272,6 @@ test('late response from the previous symbol is rejected after an in-place targe
     const url = new URL(window.location.href);
     url.searchParams.set('ticker', '000660');
     window.history.pushState({}, '', `${url.pathname}${url.search}`);
-    window.dispatchEvent(new PopStateEvent('popstate'));
   });
 
   const dialog = page.getByRole('dialog', { name: /000660 호가창/ });
@@ -272,6 +281,62 @@ test('late response from the previous symbol is rejected after an in-place targe
   await expect(dialog.getByTestId('ask-level-1')).toContainText('120,100');
   expect(seen).toContain('005930');
   expect(seen).toContain('000660');
+});
+
+test('query-only market switch aborts the old owner and applies only the new canonical target', async ({ page }) => {
+  const seen: string[] = [];
+  await page.route('**/api/orderbook**', async (route) => {
+    const url = new URL(route.request().url());
+    const key = `${url.searchParams.get('assetClass')}:${url.searchParams.get('market')}:${url.searchParams.get('symbol')}`;
+    seen.push(key);
+    if (key === 'stock:KR:005930') {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      try {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(readyFixture) });
+      } catch {
+        // Expected if the market switch cancels the old request.
+      }
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...readyFixture,
+        assetClass: 'crypto_spot',
+        market: 'UPBIT',
+        symbol: 'BTC',
+        ticker: 'BTC',
+        currency: 'KRW',
+        provider: 'upbit',
+        asks: [{ rank: 1, price: 100100000, quantity: 0.2, cumulativeQuantity: 0.2 }],
+        bids: [{ rank: 1, price: 100000000, quantity: 0.3, cumulativeQuantity: 0.3 }],
+        bestAsk: 100100000,
+        bestBid: 100000000,
+        spread: 100000,
+      }),
+    });
+  });
+
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
+  await page.waitForTimeout(30);
+  await page.evaluate(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('ticker', 'BTC');
+    url.searchParams.set('market', 'UPBIT');
+    url.searchParams.set('assetClass', 'crypto_spot');
+    window.history.pushState({}, '', `${url.pathname}${url.search}`);
+  });
+
+  const dialog = page.getByRole('dialog', { name: /BTC 호가창/ });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('Upbit public REST')).toBeVisible();
+  await expect(dialog.getByTestId('ask-level-1')).toContainText('100,100,000');
+  await page.waitForTimeout(250);
+  await expect(dialog.getByTestId('ask-level-1')).toContainText('100,100,000');
+  expect(seen).toContain('stock:KR:005930');
+  expect(seen).toContain('crypto_spot:UPBIT:BTC');
 });
 
 test('single polling owner issues one request per interval for the same key', async ({ page }) => {
