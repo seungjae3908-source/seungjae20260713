@@ -36,7 +36,8 @@ const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search')
 const ThemesPage = lazy(() => import('@/pages/themes'));
 const LearnPage = lazy(() => import('@/pages/learn'));
 const MorePage = lazy(() => import('@/pages/more'));
-const PortfolioPage = lazy(() => import('@/pages/portfolio'));
+const PortfolioPage = lazy(() => import('@/pages/portfolio-v2'));
+const PositionPage = lazy(() => import('@/pages/portfolio'));
 const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
@@ -170,7 +171,7 @@ function AiChartAccess() { return gated('canAccessRiskPreview', builder('AI_CHAR
 function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
 function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioPage />)); }
-function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PortfolioPage />)); }
+function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PositionPage />)); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingRouteFallback() {
   return (

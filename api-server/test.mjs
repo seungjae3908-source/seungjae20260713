@@ -74,6 +74,7 @@ const groups = {
     path.join(root, 'src/providers/toss.test.ts'),
     path.join(root, 'src/services/telegram-notification.service.test.ts'),
     path.join(root, 'src/modules/portfolio/portfolio-core.test.ts'),
+    path.join(root, 'src/modules/portfolio/intelligence-v2.test.ts'),
     path.join(root, 'src/modules/portfolio/canonical-journal-adapter.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/trading-ai-review-storage.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/analysis-selection.test.ts'),
