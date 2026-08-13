@@ -30,9 +30,15 @@ type RequestStatus = 'loading' | 'success' | 'empty' | 'partial' | 'cancelled' |
 const VIEWS: Array<{ value: ScannerView; market: FrontendScannerMarket; label: string; description: string }> = [
   { value: 'KR', market: 'KR_STOCK', label: '국내주식', description: 'KRX 주식·ETF·ETN' },
   { value: 'US', market: 'US_STOCK', label: '미국주식', description: '미국 주식·ETF' },
-  { value: 'SPOT', market: 'CRYPTO_SPOT', label: '코인현물', description: 'Upbit KRW 현물' },
-  { value: 'FUTURES', market: 'CRYPTO_FUTURES', label: '코인선물', description: 'Bitget USDT 선물' },
+  { value: 'SPOT', market: 'CRYPTO_SPOT', label: '코인 현물', description: 'Upbit KRW 현물' },
+  { value: 'FUTURES', market: 'CRYPTO_FUTURES', label: '코인 선물', description: 'Bitget USDT 선물' },
 ];
+
+const EMBEDDED_TIMEFRAMES: Readonly<Record<UnifiedScannerStrategyMode, readonly SignalScannerRequest['timeframe'][]>> = Object.freeze({
+  scalping: ['1m', '3m', '5m'],
+  swing: ['4H', '1D'],
+  position: ['1D'],
+});
 
 function viewMarket(view: ScannerView): FrontendScannerMarket {
   return VIEWS.find((item) => item.value === view)?.market ?? 'KR_STOCK';
@@ -89,6 +95,10 @@ function strategyLabel(strategy: UnifiedScannerStrategyMode): string {
   return SCANNER_STRATEGY_OPTIONS.find((item) => item.value === strategy)?.label ?? strategy;
 }
 
+function defaultEmbeddedTimeframe(strategy: UnifiedScannerStrategyMode): SignalScannerRequest['timeframe'] {
+  return strategy === 'scalping' ? '5m' : '1D';
+}
+
 export default function SignalScannerPage({ embedded = false }: { embedded?: boolean }) {
   const [, navigate] = useLocation();
   const assetMode = useAssetMode();
@@ -99,6 +109,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const initialStrategy: UnifiedScannerStrategyMode = initialView === 'KR' || initialView === 'US' ? 'swing' : 'scalping';
   const [view, setView] = useState<ScannerView>(initialView);
   const [strategy, setStrategy] = useState<UnifiedScannerStrategyMode>(initialStrategy);
+  const [embeddedTimeframe, setEmbeddedTimeframe] = useState<SignalScannerRequest['timeframe']>(() => defaultEmbeddedTimeframe(initialStrategy));
   const [cursor, setCursor] = useState(0);
   const [refreshToken, setRefreshToken] = useState(0);
   const [status, setStatus] = useState<RequestStatus>('loading');
@@ -112,20 +123,21 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
   const market = viewMarket(view);
   const profile = useMemo(() => getScannerUiProfile(market, strategy), [market, strategy]);
+  const effectiveTimeframe = embedded ? embeddedTimeframe : profile.timeframe;
   const stockView = view === 'KR' || view === 'US';
   const batchSize = stockView ? 100 : 24;
   const request = useMemo<SignalScannerRequest>(() => ({
     assetClass: stockView ? 'stock' : view === 'SPOT' ? 'coin_spot' : 'coin_futures',
     market: view === 'KR' ? 'KR' : view === 'US' ? 'US' : view === 'SPOT' ? 'UPBIT' : 'BITGET',
     strategy,
-    timeframe: profile.timeframe,
+    timeframe: effectiveTimeframe,
     conditions: [],
     condition: !stockView && strategy === 'scalping' ? 'williams' : 'trend',
     cursor,
     batchSize,
     minimumScore: 55,
     maximumRiskScore: 70,
-  }), [batchSize, cursor, profile.timeframe, stockView, strategy, view]);
+  }), [batchSize, cursor, effectiveTimeframe, stockView, strategy, view]);
   const requestKey = useMemo(() => JSON.stringify(request), [request]);
 
   const normalizedCards = useMemo(() => {
@@ -190,12 +202,20 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       if (document.visibilityState === 'visible') setRefreshToken((value) => value + 1);
     };
     document.addEventListener('visibilitychange', refreshWhenVisible);
-    const timer = window.setInterval(refreshWhenVisible, 30_000);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') setRefreshToken((value) => value + 1);
+    }, 30_000);
     return () => {
       document.removeEventListener('visibilitychange', refreshWhenVisible);
       window.clearInterval(timer);
     };
   }, []);
+
+  const selectStrategy = (next: UnifiedScannerStrategyMode) => {
+    setCursor(0);
+    setStrategy(next);
+    if (embedded) setEmbeddedTimeframe(defaultEmbeddedTimeframe(next));
+  };
 
   const openInAiChart = (card: ScannerSignalCard) => {
     const selection: AnalysisSelection = {
@@ -204,7 +224,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       symbol: card.symbol,
       ticker: card.symbol,
       displayName: card.name,
-      timeframe: data?.timeframe ?? profile.timeframe,
+      timeframe: data?.timeframe ?? effectiveTimeframe,
       searchRunId: data?.requestId,
       signalScore: card.score,
       signalRank: card.candidateRanking?.rank,
@@ -244,7 +264,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
           </div>
         </header>
 
-        <section aria-label="시장" className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <section aria-label="검색 시장" className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           {VIEWS.map((item) => (
             <button key={item.value} type="button" aria-pressed={view === item.value} onClick={() => { setCursor(0); setView(item.value); }}
               className={`min-h-14 rounded-2xl border px-3 py-2 text-left ${view === item.value ? 'border-primary bg-primary/10' : 'border-card-border bg-card'}`}>
@@ -254,9 +274,9 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
           ))}
         </section>
 
-        <section aria-label="투자 스타일" className="grid grid-cols-3 gap-2">
+        <section aria-label="검색 전략" className="grid grid-cols-3 gap-2">
           {SCANNER_STRATEGY_OPTIONS.map((item) => (
-            <button key={item.value} type="button" aria-pressed={strategy === item.value} onClick={() => { setCursor(0); setStrategy(item.value); }}
+            <button key={item.value} type="button" aria-label={embedded ? `${item.label} Engine` : undefined} aria-pressed={strategy === item.value} onClick={() => selectStrategy(item.value)}
               className={`min-h-16 rounded-2xl border px-3 py-3 text-left ${strategy === item.value ? 'border-primary bg-primary/10' : 'border-card-border bg-card'}`}>
               <span className="block break-keep text-sm font-black">{item.label}</span>
               <span className="mt-1 hidden break-keep text-[10px] text-muted-foreground sm:block">{item.description}</span>
@@ -268,11 +288,25 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <p className="text-sm font-black">{strategyLabel(strategy)} · 자동 Profile</p>
-              <p className="mt-1 break-keep text-xs text-muted-foreground">분석 시간봉 {profile.timeframe} · 확인 시간봉과 지표 가중치는 시장별 Profile에서 자동 관리</p>
+              <p className="mt-1 break-keep text-xs text-muted-foreground">분석 시간봉 {effectiveTimeframe} · 확인 시간봉과 지표 가중치는 시장별 Profile에서 자동 관리</p>
             </div>
             <span className="rounded-full border border-card-border px-3 py-1 text-[11px] font-bold">{profile.profileVersion}</span>
           </div>
           <p className="mt-2 break-keep text-[11px] text-muted-foreground">기술지표 직접 선택은 기본 화면에 노출하지 않습니다. 상세 근거는 결과 카드에서 확인할 수 있습니다.</p>
+          {embedded && (
+            <label className="mt-3 block space-y-1 text-xs font-bold">
+              시간봉
+              <select
+                aria-label="시간봉"
+                value={embeddedTimeframe}
+                onChange={(event) => { setCursor(0); setEmbeddedTimeframe(event.target.value as SignalScannerRequest['timeframe']); }}
+                className="min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-sm"
+              >
+                {EMBEDDED_TIMEFRAMES[strategy].map((item) => <option key={item} value={item}>{item}</option>)}
+              </select>
+              <span className="block text-[10px] font-normal text-muted-foreground">기술 워크스페이스의 회귀·연구 검증에서만 시간봉을 직접 전환합니다. 기본 Scanner 화면은 자동 Profile을 유지합니다.</span>
+            </label>
+          )}
         </section>
 
         {status === 'loading' && <section aria-live="polite" className="rounded-3xl border border-card-border bg-card p-8 text-center"><p className="font-bold">시장데이터를 분석하고 있습니다.</p></section>}
@@ -282,7 +316,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
         {data && status !== 'loading' && status !== 'error' && (
           <>
-            <section className={`rounded-3xl border p-4 ${status === 'partial' ? 'border-amber-500/40 bg-amber-500/10' : 'border-card-border bg-card'}`}>
+            <section data-testid={status === 'partial' ? 'scanner-partial' : undefined} className={`rounded-3xl border p-4 ${status === 'partial' ? 'border-amber-500/40 bg-amber-500/10' : 'border-card-border bg-card'}`}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div><p className="text-sm font-black">{data.message}</p><p className="mt-1 text-xs text-muted-foreground">{strategyLabel(strategy)} · {data.timeframe} · {new Date(data.generatedAt).toLocaleString('ko-KR')}</p></div>
                 <span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{data.dataState}</span>
@@ -294,6 +328,17 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                 <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Provider 오류</p><p className="text-sm font-black">{data.execution.providerErrorCount}</p></div>
               </div>
             </section>
+
+            {data.failures.length > 0 && (
+              <section className="rounded-3xl border border-amber-500/30 bg-card p-4">
+                <h2 className="text-sm font-black">분석하지 못한 종목 {data.failures.length}개</h2>
+                <div className="mt-2 space-y-1">
+                  {data.failures.map((failure) => (
+                    <p key={`${failure.symbol}:${failure.reason}`} className="text-xs text-muted-foreground">{failure.symbol} · {failure.reason}</p>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {data.alerts.length > 0 && (
               <section aria-label="승인 대기 알림" className="rounded-3xl border border-primary/40 bg-primary/10 p-4">
@@ -314,7 +359,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                 {normalizedCards.map((card) => (
                   <article key={card.signalId} className="min-w-0 rounded-3xl border border-card-border bg-card p-4">
                     <div className="flex items-start justify-between gap-3">
-                      <button type="button" onClick={() => navigate(signalScannerDetailPath(card))} className="min-h-11 min-w-0 text-left">
+                      <button type="button" aria-label={`${card.name} ${card.symbol} · ${card.market} · ${card.assetType}`} onClick={() => navigate(signalScannerDetailPath(card))} className="min-h-11 min-w-0 text-left">
                         <p className="truncate font-black">{card.candidateRanking?.rank ? `${card.candidateRanking.rank}위 · ` : ''}{card.name}</p>
                         <p className="truncate text-xs text-muted-foreground">{card.symbol} · {card.market}</p>
                       </button>
@@ -361,7 +406,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       <button type="button" onClick={() => navigate(signalScannerDetailPath(card))} className="min-h-11 rounded-xl border border-card-border text-sm font-bold">상세 보기</button>
-                      <button type="button" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary text-sm font-bold text-primary-foreground">AI 차트</button>
+                      <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary text-sm font-bold text-primary-foreground">AI 차트</button>
                     </div>
                   </article>
                 ))}
