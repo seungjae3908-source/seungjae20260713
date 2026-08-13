@@ -1,0 +1,7 @@
+Private AI V1 local validation
+
+node --test private-ai-gateway.test.mjs
+PASS 4/4
+FAIL 0
+
+Validated locally with a fake loopback Ollama-compatible endpoint. No external AI provider was called during this validation.
