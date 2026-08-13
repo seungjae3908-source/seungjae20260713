@@ -11,9 +11,9 @@ export type CanonicalProviderAction =
 
 export type CanonicalProviderActionContract = {
   provider: CanonicalTradingProvider;
-  markets: CanonicalTradingMarket[];
-  actions: CanonicalProviderAction[];
-  directions: Array<'BUY' | 'SELL' | 'LONG' | 'SHORT'>;
+  markets: readonly CanonicalTradingMarket[];
+  actions: readonly CanonicalProviderAction[];
+  directions: readonly ('BUY' | 'SELL' | 'LONG' | 'SHORT')[];
   sellRequiresExistingPosition: boolean;
   futuresOnly: boolean;
 };
@@ -21,25 +21,25 @@ export type CanonicalProviderActionContract = {
 export const CANONICAL_PROVIDER_ACTIONS: Readonly<Record<CanonicalTradingProvider, CanonicalProviderActionContract>> = Object.freeze({
   toss: Object.freeze({
     provider: 'toss',
-    markets: ['KR_STOCK', 'US_STOCK'],
-    actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL', 'ORDER_MODIFY'],
-    directions: ['BUY', 'SELL'],
+    markets: ['KR_STOCK', 'US_STOCK'] as const,
+    actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL', 'ORDER_MODIFY'] as const,
+    directions: ['BUY', 'SELL'] as const,
     sellRequiresExistingPosition: true,
     futuresOnly: false,
   }),
   upbit: Object.freeze({
     provider: 'upbit',
-    markets: ['CRYPTO_SPOT'],
-    actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL', 'ORDER_CANCEL_REPLACE'],
-    directions: ['BUY', 'SELL'],
+    markets: ['CRYPTO_SPOT'] as const,
+    actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL', 'ORDER_CANCEL_REPLACE'] as const,
+    directions: ['BUY', 'SELL'] as const,
     sellRequiresExistingPosition: true,
     futuresOnly: false,
   }),
   bitget: Object.freeze({
     provider: 'bitget',
-    markets: ['CRYPTO_FUTURES'],
-    actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL', 'ORDER_MODIFY'],
-    directions: ['LONG', 'SHORT'],
+    markets: ['CRYPTO_FUTURES'] as const,
+    actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL', 'ORDER_MODIFY'] as const,
+    directions: ['LONG', 'SHORT'] as const,
     sellRequiresExistingPosition: false,
     futuresOnly: true,
   }),
