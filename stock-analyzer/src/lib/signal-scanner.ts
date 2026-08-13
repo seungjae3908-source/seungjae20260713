@@ -230,7 +230,7 @@ export interface SignalScannerRequest {
   strategy: ScannerStrategyMode;
   timeframe: '1m' | '3m' | '5m' | '15m' | '60m' | '4H' | '1D';
   conditions: string[];
-  condition: 'trend' | 'volume' | 'breakout' | 'pullback';
+  condition: 'trend' | 'volume' | 'breakout' | 'pullback' | 'williams';
   cursor: number;
   batchSize: number;
   minimumScore: number;
