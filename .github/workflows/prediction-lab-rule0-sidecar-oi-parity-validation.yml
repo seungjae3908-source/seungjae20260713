@@ -1,0 +1,173 @@
+name: Prediction Lab Rule0 Sidecar OI Parity Validation
+
+on:
+  push:
+    branches:
+      - validation/rule-model-1h-sidecar-oi-parity-20260814
+    paths:
+      - .github/workflows/prediction-lab-rule0-sidecar-oi-parity-validation.yml
+      - market-prediction-lab/src/derivatives-history.js
+      - market-prediction-lab/tests/derivatives-history.test.js
+      - market-prediction-lab/scripts/run-rule-model-1h-shadow-sidecar.js
+      - market-prediction-lab/src/rule-model-shadow-challenger.js
+      - market-prediction-lab/tests/rule-model-shadow-challenger.test.js
+      - market-prediction-lab/docs/rule-model-1h-shadow-model.json
+      - market-prediction-lab/docs/rule-model-1h-shadow-contract.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rule0-sidecar-oi-parity-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LAB_DIR: market-prediction-lab
+  EXPECTED_DERIVATIVES_BLOB: 201e70e53af2e150eda600377e8ef7d287c4ea23
+  EXPECTED_DERIVATIVES_TEST_BLOB: 231cf79cf4118ff3f1d2a2283c16b39855bbdd24
+  PARENT_RULE0_HEAD: 02dd9d8022e0509b745b66a1bdde78630a40ee0e
+
+jobs:
+  fresh-public-parity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact validation revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Assert exact checkout and canonical parity blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git hash-object "$LAB_DIR/src/derivatives-history.js")" = "$EXPECTED_DERIVATIVES_BLOB"
+          test "$(git hash-object "$LAB_DIR/tests/derivatives-history.test.js")" = "$EXPECTED_DERIVATIVES_TEST_BLOB"
+
+      - name: Run OI parity and Rule0 sidecar regression tests
+        working-directory: ${{ env.LAB_DIR }}
+        run: node --test tests/derivatives-history.test.js tests/rule-model-shadow-challenger.test.js
+
+      - name: Run one fresh public Rule0 sidecar cycle
+        working-directory: ${{ env.LAB_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/rule0-sidecar"
+          mkdir -p "$RUNNER_TEMP/rule0-sidecar"
+          node scripts/run-rule-model-1h-shadow-sidecar.js \
+            "$RUNNER_TEMP/rule0-sidecar/state.json" \
+            "$RUNNER_TEMP/rule0-sidecar/summary.json" \
+            docs/rule-model-1h-shadow-model.json
+
+      - name: Verify fresh OI is observed but excluded from model inference
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const root = path.join(process.env.RUNNER_TEMP, 'rule0-sidecar');
+          const state = JSON.parse(fs.readFileSync(path.join(root, 'state.json'), 'utf8'));
+          const summary = JSON.parse(fs.readFileSync(path.join(root, 'summary.json'), 'utf8'));
+          if (summary.status !== 'pass') throw new Error(`sidecar status=${summary.status}`);
+          const safety = summary.safety ?? {};
+          if (safety.forwardOnly !== true || safety.historicalBackfill !== false || safety.currentGeneralShadowReplaced !== false) {
+            throw new Error('forward-only safety contract failed');
+          }
+          if (safety.publicMarketDataOnly !== true || safety.actualOrders !== 0 || safety.privateAccountRequests !== 0 || safety.liveAuthority !== false || safety.promotionAuthority !== false) {
+            throw new Error('sidecar authority safety contract failed');
+          }
+          const symbols = ['BTCUSDT', 'ETHUSDT'];
+          for (const symbol of symbols) {
+            const context = summary.contexts?.[symbol];
+            if (!context || typeof context.openInterestRaw !== 'string' || context.openInterestRaw.length === 0) {
+              throw new Error(`${symbol} fresh public open interest was not observed`);
+            }
+          }
+          const records = Array.isArray(state.records) ? state.records : [];
+          if (records.length < 2) throw new Error(`expected at least two forward records, got ${records.length}`);
+          for (const record of records) {
+            if (!symbols.includes(record.symbol)) throw new Error(`unexpected symbol ${record.symbol}`);
+            if (record.timeframe !== '1h' || record.horizon !== 12) throw new Error('sidecar timeframe/horizon contract drifted');
+            if (record.featureAvailability?.openInterestKnown !== false) {
+              throw new Error(`${record.symbol} leaked open interest into inference availability`);
+            }
+            const effectiveOi = Number(record.features?.openInterestChange ?? 0);
+            if (!Number.isFinite(effectiveOi) || Math.abs(effectiveOi) > 1e-12) {
+              throw new Error(`${record.symbol} openInterestChange must remain effective zero`);
+            }
+          }
+          if (!Array.isArray(state.openInterestSnapshots) || state.openInterestSnapshots.length < 2) {
+            throw new Error('raw public OI snapshots were not retained for observational provenance');
+          }
+          if (summary.gate?.status === 'shadow_challenger_review_ready') {
+            throw new Error('one fresh cycle cannot become review-ready');
+          }
+          console.log(JSON.stringify({
+            total: summary.metrics?.total,
+            settled: summary.metrics?.settled,
+            pending: summary.metrics?.pending,
+            gate: summary.gate?.status,
+            observedOiSnapshots: state.openInterestSnapshots.length,
+            inferenceOiKnown: records.filter((record) => record.featureAvailability?.openInterestKnown).length,
+          }, null, 2));
+          NODE
+
+      - name: Build immutable validation artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf validation-artifact
+          mkdir -p validation-artifact
+          cp "$RUNNER_TEMP/rule0-sidecar/state.json" validation-artifact/state.json
+          cp "$RUNNER_TEMP/rule0-sidecar/summary.json" validation-artifact/summary.json
+          cp "$LAB_DIR/docs/rule-model-1h-shadow-model.json" validation-artifact/frozen-model.json
+          cp "$LAB_DIR/docs/rule-model-1h-shadow-contract.json" validation-artifact/contract.json
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          const manifest = {
+            schemaVersion: 1,
+            kind: 'rule-model-1h-sidecar-oi-parity-validation',
+            validationHeadSha: process.env.GITHUB_SHA,
+            parentRule0HeadSha: process.env.PARENT_RULE0_HEAD,
+            derivativesHistoryBlobSha: process.env.EXPECTED_DERIVATIVES_BLOB,
+            derivativesHistoryTestBlobSha: process.env.EXPECTED_DERIVATIVES_TEST_BLOB,
+            stateSha256: digest('validation-artifact/state.json'),
+            summarySha256: digest('validation-artifact/summary.json'),
+            frozenModelSha256: digest('validation-artifact/frozen-model.json'),
+            contractSha256: digest('validation-artifact/contract.json'),
+            openInterestTrainingParityConfirmed: false,
+            rawOpenInterestObservationAllowed: true,
+            openInterestInferenceAllowed: false,
+            branchWrite: false,
+            liveOrderAllowed: false,
+            privateAccountRequestAllowed: false,
+            actualOrders: 0,
+            generatedAt: new Date().toISOString(),
+          };
+          fs.writeFileSync('validation-artifact/manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+      - name: Upload immutable validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rule-model-1h-sidecar-oi-parity-${{ github.sha }}
+          path: validation-artifact
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert immutable validation HEAD
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
