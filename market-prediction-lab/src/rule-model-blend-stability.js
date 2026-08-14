@@ -1,3 +1,5 @@
+export const RULE_WEIGHT_STABILITY_CONTRACT_VERSION = "exact-grid-v1";
+
 export function evaluateRuleWeightSnapshotStability(snapshots, { minimumSnapshots = 2 } = {}) {
   if (!Array.isArray(snapshots) || snapshots.length < minimumSnapshots) {
     throw new TypeError(`at least ${minimumSnapshots} snapshots are required`);
@@ -15,6 +17,7 @@ export function evaluateRuleWeightSnapshotStability(snapshots, { minimumSnapshot
   const selectedWeights = Object.freeze(normalized.map((snapshot) => snapshot.ruleWeight));
   const stable = selectedWeights.every((weight) => weight === selectedWeights[0]);
   return Object.freeze({
+    contractVersion: RULE_WEIGHT_STABILITY_CONTRACT_VERSION,
     stable,
     status: stable ? "stable_shadow_challenger_candidate" : "research_hold",
     reason: stable ? null : "validation_selected_rule_weight_unstable_across_snapshots",
