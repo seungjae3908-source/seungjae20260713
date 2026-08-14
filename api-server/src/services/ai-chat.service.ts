@@ -31,7 +31,7 @@ export type AiChatResult = {
   data: AiChatDataDisclosure;
 };
 
-type AiChatProvider = 'google-gemini' | 'openai-compatible';
+type AiChatProvider = 'google-gemini' | 'groq' | 'openai-compatible';
 
 type AiChatProviderConfig = {
   provider: AiChatProvider;
@@ -82,6 +82,8 @@ const unsafeAnswer = /(?:수익\s*보장|무조건\s*(?:상승|하락)|확정\s*
 const currentDataQuestionPattern = /(?:현재가|실시간|오늘|지금|최근\s*(?:뉴스|실적|공시)|시세|주가|등락|거래량|재무\s*(?:요약|상태|수치)|기술적\s*분석|차트\s*분석|목표가|손절가|시장\s*상황)/i;
 const geminiProviders = new Set(['gemini', 'google', 'google-gemini']);
 const defaultGeminiModel = 'gemini-3.1-flash-lite';
+const defaultGroqModel = 'openai/gpt-oss-20b';
+const groqChatEndpoint = 'https://api.groq.com/openai/v1/chat/completions';
 const aiChatSystemInstruction = `You are the public-market analysis assistant inside a Korean stock and crypto decision-support app.
 Use only the supplied publicContext for current or symbol-specific claims. The data.asOf value is server collection time, not guaranteed exchange tick time. Explicitly state missing, delayed, stale, or partial data and never fill gaps with invented values.
 When market evidence is available, organize the answer in Korean with these sections where applicable: [현재 데이터], [핵심 판단], [기술적 분석], [기본적 분석], [뉴스·이벤트], [상승 시나리오], [중립 시나리오], [하락 시나리오], [중요 가격대], [핵심 위험], [데이터 한계]. Omit fundamental analysis for crypto unless actual fundamental data exists. Distinguish facts, deterministic calculations, inference, and outlook. Use Bull/Base/Bear only as conditional scenarios, never as certainty.
@@ -285,35 +287,52 @@ function notConfigured(): never {
   throw new AiChatError('AI_CHAT_NOT_CONFIGURED', 'AI 채팅 공급자가 아직 설정되지 않았습니다.', 503);
 }
 
-function resolveProviderConfig(): AiChatProviderConfig {
+function resolveProviderConfigs(): { primary: AiChatProviderConfig; secondary: AiChatProviderConfig | null } {
   const explicitProvider = process.env.AI_CHAT_PROVIDER?.trim().toLowerCase();
   const geminiApiKey = process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
+  const groqApiKey = process.env.GROQ_API_KEY?.trim();
+  const groq = groqApiKey ? { provider: 'groq' as const, apiKey: groqApiKey, model: process.env.GROQ_MODEL?.trim() || defaultGroqModel } : null;
 
   if (explicitProvider && geminiProviders.has(explicitProvider)) {
     const apiKey = process.env.AI_CHAT_API_KEY?.trim() || geminiApiKey;
     const model = process.env.AI_CHAT_MODEL?.trim() || process.env.GEMINI_MODEL?.trim() || defaultGeminiModel;
     if (!apiKey || !model) return notConfigured();
-    return { provider: 'google-gemini', apiKey, model };
+    return { primary: { provider: 'google-gemini', apiKey, model }, secondary: groq };
+  }
+
+  if (explicitProvider === 'groq') {
+    const apiKey = process.env.AI_CHAT_API_KEY?.trim() || groqApiKey;
+    const model = process.env.AI_CHAT_MODEL?.trim() || process.env.GROQ_MODEL?.trim() || defaultGroqModel;
+    if (!apiKey || !model) return notConfigured();
+    return { primary: { provider: 'groq', apiKey, model }, secondary: null };
   }
 
   if (explicitProvider === 'openai-compatible') {
     const apiKey = process.env.AI_CHAT_API_KEY?.trim();
     const model = process.env.AI_CHAT_MODEL?.trim();
     if (!apiKey || !model) return notConfigured();
-    return { provider: 'openai-compatible', apiKey, model };
+    return { primary: { provider: 'openai-compatible', apiKey, model }, secondary: null };
   }
 
   if (explicitProvider) return notConfigured();
 
   if (geminiApiKey) {
-    return {
-      provider: 'google-gemini',
-      apiKey: geminiApiKey,
+    return { primary: {
+      provider: 'google-gemini', apiKey: geminiApiKey,
       model: process.env.AI_CHAT_MODEL?.trim() || process.env.GEMINI_MODEL?.trim() || defaultGeminiModel,
-    };
+    }, secondary: groq };
   }
 
+  if (groq) return { primary: groq, secondary: null };
+
   return notConfigured();
+}
+
+class AiChatProviderFailure extends Error {
+  constructor(readonly error: AiChatError, readonly retryable: boolean) {
+    super(error.code);
+    this.name = 'AiChatProviderFailure';
+  }
 }
 
 function publicQuestionPayload(message: string, publicContext: PublicMarketContext): string {
@@ -374,28 +393,53 @@ async function requestGeminiAnswer(
   signal: AbortSignal,
 ): Promise<string> {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.model)}:generateContent`;
-  const response = await fetchImpl(endpoint, {
-    method: 'POST',
-    signal,
-    headers: {
-      'content-type': 'application/json',
-      'x-goog-api-key': config.apiKey,
-    },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: aiChatSystemInstruction }] },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        maxOutputTokens: 800,
-        thinkingConfig: { thinkingLevel: 'low' },
-      },
-    }),
-  });
-  if (response.status === 429) throw new AiChatError('AI_CHAT_RATE_LIMITED', 'AI 채팅 무료 사용 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.', 429);
-  if (!response.ok) throw new AiChatError('AI_CHAT_PROVIDER_ERROR', 'Google AI 응답을 받지 못했습니다.', 502);
-  const body = await parseProviderJson(response);
+  let response: Response;
+  try {
+    response = await fetchImpl(endpoint, {
+      method: 'POST', signal,
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': config.apiKey },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: aiChatSystemInstruction }] },
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 800, thinkingConfig: { thinkingLevel: 'low' } },
+      }),
+    });
+  } catch (cause) {
+    if (signal.aborted) throw cause;
+    throw new AiChatProviderFailure(new AiChatError('AI_CHAT_PROVIDER_ERROR', 'Google AI 응답을 받지 못했습니다.', 502), true);
+  }
+  if (response.status === 429) throw new AiChatProviderFailure(new AiChatError('AI_CHAT_RATE_LIMITED', 'AI 채팅 무료 사용 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.', 429), true);
+  if (!response.ok) throw new AiChatProviderFailure(new AiChatError('AI_CHAT_PROVIDER_ERROR', 'Google AI 응답을 받지 못했습니다.', 502), response.status >= 500);
+  let body: Record<string, unknown>;
+  try { body = await parseProviderJson(response); } catch (cause) {
+    throw new AiChatProviderFailure(cause as AiChatError, true);
+  }
   const answer = readGeminiText(body);
-  if (!answer && geminiSafetyBlocked(body)) throw new AiChatError('AI_CHAT_UNSAFE_RESPONSE', '안전하지 않은 AI 응답이 차단되었습니다.', 502);
-  if (!answer) throw new AiChatError('AI_CHAT_INVALID_RESPONSE', 'AI 모델 응답 형식이 올바르지 않습니다.', 502);
+  if (!answer && geminiSafetyBlocked(body)) throw new AiChatProviderFailure(new AiChatError('AI_CHAT_UNSAFE_RESPONSE', '안전하지 않은 AI 응답이 차단되었습니다.', 502), false);
+  if (!answer) throw new AiChatProviderFailure(new AiChatError('AI_CHAT_INVALID_RESPONSE', 'AI 모델 응답 형식이 올바르지 않습니다.', 502), true);
+  return answer;
+}
+
+async function requestGroqAnswer(config: AiChatProviderConfig, prompt: string, fetchImpl: typeof fetch, signal: AbortSignal): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetchImpl(groqChatEndpoint, {
+      method: 'POST', signal,
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${config.apiKey}` },
+      body: JSON.stringify({ model: config.model, temperature: 0.2, max_tokens: 800, messages: [
+        { role: 'system', content: aiChatSystemInstruction }, { role: 'user', content: prompt },
+      ] }),
+    });
+  } catch (cause) {
+    if (signal.aborted) throw cause;
+    throw new AiChatProviderFailure(new AiChatError('AI_CHAT_PROVIDER_ERROR', 'Groq AI 응답을 받지 못했습니다.', 502), true);
+  }
+  if (response.status === 429) throw new AiChatProviderFailure(new AiChatError('AI_CHAT_RATE_LIMITED', 'Groq 무료 사용 한도에 도달했습니다.', 429), true);
+  if (!response.ok) throw new AiChatProviderFailure(new AiChatError('AI_CHAT_PROVIDER_ERROR', 'Groq AI 응답을 받지 못했습니다.', 502), response.status >= 500);
+  let body: Record<string, unknown>;
+  try { body = await parseProviderJson(response); } catch (cause) { throw new AiChatProviderFailure(cause as AiChatError, true); }
+  const answer = readOpenAiText(body);
+  if (!answer) throw new AiChatProviderFailure(new AiChatError('AI_CHAT_INVALID_RESPONSE', 'Groq AI 응답 형식이 올바르지 않습니다.', 502), true);
   return answer;
 }
 
@@ -424,6 +468,40 @@ async function requestOpenAiCompatibleAnswer(
   const answer = readOpenAiText(await parseProviderJson(response));
   if (!answer) throw new AiChatError('AI_CHAT_INVALID_RESPONSE', 'AI 모델 응답 형식이 올바르지 않습니다.', 502);
   return answer;
+}
+
+async function requestConfiguredProvider(config: AiChatProviderConfig, prompt: string, fetchImpl: typeof fetch, signal: AbortSignal): Promise<string> {
+  if (config.provider === 'google-gemini') return requestGeminiAnswer(config, prompt, fetchImpl, signal);
+  if (config.provider === 'groq') return requestGroqAnswer(config, prompt, fetchImpl, signal);
+  return requestOpenAiCompatibleAnswer(config, prompt, fetchImpl, signal);
+}
+
+const aiChatInFlight = new Map<string, Promise<{ answer: string; model: string }>>();
+
+function sharedProviderAnswer(configs: { primary: AiChatProviderConfig; secondary: AiChatProviderConfig | null }, prompt: string, fetchImpl: typeof fetch, timeoutMs: number): Promise<{ answer: string; model: string }> {
+  const key = JSON.stringify([configs.primary.provider, configs.primary.model, configs.secondary?.provider, configs.secondary?.model, prompt]);
+  const existing = aiChatInFlight.get(key);
+  if (existing) return existing;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const promise = (async () => {
+    try {
+      try {
+        return { answer: await requestConfiguredProvider(configs.primary, prompt, fetchImpl, controller.signal), model: configs.primary.model };
+      } catch (cause) {
+        if (controller.signal.aborted) throw cause;
+        if (!(cause instanceof AiChatProviderFailure) || !cause.retryable || !configs.secondary) throw cause;
+        try {
+          return { answer: await requestConfiguredProvider(configs.secondary, prompt, fetchImpl, controller.signal), model: configs.secondary.model };
+        } catch {
+          throw new AiChatError('AI_TEMPORARILY_UNAVAILABLE', '무료 AI 공급자를 일시적으로 사용할 수 없습니다. 정량 분석 기능은 계속 사용할 수 있습니다.', 503);
+        }
+      }
+    } finally { clearTimeout(timeout); }
+  })();
+  aiChatInFlight.set(key, promise);
+  void promise.finally(() => { if (aiChatInFlight.get(key) === promise) aiChatInFlight.delete(key); }).catch(() => undefined);
+  return promise;
 }
 
 function abortedError(): Error {
@@ -457,7 +535,7 @@ export async function answerAiChat(
   }
   if (!context.symbol && currentDataQuestionPattern.test(message)) return missingCurrentDataResult();
 
-  const config = resolveProviderConfig();
+  const configs = resolveProviderConfigs();
   const controller = new AbortController();
   let timedOut = false;
   let externallyAborted = false;
@@ -476,20 +554,20 @@ export async function answerAiChat(
   try {
     const publicContext = await withAbort(publicMarketContext(context, controller.signal), controller.signal);
     const prompt = publicQuestionPayload(message, publicContext);
-    const answer = config.provider === 'google-gemini'
-      ? await requestGeminiAnswer(config, prompt, fetchImpl, controller.signal)
-      : await requestOpenAiCompatibleAnswer(config, prompt, fetchImpl, controller.signal);
+    const providerResult = await withAbort(sharedProviderAnswer(configs, prompt, fetchImpl, safeTimeoutMs), controller.signal);
+    const answer = providerResult.answer;
     if (secretPattern.test(answer) || privateDataPattern.test(answer) || unsafeAnswer.test(answer)) {
       throw new AiChatError('AI_CHAT_UNSAFE_RESPONSE', '안전하지 않은 AI 응답이 차단되었습니다.', 502);
     }
     return {
       answer,
       kind: 'answer',
-      model: config.model,
+      model: providerResult.model,
       generatedAt: new Date().toISOString(),
       data: publicContext.data,
     };
   } catch (cause) {
+    if (cause instanceof AiChatProviderFailure) throw cause.error;
     if (cause instanceof AiChatError) throw cause;
     if (externallyAborted) throw new AiChatError('AI_CHAT_CANCELLED', 'AI 채팅 요청이 취소되었습니다.', 499);
     if (timedOut || controller.signal.aborted) throw new AiChatError('AI_CHAT_TIMEOUT', 'AI 채팅 요청 시간이 초과되었습니다.', 504);
