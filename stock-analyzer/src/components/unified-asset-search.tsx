@@ -20,7 +20,10 @@ import {
   type UnifiedAssetSuggestResponse,
   type UnifiedMarketFilter,
 } from '@/lib/unified-asset-search';
-import { allowedUnifiedSearchMarkets } from '@/lib/unified-search-capability';
+import {
+  allowedUnifiedSearchMarkets,
+  filterUnifiedSearchResponseByMarkets,
+} from '@/lib/unified-search-capability';
 import {
   readWatchlistItems,
   WATCHLIST_CHANGE_EVENT,
@@ -39,12 +42,6 @@ const PROVIDER_LABEL: Record<string, string> = {
   finnhub: 'Finnhub',
   upbit: 'Upbit',
   bitget: 'Bitget',
-};
-const PROVIDER_MARKET: Record<string, UnifiedMarketFilter> = {
-  krx: 'KR',
-  finnhub: 'US',
-  upbit: 'spot',
-  bitget: 'futures',
 };
 
 function readRecent(): UnifiedAssetSuggestion[] {
@@ -133,21 +130,10 @@ export function UnifiedAssetSearch({
     [effectiveAllowedMarkets],
   );
 
-  const filterResponse = useCallback((next: UnifiedAssetSuggestResponse): UnifiedAssetSuggestResponse => {
-    const results = next.results.filter((item) => allowedMarketSet.has(item.market));
-    const providers = next.providers.filter((provider) => {
-      const providerMarket = PROVIDER_MARKET[String(provider.provider ?? '').toLowerCase()];
-      return !providerMarket || allowedMarketSet.has(providerMarket);
-    });
-    const hiddenMatches = next.hiddenMatches.filter((item) => allowedMarketSet.has(item.market));
-    return {
-      ...next,
-      results,
-      count: results.length,
-      providers,
-      hiddenMatches,
-    };
-  }, [allowedMarketSet]);
+  const filterResponse = useCallback(
+    (next: UnifiedAssetSuggestResponse) => filterUnifiedSearchResponseByMarkets(next, effectiveAllowedMarkets),
+    [effectiveAllowedMarkets],
+  );
 
   const filteredRecent = useMemo(() => recent.filter((item) =>
     allowedMarketSet.has(item.market)
