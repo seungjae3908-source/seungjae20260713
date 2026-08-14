@@ -139,7 +139,12 @@ for (const symbol of CONFIG.symbols) {
   const temporal = createTemporalDerivativesProvider({
     fundingHistory: fundingBySymbol[symbol].records,
     openInterestSnapshots: openInterestSnapshots.filter((row) => row.symbol === symbol),
+    openInterestTrainingParityConfirmed: false,
   })({ anchorTimestamp: anchor.timestamp });
+  if (temporal.featureAvailability.openInterestKnown !== false
+      || temporal.derivativesFeatures.openInterestChange !== undefined) {
+    throw new Error("open interest must remain inference-disabled until historical training parity is confirmed");
+  }
   const input = {
     market: "CRYPTO_FUTURES",
     symbol,
@@ -177,7 +182,13 @@ for (const symbol of CONFIG.symbols) {
     generatedAt: cycleTime,
   });
   if (!state.records.some((existing) => existing.id === record.id)) {
-    state = upsertShadowPrediction(state, record);
+    const ledgerState = upsertShadowPrediction(state, record);
+    state = {
+      ...state,
+      ...ledgerState,
+      challengerStartedAt,
+      openInterestSnapshots,
+    };
   }
 }
 
