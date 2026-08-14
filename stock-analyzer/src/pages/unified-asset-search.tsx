@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { BarChart3, Search } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
@@ -37,12 +37,15 @@ export default function UnifiedAssetSearchPage() {
   const [asset, setAsset] = useState<UnifiedAssetFilter>('all');
   const [market, setMarket] = useState<UnifiedMarketFilter | null>(null);
   const e2eAllMarkets = location.startsWith('/__phase11-unified-search-e2e');
-  const allowedMarkets = e2eAllMarkets
-    ? ALL_UNIFIED_SEARCH_MARKETS
-    : allowedUnifiedSearchMarkets({
-        canAccessSpot: auth.permissions.canAccessSpot,
-        canAccessFutures: auth.permissions.canAccessFutures,
-      });
+  const allowedMarkets = useMemo<readonly UnifiedMarketFilter[]>(
+    () => e2eAllMarkets
+      ? ALL_UNIFIED_SEARCH_MARKETS
+      : allowedUnifiedSearchMarkets({
+          canAccessSpot: auth.permissions.canAccessSpot,
+          canAccessFutures: auth.permissions.canAccessFutures,
+        }),
+    [auth.permissions.canAccessFutures, auth.permissions.canAccessSpot, e2eAllMarkets],
+  );
   const canSearchCoin = allowedMarkets.includes('spot') || allowedMarkets.includes('futures');
   const canSearchFutures = allowedMarkets.includes('futures');
   const visibleAssetFilters = ASSET_FILTERS.filter((item) => item.key !== 'coin' || canSearchCoin);
@@ -53,7 +56,7 @@ export default function UnifiedAssetSearchPage() {
   useEffect(() => {
     if (market && !isUnifiedSearchMarketAllowed(market, allowedMarkets)) setMarket(null);
     if (asset === 'coin' && !canSearchCoin) setAsset('all');
-  }, [asset, canSearchCoin, market, auth.membershipLevel, e2eAllMarkets]);
+  }, [allowedMarkets, asset, canSearchCoin, market]);
 
   const selectAsset = (next: UnifiedAssetFilter) => {
     if (next === 'coin' && !canSearchCoin) return;
