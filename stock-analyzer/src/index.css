@@ -269,3 +269,12 @@ input[type='search']::-webkit-search-results-decoration {
     min-height: 48px;
   }
 }
+
+/*
+ * Basic scanner access is the associate tier: public stocks + crypto spot.
+ * Futures remains server-side fail-closed and is also removed from this UI surface
+ * so users do not see a control they cannot use.
+ */
+[data-testid='scanner-workspace-basic'] section[aria-label='검색 시장'] > button:nth-child(4) {
+  display: none;
+}
