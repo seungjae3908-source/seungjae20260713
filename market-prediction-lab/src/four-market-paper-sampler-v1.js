@@ -162,6 +162,19 @@ export function buildFourMarketPaperSample({
     });
   }
 
+  if (signal.market !== "CRYPTO_FUTURES" && executionDirection === "SELL_EXIT") {
+    const sampleId = hash({ ...base.identity, decision: "ELIGIBLE", action: "SELL_EXIT_REQUIRES_POSITION" });
+    return Object.freeze({
+      ...base,
+      paperSampleId: sampleId,
+      status: "BLOCKED",
+      executionContextStatus: "NOT_REQUESTED",
+      fill: null,
+      blockers: Object.freeze(["CASH_EXIT_REQUIRES_OPEN_POSITION"]),
+      ...safetyEnvelope(),
+    });
+  }
+
   if (!execution || typeof execution !== "object") throw new TypeError("execution input is required for ELIGIBLE signal");
   if (!order || typeof order !== "object") throw new TypeError("simulated order is required for ELIGIBLE signal");
   if (order.direction !== executionDirection) throw new Error("PAPER_SIGNAL_ORDER_DIRECTION_MISMATCH");
