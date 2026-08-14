@@ -369,6 +369,32 @@ async function finishRouteTransition(
   })));
 }
 
+async function expectNavigationTransition(
+  page: Page,
+  route: string,
+  open: () => Promise<void>,
+) {
+  await settle(page);
+  const observation: RouteTransitionObservation = {
+    fromRoute: routeIdentity(page.url()),
+    toRoute: routeIdentity(route, page.url()),
+    candidates: [],
+    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
+  };
+  activeRouteTransitionObservations.set(page, observation);
+  let confirmed = false;
+  try {
+    await open();
+    await settle(page);
+    expect(routeIdentity(page.url())).toBe(observation.toRoute);
+    await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
+    await expect(page.locator('body')).not.toBeEmpty();
+    confirmed = true;
+  } finally {
+    await finishRouteTransition(page, observation, confirmed);
+  }
+}
+
 async function expectHealthyRoute(page: Page, route: string) {
   await settle(page);
   const requestedRoute = routeIdentity(route, page.url());
@@ -904,32 +930,39 @@ test.describe('real staging release readiness', () => {
       await settle(page);
     }
 
+    const technicalMenu = APP_NAVIGATION.find((group) => group.id === 'technical')?.menu ?? [];
     await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
     await expect(page.getByRole('menuitem', { name: '승인형 주문', exact: true })).toHaveCount(0);
     for (const label of ['AI 신호검색기', 'AI 차트', '백테스트', '모의매매']) {
-      await settle(page);
+      const target = technicalMenu.find((menuItem) => menuItem.label === label);
+      if (!target) throw new Error(`missing technical navigation item: ${label}`);
       const item = page.getByRole('menuitem', { name: label, exact: true });
-      if (label === 'AI 신호검색기') {
-        await expectHealthyScannerRoute(page, {
-          open: async () => {
-            await item.click();
-          },
-        });
-      } else {
+      await expectNavigationTransition(page, target.href, async () => {
+        if (label === 'AI 신호검색기') {
+          await expectHealthyScannerRoute(page, {
+            open: async () => {
+              await item.click();
+            },
+          });
+          return;
+        }
         await item.click();
-        await settle(page);
-      }
+      });
       await nav.getByRole('button', { name: '기술', exact: true }).click();
     }
     await page.keyboard.press('Escape');
 
+    const informationMenu = APP_NAVIGATION.find((group) => group.id === 'information')?.menu ?? [];
     await settle(page);
     await nav.getByRole('button', { name: '정보', exact: true }).click();
     for (const label of ['투자 공부', 'AI 정보', '포트폴리오']) {
-      await settle(page);
-      await page.getByRole('menuitem', { name: label, exact: true }).click();
-      await settle(page);
+      const target = informationMenu.find((menuItem) => menuItem.label === label);
+      if (!target) throw new Error(`missing information navigation item: ${label}`);
+      const item = page.getByRole('menuitem', { name: label, exact: true });
+      await expectNavigationTransition(page, target.href, async () => {
+        await item.click();
+      });
       await nav.getByRole('button', { name: '정보', exact: true }).click();
     }
     expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);
