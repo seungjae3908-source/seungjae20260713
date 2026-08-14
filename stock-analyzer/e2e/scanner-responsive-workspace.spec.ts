@@ -73,6 +73,14 @@ async function installMocks(page: Page, requests: string[]) {
   await page.route('**/api/scanner/crypto/futures**', (route) => fulfill(route, scannerPayload('coin_futures', 'BITGET_USDT_FUTURES')));
 }
 
+async function mainNavBox(page: Page) {
+  const nav = page.getByRole('navigation', { name: '주요 메뉴' });
+  await expect(nav).toBeVisible();
+  const box = await nav.boundingBox();
+  expect(box).not.toBeNull();
+  return box!;
+}
+
 for (const viewport of [
   { width: 360, height: 800 },
   { width: 390, height: 844 },
@@ -97,14 +105,18 @@ for (const viewport of [
     expect(requests.some((item) => item.includes('/api/scanner/crypto/spot'))).toBe(true);
     expect(requests.filter((item) => item.startsWith('FORBIDDEN'))).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
-    await expect(page.getByRole('navigation', { name: '주요 메뉴' })).toBeVisible();
+
+    const navBox = await mainNavBox(page);
+    expect(navBox.width).toBeGreaterThanOrEqual(viewport.width - 2);
+    expect(Math.abs(navBox.y + navBox.height - viewport.height)).toBeLessThanOrEqual(2);
   });
 }
 
-test('desktop scanner uses split workspace and keeps coin spot functional', async ({ page }) => {
+test('desktop scanner uses split workspace, bounded desktop navigation, and keeps coin spot functional', async ({ page }) => {
   const requests: string[] = [];
   await installMocks(page, requests);
-  await page.setViewportSize({ width: 1440, height: 1000 });
+  const viewport = { width: 1440, height: 1000 };
+  await page.setViewportSize(viewport);
   await page.goto('/__phase11-technical-workspace-e2e');
 
   await expect(page.getByTestId('scanner-workspace-desktop')).toBeVisible();
@@ -117,5 +129,11 @@ test('desktop scanner uses split workspace and keeps coin spot functional', asyn
 
   expect(requests.some((item) => item.includes('/api/scanner/crypto/spot'))).toBe(true);
   expect(requests.filter((item) => item.startsWith('FORBIDDEN'))).toEqual([]);
-  await expect(page.getByRole('navigation', { name: '주요 메뉴' })).toBeVisible();
+
+  const navBox = await mainNavBox(page);
+  expect(navBox.width).toBeLessThanOrEqual(840);
+  expect(navBox.width).toBeGreaterThanOrEqual(700);
+  expect(navBox.x).toBeGreaterThan(100);
+  expect(viewport.height - (navBox.y + navBox.height)).toBeGreaterThanOrEqual(12);
+  expect(viewport.height - (navBox.y + navBox.height)).toBeLessThanOrEqual(20);
 });
