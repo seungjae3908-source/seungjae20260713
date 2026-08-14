@@ -53,7 +53,22 @@ test("funding collector rejects stalled pagination", async () => {
   }), /did not move backward/);
 });
 
-test("temporal provider never uses funding or OI from the future", () => {
+test("open-interest snapshots fail closed by default when training parity is not confirmed", () => {
+  const provider = createTemporalDerivativesProvider({
+    fundingHistory: [{ fundingRate: "0.0001", fundingTime: START }],
+    openInterestSnapshots: [
+      { timestamp: START, valueRaw: "100" },
+      { timestamp: START + HOUR, valueRaw: "110" },
+    ],
+  });
+  const result = provider({ anchorTimestamp: START + 90 * 60 * 1000 });
+  assert.equal(result.derivativesFeatures.fundingRate, 0.0001);
+  assert.equal(result.derivativesFeatures.openInterestChange, undefined);
+  assert.equal(result.featureAvailability.openInterestKnown, false);
+  assert.equal(result.featureAvailability.openInterestTimestamp, null);
+});
+
+test("temporal provider uses OI only after explicit training parity confirmation and never from the future", () => {
   const provider = createTemporalDerivativesProvider({
     fundingHistory: [
       { fundingRate: "0.0001", fundingTime: START },
@@ -64,6 +79,7 @@ test("temporal provider never uses funding or OI from the future", () => {
       { timestamp: START + HOUR, valueRaw: "110" },
       { timestamp: START + 2 * HOUR, valueRaw: "150" },
     ],
+    openInterestTrainingParityConfirmed: true,
   });
   const atNinetyMinutes = provider({ anchorTimestamp: START + 90 * 60 * 1000 });
   assert.equal(atNinetyMinutes.derivativesFeatures.fundingRate, 0.0001);
@@ -83,11 +99,18 @@ test("stale derivatives values remain missing instead of being carried forever",
       { timestamp: START, valueRaw: "100" },
       { timestamp: START + HOUR, valueRaw: "110" },
     ],
+    openInterestTrainingParityConfirmed: true,
     fundingMaxAgeMs: 2 * HOUR,
     openInterestMaxAgeMs: HOUR,
   });
   const result = provider({ anchorTimestamp: START + 5 * HOUR });
   assert.deepEqual(result.derivativesFeatures, {});
+});
+
+test("temporal provider rejects non-boolean OI training parity flags", () => {
+  assert.throws(() => createTemporalDerivativesProvider({
+    openInterestTrainingParityConfirmed: "yes",
+  }), /must be boolean/);
 });
 
 test("coverage summary counts only truly available temporal features", () => {
