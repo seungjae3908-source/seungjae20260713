@@ -16,7 +16,7 @@ function technicalItem(id: string) {
   return item;
 }
 
-test('associate scanner access is isolated from Risk, futures, chart workspace, and order capabilities', () => {
+test('associate scanner access stays isolated while preserving canonical scanner navigation', () => {
   const associateBlock = memberAccessSource.match(/const ASSOCIATE = Object\.freeze\(\{([\s\S]*?)\}\);\nconst REGULAR/)?.[1] ?? '';
   expect(associateBlock).toContain('canAccessBasicInfo: true');
   expect(associateBlock).toContain('canAccessSpot: true');
@@ -29,7 +29,11 @@ test('associate scanner access is isolated from Risk, futures, chart workspace, 
   expect(technicalItem('auto-trading').capability).toBe('canPlaceOrders');
 
   expect(appSource).toContain("const SignalScannerPage = lazy(() => import('@/pages/signal-scanner')); ".trim());
-  expect(appSource).toContain("auth.can('canAccessRiskPreview') ? <TechnicalWorkspacePage /> : <SignalScannerPage />");
+  expect(appSource).toContain('function BasicScannerWorkspace()');
+  expect(appSource).toContain('data-testid="scanner-workspace-basic"');
+  expect(appSource).toContain('<SignalScannerPage />');
+  expect(appSource).toContain('<BottomNav />');
+  expect(appSource).toContain("auth.can('canAccessRiskPreview') ? <TechnicalWorkspacePage /> : <BasicScannerWorkspace />");
 
   const aiChartAccess = appSource.match(/function AiChartAccess\(\) \{([^\n]+)\}/)?.[1] ?? '';
   expect(aiChartAccess).toContain("gated('canAccessRiskPreview'");
