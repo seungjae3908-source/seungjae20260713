@@ -33,10 +33,16 @@ function serializeError(error) {
 
 async function loadFrozenModel(group) {
   const artifact = JSON.parse(await readFile(resolve("docs/candidate-models", `${group}.json`), "utf8"));
-  if (artifact?.status !== "shadow_candidate" || !artifact?.model?.trained) {
-    throw new Error(`frozen shadow candidate model missing for ${group}`);
+  if (artifact?.status !== "shadow_candidate") {
+    return Object.freeze({
+      status: "research_hold",
+      reason: "NO_FROZEN_SHADOW_CANDIDATE",
+      sourceCandidateStatus: typeof artifact?.status === "string" ? artifact.status : "unknown",
+      model: null,
+    });
   }
-  return artifact.model;
+  if (artifact?.model?.trained !== true) throw new Error(`INVALID_FROZEN_SHADOW_CANDIDATE_MODEL:${group}`);
+  return Object.freeze({ status: "ready", reason: null, sourceCandidateStatus: artifact.status, model: artifact.model });
 }
 
 async function collectDataset({ client, symbol, config, suiteEndTime }) {
@@ -110,13 +116,23 @@ const groups = {};
 
 for (const config of GROUPS) {
   try {
-    const model = await loadFrozenModel(config.group);
+    const frozen = await loadFrozenModel(config.group);
+    if (frozen.status === "research_hold") {
+      groups[config.group] = Object.freeze({
+        status: "research_hold",
+        reason: frozen.reason,
+        sourceCandidateStatus: frozen.sourceCandidateStatus,
+        modelRetrained: false,
+        candidateFabricated: false,
+      });
+      continue;
+    }
     const seedDatasets = [];
     const holdoutDatasets = [];
     for (const symbol of SEED_SYMBOLS) seedDatasets.push(await collectDataset({ client, symbol, config, suiteEndTime }));
     for (const symbol of HOLDOUT_SYMBOLS) holdoutDatasets.push(await collectDataset({ client, symbol, config, suiteEndTime }));
     const result = optimizeFrozenFuturesPnl({
-      model,
+      model: frozen.model,
       seedDatasets,
       holdoutDatasets,
       stressMultiplier: 1.5,
@@ -144,6 +160,8 @@ const report = Object.freeze({
   methodology: "frozen BTC+ETH direction model -> train/validation execution-parameter selection -> untouched BTC+ETH test -> 1.5x cost stress -> unseen SOL holdout -> unseen SOL stress -> fixed-parameter future-time rolling audit",
   safeguards: Object.freeze({
     modelRetrained: false,
+    candidateFabricationAllowed: false,
+    noCandidateIsResearchHoldNotTechnicalFailure: true,
     solUsedForSelection: false,
     testUsedForSelection: false,
     currentOpenInterestBackfilled: false,
