@@ -183,6 +183,37 @@ test('approval route blocks unapproved calls and paper execution makes no extern
     const planId = plannedBody.plan.id;
     assert.equal(plannedBody.plan.state, 'APPROVAL_PENDING');
     assert.equal(plannedBody.plan.riskEnvelope, undefined);
+
+    const queueResponse = await nativeFetch(`${baseUrl}/api/trade-automation/approval-queue`);
+    assert.equal(queueResponse.status, 200);
+    const queueBody = await queueResponse.json() as {
+      items: Array<{ id: string; approval: { approvalEnabled: boolean }; order: unknown }>;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      privateTradingRequestSent: boolean;
+    };
+    const queuedPlan = queueBody.items.find((item) => item.id === planId);
+    assert.equal(queuedPlan?.approval.approvalEnabled, true);
+    assert.equal(queuedPlan?.order, null);
+    assert.equal(queueBody.orderSubmitted, false);
+    assert.equal(queueBody.orderCanceled, false);
+    assert.equal(queueBody.privateTradingRequestSent, false);
+
+    const approvalStatusResponse = await nativeFetch(`${baseUrl}/api/trade-automation/plans/${planId}/approval-status`);
+    assert.equal(approvalStatusResponse.status, 200);
+    const approvalStatusBody = await approvalStatusResponse.json() as {
+      approval: { approvalEnabled: boolean; signalState: string; planState: string };
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      privateTradingRequestSent: boolean;
+    };
+    assert.equal(approvalStatusBody.approval.approvalEnabled, true);
+    assert.equal(approvalStatusBody.approval.signalState, 'READY_FOR_APPROVAL');
+    assert.equal(approvalStatusBody.approval.planState, 'APPROVAL_PENDING');
+    assert.equal(approvalStatusBody.orderSubmitted, false);
+    assert.equal(approvalStatusBody.orderCanceled, false);
+    assert.equal(approvalStatusBody.privateTradingRequestSent, false);
+
     const denied = await nativeFetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
     });
