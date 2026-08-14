@@ -1,0 +1,98 @@
+name: Prediction Lab Automated Research Contract
+
+on:
+  push:
+    branches:
+      - research/automated-research-contract-current-main-v1
+    paths:
+      - .github/workflows/prediction-lab-automated-research-contract.yml
+      - market-prediction-lab/src/automated-research-orchestrator.js
+      - market-prediction-lab/scripts/run-automated-research-contract-current-main.js
+      - market-prediction-lab/tests/automated-research-orchestrator.test.js
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-automated-research-contract-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LAB_DIR: market-prediction-lab
+  ARTIFACT_NAME: prediction-lab-automated-research-contract
+
+jobs:
+  contract-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Assert immutable checkout
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Run automated research core regressions
+        working-directory: ${{ env.LAB_DIR }}
+        run: node --test tests/automated-research-orchestrator.test.js
+
+      - name: Build fail-closed current-main contract
+        working-directory: ${{ env.LAB_DIR }}
+        env:
+          RESEARCH_CODE_SHA: ${{ github.sha }}
+        run: node scripts/run-automated-research-contract-current-main.js contract_validation
+
+      - name: Verify no false execution or profitability claims
+        working-directory: ${{ env.LAB_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const artifact = JSON.parse(fs.readFileSync('artifacts/automated-research/contract.json', 'utf8'));
+          if (artifact.executionStatus !== 'contract_only') throw new Error('executionStatus must remain contract_only');
+          for (const key of ['automaticBacktestExecuted','automaticOosExecuted','automaticWalkForwardExecuted','automaticFinalHoldoutExecuted','automaticPaperExecuted','automaticShadowExecuted']) {
+            if (artifact[key] !== false) throw new Error(`${key} must remain false`);
+          }
+          if (artifact.interpretation?.profitabilityClaimAllowed !== false) throw new Error('profitability claims must remain forbidden');
+          if (artifact.scopeComplete !== false || !artifact.scopeGaps?.includes('MID_LONG_AUTOMATED_RESEARCH_GROUP_NOT_IN_CURRENT_CORE')) {
+            throw new Error('known MID_LONG scope gap must remain explicit');
+          }
+          if (artifact.providerCapabilities?.KR_STOCK?.status !== 'blocked_provider' || artifact.providerCapabilities?.US_STOCK?.status !== 'blocked_provider') {
+            throw new Error('stock providers must remain fail-closed');
+          }
+          if (artifact.artifactSafety?.branchWrite !== false || artifact.artifactSafety?.liveOrderAllowed !== false || artifact.artifactSafety?.privateAccountRequestAllowed !== false || artifact.artifactSafety?.orderSubmitted !== false) {
+            throw new Error('safety flags violated');
+          }
+          console.log(JSON.stringify({
+            executionStatus: artifact.executionStatus,
+            groupCount: artifact.groups?.length,
+            scopeGaps: artifact.scopeGaps,
+            providerStatus: Object.fromEntries(Object.entries(artifact.providerCapabilities ?? {}).map(([market, value]) => [market, value.status])),
+          }, null, 2));
+          NODE
+
+      - name: Upload immutable readiness artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
+          path: market-prediction-lab/artifacts/automated-research/contract.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert exact HEAD did not move
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
