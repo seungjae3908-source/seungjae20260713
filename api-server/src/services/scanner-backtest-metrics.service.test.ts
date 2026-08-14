@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import './scanner-adaptive-threshold-arena.smoke.test';
 import {
   calculateScalpingBacktestMetrics,
   calculateSwingBacktestMetrics,
