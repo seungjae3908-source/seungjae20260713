@@ -60,7 +60,7 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
     queryKey: ['futures-public-status'],
     queryFn: getFuturesMarketStatus,
     refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     retry: 1,
   });
   const snapshotQuery = useQuery({
@@ -68,7 +68,7 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
     queryFn: () => getFuturesMarketSnapshot(symbol),
     enabled: Boolean(symbol),
     refetchInterval: 10_000,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     retry: 1,
   });
   const contractRulesQuery = useQuery({
@@ -77,7 +77,7 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
     enabled: Boolean(symbol),
     staleTime: 5 * 60_000,
     refetchInterval: 10 * 60_000,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     retry: 1,
   });
 

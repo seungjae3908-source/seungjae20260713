@@ -659,7 +659,7 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
   });
 
   // 스캔 응답의 supportedIndicators를 우선 사용하고, 없으면 시드 목록을 사용한다.
