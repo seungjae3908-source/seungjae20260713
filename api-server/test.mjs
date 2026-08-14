@@ -87,6 +87,9 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-structure-engine.test.ts'),
   ],
   phase12: [
+    path.join(root, 'src/services/canonical-provider-action-contract.service.test.ts'),
+    path.join(root, 'src/services/three-provider-predeploy-readiness.service.contract.test.ts'),
+    path.join(root, 'src/services/three-provider-predeploy-readiness.service.test.ts'),
     path.join(root, 'src/services/trade-approval-paper-guard.service.test.ts'),
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
     path.join(root, 'src/services/trade-automation-repository-compatibility.test.ts'),
