@@ -148,6 +148,22 @@ function DesktopDefaultWorkspace() {
   );
 }
 
+function BuilderFallbackContent({ desktop }: { desktop: boolean }) {
+  if (desktop) {
+    return (
+      <div data-testid="scanner-builder-fallback-desktop" className="grid h-full min-h-0 grid-cols-[minmax(380px,0.88fr)_minmax(0,2fr)] overflow-hidden bg-background pb-20">
+        <aside className="min-h-0 overflow-hidden border-r border-card-border"><SignalScannerPage embedded /></aside>
+        <section className="min-h-0 overflow-hidden"><AiChartPage embedded /></section>
+      </div>
+    );
+  }
+  return (
+    <div data-testid="scanner-builder-fallback-mobile" className="h-full min-h-0 overflow-hidden bg-background">
+      <SignalScannerPage />
+    </div>
+  );
+}
+
 export default function TechnicalWorkspacePage() {
   const desktop = useDesktopWorkspace();
   const [location] = useLocation();
@@ -180,7 +196,7 @@ export default function TechnicalWorkspacePage() {
         chart={desktop ? <AiChartPage embedded /> : undefined}
         position={<PositionSummarySurface />}
         tradeReview={<TradeReviewSurface />}
-        fallback={fallback}
+        fallback={<BuilderFallbackContent desktop={desktop} />}
       />
       <BottomNav />
     </div>
