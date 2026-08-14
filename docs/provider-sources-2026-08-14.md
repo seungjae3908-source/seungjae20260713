@@ -1,1 +1,0 @@
-Provider references checked on 2026-08-14 KST: Toss Securities OpenAPI 1.2.13, Upbit authenticated order API, and Bitget v2 USDT futures account/order API. This file contains no credentials or runtime configuration.

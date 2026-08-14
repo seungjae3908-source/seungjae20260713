@@ -1,1 +1,0 @@
-This Draft establishes canonical provider authority and predeploy evidence only. It makes no private API calls and performs no order submission. Exact-head CI is required before any further integration.
