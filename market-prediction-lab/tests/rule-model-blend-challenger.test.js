@@ -14,9 +14,9 @@ function model() {
     featureOrder: Object.freeze(["x"]),
     temperature: 1,
     classes: Object.freeze({
-      bullish: Object.freeze({ bias: -0.2, weights: Object.freeze([4]) }),
+      bullish: Object.freeze({ bias: -0.2, weights: Object.freeze([2]) }),
       neutral: Object.freeze({ bias: 1.1, weights: Object.freeze([0]) }),
-      bearish: Object.freeze({ bias: -0.2, weights: Object.freeze([-4]) }),
+      bearish: Object.freeze({ bias: -0.2, weights: Object.freeze([-2]) }),
     }),
   });
 }
@@ -39,6 +39,7 @@ test("deployed 65% rule baseline is not silently changed", () => {
   const metrics = evaluateRuleModelBlend(records(90), model(), DEPLOYED_RULE_WEIGHT);
   assert.equal(metrics.ruleWeight, 0.65);
   assert.equal(metrics.modelWeight, 0.35);
+  assert.ok(metrics.predictedShares.neutral > 0.9);
 });
 
 test("challenger selects weight on validation only and gates on untouched test", () => {
@@ -58,6 +59,7 @@ test("challenger selects weight on validation only and gates on untouched test",
   assert.equal(result.status, "shadow_challenger_candidate");
   assert.ok(result.test.comparison.macroF1Delta >= 0.05);
   assert.ok(result.test.comparison.balancedAccuracyDelta >= 0.03);
+  assert.ok(result.test.comparison.directionalRecallAverageDelta >= 0.03);
   assert.equal(result.safety.runtimeChanged, false);
   assert.equal(result.safety.finalHoldoutUsed, false);
   assert.equal(result.safety.paperUsed, false);
