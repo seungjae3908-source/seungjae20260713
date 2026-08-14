@@ -240,9 +240,12 @@ function currencyOf(market: Market, quote?: AnyObj | null): Currency {
   return market === "US" ? "USD" : "KRW";
 }
 
-async function tryJson<T>(urls: string[], fallback: T): Promise<T> {
+async function tryJson<T>(urls: string[], fallback: T, ownerSignal?: AbortSignal): Promise<T> {
   for (const url of urls) {
+    if (ownerSignal?.aborted) throw ownerSignal.reason;
     const controller = new AbortController();
+    const abortOwnedRequest = () => controller.abort(ownerSignal?.reason);
+    ownerSignal?.addEventListener("abort", abortOwnedRequest, { once: true });
     const timeout = window.setTimeout(() => controller.abort(), 15_000);
     try {
       const response = await authorizedFetch(url, {
@@ -253,10 +256,12 @@ async function tryJson<T>(urls: string[], fallback: T): Promise<T> {
       if (!response.ok) continue;
 
       return (await response.json()) as T;
-    } catch {
+    } catch (cause) {
+      if (ownerSignal?.aborted) throw cause;
       // 다음 API 주소를 시도합니다.
     } finally {
       window.clearTimeout(timeout);
+      ownerSignal?.removeEventListener("abort", abortOwnedRequest);
     }
   }
 
@@ -359,7 +364,7 @@ function collectNews(data: AnyObj): AnyObj[] {
   );
 }
 
-async function fetchDetail(ticker: string): Promise<DetailData> {
+async function fetchDetail(ticker: string, signal?: AbortSignal): Promise<DetailData> {
   const upper = ticker.toUpperCase();
 
   const [
@@ -373,24 +378,24 @@ async function fetchDetail(ticker: string): Promise<DetailData> {
   ] = await Promise.all([
     tryJson<AnyObj>(
       [`/api/quotes?tickers=${upper}`, `/api/stocks/${upper}/quote`],
-      {},
+      {}, signal,
     ),
 
     tryJson<AnyObj>(
       [`/api/stocks/${upper}/company`, `/api/stocks/${upper}/profile`],
-      {},
+      {}, signal,
     ),
 
     tryJson<AnyObj>(
       [`/api/stocks/${upper}/candles?tf=1D`],
-      {},
+      {}, signal,
     ),
 
-    tryJson<AnyObj>([`/api/stocks/${upper}/financials`], {}),
+    tryJson<AnyObj>([`/api/stocks/${upper}/financials`], {}, signal),
 
     tryJson<AnyObj>(
       [`/api/stocks/${upper}/risk`, `/api/stocks/${upper}/analysis`],
-      {},
+      {}, signal,
     ),
 
     tryJson<AnyObj>(
@@ -398,10 +403,10 @@ async function fetchDetail(ticker: string): Promise<DetailData> {
         `/api/stocks/${upper}/filings`,
         `/api/stocks/${upper}/disclosures`,
       ],
-      {},
+      {}, signal,
     ),
 
-    tryJson<AnyObj>([`/api/stocks/${upper}/news`], {}),
+    tryJson<AnyObj>([`/api/stocks/${upper}/news`], {}, signal),
   ]);
 
   const candleRows = Array.isArray(candlesRaw?.candles)
@@ -726,12 +731,13 @@ async function fetchChartCandles(
   ticker: string,
   timeframe: ChartTimeframe,
   fallbackRows: AnyObj[],
+  signal?: AbortSignal,
 ): Promise<CandlePoint[]> {
   const encodedTicker = encodeURIComponent(ticker);
   const encodedFrame = encodeURIComponent(timeframe);
   const raw = await tryJson<AnyObj>(
     [`/api/stocks/${encodedTicker}/candles?tf=${encodedFrame}`],
-    {},
+    {}, signal,
   );
 
   const rows = Array.isArray(raw?.candles)
@@ -1278,7 +1284,7 @@ export default function DetailPage() {
   const detail = useQuery<DetailData>({
     queryKey: ["stock-detail-v13", ticker],
 
-    queryFn: () => fetchDetail(ticker),
+    queryFn: ({ signal }) => fetchDetail(ticker, signal),
 
     enabled: Boolean(ticker),
 
@@ -1288,7 +1294,7 @@ export default function DetailPage() {
 
     refetchInterval: 60_000,
 
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
 
     refetchOnWindowFocus: true,
   });
@@ -1505,14 +1511,10 @@ export default function DetailPage() {
       </header>
 
       <main className="flex-none px-3 pb-28 pt-3">
-        {detail.isLoading && (
-          <CenterMessage>종목 데이터를 불러오는 중...</CenterMessage>
-        )}
+        {detail.isLoading && <DetailPageSkeleton />}
 
         {detail.isError && (
-          <CenterMessage error>
-            종목 데이터를 불러오지 못했습니다.
-          </CenterMessage>
+          <DetailErrorState onRetry={() => void detail.refetch()} />
         )}
 
         {data && tab === "overview" && (
@@ -1570,26 +1572,23 @@ export default function DetailPage() {
   );
 }
 
-function CenterMessage({
-  children,
-  error = false,
-}: {
-  children: ReactNode;
-  error?: boolean;
-}) {
+function DetailPageSkeleton() {
   return (
-    <div className="flex min-h-[50vh] items-center justify-center">
-      <p
-        className={cn(
-          "text-center text-sm font-bold",
-
-          error ? "text-destructive" : "text-muted-foreground",
-        )}
-      >
-        {children}
-      </p>
+    <div role="status" aria-busy="true" aria-label="종목 상세를 불러오는 중" data-testid="detail-page-skeleton" className="space-y-3">
+      <span className="sr-only">종목 상세 데이터를 불러오는 중입니다.</span>
+      <div aria-hidden="true" className="space-y-3">
+        <div className="h-24 animate-pulse rounded-2xl bg-muted/40" />
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => <div key={index} className="h-20 animate-pulse rounded-2xl bg-muted/40" />)}
+        </div>
+        <div className="h-72 animate-pulse rounded-2xl bg-muted/40" />
+      </div>
     </div>
   );
+}
+
+function DetailErrorState({ onRetry }: { onRetry: () => void }) {
+  return <div role="alert" className="flex min-h-[40vh] flex-col items-center justify-center gap-3 text-center"><p className="text-sm font-bold text-destructive">종목 데이터를 불러오지 못했습니다.</p><button type="button" onClick={onRetry} className="min-h-11 rounded-xl border border-card-border px-4 text-sm font-extrabold">다시 시도</button></div>;
 }
 
 function SectionCard({
@@ -2447,7 +2446,7 @@ function ChartTab({
   const chartQuery = useQuery<CandlePoint[]>({
     queryKey: ["detail-chart-v9", ticker, timeframe],
 
-    queryFn: () => fetchChartCandles(ticker, timeframe, fallbackRows),
+    queryFn: ({ signal }) => fetchChartCandles(ticker, timeframe, fallbackRows, signal),
 
     enabled: Boolean(ticker),
 
@@ -2457,7 +2456,7 @@ function ChartTab({
 
     refetchInterval: timeframe.endsWith("m") ? 5_000 : 30_000,
 
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
 
     refetchOnWindowFocus: true,
   });
@@ -4596,7 +4595,7 @@ function ProfessionalChart({
   }, [fullscreen, volumeHeight]);
 
   if (loading && rows.length < 2) {
-    return <ChartPlaceholder text="실제 봉 데이터를 불러오는 중..." />;
+    return <ChartPlaceholder text="실제 봉 데이터를 불러오는 중..." loading />;
   }
   if (rows.length < 2) {
     return <ChartPlaceholder text="표시할 시가·고가·저가·종가 데이터가 부족합니다." />;
@@ -5131,10 +5130,10 @@ function ChartSettingToggle({
   );
 }
 
-function ChartPlaceholder({ text }: { text: string }) {
+function ChartPlaceholder({ text, loading = false }: { text: string; loading?: boolean }) {
   return (
-    <div className="mt-3 flex h-[360px] items-center justify-center rounded-xl bg-secondary/50">
-      <p className="text-sm font-bold text-muted-foreground">{text}</p>
+    <div role={loading ? "status" : undefined} aria-busy={loading || undefined} className="relative mt-3 flex h-[360px] items-center justify-center overflow-hidden rounded-xl bg-secondary/50">
+      {loading ? <><span className="sr-only">{text}</span><div aria-hidden="true" className="absolute inset-3 animate-pulse rounded-lg bg-muted/50"><div className="absolute inset-x-5 bottom-8 top-8 rounded-lg border-b border-l border-muted-foreground/15" /></div></> : <p className="text-sm font-bold text-muted-foreground">{text}</p>}
     </div>
   );
 }
