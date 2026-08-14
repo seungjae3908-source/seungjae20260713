@@ -13,6 +13,8 @@ const aiEnvironmentKeys = [
   'GEMINI_API_KEY',
   'GOOGLE_API_KEY',
   'GEMINI_MODEL',
+  'GROQ_API_KEY',
+  'GROQ_MODEL',
   'TRADING_REVIEW_PROVIDER',
   'TRADING_REVIEW_API_KEY',
   'TRADING_REVIEW_MODEL',
@@ -198,6 +200,86 @@ test('Gemini quota exhaustion maps to the existing AI chat rate-limit contract',
   } finally {
     restoreAiEnvironment(previous);
   }
+});
+
+test('Gemini success makes zero Groq calls', async () => {
+  const previous = snapshotAiEnvironment(); clearAiEnvironment();
+  process.env.GEMINI_API_KEY = 'fake-gemini'; process.env.GROQ_API_KEY = 'fake-groq';
+  let groqCalls = 0;
+  try {
+    const result = await answerAiChat({ message: 'PER 의미를 설명해줘' }, async (input) => {
+      const url = String(input); if (url.includes('api.groq.com')) groqCalls += 1;
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'PER 설명' }] } }] }), { status: 200 });
+    });
+    assert.equal(result.answer, 'PER 설명'); assert.equal(groqCalls, 0);
+  } finally { restoreAiEnvironment(previous); }
+});
+
+test('Gemini 429 and retryable 5xx fall back to Groq exactly once', async () => {
+  for (const status of [429, 503]) {
+    const previous = snapshotAiEnvironment(); clearAiEnvironment();
+    process.env.GEMINI_API_KEY = 'fake-gemini'; process.env.GROQ_API_KEY = 'fake-groq';
+    let groqCalls = 0;
+    try {
+      const result = await answerAiChat({ message: `fallback ${status}` }, async (input, init) => {
+        const url = String(input);
+        if (url.includes('googleapis.com')) return new Response('{}', { status });
+        groqCalls += 1;
+        assert.equal(url, 'https://api.groq.com/openai/v1/chat/completions');
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer fake-groq');
+        assert.doesNotMatch(String(init?.body), /fake-groq|fake-gemini/);
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'Groq fallback answer' } }] }), { status: 200 });
+      });
+      assert.equal(result.answer, 'Groq fallback answer'); assert.equal(result.model, 'openai/gpt-oss-20b'); assert.equal(groqCalls, 1);
+    } finally { restoreAiEnvironment(previous); }
+  }
+});
+
+test('Gemini safety and prohibited-content rejection never call Groq', async () => {
+  for (const finishReason of ['SAFETY', 'PROHIBITED_CONTENT']) {
+    const previous = snapshotAiEnvironment(); clearAiEnvironment();
+    process.env.GEMINI_API_KEY = 'fake-gemini'; process.env.GROQ_API_KEY = 'fake-groq';
+    let groqCalls = 0;
+    try {
+      await assert.rejects(answerAiChat({ message: `safety ${finishReason}` }, async (input) => {
+        if (String(input).includes('api.groq.com')) groqCalls += 1;
+        return new Response(JSON.stringify({ candidates: [{ finishReason }] }), { status: 200 });
+      }), (cause: unknown) => cause instanceof AiChatError && cause.code === 'AI_CHAT_UNSAFE_RESPONSE');
+      assert.equal(groqCalls, 0);
+    } finally { restoreAiEnvironment(previous); }
+  }
+});
+
+test('caller cancellation never falls back and does not cancel a surviving single-flight caller', async () => {
+  const previous = snapshotAiEnvironment(); clearAiEnvironment();
+  process.env.GEMINI_API_KEY = 'fake-gemini'; process.env.GROQ_API_KEY = 'fake-groq';
+  let geminiCalls = 0; let groqCalls = 0; let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input).includes('api.groq.com')) { groqCalls += 1; throw new Error('unexpected'); }
+    geminiCalls += 1; await gate;
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'shared answer' }] } }] }), { status: 200 });
+  };
+  const cancelledController = new AbortController();
+  try {
+    const cancelled = answerAiChat({ message: '동일한 공유 요청' }, fetchImpl, cancelledController.signal);
+    const survivor = answerAiChat({ message: '동일한 공유 요청' }, fetchImpl);
+    cancelledController.abort(); release();
+    await assert.rejects(cancelled, (cause: unknown) => cause instanceof AiChatError && cause.code === 'AI_CHAT_CANCELLED');
+    assert.equal((await survivor).answer, 'shared answer'); assert.equal(geminiCalls, 1); assert.equal(groqCalls, 0);
+  } finally { restoreAiEnvironment(previous); }
+});
+
+test('both free providers failing returns AI_TEMPORARILY_UNAVAILABLE without leaking secrets', async () => {
+  const previous = snapshotAiEnvironment(); clearAiEnvironment();
+  const secrets = ['fake-gemini-secret', 'fake-groq-secret'];
+  process.env.GEMINI_API_KEY = secrets[0]; process.env.GROQ_API_KEY = secrets[1];
+  try {
+    await assert.rejects(answerAiChat({ message: '두 공급자 실패' }, async (_input, init) => {
+      assert.ok(secrets.every((secret) => !String(init?.body).includes(secret)));
+      return new Response('{}', { status: 503 });
+    }), (cause: unknown) => cause instanceof AiChatError && cause.code === 'AI_TEMPORARILY_UNAVAILABLE' && secrets.every((secret) => !String(cause).includes(secret)));
+  } finally { restoreAiEnvironment(previous); }
 });
 
 test('POST /api/ai/chat uses only a mock Gemini provider and never leaks the test key', async () => {
