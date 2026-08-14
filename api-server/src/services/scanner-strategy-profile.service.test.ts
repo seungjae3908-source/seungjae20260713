@@ -1,3 +1,5 @@
+import './strategy-promotion.service.test';
+import '../routes/strategy-promotion.smoke.test';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { getScannerStrategyProfile, listScannerStrategyProfiles } from './scanner-strategy-profile.service';
@@ -58,4 +60,3 @@ describe('scanner strategy profiles', () => {
     assert.notDeepEqual(position.indicatorWeights, swing.indicatorWeights);
   });
 });
-
