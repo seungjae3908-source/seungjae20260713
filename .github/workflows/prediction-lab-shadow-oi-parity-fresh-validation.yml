@@ -6,6 +6,7 @@ on:
       - research/shadow-oi-feature-parity-v1
     paths:
       - .github/workflows/prediction-lab-shadow-oi-parity-fresh-validation.yml
+      - market-prediction-lab/scripts/run-fresh-recent-deployment-parity.js
   workflow_dispatch:
 
 permissions:
@@ -53,7 +54,7 @@ jobs:
             /tmp/shadow-oi-parity-fresh/state.json \
             /tmp/shadow-oi-parity-fresh/summary.json
 
-      - name: Build fail-closed fresh-public parity evidence
+      - name: Build fresh inference and deployment-parity evidence
         shell: bash
         env:
           RESEARCH_SHA: ${{ steps.sha.outputs.value }}
@@ -66,33 +67,29 @@ jobs:
           const cycleSummary = JSON.parse(await readFile('/tmp/shadow-oi-parity-fresh/summary.json', 'utf8'));
           const groups = ['crypto-futures-15m', 'crypto-futures-1h'];
           const classes = ['bullish', 'neutral', 'bearish'];
+          const predictedClass = (p) => classes.reduce((best, name) => p[name] > p[best] ? name : best, classes[0]);
 
-          function predictedClass(probabilities) {
-            return classes.reduce((best, name) => probabilities[name] > probabilities[best] ? name : best, classes[0]);
-          }
-
-          async function loadCandidateModel(group, selectionSource) {
-            const candidates = {
+          async function loadCandidateModel(group, source) {
+            const paths = {
               'v1-vs-rule-baseline': `market-prediction-lab/docs/candidate-models/${group}.json`,
               'funding-v2-vs-v1': `market-prediction-lab/docs/candidate-models-v2/${group}-funding-v2.json`,
               'market-structure-v3-vs-v1': `market-prediction-lab/docs/candidate-models-v3/${group}-market-structure-v3.json`,
               'ensemble-v4-vs-v1': `market-prediction-lab/docs/candidate-models-v4/${group}-ensemble-v4.json`,
             };
-            const path = candidates[selectionSource];
-            if (!path) throw new Error(`${group} unsupported model selection source: ${selectionSource}`);
+            const path = paths[source];
+            if (!path) throw new Error(`${group} unsupported model selection source: ${source}`);
             const artifact = JSON.parse(await readFile(path, 'utf8'));
-            if (!artifact?.model?.trained) throw new Error(`${group} selected model artifact is missing or untrained`);
+            if (!artifact?.model?.trained) throw new Error(`${group} selected model artifact missing or untrained`);
             return artifact.model;
           }
 
+          if (cycleSummary.status !== 'pass') throw new Error('fresh public Shadow cycle failed');
           const evidence = {
             schemaVersion: 2,
             validationType: 'fresh_public_inference_and_deployment_parity',
             researchCodeSha: process.env.RESEARCH_SHA,
             generatedAt: Date.now(),
             provider: 'bitget-public-v2',
-            sourceStateWasEmpty: true,
-            sourceRepositoryStateMutated: false,
             labelsSettled: false,
             profitabilityEvidence: false,
             neutralCollapseFixed: false,
@@ -114,38 +111,21 @@ jobs:
             },
           };
 
-          if (cycleSummary.status !== 'pass') {
-            throw new Error(`fresh public Shadow cycle failed: ${JSON.stringify(cycleSummary.groups)}`);
-          }
-
           for (const group of groups) {
             const groupState = state.groups?.[group];
             const records = groupState?.records ?? [];
-            if (records.length !== 2) throw new Error(`${group} expected exactly BTC/ETH fresh records, got ${records.length}`);
+            if (records.length !== 2) throw new Error(`${group} expected exactly 2 fresh records, got ${records.length}`);
             const symbols = [...new Set(records.map((record) => record.symbol))].sort();
-            if (JSON.stringify(symbols) !== JSON.stringify(['BTCUSDT', 'ETHUSDT'])) {
-              throw new Error(`${group} symbol isolation failed: ${symbols.join(',')}`);
-            }
-            if (records.some((record) => record.status !== 'pending')) {
-              throw new Error(`${group} fresh records must remain pending; this validation must not fabricate future labels`);
-            }
-            if (records.some((record) => record.featureAvailability?.openInterestKnown !== false)) {
-              throw new Error(`${group} OI parity failed: live OI reached inference feature availability`);
-            }
-            if (records.some((record) => record.features?.openInterestChange !== 0)) {
-              throw new Error(`${group} OI parity failed: missing OI was not normalized to the training-compatible zero value`);
-            }
+            if (JSON.stringify(symbols) !== JSON.stringify(['BTCUSDT', 'ETHUSDT'])) throw new Error(`${group} symbol isolation failed`);
+            if (records.some((record) => record.status !== 'pending')) throw new Error(`${group} must not fabricate settled labels`);
+            if (records.some((record) => record.featureAvailability?.openInterestKnown !== false)) throw new Error(`${group} live OI reached inference availability`);
+            if (records.some((record) => record.features?.openInterestChange !== 0)) throw new Error(`${group} OI missing value is not training-compatible zero`);
             const oiSnapshots = groupState?.openInterestSnapshots ?? [];
-            if (oiSnapshots.length < 2) {
-              throw new Error(`${group} expected public OI context to be collected before fail-closed suppression`);
-            }
+            if (oiSnapshots.length < 2) throw new Error(`${group} expected public OI context before suppression`);
 
-            const selectionSource = cycleSummary.groups?.[group]?.modelSelection?.source;
-            const model = await loadCandidateModel(group, selectionSource);
-            if (records.some((record) => record.modelId !== model.id)) {
-              throw new Error(`${group} model identity mismatch between Shadow record and selected artifact`);
-            }
-
+            const source = cycleSummary.groups?.[group]?.modelSelection?.source;
+            const model = await loadCandidateModel(group, source);
+            if (records.some((record) => record.modelId !== model.id)) throw new Error(`${group} model identity mismatch`);
             const rows = records.map((record) => {
               const modelOnly = predictTinyModel(record.features, model);
               const modelOnlyClass = predictedClass(modelOnly.probabilities);
@@ -160,28 +140,20 @@ jobs:
                 classChangedByBlend: modelOnlyClass !== record.candidateClass,
                 directionSuppressedByBlend: modelOnlyClass !== 'neutral' && record.candidateClass === 'neutral',
                 openInterestKnown: record.featureAvailability?.openInterestKnown ?? null,
-                openInterestTimestamp: record.featureAvailability?.openInterestTimestamp ?? null,
                 openInterestFeatureValue: record.features?.openInterestChange ?? null,
-                fundingKnown: record.featureAvailability?.fundingKnown ?? null,
-                fundingTimestamp: record.featureAvailability?.fundingTimestamp ?? null,
                 modelId: record.modelId,
-                referenceModelId: record.referenceModelId,
               };
             });
-
-            const blendedPredictionCounts = Object.fromEntries(classes.map((name) => [name, rows.filter((row) => row.blendedClass === name).length]));
-            const modelOnlyPredictionCounts = Object.fromEntries(classes.map((name) => [name, rows.filter((row) => row.modelOnlyClass === name).length]));
             evidence.groups[group] = {
-              modelSelectionSource: selectionSource,
-              freshPredictionCount: records.length,
-              settledCount: 0,
-              blendedPredictionCounts,
-              modelOnlyPredictionCounts,
+              modelSelectionSource: source,
+              freshPredictionCount: rows.length,
+              blendedPredictionCounts: Object.fromEntries(classes.map((name) => [name, rows.filter((row) => row.blendedClass === name).length])),
+              modelOnlyPredictionCounts: Object.fromEntries(classes.map((name) => [name, rows.filter((row) => row.modelOnlyClass === name).length])),
               classChangedByBlendCount: rows.filter((row) => row.classChangedByBlend).length,
               directionSuppressedByBlendCount: rows.filter((row) => row.directionSuppressedByBlend).length,
               publicOpenInterestSnapshotCount: oiSnapshots.length,
-              openInterestSuppressedAtInferenceCount: records.filter((record) => record.featureAvailability?.openInterestKnown === false).length,
-              openInterestEffectiveZeroCount: records.filter((record) => record.features?.openInterestChange === 0).length,
+              openInterestSuppressedAtInferenceCount: rows.filter((row) => row.openInterestKnown === false).length,
+              openInterestEffectiveZeroCount: rows.filter((row) => row.openInterestFeatureValue === 0).length,
               rows,
             };
           }
@@ -190,15 +162,21 @@ jobs:
           console.log(JSON.stringify(evidence, null, 2));
           NODE
 
+      - name: Run fresh recent settled deployment-parity replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-fresh-recent-deployment-parity.js /tmp/shadow-oi-parity-fresh/recent-deployment-parity.json
+
       - name: Assert repository tree was not mutated by validation
         shell: bash
         run: git diff --exit-code
 
-      - name: Upload immutable fresh-public parity artifact
+      - name: Upload immutable fresh-public parity artifacts
         uses: actions/upload-artifact@v4
         with:
           name: prediction-lab-shadow-oi-parity-fresh-${{ github.run_id }}
-          path: /tmp/shadow-oi-parity-fresh/evidence.json
+          path: |
+            /tmp/shadow-oi-parity-fresh/evidence.json
+            /tmp/shadow-oi-parity-fresh/recent-deployment-parity.json
           if-no-files-found: error
           retention-days: 90
 
