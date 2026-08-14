@@ -111,8 +111,8 @@ jobs:
             if (records.some((record) => record.featureAvailability?.openInterestKnown !== false)) {
               throw new Error(`${group} OI parity failed: live OI reached inference feature availability`);
             }
-            if (records.some((record) => Object.prototype.hasOwnProperty.call(record.features ?? {}, 'openInterestChange'))) {
-              throw new Error(`${group} OI parity failed: openInterestChange reached candidate feature vector`);
+            if (records.some((record) => record.features?.openInterestChange !== 0)) {
+              throw new Error(`${group} OI parity failed: missing OI was not normalized to the training-compatible zero value`);
             }
             const oiSnapshots = groupState?.openInterestSnapshots ?? [];
             if (oiSnapshots.length < 2) {
@@ -127,6 +127,7 @@ jobs:
               candidateProbabilities: record.candidateProbabilities,
               openInterestKnown: record.featureAvailability?.openInterestKnown ?? null,
               openInterestTimestamp: record.featureAvailability?.openInterestTimestamp ?? null,
+              openInterestFeatureValue: record.features?.openInterestChange ?? null,
               fundingKnown: record.featureAvailability?.fundingKnown ?? null,
               fundingTimestamp: record.featureAvailability?.fundingTimestamp ?? null,
               modelId: record.modelId,
@@ -138,6 +139,7 @@ jobs:
               predictionCounts,
               publicOpenInterestSnapshotCount: oiSnapshots.length,
               openInterestSuppressedAtInferenceCount: records.filter((record) => record.featureAvailability?.openInterestKnown === false).length,
+              openInterestEffectiveZeroCount: records.filter((record) => record.features?.openInterestChange === 0).length,
               rows,
             };
           }
