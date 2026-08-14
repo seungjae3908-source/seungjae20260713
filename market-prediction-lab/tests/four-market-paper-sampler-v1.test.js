@@ -176,22 +176,21 @@ for (const [market, direction] of [
   });
 }
 
-test("Profit-First SELL maps explicitly to canonical SELL_EXIT", () => {
+test("Profit-First SELL maps to SELL_EXIT but cannot create a fake standalone OPEN trade", () => {
   assert.equal(normalizePaperExecutionDirection("KR_STOCK", "SELL"), "SELL_EXIT");
   const sample = buildFourMarketPaperSample({
     signal: signal("KR_STOCK", "SELL"),
     profitGate: gate(),
     profitEvidence: evidence("KR_STOCK"),
-    execution: execution("KR_STOCK"),
-    order: { type: "MARKET", quantity: 1, direction: "SELL_EXIT" },
-    bar,
     evaluatedAtMs: NOW,
   });
-  assert.equal(sample.status, "OPEN");
+  assert.equal(sample.status, "BLOCKED");
   assert.equal(sample.identity.signalDirection, "SELL");
   assert.equal(sample.identity.executionDirection, "SELL_EXIT");
-  assert.equal(sample.fill.direction, "SELL_EXIT");
-  assert.equal(sample.fill.side, "SELL");
+  assert.equal(sample.executionContextStatus, "NOT_REQUESTED");
+  assert.equal(sample.fill, null);
+  assert.deepEqual(sample.blockers, ["CASH_EXIT_REQUIRES_OPEN_POSITION"]);
+  assert.equal(sample.orderSubmitted, false);
 });
 
 test("NO_TRADE is preserved without requesting an execution context", () => {
@@ -237,7 +236,7 @@ test("ELIGIBLE cannot bypass not-ready or non-positive Profit-First evidence", (
   }), /PAPER_ELIGIBLE_NET_EDGE_NON_POSITIVE/);
 });
 
-test("stale or future execution evidence fails closed instead of creating a Paper fill", () => {
+test("future execution evidence fails closed instead of creating a Paper fill", () => {
   const sample = buildFourMarketPaperSample({
     signal: signal("CRYPTO_FUTURES", "LONG"),
     profitGate: gate(),
@@ -255,7 +254,7 @@ test("stale or future execution evidence fails closed instead of creating a Pape
   assert.equal(sample.orderSubmitted, false);
 });
 
-test("gate and evidence execution authority can never authorize Paper execution", () => {
+test("gate execution authority can never authorize Paper execution", () => {
   assert.throws(() => buildFourMarketPaperSample({
     signal: signal("KR_STOCK", "BUY"),
     profitGate: gate("ELIGIBLE", { executionAuthority: "LIVE" }),
