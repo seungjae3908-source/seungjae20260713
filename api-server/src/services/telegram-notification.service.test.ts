@@ -9,6 +9,12 @@ import {
   type TelegramAlertInput,
 } from './telegram-notification.service';
 import {
+  dedupeTelegramIntelligencePlans,
+  dueTelegramIntelligenceReports,
+  telegramPersonalRelevancePriority,
+  telegramReportDestinations,
+} from './telegram-intelligence-report.service';
+import {
   deliverScannerTelegramAlerts,
   scannerTelegramInput,
 } from './scanner-telegram-delivery.service';
@@ -213,4 +219,76 @@ test('scanner Telegram delivery is fail-open and uses the lifecycle idempotency 
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].dedupeKey, 'scanner-alert:test');
   assert.equal(delivered[0].type, 'strong_buy');
+});
+
+test('Telegram intelligence audience follows membership and portfolio priority', () => {
+  assert.deepEqual(telegramReportDestinations({ membership: 'pending' }), []);
+  assert.deepEqual(
+    telegramReportDestinations({ membership: 'associate' }),
+    ['STOCK_ROOM'],
+  );
+  assert.deepEqual(
+    telegramReportDestinations({ membership: 'regular', portfolioRelevant: true, watchlistRelevant: true }),
+    ['STOCK_ROOM', 'CRYPTO_ROOM', 'PERSONAL'],
+  );
+  assert.equal(telegramPersonalRelevancePriority({ portfolioRelevant: true, watchlistRelevant: true }), 'HIGH');
+  assert.equal(telegramPersonalRelevancePriority({ portfolioRelevant: false, watchlistRelevant: true }), 'NORMAL');
+});
+
+test('Telegram intelligence schedules morning and weekly reports around Monday 08:00 KST', () => {
+  const due = dueTelegramIntelligenceReports(
+    new Date('2026-08-16T23:00:00.000Z'),
+    { membership: 'regular' },
+  );
+  assert.deepEqual(due.map((item) => item.kind), ['MORNING', 'WEEKLY']);
+  for (const plan of due) {
+    assert.equal(plan.scheduledTimezone, 'Asia/Seoul');
+    assert.equal(plan.localDate, '2026-08-17');
+    assert.equal(plan.orderSubmitted, false);
+    assert.equal(plan.privateTradingApiCount, 0);
+    assert.equal(plan.liveTradingAuthority, false);
+  }
+});
+
+test('Telegram intelligence schedules KR closing only inside the 15:50-16:10 KST window', () => {
+  const inside = dueTelegramIntelligenceReports(
+    new Date('2026-08-14T07:00:00.000Z'),
+    { membership: 'associate', includeCrypto: false },
+  );
+  assert.deepEqual(inside.map((item) => item.kind), ['KR_CLOSING']);
+  assert.deepEqual(inside[0].destinations, ['STOCK_ROOM']);
+
+  const outside = dueTelegramIntelligenceReports(
+    new Date('2026-08-14T07:11:00.000Z'),
+    { membership: 'associate' },
+  );
+  assert.equal(outside.some((item) => item.kind === 'KR_CLOSING'), false);
+});
+
+test('US premarket report follows New York wall clock across EST and EDT', () => {
+  const winter = dueTelegramIntelligenceReports(
+    new Date('2026-01-15T13:00:00.000Z'),
+    { membership: 'regular' },
+  ).find((item) => item.kind === 'US_PREMARKET');
+  const summer = dueTelegramIntelligenceReports(
+    new Date('2026-07-15T12:00:00.000Z'),
+    { membership: 'regular' },
+  ).find((item) => item.kind === 'US_PREMARKET');
+
+  assert.ok(winter);
+  assert.ok(summer);
+  assert.equal(winter.scheduledTimezone, 'America/New_York');
+  assert.equal(summer.scheduledTimezone, 'America/New_York');
+  assert.equal(winter.localMinuteOfDay, 8 * 60);
+  assert.equal(summer.localMinuteOfDay, 8 * 60);
+});
+
+test('Telegram intelligence daily dedupe suppresses an already delivered report key', () => {
+  const plans = dueTelegramIntelligenceReports(
+    new Date('2026-08-14T07:00:00.000Z'),
+    { membership: 'regular', portfolioRelevant: true },
+  );
+  assert.equal(plans.length, 1);
+  const deduped = dedupeTelegramIntelligencePlans(plans, new Set([plans[0].dedupeKey]));
+  assert.deepEqual(deduped, []);
 });
