@@ -268,6 +268,10 @@ input[type='search']::-webkit-search-results-decoration {
   nav[aria-label='주요 메뉴'] button {
     min-height: 48px;
   }
+
+  [data-testid='scanner-workspace-basic'] section[aria-label='검색 시장'] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 /*
