@@ -38,6 +38,12 @@ const PROVIDER_LABEL: Record<string, string> = {
   upbit: 'Upbit',
   bitget: 'Bitget',
 };
+const PROVIDER_MARKET: Record<string, UnifiedMarketFilter> = {
+  krx: 'KR',
+  finnhub: 'US',
+  upbit: 'spot',
+  bitget: 'futures',
+};
 
 function readRecent(): UnifiedAssetSuggestion[] {
   if (typeof window === 'undefined') return [];
@@ -85,12 +91,14 @@ function Highlight({ text, query }: { text: string; query: string }) {
 export function UnifiedAssetSearch({
   asset = 'all',
   market = null,
+  allowedMarkets = GROUP_ORDER,
   placeholder = '종목명·티커·코인명·심볼 검색',
   autoFocus = false,
   onSelect,
 }: {
   asset?: UnifiedAssetFilter;
   market?: UnifiedMarketFilter | null;
+  allowedMarkets?: readonly UnifiedMarketFilter[];
   placeholder?: string;
   autoFocus?: boolean;
   onSelect: (item: UnifiedAssetSuggestion) => void;
@@ -110,10 +118,29 @@ export function UnifiedAssetSearch({
   const [watchlist, setWatchlist] = useState(() => readSearchWatchlist());
   const [popupStyle, setPopupStyle] = useState<CSSProperties>({});
   const trimmed = query.trim();
+  const allowedMarketSet = useMemo(() => new Set<UnifiedMarketFilter>(allowedMarkets), [allowedMarkets]);
+
+  const filterResponse = useCallback((next: UnifiedAssetSuggestResponse): UnifiedAssetSuggestResponse => {
+    const results = next.results.filter((item) => allowedMarketSet.has(item.market));
+    const providers = next.providers.filter((provider) => {
+      const providerMarket = PROVIDER_MARKET[String(provider.provider ?? '').toLowerCase()];
+      return !providerMarket || allowedMarketSet.has(providerMarket);
+    });
+    const hiddenMatches = next.hiddenMatches.filter((item) => allowedMarketSet.has(item.market));
+    return {
+      ...next,
+      results,
+      count: results.length,
+      providers,
+      hiddenMatches,
+    };
+  }, [allowedMarketSet]);
 
   const filteredRecent = useMemo(() => recent.filter((item) =>
-    (asset === 'all' || item.assetType === asset) && (!market || item.market === market),
-  ), [asset, market, recent]);
+    allowedMarketSet.has(item.market)
+      && (asset === 'all' || item.assetType === asset)
+      && (!market || item.market === market),
+  ), [allowedMarketSet, asset, market, recent]);
   const prioritizedResults = useMemo(() => prioritizeUnifiedAssetSuggestions(
     response?.results ?? [],
     {
@@ -187,8 +214,9 @@ export function UnifiedAssetSearch({
     setLoading(true);
     setError(null);
     try {
-      const next = await fetchUnifiedAssetSuggestions({ q: value, asset, market, limit: value.length === 1 ? 25 : 30, signal });
+      const raw = await fetchUnifiedAssetSuggestions({ q: value, asset, market, limit: value.length === 1 ? 25 : 30, signal });
       if (sequence !== requestSequence.current) return;
+      const next = filterResponse(raw);
       setResponse(next);
       setActiveIndex(next.results.length ? 0 : -1);
     } catch (cause) {
@@ -199,7 +227,7 @@ export function UnifiedAssetSearch({
     } finally {
       if (sequence === requestSequence.current) setLoading(false);
     }
-  }, [asset, market]);
+  }, [asset, filterResponse, market]);
 
   useEffect(() => {
     if (!trimmed || composing) {
@@ -311,4 +339,3 @@ export function UnifiedAssetSearch({
     </div>
   );
 }
-
