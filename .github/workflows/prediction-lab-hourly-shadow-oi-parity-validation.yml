@@ -1,0 +1,120 @@
+name: Prediction Lab Hourly Shadow OI Parity Validation
+
+on:
+  push:
+    branches:
+      - validation/hourly-shadow-oi-parity-20260814
+    paths:
+      - .github/workflows/prediction-lab-hourly-shadow-oi-parity-validation.yml
+      - market-prediction-lab/src/derivatives-history.js
+      - market-prediction-lab/tests/derivatives-history.test.js
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hourly-shadow-oi-parity-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LAB_DIR: market-prediction-lab
+  EXPECTED_PROVIDER_BLOB: 201e70e53af2e150eda600377e8ef7d287c4ea23
+  EXPECTED_TEST_BLOB: 231cf79cf4118ff3f1d2a2283c16b39855bbdd24
+  PARENT_FIX_HEAD: 87cfafc3d502901d8f678e0153e2e974a4b69004
+
+jobs:
+  exact-head-parity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Assert canonical #248 blobs and immutable HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git hash-object "$LAB_DIR/src/derivatives-history.js")" = "$EXPECTED_PROVIDER_BLOB"
+          test "$(git hash-object "$LAB_DIR/tests/derivatives-history.test.js")" = "$EXPECTED_TEST_BLOB"
+
+      - name: Run full isolated Prediction Lab validation
+        working-directory: ${{ env.LAB_DIR }}
+        run: npm run validate
+
+      - name: Assert default two-snapshot OI is inference-disabled
+        working-directory: ${{ env.LAB_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createTemporalDerivativesProvider } from './src/derivatives-history.js';
+          const anchor = 1_800_000_000_000;
+          const snapshots = [
+            { timestamp: anchor - 7_200_000, valueRaw: '1000' },
+            { timestamp: anchor - 3_600_000, valueRaw: '1100' },
+          ];
+          const result = createTemporalDerivativesProvider({ openInterestSnapshots: snapshots })({ anchorTimestamp: anchor });
+          if (result.featureAvailability.openInterestKnown !== false) throw new Error('default OI availability must remain false');
+          if (Object.prototype.hasOwnProperty.call(result.derivativesFeatures, 'openInterestChange')) throw new Error('default OI feature leaked into inference');
+
+          const confirmed = createTemporalDerivativesProvider({
+            openInterestSnapshots: snapshots,
+            openInterestTrainingParityConfirmed: true,
+          })({ anchorTimestamp: anchor });
+          if (confirmed.featureAvailability.openInterestKnown !== true) throw new Error('explicit parity confirmation should enable historical-compatible OI');
+          if (!(Math.abs(confirmed.derivativesFeatures.openInterestChange - 0.1) < 1e-12)) throw new Error('confirmed OI change is incorrect');
+          console.log(JSON.stringify({ defaultOpenInterestKnown: false, defaultFeaturePresent: false, confirmedOpenInterestKnown: true }));
+          NODE
+
+      - name: Build validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p validation-artifact
+          node <<'NODE'
+          const fs = require('fs');
+          const manifest = {
+            schemaVersion: 1,
+            kind: 'hourly-shadow-source-oi-parity-validation',
+            validationHeadSha: process.env.GITHUB_SHA,
+            parentFixHeadSha: process.env.PARENT_FIX_HEAD,
+            providerBlobSha: process.env.EXPECTED_PROVIDER_BLOB,
+            testBlobSha: process.env.EXPECTED_TEST_BLOB,
+            openInterestTrainingParityConfirmedByDefault: false,
+            rawOpenInterestCollectionAllowed: true,
+            openInterestInferenceAllowedByDefault: false,
+            modelModified: false,
+            thresholdModified: false,
+            labelModified: false,
+            blendModified: false,
+            branchWrite: false,
+            liveOrderAllowed: false,
+            privateAccountRequestAllowed: false,
+            actualOrders: 0,
+            generatedAt: new Date().toISOString(),
+          };
+          fs.writeFileSync('validation-artifact/manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+      - name: Upload immutable validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hourly-shadow-oi-parity-${{ github.sha }}
+          path: validation-artifact
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert exact HEAD did not move
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
