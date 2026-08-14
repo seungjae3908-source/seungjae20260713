@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "assessment": "cross_snapshot_rule_weight_stability",
+  "snapshots": [
+    {
+      "id": "parent-253",
+      "runId": "31768554408",
+      "artifactId": "9207316364",
+      "artifactSha256": "89a0611f4a5e1239e0168e98be2db46c2427709e5eabf7b3038bf92af51bd64d",
+      "headSha": "c12c7291ecc601d2dc20c6e874fc86f9ccd9f7bb",
+      "selectedRuleWeights": {
+        "crypto-futures-15m": 0.05,
+        "crypto-futures-1h": 0.0
+      }
+    },
+    {
+      "id": "child-255-exact",
+      "runId": "31769440606",
+      "artifactId": "9207633796",
+      "artifactSha256": "1e0d931526e203e7d1866feeed981be1865e3967e87a41fed8f01758953f1f77",
+      "headSha": "528d03102bd2a9b01003c4dd38624a352bba7898",
+      "selectedRuleWeights": {
+        "crypto-futures-15m": 0.3,
+        "crypto-futures-1h": 0.0
+      },
+      "untouchedTest": {
+        "crypto-futures-15m": {
+          "baseline": {
+            "ruleWeight": 0.65,
+            "accuracy": 0.5589887640449438,
+            "balancedAccuracy": 0.3368817469450381,
+            "macroF1": 0.2549336440181126,
+            "logLoss": 0.9848751019629809,
+            "predictedCounts": { "bullish": 4, "neutral": 351, "bearish": 1 }
+          },
+          "candidate": {
+            "ruleWeight": 0.3,
+            "accuracy": 0.5758426966292135,
+            "balancedAccuracy": 0.3934886843114691,
+            "macroF1": 0.37102005525544296,
+            "logLoss": 0.9764912239758506,
+            "predictedCounts": { "bullish": 35, "neutral": 311, "bearish": 10 }
+          },
+          "comparison": {
+            "accuracyDelta": 0.016853932584269704,
+            "balancedAccuracyDelta": 0.05660693736643102,
+            "macroF1Delta": 0.11608641123733038,
+            "logLossImprovement": 0.00838387798713025,
+            "directionalRecallAverageDelta": 0.11491040604964656
+          }
+        },
+        "crypto-futures-1h": {
+          "baseline": {
+            "ruleWeight": 0.65,
+            "accuracy": 0.26953125,
+            "balancedAccuracy": 0.323943661971831,
+            "macroF1": 0.14375000000000002,
+            "logLoss": 1.1551576911176427,
+            "predictedCounts": { "bullish": 1, "neutral": 249, "bearish": 6 }
+          },
+          "candidate": {
+            "ruleWeight": 0.0,
+            "accuracy": 0.4453125,
+            "balancedAccuracy": 0.4121277511147872,
+            "macroF1": 0.3969597715629462,
+            "logLoss": 1.0859257397998958,
+            "predictedCounts": { "bullish": 142, "neutral": 34, "bearish": 80 }
+          },
+          "comparison": {
+            "accuracyDelta": 0.17578125,
+            "balancedAccuracyDelta": 0.08818408914295622,
+            "macroF1Delta": 0.2532097715629462,
+            "logLossImprovement": 0.06923195131774684,
+            "directionalRecallAverageDelta": 0.5336845844186597
+          },
+          "bySymbol": {
+            "BTCUSDT": {
+              "accuracyDelta": 0.1796875,
+              "balancedAccuracyDelta": 0.11402218545075693,
+              "macroF1Delta": 0.2849672878373095,
+              "logLossImprovement": 0.06896628786542891
+            },
+            "ETHUSDT": {
+              "accuracyDelta": 0.171875,
+              "balancedAccuracyDelta": 0.060058097312999326,
+              "macroF1Delta": 0.21902325087038463,
+              "logLossImprovement": 0.06949761477006211
+            }
+          }
+        }
+      }
+    }
+  ],
+  "verdicts": {
+    "crypto-futures-15m": {
+      "status": "research_hold",
+      "reason": "validation_selected_rule_weight_unstable_across_snapshots",
+      "selectedWeights": [0.05, 0.3]
+    },
+    "crypto-futures-1h": {
+      "status": "stable_shadow_challenger_candidate",
+      "reason": null,
+      "selectedWeights": [0.0, 0.0]
+    }
+  },
+  "safety": {
+    "exactGridAgreementRequired": true,
+    "toleranceIntroducedAfterObservation": false,
+    "runtimeChanged": false,
+    "thresholdChanged": false,
+    "classWeightChanged": false,
+    "labelChanged": false,
+    "finalHoldoutUsed": false,
+    "paperUsed": false,
+    "shadowUsedForSelection": false,
+    "liveAuthority": false,
+    "promotionAuthority": false
+  }
+}
