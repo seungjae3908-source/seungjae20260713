@@ -4,6 +4,7 @@ import {
   FOUR_MARKET_EXECUTION_PROFILES,
   buildFourMarketExecutionContext,
   compareExecutionStageParity,
+  resolveSameBarExit,
   simulateFourMarketFill,
 } from "../src/four-market-execution-v2.js";
 
@@ -59,6 +60,8 @@ function commonEvidence(provider, overrides = {}) {
       available: true,
       bid: 99,
       ask: 101,
+      asOfMs: NOW - 500,
+      maxAgeMs: 5_000,
     },
     ...overrides,
   };
@@ -102,10 +105,12 @@ function stockEvidence(provider, overrides = {}) {
 }
 
 function build(overrides = {}) {
-  return buildFourMarketExecutionContext({
+  const input = {
     market: "CRYPTO_SPOT",
     stage: "BACKTEST",
     style: "SWING",
+    timeframe: "15m",
+    horizon: 4,
     direction: "BUY",
     strategyIdentity: strategyIdentity(),
     costPolicy: costPolicy(),
@@ -113,7 +118,9 @@ function build(overrides = {}) {
     dataEvidence: spotEvidence(),
     evaluatedAtMs: NOW,
     ...overrides,
-  });
+  };
+  input.marketAdapterIdentity ??= { ...FOUR_MARKET_EXECUTION_PROFILES[input.market].marketAdapter };
+  return buildFourMarketExecutionContext(input);
 }
 
 test("fixed four-market profiles preserve provider and direction authority", () => {
@@ -210,7 +217,10 @@ test("Backtest Shadow and Paper are comparable only under one identical executio
   const shared = {
     market: "CRYPTO_SPOT",
     style: "SWING",
+    timeframe: "15m",
+    horizon: 4,
     direction: "BUY",
+    marketAdapterIdentity: { ...FOUR_MARKET_EXECUTION_PROFILES.CRYPTO_SPOT.marketAdapter },
     strategyIdentity: strategyIdentity(),
     costPolicy: costPolicy(),
     executionPolicy: executionPolicy(),
@@ -230,7 +240,7 @@ test("policy drift between research stages is detected instead of silently compa
   const backtest = build({ stage: "BACKTEST" });
   const paper = build({ stage: "PAPER", costPolicy: costPolicy({ version: "cost-v3", slippageRate: 0.002 }) });
   const parity = compareExecutionStageParity([backtest, paper]);
-  assert.equal(parity.status, "BLOCKED");
+  assert.equal(parity.status, "PERFORMANCE_COMPARISON_BLOCKED");
   assert.deepEqual(parity.mismatchedStages, ["PAPER"]);
   assert.equal(parity.backtestPaperShadowComparable, false);
 });
@@ -276,7 +286,7 @@ test("depth-participation simulation models bounded partial fills without exchan
   const fill = simulateFourMarketFill({
     context,
     order: { type: "MARKET", direction: "BUY", quantity: 5 },
-    quote: { bid: 99, ask: 101 },
+    quote: { bid: 99, ask: 101, asOfMs: NOW - 500, maxAgeMs: 5_000 },
     depth: { bidSize: 20, askSize: 8 },
   });
   assert.equal(fill.status, "PARTIALLY_FILLED");
@@ -292,10 +302,91 @@ test("a blocked research context cannot be used to fabricate a simulated fill", 
   const fill = simulateFourMarketFill({
     context: blocked,
     order: { type: "MARKET", direction: "BUY", quantity: 1 },
-    quote: { bid: 99, ask: 101 },
+    quote: { bid: 99, ask: 101, asOfMs: NOW - 500, maxAgeMs: 5_000 },
   });
   assert.equal(fill.status, "BLOCKED");
   assert.equal(fill.reason, "EXECUTION_CONTEXT_NOT_READY");
   assert.ok(fill.blockers.includes("DATA_QUALITY_NOT_READY"));
   assert.equal(fill.orderSubmitted, false);
+});
+
+test("execution fingerprint blocks deterministic identity drift fields", () => {
+  const baseline = build({ stage: "BACKTEST" });
+  const cases = [
+    ["researchCodeSha", build({ stage: "PAPER", strategyIdentity: strategyIdentity({ researchCodeSha: "b".repeat(40) }) })],
+    ["timeframe", build({ stage: "PAPER", timeframe: "1h" })],
+    ["horizon", build({ stage: "PAPER", horizon: 12 })],
+    ["marketAdapterVersion", build({ stage: "PAPER", marketAdapterIdentity: { id: "crypto-spot-upbit-execution", version: "v3" } })],
+    ["costPolicyVersion", build({ stage: "PAPER", costPolicy: costPolicy({ version: "cost-v3" }) })],
+    ["executionPolicyVersion", build({ stage: "PAPER", executionPolicy: executionPolicy({ version: "execution-v3" }) })],
+    ["style", build({ stage: "PAPER", style: "SCALPING" })],
+  ];
+  for (const [field, context] of cases) {
+    const parity = compareExecutionStageParity([baseline, context]);
+    assert.equal(parity.status, "PERFORMANCE_COMPARISON_BLOCKED");
+    assert.equal(parity.reason, "EXECUTION_POLICY_MISMATCH");
+    assert.ok(parity.mismatchFields.includes(field));
+    assert.equal(parity.backtestPaperShadowComparable, false);
+  }
+});
+
+test("TOP_OF_BOOK accepts only fresh timestamped non-crossed evidence", () => {
+  const fresh = build({ stage: "PAPER" });
+  assert.equal(fresh.status, "READY");
+  const filled = simulateFourMarketFill({
+    context: fresh,
+    order: { type: "MARKET", direction: "BUY", quantity: 1 },
+    quote: { bid: 99, ask: 101, asOfMs: NOW - 500, maxAgeMs: 5_000 },
+  });
+  assert.equal(filled.status, "FILLED");
+
+  const cases = [
+    ["STALE_QUOTE_FORBIDDEN", { asOfMs: NOW - 10_000, maxAgeMs: 5_000 }],
+    ["FUTURE_QUOTE_FORBIDDEN", { asOfMs: NOW + 1, maxAgeMs: 5_000 }],
+    ["CROSSED_QUOTE_FORBIDDEN", { bid: 102, ask: 101 }],
+    ["QUOTE_TIMESTAMP_REQUIRED", { asOfMs: undefined }],
+  ];
+  for (const [blocker, quotePatch] of cases) {
+    const quoteEvidence = { ...spotEvidence().quoteEvidence, ...quotePatch };
+    const context = build({ stage: "PAPER", dataEvidence: spotEvidence({ quoteEvidence }) });
+    assert.equal(context.status, "BLOCKED");
+    assert.ok(context.blockers.includes(blocker));
+  }
+});
+
+test("TOP_OF_BOOK fill rejects a stale caller quote even with a ready context", () => {
+  const context = build({ stage: "PAPER" });
+  const fill = simulateFourMarketFill({
+    context,
+    order: { type: "MARKET", direction: "BUY", quantity: 1 },
+    quote: { bid: 99, ask: 101, asOfMs: NOW - 10_000, maxAgeMs: 5_000 },
+  });
+  assert.equal(fill.status, "BLOCKED");
+  assert.equal(fill.reason, "VALID_QUOTE_REQUIRED");
+});
+
+test("same-bar STOP_FIRST resolves LONG and SHORT outcomes conservatively", () => {
+  const cases = [
+    [{ direction: "LONG", open: 100, high: 104, low: 94, stop: 95, target: 110 }, "STOP"],
+    [{ direction: "LONG", open: 100, high: 111, low: 99, stop: 95, target: 110 }, "TARGET"],
+    [{ direction: "LONG", open: 100, high: 111, low: 94, stop: 95, target: 110 }, "STOP"],
+    [{ direction: "SHORT", open: 100, high: 106, low: 96, stop: 105, target: 90 }, "STOP"],
+    [{ direction: "SHORT", open: 100, high: 101, low: 89, stop: 105, target: 90 }, "TARGET"],
+    [{ direction: "SHORT", open: 100, high: 106, low: 89, stop: 105, target: 90 }, "STOP"],
+    [{ direction: "LONG", open: 100, high: 104, low: 96, stop: 95, target: 110 }, "NEITHER"],
+  ];
+  for (const [input, verdict] of cases) assert.equal(resolveSameBarExit(input).verdict, verdict);
+
+  const longGap = resolveSameBarExit({ direction: "LONG", open: 90, high: 100, low: 89, stop: 95, target: 110 });
+  assert.equal(longGap.verdict, "STOP");
+  assert.equal(longGap.exitPrice, 90);
+  const shortGap = resolveSameBarExit({ direction: "SHORT", open: 110, high: 111, low: 100, stop: 105, target: 90 });
+  assert.equal(shortGap.verdict, "STOP");
+  assert.equal(shortGap.exitPrice, 110);
+});
+
+test("same-bar resolver fails closed on invalid OHLC", () => {
+  const invalid = resolveSameBarExit({ direction: "LONG", open: 100, high: 90, low: 95, stop: 94, target: 110 });
+  assert.equal(invalid.status, "BLOCKED");
+  assert.equal(invalid.reason, "INVALID_SAME_BAR_EVIDENCE");
 });
