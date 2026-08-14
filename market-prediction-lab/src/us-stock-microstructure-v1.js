@@ -162,12 +162,8 @@ export function buildUsStockMicrostructureContext({
     addBlocker(blockers, evidence.haltEvidence.active !== true, "US_TRADING_HALT_ACTIVE");
   }
 
-  if (CONTINUOUS_PHASES.has(phase)) {
-    validateContinuousEvidence({ phase, evidence, policy, evaluatedAtMs }, blockers);
-  }
-  if (AUCTION_PHASES.has(phase)) {
-    validateAuctionEvidence({ phase, evidence, evaluatedAtMs }, blockers);
-  }
+  if (CONTINUOUS_PHASES.has(phase)) validateContinuousEvidence({ phase, evidence, policy, evaluatedAtMs }, blockers);
+  if (AUCTION_PHASES.has(phase)) validateAuctionEvidence({ phase, evidence, evaluatedAtMs }, blockers);
 
   const parityPayload = Object.freeze({
     schemaVersion: 1,
@@ -194,6 +190,7 @@ export function buildUsStockMicrostructureContext({
     phase,
     executionContext,
     policy: Object.freeze({ ...(policy ?? {}) }),
+    evidence: Object.freeze({ ...(evidence ?? {}) }),
     parityPayload,
     parityFingerprint,
     evaluatedAtMs,
@@ -214,9 +211,7 @@ function capQuantity({ requestedQuantity, availableQuantity, allowPartialFill })
   if (!nonNegative(availableQuantity)) return Object.freeze({ status: "BLOCKED", reason: "US_EXECUTABLE_QUANTITY_REQUIRED" });
   const capped = Math.min(requestedQuantity, availableQuantity);
   if (capped <= 0) return Object.freeze({ status: "PENDING", reason: "US_NO_EXECUTABLE_CAPACITY" });
-  if (capped < requestedQuantity && allowPartialFill !== true) {
-    return Object.freeze({ status: "PENDING", reason: "US_PARTIAL_FILL_FORBIDDEN" });
-  }
+  if (capped < requestedQuantity && allowPartialFill !== true) return Object.freeze({ status: "PENDING", reason: "US_PARTIAL_FILL_FORBIDDEN" });
   return Object.freeze({ status: "READY", quantity: capped, partial: capped < requestedQuantity });
 }
 
@@ -250,34 +245,20 @@ function withAdapterEnvelope(result, context, requestedQuantity, microstructureP
   });
 }
 
-export function simulateUsStockMicrostructureFill({
-  context,
-  order,
-  quote = null,
-  depth = null,
-} = {}) {
-  if (!context || context.schemaVersion !== 1 || context.market !== "US_STOCK") {
-    throw new TypeError("valid US stock microstructure context is required");
-  }
+export function simulateUsStockMicrostructureFill({ context, order, quote = null, depth = null } = {}) {
+  if (!context || context.schemaVersion !== 1 || context.market !== "US_STOCK") throw new TypeError("valid US stock microstructure context is required");
   if (context.status !== "READY") {
-    return Object.freeze({
-      status: "BLOCKED",
-      reason: "US_MICROSTRUCTURE_CONTEXT_NOT_READY",
-      blockers: context.blockers,
-      orderSubmitted: false,
-      exchangeRequestSent: false,
-    });
+    return Object.freeze({ status: "BLOCKED", reason: "US_MICROSTRUCTURE_CONTEXT_NOT_READY", blockers: context.blockers, orderSubmitted: false, exchangeRequestSent: false });
   }
   if (!positive(order?.quantity)) throw new TypeError("positive simulated quantity is required");
 
-  const evidence = context.executionContext?.dataEvidence ?? null;
+  const evidence = context.evidence;
   const allowPartialFill = context.executionContext.executionPolicy?.allowPartialFill === true;
   let availableQuantity;
   let effectiveQuote = quote;
 
   if (CONTINUOUS_PHASES.has(context.phase)) {
-    const rate = sessionParticipation(context.policy, context.phase);
-    availableQuantity = (evidence?.observedVolume ?? 0) * rate;
+    availableQuantity = (evidence?.observedVolume ?? 0) * sessionParticipation(context.policy, context.phase);
     if (!effectiveQuote) effectiveQuote = evidence?.quoteEvidence ?? null;
   } else {
     if (order.type === "STOP_MARKET") {
@@ -289,20 +270,15 @@ export function simulateUsStockMicrostructureFill({
   }
 
   const capacity = capQuantity({ requestedQuantity: order.quantity, availableQuantity, allowPartialFill });
-  if (capacity.status !== "READY") {
-    return Object.freeze({ ...capacity, orderSubmitted: false, exchangeRequestSent: false });
-  }
+  if (capacity.status !== "READY") return Object.freeze({ ...capacity, orderSubmitted: false, exchangeRequestSent: false });
 
-  const cappedOrder = Object.freeze({ ...order, quantity: capacity.quantity });
   const result = simulateFourMarketFill({
     context: context.executionContext,
-    order: cappedOrder,
+    order: Object.freeze({ ...order, quantity: capacity.quantity }),
     quote: effectiveQuote,
     depth,
   });
-  if (!["FILLED", "PARTIALLY_FILLED"].includes(result.status)) {
-    return Object.freeze({ ...result, orderSubmitted: false, exchangeRequestSent: false });
-  }
+  if (!["FILLED", "PARTIALLY_FILLED"].includes(result.status)) return Object.freeze({ ...result, orderSubmitted: false, exchangeRequestSent: false });
   return withAdapterEnvelope(result, context, order.quantity, capacity.partial);
 }
 
