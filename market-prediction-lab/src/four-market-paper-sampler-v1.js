@@ -5,7 +5,7 @@ import {
 } from "./four-market-execution-v2.js";
 
 const SUPPORTED_MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
-const STOCK_OR_SPOT_DIRECTIONS = new Set(["BUY", "SELL_EXIT"]);
+const PROFIT_FIRST_CASH_DIRECTIONS = new Set(["BUY", "SELL", "SELL_EXIT"]);
 const FUTURES_DIRECTIONS = new Set(["LONG", "SHORT"]);
 
 function finite(value) {
@@ -36,6 +36,15 @@ function hash(value) {
   return createHash("sha256").update(stableSerialize(value)).digest("hex");
 }
 
+export function normalizePaperExecutionDirection(market, signalDirection) {
+  if (market === "CRYPTO_FUTURES") {
+    if (!FUTURES_DIRECTIONS.has(signalDirection)) throw new TypeError("direction is not supported for futures");
+    return signalDirection;
+  }
+  if (!PROFIT_FIRST_CASH_DIRECTIONS.has(signalDirection)) throw new TypeError("direction is not supported for cash market");
+  return signalDirection === "SELL" ? "SELL_EXIT" : signalDirection;
+}
+
 function validateSignalIdentity(signal) {
   if (!nonEmpty(signal?.signalId)) throw new TypeError("signalId is required");
   if (!SUPPORTED_MARKETS.has(signal?.market)) throw new TypeError("supported market is required");
@@ -46,9 +55,7 @@ function validateSignalIdentity(signal) {
   if (!nonEmpty(signal?.strategyIdentity?.strategyVersion)) throw new TypeError("strategyVersion is required");
   if (!nonEmpty(signal?.strategyIdentity?.parameterHash)) throw new TypeError("parameterHash is required");
   if (!immutableSha(signal?.strategyIdentity?.researchCodeSha)) throw new TypeError("immutable researchCodeSha is required");
-
-  const directionSet = signal.market === "CRYPTO_FUTURES" ? FUTURES_DIRECTIONS : STOCK_OR_SPOT_DIRECTIONS;
-  if (!directionSet.has(signal.direction)) throw new TypeError("direction is not supported for market");
+  normalizePaperExecutionDirection(signal.market, signal.direction);
 }
 
 function validateGate(gate) {
@@ -87,14 +94,15 @@ function safetyEnvelope() {
   });
 }
 
-function buildBaseSnapshot(signal, gate, evidence, evaluatedAtMs) {
+function buildBaseSnapshot(signal, gate, evidence, evaluatedAtMs, executionDirection) {
   const identity = Object.freeze({
     signalId: signal.signalId,
     market: signal.market,
     style: signal.style,
     timeframe: signal.timeframe,
     horizon: signal.horizon,
-    direction: signal.direction,
+    signalDirection: signal.direction,
+    executionDirection,
     strategyId: signal.strategyIdentity.strategyId,
     strategyVersion: signal.strategyIdentity.strategyVersion,
     parameterHash: signal.strategyIdentity.parameterHash,
@@ -138,7 +146,8 @@ export function buildFourMarketPaperSample({
   validateGate(profitGate);
   validateEvidence(profitEvidence, signal, profitGate);
 
-  const base = buildBaseSnapshot(signal, profitGate, profitEvidence, evaluatedAtMs);
+  const executionDirection = normalizePaperExecutionDirection(signal.market, signal.direction);
+  const base = buildBaseSnapshot(signal, profitGate, profitEvidence, evaluatedAtMs, executionDirection);
 
   if (profitGate.decision === "NO_TRADE") {
     const sampleId = hash({ ...base.identity, decision: "NO_TRADE", reasons: profitGate.reasons });
@@ -155,7 +164,7 @@ export function buildFourMarketPaperSample({
 
   if (!execution || typeof execution !== "object") throw new TypeError("execution input is required for ELIGIBLE signal");
   if (!order || typeof order !== "object") throw new TypeError("simulated order is required for ELIGIBLE signal");
-  if (order.direction !== signal.direction) throw new Error("PAPER_SIGNAL_ORDER_DIRECTION_MISMATCH");
+  if (order.direction !== executionDirection) throw new Error("PAPER_SIGNAL_ORDER_DIRECTION_MISMATCH");
 
   const context = buildFourMarketExecutionContext({
     ...execution,
@@ -164,7 +173,7 @@ export function buildFourMarketPaperSample({
     style: signal.style,
     timeframe: signal.timeframe,
     horizon: signal.horizon,
-    direction: signal.direction,
+    direction: executionDirection,
     strategyIdentity: signal.strategyIdentity,
     evaluatedAtMs,
   });
