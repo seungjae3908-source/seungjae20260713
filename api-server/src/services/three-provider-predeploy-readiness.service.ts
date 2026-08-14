@@ -33,7 +33,7 @@ export type ProviderPredeployResult = {
   market: CanonicalTradingMarket;
   provider: CanonicalTradingProvider;
   readyForPredeployValidation: boolean;
-  blockers: string[];
+  blockers: readonly string[];
   privateTradingRequestAllowed: false;
   liveActivationAllowed: false;
 };
@@ -61,7 +61,7 @@ export function evaluateProviderPredeployReadiness(input: ProviderPredeployEvide
     market: input.market,
     provider: input.provider,
     readyForPredeployValidation: blockers.length === 0,
-    blockers: Object.freeze([...blockers]) as unknown as string[],
+    blockers: Object.freeze([...blockers]),
     privateTradingRequestAllowed: false,
     liveActivationAllowed: false,
   });
