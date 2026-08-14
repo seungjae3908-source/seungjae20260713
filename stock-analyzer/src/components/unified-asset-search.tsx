@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { AlertTriangle, Clock3, Loader2, Search, X } from 'lucide-react';
+import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import {
   fetchUnifiedAssetSuggestions,
@@ -19,6 +20,10 @@ import {
   type UnifiedAssetSuggestResponse,
   type UnifiedMarketFilter,
 } from '@/lib/unified-asset-search';
+import {
+  allowedUnifiedSearchMarkets,
+  filterUnifiedSearchResponseByMarkets,
+} from '@/lib/unified-search-capability';
 import {
   readWatchlistItems,
   WATCHLIST_CHANGE_EVENT,
@@ -85,16 +90,19 @@ function Highlight({ text, query }: { text: string; query: string }) {
 export function UnifiedAssetSearch({
   asset = 'all',
   market = null,
+  allowedMarkets,
   placeholder = '종목명·티커·코인명·심볼 검색',
   autoFocus = false,
   onSelect,
 }: {
   asset?: UnifiedAssetFilter;
   market?: UnifiedMarketFilter | null;
+  allowedMarkets?: readonly UnifiedMarketFilter[];
   placeholder?: string;
   autoFocus?: boolean;
   onSelect: (item: UnifiedAssetSuggestion) => void;
 }) {
+  const auth = useAuth();
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
@@ -110,10 +118,28 @@ export function UnifiedAssetSearch({
   const [watchlist, setWatchlist] = useState(() => readSearchWatchlist());
   const [popupStyle, setPopupStyle] = useState<CSSProperties>({});
   const trimmed = query.trim();
+  const effectiveAllowedMarkets = useMemo(
+    () => allowedMarkets ?? allowedUnifiedSearchMarkets({
+      canAccessSpot: auth.permissions.canAccessSpot,
+      canAccessFutures: auth.permissions.canAccessFutures,
+    }),
+    [allowedMarkets, auth.permissions.canAccessFutures, auth.permissions.canAccessSpot],
+  );
+  const allowedMarketSet = useMemo(
+    () => new Set<UnifiedMarketFilter>(effectiveAllowedMarkets),
+    [effectiveAllowedMarkets],
+  );
+
+  const filterResponse = useCallback(
+    (next: UnifiedAssetSuggestResponse) => filterUnifiedSearchResponseByMarkets(next, effectiveAllowedMarkets),
+    [effectiveAllowedMarkets],
+  );
 
   const filteredRecent = useMemo(() => recent.filter((item) =>
-    (asset === 'all' || item.assetType === asset) && (!market || item.market === market),
-  ), [asset, market, recent]);
+    allowedMarketSet.has(item.market)
+      && (asset === 'all' || item.assetType === asset)
+      && (!market || item.market === market),
+  ), [allowedMarketSet, asset, market, recent]);
   const prioritizedResults = useMemo(() => prioritizeUnifiedAssetSuggestions(
     response?.results ?? [],
     {
@@ -123,6 +149,7 @@ export function UnifiedAssetSearch({
   ), [recent, response?.results, watchlist]);
   const items = trimmed ? prioritizedResults : filteredRecent;
   const open = focused && (trimmed.length > 0 || filteredRecent.length > 0);
+  const hasLastGoodResults = trimmed.length > 0 && items.length > 0;
   const staleProviders = response?.providers.filter((provider) => provider.status === 'stale') ?? [];
   const errorProviders = response?.providers.filter((provider) => provider.status === 'error') ?? [];
   const outcome = error
@@ -187,19 +214,18 @@ export function UnifiedAssetSearch({
     setLoading(true);
     setError(null);
     try {
-      const next = await fetchUnifiedAssetSuggestions({ q: value, asset, market, limit: value.length === 1 ? 25 : 30, signal });
+      const raw = await fetchUnifiedAssetSuggestions({ q: value, asset, market, limit: value.length === 1 ? 25 : 30, signal });
       if (sequence !== requestSequence.current) return;
+      const next = filterResponse(raw);
       setResponse(next);
       setActiveIndex(next.results.length ? 0 : -1);
     } catch (cause) {
       if (signal?.aborted || sequence !== requestSequence.current) return;
       setError(cause instanceof Error ? cause.message : '검색 요청에 실패했습니다.');
-      setResponse(null);
-      setActiveIndex(-1);
     } finally {
       if (sequence === requestSequence.current) setLoading(false);
     }
-  }, [asset, market]);
+  }, [asset, filterResponse, market]);
 
   useEffect(() => {
     if (!trimmed || composing) {
@@ -276,12 +302,14 @@ export function UnifiedAssetSearch({
       {open && (
         <div ref={popupRef} id="unified-asset-search-listbox" role="listbox" aria-label="통합 자산 자동완성 결과" style={popupStyle} className="z-[120] overflow-y-auto overscroll-contain rounded-2xl border border-card-border bg-card shadow-2xl">
           {!trimmed && filteredRecent.length > 0 && <div className="flex items-center gap-2 border-b border-card-border px-4 py-3 text-xs font-extrabold text-muted-foreground"><Clock3 className="h-4 w-4" /> 최근 검색</div>}
-          {loading && <div className="flex min-h-28 items-center justify-center gap-2 px-4 py-6 text-sm font-bold text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> 검색 인덱스에서 찾는 중입니다.</div>}
-          {!loading && error && <div className="space-y-3 px-4 py-5 text-center" data-testid="unified-search-outcome"><AlertTriangle className="mx-auto h-6 w-6 text-warning" /><p className="text-xs font-black text-warning">DATA_UNAVAILABLE · 검색 데이터 사용 불가</p><p className="break-keep text-sm font-bold">{error}</p><button type="button" onClick={() => { if (trimmed) void runSearch(trimmed); }} className="h-11 rounded-xl border border-card-border px-4 text-sm font-extrabold">재시도</button></div>}
-          {!loading && !error && trimmed && errorProviders.length > 0 && <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs font-bold text-destructive">공급자 연결 실패: {providerNames(errorProviders)}. 해당 시장 결과가 누락될 수 있습니다.</div>}
-          {!loading && !error && trimmed && staleProviders.length > 0 && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">마지막 정상 인덱스 사용: {providerNames(staleProviders)}.</div>}
-          {!loading && !error && trimmed && response?.stale && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">가장 오래된 데이터 기준시각: {response.dataAsOf ? new Date(response.dataAsOf).toLocaleString('ko-KR') : '확인 필요'}</div>}
-          {!loading && !error && grouped.map((group) => (
+          {loading && !hasLastGoodResults && <div className="space-y-3 px-4 py-5" aria-live="polite" data-testid="unified-search-skeleton"><div className="flex items-center gap-2 text-sm font-bold text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 검색 인덱스에서 찾는 중입니다.</div><div className="h-12 animate-pulse rounded-xl bg-muted" /><div className="h-12 animate-pulse rounded-xl bg-muted" /></div>}
+          {loading && hasLastGoodResults && <div className="flex items-center gap-2 border-b border-primary/20 bg-primary/5 px-4 py-2 text-xs font-bold text-muted-foreground" aria-live="polite" data-testid="unified-search-refreshing"><Loader2 className="h-4 w-4 animate-spin" /> 이전 결과를 유지하며 새 검색을 확인 중입니다.</div>}
+          {error && !hasLastGoodResults && <div className="space-y-3 px-4 py-5 text-center" data-testid="unified-search-outcome"><AlertTriangle className="mx-auto h-6 w-6 text-warning" /><p className="text-xs font-black text-warning">DATA_UNAVAILABLE · 검색 데이터 사용 불가</p><p className="break-keep text-sm font-bold">{error}</p><button type="button" onClick={() => { if (trimmed) void runSearch(trimmed); }} className="h-11 rounded-xl border border-card-border px-4 text-sm font-extrabold">재시도</button></div>}
+          {error && hasLastGoodResults && <div className="flex flex-wrap items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning" data-testid="unified-search-last-good"><span>새 검색에 실패해 마지막 정상 결과를 표시합니다.</span><button type="button" onClick={() => { if (trimmed) void runSearch(trimmed); }} className="h-9 rounded-lg border border-warning/40 px-3 font-extrabold">재시도</button></div>}
+          {!error && trimmed && errorProviders.length > 0 && <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs font-bold text-destructive">공급자 연결 실패: {providerNames(errorProviders)}. 해당 시장 결과가 누락될 수 있습니다.</div>}
+          {!error && trimmed && staleProviders.length > 0 && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">마지막 정상 인덱스 사용: {providerNames(staleProviders)}.</div>}
+          {!error && trimmed && response?.stale && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">가장 오래된 데이터 기준시각: {response.dataAsOf ? new Date(response.dataAsOf).toLocaleString('ko-KR') : '확인 필요'}</div>}
+          {(hasLastGoodResults || (!loading && !error)) && grouped.map((group) => (
             <Fragment key={group.market}>
               <div className="sticky top-0 z-10 border-y border-card-border bg-secondary/90 px-4 py-2 text-xs font-black backdrop-blur">{GROUP_LABEL[group.market]}</div>
               {group.items.map(({ item, index }) => (
@@ -311,4 +339,3 @@ export function UnifiedAssetSearch({
     </div>
   );
 }
-
