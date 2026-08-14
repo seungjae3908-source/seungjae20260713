@@ -14,6 +14,7 @@ export const EXECUTION_ORDER_TYPES = Object.freeze(["MARKET", "LIMIT", "STOP_MAR
 
 export const FOUR_MARKET_EXECUTION_PROFILES = Object.freeze({
   KR_STOCK: Object.freeze({
+    marketAdapter: Object.freeze({ id: "kr-stock-toss-execution", version: "v2" }),
     provider: "toss",
     settlementCurrency: "KRW",
     directions: Object.freeze(["BUY", "SELL_EXIT"]),
@@ -23,6 +24,7 @@ export const FOUR_MARKET_EXECUTION_PROFILES = Object.freeze({
     requiresVolatilityInterruptionEvidence: true,
   }),
   US_STOCK: Object.freeze({
+    marketAdapter: Object.freeze({ id: "us-stock-toss-execution", version: "v2" }),
     provider: "toss",
     settlementCurrency: "USD",
     directions: Object.freeze(["BUY", "SELL_EXIT"]),
@@ -32,6 +34,7 @@ export const FOUR_MARKET_EXECUTION_PROFILES = Object.freeze({
     requiresVolatilityInterruptionEvidence: false,
   }),
   CRYPTO_SPOT: Object.freeze({
+    marketAdapter: Object.freeze({ id: "crypto-spot-upbit-execution", version: "v2" }),
     provider: "upbit",
     settlementCurrency: "KRW",
     directions: Object.freeze(["BUY", "SELL_EXIT"]),
@@ -41,6 +44,7 @@ export const FOUR_MARKET_EXECUTION_PROFILES = Object.freeze({
     requiresVolatilityInterruptionEvidence: false,
   }),
   CRYPTO_FUTURES: Object.freeze({
+    marketAdapter: Object.freeze({ id: "crypto-futures-bitget-execution", version: "v2" }),
     provider: "bitget",
     settlementCurrency: "USDT",
     directions: Object.freeze(["LONG", "SHORT"]),
@@ -169,17 +173,24 @@ function validateFuturesEvidence({ dataEvidence }, blockers) {
   addBlocker(blockers, positive(dataEvidence?.liquidationDistancePct), "BITGET_LIQUIDATION_DISTANCE_REQUIRED");
 }
 
-function validateFidelityEvidence({ stage, executionPolicy, dataEvidence }, blockers) {
+function validateFidelityEvidence({ stage, executionPolicy, dataEvidence, evaluatedAtMs }, blockers) {
   if (executionPolicy?.fillModel === "BAR_PROXY") {
     if (stage !== "BACKTEST") addBlocker(blockers, dataEvidence?.barProxyRealtimeAllowed === true, "REALTIME_BAR_PROXY_NOT_EVIDENCED");
     return;
   }
 
-  addBlocker(blockers, dataEvidence?.quoteEvidence?.available === true, "QUOTE_EVIDENCE_REQUIRED");
-  addBlocker(blockers, positive(dataEvidence?.quoteEvidence?.bid), "VALID_BID_REQUIRED");
-  addBlocker(blockers, positive(dataEvidence?.quoteEvidence?.ask), "VALID_ASK_REQUIRED");
-  if (positive(dataEvidence?.quoteEvidence?.bid) && positive(dataEvidence?.quoteEvidence?.ask)) {
-    addBlocker(blockers, dataEvidence.quoteEvidence.bid <= dataEvidence.quoteEvidence.ask, "CROSSED_QUOTE_FORBIDDEN");
+  const quote = dataEvidence?.quoteEvidence;
+  addBlocker(blockers, quote?.available === true, "QUOTE_EVIDENCE_REQUIRED");
+  addBlocker(blockers, positive(quote?.bid), "VALID_BID_REQUIRED");
+  addBlocker(blockers, positive(quote?.ask), "VALID_ASK_REQUIRED");
+  addBlocker(blockers, isFiniteNumber(quote?.asOfMs), "QUOTE_TIMESTAMP_REQUIRED");
+  addBlocker(blockers, positive(quote?.maxAgeMs), "QUOTE_MAX_AGE_REQUIRED");
+  if (isFiniteNumber(quote?.asOfMs)) {
+    addBlocker(blockers, quote.asOfMs <= evaluatedAtMs, "FUTURE_QUOTE_FORBIDDEN");
+    if (positive(quote?.maxAgeMs)) addBlocker(blockers, evaluatedAtMs - quote.asOfMs <= quote.maxAgeMs, "STALE_QUOTE_FORBIDDEN");
+  }
+  if (positive(quote?.bid) && positive(quote?.ask)) {
+    addBlocker(blockers, quote.bid <= quote.ask, "CROSSED_QUOTE_FORBIDDEN");
   }
 
   if (executionPolicy?.fillModel === "DEPTH_PARTICIPATION") {
@@ -193,7 +204,10 @@ export function buildFourMarketExecutionContext({
   market,
   stage,
   style,
+  timeframe,
+  horizon,
   direction,
+  marketAdapterIdentity,
   strategyIdentity,
   costPolicy,
   executionPolicy,
@@ -208,6 +222,10 @@ export function buildFourMarketExecutionContext({
   const profile = FOUR_MARKET_EXECUTION_PROFILES[market];
   const blockers = [];
   addBlocker(blockers, profile.directions.includes(direction), "DIRECTION_NOT_SUPPORTED");
+  addBlocker(blockers, nonEmptyString(timeframe), "TIMEFRAME_REQUIRED");
+  addBlocker(blockers, Number.isInteger(horizon) && horizon > 0, "HORIZON_REQUIRED");
+  addBlocker(blockers, marketAdapterIdentity?.id === profile.marketAdapter.id, "MARKET_ADAPTER_ID_MISMATCH");
+  addBlocker(blockers, marketAdapterIdentity?.version === profile.marketAdapter.version, "MARKET_ADAPTER_VERSION_MISMATCH");
   addBlocker(blockers, nonEmptyString(strategyIdentity?.strategyId), "STRATEGY_ID_REQUIRED");
   addBlocker(blockers, nonEmptyString(strategyIdentity?.strategyVersion), "STRATEGY_VERSION_REQUIRED");
   addBlocker(blockers, nonEmptyString(strategyIdentity?.parameterHash), "PARAMETER_HASH_REQUIRED");
@@ -220,21 +238,26 @@ export function buildFourMarketExecutionContext({
   if (market === "KR_STOCK" || market === "US_STOCK") validateStockEvidence({ market, stage, style, dataEvidence }, blockers);
   if (market === "CRYPTO_SPOT") validateSpotEvidence({ dataEvidence }, blockers);
   if (market === "CRYPTO_FUTURES") validateFuturesEvidence({ dataEvidence }, blockers);
-  validateFidelityEvidence({ stage, executionPolicy, dataEvidence }, blockers);
+  validateFidelityEvidence({ stage, executionPolicy, dataEvidence, evaluatedAtMs }, blockers);
 
   const parityPayload = Object.freeze({
     schemaVersion: 2,
     market,
     style,
+    timeframe: timeframe ?? null,
+    horizon: horizon ?? null,
     direction,
     provider: profile.provider,
+    marketAdapterId: marketAdapterIdentity?.id ?? null,
+    marketAdapterVersion: marketAdapterIdentity?.version ?? null,
     settlementCurrency: profile.settlementCurrency,
     strategyId: strategyIdentity?.strategyId ?? null,
     strategyVersion: strategyIdentity?.strategyVersion ?? null,
     parameterHash: strategyIdentity?.parameterHash ?? null,
+    researchCodeSha: immutableSha(strategyIdentity?.researchCodeSha) ? strategyIdentity.researchCodeSha.toLowerCase() : null,
     costPolicyVersion: costPolicy?.version ?? null,
     executionPolicyVersion: executionPolicy?.version ?? null,
-    fillModel: executionPolicy?.fillModel ?? null,
+    fillFidelity: executionPolicy?.fillModel ?? null,
     sameBarPolicy: executionPolicy?.sameBarPolicy ?? null,
     allowPartialFill: executionPolicy?.allowPartialFill ?? null,
     maxParticipationRate: executionPolicy?.maxParticipationRate ?? null,
@@ -249,9 +272,15 @@ export function buildFourMarketExecutionContext({
     market,
     stage,
     style,
+    timeframe: timeframe ?? null,
+    horizon: horizon ?? null,
     direction,
     provider: profile.provider,
     settlementCurrency: profile.settlementCurrency,
+    marketAdapterIdentity: Object.freeze({
+      id: marketAdapterIdentity?.id ?? null,
+      version: marketAdapterIdentity?.version ?? null,
+    }),
     profile,
     strategyIdentity: Object.freeze({
       strategyId: strategyIdentity?.strategyId ?? null,
@@ -281,14 +310,22 @@ export function compareExecutionStageParity(contexts = []) {
   const invalid = contexts.filter((context) => !context || context.schemaVersion !== 2 || typeof context.parityFingerprint !== "string");
   if (invalid.length > 0) throw new TypeError("valid execution contexts are required");
   const blockedStages = contexts.filter((context) => context.status !== "READY").map((context) => context.stage);
-  const reference = contexts[0].parityFingerprint;
+  const referenceContext = contexts[0];
+  const reference = referenceContext.parityFingerprint;
   const mismatchedStages = contexts.filter((context) => context.parityFingerprint !== reference).map((context) => context.stage);
+  const mismatchFields = [...new Set(contexts.slice(1).flatMap((context) =>
+    Object.keys(referenceContext.parityPayload)
+      .filter((field) => stableSerialize(referenceContext.parityPayload[field]) !== stableSerialize(context.parityPayload[field]))
+  ))].sort();
+  const comparable = blockedStages.length === 0 && mismatchedStages.length === 0;
   return Object.freeze({
-    status: blockedStages.length === 0 && mismatchedStages.length === 0 ? "READY" : "BLOCKED",
+    status: comparable ? "READY" : "PERFORMANCE_COMPARISON_BLOCKED",
+    reason: comparable ? null : "EXECUTION_POLICY_MISMATCH",
     parityFingerprint: mismatchedStages.length === 0 ? reference : null,
     blockedStages: Object.freeze(blockedStages),
     mismatchedStages: Object.freeze(mismatchedStages),
-    backtestPaperShadowComparable: blockedStages.length === 0 && mismatchedStages.length === 0,
+    mismatchFields: Object.freeze(mismatchFields),
+    backtestPaperShadowComparable: comparable,
     livePromotionAllowed: false,
   });
 }
@@ -327,8 +364,10 @@ function barProxyBasePrice(order, side, bar) {
   return Object.freeze({ status: "FILLED", price });
 }
 
-function quoteBasePrice(order, side, quote) {
-  if (!quote || !positive(quote.bid) || !positive(quote.ask) || quote.bid > quote.ask) {
+function quoteBasePrice(order, side, quote, evaluatedAtMs) {
+  if (!quote || !positive(quote.bid) || !positive(quote.ask) || quote.bid > quote.ask
+    || !isFiniteNumber(quote.asOfMs) || !positive(quote.maxAgeMs)
+    || quote.asOfMs > evaluatedAtMs || evaluatedAtMs - quote.asOfMs > quote.maxAgeMs) {
     return Object.freeze({ status: "BLOCKED", reason: "VALID_QUOTE_REQUIRED" });
   }
   if (order.type === "MARKET") return Object.freeze({ status: "FILLED", price: side === "BUY" ? quote.ask : quote.bid });
@@ -352,7 +391,7 @@ export function simulateFourMarketFill({ context, order, bar = null, quote = nul
 
   const side = normalizeSide(context.direction);
   const fillModel = context.executionPolicy.fillModel;
-  const base = fillModel === "BAR_PROXY" ? barProxyBasePrice(order, side, bar) : quoteBasePrice(order, side, quote);
+  const base = fillModel === "BAR_PROXY" ? barProxyBasePrice(order, side, bar) : quoteBasePrice(order, side, quote, context.evaluatedAtMs);
   if (base.status !== "FILLED") return Object.freeze({ ...base, orderSubmitted: false, exchangeRequestSent: false });
 
   let filledQuantity = order.quantity;
@@ -405,4 +444,25 @@ export function simulateFourMarketFill({ context, order, bar = null, quote = nul
     privateTradingRequestSent: false,
     liveExecution: false,
   });
+}
+
+export function resolveSameBarExit({ direction, open, high, low, stop, target } = {}) {
+  const validDirection = direction === "LONG" || direction === "SHORT";
+  const validOhlc = positive(open) && positive(high) && positive(low) && high >= low && open >= low && open <= high;
+  const validLevels = positive(stop) && positive(target);
+  if (!validDirection || !validOhlc || !validLevels) {
+    return Object.freeze({ status: "BLOCKED", reason: "INVALID_SAME_BAR_EVIDENCE", verdict: null, exitPrice: null });
+  }
+
+  const isLong = direction === "LONG";
+  const stopHit = isLong ? low <= stop : high >= stop;
+  const targetHit = isLong ? high >= target : low <= target;
+  if (stopHit) {
+    const exitPrice = isLong && open <= stop ? open : !isLong && open >= stop ? open : stop;
+    return Object.freeze({ status: "RESOLVED", verdict: "STOP", exitPrice, stopHit: true, targetHit });
+  }
+  if (targetHit) {
+    return Object.freeze({ status: "RESOLVED", verdict: "TARGET", exitPrice: target, stopHit: false, targetHit: true });
+  }
+  return Object.freeze({ status: "RESOLVED", verdict: "NEITHER", exitPrice: null, stopHit: false, targetHit: false });
 }
