@@ -7,7 +7,7 @@ import type {
 } from './signal-performance-learning.service';
 import { SIGNAL_PERFORMANCE_EXECUTION_AUTHORITY } from './signal-performance-learning.service';
 
-export type ProfitEvidenceStatus = 'READY' | 'INSUFFICIENT_SAMPLE' | 'NOT_EVIDENCED' | 'NO_VALIDATED_HISTORY';
+export type ProfitEvidenceStatus = 'READY' | 'INSUFFICIENT_SAMPLE' | 'NOT_EVIDENCED' | 'NO_VALIDATED_HISTORY' | 'DIRECTION_NOT_SUPPORTED';
 export type RuntimeEvidenceStatus = 'VALIDATED_RUNTIME' | 'NOT_EVIDENCED' | 'NO_VALIDATED_HISTORY';
 
 export interface TradingCostPolicy {
@@ -79,6 +79,11 @@ function mean(values: readonly number[]): number | null {
 
 function validNonNegative(value: number): boolean {
   return Number.isFinite(value) && value >= 0;
+}
+
+function directionSupported(market: SignalPerformanceMarket, direction: SignalPerformanceDirection): boolean {
+  if (market === 'CRYPTO_FUTURES') return direction === 'LONG' || direction === 'SHORT';
+  return direction === 'BUY' || direction === 'SELL';
 }
 
 export function validateTradingCostPolicy(policy: TradingCostPolicy): TradingCostPolicy {
@@ -181,6 +186,9 @@ export function calculateProfitEvidence(input: {
   minimumSampleSize?: number;
 }): ProfitEvidence {
   const minimumSampleSize = Math.max(1, input.minimumSampleSize ?? 30);
+  if (!directionSupported(input.market, input.direction)) {
+    return emptyEvidence({ ...input, status: 'DIRECTION_NOT_SUPPORTED', sampleSize: input.outcomes.length });
+  }
   if (input.evidenceStatus === 'NO_VALIDATED_HISTORY') {
     return emptyEvidence({ ...input, status: 'NO_VALIDATED_HISTORY', sampleSize: input.outcomes.length });
   }
