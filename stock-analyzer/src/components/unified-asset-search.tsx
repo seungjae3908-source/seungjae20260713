@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { AlertTriangle, Clock3, Loader2, Search, X } from 'lucide-react';
+import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import {
   fetchUnifiedAssetSuggestions,
@@ -19,6 +20,7 @@ import {
   type UnifiedAssetSuggestResponse,
   type UnifiedMarketFilter,
 } from '@/lib/unified-asset-search';
+import { allowedUnifiedSearchMarkets } from '@/lib/unified-search-capability';
 import {
   readWatchlistItems,
   WATCHLIST_CHANGE_EVENT,
@@ -91,7 +93,7 @@ function Highlight({ text, query }: { text: string; query: string }) {
 export function UnifiedAssetSearch({
   asset = 'all',
   market = null,
-  allowedMarkets = GROUP_ORDER,
+  allowedMarkets,
   placeholder = '종목명·티커·코인명·심볼 검색',
   autoFocus = false,
   onSelect,
@@ -103,6 +105,7 @@ export function UnifiedAssetSearch({
   autoFocus?: boolean;
   onSelect: (item: UnifiedAssetSuggestion) => void;
 }) {
+  const auth = useAuth();
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
@@ -118,7 +121,17 @@ export function UnifiedAssetSearch({
   const [watchlist, setWatchlist] = useState(() => readSearchWatchlist());
   const [popupStyle, setPopupStyle] = useState<CSSProperties>({});
   const trimmed = query.trim();
-  const allowedMarketSet = useMemo(() => new Set<UnifiedMarketFilter>(allowedMarkets), [allowedMarkets]);
+  const effectiveAllowedMarkets = useMemo(
+    () => allowedMarkets ?? allowedUnifiedSearchMarkets({
+      canAccessSpot: auth.permissions.canAccessSpot,
+      canAccessFutures: auth.permissions.canAccessFutures,
+    }),
+    [allowedMarkets, auth.permissions.canAccessFutures, auth.permissions.canAccessSpot],
+  );
+  const allowedMarketSet = useMemo(
+    () => new Set<UnifiedMarketFilter>(effectiveAllowedMarkets),
+    [effectiveAllowedMarkets],
+  );
 
   const filterResponse = useCallback((next: UnifiedAssetSuggestResponse): UnifiedAssetSuggestResponse => {
     const results = next.results.filter((item) => allowedMarketSet.has(item.market));
