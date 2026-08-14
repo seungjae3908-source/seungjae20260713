@@ -37,6 +37,8 @@ const ThemesPage = lazy(() => import('@/pages/themes'));
 const LearnPage = lazy(() => import('@/pages/learn'));
 const MorePage = lazy(() => import('@/pages/more'));
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
+const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
+const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
 const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
@@ -169,8 +171,9 @@ function ScannerAccess() {
 function AiChartAccess() { return gated('canAccessRiskPreview', builder('AI_CHART', <AiChartPage />)); }
 function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
-function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioPage />)); }
+function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioV2Page />)); }
 function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PortfolioPage />)); }
+function StrategyPromotionAccess() { return gated('canAccessBacktests', <StrategyPromotionPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingRouteFallback() {
   return (
@@ -267,6 +270,7 @@ function ApprovedRouter() {
     <Route path="/alerts" component={AlertsPage} />
     <Route path="/portfolio" component={PortfolioAccess} />
     <Route path="/position" component={PositionAccess} />
+    <Route path="/strategy-promotion" component={StrategyPromotionAccess} />
     <Route path="/account" component={AccountConnectionAccess} />
     <Route path="/admin/ui-layouts" component={UiBuilderAdminAccess} />
     <Route path="/admin" component={AdminAccess} />
