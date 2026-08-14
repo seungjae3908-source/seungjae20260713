@@ -24,6 +24,7 @@ import tradeAutomationRouter from './trade-automation';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
 import strategyPromotionRouter from './strategy-promotion';
+import portfolioIntelligenceRouter from './portfolio-intelligence';
 import unifiedSearchRouter from './unified-search';
 import accountConnectionsRouter from './account-connections';
 import {
@@ -134,6 +135,7 @@ router.use('/user-integrations', requireCapability('canPlaceOrders'));
 router.use('/user-integrations', userBrokerTelegramRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
+router.use('/', portfolioIntelligenceRouter);
 router.use('/', unifiedSearchRouter);
 router.use('/', aiChatRouter);
 router.use('/', marketRouter);
