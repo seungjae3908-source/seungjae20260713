@@ -23,6 +23,8 @@ import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
+import strategyPromotionRouter from './strategy-promotion';
+import portfolioIntelligenceRouter from './portfolio-intelligence';
 import unifiedSearchRouter from './unified-search';
 import accountConnectionsRouter from './account-connections';
 import {
@@ -66,6 +68,8 @@ router.use('/account-connections', accountConnectionsRouter);
 // bounded and cancellation aware. The legacy handler is no longer reachable.
 router.use('/market/scan', boundedMarketScanRouter);
 router.use('/scanner/crypto', cryptoSignalScanRouter);
+router.use('/strategy-promotion', requireCapability('canAccessBacktests'));
+router.use('/', strategyPromotionRouter);
 
 const privateExchangeDisabled = (_req: unknown, res: any) => res.status(403).json({
   ok: false,
@@ -131,6 +135,7 @@ router.use('/user-integrations', requireCapability('canPlaceOrders'));
 router.use('/user-integrations', userBrokerTelegramRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
+router.use('/', portfolioIntelligenceRouter);
 router.use('/', unifiedSearchRouter);
 router.use('/', aiChatRouter);
 router.use('/', marketRouter);
