@@ -1,0 +1,165 @@
+name: Prediction Lab Shadow OI Parity Fresh Public Validation
+
+on:
+  pull_request:
+    branches:
+      - research/shadow-oi-feature-parity-v1
+    paths:
+      - .github/workflows/prediction-lab-shadow-oi-parity-fresh-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-shadow-oi-parity-fresh-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fresh-public-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Record immutable validation SHA
+        id: sha
+        shell: bash
+        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate OI parity regression contract
+        working-directory: market-prediction-lab
+        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js
+
+      - name: Run isolated fresh-public Shadow inference
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          rm -rf /tmp/shadow-oi-parity-fresh
+          mkdir -p /tmp/shadow-oi-parity-fresh
+          cat > /tmp/shadow-oi-parity-fresh/state.json <<'JSON'
+          {"schemaVersion":3,"groups":{},"forwardStrategies":{}}
+          JSON
+          node scripts/run-shadow-cycle.js \
+            /tmp/shadow-oi-parity-fresh/state.json \
+            /tmp/shadow-oi-parity-fresh/summary.json
+
+      - name: Build fail-closed fresh-public parity evidence
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+
+          const state = JSON.parse(await readFile('/tmp/shadow-oi-parity-fresh/state.json', 'utf8'));
+          const cycleSummary = JSON.parse(await readFile('/tmp/shadow-oi-parity-fresh/summary.json', 'utf8'));
+          const groups = ['crypto-futures-15m', 'crypto-futures-1h'];
+          const classes = ['bullish', 'neutral', 'bearish'];
+          const evidence = {
+            schemaVersion: 1,
+            validationType: 'fresh_public_inference_only',
+            researchCodeSha: process.env.RESEARCH_SHA,
+            generatedAt: Date.now(),
+            provider: 'bitget-public-v2',
+            sourceStateWasEmpty: true,
+            sourceRepositoryStateMutated: false,
+            labelsSettled: false,
+            profitabilityEvidence: false,
+            neutralCollapseFixed: false,
+            groups: {},
+            safety: {
+              publicMarketDataOnly: true,
+              privateAccountRequests: 0,
+              privateTradingRequests: 0,
+              actualOrders: 0,
+              actualCancels: 0,
+              actualAmends: 0,
+              thresholdModified: false,
+              classWeightModified: false,
+              labelModified: false,
+              calibrationModified: false,
+              modelRetrained: false,
+              finalHoldoutUsedForSelection: false,
+            },
+          };
+
+          if (cycleSummary.status !== 'pass') {
+            throw new Error(`fresh public Shadow cycle failed: ${JSON.stringify(cycleSummary.groups)}`);
+          }
+
+          for (const group of groups) {
+            const groupState = state.groups?.[group];
+            const records = groupState?.records ?? [];
+            if (records.length !== 2) throw new Error(`${group} expected exactly BTC/ETH fresh records, got ${records.length}`);
+            const symbols = [...new Set(records.map((record) => record.symbol))].sort();
+            if (JSON.stringify(symbols) !== JSON.stringify(['BTCUSDT', 'ETHUSDT'])) {
+              throw new Error(`${group} symbol isolation failed: ${symbols.join(',')}`);
+            }
+            if (records.some((record) => record.status !== 'pending')) {
+              throw new Error(`${group} fresh records must remain pending; this validation must not fabricate future labels`);
+            }
+            if (records.some((record) => record.featureAvailability?.openInterestKnown !== false)) {
+              throw new Error(`${group} OI parity failed: live OI reached inference feature availability`);
+            }
+            if (records.some((record) => Object.prototype.hasOwnProperty.call(record.features ?? {}, 'openInterestChange'))) {
+              throw new Error(`${group} OI parity failed: openInterestChange reached candidate feature vector`);
+            }
+            const oiSnapshots = groupState?.openInterestSnapshots ?? [];
+            if (oiSnapshots.length < 2) {
+              throw new Error(`${group} expected public OI context to be collected before fail-closed suppression`);
+            }
+            const predictionCounts = Object.fromEntries(classes.map((name) => [name, records.filter((record) => record.candidateClass === name).length]));
+            const rows = records.map((record) => ({
+              symbol: record.symbol,
+              timeframe: record.timeframe,
+              anchorTimestamp: record.anchorTimestamp,
+              candidateClass: record.candidateClass,
+              candidateProbabilities: record.candidateProbabilities,
+              openInterestKnown: record.featureAvailability?.openInterestKnown ?? null,
+              openInterestTimestamp: record.featureAvailability?.openInterestTimestamp ?? null,
+              fundingKnown: record.featureAvailability?.fundingKnown ?? null,
+              fundingTimestamp: record.featureAvailability?.fundingTimestamp ?? null,
+              modelId: record.modelId,
+              referenceModelId: record.referenceModelId,
+            }));
+            evidence.groups[group] = {
+              freshPredictionCount: records.length,
+              settledCount: 0,
+              predictionCounts,
+              publicOpenInterestSnapshotCount: oiSnapshots.length,
+              openInterestSuppressedAtInferenceCount: records.filter((record) => record.featureAvailability?.openInterestKnown === false).length,
+              rows,
+            };
+          }
+
+          await writeFile('/tmp/shadow-oi-parity-fresh/evidence.json', `${JSON.stringify(evidence, null, 2)}\n`);
+          console.log(JSON.stringify(evidence, null, 2));
+          NODE
+
+      - name: Assert repository tree was not mutated by validation
+        shell: bash
+        run: git diff --exit-code
+
+      - name: Upload immutable fresh-public parity artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-shadow-oi-parity-fresh-${{ github.run_id }}
+          path: /tmp/shadow-oi-parity-fresh/evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert exact validation HEAD
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
