@@ -18,6 +18,22 @@ function fulfill(route: Route, body: unknown) {
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
+async function installAdminAuth(page: import('@playwright/test').Page) {
+  const userId = '97979797-9797-4797-8797-979797979797';
+  await page.addInitScript(({ id }) => {
+    const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+    const expiresAt = 4_102_444_800;
+    const accessToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: id, role: 'authenticated', exp: expiresAt })}.e2e`;
+    window.localStorage.setItem('sb-127-auth-token', JSON.stringify({ access_token: accessToken, refresh_token: 'global-loading-refresh', expires_in: 3600, expires_at: expiresAt, token_type: 'bearer', user: { id, aud: 'authenticated', role: 'authenticated', email: 'loading@e2e.invalid', app_metadata: {}, user_metadata: {}, identities: [], created_at: '2026-08-15T00:00:00.000Z' } }));
+  }, { id: userId });
+  await page.route('**/__e2e-supabase/**', (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith('/rest/v1/profiles')) return fulfill(route, { id: userId, login_name: 'loading-admin', display_name: 'Loading Admin', role: 'admin', status: 'approved', membership_level: 'admin', is_active: true });
+    if (pathname.endsWith('/auth/v1/user')) return fulfill(route, { id: userId, aud: 'authenticated', role: 'authenticated', email: 'loading@e2e.invalid', app_metadata: {}, user_metadata: {}, identities: [] });
+    return fulfill(route, { ok: true });
+  });
+}
+
 test('all frontend interval queries are foreground-only', () => {
   for (const relativePath of frontendSources('src')) {
     expect(source(relativePath), relativePath).not.toContain('refetchIntervalInBackground: true');
@@ -40,6 +56,7 @@ test('detail query lifecycle forwards cancellation and exposes accessible loadin
 });
 
 test('delayed first detail load shows a structured skeleton instead of a blocking spinner', async ({ page }) => {
+  await installAdminAuth(page);
   let delayed = false;
   await page.route('**/api/quotes?**', async (route) => {
     if (!delayed) {
@@ -60,6 +77,7 @@ test('delayed first detail load shows a structured skeleton instead of a blockin
 });
 
 test('rapid detail navigation keeps obsolete responses from replacing the latest symbol', async ({ page }) => {
+  await installAdminAuth(page);
   await page.route('**/api/quotes?**', async (route) => {
     const url = new URL(route.request().url());
     const ticker = url.searchParams.get('tickers') ?? '';
