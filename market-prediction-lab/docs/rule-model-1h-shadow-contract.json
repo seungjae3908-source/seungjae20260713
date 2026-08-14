@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "contractVersion": "forward-only-1h-rule0-v1",
+  "draftArtifactChainNegativeProbe": true,
   "market": "CRYPTO_FUTURES",
   "symbols": ["BTCUSDT", "ETHUSDT"],
   "timeframe": "1h",
