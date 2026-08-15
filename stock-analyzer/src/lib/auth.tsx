@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { ProfileRequestCoordinator } from '@/lib/profile-request-coordinator';
+import { userIntegrationsRequestLifecycle } from '@/lib/user-integrations-request-lifecycle';
 import {
   AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
   authBootstrapErrorMessage,
@@ -124,7 +125,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function applySession(next: Session | null) {
     sessionRef.current = next;
     setSession(next);
-    profileRequestsRef.current.setIdentity(next?.user.id ?? null, profileRequestKey(next));
+    const requestKey = profileRequestKey(next);
+    profileRequestsRef.current.setIdentity(next?.user.id ?? null, requestKey);
+    userIntegrationsRequestLifecycle.setIdentity(next?.user.id ?? null, requestKey);
     if (!next) applyProfile(null);
   }
 
@@ -321,25 +324,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const backupDrain = prepareBackupForSessionEnd();
           const coordinatorDrain = profileRequestsRef.current.beginLogout();
+          const integrationsDrain = userIntegrationsRequestLifecycle.beginLogout();
           await profileLoadQueueRef.current;
           await Promise.all([
             coordinatorDrain,
             backupDrain,
+            integrationsDrain,
           ]);
           const { error } = await getSupabase().auth.signOut();
           if (error) throw error;
           applySession(null);
           profileRequestsRef.current.finishLogout();
+          userIntegrationsRequestLifecycle.finishLogout();
         } catch (cause) {
           const { data } = await getSupabase().auth.getSession();
           const restored = data.session ?? previousSession;
           const restoredRequestKey = profileRequestKey(restored) ?? previousRequestKey;
           if (restored && restoredRequestKey) {
             profileRequestsRef.current.restoreAfterFailedLogout(restored.user.id, restoredRequestKey);
+            userIntegrationsRequestLifecycle.restoreAfterFailedLogout(restored.user.id, restoredRequestKey);
             applySession(restored);
             resumeBackupForSession(restored.user.id);
           } else {
             profileRequestsRef.current.finishLogout();
+            userIntegrationsRequestLifecycle.finishLogout();
             applySession(null);
           }
           throw cause;
