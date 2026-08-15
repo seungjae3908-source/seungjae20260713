@@ -245,10 +245,9 @@ if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]; then
     exit 0
   fi
   echo "[deploy] runtime identity or Telegram activation is stale; refreshing PM2 environment for the already-active target"
-  LIVE_TELEGRAM_ACTIVATION_APPROVED=true \
-    TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true \
-    DEPLOY_SHA="$TARGET_SHA" \
-    pm2 restart "$PM2_NAME" --update-env
+  export LIVE_TELEGRAM_ACTIVATION_APPROVED=true
+  export TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true
+  DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
   pm2 save
   probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA"
   probe_data "http://127.0.0.1:$LIVE_PORT"
@@ -373,10 +372,9 @@ set +e
   cp -a "$RELEASE_DIR/stock-analyzer/dist" "$LIVE_DIR/stock-analyzer/dist"
   printf '%s\n' "$TARGET_SHA" > "$DEPLOY_STATE_DIR/current-sha"
 
-  LIVE_TELEGRAM_ACTIVATION_APPROVED=true \
-    TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true \
-    DEPLOY_SHA="$TARGET_SHA" \
-    pm2 restart "$PM2_NAME" --update-env
+  export LIVE_TELEGRAM_ACTIVATION_APPROVED=true
+  export TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true
+  DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
   pm2 save
 
   probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA"
