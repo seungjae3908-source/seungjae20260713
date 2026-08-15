@@ -35,7 +35,11 @@ let accounts = emptyAccounts;
 let accountLifecycle: StagingAccountLifecycle | null = null;
 
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
-type LogoutObservation = { candidates: Diagnostic[] };
+type LogoutObservation = {
+  candidates: Diagnostic[];
+  origin: string;
+  personalIntegrationReads: Set<Request>;
+};
 type RouteTransitionObservation = {
   fromRoute: string;
   toRoute: string;
@@ -50,6 +54,7 @@ type AuthFaultObservation = {
   failedAt: number | null;
 };
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
+const confirmedLogoutAbortRequests = new WeakMap<Request, string>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
 const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
@@ -105,7 +110,20 @@ function diagnosticText(raw: string) {
     .replace(/((?:authorization|apikey|api[_-]?key|token|password|secret|key)\s*[:=]\s*)([^\s,;]+)/gi, '$1[redacted]');
 }
 
-function isExpectedLogoutAbort(request: Request) {
+function isPersonalIntegrationLogoutRead(request: Request, expectedOrigin: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(request.url());
+  } catch {
+    return false;
+  }
+  return request.method() === 'GET'
+    && parsed.pathname === '/api/user-integrations'
+    && parsed.searchParams.size === 0
+    && parsed.origin === expectedOrigin;
+}
+
+function isExpectedLogoutAbort(request: Request, observation: LogoutObservation) {
   let parsed: URL;
   try {
     parsed = new URL(request.url());
@@ -119,11 +137,16 @@ function isExpectedLogoutAbort(request: Request) {
     && query.length === 1
     && query[0]?.[0] === 'scope'
     && query[0]?.[1] === 'global';
-  const abortedPersonalIntegrationRead = request.method() === 'GET'
-    && parsed.pathname === '/api/user-integrations'
-    && query.length === 0
-    && parsed.origin === new URL(request.frame().url()).origin;
+  const abortedPersonalIntegrationRead = observation.personalIntegrationReads.has(request)
+    && isPersonalIntegrationLogoutRead(request, observation.origin);
   return aborted && (abortedLogoutRequest || abortedPersonalIntegrationRead);
+}
+
+function isConfirmedLogoutAbort(request: Request) {
+  const expectedOrigin = confirmedLogoutAbortRequests.get(request);
+  return expectedOrigin !== undefined
+    && request.failure()?.errorText === 'net::ERR_ABORTED'
+    && isPersonalIntegrationLogoutRead(request, expectedOrigin);
 }
 
 function isProfileRequest(request: Request) {
@@ -195,6 +218,13 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   pendingMutatingRequests.set(page, mutations);
   pendingApiGetRequests.set(page, apiGets);
   page.on('request', (request) => {
+    const logoutObservation = activeLogoutObservations.get(page);
+    if (
+      logoutObservation
+      && isPersonalIntegrationLogoutRead(request, logoutObservation.origin)
+    ) {
+      logoutObservation.personalIntegrationReads.add(request);
+    }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
     if (isSameOriginApiGet(request)) apiGets.add(request);
   });
@@ -241,8 +271,12 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       detail,
     };
     const logoutObservation = activeLogoutObservations.get(page);
-    if (logoutObservation && isExpectedLogoutAbort(request)) {
+    if (logoutObservation && isExpectedLogoutAbort(request, logoutObservation)) {
       logoutObservation.candidates.push(diagnostic);
+      return;
+    }
+    if (isConfirmedLogoutAbort(request)) {
+      diagnostics.expected_logout_aborts.push(diagnostic);
       return;
     }
     const authFault = activeAuthFaultObservations.get(page);
@@ -307,7 +341,11 @@ async function login(page: Page, loginName: string, password: string) {
 async function logout(page: Page) {
   const logoutButton = page.getByRole('button', { name: /로그아웃|sign out/i });
   await expect(logoutButton).toBeVisible();
-  const observation: LogoutObservation = { candidates: [] };
+  const observation: LogoutObservation = {
+    candidates: [],
+    origin: new URL(page.url()).origin,
+    personalIntegrationReads: new Set<Request>(),
+  };
   activeLogoutObservations.set(page, observation);
   let confirmed = false;
   try {
@@ -326,6 +364,9 @@ async function logout(page: Page) {
       `protected API remained accessible after logout: ${protectedResponse.status()}`,
     ).toContain(protectedResponse.status());
 
+    for (const request of observation.personalIntegrationReads) {
+      confirmedLogoutAbortRequests.set(request, observation.origin);
+    }
     confirmed = true;
     diagnostics.expected_logout_aborts.push(...observation.candidates);
   } finally {
