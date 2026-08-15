@@ -135,27 +135,27 @@ for (const viewport of [
 
     const sheet = page.getByTestId('scanner-mobile-sheet');
     await expect(sheet).toBeVisible();
-    const tabs = page.getByTestId('scanner-mobile-detail-tabs');
+    const tabs = sheet.getByTestId('scanner-mobile-detail-tabs');
     await expect(tabs).toBeVisible();
     await expect(tabs.getByRole('tab')).toHaveCount(5);
     await expect(tabs.getByRole('tab', { name: '요약' })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByTestId('scanner-mobile-summary')).toBeVisible();
-    await expect(page.getByTestId('scanner-mobile-performance')).toHaveCount(0);
+    await expect(sheet.getByTestId('scanner-mobile-summary')).toBeVisible();
+    await expect(sheet.getByTestId('scanner-mobile-performance')).toHaveCount(0);
 
     await tabs.getByRole('tab', { name: '성과' }).click();
     await expect(tabs.getByRole('tab', { name: '성과' })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByTestId('scanner-mobile-performance')).toContainText('61.2%');
-    await expect(page.getByTestId('scanner-mobile-performance')).toContainText('184');
-    await expect(page.getByTestId('scanner-mobile-summary')).toHaveCount(0);
+    await expect(sheet.getByTestId('scanner-mobile-performance')).toContainText('61.2%');
+    await expect(sheet.getByTestId('scanner-mobile-performance')).toContainText('184');
+    await expect(sheet.getByTestId('scanner-mobile-summary')).toHaveCount(0);
 
     await tabs.getByRole('tab', { name: '근거' }).click();
-    await expect(page.getByTestId('scanner-mobile-evidence')).toContainText('중기 추세가 상승 방향으로 정렬됨');
+    await expect(sheet.getByTestId('scanner-mobile-evidence')).toContainText('중기 추세가 상승 방향으로 정렬됨');
 
     await tabs.getByRole('tab', { name: '차트' }).click();
-    await expect(page.getByTestId('scanner-mobile-chart').getByRole('button', { name: 'AI 차트 분석기에서 보기' })).toBeVisible();
+    await expect(sheet.getByTestId('scanner-mobile-chart').getByRole('button', { name: 'AI 차트 분석기에서 보기' })).toBeVisible();
 
     await tabs.getByRole('tab', { name: '위험' }).click();
-    await expect(page.getByTestId('scanner-mobile-risk')).toContainText('실적 발표 일정 확인 필요');
+    await expect(sheet.getByTestId('scanner-mobile-risk')).toContainText('실적 발표 일정 확인 필요');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   });
 }
