@@ -1,5 +1,5 @@
 import { createSearchFunnel, evaluateProfitGate } from "./meaningful-search-profit-gate-v1.js";
-import { primarySecondaryReasons } from "./public-coverage-audit-v1.js";
+import { primarySecondaryReasons, summarizeProviderFailureClassifications } from "./public-coverage-audit-v1.js";
 
 const MARKETS = Object.freeze(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
 
@@ -96,7 +96,8 @@ export async function runCanonicalMeaningfulSearchMarket({
   let providerSuccess = 0;
   let providerFailed = 0;
   let optionalProviderMissing = 0;
-  let executionPartial = false;
+  let executionReportedPartial = false;
+  let executionHardPartial = false;
   let historySufficient = 0;
   let historyInsufficient = 0;
   let dataQualityPass = 0;
@@ -152,9 +153,8 @@ export async function runCanonicalMeaningfulSearchMarket({
       : execution.providerFailureClassifications;
     addCounts(providerFailureClassifications, classifiedProviderFailures);
     const hasClassifiedProviderFailures = Object.keys(classifiedProviderFailures ?? {}).length > 0;
-    executionPartial ||= execution.partial === true
-      || execution.timedOut === true
-      || execution.cancelled === true;
+    executionReportedPartial ||= execution.partial === true;
+    executionHardPartial ||= execution.timedOut === true || execution.cancelled === true;
     const historyOk = Number.isInteger(audit.historyOkCount) ? integer(audit.historyOkCount) : Math.max(0, succeeded - insufficient);
     const historyFail = Number.isInteger(audit.historyFailCount) ? integer(audit.historyFailCount) : insufficient;
     historyInsufficient += historyFail;
@@ -183,7 +183,10 @@ export async function runCanonicalMeaningfulSearchMarket({
       const reason = failureReason(failure);
       reject(primaryRejectReasons, reason);
       for (const secondary of failure?.secondaryRejectReasons ?? []) reject(secondaryRejectReasons, secondary);
-      if (!hasClassifiedProviderFailures && ["REQUIRED_PROVIDER_FAILURE", "FALLBACK_FAILED", "RATE_LIMITED", "TIMEOUT", "BAD_RESPONSE", "INSUFFICIENT_HISTORY"].includes(reason)) {
+      if (!hasClassifiedProviderFailures && [
+        "REQUIRED_PROVIDER_FAILURE", "FALLBACK_FAILED", "RATE_LIMITED", "TIMEOUT", "CONNECTION_ERROR",
+        "BAD_RESPONSE", "INSUFFICIENT_HISTORY", "SYMBOL_UNSUPPORTED", "DELISTED_OR_INACTIVE", "MARKET_NOT_SUPPORTED",
+      ].includes(reason)) {
         reject(providerFailureClassifications, reason);
       }
     }
@@ -246,7 +249,16 @@ export async function runCanonicalMeaningfulSearchMarket({
   const unexplainedSkipped = Math.max(0, universeCount - providerRequested - requestSkipped);
   const paginationComplete = paginationEnded && universeAttempted >= universeCount;
   const coverageComplete = universeCount > 0 && paginationComplete && unexplainedSkipped === 0;
-  const providerIntegrityComplete = providerFailed === 0 && !executionPartial;
+  const providerFailureSummary = summarizeProviderFailureClassifications(providerFailureClassifications);
+  const hasProviderFailureClassifications = Object.keys(providerFailureClassifications).length > 0;
+  const unresolvedRequiredFailures = hasProviderFailureClassifications
+    ? providerFailureSummary.unresolvedRequiredFailures
+    : providerFailed;
+  const explainedProviderExclusions = providerFailureSummary.explainedUnsupported;
+  const executionPartial = executionHardPartial || (executionReportedPartial && unresolvedRequiredFailures > 0);
+  const providerIntegrityComplete = unresolvedRequiredFailures === 0
+    && requestNotStarted === 0
+    && !executionPartial;
   const universeProviderFailed = universePartial
     || !coverageComplete
     || !providerIntegrityComplete
@@ -288,8 +300,13 @@ export async function runCanonicalMeaningfulSearchMarket({
     providerCompleted,
     providerSuccess,
     providerFailed,
+    explainedProviderExclusions,
+    unresolvedRequiredFailures,
     optionalProviderMissing,
     providerFailureClassifications: freeze(providerFailureClassifications),
+    providerFailureSummary: freeze(providerFailureSummary),
+    executionReportedPartial,
+    executionPartial,
     providerIntegrityComplete,
     historySufficient,
     historyInsufficient,
@@ -329,6 +346,9 @@ export async function runCanonicalMeaningfulSearchMarket({
       secondaryRejectReasons: "NON_EXCLUSIVE_EVIDENCE",
       hardRejectReasons: "EXACT_WHEN_AUDIT_STAGE_EMITS",
       dataQualityAndLiquidityCounters: "LEGACY_COMPATIBILITY_PROXY",
+      providerFailed: "RAW_REQUIRED_FAILURE_COMPATIBILITY_COUNT",
+      explainedProviderExclusions: "UNSUPPORTED_OR_INSUFFICIENT_REAL_MARKET_DATA",
+      unresolvedRequiredFailures: "REQUIRED_PROVIDER_OUTAGES_ONLY",
     }),
     orderSubmitted: false,
     exchangeRequestSent: false,
