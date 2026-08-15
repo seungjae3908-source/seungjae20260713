@@ -12,6 +12,7 @@ export function ResponsiveTabs<T extends string>({
   ariaLabel,
   testId,
   className,
+  compact = false,
 }: {
   value: T;
   options: readonly ResponsiveTabOption<T>[];
@@ -19,6 +20,7 @@ export function ResponsiveTabs<T extends string>({
   ariaLabel: string;
   testId?: string;
   className?: string;
+  compact?: boolean;
 }) {
   return (
     <div
@@ -26,7 +28,8 @@ export function ResponsiveTabs<T extends string>({
       aria-label={ariaLabel}
       data-testid={testId}
       className={cn(
-        'no-scrollbar flex min-w-0 gap-1 overflow-x-auto overscroll-x-contain rounded-2xl border border-card-border bg-card p-1 lg:grid lg:overflow-visible',
+        'no-scrollbar flex min-w-0 gap-1 overflow-x-auto overscroll-x-contain border border-card-border lg:grid lg:overflow-visible',
+        compact ? 'rounded-xl bg-background p-0.5' : 'rounded-2xl bg-card p-1',
         options.length === 2 && 'lg:grid-cols-2',
         options.length === 3 && 'lg:grid-cols-3',
         options.length === 4 && 'lg:grid-cols-4',
@@ -45,7 +48,8 @@ export function ResponsiveTabs<T extends string>({
             aria-selected={selected}
             onClick={() => onChange(option.value)}
             className={cn(
-              'min-h-11 min-w-[76px] shrink-0 rounded-xl px-3 text-xs font-black transition-colors lg:min-w-0',
+              'min-h-11 shrink-0 rounded-xl text-xs font-black transition-colors lg:min-w-0',
+              compact ? 'min-w-[88px] px-3' : 'min-w-[76px] px-3',
               selected
                 ? 'bg-primary text-primary-foreground shadow-sm'
                 : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
