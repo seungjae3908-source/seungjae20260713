@@ -62,7 +62,10 @@ export async function collectUpbitSpotHistory(raw = {}) {
   while (cursor > startTime && pages < maxPages) {
     const to = new Date(cursor).toISOString();
     const url = `${BASE_URL}/v1/candles/minutes/240?market=${encodeURIComponent(market)}&to=${encodeURIComponent(to)}&count=${PAGE_SIZE}`;
-    const response = await fetchImpl(url, { headers: { accept: "application/json", "user-agent": "seungjae-prediction-lab/1.0" } });
+    const response = await fetchImpl(url, {
+      signal: raw.signal,
+      headers: { accept: "application/json", "user-agent": "seungjae-prediction-lab/1.0" },
+    });
     if (!response.ok) throw new Error(`UPBIT_HISTORY_HTTP_${response.status}`);
     const rows = await response.json();
     if (!Array.isArray(rows)) throw new Error("UPBIT_HISTORY_INVALID_RESPONSE");
