@@ -7,6 +7,7 @@ import {
   InvestmentCopilotQueryError,
   queryInvestmentCopilot,
 } from '../services/investment-copilot-query.service.ts';
+import { AiChatError, answerAiChat } from '../services/ai-chat.service.ts';
 import {
   AdvisorContextError,
   buildCanonicalJournalPortfolioAdvisor,
@@ -76,6 +77,9 @@ function failure(
   if (cause instanceof InvestmentCopilotQueryError) {
     return response.status(cause.statusCode).json(wrap({ ok: false, code: cause.code, message: cause.message }));
   }
+  if (cause instanceof AiChatError) {
+    return response.status(cause.statusCode).json(wrap({ ok: false, code: cause.code, message: cause.message }));
+  }
   if (cause instanceof Error && cause.message.startsWith('PORTFOLIO_HOLDINGS_READ_FAILED:')) {
     return response.status(503).json(wrap({ ok: false, code: 'PORTFOLIO_HOLDINGS_UNAVAILABLE', message: '포트폴리오 보유 데이터를 읽지 못했습니다.' }));
   }
@@ -124,11 +128,24 @@ export function registerCanonicalPortfolioAdvisorRoute(router: IRouter, dependen
 
       const snapshot = await buildPortfolioIntelligence({ accessToken: request.accessToken });
       const result = queryInvestmentCopilot(snapshot, body.message);
+      const ai = await answerAiChat({
+        message: body.message,
+        portfolioAssistantContext: {
+          ...result.assistantContext,
+          readOnly: true,
+          orderAuthority: 'none',
+          exchangeRequestSent: false,
+        },
+      }, fetch);
       return response.json(copilotEnvelope({
         ok: true,
-        result,
+        result: {
+          ...result,
+          ai,
+          safety: { ...result.safety, externalAiCalled: true },
+        },
         sourceOfTruth: 'PORTFOLIO_INTELLIGENCE_V2',
-        providerBridgeStatus: 'NOT_CALLED_BY_THIS_READ_ONLY_ROUTE',
+        providerBridgeStatus: 'CALLED_EXISTING_AI_CHAT_SEAM',
       }));
     } catch (cause) {
       return failure(response, cause, copilotEnvelope);
