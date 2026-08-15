@@ -79,9 +79,16 @@ async function diagnoseSpot(limit = 30) {
   return { market: "CRYPTO_SPOT", successesBeforeSampleCap: successes, failures };
 }
 
-const report = {
-  generatedAt: new Date().toISOString(),
-  safety: { liveTrading: false, realOrder: false, privateApi: false, financialMutationCount: 0 },
-  results: [await diagnoseKr(), await diagnoseSpot()],
-};
-process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+async function main() {
+  const report = {
+    generatedAt: new Date().toISOString(),
+    safety: { liveTrading: false, realOrder: false, privateApi: false, financialMutationCount: 0 },
+    results: [await diagnoseKr(), await diagnoseSpot()],
+  };
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
