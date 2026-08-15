@@ -35,10 +35,7 @@ let accounts = emptyAccounts;
 let accountLifecycle: StagingAccountLifecycle | null = null;
 
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
-type LogoutObservation = {
-  candidates: Diagnostic[];
-  pendingGetRequests: Set<Request>;
-};
+type LogoutObservation = { candidates: Diagnostic[] };
 type RouteTransitionObservation = {
   fromRoute: string;
   toRoute: string;
@@ -108,7 +105,7 @@ function diagnosticText(raw: string) {
     .replace(/((?:authorization|apikey|api[_-]?key|token|password|secret|key)\s*[:=]\s*)([^\s,;]+)/gi, '$1[redacted]');
 }
 
-function isExpectedLogoutAbort(request: Request, observation: LogoutObservation) {
+function isExpectedLogoutAbort(request: Request) {
   let parsed: URL;
   try {
     parsed = new URL(request.url());
@@ -122,10 +119,10 @@ function isExpectedLogoutAbort(request: Request, observation: LogoutObservation)
     && query.length === 1
     && query[0]?.[0] === 'scope'
     && query[0]?.[1] === 'global';
-  const abortedPersonalIntegrationRead = observation.pendingGetRequests.has(request)
-    && request.method() === 'GET'
+  const abortedPersonalIntegrationRead = request.method() === 'GET'
     && parsed.pathname === '/api/user-integrations'
-    && query.length === 0;
+    && query.length === 0
+    && parsed.origin === new URL(request.frame().url()).origin;
   return aborted && (abortedLogoutRequest || abortedPersonalIntegrationRead);
 }
 
@@ -244,7 +241,7 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       detail,
     };
     const logoutObservation = activeLogoutObservations.get(page);
-    if (logoutObservation && isExpectedLogoutAbort(request, logoutObservation)) {
+    if (logoutObservation && isExpectedLogoutAbort(request)) {
       logoutObservation.candidates.push(diagnostic);
       return;
     }
@@ -310,10 +307,7 @@ async function login(page: Page, loginName: string, password: string) {
 async function logout(page: Page) {
   const logoutButton = page.getByRole('button', { name: /로그아웃|sign out/i });
   await expect(logoutButton).toBeVisible();
-  const observation: LogoutObservation = {
-    candidates: [],
-    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
-  };
+  const observation: LogoutObservation = { candidates: [] };
   activeLogoutObservations.set(page, observation);
   let confirmed = false;
   try {
