@@ -4,6 +4,7 @@ import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
+import { useAssetMode } from '@/lib/asset-mode';
 import {
   unifiedAssetDetailPath,
   type UnifiedAssetFilter,
@@ -27,12 +28,37 @@ function assetForMarket(market: UnifiedMarketFilter | null): UnifiedAssetFilter 
 }
 
 export default function UnifiedAssetSearchPage() {
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
+  const assetMode = useAssetMode();
   const [market, setMarket] = useState<UnifiedMarketFilter | null>(null);
   const asset = useMemo(() => assetForMarket(market), [market]);
+  const backPath = location.startsWith('/__phase11-unified-search-e2e')
+    ? '/search'
+    : location.startsWith('/search')
+      ? '/search'
+      : '/stocks';
+
+  const selectMarket = (nextMarket: UnifiedMarketFilter | null) => {
+    setMarket(nextMarket);
+    if (nextMarket === 'KR' || nextMarket === 'US') {
+      assetMode.setAsset('stock');
+      assetMode.setStockMarket(nextMarket);
+    }
+    if (nextMarket === 'spot' || nextMarket === 'futures') {
+      assetMode.setAsset('coin');
+      assetMode.setCoinMarket(nextMarket);
+    }
+  };
 
   const openAsset = (item: UnifiedAssetSuggestion) => {
-    navigate(unifiedAssetDetailPath(item, '/stocks'));
+    if (item.assetType === 'stock') {
+      assetMode.setAsset('stock');
+      assetMode.setStockMarket(item.market === 'US' ? 'US' : 'KR');
+    } else {
+      assetMode.setAsset('coin');
+      assetMode.setCoinMarket(item.market === 'futures' ? 'futures' : 'spot');
+    }
+    navigate(unifiedAssetDetailPath(item, backPath));
   };
 
   return (
@@ -54,7 +80,7 @@ export default function UnifiedAssetSearchPage() {
                 key={item.label}
                 type="button"
                 aria-pressed={market === item.key}
-                onClick={() => setMarket(item.key)}
+                onClick={() => selectMarket(item.key)}
                 className={cn(
                   'min-h-11 shrink-0 snap-start rounded-xl border px-4 text-sm font-black transition',
                   market === item.key
