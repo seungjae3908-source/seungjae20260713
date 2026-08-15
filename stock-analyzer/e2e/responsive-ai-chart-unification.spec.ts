@@ -13,6 +13,10 @@ const canonicalChartSource = readFileSync(
   new URL('../src/components/canonical-market-chart.tsx', import.meta.url),
   'utf8',
 );
+const richDetailSource = readFileSync(
+  new URL('../src/pages/detail.tsx', import.meta.url),
+  'utf8',
+);
 
 const safeTradeAutomationStatus = {
   policy: {
@@ -114,6 +118,15 @@ test('market price charts use the canonical AI Chart surface instead of legacy c
   expect(chartTabSource).not.toContain("from '@/components/charts'");
   expect(canonicalChartSource).toContain('UnifiedAnalysisChart');
   expect(canonicalChartSource).toContain('AI Chart 2.0');
+});
+
+test('rich stock analysis preserves legacy information tabs but bridges its chart tab to AI Chart 2.0', async () => {
+  expect(richDetailSource).toContain("import LegacyDetailPage from '@/pages/detail-legacy'");
+  expect(richDetailSource).toContain("button.textContent?.trim() !== '차트'");
+  expect(richDetailSource).toContain('<AiChartPage embedded />');
+  expect(richDetailSource).toContain('canonical-rich-detail-chart');
+  expect(richDetailSource).not.toContain('createChart(');
+  expect(richDetailSource).not.toContain("from 'lightweight-charts'");
 });
 
 test('technical workspace removes the legacy scanner chart and exposes dedicated mobile workspaces', async () => {
