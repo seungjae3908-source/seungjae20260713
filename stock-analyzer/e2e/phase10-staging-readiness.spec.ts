@@ -685,6 +685,7 @@ test.describe('real staging release readiness', () => {
       await waitForPendingPersonalIntegrationReads(page);
       await page.reload();
       await settle(page);
+      await waitForPendingPersonalIntegrationReads(page);
       await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
       await logout(page);
