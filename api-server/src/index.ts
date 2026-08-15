@@ -8,6 +8,7 @@ import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-quer
 import { startUserTelegramDeliveryWorker } from './features/user-broker-telegram/user-broker-telegram.worker';
 import { startPriceAlertMonitor } from './services/notification.service';
 import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
+import { startTelegramIntelligenceWorker } from './services/telegram-intelligence-worker.service';
 import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -219,6 +220,7 @@ app.listen(
     startPriceAlertMonitor();
     startTradeRecoveryWorker();
     startUserTelegramDeliveryWorker();
+    startTelegramIntelligenceWorker();
 
     if (frontendDist) {
       console.log(
