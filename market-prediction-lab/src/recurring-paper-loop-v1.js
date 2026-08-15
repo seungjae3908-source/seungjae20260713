@@ -211,6 +211,7 @@ export async function runRecurringPaperCycle({
   candidates = [],
   exits = [],
   ledgerAdapter,
+  learningAdapter,
   stateStore,
 } = {}) {
   validateState(predecessor);
@@ -220,6 +221,9 @@ export async function runRecurringPaperCycle({
   }
   if (!ledgerAdapter || typeof ledgerAdapter.applyEntry !== "function" || typeof ledgerAdapter.applySettlement !== "function") {
     throw new Error("PAPER_LOOP_LEDGER_ADAPTER_REQUIRED");
+  }
+  if (!learningAdapter || typeof learningAdapter.persistSignal !== "function" || typeof learningAdapter.persistOutcome !== "function") {
+    throw new Error("PAPER_LOOP_LEARNING_ADAPTER_REQUIRED");
   }
   if (!stateStore || typeof stateStore.save !== "function") throw new Error("PAPER_LOOP_STATE_STORE_REQUIRED");
 
@@ -239,6 +243,12 @@ export async function runRecurringPaperCycle({
     if (settlement.status !== "SETTLED") continue;
     const settlementId = hash({ positionId: position.positionId, paperSampleId: settlement.paperSampleId, settledAtMs: settlement.settledAtMs });
     if (settlements.some((row) => row.settlementId === settlementId || row.paperSampleId === settlement.paperSampleId)) continue;
+    await learningAdapter.persistOutcome({
+      cycle,
+      identity: predecessor.identity,
+      position,
+      settlement: Object.freeze({ ...settlement, settlementId }),
+    });
     const nextLedger = await ledgerAdapter.applySettlement({ ledger, settlement, settlementId, cycle });
     validateLedgerSnapshot(nextLedger);
     ledger = structuredClone(nextLedger);
@@ -267,6 +277,7 @@ export async function runRecurringPaperCycle({
     }
     const position = positionFromSample(sample);
     if (positions.some((row) => row.positionId === position.positionId)) continue;
+    await learningAdapter.persistSignal({ cycle, identity: predecessor.identity, candidate, sample });
     const nextLedger = await ledgerAdapter.applyEntry({ ledger, position, cycle });
     validateLedgerSnapshot(nextLedger);
     ledger = structuredClone(nextLedger);
