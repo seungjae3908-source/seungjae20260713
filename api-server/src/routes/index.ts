@@ -27,6 +27,8 @@ import strategyPromotionRouter from './strategy-promotion';
 import portfolioIntelligenceRouter from './portfolio-intelligence';
 import unifiedSearchRouter from './unified-search';
 import accountConnectionsRouter from './account-connections';
+import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';
+import { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';
 import {
   manualPortfolioNotificationBridge,
   telegramWebhookRouter,
@@ -62,6 +64,15 @@ router.use(requireAuthenticated);
 // authenticated user's vault connection metadata and never falls back to a
 // server credential or sends a private provider request.
 router.use('/account-connections', accountConnectionsRouter);
+// Private account reads are a separate, authenticated, read-only surface. All
+// providers fail closed unless their explicit feature flag is exactly `true`.
+// Runtime credential/transport readers remain deliberately unconfigured here;
+// secret provisioning and private smoke require a separate approval.
+router.use(
+  '/accounts/read-only',
+  requireCapability('canAccessBasicInfo'),
+  createAccountReadonlyRouter(new AccountReadonlyService({}, accountReadFlags())),
+);
 
 // Canonical AI Scanner routes must be registered before the legacy market
 // router. This makes /api/market/scan authenticated, capability protected,
