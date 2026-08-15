@@ -52,9 +52,9 @@ jobs:
             ../market-prediction-lab/scripts/meaningful-search-public-universe-entry.js \
             --bundle \
             --platform=node \
-            --format=esm \
+            --format=cjs \
             --target=node22 \
-            --outfile=../meaningful-search-public-audit-runner.mjs
+            --outfile=../meaningful-search-public-audit-runner.cjs
 
       - name: Run exact-head four-market public audit
         env:
@@ -62,7 +62,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
-          node meaningful-search-public-audit-runner.mjs > meaningful-search-public-audit.json
+          node meaningful-search-public-audit-runner.cjs > meaningful-search-public-audit.json
 
       - name: Verify audit safety and shape
         run: |
