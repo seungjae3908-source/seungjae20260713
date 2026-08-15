@@ -7,6 +7,7 @@ import {
   hashTelegramLinkToken,
   manualPortfolioEvent,
   maskBrokerAccount,
+  personalTelegramEventAllowed,
 } from './user-broker-telegram.service';
 import type {
   PortfolioSyncSink,
@@ -90,6 +91,25 @@ test('a Telegram chat cannot be rebound to another app user', async () => {
     telegramUserId: 'tg-b',
     now: new Date('2026-08-12T00:01:00.000Z'),
   }), /TELEGRAM_CHAT_ALREADY_LINKED/);
+});
+
+test('personal Telegram delivery is bounded by the server-resolved membership market scope', async () => {
+  assert.equal(personalTelegramEventAllowed('associate', { market: 'KR' }), true);
+  assert.equal(personalTelegramEventAllowed('associate', { market: 'crypto_spot' }), true);
+  assert.equal(personalTelegramEventAllowed('associate', { market: 'crypto_futures' }), false);
+  assert.equal(personalTelegramEventAllowed('regular', { market: 'crypto_futures' }), true);
+  assert.equal(personalTelegramEventAllowed('pending', { market: 'KR' }), false);
+
+  const { service, repository } = fixture();
+  await link(service, 'associate-user', 'associate-chat');
+  const futures = manualPortfolioEvent({
+    id: 'associate-futures', userId: 'associate-user', symbol: 'BTCUSDT', market: 'crypto_futures', quantity: 1, price: 100,
+  });
+  assert.deepEqual(
+    await service.recordEvent(futures, new Date('2026-08-12T00:02:00.000Z'), 'associate'),
+    { inserted: true, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' },
+  );
+  assert.equal((await repository.listDeliveries('associate-user')).length, 0);
 });
 
 test('user A manual event queues only Telegram A and does not re-sync canonical portfolio', async () => {
