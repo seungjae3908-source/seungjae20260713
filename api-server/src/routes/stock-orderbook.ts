@@ -1,4 +1,6 @@
 import { Router, type IRouter, type Request } from 'express';
+import { getTossAccessToken } from '../providers/toss';
+import { resolveStockVenue, TossOrderbookProvider } from '../features/toss-orderbook/toss-orderbook.provider';
 
 import coreRouter, {
   normalizeBitgetFuturesOrderbook as normalizeBitgetFuturesOrderbookCore,
@@ -31,6 +33,26 @@ const ALLOWED_STATUSES = new Set<InstrumentOrderbookStatus>([
 ]);
 const ASSET_CLASSES = new Set(['stock', 'crypto_spot', 'crypto_futures']);
 const MARKETS = new Set(['KR', 'US', 'UPBIT', 'BITGET']);
+const STOCK_VENUES = new Set(['auto', 'kiwoom', 'toss']);
+
+function tossOrderbookEnabled(environment: NodeJS.ProcessEnv = process.env): boolean {
+  return environment.TOSS_ORDERBOOK_READ_ENABLED === 'true';
+}
+
+const tossOrderbook = new TossOrderbookProvider(
+  { token: (signal) => getTossAccessToken(signal) },
+  async ({ path, query, headers, signal }) => {
+    const configured = process.env.TOSS_API_BASE_URL?.trim() || 'https://openapi.tossinvest.com';
+    const base = new URL(configured);
+    if (base.protocol !== 'https:') throw new Error('TOSS_ORDERBOOK_BASE_URL_INVALID');
+    const response = await fetch(`${base.toString().replace(/\/$/, '')}${path}?${query}`, {
+      method: 'GET', headers, signal,
+    });
+    let body: unknown = null;
+    try { body = await response.json(); } catch { /* normalized below as unavailable */ }
+    return { status: response.status, body };
+  },
+);
 
 function canonicalStatus(payload: CoreOrderbookPayload): InstrumentOrderbookStatus {
   if (payload.status === 'provider_error') return 'unavailable';
@@ -128,6 +150,33 @@ function invalidTargetResponse(query: Request['query']) {
     exchangeRequestSent: false as const,
   };
 }
+
+router.get('/orderbook', async (req, res, next) => {
+  const target = canonicalTarget(req.query);
+  if (!target || target.assetClass !== 'stock') return next();
+  const requested = String(req.query.venue ?? 'auto').trim().toLowerCase();
+  if (!STOCK_VENUES.has(requested)) return res.status(400).json(invalidTargetResponse(req.query));
+  const venue = resolveStockVenue(target.market as 'KR' | 'US', requested as 'auto' | 'kiwoom' | 'toss');
+  if (venue === 'kiwoom') return next();
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  if (venue === null || !tossOrderbookEnabled()) {
+    return res.status(200).json({
+      ...invalidTargetResponse(req.query), status: 'unavailable',
+      reason: venue === null ? 'STOCK_ORDERBOOK_VENUE_UNSUPPORTED' : 'TOSS_ORDERBOOK_READ_DISABLED',
+    });
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort(); req.once('aborted', abort);
+  try {
+    const payload = await tossOrderbook.load(target.market as 'KR' | 'US', target.symbol, controller.signal);
+    if (!res.writableEnded) return res.status(200).json(payload);
+  } catch (error) {
+    if (!res.writableEnded) return res.status(200).json({
+      ...invalidTargetResponse(req.query), status: 'unavailable',
+      reason: error instanceof Error ? error.message : 'TOSS_ORDERBOOK_PROVIDER_UNAVAILABLE',
+    });
+  } finally { req.removeListener('aborted', abort); }
+});
 
 export function normalizeKiwoomOrderbook(
   ...args: Parameters<typeof normalizeKiwoomOrderbookCore>
