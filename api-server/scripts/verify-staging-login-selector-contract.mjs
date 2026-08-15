@@ -84,6 +84,23 @@ assert(spec.includes('unconfirmed logout abort:'), 'unconfirmed candidates must 
 assert(spec.includes('diagnostics.unexpected_http_errors.push(diagnostic);'), 'all non-matching failed requests must remain unexpected');
 assert(spec.includes('if (response.status() < 400) return;'), 'all browser 4xx and 5xx responses must remain unexpected');
 
+const responsiveLogoutStart = spec.indexOf("test(`${name}: login, refresh session retention, responsive layout, and logout`");
+const responsiveReloadIndex = spec.indexOf('await page.reload();', responsiveLogoutStart);
+const responsivePostReloadSettleIndex = spec.indexOf('await settle(page);', responsiveReloadIndex);
+const responsivePostReloadIntegrationDrainIndex = spec.indexOf(
+  'await waitForPendingPersonalIntegrationReads(page);',
+  responsivePostReloadSettleIndex,
+);
+const responsiveLogoutIndex = spec.indexOf('await logout(page);', responsivePostReloadSettleIndex);
+assert(
+  responsiveLogoutStart >= 0
+    && responsiveReloadIndex > responsiveLogoutStart
+    && responsivePostReloadSettleIndex > responsiveReloadIndex
+    && responsivePostReloadIntegrationDrainIndex > responsivePostReloadSettleIndex
+    && responsivePostReloadIntegrationDrainIndex < responsiveLogoutIndex,
+  'the reload-created personal integration GET must settle before the verifier starts logout',
+);
+
 const profileMatcherStart = spec.indexOf('function isProfileRequest(request: Request)');
 const profileMatcherEnd = spec.indexOf('\nfunction isExpectedAuthFault(', profileMatcherStart);
 assert(
