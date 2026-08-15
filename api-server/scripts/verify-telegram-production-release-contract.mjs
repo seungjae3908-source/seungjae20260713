@@ -31,6 +31,9 @@ const requiredFragments = [
   'staging-postgres-auth-${targetSha}',
   'staging-verdict-${targetSha}',
   'verify-staging-verdict.mjs',
+  'Apply and verify Production personal Telegram storage atomically',
+  'production-personal-telegram-storage-${{ steps.command.outputs.sha }}',
+  'ops/verify-production-personal-telegram-storage.mjs --artifact',
   "workflow_id: 'production-deploy.yml'",
   'return_run_details: true',
   'run.head_sha !== targetSha',
@@ -51,6 +54,17 @@ const requiredFragments = [
 const missing = requiredFragments.filter((fragment) => !source.includes(fragment));
 if (missing.length > 0) {
   console.error(`[telegram-production-release-contract] missing safeguards: ${missing.join(', ')}`);
+  process.exit(1);
+}
+
+const storageMigrationIndex = source.indexOf('Apply and verify Production personal Telegram storage atomically');
+const productionDispatchIndex = source.indexOf('Dispatch existing Production Deploy and require exact-run success');
+if (storageMigrationIndex < 0 || productionDispatchIndex <= storageMigrationIndex) {
+  console.error('[telegram-production-release-contract] atomic personal Telegram storage migration must precede Production deployment');
+  process.exit(1);
+}
+if (/\b(?:PROD_DATABASE_URL|DATABASE_URL|POSTGRES_URL)\b/.test(source)) {
+  console.error('[telegram-production-release-contract] Production workflow must reuse the server connection without adding a database secret');
   process.exit(1);
 }
 

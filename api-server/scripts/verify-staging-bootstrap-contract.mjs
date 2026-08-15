@@ -14,6 +14,7 @@ const guard = await read('api-server/supabase/bootstrap/staging-empty-project-gu
 const base = await read('api-server/supabase/bootstrap/staging-allowlist-base.sql');
 const assertion = await read('api-server/supabase/bootstrap/staging-bootstrap-assert.sql');
 const telegramStorage = await read('api-server/supabase/migrations/2026081501_personal_telegram_storage.sql');
+const telegramPolicyCleanup = await read('api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql');
 const runner = await read('api-server/scripts/apply-staging-supabase-bootstrap.mjs');
 const verdict = await read('api-server/scripts/build-staging-verdict.mjs');
 const serverEntry = await read('api-server/src/index.ts');
@@ -21,12 +22,15 @@ const playwright = await read('stock-analyzer/playwright.config.ts');
 const dbVerifier = await read('api-server/scripts/verify-phase8-db.sh');
 const authHarness = await read('api-server/supabase/test/staging_bootstrap_auth_harness.sql');
 const triggerTest = await read('api-server/supabase/test/staging_bootstrap_trigger_integration.sql');
+const telegramPolicyCleanupTest = await read('api-server/supabase/test/personal_telegram_policy_cleanup_integration.sql');
 
 assert(!manifest.includes('20260716_full_schema_idempotent.sql'), 'must not import the historical full schema');
 assert(!manifest.includes('../schema.sql'), 'must not import the broad legacy schema file');
 assert(manifest.includes('staging-allowlist-base.sql'), 'manifest must use the allowlisted base schema');
 assert(manifest.includes('2026081501_personal_telegram_storage.sql'), 'manifest must include personal Telegram storage');
 assert(runner.includes('2026081501_personal_telegram_storage.sql'), 'atomic runner must include personal Telegram storage');
+assert(manifest.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'manifest must include personal Telegram policy cleanup');
+assert(runner.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'atomic runner must include personal Telegram policy cleanup');
 
 for (const serverTable of [
   'telegram_connections',
@@ -35,6 +39,7 @@ for (const serverTable of [
   'notification_deliveries',
 ]) {
   assert(telegramStorage.includes(`public.${serverTable}`), `personal Telegram migration is missing ${serverTable}`);
+  assert(telegramPolicyCleanup.includes(`'${serverTable}'`), `personal Telegram policy cleanup is missing ${serverTable}`);
   assert(assertion.includes(`'${serverTable}'`), `final assertion is missing ${serverTable}`);
 }
 assert(!telegramStorage.includes('public.notification_preferences'), 'personal Telegram migration must not mutate unified notification preferences');
@@ -46,6 +51,11 @@ assert(
   telegramStorage.includes('to service_role'),
   'personal Telegram tables must remain available only to the server role',
 );
+assert(telegramPolicyCleanup.includes("select pol.polname\n      from pg_policy pol"), 'legacy Telegram policies must be enumerated for removal');
+assert(telegramPolicyCleanup.includes("for all using (false) with check (false)"), 'Telegram policy cleanup must remain fail-closed');
+assert(telegramPolicyCleanupTest.includes('telegram_connections select own'), 'cleanup integration must reproduce a legacy Telegram self-read policy');
+assert(telegramPolicyCleanupTest.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'cleanup integration must apply the cleanup migration');
+assert(dbVerifier.includes('personal_telegram_policy_cleanup_integration.sql'), 'disposable PostgreSQL verification must execute the Telegram policy cleanup test');
 
 for (const forbidden of [
   'STAGING_PENDING_EMAIL', 'STAGING_PENDING_PASSWORD',
