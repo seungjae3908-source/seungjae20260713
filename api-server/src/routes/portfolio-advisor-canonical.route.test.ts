@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import '../services/investment-copilot-tools.service.test.ts';
+import '../services/investment-copilot-query.service.test.ts';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { createPaperJournalRouter } from './paper-journal';
