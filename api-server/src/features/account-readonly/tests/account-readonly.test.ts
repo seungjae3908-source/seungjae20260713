@@ -6,7 +6,32 @@ import { AccountReadonlyService } from '../account-readonly.service';
 import { TossReadonlyProvider, TossTokenManager, type ReadonlyTransport } from '../providers/toss-readonly.provider';
 import { readBitgetSnapshot, readUpbitSnapshot } from '../providers/exchange-readonly.providers';
 
-test('disabled feature flag performs zero private calls', async () => { let calls = 0; const service = new AccountReadonlyService({ toss: async () => { calls++; throw new Error('unexpected'); } }, { toss: false }); const result = await service.read('toss'); assert.equal(calls, 0); assert.equal(result.status, 'NOT_CONFIGURED'); assert.equal(result.orderRequests, 0); });
+const USER_A = { userId: 'user-a', accessToken: 'SUPABASE_ACCESS_A_TEST_ONLY' };
+const USER_B = { userId: 'user-b', accessToken: 'SUPABASE_ACCESS_B_TEST_ONLY' };
+
+test('disabled feature flag performs zero private calls', async () => {
+  let calls = 0;
+  const service = new AccountReadonlyService(
+    { toss: async () => { calls++; throw new Error('unexpected'); } },
+    { toss: false },
+  );
+  const result = await service.read(USER_A, 'toss');
+  assert.equal(calls, 0);
+  assert.equal(result.status, 'NOT_CONFIGURED');
+  assert.equal(result.orderRequests, 0);
+});
+
+test('missing authenticated request scope fails closed before private reader use', async () => {
+  let calls = 0;
+  const service = new AccountReadonlyService(
+    { upbit: async () => { calls++; throw new Error('unexpected'); } },
+    { upbit: true },
+  );
+  const result = await service.read({ userId: '', accessToken: '' }, 'upbit');
+  assert.equal(calls, 0);
+  assert.equal(result.status, 'AUTH_FAILED');
+  assert.equal(result.errorCode, 'ACCOUNT_REQUEST_SCOPE_REQUIRED');
+});
 
 test('Toss token refresh is single-flight, cached, and never uses account header', async () => {
   let calls = 0; const seen: any[] = [];
@@ -34,9 +59,30 @@ test('Bitget wrapper uses only signed GET account and position requests and reda
   assert.ok(seen.every((r) => r.method === 'GET')); assert.equal(result.positions[0]?.liquidationPrice, null); assert.equal(JSON.stringify(result).includes('BITGET_PASSPHRASE_TEST_ONLY'), false); assert.equal(result.withdrawalRequests, 0);
 });
 
-test('last-good data becomes stale while auth failure without data is distinct from zero balance', async () => {
-  let fail = false; const snapshot = { provider: 'upbit' as const, readOnly: true as const, connected: true, status: 'CONNECTED' as const, accounts: [], balances: [{ currency: 'KRW', available: 0, locked: 0, total: 0, estimatedKrwValue: 0 }], positions: [], openOrders: [], checkedAt: '2026-01-01T00:00:00.000Z', lastGoodAt: '2026-01-01T00:00:00.000Z', stale: false, errorCode: null, orderRequests: 0 as const, cancelRequests: 0 as const, amendRequests: 0 as const, transferRequests: 0 as const, withdrawalRequests: 0 as const, credentialsReturned: false as const, liveTradingEnabled: false as const, autoTradingEnabled: false as const };
-  const service = new AccountReadonlyService({ upbit: async () => { if (fail) throw new Error('401 invalid-token'); return snapshot; } }, { upbit: true });
-  assert.equal((await service.read('upbit')).balances[0]?.total, 0); fail = true; const stale = await service.read('upbit'); assert.equal(stale.status, 'STALE'); assert.equal(stale.errorCode, 'AUTH_FAILED');
-  const fresh = new AccountReadonlyService({ upbit: async () => { throw new Error('401'); } }, { upbit: true }); assert.equal((await fresh.read('upbit')).status, 'AUTH_FAILED');
+test('last-good data becomes stale only inside the same authenticated user scope', async () => {
+  let failUserA = false;
+  const snapshot = { provider: 'upbit' as const, readOnly: true as const, connected: true, status: 'CONNECTED' as const, accounts: [], balances: [{ currency: 'KRW', available: 0, locked: 0, total: 0, estimatedKrwValue: 0 }], positions: [], openOrders: [], checkedAt: '2026-01-01T00:00:00.000Z', lastGoodAt: '2026-01-01T00:00:00.000Z', stale: false, errorCode: null, orderRequests: 0 as const, cancelRequests: 0 as const, amendRequests: 0 as const, transferRequests: 0 as const, withdrawalRequests: 0 as const, credentialsReturned: false as const, liveTradingEnabled: false as const, autoTradingEnabled: false as const };
+  const service = new AccountReadonlyService(
+    {
+      upbit: async (scope) => {
+        if (scope.userId === USER_B.userId) throw new Error('401 user-b');
+        if (failUserA) throw new Error('401 user-a');
+        return snapshot;
+      },
+    },
+    { upbit: true },
+  );
+
+  assert.equal((await service.read(USER_A, 'upbit')).balances[0]?.total, 0);
+
+  const userB = await service.read(USER_B, 'upbit');
+  assert.equal(userB.status, 'AUTH_FAILED');
+  assert.equal(userB.stale, false);
+  assert.deepEqual(userB.balances, []);
+
+  failUserA = true;
+  const staleUserA = await service.read(USER_A, 'upbit');
+  assert.equal(staleUserA.status, 'STALE');
+  assert.equal(staleUserA.errorCode, 'AUTH_FAILED');
+  assert.equal(staleUserA.balances[0]?.total, 0);
 });
