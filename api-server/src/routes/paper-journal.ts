@@ -33,6 +33,12 @@ import {
   type TradeSource,
   type UnifiedJournalFilters,
 } from '../services/unified-trade-journal.service';
+import {
+  PaperJournalSignalPerformanceRepository,
+  buildSignalPerformanceReadModel,
+  type PerformanceQuery,
+  type PersistentPerformanceSource,
+} from '../services/signal-performance-persistence.service';
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 
@@ -166,6 +172,54 @@ export function createPaperJournalRouter(
       return response.json(result);
     } catch (cause) {
       return handleError(response, cause, 'JOURNAL_SNAPSHOT_FAILED', '거래일지 snapshot을 불러오지 못했습니다.', syncEnvelope);
+    }
+  });
+
+  router.get('/signal-performance', async (request: AuthenticatedRequest, response) => {
+    try {
+      const ownerId = request.member?.id ?? '';
+      if (!ownerId) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+      const source = queryText(request.query.source, 30);
+      const allowedSources: PersistentPerformanceSource[] = ['BACKTEST', 'OOS', 'WALK_FORWARD', 'FINAL_HOLDOUT', 'PAPER', 'SHADOW', 'LIVE_RECOMMENDATION'];
+      if (!source || !allowedSources.includes(source as PersistentPerformanceSource)) throw new PaperJournalError('INVALID_PERFORMANCE_SOURCE', '성과 출처를 확인하세요.');
+      const minimumText = queryText(request.query.minimumSampleSize, 8);
+      const minimumSampleSize = minimumText == null ? undefined : Number(minimumText);
+      if (minimumSampleSize != null && (!Number.isInteger(minimumSampleSize) || minimumSampleSize <= 0)) throw new PaperJournalError('INVALID_MINIMUM_SAMPLE_SIZE', '최소 표본 수를 확인하세요.');
+      const query: PerformanceQuery = {
+        source: source as PersistentPerformanceSource | undefined,
+        market: queryText(request.query.market, 30) as PerformanceQuery['market'],
+        symbol: queryText(request.query.symbol),
+        strategyMode: queryText(request.query.strategyMode, 20) as PerformanceQuery['strategyMode'],
+        strategyFamily: queryText(request.query.strategyFamily),
+        strategyVersion: queryText(request.query.strategyVersion),
+        parameterHash: queryText(request.query.parameterHash),
+        direction: queryText(request.query.direction, 10) as PerformanceQuery['direction'],
+        timeframe: queryText(request.query.timeframe, 20),
+        regime: queryText(request.query.regime, 30),
+        researchCodeSha: queryText(request.query.researchCodeSha, 40),
+        minimumSampleSize,
+      };
+      const repository = new PaperJournalSignalPerformanceRepository(repositoryFactory(request), ownerId);
+      const result = await buildSignalPerformanceReadModel(repository, ownerId, query);
+      return response.json(analysisEnvelope({ ok: true, result, profitabilityClaimAllowed: false }));
+    } catch (cause) {
+      return handleError(response, cause, 'SIGNAL_PERFORMANCE_READ_FAILED', '신호 성과를 불러오지 못했습니다.', analysisEnvelope);
+    }
+  });
+
+  router.get('/signal-performance/:signalId', async (request: AuthenticatedRequest, response) => {
+    try {
+      const ownerId = request.member?.id ?? '';
+      if (!ownerId) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+      const signalId = queryText(request.params.signalId, 160);
+      if (!signalId) throw new PaperJournalError('SIGNAL_ID_REQUIRED', '신호 ID를 확인하세요.');
+      const repository = new PaperJournalSignalPerformanceRepository(repositoryFactory(request), ownerId);
+      const event = await repository.getSignal(ownerId, signalId);
+      if (!event) throw new PaperJournalError('SIGNAL_PERFORMANCE_NOT_FOUND', '저장된 신호 성과가 없습니다.', 404);
+      const outcomes = (await repository.listOutcomes(ownerId)).filter((row) => row.signalId === signalId);
+      return response.json(analysisEnvelope({ ok: true, result: { event, outcomes }, profitabilityClaimAllowed: false }));
+    } catch (cause) {
+      return handleError(response, cause, 'SIGNAL_PERFORMANCE_DETAIL_FAILED', '신호 성과 상세를 불러오지 못했습니다.', analysisEnvelope);
     }
   });
 
