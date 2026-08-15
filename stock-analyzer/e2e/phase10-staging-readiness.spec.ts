@@ -322,7 +322,7 @@ async function waitForPendingPersonalIntegrationReads(page: Page) {
         .length;
     },
     {
-      message: 'personal integration GET must settle before verifier-owned session-retention reload',
+      message: 'personal integration GET must settle before verifier-owned authenticated navigation',
       timeout: 15_000,
       intervals: [100, 200, 300, 500],
     },
@@ -354,6 +354,8 @@ async function login(page: Page, loginName: string, password: string) {
   await passwordInput.fill(password);
   await loginSubmitButton(page).click();
   await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 30_000 });
+  await settle(page);
+  await waitForPendingPersonalIntegrationReads(page);
 }
 
 async function logout(page: Page) {
