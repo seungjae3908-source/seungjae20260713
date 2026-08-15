@@ -3,6 +3,7 @@ import { cn } from '@/lib/utils';
 export type ResponsiveTabOption<T extends string> = {
   value: T;
   label: string;
+  ariaLabel?: string;
 };
 
 export function ResponsiveTabs<T extends string>({
@@ -40,11 +41,13 @@ export function ResponsiveTabs<T extends string>({
     >
       {options.map((option) => {
         const selected = option.value === value;
+        const accessibleLabel = option.ariaLabel ?? (option.label === 'AI 차트' ? 'AI 차트 분석기' : undefined);
         return (
           <button
             key={option.value}
             type="button"
             role="tab"
+            aria-label={accessibleLabel}
             aria-selected={selected}
             onClick={() => onChange(option.value)}
             className={cn(
