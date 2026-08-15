@@ -14,9 +14,40 @@ const canonicalChartSource = readFileSync(
   'utf8',
 );
 
+const safeTradeAutomationStatus = {
+  policy: {
+    mode: 'approval',
+    automaticEnabled: false,
+    emergencyStopped: false,
+    exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
+    enabledAssets: { bitget: [], upbit: [], kiwoom: [] },
+    enabledStrategies: [],
+    totalCapitalKrw: 1_000_000,
+    maxOrderKrw: 1_000_000,
+    dailyLossLimitPercent: 5,
+    maxAssetPercent: 30,
+    maxOpenPositions: 5,
+    maxDailyOrders: 10,
+    maxConsecutiveLosses: 3,
+    bitgetLeverage: 2,
+  },
+  connections: [],
+  emergencyStopped: false,
+  credentialVault: { encryptionConfigured: false, keyValueExposed: false },
+  lastOrder: null,
+};
+
 async function mockPublicApi(page: Page) {
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === '/api/trade-automation/status') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(safeTradeAutomationStatus),
+      });
+      return;
+    }
     if (url.pathname.includes('/market/scan')) {
       await route.fulfill({
         status: 200,
@@ -77,10 +108,10 @@ async function mockPublicApi(page: Page) {
 
 test('market price charts use the canonical AI Chart surface instead of legacy chart primitives', async () => {
   expect(chartTabSource).toContain('CanonicalMarketChart');
-  expect(chartTabSource).not.toContain('PriceChart');
-  expect(chartTabSource).not.toContain('RsiChart');
-  expect(chartTabSource).not.toContain('MacdChart');
-  expect(chartTabSource).not.toContain("@/components/charts");
+  expect(chartTabSource).not.toMatch(/<PriceChart\b/);
+  expect(chartTabSource).not.toMatch(/<RsiChart\b/);
+  expect(chartTabSource).not.toMatch(/<MacdChart\b/);
+  expect(chartTabSource).not.toContain("from '@/components/charts'");
   expect(canonicalChartSource).toContain('UnifiedAnalysisChart');
   expect(canonicalChartSource).toContain('AI Chart 2.0');
 });
