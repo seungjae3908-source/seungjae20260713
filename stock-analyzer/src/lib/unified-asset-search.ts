@@ -130,6 +130,8 @@ export function unifiedSuggestionIdentity(item: UnifiedAssetSuggestion, backPath
 }
 
 export function unifiedAssetDetailPath(item: UnifiedAssetSuggestion, backPath = '/search') {
-  return resolveAssetDetailPath(unifiedSuggestionIdentity(item, backPath));
+  const resolved = resolveAssetDetailPath(unifiedSuggestionIdentity(item, backPath));
+  return item.assetType === 'stock'
+    ? resolved.replace('/stock-info?', '/stock-info/analysis?')
+    : resolved;
 }
-
