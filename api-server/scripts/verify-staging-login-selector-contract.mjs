@@ -42,7 +42,7 @@ assert(
 );
 
 assert(spec.includes('expected_logout_aborts: Diagnostic[]'), 'expected logout abort diagnostics bucket is missing');
-assert(spec.includes('type LogoutObservation = { candidates: Diagnostic[] }'), 'logout aborts must remain pending until post-logout checks pass');
+assert(spec.includes('pendingGetRequests: Set<Request>;'), 'logout aborts must be limited to requests pending before logout begins');
 assert(spec.includes('const activeLogoutObservations = new WeakMap<Page, LogoutObservation>()'), 'logout observation must be scoped to the active page');
 assert(spec.includes("request.method() === 'POST'"), 'only POST logout requests may be considered expected');
 assert(spec.includes("parsed.pathname === '/auth/v1/logout'"), 'logout path must match exactly');
@@ -56,6 +56,9 @@ const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observ
 const clickIndex = spec.indexOf('await logoutButton.click();');
 assert(visibleIndex >= 0 && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only around an explicit visible logout-button click');
 assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
+assert(spec.includes("parsed.pathname === '/api/user-integrations'"), 'the personal integration read may be classified only by its exact API path');
+assert(spec.includes('observation.pendingGetRequests.has(request)'), 'the personal integration read must already be pending when logout begins');
+assert(spec.includes('query.length === 0'), 'the personal integration logout exception must reject query-bearing requests');
 assert(spec.includes('routeObservation.candidates.push(diagnostic);'), 'matching route-transition aborts must be held as candidates first');
 assert(
   spec.indexOf('diagnostics.expected_logout_aborts.push(...observation.candidates);')
