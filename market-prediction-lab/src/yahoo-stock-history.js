@@ -24,6 +24,19 @@ export function yahooStockProviderSymbol(market, symbol) {
   throw new PredictionInputError("Yahoo stock collector supports KR_STOCK or US_STOCK only", { market });
 }
 
+export function yahooStockProviderCandidates(market, symbol) {
+  const primary = yahooStockProviderSymbol(market, symbol);
+  const candidates = [primary];
+  if (market === "KR_STOCK") {
+    if (primary.endsWith(".KS")) candidates.push(primary.replace(/\.KS$/u, ".KQ"));
+    else if (primary.endsWith(".KQ")) candidates.push(primary.replace(/\.KQ$/u, ".KS"));
+  } else if (market === "US_STOCK") {
+    if (primary.includes("-")) candidates.push(primary.replace(/-/gu, "."));
+    if (primary.includes(".")) candidates.push(primary.replace(/\./gu, "-"));
+  }
+  return Object.freeze([...new Set(candidates)]);
+}
+
 function finite(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -55,7 +68,12 @@ async function fetchJson(fetchImpl, url, signal, timeoutMs) {
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
       },
     });
-    if (!response.ok) throw new Error(`YAHOO_STOCK_HTTP_${response.status}`);
+    if (!response.ok) {
+      const error = Object.assign(new Error(`YAHOO_STOCK_HTTP_${response.status}`), { status: response.status });
+      const retryAfter = Number(response.headers?.get?.("retry-after"));
+      if (Number.isFinite(retryAfter)) error.retryAfterMs = retryAfter * 1_000;
+      throw error;
+    }
     return await response.json();
   } finally {
     linked.clear();
@@ -90,10 +108,23 @@ function parseCandles(result) {
   return candles.sort((left, right) => left.timestamp - right.timestamp);
 }
 
+function chartErrorMessage(payload) {
+  const chartError = payload?.chart?.error;
+  if (!chartError) return null;
+  return String(chartError?.code ?? chartError?.description ?? "YAHOO_STOCK_CHART_ERROR");
+}
+
+function allUnsupported(errors) {
+  return errors.length > 0 && errors.every((item) => (
+    item.status === 404
+    || /NOT FOUND|NO DATA|DELISTED|SYMBOL.*(?:INVALID|MISSING|NOT)/iu.test(item.message)
+  ));
+}
+
 export async function collectYahooStockHistory(raw = {}) {
   const market = raw.market;
   const symbol = cleanSymbol(raw.symbol);
-  const providerSymbol = yahooStockProviderSymbol(market, symbol);
+  const providerCandidates = yahooStockProviderCandidates(market, symbol);
   const endTime = Number(raw.endTime ?? Date.now());
   const startTime = Number(raw.startTime ?? endTime - 10 * 365 * DAY_MS);
   const timeoutMs = Number(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -109,40 +140,55 @@ export async function collectYahooStockHistory(raw = {}) {
     throw new PredictionInputError("timeoutMs must be between 100 and 60000", { timeoutMs });
   }
 
-  const encoded = encodeURIComponent(providerSymbol);
   const query = `period1=${Math.floor(startTime / 1000)}&period2=${Math.ceil(endTime / 1000)}&interval=1d&events=history&includeAdjustedClose=true`;
-  const urls = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?${query}`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?${query}`,
-  ];
   const errors = [];
-  for (const url of urls) {
-    try {
-      const payload = await fetchJson(fetchImpl, url, raw.signal, timeoutMs);
-      const result = payload?.chart?.result?.[0];
-      const candles = parseCandles(result);
-      if (candles.length < 60) throw new Error(`YAHOO_STOCK_INSUFFICIENT_HISTORY_${candles.length}`);
-      return Object.freeze({
-        schemaVersion: 1,
-        market,
-        symbol,
-        providerSymbol,
-        timeframe: "1d",
-        source: "yahoo-public-chart",
-        collectedAt: Date.now(),
-        requestedStartTime: startTime,
-        requestedEndTime: endTime,
-        firstTimestamp: candles[0].timestamp,
-        lastTimestamp: candles.at(-1).timestamp,
-        candleCount: candles.length,
-        candles: Object.freeze(candles),
-        liveOrderAllowed: false,
-        privateAccountRequestAllowed: false,
-      });
-    } catch (error) {
-      if (raw.signal?.aborted) throw error;
-      errors.push(error instanceof Error ? error.message : String(error));
+  for (const providerSymbol of providerCandidates) {
+    const encoded = encodeURIComponent(providerSymbol);
+    const urls = [
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?${query}`,
+      `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?${query}`,
+    ];
+    for (const url of urls) {
+      try {
+        const payload = await fetchJson(fetchImpl, url, raw.signal, timeoutMs);
+        const chartError = chartErrorMessage(payload);
+        if (chartError) throw new Error(`YAHOO_STOCK_CHART_ERROR:${chartError}`);
+        const result = payload?.chart?.result?.[0];
+        const candles = parseCandles(result);
+        if (candles.length < 60) throw new Error(`YAHOO_STOCK_INSUFFICIENT_HISTORY_${candles.length}`);
+        return Object.freeze({
+          schemaVersion: 1,
+          market,
+          symbol,
+          providerSymbol,
+          providerFallbackUsed: providerSymbol !== providerCandidates[0],
+          providerCandidatesTried: Object.freeze(providerCandidates.slice(0, providerCandidates.indexOf(providerSymbol) + 1)),
+          timeframe: "1d",
+          source: "yahoo-public-chart",
+          collectedAt: Date.now(),
+          requestedStartTime: startTime,
+          requestedEndTime: endTime,
+          firstTimestamp: candles[0].timestamp,
+          lastTimestamp: candles.at(-1).timestamp,
+          candleCount: candles.length,
+          candles: Object.freeze(candles),
+          liveOrderAllowed: false,
+          privateAccountRequestAllowed: false,
+        });
+      } catch (error) {
+        if (raw.signal?.aborted) throw error;
+        errors.push({
+          providerSymbol,
+          status: Number.isFinite(Number(error?.status)) ? Number(error.status) : null,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
-  throw new Error(`YAHOO_STOCK_HISTORY_FAILED:${providerSymbol}:${errors.join("|")}`);
+  const details = errors.map((item) => `${item.providerSymbol}:${item.message}`).join("|");
+  if (allUnsupported(errors)) throw new Error(`YAHOO_STOCK_SYMBOL_UNSUPPORTED:${symbol}:${details}`);
+  if (errors.length && errors.every((item) => /INSUFFICIENT_HISTORY/u.test(item.message))) {
+    throw new Error(`YAHOO_STOCK_INSUFFICIENT_HISTORY:${symbol}:${details}`);
+  }
+  throw new Error(`YAHOO_STOCK_HISTORY_FAILED:${symbol}:${details}`);
 }
