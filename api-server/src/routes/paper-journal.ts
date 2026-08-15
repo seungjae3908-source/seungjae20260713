@@ -188,15 +188,15 @@ export function createPaperJournalRouter(
       const query: PerformanceQuery = {
         source: source as PersistentPerformanceSource | undefined,
         market: queryText(request.query.market, 30) as PerformanceQuery['market'],
-        symbol: queryText(request.query.symbol),
+        symbol: queryText(request.query.symbol) ?? undefined,
         strategyMode: queryText(request.query.strategyMode, 20) as PerformanceQuery['strategyMode'],
-        strategyFamily: queryText(request.query.strategyFamily),
-        strategyVersion: queryText(request.query.strategyVersion),
-        parameterHash: queryText(request.query.parameterHash),
+        strategyFamily: queryText(request.query.strategyFamily) ?? undefined,
+        strategyVersion: queryText(request.query.strategyVersion) ?? undefined,
+        parameterHash: queryText(request.query.parameterHash) ?? undefined,
         direction: queryText(request.query.direction, 10) as PerformanceQuery['direction'],
-        timeframe: queryText(request.query.timeframe, 20),
-        regime: queryText(request.query.regime, 30),
-        researchCodeSha: queryText(request.query.researchCodeSha, 40),
+        timeframe: queryText(request.query.timeframe, 20) ?? undefined,
+        regime: queryText(request.query.regime, 30) ?? undefined,
+        researchCodeSha: queryText(request.query.researchCodeSha, 40) ?? undefined,
         minimumSampleSize,
       };
       const repository = new PaperJournalSignalPerformanceRepository(repositoryFactory(request), ownerId);
