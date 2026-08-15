@@ -14,5 +14,6 @@
 \ir ../migrations/2026080501_paper_journal_authenticated_privileges.sql
 \ir ../migrations/2026080502_member_permission_audit_authenticated_privileges.sql
 \ir ../migrations/2026081501_personal_telegram_storage.sql
+\ir ../migrations/2026081502_personal_telegram_policy_cleanup.sql
 \ir staging-bootstrap-assert.sql
 \ir staging-audit-privilege-assert.sql
