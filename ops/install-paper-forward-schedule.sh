@@ -6,6 +6,7 @@ umask 077
 TARGET_SHA="${1:-}"
 LIVE_DIR="${LIVE_DIR:-/opt/stock-app}"
 STATE_ROOT="${PAPER_FORWARD_STATE_ROOT:-/opt/stock-app-data/paper-forward-v1}"
+RUNTIME_STATE_ROOT="$STATE_ROOT/runtime-state"
 DEPLOY_MARKER="$LIVE_DIR/.deploy/current-sha"
 SOURCE_LAB="$LIVE_DIR/market-prediction-lab"
 RELEASE_ROOT="$STATE_ROOT/releases"
@@ -28,12 +29,19 @@ fail() {
   exit "${2:-1}"
 }
 
+mark_disabled() {
+  mkdir -p "$STATE_ROOT" "$RUNTIME_STATE_ROOT"
+  : > "$STATE_ROOT/DISABLED"
+  : > "$RUNTIME_STATE_ROOT/DISABLED"
+  chmod 600 "$STATE_ROOT/DISABLED" "$RUNTIME_STATE_ROOT/DISABLED"
+}
+
 restore_on_error() {
   local status=$?
   trap - EXIT
   if (( status != 0 )) && [[ "$CRONTAB_MUTATED" == 1 ]]; then
     printf '%s' "$PREVIOUS_CRONTAB" | crontab - || true
-    : > "$STATE_ROOT/DISABLED"
+    mark_disabled
   fi
   exit "$status"
 }
@@ -48,7 +56,7 @@ DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
 [[ "$STATE_ROOT" == /opt/stock-app-data/paper-forward-v1 ]] || fail "unexpected persistent state root" 7
 [[ "$STATE_ROOT" != "$LIVE_DIR" && "$STATE_ROOT" != "$LIVE_DIR/"* ]] || fail "state root must remain outside deploy tree" 8
 
-for command_name in node flock crontab mkdir cp rm mv ln date sha256sum awk grep sed wc pgrep find sort xargs chmod tr; do
+for command_name in node flock crontab mkdir rm mv ln date sha256sum awk grep sed wc pgrep find sort xargs chmod tr rsync; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing command: $command_name" 9
 done
 
@@ -60,13 +68,16 @@ fi
 
 NODE_BIN="$(command -v node)"
 FLOCK_BIN="$(command -v flock)"
-mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$STATE_ROOT/runtime-state"
-chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$STATE_ROOT/runtime-state"
+mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$RUNTIME_STATE_ROOT"
+chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$RUNTIME_STATE_ROOT"
 
 TEMP_RELEASE="$RELEASE_ROOT/.tmp-$TARGET_SHA-$$"
 rm -rf -- "$TEMP_RELEASE"
 mkdir -p "$TEMP_RELEASE/market-prediction-lab"
-cp -a "$SOURCE_LAB/." "$TEMP_RELEASE/market-prediction-lab/"
+rsync -a --delete \
+  --exclude='node_modules/' \
+  --exclude='*/node_modules/' \
+  "$SOURCE_LAB/" "$TEMP_RELEASE/market-prediction-lab/"
 find "$TEMP_RELEASE/market-prediction-lab" -type f -exec chmod go-rwx {} +
 find "$TEMP_RELEASE/market-prediction-lab" -type d -exec chmod 700 {} +
 
@@ -92,6 +103,7 @@ STATE_ROOT='$STATE_ROOT'
 RUNTIME_DIR='$RUNTIME_RELEASE'
 NODE_BIN='$NODE_BIN'
 [[ ! -e "\$STATE_ROOT/DISABLED" ]] || exit 0
+[[ ! -e "\$STATE_ROOT/runtime-state/DISABLED" ]] || exit 0
 [[ -r "\$RUNTIME_DIR/scripts/run-paper-forward-schedule.js" ]] || {
   echo '[paper-forward-cron] pinned runner missing' >&2
   exit 66
@@ -108,7 +120,7 @@ exec /usr/bin/env -i \
   NODE_ENV='production' \
   PAPER_FORWARD_SCHEDULE_ACTIVE='true' \
   PAPER_FORWARD_TRIGGER_SOURCE='cron' \
-  PAPER_FORWARD_ROOT='$STATE_ROOT/runtime-state' \
+  PAPER_FORWARD_ROOT='$RUNTIME_STATE_ROOT' \
   PAPER_FORWARD_RESEARCH_SHA='$TARGET_SHA' \
   PAPER_FORWARD_ACTIVATION_AT_MS='$ACTIVATION_AT_MS' \
   LIVE_TRADING='false' \
@@ -135,7 +147,7 @@ CRON_LINE="$CRON_EXPRESSION $FLOCK_BIN -n $CRON_LOCK $WRAPPER $TAG"
   printf '%s\n' "$CRON_LINE"
 } | sed '/^[[:space:]]*$/d' | crontab -
 CRONTAB_MUTATED=1
-rm -f "$STATE_ROOT/DISABLED"
+rm -f "$STATE_ROOT/DISABLED" "$RUNTIME_STATE_ROOT/DISABLED"
 
 MATCH_COUNT="$(crontab -l | grep -Fxc "$CRON_LINE" || true)"
 [[ "$MATCH_COUNT" == 1 ]] || fail "exactly one Paper Forward cron entry is required" 12
