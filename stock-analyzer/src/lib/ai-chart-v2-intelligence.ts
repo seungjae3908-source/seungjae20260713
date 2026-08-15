@@ -11,7 +11,7 @@ import type {
 
 export type AiChartStrategyMode = 'SCALPING' | 'SWING' | 'MID_LONG';
 export type AiChartMarket = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
-export type AiChartSignalSide = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'WAIT';
+export type AiChartSignalSide = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NO_TRADE' | 'UNKNOWN' | 'WAIT';
 export type AiChartSignalLifecycle = 'ACTIVE' | 'WEAKENED' | 'INVALIDATED' | 'EXPIRED';
 export type AiChartDataQuality = 'LIVE' | 'DELAYED' | 'STALE' | 'PARTIAL' | 'UNAVAILABLE';
 export type AiChartEvidenceState = 'READY' | 'INSUFFICIENT_DATA';
