@@ -33,10 +33,12 @@ test('기술 워크스페이스는 네 기능을 지연 로딩하고 모바일 �
   expect(workspace).toContain('<BottomNav />');
 });
 
-test('코인 현물은 canonical scanner의 spot 요청과 현물 상태 전환을 유지한다', () => {
+test('코인 현물은 canonical Upbit spot 요청과 현물 상태 전환을 유지한다', () => {
   const scanner = source('src/pages/signal-scanner.tsx');
+  const scannerUrl = source('src/lib/signal-scanner-url.ts');
   expect(scanner).toContain("view === 'SPOT'");
-  expect(scanner).toContain('/api/spot/market/scanner?');
+  expect(scannerUrl).toContain("const SPOT_SCANNER_PATH = '/api/scanner/crypto/spot'");
+  expect(scannerUrl).toContain("request.assetClass === 'coin_spot'");
   expect(scanner).toContain("assetMode.setCoinMarket(view === 'FUTURES' ? 'futures' : 'spot')");
 });
 
