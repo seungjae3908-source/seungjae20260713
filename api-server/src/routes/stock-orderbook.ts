@@ -4,6 +4,7 @@ import coreRouter, {
   normalizeBitgetFuturesOrderbook as normalizeBitgetFuturesOrderbookCore,
   normalizeKiwoomOrderbook as normalizeKiwoomOrderbookCore,
   normalizeUpbitOrderbook as normalizeUpbitOrderbookCore,
+  normalizeTossOrderbook as normalizeTossOrderbookCore,
   setOrderbookKiwoomLoaderForTests,
   setOrderbookPublicTransportForTests,
   type InstrumentOrderbookPayload as CoreOrderbookPayload,
@@ -144,6 +145,10 @@ export function normalizeBitgetFuturesOrderbook(
   ...args: Parameters<typeof normalizeBitgetFuturesOrderbookCore>
 ): InstrumentOrderbookPayload {
   return canonicalize(normalizeBitgetFuturesOrderbookCore(...args));
+}
+
+export function normalizeTossOrderbook(...args: Parameters<typeof normalizeTossOrderbookCore>): InstrumentOrderbookPayload {
+  return canonicalize(normalizeTossOrderbookCore(...args));
 }
 
 // Canonical generic route inputs are strict. A mismatched assetClass/market pair
