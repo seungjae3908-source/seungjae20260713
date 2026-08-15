@@ -34,6 +34,7 @@ type ActiveFlight<T> = {
   generation: number;
   promise: Promise<UserIntegrationsTerminal<T>>;
   transport: Promise<UserIntegrationsTerminal<T>>;
+  publicPending: boolean;
 };
 
 function timeoutError() {
@@ -149,7 +150,8 @@ export class UserIntegrationsRequestLifecycle<T> {
       timer = setTimeout(() => reject(timeoutError()), this.timeoutMs);
     });
     const publicOperation: Promise<T> = Promise.race([transportOperation, deadline]);
-    const publicFlight = publicOperation.then(
+    let publicFlight: Promise<UserIntegrationsTerminal<T>>;
+    publicFlight = publicOperation.then(
       (value): UserIntegrationsTerminal<T> => ({ status: 'success', identity, requestKey, generation, value }),
       (error): UserIntegrationsTerminal<T> => ({ status: 'failure', identity, requestKey, generation, error }),
     ).then((result) => {
@@ -165,6 +167,7 @@ export class UserIntegrationsRequestLifecycle<T> {
       return result;
     }).finally(() => {
       if (timer !== undefined) clearTimeout(timer);
+      if (this.active?.promise === publicFlight) this.active.publicPending = false;
     });
 
     this.active = {
@@ -173,6 +176,7 @@ export class UserIntegrationsRequestLifecycle<T> {
       generation,
       promise: publicFlight,
       transport: transportFlight,
+      publicPending: true,
     };
     this.flights.add(transportFlight);
     return publicFlight;
@@ -231,7 +235,8 @@ export class UserIntegrationsRequestLifecycle<T> {
       requestKey: this.requestKey,
       generation: this.generation,
       blocked: this.blocked,
-      activeCount: this.flights.size,
+      activeCount: this.active?.publicPending ? 1 : 0,
+      transportCount: this.flights.size,
       terminalStatus: this.terminal?.status ?? null,
       lastTerminalStatus: this.lastTerminal?.status ?? null,
     } as const;
