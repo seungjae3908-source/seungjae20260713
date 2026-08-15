@@ -1,0 +1,359 @@
+name: Staging User Integrations Strict Evidence
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: staging-user-integrations-strict-evidence
+  cancel-in-progress: false
+
+jobs:
+  strict-evidence:
+    name: Verify exact-main user-integrations transport lifecycle
+    if: >-
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/run-staging-integrations-strict ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: staging
+    env:
+      STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+      STAGING_STRICT_ARTIFACT_DIR: ${{ github.workspace }}/staging-user-integrations-artifacts
+    steps:
+      - name: Parse exact owner strict-evidence command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == "seungjae3908-source" ]]
+          [[ "$AUTHOR_ASSOCIATION" == "OWNER" ]]
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-staging-integrations-strict ([0-9a-f]{40})$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /run-staging-integrations-strict <40-character-current-main-sha>');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
+          NODE
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Require exact current main and Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Strict-evidence target is stale: target=${target} main=${main.data.commit.sha}`);
+              return;
+            }
+            const required = new Set([
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ]);
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: target,
+              per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) {
+              if (!latest.has(status.context)) latest.set(status.context, status);
+            }
+            const accepted = [...required].map((name) => latest.get(name));
+            if (accepted.length !== 6 || accepted.some((status) => status?.state !== 'success')) {
+              core.setFailed('Exact current main does not have all six successful Required statuses.');
+              return;
+            }
+            const provenance = new Set(accepted.map((status) => {
+              const match = /\/actions\/runs\/(\d+)/.exec(String(status.target_url ?? ''));
+              return match?.[1] ?? null;
+            }));
+            if (provenance.size !== 1 || provenance.has(null)) {
+              core.setFailed('Required statuses do not share one exact Application CI provenance run.');
+              return;
+            }
+            const runId = Number([...provenance][0]);
+            const run = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            if (run.data.head_sha !== target || run.data.status !== 'completed' || run.data.conclusion !== 'success') {
+              core.setFailed('Required status provenance is not an exact successful target run.');
+              return;
+            }
+            core.info(`Required CI 6/6 accepted from Run ${runId}.`);
+
+      - name: Locate successful exact-SHA Staging Readiness evidence
+        id: staging
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const artifactName = `staging-verdict-${target}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: artifactName,
+              per_page: 100,
+            });
+            for (const artifact of artifacts) {
+              if (artifact.expired || artifact.workflow_run?.head_sha !== target) continue;
+              const run = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: artifact.workflow_run.id,
+              });
+              if (
+                run.data.name === 'Staging Readiness'
+                && run.data.path === '.github/workflows/staging-readiness.yml'
+                && run.data.head_sha === target
+                && run.data.status === 'completed'
+                && run.data.conclusion === 'success'
+              ) {
+                core.setOutput('run_id', String(run.data.id));
+                return;
+              }
+            }
+            core.setFailed(`No successful unexpired exact-SHA Staging Readiness artifact exists for ${target}.`);
+
+      - name: Download exact-SHA Staging verdict
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-verdict-${{ steps.command.outputs.sha }}
+          path: upstream-staging-verdict
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.staging.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Require release-ready upstream Staging verdict
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const target = process.env.TARGET_SHA;
+          const root = path.resolve('upstream-staging-verdict');
+          const find = (dir) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                const nested = find(full);
+                if (nested) return nested;
+              } else if (entry.name === 'staging-verdict.json') {
+                return full;
+              }
+            }
+            return null;
+          };
+          const file = find(root);
+          if (!file) throw new Error('staging-verdict.json missing from exact-SHA artifact');
+          const verdict = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (String(verdict.target_sha ?? '').toLowerCase() !== target) throw new Error('Staging target SHA mismatch');
+          if (String(verdict.deployed_sha ?? '').toLowerCase() !== target) throw new Error('Staging deployed SHA mismatch');
+          if (verdict.release_ready !== true) throw new Error('Exact-SHA Staging verdict is not release_ready=true');
+          if (Number(verdict.failed ?? -1) !== 0 || Number(verdict.skipped ?? -1) !== 0) {
+            throw new Error('Exact-SHA Staging verdict has failed or skipped checks');
+          }
+          NODE
+
+      - name: Require live Staging identity still matches target
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$STAGING_BASE_URL" ]]
+          curl --fail --silent --show-error --max-time 20 "$STAGING_BASE_URL/api/health" > /tmp/strict-staging-health.json
+          node <<'NODE'
+          const fs = require('node:fs');
+          const target = process.env.TARGET_SHA;
+          const health = JSON.parse(fs.readFileSync('/tmp/strict-staging-health.json', 'utf8'));
+          const sha = String(health.deploySha ?? health.sha ?? health.commitSha ?? '').toLowerCase();
+          if (health.ok !== true) throw new Error('Staging health is not ok=true');
+          if (sha !== target) throw new Error(`Live Staging SHA mismatch: expected=${target} actual=${sha}`);
+          if (health.identityMatch !== true) throw new Error('Staging health identityMatch is not true');
+          NODE
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install exact-main dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium for strict Staging verification
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Run strict user-integrations Staging evidence
+        id: strict_test
+        continue-on-error: true
+        env:
+          USER_INTEGRATIONS_STAGING_STRICT: "true"
+          STAGING_TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          mkdir -p "$STAGING_STRICT_ARTIFACT_DIR"
+          pnpm --dir stock-analyzer exec playwright test \
+            -c playwright.staging-user-integrations.config.ts \
+            e2e/staging-user-integrations-strict.spec.ts
+
+      - name: Validate strict immutable evidence contract
+        if: always() && steps.strict_test.outcome != 'skipped'
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const target = process.env.TARGET_SHA;
+          const file = path.join(process.env.STAGING_STRICT_ARTIFACT_DIR, 'staging-user-integrations-strict.json');
+          if (!fs.existsSync(file)) throw new Error('strict user-integrations evidence artifact is missing');
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const checks = [
+            ['status', value.status === 'passed'],
+            ['target_sha', String(value.target_sha ?? '').toLowerCase() === target],
+            ['GET_COUNT>=1', Number(value.USER_INTEGRATIONS_GET_COUNT) >= 1],
+            ['actual endpoint success>=1', Number(value.USER_INTEGRATIONS_ACTUAL_ENDPOINT_SUCCESS_COUNT) >= 1],
+            ['HTTP_TERMINAL=true', value.USER_INTEGRATIONS_HTTP_TERMINAL === true],
+            ['abort_count=0', Number(value.USER_INTEGRATIONS_UNEXPECTED_ABORT_COUNT) === 0],
+            ['requestfailed_count=0', Number(value.USER_INTEGRATIONS_UNEXPECTED_REQUESTFAILED_COUNT) === 0],
+            ['post_logout_get=0', Number(value.POST_LOGOUT_INTEGRATIONS_REQUEST_COUNT) === 0],
+            ['stale_probe>=1', Number(value.STALE_RESPONSE_PROBE_COUNT) >= 1],
+            ['stale_ui_mutation=0', Number(value.STALE_RESPONSE_UI_MUTATION_COUNT) === 0],
+            ['logout_drain_probe>=1', Number(value.LOGOUT_DRAIN_PROBE_COUNT) >= 1],
+            ['auth_before_terminal=0', Number(value.LOGOUT_STARTED_BEFORE_INTEGRATIONS_TERMINAL_COUNT) === 0],
+            ['ephemeral_cleanup=true', value.EPHEMERAL_ACCOUNT_CLEANUP_OK === true],
+          ];
+          const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
+          if (failed.length > 0) throw new Error(`Strict evidence failed: ${failed.join(', ')}`);
+          const raw = fs.readFileSync(file, 'utf8');
+          if (/password|secret|refresh_token|access_token|authorization|@accounts\./i.test(raw)) {
+            throw new Error('Strict evidence artifact contains forbidden credential-like content');
+          }
+          NODE
+
+      - name: Upload strict exact-SHA evidence
+        if: always() && steps.strict_test.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-user-integrations-strict-${{ steps.command.outputs.sha }}
+          path: ${{ env.STAGING_STRICT_ARTIFACT_DIR }}/staging-user-integrations-strict.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Write strict evidence summary
+        if: success()
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const value = JSON.parse(fs.readFileSync(path.join(process.env.STAGING_STRICT_ARTIFACT_DIR, 'staging-user-integrations-strict.json'), 'utf8'));
+          console.log('## Strict Staging user-integrations evidence');
+          console.log('');
+          console.log(`- Target SHA: \`${process.env.TARGET_SHA}\``);
+          console.log(`- USER_INTEGRATIONS_GET_COUNT: \`${value.USER_INTEGRATIONS_GET_COUNT}\``);
+          console.log(`- USER_INTEGRATIONS_HTTP_TERMINAL: \`${value.USER_INTEGRATIONS_HTTP_TERMINAL}\``);
+          console.log(`- USER_INTEGRATIONS_UNEXPECTED_ABORT_COUNT: \`${value.USER_INTEGRATIONS_UNEXPECTED_ABORT_COUNT}\``);
+          console.log(`- USER_INTEGRATIONS_UNEXPECTED_REQUESTFAILED_COUNT: \`${value.USER_INTEGRATIONS_UNEXPECTED_REQUESTFAILED_COUNT}\``);
+          console.log(`- POST_LOGOUT_INTEGRATIONS_REQUEST_COUNT: \`${value.POST_LOGOUT_INTEGRATIONS_REQUEST_COUNT}\``);
+          console.log(`- STALE_RESPONSE_UI_MUTATION_COUNT: \`${value.STALE_RESPONSE_UI_MUTATION_COUNT}\``);
+          console.log('- Production deployment executed: `false`');
+          console.log('- Production database changed: `false`');
+          console.log('- Live trading enabled: `false`');
+          NODE
+
+      - name: Report strict-evidence PASS to release control
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[STAGING_USER_INTEGRATIONS_STRICT_REPORT]',
+                '',
+                `target_sha: ${process.env.TARGET_SHA}`,
+                `run_id: ${context.runId}`,
+                'result: PASS',
+                'production_deploy: false',
+                'production_db_mutation: false',
+                'live_trading: false',
+              ].join('\n'),
+            });
+
+      - name: Report strict-evidence failure to release control
+        if: failure()
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[STAGING_USER_INTEGRATIONS_STRICT_REPORT]',
+                '',
+                `target_sha: ${process.env.TARGET_SHA}`,
+                `run_id: ${context.runId}`,
+                'result: FAIL',
+                'production_deploy: false',
+                'production_db_mutation: false',
+                'live_trading: false',
+              ].join('\n'),
+            });
