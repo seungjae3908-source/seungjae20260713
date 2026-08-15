@@ -175,6 +175,27 @@ probe_data() {
   return "$result"
 }
 
+telegram_runtime_activation_ready() {
+  local output_file
+  output_file="$(mktemp /tmp/stock-app-telegram-runtime.XXXXXX)"
+  pm2 jlist >"$output_file"
+
+  node - "$output_file" "$PM2_NAME" <<'NODE'
+const fs = require('fs');
+const [file, processName] = process.argv.slice(2);
+const processes = JSON.parse(fs.readFileSync(file, 'utf8'));
+const selected = processes.find((item) => item.name === processName);
+const env = selected?.pm2_env;
+const valid = env?.status === 'online'
+  && String(env?.LIVE_TELEGRAM_ACTIVATION_APPROVED ?? '') === 'true'
+  && String(env?.TELEGRAM_INTELLIGENCE_WORKER_ENABLED ?? 'true') !== 'false';
+if (!valid) process.exit(1);
+NODE
+  local result=$?
+  rm -f "$output_file"
+  return "$result"
+}
+
 restore_backup() {
   echo "[rollback] restoring previous production snapshot"
 
@@ -218,14 +239,20 @@ fi
 
 if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]; then
   echo "[deploy] target marker is already active: $TARGET_SHA"
-  if probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA" && probe_data "http://127.0.0.1:$LIVE_PORT"; then
+  if probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA" \
+    && probe_data "http://127.0.0.1:$LIVE_PORT" \
+    && telegram_runtime_activation_ready; then
     exit 0
   fi
-  echo "[deploy] runtime identity is stale; refreshing PM2 environment for the already-active target"
-  DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
+  echo "[deploy] runtime identity or Telegram activation is stale; refreshing PM2 environment for the already-active target"
+  LIVE_TELEGRAM_ACTIVATION_APPROVED=true \
+    TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true \
+    DEPLOY_SHA="$TARGET_SHA" \
+    pm2 restart "$PM2_NAME" --update-env
   pm2 save
   probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA"
   probe_data "http://127.0.0.1:$LIVE_PORT"
+  telegram_runtime_activation_ready
   exit 0
 fi
 
@@ -299,6 +326,7 @@ rm -f "$PM2_JSON"
 (
   cd "$RELEASE_DIR/api-server"
   nohup env PORT="$CANARY_PORT" API_PORT="$CANARY_PORT" NODE_ENV=production DEPLOY_SHA="$TARGET_SHA" \
+    LIVE_TELEGRAM_ACTIVATION_APPROVED=false TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false \
     node --env-file="$CANARY_ENV" --enable-source-maps ./dist/index.mjs \
     >"$CANARY_LOG" 2>&1 &
   echo $! >"$RELEASE_DIR/.canary.pid"
@@ -345,11 +373,15 @@ set +e
   cp -a "$RELEASE_DIR/stock-analyzer/dist" "$LIVE_DIR/stock-analyzer/dist"
   printf '%s\n' "$TARGET_SHA" > "$DEPLOY_STATE_DIR/current-sha"
 
-  DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
+  LIVE_TELEGRAM_ACTIVATION_APPROVED=true \
+    TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true \
+    DEPLOY_SHA="$TARGET_SHA" \
+    pm2 restart "$PM2_NAME" --update-env
   pm2 save
 
   probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA"
   probe_data "http://127.0.0.1:$LIVE_PORT"
+  telegram_runtime_activation_ready
 
   if [[ -n "$PUBLIC_BASE_URL" ]]; then
     probe_health "${PUBLIC_BASE_URL%/}" "$TARGET_SHA"
