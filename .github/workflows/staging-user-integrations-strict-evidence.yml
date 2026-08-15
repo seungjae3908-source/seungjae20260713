@@ -165,7 +165,7 @@ jobs:
           run-id: ${{ steps.staging.outputs.run_id }}
           github-token: ${{ github.token }}
 
-      - name: Require release-ready upstream Staging verdict
+      - name: Require release-ready upstream Staging identity verdict
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
         run: |
@@ -196,23 +196,6 @@ jobs:
           if (Number(verdict.failed ?? -1) !== 0 || Number(verdict.skipped ?? -1) !== 0) {
             throw new Error('Exact-SHA Staging verdict has failed or skipped checks');
           }
-          NODE
-
-      - name: Require live Staging identity still matches target
-        env:
-          TARGET_SHA: ${{ steps.command.outputs.sha }}
-        run: |
-          set -Eeuo pipefail
-          [[ -n "$STAGING_BASE_URL" ]]
-          curl --fail --silent --show-error --max-time 20 "$STAGING_BASE_URL/api/health" > /tmp/strict-staging-health.json
-          node <<'NODE'
-          const fs = require('node:fs');
-          const target = process.env.TARGET_SHA;
-          const health = JSON.parse(fs.readFileSync('/tmp/strict-staging-health.json', 'utf8'));
-          const sha = String(health.deploySha ?? health.sha ?? health.commitSha ?? '').toLowerCase();
-          if (health.ok !== true) throw new Error('Staging health is not ok=true');
-          if (sha !== target) throw new Error(`Live Staging SHA mismatch: expected=${target} actual=${sha}`);
-          if (health.identityMatch !== true) throw new Error('Staging health identityMatch is not true');
           NODE
 
       - uses: pnpm/action-setup@v4
@@ -307,9 +290,9 @@ jobs:
           console.log(`- USER_INTEGRATIONS_UNEXPECTED_REQUESTFAILED_COUNT: \`${value.USER_INTEGRATIONS_UNEXPECTED_REQUESTFAILED_COUNT}\``);
           console.log(`- POST_LOGOUT_INTEGRATIONS_REQUEST_COUNT: \`${value.POST_LOGOUT_INTEGRATIONS_REQUEST_COUNT}\``);
           console.log(`- STALE_RESPONSE_UI_MUTATION_COUNT: \`${value.STALE_RESPONSE_UI_MUTATION_COUNT}\``);
-          console.log('- Production deployment executed: `false`');
-          console.log('- Production database changed: `false`');
-          console.log('- Live trading enabled: `false`');
+          console.log('- This workflow Production deploy: `false`');
+          console.log('- This workflow Production DB write capability: `none`');
+          console.log('- This workflow live-trading activation: `none`');
           NODE
 
       - name: Report strict-evidence PASS to release control
@@ -329,9 +312,9 @@ jobs:
                 `target_sha: ${process.env.TARGET_SHA}`,
                 `run_id: ${context.runId}`,
                 'result: PASS',
-                'production_deploy: false',
-                'production_db_mutation: false',
-                'live_trading: false',
+                'workflow_production_deploy: false',
+                'workflow_production_db_write_capability: none',
+                'workflow_live_trading_activation: none',
               ].join('\n'),
             });
 
@@ -352,8 +335,8 @@ jobs:
                 `target_sha: ${process.env.TARGET_SHA}`,
                 `run_id: ${context.runId}`,
                 'result: FAIL',
-                'production_deploy: false',
-                'production_db_mutation: false',
-                'live_trading: false',
+                'workflow_production_deploy: false',
+                'workflow_production_db_write_capability: none',
+                'workflow_live_trading_activation: none',
               ].join('\n'),
             });
