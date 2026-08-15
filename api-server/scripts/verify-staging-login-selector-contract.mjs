@@ -4,22 +4,23 @@ import path from 'node:path';
 const root = path.basename(process.cwd()) === 'api-server'
   ? path.resolve(process.cwd(), '..')
   : path.resolve(process.cwd());
-const spec = await readFile(
+const normalizeNewlines = (value) => value.replace(/\r\n?/g, '\n');
+const spec = normalizeNewlines(await readFile(
   path.join(root, 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts'),
   'utf8',
-);
-const app = await readFile(
+));
+const app = normalizeNewlines(await readFile(
   path.join(root, 'stock-analyzer/src/App.tsx'),
   'utf8',
-);
-const auth = await readFile(
+));
+const auth = normalizeNewlines(await readFile(
   path.join(root, 'stock-analyzer/src/lib/auth.tsx'),
   'utf8',
-);
-const routes = await readFile(
+));
+const routes = normalizeNewlines(await readFile(
   path.join(root, 'api-server/src/routes/index.ts'),
   'utf8',
-);
+));
 const assert = (condition, message) => {
   if (!condition) throw new Error(`[staging-login-selector-contract] ${message}`);
 };
@@ -42,8 +43,10 @@ assert(
 );
 
 assert(spec.includes('expected_logout_aborts: Diagnostic[]'), 'expected logout abort diagnostics bucket is missing');
-assert(spec.includes('type LogoutObservation = { candidates: Diagnostic[] }'), 'logout aborts must remain pending until post-logout checks pass');
+assert(spec.includes('type LogoutObservation = {'), 'logout observation contract is missing');
+assert(spec.includes('personalIntegrationReads: Set<Request>'), 'logout observation must retain exact personal integration request identities');
 assert(spec.includes('const activeLogoutObservations = new WeakMap<Page, LogoutObservation>()'), 'logout observation must be scoped to the active page');
+assert(spec.includes('const confirmedLogoutAbortRequests = new WeakMap<Request, string>()'), 'confirmed delayed aborts must remain scoped to exact request identities');
 assert(spec.includes("request.method() === 'POST'"), 'only POST logout requests may be considered expected');
 assert(spec.includes("parsed.pathname === '/auth/v1/logout'"), 'logout path must match exactly');
 assert(spec.includes('query.length === 1'), 'logout request must contain no query parameter other than scope');
@@ -57,8 +60,11 @@ const clickIndex = spec.indexOf('await logoutButton.click();');
 assert(visibleIndex >= 0 && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only around an explicit visible logout-button click');
 assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
 assert(spec.includes("parsed.pathname === '/api/user-integrations'"), 'the personal integration read may be classified only by its exact API path');
-assert(spec.includes('query.length === 0'), 'the personal integration logout exception must reject query-bearing requests');
-assert(spec.includes('parsed.origin === new URL(request.frame().url()).origin'), 'the personal integration logout exception must remain same-origin');
+assert(spec.includes('parsed.searchParams.size === 0'), 'the personal integration logout exception must reject query-bearing requests');
+assert(spec.includes('parsed.origin === expectedOrigin'), 'the personal integration logout exception must remain on the origin captured before logout');
+assert(spec.includes('logoutObservation.personalIntegrationReads.add(request);'), 'only an exact request observed during the explicit logout window may become a delayed candidate');
+assert(spec.includes('observation.personalIntegrationReads.has(request)'), 'active abort classification must require exact request identity');
+assert(spec.includes('confirmedLogoutAbortRequests.get(request)'), 'delayed abort classification must require an exact confirmed request identity');
 assert(spec.includes('routeObservation.candidates.push(diagnostic);'), 'matching route-transition aborts must be held as candidates first');
 assert(
   spec.indexOf('diagnostics.expected_logout_aborts.push(...observation.candidates);')
@@ -69,6 +75,11 @@ assert(spec.includes('await page.reload();'), 'logout validation must refresh th
 assert(spec.includes("await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toHaveCount(0);"), 'logout session must not return after refresh');
 assert(spec.includes("page.request.get('/api/paper-journal/snapshot')"), 'logout validation must probe a protected API');
 assert(spec.includes('[401, 403]'), 'protected API must be denied with 401 or 403 after logout');
+assert(
+  spec.indexOf('confirmedLogoutAbortRequests.set(request, observation.origin);')
+    > spec.indexOf("expect(\n      [401, 403],"),
+  'delayed request identities may be confirmed only after protected API denial succeeds',
+);
 assert(spec.includes('unconfirmed logout abort:'), 'unconfirmed candidates must return to unexpected HTTP errors');
 assert(spec.includes('diagnostics.unexpected_http_errors.push(diagnostic);'), 'all non-matching failed requests must remain unexpected');
 assert(spec.includes('if (response.status() < 400) return;'), 'all browser 4xx and 5xx responses must remain unexpected');
