@@ -3,11 +3,31 @@ const PROVIDER_PRIORITY = Object.freeze([
   "FALLBACK_FAILED",
   "RATE_LIMITED",
   "TIMEOUT",
+  "CONNECTION_ERROR",
   "BAD_RESPONSE",
+  "INVALID_CANDLE",
+  "EMPTY_HISTORY",
+  "REQUEST_CANCELLED",
+  "CIRCUIT_OPEN",
   "INSUFFICIENT_HISTORY",
+  "SYMBOL_UNSUPPORTED",
+  "DELISTED_OR_INACTIVE",
+  "MARKET_NOT_SUPPORTED",
   "OPTIONAL_ENRICHMENT_MISSING",
   "FALLBACK_USED",
 ]);
+
+const EXPLAINED_PROVIDER_EXCLUSIONS = Object.freeze(new Set([
+  "INSUFFICIENT_HISTORY",
+  "SYMBOL_UNSUPPORTED",
+  "DELISTED_OR_INACTIVE",
+  "MARKET_NOT_SUPPORTED",
+]));
+
+const NON_FAILURE_PROVIDER_CLASSIFICATIONS = Object.freeze(new Set([
+  "OPTIONAL_ENRICHMENT_MISSING",
+  "FALLBACK_USED",
+]));
 
 const REJECT_PRIORITY = Object.freeze([
   "DATA_STALE",
@@ -58,12 +78,24 @@ export function classifyProviderFailure(error, {
   if (!required || /DART_NOT_CONFIGURED|FINNHUB_NOT_CONFIGURED|OPTIONAL/u.test(text)) {
     return "OPTIONAL_ENRICHMENT_MISSING";
   }
-  if (fallbackAttempted) return "FALLBACK_FAILED";
-  if (status === 429 || /(?:HTTP_|^|\D)429(?:\D|$)|RATE_LIMIT/u.test(text)) return "RATE_LIMITED";
-  if (error?.name === "AbortError" || /TIMEOUT|DEADLINE|ABORT/u.test(text)) return "TIMEOUT";
+  if (/DELISTED|DELISTING|INACTIVE_SECURITY|INACTIVE_SYMBOL/u.test(text)) return "DELISTED_OR_INACTIVE";
+  if (/MARKET_NOT_SUPPORTED|UNSUPPORTED_MARKET/u.test(text)) return "MARKET_NOT_SUPPORTED";
+  if (status === 404 || /SYMBOL_UNSUPPORTED|INVALID_SYMBOL|UNKNOWN_SYMBOL|NO SUCH SYMBOL/u.test(text)) return "SYMBOL_UNSUPPORTED";
   if (/INSUFFICIENT|MISSING_HISTORY|NO_CANONICAL_CANDLES/u.test(text)) return "INSUFFICIENT_HISTORY";
+  if (/EMPTY_HISTORY|NO_HISTORY|EMPTY_CANDLES/u.test(text)) return "EMPTY_HISTORY";
+  if (/INVALID_CANDLE|INVALID_OHLC|MALFORMED_CANDLE/u.test(text)) return "INVALID_CANDLE";
+  if (status === 429 || /(?:HTTP_|^|\D)429(?:\D|$)|RATE_LIMIT/u.test(text)) return "RATE_LIMITED";
+  if (/CIRCUIT_OPEN/u.test(text)) return "CIRCUIT_OPEN";
+  if (/REQUEST_CANCELLED|CANCELED_BY_CALLER|CANCELLED_BY_CALLER/u.test(text)) return "REQUEST_CANCELLED";
+  if (error?.name === "AbortError" || /TIMEOUT|DEADLINE|ABORT/u.test(text)) return "TIMEOUT";
+  if (/ECONNRESET|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|NETWORK_ERROR|FETCH FAILED/u.test(text)) return "CONNECTION_ERROR";
+  if (fallbackAttempted) return "FALLBACK_FAILED";
   if ((status >= 400 && status <= 599) || /HTTP_[45]\d\d|INVALID_RESPONSE|BAD_RESPONSE/u.test(text)) return "BAD_RESPONSE";
   return "REQUIRED_PROVIDER_FAILURE";
+}
+
+export function isExplainedProviderExclusion(classification) {
+  return EXPLAINED_PROVIDER_EXCLUSIONS.has(classification);
 }
 
 export function providerFailureDiagnostic(error, options) {
@@ -71,7 +103,29 @@ export function providerFailureDiagnostic(error, options) {
   return Object.freeze({
     classification,
     required: options?.required !== false,
-    countsAsRequiredFailure: !["OPTIONAL_ENRICHMENT_MISSING", "FALLBACK_USED"].includes(classification),
+    countsAsRequiredFailure: !NON_FAILURE_PROVIDER_CLASSIFICATIONS.has(classification)
+      && !EXPLAINED_PROVIDER_EXCLUSIONS.has(classification),
+    explainedUnsupported: EXPLAINED_PROVIDER_EXCLUSIONS.has(classification),
+  });
+}
+
+export function summarizeProviderFailureClassifications(counts = {}) {
+  let explainedUnsupported = 0;
+  let unresolvedRequiredFailures = 0;
+  let optionalMissing = 0;
+  let fallbackUsed = 0;
+  for (const [classification, rawCount] of Object.entries(counts ?? {})) {
+    const count = Number.isInteger(rawCount) && rawCount > 0 ? rawCount : 0;
+    if (classification === "OPTIONAL_ENRICHMENT_MISSING") optionalMissing += count;
+    else if (classification === "FALLBACK_USED") fallbackUsed += count;
+    else if (EXPLAINED_PROVIDER_EXCLUSIONS.has(classification)) explainedUnsupported += count;
+    else unresolvedRequiredFailures += count;
+  }
+  return Object.freeze({
+    explainedUnsupported,
+    unresolvedRequiredFailures,
+    optionalMissing,
+    fallbackUsed,
   });
 }
 
@@ -188,7 +242,7 @@ export function parseNasdaqTraderDirectories({ nasdaqText, otherText } = {}) {
 
 function retryable(error) {
   const classification = classifyProviderFailure(error);
-  return ["RATE_LIMITED", "TIMEOUT"].includes(classification)
+  return ["RATE_LIMITED", "TIMEOUT", "CONNECTION_ERROR"].includes(classification)
     || Number(error?.status) >= 500;
 }
 
