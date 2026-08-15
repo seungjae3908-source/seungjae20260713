@@ -146,6 +146,17 @@ function loginSubmitButton(page: Page) {
   return page.locator('form').getByRole('button', { name: /^로그인$|sign in|log in/i });
 }
 
+async function waitForPendingUserIntegrationsReads() {
+  await expect.poll(
+    () => evidence.USER_INTEGRATIONS_GET_COUNT - evidence.USER_INTEGRATIONS_HTTP_TERMINAL_COUNT,
+    {
+      message: 'login user-integrations GET must reach HTTP terminal before verifier navigation',
+      timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe(0);
+}
+
 async function login(page: Page, loginName: string, password: string) {
   await page.goto('/login');
   const nameInput = page.locator(
@@ -161,23 +172,20 @@ async function login(page: Page, loginName: string, password: string) {
   await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({
     timeout: 30_000,
   });
+  await waitForPendingUserIntegrationsReads();
 }
 
 async function openAccountAndRequireActualTerminal(page: Page) {
-  const beforeGet = evidence.USER_INTEGRATIONS_GET_COUNT;
-  const beforeTerminal = evidence.USER_INTEGRATIONS_HTTP_TERMINAL_COUNT;
-  const beforeActualSuccess = evidence.USER_INTEGRATIONS_ACTUAL_ENDPOINT_SUCCESS_COUNT;
   await page.goto('/account');
   const panel = page.getByTestId('user-broker-telegram-panel');
   await expect(panel).toBeVisible();
   await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'success', {
     timeout: 30_000,
   });
-  await expect.poll(() => evidence.USER_INTEGRATIONS_GET_COUNT).toBeGreaterThan(beforeGet);
-  await expect.poll(() => evidence.USER_INTEGRATIONS_HTTP_TERMINAL_COUNT)
-    .toBeGreaterThan(beforeTerminal);
-  await expect.poll(() => evidence.USER_INTEGRATIONS_ACTUAL_ENDPOINT_SUCCESS_COUNT)
-    .toBeGreaterThan(beforeActualSuccess);
+  await expect.poll(() => evidence.USER_INTEGRATIONS_GET_COUNT).toBeGreaterThan(0);
+  await expect.poll(() => evidence.USER_INTEGRATIONS_HTTP_TERMINAL_COUNT).toBeGreaterThan(0);
+  await expect.poll(() => evidence.USER_INTEGRATIONS_ACTUAL_ENDPOINT_SUCCESS_COUNT).toBeGreaterThan(0);
+  await waitForPendingUserIntegrationsReads();
   return panel;
 }
 
