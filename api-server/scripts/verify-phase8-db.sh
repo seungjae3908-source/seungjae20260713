@@ -71,6 +71,8 @@ if (value.auth_users_copied !== 0 || value.profile_rows_copied !== 0 || value.st
 }
 NODE
 
+run_sql "verify legacy personal Telegram policy cleanup" "api-server/supabase/test/personal_telegram_policy_cleanup_integration.sql"
+
 run_sql "verify Auth profile trigger and deletion cascade" "api-server/supabase/test/staging_bootstrap_trigger_integration.sql"
 run_sql "seed exact four-tier auth fixtures" "api-server/supabase/test/phase8_auth_harness.sql"
 
