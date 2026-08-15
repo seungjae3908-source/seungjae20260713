@@ -23,7 +23,8 @@ async function assertNoHorizontalOverflow(page: Page) {
 async function openPage(page: Page) {
   await page.goto('/__phase5-backtest-e2e');
   await expect(page.getByTestId('backtest-page')).toBeVisible();
-  await expect(page.getByText('과거 데이터 기반 백테스트이며 미래 수익을 보장하지 않습니다.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '기본 설정', level: 2 })).toBeVisible();
+  await expect(page.getByTestId('backtest-advanced-settings')).not.toHaveAttribute('open', '');
   await expect(page.getByLabel('초기 자본')).toHaveValue('10000');
   const initialCapitalIsValid = await page.getByLabel('초기 자본').evaluate((element) => (element as HTMLInputElement).checkValidity());
   expect(initialCapitalIsValid).toBe(true);
