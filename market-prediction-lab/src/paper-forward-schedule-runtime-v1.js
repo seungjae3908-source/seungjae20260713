@@ -5,6 +5,7 @@ import { hostname } from "node:os";
 import {
   createRecurringPaperLoopState,
   restoreRecurringPaperLoopState,
+  runRecurringPaperCycle,
 } from "./recurring-paper-loop-v1.js";
 import {
   createCanonicalPaperForwardEvidenceProvider,
@@ -316,6 +317,13 @@ export async function runPaperForwardScheduledInvocation({
       timeoutMs: 30_000,
     }),
     clock,
+    runCycle: (input) => runRecurringPaperCycle({
+      ...input,
+      cycle: Object.freeze({
+        ...input.cycle,
+        identity,
+      }),
+    }),
   });
 
   const persistedStatus = await runtimeStatusStore.load();
