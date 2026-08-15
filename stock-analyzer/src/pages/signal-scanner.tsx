@@ -29,12 +29,21 @@ import type { FrontendScannerMarket } from '@/lib/signal-scanner-url';
 
 export type ScannerView = 'KR' | 'US' | 'SPOT' | 'FUTURES';
 type RequestStatus = 'loading' | 'success' | 'empty' | 'partial' | 'cancelled' | 'error';
+type MobileDetailTab = 'summary' | 'chart' | 'evidence' | 'performance' | 'risk';
 
 const VIEWS: Array<{ value: ScannerView; market: FrontendScannerMarket; label: string; description: string }> = [
   { value: 'KR', market: 'KR_STOCK', label: '국내주식', description: 'KRX 주식·ETF·ETN' },
   { value: 'US', market: 'US_STOCK', label: '미국주식', description: '미국 주식·ETF' },
   { value: 'SPOT', market: 'CRYPTO_SPOT', label: '코인 현물', description: '현물 Scanner에는 숏·레버리지를 적용하지 않습니다' },
   { value: 'FUTURES', market: 'CRYPTO_FUTURES', label: '코인 선물', description: 'Bitget USDT 선물' },
+];
+
+const MOBILE_DETAIL_TABS: ReadonlyArray<{ value: MobileDetailTab; label: string }> = [
+  { value: 'summary', label: '요약' },
+  { value: 'chart', label: '차트' },
+  { value: 'evidence', label: '근거' },
+  { value: 'performance', label: '성과' },
+  { value: 'risk', label: '위험' },
 ];
 
 const EMBEDDED_TIMEFRAMES: Readonly<Record<UnifiedScannerStrategyMode, readonly SignalScannerRequest['timeframe'][]>> = Object.freeze({
@@ -67,6 +76,11 @@ function requestErrorMessage(error: unknown): string {
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 2): string {
   if (value == null || !Number.isFinite(value)) return '미확인';
   return value.toLocaleString('ko-KR', { maximumFractionDigits });
+}
+
+function formatMetric(value: number | null | undefined, suffix = ''): string {
+  if (value == null || !Number.isFinite(value)) return '미확인';
+  return `${formatNumber(value)}${suffix}`;
 }
 
 function actionLabel(card: ScannerSignalCard): string {
@@ -135,6 +149,129 @@ function SignalDetailPanel({
   const why = matchedEvidence.flatMap((item) => item.reasons).filter(Boolean).slice(0, 8);
   const missing = [...new Set([...card.unverified, ...(card.aiValidation?.missingData ?? [])])];
   const risks = [...new Set([...card.warnings, ...(card.aiValidation?.risks ?? [])])];
+  const mobile = Boolean(onClose);
+  const [mobileTab, setMobileTab] = useState<MobileDetailTab>(() => showOrderPreparation ? 'risk' : 'summary');
+  const quality = card.backtestQuality;
+
+  useEffect(() => {
+    setMobileTab('summary');
+  }, [card.signalId]);
+
+  useEffect(() => {
+    if (showOrderPreparation) setMobileTab('risk');
+  }, [showOrderPreparation]);
+
+  const summaryContent = (
+    <div data-testid="scanner-mobile-summary" className="space-y-3">
+      <section aria-label="이 신호인 이유" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-black">왜 이 신호인가 · 핵심 판단</h3>
+          <span className="rounded-full border border-primary/25 px-2 py-1 text-[10px] font-black text-primary">{actionLabel(card)}</span>
+        </div>
+        {why.length > 0
+          ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.slice(0, 3).map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
+          : <p className="mt-2 text-xs text-muted-foreground">검증된 이유 설명이 없습니다. 근거가 없는 설명은 만들지 않습니다.</p>}
+        <p className="mt-2 break-words text-[10px] leading-4 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
+      </section>
+
+      <section className="rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
+        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">NO SYNTHETIC PRICE</span></div>
+        <div className="mt-2 grid grid-cols-2 gap-2 text-center">
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">목표1</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[0])}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">R:R</p><p className="text-xs font-black">{card.pricePlan.riskReward == null ? '미확인' : card.pricePlan.riskReward.toFixed(2)}</p></div>
+        </div>
+      </section>
+
+      <div className="grid grid-cols-2 gap-2">
+        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-xs font-black text-primary-foreground">AI Chart</button>
+        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-xs font-black">Order Preparation</button>
+      </div>
+    </div>
+  );
+
+  const evidenceContent = (
+    <div data-testid={mobile ? 'scanner-mobile-evidence' : 'scanner-desktop-evidence'} className={`${mobile ? '' : 'mt-3 '}space-y-3`}>
+      <section aria-label="이 신호인 이유" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
+        <h3 className="text-xs font-black">왜 이 신호인가</h3>
+        {why.length > 0
+          ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
+          : <p className="mt-2 text-xs text-muted-foreground">검증된 이유 설명이 없습니다. 근거가 없는 설명은 만들지 않습니다.</p>}
+      </section>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">일치 근거</h3><div className="mt-2 flex flex-wrap gap-1">{card.matched.length ? card.matched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-positive/10 px-2 py-1 text-[10px] text-positive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
+        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">불일치 조건</h3><div className="mt-2 flex flex-wrap gap-1">{card.notMatched.length ? card.notMatched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-destructive/10 px-2 py-1 text-[10px] text-destructive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
+        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">누락·미검증</h3><div className="mt-2 flex flex-wrap gap-1">{missing.length ? missing.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
+      </div>
+    </div>
+  );
+
+  const performanceContent = (
+    <section data-testid="scanner-mobile-performance" className="rounded-2xl border border-card-border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-xs font-black">검증 성과</h3>
+        <span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">{quality?.status ?? 'missing'}</span>
+      </div>
+      <p className="mt-2 text-[10px] leading-4 text-muted-foreground">검증 이력이 없거나 표본이 부족하면 0%로 만들지 않고 미확인으로 표시합니다.</p>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-center">
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">OOS 승률</p><p className="text-xs font-black">{formatMetric(quality?.oosWinRate, '%')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">WF 승률</p><p className="text-xs font-black">{formatMetric(quality?.walkForwardWinRate, '%')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Expectancy</p><p className="text-xs font-black">{formatMetric(quality?.expectancyPercent, '%')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Profit Factor</p><p className="text-xs font-black">{formatMetric(quality?.profitFactor)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">MDD</p><p className="text-xs font-black">{formatMetric(quality?.maxDrawdownPercent, '%')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">표본 거래</p><p className="text-xs font-black">{formatMetric(quality?.tradeCount)}</p></div>
+      </div>
+      <p className="mt-3 text-[10px] leading-4 text-muted-foreground">비용 반영 {quality?.costsIncluded === true ? '확인' : '미확인'} · 슬리피지 {quality?.slippageIncluded === true ? '확인' : '미확인'} · Regime {quality?.regime ?? '미확인'}</p>
+    </section>
+  );
+
+  const chartContent = (
+    <section data-testid="scanner-mobile-chart" className="rounded-2xl border border-card-border p-3">
+      <h3 className="text-xs font-black">AI Chart</h3>
+      <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">모바일 상세 안에 차트를 길게 끼워 넣지 않고 전체 차트 화면으로 전환해 세로 스크롤을 줄입니다.</p>
+      <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="mt-3 min-h-11 w-full rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI Chart 전체화면 열기</button>
+    </section>
+  );
+
+  const riskContent = (
+    <div data-testid="scanner-mobile-risk" className="space-y-3">
+      <section className="rounded-2xl border border-card-border p-3">
+        <h3 className="text-xs font-black">위험 · 데이터 상태</h3>
+        <div className="mt-2 grid grid-cols-2 gap-2 text-center">
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Risk</p><p className="text-xs font-black">{card.riskScore ?? '미확인'} · {card.riskLevel}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Data</p><p className="text-xs font-black">{card.dataState}</p></div>
+        </div>
+        <p className="mt-2 break-words text-[11px] leading-5 text-muted-foreground">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
+        <p className="mt-1 text-[11px] text-muted-foreground">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)}</p>
+        {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
+      </section>
+      <div className="grid grid-cols-2 gap-2">
+        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">Order Preparation</button>
+        <button type="button" onClick={onOpenAsset} className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">자산 상세</button>
+      </div>
+      <p className="text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
+      {showOrderPreparation ? (
+        <div data-testid="order-preparation" className="border-t border-card-border pt-3">
+          <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
+            <h3 className="text-xs font-black">Order Preparation · 실행 아님</h3>
+            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
+          </div>
+          <ScannerApprovalComposer selection={selection} />
+        </div>
+      ) : null}
+    </div>
+  );
+
+  const mobileContent = mobileTab === 'summary'
+    ? summaryContent
+    : mobileTab === 'chart'
+      ? chartContent
+      : mobileTab === 'evidence'
+        ? evidenceContent
+        : mobileTab === 'performance'
+          ? performanceContent
+          : riskContent;
 
   return (
     <section data-testid="signal-detail" aria-label="Signal Detail" className="min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-xl">
@@ -154,54 +291,63 @@ function SignalDetailPanel({
         <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Risk</p><p className="mt-1 text-sm font-black">{card.riskScore ?? '미확인'} · {card.riskLevel}</p></div>
       </div>
 
-      <section aria-label="이 신호인 이유" className="mt-3 rounded-2xl border border-primary/25 bg-primary/5 p-3">
-        <h3 className="text-xs font-black">왜 이 신호인가</h3>
-        {why.length > 0
-          ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
-          : <p className="mt-2 text-xs text-muted-foreground">검증된 이유 설명이 없습니다. 근거가 없는 설명은 만들지 않습니다.</p>}
-      </section>
-
-      <div className="mt-3 grid gap-2 sm:grid-cols-3">
-        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">일치 근거</h3><div className="mt-2 flex flex-wrap gap-1">{card.matched.length ? card.matched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-positive/10 px-2 py-1 text-[10px] text-positive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
-        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">불일치 조건</h3><div className="mt-2 flex flex-wrap gap-1">{card.notMatched.length ? card.notMatched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-destructive/10 px-2 py-1 text-[10px] text-destructive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
-        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">누락·미검증</h3><div className="mt-2 flex flex-wrap gap-1">{missing.length ? missing.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
-      </div>
-
-      <section className="mt-3 rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
-        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">PricePlan · 서버 계산값만 표시</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">NO SYNTHETIC PRICE</span></div>
-        <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">목표1</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[0])}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">목표2</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[1])}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">R:R</p><p className="text-xs font-black">{card.pricePlan.riskReward == null ? '미확인' : card.pricePlan.riskReward.toFixed(2)}</p></div>
-        </div>
-      </section>
-
-      <section className="mt-3 rounded-2xl border border-card-border p-3">
-        <h3 className="text-xs font-black">데이터 근거·Freshness</h3>
-        <p className="mt-2 break-words text-[11px] leading-5 text-muted-foreground">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
-        <p className="mt-1 break-words text-[11px] leading-5 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
-        <p className="mt-1 text-[11px] text-muted-foreground">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)} · {card.dataState}</p>
-        {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
-      </section>
-
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI Chart</button>
-        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">Order Preparation</button>
-        <button type="button" onClick={onOpenAsset} className="col-span-2 min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">기존 자산 상세 열기</button>
-      </div>
-      <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
-
-      {showOrderPreparation ? (
-        <div data-testid="order-preparation" className="mt-4 border-t border-card-border pt-4">
-          <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
-            <h3 className="text-xs font-black">Order Preparation · 실행 아님</h3>
-            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
+      {mobile ? (
+        <>
+          <div role="tablist" aria-label="Signal Detail 모바일 탭" data-testid="scanner-mobile-detail-tabs" className="mt-3 flex gap-1 overflow-x-auto overscroll-x-contain pb-1">
+            {MOBILE_DETAIL_TABS.map((tab) => (
+              <button
+                key={tab.value}
+                type="button"
+                role="tab"
+                aria-selected={mobileTab === tab.value}
+                onClick={() => setMobileTab(tab.value)}
+                className={`min-h-11 shrink-0 rounded-xl border px-3 text-xs font-black ${mobileTab === tab.value ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-background'}`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
-          <ScannerApprovalComposer selection={selection} />
-        </div>
-      ) : null}
+          <div role="tabpanel" className="mt-2" data-testid={`scanner-mobile-detail-panel-${mobileTab}`}>
+            {mobileContent}
+          </div>
+        </>
+      ) : (
+        <>
+          {evidenceContent}
+          <section className="mt-3 rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
+            <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">PricePlan · 서버 계산값만 표시</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">NO SYNTHETIC PRICE</span></div>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
+              <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
+              <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
+              <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">목표1</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[0])}</p></div>
+              <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">목표2</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[1])}</p></div>
+              <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">R:R</p><p className="text-xs font-black">{card.pricePlan.riskReward == null ? '미확인' : card.pricePlan.riskReward.toFixed(2)}</p></div>
+            </div>
+          </section>
+          <section className="mt-3 rounded-2xl border border-card-border p-3">
+            <h3 className="text-xs font-black">데이터 근거·Freshness</h3>
+            <p className="mt-2 break-words text-[11px] leading-5 text-muted-foreground">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
+            <p className="mt-1 break-words text-[11px] leading-5 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)} · {card.dataState}</p>
+            {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
+          </section>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI Chart</button>
+            <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">Order Preparation</button>
+            <button type="button" onClick={onOpenAsset} className="col-span-2 min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">기존 자산 상세 열기</button>
+          </div>
+          <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
+          {showOrderPreparation ? (
+            <div data-testid="order-preparation" className="mt-4 border-t border-card-border pt-4">
+              <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
+                <h3 className="text-xs font-black">Order Preparation · 실행 아님</h3>
+                <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
+              </div>
+              <ScannerApprovalComposer selection={selection} />
+            </div>
+          ) : null}
+        </>
+      )}
     </section>
   );
 }
@@ -569,4 +715,3 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     </main>
   );
 }
-
