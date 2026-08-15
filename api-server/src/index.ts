@@ -8,6 +8,7 @@ import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-quer
 import { startUserTelegramDeliveryWorker } from './features/user-broker-telegram/user-broker-telegram.worker';
 import { startPriceAlertMonitor } from './services/notification.service';
 import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
+import { startTelegramIntelligenceWorker } from './services/telegram-intelligence-worker.service';
 import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -74,74 +75,24 @@ app.use('/api/paper-journal', rejectPaperJournalQueryIdentity);
 app.use('/api', apiRouter);
 
 const frontendDistCandidates = [
-  path.resolve(
-    __dirname,
-    '../../stock-analyzer/dist/public',
-  ),
-
-  path.resolve(
-    __dirname,
-    '../../stock-analyzer/dist',
-  ),
-
-  path.resolve(
-    __dirname,
-    '../../../stock-analyzer/dist/public',
-  ),
-
-  path.resolve(
-    __dirname,
-    '../../../stock-analyzer/dist',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    '../stock-analyzer/dist/public',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    '../stock-analyzer/dist',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    'artifacts/stock-analyzer/dist/public',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    'artifacts/stock-analyzer/dist',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    'stock-analyzer/dist/public',
-  ),
-
-  path.resolve(
-    process.cwd(),
-    'stock-analyzer/dist',
-  ),
+  path.resolve(__dirname, '../../stock-analyzer/dist/public'),
+  path.resolve(__dirname, '../../stock-analyzer/dist'),
+  path.resolve(__dirname, '../../../stock-analyzer/dist/public'),
+  path.resolve(__dirname, '../../../stock-analyzer/dist'),
+  path.resolve(process.cwd(), '../stock-analyzer/dist/public'),
+  path.resolve(process.cwd(), '../stock-analyzer/dist'),
+  path.resolve(process.cwd(), 'artifacts/stock-analyzer/dist/public'),
+  path.resolve(process.cwd(), 'artifacts/stock-analyzer/dist'),
+  path.resolve(process.cwd(), 'stock-analyzer/dist/public'),
+  path.resolve(process.cwd(), 'stock-analyzer/dist'),
 ];
 
-const frontendDist =
-  frontendDistCandidates.find(
-    (candidate) =>
-      fs.existsSync(
-        path.join(
-          candidate,
-          'index.html',
-        ),
-      ),
-  );
+const frontendDist = frontendDistCandidates.find(
+  (candidate) => fs.existsSync(path.join(candidate, 'index.html')),
+);
 
 if (frontendDist) {
-  app.use(
-    express.static(
-      frontendDist,
-    ),
-  );
+  app.use(express.static(frontendDist));
 }
 
 const availableRoutes = [
@@ -165,42 +116,26 @@ const availableRoutes = [
 ];
 
 app.use((req, res) => {
-  if (
-    req.path.startsWith(
-      '/api',
-    )
-  ) {
+  if (req.path.startsWith('/api')) {
     res.status(404).json({
       ok: false,
       error: 'API_ROUTE_NOT_FOUND',
       path: req.path,
       available: availableRoutes,
     });
-
     return;
   }
 
   if (frontendDist) {
-    res.sendFile(
-      path.join(
-        frontendDist,
-        'index.html',
-      ),
-    );
-
+    res.sendFile(path.join(frontendDist, 'index.html'));
     return;
   }
 
   res.status(200).json({
     ok: true,
     service: 'api-server',
-    message:
-      'API server is running, but frontend dist was not found.',
-
-    available: [
-      '/health',
-      ...availableRoutes,
-    ],
+    message: 'API server is running, but frontend dist was not found.',
+    available: ['/health', ...availableRoutes],
   });
 });
 
@@ -208,26 +143,18 @@ app.listen(
   port,
   '0.0.0.0',
   () => {
-    console.log(
-      `[api-server] listening on 0.0.0.0:${port}`,
-    );
-
-    console.log(
-      '[api-server] Kiwoom routes enabled at /api/kiwoom',
-    );
+    console.log(`[api-server] listening on 0.0.0.0:${port}`);
+    console.log('[api-server] Kiwoom routes enabled at /api/kiwoom');
 
     startPriceAlertMonitor();
     startTradeRecoveryWorker();
     startUserTelegramDeliveryWorker();
+    startTelegramIntelligenceWorker();
 
     if (frontendDist) {
-      console.log(
-        `[api-server] serving frontend from ${frontendDist}`,
-      );
+      console.log(`[api-server] serving frontend from ${frontendDist}`);
     } else {
-      console.log(
-        '[api-server] frontend dist not found, api only mode',
-      );
+      console.log('[api-server] frontend dist not found, api only mode');
     }
   },
 );
