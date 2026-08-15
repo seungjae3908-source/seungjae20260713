@@ -556,7 +556,6 @@ function scannerFixture(state: 'complete' | 'partial' | 'unavailable') {
       startedCount: 1,
       completedCount: unavailable ? 0 : 1,
       excludedCount: 0,
-      successCount: unavailable ? 0 : 1,
       providerErrorCount: 0,
       timeoutCount: unavailable ? 1 : 0,
       partial,
