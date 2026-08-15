@@ -13,6 +13,7 @@ const manifest = await read('api-server/supabase/bootstrap/staging-bootstrap.sql
 const guard = await read('api-server/supabase/bootstrap/staging-empty-project-guard.sql');
 const base = await read('api-server/supabase/bootstrap/staging-allowlist-base.sql');
 const assertion = await read('api-server/supabase/bootstrap/staging-bootstrap-assert.sql');
+const telegramStorage = await read('api-server/supabase/migrations/2026081501_personal_telegram_storage.sql');
 const runner = await read('api-server/scripts/apply-staging-supabase-bootstrap.mjs');
 const verdict = await read('api-server/scripts/build-staging-verdict.mjs');
 const serverEntry = await read('api-server/src/index.ts');
@@ -24,6 +25,27 @@ const triggerTest = await read('api-server/supabase/test/staging_bootstrap_trigg
 assert(!manifest.includes('20260716_full_schema_idempotent.sql'), 'must not import the historical full schema');
 assert(!manifest.includes('../schema.sql'), 'must not import the broad legacy schema file');
 assert(manifest.includes('staging-allowlist-base.sql'), 'manifest must use the allowlisted base schema');
+assert(manifest.includes('2026081501_personal_telegram_storage.sql'), 'manifest must include personal Telegram storage');
+assert(runner.includes('2026081501_personal_telegram_storage.sql'), 'atomic runner must include personal Telegram storage');
+
+for (const serverTable of [
+  'telegram_connections',
+  'telegram_link_tokens',
+  'user_execution_events',
+  'notification_deliveries',
+]) {
+  assert(telegramStorage.includes(`public.${serverTable}`), `personal Telegram migration is missing ${serverTable}`);
+  assert(assertion.includes(`'${serverTable}'`), `final assertion is missing ${serverTable}`);
+}
+assert(!telegramStorage.includes('public.notification_preferences'), 'personal Telegram migration must not mutate unified notification preferences');
+assert(
+  telegramStorage.includes('from public, anon, authenticated'),
+  'personal Telegram tables must revoke every API role',
+);
+assert(
+  telegramStorage.includes('to service_role'),
+  'personal Telegram tables must remain available only to the server role',
+);
 
 for (const forbidden of [
   'STAGING_PENDING_EMAIL', 'STAGING_PENDING_PASSWORD',
