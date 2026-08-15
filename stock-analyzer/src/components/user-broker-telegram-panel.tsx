@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { authorizedFetch } from '@/lib/auth-fetch';
+import { authorizedFetch, type AuthorizedFetchOptions } from '@/lib/auth-fetch';
 import { useAuth } from '@/lib/auth';
 import { userIntegrationsRequestLifecycle } from '@/lib/user-integrations-request-lifecycle';
 
@@ -87,11 +87,15 @@ function normalizeIntegrationState(value: unknown): IntegrationState {
   };
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
+async function api<T>(
+  path: string,
+  init?: RequestInit,
+  fetchOptions?: AuthorizedFetchOptions,
+): Promise<T> {
   const response = await authorizedFetch(path, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-  });
+  }, fetchOptions);
   const payload = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(payload.error || `HTTP_${response.status}`);
   return payload;
@@ -121,7 +125,10 @@ export function UserBrokerTelegramPanel() {
       identity,
       requestKey,
       force,
-      load: (signal) => api<unknown>('/api/user-integrations', { signal }),
+      // The lifecycle owns the logical UI deadline and logout drain. Do not let
+      // the generic API timeout physically abort this read while logout waits
+      // for an HTTP terminal.
+      load: (signal) => api<unknown>('/api/user-integrations', { signal }, { timeoutMs: null }),
     });
     if (
       !mountedRef.current
