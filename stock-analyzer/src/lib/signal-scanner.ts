@@ -3,7 +3,7 @@ import { buildSignalScannerRequestUrl } from './signal-scanner-url';
 
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
-export type ScannerTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
+export type ScannerTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NO_TRADE' | 'UNKNOWN' | 'NONE';
 export type ScannerStrategyMode = 'scalping' | 'swing' | 'position';
 export type ScannerSignalGrade = 'S' | 'A' | 'B' | 'C' | 'D';
 export type ScannerSignalState =
