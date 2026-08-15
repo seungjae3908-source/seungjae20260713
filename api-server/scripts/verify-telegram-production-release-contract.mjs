@@ -3,7 +3,9 @@ import path from 'node:path';
 
 const root = process.cwd();
 const workflowPath = path.join(root, '.github/workflows/telegram-production-release.yml');
+const deployPath = path.join(root, 'ops/deploy-production.sh');
 const source = fs.readFileSync(workflowPath, 'utf8');
+const deploySource = fs.readFileSync(deployPath, 'utf8');
 
 const requiredFragments = [
   'name: Telegram Production Release',
@@ -52,6 +54,63 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+const deployRequiredFragments = [
+  'telegram_runtime_activation_ready()',
+  'runtime identity or Telegram activation is stale',
+  'LIVE_TELEGRAM_ACTIVATION_APPROVED=false TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false',
+  'LIVE_TELEGRAM_ACTIVATION_APPROVED=true',
+  'TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true',
+  'telegram_runtime_activation_ready',
+];
+const missingDeploy = deployRequiredFragments.filter((fragment) => !deploySource.includes(fragment));
+if (missingDeploy.length > 0) {
+  console.error(`[telegram-production-release-contract] missing deployment activation safeguards: ${missingDeploy.join(', ')}`);
+  process.exit(1);
+}
+
+const canaryStart = deploySource.indexOf('nohup env PORT="$CANARY_PORT"');
+const canaryEnd = deploySource.indexOf('CANARY_PID="$(cat "$RELEASE_DIR/.canary.pid")"');
+if (canaryStart < 0 || canaryEnd <= canaryStart) {
+  console.error('[telegram-production-release-contract] canary process block was not found');
+  process.exit(1);
+}
+const canaryBlock = deploySource.slice(canaryStart, canaryEnd);
+if (!canaryBlock.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=false')
+  || !canaryBlock.includes('TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false')
+  || canaryBlock.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=true')) {
+  console.error('[telegram-production-release-contract] canary must remain Telegram fail-closed');
+  process.exit(1);
+}
+
+const sameTargetStart = deploySource.indexOf('if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]');
+const sameTargetEnd = deploySource.indexOf('mkdir -p "$RELEASE_DIR"', sameTargetStart);
+if (sameTargetStart < 0 || sameTargetEnd <= sameTargetStart) {
+  console.error('[telegram-production-release-contract] same-target refresh block was not found');
+  process.exit(1);
+}
+const sameTargetBlock = deploySource.slice(sameTargetStart, sameTargetEnd);
+if (!sameTargetBlock.includes('telegram_runtime_activation_ready')
+  || !sameTargetBlock.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=true')
+  || !sameTargetBlock.includes('TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true')) {
+  console.error('[telegram-production-release-contract] same-target deployment must repair Telegram activation');
+  process.exit(1);
+}
+
+const promotionStart = deploySource.lastIndexOf('set +e');
+const promotionEnd = deploySource.indexOf('DEPLOY_RESULT=$?', promotionStart);
+if (promotionStart < 0 || promotionEnd <= promotionStart) {
+  console.error('[telegram-production-release-contract] production promotion block was not found');
+  process.exit(1);
+}
+const promotionBlock = deploySource.slice(promotionStart, promotionEnd);
+if (!promotionBlock.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=true')
+  || !promotionBlock.includes('TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true')
+  || !promotionBlock.includes('pm2 restart "$PM2_NAME" --update-env')
+  || !promotionBlock.includes('telegram_runtime_activation_ready')) {
+  console.error('[telegram-production-release-contract] exact production promotion must activate and verify Telegram runtime');
+  process.exit(1);
+}
+
 const forbiddenPatterns = [
   [/pull_request_target\s*:/, 'pull_request_target is forbidden'],
   [/repository_dispatch\s*:/, 'repository_dispatch is forbidden'],
@@ -64,7 +123,7 @@ const forbiddenPatterns = [
 ];
 
 const violations = forbiddenPatterns
-  .filter(([pattern]) => pattern.test(source))
+  .filter(([pattern]) => pattern.test(source) || pattern.test(deploySource))
   .map(([, message]) => message);
 if (violations.length > 0) {
   console.error(`[telegram-production-release-contract] forbidden behavior: ${violations.join(', ')}`);
@@ -80,10 +139,10 @@ if (exactCommandMatches.length !== 1) {
 const secretNames = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
 for (const name of secretNames) {
   const outputPattern = new RegExp(`(?:GITHUB_OUTPUT|GITHUB_STEP_SUMMARY)[^\\n]*${name}`, 'i');
-  if (outputPattern.test(source)) {
+  if (outputPattern.test(source) || outputPattern.test(deploySource)) {
     console.error(`[telegram-production-release-contract] ${name} must not be written to outputs or summaries`);
     process.exit(1);
   }
 }
 
-console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, existing Production dispatch, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');
+console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, canary fail-closed behavior, production Telegram activation, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');
