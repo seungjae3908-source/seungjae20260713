@@ -1,5 +1,6 @@
 import type { TradingRepository } from '../../services/trade-automation.repository';
 import { executionEventFromTradingOrder, UserBrokerTelegramService } from './user-broker-telegram.service';
+import type { MemberTier } from '../../../../packages/member-access/src/index.js';
 
 export type TradeExecutionEventBridgeResult = {
   scanned: number;
@@ -23,7 +24,7 @@ export class TradeExecutionEventBridgeService {
     private readonly integrationService: UserBrokerTelegramService,
   ) {}
 
-  async syncUser(userId: string): Promise<TradeExecutionEventBridgeResult> {
+  async syncUser(userId: string, membership: MemberTier = 'admin'): Promise<TradeExecutionEventBridgeResult> {
     const transitions = await this.tradingRepository.listEvents(userId);
     let mapped = 0;
     let inserted = 0;
@@ -52,7 +53,7 @@ export class TradeExecutionEventBridgeService {
       );
       if (!event) continue;
       mapped += 1;
-      const result = await this.integrationService.recordEvent(event);
+      const result = await this.integrationService.recordEvent(event, new Date(), membership);
       if (result.inserted) inserted += 1;
       if (result.deliveryQueued) deliveryQueued += 1;
     }

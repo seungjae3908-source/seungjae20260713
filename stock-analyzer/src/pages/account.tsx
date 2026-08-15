@@ -3,6 +3,7 @@ import { useLocation } from 'wouter';
 import { ArrowLeft, Clock3, LogIn, LogOut, ShieldCheck, UserPlus } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { BrokerageAccountConnections } from '@/components/brokerage-account-connections';
+import { UserBrokerTelegramPanel } from '@/components/user-broker-telegram-panel';
 import { useAuth } from '@/lib/auth';
 import { MEMBER_TIER_LABELS } from '../../../packages/member-access/src/index.js';
 
@@ -63,6 +64,7 @@ export default function AccountPage() {
         </form>
       </Card>}
       {!auth.loading && auth.user && auth.isAdmin ? <BrokerageAccountConnections /> : null}
+      {!auth.loading && auth.user && auth.can('canConnectPersonalTelegram') ? <div className="mt-4"><UserBrokerTelegramPanel /></div> : null}
       {(notice || error) && <p className={`mt-3 break-words rounded-2xl p-4 text-sm font-bold ${error ? 'bg-destructive/10 text-destructive' : 'bg-positive/10 text-positive'}`}>{error || notice}</p>}
     </main>{auth.isApproved && <BottomNav />}
   </div>;
