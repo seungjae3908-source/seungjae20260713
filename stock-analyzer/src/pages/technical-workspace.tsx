@@ -17,9 +17,12 @@ import {
 const AiChartPage = lazy(() => import('@/pages/ai-chart'));
 const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
 const SignalScannerPage = lazy(() => import('@/pages/signal-scanner'));
-const BacktestResearchPanel = lazy(() => import('@/components/backtest-research-panel').then((module) => ({ default: module.BacktestResearchPanel })));
+const BacktestResearchPanel = lazy(() => import('@/components/backtest-research-panel').then((module) => ({
+  default: module.BacktestResearchPanel,
+})));
 
 type Workspace = 'signal' | 'chart' | 'backtest' | 'trade';
+type LoadedScannerLayout = ReturnType<typeof loadUiBuilderSignalScannerLayout>;
 
 const WORKSPACE_TABS = [
   { value: 'signal', label: 'AI 검색기' },
@@ -38,6 +41,7 @@ const WORKSPACE_TITLES: Record<Workspace, string> = {
 function useDesktopWorkspace() {
   const query = '(min-width: 1024px)';
   const [desktop, setDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
+
   useEffect(() => {
     const media = window.matchMedia(query);
     const update = () => setDesktop(media.matches);
@@ -45,6 +49,7 @@ function useDesktopWorkspace() {
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
+
   return desktop;
 }
 
@@ -91,7 +96,7 @@ function PositionSummarySurface() {
       <section data-testid="ui-builder-position-summary-none" className="min-w-0 rounded-3xl border border-card-border bg-card p-3 shadow-sm sm:p-4">
         <h2 className="text-center text-sm font-black">내 포지션</h2>
         <p className="mt-2 break-words text-xs font-bold">{selection.displayName} · {selection.ticker}</p>
-        <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">동기화된 보유 기록이 없습니다. 계좌나 private trading API를 호출하지 않습니다.</p>
+        <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">동기화된 보유 기록이 없습니다. 읽기 전용 상태만 표시합니다.</p>
       </section>
     );
   }
@@ -131,19 +136,40 @@ function TradeReviewSurface() {
   return <ScannerApprovalComposer selection={selection} />;
 }
 
-function ScannerSurface({ desktop }: { desktop: boolean }) {
+function ScannerSurface({ desktop, showSectionHeader, builderMobile = false }: { desktop: boolean; showSectionHeader: boolean; builderMobile?: boolean }) {
   return (
-    <div className="h-full min-h-0 min-w-0 overflow-hidden [&_main>div>header:first-child]:hidden">
+    <div className={[
+      'h-full min-h-0 min-w-0 overflow-hidden',
+      showSectionHeader
+        ? '[&_main>div>header:first-child]:rounded-2xl [&_main>div>header:first-child]:p-3 [&_main>div>header:first-child_p]:hidden [&_main>div>header:first-child_h1]:text-center'
+        : '[&_main>div>header:first-child]:hidden',
+      builderMobile ? '[&_main]:h-auto [&_main]:overflow-visible [&_main]:pb-0' : '',
+    ].join(' ')}>
       <SignalScannerPage embedded={desktop} />
     </div>
   );
 }
 
-function MobileWorkspace({ workspace }: { workspace: Workspace }) {
+function MobileSignalWorkspace({ builderLayout }: { builderLayout: LoadedScannerLayout }) {
+  if (builderLayout.source !== 'builder') return <ScannerSurface desktop={false} showSectionHeader={false} />;
+
+  return (
+    <UiBuilderSignalScannerLayout
+      layout={builderLayout.layout}
+      scanner={<ScannerSurface desktop={false} showSectionHeader builderMobile />}
+      chart={<AiChartPage embedded />}
+      position={<PositionSummarySurface />}
+      tradeReview={<TradeReviewSurface />}
+      fallback={<ScannerSurface desktop={false} showSectionHeader={false} />}
+    />
+  );
+}
+
+function MobileWorkspace({ workspace, builderLayout }: { workspace: Workspace; builderLayout: LoadedScannerLayout }) {
   return (
     <div role="tabpanel" data-testid={`technical-mobile-panel-${workspace}`} className="min-h-0 min-w-0 flex-1 overflow-hidden">
       <Suspense fallback={<WorkspaceFallback />}>
-        {workspace === 'signal' ? <ScannerSurface desktop={false} /> : null}
+        {workspace === 'signal' ? <MobileSignalWorkspace builderLayout={builderLayout} /> : null}
         {workspace === 'chart' ? <AiChartPage embedded /> : null}
         {workspace === 'backtest' ? <BacktestResearchPanel compact /> : null}
         {workspace === 'trade' ? <AutoTradingPage embedded /> : null}
@@ -152,14 +178,14 @@ function MobileWorkspace({ workspace }: { workspace: Workspace }) {
   );
 }
 
-function DesktopWorkspace({ workspace, builderLayout }: { workspace: Workspace; builderLayout: ReturnType<typeof loadUiBuilderSignalScannerLayout> }) {
+function DesktopWorkspace({ workspace, builderLayout }: { workspace: Workspace; builderLayout: LoadedScannerLayout }) {
   if (workspace === 'chart') return <Suspense fallback={<WorkspaceFallback />}><AiChartPage embedded /></Suspense>;
   if (workspace === 'backtest') return <Suspense fallback={<WorkspaceFallback />}><BacktestResearchPanel compact /></Suspense>;
   if (workspace === 'trade') return <Suspense fallback={<WorkspaceFallback />}><AutoTradingPage embedded /></Suspense>;
 
   const fallback = (
     <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(360px,0.88fr)_minmax(0,2fr)] overflow-hidden bg-background xl:grid-cols-[minmax(420px,0.82fr)_minmax(0,2fr)]">
-      <aside className="min-h-0 min-w-0 overflow-hidden border-r border-card-border"><ScannerSurface desktop /></aside>
+      <aside className="min-h-0 min-w-0 overflow-hidden border-r border-card-border"><ScannerSurface desktop showSectionHeader /></aside>
       <section className="min-h-0 min-w-0 overflow-hidden"><AiChartPage embedded /></section>
     </div>
   );
@@ -170,7 +196,7 @@ function DesktopWorkspace({ workspace, builderLayout }: { workspace: Workspace; 
     <Suspense fallback={<WorkspaceFallback />}>
       <UiBuilderSignalScannerLayout
         layout={builderLayout.layout}
-        scanner={<ScannerSurface desktop />}
+        scanner={<ScannerSurface desktop showSectionHeader />}
         chart={<AiChartPage embedded />}
         position={<PositionSummarySurface />}
         tradeReview={<TradeReviewSurface />}
@@ -201,21 +227,14 @@ export default function TechnicalWorkspacePage() {
         infoItems={[
           'AI 검색기에서 국내·미국·코인 현물·코인 선물 후보를 같은 방식으로 확인합니다.',
           '종목 선택 상태는 AI 차트와 승인형 모의매매 검토 흐름으로 이어집니다.',
-          '실전 주문은 활성화하지 않으며 사용자 승인과 Risk Engine 검증을 유지합니다.',
+          '실전 주문은 활성화하지 않으며 사용자 승인과 최종 위험 검증을 유지합니다.',
         ]}
       />
       <div className="shrink-0 border-b border-card-border bg-background px-2 py-2 sm:px-3">
-        <ResponsiveTabs
-          value={workspace}
-          options={WORKSPACE_TABS}
-          onChange={setWorkspace}
-          ariaLabel="기술 기능 탭"
-          testId={desktop ? 'technical-desktop-tabs' : 'technical-mobile-tabs'}
-          compact
-        />
+        <ResponsiveTabs value={workspace} options={WORKSPACE_TABS} onChange={setWorkspace} ariaLabel="기술 기능 탭" testId={desktop ? 'technical-desktop-tabs' : 'technical-mobile-tabs'} compact />
       </div>
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        {desktop ? <DesktopWorkspace workspace={workspace} builderLayout={loadedLayout} /> : <MobileWorkspace workspace={workspace} />}
+        {desktop ? <DesktopWorkspace workspace={workspace} builderLayout={loadedLayout} /> : <MobileWorkspace workspace={workspace} builderLayout={loadedLayout} />}
       </div>
       <BottomNav />
     </div>
