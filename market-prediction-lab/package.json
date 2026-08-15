@@ -9,6 +9,7 @@
   "scripts": {
     "check": "node scripts/check-all.js",
     "test": "node --test tests/*.test.js",
+    "paper:scheduler:verify": "node --test tests/paper-scheduler-driver-v1.test.js tests/recurring-paper-loop-v1.test.js tests/signal-performance-persistence-v1.test.js",
     "test:temporal": "node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/market-structure-history.test.js tests/model-ensemble.test.js tests/shadow-ledger.test.js",
     "smoke": "node scripts/smoke-pipeline.js",
     "stress": "node scripts/stress-pipeline.js",
