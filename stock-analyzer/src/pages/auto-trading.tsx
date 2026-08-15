@@ -1,4 +1,4 @@
-import type { ComponentProps } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { CheckCircle2, ShieldCheck, ShieldX } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
@@ -30,6 +30,9 @@ function StatusItem({ label, value, tone }: { label: string; value: string; tone
 }
 
 export default function AutoTradingPage({ fixture, approvalFixture, embedded = false }: AutoTradingPageProps) {
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground" data-testid="auto-trading-page">
       {!embedded ? (
@@ -61,24 +64,38 @@ export default function AutoTradingPage({ fixture, approvalFixture, embedded = f
 
           <TradeApprovalQueue fixture={approvalFixture} />
 
-          <details className="rounded-3xl border border-card-border bg-card" data-testid="auto-trading-advanced-settings">
+          <details
+            open={advancedOpen}
+            onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+            className="rounded-3xl border border-card-border bg-card"
+            data-testid="auto-trading-advanced-settings"
+          >
             <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between px-4 text-sm font-black [&::-webkit-details-marker]:hidden">
               안전설정 · 거래소 연결
               <span aria-hidden className="text-muted-foreground">⌄</span>
             </summary>
-            <div className="border-t border-card-border p-3 sm:p-4">
-              <TradeAutomationSettings fixture={fixture} />
-            </div>
+            {advancedOpen ? (
+              <div className="border-t border-card-border p-3 sm:p-4">
+                <TradeAutomationSettings fixture={fixture} />
+              </div>
+            ) : null}
           </details>
 
-          <details className="rounded-3xl border border-card-border bg-card" data-testid="auto-trading-notification-settings">
+          <details
+            open={notificationOpen}
+            onToggle={(event) => setNotificationOpen(event.currentTarget.open)}
+            className="rounded-3xl border border-card-border bg-card"
+            data-testid="auto-trading-notification-settings"
+          >
             <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between px-4 text-sm font-black [&::-webkit-details-marker]:hidden">
               주문 알림 · 텔레그램
               <span aria-hidden className="text-muted-foreground">⌄</span>
             </summary>
-            <div className="border-t border-card-border p-3 sm:p-4">
-              <UserBrokerTelegramPanel />
-            </div>
+            {notificationOpen ? (
+              <div className="border-t border-card-border p-3 sm:p-4">
+                <UserBrokerTelegramPanel />
+              </div>
+            ) : null}
           </details>
         </div>
       </main>
