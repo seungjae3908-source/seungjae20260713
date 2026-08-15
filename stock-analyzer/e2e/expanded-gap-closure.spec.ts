@@ -258,10 +258,10 @@ async function mockUnifiedSearch(page: Page) {
 test('005930 AAPL KRW-BTC and BTCUSDT resolve to exact canonical semantic identities', async ({ page }) => {
   await mockUnifiedSearch(page);
   const cases = [
-    { query: '005930', option: /삼성전자.*005930/, expected: { asset: 'stock', market: 'KR', ticker: '005930', coinMarket: null, symbol: null } },
-    { query: 'AAPL', option: /애플.*AAPL/, expected: { asset: 'stock', market: 'US', ticker: 'AAPL', coinMarket: null, symbol: null } },
-    { query: 'KRW-BTC', option: /비트코인.*UPBIT.*BTC\/KRW/, expected: { asset: 'coin', market: null, ticker: null, coinMarket: 'spot', symbol: 'BTC' } },
-    { query: 'BTCUSDT', option: /비트코인.*BITGET.*BTCUSDT/, expected: { asset: 'coin', market: null, ticker: null, coinMarket: 'futures', symbol: 'BTCUSDT' } },
+    { query: '005930', option: /삼성전자.*005930/, expectedPath: '/stock-info/analysis', expected: { asset: 'stock', market: 'KR', ticker: '005930', coinMarket: null, symbol: null } },
+    { query: 'AAPL', option: /애플.*AAPL/, expectedPath: '/stock-info/analysis', expected: { asset: 'stock', market: 'US', ticker: 'AAPL', coinMarket: null, symbol: null } },
+    { query: 'KRW-BTC', option: /비트코인.*UPBIT.*BTC\/KRW/, expectedPath: '/stock-info', expected: { asset: 'coin', market: null, ticker: null, coinMarket: 'spot', symbol: 'BTC' } },
+    { query: 'BTCUSDT', option: /비트코인.*BITGET.*BTCUSDT/, expectedPath: '/stock-info', expected: { asset: 'coin', market: null, ticker: null, coinMarket: 'futures', symbol: 'BTCUSDT' } },
   ];
 
   for (const item of cases) {
@@ -269,7 +269,7 @@ test('005930 AAPL KRW-BTC and BTCUSDT resolve to exact canonical semantic identi
     const input = page.getByRole('combobox', { name: '통합 자산 검색' });
     await input.fill(item.query);
     await page.getByRole('option', { name: item.option }).click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe('/stock-info');
+    await expect.poll(() => new URL(page.url()).pathname).toBe(item.expectedPath);
     const url = new URL(page.url());
     expect(url.searchParams.get('asset')).toBe(item.expected.asset);
     expect(url.searchParams.get('market')).toBe(item.expected.market);
