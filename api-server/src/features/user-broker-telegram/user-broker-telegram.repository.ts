@@ -1,6 +1,7 @@
 import { getSupabase, hasSupabaseServerKey } from '../../lib/supabase';
 import {
   DEFAULT_NOTIFICATION_PREFERENCES,
+  NOTIFICATION_PREFERENCE_KEYS,
   type NotificationDelivery,
   type NotificationDeliveryState,
   type NotificationPreferences,
@@ -40,6 +41,37 @@ function copy<T>(value: T): T {
 
 function normalizedPreferences(value?: Partial<NotificationPreferences> | null): NotificationPreferences {
   return { ...DEFAULT_NOTIFICATION_PREFERENCES, ...(value ?? {}) };
+}
+
+export const TELEGRAM_NOTIFICATION_PREFERENCES_MARKER = 'telegram_preferences_v1';
+const telegramPreferenceKeys = new Set<string>(NOTIFICATION_PREFERENCE_KEYS);
+
+export function notificationPreferencesFromEnabledTypes(value: unknown): NotificationPreferences {
+  if (!Array.isArray(value) || !value.includes(TELEGRAM_NOTIFICATION_PREFERENCES_MARKER)) {
+    return normalizedPreferences();
+  }
+  const enabled = new Set(value.filter((item): item is string => typeof item === 'string'));
+  return Object.fromEntries(
+    NOTIFICATION_PREFERENCE_KEYS.map((key) => [key, enabled.has(key)]),
+  ) as NotificationPreferences;
+}
+
+export function enabledTypesWithTelegramPreferences(
+  value: unknown,
+  preferences: NotificationPreferences,
+): string[] {
+  const preserved = Array.isArray(value)
+    ? value.filter((item): item is string => (
+      typeof item === 'string'
+      && item !== TELEGRAM_NOTIFICATION_PREFERENCES_MARKER
+      && !telegramPreferenceKeys.has(item)
+    ))
+    : [];
+  return [
+    ...new Set(preserved),
+    TELEGRAM_NOTIFICATION_PREFERENCES_MARKER,
+    ...NOTIFICATION_PREFERENCE_KEYS.filter((key) => preferences[key]),
+  ];
 }
 
 export class InMemoryUserBrokerTelegramRepository implements UserBrokerTelegramRepository {
@@ -243,15 +275,21 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
 
     async getPreferences(userId) {
       const { data, error } = await secureClient().from('notification_preferences')
-        .select('payload').eq('user_id', userId).maybeSingle();
+        .select('enabled_types').eq('member_id', userId).maybeSingle();
       if (error) throw databaseError();
-      return normalizedPreferences((data?.payload ?? null) as Partial<NotificationPreferences> | null);
+      return notificationPreferencesFromEnabledTypes(data?.enabled_types);
     },
 
     async savePreferences(userId, preferences, updatedAt) {
-      const { error } = await secureClient().from('notification_preferences').upsert({
-        user_id: userId, payload: preferences, updated_at: updatedAt,
-      }, { onConflict: 'user_id' });
+      const table = secureClient().from('notification_preferences');
+      const { data, error: readError } = await table
+        .select('enabled_types').eq('member_id', userId).maybeSingle();
+      if (readError) throw databaseError();
+      const { error } = await table.upsert({
+        member_id: userId,
+        enabled_types: enabledTypesWithTelegramPreferences(data?.enabled_types, preferences),
+        updated_at: updatedAt,
+      }, { onConflict: 'member_id' });
       if (error) throw databaseError();
     },
 
