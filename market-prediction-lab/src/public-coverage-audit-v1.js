@@ -100,12 +100,12 @@ export function isExplainedProviderExclusion(classification) {
 
 export function providerFailureDiagnostic(error, options) {
   const classification = classifyProviderFailure(error, options);
+  const explainedUnsupported = EXPLAINED_PROVIDER_EXCLUSIONS.has(classification);
   return Object.freeze({
     classification,
     required: options?.required !== false,
-    countsAsRequiredFailure: !NON_FAILURE_PROVIDER_CLASSIFICATIONS.has(classification)
-      && !EXPLAINED_PROVIDER_EXCLUSIONS.has(classification),
-    explainedUnsupported: EXPLAINED_PROVIDER_EXCLUSIONS.has(classification),
+    countsAsRequiredFailure: !NON_FAILURE_PROVIDER_CLASSIFICATIONS.has(classification) && !explainedUnsupported,
+    ...(explainedUnsupported ? { explainedUnsupported: true } : {}),
   });
 }
 
@@ -121,12 +121,7 @@ export function summarizeProviderFailureClassifications(counts = {}) {
     else if (EXPLAINED_PROVIDER_EXCLUSIONS.has(classification)) explainedUnsupported += count;
     else unresolvedRequiredFailures += count;
   }
-  return Object.freeze({
-    explainedUnsupported,
-    unresolvedRequiredFailures,
-    optionalMissing,
-    fallbackUsed,
-  });
+  return Object.freeze({ explainedUnsupported, unresolvedRequiredFailures, optionalMissing, fallbackUsed });
 }
 
 export function canonicalHardRejectReasons(card) {
@@ -144,11 +139,7 @@ export function canonicalHardRejectReasons(card) {
 }
 
 function candidateKey(card) {
-  return [
-    card?.market ?? "UNKNOWN",
-    card?.symbol ?? card?.ticker ?? "UNKNOWN",
-    card?.signalId ?? "NO_SIGNAL_ID",
-  ].join(":");
+  return [card?.market ?? "UNKNOWN", card?.symbol ?? card?.ticker ?? "UNKNOWN", card?.signalId ?? "NO_SIGNAL_ID"].join(":");
 }
 
 export function separateInternalAndDisplayCandidates(internalCards = [], displayCards = []) {
@@ -209,16 +200,7 @@ export function parseNasdaqTraderDirectories({ nasdaqText, otherText } = {}) {
       if (!symbol || !/^[A-Z0-9]+(?:[.-][A-Z0-9]+)*$/u.test(symbol)) { exclude("SYMBOL_UNSUPPORTED"); continue; }
       if (!name) { exclude("MISSING_NAME"); continue; }
       if (/\b(?:WARRANTS?|RIGHTS?|UNITS?)\b/iu.test(name)) { exclude("UNSUPPORTED_SECURITY_TYPE"); continue; }
-      rows.push({
-        ticker: symbol,
-        name,
-        market: "US",
-        currency: "USD",
-        assetType: usAssetType(name, row.ETF),
-        exchange: exchangeFor(row),
-        listingStatus: "LISTED",
-        source: "nasdaq-trader-public-directory",
-      });
+      rows.push({ ticker: symbol, name, market: "US", currency: "USD", assetType: usAssetType(name, row.ETF), exchange: exchangeFor(row), listingStatus: "LISTED", source: "nasdaq-trader-public-directory" });
     }
     return rawCount;
   };
@@ -230,20 +212,12 @@ export function parseNasdaqTraderDirectories({ nasdaqText, otherText } = {}) {
     deduped.set(row.ticker, row);
   }
   const entries = [...deduped.values()].sort((left, right) => left.ticker.localeCompare(right.ticker));
-  return Object.freeze({
-    source: "nasdaq-trader-public-directory",
-    rawTotal: nasdaqRaw + otherRaw,
-    eligibleTotal: entries.length,
-    entries: Object.freeze(entries),
-    exclusionReasons: Object.freeze(exclusions),
-    partial: false,
-  });
+  return Object.freeze({ source: "nasdaq-trader-public-directory", rawTotal: nasdaqRaw + otherRaw, eligibleTotal: entries.length, entries: Object.freeze(entries), exclusionReasons: Object.freeze(exclusions), partial: false });
 }
 
 function retryable(error) {
   const classification = classifyProviderFailure(error);
-  return ["RATE_LIMITED", "TIMEOUT", "CONNECTION_ERROR"].includes(classification)
-    || Number(error?.status) >= 500;
+  return ["RATE_LIMITED", "TIMEOUT", "CONNECTION_ERROR"].includes(classification) || Number(error?.status) >= 500;
 }
 
 export async function withPublicProviderRetry(operation, {
