@@ -9,6 +9,10 @@ function chartRequestedByUrl(): boolean {
 }
 
 export default function DetailPage() {
+  const queryParams = typeof window === 'undefined'
+    ? new URLSearchParams()
+    : new URLSearchParams(window.location.search);
+  const ticker = queryParams.get("ticker") ?? queryParams.get('symbol') ?? '';
   const [showCanonicalChart, setShowCanonicalChart] = useState(chartRequestedByUrl);
 
   useEffect(() => {
@@ -39,8 +43,12 @@ export default function DetailPage() {
 
   if (showCanonicalChart) {
     return (
-      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background" data-testid="canonical-rich-detail-chart">
-        <div className="shrink-0 border-b border-card-border bg-background px-3 py-2 sm:px-4">
+      <div
+        className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
+        data-testid="canonical-stock-analysis"
+        data-ticker={ticker}
+      >
+        <div className="shrink-0 border-b border-card-border bg-background px-3 py-2 sm:px-4" data-testid="canonical-rich-detail-chart">
           <button
             type="button"
             onClick={returnToRichDetail}
@@ -59,7 +67,12 @@ export default function DetailPage() {
   }
 
   return (
-    <div className="h-full min-h-0" onClickCapture={openCanonicalChart} data-testid="rich-detail-shell">
+    <div
+      className="h-full min-h-0"
+      onClickCapture={openCanonicalChart}
+      data-testid="canonical-stock-analysis"
+      data-ticker={ticker}
+    >
       <LegacyDetailPage />
     </div>
   );
