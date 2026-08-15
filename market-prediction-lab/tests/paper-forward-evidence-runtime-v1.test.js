@@ -72,7 +72,8 @@ test("runtime delegates one canonical mutation boundary and persists sanitized s
   const saved = [];
   const result = await runPaperForwardEvidenceRuntime({
     publicEvidenceProvider: provider(),
-    runtimeStatusStore: { async save(value) { saved.push(value); } },
+    runtimeClock: () => NOW,
+    runtimeStatusStore: { async load() { return null; }, async save(value) { saved.push(value); } },
     runScheduled: async ({ publicEvidenceProvider }) => {
       for (const market of Object.keys(PAPER_FORWARD_PROVIDER_AUTHORITY)) await publicEvidenceProvider.collectPublicEvidence({ market });
       return { status: "COMPLETED", cycleId: "cycle:1", mutationCount: 1, summary: { tradesSettled: 0, noTrade: 0 } };
@@ -82,6 +83,8 @@ test("runtime delegates one canonical mutation boundary and persists sanitized s
   assert.equal(result.runtimeStatus.orderCount, 0);
   assert.equal(result.runtimeStatus.privateRequestCount, 0);
   assert.equal(result.runtimeStatus.settlementCount, 0);
+  assert.equal(result.runtimeStatus.lanes[0].lastSuccessAtMs, NOW);
+  assert.equal(result.runtimeStatus.lanes[0].lastFailureAtMs, null);
   assert.equal(saved.length, 1);
   assert.doesNotMatch(JSON.stringify(saved[0]), /secret|token|credential/i);
 });
@@ -94,6 +97,40 @@ test("same-cycle replay reports zero mutation and one replay", async () => {
   assert.equal(result.runtimeStatus.mutationCount, 0);
   assert.equal(result.runtimeStatus.replayCount, 1);
   assert.equal(result.runtimeStatus.orderCount, 0);
+});
+
+test("restart merges sanitized per-market success, failure, replay, settlement, and outcome counters", async () => {
+  const previous = {
+    replayCount: 2,
+    duplicateReplayCount: 2,
+    settlementCount: 3,
+    outcomeCount: 3,
+    lanes: Object.keys(PAPER_FORWARD_PROVIDER_AUTHORITY).map((market) => ({
+      market,
+      acceptedEvidenceCount: 4,
+      lastSuccessAtMs: NOW - 10_000,
+      lastFailureAtMs: null,
+    })),
+  };
+  let saved;
+  const result = await runPaperForwardEvidenceRuntime({
+    publicEvidenceProvider: provider({ collectUpbit: async () => { throw new Error("provider failed"); } }),
+    runtimeClock: () => NOW,
+    runtimeStatusStore: { async load() { return previous; }, async save(value) { saved = value; } },
+    runScheduled: async ({ publicEvidenceProvider }) => {
+      for (const market of Object.keys(PAPER_FORWARD_PROVIDER_AUTHORITY)) await publicEvidenceProvider.collectPublicEvidence({ market });
+      return { status: "REPLAYED", cycleId: "cycle:2", mutationCount: 0, summary: { tradesSettled: 1 } };
+    },
+  });
+  assert.equal(result.runtimeStatus.replayCount, 3);
+  assert.equal(result.runtimeStatus.duplicateReplayCount, 3);
+  assert.equal(result.runtimeStatus.settlementCount, 4);
+  assert.equal(result.runtimeStatus.outcomeCount, 4);
+  const spot = result.runtimeStatus.lanes.find((lane) => lane.market === "CRYPTO_SPOT");
+  assert.equal(spot.acceptedEvidenceCount, 4);
+  assert.equal(spot.lastSuccessAtMs, NOW - 10_000);
+  assert.equal(spot.lastFailureAtMs, NOW);
+  assert.equal(saved, result.runtimeStatus);
 });
 
 test("rate-limit and timeout errors remain retry-classified without mutation", async () => {
