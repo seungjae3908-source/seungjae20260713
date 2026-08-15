@@ -45,14 +45,25 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Bundle exact-head audit runner
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild \
+            ../market-prediction-lab/scripts/meaningful-search-public-universe-entry.js \
+            --bundle \
+            --platform=node \
+            --format=esm \
+            --target=node22 \
+            --packages=external \
+            --outfile=../meaningful-search-public-audit-runner.mjs
+
       - name: Run exact-head four-market public audit
         env:
           NODE_NO_WARNINGS: '1'
         run: |
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
-          node --experimental-strip-types market-prediction-lab/scripts/meaningful-search-public-universe-entry.js \
-            > meaningful-search-public-audit.json
+          node meaningful-search-public-audit-runner.mjs > meaningful-search-public-audit.json
 
       - name: Verify audit safety and shape
         run: |
