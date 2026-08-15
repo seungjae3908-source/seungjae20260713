@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { useAuth } from '@/lib/auth';
+import { userIntegrationsRequestLifecycle } from '@/lib/user-integrations-request-lifecycle';
 
 type BrokerConnection = {
   exchange: string;
@@ -96,27 +98,56 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function UserBrokerTelegramPanel() {
+  const auth = useAuth();
   const [state, setState] = useState<IntegrationState | null>(null);
   const [link, setLink] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [requestState, setRequestState] = useState<'pending' | 'success' | 'failure'>('pending');
+  const mountedRef = useRef(false);
+  const renderGenerationRef = useRef(0);
+  const identity = auth.user?.id ?? null;
+  const requestKey = auth.session ? `${auth.session.user.id}:${auth.session.access_token}` : null;
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (force = true) => {
+    if (!identity || !requestKey) return;
+    const renderGeneration = ++renderGenerationRef.current;
     setLoading(true);
+    setRequestState('pending');
     setError(null);
-    try {
-      const value = await api<unknown>('/api/user-integrations');
-      setState(normalizeIntegrationState(value));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '연결 상태를 불러오지 못했습니다.');
-    } finally {
-      setLoading(false);
+    const result = await userIntegrationsRequestLifecycle.request({
+      identity,
+      requestKey,
+      force,
+      load: (signal) => api<unknown>('/api/user-integrations', { signal }),
+    });
+    if (
+      !mountedRef.current
+      || renderGenerationRef.current !== renderGeneration
+      || !userIntegrationsRequestLifecycle.isCurrent(result)
+    ) {
+      return;
     }
-  }, []);
+    if (result.status === 'success') {
+      setState(normalizeIntegrationState(result.value));
+      setRequestState('success');
+    } else {
+      setError(result.error instanceof Error ? result.error.message : '연결 상태를 불러오지 못했습니다.');
+      setRequestState('failure');
+    }
+    setLoading(false);
+  }, [identity, requestKey]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    mountedRef.current = true;
+    void refresh(false);
+    return () => {
+      mountedRef.current = false;
+      renderGenerationRef.current += 1;
+    };
+  }, [refresh]);
 
   async function syncExecutionState() {
     setSyncing(true);
@@ -148,7 +179,8 @@ export function UserBrokerTelegramPanel() {
     try {
       await api('/api/user-integrations/telegram', { method: 'DELETE' });
       setLink(null);
-      await refresh();
+      userIntegrationsRequestLifecycle.invalidate();
+      await refresh(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Telegram 연결을 해제하지 못했습니다.');
     }
@@ -170,54 +202,56 @@ export function UserBrokerTelegramPanel() {
     }
   }
 
-  if (loading && !state) return <section aria-busy="true" className="rounded-3xl border border-card-border bg-card p-4">개인 연결 상태를 불러오는 중…</section>;
+  if (loading && !state) return <section aria-busy="true" className="rounded-3xl border border-card-border bg-card p-4" data-testid="user-broker-telegram-panel" data-user-integrations-request-state={requestState}>개인 연결 상태를 불러오는 중…</section>;
 
   return (
-    <section aria-labelledby="user-integrations-title" className="rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm" data-testid="user-broker-telegram-panel">
+    <section aria-labelledby="user-integrations-title" className="rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm" data-testid="user-broker-telegram-panel" data-user-integrations-request-state={requestState}>
       <h2 id="user-integrations-title" className="text-sm font-extrabold">개인 Broker · Telegram 연결</h2>
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">실주문 활성화 화면이 아닙니다. 기존 Risk Engine과 승인된 OrderPlan 계약은 그대로 유지됩니다.</p>
 
       {error ? <div role="alert" className="mt-3 rounded-xl bg-destructive/10 p-3 text-xs text-destructive">{error}</div> : null}
       {syncNotice ? <p role="status" className="mt-3 rounded-xl bg-secondary p-3 text-xs font-bold">{syncNotice}</p> : null}
 
-      <h3 className="mt-4 text-xs font-extrabold">Broker 연결 상태</h3>
-      {state?.brokerConnections.length ? (
-        <ul className="mt-2 space-y-2">
-          {state.brokerConnections.map((connection) => (
-            <li key={connection.exchange} className="rounded-xl border border-card-border bg-background p-3 text-xs">
-              <strong>{connection.exchange.toUpperCase()}</strong>{' '}
-              {connection.configured ? '연결 정보 있음' : '미연결'} · {connection.accountMode}
-              {connection.lastErrorCode ? ` · ${connection.lastErrorCode}` : ''}
-              <span className="mt-1 block text-[10px] text-muted-foreground">계좌·Secret 원문은 표시하지 않습니다.</span>
-            </li>
+      {state ? <>
+        <h3 className="mt-4 text-xs font-extrabold">Broker 연결 상태</h3>
+        {state.brokerConnections.length ? (
+          <ul className="mt-2 space-y-2">
+            {state.brokerConnections.map((connection) => (
+              <li key={connection.exchange} className="rounded-xl border border-card-border bg-background p-3 text-xs">
+                <strong>{connection.exchange.toUpperCase()}</strong>{' '}
+                {connection.configured ? '연결 정보 있음' : '미연결'} · {connection.accountMode}
+                {connection.lastErrorCode ? ` · ${connection.lastErrorCode}` : ''}
+                <span className="mt-1 block text-[10px] text-muted-foreground">계좌·Secret 원문은 표시하지 않습니다.</span>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="mt-2 text-xs text-muted-foreground">등록된 Broker 연결이 없습니다.</p>}
+
+        <h3 className="mt-4 text-xs font-extrabold">Telegram</h3>
+        <p className="mt-1 text-xs">{state.telegram.connected ? '연결됨' : '연결 안 됨'}</p>
+        {state.telegram.connected ? (
+          <button className="mt-2 min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void revokeTelegram()}>Telegram 연결 해제</button>
+        ) : (
+          <button className="mt-2 min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void createTelegramLink()}>Telegram 연결</button>
+        )}
+        {link ? <p className="mt-2 text-xs"><a className="underline" href={link} target="_blank" rel="noreferrer">Telegram에서 연결 완료</a></p> : null}
+
+        <h3 className="mt-4 text-xs font-extrabold">알림 설정</h3>
+        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {preferenceKeys.map((key) => (
+            <label key={key} className="flex min-h-11 items-center gap-2 rounded-xl border border-card-border bg-background px-3 text-xs">
+              <input type="checkbox" checked={state.preferences[key]} onChange={(event) => void togglePreference(key, event.currentTarget.checked)} />
+              {preferenceLabels[key]}
+            </label>
           ))}
-        </ul>
-      ) : <p className="mt-2 text-xs text-muted-foreground">등록된 Broker 연결이 없습니다.</p>}
-
-      <h3 className="mt-4 text-xs font-extrabold">Telegram</h3>
-      <p className="mt-1 text-xs">{state?.telegram.connected ? '연결됨' : '연결 안 됨'}</p>
-      {state?.telegram.connected ? (
-        <button className="mt-2 min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void revokeTelegram()}>Telegram 연결 해제</button>
-      ) : (
-        <button className="mt-2 min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void createTelegramLink()}>Telegram 연결</button>
-      )}
-      {link ? <p className="mt-2 text-xs"><a className="underline" href={link} target="_blank" rel="noreferrer">Telegram에서 연결 완료</a></p> : null}
-
-      <h3 className="mt-4 text-xs font-extrabold">알림 설정</h3>
-      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {state ? preferenceKeys.map((key) => (
-          <label key={key} className="flex min-h-11 items-center gap-2 rounded-xl border border-card-border bg-background px-3 text-xs">
-            <input type="checkbox" checked={state.preferences[key]} onChange={(event) => void togglePreference(key, event.currentTarget.checked)} />
-            {preferenceLabels[key]}
-          </label>
-        )) : null}
-      </div>
+        </div>
+      </> : null}
 
       <div className="mt-4 flex flex-wrap gap-2">
-        <button type="button" onClick={() => void refresh()} disabled={loading} className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50">
+        <button type="button" onClick={() => void refresh(true)} disabled={loading} className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50">
           {loading ? '새로고침 중…' : '연결 상태 새로고침'}
         </button>
-        <button type="button" onClick={() => void syncExecutionState()} disabled={syncing} className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50">
+        <button type="button" onClick={() => void syncExecutionState()} disabled={syncing || !state} className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50">
           {syncing ? '동기화 중…' : '주문 결과 동기화'}
         </button>
       </div>
