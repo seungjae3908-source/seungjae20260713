@@ -54,7 +54,6 @@ jobs:
             --platform=node \
             --format=esm \
             --target=node22 \
-            --packages=external \
             --outfile=../meaningful-search-public-audit-runner.mjs
 
       - name: Run exact-head four-market public audit
