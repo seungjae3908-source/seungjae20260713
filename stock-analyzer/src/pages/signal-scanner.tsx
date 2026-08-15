@@ -165,16 +165,17 @@ function SignalDetailPanel({
     <div data-testid="scanner-mobile-summary" className="space-y-3">
       <section aria-label="이 신호인 이유" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-black">핵심 판단</h3>
+          <h3 className="text-xs font-black">왜 이 신호인가 · 핵심 판단</h3>
           <span className="rounded-full border border-primary/25 px-2 py-1 text-[10px] font-black text-primary">{actionLabel(card)}</span>
         </div>
         {why.length > 0
           ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.slice(0, 3).map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
           : <p className="mt-2 text-xs text-muted-foreground">검증된 이유 설명이 없습니다. 근거가 없는 설명은 만들지 않습니다.</p>}
+        <p className="mt-2 break-words text-[10px] leading-4 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
       </section>
 
       <section className="rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
-        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">SERVER ONLY</span></div>
+        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">NO SYNTHETIC PRICE</span></div>
         <div className="mt-2 grid grid-cols-2 gap-2 text-center">
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
@@ -182,11 +183,16 @@ function SignalDetailPanel({
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">R:R</p><p className="text-xs font-black">{card.pricePlan.riskReward == null ? '미확인' : card.pricePlan.riskReward.toFixed(2)}</p></div>
         </div>
       </section>
+
+      <div className="grid grid-cols-2 gap-2">
+        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-xs font-black text-primary-foreground">AI Chart</button>
+        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-xs font-black">Order Preparation</button>
+      </div>
     </div>
   );
 
   const evidenceContent = (
-    <div data-testid="scanner-mobile-evidence" className={`${mobile ? '' : 'mt-3 '}space-y-3`}>
+    <div data-testid={mobile ? 'scanner-mobile-evidence' : 'scanner-desktop-evidence'} className={`${mobile ? '' : 'mt-3 '}space-y-3`}>
       <section aria-label="이 신호인 이유" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
         <h3 className="text-xs font-black">왜 이 신호인가</h3>
         {why.length > 0
@@ -295,7 +301,7 @@ function SignalDetailPanel({
                 role="tab"
                 aria-selected={mobileTab === tab.value}
                 onClick={() => setMobileTab(tab.value)}
-                className={`min-h-10 shrink-0 rounded-xl border px-3 text-xs font-black ${mobileTab === tab.value ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-background'}`}
+                className={`min-h-11 shrink-0 rounded-xl border px-3 text-xs font-black ${mobileTab === tab.value ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-background'}`}
               >
                 {tab.label}
               </button>
