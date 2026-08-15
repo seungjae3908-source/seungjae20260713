@@ -193,7 +193,6 @@ test('legacy stock auto-trade controls remain fail closed with zero order mutati
 
   await page.goto('/__phase11-ai-workspace-e2e');
   await page.getByRole('button', { name: '자동매매', exact: true }).click();
-  await page.getByTestId('auto-trading-advanced-settings').locator('summary').click();
   const liveToggle = page.getByRole('button', { name: '실제 주문 꺼짐', exact: true });
   await expect(liveToggle).toBeVisible();
   await liveToggle.click();
