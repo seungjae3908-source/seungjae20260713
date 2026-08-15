@@ -173,6 +173,16 @@ function sanitizeLane(market, evidence) {
   });
 }
 
+function mergeRuntimeLane(previous, current, updatedAtMs) {
+  const accepted = current.status === "READY" ? 1 : 0;
+  return Object.freeze({
+    ...current,
+    acceptedEvidenceCount: Number(previous?.acceptedEvidenceCount ?? 0) + accepted,
+    lastSuccessAtMs: current.status === "READY" ? updatedAtMs : (previous?.lastSuccessAtMs ?? null),
+    lastFailureAtMs: current.status === "READY" ? (previous?.lastFailureAtMs ?? null) : updatedAtMs,
+  });
+}
+
 export async function validateCanonicalPaperForwardEvidence({ provider, nowMs = Date.now() } = {}) {
   if (!provider || typeof provider.collectPublicEvidence !== "function") throw new TypeError("public evidence provider is required");
   const cycle = Object.freeze({ cycleId: `manual-validation:${nowMs}`, scheduledAtMs: nowMs, startedAtMs: nowMs });
@@ -197,10 +207,12 @@ export async function validateCanonicalPaperForwardEvidence({ provider, nowMs = 
 export async function runPaperForwardEvidenceRuntime({
   publicEvidenceProvider,
   runtimeStatusStore,
+  runtimeClock = Date.now,
   runScheduled = runScheduledPaperCycle,
   ...scheduledInput
 } = {}) {
   if (!publicEvidenceProvider || typeof publicEvidenceProvider.collectPublicEvidence !== "function") throw new TypeError("public evidence provider is required");
+  if (typeof runtimeClock !== "function") throw new TypeError("runtimeClock must be a function");
   const observed = new Map();
   const trackingProvider = Object.freeze({
     async collectPublicEvidence(input) {
@@ -215,15 +227,27 @@ export async function runPaperForwardEvidenceRuntime({
     },
   });
   const result = await runScheduled({ ...scheduledInput, publicEvidenceProvider: trackingProvider });
-  const lanes = RECURRING_PAPER_MARKETS.map((market) => observed.get(market) ?? sanitizeLane(market, null));
+  const previous = await runtimeStatusStore?.load?.() ?? null;
+  const updatedAtMs = runtimeClock();
+  if (!finite(updatedAtMs)) throw new TypeError("runtimeClock must return a finite number");
+  const previousLanes = new Map((previous?.lanes ?? []).map((lane) => [lane.market, lane]));
+  const lanes = RECURRING_PAPER_MARKETS.map((market) => mergeRuntimeLane(
+    previousLanes.get(market),
+    observed.get(market) ?? sanitizeLane(market, null),
+    updatedAtMs,
+  ));
+  const replayIncrement = result.status === "REPLAYED" ? 1 : 0;
+  const settlementIncrement = result.summary?.tradesSettled ?? 0;
   const status = Object.freeze({
     schemaVersion: "paper-forward-runtime-status-v1",
     cycleId: result.cycleId,
     status: result.status,
+    updatedAtMs,
     mutationCount: result.mutationCount ?? 0,
-    replayCount: result.status === "REPLAYED" ? 1 : 0,
-    settlementCount: result.summary?.tradesSettled ?? 0,
-    outcomeCount: result.summary?.tradesSettled ?? 0,
+    replayCount: Number(previous?.replayCount ?? 0) + replayIncrement,
+    duplicateReplayCount: Number(previous?.duplicateReplayCount ?? 0) + replayIncrement,
+    settlementCount: Number(previous?.settlementCount ?? 0) + settlementIncrement,
+    outcomeCount: Number(previous?.outcomeCount ?? 0) + settlementIncrement,
     lanes: Object.freeze(lanes),
     privateRequestCount: 0,
     orderCount: 0,
