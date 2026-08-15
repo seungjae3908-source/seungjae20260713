@@ -13,7 +13,10 @@ export function yahooStockProviderSymbol(market, symbol) {
   const clean = cleanSymbol(symbol);
   if (market === "KR_STOCK") {
     if (/^\d{6}\.(KS|KQ)$/.test(clean)) return clean;
-    if (!/^\d{6}$/.test(clean)) throw new Error(`YAHOO_STOCK_SYMBOL_UNSUPPORTED:${clean}`);
+    if (/^[A-Z0-9]{6}\.(KS|KQ)$/.test(clean)) throw new Error(`YAHOO_STOCK_SYMBOL_UNSUPPORTED:${clean}`);
+    if (!/^\d{6}$/.test(clean)) {
+      throw new PredictionInputError("KR_STOCK symbol must be a six-digit code or .KS/.KQ symbol", { symbol });
+    }
     return `${clean}.KS`;
   }
   if (market === "US_STOCK") return clean;
