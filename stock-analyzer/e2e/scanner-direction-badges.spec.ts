@@ -131,7 +131,7 @@ test('BUY SELL LONG SHORT NO_TRADE UNKNOWN remain visible even when evidence gra
   expect(texts.every((text) => !text.includes('WATCH'))).toBe(true);
 
   await page.getByTestId('scanner-master-list').locator('button').first().click();
-  const detail = page.getByTestId('scanner-direction-badge');
+  const detail = page.getByTestId('scanner-desktop-detail').getByTestId('scanner-direction-badge');
   await expect(detail).toBeVisible();
   await expect(detail).toHaveText(directionLabels.BUY);
 });
