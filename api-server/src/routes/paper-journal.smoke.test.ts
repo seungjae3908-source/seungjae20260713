@@ -118,6 +118,26 @@ test('snapshot endpoint returns paginated safety contract', async () => {
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 
+test('signal performance GET returns zero-sample N/A without execution authority', async () => {
+  const { server, baseUrl } = await startServer();
+  try {
+    const response = await fetch(`${baseUrl}/api/signal-performance?source=PAPER`);
+    const body = await safeJson(response);
+    assert.equal(response.status, 200); assert.equal(body.mode, 'analysis-only'); assert.equal(body.externalAiCalled, false);
+    assert.equal(body.result.source, 'PAPER'); assert.equal(body.result.sampleSize, 0); assert.equal(body.result.hitRate, null);
+    assert.equal(body.result.profitFactor, null); assert.equal(body.result.evidenceState, 'INSUFFICIENT_SAMPLE');
+    assert.equal(body.result.executionAuthority, 'NONE'); assert.equal(body.profitabilityClaimAllowed, false);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('signal performance GET rejects unknown stage', async () => {
+  const { server, baseUrl } = await startServer();
+  try {
+    const response = await fetch(`${baseUrl}/api/signal-performance?source=LIVE`);
+    assert.equal(response.status, 400); assert.equal((await safeJson(response)).code, 'INVALID_PERFORMANCE_SOURCE');
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
 test('conflict endpoint rejects unknown conflict without silent discard', async () => {
   const { server, baseUrl } = await startServer();
   try {
