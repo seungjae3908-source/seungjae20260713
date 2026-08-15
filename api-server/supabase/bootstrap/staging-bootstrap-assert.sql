@@ -38,7 +38,11 @@ begin
     'trade_exchange_connections',
     'trade_order_plans',
     'trade_orders',
-    'trade_order_events'
+    'trade_order_events',
+    'telegram_connections',
+    'telegram_link_tokens',
+    'user_execution_events',
+    'notification_deliveries'
   ]
   loop
     if to_regclass(format('public.%I', required_table)) is null then
@@ -102,7 +106,10 @@ begin
     'paper_journal_entries_user_updated_idx',
     'member_permission_audit_target_idx',
     'trade_plans_user_updated_idx',
-    'trade_orders_user_updated_idx'
+    'trade_orders_user_updated_idx',
+    'telegram_link_tokens_user_expiry_idx',
+    'user_execution_events_user_occurred_idx',
+    'notification_deliveries_due_idx'
   ]
   loop
     if to_regclass(format('public.%I', required_index)) is null then
@@ -117,7 +124,9 @@ begin
     'paper_accounts', 'paper_orders', 'paper_positions', 'paper_fills',
     'paper_journal_entries', 'paper_sync_state', 'member_permission_audit',
     'trade_automation_profiles', 'trade_exchange_connections',
-    'trade_order_plans', 'trade_orders', 'trade_order_events'
+    'trade_order_plans', 'trade_orders', 'trade_order_events',
+    'telegram_connections', 'telegram_link_tokens',
+    'user_execution_events', 'notification_deliveries'
   ]
   loop
     if not exists (
@@ -186,6 +195,27 @@ begin
   ) then
     raise exception 'service_role lacks watchlist server privileges';
   end if;
+
+  foreach required_table in array array[
+    'telegram_connections',
+    'telegram_link_tokens',
+    'user_execution_events',
+    'notification_deliveries'
+  ]
+  loop
+    if has_table_privilege('anon', format('public.%I', required_table), 'SELECT')
+       or has_table_privilege('authenticated', format('public.%I', required_table), 'SELECT') then
+      raise exception 'personal Telegram server table public.% is exposed to an API role', required_table;
+    end if;
+    if not (
+      has_table_privilege('service_role', format('public.%I', required_table), 'SELECT')
+      and has_table_privilege('service_role', format('public.%I', required_table), 'INSERT')
+      and has_table_privilege('service_role', format('public.%I', required_table), 'UPDATE')
+      and has_table_privilege('service_role', format('public.%I', required_table), 'DELETE')
+    ) then
+      raise exception 'service_role lacks personal Telegram storage privileges on public.%', required_table;
+    end if;
+  end loop;
 
   select count(*) into auth_user_count from auth.users;
   select count(*) into profile_count from public.profiles;

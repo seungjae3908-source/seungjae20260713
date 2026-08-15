@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { InMemoryUserBrokerTelegramRepository } from './user-broker-telegram.repository';
+import {
+  InMemoryUserBrokerTelegramRepository,
+  TELEGRAM_NOTIFICATION_PREFERENCES_MARKER,
+  enabledTypesWithTelegramPreferences,
+  notificationPreferencesFromEnabledTypes,
+} from './user-broker-telegram.repository';
 import {
   UserBrokerTelegramService,
   executionEventFromTradingOrder,
@@ -186,6 +191,26 @@ test('notification preferences can disable a type without affecting event/portfo
   assert.deepEqual(result, { inserted: true, deliveryQueued: false });
   assert.equal((await repository.listDeliveries('user-a')).length, 0);
   assert.equal(portfolio.events.length, 1);
+});
+
+test('Telegram preference projection preserves unified app notification types', () => {
+  const legacy = notificationPreferencesFromEnabledTypes(['news_positive', 'system']);
+  assert.equal(legacy.ORDER_FILLED, true);
+  assert.equal(legacy.POSITION_CLOSED, true);
+
+  const enabledTypes = enabledTypesWithTelegramPreferences(
+    ['news_positive', 'system', 'ORDER_REJECTED', TELEGRAM_NOTIFICATION_PREFERENCES_MARKER],
+    { ...legacy, ORDER_FILLED: false, POSITION_CLOSED: false },
+  );
+  assert.deepEqual(enabledTypes.slice(0, 3), [
+    'news_positive',
+    'system',
+    TELEGRAM_NOTIFICATION_PREFERENCES_MARKER,
+  ]);
+  const stored = notificationPreferencesFromEnabledTypes(enabledTypes);
+  assert.equal(stored.ORDER_FILLED, false);
+  assert.equal(stored.POSITION_CLOSED, false);
+  assert.equal(stored.ORDER_REJECTED, true);
 });
 
 test('canonical trading order event maps to user execution event with owner checks and masked account', () => {
