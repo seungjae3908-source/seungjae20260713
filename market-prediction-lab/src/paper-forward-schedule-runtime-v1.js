@@ -327,9 +327,11 @@ export async function runPaperForwardScheduledInvocation({
   });
 
   const persistedStatus = await runtimeStatusStore.load();
-  const naturalCompleted = triggerSource === "cron"
+  const newPublicEvidenceAccepted = triggerSource === "cron"
     && result?.status === "COMPLETED"
     && persistedStatus?.allProvidersReady === true;
+  const publicForwardEvidenceAccumulating = triggerSource === "cron"
+    && persistedStatus?.publicForwardEvidenceAccumulating === true;
   const record = Object.freeze({
     schemaVersion: "paper-forward-schedule-invocation-v1",
     invokedAtMs: nowMs,
@@ -340,7 +342,8 @@ export async function runPaperForwardScheduledInvocation({
     mutationCount: Number(result?.mutationCount ?? 0),
     scheduleActive: true,
     naturalScheduleInvocation: triggerSource === "cron",
-    publicForwardEvidenceAccumulating: naturalCompleted,
+    newPublicEvidenceAccepted,
+    publicForwardEvidenceAccumulating,
     paperTradeOutcomeAccumulating: false,
     providerLanes: Object.freeze((persistedStatus?.lanes ?? []).map((lane) => Object.freeze({
       market: lane.market,

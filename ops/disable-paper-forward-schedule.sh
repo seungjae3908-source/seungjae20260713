@@ -4,6 +4,7 @@ set -Eeuo pipefail
 umask 077
 
 STATE_ROOT="${PAPER_FORWARD_STATE_ROOT:-/opt/stock-app-data/paper-forward-v1}"
+RUNTIME_STATE_ROOT="$STATE_ROOT/runtime-state"
 TAG="# stock-app-paper-forward-v1"
 BACKUP_DIR="$STATE_ROOT/crontab-backups"
 
@@ -17,10 +18,11 @@ for command_name in crontab mkdir date grep sed node chmod tr; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing command: $command_name" 3
 done
 
-mkdir -p "$STATE_ROOT" "$BACKUP_DIR"
-chmod 700 "$STATE_ROOT" "$BACKUP_DIR"
+mkdir -p "$STATE_ROOT" "$RUNTIME_STATE_ROOT" "$BACKUP_DIR"
+chmod 700 "$STATE_ROOT" "$RUNTIME_STATE_ROOT" "$BACKUP_DIR"
 : > "$STATE_ROOT/DISABLED"
-chmod 600 "$STATE_ROOT/DISABLED"
+: > "$RUNTIME_STATE_ROOT/DISABLED"
+chmod 600 "$STATE_ROOT/DISABLED" "$RUNTIME_STATE_ROOT/DISABLED"
 
 PREVIOUS_CRONTAB="$(crontab -l 2>/dev/null || true)"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"

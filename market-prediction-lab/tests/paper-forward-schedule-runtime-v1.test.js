@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -51,6 +51,7 @@ test("natural cron invocation persists one canonical 4h cycle and active status"
     assert.equal(first.status, "COMPLETED");
     assert.equal(first.mutationCount, 1);
     assert.equal(first.invocation.naturalScheduleInvocation, true);
+    assert.equal(first.invocation.newPublicEvidenceAccepted, true);
     assert.equal(first.invocation.publicForwardEvidenceAccumulating, true);
     assert.equal(first.invocation.paperTradeOutcomeAccumulating, false);
     assert.equal(first.persistedStatus.scheduleActive, true);
@@ -130,12 +131,48 @@ test("same 4h cycle replays without provider calls or duplicate mutation", async
     assert.equal(providerCalls, 4);
     assert.equal(second.persistedStatus.allProvidersReady, true);
     assert.equal(second.persistedStatus.lanes.every((lane) => lane.status === "READY"), true);
+    assert.equal(second.invocation.newPublicEvidenceAccepted, false);
+    assert.equal(second.invocation.publicForwardEvidenceAccumulating, true);
 
     const persistedState = JSON.parse(await readFile(
       join(root, "state", "recurring-paper-loop.json"),
       "utf8",
     ));
     assert.equal(persistedState.cycles.length, 1);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("disable sentinel blocks direct runtime invocation before provider collection", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-forward-disabled-"));
+  const root = join(sandbox, "persistent-state");
+  const nowMs = 1_800_000_000_000;
+  let providerCalls = 0;
+  try {
+    await writeFile(join(root, "DISABLED"), "", { mode: 0o600, flag: "wx" }).catch(async (error) => {
+      if (error?.code !== "ENOENT") throw error;
+      await import("node:fs/promises").then(({ mkdir }) => mkdir(root, { recursive: true, mode: 0o700 }));
+      await writeFile(join(root, "DISABLED"), "", { mode: 0o600, flag: "wx" });
+    });
+    await assert.rejects(
+      runPaperForwardScheduledInvocation({
+        rootDirectory: root,
+        researchCodeSha: RESEARCH_SHA,
+        triggerSource: "cron",
+        activationAtMs: nowMs - 10_000,
+        ownerId: "test-owner:disabled",
+        clock: () => nowMs,
+        publicEvidenceProvider: {
+          async collectPublicEvidence() {
+            providerCalls += 1;
+            throw new Error("must not collect while disabled");
+          },
+        },
+      }),
+      (error) => error?.code === "PAPER_FORWARD_SCHEDULE_DISABLED",
+    );
+    assert.equal(providerCalls, 0);
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }
