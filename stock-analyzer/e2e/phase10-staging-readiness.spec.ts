@@ -311,6 +311,24 @@ async function waitForPendingMutations(page: Page) {
   ).toBe(0);
 }
 
+async function waitForPendingPersonalIntegrationReads(page: Page) {
+  const expectedOrigin = new URL(page.url()).origin;
+  await expect.poll(
+    () => {
+      const pending = pendingApiGetRequests.get(page);
+      if (!pending) return 0;
+      return [...pending]
+        .filter((request) => isPersonalIntegrationLogoutRead(request, expectedOrigin))
+        .length;
+    },
+    {
+      message: 'personal integration GET must settle before verifier-owned session-retention reload',
+      timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe(0);
+}
+
 async function settle(page: Page) {
   await page.waitForLoadState('load');
   for (let pass = 0; pass < 2; pass += 1) {
@@ -538,6 +556,7 @@ function scannerFixture(state: 'complete' | 'partial' | 'unavailable') {
       startedCount: 1,
       completedCount: unavailable ? 0 : 1,
       excludedCount: 0,
+      successCount: unavailable ? 0 : 1,
       providerErrorCount: 0,
       timeoutCount: unavailable ? 1 : 0,
       partial,
@@ -661,6 +680,8 @@ test.describe('real staging release readiness', () => {
       await page.setViewportSize({ width, height });
       await login(page, accounts.regular.loginName, accounts.regular.password);
       await expectMembership(page, /정회원/);
+      await settle(page);
+      await waitForPendingPersonalIntegrationReads(page);
       await page.reload();
       await settle(page);
       await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
