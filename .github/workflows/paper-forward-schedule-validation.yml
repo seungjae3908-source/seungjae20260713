@@ -1,0 +1,110 @@
+name: Paper Forward Schedule Activation Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+      - market-prediction-lab/scripts/run-paper-forward-schedule.js
+      - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+      - ops/install-paper-forward-schedule.sh
+      - ops/disable-paper-forward-schedule.sh
+      - .github/workflows/paper-forward-schedule-activation.yml
+      - .github/workflows/paper-forward-schedule-validation.yml
+  push:
+    branches:
+      - agent/paper-forward-schedule-activation-v1
+    paths:
+      - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+      - market-prediction-lab/scripts/run-paper-forward-schedule.js
+      - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+      - ops/install-paper-forward-schedule.sh
+      - ops/disable-paper-forward-schedule.sh
+      - .github/workflows/paper-forward-schedule-activation.yml
+      - .github/workflows/paper-forward-schedule-validation.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-forward-schedule-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Require bounded non-UI diff
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          base="$(git merge-base HEAD origin/main)"
+          mapfile -t changed < <(git diff --name-only "$base"...HEAD)
+          allowed=(
+            market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+            market-prediction-lab/scripts/run-paper-forward-schedule.js
+            market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+            ops/install-paper-forward-schedule.sh
+            ops/disable-paper-forward-schedule.sh
+            .github/workflows/paper-forward-schedule-activation.yml
+            .github/workflows/paper-forward-schedule-validation.yml
+          )
+          test "${#changed[@]}" -ge 1
+          test "${#changed[@]}" -le "${#allowed[@]}"
+          for path in "${changed[@]}"; do
+            printf '%s\n' "${allowed[@]}" | grep -Fx "$path" >/dev/null || {
+              echo "unexpected path: $path" >&2
+              exit 1
+            }
+            [[ "$path" != stock-analyzer/* ]]
+          done
+
+      - name: Validate JavaScript and shell syntax
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+          node --check market-prediction-lab/scripts/run-paper-forward-schedule.js
+          node --check market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+          bash -n ops/install-paper-forward-schedule.sh
+          bash -n ops/disable-paper-forward-schedule.sh
+
+      - name: Run focused scheduler, restart, replay, and safety regression
+        working-directory: market-prediction-lab
+        run: |
+          node --test \
+            tests/paper-scheduler-driver-v1.test.js \
+            tests/paper-forward-evidence-runtime-v1.test.js \
+            tests/paper-forward-schedule-runtime-v1.test.js
+
+      - name: Verify activation remains Paper-only and fail-closed
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -F "PAPER_FORWARD_SCHEDULE_ACTIVE='true'" ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F "PRIVATE_TRADING_API_ALLOWED='false'" ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F "REAL_ORDER_ENABLED='false'" ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F '*/15 * * * *' ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F 'canonicalCycleIntervalMs: FOUR_HOURS_MS' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
+          grep -F 'financialMutationAdaptersEnabled: false' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
+          ! grep -R --line-number -E 'stock-analyzer/|LIVE_TRADING=.?(true|1)|PRIVATE_TRADING_API_ALLOWED=.?(true|1)|REAL_ORDER_ENABLED=.?(true|1)' \
+            market-prediction-lab/src/paper-forward-schedule-runtime-v1.js \
+            market-prediction-lab/scripts/run-paper-forward-schedule.js \
+            ops/install-paper-forward-schedule.sh \
+            ops/disable-paper-forward-schedule.sh
+
+      - name: Final exact HEAD and clean workspace
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git status --porcelain)"
