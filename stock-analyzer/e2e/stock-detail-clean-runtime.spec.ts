@@ -138,7 +138,7 @@ for (const viewport of [
     expect(requests).not.toContain('/api/stocks/005930/news');
     expect(requests).not.toContain('/api/stocks/005930/chart');
 
-    await tabs.getByRole('tab', { name: 'AI 차트', exact: true }).click();
+    await tabs.getByRole('tab', { name: 'AI 차트 분석기', exact: true }).click();
     await expect(page.getByRole('heading', { name: /AI 차트 생중계/ })).toBeVisible();
     await expect.poll(() => requests.filter((path) => path === '/api/stocks/005930/chart').length).toBeGreaterThan(0);
 
