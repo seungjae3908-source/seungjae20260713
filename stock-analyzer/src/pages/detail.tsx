@@ -70,7 +70,7 @@ export default function DetailPage() {
     <div
       className="h-full min-h-0"
       onClickCapture={openCanonicalChart}
-      data-testid="canonical-stock-analysis"
+      data-testid="rich-detail-shell"
       data-ticker={ticker}
     >
       <LegacyDetailPage />
