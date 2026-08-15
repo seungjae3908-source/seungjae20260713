@@ -7,6 +7,10 @@ on:
     paths:
       - .github/workflows/telegram-production-release.yml
       - api-server/scripts/verify-telegram-production-release-contract.mjs
+      - api-server/supabase/migrations/2026081501_personal_telegram_storage.sql
+      - api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql
+      - ops/apply-production-personal-telegram-storage.mjs
+      - ops/verify-production-personal-telegram-storage.mjs
 
 permissions:
   contents: read
@@ -26,7 +30,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: node api-server/scripts/verify-telegram-production-release-contract.mjs
+      - run: |
+          node api-server/scripts/verify-telegram-production-release-contract.mjs
+          node ops/verify-production-personal-telegram-storage.mjs --static
 
   release:
     name: Owner-approved Telegram production release and delivery verification
@@ -375,6 +381,57 @@ jobs:
           ].join('\n'));
           NODE
 
+      - name: Apply and verify Production personal Telegram storage atomically
+        id: storage
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRE_ACTIVE_SHA: ${{ steps.before.outputs.active_sha }}
+        run: |
+          set -Eeuo pipefail
+          artifact="$RUNNER_TEMP/production-personal-telegram-storage.json"
+          stderr_file="$RUNNER_TEMP/production-personal-telegram-storage.stderr"
+          archive="$RUNNER_TEMP/production-personal-telegram-storage-tooling.tar.gz"
+          remote_dir="$(
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" 'mktemp -d /tmp/telegram-storage.XXXXXX'
+          )"
+          [[ "$remote_dir" =~ ^/tmp/telegram-storage\.[A-Za-z0-9]+$ ]] || {
+            echo 'Production migration temporary directory was rejected.' >&2
+            exit 1
+          }
+          quoted_remote_dir="$(printf '%q' "$remote_dir")"
+          cleanup_remote() {
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" \
+              "case $quoted_remote_dir in /tmp/telegram-storage.*) find $quoted_remote_dir -depth -mindepth 1 -delete && rmdir $quoted_remote_dir ;; *) exit 2 ;; esac" \
+              >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote EXIT
+
+          tar -czf "$archive" \
+            ops/apply-production-personal-telegram-storage.mjs \
+            api-server/supabase/migrations/2026081501_personal_telegram_storage.sql \
+            api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
+          remote_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && EXPECTED_ACTIVE_SHA=%q APPROVED_TARGET_SHA=%q node ops/apply-production-personal-telegram-storage.mjs' \
+            "$remote_dir" "$PRE_ACTIVE_SHA" "$TARGET_SHA")"
+          if ! ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" > "$artifact" 2> "$stderr_file"; then
+            echo 'Production personal Telegram storage migration failed safely; remote diagnostics are not printed.' >&2
+            exit 1
+          fi
+          node ops/verify-production-personal-telegram-storage.mjs --artifact "$artifact" "$TARGET_SHA" "$PRE_ACTIVE_SHA"
+          printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sanitized Production personal Telegram storage evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-personal-telegram-storage-${{ steps.command.outputs.sha }}
+          path: ${{ steps.storage.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Record accepted owner approval without exposing secrets
         uses: actions/github-script@v7
         env:
@@ -398,7 +455,8 @@ jobs:
                 `- PostgreSQL Auth Gate Run ID: \`${process.env.POSTGRES_RUN_ID}\``,
                 `- Staging Readiness Run ID: \`${process.env.STAGING_RUN_ID}\``,
                 '- Staging verdict: `release_ready=true`',
-                '- Database changed by this gate: `false`',
+                '- Personal Telegram storage migration: `atomic, verified`',
+                '- Database changed by this gate: `true`',
                 '- Trading authority granted: `false`',
                 '- Secret values recorded: `false`',
                 `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
