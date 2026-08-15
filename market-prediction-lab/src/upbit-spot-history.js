@@ -16,8 +16,18 @@ function finite(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parseUtcBoundary(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return Number.NaN;
+  return Date.parse(/[zZ]|[+-]\d\d:\d\d$/u.test(text) ? text : `${text}Z`);
+}
+
 function parseRow(row) {
-  const timestamp = finite(row?.timestamp) ?? Date.parse(String(row?.candle_date_time_utc ?? ""));
+  // Upbit `timestamp` is the last trade/update time inside the candle. The UTC
+  // candle field is the canonical interval boundary needed for closed-candle
+  // checks and deterministic replay.
+  const candleBoundary = parseUtcBoundary(row?.candle_date_time_utc);
+  const timestamp = Number.isFinite(candleBoundary) ? candleBoundary : finite(row?.timestamp);
   const open = finite(row?.opening_price);
   const high = finite(row?.high_price);
   const low = finite(row?.low_price);
