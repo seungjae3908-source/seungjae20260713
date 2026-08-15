@@ -151,7 +151,9 @@ function ScannerSurface({ desktop, showSectionHeader, builderMobile = false }: {
 }
 
 function MobileSignalWorkspace({ builderLayout }: { builderLayout: LoadedScannerLayout }) {
-  if (builderLayout.source !== 'builder') return <ScannerSurface desktop={false} showSectionHeader={false} />;
+  if (builderLayout.source !== 'builder') {
+    return <ScannerSurface desktop={false} showSectionHeader={builderLayout.issues.length > 0} />;
+  }
 
   return (
     <UiBuilderSignalScannerLayout
@@ -160,7 +162,7 @@ function MobileSignalWorkspace({ builderLayout }: { builderLayout: LoadedScanner
       chart={<AiChartPage embedded />}
       position={<PositionSummarySurface />}
       tradeReview={<TradeReviewSurface />}
-      fallback={<ScannerSurface desktop={false} showSectionHeader={false} />}
+      fallback={<ScannerSurface desktop={false} showSectionHeader />}
     />
   );
 }
