@@ -33,15 +33,26 @@ type ActiveFlight<T> = {
   requestKey: string;
   generation: number;
   promise: Promise<UserIntegrationsTerminal<T>>;
+  transport: Promise<UserIntegrationsTerminal<T>>;
 };
 
 function timeoutError() {
   return new DOMException('User integrations request timed out.', 'TimeoutError');
 }
 
+function logoutDrainTimeoutError() {
+  return new DOMException('User integrations logout drain timed out.', 'TimeoutError');
+}
+
 /**
  * Owns the single user-integrations read for the current authenticated session.
- * Logout drains this bounded request instead of invalidating its session mid-flight.
+ *
+ * The UI deadline and the physical HTTP transport lifetime are deliberately
+ * separate. A slow read may become a terminal UI failure without aborting the
+ * underlying same-origin request. Logout blocks new reads and waits for the
+ * physical transport to reach an HTTP terminal before invalidating auth. If
+ * that drain itself exceeds its bounded deadline, logout fails closed and the
+ * existing session is restored by AuthProvider; the transport is not aborted.
  */
 export class UserIntegrationsRequestLifecycle<T> {
   private identity: string | null = null;
@@ -53,9 +64,15 @@ export class UserIntegrationsRequestLifecycle<T> {
   private terminal: UserIntegrationsTerminal<T> | null = null;
   private lastTerminal: UserIntegrationsTerminal<T> | null = null;
 
-  constructor(private readonly timeoutMs = APP_API_REQUEST_TIMEOUT_MS) {
+  constructor(
+    private readonly timeoutMs = APP_API_REQUEST_TIMEOUT_MS,
+    private readonly logoutDrainTimeoutMs = APP_API_REQUEST_TIMEOUT_MS,
+  ) {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw new Error(`invalid user integrations request timeout: ${timeoutMs}`);
+    }
+    if (!Number.isFinite(logoutDrainTimeoutMs) || logoutDrainTimeoutMs <= 0) {
+      throw new Error(`invalid user integrations logout drain timeout: ${logoutDrainTimeoutMs}`);
     }
   }
 
@@ -99,22 +116,40 @@ export class UserIntegrationsRequestLifecycle<T> {
       return Promise.resolve(this.terminal);
     }
 
+    // This signal is intentionally not aborted by the logical UI deadline.
+    // The owning transport may still reject naturally (HTTP/network terminal),
+    // which is safe to drain before auth invalidation.
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadline = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        const error = timeoutError();
-        controller.abort(error);
-        reject(error);
-      }, this.timeoutMs);
+    const transportOperation = Promise.resolve().then(() => load(controller.signal));
+    let transportFlight: Promise<UserIntegrationsTerminal<T>>;
+    transportFlight = transportOperation.then(
+      (value): UserIntegrationsTerminal<T> => ({ status: 'success', identity, requestKey, generation, value }),
+      (error): UserIntegrationsTerminal<T> => ({ status: 'failure', identity, requestKey, generation, error }),
+    ).then((result) => {
+      this.lastTerminal = result;
+      if (
+        !this.blocked
+        && this.generation === generation
+        && this.identity === identity
+        && this.requestKey === requestKey
+      ) {
+        // If the UI deadline fired first, a later physical HTTP terminal becomes
+        // the reusable cached truth for a remount/retry without starting a
+        // duplicate request.
+        this.terminal = result;
+      }
+      return result;
+    }).finally(() => {
+      this.flights.delete(transportFlight);
+      if (this.active?.transport === transportFlight) this.active = null;
     });
 
-    const operation: Promise<T> = Promise.race([
-      Promise.resolve().then(() => load(controller.signal)),
-      deadline,
-    ]);
-    let flight: Promise<UserIntegrationsTerminal<T>>;
-    flight = operation.then(
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(timeoutError()), this.timeoutMs);
+    });
+    const publicOperation: Promise<T> = Promise.race([transportOperation, deadline]);
+    const publicFlight = publicOperation.then(
       (value): UserIntegrationsTerminal<T> => ({ status: 'success', identity, requestKey, generation, value }),
       (error): UserIntegrationsTerminal<T> => ({ status: 'failure', identity, requestKey, generation, error }),
     ).then((result) => {
@@ -130,13 +165,17 @@ export class UserIntegrationsRequestLifecycle<T> {
       return result;
     }).finally(() => {
       if (timer !== undefined) clearTimeout(timer);
-      this.flights.delete(flight);
-      if (this.active?.promise === flight) this.active = null;
     });
 
-    this.active = { identity, requestKey, generation, promise: flight };
-    this.flights.add(flight);
-    return flight;
+    this.active = {
+      identity,
+      requestKey,
+      generation,
+      promise: publicFlight,
+      transport: transportFlight,
+    };
+    this.flights.add(transportFlight);
+    return publicFlight;
   }
 
   isCurrent(result: UserIntegrationsRequestResult<T>): result is UserIntegrationsTerminal<T> {
@@ -157,8 +196,19 @@ export class UserIntegrationsRequestLifecycle<T> {
       this.terminal = null;
     }
     const pending = [...this.flights];
-    return Promise.all(pending.map((flight) => flight.then(() => undefined, () => undefined)))
-      .then(() => undefined);
+    if (pending.length === 0) return Promise.resolve();
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const drained = Promise.all(
+      pending.map((flight) => flight.then(() => undefined, () => undefined)),
+    ).then(() => undefined);
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(logoutDrainTimeoutError()), this.logoutDrainTimeoutMs);
+    });
+
+    return Promise.race([drained, deadline]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
   }
 
   finishLogout(): void {
