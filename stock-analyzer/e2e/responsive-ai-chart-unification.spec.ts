@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 const technicalWorkspaceSource = readFileSync(
   new URL('../src/pages/technical-workspace.tsx', import.meta.url),
@@ -14,8 +14,8 @@ const canonicalChartSource = readFileSync(
   'utf8',
 );
 
-async function mockPublicApi(page: Parameters<typeof test>[0] extends never ? never : any) {
-  await page.route('**/api/**', async (route: any) => {
+async function mockPublicApi(page: Page) {
+  await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname.includes('/market/scan')) {
       await route.fulfill({
