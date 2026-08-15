@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { Router, type IRouter, type RequestHandler } from 'express';
+import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { requireCapability, type AuthenticatedRequest } from '../middleware/auth';
 import { TradeExecutionEventBridgeService } from '../features/user-broker-telegram/trade-execution-event-bridge.service';
 import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
@@ -128,10 +129,14 @@ export const userBrokerTelegramRouter: IRouter = Router();
 
 userBrokerTelegramRouter.get('/', async (req, res) => {
   try {
-    const { userId, accessToken } = member(req as AuthenticatedRequest);
+    const authenticated = req as AuthenticatedRequest;
+    const { userId, accessToken } = member(authenticated);
+    const canReadBrokerConnections = hasCapability(authenticated.member, 'canPlaceOrders');
     const [state, brokerConnections] = await Promise.all([
       service().getState(userId),
-      createSupabaseTradingRepository(accessToken, userId).getConnections(userId),
+      canReadBrokerConnections
+        ? createSupabaseTradingRepository(accessToken, userId).getConnections(userId)
+        : Promise.resolve([]),
     ]);
     res.json({
       ok: true,
@@ -140,6 +145,7 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
       privateApiRequests: 0,
       ordersSubmitted: 0,
       ordersCancelled: 0,
+      brokerMetadataRead: canReadBrokerConnections,
     });
   } catch (error) {
     res.status(503).json({ ok: false, error: errorCode(error) });
