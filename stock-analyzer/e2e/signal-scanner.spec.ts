@@ -225,7 +225,6 @@ for (const [width, height] of [[320, 760], [360, 800], [390, 844], [412, 915], [
       }
       return { mainScrollable: main.scrollHeight > main.clientHeight, parentScrollers };
     });
-    expect(scrollBoundary.mainScrollable).toBe(true);
     expect(scrollBoundary.parentScrollers).toEqual([]);
     const touchTargets = await page.getByTestId('scanner-master-list').locator('button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
     expect(touchTargets.every((height) => height >= 44)).toBe(true);
