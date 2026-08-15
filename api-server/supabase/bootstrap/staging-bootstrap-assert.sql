@@ -203,8 +203,12 @@ begin
     'notification_deliveries'
   ]
   loop
-    if has_table_privilege('anon', format('public.%I', required_table), 'SELECT')
-       or has_table_privilege('authenticated', format('public.%I', required_table), 'SELECT') then
+    if exists (
+      select 1 from information_schema.table_privileges privilege
+      where privilege.table_schema = 'public'
+        and privilege.table_name = required_table
+        and privilege.grantee in ('PUBLIC', 'anon', 'authenticated')
+    ) then
       raise exception 'personal Telegram server table public.% is exposed to an API role', required_table;
     end if;
     if not (
@@ -214,6 +218,17 @@ begin
       and has_table_privilege('service_role', format('public.%I', required_table), 'DELETE')
     ) then
       raise exception 'service_role lacks personal Telegram storage privileges on public.%', required_table;
+    end if;
+    if (
+      select count(*) <> 1
+        or bool_or(policyname <> (required_table || '_server_only'))
+        or bool_or(cmd <> 'ALL')
+        or bool_or(qual <> 'false')
+        or bool_or(with_check <> 'false')
+      from pg_policies
+      where schemaname = 'public' and tablename = required_table
+    ) then
+      raise exception 'personal Telegram storage policy on public.% is not exclusively fail-closed', required_table;
     end if;
   end loop;
 
