@@ -141,7 +141,8 @@ test('cash and spot show buy-entry wording while futures show long short and sel
   await expect(desktopDetail.getByText('공개 데이터 확인').first()).toBeVisible();
   await expect(desktopDetail.getByText('canonical action fixture').first()).toBeVisible();
 
-  await page.getByTestId('market-BITGET').click();
+  const marketControls = page.locator('section[aria-label="검색 시장"]');
+  await marketControls.getByRole('button', { name: /코인 선물/ }).click();
   await expect(page.getByTestId('scanner-market-signal-guide')).toContainText('코인 선물 · ↑ 롱 신호 / ↓ 숏 신호');
 });
 
