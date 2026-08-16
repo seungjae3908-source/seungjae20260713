@@ -1,8 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { buildAdaptiveShadowCandidate } from "../src/adaptive-shadow-candidate.js";
+import { summarizeShadowSourceHealth } from "../src/shadow-source-health.js";
 
 const GROUPS = Object.freeze(["crypto-futures-15m", "crypto-futures-1h"]);
+const MIN_ADAPTIVE_SETTLED = 120;
 
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"));
@@ -23,6 +25,39 @@ function serializeError(error) {
   };
 }
 
+function collapseResearchHold({ group, referenceModel, sourceHealth }) {
+  return Object.freeze({
+    schemaVersion: 1,
+    status: "research_hold",
+    reason: "source_shadow_prediction_collapse",
+    reasons: sourceHealth.reasons,
+    group,
+    generatedAt: Date.now(),
+    settled: sourceHealth.sampleCount,
+    required: MIN_ADAPTIVE_SETTLED,
+    referenceModelId: referenceModel.id,
+    diagnostics: Object.freeze({ sourceShadowHealth: sourceHealth }),
+    safety: Object.freeze({
+      usesPublicMarketDataOnly: true,
+      usesAccountOrOrderApi: false,
+      modifiesExistingAppApi: false,
+      deploysModel: false,
+      mutatesSourceModel: false,
+      forcesDirectionalPredictions: false,
+    }),
+  });
+}
+
+function attachSourceHealth(result, sourceHealth) {
+  return Object.freeze({
+    ...result,
+    diagnostics: Object.freeze({
+      ...(result.diagnostics ?? {}),
+      sourceShadowHealth: sourceHealth,
+    }),
+  });
+}
+
 const statePath = resolve(process.argv[2] ?? "docs/shadow-state.json");
 const referenceRoot = resolve(process.argv[3] ?? "docs/candidate-models");
 const diagnosticsRoot = resolve(process.argv[4] ?? "docs/adaptive-candidates");
@@ -35,11 +70,21 @@ let technicalFailure = false;
 for (const group of GROUPS) {
   try {
     const referenceArtifact = await readJson(resolve(referenceRoot, `${group}.json`));
-    const result = buildAdaptiveShadowCandidate({
-      group,
-      state: state.groups?.[group] ?? { records: [] },
-      referenceArtifact,
-    });
+    const referenceModel = referenceArtifact?.model;
+    if (!referenceModel?.trained || typeof referenceModel.id !== "string") {
+      throw new TypeError(`trained reference model is required for ${group}`);
+    }
+    const groupState = state.groups?.[group] ?? { records: [] };
+    const sourceHealth = summarizeShadowSourceHealth({ state: groupState, model: referenceModel });
+    const result = sourceHealth.collapsed
+      ? collapseResearchHold({ group, referenceModel, sourceHealth })
+      : attachSourceHealth(buildAdaptiveShadowCandidate({
+          group,
+          state: groupState,
+          referenceArtifact,
+          minSettled: MIN_ADAPTIVE_SETTLED,
+        }), sourceHealth);
+
     await writeJsonAtomically(resolve(diagnosticsRoot, `${group}-adaptive-v2.json`), result);
     if (result.status === "shadow_candidate_v2") {
       await writeJsonAtomically(resolve(promotionRoot, `${group}-funding-v2.json`), result);
@@ -48,9 +93,20 @@ for (const group of GROUPS) {
       status: result.status,
       reason: result.reason ?? null,
       reasons: result.reasons ?? [],
-      settled: result.settled ?? result.diagnostics?.split?.total ?? 0,
+      settled: result.settled ?? result.diagnostics?.split?.total ?? sourceHealth.sampleCount,
       modelId: result.model?.id ?? null,
       promotedToShadowSlot: result.status === "shadow_candidate_v2",
+      sourceShadowHealth: {
+        status: sourceHealth.status,
+        sampleCount: sourceHealth.sampleCount,
+        dominantClass: sourceHealth.dominantClass,
+        dominantShare: sourceHealth.dominantShare,
+        collapsed: sourceHealth.collapsed,
+        reasons: sourceHealth.reasons,
+        actualCounts: sourceHealth.actualCounts,
+        predictedCounts: sourceHealth.predictedCounts,
+        topFeatureMeanShifts: sourceHealth.featureMeanShift.topMeanShifts,
+      },
     };
   } catch (error) {
     technicalFailure = true;
@@ -59,7 +115,7 @@ for (const group of GROUPS) {
 }
 
 const report = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   status: technicalFailure ? "fail" : "pass",
   generatedAt: Date.now(),
   source: "isolated-live-shadow-adaptive-candidate-builder",
@@ -70,6 +126,8 @@ const report = {
     modifiesExistingAppApi: false,
     overwritesShadowHistory: false,
     deploysModel: false,
+    mutatesSourceModel: false,
+    forcesDirectionalPredictions: false,
   },
 };
 await writeJsonAtomically(reportPath, report);
