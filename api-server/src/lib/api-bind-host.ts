@@ -23,15 +23,15 @@ export function isStagingReadonlyCredentialRuntime(environment: NodeJS.ProcessEn
 }
 
 export function resolveApiBindHost(environment: NodeJS.ProcessEnv = process.env) {
+  // A staging runtime that temporarily receives real private-read credentials
+  // is non-overridable: even an inherited API_BIND_HOST cannot widen it.
+  if (isStagingReadonlyCredentialRuntime(environment)) return '127.0.0.1';
+
   const explicit = environment.API_BIND_HOST?.trim();
   if (explicit) {
     if (!EXPLICIT_BIND_HOSTS.has(explicit)) throw new Error('API_BIND_HOST_INVALID');
     return explicit;
   }
-
-  // A staging runtime that temporarily receives real private-read credentials
-  // fails closed to loopback unless an operator explicitly overrides the bind host.
-  if (isStagingReadonlyCredentialRuntime(environment)) return '127.0.0.1';
 
   return '0.0.0.0';
 }
