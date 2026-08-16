@@ -27,18 +27,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Verify no application deployment authority exists
+      - name: Verify Paper-only activation and no application deployment authority
         shell: bash
         run: |
           set -Eeuo pipefail
           workflow=.github/workflows/paper-forward-schedule-no-deploy-activation.yml
+          install=ops/install-paper-forward-schedule.sh
           grep -F "startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')" "$workflow" >/dev/null
-          grep -F "productionAppDeployPerformed: false" "$workflow" >/dev/null
-          grep -F "LIVE_TRADING='false'" "$workflow" >/dev/null
-          grep -F "REAL_ORDER_ENABLED='false'" "$workflow" >/dev/null
-          grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$workflow" >/dev/null
-          ! grep -F 'deploy-production.sh' "$workflow" >/dev/null
-          ! grep -E 'pm2 (start|restart|reload|delete|stop)|systemctl .*caddy|caddy reload|supabase db|psql .*-(c|f)' "$workflow" >/dev/null
+          grep -F 'productionAppDeployPerformed = false' "$workflow" >/dev/null
+          grep -F 'productionAppMutationAllowed = false' "$workflow" >/dev/null
+          grep -F 'productionAppShaBefore' "$workflow" >/dev/null
+          grep -F 'productionAppShaAfter' "$workflow" >/dev/null
+          grep -F "LIVE_TRADING='false'" "$install" >/dev/null
+          grep -F "REAL_ORDER_ENABLED='false'" "$install" >/dev/null
+          grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$install" >/dev/null
+          grep -F "PRIVATE_ACCOUNT_ACCESS='false'" "$install" >/dev/null
+          deploy_token="deploy-production"".sh"
+          mutation_pattern="pm2 ""(start|restart|reload|delete|stop)|systemctl .*""caddy|caddy ""reload|supabase ""db|psql .*-(c|f)"
+          ! grep -F "$deploy_token" "$workflow" >/dev/null
+          ! grep -E "$mutation_pattern" "$workflow" >/dev/null
 
   gate:
     if: >-
@@ -212,7 +219,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Validate SSH secrets and configure read/write Paper-only access
+      - name: Validate SSH secrets and configure Paper-only access
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -289,6 +296,7 @@ jobs:
             || value.targetSha !== process.env.TARGET_SHA
             || value.paperRuntimeSourceSha !== process.env.TARGET_SHA
             || value.productionAppDeployPerformed !== false
+            || value.productionAppMutationAllowed !== false
             || value.scheduleActive !== true
             || value.liveTrading !== false
             || value.privateAccountAccess !== false
@@ -325,8 +333,8 @@ jobs:
           STATE="$ROOT/runtime-state/state/recurring-paper-loop.json"
           STATUS="$ROOT/runtime-state/status/runtime-status.json"
           ACTIVATION="$ROOT/activation.json"
-          [[ -r "$INVOCATIONS" && -r "$STATE" && -r "$STATUS" && -r "$ACTIVATION" ]]
-          [[ "$(tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha)" == "$PRODUCTION_APP_SHA" ]]
+          [[ -r "$INVOCATIONS" && -r "$STATE" && -r "$STATUS" && -r "$ACTIVATION" ]] || exit 75
+          [[ "$(tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha)" == "$PRODUCTION_APP_SHA" ]] || exit 77
           node - "$INVOCATIONS" "$STATE" "$STATUS" "$ACTIVATION" "$ACTIVATION_AT_MS" "$TARGET_SHA" "$PRODUCTION_APP_SHA" <<'NODE'
           const fs = require('node:fs');
           const cp = require('node:child_process');
@@ -341,11 +349,12 @@ jobs:
           const cronMatches = cronText.split(/\r?\n/).filter((line) => line.includes('# stock-app-paper-forward-v1')).length;
           const checks = {
             exactPaperRuntime: activation.paperRuntimeSourceSha === targetSha,
-            noAppDeploy: activation.productionAppDeployPerformed === false && activation.productionAppShaBefore === productionAppSha,
+            noAppDeploy: activation.productionAppDeployPerformed === false && activation.productionAppMutationAllowed === false && activation.productionAppShaBefore === productionAppSha,
             naturalCron: invocation.naturalScheduleInvocation === true,
             completed: invocation.status === 'COMPLETED',
             oneMutation: invocation.mutationCount === 1,
             accumulating: invocation.publicForwardEvidenceAccumulating === true,
+            tradeOutcomeNotClaimed: invocation.paperTradeOutcomeAccumulating === false,
             fourReadyProviders: Array.isArray(invocation.providerLanes) && invocation.providerLanes.length === 4 && invocation.providerLanes.every((lane) => lane.status === 'READY'),
             scheduleActive: status.scheduleActive === true,
             stateCyclePersisted: Array.isArray(state.cycles) && state.cycles.length >= 1,
@@ -359,7 +368,10 @@ jobs:
             disableSentinelAbsent: !fs.existsSync('/opt/stock-app-data/paper-forward-v1/DISABLED'),
           };
           const failed = Object.entries(checks).filter(([, value]) => value !== true).map(([key]) => key);
-          if (failed.length) process.exit(77);
+          if (failed.length) {
+            console.error(`Natural Paper Forward cycle failed: ${failed.join(', ')}`);
+            process.exit(77);
+          }
           process.stdout.write(`${JSON.stringify({
             schemaVersion: 'paper-forward-natural-cycle-no-deploy-evidence-v1',
             status: 'passed', targetSha, productionAppSha, checks,
@@ -420,5 +432,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: 23,
-              body: `[PAPER_FORWARD_NO_DEPLOY_ACTIVATED]\nTARGET_SHA=${process.env.TARGET_SHA}\nPRODUCTION_APP_SHA_UNCHANGED=${process.env.PRODUCTION_APP_SHA}\nFIRST_NATURAL_CRON_VERIFIED=true\nLIVE_TRADING=false\nPRIVATE_TRADING_API_ALLOWED=false\nREAL_ORDER_COUNT=0\nFINANCIAL_MUTATION_COUNT=0`,
+              body: `[PAPER_FORWARD_NO_DEPLOY_ACTIVATED]\nTARGET_SHA=${process.env.TARGET_SHA}\nPRODUCTION_APP_SHA_UNCHANGED=${process.env.PRODUCTION_APP_SHA}\nPRODUCTION_APP_DEPLOY_PERFORMED=false\nFIRST_NATURAL_CRON_VERIFIED=true\nLIVE_TRADING=false\nPRIVATE_TRADING_API_ALLOWED=false\nREAL_ORDER_COUNT=0\nFINANCIAL_MUTATION_COUNT=0`,
             });
