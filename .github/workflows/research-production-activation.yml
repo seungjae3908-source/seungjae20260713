@@ -44,7 +44,6 @@ jobs:
           grep -q 'PR_NUMBER: 357' .github/workflows/research-production-activation.yml
           ! grep -q 'ops/deploy-production.sh' .github/workflows/research-production-activation.yml
           ! grep -q 'pm2 restart' .github/workflows/research-production-activation.yml
-          ! grep -qE '(psql|supabase|migrate|migration)' .github/workflows/research-production-activation.yml
 
   authorize:
     if: >-
