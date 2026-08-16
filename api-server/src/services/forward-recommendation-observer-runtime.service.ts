@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  FORWARD_OBSERVATION_SOURCE,
   advanceForwardRecommendationObservation,
   buildForwardObservationProfitCalibration,
   prepareForwardRecommendationObservation,
@@ -112,6 +113,38 @@ function iso(value: unknown): string | null {
   return Number.isFinite(at) ? new Date(at).toISOString() : null;
 }
 
+function assertObservationStateEnvelope(observation: ForwardRecommendationObservation, researchCodeSha: string): void {
+  if (observation.schemaVersion !== 'forward-recommendation-observation-v1'
+    || observation.source !== FORWARD_OBSERVATION_SOURCE
+    || observation.identity.researchCodeSha !== researchCodeSha
+    || observation.publicDataOnly !== true
+    || observation.simulatedOnly !== true
+    || observation.executionAuthority !== 'NONE'
+    || observation.financialMutationAllowed !== false
+    || observation.liveOrderAllowed !== false
+    || observation.privateTradingApiAllowed !== false
+    || observation.orderSubmitted !== false
+    || observation.exchangeRequestSent !== false
+    || observation.profitabilityClaimAllowed !== false
+    || observation.snapshot.executionAuthority !== 'NONE') {
+    throw new Error('FORWARD_OBSERVER_OBSERVATION_SAFETY_ENVELOPE_INVALID');
+  }
+  if (observation.snapshot.market !== observation.identity.market
+    || observation.snapshot.strategyHorizon !== observation.identity.horizon
+    || observation.snapshot.direction !== observation.identity.direction
+    || observation.snapshot.strategyProfileVersion !== observation.identity.strategyProfileVersion
+    || observation.snapshot.timeframes[0] !== observation.identity.timeframe) {
+    throw new Error('FORWARD_OBSERVER_OBSERVATION_IDENTITY_MISMATCH');
+  }
+  if (observation.status === 'PENDING') {
+    if (observation.outcome !== null || observation.settledAt !== null) throw new Error('FORWARD_OBSERVER_PENDING_STATE_INVALID');
+  } else if (observation.status === 'SETTLED') {
+    if (observation.outcome == null || iso(observation.settledAt) == null) throw new Error('FORWARD_OBSERVER_SETTLED_STATE_INVALID');
+  } else {
+    throw new Error('FORWARD_OBSERVER_OBSERVATION_STATUS_INVALID');
+  }
+}
+
 export function createForwardObserverRuntimeState(researchCodeSha: string, now = new Date()): ForwardObserverRuntimeState {
   const sha = researchCodeSha.trim().toLowerCase();
   if (!exactSha(sha)) throw new Error('FORWARD_OBSERVER_IMMUTABLE_RESEARCH_SHA_REQUIRED');
@@ -137,9 +170,13 @@ export function validateForwardObserverRuntimeState(state: ForwardObserverRuntim
     || state.safety.profitabilityClaimAllowed !== false) {
     throw new Error('FORWARD_OBSERVER_STATE_SAFETY_CONTRACT_VIOLATION');
   }
+  for (const lane of FORWARD_OBSERVER_LANES) {
+    const cursor = state.cursors[lane.id];
+    if (!Number.isInteger(cursor) || cursor < 0) throw new Error('FORWARD_OBSERVER_CURSOR_INVALID');
+  }
   const ids = new Set<string>();
   for (const observation of state.observations) {
-    if (observation.identity.researchCodeSha !== sha) throw new Error('FORWARD_OBSERVER_IDENTITY_MIXING_FORBIDDEN');
+    assertObservationStateEnvelope(observation, sha);
     if (ids.has(observation.observationId)) throw new Error('FORWARD_OBSERVER_DUPLICATE_STATE_ID');
     ids.add(observation.observationId);
   }
@@ -148,12 +185,14 @@ export function validateForwardObserverRuntimeState(state: ForwardObserverRuntim
 export function latestCardEvidenceTimestamp(card: ScannerSignalCard): string | null {
   const signalAt = Date.parse(card.observedAt);
   if (!Number.isFinite(signalAt)) return null;
-  const values = card.evidence
-    .map((item) => iso(item.observedAt))
-    .filter((value): value is string => value != null)
-    .filter((value) => Date.parse(value) <= signalAt)
-    .sort((left, right) => Date.parse(right) - Date.parse(left));
-  return values[0] ?? null;
+  const matched = card.evidence.filter((item) => item.status === 'matched');
+  if (matched.length === 0) return null;
+  const values = matched.map((item) => iso(item.observedAt));
+  if (values.some((value) => value == null)) return null;
+  const timestamps = values as string[];
+  if (timestamps.some((value) => Date.parse(value) > signalAt)) return null;
+  timestamps.sort((left, right) => Date.parse(left) - Date.parse(right));
+  return timestamps[0] ?? null;
 }
 
 export function laneParameterHash(lane: ForwardObserverLane): string {
@@ -181,6 +220,21 @@ function scannerOutcome(response: ScannerResponse): string {
   if (typeof response.outcome === 'string') return response.outcome;
   if (response.cards.length > 0) return 'CANDIDATES_AVAILABLE';
   return response.dataState === 'complete' ? 'VALID_ZERO_SIGNAL' : `DATA_${response.dataState.toUpperCase()}`;
+}
+
+function scannerResponseBlockers(response: ScannerResponse): string[] {
+  const blockers: string[] = [];
+  if (response.orderSubmitted !== false || response.exchangeRequestSent !== false) blockers.push('SCANNER_EXECUTION_SAFETY_VIOLATION');
+  if (response.dataState !== 'complete') blockers.push('SCANNER_DATA_NOT_COMPLETE');
+  if (response.execution.partial) blockers.push('SCANNER_PARTIAL_RESULT');
+  if (response.execution.timedOut || response.execution.timeoutCount > 0) blockers.push('SCANNER_TIMEOUT');
+  if (response.execution.cancelled) blockers.push('SCANNER_CANCELLED');
+  if (response.execution.duplicate) blockers.push('SCANNER_DUPLICATE_RESULT');
+  if (response.execution.providerErrorCount > 0 || response.failures.some((failure) => failure.reason === 'provider_error')) blockers.push('SCANNER_PROVIDER_ERROR');
+  if (response.failures.length > 0) blockers.push('SCANNER_FAILURES_PRESENT');
+  if (response.universe.partial) blockers.push('SCANNER_UNIVERSE_PARTIAL');
+  if (response.universe.stale) blockers.push('SCANNER_UNIVERSE_STALE');
+  return [...new Set(blockers)];
 }
 
 function calibrationGroups(observations: ForwardRecommendationObservation[]): ForwardObservationProfitCalibration[] {
@@ -269,6 +323,22 @@ export async function runForwardRecommendationObserverCycle(input: {
       continue;
     }
 
+    const responseBlockers = scannerResponseBlockers(response);
+    if (responseBlockers.length > 0) {
+      lanes.push({
+        laneId: lane.id,
+        cursorBefore,
+        cursorAfter: cursorBefore,
+        scannerOutcome: scannerOutcome(response),
+        scannedCards: response.cards.length,
+        readyObservations: 0,
+        noTrade: 0,
+        blocked: 1,
+        blockers: Object.fromEntries(responseBlockers.map((blocker) => [blocker, 1])),
+      });
+      continue;
+    }
+
     cursors[lane.id] = nextCursor(response);
     let readyObservations = 0;
     let noTrade = 0;
@@ -278,7 +348,7 @@ export async function runForwardRecommendationObserverCycle(input: {
       const dataTimestamp = latestCardEvidenceTimestamp(card);
       if (!dataTimestamp) {
         blocked += 1;
-        countBlocker(blockers, 'DATA_TIMESTAMP_FROM_EVIDENCE_REQUIRED');
+        countBlocker(blockers, 'DATA_TIMESTAMP_FROM_MATCHED_EVIDENCE_REQUIRED');
         continue;
       }
       const decision = prepareForwardRecommendationObservation({
