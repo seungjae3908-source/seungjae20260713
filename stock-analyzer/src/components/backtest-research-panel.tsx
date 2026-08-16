@@ -197,6 +197,13 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
           />
         ) : null}
 
+        <p
+          className="text-center text-xs font-medium text-amber-700"
+          data-testid="backtest-historical-disclaimer"
+        >
+          과거 데이터 기반 분석이며 미래 수익을 보장하지 않습니다.
+        </p>
+
         <form onSubmit={submit} className="rounded-2xl border border-border bg-card p-4" aria-busy={loading} data-testid="backtest-form">
           <h2 className="mb-4 text-center text-base font-black">기본 설정</h2>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
