@@ -71,7 +71,7 @@ for (const forbidden of [
 }
 assert(runner.includes('withYahooPublicOnlyStockData'), 'stock scanner must be isolated behind Yahoo public-only adapter');
 assert(runner.includes('finally') && runner.includes('originalCandles') && runner.includes('originalQuote'), 'temporary stock adapter must restore defaults');
-assert(tests.includes('missing evidence timestamps are blocked'), 'missing evidence timestamp regression test required');
+assert(tests.includes('missing matched evidence timestamps are blocked'), 'missing evidence timestamp regression test required');
 assert(tests.includes('ignores pre-signal bars'), 'future-only settlement regression test required');
 assert(tests.includes('idempotent'), 'idempotency regression test required');
 
