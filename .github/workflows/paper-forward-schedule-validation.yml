@@ -17,6 +17,7 @@ on:
       - agent/paper-forward-schedule-activation-v1
       - agent/paper-forward-stale-disable-race-guard-v1
       - fix/paper-forward-activation-post-approval-main-guard-v1
+      - fix/paper-forward-disable-moving-main-liveness-v1
     paths:
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
@@ -131,22 +132,22 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -f .github/workflows/paper-forward-schedule-disable.yml
-          grep -F "startsWith(github.event.comment.body, '/disable-paper-forward-schedule ')" \
-            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
-          grep -F "environment: production" .github/workflows/paper-forward-schedule-disable.yml >/dev/null
-          grep -F "target === currentMain" .github/workflows/paper-forward-schedule-disable.yml >/dev/null
-          grep -F "comparison.data.behind_by !== 0" .github/workflows/paper-forward-schedule-disable.yml >/dev/null
-          grep -F "Revalidate current main after Production environment approval" \
-            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
-          grep -F '[[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]]' \
-            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
-          grep -F '< ops/disable-paper-forward-schedule.sh' \
-            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
-          grep -F "cronEntryCountAfter: Number(cronCountRaw)" \
-            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
-          grep -F "orderAuthorityOff: disabled.orderAuthority === false" \
-            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
+          workflow=.github/workflows/paper-forward-schedule-disable.yml
+          test -f "$workflow"
+          grep -F "startsWith(github.event.comment.body, '/disable-paper-forward-schedule ')" "$workflow" >/dev/null
+          grep -F "environment: production" "$workflow" >/dev/null
+          grep -F "target === currentMain" "$workflow" >/dev/null
+          test "$(grep -Fc 'compareCommitsWithBasehead' "$workflow")" -ge 2
+          grep -F "comparison.data.behind_by !== 0" "$workflow" >/dev/null
+          grep -F "Revalidate stale target ancestry after Production environment approval" "$workflow" >/dev/null
+          grep -F "Refusing emergency disable because stale target is not an ancestor of current main after Production approval" "$workflow" >/dev/null
+          grep -F "Post-approval stale ancestry guard accepted" "$workflow" >/dev/null
+          ! grep -F "Current main moved again before emergency disable" "$workflow" >/dev/null
+          ! grep -F "EXPECTED_MAIN_SHA" "$workflow" >/dev/null
+          grep -F '[[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]]' "$workflow" >/dev/null
+          grep -F '< ops/disable-paper-forward-schedule.sh' "$workflow" >/dev/null
+          grep -F "cronEntryCountAfter: Number(cronCountRaw)" "$workflow" >/dev/null
+          grep -F "orderAuthorityOff: disabled.orderAuthority === false" "$workflow" >/dev/null
 
       - name: Final exact HEAD and clean workspace
         run: |
