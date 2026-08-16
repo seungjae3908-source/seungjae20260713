@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { resolveApiBindHost } from '../../../lib/api-bind-host';
 import { InMemoryTradingRepository } from '../../../services/trade-automation.repository';
 import { decryptTradingCredentials } from '../../../services/trade-credential-vault.service';
 import {
@@ -105,4 +106,29 @@ test('saving read-only credentials preserves an existing account mode and never 
     assert.equal(afterPolicy.automaticEnabled, false);
     assert.deepEqual(afterPolicy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false });
   });
+});
+
+test('secret-bearing staging private-read runtime defaults to loopback while normal runtimes keep existing bind behavior', () => {
+  assert.equal(resolveApiBindHost({}), '0.0.0.0');
+  assert.equal(resolveApiBindHost({ APP_ENV: 'staging' }), '0.0.0.0');
+  assert.equal(resolveApiBindHost({
+    APP_ENV: 'staging',
+    TRADING_CREDENTIAL_MASTER_KEY: TEST_MASTER_KEY,
+    UPBIT_ACCOUNT_READ_ENABLED: 'true',
+    BITGET_ACCOUNT_READ_ENABLED: 'true',
+    LIVE_TRADING_ENABLED: 'false',
+    AUTO_TRADING_ENABLED: 'false',
+    TOSS_ORDER_ENABLED: 'false',
+    UPBIT_ORDER_ENABLED: 'false',
+    BITGET_ORDER_ENABLED: 'false',
+    TRANSFER_ENABLED: 'false',
+    WITHDRAWAL_ENABLED: 'false',
+  }), '127.0.0.1');
+});
+
+test('bind host override is explicit and restricted to known listener addresses', () => {
+  assert.equal(resolveApiBindHost({ API_BIND_HOST: '127.0.0.1' }), '127.0.0.1');
+  assert.equal(resolveApiBindHost({ API_BIND_HOST: '0.0.0.0' }), '0.0.0.0');
+  assert.equal(resolveApiBindHost({ API_BIND_HOST: '::1' }), '::1');
+  assert.throws(() => resolveApiBindHost({ API_BIND_HOST: 'example.com' }), /API_BIND_HOST_INVALID/);
 });
