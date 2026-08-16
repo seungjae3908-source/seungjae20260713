@@ -11,6 +11,11 @@ import {
   createCanonicalPaperForwardEvidenceProvider,
   runPaperForwardEvidenceRuntime,
 } from "./paper-forward-evidence-runtime-v1.js";
+import { createFilePaperLearningStore } from "./paper-forward-persistent-learning-store-v1.js";
+import {
+  createSimulatedPaperLedgerAdapter,
+  createSimulatedPaperLearningAdapter,
+} from "./paper-simulated-adapters-v1.js";
 import { createFilePaperSchedulerLeaseStore } from "./paper-scheduler-driver-v1.js";
 
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
@@ -35,6 +40,9 @@ export const PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT = Object.freeze({
   singleHostOnly: true,
   distributedMultiHostSupported: false,
   financialMutationAdaptersEnabled: false,
+  simulatedFinancialAdaptersEnabled: false,
+  externalFinancialMutationAllowed: false,
+  paperTradeOutcomeAccumulationEnabled: false,
   paperTradeOutcomeAccumulating: false,
 });
 
@@ -119,20 +127,46 @@ async function disabledSentinelPresent(path) {
   }
 }
 
-function buildIdentity(researchCodeSha) {
-  if (!immutableSha(researchCodeSha)) throw new TypeError("immutable Paper Forward research SHA is required");
-  const parameterHash = sha256(stableSerialize({
-    authority: "canonical-paper-forward-provider-v1",
-    cadence: PAPER_FORWARD_SCHEDULE_CADENCE,
-    financialMutationAdaptersEnabled: false,
-  }));
+function activationContract(outcomeAccumulationEnabled) {
+  if (!outcomeAccumulationEnabled) return PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT;
   return Object.freeze({
-    strategyId: "paper-forward-public-evidence-v1",
+    ...PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT,
+    version: "paper-forward-schedule-simulated-outcome-v1",
+    financialMutationAdaptersEnabled: true,
+    simulatedFinancialAdaptersEnabled: true,
+    externalFinancialMutationAllowed: false,
+    paperTradeOutcomeAccumulationEnabled: true,
+    paperTradeOutcomeAccumulating: false,
+  });
+}
+
+function buildIdentity(researchCodeSha, outcomeAccumulationEnabled = false) {
+  if (!immutableSha(researchCodeSha)) throw new TypeError("immutable Paper Forward research SHA is required");
+  const parameterHash = sha256(stableSerialize(outcomeAccumulationEnabled
+    ? {
+      authority: "canonical-paper-forward-provider-v1",
+      cadence: PAPER_FORWARD_SCHEDULE_CADENCE,
+      financialMutationAdaptersEnabled: true,
+      simulatedOnly: true,
+    }
+    : {
+      authority: "canonical-paper-forward-provider-v1",
+      cadence: PAPER_FORWARD_SCHEDULE_CADENCE,
+      financialMutationAdaptersEnabled: false,
+    }));
+  return Object.freeze({
+    strategyId: outcomeAccumulationEnabled
+      ? "paper-forward-simulated-outcome-v1"
+      : "paper-forward-public-evidence-v1",
     strategyVersion: "1.0.0",
     parameterHash,
     researchCodeSha,
-    costPolicyVersion: "paper-forward-observation-only-v1",
-    executionPolicyVersion: "public-evidence-no-financial-mutation-v1",
+    costPolicyVersion: outcomeAccumulationEnabled
+      ? "paper-forward-simulated-ledger-v1"
+      : "paper-forward-observation-only-v1",
+    executionPolicyVersion: outcomeAccumulationEnabled
+      ? "public-evidence-simulated-paper-v1"
+      : "public-evidence-no-financial-mutation-v1",
   });
 }
 
@@ -183,6 +217,7 @@ function statePaths(root) {
     invocations: join(root, "status", "invocations.jsonl"),
     leases: join(root, "leases"),
     cycleReceipts: join(root, "cycles"),
+    learning: join(root, "learning"),
   });
 }
 
@@ -221,18 +256,24 @@ function createPersistentStateStore(paths) {
   });
 }
 
-function activeRuntimeStatus(value, previous, activationAtMs) {
+function activeRuntimeStatus(value, previous, activationAtMs, outcomeAccumulationEnabled = false) {
   const replayed = value?.status === "REPLAYED";
   const lanes = replayed && Array.isArray(previous?.lanes)
     ? previous.lanes
     : (Array.isArray(value?.lanes) ? value.lanes : []);
   const allReady = lanes.length === 4 && lanes.every((lane) => lane?.status === "READY");
+  const outcomeAccumulating = replayed
+    ? previous?.paperTradeOutcomeAccumulating === true
+    : outcomeAccumulationEnabled
+      && value?.status === "COMPLETED"
+      && allReady
+      && Number(value?.outcomeCount ?? 0) > 0;
   return Object.freeze({
     ...value,
     schemaVersion: "paper-forward-active-runtime-status-v1",
     preparedRuntimeContractScheduleActive: value?.scheduleActive === true,
     scheduleActive: true,
-    activationVersion: PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT.version,
+    activationVersion: activationContract(outcomeAccumulationEnabled).version,
     activationAtMs,
     trigger: PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT.trigger,
     canonicalCycleIntervalMs: FOUR_HOURS_MS,
@@ -241,8 +282,11 @@ function activeRuntimeStatus(value, previous, activationAtMs) {
     publicForwardEvidenceAccumulating: replayed
       ? previous?.publicForwardEvidenceAccumulating === true
       : value?.status === "COMPLETED" && allReady,
-    paperTradeOutcomeAccumulating: false,
-    financialMutationAdaptersEnabled: false,
+    paperTradeOutcomeAccumulationEnabled: outcomeAccumulationEnabled,
+    paperTradeOutcomeAccumulating: outcomeAccumulating,
+    financialMutationAdaptersEnabled: outcomeAccumulationEnabled,
+    simulatedFinancialAdaptersEnabled: outcomeAccumulationEnabled,
+    externalFinancialMutationAllowed: false,
     privateRequestCount: 0,
     orderCount: 0,
     financialMutationCount: 0,
@@ -251,13 +295,27 @@ function activeRuntimeStatus(value, previous, activationAtMs) {
   });
 }
 
-function createPersistentRuntimeStatusStore(paths, activationAtMs) {
+function createPersistentRuntimeStatusStore(paths, activationAtMs, outcomeAccumulationEnabled) {
   return Object.freeze({
     load: () => readJsonOrNull(paths.runtimeStatus),
     async save(value) {
       const previous = await readJsonOrNull(paths.runtimeStatus);
-      await atomicWriteJson(paths.runtimeStatus, activeRuntimeStatus(value, previous, activationAtMs));
+      await atomicWriteJson(paths.runtimeStatus, activeRuntimeStatus(
+        value,
+        previous,
+        activationAtMs,
+        outcomeAccumulationEnabled,
+      ));
     },
+  });
+}
+
+function buildFinancialAdapters({ paths, outcomeAccumulationEnabled, accountingEvidenceForSettlement }) {
+  if (!outcomeAccumulationEnabled) return failClosedFinancialAdapters();
+  const learningStore = createFilePaperLearningStore({ directory: paths.learning });
+  return Object.freeze({
+    ledgerAdapter: createSimulatedPaperLedgerAdapter({ accountingEvidenceForSettlement }),
+    learningAdapter: createSimulatedPaperLearningAdapter({ learningStore }),
   });
 }
 
@@ -271,6 +329,8 @@ export async function runPaperForwardScheduledInvocation({
   publicEvidenceProvider = createCanonicalPaperForwardEvidenceProvider({ clock }),
   runRuntime = runPaperForwardEvidenceRuntime,
   leaseDurationMs = DEFAULT_LEASE_DURATION_MS,
+  outcomeAccumulationEnabled = false,
+  accountingEvidenceForSettlement,
 } = {}) {
   const root = assertRootDirectory(rootDirectory);
   if (!immutableSha(researchCodeSha)) throw new TypeError("immutable researchCodeSha is required");
@@ -279,6 +339,9 @@ export async function runPaperForwardScheduledInvocation({
   }
   if (!finite(activationAtMs) || typeof clock !== "function") {
     throw new TypeError("finite activation time and clock are required");
+  }
+  if (typeof outcomeAccumulationEnabled !== "boolean") {
+    throw new TypeError("outcomeAccumulationEnabled must be boolean");
   }
 
   const paths = statePaths(root);
@@ -291,11 +354,15 @@ export async function runPaperForwardScheduledInvocation({
   const nowMs = clock();
   if (!finite(nowMs)) throw new TypeError("clock must return a finite number");
 
-  const identity = buildIdentity(researchCodeSha);
+  const identity = buildIdentity(researchCodeSha, outcomeAccumulationEnabled);
   const state = await loadOrCreateState(paths, identity, nowMs);
   const stateStore = createPersistentStateStore(paths);
-  const runtimeStatusStore = createPersistentRuntimeStatusStore(paths, activationAtMs);
-  const { ledgerAdapter, learningAdapter } = failClosedFinancialAdapters();
+  const runtimeStatusStore = createPersistentRuntimeStatusStore(paths, activationAtMs, outcomeAccumulationEnabled);
+  const { ledgerAdapter, learningAdapter } = buildFinancialAdapters({
+    paths,
+    outcomeAccumulationEnabled,
+    accountingEvidenceForSettlement,
+  });
   const leaseStore = createFilePaperSchedulerLeaseStore({ directory: paths.leases });
 
   const result = await runRuntime({
@@ -332,6 +399,8 @@ export async function runPaperForwardScheduledInvocation({
     && persistedStatus?.allProvidersReady === true;
   const publicForwardEvidenceAccumulating = triggerSource === "cron"
     && persistedStatus?.publicForwardEvidenceAccumulating === true;
+  const paperTradeOutcomeAccumulating = triggerSource === "cron"
+    && persistedStatus?.paperTradeOutcomeAccumulating === true;
   const record = Object.freeze({
     schemaVersion: "paper-forward-schedule-invocation-v1",
     invokedAtMs: nowMs,
@@ -344,7 +413,11 @@ export async function runPaperForwardScheduledInvocation({
     naturalScheduleInvocation: triggerSource === "cron",
     newPublicEvidenceAccepted,
     publicForwardEvidenceAccumulating,
-    paperTradeOutcomeAccumulating: false,
+    paperTradeOutcomeAccumulationEnabled: outcomeAccumulationEnabled,
+    paperTradeOutcomeAccumulating,
+    financialMutationAdaptersEnabled: outcomeAccumulationEnabled,
+    simulatedFinancialAdaptersEnabled: outcomeAccumulationEnabled,
+    externalFinancialMutationAllowed: false,
     providerLanes: Object.freeze((persistedStatus?.lanes ?? []).map((lane) => Object.freeze({
       market: lane.market,
       provider: lane.provider,
@@ -361,7 +434,7 @@ export async function runPaperForwardScheduledInvocation({
   await appendJsonl(paths.invocations, record);
   return Object.freeze({
     ...result,
-    schedule: PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT,
+    schedule: activationContract(outcomeAccumulationEnabled),
     persistedStatus,
     invocation: record,
     rootDirectory: root,
@@ -401,4 +474,5 @@ export const __paperForwardScheduleTestables = Object.freeze({
   failClosedFinancialAdapters,
   initialLedger,
   activeRuntimeStatus,
+  activationContract,
 });
