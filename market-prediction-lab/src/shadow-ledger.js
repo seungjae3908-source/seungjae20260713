@@ -156,6 +156,42 @@ function metricRows(records, prefix) {
   }));
 }
 
+function shares(counts, total) {
+  return Object.freeze(Object.fromEntries(CLASS_NAMES.map((name) => [name, counts[name] / total])));
+}
+
+function predictionHealth({ sampleCount, predictedShares, perClass }, {
+  maxDominantShare = 0.8,
+  minDirectionalRecall = 0.05,
+  minDirectionalSupport = 5,
+} = {}) {
+  const dominantClass = CLASS_NAMES.reduce(
+    (best, name) => predictedShares[name] > predictedShares[best] ? name : best,
+    CLASS_NAMES[0],
+  );
+  const dominantShare = predictedShares[dominantClass];
+  const reasons = [];
+  if (dominantShare >= maxDominantShare) reasons.push(`dominant_prediction_share:${dominantClass}`);
+  const bullish = perClass.bullish;
+  const bearish = perClass.bearish;
+  if (bullish.support >= minDirectionalSupport
+      && bearish.support >= minDirectionalSupport
+      && bullish.recall < minDirectionalRecall
+      && bearish.recall < minDirectionalRecall) {
+    reasons.push("directional_recall_collapse");
+  }
+  return Object.freeze({
+    sampleCount,
+    dominantClass,
+    dominantShare,
+    maxDominantShare,
+    minDirectionalRecall,
+    minDirectionalSupport,
+    collapsed: reasons.length > 0,
+    reasons: Object.freeze(reasons),
+  });
+}
+
 function metrics(rows) {
   if (rows.length === 0) return null;
   const confusion = Object.fromEntries(CLASS_NAMES.map((actual) => [actual, Object.fromEntries(CLASS_NAMES.map((predicted) => [predicted, 0]))]));
@@ -169,16 +205,27 @@ function metrics(rows) {
     brierScore += row.brier;
   }
   const perClass = {};
+  const actualCounts = Object.fromEntries(CLASS_NAMES.map((name) => [
+    name,
+    CLASS_NAMES.reduce((sum, predicted) => sum + confusion[name][predicted], 0),
+  ]));
+  const predictedCounts = Object.fromEntries(CLASS_NAMES.map((name) => [
+    name,
+    CLASS_NAMES.reduce((sum, actual) => sum + confusion[actual][name], 0),
+  ]));
   for (const name of CLASS_NAMES) {
     const tp = confusion[name][name];
     const fp = CLASS_NAMES.reduce((sum, actual) => sum + (actual === name ? 0 : confusion[actual][name]), 0);
     const fn = CLASS_NAMES.reduce((sum, predicted) => sum + (predicted === name ? 0 : confusion[name][predicted]), 0);
-    const support = CLASS_NAMES.reduce((sum, predicted) => sum + confusion[name][predicted], 0);
+    const support = actualCounts[name];
     const precision = tp / Math.max(tp + fp, 1);
     const recall = tp / Math.max(tp + fn, 1);
     const f1 = 2 * precision * recall / Math.max(precision + recall, 1e-12);
-    perClass[name] = { support, precision, recall, f1 };
+    perClass[name] = Object.freeze({ support, precision, recall, f1 });
   }
+  const actualShares = shares(actualCounts, rows.length);
+  const predictedShares = shares(predictedCounts, rows.length);
+  const health = predictionHealth({ sampleCount: rows.length, predictedShares, perClass });
   return Object.freeze({
     sampleCount: rows.length,
     accuracy: hits / rows.length,
@@ -186,6 +233,11 @@ function metrics(rows) {
     balancedAccuracy: CLASS_NAMES.reduce((sum, name) => sum + perClass[name].recall, 0) / CLASS_NAMES.length,
     logLoss: logLoss / rows.length,
     brier: brierScore / rows.length,
+    actualCounts: Object.freeze(actualCounts),
+    actualShares,
+    predictedCounts: Object.freeze(predictedCounts),
+    predictedShares,
+    predictionHealth: health,
     perClass: Object.freeze(perClass),
     confusion: Object.freeze(confusion),
   });
@@ -211,6 +263,11 @@ function comparison(candidate, reference) {
     logLossImprovement: reference.logLoss - candidate.logLoss,
     brierImprovement: reference.brier - candidate.brier,
   }) : null;
+}
+
+function addPredictionCollapseReasons(reasons, metricsValue, prefix) {
+  if (metricsValue?.predictionHealth?.collapsed !== true) return;
+  for (const reason of metricsValue.predictionHealth.reasons) reasons.push(`${prefix}prediction_collapse:${reason}`);
 }
 
 export function summarizeShadowState(state, { modelId, referenceModelId } = {}) {
@@ -252,8 +309,10 @@ export function evaluateShadowPromotion(summary, {
   if (summary.settled < minSettled) reasons.push("insufficient_settled_samples");
   if (!summary.firstAnchorTimestamp || !summary.lastAnchorTimestamp
       || summary.lastAnchorTimestamp - summary.firstAnchorTimestamp < minElapsedMs) reasons.push("insufficient_elapsed_shadow_period");
+  addPredictionCollapseReasons(reasons, summary.candidate, "candidate:");
   for (const [symbol, group] of Object.entries(summary.bySymbol ?? {})) {
     if ((group.candidate?.sampleCount ?? 0) < minPerSymbol) reasons.push(`${symbol}:insufficient_samples`);
+    if ((group.candidate?.sampleCount ?? 0) >= minPerSymbol) addPredictionCollapseReasons(reasons, group.candidate, `${symbol}:`);
     if (group.candidate && group.reference) {
       if (group.candidate.logLoss > group.reference.logLoss + 0.01) reasons.push(`${symbol}:log_loss_regressed`);
       if (group.candidate.macroF1 < group.reference.macroF1 - 0.01) reasons.push(`${symbol}:macro_f1_regressed`);
@@ -263,6 +322,7 @@ export function evaluateShadowPromotion(summary, {
     .filter(([, group]) => (group.candidate?.sampleCount ?? 0) >= minRegimeSamples);
   if (qualifiedRegimes.length < minQualifiedRegimes) reasons.push("insufficient_regime_coverage");
   for (const [regime, group] of qualifiedRegimes) {
+    addPredictionCollapseReasons(reasons, group.candidate, `${regime}:`);
     if (group.candidate.logLoss > group.reference.logLoss + 0.015) reasons.push(`${regime}:log_loss_regressed`);
     if (group.candidate.macroF1 < group.reference.macroF1 - 0.02) reasons.push(`${regime}:macro_f1_regressed`);
   }
@@ -272,10 +332,11 @@ export function evaluateShadowPromotion(summary, {
     if (summary.comparison.macroF1Delta < 0) reasons.push("macro_f1_regressed");
     if (summary.comparison.accuracyDelta < -0.005) reasons.push("accuracy_regressed");
   }
+  const uniqueReasons = [...new Set(reasons)];
   return Object.freeze({
-    approved: reasons.length === 0,
-    status: reasons.length === 0 ? "integration_review_ready" : "shadow_continue",
+    approved: uniqueReasons.length === 0,
+    status: uniqueReasons.length === 0 ? "integration_review_ready" : "shadow_continue",
     qualifiedRegimes: qualifiedRegimes.map(([regime]) => regime),
-    reasons: Object.freeze(reasons),
+    reasons: Object.freeze(uniqueReasons),
   });
 }
