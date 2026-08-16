@@ -180,7 +180,11 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         ? await williamsOverlay.apply({ market, cards: baseRankedCards, signal: controller.signal })
         : { cards: baseRankedCards, matchedCount: 0, unavailableCount: 0 };
       if (controller.signal.aborted || res.writableEnded) return;
-      const rankedCards = overlay.cards;
+      const rankedCards = overlay.cards.filter((card) => (
+        market === 'spot'
+          ? card.direction === 'LONG'
+          : card.direction === 'LONG' || card.direction === 'SHORT'
+      ));
       const actionableIds = new Set(rankedCards
         .filter((card) => card.signalGrade === 'S' || card.signalGrade === 'A')
         .map((card) => card.signalId));
@@ -236,7 +240,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
           : dataSuccessCount === 0 && insufficientDataCount > 0
             ? `현재 묶음에서 공급자 응답은 받았지만 ${insufficientDataCount}종목의 분석 데이터가 부족합니다.`
             : rankedCards.length === 0
-              ? '현재 묶음에서 Hard Risk Filter를 통과한 후보가 없습니다.'
+              ? '현재 묶음에서 추천 정책을 통과한 후보가 없습니다.'
               : actionableCount === 0
                 ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${bGradeCount}개`
                 : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${bGradeCount}개`,
@@ -263,4 +267,3 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
 }
 
 export default createCryptoSignalScanRouter();
-

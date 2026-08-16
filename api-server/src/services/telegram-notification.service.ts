@@ -11,6 +11,7 @@ const DEFAULT_COOLDOWN_MS = 60 * 1000;
 export const TELEGRAM_ALERT_TYPES = [
   'strong_buy',
   'strong_sell',
+  'crypto_spot_buy',
   'crypto_futures_long',
   'crypto_futures_short',
   'price_alert',
@@ -92,6 +93,8 @@ function titleForType(type: TelegramAlertType): string {
       return '🟢 강한매수 신호';
     case 'strong_sell':
       return '🔴 강한매도 신호';
+    case 'crypto_spot_buy':
+      return '🟢 코인현물 매수 신호';
     case 'crypto_futures_long':
       return '🟦 코인선물 LONG 신호';
     case 'crypto_futures_short':
