@@ -106,8 +106,20 @@ function evidenceGradeLabel(card: ScannerSignalCard): string {
 }
 
 function alertTitle(alert: ScannerAlertCandidate): string {
-  const action = alert.action && alert.action !== 'NONE' ? alert.action : 'SIGNAL';
-  return `${action} 승인 대기 · ${alert.symbol}`;
+  const futures = alert.assetClass === 'coin_futures';
+  let label: string;
+  if (futures) {
+    if (alert.action === 'LONG') label = '↑ 롱 신호';
+    else if (alert.action === 'SHORT') label = '↓ 숏 신호';
+    else if (alert.action === 'NONE' || alert.action === 'NO_TRADE') label = '— 거래 안 함 · NO_TRADE';
+    else label = '? 선물 방향 확인 필요 · UNKNOWN';
+  } else {
+    if (alert.action === 'BUY') label = '↗ 매수 신호';
+    else if (alert.action === 'SELL') label = '↘ 보유분 매도·청산 참고';
+    else if (alert.action === 'NONE' || alert.action === 'NO_TRADE') label = '— 거래 안 함 · NO_TRADE';
+    else label = '? 현물 방향 확인 필요 · UNKNOWN';
+  }
+  return `${label} 승인 대기 · ${alert.symbol}`;
 }
 
 function analysisMarket(card: ScannerSignalCard): AnalysisMarket {
