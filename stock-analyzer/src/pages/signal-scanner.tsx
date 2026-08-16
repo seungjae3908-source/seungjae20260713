@@ -84,12 +84,17 @@ function formatMetric(value: number | null | undefined, suffix = ''): string {
 }
 
 function actionLabel(card: ScannerSignalCard): string {
-  if (card.action === 'BUY') return '↗ 매수 · BUY';
-  if (card.action === 'SELL') return '↘ 매도 · SELL';
-  if (card.action === 'LONG') return '↑ 롱 · LONG';
-  if (card.action === 'SHORT') return '↓ 숏 · SHORT';
+  const futures = card.assetClass === 'coin_futures';
+  if (futures) {
+    if (card.action === 'LONG') return '↑ 롱 신호';
+    if (card.action === 'SHORT') return '↓ 숏 신호';
+    if (card.action === 'NONE' || card.action === 'NO_TRADE') return '— 거래 안 함 · NO_TRADE';
+    return '? 선물 방향 확인 필요 · UNKNOWN';
+  }
+  if (card.action === 'BUY') return '↗ 매수 신호';
+  if (card.action === 'SELL') return '↘ 보유분 매도·청산 참고';
   if (card.action === 'NONE' || card.action === 'NO_TRADE') return '— 거래 안 함 · NO_TRADE';
-  return '? 방향 확인 필요 · UNKNOWN';
+  return '? 현물 방향 확인 필요 · UNKNOWN';
 }
 
 function evidenceGradeLabel(card: ScannerSignalCard): string {
@@ -165,7 +170,7 @@ function SignalDetailPanel({
   onOrderPreparation: () => void;
 }) {
   const matchedEvidence = card.evidence.filter((item) => item.status === 'matched');
-  const why = matchedEvidence.flatMap((item) => item.reasons).filter(Boolean).slice(0, 8);
+  const why = [...new Set([...card.matched, ...matchedEvidence.flatMap((item) => item.reasons)])].filter(Boolean).slice(0, 8);
   const missing = [...new Set([...card.unverified, ...(card.aiValidation?.missingData ?? [])])];
   const risks = [...new Set([...card.warnings, ...(card.aiValidation?.risks ?? [])])];
   const mobile = Boolean(onClose);
@@ -614,6 +619,9 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             </div>
             <span className="rounded-full border border-card-border px-3 py-1 text-[11px] font-bold">{profile.profileVersion}</span>
           </div>
+          <p data-testid="scanner-market-signal-guide" className="mt-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-black text-primary">
+            {view === 'FUTURES' ? '코인 선물 · ↑ 롱 신호 / ↓ 숏 신호' : `${view === 'KR' ? '국내주식' : view === 'US' ? '해외주식' : '코인 현물'} · ↗ 매수 신호`}
+          </p>
           <p className="mt-2 hidden break-keep text-[11px] text-muted-foreground sm:block">기술지표 직접 선택은 기본 화면에 노출하지 않습니다. 상세 근거는 결과 카드에서 확인할 수 있습니다.</p>
           {embedded && (
             <label className="mt-3 block space-y-1 text-xs font-bold">
