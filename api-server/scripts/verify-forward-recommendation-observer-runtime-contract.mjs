@@ -41,7 +41,7 @@ for (const marker of [
   assert(runtime.includes(marker), `runtime safety marker missing: ${marker}`);
 }
 assert(runtime.includes('latestCardEvidenceTimestamp'), 'runtime must derive data time from actual scanner evidence');
-assert(runtime.includes('DATA_TIMESTAMP_FROM_EVIDENCE_REQUIRED'), 'missing evidence timestamp must fail closed');
+assert(runtime.includes('DATA_TIMESTAMP_FROM_MATCHED_EVIDENCE_REQUIRED'), 'missing evidence timestamp must fail closed');
 assert(runtime.includes('futureOnlyBars'), 'settlement must filter pre-signal bars');
 assert(runtime.includes('buildForwardObservationProfitCalibration'), 'runtime must use canonical calibration builder');
 assert(observer.includes("source: FORWARD_OBSERVATION_SOURCE"), 'canonical observer source contract must remain in use');
