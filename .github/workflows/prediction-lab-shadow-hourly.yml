@@ -22,9 +22,9 @@ env:
   SHADOW_BRANCH: feature/prediction-lab-standalone
   LAB_DIR: market-prediction-lab
   SHADOW_ARTIFACT: prediction-lab-shadow-state
-  SHADOW_CUTOVER_FROM_SHA: be77e3d2f5e63609806697836a8c1b6cd893a547
-  SHADOW_CUTOVER_TO_SHA: 87cfafc3d502901d8f678e0153e2e974a4b69004
-  SHADOW_CUTOVER_REASON: oi-training-parity
+  SHADOW_CUTOVER_FROM_SHA: 87cfafc3d502901d8f678e0153e2e974a4b69004
+  SHADOW_CUTOVER_TO_SHA: 84bb50cf6d0b90c29f47f043de36b9a239547c9b
+  SHADOW_CUTOVER_REASON: shadow-collapse-drift-guard
 
 jobs:
   shadow-validation:
@@ -217,16 +217,16 @@ jobs:
             const previousValue = JSON.parse(fs.readFileSync(previousState, 'utf8'));
             const previousSummaryValue = JSON.parse(fs.readFileSync(previousSummary, 'utf8'));
             if (manifest.researchCodeSha !== currentResearchCodeSha) {
-              const approvedOiParityCutover = manifest.researchCodeSha === cutoverFromSha && currentResearchCodeSha === cutoverToSha;
-              if (!approvedOiParityCutover) {
-                throw new Error('Shadow research code changed outside approved OI parity cutover; chain mixing forbidden.');
+              const approvedResearchCutover = manifest.researchCodeSha === cutoverFromSha && currentResearchCodeSha === cutoverToSha;
+              if (!approvedResearchCutover) {
+                throw new Error('Shadow research code changed outside approved research cutover; chain mixing forbidden.');
               }
               writeCleanCutover({
                 previousValue,
                 previousSummaryValue,
                 predecessorSha: manifest.researchCodeSha,
                 previousDigest: manifest.stateSha256,
-                seedMode: 'oi-parity-clean-cutover',
+                seedMode: 'research-code-clean-cutover',
               });
             } else {
               if (!nonEmptyLedger(previousValue)) {
@@ -251,7 +251,7 @@ jobs:
                 previousSummaryValue: branchSummary,
                 predecessorSha: '',
                 previousDigest: digest(statePath),
-                seedMode: 'oi-parity-clean-cutover-no-predecessor',
+                seedMode: 'research-code-clean-cutover-no-predecessor',
               });
             } else {
               if (currentResearchCodeSha !== cutoverFromSha) {
@@ -342,7 +342,7 @@ jobs:
           const unique = (values) => [...new Set(values.filter(Boolean))];
           const candidateModelIds = unique(groups.map((group) => group?.filter?.modelId ?? group?.modelSelection?.candidateModelId ?? null));
           const referenceModelIds = unique(groups.map((group) => group?.filter?.referenceModelId ?? group?.modelSelection?.referenceModelId ?? null));
-          const cutoverSeed = String(process.env.SEED_MODE ?? '').startsWith('oi-parity-clean-cutover');
+          const cutoverSeed = String(process.env.SEED_MODE ?? '').startsWith('research-code-clean-cutover');
           const manifest = {
             schemaVersion: 1,
             kind: 'prediction-lab-shadow-state',
