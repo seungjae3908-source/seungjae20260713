@@ -173,10 +173,12 @@ activate() {
     exit 78
   }
 
+  # The Research service shares the host with the production app. Keep small
+  # servers conservative; scale only when both CPU and memory are clearly ample.
   local concurrency=1
-  if (( CPU_CORES >= 4 && MEM_AVAILABLE_BYTES >= 4294967296 && FREE_BYTES >= 10737418240 )); then
+  if (( CPU_CORES >= 8 && MEM_AVAILABLE_BYTES >= 8589934592 && FREE_BYTES >= 21474836480 )); then
     concurrency=4
-  elif (( CPU_CORES >= 2 && MEM_AVAILABLE_BYTES >= 2147483648 )); then
+  elif (( CPU_CORES >= 4 && MEM_AVAILABLE_BYTES >= 4294967296 && FREE_BYTES >= 10737418240 )); then
     concurrency=2
   fi
 
