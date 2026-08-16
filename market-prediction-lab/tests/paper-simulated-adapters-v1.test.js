@@ -41,7 +41,7 @@ function position() {
   };
 }
 
-function settlement() {
+function settlement(overrides = {}) {
   return {
     settlementId: "settlement-1",
     paperSampleId: "sample-1",
@@ -52,6 +52,21 @@ function settlement() {
     netPnl: 10,
     settledAtMs: T0,
     ...safety(),
+    ...overrides,
+  };
+}
+
+function readyAccounting(overrides = {}) {
+  return {
+    status: "READY",
+    netPnlKrw: 13_500,
+    sourceCurrency: "USD",
+    fxRateToKrw: 1_350,
+    source: "public-fx-fixture",
+    version: "fx-v1",
+    asOfMs: T0,
+    maxAgeMs: 60_000,
+    ...overrides,
   };
 }
 
@@ -77,14 +92,15 @@ test("missing KRW accounting evidence keeps equity partial instead of adding for
   assert.equal(next.totalEquityKrw, null);
   assert.equal(next.pendingAccounting.length, 1);
   assert.equal(next.pendingAccounting[0].reason, "KRW_ACCOUNTING_EVIDENCE_MISSING");
+  assert.deepEqual(next.appliedSettlementIds, []);
 });
 
-test("verified KRW accounting evidence applies once and supports later reconciliation", async () => {
+test("verified KRW accounting evidence applies once and replay does not requery FX", async () => {
   let calls = 0;
   const adapter = createSimulatedPaperLedgerAdapter({
     accountingEvidenceForSettlement: async () => {
       calls += 1;
-      return { status: "READY", netPnlKrw: 13_500, source: "fx-fixture", version: "fx-v1", asOfMs: T0 };
+      return readyAccounting();
     },
   });
   const first = await adapter.applySettlement({ ledger: ledger(), settlement: settlement(), settlementId: "settlement-1", cycle });
@@ -95,7 +111,49 @@ test("verified KRW accounting evidence applies once and supports later reconcili
   const replay = await adapter.applySettlement({ ledger: first, settlement: settlement(), settlementId: "settlement-1", cycle });
   assert.equal(replay.knownEquityKrw, 1_013_500);
   assert.deepEqual(replay.appliedSettlementIds, ["settlement-1"]);
-  assert.equal(calls, 2);
+  assert.equal(calls, 1);
+});
+
+test("pending accounting can be reconciled later when fresh FX evidence becomes available", async () => {
+  let available = false;
+  const adapter = createSimulatedPaperLedgerAdapter({
+    accountingEvidenceForSettlement: async () => available ? readyAccounting() : { status: "MISSING" },
+  });
+  const partial = await adapter.applySettlement({ ledger: ledger(), settlement: settlement(), settlementId: "settlement-1", cycle });
+  assert.equal(partial.status, "PARTIAL");
+  assert.equal(partial.pendingAccounting.length, 1);
+  available = true;
+  const reconciled = await adapter.applySettlement({ ledger: partial, settlement: settlement(), settlementId: "settlement-1", cycle });
+  assert.equal(reconciled.status, "READY");
+  assert.equal(reconciled.pendingAccounting.length, 0);
+  assert.equal(reconciled.knownEquityKrw, 1_013_500);
+  assert.deepEqual(reconciled.appliedSettlementIds, ["settlement-1"]);
+});
+
+test("future and stale accounting evidence fail closed", async () => {
+  for (const [evidence, expected] of [
+    [readyAccounting({ asOfMs: T0 + 1 }), /FUTURE_EVIDENCE_FORBIDDEN/],
+    [readyAccounting({ asOfMs: T0 - 60_001 }), /STALE_EVIDENCE_FORBIDDEN/],
+  ]) {
+    const adapter = createSimulatedPaperLedgerAdapter({ accountingEvidenceForSettlement: async () => evidence });
+    await assert.rejects(
+      () => adapter.applySettlement({ ledger: ledger(), settlement: settlement(), settlementId: "settlement-1", cycle }),
+      expected,
+    );
+  }
+});
+
+test("currency and KRW conversion mismatch fail closed", async () => {
+  for (const [evidence, expected] of [
+    [readyAccounting({ sourceCurrency: "KRW", fxRateToKrw: 1, netPnlKrw: 10 }), /CURRENCY_MISMATCH/],
+    [readyAccounting({ netPnlKrw: 13_499 }), /CONVERSION_MISMATCH/],
+  ]) {
+    const adapter = createSimulatedPaperLedgerAdapter({ accountingEvidenceForSettlement: async () => evidence });
+    await assert.rejects(
+      () => adapter.applySettlement({ ledger: ledger(), settlement: settlement(), settlementId: "settlement-1", cycle }),
+      expected,
+    );
+  }
 });
 
 test("learning adapter persists signals and outcomes with idempotency keys", async () => {
@@ -129,4 +187,24 @@ test("unsafe samples are rejected before ledger mutation", async () => {
   const unsafe = position();
   unsafe.sample.liveOrderAllowed = true;
   await assert.rejects(() => adapter.applyEntry({ ledger: ledger(), position: unsafe, cycle }), /SAFETY_VIOLATION/);
+});
+
+test("unsafe learning inputs are rejected before persistence", async () => {
+  const store = createMemoryPaperLearningStore();
+  const adapter = createSimulatedPaperLearningAdapter({ learningStore: store });
+  const unsafeSample = { identity: { signalId: "unsafe-signal", market: "US_STOCK" }, ...safety(), liveOrderAllowed: true };
+  await assert.rejects(
+    () => adapter.persistSignal({ cycle, identity: { strategyId: "profit-first-v1", strategyVersion: "v1" }, sample: unsafeSample }),
+    /LEARNING_SAMPLE_SAFETY_VIOLATION/,
+  );
+  await assert.rejects(
+    () => adapter.persistOutcome({
+      cycle,
+      identity: { strategyId: "profit-first-v1", strategyVersion: "v1" },
+      position: position(),
+      settlement: settlement({ liveOrderAllowed: true }),
+    }),
+    /LEARNING_SETTLEMENT_SAFETY_VIOLATION/,
+  );
+  assert.deepEqual(store.snapshot(), []);
 });
