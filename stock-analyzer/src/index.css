@@ -282,3 +282,110 @@ input[type='search']::-webkit-search-results-decoration {
 [data-testid='scanner-workspace-basic'] section[aria-label='검색 시장'] > button:nth-child(4) {
   display: none;
 }
+
+/*
+ * Scanner mobile collision guard.
+ * The prior responsive contract only proved that the document did not overflow
+ * horizontally. Elements could still become visually crushed or collide inside
+ * a fixed-width row. Small screens now stack the price/score rail, keep signal
+ * badges wrap-safe, and make the detail tabs a true five-column control instead
+ * of a horizontally hidden strip.
+ */
+@media (max-width: 479px) {
+  [data-testid='scanner-master-list'] > article > .flex.items-start.justify-between.gap-3 {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  [data-testid='scanner-master-list']
+    > article
+    > .flex.items-start.justify-between.gap-3
+    > .shrink-0.text-right {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    text-align: left;
+  }
+
+  [data-testid='scanner-master-list']
+    > article
+    > .flex.items-start.justify-between.gap-3
+    > .shrink-0.text-right
+    > p {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  [data-testid='scanner-card-direction'],
+  [data-testid='scanner-direction-badge'],
+  [data-testid='scanner-evidence-grade'],
+  [data-testid='scanner-ttl-badge'] {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1rem;
+  }
+
+  [data-testid='scanner-master-list'] article .grid.grid-cols-2.gap-2 > button,
+  [data-testid='scanner-mobile-sheet'] .grid.grid-cols-2.gap-2 > button,
+  section[aria-label='승인 대기 알림'] button {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  [data-testid='scanner-mobile-sheet'] {
+    overflow-x: hidden;
+  }
+
+  [data-testid='scanner-mobile-sheet'] [data-testid='signal-detail'] {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  [data-testid='scanner-mobile-detail-tabs'] {
+    display: grid !important;
+    width: 100%;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    overflow-x: visible !important;
+    overscroll-behavior-x: auto;
+  }
+
+  [data-testid='scanner-mobile-detail-tabs'] > button {
+    width: 100%;
+    min-width: 0 !important;
+    padding-inline: 0.35rem;
+  }
+
+  .mx-auto.w-full.max-w-6xl.space-y-4
+    > section.flex.items-center.justify-between.gap-2
+    > span {
+    min-width: 0;
+    flex: 1 1 auto;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+
+  .mx-auto.w-full.max-w-6xl.space-y-4
+    > section.flex.items-center.justify-between.gap-2
+    > button {
+    flex: 0 0 auto;
+    padding-inline: 0.75rem;
+  }
+}
+
+@media (max-width: 359px) {
+  section[aria-label='검색 전략'] > button {
+    padding-inline: 0.5rem;
+  }
+
+  [data-testid='scanner-mobile-detail-tabs'] > button {
+    padding-inline: 0.2rem;
+    font-size: 0.65rem;
+  }
+}
