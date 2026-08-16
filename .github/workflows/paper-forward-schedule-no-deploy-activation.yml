@@ -33,19 +33,20 @@ jobs:
           set -Eeuo pipefail
           workflow=.github/workflows/paper-forward-schedule-no-deploy-activation.yml
           install=ops/install-paper-forward-schedule.sh
+          active_contract="$RUNNER_TEMP/paper-forward-active-contract.yml"
+          awk '/^  activate:/{emit=1} emit{print}' "$workflow" > "$active_contract"
+          test -s "$active_contract"
           grep -F "startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')" "$workflow" >/dev/null
-          grep -F 'productionAppDeployPerformed = false' "$workflow" >/dev/null
-          grep -F 'productionAppMutationAllowed = false' "$workflow" >/dev/null
-          grep -F 'productionAppShaBefore' "$workflow" >/dev/null
-          grep -F 'productionAppShaAfter' "$workflow" >/dev/null
+          grep -F 'productionAppDeployPerformed = false' "$active_contract" >/dev/null
+          grep -F 'productionAppMutationAllowed = false' "$active_contract" >/dev/null
+          grep -F 'productionAppShaBefore' "$active_contract" >/dev/null
+          grep -F 'productionAppShaAfter' "$active_contract" >/dev/null
           grep -F "LIVE_TRADING='false'" "$install" >/dev/null
           grep -F "REAL_ORDER_ENABLED='false'" "$install" >/dev/null
           grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$install" >/dev/null
           grep -F "PRIVATE_ACCOUNT_ACCESS='false'" "$install" >/dev/null
-          deploy_token="deploy-production"".sh"
-          mutation_pattern="pm2 ""(start|restart|reload|delete|stop)|systemctl .*""caddy|caddy ""reload|supabase ""db|psql .*-(c|f)"
-          ! grep -F "$deploy_token" "$workflow" >/dev/null
-          ! grep -E "$mutation_pattern" "$workflow" >/dev/null
+          ! grep -F 'deploy-production.sh' "$active_contract" >/dev/null
+          ! grep -E 'pm2 (start|restart|reload|delete|stop)|systemctl .*caddy|caddy reload|supabase db|psql .*-(c|f)' "$active_contract" >/dev/null
 
   gate:
     if: >-
