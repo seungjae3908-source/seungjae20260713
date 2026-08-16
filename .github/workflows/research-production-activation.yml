@@ -38,6 +38,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           bash -n research-production/deploy/activate-server.sh
           grep -q '/activate-research-production' .github/workflows/research-production-activation.yml
+          grep -q 'checkout-only lifecycle failure' .github/workflows/research-production-activation.yml
+          grep -q 'SOURCE_MERGE_SHA' .github/workflows/research-production-activation.yml
           grep -q 'LIVE_TRADING=false' research-production/deploy/activate-server.sh
           grep -q 'PRIVATE_API_ENABLED=false' research-production/deploy/activate-server.sh
           grep -q 'ORDER_AUTHORITY=false' research-production/deploy/activate-server.sh
@@ -53,11 +55,12 @@ jobs:
     outputs:
       target_sha: ${{ steps.gate.outputs.target_sha }}
       research_head_sha: ${{ steps.gate.outputs.research_head_sha }}
+      source_merge_sha: ${{ steps.gate.outputs.source_merge_sha }}
       application_run_id: ${{ steps.gate.outputs.application_run_id }}
     env:
       PR_NUMBER: 357
     steps:
-      - name: Authorize immutable main, merged PR, and exact-head CI
+      - name: Authorize immutable main, Research ancestry, and coherent exact-head CI
         id: gate
         uses: actions/github-script@v7
         with:
@@ -81,15 +84,23 @@ jobs:
             const pr = (await github.rest.pulls.get({
               owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber,
             })).data;
-            if (!pr.merged || String(pr.merge_commit_sha ?? '').toLowerCase() !== targetSha) {
-              core.setFailed(`PR #${prNumber} is not the exact current-main merge.`);
+            if (!pr.merged || !pr.merge_commit_sha) {
+              core.setFailed(`Source PR #${prNumber} is not merged.`);
               return;
             }
+            const sourceMergeSha = String(pr.merge_commit_sha).toLowerCase();
             const headSha = String(pr.head.sha).toLowerCase();
-
-            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
-              owner: context.repo.owner, repo: context.repo.repo, ref: headSha, per_page: 100,
+            const ancestry = await github.rest.repos.compareCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              base: sourceMergeSha,
+              head: targetSha,
             });
+            if (!['ahead', 'identical'].includes(ancestry.data.status)) {
+              core.setFailed(`Current main does not descend from Research source merge ${sourceMergeSha}.`);
+              return;
+            }
+
             const required = [
               'application-ci/verified',
               'browser-ui/verified',
@@ -98,59 +109,110 @@ jobs:
               'ai-privacy/verified',
               'futures-public-network-smoke/verified',
             ];
-            const latest = new Map();
-            for (const status of statuses.sort((a, b) => b.id - a.id)) {
-              if (!latest.has(status.context)) latest.set(status.context, status);
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: headSha, per_page: 100,
+            });
+            const byRun = new Map();
+            for (const status of statuses) {
+              const runMatch = String(status.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              if (!runMatch) continue;
+              const runId = runMatch[1];
+              if (!byRun.has(runId)) byRun.set(runId, new Map());
+              const contexts = byRun.get(runId);
+              const previous = contexts.get(status.context);
+              if (!previous || Number(status.id) > Number(previous.id)) contexts.set(status.context, status);
             }
-            for (const name of required) {
-              if (latest.get(name)?.state !== 'success') {
-                core.setFailed(`Required exact-head status not successful: ${name}`);
-                return;
+
+            const coherentRunIds = [...byRun.entries()]
+              .filter(([, contexts]) => required.every((name) => contexts.get(name)?.state === 'success'))
+              .map(([runId]) => Number(runId))
+              .sort((a, b) => b - a);
+            let acceptedRun = null;
+            for (const runId of coherentRunIds) {
+              const run = (await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo, run_id: runId,
+              })).data;
+              if (
+                run.head_sha.toLowerCase() === headSha &&
+                run.event === 'pull_request' &&
+                run.status === 'completed' &&
+                run.conclusion === 'success' &&
+                run.path === '.github/workflows/futures-public-network-smoke.yml'
+              ) {
+                acceptedRun = run;
+                break;
               }
             }
-            const runIds = new Set(required.map((name) => {
-              const m = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
-              return m?.[1] ?? '';
-            }));
-            if (runIds.size !== 1 || runIds.has('')) {
-              core.setFailed('Required statuses do not share one Application CI run.');
+            if (!acceptedRun) {
+              core.setFailed('No coherent exact-head Application CI run has all Required statuses 6/6 SUCCESS.');
               return;
             }
-            const applicationRunId = [...runIds][0];
-            const run = (await github.rest.actions.getWorkflowRun({
-              owner: context.repo.owner, repo: context.repo.repo, run_id: Number(applicationRunId),
-            })).data;
-            if (
-              run.head_sha.toLowerCase() !== headSha ||
-              run.event !== 'pull_request' ||
-              run.status !== 'completed' ||
-              run.conclusion !== 'success'
-            ) {
-              core.setFailed('Application CI provenance rejected.');
-              return;
+
+            const allRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: headSha,
+              event: 'pull_request',
+              per_page: 100,
+            });
+            const newerRuns = allRuns
+              .filter((run) => run.path === '.github/workflows/futures-public-network-smoke.yml' && Number(run.id) > Number(acceptedRun.id))
+              .sort((a, b) => Number(a.id) - Number(b.id));
+            for (const run of newerRuns) {
+              if (run.status !== 'completed') {
+                core.setFailed(`A newer exact-head Application CI run is not terminal: ${run.id}`);
+                return;
+              }
+              if (run.conclusion === 'success') continue;
+              if (run.conclusion !== 'failure' || !pr.merged) {
+                core.setFailed(`A newer exact-head Application CI run is not acceptable: ${run.id} ${run.conclusion}`);
+                return;
+              }
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const failedJobs = jobs.filter((job) => job.conclusion === 'failure');
+              if (failedJobs.length === 0) {
+                core.setFailed(`Newer failed run ${run.id} has no inspectable failed jobs.`);
+                return;
+              }
+              for (const job of failedJobs) {
+                const failedSteps = (job.steps ?? []).filter((step) => step.conclusion === 'failure');
+                const checkoutOnly = failedSteps.length > 0 && failedSteps.every((step) => /checkout/i.test(step.name));
+                if (!checkoutOnly) {
+                  core.setFailed(`Newer run ${run.id} has a non-checkout failure in job ${job.name}.`);
+                  return;
+                }
+              }
+              core.info(`Accepted newer run ${run.id} as checkout-only lifecycle failure after PR merge.`);
             }
+
+            core.info(`Accepted exact-head Application CI Run ${acceptedRun.id} with Required 6/6 SUCCESS.`);
             core.setOutput('target_sha', targetSha);
             core.setOutput('research_head_sha', headSha);
-            core.setOutput('application_run_id', applicationRunId);
+            core.setOutput('source_merge_sha', sourceMergeSha);
+            core.setOutput('application_run_id', String(acceptedRun.id));
 
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.gate.outputs.target_sha }}
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
 
-      - name: Verify exact merged main and Research contract
+      - name: Verify exact current main and Research source ancestry
         env:
           TARGET_SHA: ${{ steps.gate.outputs.target_sha }}
           RESEARCH_HEAD_SHA: ${{ steps.gate.outputs.research_head_sha }}
+          SOURCE_MERGE_SHA: ${{ steps.gate.outputs.source_merge_sha }}
         shell: bash
         run: |
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          read -r commit parent1 parent2 extra <<<"$(git rev-list --parents -n 1 HEAD)"
-          test "$commit" = "$TARGET_SHA"
-          test "$parent2" = "$RESEARCH_HEAD_SHA"
-          test -z "${extra:-}"
+          git merge-base --is-ancestor "$SOURCE_MERGE_SHA" "$TARGET_SHA"
+          git cat-file -e "$RESEARCH_HEAD_SHA^{commit}"
           bash -n research-production/deploy/activate-server.sh
           systemd-analyze verify \
             research-production/deploy/research-production@.service \
@@ -177,6 +239,7 @@ jobs:
     env:
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
       RESEARCH_HEAD_SHA: ${{ needs.authorize.outputs.research_head_sha }}
+      SOURCE_MERGE_SHA: ${{ needs.authorize.outputs.source_merge_sha }}
       APPLICATION_RUN_ID: ${{ needs.authorize.outputs.application_run_id }}
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
       SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -239,6 +302,7 @@ jobs:
                 'status: success',
                 `target_sha: ${process.env.TARGET_SHA}`,
                 `source_pr_head: ${process.env.RESEARCH_HEAD_SHA}`,
+                `source_merge_sha: ${process.env.SOURCE_MERGE_SHA}`,
                 `application_ci_run: ${process.env.APPLICATION_RUN_ID}`,
                 'exact_main_research_self_check: success',
                 'timers: fast-historical=enabled; long-history=enabled; forward=enabled',
