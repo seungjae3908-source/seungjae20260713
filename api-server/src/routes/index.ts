@@ -29,6 +29,7 @@ import unifiedSearchRouter from './unified-search';
 import accountConnectionsRouter from './account-connections';
 import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';
 import { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';
+import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import {
   manualPortfolioNotificationBridge,
   telegramWebhookRouter,
@@ -66,12 +67,13 @@ router.use(requireAuthenticated);
 router.use('/account-connections', accountConnectionsRouter);
 // Private account reads are a separate, authenticated, read-only surface. All
 // providers fail closed unless their explicit feature flag is exactly `true`.
-// Runtime credential/transport readers remain deliberately unconfigured here;
-// secret provisioning and private smoke require a separate approval.
+// Upbit and Bitget readers load only the authenticated user's encrypted vault
+// credentials and use a GET-only, host/path allowlisted transport. Toss stays
+// fail-closed until its separate credential contract is wired and verified.
 router.use(
   '/accounts/read-only',
   requireCapability('canAccessBasicInfo'),
-  createAccountReadonlyRouter(new AccountReadonlyService({}, accountReadFlags())),
+  createAccountReadonlyRouter(new AccountReadonlyService(createVaultBackedAccountReaders(), accountReadFlags())),
 );
 
 // Canonical AI Scanner routes must be registered before the legacy market
