@@ -1,0 +1,275 @@
+name: Paper Forward Schedule Emergency Disable
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: paper-forward-production-schedule-control
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Validate owner stale-schedule disable command
+    if: >-
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/disable-paper-forward-schedule ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      target_sha: ${{ steps.command.outputs.target_sha }}
+      current_main_sha: ${{ steps.command.outputs.current_main_sha }}
+    steps:
+      - name: Parse exact owner disable command and require stale ancestor
+        id: command
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        with:
+          script: |
+            if (process.env.COMMENT_AUTHOR !== 'seungjae3908-source'
+              || process.env.AUTHOR_ASSOCIATION !== 'OWNER') {
+              core.setFailed('Only the repository owner can disable the Production Paper Forward schedule.');
+              return;
+            }
+            const body = String(process.env.COMMENT_BODY ?? '').trim();
+            const match = /^\/disable-paper-forward-schedule ([0-9a-f]{40})$/.exec(body);
+            if (!match) {
+              core.setFailed('Exact command required: /disable-paper-forward-schedule <40-character-stale-deployed-sha>');
+              return;
+            }
+            const target = match[1];
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            const currentMain = main.data.commit.sha;
+            if (target === currentMain) {
+              core.setFailed('Emergency stale-schedule disable requires the deployed target to differ from current main.');
+              return;
+            }
+            const comparison = await github.rest.repos.compareCommitsWithBasehead({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              basehead: `${target}...${currentMain}`,
+            });
+            if (comparison.data.status !== 'ahead' || comparison.data.behind_by !== 0 || comparison.data.ahead_by < 1) {
+              core.setFailed(`Refusing disable because stale target is not an ancestor of current main: target=${target} main=${currentMain}.`);
+              return;
+            }
+            core.setOutput('target_sha', target);
+            core.setOutput('current_main_sha', currentMain);
+
+  disable:
+    name: Disable stale Production Paper Forward schedule
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      CURRENT_MAIN_SHA: ${{ needs.gate.outputs.current_main_sha }}
+      EVIDENCE_DIR: ${{ github.workspace }}/paper-forward-disable-evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Revalidate current main after Production environment approval
+        uses: actions/github-script@v7
+        env:
+          EXPECTED_MAIN_SHA: ${{ env.CURRENT_MAIN_SHA }}
+          STALE_TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (main.data.commit.sha !== process.env.EXPECTED_MAIN_SHA) {
+              core.setFailed(`Current main moved again before emergency disable: expected=${process.env.EXPECTED_MAIN_SHA} actual=${main.data.commit.sha}.`);
+              return;
+            }
+            if (main.data.commit.sha === process.env.STALE_TARGET_SHA) {
+              core.setFailed('Stale target unexpectedly became current main; refusing emergency path.');
+            }
+
+      - name: Validate Production SSH secrets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh "$EVIDENCE_DIR"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Require stale SHA to be the exact deployed revision
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "TARGET_SHA='$TARGET_SHA' bash -s" > "$EVIDENCE_DIR/before.json" <<'REMOTE'
+          set -Eeuo pipefail
+          MARKER=/opt/stock-app/.deploy/current-sha
+          TAG='# stock-app-paper-forward-v1'
+          [[ -r "$MARKER" ]] || { echo 'Production deployed-SHA marker missing' >&2; exit 31; }
+          DEPLOYED_SHA="$(tr -d '[:space:]' < "$MARKER")"
+          [[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]] || {
+            echo "Refusing to disable a different Production revision: deployed=$DEPLOYED_SHA target=$TARGET_SHA" >&2
+            exit 32
+          }
+          CRON_COUNT="$(crontab -l 2>/dev/null | grep -Fc "$TAG" || true)"
+          node - "$DEPLOYED_SHA" "$CRON_COUNT" <<'NODE'
+          const [deployedSha, cronCountRaw] = process.argv.slice(2);
+          process.stdout.write(`${JSON.stringify({
+            deployedSha,
+            cronEntryCountBefore: Number(cronCountRaw),
+          }, null, 2)}\n`);
+          NODE
+          REMOTE
+
+      - name: Run canonical fail-closed disable script
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' \
+            < ops/disable-paper-forward-schedule.sh > "$EVIDENCE_DIR/disable-result.json"
+
+      - name: Verify cron removal, sentinel, preserved state, and zero authority
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "TARGET_SHA='$TARGET_SHA' bash -s" > "$EVIDENCE_DIR/after.json" <<'REMOTE'
+          set -Eeuo pipefail
+          ROOT=/opt/stock-app-data/paper-forward-v1
+          MARKER=/opt/stock-app/.deploy/current-sha
+          TAG='# stock-app-paper-forward-v1'
+          [[ -r "$MARKER" ]] || exit 41
+          DEPLOYED_SHA="$(tr -d '[:space:]' < "$MARKER")"
+          [[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]] || exit 42
+          CRON_COUNT="$(crontab -l 2>/dev/null | grep -Fc "$TAG" || true)"
+          [[ "$CRON_COUNT" == '0' ]] || exit 43
+          [[ -f "$ROOT/DISABLED" && -f "$ROOT/runtime-state/DISABLED" && -r "$ROOT/disabled.json" ]] || exit 44
+          node - "$ROOT/disabled.json" "$DEPLOYED_SHA" "$CRON_COUNT" <<'NODE'
+          const fs = require('node:fs');
+          const [disabledPath, deployedSha, cronCountRaw] = process.argv.slice(2);
+          const disabled = JSON.parse(fs.readFileSync(disabledPath, 'utf8'));
+          const checks = {
+            statusDisabled: disabled.status === 'DISABLED',
+            scheduleInactive: disabled.scheduleActive === false,
+            statePreserved: disabled.statePreserved === true,
+            liveTradingOff: disabled.liveTrading === false,
+            privateAccountAccessOff: disabled.privateAccountAccess === false,
+            orderAuthorityOff: disabled.orderAuthority === false,
+            cronRemoved: Number(cronCountRaw) === 0,
+          };
+          const failed = Object.entries(checks).filter(([, value]) => value !== true).map(([key]) => key);
+          if (failed.length) {
+            console.error(`Emergency disable verification failed: ${failed.join(', ')}`);
+            process.exit(45);
+          }
+          process.stdout.write(`${JSON.stringify({
+            schemaVersion: 'paper-forward-emergency-disable-evidence-v1',
+            status: 'passed',
+            targetSha: process.env.TARGET_SHA,
+            deployedSha,
+            checks,
+            cronEntryCountAfter: Number(cronCountRaw),
+            scheduleActive: false,
+            statePreserved: true,
+            privateRequestCount: 0,
+            financialMutationCount: 0,
+            liveTrading: false,
+          }, null, 2)}\n`);
+          NODE
+          REMOTE
+
+      - name: Verify local evidence contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node - "$EVIDENCE_DIR/before.json" "$EVIDENCE_DIR/disable-result.json" "$EVIDENCE_DIR/after.json" <<'NODE'
+          const fs = require('node:fs');
+          const [beforePath, resultPath, afterPath] = process.argv.slice(2);
+          const before = JSON.parse(fs.readFileSync(beforePath, 'utf8'));
+          const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+          const after = JSON.parse(fs.readFileSync(afterPath, 'utf8'));
+          if (before.deployedSha !== process.env.TARGET_SHA
+            || before.cronEntryCountBefore < 1
+            || result.status !== 'DISABLED'
+            || result.scheduleActive !== false
+            || result.statePreserved !== true
+            || result.privateRequestCount !== 0
+            || result.financialMutationCount !== 0
+            || result.liveTrading !== false
+            || after.status !== 'passed'
+            || after.targetSha !== process.env.TARGET_SHA
+            || after.cronEntryCountAfter !== 0
+            || after.scheduleActive !== false
+            || after.privateRequestCount !== 0
+            || after.financialMutationCount !== 0
+            || after.liveTrading !== false) {
+            process.exit(1);
+          }
+          NODE
+
+      - name: Upload immutable disable evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-forward-schedule-disable-${{ env.TARGET_SHA }}
+          path: paper-forward-disable-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record stale schedule disabled in control issue and Central Hub
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              'Stale Paper Forward Schedule disabled fail-closed.',
+              '',
+              `- Stale deployed SHA: \`${process.env.TARGET_SHA}\``,
+              `- Current main at gate: \`${process.env.CURRENT_MAIN_SHA}\``,
+              `- Disable Run: [${context.runId}](${runUrl})`,
+              '- Managed cron entries after disable: `0`',
+              '- DISABLED sentinel: `present`',
+              '- Persistent Paper state: `preserved`',
+              '- Private/account/trading requests caused by disable: `0`',
+              '- Financial mutations caused by disable: `0`',
+              '- Live Trading: `false`',
+              '- Schedule active: `false`',
+            ].join('\n');
+            for (const issue_number of [23, 62]) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                body,
+              });
+            }
