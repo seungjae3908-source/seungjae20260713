@@ -3,7 +3,7 @@ Description=Weekly long-history research
 
 [Timer]
 OnCalendar=Sun *-*-* 03:43:00 UTC
-Persistent=true
+Persistent=false
 RandomizedDelaySec=300
 Unit=research-production@long-history.service
 
