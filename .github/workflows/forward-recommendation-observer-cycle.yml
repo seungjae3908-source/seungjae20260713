@@ -1,0 +1,300 @@
+name: Forward Recommendation Observer Cycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      research_sha:
+        description: Exact immutable research/main SHA whose recommendation identity is being observed
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/forward-recommendation-observer-cycle.yml
+      - api-server/src/services/forward-recommendation-observer.service.ts
+      - api-server/src/services/forward-recommendation-observer-runtime.service.ts
+      - api-server/src/services/forward-recommendation-observer-runtime.service.test.ts
+      - api-server/src/scripts/run-forward-recommendation-observer-cycle.ts
+      - api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: forward-recommendation-observer-${{ github.event_name == 'workflow_dispatch' && inputs.research_sha || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  OBSERVER_ARTIFACT: forward-recommendation-observer-state-${{ inputs.research_sha }}
+
+jobs:
+  static-contract:
+    name: Validate forward observer safety contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify artifact-only public-data contract
+        run: node api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs
+      - name: Typecheck backend
+        working-directory: api-server
+        run: pnpm run typecheck
+      - name: Run observer runtime unit tests
+        working-directory: api-server
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import { build } from 'esbuild';
+          await build({
+            entryPoints: ['src/services/forward-recommendation-observer-runtime.service.test.ts'],
+            outfile: '/tmp/forward-observer-runtime.test.cjs',
+            bundle: true,
+            platform: 'node',
+            format: 'cjs',
+            target: 'node20',
+            logLevel: 'warning',
+          });
+          NODE
+          node --test /tmp/forward-observer-runtime.test.cjs
+
+  observer-cycle:
+    name: Public-data forward recommendation observation
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Require main dispatch and exact immutable research SHA
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ inputs.research_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == 'refs/heads/main' ]] || { echo 'Forward observer must be dispatched from main.' >&2; exit 1; }
+          [[ "$RESEARCH_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'Exact 40-character research SHA required.' >&2; exit 1; }
+
+      - name: Locate previous successful observer artifact
+        id: previous
+        uses: actions/github-script@v7
+        env:
+          TARGET_ARTIFACT: ${{ env.OBSERVER_ARTIFACT }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const currentRunId = Number(context.runId);
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner,
+              repo,
+              workflow_id: 'forward-recommendation-observer-cycle.yml',
+              status: 'completed',
+              per_page: 100,
+            });
+            for (const run of runs) {
+              if (run.id === currentRunId || run.conclusion !== 'success') continue;
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner,
+                repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = artifacts.find((item) => item.name === process.env.TARGET_ARTIFACT && !item.expired);
+              if (!artifact) continue;
+              core.setOutput('found', 'true');
+              core.setOutput('run_id', String(run.id));
+              core.setOutput('artifact_id', String(artifact.id));
+              core.info(`Using predecessor observer artifact ${artifact.id} from run ${run.id}.`);
+              return;
+            }
+            core.setOutput('found', 'false');
+            core.setOutput('run_id', '');
+            core.setOutput('artifact_id', '');
+            core.info('No previous observer artifact; cycle will start a clean empty state for this immutable research SHA.');
+
+      - name: Download previous observer artifact
+        if: steps.previous.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.OBSERVER_ARTIFACT }}
+          path: ${{ runner.temp }}/previous-forward-observer
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+
+      - name: Checkout immutable research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.research_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Assert checkout and verify predecessor chain
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ inputs.research_sha }}
+          PREVIOUS_FOUND: ${{ steps.previous.outputs.found }}
+          PREVIOUS_DIR: ${{ runner.temp }}/previous-forward-observer
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD^{commit})" == "${RESEARCH_SHA,,}" ]] || { echo 'Research checkout mismatch.' >&2; exit 1; }
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const crypto = require('crypto');
+          if (process.env.PREVIOUS_FOUND !== 'true') {
+            console.log('No predecessor observer artifact; clean first-run state accepted.');
+            process.exit(0);
+          }
+          const root = process.env.PREVIOUS_DIR;
+          const manifestPath = path.join(root, 'manifest.json');
+          const statePath = path.join(root, 'state.json');
+          const summaryPath = path.join(root, 'summary.json');
+          for (const file of [manifestPath, statePath, summaryPath]) {
+            if (!fs.existsSync(file)) throw new Error(`Missing predecessor observer file: ${file}`);
+          }
+          const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          const expectedSha = process.env.RESEARCH_SHA.toLowerCase();
+          if (manifest.schemaVersion !== 1 || manifest.kind !== 'forward-recommendation-observer-state') throw new Error('Unsupported predecessor observer manifest.');
+          if (manifest.researchCodeSha !== expectedSha) throw new Error('Observer research SHA mixing forbidden.');
+          if (manifest.stateSha256 !== digest(statePath) || manifest.summarySha256 !== digest(summaryPath)) throw new Error('Observer predecessor digest mismatch.');
+          const safety = manifest.safety ?? {};
+          if (safety.publicDataOnly !== true || safety.artifactOnly !== true || safety.executionAuthority !== 'NONE'
+            || safety.financialMutationAllowed !== false || safety.liveOrderAllowed !== false
+            || safety.privateTradingApiAllowed !== false || safety.profitabilityClaimAllowed !== false) {
+            throw new Error('Observer predecessor safety contract invalid.');
+          }
+          NODE
+
+      - name: Verify runtime contract at immutable revision
+        run: node api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs
+
+      - name: Build isolated observer CLI
+        working-directory: api-server
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import { build } from 'esbuild';
+          await build({
+            entryPoints: ['src/scripts/run-forward-recommendation-observer-cycle.ts'],
+            outfile: '.forward-observer-cycle.mjs',
+            bundle: true,
+            packages: 'external',
+            platform: 'node',
+            format: 'esm',
+            target: 'node20',
+            logLevel: 'warning',
+          });
+          NODE
+
+      - name: Run one public-data observer cycle
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ inputs.research_sha }}
+          PREVIOUS_FOUND: ${{ steps.previous.outputs.found }}
+          PREVIOUS_DIR: ${{ runner.temp }}/previous-forward-observer
+        run: |
+          set -Eeuo pipefail
+          rm -rf forward-observer-artifact
+          mkdir -p forward-observer-artifact
+          args=(--research-sha "$RESEARCH_SHA" --output-dir forward-observer-artifact)
+          if [[ "$PREVIOUS_FOUND" == 'true' ]]; then
+            args+=(--state-input "$PREVIOUS_DIR/state.json")
+          fi
+          node api-server/.forward-observer-cycle.mjs "${args[@]}"
+
+      - name: Build immutable manifest and assert safety
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ inputs.research_sha }}
+          PREVIOUS_RUN_ID: ${{ steps.previous.outputs.run_id }}
+          PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact_id }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          const stateFile = 'forward-observer-artifact/state.json';
+          const summaryFile = 'forward-observer-artifact/summary.json';
+          const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+          const summary = JSON.parse(fs.readFileSync(summaryFile, 'utf8'));
+          const researchCodeSha = process.env.RESEARCH_SHA.toLowerCase();
+          if (state.researchCodeSha !== researchCodeSha || summary.researchCodeSha !== researchCodeSha) throw new Error('Observer output research SHA mismatch.');
+          for (const value of [state.safety, summary.safety]) {
+            if (value?.publicDataOnly !== true || value?.artifactOnly !== true || value?.executionAuthority !== 'NONE'
+              || value?.financialMutationAllowed !== false || value?.liveOrderAllowed !== false
+              || value?.privateTradingApiAllowed !== false || value?.profitabilityClaimAllowed !== false) {
+              throw new Error('Observer output safety assertion failed.');
+            }
+          }
+          if (summary.coverage?.fullStrategyCoverage !== false || JSON.stringify(summary.coverage?.strategies) !== JSON.stringify(['SWING'])) {
+            throw new Error('Observer must not overclaim full strategy coverage.');
+          }
+          const manifest = {
+            schemaVersion: 1,
+            kind: 'forward-recommendation-observer-state',
+            researchCodeSha,
+            harnessSha: process.env.GITHUB_SHA,
+            predecessorRunId: process.env.PREVIOUS_RUN_ID || null,
+            predecessorArtifactId: process.env.PREVIOUS_ARTIFACT_ID || null,
+            stateSha256: digest(stateFile),
+            summarySha256: digest(summaryFile),
+            safety: {
+              publicDataOnly: true,
+              artifactOnly: true,
+              executionAuthority: 'NONE',
+              financialMutationAllowed: false,
+              liveOrderAllowed: false,
+              privateTradingApiAllowed: false,
+              profitabilityClaimAllowed: false,
+            },
+          };
+          fs.writeFileSync('forward-observer-artifact/manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+      - name: Upload immutable observer state
+        uses: actions/upload-artifact@v4
+        with:
+          name: forward-recommendation-observer-state-${{ inputs.research_sha }}
+          path: forward-observer-artifact
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Summarize non-financial boundary
+        if: always()
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ inputs.research_sha }}
+        run: |
+          {
+            echo '## Forward Recommendation Observer'
+            echo
+            echo "- research SHA: \`${RESEARCH_SHA,,}\`"
+            echo '- coverage: KR/US/Upbit Spot/Bitget Futures · SWING 60m only'
+            echo '- full strategy coverage: `false`'
+            echo '- public market data only: `true`'
+            echo '- artifact-only persistence: `true`'
+            echo '- execution authority: `NONE`'
+            echo '- financial mutation: `false`'
+            echo '- live orders: `false`'
+            echo '- private trading API: `false`'
+            echo '- profitability claim: `false`'
+          } >> "$GITHUB_STEP_SUMMARY"
