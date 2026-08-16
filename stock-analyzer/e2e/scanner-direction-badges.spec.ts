@@ -3,12 +3,12 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 type Action = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NO_TRADE' | 'UNKNOWN';
 
 const directionLabels: Record<Action, string> = {
-  BUY: '↗ 매수 · BUY',
-  SELL: '↘ 매도 · SELL',
-  LONG: '↑ 롱 · LONG',
-  SHORT: '↓ 숏 · SHORT',
+  BUY: '↗ 매수 신호',
+  SELL: '↘ 보유분 매도·청산 참고',
+  LONG: '↑ 롱 신호',
+  SHORT: '↓ 숏 신호',
   NO_TRADE: '— 거래 안 함 · NO_TRADE',
-  UNKNOWN: '? 방향 확인 필요 · UNKNOWN',
+  UNKNOWN: '? 현물 방향 확인 필요 · UNKNOWN',
 };
 
 function card(action: Action, index: number) {
@@ -115,11 +115,12 @@ async function installMocks(page: Page) {
   await page.route('**/api/market/scan**', (route) => fulfill(route, response()));
 }
 
-test('BUY SELL LONG SHORT NO_TRADE UNKNOWN remain visible even when evidence grade is WATCH', async ({ page }) => {
+test('cash and spot show buy-entry wording while futures show long short and selected symbol exposes evidence', async ({ page }) => {
   await installMocks(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/__phase11-technical-workspace-e2e');
   await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
+  await expect(page.getByTestId('scanner-market-signal-guide')).toContainText('국내주식 · ↗ 매수 신호');
 
   const badges = page.getByTestId('scanner-card-direction');
   await expect(badges).toHaveCount(6);
@@ -131,17 +132,25 @@ test('BUY SELL LONG SHORT NO_TRADE UNKNOWN remain visible even when evidence gra
   expect(texts.every((text) => !text.includes('WATCH'))).toBe(true);
 
   await page.getByTestId('scanner-master-list').locator('button').first().click();
-  const detail = page.getByTestId('scanner-desktop-detail').getByTestId('scanner-direction-badge');
+  const desktopDetail = page.getByTestId('scanner-desktop-detail');
+  const detail = desktopDetail.getByTestId('scanner-direction-badge');
   await expect(detail).toBeVisible();
   await expect(detail).toHaveText(directionLabels.BUY);
+  await expect(desktopDetail.getByRole('heading', { name: '왜 이 신호인가' })).toBeVisible();
+  await expect(desktopDetail.getByText('공개 데이터 확인').first()).toBeVisible();
+  await expect(desktopDetail.getByText('canonical action fixture').first()).toBeVisible();
+
+  await page.getByRole('button', { name: /코인 선물/ }).click();
+  await expect(page.getByTestId('scanner-market-signal-guide')).toContainText('코인 선물 · ↑ 롱 신호 / ↓ 숏 신호');
 });
 
 for (const [width, height] of [[320, 760], [360, 800], [390, 844], [412, 915], [430, 932]] as const) {
-  test(`direction badge stays visible without horizontal overflow at ${width}px`, async ({ page }) => {
+  test(`direction badge and evidence stay visible without horizontal overflow at ${width}px`, async ({ page }) => {
     await installMocks(page);
     await page.setViewportSize({ width, height });
     await page.goto('/__phase11-technical-workspace-e2e');
     await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
+    await expect(page.getByTestId('scanner-market-signal-guide')).toContainText('↗ 매수 신호');
     await expect(page.getByTestId('scanner-card-direction').first()).toHaveText(directionLabels.BUY);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
@@ -151,6 +160,8 @@ for (const [width, height] of [[320, 760], [360, 800], [390, 844], [412, 915], [
     await expect(sheet.getByTestId('scanner-direction-badge')).toHaveText(directionLabels.BUY);
     await expect(sheet.getByTestId('scanner-evidence-grade')).toHaveText('등급 WATCH');
     await expect(sheet.getByTestId('scanner-ttl-badge')).toContainText('TTL');
+    await expect(sheet.getByRole('heading', { name: '왜 이 신호인가 · 핵심 판단' })).toBeVisible();
+    await expect(sheet.getByText('공개 데이터 확인').first()).toBeVisible();
     expect(await sheet.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
   });
 }
