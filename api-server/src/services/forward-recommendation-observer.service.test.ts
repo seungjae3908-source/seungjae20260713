@@ -187,8 +187,8 @@ test('forward calibration stays insufficient below 30 and becomes READY only fro
   assert.equal(ready.probabilities.tp, 1 / 3);
   assert.equal(ready.probabilities.sl, 1 / 3);
   assert.equal(ready.probabilities.expire, 1 / 3);
-  assert.equal(ready.returns.target, 0.05);
-  assert.equal(ready.returns.stop, -0.05);
+  assert.ok(ready.returns.target != null && Math.abs(ready.returns.target - 0.05) < 1e-12);
+  assert.ok(ready.returns.stop != null && Math.abs(ready.returns.stop + 0.05) < 1e-12);
   assert.equal(ready.returns.expire, 0);
   assert.equal(ready.costAdjusted, false);
   assert.equal(ready.profitabilityClaimAllowed, false);
