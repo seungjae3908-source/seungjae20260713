@@ -38,7 +38,7 @@ test('stock detail analysis stays on stock-info and mounts the existing rich det
   expect(stockInfo).toContain('navigate(`/stock-info/analysis?${params.toString()}`);');
   expect(stockInfo).not.toContain('navigate(`/stock/${encodeURIComponent(ticker)}`)');
   expect(detail).toContain('data-testid="canonical-stock-analysis"');
-  expect(detail).toContain('queryParams.get("ticker")');
+  expect(detail).toContain("params.get('ticker')");
 });
 
 test('portfolio reuses the unified journal component as a primary tab', async () => {
