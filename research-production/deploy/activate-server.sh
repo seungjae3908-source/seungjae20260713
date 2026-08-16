@@ -80,12 +80,18 @@ activate() {
   ROOT=/opt/investment-research
   RELEASES="$ROOT/releases"
   RELEASE="$RELEASES/$TARGET_SHA"
+  STAGED_RELEASE="$RELEASES/.staging-$TARGET_SHA-$$"
   CURRENT="$ROOT/current"
+  NEXT_CURRENT="$ROOT/.current-$TARGET_SHA-$$"
   STATE=/var/lib/investment-research-production
   ENV_DIR=/etc/investment-research
   ENV_FILE="$ENV_DIR/research-production.env"
-  SOURCE_DIR="$(mktemp -d /tmp/investment-research-source.XXXXXX)"
   APP_SHA_BEFORE="$(read_app_sha)"
+
+  cleanup_transient() {
+    "${SUDO[@]}" rm -rf -- "$STAGED_RELEASE" >/dev/null 2>&1 || true
+    "${SUDO[@]}" rm -f -- "$NEXT_CURRENT" >/dev/null 2>&1 || true
+  }
 
   fail_safe() {
     local status=$?
@@ -95,27 +101,22 @@ activate() {
         research-production-long-history.timer \
         research-production-forward.timer >/dev/null 2>&1 || true
     fi
-    rm -rf -- "${SOURCE_DIR:-}"
+    cleanup_transient
     return "$status"
   }
   trap fail_safe EXIT
 
-  git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$SOURCE_DIR"
-  git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
-  local resolved
-  resolved="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD^{commit})"
-  [[ "$resolved" == "$TARGET_SHA" ]] || {
-    echo "Exact SHA resolution mismatch" >&2
-    exit 73
+  release_is_valid() {
+    local candidate="$1"
+    [[ -d "$candidate" ]] || return 1
+    "${SUDO[@]}" test -f "$candidate/research-production/bin/research-cycle.mjs" || return 1
+    "${SUDO[@]}" test -f "$candidate/research-production/src/engine.mjs" || return 1
+    "${SUDO[@]}" test -f "$candidate/research-production/deploy/research-production@.service" || return 1
+    "${SUDO[@]}" test -f "$candidate/research-production/deploy/research-production-forward.timer" || return 1
+    local candidate_sha
+    candidate_sha="$("${SUDO[@]}" git -C "$candidate" rev-parse HEAD 2>/dev/null || true)"
+    [[ "$candidate_sha" == "$TARGET_SHA" ]]
   }
-  git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
-
-  local concurrency=1
-  if (( CPU_CORES >= 4 && MEM_AVAILABLE_BYTES >= 4294967296 && FREE_BYTES >= 10737418240 )); then
-    concurrency=4
-  elif (( CPU_CORES >= 2 && MEM_AVAILABLE_BYTES >= 2147483648 )); then
-    concurrency=2
-  fi
 
   if ! id investment-research >/dev/null 2>&1; then
     "${SUDO[@]}" useradd --system --home /nonexistent --shell /usr/sbin/nologin investment-research
@@ -124,14 +125,62 @@ activate() {
   "${SUDO[@]}" install -d -o investment-research -g investment-research -m 0750 "$STATE"
   "${SUDO[@]}" install -d -o root -g investment-research -m 0750 "$ENV_DIR"
 
-  if [[ ! -d "$RELEASE" ]]; then
-    "${SUDO[@]}" install -d -o root -g root -m 0755 "$RELEASE"
-    "${SUDO[@]}" cp -a "$SOURCE_DIR"/. "$RELEASE"/
-    "${SUDO[@]}" chown -R root:root "$RELEASE"
+  if release_is_valid "$RELEASE"; then
+    echo "RESEARCH_RELEASE_REUSED=true"
+  else
+    if [[ -e "$RELEASE" ]]; then
+      echo "RESEARCH_RELEASE_REPAIR=required"
+      "${SUDO[@]}" rm -rf -- "$RELEASE"
+    fi
+    cleanup_transient
+    "${SUDO[@]}" git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$STAGED_RELEASE"
+    "${SUDO[@]}" git -C "$STAGED_RELEASE" fetch --quiet --depth 1 origin "$TARGET_SHA"
+    local resolved
+    resolved="$("${SUDO[@]}" git -C "$STAGED_RELEASE" rev-parse FETCH_HEAD^{commit})"
+    [[ "$resolved" == "$TARGET_SHA" ]] || {
+      echo "Exact SHA resolution mismatch" >&2
+      exit 73
+    }
+    "${SUDO[@]}" git -C "$STAGED_RELEASE" checkout --quiet --detach "$TARGET_SHA"
+    "${SUDO[@]}" chown -R root:root "$STAGED_RELEASE"
+    if ! release_is_valid "$STAGED_RELEASE"; then
+      echo "Staged Research release verification failed" >&2
+      exit 75
+    fi
+    "${SUDO[@]}" mv -- "$STAGED_RELEASE" "$RELEASE"
+    echo "RESEARCH_RELEASE_BUILT=true"
   fi
 
-  "${SUDO[@]}" ln -sfn "$RELEASE" "$ROOT/current.new"
-  "${SUDO[@]}" mv -Tf "$ROOT/current.new" "$CURRENT"
+  if ! release_is_valid "$RELEASE"; then
+    echo "Final Research release verification failed" >&2
+    exit 76
+  fi
+
+  "${SUDO[@]}" rm -f -- "$NEXT_CURRENT"
+  "${SUDO[@]}" ln -s -- "$RELEASE" "$NEXT_CURRENT"
+  "${SUDO[@]}" mv -Tf -- "$NEXT_CURRENT" "$CURRENT"
+  local resolved_current
+  resolved_current="$(readlink -f "$CURRENT")"
+  [[ "$resolved_current" == "$RELEASE" ]] || {
+    echo "Research current symlink mismatch: expected=$RELEASE actual=$resolved_current" >&2
+    exit 77
+  }
+  "${SUDO[@]}" test -f "$CURRENT/research-production/bin/research-cycle.mjs"
+  local current_sha
+  current_sha="$("${SUDO[@]}" git -C "$CURRENT" rev-parse HEAD)"
+  [[ "$current_sha" == "$TARGET_SHA" ]] || {
+    echo "Research current SHA mismatch: expected=$TARGET_SHA actual=$current_sha" >&2
+    exit 78
+  }
+
+  # The Research service shares the host with the production app. Keep small
+  # servers conservative; scale only when both CPU and memory are clearly ample.
+  local concurrency=1
+  if (( CPU_CORES >= 8 && MEM_AVAILABLE_BYTES >= 8589934592 && FREE_BYTES >= 21474836480 )); then
+    concurrency=4
+  elif (( CPU_CORES >= 4 && MEM_AVAILABLE_BYTES >= 4294967296 && FREE_BYTES >= 10737418240 )); then
+    concurrency=2
+  fi
 
   local env_tmp
   env_tmp="$(mktemp)"
@@ -213,6 +262,7 @@ ENV
   printf '%s\n' \
     "RESEARCH_PRODUCTION_ACTIVATED=true" \
     "TARGET_SHA=$TARGET_SHA" \
+    "CURRENT_RELEASE=$resolved_current" \
     "CONCURRENCY=$concurrency" \
     "APP_SHA_BEFORE=$APP_SHA_BEFORE" \
     "APP_SHA_AFTER=$app_sha_after" \
