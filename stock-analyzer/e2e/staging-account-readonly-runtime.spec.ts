@@ -117,6 +117,7 @@ test('ephemeral user proves real Upbit and Bitget GET-only account runtime witho
   let lifecycle: StagingAccountLifecycle | null = null;
   let regularUserId = '';
   let loopbackBindVerified = false;
+  let backgroundWorkersDisabled = false;
   let upbitEvidence: Record<string, unknown> | null = null;
   let bitgetEvidence: Record<string, unknown> | null = null;
   let cleanupRowsRemaining: number | null = null;
@@ -145,7 +146,9 @@ test('ephemeral user proves real Upbit and Bitget GET-only account runtime witho
     expect(health.status).toBe(200);
     expect(health.payload.ok).toBe(true);
     expect(health.payload.bindHost).toBe('127.0.0.1');
+    expect(health.payload.backgroundWorkersEnabled).toBe(false);
     loopbackBindVerified = true;
+    backgroundWorkersDisabled = true;
 
     const vaultStatus = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/credentials/status');
     expect(vaultStatus.status).toBe(200);
@@ -207,12 +210,14 @@ test('ephemeral user proves real Upbit and Bitget GET-only account runtime witho
     }
     await writeEvidence(artifactDir, {
       status: loopbackBindVerified
+        && backgroundWorkersDisabled
         && upbitEvidence?.connected === true
         && bitgetEvidence?.connected === true
         && cleanupRowsRemaining === 0
         ? 'passed'
         : 'failed',
       loopback_bind_verified: loopbackBindVerified,
+      background_workers_disabled: backgroundWorkersDisabled,
       upbit: upbitEvidence,
       bitget: bitgetEvidence,
       credential_rows_remaining_after_ephemeral_user_cleanup: cleanupRowsRemaining,
