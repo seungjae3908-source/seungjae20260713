@@ -224,6 +224,24 @@ jobs:
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
       EVIDENCE_DIR: ${{ github.workspace }}/paper-forward-activation-evidence
     steps:
+      - name: Revalidate current main after Production environment approval
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Activation target became stale while awaiting Production approval: target=${target} main=${main.data.commit.sha}.`);
+              return;
+            }
+            core.info(`Post-approval current-main guard accepted ${target}.`);
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_SHA }}
@@ -273,6 +291,24 @@ jobs:
             PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
             "$SOURCE_DIR/ops/deploy-production.sh" "$TARGET_SHA"
           REMOTE
+
+      - name: Revalidate current main before schedule installation
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Activation target became stale during Production deployment; refusing schedule install: target=${target} main=${main.data.commit.sha}.`);
+              return;
+            }
+            core.info(`Pre-install current-main guard accepted ${target}.`);
 
       - name: Install fail-closed Paper Forward schedule without immediate manual cycle
         id: install
