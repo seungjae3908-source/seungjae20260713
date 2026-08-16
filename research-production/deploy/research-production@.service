@@ -1,0 +1,32 @@
+[Unit]
+Description=Investment Research Production (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=investment-research
+Group=investment-research
+WorkingDirectory=/opt/investment-research/current
+EnvironmentFile=/etc/investment-research/research-production.env
+ExecStart=/usr/bin/env node research-production/bin/research-cycle.mjs run --profile %i
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/investment-research-production
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=4h
+
+[Install]
+WantedBy=multi-user.target
