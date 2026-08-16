@@ -10,10 +10,12 @@ on:
       - ops/install-paper-forward-schedule.sh
       - ops/disable-paper-forward-schedule.sh
       - .github/workflows/paper-forward-schedule-activation.yml
+      - .github/workflows/paper-forward-schedule-disable.yml
       - .github/workflows/paper-forward-schedule-validation.yml
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
+      - agent/paper-forward-stale-disable-race-guard-v1
     paths:
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
@@ -21,6 +23,7 @@ on:
       - ops/install-paper-forward-schedule.sh
       - ops/disable-paper-forward-schedule.sh
       - .github/workflows/paper-forward-schedule-activation.yml
+      - .github/workflows/paper-forward-schedule-disable.yml
       - .github/workflows/paper-forward-schedule-validation.yml
 
 permissions:
@@ -58,6 +61,7 @@ jobs:
             ops/install-paper-forward-schedule.sh
             ops/disable-paper-forward-schedule.sh
             .github/workflows/paper-forward-schedule-activation.yml
+            .github/workflows/paper-forward-schedule-disable.yml
             .github/workflows/paper-forward-schedule-validation.yml
           )
           test "${#changed[@]}" -ge 1
@@ -103,6 +107,27 @@ jobs:
             market-prediction-lab/scripts/run-paper-forward-schedule.js \
             ops/install-paper-forward-schedule.sh \
             ops/disable-paper-forward-schedule.sh
+
+      - name: Verify stale schedule emergency disable contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f .github/workflows/paper-forward-schedule-disable.yml
+          grep -F "startsWith(github.event.comment.body, '/disable-paper-forward-schedule ')" \
+            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
+          grep -F "environment: production" .github/workflows/paper-forward-schedule-disable.yml >/dev/null
+          grep -F "target === currentMain" .github/workflows/paper-forward-schedule-disable.yml >/dev/null
+          grep -F "comparison.data.behind_by !== 0" .github/workflows/paper-forward-schedule-disable.yml >/dev/null
+          grep -F "Revalidate current main after Production environment approval" \
+            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
+          grep -F '[[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]]' \
+            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
+          grep -F '< ops/disable-paper-forward-schedule.sh' \
+            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
+          grep -F "cronEntryCountAfter: Number(cronCountRaw)" \
+            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
+          grep -F "orderAuthorityOff: disabled.orderAuthority === false" \
+            .github/workflows/paper-forward-schedule-disable.yml >/dev/null
 
       - name: Final exact HEAD and clean workspace
         run: |
