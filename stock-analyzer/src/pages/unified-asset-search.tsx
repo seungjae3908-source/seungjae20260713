@@ -1,16 +1,22 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { useAssetMode } from '@/lib/asset-mode';
+import { useAuth } from '@/lib/auth';
 import {
   unifiedAssetDetailPath,
   type UnifiedAssetFilter,
   type UnifiedAssetSuggestion,
   type UnifiedMarketFilter,
 } from '@/lib/unified-asset-search';
+import {
+  ALL_UNIFIED_SEARCH_MARKETS,
+  allowedUnifiedSearchMarkets,
+  isUnifiedSearchMarketAllowed,
+} from '@/lib/unified-search-capability';
 import { cn } from '@/lib/utils';
 
 const MARKET_FILTERS: Array<{ key: UnifiedMarketFilter | null; label: string }> = [
@@ -30,7 +36,22 @@ function assetForMarket(market: UnifiedMarketFilter | null): UnifiedAssetFilter 
 export default function UnifiedAssetSearchPage() {
   const [location, navigate] = useLocation();
   const assetMode = useAssetMode();
+  const auth = useAuth();
   const [market, setMarket] = useState<UnifiedMarketFilter | null>(null);
+  const e2eAllMarkets = location.startsWith('/__phase11-unified-search-e2e');
+  const allowedMarkets = useMemo<readonly UnifiedMarketFilter[]>(
+    () => e2eAllMarkets
+      ? ALL_UNIFIED_SEARCH_MARKETS
+      : allowedUnifiedSearchMarkets({
+          canAccessSpot: auth.permissions.canAccessSpot,
+          canAccessFutures: auth.permissions.canAccessFutures,
+        }),
+    [auth.permissions.canAccessFutures, auth.permissions.canAccessSpot, e2eAllMarkets],
+  );
+  const visibleMarketFilters = useMemo(
+    () => MARKET_FILTERS.filter((item) => item.key == null || isUnifiedSearchMarketAllowed(item.key, allowedMarkets)),
+    [allowedMarkets],
+  );
   const asset = useMemo(() => assetForMarket(market), [market]);
   const backPath = location.startsWith('/__phase11-unified-search-e2e')
     ? '/search'
@@ -38,7 +59,12 @@ export default function UnifiedAssetSearchPage() {
       ? '/search'
       : '/stocks';
 
+  useEffect(() => {
+    if (market && !isUnifiedSearchMarketAllowed(market, allowedMarkets)) setMarket(null);
+  }, [allowedMarkets, market]);
+
   const selectMarket = (nextMarket: UnifiedMarketFilter | null) => {
+    if (nextMarket && !isUnifiedSearchMarketAllowed(nextMarket, allowedMarkets)) return;
     setMarket(nextMarket);
     if (nextMarket === 'KR' || nextMarket === 'US') {
       assetMode.setAsset('stock');
@@ -51,6 +77,7 @@ export default function UnifiedAssetSearchPage() {
   };
 
   const openAsset = (item: UnifiedAssetSuggestion) => {
+    if (!isUnifiedSearchMarketAllowed(item.market, allowedMarkets)) return;
     if (item.assetType === 'stock') {
       assetMode.setAsset('stock');
       assetMode.setStockMarket(item.market === 'US' ? 'US' : 'KR');
@@ -61,21 +88,32 @@ export default function UnifiedAssetSearchPage() {
     navigate(unifiedAssetDetailPath(item, backPath));
   };
 
+  const canAccessSpot = allowedMarkets.includes('spot');
+  const canAccessFutures = allowedMarkets.includes('futures');
+
   return (
     <div data-testid="unified-asset-search-page" className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <CenteredPageHeader
         title="종목"
         infoTitle="통합 종목 검색"
         infoItems={[
-          '국내주식·미국주식·코인 현물·코인 선물을 한 검색창에서 찾습니다.',
-          '종목명, 코드, 티커와 BTC/KRW·BTCUSDT 형식을 지원합니다.',
+          canAccessFutures
+            ? '국내주식·미국주식·코인 현물·코인 선물을 한 검색창에서 찾습니다.'
+            : canAccessSpot
+              ? '국내주식·미국주식·코인 현물을 한 검색창에서 찾습니다.'
+              : '국내주식·미국주식을 한 검색창에서 찾습니다.',
+          canAccessFutures
+            ? '종목명, 코드, 티커와 BTC/KRW·BTCUSDT 형식을 지원합니다.'
+            : canAccessSpot
+              ? '종목명, 코드, 티커와 BTC/KRW 형식을 지원합니다.'
+              : '종목명, 코드와 티커 형식을 지원합니다.',
         ]}
       />
 
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-28 pt-4 sm:px-4">
         <div className="mx-auto w-full max-w-4xl">
           <nav className="mb-4 flex snap-x gap-2 overflow-x-auto pb-1" aria-label="종목 시장 필터" data-testid="unified-market-tabs">
-            {MARKET_FILTERS.map((item) => (
+            {visibleMarketFilters.map((item) => (
               <button
                 key={item.label}
                 type="button"
@@ -94,7 +132,13 @@ export default function UnifiedAssetSearchPage() {
           </nav>
 
           <section data-testid="unified-search-single-input" className="rounded-2xl border border-card-border bg-card p-3 sm:p-4">
-            <UnifiedAssetSearch asset={asset} market={market} autoFocus onSelect={openAsset} />
+            <UnifiedAssetSearch
+              asset={asset}
+              market={market}
+              allowedMarkets={allowedMarkets}
+              autoFocus
+              onSelect={openAsset}
+            />
           </section>
 
           <button
