@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { isStagingReadonlyCredentialRuntime, resolveApiBindHost } from '../../../lib/api-bind-host';
 import { InMemoryTradingRepository } from '../../../services/trade-automation.repository';
 import { decryptTradingCredentials } from '../../../services/trade-credential-vault.service';
 import {
@@ -16,6 +17,22 @@ function withMasterKey<T>(run: () => Promise<T>) {
     if (previous === undefined) delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
     else process.env.TRADING_CREDENTIAL_MASTER_KEY = previous;
   });
+}
+
+function privateReadRuntime() {
+  return {
+    APP_ENV: 'staging',
+    TRADING_CREDENTIAL_MASTER_KEY: TEST_MASTER_KEY,
+    UPBIT_ACCOUNT_READ_ENABLED: 'true',
+    BITGET_ACCOUNT_READ_ENABLED: 'true',
+    LIVE_TRADING_ENABLED: 'false',
+    AUTO_TRADING_ENABLED: 'false',
+    TOSS_ORDER_ENABLED: 'false',
+    UPBIT_ORDER_ENABLED: 'false',
+    BITGET_ORDER_ENABLED: 'false',
+    TRANSFER_ENABLED: 'false',
+    WITHDRAWAL_ENABLED: 'false',
+  };
 }
 
 test('read-only credential parser accepts exact Upbit and Bitget fields without returning extras', () => {
@@ -105,4 +122,29 @@ test('saving read-only credentials preserves an existing account mode and never 
     assert.equal(afterPolicy.automaticEnabled, false);
     assert.deepEqual(afterPolicy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false });
   });
+});
+
+test('secret-bearing staging private-read runtime defaults to loopback while normal runtimes keep existing bind behavior', () => {
+  const runtime = privateReadRuntime();
+
+  assert.equal(isStagingReadonlyCredentialRuntime({}), false);
+  assert.equal(isStagingReadonlyCredentialRuntime({ APP_ENV: 'staging' }), false);
+  assert.equal(isStagingReadonlyCredentialRuntime(runtime), true);
+  assert.equal(resolveApiBindHost({}), '0.0.0.0');
+  assert.equal(resolveApiBindHost({ APP_ENV: 'staging' }), '0.0.0.0');
+  assert.equal(resolveApiBindHost(runtime), '127.0.0.1');
+});
+
+test('secret-bearing staging private-read runtime cannot be widened by API_BIND_HOST', () => {
+  const runtime = privateReadRuntime();
+  assert.equal(resolveApiBindHost({ ...runtime, API_BIND_HOST: '0.0.0.0' }), '127.0.0.1');
+  assert.equal(resolveApiBindHost({ ...runtime, API_BIND_HOST: '::1' }), '127.0.0.1');
+  assert.equal(resolveApiBindHost({ ...runtime, API_BIND_HOST: 'example.com' }), '127.0.0.1');
+});
+
+test('normal-runtime bind host override is explicit and restricted to known listener addresses', () => {
+  assert.equal(resolveApiBindHost({ API_BIND_HOST: '127.0.0.1' }), '127.0.0.1');
+  assert.equal(resolveApiBindHost({ API_BIND_HOST: '0.0.0.0' }), '0.0.0.0');
+  assert.equal(resolveApiBindHost({ API_BIND_HOST: '::1' }), '::1');
+  assert.throws(() => resolveApiBindHost({ API_BIND_HOST: 'example.com' }), /API_BIND_HOST_INVALID/);
 });
