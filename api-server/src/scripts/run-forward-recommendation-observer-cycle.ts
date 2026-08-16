@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { MarketDataService } from '../services/market-data.service';
 import { StockSignalScannerService } from '../services/stock-signal-scanner.service';
-import { CryptoSignalScannerService, type CryptoCandle } from '../services/crypto-signal-scanner.service';
+import { CryptoSignalScannerService } from '../services/crypto-signal-scanner.service';
 import { CryptoPricePrecisionService } from '../services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../services/scanner-candidate-ranking.service';
 import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
@@ -89,11 +89,12 @@ async function withYahooPublicOnlyStockData<T>(operation: () => Promise<T>): Pro
 }
 
 async function scanStockLane(lane: ForwardObserverLane, cursor: number): Promise<ScannerResponse> {
-  if (lane.scannerMarket !== 'KR' && lane.scannerMarket !== 'US') throw new Error('STOCK_LANE_MARKET_INVALID');
+  const market = lane.scannerMarket;
+  if (market !== 'KR' && market !== 'US') throw new Error('STOCK_LANE_MARKET_INVALID');
   return await withYahooPublicOnlyStockData(async () => {
     const scanned = await StockSignalScannerService.scan({
       memberId: 'forward-observer-public-only',
-      market: lane.scannerMarket,
+      market,
       indicators: [],
       filters: { timeframe: lane.timeframe } as never,
       cursor,
@@ -108,17 +109,18 @@ async function scanStockLane(lane: ForwardObserverLane, cursor: number): Promise
 }
 
 async function scanCryptoLane(lane: ForwardObserverLane, cursor: number): Promise<ScannerResponse> {
-  if (lane.scannerMarket !== 'spot' && lane.scannerMarket !== 'futures') throw new Error('CRYPTO_LANE_MARKET_INVALID');
+  const market = lane.scannerMarket;
+  if (market !== 'spot' && market !== 'futures') throw new Error('CRYPTO_LANE_MARKET_INVALID');
   const scanned = await CryptoSignalScannerService.scan({
     memberId: 'forward-observer-public-only',
-    market: lane.scannerMarket,
+    market,
     strategyMode: 'swing',
     timeframe: '60m',
     condition: 'trend',
     cursor,
     batchSize: lane.batchSize,
   });
-  const aligned = await CryptoPricePrecisionService.align(lane.scannerMarket, scanned);
+  const aligned = await CryptoPricePrecisionService.align(market, scanned);
   const ranking = rankScannerCandidates({
     cards: aligned.cards,
     market: aligned.market,
@@ -129,7 +131,7 @@ async function scanCryptoLane(lane: ForwardObserverLane, cursor: number): Promis
     .map((card) => card.signalGrade === 'B'
       ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
       : card)
-    .filter((card) => lane.scannerMarket === 'spot'
+    .filter((card) => market === 'spot'
       ? card.direction === 'LONG'
       : card.direction === 'LONG' || card.direction === 'SHORT');
   return withScannerCanonicalActions({
