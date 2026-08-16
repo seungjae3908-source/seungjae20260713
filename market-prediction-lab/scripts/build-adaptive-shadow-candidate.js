@@ -115,7 +115,7 @@ for (const group of GROUPS) {
 }
 
 const report = {
-  schemaVersion: 2,
+  schemaVersion: 1,
   status: technicalFailure ? "fail" : "pass",
   generatedAt: Date.now(),
   source: "isolated-live-shadow-adaptive-candidate-builder",
