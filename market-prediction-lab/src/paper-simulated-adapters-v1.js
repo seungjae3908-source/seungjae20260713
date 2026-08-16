@@ -17,6 +17,10 @@ function nonEmpty(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function immutableSha(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/iu.test(value);
+}
+
 function safetyEnvelope() {
   return Object.freeze({
     simulatedOnly: true,
@@ -149,11 +153,35 @@ export function createSimulatedPaperLedgerAdapter({ accountingEvidenceForSettlem
   });
 }
 
+function learningLineage(kind, payload) {
+  const source = kind === "signal"
+    ? payload?.sample?.identity
+    : (payload?.settlement ?? payload?.position);
+  const fallback = payload?.identity ?? {};
+  const strategyId = source?.strategyId ?? fallback.strategyId ?? null;
+  const strategyVersion = source?.strategyVersion ?? fallback.strategyVersion ?? null;
+  const parameterHash = source?.parameterHash ?? fallback.parameterHash ?? null;
+  const researchCodeSha = source?.researchCodeSha ?? fallback.researchCodeSha ?? null;
+  if (!nonEmpty(strategyId) || !nonEmpty(strategyVersion)) {
+    throw new Error("PAPER_SIM_LEARNING_STRATEGY_LINEAGE_REQUIRED");
+  }
+  if (researchCodeSha != null && !immutableSha(researchCodeSha)) {
+    throw new Error("PAPER_SIM_LEARNING_RESEARCH_SHA_INVALID");
+  }
+  return Object.freeze({
+    strategyId,
+    strategyVersion,
+    parameterHash,
+    researchCodeSha: researchCodeSha == null ? null : researchCodeSha.toLowerCase(),
+  });
+}
+
 function learningRecord(kind, payload) {
   const signalId = payload?.sample?.identity?.signalId ?? payload?.position?.signalId ?? null;
   const settlementId = payload?.settlement?.settlementId ?? null;
   const key = kind === "signal" ? `paper-signal:${signalId}` : `paper-outcome:${settlementId}`;
   if (!nonEmpty(kind === "signal" ? signalId : settlementId)) throw new Error("PAPER_SIM_LEARNING_ID_REQUIRED");
+  const lineage = learningLineage(kind, payload);
   const value = Object.freeze({
     schemaVersion: 1,
     kind,
@@ -162,8 +190,7 @@ function learningRecord(kind, payload) {
     signalId,
     settlementId,
     market: payload?.sample?.identity?.market ?? payload?.settlement?.market ?? null,
-    strategyId: payload?.identity?.strategyId ?? payload?.settlement?.strategyId ?? null,
-    strategyVersion: payload?.identity?.strategyVersion ?? payload?.settlement?.strategyVersion ?? null,
+    ...lineage,
     recordedAtMs: payload?.cycle?.evaluatedAtMs ?? null,
     sample: kind === "signal" ? structuredClone(payload.sample) : null,
     settlement: kind === "outcome" ? structuredClone(payload.settlement) : null,
