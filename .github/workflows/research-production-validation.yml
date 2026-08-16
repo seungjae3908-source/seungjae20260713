@@ -48,10 +48,15 @@ jobs:
           grep -q '^CapabilityBoundingSet=$' research-production/deploy/research-production@.service
           ! grep -q 'MemoryDenyWriteExecute=true' research-production/deploy/research-production@.service
 
-      - name: Validate systemd schedules
+      - name: Validate systemd service and schedules
         shell: bash
         run: |
           set -euo pipefail
+          systemd-analyze verify \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-fast-historical.timer \
+            research-production/deploy/research-production-long-history.timer \
+            research-production/deploy/research-production-forward.timer
           systemd-analyze calendar '*-*-* 02:17:00 UTC' >/dev/null
           systemd-analyze calendar 'Sun *-*-* 03:43:00 UTC' >/dev/null
           systemd-analyze calendar '*-*-* *:11:00 UTC' >/dev/null
