@@ -84,12 +84,25 @@ function formatMetric(value: number | null | undefined, suffix = ''): string {
 }
 
 function actionLabel(card: ScannerSignalCard): string {
-  if (card.signalGrade === 'B') return 'WATCH · 관찰';
-  if (card.action === 'BUY') return 'BUY · 매수 검토';
-  if (card.action === 'SELL') return 'SELL · 축소 검토';
-  if (card.action === 'LONG') return 'LONG · 롱 검토';
-  if (card.action === 'SHORT') return 'SHORT · 숏 검토';
-  return 'ACTION 미확인';
+  const futures = card.assetClass === 'coin_futures';
+  if (futures) {
+    if (card.action === 'LONG') return '↑ 롱 신호';
+    if (card.action === 'SHORT') return '↓ 숏 신호';
+    if (card.action === 'NONE' || card.action === 'NO_TRADE') return '— 거래 안 함 · NO_TRADE';
+    return '? 선물 방향 확인 필요 · UNKNOWN';
+  }
+  if (card.action === 'BUY') return '↗ 매수 신호';
+  if (card.action === 'SELL') return '↘ 보유분 매도·청산 참고';
+  if (card.action === 'NONE' || card.action === 'NO_TRADE') return '— 거래 안 함 · NO_TRADE';
+  return '? 현물 방향 확인 필요 · UNKNOWN';
+}
+
+function evidenceGradeLabel(card: ScannerSignalCard): string {
+  if (card.signalGrade === 'S') return 'S';
+  if (card.signalGrade === 'A') return 'A';
+  if (card.signalGrade === 'B') return 'WATCH';
+  if (card.signalGrade === 'C' || card.signalGrade === 'D') return 'REJECT';
+  return '미확인';
 }
 
 function alertTitle(alert: ScannerAlertCandidate): string {
@@ -128,6 +141,17 @@ function formatObservedAt(value: string | null | undefined): string {
   return new Date(value).toLocaleString('ko-KR');
 }
 
+function remainingValidityLabel(value: string | null | undefined): string {
+  if (!value || !Number.isFinite(Date.parse(value))) return 'TTL 미확인';
+  const remainingMs = Date.parse(value) - Date.now();
+  if (remainingMs <= 0) return 'TTL 만료';
+  const remainingMinutes = Math.ceil(remainingMs / 60_000);
+  if (remainingMinutes < 60) return `TTL ${remainingMinutes}분`;
+  const remainingHours = Math.ceil(remainingMinutes / 60);
+  if (remainingHours < 24) return `TTL ${remainingHours}시간`;
+  return `TTL ${Math.ceil(remainingHours / 24)}일`;
+}
+
 function SignalDetailPanel({
   card,
   selection,
@@ -146,7 +170,7 @@ function SignalDetailPanel({
   onOrderPreparation: () => void;
 }) {
   const matchedEvidence = card.evidence.filter((item) => item.status === 'matched');
-  const why = matchedEvidence.flatMap((item) => item.reasons).filter(Boolean).slice(0, 8);
+  const why = [...new Set([...card.matched, ...matchedEvidence.flatMap((item) => item.reasons)])].filter(Boolean).slice(0, 8);
   const missing = [...new Set([...card.unverified, ...(card.aiValidation?.missingData ?? [])])];
   const risks = [...new Set([...card.warnings, ...(card.aiValidation?.risks ?? [])])];
   const mobile = Boolean(onClose);
@@ -280,6 +304,11 @@ function SignalDetailPanel({
           <p className="text-[11px] font-black text-primary">Signal Detail</p>
           <h2 className="mt-1 break-words text-lg font-black">{card.name} · {card.symbol}</h2>
           <p className="mt-1 text-xs font-bold text-muted-foreground">{card.market} · {card.exchange ?? '거래소 미확인'} · {card.assetType}</p>
+          <div className="mt-2 flex flex-wrap gap-1">
+            <span data-testid="scanner-direction-badge" className="rounded-full border border-primary/30 bg-primary/5 px-2 py-1 text-[10px] font-black">{actionLabel(card)}</span>
+            <span data-testid="scanner-evidence-grade" className="rounded-full border border-card-border px-2 py-1 text-[10px] font-black">등급 {evidenceGradeLabel(card)}</span>
+            <span data-testid="scanner-ttl-badge" className="rounded-full border border-card-border px-2 py-1 text-[10px] font-black">{remainingValidityLabel(card.expiresAt)}</span>
+          </div>
         </div>
         {onClose ? <button type="button" onClick={onClose} aria-label="Signal Detail 닫기" className="min-h-11 shrink-0 rounded-xl border border-card-border px-3 text-xs font-black">닫기</button> : null}
       </div>
@@ -590,6 +619,9 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             </div>
             <span className="rounded-full border border-card-border px-3 py-1 text-[11px] font-bold">{profile.profileVersion}</span>
           </div>
+          <p data-testid="scanner-market-signal-guide" className="mt-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-black text-primary">
+            {view === 'FUTURES' ? '코인 선물 · ↑ 롱 신호 / ↓ 숏 신호' : `${view === 'KR' ? '국내주식' : view === 'US' ? '해외주식' : '코인 현물'} · ↗ 매수 신호`}
+          </p>
           <p className="mt-2 hidden break-keep text-[11px] text-muted-foreground sm:block">기술지표 직접 선택은 기본 화면에 노출하지 않습니다. 상세 근거는 결과 카드에서 확인할 수 있습니다.</p>
           {embedded && (
             <label className="mt-3 block space-y-1 text-xs font-bold">
@@ -669,7 +701,12 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                       <div className="flex items-start justify-between gap-3">
                         <button type="button" aria-label={`${card.name} ${card.symbol} · ${card.market} · ${card.assetType}`} onClick={() => selectSignal(card)} className="min-h-11 min-w-0 flex-1 text-left">
                           <p className="truncate font-black">{card.candidateRanking?.rank ? `${card.candidateRanking.rank}위 · ` : ''}{card.name}</p>
-                          <p className="truncate text-xs text-muted-foreground">{card.symbol} · {card.market} · {actionLabel(card)}</p>
+                          <p className="truncate text-xs text-muted-foreground">{card.symbol} · {card.market}</p>
+                          <div className="mt-1 flex min-w-0 flex-wrap gap-1">
+                            <span data-testid="scanner-card-direction" className="rounded-full border border-primary/30 px-2 py-0.5 text-[10px] font-black">{actionLabel(card)}</span>
+                            <span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-black">등급 {evidenceGradeLabel(card)}</span>
+                            <span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-black">{remainingValidityLabel(card.expiresAt)}</span>
+                          </div>
                         </button>
                         <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">Score {card.score} · Risk {card.riskScore ?? '미확인'}</p></div>
                       </div>
