@@ -22,6 +22,9 @@ import {
 import {
   deliverScannerTelegramAlerts,
   scannerTelegramInput,
+  scannerTelegramRoomChatId,
+  scannerTelegramRoomFor,
+  type ScannerTelegramRoom,
 } from './scanner-telegram-delivery.service';
 import type { ScannerAlertCandidate } from './scanner-signal.types';
 
@@ -29,12 +32,18 @@ const originalFetch = globalThis.fetch;
 const originalEnv = {
   botToken: process.env.TELEGRAM_BOT_TOKEN,
   chatId: process.env.TELEGRAM_CHAT_ID,
+  stockChatId: process.env.TELEGRAM_STOCK_CHAT_ID,
+  cryptoChatId: process.env.TELEGRAM_CRYPTO_CHAT_ID,
   personalChatId: process.env.TELEGRAM_PERSONAL_CHAT_ID,
 };
 
 function setFakeConfig(): void {
   process.env.TELEGRAM_BOT_TOKEN = 'ci-bot-token-sentinel';
   process.env.TELEGRAM_CHAT_ID = 'ci-chat-id-sentinel';
+}
+
+function testRoom(room: ScannerTelegramRoom): string {
+  return room === 'STOCK_ROOM' ? 'stock-room' : 'crypto-room';
 }
 
 function okResponse(): Response {
@@ -73,6 +82,10 @@ test.afterEach(() => {
   else process.env.TELEGRAM_BOT_TOKEN = originalEnv.botToken;
   if (originalEnv.chatId == null) delete process.env.TELEGRAM_CHAT_ID;
   else process.env.TELEGRAM_CHAT_ID = originalEnv.chatId;
+  if (originalEnv.stockChatId == null) delete process.env.TELEGRAM_STOCK_CHAT_ID;
+  else process.env.TELEGRAM_STOCK_CHAT_ID = originalEnv.stockChatId;
+  if (originalEnv.cryptoChatId == null) delete process.env.TELEGRAM_CRYPTO_CHAT_ID;
+  else process.env.TELEGRAM_CRYPTO_CHAT_ID = originalEnv.cryptoChatId;
   if (originalEnv.personalChatId == null) delete process.env.TELEGRAM_PERSONAL_CHAT_ID;
   else process.env.TELEGRAM_PERSONAL_CHAT_ID = originalEnv.personalChatId;
 });
@@ -180,6 +193,7 @@ test('supports all requested alert templates', () => {
   for (const type of [
     'strong_buy',
     'strong_sell',
+    'crypto_spot_buy',
     'crypto_futures_long',
     'crypto_futures_short',
     'price_alert',
@@ -190,30 +204,60 @@ test('supports all requested alert templates', () => {
     const rendered = renderTelegramAlert({ type, symbol: 'TEST' });
     assert.ok(rendered.length > 0);
   }
+  assert.match(renderTelegramAlert({ type: 'crypto_spot_buy', symbol: 'BTC' }), /코인현물 매수 신호/);
 });
 
-test('maps only existing actionable scanner producers to Telegram delivery types', () => {
-  assert.equal(scannerTelegramInput(scannerAlert())?.type, 'strong_buy');
-  assert.equal(
-    scannerTelegramInput(scannerAlert({
-      assetClass: 'coin_futures',
-      market: 'futures',
-      symbol: 'BTCUSDT',
-      direction: 'LONG',
-    }))?.type,
-    'crypto_futures_long',
-  );
-  assert.equal(
-    scannerTelegramInput(scannerAlert({
-      assetClass: 'coin_futures',
-      market: 'futures',
-      symbol: 'BTCUSDT',
-      direction: 'SHORT',
-    }))?.type,
-    'crypto_futures_short',
-  );
-  assert.equal(scannerTelegramInput(scannerAlert({ direction: 'SHORT' })), null);
-  assert.equal(scannerTelegramInput(scannerAlert({ assetClass: 'coin_spot' })), null);
+test('scanner signal room routing is strict and does not fall back to the default chat', () => {
+  process.env.TELEGRAM_CHAT_ID = 'default-room';
+  delete process.env.TELEGRAM_STOCK_CHAT_ID;
+  delete process.env.TELEGRAM_CRYPTO_CHAT_ID;
+
+  assert.equal(scannerTelegramRoomFor('stock'), 'STOCK_ROOM');
+  assert.equal(scannerTelegramRoomFor('coin_spot'), 'CRYPTO_ROOM');
+  assert.equal(scannerTelegramRoomFor('coin_futures'), 'CRYPTO_ROOM');
+  assert.equal(scannerTelegramRoomChatId('STOCK_ROOM'), null);
+  assert.equal(scannerTelegramRoomChatId('CRYPTO_ROOM'), null);
+
+  process.env.TELEGRAM_STOCK_CHAT_ID = 'stock-room';
+  process.env.TELEGRAM_CRYPTO_CHAT_ID = 'crypto-room';
+  assert.equal(scannerTelegramRoomChatId('STOCK_ROOM'), 'stock-room');
+  assert.equal(scannerTelegramRoomChatId('CRYPTO_ROOM'), 'crypto-room');
+});
+
+test('maps stock/spot BUY only and futures LONG/SHORT to their dedicated Telegram rooms', () => {
+  const stock = scannerTelegramInput(scannerAlert(), testRoom);
+  assert.equal(stock?.type, 'strong_buy');
+  assert.equal(stock?.destinationChatId, 'stock-room');
+
+  const spot = scannerTelegramInput(scannerAlert({
+    assetClass: 'coin_spot',
+    market: 'spot',
+    symbol: 'BTC',
+    direction: 'LONG',
+  }), testRoom);
+  assert.equal(spot?.type, 'crypto_spot_buy');
+  assert.equal(spot?.destinationChatId, 'crypto-room');
+
+  const futuresLong = scannerTelegramInput(scannerAlert({
+    assetClass: 'coin_futures',
+    market: 'futures',
+    symbol: 'BTCUSDT',
+    direction: 'LONG',
+  }), testRoom);
+  assert.equal(futuresLong?.type, 'crypto_futures_long');
+  assert.equal(futuresLong?.destinationChatId, 'crypto-room');
+
+  const futuresShort = scannerTelegramInput(scannerAlert({
+    assetClass: 'coin_futures',
+    market: 'futures',
+    symbol: 'BTCUSDT',
+    direction: 'SHORT',
+  }), testRoom);
+  assert.equal(futuresShort?.type, 'crypto_futures_short');
+  assert.equal(futuresShort?.destinationChatId, 'crypto-room');
+
+  assert.equal(scannerTelegramInput(scannerAlert({ direction: 'SHORT' }), testRoom), null);
+  assert.equal(scannerTelegramInput(scannerAlert({ assetClass: 'coin_spot', direction: 'SHORT' }), testRoom), null);
 });
 
 test('scanner Telegram delivery is fail-open and uses the lifecycle idempotency key', async () => {
@@ -224,10 +268,12 @@ test('scanner Telegram delivery is fail-open and uses the lifecycle idempotency 
       delivered.push(input);
       throw new Error('telegram unavailable');
     },
+    testRoom,
   );
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].dedupeKey, 'scanner-alert:test');
   assert.equal(delivered[0].type, 'strong_buy');
+  assert.equal(delivered[0].destinationChatId, 'stock-room');
 });
 
 test('Telegram intelligence audience follows membership and portfolio priority', () => {
