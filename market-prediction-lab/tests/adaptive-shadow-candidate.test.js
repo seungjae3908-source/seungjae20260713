@@ -5,6 +5,7 @@ import {
   buildAdaptiveShadowCandidate,
   evaluateModelRecords,
   evaluatePredictionHealth,
+  evaluateVolatilityRegimeHealth,
 } from "../src/adaptive-shadow-candidate.js";
 
 function neutralModel(id = "neutral-v1") {
@@ -18,6 +19,25 @@ function neutralModel(id = "neutral-v1") {
       bullish: Object.freeze({ bias: -2, weights: Object.freeze([0]) }),
       neutral: Object.freeze({ bias: 2, weights: Object.freeze([0]) }),
       bearish: Object.freeze({ bias: -2, weights: Object.freeze([0]) }),
+    }),
+  });
+}
+
+function atrLowVolCollapseModel(id = "atr-low-vol-collapse-v1") {
+  return Object.freeze({
+    id,
+    trained: true,
+    modelType: "multinomial-logistic-regression",
+    featureOrder: Object.freeze(["atrPct"]),
+    normalization: Object.freeze({
+      mean: Object.freeze([0.01]),
+      scale: Object.freeze([0.004]),
+    }),
+    temperature: 1,
+    classes: Object.freeze({
+      bullish: Object.freeze({ bias: -0.5, weights: Object.freeze([1]) }),
+      neutral: Object.freeze({ bias: 0, weights: Object.freeze([0]) }),
+      bearish: Object.freeze({ bias: -0.5, weights: Object.freeze([1]) }),
     }),
   });
 }
@@ -71,6 +91,31 @@ test("health flags dominant neutral collapse and zero directional recall", () =>
   assert.ok(health.reasons.includes("directional_recall_collapse"));
 });
 
+test("volatility regime health catches collapse hidden inside low-volatility samples", () => {
+  const model = atrLowVolCollapseModel();
+  const directions = ["bullish", "neutral", "bearish"];
+  const records = Array.from({ length: 18 }, (_, index) => Object.freeze({
+    actualDirection: directions[index % directions.length],
+    features: Object.freeze({ atrPct: 0.002 }),
+  }));
+  const result = evaluateVolatilityRegimeHealth(records, model, model, {
+    sigmaBand: 1,
+    minRegimeSamples: 12,
+    minDirectionalSupport: 3,
+  });
+
+  assert.equal(result.available, true);
+  assert.equal(result.healthy, false);
+  assert.equal(result.reference.lowUpper, 0.006);
+  assert.deepEqual(result.collapsedRegimes, ["low"]);
+  assert.equal(result.byRegime.low.qualified, true);
+  assert.equal(result.byRegime.low.sampleCount, 18);
+  assert.equal(result.byRegime.low.health.dominantClass, "neutral");
+  assert.ok(result.byRegime.low.health.reasons.includes("directional_recall_collapse"));
+  assert.equal(result.byRegime.normal.qualified, false);
+  assert.equal(result.byRegime.high.qualified, false);
+});
+
 test("adaptive candidate waits for enough settled live samples", () => {
   const result = buildAdaptiveShadowCandidate({
     group: "crypto-futures-15m",
@@ -94,6 +139,7 @@ test("adaptive blend uses chronological holdout and escapes neutral collapse", (
   });
   assert.equal(result.status, "shadow_candidate_v2", JSON.stringify(result.reasons));
   assert.equal(result.safety.chronologicalSplit, true);
+  assert.equal(result.safety.volatilityRegimeSelectionUsesTrainingNormalizationOnly, true);
   assert.equal(result.diagnostics.holdout.candidateHealth.collapsed, false);
   assert.ok(result.diagnostics.holdout.comparison.macroF1Delta > 0.02);
   assert.ok(result.diagnostics.selection.baselineWeight > 0);
