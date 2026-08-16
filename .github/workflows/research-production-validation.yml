@@ -1,0 +1,96 @@
+name: Research Production Branch Validation
+
+on:
+  push:
+    branches:
+      - agent/research-production-server-v1
+    paths:
+      - 'research-production/**'
+      - '.github/workflows/research-production-validation.yml'
+  pull_request:
+    paths:
+      - 'research-production/**'
+      - '.github/workflows/research-production-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-production-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Assert exact checkout and no live authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          ! grep -R -n -E 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)' research-production
+          grep -q 'NoNewPrivileges=true' research-production/deploy/research-production@.service
+          grep -q 'ProtectSystem=strict' research-production/deploy/research-production@.service
+          grep -q '^CapabilityBoundingSet=$' research-production/deploy/research-production@.service
+          ! grep -q 'MemoryDenyWriteExecute=true' research-production/deploy/research-production@.service
+
+      - name: Validate systemd service and schedules
+        shell: bash
+        run: |
+          set -euo pipefail
+          systemd-analyze verify \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-fast-historical.timer \
+            research-production/deploy/research-production-long-history.timer \
+            research-production/deploy/research-production-forward.timer
+          systemd-analyze calendar '*-*-* 02:17:00 UTC' >/dev/null
+          systemd-analyze calendar 'Sun *-*-* 03:43:00 UTC' >/dev/null
+          systemd-analyze calendar '*-*-* *:11:00 UTC' >/dev/null
+
+      - name: Unit tests
+        working-directory: research-production
+        run: npm test
+
+      - name: Exact-SHA preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$RUNNER_TEMP/investment-research-production" \
+            --research-sha "$GITHUB_SHA"
+
+      - name: Build deterministic full plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$RUNNER_TEMP/investment-research-production" \
+            --research-sha "$GITHUB_SHA" > "$RUNNER_TEMP/research-plan.json"
+          node -e "const p=require(process.argv[1]); if(p.taskCount !== 10 || p.stepCount !== 21 || p.liveTrading || p.privateApi || p.orderAuthority) process.exit(1)" "$RUNNER_TEMP/research-plan.json"
+
+      - name: Safety summary
+        run: |
+          printf '%s\n' \
+            'researchProductionValidation=PASS' \
+            'productionDeploy=false' \
+            'liveTrading=false' \
+            'privateApi=false' \
+            'orderAuthority=false' \
+            'existingPaperShadowStateMutation=false'

@@ -1,0 +1,12 @@
+{
+  "name": "investment-research-production",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "preflight": "node bin/research-cycle.mjs preflight",
+    "plan": "node bin/research-cycle.mjs plan --profile all"
+  }
+}
