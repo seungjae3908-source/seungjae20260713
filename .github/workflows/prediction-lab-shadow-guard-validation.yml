@@ -1,0 +1,50 @@
+name: Prediction Lab Shadow Guard Validation
+
+on:
+  push:
+    branches:
+      - research/shadow-collapse-drift-guard-v1
+  pull_request:
+    branches:
+      - feature/prediction-lab-standalone
+    paths:
+      - market-prediction-lab/src/shadow-ledger.js
+      - market-prediction-lab/src/shadow-source-health.js
+      - market-prediction-lab/scripts/build-adaptive-shadow-candidate.js
+      - market-prediction-lab/tests/shadow-ledger.test.js
+      - market-prediction-lab/tests/shadow-source-health.test.js
+      - .github/workflows/prediction-lab-shadow-guard-validation.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-shadow-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shadow-guard-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact research head
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run Shadow collapse and adaptive safety tests
+        working-directory: market-prediction-lab
+        run: node --test tests/shadow-ledger.test.js tests/shadow-source-health.test.js tests/adaptive-shadow-candidate.test.js tests/model-ensemble.test.js
+
+      - name: Run full Prediction Lab unit suite
+        working-directory: market-prediction-lab
+        run: npm test
+
+      - name: Assert no repository mutation
+        shell: bash
+        run: git diff --exit-code && git status --porcelain=v1
