@@ -13,18 +13,22 @@
 - 서버의 일반 환경변수는 자식 연구 프로세스로 그대로 전달하지 않으며 PATH/LANG/TZ 등 최소 실행 환경만 전달하여 Token/API key/DB credential 전파를 차단합니다.
 - `RESEARCH_CODE_SHA`와 실제 checkout `git rev-parse HEAD`가 다르면 실행을 거부합니다.
 - Paper Forward activation timestamp는 첫 실행 때 상태 저장소에 고정되고 이후 변경을 거부합니다.
-- 프로세스 강제 종료 후 남은 stale lock은 다음 실행에서 PID를 확인해 안전하게 회수합니다.
+- 프로세스 강제 종료 후 남은 stale lock은 다음 실행에서 PID/시간을 검증해 안전하게 회수합니다.
 - 상태 디스크의 가용 공간이 기본 5 GiB 미만이면 새 연구 cycle을 시작하지 않습니다(`RESEARCH_MIN_FREE_BYTES`로 조정 가능).
 - `BLOCKED_DATA`는 수익 성공으로 간주하지 않고 별도 상태로 보존합니다.
 
 ## 프로필
 
-- `fast-historical`: KR/US 주식, Upbit 현물, Bitget 선물 일반화/PnL/regime, funding/market structure 연구를 병렬 실행합니다.
+- `fast-historical`: **3개 독립 파이프라인을 병렬 실행**합니다. 같은 파이프라인 내부는 기존 GitHub Multi-Market Suite의 검증된 의존 순서를 그대로 유지합니다.
+  - Crypto Futures/Derivatives: 시장 데이터·후보 → 일반화 → 비용/PnL → regime → funding history → market structure
+  - Crypto Spot: Upbit public → 비용/PnL → 대안전략
+  - Stocks: KR/US public → 비용/PnL → unseen-symbol/rolling generalization → US pullback → regime
+  - 총 14개 역사연구 단계를 3개 격리 workspace에서 병렬 처리합니다.
 - `long-history`: V1/V3/V4/V5/V6 long-history 연구를 병렬 실행합니다.
 - `forward`: 별도 state root로 Paper Forward + Shadow를 실행합니다. 미래 시간은 압축하지 않습니다.
-- `all`: 위 세 프로필을 하나의 계획으로 표시하거나 수동 실행할 때 사용합니다.
+- `all`: 배포/감사용 **계획 출력만** 허용하며 실제 실행은 세 프로필을 따로 실행하게 강제해 장시간 단일 프로세스와 state 충돌을 피합니다.
 
-기존 Quant Lab의 candidate narrowing/OOS/walk-forward/holdout 로직은 `market-prediction-lab` 자체 구현을 그대로 사용하며, 이 런타임은 그 엔진을 재작성하지 않고 서버 실행·격리·병렬화·결과 저장을 담당합니다.
+기존 Quant Lab의 `bounded_coarse_narrow_fine` candidate narrowing, OOS/walk-forward/holdout 안전계약과 Automated V1 adapter는 서버 preflight에서 **현재 exact SHA 모듈을 직접 import**하여 검증합니다. 시장 연구 알고리즘은 재작성하지 않고 기존 검증 suite를 재사용합니다. 따라서 속도 향상은 독립 시장 파이프라인의 병렬화에서 얻고, 동일 시장의 선행 산출물 의존성은 보존합니다.
 
 ## 로컬/CI 검증
 
