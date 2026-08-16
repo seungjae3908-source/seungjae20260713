@@ -65,7 +65,42 @@ function response() {
     market: 'KR',
     timeframe: '1D',
     cards: actions.map(card),
-    alerts: [],
+    alerts: [
+      {
+        idempotencyKey: 'direction-alert-buy',
+        signalId: 'direction:BUY:0',
+        assetClass: 'stock',
+        market: 'KR',
+        symbol: '005930',
+        direction: 'LONG',
+        action: 'BUY',
+        state: 'APPROVAL_PENDING',
+        entryZone: { from: 74_000, to: 75_000 },
+        stopLoss: 70_000,
+        targets: [82_000],
+        expiresAt: '2099-08-16T03:00:00.000Z',
+        evidence: ['public fixture'],
+        orderSubmitted: false,
+        exchangeRequestSent: false,
+      },
+      {
+        idempotencyKey: 'direction-alert-short',
+        signalId: 'direction:SHORT:3',
+        assetClass: 'coin_futures',
+        market: 'BITGET',
+        symbol: 'BTCUSDT3',
+        direction: 'SHORT',
+        action: 'SHORT',
+        state: 'APPROVAL_PENDING',
+        entryZone: { from: 74_000, to: 75_000 },
+        stopLoss: 80_000,
+        targets: [68_000],
+        expiresAt: '2099-08-16T03:00:00.000Z',
+        evidence: ['public fixture'],
+        orderSubmitted: false,
+        exchangeRequestSent: false,
+      },
+    ],
     failures: [],
     execution: {
       requestedCount: actions.length,
@@ -130,6 +165,12 @@ test('cash and spot show buy-entry wording while futures show long short and sel
   const grades = await page.getByTestId('scanner-master-list').getByText('등급 WATCH', { exact: true }).count();
   expect(grades).toBe(6);
   expect(texts.every((text) => !text.includes('WATCH'))).toBe(true);
+
+  const alerts = page.locator('section[aria-label="승인 대기 알림"]');
+  await expect(alerts).toContainText('↗ 매수 신호 승인 대기 · 005930');
+  await expect(alerts).toContainText('↓ 숏 신호 승인 대기 · BTCUSDT3');
+  await expect(alerts).not.toContainText('BUY 승인 대기');
+  await expect(alerts).not.toContainText('SHORT 승인 대기');
 
   const masterList = page.getByTestId('scanner-master-list');
   await masterList.locator('button').first().click();
