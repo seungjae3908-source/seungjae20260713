@@ -46,7 +46,7 @@ function card(): ScannerSignalCard {
     evidence: [
       { key: 'old', label: 'old', status: 'matched', source: 'yahoo-public', observedAt: iso(-60_000), reasons: [] },
       { key: 'new', label: 'new', status: 'matched', source: 'yahoo-public', observedAt: iso(0), reasons: [] },
-      { key: 'future', label: 'future', status: 'matched', source: 'bad', observedAt: iso(60_000), reasons: [] },
+      { key: 'future', label: 'future', status: 'unverified', source: 'bad', observedAt: iso(60_000), reasons: [] },
     ],
     pricePlan: { entryZone: { from: 99, to: 101 }, invalidation: 95, stopLoss: 95, targets: [105, 110], riskReward: 1.5 },
     dataState: 'complete',
@@ -101,16 +101,25 @@ function response(lane: ForwardObserverLane, cards: ScannerSignalCard[]): Scanne
   };
 }
 
-test('runtime state is immutable-SHA scoped and fail-closed on identity or safety mixing', () => {
+test('runtime state is immutable-SHA scoped and fail-closed on identity, cursor or safety mixing', () => {
   const state = createForwardObserverRuntimeState(SHA, new Date(T0));
   validateForwardObserverRuntimeState(state, SHA);
   assert.throws(() => validateForwardObserverRuntimeState(state, 'b'.repeat(40)), /RESEARCH_SHA_MISMATCH/u);
   assert.throws(() => validateForwardObserverRuntimeState({ ...state, safety: { ...state.safety, financialMutationAllowed: true as false } }, SHA), /SAFETY_CONTRACT/u);
+  assert.throws(() => validateForwardObserverRuntimeState({ ...state, cursors: { ...state.cursors, KR_SWING_60M: -1 } }, SHA), /CURSOR_INVALID/u);
 });
 
-test('latest evidence timestamp never accepts evidence after signal observation time', () => {
-  assert.equal(latestCardEvidenceTimestamp(card()), iso(0));
+test('evidence cutoff uses oldest matched timestamp and rejects incomplete or future matched provenance', () => {
+  assert.equal(latestCardEvidenceTimestamp(card()), iso(-60_000));
   assert.equal(latestCardEvidenceTimestamp({ ...card(), evidence: [] }), null);
+  assert.equal(latestCardEvidenceTimestamp({
+    ...card(),
+    evidence: [{ key: 'missing', label: 'missing', status: 'matched', source: 'yahoo-public', observedAt: null, reasons: [] }],
+  }), null);
+  assert.equal(latestCardEvidenceTimestamp({
+    ...card(),
+    evidence: [{ key: 'future-matched', label: 'future', status: 'matched', source: 'yahoo-public', observedAt: iso(60_000), reasons: [] }],
+  }), null);
 });
 
 test('cycle creates one idempotent public observation, ignores pre-signal bars and settles only on future evidence', async () => {
@@ -158,9 +167,46 @@ test('cycle creates one idempotent public observation, ignores pre-signal bars a
   assert.equal(second.summary.safety.financialMutationAllowed, false);
   assert.equal(second.summary.safety.privateTradingApiAllowed, false);
   assert.equal(second.summary.safety.profitabilityClaimAllowed, false);
+
+  const tampered = {
+    ...second.state,
+    observations: [{ ...second.state.observations[0]!, financialMutationAllowed: true as false }],
+  };
+  assert.throws(() => validateForwardObserverRuntimeState(tampered, SHA), /OBSERVATION_SAFETY_ENVELOPE_INVALID/u);
 });
 
-test('missing evidence timestamps are blocked instead of fabricated from now or signal time', async () => {
+test('partial or provider-failed scan lanes are rejected without advancing cursor or creating biased samples', async () => {
+  const state = createForwardObserverRuntimeState(SHA, new Date(T0));
+  const result = await runForwardRecommendationObserverCycle({
+    state,
+    researchCodeSha: SHA,
+    dependencies: {
+      scanLane: async (lane) => {
+        const clean = response(lane, lane.id === 'KR_SWING_60M' ? [card()] : []);
+        if (lane.id !== 'KR_SWING_60M') return clean;
+        return {
+          ...clean,
+          dataState: 'partial',
+          failures: [{ symbol: '*', reason: 'provider_error', message: 'provider failed mid-scan' }],
+          execution: { ...clean.execution, partial: true, providerErrorCount: 1 },
+          universe: { ...clean.universe, partial: true },
+        };
+      },
+      loadFutureBars: async () => [],
+      now: () => new Date(T0 + 60_000),
+    },
+  });
+  assert.equal(result.summary.counts.total, 0);
+  assert.equal(result.state.cursors.KR_SWING_60M, 0);
+  const kr = result.summary.lanes.find((lane) => lane.laneId === 'KR_SWING_60M');
+  assert.equal(kr?.blocked, 1);
+  assert.equal(kr?.cursorAfter, 0);
+  assert.equal(kr?.blockers.SCANNER_PARTIAL_RESULT, 1);
+  assert.equal(kr?.blockers.SCANNER_PROVIDER_ERROR, 1);
+  assert.equal(kr?.blockers.SCANNER_UNIVERSE_PARTIAL, 1);
+});
+
+test('missing matched evidence timestamps are blocked instead of fabricated from now or signal time', async () => {
   const missing = { ...card(), signalId: 'missing-evidence', evidence: [] };
   const state = createForwardObserverRuntimeState(SHA, new Date(T0));
   const result = await runForwardRecommendationObserverCycle({
@@ -175,5 +221,5 @@ test('missing evidence timestamps are blocked instead of fabricated from now or 
   assert.equal(result.summary.counts.total, 0);
   const kr = result.summary.lanes.find((lane) => lane.laneId === 'KR_SWING_60M');
   assert.equal(kr?.blocked, 1);
-  assert.equal(kr?.blockers.DATA_TIMESTAMP_FROM_EVIDENCE_REQUIRED, 1);
+  assert.equal(kr?.blockers.DATA_TIMESTAMP_FROM_MATCHED_EVIDENCE_REQUIRED, 1);
 });
