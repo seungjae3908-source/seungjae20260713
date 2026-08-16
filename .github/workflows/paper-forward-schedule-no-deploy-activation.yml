@@ -187,6 +187,8 @@ jobs:
           run-id: ${{ steps.staging.outputs.run_id }}
 
       - name: Require exact release-ready Staging verdict
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
         run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
 
   activate:
