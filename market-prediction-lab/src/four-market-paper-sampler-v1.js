@@ -200,7 +200,12 @@ export function buildFourMarketPaperSample({
     quantity: order.quantity ?? null,
   });
 
-  if (context.status !== "READY") {
+  const contextBlockers = [...context.blockers];
+  if (context.costPolicy?.version !== profitEvidence.costPolicyId) {
+    contextBlockers.push("PAPER_COST_POLICY_VERSION_MISMATCH");
+  }
+
+  if (context.status !== "READY" || contextBlockers.length > 0) {
     return Object.freeze({
       ...base,
       paperSampleId: sampleId,
@@ -208,7 +213,7 @@ export function buildFourMarketPaperSample({
       executionContextStatus: context.status,
       parityFingerprint: context.parityFingerprint,
       fill: null,
-      blockers: Object.freeze([...context.blockers]),
+      blockers: Object.freeze([...new Set(contextBlockers)]),
       ...safetyEnvelope(),
     });
   }
