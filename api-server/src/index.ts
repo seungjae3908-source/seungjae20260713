@@ -9,7 +9,7 @@ import { startUserTelegramDeliveryWorker } from './features/user-broker-telegram
 import { startPriceAlertMonitor } from './services/notification.service';
 import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
 import { startTelegramIntelligenceWorker } from './services/telegram-intelligence-worker.service';
-import { resolveApiBindHost } from './lib/api-bind-host';
+import { isStagingReadonlyCredentialRuntime, resolveApiBindHost } from './lib/api-bind-host';
 import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,6 +22,7 @@ const port = Number(
     process.env.API_PORT ??
     8080,
 );
+const readonlyCredentialRuntime = isStagingReadonlyCredentialRuntime();
 const bindHost = resolveApiBindHost();
 
 const deployMarkerPath = process.env.DEPLOY_MARKER_PATH?.trim()
@@ -39,6 +40,7 @@ function healthPayload(route: '/health' | '/api/health') {
     identityMatch: identity.identityMatch,
     identityStatus: identity.identityStatus,
     bindHost,
+    backgroundWorkersEnabled: !readonlyCredentialRuntime,
     time: new Date().toISOString(),
   };
 }
@@ -220,10 +222,14 @@ app.listen(
       '[api-server] Kiwoom routes enabled at /api/kiwoom',
     );
 
-    startPriceAlertMonitor();
-    startTradeRecoveryWorker();
-    startUserTelegramDeliveryWorker();
-    startTelegramIntelligenceWorker();
+    if (readonlyCredentialRuntime) {
+      console.log('[api-server] staging read-only credential runtime: background workers disabled');
+    } else {
+      startPriceAlertMonitor();
+      startTradeRecoveryWorker();
+      startUserTelegramDeliveryWorker();
+      startTelegramIntelligenceWorker();
+    }
 
     if (frontendDist) {
       console.log(
