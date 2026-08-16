@@ -77,6 +77,11 @@ test("summary reports candidate and reference metrics by symbol and regime", () 
   const summary = summarizeShadowState({ records });
   assert.equal(summary.settled, 2);
   assert.equal(summary.candidate.accuracy, 1);
+  assert.deepEqual(summary.candidate.actualCounts, { bullish: 1, neutral: 0, bearish: 1 });
+  assert.deepEqual(summary.candidate.predictedCounts, { bullish: 1, neutral: 0, bearish: 1 });
+  assert.equal(summary.candidate.actualShares.bullish, 0.5);
+  assert.equal(summary.candidate.predictedShares.bearish, 0.5);
+  assert.equal(summary.candidate.predictionHealth.collapsed, false);
   assert.equal(Object.keys(summary.bySymbol).length, 2);
   assert.equal(Object.keys(summary.byRegime).length, 2);
   assert.ok(summary.comparison.logLossImprovement > 0);
@@ -106,4 +111,27 @@ test("promotion remains blocked before samples, elapsed time and regime coverage
   assert.ok(decision.reasons.includes("insufficient_settled_samples"));
   assert.ok(decision.reasons.includes("insufficient_elapsed_shadow_period"));
   assert.ok(decision.reasons.includes("insufficient_regime_coverage"));
+});
+
+test("neutral prediction collapse is visible and explicitly blocks promotion", () => {
+  const neutral = settle(pending({
+    candidateProbabilities: { bullish: 0.05, neutral: 0.9, bearish: 0.05 },
+    referenceProbabilities: { bullish: 0.1, neutral: 0.8, bearish: 0.1 },
+  }), [100.05, 100.1]);
+  const summary = summarizeShadowState({ records: [neutral] });
+  assert.equal(summary.candidate.actualShares.neutral, 1);
+  assert.equal(summary.candidate.predictedShares.neutral, 1);
+  assert.equal(summary.candidate.predictionHealth.collapsed, true);
+  assert.ok(summary.candidate.predictionHealth.reasons.includes("dominant_prediction_share:neutral"));
+
+  const decision = evaluateShadowPromotion(summary, {
+    minSettled: 1,
+    minPerSymbol: 1,
+    minElapsedMs: 0,
+    minRegimeSamples: 1,
+    minQualifiedRegimes: 1,
+  });
+  assert.equal(decision.approved, false);
+  assert.ok(decision.reasons.includes("candidate:prediction_collapse:dominant_prediction_share:neutral"));
+  assert.ok(decision.reasons.includes("BTCUSDT:prediction_collapse:dominant_prediction_share:neutral"));
 });
