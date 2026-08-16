@@ -78,7 +78,7 @@ jobs:
             --repo-root "$GITHUB_WORKSPACE" \
             --state-root "$RUNNER_TEMP/investment-research-production" \
             --research-sha "$GITHUB_SHA" > "$RUNNER_TEMP/research-plan.json"
-          node -e "const p=require(process.argv[1]); if(p.taskCount < 15 || p.liveTrading || p.privateApi || p.orderAuthority) process.exit(1)" "$RUNNER_TEMP/research-plan.json"
+          node -e "const p=require(process.argv[1]); if(p.taskCount !== 10 || p.stepCount !== 21 || p.liveTrading || p.privateApi || p.orderAuthority) process.exit(1)" "$RUNNER_TEMP/research-plan.json"
 
       - name: Safety summary
         run: |
