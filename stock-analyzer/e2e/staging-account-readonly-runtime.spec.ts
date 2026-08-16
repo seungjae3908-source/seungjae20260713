@@ -116,6 +116,7 @@ test('ephemeral user proves real Upbit and Bitget GET-only account runtime witho
 
   let lifecycle: StagingAccountLifecycle | null = null;
   let regularUserId = '';
+  let loopbackBindVerified = false;
   let upbitEvidence: Record<string, unknown> | null = null;
   let bitgetEvidence: Record<string, unknown> | null = null;
   let cleanupRowsRemaining: number | null = null;
@@ -139,6 +140,12 @@ test('ephemeral user proves real Upbit and Bitget GET-only account runtime witho
     }
     regularUserId = data.user.id;
     const token = data.session.access_token;
+
+    const health = await requestJson(baseUrl, token, 'GET', '/api/health');
+    expect(health.status).toBe(200);
+    expect(health.payload.ok).toBe(true);
+    expect(health.payload.bindHost).toBe('127.0.0.1');
+    loopbackBindVerified = true;
 
     const vaultStatus = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/credentials/status');
     expect(vaultStatus.status).toBe(200);
@@ -199,9 +206,13 @@ test('ephemeral user proves real Upbit and Bitget GET-only account runtime witho
       expect(cleanupRowsRemaining).toBe(0);
     }
     await writeEvidence(artifactDir, {
-      status: upbitEvidence?.connected === true && bitgetEvidence?.connected === true && cleanupRowsRemaining === 0
+      status: loopbackBindVerified
+        && upbitEvidence?.connected === true
+        && bitgetEvidence?.connected === true
+        && cleanupRowsRemaining === 0
         ? 'passed'
         : 'failed',
+      loopback_bind_verified: loopbackBindVerified,
       upbit: upbitEvidence,
       bitget: bitgetEvidence,
       credential_rows_remaining_after_ephemeral_user_cleanup: cleanupRowsRemaining,
