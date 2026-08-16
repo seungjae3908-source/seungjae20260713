@@ -9,6 +9,7 @@ import { startUserTelegramDeliveryWorker } from './features/user-broker-telegram
 import { startPriceAlertMonitor } from './services/notification.service';
 import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
 import { startTelegramIntelligenceWorker } from './services/telegram-intelligence-worker.service';
+import { isStagingReadonlyCredentialRuntime, resolveApiBindHost } from './lib/api-bind-host';
 import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -21,6 +22,8 @@ const port = Number(
     process.env.API_PORT ??
     8080,
 );
+const readonlyCredentialRuntime = isStagingReadonlyCredentialRuntime();
+const bindHost = resolveApiBindHost();
 
 const deployMarkerPath = process.env.DEPLOY_MARKER_PATH?.trim()
   || path.resolve(__dirname, '../../.deploy/current-sha');
@@ -36,6 +39,8 @@ function healthPayload(route: '/health' | '/api/health') {
     deployMarkerSha: identity.deployMarkerSha,
     identityMatch: identity.identityMatch,
     identityStatus: identity.identityStatus,
+    bindHost,
+    backgroundWorkersEnabled: !readonlyCredentialRuntime,
     time: new Date().toISOString(),
   };
 }
@@ -207,20 +212,24 @@ app.use((req, res) => {
 
 app.listen(
   port,
-  '0.0.0.0',
+  bindHost,
   () => {
     console.log(
-      `[api-server] listening on 0.0.0.0:${port}`,
+      `[api-server] listening on ${bindHost}:${port}`,
     );
 
     console.log(
       '[api-server] Kiwoom routes enabled at /api/kiwoom',
     );
 
-    startPriceAlertMonitor();
-    startTradeRecoveryWorker();
-    startUserTelegramDeliveryWorker();
-    startTelegramIntelligenceWorker();
+    if (readonlyCredentialRuntime) {
+      console.log('[api-server] staging read-only credential runtime: background workers disabled');
+    } else {
+      startPriceAlertMonitor();
+      startTradeRecoveryWorker();
+      startUserTelegramDeliveryWorker();
+      startTelegramIntelligenceWorker();
+    }
 
     if (frontendDist) {
       console.log(
