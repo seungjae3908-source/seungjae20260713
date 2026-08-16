@@ -154,7 +154,7 @@ test('cash and spot show buy-entry wording while futures show long short and sel
   await installMocks(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/__phase11-technical-workspace-e2e');
-  await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'AI 검색기', level: 1 })).toBeVisible();
   await expect(page.getByTestId('scanner-market-signal-guide')).toContainText('국내주식 · ↗ 매수 신호');
 
   const badges = page.getByTestId('scanner-card-direction');
@@ -192,7 +192,7 @@ for (const [width, height] of [[320, 760], [360, 800], [390, 844], [412, 915], [
     await installMocks(page);
     await page.setViewportSize({ width, height });
     await page.goto('/__phase11-technical-workspace-e2e');
-    await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'AI 검색기', level: 1 })).toBeVisible();
     await expect(page.getByTestId('scanner-market-signal-guide')).toContainText('↗ 매수 신호');
     await expect(page.getByTestId('scanner-card-direction').first()).toHaveText(directionLabels.BUY);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
