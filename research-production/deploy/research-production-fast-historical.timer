@@ -3,7 +3,7 @@ Description=Daily high-speed historical research
 
 [Timer]
 OnCalendar=*-*-* 02:17:00 UTC
-Persistent=true
+Persistent=false
 RandomizedDelaySec=180
 Unit=research-production@fast-historical.service
 
