@@ -439,6 +439,59 @@ jobs:
           echo "No successful natural Paper Forward cron cycle was observed within the bounded window." >&2
           exit 78
 
+      - name: Collect sanitized cron failure diagnostics before disable
+        if: failure() && steps.install.outcome == 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          diagnostics="$EVIDENCE_DIR/failure-diagnostics.json"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "TARGET_SHA='$TARGET_SHA' bash -s" > "$diagnostics" <<'REMOTE'
+          set -Eeuo pipefail
+          ROOT=/opt/stock-app-data/paper-forward-v1
+          node - "$ROOT" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const cp = require('node:child_process');
+          const path = require('node:path');
+          const [root, targetSha] = process.argv.slice(2);
+          const read = (file) => {
+            try { return fs.readFileSync(file, 'utf8'); } catch { return null; }
+          };
+          const parse = (file) => {
+            const text = read(file);
+            if (text == null) return null;
+            try { return JSON.parse(text); } catch { return { invalidJson: true }; }
+          };
+          const log = read(path.join(root, 'logs', 'cron.log')) ?? '';
+          const codes = [...new Set(log.match(/(?:PAPER|BLOCKED)_[A-Z0-9_]+/g) ?? [])].slice(-20);
+          const invocations = (read(path.join(root, 'runtime-state', 'status', 'invocations.jsonl')) ?? '')
+            .split(/\r?\n/).filter(Boolean);
+          const state = parse(path.join(root, 'runtime-state', 'state', 'recurring-paper-loop.json'));
+          const runtimeStatus = parse(path.join(root, 'runtime-state', 'status', 'runtime-status.json'));
+          const cronText = cp.execFileSync('crontab', ['-l'], { encoding: 'utf8' });
+          const value = {
+            schemaVersion: 'paper-forward-sanitized-cron-failure-v1',
+            targetSha,
+            deployedShaMatches: (read('/opt/stock-app/.deploy/current-sha') ?? '').trim() === targetSha,
+            cronEntryCount: cronText.split(/\r?\n/).filter((line) => line.includes('# stock-app-paper-forward-v1')).length,
+            cronInvocationMarkerCount: (log.match(/\[paper-forward-cron\] invoked_at=/g) ?? []).length,
+            invocationRecordCount: invocations.length,
+            statePresent: state != null,
+            stateValidJson: state?.invalidJson !== true,
+            stateResearchSha: state?.identity?.researchCodeSha ?? null,
+            runtimeStatusPresent: runtimeStatus != null,
+            runtimeStatusValidJson: runtimeStatus?.invalidJson !== true,
+            failureCodes: codes,
+            secretsIncluded: false,
+            privateRequestCount: 0,
+            financialMutationCount: 0,
+            orderCount: 0,
+            liveTrading: false,
+          };
+          process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+          NODE
+          REMOTE
+
       - name: Disable schedule automatically if activation validation fails
         if: failure() && steps.install.outcome == 'success'
         shell: bash
