@@ -33,6 +33,8 @@ export type ForwardObservationIdentity = Readonly<{
   direction: SignalPerformanceDirection;
   timeframe: string;
   strategyProfileVersion: string;
+  parameterHash: string;
+  researchCodeSha: string;
 }>;
 
 export type ForwardRecommendationObservation = Readonly<{
@@ -43,6 +45,9 @@ export type ForwardRecommendationObservation = Readonly<{
   identity: ForwardObservationIdentity;
   signalGrade: 'S' | 'A';
   expiresAt: string;
+  dataTimestamp: string;
+  dataMaxAgeMs: number;
+  publicDataOnly: true;
   snapshot: SignalSnapshot;
   outcome: SignalOutcomeEvaluation | null;
   settledAt: string | null;
@@ -112,6 +117,14 @@ function positive(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+function positiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0;
+}
+
+function immutableSha(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{40}$/iu.test(value);
+}
+
 function finiteOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
@@ -120,6 +133,12 @@ function parseTime(value: string, label: string): number {
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) throw new Error(`${label} must be a valid ISO timestamp`);
   return parsed;
+}
+
+function parseTimeOrNull(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function marketFromCard(card: ScannerSignalCard): SignalPerformanceMarket | null {
@@ -184,9 +203,20 @@ function decision(status: ForwardObservationDecisionStatus, blockers: string[], 
   });
 }
 
-function observationId(snapshot: SignalSnapshot, timeframe: string): string {
+function observationId(snapshot: SignalSnapshot, identity: ForwardObservationIdentity): string {
   return createHash('sha256')
-    .update(`${FORWARD_OBSERVATION_SOURCE}|${snapshot.signalId}|${snapshot.strategyProfileVersion}|${snapshot.timestamp}|${timeframe}`)
+    .update([
+      FORWARD_OBSERVATION_SOURCE,
+      snapshot.signalId,
+      snapshot.timestamp,
+      identity.market,
+      identity.horizon,
+      identity.direction,
+      identity.timeframe,
+      identity.strategyProfileVersion,
+      identity.parameterHash,
+      identity.researchCodeSha,
+    ].join('|'))
     .digest('hex');
 }
 
@@ -194,7 +224,11 @@ export function prepareForwardRecommendationObservation(input: {
   card: ScannerSignalCard;
   timeframe: string;
   strategyProfileVersion: string;
+  parameterHash: string;
+  researchCodeSha: string;
   dataTimestamp: string;
+  dataMaxAgeMs: number;
+  publicDataOnly: boolean;
 }): ForwardObservationDecision {
   const { card } = input;
   if (card.signalGrade !== 'S' && card.signalGrade !== 'A') {
@@ -213,16 +247,26 @@ export function prepareForwardRecommendationObservation(input: {
   if (!horizon) blockers.push('STRATEGY_HORIZON_REQUIRED');
   if (!nonEmpty(input.timeframe)) blockers.push('TIMEFRAME_REQUIRED');
   if (!nonEmpty(input.strategyProfileVersion)) blockers.push('STRATEGY_PROFILE_VERSION_REQUIRED');
+  if (!nonEmpty(input.parameterHash)) blockers.push('PARAMETER_HASH_REQUIRED');
+  if (!immutableSha(input.researchCodeSha)) blockers.push('IMMUTABLE_RESEARCH_SHA_REQUIRED');
+  if (!positiveInteger(input.dataMaxAgeMs)) blockers.push('DATA_MAX_AGE_REQUIRED');
+  if (input.publicDataOnly !== true) blockers.push('PUBLIC_DATA_AUTHORITY_REQUIRED');
   if (!nonEmpty(card.signalId) || !nonEmpty(card.symbol)) blockers.push('SIGNAL_IDENTITY_REQUIRED');
   if (!Array.isArray(card.dataSources) || card.dataSources.length === 0 || card.dataSources.some((source) => !nonEmpty(source))) blockers.push('DATA_PROVENANCE_REQUIRED');
   if (card.dataState !== 'complete') blockers.push('DATA_STATE_NOT_COMPLETE');
   if (card.dataQuality?.state === 'DATA_UNTRUSTED' || card.dataQuality?.strongSignalAllowed === false) blockers.push('DATA_QUALITY_BLOCKED');
 
-  const observedAtMs = parseTime(card.observedAt, 'observedAt');
-  const dataTimestampMs = parseTime(input.dataTimestamp, 'dataTimestamp');
-  const expiresAtMs = parseTime(card.expiresAt, 'expiresAt');
-  if (dataTimestampMs > observedAtMs) blockers.push('LOOKAHEAD_DATA_TIMESTAMP');
-  if (expiresAtMs <= observedAtMs) blockers.push('INVALID_SIGNAL_EXPIRY');
+  const observedAtMs = parseTimeOrNull(card.observedAt);
+  const dataTimestampMs = parseTimeOrNull(input.dataTimestamp);
+  const expiresAtMs = parseTimeOrNull(card.expiresAt);
+  if (observedAtMs == null) blockers.push('SIGNAL_OBSERVED_AT_REQUIRED');
+  if (dataTimestampMs == null) blockers.push('DATA_TIMESTAMP_REQUIRED');
+  if (expiresAtMs == null) blockers.push('SIGNAL_EXPIRY_REQUIRED');
+  if (observedAtMs != null && dataTimestampMs != null) {
+    if (dataTimestampMs > observedAtMs) blockers.push('LOOKAHEAD_DATA_TIMESTAMP');
+    else if (positiveInteger(input.dataMaxAgeMs) && observedAtMs - dataTimestampMs > input.dataMaxAgeMs) blockers.push('DATA_EVIDENCE_STALE');
+  }
+  if (observedAtMs != null && expiresAtMs != null && expiresAtMs <= observedAtMs) blockers.push('INVALID_SIGNAL_EXPIRY');
 
   const entry = card.price;
   const stop = card.pricePlan?.stopLoss;
@@ -276,21 +320,26 @@ export function prepareForwardRecommendationObservation(input: {
     dataTimestamp: input.dataTimestamp,
   });
 
-  const identity = Object.freeze({
+  const identity: ForwardObservationIdentity = Object.freeze({
     market,
     horizon,
     direction,
     timeframe: input.timeframe,
     strategyProfileVersion: input.strategyProfileVersion,
+    parameterHash: input.parameterHash,
+    researchCodeSha: input.researchCodeSha.toLowerCase(),
   });
   const observation: ForwardRecommendationObservation = Object.freeze({
     schemaVersion: 'forward-recommendation-observation-v1',
-    observationId: observationId(snapshot, input.timeframe),
+    observationId: observationId(snapshot, identity),
     source: FORWARD_OBSERVATION_SOURCE,
     status: 'PENDING',
     identity,
     signalGrade: card.signalGrade,
     expiresAt: card.expiresAt,
+    dataTimestamp: input.dataTimestamp,
+    dataMaxAgeMs: input.dataMaxAgeMs,
+    publicDataOnly: true,
     snapshot,
     outcome: null,
     settledAt: null,
@@ -321,13 +370,37 @@ function advanceResult(status: ForwardObservationAdvance['status'], observation:
   });
 }
 
+function assertObservationEnvelope(observation: ForwardRecommendationObservation): void {
+  if (observation.source !== FORWARD_OBSERVATION_SOURCE) throw new Error('FORWARD_OBSERVATION_SOURCE_MISMATCH');
+  if (observation.publicDataOnly !== true) throw new Error('FORWARD_OBSERVATION_PUBLIC_DATA_REQUIRED');
+  if (!immutableSha(observation.identity.researchCodeSha) || !nonEmpty(observation.identity.parameterHash)) {
+    throw new Error('FORWARD_OBSERVATION_LINEAGE_INVALID');
+  }
+  if (observation.executionAuthority !== 'NONE'
+    || observation.financialMutationAllowed !== false
+    || observation.liveOrderAllowed !== false
+    || observation.privateTradingApiAllowed !== false
+    || observation.orderSubmitted !== false
+    || observation.exchangeRequestSent !== false) {
+    throw new Error('FORWARD_OBSERVATION_SAFETY_ENVELOPE_INVALID');
+  }
+  const snapshot = observation.snapshot;
+  if (snapshot.market !== observation.identity.market
+    || snapshot.strategyHorizon !== observation.identity.horizon
+    || snapshot.direction !== observation.identity.direction
+    || snapshot.strategyProfileVersion !== observation.identity.strategyProfileVersion
+    || snapshot.timeframes[0] !== observation.identity.timeframe) {
+    throw new Error('FORWARD_OBSERVATION_SNAPSHOT_IDENTITY_MISMATCH');
+  }
+}
+
 export function advanceForwardRecommendationObservation(input: {
   observation: ForwardRecommendationObservation;
   bars: readonly SignalOutcomeBar[];
   evaluatedAt: string;
   evidenceCompleteThrough: string;
 }): ForwardObservationAdvance {
-  if (input.observation.source !== FORWARD_OBSERVATION_SOURCE) throw new Error('FORWARD_OBSERVATION_SOURCE_MISMATCH');
+  assertObservationEnvelope(input.observation);
   if (input.observation.status === 'SETTLED') return advanceResult('REPLAYED', input.observation);
 
   const evaluatedAtMs = parseTime(input.evaluatedAt, 'evaluatedAt');
@@ -364,7 +437,15 @@ export function advanceForwardRecommendationObservation(input: {
 }
 
 function identityKey(identity: ForwardObservationIdentity): string {
-  return [identity.market, identity.horizon, identity.direction, identity.timeframe, identity.strategyProfileVersion].join('|');
+  return [
+    identity.market,
+    identity.horizon,
+    identity.direction,
+    identity.timeframe,
+    identity.strategyProfileVersion,
+    identity.parameterHash,
+    identity.researchCodeSha,
+  ].join('|');
 }
 
 function mean(values: number[]): number | null {
@@ -381,6 +462,7 @@ export function buildForwardObservationProfitCalibration(
 ): ForwardObservationProfitCalibration {
   if (!Number.isInteger(minimumSampleSize) || minimumSampleSize < 1) throw new Error('minimumSampleSize must be a positive integer');
   const settled = observations.filter((row) => row.status === 'SETTLED' && row.outcome != null);
+  settled.forEach(assertObservationEnvelope);
   const identity = settled[0]?.identity ?? null;
   if (identity) {
     const expected = identityKey(identity);
@@ -414,10 +496,12 @@ export function buildForwardObservationProfitCalibration(
   if (status === 'READY') {
     const targetReturns = tp.map((row) => barrierReturn(row.snapshot, row.snapshot.target1!));
     const stopReturns = sl.map((row) => barrierReturn(row.snapshot, row.snapshot.stopLoss!));
-    const expireReturns = expire.map((row) => (row.outcome!.returnPercent as number) / 100);
+    const expireReturns = expire.map((row) => row.outcome?.returnPercent)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .map((value) => value / 100);
     const target = mean(targetReturns);
     const stop = mean(stopReturns);
-    const expiredReturn = mean(expireReturns);
+    const expiredReturn = expireReturns.length === expire.length ? mean(expireReturns) : null;
     if (target == null || stop == null || expiredReturn == null || !(target > 0) || !(stop < 0)) {
       status = 'INCOMPLETE_OUTCOME_CLASSES';
     } else {
