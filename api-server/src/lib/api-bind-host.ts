@@ -4,7 +4,7 @@ function enabled(environment: NodeJS.ProcessEnv, name: string) {
   return environment[name] === 'true';
 }
 
-function stagingReadonlyCredentialRuntime(environment: NodeJS.ProcessEnv) {
+export function isStagingReadonlyCredentialRuntime(environment: NodeJS.ProcessEnv = process.env) {
   const hasMasterKey = Boolean(environment.TRADING_CREDENTIAL_MASTER_KEY?.trim());
   const privateReadEnabled = enabled(environment, 'UPBIT_ACCOUNT_READ_ENABLED')
     || enabled(environment, 'BITGET_ACCOUNT_READ_ENABLED');
@@ -31,7 +31,7 @@ export function resolveApiBindHost(environment: NodeJS.ProcessEnv = process.env)
 
   // A staging runtime that temporarily receives real private-read credentials
   // fails closed to loopback unless an operator explicitly overrides the bind host.
-  if (stagingReadonlyCredentialRuntime(environment)) return '127.0.0.1';
+  if (isStagingReadonlyCredentialRuntime(environment)) return '127.0.0.1';
 
   return '0.0.0.0';
 }
