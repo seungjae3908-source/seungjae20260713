@@ -131,8 +131,9 @@ test('cash and spot show buy-entry wording while futures show long short and sel
   expect(grades).toBe(6);
   expect(texts.every((text) => !text.includes('WATCH'))).toBe(true);
 
-  await page.getByTestId('scanner-master-list').locator('button').first().click();
-  const desktopDetail = page.getByTestId('scanner-desktop-detail');
+  const masterList = page.getByTestId('scanner-master-list');
+  await masterList.locator('button').first().click();
+  const desktopDetail = masterList.getByTestId('signal-detail');
   const detail = desktopDetail.getByTestId('scanner-direction-badge');
   await expect(detail).toBeVisible();
   await expect(detail).toHaveText(directionLabels.BUY);
