@@ -1,0 +1,371 @@
+name: Staging Account Read-only Evidence
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: staging-account-readonly-evidence
+  cancel-in-progress: false
+
+jobs:
+  account-readonly-evidence:
+    if: >-
+      github.event.issue.number == 23 &&
+      github.event.comment.user.login == github.repository_owner &&
+      startsWith(github.event.comment.body, '/run-staging-account-readonly ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    env:
+      STAGING_ARTIFACT_DIR: ${{ github.workspace }}/staging-account-readonly-artifacts
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+      STANDARD_STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+      STAGING_TRADING_CREDENTIAL_MASTER_KEY: ${{ secrets.STAGING_TRADING_CREDENTIAL_MASTER_KEY }}
+      STAGING_UPBIT_ACCESS_KEY: ${{ secrets.STAGING_UPBIT_ACCESS_KEY }}
+      STAGING_UPBIT_SECRET_KEY: ${{ secrets.STAGING_UPBIT_SECRET_KEY }}
+      STAGING_BITGET_API_KEY: ${{ secrets.STAGING_BITGET_API_KEY }}
+      STAGING_BITGET_SECRET_KEY: ${{ secrets.STAGING_BITGET_SECRET_KEY }}
+      STAGING_BITGET_PASSPHRASE: ${{ secrets.STAGING_BITGET_PASSPHRASE }}
+      ACCOUNT_CANARY_PORT: '18086'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Parse exact owner command
+        id: target
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-staging-account-readonly ([0-9a-f]{40}) --providers=upbit,bitget$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /run-staging-account-readonly <40-char-sha> --providers=upbit,bitget');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
+          NODE
+
+      - name: Require exact current main and required secret names
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_SHA"
+          CURRENT_MAIN="$(git rev-parse origin/main^{commit})"
+          [[ "$CURRENT_MAIN" == "$TARGET_SHA" ]] || {
+            echo "Target is not current main. target=$TARGET_SHA current=$CURRENT_MAIN" >&2
+            exit 1
+          }
+          node <<'NODE'
+          const required = [
+            'STAGING_SSH_HOST',
+            'STAGING_SSH_USER',
+            'STAGING_SSH_PRIVATE_KEY',
+            'STANDARD_STAGING_BASE_URL',
+            'STAGING_SUPABASE_URL',
+            'STAGING_SUPABASE_ANON_KEY',
+            'STAGING_SUPABASE_SECRET_KEY',
+            'STAGING_TRADING_CREDENTIAL_MASTER_KEY',
+            'STAGING_UPBIT_ACCESS_KEY',
+            'STAGING_UPBIT_SECRET_KEY',
+            'STAGING_BITGET_API_KEY',
+            'STAGING_BITGET_SECRET_KEY',
+            'STAGING_BITGET_PASSPHRASE',
+          ];
+          const missing = required.filter((name) => !String(process.env[name] ?? '').trim());
+          if (missing.length) {
+            console.error(`Missing staging Environment secret(s): ${missing.join(', ')}`);
+            process.exit(1);
+          }
+          const key = Buffer.from(String(process.env.STAGING_TRADING_CREDENTIAL_MASTER_KEY).trim(), 'base64');
+          if (key.length !== 32) {
+            console.error('STAGING_TRADING_CREDENTIAL_MASTER_KEY must decode to exactly 32 bytes.');
+            process.exit(1);
+          }
+          NODE
+
+      - name: Install repository dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Configure isolated staging SSH
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$STAGING_SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$STAGING_SSH_PORT" -H "$STAGING_SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Require currently deployed standard Staging exact SHA
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          REMOTE_SHA="$(ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "cat /srv/seungjae-staging/.deploy/current-sha")"
+          [[ "$REMOTE_SHA" == "$TARGET_SHA" ]] || {
+            echo "Staging is not on target SHA. deployed=$REMOTE_SHA target=$TARGET_SHA" >&2
+            exit 1
+          }
+          curl --fail --silent --show-error --max-time 20 "$STANDARD_STAGING_BASE_URL/api/health" \
+            | TARGET_SHA="$TARGET_SHA" node -e '
+              let raw=""; process.stdin.on("data", d => raw += d); process.stdin.on("end", () => {
+                const value=JSON.parse(raw); const sha=String(value.deploySha ?? value.sha ?? value.commitSha ?? "");
+                if (value.ok !== true || value.identityMatch !== true || sha !== process.env.TARGET_SHA) process.exit(1);
+              });'
+
+      - name: Start bounded localhost-only account canary
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          REMOTE_SECRET_FILE: /tmp/seungjae-account-readonly-${{ github.run_id }}-${{ github.run_attempt }}.env
+          REMOTE_PID_FILE: /tmp/seungjae-account-readonly-${{ github.run_id }}-${{ github.run_attempt }}.pid
+          REMOTE_LOG_FILE: /tmp/seungjae-account-readonly-${{ github.run_id }}-${{ github.run_attempt }}.log
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          local_secret_file="$(mktemp)"
+          cleanup_local() { rm -f "$local_secret_file"; }
+          trap cleanup_local EXIT
+          printf 'TRADING_CREDENTIAL_MASTER_KEY=%q\n' "$STAGING_TRADING_CREDENTIAL_MASTER_KEY" > "$local_secret_file"
+          chmod 600 "$local_secret_file"
+          scp -q -i ~/.ssh/id_ed25519 -P "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$local_secret_file" "$STAGING_SSH_USER@$STAGING_SSH_HOST:$REMOTE_SECRET_FILE"
+
+          remote_command="$(printf 'TARGET_SHA=%q PORT=%q SECRET_FILE=%q PID_FILE=%q LOG_FILE=%q bash -s' \
+            "$TARGET_SHA" "$ACCOUNT_CANARY_PORT" "$REMOTE_SECRET_FILE" "$REMOTE_PID_FILE" "$REMOTE_LOG_FILE")"
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$remote_command" <<'REMOTE'
+          set -Eeuo pipefail
+          [[ "$(cat /srv/seungjae-staging/.deploy/current-sha)" == "$TARGET_SHA" ]] || exit 21
+          [[ -r /srv/seungjae-staging/api-server/.env.staging ]] || exit 22
+          [[ -r /srv/seungjae-staging/api-server/dist/index.mjs ]] || exit 23
+          if ss -lnt "sport = :$PORT" | grep -q LISTEN; then
+            echo "Account evidence canary port is already occupied." >&2
+            exit 24
+          fi
+          chmod 600 "$SECRET_FILE"
+          # shellcheck disable=SC1090
+          source "$SECRET_FILE"
+          rm -f "$SECRET_FILE"
+          cd /srv/seungjae-staging/api-server
+          nohup setsid timeout --signal=TERM --kill-after=5s 900s env \
+            PORT="$PORT" \
+            API_PORT="$PORT" \
+            NODE_ENV=production \
+            APP_ENV=staging \
+            DEPLOY_SHA="$TARGET_SHA" \
+            TRADING_CREDENTIAL_MASTER_KEY="$TRADING_CREDENTIAL_MASTER_KEY" \
+            TOSS_ACCOUNT_READ_ENABLED=false \
+            UPBIT_ACCOUNT_READ_ENABLED=true \
+            BITGET_ACCOUNT_READ_ENABLED=true \
+            LIVE_TRADING_ENABLED=false \
+            AUTO_TRADING_ENABLED=false \
+            TOSS_ORDER_ENABLED=false \
+            UPBIT_ORDER_ENABLED=false \
+            BITGET_ORDER_ENABLED=false \
+            TRANSFER_ENABLED=false \
+            WITHDRAWAL_ENABLED=false \
+            node --enable-source-maps --env-file=.env.staging ./dist/index.mjs \
+            >"$LOG_FILE" 2>&1 < /dev/null &
+          CANARY_PID=$!
+          printf '%s\n' "$CANARY_PID" > "$PID_FILE"
+          chmod 600 "$PID_FILE"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$PORT/api/health" > /tmp/account-canary-health.json 2>/dev/null; then
+              TARGET_SHA="$TARGET_SHA" node - <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync('/tmp/account-canary-health.json', 'utf8'));
+          const sha = String(value.deploySha ?? value.sha ?? value.commitSha ?? '');
+          if (value.ok !== true || value.identityMatch !== true || sha !== process.env.TARGET_SHA) process.exit(1);
+          NODE
+              rm -f /tmp/account-canary-health.json
+              exit 0
+            fi
+            sleep 1
+          done
+          rm -f /tmp/account-canary-health.json
+          echo 'Account evidence canary failed health startup.' >&2
+          exit 25
+          REMOTE
+
+      - name: Open localhost SSH tunnel to isolated account canary
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            -N -L "127.0.0.1:$ACCOUNT_CANARY_PORT:127.0.0.1:$ACCOUNT_CANARY_PORT" \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" &
+          echo $! > /tmp/staging-account-readonly-tunnel.pid
+          sleep 2
+          curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:$ACCOUNT_CANARY_PORT/api/health" \
+            | TARGET_SHA="$TARGET_SHA" node -e '
+              let raw=""; process.stdin.on("data", d => raw += d); process.stdin.on("end", () => {
+                const value=JSON.parse(raw); const sha=String(value.deploySha ?? value.sha ?? value.commitSha ?? "");
+                if (value.ok !== true || value.identityMatch !== true || sha !== process.env.TARGET_SHA) process.exit(1);
+              });'
+
+      - name: Run real Upbit and Bitget read-only account evidence
+        id: account_evidence
+        continue-on-error: true
+        env:
+          CI: 'true'
+          PHASE10_STAGING_E2E: 'true'
+          STAGING_ACCOUNT_READONLY_E2E: 'true'
+          STAGING_BASE_URL: http://127.0.0.1:18086
+          STAGING_TARGET_SHA: ${{ steps.target.outputs.sha }}
+          STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+          STAGING_UPBIT_ACCESS_KEY: ${{ secrets.STAGING_UPBIT_ACCESS_KEY }}
+          STAGING_UPBIT_SECRET_KEY: ${{ secrets.STAGING_UPBIT_SECRET_KEY }}
+          STAGING_BITGET_API_KEY: ${{ secrets.STAGING_BITGET_API_KEY }}
+          STAGING_BITGET_SECRET_KEY: ${{ secrets.STAGING_BITGET_SECRET_KEY }}
+          STAGING_BITGET_PASSPHRASE: ${{ secrets.STAGING_BITGET_PASSPHRASE }}
+        run: |
+          mkdir -p "$STAGING_ARTIFACT_DIR"
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts \
+            e2e/staging-account-readonly-runtime.spec.ts
+
+      - name: Sanitize and prove no account secret entered artifacts
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          if [[ -d "$STAGING_ARTIFACT_DIR" ]]; then
+            node api-server/scripts/sanitize-staging-playwright-artifacts.mjs "$STAGING_ARTIFACT_DIR"
+            node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const dir = process.env.STAGING_ARTIFACT_DIR;
+          const secretNames = [
+            'STAGING_TRADING_CREDENTIAL_MASTER_KEY',
+            'STAGING_UPBIT_ACCESS_KEY',
+            'STAGING_UPBIT_SECRET_KEY',
+            'STAGING_BITGET_API_KEY',
+            'STAGING_BITGET_SECRET_KEY',
+            'STAGING_BITGET_PASSPHRASE',
+          ];
+          const secrets = secretNames.map((name) => process.env[name]).filter(Boolean).map(String);
+          const files = [];
+          const walk = (root) => {
+            for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+              const file = path.join(root, entry.name);
+              if (entry.isDirectory()) walk(file); else files.push(file);
+            }
+          };
+          walk(dir);
+          for (const file of files) {
+            const body = fs.readFileSync(file);
+            for (const secret of secrets) {
+              if (body.includes(Buffer.from(secret))) {
+                throw new Error(`secret value detected in account evidence artifact: ${path.relative(dir, file)}`);
+              }
+            }
+          }
+          console.log(JSON.stringify({ artifact_files_scanned: files.length, secret_values_detected: 0 }));
+          NODE
+          fi
+
+      - name: Upload secret-free immutable account evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-account-readonly-${{ steps.target.outputs.sha }}
+          path: ${{ env.STAGING_ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop tunnel and bounded canary, then prove standard Staging unchanged
+        if: always()
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          REMOTE_SECRET_FILE: /tmp/seungjae-account-readonly-${{ github.run_id }}-${{ github.run_attempt }}.env
+          REMOTE_PID_FILE: /tmp/seungjae-account-readonly-${{ github.run_id }}-${{ github.run_attempt }}.pid
+          REMOTE_LOG_FILE: /tmp/seungjae-account-readonly-${{ github.run_id }}-${{ github.run_attempt }}.log
+        run: |
+          set -Eeuo pipefail
+          if [[ -s /tmp/staging-account-readonly-tunnel.pid ]]; then
+            kill "$(cat /tmp/staging-account-readonly-tunnel.pid)" >/dev/null 2>&1 || true
+            rm -f /tmp/staging-account-readonly-tunnel.pid
+          fi
+          remote_command="$(printf 'TARGET_SHA=%q SECRET_FILE=%q PID_FILE=%q LOG_FILE=%q bash -s' \
+            "$TARGET_SHA" "$REMOTE_SECRET_FILE" "$REMOTE_PID_FILE" "$REMOTE_LOG_FILE")"
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$remote_command" <<'REMOTE'
+          set -Eeuo pipefail
+          if [[ -s "$PID_FILE" ]]; then
+            PID="$(cat "$PID_FILE")"
+            kill -TERM -- "-$PID" >/dev/null 2>&1 || kill -TERM "$PID" >/dev/null 2>&1 || true
+          fi
+          rm -f "$PID_FILE" "$LOG_FILE" "$SECRET_FILE"
+          [[ "$(cat /srv/seungjae-staging/.deploy/current-sha)" == "$TARGET_SHA" ]] || exit 31
+          REMOTE
+          curl --fail --silent --show-error --max-time 20 "$STANDARD_STAGING_BASE_URL/api/health" \
+            | TARGET_SHA="$TARGET_SHA" node -e '
+              let raw=""; process.stdin.on("data", d => raw += d); process.stdin.on("end", () => {
+                const value=JSON.parse(raw); const sha=String(value.deploySha ?? value.sha ?? value.commitSha ?? "");
+                if (value.ok !== true || value.identityMatch !== true || sha !== process.env.TARGET_SHA) process.exit(1);
+              });'
+
+      - name: Enforce account evidence verdict
+        if: always()
+        env:
+          EVIDENCE_OUTCOME: ${{ steps.account_evidence.outcome }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$EVIDENCE_OUTCOME" == success ]] || {
+            echo "Account read-only runtime evidence failed: $EVIDENCE_OUTCOME" >&2
+            exit 1
+          }
+
+      - name: Write account evidence summary
+        if: success()
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          {
+            echo '## Staging Account Read-only Evidence'
+            echo
+            echo "- Exact current main: \`$TARGET_SHA\`"
+            echo '- Standard Staging mutated: `false`'
+            echo '- Production mutated: `false`'
+            echo '- Toss private read executed: `false`'
+            echo '- Upbit private operation type: `GET only`'
+            echo '- Bitget private operation type: `GET only`'
+            echo '- Order/cancel/amend/transfer/withdrawal requests: `0`'
+            echo '- Credentials returned or recorded in artifacts: `false`'
+            echo '- Ephemeral credential rows remaining: `0`'
+          } >> "$GITHUB_STEP_SUMMARY"
