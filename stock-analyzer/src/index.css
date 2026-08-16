@@ -407,4 +407,23 @@ input[type='search']::-webkit-search-results-decoration {
     padding-inline: 0.2rem;
     font-size: 0.65rem;
   }
+
+  /*
+   * 320px is too narrow for intentionally long deterministic risk/provenance
+   * tokens to share two columns without obscuring adjacent evidence. Keep every
+   * value visible: stack only the risk-panel two-column groups and allow hard
+   * token wrapping. 360px+ retains the denser two-column layout.
+   */
+  [data-testid='scanner-mobile-risk'] .grid.grid-cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-testid='scanner-mobile-risk'] p,
+  [data-testid='scanner-mobile-risk'] li,
+  [data-testid='scanner-mobile-risk'] span,
+  [data-testid='scanner-mobile-risk'] button {
+    min-width: 0;
+    overflow-wrap: anywhere !important;
+    word-break: break-all !important;
+  }
 }
