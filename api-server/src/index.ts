@@ -9,6 +9,7 @@ import { startUserTelegramDeliveryWorker } from './features/user-broker-telegram
 import { startPriceAlertMonitor } from './services/notification.service';
 import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
 import { startTelegramIntelligenceWorker } from './services/telegram-intelligence-worker.service';
+import { resolveApiBindHost } from './lib/api-bind-host';
 import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -21,6 +22,7 @@ const port = Number(
     process.env.API_PORT ??
     8080,
 );
+const bindHost = resolveApiBindHost();
 
 const deployMarkerPath = process.env.DEPLOY_MARKER_PATH?.trim()
   || path.resolve(__dirname, '../../.deploy/current-sha');
@@ -36,6 +38,7 @@ function healthPayload(route: '/health' | '/api/health') {
     deployMarkerSha: identity.deployMarkerSha,
     identityMatch: identity.identityMatch,
     identityStatus: identity.identityStatus,
+    bindHost,
     time: new Date().toISOString(),
   };
 }
@@ -207,10 +210,10 @@ app.use((req, res) => {
 
 app.listen(
   port,
-  '0.0.0.0',
+  bindHost,
   () => {
     console.log(
-      `[api-server] listening on 0.0.0.0:${port}`,
+      `[api-server] listening on ${bindHost}:${port}`,
     );
 
     console.log(
