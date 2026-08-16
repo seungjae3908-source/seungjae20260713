@@ -16,6 +16,7 @@ on:
     branches:
       - agent/paper-forward-schedule-activation-v1
       - agent/paper-forward-stale-disable-race-guard-v1
+      - fix/paper-forward-activation-post-approval-main-guard-v1
     paths:
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
@@ -107,6 +108,24 @@ jobs:
             market-prediction-lab/scripts/run-paper-forward-schedule.js \
             ops/install-paper-forward-schedule.sh \
             ops/disable-paper-forward-schedule.sh
+
+      - name: Verify Production approval race guards
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow=.github/workflows/paper-forward-schedule-activation.yml
+          grep -F 'Revalidate current main after Production environment approval' "$workflow" >/dev/null
+          grep -F 'Activation target became stale while awaiting Production approval' "$workflow" >/dev/null
+          grep -F 'Revalidate current main before schedule installation' "$workflow" >/dev/null
+          grep -F 'Activation target became stale during Production deployment; refusing schedule install' "$workflow" >/dev/null
+          test "$(grep -Fc 'main.data.commit.sha !== target' "$workflow")" -ge 3
+          post_approval_line="$(grep -nF 'Revalidate current main after Production environment approval' "$workflow" | head -1 | cut -d: -f1)"
+          deploy_line="$(grep -nF 'Deploy exact approved revision with canonical canary and rollback safeguards' "$workflow" | head -1 | cut -d: -f1)"
+          pre_install_line="$(grep -nF 'Revalidate current main before schedule installation' "$workflow" | head -1 | cut -d: -f1)"
+          install_line="$(grep -nF 'Install fail-closed Paper Forward schedule without immediate manual cycle' "$workflow" | head -1 | cut -d: -f1)"
+          test "$post_approval_line" -lt "$deploy_line"
+          test "$deploy_line" -lt "$pre_install_line"
+          test "$pre_install_line" -lt "$install_line"
 
       - name: Verify stale schedule emergency disable contract
         shell: bash
