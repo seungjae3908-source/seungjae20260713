@@ -1,0 +1,424 @@
+name: Paper Forward No-Deploy Schedule Activation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/paper-forward-schedule-no-deploy-activation.yml
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: paper-forward-no-deploy-schedule-activation
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify no application deployment authority exists
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow=.github/workflows/paper-forward-schedule-no-deploy-activation.yml
+          grep -F "startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')" "$workflow" >/dev/null
+          grep -F "productionAppDeployPerformed: false" "$workflow" >/dev/null
+          grep -F "LIVE_TRADING='false'" "$workflow" >/dev/null
+          grep -F "REAL_ORDER_ENABLED='false'" "$workflow" >/dev/null
+          grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$workflow" >/dev/null
+          ! grep -F 'deploy-production.sh' "$workflow" >/dev/null
+          ! grep -E 'pm2 (start|restart|reload|delete|stop)|systemctl .*caddy|caddy reload|supabase db|psql .*-(c|f)' "$workflow" >/dev/null
+
+  gate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${{ steps.command.outputs.sha }}
+      staging_run_id: ${{ steps.staging.outputs.run_id }}
+      postgres_run_id: ${{ steps.postgres.outputs.run_id }}
+    steps:
+      - name: Parse exact owner activation command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == "seungjae3908-source" ]]
+          [[ "$AUTHOR_ASSOCIATION" == "OWNER" ]]
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/activate-paper-forward-no-deploy ([0-9a-f]{40})$/.exec(body);
+          if (!match) process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
+          NODE
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Require exact current main and Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Activation target is stale: target=${target} main=${main.data.commit.sha}`);
+              return;
+            }
+            const required = new Set([
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ]);
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const evidence = [...required].map((contextName) => latest.get(contextName));
+            if (evidence.length !== 6 || evidence.some((status) => status?.state !== 'success')) {
+              core.setFailed('Exact current main does not have all six successful Required statuses.');
+              return;
+            }
+            const runIds = new Set(evidence.map((status) => /\/actions\/runs\/(\d+)/.exec(String(status.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Required statuses do not share one exact Application CI provenance run.');
+              return;
+            }
+            const runId = Number([...runIds][0]);
+            const run = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: runId });
+            if (run.data.head_sha !== target || run.data.status !== 'completed' || run.data.conclusion !== 'success') {
+              core.setFailed('Required status provenance is not an exact successful target run.');
+            }
+
+      - name: Locate successful exact-SHA PostgreSQL Auth evidence
+        id: postgres
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, head_sha: target, branch: 'main', event: 'issue_comment', status: 'completed', per_page: 100,
+            });
+            for (const run of runs) {
+              if (run.name !== 'Staging PostgreSQL Auth Gate' || run.path !== '.github/workflows/staging-postgres-auth-gate.yml' || run.conclusion !== 'success') continue;
+              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({ owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100 });
+              const expected = `staging-postgres-auth-${target}`;
+              const artifact = (artifacts.data.artifacts ?? []).find((item) => item.name === expected && item.expired !== true && item.workflow_run?.head_sha === target);
+              if (artifact) {
+                core.setOutput('run_id', String(run.id));
+                return;
+              }
+            }
+            core.setFailed(`No successful exact-SHA PostgreSQL Auth evidence exists for ${target}.`);
+
+      - name: Locate successful exact-SHA Staging Readiness evidence
+        id: staging
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const name = `staging-verdict-${target}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, name, per_page: 100,
+            });
+            for (const artifact of artifacts) {
+              if (artifact.expired || artifact.workflow_run?.head_sha !== target) continue;
+              const response = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: artifact.workflow_run.id });
+              const run = response.data;
+              if (run.event === 'workflow_dispatch' && run.head_branch === 'main' && run.head_sha === target && run.path === '.github/workflows/staging-readiness.yml' && run.status === 'completed' && run.conclusion === 'success') {
+                core.setOutput('run_id', String(run.id));
+                return;
+              }
+            }
+            core.setFailed(`No successful exact-SHA Staging Readiness verdict exists for ${target}.`);
+
+      - name: Download and verify release-ready Staging verdict
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-verdict-${{ steps.command.outputs.sha }}
+          path: staging-verdict
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.staging.outputs.run_id }}
+
+      - name: Require exact release-ready Staging verdict
+        run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
+
+  activate:
+    if: github.event_name == 'issue_comment'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
+      EVIDENCE_DIR: ${{ github.workspace }}/paper-forward-no-deploy-evidence
+    steps:
+      - name: Revalidate current main after Production environment approval
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== process.env.TARGET_SHA) core.setFailed(`Activation target became stale: ${process.env.TARGET_SHA} != ${main.data.commit.sha}`);
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate SSH secrets and configure read/write Paper-only access
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh "$EVIDENCE_DIR"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Capture immutable Production application identity before Paper activation
+        id: app_before
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          app_sha="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha")"
+          [[ "$app_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf 'sha=%s\n' "$app_sha" >> "$GITHUB_OUTPUT"
+          printf '{"productionAppShaBefore":"%s"}\n' "$app_sha" > "$EVIDENCE_DIR/application-before.json"
+
+      - name: Install isolated exact-SHA Paper runtime and cron without application deployment
+        id: install
+        env:
+          PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "TARGET_SHA='$TARGET_SHA' REPOSITORY_URL='$REPOSITORY_URL' PRODUCTION_APP_SHA='$PRODUCTION_APP_SHA' bash -s" <<'REMOTE' > "$EVIDENCE_DIR/activation.json"
+          set -Eeuo pipefail
+          STATE_ROOT=/opt/stock-app-data/paper-forward-v1
+          SOURCE_DIR="$(mktemp -d /tmp/paper-forward-source.XXXXXX)"
+          cleanup() { rm -rf -- "$SOURCE_DIR"; }
+          trap cleanup EXIT
+          [[ "$(tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha)" == "$PRODUCTION_APP_SHA" ]]
+          git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$SOURCE_DIR"
+          git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
+          [[ "$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD^{commit})" == "$TARGET_SHA" ]]
+          git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
+          mkdir -p "$SOURCE_DIR/.deploy"
+          printf '%s\n' "$TARGET_SHA" > "$SOURCE_DIR/.deploy/current-sha"
+          LIVE_DIR="$SOURCE_DIR" PAPER_FORWARD_STATE_ROOT="$STATE_ROOT" \
+            "$SOURCE_DIR/ops/install-paper-forward-schedule.sh" "$TARGET_SHA" >/dev/null
+          PRODUCTION_APP_SHA="$PRODUCTION_APP_SHA" TARGET_SHA="$TARGET_SHA" node - "$STATE_ROOT/activation.json" <<'NODE'
+          const fs = require('node:fs');
+          const path = process.argv[2];
+          const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const paperRuntimeSourceSha = value.deployedSha;
+          delete value.deployedSha;
+          value.schemaVersion = 'paper-forward-schedule-no-deploy-activation-v1';
+          value.sourceMode = 'ISOLATED_GIT_EXACT_SHA';
+          value.paperRuntimeSourceSha = paperRuntimeSourceSha;
+          value.productionAppShaBefore = process.env.PRODUCTION_APP_SHA;
+          value.productionAppDeployPerformed = false;
+          value.productionAppMutationAllowed = false;
+          if (paperRuntimeSourceSha !== process.env.TARGET_SHA) process.exit(1);
+          const temp = `${path}.tmp-${process.pid}`;
+          fs.writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+          fs.renameSync(temp, path);
+          process.stdout.write(`${JSON.stringify(value)}\n`);
+          NODE
+          [[ "$(tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha)" == "$PRODUCTION_APP_SHA" ]]
+          REMOTE
+          node - "$EVIDENCE_DIR/activation.json" <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (value.status !== 'ACTIVE_WAITING_FOR_NATURAL_CYCLE'
+            || value.targetSha !== process.env.TARGET_SHA
+            || value.paperRuntimeSourceSha !== process.env.TARGET_SHA
+            || value.productionAppDeployPerformed !== false
+            || value.scheduleActive !== true
+            || value.liveTrading !== false
+            || value.privateAccountAccess !== false
+            || value.orderAuthority !== false) process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `activation_at_ms=${value.activationAtMs}\n`);
+          NODE
+
+      - name: Verify Production application identity remained unchanged
+        env:
+          PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          app_sha_after="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha")"
+          [[ "$app_sha_after" == "$PRODUCTION_APP_SHA" ]]
+          printf '{"productionAppShaBefore":"%s","productionAppShaAfter":"%s","productionAppDeployPerformed":false}\n' "$PRODUCTION_APP_SHA" "$app_sha_after" > "$EVIDENCE_DIR/application-after.json"
+
+      - name: Wait for and verify first natural Paper-only cron cycle
+        env:
+          ACTIVATION_AT_MS: ${{ steps.install.outputs.activation_at_ms }}
+          PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          evidence="$EVIDENCE_DIR/natural-cycle.json"
+          for attempt in $(seq 1 50); do
+            set +e
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" \
+              "TARGET_SHA='$TARGET_SHA' ACTIVATION_AT_MS='$ACTIVATION_AT_MS' PRODUCTION_APP_SHA='$PRODUCTION_APP_SHA' bash -s" > "$evidence.tmp" <<'REMOTE'
+          set -Eeuo pipefail
+          ROOT=/opt/stock-app-data/paper-forward-v1
+          INVOCATIONS="$ROOT/runtime-state/status/invocations.jsonl"
+          STATE="$ROOT/runtime-state/state/recurring-paper-loop.json"
+          STATUS="$ROOT/runtime-state/status/runtime-status.json"
+          ACTIVATION="$ROOT/activation.json"
+          [[ -r "$INVOCATIONS" && -r "$STATE" && -r "$STATUS" && -r "$ACTIVATION" ]]
+          [[ "$(tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha)" == "$PRODUCTION_APP_SHA" ]]
+          node - "$INVOCATIONS" "$STATE" "$STATUS" "$ACTIVATION" "$ACTIVATION_AT_MS" "$TARGET_SHA" "$PRODUCTION_APP_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const cp = require('node:child_process');
+          const [invocationsPath, statePath, statusPath, activationPath, activationAtRaw, targetSha, productionAppSha] = process.argv.slice(2);
+          const lines = fs.readFileSync(invocationsPath, 'utf8').trim().split(/\r?\n/).filter(Boolean);
+          const invocation = lines.map((line) => JSON.parse(line)).filter((row) => row.triggerSource === 'cron' && Number(row.invokedAtMs) >= Number(activationAtRaw)).at(-1);
+          if (!invocation) process.exit(75);
+          const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+          const status = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
+          const activation = JSON.parse(fs.readFileSync(activationPath, 'utf8'));
+          const cronText = cp.execFileSync('crontab', ['-l'], { encoding: 'utf8' });
+          const cronMatches = cronText.split(/\r?\n/).filter((line) => line.includes('# stock-app-paper-forward-v1')).length;
+          const checks = {
+            exactPaperRuntime: activation.paperRuntimeSourceSha === targetSha,
+            noAppDeploy: activation.productionAppDeployPerformed === false && activation.productionAppShaBefore === productionAppSha,
+            naturalCron: invocation.naturalScheduleInvocation === true,
+            completed: invocation.status === 'COMPLETED',
+            oneMutation: invocation.mutationCount === 1,
+            accumulating: invocation.publicForwardEvidenceAccumulating === true,
+            fourReadyProviders: Array.isArray(invocation.providerLanes) && invocation.providerLanes.length === 4 && invocation.providerLanes.every((lane) => lane.status === 'READY'),
+            scheduleActive: status.scheduleActive === true,
+            stateCyclePersisted: Array.isArray(state.cycles) && state.cycles.length >= 1,
+            noPositions: Array.isArray(state.positions) && state.positions.length === 0,
+            noSettlements: Array.isArray(state.settlements) && state.settlements.length === 0,
+            noPrivate: invocation.privateRequestCount === 0,
+            noFinancialMutation: invocation.financialMutationCount === 0,
+            noOrders: invocation.orderCount === 0,
+            liveOff: invocation.liveTrading === false && invocation.orderAuthority === false,
+            oneCronEntry: cronMatches === 1,
+            disableSentinelAbsent: !fs.existsSync('/opt/stock-app-data/paper-forward-v1/DISABLED'),
+          };
+          const failed = Object.entries(checks).filter(([, value]) => value !== true).map(([key]) => key);
+          if (failed.length) process.exit(77);
+          process.stdout.write(`${JSON.stringify({
+            schemaVersion: 'paper-forward-natural-cycle-no-deploy-evidence-v1',
+            status: 'passed', targetSha, productionAppSha, checks,
+            invocation: { cycleId: invocation.cycleId, invokedAtMs: invocation.invokedAtMs, completedAtMs: invocation.completedAtMs, status: invocation.status, mutationCount: invocation.mutationCount, providerLanes: invocation.providerLanes },
+            state: { cycleCount: state.cycles.length, positionCount: state.positions.length, settlementCount: state.settlements.length },
+            privateRequestCount: 0, financialMutationCount: 0, orderCount: 0, liveTrading: false,
+          }, null, 2)}\n`);
+          NODE
+          REMOTE
+            status=$?
+            set -e
+            if [[ "$status" == 0 ]]; then
+              mv "$evidence.tmp" "$evidence"
+              exit 0
+            fi
+            rm -f "$evidence.tmp"
+            if [[ "$status" != 75 ]]; then exit "$status"; fi
+            sleep 20
+          done
+          echo 'No natural cron cycle observed within bounded window.' >&2
+          exit 78
+
+      - name: Revalidate current main after natural cycle
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== process.env.TARGET_SHA) core.setFailed(`Schedule target became stale after activation: ${process.env.TARGET_SHA} != ${main.data.commit.sha}`);
+
+      - name: Disable schedule automatically on any activation failure
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" 'bash -s' < ops/disable-paper-forward-schedule.sh > "$EVIDENCE_DIR/automatic-disable.json" 2>&1
+          exit 0
+
+      - name: Upload sanitized activation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-forward-no-deploy-${{ env.TARGET_SHA }}
+          path: paper-forward-no-deploy-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report successful Paper-only activation
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: `[PAPER_FORWARD_NO_DEPLOY_ACTIVATED]\nTARGET_SHA=${process.env.TARGET_SHA}\nPRODUCTION_APP_SHA_UNCHANGED=${process.env.PRODUCTION_APP_SHA}\nFIRST_NATURAL_CRON_VERIFIED=true\nLIVE_TRADING=false\nPRIVATE_TRADING_API_ALLOWED=false\nREAL_ORDER_COUNT=0\nFINANCIAL_MUTATION_COUNT=0`,
+            });
