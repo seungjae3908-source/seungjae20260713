@@ -186,7 +186,7 @@ for (const [width, height] of [[320, 760], [360, 800], [390, 844], [412, 915], [
     await installMocks(page);
     await page.setViewportSize({ width, height });
     await page.goto('/__phase11-technical-workspace-e2e');
-    await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'AI 검색기', level: 1 })).toBeVisible();
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 

@@ -45,11 +45,7 @@ async function mockPublicApi(page: Page) {
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/trade-automation/status') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(safeTradeAutomationStatus),
-      });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(safeTradeAutomationStatus) });
       return;
     }
     if (url.pathname.includes('/market/scan')) {
@@ -120,8 +116,8 @@ test('market price charts use the canonical AI Chart surface instead of legacy c
   expect(canonicalChartSource).toContain('AI Chart 2.0');
 });
 
-test('rich stock analysis preserves legacy information tabs but bridges its chart tab to AI Chart 2.0', async () => {
-  expect(richDetailSource).toContain("import LegacyDetailPage from '@/pages/detail-legacy'");
+test('rich stock analysis preserves legacy information tabs but lazy-loads AI Chart 2.0', async () => {
+  expect(richDetailSource).toContain("lazy(() => import('@/pages/detail-legacy'))");
   expect(richDetailSource).toContain("button.textContent?.trim() !== '차트'");
   expect(richDetailSource).toContain('<AiChartPage embedded />');
   expect(richDetailSource).toContain('canonical-rich-detail-chart');
@@ -129,10 +125,11 @@ test('rich stock analysis preserves legacy information tabs but bridges its char
   expect(richDetailSource).not.toContain("from 'lightweight-charts'");
 });
 
-test('technical workspace removes the legacy scanner chart and exposes dedicated mobile workspaces', async () => {
-  expect(technicalWorkspaceSource).toContain("type MobileWorkspace = 'signal' | 'chart' | 'trade'");
+test('technical workspace exposes four dedicated lazy workspaces and no legacy scanner chart', async () => {
+  expect(technicalWorkspaceSource).toContain("type Workspace = 'signal' | 'chart' | 'backtest' | 'trade'");
   expect(technicalWorkspaceSource).toContain('ResponsiveTabs');
-  expect(technicalWorkspaceSource).toContain('<AiChartPage embedded />');
+  expect(technicalWorkspaceSource).toContain("lazy(() => import('@/pages/ai-chart'))");
+  expect(technicalWorkspaceSource).toContain("lazy(() => import('@/pages/signal-scanner'))");
   expect(technicalWorkspaceSource).not.toContain("@/pages/scanner");
   expect(technicalWorkspaceSource).not.toContain('<ScannerPage');
 });
@@ -142,26 +139,29 @@ for (const viewport of [
   { width: 390, height: 844 },
   { width: 430, height: 932 },
 ] as const) {
-  test(`mobile technical tabs fit ${viewport.width}px and open the canonical AI Chart`, async ({ page }) => {
+  test(`mobile technical tabs fit ${viewport.width}px and open every canonical workspace`, async ({ page }) => {
     await mockPublicApi(page);
     await page.setViewportSize(viewport);
     await page.goto('/__phase11-technical-workspace-e2e');
 
     const tabs = page.getByTestId('technical-mobile-tabs');
     await expect(tabs).toBeVisible();
-    await expect(tabs.getByRole('tab')).toHaveCount(3);
+    await expect(tabs.getByRole('tab')).toHaveCount(4);
     const tabHeights = await tabs.getByRole('tab').evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().height));
     expect(tabHeights.every((height) => height >= 44)).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
 
-    await tabs.getByRole('tab', { name: 'AI 차트' }).click();
-    await expect(tabs.getByRole('tab', { name: 'AI 차트' })).toHaveAttribute('aria-selected', 'true');
+    const chartTab = tabs.getByRole('tab', { name: 'AI 차트 분석기' });
+    await chartTab.click();
+    await expect(chartTab).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: 'AI 차트 생중계 · AI 차트 2.0' })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+
+    await tabs.getByRole('tab', { name: '백테스트' }).click();
+    await expect(page.getByTestId('backtest-form')).toBeVisible();
 
     await tabs.getByRole('tab', { name: '자동매매' }).click();
     await expect(tabs.getByRole('tab', { name: '자동매매' })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('heading', { name: '승인형 주문' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '현재 주문 안전 상태' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   });
 }
