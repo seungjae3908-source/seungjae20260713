@@ -102,6 +102,9 @@ jobs:
           grep -F "PRIVATE_TRADING_API_ALLOWED='false'" ops/install-paper-forward-schedule.sh >/dev/null
           grep -F "REAL_ORDER_ENABLED='false'" ops/install-paper-forward-schedule.sh >/dev/null
           grep -F '*/15 * * * *' ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F 'paper-forward-identity-clean-cutover-v1' ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F 'predecessorStatePreserved: true' ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F 'predecessorPerformanceMixed: false' ops/install-paper-forward-schedule.sh >/dev/null
           grep -F 'canonicalCycleIntervalMs: FOUR_HOURS_MS' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
           grep -F 'financialMutationAdaptersEnabled: false' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
           ! grep -R --line-number -E 'stock-analyzer/|LIVE_TRADING=.?(true|1)|PRIVATE_TRADING_API_ALLOWED=.?(true|1)|REAL_ORDER_ENABLED=.?(true|1)' \
@@ -127,6 +130,11 @@ jobs:
           test "$post_approval_line" -lt "$deploy_line"
           test "$deploy_line" -lt "$pre_install_line"
           test "$pre_install_line" -lt "$install_line"
+          grep -F 'Collect sanitized cron failure diagnostics before disable' "$workflow" >/dev/null
+          grep -F 'paper-forward-sanitized-cron-failure-v1' "$workflow" >/dev/null
+          diagnostics_line="$(grep -nF 'Collect sanitized cron failure diagnostics before disable' "$workflow" | head -1 | cut -d: -f1)"
+          disable_line="$(grep -nF 'Disable schedule automatically if activation validation fails' "$workflow" | head -1 | cut -d: -f1)"
+          test "$diagnostics_line" -lt "$disable_line"
 
       - name: Verify stale schedule emergency disable contract
         shell: bash
