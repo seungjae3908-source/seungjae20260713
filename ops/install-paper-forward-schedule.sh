@@ -15,6 +15,8 @@ CURRENT_LINK="$STATE_ROOT/current"
 BIN_DIR="$STATE_ROOT/bin"
 LOG_DIR="$STATE_ROOT/logs"
 BACKUP_DIR="$STATE_ROOT/crontab-backups"
+IDENTITY_ARCHIVE_ROOT="$STATE_ROOT/identity-archives"
+IDENTITY_CUTOVER_ROOT="$STATE_ROOT/identity-cutovers"
 WRAPPER="$BIN_DIR/run-paper-forward-schedule"
 CRON_LOCK="$STATE_ROOT/cron.lock"
 TAG="# stock-app-paper-forward-v1"
@@ -68,8 +70,53 @@ fi
 
 NODE_BIN="$(command -v node)"
 FLOCK_BIN="$(command -v flock)"
-mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$RUNTIME_STATE_ROOT"
-chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$RUNTIME_STATE_ROOT"
+mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT"
+chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT"
+
+IDENTITY_CUTOVER="false"
+ARCHIVED_RESEARCH_SHA=""
+STATE_FILE="$RUNTIME_STATE_ROOT/state/recurring-paper-loop.json"
+if [[ -r "$STATE_FILE" ]]; then
+  EXISTING_RESEARCH_SHA="$("$NODE_BIN" - "$STATE_FILE" <<'NODE'
+const fs = require('node:fs');
+const state = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const sha = String(state?.identity?.researchCodeSha ?? '').trim().toLowerCase();
+if (!/^[0-9a-f]{40}$/.test(sha)) process.exit(1);
+process.stdout.write(sha);
+NODE
+)" || fail "existing Paper Forward state identity is invalid; refusing cutover" 11
+  if [[ "$EXISTING_RESEARCH_SHA" != "$TARGET_SHA" ]]; then
+    EXISTING_MANAGED_CRON_COUNT="$(crontab -l 2>/dev/null | grep -Fc "$TAG" || true)"
+    [[ "$EXISTING_MANAGED_CRON_COUNT" == 0 ]] || fail "identity cutover requires the prior schedule to be disabled" 12
+    CUTOVER_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+    ARCHIVE_PATH="$IDENTITY_ARCHIVE_ROOT/${EXISTING_RESEARCH_SHA}-to-${TARGET_SHA}-$CUTOVER_STAMP"
+    [[ ! -e "$ARCHIVE_PATH" ]] || fail "identity archive path already exists" 13
+    mv "$RUNTIME_STATE_ROOT" "$ARCHIVE_PATH"
+    mkdir -p "$RUNTIME_STATE_ROOT"
+    chmod 700 "$RUNTIME_STATE_ROOT"
+    "$NODE_BIN" - "$IDENTITY_CUTOVER_ROOT/$TARGET_SHA.json" "$EXISTING_RESEARCH_SHA" "$TARGET_SHA" "$ARCHIVE_PATH" <<'NODE'
+const fs = require('node:fs');
+const [path, archivedResearchSha, targetResearchSha, archivePath] = process.argv.slice(2);
+const value = {
+  schemaVersion: 'paper-forward-identity-clean-cutover-v1',
+  archivedResearchSha,
+  targetResearchSha,
+  archivePath,
+  predecessorStatePreserved: true,
+  predecessorPerformanceMixed: false,
+  newIdentityStartsFromZero: true,
+  privateRequestCount: 0,
+  financialMutationCount: 0,
+  liveTrading: false,
+};
+const temporary = `${path}.tmp-${process.pid}`;
+fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+fs.renameSync(temporary, path);
+NODE
+    IDENTITY_CUTOVER="true"
+    ARCHIVED_RESEARCH_SHA="$EXISTING_RESEARCH_SHA"
+  fi
+fi
 
 TEMP_RELEASE="$RELEASE_ROOT/.tmp-$TARGET_SHA-$$"
 rm -rf -- "$TEMP_RELEASE"
@@ -154,9 +201,9 @@ MATCH_COUNT="$(crontab -l | grep -Fxc "$CRON_LINE" || true)"
 
 RUNTIME_DIGEST="$(find "$RUNTIME_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
 CRON_HASH="$(printf '%s' "$CRON_LINE" | sha256sum | awk '{print $1}')"
-"$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" <<'NODE'
+"$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" <<'NODE'
 const fs = require('node:fs');
-const [path, targetSha, deployedSha, activationAtMs, runtimeDigest, cronHash, backupPath] = process.argv.slice(2);
+const [path, targetSha, deployedSha, activationAtMs, runtimeDigest, cronHash, backupPath, identityCutoverRaw, archivedResearchShaRaw] = process.argv.slice(2);
 const value = {
   schemaVersion: 'paper-forward-schedule-activation-v1',
   status: 'ACTIVE_WAITING_FOR_NATURAL_CYCLE',
@@ -169,6 +216,10 @@ const value = {
   runtimeDigest,
   cronHash,
   crontabBackupPath: backupPath,
+  identityCutover: identityCutoverRaw === 'true',
+  archivedResearchSha: archivedResearchShaRaw || null,
+  predecessorStatePreserved: true,
+  predecessorPerformanceMixed: false,
   scheduleActive: true,
   publicDataOnly: true,
   liveTrading: false,
@@ -182,5 +233,5 @@ NODE
 
 CRONTAB_MUTATED=0
 trap - EXIT
-printf '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE","targetSha":"%s","activationAtMs":%s,"scheduleActive":true,"pollCadence":"EVERY_15_MINUTES","canonicalCycleIntervalMs":%s,"privateRequestCount":0,"financialMutationCount":0,"liveTrading":false}\n' \
-  "$TARGET_SHA" "$ACTIVATION_AT_MS" "$CANONICAL_CYCLE_MS"
+printf '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE","targetSha":"%s","activationAtMs":%s,"scheduleActive":true,"identityCutover":%s,"archivedResearchSha":"%s","predecessorStatePreserved":true,"predecessorPerformanceMixed":false,"pollCadence":"EVERY_15_MINUTES","canonicalCycleIntervalMs":%s,"privateRequestCount":0,"financialMutationCount":0,"liveTrading":false}\n' \
+  "$TARGET_SHA" "$ACTIVATION_AT_MS" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$CANONICAL_CYCLE_MS"
