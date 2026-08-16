@@ -90,25 +90,35 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Revalidate current main after Production environment approval
+      - name: Revalidate stale target ancestry after Production environment approval
         uses: actions/github-script@v7
         env:
-          EXPECTED_MAIN_SHA: ${{ env.CURRENT_MAIN_SHA }}
           STALE_TARGET_SHA: ${{ env.TARGET_SHA }}
         with:
           script: |
+            const staleTarget = process.env.STALE_TARGET_SHA;
             const main = await github.rest.repos.getBranch({
               owner: context.repo.owner,
               repo: context.repo.repo,
               branch: 'main',
             });
-            if (main.data.commit.sha !== process.env.EXPECTED_MAIN_SHA) {
-              core.setFailed(`Current main moved again before emergency disable: expected=${process.env.EXPECTED_MAIN_SHA} actual=${main.data.commit.sha}.`);
+            const currentMain = main.data.commit.sha;
+            if (currentMain === staleTarget) {
+              core.setFailed('Stale target unexpectedly became current main; refusing emergency path.');
               return;
             }
-            if (main.data.commit.sha === process.env.STALE_TARGET_SHA) {
-              core.setFailed('Stale target unexpectedly became current main; refusing emergency path.');
+            const comparison = await github.rest.repos.compareCommitsWithBasehead({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              basehead: `${staleTarget}...${currentMain}`,
+            });
+            if (comparison.data.status !== 'ahead'
+              || comparison.data.behind_by !== 0
+              || comparison.data.ahead_by < 1) {
+              core.setFailed(`Refusing emergency disable because stale target is not an ancestor of current main after Production approval: target=${staleTarget} main=${currentMain}.`);
+              return;
             }
+            core.info(`Post-approval stale ancestry guard accepted target=${staleTarget} currentMain=${currentMain}.`);
 
       - name: Validate Production SSH secrets
         shell: bash
