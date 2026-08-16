@@ -9,6 +9,8 @@ import {
 } from './forward-recommendation-observer.service';
 
 const T0 = Date.parse('2026-08-16T00:00:00.000Z');
+const RESEARCH_SHA = 'a'.repeat(40);
+const PARAMETER_HASH = 'scanner-params-v1';
 const iso = (offsetMs: number) => new Date(T0 + offsetMs).toISOString();
 
 function card(overrides: Partial<ScannerSignalCard> = {}): ScannerSignalCard {
@@ -64,13 +66,28 @@ function card(overrides: Partial<ScannerSignalCard> = {}): ScannerSignalCard {
   };
 }
 
-function prepared(id = 'forward-observation-1', profile = 'scanner-swing-v1') {
-  const result = prepareForwardRecommendationObservation({
-    card: card({ signalId: id }),
+function prepareInput(
+  selectedCard: ScannerSignalCard,
+  overrides: Partial<Parameters<typeof prepareForwardRecommendationObservation>[0]> = {},
+): Parameters<typeof prepareForwardRecommendationObservation>[0] {
+  return {
+    card: selectedCard,
     timeframe: '4H',
-    strategyProfileVersion: profile,
+    strategyProfileVersion: 'scanner-swing-v1',
+    parameterHash: PARAMETER_HASH,
+    researchCodeSha: RESEARCH_SHA,
     dataTimestamp: iso(0),
-  });
+    dataMaxAgeMs: 60_000,
+    publicDataOnly: true,
+    ...overrides,
+  };
+}
+
+function prepared(
+  id = 'forward-observation-1',
+  identityOverrides: Partial<Parameters<typeof prepareForwardRecommendationObservation>[0]> = {},
+): ForwardRecommendationObservation {
+  const result = prepareForwardRecommendationObservation(prepareInput(card({ signalId: id }), identityOverrides));
   assert.equal(result.status, 'OBSERVATION_READY');
   assert.ok(result.observation);
   return result.observation;
@@ -80,8 +97,12 @@ function barAt(hours: number, high: number, low: number, close: number) {
   return { timestamp: iso(hours * 60 * 60 * 1000), high, low, close };
 }
 
-function settle(kind: 'WIN' | 'LOSS' | 'EXPIRED', id: string, profile = 'scanner-swing-v1'): ForwardRecommendationObservation {
-  const observation = prepared(id, profile);
+function settle(
+  kind: 'WIN' | 'LOSS' | 'EXPIRED',
+  id: string,
+  identityOverrides: Partial<Parameters<typeof prepareForwardRecommendationObservation>[0]> = {},
+): ForwardRecommendationObservation {
+  const observation = prepared(id, identityOverrides);
   const input = kind === 'WIN'
     ? { bars: [barAt(1, 106, 99, 105)], evaluatedAt: iso(60 * 60 * 1000), evidenceCompleteThrough: iso(60 * 60 * 1000) }
     : kind === 'LOSS'
@@ -93,30 +114,51 @@ function settle(kind: 'WIN' | 'LOSS' | 'EXPIRED', id: string, profile = 'scanner
   return advanced.observation;
 }
 
-test('only active S/A trusted strong signals become non-financial forward observations', () => {
-  const ready = prepareForwardRecommendationObservation({
-    card: card(), timeframe: '4H', strategyProfileVersion: 'scanner-swing-v1', dataTimestamp: iso(0),
-  });
+test('only active S/A trusted strong public signals become non-financial forward observations', () => {
+  const ready = prepareForwardRecommendationObservation(prepareInput(card()));
   assert.equal(ready.status, 'OBSERVATION_READY');
   assert.equal(ready.observation?.source, 'LIVE_RECOMMENDATION');
   assert.equal(ready.observation?.status, 'PENDING');
+  assert.equal(ready.observation?.publicDataOnly, true);
+  assert.equal(ready.observation?.identity.parameterHash, PARAMETER_HASH);
+  assert.equal(ready.observation?.identity.researchCodeSha, RESEARCH_SHA);
   assert.equal(ready.observation?.financialMutationAllowed, false);
   assert.equal(ready.observation?.liveOrderAllowed, false);
   assert.equal(ready.observation?.privateTradingApiAllowed, false);
   assert.equal(ready.observation?.orderSubmitted, false);
   assert.equal(ready.observation?.snapshot.executionAuthority, 'NONE');
 
-  const watch = prepareForwardRecommendationObservation({
-    card: card({ signalGrade: 'B' }), timeframe: '4H', strategyProfileVersion: 'scanner-swing-v1', dataTimestamp: iso(0),
-  });
+  const watch = prepareForwardRecommendationObservation(prepareInput(card({ signalGrade: 'B' })));
   assert.equal(watch.status, 'NO_TRADE');
   assert.equal(watch.observation, null);
 
-  const untrusted = prepareForwardRecommendationObservation({
-    card: card({ dataState: 'untrusted' }), timeframe: '4H', strategyProfileVersion: 'scanner-swing-v1', dataTimestamp: iso(0),
-  });
+  const untrusted = prepareForwardRecommendationObservation(prepareInput(card({ dataState: 'untrusted' })));
   assert.equal(untrusted.status, 'BLOCKED');
   assert.ok(untrusted.blockers.includes('DATA_STATE_NOT_COMPLETE'));
+});
+
+test('private authority, stale data and incomplete immutable lineage fail closed before observation creation', () => {
+  const privateData = prepareForwardRecommendationObservation(prepareInput(card(), { publicDataOnly: false }));
+  assert.equal(privateData.status, 'BLOCKED');
+  assert.ok(privateData.blockers.includes('PUBLIC_DATA_AUTHORITY_REQUIRED'));
+
+  const stale = prepareForwardRecommendationObservation(prepareInput(card({
+    observedAt: iso(2 * 60 * 1000),
+    expiresAt: iso(4 * 60 * 60 * 1000),
+  }), {
+    dataTimestamp: iso(0),
+    dataMaxAgeMs: 60_000,
+  }));
+  assert.equal(stale.status, 'BLOCKED');
+  assert.ok(stale.blockers.includes('DATA_EVIDENCE_STALE'));
+
+  const missingParameter = prepareForwardRecommendationObservation(prepareInput(card(), { parameterHash: '' }));
+  assert.equal(missingParameter.status, 'BLOCKED');
+  assert.ok(missingParameter.blockers.includes('PARAMETER_HASH_REQUIRED'));
+
+  const mutableResearchRef = prepareForwardRecommendationObservation(prepareInput(card(), { researchCodeSha: 'main' }));
+  assert.equal(mutableResearchRef.status, 'BLOCKED');
+  assert.ok(mutableResearchRef.blockers.includes('IMMUTABLE_RESEARCH_SHA_REQUIRED'));
 });
 
 test('future recommendation outcomes remain pending until a decisive barrier or complete expiry evidence exists', () => {
@@ -194,13 +236,22 @@ test('forward calibration stays insufficient below 30 and becomes READY only fro
   assert.equal(ready.profitabilityClaimAllowed, false);
 });
 
-test('calibration refuses to mix strategy identities', () => {
-  const observations = [
-    settle('WIN', 'mixed-win', 'scanner-swing-v1'),
-    settle('LOSS', 'mixed-loss', 'scanner-swing-v2'),
+test('calibration refuses parameter-hash and research-SHA identity mixing even under the same profile version', () => {
+  const parameterMixed = [
+    settle('WIN', 'mixed-param-win'),
+    settle('LOSS', 'mixed-param-loss', { parameterHash: 'scanner-params-v2' }),
   ];
   assert.throws(
-    () => buildForwardObservationProfitCalibration(observations, 1),
+    () => buildForwardObservationProfitCalibration(parameterMixed, 1),
+    /FORWARD_OBSERVATION_IDENTITY_MIXING_FORBIDDEN/u,
+  );
+
+  const researchMixed = [
+    settle('WIN', 'mixed-sha-win'),
+    settle('LOSS', 'mixed-sha-loss', { researchCodeSha: 'b'.repeat(40) }),
+  ];
+  assert.throws(
+    () => buildForwardObservationProfitCalibration(researchMixed, 1),
     /FORWARD_OBSERVATION_IDENTITY_MIXING_FORBIDDEN/u,
   );
 });
