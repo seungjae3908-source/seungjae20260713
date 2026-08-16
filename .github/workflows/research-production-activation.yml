@@ -42,6 +42,8 @@ jobs:
           grep -q 'PRIVATE_API_ENABLED=false' research-production/deploy/activate-server.sh
           grep -q 'ORDER_AUTHORITY=false' research-production/deploy/activate-server.sh
           grep -q 'research-production-forward.timer' research-production/deploy/activate-server.sh
+          grep -q 'coherentSuccessfulRuns' .github/workflows/research-production-activation.yml
+          grep -q 'git merge-base --is-ancestor' .github/workflows/research-production-activation.yml
 
   authorize:
     if: >-
@@ -53,6 +55,7 @@ jobs:
     outputs:
       target_sha: ${{ steps.gate.outputs.target_sha }}
       research_head_sha: ${{ steps.gate.outputs.research_head_sha }}
+      research_merge_sha: ${{ steps.gate.outputs.research_merge_sha }}
       application_run_id: ${{ steps.gate.outputs.application_run_id }}
     env:
       PR_NUMBER: 357
@@ -81,8 +84,9 @@ jobs:
             const pr = (await github.rest.pulls.get({
               owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber,
             })).data;
-            if (!pr.merged || String(pr.merge_commit_sha ?? '').toLowerCase() !== targetSha) {
-              core.setFailed(`PR #${prNumber} is not the exact current-main merge.`);
+            const researchMergeSha = String(pr.merge_commit_sha ?? '').toLowerCase();
+            if (!pr.merged || !/^[0-9a-f]{40}$/.test(researchMergeSha)) {
+              core.setFailed(`PR #${prNumber} is not merged with an immutable merge commit.`);
               return;
             }
             const headSha = String(pr.head.sha).toLowerCase();
@@ -98,57 +102,71 @@ jobs:
               'ai-privacy/verified',
               'futures-public-network-smoke/verified',
             ];
-            const latest = new Map();
-            for (const status of statuses.sort((a, b) => b.id - a.id)) {
-              if (!latest.has(status.context)) latest.set(status.context, status);
-            }
-            for (const name of required) {
-              if (latest.get(name)?.state !== 'success') {
-                core.setFailed(`Required exact-head status not successful: ${name}`);
-                return;
+
+            // A pull_request merge ref disappears after merge. A late queued run can then
+            // fail at checkout and publish newer failure statuses onto the same PR HEAD.
+            // Do not let that erase an earlier immutable, coherent 6/6 successful run.
+            // Group successful statuses by their exact workflow run and validate the run
+            // provenance itself instead of trusting only the newest status per context.
+            const coherentSuccessfulRuns = new Map();
+            for (const status of statuses) {
+              if (status.state !== 'success' || !required.includes(status.context)) continue;
+              const runId = String(status.target_url ?? '').match(/\/actions\/runs\/(\d+)/)?.[1];
+              if (!runId) continue;
+              if (!coherentSuccessfulRuns.has(runId)) coherentSuccessfulRuns.set(runId, new Map());
+              const byContext = coherentSuccessfulRuns.get(runId);
+              if (!byContext.has(status.context) || status.id > byContext.get(status.context).id) {
+                byContext.set(status.context, status);
               }
             }
-            const runIds = new Set(required.map((name) => {
-              const m = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
-              return m?.[1] ?? '';
-            }));
-            if (runIds.size !== 1 || runIds.has('')) {
-              core.setFailed('Required statuses do not share one Application CI run.');
+
+            const candidates = [];
+            for (const [runId, byContext] of coherentSuccessfulRuns) {
+              if (!required.every((name) => byContext.get(name)?.state === 'success')) continue;
+              const run = (await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo, run_id: Number(runId),
+              })).data;
+              if (
+                run.head_sha.toLowerCase() === headSha &&
+                run.event === 'pull_request' &&
+                run.status === 'completed' &&
+                run.conclusion === 'success' &&
+                run.name === 'Application CI'
+              ) {
+                candidates.push(run);
+              }
+            }
+            candidates.sort((a, b) => Number(b.id) - Number(a.id));
+            if (candidates.length === 0) {
+              core.setFailed('No coherent successful exact-head Application CI 6/6 run found.');
               return;
             }
-            const applicationRunId = [...runIds][0];
-            const run = (await github.rest.actions.getWorkflowRun({
-              owner: context.repo.owner, repo: context.repo.repo, run_id: Number(applicationRunId),
-            })).data;
-            if (
-              run.head_sha.toLowerCase() !== headSha ||
-              run.event !== 'pull_request' ||
-              run.status !== 'completed' ||
-              run.conclusion !== 'success'
-            ) {
-              core.setFailed('Application CI provenance rejected.');
-              return;
-            }
+            const applicationRunId = String(candidates[0].id);
+
             core.setOutput('target_sha', targetSha);
             core.setOutput('research_head_sha', headSha);
+            core.setOutput('research_merge_sha', researchMergeSha);
             core.setOutput('application_run_id', applicationRunId);
 
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.gate.outputs.target_sha }}
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
 
-      - name: Verify exact merged main and Research contract
+      - name: Verify exact current main contains immutable Research merge and contract
         env:
           TARGET_SHA: ${{ steps.gate.outputs.target_sha }}
           RESEARCH_HEAD_SHA: ${{ steps.gate.outputs.research_head_sha }}
+          RESEARCH_MERGE_SHA: ${{ steps.gate.outputs.research_merge_sha }}
         shell: bash
         run: |
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          read -r commit parent1 parent2 extra <<<"$(git rev-list --parents -n 1 HEAD)"
-          test "$commit" = "$TARGET_SHA"
+          git cat-file -e "$RESEARCH_MERGE_SHA^{commit}"
+          git merge-base --is-ancestor "$RESEARCH_MERGE_SHA" "$TARGET_SHA"
+          read -r merge_commit parent1 parent2 extra <<<"$(git rev-list --parents -n 1 "$RESEARCH_MERGE_SHA")"
+          test "$merge_commit" = "$RESEARCH_MERGE_SHA"
           test "$parent2" = "$RESEARCH_HEAD_SHA"
           test -z "${extra:-}"
           bash -n research-production/deploy/activate-server.sh
