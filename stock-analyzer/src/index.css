@@ -348,6 +348,25 @@ input[type='search']::-webkit-search-results-decoration {
     overflow-x: hidden;
   }
 
+  [data-testid='scanner-mobile-risk'],
+  [data-testid='scanner-mobile-risk'] > *,
+  [data-testid='scanner-mobile-risk'] section,
+  [data-testid='scanner-mobile-risk'] .grid,
+  [data-testid='scanner-mobile-risk'] .grid > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  [data-testid='scanner-mobile-risk'] p,
+  [data-testid='scanner-mobile-risk'] li,
+  [data-testid='scanner-mobile-risk'] span,
+  [data-testid='scanner-mobile-risk'] button {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
   [data-testid='scanner-mobile-detail-tabs'] {
     display: grid !important;
     width: 100%;
