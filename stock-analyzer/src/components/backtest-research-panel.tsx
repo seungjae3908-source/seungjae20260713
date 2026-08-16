@@ -201,7 +201,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
           className="text-center text-xs font-medium text-amber-700"
           data-testid="backtest-historical-disclaimer"
         >
-          과거 데이터 기반 분석이며 미래 수익을 보장하지 않습니다.
+          과거 데이터 기반 백테스트이며 미래 수익을 보장하지 않습니다.
         </p>
 
         <form onSubmit={submit} className="rounded-2xl border border-border bg-card p-4" aria-busy={loading} data-testid="backtest-form">
