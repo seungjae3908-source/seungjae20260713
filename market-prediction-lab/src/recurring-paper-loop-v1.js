@@ -58,6 +58,19 @@ function identityFingerprint(identity) {
   return hash({ ...identity, researchCodeSha: identity.researchCodeSha.toLowerCase() });
 }
 
+function candidateStrategyBlockers(strategyIdentity, runtimeIdentity) {
+  if (!nonEmpty(strategyIdentity?.strategyId)
+    || !nonEmpty(strategyIdentity?.strategyVersion)
+    || !nonEmpty(strategyIdentity?.parameterHash)
+    || !immutableSha(strategyIdentity?.researchCodeSha)) {
+    return ["STRATEGY_IDENTITY_REQUIRED"];
+  }
+  if (strategyIdentity.researchCodeSha.toLowerCase() !== runtimeIdentity.researchCodeSha.toLowerCase()) {
+    return ["STRATEGY_RESEARCH_SHA_MISMATCH"];
+  }
+  return [];
+}
+
 function assertSafety(value, code) {
   if (value?.simulatedOnly !== true
     || value?.liveOrderAllowed !== false
@@ -121,17 +134,20 @@ function validateCycle(cycle, state) {
   if (identityFingerprint(cycle.identity) !== state.identityFingerprint) throw new Error("PAPER_LOOP_CYCLE_IDENTITY_MISMATCH");
 }
 
-function evidenceBlockers(candidate, evaluatedAtMs, expectedIdentityFingerprint) {
+function evidenceBlockers(candidate, evaluatedAtMs, runtimeIdentity) {
   const evidence = candidate?.execution?.dataEvidence;
   const blockers = [];
   if (!nonEmpty(candidate?.signal?.signalId)) blockers.push("SIGNAL_ID_REQUIRED");
   if (!nonEmpty(candidate?.signal?.symbol)) blockers.push("SYMBOL_REQUIRED");
   if (!finite(candidate?.signal?.timestampMs)) blockers.push("SIGNAL_TIMESTAMP_REQUIRED");
   else if (candidate.signal.timestampMs > evaluatedAtMs) blockers.push("FUTURE_SIGNAL_FORBIDDEN");
-  try {
-    if (identityFingerprint(candidate?.signal?.strategyIdentity) !== expectedIdentityFingerprint) blockers.push("STRATEGY_IDENTITY_MISMATCH");
-  } catch {
-    blockers.push("STRATEGY_IDENTITY_REQUIRED");
+  blockers.push(...candidateStrategyBlockers(candidate?.signal?.strategyIdentity, runtimeIdentity));
+  if (candidate?.profitGate?.decision === "ELIGIBLE") {
+    if (!nonEmpty(candidate?.profitEvidence?.costPolicyId) || !nonEmpty(candidate?.execution?.costPolicy?.version)) {
+      blockers.push("PAPER_COST_POLICY_VERSION_REQUIRED");
+    } else if (candidate.profitEvidence.costPolicyId !== candidate.execution.costPolicy.version) {
+      blockers.push("PAPER_COST_POLICY_VERSION_MISMATCH");
+    }
   }
   if (candidate?.riskEvidence?.status !== "APPROVED"
     || candidate.riskEvidence.simulatedOnly !== true
@@ -261,7 +277,7 @@ export async function runRecurringPaperCycle({
   for (const candidate of candidates) {
     if (!MARKET_SET.has(candidate?.signal?.market)) throw new Error("PAPER_LOOP_MARKET_UNSUPPORTED");
     if (consumedSignals.has(candidate.signal.signalId)) continue;
-    const blockers = evidenceBlockers(candidate, cycle.evaluatedAtMs, predecessor.identityFingerprint);
+    const blockers = evidenceBlockers(candidate, cycle.evaluatedAtMs, predecessor.identity);
     const sample = blockers.length
       ? blockedSample(candidate, cycle, blockers)
       : buildFourMarketPaperSample({ ...candidate, evaluatedAtMs: cycle.evaluatedAtMs });
