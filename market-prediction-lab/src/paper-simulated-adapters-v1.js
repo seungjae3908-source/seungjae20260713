@@ -1,5 +1,16 @@
+const MARKET_ACCOUNTING_CURRENCY = Object.freeze({
+  KR_STOCK: "KRW",
+  US_STOCK: "USD",
+  CRYPTO_SPOT: "KRW",
+  CRYPTO_FUTURES: "USDT",
+});
+
 function finite(value) {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function positive(value) {
+  return finite(value) && value > 0;
 }
 
 function nonEmpty(value) {
@@ -35,19 +46,40 @@ function validateLedger(ledger) {
   assertSafety(ledger, "PAPER_SIM_LEDGER_SAFETY_VIOLATION");
 }
 
-function validateAccountingEvidence(evidence) {
+function validateAccountingEvidence(evidence, settlement, cycle) {
   if (!evidence || evidence.status === "MISSING") return Object.freeze({ status: "MISSING" });
   if (evidence.status !== "READY") throw new Error("PAPER_SIM_ACCOUNTING_EVIDENCE_INVALID");
   if (!finite(evidence.netPnlKrw)) throw new Error("PAPER_SIM_ACCOUNTING_KRW_PNL_REQUIRED");
-  if (!nonEmpty(evidence.source) || !nonEmpty(evidence.version) || !finite(evidence.asOfMs)) {
+  if (!nonEmpty(evidence.source) || !nonEmpty(evidence.version)
+      || !finite(evidence.asOfMs) || !positive(evidence.maxAgeMs)) {
     throw new Error("PAPER_SIM_ACCOUNTING_PROVENANCE_REQUIRED");
+  }
+  if (evidence.asOfMs > cycle.evaluatedAtMs) throw new Error("PAPER_SIM_ACCOUNTING_FUTURE_EVIDENCE_FORBIDDEN");
+  if (cycle.evaluatedAtMs - evidence.asOfMs > evidence.maxAgeMs) throw new Error("PAPER_SIM_ACCOUNTING_STALE_EVIDENCE_FORBIDDEN");
+  if (!nonEmpty(evidence.sourceCurrency) || !positive(evidence.fxRateToKrw)) {
+    throw new Error("PAPER_SIM_ACCOUNTING_FX_EVIDENCE_REQUIRED");
+  }
+  const expectedCurrency = MARKET_ACCOUNTING_CURRENCY[settlement.market];
+  if (!expectedCurrency || evidence.sourceCurrency !== expectedCurrency) {
+    throw new Error("PAPER_SIM_ACCOUNTING_CURRENCY_MISMATCH");
+  }
+  if (expectedCurrency === "KRW" && Math.abs(evidence.fxRateToKrw - 1) > 1e-12) {
+    throw new Error("PAPER_SIM_ACCOUNTING_KRW_FX_MUST_BE_ONE");
+  }
+  const expectedNetPnlKrw = settlement.netPnl * evidence.fxRateToKrw;
+  const tolerance = Math.max(1e-6, Math.abs(expectedNetPnlKrw) * 1e-9);
+  if (Math.abs(evidence.netPnlKrw - expectedNetPnlKrw) > tolerance) {
+    throw new Error("PAPER_SIM_ACCOUNTING_CONVERSION_MISMATCH");
   }
   return Object.freeze({
     status: "READY",
     netPnlKrw: evidence.netPnlKrw,
+    sourceCurrency: evidence.sourceCurrency,
+    fxRateToKrw: evidence.fxRateToKrw,
     source: evidence.source,
     version: evidence.version,
     asOfMs: evidence.asOfMs,
+    maxAgeMs: evidence.maxAgeMs,
   });
 }
 
@@ -77,9 +109,10 @@ export function createSimulatedPaperLedgerAdapter({ accountingEvidenceForSettlem
       if (!nonEmpty(settlementId) || !finite(cycle?.evaluatedAtMs)) throw new Error("PAPER_SIM_SETTLEMENT_IDENTITY_REQUIRED");
       assertSafety(settlement, "PAPER_SIM_SETTLEMENT_SAFETY_VIOLATION");
 
-      const accounting = validateAccountingEvidence(await converter(settlement, cycle));
       const applied = Array.isArray(ledger.appliedSettlementIds) ? [...ledger.appliedSettlementIds] : [];
       if (applied.includes(settlementId)) return Object.freeze({ ...structuredClone(ledger), ...safetyEnvelope() });
+
+      const accounting = validateAccountingEvidence(await converter(settlement, cycle), settlement, cycle);
       const pendingAccounting = normalizePendingAccounting(ledger).filter((row) => row.settlementId !== settlementId);
 
       if (accounting.status !== "READY") {
@@ -144,6 +177,8 @@ export function createSimulatedPaperLearningAdapter({ learningStore } = {}) {
     throw new Error("PAPER_SIM_LEARNING_STORE_REQUIRED");
   }
   async function persist(kind, payload) {
+    if (kind === "signal") assertSafety(payload?.sample, "PAPER_SIM_LEARNING_SAMPLE_SAFETY_VIOLATION");
+    else assertSafety(payload?.settlement, "PAPER_SIM_LEARNING_SETTLEMENT_SAFETY_VIOLATION");
     const record = learningRecord(kind, payload);
     assertSafety(record.value, "PAPER_SIM_LEARNING_SAFETY_VIOLATION");
     const result = await learningStore.putIfAbsent(record);
