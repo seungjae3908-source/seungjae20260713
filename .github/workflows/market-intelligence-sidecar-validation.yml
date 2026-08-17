@@ -1,0 +1,95 @@
+name: Market Intelligence Sidecar Validation
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/**'
+      - '.github/workflows/market-intelligence-sidecar-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-intelligence-sidecar-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Syntax check
+        run: |
+          node --check market-intelligence-sidecar/src/engine.mjs
+          node --check market-intelligence-sidecar/src/public-data.mjs
+          node --check market-intelligence-sidecar/src/server.mjs
+          node --check market-intelligence-sidecar/scripts/verify-contract.mjs
+
+      - name: Unit and service tests
+        working-directory: market-intelligence-sidecar
+        run: node --test tests/*.test.mjs
+
+      - name: Verify safety contract
+        run: node market-intelligence-sidecar/scripts/verify-contract.mjs
+
+      - name: Public-only Bitget and Upbit smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if node --input-type=module - <<'NODE'
+          import { fetchBitgetFuturesEvidence, fetchUpbitSpotEvidence } from './market-intelligence-sidecar/src/public-data.mjs';
+          const futures = await fetchBitgetFuturesEvidence('BTCUSDT');
+          if (futures.market !== 'CRYPTO_FUTURES' || futures.provenance?.privateApiUsed !== false) process.exit(1);
+          if (!futures.orderBook?.bids?.length || !futures.orderBook?.asks?.length || !futures.trades?.length) process.exit(1);
+          const spot = await fetchUpbitSpotEvidence('KRW-BTC');
+          if (spot.market !== 'CRYPTO_SPOT' || spot.provenance?.privateApiUsed !== false) process.exit(1);
+          if (!spot.orderBook?.bids?.length || !spot.orderBook?.asks?.length || !spot.trades?.length) process.exit(1);
+          console.log(JSON.stringify({
+            bitget: { symbol: futures.symbol, bookTs: futures.orderBook.ts, fills: futures.trades.length },
+            upbit: { symbol: spot.symbol, bookTs: spot.orderBook.ts, trades: spot.trades.length },
+            privateRequests: 0,
+            orders: 0,
+          }));
+          NODE
+            then
+              exit 0
+            fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep $((attempt * 3))
+          done
+
+      - name: Package exact-head release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          tar -czf "release/market-intelligence-sidecar-$EXPECTED_SHA.tar.gz" market-intelligence-sidecar
+          sha256sum "release/market-intelligence-sidecar-$EXPECTED_SHA.tar.gz" > "release/market-intelligence-sidecar-$EXPECTED_SHA.sha256"
+          printf '%s\n' "$EXPECTED_SHA" > "release/SERVICE_SHA"
+
+      - name: Upload immutable release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-intelligence-sidecar-${{ env.EXPECTED_SHA }}
+          path: release/
+          retention-days: 90
+          if-no-files-found: error
