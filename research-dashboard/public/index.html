@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1020" />
+  <meta name="description" content="투자앱 Research Production의 Paper, Shadow, Backtest 진행상태를 확인하는 읽기 전용 대시보드" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>Research Lab</title>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">INVESTMENT PLATFORM</p>
+      <h1>Research Lab</h1>
+    </div>
+    <div class="topbar-actions">
+      <span id="system-pill" class="pill neutral">확인 중</span>
+      <button id="refresh-button" type="button">새로고침</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero panel">
+      <div>
+        <p class="eyebrow">RESEARCH CONTROL CENTER</p>
+        <h2>실사용 앱과 분리된 연구 상태</h2>
+        <p class="muted">Paper · Shadow · Historical 연구의 진행 여부와 표본을 읽기 전용으로 확인합니다.</p>
+      </div>
+      <div class="safety-grid" aria-label="안전 상태">
+        <div><span>실거래</span><strong id="live-trading">OFF</strong></div>
+        <div><span>Private API</span><strong id="private-api">OFF</strong></div>
+        <div><span>주문 권한</span><strong id="order-authority">OFF</strong></div>
+      </div>
+    </section>
+
+    <section class="metric-grid" aria-label="핵심 지표">
+      <article class="metric-card"><span>Paper Settled</span><strong id="paper-settled">—</strong><small>정산 완료 표본</small></article>
+      <article class="metric-card"><span>Paper Positions</span><strong id="paper-positions">—</strong><small>현재 Paper 포지션</small></article>
+      <article class="metric-card"><span>Shadow Settled</span><strong id="shadow-settled">—</strong><small>방향 검증 완료</small></article>
+      <article class="metric-card"><span>Failed Tasks</span><strong id="failed-tasks">—</strong><small>최근 연구 실패</small></article>
+    </section>
+
+    <section class="two-column">
+      <article class="panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">AUTOMATION</p><h2>연구 사이클</h2></div>
+          <span id="last-cycle" class="muted">—</span>
+        </div>
+        <div id="cycle-list" class="stack"></div>
+      </article>
+
+      <article class="panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">PAPER FORWARD</p><h2>미래 표본 수집</h2></div>
+          <span id="paper-status" class="pill neutral">—</span>
+        </div>
+        <dl class="detail-grid">
+          <div><dt>스케줄</dt><dd id="paper-schedule">—</dd></div>
+          <div><dt>Provider</dt><dd id="paper-providers">—</dd></div>
+          <div><dt>Cycle</dt><dd id="paper-cycles">—</dd></div>
+          <div><dt>Settled</dt><dd id="paper-settlements">—</dd></div>
+        </dl>
+        <div id="paper-lanes" class="chip-row"></div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">SHADOW</p><h2>방향성 검증</h2></div>
+        <span id="shadow-total" class="muted">—</span>
+      </div>
+      <div id="shadow-table-wrap" class="table-wrap">
+        <table>
+          <thead><tr><th>그룹</th><th>전체</th><th>Settled</th><th>Pending</th><th>Macro F1</th><th>Balanced Acc.</th><th>Collapse</th></tr></thead>
+          <tbody id="shadow-table"></tbody>
+        </table>
+      </div>
+      <p id="shadow-empty" class="empty" hidden>아직 Shadow 요약 표본이 없습니다.</p>
+    </section>
+
+    <section class="panel proof-panel">
+      <div>
+        <p class="eyebrow">PROFITABILITY EVIDENCE</p>
+        <h2>수익성 증명</h2>
+        <p class="muted">이 화면은 수익성을 임의로 승격하지 않습니다. Paper·Shadow·OOS/WF/Holdout 등 검증 파이프라인의 증거만 표시합니다.</p>
+      </div>
+      <div id="profitability-state" class="proof-state">EVIDENCE COLLECTION</div>
+    </section>
+  </main>
+
+  <footer>
+    <span>Read-only Research Dashboard</span>
+    <span id="updated-at">업데이트 —</span>
+  </footer>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
