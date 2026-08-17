@@ -143,7 +143,16 @@ jobs:
           const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           if (p.serviceSha !== process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA) process.exit(1);
           if (p.publicDataOnly !== true || p.safety?.executionAuthority !== 'NONE') process.exit(1);
-          if (!Array.isArray(p.coverage) || p.coverage.length !== 4) process.exit(1);
+          if (p.profile?.fullStrategyCoverage !== true) process.exit(1);
+          if (!Array.isArray(p.coverage) || p.coverage.length !== 12) process.exit(1);
+          const markets = ['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'];
+          const strategies = ['SCALPING','SWING','MID_LONG'];
+          for (const market of markets) {
+            for (const strategy of strategies) {
+              const matches = p.coverage.filter((row) => row.market === market && row.strategy === strategy);
+              if (matches.length !== 1) process.exit(1);
+            }
+          }
           for (const row of p.coverage) if (!['CANDIDATES_AVAILABLE','VALID_NO_TRADE','SEARCH_FAILURE'].includes(row.status)) process.exit(1);
           NODE
       - name: Build self-contained deploy artifact
