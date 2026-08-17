@@ -1,20 +1,25 @@
 import type { PreparedExchangeRequest, BitgetCredentials, UpbitCredentials } from '../../services/trade-exchange-adapters.service';
 import { decryptTradingCredentials } from '../../services/trade-credential-vault.service';
-import {
-  createSupabaseTradingRepository,
-  type TradingRepository,
-} from '../../services/trade-automation.repository';
-import type { TradingExchange } from '../../services/trade-automation.types';
 import { AccountReadonlyError } from './account-readonly.errors';
+import {
+  createAccountReadonlyCredentialRepository,
+  type AccountReadonlyCredentialRepository,
+  type ReadonlyCredentialProvider,
+} from './account-readonly.repository';
 import type { AccountReader, AccountReadScope } from './account-readonly.service';
 import {
   readBitgetSnapshot,
   readUpbitSnapshot,
   type SignedReadonlyTransport,
 } from './providers/exchange-readonly.providers';
+import {
+  createTossReadonlyTransport,
+  TossReadonlyProvider,
+  TossTokenManager,
+  type TossCredentials,
+} from './providers/toss-readonly.provider';
 
-type ConnectionRepository = Pick<TradingRepository, 'getConnection'>;
-type RepositoryFactory = (accessToken: string, userId: string) => ConnectionRepository;
+type RepositoryFactory = (userId: string) => AccountReadonlyCredentialRepository;
 type CredentialDecryptor = (payload: string) => Record<string, string>;
 
 export type AccountReadonlyRuntimeOptions = {
@@ -69,15 +74,9 @@ function createReadonlyTransport(
       throw error;
     }
 
-    if (response.status === 401 || response.status === 403) {
-      throw new AccountReadonlyError('AUTH_FAILED');
-    }
-    if (response.status === 429) {
-      throw new AccountReadonlyError('RATE_LIMITED', true);
-    }
-    if (!response.ok) {
-      throw new AccountReadonlyError('PROVIDER_UNAVAILABLE', response.status >= 500);
-    }
+    if (response.status === 401 || response.status === 403) throw new AccountReadonlyError('AUTH_FAILED');
+    if (response.status === 429) throw new AccountReadonlyError('RATE_LIMITED', true);
+    if (!response.ok) throw new AccountReadonlyError('PROVIDER_UNAVAILABLE', response.status >= 500);
 
     try {
       return await response.json();
@@ -89,12 +88,12 @@ function createReadonlyTransport(
 
 async function loadCredentials(
   scope: AccountReadScope,
-  exchange: TradingExchange,
+  provider: ReadonlyCredentialProvider,
   repositoryFactory: RepositoryFactory,
   decryptCredentials: CredentialDecryptor,
 ) {
-  const repository = repositoryFactory(scope.accessToken, scope.userId);
-  const connection = await repository.getConnection(scope.userId, exchange);
+  const repository = repositoryFactory(scope.userId);
+  const connection = await repository.get(scope.userId, provider);
   if (!connection?.configured || !connection.encryptedCredentials) {
     throw new AccountReadonlyError('ACCOUNT_NOT_CONFIGURED');
   }
@@ -114,8 +113,8 @@ function requireCredential(credentials: Record<string, string>, key: string) {
 
 export function createVaultBackedAccountReaders(
   options: AccountReadonlyRuntimeOptions = {},
-): Partial<Record<'upbit' | 'bitget', AccountReader>> {
-  const repositoryFactory = options.repositoryFactory ?? createSupabaseTradingRepository;
+): Partial<Record<'toss' | 'upbit' | 'bitget', AccountReader>> {
+  const repositoryFactory = options.repositoryFactory ?? createAccountReadonlyCredentialRepository;
   const decryptCredentials = options.decryptCredentials ?? decryptTradingCredentials;
   const fetchImpl = options.fetchImpl ?? fetch;
 
@@ -129,8 +128,20 @@ export function createVaultBackedAccountReaders(
     READONLY_TARGETS.bitget.paths,
     fetchImpl,
   );
+  const tossTransport = createTossReadonlyTransport(fetchImpl);
+  const tossTokens = new TossTokenManager(tossTransport);
+  const tossProvider = new TossReadonlyProvider(tossTransport, tossTokens);
 
   return {
+    toss: async (scope, signal) => {
+      const raw = await loadCredentials(scope, 'toss', repositoryFactory, decryptCredentials);
+      const credentials: TossCredentials = {
+        clientId: requireCredential(raw, 'clientId'),
+        clientSecret: requireCredential(raw, 'clientSecret'),
+        accountSeq: String(raw.accountSeq ?? '').trim() || undefined,
+      };
+      return tossProvider.snapshot(credentials, signal);
+    },
     upbit: async (scope, signal) => {
       const raw = await loadCredentials(scope, 'upbit', repositoryFactory, decryptCredentials);
       const credentials: UpbitCredentials = {

@@ -6,7 +6,8 @@ function enabled(environment: NodeJS.ProcessEnv, name: string) {
 
 export function isStagingReadonlyCredentialRuntime(environment: NodeJS.ProcessEnv = process.env) {
   const hasMasterKey = Boolean(environment.TRADING_CREDENTIAL_MASTER_KEY?.trim());
-  const privateReadEnabled = enabled(environment, 'UPBIT_ACCOUNT_READ_ENABLED')
+  const privateReadEnabled = enabled(environment, 'TOSS_ACCOUNT_READ_ENABLED')
+    || enabled(environment, 'UPBIT_ACCOUNT_READ_ENABLED')
     || enabled(environment, 'BITGET_ACCOUNT_READ_ENABLED');
   const mutationAuthorityDisabled = !enabled(environment, 'LIVE_TRADING_ENABLED')
     && !enabled(environment, 'AUTO_TRADING_ENABLED')

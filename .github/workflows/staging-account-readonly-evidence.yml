@@ -32,6 +32,9 @@ jobs:
       STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
       STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
       STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+      STAGING_TOSS_CLIENT_ID: ${{ secrets.STAGING_TOSS_CLIENT_ID }}
+      STAGING_TOSS_CLIENT_SECRET: ${{ secrets.STAGING_TOSS_CLIENT_SECRET }}
+      STAGING_TOSS_ACCOUNT_SEQ: ${{ secrets.STAGING_TOSS_ACCOUNT_SEQ }}
       STAGING_UPBIT_ACCESS_KEY: ${{ secrets.STAGING_UPBIT_ACCESS_KEY }}
       STAGING_UPBIT_SECRET_KEY: ${{ secrets.STAGING_UPBIT_SECRET_KEY }}
       STAGING_BITGET_API_KEY: ${{ secrets.STAGING_BITGET_API_KEY }}
@@ -63,9 +66,9 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const body = String(process.env.COMMENT_BODY ?? '').trim();
-          const match = /^\/run-staging-account-readonly ([0-9a-f]{40}) --providers=upbit,bitget$/.exec(body);
+          const match = /^\/run-staging-account-readonly ([0-9a-f]{40}) --providers=toss,upbit,bitget$/.exec(body);
           if (!match) {
-            console.error('Exact command required: /run-staging-account-readonly <40-char-sha> --providers=upbit,bitget');
+            console.error('Exact command required: /run-staging-account-readonly <40-char-sha> --providers=toss,upbit,bitget');
             process.exit(1);
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
@@ -93,6 +96,8 @@ jobs:
             'STAGING_SUPABASE_URL',
             'STAGING_SUPABASE_ANON_KEY',
             'STAGING_SUPABASE_SECRET_KEY',
+            'STAGING_TOSS_CLIENT_ID',
+            'STAGING_TOSS_CLIENT_SECRET',
             'STAGING_UPBIT_ACCESS_KEY',
             'STAGING_UPBIT_SECRET_KEY',
             'STAGING_BITGET_API_KEY',
@@ -205,7 +210,7 @@ jobs:
             APP_ENV=staging \
             DEPLOY_SHA="$TARGET_SHA" \
             TRADING_CREDENTIAL_MASTER_KEY="$TRADING_CREDENTIAL_MASTER_KEY" \
-            TOSS_ACCOUNT_READ_ENABLED=false \
+            TOSS_ACCOUNT_READ_ENABLED=true \
             UPBIT_ACCOUNT_READ_ENABLED=true \
             BITGET_ACCOUNT_READ_ENABLED=true \
             LIVE_TRADING_ENABLED=false \
@@ -260,7 +265,7 @@ jobs:
                 if (value.ok !== true || value.identityMatch !== true || sha !== process.env.TARGET_SHA) process.exit(1);
               });'
 
-      - name: Run real Upbit and Bitget read-only account evidence
+      - name: Run real Toss Upbit Bitget read-only account evidence
         id: account_evidence
         if: steps.tunnel.outcome == 'success'
         continue-on-error: true
@@ -273,6 +278,9 @@ jobs:
           STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
           STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
           STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+          STAGING_TOSS_CLIENT_ID: ${{ secrets.STAGING_TOSS_CLIENT_ID }}
+          STAGING_TOSS_CLIENT_SECRET: ${{ secrets.STAGING_TOSS_CLIENT_SECRET }}
+          STAGING_TOSS_ACCOUNT_SEQ: ${{ secrets.STAGING_TOSS_ACCOUNT_SEQ }}
           STAGING_UPBIT_ACCESS_KEY: ${{ secrets.STAGING_UPBIT_ACCESS_KEY }}
           STAGING_UPBIT_SECRET_KEY: ${{ secrets.STAGING_UPBIT_SECRET_KEY }}
           STAGING_BITGET_API_KEY: ${{ secrets.STAGING_BITGET_API_KEY }}
@@ -297,6 +305,9 @@ jobs:
           const dir = process.env.STAGING_ARTIFACT_DIR;
           const secretNames = [
             'STAGING_TRADING_CREDENTIAL_MASTER_KEY',
+            'STAGING_TOSS_CLIENT_ID',
+            'STAGING_TOSS_CLIENT_SECRET',
+            'STAGING_TOSS_ACCOUNT_SEQ',
             'STAGING_UPBIT_ACCESS_KEY',
             'STAGING_UPBIT_SECRET_KEY',
             'STAGING_BITGET_API_KEY',
@@ -420,9 +431,10 @@ jobs:
             echo "- Exact current main: \`$TARGET_SHA\`"
             echo '- Standard Staging mutated: `false`'
             echo '- Production mutated: `false`'
-            echo '- Toss private read executed: `false`'
+            echo '- Toss private operation type: `OAuth + GET account/holdings only`'
             echo '- Upbit private operation type: `GET only`'
             echo '- Bitget private operation type: `GET only`'
+            echo '- Kiwoom account linking: `hidden / not tested`'
             echo '- Order/cancel/amend/transfer/withdrawal requests: `0`'
             echo '- Credentials returned or recorded in artifacts: `false`'
             echo '- Ephemeral credential rows remaining: `0`'
