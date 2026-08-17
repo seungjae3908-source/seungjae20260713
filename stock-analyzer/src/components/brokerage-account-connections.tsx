@@ -1,206 +1,214 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { KeyRound, RefreshCw, ShieldCheck, WalletCards, X } from 'lucide-react';
-import { apiGet } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
 
-type Exchange = 'kiwoom' | 'upbit' | 'bitget';
-type CredentialSource = 'vault' | 'environment' | 'none';
+type Provider = 'toss' | 'upbit' | 'bitget';
+type CredentialProvider = 'upbit' | 'bitget';
+type AccountReadStatus = 'CONNECTED' | 'CONFIGURED_UNVERIFIED' | 'NOT_CONFIGURED' | 'STALE' | 'AUTH_FAILED' | 'RATE_LIMITED' | 'UNAVAILABLE';
 
-type Holding = {
-  symbol?: string;
-  name?: string;
-  quantity?: number | null;
-  averagePrice?: number | null;
-  currentPrice?: number | null;
-  evaluationAmount?: number | null;
-  profitLoss?: number | null;
-  profitRate?: number | null;
-  currency?: string;
+type CanonicalBalance = {
+  currency: string;
+  available: number | null;
+  locked: number | null;
+  total: number | null;
+  estimatedKrwValue: number | null;
 };
 
-type ProviderBase = {
-  configured: boolean;
+type CanonicalPosition = {
+  market: string;
+  symbol: string;
+  quantity: number | null;
+  availableQuantity: number | null;
+  averageEntryPrice: number | null;
+  currentPrice: number | null;
+  marketValue: number | null;
+  unrealizedPnl: number | null;
+  unrealizedPnlPercent: number | null;
+  leverage: number | null;
+  liquidationPrice: number | null;
+  marginMode: string | null;
+  side: string | null;
+};
+
+type CanonicalAccount = {
+  market: 'KR' | 'US' | 'UPBIT' | 'BITGET';
+  accountRef: string | null;
+  currency: string | null;
+  buyingPower: number | null;
+};
+
+type CanonicalAccountSnapshot = {
+  provider: Provider;
+  readOnly: true;
   connected: boolean;
-  credentialSource?: CredentialSource;
-  vaultError?: string | null;
-  error?: string | null;
-};
-
-type Snapshot = {
-  ok: boolean;
-  readOnly: boolean;
-  mutationsAllowed: boolean;
-  credentialsReturned?: boolean;
+  status: AccountReadStatus;
+  accounts: CanonicalAccount[];
+  balances: CanonicalBalance[];
+  positions: CanonicalPosition[];
+  openOrders: Array<unknown>;
   checkedAt: string;
-  providers: {
-    kiwoom: ProviderBase & {
-      accountMasked?: string | null;
-      kr?: {
-        ok: boolean;
-        estimatedAssets?: number | null;
-        totalEvaluationAmount?: number | null;
-        totalProfitLoss?: number | null;
-        totalProfitRate?: number | null;
-        holdingCount: number;
-        holdings: Holding[];
-        error?: string | null;
-      };
-      us?: {
-        ok: boolean;
-        holdingCount: number;
-        holdings: Holding[];
-        error?: string | null;
-      };
-    };
-    upbit: ProviderBase & {
-      assetCount?: number;
-      assets?: Array<{
-        currency: string;
-        balance: number | null;
-        locked: number | null;
-        averageBuyPrice: number | null;
-        unitCurrency: string;
-      }>;
-    };
-    bitget: ProviderBase & {
-      accounts?: Array<{
-        marginCoin: string;
-        available: number | null;
-        locked: number | null;
-        accountEquity: number | null;
-        unrealizedPL: number | null;
-      }>;
-      positions?: Array<{
-        symbol: string;
-        side: string;
-        total: number | null;
-        leverage: number | null;
-        averageOpenPrice: number | null;
-        markPrice: number | null;
-        unrealizedPL: number | null;
-        liquidationPrice: number | null;
-      }>;
-    };
-  };
+  lastGoodAt: string | null;
+  stale: boolean;
+  errorCode: string | null;
+  orderRequests: 0;
+  cancelRequests: 0;
+  amendRequests: 0;
+  transferRequests: 0;
+  withdrawalRequests: 0;
+  credentialsReturned: false;
+  liveTradingEnabled: false;
+  autoTradingEnabled: false;
 };
 
-type CredentialDraft = {
-  first: string;
-  second: string;
-  third: string;
-};
+type CredentialDraft = { first: string; second: string; third: string };
+type Props = { canAccessSpot?: boolean; canAccessFutures?: boolean };
 
 const EMPTY_CREDENTIALS: CredentialDraft = { first: '', second: '', third: '' };
 
-function amount(value: number | null | undefined, currency?: string) {
+function amount(value: number | null | undefined, currency?: string | null) {
   if (value == null || !Number.isFinite(value)) return '-';
   return new Intl.NumberFormat('ko-KR', {
-    maximumFractionDigits: currency === 'KRW' ? 0 : 6,
+    maximumFractionDigits: currency === 'KRW' ? 0 : 8,
   }).format(value);
 }
 
-function Status({ configured, connected }: { configured: boolean; connected: boolean }) {
-  const label = connected ? '연결됨' : configured ? '연결 확인 필요' : '키 미설정';
-  const className = connected
+function statusLabel(snapshot?: CanonicalAccountSnapshot) {
+  if (!snapshot) return '확인 전';
+  if (snapshot.connected) return snapshot.stale ? '이전 정상값' : '연결됨';
+  const labels: Record<AccountReadStatus, string> = {
+    CONNECTED: '연결됨',
+    CONFIGURED_UNVERIFIED: '검증 필요',
+    NOT_CONFIGURED: '미연결',
+    STALE: '이전 정상값',
+    AUTH_FAILED: '인증 오류',
+    RATE_LIMITED: '조회 제한',
+    UNAVAILABLE: '조회 불가',
+  };
+  return labels[snapshot.status];
+}
+
+function Status({ snapshot }: { snapshot?: CanonicalAccountSnapshot }) {
+  const connected = Boolean(snapshot?.connected);
+  const caution = snapshot?.stale || snapshot?.status === 'CONFIGURED_UNVERIFIED' || snapshot?.status === 'RATE_LIMITED';
+  const className = connected && !snapshot?.stale
     ? 'bg-positive/10 text-positive'
-    : configured
+    : caution
       ? 'bg-warning/10 text-warning'
       : 'bg-secondary text-muted-foreground';
-  return <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-extrabold ${className}`}>{label}</span>;
+  return <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-extrabold ${className}`}>{statusLabel(snapshot)}</span>;
 }
 
-function ErrorLine({ value }: { value?: string | null }) {
-  if (!value) return null;
-  return <p className="mt-2 break-words text-xs font-bold text-warning">{value}</p>;
+async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await authorizedFetch(path, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+  });
+  const payload = await response.json() as T & { error?: string; errorCode?: string };
+  if (!response.ok) throw new Error(payload.errorCode ?? payload.error ?? `HTTP_${response.status}`);
+  return payload;
 }
 
-function SourceLine({ source, vaultError }: { source?: CredentialSource; vaultError?: string | null }) {
-  const label = source === 'vault' ? '암호화 저장소 사용' : source === 'environment' ? '서버 Secret 사용' : '연결 키 없음';
-  return <p className="mt-1 break-words text-[10px] text-muted-foreground">{label}{vaultError ? ` · Vault ${vaultError}` : ''}</p>;
-}
-
-export function BrokerageAccountConnections() {
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFutures = true }: Props) {
+  const [snapshots, setSnapshots] = useState<Partial<Record<Provider, CanonicalAccountSnapshot>>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [editing, setEditing] = useState<Exchange | null>(null);
+  const [editing, setEditing] = useState<CredentialProvider | null>(null);
   const [credentials, setCredentials] = useState<CredentialDraft>(EMPTY_CREDENTIALS);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
+  const requestSequence = useRef(0);
+  const controllerRef = useRef<AbortController | null>(null);
+
+  const enabledProviders = useCallback(() => [
+    'toss' as const,
+    ...(canAccessSpot ? ['upbit' as const] : []),
+    ...(canAccessFutures ? ['bitget' as const] : []),
+  ], [canAccessFutures, canAccessSpot]);
 
   const refresh = useCallback(async () => {
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    const sequence = ++requestSequence.current;
     setLoading(true);
     setError('');
-    try {
-      setSnapshot(await apiGet<Snapshot>('/account-connections/snapshot'));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '계좌 연결 상태를 불러오지 못했습니다.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+
+    const results = await Promise.all(enabledProviders().map(async (provider) => {
+      try {
+        const value = await jsonRequest<CanonicalAccountSnapshot>(`/api/accounts/read-only/${provider}`, { signal: controller.signal });
+        return { provider, value, error: null as string | null };
+      } catch (cause) {
+        if (controller.signal.aborted) return { provider, value: null, error: null };
+        return { provider, value: null, error: cause instanceof Error ? cause.message : 'ACCOUNT_READ_FAILED' };
+      }
+    }));
+
+    if (controller.signal.aborted || sequence !== requestSequence.current) return;
+    setSnapshots((current) => {
+      const next = { ...current };
+      for (const result of results) if (result.value) next[result.provider] = result.value;
+      return next;
+    });
+    const failures = results.filter((result) => result.error).map((result) => `${result.provider.toUpperCase()}: ${result.error}`);
+    setError(failures.join(' · '));
+    setLoading(false);
+  }, [enabledProviders]);
 
   useEffect(() => {
     void refresh();
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') void refresh();
-    };
+    const onVisibility = () => { if (document.visibilityState === 'visible') void refresh(); };
     const onOnline = () => void refresh();
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('online', onOnline);
     return () => {
+      controllerRef.current?.abort();
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('online', onOnline);
     };
   }, [refresh]);
 
-  function openSetup(exchange: Exchange) {
-    setEditing(exchange);
+  function openSetup(provider: CredentialProvider) {
+    setEditing(provider);
     setCredentials(EMPTY_CREDENTIALS);
     setSaveMessage('');
   }
 
   async function saveConnection() {
     if (!editing || !credentials.first.trim() || !credentials.second.trim() || (editing === 'bitget' && !credentials.third.trim())) {
-      setSaveMessage('필수 연결 키를 모두 입력해 주세요.');
+      setSaveMessage('필수 조회 키를 모두 입력해 주세요.');
       return;
     }
-    const payload = editing === 'kiwoom'
-      ? { appKey: credentials.first.trim(), secretKey: credentials.second.trim() }
-      : editing === 'upbit'
-        ? { accessKey: credentials.first.trim(), secretKey: credentials.second.trim() }
-        : { apiKey: credentials.first.trim(), secretKey: credentials.second.trim(), passphrase: credentials.third.trim() };
+    const payload = editing === 'upbit'
+      ? { accessKey: credentials.first.trim(), secretKey: credentials.second.trim() }
+      : { apiKey: credentials.first.trim(), secretKey: credentials.second.trim(), passphrase: credentials.third.trim() };
 
     setSaving(true);
     setSaveMessage('');
     try {
-      const response = await authorizedFetch(`/api/trade-automation/connections/${editing}`, {
+      const result = await jsonRequest<{ configured: boolean; credentialsReturned: false }>(`/api/accounts/read-only/credentials/${editing}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          accountMode: 'live',
-          credentials: payload,
+          purpose: 'read_only',
           permissions: ['read'],
+          credentials: payload,
         }),
       });
-      const result = await response.json() as { configured?: boolean; credentialsExposed?: boolean; error?: string };
-      if (!response.ok || result.configured !== true || result.credentialsExposed !== false) {
-        throw new Error(result.error ?? '연결 정보를 안전하게 저장하지 못했습니다.');
-      }
+      if (result.configured !== true || result.credentialsReturned !== false) throw new Error('READONLY_CREDENTIAL_SAVE_FAILED');
+      const providerLabel = editing === 'upbit' ? 'Upbit' : 'Bitget';
       setCredentials(EMPTY_CREDENTIALS);
       setEditing(null);
-      setSaveMessage('연결 키를 암호화 저장했습니다. 조회 연결을 다시 확인합니다.');
+      setSaveMessage(`${providerLabel} 조회 전용 키를 암호화 저장했습니다.`);
       await refresh();
     } catch (cause) {
-      setSaveMessage(cause instanceof Error ? cause.message : '연결 정보를 저장하지 못했습니다.');
+      setSaveMessage(cause instanceof Error ? cause.message : '조회 키를 저장하지 못했습니다.');
     } finally {
       setSaving(false);
     }
   }
 
-  const kiwoom = snapshot?.providers.kiwoom;
-  const upbit = snapshot?.providers.upbit;
-  const bitget = snapshot?.providers.bitget;
+  const toss = snapshots.toss;
+  const upbit = snapshots.upbit;
+  const bitget = snapshots.bitget;
 
   return (
     <section data-testid="brokerage-account-connections" className="mt-4 min-w-0 rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm">
@@ -208,18 +216,13 @@ export function BrokerageAccountConnections() {
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <WalletCards className="h-5 w-5 shrink-0 text-primary" />
-            <h2 className="text-sm font-extrabold">증권 · 거래소 계좌 연결</h2>
+            <h2 className="text-sm font-extrabold">내 계좌 · READ-ONLY 연결</h2>
           </div>
           <p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-            잔고·보유·포지션 조회만 허용합니다. 연결 키는 서버에서 암호화하며 주문·취소·이체는 이 화면에서 실행되지 않습니다.
+            내 계정의 암호화 Vault만 사용해 잔고·보유·포지션을 조회합니다. 주문·취소·이체·출금은 실행하지 않습니다.
           </p>
         </div>
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => void refresh()}
-          className="flex min-h-10 shrink-0 items-center gap-2 rounded-xl border border-card-border px-3 py-2 text-xs font-extrabold disabled:opacity-50"
-        >
+        <button type="button" disabled={loading} onClick={() => void refresh()} className="flex min-h-10 shrink-0 items-center gap-2 rounded-xl border border-card-border px-3 py-2 text-xs font-extrabold disabled:opacity-50">
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           {loading ? '확인 중' : '새로고침'}
         </button>
@@ -227,88 +230,80 @@ export function BrokerageAccountConnections() {
 
       <div className="mt-3 flex items-center gap-2 rounded-2xl bg-positive/10 p-3 text-xs font-bold text-positive">
         <ShieldCheck className="h-4 w-4 shrink-0" />
-        <span className="min-w-0 break-words">READ-ONLY · 주문/취소/이체 mutation 0건 · Secret 응답 0건</span>
+        <span className="min-w-0 break-words">READ-ONLY · 실주문/취소/이체/출금 0건 · Secret 원문 응답 0건</span>
       </div>
 
-      {error ? <p className="mt-3 break-words rounded-2xl bg-destructive/10 p-3 text-xs font-bold text-destructive">{error}</p> : null}
+      {error ? <p role="alert" className="mt-3 break-words rounded-2xl bg-destructive/10 p-3 text-xs font-bold text-destructive">{error}</p> : null}
       {saveMessage ? <p role="status" className="mt-3 break-words rounded-2xl bg-secondary p-3 text-xs font-bold">{saveMessage}</p> : null}
 
       <div className="mt-4 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-3">
-        <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-kiwoom">
+        <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-toss">
           <div className="flex min-w-0 items-center justify-between gap-2">
-            <div className="min-w-0"><p className="truncate text-sm font-extrabold">Kiwoom · 국내/미국주식</p><p className="mt-0.5 text-[11px] text-muted-foreground">{kiwoom?.accountMasked ? `계좌 ${kiwoom.accountMasked}` : '국내·미국 계좌 조회'}</p></div>
-            <Status configured={Boolean(kiwoom?.configured)} connected={Boolean(kiwoom?.connected)} />
+            <div className="min-w-0"><p className="truncate text-sm font-extrabold">Toss · 국내/미국주식</p><p className="mt-0.5 text-[11px] text-muted-foreground">계좌 조회 계약 준비 중</p></div>
+            <Status snapshot={toss} />
           </div>
-          <SourceLine source={kiwoom?.credentialSource} vaultError={kiwoom?.vaultError} />
-          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <Metric label="국내 추정자산" value={amount(kiwoom?.kr?.estimatedAssets, 'KRW')} />
-            <Metric label="국내 평가손익" value={amount(kiwoom?.kr?.totalProfitLoss, 'KRW')} />
-            <Metric label="국내 보유" value={`${kiwoom?.kr?.holdingCount ?? 0}종목`} />
-            <Metric label="미국 보유" value={`${kiwoom?.us?.holdingCount ?? 0}종목`} />
-          </div>
-          <HoldingList rows={[...(kiwoom?.kr?.holdings ?? []), ...(kiwoom?.us?.holdings ?? [])].slice(0, 6)} />
-          <SetupButton label="Kiwoom 연결 설정" onClick={() => openSetup('kiwoom')} />
-          <ErrorLine value={kiwoom?.error ?? kiwoom?.kr?.error ?? kiwoom?.us?.error} />
+          <p className="mt-3 rounded-xl bg-secondary/60 p-3 text-xs leading-relaxed text-muted-foreground">
+            Toss private 계좌 조회는 별도 credential/runtime 계약 검증 전까지 fail-closed 상태입니다. 가짜 잔고는 표시하지 않습니다.
+          </p>
+          <ErrorLine value={toss?.errorCode} />
         </article>
 
-        <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-upbit">
+        {canAccessSpot ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-upbit">
           <div className="flex min-w-0 items-center justify-between gap-2">
-            <div className="min-w-0"><p className="truncate text-sm font-extrabold">Upbit · 코인 현물</p><p className="mt-0.5 text-[11px] text-muted-foreground">자산조회 권한만 사용</p></div>
-            <Status configured={Boolean(upbit?.configured)} connected={Boolean(upbit?.connected)} />
+            <div className="min-w-0"><p className="truncate text-sm font-extrabold">Upbit · 코인 현물</p><p className="mt-0.5 text-[11px] text-muted-foreground">내 Vault + GET /v1/accounts</p></div>
+            <Status snapshot={upbit} />
           </div>
-          <SourceLine source={upbit?.credentialSource} vaultError={upbit?.vaultError} />
-          <p className="mt-3 text-xs font-bold">보유 자산 {upbit?.assetCount ?? 0}개</p>
+          <p className="mt-3 text-xs font-bold">보유 자산 {upbit?.balances.filter((row) => (row.total ?? 0) !== 0).length ?? 0}개</p>
           <div className="mt-2 max-h-40 space-y-1 overflow-y-auto overscroll-contain">
-            {(upbit?.assets ?? []).slice(0, 10).map((row) => (
+            {(upbit?.balances ?? []).filter((row) => (row.total ?? 0) !== 0).slice(0, 10).map((row) => (
               <div key={row.currency} className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-secondary/60 px-3 py-2 text-xs">
                 <span className="min-w-0 truncate font-extrabold">{row.currency}</span>
-                <span className="shrink-0 tabular-nums">{amount(row.balance, row.unitCurrency)}</span>
+                <span className="shrink-0 tabular-nums">{amount(row.total, row.currency)}</span>
               </div>
             ))}
           </div>
-          <SetupButton label="Upbit 연결 설정" onClick={() => openSetup('upbit')} />
-          <ErrorLine value={upbit?.error} />
-        </article>
+          <SetupButton label="Upbit 조회 연결 설정" onClick={() => openSetup('upbit')} />
+          <ErrorLine value={upbit?.errorCode} />
+        </article> : null}
 
-        <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-bitget">
+        {canAccessFutures ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-bitget">
           <div className="flex min-w-0 items-center justify-between gap-2">
-            <div className="min-w-0"><p className="truncate text-sm font-extrabold">Bitget · 코인 선물</p><p className="mt-0.5 text-[11px] text-muted-foreground">계정·포지션 조회 전용</p></div>
-            <Status configured={Boolean(bitget?.configured)} connected={Boolean(bitget?.connected)} />
+            <div className="min-w-0"><p className="truncate text-sm font-extrabold">Bitget · 코인 선물</p><p className="mt-0.5 text-[11px] text-muted-foreground">내 Vault + allowlisted GET 2종</p></div>
+            <Status snapshot={bitget} />
           </div>
-          <SourceLine source={bitget?.credentialSource} vaultError={bitget?.vaultError} />
           <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <Metric label="선물 계정" value={`${bitget?.accounts?.length ?? 0}개`} />
-            <Metric label="열린 포지션" value={`${(bitget?.positions ?? []).filter((row) => (row.total ?? 0) !== 0).length}개`} />
+            <Metric label="선물 계정" value={`${bitget?.accounts.length ?? 0}개`} />
+            <Metric label="열린 포지션" value={`${(bitget?.positions ?? []).filter((row) => (row.quantity ?? 0) !== 0).length}개`} />
           </div>
           <div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">
-            {(bitget?.positions ?? []).filter((row) => (row.total ?? 0) !== 0).slice(0, 8).map((row, index) => (
+            {(bitget?.positions ?? []).filter((row) => (row.quantity ?? 0) !== 0).slice(0, 8).map((row, index) => (
               <div key={`${row.symbol}-${row.side}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs">
-                <div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-extrabold">{row.symbol} · {row.side}</span><span className="shrink-0">{amount(row.total)}</span></div>
-                <p className="mt-1 break-words text-[11px] text-muted-foreground">레버리지 {amount(row.leverage)}x · 미실현 {amount(row.unrealizedPL)}</p>
+                <div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-extrabold">{row.symbol} · {row.side ?? '-'}</span><span className="shrink-0">{amount(row.quantity)}</span></div>
+                <p className="mt-1 break-words text-[11px] text-muted-foreground">레버리지 {amount(row.leverage)}x · 미실현 {amount(row.unrealizedPnl)}</p>
               </div>
             ))}
           </div>
-          <SetupButton label="Bitget 연결 설정" onClick={() => openSetup('bitget')} />
-          <ErrorLine value={bitget?.error} />
-        </article>
+          <SetupButton label="Bitget 조회 연결 설정" onClick={() => openSetup('bitget')} />
+          <ErrorLine value={bitget?.errorCode} />
+        </article> : null}
       </div>
 
-      {snapshot?.checkedAt ? <p className="mt-3 text-[11px] text-muted-foreground">최근 확인 {new Date(snapshot.checkedAt).toLocaleString('ko-KR')}</p> : null}
+      <p className="mt-3 text-[11px] text-muted-foreground">최근 확인 {latestCheckedAt(enabledProviders().map((provider) => snapshots[provider]))}</p>
 
       {editing ? (
-        <div className="fixed inset-0 z-50 flex items-end bg-black/55 p-3 sm:items-center sm:justify-center" role="dialog" aria-modal="true" aria-label={`${editing} 계좌 연결 설정`}>
-          <div className="max-h-[88dvh] w-full max-w-md min-w-0 overflow-y-auto rounded-3xl bg-card p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0"><div className="flex items-center gap-2"><KeyRound className="h-5 w-5 text-primary" /><h3 className="text-base font-black">{editing === 'kiwoom' ? 'Kiwoom' : editing === 'upbit' ? 'Upbit' : 'Bitget'} 연결 설정</h3></div><p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">키는 AES-256-GCM 암호화 저장 후 서버 조회에만 사용하며 다시 화면에 표시하지 않습니다.</p></div>
-              <button type="button" aria-label="연결 설정 닫기" onClick={() => { setEditing(null); setCredentials(EMPTY_CREDENTIALS); setSaveMessage(''); }} className="shrink-0 rounded-xl border border-card-border p-2"><X className="h-4 w-4" /></button>
+        <div className="fixed inset-0 z-50 flex items-end bg-black/55 p-3 sm:items-center sm:justify-center" role="presentation">
+          <div role="dialog" aria-modal="true" aria-label={`${editing === 'upbit' ? 'Upbit' : 'Bitget'} 조회 연결 설정`} className="max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-3xl border border-card-border bg-card p-4 shadow-2xl">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0"><h3 className="truncate text-base font-extrabold">{editing === 'upbit' ? 'Upbit' : 'Bitget'} 조회 전용 연결</h3><p className="mt-1 text-xs text-muted-foreground">API 권한은 반드시 조회 전용으로 발급하고 거래·출금 권한은 켜지 마세요.</p></div>
+              <button type="button" aria-label="연결 설정 닫기" onClick={() => setEditing(null)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-card-border"><X className="h-4 w-4" /></button>
             </div>
             <div className="mt-4 space-y-3">
-              <SecretField label={editing === 'kiwoom' ? 'App Key' : editing === 'upbit' ? 'Access Key' : 'API Key'} value={credentials.first} onChange={(first) => setCredentials((value) => ({ ...value, first }))} testId={`${editing}-credential-primary`} />
-              <SecretField label="Secret Key" value={credentials.second} onChange={(second) => setCredentials((value) => ({ ...value, second }))} testId={`${editing}-credential-secret`} />
-              {editing === 'bitget' ? <SecretField label="Passphrase" value={credentials.third} onChange={(third) => setCredentials((value) => ({ ...value, third }))} testId="bitget-credential-passphrase" /> : null}
+              <CredentialField testId={`${editing}-credential-primary`} label={editing === 'upbit' ? 'Access Key' : 'API Key'} value={credentials.first} onChange={(value) => setCredentials((current) => ({ ...current, first: value }))} />
+              <CredentialField testId={`${editing}-credential-secret`} label="Secret Key" value={credentials.second} onChange={(value) => setCredentials((current) => ({ ...current, second: value }))} />
+              {editing === 'bitget' ? <CredentialField testId="bitget-credential-passphrase" label="Passphrase" value={credentials.third} onChange={(value) => setCredentials((current) => ({ ...current, third: value }))} /> : null}
             </div>
-            <div className="mt-4 rounded-2xl bg-warning/10 p-3 text-xs font-bold text-warning">API 키 권한은 조회(Read)만 허용하세요. 출금 권한이 포함된 키는 서버가 저장을 거부합니다.</div>
-            <button type="button" disabled={saving} onClick={() => void saveConnection()} className="mt-4 w-full rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground disabled:opacity-50" data-testid={`${editing}-save-connection`}>{saving ? '암호화 저장 중...' : '조회 전용 키 암호화 저장'}</button>
+            <div className="mt-4 flex items-center gap-2 rounded-2xl bg-secondary p-3 text-xs text-muted-foreground"><KeyRound className="h-4 w-4 shrink-0" /><span>입력값은 사용자별 암호화 Vault에 저장되며 화면/API 응답으로 다시 노출하지 않습니다.</span></div>
+            <button data-testid={`${editing}-save-connection`} type="button" disabled={saving} onClick={() => void saveConnection()} className="mt-4 min-h-12 w-full rounded-2xl bg-primary px-4 text-sm font-extrabold text-primary-foreground disabled:opacity-50">{saving ? '저장 중…' : '조회 전용으로 암호화 저장'}</button>
           </div>
         </div>
       ) : null}
@@ -316,24 +311,25 @@ export function BrokerageAccountConnections() {
   );
 }
 
-function SetupButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return <button type="button" onClick={onClick} className="mt-3 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-card-border px-3 py-2 text-xs font-extrabold"><KeyRound className="h-4 w-4" />{label}</button>;
+function latestCheckedAt(values: Array<CanonicalAccountSnapshot | undefined>) {
+  const timestamps = values.map((value) => value?.checkedAt).filter((value): value is string => Boolean(value));
+  if (!timestamps.length) return '-';
+  return new Date(timestamps.sort().at(-1)!).toLocaleString('ko-KR');
 }
 
-function SecretField({ label, value, onChange, testId }: { label: string; value: string; onChange: (value: string) => void; testId: string }) {
-  return <label className="block min-w-0 text-xs font-extrabold">{label}<input data-testid={testId} type="password" autoComplete="new-password" value={value} onChange={(event) => onChange(event.target.value)} className="mt-2 h-11 w-full min-w-0 rounded-xl border border-card-border bg-background px-3 text-sm outline-none focus:border-primary" /></label>;
+function ErrorLine({ value }: { value?: string | null }) {
+  if (!value || value === 'ACCOUNT_READ_DISABLED' || value === 'ACCOUNT_NOT_CONFIGURED') return null;
+  return <p className="mt-2 break-words text-xs font-bold text-warning">{value}</p>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="min-w-0 rounded-xl bg-secondary/60 p-2.5"><p className="break-keep text-[10px] text-muted-foreground">{label}</p><p className="mt-1 truncate font-extrabold tabular-nums">{value}</p></div>;
+  return <div className="min-w-0 rounded-xl bg-secondary/60 p-2"><p className="truncate text-[10px] text-muted-foreground">{label}</p><p className="mt-1 truncate font-extrabold">{value}</p></div>;
 }
 
-function HoldingList({ rows }: { rows: Holding[] }) {
-  if (!rows.length) return null;
-  return <div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{rows.map((row, index) => (
-    <div key={`${row.symbol ?? row.name ?? 'holding'}-${index}`} className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-secondary/60 px-3 py-2 text-xs">
-      <span className="min-w-0 truncate font-extrabold">{row.name || row.symbol || '보유자산'}</span>
-      <span className="shrink-0 tabular-nums">{amount(row.quantity)}</span>
-    </div>
-  ))}</div>;
+function SetupButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return <button type="button" onClick={onClick} className="mt-3 min-h-11 w-full rounded-xl border border-card-border px-3 text-xs font-extrabold">{label}</button>;
+}
+
+function CredentialField({ testId, label, value, onChange }: { testId: string; label: string; value: string; onChange: (value: string) => void }) {
+  return <label className="block"><span className="text-xs font-extrabold text-muted-foreground">{label}</span><input data-testid={testId} type="password" autoComplete="off" value={value} onChange={(event) => onChange(event.currentTarget.value)} className="mt-2 h-12 w-full rounded-2xl border border-card-border bg-background px-4 text-sm font-bold outline-none focus:border-primary" /></label>;
 }
