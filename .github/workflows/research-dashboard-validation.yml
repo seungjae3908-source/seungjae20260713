@@ -1,0 +1,34 @@
+name: Research Dashboard Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'research-dashboard/**'
+      - '.github/workflows/research-dashboard-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax and unit tests
+        working-directory: research-dashboard
+        run: |
+          npm run check
+          npm test
+      - name: Validate systemd sandbox contract
+        run: |
+          grep -q 'User=investment-research' research-dashboard/deploy/research-dashboard.service
+          grep -q 'RESEARCH_DASHBOARD_HOST=127.0.0.1' research-dashboard/deploy/research-dashboard.service
+          grep -q 'ProtectSystem=strict' research-dashboard/deploy/research-dashboard.service
+          grep -q 'ReadOnlyPaths=/opt/investment-research/current /var/lib/investment-research-production' research-dashboard/deploy/research-dashboard.service
+          ! grep -R -E 'ORDER_SUBMISSION_ENABLED=true|PRIVATE_API_ENABLED=true|LIVE_TRADING=true|REAL_ORDER_ENABLED=true' research-dashboard
