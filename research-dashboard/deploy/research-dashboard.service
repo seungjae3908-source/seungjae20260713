@@ -9,10 +9,11 @@ User=investment-research
 Group=investment-research
 WorkingDirectory=/opt/investment-research-dashboard/current/research-dashboard
 Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=RESEARCH_DASHBOARD_HOST=127.0.0.1
 Environment=RESEARCH_DASHBOARD_PORT=18090
 Environment=RESEARCH_STATE_ROOT=/var/lib/investment-research-production
-ExecStart=/usr/bin/node /opt/investment-research-dashboard/current/research-dashboard/server.mjs
+ExecStart=/usr/bin/env node /opt/investment-research-dashboard/current/research-dashboard/server.mjs
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
