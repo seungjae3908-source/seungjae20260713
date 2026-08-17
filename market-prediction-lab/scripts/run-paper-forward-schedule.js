@@ -30,6 +30,7 @@ if (!truthy(process.env.PAPER_FORWARD_SCHEDULE_ACTIVE)) {
   const researchCodeSha = String(process.env.PAPER_FORWARD_RESEARCH_SHA ?? "").trim().toLowerCase();
   const activationAtMs = Number(process.env.PAPER_FORWARD_ACTIVATION_AT_MS);
   const triggerSource = process.env.PAPER_FORWARD_TRIGGER_SOURCE ?? "cron";
+  const outcomeAccumulationEnabled = truthy(process.env.PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED);
 
   try {
     const result = await runPaperForwardScheduledInvocation({
@@ -37,16 +38,20 @@ if (!truthy(process.env.PAPER_FORWARD_SCHEDULE_ACTIVE)) {
       researchCodeSha,
       activationAtMs,
       triggerSource,
+      outcomeAccumulationEnabled,
     });
     const output = {
-      schemaVersion: "paper-forward-schedule-cli-v1",
+      schemaVersion: "paper-forward-schedule-cli-v2",
       status: result.status,
       cycleId: result.cycleId ?? null,
       mutationCount: result.mutationCount ?? 0,
       scheduleActive: true,
       naturalScheduleInvocation: result.invocation?.naturalScheduleInvocation === true,
       publicForwardEvidenceAccumulating: result.invocation?.publicForwardEvidenceAccumulating === true,
-      paperTradeOutcomeAccumulating: false,
+      paperTradeOutcomeAccumulationEnabled: result.invocation?.paperTradeOutcomeAccumulationEnabled === true,
+      paperTradeOutcomeAccumulating: result.invocation?.paperTradeOutcomeAccumulating === true,
+      simulatedFinancialAdaptersEnabled: result.persistedStatus?.simulatedFinancialAdaptersEnabled === true,
+      externalFinancialMutationAllowed: false,
       lanes: result.invocation?.providerLanes ?? [],
       privateRequestCount: 0,
       financialMutationCount: 0,
