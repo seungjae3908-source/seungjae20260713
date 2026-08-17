@@ -153,7 +153,12 @@ jobs:
               if (matches.length !== 1) process.exit(1);
             }
           }
-          for (const row of p.coverage) if (!['CANDIDATES_AVAILABLE','VALID_NO_TRADE','SEARCH_FAILURE'].includes(row.status)) process.exit(1);
+          for (const row of p.coverage) {
+            if (!['CANDIDATES_AVAILABLE','VALID_NO_TRADE','SEARCH_FAILURE','BLOCKED_DATA'].includes(row.status)) process.exit(1);
+            const leverage = row.leverage;
+            if (!leverage || !['evaluated','available','blocked','unavailable'].every((key) => Number.isInteger(leverage[key]) && leverage[key] >= 0)) process.exit(1);
+            if (row.market !== 'CRYPTO_FUTURES' && leverage.evaluated !== 0) process.exit(1);
+          }
           NODE
       - name: Build self-contained deploy artifact
         shell: bash
