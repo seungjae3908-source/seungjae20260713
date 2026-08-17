@@ -87,3 +87,40 @@ jobs:
           echo 'realOrderAllowed=false'
           echo 'AI promotion authority=false'
           echo 'AI leverage authority=false'
+
+  producer-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Bundle rolling public Scanner producer
+        run: |
+          mkdir -p "$RUNNER_TEMP/signal-intelligence-build"
+          pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/run-public-scanner-cycle.ts \
+            --bundle \
+            --platform=node \
+            --format=esm \
+            --target=node20 \
+            --packages=external \
+            --outfile="$RUNNER_TEMP/signal-intelligence-build/public-cycle.mjs"
+          node --check "$RUNNER_TEMP/signal-intelligence-build/public-cycle.mjs"
+      - name: Assert producer has no private/order imports
+        run: |
+          ! grep -Eiq '(private[-_ ]?api|placeOrder|submitOrder|cancelOrder|withdraw|transfer)' signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
+          grep -q 'public-only' signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
