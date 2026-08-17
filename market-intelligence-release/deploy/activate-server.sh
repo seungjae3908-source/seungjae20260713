@@ -8,6 +8,7 @@ BASE_DIR="${MARKET_INTELLIGENCE_BASE_DIR:-/opt/investment-market-intelligence}"
 RELEASE_DIR="$BASE_DIR/releases/$TARGET_SHA"
 CURRENT_LINK="$BASE_DIR/current"
 SERVICE_NAME="investment-market-intelligence.service"
+UNIT_PATH="/etc/systemd/system/$SERVICE_NAME"
 RUN_USER="${MARKET_INTELLIGENCE_USER:-$(id -un)}"
 PORT="${MARKET_INTELLIGENCE_PORT:-8791}"
 
@@ -68,9 +69,59 @@ checkout_release() {
   )
 }
 
+health_check() {
+  local expected_sha="$1"
+  local health_file="$BASE_DIR/health-${expected_sha}.json"
+  curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$PORT/health" > "$health_file" || return 1
+  node -e "const fs=require('fs');const h=JSON.parse(fs.readFileSync(process.argv[1]));if(h.ok!==true||h.serviceSha!==process.argv[2]||h.bindHost!=='127.0.0.1'||h.port!==Number(process.argv[3])||h.safety?.executionAuthority!=='NONE'||h.safety?.privateTradingApiAllowed!==false||h.safety?.realOrderAllowed!==false||h.safety?.orderSubmissionAllowed!==false)process.exit(1)" "$health_file" "$expected_sha" "$PORT"
+}
+
+rollback_service() {
+  local previous_target="$1"
+  local previous_unit="$2"
+  local previous_sha="$3"
+  echo "rollback_attempted=true"
+
+  if [[ -n "$previous_target" && -d "$previous_target" && -n "$previous_unit" && -s "$previous_unit" ]]; then
+    ln -sfn "$previous_target" "$CURRENT_LINK"
+    privileged install -m 0644 "$previous_unit" "$UNIT_PATH"
+    privileged systemctl daemon-reload
+    if privileged systemctl restart "$SERVICE_NAME" && privileged systemctl is-active --quiet "$SERVICE_NAME"; then
+      if [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] && health_check "$previous_sha"; then
+        echo "rollback_restored_sha=$previous_sha"
+        return 0
+      fi
+    fi
+    echo "rollback_restore_failed=true" >&2
+    return 1
+  fi
+
+  privileged systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+  privileged rm -f "$UNIT_PATH"
+  privileged systemctl daemon-reload
+  rm -f "$CURRENT_LINK"
+  echo "rollback_restored_absent_state=true"
+  return 0
+}
+
 install_service() {
-  local unit_tmp
+  local unit_tmp previous_unit previous_target previous_sha
   unit_tmp="$(mktemp)"
+  previous_unit="$(mktemp)"
+  previous_target=""
+  previous_sha=""
+  trap 'rm -f "$unit_tmp" "$previous_unit"' RETURN
+
+  if [[ -L "$CURRENT_LINK" ]]; then
+    previous_target="$(readlink -f "$CURRENT_LINK" || true)"
+  fi
+  if privileged test -f "$UNIT_PATH"; then
+    privileged cat "$UNIT_PATH" > "$previous_unit"
+    previous_sha="$(sed -n 's/^Environment=MARKET_INTELLIGENCE_SERVICE_SHA=//p' "$previous_unit" | head -n 1)"
+  else
+    : > "$previous_unit"
+  fi
+
   cat > "$unit_tmp" <<EOF
 [Unit]
 Description=Investment Market Intelligence Sidecar (read-only)
@@ -104,17 +155,25 @@ RestrictSUIDSGID=true
 [Install]
 WantedBy=multi-user.target
 EOF
-  privileged install -m 0644 "$unit_tmp" "/etc/systemd/system/$SERVICE_NAME"
-  rm -f "$unit_tmp"
+
+  privileged install -m 0644 "$unit_tmp" "$UNIT_PATH"
   ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
   privileged systemctl daemon-reload
-  privileged systemctl enable --now "$SERVICE_NAME"
-  sleep 2
-  privileged systemctl is-active --quiet "$SERVICE_NAME" || fail "SERVICE_NOT_ACTIVE"
+  privileged systemctl enable "$SERVICE_NAME" >/dev/null
 
-  local health="$BASE_DIR/health.json"
-  curl --fail --silent --show-error "http://127.0.0.1:$PORT/health" > "$health"
-  node -e "const fs=require('fs');const h=JSON.parse(fs.readFileSync(process.argv[1]));if(h.ok!==true||h.serviceSha!==process.argv[2]||h.bindHost!=='127.0.0.1'||h.port!==Number(process.argv[3])||h.safety?.executionAuthority!=='NONE'||h.safety?.privateTradingApiAllowed!==false||h.safety?.realOrderAllowed!==false)process.exit(1)" "$health" "$TARGET_SHA" "$PORT"
+  if ! privileged systemctl restart "$SERVICE_NAME"; then
+    rollback_service "$previous_target" "$previous_unit" "$previous_sha" || true
+    fail "SERVICE_RESTART_FAILED"
+  fi
+  sleep 2
+  if ! privileged systemctl is-active --quiet "$SERVICE_NAME"; then
+    rollback_service "$previous_target" "$previous_unit" "$previous_sha" || true
+    fail "SERVICE_NOT_ACTIVE"
+  fi
+  if ! health_check "$TARGET_SHA"; then
+    rollback_service "$previous_target" "$previous_unit" "$previous_sha" || true
+    fail "HEALTH_CHECK_FAILED_AND_ROLLED_BACK"
+  fi
 }
 
 case "$MODE" in
@@ -128,7 +187,8 @@ case "$MODE" in
       "service_sha=$TARGET_SHA" \
       "service=$SERVICE_NAME" \
       "bind=127.0.0.1:$PORT" \
-      "executionAuthority=NONE"
+      "executionAuthority=NONE" \
+      "rollback_ready=true"
     ;;
   *) fail "MODE_MUST_BE_PREFLIGHT_OR_ACTIVATE" ;;
 esac
