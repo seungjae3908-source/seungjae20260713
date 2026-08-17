@@ -1,0 +1,257 @@
+name: Prediction Lab Rule0 1h Shadow Sidecar
+
+on:
+  push:
+    branches:
+      - main
+      - research/rule-model-1h-sidecar-artifact-chain-v1
+    paths:
+      - .github/workflows/prediction-lab-rule0-1h-shadow-sidecar.yml
+      - market-prediction-lab/scripts/run-rule-model-1h-shadow-sidecar.js
+      - market-prediction-lab/src/rule-model-shadow-challenger.js
+      - market-prediction-lab/src/derivatives-history.js
+      - market-prediction-lab/src/shadow-ledger.js
+      - market-prediction-lab/docs/rule-model-1h-shadow-model.json
+      - market-prediction-lab/docs/rule-model-1h-shadow-contract.json
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Optional immutable 40-character research SHA; defaults to triggering SHA
+        required: false
+        type: string
+  schedule:
+    - cron: "7 */2 * * *"
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: prediction-lab-rule0-1h-sidecar-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LAB_DIR: market-prediction-lab
+  ARTIFACT_NAME: prediction-lab-rule0-1h-shadow-state
+  WORKFLOW_FILE: prediction-lab-rule0-1h-shadow-sidecar.yml
+  CHAIN_CONTRACT: rule0-1h-artifact-chain-v1
+  CANONICAL_OI_PARITY_BLOB: 201e70e53af2e150eda600377e8ef7d287c4ea23
+
+jobs:
+  forward-shadow-sidecar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Resolve immutable research revision
+        id: resolve
+        shell: bash
+        env:
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          set -euo pipefail
+          ref="${INPUT_REF:-}"
+          if [ -z "$ref" ]; then ref="$GITHUB_SHA"; fi
+          if ! [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "research_ref must resolve to an immutable 40-character SHA" >&2
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Assert exact checkout and OI parity contract
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.resolve.outputs.ref }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git hash-object "$LAB_DIR/src/derivatives-history.js")" = "$CANONICAL_OI_PARITY_BLOB"
+
+      - name: Run focused Rule0 and OI parity regressions
+        working-directory: ${{ env.LAB_DIR }}
+        run: node --test tests/derivatives-history.test.js tests/rule-model-shadow-challenger.test.js
+
+      - name: Resolve latest successful predecessor artifact on this branch
+        id: predecessor
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/predecessor"
+          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_FILE/runs?branch=$GITHUB_REF_NAME&status=success&per_page=20" --jq '.workflow_runs[0].id // empty')"
+          if [ -z "$run_id" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" --jq '.artifacts[] | select(.name == "prediction-lab-rule0-1h-shadow-state" and .expired == false) | .id' | head -n 1)"
+          if [ -z "$artifact_id" ]; then
+            echo "No unexpired predecessor artifact on latest successful run $run_id" >&2
+            exit 1
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
+
+      - name: Restore and verify predecessor state
+        if: steps.predecessor.outputs.found == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREDECESSOR_RUN_ID: ${{ steps.predecessor.outputs.run_id }}
+          PREDECESSOR_ARTIFACT_ID: ${{ steps.predecessor.outputs.artifact_id }}
+        run: |
+          set -euo pipefail
+          zip="$RUNNER_TEMP/predecessor.zip"
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$PREDECESSOR_ARTIFACT_ID/zip" \
+            -o "$zip"
+          unzip -q "$zip" -d "$RUNNER_TEMP/predecessor"
+          state="$(find "$RUNNER_TEMP/predecessor" -name state.json -type f | head -n 1)"
+          summary="$(find "$RUNNER_TEMP/predecessor" -name summary.json -type f | head -n 1)"
+          manifest="$(find "$RUNNER_TEMP/predecessor" -name manifest.json -type f | head -n 1)"
+          test -n "$state" && test -n "$summary" && test -n "$manifest"
+          CURRENT_SIDECAR_SHA="$(sha256sum "$LAB_DIR/scripts/run-rule-model-1h-shadow-sidecar.js" | awk '{print $1}')" \
+          CURRENT_MODEL_SHA="$(sha256sum "$LAB_DIR/docs/rule-model-1h-shadow-model.json" | awk '{print $1}')" \
+          CURRENT_CONTRACT_SHA="$(sha256sum "$LAB_DIR/docs/rule-model-1h-shadow-contract.json" | awk '{print $1}')" \
+          PREDECESSOR_STATE="$state" PREDECESSOR_SUMMARY="$summary" PREDECESSOR_MANIFEST="$manifest" \
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          const manifest = JSON.parse(fs.readFileSync(process.env.PREDECESSOR_MANIFEST, 'utf8'));
+          if (manifest.chainContract !== process.env.CHAIN_CONTRACT) throw new Error('predecessor chain contract mismatch');
+          if (manifest.stateSha256 !== digest(process.env.PREDECESSOR_STATE)) throw new Error('predecessor state digest mismatch');
+          if (manifest.summarySha256 !== digest(process.env.PREDECESSOR_SUMMARY)) throw new Error('predecessor summary digest mismatch');
+          if (manifest.sidecarSha256 !== process.env.CURRENT_SIDECAR_SHA) throw new Error('sidecar code changed; start a separately versioned chain');
+          if (manifest.frozenModelFileSha256 !== process.env.CURRENT_MODEL_SHA) throw new Error('frozen model changed; chain mixing forbidden');
+          if (manifest.contractSha256 !== process.env.CURRENT_CONTRACT_SHA) throw new Error('forward gate contract changed; chain mixing forbidden');
+          if (manifest.oiParityBlob !== process.env.CANONICAL_OI_PARITY_BLOB) throw new Error('OI parity provenance mismatch');
+          if (manifest.liveOrderAllowed !== false || manifest.privateAccountRequestAllowed !== false || manifest.branchWrite !== false) {
+            throw new Error('predecessor safety contract violated');
+          }
+          NODE
+          cp "$state" "$RUNNER_TEMP/sidecar-state.json"
+
+      - name: Run fresh public forward-only sidecar cycle
+        working-directory: ${{ env.LAB_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$RUNNER_TEMP/sidecar-state.json"
+          summary="$RUNNER_TEMP/sidecar-summary.json"
+          node scripts/run-rule-model-1h-shadow-sidecar.js \
+            "$state" \
+            "$summary" \
+            docs/rule-model-1h-shadow-model.json
+
+      - name: Verify forward state, OI parity, and zero authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/sidecar-state.json`, 'utf8'));
+          const summary = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/sidecar-summary.json`, 'utf8'));
+          if (!Number.isInteger(state.challengerStartedAt) || state.challengerStartedAt <= 0) throw new Error('challengerStartedAt missing');
+          const records = Array.isArray(state.records) ? state.records : [];
+          const ids = new Set();
+          for (const record of records) {
+            if (ids.has(record.id)) throw new Error(`duplicate record ${record.id}`);
+            ids.add(record.id);
+            if (record.symbol !== 'BTCUSDT' && record.symbol !== 'ETHUSDT') throw new Error(`unexpected symbol ${record.symbol}`);
+            if (record.timeframe !== '1h' || record.horizon !== 12) throw new Error('timeframe/horizon drift');
+            if (record.anchorTimestamp < state.challengerStartedAt) throw new Error('historical backfill detected');
+            if (record.featureAvailability?.openInterestKnown !== false) throw new Error('OI inference availability leaked');
+            const effectiveOi = Number(record.features?.openInterestChange ?? 0);
+            if (!Number.isFinite(effectiveOi) || Math.abs(effectiveOi) > 1e-12) throw new Error('OI inference must remain effective zero');
+          }
+          if (!Array.isArray(state.openInterestSnapshots) || state.openInterestSnapshots.length < 2) throw new Error('raw OI provenance missing');
+          const safety = summary.safety ?? {};
+          if (summary.status !== 'pass' || safety.forwardOnly !== true || safety.historicalBackfill !== false || safety.currentGeneralShadowReplaced !== false) {
+            throw new Error('forward-only sidecar safety failed');
+          }
+          if (safety.publicMarketDataOnly !== true || safety.actualOrders !== 0 || safety.privateAccountRequests !== 0 || safety.liveAuthority !== false || safety.promotionAuthority !== false) {
+            throw new Error('authority safety failed');
+          }
+          console.log(JSON.stringify({ total: summary.metrics?.total, settled: summary.metrics?.settled, pending: summary.metrics?.pending, gate: summary.gate?.status }, null, 2));
+          NODE
+
+      - name: Build immutable artifact-chain manifest
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.resolve.outputs.ref }}
+          PREDECESSOR_FOUND: ${{ steps.predecessor.outputs.found }}
+          PREDECESSOR_RUN_ID: ${{ steps.predecessor.outputs.run_id }}
+          PREDECESSOR_ARTIFACT_ID: ${{ steps.predecessor.outputs.artifact_id }}
+        run: |
+          set -euo pipefail
+          rm -rf sidecar-artifact
+          mkdir -p sidecar-artifact
+          cp "$RUNNER_TEMP/sidecar-state.json" sidecar-artifact/state.json
+          cp "$RUNNER_TEMP/sidecar-summary.json" sidecar-artifact/summary.json
+          cp "$LAB_DIR/docs/rule-model-1h-shadow-model.json" sidecar-artifact/frozen-model.json
+          cp "$LAB_DIR/docs/rule-model-1h-shadow-contract.json" sidecar-artifact/contract.json
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          const predecessorState = `${process.env.RUNNER_TEMP}/predecessor/state.json`;
+          const previousStateSha256 = process.env.PREDECESSOR_FOUND === 'true' && fs.existsSync(predecessorState) ? digest(predecessorState) : null;
+          const manifest = {
+            schemaVersion: 1,
+            chainContract: process.env.CHAIN_CONTRACT,
+            researchCodeSha: process.env.RESEARCH_SHA,
+            runId: process.env.GITHUB_RUN_ID,
+            eventName: process.env.GITHUB_EVENT_NAME,
+            refName: process.env.GITHUB_REF_NAME,
+            predecessorRunId: process.env.PREDECESSOR_RUN_ID || null,
+            predecessorArtifactId: process.env.PREDECESSOR_ARTIFACT_ID || null,
+            previousStateSha256,
+            stateSha256: digest('sidecar-artifact/state.json'),
+            summarySha256: digest('sidecar-artifact/summary.json'),
+            sidecarSha256: digest(`${process.env.LAB_DIR}/scripts/run-rule-model-1h-shadow-sidecar.js`),
+            frozenModelFileSha256: digest('sidecar-artifact/frozen-model.json'),
+            contractSha256: digest('sidecar-artifact/contract.json'),
+            oiParityBlob: process.env.CANONICAL_OI_PARITY_BLOB,
+            openInterestTrainingParityConfirmed: false,
+            rawOpenInterestObservationAllowed: true,
+            openInterestInferenceAllowed: false,
+            scheduleContract: '7 */2 * * *',
+            scheduleObservedThisRun: process.env.GITHUB_EVENT_NAME === 'schedule',
+            scheduleRequiresDefaultBranch: true,
+            branchWrite: false,
+            liveOrderAllowed: false,
+            privateAccountRequestAllowed: false,
+            actualOrders: 0,
+            generatedAt: new Date().toISOString(),
+          };
+          fs.writeFileSync('sidecar-artifact/manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+      - name: Upload immutable sidecar state artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: sidecar-artifact
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert immutable checkout HEAD
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.resolve.outputs.ref }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
