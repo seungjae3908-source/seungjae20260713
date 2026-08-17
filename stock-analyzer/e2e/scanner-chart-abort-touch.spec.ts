@@ -322,8 +322,8 @@ async function openScanner(page: Page, state: MockState) {
   await page.setViewportSize({ width: 390, height: 844 });
   await installApprovedUser(page);
   await installApplicationMocks(page, state);
-  await page.goto(`${isolatedBaseURL}/scanner`);
-  await expect(page).toHaveURL(/\/scanner$/);
+  await page.goto(`${isolatedBaseURL}/__phase11-ai-workspace-e2e`);
+  await expect(page).toHaveURL(/\/__phase11-ai-workspace-e2e$/);
   await expect(page.getByRole('heading', { name: 'AI 검색기', level: 1 })).toBeVisible();
   await expect(page.getByTestId('capability-denied')).toHaveCount(0);
 }
