@@ -70,8 +70,11 @@ checkout_release() {
   test -f "$RELEASE_DIR/signal-intelligence-v3/src/server.mjs" || fail "V3_SERVER_MISSING"
   test -f "$RELEASE_DIR/signal-intelligence-v3/scripts/run-public-scanner-cycle.ts" || fail "V3_PUBLIC_CYCLE_MISSING"
   test -f "$RELEASE_DIR/signal-intelligence-v3/scripts/verify-contract.mjs" || fail "V3_CONTRACT_MISSING"
-  node --test "$RELEASE_DIR"/signal-intelligence-v3/tests/*.test.mjs
-  node "$RELEASE_DIR/signal-intelligence-v3/scripts/verify-contract.mjs"
+  (
+    cd "$RELEASE_DIR"
+    node --test signal-intelligence-v3/tests/*.test.mjs
+    node signal-intelligence-v3/scripts/verify-contract.mjs
+  )
 }
 
 build_public_cycle() {
