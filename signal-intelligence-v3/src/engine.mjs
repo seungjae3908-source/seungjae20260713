@@ -9,9 +9,11 @@ const CASH_MARKETS = new Set(['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT']);
 const CASH_DIRECTION = 'BUY';
 const FUTURES_DIRECTIONS = new Set(['LONG', 'SHORT']);
 const TERMINAL_STATES = new Set(['CANDIDATE', 'ABSTAIN', 'NO_TRADE', 'BLOCKED_DATA']);
+const VALIDATION_TIERS = new Set(['RESEARCH_CANDIDATE', 'FORWARD_VALIDATED', 'CHAMPION']);
+const PENALTY_FIELDS = ['tailLossPenaltyR', 'uncertaintyPenaltyR', 'executionPenaltyR'];
 
 export const SIGNAL_INTELLIGENCE_V3_POLICY = Object.freeze({
-  version: 'signal-intelligence-v3.0',
+  version: 'signal-intelligence-v3.1',
   maxCandidatesPerList: 10,
   futuresDirectionSeparationMinR: 0.20,
   leverage: Object.freeze({
@@ -61,6 +63,11 @@ function normalizeDirection(market, value) {
   return direction;
 }
 
+function normalizeValidationTier(value) {
+  const tier = String(value ?? 'RESEARCH_CANDIDATE').trim().toUpperCase();
+  return VALIDATION_TIERS.has(tier) ? tier : 'RESEARCH_CANDIDATE';
+}
+
 function identity(candidate) {
   return [
     candidate.market,
@@ -108,22 +115,39 @@ export function evaluateAiCommittee(raw = {}) {
     forceAbstain: riskVeto || evidenceConflict,
     rescanRequested: catalystRescan || technicalRescan || raw?.rescanRequested === true,
     reasons: Object.freeze(reasons),
-    // AI is deliberately denied promotion/numeric authority.
     promotionAuthority: false,
     leverageAuthority: false,
     executionAuthority: 'NONE',
   });
 }
 
-function utilityFromEvidence(evidence = {}) {
+export function utilityFromEvidence(evidence = {}) {
   const expectedNetEdgeR = finite(evidence.expectedNetEdgeR);
+  if (expectedNetEdgeR == null) {
+    return Object.freeze({ value: null, mode: 'INCOMPLETE_EXPECTED_EDGE' });
+  }
+
+  const present = PENALTY_FIELDS.filter((field) => Object.prototype.hasOwnProperty.call(evidence, field));
+  if (present.length === 0) {
+    return Object.freeze({
+      value: expectedNetEdgeR,
+      mode: 'NET_EDGE_ONLY_RISK_SEPARATE',
+    });
+  }
+  if (present.length !== PENALTY_FIELDS.length) {
+    return Object.freeze({ value: null, mode: 'PARTIAL_PENALTY_EVIDENCE_REJECTED' });
+  }
+
   const tailLossPenaltyR = nonNegative(evidence.tailLossPenaltyR);
   const uncertaintyPenaltyR = nonNegative(evidence.uncertaintyPenaltyR);
   const executionPenaltyR = nonNegative(evidence.executionPenaltyR);
-  if ([expectedNetEdgeR, tailLossPenaltyR, uncertaintyPenaltyR, executionPenaltyR].some((value) => value == null)) {
-    return null;
+  if ([tailLossPenaltyR, uncertaintyPenaltyR, executionPenaltyR].some((value) => value == null)) {
+    return Object.freeze({ value: null, mode: 'INVALID_PENALTY_EVIDENCE' });
   }
-  return expectedNetEdgeR - tailLossPenaltyR - uncertaintyPenaltyR - executionPenaltyR;
+  return Object.freeze({
+    value: expectedNetEdgeR - tailLossPenaltyR - uncertaintyPenaltyR - executionPenaltyR,
+    mode: 'FULL_EXPECTED_UTILITY',
+  });
 }
 
 export function recommendConservativeLeverage(raw = {}, policy = SIGNAL_INTELLIGENCE_V3_POLICY.leverage) {
@@ -164,8 +188,8 @@ export function recommendConservativeLeverage(raw = {}, policy = SIGNAL_INTELLIG
   const stressDistancePct = Math.max(stopDistancePct, maeQ95Pct, downsideIntervalPct) + spreadPct + slippagePct;
   const bufferMultiplier = policy.baseBufferMultiplier + uncertaintyBuffer + volatilityBuffer + liquidityBuffer;
   const minimumLiquidationDistancePct = stressDistancePct * bufferMultiplier;
-
   const surviving = tiers.filter((tier) => tier.liquidationDistancePct >= minimumLiquidationDistancePct);
+
   if (!surviving.length) {
     return Object.freeze({
       status: 'BLOCKED',
@@ -177,15 +201,10 @@ export function recommendConservativeLeverage(raw = {}, policy = SIGNAL_INTELLIG
   }
 
   const hardMaximum = surviving.at(-1).leverage;
-  // The recommendation is intentionally a range selected only from verified exchange/tier evidence.
-  // It is never increased by AI. The upper recommendation stays below the hard maximum when there is room.
   const recommendedUpperIndex = Math.max(0, Math.floor((surviving.length - 1) * 0.75));
-  const recommendedUpper = surviving[recommendedUpperIndex].leverage;
-  const recommendedLower = surviving[0].leverage;
-
   return Object.freeze({
     status: 'INDICATIVE_ONLY',
-    recommendedRange: Object.freeze({ min: recommendedLower, max: recommendedUpper }),
+    recommendedRange: Object.freeze({ min: surviving[0].leverage, max: surviving[recommendedUpperIndex].leverage }),
     hardMaximum,
     stressDistancePct,
     bufferMultiplier,
@@ -204,6 +223,7 @@ function normalizeCandidate(raw) {
     strategy: requiredString(raw?.strategy, 'strategy').toUpperCase(),
     timeframe: requiredString(raw?.timeframe, 'timeframe'),
     direction,
+    validationTier: normalizeValidationTier(raw?.validationTier),
     dataStatus: String(raw?.dataStatus ?? 'BLOCKED').toUpperCase(),
     quantEligible: raw?.quantEligible === true,
     profitEligible: raw?.profitEligible === true,
@@ -211,12 +231,19 @@ function normalizeCandidate(raw) {
     evidence: raw?.evidence ?? {},
     ai: evaluateAiCommittee(raw?.ai),
     sourceAsOf: raw?.sourceAsOf ?? null,
+    provenance: raw?.provenance ?? null,
   };
-  const utilityR = utilityFromEvidence(base.evidence);
+  const utility = utilityFromEvidence(base.evidence);
   const leverage = market === 'CRYPTO_FUTURES'
     ? recommendConservativeLeverage(raw?.leverageEvidence ?? {})
     : null;
-  return Object.freeze({ ...base, utilityR, leverage, id: identity(base) });
+  return Object.freeze({
+    ...base,
+    utilityR: utility.value,
+    utilityMode: utility.mode,
+    leverage,
+    id: identity(base),
+  });
 }
 
 function initialDecision(candidate) {
@@ -226,7 +253,7 @@ function initialDecision(candidate) {
   if (!candidate.quantEligible) reasons.push('QUANT_NOT_ELIGIBLE');
   if (!candidate.profitEligible) reasons.push('PROFIT_GATE_REJECTED');
   if (!candidate.riskReady) reasons.push('RISK_NOT_READY');
-  if (candidate.utilityR == null) reasons.push('UTILITY_EVIDENCE_INCOMPLETE');
+  if (candidate.utilityR == null) reasons.push(`UTILITY_EVIDENCE_INCOMPLETE:${candidate.utilityMode}`);
   else if (candidate.utilityR <= 0) reasons.push('NON_POSITIVE_NET_UTILITY');
   if (reasons.length) return { state: 'NO_TRADE', reasons };
   if (candidate.ai.forceAbstain) {
@@ -308,6 +335,7 @@ export function buildSignalEvents(snapshot, previousSnapshot = null) {
         timeframe: row.timeframe,
         direction: row.direction,
         state: row.state,
+        validationTier: row.validationTier,
       }));
     }
     if (row.state === 'CANDIDATE' && before !== 'CANDIDATE') {
@@ -320,7 +348,9 @@ export function buildSignalEvents(snapshot, previousSnapshot = null) {
         timeframe: row.timeframe,
         direction: row.direction,
         state: row.state,
+        validationTier: row.validationTier,
         utilityR: row.utilityR,
+        utilityMode: row.utilityMode,
         leverage: row.leverage,
       }));
     } else if (before && before !== row.state) {
@@ -332,6 +362,7 @@ export function buildSignalEvents(snapshot, previousSnapshot = null) {
         strategy: row.strategy,
         timeframe: row.timeframe,
         direction: row.direction,
+        validationTier: row.validationTier,
         previousState: before,
         state: row.state,
         reasons: row.reasons,
@@ -390,6 +421,7 @@ export function assertSignalIntelligenceV3Snapshot(snapshot) {
   for (const row of snapshot.lists.futuresShort) if (row.direction !== 'SHORT') throw new Error('Futures short list invalid');
   for (const row of snapshot.rows) {
     if (!TERMINAL_STATES.has(row.state)) throw new Error(`invalid state ${row.state}`);
+    if (!VALIDATION_TIERS.has(row.validationTier)) throw new Error(`invalid validation tier ${row.validationTier}`);
   }
   return true;
 }
