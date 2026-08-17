@@ -28,8 +28,12 @@ export interface YahooIndexQuote {
   changeAmount: number;
   changePercent: number;
   spark: number[];
+  unit?: 'index' | 'krw' | 'usd';
   updatedAt: string;
 }
+
+const YAHOO_CHART_BUDGET_MS = 3_500;
+const YAHOO_HEDGE_DELAY_MS = 450;
 
 function cleanTicker(value: unknown) {
   return String(value ?? '').trim().toUpperCase();
@@ -71,9 +75,14 @@ function yahooSymbol(ticker: string) {
   return clean;
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(url, {
     redirect: 'follow',
+    signal,
     headers: {
       accept: 'application/json,text/plain,*/*',
       'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -87,6 +96,40 @@ async function fetchJson<T>(url: string): Promise<T> {
   }
 
   return (await res.json()) as T;
+}
+
+async function validChart(url: string, signal: AbortSignal): Promise<YahooChartResult> {
+  const data = await fetchJson<any>(url, signal);
+  const result = data?.chart?.result?.[0];
+  if (!result?.indicators?.quote?.[0]) throw new Error(`YAHOO_CHART_EMPTY_RESULT:${url}`);
+  return result as YahooChartResult;
+}
+
+async function hedgedYahooChart(urls: [string, string]): Promise<YahooChartResult> {
+  const controllers = [new AbortController(), new AbortController()];
+  const timer = setTimeout(() => {
+    controllers[0].abort(new Error('YAHOO_CHART_BUDGET_EXCEEDED'));
+    controllers[1].abort(new Error('YAHOO_CHART_BUDGET_EXCEEDED'));
+  }, YAHOO_CHART_BUDGET_MS);
+  const first = validChart(urls[0], controllers[0].signal);
+  const second = (async () => {
+    await sleep(YAHOO_HEDGE_DELAY_MS);
+    return validChart(urls[1], controllers[1].signal);
+  })();
+
+  try {
+    return await Promise.any([first, second]);
+  } catch (error) {
+    if (error instanceof AggregateError) {
+      const details = error.errors.map((item) => item instanceof Error ? item.message : String(item)).join('|');
+      throw new Error(`YAHOO_HEDGED_PAIR_FAILED:${details}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    controllers[0].abort();
+    controllers[1].abort();
+  }
 }
 
 async function fetchYahooChart(
@@ -103,23 +146,13 @@ async function fetchYahooChart(
       ]
     : ['range=5d&interval=1d', 'range=1mo&interval=1d'];
 
-  const urls = query.flatMap((q) => [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
-  ]);
-
   const errors: string[] = [];
-
-  for (const url of urls) {
+  for (const q of query) {
     try {
-      const data = await fetchJson<any>(url);
-      const result = data?.chart?.result?.[0];
-
-      if (result?.indicators?.quote?.[0]) {
-        return result as YahooChartResult;
-      }
-
-      errors.push(`EMPTY_RESULT:${url}`);
+      return await hedgedYahooChart([
+        `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
+        `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
+      ]);
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
@@ -239,7 +272,7 @@ export function yahooChartParams(tf?: string): { range: string; interval: string
     case '1D':
       return { range: '10y', interval: '1d' };
     default:
-		throw new Error(`YAHOO_UNSUPPORTED_TIMEFRAME:${String(tf)}`);
+      throw new Error(`YAHOO_UNSUPPORTED_TIMEFRAME:${String(tf)}`);
   }
 }
 
