@@ -202,12 +202,12 @@ export function evaluateResearchCapitalAllocation({
 
   const rawWeights = Object.fromEntries(Object.entries(stats).map(([key, row]) => [key, row.rawScore / rawScoreSum]));
   const capped = capWeights(rawWeights, policy.maxStrategyWeight);
-  const normalizedSum = Object.values(capped).reduce((sum, value) => sum + value, 0);
-  const normalized = Object.fromEntries(Object.entries(capped).map(([key, value]) => [key, normalizedSum > 0 ? value / normalizedSum : 0]));
-  const portfolioReturns = alignedPortfolioReturns(eligible, normalized);
+  const baseGrossExposure = Object.values(capped).reduce((sum, value) => sum + value, 0);
+  const portfolioReturns = alignedPortfolioReturns(eligible, capped);
   const safe = findSafeExposure(portfolioReturns, policy);
-  const weights = Object.fromEntries(Object.entries(normalized).map(([key, value]) => [key, value * safe.exposure]));
-  const cashWeight = Math.max(0, 1 - Object.values(weights).reduce((sum, value) => sum + value, 0));
+  const weights = Object.fromEntries(Object.entries(capped).map(([key, value]) => [key, value * safe.exposure]));
+  const grossExposure = Object.values(weights).reduce((sum, value) => sum + value, 0);
+  const cashWeight = Math.max(0, 1 - grossExposure);
 
   return Object.freeze({
     schemaVersion: CAPITAL_ALLOCATION_RISK_SCHEMA_VERSION,
@@ -215,7 +215,9 @@ export function evaluateResearchCapitalAllocation({
     reason: safe.ruinProbability == null ? "ruin_evidence_insufficient" : null,
     weights: Object.freeze(weights),
     cashWeight,
-    grossExposure: safe.exposure,
+    grossExposure,
+    baseGrossExposure,
+    ruinRiskScale: safe.exposure,
     ruinProbability: safe.ruinProbability,
     ruinThreshold: policy.ruinThreshold,
     maxAllowedRuinProbability: policy.maxRuinProbability,
