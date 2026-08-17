@@ -168,10 +168,12 @@ function isExpectedRouteTransitionAbort(
 ) {
   try {
     const parsed = new URL(request.url());
+    const routeRead = parsed.pathname.startsWith('/api/') || request.resourceType() === 'script';
     return observation.fromRoute !== observation.toRoute
       && observation.pendingGetRequests.has(request)
       && request.method() === 'GET'
-      && parsed.pathname.startsWith('/api/')
+      && routeRead
+      && parsed.pathname !== '/api/market/scan'
       && request.failure()?.errorText === 'net::ERR_ABORTED';
   } catch {
     return false;
@@ -181,9 +183,11 @@ function isExpectedRouteTransitionAbort(
 function isSameOriginApiGet(request: Request) {
   try {
     const parsed = new URL(request.url());
+    const routeRead = parsed.pathname.startsWith('/api/') || request.resourceType() === 'script';
     return request.method() === 'GET'
       && parsed.origin === new URL(request.frame().url()).origin
-      && parsed.pathname.startsWith('/api/');
+      && routeRead
+      && parsed.pathname !== '/api/market/scan';
   } catch {
     return false;
   }
@@ -226,7 +230,13 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       logoutObservation.personalIntegrationReads.add(request);
     }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
-    if (isSameOriginApiGet(request)) apiGets.add(request);
+    if (isSameOriginApiGet(request)) {
+      apiGets.add(request);
+      const routeObservation = activeRouteTransitionObservations.get(page);
+      if (routeObservation && routeIdentity(page.url()) === routeObservation.fromRoute) {
+        routeObservation.pendingGetRequests.add(request);
+      }
+    }
   });
   page.on('requestfinished', (request) => completeBrowserRequest(page, request));
   page.on('console', (message) => {
