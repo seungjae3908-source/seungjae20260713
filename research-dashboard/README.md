@@ -1,3 +1,0 @@
-# Research Lab
-
-placeholder
