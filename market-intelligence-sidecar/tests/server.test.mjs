@@ -39,7 +39,21 @@ async function assertHealth(port, expectedSha) {
   return health;
 }
 
-test('server exposes safe loopback health and evaluate endpoint', async (t) => {
+async function assertContracts(port) {
+  const response = await fetch(`http://127.0.0.1:${port}/v1/contracts`);
+  assert.equal(response.status, 200);
+  const contracts = await response.json();
+  assert.equal(contracts.safetySuite.defaultEnforcement, 'OBSERVE_ONLY');
+  assert.equal(contracts.safetySuite.advancedGates.policy.enforcement, 'OBSERVE_ONLY');
+  assert.equal(contracts.safetySuite.executionQuality.policy.enforcement, 'OBSERVE_ONLY');
+  assert.equal(contracts.safetySuite.portfolioSafety.policy.enforcement, 'OBSERVE_ONLY');
+  assert.equal(contracts.safetySuite.portfolioSafety.killSwitchAuthority, 'BLOCK_NEW_ENTRIES_ONLY');
+  assert.equal(contracts.safety.executionAuthority, 'NONE');
+  assert.equal(contracts.safety.realOrderAllowed, false);
+  return contracts;
+}
+
+test('server exposes safe loopback health, contracts and evaluate endpoint', async (t) => {
   const port = 18891;
   const child = spawn(process.execPath, ['src/server.mjs'], {
     cwd: new URL('..', import.meta.url),
@@ -54,6 +68,7 @@ test('server exposes safe loopback health and evaluate endpoint', async (t) => {
   t.after(() => child.kill('SIGTERM'));
   await waitForLine(child, 'market_intelligence_started');
   await assertHealth(port, 'test-sha');
+  await assertContracts(port);
 
   const evaluateResponse = await fetch(`http://127.0.0.1:${port}/v1/evaluate`, {
     method: 'POST',
@@ -71,6 +86,9 @@ test('server exposes safe loopback health and evaluate endpoint', async (t) => {
   assert.equal(evaluated.ok, true);
   assert.equal(evaluated.result.scanner.mode, 'SOFT_INTELLIGENCE_LAYER');
   assert.equal(evaluated.result.autoTrading.orderAllowed, false);
+  assert.equal(evaluated.result.advancedGates.policy.enforcement, 'OBSERVE_ONLY');
+  assert.equal(evaluated.result.executionQuality.policy.enforcement, 'OBSERVE_ONLY');
+  assert.equal(evaluated.result.portfolioSafety.policy.enforcement, 'OBSERVE_ONLY');
 });
 
 test('server starts when invoked through the production-style current symlink', async (t) => {
@@ -95,4 +113,5 @@ test('server starts when invoked through the production-style current symlink', 
   t.after(() => child.kill('SIGTERM'));
   await waitForLine(child, 'market_intelligence_started');
   await assertHealth(port, 'symlink-sha');
+  await assertContracts(port);
 });
