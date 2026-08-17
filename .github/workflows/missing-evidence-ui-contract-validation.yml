@@ -1,0 +1,48 @@
+name: Missing Evidence UI Contract Validation
+
+on:
+  pull_request:
+    paths:
+      - 'evidence-ui-contract/**'
+      - '.github/workflows/missing-evidence-ui-contract-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+
+      - name: Validate evidence display contract
+        run: node --test evidence-ui-contract/evidence-display-contract.test.mjs
+
+      - name: Verify forbidden zero coercion contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const source = readFileSync('evidence-ui-contract/evidence-display-contract.mjs', 'utf8');
+          for (const required of ['NOT_COLLECTED', 'STALE', 'UNAVAILABLE', 'PERMISSION_REQUIRED', 'N_A']) {
+            if (!source.includes(required)) throw new Error(`missing evidence state ${required}`);
+          }
+          if (!source.includes('Object.is(value, 0)')) throw new Error('actual-zero preservation contract missing');
+          NODE
