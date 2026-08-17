@@ -22,7 +22,7 @@ export interface ScannerUniverseExplainedExclusion {
   name: string;
   exchange: string | null;
   assetType: AssetType;
-  reason: 'PUBLIC_PROVIDER_UNSUPPORTED_ALPHANUMERIC_ETF_ETN';
+  reason: 'PUBLIC_PROVIDER_UNSUPPORTED_ALPHANUMERIC_KRX_SYMBOL';
 }
 
 export interface ScannerUniverseResult {
@@ -90,15 +90,20 @@ function publicOnlyCapability(
   const exclusions: ScannerUniverseExplainedExclusion[] = [];
   const supported = entries.filter((entry) => {
     const ticker = String(entry.ticker ?? '').trim().toUpperCase();
-    const isSecurityProduct = String(entry.exchange ?? '').trim() === 'ETF·ETN';
-    const unsupported = isSecurityProduct && !/^\d{6}$/u.test(ticker);
+    // The standalone public-only V3 uses Yahoo for KR candles/quotes. Yahoo
+    // supports the traditional numeric KRX short-code form via .KS/.KQ, but
+    // not the newer alphanumeric KRX short codes. Keep those symbols visible
+    // as explained capability exclusions instead of counting them as provider
+    // outages. The normal app universe is unchanged because this branch is
+    // enabled only by SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE=true.
+    const unsupported = !/^\d{6}$/u.test(ticker);
     if (!unsupported) return true;
     exclusions.push({
       ticker,
       name: String(entry.name ?? ticker),
       exchange: entry.exchange,
       assetType: entry.assetType,
-      reason: 'PUBLIC_PROVIDER_UNSUPPORTED_ALPHANUMERIC_ETF_ETN',
+      reason: 'PUBLIC_PROVIDER_UNSUPPORTED_ALPHANUMERIC_KRX_SYMBOL',
     });
     return false;
   });
@@ -106,7 +111,7 @@ function publicOnlyCapability(
   if (exclusions.length > 0) {
     const tickers = exclusions.slice(0, 20).map((row) => row.ticker).join(',');
     console.warn(
-      `[SIGNAL_INTELLIGENCE_EXPLAINED_EXCLUSION] reason=PUBLIC_PROVIDER_UNSUPPORTED_ALPHANUMERIC_ETF_ETN count=${exclusions.length} tickers=${tickers}`,
+      `[SIGNAL_INTELLIGENCE_EXPLAINED_EXCLUSION] reason=PUBLIC_PROVIDER_UNSUPPORTED_ALPHANUMERIC_KRX_SYMBOL count=${exclusions.length} tickers=${tickers}`,
     );
   }
   return { entries: supported, rawTotalCount, exclusions };
