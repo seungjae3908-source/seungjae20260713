@@ -126,6 +126,19 @@ test("capital allocator keeps explicit cash and caps ruin risk using research-on
   assert.equal(result.safety.capitalMutationAllowed, false);
 });
 
+test("capital allocator never renormalizes past a per-strategy cap and leaves the remainder in cash", () => {
+  const policy = { status: "empirically_calibrated", maxStrategyWeight: 0.4, expectedShortfallAlpha: 0.2, maxRuinProbability: 0.05, ruinThreshold: 0.7, paths: 300, horizon: 50, blockLength: 3, seed: 13 };
+  const returnsA = Array.from({ length: 60 }, (_, i) => 0.004 + (i % 5 === 0 ? -0.003 : 0.001));
+  const returnsB = Array.from({ length: 60 }, (_, i) => 0.003 + (i % 7 === 0 ? -0.002 : 0.0005));
+  const promoted = (id, samples) => ({ strategyFingerprint: id, netReturnSamples: samples, promotionAssessment: { status: "PROMOTION_REVIEW_READY" }, lifecycleAssessment: { state: "CHAMPION" } });
+  const result = evaluateResearchCapitalAllocation({ strategies: [promoted("a", returnsA), promoted("b", returnsB)], policy });
+  assert.equal(result.status, "ALLOCATION_REVIEW_READY");
+  assert.ok(Object.values(result.weights).every((value) => value <= 0.4 + 1e-12));
+  assert.ok(result.baseGrossExposure <= 0.8 + 1e-12);
+  assert.ok(result.grossExposure <= result.baseGrossExposure + 1e-12);
+  assert.ok(result.cashWeight >= 0.2 - 1e-12);
+});
+
 test("capacity model refuses public/simulated book data and only fits real execution impact", () => {
   const policy = { status: "empirically_calibrated", minimumRealExecutions: 20, minimumParticipationBuckets: 4, participationBucketCount: 5, edgeSafetyMarginBps: 2, minimumRSquared: 0.7 };
   const notReady = estimateEmpiricalExecutionCapacity({
