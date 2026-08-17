@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Database } from 'lucide-react';
 import type { AnalysisSelection } from '@/lib/analysis-selection';
+import { resolveEvidenceDisplay } from '@/lib/evidence-display';
 import { normalizeUnifiedSymbol } from '@/lib/unified-chart-data';
 
 type FuturesPublicStatus = 'live' | 'delayed' | 'cached' | 'disconnected' | 'error' | 'insufficient';
@@ -74,24 +75,36 @@ async function fetchFuturesPublicContext(symbol: string, signal: AbortSignal): P
 }
 
 function formatNumber(value: number | null, maximumFractionDigits = 2): string {
-  if (value == null) return 'UNAVAILABLE';
-  return value.toLocaleString('ko-KR', { maximumFractionDigits });
+  return resolveEvidenceDisplay({
+    value,
+    formatter: (observed) => typeof observed === 'number'
+      ? observed.toLocaleString('ko-KR', { maximumFractionDigits })
+      : String(observed),
+  }).display;
 }
 
 function formatFunding(value: number | null): string {
-  if (value == null) return 'UNAVAILABLE';
-  return `${(value * 100).toFixed(4)}%`;
+  return resolveEvidenceDisplay({
+    value,
+    formatter: (observed) => typeof observed === 'number'
+      ? `${(observed * 100).toFixed(4)}%`
+      : String(observed),
+  }).display;
 }
 
 function formatPercent(value: number | null): string {
-  if (value == null) return 'UNAVAILABLE';
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+  return resolveEvidenceDisplay({
+    value,
+    formatter: (observed) => typeof observed === 'number'
+      ? `${observed >= 0 ? '+' : ''}${observed.toFixed(2)}%`
+      : String(observed),
+  }).display;
 }
 
 function formatDate(value: string | null): string {
-  if (!value) return 'UNAVAILABLE';
+  if (!value) return resolveEvidenceDisplay({ value: null, collected: false }).display;
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return 'UNAVAILABLE';
+  if (!Number.isFinite(timestamp)) return resolveEvidenceDisplay({ value: Number.NaN }).display;
   return new Date(timestamp).toLocaleString('ko-KR', {
     month: '2-digit',
     day: '2-digit',
@@ -126,6 +139,7 @@ export function FuturesPublicContextPanel({ selection }: Props) {
   if (selection.market !== 'BITGET') return null;
 
   const data = query.data;
+  const missingEvidence = resolveEvidenceDisplay({ value: null, collected: false }).display;
   return (
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="futures-public-context">
       <div className="flex items-start justify-between gap-3">
@@ -150,11 +164,11 @@ export function FuturesPublicContextPanel({ selection }: Props) {
         </div>
       ) : (
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5 lg:grid-cols-2 xl:grid-cols-5">
-          <Metric label="Mark Price" value={data ? `${formatNumber(data.markPrice, 8)} USDT` : 'LOADING'} />
-          <Metric label="Funding" value={data ? formatFunding(data.fundingRate) : 'LOADING'} />
-          <Metric label="Next Funding" value={data ? formatDate(data.nextFundingAt) : 'LOADING'} />
-          <Metric label="Open Interest" value={data ? formatNumber(data.openInterest, 4) : 'LOADING'} />
-          <Metric label="OI Change" value={data ? formatPercent(data.openInterestChangePercent) : 'LOADING'} />
+          <Metric label="Mark Price" value={data ? `${formatNumber(data.markPrice, 8)}${data.markPrice == null ? '' : ' USDT'}` : missingEvidence} />
+          <Metric label="Funding" value={data ? formatFunding(data.fundingRate) : missingEvidence} />
+          <Metric label="Next Funding" value={data ? formatDate(data.nextFundingAt) : missingEvidence} />
+          <Metric label="Open Interest" value={data ? formatNumber(data.openInterest, 4) : missingEvidence} />
+          <Metric label="OI Change" value={data ? formatPercent(data.openInterestChangePercent) : missingEvidence} />
         </div>
       )}
 
