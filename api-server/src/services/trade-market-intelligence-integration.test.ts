@@ -4,6 +4,7 @@ import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
+import { marketIntelligenceSymbolForTradingPlan } from './trade-market-intelligence.service';
 
 const USER_ID = '33333333-3333-3333-3333-333333333333';
 
@@ -54,6 +55,11 @@ async function withFetchMock<T>(mock: typeof fetch, run: () => Promise<T>) {
   globalThis.fetch = mock;
   try { return await run(); } finally { globalThis.fetch = original; }
 }
+
+test('Upbit plan symbol is normalized from BTC + KRW to KRW-BTC for Sidecar public data', () => {
+  assert.equal(marketIntelligenceSymbolForTradingPlan({ exchange: 'upbit', market: 'KRW', symbol: 'BTC' }), 'KRW-BTC');
+  assert.equal(marketIntelligenceSymbolForTradingPlan({ exchange: 'upbit', market: 'KRW', symbol: 'KRW-ETH' }), 'KRW-ETH');
+});
 
 test('canonical trade plan creation blocks Market Intelligence BLOCKED_RISK with zero orders', async () => {
   await withFetchMock(async () => sidecar('BLOCKED_RISK', 'STALE_INTELLIGENCE_DATA'), async () => {
