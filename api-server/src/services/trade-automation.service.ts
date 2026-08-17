@@ -9,6 +9,10 @@ import {
   riskEnvelopeForPlan,
   withRiskEnvelope,
 } from './trade-risk-envelope.service';
+import {
+  fetchTradingPlanMarketIntelligence,
+  marketIntelligenceTradeDecision,
+} from './trade-market-intelligence.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder, TradingOrderEvent, TradingOrderState, TradingPlan, TradingPlanInput, TradingPolicy,
@@ -44,6 +48,21 @@ function authoritativeFillCorrection(
   return currentTimestamp === null || nextTimestamp === null || nextTimestamp >= currentTimestamp;
 }
 
+function marketIntelligenceBlockedDecision(blockCode: string, warnings: string[]): TradingRiskDecision {
+  return {
+    allowed: false,
+    blockCodes: [blockCode],
+    warnings: [...new Set(warnings)],
+  };
+}
+
+function withMarketIntelligenceWarnings(decision: TradingRiskDecision, warnings: string[]): TradingRiskDecision {
+  return {
+    ...decision,
+    warnings: [...new Set([...decision.warnings, ...warnings])],
+  };
+}
+
 export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
   return createHash('sha256').update([
     userId, input.exchange, input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
@@ -69,15 +88,33 @@ export class TradeAutomationService {
       || await this.repository.getGlobalEmergencyStop();
   }
 
+  private async marketIntelligenceDecision(input: TradingPlanInput) {
+    const intelligence = await fetchTradingPlanMarketIntelligence(input);
+    return marketIntelligenceTradeDecision(intelligence, input.accountMode);
+  }
+
   async createPlan(userId: string, input: TradingPlanInput, policy: TradingPolicy, emergencyStopped: boolean) {
     const idempotencyKey = tradingIdempotencyKey(userId, input);
     const duplicate = await this.repository.findPlanByIdempotency(userId, idempotencyKey);
     if (duplicate) return { plan: duplicate, duplicate: true, decision: { allowed: true, blockCodes: [], warnings: [] } };
 
-    const decision = evaluateTradingPlan(input, policy, {
+    const intelligence = await this.marketIntelligenceDecision(input);
+    if (!intelligence.allowed) {
+      return {
+        plan: null,
+        duplicate: false,
+        decision: marketIntelligenceBlockedDecision(
+          intelligence.blockCode ?? 'MARKET_INTELLIGENCE_BLOCKED_RISK',
+          intelligence.warnings,
+        ),
+      };
+    }
+
+    const riskDecision = evaluateTradingPlan(input, policy, {
       emergencyStopped: emergencyStopped || await this.emergencyStopActive(userId, policy),
       serverLiveEnabled: input.accountMode !== 'live' || liveExecutionEnabled(input.exchange),
     });
+    const decision = withMarketIntelligenceWarnings(riskDecision, intelligence.warnings);
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
       return { plan: null, duplicate: false, decision };
@@ -106,6 +143,14 @@ export class TradeAutomationService {
       await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
       throw new Error('TRADE_PLAN_EXPIRED');
     }
+
+    const intelligence = await this.marketIntelligenceDecision(plan);
+    if (!intelligence.allowed) {
+      const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
+      await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
+      throw new Error(`TRADE_PLAN_MARKET_INTELLIGENCE_FAILED:${intelligence.blockCode ?? 'MARKET_INTELLIGENCE_BLOCKED_RISK'}`);
+    }
+
     const policy = await this.repository.getPolicy(userId);
     const decision = evaluateTradingPlan(plan, policy, {
       emergencyStopped: await this.emergencyStopActive(userId, policy),
