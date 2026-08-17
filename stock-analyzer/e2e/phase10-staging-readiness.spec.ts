@@ -168,7 +168,9 @@ function isExpectedRouteTransitionAbort(
 ) {
   try {
     const parsed = new URL(request.url());
-    const routeRead = parsed.pathname.startsWith('/api/') || request.resourceType() === 'script';
+    const routeRead = parsed.pathname.startsWith('/api/')
+      || isProfileRequest(request)
+      || request.resourceType() === 'script';
     return observation.fromRoute !== observation.toRoute
       && observation.pendingGetRequests.has(request)
       && request.method() === 'GET'
@@ -183,7 +185,9 @@ function isExpectedRouteTransitionAbort(
 function isSameOriginApiGet(request: Request) {
   try {
     const parsed = new URL(request.url());
-    const routeRead = parsed.pathname.startsWith('/api/') || request.resourceType() === 'script';
+    const routeRead = parsed.pathname.startsWith('/api/')
+      || isProfileRequest(request)
+      || request.resourceType() === 'script';
     return request.method() === 'GET'
       && parsed.origin === new URL(request.frame().url()).origin
       && routeRead
