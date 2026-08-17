@@ -71,6 +71,10 @@ function yahooSymbol(ticker: string) {
   const clean = cleanTicker(ticker);
 
   if (isKrTicker(clean)) return `${clean}.KS`;
+  // Yahoo Finance canonicalizes US class shares such as BRK.B / BF.B to
+  // BRK-B / BF-B. Normalizing before the first request prevents the scanner's
+  // bounded item budget from being spent on a known alias miss.
+  if (/^[A-Z0-9]+\.[A-Z0-9]+$/u.test(clean)) return clean.replace(/\./gu, '-');
 
   return clean;
 }
@@ -377,7 +381,7 @@ export async function getYahooSector(ticker: string): Promise<string | null> {
   const clean = cleanTicker(ticker);
   if (!clean || isKrTicker(clean)) return null;
 
-  const encoded = encodeURIComponent(clean);
+  const encoded = encodeURIComponent(yahooSymbol(clean));
   const urls = [
     `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encoded}?modules=assetProfile`,
     `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encoded}?modules=assetProfile`,
