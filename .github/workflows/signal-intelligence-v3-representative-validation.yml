@@ -5,6 +5,10 @@ on:
     paths:
       - 'signal-intelligence-v3/**'
       - 'market-prediction-lab/**'
+      - 'api-server/src/services/stock-signal-scanner.service.ts'
+      - 'api-server/src/services/crypto-signal-scanner.service.ts'
+      - 'api-server/src/services/scanner-*.service.ts'
+      - 'api-server/src/providers/yahoo.ts'
       - '.github/workflows/signal-intelligence-v3-representative-validation.yml'
   workflow_dispatch:
 
