@@ -4,13 +4,13 @@ on:
   push:
     branches:
       - main
-      - research/rule-model-1h-sidecar-artifact-chain-v1
+      - research/rule0-1h-sidecar-chain-v2
     paths:
       - .github/workflows/prediction-lab-rule0-1h-shadow-sidecar.yml
+      - market-prediction-lab/package.json
+      - market-prediction-lab/scripts/compute-rule0-1h-execution-fingerprint.js
       - market-prediction-lab/scripts/run-rule-model-1h-shadow-sidecar.js
-      - market-prediction-lab/src/rule-model-shadow-challenger.js
-      - market-prediction-lab/src/derivatives-history.js
-      - market-prediction-lab/src/shadow-ledger.js
+      - market-prediction-lab/src/**
       - market-prediction-lab/docs/rule-model-1h-shadow-model.json
       - market-prediction-lab/docs/rule-model-1h-shadow-contract.json
   workflow_dispatch:
@@ -32,10 +32,11 @@ concurrency:
 
 env:
   LAB_DIR: market-prediction-lab
-  ARTIFACT_NAME: prediction-lab-rule0-1h-shadow-state
+  ARTIFACT_NAME: prediction-lab-rule0-1h-shadow-state-v2
   WORKFLOW_FILE: prediction-lab-rule0-1h-shadow-sidecar.yml
-  CHAIN_CONTRACT: rule0-1h-artifact-chain-v1
+  CHAIN_CONTRACT: rule0-1h-artifact-chain-v2
   CANONICAL_OI_PARITY_BLOB: 201e70e53af2e150eda600377e8ef7d287c4ea23
+  EXECUTION_FINGERPRINT_SCRIPT: market-prediction-lab/scripts/compute-rule0-1h-execution-fingerprint.js
 
 jobs:
   forward-shadow-sidecar:
@@ -78,11 +79,22 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "$(git hash-object "$LAB_DIR/src/derivatives-history.js")" = "$CANONICAL_OI_PARITY_BLOB"
 
-      - name: Run focused Rule0 and OI parity regressions
-        working-directory: ${{ env.LAB_DIR }}
-        run: node --test tests/derivatives-history.test.js tests/rule-model-shadow-challenger.test.js
+      - name: Build current execution dependency fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$EXECUTION_FINGERPRINT_SCRIPT" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/current-execution-dependencies.json" \
+            --format json
+          node -e 'const x=require(process.argv[1]); if (!/^[0-9a-f]{64}$/.test(x.fingerprint) || !Array.isArray(x.files) || x.files.length < 10) process.exit(1)' \
+            "$RUNNER_TEMP/current-execution-dependencies.json"
 
-      - name: Resolve latest successful predecessor artifact on this branch
+      - name: Run focused Rule0, fingerprint and OI parity regressions
+        working-directory: ${{ env.LAB_DIR }}
+        run: node --test tests/derivatives-history.test.js tests/rule-model-shadow-challenger.test.js tests/rule0-execution-fingerprint.test.js
+
+      - name: Resolve latest compatible predecessor artifact on this branch
         id: predecessor
         shell: bash
         env:
@@ -90,19 +102,26 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/predecessor"
-          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_FILE/runs?branch=$GITHUB_REF_NAME&status=success&per_page=20" --jq '.workflow_runs[0].id // empty')"
-          if [ -z "$run_id" ]; then
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          found=false
+          run_id=""
+          artifact_id=""
+          while IFS= read -r candidate_run_id; do
+            [ -n "$candidate_run_id" ] || continue
+            candidate_artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate_run_id/artifacts?per_page=100" \
+              --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\" and .expired == false) | .id" | head -n 1)"
+            if [ -n "$candidate_artifact_id" ]; then
+              found=true
+              run_id="$candidate_run_id"
+              artifact_id="$candidate_artifact_id"
+              break
+            fi
+          done < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_FILE/runs?branch=$GITHUB_REF_NAME&status=success&per_page=50" \
+            --jq '.workflow_runs[].id')
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+          if [ "$found" = true ]; then
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
           fi
-          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" --jq '.artifacts[] | select(.name == "prediction-lab-rule0-1h-shadow-state" and .expired == false) | .id' | head -n 1)"
-          if [ -z "$artifact_id" ]; then
-            echo "No unexpired predecessor artifact on latest successful run $run_id" >&2
-            exit 1
-          fi
-          echo "found=true" >> "$GITHUB_OUTPUT"
-          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
 
       - name: Restore and verify predecessor state
         if: steps.predecessor.outputs.found == 'true'
@@ -123,19 +142,26 @@ jobs:
           state="$(find "$RUNNER_TEMP/predecessor" -name state.json -type f | head -n 1)"
           summary="$(find "$RUNNER_TEMP/predecessor" -name summary.json -type f | head -n 1)"
           manifest="$(find "$RUNNER_TEMP/predecessor" -name manifest.json -type f | head -n 1)"
-          test -n "$state" && test -n "$summary" && test -n "$manifest"
+          dependencies="$(find "$RUNNER_TEMP/predecessor" -name execution-dependencies.json -type f | head -n 1)"
+          test -n "$state" && test -n "$summary" && test -n "$manifest" && test -n "$dependencies"
           CURRENT_SIDECAR_SHA="$(sha256sum "$LAB_DIR/scripts/run-rule-model-1h-shadow-sidecar.js" | awk '{print $1}')" \
           CURRENT_MODEL_SHA="$(sha256sum "$LAB_DIR/docs/rule-model-1h-shadow-model.json" | awk '{print $1}')" \
           CURRENT_CONTRACT_SHA="$(sha256sum "$LAB_DIR/docs/rule-model-1h-shadow-contract.json" | awk '{print $1}')" \
-          PREDECESSOR_STATE="$state" PREDECESSOR_SUMMARY="$summary" PREDECESSOR_MANIFEST="$manifest" \
+          CURRENT_EXECUTION_DEPENDENCIES="$RUNNER_TEMP/current-execution-dependencies.json" \
+          PREDECESSOR_STATE="$state" PREDECESSOR_SUMMARY="$summary" PREDECESSOR_MANIFEST="$manifest" PREDECESSOR_DEPENDENCIES="$dependencies" \
           node <<'NODE'
           const fs = require('fs');
           const crypto = require('crypto');
           const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
           const manifest = JSON.parse(fs.readFileSync(process.env.PREDECESSOR_MANIFEST, 'utf8'));
+          const predecessorDependencies = JSON.parse(fs.readFileSync(process.env.PREDECESSOR_DEPENDENCIES, 'utf8'));
+          const currentDependencies = JSON.parse(fs.readFileSync(process.env.CURRENT_EXECUTION_DEPENDENCIES, 'utf8'));
           if (manifest.chainContract !== process.env.CHAIN_CONTRACT) throw new Error('predecessor chain contract mismatch');
           if (manifest.stateSha256 !== digest(process.env.PREDECESSOR_STATE)) throw new Error('predecessor state digest mismatch');
           if (manifest.summarySha256 !== digest(process.env.PREDECESSOR_SUMMARY)) throw new Error('predecessor summary digest mismatch');
+          if (manifest.executionDependencyManifestSha256 !== digest(process.env.PREDECESSOR_DEPENDENCIES)) throw new Error('predecessor execution dependency manifest digest mismatch');
+          if (predecessorDependencies.fingerprint !== manifest.executionDependencyFingerprint) throw new Error('predecessor execution dependency fingerprint mismatch');
+          if (currentDependencies.fingerprint !== manifest.executionDependencyFingerprint) throw new Error('execution dependency changed; start a separately versioned chain');
           if (manifest.sidecarSha256 !== process.env.CURRENT_SIDECAR_SHA) throw new Error('sidecar code changed; start a separately versioned chain');
           if (manifest.frozenModelFileSha256 !== process.env.CURRENT_MODEL_SHA) throw new Error('frozen model changed; chain mixing forbidden');
           if (manifest.contractSha256 !== process.env.CURRENT_CONTRACT_SHA) throw new Error('forward gate contract changed; chain mixing forbidden');
@@ -203,6 +229,7 @@ jobs:
           mkdir -p sidecar-artifact
           cp "$RUNNER_TEMP/sidecar-state.json" sidecar-artifact/state.json
           cp "$RUNNER_TEMP/sidecar-summary.json" sidecar-artifact/summary.json
+          cp "$RUNNER_TEMP/current-execution-dependencies.json" sidecar-artifact/execution-dependencies.json
           cp "$LAB_DIR/docs/rule-model-1h-shadow-model.json" sidecar-artifact/frozen-model.json
           cp "$LAB_DIR/docs/rule-model-1h-shadow-contract.json" sidecar-artifact/contract.json
           node <<'NODE'
@@ -211,8 +238,9 @@ jobs:
           const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
           const predecessorState = `${process.env.RUNNER_TEMP}/predecessor/state.json`;
           const previousStateSha256 = process.env.PREDECESSOR_FOUND === 'true' && fs.existsSync(predecessorState) ? digest(predecessorState) : null;
+          const executionDependencies = JSON.parse(fs.readFileSync('sidecar-artifact/execution-dependencies.json', 'utf8'));
           const manifest = {
-            schemaVersion: 1,
+            schemaVersion: 2,
             chainContract: process.env.CHAIN_CONTRACT,
             researchCodeSha: process.env.RESEARCH_SHA,
             runId: process.env.GITHUB_RUN_ID,
@@ -223,6 +251,9 @@ jobs:
             previousStateSha256,
             stateSha256: digest('sidecar-artifact/state.json'),
             summarySha256: digest('sidecar-artifact/summary.json'),
+            executionDependencyFingerprint: executionDependencies.fingerprint,
+            executionDependencyFileCount: executionDependencies.files.length,
+            executionDependencyManifestSha256: digest('sidecar-artifact/execution-dependencies.json'),
             sidecarSha256: digest(`${process.env.LAB_DIR}/scripts/run-rule-model-1h-shadow-sidecar.js`),
             frozenModelFileSha256: digest('sidecar-artifact/frozen-model.json'),
             contractSha256: digest('sidecar-artifact/contract.json'),
