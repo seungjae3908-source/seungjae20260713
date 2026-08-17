@@ -1,0 +1,238 @@
+name: Production App Release Control
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Owner-approved exact-main Production app release bridge
+    if: >-
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-production-app ')
+    concurrency:
+      group: production-app-release-control
+      cancel-in-progress: false
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+      statuses: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Parse exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-production-app ([0-9a-fA-F]{40})$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /run-production-app <40-character-current-main-sha>');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1].toLowerCase()}\n`);
+          NODE
+
+      - name: Require exact current main SHA
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_SHA"
+          MAIN_SHA="$(git rev-parse origin/main^{commit})"
+          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || {
+            echo "Production app release requires exact current main: target=$TARGET_SHA main=$MAIN_SHA" >&2
+            exit 1
+          }
+
+      - name: Require exact-main Required CI 6/6
+        id: ci
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const targetSha = process.env.TARGET_SHA;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            for (const name of required) {
+              const latest = statuses.find((status) => status.context === name);
+              if (!latest || latest.state !== 'success') {
+                core.setFailed(`Required CI is not green: ${name}`);
+                return;
+              }
+            }
+            core.info('Exact-main Required CI 6/6 is green.');
+
+      - name: Require successful exact-SHA PostgreSQL authentication artifact
+        id: postgres
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const artifactName = `staging-postgres-auth-${targetSha}`;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: targetSha,
+              branch: 'main',
+              event: 'issue_comment',
+              status: 'completed',
+              per_page: 100,
+            });
+            const candidates = runs
+              .filter((run) => run.name === 'Staging PostgreSQL Auth Gate'
+                && run.path === '.github/workflows/staging-postgres-auth-gate.yml'
+                && run.head_sha === targetSha
+                && run.head_branch === 'main'
+                && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+            for (const run of candidates) {
+              const response = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = (response.data.artifacts ?? []).find((item) =>
+                item.name === artifactName && item.expired !== true && item.workflow_run?.head_sha === targetSha);
+              if (artifact) {
+                core.setOutput('run_id', String(run.id));
+                core.info(`Exact PostgreSQL auth evidence accepted from Run ${run.id}.`);
+                return;
+              }
+            }
+            core.setFailed(`No successful exact-SHA PostgreSQL auth artifact exists for ${targetSha}.`);
+
+      - name: Require successful exact-SHA release-ready Staging verdict
+        id: staging
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const artifactName = `staging-verdict-${targetSha}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: artifactName,
+              per_page: 100,
+            });
+            const candidates = artifacts
+              .filter((artifact) => !artifact.expired && artifact.workflow_run?.head_sha === targetSha)
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+            for (const artifact of candidates) {
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: artifact.workflow_run.id,
+              });
+              const run = response.data;
+              if (run.event === 'workflow_dispatch'
+                && run.head_branch === 'main'
+                && run.head_sha === targetSha
+                && run.path === '.github/workflows/staging-readiness.yml'
+                && run.status === 'completed'
+                && run.conclusion === 'success') {
+                core.setOutput('run_id', String(run.id));
+                core.info(`Exact Staging verdict accepted from Run ${run.id}.`);
+                return;
+              }
+            }
+            core.setFailed(`No successful exact-SHA Staging verdict exists for ${targetSha}.`);
+
+      - name: Dispatch protected Production Deploy
+        id: production
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const response = await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              ref: 'main',
+              inputs: {
+                sha: targetSha,
+                data_probe_path: '/api/healthz/data-plane',
+                force_rebuild: 'false',
+              },
+              return_run_details: true,
+              headers: {
+                accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2026-03-10',
+              },
+            });
+            const runId = Number(response.data?.workflow_run_id);
+            if (response.status !== 200 || !Number.isSafeInteger(runId) || runId <= 0) {
+              core.setFailed(`Production dispatch returned invalid Run ID with HTTP ${response.status}.`);
+              return;
+            }
+            core.setOutput('run_id', String(runId));
+            core.info(`Protected Production Deploy dispatched as Run ${runId}.`);
+
+      - name: Record protected Production dispatch
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_RUN_ID: ${{ steps.production.outputs.run_id }}
+          POSTGRES_RUN_ID: ${{ steps.postgres.outputs.run_id }}
+          STAGING_RUN_ID: ${{ steps.staging.outputs.run_id }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                'Production application deploy dispatched behind the protected `production` environment.',
+                '',
+                `- Exact current main SHA: \`${process.env.TARGET_SHA}\``,
+                '- Required CI: `6/6 SUCCESS`',
+                `- PostgreSQL Auth Gate Run ID: \`${process.env.POSTGRES_RUN_ID}\``,
+                `- Staging Readiness Run ID: \`${process.env.STAGING_RUN_ID}\``,
+                '- Staging verdict: `release_ready=true`',
+                `- Production Deploy Run ID: \`${process.env.PRODUCTION_RUN_ID}\``,
+                '- Production environment protection bypassed: `false`',
+                '- Production DB mutation by this bridge: `false`',
+                '- Trading authority granted: `false`',
+                `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+              ].join('\n'),
+            });
