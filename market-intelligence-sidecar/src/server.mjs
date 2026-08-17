@@ -2,6 +2,9 @@ import http from 'node:http';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { evaluateMarketIntelligence, DEFAULT_POLICY } from './engine.mjs';
+import { DEFAULT_ADVANCED_GATE_POLICY } from './advanced-gates.mjs';
+import { DEFAULT_EXECUTION_QUALITY_POLICY } from './execution-quality.mjs';
+import { DEFAULT_PORTFOLIO_SAFETY_POLICY } from './portfolio-safety.mjs';
 import { fetchBitgetFuturesEvidence, fetchUpbitSpotEvidence } from './public-data.mjs';
 import { buildSignalIntelligenceOverlay } from './signal-overlay.mjs';
 
@@ -99,6 +102,22 @@ async function handler(req, res) {
         policy: DEFAULT_POLICY,
         scannerMode: 'SOFT_INTELLIGENCE_LAYER',
         autoTradingModes: ['PAPER_ONLY', 'BLOCKED_RISK', 'ELIGIBLE_FOR_PARENT_GATE'],
+        safetySuite: {
+          defaultEnforcement: 'OBSERVE_ONLY',
+          advancedGates: {
+            contract: 'market-intelligence-advanced-gates/v1',
+            policy: DEFAULT_ADVANCED_GATE_POLICY,
+          },
+          executionQuality: {
+            contract: 'market-intelligence-execution-quality/v1',
+            policy: DEFAULT_EXECUTION_QUALITY_POLICY,
+          },
+          portfolioSafety: {
+            contract: 'market-intelligence-portfolio-safety/v1',
+            policy: DEFAULT_PORTFOLIO_SAFETY_POLICY,
+            killSwitchAuthority: 'BLOCK_NEW_ENTRIES_ONLY',
+          },
+        },
         signalOverlay: {
           endpoint: '/v1/overlay/signal-intelligence',
           contract: 'market-intelligence-signal-overlay/v1',
