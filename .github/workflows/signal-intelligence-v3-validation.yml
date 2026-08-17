@@ -28,7 +28,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'none'
 
       - name: Run Signal Intelligence V3 tests
         run: node --test signal-intelligence-v3/tests/*.test.mjs
