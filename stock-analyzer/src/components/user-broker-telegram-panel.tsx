@@ -48,6 +48,7 @@ const preferenceLabels: Record<PreferenceKey, string> = {
 };
 
 const preferenceKeys = Object.keys(preferenceLabels) as PreferenceKey[];
+const VISIBLE_ACCOUNT_EXCHANGES = new Set(['toss', 'upbit', 'bitget']);
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -63,8 +64,10 @@ function normalizeIntegrationState(value: unknown): IntegrationState {
     ? root.brokerConnections.flatMap((item): BrokerConnection[] => {
       const connection = record(item);
       if (!connection || typeof connection.exchange !== 'string') return [];
+      const exchange = connection.exchange.trim().toLowerCase();
+      if (!VISIBLE_ACCOUNT_EXCHANGES.has(exchange)) return [];
       return [{
-        exchange: connection.exchange,
+        exchange,
         accountMode: typeof connection.accountMode === 'string' ? connection.accountMode : 'disabled',
         configured: connection.configured === true,
         lastVerifiedAt: typeof connection.lastVerifiedAt === 'string' ? connection.lastVerifiedAt : null,
@@ -125,9 +128,6 @@ export function UserBrokerTelegramPanel() {
       identity,
       requestKey,
       force,
-      // The lifecycle owns the logical UI deadline and logout drain. Do not let
-      // the generic API timeout physically abort this read while logout waits
-      // for an HTTP terminal.
       load: (signal) => api<unknown>('/api/user-integrations', { signal }, { timeoutMs: null }),
     });
     if (
