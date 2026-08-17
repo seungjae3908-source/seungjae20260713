@@ -104,11 +104,14 @@ jobs:
       - name: Bundle self-contained rolling public Scanner producer and diagnostics
         run: |
           mkdir -p api-server/.signal-intelligence
+          BANNER='import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);'
           pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/run-public-scanner-cycle.ts \
             --bundle --platform=node --format=esm --target=node20 \
+            --banner:js="$BANNER" \
             --outfile=./.signal-intelligence/public-cycle.mjs
           pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/diagnose-public-providers.ts \
             --bundle --platform=node --format=esm --target=node20 \
+            --banner:js="$BANNER" \
             --outfile=./.signal-intelligence/provider-diagnostic.mjs
           node --check api-server/.signal-intelligence/public-cycle.mjs
           node --check api-server/.signal-intelligence/provider-diagnostic.mjs
