@@ -1,0 +1,103 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import {
+  prepareResearchProductionIdentityCutover,
+  resolveOutcomeAccumulationEnabled,
+} from "../scripts/run-paper-forward-schedule.js";
+
+const OLD_SHA = "a".repeat(40);
+const NEW_SHA = "b".repeat(40);
+const NOW = Date.UTC(2026, 7, 18, 0, 0, 0);
+
+async function writeState(root, { researchCodeSha = OLD_SHA, strategyId = "paper-forward-public-evidence-v1" } = {}) {
+  const path = join(root, "state", "recurring-paper-loop.json");
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify({ identity: { researchCodeSha, strategyId } }, null, 2)}\n`);
+  await mkdir(join(root, "status"), { recursive: true });
+  await writeFile(join(root, "status", "marker.txt"), "preserve-me\n");
+  return path;
+}
+
+test("Research Production enables simulated Paper outcome accumulation without external authority", () => {
+  assert.equal(resolveOutcomeAccumulationEnabled({ RESEARCH_PRODUCTION: "true" }), true);
+  assert.equal(resolveOutcomeAccumulationEnabled({ RESEARCH_PRODUCTION: "true", PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED: "false" }), true);
+  assert.equal(resolveOutcomeAccumulationEnabled({ PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED: "true" }), true);
+  assert.equal(resolveOutcomeAccumulationEnabled({}), false);
+});
+
+test("Research Production archives predecessor Paper identity and starts the target identity from zero", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "research-paper-cutover-"));
+  const root = join(temp, "forward", "paper");
+  await writeState(root);
+
+  const result = await prepareResearchProductionIdentityCutover({
+    rootDirectory: root,
+    researchCodeSha: NEW_SHA,
+    outcomeAccumulationEnabled: true,
+    nowMs: NOW,
+  });
+
+  assert.equal(result.identityCutover, true);
+  assert.equal(result.archivedResearchSha, OLD_SHA);
+  assert.equal(result.archivedStrategyId, "paper-forward-public-evidence-v1");
+  assert.equal(result.targetResearchSha, NEW_SHA);
+  assert.equal(result.targetStrategyId, "paper-forward-simulated-outcome-v1");
+  assert.match(result.archivePath, /paper-identity-archives/);
+  assert.equal(await readFile(join(result.archivePath, "status", "marker.txt"), "utf8"), "preserve-me\n");
+  await assert.rejects(access(join(root, "state", "recurring-paper-loop.json")));
+  await access(root);
+
+  const manifest = JSON.parse(await readFile(join(temp, "forward", "paper-identity-cutovers", `${NEW_SHA}.json`), "utf8"));
+  assert.equal(manifest.predecessorStatePreserved, true);
+  assert.equal(manifest.predecessorPerformanceMixed, false);
+  assert.equal(manifest.newIdentityStartsFromZero, true);
+  assert.equal(manifest.paperTradeOutcomeAccumulationEnabled, true);
+  assert.equal(manifest.simulatedFinancialAdaptersEnabled, true);
+  assert.equal(manifest.externalFinancialMutationAllowed, false);
+  assert.equal(manifest.privateRequestCount, 0);
+  assert.equal(manifest.financialMutationCount, 0);
+  assert.equal(manifest.orderCount, 0);
+  assert.equal(manifest.liveTrading, false);
+  assert.equal(manifest.privateApi, false);
+  assert.equal(manifest.orderAuthority, false);
+});
+
+test("matching Research Production Paper identity is preserved without cutover", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "research-paper-same-"));
+  const root = join(temp, "forward", "paper");
+  const statePath = await writeState(root, {
+    researchCodeSha: NEW_SHA,
+    strategyId: "paper-forward-simulated-outcome-v1",
+  });
+
+  const result = await prepareResearchProductionIdentityCutover({
+    rootDirectory: root,
+    researchCodeSha: NEW_SHA,
+    outcomeAccumulationEnabled: true,
+    nowMs: NOW,
+  });
+
+  assert.equal(result.identityCutover, false);
+  assert.equal(result.archivedResearchSha, NEW_SHA);
+  await access(statePath);
+});
+
+test("invalid predecessor identity fails closed without moving Paper state", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "research-paper-invalid-"));
+  const root = join(temp, "forward", "paper");
+  const statePath = await writeState(root, { researchCodeSha: "not-a-sha" });
+
+  await assert.rejects(
+    prepareResearchProductionIdentityCutover({
+      rootDirectory: root,
+      researchCodeSha: NEW_SHA,
+      outcomeAccumulationEnabled: true,
+      nowMs: NOW,
+    }),
+    /predecessor identity is invalid/,
+  );
+  await access(statePath);
+});
