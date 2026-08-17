@@ -11,6 +11,8 @@ SERVICE_NAME="investment-market-intelligence.service"
 UNIT_PATH="/etc/systemd/system/$SERVICE_NAME"
 RUN_USER="${MARKET_INTELLIGENCE_USER:-$(id -un)}"
 PORT="${MARKET_INTELLIGENCE_PORT:-8791}"
+HEALTH_ATTEMPTS="${MARKET_INTELLIGENCE_HEALTH_ATTEMPTS:-15}"
+HEALTH_DELAY_SECONDS="${MARKET_INTELLIGENCE_HEALTH_DELAY_SECONDS:-1}"
 
 fail() { echo "MARKET_INTELLIGENCE_ACTIVATION_ERROR:$1" >&2; exit 1; }
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "TARGET_SHA_REQUIRED"
@@ -57,12 +59,16 @@ preflight() {
   command -v curl >/dev/null || fail "CURL_REQUIRED"
   [[ "$PORT" =~ ^[0-9]+$ ]] || fail "INVALID_PORT"
   [[ "$PORT" -ne 8790 ]] || fail "PORT_CONFLICT_WITH_SIGNAL_INTELLIGENCE_V3"
+  [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "INVALID_HEALTH_ATTEMPTS"
+  [[ "$HEALTH_DELAY_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "INVALID_HEALTH_DELAY_SECONDS"
   printf '%s\n' \
     "preflight_ok=true" \
     "target_sha=$TARGET_SHA" \
     "service_user=$RUN_USER" \
     "node_bin=$NODE_BIN" \
     "port=$PORT" \
+    "health_attempts=$HEALTH_ATTEMPTS" \
+    "health_delay_seconds=$HEALTH_DELAY_SECONDS" \
     "executionAuthority=NONE" \
     "liveTrading=false" \
     "privateApi=false" \
@@ -91,8 +97,25 @@ checkout_release() {
 health_check() {
   local expected_sha="$1"
   local health_file="$BASE_DIR/health-${expected_sha}.json"
-  curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$PORT/health" > "$health_file" || return 1
-  "$NODE_BIN" -e "const fs=require('fs');const h=JSON.parse(fs.readFileSync(process.argv[1]));if(h.ok!==true||h.serviceSha!==process.argv[2]||h.bindHost!=='127.0.0.1'||h.port!==Number(process.argv[3])||h.safety?.executionAuthority!=='NONE'||h.safety?.privateTradingApiAllowed!==false||h.safety?.realOrderAllowed!==false||h.safety?.orderSubmissionAllowed!==false)process.exit(1)" "$health_file" "$expected_sha" "$PORT"
+  local candidate_file="$health_file.tmp"
+  local attempt
+
+  rm -f "$candidate_file"
+  for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
+    if curl --fail --silent --max-time 2 "http://127.0.0.1:$PORT/health" > "$candidate_file" 2>/dev/null; then
+      if "$NODE_BIN" -e "const fs=require('fs');const h=JSON.parse(fs.readFileSync(process.argv[1]));if(h.ok!==true||h.serviceSha!==process.argv[2]||h.bindHost!=='127.0.0.1'||h.port!==Number(process.argv[3])||h.safety?.executionAuthority!=='NONE'||h.safety?.privateTradingApiAllowed!==false||h.safety?.realOrderAllowed!==false||h.safety?.orderSubmissionAllowed!==false)process.exit(1)" "$candidate_file" "$expected_sha" "$PORT"; then
+        mv "$candidate_file" "$health_file"
+        echo "health_ready_attempt=$attempt"
+        return 0
+      fi
+    fi
+    rm -f "$candidate_file"
+    if (( attempt < HEALTH_ATTEMPTS )); then
+      sleep "$HEALTH_DELAY_SECONDS"
+    fi
+  done
+  echo "health_not_ready_after_attempts=$HEALTH_ATTEMPTS" >&2
+  return 1
 }
 
 dump_service_diagnostics() {
@@ -194,7 +217,6 @@ EOF
     rollback_service "$previous_target" "$previous_unit" "$previous_sha" || true
     fail "SERVICE_RESTART_FAILED"
   fi
-  sleep 2
   if ! privileged systemctl is-active --quiet "$SERVICE_NAME"; then
     dump_service_diagnostics
     rollback_service "$previous_target" "$previous_unit" "$previous_sha" || true
