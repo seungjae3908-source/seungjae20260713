@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { assertSignalIntelligenceV3Snapshot, SIGNAL_INTELLIGENCE_V3_POLICY } from './engine.mjs';
 
 const HOST = process.env.SIGNAL_INTELLIGENCE_HOST || '127.0.0.1';
@@ -8,12 +9,18 @@ const PORT = Number(process.env.SIGNAL_INTELLIGENCE_PORT || 8790);
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA || '').trim().toLowerCase();
 const STATE_FILE = resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE || './state/latest-snapshot.json');
 const MAX_STATE_AGE_MS = Number(process.env.SIGNAL_INTELLIGENCE_MAX_STATE_AGE_MS || 15 * 60_000);
+const PRODUCER_PATH = String(process.env.SIGNAL_INTELLIGENCE_PRODUCER_PATH || '').trim();
 
 if (!/^([0-9a-f]{40})$/.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
 if (HOST !== '127.0.0.1' && HOST !== '::1') throw new Error('SIGNAL_INTELLIGENCE_LOOPBACK_ONLY');
 if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) throw new Error('SIGNAL_INTELLIGENCE_PORT_INVALID');
+if (PRODUCER_PATH && (!isAbsolute(PRODUCER_PATH) || !PRODUCER_PATH.endsWith('.mjs'))) throw new Error('SIGNAL_INTELLIGENCE_PRODUCER_PATH_INVALID');
 
 let cache = { mtimeMs: -1, snapshot: null, loadedAt: null, error: 'SNAPSHOT_NOT_READY' };
+let rescanRunning = false;
+let lastRescanStartedAt = null;
+let lastRescanFinishedAt = null;
+let lastRescanExitCode = null;
 
 async function loadSnapshot() {
   try {
@@ -55,6 +62,39 @@ function publicList(snapshot, name) {
   return Array.isArray(rows) ? rows : [];
 }
 
+function triggerPublicRescan() {
+  if (!PRODUCER_PATH) return { started: false, reason: 'PRODUCER_NOT_CONFIGURED' };
+  if (rescanRunning) return { started: false, alreadyRunning: true };
+  rescanRunning = true;
+  lastRescanStartedAt = new Date().toISOString();
+  lastRescanExitCode = null;
+  const child = spawn(process.execPath, [PRODUCER_PATH], {
+    cwd: dirname(PRODUCER_PATH),
+    env: {
+      ...process.env,
+      SIGNAL_INTELLIGENCE_SERVICE_SHA: SERVICE_SHA,
+      SIGNAL_INTELLIGENCE_STATE_FILE: STATE_FILE,
+      LIVE_TRADING: 'false',
+      PRIVATE_API_ENABLED: 'false',
+      ORDER_AUTHORITY: 'false',
+      SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY: 'NONE',
+    },
+    stdio: ['ignore', 'ignore', 'ignore'],
+  });
+  child.once('exit', (code) => {
+    rescanRunning = false;
+    lastRescanFinishedAt = new Date().toISOString();
+    lastRescanExitCode = Number.isInteger(code) ? code : -1;
+    cache.mtimeMs = -1;
+  });
+  child.once('error', () => {
+    rescanRunning = false;
+    lastRescanFinishedAt = new Date().toISOString();
+    lastRescanExitCode = -1;
+  });
+  return { started: true };
+}
+
 const routes = new Map([
   ['/v1/signals/kr', 'krBuy'],
   ['/v1/signals/us', 'usBuy'],
@@ -64,8 +104,22 @@ const routes = new Map([
 ]);
 
 const server = createServer(async (req, res) => {
-  if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
   const url = new URL(req.url || '/', `http://${HOST}:${PORT}`);
+
+  if (req.method === 'POST' && url.pathname === '/internal/rescan') {
+    const result = triggerPublicRescan();
+    if (result.reason === 'PRODUCER_NOT_CONFIGURED') return json(res, 503, { ok: false, error: result.reason, executionAuthority: 'NONE' });
+    return json(res, 202, {
+      ok: true,
+      publicDataRescan: true,
+      started: result.started,
+      alreadyRunning: result.alreadyRunning === true,
+      executionAuthority: 'NONE',
+      realOrderAllowed: false,
+    });
+  }
+
+  if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
 
   if (url.pathname === '/health') {
     const state = await loadSnapshot();
@@ -81,6 +135,7 @@ const server = createServer(async (req, res) => {
       snapshotAgeMs: ageMs,
       snapshotFresh: ageMs != null ? ageMs <= MAX_STATE_AGE_MS : false,
       snapshotError: state.error,
+      rescan: { running: rescanRunning, lastStartedAt: lastRescanStartedAt, lastFinishedAt: lastRescanFinishedAt, lastExitCode: lastRescanExitCode },
       executionAuthority: 'NONE',
       privateTradingApiAllowed: false,
       realOrderAllowed: false,
@@ -90,30 +145,15 @@ const server = createServer(async (req, res) => {
 
   const state = await loadSnapshot();
   if (!state.snapshot) {
-    return json(res, 503, {
-      ok: false,
-      error: state.error || 'SNAPSHOT_NOT_READY',
-      executionAuthority: 'NONE',
-    });
+    return json(res, 503, { ok: false, error: state.error || 'SNAPSHOT_NOT_READY', executionAuthority: 'NONE' });
   }
   const ageMs = snapshotAgeMs(state.snapshot);
   if (ageMs > MAX_STATE_AGE_MS) {
-    return json(res, 503, {
-      ok: false,
-      error: 'SNAPSHOT_STALE',
-      generatedAt: state.snapshot.generatedAt,
-      ageMs,
-      executionAuthority: 'NONE',
-    });
+    return json(res, 503, { ok: false, error: 'SNAPSHOT_STALE', generatedAt: state.snapshot.generatedAt, ageMs, executionAuthority: 'NONE' });
   }
 
   if (url.pathname === '/v1/signals') {
-    return json(res, 200, {
-      ok: true,
-      serviceSha: SERVICE_SHA,
-      snapshot: state.snapshot,
-      executionAuthority: 'NONE',
-    });
+    return json(res, 200, { ok: true, serviceSha: SERVICE_SHA, snapshot: state.snapshot, executionAuthority: 'NONE' });
   }
 
   const listName = routes.get(url.pathname);
