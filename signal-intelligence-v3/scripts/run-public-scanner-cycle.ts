@@ -23,16 +23,26 @@ const OTHER_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/otherliste
 
 if (!/^[0-9a-f]{40}$/u.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
 
-const lanes = [
-  { id: 'KR_SWING_60M', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20 },
-  { id: 'US_SWING_60M', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20 },
-  { id: 'SPOT_SWING_60M', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20 },
-  { id: 'FUTURES_SWING_60M', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20 },
-];
+const strategyProfiles = Object.freeze([
+  Object.freeze({ label: 'SCALPING', strategyMode: 'scalping', timeframe: '15m' }),
+  Object.freeze({ label: 'SWING', strategyMode: 'swing', timeframe: '60m' }),
+  Object.freeze({ label: 'MID_LONG', strategyMode: 'position', timeframe: '1D' }),
+]);
+const marketProfiles = Object.freeze([
+  Object.freeze({ prefix: 'KR', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20 }),
+  Object.freeze({ prefix: 'US', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20 }),
+  Object.freeze({ prefix: 'SPOT', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20 }),
+  Object.freeze({ prefix: 'FUTURES', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20 }),
+]);
+const lanes = Object.freeze(marketProfiles.flatMap((market) => strategyProfiles.map((strategy) => Object.freeze({
+  ...market,
+  ...strategy,
+  id: `${market.prefix}_${strategy.label}_${strategy.timeframe.toUpperCase()}`,
+}))));
 
 function freshState() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     serviceSha: SERVICE_SHA,
     cursors: Object.fromEntries(lanes.map((lane) => [lane.id, 0])),
     retained: {},
@@ -69,6 +79,12 @@ function clearScannedWindow(state, laneId, cursor) {
   for (const [key, row] of Object.entries(state.retained ?? {})) {
     if (row?.laneId === laneId && row?.cursor === cursor) delete state.retained[key];
   }
+}
+
+function fallbackExpiry(lane, nowMs) {
+  if (lane.timeframe === '15m') return new Date(nowMs + 45 * 60_000).toISOString();
+  if (lane.timeframe === '60m') return new Date(nowMs + 3 * 60 * 60_000).toISOString();
+  return new Date(nowMs + 3 * 24 * 60 * 60_000).toISOString();
 }
 
 function sleep(ms) {
@@ -269,10 +285,10 @@ async function scanStock(lane, cursor) {
       memberId: MEMBER_ID,
       market: lane.scannerMarket,
       indicators: [],
-      filters: { timeframe: '60m' },
+      filters: { timeframe: lane.timeframe },
       cursor,
       batchSize: lane.batchSize,
-      strategyMode: 'swing',
+      strategyMode: lane.strategyMode,
     });
     return withScannerCanonicalActions({
       ...scanned,
@@ -285,14 +301,14 @@ async function scanCryptoRaw(lane, cursor) {
   const scanned = await CryptoSignalScannerService.scan({
     memberId: MEMBER_ID,
     market: lane.scannerMarket,
-    strategyMode: 'swing',
-    timeframe: '60m',
+    strategyMode: lane.strategyMode,
+    timeframe: lane.timeframe,
     condition: 'trend',
     cursor,
     batchSize: lane.batchSize,
   });
   const aligned = await CryptoPricePrecisionService.align(lane.scannerMarket, scanned);
-  const ranking = rankScannerCandidates({ cards: aligned.cards, market: aligned.market, strategy: 'swing', limit: 10 });
+  const ranking = rankScannerCandidates({ cards: aligned.cards, market: aligned.market, strategy: lane.strategyMode, limit: 10 });
   const cards = ranking.cards
     .map((card) => card.signalGrade === 'B' ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' } : card)
     .filter((card) => lane.scannerMarket === 'spot'
@@ -330,9 +346,11 @@ function laneStatus(response) {
 
 async function main() {
   await mkdir(STATE_DIR, { recursive: true });
-  const state = await readJson(CYCLE_STATE_FILE, freshState());
-  if (state.serviceSha !== SERVICE_SHA) throw new Error('SIGNAL_INTELLIGENCE_STATE_SHA_MISMATCH');
-  const previousSnapshot = await readJson(SNAPSHOT_FILE, null);
+  const persistedState = await readJson(CYCLE_STATE_FILE, null);
+  const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 2;
+  const state = releaseChanged ? freshState() : persistedState;
+  const persistedSnapshot = await readJson(SNAPSHOT_FILE, null);
+  const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
   const nowMs = Date.now();
   pruneRetained(state, nowMs);
 
@@ -347,13 +365,13 @@ async function main() {
       let adapted = [];
       if (status !== 'SEARCH_FAILURE') {
         clearScannedWindow(state, lane.id, cursor);
-        adapted = adaptCanonicalScannerCards(response.cards.map((card) => ({ card, timeframe: '60m' })), { nowMs });
+        adapted = adaptCanonicalScannerCards(response.cards.map((card) => ({ card, timeframe: lane.timeframe })), { nowMs });
         for (const input of adapted) {
           const card = response.cards.find((candidate) => candidate.symbol === input.symbol && String(candidate.action ?? candidate.direction) === input.direction)
             ?? response.cards.find((candidate) => candidate.symbol === input.symbol);
           state.retained[retainedKey(input)] = {
             input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor } },
-            expiresAt: card?.expiresAt ?? new Date(nowMs + 90 * 60_000).toISOString(),
+            expiresAt: card?.expiresAt ?? fallbackExpiry(lane, nowMs),
             laneId: lane.id,
             cursor,
           };
@@ -363,6 +381,8 @@ async function main() {
       coverage.push({
         laneId: lane.id,
         market: lane.market,
+        strategy: lane.label,
+        timeframe: lane.timeframe,
         cursorBefore: cursor,
         cursorAfter: state.cursors[lane.id],
         totalUniverse: response.universe.totalCount,
@@ -370,6 +390,7 @@ async function main() {
         universePartial: response.universe.partial === true,
         universeStale: response.universe.stale === true,
         universeProviderErrors: Number(response.universe.providerErrorCount ?? 0),
+        responseDataState: response.dataState ?? null,
         scannedCards: response.cards.length,
         retainedFromBatch: adapted.length,
         status,
@@ -382,6 +403,8 @@ async function main() {
       coverage.push({
         laneId: lane.id,
         market: lane.market,
+        strategy: lane.label,
+        timeframe: lane.timeframe,
         cursorBefore: cursor,
         cursorAfter: cursor,
         totalUniverse: null,
@@ -400,9 +423,10 @@ async function main() {
   const snapshot = {
     ...baseSnapshot,
     serviceSha: SERVICE_SHA,
-    profile: { strategies: ['SWING'], timeframes: ['60m'], fullStrategyCoverage: false },
+    profile: { strategies: ['SCALPING', 'SWING', 'MID_LONG'], timeframes: ['15m', '60m', '1D'], fullStrategyCoverage: true },
     coverage,
     publicDataOnly: true,
+    releaseStateReset: releaseChanged,
   };
   assertSignalIntelligenceV3Snapshot(snapshot);
   state.updatedAt = new Date().toISOString();
@@ -415,6 +439,8 @@ async function main() {
     retainedInputs: inputs.length,
     lists: Object.fromEntries(Object.entries(snapshot.lists).map(([key, rows]) => [key, rows.length])),
     events: snapshot.events.length,
+    profile: snapshot.profile,
+    releaseStateReset: releaseChanged,
     coverage,
     executionAuthority: 'NONE',
   }, null, 2)}\n`);
