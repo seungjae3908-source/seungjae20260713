@@ -111,15 +111,15 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Bundle rolling public Scanner producer
         run: |
-          mkdir -p "$RUNNER_TEMP/signal-intelligence-build"
+          mkdir -p api-server/.signal-intelligence
           pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/run-public-scanner-cycle.ts \
             --bundle \
             --platform=node \
             --format=esm \
             --target=node20 \
             --packages=external \
-            --outfile="$RUNNER_TEMP/signal-intelligence-build/public-cycle.mjs"
-          node --check "$RUNNER_TEMP/signal-intelligence-build/public-cycle.mjs"
+            --outfile=./api-server/.signal-intelligence/public-cycle.mjs
+          node --check api-server/.signal-intelligence/public-cycle.mjs
       - name: Assert producer has no private/order imports
         run: |
           ! grep -Eiq '(private[-_ ]?api|placeOrder|submitOrder|cancelOrder|withdraw|transfer)' signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
@@ -135,7 +135,7 @@ jobs:
           ORDER_AUTHORITY: 'false'
           SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY: NONE
         run: |
-          node "$RUNNER_TEMP/signal-intelligence-build/public-cycle.mjs" | tee "$RUNNER_TEMP/signal-intelligence-live-cycle.log"
+          node .signal-intelligence/public-cycle.mjs | tee "$RUNNER_TEMP/signal-intelligence-live-cycle.log"
           node - <<'NODE' "$SIGNAL_INTELLIGENCE_STATE_FILE"
           const fs = require('node:fs');
           const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
