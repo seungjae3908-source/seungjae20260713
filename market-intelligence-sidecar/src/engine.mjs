@@ -1,3 +1,5 @@
+import { evaluateAdvancedGates } from './advanced-gates.mjs';
+
 const DEFAULT_POLICY = Object.freeze({
   version: 'MIS_V1',
   maxDataAgeMs: 15_000,
@@ -264,6 +266,13 @@ export function evaluateMarketIntelligence(input = {}) {
     previousOpenInterest: input.derivatives?.previousOpenInterest ?? input.previous?.derivatives?.openInterest,
   }) : null;
   const microcap = market === 'US_STOCK' ? microcapFeatures(input.microcap) : null;
+  const advancedGates = evaluateAdvancedGates({
+    now,
+    market,
+    uncertainty: input.advancedGates?.uncertainty,
+    metaLabel: input.advancedGates?.metaLabel,
+    events: input.advancedGates?.events,
+  }, input.advancedGatePolicy);
 
   let directional = 0;
   directional += book.bookImbalance * 24;
@@ -291,7 +300,7 @@ export function evaluateMarketIntelligence(input = {}) {
     ? clamp(microcap.shortPressureScore * 0.65 + (100 - microcap.dilutionRisk) * 0.20 + Math.max(0, scannerAdjustmentRaw) * 0.75, 0, 100)
     : null;
 
-  const hardBlockReason = stale
+  const scannerHardBlockReason = stale
     ? 'STALE_INTELLIGENCE_DATA'
     : microcap && microcap.dilutionRisk >= policy.structuralHardBlock
       ? 'EXTREME_DILUTION_RISK'
@@ -311,9 +320,17 @@ export function evaluateMarketIntelligence(input = {}) {
     && maxDrawdownPct <= policy.autoMaxDrawdownPct
     && regimeCount >= policy.autoMinRegimeCount;
 
-  const autoMode = hardBlockReason
+  const advancedRequired = advancedGates.policy.enforcement === 'REQUIRED_FOR_PARENT_GATE';
+  const advancedGateReady = advancedGates.autoTrading.state === 'PASS';
+  const advancedVetoReason = advancedRequired && advancedGates.autoTrading.state === 'VETO'
+    ? advancedGates.autoTrading.reasons[0] ?? 'ADVANCED_GATE_VETO'
+    : null;
+  const autoHardBlockReason = scannerHardBlockReason ?? advancedVetoReason;
+  const parentEligibilityReady = evidenceReady && (!advancedRequired || advancedGateReady);
+
+  const autoMode = autoHardBlockReason
     ? 'BLOCKED_RISK'
-    : evidenceReady
+    : parentEligibilityReady
       ? 'ELIGIBLE_FOR_PARENT_GATE'
       : 'PAPER_ONLY';
 
@@ -324,6 +341,7 @@ export function evaluateMarketIntelligence(input = {}) {
   if (market === 'CRYPTO_FUTURES' && derivatives?.oiDeltaPct == null) warnings.push('OI_DELTA_NOT_AVAILABLE');
   if (market === 'US_STOCK' && input.microcap == null) warnings.push('MICROCAP_STRUCTURAL_DATA_NOT_AVAILABLE');
   if (!evidenceReady) warnings.push('AUTO_TRADING_FORWARD_EVIDENCE_INSUFFICIENT');
+  warnings.push(...advancedGates.scanner.warnings);
 
   return {
     contract: 'market-intelligence-sidecar/v1',
@@ -351,6 +369,7 @@ export function evaluateMarketIntelligence(input = {}) {
     },
     derivatives,
     structural: microcap ? { ...microcap, shortSqueezeScore: squeezeScore } : null,
+    advancedGates,
     scanner: {
       mode: 'SOFT_INTELLIGENCE_LAYER',
       adjustment: scannerAdjustment,
@@ -358,17 +377,22 @@ export function evaluateMarketIntelligence(input = {}) {
       bullishScore,
       bearishScore,
       grade: grade(Math.max(bullishScore, bearishScore)),
-      hardBlockReason,
+      hardBlockReason: scannerHardBlockReason,
+      advancedGateState: advancedGates.autoTrading.state,
+      candidateDeletionAllowed: false,
     },
     autoTrading: {
       mode: autoMode,
       parentGateRequired: true,
       orderAllowed: false,
       evidenceReady,
-      hardBlockReason,
+      parentEligibilityReady,
+      advancedGateReady,
+      advancedEnforcement: advancedGates.policy.enforcement,
+      hardBlockReason: autoHardBlockReason,
       evidence: { forwardSamples, profitFactor, expectedNetEdgeBps, maxDrawdownPct, regimeCount },
     },
-    warnings,
+    warnings: [...new Set(warnings)],
   };
 }
 
