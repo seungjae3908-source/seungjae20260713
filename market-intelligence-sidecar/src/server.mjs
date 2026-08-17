@@ -3,10 +3,12 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { evaluateMarketIntelligence, DEFAULT_POLICY } from './engine.mjs';
 import { fetchBitgetFuturesEvidence, fetchUpbitSpotEvidence } from './public-data.mjs';
+import { buildSignalIntelligenceOverlay } from './signal-overlay.mjs';
 
 const HOST = process.env.MARKET_INTELLIGENCE_HOST || '127.0.0.1';
 const PORT = Number(process.env.MARKET_INTELLIGENCE_PORT || 8791);
 const SERVICE_SHA = process.env.MARKET_INTELLIGENCE_SERVICE_SHA || 'development';
+const SIGNAL_INTELLIGENCE_BASE_URL = process.env.SIGNAL_INTELLIGENCE_BASE_URL || 'http://127.0.0.1:8790';
 const MAX_BODY_BYTES = 1_000_000;
 const previousByKey = new Map();
 
@@ -97,8 +99,21 @@ async function handler(req, res) {
         policy: DEFAULT_POLICY,
         scannerMode: 'SOFT_INTELLIGENCE_LAYER',
         autoTradingModes: ['PAPER_ONLY', 'BLOCKED_RISK', 'ELIGIBLE_FOR_PARENT_GATE'],
+        signalOverlay: {
+          endpoint: '/v1/overlay/signal-intelligence',
+          contract: 'market-intelligence-signal-overlay/v1',
+          stockEvidenceMode: 'NOT_AVAILABLE_UNTIL_PUBLIC_COLLECTOR_CONNECTED',
+        },
         safety: safety(),
       });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/v1/overlay/signal-intelligence') {
+      const overlay = await buildSignalIntelligenceOverlay({
+        signalBaseUrl: SIGNAL_INTELLIGENCE_BASE_URL,
+        intelligenceBaseUrl: `http://${HOST}:${PORT}`,
+      });
+      return json(res, 200, { serviceSha: SERVICE_SHA, ...overlay });
     }
 
     if (req.method === 'POST' && url.pathname === '/v1/evaluate') {
