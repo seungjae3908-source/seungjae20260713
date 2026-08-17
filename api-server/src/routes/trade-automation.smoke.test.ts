@@ -10,12 +10,15 @@ import {
   marketIntelligenceSymbolForTradingPlan,
   setTradingPlanMarketIntelligenceRunnerForTests,
 } from '../services/trade-market-intelligence.service';
+import type { TradingPlanInput } from '../services/trade-automation.types';
 
 const USER = '11111111-1111-1111-1111-111111111111';
 const repository = new InMemoryTradingRepository();
 const MASTER_KEY = Buffer.alloc(32, 9).toString('base64');
 
-async function unavailableMarketIntelligence(input: Parameters<typeof tradingMarket>[0]) {
+async function unavailableMarketIntelligence(
+  input: Pick<TradingPlanInput, 'exchange' | 'market' | 'symbol'>,
+) {
   return marketIntelligenceNotAvailable(
     tradingMarket(input),
     marketIntelligenceSymbolForTradingPlan(input),
