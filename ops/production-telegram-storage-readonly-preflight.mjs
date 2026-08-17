@@ -1,8 +1,20 @@
-import { readFileSync } from 'node:fs';
+import {
+  lstatSync,
+  readFileSync,
+  realpathSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import path from 'node:path';
 import process from 'node:process';
 
 const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq';
+const PRODUCTION_ENV_ALLOWLIST = Object.freeze([
+  '/opt/stock-app/.env',
+  '/opt/stock-app/.env.production',
+  '/opt/stock-app/api-server/.env',
+  '/opt/stock-app/api-server/.env.production',
+]);
+const POSTGRES_URI_PATTERN = /^postgres(?:ql)?:\/\//i;
 
 const TOP_LEVEL_KEYS = new Set([
   'status',
@@ -204,6 +216,75 @@ function blocked(classification, overrides = {}) {
   process.exit(0);
 }
 
+function parseDotenvValue(raw) {
+  let value = String(raw ?? '').trim();
+  if (!value) return '';
+  const quote = value[0];
+  if (quote === "'" || quote === '"') {
+    if (value.length < 2 || value.at(-1) !== quote) return '';
+    value = value.slice(1, -1);
+    if (quote === '"') value = value.replace(/\\([\\"$`])/g, '$1');
+    return value;
+  }
+  const inlineComment = value.search(/\s+#/);
+  if (inlineComment >= 0) value = value.slice(0, inlineComment).trimEnd();
+  return value;
+}
+
+function readAllowedEnvValues(filePath) {
+  let stat;
+  try {
+    stat = lstatSync(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    blocked('production_database_env_file_unreadable', {
+      pm2_online: true,
+      production_project_match: true,
+    });
+  }
+  if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o022) !== 0) {
+    blocked('production_database_env_file_unsafe', {
+      pm2_online: true,
+      production_project_match: true,
+    });
+  }
+  let real;
+  try {
+    real = realpathSync(filePath);
+  } catch {
+    blocked('production_database_env_file_unreadable', {
+      pm2_online: true,
+      production_project_match: true,
+    });
+  }
+  if (real !== path.resolve(filePath)) {
+    blocked('production_database_env_file_unsafe', {
+      pm2_online: true,
+      production_project_match: true,
+    });
+  }
+
+  let source;
+  try {
+    source = readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+  } catch {
+    blocked('production_database_env_file_unreadable', {
+      pm2_online: true,
+      production_project_match: true,
+    });
+  }
+  const values = [];
+  for (const sourceLine of source.split(/\r?\n/)) {
+    const line = sourceLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const match = /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.*)$/.exec(line);
+    if (!match) continue;
+    const value = parseDotenvValue(match[1]);
+    if (POSTGRES_URI_PATTERN.test(value)) values.push(value);
+  }
+  return values;
+}
+
 if (!/^[0-9a-f]{40}$/.test(expectedProductionSha)) {
   blocked('invalid_production_sha');
 }
@@ -243,12 +324,14 @@ try {
   blocked('production_project_mismatch', { pm2_online: true });
 }
 
-const postgresUris = [...new Set(
-  Object.values(runtime)
-    .filter((value) => typeof value === 'string')
-    .map((value) => value.trim())
-    .filter((value) => /^postgres(?:ql)?:\/\//i.test(value)),
-)];
+const postgresValues = Object.values(runtime)
+  .filter((value) => typeof value === 'string')
+  .map((value) => value.trim())
+  .filter((value) => POSTGRES_URI_PATTERN.test(value));
+for (const filePath of PRODUCTION_ENV_ALLOWLIST) {
+  postgresValues.push(...readAllowedEnvValues(filePath));
+}
+const postgresUris = [...new Set(postgresValues)];
 
 if (postgresUris.length === 0) {
   blocked('production_database_connection_missing', {
