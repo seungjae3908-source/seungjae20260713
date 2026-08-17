@@ -57,7 +57,9 @@ function normalizeLevels(levels, ascending) {
 
 export function walkOrderBook(raw = {}, policyInput = {}) {
   const policy = resolvePolicy(policyInput);
-  const side = normalizeDirection(raw.direction);
+  const direction = String(raw.direction ?? '').trim();
+  if (!direction) return { status: 'NOT_AVAILABLE', reason: 'EXECUTION_DIRECTION_REQUIRED' };
+  const side = normalizeDirection(direction);
   const targetQty = finite(raw.targetQty);
   if (!(targetQty > 0)) return { status: 'NOT_AVAILABLE', reason: 'TARGET_QTY_REQUIRED' };
   const levels = side === 'BUY'
@@ -93,26 +95,13 @@ export function walkOrderBook(raw = {}, policyInput = {}) {
   if (slippageBps != null && slippageBps > policy.maxBookWalkSlippageBps) reasons.push('BOOK_WALK_SLIPPAGE_TOO_HIGH');
 
   return {
-    status: reasons.length ? 'VETO' : 'PASS',
-    reasons,
-    side,
-    targetQty,
-    filledQty,
-    unfilledQty: Math.max(0, remaining),
-    coverageRatio,
-    vwap,
-    arrivalPrice,
-    slippageBps,
-    levelsConsumed,
-    model: 'VISIBLE_L2_BOOK_WALK_ONLY',
-    permanentMarketImpactEstimated: false,
+    status: reasons.length ? 'VETO' : 'PASS', reasons, side, targetQty, filledQty, unfilledQty: Math.max(0, remaining),
+    coverageRatio, vwap, arrivalPrice, slippageBps, levelsConsumed, model: 'VISIBLE_L2_BOOK_WALK_ONLY', permanentMarketImpactEstimated: false,
   };
 }
 
 export function evaluateQueueEvidence(raw = {}) {
-  if (raw.queueEvidenceVerified !== true) {
-    return { status: 'NOT_AVAILABLE', reason: 'VERIFIED_QUEUE_EVIDENCE_REQUIRED' };
-  }
+  if (raw.queueEvidenceVerified !== true) return { status: 'NOT_AVAILABLE', reason: 'VERIFIED_QUEUE_EVIDENCE_REQUIRED' };
   const queueAheadQty = finite(raw.queueAheadQty);
   const ownOrderQty = finite(raw.ownOrderQty);
   const marketableQtyAtLevel = finite(raw.marketableQtyAtLevel);
@@ -120,21 +109,14 @@ export function evaluateQueueEvidence(raw = {}) {
   if (![queueAheadQty, ownOrderQty, marketableQtyAtLevel, cancellationsAheadQty].every((value) => value != null && value >= 0) || ownOrderQty <= 0) {
     return { status: 'NOT_AVAILABLE', reason: 'QUEUE_EVIDENCE_INVALID' };
   }
-
   const progressAhead = Math.max(0, marketableQtyAtLevel + cancellationsAheadQty);
   const clearedAheadQty = Math.min(queueAheadQty, progressAhead);
   const residualFlowAfterQueue = Math.max(0, progressAhead - queueAheadQty);
   const executableOwnQty = Math.min(ownOrderQty, residualFlowAfterQueue);
   const observedFillFraction = clamp(executableOwnQty / ownOrderQty, 0, 1);
   return {
-    status: 'OBSERVED_ONLY',
-    queueAheadQty,
-    clearedAheadQty,
-    ownOrderQty,
-    executableOwnQty,
-    observedFillFraction,
-    probabilityEstimated: false,
-    note: 'QUEUE_POSITION_REQUIRES_VERIFIED_ORDER_LEVEL_EVIDENCE',
+    status: 'OBSERVED_ONLY', queueAheadQty, clearedAheadQty, ownOrderQty, executableOwnQty, observedFillFraction,
+    probabilityEstimated: false, note: 'QUEUE_POSITION_REQUIRES_VERIFIED_ORDER_LEVEL_EVIDENCE',
   };
 }
 
@@ -148,29 +130,15 @@ export function evaluateCalibratedFillModel(raw = {}, policyInput = {}, nowInput
   const evaluatedAt = finite(raw.evaluatedAt);
   const now = finite(nowInput, Date.now());
   const ageMs = evaluatedAt == null ? null : Math.max(0, now - evaluatedAt);
-
-  if (!modelId || fillProbability == null || brierScore == null || calibrationError == null || evaluatedAt == null) {
-    return { status: 'NOT_AVAILABLE', reason: 'CALIBRATED_FILL_MODEL_EVIDENCE_MISSING' };
-  }
+  if (!modelId || fillProbability == null || brierScore == null || calibrationError == null || evaluatedAt == null) return { status: 'NOT_AVAILABLE', reason: 'CALIBRATED_FILL_MODEL_EVIDENCE_MISSING' };
   if (!(fillProbability >= 0 && fillProbability <= 1)) return { status: 'NOT_AVAILABLE', reason: 'FILL_PROBABILITY_INVALID' };
-  if (evaluationSamples < policy.minFillModelSamples) {
-    return { status: 'NOT_AVAILABLE', reason: 'FILL_MODEL_SAMPLE_INSUFFICIENT', evaluationSamples, minimumSamples: policy.minFillModelSamples };
-  }
+  if (evaluationSamples < policy.minFillModelSamples) return { status: 'NOT_AVAILABLE', reason: 'FILL_MODEL_SAMPLE_INSUFFICIENT', evaluationSamples, minimumSamples: policy.minFillModelSamples };
   if (ageMs > policy.maxFillModelAgeMs) return { status: 'NOT_AVAILABLE', reason: 'FILL_MODEL_EVIDENCE_STALE', ageMs };
-  if (brierScore > policy.maxFillModelBrierScore || calibrationError > policy.maxFillModelCalibrationError) {
-    return { status: 'NOT_AVAILABLE', reason: 'FILL_MODEL_CALIBRATION_QUALITY_INSUFFICIENT', brierScore, calibrationError };
-  }
+  if (brierScore > policy.maxFillModelBrierScore || calibrationError > policy.maxFillModelCalibrationError) return { status: 'NOT_AVAILABLE', reason: 'FILL_MODEL_CALIBRATION_QUALITY_INSUFFICIENT', brierScore, calibrationError };
   return {
     status: fillProbability >= policy.minFillProbability ? 'PASS' : 'VETO',
-    reason: fillProbability >= policy.minFillProbability ? null : 'FILL_PROBABILITY_TOO_LOW',
-    modelId,
-    fillProbability,
-    threshold: policy.minFillProbability,
-    evaluationSamples,
-    brierScore,
-    calibrationError,
-    evaluatedAt,
-    ageMs,
+    reason: fillProbability >= policy.minFillProbability ? null : 'FILL_PROBABILITY_TOO_LOW', modelId, fillProbability,
+    threshold: policy.minFillProbability, evaluationSamples, brierScore, calibrationError, evaluatedAt, ageMs,
   };
 }
 
@@ -181,28 +149,15 @@ export function calculateRealizedTca(raw = {}, policyInput = {}) {
   const arrivalPrice = finite(raw.arrivalPrice);
   const fillVwap = finite(raw.fillVwap);
   const feesBps = Math.max(0, finite(raw.feesBps, 0));
-  if (![decisionPrice, arrivalPrice, fillVwap].every((value) => value != null && value > 0)) {
-    return { status: 'NOT_AVAILABLE', reason: 'REALIZED_TCA_PRICES_REQUIRED' };
-  }
-
-  const signedBps = (from, to) => side === 'BUY'
-    ? ((to - from) / from) * 10_000
-    : ((from - to) / from) * 10_000;
+  if (![decisionPrice, arrivalPrice, fillVwap].every((value) => value != null && value > 0)) return { status: 'NOT_AVAILABLE', reason: 'REALIZED_TCA_PRICES_REQUIRED' };
+  const signedBps = (from, to) => side === 'BUY' ? ((to - from) / from) * 10_000 : ((from - to) / from) * 10_000;
   const delayCostBps = signedBps(decisionPrice, arrivalPrice);
   const executionCostBps = signedBps(arrivalPrice, fillVwap);
   const implementationShortfallBps = signedBps(decisionPrice, fillVwap) + feesBps;
   return {
     status: implementationShortfallBps > policy.maxObservedImplementationShortfallBps ? 'VETO' : 'OBSERVED',
     reason: implementationShortfallBps > policy.maxObservedImplementationShortfallBps ? 'IMPLEMENTATION_SHORTFALL_TOO_HIGH' : null,
-    side,
-    decisionPrice,
-    arrivalPrice,
-    fillVwap,
-    delayCostBps,
-    executionCostBps,
-    feesBps,
-    implementationShortfallBps,
-    realizedOnly: true,
+    side, decisionPrice, arrivalPrice, fillVwap, delayCostBps, executionCostBps, feesBps, implementationShortfallBps, realizedOnly: true,
   };
 }
 
@@ -213,39 +168,16 @@ export function evaluateExecutionQuality(raw = {}, policyInput = {}) {
   const queue = evaluateQueueEvidence(raw.queue ?? {});
   const fillModel = evaluateCalibratedFillModel(raw.fillModel ?? {}, policy, now);
   const tca = raw.realizedTca ? calculateRealizedTca(raw.realizedTca, policy) : { status: 'NOT_AVAILABLE', reason: 'NO_REALIZED_EXECUTION_YET' };
-
   const vetoReasons = [];
   if (bookWalk.status === 'VETO') vetoReasons.push(...bookWalk.reasons);
   if (fillModel.status === 'VETO') vetoReasons.push(fillModel.reason);
   if (tca.status === 'VETO') vetoReasons.push(tca.reason);
-  const missingRequired = policy.enforcement === 'REQUIRED_FOR_PARENT_GATE'
-    && [bookWalk.status, fillModel.status].some((status) => status === 'NOT_AVAILABLE');
+  const missingRequired = policy.enforcement === 'REQUIRED_FOR_PARENT_GATE' && [bookWalk.status, fillModel.status].some((status) => status === 'NOT_AVAILABLE');
   const state = vetoReasons.length ? 'VETO' : missingRequired ? 'INSUFFICIENT_EVIDENCE' : 'PASS';
-
   return {
-    contract: 'market-intelligence-execution-quality/v1',
-    policy,
-    bookWalk,
-    queue,
-    fillModel,
-    tca,
-    scanner: {
-      mode: 'OBSERVE_ONLY',
-      candidateDeletionAllowed: false,
-    },
-    autoTrading: {
-      state,
-      reasons: vetoReasons,
-      insufficientEvidence: missingRequired,
-      parentGateStillRequired: true,
-      orderAllowed: false,
-      executionAuthority: 'NONE',
-    },
-    safety: {
-      executionAuthority: 'NONE',
-      privateTradingApiAllowed: false,
-      realOrderAllowed: false,
-      orderSubmissionAllowed: false,
-    },
+    contract: 'market-intelligence-execution-quality/v1', policy, bookWalk, queue, fillModel, tca,
+    scanner: { mode: 'OBSERVE_ONLY', candidateDeletionAllowed: false },
+    autoTrading: { state, reasons: vetoReasons, insufficientEvidence: missingRequired, parentGateStillRequired: true, orderAllowed: false, executionAuthority: 'NONE' },
+    safety: { executionAuthority: 'NONE', privateTradingApiAllowed: false, realOrderAllowed: false, orderSubmissionAllowed: false },
   };
 }
