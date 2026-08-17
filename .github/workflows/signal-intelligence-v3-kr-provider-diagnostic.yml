@@ -1,0 +1,66 @@
+name: Signal Intelligence V3 KR Provider Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - 'signal-intelligence-v3/scripts/diagnose-kr-yahoo-provider.ts'
+      - 'api-server/src/providers/yahoo.ts'
+      - '.github/workflows/signal-intelligence-v3-kr-provider-diagnostic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signal-intelligence-v3-kr-provider-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Bundle diagnostic
+        run: |
+          mkdir -p api-server/.signal-intelligence "$RUNNER_TEMP/kr-provider"
+          pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/diagnose-kr-yahoo-provider.ts \
+            --bundle --platform=node --format=esm --target=node20 \
+            --outfile=./.signal-intelligence/diagnose-kr-yahoo.mjs
+          node --check api-server/.signal-intelligence/diagnose-kr-yahoo.mjs
+      - name: Probe representative KR Yahoo hosts and timeframes
+        working-directory: api-server
+        run: node .signal-intelligence/diagnose-kr-yahoo.mjs "$RUNNER_TEMP/kr-provider/diagnostic.json"
+      - name: Verify safety contract
+        run: |
+          node - <<'NODE' "$RUNNER_TEMP/kr-provider/diagnostic.json"
+          const fs = require('node:fs');
+          const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (p.publicOnly !== true || p.executionAuthority !== 'NONE' || p.privateApiAllowed !== false || p.realOrderAllowed !== false) process.exit(1);
+          if (!Array.isArray(p.rows) || p.rows.length !== 40) process.exit(1);
+          NODE
+      - name: Upload KR provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-v3-kr-provider-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/kr-provider/diagnostic.json
+          retention-days: 30
+          if-no-files-found: warn
