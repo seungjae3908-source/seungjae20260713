@@ -17,6 +17,24 @@ assert.match(script, /private_trading_api_count:\s*0/);
 assert.match(script, /live_trading_authority:\s*false/);
 assert.match(script, /--verify-artifact/);
 
+for (const marker of [
+  'PRODUCTION_ENV_ALLOWLIST',
+  "'/opt/stock-app/.env'",
+  "'/opt/stock-app/.env.production'",
+  "'/opt/stock-app/api-server/.env'",
+  "'/opt/stock-app/api-server/.env.production'",
+  'lstatSync',
+  'realpathSync',
+  '(stat.mode & 0o022)',
+  'readAllowedEnvValues',
+  'production_database_env_file_unsafe',
+  'production_database_connection_ambiguous',
+]) {
+  assert(script.includes(marker), `read-only preflight is missing resolver safeguard: ${marker}`);
+}
+assert(!/\beval\s*\(/.test(script), 'read-only preflight must not eval env files');
+assert(!/(^|\n)\s*(?:source|\.)\s+[^\n]+\.env/m.test(script), 'read-only preflight must not source env files');
+
 const sqlMatch = /const SQL = String\.raw`([\s\S]*?)`;/m.exec(script);
 assert(sqlMatch, 'fixed read-only SQL block is required');
 const sql = sqlMatch[1];
