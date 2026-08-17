@@ -32,4 +32,5 @@ jobs:
           grep -q 'ProtectSystem=strict' research-dashboard/deploy/research-dashboard.service
           grep -q 'ReadOnlyPaths=/opt/investment-research-dashboard/current /var/lib/investment-research-production' research-dashboard/deploy/research-dashboard.service
           grep -q 'WorkingDirectory=/opt/investment-research-dashboard/current/research-dashboard' research-dashboard/deploy/research-dashboard.service
+          ! grep -q '^MemoryDenyWriteExecute=true$' research-dashboard/deploy/research-dashboard.service
           ! grep -R -E 'ORDER_SUBMISSION_ENABLED=true|PRIVATE_API_ENABLED=true|LIVE_TRADING=true|REAL_ORDER_ENABLED=true' research-dashboard
