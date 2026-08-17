@@ -40,6 +40,8 @@ jobs:
           grep -q 'ORDER_AUTHORITY=false' market-intelligence-release/deploy/activate-server.sh
           grep -q '127.0.0.1' market-intelligence-release/deploy/activate-server.sh
           grep -q 'PORT_CONFLICT_WITH_SIGNAL_INTELLIGENCE_V3' market-intelligence-release/deploy/activate-server.sh
+          grep -q 'rollback_service' market-intelligence-release/deploy/activate-server.sh
+          grep -q 'systemctl restart' market-intelligence-release/deploy/activate-server.sh
 
   authorize:
     if: >-
@@ -123,6 +125,7 @@ jobs:
         run: |
           bash -n market-intelligence-release/deploy/activate-server.sh
           grep -q 'MARKET_INTELLIGENCE_EXECUTION_AUTHORITY=NONE' market-intelligence-release/deploy/activate-server.sh
+          grep -q 'rollback_service' market-intelligence-release/deploy/activate-server.sh
 
   activate:
     needs: authorize
@@ -177,6 +180,7 @@ jobs:
           grep -q "service_sha=$TARGET_SHA" activation.txt
           grep -q 'bind=127.0.0.1:8791' activation.txt
           grep -q 'executionAuthority=NONE' activation.txt
+          grep -q 'rollback_ready=true' activation.txt
       - name: Report sanitized activation evidence
         uses: actions/github-script@v7
         with:
@@ -185,5 +189,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: 410,
-              body: `[MARKET_INTELLIGENCE_SIDECAR_ACTIVATED]\n- service_sha: \`${process.env.TARGET_SHA}\`\n- validation_run: \`${process.env.VALIDATION_RUN_ID}\`\n- artifact: \`${process.env.ARTIFACT_ID}\`\n- bind: \`127.0.0.1:8791\`\n- service: \`investment-market-intelligence.service\`\n- executionAuthority: \`NONE\`\n- privateTradingApiAllowed: \`false\`\n- realOrderAllowed: \`false\`\n- app Production deploy: \`false\``,
+              body: `[MARKET_INTELLIGENCE_SIDECAR_ACTIVATED]\n- service_sha: \`${process.env.TARGET_SHA}\`\n- validation_run: \`${process.env.VALIDATION_RUN_ID}\`\n- artifact: \`${process.env.ARTIFACT_ID}\`\n- bind: \`127.0.0.1:8791\`\n- service: \`investment-market-intelligence.service\`\n- rollback: \`READY\`\n- executionAuthority: \`NONE\`\n- privateTradingApiAllowed: \`false\`\n- realOrderAllowed: \`false\`\n- app Production deploy: \`false\``,
             });
