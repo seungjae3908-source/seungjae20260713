@@ -50,6 +50,8 @@ jobs:
           node --check api-server/.signal-intelligence/diagnose-kr-first-batch.mjs
       - name: Probe actual KRX rolling first batch
         working-directory: api-server
+        env:
+          SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE: 'true'
         run: node .signal-intelligence/diagnose-kr-first-batch.mjs "$RUNNER_TEMP/kr-first-batch/diagnostic.json"
       - name: Verify safety and shape
         run: |
