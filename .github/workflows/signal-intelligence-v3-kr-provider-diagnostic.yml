@@ -5,6 +5,7 @@ on:
     paths:
       - 'signal-intelligence-v3/scripts/diagnose-kr-yahoo-provider.ts'
       - 'api-server/src/providers/yahoo.ts'
+      - 'api-server/src/services/stock-signal-scanner.service.ts'
       - '.github/workflows/signal-intelligence-v3-kr-provider-diagnostic.yml'
   workflow_dispatch:
 
@@ -41,11 +42,13 @@ jobs:
       - name: Bundle diagnostic
         run: |
           mkdir -p api-server/.signal-intelligence "$RUNNER_TEMP/kr-provider"
+          BANNER='import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);'
           pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/diagnose-kr-yahoo-provider.ts \
             --bundle --platform=node --format=esm --target=node20 \
+            --banner:js="$BANNER" \
             --outfile=./.signal-intelligence/diagnose-kr-yahoo.mjs
           node --check api-server/.signal-intelligence/diagnose-kr-yahoo.mjs
-      - name: Probe representative KR Yahoo hosts and timeframes
+      - name: Probe representative KR Yahoo hosts and scanner calls
         working-directory: api-server
         run: node .signal-intelligence/diagnose-kr-yahoo.mjs "$RUNNER_TEMP/kr-provider/diagnostic.json"
       - name: Verify safety contract
@@ -55,6 +58,7 @@ jobs:
           const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           if (p.publicOnly !== true || p.executionAuthority !== 'NONE' || p.privateApiAllowed !== false || p.realOrderAllowed !== false) process.exit(1);
           if (!Array.isArray(p.rows) || p.rows.length !== 40) process.exit(1);
+          if (!Array.isArray(p.scannerRows) || p.scannerRows.length !== 15) process.exit(1);
           NODE
       - name: Upload KR provider evidence
         if: always()
