@@ -18,6 +18,24 @@ fail() { echo "MARKET_INTELLIGENCE_ACTIVATION_ERROR:$1" >&2; exit 1; }
 id "$RUN_USER" >/dev/null 2>&1 || fail "SERVICE_USER_NOT_FOUND"
 RUN_GROUP="$(id -gn "$RUN_USER")"
 
+resolve_node_bin() {
+  local candidate resolved
+  for candidate in \
+    "${MARKET_INTELLIGENCE_NODE_BIN:-}" \
+    /usr/bin/node \
+    /usr/local/bin/node \
+    "$(command -v node 2>/dev/null || true)"; do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    resolved="$(readlink -f "$candidate" 2>/dev/null || printf '%s' "$candidate")"
+    [[ -x "$resolved" ]] || continue
+    printf '%s\n' "$resolved"
+    return 0
+  done
+  return 1
+}
+
+NODE_BIN="$(resolve_node_bin || true)"
+
 export LIVE_TRADING=false
 export PRIVATE_API_ENABLED=false
 export ORDER_AUTHORITY=false
@@ -34,7 +52,7 @@ privileged() { "${SUDO[@]}" "$@"; }
 
 preflight() {
   command -v git >/dev/null || fail "GIT_REQUIRED"
-  command -v node >/dev/null || fail "NODE_REQUIRED"
+  [[ -n "$NODE_BIN" && -x "$NODE_BIN" ]] || fail "SYSTEMD_SAFE_NODE_REQUIRED"
   command -v systemctl >/dev/null || fail "SYSTEMD_REQUIRED"
   command -v curl >/dev/null || fail "CURL_REQUIRED"
   [[ "$PORT" =~ ^[0-9]+$ ]] || fail "INVALID_PORT"
@@ -43,6 +61,7 @@ preflight() {
     "preflight_ok=true" \
     "target_sha=$TARGET_SHA" \
     "service_user=$RUN_USER" \
+    "node_bin=$NODE_BIN" \
     "port=$PORT" \
     "executionAuthority=NONE" \
     "liveTrading=false" \
@@ -64,8 +83,8 @@ checkout_release() {
   test -f "$RELEASE_DIR/market-intelligence-sidecar/scripts/verify-contract.mjs" || fail "CONTRACT_MISSING"
   (
     cd "$RELEASE_DIR/market-intelligence-sidecar"
-    node --test tests/*.test.mjs
-    node scripts/verify-contract.mjs
+    "$NODE_BIN" --test tests/*.test.mjs
+    "$NODE_BIN" scripts/verify-contract.mjs
   )
 }
 
@@ -73,7 +92,16 @@ health_check() {
   local expected_sha="$1"
   local health_file="$BASE_DIR/health-${expected_sha}.json"
   curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$PORT/health" > "$health_file" || return 1
-  node -e "const fs=require('fs');const h=JSON.parse(fs.readFileSync(process.argv[1]));if(h.ok!==true||h.serviceSha!==process.argv[2]||h.bindHost!=='127.0.0.1'||h.port!==Number(process.argv[3])||h.safety?.executionAuthority!=='NONE'||h.safety?.privateTradingApiAllowed!==false||h.safety?.realOrderAllowed!==false||h.safety?.orderSubmissionAllowed!==false)process.exit(1)" "$health_file" "$expected_sha" "$PORT"
+  "$NODE_BIN" -e "const fs=require('fs');const h=JSON.parse(fs.readFileSync(process.argv[1]));if(h.ok!==true||h.serviceSha!==process.argv[2]||h.bindHost!=='127.0.0.1'||h.port!==Number(process.argv[3])||h.safety?.executionAuthority!=='NONE'||h.safety?.privateTradingApiAllowed!==false||h.safety?.realOrderAllowed!==false||h.safety?.orderSubmissionAllowed!==false)process.exit(1)" "$health_file" "$expected_sha" "$PORT"
+}
+
+dump_service_diagnostics() {
+  echo "service_diagnostics_begin=true" >&2
+  privileged systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
+  if command -v journalctl >/dev/null; then
+    privileged journalctl --no-pager -u "$SERVICE_NAME" -n 80 >&2 || true
+  fi
+  echo "service_diagnostics_end=true" >&2
 }
 
 rollback_service() {
@@ -141,7 +169,7 @@ Environment=LIVE_TRADING=false
 Environment=PRIVATE_API_ENABLED=false
 Environment=ORDER_AUTHORITY=false
 Environment=MARKET_INTELLIGENCE_EXECUTION_AUTHORITY=NONE
-ExecStart=/usr/bin/env node $CURRENT_LINK/market-intelligence-sidecar/src/server.mjs
+ExecStart=$NODE_BIN $CURRENT_LINK/market-intelligence-sidecar/src/server.mjs
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -162,15 +190,18 @@ EOF
   privileged systemctl enable "$SERVICE_NAME" >/dev/null
 
   if ! privileged systemctl restart "$SERVICE_NAME"; then
+    dump_service_diagnostics
     rollback_service "$previous_target" "$previous_unit" "$previous_sha" || true
     fail "SERVICE_RESTART_FAILED"
   fi
   sleep 2
   if ! privileged systemctl is-active --quiet "$SERVICE_NAME"; then
+    dump_service_diagnostics
     rollback_service "$previous_target" "$previous_unit" "$previous_sha" || true
     fail "SERVICE_NOT_ACTIVE"
   fi
   if ! health_check "$TARGET_SHA"; then
+    dump_service_diagnostics
     rollback_service "$previous_target" "$previous_unit" "$previous_sha" || true
     fail "HEALTH_CHECK_FAILED_AND_ROLLED_BACK"
   fi
@@ -186,6 +217,7 @@ case "$MODE" in
       "activated=true" \
       "service_sha=$TARGET_SHA" \
       "service=$SERVICE_NAME" \
+      "node_bin=$NODE_BIN" \
       "bind=127.0.0.1:$PORT" \
       "executionAuthority=NONE" \
       "rollback_ready=true"
