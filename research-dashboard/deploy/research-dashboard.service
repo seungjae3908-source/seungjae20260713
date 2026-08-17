@@ -1,0 +1,33 @@
+[Unit]
+Description=Investment Research Lab read-only dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=investment-research
+Group=investment-research
+WorkingDirectory=/opt/investment-research/current/research-dashboard
+Environment=NODE_ENV=production
+Environment=RESEARCH_DASHBOARD_HOST=127.0.0.1
+Environment=RESEARCH_DASHBOARD_PORT=18090
+Environment=RESEARCH_STATE_ROOT=/var/lib/investment-research-production
+ExecStart=/usr/bin/node /opt/investment-research/current/research-dashboard/server.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadOnlyPaths=/opt/investment-research/current /var/lib/investment-research-production
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target
