@@ -32,6 +32,15 @@ function verifyStatic() {
 
   for (const marker of [
     "const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq'",
+    'PRODUCTION_ENV_ALLOWLIST',
+    "'/opt/stock-app/.env'",
+    "'/opt/stock-app/.env.production'",
+    "'/opt/stock-app/api-server/.env'",
+    "'/opt/stock-app/api-server/.env.production'",
+    'lstatSync',
+    'realpathSync',
+    '(stat.mode & 0o022)',
+    'readAllowedEnvValues',
     "runtime.DEPLOY_SHA",
     'postgresUris.length !== 1',
     'stripOuterTransaction',
@@ -50,6 +59,8 @@ function verifyStatic() {
     'live_trading_authority',
   ]) assert(migrator.includes(marker), `migrator is missing ${marker}`);
 
+  assert(!/\beval\s*\(/.test(migrator), 'migrator must not eval server env files');
+  assert(!/(^|\n)\s*(?:source|\.)\s+[^\n]+\.env/m.test(migrator), 'migrator must not source server env files');
   assert(!migrator.includes('console.log(postgresUris'), 'migrator must not print database URLs');
   assert(!migrator.includes('console.log(database'), 'migrator must not print database connection details');
   assert(cleanup.includes("from pg_policy pol"), 'policy cleanup must enumerate legacy policies');
