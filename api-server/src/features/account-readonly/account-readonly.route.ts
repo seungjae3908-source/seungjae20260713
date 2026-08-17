@@ -1,32 +1,30 @@
 import { Router, type IRouter } from 'express';
 import type { AuthenticatedRequest } from '../../middleware/auth';
 import {
-  createSupabaseTradingRepository,
-  type TradingRepository,
-} from '../../services/trade-automation.repository';
-import {
   credentialConfigurationStatus,
   encryptTradingCredentials,
 } from '../../services/trade-credential-vault.service';
 import type { AccountProvider } from './account-readonly.contract';
+import {
+  createAccountReadonlyCredentialRepository,
+  type AccountReadonlyCredentialRepository,
+  type ReadonlyCredentialProvider,
+} from './account-readonly.repository';
 import { AccountReadonlyService } from './account-readonly.service';
 
 const PROVIDERS = new Set<AccountProvider>(['toss', 'upbit', 'bitget']);
-const CREDENTIAL_PROVIDERS = new Set<ReadonlyCredentialProvider>(['upbit', 'bitget']);
-const CREDENTIAL_KEYS: Record<ReadonlyCredentialProvider, readonly string[]> = {
-  upbit: ['accessKey', 'secretKey'],
-  bitget: ['apiKey', 'secretKey', 'passphrase'],
+const CREDENTIAL_PROVIDERS = new Set<ReadonlyCredentialProvider>(['toss', 'upbit', 'bitget']);
+const CREDENTIAL_FIELDS: Record<ReadonlyCredentialProvider, { required: readonly string[]; optional: readonly string[] }> = {
+  toss: { required: ['clientId', 'clientSecret'], optional: ['accountSeq'] },
+  upbit: { required: ['accessKey', 'secretKey'], optional: [] },
+  bitget: { required: ['apiKey', 'secretKey', 'passphrase'], optional: [] },
 };
 const FORBIDDEN_PERMISSION_PATTERN = /(trade|order|write|withdraw|transfer|매매|주문|출금|이체)/i;
 
-type ReadonlyCredentialProvider = 'upbit' | 'bitget';
-type CredentialRepository = Pick<TradingRepository, 'getConnection' | 'saveConnection'>;
+type CredentialRepositoryFactory = (userId: string) => AccountReadonlyCredentialRepository;
+let credentialRepositoryFactoryForTests: CredentialRepositoryFactory | null = null;
 
-let credentialRepositoryFactoryForTests: ((userId: string, accessToken: string) => CredentialRepository) | null = null;
-
-export function setAccountReadonlyCredentialRepositoryFactoryForTests(
-  factory: ((userId: string, accessToken: string) => CredentialRepository) | null,
-) {
+export function setAccountReadonlyCredentialRepositoryFactoryForTests(factory: CredentialRepositoryFactory | null) {
   credentialRepositoryFactoryForTests = factory;
 }
 
@@ -53,23 +51,16 @@ function safetyCounters() {
 }
 
 function deniedResponse(errorCode: string) {
-  return {
-    ok: false,
-    errorCode,
-    ...safetyCounters(),
-  } as const;
+  return { ok: false, errorCode, ...safetyCounters() } as const;
 }
 
 function authScope(req: AuthenticatedRequest) {
-  return {
-    userId: req.member?.id ?? '',
-    accessToken: req.accessToken ?? '',
-  };
+  return { userId: req.member?.id ?? '', accessToken: req.accessToken ?? '' };
 }
 
-function credentialRepository(userId: string, accessToken: string): CredentialRepository {
-  if (credentialRepositoryFactoryForTests) return credentialRepositoryFactoryForTests(userId, accessToken);
-  return createSupabaseTradingRepository(accessToken, userId);
+function credentialRepository(userId: string): AccountReadonlyCredentialRepository {
+  return credentialRepositoryFactoryForTests?.(userId)
+    ?? createAccountReadonlyCredentialRepository(userId);
 }
 
 export function parseReadonlyCredentialRequest(
@@ -90,7 +81,8 @@ export function parseReadonlyCredentialRequest(
     throw new Error('CREDENTIALS_REQUIRED');
   }
   const credentials = rawCredentials as Record<string, unknown>;
-  const allowedKeys = CREDENTIAL_KEYS[provider];
+  const schema = CREDENTIAL_FIELDS[provider];
+  const allowedKeys = [...schema.required, ...schema.optional];
   if (Object.keys(credentials).some((key) => !allowedKeys.includes(key))) {
     throw new Error('UNEXPECTED_CREDENTIAL_FIELD');
   }
@@ -98,34 +90,32 @@ export function parseReadonlyCredentialRequest(
   const normalized = Object.fromEntries(
     allowedKeys.map((key) => [key, String(credentials[key] ?? '').trim()]),
   );
-  if (Object.values(normalized).some((value) => !value)) throw new Error('CREDENTIALS_INCOMPLETE');
-  return normalized;
+  if (schema.required.some((key) => !normalized[key])) throw new Error('CREDENTIALS_INCOMPLETE');
+  return Object.fromEntries(Object.entries(normalized).filter(([, value]) => value !== ''));
 }
 
 export async function saveReadonlyCredentialConfiguration(
-  repository: CredentialRepository,
+  repository: AccountReadonlyCredentialRepository,
   userId: string,
   provider: ReadonlyCredentialProvider,
   credentials: Record<string, string>,
 ) {
-  const existing = await repository.getConnection(userId, provider);
-  const accountMode = existing?.accountMode ?? 'paper';
-  await repository.saveConnection({
+  await repository.save({
     userId,
-    exchange: provider,
-    accountMode,
+    provider,
     configured: true,
     encryptedCredentials: encryptTradingCredentials(credentials),
     lastVerifiedAt: null,
     lastErrorCode: null,
     updatedAt: new Date().toISOString(),
   });
-  return { accountMode } as const;
+  return { provider, configured: true } as const;
 }
 
 function credentialErrorStatus(errorCode: string) {
   if (errorCode === 'LOGIN_REQUIRED') return 401;
-  if (errorCode.includes('MASTER_KEY')) return 503;
+  if (errorCode.includes('MASTER_KEY') || errorCode.includes('STORAGE_UNAVAILABLE')) return 503;
+  if (errorCode === 'ACCOUNT_READONLY_USER_SCOPE_MISMATCH') return 403;
   return 400;
 }
 
@@ -140,9 +130,9 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     return res.json({
       ok: true,
       encryptionConfigured: vault.encryptionConfigured,
-      supportedProviders: ['upbit', 'bitget'],
-      tossCredentialSetupSupported: false,
-      storage: 'user_scoped_encrypted_vault',
+      supportedProviders: ['toss', 'upbit', 'bitget'],
+      hiddenProviders: ['kiwoom'],
+      storage: 'user_scoped_account_readonly_encrypted_vault',
       ...safetyCounters(),
     });
   });
@@ -163,7 +153,7 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
       }
       const credentials = parseReadonlyCredentialRequest(provider, req.body);
       const saved = await saveReadonlyCredentialConfiguration(
-        credentialRepository(userId, accessToken),
+        credentialRepository(userId),
         userId,
         provider,
         credentials,
@@ -171,8 +161,7 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
       return res.json({
         ok: true,
         provider,
-        configured: true,
-        accountMode: saved.accountMode,
+        configured: saved.configured,
         purpose: 'read_only',
         ...safetyCounters(),
       });
@@ -190,9 +179,7 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     }
 
     const { userId, accessToken } = authScope(req);
-    if (!userId || !accessToken) {
-      return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
-    }
+    if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
 
     const controller = new AbortController();
     const abort = () => controller.abort();
